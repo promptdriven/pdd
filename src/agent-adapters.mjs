@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: c9a7679c111fd48754dffc2a37b084e6cd4df2f7997d7075a319787387a1814b).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 77b24f36abfd6349a9d289b418b639a87312b64ff6e73d82bed95c859fada6f1).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';
@@ -256,7 +256,7 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
     }
     if((rateClass==='quota_exhausted'||(rateClass==='burst_rate_limit'&&burstRetried))&&acc?.account_id&&triedIds.length<12){
      let windows=acc;
-     if(launch.agent==='codex'&&typeof accountsPorts?.readCodexUsageWindows==='function'){
+     if(launch.agent==='codex'&&leaseReply?.lease?.delivery_mode!=='gateway_grant'&&typeof accountsPorts?.readCodexUsageWindows==='function'){
       const probeExec=cloudMod.prepareCloudStepExecution(leaseReply,childEnv,accountsPorts);
       try{windows=await accountsPorts.readCodexUsageWindows({command:launch.command,cwd,env:probeExec.env,weeklyStopPercent:100,timeoutMs:800});}catch{}finally{probeExec.cleanup();}
      }

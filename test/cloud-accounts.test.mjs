@@ -13,12 +13,13 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { runStepAgentProcess } from '../src/agent-adapters.mjs';
+import { parseAgentAuthStatus, runStepAgentProcess } from '../src/agent-adapters.mjs';
 import { cleanupAgentJob, jobEnvironment } from '../src/agent-job.mjs';
 import { parseCodexUsageWindows } from '../src/codex-limits.mjs';
 import {
@@ -26,14 +27,20 @@ import {
   DEFAULT_CLOUD_URL,
   cloudAccountsRequest,
   createCodexStepOverlay,
+  localCodexAuthPath,
+  localCodexConfigPath,
   loginEnvironment,
   materializeLocalClaudeAuth,
+  materializeLocalCodexAuth,
   normalizeUsagePercentInt,
   prepareCloudStepExecution,
   reportCloudAccountUsage,
   resolveCloudAccountsEndpoint,
+  restoreLocalCodexGatewayConfig,
+  selectCloudPoolLogin,
   sweepActiveCodexOverlays,
 } from '../src/login-pool.mjs';
+import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
 import { redactSecrets } from '../src/secret-redaction.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 import { tickAutopilot, runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
@@ -64,8 +71,11 @@ async function createMockCloudServer(t, initial = {}) {
     vaultBundles: new Map(),
     pendingInvites: structuredClone(initial.pendingInvites ?? []),
     auditLogs: new Map(),
+    activeLeases: new Map(),
     requests: [],
     delayLeaseMs: 0,
+    dedupEnroll: Boolean(initial.dedupEnroll),
+    zeroInitialUsage: Boolean(initial.zeroInitialUsage),
     nextSeq: 1,
   };
 
@@ -119,21 +129,38 @@ async function createMockCloudServer(t, initial = {}) {
     state.requests.push({
       method: req.method,
       path: url.pathname,
+      query: url.search,
+      headers: { ...req.headers },
       auth: req.headers.authorization ?? '',
       machineId,
       body,
     });
+
+    const send = (status, payload) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+
+    const codexGatewayMatch = /^\/v1\/codex-gateway\/([^/]+)\/responses$/.exec(url.pathname);
+    if (req.method === 'POST' && codexGatewayMatch) {
+      const leaseId = decodeURIComponent(codexGatewayMatch[1]);
+      const grantHeader = req.headers['x-pdd-gateway-grant'] ?? '';
+      const leaseRecord = state.activeLeases.get(leaseId);
+      if (!leaseRecord || leaseRecord.grantToken !== grantHeader) {
+        return send(401, { error: { message: 'Invalid gateway grant' } });
+      }
+      const acc = state.accounts.find(a => a.account_id === leaseRecord.accountId);
+      if (!acc || acc.revoked || acc.state === 'paused' || leaseRecord.revoked) {
+        return send(403, { error: { message: 'Gateway grant revoked' } });
+      }
+      return send(200, { id: 'resp_gateway_ok', object: 'response', status: 'completed' });
+    }
 
     if (req.headers.authorization !== `Bearer ${state.bearerToken}`) {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ detail: { error: 'unauthorized', message: 'Unauthorized' } }));
       return;
     }
-
-    const send = (status, payload) => {
-      res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(payload));
-    };
 
     if (req.method === 'GET' && url.pathname === '/v1/accounts') {
       for (const acc of state.accounts) refreshAccountState(acc);
@@ -153,8 +180,20 @@ async function createMockCloudServer(t, initial = {}) {
           return send(422, { detail: missing.map(k => ({ loc: ['body', 'bundle', 'auth_json', 'tokens', k], msg: `Field required: ${k}` })) });
         }
       }
+      if (state.dedupEnroll) {
+        const subjectKey = body?.provider === 'codex'
+          ? `codex:${body?.bundle?.auth_json?.tokens?.account_id}`
+          : `claude:${body?.bundle?.oauth_token}`;
+        const existing = state.accounts.find(a => !a.revoked && a.provider === body.provider && a._subjectKey === subjectKey);
+        if (existing) {
+          state.vaultBundles.set(existing.account_id, structuredClone(body.bundle));
+          logAudit(existing.account_id, 'refreshed', machineId, `provider=${existing.provider}`);
+          return send(200, { account: existing, already_enrolled: true });
+        }
+      }
       const id = `acc_${state.nextSeq++}`;
       const coolingInit = state.enrollCoolingUntil ?? null;
+      const zeroUsage = state.zeroInitialUsage && !coolingInit;
       const acc = {
         account_id: id,
         label: body.label,
@@ -162,14 +201,18 @@ async function createMockCloudServer(t, initial = {}) {
         plan: body.plan ?? 'pro',
         owner_github_id: 95069916,
         owner_login: 'Serhan-Asad',
+        is_owner: true,
         shared: false,
         state: coolingInit ? 'cooling' : 'ready',
-        five_hour_used_percent: coolingInit ? 100 : 8,
-        five_hour_reset_at: coolingInit ?? '2026-11-15T02:00:00Z',
-        weekly_used_percent: 22,
-        weekly_reset_at: '2026-11-18T17:00:00Z',
+        five_hour_used_percent: coolingInit ? 100 : (zeroUsage ? 0 : 8),
+        five_hour_reset_at: coolingInit ?? (zeroUsage ? null : '2026-11-15T02:00:00Z'),
+        weekly_used_percent: zeroUsage ? 0 : 22,
+        weekly_reset_at: zeroUsage ? null : '2026-11-18T17:00:00Z',
         cooling_until: coolingInit,
         created_at: new Date(state.nowMs + state.nextSeq).toISOString(),
+        _subjectKey: body?.provider === 'codex'
+          ? `codex:${body?.bundle?.auth_json?.tokens?.account_id}`
+          : `claude:${body?.bundle?.oauth_token}`,
       };
       state.vaultBundles.set(id, structuredClone(body.bundle));
       state.accounts.push(acc);
@@ -233,7 +276,20 @@ async function createMockCloudServer(t, initial = {}) {
       logAudit(chosen.account_id, 'leased', body?.machine_label || machineId, `holder=${body?.holder_id ?? ''}`);
       const expiresAt = new Date(state.nowMs + 50 * 60 * 1000).toISOString();
       let lease;
-      if (provider === 'codex') {
+      const isBorrowerShared = typeof chosen.is_owner === 'boolean' ? !chosen.is_owner : Boolean(chosen.shared);
+      if (provider === 'codex' && isBorrowerShared) {
+        const leaseId = `lse_${state.nextSeq++}`;
+        const grantToken = `pddg_${chosen.label.replace(/[^A-Za-z0-9_-]/g, '_')}_codexGrant7777`;
+        state.activeLeases.set(leaseId, { accountId: chosen.account_id, grantToken, revoked: false });
+        lease = {
+          lease_id: leaseId,
+          expires_at: expiresAt,
+          delivery_mode: 'gateway_grant',
+          codex_gateway_url: `${serverUrl}/v1/codex-gateway/${leaseId}`,
+          codex_gateway_token: grantToken,
+          gateway_bearer_token: grantToken,
+        };
+      } else if (provider === 'codex') {
         lease = {
           lease_id: `lse_${state.nextSeq++}`,
           expires_at: expiresAt,
@@ -250,7 +306,7 @@ async function createMockCloudServer(t, initial = {}) {
             last_refresh: new Date(state.nowMs).toISOString(),
           },
         };
-      } else if (chosen.shared) {
+      } else if (isBorrowerShared) {
         const leaseId = `lse_${state.nextSeq++}`;
         lease = {
           lease_id: leaseId,
@@ -326,11 +382,17 @@ async function createMockCloudServer(t, initial = {}) {
         return send(200, { account: acc, invite: { invite_id: invId, account_id: id, shared: body } });
       }
       if (req.method === 'POST' && action === 'unshare') {
-        logAudit(id, 'unshared', machineId, `user=${body?.github_login}`);
+        for (const leaseRec of state.activeLeases.values()) {
+          if (leaseRec.accountId === id) leaseRec.revoked = true;
+        }
+        logAudit(id, 'unshared', machineId, `user=${body?.github_login ?? body?.team ?? body?.org ?? body?.machine_id}`);
         return send(200, { revoked: true });
       }
       if (req.method === 'POST' && action === 'leave') {
         acc.revoked = true;
+        for (const leaseRec of state.activeLeases.values()) {
+          if (leaseRec.accountId === id) leaseRec.revoked = true;
+        }
         logAudit(id, 'left', machineId);
         return send(200, { left: true });
       }
@@ -349,9 +411,10 @@ async function createMockCloudServer(t, initial = {}) {
         account_id: inv.account_id,
         label: inv.label,
         provider: inv.provider,
-        plan: 'max',
+        plan: inv.provider === 'codex' ? 'pro' : 'max',
         owner_github_id: 111,
         owner_login: inv.owner_login,
+        is_owner: false,
         shared: true,
         state: 'ready',
         five_hour_used_percent: 15,
@@ -1550,4 +1613,610 @@ test('3252 T8: Round 2 single-provider Cloud enrollment preserves un-enrolled lo
   assert.equal(coolingState.enrolled, true);
   assert.deepEqual(coolingState.providers, ['codex', 'claude']);
   assert.equal(coolingState.cooling?.claude?.wake_at, '2026-11-14T22:30:00Z');
+});
+
+test('3426: shared Codex gateway_grant materializes tokenless step overlays & local ~/.codex/, skips local usage probes, refuses symlinks, and clean-restores config', async t => {
+  const cloud = await createMockCloudServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_cx_owner',
+        label: 'cx-owner',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        is_owner: true,
+        shared: true, // owner shared this account with a team — still owned!
+        state: 'ready',
+        five_hour_used_percent: 12,
+        five_hour_reset_at: '2026-11-15T02:00:00Z',
+        weekly_used_percent: 24,
+        weekly_reset_at: '2026-11-21T12:00:00Z',
+        cooling_until: null,
+        created_at: '2026-11-01T00:00:00Z',
+      },
+      {
+        account_id: 'acc_cx_backup_shared',
+        label: 'cx-shared-2',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'team-owner',
+        is_owner: false,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 18,
+        five_hour_reset_at: '2026-11-15T02:00:00Z',
+        weekly_used_percent: 35,
+        weekly_reset_at: '2026-11-20T12:00:00Z',
+        cooling_until: null,
+        created_at: '2026-11-02T00:00:00Z',
+      },
+    ],
+    pendingInvites: [
+      { invite_id: 'inv_cx_shared_1', account_id: 'acc_cx_shared_1', label: 'cx-shared-1', provider: 'codex', owner_login: 'team-owner' },
+    ],
+  });
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+
+  // Seed user's ~/.codex/ with custom model_provider, [mcp_servers.pdd], real skills/rules, and a symlinked sessions folder.
+  const codexDir = join(sb.home, '.codex');
+  mkdirSync(join(codexDir, 'skills', 'pdd-prompting'), { recursive: true });
+  writeFileSync(join(codexDir, 'skills', 'pdd-prompting', 'SKILL.md'), '# Skill\n');
+  mkdirSync(join(codexDir, 'rules'), { recursive: true });
+  writeFileSync(join(codexDir, 'rules', 'base.md'), '# Rule\n');
+  const extSessions = join(sb.root, 'ext-sessions');
+  mkdirSync(extSessions, { recursive: true });
+  symlinkSync(extSessions, join(codexDir, 'sessions'));
+  writeFileSync(join(codexDir, 'config.toml'), [
+    'model = "gpt-5.4"',
+    'model_provider = "custom_upstream"',
+    '',
+    '[mcp_servers.pdd]',
+    'command = "node"',
+    'args = ["bin/pdd.mjs", "mcp"]',
+    'default_tools_approval_mode = "approve"',
+    'tool_timeout_sec = 600',
+    '',
+  ].join('\n'), { mode: 0o600 });
+
+  // 1. Accept shared Codex invite -> immediately materializes tokenless gateway_grant into ~/.codex/{auth.json,config.toml}!
+  const accRes = await invokeCli(['accounts', 'accept', 'inv_cx_shared_1'], sb);
+  assert.equal(accRes.exit, 0, accRes.stderr);
+  assert.match(accRes.stdout, /Accepted shared account "cx-shared-1"/);
+
+  const authPath = localCodexAuthPath(sb.env);
+  const configPath = localCodexConfigPath(sb.env);
+  assert.equal(statSync(authPath).mode & 0o777, 0o600);
+  assert.equal(statSync(configPath).mode & 0o777, 0o600);
+
+  const localAuthRaw = readFileSync(authPath, 'utf8');
+  const localAuth = JSON.parse(localAuthRaw);
+  assert.equal(localAuth.auth_mode, 'apikey');
+  assert.match(localAuth.OPENAI_API_KEY, /^pddg_cx-shared-1_/);
+  assert.equal(localAuth.tokens, undefined, 'zero OpenAI access_token, id_token, or refresh_token on borrower disk');
+  assert.doesNotMatch(localAuthRaw, /access_token|refresh_token|id_token/);
+
+  const localCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(localCfg.model, 'gpt-5.4', 'preserved top-level model');
+  assert.equal(localCfg.model_provider, 'pdd_codex_gateway');
+  assert.deepEqual({ ...localCfg.mcp_servers?.pdd }, {
+    command: 'node',
+    args: ['bin/pdd.mjs', 'mcp'],
+    default_tools_approval_mode: 'approve',
+    tool_timeout_sec: 600,
+  }, 'preserved [mcp_servers.pdd]');
+  assert.equal(localCfg.model_providers?.pdd_codex_gateway?.wire_api, 'responses');
+  assert.equal(localCfg.model_providers?.pdd_codex_gateway?.requires_openai_auth, false);
+  assert.equal(localCfg.model_providers?.pdd_codex_gateway?.supports_websockets, false);
+  assert.equal(localCfg.model_providers?.pdd_codex_gateway?.http_headers?.['x-pdd-gateway-grant'], localAuth.OPENAI_API_KEY);
+
+  const savedState = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
+  assert.equal(savedState.active.codex.delivery_mode, 'gateway_grant');
+  assert.equal(savedState.active.codex.managed_codex_gateway, true);
+  assert.equal(savedState.active.codex.previous_codex_model_provider, 'custom_upstream');
+  assert.doesNotMatch(JSON.stringify(savedState), /pddg_/, 'zero grant tokens persisted in accounts-state.json');
+
+  // Verify real codex-cli (if installed) parses local ~/.codex/{auth.json,config.toml} with exit 0 and zero TOML warnings!
+  const codexWhich = spawnSync('codex', ['--version'], { encoding: 'utf8' });
+  const hasRealCodex = codexWhich.status === 0;
+  if (hasRealCodex) {
+    const statusCheck = spawnSync('codex', ['login', 'status'], {
+      env: { ...sb.env, CODEX_HOME: codexDir },
+      encoding: 'utf8',
+    });
+    assert.equal(statusCheck.status, 0, `codex login status failed: ${statusCheck.stderr}`);
+    assert.equal(
+      parseAgentAuthStatus({ agent: 'codex', result: { code: statusCheck.status, stdout: statusCheck.stdout, stderr: statusCheck.stderr } }),
+      'ready',
+    );
+    const featCheck = spawnSync('codex', ['features', 'list'], {
+      env: { ...sb.env, CODEX_HOME: codexDir },
+      encoding: 'utf8',
+    });
+    assert.equal(featCheck.status, 0, `codex features list failed on local config.toml: ${featCheck.stderr}`);
+    assert.doesNotMatch(featCheck.stderr, /parse|invalid|unknown field|toml/i);
+  }
+
+  // 2. Per-step overlay (`selectCloudPoolLogin` + `runStepAgentProcess`):
+  //    - NO auth.json inside /tmp/pdd-cx-*
+  //    - Symlinks non-symlink skills & rules only (never auth.json, config.toml, or symlinked sessions)
+  //    - Scrubs ambient OPENAI_API_KEY / CODEX_API_KEY / CODEX_ACCESS_TOKEN / OPENAI_BASE_URL
+  //    - Skips local readCodexUsageWindows on gateway_grant!
+  let usageProbeCalls = 0;
+  const poolSel = await selectCloudPoolLogin(
+    { cwd: sb.cwd, env: sb.env, fallbackAgent: { kind: 'codex', command: 'codex' } },
+    {
+      tmpRoot: sb.root,
+      readCodexUsageWindows: async () => {
+        usageProbeCalls += 1;
+        return { state: 'ok' };
+      },
+    },
+  );
+  assert.equal(poolSel.state, 'ready');
+  assert.equal(poolSel.lease.delivery_mode, 'gateway_grant');
+  assert.equal(usageProbeCalls, 0, 'selectCloudPoolLogin skips local readCodexUsageWindows on gateway_grant');
+
+  const dirtyEnv = {
+    ...sb.env,
+    OPENAI_API_KEY: 'sk-ambient-personal-key',
+    CODEX_API_KEY: 'sk-ambient-codex-key',
+    CODEX_ACCESS_TOKEN: 'at-ambient-codex-token',
+    OPENAI_BASE_URL: 'https://evil-override.example.com/v1',
+  };
+  let stepAttempts = 0;
+  let capturedOverlayDir = null;
+  const stepRes = await runStepAgentProcess({
+    agent: 'codex',
+    step: 'build',
+    args: ['exec', 'hello'],
+    cwd: sb.cwd,
+    env: dirtyEnv,
+    accountsPorts: {
+      tmpRoot: sb.root,
+      readCodexUsageWindows: async () => {
+        usageProbeCalls += 1;
+        return { five_hour_used_percent: 100 };
+      },
+    },
+    run: async (_cmd, _args, opts) => {
+      stepAttempts += 1;
+      const ovDir = opts.env.CODEX_HOME;
+      capturedOverlayDir = ovDir;
+      assert.notEqual(ovDir, codexDir);
+      assert.equal(statSync(ovDir).mode & 0o777, 0o700);
+      assert.equal(existsSync(join(ovDir, 'auth.json')), false, 'NO auth.json inside shared Codex step overlay');
+      assert.equal(lstatSync(join(ovDir, 'config.toml')).isSymbolicLink(), false, 'config.toml is a dedicated 0600 file, never symlinked');
+      assert.equal(statSync(join(ovDir, 'config.toml')).mode & 0o777, 0o600);
+      assert.equal(lstatSync(join(ovDir, 'skills')).isSymbolicLink(), true, 'skills dir symlinked');
+      assert.equal(lstatSync(join(ovDir, 'rules')).isSymbolicLink(), true, 'rules dir symlinked');
+      assert.equal(existsSync(join(ovDir, 'sessions')), false, 'symlinked source sessions dir is NOT symlinked');
+
+      assert.match(opts.env.PDD_CODEX_GATEWAY_GRANT ?? '', /^pddg_/);
+      assert.equal(opts.env.OPENAI_API_KEY, undefined);
+      assert.equal(opts.env.CODEX_API_KEY, undefined);
+      assert.equal(opts.env.CODEX_ACCESS_TOKEN, undefined);
+      assert.equal(opts.env.OPENAI_BASE_URL, undefined);
+
+      const ovCfg = parseToml(readFileSync(join(ovDir, 'config.toml'), 'utf8'));
+      assert.equal(ovCfg.model_provider, 'pdd_codex_gateway');
+      assert.equal(ovCfg.features?.shell_snapshot, false);
+      assert.equal(ovCfg.shell_environment_policy?.filters?.PDD_CODEX_GATEWAY_GRANT, 'exclude');
+      assert.deepEqual(ovCfg.mcp_servers?.pdd, localCfg.mcp_servers.pdd, 'step overlay preserved [mcp_servers.pdd]');
+      const gwBlock = ovCfg.model_providers?.pdd_codex_gateway;
+      assert.equal(gwBlock?.http_headers, undefined, 'no static http_headers leaked into step overlay');
+      assert.deepEqual({ ...gwBlock?.env_http_headers }, { 'x-pdd-gateway-grant': 'PDD_CODEX_GATEWAY_GRANT' });
+
+      if (hasRealCodex && stepAttempts === 1) {
+        const ovFeat = spawnSync('codex', ['features', 'list'], {
+          env: { ...sb.env, CODEX_HOME: ovDir, PDD_CODEX_GATEWAY_GRANT: opts.env.PDD_CODEX_GATEWAY_GRANT },
+          encoding: 'utf8',
+        });
+        assert.equal(ovFeat.status, 0, `codex features list failed on step overlay config.toml: ${ovFeat.stderr}`);
+        assert.doesNotMatch(ovFeat.stderr, /parse|invalid|unknown field|toml/i);
+      }
+
+      // Verify live gateway call succeeds before revocation.
+      const gwResp = await fetch(`${gwBlock.base_url}/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-pdd-gateway-grant': opts.env.PDD_CODEX_GATEWAY_GRANT },
+        body: JSON.stringify({ model: 'gpt-5.4', input: 'ping' }),
+      });
+      assert.equal(gwResp.status, 200);
+
+      if (stepAttempts === 1) {
+        // Trigger quota exhaustion on cx-shared-1 -> rotates to cx-shared-2 WITHOUT calling local readCodexUsageWindows!
+        return { code: 1, stdout: '', stderr: 'You have hit your usage limit (5-hour limit). resets at 2026-11-15T03:00:00Z' };
+      }
+      return { code: 0, stdout: 'gateway-step-ok', stderr: '' };
+    },
+  });
+  assert.equal(stepRes.code, 0);
+  assert.equal(stepAttempts, 2);
+  assert.equal(stepRes.account?.label, 'cx-shared-2');
+  assert.equal(usageProbeCalls, 0, 'runStepAgentProcess skips local readCodexUsageWindows on gateway_grant failover');
+  assert.equal(existsSync(capturedOverlayDir), false, 'step overlay wiped in finally');
+
+  // Revoking access (`unshare`) invalidates existing gateway grant immediately on the server!
+  const activeLeaseEntry = [...cloud.state.activeLeases.entries()].find(([, v]) => v.accountId === 'acc_cx_shared_1');
+  assert.ok(activeLeaseEntry);
+  await invokeCli(['accounts', 'unshare', 'cx-shared-1', '--user', 'borrower'], sb);
+  const afterRevokeResp = await fetch(`${cloud.serverUrl}/v1/codex-gateway/${activeLeaseEntry[0]}/responses`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-pdd-gateway-grant': activeLeaseEntry[1].grantToken },
+    body: JSON.stringify({ model: 'gpt-5.4', input: 'ping' }),
+  });
+  assert.equal(afterRevokeResp.status, 403, 'revoked shared Codex grant fails immediately without waiting for expiry');
+
+  // 3. Clean Restore A: Switching to owner `direct_stripped` account strips [model_providers.pdd_codex_gateway] & restores model_provider!
+  assert.equal((await invokeCli(['accounts', 'use', 'cx-owner'], sb)).exit, 0);
+  const ownerAuth = JSON.parse(readFileSync(authPath, 'utf8'));
+  assert.equal(ownerAuth.auth_mode, 'chatgpt');
+  assert.equal(ownerAuth.tokens.refresh_token, '');
+  const ownerCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(ownerCfg.model_provider, 'custom_upstream', 'previous model_provider restored cleanly');
+  assert.equal(ownerCfg.model_providers, undefined, '[model_providers.pdd_codex_gateway] stripped cleanly');
+  assert.deepEqual(ownerCfg.mcp_servers?.pdd, localCfg.mcp_servers.pdd, '[mcp_servers.pdd] preserved');
+  const ownerState = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
+  assert.equal(ownerState.active.codex.managed_codex_gateway, false);
+  assert.equal(ownerState.active.codex.previous_codex_model_provider, null);
+
+  // 4. Clean Restore B: Switching to shared `cx-shared-2`, removing remaining accounts, and running `leave cx-shared-2`
+  //    strips gateway config AND removes the pddg_* auth.json!
+  assert.equal((await invokeCli(['accounts', 'use', 'cx-shared-2'], sb)).exit, 0);
+  assert.equal((await invokeCli(['accounts', 'remove', 'cx-owner'], sb)).exit, 0);
+  assert.equal((await invokeCli(['accounts', 'leave', 'cx-shared-1'], sb)).exit, 0);
+  assert.equal((await invokeCli(['accounts', 'leave', 'cx-shared-2'], sb)).exit, 0);
+
+  assert.equal(existsSync(authPath), false, 'pddg_* auth.json removed when leaving shared Codex account with no replacement');
+  const leftCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(leftCfg.model_provider, 'custom_upstream', 'model_provider restored on leave');
+  assert.equal(leftCfg.model_providers, undefined, 'pdd_codex_gateway removed on leave');
+  assert.deepEqual(leftCfg.mcp_servers?.pdd, localCfg.mcp_servers.pdd, '[mcp_servers.pdd] still intact after leave');
+
+  // 5. Symlink refusal: symlinking ~/.codex/config.toml or ~/.codex/auth.json is refused without touching target!
+  const victimFile = join(sb.root, 'victim.txt');
+  writeFileSync(victimFile, 'DO_NOT_OVERWRITE');
+  rmSync(configPath, { force: true });
+  symlinkSync(victimFile, configPath);
+  assert.throws(
+    () => materializeLocalCodexAuth({
+      delivery_mode: 'gateway_grant',
+      codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_test',
+      codex_gateway_token: 'pddg_symlink_test_token',
+    }, { env: sb.env }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+  assert.throws(
+    () => restoreLocalCodexGatewayConfig({ env: sb.env, removeAuthFile: true }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+  assert.equal(readFileSync(victimFile, 'utf8'), 'DO_NOT_OVERWRITE');
+});
+
+test('3427: isolated temp CODEX_HOME on add, --device-auth, --loop auto-labels & duplicate detection, inline --with, import --from, bulk share --all, and symmetric unshare', async t => {
+  const cloud = await createMockCloudServer(t, {
+    dedupEnroll: true,
+    accounts: [
+      {
+        account_id: 'acc_existing_1',
+        label: 'team-cx-1',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 5,
+        five_hour_reset_at: '2026-11-15T02:00:00Z',
+        weekly_used_percent: 10,
+        weekly_reset_at: '2026-11-18T17:00:00Z',
+        cooling_until: null,
+        created_at: '2026-11-01T00:00:00Z',
+        _subjectKey: 'codex:acct_existing_server',
+      },
+      {
+        account_id: 'acc_borrowed_cx',
+        label: 'borrowed-cx',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'other-owner',
+        is_owner: false,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 5,
+        five_hour_reset_at: '2026-11-15T02:00:00Z',
+        weekly_used_percent: 10,
+        weekly_reset_at: '2026-11-18T17:00:00Z',
+        cooling_until: null,
+        created_at: '2026-11-01T00:00:00Z',
+      },
+      {
+        account_id: 'acc_owned_cl',
+        label: 'owned-claude',
+        provider: 'claude',
+        plan: 'max',
+        owner_login: 'Serhan-Asad',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 5,
+        five_hour_reset_at: '2026-11-15T02:00:00Z',
+        weekly_used_percent: 10,
+        weekly_reset_at: '2026-11-18T17:00:00Z',
+        cooling_until: null,
+        created_at: '2026-11-01T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+
+  // 1. Reject --device-auth for Claude with exit 2 BEFORE invoking claude!
+  let claudeCalled = false;
+  const badDeviceClaude = await invokeCli(['accounts', 'add', '--provider', 'claude', '--device-auth'], sb, {
+    run: async () => {
+      claudeCalled = true;
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(badDeviceClaude.exit, 2);
+  assert.match(badDeviceClaude.stderr, /--device-auth is only supported for Codex accounts/);
+  assert.equal(claudeCalled, false);
+
+  // 2. Isolated temp CODEX_HOME on Codex `add` + `--device-auth`: failed/cancelled login leaves ~/.codex/auth.json untouched and wipes temp dir!
+  const localCodexDir = join(sb.home, '.codex');
+  mkdirSync(localCodexDir, { recursive: true });
+  const sentinelAuth = JSON.stringify({ sentinel: 'keep_untouched' });
+  writeFileSync(join(localCodexDir, 'auth.json'), sentinelAuth, { mode: 0o600 });
+
+  let seenTempLoginHome = null;
+  const abortedAdd = await invokeCli(['accounts', 'add', '--provider', 'codex', '--device-auth'], sb, {
+    tmpRoot: sb.root,
+    run: async (cmd, args, opts) => {
+      assert.equal(cmd, 'codex');
+      assert.deepEqual(args, ['login', '-c', 'cli_auth_credentials_store="file"', '--device-auth']);
+      seenTempLoginHome = opts.env.CODEX_HOME;
+      assert.notEqual(seenTempLoginHome, localCodexDir);
+      assert.equal(statSync(seenTempLoginHome).mode & 0o777, 0o700);
+      writeFileSync(join(seenTempLoginHome, 'auth.json'), '{"partial":true}');
+      return { code: 130, stdout: '', stderr: 'Interrupted' };
+    },
+  });
+  assert.equal(abortedAdd.exit, 1);
+  assert.equal(existsSync(seenTempLoginHome), false, 'disposable login CODEX_HOME removed in finally');
+  assert.equal(readFileSync(join(localCodexDir, 'auth.json'), 'utf8'), sentinelAuth, 'local ~/.codex/auth.json untouched on failed login');
+
+  // 3. Reject --loop in non-TTY without prompt port (exit 2).
+  const nonTtyLoop = await invokeCli(['accounts', 'add', '--provider', 'codex', '--loop'], sb);
+  assert.equal(nonTtyLoop.exit, 2);
+  assert.match(nonTtyLoop.stderr, /--loop requires an interactive terminal/);
+
+  // 4. Interactive `--loop` with collision-free auto-labels (team-cx-1 already taken -> starts at team-cx-2),
+  //    session + server duplicate detection without advancing label counter, and inline comma-separated `--with`!
+  const loopLogins = [
+    { account_id: 'acct_loop_A', refresh: 'rt_loop_A_secret1111', email: 'a@example.com' },
+    { account_id: 'acct_loop_A', refresh: 'rt_loop_A_refreshed2222', email: 'a@example.com' }, // session duplicate!
+    { account_id: 'acct_existing_server', refresh: 'rt_server_dup_3333', email: 'existing@example.com' }, // server already_enrolled duplicate!
+    { account_id: 'acct_loop_B', refresh: 'rt_loop_B_secret4444', email: 'b@example.com' },
+  ];
+  const promptAnswers = ['y', '', 'yes', 'n'];
+  const seenPrompts = [];
+  let loginIdx = 0;
+
+  const loopRes = await invokeCli(
+    ['accounts', 'add', '--provider', 'codex', '--label', 'team-cx', '--loop', '--with', 'octocat, promptdriven/builders, @promptdriven, octocat'],
+    sb,
+    {
+      tmpRoot: sb.root,
+      resolveGithubUser: async login => ({ id: 583231, login, type: 'User' }),
+      prompt: async question => {
+        seenPrompts.push(question);
+        return promptAnswers.shift();
+      },
+      run: async (cmd, args, opts) => {
+        assert.equal(cmd, 'codex');
+        assert.deepEqual(args, ['login', '-c', 'cli_auth_credentials_store="file"']);
+        const spec = loopLogins[loginIdx++];
+        writeFileSync(join(opts.env.CODEX_HOME, 'auth.json'), JSON.stringify({
+          auth_mode: 'chatgpt',
+          OPENAI_API_KEY: null,
+          tokens: {
+            access_token: `at_${spec.account_id}_secret`,
+            refresh_token: spec.refresh,
+            id_token: makeJwt({ email: spec.email, 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+            account_id: spec.account_id,
+          },
+        }));
+        return { code: 0, stdout: 'Logged in\n', stderr: '' };
+      },
+    },
+  );
+  assert.equal(loopRes.exit, 0, loopRes.stderr);
+  assert.equal(seenPrompts.length, 4);
+  assert.ok(seenPrompts.every(q => q === 'Enroll another codex account? [Y/n] '));
+  assert.match(loopRes.stdout, /Enrolled Codex account "team-cx-2"/);
+  assert.match(loopRes.stdout, /Already enrolled as team-cx-2 — refreshed credentials\./);
+  assert.match(loopRes.stdout, /Already enrolled as team-cx-1 — refreshed credentials\./);
+  assert.match(loopRes.stdout, /Enrolled Codex account "team-cx-3"/, 'duplicates did NOT increment label counter past team-cx-3');
+  assert.match(loopRes.stdout, /Loop summary: enrolled 2 codex accounts \(team-cx-2, team-cx-3\); refreshed 1 existing \(team-cx-1\), shared with octocat, promptdriven\/builders, @promptdriven\./);
+
+  // 5. `pdd accounts import --provider codex --from <path> --label cx-imported --with promptdriven/eng,@promptdriven`
+  const extAuthPath = join(sb.root, 'external-codex-auth.json');
+  const extRawJson = JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_ext_import_secret9999',
+      refresh_token: 'rt_ext_import_secret8888',
+      id_token: makeJwt({ email: 'ext@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_ext_import',
+    },
+  });
+  writeFileSync(extAuthPath, extRawJson, { mode: 0o600 });
+  const impFrom = await invokeCli(
+    ['accounts', 'import', '--provider', 'codex', '--from', extAuthPath, '--label', 'cx-imported', '--with', 'promptdriven/eng,@promptdriven'],
+    sb,
+  );
+  assert.equal(impFrom.exit, 0, impFrom.stderr);
+  assert.match(impFrom.stdout, /Enrolled Codex account "cx-imported"/);
+  assert.match(impFrom.stdout, /Shared with promptdriven\/eng \(invite inv_\d+\), @promptdriven \(invite inv_\d+\)/);
+  assert.equal(readFileSync(extAuthPath, 'utf8'), extRawJson, 'external --from file left intact');
+
+  // 6. Upfront validation on `share` & `unshare` BEFORE network mutations!
+  const reqCountBeforeInvalid = cloud.state.requests.length;
+  assert.equal((await invokeCli(['accounts', 'share', '--with', 'octocat'], sb)).exit, 2, 'missing both LABEL and --all');
+  assert.equal((await invokeCli(['accounts', 'share', 'team-cx-1', '--all', '--with', 'octocat'], sb)).exit, 2, 'both LABEL and --all');
+  assert.equal((await invokeCli(['accounts', 'share', 'team-cx-1', '--with', 'bad/team/extra'], sb)).exit, 2, 'malformed team');
+  assert.equal((await invokeCli(['accounts', 'share', 'team-cx-1', '--with', '@'], sb)).exit, 2, 'empty @ORG');
+  assert.equal((await invokeCli(['accounts', 'share', 'team-cx-1', '--with', 'octocat,'], sb)).exit, 2, 'empty trailing target');
+  assert.equal((await invokeCli(['accounts', 'unshare', 'team-cx-1'], sb)).exit, 2, 'missing target on unshare');
+  assert.equal((await invokeCli(['accounts', 'unshare', 'team-cx-1', '--all', '--user', 'octocat'], sb)).exit, 2, 'both LABEL and --all on unshare');
+  assert.equal(cloud.state.requests.length, reqCountBeforeInvalid, 'invalid share/unshare syntax rejected before network calls');
+
+  // 7. Bulk `share --all --provider codex` shares ONLY owned Codex accounts (skipping borrowed-cx and owned-claude)!
+  const idxBeforeBulkShare = cloud.state.requests.length;
+  const bulkShare = await invokeCli(
+    ['accounts', 'share', '--all', '--provider', 'codex', '--with', 'alice,promptdriven/core,@promptdriven'],
+    sb,
+    { resolveGithubUser: async login => ({ id: 1001, login, type: 'User' }) },
+  );
+  assert.equal(bulkShare.exit, 0, bulkShare.stderr);
+  const bulkShareReqs = cloud.state.requests.slice(idxBeforeBulkShare).filter(r => r.method === 'POST' && r.path.endsWith('/share'));
+  const sharedAccountIds = [...new Set(bulkShareReqs.map(r => r.path.split('/')[3]))];
+  const expectedOwnedCodexIds = cloud.state.accounts
+    .filter(a => a.provider === 'codex' && a.is_owner === true)
+    .map(a => a.account_id);
+  assert.deepEqual(sharedAccountIds, expectedOwnedCodexIds, 'shared every owned Codex account and excluded borrowed/Claude accounts');
+  const firstAcctShares = bulkShareReqs.filter(r => r.path === `/v1/accounts/${expectedOwnedCodexIds[0]}/share`).map(r => r.body);
+  assert.deepEqual(firstAcctShares, [
+    { github_login: 'alice', github_user_id: 1001 },
+    { org: 'promptdriven', team: 'core' },
+    { org: 'promptdriven' },
+  ]);
+
+  // 8. Symmetric `unshare --all --provider codex --user alice --with promptdriven/core,@promptdriven --machine old-laptop`!
+  const idxBeforeBulkUnshare = cloud.state.requests.length;
+  const bulkUnshare = await invokeCli(
+    ['accounts', 'unshare', '--all', '--provider', 'codex', '--user', 'alice', '--with', 'promptdriven/core,@promptdriven,alice', '--machine', 'old-laptop'],
+    sb,
+  );
+  assert.equal(bulkUnshare.exit, 0, bulkUnshare.stderr);
+  const bulkUnshareReqs = cloud.state.requests.slice(idxBeforeBulkUnshare).filter(r => r.method === 'POST' && r.path.endsWith('/unshare'));
+  const unsharedAccountIds = [...new Set(bulkUnshareReqs.map(r => r.path.split('/')[3]))];
+  assert.deepEqual(unsharedAccountIds, expectedOwnedCodexIds);
+  const firstAcctUnshares = bulkUnshareReqs.filter(r => r.path === `/v1/accounts/${expectedOwnedCodexIds[0]}/unshare`).map(r => r.body);
+  assert.deepEqual(firstAcctUnshares, [
+    { github_login: 'alice' },
+    { org: 'promptdriven', team: 'core' },
+    { org: 'promptdriven' },
+    { machine_id: 'old-laptop' },
+  ], 'deduplicated alice and sent symmetric user, team, org, and machine unshare payloads');
+});
+
+test('3428: pdd accounts list requests refresh=true while internal checks stay fast, and Codex add/import probes local usage when initial server windows are unpopulated', async t => {
+  const cloud = await createMockCloudServer(t, { zeroInitialUsage: true });
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+
+  // 1. Codex `add` when server returns 0%/0% & null resets: probes temp CODEX_HOME BEFORE cleanup and reports usage!
+  let addProbeSawFullTokens = false;
+  const addRes = await invokeCli(['accounts', 'add', '--provider', 'codex', '--label', 'probe-add'], sb, {
+    tmpRoot: sb.root,
+    run: async (_cmd, _args, opts) => {
+      writeFileSync(join(opts.env.CODEX_HOME, 'auth.json'), JSON.stringify({
+        auth_mode: 'chatgpt',
+        OPENAI_API_KEY: null,
+        tokens: {
+          access_token: 'at_probe_add_secret1111',
+          refresh_token: 'rt_probe_add_secret2222',
+          id_token: makeJwt({ email: 'probe1@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+          account_id: 'acct_probe_add',
+        },
+      }));
+      return { code: 0, stdout: 'Logged in\n', stderr: '' };
+    },
+    readCodexUsageWindows: async ({ env: probeEnv }) => {
+      const raw = JSON.parse(readFileSync(join(probeEnv.CODEX_HOME, 'auth.json'), 'utf8'));
+      addProbeSawFullTokens = raw.tokens?.refresh_token === 'rt_probe_add_secret2222';
+      return {
+        state: 'ok',
+        five_hour_used_percent: 34,
+        five_hour_reset_at: '2026-11-15T23:00:00Z',
+        weekly_used_percent: 61,
+        weekly_reset_at: '2026-11-20T00:00:00Z',
+      };
+    },
+  });
+  assert.equal(addRes.exit, 0, addRes.stderr);
+  assert.equal(addProbeSawFullTokens, true, 'local usage probe ran against temp CODEX_HOME BEFORE temp dir was wiped');
+  const addedAcc = cloud.state.accounts.find(a => a.label === 'probe-add');
+  assert.equal(addedAcc.five_hour_used_percent, 34);
+  assert.equal(addedAcc.weekly_used_percent, 61);
+  assert.equal(addedAcc.weekly_reset_at, '2026-11-20T00:00:00Z');
+
+  // 2. Codex `import` when server returns 0%/0% & null resets: probes BEFORE stripping ~/.codex/auth.json, and fails open on probe error!
+  mkdirSync(join(sb.home, '.codex'), { recursive: true });
+  writeFileSync(join(sb.home, '.codex', 'auth.json'), JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_probe_imp_secret3333',
+      refresh_token: 'rt_probe_imp_secret4444',
+      id_token: makeJwt({ email: 'probe2@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' } }),
+      account_id: 'acct_probe_imp',
+    },
+  }));
+  let impProbeSawUnstripped = false;
+  const impRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'probe-imp'], sb, {
+    readCodexUsageWindows: async ({ env: probeEnv }) => {
+      const raw = JSON.parse(readFileSync(join(probeEnv.CODEX_HOME, 'auth.json'), 'utf8'));
+      impProbeSawUnstripped = raw.tokens?.refresh_token === 'rt_probe_imp_secret4444';
+      return {
+        state: 'ok',
+        five_hour_used_percent: 19,
+        five_hour_reset_at: '2026-11-15T21:00:00Z',
+        weekly_used_percent: 48,
+        weekly_reset_at: '2026-11-19T12:00:00Z',
+      };
+    },
+  });
+  assert.equal(impRes.exit, 0, impRes.stderr);
+  assert.equal(impProbeSawUnstripped, true, 'import usage probe ran BEFORE stripping local ~/.codex/auth.json');
+  const impAcc = cloud.state.accounts.find(a => a.label === 'probe-imp');
+  assert.equal(impAcc.five_hour_used_percent, 19);
+  assert.equal(impAcc.weekly_used_percent, 48);
+
+  // Fail-open check when local usage probe throws
+  const extProbeFail = join(sb.root, 'probe-fail-auth.json');
+  writeFileSync(extProbeFail, JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_probe_fail_5555',
+      refresh_token: 'rt_probe_fail_6666',
+      id_token: makeJwt({ email: 'probe3@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_probe_fail',
+    },
+  }));
+  const failOpenImp = await invokeCli(['accounts', 'import', '--provider', 'codex', '--from', extProbeFail, '--label', 'probe-fail-open'], sb, {
+    readCodexUsageWindows: async () => {
+      throw new Error('codex app-server timed out');
+    },
+  });
+  assert.equal(failOpenImp.exit, 0, 'usage probe failure is strictly fail-open');
+
+  // 3. `pdd accounts` and `pdd accounts list` pass `?refresh=true`, whereas internal lookups (`use`) omit `?refresh=true`!
+  const idxBeforeList = cloud.state.requests.length;
+  const listOut = await invokeCli(['accounts', 'list'], sb);
+  assert.equal(listOut.exit, 0);
+  assert.match(listOut.stdout, /probe-add\s+codex\s+owner \(Serhan-Asad\)\s+34%/);
+  const rootListOut = await invokeCli(['accounts'], sb);
+  assert.equal(rootListOut.exit, 0);
+  const listReqs = cloud.state.requests.slice(idxBeforeList).filter(r => r.method === 'GET' && r.path === '/v1/accounts');
+  assert.equal(listReqs.length, 2);
+  assert.deepEqual(listReqs.map(r => r.query), ['?refresh=true', '?refresh=true']);
+
+  const idxBeforeUse = cloud.state.requests.length;
+  assert.equal((await invokeCli(['accounts', 'use', 'probe-add'], sb)).exit, 0);
+  const internalListReqs = cloud.state.requests.slice(idxBeforeUse).filter(r => r.method === 'GET' && r.path === '/v1/accounts');
+  assert.equal(internalListReqs.length, 1);
+  assert.equal(internalListReqs[0].query, '', 'internal account resolution keeps refresh=false');
 });

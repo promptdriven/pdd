@@ -1,19 +1,27 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 2aca7402038707d126846bf5761caeefa897e5a53283c53e9eeeab0be0d4a0db).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 4c4f6470ed343fd1d4be6719948fa7f4ffd0f05c4f4bc6f9d2c15df994399109).
 import { spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 import { runAgentProcess } from './agent-adapters.mjs';
 import {
   CloudAccountsError,
   cloudAccountsRequest,
   isCloudAccountsActive,
   leaseCloudAccount,
+  listCloudAccounts,
   localClaudePaths,
   localCodexAuthPath,
+  localCodexConfigPath,
+  localCodexHome,
   materializeLocalClaudeAuth,
   materializeLocalCodexAuth,
   readCloudAccountsState,
+  readCodexUsageWindows,
+  reportCloudAccountUsage,
+  restoreLocalCodexGatewayConfig,
   saveActiveLeaseMetadata,
   writeCloudAccountsState,
 } from './login-pool.mjs';
@@ -85,7 +93,8 @@ function renderAccountsTable(accounts, pendingInvites, activeByProvider) {
   } else {
     const rows = accounts.map(acc => {
       const isActive = activeByProvider?.[acc.provider]?.account_id === acc.account_id;
-      const access = acc.shared
+      const isSharedBorrower = typeof acc.is_owner === 'boolean' ? !acc.is_owner : Boolean(acc.shared);
+      const access = isSharedBorrower
         ? `shared${acc.owner_login ? ` (${acc.owner_login})` : ''}`
         : `owner${acc.owner_login ? ` (${acc.owner_login})` : ''}`;
       return [
@@ -183,8 +192,8 @@ async function readStdinString(stdin, { idleTimeoutMs = 50 } = {}) {
   });
 }
 
-export function readCodexFullAuthBundle(fs, env) {
-  const authPath = localCodexAuthPath(env);
+export function readCodexFullAuthBundle(fs, env, explicitAuthPath = null) {
+  const authPath = explicitAuthPath || localCodexAuthPath(env);
   let raw;
   try {
     raw = JSON.parse(fs.readFileSync(authPath, 'utf8'));
@@ -250,7 +259,68 @@ function readLocalClaudeToken(fs, env, extraText = '') {
   throw new CloudAccountsError('No Claude OAuth token found. Run claude setup-token or pass CLAUDE_CODE_OAUTH_TOKEN.', { code: 'missing_local_login' });
 }
 
-function detectImportProvider(fs, env) {
+function readClaudeTokenFromPath(fs, fromPath) {
+  let target = fromPath;
+  try {
+    if (fs.statSync(fromPath)?.isDirectory()) target = join(fromPath, 'settings.json');
+  } catch {}
+  let rawText = '';
+  try {
+    rawText = fs.readFileSync(target, 'utf8');
+  } catch {
+    throw new CloudAccountsError(`No Claude token file found at ${target}.`, { code: 'missing_local_login' });
+  }
+  try {
+    const parsed = JSON.parse(rawText);
+    rememberSecrets(...knownSecretValues(parsed));
+    const candidate = parsed?.env?.CLAUDE_CODE_OAUTH_TOKEN ?? parsed?.oauth_token ?? parsed?.claude_oauth_token ?? '';
+    if (typeof candidate === 'string' && candidate.trim()) {
+      const clean = candidate.trim();
+      rememberSecrets(clean);
+      return clean;
+    }
+  } catch {}
+  const extracted = extractClaudeToken(rawText) || rawText.trim();
+  if (extracted && !/\s/.test(extracted)) {
+    rememberSecrets(extracted);
+    return extracted;
+  }
+  throw new CloudAccountsError(`No valid Claude OAuth token found in ${target}.`, { code: 'invalid_local_login' });
+}
+
+function resolveCodexImportSource(fs, cwd, env, fromOption) {
+  const defaultAuth = localCodexAuthPath(env);
+  if (!fromOption) {
+    return { authPath: defaultAuth, probeCodexHome: localCodexHome(env), isDefaultLocal: true };
+  }
+  const resolved = resolve(cwd, String(fromOption).trim());
+  let isDir = false;
+  try { isDir = Boolean(fs.statSync(resolved)?.isDirectory()); } catch {}
+  const authPath = isDir ? join(resolved, 'auth.json') : resolved;
+  const isDefaultLocal = resolve(authPath) === resolve(defaultAuth);
+  return {
+    authPath,
+    probeCodexHome: isDir ? resolved : null,
+    isDefaultLocal,
+  };
+}
+
+function detectImportProvider(fs, env, { cwd = process.cwd(), fromOption = null } = {}) {
+  if (fromOption) {
+    const resolved = resolve(cwd, String(fromOption).trim());
+    let candidate = resolved;
+    try { if (fs.statSync(resolved)?.isDirectory()) candidate = join(resolved, 'auth.json'); } catch {}
+    try {
+      const raw = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+      if (object(raw?.tokens)) return 'codex';
+      if (raw?.env?.CLAUDE_CODE_OAUTH_TOKEN || raw?.oauth_token || raw?.claude_oauth_token) return 'claude';
+    } catch {}
+    try {
+      const txt = fs.readFileSync(resolved, 'utf8');
+      if (extractClaudeToken(txt)) return 'claude';
+    } catch {}
+    return 'codex';
+  }
   try {
     const raw = JSON.parse(fs.readFileSync(localCodexAuthPath(env), 'utf8'));
     const t = raw?.tokens;
@@ -264,12 +334,34 @@ function detectImportProvider(fs, env) {
   return 'codex';
 }
 
-async function runProviderLogin(provider, { cwd, env }, ports = {}) {
+function createTempPrivateDir(fs, prefix, tmpRoot) {
+  const rootDir = tmpRoot || (fs.existsSync?.('/tmp') !== false ? '/tmp' : tmpdir());
+  let dir;
+  if (typeof fs.mkdtempSync === 'function') {
+    dir = fs.mkdtempSync(join(rootDir, prefix));
+  } else if (fs === nativeFs) {
+    dir = nativeFs.mkdtempSync(join(rootDir, prefix));
+  } else {
+    dir = join(rootDir, `${prefix}${randomBytes(8).toString('hex')}`);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  try { (fs.chmodSync ?? nativeFs.chmodSync)(dir, 0o700); } catch {}
+  return dir;
+}
+
+function removeTempPrivateDir(fs, dir) {
+  if (!dir) return;
+  try { (fs.rmSync ?? nativeFs.rmSync)(dir, { recursive: true, force: true }); } catch {}
+}
+
+async function runProviderLogin(provider, { cwd, env, deviceAuth = false }, ports = {}) {
   if (typeof ports.runLogin === 'function') {
-    return ports.runLogin(provider, { cwd, env });
+    return ports.runLogin(provider, { cwd, env, deviceAuth });
   }
   const cmd = provider === 'claude' ? 'claude' : 'codex';
-  const args = provider === 'claude' ? ['setup-token'] : ['login'];
+  const args = provider === 'claude'
+    ? ['setup-token']
+    : ['login', '-c', 'cli_auth_credentials_store="file"', ...(deviceAuth ? ['--device-auth'] : [])];
   if (typeof ports.run === 'function') {
     return ports.run(cmd, args, { cwd, env, input: '', timeoutMs: 120_000, maxBytes: 65_536 });
   }
@@ -283,23 +375,288 @@ async function runProviderLogin(provider, { cwd, env }, ports = {}) {
 function applyMaterializedLease(leaseReply, { env }, ports = {}) {
   const saved = readCloudAccountsState({ env }, ports);
   const provider = leaseReply?.account?.provider;
-  if (provider === 'codex' && object(leaseReply?.lease?.codex_auth_json)) {
-    materializeLocalCodexAuth(leaseReply.lease.codex_auth_json, { env }, ports);
-    saveActiveLeaseMetadata(leaseReply, { env }, ports);
-    return;
+  const lease = leaseReply?.lease;
+  if (provider === 'codex') {
+    const prevCodex = saved.active?.codex;
+    const prevManagedGateway = Boolean(prevCodex?.managed_codex_gateway);
+    const prevModelProvider = prevCodex?.previous_codex_model_provider ?? null;
+    if (lease?.delivery_mode === 'gateway_grant') {
+      const mat = materializeLocalCodexAuth(lease, {
+        env,
+        previousManagedCodexGateway: prevManagedGateway,
+        previousCodexModelProvider: prevModelProvider,
+      }, ports);
+      saveActiveLeaseMetadata(leaseReply, {
+        env,
+        managedCodexGateway: mat.managedCodexGateway,
+        codexGatewayUrl: mat.codexGatewayUrl,
+        previousCodexModelProvider: mat.previousCodexModelProvider,
+      }, ports);
+      return;
+    }
+    if (object(lease?.codex_auth_json)) {
+      materializeLocalCodexAuth(lease.codex_auth_json, {
+        env,
+        previousManagedCodexGateway: prevManagedGateway,
+        previousCodexModelProvider: prevModelProvider,
+      }, ports);
+      saveActiveLeaseMetadata(leaseReply, {
+        env,
+        managedCodexGateway: false,
+        codexGatewayUrl: null,
+        previousCodexModelProvider: null,
+      }, ports);
+      return;
+    }
   }
   if (provider === 'claude') {
     const prevManaged = Boolean(saved.active?.claude?.managed_anthropic_base_url);
-    const { managedBaseUrl } = materializeLocalClaudeAuth(leaseReply.lease, { env, previousManagedBaseUrl: prevManaged }, ports);
+    const { managedBaseUrl } = materializeLocalClaudeAuth(lease, { env, previousManagedBaseUrl: prevManaged }, ports);
     saveActiveLeaseMetadata(leaseReply, { env, managedBaseUrl }, ports);
   }
 }
 
-async function fetchAccountsList({ cwd, env }, ports = {}) {
-  const data = await cloudAccountsRequest('GET', '/v1/accounts', { cwd, env }, ports);
+async function fetchAccountsList({ cwd, env, refresh = false }, ports = {}) {
+  const data = await listCloudAccounts({ refresh, cwd, env }, ports);
   const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
   const pendingInvites = Array.isArray(data?.pending_invites) ? data.pending_invites : [];
   return { accounts, pendingInvites };
+}
+
+function isOwnedAccount(acc) {
+  if (!acc || acc.revoked) return false;
+  if (typeof acc.is_owner === 'boolean') return acc.is_owner === true;
+  return acc.shared !== true;
+}
+
+const VALID_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+
+function parseWithTargets(rawWith) {
+  const source = String(rawWith ?? '');
+  if (!source.trim()) return { targets: [] };
+  const parts = source.split(',');
+  const seen = new Set();
+  const targets = [];
+  for (const rawPart of parts) {
+    const item = rawPart.trim();
+    if (!item) {
+      return { error: 'Share target list contains an empty entry. Pass --with USER|ORG/TEAM[,...].' };
+    }
+    if (/\s/.test(item)) {
+      return { error: `Invalid share target "${item}". Separate multiple targets with commas.` };
+    }
+    if (item.startsWith('@')) {
+      const org = item.slice(1);
+      if (!org || org.includes('/') || !VALID_SLUG_RE.test(org)) {
+        return { error: `Invalid organization target "${item}". Use @ORG or ORG/TEAM.` };
+      }
+      const key = `org:${org.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        targets.push({ kind: 'org', raw: item, org });
+      }
+      continue;
+    }
+    if (item.includes('/')) {
+      const segs = item.split('/');
+      const [org, team, extra] = segs;
+      if (!org || !team || extra || !VALID_SLUG_RE.test(org) || !VALID_SLUG_RE.test(team)) {
+        return { error: 'Use ORG/TEAM for team sharing.' };
+      }
+      const key = `team:${org.toLowerCase()}/${team.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        targets.push({ kind: 'team', raw: item, org, team });
+      }
+      continue;
+    }
+    if (!VALID_SLUG_RE.test(item)) {
+      return { error: `Invalid GitHub user target "${item}".` };
+    }
+    const key = `user:${item.toLowerCase()}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      targets.push({ kind: 'user', raw: item, login: item });
+    }
+  }
+  return { targets };
+}
+
+async function resolveSharePayloads(parsedTargets, { cwd, env }, ports = {}) {
+  const payloads = [];
+  for (const target of parsedTargets) {
+    if (target.kind === 'org') {
+      payloads.push({ display: `@${target.org}`, body: { org: target.org } });
+    } else if (target.kind === 'team') {
+      payloads.push({ display: `${target.org}/${target.team}`, body: { org: target.org, team: target.team } });
+    } else {
+      const resolved = await resolveGitHubUser(target.login, { cwd, env }, ports);
+      const body = { github_login: resolved.login };
+      if (Number.isSafeInteger(resolved.id)) body.github_user_id = resolved.id;
+      payloads.push({ display: target.raw, body });
+    }
+  }
+  return payloads;
+}
+
+async function applySharePayloadsToAccounts(accounts, sharePayloads, { cwd, env }, ports = {}) {
+  const notes = [];
+  for (const account of accounts) {
+    for (const item of sharePayloads) {
+      const res = await cloudAccountsRequest(
+        'POST',
+        `/v1/accounts/${encodeURIComponent(account.account_id)}/share`,
+        { body: item.body, cwd, env },
+        ports,
+      );
+      const inviteId = res?.invite?.invite_id ?? res?.invite_id ?? null;
+      notes.push({
+        label: account.label ?? account.account_id,
+        display: item.display,
+        inviteId,
+      });
+    }
+  }
+  return notes;
+}
+
+function buildUnsharePayloads({ userOption, withOption, machineOption }) {
+  const seen = new Set();
+  const payloads = [];
+  const rawUser = typeof userOption === 'string' ? userOption.trim() : '';
+  if (rawUser) {
+    if (!VALID_SLUG_RE.test(rawUser)) {
+      return { error: `Invalid GitHub user "${rawUser}".` };
+    }
+    const key = `user:${rawUser.toLowerCase()}`;
+    seen.add(key);
+    payloads.push({ display: rawUser, body: { github_login: rawUser } });
+  }
+  const rawWith = typeof withOption === 'string' ? withOption : '';
+  if (rawWith.trim()) {
+    const parsed = parseWithTargets(rawWith);
+    if (parsed.error) return { error: parsed.error };
+    for (const target of parsed.targets) {
+      if (target.kind === 'org') {
+        const key = `org:${target.org.toLowerCase()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          payloads.push({ display: `@${target.org}`, body: { org: target.org } });
+        }
+      } else if (target.kind === 'team') {
+        const key = `team:${target.org.toLowerCase()}/${target.team.toLowerCase()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          payloads.push({ display: `${target.org}/${target.team}`, body: { org: target.org, team: target.team } });
+        }
+      } else {
+        const key = `user:${target.login.toLowerCase()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          payloads.push({ display: target.login, body: { github_login: target.login } });
+        }
+      }
+    }
+  }
+  const rawMachine = typeof machineOption === 'string' ? machineOption.trim() : '';
+  if (rawMachine) {
+    if (/\s/.test(rawMachine)) {
+      return { error: `Invalid machine ID "${rawMachine}".` };
+    }
+    const key = `machine:${rawMachine}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      payloads.push({ display: `machine ${rawMachine}`, body: { machine_id: rawMachine } });
+    }
+  }
+  return { payloads };
+}
+
+async function probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome, { fs, cwd, env }, ports = {}) {
+  if (!acc?.account_id) return acc;
+  const isUnpopulated = (acc.five_hour_used_percent ?? 0) === 0
+    && (acc.weekly_used_percent ?? 0) === 0
+    && !acc.five_hour_reset_at
+    && !acc.weekly_reset_at;
+  if (!isUnpopulated) return acc;
+
+  let tempProbeDir = null;
+  try {
+    let targetHome = probeCodexHome;
+    if (!targetHome) {
+      tempProbeDir = createTempPrivateDir(fs, 'pdd-cx-probe-', ports.tmpRoot);
+      fs.writeFileSync(join(tempProbeDir, 'auth.json'), `${JSON.stringify(authJson, null, 2)}\n`, { mode: 0o600 });
+      targetHome = tempProbeDir;
+    }
+    const probeFn = ports.readCodexUsageWindows ?? readCodexUsageWindows;
+    const windows = await probeFn(
+      {
+        command: 'codex',
+        cwd,
+        env: { ...env, CODEX_HOME: targetHome },
+        weeklyStopPercent: 100,
+        timeoutMs: ports.usageProbeTimeoutMs ?? 3000,
+      },
+      ports.codexLimitPorts,
+    );
+    const hasFiveH = typeof windows?.five_hour_used_percent === 'number' && Number.isFinite(windows.five_hour_used_percent);
+    const hasSevenD = typeof windows?.weekly_used_percent === 'number' && Number.isFinite(windows.weekly_used_percent);
+    if (hasFiveH || hasSevenD) {
+      const fiveH = hasFiveH ? windows.five_hour_used_percent : 0;
+      const sevenD = hasSevenD ? windows.weekly_used_percent : 0;
+      const reported = await reportCloudAccountUsage(acc.account_id, {
+        five_hour_used_percent: fiveH,
+        five_hour_reset_at: windows.five_hour_reset_at ?? null,
+        weekly_used_percent: sevenD,
+        weekly_reset_at: windows.weekly_reset_at ?? null,
+        limit_reached: Boolean(windows.limit_reached || fiveH >= 100 || sevenD >= 100),
+      }, { cwd, env, timeoutMs: 3500 }, ports);
+      if (object(reported?.account)) return reported.account;
+    }
+  } catch {} finally {
+    removeTempPrivateDir(fs, tempProbeDir);
+  }
+  return acc;
+}
+
+function hashCredentialMaterial(value) {
+  return createHash('sha256').update(String(value ?? '')).digest('hex');
+}
+
+async function askLoopContinue(question, { stdin, stdout }, ports = {}) {
+  const promptFn = ports.prompt ?? ports.confirm ?? null;
+  let answer;
+  if (typeof promptFn === 'function') {
+    try {
+      answer = await promptFn(question);
+    } catch {
+      return false;
+    }
+  } else {
+    const rl = createInterface({ input: stdin, output: stdout });
+    try {
+      answer = await new Promise(resolveAnswer => {
+        let settled = false;
+        const finish = val => {
+          if (settled) return;
+          settled = true;
+          resolveAnswer(val);
+        };
+        rl.once('SIGINT', () => {
+          finish(undefined);
+          rl.close();
+        });
+        rl.once('close', () => finish(undefined));
+        rl.question(question, val => finish(val));
+      });
+    } finally {
+      rl.close();
+    }
+  }
+  if (answer === undefined || answer === null || answer === false) return false;
+  if (answer === true) return true;
+  const normalized = String(answer).trim().toLowerCase();
+  return normalized === '' || normalized === 'y' || normalized === 'yes';
 }
 
 async function resolveAccount(labelOrId, { cwd, env }, ports = {}) {
@@ -314,137 +671,58 @@ async function resolveAccount(labelOrId, { cwd, env }, ports = {}) {
   throw new CloudAccountsError(`Account "${target}" was not found. Run pdd accounts list.`, { code: 'not_found' });
 }
 
-async function enrollOrImportAccount(mode, { provider: requestedProvider, label: requestedLabel, cwd, env, stdin }, ports = {}) {
-  const fs = ports.fs ?? nativeFs;
-  const provider = requestedProvider || (mode === 'import' ? detectImportProvider(fs, env) : 'codex');
-
-  if (provider === 'codex') {
-    if (mode === 'add') {
-      const loginRes = await runProviderLogin('codex', { cwd, env }, ports);
-      if (loginRes && Number.isInteger(loginRes.code) && loginRes.code !== 0) {
-        return { exitCode: 1, message: 'codex login did not complete.' };
-      }
-    }
-    const { authJson, bundle } = readCodexFullAuthBundle(fs, env);
-    const label = requestedLabel ? sanitizeLabel(requestedLabel, '') : defaultAccountLabel('codex', authJson);
-    if (!label) return { exitCode: 2, message: 'Provide a valid --label NAME.' };
-    const created = await cloudAccountsRequest('POST', '/v1/accounts', {
-      body: {
-        label,
-        provider: 'codex',
-        plan: detectCodexPlan(authJson),
-        bundle,
-      },
-      cwd,
-      env,
-    }, ports);
-    const acc = created?.account ?? { account_id: created?.account_id ?? label, label, provider: 'codex' };
-    // Strip local refresh_token immediately so only Cloud refreshes.
-    materializeLocalCodexAuth(authJson, { env }, ports);
-    try {
-      const leased = await leaseCloudAccount({ provider: 'codex', preferredLabel: acc.label, holderId: 'local-cli' }, { cwd, env }, ports);
-      if (leased?.state === 'leased') {
-        applyMaterializedLease(leased, { env }, ports);
-      } else {
-        const current = readCloudAccountsState({ env }, ports);
-        writeCloudAccountsState({
-          enrolled: true,
-          providers: [...new Set([...current.providers, 'codex'])],
-          active: current.active,
-          cooling: leased?.state === 'all_cooling'
-            ? { ...current.cooling, codex: { wake_at: leased.wake_at ?? null } }
-            : current.cooling,
-        }, { env }, ports);
-      }
-    } catch {
-      const current = readCloudAccountsState({ env }, ports);
-      writeCloudAccountsState({
-        enrolled: true,
-        providers: [...new Set([...current.providers, 'codex'])],
-        active: {
-          ...current.active,
-          codex: {
-            account_id: acc.account_id,
-            label: acc.label ?? label,
-            provider: 'codex',
-            lease_id: null,
-            expires_at: new Date(((ports.now ?? Date.now)()) + 45 * 60 * 1000).toISOString(),
-            delivery_mode: 'direct_stripped',
-            five_hour_used_percent: acc.five_hour_used_percent ?? 0,
-            five_hour_reset_at: acc.five_hour_reset_at ?? null,
-            weekly_used_percent: acc.weekly_used_percent ?? 0,
-            weekly_reset_at: acc.weekly_reset_at ?? null,
-          },
-        },
-        cooling: current.cooling,
-      }, { env }, ports);
-    }
-    return {
-      exitCode: 0,
-      message: `Enrolled Codex account "${acc.label ?? label}" in PDD Cloud and stripped the local refresh token.`,
-    };
-  }
-
-  // Claude enrollment / import
-  let loginOutput = '';
-  if (mode === 'add') {
-    const piped = await readStdinString(stdin);
-    if (piped.trim()) {
-      loginOutput = piped;
-    } else {
-      const loginRes = await runProviderLogin('claude', { cwd, env }, ports);
-      if (loginRes && Number.isInteger(loginRes.code) && loginRes.code !== 0) {
-        return { exitCode: 1, message: 'claude setup-token did not complete.' };
-      }
-      loginOutput = `${loginRes?.stdout ?? ''}\n${loginRes?.stderr ?? ''}`;
-    }
-  } else {
-    loginOutput = await readStdinString(stdin);
-  }
-  const oauthToken = readLocalClaudeToken(fs, env, loginOutput);
-  const label = requestedLabel ? sanitizeLabel(requestedLabel, '') : defaultAccountLabel('claude');
-  if (!label) return { exitCode: 2, message: 'Provide a valid --label NAME.' };
-  const created = await cloudAccountsRequest('POST', '/v1/accounts', {
-    body: {
-      label,
-      provider: 'claude',
-      plan: 'max',
-      bundle: { oauth_token: oauthToken },
-    },
-    cwd,
-    env,
-  }, ports);
-  const acc = created?.account ?? { account_id: created?.account_id ?? label, label, provider: 'claude' };
-  materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: oauthToken }, { env }, ports);
+async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, fallbackAuthJson, fallbackOauthToken, { cwd, env }, ports = {}) {
   try {
-    const leased = await leaseCloudAccount({ provider: 'claude', preferredLabel: acc.label, holderId: 'local-cli' }, { cwd, env }, ports);
+    const leased = await leaseCloudAccount({ provider, preferredLabel: acc.label, holderId: 'local-cli' }, { cwd, env }, ports);
     if (leased?.state === 'leased') {
       applyMaterializedLease(leased, { env }, ports);
     } else {
+      if (provider === 'codex' && fallbackAuthJson) {
+        const saved = readCloudAccountsState({ env }, ports);
+        const prevCodex = saved.active?.codex;
+        materializeLocalCodexAuth(fallbackAuthJson, {
+          env,
+          previousManagedCodexGateway: Boolean(prevCodex?.managed_codex_gateway),
+          previousCodexModelProvider: prevCodex?.previous_codex_model_provider ?? null,
+        }, ports);
+      } else if (provider === 'claude' && fallbackOauthToken) {
+        materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
+      }
       const current = readCloudAccountsState({ env }, ports);
       writeCloudAccountsState({
         enrolled: true,
-        providers: [...new Set([...current.providers, 'claude'])],
+        providers: [...new Set([...current.providers, provider])],
         active: current.active,
         cooling: leased?.state === 'all_cooling'
-          ? { ...current.cooling, claude: { wake_at: leased.wake_at ?? null } }
+          ? { ...current.cooling, [provider]: { wake_at: leased.wake_at ?? null } }
           : current.cooling,
       }, { env }, ports);
     }
   } catch {
+    if (provider === 'codex' && fallbackAuthJson) {
+      const saved = readCloudAccountsState({ env }, ports);
+      const prevCodex = saved.active?.codex;
+      materializeLocalCodexAuth(fallbackAuthJson, {
+        env,
+        previousManagedCodexGateway: Boolean(prevCodex?.managed_codex_gateway),
+        previousCodexModelProvider: prevCodex?.previous_codex_model_provider ?? null,
+      }, ports);
+    } else if (provider === 'claude' && fallbackOauthToken) {
+      materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
+    }
     const current = readCloudAccountsState({ env }, ports);
     writeCloudAccountsState({
       enrolled: true,
-      providers: [...new Set([...current.providers, 'claude'])],
+      providers: [...new Set([...current.providers, provider])],
       active: {
         ...current.active,
-        claude: {
+        [provider]: {
           account_id: acc.account_id,
-          label: acc.label ?? label,
-          provider: 'claude',
+          label: acc.label ?? fallbackLabel,
+          provider,
           lease_id: null,
           expires_at: new Date(((ports.now ?? Date.now)()) + 45 * 60 * 1000).toISOString(),
-          delivery_mode: 'direct_oauth',
+          delivery_mode: provider === 'codex' ? 'direct_stripped' : 'direct_oauth',
           five_hour_used_percent: acc.five_hour_used_percent ?? 0,
           five_hour_reset_at: acc.five_hour_reset_at ?? null,
           weekly_used_percent: acc.weekly_used_percent ?? 0,
@@ -454,16 +732,370 @@ async function enrollOrImportAccount(mode, { provider: requestedProvider, label:
       cooling: current.cooling,
     }, { env }, ports);
   }
+}
+
+async function enrollSingleIteration(mode, {
+  provider,
+  requestedLabel = null,
+  fromOption = null,
+  deviceAuth = false,
+  sharePayloads = [],
+  loopState = null,
+  cwd,
+  env,
+  stdin,
+}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+
+  if (provider === 'codex') {
+    let tempLoginDir = null;
+    try {
+      let authJson;
+      let bundle;
+      let probeCodexHome = null;
+      let shouldStripDefaultLocal = false;
+
+      if (mode === 'add') {
+        tempLoginDir = createTempPrivateDir(fs, 'pdd-codex-login-', ports.tmpRoot);
+        const loginEnv = { ...env, CODEX_HOME: tempLoginDir };
+        const loginRes = await runProviderLogin('codex', { cwd, env: loginEnv, deviceAuth }, ports);
+        if (loginRes && Number.isInteger(loginRes.code) && loginRes.code !== 0) {
+          return { exitCode: 1, aborted: loginRes.code === 130, message: 'codex login did not complete.' };
+        }
+        const tempAuthFile = join(tempLoginDir, 'auth.json');
+        let hasTempAuth = false;
+        try { hasTempAuth = Boolean(fs.statSync(tempAuthFile)?.isFile()); } catch {}
+        if (hasTempAuth || typeof ports.runLogin !== 'function') {
+          ({ authJson, bundle } = readCodexFullAuthBundle(fs, loginEnv, tempAuthFile));
+          probeCodexHome = tempLoginDir;
+        } else {
+          // Compatibility with unit test runLogin mocks that write directly to HOME/.codex/auth.json.
+          ({ authJson, bundle } = readCodexFullAuthBundle(fs, env));
+          probeCodexHome = localCodexHome(env);
+          shouldStripDefaultLocal = true;
+        }
+      } else {
+        const importSource = resolveCodexImportSource(fs, cwd, env, fromOption);
+        ({ authJson, bundle } = readCodexFullAuthBundle(fs, env, importSource.authPath));
+        probeCodexHome = importSource.probeCodexHome;
+        shouldStripDefaultLocal = importSource.isDefaultLocal;
+      }
+
+      const subjectAccountId = bundle.auth_json.tokens.account_id;
+      const credHash = hashCredentialMaterial(`${subjectAccountId}:${bundle.auth_json.tokens.refresh_token}`);
+      const seenLabel = loopState
+        ? (loopState.bySubjectId.get(subjectAccountId) ?? loopState.byFingerprint.get(credHash) ?? null)
+        : null;
+
+      let candidateLabel;
+      if (loopState) {
+        candidateLabel = seenLabel || loopState.peekNextLabel();
+      } else {
+        candidateLabel = requestedLabel ? sanitizeLabel(requestedLabel, '') : defaultAccountLabel('codex', authJson);
+      }
+      if (!candidateLabel) return { exitCode: 2, message: 'Provide a valid --label NAME.' };
+
+      const created = await cloudAccountsRequest('POST', '/v1/accounts', {
+        body: {
+          label: candidateLabel,
+          provider: 'codex',
+          plan: detectCodexPlan(authJson),
+          bundle,
+        },
+        cwd,
+        env,
+      }, ports);
+
+      let acc = created?.account ?? { account_id: created?.account_id ?? candidateLabel, label: candidateLabel, provider: 'codex' };
+      const isDuplicate = Boolean(
+        created?.already_enrolled === true
+        || seenLabel
+        || (loopState && acc.account_id && loopState.byAccountId.has(acc.account_id)),
+      );
+
+      acc = await probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome, { fs, cwd, env }, ports);
+
+      if (shouldStripDefaultLocal) {
+        const saved = readCloudAccountsState({ env }, ports);
+        const prevCodex = saved.active?.codex;
+        materializeLocalCodexAuth(authJson, {
+          env,
+          previousManagedCodexGateway: Boolean(prevCodex?.managed_codex_gateway),
+          previousCodexModelProvider: prevCodex?.previous_codex_model_provider ?? null,
+        }, ports);
+      }
+
+      await leaseAndSyncAfterEnroll('codex', acc, candidateLabel, authJson, null, { cwd, env }, ports);
+
+      const finalLabel = acc.label ?? candidateLabel;
+      if (loopState) {
+        loopState.byFingerprint.set(credHash, finalLabel);
+        if (subjectAccountId) loopState.bySubjectId.set(subjectAccountId, finalLabel);
+        if (acc.account_id) loopState.byAccountId.set(acc.account_id, finalLabel);
+        if (!isDuplicate) loopState.commitCandidateLabel(candidateLabel, finalLabel);
+      }
+
+      const shareNotes = sharePayloads.length
+        ? await applySharePayloadsToAccounts([acc], sharePayloads, { cwd, env }, ports)
+        : [];
+      const shareSuffix = shareNotes.length
+        ? ` Shared with ${shareNotes.map(n => `${n.display}${n.inviteId ? ` (invite ${n.inviteId})` : ''}`).join(', ')}.`
+        : '';
+
+      if (isDuplicate) {
+        return {
+          exitCode: 0,
+          duplicate: true,
+          account: acc,
+          label: finalLabel,
+          shareNotes,
+          message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
+        };
+      }
+      return {
+        exitCode: 0,
+        duplicate: false,
+        account: acc,
+        label: finalLabel,
+        shareNotes,
+        message: `Enrolled Codex account "${finalLabel}" in PDD Cloud and stripped the local refresh token.${shareSuffix}`,
+      };
+    } finally {
+      removeTempPrivateDir(fs, tempLoginDir);
+    }
+  }
+
+  // Claude enrollment / import
+  let oauthToken = '';
+  if (mode === 'add') {
+    const piped = !loopState ? await readStdinString(stdin) : '';
+    if (piped.trim()) {
+      oauthToken = readLocalClaudeToken(fs, env, piped);
+    } else {
+      const loginRes = await runProviderLogin('claude', { cwd, env, deviceAuth: false }, ports);
+      if (loginRes && Number.isInteger(loginRes.code) && loginRes.code !== 0) {
+        return { exitCode: 1, aborted: loginRes.code === 130, message: 'claude setup-token did not complete.' };
+      }
+      const loginOutput = `${loginRes?.stdout ?? ''}\n${loginRes?.stderr ?? ''}`;
+      oauthToken = readLocalClaudeToken(fs, env, loginOutput);
+    }
+  } else if (fromOption) {
+    oauthToken = readClaudeTokenFromPath(fs, resolve(cwd, String(fromOption).trim()));
+  } else {
+    const loginOutput = await readStdinString(stdin);
+    oauthToken = readLocalClaudeToken(fs, env, loginOutput);
+  }
+
+  const credHash = hashCredentialMaterial(oauthToken);
+  const seenLabel = loopState ? (loopState.byFingerprint.get(credHash) ?? null) : null;
+  let candidateLabel;
+  if (loopState) {
+    candidateLabel = seenLabel || loopState.peekNextLabel();
+  } else {
+    candidateLabel = requestedLabel ? sanitizeLabel(requestedLabel, '') : defaultAccountLabel('claude');
+  }
+  if (!candidateLabel) return { exitCode: 2, message: 'Provide a valid --label NAME.' };
+
+  const created = await cloudAccountsRequest('POST', '/v1/accounts', {
+    body: {
+      label: candidateLabel,
+      provider: 'claude',
+      plan: 'max',
+      bundle: { oauth_token: oauthToken },
+    },
+    cwd,
+    env,
+  }, ports);
+  const acc = created?.account ?? { account_id: created?.account_id ?? candidateLabel, label: candidateLabel, provider: 'claude' };
+  const isDuplicate = Boolean(
+    created?.already_enrolled === true
+    || seenLabel
+    || (loopState && acc.account_id && loopState.byAccountId.has(acc.account_id)),
+  );
+
+  materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: oauthToken }, { env }, ports);
+  await leaseAndSyncAfterEnroll('claude', acc, candidateLabel, null, oauthToken, { cwd, env }, ports);
+
+  const finalLabel = acc.label ?? candidateLabel;
+  if (loopState) {
+    loopState.byFingerprint.set(credHash, finalLabel);
+    if (acc.account_id) loopState.byAccountId.set(acc.account_id, finalLabel);
+    if (!isDuplicate) loopState.commitCandidateLabel(candidateLabel, finalLabel);
+  }
+
+  const shareNotes = sharePayloads.length
+    ? await applySharePayloadsToAccounts([acc], sharePayloads, { cwd, env }, ports)
+    : [];
+  const shareSuffix = shareNotes.length
+    ? ` Shared with ${shareNotes.map(n => `${n.display}${n.inviteId ? ` (invite ${n.inviteId})` : ''}`).join(', ')}.`
+    : '';
+
+  if (isDuplicate) {
+    return {
+      exitCode: 0,
+      duplicate: true,
+      account: acc,
+      label: finalLabel,
+      shareNotes,
+      message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
+    };
+  }
   return {
     exitCode: 0,
-    message: `Enrolled Claude account "${acc.label ?? label}" in PDD Cloud.`,
+    duplicate: false,
+    account: acc,
+    label: finalLabel,
+    shareNotes,
+    message: `Enrolled Claude account "${finalLabel}" in PDD Cloud.${shareSuffix}`,
   };
 }
 
-function hasLocalMaterializedFile(fs, provider, env) {
+async function enrollOrImportAccount(mode, {
+  provider: requestedProvider,
+  label: requestedLabel,
+  from: fromOption,
+  loop = false,
+  deviceAuth = false,
+  withTargets: rawWith = '',
+  cwd,
+  env,
+  stdin,
+}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const provider = requestedProvider || (mode === 'import' ? detectImportProvider(fs, env, { cwd, fromOption }) : 'codex');
+
+  if (deviceAuth && provider === 'claude') {
+    return { exitCode: 2, message: '--device-auth is only supported for Codex accounts.' };
+  }
+
+  let sharePayloads = [];
+  if (typeof rawWith === 'string' && rawWith.trim()) {
+    const parsedWith = parseWithTargets(rawWith);
+    if (parsedWith.error) return { exitCode: 2, message: parsedWith.error };
+    if (!parsedWith.targets.length) return { exitCode: 2, message: 'Pass at least one target to --with USER|ORG/TEAM[,...].' };
+    sharePayloads = await resolveSharePayloads(parsedWith.targets, { cwd, env }, ports);
+  }
+
+  if (!loop) {
+    const single = await enrollSingleIteration(mode, {
+      provider,
+      requestedLabel,
+      fromOption,
+      deviceAuth,
+      sharePayloads,
+      loopState: null,
+      cwd,
+      env,
+      stdin,
+    }, ports);
+    return { exitCode: single.exitCode, message: single.message };
+  }
+
+  // Interactive --loop enrollment mode
+  const promptFn = ports.prompt ?? ports.confirm ?? null;
+  const stdout = ports.stdout ?? process.stdout;
+  const interactive = Boolean(promptFn) || Boolean(stdin?.isTTY && stdout?.isTTY);
+  if (!interactive) {
+    return { exitCode: 2, message: 'pdd accounts add --loop requires an interactive terminal.' };
+  }
+  const prefix = requestedLabel ? sanitizeLabel(requestedLabel, '') : provider;
+  if (!prefix) return { exitCode: 2, message: 'Provide a valid --label NAME.' };
+
+  const existingList = await fetchAccountsList({ cwd, env, refresh: false }, ports).catch(() => ({ accounts: [] }));
+  const usedLabels = new Set(
+    existingList.accounts
+      .filter(a => a && !a.revoked)
+      .map(a => String(a.label ?? '').toLowerCase())
+      .filter(Boolean),
+  );
+  let counter = 1;
+  const loopState = {
+    byFingerprint: new Map(),
+    bySubjectId: new Map(),
+    byAccountId: new Map(),
+    peekNextLabel() {
+      while (usedLabels.has(`${prefix}-${counter}`.toLowerCase())) counter += 1;
+      return `${prefix}-${counter}`;
+    },
+    commitCandidateLabel(candidate, actual) {
+      usedLabels.add(String(candidate).toLowerCase());
+      if (actual) usedLabels.add(String(actual).toLowerCase());
+      counter += 1;
+    },
+  };
+
+  const streamedLive = !promptFn && Boolean(stdin?.isTTY && stdout?.isTTY);
+  const iterationMessages = [];
+  const enrolledLabels = [];
+  const refreshedLabels = [];
+
+  for (let iteration = 0; ; iteration += 1) {
+    const step = await enrollSingleIteration('add', {
+      provider,
+      requestedLabel: null,
+      fromOption: null,
+      deviceAuth,
+      sharePayloads,
+      loopState,
+      cwd,
+      env,
+      stdin,
+    }, ports);
+
+    if (step.exitCode !== 0) {
+      if (iteration > 0 && step.aborted) break;
+      if (iteration === 0) return { exitCode: step.exitCode, message: step.message };
+      iterationMessages.push(step.message);
+      break;
+    }
+
+    if (step.duplicate) {
+      if (!refreshedLabels.includes(step.label) && !enrolledLabels.includes(step.label)) {
+        refreshedLabels.push(step.label);
+      }
+    } else if (!enrolledLabels.includes(step.label)) {
+      enrolledLabels.push(step.label);
+    }
+
+    if (streamedLive) {
+      stdout.write(`${redactSecrets(step.message)}\n`);
+    } else {
+      iterationMessages.push(step.message);
+    }
+
+    const keepGoing = await askLoopContinue(`Enroll another ${provider} account? [Y/n] `, { stdin, stdout }, ports);
+    if (!keepGoing) break;
+  }
+
+  const shareSummary = sharePayloads.length
+    ? `, shared with ${sharePayloads.map(p => p.display).join(', ')}`
+    : '';
+  const summaryParts = [];
+  if (enrolledLabels.length) {
+    summaryParts.push(`enrolled ${enrolledLabels.length} ${provider} account${enrolledLabels.length === 1 ? '' : 's'} (${enrolledLabels.join(', ')})`);
+  }
+  if (refreshedLabels.length) {
+    summaryParts.push(`refreshed ${refreshedLabels.length} existing (${refreshedLabels.join(', ')})`);
+  }
+  const summary = summaryParts.length
+    ? `Loop summary: ${summaryParts.join('; ')}${shareSummary}.`
+    : `Loop finished with 0 ${provider} accounts enrolled.`;
+
+  const fullOutput = streamedLive ? summary : [...iterationMessages, summary].join('\n');
+  return { exitCode: 0, message: redactSecrets(fullOutput) };
+}
+
+function hasLocalMaterializedFile(fs, provider, env, cachedEntry = null) {
   try {
-    const target = provider === 'claude' ? localClaudePaths(env).settingsPath : localCodexAuthPath(env);
-    return Boolean(fs.statSync(target)?.isFile());
+    if (provider === 'claude') {
+      return Boolean(fs.statSync(localClaudePaths(env).settingsPath)?.isFile());
+    }
+    const hasAuth = Boolean(fs.statSync(localCodexAuthPath(env))?.isFile());
+    if (!hasAuth) return false;
+    if (cachedEntry?.managed_codex_gateway === true || cachedEntry?.delivery_mode === 'gateway_grant') {
+      return Boolean(fs.statSync(localCodexConfigPath(env))?.isFile());
+    }
+    return true;
   } catch {
     return false;
   }
@@ -494,7 +1126,7 @@ async function runSyncCommand({ provider: requestedProvider, quiet = false, time
       && (expiresMs - now) > 15 * 60 * 1000
       && fiveH < 100
       && sevenD < 100
-      && hasLocalMaterializedFile(fs, provider, env),
+      && hasLocalMaterializedFile(fs, provider, env, cached),
     );
     if (validCache) {
       if (!quiet) messages.push(`Active ${provider} account "${cached.label}" is fresh.`);
@@ -616,6 +1248,14 @@ function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {
       nextActive[prov] = entry;
     }
   }
+  const prevCodex = current.active?.codex;
+  if (prevCodex?.managed_codex_gateway === true && !nextActive.codex?.managed_codex_gateway) {
+    restoreLocalCodexGatewayConfig({
+      env,
+      previousModelProvider: prevCodex.previous_codex_model_provider ?? null,
+      removeAuthFile: !nextActive.codex,
+    }, ports);
+  }
   const nextCooling = Object.fromEntries(
     Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
   );
@@ -639,7 +1279,7 @@ export async function runAccountsCli({
   try {
     switch (sub) {
       case 'list': {
-        const { accounts, pendingInvites } = await fetchAccountsList({ cwd, env }, ports);
+        const { accounts, pendingInvites } = await fetchAccountsList({ cwd, env, refresh: true }, ports);
         const current = readCloudAccountsState({ env }, ports);
         const accessible = accounts.filter(a => !a.revoked);
         const validIds = new Set(accessible.map(a => a.account_id).filter(Boolean));
@@ -684,6 +1324,9 @@ export async function runAccountsCli({
         return await enrollOrImportAccount('add', {
           provider: options['--provider'],
           label: options['--label'],
+          loop: options['--loop'] === true,
+          deviceAuth: options['--device-auth'] === true,
+          withTargets: options['--with'] ?? '',
           cwd,
           env,
           stdin,
@@ -692,7 +1335,9 @@ export async function runAccountsCli({
       case 'import':
         return await enrollOrImportAccount('import', {
           provider: options['--provider'],
+          from: options['--from'] ?? null,
           label: options['--label'],
+          withTargets: options['--with'] ?? '',
           cwd,
           env,
           stdin,
@@ -765,23 +1410,51 @@ export async function runAccountsCli({
       }
 
       case 'share': {
-        const withTarget = typeof options['--with'] === 'string' ? options['--with'].trim() : '';
-        if (!withTarget) return { exitCode: 2, message: 'Use pdd accounts share LABEL --with USER|ORG/TEAM.' };
-        const { account } = await resolveAccount(operands[0], { cwd, env }, ports);
-        let body;
-        if (withTarget.includes('/')) {
-          const [org, team, extra] = withTarget.split('/');
-          if (!org || !team || extra) return { exitCode: 2, message: 'Use ORG/TEAM for team sharing.' };
-          body = { org, team };
-        } else {
-          const resolvedUser = await resolveGitHubUser(withTarget, { cwd, env }, ports);
-          body = { github_login: resolvedUser.login };
-          if (Number.isSafeInteger(resolvedUser.id)) body.github_user_id = resolvedUser.id;
+        const labelArg = typeof operands[0] === 'string' ? operands[0].trim() : '';
+        const allFlag = options['--all'] === true;
+        const providerFilter = options['--provider'] || null;
+        if (Boolean(labelArg) === allFlag) {
+          return { exitCode: 2, message: 'Specify either LABEL or --all on pdd accounts share, not both.' };
         }
-        const res = await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/share`, { body, cwd, env }, ports);
-        const inviteId = res?.invite?.invite_id ?? res?.invite_id ?? null;
-        const inviteNote = inviteId ? ` (invite ${inviteId})` : '';
-        return { exitCode: 0, message: `Shared "${account.label}" with ${withTarget}${inviteNote}.` };
+        if (!allFlag && providerFilter) {
+          return { exitCode: 2, message: '--provider requires --all on pdd accounts share.' };
+        }
+        const rawWith = typeof options['--with'] === 'string' ? options['--with'] : '';
+        const parsedWith = parseWithTargets(rawWith);
+        if (parsedWith.error) return { exitCode: 2, message: parsedWith.error };
+        if (!parsedWith.targets.length) {
+          return { exitCode: 2, message: 'Use pdd accounts share LABEL --with USER|ORG/TEAM[,...] or pdd accounts share --all --with USER|ORG/TEAM[,...].' };
+        }
+        const sharePayloads = await resolveSharePayloads(parsedWith.targets, { cwd, env }, ports);
+
+        let targetAccounts;
+        if (allFlag) {
+          const { accounts } = await fetchAccountsList({ cwd, env, refresh: false }, ports);
+          targetAccounts = accounts.filter(acc => isOwnedAccount(acc) && (!providerFilter || acc.provider === providerFilter));
+          if (!targetAccounts.length) {
+            return { exitCode: 1, message: providerFilter ? `No owned ${providerFilter} Cloud accounts found.` : 'No owned Cloud accounts found.' };
+          }
+        } else {
+          const { account } = await resolveAccount(labelArg, { cwd, env }, ports);
+          targetAccounts = [account];
+        }
+
+        const notes = await applySharePayloadsToAccounts(targetAccounts, sharePayloads, { cwd, env }, ports);
+        if (targetAccounts.length === 1 && sharePayloads.length === 1) {
+          const inviteNote = notes[0]?.inviteId ? ` (invite ${notes[0].inviteId})` : '';
+          return { exitCode: 0, message: `Shared "${targetAccounts[0].label}" with ${notes[0].display}${inviteNote}.` };
+        }
+        const acctNames = targetAccounts.map(a => `"${a.label}"`).join(', ');
+        const targetNames = notes
+          .filter((_, idx) => idx < sharePayloads.length)
+          .map((n, idx) => {
+            const invitesForTarget = notes
+              .filter(row => row.display === sharePayloads[idx].display && row.inviteId)
+              .map(row => row.inviteId);
+            return invitesForTarget.length ? `${n.display} (invite ${invitesForTarget.join(', ')})` : n.display;
+          })
+          .join(', ');
+        return { exitCode: 0, message: `Shared ${acctNames} with ${targetNames}.` };
       }
 
       case 'accept': {
@@ -794,7 +1467,8 @@ export async function runAccountsCli({
         }
         const res = await cloudAccountsRequest('POST', `/v1/accounts/invites/${encodeURIComponent(inviteId)}/accept`, { body: {}, cwd, env }, ports);
         const current = readCloudAccountsState({ env }, ports);
-        let provider = res?.account?.provider ?? res?.provider ?? null;
+        const acceptedAcc = res?.account ?? null;
+        let provider = acceptedAcc?.provider ?? res?.provider ?? null;
         let nextProviders = provider ? [...new Set([...current.providers, provider])] : current.providers;
         if (!provider) {
           const listed = await fetchAccountsList({ cwd, env }, ports).catch(() => null);
@@ -807,19 +1481,76 @@ export async function runAccountsCli({
           enrolled: true,
           providers: nextProviders,
         }, { env }, ports);
-        return { exitCode: 0, message: `Accepted shared account${res?.account?.label ? ` "${res.account.label}"` : ` invite ${inviteId}`}.` };
+        if (provider && !current.active?.[provider]?.account_id) {
+          try {
+            const leased = await leaseCloudAccount({
+              provider,
+              preferredLabel: acceptedAcc?.label ?? null,
+              currentAccountId: acceptedAcc?.account_id ?? null,
+              holderId: 'local-cli',
+            }, { cwd, env }, ports);
+            if (leased?.state === 'leased') {
+              applyMaterializedLease(leased, { env }, ports);
+              const refreshed = readCloudAccountsState({ env }, ports);
+              writeCloudAccountsState({
+                ...refreshed,
+                enrolled: true,
+                providers: [...new Set([...refreshed.providers, ...nextProviders])],
+              }, { env }, ports);
+            }
+          } catch {}
+        }
+        return { exitCode: 0, message: `Accepted shared account${acceptedAcc?.label ? ` "${acceptedAcc.label}"` : ` invite ${inviteId}`}.` };
       }
 
       case 'unshare': {
-        const user = typeof options['--user'] === 'string' ? options['--user'].trim() : '';
-        if (!user) return { exitCode: 2, message: 'Use pdd accounts unshare LABEL --user USER.' };
-        const { account } = await resolveAccount(operands[0], { cwd, env }, ports);
-        await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/unshare`, {
-          body: { github_login: user },
-          cwd,
-          env,
-        }, ports);
-        return { exitCode: 0, message: `Revoked "${account.label}" access for ${user}.` };
+        const labelArg = typeof operands[0] === 'string' ? operands[0].trim() : '';
+        const allFlag = options['--all'] === true;
+        const providerFilter = options['--provider'] || null;
+        if (Boolean(labelArg) === allFlag) {
+          return { exitCode: 2, message: 'Specify either LABEL or --all on pdd accounts unshare, not both.' };
+        }
+        if (!allFlag && providerFilter) {
+          return { exitCode: 2, message: '--provider requires --all on pdd accounts unshare.' };
+        }
+        const built = buildUnsharePayloads({
+          userOption: options['--user'],
+          withOption: options['--with'],
+          machineOption: options['--machine'],
+        });
+        if (built.error) return { exitCode: 2, message: built.error };
+        if (!built.payloads.length) {
+          return { exitCode: 2, message: 'Use pdd accounts unshare LABEL --user USER or pass --with USER|ORG/TEAM[,...] / --machine MACHINE_ID.' };
+        }
+
+        let targetAccounts;
+        if (allFlag) {
+          const { accounts } = await fetchAccountsList({ cwd, env, refresh: false }, ports);
+          targetAccounts = accounts.filter(acc => isOwnedAccount(acc) && (!providerFilter || acc.provider === providerFilter));
+          if (!targetAccounts.length) {
+            return { exitCode: 1, message: providerFilter ? `No owned ${providerFilter} Cloud accounts found.` : 'No owned Cloud accounts found.' };
+          }
+        } else {
+          const { account } = await resolveAccount(labelArg, { cwd, env }, ports);
+          targetAccounts = [account];
+        }
+
+        for (const account of targetAccounts) {
+          for (const item of built.payloads) {
+            await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/unshare`, {
+              body: item.body,
+              cwd,
+              env,
+            }, ports);
+          }
+        }
+
+        if (targetAccounts.length === 1 && built.payloads.length === 1) {
+          return { exitCode: 0, message: `Revoked "${targetAccounts[0].label}" access for ${built.payloads[0].display}.` };
+        }
+        const acctNames = targetAccounts.map(a => `"${a.label}"`).join(', ');
+        const targetNames = built.payloads.map(p => p.display).join(', ');
+        return { exitCode: 0, message: `Revoked ${acctNames} access for ${targetNames}.` };
       }
 
       case 'leave': {
