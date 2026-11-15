@@ -9,7 +9,7 @@ burst-`429` classifiers, and internal multi-harness fallback helpers:
 `accountsStatePath(env)`,
 `readCloudAccountsState({env}, ports)`,
 `writeCloudAccountsState(state, {env}, ports)`,
-`isCloudAccountsActive({env, poolPath}, ports)`,
+`isCloudAccountsActive({env, poolPath, provider}, ports)`,
 `stripCodexAuthBundle(authJson)`,
 `materializeLocalCodexAuth(authJson, {env}, ports)`,
 `materializeLocalClaudeAuth(lease, {env, previousManagedBaseUrl}, ports)`,
@@ -45,10 +45,14 @@ fields, endpoints or calls exist.
 
 - Local cache (`${PDD_STATE_DIR || XDG_STATE_HOME || ~/.local/state}/pdd/accounts-state.json`,
   mode `0600`, atomic rename) stores only non-secret active lease metadata
-  (`enrolled`, per-provider `account_id`, `label`, `lease_id`, `expires_at`,
+  (`enrolled`, `providers`, per-provider `account_id`, `label`, `lease_id`, `expires_at`,
   `delivery_mode`, `anthropic_base_url`, `managed_anthropic_base_url`,
   `five_hour_used_percent`, `five_hour_reset_at`, `weekly_used_percent`,
   `weekly_reset_at`) — never `refresh_token`, `access_token` or OAuth tokens.
+  `isCloudAccountsActive({env, poolPath, provider})` returns `false` when an explicit
+  `poolPath` is supplied, when `provider` is neither `"codex"` nor `"claude"`, when
+  `!saved.enrolled`, or when `provider` is passed and absent from `saved.providers`;
+  `selectCloudPoolLogin` only leases providers present in `saved.providers`.
 - `stripCodexAuthBundle` and `materializeLocalCodexAuth` write `~/.codex/auth.json`
   (or `$CODEX_HOME/auth.json`) atomically with mode `0600` and `tokens.refresh_token: ""`
   so only PDD Cloud refreshes the single-use OpenAI refresh token.

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 9aa7075cb147bef8030312cc756dfeeb0aeba142be35a45e3af2b6efc85fabaf).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: dc338a7581b102e984745d1d1f8b1efbab3bf88a42ce0b07b693f6eb0a8d01f0).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1158,6 +1158,7 @@ async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
 async function selectAgentStep(ctx, issue = null) {
   if (!ctx.ports.selectLogin) return { state: 'ready', selected: null };
   const selected = await ctx.ports.selectLogin();
+  if (selected === null) return { state: 'ready', selected: null };
   if (selected?.state === 'ready') {
     clearPoolExhausted(ctx);
     return { state: 'ready', selected };
@@ -1358,7 +1359,7 @@ async function intake(ctx, rows) {
     const m = ctx.machineState();
     if (ctx.ports.selectLogin && m.poolOut && (!Number.isFinite(m.poolOut.resetAt) || ctx.now() >= m.poolOut.resetAt)) {
       const check = await ctx.ports.selectLogin();
-      if (check?.state === 'ready') { clearPoolExhausted(ctx); return null; }
+      if (check === null || check?.state === 'ready') { clearPoolExhausted(ctx); return null; }
       if (check?.state === 'exhausted') return poolHeldText(await recordPoolExhausted(ctx, check, check.cooling?.[0]?.reason ?? 'usage-limit', m.poolOut.issue));
     }
     return m.poolOut ? poolHeldText(m.poolOut) : null;
@@ -1435,7 +1436,8 @@ async function intake(ctx, rows) {
   if (ctx.ports.selectLogin) {
     firstStep = await selectAgentStep(ctx, candidateGroups[0].primary.number);
     if (firstStep.state === 'exhausted') return poolHeldText(firstStep.poolOut);
-  } else if (!await (ctx.ports.agentReady ?? (async () => true))()) {
+  }
+  if ((!firstStep || firstStep.selected === null) && !await (ctx.ports.agentReady ?? (async () => true))()) {
     return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
   }
   // A base fetch failure is not about one issue: it stops intake for this tick.
@@ -1742,7 +1744,10 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
   }
   if (!object(r) || !['PASS', 'FAIL'].includes(r.verdict) || r.head !== job.head) {
     const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, job.review.agent) : null;
-    if (service && isQuotaExhaustionMessage(service)) {
+    const reviewPooled = service && isQuotaExhaustionMessage(service)
+      ? (job.review.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
+      : false;
+    if (service && isQuotaExhaustionMessage(service) && reviewPooled) {
       const prevReviewAgent = job.review.agent;
       const rateClass = classifyRateLimitFailure(service, prevReviewAgent?.accountWindows);
       if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
@@ -1776,20 +1781,22 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
         }
       }
       const next = await ctx.ports.exhaustLogin({ loginId: prevReviewAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevReviewAgent?.accountWindows ?? null });
-      if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
-        job.poolRotations = (job.poolRotations ?? 0) + 1;
-        delete job.review.burstRetried;
-        clearPoolExhausted(ctx);
-        job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
-        job.review.agent = null;
-        job.review.retry = true;
-        ctx.saveJob(job);
-        return reviewState(ctx, job, prBody, next);
+      if (next !== null) {
+        if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
+          job.poolRotations = (job.poolRotations ?? 0) + 1;
+          delete job.review.burstRetried;
+          clearPoolExhausted(ctx);
+          job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
+          job.review.agent = null;
+          job.review.retry = true;
+          ctx.saveJob(job);
+          return reviewState(ctx, job, prBody, next);
+        }
+        const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
+        job.review = job.review?.scoped ? { head: job.head, scoped: job.review.scoped } : null;
+        await pausePrForPool(ctx, job, poolOut, service);
+        return { state: 'pool-paused' };
       }
-      const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-      job.review = job.review?.scoped ? { head: job.head, scoped: job.review.scoped } : null;
-      await pausePrForPool(ctx, job, poolOut, service);
-      return { state: 'pool-paused' };
     }
     if (job.review.attempts >= 2) return { state: 'missing' };
     job.review.retry = true; return reviewState(ctx, job, prBody);
@@ -3833,7 +3840,10 @@ async function agentStop(ctx, job, seen, quiet) {
   recordPartTelemetry(ctx, job, job.agent, job.role, seen);
   const service = serviceProblem(ctx, job.agent), hang = service ? null : repeatedHang(job);
   if (hang) return issueStop(ctx, job, hang);
-  if (service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin) {
+  const mainPooled = service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin
+    ? (job.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
+    : false;
+  if (service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin && mainPooled) {
     const prevAgent = job.agent;
     const rateClass = classifyRateLimitFailure(service, prevAgent?.accountWindows);
     if (!await cleanupPart(ctx, job, prevAgent, job.role)) return;
@@ -3877,29 +3887,31 @@ async function agentStop(ctx, job, seen, quiet) {
       }
     }
     const next = await ctx.ports.exhaustLogin({ loginId: prevAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevAgent?.accountWindows ?? null });
-    if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
-      job.poolRotations = (job.poolRotations ?? 0) + 1;
-      clearPoolExhausted(ctx);
-      await restartStepWith(next, false);
-      return;
-    }
-    const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-    if (Number.isSafeInteger(job.pr)) {
-      if (job.role === 'repair') {
-        job.repairs = Math.max(0, (job.repairs ?? 1) - 1);
-        if (Array.isArray(job.rounds) && job.rounds.length) job.rounds = job.rounds.slice(0, -1);
-        delete job.repairReproduce;
-      } else if (job.role === 'conflict') {
-        job.conflictExits = Math.max(0, (job.conflictExits ?? 1) - 1);
-        delete job.conflict;
+    if (next !== null) {
+      if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
+        job.poolRotations = (job.poolRotations ?? 0) + 1;
+        clearPoolExhausted(ctx);
+        await restartStepWith(next, false);
+        return;
       }
-      job.agent = null;
-      return pausePrForPool(ctx, job, poolOut, service);
+      const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
+      if (Number.isSafeInteger(job.pr)) {
+        if (job.role === 'repair') {
+          job.repairs = Math.max(0, (job.repairs ?? 1) - 1);
+          if (Array.isArray(job.rounds) && job.rounds.length) job.rounds = job.rounds.slice(0, -1);
+          delete job.repairReproduce;
+        } else if (job.role === 'conflict') {
+          job.conflictExits = Math.max(0, (job.conflictExits ?? 1) - 1);
+          delete job.conflict;
+        }
+        job.agent = null;
+        return pausePrForPool(ctx, job, poolOut, service);
+      }
+      const endMsg = poolOut?.cloud && poolOut?.wakeAt
+        ? `Waiting on AI quota until ${poolOut.wakeAt}`
+        : `all logins in the pool reached quota limits: "${service}"`;
+      return end(ctx, job, cause('job', 'no-result', endMsg, { service, owner: 'service', poolExhausted: true }));
     }
-    const endMsg = poolOut?.cloud && poolOut?.wakeAt
-      ? `Waiting on AI quota until ${poolOut.wakeAt}`
-      : `all logins in the pool reached quota limits: "${service}"`;
-    return end(ctx, job, cause('job', 'no-result', endMsg, { service, owner: 'service', poolExhausted: true }));
   }
   const said = service ? `: the AI service said "${service}" (an agent account or service problem, not this issue)` : '';
   const text = quiet ? `${quietText(ctx, `${job.role} agent`)}${said}`

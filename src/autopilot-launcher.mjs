@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b599ab564f77e486e37520f5f9795f693b0eb7da4089f6f778c07449cd237927).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: cfb44f20696dd736b442bc2cef6e952d2e0eba18d1a3c7830b35263f7aa8e74f).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -433,17 +433,29 @@ async function runCoreTick(stateFile, state, p, ports) {
     try { pool = loadLoginPool({ cwd: state.cwd, env: p.env, poolPath: state.poolPath || undefined, fallbackAgent: agent }); }
     catch (error) { if (state.poolPath) throw error; }
   }
-  const cloudActive = state.poolPath !== 'off' && !pool.configured && isCloudAccountsActive({ env: p.env, poolPath: state.poolPath || undefined }, { fs: p.fs });
+  const cloudMainActive = state.poolPath !== 'off' && !pool.configured
+    && isCloudAccountsActive({ env: p.env, poolPath: state.poolPath || undefined, provider: agent.kind }, { fs: p.fs });
+  const cloudAnyActive = state.poolPath !== 'off' && !pool.configured
+    && isCloudAccountsActive({ env: p.env, poolPath: state.poolPath || undefined }, { fs: p.fs });
+  const localAgentReady = async () => agent.kind !== 'codex'
+    || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env, weeklyStopPercent: pool.weeklyStopPercent })).state !== 'limited';
+  const useCloudForOpts = opts => Array.isArray(opts?.allowedKinds)
+    ? (!pool.configured && state.poolPath !== 'off' && opts.allowedKinds.some(kind => isCloudAccountsActive({ env: p.env, poolPath: state.poolPath || undefined, provider: kind }, { fs: p.fs })))
+    : cloudMainActive;
   const cloudPorts = { fs: p.fs, fetch: p.fetch, run: p.run, authToken: p.authToken, readCodexLimits: p.codexLimits, readCodexUsageWindows: p.readCodexUsageWindows, now: p.now };
   const cloudTried = new Set();
   const poolCache = new Map();
   const poolKey = opts => `${Array.isArray(opts?.allowedKinds) ? [...opts.allowedKinds].sort().join(',') : '*'}:${opts?.preferredAccountId ?? ''}:${[...cloudTried].join(',')}`;
   const selectPool = (opts = {}) => {
+    if (!useCloudForOpts(opts) && !pool.configured && !Array.isArray(opts?.allowedKinds)) {
+      return Promise.resolve(null);
+    }
     const key = poolKey(opts);
     if (opts?.fresh === true) poolCache.delete(key);
     if (!poolCache.has(key)) {
-      poolCache.set(key, cloudActive
-        ? selectCloudPoolLogin(
+      poolCache.set(key, (async () => {
+        if (useCloudForOpts(opts)) {
+          const cloudSel = await selectCloudPoolLogin(
             {
               cwd: state.cwd,
               env: p.env,
@@ -453,24 +465,36 @@ async function runCoreTick(stateFile, state, p, ports) {
               preferredAccountId: opts?.preferredAccountId,
             },
             cloudPorts,
-          )
-        : selectPoolLogin(
+          );
+          if (Array.isArray(opts?.allowedKinds) && cloudSel?.state !== 'ready' && !cloudMainActive && opts.allowedKinds.includes(agent.kind) && await localAgentReady()) {
+            return { state: 'ready', configured: false, poolPath: null, poolSize: 1, login: null, agent, env: p.env };
+          }
+          return cloudSel;
+        }
+        if (pool.configured) {
+          return selectPoolLogin(
             {
               cwd: state.cwd,
               env: p.env,
               poolPath: pool.poolPath,
-              pool: pool.configured ? pool : undefined,
+              pool,
               fallbackAgent: agent,
               stateRoot: cRoot,
               ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
             },
             { run: p.run, readCodexLimits: p.codexLimits ?? readCodexLimits, now: p.now },
-          ));
+          );
+        }
+        if (opts.allowedKinds.includes(agent.kind) && await localAgentReady()) {
+          return { state: 'ready', configured: false, poolPath: null, poolSize: 1, login: null, agent, env: p.env };
+        }
+        return { state: 'unavailable', configured: false, poolPath: null, poolSize: 0, resetAt: null, cooling: [], unavailable: [] };
+      })());
     }
     return poolCache.get(key);
   };
   const exhaustPool = async ({ loginId, resetAt = null, reason = 'quota', accountWindows = null, allowedKinds, markTriedOnly = false } = {}) => {
-    if (cloudActive) {
+    if (useCloudForOpts({ allowedKinds })) {
       if (loginId) cloudTried.add(loginId);
       poolCache.clear();
       if (markTriedOnly) return null;
@@ -479,11 +503,12 @@ async function runCoreTick(stateFile, state, p, ports) {
         cloudPorts,
       );
     }
+    if (!pool.configured) return null;
     if (loginId) markLoginExhausted({ stateRoot: cRoot, loginId, resetAt, reason, now: p.now() });
     poolCache.clear();
     return selectPool(Array.isArray(allowedKinds) ? { allowedKinds } : {});
   };
-  const usePool = pool.configured || cloudActive;
+  const usePool = pool.configured || cloudMainActive || (cloudAnyActive && core.intake !== 'off');
   const alertPorts = { ...p.alertPorts, repository: async () => ({ nameWithOwner: state.repo }), stateRoot: dirname(stateFile), now: p.now, hostname: () => state.machine };
   if (!p.sendAlert) {
     try { await runAutopilotAlerts({ action: 'retry', cwd: state.cwd, env: p.env }, alertPorts); }
@@ -495,8 +520,7 @@ async function runCoreTick(stateFile, state, p, ports) {
     now: p.now, env: p.env, warn: p.warn, root: cRoot, reportRoot: coreReports(ports, p.env), tickMinutes: timerMinutes(state),
     version: read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {})?.version, listIssues,
     trusted: row => trusted(row, state, { trust: core.trust }, p),
-    agentReady: async () => usePool ? (await selectPool()).state === 'ready'
-      : agent.kind !== 'codex' || (await (p.codexLimits ?? readCodexLimits)({ command: agent.command ?? 'codex', cwd: state.cwd, env: p.env, weeklyStopPercent: pool.weeklyStopPercent })).state !== 'limited',
+    agentReady: async () => (pool.configured || cloudMainActive) ? (await selectPool())?.state === 'ready' : localAgentReady(),
     ...(usePool ? { selectLogin: selectPool, exhaustLogin: exhaustPool } : {}),
     // One alert through this machine's alert destination; the core gives each alert its own cause, tried and need.
     alert: ({ issue, kind, text, tried, need, update }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, ...(update ? { update: true } : {}),
@@ -745,7 +769,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
   }
   if (input.autoUpdate !== undefined && !validAutoUpdateMode(input.autoUpdate)) return { exitCode: 2, message: 'Use --auto-update release, --auto-update main or --auto-update off.' };
   const shareRefusal = shareOption(command, input, null); if (shareRefusal) return shareRefusal;
-  let startSelection, startWarnings = [], accountOverride = false, activePool = null, chosenPoolLogin = null, activeIntakeStart = false;
+  let startSelection, startWarnings = [], accountOverride = false, activePool = null, chosenPoolLogin = null, activeIntakeStart = false, cloudIntakeAvailable = false;
   if (command === 'doctor' || command === 'start') {
     const baseDoctorPorts = typeof ports.doctorPorts === 'function' ? ports.doctorPorts(input,ports) : ports.doctorPorts ?? ports;
     const env = input.env ?? ports.env ?? process.env;
@@ -772,6 +796,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
         }
       }
       accountOverride = command === 'start' && (input.agent !== undefined || input.pool !== undefined || explicitConfigOverride(previous, env) || Boolean(activePool?.configured && !previous?.poolPath));
+      const nextPoolPath = callerPoolOff ? 'off' : input.pool !== undefined ? input.pool : (input.agent !== undefined && previous?.poolPath && previous.poolPath !== 'off' ? 'off' : previous?.poolPath);
+      cloudIntakeAvailable = nextPoolPath !== 'off' && !activePool?.configured
+        && ['codex', 'claude'].some(kind => isCloudAccountsActive({ env, poolPath: nextPoolPath || undefined, provider: kind }, { fs: baseDoctorPorts.files ?? nativeFs }));
       if (activePool?.configured) {
         if (activeIntakeStart && !activePool.logins.some(item => !item.paused && (item.kind === 'codex' || item.kind === 'claude'))) {
           throw Error(ACTIVE_INTAKE_AGENT_MSG);
@@ -802,7 +829,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
           codexLimits: (opts, limitPorts) => (baseDoctorPorts.codexLimits ?? readCodexLimits)({ weeklyStopPercent: activePool.weeklyStopPercent, ...opts }, limitPorts),
         };
       } else if (command === 'start' && input.agent !== undefined) {
-        if (activeIntakeStart && !['codex', 'claude'].includes(input.agent)) throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        if (activeIntakeStart && !cloudIntakeAvailable && !['codex', 'claude'].includes(input.agent)) throw Error(ACTIVE_INTAKE_AGENT_MSG);
         let defs = [];
         try { defs = await ((ports.selectAgent ? undefined : baseDoctorPorts.agentDefinitions) ?? loadAgentDefinitions)({ cwd, env }); } catch {}
         const match = Array.isArray(defs) ? defs.find(def => def?.kind === input.agent) : null;
@@ -823,7 +850,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
             : {}),
         };
       } else if (command === 'start' && explicitConfigOverride(previous, env)) {
-        if (activeIntakeStart && !['codex', 'claude'].includes(previous.agent.kind)) throw Error(ACTIVE_INTAKE_AGENT_MSG);
+        if (activeIntakeStart && !cloudIntakeAvailable && !['codex', 'claude'].includes(previous.agent.kind)) throw Error(ACTIVE_INTAKE_AGENT_MSG);
         const kind = previous.agent.kind, ownVar = AGENT_CONFIG_VARS[kind];
         const doctorEnv = loginEnvironment(env, { kind, configVar: ownVar, configDir: env[ownVar], env: {} });
         const profile = {
@@ -840,7 +867,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
           };
         }
       } else {
-        if (activeIntakeStart && previous?.agent?.kind && !['codex', 'claude'].includes(previous.agent.kind)) {
+        if (activeIntakeStart && !cloudIntakeAvailable && previous?.agent?.kind && !['codex', 'claude'].includes(previous.agent.kind)) {
           throw Error(ACTIVE_INTAKE_AGENT_MSG);
         }
         const profile = savedProfile(previous, env);
@@ -855,7 +882,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     const diagnostics = await runAutopilotDoctor(doctorInput, {...doctorPorts, ...extraDoctorPorts,
       onSelection:selection=>{startSelection=selection;}});
     if (command === 'doctor' || diagnostics.exitCode !== 0) return diagnostics;
-    if (activeIntakeStart && !activePool?.configured && startSelection?.agent?.kind && !['codex', 'claude'].includes(startSelection.agent.kind)) {
+    if (activeIntakeStart && !activePool?.configured && !cloudIntakeAvailable && startSelection?.agent?.kind && !['codex', 'claude'].includes(startSelection.agent.kind)) {
       return bad(ACTIVE_INTAKE_AGENT_MSG);
     }
     startWarnings = diagnostics.message.split('\n').filter(line=>line.startsWith('WARN '));
@@ -998,7 +1025,12 @@ export async function runAutopilotLauncher(input, ports = {}) {
       : saved ? await selectAgent(state, probe, saved) : startSelection.agent;
     const agent = chosenPoolLogin && rawAgent ? { ...rawAgent, ...(chosenPoolLogin.model ? { model: chosenPoolLogin.model } : {}) } : rawAgent;
     if (!agent || saved && (agent.id !== saved.agent.id || agent.kind !== saved.agent.kind)) return bad(saved ? 'The saved coordinator profile is unavailable. Restore its sign-in and retry.' : 'Sign in to Codex, Claude Code, agy or Gemini at your terminal, then run pdd autopilot start.');
-    if (effectiveIntake(state, readCoreSettings(state.cwd)) === 'active' && !activePool?.configured && !['codex', 'claude'].includes(agent.kind)) {
+    const postPoolPath = input.pool !== undefined
+      ? (['off', 'none'].includes(input.pool.trim()) ? 'off' : activePool?.poolPath ?? 'off')
+      : (input.agent !== undefined && previous?.poolPath && previous.poolPath !== 'off' ? 'off' : previous?.poolPath);
+    const postCloudIntake = postPoolPath !== 'off' && !activePool?.configured
+      && ['codex', 'claude'].some(kind => isCloudAccountsActive({ env: p.env, poolPath: postPoolPath || undefined, provider: kind }, { fs: p.fs }));
+    if (effectiveIntake(state, readCoreSettings(state.cwd)) === 'active' && !activePool?.configured && !postCloudIntake && !['codex', 'claude'].includes(agent.kind)) {
       return bad(ACTIVE_INTAKE_AGENT_MSG);
     }
     const version = read(join(packageRoot, 'package.json')).version;

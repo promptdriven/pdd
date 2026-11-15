@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 66fb21eec250e3857a60b1030d27d9c02535523e4d05874dfc989c3d03539bd1).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 79c2fbe3c3d9e4273957f538e039958912f25f7388ac717da5085d81bc1ced2d).
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -326,11 +326,15 @@ export function writeCloudAccountsState(state, { env = process.env } = {}, ports
   return payload;
 }
 
-export function isCloudAccountsActive({ env = process.env, poolPath } = {}, ports = {}) {
+export function isCloudAccountsActive({ env = process.env, poolPath, provider } = {}, ports = {}) {
   if (typeof poolPath === 'string' && poolPath.trim()) return false;
-  if (typeof env?.PDD_ACCOUNTS_URL === 'string' && env.PDD_ACCOUNTS_URL.trim()) return true;
+  if (provider !== undefined && provider !== null && !CLOUD_PROVIDERS.includes(provider)) return false;
   const saved = readCloudAccountsState({ env }, ports);
-  return saved.enrolled === true;
+  if (!saved.enrolled) return false;
+  if (provider !== undefined && provider !== null && Array.isArray(saved.providers)) {
+    return saved.providers.includes(provider);
+  }
+  return saved.providers.length > 0 || Object.keys(saved.active ?? {}).length > 0;
 }
 
 export function stripCodexAuthBundle(authJson) {
@@ -611,10 +615,9 @@ export async function leaseCloudAccount({
   }, ports);
   if (reply?.state === 'leased' && updateState) {
     saveActiveLeaseMetadata(reply, { env }, ports);
-  } else if (reply?.state === 'all_cooling' && updateState) {
+  } else if (reply?.state === 'all_cooling' && updateState && saved.enrolled && saved.providers.includes(provider)) {
     writeCloudAccountsState({
       ...saved,
-      enrolled: true,
       cooling: { ...saved.cooling, [provider]: { wake_at: reply.wake_at ?? null } },
     }, { env }, ports);
   }
@@ -623,14 +626,13 @@ export async function leaseCloudAccount({
 
 function candidateCloudProviders({ fallbackAgent, allowedKinds, savedState }) {
   const allowed = Array.isArray(allowedKinds) ? CLOUD_PROVIDERS.filter(p => allowedKinds.includes(p)) : [...CLOUD_PROVIDERS];
-  if (!allowed.length) return [];
+  const enrolledAllowed = allowed.filter(p => Array.isArray(savedState?.providers) && savedState.providers.includes(p));
+  if (!enrolledAllowed.length) return [];
   const preferred = CLOUD_PROVIDERS.includes(fallbackAgent?.kind) ? fallbackAgent.kind : null;
-  if (preferred && allowed.includes(preferred)) {
-    const others = allowed.filter(p => p !== preferred && savedState.providers.includes(p));
-    return [preferred, ...others];
+  if (preferred && enrolledAllowed.includes(preferred)) {
+    return [preferred, ...enrolledAllowed.filter(p => p !== preferred)];
   }
-  const enrolledAllowed = allowed.filter(p => savedState.providers.includes(p));
-  return enrolledAllowed.length ? enrolledAllowed : [allowed[0]];
+  return enrolledAllowed;
 }
 
 export async function selectCloudPoolLogin({

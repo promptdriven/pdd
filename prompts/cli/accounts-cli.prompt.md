@@ -8,7 +8,9 @@ usage-reset credit commands, options or calls exist.
 
 ## Commands
 
-- `pdd accounts` / `pdd accounts list [--json]`: Call `GET /v1/accounts`, mark
+- `pdd accounts` / `pdd accounts list [--json]`: Call `GET /v1/accounts`, reconcile
+  `accounts-state.json` (`enrolled: accounts.length > 0` and `providers` from
+  accessible accounts, pruning removed/revoked `active` and `cooling` entries), mark
   the locally active account per provider with `*`, and render an aligned table
   (`*`, `LABEL`, `PROVIDER`, `ACCESS`, `5H`, `7D`, `STATE`: `ready | cooling | paused`)
   followed by any `pending_invites`. `--json` prints structured JSON with zero
@@ -31,8 +33,10 @@ usage-reset credit commands, options or calls exist.
   and switch the local install to the next ready account (`soonest weekly_reset_at`)
   via `POST /v1/accounts/lease`.
 - `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`:
-  Check local `accounts-state.json` first: return a `0ms` no-op when the cached
-  active lease has `five_hour_used_percent < 100`, `weekly_used_percent < 100`,
+  When `--quiet` is passed and `isCloudAccountsActive({env, provider})` is false,
+  return `exitCode: 0` immediately without making any network call. Otherwise check
+  local `accounts-state.json` first: return a `0ms` no-op when the cached active
+  lease has `five_hour_used_percent < 100`, `weekly_used_percent < 100`,
   more than 15 minutes until `expires_at`, and a present local auth file.
   Otherwise call `POST /v1/accounts/lease` bounded by `--timeout-ms` (default `1200`)
   and atomically materialize `0600` `~/.codex/auth.json` or `~/.claude/settings.json` +
@@ -51,8 +55,10 @@ usage-reset credit commands, options or calls exist.
   `log LABEL [--json]`: Resolve `LABEL` (or account/invite ID) and call the
   corresponding `/v1/accounts` lifecycle, sharing or audit endpoint. For `--with USER`,
   verify `gh api users/USER` resolves `type === "User"` (rejecting `Organization` with
-  a hint to pass `--with ORG/TEAM`) and read `res.invite.invite_id` (falling back to
-  `res.invite_id`) when printing invite confirmation.
+  a hint to pass `--with ORG/TEAM`), read `res.invite.invite_id` (falling back to
+  `res.invite_id`) when printing invite confirmation, and reconcile `accounts-state.json`
+  (`enrolled: remaining.length > 0`, `providers`, `active`, `cooling`) on both `remove`
+  and `leave`.
 
 ## Dependencies
 

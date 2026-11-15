@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: fef6d466d13e43dea6642bf575e95c37d1ad75bd49ce7a9688e82ba91799b72f).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 4ec894c93915e97f6ada0a7e3a544d8e6bd1aa08de0bdcb7472eca1362f93bc7).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';
@@ -174,7 +174,7 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
  let cloudMod=null;
  if((launch.agent==='codex'||launch.agent==='claude')&&childEnv.PDD_CLOUD_STEP_ISOLATED!=='1'){
   const loaded=await import('./login-pool.mjs');
-  if(loaded.isCloudAccountsActive({env:childEnv},accountsPorts))cloudMod=loaded;
+  if(loaded.isCloudAccountsActive({env:childEnv,provider:launch.agent},accountsPorts))cloudMod=loaded;
  }
  let result,activeAccount=null;
  try{
@@ -195,7 +195,29 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
      throw leaseErr;
     }
     if(leaseReply?.state==='all_cooling'){
-     throw Object.assign(new Error(`Waiting on AI quota until ${leaseReply.wake_at}`),{code:'all_cooling',wakeAt:leaseReply.wake_at});
+     if(!triedIds.length&&!leaseReply.wake_at){
+      let fallBackLocal=false;
+      try{
+       const listed=await cloudMod.cloudAccountsRequest('GET','/v1/accounts',{cwd,env:childEnv,timeoutMs:accountsPorts?.leaseTimeoutMs??1500},accountsPorts);
+       const accessible=(Array.isArray(listed?.accounts)?listed.accounts:[]).filter(a=>a&&!a.revoked);
+       if(!accessible.some(a=>a.provider===launch.agent)){
+        const saved=cloudMod.readCloudAccountsState({env:childEnv},accountsPorts);
+        const nextProviders=[...new Set(accessible.map(a=>a.provider).filter(Boolean))];
+        const nextActive=Object.fromEntries(Object.entries(saved.active??{}).filter(([p])=>nextProviders.includes(p)));
+        const nextCooling=Object.fromEntries(Object.entries(saved.cooling??{}).filter(([p])=>nextProviders.includes(p)));
+        cloudMod.writeCloudAccountsState({enrolled:accessible.length>0,providers:nextProviders,active:nextActive,cooling:nextCooling},{env:childEnv},accountsPorts);
+        fallBackLocal=true;
+       }
+      }catch{
+       if(!cloudMod.readCloudAccountsState({env:childEnv},accountsPorts).active?.[launch.agent])fallBackLocal=true;
+      }
+      if(fallBackLocal){
+       result=await run(launch.command,childArgs,{cwd,env:childEnv,input,signal,timeoutMs,maxBytes});
+       break;
+      }
+     }
+     const msg=leaseReply.wake_at?`Waiting on AI quota until ${leaseReply.wake_at}`:`All ${launch.agent} Cloud accounts are paused or cooling.`;
+     throw Object.assign(new Error(msg),{code:'all_cooling',wakeAt:leaseReply.wake_at??null});
     }
     const acc=leaseReply?.account;
     if(burstRetried&&prevAccountId&&acc?.account_id&&acc.account_id!==prevAccountId){

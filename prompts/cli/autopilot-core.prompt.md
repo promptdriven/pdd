@@ -433,7 +433,7 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    `{issue, at}` numbers) reads as not paused, `streak` 0, `hours` 1, no pending; it
    never stops a tick or status.
    **Cloud accounts and login pool (#3252):** when `ports.selectLogin` and
-   `ports.exhaustLogin` are supplied by [Cloud accounts and login pool](login-pool.prompt.md), each AI
+   `ports.exhaustLogin` are supplied by [Cloud accounts and login pool](login-pool.prompt.md) (and `ports.selectLogin()` does not return `null`, which indicates `selectLogin` is wired only for intake `allowedKinds`), each AI
    process (`build`, `repair`, `conflict`, `review`) selects the active ready login,
    materializes any per-step isolation (`prepareStep`: disposable `0700` `/tmp/pdd-cx-<random>`
    overlay passed via `cleanupDirs` for Codex, or `CLAUDE_CODE_OAUTH_TOKEN` and optional

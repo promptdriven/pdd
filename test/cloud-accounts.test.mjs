@@ -221,7 +221,7 @@ async function createMockCloudServer(t, initial = {}) {
           .sort((a, b) => Date.parse(a) - Date.parse(b));
         return send(200, {
           state: 'all_cooling',
-          wake_at: coolingTimes[0] ?? new Date(state.nowMs + 3600_000).toISOString(),
+          wake_at: coolingTimes[0] ?? null,
           lease: null,
         });
       }
@@ -1318,4 +1318,198 @@ test('3252 T7: Round 1 security, FastAPI contract, overlay cleanup, env isolatio
   assert.equal(job31.agent.loginId, 'acc_r1_2', 'burst retry switched to acc_r1_2 when acc_r1_1 paused');
   assert.equal(job31.poolRotations, 1, 'server-switched burst retry counted as a pool rotation');
   assert.equal(job31.agent.burstRetried, undefined, 'fresh account retains its own burst-retry budget');
+});
+
+test('3252 T8: Round 2 single-provider Cloud enrollment preserves un-enrolled local agents, heals leave/list state, and runs --agent agy with Cloud active intake', async t => {
+  const baseMs = Date.parse('2026-11-14T18:00:00Z');
+  const cloud = await createMockCloudServer(t, {
+    nowMs: baseMs,
+    pendingInvites: [
+      { invite_id: 'inv_only_cl', account_id: 'acc_shared_cl_r2', label: 'cl-team', provider: 'claude', owner_login: 'Serhan-Asad' },
+    ],
+  });
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+
+  // 1. Accept shared Claude invite, then `leave` it -> accounts-state.json flips back to enrolled: false, providers: []!
+  assert.equal((await invokeCli(['accounts', 'accept', 'inv_only_cl'], sb)).exit, 0);
+  assert.equal((await invokeCli(['accounts', 'use', 'cl-team'], sb)).exit, 0);
+  let stateAfterAccept = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
+  assert.equal(stateAfterAccept.enrolled, true);
+  assert.deepEqual(stateAfterAccept.providers, ['claude']);
+
+  assert.equal((await invokeCli(['accounts', 'leave', 'cl-team'], sb)).exit, 0);
+  let stateAfterLeave = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
+  assert.equal(stateAfterLeave.enrolled, false, 'leaving last shared account sets enrolled: false');
+  assert.deepEqual(stateAfterLeave.providers, []);
+  assert.deepEqual(stateAfterLeave.active, {});
+
+  // Also verify `pdd accounts list` keeps enrolled: false when 0 accessible accounts exist even if state was stale!
+  writeFileSync(join(sb.stateDir, 'accounts-state.json'), JSON.stringify({ enrolled: true, providers: ['claude'], active: {}, cooling: {} }));
+  assert.equal((await invokeCli(['accounts', 'list'], sb)).exit, 0);
+  let stateAfterEmptyList = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
+  assert.equal(stateAfterEmptyList.enrolled, false, 'list clears stale enrolled: true when 0 accessible accounts remain');
+  assert.deepEqual(stateAfterEmptyList.providers, []);
+
+  // 2. Enroll ONLY Codex (`providers: ["codex"]`):
+  mkdirSync(join(sb.home, '.codex'), { recursive: true });
+  writeFileSync(join(sb.home, '.codex', 'auth.json'), JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_cx_only_r2_secret8888',
+      refresh_token: 'rt_cx_only_r2_secret1234',
+      id_token: makeJwt({ email: 'cx-only@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_cx_only_r2',
+    },
+  }));
+  assert.equal((await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'cx-only'], sb)).exit, 0);
+  const stateCodexOnly = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
+  assert.equal(stateCodexOnly.enrolled, true);
+  assert.deepEqual(stateCodexOnly.providers, ['codex']);
+
+  // 2a. `pdd accounts sync --provider claude --quiet` (shell auto-wrapper) exits 0 with ZERO HTTP requests!
+  const reqBeforeQuietSync = cloud.state.requests.length;
+  const quietClaudeSync = await invokeCli(['accounts', 'sync', '--provider', 'claude', '--quiet'], sb);
+  assert.equal(quietClaudeSync.exit, 0);
+  assert.equal(cloud.state.requests.length, reqBeforeQuietSync, 'quiet sync for un-enrolled provider makes zero network calls');
+
+  // 2b. `runStepAgentProcess` for un-enrolled `claude` runs local `claude` directly without calling /v1/accounts/lease!
+  let localClaudeRuns = 0;
+  const localClaudeRes = await runStepAgentProcess({
+    agent: 'claude',
+    step: 'build',
+    args: ['-p', 'hi'],
+    cwd: sb.root,
+    env: { ...sb.env, CLAUDE_CODE_OAUTH_TOKEN: 'local-user-claude-token' },
+    run: async (cmd, _args, opts) => {
+      localClaudeRuns++;
+      assert.equal(cmd, 'claude');
+      assert.equal(opts.env.CLAUDE_CODE_OAUTH_TOKEN, 'local-user-claude-token', 'local Claude token preserved when Claude is not enrolled in Cloud');
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  });
+  assert.equal(localClaudeRes.code, 0);
+  assert.equal(localClaudeRuns, 1);
+  assert.equal(cloud.state.requests.length, reqBeforeQuietSync, 'un-enrolled claude step did not call Cloud /lease');
+
+  // 2c. Even if accounts-state.json has stale `providers: ["codex", "claude"]` while Cloud has 0 Claude accounts,
+  // `runStepAgentProcess` falls back to local `claude` and heals `accounts-state.json` (never throwing "until null")!
+  writeFileSync(join(sb.stateDir, 'accounts-state.json'), JSON.stringify({
+    ...stateCodexOnly,
+    providers: ['codex', 'claude'],
+  }));
+  const healedClaudeRes = await runStepAgentProcess({
+    agent: 'claude',
+    step: 'build',
+    args: ['-p', 'hi'],
+    cwd: sb.root,
+    env: sb.env,
+    run: async cmd => {
+      localClaudeRuns++;
+      assert.equal(cmd, 'claude');
+      return { code: 0, stdout: 'healed-ok', stderr: '' };
+    },
+  });
+  assert.equal(healedClaudeRes.code, 0);
+  assert.equal(localClaudeRuns, 2);
+  const healedState = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
+  assert.deepEqual(healedState.providers, ['codex'], 'stale claude provider healed out of accounts-state.json');
+
+  // 2d. When `codex` IS enrolled in Cloud and its only account is paused (`wake_at: null`), message never says "until null"!
+  const cxAcc = cloud.state.accounts.find(a => a.label === 'cx-only');
+  cxAcc.state = 'paused';
+  await assert.rejects(
+    () => runStepAgentProcess({
+      agent: 'codex',
+      step: 'build',
+      args: ['exec', 'hi'],
+      cwd: sb.root,
+      env: sb.env,
+      run: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+    }),
+    err => {
+      assert.equal(err.code, 'all_cooling');
+      assert.equal(err.wakeAt, null);
+      assert.match(err.message, /All codex Cloud accounts are paused or cooling\./);
+      assert.doesNotMatch(err.message, /until null/);
+      return true;
+    },
+  );
+  cxAcc.state = 'ready';
+
+  // 3. Autopilot with `--agent agy --intake active` while `codex` is enrolled in Cloud:
+  //    - Active intake card job leases Cloud `codex` inside a disposable `0700` `pdd-cx-*` overlay!
+  //    - Main `build` job runs on `agy` (NEVER hijacked onto `codex`)!
+  const w = await coreWorld(t, { settings: { runs: 1, intake: 'active' } });
+  cloud.state.nowMs = w.now();
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', intake: 'active', trust: [], testCommand: 'npm test', runs: 1 } }));
+  w.issue(41, { title: 'Fix typo in help text', body: 'Change teh to the in src/help.mjs.', labels: [] });
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel');
+  const stateRoot = join(w.dir, 'launcher-state-r2');
+  mkdirSync(stateRoot, { recursive: true });
+  const fakeBin = join(sb.root, 'fake-bin');
+  mkdirSync(fakeBin, { recursive: true });
+  writeFileSync(join(fakeBin, 'agy'), '#!/bin/sh\necho "agy ready"\n', { mode: 0o755 });
+  const agyEnv = { ...sb.env, PATH: `${fakeBin}:${sb.env.PATH}` };
+  const ports = {
+    stateRoot,
+    now: () => { cloud.state.nowMs = w.now(); return w.now(); },
+    env: agyEnv,
+    timer: async () => true,
+    warn: () => {},
+    sendAlert: async () => ({ exitCode: 0, message: 'sent' }),
+    run: async (command, args, options = {}) => {
+      if (command === 'agy' || command.endsWith('/agy')) return { code: 0, stdout: 'agy models\n', stderr: '' };
+      if (command === 'gh') return w.gh(args, options);
+      if (command !== 'git') assert.fail(`unexpected program ${command}`);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' });
+      return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    machineGuard: w.machineGuard,
+    corePorts: {
+      jobs: w.jobs,
+      burstRetryMs: 1,
+      checkBase: async () => ({ exitCode: 0, message: 'ok' }),
+    },
+  };
+
+  const agyStart = await runAutopilotLauncher({
+    command: 'start',
+    cwd,
+    packageRoot: process.cwd(),
+    mode: 'auto',
+    intake: 'active',
+    agent: 'agy',
+    env: agyEnv,
+  }, ports);
+  assert.equal(agyStart.exitCode, 0, agyStart.message);
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+
+  // First tick started an intake card job for #41 using the leased Cloud `codex` account inside a `pdd-cx-*` overlay!
+  const cardJob41 = w.started.find(j => j.role === 'intake' && j.issue === 41);
+  assert.ok(cardJob41, 'active intake started card job for #41');
+  assert.equal(cardJob41.command, 'codex', 'intake card job uses enrolled Cloud codex');
+  assert.match(cardJob41.env.CODEX_HOME ?? '', /pdd-cx-/, 'intake card job runs inside disposable 0700 pdd-cx-* overlay');
+
+  // Complete card job #41 as `ready`, then tick again -> main `build` job starts on `agy`, NOT hijacked to `codex`!
+  const cardOutPath = cardJob41.args[cardJob41.args.indexOf('--output-last-message') + 1];
+  writeFileSync(cardOutPath, JSON.stringify({
+    class: 'ready',
+    reason: 'Clear one-line fix.',
+    confidence: 0.95,
+    canonical: null,
+    suggested_links: [],
+    question: null,
+    area_hint: ['src/help.mjs'],
+    model: 'gpt-test',
+  }));
+  writeFileSync(cardJob41.exit, JSON.stringify({ code: 0, signal: null, at: w.now() }));
+  w.alive.delete(cardJob41.pid);
+
+  const buildTick = await tickAutopilot(stateFile, ports);
+  assert.match(buildTick.message, /1 started/);
+  const buildJob41 = w.job(41, 'build');
+  assert.ok(buildJob41, 'main build job started for #41');
+  assert.equal(buildJob41.command, 'agy', 'main build job uses --agent agy and is NOT hijacked onto Cloud codex');
+  assert.equal(buildJob41.agentKind, 'agy');
 });

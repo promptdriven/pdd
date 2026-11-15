@@ -1,6 +1,6 @@
-// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: 70431fcc97b926b26e61f0e2027cadd2a75f782defe140f2fedf574ab8890107).
+// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: b5c49522a40cc6038783ab929a8220da06d6bb55f178ba940d9ab2740fa6c89d).
 import * as nativeFs from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { jobEnvironment, readAgentJob, stopAgentJob } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
@@ -329,6 +329,13 @@ const existsCoreJob = (ctx, n) => ctx.fs.existsSync(join(ctx.root, 'jobs', `${n}
 // A finished card job leaves no files behind: the card holds its result. A failed one keeps its log for a person.
 function prune(ctx, job, keepLog, answer = null) {
   for (const file of [job?.input, job?.token, job?.exit, job?.result, answer, keepLog ? null : job?.log]) if (typeof file === 'string') try { ctx.fs.rmSync(file, { force: true }); } catch { /* Left for the next pass. */ }
+  if (Array.isArray(job?.cleanupDirs) && ctx.jobs?.read?.(job)?.state !== 'running') {
+    for (const rawDir of job.cleanupDirs) {
+      if (typeof rawDir !== 'string' || !rawDir.trim()) continue;
+      const dir = resolve(rawDir);
+      if (basename(dir).startsWith('pdd-cx-')) try { ctx.fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Best effort overlay wipe. */ }
+    }
+  }
 }
 // Job files older than 7 days go, also the logs of failed cards and the exit records written after a stop.
 function pruneOld(ctx, f) {
@@ -356,8 +363,37 @@ async function maybeExhaustIntakeLogin(ctx, saved, errorText = '') {
     readFileTail(ctx.fs, saved?.answer),
   ].filter(Boolean).join('\n');
   if (!isQuotaExhaustionMessage(sample)) return false;
-  await ctx.ports.exhaustLogin({ loginId: saved.loginId, reason: 'quota', allowedKinds: ['codex', 'claude'] });
+  await ctx.ports.exhaustLogin({
+    loginId: saved.loginId,
+    reason: saved.cloud ? (sample.slice(0, 500) || 'quota') : 'quota',
+    accountWindows: saved.accountWindows ?? null,
+    allowedKinds: ['codex', 'claude'],
+  });
   return true;
+}
+
+function startIntakeJob(ctx, runner, spec) {
+  const prepared = typeof runner?.prepareStep === 'function'
+    ? runner.prepareStep(ctx.ports?.env ?? process.env, { detached: true })
+    : null;
+  const env = prepared ? cardEnvironment(prepared.env) : runner.env;
+  const cleanupDirs = Array.isArray(prepared?.cleanupDirs) && prepared.cleanupDirs.length
+    ? prepared.cleanupDirs
+    : (typeof prepared?.overlayDir === 'string' && prepared.overlayDir ? [prepared.overlayDir] : []);
+  try {
+    const job = ctx.jobs.start({
+      ...spec,
+      env,
+      ...(cleanupDirs.length ? { cleanupDirs } : {}),
+    });
+    if (cleanupDirs.length && object(job) && !Array.isArray(job.cleanupDirs)) {
+      job.cleanupDirs = cleanupDirs;
+    }
+    return job;
+  } catch (error) {
+    prepared?.cleanup?.();
+    throw error;
+  }
 }
 
 async function resolveIntakeRunner(ctx) {
@@ -375,12 +411,23 @@ async function resolveIntakeRunner(ctx) {
     }
     const model = selected.agent.model
       ?? (selected.agent.kind === ctx.state?.agent?.kind ? ctx.state?.agent?.model ?? null : null);
+    const accountWindows = object(selected.account)
+      ? {
+          five_hour_used_percent: selected.account.five_hour_used_percent ?? null,
+          five_hour_reset_at: selected.account.five_hour_reset_at ?? null,
+          weekly_used_percent: selected.account.weekly_used_percent ?? null,
+          weekly_reset_at: selected.account.weekly_reset_at ?? null,
+        }
+      : null;
     return {
       ok: true,
       spec: { ...selected.agent, model },
       agent: { kind: selected.agent.kind, model },
       env: cardEnvironment(selected.env ?? ctx.ports?.env ?? process.env),
       loginId: selected.login?.id ?? selected.agent?.id ?? null,
+      cloud: selected.cloud === true,
+      accountWindows,
+      prepareStep: typeof selected.prepareStep === 'function' ? selected.prepareStep : null,
     };
   }
   const kind = ctx.state?.agent?.kind ?? null;
@@ -398,6 +445,9 @@ async function resolveIntakeRunner(ctx) {
     agent: { kind, model },
     env: cardEnvironment(ctx.ports?.env ?? process.env),
     loginId: null,
+    cloud: false,
+    accountWindows: null,
+    prepareStep: null,
   };
 }
 
@@ -733,12 +783,21 @@ export async function shadowIntake(ctx, rows) {
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
       const jobAgent = runner.agent;
       const run = cardCommand(runner.spec, { model: jobAgent.model, result: answer });
-      const job = ctx.jobs.start({ id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args, input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'shadow' }),
-        env: runner.env, issue: n, role: 'intake' });
-      try { writeJson(ctx.fs, join(f.jobs, `${n}.json`), { issue: n, stage: 'card', version, startedAt: ctx.now(), agent: jobAgent, ...(runner.loginId ? { loginId: runner.loginId } : {}), job, answer }); }
+      const job = startIntakeJob(ctx, runner, { id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args, input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'shadow' }),
+        issue: n, role: 'intake' });
+      try {
+        writeJson(ctx.fs, join(f.jobs, `${n}.json`), {
+          issue: n, stage: 'card', version, startedAt: ctx.now(), agent: jobAgent,
+          ...(runner.loginId ? { loginId: runner.loginId } : {}),
+          ...(runner.cloud ? { cloud: true } : {}),
+          ...(runner.accountWindows ? { accountWindows: runner.accountWindows } : {}),
+          job, answer,
+        });
+      }
       catch (error) {
         // A job that cannot be recorded would run with no limit: stop it, and wait 6 hours like any failed card.
         ctx.jobs.stop(job);
+        prune(ctx, job, false);
         try { saveCard(ctx, f, n, failed(ctx, { issue: n, version, startedAt: ctx.now(), agent: jobAgent }, `the card job could not be recorded (${plain(error.message, 200)})`)); } catch { /* The next pass tries again. */ }
         throw error;
       }
@@ -868,18 +927,23 @@ export async function activeIntake(ctx, rows) {
         const jobAgent = runner.agent;
         const run = improveCommand(runner.spec, { model: jobAgent.model, result: answer });
         const repoCwd = ctx.state?.cwd || f.empty;
-        const job = ctx.jobs.start({
+        const job = startIntakeJob(ctx, runner, {
           id, dir: f.logs, cwd: repoCwd, command: run.command, args: run.args,
           input: improvePrompt({ repo: ctx.repo, row, comments: pComments, card: card.card, pool, decisionNote }),
-          env: runner.env, issue: n, role: 'intake-improve',
+          issue: n, role: 'intake-improve',
         });
         try {
           writeJson(ctx.fs, join(f.jobs, `${n}.json`), {
             issue: n, stage: 'improve', version, humanKey: hKey, bodyKey: bKey, baseCard: card.card,
-            startedAt: ctx.now(), agent: jobAgent, ...(runner.loginId ? { loginId: runner.loginId } : {}), job, answer,
+            startedAt: ctx.now(), agent: jobAgent,
+            ...(runner.loginId ? { loginId: runner.loginId } : {}),
+            ...(runner.cloud ? { cloud: true } : {}),
+            ...(runner.accountWindows ? { accountWindows: runner.accountWindows } : {}),
+            job, answer,
           });
         } catch (error) {
           ctx.jobs.stop(job);
+          prune(ctx, job, false);
           try { saveCard(ctx, f, n, failed(ctx, { issue: n, version, startedAt: ctx.now(), agent: jobAgent }, `the auto-improve job could not be recorded (${plain(error.message, 200)})`)); } catch { /* Next pass. */ }
           throw error;
         }
@@ -915,14 +979,23 @@ export async function activeIntake(ctx, rows) {
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
       const jobAgent = runner.agent;
       const run = cardCommand(runner.spec, { model: jobAgent.model, result: answer });
-      const job = ctx.jobs.start({
+      const job = startIntakeJob(ctx, runner, {
         id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args,
         input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'active', specRefinement, decisionNote }),
-        env: runner.env, issue: n, role: 'intake',
+        issue: n, role: 'intake',
       });
-      try { writeJson(ctx.fs, join(f.jobs, `${n}.json`), { issue: n, stage: 'card', version, startedAt: ctx.now(), agent: jobAgent, ...(runner.loginId ? { loginId: runner.loginId } : {}), job, answer }); }
+      try {
+        writeJson(ctx.fs, join(f.jobs, `${n}.json`), {
+          issue: n, stage: 'card', version, startedAt: ctx.now(), agent: jobAgent,
+          ...(runner.loginId ? { loginId: runner.loginId } : {}),
+          ...(runner.cloud ? { cloud: true } : {}),
+          ...(runner.accountWindows ? { accountWindows: runner.accountWindows } : {}),
+          job, answer,
+        });
+      }
       catch (error) {
         ctx.jobs.stop(job);
+        prune(ctx, job, false);
         try { saveCard(ctx, f, n, failed(ctx, { issue: n, version, startedAt: ctx.now(), agent: jobAgent }, `the card job could not be recorded (${plain(error.message, 200)})`)); } catch { /* Next pass. */ }
         throw error;
       }

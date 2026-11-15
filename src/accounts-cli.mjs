@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: d3daa9fb0b86d1f7e07fb0a924836f25f961cf67f13245933563f47c2378e6b0).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 9a086477389ba5a9aa5df6be5034e761d232e93d42a7c106bff5c7a703e5f970).
 import { spawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
@@ -7,6 +7,7 @@ import { runAgentProcess } from './agent-adapters.mjs';
 import {
   CloudAccountsError,
   cloudAccountsRequest,
+  isCloudAccountsActive,
   leaseCloudAccount,
   localClaudePaths,
   localCodexAuthPath,
@@ -448,9 +449,14 @@ async function runSyncCommand({ provider: requestedProvider, quiet = false, time
   const fs = ports.fs ?? nativeFs;
   const now = (ports.now ?? Date.now)();
   const saved = readCloudAccountsState({ env }, ports);
-  const providers = requestedProvider
+  let providers = requestedProvider
     ? [requestedProvider]
     : (saved.providers.length ? saved.providers : ['codex']);
+  if (quiet) {
+    providers = (requestedProvider ? [requestedProvider] : saved.providers)
+      .filter(provider => isCloudAccountsActive({ env, provider }, ports));
+    if (!providers.length) return { exitCode: 0, message: '' };
+  }
 
   const messages = [];
   for (const provider of providers) {
@@ -575,6 +581,28 @@ async function resolveGitHubUser(login, { cwd, env }, ports = {}) {
   };
 }
 
+function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {
+  const current = readCloudAccountsState({ env }, ports);
+  const remaining = accounts.filter(a => a.account_id !== account.account_id && !a.revoked);
+  const remainingIds = new Set(remaining.map(a => a.account_id));
+  const nextProviders = [...new Set(remaining.map(a => a.provider).filter(Boolean))];
+  const nextActive = {};
+  for (const [prov, entry] of Object.entries(current.active ?? {})) {
+    if (entry?.account_id && entry.account_id !== account.account_id && remainingIds.has(entry.account_id)) {
+      nextActive[prov] = entry;
+    }
+  }
+  const nextCooling = Object.fromEntries(
+    Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
+  );
+  writeCloudAccountsState({
+    enrolled: remaining.length > 0,
+    providers: nextProviders,
+    active: nextActive,
+    cooling: nextCooling,
+  }, { env }, ports);
+}
+
 export async function runAccountsCli({
   commandId = 'accounts',
   operands = [],
@@ -589,34 +617,42 @@ export async function runAccountsCli({
       case 'list': {
         const { accounts, pendingInvites } = await fetchAccountsList({ cwd, env }, ports);
         const current = readCloudAccountsState({ env }, ports);
-        const nextActive = { ...current.active };
-        for (const acc of accounts) {
-          if (nextActive[acc.provider]?.account_id === acc.account_id) {
-            nextActive[acc.provider] = {
-              ...nextActive[acc.provider],
-              label: acc.label ?? acc.account_id,
-              five_hour_used_percent: typeof acc.five_hour_used_percent === 'number' ? acc.five_hour_used_percent : nextActive[acc.provider].five_hour_used_percent,
-              five_hour_reset_at: acc.five_hour_reset_at ?? nextActive[acc.provider].five_hour_reset_at,
-              weekly_used_percent: typeof acc.weekly_used_percent === 'number' ? acc.weekly_used_percent : nextActive[acc.provider].weekly_used_percent,
-              weekly_reset_at: acc.weekly_reset_at ?? nextActive[acc.provider].weekly_reset_at,
-            };
-          }
+        const accessible = accounts.filter(a => !a.revoked);
+        const validIds = new Set(accessible.map(a => a.account_id).filter(Boolean));
+        const nextProviders = [...new Set(accessible.map(a => a.provider).filter(Boolean))];
+        const nextActive = {};
+        for (const [prov, entry] of Object.entries(current.active ?? {})) {
+          if (!validIds.has(entry?.account_id)) continue;
+          const acc = accessible.find(a => a.account_id === entry.account_id);
+          nextActive[prov] = acc
+            ? {
+                ...entry,
+                label: acc.label ?? acc.account_id,
+                five_hour_used_percent: typeof acc.five_hour_used_percent === 'number' ? acc.five_hour_used_percent : entry.five_hour_used_percent,
+                five_hour_reset_at: acc.five_hour_reset_at ?? entry.five_hour_reset_at,
+                weekly_used_percent: typeof acc.weekly_used_percent === 'number' ? acc.weekly_used_percent : entry.weekly_used_percent,
+                weekly_reset_at: acc.weekly_reset_at ?? entry.weekly_reset_at,
+              }
+            : entry;
         }
+        const nextCooling = Object.fromEntries(
+          Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
+        );
         const updatedState = writeCloudAccountsState({
-          enrolled: accounts.length > 0 || current.enrolled,
-          providers: [...new Set(accounts.map(a => a.provider).filter(Boolean))],
+          enrolled: accessible.length > 0,
+          providers: nextProviders,
           active: nextActive,
-          cooling: current.cooling,
+          cooling: nextCooling,
         }, { env }, ports);
         if (options['--json'] === true) {
           return {
             exitCode: 0,
-            message: redactSecrets(JSON.stringify({ accounts, pending_invites: pendingInvites, active: updatedState.active }, null, 2)),
+            message: redactSecrets(JSON.stringify({ accounts: accessible, pending_invites: pendingInvites, active: updatedState.active }, null, 2)),
           };
         }
         return {
           exitCode: 0,
-          message: redactSecrets(renderAccountsTable(accounts, pendingInvites, updatedState.active)),
+          message: redactSecrets(renderAccountsTable(accessible, pendingInvites, updatedState.active)),
         };
       }
 
@@ -640,7 +676,7 @@ export async function runAccountsCli({
 
       case 'use': {
         const targetLabel = operands[0];
-        const { account } = await resolveAccount(targetLabel, { cwd, env }, ports);
+        const { account, accounts } = await resolveAccount(targetLabel, { cwd, env }, ports);
         const reply = await leaseCloudAccount({
           provider: account.provider,
           preferredLabel: account.label,
@@ -651,6 +687,13 @@ export async function runAccountsCli({
           return { exitCode: 1, message: `All ${account.provider} accounts are cooling${reply.wake_at ? ` until ${reply.wake_at}` : ''}.` };
         }
         applyMaterializedLease(reply, { env }, ports);
+        const synced = readCloudAccountsState({ env }, ports);
+        const allProviders = [...new Set(accounts.filter(a => !a.revoked).map(a => a.provider).filter(Boolean))];
+        writeCloudAccountsState({
+          ...synced,
+          enrolled: allProviders.length > 0,
+          providers: allProviders,
+        }, { env }, ports);
         return { exitCode: 0, message: `Active ${account.provider} account set to "${reply.account?.label ?? account.label}".` };
       }
 
@@ -727,11 +770,18 @@ export async function runAccountsCli({
         }
         const res = await cloudAccountsRequest('POST', `/v1/accounts/invites/${encodeURIComponent(inviteId)}/accept`, { body: {}, cwd, env }, ports);
         const current = readCloudAccountsState({ env }, ports);
-        const provider = res?.account?.provider;
+        let provider = res?.account?.provider ?? res?.provider ?? null;
+        let nextProviders = provider ? [...new Set([...current.providers, provider])] : current.providers;
+        if (!provider) {
+          const listed = await fetchAccountsList({ cwd, env }, ports).catch(() => null);
+          if (listed?.accounts) {
+            nextProviders = [...new Set(listed.accounts.filter(a => !a.revoked).map(a => a.provider).filter(Boolean))];
+          }
+        }
         writeCloudAccountsState({
           ...current,
           enrolled: true,
-          providers: provider ? [...new Set([...current.providers, provider])] : current.providers,
+          providers: nextProviders,
         }, { env }, ports);
         return { exitCode: 0, message: `Accepted shared account${res?.account?.label ? ` "${res.account.label}"` : ` invite ${inviteId}`}.` };
       }
@@ -749,24 +799,16 @@ export async function runAccountsCli({
       }
 
       case 'leave': {
-        const { account } = await resolveAccount(operands[0], { cwd, env }, ports);
+        const { account, accounts } = await resolveAccount(operands[0], { cwd, env }, ports);
         await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/leave`, { body: {}, cwd, env }, ports);
+        syncStateAfterAccountRemoval(account, accounts, { env }, ports);
         return { exitCode: 0, message: `Left shared account "${account.label}".` };
       }
 
       case 'remove': {
         const { account, accounts } = await resolveAccount(operands[0], { cwd, env }, ports);
         await cloudAccountsRequest('DELETE', `/v1/accounts/${encodeURIComponent(account.account_id)}`, { cwd, env }, ports);
-        const current = readCloudAccountsState({ env }, ports);
-        const nextActive = { ...current.active };
-        if (nextActive[account.provider]?.account_id === account.account_id) delete nextActive[account.provider];
-        const remaining = accounts.filter(a => a.account_id !== account.account_id);
-        writeCloudAccountsState({
-          enrolled: remaining.length > 0,
-          providers: [...new Set(remaining.map(a => a.provider).filter(Boolean))],
-          active: nextActive,
-          cooling: current.cooling,
-        }, { env }, ports);
+        syncStateAfterAccountRemoval(account, accounts, { env }, ports);
         return { exitCode: 0, message: `Removed account "${account.label}".` };
       }
 
