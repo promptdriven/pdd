@@ -1190,9 +1190,9 @@ test('3252 T7: Round 1 security, FastAPI contract, overlay cleanup, env isolatio
   const afterDirect = JSON.parse(readFileSync(join(sb.home, '.claude', 'settings.json'), 'utf8'));
   assert.equal(afterDirect.env.ANTHROPIC_BASE_URL, undefined);
 
-  // 4. Production URL defaults to https://api.promptdriven.ai and ignores PDD_RUNTIME_URL!
-  assert.equal(DEFAULT_CLOUD_URL, 'https://api.promptdriven.ai');
-  assert.equal(resolveCloudAccountsEndpoint({ PDD_RUNTIME_URL: 'https://interpreter.example.com' }), 'https://api.promptdriven.ai');
+  // 4. Production URL defaults to https://pdd-byok-api-c437voydwa-uc.a.run.app and ignores PDD_RUNTIME_URL!
+  assert.equal(DEFAULT_CLOUD_URL, 'https://pdd-byok-api-c437voydwa-uc.a.run.app');
+  assert.equal(resolveCloudAccountsEndpoint({ PDD_RUNTIME_URL: 'https://interpreter.example.com' }), 'https://pdd-byok-api-c437voydwa-uc.a.run.app');
   assert.equal(resolveCloudAccountsEndpoint({ PDD_CLOUD_URL: 'https://cloud.example.com/' }), 'https://cloud.example.com');
   assert.equal(resolveCloudAccountsEndpoint({ PDD_ACCOUNTS_URL: 'https://accounts.example.com/', PDD_CLOUD_URL: 'https://cloud.example.com' }), 'https://accounts.example.com');
 
