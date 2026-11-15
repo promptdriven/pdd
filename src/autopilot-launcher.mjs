@@ -1,10 +1,10 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4affbcf8587e2c380ae4c0cb6bbb99895db9adef6eda2df88162c607f3b78df6).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 8ea9dc7f289888e608c3cfea708a8551f13c03d67712fe7ad821aec9aa05409c).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
-import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, loginEnvironment, isCloudAccountsActive, selectCloudPoolLogin, exhaustCloudPoolLogin } from './login-pool.mjs';
+import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, loginEnvironment, isCloudAccountsActive, isCreditOrResetAccount, selectCloudPoolLogin, exhaustCloudPoolLogin } from './login-pool.mjs';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -800,7 +800,11 @@ export async function runAutopilotLauncher(input, ports = {}) {
       cloudIntakeAvailable = nextPoolPath !== 'off' && !activePool?.configured
         && ['codex', 'claude'].some(kind => isCloudAccountsActive({ env, poolPath: nextPoolPath || undefined, provider: kind }, { fs: baseDoctorPorts.files ?? nativeFs }));
       if (activePool?.configured) {
-        if (activeIntakeStart && !activePool.logins.some(item => !item.paused && (item.kind === 'codex' || item.kind === 'claude'))) {
+        const nonCreditPoolLogins = activePool.logins.filter(item => !isCreditOrResetAccount(item));
+        if (!nonCreditPoolLogins.length) {
+          throw Error('Autopilot did not start: every login in the pool is flagged with credits or allowReset, and automated Autopilot runs never spend credit or reset-eligible accounts.');
+        }
+        if (activeIntakeStart && !nonCreditPoolLogins.some(item => !item.paused && (item.kind === 'codex' || item.kind === 'claude'))) {
           throw Error(ACTIVE_INTAKE_AGENT_MSG);
         }
         const picked = await selectPoolLogin(
@@ -814,7 +818,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
           );
           if (intakePicked.state !== 'ready') throw Error(ACTIVE_INTAKE_AGENT_MSG);
         }
-        chosenPoolLogin = picked.state === 'ready' ? picked.login : (activePool.logins.find(item => !item.paused) ?? activePool.logins[0]);
+        chosenPoolLogin = picked.state === 'ready' ? picked.login : (nonCreditPoolLogins.find(item => !item.paused) ?? nonCreditPoolLogins[0]);
         const doctorEnv = picked.state === 'ready' ? picked.env : loginEnvironment(env, chosenPoolLogin);
         const profile = {
           agent: { id: chosenPoolLogin.id, kind: chosenPoolLogin.kind },
@@ -1052,7 +1056,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     const newAccountLabel = describeProfile(state.agent, state.environment);
     if (accountOverride && oldAccountLabel && oldAccountLabel !== newAccountLabel) accountNotices.push(`Account changed from ${oldAccountLabel} to ${newAccountLabel}.`);
     if (activePool?.configured) {
-      const ids = activePool.logins.filter(item => !item.paused).map(item => item.id);
+      const ids = activePool.logins.filter(item => !item.paused && !isCreditOrResetAccount(item)).map(item => item.id);
       accountNotices.push(`Login pool: ${ids.join(' -> ')} (${ids.length} login(s)).`);
     } else if (input.pool !== undefined && previous?.poolPath && previous.poolPath !== 'off') {
       accountNotices.push('Login pool disabled.');

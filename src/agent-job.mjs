@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 1feb66cfb22dc20090d770cbde29ea2d5934a014460536b911f8dcc10bf97ee5).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: d424990cc3119cfc260d7d0d65afe67c444b540949afd2d9638f4534e80f26e8).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { descendants, parseProcessTable, sameProcess, terminateCaptured } from './process-lifecycle.mjs';
 
 const self = fileURLToPath(import.meta.url), GRACE_MS = 2000;
+export const SNAPSHOT_INTERVAL_MS = 2000;
+export const MAX_CAPTURED_PROCESSES = 512;
 const SESSION_KEYS = /^(?:ANTIGRAVITY_(?!APP_DATA_DIR$)|CLAUDECODE$|CLAUDE_CODE_(?!OAUTH_TOKEN$)|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -170,8 +172,11 @@ function cleanupSnapshotMatches(record, wrapper) {
 }
 
 function resolveCleanupSnapshot(job, record, wrapper) {
+  const known = wrapper && processIdentity(wrapper) && wrapper.pid === job.pid
+    ? { pid: wrapper.pid, start: wrapper.start, args: wrapper.args }
+    : null;
   const resolved = { ...record, resolutions: [...record.resolutions,
-    { at: Date.now(), attempt: record.attempts.length, wrapper: { pid: wrapper.pid, start: wrapper.start, args: wrapper.args } }] };
+    { at: Date.now(), attempt: record.attempts.length, wrapper: known }] };
   try { writeAtomic(cleanupSnapshotFile(job.token), JSON.stringify(resolved)); } catch { return null; }
   return resolved;
 }
@@ -382,19 +387,55 @@ function cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath) {
   return null;
 }
 
+function jobSavedProcesses(job) {
+  if (Array.isArray(job?.processes)) return job.processes;
+  if (Array.isArray(job?.processes?.seen)) return job.processes.seen;
+  return null;
+}
+
+function capCapturedProcesses(entries, currentKeys, wrapperPid, token) {
+  if (entries.length <= MAX_CAPTURED_PROCESSES) return entries;
+  const mustKeep = new Set();
+  for (const row of entries) {
+    const key = `${row.pid}:${row.start}`;
+    const isWrapper = row.pid === wrapperPid && String(row.args).includes(token);
+    const isActiveChildGroup = !row.groupEnded && Number.isSafeInteger(row.pgid) && row.pgid > 1 && row.pid === row.pgid && row.pgid !== wrapperPid;
+    if (currentKeys.has(key) || isWrapper || isActiveChildGroup) mustKeep.add(key);
+  }
+  const budget = Math.max(0, MAX_CAPTURED_PROCESSES - mustKeep.size);
+  const optional = entries.filter(row => !mustKeep.has(`${row.pid}:${row.start}`));
+  const keptOptional = new Set(optional.slice(optional.length - budget).map(row => `${row.pid}:${row.start}`));
+  return entries.filter(row => {
+    const key = `${row.pid}:${row.start}`;
+    return mustKeep.has(key) || keptOptional.has(key);
+  });
+}
+
 // Save the tree while its parent links still exist. A later stop can then find a
 // helper that reparented itself after its direct agent exited.
-export function snapshotAgentJob(job, ports = {}, { requireWrapper = false, cleanupSnapshot = false } = {}) {
+export function snapshotAgentJob(job, ports = {}, { requireWrapper = false, cleanupSnapshot = false, wrapperPoll = false } = {}) {
   if (!(Number.isSafeInteger(job?.pid) && job.pid > 0)) return null;
   const manifestFile = `${job.token}.processes.json`;
   const retryable = new Set(['inventory unavailable', 'live wrapper identity unavailable', 'incomplete inventory', 'process identity invalid']);
   const savedManifest = readJson(manifestFile);
-  if ((savedManifest !== undefined && !processManifest(savedManifest)) || (Array.isArray(job.processes) && !processManifest(job.processes))) return markProcessUncertain(job, 'manifest invalid');
-  const saved = [...(savedManifest ?? []), ...(Array.isArray(job.processes) ? job.processes : [])];
-  if (saved.length && !processManifest(saved)) return markProcessUncertain(job, 'manifest invalid');
+  const inMemory = jobSavedProcesses(job);
+  if ((savedManifest !== undefined && !processManifest(savedManifest)) || (inMemory !== null && !processManifest(inMemory))) return markProcessUncertain(job, 'manifest invalid');
+  const savedByKey = new Map();
+  for (const row of [...(savedManifest ?? []), ...(inMemory ?? [])]) {
+    if (!processIdentity(row)) return markProcessUncertain(job, 'manifest invalid');
+    const key = `${row.pid}:${row.start}`, prev = savedByKey.get(key);
+    savedByKey.set(key, prev ? (row.groupEnded && !prev.groupEnded ? { ...prev, groupEnded: true } : prev) : { ...row });
+  }
+  const saved = [...savedByKey.values()];
   const previousRoot = saved.find(row => row.pid === job.pid && String(row.args).includes(job.token)) ?? null;
-  const uncertain = (reason, wrapper = previousRoot) => cleanupSnapshot && retryable.has(reason)
-    ? recordCleanupSnapshotFailure(job, reason, wrapper) : markProcessUncertain(job, reason);
+  const uncertain = (reason, wrapper = previousRoot) => {
+    if (wrapperPoll && saved.length && retryable.has(reason)) {
+      job.processes = saved;
+      return saved;
+    }
+    return cleanupSnapshot && retryable.has(reason)
+      ? recordCleanupSnapshotFailure(job, reason, wrapper) : markProcessUncertain(job, reason);
+  };
   let rows; try { rows = (ports.list ?? lifecycleRows)(ports); } catch { return uncertain('inventory unavailable'); }
   if (!Array.isArray(rows)) return uncertain('inventory unavailable');
   const root = rows.find(row => row.pid === job.pid && String(row.args).includes(job.token));
@@ -406,10 +447,12 @@ export function snapshotAgentJob(job, ports = {}, { requireWrapper = false, clea
   const current = descendants(rows, [root]);
   if (current.incomplete) return uncertain('incomplete inventory', root);
   if (!current.every(processIdentity)) return uncertain('process identity invalid', root);
+  const currentKeys = new Set(current.map(row => `${row.pid}:${row.start}`));
   const byIdentity = new Map();
   for (const row of [...saved, ...current]) {
     if (!processIdentity(row)) continue;
     const key = `${row.pid}:${row.start}`, prev = byIdentity.get(key);
+    if (prev) byIdentity.delete(key);
     byIdentity.set(key, prev ? (row.groupEnded && !prev.groupEnded ? { ...prev, groupEnded: true } : prev) : { ...row });
   }
   const liveByPid = new Map(rows.map(row => [row.pid, row]));
@@ -419,10 +462,12 @@ export function snapshotAgentJob(job, ports = {}, { requireWrapper = false, clea
     const liveLeader = liveByPid.get(entry.pid);
     if (!liveGroups.has(entry.pgid) || (liveLeader && !sameProcess(entry, liveLeader))) entry.groupEnded = true;
   }
-  job.processes = [...byIdentity.values()];
-  try { writeAtomic(manifestFile, JSON.stringify(job.processes)); }
+  const bounded = capCapturedProcesses([...byIdentity.values()], currentKeys, job.pid, job.token);
+  if (object(job?.processes) && Array.isArray(job.processes.seen)) job.processes = { ...job.processes, seen: bounded };
+  else job.processes = bounded;
+  try { writeAtomic(manifestFile, JSON.stringify(bounded)); }
   catch { uncertain('manifest write failed'); }
-  return job.processes;
+  return bounded;
 }
 
 export async function cleanupAgentJob(job, ports = {}) {
@@ -430,16 +475,27 @@ export async function cleanupAgentJob(job, ports = {}) {
   const overlays = cleanOverlayDirs((object(spec) ? spec.cleanupDirs : null) ?? job?.cleanupDirs);
   const isLive = () => Boolean(Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token));
   const wipeIfDead = () => { if (overlays.length && !isLive()) removeCleanupDirs(overlays); };
+  const markStopped = () => {
+    if (object(job?.progress)) job.progress.running = false;
+    if (object(job) && job.running === true) job.running = false;
+  };
   const manifestFile = typeof job?.token === 'string' ? `${job.token}.processes.json` : null;
   const errorFile = typeof job?.token === 'string' ? `${job.token}.processes.error` : null;
+  const hasErrorFile = () => Boolean(errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })());
   const custodyPath = typeof job?.token === 'string' ? custodyFile(job.token) : null;
   const manifest = manifestFile ? readJson(manifestFile) : null;
-  if (manifest !== undefined && !processManifest(manifest)) {
-    try { writeFileSync(errorFile, 'manifest invalid\n', { mode: 0o600 }); } catch {}
+  const inMemory = jobSavedProcesses(job);
+  if ((manifest !== undefined && !processManifest(manifest)) || (inMemory !== null && !processManifest(inMemory))) {
+    try { if (errorFile) writeFileSync(errorFile, 'manifest invalid\n', { mode: 0o600 }); } catch {}
     wipeIfDead();
     return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
   }
-  if (job?.processesUncertain || errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })()) {
+  const exitRecord = typeof job?.exit === 'string' ? readJson(job.exit) : undefined;
+  const signalStopped = object(exitRecord) && typeof exitRecord.signal === 'string' && exitRecord.signal.length > 0;
+  const explicitlyStopped = Boolean(ports.recoverStopped || job?.stopped || job?.watch?.stopped || signalStopped);
+  const canRecoverError = explicitlyStopped || (object(spec) && typeof spec.exit === 'string');
+  const hadPreExistingError = Boolean(job?.processesUncertain || hasErrorFile());
+  if (hadPreExistingError && !canRecoverError) {
     wipeIfDead();
     return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
   }
@@ -457,40 +513,128 @@ export async function cleanupAgentJob(job, ports = {}) {
   }
   const retryRecord = snapshotState.record;
   const retryPending = retryRecord && cleanupSnapshotPending(retryRecord);
-  let saved = Array.isArray(job?.processes) ? job.processes : Array.isArray(manifest) ? manifest : null;
-  const live = (ports.alive ?? nativeAlive)(job.pid, job.token);
-  if (retryPending && !live) {
+  let saved = inMemory ?? (Array.isArray(manifest) ? manifest : null);
+  const live = isLive();
+  if (retryPending && !live && !canRecoverError) {
     removeCleanupDirs(overlays);
     return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
   }
-  if (live) {
-    const fresh = snapshotAgentJob(job, ports, { requireWrapper: true, cleanupSnapshot: true });
-    const error = errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })();
-    if (!processManifest(fresh) || job.processesUncertain || error)
+  const needsStoppedRecovery = hadPreExistingError
+    || (retryPending && !live && canRecoverError)
+    || (!live && !processManifest(saved) && explicitlyStopped && !ports.legacyCustodyRoot);
+  let result;
+  if (needsStoppedRecovery) {
+    let probeRows;
+    try { probeRows = (ports.list ?? lifecycleRows)(ports); } catch { probeRows = null; }
+    if (!Array.isArray(probeRows)) {
+      wipeIfDead();
       return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
-    saved = fresh;
-    if (retryPending) {
-      const wrapper = fresh.find(row => row.pid === job.pid && String(row.args).includes(job.token));
-      if (!wrapper || !cleanupSnapshotMatches(retryRecord, wrapper))
-        return { confirmed: false, stopped: 0, killed: 0, remaining: saved.length };
-      if (!resolveCleanupSnapshot(job, retryRecord, wrapper)) {
-        markProcessUncertain(job, 'cleanup snapshot history resolution failed');
-        return { confirmed: false, stopped: 0, killed: 0, remaining: saved.length };
+    }
+    const isPidRecycledInRows = rows => Array.isArray(rows) && Number.isSafeInteger(job?.pid) && job.pid > 1
+      && rows.some(r => r.pid === job.pid && !String(r.args).includes(job.token));
+    const root = probeRows.find(row => row.pid === job.pid && String(row.args).includes(job.token));
+    const pidRecycledAtProbe = isPidRecycledInRows(probeRows);
+    if (live && !root) return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
+    let liveTree = [];
+    if (root) {
+      const tree = descendants(probeRows, [root]);
+      if (tree.incomplete || !tree.every(processIdentity)) return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
+      liveTree = tree;
+    }
+    const byKey = new Map();
+    for (const row of [...(processManifest(saved) ? saved : []), ...liveTree]) {
+      if (processIdentity(row)) byKey.set(`${row.pid}:${row.start}`, row);
+    }
+    if (!pidRecycledAtProbe && Number.isSafeInteger(job?.pid) && job.pid > 1) {
+      for (const row of probeRows) {
+        if (row.pgid === job.pid && processIdentity(row) && (row.pid !== job.pid || Boolean(root))) {
+          byKey.set(`${row.pid}:${row.start}`, row);
+        }
       }
     }
+    if (errorFile) try { rmSync(errorFile, { force: true }); } catch {}
+    if (object(job)) delete job.processesUncertain;
+    const signalFn = ports.kill ?? process.kill;
+    const sleepFn = ports.sleep ?? (ms => new Promise(r => setTimeout(r, ms)));
+    const graceMs = ports.grace ?? GRACE_MS;
+    const pollMs = Math.max(1, Math.min(ports.poll ?? 50, Math.max(1, graceMs)));
+    stopAgentJob(job, ports);
+    if (!live && !pidRecycledAtProbe && Number.isSafeInteger(job?.pid) && job.pid > 1 && probeRows.some(r => r.pgid === job.pid && r.pid !== job.pid)) {
+      try { signalFn(-job.pid, 'SIGTERM'); } catch {}
+    }
+    const targets = [...byKey.values()];
+    result = targets.length
+      ? await terminateCaptured(targets, { list: async () => (ports.list ?? lifecycleRows)(ports), signal: signalFn, sleep: sleepFn, grace: graceMs, poll: pollMs })
+      : { confirmed: true, stopped: 0, killed: 0, remaining: 0 };
+    const groupDead = () => {
+      if (isLive()) return false;
+      let after;
+      try { after = (ports.list ?? lifecycleRows)(ports); } catch { return false; }
+      if (!Array.isArray(after)) return false;
+      if (Number.isSafeInteger(job?.pid) && job.pid > 1) {
+        if (isPidRecycledInRows(after)) return true;
+        if (after.some(r => r.pgid === job.pid && (r.pid !== job.pid || String(r.args).includes(job.token)))) return false;
+        if (!ports.list && !ports.kill) {
+          try { process.kill(-job.pid, 0); return false; }
+          catch (err) { if (err?.code !== 'ESRCH') return false; }
+        }
+      }
+      return true;
+    };
+    if (!groupDead() && Number.isSafeInteger(job?.pid) && job.pid > 1) {
+      const deadline = Date.now() + graceMs;
+      while (!groupDead() && Date.now() < deadline) await sleepFn(pollMs);
+      if (!groupDead()) {
+        let beforeKill;
+        try { beforeKill = (ports.list ?? lifecycleRows)(ports); } catch { beforeKill = null; }
+        if (Array.isArray(beforeKill) && !isPidRecycledInRows(beforeKill)) {
+          try { signalFn(-job.pid, 'SIGKILL'); } catch {}
+        }
+        const killDeadline = Date.now() + graceMs;
+        while (!groupDead() && Date.now() < killDeadline) await sleepFn(pollMs);
+      }
+    }
+    if (!result.confirmed || !groupDead()) {
+      wipeIfDead();
+      return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
+    }
+    if (retryPending) {
+      const resolvedWrapper = root ?? retryRecord.attempts?.at(-1)?.wrapper ?? null;
+      if (!resolveCleanupSnapshot(job, retryRecord, resolvedWrapper)) {
+        markProcessUncertain(job, 'cleanup snapshot history resolution failed');
+        return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
+      }
+    }
+  } else {
+    if (live) {
+      const fresh = snapshotAgentJob(job, ports, { requireWrapper: true, cleanupSnapshot: true });
+      if (!processManifest(fresh) || job.processesUncertain || hasErrorFile())
+        return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
+      saved = fresh;
+      if (retryPending) {
+        const wrapper = fresh.find(row => row.pid === job.pid && String(row.args).includes(job.token));
+        if (!wrapper || !cleanupSnapshotMatches(retryRecord, wrapper))
+          return { confirmed: false, stopped: 0, killed: 0, remaining: saved.length };
+        if (!resolveCleanupSnapshot(job, retryRecord, wrapper)) {
+          markProcessUncertain(job, 'cleanup snapshot history resolution failed');
+          return { confirmed: false, stopped: 0, killed: 0, remaining: saved.length };
+        }
+      }
+    }
+    if (!processManifest(saved)) {
+      if (!live) removeCleanupDirs(overlays);
+      const legacy = cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath);
+      if (legacy?.confirmed) markStopped();
+      return legacy ?? { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+    }
+    stopAgentJob(job, ports);
+    result = await terminateCaptured(saved, { list: async () => (ports.list ?? lifecycleRows)(ports), signal: ports.kill ?? process.kill,
+      sleep: ports.sleep, grace: ports.grace ?? GRACE_MS, poll: ports.poll });
   }
-  if (!processManifest(saved)) {
-    if (!live) removeCleanupDirs(overlays);
-    const legacy = cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath);
-    return legacy ?? { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
-  }
-  stopAgentJob(job, ports);
-  const result = await terminateCaptured(saved, { list: async () => (ports.list ?? lifecycleRows)(ports), signal: ports.kill ?? process.kill,
-    sleep: ports.sleep, grace: ports.grace ?? GRACE_MS, poll: ports.poll });
   if (overlays.length && (result.confirmed || !isLive())) removeCleanupDirs(overlays);
   // The wrapper can write custody or an error while its group shuts down. Read
   // again before reporting a clean result so that marker is not missed.
-  if (errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })())
+  if (hasErrorFile())
     return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
   const currentCustody = custodyPath ? readJson(custodyPath) : undefined;
   if (currentCustody !== undefined && !validCustodyRecord(currentCustody))
@@ -500,10 +644,11 @@ export async function cleanupAgentJob(job, ports = {}) {
   if (!hasCustodyRoot) {
     if (currentCustody) return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
     removeCleanupDirs(overlays);
+    markStopped();
     return result;
   }
   const platform = ports.platform ?? process.platform;
-  if (!['darwin', 'linux'].includes(platform) || (ports.alive ?? nativeAlive)(job.pid, job.token))
+  if (!['darwin', 'linux'].includes(platform) || isLive())
     return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
   let currentRoot = null;
   try { currentRoot = realpathSync(spec.custodyRoot); } catch {}
@@ -512,11 +657,12 @@ export async function cleanupAgentJob(job, ports = {}) {
   const retained = currentCustody?.observations.flatMap(row => row.identities) ?? [], boundary = Number.isFinite(spec?.custodyBoundary) ? spec.custodyBoundary : null;
   const finding = worktreeCustody(job, currentRoot, ports, retained, false, boundary);
   if (!finding) {
-    if (!currentCustody || currentCustody.resolution) { removeCleanupDirs(overlays); return result; }
+    if (!currentCustody || currentCustody.resolution) { removeCleanupDirs(overlays); markStopped(); return result; }
     const resolved = { ...currentCustody, resolution: { at: Date.now(), completeProcessTable: true, completeCwdInventory: true,
       recordedIdentitiesGone: true, unsavedProcessesInRoot: 0, manifestConfirmed: true } };
     try { writeAtomic(custodyPath, JSON.stringify(resolved)); } catch { return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) }; }
     removeCleanupDirs(overlays);
+    markStopped();
     return result;
   }
   if (Array.isArray(finding.identities) && processManifest(finding.identities)) {
@@ -735,10 +881,10 @@ export function selectChildGroups(saved, nowRows, wrapperPid = process.pid, allo
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
   const job = { pid: process.pid, token: specFile };
-  const snapshot = () => snapshotAgentJob(job);
+  const snapshot = () => snapshotAgentJob(job, {}, { wrapperPoll: true });
   snapshot();
   const earlySnapshot = setTimeout(snapshot, 25); earlySnapshot.unref();
-  setInterval(snapshot, 250).unref();
+  setInterval(snapshot, SNAPSHOT_INTERVAL_MS).unref();
   lowerPriority(spec);
   const stdin = openSync(spec.input, 'r'), out = openSync(spec.log, 'a', 0o600);
   let child, activeChildGroups = null;
@@ -758,7 +904,11 @@ function wrap(specFile) {
     exit: () => { removeCleanupDirs(spec.cleanupDirs); process.exit(0); } });
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => stop(signal));
   const run = jobCommand(spec);
-  try { child = spawn(run.command, run.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] }); snapshot(); }
+  try {
+    child = spawn(run.command, run.args, { cwd: spec.cwd, env: process.env, stdio: [stdin, out, out] });
+    snapshot();
+    setTimeout(snapshot, 100).unref();
+  }
   catch (error) { writeFileSync(out, `agent-job: ${error.message}\n`); finish(127, null); return; }
   child.on('error', error => { try { writeFileSync(out, `agent-job: ${error.message}\n`); } catch {} finish(127, null); });
   if (object(spec.hung) && typeof spec.hangs === 'string') watchHung(spec, child.pid, out);
