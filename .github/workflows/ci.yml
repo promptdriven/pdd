@@ -41,6 +41,7 @@ jobs:
           zsh --version
       - name: Install dependencies with private package Git access
         env:
+          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
           PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
@@ -99,6 +100,7 @@ jobs:
           node-version: '22'
       - name: Install dependencies with private package Git access
         env:
+          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
           PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
           PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}

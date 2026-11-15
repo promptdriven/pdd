@@ -1,5 +1,8 @@
 import { createSign } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const repo = 'promptdriven/runtime-client';
 const apiBase = (process.env.GITHUB_API_URL || 'https://api.github.com').replace(/\/+$/, '');
@@ -23,7 +26,17 @@ function normalizePem(raw) {
   if (!key.includes('BEGIN ')) {
     try { key = Buffer.from(key, 'base64').toString('utf8').trim(); } catch {}
   }
-  return key.replace(/\\n/g, '\n');
+  key = key.replace(/\\n/g, '\n').trim();
+  return key ? `${key}\n` : '';
+}
+
+function checkDeployKeyAccess(sshCommand) {
+  const probe = spawnSync('git', ['ls-remote', `ssh://git@github.com/${repo}.git`, 'HEAD'], {
+    env: { ...process.env, GIT_SSH_COMMAND: sshCommand, GIT_TERMINAL_PROMPT: '0' },
+    encoding: 'utf8',
+    timeout: 20_000,
+  });
+  return { ok: probe.status === 0, status: probe.status };
 }
 
 async function mintAppToken(rawAppId, rawKey) {
@@ -65,47 +78,92 @@ async function mintAppToken(rawAppId, rawKey) {
 
 const attempts = [];
 let selected = null;
+let keyDir = '';
 
-for (const [name, raw] of [['PRIVATE_REPO_TOKEN', process.env.PRIVATE_REPO_TOKEN], ['PDS_TOKEN', process.env.PDS_TOKEN]]) {
-  const token = String(raw ?? '').trim();
-  if (!token) { attempts.push(`${name}=unset`); continue; }
-  const check = await checkRepoAccess(token);
-  attempts.push(`${name}=HTTP ${check.status}`);
-  if (check.ok) { selected = { name, token }; break; }
-}
-
-if (!selected) {
-  const minted = await mintAppToken(process.env.PDD_CLOUD_APP_ID, process.env.PDD_CLOUD_APP_PRIVATE_KEY);
-  if (!minted.token) {
-    attempts.push(`PDD_CLOUD_APP=${minted.reason}`);
+try {
+  const deployKey = normalizePem(process.env.RUNTIME_CLIENT_DEPLOY_KEY);
+  if (!deployKey) {
+    attempts.push('RUNTIME_CLIENT_DEPLOY_KEY=unset');
   } else {
-    const check = await checkRepoAccess(minted.token);
-    attempts.push(`PDD_CLOUD_APP=HTTP ${check.status}`);
-    if (check.ok) selected = { name: 'PDD_CLOUD_APP', token: minted.token };
+    keyDir = mkdtempSync(join(tmpdir(), 'pdd-ci-key-'));
+    const keyPath = join(keyDir, 'id_ed25519');
+    const knownHostsPath = join(keyDir, 'known_hosts');
+    writeFileSync(keyPath, deployKey, { mode: 0o600 });
+    const sshCommand = `ssh -i "${keyPath}" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="${knownHostsPath}" -o BatchMode=yes`;
+    const check = checkDeployKeyAccess(sshCommand);
+    attempts.push(`RUNTIME_CLIENT_DEPLOY_KEY=exit ${check.status}`);
+    if (check.ok) {
+      selected = { kind: 'ssh', name: 'RUNTIME_CLIENT_DEPLOY_KEY', sshCommand };
+    }
+  }
+
+  if (!selected) {
+    for (const [name, raw] of [['PRIVATE_REPO_TOKEN', process.env.PRIVATE_REPO_TOKEN], ['PDS_TOKEN', process.env.PDS_TOKEN]]) {
+      const token = String(raw ?? '').trim();
+      if (!token) { attempts.push(`${name}=unset`); continue; }
+      const check = await checkRepoAccess(token);
+      attempts.push(`${name}=HTTP ${check.status}`);
+      if (check.ok) { selected = { kind: 'https', name, token }; break; }
+    }
+  }
+
+  if (!selected) {
+    const minted = await mintAppToken(process.env.PDD_CLOUD_APP_ID, process.env.PDD_CLOUD_APP_PRIVATE_KEY);
+    if (!minted.token) {
+      attempts.push(`PDD_CLOUD_APP=${minted.reason}`);
+    } else {
+      const check = await checkRepoAccess(minted.token);
+      attempts.push(`PDD_CLOUD_APP=HTTP ${check.status}`);
+      if (check.ok) selected = { kind: 'https', name: 'PDD_CLOUD_APP', token: minted.token };
+    }
+  }
+
+  if (!selected) {
+    console.error(`No configured secret has read access to ${repo} (${attempts.join(', ')}).`);
+    process.exit(1);
+  }
+  console.log(`Authenticated read access to ${repo} via ${selected.name}.`);
+
+  try { execFileSync('git', ['config', '--local', '--unset-all', 'http.https://github.com/.extraheader'], { stdio: 'ignore' }); } catch {}
+
+  const scrubbedEnv = {
+    ...process.env,
+    RUNTIME_CLIENT_DEPLOY_KEY: '',
+    PRIVATE_REPO_TOKEN: '',
+    PDS_TOKEN: '',
+    PDD_CLOUD_APP_ID: '',
+    PDD_CLOUD_APP_PRIVATE_KEY: '',
+  };
+
+  let childEnv;
+  if (selected.kind === 'ssh') {
+    const sshKey = `url.ssh://git@github.com/${repo}.insteadOf`;
+    childEnv = {
+      ...scrubbedEnv,
+      GIT_SSH_COMMAND: selected.sshCommand,
+      GIT_CONFIG_COUNT: '2',
+      GIT_CONFIG_KEY_0: sshKey,
+      GIT_CONFIG_VALUE_0: `https://github.com/${repo}`,
+      GIT_CONFIG_KEY_1: sshKey,
+      GIT_CONFIG_VALUE_1: `git@github.com:${repo}`,
+    };
+  } else {
+    const httpsKey = `url.https://x-access-token:${selected.token}@github.com/promptdriven/.insteadOf`;
+    childEnv = {
+      ...scrubbedEnv,
+      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_KEY_0: httpsKey,
+      GIT_CONFIG_VALUE_0: 'https://github.com/promptdriven/',
+      GIT_CONFIG_KEY_1: httpsKey,
+      GIT_CONFIG_VALUE_1: 'ssh://git@github.com/promptdriven/',
+      GIT_CONFIG_KEY_2: httpsKey,
+      GIT_CONFIG_VALUE_2: 'git@github.com:promptdriven/',
+    };
+  }
+
+  execFileSync('npm', ['ci', '--ignore-scripts'], { env: childEnv, stdio: 'inherit' });
+} finally {
+  if (keyDir) {
+    try { rmSync(keyDir, { recursive: true, force: true }); } catch {}
   }
 }
-
-if (!selected) {
-  console.error(`No configured secret has read access to ${repo} (${attempts.join(', ')}).`);
-  process.exit(1);
-}
-console.log(`Authenticated read access to ${repo} via ${selected.name}.`);
-
-try { execFileSync('git', ['config', '--local', '--unset-all', 'http.https://github.com/.extraheader'], { stdio: 'ignore' }); } catch {}
-
-const key = `url.https://x-access-token:${selected.token}@github.com/promptdriven/.insteadOf`;
-const childEnv = {
-  ...process.env,
-  PRIVATE_REPO_TOKEN: '',
-  PDS_TOKEN: '',
-  PDD_CLOUD_APP_ID: '',
-  PDD_CLOUD_APP_PRIVATE_KEY: '',
-  GIT_CONFIG_COUNT: '3',
-  GIT_CONFIG_KEY_0: key,
-  GIT_CONFIG_VALUE_0: 'https://github.com/promptdriven/',
-  GIT_CONFIG_KEY_1: key,
-  GIT_CONFIG_VALUE_1: 'ssh://git@github.com/promptdriven/',
-  GIT_CONFIG_KEY_2: key,
-  GIT_CONFIG_VALUE_2: 'git@github.com:promptdriven/',
-};
-execFileSync('npm', ['ci', '--ignore-scripts'], { env: childEnv, stdio: 'inherit' });
