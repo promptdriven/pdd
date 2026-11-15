@@ -1162,10 +1162,15 @@ runs until its end):
    base and the branch, each changed prompt of `git diff --name-status --find-renames
    origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
    clean checkout of the head (`worktrees/N-approve`) with the
-   [Runtime seam](runtime-seam.prompt.md)'s `readPrompt` and `promptRefusal`. A
+   [Runtime seam](runtime-seam.prompt.md)'s `readPrompt` and `promptRefusal`. Plain
+   Markdown prompts (`interface-missing`) and valid frontmatter `kind: native-only` prompts
+   pass without embedded-block status checks (removing an embedded Runtime interface block
+   to leave plain Markdown is valid; in a `strict` repository, a pure rename or stripping
+   an approved, current Runtime interface block without changing the prose keeps the
+   approval that Git has, while a changed plain or frontmatter prompt requires a trusted
+   GitHub review or a terminal `pdd approve` journal entry for its `proseSha256`). For prompts with an embedded Runtime interface block, a
    problem is: a refusal (two blocks, invalid JSON, a bad status, a stale prose hash), a
-   status other than `approved`, an interface that the base had and the head removed
-   (no interface on both sides is not an approval matter), or an approved status with
+   status other than `approved`, or an approved status with
    no approval: not the same interface and prose hash as the base version at the old
    path (a pure rename keeps the approval that Git has), and no entry for that path and
    prose hash in the approval journal of the repository's common Git dir
@@ -1248,8 +1253,8 @@ runs until its end):
    Runtime test for each such Story (in test/runtime/ or tests/runtime/ when the
    repository keeps its own tests in test/ or tests/), one step for each of its criteria,
    and run "$PDD_CLI" test; or, when bound ports cannot fake the effect, mark the owning
-   prompt's interface native-only with a reason." It is not red when the PR changes at
-   least one prompt and every changed prompt's interface is `native-only` (the Story is
+   prompt native-only with frontmatter kind and reason." It is not red when the PR changes at
+   least one prompt and every changed prompt is `native-only` (the Story is
    checked natively). A read error adds no red (the T01 read names it). The reader is a
    port, `ports.untestedStories(tree)` → `{untested, visible}`. Then a
    failed CI check

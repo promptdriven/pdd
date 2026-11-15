@@ -111,8 +111,9 @@ and never rewrites a header.
 
 ### Prompt claims
 
-The opening paragraph of a prompt is its first block of text. Skip leading
-blank lines and one `# ` title line, then blank lines. The paragraph is the run
+The opening paragraph of a prompt is its first block of text. Skip a leading
+YAML frontmatter block (`---` ... `---`), leading blank lines and one `# `
+title line, then blank lines. The paragraph is the run
 of lines up to a blank line, a heading line (`#`) or a code fence (```` ``` ````
 or `~~~`). A prompt that starts with a heading or fence after its title has no
 opening paragraph. Join the lines with single spaces.

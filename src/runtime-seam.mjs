@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: e5bee5bce124bbe25c68c8312365716252065e3ec285c18be5c4f2b1c4190eb4).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 10e332cf5abc9566fa6310f184faada9dfbe66e2406ab8599e4423ba3f1bacaa).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -60,7 +60,6 @@ import {
   isSecretPath,
   jsonRow,
   jsonSafe,
-  loadInterfaceDraft,
   loadRuntimeClient as runtimeLoadClient,
   loadRuntimeWorkspace,
   migrateRuntimeWorkspace as runtimeMigrateWorkspace,
@@ -72,12 +71,14 @@ import {
   outcomeFor,
   outcomeOverall,
   outcomeText,
+  parsePromptFrontmatter,
   parseScenarioJson,
   preflight,
   productTapCallBound,
   progressText,
   progressTicker,
   projectAnswer,
+  promptMarkdownTargets,
   promptRefusal,
   promptSchemaRefusals,
   proseSha256,
@@ -93,11 +94,9 @@ import {
   resultOutcome,
   roundedNumberTokens,
   resultOverall,
-  runAutomaticApproval as runtimeRunAutomaticApproval,
   runCheck as runtimeRunCheck,
   runContracts as runtimeRunContracts,
   runDoorCall as runtimeRunDoorCall,
-  runInterfaceDraft as runtimeRunInterfaceDraft,
   runJobs as runtimeRunJobs,
   runMcp as runtimeRunMcp,
   runShim as runtimeRunShim,
@@ -330,7 +329,6 @@ export function whyNoTests(root, visible, found, ports = {}) {
     found,
     withPortDefaults(ports, {
       allowsPath: (r, p) => allowsRuntimePath(loadPreflightWorkspacePolicy({ root: r }), p),
-      hasInterfaceBlock: hasPromptInterface,
       discoverTests: (r, files) => findTests({ root: r, files }),
     }),
   );
@@ -507,80 +505,6 @@ export async function loadRuntimeClient() {
     checkRuntimeHealth: boundHealth,
     health: boundHealth,
   };
-}
-
-export async function runInterfaceDraft(input = {}, ports = {}) {
-  return runtimeRunInterfaceDraft(input, seamSelectionPorts(ports));
-}
-
-export async function runAutomaticApproval(input = {}, ports = {}) {
-  const stderr = ports.stderr ?? process.stderr;
-  try {
-    const [
-      { approvalActor, readApprovalPolicy, readPromptApprovals, recordPromptApproval },
-      { approvePromptText, promptPath },
-      ,
-      ,
-      { headerPrompts, isTestOwnedPath, promptClaims, resolveOwners },
-      { readEvidenceEligibility },
-      { allRuns },
-      { assessNativeEvidence, resultLines, usableResult },
-      ,
-      { lintSvgLayouts },
-      { compareScreen, formatScreenComparison },
-    ] = await Promise.all([
-      import('./approval-policy.mjs'),
-      import('./prompt-approve.mjs'),
-      import('./product.mjs'),
-      import('./secret-redaction.mjs'),
-      import('./file-owner.mjs'),
-      import('./workflow-runner.mjs'),
-      import('./workflow-runs.mjs'),
-      import('./workflow-results.mjs'),
-      import('./agent-config.mjs'),
-      import('./svg-layout.mjs'),
-      import('./screen-compare.mjs'),
-    ]);
-    const env = ports.env ?? process.env;
-    const client =
-      ports.client ??
-      (input?.client
-        ? { ...input.client, version: input.client.version ?? clientVersion() }
-        : { version: clientVersion() });
-    const explicitWorkflow = ports.workflow ?? input?.workflow;
-    return await runtimeRunAutomaticApproval(
-      input,
-      seamRuntimePorts(
-        withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
-          approvalActor,
-          readApprovalPolicy,
-          readPromptApprovals,
-          recordPromptApproval,
-          approvePromptText,
-          promptPath,
-          headerPrompts,
-          isTestOwnedPath,
-          promptClaims,
-          resolveOwners,
-          allRuns,
-          workflowBaseSha: ({ root, env: runEnv }) =>
-            resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
-          assessNativeEvidence,
-          usableResult,
-          resultLines,
-          lintSvgLayouts,
-          compareScreen,
-          formatScreenComparison,
-          client,
-          ...(explicitWorkflow !== undefined ? { workflow: explicitWorkflow } : {}),
-          redaction: seamRedaction(ports),
-        }),
-      ),
-    );
-  } catch (error) {
-    stderr.write(`${error?.message || 'Approval failed.'}\n`);
-    return 4;
-  }
 }
 
 export async function runCheck(input = {}, ports = {}) {
@@ -883,7 +807,6 @@ function buildCheckInput(input = {}, { defaultCache = false, extraOptions = {} }
 
 const LOCAL_WHAT_FLAGS = Object.freeze({
   files: '--files',
-  'fill-hash': '--fill-hash',
   'explain-bindings': '--explain-bindings',
 });
 
@@ -949,10 +872,7 @@ export async function local(input = {}, ports = {}) {
   if (!flag) {
     throw new RangeError(`Unsupported local inspection mode: ${String(input?.what)}`);
   }
-  const extraOptions = {
-    [flag]: true,
-    ...(input?.compact === true && input?.options?.['--compact'] === undefined ? { '--compact': true } : {}),
-  };
+  const extraOptions = { [flag]: true };
   return runCheck({ ...buildCheckInput(input, { defaultCache: false, extraOptions }), cache: false }, ports);
 }
 
@@ -999,23 +919,6 @@ export async function mcp(input = {}, ports = {}) {
       ...(cwd !== undefined ? { cwd } : {}),
       words,
       ...(env !== undefined ? { env } : {}),
-    },
-    ports,
-  );
-}
-
-export async function draftInterfaces(input = {}, ports = {}) {
-  const cwd = input?.cwd ?? input?.root;
-  const words = Array.isArray(input?.words) ? [...input.words] : Array.isArray(input?.paths) ? [...input.paths] : [];
-  return runInterfaceDraft(
-    {
-      ...(cwd !== undefined ? { cwd } : {}),
-      words,
-      all: Boolean(input?.all),
-      json: Boolean(input?.json),
-      contract: input?.contract,
-      extend: Boolean(input?.extend),
-      refresh: Boolean(input?.refresh),
     },
     ports,
   );
@@ -1112,7 +1015,6 @@ export {
   isSecretPath,
   jsonRow,
   jsonSafe,
-  loadInterfaceDraft,
   loadRuntimeWorkspace,
   numberWarnings,
   otherFiles,
@@ -1120,12 +1022,14 @@ export {
   outcomeFor,
   outcomeOverall,
   outcomeText,
+  parsePromptFrontmatter,
   parseScenarioJson,
   preflight,
   productTapCallBound,
   progressText,
   progressTicker,
   projectAnswer,
+  promptMarkdownTargets,
   promptRefusal,
   promptSchemaRefusals,
   proseSha256,

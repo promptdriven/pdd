@@ -50,9 +50,9 @@ All existing interface declarations and transport defaults remain in force.
 
 For admitted `setup [--yes]`, call the required [setup terminal policy](setup-interaction.prompt.md)
 with the parsed yes flag and actual stdin/stdout TTY flags. Use its Boolean for
-all optional setup questions: interface drafts, MCP registration and Autopilot.
+all optional setup questions: MCP registration and Autopilot.
 Pass it as the MCP `interactive` port. When false, suppress even an injected
-confirm callback, leave missing interfaces and agent configs unchanged, and let
+confirm callback, leave agent configs unchanged, and let
 Autopilot's existing noninteractive route preserve settings without GitHub
 lookup. Skills, the project block and Git ignore handling still run. `--yes`
 selects these safe defaults; it never enables Autopilot or consents to config
@@ -111,9 +111,7 @@ Pass workflow-park options --blocker and --until unchanged as blocker and until 
 
 Dispatch workflow-resend through the existing runner result/port handling to resendChecks with refs equal to all issue operands, cwd, packageRoot, and said only when --said is supplied. Forward the caller stdin and env to the resend runner ports. No prompt approval or worker launch.
 
-## Interface drafting and setup offer
-
-Dispatch `pdd interface draft [PROMPT...] [--all] [--json]` locally to the interface drafting owner. Dispatch `pdd approve PROMPT --automatic --tests COMMAND` to its automatic route. In a Git repository, setup detects prompts without blocks and offers `pdd interface draft --all` before MCP setup. With an interactive confirmation it may draft; a decline or a noninteractive call only prints the command. Reuse setup confirmation ports. Never run native tests or approve a prompt from setup.
+## Workflow park route option
 
 Pass workflow-park --route unchanged as route to parkAutomaticRun only when supplied. Omit the route key when absent, preserving the input shape of existing park callers.
 
@@ -139,7 +137,7 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 - [Regression detection](autopilot-regressions.prompt.md): required native generation/verification context for regression command dispatch.
 
-- [PDD to Runtime seam](runtime-seam.prompt.md#public-contract): required generation and verification context for Runtime command and reader dispatch (`check`, `lint`, `simulate`, `jobs`, `mcp`, `draftInterfaces` / `runInterfaceDraft`, `missingInterfaces`, `contracts` list/sync, `loadInterfaceDraft`, and `causeText`). Automatic approval dispatch is owned by the prompt approval module; the syntax-only Runtime entry does not bind local filesystem/contract effects.
+- [PDD to Runtime seam](runtime-seam.prompt.md#public-contract): required generation and verification context for Runtime command and reader dispatch (`check`, `lint`, `simulate`, `jobs`, `mcp`, `contracts`, and `causeText`).
 
 - [Shared full-suite queue](test-suite-queue.prompt.md): required execution, status and paused inactivity contract.
 
@@ -310,7 +308,7 @@ reply.
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "2e112cbdbfd1c5f16eada4bcff84b39e9f6c2833b813122cb7529f2e6c40a890",
+  "prose_sha256": "f12d99273abeae24dc4584162ba38dab30c7fe6bcf875e5223f194f01204cbb7",
   "entries": [
     {
       "operation": "runPdd",
@@ -1291,7 +1289,5 @@ reply.
 Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with the selected arguments, current cwd, stdout and stderr; return its exit code without an interpreter call. Forward optional origin, decisionId and outcome metadata alongside existing base, adoptCorpus and draft fields to startRun; these observations grant no workflow authority.
 
 Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. Dispatch `autopilot-intake` the same way with command intake and `--json` as `json`. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode`, `--report` as `report`, `--decisions` as `decisions`, `--intake` as `intake`, `--agent` as `agent`, `--pool` as `pool` and `--auto-update` as `autoUpdate` when given.
-
-For interface-draft dispatch, pass parsed --contract as contract and the --extend/--refresh flags as extend/refresh to `draftInterfaces` alongside cwd, words, all and json. Forward stdout/stderr; drafting remains local.
 
 Route `pdd test --target code` to the local compiled Story checker without contacting the interpreter. Reject other test options except `--json` for this route.

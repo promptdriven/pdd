@@ -3,7 +3,7 @@
   "story_path": "user_stories/help-teaches-pdd.md",
   "criteria": [
     {"id": "AC1", "text": "`pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed Prompting guide (`docs/prompting-guide.md`) and RUNBOOK (`RUNBOOK.md`), print nothing to stderr and exit with code 0."},
-    {"id": "AC2", "text": "`pdd help prompting` shows how to write a prompt file, `prompts/NAME.prompt.md`, with its `## Dependencies` section and its Runtime interface block, prints nothing to stderr and exits with code 0."},
+    {"id": "AC2", "text": "`pdd help prompting` shows how to write a prompt file, `prompts/NAME.prompt.md`, with its `## Dependencies` section, prints nothing to stderr and exits with code 0."},
     {"id": "AC3", "text": "`pdd help prompting` shows how to write a Story file, `user_stories/STORY.md`, with its numbered acceptance criteria, and the Story's test file, `tests/STORY.json`, and exits with code 0."},
     {"id": "AC4", "text": "`pdd help prompting` names the commands `pdd test`, `pdd lint` and `pdd approve`, and exits with code 0."},
     {"id": "AC5", "text": "`pdd help prompting` names the full paths of the installed `docs/prompting-guide.md` and `RUNBOOK.md`, and exits with code 0."},
@@ -84,7 +84,6 @@
       "checks": [
         {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "prompts/NAME.prompt.md"},
         {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "## Dependencies"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "Runtime interface"},
         {"criterion_id": "AC2", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
         {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
         {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "user_stories/STORY.md"},

@@ -648,27 +648,24 @@ const RECORDED_BASE_ENTRIES = {
   'cli:help-topic': [0,2,12,31,33,59,60,65,68,74,75,79,83,84,94,95,108],
   'cli:--version': [0,2,12,31,33,59,60,65,68,74,75,79,83,84,94,95,108],
   'cli:completion': [0,2,12,31,33,59,60,65,68,74,75,79,83,84,94,95,108],
-  'cli:setup': [0,2,7,10,12,29,31,33,34,36,38,39,53,55,56,58,59,60,65,68,73,74,75,76,79,80,83,84,89,94,95,96,98,100,107,108,113],
+  'cli:setup': [0,2,7,10,12,29,31,33,36,38,53,55,56,58,59,60,65,68,74,75,79,83,84,89,94,95,96,98,100,107,108,113],
   'cli:files': [0,2,12,31,33,34,59,60,64,65,68,73,74,75,76,79,80,83,84,94,95,108],
   'cli:owner': [0,2,12,31,33,34,37,59,60,65,68,73,74,75,76,79,80,83,84,94,95,108],
-  'cli:interface-draft': [0,2,12,31,33,34,39,59,60,65,68,73,74,75,76,79,80,83,84,94,95,108],
   'cli:approve': [0,2,11,12,31,33,34,37,59,60,65,66,68,73,74,75,76,79,80,83,84,85,94,95,108],
-  'cli:approve-automatic': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:approve-automatic-tests': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:test': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:lint': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:simulate': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:contracts': [0,2,10,11,12,14,16,19,23,29,31,33,34,35,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:contracts-sync': [0,2,10,11,12,14,16,19,23,29,31,33,34,35,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:jobs': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:mcp': [0,2,6,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:test': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:lint': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:simulate': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:contracts': [0,2,10,11,12,14,16,19,23,29,31,33,34,35,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:contracts-sync': [0,2,10,11,12,14,16,19,23,29,31,33,34,35,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:jobs': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:mcp': [0,2,6,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
   'cli:metrics': [0,2,10,12,31,33,36,38,53,54,55,56,57,58,59,60,65,68,74,75,79,83,84,89,94,95,96,98,100,107,108,113],
   'cli:graph': [0,2,10,12,14,19,23,29,31,33,36,38,41,43,44,45,46,47,48,52,53,55,56,58,59,60,65,68,74,75,79,83,84,88,89,93,94,95,96,97,98,100,107,108,113],
   'cli:dependencies-prepare': [0,2,10,12,14,19,23,29,31,33,36,38,41,42,43,46,47,48,52,53,55,56,58,59,60,65,68,74,75,79,83,84,88,89,93,94,95,96,97,98,100,107,108,113],
   'cli:dependencies-complete': [0,2,10,12,14,19,23,29,31,33,36,38,41,42,43,46,47,48,52,53,55,56,58,59,60,65,68,74,75,79,83,84,88,89,93,94,95,96,97,98,100,107,108,113],
-  'cli:product-status': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:product-next': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:product-start': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:product-status': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:product-next': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:product-start': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
   'cli:workflow-list': [0,2,12,31,33,59,60,65,68,74,75,79,83,84,94,95,108],
   'cli:workflow-status': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
   'cli:workflow-run': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
@@ -677,23 +674,23 @@ const RECORDED_BASE_ENTRIES = {
   'cli:workflow-view': [0,2,10,11,12,31,33,34,36,37,53,55,56,58,59,60,65,68,70,73,74,75,76,79,80,83,84,89,94,95,96,98,100,102,103,105,107,108,111,113],
   'cli:workflow-cost': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
   'cli:workflow-prove': [0,2,10,12,31,33,36,53,55,56,58,59,60,65,68,74,75,79,83,84,89,94,95,96,98,100,103,107,108,113],
-  'cli:autopilot-status': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,33,34,36,37,38,39,41,43,46,47,48,49,50,51,52,53,55,56,58,59,60,61,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:autopilot-doctor': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,33,34,36,37,38,39,41,43,46,47,48,49,50,51,52,53,55,56,58,59,60,61,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:autopilot-status': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,33,34,36,37,38,41,43,46,47,48,49,50,51,52,53,55,56,58,59,60,61,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
+  'cli:autopilot-doctor': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,33,34,36,37,38,41,43,46,47,48,49,50,51,52,53,55,56,58,59,60,61,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
   'cli:autopilot-regressions': [0,2,12,24,31,33,36,38,59,60,65,68,74,75,79,83,84,94,95,108,113],
   'cli:autopilot-alerts': [0,2,10,11,12,13,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
   'cli:autopilot-off': [0,2,12,29,31,33,36,38,59,60,65,68,74,75,79,83,84,94,95,108],
   'child:workflow-worker-completion': [0,2,10,36,53,55,56,58,79,89,94,96,98,100,107,112,113],
   'child:workflow-replay-selector': [34,68,73,76,79,80],
-  'child:try-doors-launcher': [0,2,10,11,14,16,19,23,29,31,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,90,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
+  'child:try-doors-launcher': [0,2,10,11,14,16,19,23,29,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,90,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
   'child:scripts/autopilot-smoke.mjs': [],
   'child:scripts/route-runtime-issues.mjs': [],
-  'tick:autopilot-launcher': [0,2,5,10,11,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,34,36,37,38,39,41,43,46,47,48,49,50,51,52,53,55,56,58,59,61,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
+  'tick:autopilot-launcher': [0,2,5,10,11,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,34,36,37,38,41,43,46,47,48,49,50,51,52,53,55,56,58,59,61,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
   'lib:svg-layout.mjs': [79,82,86],
   'lib:prompt-approve.mjs': [11,34,37,66,68,73,76,79,80,85],
   'lib:file-owner.mjs': [34,37,68,73,76,79,80],
   'lib:agent-adapters.mjs': [0,2,79],
-  'lib:product.mjs': [0,2,10,11,14,16,19,23,29,31,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
-  'lib:autopilot-doctor.mjs': [0,2,10,11,14,16,18,19,23,29,30,31,34,36,37,38,39,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
+  'lib:product.mjs': [0,2,10,11,14,16,19,23,29,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
+  'lib:autopilot-doctor.mjs': [0,2,10,11,14,16,18,19,23,29,30,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
 };
 
 test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and library entry matches recorded base module sets, cycles and guarded load failures', async t => {
@@ -763,7 +760,6 @@ registerHooks({
     'src/issue-sort-github.mjs <-> src/issue-sort.mjs',
     'src/issue-mixed.mjs <-> src/issue-sort-github.mjs <-> src/issue-sort.mjs',
     'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
-    'src/runtime/interface-draft.mjs <-> src/runtime/runtime-bindings.mjs <-> src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
     'src/toml-string.mjs <-> src/workflow-herdr-layout.mjs',
   ]);
 
@@ -833,7 +829,6 @@ registerHooks({
   assert.deepEqual(novelStaticCycles, [], `unexpected new static import cycle: ${novelStaticCycles.join('; ')}`);
 
   const ASYNC_SEAM_BRIDGE_PROBES = new Set([
-    'cli:approve-automatic', 'cli:approve-automatic-tests',
     'cli:test', 'cli:lint', 'cli:simulate', 'cli:contracts', 'cli:contracts-sync',
     'cli:jobs', 'cli:mcp', 'child:try-doors-launcher',
   ]);
@@ -903,7 +898,7 @@ registerHooks({
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
-    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'interface-draft', 'prompt-approve',
+    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'prompt-approve',
     'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
     'issue-dependency-graph', 'dependencies-prepare', 'dependencies-complete',
     'product-status', 'product-next', 'product-start',
@@ -936,10 +931,7 @@ registerHooks({
     ['cli:setup', [bin, 'setup', '--yes'], repo],
     ['cli:files', [bin, 'files', '--json'], repo],
     ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
-    ['cli:interface-draft', [bin, 'interface', 'draft', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
-    ['cli:approve-automatic', [bin, 'approve', 'prompts/a.prompt.md', '--automatic'], repo],
-    ['cli:approve-automatic-tests', [bin, 'approve', 'prompts/a.prompt.md', '--automatic', '--tests', 'npm test'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
     ['cli:simulate', [bin, 'simulate', '--stop', 'a'], repo],
@@ -982,7 +974,7 @@ registerHooks({
   ];
 
   const ACYCLIC_ENTRIES = new Set([
-    'cli:--help', 'cli:owner', 'cli:files', 'cli:approve', 'cli:interface-draft',
+    'cli:--help', 'cli:owner', 'cli:files', 'cli:approve',
     'child:workflow-replay-selector', 'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
     'lib:file-owner.mjs', 'lib:agent-adapters.mjs',
   ]);
@@ -1020,15 +1012,6 @@ registerHooks({
 
   assert.equal(runWithRejectedModule('/runtime-client.mjs', [bin, '--help']).status, 0);
 
-  for (const suffix of ['/workflow-runner.mjs', '/product.mjs', '/screen-compare.mjs', '/runtime-client.mjs']) {
-    for (const extraArgs of [['--automatic', '--tests', 'node --test x.mjs'], ['--automatic']]) {
-      const approveFail = runWithRejectedModule(suffix, [bin, 'approve', 'prompts/a.prompt.md', ...extraArgs], repo);
-      assert.equal(approveFail.status, 4, `approve ${extraArgs.join(' ')} (${suffix}) expected exit 4, got ${approveFail.status}: ${approveFail.stderr}`);
-      assert.equal(approveFail.stdout, '');
-      assert.equal(approveFail.stderr, 'REVIEW_LOAD_FAILURE\n');
-    }
-  }
-
   for (const [cmdArgs, suffix] of [
     [['test', 'a'], '/workflow-runner.mjs'],
     [['simulate', '--stop', 'a'], '/prompt-approve.mjs'],
@@ -1054,9 +1037,6 @@ registerHooks({
     assert.equal(contractsFail.status, 5);
     assert.equal(contractsFail.stderr.trim(), 'Local contracts could not be read. Reason: REVIEW_LOAD_FAILURE');
   }
-  const setupFail = runWithRejectedModule('/interface-draft.mjs', [bin, 'setup', '--yes'], repo);
-  assert.equal(setupFail.status, 1);
-  assert.ok(setupFail.stderr.includes('REVIEW_LOAD_FAILURE'));
 
   const launcherFailScript = 'import(process.argv[1]).then(async ({ runShim }) => { process.exitCode = await runShim(process.argv[2], process.argv.slice(3)); }).catch(() => { process.stderr.write("pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\\n"); process.exitCode = 125; });';
   const launcherFail = runWithRejectedModule(
@@ -1354,7 +1334,7 @@ test('SEAM9 (R2-2): seam preserves legacy port overrides and ignores own undefin
       redactSecrets: undefined,
     },
   );
-  assert.equal(checkCode, 4, errText);
+  assert.equal(checkCode, 0, errText);
   const parsedCheck = JSON.parse(outJson);
   assert.ok(
     Array.isArray(parsedCheck.warnings) && parsedCheck.warnings.some(w => w.includes('Visible')),
@@ -2418,7 +2398,7 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   const { redactSecrets } = await import('../src/secret-redaction.mjs');
   const { approvePromptText } = await import('../src/prompt-approve.mjs');
 
-  for (const name of ['lint', 'check', 'read', 'retry', 'local', 'simulate', 'jobs', 'health', 'mcp', 'draftInterfaces', 'contracts', 'render']) {
+  for (const name of ['lint', 'check', 'read', 'retry', 'local', 'simulate', 'jobs', 'health', 'mcp', 'contracts', 'render']) {
     assert.equal(typeof seam[name], 'function', `seam.${name} must be a function`);
     assert.notEqual(seam[name], index[name], `seam.${name} must wrap host ports, not re-export index.${name}`);
   }
@@ -2605,17 +2585,28 @@ test('SEAM20: whyNoTests preserves workspace preflight errors through the compat
 
 test('SEAM21: repo prompt dependency graph has zero cycles, pure-Runtime prompts are removed, and staying prompts have zero broken prompt links', async () => {
   const seam = await import('../src/runtime-seam.mjs');
-  const { contractCoverage } = await seam.loadInterfaceDraft();
-  const dummyIface = { status: 'draft', prose_sha256: '', entries: [], calls: [], resources: [], limits: { max_steps: 1, max_model_calls: 1 } };
+  const { promptMarkdownTargets } = seam.runtimePreflightSlice();
   const prompts = [...seam.discoveryVisibleFiles({ root, excludeFixtureProjects: true })].filter(p => p.endsWith('.prompt.md')).sort();
   const promptSet = new Set(prompts);
+  const edges = new Map(prompts.map(p => [
+    p,
+    promptMarkdownTargets(readFileSync(join(root, p), 'utf8'), p).filter(target => promptSet.has(target)),
+  ]));
   const cycles = [];
-  for (const path of prompts) {
-    try {
-      contractCoverage({ root, path, iface: dummyIface });
-    } catch (error) {
-      if (String(error?.message ?? '').includes('cycle')) cycles.push(`${path}: ${error.message}`);
-    }
+  for (const start of prompts) {
+    const stack = new Set([start]);
+    const visit = current => {
+      for (const next of edges.get(current) ?? []) {
+        if (stack.has(next)) {
+          cycles.push(`${start}: cycle to ${next}`);
+          return;
+        }
+        stack.add(next);
+        visit(next);
+        stack.delete(next);
+      }
+    };
+    visit(start);
   }
   assert.deepEqual(cycles, []);
 
@@ -2668,35 +2659,9 @@ test('SEAM21: repo prompt dependency graph has zero cycles, pure-Runtime prompts
   assert.deepEqual(brokenLinks, []);
 });
 
-test('SEAM22: draftInterfaces succeeds when prompt prose names a moved src/<name>.mjs path', async t => {
-  const { mkdirSync, writeFileSync } = await import('node:fs');
-  const { harbor } = await import('./helpers/runtime-fake.mjs');
-  const seam = await import('../src/runtime-seam.mjs');
-  const setup = harbor(t, repo => {
-    mkdirSync(join(repo, 'src/runtime'), { recursive: true });
-    writeFileSync(join(repo, 'src/runtime/moved-leaf.mjs'), 'export function scoreOrder(input) { return input; }\n');
-    writeFileSync(
-      join(repo, 'prompts/moved-leaf.prompt.md'),
-      '# Moved leaf\n\nOwn `src/moved-leaf.mjs`. Export `scoreOrder(input)` returning the order score.\n',
-    );
-  });
-  let out = '';
-  const code = await seam.draftInterfaces(
-    { cwd: setup.repo, paths: ['prompts/moved-leaf.prompt.md'], json: true },
-    { stdout: { write: chunk => { out += chunk; } }, stderr: { write: () => {} } },
-  );
-  const parsed = JSON.parse(out);
-  const rows = parsed.rows ?? parsed;
-  const row = rows.find(item => item.path === 'prompts/moved-leaf.prompt.md');
-  assert.ok(row, `expected row for moved-leaf prompt, got ${out}`);
-  assert.equal(row.state, 'drafted', JSON.stringify(row));
-  assert.notEqual(code, 2);
-});
-
-test('SEAM23: unbound-port errors propagate with unboundPort: true across product composition, screen check, and automatic approval', async t => {
+test('SEAM23: unbound-port errors propagate with unboundPort: true across product composition and screen check', async () => {
   const runtime = await import('@promptdriven/runtime-client');
   const { composeProductTry } = await import('@promptdriven/runtime-client/product-composition.mjs');
-  const { runAutomaticApproval } = await import('@promptdriven/runtime-client/interface-draft.mjs');
 
   assert.throws(
     () => composeProductTry({ root: '/repo' }, {}),
@@ -2722,33 +2687,6 @@ test('SEAM23: unbound-port errors propagate with unboundPort: true across produc
     () => runtime.runCheck(
       { cwd: root, words: [], options: { '--screen': 'http://127.0.0.1:9', '--drawing': 'drawing.svg' } },
       { stdout: { write: () => {} }, stderr: { write: () => {} } },
-    ),
-    error => hasControlledDiagnostic(error) && error.unboundPort === true,
-  );
-
-  let approvalErr = '';
-  const missingApprovalCode = await runAutomaticApproval(
-    { path: 'prompts/place_order.prompt.md', root, tests: 'npm test' },
-    { stdout: { write: () => {} }, stderr: { write: chunk => { approvalErr += chunk; } } },
-  );
-  assert.equal(missingApprovalCode, 4);
-  assert.ok(approvalErr.trim().length > 0);
-
-  await assert.rejects(
-    () => runAutomaticApproval(
-      { path: 'prompts/place_order.prompt.md', root, tests: 'npm test' },
-      {
-        stdout: { write: () => {} },
-        stderr: { write: () => {} },
-        readApprovalPolicy: () => {
-          throw Object.assign(new Error('downstream port unbound'), { unboundPort: true });
-        },
-        approvalActor: () => 'tester',
-        recordPromptApproval: async () => {},
-        readPromptApprovals: () => ({ approvals: [] }),
-        approvePromptText: text => text,
-        promptPath: () => 'prompts/place_order.prompt.md',
-      },
     ),
     error => hasControlledDiagnostic(error) && error.unboundPort === true,
   );

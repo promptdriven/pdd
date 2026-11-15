@@ -25,7 +25,7 @@
     "test": "node --import ./test/helpers/test-home.mjs --test test/*.test.mjs"
   },
   "dependencies": {
-    "@promptdriven/runtime-client": "github:promptdriven/runtime-client#8de0f58ff80d04e1a1b7efdc6263f7cef0b2a8de"
+    "@promptdriven/runtime-client": "github:promptdriven/runtime-client#81ed2436e587e3533824970800eb39a326ca063d"
   },
   "bundleDependencies": [
     "@promptdriven/runtime-client"

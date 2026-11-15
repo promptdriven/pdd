@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {appendFileSync,existsSync,readFileSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {runCheck,captureSource,findTests} from '../src/runtime-seam.mjs';
+import {runCheck,captureSource,fillHashes,findTests} from '../src/runtime-seam.mjs';
 import {portsFor} from './helpers/runtime-fake.mjs';
 import {affectedFixture,affectedRuntime,batch,check,checks,cli,commit,disclaimer,git,hasState,historicalAssociation,installGh,put,vectors} from './helpers/affected-check-fixture.mjs';
 const cases=vectors('affected-story-selection').cases;
@@ -60,8 +60,8 @@ test('3146 safe-link-target-consumers dispatch A/B and preserve source authority
     const path=join(setup.repo,`prompts/${name}.prompt.md`);
     writeFileSync(path,readFileSync(path,'utf8').replace('../docs/shared.md',`../docs/${name}-link.md`));
   }
-  // Fill draft hashes through the public local command after the fixture dependency edit.
-  assert.equal((await cli(setup,['test','--fill-hash'])).code,0);commit(setup.repo);setup.change(data.given.changed[0]);
+  // Fill draft hashes after the fixture dependency edit.
+  fillHashes({root:setup.repo});commit(setup.repo);setup.change(data.given.changed[0]);
   const fake=await affectedRuntime(t,setup),result=await check(setup,fake);
   assert.equal(result.code,0,result.ports.stderr.text);assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),sorted(data.expected.check_tests));
 });
