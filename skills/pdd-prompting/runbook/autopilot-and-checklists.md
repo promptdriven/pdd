@@ -186,7 +186,7 @@ records. A line that the records do not support is red. The same rules, short en
   write a failed check as `not run`.
 - `not run` is only for a cause that this PR cannot fix: a native-only prompt, no verdict with no failed step, or a
   refusal that pdd gives no fix for. A changed Story with no Runtime test is no such cause: write its Runtime test
-  (one step for each criterion) and run `pdd test`, or mark the owning prompt's interface native-only with a reason.
+  (one step for each criterion) and run `pdd test`, or mark the owning prompt native-only with frontmatter kind and reason.
   A refusal with a fix from pdd is this PR's work. For example, a whole number outside the interpreter's range: apply
   the Number spelling that pdd prints (§3 "Large whole numbers") and check again.
 - Do not wait for maintenance. When pdd prints that the interpreter is in maintenance (§11), it has sent nothing yet.

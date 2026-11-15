@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CommandInputError, parseArgv } from '../src/argument-parser.mjs';
@@ -200,7 +200,8 @@ test('shell completion offers no removed or quiet name in any context', t => {
 
 // A later rename is one edit: change only NAMES in a copy of src; help, parse, removal lines and completion follow it.
 test('the new words are data in one place', async t => {
-  const copy = join(temp(t), 'src'); cpSync(join(root, 'src'), copy, { recursive: true });
+  const sandbox = temp(t), copy = join(sandbox, 'src'); cpSync(join(root, 'src'), copy, { recursive: true });
+  symlinkSync(join(root, 'node_modules'), join(sandbox, 'node_modules'), 'dir');
   const file = join(copy, 'command-catalog.mjs'), source = readFileSync(file, 'utf8');
   const RENAMED = { test: 'exam', lint: 'sweep', simulate: 'sandbox', run: 'begin' };
   const edited = source.replace(/(export const NAMES = Object\.freeze\()\{[^}]*\}/, (_, head) => `${head}${JSON.stringify(RENAMED)}`);

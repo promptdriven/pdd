@@ -2844,7 +2844,7 @@ test('U3 (M2) after a final-step refresh, a head with no CI run yet waits for it
   assert.deepEqual(w.github.merges, [pr.number]); assert.match(mergeComment(pr), /- CI: green/);
 });
 
-test('U4 (M3) a pure rename of an approved, current prompt passes the gate and merges; a lost interface block is red', async t => {
+test('U4 (M3) a pure rename or stripping a legacy interface block on an approved, current prompt passes the gate and merges', async t => {
   const prose = 'Count the words of a text.';
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit('prompts/words.prompt.md', approvedText(prose));
@@ -2854,11 +2854,20 @@ test('U4 (M3) a pure rename of an approved, current prompt passes the gate and m
   const { pr } = w.build(17); await greenTick(w, 17);
   assert.deepEqual(w.github.merges, [pr.number], 'a rename keeps the approval that Git has');
   const v = await coreWorld(t, { settings: { runs: 1 } });
+  v.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
   v.baseCommit('prompts/words.prompt.md', approvedText(prose));
   v.issue(17); await v.tick();
   writeIn(v.job(17, 'build').cwd, 'prompts/words.prompt.md', `# Words\n\n${prose}\n`);
-  v.build(17); await v.tick();
-  assert.match(v.job(17, 'repair')?.input ?? '', /prompts\/words\.prompt\.md lost its Runtime interface block/);
+  const { pr: plainPr } = v.build(17); await greenTick(v, 17);
+  assert.deepEqual(v.github.merges, [plainPr.number], 'stripping a legacy Runtime interface block keeps the prose approval even under strict_approvals');
+  const s = await coreWorld(t, { settings: { runs: 1 } });
+  s.baseCommit('pdd.json', JSON.stringify({ strict_approvals: true }));
+  s.baseCommit('prompts/words.prompt.md', `# Words\n\n${prose}\n`);
+  s.issue(17); await s.tick();
+  writeIn(s.job(17, 'build').cwd, 'prompts/words.prompt.md', '# Words\n\nCount words and sentences.\n');
+  const { pr: strictPlainPr } = s.build(17); await s.tick();
+  assert.ok(s.labels(17).includes('pdd:needs-decision'), 'strict_approvals plain prompt edit asks a person');
+  assert.equal(strictPlainPr.state, 'open');
   // A changed approved prompt with no recorded approval: the finding says what works (draft, then pdd approve).
   const x = await coreWorld(t, { settings: { runs: 1 } });
   x.issue(17); await x.tick();

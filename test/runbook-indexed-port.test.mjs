@@ -21,14 +21,12 @@ test('RUNBOOK indexed port example has complete, schema-compatible cases', () =>
   const prompt = extract('prompts/varying-port.prompt.md', '````', 'markdown');
   const story = extract('user_stories/varying-port.md', '```', 'markdown');
   const scenario = JSON.parse(extract('test/runtime/varying-port.json', '```', 'json'));
-  const iface = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)[1]);
-  const entry = iface.entries[0];
-  const resource = iface.resources.find(item => item.name === 'service');
-  const operation = resource.operations.find(item => item.name === 'lookup');
+  assert.ok(!prompt.includes('<details><summary>Runtime interface</summary>'), 'documented prompt must be plain Markdown');
+  assert.match(prompt, /varying-port\.mjs/);
+  assert.match(prompt, /service\.lookup/);
+  const idObjectSchema = { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false };
+  const labelObjectSchema = { type: 'object', properties: { label: { type: 'string' } }, required: ['label'], additionalProperties: false };
   const binding = scenario.simulation['service.lookup'];
-  assert.equal(resource.kind, 'port');
-  assert.equal(resource.access, 'write');
-  assert.equal(operation.access, 'write');
   assert.equal(binding.action, 'fixture.lookup');
   const pointer = (root, path) => path === '' ? root : path.slice(1).split('/').reduce((value, key) => value[key.replaceAll('~1', '/').replaceAll('~0', '~')], root);
   assert.equal(pointer(scenario.initial_world, binding.world_pointer), 0);
@@ -41,17 +39,16 @@ test('RUNBOOK indexed port example has complete, schema-compatible cases', () =>
     return schema.required.every(key => Object.hasOwn(value, key)) &&
       Object.entries(value).every(([key, child]) => schema.properties[key] ? matches(schema.properties[key], child) : schema.additionalProperties !== false);
   }
-  // The pointer selects a location in the declared result schema as well as the template.
   const schemaAt = (schema, path) => path === '' ? schema : path.slice(1).split('/').reduce(
     (current, key) => current?.properties?.[key.replaceAll('~1', '/').replaceAll('~0', '~')], schema);
-  assert.ok(schemaAt(operation.result_schema, binding.result_value_pointer));
-  assert.equal(schemaAt(operation.result_schema, '/value'), undefined);
+  assert.ok(schemaAt(labelObjectSchema, binding.result_value_pointer));
+  assert.equal(schemaAt(labelObjectSchema, '/value'), undefined);
   const validCases = cases => {
     const indices = new Set();
     return cases.every(item => {
       if (Object.keys(item).sort().join(',') !== 'args,call_index,result' ||
           !Number.isInteger(item.call_index) || item.call_index < 1 || indices.has(item.call_index) ||
-          !matches(operation.arguments_schema, item.args) || !matches(operation.result_schema, item.result)) return false;
+          !matches(idObjectSchema, item.args) || !matches(labelObjectSchema, item.result)) return false;
       indices.add(item.call_index);
       return true;
     });
@@ -65,10 +62,10 @@ test('RUNBOOK indexed port example has complete, schema-compatible cases', () =>
     const item = binding.cases[index];
     assert.equal(item.call_index, index + 1);
     assert.equal(step.entry_path, 'prompts/varying-port.prompt.md');
-    assert.equal(step.operation, entry.operation);
-    assert.ok(matches(entry.input_schema, step.input));
+    assert.equal(step.operation, 'lookup');
+    assert.ok(matches(idObjectSchema, step.input));
     assert.deepEqual(step.input, item.args);
-    assert.ok(matches(entry.result_schema, item.result));
+    assert.ok(matches(labelObjectSchema, item.result));
     assert.equal(step.checks[0].criterion_id, scenario.criteria[0].id);
     assert.equal(pointer(item.result, step.checks[0].path), step.checks[0].value);
   }

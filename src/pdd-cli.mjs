@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 412e0746887533970aa0147273d391096fff13afec8e7752f0ad86c60ecdd6de).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 93b7513da4ab428e9a005e96ecc39aa0696eb4124ce75466313bdbf518d24fb2).
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -94,7 +94,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
   setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {} } = {}) {
+  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -172,6 +172,15 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       for (const [name, value] of Object.entries(plan.options)) { args.push(name); if (Array.isArray(value)) args.push(...value); else if (value !== true) args.push(value); }
       const { runMetrics } = await import('./metrics-command.mjs');
       return runMetrics({ argv: args, cwd, stdout, stderr });
+    }
+    case 'accounts': {
+      try {
+        const module = accountsCli ?? await import('./accounts-cli.mjs');
+        const result = await module.runAccountsCli({ commandId: plan.commandId, operands: [...plan.operands], options: { ...plan.options }, cwd, env, stdin }, accountsPorts);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string') throw Error('Invalid accounts reply');
+        if (result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `The accounts command failed.${reason(error)}`); return 1; }
     }
     case 'help': line(stdout, plan.topic ? renderTopic(plan.topic, packageRoot) : renderHelp(plan.helpPrefix, packageRoot));return 0;
     case 'version': case 'version-detailed': {
@@ -332,29 +341,6 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         }
       } catch (error) { line(stderr, `pdd setup: ${error.message}`); code = 1; }
       try {
-        if(context?.toplevel) {
-          const {loadInterfaceDraft,draftInterfaces}=await import('./runtime-seam.mjs');
-          const {missingInterfaces}=await loadInterfaceDraft();
-          const missing=missingInterfaces(context.toplevel);
-          if(missing.length) {
-            line(stdout,`${missing.length} prompts have no Runtime interface. Run pdd interface draft --all.`);
-            if(interactive) {
-              const question='Draft missing Runtime interfaces now? [y/N] ';
-              let answer;
-              stdout.write(question);
-              if(confirm) answer=await confirm(question);
-              else {
-                const {lineReader}=await import('./prompt-approve.mjs');
-                const reader=lineReader(stdin);
-                try {answer=await reader.ask();} finally {reader.close();}
-              }
-              if(typeof answer==='string' && /^(y|yes)$/i.test(answer.trim()))
-                if(await draftInterfaces({cwd:context.toplevel,all:true},{stdout,stderr})) code=1;
-            }
-          }
-        }
-      } catch(error) {line(stderr,`Interface drafts: ${error.message}`);code=1;}
-      try {
         const action = setupAgentMcp ?? (await import('./agent-mcp-setup.mjs')).setupAgentMcp;
         if (await action({ env, packageRoot }, { stdin, stdout, stderr, confirm: interactive ? confirm : undefined, interactive })) code = 1;
       } catch (error) { line(stderr, `pdd setup: MCP registration failed.${reason(error)}`); code = 1; }
@@ -411,13 +397,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const { runOwner } = await import('./file-owner.mjs');
       return runOwner({ cwd, paths: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
     }
-    case 'interface-draft': {
-      const {draftInterfaces}=await import('./runtime-seam.mjs');
-      return draftInterfaces({cwd,words:[...plan.operands],all:!!plan.options['--all'],json:!!plan.options['--json'],contract:plan.options['--contract'],extend:!!plan.options['--extend'],refresh:!!plan.options['--refresh']},{stdout,stderr});
-    }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
-      return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'],automatic:!!plan.options['--automatic'],tests:plan.options['--tests'] }, { stdout, stderr, stdin, env });
+      return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });
     }
     case 'completion': stdout.write(renderCompletion(plan.operands[0]));return 0;
     case 'workflow-list':
@@ -429,7 +411,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp'].includes(plan.local) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 90307af4ce2e5bb12dd4906d989bacf49d838ca4e719f9c7d626cad1e902ec06).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: bd620d750767f96706399b15e0b376f88234848acced9c48d7ebdbcc599cdbae).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -3686,7 +3686,15 @@ async function approveGatePrompts(run, p, snapshot = null) {
     try { stat = fs.lstatSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
     if (!stat.isFile() || fs.realpathSync(file) !== file) throw Error(`Cannot approve unsafe prompt: ${path}`);
     const text = fs.readFileSync(file, 'utf8'), blocks = interfaceBlocks(text);
-    if (!blocks.length) continue;
+    if (!blocks.length) {
+      let prompt, problems;
+      try {
+        prompt = readPrompt(run.root, visible, path);
+        problems = promptSchemaRefusals(run.root, { visible }, prompt, new Map([[path, prompt]]), new Set(), { allowMissingInterfaces: true });
+      } catch (error) { throw Error(`${path}: ${error.message}`); }
+      if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.section} ${item.message}`).join('; ')}`);
+      continue;
+    }
     if (blocks.length !== 1) throw Error(`${path} must have one Runtime interface block.`);
     let iface;
     try { iface = JSON.parse(blocks[0][1]); } catch { throw Error(`${path} has invalid Runtime interface JSON.`); }

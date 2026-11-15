@@ -1,94 +1,119 @@
-# Multi-harness login pool
+# Cloud accounts and login pool
 
-Own `src/login-pool.mjs`. Export `resolvePoolPath({env, poolPath})`,
+Own `src/login-pool.mjs`. Export the Cloud Accounts client, local `0600` lease
+materializers, disposable `0700` Codex step overlay, Stick-Until-100% and
+burst-`429` classifiers, and internal multi-harness fallback helpers:
+`resolveCloudAccountsEndpoint(env)`,
+`resolveCloudAccountsToken({cwd, env}, ports)`,
+`cloudAccountsRequest(method, path, options, ports)`,
+`accountsStatePath(env)`,
+`readCloudAccountsState({env}, ports)`,
+`writeCloudAccountsState(state, {env}, ports)`,
+`isCloudAccountsActive({env, poolPath, provider}, ports)`,
+`stripCodexAuthBundle(authJson)`,
+`materializeLocalCodexAuth(authJson, {env}, ports)`,
+`materializeLocalClaudeAuth(lease, {env, previousManagedBaseUrl}, ports)`,
+`createCodexStepOverlay(authJson, {env, tmpRoot}, ports)`,
+`buildClaudeStepEnv(baseEnv, lease)`,
+`prepareCloudStepExecution(lease, baseEnv, ports)`,
+`classifyRateLimitFailure(text, usageWindows)`,
+`extractRateLimitReport(text, accountOrWindows)`,
+`reportCloudAccountUsage(accountId, report, {cwd, env, timeoutMs}, ports)`,
+`leaseCloudAccount(request, {cwd, env, timeoutMs}, ports)`,
+`isCreditOrResetAccount(entry)`,
+`selectCloudPoolLogin(options, ports)`,
+`exhaustCloudPoolLogin(options, ports)`,
+`resolvePoolPath({env, poolPath})`,
 `loadLoginPool({cwd, env, poolPath, fallbackAgent}, ports)`,
 `loginEnvironment(baseEnv, login)`, `isQuotaExhaustionMessage(text)`,
 `readPoolCooldowns({stateRoot, now}, ports)`,
 `markLoginExhausted({stateRoot, loginId, resetAt, reason, now}, ports)`,
 `clearPoolCooldowns({stateRoot}, ports)` and
-`selectPoolLogin({cwd, env, poolPath, pool, fallbackAgent, stateRoot, allowLimited, allowedKinds}, ports)`.
+`selectPoolLogin({cwd, env, poolPath, pool, fallbackAgent, stateRoot, allowLimited, allowCredits, allowedKinds}, ports)`.
 
-## Pool configuration
+## Cloud Accounts transport and single-refresh invariant
 
-The pool orders local agent logins (`codex`, `claude`, `gemini`, `agy`) on one
-machine without copying or storing tokens. Each login points only to a local
-program and profile folder (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`
-or `ANTIGRAVITY_APP_DATA_DIR`).
+Cloud Accounts uses `PDD_ACCOUNTS_URL || PDD_CLOUD_URL ||
+"https://pdd-byok-api-c437voydwa-uc.a.run.app"` (`https:` required except loopback `127.0.0.1`,
+`localhost`, `[::1]`; never falls back to `PDD_RUNTIME_URL`),
+`Authorization: Bearer <token>` (`PDD_TOKEN`, `PDD_ACCOUNTS_TOKEN`, `GH_TOKEN`,
+`GITHUB_TOKEN`, or `gh auth token`), and `X-PDD-Machine-Id`. Unwrap FastAPI
+`HTTPException` `detail` envelopes (`{"detail": {"error": ..., "message": ...}}`,
+string `detail`, and validation-error arrays) alongside top-level `error`/`message`.
+Every credential read or leased is registered with `rememberSecrets` from
+`src/secret-redaction.mjs` and is never printed or logged. Zero usage-reset credit
+fields, endpoints or calls exist.
 
-`resolvePoolPath` uses an explicit `poolPath` (expanding `~/` with `env.HOME`),
-else `${XDG_CONFIG_HOME || ~/.config}/pdd/pool.json`, else `~/.pdd/pool.json`.
-An explicit `poolPath` of `off` or `none` disables file discovery and uses only
-the single fallback agent. When an explicit file path is missing, symlinked,
-larger than 65,536 bytes or invalid JSON, throw `Error("Invalid login pool: ...")`.
-Read regular files with `O_NOFOLLOW`.
+- Local cache (`${PDD_STATE_DIR || XDG_STATE_HOME || ~/.local/state}/pdd/accounts-state.json`,
+  mode `0600`, atomic rename) stores only non-secret active lease metadata
+  (`enrolled`, `providers`, per-provider `account_id`, `label`, `lease_id`, `expires_at`,
+  `delivery_mode`, `anthropic_base_url`, `managed_anthropic_base_url`,
+  `five_hour_used_percent`, `five_hour_reset_at`, `weekly_used_percent`,
+  `weekly_reset_at`) — never `refresh_token`, `access_token` or OAuth tokens.
+  `isCloudAccountsActive({env, poolPath, provider})` returns `false` when an explicit
+  `poolPath` is supplied, when `provider` is neither `"codex"` nor `"claude"`, when
+  `!saved.enrolled`, or when `provider` is passed and absent from `saved.providers`;
+  `selectCloudPoolLogin` only leases providers present in `saved.providers`.
+- `stripCodexAuthBundle` and `materializeLocalCodexAuth` write `~/.codex/auth.json`
+  (or `$CODEX_HOME/auth.json`) atomically with mode `0600` and `tokens.refresh_token: ""`
+  so only PDD Cloud refreshes the single-use OpenAI refresh token.
+- `materializeLocalClaudeAuth` atomically merges `env.CLAUDE_CODE_OAUTH_TOKEN`
+  into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`, mode `0600`),
+  sets `env.ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`, removes a
+  previously managed `/v1/accounts/claude-gateway` (or `/v1/claude-gateway`)
+  `ANTHROPIC_BASE_URL` when switching back to `direct_oauth`, and writes
+  `hasCompletedOnboarding: true` in `~/.claude.json` (mode `0600`).
 
-A pool file is a JSON object with:
-- optional `reset`: only `"never"` is accepted; any other value throws so
-  Autopilot never spends reset credits;
-- optional `weeklyStopPercent`: finite number in `(0, 100]`, default `97`;
-- `logins`: non-empty array of at most 24 objects, each with `kind`
-  (`codex`, `claude`, `gemini` or `agy`), optional unique `id`
-  (`[A-Za-z0-9._-]+`, default `kind`), optional `command`, optional `model`,
-  optional `plan` (`plus`, `pro`, `team`, `max`, `free` or text), optional
-  Boolean `credits` and `paused`, optional profile folder (`codexHome`,
-  `claudeConfigDir`, `geminiCliHome`, `appDataDir` or `configHome`, with `~/`
-  expanded), and optional non-secret `env` map. Reject secret-named keys in
-  `env` (`*_TOKEN`, `*_SECRET`, `*_API_KEY`, `*_PASSWORD`, `*_CREDENTIAL*`).
+## Disposable step isolation and Stick-Until-100%
 
-When no pool file exists, `loadLoginPool` returns a single-entry pool synthesized
-from `fallbackAgent` (or default `codex`) and its ambient profile folder with
-`configured: false`.
+- **Codex step overlay (`createCodexStepOverlay`):** Allocates a disposable `0700`
+  directory atomically via `mkdtempSync(join(rootDir, 'pdd-cx-'))`, symlinks
+  existing `~/.codex/{config.toml,skills,memories,sessions,rules}`, writes leased
+  stripped `auth.json` (`0600`, `refresh_token: ""`), passes `CODEX_HOME=<overlay>`,
+  registers in-process overlays in an `exit`/`SIGINT`/`SIGTERM` cleanup `Set`, and
+  removes `<overlay>` on step exit (`0` tokens in `ps`, never clobbering concurrent
+  terminal sessions).
+- **Claude step env (`buildClaudeStepEnv` & `loginEnvironment`):** `loginEnvironment`
+  strips ambient `CLAUDE_CODE_OAUTH_TOKEN` and managed `/v1/accounts/claude-gateway`
+  `ANTHROPIC_BASE_URL` before applying profile settings so Codex and other profiles
+  never inherit ambient Claude grants; `buildClaudeStepEnv` injects leased
+  `CLAUDE_CODE_OAUTH_TOKEN` (and `ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`).
+- **Stick-Until-100% (`selectCloudPoolLogin`, `exhaustCloudPoolLogin`, `reportCloudAccountUsage`):**
+  Cloud accounts never stop at `97%`. They stay on `current_account_id` (`0` switches)
+  until `five_hour_used_percent >= 100` or `weekly_used_percent >= 100` (or a quota
+  exhaustion error), normalize reported usage percents to integers `0..100`
+  (`v >= 100 ? 100 : Math.max(0, Math.floor(v))`), POST `/v1/accounts/{account_id}/usage-report`
+  with `limit_reached: true`, and lease the next ready account (`soonest weekly_reset_at`)
+  with `0` issue strikes.
+- **Burst `429` vs quota exhaustion (`classifyRateLimitFailure`):** A transient
+  burst rate limit (`429 Too Many Requests`, `rate_limit_exceeded`, RPM/TPM) with no
+  hard quota-exhaustion marker while known `5h < 100%` and `7d < 100%` returns
+  `"burst_rate_limit"` so callers retry briefly on the same account to keep the
+  prompt cache warm before rotating. Hard window/quota exhaustion returns
+  `"quota_exhausted"`.
+- **`all_cooling`:** When `/v1/accounts/lease` returns `{state: "all_cooling", wake_at}`,
+  `selectCloudPoolLogin` returns `{state: "exhausted", cloud: true, resetAt, wakeAt: wake_at}`
+  so Autopilot reports `Waiting on AI quota until <wake_at>` and auto-wakes at `wake_at`.
+- **Credit and reset-flagged account guard (`isCreditOrResetAccount`):** Both
+  `selectCloudPoolLogin` and `selectPoolLogin` default `allowCredits = false` for
+  automated Autopilot steps and skip any account or `pool.json` login entry explicitly
+  flagged `credits: true`, `allowReset: true` or `allow_reset: true` (recording reason
+  `"credit_or_reset_guarded"` in `unavailable`), unless a human CLI command explicitly
+  passes `allowCredits: true`.
 
-## Isolation, quota classification and cooldowns
+## Internal local-folder pool fallback
 
-`loginEnvironment(baseEnv, login)` returns a copy of `baseEnv` with unrelated
-provider config variables (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`,
-`ANTIGRAVITY_APP_DATA_DIR`) removed, the selected login's own profile folder set
-when present, and `login.env` applied.
-
-`isQuotaExhaustionMessage(text)` returns `true` for account quota, usage-limit,
-rate-limit, spend-control and out-of-credits messages (`out of credits`, `credit
-balance is too low`, `insufficient quota`, `exceeded your current quota`, `quota
-exceeded`, `usage limit`, `rate limit`, `rate_limit`, `too many requests`, `429`,
-`spend control`, `spending limit`, `weekly limit`), and `false` for test
-diagnostics or transient `5xx`/overloaded server errors.
-
-Cooldowns live in `join(stateRoot, "login-pool.json")` (atomic rename, mode
-`0600`). `markLoginExhausted` sets `until` to `resetAt` when `resetAt > now`,
-else `now + 30 * 60 * 1000` (30-minute bounded retry window when reset time is
-unknown). `readPoolCooldowns` drops expired entries (`until <= now`).
-
-## Selection and 97% weekly stop protection
-
-`selectPoolLogin` walks non-paused logins matching optional `allowedKinds` (for
-example `["codex", "claude"]` for sandboxed read-only intake card checks; when
-`allowedKinds` is an array and zero non-paused logins match, return
-`{state: "unavailable", configured, poolPath, poolSize: 0, resetAt: null,
-cooling: [], unavailable: []}`) in order:
-1. Skip logins with an active cooldown (`until > now`), recording `{id, until, reason}`
-   in `cooling`.
-2. Build `loginEnvironment` and check local sign-in (`codex login status`,
-   `claude auth status --json`, `agy models` via `checkWorkflowAgents`, or
-   `gemini --version` plus `GEMINI_API_KEY`, `GOOGLE_API_KEY`,
-   `GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_GENAI_USE_GCA=true`, or an
-   `oauth_creds.json` `refresh_token` in `.gemini/` or the profile root;
-   replaceable via `ports.probeLogin`). Unsigned logins go to `unavailable`.
-3. For `codex`, call `readCodexLimits` with `weeklyStopPercent` (default `97`).
-   - `limited` marks the login exhausted until `limits.resetAt` (or 30 minutes)
-     and moves to the next login (unless `allowLimited` is set for preflight
-     selection when all logins are limited).
-   - `unknown` on a Pro or extra-credits account (`plan === "pro"` or
-     `credits === true`) fails closed onto a 30-minute cooldown instead of
-     risking paid extra credits.
-4. Return `{state: "ready", configured, poolPath, poolSize, login, agent, env}`
-   for the first healthy login.
-5. When none is ready, return `{state: "exhausted", configured, poolPath,
-   poolSize, resetAt, cooling, unavailable}`, where `resetAt` is the earliest
-   cooldown timestamp or `null`.
+For internal test fixtures and explicit local `pool.json` configurations, preserve
+`resolvePoolPath`, `loadLoginPool` (`reset: "never"`, `weeklyStopPercent` default `97`,
+optional boolean `credits`, `allowReset` / `allow_reset`),
+`loginEnvironment`, `readPoolCooldowns`, `markLoginExhausted`, `clearPoolCooldowns`
+and `selectPoolLogin`.
 
 ## Dependencies
 
 - [Read Codex account limits](codex-limits.prompt.md) supplies the read-only
-  primary/weekly rate-limit check.
+  primary/weekly rate-limit and usage-window checks.
 - [Agent adapters](agent-adapters.prompt.md) and
   [workflow agents](workflow-agents.prompt.md) supply local CLI sign-in probes.
+- [Secret redaction](secret-redaction.prompt.md) supplies `rememberSecrets` and
+  `knownSecretValues`.

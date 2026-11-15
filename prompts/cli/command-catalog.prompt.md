@@ -50,9 +50,9 @@ Help forms and completion name only the `NAMES` words.
 
 ## Autopilot routes
 
-Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text `--runs`, `--checks`, `--label`, `--share`, `--agent` with completion choices `codex`, `claude`, `gemini` and `agy`, and `--pool`, plus value options `--engine`, `--mode`, `--report`, `--decisions`, `--intake` and `--auto-update`); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
+Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text `--runs`, `--checks`, `--label`, `--share`, `--agent` with completion choices `codex`, `claude`, `gemini` and `agy`, hidden text `--pool`, plus value options `--engine`, `--mode`, `--report`, `--decisions`, `--intake` and `--auto-update`); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
-- `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--decisions ask|decide] [--intake off|shadow|active] [--share PERCENT] [--agent codex|claude|gemini|agy] [--pool PATH] [--auto-update release|main|off]`: Start this repo with headless agent jobs (the core engine): check now and every 10 minutes, with no AI call on empty ticks. Autopilot works on issues with an opt-in label (--label NAME or autopilot.label in pdd.json) or on vetted ready cards when --intake active is enabled; without --intake active, a start with no label starts nothing. --runs and --checks override machine-sized run and heavy-check limits; --label (text), --mode (choice auto, observe or off) and --report (choice file, draft or off) save this machine's opt-in label, mode and report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --decisions (choice ask or decide) saves this machine's decision mode (ask asks a person only for a big decision; decide, the default, never asks); --intake (choice off, shadow or active) saves this machine's intake mode (shadow writes local intake cards that never change what starts; active selects ready cards, refines improve cards via read-only repo inspection and groups related small work; off is the default). --share (text) saves the percent of this machine's CPU and memory that Autopilot may use (1-100, default 50; it sets the automatic slots, the room check and the timer's memory limit). --agent saves or replaces this machine's agent and sign-in profile; --pool saves or replaces this machine's local login-pool file path (or off for one login). --auto-update (choice release, main or off; default release) saves this machine's between-tick self-update mode for a user-owned global pdd install and its skills when no job is publishing or merging (#2710). A machine that ran the removed full engine moves to the core engine at its next tick. The route also accepts `--engine` (choice core or full) and shows it in no form: the launcher accepts core and refuses full with one line.
+- `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--decisions ask|decide] [--intake off|shadow|active] [--share PERCENT] [--agent codex|claude|gemini|agy] [--auto-update release|main|off]`: Start this repo with headless agent jobs (the core engine): check now and every 10 minutes, with no AI call on empty ticks. Autopilot works on issues with an opt-in label (--label NAME or autopilot.label in pdd.json) or on vetted ready cards when --intake active is enabled; without --intake active, a start with no label starts nothing. --runs and --checks override machine-sized run and heavy-check limits; --label (text), --mode (choice auto, observe or off) and --report (choice file, draft or off) save this machine's opt-in label, mode and report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --decisions (choice ask or decide) saves this machine's decision mode (ask asks a person only for a big decision; decide, the default, never asks); --intake (choice off, shadow or active) saves this machine's intake mode (shadow writes local intake cards that never change what starts; active selects ready cards, refines improve cards via read-only repo inspection and groups related small work; off is the default). --share (text) saves the percent of this machine's CPU and memory that Autopilot may use (1-100, default 50; it sets the automatic slots, the room check and the timer's memory limit). --agent saves or replaces this machine's agent and sign-in profile. --auto-update (choice release, main or off; default release) saves this machine's between-tick self-update mode for a user-owned global pdd install and its skills when no job is publishing or merging (#2710). A machine that ran the removed full engine moves to the core engine at its next tick. The route also accepts `--engine` (choice core or full) and hidden `--pool` (text) and shows neither in public help or completion.
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
@@ -119,15 +119,13 @@ Describe the runner routes in plain words without preview labels. workflow.run s
 
 ## Interpreter routes
 
-Help calls the hosted service "the PDD interpreter" ([word rule](public-boundary.prompt.md#pdd-interpreter)). It keeps the words "runtime interface", the name of the block in a prompt file.
+Help calls the hosted service "the PDD interpreter" ([word rule](public-boundary.prompt.md#pdd-interpreter)).
 
-Catalog `approve` (local `prompt-approve`, [prompt approve](prompt-approve.prompt.md)) with the form `pdd approve PROMPT [--said WORDS]`: one required text operand and optional text option `--said`. Its help says that it shows the prompt's runtime interface and the text changes since the last approval, and that easy mode accepts the person's chat words through --said; no-said asks terminal y/N. Root pdd.json strict_approvals true requires a person terminal.
+Catalog `approve` (local `prompt-approve`, [prompt approve](prompt-approve.prompt.md)) with the form `pdd approve PROMPT [--said WORDS]`: one required text operand and optional text option `--said`. Its help says that it shows the prompt's text changes since the last approval (plus any embedded runtime interface or native-only declaration), and that easy mode accepts the person's chat words through --said; no-said asks terminal y/N. Root pdd.json strict_approvals true requires a person terminal.
 
-Catalog `check` (prefix `test`, local `runtime-check`) with the forms `pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` (help: it checks Stories on the PDD interpreter with the person's gh login, waits for every check, with no default limit in any shell, and prints a progress line every 30 s; `--timeout MIN` sets the limit), `pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]`, `pdd test --fill-hash`, `pdd test --fill-hash --compact` and `pdd test --files [STORY...] [--app-map PATH]`. Catalog `lint` (prefix `lint`, local `runtime-check`) with the optional repeated text operand STORY, the options `--json`, `--timeout`, `--max-calls` and `--local`, and the form `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` (help: it prints local SVG layout warnings, then runs only the PDD interpreter lint with 0 AI calls, and sends no checks). The `lint` plan always has the flag `--lint`, so the runtime client runs the same code as for `pdd test --lint`. On `check`, `--lint` and `--local` stay as hidden flags: `pdd test --lint` works like `pdd lint`, with the same options. Catalog `try` (prefix `simulate`, local `runtime-try`) with the forms `pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` (`--app-map` is an option of kind `text`; help: it makes a Try link on the PDD interpreter with the person's gh login) and `pdd simulate --stop [STORY]`. `--app-map` on check is a text option accepted only with `--files`, to preview a Try map. STORY words are free text. `--timeout` is an option of kind `integer` from 1 to 120 and Check `--max-calls` from 1 to 1000. Try accepts `--max-calls` as a positive integer up to 1000, the server cap. Help states that a new Try defaults to400calls and both Check and Try accept --max-calls1..1000. `--request` (kind `uuid`) is hidden. No help form and no completion show a hidden option. These three routes are the one exception to the no-hosted-operation rule above: they call the PDD interpreter through the [runtime client](runtime-client.prompt.md).
+Catalog `check` (prefix `test`, local `runtime-check`) with the forms `pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` (help: it checks Stories on the PDD interpreter with the person's gh login, waits for every check, with no default limit in any shell, and prints a progress line every 30 s; `--timeout MIN` sets the limit), `pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]` and `pdd test --files [STORY...] [--app-map PATH]`. Catalog `lint` (prefix `lint`, local `runtime-check`) with the optional repeated text operand STORY, the options `--json`, `--timeout`, `--max-calls` and `--local`, and the form `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` (help: it prints local SVG layout warnings, then runs only the PDD interpreter lint with 0 AI calls, and sends no checks). The `lint` plan always has the flag `--lint`, so the runtime client runs the same code as for `pdd test --lint`. On `check`, `--lint` and `--local` stay as hidden flags: `pdd test --lint` works like `pdd lint`, with the same options. Catalog `try` (prefix `simulate`, local `runtime-try`) with the forms `pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` (`--app-map` is an option of kind `text`; help: it makes a Try link on the PDD interpreter with the person's gh login) and `pdd simulate --stop [STORY]`. `--app-map` on check is a text option accepted only with `--files`, to preview a Try map. STORY words are free text. `--timeout` is an option of kind `integer` from 1 to 120 and Check `--max-calls` from 1 to 1000. Try accepts `--max-calls` as a positive integer up to 1000, the server cap. Help states that a new Try defaults to400calls and both Check and Try accept --max-calls1..1000. `--request` (kind `uuid`) is hidden. No help form and no completion show a hidden option. These three routes are the one exception to the no-hosted-operation rule above: they call the PDD interpreter through the [Runtime seam](runtime-seam.prompt.md).
 
-Check also catalogs `--screen` (text URL), `--drawing` (text PATH) and Boolean flag `--look`, with the form `pdd test --screen URL --drawing PATH [--look] [--json]`, and lint has the form `pdd lint --local [STORY...] [--json]`. The local lint form checks linked SVG layout parts and HTML screen stylesheet links locally with warning diagnostics and 0 AI/network calls; the screen form compares the real page in installed headless Chrome/Chromium at the drawing viewport (and with `--look` also checks canvas color, painted card/section boxes, box bounds and spacing within tolerance, without pixel equality), with no AI or interpreter call. [Runtime client](runtime-client.prompt.md#local-drawing-checks) owns combinations, selection, output and exit codes; ordinary remote lint keeps its existing behavior.
-
-Check also catalogs visible flag `--compact`. Its help form `pdd test --fill-hash --compact` says it fills draft hashes and removes interface JSON formatting whitespace, preserving values and prose, with no network. [Runtime client](runtime-client.prompt.md#hash-filling) owns allowed combinations and output; [preflight](runtime-preflight.prompt.md#draft-interface-compaction) owns the transform.
+Check also catalogs `--screen` (text URL), `--drawing` (text PATH) and Boolean flag `--look`, with the form `pdd test --screen URL --drawing PATH [--look] [--json]`, and lint has the form `pdd lint --local [STORY...] [--json]`. The local lint form checks linked SVG layout parts and HTML screen stylesheet links locally with warning diagnostics and 0 AI/network calls; the screen form compares the real page in installed headless Chrome/Chromium at the drawing viewport (and with `--look` also checks canvas color, painted card/section boxes, box bounds and spacing within tolerance, without pixel equality), with no AI or interpreter call. [Runtime seam](runtime-seam.prompt.md) binds `@promptdriven/runtime-client`, which owns combinations, selection, output and exit codes; ordinary remote lint keeps its existing behavior.
 
 Check also catalogs `--retry` as a text option with form `pdd test --retry BATCH [--json] [--details] [--timeout MIN]`. Help says it retries only proven unstarted checks for the saved identical source, preserving completed/running results.
 
@@ -141,7 +139,7 @@ operations open its Form tab. With no Story,
 open the whole project. `--page` forces the page. The standalone form above is required as its own manifest/help
 entry; an optional `[--page]` token in the general form does not replace it. Preserve the optional Story operand and all
 existing explicit forms. Mode conflicts and choice are owned by
-[runtime client](runtime-client.prompt.md#choose-how-to-open-the-program).
+[Runtime seam](runtime-seam.prompt.md).
 
 `pdd workflow evidence ISSUE --summary FILE` records newer source-verified saved check JSON without rerunning workflow steps or publication; require ISSUE and --summary, no extra operands/options.
 
@@ -153,14 +151,14 @@ Catalog `mcp` (local `mcp`) with the form `pdd mcp`, no operands or options. Hel
 
 Remote lint uses --timeout when explicit; otherwise it retains its 90-second agent default and unlimited interactive wait. Preliminary lint uses its owning Check's unlimited default wait. Neither has a separate120second cap. Read help explains that a saved normal Check held for lint may safely continue its original checks; other reads remain GET-only. Runtime-client owns the continuation safeguards: saved-batch reads wait without a default limit in every shell; --timeout sets a limit, while explicit retry retains its finite default.
 
-Catalog `jobs` (stable id `jobs`, local disposition `runtime-jobs`) with the sole form `pdd jobs`, no operands or options. Help says it lists active and waiting interpreter jobs on this machine without contacting the interpreter. Root help and shell completion include jobs. The [slots helper](runtime-slots.prompt.md) owns listing; this route does not authenticate or import the runtime client.
+Catalog `jobs` (stable id `jobs`, local disposition `runtime-jobs`) with the sole form `pdd jobs`, no operands or options. Help says it lists active and waiting interpreter jobs on this machine without contacting the interpreter. Root help and shell completion include jobs. `@promptdriven/runtime-client` slots (bound by [Runtime seam](runtime-seam.prompt.md) `jobs`) owns listing; this route does not authenticate or import the hosted runtime client.
 
 ## Files route
 
 Catalog `files` (stable id `files`, local `project-files`) immediately before
 `approve`. Its form is `pdd files [--json]`. It accepts only the optional Boolean
 flag `--json`, with no operands. Help describes a read-only list of prompts,
-Runtime interfaces, Stories, tests and refusal reasons, without network calls.
+Stories, tests and refusal reasons, without network calls.
 Include it in root help and completion. The [files view](files.prompt.md) owns
 its output; do not import the Runtime client for this route.
 
@@ -195,6 +193,19 @@ text operand RUN, flags `--no-run` and text `--agent` with the same codex|claude
 Stories by part and slice, next shows ready runs, and start creates or reuses one
 issue then starts a normal feature run unless `--no-run`. All three make zero
 interpreter calls, and their help says "no interpreter calls". [Product](product.prompt.md) owns their behavior.
+
+## Cloud accounts routes
+
+Catalog local disposition `accounts` ([Cloud accounts CLI](accounts-cli.prompt.md)) immediately before `setup`, with zero usage-reset routes or options:
+- `accounts` (`accounts`, flag `--json`): `pdd accounts [--json]`
+- `accounts.list` (`accounts list`, flag `--json`): `pdd accounts list [--json]`
+- `accounts.add` (`accounts add`, value `--provider` choices `codex`, `claude`, text `--label`): `pdd accounts add [--provider codex|claude] [--label NAME]`
+- `accounts.import` (`accounts import`, value `--provider` choices `codex`, `claude`, text `--label`): `pdd accounts import [--provider codex|claude] [--label NAME]`
+- `accounts.use` (`accounts use`, operand `label`): `pdd accounts use LABEL`
+- `accounts.next` (`accounts next`, value `--provider` choices `codex`, `claude`): `pdd accounts next [--provider codex|claude]`
+- `accounts.sync` (`accounts sync`, value `--provider` choices `codex`, `claude`, flag `--quiet`, integer `--timeout-ms` 50..60000): `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`
+- `accounts.auto` (`accounts auto`, operand choice `on`, `off`, `status`): `pdd accounts auto on|off|status`
+- `accounts.pause` (`accounts pause`, operand `label`), `accounts.unpause` (`accounts unpause`, operand `label`), `accounts.share` (`accounts share`, operand `label`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, operand `label`, text `--user`), `accounts.leave` (`accounts leave`, operand `label`), `accounts.remove` (`accounts remove`, operand `label`), and `accounts.log` (`accounts log`, operand `label`, flag `--json`).
 
 ## Help forms
 
@@ -232,15 +243,13 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no default limit in any shell; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
   pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]  Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.
   pdd test --retry BATCH [--json] [--details] [--timeout MIN]  Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.
-  pdd test --fill-hash  Fill prose_sha256 of draft runtime interfaces; no network.
-  pdd test --fill-hash --compact  Fill draft hashes and remove interface JSON formatting whitespace; preserve values and prose, no network.
   pdd test --files [STORY...] [--app-map PATH]  List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator's app map.
   pdd test --screen URL --drawing PATH [--look] [--json]  Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium (--look also checks main colors, painted boxes and spacing within tolerance); no AI or interpreter calls.
   pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]  Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks.
   pdd lint --local [STORY...] [--json]  Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.
-  pdd files [--json]  List prompts, Runtime interfaces, Stories, tests and refusal reasons; no network calls.
+  pdd files [--json]  List prompts, Stories, tests and refusal reasons; no network calls.
   pdd owner PATH... [--json]  Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.
-  pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its interface/text changes and ask terminal y/N; strict mode requires a person terminal.
+  pdd approve PROMPT [--said WORDS]  Approve one prompt with the person's chat words in easy mode, or show its text changes and ask terminal y/N; strict mode requires a person terminal.
   pdd simulate [STORY] [--max-calls N] [--tab call|screen|terminal|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]  Open the Story in the PDD Simulator: make a link on the PDD interpreter with your gh login and open it in your browser; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file.
   pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]  Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell.
   pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]  Serve real HTTP requests through your Simulator session on localhost (default port 8080).
@@ -255,6 +264,22 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd autopilot auto  Set the repository Autopilot mode to auto.
   pdd autopilot trust NAME...  Add explicitly trusted GitHub names.
   pdd autopilot untrust NAME  Remove an explicitly trusted GitHub name.
+  pdd accounts [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.
+  pdd accounts list [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.
+  pdd accounts add [--provider codex|claude] [--label NAME]  Sign in with codex login or claude setup-token, upload the encrypted bundle to PDD Cloud, and strip the local refresh token.
+  pdd accounts import [--provider codex|claude] [--label NAME]  Import an existing local ~/.codex/auth.json or Claude token into PDD Cloud and replace the local Codex file with a stripped pass.
+  pdd accounts use LABEL  Pin and materialize LABEL in ~/.codex/auth.json or ~/.claude/settings.json.
+  pdd accounts next [--provider codex|claude]  Skip the active login and switch the local install to the next ready account sorted by soonest weekly reset.
+  pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]  Refresh the local stripped login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.
+  pdd accounts auto on|off|status  Manage the opt-in fail-open shell wrapper in ~/.zshrc and ~/.bashrc for plain terminal codex and claude launches (off by default).
+  pdd accounts pause LABEL  Pause automatic leasing for LABEL.
+  pdd accounts unpause LABEL  Resume automatic leasing for LABEL.
+  pdd accounts share LABEL --with USER|ORG/TEAM  Share LABEL with a GitHub user or organization team without exposing raw credentials.
+  pdd accounts accept INVITE  Accept a pending Cloud account share invite.
+  pdd accounts unshare LABEL --user USER  Revoke shared access to LABEL for USER.
+  pdd accounts leave LABEL  Leave a shared Cloud account.
+  pdd accounts remove LABEL  Delete LABEL from PDD Cloud and revoke active leases.
+  pdd accounts log LABEL [--json]  Show the lease and sharing audit log for LABEL.
   pdd setup [--yes]  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.
 ```
 
@@ -292,11 +317,11 @@ RUNBOOK: PACKAGE_ROOT/RUNBOOK.md
 
 ```text
 In PDD, prompts are the source. Code follows the prompts.
-1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies, then one Runtime interface block.
+1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies.
 2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.
 3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.
-4. Check: run pdd test --fill-hash && pdd test --files STORY && pdd test STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd lint for lint-only diagnosis.
-5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person. An unchanged complete draft can use --automatic with passing existing tests and a full prompt check.
+4. Check: run pdd test --files STORY && pdd test STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd lint for lint-only diagnosis.
+5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person.
 ```
 
 The workflow park options also include text `--blocker` and `--until`. Show
@@ -348,13 +373,7 @@ Include public local route `workflow.tidy`, prefix `workflow tidy`, no operands,
 
 Add workflow.resend, prefix workflow resend, local workflow-resend, required repeated issue operands, optional text --said. Help form: `pdd workflow resend ISSUE... [--said WORDS]`. Description: Record one person decision and resend each lost check once; --said - reads exact words from stdin; strict mode requires a person terminal. Preserve all other routes.
 
-## Interface draft commands
-
-Interface-draft help follows the same command-name substitutions as other
-commands. Use local schema-check wording for the action and interpreter admission
-for server admission; Runtime names only the Runtime interface declaration.
-
-Catalog `interface draft` with local `interface-draft`, repeat optional prompt operands, flags --all, --json, --extend and --refresh, and text --contract. Forms: `pdd interface draft [PROMPT...] [--all] [--json]` and `pdd interface draft PROMPT [--contract FILE] [--extend | --refresh] [--json]`. Draft from explicit prose or contracts and lint locally without AI/network calls. The second form supplies effect ports, extends preserved operations or reopens a stale block as draft. Missing facts include questions and a next step. Catalog approve flags --automatic and text --tests, with additional form `pdd approve PROMPT --automatic --tests COMMAND`. The automatic route requires existing tests and a complete current prompt check; strict mode still requires a person. Help must explain native-only not-run and the separate automatic route, without claiming that an agent can approve new behavior.
+## Missing-route workflow parking
 
 Catalog text --route on workflow park and show `pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` for recording a missing supported PDD route without asking a person. The runner owns route validation and installed-fix clearing.
 

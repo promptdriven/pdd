@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,7 @@ function fixture(t) {
   const pkg = join(sandbox, 'pkg'), home = join(sandbox, 'home'), project = join(sandbox, 'project');
   for (const dir of [pkg, home, project]) mkdirSync(dir);
   for (const name of ['src', 'bin', 'package.json', 'skills', 'RUNBOOK.md']) cpSync(join(root, name), join(pkg, name), { recursive: true });
+  symlinkSync(join(root, 'node_modules'), join(pkg, 'node_modules'), 'dir');
   const agentBin = join(sandbox, 'agent-bin');
   mkdirSync(agentBin);
   writeFileSync(join(agentBin, 'codex'), '#!/bin/sh\necho Logged in\n', { mode: 0o755 });

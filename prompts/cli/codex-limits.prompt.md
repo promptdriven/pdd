@@ -43,6 +43,15 @@ For reached windows return the latest reset (both must clear); if any has unknow
 reset return null. A past reset timestamp alone never proves recovery: read the
 account again. Unknown returns null metrics. Ignore all unrelated fields.
 
+Also export `parseCodexUsageWindows(reply, {weeklyStopPercent=100}={})` and async
+`readCodexUsageWindows({command,cwd,env,weeklyStopPercent=100,timeoutMs=10000}, ports={})`
+over the same bounded `app-server --listen stdio://` exchange. They preserve
+`parseCodexLimits` / `readCodexLimits` unchanged and return normalized 5-hour and
+7-day usage window fields `{state, resetAt, usedPercent, five_hour_used_percent,
+five_hour_reset_at, weekly_used_percent, weekly_reset_at, limit_reached}` (ISO-8601
+UTC strings or null for `*_reset_at`) so Cloud account usage reports can record
+window exhaustion without touching reset credits.
+
 ## Dependencies
 
 Node child_process supplies a bounded subprocess transport. Protocol authority:

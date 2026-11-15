@@ -1018,3 +1018,53 @@ test('3228: cumulative manifest retires extinct or reused child groups and verif
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('3252: jobEnvironment preserves CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_BASE_URL while stripping Claude session keys', () => {
+  const env = jobEnvironment({
+    HOME: '/h',
+    PATH: '/bin',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_CODE_SESSION_ID: 'sess-1',
+    CLAUDE_CODE_OAUTH_TOKEN: 'oat-test-token-value',
+    ANTHROPIC_BASE_URL: 'https://cloud.promptdriven.ai/v1/claude-gateway',
+  });
+  assert.deepEqual(env, {
+    HOME: '/h',
+    PATH: '/bin',
+    CLAUDE_CODE_OAUTH_TOKEN: 'oat-test-token-value',
+    ANTHROPIC_BASE_URL: 'https://cloud.promptdriven.ai/v1/claude-gateway',
+  });
+});
+
+test('3252: startAgentJob removes disposable pdd-cx-* overlay cleanupDirs on wrapper exit after child reads CODEX_HOME', async t => {
+  const dir = folder(t);
+  const overlay = mkdtempSync(join(tmpdir(), 'pdd-cx-'));
+  t.after(() => rmSync(overlay, { recursive: true, force: true }));
+  writeFileSync(join(overlay, 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'acc-1', refresh_token: '' } }), { mode: 0o600 });
+  const seenFile = join(dir, 'seen.json');
+  const script = `
+    const fs = require('fs');
+    const path = require('path');
+    const auth = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, 'auth.json'), 'utf8'));
+    fs.writeFileSync(${JSON.stringify(seenFile)}, JSON.stringify({ codexHome: process.env.CODEX_HOME, mode: auth.auth_mode, refresh: auth.tokens.refresh_token, claudeToken: process.env.CLAUDE_CODE_OAUTH_TOKEN }));
+  `;
+  const job = startAgentJob({
+    id: '3252-overlay-1',
+    dir,
+    cwd: dir,
+    command: process.execPath,
+    args: ['-e', script],
+    env: { PATH: process.env.PATH, CODEX_HOME: overlay, CLAUDE_CODE_OAUTH_TOKEN: 'oat-pass-through', CLAUDECODE: '1' },
+    cleanupDirs: [overlay],
+  });
+  const done = await until(() => { const s = readAgentJob(job); return s.state === 'exited' && s; });
+  assert.equal(done.exit.code, 0);
+  const seen = JSON.parse(readFileSync(seenFile, 'utf8'));
+  assert.equal(seen.codexHome, overlay);
+  assert.equal(seen.mode, 'chatgpt');
+  assert.equal(seen.refresh, '');
+  assert.equal(seen.claudeToken, 'oat-pass-through');
+  await until(() => !existsSync(overlay), 3000);
+  assert.equal(existsSync(overlay), false, 'disposable pdd-cx-* overlay wiped on wrapper exit');
+});

@@ -432,22 +432,25 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    from now, for example after the clock went back, or a `pending` that is not
    `{issue, at}` numbers) reads as not paused, `streak` 0, `hours` 1, no pending; it
    never stops a tick or status.
-   **Multi-harness login pool (#3252):** when `ports.selectLogin` and
-   `ports.exhaustLogin` are supplied by the [login pool](login-pool.prompt.md), each AI
-   process (`build`, `repair`, `conflict`, `review`) selects the first healthy login and
-   runs with that login's `agent` and isolated `env` (`loginId` saved on the part). When
-   such an AI process ends with no result because of a quota, usage-limit, spend-control
-   or out-of-credits refusal (`isQuotaExhaustionMessage`), the engine calls
-   `ports.exhaustLogin` for that `loginId`: while another login in the pool is `ready`
-   (bounded by the pool size per job), it cleans up the finished part and restarts the
-   same step in place on the next login with zero issue strikes, zero `holdIssue`, zero
-   `pending` and zero `streak` increment. When every login in the pool is `exhausted`, it
-   saves `poolOut {since, resetAt, reason, alerted}` in `core.json`, sends at most one
-   deduplicated `usage-limit` alert naming the earliest reset time (`resetAt`), holds a
-   phase `pr` job via a `service` step wait until `resetAt` (without `holdIssue` or
-   `streak` increment) or releases an unbuilt job cleanly (`owner: "service"`, no
-   cooldown, no `holdIssue`, no `streak` increment), and wakes automatically once `now >=
-   resetAt` or `ports.selectLogin()` finds a `ready` login again (clearing `poolOut`).
+   **Cloud accounts and login pool (#3252):** when `ports.selectLogin` and
+   `ports.exhaustLogin` are supplied by [Cloud accounts and login pool](login-pool.prompt.md) (and `ports.selectLogin()` does not return `null`, which indicates `selectLogin` is wired only for intake `allowedKinds`), each AI
+   process (`build`, `repair`, `conflict`, `review`) selects the active ready login,
+   materializes any per-step isolation (`prepareStep`: disposable `0700` `/tmp/pdd-cx-<random>`
+   overlay passed via `cleanupDirs` for Codex, or `CLAUDE_CODE_OAUTH_TOKEN` and optional
+   `ANTHROPIC_BASE_URL` for Claude), and runs with `loginId` saved on the part. Cloud
+   accounts stick on the active account (`0` switches) until `5h >= 100%` or `7d >= 100%`
+   (or a quota-exhaustion refusal): a brief burst `429` while `< 100%` retries once on the
+   same account (`same.login.id === prev.loginId`, counting a rotation and marking the
+   prior login tried if `/lease` switched accounts) to keep the prompt cache warm, whereas
+   `100%` quota exhaustion reports
+   usage and rotates to the next ready account (`soonest weekly_reset_at`) with zero issue
+   strikes, zero `holdIssue`, zero `pending` and zero `streak` increment. When every login
+   is cooling (`state: "all_cooling"` or `exhausted`), the engine saves `poolOut {since,
+   resetAt, wakeAt, cloud, reason}` in `core.json`, reports `Waiting on AI quota until <wake_at>`
+   for Cloud accounts (or `Login pool exhausted since ...` for local `pool.json`), sends at
+   most one deduplicated `usage-limit` alert, holds a phase `pr` job or releases an unbuilt
+   job cleanly (`owner: "service"`, zero strikes), and auto-wakes once `now >= resetAt` or
+   `ports.selectLogin()` finds a `ready` login again (clearing `poolOut`).
 4. `history.jsonl` is read line by line and a line that does not parse is skipped.
    Before each append, the file gets a newline when it does not end with one, so a cut
    line never swallows the next record.
@@ -1037,8 +1040,16 @@ runs until its end):
    It never blocks or ends the job. A not-run
    with no Runtime kind (for example no prompt changed) files nothing.
 3. Red findings. The Runtime gate is an allowlist (fail closed). A Runtime line is a
-   PR body line that, after heading, list, quote, table, bold and code marks go,
-   starts with "Runtime" or holds "Runtime:". Its value, after leading signs such as
+   PR body line (`runtimeVerdicts(body)`, exported) that, after heading, list, quote,
+   table, bold and code marks go, starts with `Runtime:` (or is a Markdown `| Runtime |`
+   table row or `; Runtime:` clause; ordinary prose lines starting with `"Runtime ..."`
+   without a colon are never parsed as Runtime verdict lines). When the saved Runtime
+   checks at `agentHead` already cover every changed Story, consumer Story and changed
+   prompt (or a Story has only a local `real-binding-unavailable` sandbox skip with zero
+   provider calls), the merge check mechanically writes or syncs missing/per-Story
+   `Runtime:` verdict lines (and the `Evidence:` `runtime=` state) onto the PR body from
+   that verified saved state before running `runtimeReds`, never inventing a pass when
+   saved checks are missing, stale or failed. Its value, after leading signs such as
    an emoji, names its Story in the parentheses after the verdict (`Runtime: PASS (STORY,
    …)`, the form of the briefs and the RUNBOOK); a Story path first (`Runtime: STORY
    PASS (…)`) is read too. Then the verdict must start with PASS (or PASSED) or "not run", in any
@@ -1069,7 +1080,7 @@ runs until its end):
    `Runtime: not run (N Stories reach PROMPT; checked K)` (K the consumers with a passing
    current check), never a silent pass and never a way to skip work. The single-line
    rule (one line with no Story) counts only Story and test file changes. On pdd, a
-   change to `prompts/cli/runtime-client.prompt.md` reads its consumers in one tick in
+   change to `prompts/cli/runtime-seam.prompt.md` reads its consumers in one tick in
    under 60 s (a test checks it). The result's `runtime.state` (lower case, spaces as `-`) must be
    absent, `pass` or `not-run`, and must agree with the body when all lines have one
    verdict; else red. With per-Story lines, if any Story says `not run`, the result
@@ -1094,7 +1105,7 @@ runs until its end):
    every name stays exact). The read uses a clean checkout of that head
    (`worktrees/N-agent`): the Stories and their tests come from `findTests` there, with
    fixture projects excluded (as a full `pdd test` does), and `savedStoryEvidence` of the
-   [runtime client](runtime-client.prompt.md) reads the checks that `pdd test` saved for
+   [Runtime seam](runtime-seam.prompt.md) reads the checks that `pdd test` saved for
    the job worktree (`root`) and compares their source with the clean checkout
    (`comparisonRoot`, with `withTests`, so each row names the tests that its check ran).
    So an uncommitted or untracked file of the job worktree never counts as the head. A
@@ -1155,17 +1166,32 @@ runs until its end):
    at head H it has REASON. A PR must not lose a Runtime pass: make the check of S pass
    again at this head." A row with no verdict, no failed check and no refusal (an AI
    provider failure, maintenance, a busy or interrupted check) is never red here: the
-   engine sends such a check again (B5). A merge base read error is not red: the engine
+   engine sends such a check again (B5). Likewise, a saved row skipped locally with
+   `real-binding-unavailable` (no live binding available in this sandbox, zero provider
+   calls) is treated as a local skip rather than an author refusal or coverage loss
+   (provided every test of that Story at the head has a passing or skipped/service
+   deciding check, never excusing unrun sibling tests of the same Story), and its generic
+   operator-reconciliation `client_advice` is never fed into the repair prompt as a defect
+   or `needs-person` trigger. When Autopilot queues the repository
+   full test suite (`boundSuiteCommand`, exported), it bounds `node --test` worker
+   concurrency (`--test-concurrency`) to `Math.max(1, Math.min(6, shareCpus))` when
+   `shareCpus` is configured (`ports.machine` or `ports.env.PDD_CHECK_CPUS`, or directly on a
+   `node --test` command). A merge base read error is not red: the engine
    warns, and the record keeps the error. The port gets `{root, tree, head, base:
    true}` for the merge base read. **Prompt gate**
    (once per head, saved as `approvals {head, strict, problems}`): after a fetch of the
    base and the branch, each changed prompt of `git diff --name-status --find-renames
    origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
    clean checkout of the head (`worktrees/N-approve`) with the
-   [preflight](runtime-preflight.prompt.md)'s own `readPrompt` and `promptRefusal`. A
+   [Runtime seam](runtime-seam.prompt.md)'s `readPrompt` and `promptRefusal`. Plain
+   Markdown prompts (`interface-missing`) and valid frontmatter `kind: native-only` prompts
+   pass without embedded-block status checks (removing an embedded Runtime interface block
+   to leave plain Markdown is valid; in a `strict` repository, a pure rename or stripping
+   an approved, current Runtime interface block without changing the prose keeps the
+   approval that Git has, while a changed plain or frontmatter prompt requires a trusted
+   GitHub review or a terminal `pdd approve` journal entry for its `proseSha256`). For prompts with an embedded Runtime interface block, a
    problem is: a refusal (two blocks, invalid JSON, a bad status, a stale prose hash), a
-   status other than `approved`, an interface that the base had and the head removed
-   (no interface on both sides is not an approval matter), or an approved status with
+   status other than `approved`, or an approved status with
    no approval: not the same interface and prose hash as the base version at the old
    path (a pure rename keeps the approval that Git has), and no entry for that path and
    prose hash in the approval journal of the repository's common Git dir
@@ -1248,8 +1274,8 @@ runs until its end):
    Runtime test for each such Story (in test/runtime/ or tests/runtime/ when the
    repository keeps its own tests in test/ or tests/), one step for each of its criteria,
    and run "$PDD_CLI" test; or, when bound ports cannot fake the effect, mark the owning
-   prompt's interface native-only with a reason." It is not red when the PR changes at
-   least one prompt and every changed prompt's interface is `native-only` (the Story is
+   prompt native-only with frontmatter kind and reason." It is not red when the PR changes at
+   least one prompt and every changed prompt is `native-only` (the Story is
    checked natively). A read error adds no red (the T01 read names it). The reader is a
    port, `ports.untestedStories(tree)` → `{untested, visible}`. Then a
    failed CI check
@@ -1471,7 +1497,7 @@ runs until its end):
    hours. When the base tip moves, the path checks read it again.
 5a. **Runtime resend (#3241, rule B5), one function `runtimeResend`.** When the PR
    body has a "not run" Runtime line and no FAIL or unclear Runtime line, the tick reads
-   once for each agent head the saved checks of the job worktree since the job started (`resendableStoryChecks` of the [runtime client](runtime-client.prompt.md)
+   once for each agent head the saved checks of the job worktree since the job started (`resendableStoryChecks` of the [Runtime seam](runtime-seam.prompt.md)
    with `root` the job worktree and `since` the job start; saved as `runtimeWait {head,
    state, stories, neverSent, noVerdict, failed}`). A check is sent once more when it
    was **never sent** (held in maintenance, busy, stopped before sending) or was **sent
@@ -1771,10 +1797,8 @@ with the native defaults named above.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
-- [Runtime client](runtime-client.prompt.md): required for `savedStoryEvidence` (the
+- [Runtime seam](runtime-seam.prompt.md#public-contract): required for `savedStoryEvidence` (the
   saved checks of T01, with `comparisonRoot` and `withTests`; the merge base read also
   with `anyRoot` and `limit`), `resendableStoryChecks` and `checkRuntimeHealth` (the
-  Runtime step 5a).
-- [Runtime preflight](runtime-preflight.prompt.md): required for `findTests` (Stories and
-  their tests, `excludeFixtureProjects`), `captureSource` (Story footprints), `gitFiles`,
-  `readPrompt`, `promptRefusal` and `interfaceBlocks`.
+  Runtime step 5a), plus `findTests` (Stories and their tests, `excludeFixtureProjects`),
+  `captureSource` (Story footprints), `gitFiles`, `readPrompt`, `promptRefusal` and `interfaceBlocks`.
