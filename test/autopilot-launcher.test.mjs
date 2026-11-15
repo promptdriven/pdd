@@ -104,7 +104,7 @@ async function fixture(t, options = {}) {
   };
   f.module = await import('../src/autopilot-launcher.mjs');
   f.invoke = async (command, extra = {}) => f.module.runAutopilotLauncher({ command, cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: root, issues: [], ...extra }, f.ports);
-  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json') && x !== 'autopilot-update.json'));
+  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => /^[0-9a-f]{20}\.json$/.test(x)));
   f.state = () => JSON.parse(readFileSync(f.stateFile(), 'utf8'));
   f.tick = () => f.module.tickAutopilot(f.stateFile(), f.ports);
   return f;

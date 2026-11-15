@@ -114,4 +114,4 @@ ready. Existing action lookup/recovery belongs to the door, not this module.
 
 ## Caller navigation
 
-[Check](runtime-client.prompt.md) owns CLI routing, output and exit codes.
+[Runtime seam](runtime-seam.prompt.md) binds `@promptdriven/runtime-client`, which owns CLI routing, output and exit codes.

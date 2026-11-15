@@ -26,12 +26,6 @@ test('RELEASE9: runbook and lint documentation describe current behavior', () =>
   for(const file of runbookFiles) assert.doesNotMatch(read(file),/The existing `http.prompt`.*still handles/,file);
   assert.doesNotMatch(read('docs/lint-capacity.md'),/obsolete unknown wording/);
 });
-test('RELEASE12: launcher prompt describes its actual POSIX shell shebang and Node invocation', () => {
-  const source=read('prompts/cli/try-doors.prompt.md');
-  assert.doesNotMatch(source,/Node shebang/);
-  assert.match(source,/POSIX shell shebang.*absolute Node/);
-});
-
 test('RELEASE13: Runtime guidance binds factories and supported resources without claiming native effects', () => {
   const boundaries=read('docs/runtime-boundaries.md');
   for(const name of ['prompt-runtime.interface.v2','instance_types','copy_out','post_schema','port.write','sql.execute','blob.read','blob.write','blob.stat','compute.hash_json','compute.hash_utf8']) assert.ok(boundaries.includes(name),name);

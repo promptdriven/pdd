@@ -50,11 +50,11 @@ Node `node:path` (`basename`, `posix`) supplies pure path operations.
 
 ## Caller navigation
 
-[PDD to Runtime seam](runtime-seam.prompt.md) supplies these functions to [Runtime preflight](runtime-preflight.prompt.md), [Project card](agent-project.prompt.md), [Compose a product Try](product-composition.prompt.md), and [Runtime client](runtime-client.prompt.md) as ports, and binds preflight's `captureSource`, `discoverTests`, and workspace path check when pdd callers invoke `selectTests` or `whyNoTests`.
+[PDD to Runtime seam](runtime-seam.prompt.md) supplies these functions to `@promptdriven/runtime-client` as ports, and binds preflight's `captureSource`, `discoverTests`, and workspace path check when pdd callers invoke `selectTests` or `whyNoTests`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"approved","prose_sha256": "198f6e2574b4d61cabe8d4a09dcdd5e5cb7dff809eb4cf438aeafb6a0097a6d8","reason":"Exposes synchronous host-bound callbacks for native Story capture and repository interface inspection alongside pure path-matching functions consumed across pdd and Runtime ports."}
+{"kind":"native-only","status":"approved","prose_sha256":"3cf3678234c3237450a8d175f0b28666ab8524aefb03def3600bc8c2e87dccb3","reason":"Exposes synchronous host-bound callbacks for native Story capture and repository interface inspection alongside pure path-matching functions consumed across pdd and Runtime ports."}
 ```
 </details>

@@ -59,8 +59,7 @@ log lines and history file at `PDD_VM_SUITE_LOCK.history`, else
 path still needs an existing writable parent; the default log parent is created. No GitHub writes, private paths or live agent calls.
 
 `scripts/vm-suite.sh` runs `node --test` with TAP reporting and concurrency 4
-across `test/*.test.mjs` and `test/runtime-package/*.test.mjs` in its isolated
-checkout.
+across `test/*.test.mjs` in its isolated checkout.
 
 Both VM scripts preserve a nonempty caller `PDD_STATE_DIR`. Otherwise they set
 it to `PDD_SUITE_QUEUE.state` when a nonempty queue selector is supplied, or

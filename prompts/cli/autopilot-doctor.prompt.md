@@ -144,7 +144,7 @@ Check these boundaries in order and continue after failures:
 - [Workflow worktree](workflow-worktree.prompt.md): canonical GitHub origin normalization.
 - [Workflow agents](workflow-agents.prompt.md): read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
-- [PDD to Runtime seam](runtime-seam.prompt.md) and [Runtime client](runtime-client.prompt.md#free-interpreter-health-check): required `health` classification and `runtimeOrigin` address rules.
+- [PDD to Runtime seam](runtime-seam.prompt.md#public-contract): required `health` (`checkRuntimeHealth`) classification and `runtimeOrigin` address rules.
 - [Autopilot settings on GitHub](autopilot-github.prompt.md): owns when two
   Autopilot settings differ, the `MODE, trust NAMES` form and the publish commands.
   Doctor reads GitHub with its own read-only run port, not with that module's ports.
@@ -164,7 +164,7 @@ Do not use a GitHub ledger that writes reads to disk. Do not mutate arrays retur
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "e29312fde0fa6f4c2c9dec6a38351235b7f203cb8e69d312a0306075e73f939a",
+  "prose_sha256": "dad7a02486bb5e396cba732c37a2d19a8d2be011f6e8d8ef6ac3eb110fc9686c",
   "entries": [
     {
       "operation": "runAutopilotDoctor",
