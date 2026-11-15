@@ -34,7 +34,7 @@ burst-`429` classifiers, and internal multi-harness fallback helpers:
 ## Cloud Accounts transport and single-refresh invariant
 
 Cloud Accounts uses `PDD_ACCOUNTS_URL || PDD_CLOUD_URL ||
-"https://api.promptdriven.ai"` (`https:` required except loopback `127.0.0.1`,
+"https://pdd-byok-api-c437voydwa-uc.a.run.app"` (`https:` required except loopback `127.0.0.1`,
 `localhost`, `[::1]`; never falls back to `PDD_RUNTIME_URL`),
 `Authorization: Bearer <token>` (`PDD_TOKEN`, `PDD_ACCOUNTS_TOKEN`, `GH_TOKEN`,
 `GITHUB_TOKEN`, or `gh auth token`), and `X-PDD-Machine-Id`. Unwrap FastAPI
