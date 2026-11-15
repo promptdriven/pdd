@@ -1173,7 +1173,7 @@ runs until its end):
    prompt as a defect or `needs-person` trigger. When Autopilot queues the repository
    full test suite (`boundSuiteCommand`, exported), it bounds `node --test` worker
    concurrency (`--test-concurrency`) to `Math.max(1, Math.min(6, shareCpus))` when
-   `shareCpus` is configured (`ports.machine` or `PDD_CHECK_CPUS`, or directly on a
+   `shareCpus` is configured (`ports.machine` or `ports.env.PDD_CHECK_CPUS`, or directly on a
    `node --test` command). A merge base read error is not red: the engine
    warns, and the record keeps the error. The port gets `{root, tree, head, base:
    true}` for the merge base read. **Prompt gate**

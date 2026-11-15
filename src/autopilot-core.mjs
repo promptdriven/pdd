@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 5e1b9c3ddc34483eb0dca8816a55729cd338a824b4464c4ed563fd9284f0284e).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 3a05136d550ff1a894e38e7809e583122c98c34424b7c3c3fbda30e11fc0fd80).
 import * as nativeFs from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -2016,7 +2016,7 @@ export function boundSuiteCommand(testCommand, pkg = {}, shareCpus = null) {
 }
 function queuedCommand(ctx, cwd, testCommand) {
   const pkg = readJson(ctx.fs, join(cwd, 'package.json'), {});
-  const envShare = Number((ctx.ports.env ?? process.env)?.PDD_CHECK_CPUS);
+  const envShare = Number(ctx.ports.env?.PDD_CHECK_CPUS);
   const rawShare = ctx.ports.machine?.priority?.('suite')?.checkCpus ?? (Number.isSafeInteger(envShare) && envShare > 0 ? envShare : null);
   const shareCpus = Number.isSafeInteger(rawShare) && rawShare > 0 ? rawShare : null;
   const effectiveCommand = boundSuiteCommand(testCommand, pkg, shareCpus);
