@@ -1,6 +1,6 @@
 # Own-agent adapters
 
-Own `src/agent-adapters.mjs`: PDD's local agent CLI discovery, shared credential-status interpretation, and direct subprocess runner (`agents.list` and `agents.run`). Simulator chat turns (`askAgent`, response parsing, fill validation, and temporary read-only overlays) live in [Simulator agent turn](agent-ask.prompt.md).
+Own `src/agent-adapters.mjs`: PDD's local agent CLI discovery, shared credential-status interpretation, and direct subprocess runner (`agents.list` and `agents.run`). Simulator chat turns (`askAgent`, response parsing, fill validation, and temporary read-only overlays) live in `@promptdriven/runtime-client` behind [Runtime seam](runtime-seam.prompt.md).
 
 Export asynchronous `discoverAgents({cwd,env,run,definitions,workspace})`, pure `parseAgentAuthStatus({agent,result})`, `runAgentProcess(command,args,{cwd,env,input='',signal,timeoutMs=120000,maxBytes=131072})`, pure `resolveAgentStepLaunch({agent,definition,step,model,reasoningEffort,tiering,env})`, and asynchronous `runStepAgentProcess({agent,definition,step,args,model,reasoningEffort,tiering,cwd,env,input,signal,timeoutMs,maxBytes,run,now})`. `run(command,args,{cwd,env,input,signal,timeoutMs,maxBytes})` is a direct subprocess port without a shell returning `{code,stdout,stderr}`, with `runAgentProcess` as its default implementation; cancellation sends `SIGTERM` to the process group (falling back to the child) followed by `SIGKILL` after 500 ms, and enforces `timeoutMs` (`timeout`) and `maxBytes` (`output limit`).
 
@@ -8,7 +8,7 @@ Discovery uses supplied private `definitions`, or loads them through [`loadAgent
 
 ## Bounded workspace discovery
 
-When `workspace` or [`workspace.policy({root: cwd})`](runtime-entry.prompt.md) ([workspace boundary](runtime-workspace.prompt.md)) has `configured: true`, return `{id, name, state: 'error', detail: 'Bounded agent connection is unavailable: packet-only context cannot be established.'}` for each supplied or default agent without starting any subprocess.
+When `workspace` or [`workspace.policy({root: cwd})`](runtime-seam.prompt.md) has `configured: true`, return `{id, name, state: 'error', detail: 'Bounded agent connection is unavailable: packet-only context cannot be established.'}` for each supplied or default agent without starting any subprocess.
 
 ## Shared credential-status interpretation
 
@@ -28,10 +28,10 @@ The native process port classifies `ENOENT` conservatively with Boolean `error.e
 
 ## Dependencies
 
-- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime context for bounded-workspace discovery refusal.
+- [Runtime seam](runtime-seam.prompt.md#public-contract): required generation/runtime context for bounded-workspace discovery refusal (`workspace.policy`).
 - [Local agent configuration](agent-config.prompt.md): required generation context for `loadAgentDefinitions`.
 - [Autopilot telemetry](autopilot-telemetry.prompt.md): step-tier model and reasoning-effort routing, phase normalization, and cross-harness token extraction.
 
 ## Caller navigation
 
-[PDD to Runtime seam](runtime-seam.prompt.md) binds `discoverAgents` and `runAgentProcess` as the host agent ports for [Agent chat](agent-chat.prompt.md) and [Simulator agent turn](agent-ask.prompt.md).
+[PDD to Runtime seam](runtime-seam.prompt.md) binds `discoverAgents` and `runAgentProcess` as the host agent ports for `@promptdriven/runtime-client` (`askAgent` and agent chat).

@@ -240,7 +240,7 @@ test('3367 approve: records plain Markdown and frontmatter native-only approvals
 });
 
 test('3367 product composition and project card support plain Markdown prompts and refuse native-only tap handlers', t => {
-  const baseFiles = JSON.parse(readFileSync(new URL('./runtime/product-compose-try.json', import.meta.url), 'utf8')).initial_world.files;
+  const baseFiles = JSON.parse(readFileSync(new URL('./product-composition/product-compose-try-cases.json', import.meta.url), 'utf8')).initial_world.files;
   const files = structuredClone(baseFiles);
   for (const [path, entry] of Object.entries(files)) {
     if (path.endsWith('.prompt.md')) entry.content = stripEmbeddedInterface(entry.content);

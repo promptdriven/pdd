@@ -28,11 +28,11 @@ None.
 
 ## Caller navigation
 
-[PDD to Runtime seam](runtime-seam.prompt.md) binds [`outcomeOverall`](runtime-outcome.prompt.md#progress-and-exit) on exported `outcomeExitCode` and `exitCodeFor`, and injects `exitFor` and `exitCodeFor` into [`src/runtime/`](runtime-entry.prompt.md).
+[PDD to Runtime seam](runtime-seam.prompt.md) binds `outcomeOverall` from `@promptdriven/runtime-client` on exported `outcomeExitCode` and `exitCodeFor`, and injects `exitFor` and `exitCodeFor` into `@promptdriven/runtime-client`.
 
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"approved","prose_sha256":"7b0111b5ad52740bb5726227bb3fb18eeda2809a7a89dc0563c18c9ff8f98da3","reason":"Provides PDD CLI exit-code constants and synchronous callback wrappers over Runtime outcome aggregation."}
+{"kind":"native-only","status":"approved","prose_sha256":"c785f36f244316c342061f4be5760e3d45cf2d7c64d859885ec3771e4133a452","reason":"Provides PDD CLI exit-code constants and synchronous callback wrappers over Runtime outcome aggregation."}
 ```
 </details>

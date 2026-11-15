@@ -404,7 +404,7 @@ async function tickFixture(t, { mode = 'auto' } = {}) {
   };
   const launcher = await import('../src/autopilot-launcher.mjs');
   f.cwd = cwd;
-  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => x.endsWith('.json')));
+  f.stateFile = () => join(f.ports.stateRoot, readdirSync(f.ports.stateRoot).find(x => /^[0-9a-f]{20}\.json$/.test(x)));
   f.state = () => { try { return JSON.parse(readFileSync(f.stateFile(), 'utf8')); } catch { return {}; } };
   f.start = () => launcher.runAutopilotLauncher({ command: 'start', cwd, env: { HOME: home, PATH: process.env.PATH }, packageRoot: resolve('.'), issues: [] }, f.ports);
   f.tick = () => launcher.tickAutopilot(f.stateFile(), f.ports);

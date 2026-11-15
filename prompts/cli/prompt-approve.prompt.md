@@ -21,7 +21,7 @@ Show a native-only declaration's kind and reason before approval (whether author
 
 ## Dependencies
 
-- [Shared authored-file reader](runtime-preflight.prompt.md#shared-authored-file-reader): required generation/verification/testing context for parsing, frontmatter, references, numeric tokens and schema refusals.
+- [Runtime seam](runtime-seam.prompt.md#public-contract): required generation, verification, and testing context for the shared authored-file reader (`readPrompt`, `parsePromptFrontmatter`, `promptRefusal`, `promptSchemaRefusals`, references, and numeric tokens) from `@promptdriven/runtime-client`.
 
 - [Approval policy and journal](approval-policy.prompt.md): required authoring/generation/native-production/verification/testing context for config, actor, evidence shape and storage.
 
@@ -31,6 +31,6 @@ Read the full [Prompting guide](../../docs/prompting-guide.md) before you change
 
 ## Caller navigation
 
-The [CLI](pdd-cli.prompt.md) routes `pdd approve PROMPT` here. The [runtime client](runtime-client.prompt.md) uses the same view and edit for Try-page approvals.
+The [CLI](pdd-cli.prompt.md) routes `pdd approve PROMPT` here. `@promptdriven/runtime-client` (bound by [Runtime seam](runtime-seam.prompt.md)) uses the same view and edit for Try-page approvals.
 
 Use “Runtime interface” when naming the declaration and its global approval status in user messages.

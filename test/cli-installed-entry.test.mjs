@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, cpSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, cpSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,7 @@ test('runner area-chat commands pin the real absolute executable despite an olde
  const tmp=mkdtempSync(join(tmpdir(),"pdd-entry ' quoted-"));t.after(()=>rmSync(tmp,{recursive:true,force:true}));
  const pkg=join(tmp,'installed package'),old=join(tmp,'old-bin'),home=join(tmp,'home');mkdirSync(pkg);mkdirSync(old);mkdirSync(home);
  for(const name of ['src','bin','package.json','docs','skills'])cpSync(join(root,name),join(pkg,name),{recursive:true});
+ symlinkSync(join(root,'node_modules'),join(pkg,'node_modules'),'dir');
  writeFileSync(join(old,'pdd'),'#!/bin/sh\necho OLD_PRIVATE_PDD\nexit 77\n',{mode:0o755});
  const env={...process.env,HOME:home,CLAUDE_CONFIG_DIR:'',PATH:old};
  const stagePrefix=pddCommand(pkg);

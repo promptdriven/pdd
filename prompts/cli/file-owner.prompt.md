@@ -83,7 +83,7 @@ with no backslash, no control character and no empty, `.`, `..` or `.git`
 The header hash of a prompt is the SHA-256 (64 lowercase hex digits) of the
 UTF-8 bytes of its behavior text. The behavior text is the prompt text with
 the approval metadata taken out: replace the JSON of each Runtime interface
-block (found with the shared [interface block reader](runtime-preflight.prompt.md))
+block (found with the shared [interface block reader](runtime-seam.prompt.md))
 that parses as a JSON object with `JSON.stringify` of that object without its
 top-level `status` and `prose_sha256` keys. Keep all other bytes. A block whose
 JSON does not parse as an object stays as written.
@@ -260,7 +260,7 @@ sorted eligible production code paths with a `.ext` extension in `allPaths` and
 - `findOwners({root, paths}, ports = {})`: read the inputs of `resolveOwners`
   from the working tree of the Git root `root`, then return its result.
   `ports.files()` returns the Git-visible repository paths (default: the shared
-  [Git file list](runtime-preflight.prompt.md)). `ports.read(path, limit)`
+  [Git file list](runtime-seam.prompt.md)). `ports.read(path, limit)`
   returns at most `limit` bytes of the working file as a `Uint8Array`, or null
   when it does not exist (default: read the regular file at `root/path`; a
   missing file or a missing parent folder is null; other errors throw, and the
@@ -320,13 +320,13 @@ claims ownership of a test file (`isTestOwnedPath`):
 
 ## Callers
 
-[Code replay](workflow-replay.prompt.md) and the [check plan](runtime-check-plan.prompt.md)
+[Code replay](workflow-replay.prompt.md) and the [Runtime seam](runtime-seam.prompt.md) check planner
 read headers with `headerPrompts`. They use bindings and headers only; prose
 claims never select replay scenarios or check targets. They read the prompt
 path of a header, not its hash.
 
 ## Dependencies
 
-- [Runtime preflight](runtime-preflight.prompt.md): required generation context
+- [Runtime seam](runtime-seam.prompt.md#public-contract): required generation context
   for `gitFiles(root)`, the Git-visible file list, and `interfaceBlocks(text)`,
   the Runtime interface block reader.

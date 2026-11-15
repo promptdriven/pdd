@@ -1069,7 +1069,7 @@ runs until its end):
    `Runtime: not run (N Stories reach PROMPT; checked K)` (K the consumers with a passing
    current check), never a silent pass and never a way to skip work. The single-line
    rule (one line with no Story) counts only Story and test file changes. On pdd, a
-   change to `prompts/cli/runtime-client.prompt.md` reads its consumers in one tick in
+   change to `prompts/cli/runtime-seam.prompt.md` reads its consumers in one tick in
    under 60 s (a test checks it). The result's `runtime.state` (lower case, spaces as `-`) must be
    absent, `pass` or `not-run`, and must agree with the body when all lines have one
    verdict; else red. With per-Story lines, if any Story says `not run`, the result
@@ -1094,7 +1094,7 @@ runs until its end):
    every name stays exact). The read uses a clean checkout of that head
    (`worktrees/N-agent`): the Stories and their tests come from `findTests` there, with
    fixture projects excluded (as a full `pdd test` does), and `savedStoryEvidence` of the
-   [runtime client](runtime-client.prompt.md) reads the checks that `pdd test` saved for
+   [Runtime seam](runtime-seam.prompt.md) reads the checks that `pdd test` saved for
    the job worktree (`root`) and compares their source with the clean checkout
    (`comparisonRoot`, with `withTests`, so each row names the tests that its check ran).
    So an uncommitted or untracked file of the job worktree never counts as the head. A
@@ -1162,7 +1162,7 @@ runs until its end):
    base and the branch, each changed prompt of `git diff --name-status --find-renames
    origin/BASE...HEAD` (added, modified, renamed or copied; the new path) is read in a
    clean checkout of the head (`worktrees/N-approve`) with the
-   [preflight](runtime-preflight.prompt.md)'s own `readPrompt` and `promptRefusal`. Plain
+   [Runtime seam](runtime-seam.prompt.md)'s `readPrompt` and `promptRefusal`. Plain
    Markdown prompts (`interface-missing`) and valid frontmatter `kind: native-only` prompts
    pass without embedded-block status checks (removing an embedded Runtime interface block
    to leave plain Markdown is valid; in a `strict` repository, a pure rename or stripping
@@ -1476,7 +1476,7 @@ runs until its end):
    hours. When the base tip moves, the path checks read it again.
 5a. **Runtime resend (#3241, rule B5), one function `runtimeResend`.** When the PR
    body has a "not run" Runtime line and no FAIL or unclear Runtime line, the tick reads
-   once for each agent head the saved checks of the job worktree since the job started (`resendableStoryChecks` of the [runtime client](runtime-client.prompt.md)
+   once for each agent head the saved checks of the job worktree since the job started (`resendableStoryChecks` of the [Runtime seam](runtime-seam.prompt.md)
    with `root` the job worktree and `since` the job start; saved as `runtimeWait {head,
    state, stories, neverSent, noVerdict, failed}`). A check is sent once more when it
    was **never sent** (held in maintenance, busy, stopped before sending) or was **sent
@@ -1776,10 +1776,8 @@ with the native defaults named above.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
-- [Runtime client](runtime-client.prompt.md): required for `savedStoryEvidence` (the
+- [Runtime seam](runtime-seam.prompt.md#public-contract): required for `savedStoryEvidence` (the
   saved checks of T01, with `comparisonRoot` and `withTests`; the merge base read also
   with `anyRoot` and `limit`), `resendableStoryChecks` and `checkRuntimeHealth` (the
-  Runtime step 5a).
-- [Runtime preflight](runtime-preflight.prompt.md): required for `findTests` (Stories and
-  their tests, `excludeFixtureProjects`), `captureSource` (Story footprints), `gitFiles`,
-  `readPrompt`, `promptRefusal` and `interfaceBlocks`.
+  Runtime step 5a), plus `findTests` (Stories and their tests, `excludeFixtureProjects`),
+  `captureSource` (Story footprints), `gitFiles`, `readPrompt`, `promptRefusal` and `interfaceBlocks`.

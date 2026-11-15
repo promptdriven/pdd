@@ -1,4 +1,4 @@
-// Generated from prompts/cli/files.prompt.md (sha256: 2f9b914d53b33baaaeff43e4fc7f58a485db3e4afc7ade6830e260d5c4df16b2).
+// Generated from prompts/cli/files.prompt.md (sha256: b1c41e3ab9a7d41978976452e04408d31a4c4be0aca4ad8d347a6cc621754433).
 import { spawnSync } from 'node:child_process';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 

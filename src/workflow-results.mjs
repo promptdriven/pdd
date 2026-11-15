@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: f39c0e8c7c72058393411296f0630401ca571c6b954fdd5c9b89e9c9414d8b93).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: dc500739fe35c5fea8e1b5a001ec23c3ef1f76daabad195efd2820a2558aaea5).
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {composeProductTry,productTapCallBound} from '../src/runtime-seam.mjs';
 import {parseProductWorldWriters} from '../src/product.mjs';
-const original=JSON.parse(readFileSync(new URL('./runtime/product-compose-try.json',import.meta.url))).initial_world.files;
+const original=JSON.parse(readFileSync(new URL('./product-composition/product-compose-try-cases.json',import.meta.url))).initial_world.files;
 function fixture(){const files=structuredClone(original);return {files,ports:{root:'/project',statFile:path=>({exists:Object.hasOwn(files,path),is_symlink:false}),readFile:path=>files[path].content}};}
 const schema={type:'object',properties:{},required:[],additionalProperties:false};
 function boundFixture(cap,childCalls,childCap=1,drawCap=1){

@@ -7,9 +7,8 @@ import { productStatus } from '../src/product.mjs';
 const pointer = (value, path) => path === '' ? value : path.slice(1).split('/').reduce((item, token) => item?.[token.replace(/~1/g, '/').replace(/~0/g, '~')], value);
 
 for (const name of ['product-compose-try', 'product-journey-seed', 'product-server-without-screen', 'product-map-field-diagnostics']) test(`${name}: unchanged prompt-space cases execute actual public module functions`, async () => {
-  const kind = ['product-server-without-screen', 'product-map-field-diagnostics'].includes(name) ? 'native' : 'runtime';
-  const scenario = JSON.parse(readFileSync(new URL(`./${kind === "native" ? "product-composition" : kind}/${name}${kind === "native" ? "-cases" : ""}.json`, import.meta.url)));
-  if (kind === 'native') assert.equal(Object.hasOwn(scenario, 'schema_version'), false);
+  const scenario = JSON.parse(readFileSync(new URL(`./product-composition/${name}-cases.json`, import.meta.url)));
+  assert.equal(Object.hasOwn(scenario, 'schema_version'), false);
   const world = structuredClone(scenario.initial_world);
   const invoke = (resource, args) => {
     const binding = scenario.simulation[resource];

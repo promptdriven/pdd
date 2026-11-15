@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: f05277ae06311d86084d41aa056843f8691acecd1a619dadc20df770b1121f7b).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: bd620d750767f96706399b15e0b376f88234848acced9c48d7ebdbcc599cdbae).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';

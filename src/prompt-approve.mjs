@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: b8dc43475c6749222ee9fd9443f5501952e492548fddd3e897771c34b74e7959).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 93dfb4789888bb901eb64fb66539bf1b3156508ca54f1bab2a9baf09f771d2e4).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
