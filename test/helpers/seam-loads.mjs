@@ -1,7 +1,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
@@ -15,15 +15,14 @@ export const REPLAY_CHILD_EXPR = 'source.identity({root:process.argv[1],tests:JS
 export const SEAM_LOAD_BASES = {
   'cli:--help': [
     'cli:help-topic', 'cli:--version', 'cli:completion', 'cli:workflow-list', 'cli:setup', 'cli:files', 'cli:owner',
-    'cli:interface-draft', 'cli:approve', 'cli:metrics', 'cli:graph', 'cli:dependencies-prepare',
+    'cli:approve', 'cli:metrics', 'cli:graph', 'cli:dependencies-prepare',
     'cli:workflow-status', 'cli:workflow-view', 'cli:workflow-prove', 'cli:autopilot-regressions', 'cli:autopilot-off',
   ],
   'cli:dependencies-prepare': ['cli:dependencies-complete'],
   'cli:workflow-status': ['cli:workflow-run', 'cli:workflow-done', 'cli:workflow-publish', 'cli:workflow-cost', 'cli:autopilot-alerts'],
   'lib:product.mjs': ['cli:jobs', 'child:try-doors-launcher', 'lib:autopilot-doctor.mjs'],
   'cli:jobs': ['cli:product-status'],
-  'cli:product-status': ['cli:product-next', 'cli:product-start', 'cli:approve-automatic', 'cli:contracts'],
-  'cli:approve-automatic': ['cli:approve-automatic-tests', 'cli:test', 'cli:lint', 'cli:simulate', 'cli:mcp'],
+  'cli:product-status': ['cli:product-next', 'cli:product-start', 'cli:contracts', 'cli:test', 'cli:lint', 'cli:simulate', 'cli:mcp'],
   'cli:contracts': ['cli:contracts-sync'],
   'lib:autopilot-doctor.mjs': ['tick:autopilot-launcher'],
   'tick:autopilot-launcher': ['cli:autopilot-status'],
@@ -60,7 +59,6 @@ export function readRecord(keys) {
 }
 
 const ASYNC_SEAM_BRIDGE_PROBES = new Set([
-  'cli:approve-automatic', 'cli:approve-automatic-tests',
   'cli:test', 'cli:lint', 'cli:simulate', 'cli:contracts', 'cli:contracts-sync',
   'cli:jobs', 'cli:mcp', 'child:try-doors-launcher',
 ]);
@@ -132,12 +130,19 @@ export async function inBatches(items, run) {
 }
 
 function analyzeProbeLines(lines, ignoreAsyncSeamOutgoing) {
+  const edges = lines.map(line => [line.slice(0, line.indexOf('\t')), line.slice(line.indexOf('\t') + 1)]);
+  const runtimeEntry = edges.find(([parent, full]) => srcName(parent) === 'runtime-seam.mjs' && full.endsWith('.mjs') && !srcName(full))?.[1];
+  const runtimeDir = runtimeEntry && join(dirname(runtimeEntry), 'runtime');
+  const nameOf = full => {
+    if (runtimeEntry && full === runtimeEntry) return 'runtime/index.mjs';
+    if (runtimeDir && full.startsWith(runtimeDir + sep) && full.endsWith('.mjs')) return `runtime/${relative(runtimeDir, full).split(sep).join('/')}`;
+    return srcName(full);
+  };
   const loaded = new Set();
   const adj = new Map();
-  for (const line of lines) {
-    const tab = line.indexOf('\t');
-    const parent = srcName(line.slice(0, tab));
-    const name = srcName(line.slice(tab + 1));
+  for (const [parentFull, full] of edges) {
+    const parent = nameOf(parentFull);
+    const name = nameOf(full);
     if (!name) continue;
     loaded.add(name);
     if (parent && parent !== name && !(ignoreAsyncSeamOutgoing && parent === 'runtime-seam.mjs' && !name.startsWith('runtime/'))) {
@@ -198,10 +203,7 @@ export function seamWorld() {
     ['cli:setup', [bin, 'setup', '--yes'], repo],
     ['cli:files', [bin, 'files', '--json'], repo],
     ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
-    ['cli:interface-draft', [bin, 'interface', 'draft', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
-    ['cli:approve-automatic', [bin, 'approve', 'prompts/a.prompt.md', '--automatic'], repo],
-    ['cli:approve-automatic-tests', [bin, 'approve', 'prompts/a.prompt.md', '--automatic', '--tests', 'npm test'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
     ['cli:simulate', [bin, 'simulate', '--stop', 'a'], repo],

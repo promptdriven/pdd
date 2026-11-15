@@ -1,8 +1,8 @@
-// Generated from prompts/cli/files.prompt.md (sha256: bd863b66a167409b0a76f97b9a78a27e3af4e9e7dd8408c4f276aaaf02419ded).
+// Generated from prompts/cli/files.prompt.md (sha256: b1c41e3ab9a7d41978976452e04408d31a4c4be0aca4ad8d347a6cc621754433).
 import { spawnSync } from 'node:child_process';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 
-const { findTests, preflight, promptRefusal, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
+const { findTests, preflight, promptMarkdownTargets, promptRefusal, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
 
 const sorted = paths => [...new Set(paths)].sort();
 const problemKey = problem => JSON.stringify([problem.path, problem.code, problem.section, problem.message]);
@@ -27,6 +27,9 @@ export function inspectProjectFiles(root) {
     paths.add(path);
     const prompt = read(path);
     for (const call of Array.isArray(prompt?.interface?.calls) ? prompt.interface.calls : []) reached(call?.target, paths);
+    if (!prompt?.blocks?.length) {
+      for (const target of promptMarkdownTargets(prompt?.text, path, found.visible)) reached(target, paths);
+    }
   };
   const tests = found.tests.map(test => {
     const paths = new Set();
@@ -34,7 +37,7 @@ export function inspectProjectFiles(root) {
     for (const path of Array.isArray(test.doc?.entry_paths) ? test.doc.entry_paths : []) reached(path, paths);
     let refusals;
     try {
-      const checked = preflight({ root, found, selected: [test] });
+      const checked = preflight({ root, found, selected: [test], allowMissingInterfaces: true });
       refusals = checked.rows[0].refusals.map(problem => ({ path: test.path, ...problem }));
       warnings.push(...checked.warnings, ...checked.rows[0].warnings);
     } catch (error) { refusals = [sourceProblem(test.path, error)]; }
@@ -44,12 +47,12 @@ export function inspectProjectFiles(root) {
     const prompt = read(path), users = tests.filter(test => test.prompts.includes(path));
     let refusals = [];
     if (!failures.has(path)) {
-      const freshness = promptRefusal(prompt, 'interface');
+      const freshness = prompt?.error === 'interface-missing' ? null : promptRefusal(prompt, 'interface');
       if (freshness) refusals.push({ path, ...freshness });
-      try { refusals.push(...promptSchemaRefusals(root, found, prompt, prompts)); }
+      try { refusals.push(...promptSchemaRefusals(root, found, prompt, prompts, new Set(), { allowMissingInterfaces: true })); }
       catch (error) { refusals.push(sourceProblem(path, error)); }
     } else refusals.push(failures.get(path));
-    return { path, has_interface: failures.has(path) ? null : prompt?.blocks?.length === 1, stories: sorted(users.flatMap(test => test.stories)),
+    return { path, has_interface: failures.has(path) ? null : prompt?.blocks?.length === 1, native_only: prompt?.interface?.kind === 'native-only', stories: sorted(users.flatMap(test => test.stories)),
       tests: users.map(test => test.path), references: prompt?.references ?? [], refusals: uniqueProblems(refusals) };
   });
   const stories = found.stories.map(story => ({ path: story.path, title: story.title,
@@ -67,7 +70,7 @@ export function runProjectFiles({ cwd = process.cwd(), json = false } = {}, port
     const view = inspectProjectFiles(top.stdout.trim());
     if (json) stdout.write(`${JSON.stringify(view)}\n`);
     else {
-      for (const prompt of view.prompts) stdout.write(`Prompt: ${prompt.path} (${prompt.has_interface === null ? 'interface unavailable' : prompt.has_interface ? 'Runtime interface' : 'no single Runtime interface'})\n`);
+      for (const prompt of view.prompts) stdout.write(`Prompt: ${prompt.path}${prompt.has_interface === null ? ' (unreadable)' : prompt.native_only ? ' (native-only)' : ''}\n`);
       for (const story of view.stories) stdout.write(`Story: ${story.path}; tests: ${story.tests.join(', ') || 'none'}\n`);
       for (const test of view.tests) stdout.write(`Test: ${test.files.join(', ')}; Stories: ${test.stories.join(', ')}; prompts: ${test.prompts.join(', ')}\n`);
       for (const orphan of view.orphans) stdout.write(`${orphan.line}\n`);

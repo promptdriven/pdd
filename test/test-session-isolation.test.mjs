@@ -53,6 +53,7 @@ for (const entry of ['focused import', 'npm preload']) test(`${entry} isolates c
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, 'test/helpers'), { recursive: true });
   writeFileSync(join(dir, 'test/helpers/test-home.mjs'), readFileSync(join(root, 'test/helpers/test-home.mjs')));
+  writeFileSync(join(dir, 'test/helpers/test-net-guard.mjs'), readFileSync(join(root, 'test/helpers/test-net-guard.mjs')));
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ private: true, type: 'module', scripts: { test: manifest.scripts.test } }));
   const env = { ...process.env, ...sessions, PDD_CHECK_CPUS: '3', PDD_SESSION_FIXTURE_VALUE: 'keep',

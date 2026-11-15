@@ -1,5 +1,6 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 073ab464fd1a98a35d650171434c226e6276f814570d46c6a5ee1ce4659f4167).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 4cf6a1a5b0695ed9d5e194d9825fef84cdc51b14c7be20b8c3dba3014cfade87).
 import * as nativeFs from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -15,10 +16,10 @@ import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode } from './autopilot-intake.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
-import { isQuotaExhaustionMessage, POOL_FALLBACK_COOLDOWN_MS } from './login-pool.mjs';
+import { classifyRateLimitFailure, isQuotaExhaustionMessage, POOL_FALLBACK_COOLDOWN_MS } from './login-pool.mjs';
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 
-const { interfaceBlocks, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
+const { interfaceBlocks, proseSha256, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
 
 const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR, CLAIM_EXPIRES = 4 * HOUR, STRIKES = 3, MAX_PAUSE_HOURS = 8, NO_RESULT_LIMIT = 3, CLAIM_TRIES = 3, NO_CI_AFTER = 10 * MIN, END_TRIES = 6;
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
@@ -48,19 +49,23 @@ function save(fs, file, value) {
   fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(temp, file);
 }
 const cause = (kind, code, text, extra = {}) => ({ kind, component: 'autopilot-core', code, text, ...extra });
-// The Runtime gate is an allowlist. A Runtime line is a line that starts with "Runtime", or holds "Runtime:", after
-// heading, list, quote, table, bold and code marks go. Its verdict is "pass" or "not-run"; anything else is "other".
+// The Runtime gate is an allowlist. A Runtime line starts with "Runtime:" (or is a "| Runtime |" table row or
+// "; Runtime:" clause) after heading, list, quote, table, bold and code marks go; prose starting with "Runtime ..."
+// without a colon is ignored. Its verdict is "pass" or "not-run"; anything else is "other".
 const normalLine = line => line.replace(/[*_`|]/g, ' ').replace(/^\s*(?:(?:#+|[-+>]|\d+[.)])\s*)*/, '').replace(/\s+/g, ' ').trim();
-function runtimeVerdicts(body) {
+export function runtimeVerdicts(body) {
   const found = [];
   for (const raw of String(body ?? '').split(/\r?\n/)) {
-    const line = normalLine(raw), at = /^runtime\b/i.test(line) ? 0 : line.search(/\bruntime\s*:/i);
+    const tableRow = /^\s*\|\s*[*_`]*runtime[*_`]*\s*\|/i.test(raw);
+    const line = normalLine(raw), at = tableRow || /^runtime\s*:/i.test(line) ? 0 : line.search(/;\s*runtime\s*:/i);
     if (at < 0) continue;
-    let value = line.slice(at).replace(/^runtime\b\s*[:\-\u2013\u2014]?\s*/i, '').replace(/^[^a-z0-9]+/i, '');
+    const slice = at > 0 ? line.slice(at).replace(/^;\s*/, '') : line;
+    let value = slice.replace(/^runtime\b\s*[:\-\u2013\u2014]?\s*/i, '').replace(/^[^a-z0-9]+/i, '');
     // #3227: a per-Story line names its Story first ("Runtime: STORY PASS (batch ID)"), or in the parentheses after a
     // verdict first ("Runtime: PASS (STORY, 19/19 checks)").
     // The Story path is read from the raw line (the marks that normalLine removes, such as "_", are path characters).
-    const rawAt = raw.search(/\bruntime\b/i), rawValue = rawAt < 0 ? '' : raw.slice(rawAt).replace(/^runtime\b\s*[:\-\u2013\u2014]?\s*/i, '').replace(/^[\s`*>|]+/, '');
+    const rawAt = tableRow ? raw.search(/\bruntime\b/i) : raw.search(/\bruntime[\s*`_|]*:/i);
+    const rawValue = rawAt < 0 ? '' : raw.slice(rawAt).replace(/^runtime[\s*`_|]*[:|]?[\s*`_|>\-\u2013\u2014]*/i, '');
     const first = /^`?([^\s()`]+(?<!\.prompt)\.md)`?\s+(.*)$/i.exec(rawValue);
     if (first) value = normalLine(first[2]).replace(/^[^a-z0-9]+/i, '');
     const story = first?.[1] ?? /\(\s*`?([^\s(),:`]+(?<!\.prompt)\.md)\b/i.exec(rawValue)?.[1] ?? null;   // a prompt is not a Story
@@ -579,7 +584,7 @@ function workRules(ctx, job) {
 3. Tests. When the change alters what a person or program gets through the repo's public surface (a return value, error, output, exit code, written file, export, command or script), add a test through that surface that fails on base. For any other change, add no test: run the issue's done check and record the command and its result.
 4. In the PR body, write one line for each path that you use: \`Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote file:line | no contract change | new prompt> — Test: <file | done check>\`. The prompt and the code may be in one commit. Never rewrite history to change the commit order.
 5. Run focused tests for the changed behavior. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish (the full test command of this repository is \`${settings.testCommand ?? 'not set'}\`). When you run tests or builds, pass \`$PDD_CHECK_CPUS\` as the worker count (for example \`node --test --test-concurrency=$PDD_CHECK_CPUS\`, \`pytest -n $PDD_CHECK_CPUS\`, \`cargo test -j $PDD_CHECK_CPUS\`): it is this machine's share for Autopilot.
-6. Runtime (RUNBOOK §15 "Autopilot core jobs"). Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. A Story or prompt that a merge from the base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test reaches a changed prompt. Commit every change, then run \`pdd test\` for each changed Story, all of them in one \`pdd test\` batch where you can (\`pdd test STORY STORY …\`): every Story whose test reaches a changed prompt counts, however many. Run pdd as "$PDD_CLI" (for example "$PDD_CLI" test STORY), never as a bare pdd: your shell can find an older pdd first on PATH. $PDD_CLI is the pdd of this Autopilot. Write one \`Runtime:\` line for each changed Story, the verdict first and the Story in the parentheses: \`Runtime: PASS (STORY, N/N checks)\`, \`Runtime: FAIL (STORY, N of M checks failed: STEPS)\` or \`Runtime: not run (STORY: REASON)\`. STORY is the Story file path, as \`git diff\` shows it. A single line with no Story is valid only when the PR changes one Story or none. Two lines for the same Story are red. A PASS of a Story that the PR does not change never counts. A FAIL line blocks the merge: fix the code until it passes. A failed check is a FAIL, also when its check has no verdict. Find the cause and fix it. Never write a failed check as \`not run\`. \`not run\` is only for a cause that this PR cannot fix: a native-only prompt, no verdict with no failed step, or a refusal that pdd gives no fix for. A changed Story with no Runtime test is no such cause: write its Runtime test (one step for each criterion) and run pdd test, or mark the owning prompt's interface native-only with a reason. A refusal with a fix from pdd is this PR's work. For example, a whole number outside the interpreter's range: apply the Number spelling that pdd prints and check again. Do not wait for maintenance. When pdd prints that the interpreter is in maintenance, it has sent nothing yet. Stop pdd then. For each changed Story that pdd did not send, write \`Runtime: not run (STORY: maintenance until HH:MM UTC)\` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never cut short a check that pdd has already sent. When Runtime could not check, do not stop and do not invent an interface: cover the case with native tests, ship the PR with the \`not run\` line, and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it.
+6. Runtime (RUNBOOK §15 "Autopilot core jobs"). Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. A Story or prompt that a merge from the base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test reaches a changed prompt. Commit every change, then run \`pdd test\` for each changed Story, all of them in one \`pdd test\` batch where you can (\`pdd test STORY STORY …\`): every Story whose test reaches a changed prompt counts, however many. Run pdd as "$PDD_CLI" (for example "$PDD_CLI" test STORY), never as a bare pdd: your shell can find an older pdd first on PATH. $PDD_CLI is the pdd of this Autopilot. Write one \`Runtime:\` line for each changed Story, the verdict first and the Story in the parentheses: \`Runtime: PASS (STORY, N/N checks)\`, \`Runtime: FAIL (STORY, N of M checks failed: STEPS)\` or \`Runtime: not run (STORY: REASON)\` (Autopilot also mechanically syncs verified \`Runtime:\` lines from saved \`pdd test\` checks at HEAD). STORY is the Story file path, as \`git diff\` shows it. A single line with no Story is valid only when the PR changes one Story or none. Two lines for the same Story are red. A PASS of a Story that the PR does not change never counts. A FAIL line blocks the merge: fix the code until it passes. A failed check is a FAIL, also when its check has no verdict. Find the cause and fix it. Never write a failed check as \`not run\`. \`not run\` is only for a cause that this PR cannot fix: a native-only prompt, \`real-binding-unavailable\` (no live binding available in this local sandbox, 0 provider calls — never treat its generic operator-reconciliation advice as a defect or a \`needs-person\` trigger), no verdict with no failed step, or a refusal that pdd gives no fix for. A changed Story with no Runtime test is no such cause: write its Runtime test (one step for each criterion) and run pdd test, or mark the owning prompt native-only with frontmatter kind and reason. A refusal with a fix from pdd is this PR's work. For example, a whole number outside the interpreter's range: apply the Number spelling that pdd prints and check again. Do not wait for maintenance. When pdd prints that the interpreter is in maintenance, it has sent nothing yet. Stop pdd then. For each changed Story that pdd did not send, write \`Runtime: not run (STORY: maintenance until HH:MM UTC)\` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never cut short a check that pdd has already sent. When Runtime could not check, do not stop and do not invent an interface: cover the case with native tests, ship the PR with the \`not run\` line, and put that reason and the tool's error in the result's runtime (kind "runtime"). Autopilot files one report for it.
 7. Put exactly one Evidence line in the PR body and the same text as "evidence" in the result: "Evidence: runtime=<pass|fail|not-run> (<passed>/<total>); vectors=<pass|fail|not-run> (<passed>/<total>); formal=<proved|bounded|failed|not-run|not-applicable>; tests=<pass|fail> (<passed>/<total>)". runtime is pdd test on the changed Stories; \`vectors=\` counts the replay files (\`*.vectors.test.*\`) that the PR changes or that read a changed scenario file: count \`node:test\` tests (the \`# tests\` and \`# pass\` lines), not steps or checks, for example \`vectors=pass (36/36)\` (Autopilot runs the same files and compares the counts); formal the changed formal tests; tests your focused tests. Give the counts you saw, and leave out a count you did not see.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix" or "Independent review: …") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
 ${approving(ctx) && !strictRepo(ctx, job) ? `9. Approval: in ${settings.mode} mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed that has a Runtime interface block, after its checks pass, record it with the native command and commit the result in the PR: printf '%s' ${quote(approvalWords(ctx))} | "$PDD_CLI" approve PROMPT --said -. A prompt with no Runtime interface block needs no approval: do not run pdd approve for it, and do not invent an interface.
@@ -632,11 +637,14 @@ function reproduceText(ctx, job) {
       : `3. Other non-test findings above also need fixes in this round, so fix them after checking the test failure; "not reproduced" applies only when CI or the full suite is the sole red check.`;
   return `\nFailure reproduction details (#3247):\n${blocks}\n\nReproduce before changing code:\n1. Before you edit any file, run those exact failing tests first in the matching environment (\`CI=true\`, worker count \`$PDD_CHECK_CPUS\`, clean state) and confirm that they fail for the same reason.\n2. If an untouched test fails, also check whether it fails on \`origin/${ctx.state.baseBranch}\` (\`git merge-base origin/${ctx.state.baseBranch} HEAD\` in a throwaway worktree, #3181). When the same test fails on \`origin/${ctx.state.baseBranch}\` too, make no guessed edits on this branch and report {"outcome":"failed","kind":"pdd","component":"base-suite","code":"base-test-red","cause":"<test> also fails on origin/${ctx.state.baseBranch}","detail":"<exact command and failing lines on base>"}.\n${notReproducedRule}\n4. After your fix, run those exact failing tests again in the same environment (\`CI=true\`, \`$PDD_CHECK_CPUS\`) and confirm that they pass before you commit and push.\n`;
 }
+const OPERATOR_RECONCILE_ADVICE = /reconcile possible external effects with the operator[^.]*\.?/gi;
+const sanitizeRepairFinding = red => String(red ?? '').replace(OPERATOR_RECONCILE_ADVICE, 'local skip (real-binding-unavailable: no live binding in this sandbox, 0 provider calls; not a defect or needs-person blocker).').replace(/\s+/g, ' ').trim();
 const repairPrompt = (ctx, job, reds, result) => {
   const allowNotReproduced = Boolean(job.repairReproduce?.onlyTestOrCi && job.reproduceRerun?.head !== job.head);
+  const cleanedReds = reds.map(sanitizeRepairFinding).filter(Boolean);
   return `You are an Autopilot core repair job for ${ctx.repo}, issue #${job.issue}, PR #${job.pr} on branch ${job.branch}.
 Work only in this folder: ${job.worktree}. The checks of head ${job.head} are red:
-${reds.map(red => `- ${red}`).join('\n')}
+${cleanedReds.map(red => `- ${red}`).join('\n')}
 ${reproduceText(ctx, job)}
 Fix these causes on the same branch and push to it. Do not open a new PR. Changed means changed against the base (\`git diff --name-only origin/${ctx.state.baseBranch}...HEAD\`), never since the previous PR head: when the \`pdd test\` result of a changed Story, or of the tests, changes, update its "Runtime:" line and the "Evidence:" line in the PR body (rules 6 and 7). After a merge from the base, check that the fix is still needed: check out the new merge base (\`git merge-base origin/${ctx.state.baseBranch} HEAD\`) in a throwaway worktree, copy in the PR's changed tests, and run them. When they pass on the base code too, the base already holds the fix. Then keep the base's code, keep only what the base does not hold, and say so in the PR body. The logs of this issue's jobs are in ${ctx.dirs.logs}.
 
@@ -959,13 +967,17 @@ function legacyCustodyRoot(ctx, job, part, role) {
     return root;
   } catch { return null; }
 }
-async function cleanupPart(ctx, job, part, role) {
+async function cleanupPart(ctx, job, part, role, extra = null) {
   if (!part || !ctx.jobs.cleanup) return false;
   try {
     ctx.saveJob(job);
-    const root = legacyCustodyRoot(ctx, job, part, role), options = root ? { legacyCustodyRoot: root,
-      ...(Number.isFinite(job.started) ? { legacyCustodyBoundary: job.started } : {}) } : null;
-    const result = options ? await ctx.jobs.cleanup(part, options) : await ctx.jobs.cleanup(part);
+    const root = legacyCustodyRoot(ctx, job, part, role);
+    const merged = {
+      ...(root ? { legacyCustodyRoot: root, ...(Number.isFinite(job.started) ? { legacyCustodyBoundary: job.started } : {}) } : {}),
+      ...(object(extra) ? extra : {}),
+    };
+    const hasOptions = Object.keys(merged).length > 0;
+    const result = hasOptions ? await ctx.jobs.cleanup(part, merged) : await ctx.jobs.cleanup(part);
     if (result?.legacy) {
       job.legacyCleanup ??= [];
       if (!job.legacyCleanup.some(row => row.id === part.id)) {
@@ -974,7 +986,11 @@ async function cleanupPart(ctx, job, part, role) {
       }
       ctx.warn(`Autopilot core cleanup of #${job.issue} (${role}): ${result.legacy}`);
     }
-    if (result?.confirmed === true) recordPartTelemetry(ctx, job, part, role);
+    if (result?.confirmed === true) {
+      if (object(job?.progress)) job.progress.running = false;
+      if (object(part?.progress)) part.progress.running = false;
+      recordPartTelemetry(ctx, job, part, role);
+    }
     return result?.confirmed === true;
   } catch { return false; }
 }
@@ -1029,7 +1045,7 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
     try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, ...a }); } catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
   };
   if (age >= limit) {
-    if (!await cleanupPart(ctx, job, part, role)) return { state: 'cleanup' };
+    if (!await cleanupPart(ctx, job, part, role, { recoverStopped: true })) return { state: 'cleanup' };
     w.stopped = 'backstop';
     const longest = longestSuccess(ctx, role), text = `the ${label} ran ${Math.round(limit / HOUR)} h (its limit: the larger of autopilot.maxJobHours and 4 times the longest successful ${role} here${longest ? `, ${AGO(longest)}` : ''}) with no result`;
     if (cwd) try {
@@ -1047,7 +1063,7 @@ async function watchProcess(ctx, job, part, role, cwd = null) {
       tried: `It still makes new things (last: ${w.last ?? 'none'}, ${AGO(now - w.at)} ago).`, need: `This job goes on (it stops at ${Math.round(limit / HOUR)} h). To stop it, remove pdd:working or add pdd:stuck.` });
   }
   if (now - w.at >= ctx.quiet) {
-    if (!await cleanupPart(ctx, job, part, role)) return { state: 'cleanup' };
+    if (!await cleanupPart(ctx, job, part, role, { recoverStopped: true })) return { state: 'cleanup' };
     w.stopped = 'quiet'; ctx.saveJob(job); return { state: 'quiet' };
   }
   ctx.saveJob(job);
@@ -1125,11 +1141,15 @@ async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
   const m = ctx.machineState();
   const already = Boolean(m.poolOut);
   const resetAt = Number.isFinite(exhausted?.resetAt) && exhausted.resetAt > ctx.now() ? exhausted.resetAt : null;
+  const cloud = Boolean(exhausted?.cloud || m.poolOut?.cloud);
+  const wakeAt = typeof exhausted?.wakeAt === 'string' && exhausted.wakeAt ? exhausted.wakeAt : (resetAt ? new Date(resetAt).toISOString() : null);
   const cleanReason = safeLine(reason ?? exhausted?.cooling?.[0]?.reason ?? 'usage-limit', 200);
   const poolOut = {
     since: m.poolOut?.since ?? ctx.now(),
     at: ctx.now(),
     resetAt,
+    ...(cloud ? { cloud: true } : {}),
+    ...(wakeAt ? { wakeAt } : {}),
     reason: cleanReason,
     issue: Number.isSafeInteger(issue) ? issue : (m.poolOut?.issue ?? null),
   };
@@ -1144,8 +1164,8 @@ async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
         text: `Autopilot paused login-pool work ${untilWords}: every login in the pool reached quota or rate limits (last: "${cleanReason}", machine ${ctx.state.machine}).`,
         tried: `Autopilot rotated across every configured login in the pool and put exhausted logins on cooldown ${untilWords}. No slot stays jammed and no retries are burned.`,
         need: resetAt
-          ? `Nothing is needed if you want to wait: Autopilot resumes automatically after ${new Date(resetAt).toISOString()}. Or add a healthy login to pool.json and run pdd autopilot start.`
-          : 'Check sign-in and usage limits on this machine with pdd autopilot doctor, or add a healthy login to pool.json and run pdd autopilot start.',
+          ? `Nothing is needed if you want to wait: Autopilot resumes automatically after ${new Date(resetAt).toISOString()}. Or add a healthy login with pdd accounts add and run pdd autopilot start.`
+          : 'Check sign-in and usage limits on this machine with pdd autopilot doctor, or add a healthy login with pdd accounts add and run pdd autopilot start.',
       });
     } catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
   }
@@ -1154,6 +1174,7 @@ async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
 async function selectAgentStep(ctx, issue = null) {
   if (!ctx.ports.selectLogin) return { state: 'ready', selected: null };
   const selected = await ctx.ports.selectLogin();
+  if (selected === null) return { state: 'ready', selected: null };
   if (selected?.state === 'ready') {
     clearPoolExhausted(ctx);
     return { state: 'ready', selected };
@@ -1167,10 +1188,12 @@ async function pausePrForPool(ctx, job, poolOut, reason) {
   try { await leaveLane(ctx, job); job.lane = null; } catch (failure) { ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${failure.message}`); }
   const until = Number.isFinite(poolOut?.resetAt) && poolOut.resetAt > ctx.now() ? poolOut.resetAt : ctx.now() + POOL_FALLBACK_COOLDOWN_MS;
   const count = (job.stepStop?.head === job.head && job.stepStop.poolExhausted ? job.stepStop.count ?? 0 : 0) + 1;
-  const text = `every login in the pool is on quota cooldown${reason ? ` ("${safeLine(reason, 180)}")` : ''}`;
+  const text = poolOut?.cloud && poolOut?.wakeAt
+    ? `Waiting on AI quota until ${poolOut.wakeAt}`
+    : `every login in the pool is on quota cooldown${reason ? ` ("${safeLine(reason, 180)}")` : ''}`;
   job.phase = 'pr';
   job.agent = null;
-  job.stepStop = { owner: 'service', code: 'pool-exhausted', text, head: job.head, count, at: ctx.now(), until, report: null, resumed: false, poolExhausted: true };
+  job.stepStop = { owner: 'service', code: 'pool-exhausted', text, head: job.head, count, at: ctx.now(), until, report: null, resumed: false, poolExhausted: true, ...(poolOut?.cloud ? { cloud: true } : {}), ...(poolOut?.wakeAt ? { wakeAt: poolOut.wakeAt } : {}) };
   job.progress = { sig: null, at: until, running: false };
   delete job.overdue;
   ctx.saveJob(job);
@@ -1180,19 +1203,37 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
   ctx.fs.mkdirSync(ctx.dirs.logs, { recursive: true, mode: 0o700 });
   const result = join(ctx.dirs.logs, `${id}.result.json`);
   const activeAgent = command ? ctx.state.agent : (selected?.agent ?? ctx.state.agent);
-  const baseEnv = (!command && selected?.env) ? selected.env : (ctx.ports.env ?? process.env);
+  const prepared = (!command && typeof selected?.prepareStep === 'function') ? selected.prepareStep(ctx.ports.env ?? process.env, { detached: true }) : null;
+  const baseEnv = prepared?.env ?? ((!command && selected?.env) ? selected.env : (ctx.ports.env ?? process.env));
+  const cleanupDirs = prepared?.cleanupDirs ?? selected?.cleanupDirs ?? null;
   const run = command ?? resolveCoreAgentCommand(ctx, role, activeAgent, baseEnv);
   // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
   // as PDD_CHECK_CPUS for every role.
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
-  const started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
-    env: { ...pddOnPath(ctx, jobEnvironment(baseEnv)), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...extraEnv },
-    ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd'), skills: skillsCheck(ctx, activeAgent, baseEnv) } } : {}),
-    issue: job.issue, role, branch: job.branch, head: job.head, ...(command ? {} : { hung: HUNG }) });
+  let started;
+  try {
+    started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
+      env: { ...pddOnPath(ctx, jobEnvironment(baseEnv)), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...extraEnv },
+      ...(Array.isArray(cleanupDirs) && cleanupDirs.length ? { cleanupDirs } : {}),
+      ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd'), skills: skillsCheck(ctx, activeAgent, baseEnv) } } : {}),
+      issue: job.issue, role, branch: job.branch, head: job.head, ...(command ? {} : { hung: HUNG }) });
+  } catch (err) {
+    prepared?.cleanup?.();
+    throw err;
+  }
   if (!command && object(started)) {
     const loginId = selected?.login?.id ?? activeAgent?.id;
     if (named(loginId)) started.loginId = loginId;
     if (named(activeAgent?.kind)) started.agentKind = activeAgent.kind;
+    if (selected?.cloud) started.cloud = true;
+    if (object(selected?.account)) {
+      started.accountWindows = {
+        five_hour_used_percent: selected.account.five_hour_used_percent ?? null,
+        five_hour_reset_at: selected.account.five_hour_reset_at ?? null,
+        weekly_used_percent: selected.account.weekly_used_percent ?? null,
+        weekly_reset_at: selected.account.weekly_reset_at ?? null,
+      };
+    }
   }
   return started;
 }
@@ -1327,12 +1368,14 @@ async function intake(ctx, rows) {
   // #3260: no new job while GitHub Actions does not start runs here; intake goes on by itself when a run starts.
   const ciHeld = await ciHold(ctx);
   if (ciHeld) return ciHeld;
-  const poolHeldText = poolOut => `intake held: every login in the pool is exhausted${poolOut?.resetAt ? ` until ${new Date(poolOut.resetAt).toISOString()}` : ''}; no issue was claimed`;
+  const poolHeldText = poolOut => poolOut?.cloud && poolOut?.wakeAt
+    ? `Waiting on AI quota until ${poolOut.wakeAt}`
+    : `intake held: every login in the pool is exhausted${poolOut?.resetAt ? ` until ${new Date(poolOut.resetAt).toISOString()}` : ''}; no issue was claimed`;
   const checkIdlePool = async () => {
     const m = ctx.machineState();
     if (ctx.ports.selectLogin && m.poolOut && (!Number.isFinite(m.poolOut.resetAt) || ctx.now() >= m.poolOut.resetAt)) {
       const check = await ctx.ports.selectLogin();
-      if (check?.state === 'ready') { clearPoolExhausted(ctx); return null; }
+      if (check === null || check?.state === 'ready') { clearPoolExhausted(ctx); return null; }
       if (check?.state === 'exhausted') return poolHeldText(await recordPoolExhausted(ctx, check, check.cooling?.[0]?.reason ?? 'usage-limit', m.poolOut.issue));
     }
     return m.poolOut ? poolHeldText(m.poolOut) : null;
@@ -1409,7 +1452,8 @@ async function intake(ctx, rows) {
   if (ctx.ports.selectLogin) {
     firstStep = await selectAgentStep(ctx, candidateGroups[0].primary.number);
     if (firstStep.state === 'exhausted') return poolHeldText(firstStep.poolOut);
-  } else if (!await (ctx.ports.agentReady ?? (async () => true))()) {
+  }
+  if ((!firstStep || firstStep.selected === null) && !await (ctx.ports.agentReady ?? (async () => true))()) {
     return 'intake held: the agent is not ready (sign-in or usage limit); no issue was claimed';
   }
   // A base fetch failure is not about one issue: it stops intake for this tick.
@@ -1716,22 +1760,59 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
   }
   if (!object(r) || !['PASS', 'FAIL'].includes(r.verdict) || r.head !== job.head) {
     const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, job.review.agent) : null;
-    if (service && isQuotaExhaustionMessage(service)) {
-      if (!await cleanupPart(ctx, job, job.review.agent, 'review')) return { state: 'running' };
-      const next = await ctx.ports.exhaustLogin({ loginId: job.review.agent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service });
-      if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
-        job.poolRotations = (job.poolRotations ?? 0) + 1;
-        clearPoolExhausted(ctx);
-        job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
-        job.review.agent = null;
-        job.review.retry = true;
-        ctx.saveJob(job);
-        return reviewState(ctx, job, prBody, next);
+    const reviewPooled = service && isQuotaExhaustionMessage(service)
+      ? (job.review.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
+      : false;
+    if (service && isQuotaExhaustionMessage(service) && reviewPooled) {
+      const prevReviewAgent = job.review.agent;
+      const rateClass = classifyRateLimitFailure(service, prevReviewAgent?.accountWindows);
+      if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
+      if (prevReviewAgent?.cloud && rateClass === 'burst_rate_limit' && !job.review.burstRetried && ctx.ports.selectLogin) {
+        await (ctx.ports.sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(ctx.ports.burstRetryMs ?? 150);
+        const same = await ctx.ports.selectLogin({ preferredAccountId: prevReviewAgent.loginId, fresh: true });
+        if (same?.state === 'ready' && same?.login?.id === prevReviewAgent.loginId) {
+          job.review.burstRetried = true;
+          job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
+          job.review.agent = null;
+          job.review.retry = true;
+          ctx.saveJob(job);
+          return reviewState(ctx, job, prBody, same);
+        }
+        if (same?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, same.poolSize ?? 4)) {
+          await ctx.ports.exhaustLogin?.({
+            loginId: prevReviewAgent?.loginId ?? ctx.state.agent?.id,
+            resetAt: null,
+            reason: service,
+            accountWindows: prevReviewAgent?.accountWindows ?? null,
+            markTriedOnly: true,
+          });
+          job.poolRotations = (job.poolRotations ?? 0) + 1;
+          delete job.review.burstRetried;
+          clearPoolExhausted(ctx);
+          job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
+          job.review.agent = null;
+          job.review.retry = true;
+          ctx.saveJob(job);
+          return reviewState(ctx, job, prBody, same);
+        }
       }
-      const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-      job.review = job.review?.scoped ? { head: job.head, scoped: job.review.scoped } : null;
-      await pausePrForPool(ctx, job, poolOut, service);
-      return { state: 'pool-paused' };
+      const next = await ctx.ports.exhaustLogin({ loginId: prevReviewAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevReviewAgent?.accountWindows ?? null });
+      if (next !== null) {
+        if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
+          job.poolRotations = (job.poolRotations ?? 0) + 1;
+          delete job.review.burstRetried;
+          clearPoolExhausted(ctx);
+          job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
+          job.review.agent = null;
+          job.review.retry = true;
+          ctx.saveJob(job);
+          return reviewState(ctx, job, prBody, next);
+        }
+        const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
+        job.review = job.review?.scoped ? { head: job.head, scoped: job.review.scoped } : null;
+        await pausePrForPool(ctx, job, poolOut, service);
+        return { state: 'pool-paused' };
+      }
     }
     if (job.review.attempts >= 2) return { state: 'missing' };
     job.review.retry = true; return reviewState(ctx, job, prBody);
@@ -1914,9 +1995,33 @@ function readTail(fs, file, bytes = 256 * 1024) {
     return buffer.toString('utf8');
   } catch { return ''; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
 }
+function injectNodeTestConcurrency(command, maxWorkers) {
+  const text = String(command ?? '');
+  if (/--test-concurrency(?:=|\s|$)/.test(text)) return text;
+  if (!/(?:^|[\s;&|()])node(?:\s+--[A-Za-z0-9-]+(?:=\S+|\s+[^\s;&|()-]\S*))*\s+--test(?=\s|$)/.test(text)) return text;
+  return text.replace(/(\s--test)(?=\s|$)/, `$1 --test-concurrency=${maxWorkers}`);
+}
+export function boundSuiteCommand(testCommand, pkg = {}, shareCpus = null) {
+  const raw = String(testCommand ?? '');
+  const hasShare = Number.isSafeInteger(shareCpus) && shareCpus > 0;
+  const cpus = hasShare ? shareCpus : availableParallelism();
+  const maxWorkers = Math.max(1, Math.min(6, cpus));
+  const direct = injectNodeTestConcurrency(raw, maxWorkers);
+  if (direct !== raw) return direct;
+  if (hasShare && /^\s*npm\s+(?:run\s+)?test\s*$/.test(raw) && !pkg?.scripts?.pretest && !pkg?.scripts?.posttest && typeof pkg?.scripts?.test === 'string') {
+    const expanded = injectNodeTestConcurrency(pkg.scripts.test, maxWorkers);
+    if (expanded !== pkg.scripts.test) return expanded;
+  }
+  return raw;
+}
 function queuedCommand(ctx, cwd, testCommand) {
-  const suite = [ctx.pdd, 'workflow', 'suite', '--command', testCommand, '--timeout', '0'];
-  const pkg = readJson(ctx.fs, join(cwd, 'package.json'), {}), deps = ['dependencies', 'devDependencies', 'optionalDependencies'].some(key => object(pkg?.[key]) && Object.keys(pkg[key]).length);
+  const pkg = readJson(ctx.fs, join(cwd, 'package.json'), {});
+  const envShare = Number(ctx.ports.env?.PDD_CHECK_CPUS);
+  const rawShare = ctx.ports.machine?.priority?.('suite')?.checkCpus ?? (Number.isSafeInteger(envShare) && envShare > 0 ? envShare : null);
+  const shareCpus = Number.isSafeInteger(rawShare) && rawShare > 0 ? rawShare : null;
+  const effectiveCommand = boundSuiteCommand(testCommand, pkg, shareCpus);
+  const suite = [ctx.pdd, 'workflow', 'suite', '--command', effectiveCommand, '--timeout', '0'];
+  const deps = ['dependencies', 'devDependencies', 'optionalDependencies'].some(key => object(pkg?.[key]) && Object.keys(pkg[key]).length);
   return ctx.fs.existsSync(join(cwd, 'package-lock.json')) && deps
     ? { command: '/bin/sh', args: ['-c', 'npm ci --ignore-scripts --no-audit --no-fund || { echo "Autopilot core: dependency install failed" >&2; exit 86; }; exec "$@"', 'pdd-suite', process.execPath, ...suite] }
     : { command: process.execPath, args: suite };
@@ -2054,10 +2159,32 @@ function decidingRows(rows, unsent = false) {
   return scopes;
 }
 const strings = value => Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+const rowReasonCodes = row => [
+  ...(typeof row?.reason?.code === 'string' ? [row.reason.code] : []),
+  ...strings(row?.codes),
+  ...(Array.isArray(row?.refusals) ? row.refusals.map(item => typeof item === 'string' ? item : item?.code).filter(named) : []),
+];
+const hasRealBindingUnavailable = row => rowReasonCodes(row).includes('real-binding-unavailable');
+const nonBindingRefusals = row => (Array.isArray(row?.refusals) ? row.refusals.map(item => typeof item === 'string' ? item : item?.code).filter(named) : [])
+  .filter(code => code !== 'real-binding-unavailable');
 const failedRow = row => Number(row.failed) > 0 || strings(row.states).includes('failed');
-const refusedRow = row => strings(row.refusals).length > 0 || strings(row.states).includes('refused');
+const refusedRow = row => nonBindingRefusals(row).length > 0 || (strings(row.states).includes('refused') && !hasRealBindingUnavailable(row));
+const localSkipRow = row => object(row) && row.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row) && !nonBindingRefusals(row).length;
 // A row that did not pass only because of the service (no verdict, no failed check, no refusal): the engine sends it again.
-const serviceRow = row => row.pass !== true && !failedRow(row) && !refusedRow(row);
+const serviceRow = row => row.pass !== true && !failedRow(row) && !refusedRow(row) && !localSkipRow(row);
+const actionableRowAdvice = row => [...strings(row?.advice), ...(typeof row?.client_advice === 'string' ? [row.client_advice] : [])]
+  .filter(text => !/reconcile possible external effects with the operator/i.test(text));
+function decidingRowForTest(scopes, story, test) {
+  const of = scopes.get(story);
+  return of?.get(test.path) ?? (test.files ?? []).map(file => of?.get(file)).find(Boolean) ?? of?.get('*');
+}
+function allStoryTestsCovered(scopes, evidence, story, pred) {
+  const own = (evidence?.tests ?? []).filter(test => (test.stories ?? []).includes(story) && !test.error);
+  return own.every(test => {
+    const row = decidingRowForTest(scopes, story, test);
+    return Boolean(row && pred(row));
+  });
+}
 // #3227 fix 1: each changed Story that the T01 cover does not check is checked against its deciding rows, "not run" too:
 // failed checks are red, a refusal that pdd can fix is red once, and a Story that passed at the merge base must not lose
 // its pass (a service-only row is not red: the engine sends it again).
@@ -2073,15 +2200,20 @@ async function savedRowReds(ctx, job, head, evidence, stories) {
       reds.push(`The latest saved pdd test check of ${story} at head ${short(head)} has ${n ? `${n} failed check${n === 1 ? '' : 's'}` : 'a failed verdict'}${steps.length ? ` (steps: ${steps.join(', ')})` : ''}. A failed check is a FAIL, also when the batch has no verdict: fix the cause (the code, the prompt or the test) and run "$PDD_CLI" test again at this head.`);
       continue;
     }
-    const fix = rows.flatMap(row => strings(row.refusals).map(code => [code, strings(row.advice).find(text => text.includes(code)) ?? strings(row.advice)[0]])).find(([code, text]) => text && !once.has(`${story}|${code}`));
+    const fix = rows.flatMap(row => {
+      const advice = actionableRowAdvice(row);
+      return nonBindingRefusals(row).map(code => [code, advice.find(text => text.includes(code)) ?? advice[0]]);
+    }).find(([code, text]) => text && !once.has(`${story}|${code}`));
     if (fix && (job.repairs ?? 0) < ctx.settings.repairs) {
       once.add(`${story}|${fix[0]}`);
       reds.push(`The saved pdd test check of ${story} at head ${short(head)} was refused before execution (${fix[0]}). pdd printed the fix: ${oneLine(fix[1], 800)} Apply the fix that pdd prints and run "$PDD_CLI" test again at this head.`);
     }
     if (!rows.length) lost.push([story, 'no saved pdd test check at this source']);
-    else if (!rows.every(row => row.pass === true || serviceRow(row))) {
-      const codes = [...new Set(rows.flatMap(row => strings(row.refusals)))];
+    else if (!rows.every(row => row.pass === true || serviceRow(row) || localSkipRow(row))) {
+      const codes = [...new Set(rows.flatMap(nonBindingRefusals))];
       lost.push([story, rows.some(refusedRow) ? `a check that was refused before execution${codes.length ? ` (${codes.join(', ')})` : ''}` : 'a check that did not pass']);
+    } else if (!allStoryTestsCovered(scopes, evidence, story, row => row.pass === true || serviceRow(row) || localSkipRow(row))) {
+      lost.push([story, 'unrun pdd test checks at this source']);
     }
   }
   job.refusalReds = [...once].slice(-50);
@@ -2101,6 +2233,13 @@ async function savedRowReds(ctx, job, head, evidence, stories) {
     reds.push(`Runtime coverage went down: ${story} had a passing pdd test check at the merge base ${short(base.commit)}, but at head ${short(head)} it has ${why}. A PR must not lose a Runtime pass: make the check of ${story} pass again at this head.`);
   return { reds, base };
 }
+async function readRuntimeEvidenceAtHead(ctx, job, head = job.agentHead ?? job.head) {
+  if (ctx.runtimeEvidenceCache?.issue === job.issue && ctx.runtimeEvidenceCache?.head === head) return ctx.runtimeEvidenceCache.value;
+  const tree = await treeAt(ctx, job, 'agent', head);
+  const value = await (ctx.ports.runtimeEvidence ?? savedRuntime)({ root: job.worktree, tree, head }, ctx);
+  ctx.runtimeEvidenceCache = { issue: job.issue, head, value };
+  return value;
+}
 // T01: a Runtime pass claim is true only when the saved Runtime checks cover the change at the agent's exact head: each
 // changed Story (its Story file or a test file changed) has a passing latest check of exactly this source that ran each
 // changed test of it, and each changed prompt is in the upload of such a check. Else: "Runtime: not run (REASON)".
@@ -2114,7 +2253,7 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   const checking = claims.length > 0 || lines.some(l => l.story);
   const changed = await changedFiles(ctx, job, head), prompts = changed.filter(file => file.endsWith('.prompt.md'));
   let evidence;
-  try { const tree = await treeAt(ctx, job, 'agent', head); evidence = await (ctx.ports.runtimeEvidence ?? savedRuntime)({ root: job.worktree, tree, head }, ctx); }
+  try { evidence = await readRuntimeEvidenceAtHead(ctx, job, head); }
   catch (error) {
     if (!checking) { ctx.warn(`Autopilot core could not read the saved pdd test checks of #${job.issue} at head ${short(head)}: ${error.message}`); return done({ ok: true, error: oneLine(error.message, 300) }); }
     return done({ ok: false, text: `${claim}, but Autopilot could not read the Stories and the saved pdd test checks at head ${short(head)}: ${oneLine(error.message, 300)}. Fix the cause, or write "Runtime: not run (REASON)".` });
@@ -2164,16 +2303,20 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   // "not run" line with no Story stands for all), whatever their number. Only a consumer that Runtime could not check
   // (its rows have no verdict, no failed check and no refusal: maintenance, a service failure) is no red; the note
   // then says how many were checked, never a silent pass.
-  const deciding = decidingRows(evidence.stories);
+  const deciding = decidingRows(evidence.stories), allDeciding = decidingRows(evidence.stories, true);
   const passingNow = story => deciding.has(story) && [...deciding.get(story).values()].every(row => row.pass === true);
   const lineOf = story => storyLines.find(l => l.story === story) ?? (!perStory && lines.length === 1 && lines[0].verdict === 'not-run' ? lines[0] : null);
   const open = consumerOnly.filter(story => !passingNow(story) && !lineOf(story) && !stories.includes(story));
-  // Could not check: never sent (maintenance, interrupted) or sent with no verdict, and no failed check and no refusal.
+  // Could not check: never sent (maintenance, interrupted) or sent with no verdict, and no failed check and no refusal;
+  // or skipped locally with real-binding-unavailable (no live binding in this sandbox, 0 provider calls).
   const couldNotCheck = row => serviceRow(row) && (row.sent === false || strings(row.states).some(state => ['unknown', 'not_run', 'partial'].includes(state)));
   const serviceOnly = story => deciding.has(story) && [...deciding.get(story).values()].every(couldNotCheck);
-  const waiting = open.filter(serviceOnly), checkedCount = consumers.filter(passingNow).length;
+  const localSkipOnly = story => allDeciding.has(story) && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
+    && [...allDeciding.get(story).values()].some(localSkipRow)
+    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row));
+  const waiting = open.filter(story => serviceOnly(story) || localSkipOnly(story)), checkedCount = consumers.filter(passingNow).length;
   const consumerNote = consumers.length ? { total: consumers.length, checked: checkedCount, open: waiting.slice(0, 50), line: waiting.length ? `Runtime: not run (${consumers.length} Stories reach ${someFiles(prompts)}; checked ${checkedCount})` : null } : null;
-  const consumerReds = open.filter(story => !serviceOnly(story)).map(story => `${story} reaches a changed prompt (${someFiles(prompts)}; its tests upload it), but it has no passing pdd test check at this source${deciding.has(story) ? ' (the latest check of it at this source did not pass)' : ''} and no Runtime line. Run "$PDD_CLI" test for ${story} at this head, or write "Runtime: not run (${story}: REASON)".`);
+  const consumerReds = open.filter(story => !serviceOnly(story) && !localSkipOnly(story)).map(story => `${story} reaches a changed prompt (${someFiles(prompts)}; its tests upload it), but it has no passing pdd test check at this source${deciding.has(story) ? ' (the latest check of it at this source did not pass)' : ''} and no Runtime line. Run "$PDD_CLI" test for ${story} at this head, or write "Runtime: not run (${story}: REASON)".`);
   // #3227 fix 1: the changed Stories (and the consumers with a "not run" line) that the cover below does not check are
   // checked against their saved rows.
   const rowStories = [...changedStories, ...consumerOnly.filter(story => lineOf(story)?.verdict === 'not-run')].filter(story => !stories.includes(story));
@@ -2570,7 +2713,11 @@ async function writeEvidenceBlock(ctx, job) {
   const block = `${EVIDENCE_START}\n### Autopilot evidence for head ${short(job.head)}\n\n${ctx.publicBody(evidenceSummary(ctx, job))}\n${EVIDENCE_END}`;
   // A fresh read: the review may have written the follow-ups section in this tick.
   const pr = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${job.pr}`);
-  const body = String(pr?.body ?? ''), at = body.indexOf(EVIDENCE_START), end = body.indexOf(EVIDENCE_END);
+  let body = String(pr?.body ?? '');
+  if (!runtimeVerdicts(body).length && job.runtimeOriginal?.head === (job.agentHead ?? job.head) && Array.isArray(job.runtimeOriginal.engine) && job.runtimeOriginal.engine.length) {
+    body = withStoryLines(body, job.runtimeOriginal.engine.map((_, idx) => `__engine_${idx}`), key => job.runtimeOriginal.engine[Number(key.slice(9))]).body;
+  }
+  const at = body.indexOf(EVIDENCE_START), end = body.indexOf(EVIDENCE_END);
   const members = jobIssues(job);
   const missing = members.filter(m => !hasClosingKeyword(body, m, ctx.repo) && !isPartialIssuePr(body, m, ctx.repo));
   const closing = !missing.length ? '' : members.length > 1 ? `${missing.map(m => `Closes #${m}`).join('\n')}\n\n` : `Fixes #${job.issue}\n\n`;
@@ -2579,14 +2726,138 @@ async function writeEvidenceBlock(ctx, job) {
   const next = at >= 0 && end > at ? `${body.slice(0, at)}${addition}${body.slice(end + EVIDENCE_END.length)}`
     : followUps >= 0 ? `${body.slice(0, followUps).trimEnd()}\n\n${addition}\n\n${body.slice(followUps)}`.trimStart()
     : body.trimEnd() ? `${body.trimEnd()}\n\n${addition}` : addition;
-  if (next !== body) await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: next });
+  if (next !== String(pr?.body ?? '')) await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: next });
 }
 
 async function stopChecks(ctx, job) {
   const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
     [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
-  for (const [part, role] of parts) if (!await cleanupPart(ctx, job, part, role)) return false;
+  for (const [part, role] of parts) {
+    const hasError = Boolean(part.watch?.stopped || part.processesUncertain || (typeof part.token === 'string' && ctx.fs.existsSync?.(`${part.token}.processes.error`)));
+    if (!await cleanupPart(ctx, job, part, role, hasError ? { recoverStopped: true } : null)) return false;
+  }
   return true;
+}
+
+function formatVerifiedStoryPassLine(story, rows) {
+  const passed = rows.reduce((sum, row) => sum + (Number.isSafeInteger(row?.checks?.passed) ? row.checks.passed : Number.isSafeInteger(row?.passed) ? row.passed : 0), 0);
+  const total = rows.reduce((sum, row) => sum + (Number.isSafeInteger(row?.checks?.total) ? row.checks.total : Number.isSafeInteger(row?.total) ? row.total : 0), 0);
+  return `Runtime: PASS (${story}${total > 0 && passed === total ? `, ${passed}/${total} checks` : ''})`;
+}
+
+async function syncVerifiedRuntimeLines(ctx, job, pr) {
+  const head = job.agentHead ?? job.head;
+  const lines = runtimeVerdicts(pr.body);
+  if (lines.some(l => l.verdict === 'other')) return;
+  if (lines.length > 1 && lines.some(l => !l.story)) return;
+  if (lines.some((l, i) => l.story && lines.findIndex(o => o.story === l.story) !== i)) return;
+  if (job.runtime?.state && !['pass', 'not-run'].includes(job.runtime.state)) return;
+  if (job.runtime?.state === 'pass' && lines.some(l => l.verdict === 'not-run')) return;
+  if (parseEvidence(pr.body)?.runtime?.state === 'fail') return;
+  if (lines.length === 1 && !lines[0].story && lines[0].verdict === 'not-run') return;
+
+  const changed = await changedFiles(ctx, job, head);
+  const prompts = changed.filter(file => file.endsWith('.prompt.md'));
+  if (!prompts.length && !changed.some(file => file.endsWith('.md') || file.endsWith('.json'))) return;
+
+  let evidence;
+  try { evidence = await readRuntimeEvidenceAtHead(ctx, job, head); }
+  catch { return; }
+
+  const storyFiles = new Set(evidence.storyFiles ?? []);
+  const changedTests = (evidence.tests ?? []).filter(test => [test.path, ...(test.files ?? [])].some(file => changed.includes(file)));
+  const changedStories = [...new Set([...changed.filter(file => storyFiles.has(file)), ...changedTests.flatMap(test => test.stories ?? [])])];
+
+  let consumers = [];
+  if (prompts.length) {
+    const key = prompts.join('\0');
+    if (job.reach?.schema === 2 && job.reach.head === head && job.reach.key === key) consumers = job.reach.stories;
+    else {
+      const read = evidence.reach ? await evidence.reach(prompts).catch(error => ({ stories: [], error: oneLine(error.message, 300) }))
+        : { stories: Object.entries(object(evidence.footprints) ? evidence.footprints : {}).filter(([, files]) => Array.isArray(files) && files.some(file => prompts.includes(file))).map(([story]) => story) };
+      consumers = (Array.isArray(read?.stories) ? read.stories : []).filter(named).sort();
+      job.reach = { schema: 2, head, key, stories: consumers, error: read?.error ?? null };
+    }
+  }
+
+  const reachesPrompt = async story => {
+    if (!prompts.length) return false;
+    const own = (evidence.tests ?? []).filter(test => (test.stories ?? []).includes(story) && !test.error).map(test => test.path);
+    const print = evidence.footprint ? await evidence.footprint(story, { tests: own }).catch(() => null) : { files: evidence.footprints?.[story] ?? [] };
+    return (Array.isArray(print?.files) ? print.files : []).some(file => prompts.includes(file));
+  };
+
+  for (const l of lines.filter(row => row.story && row.verdict === 'pass' && !changedStories.includes(row.story) && !consumers.includes(row.story))) {
+    if (!await reachesPrompt(l.story)) return;
+  }
+
+  const targetStories = [...new Set([...changedStories, ...consumers])];
+  if (!targetStories.length && !prompts.length) return;
+
+  const deciding = decidingRows(evidence.stories), allDeciding = decidingRows(evidence.stories, true);
+  const storyTests = (evidence.tests ?? []).filter(test => (test.stories ?? []).some(story => changed.includes(story)));
+  const mustRunTests = [...new Set([...changedTests, ...storyTests])];
+  const ranBy = (story, test) => {
+    const of = deciding.get(story);
+    return of?.get(test.path) ?? (test.files ?? []).map(file => of?.get(file)).find(Boolean) ?? of?.get('*');
+  };
+  const storyPassOk = story => deciding.has(story)
+    && [...deciding.get(story).values()].every(row => row.pass === true)
+    && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => ranBy(story, test)?.pass === true);
+  const storyLocalSkipOk = story => allDeciding.has(story)
+    && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
+    && [...allDeciding.get(story).values()].some(localSkipRow)
+    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row))
+    && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => {
+      const row = decidingRowForTest(allDeciding, story, test);
+      return Boolean(row && (row.pass === true || localSkipRow(row)));
+    });
+  const existingNotRun = story => lines.find(l => l.story === story && l.verdict === 'not-run') ?? null;
+
+  if (!targetStories.every(story => storyPassOk(story) || storyLocalSkipOk(story) || Boolean(existingNotRun(story)))) return;
+
+  if (prompts.length) {
+    const reached = new Set();
+    const passingAll = [...deciding].filter(([, of]) => [...of.values()].every(row => row.pass === true)).map(([story]) => story);
+    const ordered = [...passingAll.filter(s => targetStories.includes(s)), ...passingAll.filter(s => !targetStories.includes(s)).sort()];
+    for (const [story, row] of ordered.flatMap(story => [...new Set(deciding.get(story).values())].map(r => [story, r]))) {
+      if (prompts.every(prompt => reached.has(prompt))) break;
+      const print = evidence.footprint ? await evidence.footprint(story, row).catch(() => null) : { files: evidence.footprints?.[story] ?? [] };
+      for (const file of Array.isArray(print?.files) ? print.files : []) reached.add(file);
+    }
+    for (const story of targetStories.filter(s => !storyPassOk(s) && (storyLocalSkipOk(s) || Boolean(existingNotRun(s))))) {
+      if (prompts.every(prompt => reached.has(prompt))) break;
+      const own = (evidence.tests ?? []).filter(test => (test.stories ?? []).includes(story) && !test.error).map(test => test.path);
+      const print = evidence.footprint ? await evidence.footprint(story, { tests: own }).catch(() => null) : { files: evidence.footprints?.[story] ?? [] };
+      for (const file of Array.isArray(print?.files) ? print.files : []) reached.add(file);
+    }
+    if (!prompts.every(prompt => reached.has(prompt))) return;
+  }
+
+  if (!targetStories.length) {
+    if (lines.length > 0) return;
+    await setRuntimeLines(ctx, job, pr, ['__prompt_pass__'], () => 'Runtime: PASS', () => ({ state: 'pass' }));
+    return;
+  }
+
+  const singleUnnamedPass = lines.length === 1 && !lines[0].story && lines[0].verdict === 'pass';
+  const perStoryPresent = lines.some(l => Boolean(l.story));
+  const needsSync = !lines.length
+    || (singleUnnamedPass && (changedStories.length > 1 || targetStories.some(story => !storyPassOk(story))))
+    || (perStoryPresent && targetStories.some(story => {
+      const cur = lines.find(l => l.story === story);
+      return !cur || (cur.verdict === 'pass' && !storyPassOk(story) && storyLocalSkipOk(story));
+    }));
+  if (!needsSync) return;
+
+  const lineFor = story => {
+    const keepNotRun = existingNotRun(story);
+    if (keepNotRun) return keepNotRun.line;
+    if (storyPassOk(story)) return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
+    return `Runtime: not run (${story}: real-binding-unavailable)`;
+  };
+  await setRuntimeLines(ctx, job, pr, targetStories, lineFor, overall => overall === 'pass' ? { state: 'pass' }
+    : job.runtime?.state === 'not-run' ? job.runtime : { state: 'not-run' });
 }
 
 async function mergeCheck(ctx, job) {
@@ -2609,6 +2880,7 @@ async function mergeCheck(ctx, job) {
   // "Runtime: not run" is allowed and files no report by itself; a Runtime report comes only from a failed job
   // whose cause kind is runtime (END).
   job.runtime = normalRuntime(job.runtime);
+  await syncVerifiedRuntimeLines(ctx, job, pr);
   await runtimeResendable(ctx, job, pr.body);
   await runtimeNotRunReport(ctx, job);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge. Git
@@ -2847,19 +3119,36 @@ async function runtimeResendable(ctx, job, body) {
 // The Runtime lines of the resent Stories are rewritten, one line for each Story (#3227: the verdict first, the Story
 // in the parentheses); a single line with no Story stands for all of them. Lines of other Stories stay. The runtime
 // part of the Evidence line follows all lines: pass when every line is PASS, fail with a FAIL, else not-run.
+function runtimeInsertIndex(lines) {
+  for (let k = 0; k < lines.length; k++) {
+    const raw = lines[k], norm = normalLine(raw);
+    if (/^(?:evidence|path)\s*:/i.test(norm) || raw.includes(EVIDENCE_START) || raw.includes('Follow-ups from the Autopilot review') || /^\s*<!--\s*pdd:/i.test(raw)) {
+      return k;
+    }
+  }
+  return lines.length;
+}
 function withStoryLines(body, stories, lineFor) {
   const lines = runtimeVerdicts(body), single = lines.length === 1 && !lines[0].story, done = new Set();
   let last = -1;
-  const out = String(body ?? '').split('\n').flatMap(raw => {
+  const trimmed = String(body ?? '');
+  const out = trimmed ? trimmed.split('\n').flatMap(raw => {
     const v = runtimeVerdicts(raw)[0];
     if (!v) return [raw];
     if (single) { stories.forEach(story => done.add(story)); return stories.map(lineFor); }
     if (v.story && stories.includes(v.story)) { done.add(v.story); return [lineFor(v.story)]; }
     return [raw];
-  });
+  }) : [];
   for (let k = 0; k < out.length; k++) if (runtimeVerdicts(out[k]).length) last = k;
   const missing = stories.filter(story => !done.has(story)).map(lineFor);
-  if (missing.length) out.splice(last >= 0 ? last + 1 : out.length, 0, ...missing);
+  if (missing.length) {
+    if (last >= 0) out.splice(last + 1, 0, ...missing);
+    else {
+      const at = runtimeInsertIndex(out);
+      const prefix = at > 0 && out[at - 1].trim() !== '' ? [''] : [];
+      out.splice(at, 0, ...prefix, ...missing);
+    }
+  }
   const verdicts = runtimeVerdicts(out.join('\n')), state = verdicts.some(v => v.verdict === 'other') ? 'fail' : verdicts.length && verdicts.every(v => v.verdict === 'pass') ? 'pass' : 'not-run';
   return { state, body: out.map(raw => /^evidence\s*:/i.test(normalLine(raw)) ? raw.replace(/\bruntime\s*=\s*[a-z-]+(?:\s*\(\s*\d+\s*\/\s*\d+\s*\))?/i, `runtime=${state}`) : raw).join('\n') };
 }
@@ -3404,9 +3693,27 @@ async function promptGate(ctx, job) {
     for (const { path, from } of changed) {
       let prompt;
       try { prompt = readPrompt(head, visible, path); } catch (error) { problems.push(`${path} cannot be checked (${oneLine(error.message, 200)})`); continue; }
-      if (prompt.error === 'interface-missing') {
-        const before = await ctx.git(['show', `origin/${base}:${from}`], cwd).catch(() => '');
-        if (interfaceBlocks(before).length) problems.push(`${path} lost its Runtime interface block`);
+      if (prompt.error === 'interface-missing' || prompt.frontmatter) {
+        if (prompt.frontmatter) {
+          const refusal = promptRefusal(prompt, 'prompt');
+          if (refusal) { problems.push(oneLine(refusal.message, 300)); continue; }
+        }
+        if (strict) {
+          const proseBody = p => p.blocks.reduce((s, b) => s.replace(b[0], ''), p.text).replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '').trim();
+          let before = null;
+          try { before = baseVisible.has(from) ? readPrompt(baseRoot, baseVisible, from) : null; } catch { before = null; }
+          const baseApproved = before && (
+            (before.error === 'interface-missing' && !prompt.frontmatter)
+            || (before.frontmatter && !promptRefusal(before, 'prompt') && prompt.frontmatter && before.interface.reason === prompt.interface.reason)
+            || (!before.error && !before.frontmatter && !promptRefusal(before, 'prompt') && before.interface.status === 'approved'
+              && (prompt.frontmatter ? before.interface.kind === 'native-only' && before.interface.reason === prompt.interface.reason : before.interface.kind !== 'native-only'))
+          );
+          if (baseApproved && proseBody(before) === proseBody(prompt)) continue;
+          if (reviewed) continue;
+          const hash = proseSha256(prompt.rawText);
+          const recorded = journal.some(e => e.actor?.kind === 'terminal' && e.prompts.some(p => p.path === path && p.proseSha256 === hash));
+          if (!recorded) problems.push(`${path} changed, and strict_approvals requires a person's approval (pdd approve ${path} or a trusted GitHub review)`);
+        }
         continue;
       }
       const refusal = promptRefusal(prompt, 'prompt');
@@ -3757,43 +4064,78 @@ async function agentStop(ctx, job, seen, quiet) {
   recordPartTelemetry(ctx, job, job.agent, job.role, seen);
   const service = serviceProblem(ctx, job.agent), hang = service ? null : repeatedHang(job);
   if (hang) return issueStop(ctx, job, hang);
-  if (service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin) {
-    if (!await cleanupPart(ctx, job, job.agent, job.role)) return;
-    const next = await ctx.ports.exhaustLogin({ loginId: job.agent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service });
-    if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
-      job.poolRotations = (job.poolRotations ?? 0) + 1;
-      clearPoolExhausted(ctx);
+  const mainPooled = service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin
+    ? (job.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
+    : false;
+  if (service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin && mainPooled) {
+    const prevAgent = job.agent;
+    const rateClass = classifyRateLimitFailure(service, prevAgent?.accountWindows);
+    if (!await cleanupPart(ctx, job, prevAgent, job.role)) return;
+    const restartStepWith = async (selected, markBurstRetried = false) => {
       const resetTarget = Number.isSafeInteger(job.pr) && job.head ? job.head : `origin/${ctx.state.baseBranch}`;
       await ctx.git(['reset', '-q', '--hard', resetTarget], job.worktree).catch(() => {});
       await ctx.git(['clean', '-fdq'], job.worktree).catch(() => {});
       if (job.role === 'build') {
         const others = await openIssuesBrief(ctx, job).catch(() => '');
-        job.agent = startJob(ctx, job, 'build', job.worktree, result => buildPrompt(ctx, job, result, others), null, {}, next);
+        job.agent = startJob(ctx, job, 'build', job.worktree, result => buildPrompt(ctx, job, result, others), null, {}, selected);
       } else if (job.role === 'repair') {
-        job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, job.repairReds ?? [], result), null, {}, next);
+        job.agent = startJob(ctx, job, 'repair', job.worktree, result => repairPrompt(ctx, job, job.repairReds ?? [], result), null, {}, selected);
       } else if (job.role === 'conflict') {
         const info = job.conflict?.info ?? { files: job.conflict?.files ?? [], hunks: '' };
-        job.agent = startJob(ctx, job, 'conflict', job.worktree, result => conflictPrompt(ctx, job, info, result), null, {}, next);
+        job.agent = startJob(ctx, job, 'conflict', job.worktree, result => conflictPrompt(ctx, job, info, result), null, {}, selected);
       }
+      if (markBurstRetried && object(job.agent)) job.agent.burstRetried = true;
       job.progress = { sig: null, at: ctx.now(), running: false };
       delete job.overdue;
       ctx.saveJob(job);
-      return;
-    }
-    const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-    if (Number.isSafeInteger(job.pr)) {
-      if (job.role === 'repair') {
-        job.repairs = Math.max(0, (job.repairs ?? 1) - 1);
-        if (Array.isArray(job.rounds) && job.rounds.length) job.rounds = job.rounds.slice(0, -1);
-        delete job.repairReproduce;
-      } else if (job.role === 'conflict') {
-        job.conflictExits = Math.max(0, (job.conflictExits ?? 1) - 1);
-        delete job.conflict;
+    };
+    if (prevAgent?.cloud && rateClass === 'burst_rate_limit' && !prevAgent?.burstRetried && ctx.ports.selectLogin) {
+      await (ctx.ports.sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(ctx.ports.burstRetryMs ?? 150);
+      const same = await ctx.ports.selectLogin({ preferredAccountId: prevAgent.loginId, fresh: true });
+      if (same?.state === 'ready' && same?.login?.id === prevAgent.loginId) {
+        await restartStepWith(same, true);
+        return;
       }
-      job.agent = null;
-      return pausePrForPool(ctx, job, poolOut, service);
+      if (same?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, same.poolSize ?? 4)) {
+        await ctx.ports.exhaustLogin?.({
+          loginId: prevAgent?.loginId ?? ctx.state.agent?.id,
+          resetAt: null,
+          reason: service,
+          accountWindows: prevAgent?.accountWindows ?? null,
+          markTriedOnly: true,
+        });
+        job.poolRotations = (job.poolRotations ?? 0) + 1;
+        clearPoolExhausted(ctx);
+        await restartStepWith(same, false);
+        return;
+      }
     }
-    return end(ctx, job, cause('job', 'no-result', `all logins in the pool reached quota limits: "${service}"`, { service, owner: 'service', poolExhausted: true }));
+    const next = await ctx.ports.exhaustLogin({ loginId: prevAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevAgent?.accountWindows ?? null });
+    if (next !== null) {
+      if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
+        job.poolRotations = (job.poolRotations ?? 0) + 1;
+        clearPoolExhausted(ctx);
+        await restartStepWith(next, false);
+        return;
+      }
+      const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
+      if (Number.isSafeInteger(job.pr)) {
+        if (job.role === 'repair') {
+          job.repairs = Math.max(0, (job.repairs ?? 1) - 1);
+          if (Array.isArray(job.rounds) && job.rounds.length) job.rounds = job.rounds.slice(0, -1);
+          delete job.repairReproduce;
+        } else if (job.role === 'conflict') {
+          job.conflictExits = Math.max(0, (job.conflictExits ?? 1) - 1);
+          delete job.conflict;
+        }
+        job.agent = null;
+        return pausePrForPool(ctx, job, poolOut, service);
+      }
+      const endMsg = poolOut?.cloud && poolOut?.wakeAt
+        ? `Waiting on AI quota until ${poolOut.wakeAt}`
+        : `all logins in the pool reached quota limits: "${service}"`;
+      return end(ctx, job, cause('job', 'no-result', endMsg, { service, owner: 'service', poolExhausted: true }));
+    }
   }
   const said = service ? `: the AI service said "${service}" (an agent account or service problem, not this issue)` : '';
   const text = quiet ? `${quietText(ctx, `${job.role} agent`)}${said}`
@@ -4308,8 +4650,8 @@ async function finishLocal(ctx, job, outcome, text) {
 // agent log: the last error event in its last 40 lines, or one of its last 5 plain lines.
 const SERVICE_WORDS = new RegExp([
   /\bmodel is (?:at|over) capacity\b/, /\bis out of credits\b/, /\bcredit balance is too low\b/, /\binsufficient[_ ](?:quota|credits?|funds)\b/, /\bexceeded your current quota\b/,
-  /\bresource_exhausted\b/, /\bquota (?:has been )?exhausted\b/, /\b(?:weekly|daily|monthly|spending) limit\b/, /\bspend[_ ]control\b/,
-  /\bhit your (?:usage|rate) limit\b/, /\busage limit (?:reached|exceeded)\b/, /\brate limit (?:reached|exceeded)\b/, /\brate_limit_(?:error|exceeded)\b/, /\btoo many requests\b/,
+  /\bresource_exhausted\b/, /\bquota (?:has been )?exhausted\b/, /\b(?:weekly|daily|monthly|spending)[_ ](?:usage[_ ])?limit\b/, /\bspend[_ ]control\b/,
+  /\bhit your (?:usage|rate) limit\b/, /\busage[_ ]limit[_ ](?:reached|exceeded)\b/, /\brate[_ ]limit[_ ](?:reached|exceeded|error)\b/, /\btoo many requests\b/,
   /\boverloaded_error\b/, /\bnot logged in\b/, /\bplease (?:run \/login|log ?in|sign ?in)\b/, /\binvalid[_ ]api[_ ]key\b/, /\bauthentication_error\b/,
 ].map(re => re.source).join('|'), 'i');
 // In a terminal error event a clear account or service phrase counts too (an ordinary test error keeps its strike).
@@ -4665,9 +5007,16 @@ async function sweepFiles(ctx) {
 const pddWords = (fs, part) => [pddCheckFile, skillsCheckFile].map(file => readJson(fs, file(part.log ?? ''), null)?.line).filter(named).map(line => `; ${oneLine(line, 300)}`).join('');
 const runtimeWords = job => runtimeWaiting(job) ? `; Runtime: waits for the interpreter maintenance since ${utcClock(job.runtimeWait.maintenance)}${job.runtimeWait.until ? ` (until ${utcClock(job.runtimeWait.until)})` : ''}; no slot`
   : runtimeCurrent(job) && job.runtimeWait.state === 'sent' ? '; Runtime: the check that was not sent runs again' : '';
-const poolWords = job => poolWaiting(job) ? `; login pool: waits until ${new Date(job.stepStop.until).toISOString()}; no slot` : '';
+const poolWords = job => poolWaiting(job)
+  ? (job.stepStop?.cloud && job.stepStop?.wakeAt
+      ? `; Waiting on AI quota until ${job.stepStop.wakeAt}; no slot`
+      : `; login pool: waits until ${new Date(job.stepStop.until).toISOString()}; no slot`)
+  : '';
 function poolLines(machine) {
   if (!machine.poolOut) return [];
+  if (machine.poolOut.cloud && machine.poolOut.wakeAt) {
+    return [`Waiting on AI quota until ${machine.poolOut.wakeAt}.`];
+  }
   const since = new Date(machine.poolOut.since).toISOString();
   const tail = Number.isFinite(machine.poolOut.resetAt)
     ? `next reset at ${new Date(machine.poolOut.resetAt).toISOString()}.`

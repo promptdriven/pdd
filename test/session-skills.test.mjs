@@ -66,6 +66,7 @@ function packageCopy(t) {
   const sandbox = temp(t), pkg = join(sandbox, 'installed "pkg"');
   mkdirSync(pkg);
   for (const name of ['src', 'bin', 'package.json', 'docs', 'skills']) cpSync(join(root, name), join(pkg, name), { recursive: true });
+  symlinkSync(join(root, 'node_modules'), join(pkg, 'node_modules'), 'dir');
   const home = join(sandbox, 'home'), project = join(sandbox, 'project $(x) "q"');
   for (const dir of [home, project]) mkdirSync(dir);
   const agentBin = join(sandbox, 'agent-bin');

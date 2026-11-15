@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {fillHashes} from '../../../src/runtime-seam.mjs';
 import {sourceFingerprint} from '../../../src/workflow-replay.mjs';
 import {put,readJson,scenario,valuePrompt,sha,packageRoot} from './world.mjs';
 
@@ -20,7 +21,7 @@ export function scriptedAgent(w) {
     put(root,'user_stories/value.md','As a user, I want the value to be two, so that the result follows my request.\n\n## Acceptance criteria\n\n1. The value is 2.\n');
     put(root,'tests/value.json',scenario);
     put(root,'test/value.test.mjs',nativeTest);
-    await w.command(['test','--fill-hash'],{cwd:root});
+    fillHashes({root});
   };
   a.native=(mutant=false)=>{
     const r=spawnSync(process.execPath,['--test','test/value.test.mjs'],{cwd:w.record().root,env:{...w.env,...(mutant?{FACTORY_MUTANT:'1'}:{})},encoding:'utf8',timeout:10000});
@@ -120,7 +121,7 @@ export function scriptedAgent(w) {
         const fresh=JSON.parse(promptResult.stdout);assert.ok(fresh.rows.every(row=>row.state==='passed'));
         // Keep the expected vector fixed; only the source snapshot changes.
         put(w.mergeCheckout,'value.prompt.md',oldPrompt);
-        await w.command(['test','--fill-hash'],{cwd:w.mergeCheckout,actor:'checker'});
+        fillHashes({root:w.mergeCheckout});
         oldPromptResult=await w.command(['test','value','--cache-clear','--json'],{cwd:w.mergeCheckout,actor:'checker',allowFailure:true});
         if(codeOnly) {
           assert.equal(oldPromptResult.code,0,'unchanged old prompt must pass');

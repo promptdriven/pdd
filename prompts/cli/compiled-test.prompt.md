@@ -8,4 +8,4 @@ The JSON report and `.pdd/code-test/latest.json` have `target: "code"`, `commit`
 
 ## Dependencies
 
-[Runtime preflight](runtime-preflight.prompt.md) supplies Story selection, source boundaries, scenario shape, entry parsing, and schema checks. [Scenario JSON](scenario-json.prompt.md) owns exact integer scenario parsing and serialization. [Workspace](runtime-workspace.prompt.md) owns workspace access rules. These are required context for this checker.
+[Runtime seam](runtime-seam.prompt.md#public-contract) supplies Story selection, source boundaries, scenario shape, entry parsing, schema checks, exact integer scenario parsing and serialization, and workspace access rules from `@promptdriven/runtime-client`. These are required context for this checker.

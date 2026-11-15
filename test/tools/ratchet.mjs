@@ -437,6 +437,9 @@ function namespaceUse(F, i) {
   return ESCAPE;
 }
 
+const PACKAGE = Symbol('package');
+const isPackage = spec => typeof spec === 'string' && !spec.startsWith('.') && !spec.startsWith('/');
+
 function resolveSpec(from, spec, files) {
   if (typeof spec !== 'string' || !spec.startsWith('.')) return null;
   const target = posix.normalize(posix.join(posix.dirname(from), spec.split('?')[0]));
@@ -476,6 +479,7 @@ function references(F, files) {
       if (isP(toks[k + 1], '.') || depth[k] !== 0) continue;
       const decl = staticImport(F, k);
       const to = decl && resolveSpec(F.rel, decl.spec, files);
+      if (!to && isPackage(decl?.spec)) for (const local of decl.locals) imported.set(local, PACKAGE);
       if (!to) continue;
       bind(to, 'static', decl.ns ?? { names: decl.names });
       for (const local of decl.locals) imported.set(local, to);
@@ -484,7 +488,7 @@ function references(F, files) {
     if (t.v === 'export' && depth[k] === 0) {
       const decl = exportDecl(F, k);
       const to = decl.spec && resolveSpec(F.rel, decl.spec, files);
-      exports.push(...decl.exports.map(e => ({ ...e, from: to || null })));
+      exports.push(...decl.exports.map(e => ({ ...e, from: to || (isPackage(decl.spec) ? PACKAGE : null) })));
       for (const i of decl.listed) listed.add(i);
       if (to) refs.push({ to, kind: 'static', names: decl.names });
       continue;
@@ -655,7 +659,7 @@ function testOnlyExports(host, info, refs, prodStrings) {
     const prod = ins.filter(r => !isTest(r.from)), test = ins.filter(r => isTest(r.from));
     const escapedProd = prod.some(r => r.names === ESCAPE), escapedTest = test.some(r => r.names === ESCAPE);
     for (const e of exports) {
-      if (e.from && inRuntime(e.from)) continue;
+      if (e.from === PACKAGE || (e.from && inRuntime(e.from))) continue;
       if (uses(prod, e.name) || (escapedProd && prodStrings.has(e.name))) continue;
       if (!uses(test, e.name) && !escapedTest) continue;
       if ((e.kind === 'decl' || e.kind === 'list') && (counts.get(e.local) ?? 0) > 1) continue;

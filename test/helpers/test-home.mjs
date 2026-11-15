@@ -1,4 +1,4 @@
-// Generated from prompts/test/test-home-isolation.prompt.md (sha256: e1491f298a2dfa4e68e9655a056ad9b8167e4a87e294a7bc904b80c47da77382).
+// Generated from prompts/test/test-home-isolation.prompt.md (sha256: 405c2beb5a29364ca2deb4ffb92275da3c8b224efb39924e3ea000b0b3a329d9).
 // Import before production modules in focused tests. npm test preloads it too.
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import os, { tmpdir } from 'node:os';
