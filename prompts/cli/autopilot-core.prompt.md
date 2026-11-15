@@ -1168,9 +1168,11 @@ runs until its end):
    provider failure, maintenance, a busy or interrupted check) is never red here: the
    engine sends such a check again (B5). Likewise, a saved row skipped locally with
    `real-binding-unavailable` (no live binding available in this sandbox, zero provider
-   calls) is treated as a local skip rather than an author refusal or coverage loss, and
-   its generic operator-reconciliation `client_advice` is never fed into the repair
-   prompt as a defect or `needs-person` trigger. When Autopilot queues the repository
+   calls) is treated as a local skip rather than an author refusal or coverage loss
+   (provided every test of that Story at the head has a passing or skipped/service
+   deciding check, never excusing unrun sibling tests of the same Story), and its generic
+   operator-reconciliation `client_advice` is never fed into the repair prompt as a defect
+   or `needs-person` trigger. When Autopilot queues the repository
    full test suite (`boundSuiteCommand`, exported), it bounds `node --test` worker
    concurrency (`--test-concurrency`) to `Math.max(1, Math.min(6, shareCpus))` when
    `shareCpus` is configured (`ports.machine` or `ports.env.PDD_CHECK_CPUS`, or directly on a

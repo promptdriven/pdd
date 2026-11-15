@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 3a05136d550ff1a894e38e7809e583122c98c34424b7c3c3fbda30e11fc0fd80).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 4cf6a1a5b0695ed9d5e194d9825fef84cdc51b14c7be20b8c3dba3014cfade87).
 import * as nativeFs from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -2174,6 +2174,17 @@ const localSkipRow = row => object(row) && row.pass !== true && !failedRow(row) 
 const serviceRow = row => row.pass !== true && !failedRow(row) && !refusedRow(row) && !localSkipRow(row);
 const actionableRowAdvice = row => [...strings(row?.advice), ...(typeof row?.client_advice === 'string' ? [row.client_advice] : [])]
   .filter(text => !/reconcile possible external effects with the operator/i.test(text));
+function decidingRowForTest(scopes, story, test) {
+  const of = scopes.get(story);
+  return of?.get(test.path) ?? (test.files ?? []).map(file => of?.get(file)).find(Boolean) ?? of?.get('*');
+}
+function allStoryTestsCovered(scopes, evidence, story, pred) {
+  const own = (evidence?.tests ?? []).filter(test => (test.stories ?? []).includes(story) && !test.error);
+  return own.every(test => {
+    const row = decidingRowForTest(scopes, story, test);
+    return Boolean(row && pred(row));
+  });
+}
 // #3227 fix 1: each changed Story that the T01 cover does not check is checked against its deciding rows, "not run" too:
 // failed checks are red, a refusal that pdd can fix is red once, and a Story that passed at the merge base must not lose
 // its pass (a service-only row is not red: the engine sends it again).
@@ -2201,6 +2212,8 @@ async function savedRowReds(ctx, job, head, evidence, stories) {
     else if (!rows.every(row => row.pass === true || serviceRow(row) || localSkipRow(row))) {
       const codes = [...new Set(rows.flatMap(nonBindingRefusals))];
       lost.push([story, rows.some(refusedRow) ? `a check that was refused before execution${codes.length ? ` (${codes.join(', ')})` : ''}` : 'a check that did not pass']);
+    } else if (!allStoryTestsCovered(scopes, evidence, story, row => row.pass === true || serviceRow(row) || localSkipRow(row))) {
+      lost.push([story, 'unrun pdd test checks at this source']);
     }
   }
   job.refusalReds = [...once].slice(-50);
@@ -2299,7 +2312,8 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   const couldNotCheck = row => serviceRow(row) && (row.sent === false || strings(row.states).some(state => ['unknown', 'not_run', 'partial'].includes(state)));
   const serviceOnly = story => deciding.has(story) && [...deciding.get(story).values()].every(couldNotCheck);
   const localSkipOnly = story => allDeciding.has(story) && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
-    && [...allDeciding.get(story).values()].some(localSkipRow);
+    && [...allDeciding.get(story).values()].some(localSkipRow)
+    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row));
   const waiting = open.filter(story => serviceOnly(story) || localSkipOnly(story)), checkedCount = consumers.filter(passingNow).length;
   const consumerNote = consumers.length ? { total: consumers.length, checked: checkedCount, open: waiting.slice(0, 50), line: waiting.length ? `Runtime: not run (${consumers.length} Stories reach ${someFiles(prompts)}; checked ${checkedCount})` : null } : null;
   const consumerReds = open.filter(story => !serviceOnly(story) && !localSkipOnly(story)).map(story => `${story} reaches a changed prompt (${someFiles(prompts)}; its tests upload it), but it has no passing pdd test check at this source${deciding.has(story) ? ' (the latest check of it at this source did not pass)' : ''} and no Runtime line. Run "$PDD_CLI" test for ${story} at this head, or write "Runtime: not run (${story}: REASON)".`);
@@ -2792,7 +2806,12 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
     && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => ranBy(story, test)?.pass === true);
   const storyLocalSkipOk = story => allDeciding.has(story)
     && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
-    && [...allDeciding.get(story).values()].some(localSkipRow);
+    && [...allDeciding.get(story).values()].some(localSkipRow)
+    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row))
+    && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => {
+      const row = decidingRowForTest(allDeciding, story, test);
+      return Boolean(row && (row.pass === true || localSkipRow(row)));
+    });
   const existingNotRun = story => lines.find(l => l.story === story && l.verdict === 'not-run') ?? null;
 
   if (!targetStories.every(story => storyPassOk(story) || storyLocalSkipOk(story) || Boolean(existingNotRun(story)))) return;

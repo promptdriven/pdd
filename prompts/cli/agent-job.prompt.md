@@ -164,13 +164,17 @@ is uncertain; those records let a later tick retry without a live controller.
   wrapper's PID/start identity, the complete snapshot must find that same identity.
   A successful complete snapshot appends its resolution and retains prior attempt
   history. For a stopped, timed-out or real spec-backed job where `.processes.error`
-  was latched earlier (or the wrapper exited after a retryable snapshot attempt),
-  `cleanupAgentJob` does not stay wedged forever: it re-probes the live process table,
-  clears the stale pre-existing `.processes.error` latch, terminates captured and group
-  processes (`SIGTERM`, grace, `SIGKILL`), confirms the wrapper PID and `-pgid` process
-  group are dead (`ESRCH`), wipes `cleanupDirs`, marks `job.progress.running = false`,
-  and returns `{confirmed: true}` (still failing closed on a malformed manifest or a new
-  error written during shutdown).
+  was latched earlier (or the wrapper exited after a retryable snapshot attempt, including
+  when the prior attempt recorded `wrapper: null` and failing closed if writing the
+  resolution fails), `cleanupAgentJob` does not stay wedged forever: it re-probes the live
+  process table, skips `-job.pid` group collection and group signals (`SIGTERM`, `-job.pid`
+  liveness probes and `SIGKILL`) whenever `job.pid` has been recycled to an unrelated
+  process without `job.token` (which by POSIX rules proves the original `-job.pid` process
+  group already ended), clears the stale pre-existing `.processes.error` latch, terminates
+  captured and verified group processes (`SIGTERM`, grace, `SIGKILL`), confirms the wrapper
+  PID and `-pgid` process group are dead (`ESRCH` or recycled PID), wipes `cleanupDirs`,
+  marks `job.progress.running = false`, and returns `{confirmed: true}` (still failing
+  closed on a malformed manifest or a new error written during shutdown).
 
   When the direct child exits, before the wrapper records that exit, the wrapper also
   reads the current user's process table only when the saved spec has an explicit

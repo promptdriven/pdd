@@ -16,10 +16,13 @@ import {
 import { boundSuiteCommand, runtimeVerdicts } from '../src/autopilot-core.mjs';
 import {
   isCreditOrResetAccount,
+  loadLoginPool,
   selectCloudPoolLogin,
   selectPoolLogin,
   writeCloudAccountsState,
 } from '../src/login-pool.mjs';
+import { runStepAgentProcess } from '../src/agent-adapters.mjs';
+import { runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 import {
   NET_BLOCKED_CODE,
   installOfflineNetGuard,
@@ -458,4 +461,166 @@ test('Fix 4b: Cloud and local login selection skip credits/allowReset/allow_rese
     blockedAuto.unavailable.map(u => [u.id, u.reason]),
     [['only-credit', 'credit_or_reset_guarded'], ['only-reset', 'credit_or_reset_guarded']],
   );
+});
+
+test('Review Fix 1 & 2: cleanupAgentJob handles null wrapper in retryPending recovery, fails closed on resolution write error, and never signals recycled -job.pid process groups', async t => {
+  // 1. retryPending with wrapper: null resolves cleanly without TypeError.
+  const dir1 = makeTempDir(t, 'pdd-retry-null-wrap-');
+  const token1 = join(dir1, 'nullwrap.spec.json');
+  const exit1 = join(dir1, 'nullwrap.exit.json');
+  writeFileSync(token1, JSON.stringify({ command: 'codex', args: ['exec'], cwd: dir1, input: join(dir1, 'in'), log: join(dir1, 'log'), exit: exit1 }));
+  writeFileSync(`${token1}.processes.cleanup-snapshot.json`, JSON.stringify({
+    schema: 1,
+    pid: 81000,
+    token: token1,
+    attempts: [{ at: 1000, reason: 'ps unavailable', wrapper: null }],
+    resolutions: [],
+  }));
+  const proof1 = await cleanupAgentJob(
+    { pid: 81000, token: token1, exit: exit1, stopped: true },
+    { alive: () => false, list: () => [{ pid: process.pid, ppid: 1, pgid: process.pid, rss: 10, start: '@me', args: 'node test' }], kill: () => {} },
+  );
+  assert.equal(proof1.confirmed, true);
+  const resolved1 = JSON.parse(readFileSync(`${token1}.processes.cleanup-snapshot.json`, 'utf8'));
+  assert.equal(resolved1.resolutions.length, 1);
+  assert.equal(resolved1.resolutions[0].wrapper, null);
+
+  // 2. PID recycled to an unrelated process group leader: never collect pgid === job.pid or send SIGTERM/SIGKILL to -job.pid.
+  const dir2 = makeTempDir(t, 'pdd-recycled-pgid-');
+  const token2 = join(dir2, 'recycled.spec.json');
+  const exit2 = join(dir2, 'recycled.exit.json');
+  const recycledPid = 82000;
+  writeFileSync(token2, JSON.stringify({ command: 'codex', args: ['exec'], cwd: dir2, input: join(dir2, 'in'), log: join(dir2, 'log'), exit: exit2 }));
+  writeFileSync(`${token2}.processes.error`, 'stale error\n', { mode: 0o600 });
+
+  const signals = [];
+  const unrelatedLeader = { pid: recycledPid, ppid: 1, pgid: recycledPid, rss: 20, start: '@new-unrelated', args: '/usr/bin/python3 unrelated-daemon.py' };
+  const unrelatedChild = { pid: 82001, ppid: recycledPid, pgid: recycledPid, rss: 15, start: '@new-child', args: '/usr/bin/python3 worker.py' };
+  const proof2 = await cleanupAgentJob(
+    { pid: recycledPid, token: token2, exit: exit2, processesUncertain: true, stopped: true },
+    {
+      recoverStopped: true,
+      alive: () => false,
+      list: () => [unrelatedLeader, unrelatedChild],
+      kill: (pid, sig) => { signals.push([pid, sig]); },
+      sleep: async () => {},
+      grace: 5,
+      poll: 1,
+    },
+  );
+  assert.equal(proof2.confirmed, true, 'recycled PID proves original -job.pid process group already ended');
+  assert.deepEqual(signals, [], 'zero signals sent to recycled PID or its unrelated process group');
+});
+
+test('Review Fix 3: real-binding-unavailable on one test never excuses unrun sibling tests of the same Story', async t => {
+  const story = 'user_stories/multi-test-webhook.md';
+  const testA = 'tests/webhook-live.json';
+  const testB = 'tests/webhook-validation.json';
+
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit(story, '# Webhook\n\nDeliver and validate webhook.\n');
+  w.baseCommit(testA, '{"story":"user_stories/multi-test-webhook.md"}\n');
+  w.baseCommit(testB, '{"story":"user_stories/multi-test-webhook.md"}\n');
+  w.issue(17);
+  await w.tick();
+  writeIn(w.job(17, 'build').cwd, story, '# Webhook\n\nDeliver and validate signed webhook.\n');
+
+  // Only testA has a saved local skip; sibling testB was NEVER run, while the merge base passed both!
+  w.runtimeEvidence = async ({ base }) => base
+    ? {
+        stories: [{ story, pass: true, current: true, at: 500, tests: [testA, testB] }],
+        storyFiles: [story],
+        tests: [
+          { path: testA, files: [testA], stories: [story] },
+          { path: testB, files: [testB], stories: [story] },
+        ],
+      }
+    : {
+        stories: [{
+          story,
+          pass: false,
+          current: true,
+          sent: false,
+          at: 1000,
+          tests: [testA],
+          reason: { code: 'real-binding-unavailable' },
+          codes: ['real-binding-unavailable'],
+          refusals: ['real-binding-unavailable'],
+          states: ['refused'],
+        }],
+        storyFiles: [story],
+        tests: [
+          { path: testA, files: [testA], stories: [story] },
+          { path: testB, files: [testB], stories: [story] },
+        ],
+        footprints: { [story]: [] },
+      };
+
+  const { pr } = w.build(17, {
+    body: `Fixes #17\n\nRuntime: not run (${story}: real-binding-unavailable)\nPath: d — ${story}, change-17.txt — unowned — no contract change — Test: done check`,
+    runtime: { state: 'not-run' },
+  });
+  await w.tick();
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'unrun sibling testB must trigger repair instead of being excused by testA skip');
+  assert.match(repair.input, /unrun pdd test checks at this source/);
+  assert.equal(w.github.merges.length, 0);
+  assert.ok(pr.number > 0);
+});
+
+test('Review Fix 4: runStepAgentProcess, loadLoginPool fallback, and runAutopilotLauncher enforce credit/reset account guards', async t => {
+  const dir = makeTempDir(t, 'pdd-step-credit-guard-');
+  const env = { HOME: dir, PDD_STATE_DIR: join(dir, 'state'), PDD_TOKEN: 'pdd_test_token_123' };
+  writeCloudAccountsState({ enrolled: true, providers: ['codex'], active: {}, cooling: {} }, { env });
+
+  // 1. normalizeFallback preserves credits and allowReset / allow_reset.
+  const fbPool = loadLoginPool({ cwd: dir, env, fallbackAgent: { id: 'fb', kind: 'codex', credits: true, allow_reset: true } });
+  assert.equal(fbPool.logins[0].credits, true);
+  assert.equal(fbPool.logins[0].allowReset, true);
+
+  // 2. runStepAgentProcess skips credit/reset Cloud accounts by default and leases standard account.
+  const leasedIds = [];
+  const stepRes = await runStepAgentProcess({
+    agent: 'codex',
+    args: ['exec', '-'],
+    cwd: dir,
+    env,
+    run: async () => ({ code: 0, stdout: 'ok\n', stderr: '' }),
+    accountsPorts: {
+      fetch: async (_url, init) => {
+        const body = JSON.parse(init.body);
+        const skip = new Set(body.skip_account_ids ?? []);
+        const accounts = [
+          { account_id: 'acc-credit', label: 'c', provider: 'codex', credits: true, five_hour_used_percent: 5, weekly_used_percent: 5 },
+          { account_id: 'acc-std', label: 's', provider: 'codex', credits: false, five_hour_used_percent: 10, weekly_used_percent: 10 },
+        ];
+        const acc = accounts.find(a => !skip.has(a.account_id));
+        if (acc) leasedIds.push(acc.account_id);
+        return new Response(JSON.stringify({
+          state: 'leased',
+          pool_size: 2,
+          account: acc,
+          lease: { lease_id: `l-${acc.account_id}`, delivery_mode: 'codex_auth_json', codex_auth_json: { tokens: { access_token: 'tok', refresh_token: 'ref' } } },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    },
+  });
+  assert.equal(stepRes.code, 0);
+  assert.deepEqual(leasedIds, ['acc-credit', 'acc-std']);
+
+  // 3. runAutopilotLauncher start refuses a pool whose logins are all credit/reset-flagged before doctor or state writes.
+  const { execFileSync } = await import('node:child_process');
+  const repoDir = makeTempDir(t, 'pdd-launcher-credit-pool-');
+  execFileSync('git', ['init', '-q'], { cwd: repoDir });
+  const poolPath = join(repoDir, 'pool.json');
+  writeFileSync(poolPath, JSON.stringify({
+    reset: 'never',
+    logins: [{ id: 'credit-only', kind: 'codex', credits: true, codexHome: join(repoDir, '.cx') }],
+  }));
+  const launchRes = await runAutopilotLauncher(
+    { command: 'start', cwd: repoDir, env, label: 'pdd:autopilot', pool: poolPath },
+    { stateRoot: join(dir, 'ap-state') },
+  );
+  assert.equal(launchRes.exitCode, 1);
+  assert.match(launchRes.message, /credits or allowReset/);
 });

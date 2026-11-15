@@ -81,7 +81,7 @@ was started or claimed.` No doctor, state write, timer, tick, claim or GitHub ca
 caller requested an explicit account or login-pool override (`--agent`, `--pool`, or an explicit caller `CODEX_HOME`,
 `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` or `ANTIGRAVITY_APP_DATA_DIR` that differs from the saved `launchProfile`).
 Without an explicit override it resolves the saved agent profile (`savedProfile`); with `--agent` or `--pool` it
-targets the requested agent or first ready pool login (and with an explicit config-folder override it runs doctor in the
+targets the requested agent or first ready non-credit/non-reset pool login (refusing before doctor or state writes if every login in `--pool` is flagged with `credits` or `allowReset`, and with an explicit config-folder override it runs doctor in the
 caller's environment without pinning the old saved profile). It runs that doctor with the selected invocation
 environment and injected ports, before any start state write, admission lock, timer change, claim or GitHub mutation.
 No directory or lock is created by that resolution. On a required failure return the complete doctor report unchanged.

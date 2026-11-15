@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 8b01e6c2431c5720b891bbde50b83c6f005cdb56edecafd518101b9f6dff5353).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: d424990cc3119cfc260d7d0d65afe67c444b540949afd2d9638f4534e80f26e8).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -172,8 +172,11 @@ function cleanupSnapshotMatches(record, wrapper) {
 }
 
 function resolveCleanupSnapshot(job, record, wrapper) {
+  const known = wrapper && processIdentity(wrapper) && wrapper.pid === job.pid
+    ? { pid: wrapper.pid, start: wrapper.start, args: wrapper.args }
+    : null;
   const resolved = { ...record, resolutions: [...record.resolutions,
-    { at: Date.now(), attempt: record.attempts.length, wrapper: { pid: wrapper.pid, start: wrapper.start, args: wrapper.args } }] };
+    { at: Date.now(), attempt: record.attempts.length, wrapper: known }] };
   try { writeAtomic(cleanupSnapshotFile(job.token), JSON.stringify(resolved)); } catch { return null; }
   return resolved;
 }
@@ -527,7 +530,10 @@ export async function cleanupAgentJob(job, ports = {}) {
       wipeIfDead();
       return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
     }
+    const isPidRecycledInRows = rows => Array.isArray(rows) && Number.isSafeInteger(job?.pid) && job.pid > 1
+      && rows.some(r => r.pid === job.pid && !String(r.args).includes(job.token));
     const root = probeRows.find(row => row.pid === job.pid && String(row.args).includes(job.token));
+    const pidRecycledAtProbe = isPidRecycledInRows(probeRows);
     if (live && !root) return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
     let liveTree = [];
     if (root) {
@@ -539,7 +545,7 @@ export async function cleanupAgentJob(job, ports = {}) {
     for (const row of [...(processManifest(saved) ? saved : []), ...liveTree]) {
       if (processIdentity(row)) byKey.set(`${row.pid}:${row.start}`, row);
     }
-    if (Number.isSafeInteger(job?.pid) && job.pid > 1) {
+    if (!pidRecycledAtProbe && Number.isSafeInteger(job?.pid) && job.pid > 1) {
       for (const row of probeRows) {
         if (row.pgid === job.pid && processIdentity(row) && (row.pid !== job.pid || Boolean(root))) {
           byKey.set(`${row.pid}:${row.start}`, row);
@@ -553,7 +559,7 @@ export async function cleanupAgentJob(job, ports = {}) {
     const graceMs = ports.grace ?? GRACE_MS;
     const pollMs = Math.max(1, Math.min(ports.poll ?? 50, Math.max(1, graceMs)));
     stopAgentJob(job, ports);
-    if (!live && Number.isSafeInteger(job?.pid) && job.pid > 1 && probeRows.some(r => r.pgid === job.pid && r.pid !== job.pid)) {
+    if (!live && !pidRecycledAtProbe && Number.isSafeInteger(job?.pid) && job.pid > 1 && probeRows.some(r => r.pgid === job.pid && r.pid !== job.pid)) {
       try { signalFn(-job.pid, 'SIGTERM'); } catch {}
     }
     const targets = [...byKey.values()];
@@ -566,6 +572,7 @@ export async function cleanupAgentJob(job, ports = {}) {
       try { after = (ports.list ?? lifecycleRows)(ports); } catch { return false; }
       if (!Array.isArray(after)) return false;
       if (Number.isSafeInteger(job?.pid) && job.pid > 1) {
+        if (isPidRecycledInRows(after)) return true;
         if (after.some(r => r.pgid === job.pid && (r.pid !== job.pid || String(r.args).includes(job.token)))) return false;
         if (!ports.list && !ports.kill) {
           try { process.kill(-job.pid, 0); return false; }
@@ -578,7 +585,11 @@ export async function cleanupAgentJob(job, ports = {}) {
       const deadline = Date.now() + graceMs;
       while (!groupDead() && Date.now() < deadline) await sleepFn(pollMs);
       if (!groupDead()) {
-        try { signalFn(-job.pid, 'SIGKILL'); } catch {}
+        let beforeKill;
+        try { beforeKill = (ports.list ?? lifecycleRows)(ports); } catch { beforeKill = null; }
+        if (Array.isArray(beforeKill) && !isPidRecycledInRows(beforeKill)) {
+          try { signalFn(-job.pid, 'SIGKILL'); } catch {}
+        }
         const killDeadline = Date.now() + graceMs;
         while (!groupDead() && Date.now() < killDeadline) await sleepFn(pollMs);
       }
@@ -589,7 +600,10 @@ export async function cleanupAgentJob(job, ports = {}) {
     }
     if (retryPending) {
       const resolvedWrapper = root ?? retryRecord.attempts?.at(-1)?.wrapper ?? null;
-      resolveCleanupSnapshot(job, retryRecord, resolvedWrapper);
+      if (!resolveCleanupSnapshot(job, retryRecord, resolvedWrapper)) {
+        markProcessUncertain(job, 'cleanup snapshot history resolution failed');
+        return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
+      }
     }
   } else {
     if (live) {

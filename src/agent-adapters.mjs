@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 4ec894c93915e97f6ada0a7e3a544d8e6bd1aa08de0bdcb7472eca1362f93bc7).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: c9a7679c111fd48754dffc2a37b084e6cd4df2f7997d7075a319787387a1814b).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';
@@ -161,7 +161,7 @@ function composeStepChildArgs(launch,caller,hasExplicitEffortOption) {
  }
  return [...injected,...rest];
 }
-export async function runStepAgentProcess({agent='codex',definition=null,step=null,args=[],model=null,reasoningEffort=null,tiering=null,cwd,env=process.env,input='',signal,timeoutMs=120000,maxBytes=131072,run=runAgentProcess,now=Date.now,accountsPorts={}}={}) {
+export async function runStepAgentProcess({agent='codex',definition=null,step=null,args=[],model=null,reasoningEffort=null,tiering=null,cwd,env=process.env,input='',signal,timeoutMs=120000,maxBytes=131072,run=runAgentProcess,now=Date.now,allowCredits=false,accountsPorts={}}={}){
  const childEnv={...env,...definition?.env};
  const overrideExplicitModel=Boolean(tiering&&typeof tiering==='object'&&tiering.overrideExplicitModel===true);
  const hasModelOpt=model!==null&&model!==undefined;
@@ -220,6 +220,11 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
      throw Object.assign(new Error(msg),{code:'all_cooling',wakeAt:leaseReply.wake_at??null});
     }
     const acc=leaseReply?.account;
+    if(!allowCredits&&acc&&cloudMod.isCreditOrResetAccount?.(acc)){
+     if(acc.account_id&&!triedIds.includes(acc.account_id))triedIds.push(acc.account_id);
+     if(triedIds.length<24)continue;
+     throw Object.assign(new Error(`All non-credit ${launch.agent} Cloud accounts are paused or cooling.`),{code:'all_cooling',wakeAt:null});
+    }
     if(burstRetried&&prevAccountId&&acc?.account_id&&acc.account_id!==prevAccountId){
      if(!triedIds.includes(prevAccountId))triedIds.push(prevAccountId);
      burstRetried=false;
