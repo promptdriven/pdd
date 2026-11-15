@@ -183,7 +183,10 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
   }else{
    const triedIds=[];
    let burstRetried=false,prevAccountId=null;
-   for(;;){
+   for(let round=0;;round++){
+    if(round>=24){
+     throw Object.assign(new Error(`All ${launch.agent} Cloud accounts are paused or cooling.`),{code:'all_cooling',wakeAt:null});
+    }
     let leaseReply=null;
     try{
      leaseReply=await cloudMod.leaseCloudAccount({provider:launch.agent,skipAccountIds:triedIds,holderId:`step-${phase||'cli'}`},{cwd,env:childEnv,timeoutMs:accountsPorts?.leaseTimeoutMs??3000},accountsPorts);
@@ -221,9 +224,11 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
     }
     const acc=leaseReply?.account;
     if(!allowCredits&&acc&&cloudMod.isCreditOrResetAccount?.(acc)){
-     if(acc.account_id&&!triedIds.includes(acc.account_id))triedIds.push(acc.account_id);
-     if(triedIds.length<24)continue;
-     throw Object.assign(new Error(`All non-credit ${launch.agent} Cloud accounts are paused or cooling.`),{code:'all_cooling',wakeAt:null});
+     if(!acc.account_id||triedIds.includes(acc.account_id)||triedIds.length>=24){
+      throw Object.assign(new Error(`All non-credit ${launch.agent} Cloud accounts are paused or cooling.`),{code:'all_cooling',wakeAt:null});
+     }
+     triedIds.push(acc.account_id);
+     continue;
     }
     if(burstRetried&&prevAccountId&&acc?.account_id&&acc.account_id!==prevAccountId){
      if(!triedIds.includes(prevAccountId))triedIds.push(prevAccountId);

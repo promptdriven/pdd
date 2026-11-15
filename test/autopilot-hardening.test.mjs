@@ -608,6 +608,55 @@ test('Review Fix 4: runStepAgentProcess, loadLoginPool fallback, and runAutopilo
   assert.equal(stepRes.code, 0);
   assert.deepEqual(leasedIds, ['acc-credit', 'acc-std']);
 
+  // 2b. Sticky/malformed credit lease (repeats same account_id or omits account_id) terminates immediately with all_cooling instead of looping.
+  let stickyCalls = 0;
+  await assert.rejects(
+    () => runStepAgentProcess({
+      agent: 'codex',
+      args: ['exec', '-'],
+      cwd: dir,
+      env,
+      run: async () => assert.fail('must never execute on sticky credit account'),
+      accountsPorts: {
+        fetch: async () => {
+          stickyCalls += 1;
+          return new Response(JSON.stringify({
+            state: 'leased',
+            pool_size: 1,
+            account: { account_id: 'acc-sticky-credit', label: 'c', provider: 'codex', credits: true },
+            lease: { lease_id: 'l-sticky', delivery_mode: 'codex_auth_json', codex_auth_json: { tokens: { access_token: 'tok', refresh_token: 'ref' } } },
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        },
+      },
+    }),
+    { code: 'all_cooling' },
+  );
+  assert.equal(stickyCalls, 2, 'stops as soon as repeated credit account_id is seen');
+
+  let missingIdCalls = 0;
+  await assert.rejects(
+    () => runStepAgentProcess({
+      agent: 'codex',
+      args: ['exec', '-'],
+      cwd: dir,
+      env,
+      run: async () => assert.fail('must never execute on missing-id credit account'),
+      accountsPorts: {
+        fetch: async () => {
+          missingIdCalls += 1;
+          return new Response(JSON.stringify({
+            state: 'leased',
+            pool_size: 1,
+            account: { account_id: '', label: 'c', provider: 'codex', allow_reset: true },
+            lease: { lease_id: 'l-noid', delivery_mode: 'codex_auth_json', codex_auth_json: { tokens: { access_token: 'tok', refresh_token: 'ref' } } },
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        },
+      },
+    }),
+    { code: 'all_cooling' },
+  );
+  assert.equal(missingIdCalls, 1, 'stops immediately when credit/reset account omits account_id');
+
   // 3. runAutopilotLauncher start refuses a pool whose logins are all credit/reset-flagged before doctor or state writes.
   const { execFileSync } = await import('node:child_process');
   const repoDir = makeTempDir(t, 'pdd-launcher-credit-pool-');
