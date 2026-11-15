@@ -308,7 +308,7 @@ reply.
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "f12d99273abeae24dc4584162ba38dab30c7fe6bcf875e5223f194f01204cbb7",
+  "prose_sha256": "ea8ba6338e82e33855d30bde8773a91171f854de526973698db3e2e1fd876573",
   "entries": [
     {
       "operation": "runPdd",
@@ -1291,3 +1291,5 @@ Dispatch each metrics route to [metrics command](metrics-command.prompt.md) with
 Dispatch `autopilot-report` to the Autopilot launcher with command report and its operands in issues, with the same reply validation and stream rules and no remote settings warning. Dispatch `autopilot-intake` the same way with command intake and `--json` as `json`. For `autopilot-start`, also pass `--engine` as `engine` and `--label` as `label`, `--mode` as `mode`, `--report` as `report`, `--decisions` as `decisions`, `--intake` as `intake`, `--agent` as `agent`, `--pool` as `pool` and `--auto-update` as `autoUpdate` when given.
 
 Route `pdd test --target code` to the local compiled Story checker without contacting the interpreter. Reject other test options except `--json` for this route.
+
+Dispatch local `accounts` by dynamically importing [Cloud accounts CLI](accounts-cli.prompt.md) (`accountsCli ?? await import('./accounts-cli.mjs')`) and calling `runAccountsCli({commandId: plan.commandId, operands: [...plan.operands], options: {...plan.options}, cwd, env, stdin}, accountsPorts)`. When `result.message` is non-empty, write it to `stdout` on exit 0 or `stderr` otherwise; keep `stdout` silent when `result.message === ''` (such as `pdd accounts sync --quiet`).

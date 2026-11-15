@@ -293,6 +293,7 @@ The pdd CLI has no merge command. In manual workflows, ask your agent to merge u
 | `pdd workflow view ISSUE` | Show the gates, approvals, pull requests and Simulator links of a run. Changes nothing. |
 | `pdd workflow open ISSUE` | Open the chat of a run. |
 | `pdd workflow approve [ISSUE] [--said WORDS]` | Approve the ready gate and its draft prompts together with your chat words. Without ISSUE, select the current worktree or sole waiting run. Without --said use person terminal y/N; agent callers must ask then use --said. Strict mode requires a person terminal. |
+| `pdd accounts` | Manage enrolled and shared Codex and Claude accounts in PDD Cloud, inspect 5-hour and weekly usage windows, and configure opt-in terminal auto-switch. |
 | `pdd help` | Show all commands. |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, and where the Prompting guide and RUNBOOK are. |
 
@@ -319,6 +320,10 @@ The [CLI reference](docs/cli.md) has every command and option.
 `pdd test`, remote `pdd lint`, `pdd simulate` and the Try tools in `pdd mcp` use the hosted PDD interpreter. The interpreter lets you in when PDD Cloud approves your GitHub account. To get access, sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the same GitHub account that `gh` uses. After the approval, access starts within 1 minute. For questions about access, [ask the team](https://github.com/promptdriven/pdd/issues/new?title=%5Baccess%5D%20Interpreter%20access%20for%20) with your GitHub login.
 
 The skills and the other commands run on your computer; `pdd lint --local` is offline.
+
+## Cloud accounts
+
+`pdd accounts` keeps your Codex and Claude logins in PDD Cloud with envelope encryption and writes only short-lived stripped passes (`refresh_token: ""`) to your local `0600` config files so only PDD Cloud refreshes tokens. Inside `pdd` and `pdd autopilot`, steps lease an account automatically, isolate Codex steps in a disposable `0700` overlay folder, stay on the same account until a 5-hour or weekly window reaches 100%, switch to the ready account whose weekly window resets soonest, and never spend usage-reset credits. Plain terminal `codex` and `claude` sessions stay untouched unless you opt in with `pdd accounts auto on` (`pdd accounts auto off` removes the wrapper cleanly). See [Cloud accounts](docs/cli.md#cloud-accounts).
 
 ## When something goes wrong
 

@@ -33,11 +33,13 @@ is uncertain; those records let a later tick retry without a live controller.
   `Error("Autopilot core jobs need codex, claude or agy")`.
 - `jobEnvironment(env)` returns a copy of `env` without keys that would join the
   caller's own agent, Herdr or coordinator session: `ANTIGRAVITY_*` (except
-  `ANTIGRAVITY_APP_DATA_DIR`), `CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_PID`,
+  `ANTIGRAVITY_APP_DATA_DIR`), `CLAUDECODE`, `CLAUDE_CODE_*` (except
+  `CLAUDE_CODE_OAUTH_TOKEN`), `CLAUDE_PID`,
   `CODEX_THREAD_ID`, `CODEX_SANDBOX*`, `HERDR_*`, `PDD_AGENT_SESSION` and
-  `PDD_AUTOPILOT_CONTEXT`. Account settings such as `CODEX_HOME` and
+  `PDD_AUTOPILOT_CONTEXT`. Account settings such as `CODEX_HOME`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL` and
   `ANTIGRAVITY_APP_DATA_DIR` stay.
-- `startAgentJob({id, dir, cwd, command, args, input, env, hung, custodyRoot}, ports)` writes
+- `startAgentJob({id, dir, cwd, command, args, input, env, hung, custodyRoot, cleanupDirs}, ports)` writes
   `dir/ID.input` (the prompt, mode 0600) and `dir/ID.spec.json`, then starts
   `node src/agent-job.mjs --wrapper SPEC` detached in its own process group, with
   `env` and no inherited stdio, and returns at once with
@@ -53,6 +55,10 @@ is uncertain; those records let a later tick retry without a live controller.
   `custodyRoot` is optional. Only a caller that will remove a known disposable
   worktree passes its root; the runner records its absolute path. `cwd` alone is
   never a custody root: a job may run in a person's persistent source tree.
+  `cleanupDirs` is optional: an array of disposable step overlay paths (`pdd-cx-*`)
+  saved in the spec and removed best-effort when the wrapper finishes (after any
+  group `SIGKILL`) and in `cleanupAgentJob` whenever the wrapper is no longer live
+  (including when `!processManifest(saved)`) or when process termination is confirmed.
 - `startAgentJob` also takes `priority` (`{nice, qos, cpus, taskset}` from the
   [machine guard](machine-guard.prompt.md)) and saves it in the spec. Every job
   runs at the lowest priority (#3231), the child and not the wrapper: the wrapper only

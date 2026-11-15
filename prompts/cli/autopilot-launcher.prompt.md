@@ -45,10 +45,10 @@ whole percent from 1 to 100: the part of this machine's CPU and memory that Auto
 saved); a later start without it keeps it, and pdd.json never sets it. Another value returns exit code 2 with `Use
 --share with a whole percent from 1 to 100, for example --share 70 (the default is 50).` before any change. `start --agent NAME`
 selects `codex`, `claude`, `gemini` or `agy` and returns exit code 2 with `Use --agent codex, claude, gemini or agy.`
-for any blank or other name before any change. `start --pool PATH` validates the login pool with `loadLoginPool` of the
-[multi-harness login pool](login-pool.prompt.md) and saves `state.poolPath` (`off` or `none` saves `"off"`, disabling
-automatic pool file discovery; a blank or invalid pool file returns exit code 2 with its validation line before any
-change). `start --auto-update release|main|off` (#2710) saves `state.autoUpdate` (default `release` when unset; another value returns
+for any blank or other name before any change. Hidden `start --pool PATH` (kept for internal local-folder pool fixtures) validates the login pool with `loadLoginPool` of the
+[Cloud accounts and login pool](login-pool.prompt.md) and saves `state.poolPath` (`off` or `none` saves `"off"`, disabling
+automatic pool discovery; a blank or invalid pool file returns exit code 2 with its validation line before any
+change). When Cloud Accounts is active for the saved agent provider (`isCloudAccountsActive({env, poolPath, provider: agent.kind})`) and no explicit local `poolPath` overrides it, ticks wire `selectCloudPoolLogin` and `exhaustCloudPoolLogin` (`weeklyStopPercent: 100`, Stick-Until-100%, disposable `0700` Codex overlay and Claude OAuth/gateway env, `Waiting on AI quota until <wake_at>` on `all_cooling`) automatically with zero `--pool` flag; when main jobs use a non-enrolled or non-Cloud agent (`agy`, `gemini`, or un-enrolled local `codex`/`claude`) while Cloud Accounts has an enrolled `codex` or `claude` login and intake is enabled, `selectPool()` returns `null` so main jobs keep `state.agent` directly while `selectPool({allowedKinds: ["codex", "claude"]})` leases the enrolled Cloud login for intake card and auto-improve checks. `start --auto-update release|main|off` (#2710) saves `state.autoUpdate` (default `release` when unset; another value returns
 exit code 2 with `Use --auto-update release, --auto-update main or --auto-update off.`); after each enabled core tick,
 run `maybeAutoUpdateAutopilot` of [Autopilot self-update](autopilot-update.prompt.md) under the machine admission lock
 when no job is publishing or merging, and include `autoUpdateStatusLine` in status. Optional `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and
@@ -77,7 +77,7 @@ label nor `autopilot.label` in `pdd.json` names a label, the effective intake mo
 the core mode of `pdd.json`) is not off, return
 exit 1 with exactly `Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd
 autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing
-was started or claimed.` No doctor, state write, timer, tick, claim or GitHub call happens. When the effective intake mode is `active` and the mode is not `off`, start also requires a `codex` or `claude` login for sandboxed read-only intake card checks: either the selected single agent has kind `codex` or `claude`, or at least one non-paused signed-in `codex` or `claude` login exists in the configured `--pool`; otherwise refuse before writing enabled state with `Active intake needs a codex or claude login for sandboxed read-only card checks; add codex or claude to --pool, pass --agent codex or --agent claude, or use --intake off --label pdd:autopilot.` Then it checks whether the
+was started or claimed.` No doctor, state write, timer, tick, claim or GitHub call happens. When the effective intake mode is `active` and the mode is not `off`, start also requires a `codex` or `claude` login for sandboxed read-only intake card checks: either the selected single agent has kind `codex` or `claude`, at least one `codex` or `claude` login is enrolled in Cloud Accounts (when `--pool` is not `off`), or at least one non-paused signed-in `codex` or `claude` login exists in the configured `--pool`; otherwise refuse before writing enabled state with `Active intake needs a codex or claude login for sandboxed read-only card checks; add a codex or claude login with pdd accounts add, pass --agent codex or --agent claude, or use --intake off --label pdd:autopilot.` Then it checks whether the
 caller requested an explicit account or login-pool override (`--agent`, `--pool`, or an explicit caller `CODEX_HOME`,
 `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` or `ANTIGRAVITY_APP_DATA_DIR` that differs from the saved `launchProfile`).
 Without an explicit override it resolves the saved agent profile (`savedProfile`); with `--agent` or `--pool` it
@@ -103,7 +103,7 @@ A start then, in this order:
    saved profile with `The saved coordinator profile cannot be verified.`; without a saved profile, or when `--agent`,
    `--pool` or an explicit caller agent config folder overrides the saved profile (#3230), it saves the newly verified
    agent, its definition HOME, the kept environment (`HOME`, `PATH`, the agent config folders, the XDG and D-Bus session
-   values and the shared queue variables; never credentials or the whole environment), `launchProfile` from the new
+   values, `PDD_STATE_DIR`, `PDD_ACCOUNTS_URL`, `PDD_CLOUD_URL` and the shared queue variables; never credentials or the whole environment), `launchProfile` from the new
    profile binding, and `poolPath` when `--pool` is set, removes legacy `ownerLaunch`, clears stale `pausedUntil`,
    `pausedHours`, `streak` and `poolOut` in `core.json` (plus `clearPoolCooldowns` when switching accounts or pools),
    and adds an `Account changed from OLD to NEW.` or `Login pool: PATH (N login(s)).` note to the start message.

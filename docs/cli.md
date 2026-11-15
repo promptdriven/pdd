@@ -182,7 +182,7 @@ Autopilot opens no chat and needs no Herdr.
 | Command | What it does |
 |---|---|
 | `pdd autopilot doctor` | Read-only prerequisite checks, one line per item. A WARN or FAIL line also gives a fix command. No GitHub writes or AI calls. Exit 1 for a required failure, 0 when only warnings remain |
-| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow\|active] [--share PERCENT] [--agent codex\|claude\|gemini\|agy] [--pool PATH] [--auto-update release\|main\|off]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label unless `--intake active` selects vetted ready issues without a label. `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that Autopilot may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--agent` sets or replaces this machine's coordinator agent and sign-in profile; `--pool PATH` sets or replaces this machine's local multi-harness login pool JSON path (or `off` for one login). `--auto-update release\|main\|off` (default `release`) updates a user-owned global `pdd` install and its PDD skills between ticks when no job is publishing or merging. `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
+| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow\|active] [--share PERCENT] [--agent codex\|claude\|gemini\|agy] [--auto-update release\|main\|off]` | Run doctor, check the sign-ins, start the user timer and run the first tick now. The timer runs a tick every 10 minutes. `--label NAME` sets the opt-in label, for example `pdd:autopilot`: Autopilot takes only the issues with this label unless `--intake active` selects vetted ready issues without a label. `--mode`, `--report`, `--decisions` and `--intake` set this machine's mode, report mode, [decision mode](#core-engine) and [intake mode](#intake-cards-shadow) for this repo. These machine values win over `pdd.json`, and a later start without them keeps them. The report mode is `draft` unless you choose `--report file`. `--share PERCENT` (1 to 100, default 50) saves the part of this machine's CPU and memory that Autopilot may use; a later start without it keeps it (see [the machine guard](#core-engine)). `--agent` sets or replaces this machine's coordinator agent and sign-in profile. `--auto-update release\|main\|off` (default `release`) updates a user-owned global `pdd` install and its PDD skills between ticks when no job is publishing or merging. `--runs N` and `--checks N` save this machine's run and heavy-check limits; a start without them removes them |
 | `pdd autopilot stop` | Save this repo as disabled on this machine, stop its timer and its intake card jobs, and let the current step finish |
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
@@ -226,8 +226,9 @@ the session that runs the command first: Claude Code when you run it from Claude
 Code, Codex when you run it from Codex. Then it tries Codex, Claude Code, agy and
 Gemini, in that order, and takes the first one that is signed in. This check makes
 no model call. Later starts without an account flag keep that saved agent, also
-after `pdd autopilot stop`. To switch the saved account or agent, pass
-`--agent codex|claude|gemini|agy`, `--pool PATH` or a different agent config folder
+after `pdd autopilot stop`. To switch the saved account or agent, use
+[Cloud accounts](#cloud-accounts) (`pdd accounts use LABEL`) or pass
+`--agent codex|claude|gemini|agy` or a different agent config folder
 (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME` or `ANTIGRAVITY_APP_DATA_DIR`)
 to `pdd autopilot start`. The core runs Codex, Claude, Gemini and agy headless jobs.
 From a Claude Code session, run `env -u CLAUDECODE pdd autopilot start` or pass
@@ -305,16 +306,14 @@ says `intake held: the agent is not ready (sign-in or usage limit); no issue was
 claimed`. Jobs that run go on. Unknown usage does not hold a standard single-account
 intake.
 
-To rotate across local logins on one machine (`codex`, `gemini`, `agy`, `claude`),
-save an ordered `logins` array in `~/.config/pdd/pool.json` or `~/.pdd/pool.json`
-(or pass `pdd autopilot start --pool PATH`). Each entry names only a local CLI and
-profile folder (`codexHome`, `claudeConfigDir`, `geminiCliHome` or `appDataDir`),
-with zero tokens in `pool.json` and `reset: "never"`. When a login hits the 97%
-weekly stop line or a quota or rate limit, Autopilot puts that login on cooldown
-until its reset time (or a 30-minute retry window) and rotates in place to the next
-healthy login without counting an issue strike. When every login in the pool is on
-cooldown, Autopilot pauses intake with one deduplicated alert naming the earliest
-reset time and wakes when a login resets.
+When [Cloud accounts](#cloud-accounts) are enrolled or accepted on this machine,
+`pdd` and `pdd autopilot` lease accounts automatically per step with zero switches
+while both the 5-hour and weekly windows stay below 100%. When a login reaches 100%
+on its 5-hour or weekly window (or returns `429 usage_limit_reached`), `pdd` reports
+usage to PDD Cloud, selects the ready account with the soonest weekly reset, and
+retries the step with zero issue strikes. When every account is cooling, Autopilot
+pauses intake with `Waiting on AI quota until TIME`, sends one deduplicated alert,
+and wakes automatically at `TIME`.
 
 Malformed protocol frames stop the connection and report unknown usage. The read
 waits at most one second for cleanup after it selects its result. It sends SIGTERM
@@ -323,6 +322,60 @@ cannot block the read.
 
 When jobs end with no result again and again, the core pauses new jobs on this
 machine and sends one alert; see [Core engine](#core-engine).
+
+## Cloud accounts
+
+`pdd accounts` manages Codex and Claude logins in PDD Cloud from one local install
+of `@openai/codex` (`~/.codex/auth.json`) and `@anthropic-ai/claude-code`
+(`~/.claude/settings.json`). PDD never spends or triggers usage-reset credits.
+
+| Command | What it does |
+|---|---|
+| `pdd accounts [--json]` | List enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
+| `pdd accounts list [--json]` | List enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
+| `pdd accounts add [--provider codex\|claude] [--label NAME]` | Sign in with `codex login` or `claude setup-token`, upload the credential bundle to PDD Cloud over TLS, and replace the local Codex file with a stripped pass (`refresh_token: ""`) |
+| `pdd accounts import [--provider codex\|claude] [--label NAME]` | Import an existing local `~/.codex/auth.json` or Claude token into PDD Cloud and replace the local Codex file with a stripped pass (`refresh_token: ""`) |
+| `pdd accounts use LABEL` | Pin `LABEL` and write its short-lived stripped pass to `~/.codex/auth.json` (`0600`) or `~/.claude/settings.json` (`0600`) |
+| `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch the local install to the next ready account sorted by soonest weekly reset |
+| `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Return in 0 ms when the cached lease is below 100% on both windows and more than 15 minutes from expiry; else lease a fresh pass within `--timeout-ms` (default 1200 ms) and fail open when offline |
+| `pdd accounts auto on\|off\|status` | Turn on, turn off or inspect the opt-in fail-open shell wrapper in `~/.zshrc` and `~/.bashrc` for plain terminal `codex` and `claude` commands (off by default) |
+| `pdd accounts pause LABEL` | Pause automatic leasing for `LABEL` |
+| `pdd accounts unpause LABEL` | Resume automatic leasing for `LABEL` |
+| `pdd accounts share LABEL --with USER\|ORG/TEAM` | Share `LABEL` with a GitHub user or organization team without exposing raw owner credentials |
+| `pdd accounts accept INVITE` | Accept a pending Cloud account share invite |
+| `pdd accounts unshare LABEL --user USER` | Revoke shared access to `LABEL` for `USER` |
+| `pdd accounts leave LABEL` | Leave a shared Cloud account |
+| `pdd accounts remove LABEL` | Delete `LABEL` from PDD Cloud and revoke active leases |
+| `pdd accounts log LABEL [--json]` | Show the lease and sharing audit log for `LABEL` |
+
+- **Encrypted vault and stripped local passes.** PDD Cloud encrypts each account's
+  refresh credential with envelope encryption bound to the account record. Local
+  Codex files receive only a short-lived `access_token` and `id_token` with
+  `refresh_token: ""` (`0600` permissions), so only PDD Cloud refreshes single-use
+  OAuth tokens and two machines never invalidate each other. Local state in
+  `$PDD_STATE_DIR/accounts-state.json` (`0600`) stores metadata and timestamps
+  only, with zero tokens.
+- **Stick-Until-100% step rotation.** Inside `pdd` and `pdd autopilot`, steps stay
+  on the active leased account with zero switches while both the 5-hour and weekly
+  windows remain below 100%. Brief burst `429` responses below 100% retry on the
+  same account so the prompt cache stays warm. At 100% on either window, `pdd`
+  reports the window to PDD Cloud, cools the account until `reset_at` (hours for a
+  5-hour window, days for a weekly window), and switches to the ready account whose
+  weekly window resets soonest.
+- **Per-step isolation.** Codex steps write the leased stripped `auth.json` (`0600`)
+  into a disposable `0700` temporary folder (`/tmp/pdd-cx-…`) that symlinks
+  `~/.codex/{config.toml,skills,memories,sessions,rules}`, pass `CODEX_HOME` to the
+  child, and delete the folder when the step exits. Concurrent plain terminal chats
+  keep their own `~/.codex/auth.json` untouched, and zero tokens appear in process
+  arguments. Claude steps pass `CLAUDE_CODE_OAUTH_TOKEN` in the child environment,
+  plus `ANTHROPIC_BASE_URL` when a shared account uses a short-lived PDD Cloud
+  gateway grant (`delivery_mode: "gateway_grant"`).
+- **Opt-in terminal auto-switch.** Plain terminal `codex` and `claude` commands are
+  untouched by default. `pdd accounts auto on` writes one marked block in `~/.zshrc`
+  and `~/.bashrc` that runs `pdd accounts sync --provider <p> --quiet --timeout-ms 1200`
+  before `command <p> "$@"`, swapping an exhausted login before Turn 1 and failing
+  open if PDD Cloud is unreachable. `pdd accounts auto off` removes the marked block
+  cleanly.
 
 ## GitHub API budget
 
