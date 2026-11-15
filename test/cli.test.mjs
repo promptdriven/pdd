@@ -10,6 +10,7 @@ import { parseArgv, CommandInputError } from '../src/argument-parser.mjs';
 import { PUBLIC_COMMAND_IDS, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { renderCompletion } from '../src/completion.mjs';
+import { bundleInstalledDependencies } from './helpers/pack-offline.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const temp = t => { const p = mkdtempSync(join(tmpdir(), 'pdd-alpha-')); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
@@ -56,6 +57,7 @@ test('ALPHA4: actual packed package runs every advertised local command without 
     'test/runtime/fake-files.json', 'test/runtime/fake-hash.json', 'test/runtime/fake-service.json'
   ]);
   assert.equal(names.some(name => name.includes('host-adapter') || /^(?:ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name === 'src/guidance.mjs'), false);
+  bundleInstalledDependencies(root, archive, sandbox);
   execFileSync('npm', ['install', '--prefix', consumer, archive, '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '--package-lock=false'],
     { cwd: consumer, env, encoding: 'utf8', timeout: 30000 });
   const metadata = JSON.parse(readFileSync(join(root, 'package.json'))), packed = join(consumer, 'node_modules', metadata.name);
