@@ -301,7 +301,7 @@ test('#3424 pdd upgrade updates global CLI and marked skills across agent folder
   });
   assert.equal(code1, 0, err1.text);
   assert.equal(err1.text, '');
-  assert.match(out1.text, new RegExp(`Upgraded pdd 0\\.1\\.12 -> ${targetVersion.replace(/\./g, '\\.')} \\(alpha-v${targetVersion.replace(/\./g, '\\.')}\\)\\.`));
+  assert.ok(out1.text.includes(`Upgraded pdd 0.1.12 -> ${targetVersion} (alpha-v${targetVersion}).`), out1.text);
   assert.match(out1.text, /Updated PDD skills to .* in: .*\.agents\/skills.*\.codex\/skills.*\.claude\/skills/);
   assert.equal(existsSync(releaseCache), false);
   assert.ok(spawned.some(cmd => cmd[0] === 'npm' && cmd.includes('--ignore-scripts') && cmd.includes(`github:promptdriven/pdd#alpha-v${targetVersion}`)));
@@ -332,7 +332,7 @@ test('#3424 pdd upgrade updates global CLI and marked skills across agent folder
   assert.equal(res2.cliUpdated, false);
   assert.deepEqual(res2.updatedSkills, []);
   assert.equal(spawned.length, 0);
-  assert.match(out2.text, new RegExp(`pdd ${targetVersion.replace(/\./g, '\\.')} is already up to date\\. PDD skills are current\\.`));
+  assert.equal(out2.text, `pdd ${targetVersion} is already up to date. PDD skills are current.\n`);
 
   // 3. `pdd upgrade --main` pins exact 40-char commit SHA with --ignore-scripts (never mutable #main).
   const outMain = captureStream(), errMain = captureStream();

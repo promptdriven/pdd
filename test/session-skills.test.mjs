@@ -480,7 +480,7 @@ test('INSTALL15: #3424 syncOwnedUserSkills and post-upgrade CLI auto-sync write 
   });
   assert.equal(jobCode, 0);
   assert.equal(ttyOut.text, 'No active jobs.\n');
-  assert.match(ttyErr.text, new RegExp(`^Updated PDD skills to ${version().replace(/\./g, '\\.')} \\(.*\\.agents/skills.*\\.codex/skills.*\\)\\.\n$`));
+  assert.equal(ttyErr.text, `Updated PDD skills to ${version()} (${targetRoots.join(', ')}).\n`);
   assert.equal(JSON.parse(readFileSync(join(stateRoot, 'skills-sync.json'), 'utf8')).version, version());
 
   for (const skillRoot of targetRoots) {
