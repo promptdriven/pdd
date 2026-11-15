@@ -17,7 +17,7 @@ Own `src/release-notice.mjs`. Export `parseReleaseVersion(value)`, `isNewerRelea
 ## Notice rule
 
 When the cached or freshly fetched `latestVersion` is newer than `currentVersion`:
-- Format: `A newer PDD release is available (CURRENT -> LATEST). To update, run: npm install -g github:promptdriven/pdd && pdd setup`
+- Format: `A newer PDD release is available (CURRENT -> LATEST). To update, run: pdd upgrade`
 - On `isVersionCommand: true`, always return the line.
 - On other interactive commands (`interactive: true`), return the line at most once every 24 hours (`notifiedAt`), updating `notifiedAt` in the cache.
 

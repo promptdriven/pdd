@@ -1,8 +1,12 @@
-// Generated from prompts/cli/autopilot-update.prompt.md (sha256: 5f9dbe56e2e9622f7e6d665f907d66c4a793e2c5579cda7bc0b58c3f311090a0).
+// Generated from prompts/cli/autopilot-update.prompt.md (sha256: f4e87956dacee6e791e53a67f394f9d76db32d05004cc3848e085ebc2ddc098f).
+import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isNewerRelease, parseReleaseVersion, pickLatestRelease } from './release-notice.mjs';
+
+const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const HOUR_MS = 60 * 60 * 1000;
 const STATUS_FILE = 'autopilot-update.json';
@@ -193,6 +197,7 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
         cwd: state?.cwd ?? process.cwd(),
         home: env.HOME || (ports.homedir ?? homedir)(),
         claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+        ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
       });
     } catch { /* Skill refresh never fails a completed binary update. */ }
     writeJson(statusPath, {
@@ -213,4 +218,286 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
   } finally {
     releaseLock?.();
   }
+}
+
+const writeLine = (stream, text) => {
+  if (stream && typeof stream.write === 'function') stream.write(`${text}\n`);
+};
+
+const canonicalDir = (folder, fs) => {
+  try { return fs.realpathSync(folder); } catch { return folder; }
+};
+
+function hasPddSkillLock(home, fs) {
+  if (!home) return false;
+  const lockPath = join(home, '.agents', '.skill-lock.json');
+  try {
+    if (!fs.lstatSync(lockPath).isFile()) return false;
+    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    return Boolean(parsed && typeof parsed === 'object' && JSON.stringify(parsed).includes('promptdriven/pdd'));
+  } catch { return false; }
+}
+
+async function queryGitHubJson(endpoint, { fetchImpl, spawnSyncImpl, env = process.env } = {}) {
+  const hasCustomFetch = typeof fetchImpl === 'function';
+  const hasCustomSpawn = typeof spawnSyncImpl === 'function';
+  const effectiveFetch = hasCustomFetch ? fetchImpl : (!hasCustomSpawn ? globalThis.fetch : null);
+  const effectiveSpawn = hasCustomSpawn ? spawnSyncImpl : (!hasCustomFetch && !env.NODE_TEST_CONTEXT ? nativeSpawnSync : null);
+  let fetchError = null;
+  if (effectiveFetch) {
+    try {
+      const response = await effectiveFetch(`https://api.github.com/${endpoint}`, {
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'pdd-cli' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (response && typeof response.json === 'function') {
+        if (response.ok === false) throw Error(`HTTP ${response.status}`);
+        return await response.json();
+      }
+      return response;
+    } catch (error) {
+      fetchError = error;
+      if (!effectiveSpawn) throw error;
+    }
+  }
+  if (effectiveSpawn) {
+    const reply = effectiveSpawn('gh', ['api', endpoint], { encoding: 'utf8', timeout: 10000, env });
+    const code = reply?.status ?? reply?.code ?? (reply?.error ? 1 : 0);
+    if (code !== 0) {
+      const detail = (reply?.stderr || reply?.stdout || reply?.error?.message || fetchError?.message || `gh api ${endpoint} failed`).trim().split('\n')[0];
+      throw Error(detail || `gh api ${endpoint} failed`);
+    }
+    return JSON.parse(reply.stdout || 'null');
+  }
+  throw fetchError ?? Error(`Could not query GitHub ${endpoint}`);
+}
+
+export async function resolveReleaseUpgradeTarget(options = {}) {
+  const payload = await queryGitHubJson('repos/promptdriven/pdd/releases?per_page=10', options);
+  const picked = pickLatestRelease(payload);
+  if (!picked) throw Error('Could not find a valid PDD release tag');
+  return {
+    channel: 'release',
+    ref: picked.tag,
+    version: picked.version,
+    spec: `github:promptdriven/pdd#${picked.tag}`,
+  };
+}
+
+export async function resolveMainCommitTarget(options = {}) {
+  const payload = await queryGitHubJson('repos/promptdriven/pdd/commits/main', options);
+  const sha = typeof payload?.sha === 'string' && /^[0-9a-f]{40}$/i.test(payload.sha) ? payload.sha : null;
+  if (!sha) throw Error('Could not read promptdriven/pdd main commit');
+  return {
+    channel: 'main',
+    ref: sha,
+    sha,
+    spec: `github:promptdriven/pdd#${sha}`,
+  };
+}
+
+export async function runCliUpgrade({
+  env = process.env,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  main = false,
+  spawnSyncImpl,
+  fetchImpl,
+  packageRoot = PACKAGE_ROOT,
+  home,
+  cwd = process.cwd(),
+} = {}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const resolvedHome = home ?? env.HOME ?? (ports.homedir ?? homedir)();
+  const globalInstall = detectGlobalInstallPrefix(packageRoot, { fs, uid: ports.uid });
+  if (!globalInstall) {
+    writeLine(stderr, 'pdd upgrade updates only a user-owned global npm installation (not a Git checkout or root-owned prefix). To update manually, run: npm install -g github:promptdriven/pdd && pdd setup');
+    return { exitCode: 1, cliUpdated: false, updatedSkills: [], skippedSkills: [], failedSkills: [] };
+  }
+  const currentVersion = readJson(join(globalInstall.realPackageRoot, 'package.json'), fs)?.version;
+  if (!parseReleaseVersion(currentVersion)) {
+    writeLine(stderr, 'pdd upgrade could not read the installed pdd version. To reinstall, run: npm install -g github:promptdriven/pdd && pdd setup');
+    return { exitCode: 1, cliUpdated: false, updatedSkills: [], skippedSkills: [], failedSkills: [] };
+  }
+
+  let target;
+  try {
+    target = main
+      ? await resolveMainCommitTarget({ fetchImpl, spawnSyncImpl, env })
+      : await resolveReleaseUpgradeTarget({ fetchImpl, spawnSyncImpl, env });
+  } catch (error) {
+    writeLine(stderr, `pdd upgrade could not check GitHub (${error?.message || 'lookup failed'}). To update manually, run: npm install -g github:promptdriven/pdd && pdd setup`);
+    return { exitCode: 1, cliUpdated: false, fromVersion: currentVersion, toVersion: currentVersion, updatedSkills: [], skippedSkills: [], failedSkills: [] };
+  }
+
+  const effectiveSpawn = spawnSyncImpl ?? nativeSpawnSync;
+  let cliUpdated = false;
+  if (main || isNewerRelease(target.version, currentVersion)) {
+    const install = effectiveSpawn('npm', ['install', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', target.spec], {
+      encoding: 'utf8',
+      timeout: 120000,
+      env,
+    });
+    const code = install?.status ?? install?.code ?? (install?.error ? 1 : 0);
+    if (code !== 0) {
+      const detail = (install?.stderr || install?.stdout || install?.error?.message || 'npm install failed').trim().split('\n')[0];
+      writeLine(stderr, `pdd upgrade failed to install ${target.spec} (${detail}). To retry, run: npm install -g --prefix ${globalInstall.prefix} --ignore-scripts ${target.spec} && pdd setup`);
+      return { exitCode: 1, cliUpdated: false, fromVersion: currentVersion, toVersion: currentVersion, updatedSkills: [], skippedSkills: [], failedSkills: [] };
+    }
+    cliUpdated = true;
+  }
+
+  const targetPkgRoot = resolveInstalledRoot(globalInstall.prefix, globalInstall.realPackageRoot, fs);
+  const toVersion = readJson(join(targetPkgRoot, 'package.json'), fs)?.version ?? (cliUpdated && target.version ? target.version : currentVersion);
+  const stateHome = ports.stateHome ?? (env.XDG_STATE_HOME || (resolvedHome ? join(resolvedHome, '.local', 'state') : null));
+  const stateRoot = env.PDD_STATE_DIR || (stateHome ? join(stateHome, 'pdd') : null);
+
+  for (const cachePath of [stateHome ? join(stateHome, 'pdd', 'release-check.json') : null, stateRoot ? join(stateRoot, 'release-check.json') : null]) {
+    if (cachePath) {
+      try { fs.rmSync(cachePath, { force: true }); } catch { /* Stale release-notice cache removal is fail-open. */ }
+    }
+  }
+
+  const failedSkills = [];
+  const updatedSet = new Set();
+  let skillsModule = null;
+  try {
+    skillsModule = ports.skillsInstall ?? await import('./skills-install.mjs');
+    const { updated } = skillsModule.syncOwnedUserSkills({
+      packageRoot: targetPkgRoot,
+      home: resolvedHome,
+      claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+      codexHome: env.CODEX_HOME,
+      stateRoot,
+      force: true,
+      onError: (folder, error) => failedSkills.push({
+        folder,
+        reason: error?.code ?? error?.message ?? 'skill write failed',
+        recovery: 'pdd setup',
+      }),
+    });
+    for (const folder of updated) updatedSet.add(folder);
+  } catch (error) {
+    failedSkills.push({
+      folder: resolvedHome || targetPkgRoot,
+      reason: error?.code ?? error?.message ?? 'skill sync failed',
+      recovery: 'pdd setup',
+    });
+  }
+
+  const skippedSkills = [];
+  if (skillsModule && typeof skillsModule.findSkills === 'function') {
+    const noRepoCwd = join(resolvedHome || '/nonexistent', '.pdd-upgrade-user-only');
+    let userStale = [];
+    try {
+      const seenUser = new Set();
+      for (const row of skillsModule.findSkills({
+        packageRoot: targetPkgRoot,
+        cwd: noRepoCwd,
+        home: resolvedHome,
+        claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+        ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
+      })) {
+        if (!row.found || !row.stale) continue;
+        const key = canonicalDir(row.found, fs);
+        if (seenUser.has(key)) continue;
+        seenUser.add(key);
+        userStale.push(row);
+      }
+    } catch { userStale = []; }
+
+    const failedCanon = new Set(failedSkills.map(item => canonicalDir(item.folder, fs)));
+    const olderUnmarked = userStale.filter(row => row.stale === 'older' && !failedCanon.has(canonicalDir(row.found, fs)));
+    const hasCustomizations = userStale.some(row => row.stale === 'differs');
+
+    if (olderUnmarked.length > 0 && !hasCustomizations && hasPddSkillLock(resolvedHome, fs)) {
+      try {
+        const npxReply = effectiveSpawn('npx', ['--yes', 'skills', 'add', `promptdriven/pdd#${target.ref}`, '-g', '-a', 'codex', '-a', 'claude-code', '-y'], {
+          encoding: 'utf8',
+          timeout: 120000,
+          env,
+        });
+        const npxCode = npxReply?.status ?? npxReply?.code ?? (npxReply?.error ? 1 : 0);
+        if (npxCode === 0) {
+          for (const row of olderUnmarked) updatedSet.add(row.found);
+        } else {
+          const detail = (npxReply?.stderr || npxReply?.stdout || npxReply?.error?.message || 'npx skills add failed').trim().split('\n')[0];
+          failedSkills.push({
+            folder: olderUnmarked.map(row => row.found).join(', '),
+            reason: detail || 'npx skills add failed',
+            recovery: 'npx skills add promptdriven/pdd -g -a codex -a claude-code -y',
+          });
+          for (const row of olderUnmarked) failedCanon.add(canonicalDir(row.found, fs));
+        }
+      } catch (error) {
+        failedSkills.push({
+          folder: olderUnmarked.map(row => row.found).join(', '),
+          reason: error?.message || 'npx skills add failed',
+          recovery: 'npx skills add promptdriven/pdd -g -a codex -a claude-code -y',
+        });
+        for (const row of olderUnmarked) failedCanon.add(canonicalDir(row.found, fs));
+      }
+    }
+
+    const updatedCanon = new Set([...updatedSet].map(folder => canonicalDir(folder, fs)));
+    for (const row of userStale) {
+      const key = canonicalDir(row.found, fs);
+      if (updatedCanon.has(key) || failedCanon.has(key)) continue;
+      skippedSkills.push({
+        folder: row.found,
+        stale: row.stale,
+        recovery: 'npx skills add promptdriven/pdd -g -a codex -a claude-code -y',
+      });
+    }
+
+    if (cwd && cwd !== noRepoCwd) {
+      const projectRoots = new Set([join(cwd, '.agents/skills'), join(cwd, '.codex/skills'), join(cwd, '.claude/skills')]);
+      try {
+        for (const row of skillsModule.findSkills({
+          packageRoot: targetPkgRoot,
+          cwd,
+          home: resolvedHome,
+          claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+          ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
+        })) {
+          if (!row.found || !row.stale || !projectRoots.has(row.found)) continue;
+          const key = canonicalDir(row.found, fs);
+          if (updatedCanon.has(key) || failedCanon.has(key) || skippedSkills.some(item => canonicalDir(item.folder, fs) === key)) continue;
+          skippedSkills.push({
+            folder: row.found,
+            stale: row.stale,
+            recovery: 'npx skills add promptdriven/pdd -a codex -a claude-code -y',
+          });
+        }
+      } catch { /* Project skill inspection is best-effort. */ }
+    }
+  }
+
+  const updatedSkills = [...updatedSet];
+  if (cliUpdated) {
+    writeLine(stdout, `Upgraded pdd ${currentVersion} -> ${toVersion} (${main ? 'main' : target.ref}).`);
+  } else if (!updatedSkills.length && !skippedSkills.length && !failedSkills.length) {
+    writeLine(stdout, `pdd ${toVersion} is already up to date. PDD skills are current.`);
+  } else {
+    writeLine(stdout, `pdd ${toVersion} is already up to date.`);
+  }
+  if (updatedSkills.length) {
+    writeLine(stdout, `Updated PDD skills to ${toVersion} in: ${updatedSkills.join(', ')}.`);
+  }
+  for (const item of skippedSkills) {
+    writeLine(stdout, `Skipped ${item.stale === 'differs' ? 'customized' : 'unmarked'} PDD skills in ${item.folder} (preserved without overwriting). To replace them, run: ${item.recovery}`);
+  }
+  for (const item of failedSkills) {
+    writeLine(stderr, `Failed to update PDD skills in ${item.folder} (${item.reason}). To recover, run: ${item.recovery}`);
+  }
+
+  return {
+    exitCode: failedSkills.length > 0 ? 1 : 0,
+    cliUpdated,
+    fromVersion: currentVersion,
+    toVersion,
+    updatedSkills,
+    skippedSkills,
+    failedSkills,
+  };
 }

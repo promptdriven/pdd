@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { findSkills, setupSkills, PDD_SKILL_NAMES, RETIRED_SKILL_NAMES } from '../src/skills-install.mjs';
+import { findSkills, setupSkills, syncOwnedUserSkills, PDD_SKILL_NAMES, RETIRED_SKILL_NAMES } from '../src/skills-install.mjs';
+import { runPdd } from '../src/pdd-cli.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const temp = t => { const p = realpathSync(mkdtempSync(join(tmpdir(), "pdd skills ' "))); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
@@ -357,4 +358,156 @@ test('INSTALL13: #3324 pdd --version warns on stale PDD skills in .codex/skills,
   assert.equal(partial.status, 0, partial.stderr);
   assert.match(partial.stderr, /pdd-prompting is 0\.1\.12/);
   assert.match(partial.stderr, /npx skills add promptdriven\/pdd -g -a codex -a claude-code -y/);
+});
+
+test('INSTALL14: #3424 setupSkills updates marked secondary .codex/skills and $CODEX_HOME/skills (including 6-skill bundles) without creating absent .codex/skills or touching custom/unmarked skills', t => {
+  const { pkg, home, project, sandbox, run } = packageCopy(t);
+  const customCodex = join(sandbox, 'custom-codex');
+
+  // 1. Absent .codex/skills and $CODEX_HOME/skills are never created by setup.
+  assert.equal(run(['setup'], { CODEX_HOME: customCodex }).status, 0);
+  assert.equal(existsSync(join(home, '.codex/skills')), false);
+  assert.equal(existsSync(join(customCodex, 'skills')), false);
+
+  // 2. Populate ~/.codex/skills with an older 6-skill marked bundle (missing pdd-graph),
+  //    a marked retired skill, an unmarked retired skill, a symlink, and a custom skill.
+  const codexSkills = join(home, '.codex/skills');
+  for (const name of PDD_SKILL_NAMES.filter(n => n !== 'pdd-graph')) {
+    cpSync(join(pkg, 'skills', name), join(codexSkills, name), { recursive: true });
+    writeFileSync(join(codexSkills, name, MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+  }
+  mkdirSync(join(codexSkills, 'pdd-autopilot'), { recursive: true });
+  writeFileSync(join(codexSkills, 'pdd-autopilot/SKILL.md'), '---\nname: pdd-autopilot\n---\nold\n');
+  writeFileSync(join(codexSkills, 'pdd-autopilot', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+
+  mkdirSync(join(codexSkills, 'pdd-check'), { recursive: true });
+  writeFileSync(join(codexSkills, 'pdd-check/SKILL.md'), 'user unmarked retired skill\n');
+
+  mkdirSync(join(codexSkills, 'finish-pr'), { recursive: true });
+  writeFileSync(join(codexSkills, 'finish-pr/SKILL.md'), 'custom user skill\n');
+
+  const linkedTarget = join(sandbox, 'linked-merge');
+  mkdirSync(linkedTarget, { recursive: true });
+  writeFileSync(join(linkedTarget, 'SKILL.md'), 'linked retired skill\n');
+  symlinkSync(linkedTarget, join(codexSkills, 'pdd-merge'));
+
+  // Populate $CODEX_HOME/skills with a marked older skill too.
+  const customSkills = join(customCodex, 'skills');
+  cpSync(join(pkg, 'skills/pdd-bug'), join(customSkills, 'pdd-bug'), { recursive: true });
+  writeFileSync(join(customSkills, 'pdd-bug', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.15', digest: 'old' }));
+
+  const repair = run(['setup'], { CODEX_HOME: customCodex });
+  assert.equal(repair.status, 0, repair.stderr);
+
+  for (const folder of [codexSkills, customSkills]) {
+    for (const name of PDD_SKILL_NAMES) {
+      assert.equal(JSON.parse(readFileSync(join(folder, name, MARKER), 'utf8')).version, version(), `${folder}/${name}`);
+    }
+  }
+  assert.equal(existsSync(join(codexSkills, 'pdd-autopilot')), false);
+  assert.equal(readFileSync(join(codexSkills, 'pdd-check/SKILL.md'), 'utf8'), 'user unmarked retired skill\n');
+  assert.equal(readFileSync(join(codexSkills, 'finish-pr/SKILL.md'), 'utf8'), 'custom user skill\n');
+  assert.equal(readFileSync(join(codexSkills, 'pdd-merge/SKILL.md'), 'utf8'), 'linked retired skill\n');
+  assert.equal(run(['--version'], { CODEX_HOME: customCodex }).stderr, '');
+});
+
+test('INSTALL15: #3424 syncOwnedUserSkills and post-upgrade CLI auto-sync write zero files on empty/unmarked HOME or discovery/--json routes, and sync marked folders once per version', async t => {
+  const { pkg, home, project, sandbox } = packageCopy(t);
+  const stateRoot = join(sandbox, 'state-pdd');
+  const claudeConfig = join(sandbox, 'claude-cfg');
+  const customCodex = join(sandbox, 'codex-cfg');
+
+  // 1. Brand-new empty HOME: zero writes anywhere (skills-sync.json is NOT created).
+  assert.deepEqual(syncOwnedUserSkills({ packageRoot: pkg, home, claudeConfigDir: claudeConfig, codexHome: customCodex, stateRoot }), { updated: [] });
+  assert.deepEqual(readdirSync(home), []);
+  assert.equal(existsSync(stateRoot), false);
+  assert.equal(existsSync(claudeConfig), false);
+
+  // 2. Unmarked skills, symlinks and custom skills only: zero writes anywhere.
+  cpSync(join(pkg, 'skills/pdd-bug'), join(home, '.agents/skills/pdd-bug'), { recursive: true });
+  writeFileSync(join(home, '.agents/skills/pdd-bug/SKILL.md'), 'unmarked older copy\n');
+  mkdirSync(join(home, '.agents/skills/pdd-autopilot'), { recursive: true });
+  writeFileSync(join(home, '.agents/skills/pdd-autopilot/SKILL.md'), 'custom autopilot\n');
+  mkdirSync(join(home, '.agents/skills/finish-pr'), { recursive: true });
+  writeFileSync(join(home, '.agents/skills/finish-pr/SKILL.md'), 'custom finish-pr\n');
+
+  assert.deepEqual(syncOwnedUserSkills({ packageRoot: pkg, home, claudeConfigDir: claudeConfig, codexHome: customCodex, stateRoot }), { updated: [] });
+  assert.equal(existsSync(stateRoot), false);
+  assert.equal(readFileSync(join(home, '.agents/skills/pdd-bug/SKILL.md'), 'utf8'), 'unmarked older copy\n');
+  assert.equal(readFileSync(join(home, '.agents/skills/pdd-autopilot/SKILL.md'), 'utf8'), 'custom autopilot\n');
+  assert.equal(readFileSync(join(home, '.agents/skills/finish-pr/SKILL.md'), 'utf8'), 'custom finish-pr\n');
+
+  // 3. Seed older .pdd-skill.json-marked folders across .agents/skills (6-skill 0.1.12), .codex/skills, $CODEX_HOME/skills and $CLAUDE_CONFIG_DIR/skills.
+  rmSync(join(home, '.agents/skills/pdd-bug'), { recursive: true, force: true });
+  const targetRoots = [
+    join(home, '.agents/skills'),
+    join(home, '.codex/skills'),
+    join(customCodex, 'skills'),
+    join(claudeConfig, 'skills'),
+  ];
+  for (const skillRoot of targetRoots) {
+    for (const name of PDD_SKILL_NAMES.filter(n => n !== 'pdd-graph')) {
+      cpSync(join(pkg, 'skills', name), join(skillRoot, name), { recursive: true });
+      writeFileSync(join(skillRoot, name, MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+    }
+  }
+  // Marked retired skill in .claude/skills is removed; unmarked pdd-autopilot and finish-pr in .agents/skills stay untouched.
+  mkdirSync(join(claudeConfig, 'skills/pdd-check'), { recursive: true });
+  writeFileSync(join(claudeConfig, 'skills/pdd-check/SKILL.md'), 'marked retired\n');
+  writeFileSync(join(claudeConfig, 'skills/pdd-check', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+
+  const env = { HOME: home, CLAUDE_CONFIG_DIR: claudeConfig, CODEX_HOME: customCodex, PDD_STATE_DIR: stateRoot, PDD_NO_UPDATE_CHECK: '1', PATH: '' };
+  const capture = (isTTY = false) => ({ text: '', isTTY, write(s) { this.text += s; } });
+
+  // 4. Discovery, completion and --json routes skip auto-sync completely.
+  for (const argv of [['--help'], ['--version'], ['completion', 'bash'], ['workflow', 'list'], ['workflow', 'list', '--json']]) {
+    const out = capture(true), err = capture(true);
+    const code = await runPdd(argv, { cwd: project, packageRoot: pkg, env, stdout: out, stderr: err, pathDiagnostic: () => [] });
+    assert.equal(code, 0, argv.join(' '));
+    assert.equal(existsSync(join(stateRoot, 'skills-sync.json')), false, `must not sync on ${argv.join(' ')}`);
+    assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd-bug', MARKER), 'utf8')).version, '0.1.12');
+  }
+
+  // 5. First normal interactive command syncs all 4 marked folders, adds pdd-graph, removes marked retired pdd-check, preserves unmarked skills, and prints one TTY notice on stderr.
+  const ttyOut = capture(true), ttyErr = capture(true);
+  const jobCode = await runPdd(['jobs'], {
+    cwd: project,
+    packageRoot: pkg,
+    env,
+    stdout: ttyOut,
+    stderr: ttyErr,
+    runtimeSlots: { jobs: async (_in, { stdout }) => { stdout.write('No active jobs.\n'); return 0; } },
+  });
+  assert.equal(jobCode, 0);
+  assert.equal(ttyOut.text, 'No active jobs.\n');
+  assert.match(ttyErr.text, new RegExp(`^Updated PDD skills to ${version().replace(/\./g, '\\.')} \\(.*\\.agents/skills.*\\.codex/skills.*\\)\\.\n$`));
+  assert.equal(JSON.parse(readFileSync(join(stateRoot, 'skills-sync.json'), 'utf8')).version, version());
+
+  for (const skillRoot of targetRoots) {
+    for (const name of PDD_SKILL_NAMES) {
+      assert.equal(JSON.parse(readFileSync(join(skillRoot, name, MARKER), 'utf8')).version, version(), `${skillRoot}/${name}`);
+    }
+  }
+  assert.equal(existsSync(join(claudeConfig, 'skills/pdd-check')), false);
+  assert.equal(readFileSync(join(home, '.agents/skills/pdd-autopilot/SKILL.md'), 'utf8'), 'custom autopilot\n');
+  assert.equal(readFileSync(join(home, '.agents/skills/finish-pr/SKILL.md'), 'utf8'), 'custom finish-pr\n');
+
+  // 6. Cached skills-sync.json skips disk work on subsequent commands until CLI version advances.
+  writeFileSync(join(home, '.agents/skills/pdd-bug', MARKER), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+  assert.deepEqual(syncOwnedUserSkills({ packageRoot: pkg, home, claudeConfigDir: claudeConfig, codexHome: customCodex, stateRoot }), { updated: [] });
+  assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd-bug', MARKER), 'utf8')).version, '0.1.12');
+
+  // Non-TTY normal command when CLI version advances updates silently with zero stderr output.
+  writeFileSync(join(stateRoot, 'skills-sync.json'), JSON.stringify({ version: '0.1.33' }));
+  const quietOut = capture(false), quietErr = capture(false);
+  await runPdd(['jobs'], {
+    cwd: project,
+    packageRoot: pkg,
+    env,
+    stdout: quietOut,
+    stderr: quietErr,
+    runtimeSlots: { jobs: async (_in, { stdout }) => { stdout.write('No active jobs.\n'); return 0; } },
+  });
+  assert.equal(quietErr.text, '');
+  assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd-bug', MARKER), 'utf8')).version, version());
 });

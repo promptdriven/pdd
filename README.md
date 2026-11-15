@@ -33,7 +33,7 @@ pdd setup
 4. `pdd --version` must print `0.1.34`. When your skills are older than pdd, it also prints the command that updates them.
 5. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
 
-To update, run the 2 install commands and `pdd setup` again, then start a new agent chat. After `npx skills add`, `npx skills update -g` also updates the skills.
+To update a global installation and its PDD skills in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. Direct `npm install -g github:promptdriven/pdd` runs no lifecycle scripts; normal `pdd` commands sync existing `.pdd-skill.json`-marked user skill folders automatically, and `npx skills add promptdriven/pdd -g --skill '*'` (or `npx skills update -g`) updates unmarked installer copies.
 
 > [!IMPORTANT]
 > Do not run `npm install -g pdd` or `npm update -g`. The npm registry has a different package with the name `pdd`.
@@ -277,6 +277,7 @@ The pdd CLI has no merge command. In manual workflows, ask your agent to merge u
 | Command | What it does |
 |---|---|
 | `pdd setup` | Set up this repo for PDD. |
+| `pdd upgrade [--main]` | Update a global `pdd` installation and refresh installed user PDD skills (`--main` installs the pinned `main` commit). |
 | `pdd lint` | Check the format of the prompts, Stories and tests. 0 AI calls. |
 | `pdd test [STORY...]` | Run the tests of the Stories on the PDD interpreter. |
 | `pdd test --files` | List the files that a check sends. No network. |
@@ -331,7 +332,7 @@ The skills and the other commands run on your computer; `pdd lint --local` is of
 |---|---|
 | `Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
 | `PDD Cloud could not confirm your access. Try again in a minute.` (exit code 5) | PDD Cloud could not check your account. Run the command again in a minute. |
-| `Please update pdd: …` | Your pdd is too old for the PDD interpreter. Do the install steps again. |
+| `Please update pdd: …` | Your pdd is too old for the PDD interpreter. Run `pdd upgrade`, or do the install steps again. |
 | `REFUSED` / `no verdict` (exit code 3, 4 or 5) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. Run `pdd lint` before a check. [RUNBOOK §11](skills/pdd-prompting/runbook/testing-and-simulation.md#11-pdd-test) lists the usual refusals. |
 | `FAILED` (exit code 1) | Read the failed step and the report. A person decides expected values. The agent may propose a change, and never makes it. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd test --read` later. Do not send the same check again. |
