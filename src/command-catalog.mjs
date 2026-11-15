@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: c061aaa265cf5fc3a43e0772047c9f326686dd81bc1644e2cc8ab4bfd375ca12).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: d9cbc21d5d216ea84abc1964afb9c5e058193a4b25a62ae8266d65cbb7ee9c5c).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -201,10 +201,10 @@ const routes = [
     ] },
   { id: 'accounts.accept', prefix: ['accounts', 'accept'], local: 'accounts', operands: [{ name: 'invite', type: 'text' }], options: [],
     forms: [form('pdd accounts accept INVITE', 'Accept a pending Cloud account share invite.')] },
-  { id: 'accounts.unshare', prefix: ['accounts', 'unshare'], local: 'accounts', operands: [{ name: 'label', type: 'text', optional: true }], options: [{ name: '--all', kind: 'flag' }, { name: '--provider', kind: 'value', choices: ['codex', 'claude'] }, { name: '--user', kind: 'text' }, { name: '--with', kind: 'text' }, { name: '--machine', kind: 'text' }],
+  { id: 'accounts.unshare', prefix: ['accounts', 'unshare'], local: 'accounts', operands: [{ name: 'label', type: 'text', optional: true }], options: [{ name: '--all', kind: 'flag' }, { name: '--provider', kind: 'value', choices: ['codex', 'claude'] }, { name: '--user', kind: 'text' }, { name: '--with', kind: 'text' }],
     forms: [
       form('pdd accounts unshare LABEL --user USER', 'Revoke shared access to LABEL for USER.'),
-      form('pdd accounts unshare [LABEL] [--all] [--provider codex|claude] [--user USER] [--with USER|ORG/TEAM[,...]] [--machine MACHINE_ID]', 'Revoke shared access for users, organization teams, @ORG targets, or a machine across LABEL or all owned accounts.'),
+      form('pdd accounts unshare [LABEL] [--all] [--provider codex|claude] [--user USER] [--with USER|ORG/TEAM[,...]]', 'Revoke shared access for users, organization teams, or @ORG targets across LABEL or all owned accounts.'),
     ] },
   { id: 'accounts.leave', prefix: ['accounts', 'leave'], local: 'accounts', operands: [{ name: 'label', type: 'text' }], options: [],
     forms: [form('pdd accounts leave LABEL', 'Leave a shared Cloud account.')] },

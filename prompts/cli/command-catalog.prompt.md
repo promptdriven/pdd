@@ -205,7 +205,7 @@ Catalog local disposition `accounts` ([Cloud accounts CLI](accounts-cli.prompt.m
 - `accounts.next` (`accounts next`, value `--provider` choices `codex`, `claude`): `pdd accounts next [--provider codex|claude]`
 - `accounts.sync` (`accounts sync`, value `--provider` choices `codex`, `claude`, flag `--quiet`, integer `--timeout-ms` 50..60000): `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`
 - `accounts.auto` (`accounts auto`, operand choice `on`, `off`, `status`): `pdd accounts auto on|off|status`
-- `accounts.pause` (`accounts pause`, operand `label`), `accounts.unpause` (`accounts unpause`, operand `label`), `accounts.share` (`accounts share`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--user`, text `--with`, text `--machine`), `accounts.leave` (`accounts leave`, operand `label`), `accounts.remove` (`accounts remove`, operand `label`), and `accounts.log` (`accounts log`, operand `label`, flag `--json`).
+- `accounts.pause` (`accounts pause`, operand `label`), `accounts.unpause` (`accounts unpause`, operand `label`), `accounts.share` (`accounts share`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--user`, text `--with`), `accounts.leave` (`accounts leave`, operand `label`), `accounts.remove` (`accounts remove`, operand `label`), and `accounts.log` (`accounts log`, operand `label`, flag `--json`).
 
 ## Help forms
 
@@ -278,7 +278,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd accounts share --all [--provider codex|claude] --with USER|ORG/TEAM[,...]  Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or @ORG targets.
   pdd accounts accept INVITE  Accept a pending Cloud account share invite.
   pdd accounts unshare LABEL --user USER  Revoke shared access to LABEL for USER.
-  pdd accounts unshare [LABEL] [--all] [--provider codex|claude] [--user USER] [--with USER|ORG/TEAM[,...]] [--machine MACHINE_ID]  Revoke shared access for users, organization teams, @ORG targets, or a machine across LABEL or all owned accounts.
+  pdd accounts unshare [LABEL] [--all] [--provider codex|claude] [--user USER] [--with USER|ORG/TEAM[,...]]  Revoke shared access for users, organization teams, or @ORG targets across LABEL or all owned accounts.
   pdd accounts leave LABEL  Leave a shared Cloud account.
   pdd accounts remove LABEL  Delete LABEL from PDD Cloud and revoke active leases.
   pdd accounts log LABEL [--json]  Show the lease and sharing audit log for LABEL.

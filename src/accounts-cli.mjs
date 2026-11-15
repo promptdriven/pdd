@@ -1,6 +1,6 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 4c4f6470ed343fd1d4be6719948fa7f4ffd0f05c4f4bc6f9d2c15df994399109).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 4542e1e8a57a2b9b2747d18fdabbfcf659c79d5c80a1eb97ddcaf3f31fff29bb).
 import { spawnSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -520,7 +520,7 @@ async function applySharePayloadsToAccounts(accounts, sharePayloads, { cwd, env 
   return notes;
 }
 
-function buildUnsharePayloads({ userOption, withOption, machineOption }) {
+function buildUnsharePayloads({ userOption, withOption }) {
   const seen = new Set();
   const payloads = [];
   const rawUser = typeof userOption === 'string' ? userOption.trim() : '';
@@ -556,17 +556,6 @@ function buildUnsharePayloads({ userOption, withOption, machineOption }) {
           payloads.push({ display: target.login, body: { github_login: target.login } });
         }
       }
-    }
-  }
-  const rawMachine = typeof machineOption === 'string' ? machineOption.trim() : '';
-  if (rawMachine) {
-    if (/\s/.test(rawMachine)) {
-      return { error: `Invalid machine ID "${rawMachine}".` };
-    }
-    const key = `machine:${rawMachine}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      payloads.push({ display: `machine ${rawMachine}`, body: { machine_id: rawMachine } });
     }
   }
   return { payloads };
@@ -617,10 +606,6 @@ async function probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome
     removeTempPrivateDir(fs, tempProbeDir);
   }
   return acc;
-}
-
-function hashCredentialMaterial(value) {
-  return createHash('sha256').update(String(value ?? '')).digest('hex');
 }
 
 async function askLoopContinue(question, { stdin, stdout }, ports = {}) {
@@ -782,10 +767,7 @@ async function enrollSingleIteration(mode, {
       }
 
       const subjectAccountId = bundle.auth_json.tokens.account_id;
-      const credHash = hashCredentialMaterial(`${subjectAccountId}:${bundle.auth_json.tokens.refresh_token}`);
-      const seenLabel = loopState
-        ? (loopState.bySubjectId.get(subjectAccountId) ?? loopState.byFingerprint.get(credHash) ?? null)
-        : null;
+      const seenLabel = loopState ? (loopState.bySubjectId.get(subjectAccountId) ?? null) : null;
 
       let candidateLabel;
       if (loopState) {
@@ -810,7 +792,7 @@ async function enrollSingleIteration(mode, {
       const isDuplicate = Boolean(
         created?.already_enrolled === true
         || seenLabel
-        || (loopState && acc.account_id && loopState.byAccountId.has(acc.account_id)),
+        || (loopState && acc.account_id && loopState.seenAccountIds.has(acc.account_id)),
       );
 
       acc = await probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome, { fs, cwd, env }, ports);
@@ -829,9 +811,8 @@ async function enrollSingleIteration(mode, {
 
       const finalLabel = acc.label ?? candidateLabel;
       if (loopState) {
-        loopState.byFingerprint.set(credHash, finalLabel);
         if (subjectAccountId) loopState.bySubjectId.set(subjectAccountId, finalLabel);
-        if (acc.account_id) loopState.byAccountId.set(acc.account_id, finalLabel);
+        if (acc.account_id) loopState.seenAccountIds.add(acc.account_id);
         if (!isDuplicate) loopState.commitCandidateLabel(candidateLabel, finalLabel);
       }
 
@@ -886,11 +867,9 @@ async function enrollSingleIteration(mode, {
     oauthToken = readLocalClaudeToken(fs, env, loginOutput);
   }
 
-  const credHash = hashCredentialMaterial(oauthToken);
-  const seenLabel = loopState ? (loopState.byFingerprint.get(credHash) ?? null) : null;
   let candidateLabel;
   if (loopState) {
-    candidateLabel = seenLabel || loopState.peekNextLabel();
+    candidateLabel = loopState.peekNextLabel();
   } else {
     candidateLabel = requestedLabel ? sanitizeLabel(requestedLabel, '') : defaultAccountLabel('claude');
   }
@@ -909,8 +888,7 @@ async function enrollSingleIteration(mode, {
   const acc = created?.account ?? { account_id: created?.account_id ?? candidateLabel, label: candidateLabel, provider: 'claude' };
   const isDuplicate = Boolean(
     created?.already_enrolled === true
-    || seenLabel
-    || (loopState && acc.account_id && loopState.byAccountId.has(acc.account_id)),
+    || (loopState && acc.account_id && loopState.seenAccountIds.has(acc.account_id)),
   );
 
   materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: oauthToken }, { env }, ports);
@@ -918,8 +896,7 @@ async function enrollSingleIteration(mode, {
 
   const finalLabel = acc.label ?? candidateLabel;
   if (loopState) {
-    loopState.byFingerprint.set(credHash, finalLabel);
-    if (acc.account_id) loopState.byAccountId.set(acc.account_id, finalLabel);
+    if (acc.account_id) loopState.seenAccountIds.add(acc.account_id);
     if (!isDuplicate) loopState.commitCandidateLabel(candidateLabel, finalLabel);
   }
 
@@ -1010,9 +987,8 @@ async function enrollOrImportAccount(mode, {
   );
   let counter = 1;
   const loopState = {
-    byFingerprint: new Map(),
     bySubjectId: new Map(),
-    byAccountId: new Map(),
+    seenAccountIds: new Set(),
     peekNextLabel() {
       while (usedLabels.has(`${prefix}-${counter}`.toLowerCase())) counter += 1;
       return `${prefix}-${counter}`;
@@ -1516,11 +1492,10 @@ export async function runAccountsCli({
         const built = buildUnsharePayloads({
           userOption: options['--user'],
           withOption: options['--with'],
-          machineOption: options['--machine'],
         });
         if (built.error) return { exitCode: 2, message: built.error };
         if (!built.payloads.length) {
-          return { exitCode: 2, message: 'Use pdd accounts unshare LABEL --user USER or pass --with USER|ORG/TEAM[,...] / --machine MACHINE_ID.' };
+          return { exitCode: 2, message: 'Use pdd accounts unshare LABEL --user USER or pass --with USER|ORG/TEAM[,...].' };
         }
 
         let targetAccounts;

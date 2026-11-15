@@ -345,7 +345,7 @@ of `@openai/codex` (`~/.codex/auth.json`) and `@anthropic-ai/claude-code`
 | `pdd accounts share --all [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or `@ORG` targets |
 | `pdd accounts accept INVITE` | Accept a pending Cloud account share invite and materialize the shared grant if no account is pinned for that provider |
 | `pdd accounts unshare LABEL --user USER` | Revoke shared access to `LABEL` for `USER` |
-| `pdd accounts unshare [LABEL] [--all] [--provider codex\|claude] [--user USER] [--with USER\|ORG/TEAM[,...]] [--machine MACHINE_ID]` | Revoke shared access for users, organization teams, `@ORG` targets, or a machine across `LABEL` or all owned accounts |
+| `pdd accounts unshare [LABEL] [--all] [--provider codex\|claude] [--user USER] [--with USER\|ORG/TEAM[,...]]` | Revoke shared access for users, organization teams, or `@ORG` targets across `LABEL` or all owned accounts |
 | `pdd accounts leave LABEL` | Leave a shared Cloud account and clean up its local gateway configuration |
 | `pdd accounts remove LABEL` | Delete `LABEL` from PDD Cloud and revoke active leases |
 | `pdd accounts log LABEL [--json]` | Show the lease and sharing audit log for `LABEL` |

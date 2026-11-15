@@ -33,9 +33,9 @@ usage-reset credit commands, options or calls exist.
   `all_cooling`), and share with any `--with` targets. With `--loop`, require an interactive TTY
   (`stdin.isTTY && stdout.isTTY` or injected prompt port, else `exitCode: 2`), auto-generate
   collision-free labels `<prefix>-1`, `<prefix>-2`, ... (`--label` prefix or `provider`, skipping
-  numbers already present on the server), detect duplicate enrollments via session credential
-  fingerprints/`account_id`s and `already_enrolled === true` (`Already enrolled as <label> — refreshed credentials.`
-  without advancing the label counter while still applying `--with` shares), and prompt
+  numbers already present on the server), detect duplicate enrollments via `already_enrolled === true`
+  and enrolled `account_id`s within the loop session (`Already enrolled as <label> — refreshed credentials.`
+  without advancing the label counter while still applying `--with` shares, with zero local token hashing), and prompt
   `Enroll another <provider> account? [Y/n] ` after each iteration (`""`/`y`/`yes` continues;
   `n`/`no`/EOF/`SIGINT` exits `0` with a concise summary).
 - `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]`:
@@ -73,13 +73,13 @@ usage-reset credit commands, options or calls exist.
 - `pdd accounts pause LABEL`, `unpause LABEL`,
   `share [LABEL] [--all] [--provider codex|claude] --with USER|ORG/TEAM[,...]`,
   `accept INVITE`,
-  `unshare [LABEL] [--all] [--provider codex|claude] [--user USER] [--with USER|ORG/TEAM[,...]] [--machine MACHINE_ID]`,
+  `unshare [LABEL] [--all] [--provider codex|claude] [--user USER] [--with USER|ORG/TEAM[,...]]`,
   `leave LABEL`, `remove LABEL`, `log LABEL [--json]`:
   For `share` and `unshare`, require `LABEL` XOR `--all` (`exitCode: 2` otherwise), filter `--all`
   to owned accounts (`is_owner !== false`, excluding borrowed accounts, optionally filtered by
   `--provider`), and parse/validate all comma-separated targets (`USER` -> `{github_login}`,
-  `ORG/TEAM` -> `{org, team}`, `@ORG` -> `{org}`, plus `--user USER` and `--machine MACHINE_ID`
-  -> `{machine_id}` on `unshare`) before making network mutations. For `share` `USER` targets,
+  `ORG/TEAM` -> `{org, team}`, `@ORG` -> `{org}`, plus `--user USER` on `unshare`) before making
+  network mutations. For `share` `USER` targets,
   verify `gh api users/USER` resolves `type === "User"` (rejecting `Organization` with a hint to
   pass `--with ORG/<team>`) and read `res.invite.invite_id` (falling back to `res.invite_id`).
   `accept` accepts the invite and leases/materializes the shared account when no active account is

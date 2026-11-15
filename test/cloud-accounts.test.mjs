@@ -2093,10 +2093,10 @@ test('3427: isolated temp CODEX_HOME on add, --device-auth, --loop auto-labels &
     { org: 'promptdriven' },
   ]);
 
-  // 8. Symmetric `unshare --all --provider codex --user alice --with promptdriven/core,@promptdriven --machine old-laptop`!
+  // 8. Symmetric `unshare --all --provider codex --user alice --with promptdriven/core,@promptdriven`!
   const idxBeforeBulkUnshare = cloud.state.requests.length;
   const bulkUnshare = await invokeCli(
-    ['accounts', 'unshare', '--all', '--provider', 'codex', '--user', 'alice', '--with', 'promptdriven/core,@promptdriven,alice', '--machine', 'old-laptop'],
+    ['accounts', 'unshare', '--all', '--provider', 'codex', '--user', 'alice', '--with', 'promptdriven/core,@promptdriven,alice'],
     sb,
   );
   assert.equal(bulkUnshare.exit, 0, bulkUnshare.stderr);
@@ -2108,8 +2108,7 @@ test('3427: isolated temp CODEX_HOME on add, --device-auth, --loop auto-labels &
     { github_login: 'alice' },
     { org: 'promptdriven', team: 'core' },
     { org: 'promptdriven' },
-    { machine_id: 'old-laptop' },
-  ], 'deduplicated alice and sent symmetric user, team, org, and machine unshare payloads');
+  ], 'deduplicated alice and sent symmetric user, team, and org unshare payloads');
 });
 
 test('3428: pdd accounts list requests refresh=true while internal checks stay fast, and Codex add/import probes local usage when initial server windows are unpopulated', async t => {
