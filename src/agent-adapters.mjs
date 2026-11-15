@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 77b24f36abfd6349a9d289b418b639a87312b64ff6e73d82bed95c859fada6f1).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: 6233c175855a5528e959a1e995f4fd6c85f45bc497a94770e0ab9f783da8b51c).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';
@@ -207,6 +207,10 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
         const saved=cloudMod.readCloudAccountsState({env:childEnv},accountsPorts);
         const nextProviders=[...new Set(accessible.map(a=>a.provider).filter(Boolean))];
         const nextActive=Object.fromEntries(Object.entries(saved.active??{}).filter(([p])=>nextProviders.includes(p)));
+        const prevCodex=saved.active?.codex;
+        if(prevCodex?.managed_codex_gateway===true&&!nextActive.codex?.managed_codex_gateway){
+         try{cloudMod.restoreLocalCodexGatewayConfig({env:childEnv,previousModelProvider:prevCodex.previous_codex_model_provider??null,removeAuthFile:!nextActive.codex},accountsPorts);}catch{}
+        }
         const nextCooling=Object.fromEntries(Object.entries(saved.cooling??{}).filter(([p])=>nextProviders.includes(p)));
         cloudMod.writeCloudAccountsState({enrolled:accessible.length>0,providers:nextProviders,active:nextActive,cooling:nextCooling},{env:childEnv},accountsPorts);
         fallBackLocal=true;

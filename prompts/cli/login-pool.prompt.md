@@ -67,8 +67,10 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
 - `stripCodexAuthBundle`, `materializeLocalCodexAuth` and `restoreLocalCodexGatewayConfig`
   refuse symlinks on `~/.codex` (or `$CODEX_HOME`), `auth.json` and `config.toml`:
   - When `authOrLease.delivery_mode === "gateway_grant"`, `materializeLocalCodexAuth` validates
-    `codex_gateway_url` (`https:` or loopback `http:`) and `codex_gateway_token || gateway_bearer_token`,
-    atomically writes `0600` `auth.json` with `{"auth_mode": "apikey", "OPENAI_API_KEY": "<pddg_grant>"}`,
+    `codex_gateway_url` (`https:` or loopback `http:`) and `codex_gateway_token || gateway_bearer_token`
+    (registering the token in secret redaction and rejecting any value without the `"pddg_"` prefix with
+    `code: "invalid_lease"`), atomically writes `0600` `auth.json` with
+    `{"auth_mode": "apikey", "OPENAI_API_KEY": "<pddg_grant>"}`,
     and atomically updates `0600` `config.toml` (parsed and round-trip verified with
     `./vendor/smol-toml/parse.js`, preserving `[mcp_servers.pdd]` and all other user keys/tables)
     to set `model_provider = "pdd_codex_gateway"` (recording any prior non-`pdd_codex_gateway`
@@ -98,12 +100,16 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   - For owner `direct_stripped` passes, symlinks existing non-symlink
     `~/.codex/{config.toml,skills,memories,sessions,rules}`, writes leased stripped
     `auth.json` (`0600`, `refresh_token: ""`), and sets `CODEX_HOME=<overlay>`.
-  - For shared `gateway_grant` leases, writes **no `auth.json`** in `<overlay>`, symlinks only
-    existing non-symlink `~/.codex/{skills,memories,sessions,rules}` (never `auth.json` or
-    `config.toml`), parses `~/.codex/config.toml` when it is a regular non-symlink file to
-    preserve user settings such as `[mcp_servers.pdd]`, writes `0600` `<overlay>/config.toml`
-    with `model_provider = "pdd_codex_gateway"`, `[features]` merged with `shell_snapshot = false`,
-    `[shell_environment_policy]` merged with `filters = {"PDD_CODEX_GATEWAY_GRANT": "exclude"}`,
+  - For shared `gateway_grant` leases, validates the `"pddg_"` grant prefix (`code: "invalid_lease"`),
+    writes **no `auth.json`** in `<overlay>`, symlinks only existing non-symlink
+    `~/.codex/{skills,memories,sessions,rules}` (never `auth.json` or `config.toml`), parses
+    `~/.codex/config.toml` when it is a regular non-symlink file to preserve user settings such as
+    `[mcp_servers.pdd]`, writes `0600` `<overlay>/config.toml` with
+    `model_provider = "pdd_codex_gateway"`, `[features]` merged with `shell_snapshot = false`,
+    `[shell_environment_policy]` migrating string entries from legacy `exclude` (`"exclude"`) and
+    `include_only` (`"include"`) arrays into `filters` when absent, deleting `exclude` and
+    `include_only`, removing any case-insensitive `PDD_CODEX_GATEWAY_GRANT` entry from `filters` and
+    `set`, and setting `filters.PDD_CODEX_GATEWAY_GRANT = "exclude"`,
     and `[model_providers.pdd_codex_gateway]` (`name = "PDD Codex Gateway"`,
     `base_url = "<codex_gateway_url>"`, `wire_api = "responses"`, `requires_openai_auth = false`,
     `supports_websockets = false`, `env_http_headers = {"x-pdd-gateway-grant": "PDD_CODEX_GATEWAY_GRANT"}`

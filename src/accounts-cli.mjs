@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 4542e1e8a57a2b9b2747d18fdabbfcf659c79d5c80a1eb97ddcaf3f31fff29bb).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 0a619d072eab6bf687f4eeece01bdad3842e582b3b0731b4b6ef56e7f784df44).
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -367,7 +367,12 @@ async function runProviderLogin(provider, { cwd, env, deviceAuth = false }, port
   }
   if (provider === 'codex' && process.stdin?.isTTY && process.stdout?.isTTY) {
     const res = spawnSync(cmd, args, { cwd, env, stdio: 'inherit' });
-    return { code: res.status ?? 1, stdout: '', stderr: '' };
+    return {
+      code: res.signal === 'SIGINT' ? 130 : (res.status ?? 1),
+      signal: res.signal ?? null,
+      stdout: '',
+      stderr: '',
+    };
   }
   return runAgentProcess(cmd, args, { cwd, env, input: '', timeoutMs: 120_000, maxBytes: 65_536 });
 }
@@ -744,8 +749,12 @@ async function enrollSingleIteration(mode, {
         tempLoginDir = createTempPrivateDir(fs, 'pdd-codex-login-', ports.tmpRoot);
         const loginEnv = { ...env, CODEX_HOME: tempLoginDir };
         const loginRes = await runProviderLogin('codex', { cwd, env: loginEnv, deviceAuth }, ports);
-        if (loginRes && Number.isInteger(loginRes.code) && loginRes.code !== 0) {
-          return { exitCode: 1, aborted: loginRes.code === 130, message: 'codex login did not complete.' };
+        if (!loginRes || loginRes.code !== 0) {
+          return {
+            exitCode: 1,
+            aborted: loginRes?.code === 130 || loginRes?.signal === 'SIGINT',
+            message: 'codex login did not complete.',
+          };
         }
         const tempAuthFile = join(tempLoginDir, 'auth.json');
         let hasTempAuth = false;
@@ -854,8 +863,12 @@ async function enrollSingleIteration(mode, {
       oauthToken = readLocalClaudeToken(fs, env, piped);
     } else {
       const loginRes = await runProviderLogin('claude', { cwd, env, deviceAuth: false }, ports);
-      if (loginRes && Number.isInteger(loginRes.code) && loginRes.code !== 0) {
-        return { exitCode: 1, aborted: loginRes.code === 130, message: 'claude setup-token did not complete.' };
+      if (!loginRes || loginRes.code !== 0) {
+        return {
+          exitCode: 1,
+          aborted: loginRes?.code === 130 || loginRes?.signal === 'SIGINT',
+          message: 'claude setup-token did not complete.',
+        };
       }
       const loginOutput = `${loginRes?.stdout ?? ''}\n${loginRes?.stderr ?? ''}`;
       oauthToken = readLocalClaudeToken(fs, env, loginOutput);
@@ -1019,7 +1032,7 @@ async function enrollOrImportAccount(mode, {
     }, ports);
 
     if (step.exitCode !== 0) {
-      if (iteration > 0 && step.aborted) break;
+      if (step.aborted) break;
       if (iteration === 0) return { exitCode: step.exitCode, message: step.message };
       iterationMessages.push(step.message);
       break;
@@ -1274,6 +1287,14 @@ export async function runAccountsCli({
                 weekly_reset_at: acc.weekly_reset_at ?? entry.weekly_reset_at,
               }
             : entry;
+        }
+        const prevCodex = current.active?.codex;
+        if (prevCodex?.managed_codex_gateway === true && !nextActive.codex?.managed_codex_gateway) {
+          restoreLocalCodexGatewayConfig({
+            env,
+            previousModelProvider: prevCodex.previous_codex_model_provider ?? null,
+            removeAuthFile: !nextActive.codex,
+          }, ports);
         }
         const nextCooling = Object.fromEntries(
           Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),

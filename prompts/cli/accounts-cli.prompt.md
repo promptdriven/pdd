@@ -17,7 +17,9 @@ usage-reset credit commands, options or calls exist.
 
 - `pdd accounts` / `pdd accounts list [--json]`: Call `listCloudAccounts({refresh: true})` (`GET /v1/accounts?refresh=true`), reconcile
   `accounts-state.json` (`enrolled: accounts.length > 0` and `providers` from
-  accessible accounts, pruning removed/revoked `active` and `cooling` entries), mark
+  accessible accounts, pruning removed/revoked `active` and `cooling` entries and calling
+  `restoreLocalCodexGatewayConfig` with `removeAuthFile: !nextActive.codex` when pruning an
+  unshared or removed `managed_codex_gateway` Codex account), mark
   the locally active account per provider with `*`, and render an aligned table
   (`*`, `LABEL`, `PROVIDER`, `ACCESS`, `5H`, `7D`, `STATE`: `ready | cooling | paused`)
   followed by any `pending_invites`. `--json` prints structured JSON with zero
@@ -35,8 +37,11 @@ usage-reset credit commands, options or calls exist.
   collision-free labels `<prefix>-1`, `<prefix>-2`, ... (`--label` prefix or `provider`, skipping
   numbers already present on the server), detect duplicate enrollments via `already_enrolled === true`
   and enrolled `account_id`s within the loop session (`Already enrolled as <label> — refreshed credentials.`
-  without advancing the label counter while still applying `--with` shares, with zero local token hashing), and prompt
-  `Enroll another <provider> account? [Y/n] ` after each iteration (`""`/`y`/`yes` continues;
+  without advancing the label counter while still applying `--with` shares, with zero local token hashing),
+  treat `SIGINT` (`code === 130` or `signal === "SIGINT"`) during provider sign-in as a clean loop exit on
+  every iteration (`exitCode: 0`, printing `Loop finished with 0 <provider> accounts enrolled.` when aborted
+  on the first iteration while single non-`--loop` `add` exits `1` on any missing or nonzero `code`, including
+  `null`), and prompt `Enroll another <provider> account? [Y/n] ` after each iteration (`""`/`y`/`yes` continues;
   `n`/`no`/EOF/`SIGINT` exits `0` with a concise summary).
 - `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]`:
   Validate `--with` targets upfront, read `~/.codex/auth.json` (or `PATH` / `PATH/auth.json` when

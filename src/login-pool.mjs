@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 74cd4b486ec009e23ba9126a7ae8f5da71cb5e03043a14119fc3be9c977a2651).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 2f735a31d465554f889fdfa9616535357db58de38cabebf1ed74425ced345c69).
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -35,7 +35,7 @@ const SECRET_ENV_KEY = /(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD|_CREDENTIAL|^SECRET
 const CODEX_OVERLAY_LINKS = ['config.toml', 'skills', 'memories', 'sessions', 'rules'];
 const CODEX_GATEWAY_OVERLAY_LINKS = ['skills', 'memories', 'sessions', 'rules'];
 const CODEX_GATEWAY_PROVIDER_ID = 'pdd_codex_gateway';
-const INLINE_TOML_TABLE_KEYS = new Set(['http_headers', 'env_http_headers', 'filters']);
+const INLINE_TOML_TABLE_KEYS = new Set(['http_headers', 'env_http_headers', 'filters', 'set']);
 const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/;
 export const DEFAULT_CLOUD_URL = 'https://pdd-byok-api-c437voydwa-uc.a.run.app';
 export const POOL_FALLBACK_COOLDOWN_MS = 30 * 60 * 1000;
@@ -435,6 +435,9 @@ function resolveCodexGatewayGrant(lease) {
   const token = String(lease?.codex_gateway_token || lease?.gateway_bearer_token || '').trim();
   if (!token) throw new CloudAccountsError('Cloud lease returned no Codex gateway token.', { code: 'invalid_lease' });
   rememberSecrets(token);
+  if (!token.startsWith('pddg_')) {
+    throw new CloudAccountsError('Codex gateway token must start with pddg_.', { code: 'invalid_lease' });
+  }
   return token;
 }
 
@@ -743,6 +746,43 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
       const prevFeatures = isTomlTable(baseConfig.features) ? { ...baseConfig.features } : {};
       const prevPolicy = isTomlTable(baseConfig.shell_environment_policy) ? { ...baseConfig.shell_environment_policy } : {};
       const prevFilters = isTomlTable(prevPolicy.filters) ? { ...prevPolicy.filters } : {};
+      const hasFilterIgnoreCase = key => {
+        const lower = key.toLowerCase();
+        return Object.keys(prevFilters).some(k => k.toLowerCase() === lower);
+      };
+      if (Array.isArray(prevPolicy.exclude)) {
+        for (const item of prevPolicy.exclude) {
+          if (typeof item === 'string' && item.trim() && !hasFilterIgnoreCase(item.trim())) {
+            prevFilters[item.trim()] = 'exclude';
+          }
+        }
+      }
+      if (Array.isArray(prevPolicy.include_only)) {
+        for (const item of prevPolicy.include_only) {
+          if (typeof item === 'string' && item.trim() && !hasFilterIgnoreCase(item.trim())) {
+            prevFilters[item.trim()] = 'include';
+          }
+        }
+      }
+      delete prevPolicy.exclude;
+      delete prevPolicy.include_only;
+      for (const k of Object.keys(prevFilters)) {
+        if (k.toLowerCase() === 'pdd_codex_gateway_grant') {
+          delete prevFilters[k];
+        }
+      }
+      if (isTomlTable(prevPolicy.set)) {
+        const nextSet = { ...prevPolicy.set };
+        for (const k of Object.keys(nextSet)) {
+          if (k.toLowerCase() === 'pdd_codex_gateway_grant') {
+            delete nextSet[k];
+          }
+        }
+        if (Object.keys(nextSet).length > 0) prevPolicy.set = nextSet;
+        else delete prevPolicy.set;
+      }
+      prevFilters.PDD_CODEX_GATEWAY_GRANT = 'exclude';
+      prevPolicy.filters = prevFilters;
       const prevProviders = isTomlTable(baseConfig.model_providers) ? { ...baseConfig.model_providers } : {};
       delete prevProviders[CODEX_GATEWAY_PROVIDER_ID];
       const overlayConfig = {
@@ -752,13 +792,7 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
           ...prevFeatures,
           shell_snapshot: false,
         },
-        shell_environment_policy: {
-          ...prevPolicy,
-          filters: {
-            ...prevFilters,
-            PDD_CODEX_GATEWAY_GRANT: 'exclude',
-          },
-        },
+        shell_environment_policy: prevPolicy,
         model_providers: {
           ...prevProviders,
           [CODEX_GATEWAY_PROVIDER_ID]: {

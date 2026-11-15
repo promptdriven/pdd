@@ -2219,3 +2219,168 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
   assert.equal(internalListReqs.length, 1);
   assert.equal(internalListReqs[0].query, '', 'internal account resolution keeps refresh=false');
 });
+
+test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ prefix guard, revoked gateway config restore on list & step heal, and SIGINT/null-code login handling', async t => {
+  const cloud = await createMockCloudServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_revokable_shared_1',
+        label: 'cx-shared-rev1',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'team-owner',
+        is_owner: false,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 10,
+        five_hour_reset_at: '2026-11-15T02:00:00Z',
+        weekly_used_percent: 20,
+        weekly_reset_at: '2026-11-20T12:00:00Z',
+        cooling_until: null,
+        created_at: '2026-11-01T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+  const codexDir = join(sb.home, '.codex');
+  mkdirSync(codexDir, { recursive: true });
+  const authPath = localCodexAuthPath(sb.env);
+  const configPath = localCodexConfigPath(sb.env);
+
+  // 1. Legacy [shell_environment_policy] migration + case-insensitive grant scrub in `createCodexStepOverlay`!
+  writeFileSync(configPath, [
+    'model = "gpt-5.4"',
+    'model_provider = "custom_upstream"',
+    '',
+    '[shell_environment_policy]',
+    'inherit = "all"',
+    'exclude = ["AWS_*", "pdd_codex_gateway_grant"]',
+    'include_only = ["PATH", "HOME", "pdd_Codex_Gateway_Grant"]',
+    'filters = { CUSTOM_VAR = "exclude", pdd_codex_gateway_grant = "include" }',
+    'set = { SAFE_KEY = "ok", pdd_codex_gateway_grant = "leaked_override" }',
+    '',
+    '[mcp_servers.pdd]',
+    'command = "node"',
+    'args = ["bin/pdd.mjs", "mcp"]',
+    '',
+  ].join('\n'), { mode: 0o600 });
+
+  const ov = createCodexStepOverlay({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_policy_test',
+    codex_gateway_token: 'pddg_policyTestGrant1234',
+  }, { env: sb.env, tmpRoot: sb.root });
+  try {
+    const ovCfg = parseToml(readFileSync(ov.configPath, 'utf8'));
+    assert.equal(ovCfg.shell_environment_policy?.exclude, undefined, 'legacy exclude array removed');
+    assert.equal(ovCfg.shell_environment_policy?.include_only, undefined, 'legacy include_only array removed');
+    assert.equal(ovCfg.shell_environment_policy?.inherit, 'all');
+    assert.deepEqual({ ...ovCfg.shell_environment_policy?.filters }, {
+      CUSTOM_VAR: 'exclude',
+      'AWS_*': 'exclude',
+      PATH: 'include',
+      HOME: 'include',
+      PDD_CODEX_GATEWAY_GRANT: 'exclude',
+    });
+    assert.deepEqual({ ...ovCfg.shell_environment_policy?.set }, {
+      SAFE_KEY: 'ok',
+    });
+
+    const codexWhich = spawnSync('codex', ['--version'], { encoding: 'utf8' });
+    if (codexWhich.status === 0) {
+      const featCheck = spawnSync('codex', ['features', 'list'], {
+        env: { ...sb.env, CODEX_HOME: ov.overlayDir, PDD_CODEX_GATEWAY_GRANT: 'pddg_policyTestGrant1234' },
+        encoding: 'utf8',
+      });
+      assert.equal(featCheck.status, 0, `codex features list failed on migrated shell_environment_policy: ${featCheck.stderr}`);
+      assert.doesNotMatch(featCheck.stderr, /parse|invalid|unknown field|toml|conflict/i);
+    }
+  } finally {
+    ov.cleanup();
+  }
+
+  // 2. Reject non-`pddg_` tokens in `resolveCodexGatewayGrant` while registering secret redaction!
+  const badToken = 'sk-live-accidentalRawSecretToken_998877';
+  assert.throws(
+    () => materializeLocalCodexAuth({
+      delivery_mode: 'gateway_grant',
+      codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_bad',
+      codex_gateway_token: badToken,
+    }, { env: sb.env }),
+    err => err instanceof CloudAccountsError && err.code === 'invalid_lease',
+  );
+  assert.throws(
+    () => createCodexStepOverlay({
+      delivery_mode: 'gateway_grant',
+      codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_bad',
+      gateway_bearer_token: badToken,
+    }, { env: sb.env, tmpRoot: sb.root }),
+    err => err instanceof CloudAccountsError && err.code === 'invalid_lease',
+  );
+  assert.equal(existsSync(authPath), false, 'non-pddg_ token never written to ~/.codex/auth.json');
+  assert.doesNotMatch(redactSecrets(`err: ${badToken}`), new RegExp(badToken), 'rejected token registered in secret redaction');
+
+  // 3A. Server-side revoke/unshare + borrower `pdd accounts list` restores `~/.codex/config.toml` & removes `pddg_*` `auth.json`!
+  assert.equal((await invokeCli(['accounts', 'use', 'cx-shared-rev1'], sb)).exit, 0);
+  assert.equal(parseToml(readFileSync(configPath, 'utf8')).model_provider, 'pdd_codex_gateway');
+  assert.equal(existsSync(authPath), true);
+
+  cloud.state.accounts[0].revoked = true;
+  const healedList = await invokeCli(['accounts', 'list'], sb);
+  assert.equal(healedList.exit, 0, healedList.stderr);
+  assert.equal(existsSync(authPath), false, 'pddg_* auth.json removed when list prunes revoked shared Codex account');
+  const healedListCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(healedListCfg.model_provider, 'custom_upstream', 'previous model_provider restored when list prunes revoked shared account');
+  assert.equal(healedListCfg.model_providers, undefined, '[model_providers.pdd_codex_gateway] stripped on list prune');
+  assert.equal(healedListCfg.mcp_servers?.pdd?.command, 'node');
+
+  // 3B. Server-side revoke/unshare + `runStepAgentProcess` zero-accounts heal restores `~/.codex/config.toml` & removes `pddg_*` `auth.json`!
+  cloud.state.accounts[0].revoked = false;
+  assert.equal((await invokeCli(['accounts', 'use', 'cx-shared-rev1'], sb)).exit, 0);
+  assert.equal(parseToml(readFileSync(configPath, 'utf8')).model_provider, 'pdd_codex_gateway');
+  assert.equal(existsSync(authPath), true);
+
+  cloud.state.accounts[0].revoked = true;
+  let localFallbackRan = false;
+  const healStep = await runStepAgentProcess({
+    agent: 'codex',
+    step: 'build',
+    args: ['exec', 'hi'],
+    cwd: sb.cwd,
+    env: sb.env,
+    accountsPorts: { tmpRoot: sb.root },
+    run: async (_cmd, _args, opts) => {
+      localFallbackRan = true;
+      assert.equal(opts.env.PDD_CLOUD_STEP_ISOLATED, undefined, 'fell back to local run after healing zero-account state');
+      return { code: 0, stdout: 'local-ok', stderr: '' };
+    },
+  });
+  assert.equal(healStep.code, 0);
+  assert.equal(localFallbackRan, true);
+  assert.equal(existsSync(authPath), false, 'pddg_* auth.json removed during runStepAgentProcess zero-accounts heal');
+  const healedStepCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(healedStepCfg.model_provider, 'custom_upstream', 'previous model_provider restored during runStepAgentProcess zero-accounts heal');
+  assert.equal(healedStepCfg.model_providers, undefined);
+
+  // 4. `Ctrl-C` / `SIGINT` on `--loop` iteration 0 exits 0 cleanly, while non-`--loop` `{ code: null }` exits 1!
+  const loopSigintFirst = await invokeCli(['accounts', 'add', '--provider', 'codex', '--loop'], sb, {
+    tmpRoot: sb.root,
+    prompt: async () => 'n',
+    run: async () => ({ code: null, signal: 'SIGINT', stdout: '', stderr: '' }),
+  });
+  assert.equal(loopSigintFirst.exit, 0, loopSigintFirst.stderr);
+  assert.match(loopSigintFirst.stdout, /Loop finished with 0 codex accounts enrolled\./);
+
+  const singleNullCodeCodex = await invokeCli(['accounts', 'add', '--provider', 'codex'], sb, {
+    tmpRoot: sb.root,
+    run: async () => ({ code: null, signal: 'SIGTERM', stdout: '', stderr: '' }),
+  });
+  assert.equal(singleNullCodeCodex.exit, 1);
+  assert.match(singleNullCodeCodex.stderr, /codex login did not complete\./);
+
+  const singleNullCodeClaude = await invokeCli(['accounts', 'add', '--provider', 'claude'], sb, {
+    run: async () => ({ code: null, signal: 'SIGTERM', stdout: '', stderr: '' }),
+  });
+  assert.equal(singleNullCodeClaude.exit, 1);
+  assert.match(singleNullCodeClaude.stderr, /claude setup-token did not complete\./);
+});
