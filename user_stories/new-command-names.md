@@ -5,7 +5,7 @@ I can run `pdd test`, `pdd lint`, `pdd simulate` (short: `pdd sim`) and `pdd wor
 ## Acceptance criteria
 
 1. `pdd --help` lists `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run`, never says "pdd check", "pdd try" or "workflow start", prints nothing to stderr and exits with code 0.
-2. `pdd test --help` lists the `pdd test` forms with --read, --retry, --fill-hash, --files and --screen, prints nothing to stderr and exits with code 0.
+2. `pdd test --help` lists the `pdd test` forms with --read, --retry, --files and --screen, prints nothing to stderr and exits with code 0.
 3. `pdd lint --help` lists the `pdd lint` forms, including `pdd lint --local`, prints nothing to stderr and exits with code 0.
 4. `pdd check --help` prints nothing to stdout, prints one line to stderr that names `pdd check` and `pdd test`, and exits with code 2.
 5. `pdd check --lint --help` and `pdd check new-command-names --lint` each print nothing to stdout, print one line to stderr that names `pdd check --lint` and `pdd lint`, and exit with code 2.
@@ -21,7 +21,7 @@ I can run `pdd test`, `pdd lint`, `pdd simulate` (short: `pdd sim`) and `pdd wor
 
 ## What must not change
 
-`pdd test`, `pdd lint` and `pdd simulate` keep every option, effect, exit code and stdout byte that they have today. `pdd test` keeps --read, --retry, --fill-hash, --files, --screen, --timeout, --max-calls, --details and --json, and with no Story it tests every Story. `pdd simulate` keeps --cli, --shell, --serve, --save-last, --stop, --tab, --app-map, --new, --no-open, --no-wait, --agent and --max-calls. The machine-read words keep `check` and `try`: the wire commands, the `/v1/try/…` paths, the `.pdd/try` folder, saved records and the workflow step names `check` and `try`. A server text that pdd prints as it got it stays as the server sent it, even when it names an old command. The MCP tool names of `pdd mcp` stay as they are.
+`pdd test`, `pdd lint` and `pdd simulate` keep every option, effect, exit code and stdout byte that they have today. `pdd test` keeps --read, --retry, --files, --screen, --timeout, --max-calls, --details and --json, and with no Story it tests every Story. `pdd simulate` keeps --cli, --shell, --serve, --save-last, --stop, --tab, --app-map, --new, --no-open, --no-wait, --agent and --max-calls. The machine-read words keep `check` and `try`: the wire commands, the `/v1/try/…` paths, the `.pdd/try` folder, saved records and the workflow step names `check` and `try`. A server text that pdd prints as it got it stays as the server sent it, even when it names an old command. The MCP tool names of `pdd mcp` stay as they are.
 
 ## Rules to check
 

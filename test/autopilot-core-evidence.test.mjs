@@ -1566,14 +1566,14 @@ test('E79 (B1, Serhan D3) a same-head repair still checks the 501st consumer', a
   assert.ok(w.job(17, 'repair'), 'the 501st consumer remains open');
 });
 
-test('E78 (B1) on pdd itself, the consumers of a change to runtime-client.prompt.md are read in under 60 s, transitive call targets included', async t => {
+test('E78 (B1) on pdd itself, the consumers of a change to runtime-seam.prompt.md are read in under 60 s, transitive call targets included', async t => {
   const { storyReach } = await import('../src/autopilot-core.mjs');
   const { findTests } = await import('../src/runtime-seam.mjs');
   const root = fileURLToPath(new URL('..', import.meta.url));
   const started = Date.now();
   const found = findTests({ root, excludeFixtureProjects: true });
   const tests = found.tests.map(test => ({ path: test.path, stories: [...new Set([test.storyPath, ...(test.storyPaths ?? [])].filter(Boolean))], error: test.error ?? null }));
-  const reach = await storyReach(root, tests, ['prompts/cli/runtime-client.prompt.md']);
+  const reach = await storyReach(root, tests, ['prompts/cli/runtime-seam.prompt.md']);
   const took = Date.now() - started;
   assert.ok(took < 60_000, `one read took ${took} ms`);
   assert.ok(reach.stories.length > 10, `${reach.stories.length} consumers`);

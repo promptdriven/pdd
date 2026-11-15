@@ -12,9 +12,12 @@ fixture-project exclusions, with the same workspace limits. Report each bad
 prompt or test separately and continue inspecting independent files. Reference
 or source failures retain their code and reason; never print source contents.
 Pair tests with Stories by the shared name rule, never by trusting story_path.
-Pair prompts with tests through step entry_path, declared entry_paths and
-transitive interface call targets. Keep paths sorted and unique. Do not guess
-an interface kind; this task does not add or validate kind metadata.
+Pair prompts with tests through step entry_path, declared entry_paths,
+transitive interface call targets, and transitive Markdown `.prompt.md` links
+(`promptMarkdownTargets`) for plain prompts. Keep paths sorted and unique.
+Support plain Markdown prompts (`allowMissingInterfaces: true`, skipping
+`interface-missing`) and frontmatter `kind: native-only` declarations alongside
+optional embedded Runtime interface blocks.
 
 `inspectProjectFiles` returns exactly this top-level JSON shape:
 - `schema_version`: `pdd.files.v1`.
@@ -44,11 +47,11 @@ Resolve cwd's Git root with a read-only Git command. Outside Git, write one
 finite stderr diagnostic and return 2. A root discovery/configuration failure
 writes its reason to stderr and returns its exit code (default 4). Otherwise
 print JSON plus newline with --json, or a text list of every prompt, Story, test,
-orphan, refusal reason and warning. Text states whether a prompt has a Runtime
-interface. Inspection returns 0 even when listed files have refusals; this is
+orphan, refusal reason and warning. Text prints `Prompt: <path>` (with `(native-only)`
+for native-only prompts or `(unreadable)` when reading fails). Inspection returns 0 even when listed files have refusals; this is
 an inventory, not a pass verdict. Use injected stdout/stderr ports for output.
 
 ## Dependencies
 
-- [Shared authored-file reader](runtime-preflight.prompt.md): required generation,
+- [Runtime seam](runtime-seam.prompt.md#public-contract): required generation,
   verification and testing context for all parsing, pairing and refusal rules.

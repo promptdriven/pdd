@@ -7,8 +7,8 @@ offline work does not permit this command.
 | Offline work | What it establishes |
 |---|---|
 | `pdd lint --local` | Local lint; no network or AI calls. |
+| `pdd files [--json]` | Discovered prompts, Stories, tests and local refusals; nothing is sent. |
 | `pdd test --files [STORY...]` | The selected upload paths, byte sizes and capture safety checks; nothing is sent. |
-| `pdd test --fill-hash` | The hashes of draft interfaces; nothing is sent. |
 | Read the prompt, Story and test together | Check declared schemas, exact criterion text, dependencies and expected-value ownership. This is an authoring review. |
 | Run the repository's ordinary tests | The native behavior those tests exercise. |
 

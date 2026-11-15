@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: b4ca499ce3b8af0f5d894cb75554c87bfce1445f6b8e6a1ba1640c7bb26d2a1e).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: c9a7679c111fd48754dffc2a37b084e6cd4df2f7997d7075a319787387a1814b).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';
@@ -161,7 +161,7 @@ function composeStepChildArgs(launch,caller,hasExplicitEffortOption) {
  }
  return [...injected,...rest];
 }
-export async function runStepAgentProcess({agent='codex',definition=null,step=null,args=[],model=null,reasoningEffort=null,tiering=null,cwd,env=process.env,input='',signal,timeoutMs=120000,maxBytes=131072,run=runAgentProcess,now=Date.now}={}) {
+export async function runStepAgentProcess({agent='codex',definition=null,step=null,args=[],model=null,reasoningEffort=null,tiering=null,cwd,env=process.env,input='',signal,timeoutMs=120000,maxBytes=131072,run=runAgentProcess,now=Date.now,allowCredits=false,accountsPorts={}}={}){
  const childEnv={...env,...definition?.env};
  const overrideExplicitModel=Boolean(tiering&&typeof tiering==='object'&&tiering.overrideExplicitModel===true);
  const hasModelOpt=model!==null&&model!==undefined;
@@ -171,9 +171,104 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
  const childArgs=composeStepChildArgs(launch,{...caller,hasModelFlag:caller.hasModelFlag&&!overrideExplicitModel&&!hasModelOpt},reasoningEffort!==null&&reasoningEffort!==undefined);
  const {extractHarnessTokens,normalizeAutopilotPhase}=await import('./autopilot-telemetry.mjs');
  const phase=normalizeAutopilotPhase(step),startedAt=now();
- let result;
+ let cloudMod=null;
+ if((launch.agent==='codex'||launch.agent==='claude')&&childEnv.PDD_CLOUD_STEP_ISOLATED!=='1'){
+  const loaded=await import('./login-pool.mjs');
+  if(loaded.isCloudAccountsActive({env:childEnv,provider:launch.agent},accountsPorts))cloudMod=loaded;
+ }
+ let result,activeAccount=null;
  try{
-  result=await run(launch.command,childArgs,{cwd,env:childEnv,input,signal,timeoutMs,maxBytes});
+  if(!cloudMod){
+   result=await run(launch.command,childArgs,{cwd,env:childEnv,input,signal,timeoutMs,maxBytes});
+  }else{
+   const triedIds=[];
+   let burstRetried=false,prevAccountId=null;
+   for(let round=0;;round++){
+    if(round>=24){
+     throw Object.assign(new Error(`All ${launch.agent} Cloud accounts are paused or cooling.`),{code:'all_cooling',wakeAt:null});
+    }
+    let leaseReply=null;
+    try{
+     leaseReply=await cloudMod.leaseCloudAccount({provider:launch.agent,skipAccountIds:triedIds,holderId:`step-${phase||'cli'}`},{cwd,env:childEnv,timeoutMs:accountsPorts?.leaseTimeoutMs??3000},accountsPorts);
+    }catch(leaseErr){
+     if(!triedIds.length&&(leaseErr?.code==='timeout'||leaseErr?.code==='network_error'||leaseErr?.code==='missing_auth_token')){
+      result=await run(launch.command,childArgs,{cwd,env:childEnv,input,signal,timeoutMs,maxBytes});
+      break;
+     }
+     throw leaseErr;
+    }
+    if(leaseReply?.state==='all_cooling'){
+     if(!triedIds.length&&!leaseReply.wake_at){
+      let fallBackLocal=false;
+      try{
+       const listed=await cloudMod.cloudAccountsRequest('GET','/v1/accounts',{cwd,env:childEnv,timeoutMs:accountsPorts?.leaseTimeoutMs??1500},accountsPorts);
+       const accessible=(Array.isArray(listed?.accounts)?listed.accounts:[]).filter(a=>a&&!a.revoked);
+       if(!accessible.some(a=>a.provider===launch.agent)){
+        const saved=cloudMod.readCloudAccountsState({env:childEnv},accountsPorts);
+        const nextProviders=[...new Set(accessible.map(a=>a.provider).filter(Boolean))];
+        const nextActive=Object.fromEntries(Object.entries(saved.active??{}).filter(([p])=>nextProviders.includes(p)));
+        const nextCooling=Object.fromEntries(Object.entries(saved.cooling??{}).filter(([p])=>nextProviders.includes(p)));
+        cloudMod.writeCloudAccountsState({enrolled:accessible.length>0,providers:nextProviders,active:nextActive,cooling:nextCooling},{env:childEnv},accountsPorts);
+        fallBackLocal=true;
+       }
+      }catch{
+       if(!cloudMod.readCloudAccountsState({env:childEnv},accountsPorts).active?.[launch.agent])fallBackLocal=true;
+      }
+      if(fallBackLocal){
+       result=await run(launch.command,childArgs,{cwd,env:childEnv,input,signal,timeoutMs,maxBytes});
+       break;
+      }
+     }
+     const msg=leaseReply.wake_at?`Waiting on AI quota until ${leaseReply.wake_at}`:`All ${launch.agent} Cloud accounts are paused or cooling.`;
+     throw Object.assign(new Error(msg),{code:'all_cooling',wakeAt:leaseReply.wake_at??null});
+    }
+    const acc=leaseReply?.account;
+    if(!allowCredits&&acc&&cloudMod.isCreditOrResetAccount?.(acc)){
+     if(!acc.account_id||triedIds.includes(acc.account_id)||triedIds.length>=24){
+      throw Object.assign(new Error(`All non-credit ${launch.agent} Cloud accounts are paused or cooling.`),{code:'all_cooling',wakeAt:null});
+     }
+     triedIds.push(acc.account_id);
+     continue;
+    }
+    if(burstRetried&&prevAccountId&&acc?.account_id&&acc.account_id!==prevAccountId){
+     if(!triedIds.includes(prevAccountId))triedIds.push(prevAccountId);
+     burstRetried=false;
+    }
+    prevAccountId=acc?.account_id??null;
+    if((typeof acc?.five_hour_used_percent==='number'&&acc.five_hour_used_percent>=100)||(typeof acc?.weekly_used_percent==='number'&&acc.weekly_used_percent>=100)){
+     await cloudMod.reportCloudAccountUsage(acc.account_id,{...acc,limit_reached:true},{cwd,env:childEnv,timeoutMs:1500},accountsPorts).catch(()=>{});
+     triedIds.push(acc.account_id);
+     if(triedIds.length<12)continue;
+    }
+    activeAccount=acc?{account_id:acc.account_id,label:acc.label,provider:acc.provider}:null;
+    const stepExec=cloudMod.prepareCloudStepExecution(leaseReply,childEnv,accountsPorts);
+    try{
+     result=await run(launch.command,childArgs,{cwd,env:stepExec.env,input,signal,timeoutMs,maxBytes});
+    }finally{
+     stepExec.cleanup();
+    }
+    const combined=`${result?.stderr??''}\n${result?.stdout??''}`;
+    const rateClass=result?.code!==0?cloudMod.classifyRateLimitFailure(combined,acc):null;
+    if(rateClass==='burst_rate_limit'&&!burstRetried){
+     burstRetried=true;
+     await (accountsPorts?.sleep??(ms=>new Promise(r=>setTimeout(r,ms))))(accountsPorts?.burstRetryMs??150);
+     continue;
+    }
+    if((rateClass==='quota_exhausted'||(rateClass==='burst_rate_limit'&&burstRetried))&&acc?.account_id&&triedIds.length<12){
+     let windows=acc;
+     if(launch.agent==='codex'&&typeof accountsPorts?.readCodexUsageWindows==='function'){
+      const probeExec=cloudMod.prepareCloudStepExecution(leaseReply,childEnv,accountsPorts);
+      try{windows=await accountsPorts.readCodexUsageWindows({command:launch.command,cwd,env:probeExec.env,weeklyStopPercent:100,timeoutMs:800});}catch{}finally{probeExec.cleanup();}
+     }
+     const report=cloudMod.extractRateLimitReport(combined,windows,now());
+     await cloudMod.reportCloudAccountUsage(acc.account_id,report,{cwd,env:childEnv,timeoutMs:1500},accountsPorts).catch(()=>{});
+     triedIds.push(acc.account_id);
+     burstRetried=false;
+     continue;
+    }
+    break;
+   }
+  }
  }catch(error){
   const endedAt=now(),durationMs=Math.max(0,endedAt-startedAt);
   const tokens=extractHarnessTokens(typeof error?.stdout==='string'?error.stdout:'',{agent:launch.agent});
@@ -183,5 +278,5 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
  const endedAt=now(),durationMs=Math.max(0,endedAt-startedAt);
  const stdout=typeof result?.stdout==='string'?result.stdout:'';
  const tokens=extractHarnessTokens(stdout,{agent:launch.agent});
- return {...(result&&typeof result==='object'?result:{}),stdout,launch,telemetry:{phase,step:step??null,startedAt,endedAt,durationMs,tokens}};
+ return {...(result&&typeof result==='object'?result:{}),stdout,launch,...(activeAccount?{account:activeAccount}:{}),telemetry:{phase,step:step??null,startedAt,endedAt,durationMs,tokens}};
 }

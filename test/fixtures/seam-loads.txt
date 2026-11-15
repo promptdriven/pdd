@@ -59,7 +59,6 @@ cli:approve runtime/runtime-markdown.mjs
 cli:approve runtime/runtime-preflight.mjs
 cli:approve runtime/scenario-json.mjs
 cli:approve story-lint.mjs
-cli:approve-automatic runtime-exit.mjs
 cli:autopilot-alerts autopilot-alerts.mjs
 cli:autopilot-off autopilot.mjs
 cli:autopilot-off cost-ledger.mjs
@@ -137,12 +136,6 @@ cli:graph workflow-herdr-layout.mjs
 cli:graph workflow-launch-profile.mjs
 cli:graph workflow-runs.mjs
 cli:graph workflow-worktree.mjs
-cli:interface-draft runtime/contract-refs.mjs
-cli:interface-draft runtime/interface-draft.mjs
-cli:interface-draft runtime/runtime-markdown.mjs
-cli:interface-draft runtime/runtime-preflight.mjs
-cli:interface-draft runtime/scenario-json.mjs
-cli:interface-draft test-selection.mjs
 cli:jobs argument-parser.mjs
 cli:jobs completion.mjs
 cli:jobs path-diagnostic.mjs
@@ -151,6 +144,8 @@ cli:jobs project-setup.mjs
 cli:jobs setup-interaction.mjs
 cli:jobs skills-install.mjs
 cli:jobs workflow-setup.mjs
+cli:lint runtime-exit.mjs
+cli:mcp runtime-exit.mjs
 cli:mcp runtime/agent-judge.mjs
 cli:mcp runtime/try-mcp.mjs
 cli:metrics approval-evidence.mjs
@@ -183,17 +178,14 @@ cli:setup metrics-capture.mjs
 cli:setup metrics-gap.mjs
 cli:setup metrics-hooks.mjs
 cli:setup metrics-store.mjs
-cli:setup runtime/contract-refs.mjs
-cli:setup runtime/interface-draft.mjs
-cli:setup runtime/runtime-markdown.mjs
-cli:setup runtime/runtime-preflight.mjs
-cli:setup runtime/scenario-json.mjs
 cli:setup toml-string.mjs
 cli:setup workflow-chat.mjs
 cli:setup workflow-herdr-layout.mjs
 cli:setup workflow-launch-profile.mjs
 cli:setup workflow-runs.mjs
 cli:setup workflow-worktree.mjs
+cli:simulate runtime-exit.mjs
+cli:test runtime-exit.mjs
 cli:workflow-prove approval-evidence.mjs
 cli:workflow-prove cost-ledger.mjs
 cli:workflow-prove metrics-capture.mjs
@@ -323,7 +315,6 @@ lib:product.mjs prompt-approve.mjs
 lib:product.mjs runtime-seam.mjs
 lib:product.mjs runtime/contract-refs.mjs
 lib:product.mjs runtime/index.mjs
-lib:product.mjs runtime/interface-draft.mjs
 lib:product.mjs runtime/lint-call-preflight.mjs
 lib:product.mjs runtime/product-composition.mjs
 lib:product.mjs runtime/runtime-binding-plan.mjs

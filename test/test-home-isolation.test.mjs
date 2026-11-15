@@ -37,6 +37,7 @@ for (const entry of ['focused import', 'npm preload']) test(`${entry} removes in
   const f = caller(t), project = join(f.dir, 'suite-project');
   mkdirSync(join(project, 'test/helpers'), { recursive: true });
   writeFileSync(join(project, 'test/helpers/test-home.mjs'), readFileSync(join(root, 'test/helpers/test-home.mjs')));
+  writeFileSync(join(project, 'test/helpers/test-net-guard.mjs'), readFileSync(join(root, 'test/helpers/test-net-guard.mjs')));
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   writeFileSync(join(project, 'package.json'), JSON.stringify({ private: true, type: 'module', scripts: { test: manifest.scripts.test } }));
   const controls = { PDD_SUITE_QUEUE: join(f.home, 'suite-queue'), PDD_VM_SUITE_LOCK: join(f.home, 'suite.lock'), SUITE: 'synthetic-unused-command' };
@@ -194,6 +195,7 @@ test('npm test isolates a new file that omits the helper import', t => {
   const f = caller(t), before = snapshot(f.home), project = join(f.dir, 'project');
   mkdirSync(join(project, 'test/helpers'), { recursive: true });
   writeFileSync(join(project, 'test/helpers/test-home.mjs'), readFileSync(join(root, 'test/helpers/test-home.mjs')));
+  writeFileSync(join(project, 'test/helpers/test-net-guard.mjs'), readFileSync(join(root, 'test/helpers/test-net-guard.mjs')));
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   writeFileSync(join(project, 'package.json'), JSON.stringify({ private: true, type: 'module', scripts: { test: manifest.scripts.test } }));
   const record = join(f.dir, 'npm-test-home');

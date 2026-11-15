@@ -33,11 +33,13 @@ is uncertain; those records let a later tick retry without a live controller.
   `Error("Autopilot core jobs need codex, claude or agy")`.
 - `jobEnvironment(env)` returns a copy of `env` without keys that would join the
   caller's own agent, Herdr or coordinator session: `ANTIGRAVITY_*` (except
-  `ANTIGRAVITY_APP_DATA_DIR`), `CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_PID`,
+  `ANTIGRAVITY_APP_DATA_DIR`), `CLAUDECODE`, `CLAUDE_CODE_*` (except
+  `CLAUDE_CODE_OAUTH_TOKEN`), `CLAUDE_PID`,
   `CODEX_THREAD_ID`, `CODEX_SANDBOX*`, `HERDR_*`, `PDD_AGENT_SESSION` and
-  `PDD_AUTOPILOT_CONTEXT`. Account settings such as `CODEX_HOME` and
+  `PDD_AUTOPILOT_CONTEXT`. Account settings such as `CODEX_HOME`,
+  `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL` and
   `ANTIGRAVITY_APP_DATA_DIR` stay.
-- `startAgentJob({id, dir, cwd, command, args, input, env, hung, custodyRoot}, ports)` writes
+- `startAgentJob({id, dir, cwd, command, args, input, env, hung, custodyRoot, cleanupDirs}, ports)` writes
   `dir/ID.input` (the prompt, mode 0600) and `dir/ID.spec.json`, then starts
   `node src/agent-job.mjs --wrapper SPEC` detached in its own process group, with
   `env` and no inherited stdio, and returns at once with
@@ -53,6 +55,10 @@ is uncertain; those records let a later tick retry without a live controller.
   `custodyRoot` is optional. Only a caller that will remove a known disposable
   worktree passes its root; the runner records its absolute path. `cwd` alone is
   never a custody root: a job may run in a person's persistent source tree.
+  `cleanupDirs` is optional: an array of disposable step overlay paths (`pdd-cx-*`)
+  saved in the spec and removed best-effort when the wrapper finishes (after any
+  group `SIGKILL`) and in `cleanupAgentJob` whenever the wrapper is no longer live
+  (including when `!processManifest(saved)`) or when process termination is confirmed.
 - `startAgentJob` also takes `priority` (`{nice, qos, cpus, taskset}` from the
   [machine guard](machine-guard.prompt.md)) and saves it in the spec. Every job
   runs at the lowest priority (#3231), the child and not the wrapper: the wrapper only
@@ -136,13 +142,17 @@ is uncertain; those records let a later tick retry without a live controller.
   inventory or a remaining saved identity is unconfirmed. Each live `readAgentJob`
   refreshes this saved snapshot on the job record and in `TOKEN.processes.json`, so it
   survives a tick that returns while the job runs. The wrapper snapshots once
-  immediately after it starts its direct child, once more before the first 250 ms
-  round, and then refreshes the same cumulative manifest every 250 ms while its child
-  runs. Older PID/start identities stay until cleanup, even when a helper reparents.
-  A manifest write or inventory failure, or a malformed prior manifest, leaves a
-  durable uncertainty marker and cleanup then retains the job. That marker stays for
-  the job token even if a later snapshot succeeds: the failed sample could have
-  missed a detached helper. A captured live descendant without a valid identity is an
+  immediately after it starts its direct child, once more before the first periodic
+  round, and then refreshes the same cumulative manifest every 2000 ms
+  (`SNAPSHOT_INTERVAL_MS = 2000`) while its child runs, deduplicating PID/start
+  identities and bounding retained entries to `MAX_CAPTURED_PROCESSES = 512` (keeping
+  every live descendant, the wrapper root and active child group leaders, plus the most
+  recent exited entries). Older retained PID/start identities stay until cleanup, even
+  when a helper reparents.
+  A manifest write or inventory failure on a fresh capture without a saved manifest, or a
+  malformed prior manifest, leaves a durable uncertainty marker. Transient `ps` failures
+  during periodic wrapper polling keep an existing valid manifest rather than latching
+  `.processes.error`. A captured live descendant without a valid identity is an
   inventory failure, never a row to discard.
 
   A cleanup-only fresh snapshot is different from periodic sampling. If the process
@@ -153,9 +163,18 @@ is uncertain; those records let a later tick retry without a live controller.
   only while the same PID still verifies this job token; if an attempt recorded the
   wrapper's PID/start identity, the complete snapshot must find that same identity.
   A successful complete snapshot appends its resolution and retains prior attempt
-  history. If the wrapper exits or its token no longer matches first, cleanup stays
-  unconfirmed. A malformed manifest or failed manifest write, and an ordinary
-  non-cleanup snapshot failure, keep the permanent uncertainty marker.
+  history. For a stopped, timed-out or real spec-backed job where `.processes.error`
+  was latched earlier (or the wrapper exited after a retryable snapshot attempt, including
+  when the prior attempt recorded `wrapper: null` and failing closed if writing the
+  resolution fails), `cleanupAgentJob` does not stay wedged forever: it re-probes the live
+  process table, skips `-job.pid` group collection and group signals (`SIGTERM`, `-job.pid`
+  liveness probes and `SIGKILL`) whenever `job.pid` has been recycled to an unrelated
+  process without `job.token` (which by POSIX rules proves the original `-job.pid` process
+  group already ended), clears the stale pre-existing `.processes.error` latch, terminates
+  captured and verified group processes (`SIGTERM`, grace, `SIGKILL`), confirms the wrapper
+  PID and `-pgid` process group are dead (`ESRCH` or recycled PID), wipes `cleanupDirs`,
+  marks `job.progress.running = false`, and returns `{confirmed: true}` (still failing
+  closed on a malformed manifest or a new error written during shutdown).
 
   When the direct child exits, before the wrapper records that exit, the wrapper also
   reads the current user's process table only when the saved spec has an explicit

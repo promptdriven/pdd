@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { findTests, preflight, projectAnswer, renderJson, renderText } from '../src/runtime-seam.mjs';
 import { storyCard } from '../src/workflow-story-card.mjs';
-import { harbor } from './runtime-package/runtime-fake.mjs';
+import { harbor } from './helpers/runtime-fake.mjs';
 
 test('ISSUE869: preflight admits relational ref_target checks, lt/lte/gt/gte, and integer_relation as exact criterion coverage', t => {
   for (const check of [

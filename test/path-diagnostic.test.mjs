@@ -90,6 +90,7 @@ test('PATH6: probing another Alpha installation terminates and keeps version-onl
   const f = fixture(t), other = join(f.root, 'other-alpha');
   mkdirSync(other);
   for (const name of ['src', 'bin', 'package.json']) cpSync(resolve(import.meta.dirname, '..', name), join(other, name), { recursive: true });
+  symlinkSync(resolve(import.meta.dirname, '..', 'node_modules'), join(other, 'node_modules'), 'dir');
   rmSync(join(f.old, 'pdd')); symlinkSync(join(other, 'bin/pdd.mjs'), join(f.old, 'pdd'));
   const r = f.run('--version');
   assert.equal(r.status, 0, r.stderr); assert.equal(r.stdout, `${version}\n`);

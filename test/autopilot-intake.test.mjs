@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, chmodSync, 
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { coreWorld } from './helpers/core-world.mjs';
-import { nativeFacts, issueVersion, personComments, readCard, parseCardText, cardCommand, cardEnvironment, readIntake, intakeText, intakeMode, intakeFolders, wouldPick, shadowIntake, stopCardJobs } from '../src/autopilot-intake.mjs';
+import { nativeFacts, issueVersion, personComments, readCard, parseCardText, cardCommand, cardEnvironment, readIntake, intakeText, intakeMode, intakeFolders, wouldPick, shadowIntake, activeIntake, stopCardJobs } from '../src/autopilot-intake.mjs';
 
 const intakeJobs = w => w.started.filter(job => job.role === 'intake');
 const workJobs = w => w.started.filter(job => job.role !== 'intake').map(job => `${job.issue}:${job.role}`);
@@ -344,4 +344,318 @@ test('autopilot-intake-shadow: the error, timeout and stop paths make no GitHub 
   assert.equal(stopCardJobs({ root, jobs }), 1); assert.equal(alive.size, 0, 'a stop leaves no card job running');
   assert.deepEqual(calls.filter(([method]) => method !== 'GET'), [], 'no GitHub write in any path');
   rmSync(root, { recursive: true, force: true });
+});
+
+test('autopilot-intake-cloud: shadowIntake and activeIntake materialize prepareStep per job, wipe overlays on prune, and pass accountWindows to exhaustLogin', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const root = mkdtempSync(join(tmpdir(), 'pdd-intake-cloud-'));
+  try {
+    let now = Date.parse('2026-11-10T12:00:00Z');
+    const alive = new Set();
+    let pid = 0;
+    let failStartOnce = false;
+    const startedSpecs = [];
+    const startedJobs = [];
+    const exhaustCalls = [];
+    const createdOverlays = [];
+
+    const jobs = {
+      start: spec => {
+        if (failStartOnce) {
+          failStartOnce = false;
+          throw new Error('simulated spawn failure');
+        }
+        startedSpecs.push(spec);
+        const job = {
+          ...spec,
+          pid: ++pid,
+          log: join(spec.dir, `${spec.id}.log`),
+          exit: join(spec.dir, `${spec.id}.exit.json`),
+        };
+        writeFileSync(job.log, 'log');
+        alive.add(job.pid);
+        startedJobs.push(job);
+        return job;
+      },
+      read: job => {
+        if (alive.has(job.pid)) return { state: 'running', exit: null, result: null };
+        let exit = { code: 0, signal: null };
+        try { exit = JSON.parse(readFileSync(job.exit, 'utf8')); } catch {}
+        return { state: 'exited', exit, result: null };
+      },
+      stop: job => alive.delete(job.pid),
+    };
+
+    const gh = {
+      all: async () => [],
+      ok: async () => ({ id: 901 }),
+      call: async () => ({ status: 200 }),
+    };
+
+    // 1. Codex Cloud prepareStep in shadowIntake: each job gets its own disposable 0700 pdd-cx-* overlay,
+    // prune wipes finished overlays, start failure cleans up immediately, and quota failure passes accountWindows.
+    const codexSelection = {
+      state: 'ready',
+      cloud: true,
+      configured: true,
+      poolSize: 2,
+      login: { id: 'acc_cx_intake', kind: 'codex', command: 'codex' },
+      agent: { id: 'acc_cx_intake', kind: 'codex', command: 'codex' },
+      env: { HOME: root, CODEX_HOME: '/should-be-overridden' },
+      account: {
+        account_id: 'acc_cx_intake',
+        five_hour_used_percent: 45,
+        five_hour_reset_at: '2026-11-10T16:00:00Z',
+        weekly_used_percent: 62,
+        weekly_reset_at: '2026-11-15T12:00:00Z',
+      },
+      prepareStep: baseEnv => {
+        const dir = mkdtempSync(join(root, 'pdd-cx-'));
+        chmodSync(dir, 0o700);
+        writeFileSync(join(dir, 'auth.json'), '{"tokens":{"access_token":"leased-cx-tok","refresh_token":""}}', { mode: 0o600 });
+        createdOverlays.push(dir);
+        return {
+          env: { ...baseEnv, CODEX_HOME: dir, PDD_CLOUD_STEP_ISOLATED: '1' },
+          overlayDir: dir,
+          cleanupDirs: [dir],
+          cleanup: () => rmSync(dir, { recursive: true, force: true }),
+        };
+      },
+    };
+
+    const ctxShadow = {
+      fs: { ...await import('node:fs') },
+      now: () => now,
+      root,
+      repo: 'acme/widgets',
+      state: { agent: { kind: 'codex' }, cwd: root },
+      settings: { intake: 'shadow' },
+      budget: { state: 'normal' },
+      gh,
+      jobs,
+      ports: {
+        trusted: async () => true,
+        agentReady: async () => true,
+        env: { HOME: root },
+        selectLogin: async () => codexSelection,
+        exhaustLogin: async payload => {
+          exhaustCalls.push(payload);
+          return codexSelection;
+        },
+      },
+      warn: () => {},
+    };
+
+    const rows = [11, 12].map(n => ({
+      number: n,
+      title: `Issue ${n}`,
+      body: 'Small self-contained task.',
+      labels: [],
+      assignees: [],
+      comments: 0,
+      user: { login: 'acme' },
+      created_at: '2026-11-01T00:00:00Z',
+    }));
+
+    await shadowIntake(ctxShadow, rows);
+    assert.equal(startedSpecs.length, 2);
+    assert.equal(createdOverlays.length, 2);
+    assert.notEqual(startedSpecs[0].env.CODEX_HOME, startedSpecs[1].env.CODEX_HOME, 'each concurrent intake job gets its own isolated overlay');
+    assert.equal(startedSpecs[0].env.CODEX_HOME, createdOverlays[0]);
+    assert.deepEqual(startedSpecs[0].cleanupDirs, [createdOverlays[0]]);
+    assert.equal(existsSync(join(createdOverlays[0], 'auth.json')), true);
+
+    // Simulate job #11 failing with 429 quota exhaustion -> prune wipes overlay[0] AND exhaustLogin receives accountWindows!
+    const job11Log = join(root, 'intake', 'logs', `${startedSpecs[0].id}.log`);
+    const job11Exit = join(root, 'intake', 'logs', `${startedSpecs[0].id}.exit.json`);
+    writeFileSync(job11Log, 'Error 429 Too Many Requests: hit your usage limit\n');
+    writeFileSync(job11Exit, JSON.stringify({ code: 1, signal: null }));
+    alive.delete(startedJobs[0].pid);
+    failStartOnce = true; // Next re-start of #11 throws in ctx.jobs.start -> prepared.cleanup() must wipe createdOverlays[2]!
+
+    await shadowIntake(ctxShadow, rows);
+    assert.equal(existsSync(createdOverlays[0]), false, 'finished job overlay wiped in prune');
+    assert.equal(exhaustCalls.length, 1, 'quota failure reported to exhaustLogin');
+    assert.equal(exhaustCalls[0].loginId, 'acc_cx_intake');
+    assert.equal(exhaustCalls[0].cloud, true);
+    assert.deepEqual(exhaustCalls[0].accountWindows, {
+      five_hour_used_percent: 45,
+      five_hour_reset_at: '2026-11-10T16:00:00Z',
+      weekly_used_percent: 62,
+      weekly_reset_at: '2026-11-15T12:00:00Z',
+    });
+    assert.equal(createdOverlays.length, 3, 'retry attempted prepareStep');
+    assert.equal(existsSync(createdOverlays[2]), false, 'overlay wiped immediately when ctx.jobs.start throws');
+
+    // Burst 429 (< 100%) on job #12: first transient RPM/TPM 429 retries once on same sticky Cloud account WITHOUT calling exhaustLogin!
+    const job12First = startedJobs[1];
+    writeFileSync(job12First.log, 'Error 429 Too Many Requests: rate limit exceeded\n');
+    writeFileSync(job12First.exit, JSON.stringify({ code: 1, signal: null }));
+    alive.delete(job12First.pid);
+
+    await shadowIntake(ctxShadow, [rows[1]]);
+    assert.equal(exhaustCalls.length, 1, 'first burst 429 (< 100%) does NOT call exhaustLogin');
+    const job12Retry = startedJobs.at(-1);
+    assert.equal(job12Retry.issue, 12, 'burst 429 retried issue #12 immediately without 6h lockout');
+
+    // Second burst 429 on the same loginId for #12 DOES call exhaustLogin and clears burst-retries.json!
+    writeFileSync(job12Retry.log, 'Error 429 Too Many Requests: rate limit exceeded\n');
+    writeFileSync(job12Retry.exit, JSON.stringify({ code: 1, signal: null }));
+    alive.delete(job12Retry.pid);
+
+    await shadowIntake(ctxShadow, [rows[1]]);
+    assert.equal(exhaustCalls.length, 2, 'second burst 429 on same loginId calls exhaustLogin');
+    assert.equal(exhaustCalls[1].loginId, 'acc_cx_intake');
+    assert.equal(exhaustCalls[1].cloud, true);
+    assert.equal(existsSync(join(root, 'intake', 'burst-retries.json')), false, 'burst-retries.json removed once cleared');
+    stopCardJobs({ root, jobs });
+
+    // Local un-enrolled fallback (`configured: false, login: null`) sets loginId: null and NEVER calls exhaustLogin!
+    const localFallbackRoot = mkdtempSync(join(tmpdir(), 'pdd-intake-local-fb-'));
+    try {
+      const exhaustBeforeLocal = exhaustCalls.length;
+      const ctxLocalFallback = {
+        fs: { ...await import('node:fs') },
+        now: () => now,
+        root: localFallbackRoot,
+        repo: 'acme/widgets',
+        state: { agent: { id: 'claude', kind: 'claude', command: 'claude' }, cwd: localFallbackRoot },
+        settings: { intake: 'shadow' },
+        budget: { state: 'normal' },
+        gh,
+        jobs,
+        ports: {
+          trusted: async () => true,
+          agentReady: async () => true,
+          env: { HOME: localFallbackRoot },
+          selectLogin: async () => ({
+            state: 'ready',
+            configured: false,
+            poolPath: null,
+            poolSize: 1,
+            login: null,
+            agent: { id: 'claude', kind: 'claude', command: 'claude' },
+            env: { HOME: localFallbackRoot },
+          }),
+          exhaustLogin: async payload => {
+            exhaustCalls.push(payload);
+            return null;
+          },
+        },
+        warn: () => {},
+      };
+      await shadowIntake(ctxLocalFallback, [rows[0]]);
+      const localJob = startedJobs.at(-1);
+      writeFileSync(localJob.log, 'Error 429 Too Many Requests: hit your usage limit\n');
+      writeFileSync(localJob.exit, JSON.stringify({ code: 1, signal: null }));
+      alive.delete(localJob.pid);
+      await shadowIntake(ctxLocalFallback, [rows[0]]);
+      assert.equal(exhaustCalls.length, exhaustBeforeLocal, 'local un-enrolled fallback never calls exhaustLogin');
+      stopCardJobs({ root: localFallbackRoot, jobs });
+    } finally {
+      rmSync(localFallbackRoot, { recursive: true, force: true });
+    }
+
+    // 2. Claude Cloud prepareStep in activeIntake: selected.env strips CLAUDE_CODE_OAUTH_TOKEN, while prepareStep
+    // supplies CLAUDE_CODE_OAUTH_TOKEN + gateway ANTHROPIC_BASE_URL to BOTH card and auto-improve jobs!
+    const activeRoot = mkdtempSync(join(tmpdir(), 'pdd-intake-active-cl-'));
+    try {
+      startedSpecs.length = 0;
+      const claudeSelection = {
+        state: 'ready',
+        cloud: true,
+        configured: true,
+        poolSize: 1,
+        login: { id: 'acc_cl_shared', kind: 'claude', command: 'claude' },
+        agent: { id: 'acc_cl_shared', kind: 'claude', command: 'claude' },
+        env: { HOME: activeRoot }, // CLAUDE_CODE_OAUTH_TOKEN & ANTHROPIC_BASE_URL stripped on selected.env!
+        account: {
+          account_id: 'acc_cl_shared',
+          five_hour_used_percent: 15,
+          five_hour_reset_at: '2026-11-10T16:00:00Z',
+          weekly_used_percent: 30,
+          weekly_reset_at: '2026-11-16T12:00:00Z',
+        },
+        prepareStep: baseEnv => ({
+          env: {
+            ...baseEnv,
+            CLAUDE_CODE_OAUTH_TOKEN: 'pddg_shared_intake_grant_9999',
+            ANTHROPIC_BASE_URL: 'https://api.promptdriven.ai/v1/accounts/claude-gateway/lse_intake_1',
+            PDD_CLOUD_STEP_ISOLATED: '1',
+          },
+          overlayDir: null,
+          cleanupDirs: [],
+          cleanup: () => {},
+        }),
+      };
+
+      const ctxActive = {
+        fs: { ...await import('node:fs') },
+        now: () => now,
+        root: activeRoot,
+        repo: 'acme/widgets',
+        state: { agent: { kind: 'agy' }, cwd: activeRoot },
+        settings: { intake: 'active' },
+        budget: { state: 'normal' },
+        gh,
+        jobs,
+        ports: {
+          trusted: async () => true,
+          agentReady: async () => true,
+          env: { HOME: activeRoot },
+          selectLogin: async () => claudeSelection,
+          exhaustLogin: async () => claudeSelection,
+        },
+        warn: () => {},
+      };
+
+      const activeRows = [{
+        number: 21,
+        title: 'Add timeout flag',
+        body: 'Needs clear acceptance criteria.',
+        labels: [],
+        assignees: [],
+        comments: 0,
+        user: { login: 'acme' },
+        created_at: '2026-11-01T00:00:00Z',
+      }];
+
+      await activeIntake(ctxActive, activeRows);
+      assert.equal(startedSpecs.length, 1, 'card job started');
+      assert.equal(startedSpecs[0].command, 'claude');
+      assert.equal(startedSpecs[0].env.CLAUDE_CODE_OAUTH_TOKEN, 'pddg_shared_intake_grant_9999');
+      assert.equal(startedSpecs[0].env.ANTHROPIC_BASE_URL, 'https://api.promptdriven.ai/v1/accounts/claude-gateway/lse_intake_1');
+
+      // Complete card job with class='improve' so activeIntake spawns an auto-improve job on the next pass.
+      const cardJobPid = pid;
+      const cardLog = join(activeRoot, 'intake', 'logs', `${startedSpecs[0].id}.log`);
+      const cardExit = join(activeRoot, 'intake', 'logs', `${startedSpecs[0].id}.exit.json`);
+      writeFileSync(cardLog, JSON.stringify({
+        type: 'result',
+        result: JSON.stringify({
+          class: 'improve',
+          reason: 'Specify default timeout.',
+          confidence: 0.9,
+          canonical: null,
+          suggested_links: [],
+          question: null,
+          area_hint: ['src/cli.mjs'],
+        }),
+      }));
+      writeFileSync(cardExit, JSON.stringify({ code: 0, signal: null }));
+      alive.delete(cardJobPid);
+
+      await activeIntake(ctxActive, activeRows);
+      assert.equal(startedSpecs.length, 2, 'improve job started');
+      assert.match(startedSpecs[1].id, /^improve-21-/);
+      assert.equal(startedSpecs[1].env.CLAUDE_CODE_OAUTH_TOKEN, 'pddg_shared_intake_grant_9999');
+      assert.equal(startedSpecs[1].env.ANTHROPIC_BASE_URL, 'https://api.promptdriven.ai/v1/accounts/claude-gateway/lse_intake_1');
+      stopCardJobs({ root: activeRoot, jobs });
+    } finally {
+      rmSync(activeRoot, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

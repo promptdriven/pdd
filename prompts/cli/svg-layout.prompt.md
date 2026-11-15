@@ -6,7 +6,7 @@ Own `src/svg-layout.mjs`. Its module function `lintSvgLayouts({root, files, prom
 
 ## Workspace advice
 
-Use the [workspace authority](runtime-workspace.prompt.md) before prompt/drawing content access, including no-Story local scans. Filter optional excluded candidates without opening them; report unavailable advice where relevant. Required linked drawings remain preflight's capture responsibility and cannot be silently pruned. Keep advisory warnings advisory and retain strict no-link reads.
+Use the [workspace authority](runtime-seam.prompt.md) (`loadRuntimeWorkspace`, `allowsRuntimePath`) before prompt/drawing content access, including no-Story local scans. Filter optional excluded candidates without opening them; report unavailable advice where relevant. Required linked drawings remain preflight's capture responsibility and cannot be silently pruned. Keep advisory warnings advisory and retain strict no-link reads.
 
 
 ## Parts and advice
@@ -27,6 +27,8 @@ Explicit control extraction covers both HTML markup and prose while excluding no
 - **Non-control attributes and CSS selectors** (`class`, `role`, `aria-*`, `data-*`, `style`, `type`, `placeholder`, `title`, `href`, boolean state attributes, `.class` tokens, etc., whether double- or single-quoted or backticked, in HTML markup or prose) never become prompt controls.
 - **Prose control declarations** (outside HTML tags) segment sentences and clauses while tracking quote (`"..."`, `'...'`, `“...”`) and Markdown code-span/fence boundaries, so punctuation inside quoted text or code spans (such as multi-sentence help strings) never splits a literal or pairs a closing quote with a subsequent opening quote to capture connecting prose (such as `" Also explain "`). Negated control clauses (`no button`, `no controls`, `without a button`, `without controls`) declare no controls. Affirmative control clauses declare explicit control bindings (`id`, `ids`, `name`, `names`, `value`, `values`), backticked control identifiers tied to the control declaration (excluding HTML snippets, `.class` tokens and non-control field/region identifiers such as `` `instructions` ``), quoted labels tied to the control declaration (excluding attribute values and quoted status, instruction or explanation copy), and directional-control phrases.
 
+When a prompt links a single resolved `.ui.svg` drawing, check every extracted prompt control against that drawing. When a prompt links multiple distinct resolved `.ui.svg` drawings, normalize CRLF line endings, derive each drawing's distinguishing view tokens from its filename stem, state/variant and layout mode (keeping only tokens shared by strictly fewer than all linked drawings), and scope control checks per drawing: controls in a subsection whose heading or links identify a subset of drawings (intersecting nested heading scopes), a list item (and its indented continuations, code fences or sub-items) whose lead label before `:`, `—` or spaced `--` identifies a subset of drawings, a block linking a subset of drawings, or prose following a non-gallery standalone view image apply only to the matched drawing(s), while controls in shared or unscoped prose (including prose after consecutive gallery images) remain required on every linked drawing.
+
 Explicit prose or HTML markup such as `region score`, `id="score"`, or “score box” acknowledges the corresponding drawn region without turning non-control container `id`s into required prompt controls. A backticked id within `## Appearance` also acknowledges it. Do not count an interface schema property or a general state-field declaration as a layout mapping. Retain explicit behavioral control declarations anywhere in the prose. Matching is conservative local advice: name uncertain/unmatched parts; do not infer a semantic equivalence or change the prompt/drawing automatically. Report source-read/parse limitations as warnings. This is a vocabulary and part check, not an AI assessment of meaning or a geometry check.
 
 Also inspect workspace-allowed `prompt-runtime.app-map.v1` app maps (`(^|/)app-map\.json$` in `files` plus string entries of `"app_maps"` in workspace-allowed `test/**/*.json` and `tests/**/*.json` files) and delegate stylesheet and CSS-class checks for inspected prompts to [screen design check](screen-design-check.prompt.md). Read each referenced stylesheet safely inside `root` without following symlinks, passing any read/escape/symlink failure as that stylesheet's `error` record rather than throwing. Merge its returned warnings into the deduplicated sorted output.
@@ -35,11 +37,11 @@ Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt pat
 
 ## Dependencies
 
-- [Workspace authority](runtime-workspace.prompt.md): required generation/runtime/verification context for opt-in permission.
+- [Runtime seam](runtime-seam.prompt.md#public-contract): required generation/runtime/verification context for workspace opt-in permission (`loadRuntimeWorkspace`, `allowsRuntimePath`).
 - [Screen design check](screen-design-check.prompt.md): required generation/runtime/verification context for HTML screen stylesheet and CSS-class warnings.
 
 - [Screen rules](../../skills/pdd-prompting/runbook/screens-and-svg.md#13-give-your-app-a-screen-app-map): authoring and verification context.
 
 ## Caller navigation
 
-The CLI exposes this advisory through [Check](runtime-client.prompt.md).
+The CLI exposes this advisory through [Runtime seam](runtime-seam.prompt.md).

@@ -5,12 +5,14 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {nativeFixture,packageRoot,put} from './helpers/native-cli-fixture.mjs';
+import {bundleInstalledDependencies} from './helpers/pack-offline.mjs';
 test('isolated npm-packed install selects native Story and preserves unverified original intake locally',async t=>{
   const directory=mkdtempSync(join(tmpdir(),'pdd-native-packed-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
   const cache=join(directory,'cache'),home=join(directory,'home'),prefix=join(directory,'install');mkdirSync(home);
   const env={...process.env,HOME:home,npm_config_cache:cache};
   const packed=JSON.parse(execFileSync('npm',['pack','--json','--pack-destination',directory],{cwd:packageRoot,env,encoding:'utf8',maxBuffer:8*1024*1024}))[0];
-  execFileSync('npm',['install','--prefix',prefix,'--ignore-scripts','--no-audit','--no-fund','--offline',join(directory,packed.filename)],{env,encoding:'utf8',stdio:['ignore','pipe','pipe']});
+  const archive=bundleInstalledDependencies(packageRoot,join(directory,packed.filename),directory);
+  execFileSync('npm',['install','--prefix',prefix,'--ignore-scripts','--no-audit','--no-fund','--offline',archive],{env,encoding:'utf8',stdio:['ignore','pipe','pipe']});
   const pkgName=JSON.parse(readFileSync(join(packageRoot,'package.json'),'utf8')).name;
   const f=await nativeFixture(t,{cli:join(prefix,'node_modules',pkgName,'bin/pdd.mjs')});
   const result=f.command('lint','native','--json');assert.equal(result.status,1,result.stdout+result.stderr);
