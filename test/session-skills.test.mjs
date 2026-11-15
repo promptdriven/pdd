@@ -459,11 +459,19 @@ test('INSTALL15: #3424 syncOwnedUserSkills and post-upgrade CLI auto-sync write 
   const env = { HOME: home, CLAUDE_CONFIG_DIR: claudeConfig, CODEX_HOME: customCodex, PDD_STATE_DIR: stateRoot, PDD_NO_UPDATE_CHECK: '1', PATH: '' };
   const capture = (isTTY = false) => ({ text: '', isTTY, write(s) { this.text += s; } });
 
-  // 4. Discovery, completion and --json routes skip auto-sync completely.
-  for (const argv of [['--help'], ['--version'], ['completion', 'bash'], ['workflow', 'list'], ['workflow', 'list', '--json']]) {
+  // 4. Discovery, completion, files/owner and --json routes skip auto-sync completely.
+  for (const argv of [['--help'], ['--version'], ['completion', 'bash'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['files'], ['owner', 'AGENTS.md']]) {
     const out = capture(true), err = capture(true);
-    const code = await runPdd(argv, { cwd: project, packageRoot: pkg, env, stdout: out, stderr: err, pathDiagnostic: () => [] });
-    assert.equal(code, 0, argv.join(' '));
+    const useRepo = argv[0] === 'files' || argv[0] === 'owner';
+    const code = await runPdd(argv, {
+      cwd: useRepo ? root : project,
+      packageRoot: pkg,
+      env: useRepo ? { ...env, PATH: process.env.PATH } : env,
+      stdout: out,
+      stderr: err,
+      pathDiagnostic: () => [],
+    });
+    assert.equal(code, 0, `${argv.join(' ')}: ${err.text}`);
     assert.equal(existsSync(join(stateRoot, 'skills-sync.json')), false, `must not sync on ${argv.join(' ')}`);
     assert.equal(JSON.parse(readFileSync(join(home, '.agents/skills/pdd-bug', MARKER), 'utf8')).version, '0.1.12');
   }

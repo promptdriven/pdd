@@ -308,7 +308,7 @@ reply.
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "09d3f88657bf9abeac0e0cdfb14dea6c019f7efbeeb22283c95ebca86c35ae45",
+  "prose_sha256": "df6c5713fb162ceffbeaf5d1bba4c26a3cca9b623a7d3253cb5c27b954e395eb",
   "entries": [
     {
       "operation": "runPdd",
@@ -1294,4 +1294,4 @@ Route `pdd test --target code` to the local compiled Story checker without conta
 
 Dispatch local `accounts` by dynamically importing [Cloud accounts CLI](accounts-cli.prompt.md) (`accountsCli ?? await import('./accounts-cli.mjs')`) and calling `runAccountsCli({commandId: plan.commandId, operands: [...plan.operands], options: {...plan.options}, cwd, env, stdin}, accountsPorts)`. When `result.message` is non-empty, write it to `stdout` on exit 0 or `stderr` otherwise; keep `stdout` silent when `result.message === ''` (such as `pdd accounts sync --quiet`).
 
-Before command dispatch on normal CLI invocations (excluding `help`, `version`, `version-detailed`, `completion`, `workflow-list`, `mcp`, `setup`, `upgrade`, `accounts` with `--quiet`, and any command with `--json` in `plan.options` or `argv`), call [skills install](skills-install.prompt.md) `syncOwnedUserSkills({packageRoot, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, codexHome: env.CODEX_HOME, stateRoot: env.PDD_STATE_DIR})` (or injected `syncOwnedUserSkills`) fail-open (#3424). When `updated.length > 0` and `stderr?.isTTY === true`, write `Updated PDD skills to VERSION (FOLDERS).` to `stderr`. Dispatch local `upgrade` by dynamically importing [Autopilot self-update and CLI upgrade](autopilot-update.prompt.md) (`cliUpgrade ?? await import('./autopilot-update.mjs')`) and calling `runCliUpgrade({env, stdout, stderr, main: plan.options['--main'] === true, packageRoot, home: env.HOME || homedir(), cwd}, cliUpgradePorts)`; return its `exitCode` without running the post-command release notice.
+Before command dispatch on normal CLI invocations (excluding `help`, `version`, `version-detailed`, `completion`, `workflow-list`, `project-files`, `file-owner`, `mcp`, `setup`, `upgrade`, `accounts` with `--quiet`, and any command with `--json` in `plan.options` or `argv`), call [skills install](skills-install.prompt.md) `syncOwnedUserSkills({packageRoot, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, codexHome: env.CODEX_HOME, stateRoot: env.PDD_STATE_DIR})` (or injected `syncOwnedUserSkills`) fail-open (#3424). When `updated.length > 0` and `stderr?.isTTY === true`, write `Updated PDD skills to VERSION (FOLDERS).` to `stderr`. Dispatch local `upgrade` by dynamically importing [Autopilot self-update and CLI upgrade](autopilot-update.prompt.md) (`cliUpgrade ?? await import('./autopilot-update.mjs')`) and calling `runCliUpgrade({env, stdout, stderr, main: plan.options['--main'] === true, packageRoot, home: env.HOME || homedir(), cwd}, cliUpgradePorts)`; return its `exitCode` without running the post-command release notice.

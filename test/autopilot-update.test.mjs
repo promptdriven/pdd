@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -352,11 +352,12 @@ test('#3424 pdd upgrade updates global CLI and marked skills across agent folder
   assert.ok(!spawned.some(cmd => cmd.includes('github:promptdriven/pdd#main')));
 });
 
-test('#3424 pdd upgrade refreshes stale skills when CLI is already current, supports .skill-lock.json npx refresh, skips customized copies, and reports failed skill updates with recovery commands', async t => {
+test('#3424 pdd upgrade refreshes stale marked skills when CLI is already current, never overwrites unmarked or symlinked skills, prints actionable npx hints, and reports failed skill updates', async t => {
   const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-cli-upgrade-cases-')));
   t.after(() => rmSync(sandbox, { recursive: true, force: true }));
 
   const targetVersion = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
+  const marker = '.pdd-skill.json';
   const prefix = join(sandbox, 'global');
   const globalPkg = join(prefix, 'lib/node_modules/@promptdriven/pdd');
   mkdirSync(globalPkg, { recursive: true });
@@ -368,102 +369,156 @@ test('#3424 pdd upgrade refreshes stale skills when CLI is already current, supp
     json: async () => [{ tag_name: `alpha-v${targetVersion}`, draft: false, prerelease: true, published_at: '2026-11-15T12:00:00Z' }],
   });
 
-  // Case A: Already at latest CLI version + .agents/.skill-lock.json (`promptdriven/pdd`) + unmarked 0.1.12 6-skill install + custom skills.
-  const homeA = join(sandbox, 'home-lock');
-  mkdirSync(join(homeA, '.agents/skills'), { recursive: true });
-  writeFileSync(join(homeA, '.agents/.skill-lock.json'), JSON.stringify({
+  // Case A: Already at latest CLI version + stale .pdd-skill.json-marked folders -> updates ONLY folders that actually changed, zero subprocesses.
+  const homeMarked = join(sandbox, 'home-marked');
+  for (const name of PDD_SKILL_NAMES.filter(n => n !== 'pdd-graph')) {
+    cpSync(join(packageRoot, 'skills', name), join(homeMarked, '.agents/skills', name), { recursive: true });
+    writeFileSync(join(homeMarked, '.agents/skills', name, marker), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+  }
+  cpSync(join(packageRoot, 'skills/pdd-bug'), join(homeMarked, '.codex/skills/pdd-bug'), { recursive: true });
+  writeFileSync(join(homeMarked, '.codex/skills/pdd-bug', marker), JSON.stringify({ package: 'pdd', version: '0.1.12', digest: 'old' }));
+
+  const cmdsMarked = [];
+  const outMarked = captureStream(), errMarked = captureStream();
+  const resMarked = await runCliUpgrade({
+    env: { HOME: homeMarked },
+    stdout: outMarked,
+    stderr: errMarked,
+    fetchImpl,
+    spawnSyncImpl: (file, args) => { cmdsMarked.push([file, ...args]); return { status: 0, stdout: '', stderr: '' }; },
+    packageRoot: globalPkg,
+    home: homeMarked,
+    cwd: join(sandbox, 'empty-cwd'),
+  }, { uid: process.getuid() });
+  assert.equal(resMarked.exitCode, 0, errMarked.text);
+  assert.equal(resMarked.cliUpdated, false);
+  assert.equal(cmdsMarked.length, 0, 'must not spawn npm or npx');
+  assert.deepEqual(resMarked.updatedSkills, [join(homeMarked, '.agents/skills'), join(homeMarked, '.codex/skills')]);
+  assert.deepEqual(resMarked.skippedSkills, []);
+  assert.ok(outMarked.text.includes(`pdd ${targetVersion} is already up to date.`), outMarked.text);
+  assert.ok(outMarked.text.includes(`Updated PDD skills to ${targetVersion} in: ${join(homeMarked, '.agents/skills')}, ${join(homeMarked, '.codex/skills')}.`), outMarked.text);
+  for (const rel of ['.agents/skills', '.codex/skills']) {
+    for (const name of PDD_SKILL_NAMES) {
+      assert.equal(JSON.parse(readFileSync(join(homeMarked, rel, name, marker), 'utf8')).version, targetVersion);
+    }
+  }
+
+  // Case B: Unmarked skills, .skill-lock.json copies, symlinks, .codex/skills/$CODEX_HOME/skills unmarked copies, and custom skills are NEVER modified or falsely marked updated.
+  const homeUnmarked = join(sandbox, 'home-unmarked');
+  const customCodex = join(sandbox, 'custom-codex');
+  mkdirSync(join(homeUnmarked, '.agents/skills'), { recursive: true });
+  writeFileSync(join(homeUnmarked, '.agents/.skill-lock.json'), JSON.stringify({
     version: 3,
     skills: { 'pdd-feature': { source: 'promptdriven/pdd', sourceType: 'github' } },
   }));
   for (const name of PDD_SKILL_NAMES.filter(n => n !== 'pdd-graph')) {
-    cpSync(join(packageRoot, 'skills', name), join(homeA, '.agents/skills', name), { recursive: true });
-    const file = join(homeA, '.agents/skills', name, 'SKILL.md');
+    cpSync(join(packageRoot, 'skills', name), join(homeUnmarked, '.agents/skills', name), { recursive: true });
+    const file = join(homeUnmarked, '.agents/skills', name, 'SKILL.md');
     writeFileSync(file, readFileSync(file, 'utf8').replace(/^(  pdd-skills:).*$/m, '$1 0.1.12'));
   }
-  mkdirSync(join(homeA, '.agents/skills/pdd-autopilot'), { recursive: true });
-  writeFileSync(join(homeA, '.agents/skills/pdd-autopilot/SKILL.md'), 'custom autopilot\n');
-  mkdirSync(join(homeA, '.agents/skills/finish-pr'), { recursive: true });
-  writeFileSync(join(homeA, '.agents/skills/finish-pr/SKILL.md'), 'custom finish-pr\n');
+  const externalGraph = join(sandbox, 'external-pdd-graph');
+  cpSync(join(packageRoot, 'skills/pdd-graph'), externalGraph, { recursive: true });
+  const externalGraphMd = readFileSync(join(externalGraph, 'SKILL.md'), 'utf8').replace(/^(  pdd-skills:).*$/m, '$1 0.1.12');
+  writeFileSync(join(externalGraph, 'SKILL.md'), externalGraphMd);
+  symlinkSync(externalGraph, join(homeUnmarked, '.agents/skills/pdd-graph'));
 
-  const cmdsA = [];
-  const outA = captureStream(), errA = captureStream();
-  const resA = await runCliUpgrade({
-    env: { HOME: homeA },
-    stdout: outA,
-    stderr: errA,
+  cpSync(join(packageRoot, 'skills/pdd-bug'), join(homeUnmarked, '.codex/skills/pdd-bug'), { recursive: true });
+  const codexBugMd = readFileSync(join(homeUnmarked, '.codex/skills/pdd-bug/SKILL.md'), 'utf8').replace(/^(  pdd-skills:).*$/m, '$1 0.1.12');
+  writeFileSync(join(homeUnmarked, '.codex/skills/pdd-bug/SKILL.md'), codexBugMd);
+
+  cpSync(join(packageRoot, 'skills/pdd-feature'), join(customCodex, 'skills/pdd-feature'), { recursive: true });
+  const customFeatureMd = readFileSync(join(customCodex, 'skills/pdd-feature/SKILL.md'), 'utf8').replace(/^(  pdd-skills:).*$/m, '$1 0.1.12');
+  writeFileSync(join(customCodex, 'skills/pdd-feature/SKILL.md'), customFeatureMd);
+
+  mkdirSync(join(homeUnmarked, '.agents/skills/pdd-autopilot'), { recursive: true });
+  writeFileSync(join(homeUnmarked, '.agents/skills/pdd-autopilot/SKILL.md'), 'custom autopilot\n');
+  mkdirSync(join(homeUnmarked, '.agents/skills/finish-pr'), { recursive: true });
+  writeFileSync(join(homeUnmarked, '.agents/skills/finish-pr/SKILL.md'), 'custom finish-pr\n');
+
+  const cmdsUnmarked = [];
+  const outUnmarked = captureStream(), errUnmarked = captureStream();
+  const resUnmarked = await runCliUpgrade({
+    env: { HOME: homeUnmarked, CODEX_HOME: customCodex },
+    stdout: outUnmarked,
+    stderr: errUnmarked,
     fetchImpl,
-    spawnSyncImpl: (file, args) => { cmdsA.push([file, ...args]); return { status: 0, stdout: 'ok\n', stderr: '' }; },
+    spawnSyncImpl: (file, args) => { cmdsUnmarked.push([file, ...args]); return { status: 0, stdout: '', stderr: '' }; },
     packageRoot: globalPkg,
-    home: homeA,
+    home: homeUnmarked,
     cwd: join(sandbox, 'empty-cwd'),
   }, { uid: process.getuid() });
-  assert.equal(resA.exitCode, 0, errA.text);
-  assert.equal(resA.cliUpdated, false);
-  assert.equal(cmdsA.some(c => c[0] === 'npm'), false, 'must not reinstall already-current CLI');
-  assert.deepEqual(cmdsA, [['npx', '--yes', 'skills', 'add', `promptdriven/pdd#alpha-v${targetVersion}`, '-g', '-a', 'codex', '-a', 'claude-code', '-y']]);
-  assert.match(outA.text, /is already up to date\./);
-  assert.match(outA.text, /Updated PDD skills to .* in: .*\.agents\/skills/);
-  assert.equal(readFileSync(join(homeA, '.agents/skills/pdd-autopilot/SKILL.md'), 'utf8'), 'custom autopilot\n');
-  assert.equal(readFileSync(join(homeA, '.agents/skills/finish-pr/SKILL.md'), 'utf8'), 'custom finish-pr\n');
+  assert.equal(resUnmarked.exitCode, 0, errUnmarked.text);
+  assert.equal(cmdsUnmarked.length, 0, 'must never spawn npx skills add');
+  assert.deepEqual(resUnmarked.updatedSkills, [], 'must never falsely report unmarked folders as updated');
+  assert.equal(outUnmarked.text.includes('Updated PDD skills'), false, outUnmarked.text);
+  assert.deepEqual(resUnmarked.skippedSkills.map(s => s.folder), [
+    join(homeUnmarked, '.agents/skills'),
+    join(customCodex, 'skills'),
+    join(homeUnmarked, '.codex/skills'),
+  ]);
+  assert.ok(outUnmarked.text.includes(`Skipped unmarked PDD skills in ${join(homeUnmarked, '.agents/skills')}`), outUnmarked.text);
+  assert.ok(outUnmarked.text.includes(`Skipped unmarked PDD skills in ${join(customCodex, 'skills')} (pdd-feature is 0.1.12)`), outUnmarked.text);
+  assert.ok(outUnmarked.text.includes(`Skipped unmarked PDD skills in ${join(homeUnmarked, '.codex/skills')} (pdd-bug is 0.1.12)`), outUnmarked.text);
+  assert.ok(outUnmarked.text.includes("To update unmarked skills, run: npx skills add promptdriven/pdd -g --skill '*'"), outUnmarked.text);
+  assert.equal(existsSync(join(homeUnmarked, '.agents/skills/pdd-feature', marker)), false);
+  assert.equal(lstatSync(join(homeUnmarked, '.agents/skills/pdd-graph')).isSymbolicLink(), true);
+  assert.equal(readFileSync(join(externalGraph, 'SKILL.md'), 'utf8'), externalGraphMd);
+  assert.equal(readFileSync(join(homeUnmarked, '.codex/skills/pdd-bug/SKILL.md'), 'utf8'), codexBugMd);
+  assert.equal(readFileSync(join(customCodex, 'skills/pdd-feature/SKILL.md'), 'utf8'), customFeatureMd);
+  assert.equal(readFileSync(join(homeUnmarked, '.agents/skills/pdd-autopilot/SKILL.md'), 'utf8'), 'custom autopilot\n');
+  assert.equal(readFileSync(join(homeUnmarked, '.agents/skills/finish-pr/SKILL.md'), 'utf8'), 'custom finish-pr\n');
 
-  // Case B: Customized ('differs') skill copy is preserved and reported as skipped even when .skill-lock.json exists.
-  const homeB = join(sandbox, 'home-custom');
-  mkdirSync(join(homeB, '.agents/skills'), { recursive: true });
-  writeFileSync(join(homeB, '.agents/.skill-lock.json'), JSON.stringify({ source: 'promptdriven/pdd' }));
+  // Case C: Customized ('differs') skill copy and project-local stale copy are preserved untouched and reported with global vs project npx commands.
+  const homeCustom = join(sandbox, 'home-custom');
+  const projectCustom = join(sandbox, 'project-custom');
+  mkdirSync(join(homeCustom, '.agents/skills'), { recursive: true });
   for (const name of PDD_SKILL_NAMES) {
-    cpSync(join(packageRoot, 'skills', name), join(homeB, '.agents/skills', name), { recursive: true });
+    cpSync(join(packageRoot, 'skills', name), join(homeCustom, '.agents/skills', name), { recursive: true });
   }
-  const editedSkill = join(homeB, '.agents/skills/pdd-bug/SKILL.md');
+  const editedSkill = join(homeCustom, '.agents/skills/pdd-bug/SKILL.md');
   const editedText = `${readFileSync(editedSkill, 'utf8')}\nLocal customization.\n`;
   writeFileSync(editedSkill, editedText);
 
-  const cmdsB = [];
-  const outB = captureStream(), errB = captureStream();
-  const resB = await runCliUpgrade({
-    env: { HOME: homeB },
-    stdout: outB,
-    stderr: errB,
+  cpSync(join(packageRoot, 'skills/pdd-feature'), join(projectCustom, '.agents/skills/pdd-feature'), { recursive: true });
+  const projFeature = join(projectCustom, '.agents/skills/pdd-feature/SKILL.md');
+  const projFeatureText = readFileSync(projFeature, 'utf8').replace(/^(  pdd-skills:).*$/m, '$1 0.1.20');
+  writeFileSync(projFeature, projFeatureText);
+
+  const cmdsCustom = [];
+  const outCustom = captureStream(), errCustom = captureStream();
+  const resCustom = await runCliUpgrade({
+    env: { HOME: homeCustom },
+    stdout: outCustom,
+    stderr: errCustom,
     fetchImpl,
-    spawnSyncImpl: (file, args) => { cmdsB.push([file, ...args]); return { status: 0, stdout: '', stderr: '' }; },
+    spawnSyncImpl: (file, args) => { cmdsCustom.push([file, ...args]); return { status: 0, stdout: '', stderr: '' }; },
     packageRoot: globalPkg,
-    home: homeB,
-    cwd: join(sandbox, 'empty-cwd'),
+    home: homeCustom,
+    cwd: projectCustom,
   }, { uid: process.getuid() });
-  assert.equal(resB.exitCode, 0);
-  assert.equal(cmdsB.length, 0);
+  assert.equal(resCustom.exitCode, 0);
+  assert.equal(cmdsCustom.length, 0);
   assert.equal(readFileSync(editedSkill, 'utf8'), editedText);
-  assert.match(outB.text, /Skipped customized PDD skills in .*\.agents\/skills \(preserved without overwriting\)\. To replace them, run: npx skills add promptdriven\/pdd -g -a codex -a claude-code -y/);
+  assert.equal(readFileSync(projFeature, 'utf8'), projFeatureText);
+  assert.ok(outCustom.text.includes(`Skipped customized PDD skills in ${join(homeCustom, '.agents/skills')} (pdd-bug differs (version ${targetVersion})) (preserved without overwriting). To update unmarked skills, run: npx skills add promptdriven/pdd -g --skill '*'`), outCustom.text);
+  assert.ok(outCustom.text.includes(`Skipped unmarked PDD skills in ${join(projectCustom, '.agents/skills')} (pdd-feature is 0.1.20) (preserved without overwriting). To update unmarked skills, run: npx skills add promptdriven/pdd --skill '*'`), outCustom.text);
 
-  // Case C: Failed skill update (npx failure & direct folder write failure) reports actionable recovery command and exits 1.
-  const outFailNpx = captureStream(), errFailNpx = captureStream();
-  const resFailNpx = await runCliUpgrade({
-    env: { HOME: homeA },
-    stdout: outFailNpx,
-    stderr: errFailNpx,
-    fetchImpl,
-    spawnSyncImpl: () => ({ status: 1, stdout: '', stderr: 'registry offline\n' }),
-    packageRoot: globalPkg,
-    home: homeA,
-    cwd: join(sandbox, 'empty-cwd'),
-  }, { uid: process.getuid() });
-  assert.equal(resFailNpx.exitCode, 1);
-  assert.match(errFailNpx.text, /Failed to update PDD skills in .*\.agents\/skills \(registry offline\)\. To recover, run: npx skills add promptdriven\/pdd -g -a codex -a claude-code -y/);
-
+  // Case D: Failed marker-owned folder write reports actionable recovery command (`pdd setup`) and exits 1.
   const outFailOwned = captureStream(), errFailOwned = captureStream();
   const resFailOwned = await runCliUpgrade({
-    env: { HOME: homeA },
+    env: { HOME: homeMarked },
     stdout: outFailOwned,
     stderr: errFailOwned,
     fetchImpl,
     spawnSyncImpl: () => ({ status: 0, stdout: '', stderr: '' }),
     packageRoot: globalPkg,
-    home: homeA,
+    home: homeMarked,
     cwd: join(sandbox, 'empty-cwd'),
   }, {
     uid: process.getuid(),
     skillsInstall: {
       syncOwnedUserSkills: ({ onError }) => {
-        onError(join(homeA, '.codex/skills'), Object.assign(Error('permission denied'), { code: 'EACCES' }));
+        onError(join(homeMarked, '.codex/skills'), Object.assign(Error('permission denied'), { code: 'EACCES' }));
         return { updated: [] };
       },
       findSkills: () => [],
@@ -472,14 +527,14 @@ test('#3424 pdd upgrade refreshes stale skills when CLI is already current, supp
   assert.equal(resFailOwned.exitCode, 1);
   assert.match(errFailOwned.text, /Failed to update PDD skills in .*\.codex\/skills \(EACCES\)\. To recover, run: pdd setup/);
 
-  // Case D: Git checkout / non-global packageRoot refuses cleanly with recovery command.
+  // Case E: Git checkout / non-global packageRoot refuses cleanly with recovery command.
   const outCheckout = captureStream(), errCheckout = captureStream();
   const resCheckout = await runCliUpgrade({
-    env: { HOME: homeA },
+    env: { HOME: homeMarked },
     stdout: outCheckout,
     stderr: errCheckout,
     packageRoot,
-    home: homeA,
+    home: homeMarked,
   });
   assert.equal(resCheckout.exitCode, 1);
   assert.match(errCheckout.text, /npm install -g github:promptdriven\/pdd && pdd setup/);

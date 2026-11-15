@@ -81,7 +81,7 @@ pdd --version   # prints 0.1.34
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
-npm downloads the repository's default branch, `main`, from GitHub. Install the CLI and skills from this same source. The package has no dependencies and no build step. The pdd command does not copy the skills on each command. Only `pdd setup` copies them, when they are missing.
+npm downloads the repository's default branch, `main`, from GitHub. Install the CLI and skills from this same source. The package has no dependencies and no build step. `pdd setup` copies missing skills to user folders, `pdd upgrade` updates a global `pdd` installation and its `.pdd-skill.json`-marked skills, and normal CLI commands refresh existing `.pdd-skill.json`-marked user folders once per version without touching unmarked copies or symlinks.
 
 Important:
 

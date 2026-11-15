@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-update.prompt.md (sha256: f4e87956dacee6e791e53a67f394f9d76db32d05004cc3848e085ebc2ddc098f).
+// Generated from prompts/cli/autopilot-update.prompt.md (sha256: 0377fd937a21bce9234ab7d248d5afbd584fd60fa27a2e8b27d25adaf9edb7c5).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
@@ -228,14 +228,11 @@ const canonicalDir = (folder, fs) => {
   try { return fs.realpathSync(folder); } catch { return folder; }
 };
 
-function hasPddSkillLock(home, fs) {
-  if (!home) return false;
-  const lockPath = join(home, '.agents', '.skill-lock.json');
-  try {
-    if (!fs.lstatSync(lockPath).isFile()) return false;
-    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-    return Boolean(parsed && typeof parsed === 'object' && JSON.stringify(parsed).includes('promptdriven/pdd'));
-  } catch { return false; }
+function formatStaleDetails(staleSkills) {
+  if (!Array.isArray(staleSkills) || !staleSkills.length) return '';
+  return staleSkills.map(({ name, state, version }) => state === 'older'
+    ? `${name} is ${version ?? 'unknown'}`
+    : `${name} differs (version ${version ?? 'unknown'})`).join(', ');
 }
 
 async function queryGitHubJson(endpoint, { fetchImpl, spawnSyncImpl, env = process.env } = {}) {
@@ -388,9 +385,9 @@ export async function runCliUpgrade({
   const skippedSkills = [];
   if (skillsModule && typeof skillsModule.findSkills === 'function') {
     const noRepoCwd = join(resolvedHome || '/nonexistent', '.pdd-upgrade-user-only');
-    let userStale = [];
+    const failedCanon = new Set(failedSkills.map(item => canonicalDir(item.folder, fs)));
+    const seenSkip = new Set();
     try {
-      const seenUser = new Set();
       for (const row of skillsModule.findSkills({
         packageRoot: targetPkgRoot,
         cwd: noRepoCwd,
@@ -400,57 +397,18 @@ export async function runCliUpgrade({
       })) {
         if (!row.found || !row.stale) continue;
         const key = canonicalDir(row.found, fs);
-        if (seenUser.has(key)) continue;
-        seenUser.add(key);
-        userStale.push(row);
-      }
-    } catch { userStale = []; }
-
-    const failedCanon = new Set(failedSkills.map(item => canonicalDir(item.folder, fs)));
-    const olderUnmarked = userStale.filter(row => row.stale === 'older' && !failedCanon.has(canonicalDir(row.found, fs)));
-    const hasCustomizations = userStale.some(row => row.stale === 'differs');
-
-    if (olderUnmarked.length > 0 && !hasCustomizations && hasPddSkillLock(resolvedHome, fs)) {
-      try {
-        const npxReply = effectiveSpawn('npx', ['--yes', 'skills', 'add', `promptdriven/pdd#${target.ref}`, '-g', '-a', 'codex', '-a', 'claude-code', '-y'], {
-          encoding: 'utf8',
-          timeout: 120000,
-          env,
+        if (failedCanon.has(key) || seenSkip.has(key)) continue;
+        seenSkip.add(key);
+        skippedSkills.push({
+          folder: row.found,
+          stale: row.stale,
+          details: formatStaleDetails(row.staleSkills),
+          recovery: "npx skills add promptdriven/pdd -g --skill '*'",
         });
-        const npxCode = npxReply?.status ?? npxReply?.code ?? (npxReply?.error ? 1 : 0);
-        if (npxCode === 0) {
-          for (const row of olderUnmarked) updatedSet.add(row.found);
-        } else {
-          const detail = (npxReply?.stderr || npxReply?.stdout || npxReply?.error?.message || 'npx skills add failed').trim().split('\n')[0];
-          failedSkills.push({
-            folder: olderUnmarked.map(row => row.found).join(', '),
-            reason: detail || 'npx skills add failed',
-            recovery: 'npx skills add promptdriven/pdd -g -a codex -a claude-code -y',
-          });
-          for (const row of olderUnmarked) failedCanon.add(canonicalDir(row.found, fs));
-        }
-      } catch (error) {
-        failedSkills.push({
-          folder: olderUnmarked.map(row => row.found).join(', '),
-          reason: error?.message || 'npx skills add failed',
-          recovery: 'npx skills add promptdriven/pdd -g -a codex -a claude-code -y',
-        });
-        for (const row of olderUnmarked) failedCanon.add(canonicalDir(row.found, fs));
       }
-    }
+    } catch { /* User skill inspection is best-effort. */ }
 
-    const updatedCanon = new Set([...updatedSet].map(folder => canonicalDir(folder, fs)));
-    for (const row of userStale) {
-      const key = canonicalDir(row.found, fs);
-      if (updatedCanon.has(key) || failedCanon.has(key)) continue;
-      skippedSkills.push({
-        folder: row.found,
-        stale: row.stale,
-        recovery: 'npx skills add promptdriven/pdd -g -a codex -a claude-code -y',
-      });
-    }
-
-    if (cwd && cwd !== noRepoCwd) {
+    if (cwd && cwd !== noRepoCwd && (!resolvedHome || canonicalDir(cwd, fs) !== canonicalDir(resolvedHome, fs))) {
       const projectRoots = new Set([join(cwd, '.agents/skills'), join(cwd, '.codex/skills'), join(cwd, '.claude/skills')]);
       try {
         for (const row of skillsModule.findSkills({
@@ -462,11 +420,13 @@ export async function runCliUpgrade({
         })) {
           if (!row.found || !row.stale || !projectRoots.has(row.found)) continue;
           const key = canonicalDir(row.found, fs);
-          if (updatedCanon.has(key) || failedCanon.has(key) || skippedSkills.some(item => canonicalDir(item.folder, fs) === key)) continue;
+          if (failedCanon.has(key) || seenSkip.has(key)) continue;
+          seenSkip.add(key);
           skippedSkills.push({
             folder: row.found,
             stale: row.stale,
-            recovery: 'npx skills add promptdriven/pdd -a codex -a claude-code -y',
+            details: formatStaleDetails(row.staleSkills),
+            recovery: "npx skills add promptdriven/pdd --skill '*'",
           });
         }
       } catch { /* Project skill inspection is best-effort. */ }
@@ -485,7 +445,7 @@ export async function runCliUpgrade({
     writeLine(stdout, `Updated PDD skills to ${toVersion} in: ${updatedSkills.join(', ')}.`);
   }
   for (const item of skippedSkills) {
-    writeLine(stdout, `Skipped ${item.stale === 'differs' ? 'customized' : 'unmarked'} PDD skills in ${item.folder} (preserved without overwriting). To replace them, run: ${item.recovery}`);
+    writeLine(stdout, `Skipped ${item.stale === 'differs' ? 'customized' : 'unmarked'} PDD skills in ${item.folder}${item.details ? ` (${item.details})` : ''} (preserved without overwriting). To update unmarked skills, run: ${item.recovery}`);
   }
   for (const item of failedSkills) {
     writeLine(stderr, `Failed to update PDD skills in ${item.folder} (${item.reason}). To recover, run: ${item.recovery}`);
