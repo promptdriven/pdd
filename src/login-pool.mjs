@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 40dc4630d11ed8f4b34b6dc0369d0072778cc288df38e80c7ac0e807960f83ce).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 66fb21eec250e3857a60b1030d27d9c02535523e4d05874dfc989c3d03539bd1).
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -32,8 +32,42 @@ const TOP_KEYS = new Set(['reset', 'weeklyStopPercent', 'logins']);
 const CONTROLS = /[\u0000-\u001f\u007f-\u009f]/;
 const SECRET_ENV_KEY = /(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD|_CREDENTIAL|^SECRET_|API_KEY$|^OPENAI_API_KEY$|^ANTHROPIC_API_KEY$|^GEMINI_API_KEY$|^GOOGLE_API_KEY$|^CLAUDE_CODE_OAUTH_TOKEN$|^CODEX_ACCESS_TOKEN$)/i;
 const CODEX_OVERLAY_LINKS = ['config.toml', 'skills', 'memories', 'sessions', 'rules'];
-const DEFAULT_CLOUD_URL = 'https://promptdriven.ai';
+const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/;
+export const DEFAULT_CLOUD_URL = 'https://api.promptdriven.ai';
 export const POOL_FALLBACK_COOLDOWN_MS = 30 * 60 * 1000;
+
+const activeOverlayCleanups = new Set();
+let overlayHooksAttached = false;
+
+export function sweepActiveCodexOverlays() {
+  for (const fn of [...activeOverlayCleanups]) {
+    try { fn(); } catch {}
+  }
+}
+
+function onOverlaySignal(signal) {
+  const otherListeners = process.listenerCount(signal) > 1;
+  sweepActiveCodexOverlays();
+  if (!otherListeners) {
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+  }
+}
+const onOverlaySigint = () => onOverlaySignal('SIGINT');
+const onOverlaySigterm = () => onOverlaySignal('SIGTERM');
+
+function syncOverlayHooks() {
+  if (activeOverlayCleanups.size > 0 && !overlayHooksAttached) {
+    overlayHooksAttached = true;
+    process.on('exit', sweepActiveCodexOverlays);
+    process.on('SIGINT', onOverlaySigint);
+    process.on('SIGTERM', onOverlaySigterm);
+  } else if (activeOverlayCleanups.size === 0 && overlayHooksAttached) {
+    overlayHooksAttached = false;
+    process.off('exit', sweepActiveCodexOverlays);
+    process.off('SIGINT', onOverlaySigint);
+    process.off('SIGTERM', onOverlaySigterm);
+  }
+}
 
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const bad = message => { throw new Error(`Invalid login pool: ${message}`); };
@@ -67,9 +101,12 @@ function readJsonObject(fs, file) {
 }
 
 export function resolveCloudAccountsEndpoint(env = process.env) {
-  const raw = String(env?.PDD_ACCOUNTS_URL || env?.PDD_CLOUD_URL || env?.PDD_RUNTIME_URL || DEFAULT_CLOUD_URL).trim().replace(/\/+$/, '');
+  const raw = String(env?.PDD_ACCOUNTS_URL || env?.PDD_CLOUD_URL || DEFAULT_CLOUD_URL).trim().replace(/\/+$/, '');
   let parsed;
   try { parsed = new URL(raw); } catch { throw new CloudAccountsError('Invalid Cloud Accounts URL.', { code: 'invalid_url' }); }
+  if (parsed.username || parsed.password) {
+    throw new CloudAccountsError('Cloud Accounts URL must not include embedded credentials.', { code: 'invalid_url' });
+  }
   const loopback = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(parsed.hostname.toLowerCase());
   if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
     throw new CloudAccountsError('Cloud Accounts requires an https:// endpoint.', { code: 'insecure_url' });
@@ -126,6 +163,37 @@ function rememberLeaseSecrets(payload) {
   }
 }
 
+function extractCloudErrorInfo(parsed, status) {
+  if (!object(parsed)) return { code: `http_${status}`, message: `HTTP ${status}`, payload: parsed };
+  const detail = parsed.detail;
+  let code = '';
+  let message = '';
+  if (object(detail)) {
+    code = String(detail.error?.code || (typeof detail.error === 'string' ? detail.error : '') || detail.code || '');
+    message = String(detail.message || detail.error?.message || (typeof detail.error === 'string' ? detail.error : '') || '');
+  } else if (typeof detail === 'string' && detail.trim()) {
+    message = detail.trim();
+  } else if (Array.isArray(detail) && detail.length) {
+    const msgs = detail.map(item => (object(item) && typeof item.msg === 'string' ? item.msg : '')).filter(Boolean);
+    if (msgs.length) {
+      code = 'validation_error';
+      message = msgs.join('; ');
+    }
+  }
+  if (!code) {
+    code = String(parsed.error?.code || (typeof parsed.error === 'string' ? parsed.error : '') || parsed.code || '');
+  }
+  if (!message) {
+    message = String(parsed.error?.message || parsed.message || (typeof parsed.error === 'string' ? parsed.error : '') || '');
+  }
+  const payload = object(detail) ? { ...parsed, ...detail } : parsed;
+  return {
+    code: code || `http_${status}`,
+    message: message || `HTTP ${status}`,
+    payload,
+  };
+}
+
 export async function cloudAccountsRequest(method, path, { body, cwd = process.cwd(), env = process.env, timeoutMs = 10_000 } = {}, ports = {}) {
   const baseUrl = resolveCloudAccountsEndpoint(env);
   const token = await resolveCloudAccountsToken({ cwd, env, timeoutMs }, ports);
@@ -157,12 +225,11 @@ export async function cloudAccountsRequest(method, path, { body, cwd = process.c
     }
     if (parsed) rememberLeaseSecrets(parsed);
     if (!response.ok) {
-      const serverMsg = (object(parsed) && (parsed.error?.message || parsed.message || (typeof parsed.error === 'string' ? parsed.error : ''))) || `HTTP ${response.status}`;
-      const code = (object(parsed) && (parsed.error?.code || parsed.code)) || `http_${response.status}`;
-      throw new CloudAccountsError(`Cloud Accounts ${method} ${path} failed (${response.status}): ${serverMsg}`, {
+      const info = extractCloudErrorInfo(parsed, response.status);
+      throw new CloudAccountsError(`Cloud Accounts ${method} ${path} failed (${response.status}): ${info.message}`, {
         status: response.status,
-        code: String(code),
-        payload: parsed,
+        code: String(info.code),
+        payload: info.payload,
       });
     }
     return parsed ?? {};
@@ -329,7 +396,7 @@ export function materializeLocalClaudeAuth(lease, { env = process.env, previousM
   if (lease?.delivery_mode === 'gateway_grant' && typeof lease.anthropic_base_url === 'string' && lease.anthropic_base_url.trim()) {
     settingsEnv.ANTHROPIC_BASE_URL = lease.anthropic_base_url.trim();
     managedBaseUrl = true;
-  } else if (previousManagedBaseUrl || String(settingsEnv.ANTHROPIC_BASE_URL ?? '').includes('/v1/claude-gateway')) {
+  } else if (previousManagedBaseUrl || MANAGED_CLAUDE_GATEWAY_RE.test(String(settingsEnv.ANTHROPIC_BASE_URL ?? ''))) {
     delete settingsEnv.ANTHROPIC_BASE_URL;
   }
   settings.env = settingsEnv;
@@ -341,28 +408,48 @@ export function materializeLocalClaudeAuth(lease, { env = process.env, previousM
   return { settingsPath, onboardingPath, managedBaseUrl };
 }
 
-export function createCodexStepOverlay(authJson, { env = process.env, tmpRoot } = {}, ports = {}) {
+export function createCodexStepOverlay(authJson, { env = process.env, tmpRoot, detached = false } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const home = env?.HOME || homedir();
   const sourceCodexHome = (typeof env?.CODEX_HOME === 'string' && env.CODEX_HOME.trim()) ? env.CODEX_HOME.trim() : join(home, '.codex');
   const rootDir = tmpRoot || (fs.existsSync?.('/tmp') !== false ? '/tmp' : tmpdir());
-  const overlayDir = join(rootDir, `pdd-cx-${randomBytes(6).toString('hex')}`);
-  fs.mkdirSync(overlayDir, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync?.(overlayDir, 0o700); } catch {}
-  for (const name of CODEX_OVERLAY_LINKS) {
-    const src = join(sourceCodexHome, name);
-    try {
-      (fs.lstatSync ?? nativeFs.lstatSync)(src);
-      fs.symlinkSync(src, join(overlayDir, name));
-    } catch {}
+  let overlayDir;
+  if (typeof fs.mkdtempSync === 'function') {
+    overlayDir = fs.mkdtempSync(join(rootDir, 'pdd-cx-'));
+  } else if (fs === nativeFs) {
+    overlayDir = nativeFs.mkdtempSync(join(rootDir, 'pdd-cx-'));
+  } else {
+    overlayDir = join(rootDir, `pdd-cx-${randomBytes(8).toString('hex')}`);
+    fs.mkdirSync(overlayDir, { recursive: false, mode: 0o700 });
   }
-  const stripped = stripCodexAuthBundle(authJson);
-  const authPath = join(overlayDir, 'auth.json');
-  writeAtomicPrivate(fs, authPath, `${JSON.stringify(stripped, null, 2)}\n`);
+  try { (fs.chmodSync ?? nativeFs.chmodSync)(overlayDir, 0o700); } catch {}
+  let cleaned = false;
   const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (activeOverlayCleanups.delete(cleanup)) syncOverlayHooks();
     try { (fs.rmSync ?? nativeFs.rmSync)(overlayDir, { recursive: true, force: true }); } catch {}
   };
-  return { overlayDir, authPath, cleanup };
+  if (!detached) {
+    activeOverlayCleanups.add(cleanup);
+    syncOverlayHooks();
+  }
+  try {
+    for (const name of CODEX_OVERLAY_LINKS) {
+      const src = join(sourceCodexHome, name);
+      try {
+        (fs.lstatSync ?? nativeFs.lstatSync)(src);
+        fs.symlinkSync(src, join(overlayDir, name));
+      } catch {}
+    }
+    const stripped = stripCodexAuthBundle(authJson);
+    const authPath = join(overlayDir, 'auth.json');
+    writeAtomicPrivate(fs, authPath, `${JSON.stringify(stripped, null, 2)}\n`);
+    return { overlayDir, authPath, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
 export function buildClaudeStepEnv(baseEnv = process.env, lease) {
@@ -370,6 +457,7 @@ export function buildClaudeStepEnv(baseEnv = process.env, lease) {
   for (const [k, v] of Object.entries(baseEnv ?? {})) {
     if (typeof v === 'string') out[k] = v;
   }
+  delete out.CLAUDE_CODE_OAUTH_TOKEN;
   const token = String(lease?.claude_oauth_token || lease?.gateway_bearer_token || '').trim();
   if (token) {
     rememberSecrets(token);
@@ -377,13 +465,13 @@ export function buildClaudeStepEnv(baseEnv = process.env, lease) {
   }
   if (lease?.delivery_mode === 'gateway_grant' && typeof lease.anthropic_base_url === 'string' && lease.anthropic_base_url.trim()) {
     out.ANTHROPIC_BASE_URL = lease.anthropic_base_url.trim();
-  } else if (lease?.delivery_mode === 'direct_oauth' && String(out.ANTHROPIC_BASE_URL ?? '').includes('/v1/claude-gateway')) {
+  } else if (MANAGED_CLAUDE_GATEWAY_RE.test(String(out.ANTHROPIC_BASE_URL ?? ''))) {
     delete out.ANTHROPIC_BASE_URL;
   }
   return out;
 }
 
-export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, ports = {}) {
+export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, ports = {}, { detached = false } = {}) {
   const provider = leaseReply?.account?.provider;
   const lease = leaseReply?.lease;
   const cleanBase = loginEnvironment(baseEnv, { kind: provider || 'codex' });
@@ -391,7 +479,7 @@ export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, por
     if (!object(lease?.codex_auth_json)) {
       throw new CloudAccountsError('Cloud lease returned no Codex auth bundle.', { code: 'invalid_lease' });
     }
-    const overlay = createCodexStepOverlay(lease.codex_auth_json, { env: baseEnv, tmpRoot: ports.tmpRoot }, ports);
+    const overlay = createCodexStepOverlay(lease.codex_auth_json, { env: baseEnv, tmpRoot: ports.tmpRoot, detached }, ports);
     const env = { ...cleanBase, CODEX_HOME: overlay.overlayDir, PDD_CLOUD_STEP_ISOLATED: '1' };
     return { env, cleanupDirs: [overlay.overlayDir], cleanup: overlay.cleanup, overlayDir: overlay.overlayDir };
   }
@@ -413,6 +501,11 @@ export function classifyRateLimitFailure(text, usageWindows = null) {
   }
   if (HARD_QUOTA_RE.test(String(text ?? ''))) return 'quota_exhausted';
   return 'burst_rate_limit';
+}
+
+export function normalizeUsagePercentInt(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value >= 100 ? 100 : Math.max(0, Math.floor(value));
 }
 
 export function extractRateLimitReport(text, accountOrWindows = null, now = Date.now()) {
@@ -438,9 +531,9 @@ export function extractRateLimitReport(text, accountOrWindows = null, now = Date
   if (!sevenReset && (sevenD ?? 0) >= 100) sevenReset = parsedIso ?? new Date(now + 24 * 3600 * 1000).toISOString();
 
   return {
-    five_hour_used_percent: fiveH ?? 100,
+    five_hour_used_percent: normalizeUsagePercentInt(fiveH ?? 100),
     five_hour_reset_at: fiveReset,
-    weekly_used_percent: sevenD ?? 0,
+    weekly_used_percent: normalizeUsagePercentInt(sevenD ?? 0),
     weekly_reset_at: sevenReset,
     limit_reached: true,
   };
@@ -449,9 +542,9 @@ export function extractRateLimitReport(text, accountOrWindows = null, now = Date
 export async function reportCloudAccountUsage(accountId, report, { cwd = process.cwd(), env = process.env, timeoutMs = 4000 } = {}, ports = {}) {
   if (!accountId) return null;
   const body = {
-    five_hour_used_percent: report?.five_hour_used_percent ?? null,
+    five_hour_used_percent: normalizeUsagePercentInt(report?.five_hour_used_percent),
     five_hour_reset_at: report?.five_hour_reset_at ?? null,
-    weekly_used_percent: report?.weekly_used_percent ?? null,
+    weekly_used_percent: normalizeUsagePercentInt(report?.weekly_used_percent),
     weekly_reset_at: report?.weekly_reset_at ?? null,
     limit_reached: report?.limit_reached !== false,
   };
@@ -668,7 +761,7 @@ export async function selectCloudPoolLogin({
         env: loginEnvironment(env, login),
         account: acc,
         lease: reply.lease,
-        prepareStep: (stepBaseEnv = env) => prepareCloudStepExecution(reply, stepBaseEnv, ports),
+        prepareStep: (stepBaseEnv = env, stepOpts = {}) => prepareCloudStepExecution(reply, stepBaseEnv, ports, stepOpts),
       };
     }
   }
@@ -889,7 +982,10 @@ export function loginEnvironment(baseEnv = process.env, login) {
   for (const [k, v] of Object.entries(baseEnv ?? {})) {
     if (typeof v === 'string') out[k] = v;
   }
-  for (const key of [...ALL_CONFIG_VARS, 'CLAUDECODE']) delete out[key];
+  for (const key of [...ALL_CONFIG_VARS, 'CLAUDECODE', 'CLAUDE_CODE_OAUTH_TOKEN']) delete out[key];
+  if (MANAGED_CLAUDE_GATEWAY_RE.test(String(out.ANTHROPIC_BASE_URL ?? ''))) {
+    delete out.ANTHROPIC_BASE_URL;
+  }
   if (login?.configVar && login?.configDir) out[login.configVar] = login.configDir;
   for (const [k, v] of Object.entries(login?.env ?? {})) {
     if (typeof v === 'string') out[k] = v;

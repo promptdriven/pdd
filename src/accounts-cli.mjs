@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 41ded1639b969db82349854eeae2a1c2bd73073d59331575421edcec15a62d5e).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: d3daa9fb0b86d1f7e07fb0a924836f25f961cf67f13245933563f47c2378e6b0).
 import { spawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
@@ -25,6 +25,7 @@ const AUTO_END = '# <<< pdd accounts auto <<<';
 export function renderAutoSwitchBlock() {
   return [
     AUTO_BEGIN,
+    'unalias codex claude 2>/dev/null || true',
     'codex() {',
     '  command -v pdd >/dev/null 2>&1 && pdd accounts sync --provider codex --quiet --timeout-ms 1200 2>/dev/null || true',
     '  command codex "$@"',
@@ -181,7 +182,7 @@ async function readStdinString(stdin, { idleTimeoutMs = 50 } = {}) {
   });
 }
 
-function readLocalCodexBundle(fs, env) {
+export function readCodexFullAuthBundle(fs, env) {
   const authPath = localCodexAuthPath(env);
   let raw;
   try {
@@ -191,14 +192,25 @@ function readLocalCodexBundle(fs, env) {
   }
   rememberSecrets(...knownSecretValues(raw));
   const tokens = raw?.tokens;
-  if (!object(tokens) || typeof tokens.access_token !== 'string' || !tokens.access_token.trim()) {
-    throw new CloudAccountsError('Local Codex auth.json has no OAuth access token.', { code: 'invalid_local_login' });
+  if (!object(tokens)) {
+    throw new CloudAccountsError('Local Codex auth.json is missing OAuth tokens (access_token, refresh_token, id_token, account_id). Run codex login first.', { code: 'invalid_local_login' });
   }
   for (const val of Object.values(tokens)) {
     if (typeof val === 'string' && val.length >= 8) rememberSecrets(val);
   }
-  if (typeof tokens.refresh_token !== 'string' || !tokens.refresh_token.trim()) {
+  const hasAccess = typeof tokens.access_token === 'string' && Boolean(tokens.access_token.trim());
+  const hasRefresh = typeof tokens.refresh_token === 'string' && Boolean(tokens.refresh_token.trim());
+  if (hasAccess && !hasRefresh) {
     throw new CloudAccountsError('Local Codex auth.json already has a stripped refresh token. Run pdd accounts add --provider codex to sign in fresh.', { code: 'already_stripped' });
+  }
+  const missing = ['access_token', 'refresh_token', 'id_token', 'account_id'].filter(
+    key => typeof tokens[key] !== 'string' || !tokens[key].trim(),
+  );
+  if (missing.length > 0) {
+    throw new CloudAccountsError(
+      `Local Codex auth.json is missing required OAuth token field${missing.length > 1 ? 's' : ''}: ${missing.join(', ')}. Run codex login first.`,
+      { code: 'invalid_local_login' },
+    );
   }
   return {
     authPath,
@@ -207,10 +219,10 @@ function readLocalCodexBundle(fs, env) {
       auth_json: {
         OPENAI_API_KEY: raw.OPENAI_API_KEY ?? null,
         tokens: {
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token,
-          id_token: typeof tokens.id_token === 'string' ? tokens.id_token : '',
-          account_id: typeof tokens.account_id === 'string' ? tokens.account_id : '',
+          access_token: tokens.access_token.trim(),
+          refresh_token: tokens.refresh_token.trim(),
+          id_token: tokens.id_token.trim(),
+          account_id: tokens.account_id.trim(),
         },
       },
     },
@@ -240,7 +252,8 @@ function readLocalClaudeToken(fs, env, extraText = '') {
 function detectImportProvider(fs, env) {
   try {
     const raw = JSON.parse(fs.readFileSync(localCodexAuthPath(env), 'utf8'));
-    if (typeof raw?.tokens?.access_token === 'string' && raw.tokens.access_token && typeof raw?.tokens?.refresh_token === 'string' && raw.tokens.refresh_token) {
+    const t = raw?.tokens;
+    if (['access_token', 'refresh_token', 'id_token', 'account_id'].every(k => typeof t?.[k] === 'string' && t[k].trim())) {
       return 'codex';
     }
   } catch {}
@@ -311,7 +324,7 @@ async function enrollOrImportAccount(mode, { provider: requestedProvider, label:
         return { exitCode: 1, message: 'codex login did not complete.' };
       }
     }
-    const { authJson, bundle } = readLocalCodexBundle(fs, env);
+    const { authJson, bundle } = readCodexFullAuthBundle(fs, env);
     const label = requestedLabel ? sanitizeLabel(requestedLabel, '') : defaultAccountLabel('codex', authJson);
     if (!label) return { exitCode: 2, message: 'Provide a valid --label NAME.' };
     const created = await cloudAccountsRequest('POST', '/v1/accounts', {
@@ -521,6 +534,47 @@ function runAutoCommand(mode, { env }, ports = {}) {
   return { exitCode: 2, message: 'Use pdd accounts auto on|off|status.' };
 }
 
+async function resolveGitHubUser(login, { cwd, env }, ports = {}) {
+  if (typeof ports.resolveGithubUser === 'function') {
+    const info = await ports.resolveGithubUser(login, { cwd, env });
+    if (info?.type === 'Organization') {
+      throw new CloudAccountsError(
+        `"${login}" is a GitHub organization. Pass --with ${login}/<team> to share with an organization team.`,
+        { code: 'organization_requires_team' },
+      );
+    }
+    if (info?.type && info.type !== 'User') {
+      throw new CloudAccountsError(`"${login}" is not a GitHub user account.`, { code: 'invalid_share_target' });
+    }
+    return { login: info?.login || login, id: Number.isSafeInteger(info?.id) ? info.id : null };
+  }
+  if (typeof ports.resolveGithubUserId === 'function') {
+    const uid = await ports.resolveGithubUserId(login, { cwd, env });
+    return { login, id: Number.isSafeInteger(uid) ? uid : null };
+  }
+  let parsed = null;
+  try {
+    const runner = ports.run ?? ((c, a, o) => runAgentProcess(c, a, o));
+    const ghRes = await runner('gh', ['api', `users/${encodeURIComponent(login)}`], { cwd, env, input: '', timeoutMs: 3000, maxBytes: 65_536 });
+    if (ghRes?.code === 0 && ghRes.stdout) {
+      parsed = JSON.parse(ghRes.stdout);
+    }
+  } catch {}
+  if (parsed?.type === 'Organization') {
+    throw new CloudAccountsError(
+      `"${login}" is a GitHub organization. Pass --with ${login}/<team> to share with an organization team.`,
+      { code: 'organization_requires_team' },
+    );
+  }
+  if (parsed?.type && parsed.type !== 'User') {
+    throw new CloudAccountsError(`"${login}" is not a GitHub user account.`, { code: 'invalid_share_target' });
+  }
+  return {
+    login: typeof parsed?.login === 'string' && parsed.login.trim() ? parsed.login.trim() : login,
+    id: Number.isSafeInteger(parsed?.id) ? parsed.id : null,
+  };
+}
+
 export async function runAccountsCli({
   commandId = 'accounts',
   operands = [],
@@ -653,24 +707,13 @@ export async function runAccountsCli({
           if (!org || !team || extra) return { exitCode: 2, message: 'Use ORG/TEAM for team sharing.' };
           body = { org, team };
         } else {
-          body = { github_login: withTarget };
-          let uid = typeof ports.resolveGithubUserId === 'function'
-            ? await ports.resolveGithubUserId(withTarget, { cwd, env })
-            : null;
-          if (!Number.isSafeInteger(uid)) {
-            try {
-              const runner = ports.run ?? ((c, a, o) => runAgentProcess(c, a, o));
-              const ghRes = await runner('gh', ['api', `users/${encodeURIComponent(withTarget)}`], { cwd, env, input: '', timeoutMs: 3000, maxBytes: 65_536 });
-              if (ghRes?.code === 0 && ghRes.stdout) {
-                const parsed = JSON.parse(ghRes.stdout);
-                if (Number.isSafeInteger(parsed?.id)) uid = parsed.id;
-              }
-            } catch {}
-          }
-          if (Number.isSafeInteger(uid)) body.github_user_id = uid;
+          const resolvedUser = await resolveGitHubUser(withTarget, { cwd, env }, ports);
+          body = { github_login: resolvedUser.login };
+          if (Number.isSafeInteger(resolvedUser.id)) body.github_user_id = resolvedUser.id;
         }
         const res = await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/share`, { body, cwd, env }, ports);
-        const inviteNote = res?.invite_id ? ` (invite ${res.invite_id})` : '';
+        const inviteId = res?.invite?.invite_id ?? res?.invite_id ?? null;
+        const inviteNote = inviteId ? ` (invite ${inviteId})` : '';
         return { exitCode: 0, message: `Shared "${account.label}" with ${withTarget}${inviteNote}.` };
       }
 

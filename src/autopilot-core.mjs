@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: f1e62613d68856a3c802c7556e9bc296f2532fe949ef70248956d654c968f2b7).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 335a391408b3ff2f38d0f04fdbc64354c8ea831366b1bab2b92c4282dd619112).
 import * as nativeFs from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1186,18 +1186,24 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
   ctx.fs.mkdirSync(ctx.dirs.logs, { recursive: true, mode: 0o700 });
   const result = join(ctx.dirs.logs, `${id}.result.json`);
   const activeAgent = command ? ctx.state.agent : (selected?.agent ?? ctx.state.agent);
-  const prepared = (!command && typeof selected?.prepareStep === 'function') ? selected.prepareStep(ctx.ports.env ?? process.env) : null;
+  const prepared = (!command && typeof selected?.prepareStep === 'function') ? selected.prepareStep(ctx.ports.env ?? process.env, { detached: true }) : null;
   const baseEnv = prepared?.env ?? ((!command && selected?.env) ? selected.env : (ctx.ports.env ?? process.env));
   const cleanupDirs = prepared?.cleanupDirs ?? selected?.cleanupDirs ?? null;
   const run = command ?? resolveCoreAgentCommand(ctx, role, activeAgent, baseEnv);
   // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
   // as PDD_CHECK_CPUS for every role.
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
-  const started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
-    env: { ...pddOnPath(ctx, jobEnvironment(baseEnv)), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...extraEnv },
-    ...(Array.isArray(cleanupDirs) && cleanupDirs.length ? { cleanupDirs } : {}),
-    ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd'), skills: skillsCheck(ctx, activeAgent, baseEnv) } } : {}),
-    issue: job.issue, role, branch: job.branch, head: job.head, ...(command ? {} : { hung: HUNG }) });
+  let started;
+  try {
+    started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
+      env: { ...pddOnPath(ctx, jobEnvironment(baseEnv)), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...extraEnv },
+      ...(Array.isArray(cleanupDirs) && cleanupDirs.length ? { cleanupDirs } : {}),
+      ...(Object.keys(priority).length ? { priority } : {}), ...(SHELL_ROLES.has(role) ? { pddCheck: { version: engineVersion(ctx), cli: join(ctx.dirs.bin, 'pdd'), skills: skillsCheck(ctx, activeAgent, baseEnv) } } : {}),
+      issue: job.issue, role, branch: job.branch, head: job.head, ...(command ? {} : { hung: HUNG }) });
+  } catch (err) {
+    prepared?.cleanup?.();
+    throw err;
+  }
   if (!command && object(started)) {
     const loginId = selected?.login?.id ?? activeAgent?.id;
     if (named(loginId)) started.loginId = loginId;
@@ -1742,9 +1748,26 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
       if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
       if (prevReviewAgent?.cloud && rateClass === 'burst_rate_limit' && !job.review.burstRetried && ctx.ports.selectLogin) {
         await (ctx.ports.sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(ctx.ports.burstRetryMs ?? 150);
-        const same = await ctx.ports.selectLogin({ preferredAccountId: prevReviewAgent.loginId });
-        if (same?.state === 'ready') {
+        const same = await ctx.ports.selectLogin({ preferredAccountId: prevReviewAgent.loginId, fresh: true });
+        if (same?.state === 'ready' && same?.login?.id === prevReviewAgent.loginId) {
           job.review.burstRetried = true;
+          job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
+          job.review.agent = null;
+          job.review.retry = true;
+          ctx.saveJob(job);
+          return reviewState(ctx, job, prBody, same);
+        }
+        if (same?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, same.poolSize ?? 4)) {
+          await ctx.ports.exhaustLogin?.({
+            loginId: prevReviewAgent?.loginId ?? ctx.state.agent?.id,
+            resetAt: null,
+            reason: service,
+            accountWindows: prevReviewAgent?.accountWindows ?? null,
+            markTriedOnly: true,
+          });
+          job.poolRotations = (job.poolRotations ?? 0) + 1;
+          delete job.review.burstRetried;
+          clearPoolExhausted(ctx);
           job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
           job.review.agent = null;
           job.review.retry = true;
@@ -3834,9 +3857,22 @@ async function agentStop(ctx, job, seen, quiet) {
     };
     if (prevAgent?.cloud && rateClass === 'burst_rate_limit' && !prevAgent?.burstRetried && ctx.ports.selectLogin) {
       await (ctx.ports.sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(ctx.ports.burstRetryMs ?? 150);
-      const same = await ctx.ports.selectLogin({ preferredAccountId: prevAgent.loginId });
-      if (same?.state === 'ready') {
+      const same = await ctx.ports.selectLogin({ preferredAccountId: prevAgent.loginId, fresh: true });
+      if (same?.state === 'ready' && same?.login?.id === prevAgent.loginId) {
         await restartStepWith(same, true);
+        return;
+      }
+      if (same?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, same.poolSize ?? 4)) {
+        await ctx.ports.exhaustLogin?.({
+          loginId: prevAgent?.loginId ?? ctx.state.agent?.id,
+          resetAt: null,
+          reason: service,
+          accountWindows: prevAgent?.accountWindows ?? null,
+          markTriedOnly: true,
+        });
+        job.poolRotations = (job.poolRotations ?? 0) + 1;
+        clearPoolExhausted(ctx);
+        await restartStepWith(same, false);
         return;
       }
     }

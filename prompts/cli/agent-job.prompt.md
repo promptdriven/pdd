@@ -57,7 +57,8 @@ is uncertain; those records let a later tick retry without a live controller.
   never a custody root: a job may run in a person's persistent source tree.
   `cleanupDirs` is optional: an array of disposable step overlay paths (`pdd-cx-*`)
   saved in the spec and removed best-effort when the wrapper finishes (after any
-  group `SIGKILL`) and when `cleanupAgentJob` confirms process cleanup.
+  group `SIGKILL`) and in `cleanupAgentJob` whenever the wrapper is no longer live
+  (including when `!processManifest(saved)`) or when process termination is confirmed.
 - `startAgentJob` also takes `priority` (`{nice, qos, cpus, taskset}` from the
   [machine guard](machine-guard.prompt.md)) and saves it in the spec. Every job
   runs at the lowest priority (#3231), the child and not the wrapper: the wrapper only

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: d4737f496bbc8807879fb73704634b755649deb53a9957dff603d4453290a6f7).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 1feb66cfb22dc20090d770cbde29ea2d5934a014460536b911f8dcc10bf97ee5).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -426,28 +426,43 @@ export function snapshotAgentJob(job, ports = {}, { requireWrapper = false, clea
 }
 
 export async function cleanupAgentJob(job, ports = {}) {
+  const spec = typeof job?.token === 'string' ? readJson(job.token) : null;
+  const overlays = cleanOverlayDirs((object(spec) ? spec.cleanupDirs : null) ?? job?.cleanupDirs);
+  const isLive = () => Boolean(Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token));
+  const wipeIfDead = () => { if (overlays.length && !isLive()) removeCleanupDirs(overlays); };
   const manifestFile = typeof job?.token === 'string' ? `${job.token}.processes.json` : null;
   const errorFile = typeof job?.token === 'string' ? `${job.token}.processes.error` : null;
   const custodyPath = typeof job?.token === 'string' ? custodyFile(job.token) : null;
   const manifest = manifestFile ? readJson(manifestFile) : null;
   if (manifest !== undefined && !processManifest(manifest)) {
     try { writeFileSync(errorFile, 'manifest invalid\n', { mode: 0o600 }); } catch {}
+    wipeIfDead();
     return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
   }
-  if (job?.processesUncertain || errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })()) return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  if (job?.processesUncertain || errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })()) {
+    wipeIfDead();
+    return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  }
   const custody = custodyPath ? readJson(custodyPath) : undefined;
-  if (custody !== undefined && !validCustodyRecord(custody)) return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  if (custody !== undefined && !validCustodyRecord(custody)) {
+    wipeIfDead();
+    return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
+  }
   const snapshotState = typeof job?.token === 'string' && Number.isSafeInteger(job?.pid)
     ? cleanupSnapshotRecord(job) : { record: null, valid: true };
   if (!snapshotState.valid) {
     markProcessUncertain(job, 'cleanup snapshot history invalid');
+    wipeIfDead();
     return { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
   }
   const retryRecord = snapshotState.record;
   const retryPending = retryRecord && cleanupSnapshotPending(retryRecord);
   let saved = Array.isArray(job?.processes) ? job.processes : Array.isArray(manifest) ? manifest : null;
   const live = (ports.alive ?? nativeAlive)(job.pid, job.token);
-  if (retryPending && !live) return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
+  if (retryPending && !live) {
+    removeCleanupDirs(overlays);
+    return { confirmed: false, stopped: 0, killed: 0, remaining: saved?.length ?? 1 };
+  }
   if (live) {
     const fresh = snapshotAgentJob(job, ports, { requireWrapper: true, cleanupSnapshot: true });
     const error = errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })();
@@ -465,12 +480,14 @@ export async function cleanupAgentJob(job, ports = {}) {
     }
   }
   if (!processManifest(saved)) {
+    if (!live) removeCleanupDirs(overlays);
     const legacy = cleanupLegacyAgentJob(job, ports, manifest, errorFile, custodyPath);
     return legacy ?? { confirmed: false, stopped: 0, killed: 0, remaining: 0 };
   }
   stopAgentJob(job, ports);
   const result = await terminateCaptured(saved, { list: async () => (ports.list ?? lifecycleRows)(ports), signal: ports.kill ?? process.kill,
     sleep: ports.sleep, grace: ports.grace ?? GRACE_MS, poll: ports.poll });
+  if (overlays.length && (result.confirmed || !isLive())) removeCleanupDirs(overlays);
   // The wrapper can write custody or an error while its group shuts down. Read
   // again before reporting a clean result so that marker is not missed.
   if (errorFile && (() => { try { readFileSync(errorFile); return true; } catch { return false; } })())
@@ -479,8 +496,6 @@ export async function cleanupAgentJob(job, ports = {}) {
   if (currentCustody !== undefined && !validCustodyRecord(currentCustody))
     return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };
   if (!result.confirmed) return result;
-  const spec = readJson(job.token);
-  const overlays = cleanOverlayDirs(spec?.cleanupDirs ?? job?.cleanupDirs);
   const hasCustodyRoot = object(spec) && typeof spec.custodyRoot === 'string' && spec.custodyRoot;
   if (!hasCustodyRoot) {
     if (currentCustody) return { ...result, confirmed: false, remaining: Math.max(result.remaining, 1) };

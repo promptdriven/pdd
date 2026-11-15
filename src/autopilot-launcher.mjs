@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: d7bc9c1513c4a56576d54b4505a7257c3f3ff6890fb8597c95f37cfcc699f0ad).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b599ab564f77e486e37520f5f9795f693b0eb7da4089f6f778c07449cd237927).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -83,7 +83,7 @@ function portsFor(state, ports) {
 }
 const AGENT_KINDS = ['codex', 'claude', 'gemini', 'agy'];
 const AGENT_CONFIG_VARS = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME', agy: 'ANTIGRAVITY_APP_DATA_DIR' };
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'ANTIGRAVITY_APP_DATA_DIR', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'ANTIGRAVITY_APP_DATA_DIR', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_STATE_DIR', 'PDD_ACCOUNTS_URL', 'PDD_CLOUD_URL', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 function explicitConfigOverride(previous, env) {
   const kind = previous?.agent?.kind, variable = kind ? AGENT_CONFIG_VARS[kind] : null;
   if (!variable || typeof env?.[variable] !== 'string' || !env[variable].trim()) return false;
@@ -440,6 +440,7 @@ async function runCoreTick(stateFile, state, p, ports) {
   const poolKey = opts => `${Array.isArray(opts?.allowedKinds) ? [...opts.allowedKinds].sort().join(',') : '*'}:${opts?.preferredAccountId ?? ''}:${[...cloudTried].join(',')}`;
   const selectPool = (opts = {}) => {
     const key = poolKey(opts);
+    if (opts?.fresh === true) poolCache.delete(key);
     if (!poolCache.has(key)) {
       poolCache.set(key, cloudActive
         ? selectCloudPoolLogin(
@@ -468,10 +469,11 @@ async function runCoreTick(stateFile, state, p, ports) {
     }
     return poolCache.get(key);
   };
-  const exhaustPool = async ({ loginId, resetAt = null, reason = 'quota', accountWindows = null, allowedKinds } = {}) => {
+  const exhaustPool = async ({ loginId, resetAt = null, reason = 'quota', accountWindows = null, allowedKinds, markTriedOnly = false } = {}) => {
     if (cloudActive) {
       if (loginId) cloudTried.add(loginId);
       poolCache.clear();
+      if (markTriedOnly) return null;
       return exhaustCloudPoolLogin(
         { cwd: state.cwd, env: p.env, fallbackAgent: agent, loginId, accountWindows, reason, allowedKinds, skipAccountIds: [...cloudTried] },
         cloudPorts,

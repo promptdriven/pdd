@@ -440,7 +440,9 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    `ANTHROPIC_BASE_URL` for Claude), and runs with `loginId` saved on the part. Cloud
    accounts stick on the active account (`0` switches) until `5h >= 100%` or `7d >= 100%`
    (or a quota-exhaustion refusal): a brief burst `429` while `< 100%` retries once on the
-   same account to keep the prompt cache warm, whereas `100%` quota exhaustion reports
+   same account (`same.login.id === prev.loginId`, counting a rotation and marking the
+   prior login tried if `/lease` switched accounts) to keep the prompt cache warm, whereas
+   `100%` quota exhaustion reports
    usage and rotates to the next ready account (`soonest weekly_reset_at`) with zero issue
    strikes, zero `holdIssue`, zero `pending` and zero `streak` increment. When every login
    is cooling (`state: "all_cooling"` or `exhausted`), the engine saves `poolOut {since,

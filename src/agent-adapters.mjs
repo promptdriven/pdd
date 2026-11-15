@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: a0ec46fd3d9178406867a7ee9583d0763238d7e2af1725e6d6b4c646d8b1ee52).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: ed23619c7fb31b5ca33065cee238c8f7ce1e77449bd492aa2a2731b7dac454a9).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';
@@ -182,7 +182,7 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
    result=await run(launch.command,childArgs,{cwd,env:childEnv,input,signal,timeoutMs,maxBytes});
   }else{
    const triedIds=[];
-   let burstRetried=false;
+   let burstRetried=false,prevAccountId=null;
    for(;;){
     let leaseReply=null;
     try{
@@ -198,6 +198,11 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
      throw Object.assign(new Error(`Waiting on AI quota until ${leaseReply.wake_at}`),{code:'all_cooling',wakeAt:leaseReply.wake_at});
     }
     const acc=leaseReply?.account;
+    if(burstRetried&&prevAccountId&&acc?.account_id&&acc.account_id!==prevAccountId){
+     if(!triedIds.includes(prevAccountId))triedIds.push(prevAccountId);
+     burstRetried=false;
+    }
+    prevAccountId=acc?.account_id??null;
     if((typeof acc?.five_hour_used_percent==='number'&&acc.five_hour_used_percent>=100)||(typeof acc?.weekly_used_percent==='number'&&acc.weekly_used_percent>=100)){
      await cloudMod.reportCloudAccountUsage(acc.account_id,{...acc,limit_reached:true},{cwd,env:childEnv,timeoutMs:1500},accountsPorts).catch(()=>{});
      triedIds.push(acc.account_id);

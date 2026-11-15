@@ -53,19 +53,6 @@ Help forms and completion name only the `NAMES` words.
 Catalog four local routes before the product routes: `autopilot.start` (`autopilot start`, local `autopilot-start`, no operands, optional text `--runs`, `--checks`, `--label`, `--share`, `--agent` with completion choices `codex`, `claude`, `gemini` and `agy`, hidden text `--pool`, plus value options `--engine`, `--mode`, `--report`, `--decisions`, `--intake` and `--auto-update`); `autopilot.stop` (matching prefix/disposition, no operands/options); `autopilot.status` (matching prefix/disposition, no operands, optional flag --all); `autopilot.add` (`autopilot add`, local `autopilot-add`, required repeated issue operands). Forms and descriptions:
 
 - `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--decisions ask|decide] [--intake off|shadow|active] [--share PERCENT] [--agent codex|claude|gemini|agy] [--auto-update release|main|off]`: Start this repo with headless agent jobs (the core engine): check now and every 10 minutes, with no AI call on empty ticks. Autopilot works on issues with an opt-in label (--label NAME or autopilot.label in pdd.json) or on vetted ready cards when --intake active is enabled; without --intake active, a start with no label starts nothing. --runs and --checks override machine-sized run and heavy-check limits; --label (text), --mode (choice auto, observe or off) and --report (choice file, draft or off) save this machine's opt-in label, mode and report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --decisions (choice ask or decide) saves this machine's decision mode (ask asks a person only for a big decision; decide, the default, never asks); --intake (choice off, shadow or active) saves this machine's intake mode (shadow writes local intake cards that never change what starts; active selects ready cards, refines improve cards via read-only repo inspection and groups related small work; off is the default). --share (text) saves the percent of this machine's CPU and memory that Autopilot may use (1-100, default 50; it sets the automatic slots, the room check and the timer's memory limit). --agent saves or replaces this machine's agent and sign-in profile. --auto-update (choice release, main or off; default release) saves this machine's between-tick self-update mode for a user-owned global pdd install and its skills when no job is publishing or merging (#2710). A machine that ran the removed full engine moves to the core engine at its next tick. The route also accepts `--engine` (choice core or full) and hidden `--pool` (text) and shows neither in public help or completion.
-
-## Cloud accounts routes
-
-Catalog local disposition `accounts` ([Cloud accounts CLI](accounts-cli.prompt.md)) with zero usage-reset routes or options:
-- `accounts` (`accounts`, flag `--json`): `pdd accounts [--json]`
-- `accounts.list` (`accounts list`, flag `--json`): `pdd accounts list [--json]`
-- `accounts.add` (`accounts add`, value `--provider` choices `codex`, `claude`, text `--label`): `pdd accounts add [--provider codex|claude] [--label NAME]`
-- `accounts.import` (`accounts import`, value `--provider` choices `codex`, `claude`, text `--label`): `pdd accounts import [--provider codex|claude] [--label NAME]`
-- `accounts.use` (`accounts use`, operand `label`): `pdd accounts use LABEL`
-- `accounts.next` (`accounts next`, value `--provider` choices `codex`, `claude`): `pdd accounts next [--provider codex|claude]`
-- `accounts.sync` (`accounts sync`, value `--provider` choices `codex`, `claude`, flag `--quiet`, integer `--timeout-ms` 50..60000): `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`
-- `accounts.auto` (`accounts auto`, operand choice `on`, `off`, `status`): `pdd accounts auto on|off|status`
-- `accounts.pause` (`accounts pause`, operand `label`), `accounts.unpause` (`accounts unpause`, operand `label`), `accounts.share` (`accounts share`, operand `label`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, operand `label`, text `--user`), `accounts.leave` (`accounts leave`, operand `label`), `accounts.remove` (`accounts remove`, operand `label`), and `accounts.log` (`accounts log`, operand `label`, flag `--json`).
 - `pdd autopilot stop`: Stop this machine's timer; let the current agent step finish.
 - `pdd autopilot status [--all] [--json]`: Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.
 - `pdd autopilot add N...`: Mark named old issues with pdd:autopilot so Autopilot may take them.
@@ -207,6 +194,19 @@ Stories by part and slice, next shows ready runs, and start creates or reuses on
 issue then starts a normal feature run unless `--no-run`. All three make zero
 interpreter calls, and their help says "no interpreter calls". [Product](product.prompt.md) owns their behavior.
 
+## Cloud accounts routes
+
+Catalog local disposition `accounts` ([Cloud accounts CLI](accounts-cli.prompt.md)) immediately before `setup`, with zero usage-reset routes or options:
+- `accounts` (`accounts`, flag `--json`): `pdd accounts [--json]`
+- `accounts.list` (`accounts list`, flag `--json`): `pdd accounts list [--json]`
+- `accounts.add` (`accounts add`, value `--provider` choices `codex`, `claude`, text `--label`): `pdd accounts add [--provider codex|claude] [--label NAME]`
+- `accounts.import` (`accounts import`, value `--provider` choices `codex`, `claude`, text `--label`): `pdd accounts import [--provider codex|claude] [--label NAME]`
+- `accounts.use` (`accounts use`, operand `label`): `pdd accounts use LABEL`
+- `accounts.next` (`accounts next`, value `--provider` choices `codex`, `claude`): `pdd accounts next [--provider codex|claude]`
+- `accounts.sync` (`accounts sync`, value `--provider` choices `codex`, `claude`, flag `--quiet`, integer `--timeout-ms` 50..60000): `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`
+- `accounts.auto` (`accounts auto`, operand choice `on`, `off`, `status`): `pdd accounts auto on|off|status`
+- `accounts.pause` (`accounts pause`, operand `label`), `accounts.unpause` (`accounts unpause`, operand `label`), `accounts.share` (`accounts share`, operand `label`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, operand `label`, text `--user`), `accounts.leave` (`accounts leave`, operand `label`), `accounts.remove` (`accounts remove`, operand `label`), and `accounts.log` (`accounts log`, operand `label`, flag `--json`).
+
 ## Help forms
 
 `PUBLIC_COMMAND_MANIFEST` owns the forms, descriptions and order below. Each route owns entries whose form starts with its prefix. A help entry may include multiline example text. After each approval entry, include the shared policy's quoted-heredoc example with that route's command (`pdd approve PATH` or `pdd workflow approve N`). The example preserves person text without shell interpolation. Tell the caller to choose a delimiter absent from the text. Both approval descriptions state that --said - reads all UTF-8 stdin, including trailing newlines; simple literal --said text remains supported. A person terminal uses y/N; workflow y/N covers the ready gate and all selected drafts in one call.
@@ -264,6 +264,22 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd autopilot auto  Set the repository Autopilot mode to auto.
   pdd autopilot trust NAME...  Add explicitly trusted GitHub names.
   pdd autopilot untrust NAME  Remove an explicitly trusted GitHub name.
+  pdd accounts [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.
+  pdd accounts list [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.
+  pdd accounts add [--provider codex|claude] [--label NAME]  Sign in with codex login or claude setup-token, upload the encrypted bundle to PDD Cloud, and strip the local refresh token.
+  pdd accounts import [--provider codex|claude] [--label NAME]  Import an existing local ~/.codex/auth.json or Claude token into PDD Cloud and replace the local Codex file with a stripped pass.
+  pdd accounts use LABEL  Pin and materialize LABEL in ~/.codex/auth.json or ~/.claude/settings.json.
+  pdd accounts next [--provider codex|claude]  Skip the active login and switch the local install to the next ready account sorted by soonest weekly reset.
+  pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]  Refresh the local stripped login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.
+  pdd accounts auto on|off|status  Manage the opt-in fail-open shell wrapper in ~/.zshrc and ~/.bashrc for plain terminal codex and claude launches (off by default).
+  pdd accounts pause LABEL  Pause automatic leasing for LABEL.
+  pdd accounts unpause LABEL  Resume automatic leasing for LABEL.
+  pdd accounts share LABEL --with USER|ORG/TEAM  Share LABEL with a GitHub user or organization team without exposing raw credentials.
+  pdd accounts accept INVITE  Accept a pending Cloud account share invite.
+  pdd accounts unshare LABEL --user USER  Revoke shared access to LABEL for USER.
+  pdd accounts leave LABEL  Leave a shared Cloud account.
+  pdd accounts remove LABEL  Delete LABEL from PDD Cloud and revoke active leases.
+  pdd accounts log LABEL [--json]  Show the lease and sharing audit log for LABEL.
   pdd setup [--yes]  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.
 ```
 

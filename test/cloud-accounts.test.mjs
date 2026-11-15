@@ -19,8 +19,22 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runStepAgentProcess } from '../src/agent-adapters.mjs';
-import { jobEnvironment } from '../src/agent-job.mjs';
+import { cleanupAgentJob, jobEnvironment } from '../src/agent-job.mjs';
 import { parseCodexUsageWindows } from '../src/codex-limits.mjs';
+import {
+  CloudAccountsError,
+  DEFAULT_CLOUD_URL,
+  cloudAccountsRequest,
+  createCodexStepOverlay,
+  loginEnvironment,
+  materializeLocalClaudeAuth,
+  normalizeUsagePercentInt,
+  prepareCloudStepExecution,
+  reportCloudAccountUsage,
+  resolveCloudAccountsEndpoint,
+  sweepActiveCodexOverlays,
+} from '../src/login-pool.mjs';
+import { redactSecrets } from '../src/secret-redaction.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 import { tickAutopilot, runAutopilotLauncher } from '../src/autopilot-launcher.mjs';
 import { createHash } from 'node:crypto';
@@ -112,7 +126,7 @@ async function createMockCloudServer(t, initial = {}) {
 
     if (req.headers.authorization !== `Bearer ${state.bearerToken}`) {
       res.writeHead(401, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ detail: 'Unauthorized' }));
+      res.end(JSON.stringify({ detail: { error: 'unauthorized', message: 'Unauthorized' } }));
       return;
     }
 
@@ -130,6 +144,15 @@ async function createMockCloudServer(t, initial = {}) {
     }
 
     if (req.method === 'POST' && url.pathname === '/v1/accounts') {
+      if (body?.provider === 'codex') {
+        const tok = body?.bundle?.auth_json?.tokens;
+        const missing = ['access_token', 'refresh_token', 'id_token', 'account_id'].filter(
+          k => typeof tok?.[k] !== 'string' || !tok[k].trim(),
+        );
+        if (missing.length > 0) {
+          return send(422, { detail: missing.map(k => ({ loc: ['body', 'bundle', 'auth_json', 'tokens', k], msg: `Field required: ${k}` })) });
+        }
+      }
       const id = `acc_${state.nextSeq++}`;
       const acc = {
         account_id: id,
@@ -166,8 +189,8 @@ async function createMockCloudServer(t, initial = {}) {
       let switched = false;
       if (body?.preferred_label) {
         const target = accessible.find(a => a.label === body.preferred_label || a.account_id === body.preferred_label);
-        if (!target) return send(404, { detail: `Account ${body.preferred_label} not found` });
-        if (!isReady(target)) return send(409, { detail: `Account ${target.label} is ${target.state}` });
+        if (!target) return send(404, { detail: { error: 'not_found', message: `Account ${body.preferred_label} not found` } });
+        if (!isReady(target)) return send(409, { detail: { error: 'account_not_ready', message: `Account ${target.label} is ${target.state}` } });
         chosen = target;
         switched = body.current_account_id !== target.account_id;
       } else {
@@ -224,12 +247,13 @@ async function createMockCloudServer(t, initial = {}) {
           },
         };
       } else if (chosen.shared) {
+        const leaseId = `lse_${state.nextSeq++}`;
         lease = {
-          lease_id: `lse_${state.nextSeq++}`,
+          lease_id: leaseId,
           expires_at: expiresAt,
           delivery_mode: 'gateway_grant',
-          anthropic_base_url: `${serverUrl}/v1/claude-gateway/${chosen.account_id}`,
-          claude_oauth_token: `grant_tok_${chosen.label}_shortlived999`,
+          anthropic_base_url: `${serverUrl}/v1/accounts/claude-gateway/${leaseId}`,
+          claude_oauth_token: `pddg_${chosen.label.replace(/[^A-Za-z0-9_-]/g, '_')}_shortlived9999`,
         };
       } else {
         lease = {
@@ -252,7 +276,13 @@ async function createMockCloudServer(t, initial = {}) {
     if (req.method === 'POST' && usageMatch) {
       const id = decodeURIComponent(usageMatch[1]);
       const acc = state.accounts.find(a => a.account_id === id);
-      if (!acc) return send(404, { detail: 'Not found' });
+      if (!acc) return send(404, { detail: { error: 'not_found', message: 'Not found' } });
+      for (const field of ['five_hour_used_percent', 'weekly_used_percent']) {
+        const val = body?.[field];
+        if (val !== null && val !== undefined && (!Number.isInteger(val) || val < 0 || val > 100)) {
+          return send(422, { detail: [{ loc: ['body', field], msg: 'Input should be a valid integer between 0 and 100' }] });
+        }
+      }
       if (typeof body?.five_hour_used_percent === 'number') acc.five_hour_used_percent = body.five_hour_used_percent;
       if (body?.five_hour_reset_at) acc.five_hour_reset_at = body.five_hour_reset_at;
       if (typeof body?.weekly_used_percent === 'number') acc.weekly_used_percent = body.weekly_used_percent;
@@ -289,7 +319,7 @@ async function createMockCloudServer(t, initial = {}) {
       if (req.method === 'POST' && action === 'share') {
         const invId = `inv_${state.nextSeq++}`;
         logAudit(id, 'shared', machineId, body?.github_login ? `user=${body.github_login}` : `team=${body?.org}/${body?.team}`);
-        return send(200, { invite_id: invId, shared: body });
+        return send(200, { account: acc, invite: { invite_id: invId, account_id: id, shared: body } });
       }
       if (req.method === 'POST' && action === 'unshare') {
         logAudit(id, 'unshared', machineId, `user=${body?.github_login}`);
@@ -557,8 +587,8 @@ test('3252 T2: use, next, shared Claude gateway_grant, share/accept/unshare/leav
 
   assert.equal((await invokeCli(['accounts', 'use', 'cl-shared'], sb)).exit, 0);
   const sharedSettings = JSON.parse(readFileSync(join(sb.home, '.claude', 'settings.json'), 'utf8'));
-  assert.equal(sharedSettings.env.CLAUDE_CODE_OAUTH_TOKEN, 'grant_tok_cl-shared_shortlived999');
-  assert.equal(sharedSettings.env.ANTHROPIC_BASE_URL, `${cloud.serverUrl}/v1/claude-gateway/acc_cl_shared`);
+  assert.equal(sharedSettings.env.CLAUDE_CODE_OAUTH_TOKEN, 'pddg_cl-shared_shortlived9999');
+  assert.match(sharedSettings.env.ANTHROPIC_BASE_URL, new RegExp(`^${cloud.serverUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/v1/accounts/claude-gateway/lse_`));
 
   // Switching back to personal `cl-own` (`direct_oauth`) clears managed ANTHROPIC_BASE_URL cleanly!
   assert.equal((await invokeCli(['accounts', 'use', 'cl-own'], sb)).exit, 0);
@@ -571,10 +601,11 @@ test('3252 T2: use, next, shared Claude gateway_grant, share/accept/unshare/leav
     run: async (cmd, args) => {
       assert.equal(cmd, 'gh');
       assert.deepEqual(args, ['api', 'users/octocat']);
-      return { code: 0, stdout: JSON.stringify({ id: 583231, login: 'octocat' }), stderr: '' };
+      return { code: 0, stdout: JSON.stringify({ id: 583231, login: 'octocat', type: 'User' }), stderr: '' };
     },
   });
-  assert.equal(shareUser.exit, 0);
+  assert.equal(shareUser.exit, 0, shareUser.stderr);
+  assert.match(shareUser.stdout, /\(invite inv_\d+\)/);
   const shareReq = cloud.state.requests.findLast(r => r.path === '/v1/accounts/acc_cx_sooner/share');
   assert.deepEqual(shareReq.body, { github_login: 'octocat', github_user_id: 583231 });
 
@@ -684,6 +715,7 @@ test('3252 T3 & T4: sync 0ms cache hit, offline 1.2s fail-open, opt-in auto on|o
   assert.equal((await invokeCli(['accounts', 'auto', 'on'], sb)).exit, 0); // idempotent
   const zshWithAuto = readFileSync(zshrc, 'utf8');
   assert.equal(zshWithAuto.match(/# >>> pdd accounts auto >>>/g)?.length, 1);
+  assert.match(zshWithAuto, /unalias codex claude 2>\/dev\/null \|\| true/);
   assert.match(zshWithAuto, /pdd accounts sync --provider codex --quiet --timeout-ms 1200 2>\/dev\/null \|\| true/);
   assert.match(zshWithAuto, /command codex "\$@"/);
   assert.match(zshWithAuto, /command claude "\$@"/);
@@ -898,8 +930,8 @@ test('3252 T5: runStepAgentProcess enforces Stick-Until-100%, burst-429 same-acc
     env: { ...sb.env, CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli' },
     run: async (_cmd, _args, opts) => {
       const sanitized = jobEnvironment(opts.env);
-      assert.equal(sanitized.CLAUDE_CODE_OAUTH_TOKEN, 'grant_tok_cl-shared-step_shortlived999');
-      assert.equal(sanitized.ANTHROPIC_BASE_URL, `${cloud.serverUrl}/v1/claude-gateway/acc_cl_shared`);
+      assert.equal(sanitized.CLAUDE_CODE_OAUTH_TOKEN, 'pddg_cl-shared-step_shortlived9999');
+      assert.match(sanitized.ANTHROPIC_BASE_URL, new RegExp(`^${cloud.serverUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/v1/accounts/claude-gateway/lse_`));
       assert.equal(sanitized.CLAUDECODE, undefined);
       assert.equal(sanitized.CLAUDE_CODE_ENTRYPOINT, undefined);
       return { code: 0, stdout: 'claude ok\n', stderr: '' };
@@ -1052,4 +1084,238 @@ test('3252 T6: Autopilot Cloud rotation switches on 100% with zero strikes, paus
   const wokeTick = await tickAutopilot(stateFile, ports);
   assert.match(wokeTick.message, /1 started/);
   assert.ok(w.job(18, 'build'), 'Autopilot auto-woke at wake_at and resumed Issue #18');
+});
+
+test('3252 T7: Round 1 security, FastAPI contract, overlay cleanup, env isolation, alias safety, and burst rotation invariants', async t => {
+  const cloud = await createMockCloudServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_r1_1',
+        label: 'r1-1',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 12,
+        five_hour_reset_at: '2026-11-15T02:00:00Z',
+        weekly_used_percent: 34,
+        weekly_reset_at: '2026-11-18T17:00:00Z',
+        cooling_until: null,
+        created_at: '2026-11-01T00:00:00Z',
+      },
+      {
+        account_id: 'acc_r1_2',
+        label: 'r1-2',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 5,
+        five_hour_reset_at: '2026-11-15T03:00:00Z',
+        weekly_used_percent: 15,
+        weekly_reset_at: '2026-11-17T17:00:00Z',
+        cooling_until: null,
+        created_at: '2026-11-02T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+
+  // 1. Cross-process regex redaction scrubs pddg_ grants, rt_ refresh tokens, and 3-segment eyJ JWTs without rememberSecrets!
+  const unrememberedJwt = 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzEyMyIsImVtYWlsIjoidGVzdEBleGFtcGxlLmNvbSJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+  const unrememberedGrant = 'pddg_unrememberedGatewayGrant987654321';
+  const unrememberedRefresh = 'rt_unrememberedRefreshToken_abcdef123456';
+  const scrubbed = redactSecrets(`grant=${unrememberedGrant} refresh=${unrememberedRefresh} jwt=${unrememberedJwt}`);
+  assert.doesNotMatch(scrubbed, /pddg_unremembered/);
+  assert.doesNotMatch(scrubbed, /rt_unremembered/);
+  assert.doesNotMatch(scrubbed, /eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9/);
+  assert.equal(scrubbed, 'grant=[redacted] refresh=[redacted] jwt=[redacted]');
+
+  // 2. Overlay mkdtempSync + 0700 + signal/exit sweep + cleanupAgentJob when !alive && !processManifest(saved)
+  const sigintBefore = process.listenerCount('SIGINT');
+  const sigtermBefore = process.listenerCount('SIGTERM');
+  const ov = createCodexStepOverlay(
+    { tokens: { access_token: 'acc_tok_ov_test12345', refresh_token: 'rt_stripme_1234567890', id_token: 'id_1', account_id: 'acct_1' } },
+    { env: sb.env, tmpRoot: sb.root },
+  );
+  assert.equal(statSync(ov.overlayDir).mode & 0o777, 0o700);
+  assert.equal(process.listenerCount('SIGINT'), sigintBefore + 1);
+  sweepActiveCodexOverlays();
+  assert.equal(existsSync(ov.overlayDir), false, 'sweepActiveCodexOverlays wipes active overlay');
+  assert.equal(process.listenerCount('SIGINT'), sigintBefore, 'signal listeners restored to exact baseline');
+  assert.equal(process.listenerCount('SIGTERM'), sigtermBefore, 'SIGTERM listeners restored to exact baseline');
+
+  const deadJobOverlay = mkdtempSync(join(sb.root, 'pdd-cx-'));
+  chmodSync(deadJobOverlay, 0o700);
+  writeFileSync(join(deadJobOverlay, 'auth.json'), '{"tokens":{"access_token":"x"}}', { mode: 0o600 });
+  const deadSpec = join(sb.root, 'dead-job.spec.json');
+  writeFileSync(deadSpec, JSON.stringify({ command: 'codex', args: [], cwd: sb.cwd, cleanupDirs: [deadJobOverlay] }));
+  await cleanupAgentJob({ pid: 999991, token: deadSpec }, { alive: () => false, list: () => [] });
+  assert.equal(existsSync(deadJobOverlay), false, 'cleanupAgentJob removes pdd-cx-* even when !alive && !processManifest(saved)');
+
+  // 3 & 6. Strip ambient CLAUDE_CODE_OAUTH_TOKEN & managed /v1/accounts/claude-gateway ANTHROPIC_BASE_URL
+  const dirtyAmbient = {
+    HOME: sb.home,
+    PATH: sb.env.PATH,
+    CLAUDE_CODE_OAUTH_TOKEN: 'pddg_ambientLeakedToken12345678',
+    ANTHROPIC_BASE_URL: 'https://api.promptdriven.ai/v1/accounts/claude-gateway/lse_99',
+  };
+  const cleanLocal = loginEnvironment(dirtyAmbient, { kind: 'codex', configVar: 'CODEX_HOME', configDir: '/tmp/custom-codex', env: {} });
+  assert.equal(cleanLocal.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(cleanLocal.ANTHROPIC_BASE_URL, undefined);
+
+  const codexStep = prepareCloudStepExecution({
+    account: { account_id: 'acc_r1_1', provider: 'codex' },
+    lease: { codex_auth_json: { tokens: { access_token: 'at_12345678', refresh_token: '', id_token: 'id_1', account_id: 'acct_1' } } },
+  }, dirtyAmbient, { tmpRoot: sb.root });
+  try {
+    assert.equal(codexStep.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+    assert.equal(codexStep.env.ANTHROPIC_BASE_URL, undefined);
+  } finally {
+    codexStep.cleanup();
+  }
+
+  // Switching Claude settings.json from /v1/accounts/claude-gateway/<lease> to direct_oauth removes ANTHROPIC_BASE_URL even if previousManagedBaseUrl is false!
+  mkdirSync(join(sb.home, '.claude'), { recursive: true });
+  writeFileSync(join(sb.home, '.claude', 'settings.json'), JSON.stringify({
+    env: { ANTHROPIC_BASE_URL: 'https://api.promptdriven.ai/v1/accounts/claude-gateway/lse_old' },
+  }));
+  materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: 'sk-ant-oat01-directToken123456' }, { env: sb.env, previousManagedBaseUrl: false });
+  const afterDirect = JSON.parse(readFileSync(join(sb.home, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(afterDirect.env.ANTHROPIC_BASE_URL, undefined);
+
+  // 4. Production URL defaults to https://api.promptdriven.ai and ignores PDD_RUNTIME_URL!
+  assert.equal(DEFAULT_CLOUD_URL, 'https://api.promptdriven.ai');
+  assert.equal(resolveCloudAccountsEndpoint({ PDD_RUNTIME_URL: 'https://interpreter.example.com' }), 'https://api.promptdriven.ai');
+  assert.equal(resolveCloudAccountsEndpoint({ PDD_CLOUD_URL: 'https://cloud.example.com/' }), 'https://cloud.example.com');
+  assert.equal(resolveCloudAccountsEndpoint({ PDD_ACCOUNTS_URL: 'https://accounts.example.com/', PDD_CLOUD_URL: 'https://cloud.example.com' }), 'https://accounts.example.com');
+
+  // 5. FastAPI HTTPException detail envelope unwrapping ({"detail": {"error": ..., "message": ...}})
+  await assert.rejects(
+    () => cloudAccountsRequest('GET', '/v1/accounts', { env: sb.env }, {
+      fetch: async () => new Response(JSON.stringify({
+        detail: { error: 'github_not_linked', message: 'Link your GitHub account in PDD Cloud first.' },
+      }), { status: 403, headers: { 'content-type': 'application/json' } }),
+    }),
+    err => {
+      assert.ok(err instanceof CloudAccountsError);
+      assert.equal(err.code, 'github_not_linked');
+      assert.match(err.message, /Link your GitHub account in PDD Cloud first/);
+      return true;
+    },
+  );
+
+  // 7. Clamp/floor usage percents to strict int 0..100 without rounding 99.9 up to 100!
+  assert.equal(normalizeUsagePercentInt(99.9), 99);
+  assert.equal(normalizeUsagePercentInt(42.7), 42);
+  assert.equal(normalizeUsagePercentInt(-3.5), 0);
+  assert.equal(normalizeUsagePercentInt(100.4), 100);
+  assert.equal(normalizeUsagePercentInt(null), null);
+  const reportReply = await reportCloudAccountUsage('acc_r1_1', {
+    five_hour_used_percent: 42.8,
+    weekly_used_percent: 99.9,
+    limit_reached: false,
+  }, { cwd: sb.cwd, env: sb.env });
+  assert.equal(reportReply.account.five_hour_used_percent, 42);
+  assert.equal(reportReply.account.weekly_used_percent, 99);
+
+  // 8. Validate all 4 Codex token fields locally before upload!
+  mkdirSync(join(sb.home, '.codex'), { recursive: true });
+  writeFileSync(join(sb.home, '.codex', 'auth.json'), JSON.stringify({
+    tokens: { access_token: 'at_12345678', refresh_token: 'rt_123456789012', id_token: '', account_id: '' },
+  }));
+  const reqCountBeforeBadImport = cloud.state.requests.length;
+  const badImport = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'bad-codex'], sb);
+  assert.equal(badImport.exit, 1);
+  assert.match(badImport.stderr, /missing required OAuth token fields: id_token, account_id/);
+  assert.equal(cloud.state.requests.length, reqCountBeforeBadImport, 'invalid Codex bundle rejected before network upload');
+
+  // 9. Reject GitHub organization without /team on `pdd accounts share`!
+  const orgShare = await invokeCli(['accounts', 'share', 'r1-1', '--with', 'promptdriven'], sb, {
+    run: async () => ({ code: 0, stdout: JSON.stringify({ id: 777, login: 'promptdriven', type: 'Organization' }), stderr: '' }),
+  });
+  assert.equal(orgShare.exit, 1);
+  assert.match(orgShare.stderr, /is a GitHub organization\. Pass --with promptdriven\/<team>/);
+
+  // 10. `unalias codex claude` in shell block prevents zsh/bash syntax errors when user has prior `alias codex=...`!
+  const aliasZsh = join(sb.home, '.zshrc');
+  writeFileSync(aliasZsh, "alias codex='codex --full-auto'\nalias claude='claude --verbose'\n");
+  assert.equal((await invokeCli(['accounts', 'auto', 'on'], sb)).exit, 0);
+  for (const sh of ['/bin/bash', '/bin/zsh']) {
+    if (existsSync(sh)) {
+      const parseCheck = spawnSync(sh, ['-c', `source ${JSON.stringify(aliasZsh)}`], { encoding: 'utf8' });
+      assert.equal(parseCheck.status, 0, `${sh} sourced profile with prior aliases cleanly: ${parseCheck.stderr}`);
+    }
+  }
+
+  // 11 & 12. Autopilot keepEnv preserves PDD_STATE_DIR/PDD_CLOUD_URL/PDD_ACCOUNTS_URL/XDG_STATE_HOME, and burst 429 retry counts rotation when /lease switches accounts!
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  cloud.state.nowMs = w.now();
+  assert.equal((await invokeCli(['accounts', 'use', 'r1-1'], sb, { now: () => w.now() })).exit, 0);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], testCommand: 'npm test', runs: 1 } }));
+  w.issue(31, { labels: ['pdd:autopilot'] });
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel');
+  const stateRoot = join(w.dir, 'launcher-state-r1');
+  mkdirSync(stateRoot, { recursive: true });
+  const launcherEnv = {
+    ...sb.env,
+    XDG_STATE_HOME: join(sb.root, 'xdg-state'),
+    PDD_ACCOUNTS_URL: cloud.serverUrl,
+    PDD_TOKEN: cloud.state.bearerToken,
+  };
+  const basePorts = {
+    stateRoot,
+    now: () => { cloud.state.nowMs = w.now(); return w.now(); },
+    env: launcherEnv,
+    timer: async () => true,
+    warn: () => {},
+    sendAlert: async () => ({ exitCode: 0, message: 'sent' }),
+    doctor: async () => ({ exitCode: 0, ok: true, message: 'ok', warnings: [] }),
+    run: async (command, args, options = {}) => {
+      if (command === 'codex' && args[0] === 'login') return { code: 0, stdout: 'Logged in using ChatGPT\n', stderr: '' };
+      if (command === 'codex' && args[0] === '--help') return { code: 0, stdout: '--sandbox\n', stderr: '' };
+      if (command === 'gh') return w.gh(args, options);
+      if (command !== 'git') assert.fail(`unexpected program ${command}`);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' });
+      return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    machineGuard: w.machineGuard,
+    corePorts: {
+      jobs: w.jobs,
+      burstRetryMs: 1,
+      checkBase: async () => ({ exitCode: 0, message: 'ok' }),
+    },
+  };
+  const startedRes = await runAutopilotLauncher({
+    command: 'start',
+    cwd,
+    packageRoot: process.cwd(),
+    label: 'pdd:autopilot',
+    mode: 'auto',
+    agent: 'codex',
+    env: launcherEnv,
+  }, basePorts);
+  assert.equal(startedRes.exitCode, 0, startedRes.message);
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  const savedLauncherState = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.equal(savedLauncherState.environment.PDD_STATE_DIR, sb.stateDir);
+  assert.equal(savedLauncherState.environment.XDG_STATE_HOME, launcherEnv.XDG_STATE_HOME);
+  assert.equal(savedLauncherState.environment.PDD_ACCOUNTS_URL, cloud.serverUrl);
+  assert.equal(savedLauncherState.environment.PDD_CLOUD_URL, cloud.serverUrl);
+  assert.equal(savedLauncherState.environment.PDD_TOKEN, undefined, 'never persist secret tokens in launcher state');
+  assert.equal(savedLauncherState.environment.GH_TOKEN, undefined, 'never persist GH_TOKEN in launcher state');
+
+  // Issue #31 started on acc_r1_1. Simulate server pausing acc_r1_1 right before burst-429 retry so /lease switches to acc_r1_2!
+  const build31 = w.job(31, 'build');
+  assert.equal(build31.loginId, 'acc_r1_1');
+  cloud.state.accounts[0].state = 'paused';
+  writeFileSync(build31.log, '429 Too Many Requests: rate limit exceeded\n');
+  w.finish(31, 'build', { code: 1 });
+  await tickAutopilot(stateFile, basePorts);
+  const job31 = JSON.parse(readFileSync(join(stateFile.replace(/\.json$/, '-core'), 'jobs', '31.json'), 'utf8'));
+  assert.equal(job31.agent.loginId, 'acc_r1_2', 'burst retry switched to acc_r1_2 when acc_r1_1 paused');
+  assert.equal(job31.poolRotations, 1, 'server-switched burst retry counted as a pool rotation');
+  assert.equal(job31.agent.burstRetried, undefined, 'fresh account retains its own burst-retry budget');
 });

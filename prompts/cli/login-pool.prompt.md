@@ -32,12 +32,16 @@ burst-`429` classifiers, and internal multi-harness fallback helpers:
 
 ## Cloud Accounts transport and single-refresh invariant
 
-Cloud Accounts uses `PDD_ACCOUNTS_URL || PDD_CLOUD_URL || PDD_RUNTIME_URL ||
-"https://promptdriven.ai"` (`https:` required except loopback `127.0.0.1`,
-`localhost`, `[::1]`), `Authorization: Bearer <token>` (`PDD_TOKEN`, `GH_TOKEN`,
-`GITHUB_TOKEN`, or `gh auth token`), and `X-PDD-Machine-Id`. Every credential read
-or leased is registered with `rememberSecrets` from `src/secret-redaction.mjs` and
-is never printed or logged. Zero usage-reset credit fields, endpoints or calls exist.
+Cloud Accounts uses `PDD_ACCOUNTS_URL || PDD_CLOUD_URL ||
+"https://api.promptdriven.ai"` (`https:` required except loopback `127.0.0.1`,
+`localhost`, `[::1]`; never falls back to `PDD_RUNTIME_URL`),
+`Authorization: Bearer <token>` (`PDD_TOKEN`, `PDD_ACCOUNTS_TOKEN`, `GH_TOKEN`,
+`GITHUB_TOKEN`, or `gh auth token`), and `X-PDD-Machine-Id`. Unwrap FastAPI
+`HTTPException` `detail` envelopes (`{"detail": {"error": ..., "message": ...}}`,
+string `detail`, and validation-error arrays) alongside top-level `error`/`message`.
+Every credential read or leased is registered with `rememberSecrets` from
+`src/secret-redaction.mjs` and is never printed or logged. Zero usage-reset credit
+fields, endpoints or calls exist.
 
 - Local cache (`${PDD_STATE_DIR || XDG_STATE_HOME || ~/.local/state}/pdd/accounts-state.json`,
   mode `0600`, atomic rename) stores only non-secret active lease metadata
@@ -51,23 +55,30 @@ is never printed or logged. Zero usage-reset credit fields, endpoints or calls e
 - `materializeLocalClaudeAuth` atomically merges `env.CLAUDE_CODE_OAUTH_TOKEN`
   into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`, mode `0600`),
   sets `env.ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`, removes a
-  previously managed gateway `ANTHROPIC_BASE_URL` when switching back to `direct_oauth`,
-  and writes `hasCompletedOnboarding: true` in `~/.claude.json` (mode `0600`).
+  previously managed `/v1/accounts/claude-gateway` (or `/v1/claude-gateway`)
+  `ANTHROPIC_BASE_URL` when switching back to `direct_oauth`, and writes
+  `hasCompletedOnboarding: true` in `~/.claude.json` (mode `0600`).
 
 ## Disposable step isolation and Stick-Until-100%
 
-- **Codex step overlay (`createCodexStepOverlay`):** Creates a disposable `0700`
-  directory `/tmp/pdd-cx-<random>`, symlinks existing `~/.codex/{config.toml,skills,memories,sessions,rules}`,
-  writes leased stripped `auth.json` (`0600`, `refresh_token: ""`), passes
-  `CODEX_HOME=<overlay>`, and removes `<overlay>` on step exit (`0` tokens in `ps`,
-  never clobbering concurrent terminal sessions).
-- **Claude step env (`buildClaudeStepEnv`):** Passes `CLAUDE_CODE_OAUTH_TOKEN`
-  (and `ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`) in child `env`.
-- **Stick-Until-100% (`selectCloudPoolLogin`, `exhaustCloudPoolLogin`):** Cloud
-  accounts never stop at `97%`. They stay on `current_account_id` (`0` switches)
+- **Codex step overlay (`createCodexStepOverlay`):** Allocates a disposable `0700`
+  directory atomically via `mkdtempSync(join(rootDir, 'pdd-cx-'))`, symlinks
+  existing `~/.codex/{config.toml,skills,memories,sessions,rules}`, writes leased
+  stripped `auth.json` (`0600`, `refresh_token: ""`), passes `CODEX_HOME=<overlay>`,
+  registers in-process overlays in an `exit`/`SIGINT`/`SIGTERM` cleanup `Set`, and
+  removes `<overlay>` on step exit (`0` tokens in `ps`, never clobbering concurrent
+  terminal sessions).
+- **Claude step env (`buildClaudeStepEnv` & `loginEnvironment`):** `loginEnvironment`
+  strips ambient `CLAUDE_CODE_OAUTH_TOKEN` and managed `/v1/accounts/claude-gateway`
+  `ANTHROPIC_BASE_URL` before applying profile settings so Codex and other profiles
+  never inherit ambient Claude grants; `buildClaudeStepEnv` injects leased
+  `CLAUDE_CODE_OAUTH_TOKEN` (and `ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`).
+- **Stick-Until-100% (`selectCloudPoolLogin`, `exhaustCloudPoolLogin`, `reportCloudAccountUsage`):**
+  Cloud accounts never stop at `97%`. They stay on `current_account_id` (`0` switches)
   until `five_hour_used_percent >= 100` or `weekly_used_percent >= 100` (or a quota
-  exhaustion error), then POST `/v1/accounts/{account_id}/usage-report` with
-  `limit_reached: true` and lease the next ready account (`soonest weekly_reset_at`)
+  exhaustion error), normalize reported usage percents to integers `0..100`
+  (`v >= 100 ? 100 : Math.max(0, Math.floor(v))`), POST `/v1/accounts/{account_id}/usage-report`
+  with `limit_reached: true`, and lease the next ready account (`soonest weekly_reset_at`)
   with `0` issue strikes.
 - **Burst `429` vs quota exhaustion (`classifyRateLimitFailure`):** A transient
   burst rate limit (`429 Too Many Requests`, `rate_limit_exceeded`, RPM/TPM) with no
