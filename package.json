@@ -1,6 +1,6 @@
 {
   "name": "@promptdriven/pdd",
-  "version": "0.1.32",
+  "version": "0.1.34",
   "description": "PDD: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
   "bin": {
@@ -22,7 +22,10 @@
     "user_stories/fake-*.md"
   ],
   "scripts": {
-    "test": "node --import ./test/helpers/test-home.mjs --test test/*.test.mjs test/runtime-package/*.test.mjs"
+    "test": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@promptdriven/runtime-client": "github:promptdriven/runtime-client#81ed2436e587e3533824970800eb39a326ca063d"
   },
   "engines": {
     "node": ">=22.16.0"

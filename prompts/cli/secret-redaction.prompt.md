@@ -39,7 +39,8 @@ Pattern redaction is a best-effort extra layer for unknown values, not a
 complete guarantee. Reuse the agent guide's string sanitizer: remove URL
 user/password and secret query values; redact PEM private keys (including
 unterminated blocks), GitHub `gh[pousr]_` and `github_pat_` tokens, OpenAI `sk-`
-tokens, Basic/Bearer credentials, and case-insensitive colon/equal pairs for
+tokens, PDD Cloud `pddg_` gateway grants, `rt_` OAuth refresh tokens, three-segment
+`eyJ` JWTs, Basic/Bearer credentials, and case-insensitive colon/equal pairs for
 key, token, password, secret, api_key, authorization, cookie and credential.
 Also cover Google `AIza` API keys and `ya29.` access tokens. Pairs accept quoted
 or unquoted values. Redact an entire Authorization header value, including

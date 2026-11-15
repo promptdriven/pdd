@@ -125,6 +125,7 @@ test('registration pins this package with spaces despite an older pdd on PATH an
   const f = fixture(t), bin = join(f.home, 'old bin'), pkg = join(f.home, 'alpha package');
   mkdirSync(bin); mkdirSync(pkg);
   for (const name of ['src', 'bin', 'package.json']) cpSync(join(packageRoot, name), join(pkg, name), { recursive: true });
+  symlinkSync(join(packageRoot, 'node_modules'), join(pkg, 'node_modules'), 'dir');
   const old = join(bin, 'pdd'); writeFileSync(old, '#!/bin/sh\necho OLD-PDD >&2\nexit 99\n'); chmodSync(old, 0o755);
   const env = { ...f.env, PATH: bin };
   assert.equal(await setupAgentMcp({ env, packageRoot: pkg }, { ...f.ports, confirm: () => 'y' }), 0);

@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -41,7 +41,7 @@ test('Codex chats: new and resumed launches keep PDD_BIN and PDD_AGENT_SESSION u
   // Issue 3036: inherit = "core" or "none" drops the process values; `set` applies after `inherit`.
   // A pdd installed under a path with shell and TOML syntax must reach Codex unchanged. (Node loads no module from a path with a backslash.)
   const root = temp(t), pkg = join(root, `pdd 'single' "double" $HOME é`), bin = join(root, 'bin'), cwd = join(root, 'work tree');
-  cpSync(join(packageRoot, 'src'), join(pkg, 'src'), { recursive: true }); mkdirSync(join(pkg, 'bin')); mkdirSync(bin); mkdirSync(cwd);
+  cpSync(join(packageRoot, 'src'), join(pkg, 'src'), { recursive: true }); symlinkSync(join(packageRoot, 'node_modules'), join(pkg, 'node_modules'), 'dir'); mkdirSync(join(pkg, 'bin')); mkdirSync(bin); mkdirSync(cwd);
   writeFileSync(join(pkg, 'bin/pdd.mjs'), '');
   const installed = await import(pathToFileURL(join(pkg, 'src/workflow-chat.mjs')).href);
   const pddBin = join(pkg, 'bin/pdd.mjs');

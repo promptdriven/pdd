@@ -10,6 +10,7 @@ import { parseArgv, CommandInputError } from '../src/argument-parser.mjs';
 import { PUBLIC_COMMAND_IDS, PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { renderCompletion } from '../src/completion.mjs';
+import { bundleInstalledDependencies } from './helpers/pack-offline.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const temp = t => { const p = mkdtempSync(join(tmpdir(), 'pdd-alpha-')); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
@@ -17,14 +18,14 @@ const capture = () => ({ text: '', write(value) { this.text += value; } });
 
 // Wrong: deleting the adapter leaves private catalog/validator routes or unknown help succeeds.
 test('ALPHA1: only local plans are admitted without Host disposition or forwarded arguments', () => {
-  assert.deepEqual(PUBLIC_COMMAND_IDS, ['interface.draft', 'metrics', 'metrics.export', 'metrics.import', 'metrics.record', 'autopilot.regressions', 'autopilot.doctor', 'autopilot.start', 'autopilot.audit', 'autopilot.check-base', 'autopilot.stop', 'autopilot.status', 'autopilot.report', 'autopilot.intake', 'autopilot.add', 'autopilot.release', 'autopilot.alert', 'autopilot.alerts', 'graph', 'dependencies.prepare', 'dependencies.complete', 'workflow.suite', 'workflow.park', 'workflow.yield', 'product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.publish', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.resend', 'workflow.card', 'workflow.changes', 'workflow.tidy', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'version.detailed', 'completion', 'workflow.list', 'check', 'lint', 'files', 'owner', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'setup']);
+  assert.deepEqual(PUBLIC_COMMAND_IDS, ['metrics', 'metrics.export', 'metrics.import', 'metrics.record', 'autopilot.regressions', 'autopilot.doctor', 'autopilot.start', 'autopilot.audit', 'autopilot.check-base', 'autopilot.stop', 'autopilot.status', 'autopilot.report', 'autopilot.intake', 'autopilot.add', 'autopilot.release', 'autopilot.alert', 'autopilot.alerts', 'graph', 'dependencies.prepare', 'dependencies.complete', 'workflow.suite', 'workflow.park', 'workflow.yield', 'product.status', 'product.next', 'product.start', 'workflow.run', 'workflow.prove', 'workflow.done', 'workflow.publish', 'workflow.cost', 'workflow.evidence', 'workflow.evidence-associate', 'workflow.ask', 'workflow.request-uptake', 'workflow.approve', 'workflow.resend', 'workflow.card', 'workflow.changes', 'workflow.tidy', 'workflow.cancel', 'workflow.status', 'workflow.view', 'workflow.open', 'help', 'version', 'version.detailed', 'completion', 'workflow.list', 'check', 'lint', 'files', 'owner', 'approve', 'try', 'jobs', 'contracts', 'contracts.sync', 'mcp', 'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot.trust', 'autopilot.untrust', 'accounts', 'accounts.list', 'accounts.add', 'accounts.import', 'accounts.use', 'accounts.next', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause', 'accounts.share', 'accounts.accept', 'accounts.unshare', 'accounts.leave', 'accounts.remove', 'accounts.log', 'setup']);
   for (const argv of [[], ['--help'], ['-h'], ['help'], ['--version'], ['completion', 'bash'],
     ['completion', 'zsh'], ['autopilot', 'doctor'], ['jobs'], ['mcp'], ['setup'], ['workflow', 'list'], ['workflow', 'list', '--json'], ['workflow', '--help']]) {
     const input = [...argv], plan = parseArgv(input);
     assert.equal(plan.hostArgv, undefined); assert.equal(plan.host, undefined); assert.deepEqual(input, argv);
   }
   // G1: people call the skills in their own chat; pdd starts no session and no named-workflow chat.
-  for (const argv of [['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'],
+  for (const argv of [['interface', 'draft'], ['session'], ['session','--agent','claude','Draft a prompt'], ['workflow','feature'], ['workflow','bug','--agent','claude'], ['workflow','small-change','Fix it'],
     ['setup', 'now'], ['setup', '--json'], ['run', 'start', 'issue'], ['verify'], ['runtime', 'discover'],
     ['replay'], ['call'], ['tests'], ['doctor'], ['phone'], ['machine'], ['repo'], ['agents'], ['workbench'],
     ['unknown', '--help'], ['workflow', 'new', 'feature'], ['workflow', 'list', '--brief'],
@@ -56,6 +57,7 @@ test('ALPHA4: actual packed package runs every advertised local command without 
     'test/runtime/fake-files.json', 'test/runtime/fake-hash.json', 'test/runtime/fake-service.json'
   ]);
   assert.equal(names.some(name => name.includes('host-adapter') || /^(?:ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name === 'src/guidance.mjs'), false);
+  bundleInstalledDependencies(root, archive, sandbox);
   execFileSync('npm', ['install', '--prefix', consumer, archive, '--ignore-scripts', '--offline', '--no-audit', '--no-fund', '--package-lock=false'],
     { cwd: consumer, env, encoding: 'utf8', timeout: 30000 });
   const metadata = JSON.parse(readFileSync(join(root, 'package.json'))), packed = join(consumer, 'node_modules', metadata.name);

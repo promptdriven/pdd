@@ -16,7 +16,7 @@ tracked file [path,"missing"]. Include uncommitted and untracked non-ignored fil
 
 pinReplayVectors receives the prompt area's selected original scenario paths at approved publication. Return
 an anchor containing version pdd.replay-vectors.v1, each raw file SHA256, parsed scenario snapshot and original step/check identity,
-read with the [exact scenario number](scenario-json.prompt.md) rules. The snapshot stays the ordinary JSON value. A vector
+read with the [exact scenario number](runtime-seam.prompt.md) (`parseScenarioJson`, `stringifyScenarioJson`) rules. The snapshot stays the ordinary JSON value. A vector
 with a whole number above 2^53 adds `exact_integers`: its `{pointer, value}` digit rows, so the saved anchor keeps them exactly;
 a vector without one has no such field,
 or an explicit blocked anchor with a reason. No paths or no checks is not_replayed. Paths must be unique,
@@ -375,10 +375,8 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 ## Dependencies
 
-- [Runtime preflight](runtime-preflight.prompt.md): required generation/runtime context for gitFiles(root).
-- [Runtime output](runtime-output.prompt.md): required generation/runtime context for safe diagnostic text.
+- [Runtime seam](runtime-seam.prompt.md#public-contract): required generation/runtime context for `gitFiles(root)`, safe diagnostic text (`causeText`), and exact scenario numbers (`parseScenarioJson`, `stringifyScenarioJson`).
 - [File owner lookup](file-owner.prompt.md#generated-from-header): required generation context for the header rule.
-- [Exact scenario numbers](scenario-json.prompt.md): required generation context for reading, saving and comparing scenario values.
 
 <details>
 <summary>Runtime interface</summary>
@@ -386,7 +384,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 ```json
 {
   "status": "approved",
-  "prose_sha256": "5177102bd022915a457a31ad9c1f3665edb83147605edaa2ff8426c2564b1118",
+  "prose_sha256": "1e33b05732de6ee39ded88d14250981f25af96387498a72f0d73550d05aee9ed",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

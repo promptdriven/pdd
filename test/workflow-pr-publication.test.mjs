@@ -88,8 +88,8 @@ const allLabels = 'Review: reviewed\nProof (gap closed): regression\nProof (defe
 for(const kind of ['349-value move','800 numeric edits','ownership marker','oversized pointer'])test(`2870 review publication: ${kind} stays advisory and reviewable`,t=>{
   const f=fixture(t,{opted:true});mkdirSync(join(f.root,'test/runtime'),{recursive:true});
   const path='test/runtime/check-no-verdict.json',full=join(f.root,path);
-  const doc=kind==='349-value move'?JSON.parse(readFileSync(join(packageRoot,path))):{
-    schema_version:'prompt-runtime.program-scenario.v1',initial_world:{numbers:Array.from({length:800},(_,i)=>i)},
+  const doc={
+    schema_version:'prompt-runtime.program-scenario.v1',initial_world:{numbers:Array.from({length:kind==='349-value move'?340:800},(_,i)=>i)},
     steps:[{step_id:'sum',entry_path:'prompts/add.prompt.md',operation:'add',checks:[{criterion_id:'AC1',target:'result',path:'/total',op:'equals',value:3}]}]
   };
   writeFileSync(full,JSON.stringify(doc));f.git('add','.');f.git('commit','-qm','Saved cases');

@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fixture } from './helpers/workflow-delivery-fixture.mjs';
 import { approveRun, stepDone } from '../src/workflow-runner.mjs';
-import { proseSha256 } from '../src/runtime-seam.mjs';
+import { fillHashes, proseSha256 } from '../src/runtime-seam.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
 import { PLACE } from './helpers/runtime-fake.mjs';
 
@@ -40,9 +40,7 @@ function change(run, kind) {
     }
   }
   if (kind.includes('fill')) {
-    const out = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), 'test', '--fill-hash'],
-      { cwd: run.root, encoding: 'utf8' });
-    assert.equal(out.status, 0, out.stderr + out.stdout);
+    fillHashes({ root: run.root });
   }
   if (kind === 'text') {
     const file = join(run.root, paths[1]);

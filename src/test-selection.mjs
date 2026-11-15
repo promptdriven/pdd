@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-selection.prompt.md (sha256: 474becab74d335951286d47587b4c5a4a7520f113a19ee665cebad2b37e73882).
+// Generated from prompts/cli/test-selection.prompt.md (sha256: ed963f190cf7ad94534728d15170c8b22aac1db9f2d39da2e1b7e62a76a671d9).
 import { basename, posix } from 'node:path';
 
 const AC_HEADING = /(?<![^\n])##[ \t]+Acceptance(?:[ \t]+Criteria)?[ \t]*(?![^\n])/i;
@@ -166,10 +166,10 @@ export function selectTests(found, words = [], { native = false, captureSource }
 export const NO_TESTS = 'No tests found. The test of Story user_stories/S.md is S.json in a test or tests folder. See RUNBOOK.md §2.';
 
 // Why a repo has no tests, by the test name rule (it opens no JSON file): Stories with no test, test-folder JSON
-// that matches no Story, *.prompt names, prompts with no interface.
+// that matches no Story, and *.prompt names.
 export function whyNoTests(root, visible, found, ports = {}) {
-  if (typeof ports?.allowsPath !== 'function' || typeof ports?.hasInterfaceBlock !== 'function') {
-    throw new Error('Empty-repository explanation ports (allowsPath, hasInterfaceBlock) are not bound.');
+  if (typeof ports?.allowsPath !== 'function') {
+    throw new Error('Empty-repository explanation port (allowsPath) is not bound.');
   }
   if (found === undefined) {
     if (typeof ports?.discoverTests !== 'function') {
@@ -181,9 +181,6 @@ export function whyNoTests(root, visible, found, ports = {}) {
   const why = [...(found.untested ?? []), ...(found.orphans ?? [])].map(item => item.line);
   for (const path of files.filter(file => file.endsWith('.prompt'))) {
     why.push(`PDD prompts must end in .prompt.md: rename ${path} to ${path}.md.`);
-  }
-  for (const path of files.filter(file => file.endsWith('.prompt.md'))) {
-    if (!ports.hasInterfaceBlock(root, path)) why.push(`${path} has no Runtime interface block. See RUNBOOK.md §2.`);
   }
   return why.length > 5 ? [...why.slice(0, 5), `…and ${why.length - 5} more`] : why;
 }
