@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 79c2fbe3c3d9e4273957f538e039958912f25f7388ac717da5085d81bc1ced2d).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 3db2472d94ec5b9c37b714f6f76ee4c1a2d08a51d722744c1c3d00a1826650c9).
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -27,7 +27,7 @@ const FOLDER_KEY = Object.freeze({
 });
 const ALL_CONFIG_VARS = Object.values(CONFIG_VAR);
 const ALL_FOLDER_KEYS = [...Object.values(FOLDER_KEY), 'configHome'];
-const ENTRY_KEYS = new Set(['id', 'kind', 'command', 'model', 'plan', 'credits', 'paused', ...ALL_FOLDER_KEYS, 'env']);
+const ENTRY_KEYS = new Set(['id', 'kind', 'command', 'model', 'plan', 'credits', 'allowReset', 'allow_reset', 'paused', ...ALL_FOLDER_KEYS, 'env']);
 const TOP_KEYS = new Set(['reset', 'weeklyStopPercent', 'logins']);
 const CONTROLS = /[\u0000-\u001f\u007f-\u009f]/;
 const SECRET_ENV_KEY = /(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD|_CREDENTIAL|^SECRET_|API_KEY$|^OPENAI_API_KEY$|^ANTHROPIC_API_KEY$|^GEMINI_API_KEY$|^GOOGLE_API_KEY$|^CLAUDE_CODE_OAUTH_TOKEN$|^CODEX_ACCESS_TOKEN$)/i;
@@ -635,6 +635,10 @@ function candidateCloudProviders({ fallbackAgent, allowedKinds, savedState }) {
   return enrolledAllowed;
 }
 
+export function isCreditOrResetAccount(entry) {
+  return Boolean(entry?.credits === true || entry?.allowReset === true || entry?.allow_reset === true);
+}
+
 export async function selectCloudPoolLogin({
   cwd = process.cwd(),
   env = process.env,
@@ -643,6 +647,7 @@ export async function selectCloudPoolLogin({
   skipAccountIds = [],
   preferredAccountId = undefined,
   holderId = 'autopilot-step',
+  allowCredits = false,
 } = {}, ports = {}) {
   const saved = readCloudAccountsState({ env }, ports);
   const providers = candidateCloudProviders({ fallbackAgent, allowedKinds, savedState: saved });
@@ -690,6 +695,11 @@ export async function selectCloudPoolLogin({
       }
 
       const acc = reply.account;
+      if (!allowCredits && isCreditOrResetAccount(acc)) {
+        unavailable.push({ id: acc.account_id, reason: 'credit_or_reset_guarded' });
+        tried.add(acc.account_id);
+        continue;
+      }
       // Stick-Until-100%: never rotate early at 97%; rotate only at >= 100%.
       if ((typeof acc.five_hour_used_percent === 'number' && acc.five_hour_used_percent >= 100)
         || (typeof acc.weekly_used_percent === 'number' && acc.weekly_used_percent >= 100)) {
@@ -746,7 +756,8 @@ export async function selectCloudPoolLogin({
         command,
         model,
         plan: acc.plan ?? null,
-        credits: false,
+        credits: acc.credits === true,
+        allowReset: acc.allowReset === true || acc.allow_reset === true,
         paused: false,
         configVar: CONFIG_VAR[provider],
         configDir: null,
@@ -791,6 +802,7 @@ export async function exhaustCloudPoolLogin({
   allowedKinds,
   skipAccountIds = [],
   holderId = 'autopilot-step',
+  allowCredits = false,
 } = {}, ports = {}) {
   const now = (ports.now ?? Date.now)();
   if (loginId) {
@@ -798,7 +810,7 @@ export async function exhaustCloudPoolLogin({
     await reportCloudAccountUsage(loginId, report, { cwd, env }, ports).catch(() => {});
   }
   const skip = [...new Set([...(Array.isArray(skipAccountIds) ? skipAccountIds : []), ...(loginId ? [loginId] : [])])];
-  return selectCloudPoolLogin({ cwd, env, fallbackAgent, allowedKinds, skipAccountIds: skip, holderId }, ports);
+  return selectCloudPoolLogin({ cwd, env, fallbackAgent, allowedKinds, skipAccountIds: skip, holderId, allowCredits }, ports);
 }
 
 // ---- Internal local-folder pool fallback ----------------------------------------------------------------
@@ -941,6 +953,8 @@ export function loadLoginPool({ cwd = process.cwd(), env = process.env, poolPath
       plan = item.plan.trim().toLowerCase();
     }
     if (item.credits !== undefined && typeof item.credits !== 'boolean') bad(`credits must be boolean for login ${id}.`);
+    if (item.allowReset !== undefined && typeof item.allowReset !== 'boolean') bad(`allowReset must be boolean for login ${id}.`);
+    if (item.allow_reset !== undefined && typeof item.allow_reset !== 'boolean') bad(`allow_reset must be boolean for login ${id}.`);
     if (item.paused !== undefined && typeof item.paused !== 'boolean') bad(`paused must be boolean for login ${id}.`);
     const ownFolderKey = FOLDER_KEY[item.kind];
     for (const key of Object.values(FOLDER_KEY)) {
@@ -970,6 +984,7 @@ export function loadLoginPool({ cwd = process.cwd(), env = process.env, poolPath
       model,
       plan,
       credits: item.credits === true,
+      allowReset: item.allowReset === true || item.allow_reset === true,
       paused: item.paused === true,
       configVar: CONFIG_VAR[item.kind],
       configDir,
@@ -1103,13 +1118,14 @@ function agentSpecOf(login) {
   };
 }
 
-export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, poolPath, pool: preloadedPool, fallbackAgent, stateRoot, allowLimited = false, allowedKinds } = {}, ports = {}) {
+export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, poolPath, pool: preloadedPool, fallbackAgent, stateRoot, allowLimited = false, allowCredits = false, allowedKinds } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const now = (ports.now ?? Date.now)();
   const pool = preloadedPool ?? loadLoginPool({ cwd, env, poolPath, fallbackAgent }, { fs });
   const kindFilter = Array.isArray(allowedKinds) ? new Set(allowedKinds) : null;
   const active = pool.logins.filter(login => !login.paused && (!kindFilter || kindFilter.has(login.kind)));
-  if (kindFilter && active.length === 0) {
+  const eligible = active.filter(login => allowCredits || !isCreditOrResetAccount(login));
+  if (kindFilter && eligible.length === 0) {
     return {
       state: 'unavailable',
       configured: pool.configured,
@@ -1117,7 +1133,7 @@ export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, 
       poolSize: 0,
       resetAt: null,
       cooling: [],
-      unavailable: [],
+      unavailable: active.filter(login => !allowCredits && isCreditOrResetAccount(login)).map(login => ({ id: login.id, reason: 'credit_or_reset_guarded' })),
     };
   }
   const cooldowns = stateRoot ? readPoolCooldowns({ stateRoot, now }, { fs }) : {};
@@ -1126,6 +1142,10 @@ export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, 
   let fallbackLimited = null;
 
   for (const login of active) {
+    if (!allowCredits && isCreditOrResetAccount(login)) {
+      unavailable.push({ id: login.id, reason: 'credit_or_reset_guarded' });
+      continue;
+    }
     const cd = cooldowns[login.id];
     if (cd && cd.until > now) {
       cooling.push({ id: login.id, until: cd.until, resetAt: cd.resetAt ?? cd.until, reason: cd.reason });
@@ -1157,7 +1177,7 @@ export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, 
         if (allowLimited && !fallbackLimited) fallbackLimited = { login, env: childEnv };
         continue;
       }
-      if (limits.state === 'unknown' && (login.plan === 'pro' || login.credits === true)) {
+      if (limits.state === 'unknown' && (login.plan === 'pro' || isCreditOrResetAccount(login))) {
         const entry = markLoginExhausted({
           stateRoot,
           loginId: login.id,
@@ -1177,7 +1197,7 @@ export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, 
       state: 'ready',
       configured: pool.configured,
       poolPath: pool.poolPath,
-      poolSize: active.length,
+      poolSize: eligible.length,
       login,
       agent: agentSpecOf(login),
       env: childEnv,
@@ -1190,7 +1210,7 @@ export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, 
       limited: true,
       configured: pool.configured,
       poolPath: pool.poolPath,
-      poolSize: active.length,
+      poolSize: eligible.length,
       login: fallbackLimited.login,
       agent: agentSpecOf(fallbackLimited.login),
       env: fallbackLimited.env,
@@ -1202,7 +1222,7 @@ export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, 
     state: 'exhausted',
     configured: pool.configured,
     poolPath: pool.poolPath,
-    poolSize: active.length,
+    poolSize: eligible.length,
     resetAt: resetTimes.length ? Math.min(...resetTimes) : null,
     cooling,
     unavailable,

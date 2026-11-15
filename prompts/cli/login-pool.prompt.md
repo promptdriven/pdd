@@ -20,6 +20,7 @@ burst-`429` classifiers, and internal multi-harness fallback helpers:
 `extractRateLimitReport(text, accountOrWindows)`,
 `reportCloudAccountUsage(accountId, report, {cwd, env, timeoutMs}, ports)`,
 `leaseCloudAccount(request, {cwd, env, timeoutMs}, ports)`,
+`isCreditOrResetAccount(entry)`,
 `selectCloudPoolLogin(options, ports)`,
 `exhaustCloudPoolLogin(options, ports)`,
 `resolvePoolPath({env, poolPath})`,
@@ -28,7 +29,7 @@ burst-`429` classifiers, and internal multi-harness fallback helpers:
 `readPoolCooldowns({stateRoot, now}, ports)`,
 `markLoginExhausted({stateRoot, loginId, resetAt, reason, now}, ports)`,
 `clearPoolCooldowns({stateRoot}, ports)` and
-`selectPoolLogin({cwd, env, poolPath, pool, fallbackAgent, stateRoot, allowLimited, allowedKinds}, ports)`.
+`selectPoolLogin({cwd, env, poolPath, pool, fallbackAgent, stateRoot, allowLimited, allowCredits, allowedKinds}, ports)`.
 
 ## Cloud Accounts transport and single-refresh invariant
 
@@ -93,13 +94,20 @@ fields, endpoints or calls exist.
 - **`all_cooling`:** When `/v1/accounts/lease` returns `{state: "all_cooling", wake_at}`,
   `selectCloudPoolLogin` returns `{state: "exhausted", cloud: true, resetAt, wakeAt: wake_at}`
   so Autopilot reports `Waiting on AI quota until <wake_at>` and auto-wakes at `wake_at`.
+- **Credit and reset-flagged account guard (`isCreditOrResetAccount`):** Both
+  `selectCloudPoolLogin` and `selectPoolLogin` default `allowCredits = false` for
+  automated Autopilot steps and skip any account or `pool.json` login entry explicitly
+  flagged `credits: true`, `allowReset: true` or `allow_reset: true` (recording reason
+  `"credit_or_reset_guarded"` in `unavailable`), unless a human CLI command explicitly
+  passes `allowCredits: true`.
 
 ## Internal local-folder pool fallback
 
 For internal test fixtures and explicit local `pool.json` configurations, preserve
-`resolvePoolPath`, `loadLoginPool` (`reset: "never"`, `weeklyStopPercent` default `97`),
+`resolvePoolPath`, `loadLoginPool` (`reset: "never"`, `weeklyStopPercent` default `97`,
+optional boolean `credits`, `allowReset` / `allow_reset`),
 `loginEnvironment`, `readPoolCooldowns`, `markLoginExhausted`, `clearPoolCooldowns`
-and `selectPoolLogin` unchanged.
+and `selectPoolLogin`.
 
 ## Dependencies
 

@@ -110,7 +110,7 @@ test('#3252 selectPoolLogin rotates Codex -> Gemini -> Claude on 97% weekly stop
     reset: 'never',
     weeklyStopPercent: 97,
     logins: [
-      { id: 'codex-pro', kind: 'codex', plan: 'pro', credits: true, codexHome: '~/.codex-pro' },
+      { id: 'codex-pro', kind: 'codex', plan: 'pro', credits: false, codexHome: '~/.codex-pro' },
       { id: 'codex-plus', kind: 'codex', plan: 'plus', codexHome: '~/.codex-plus' },
       { id: 'gemini-main', kind: 'gemini', geminiCliHome: '~/.gemini-main' },
       { id: 'claude-team', kind: 'claude', claudeConfigDir: '~/.claude-team' },
@@ -231,4 +231,34 @@ test('selectPoolLogin filters by allowedKinds so sandboxed intake only selects c
   );
   assert.equal(nonePick.state, 'unavailable');
   assert.equal(nonePick.poolSize, 0);
+});
+
+test('selectPoolLogin skips credits and allowReset/allow_reset logins unless allowCredits is explicitly true', async t => {
+  const { home, cwd, stateRoot } = makeTemp(t);
+  const poolPath = join(home, '.pdd', 'pool.json');
+  mkdirSync(join(home, '.pdd'), { recursive: true });
+  writeFileSync(poolPath, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'codex-credits', kind: 'codex', credits: true, codexHome: '~/.codex-credits' },
+      { id: 'codex-reset-camel', kind: 'codex', allowReset: true, codexHome: '~/.codex-reset-1' },
+      { id: 'claude-reset-snake', kind: 'claude', allow_reset: true, claudeConfigDir: '~/.claude-reset-2' },
+      { id: 'gemini-safe', kind: 'gemini', geminiCliHome: '~/.gemini-safe' },
+    ],
+  }));
+
+  const probed = [];
+  const ports = {
+    probeLogin: async login => { probed.push(login.id); return { ok: true }; },
+    readCodexLimits: async () => ({ state: 'healthy', resetAt: null, usedPercent: 10 }),
+  };
+
+  const autoPick = await selectPoolLogin({ cwd, env: { HOME: home }, poolPath, stateRoot }, ports);
+  assert.equal(autoPick.state, 'ready');
+  assert.equal(autoPick.login.id, 'gemini-safe');
+  assert.deepEqual(probed, ['gemini-safe']);
+
+  const explicitCliPick = await selectPoolLogin({ cwd, env: { HOME: home }, poolPath, stateRoot, allowCredits: true }, ports);
+  assert.equal(explicitCliPick.state, 'ready');
+  assert.equal(explicitCliPick.login.id, 'codex-credits');
 });

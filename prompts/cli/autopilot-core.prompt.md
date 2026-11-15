@@ -1040,8 +1040,16 @@ runs until its end):
    It never blocks or ends the job. A not-run
    with no Runtime kind (for example no prompt changed) files nothing.
 3. Red findings. The Runtime gate is an allowlist (fail closed). A Runtime line is a
-   PR body line that, after heading, list, quote, table, bold and code marks go,
-   starts with "Runtime" or holds "Runtime:". Its value, after leading signs such as
+   PR body line (`runtimeVerdicts(body)`, exported) that, after heading, list, quote,
+   table, bold and code marks go, starts with `Runtime:` (or is a Markdown `| Runtime |`
+   table row or `; Runtime:` clause; ordinary prose lines starting with `"Runtime ..."`
+   without a colon are never parsed as Runtime verdict lines). When the saved Runtime
+   checks at `agentHead` already cover every changed Story, consumer Story and changed
+   prompt (or a Story has only a local `real-binding-unavailable` sandbox skip with zero
+   provider calls), the merge check mechanically writes or syncs missing/per-Story
+   `Runtime:` verdict lines (and the `Evidence:` `runtime=` state) onto the PR body from
+   that verified saved state before running `runtimeReds`, never inventing a pass when
+   saved checks are missing, stale or failed. Its value, after leading signs such as
    an emoji, names its Story in the parentheses after the verdict (`Runtime: PASS (STORY,
    …)`, the form of the briefs and the RUNBOOK); a Story path first (`Runtime: STORY
    PASS (…)`) is read too. Then the verdict must start with PASS (or PASSED) or "not run", in any
@@ -1158,7 +1166,15 @@ runs until its end):
    at head H it has REASON. A PR must not lose a Runtime pass: make the check of S pass
    again at this head." A row with no verdict, no failed check and no refusal (an AI
    provider failure, maintenance, a busy or interrupted check) is never red here: the
-   engine sends such a check again (B5). A merge base read error is not red: the engine
+   engine sends such a check again (B5). Likewise, a saved row skipped locally with
+   `real-binding-unavailable` (no live binding available in this sandbox, zero provider
+   calls) is treated as a local skip rather than an author refusal or coverage loss, and
+   its generic operator-reconciliation `client_advice` is never fed into the repair
+   prompt as a defect or `needs-person` trigger. When Autopilot queues the repository
+   full test suite (`boundSuiteCommand`, exported), it bounds `node --test` worker
+   concurrency (`--test-concurrency`) to `Math.max(1, Math.min(6, shareCpus))` when
+   `shareCpus` is configured (`ports.machine` or `PDD_CHECK_CPUS`, or directly on a
+   `node --test` command). A merge base read error is not red: the engine
    warns, and the record keeps the error. The port gets `{root, tree, head, base:
    true}` for the merge base read. **Prompt gate**
    (once per head, saved as `approvals {head, strict, problems}`): after a fetch of the
