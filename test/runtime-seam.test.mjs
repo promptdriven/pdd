@@ -750,6 +750,10 @@ test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and li
     ['cli:mcp', 'cli:--help', [bin, 'mcp'], nonGit, exitsWith(1, 'pdd mcp could not start. Reason: REVIEW_LOAD_FAILURE')],
     ['cli:jobs', 'cli:--help', [bin, 'jobs'], nonGit, exitsWith(5, 'Local interpreter jobs could not be read. Reason: REVIEW_LOAD_FAILURE')],
     ['cli:contracts', 'cli:--help', [bin, 'contracts'], nonGit, exitsWith(5, 'Local contracts could not be read. Reason: REVIEW_LOAD_FAILURE')],
+    ['cli:setup', 'cli:--help', [bin, 'setup', '--yes'], repo, (result, label) => {
+      assert.equal(result.status, 1, label);
+      assert.ok(result.stderr.includes('REVIEW_LOAD_FAILURE'), label);
+    }],
     ['child:try-doors-launcher', null, ['--input-type=commonjs', '-e', launcherFailScript, '--', world.moduleUrl('src/try-doors.mjs'), join(scratch, 'missing.door.json')], nonGit, (result, label) => {
       assert.equal(result.status, 125, label);
       assert.equal(result.stderr, 'pdd: The installed adapter could not load. Run pdd simulate STORY --cli again.\n', label);
