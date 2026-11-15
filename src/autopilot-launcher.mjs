@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: cfb44f20696dd736b442bc2cef6e952d2e0eba18d1a3c7830b35263f7aa8e74f).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4affbcf8587e2c380ae4c0cb6bbb99895db9adef6eda2df88162c607f3b78df6).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -493,8 +493,8 @@ async function runCoreTick(stateFile, state, p, ports) {
     }
     return poolCache.get(key);
   };
-  const exhaustPool = async ({ loginId, resetAt = null, reason = 'quota', accountWindows = null, allowedKinds, markTriedOnly = false } = {}) => {
-    if (useCloudForOpts({ allowedKinds })) {
+  const exhaustPool = async ({ loginId, cloud, resetAt = null, reason = 'quota', accountWindows = null, allowedKinds, markTriedOnly = false } = {}) => {
+    if (cloud !== false && useCloudForOpts({ allowedKinds })) {
       if (loginId) cloudTried.add(loginId);
       poolCache.clear();
       if (markTriedOnly) return null;

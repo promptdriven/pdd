@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 9a086477389ba5a9aa5df6be5034e761d232e93d42a7c106bff5c7a703e5f970).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 2aca7402038707d126846bf5761caeefa897e5a53283c53e9eeeab0be0d4a0db).
 import { spawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
@@ -343,7 +343,19 @@ async function enrollOrImportAccount(mode, { provider: requestedProvider, label:
     materializeLocalCodexAuth(authJson, { env }, ports);
     try {
       const leased = await leaseCloudAccount({ provider: 'codex', preferredLabel: acc.label, holderId: 'local-cli' }, { cwd, env }, ports);
-      if (leased?.state === 'leased') applyMaterializedLease(leased, { env }, ports);
+      if (leased?.state === 'leased') {
+        applyMaterializedLease(leased, { env }, ports);
+      } else {
+        const current = readCloudAccountsState({ env }, ports);
+        writeCloudAccountsState({
+          enrolled: true,
+          providers: [...new Set([...current.providers, 'codex'])],
+          active: current.active,
+          cooling: leased?.state === 'all_cooling'
+            ? { ...current.cooling, codex: { wake_at: leased.wake_at ?? null } }
+            : current.cooling,
+        }, { env }, ports);
+      }
     } catch {
       const current = readCloudAccountsState({ env }, ports);
       writeCloudAccountsState({
@@ -406,7 +418,19 @@ async function enrollOrImportAccount(mode, { provider: requestedProvider, label:
   materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: oauthToken }, { env }, ports);
   try {
     const leased = await leaseCloudAccount({ provider: 'claude', preferredLabel: acc.label, holderId: 'local-cli' }, { cwd, env }, ports);
-    if (leased?.state === 'leased') applyMaterializedLease(leased, { env }, ports);
+    if (leased?.state === 'leased') {
+      applyMaterializedLease(leased, { env }, ports);
+    } else {
+      const current = readCloudAccountsState({ env }, ports);
+      writeCloudAccountsState({
+        enrolled: true,
+        providers: [...new Set([...current.providers, 'claude'])],
+        active: current.active,
+        cooling: leased?.state === 'all_cooling'
+          ? { ...current.cooling, claude: { wake_at: leased.wake_at ?? null } }
+          : current.cooling,
+      }, { env }, ports);
+    }
   } catch {
     const current = readCloudAccountsState({ env }, ports);
     writeCloudAccountsState({

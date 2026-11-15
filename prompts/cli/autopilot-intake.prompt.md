@@ -89,10 +89,13 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   Codex steps get a fresh disposable `0700` `pdd-cx-*` overlay (`cleanupDirs` passed
   to `jobs.start` and wiped in `prune` once no longer running) and Cloud Claude steps
   receive `CLAUDE_CODE_OAUTH_TOKEN` (and `ANTHROPIC_BASE_URL` for `gateway_grant`)
-  through `cardEnvironment(prepared.env)`, recording `loginId` and `accountWindows`
-  on `jobs/N.json`; if a pooled card or auto-improve job fails with a quota or
-  rate-limit message (`isQuotaExhaustionMessage`), collection calls
-  `ports.exhaustLogin({loginId, reason, accountWindows, allowedKinds: ["codex", "claude"]})`
+  through `cardEnvironment(prepared.env)`, recording `loginId` (`selected.login?.id ?? null`),
+  `cloud`, and `accountWindows` on `jobs/N.json`; if a pooled card or auto-improve job
+  fails with a quota or rate-limit message (`isQuotaExhaustionMessage`), a first Cloud
+  `burst_rate_limit` (`classifyRateLimitFailure`, `< 100%`) retries once on the same
+  sticky Cloud account without calling `exhaustLogin` or setting `failedAt`, whereas
+  `quota_exhausted` (or a repeated burst `429` on the same `loginId`) calls
+  `ports.exhaustLogin({loginId, cloud, reason, accountWindows, allowedKinds: ["codex", "claude"]})`
   without locking the issue out for 6 hours so the pool rotates onto the next healthy
   `codex` or `claude` login.
 - Limits: at most 2 card attempts per tick and at most 2 jobs at once. An attempt

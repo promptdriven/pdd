@@ -1,10 +1,10 @@
-// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: b5c49522a40cc6038783ab929a8220da06d6bb55f178ba940d9ab2740fa6c89d).
+// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: 21cdd5edb8811c81c90d236564ce8189ebf3421e4ee66815cb55fad9f1aa1f01).
 import * as nativeFs from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { jobEnvironment, readAgentJob, stopAgentJob } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
-import { isQuotaExhaustionMessage } from './login-pool.mjs';
+import { classifyRateLimitFailure, isQuotaExhaustionMessage } from './login-pool.mjs';
 
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
 export const CARD_CLASSES = Object.freeze(['ready', 'improve', 'person', 'duplicate', 'blocked', 'held', 'fixed', 'elsewhere']);
@@ -355,7 +355,21 @@ function readFileTail(fs, file, maxBytes = 64 * 1024) {
   }
 }
 
-async function maybeExhaustIntakeLogin(ctx, saved, errorText = '') {
+const burstRetryFile = f => join(f.base, 'burst-retries.json');
+const burstRetryKey = saved => `${saved?.issue}:${saved?.stage ?? 'card'}:${saved?.version ?? ''}`;
+
+function clearBurstRetry(ctx, f, saved) {
+  const file = burstRetryFile(f);
+  const map = readJson(ctx.fs, file);
+  if (!object(map)) return;
+  const key = burstRetryKey(saved);
+  if (!Object.hasOwn(map, key)) return;
+  delete map[key];
+  if (Object.keys(map).length) writeJson(ctx.fs, file, map);
+  else try { ctx.fs.rmSync(file, { force: true }); } catch {}
+}
+
+async function maybeExhaustIntakeLogin(ctx, f, saved, errorText = '') {
   if (!saved?.loginId || typeof ctx.ports?.exhaustLogin !== 'function') return false;
   const sample = [
     text(errorText),
@@ -363,8 +377,20 @@ async function maybeExhaustIntakeLogin(ctx, saved, errorText = '') {
     readFileTail(ctx.fs, saved?.answer),
   ].filter(Boolean).join('\n');
   if (!isQuotaExhaustionMessage(sample)) return false;
+  if (saved.cloud === true && classifyRateLimitFailure(sample, saved.accountWindows) === 'burst_rate_limit') {
+    const file = burstRetryFile(f);
+    const map = object(readJson(ctx.fs, file)) ? readJson(ctx.fs, file) : {};
+    const key = burstRetryKey(saved);
+    if (map[key] !== saved.loginId) {
+      map[key] = saved.loginId;
+      writeJson(ctx.fs, file, map);
+      return true;
+    }
+    clearBurstRetry(ctx, f, saved);
+  }
   await ctx.ports.exhaustLogin({
     loginId: saved.loginId,
+    cloud: saved.cloud === true,
     reason: saved.cloud ? (sample.slice(0, 500) || 'quota') : 'quota',
     accountWindows: saved.accountWindows ?? null,
     allowedKinds: ['codex', 'claude'],
@@ -424,7 +450,7 @@ async function resolveIntakeRunner(ctx) {
       spec: { ...selected.agent, model },
       agent: { kind: selected.agent.kind, model },
       env: cardEnvironment(selected.env ?? ctx.ports?.env ?? process.env),
-      loginId: selected.login?.id ?? selected.agent?.id ?? null,
+      loginId: selected.login?.id ?? null,
       cloud: selected.cloud === true,
       accountWindows,
       prepareStep: typeof selected.prepareStep === 'function' ? selected.prepareStep : null,
@@ -468,11 +494,13 @@ async function collect(ctx, f, scope) {
       if (drop) { prune(ctx, saved.job, false, saved.answer); continue; }
       const answer = cardAnswer(ctx, saved), card = answer.card ?? null;
       const errText = card ? '' : (answer.error ?? `the card answer is not valid (exit ${state.exit?.code ?? 'unknown'})`);
-      const quota = !card && await maybeExhaustIntakeLogin(ctx, saved, errText);
+      const quota = !card && await maybeExhaustIntakeLogin(ctx, f, saved, errText);
       prune(ctx, saved.job, !card, saved.answer);
       if (card) {
+        clearBurstRetry(ctx, f, saved);
         saveCard(ctx, f, n, { issue: n, version: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), native: null, card });
       } else if (!quota) {
+        clearBurstRetry(ctx, f, saved);
         saveCard(ctx, f, n, failed(ctx, saved, errText));
       }
     } catch (error) {
@@ -625,23 +653,26 @@ export async function collectActiveIntake(ctx, rows) {
         const answer = improveAnswer(ctx, saved), imp = answer.improvement ?? null;
         if (!imp) {
           const errText = answer.error ?? `the auto-improve answer is not valid (exit ${state.exit?.code ?? 'unknown'})`;
-          const quota = await maybeExhaustIntakeLogin(ctx, saved, errText);
+          const quota = await maybeExhaustIntakeLogin(ctx, f, saved, errText);
           ctx.fs.rmSync(file, { force: true }); prune(ctx, saved.job, true, saved.answer);
-          if (!quota) saveCard(ctx, f, n, failed(ctx, saved, errText));
+          if (!quota) { clearBurstRetry(ctx, f, saved); saveCard(ctx, f, n, failed(ctx, saved, errText)); }
           continue;
         }
+        clearBurstRetry(ctx, f, saved);
         await applyImprovement(ctx, f, row, saved, imp);
         ctx.fs.rmSync(file, { force: true }); prune(ctx, saved.job, false, saved.answer);
         continue;
       }
       const answer = cardAnswer(ctx, saved), card = answer.card ?? null;
       const errText = card ? '' : (answer.error ?? `the card answer is not valid (exit ${state.exit?.code ?? 'unknown'})`);
-      const quota = !card && await maybeExhaustIntakeLogin(ctx, saved, errText);
+      const quota = !card && await maybeExhaustIntakeLogin(ctx, f, saved, errText);
       ctx.fs.rmSync(file, { force: true });
       prune(ctx, saved.job, !card, saved.answer);
       if (card) {
+        clearBurstRetry(ctx, f, saved);
         saveCard(ctx, f, n, { issue: n, version: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), native: null, card });
       } else if (!quota) {
+        clearBurstRetry(ctx, f, saved);
         saveCard(ctx, f, n, failed(ctx, saved, errText));
       }
     } catch (error) {

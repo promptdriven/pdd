@@ -478,6 +478,7 @@ test('autopilot-intake-cloud: shadowIntake and activeIntake materialize prepareS
     assert.equal(existsSync(createdOverlays[0]), false, 'finished job overlay wiped in prune');
     assert.equal(exhaustCalls.length, 1, 'quota failure reported to exhaustLogin');
     assert.equal(exhaustCalls[0].loginId, 'acc_cx_intake');
+    assert.equal(exhaustCalls[0].cloud, true);
     assert.deepEqual(exhaustCalls[0].accountWindows, {
       five_hour_used_percent: 45,
       five_hour_reset_at: '2026-11-10T16:00:00Z',
@@ -486,7 +487,75 @@ test('autopilot-intake-cloud: shadowIntake and activeIntake materialize prepareS
     });
     assert.equal(createdOverlays.length, 3, 'retry attempted prepareStep');
     assert.equal(existsSync(createdOverlays[2]), false, 'overlay wiped immediately when ctx.jobs.start throws');
+
+    // Burst 429 (< 100%) on job #12: first transient RPM/TPM 429 retries once on same sticky Cloud account WITHOUT calling exhaustLogin!
+    const job12First = startedJobs[1];
+    writeFileSync(job12First.log, 'Error 429 Too Many Requests: rate limit exceeded\n');
+    writeFileSync(job12First.exit, JSON.stringify({ code: 1, signal: null }));
+    alive.delete(job12First.pid);
+
+    await shadowIntake(ctxShadow, [rows[1]]);
+    assert.equal(exhaustCalls.length, 1, 'first burst 429 (< 100%) does NOT call exhaustLogin');
+    const job12Retry = startedJobs.at(-1);
+    assert.equal(job12Retry.issue, 12, 'burst 429 retried issue #12 immediately without 6h lockout');
+
+    // Second burst 429 on the same loginId for #12 DOES call exhaustLogin and clears burst-retries.json!
+    writeFileSync(job12Retry.log, 'Error 429 Too Many Requests: rate limit exceeded\n');
+    writeFileSync(job12Retry.exit, JSON.stringify({ code: 1, signal: null }));
+    alive.delete(job12Retry.pid);
+
+    await shadowIntake(ctxShadow, [rows[1]]);
+    assert.equal(exhaustCalls.length, 2, 'second burst 429 on same loginId calls exhaustLogin');
+    assert.equal(exhaustCalls[1].loginId, 'acc_cx_intake');
+    assert.equal(exhaustCalls[1].cloud, true);
+    assert.equal(existsSync(join(root, 'intake', 'burst-retries.json')), false, 'burst-retries.json removed once cleared');
     stopCardJobs({ root, jobs });
+
+    // Local un-enrolled fallback (`configured: false, login: null`) sets loginId: null and NEVER calls exhaustLogin!
+    const localFallbackRoot = mkdtempSync(join(tmpdir(), 'pdd-intake-local-fb-'));
+    try {
+      const exhaustBeforeLocal = exhaustCalls.length;
+      const ctxLocalFallback = {
+        fs: { ...await import('node:fs') },
+        now: () => now,
+        root: localFallbackRoot,
+        repo: 'acme/widgets',
+        state: { agent: { id: 'claude', kind: 'claude', command: 'claude' }, cwd: localFallbackRoot },
+        settings: { intake: 'shadow' },
+        budget: { state: 'normal' },
+        gh,
+        jobs,
+        ports: {
+          trusted: async () => true,
+          agentReady: async () => true,
+          env: { HOME: localFallbackRoot },
+          selectLogin: async () => ({
+            state: 'ready',
+            configured: false,
+            poolPath: null,
+            poolSize: 1,
+            login: null,
+            agent: { id: 'claude', kind: 'claude', command: 'claude' },
+            env: { HOME: localFallbackRoot },
+          }),
+          exhaustLogin: async payload => {
+            exhaustCalls.push(payload);
+            return null;
+          },
+        },
+        warn: () => {},
+      };
+      await shadowIntake(ctxLocalFallback, [rows[0]]);
+      const localJob = startedJobs.at(-1);
+      writeFileSync(localJob.log, 'Error 429 Too Many Requests: hit your usage limit\n');
+      writeFileSync(localJob.exit, JSON.stringify({ code: 1, signal: null }));
+      alive.delete(localJob.pid);
+      await shadowIntake(ctxLocalFallback, [rows[0]]);
+      assert.equal(exhaustCalls.length, exhaustBeforeLocal, 'local un-enrolled fallback never calls exhaustLogin');
+      stopCardJobs({ root: localFallbackRoot, jobs });
+    } finally {
+      rmSync(localFallbackRoot, { recursive: true, force: true });
+    }
 
     // 2. Claude Cloud prepareStep in activeIntake: selected.env strips CLAUDE_CODE_OAUTH_TOKEN, while prepareStep
     // supplies CLAUDE_CODE_OAUTH_TOKEN + gateway ANTHROPIC_BASE_URL to BOTH card and auto-improve jobs!

@@ -21,12 +21,16 @@ usage-reset credit commands, options or calls exist.
   before uploading the bundle to `POST /v1/accounts`, and immediately overwrite local
   `~/.codex/auth.json` (`0600`, `tokens.refresh_token: ""`) or
   `~/.claude/settings.json` + `~/.claude.json` (`0600`, `hasCompletedOnboarding: true`)
-  so only PDD Cloud refreshes credentials.
+  so only PDD Cloud refreshes credentials, recording `enrolled: true` and the provider
+  in `accounts-state.json` even when the initial `/v1/accounts/lease` reply is
+  `all_cooling`.
 - `pdd accounts import [--provider codex|claude] [--label NAME]`: Validate all four
   Codex OAuth token fields in `~/.codex/auth.json` (or read a Claude OAuth token) and
   upload to `POST /v1/accounts`, then replace local `~/.codex/auth.json` with a
   stripped `0600` pass (`refresh_token: ""`) or materialize `~/.claude/settings.json` +
-  `~/.claude.json`.
+  `~/.claude.json`, recording `enrolled: true` and the provider in
+  `accounts-state.json` even when the initial `/v1/accounts/lease` reply is
+  `all_cooling`.
 - `pdd accounts use LABEL`: Pin and materialize `LABEL` locally via
   `POST /v1/accounts/lease` (`preferred_label: LABEL`).
 - `pdd accounts next [--provider codex|claude]`: Skip the current active account

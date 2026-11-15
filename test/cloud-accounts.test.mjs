@@ -154,6 +154,7 @@ async function createMockCloudServer(t, initial = {}) {
         }
       }
       const id = `acc_${state.nextSeq++}`;
+      const coolingInit = state.enrollCoolingUntil ?? null;
       const acc = {
         account_id: id,
         label: body.label,
@@ -162,12 +163,12 @@ async function createMockCloudServer(t, initial = {}) {
         owner_github_id: 95069916,
         owner_login: 'Serhan-Asad',
         shared: false,
-        state: 'ready',
-        five_hour_used_percent: 8,
-        five_hour_reset_at: '2026-11-15T02:00:00Z',
+        state: coolingInit ? 'cooling' : 'ready',
+        five_hour_used_percent: coolingInit ? 100 : 8,
+        five_hour_reset_at: coolingInit ?? '2026-11-15T02:00:00Z',
         weekly_used_percent: 22,
         weekly_reset_at: '2026-11-18T17:00:00Z',
-        cooling_until: null,
+        cooling_until: coolingInit,
         created_at: new Date(state.nowMs + state.nextSeq).toISOString(),
       };
       state.vaultBundles.set(id, structuredClone(body.bundle));
@@ -190,9 +191,12 @@ async function createMockCloudServer(t, initial = {}) {
       if (body?.preferred_label) {
         const target = accessible.find(a => a.label === body.preferred_label || a.account_id === body.preferred_label);
         if (!target) return send(404, { detail: { error: 'not_found', message: `Account ${body.preferred_label} not found` } });
-        if (!isReady(target)) return send(409, { detail: { error: 'account_not_ready', message: `Account ${target.label} is ${target.state}` } });
-        chosen = target;
-        switched = body.current_account_id !== target.account_id;
+        if (isReady(target)) {
+          chosen = target;
+          switched = body.current_account_id !== target.account_id;
+        } else if (accessible.some(a => isReady(a))) {
+          return send(409, { detail: { error: 'account_not_ready', message: `Account ${target.label} is ${target.state}` } });
+        }
       } else {
         const current = body?.current_account_id
           ? accessible.find(a => a.account_id === body.current_account_id)
@@ -1512,4 +1516,38 @@ test('3252 T8: Round 2 single-provider Cloud enrollment preserves un-enrolled lo
   assert.ok(buildJob41, 'main build job started for #41');
   assert.equal(buildJob41.command, 'agy', 'main build job uses --agent agy and is NOT hijacked onto Cloud codex');
   assert.equal(buildJob41.agentKind, 'agy');
+
+  // 4. Importing an already-exhausted (100%) Codex or Claude login when initial `/v1/accounts/lease` returns `all_cooling`
+  //    STILL records `enrolled: true`, `providers`, and `cooling.<provider>.wake_at` in `accounts-state.json`!
+  const coolingCloud = await createMockCloudServer(t, { nowMs: baseMs });
+  coolingCloud.state.enrollCoolingUntil = '2026-11-14T22:30:00Z';
+  const sbCooling = makeTempSandbox(t, coolingCloud.serverUrl);
+  mkdirSync(join(sbCooling.home, '.codex'), { recursive: true });
+  writeFileSync(join(sbCooling.home, '.codex', 'auth.json'), JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_exhausted_cx_secret1111',
+      refresh_token: 'rt_exhausted_cx_secret2222',
+      id_token: makeJwt({ email: 'exhausted@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' } }),
+      account_id: 'acct_exhausted_cx',
+    },
+  }));
+  const impCoolingCx = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'cx-cooling'], sbCooling);
+  assert.equal(impCoolingCx.exit, 0, impCoolingCx.stderr);
+  let coolingState = JSON.parse(readFileSync(join(sbCooling.stateDir, 'accounts-state.json'), 'utf8'));
+  assert.equal(coolingState.enrolled, true, 'all_cooling on initial Codex import still marks enrolled: true');
+  assert.deepEqual(coolingState.providers, ['codex']);
+  assert.equal(coolingState.cooling?.codex?.wake_at, '2026-11-14T22:30:00Z');
+
+  mkdirSync(join(sbCooling.home, '.claude'), { recursive: true });
+  writeFileSync(join(sbCooling.home, '.claude', 'settings.json'), JSON.stringify({
+    env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-exhaustedClaudeTokenSecret3333' },
+  }));
+  const impCoolingCl = await invokeCli(['accounts', 'import', '--provider', 'claude', '--label', 'cl-cooling'], sbCooling);
+  assert.equal(impCoolingCl.exit, 0, impCoolingCl.stderr);
+  coolingState = JSON.parse(readFileSync(join(sbCooling.stateDir, 'accounts-state.json'), 'utf8'));
+  assert.equal(coolingState.enrolled, true);
+  assert.deepEqual(coolingState.providers, ['codex', 'claude']);
+  assert.equal(coolingState.cooling?.claude?.wake_at, '2026-11-14T22:30:00Z');
 });
