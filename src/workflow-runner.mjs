@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d6c4d995945e5c5c34626dc1dd5f493b75f1c069a01930409f265eab854838ba).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: bd9ddac71782ad18366a7a5601d8895b3710413d13b7c8264e35e541b7b93464).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -51,7 +51,7 @@ import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat,
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
-import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, causeText, format, isStoryPath, loadRuntimeWorkspace, promptRefusal, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
+import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, allowsRuntimePath, causeText, format, isStoryPath, loadRuntimeWorkspace, parsePromptFrontmatter, promptRefusal, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
@@ -1584,9 +1584,13 @@ async function nativeOnlyPrompts(run, area, p, head = 'HEAD') {
         mkdirSync(dirname(full), { recursive: true });
         writeFileSync(full, buf, { mode: 0o600, flag: 'wx' });
       }
+      const unconfigured = Object.freeze({ configured: false, allowed_paths: Object.freeze([]) });
+      const runtimeVisible = workspace.configured ? new Set([...visible].filter(item => allowsRuntimePath(workspace, item))) : visible;
       const verified = [];
       for (const path of paths) {
-        const parsed = readPrompt(tempRoot, visible, path, workspace);
+        const parsed = allowsRuntimePath(workspace, path)
+          ? readPrompt(tempRoot, runtimeVisible, path, workspace)
+          : readPrompt(tempRoot, visible, path, unconfigured);
         if (promptRefusal(parsed, 'interface')) return null;
         const reason = typeof parsed.interface?.reason === 'string' ? parsed.interface.reason.trim() : '';
         if (parsed.interface?.kind !== 'native-only' || !reason) return null;
@@ -2614,18 +2618,14 @@ async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.
   return null;
 }
 const pureNativeCheck = check => !check.pass && !check.tests.length && !check.problems.length && check.nativeOnly?.length ? check.nativeOnly : null;
-function eligibleRootsForRun(run, p) {
-  const roots = [run.root];
-  for (const a of run.evidenceAssociations ?? []) {
-    if (a?.stage !== 'current' || typeof a.workspaceRoot !== 'string' || !Array.isArray(a.tests) || typeof a.source_sha256 !== 'string') continue;
-    const verdict = readEvidenceEligibility(
-      { root: run.root, producerRoot: a.workspaceRoot, tests: a.tests, source_sha256: a.source_sha256, runId: run.runId, stage: 'current' },
-      { ...p, allRuns: opts => { const indexed = allRuns(opts, p); return indexed.some(item => item?.runId === run.runId) ? indexed : [...indexed, run]; }, captureSource: p.captureSource ?? captureSourceAllowMissing },
-    );
-    if (verdict.state === 'eligible' && verdict.producerRoot) roots.push(verdict.producerRoot);
-  }
-  return [...new Set(roots)];
-}
+const workspacePortsForRun = (run, p) => ({
+  ...p,
+  allRuns: opts => {
+    const indexed = (p.allRuns ?? allRuns)(opts, p);
+    return indexed.some(item => item?.runId === run.runId) ? indexed : [...indexed, run];
+  },
+  captureSource: p.captureSource ?? captureSourceAllowMissing,
+});
 const fullCheckForRun = (run, { tests = [], stories = [], prompts = [] }, p) => fullCheckPass({
   root: run.root,
   since: run.promptReturn?.at ?? run.startedAt ?? 0,
@@ -2633,8 +2633,10 @@ const fullCheckForRun = (run, { tests = [], stories = [], prompts = [] }, p) => 
   stories,
   prompts,
   scoped: true,
-  eligibleRoots: eligibleRootsForRun(run, p),
-}, p);
+}, {
+  ...p,
+  workspace: p.workspace ?? (input => readEvidenceEligibility(input, workspacePortsForRun(run, p))),
+});
 // A later code request is not approval of a changed Story or a replacement for current check evidence.
 async function normalCodeReview(run, area, p) {
   if (!normalRun(run, p) || !run.storyApproval?.fingerprint) return null;
@@ -3746,6 +3748,8 @@ async function approveGatePrompts(run, p, snapshot = null) {
   snapshot ??= await gatePromptSnapshot(run, p);
   const paths = snapshot.map(row => row.path);
   const visible = new Set(gitFiles(run.root));
+  const workspace = loadRuntimeWorkspace({ root: run.root });
+  const runtimeVisible = workspace.configured ? new Set([...visible].filter(item => allowsRuntimePath(workspace, item))) : visible;
   const edits = [];
   for (const path of paths) {
     const file = join(run.root, path);
@@ -3754,10 +3758,20 @@ async function approveGatePrompts(run, p, snapshot = null) {
     if (!stat.isFile() || fs.realpathSync(file) !== file) throw Error(`Cannot approve unsafe prompt: ${path}`);
     const text = fs.readFileSync(file, 'utf8'), blocks = interfaceBlocks(text);
     if (!blocks.length) {
+      if (workspace.configured && !allowsRuntimePath(workspace, path)) {
+        const frontmatter = parsePromptFrontmatter(text);
+        if (frontmatter.hasFrontmatter && frontmatter.error) {
+          const detail = frontmatter.error === 'native-reason-missing'
+            ? `${path} /reason must state in plain words why the effect cannot be faked.`
+            : `${path} frontmatter must declare only kind: native-only and reason.`;
+          throw Error(`${path}: ${frontmatter.error} interface ${detail}`);
+        }
+        continue;
+      }
       let prompt, problems;
       try {
-        prompt = readPrompt(run.root, visible, path);
-        problems = promptSchemaRefusals(run.root, { visible }, prompt, new Map([[path, prompt]]), new Set(), { allowMissingInterfaces: true });
+        prompt = readPrompt(run.root, runtimeVisible, path, workspace);
+        problems = promptSchemaRefusals(run.root, { visible: runtimeVisible, workspace }, prompt, new Map([[path, prompt]]), new Set(), { allowMissingInterfaces: true });
       } catch (error) { throw Error(`${path}: ${error.message}`); }
       if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.section} ${item.message}`).join('; ')}`);
       continue;
@@ -3766,7 +3780,7 @@ async function approveGatePrompts(run, p, snapshot = null) {
     let iface;
     try { iface = JSON.parse(blocks[0][1]); } catch { throw Error(`${path} has invalid Runtime interface JSON.`); }
     let prompt, problems;
-    try { prompt = readPrompt(run.root, visible, path); problems = promptSchemaRefusals(run.root, { visible }, prompt, new Map([[path, prompt]])); }
+    try { prompt = readPrompt(run.root, runtimeVisible, path, workspace); problems = promptSchemaRefusals(run.root, { visible: runtimeVisible, workspace }, prompt, new Map([[path, prompt]])); }
     catch (error) { throw Error(`${path}: ${error.message}`); }
     if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.section} ${item.message}`).join('; ')}`);
     const hash = proseSha256(text);
@@ -4012,7 +4026,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     if (refreshed) {
       const contents = await worktreeContents(run, p);
       const refreshedStories = (refreshed.fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path);
-      const isPureNative = Boolean(pureNativeCheck(fullCheckForRun(run, { tests: contents.tests, stories: refreshedStories, prompts: refreshed.prompts }, p)));
+      const isPureNative = refreshedStories.length === 0 && Boolean(pureNativeCheck(fullCheckForRun(run, { tests: contents.tests, stories: refreshedStories, prompts: refreshed.prompts }, p)));
       commitRun(run, p, latest => {
         latest.storyApproval = refreshed;
         if (through !== undefined) latest.through = through;
