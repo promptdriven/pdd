@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCodeowners, resolveArea, resolveAreas } from '../src/autopilot-areas.mjs';
+import * as fs from 'node:fs';
+import { findOwners } from '../src/file-owner.mjs';
+import { ownerRead } from '../src/autopilot-core.mjs';
+import {
+  areasOverlap,
+  groupReadyIssues,
+  issueAreas,
+  normalizeAreaPath,
+  ownerAreas,
+  parseCodeowners,
+  resolveArea,
+  resolveAreas,
+} from '../src/autopilot-areas.mjs';
 
 const areasFor = pattern => [{ name: 'literal', owner: 'literal-owner', match: { paths: [pattern] } }];
 const resolve = (pattern, path) => resolveArea({ areas: areasFor(pattern), evidence: { paths: [path] } });
@@ -38,4 +50,149 @@ test('literal encoding preserves wildcard, directory and anchor behavior', () =>
     ['/src/a+b/', 'src/a+b/deep/file', true], ['/src/a+b/', 'src/ab/deep/file', false],
   ];
   for (const [pattern, path, matches] of cases) assert.equal(resolve(pattern, path).state === 'resolved', matches);
+});
+
+test('canonical prompt ownership detects shared-owner collisions across different file stems', () => {
+  const repoRoot = process.cwd();
+  const repoFiles = [
+    'prompts/cli/workflow-runner.prompt.md',
+    'prompts/cli/autopilot-doctor.prompt.md',
+    'src/workflow-runner.mjs',
+    'src/workflow-eligibility.mjs',
+    'src/autopilot-doctor.mjs',
+  ];
+  const readResult = ownerRead(fs, repoRoot, repoFiles);
+  const findResult = findOwners({ root: repoRoot, paths: repoFiles }, { files: () => repoFiles });
+  const plainOwners = {
+    'src/workflow-runner.mjs': { prompt: 'prompts/cli/workflow-runner.prompt.md', state: 'resolved' },
+    'src/workflow-eligibility.mjs': 'prompts/cli/workflow-runner.prompt.md',
+    'src/autopilot-doctor.mjs': { prompt: 'prompts/cli/autopilot-doctor.prompt.md', state: 'resolved' },
+  };
+
+  for (const owners of [readResult.owners, readResult, findResult, plainOwners]) {
+    const overlap = areasOverlap(['src/workflow-runner.mjs'], ['src/workflow-eligibility.mjs'], { owners });
+    assert.equal(overlap.overlap, true);
+    assert.equal(overlap.reason, 'owner:prompts/cli/workflow-runner.prompt.md');
+    assert.equal(
+      areasOverlap(['src/workflow-runner.mjs'], ['src/autopilot-doctor.mjs'], { owners }).overlap,
+      false,
+    );
+  }
+
+  // Direct *.prompt.md edits collide with code files owned by that prompt.
+  const promptFootprint = issueAreas(
+    { title: 'Clarify workflow eligibility rule', body: 'Update prompts/cli/workflow-runner.prompt.md' },
+    null,
+    { owners: readResult.owners },
+  );
+  const codeFootprint = issueAreas(
+    { title: 'Refine eligibility helper', body: 'Update src/workflow-eligibility.mjs and test/workflow-runner.test.mjs' },
+    null,
+    { owners: readResult.owners },
+  );
+  assert.ok(promptFootprint.includes('owner:prompts/cli/workflow-runner.prompt.md'));
+  assert.ok(codeFootprint.includes('owner:prompts/cli/workflow-runner.prompt.md'));
+  assert.equal(codeFootprint.some(x => x.startsWith('uncertain:')), false, 'test files do not synthesize uncertain reservations');
+  assert.equal(areasOverlap(promptFootprint, codeFootprint).overlap, true);
+  assert.equal(
+    areasOverlap(['prompts/cli/workflow-runner.prompt.md'], ['src/workflow-eligibility.mjs'], { owners: readResult.owners }).overlap,
+    true,
+  );
+
+  // Without owners, existing stem/folder fallback behavior stays intact.
+  assert.equal(areasOverlap(['src/workflow-runner.mjs'], ['src/workflow-eligibility.mjs']).overlap, false);
+  assert.equal(areasOverlap(['prompts/cli/workflow-runner.prompt.md'], ['src/workflow-runner.mjs']).overlap, true);
+});
+
+test('ownerAreas and issueAreas include implied docs/cli.md target and serialize uncertain or unknown code owners conservatively', () => {
+  assert.equal(normalizeAreaPath('owner: ./prompts/cli/workflow-runner.prompt.md'), 'owner:prompts/cli/workflow-runner.prompt.md');
+  assert.equal(normalizeAreaPath('owner:../outside.prompt.md'), null);
+  assert.equal(normalizeAreaPath('uncertain:src/billing'), 'uncertain:src/billing');
+  assert.equal(normalizeAreaPath('uncertain:../outside'), null);
+
+  // Implied shared-contract target: src/command-catalog.mjs brings docs/cli.md into the footprint.
+  const catalogAreas = issueAreas({ title: 'Add flag to src/command-catalog.mjs', body: '' });
+  assert.deepEqual(catalogAreas, ['src/command-catalog.mjs', 'docs/cli.md']);
+  assert.deepEqual(areasOverlap(['src/command-catalog.mjs'], ['docs/cli.md']), {
+    overlap: true,
+    reason: 'docs/cli.md',
+  });
+
+  // Uncertain or unknown ownership on src/ and app/ code files reserves uncertain:<dir|root>.
+  const owners = new Map([
+    ['src/known.mjs', { prompt: 'prompts/cli/known.prompt.md', state: 'resolved' }],
+    ['src/shaky.mjs', { prompt: null, state: 'uncertain' }],
+  ]);
+  assert.deepEqual(ownerAreas(['src/shaky.mjs'], owners), ['uncertain:root']);
+  assert.deepEqual(ownerAreas(['app/unmapped.ts'], owners), ['uncertain:root']);
+  assert.deepEqual(ownerAreas(['src/billing/unmapped.mjs'], owners), ['uncertain:src/billing']);
+  assert.deepEqual(ownerAreas(['docs/cli.md', 'test/known.test.mjs'], owners), []);
+
+  assert.equal(areasOverlap(['src/shaky.mjs'], ['app/unmapped.ts'], { owners }).overlap, true);
+  assert.equal(areasOverlap(['src/shaky.mjs'], ['src/known.mjs'], { owners }).overlap, false);
+  assert.equal(areasOverlap(['src/billing/unmapped.mjs'], ['src/billing/invoice.mjs'], { owners }).overlap, true);
+});
+
+test('groupReadyIssues clusters small issues only on explicit group_with or the same single owning prompt when owners is supplied', () => {
+  const owners = new Map([
+    ['src/workflow-runner.mjs', { prompt: 'prompts/cli/workflow-runner.prompt.md', state: 'resolved' }],
+    ['src/workflow-eligibility.mjs', { prompt: 'prompts/cli/workflow-runner.prompt.md', state: 'resolved' }],
+    ['src/billing/invoice.mjs', { prompt: 'prompts/billing/invoice.prompt.md', state: 'resolved' }],
+    ['src/billing/tax.mjs', { prompt: 'prompts/billing/tax.prompt.md', state: 'resolved' }],
+  ]);
+
+  // 1. Same single owning prompt across different file stems clusters up to maxGroupSize.
+  const sameOwnerRows = [
+    { number: 1, title: 'Small runner tweak', body: 'In src/workflow-runner.mjs' },
+    { number: 2, title: 'Small eligibility tweak', body: 'In src/workflow-eligibility.mjs' },
+    { number: 3, title: 'Small prompt wording tweak', body: 'In prompts/cli/workflow-runner.prompt.md' },
+    { number: 4, title: 'Fourth small tweak waits', body: 'In src/workflow-eligibility.mjs' },
+  ];
+  const sameOwnerCards = new Map(sameOwnerRows.map(r => [r.number, { class: 'ready', size: 'small', areas: [] }]));
+  const clustered = groupReadyIssues(sameOwnerRows, sameOwnerCards, { owners, maxGroupSize: 3 });
+  assert.deepEqual(clustered.map(g => g.issues), [[1, 2, 3], [4]]);
+  assert.ok(clustered[0].areas.includes('owner:prompts/cli/workflow-runner.prompt.md'));
+
+  // 2. Different owning prompts in the same nested folder or sharing an area:* label stay separate unless linked by group_with.
+  const diffOwnerRows = [
+    { number: 10, title: 'Fix invoice rounding', body: 'In src/billing/invoice.mjs', labels: ['area:billing'] },
+    { number: 11, title: 'Fix tax rounding', body: 'In src/billing/tax.mjs', labels: ['area:billing'] },
+  ];
+  const diffOwnerCards = new Map([
+    [10, { class: 'ready', size: 'small', areas: ['src/billing/invoice.mjs'] }],
+    [11, { class: 'ready', size: 'small', areas: ['src/billing/tax.mjs'] }],
+  ]);
+  assert.deepEqual(
+    groupReadyIssues(diffOwnerRows, diffOwnerCards, { owners }).map(g => g.issues),
+    [[10], [11]],
+    'distinct prompt owners are not glued together without group_with',
+  );
+  // Fallback when owners is omitted preserves folder/label grouping.
+  assert.deepEqual(
+    groupReadyIssues(diffOwnerRows, diffOwnerCards).map(g => g.issues),
+    [[10, 11]],
+  );
+  // Explicit group_with still clusters across different prompt owners.
+  const linkedCards = new Map([
+    [10, { class: 'ready', size: 'small', areas: ['src/billing/invoice.mjs'], group_with: [11] }],
+    [11, { class: 'ready', size: 'small', areas: ['src/billing/tax.mjs'] }],
+  ]);
+  assert.deepEqual(
+    groupReadyIssues(diffOwnerRows, linkedCards, { owners }).map(g => g.issues),
+    [[10, 11]],
+  );
+
+  // 3. Uncertain/unmapped code files do not auto-glue together without group_with.
+  const uncertainRows = [
+    { number: 20, title: 'New helper A', body: 'In src/new-a.mjs' },
+    { number: 21, title: 'New helper B', body: 'In src/new-b.mjs' },
+  ];
+  const uncertainCards = new Map([
+    [20, { class: 'ready', size: 'small', areas: ['src/new-a.mjs'] }],
+    [21, { class: 'ready', size: 'small', areas: ['src/new-b.mjs'] }],
+  ]);
+  assert.deepEqual(
+    groupReadyIssues(uncertainRows, uncertainCards, { owners }).map(g => g.issues),
+    [[20], [21]],
+  );
 });

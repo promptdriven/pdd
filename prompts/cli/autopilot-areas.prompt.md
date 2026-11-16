@@ -34,13 +34,39 @@ never approves or writes it.
 
 For active intake grouping and parallel slot serialization (#3189), export pure
 helpers `normalizeAreaPath`, `normalizeAreaList`, `parseGitHubIssueUrl`,
-`issueAreas`, `areasOverlap`, `isSmallCard`, and `groupReadyIssues`. Normalize
-repository-relative paths (up to 6 per card) and `area:*` labels while stripping
-URLs and validating GitHub issue links via `new URL` host checks (`github.com`
-only), detect file, nested module folder, prompt-module stem and `area:*`
-overlaps, and cluster 2 to 3 small ready issues that share a `group_with` link or
-overlapping module area into one grouped claim while keeping medium or large
-issues solo.
+`ownerAreas`, `issueAreas`, `areasOverlap`, `isSmallCard`, and
+`groupReadyIssues`. Normalize repository-relative paths (up to 6 per card),
+`area:*` labels, canonical `owner:<promptPath>` tokens and
+`uncertain:<folder|root>` reservations while stripping URLs and validating
+GitHub issue links via `new URL` host checks (`github.com` only).
+
+When optional resolved ownership facts (`owners` — a `Map`, plain object,
+`ownerRead` result or `findOwners` inventory mapping repository paths to owning
+prompt paths or `{prompt, state}` / `{owner, owners, certain}` records) are
+supplied to `ownerAreas(paths, owners)`, `issueAreas(issue, card, {owners})`,
+`areasOverlap(left, right, {owners})` or
+`groupReadyIssues(rows, cards, {maxGroupSize, owners})`:
+
+- Map each resolved path to `owner:<promptPath>` so multiple production files
+  owned by the same prompt serialize across parallel slots even when their file
+  stems differ in a flat `src/` or `app/` folder.
+- Treat `*.prompt.md` paths directly in a footprint as `owner:<promptPath>` so
+  direct prompt edits collide with every module owned by that prompt.
+- Include `docs/cli.md` whenever `src/command-catalog.mjs` appears in an issue
+  or overlap footprint so CLI catalog edits cannot race on command reference docs.
+- Reserve `uncertain:<nestedFolder>` or `uncertain:root` when an owner entry has
+  `state: "uncertain"`, an unchecked record without a prompt, or an unknown
+  owner on a `src/` or `app/` code file while `owners` is supplied, so uncertain
+  ownership serializes conservatively without blocking known-owner or non-code
+  paths.
+- Preserve existing file, nested module folder, prompt-module stem and `area:*`
+  overlap rules, and preserve fallback behavior when `owners` is omitted.
+- In `groupReadyIssues`, cluster 2 to 3 small ready issues (keeping medium or
+  large issues solo) only when they share an explicit `group_with` link or, when
+  `owners` is supplied, the same single resolved `owner:*` prompt with no
+  `uncertain:*` reservation (falling back to module-area overlap when `owners`
+  is omitted), preventing unrelated issues in the same folder or label bucket
+  from being grouped when prompt ownership differs.
 
 ## Dependencies
 
@@ -50,6 +76,6 @@ None. All inputs are values. Files are read by issue-sort-github.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"d57f052caed1c4c5d91c0f5a5253fc454020210ca7cdcc5f4451a13742383ad3","entries":[{"operation":"resolveArea","input_schema":{"type":"object","properties":{"areas":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"owner":{"type":"string"},"match":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repositories":{"type":"array","items":{"type":"string"}}},"required":[],"additionalProperties":false},"mixed":{"type":"string","enum":["whole","split"]}},"required":["name","owner","match"],"additionalProperties":false}},"codeowners":{"type":"string"},"evidence":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repository":{"type":"string"},"area":{"type":"string"}},"required":[],"additionalProperties":false}},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"state":{"type":"string","enum":["resolved","unsure"]},"area":{"type":"string"},"owner":{"type":"string"},"source":{"type":"string","enum":["config","codeowners","evidence","default"]}},"required":["state","area","owner","source"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
+{"status":"approved","prose_sha256":"f8b7875e28c06df580fcb4835ba01f4a3101e7dec5462d812db8a3730a77980c","entries":[{"operation":"resolveArea","input_schema":{"type":"object","properties":{"areas":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"owner":{"type":"string"},"match":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repositories":{"type":"array","items":{"type":"string"}}},"required":[],"additionalProperties":false},"mixed":{"type":"string","enum":["whole","split"]}},"required":["name","owner","match"],"additionalProperties":false}},"codeowners":{"type":"string"},"evidence":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"keywords":{"type":"array","items":{"type":"string"}},"labels":{"type":"array","items":{"type":"string"}},"repository":{"type":"string"},"area":{"type":"string"}},"required":[],"additionalProperties":false}},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"state":{"type":"string","enum":["resolved","unsure"]},"area":{"type":"string"},"owner":{"type":"string"},"source":{"type":"string","enum":["config","codeowners","evidence","default"]}},"required":["state","area","owner","source"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":2},"conventions":[]}
 ```
 </details>

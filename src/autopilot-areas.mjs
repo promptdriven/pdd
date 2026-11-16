@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: e4e99e1d9eecf43628faca7769f7bcdee3d524cac298de50f6551ef7502635e9).
+// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: da5af90cd8090df7a2739d0326433db5736e2b8e42477a138fad5e39ffcabe4c).
 const login = x => typeof x === 'string' && /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(x);
 const repo = x => typeof x === 'string' && /^[\w.-]+\/[\w.-]+$/.test(x);
 const owner = x => x === 'autopilot' || login(x) || typeof x === 'string' && x.startsWith('repo:') && repo(x.slice(5));
@@ -58,18 +58,34 @@ export function resolveAreas(input) {
   return one.state === 'resolved' ? [one] : [];
 }
 
-const TOP_BUCKETS = new Set(['src', 'lib', 'bin', 'test', 'tests', 'test/helpers', 'tests/helpers', 'test/runtime', 'tests/runtime', 'prompts', 'prompts/cli', 'docs', 'scripts', 'user_stories']);
+const TOP_BUCKETS = new Set(['src', 'app', 'lib', 'bin', 'test', 'tests', 'test/helpers', 'tests/helpers', 'test/runtime', 'tests/runtime', 'prompts', 'prompts/cli', 'docs', 'scripts', 'user_stories']);
 const GENERIC_STEMS = new Set(['index', 'main', 'cli', 'utils', 'helpers', 'types', 'config', 'constants', 'readme', 'agents', 'package']);
+const NON_CODE_EXT = /\.(?:mdx?|rst|txt|json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
 const stripCtl = text => String(text).replace(/\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\x1b]*(?:\u0007|\x1b\\)|[@-Z\\-_])/g, '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '');
+const isToken = path => Boolean(path) && (path.startsWith('area:') || path.startsWith('owner:') || path.startsWith('uncertain:'));
 
-export function normalizeAreaPath(raw) {
+function normalizePlainPath(raw) {
   if (typeof raw !== 'string') return null;
   let value = stripCtl(raw).trim().replace(/^[`'"]+|[`'"]+$/g, '').trim().replaceAll('\\', '/');
-  if (/^area:\s*[a-z0-9_./-]+$/i.test(value)) return `area:${value.slice(5).trim().toLowerCase()}`.slice(0, 120);
-  if (/^[a-z]+:\/\//i.test(value)) return null;
+  if (/^[a-z]+:/i.test(value)) return null;
   value = value.replace(/^(?:\.\/|\/)+/, '').replace(/\/+/g, '/').replace(/\/+$/, '');
   if (!value || value === '.' || value === '..' || value.startsWith('../') || value.endsWith('/..') || value.includes('/../') || /\s/.test(value)) return null;
   return value.slice(0, 120);
+}
+
+export function normalizeAreaPath(raw) {
+  if (typeof raw !== 'string') return null;
+  const value = stripCtl(raw).trim().replace(/^[`'"]+|[`'"]+$/g, '').trim().replaceAll('\\', '/');
+  if (/^area:\s*[a-z0-9_./-]+$/i.test(value)) return `area:${value.slice(5).trim().toLowerCase()}`.slice(0, 120);
+  if (/^owner:\s*/i.test(value)) {
+    const inner = normalizePlainPath(value.slice(value.indexOf(':') + 1));
+    return inner ? `owner:${inner}` : null;
+  }
+  if (/^uncertain:\s*/i.test(value)) {
+    const inner = normalizePlainPath(value.slice(value.indexOf(':') + 1));
+    return inner ? `uncertain:${inner}` : null;
+  }
+  return normalizePlainPath(value);
 }
 
 export function normalizeAreaList(values, limit = 6) {
@@ -119,13 +135,99 @@ function textPathsOf(text) {
   return out;
 }
 
-export function issueAreas(row, card = null) {
-  const cardPaths = [...(Array.isArray(card?.areas) ? card.areas : []), ...(Array.isArray(card?.area_hint) ? card.area_hint : [])];
-  return normalizeAreaList([...cardPaths, ...areaLabelsOf(row), ...textPathsOf(`${row?.title ?? ''}\n${row?.body ?? ''}`)], 16);
+function expandImpliedPaths(paths) {
+  const out = [];
+  for (const p of paths) {
+    out.push(p);
+    if (p === 'src/command-catalog.mjs') out.push('docs/cli.md');
+  }
+  return out;
+}
+
+function isSrcOrAppCodePath(path) {
+  if (!path || isToken(path) || !/^(?:src|app)\//i.test(path) || /\.prompt\.md$/i.test(path)) return false;
+  if (/(?:^|\/)(?:tests?|__tests__|fixtures|examples)\//i.test(path)) return false;
+  const base = path.split('/').at(-1) ?? '';
+  if (!base || base.startsWith('.') || !/\.[a-z0-9]{1,8}$/i.test(base) || NON_CODE_EXT.test(base)) return false;
+  if (/\.(?:test|spec)\.[a-z0-9]+$/i.test(base) || /^(?:test_[^/]+|.+_test)\.[a-z0-9]+$/i.test(base)) return false;
+  return true;
+}
+
+function parseOwnerEntry(entry) {
+  if (!entry) return { prompts: [], uncertain: false };
+  if (typeof entry === 'string') {
+    const trimmed = entry.trim();
+    if (/^(?:uncertain|unsure|unknown)$/i.test(trimmed)) return { prompts: [], uncertain: true };
+    const norm = normalizePlainPath(trimmed.replace(/^owner:\s*/i, ''));
+    return { prompts: norm ? [norm] : [], uncertain: false };
+  }
+  if (Array.isArray(entry)) {
+    const prompts = entry.map(x => typeof x === 'string' ? normalizePlainPath(x.replace(/^owner:\s*/i, '')) : null).filter(Boolean);
+    return { prompts: [...new Set(prompts)], uncertain: false };
+  }
+  if (typeof entry === 'object') {
+    const rawPrompts = [
+      ...(Array.isArray(entry.owners) ? entry.owners : []),
+      ...(typeof entry.prompt === 'string' ? [entry.prompt] : []),
+      ...(typeof entry.owner === 'string' ? [entry.owner] : []),
+    ];
+    const prompts = [...new Set(rawPrompts.map(x => normalizePlainPath(x.replace(/^owner:\s*/i, ''))).filter(Boolean))];
+    const stateUncertain = typeof entry.state === 'string' && /^(?:uncertain|unsure|unknown)$/i.test(entry.state.trim());
+    const uncheckedUncertain = entry.certain === false && prompts.length === 0;
+    return { prompts, uncertain: stateUncertain || uncheckedUncertain };
+  }
+  return { prompts: [], uncertain: false };
+}
+
+function buildOwnerLookup(owners) {
+  if (!owners || typeof owners !== 'object') return null;
+  const map = new Map();
+  const put = (rawPath, rawEntry) => {
+    const key = normalizePlainPath(rawPath);
+    if (!key) return;
+    const parsed = parseOwnerEntry(rawEntry);
+    const prev = map.get(key);
+    if (!prev) map.set(key, parsed);
+    else map.set(key, {
+      prompts: [...new Set([...prev.prompts, ...parsed.prompts])],
+      uncertain: prev.uncertain || parsed.uncertain,
+    });
+  };
+  if (owners instanceof Map) {
+    for (const [k, v] of owners.entries()) put(k, v);
+    return map;
+  }
+  if (Array.isArray(owners)) {
+    for (const row of owners) if (row && typeof row === 'object') put(row.path, row);
+    return map;
+  }
+  const isOwnerReadShape = (owners.owners instanceof Map || (owners.owners && typeof owners.owners === 'object' && !Array.isArray(owners.owners)))
+    && ('unchecked' in owners || 'bindings' in owners || owners.owners instanceof Map);
+  if (isOwnerReadShape) {
+    if (owners.owners instanceof Map) {
+      for (const [k, v] of owners.owners.entries()) put(k, v);
+    } else {
+      for (const [k, v] of Object.entries(owners.owners)) put(k, v);
+    }
+    if (owners.unchecked instanceof Map) {
+      for (const k of owners.unchecked.keys()) put(k, { state: 'uncertain' });
+    } else if (owners.unchecked instanceof Set || Array.isArray(owners.unchecked)) {
+      for (const k of owners.unchecked) put(k, { state: 'uncertain' });
+    } else if (owners.unchecked && typeof owners.unchecked === 'object') {
+      for (const k of Object.keys(owners.unchecked)) put(k, { state: 'uncertain' });
+    }
+    return map;
+  }
+  if (Array.isArray(owners.files) && ('schema_version' in owners || Object.keys(owners).every(k => k === 'files' || k === 'schema_version'))) {
+    for (const row of owners.files) if (row && typeof row === 'object') put(row.path, row);
+    return map;
+  }
+  for (const [k, v] of Object.entries(owners)) put(k, v);
+  return map;
 }
 
 function stemOf(path) {
-  if (!path || path.startsWith('area:')) return null;
+  if (!path || isToken(path)) return null;
   const base = path.split('/').at(-1) ?? '';
   const isPrompt = base.endsWith('.prompt.md');
   const stem = base
@@ -139,16 +241,78 @@ function stemOf(path) {
 }
 
 function dirOf(path) {
-  if (!path || path.startsWith('area:') || !path.includes('/')) return null;
+  if (!path || isToken(path) || !path.includes('/')) return null;
   const dir = path.slice(0, path.lastIndexOf('/'));
   return TOP_BUCKETS.has(dir.toLowerCase()) ? null : dir;
 }
 
-export function areasOverlap(left, right) {
-  const aList = normalizeAreaList(left, 32), bList = normalizeAreaList(right, 32);
+export function ownerAreas(paths, owners = null) {
+  const normalized = expandImpliedPaths(normalizeAreaList(paths, 64));
+  const lookup = buildOwnerLookup(owners);
+  const out = [];
+  for (const item of normalized) {
+    if (item.startsWith('area:')) continue;
+    if (item.startsWith('owner:') || item.startsWith('uncertain:')) {
+      out.push(item);
+      continue;
+    }
+    if (/\.prompt\.md$/i.test(item)) {
+      out.push(`owner:${item}`);
+      continue;
+    }
+    if (!lookup) continue;
+    const found = lookup.get(item);
+    if (found?.prompts.length) {
+      for (const prompt of found.prompts) out.push(`owner:${prompt}`);
+      if (found.uncertain) out.push(`uncertain:${dirOf(item) || 'root'}`);
+    } else if (found?.uncertain || isSrcOrAppCodePath(item)) {
+      out.push(`uncertain:${dirOf(item) || 'root'}`);
+    }
+  }
+  return normalizeAreaList(out, 32);
+}
+
+const isAreaOptions = value => Boolean(value) && typeof value === 'object' && !(value instanceof Map) && !Array.isArray(value)
+  && ('owners' in value) && !('areas' in value) && !('area_hint' in value) && !('class' in value);
+
+export function issueAreas(row, card = null, options = undefined) {
+  const opts = options === undefined && isAreaOptions(card) ? card : (options ?? {});
+  const resolvedCard = options === undefined && isAreaOptions(card) ? (row?.card ?? null) : card;
+  const cardPaths = [...(Array.isArray(resolvedCard?.areas) ? resolvedCard.areas : []), ...(Array.isArray(resolvedCard?.area_hint) ? resolvedCard.area_hint : [])];
+  const raw = normalizeAreaList([...cardPaths, ...areaLabelsOf(row), ...textPathsOf(`${row?.title ?? ''}\n${row?.body ?? ''}`)], 16);
+  const expanded = normalizeAreaList(expandImpliedPaths(raw), 18);
+  if (opts?.owners === undefined || opts?.owners === null) return normalizeAreaList(expanded, 16);
+  return normalizeAreaList([...expanded, ...ownerAreas(expanded, opts.owners)], 24);
+}
+
+function expandForOverlap(values, owners) {
+  const base = expandImpliedPaths(normalizeAreaList(values, 32));
+  return normalizeAreaList([...base, ...ownerAreas(base, owners)], 48);
+}
+
+export function areasOverlap(left, right, options = {}) {
+  const owners = options?.owners ?? null;
+  const aList = expandForOverlap(left, owners), bList = expandForOverlap(right, owners);
   for (const a of aList) for (const b of bList) {
     if (a === b) return { overlap: true, reason: a };
     if (a.startsWith('area:') || b.startsWith('area:')) continue;
+    if (a.startsWith('owner:') || b.startsWith('owner:')) continue;
+    if (a.startsWith('uncertain:') || b.startsWith('uncertain:')) {
+      const ua = a.startsWith('uncertain:') ? a.slice(10) : null;
+      const ub = b.startsWith('uncertain:') ? b.slice(10) : null;
+      if (ua && ub) {
+        if (ua !== 'root' && ub !== 'root') {
+          if (ub.startsWith(`${ua}/`)) return { overlap: true, reason: a };
+          if (ua.startsWith(`${ub}/`)) return { overlap: true, reason: b };
+        }
+        continue;
+      }
+      const scope = ua ?? ub, plain = ua ? b : a, token = ua ? a : b;
+      if (scope !== 'root' && (plain === scope || plain.startsWith(`${scope}/`) || scope.startsWith(`${plain}/`))) {
+        return { overlap: true, reason: token };
+      }
+      continue;
+    }
     if (b.startsWith(`${a}/`)) return { overlap: true, reason: a };
     if (a.startsWith(`${b}/`)) return { overlap: true, reason: b };
     const da = dirOf(a), db = dirOf(b);
@@ -169,20 +333,35 @@ export function isSmallCard(card) {
   return paths.length <= 2 && !/\b(?:large|major|rewrite|architecture)\b/i.test(String(card.reason ?? ''));
 }
 
-const cardFor = (cards, n) => {
+const cardFor = (cards, row) => {
+  const n = row?.number;
   const raw = cards instanceof Map ? cards.get(n) : cards?.[n];
-  return raw?.card ?? raw ?? null;
+  return raw?.card ?? raw ?? row?.card ?? (row?.class ? row : null);
 };
 
-export function groupReadyIssues(rows, cards, { maxGroupSize = 3 } = {}) {
-  const cap = Math.max(1, Math.min(3, Number(maxGroupSize) || 3));
+const isGroupOptions = value => Boolean(value) && typeof value === 'object' && !(value instanceof Map) && !Array.isArray(value)
+  && ('owners' in value || 'maxGroupSize' in value || 'cards' in value);
+
+const singleOwnerOf = areaList => {
+  if (areaList.some(x => x.startsWith('uncertain:'))) return null;
+  const owners = areaList.filter(x => x.startsWith('owner:'));
+  return owners.length === 1 ? owners[0] : null;
+};
+
+export function groupReadyIssues(rows, cards = null, options = undefined) {
+  const opts = options === undefined && isGroupOptions(cards) ? cards : (options ?? {});
+  const cardMap = options === undefined && isGroupOptions(cards) ? (cards.cards ?? null) : cards;
+  const cap = Math.max(1, Math.min(3, Number(opts.maxGroupSize) || 3));
+  const withOwners = opts.owners !== undefined && opts.owners !== null;
+  const areaOpts = withOwners ? { owners: opts.owners } : {};
+  const areaCap = withOwners ? 24 : 16;
   const list = Array.isArray(rows) ? rows : [], used = new Set(), groups = [];
   for (let i = 0; i < list.length; i++) {
     const primary = list[i], n = primary?.number;
     if (!Number.isSafeInteger(n) || used.has(n)) continue;
     used.add(n);
-    const primaryCard = cardFor(cards, n);
-    let areas = issueAreas(primary, primaryCard);
+    const primaryCard = cardFor(cardMap, primary);
+    let areas = issueAreas(primary, primaryCard, areaOpts);
     if (cap <= 1 || !isSmallCard(primaryCard)) {
       groups.push({ primary, companions: [], issues: [n], areas });
       continue;
@@ -192,18 +371,24 @@ export function groupReadyIssues(rows, cards, { maxGroupSize = 3 } = {}) {
     for (let j = i + 1; j < list.length && companions.length < cap - 1; j++) {
       const other = list[j], m = other?.number;
       if (!Number.isSafeInteger(m) || used.has(m)) continue;
-      const otherCard = cardFor(cards, m);
+      const otherCard = cardFor(cardMap, other);
       if (!isSmallCard(otherCard)) continue;
       const otherHints = (otherCard?.group_with ?? []).filter(x => Number.isSafeInteger(x) && x > 0);
       const linked = hints.has(m) || otherHints.some(x => members.includes(x) || hints.has(x));
-      const otherAreas = issueAreas(other, otherCard);
-      const nonLabelA = areas.filter(x => !x.startsWith('area:')), nonLabelB = otherAreas.filter(x => !x.startsWith('area:'));
-      const sameArea = (nonLabelA.length > 0 && nonLabelB.length > 0 && areasOverlap(nonLabelA, nonLabelB).overlap)
-        || (areas.some(x => x.startsWith('area:')) && areasOverlap(areas, otherAreas).overlap);
+      const otherAreas = issueAreas(other, otherCard, areaOpts);
+      let sameArea = false;
+      if (withOwners) {
+        const ownerA = singleOwnerOf(areas), ownerB = singleOwnerOf(otherAreas);
+        sameArea = Boolean(ownerA && ownerA === ownerB);
+      } else {
+        const nonLabelA = areas.filter(x => !x.startsWith('area:')), nonLabelB = otherAreas.filter(x => !x.startsWith('area:'));
+        sameArea = (nonLabelA.length > 0 && nonLabelB.length > 0 && areasOverlap(nonLabelA, nonLabelB).overlap)
+          || (areas.some(x => x.startsWith('area:')) && areasOverlap(areas, otherAreas).overlap);
+      }
       if (!linked && !sameArea) continue;
       used.add(m); members.push(m); companions.push(other);
       for (const h of otherHints) hints.add(h);
-      areas = normalizeAreaList([...areas, ...otherAreas], 16);
+      areas = normalizeAreaList([...areas, ...otherAreas], areaCap);
     }
     groups.push({ primary, companions, issues: members, areas });
   }
