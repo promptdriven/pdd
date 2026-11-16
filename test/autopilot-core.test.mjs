@@ -1,7 +1,9 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as nodeFs from 'node:fs';
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -4309,8 +4311,55 @@ test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt
   await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
 
-  // Non-code / outside-PDD files (README.md, RUNBOOK.md, AGENTS.md, docs/*, skills/*, test/*, tests/*, .github/*, prompts/*, stories/*, package/config/lockfiles) are rejected on path e even with a new prompt + Generated from header
+  // Positive control + non-code / outside-PDD rejection matrix with real node:fs passed to ownerRead
   const { ownerRead, pathRules } = autopilotCore;
+  const runPathEHeaderCase = (targetFile, renderHead, { from = null } = {}) => {
+    const baseDir = mkdtempSync(join(tmpdir(), 'pdd-pe-base-'));
+    const headDir = mkdtempSync(join(tmpdir(), 'pdd-pe-head-'));
+    t.after(() => {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(headDir, { recursive: true, force: true });
+    });
+    const baseFile = from ?? targetFile;
+    const badPrompt = 'prompts/bad.prompt.md';
+    const badPromptText = `# Candidate Owner\n\nOwn \`${targetFile}\`.\n`;
+    const badHash = promptHeaderHash(Buffer.from(badPromptText, 'utf8'));
+    writeIn(baseDir, baseFile, 'initial\n');
+    writeIn(headDir, targetFile, renderHead(badHash));
+    writeIn(headDir, badPrompt, badPromptText);
+    const baseFiles = [baseFile];
+    const headFiles = [badPrompt, targetFile].sort();
+    const before = ownerRead(nodeFs, baseDir, baseFiles);
+    const after = ownerRead(nodeFs, headDir, headFiles);
+    assert.equal(before.bindings, true);
+    assert.equal(before.unchecked.size, 0, `${baseFile}: base ownerRead must be checked`);
+    assert.equal(after.bindings, true);
+    assert.equal(after.unchecked.size, 0, `${targetFile}: head ownerRead must be checked`);
+    assert.equal(after.owners.get(targetFile)?.how, 'header', `${targetFile}: ownerRead must read header ownership`);
+    assert.ok(after.owners.get(targetFile)?.owners.includes(badPrompt), `${targetFile}: ownerRead must record ${badPrompt}`);
+    const changeEntry = from ? { status: 'R100', path: targetFile, from } : { status: 'M', path: targetFile };
+    return pathRules({
+      changed: [{ status: 'A', path: badPrompt }, changeEntry],
+      baseFiles,
+      before,
+      after,
+      body: `Fixes #99\n\nRuntime: PASS\nPath: e — ${badPrompt}, ${targetFile} — ${badPrompt} — new prompt — Test: done check\n`,
+      adopting: false,
+    }).reds;
+  };
+
+  // Positive controls: eligible product code and extensionless bin/ script pass with 0 reds through the exact same real-fs helper
+  assert.deepEqual(
+    runPathEHeaderCase('src/legit-mod.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const ok = 1;\n`),
+    [],
+    'eligible product source file passes path e prompt creation with 0 reds',
+  );
+  assert.deepEqual(
+    runPathEHeaderCase('bin/my-cli', h => `#!/usr/bin/env node\n// Generated from prompts/bad.prompt.md (sha256: ${h}).\nconsole.log(1);\n`),
+    [],
+    'eligible extensionless script under bin/ passes path e prompt creation with 0 reds',
+  );
+
   const nonCodeCases = [
     ['README.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Docs\n`],
     ['RUNBOOK.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Runbook\n`],
@@ -4323,56 +4372,27 @@ test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt
     ['.github/scripts/ci.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
     ['prompts/helper.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
     ['stories/Button.stories.tsx', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const Story = {};\n`],
-    ['package.json', h => `{"_owner":"// Generated from prompts/bad.prompt.md (sha256: ${h})."}\n`],
+    ['package.json', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\n{"name":"x"}\n`],
     ['pnpm-lock.yaml', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nlockfileVersion: '9.0'\n`],
     ['tsconfig.json', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\n{}\n`],
     ['data/data.log', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nlog line\n`],
     ['assets/logo.avif', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nbinary\n`],
     ['data/archive.zip', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\npk\n`],
     ['src/archive.zip', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\npk\n`],
+    ['bin/archive.zip', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\npk\n`],
   ];
   for (const [targetFile, renderHead] of nonCodeCases) {
-    const baseDir = mkdtempSync(join(w.dir, 'pe-base-'));
-    const headDir = mkdtempSync(join(w.dir, 'pe-head-'));
-    const badPrompt = 'prompts/bad.prompt.md';
-    const badPromptText = `# Bad Owner\n\nOwn \`${targetFile}\`.\n`;
-    const badHash = promptHeaderHash(Buffer.from(badPromptText, 'utf8'));
-    writeIn(baseDir, targetFile, 'initial\n');
-    writeIn(headDir, targetFile, renderHead(badHash));
-    writeIn(headDir, badPrompt, badPromptText);
-    const baseFiles = [targetFile];
-    const headFiles = [badPrompt, targetFile].sort();
-    const out = pathRules({
-      changed: [{ status: 'A', path: badPrompt }, { status: 'M', path: targetFile }],
-      baseFiles,
-      before: ownerRead({ readFileSync }, baseDir, baseFiles),
-      after: ownerRead({ readFileSync }, headDir, headFiles),
-      body: `Fixes #99\n\nRuntime: PASS\nPath: e — ${badPrompt}, ${targetFile} — ${badPrompt} — new prompt — Test: done check\n`,
-      adopting: false,
-    });
-    assert.ok(out.reds.length > 0, `${targetFile} must be rejected on path e`);
+    const reds = runPathEHeaderCase(targetFile, renderHead);
+    assert.ok(reds.some(r => r.includes(`${targetFile} exists on the base with no owner`)), `${targetFile}: must fire R4 via isEligiblePathECode`);
   }
 
   // Renaming a non-code base file (data/data.log -> src/foo.mjs) cannot bypass path e eligibility
-  {
-    const baseDir = mkdtempSync(join(w.dir, 'pe-ren-base-'));
-    const headDir = mkdtempSync(join(w.dir, 'pe-ren-head-'));
-    const badPrompt = 'prompts/foo.prompt.md';
-    const badPromptText = '# Foo\n\nOwn `src/foo.mjs`.\n';
-    const badHash = promptHeaderHash(Buffer.from(badPromptText, 'utf8'));
-    writeIn(baseDir, 'data/data.log', 'initial\n');
-    writeIn(headDir, 'src/foo.mjs', `// Generated from ${badPrompt} (sha256: ${badHash}).\nexport const foo = 1;\n`);
-    writeIn(headDir, badPrompt, badPromptText);
-    const renameOut = pathRules({
-      changed: [{ status: 'A', path: badPrompt }, { status: 'R100', path: 'src/foo.mjs', from: 'data/data.log' }],
-      baseFiles: ['data/data.log'],
-      before: ownerRead({ readFileSync }, baseDir, ['data/data.log']),
-      after: ownerRead({ readFileSync }, headDir, [badPrompt, 'src/foo.mjs']),
-      body: `Fixes #99\n\nRuntime: PASS\nPath: e — ${badPrompt}, src/foo.mjs — ${badPrompt} — new prompt — Test: done check\n`,
-      adopting: false,
-    });
-    assert.ok(renameOut.reds.length > 0, 'renaming data/data.log -> src/foo.mjs must be rejected on path e');
-  }
+  const renameReds = runPathEHeaderCase(
+    'src/foo.mjs',
+    h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const foo = 1;\n`,
+    { from: 'data/data.log' },
+  );
+  assert.ok(renameReds.some(r => r.includes('src/foo.mjs exists on the base with no owner')), 'renaming data/data.log -> src/foo.mjs must fire R4 via isEligiblePathECode');
 
   for (const [index, [targetFile, badPrompt]] of [['README.md', 'prompts/readme-adopt.prompt.md'], ['docs/guide.md', 'prompts/guide-adopt.prompt.md']].entries()) {
     const issueNum = 30 + index;
