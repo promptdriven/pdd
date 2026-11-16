@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 543b52ba602495608abc93012276af5be607c2ac116c4b5da832a10ba79ac47e).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4d1c2df0e62fc2b82341b9d91625a1db82efa0e29850cf7404d6c3e682636909).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -404,6 +404,10 @@ export function inspectMachineJobs(folder, ports = {}) {
   }
   const aliveCheck = ports.jobAlive ?? ((pid, token) => {
     try { process.kill(pid, 0); } catch (error) { if (error.code !== 'EPERM') return false; }
+    if (process.platform === 'linux') {
+      try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ').includes(token); }
+      catch (error) { if (error?.code === 'ENOENT' || error?.code === 'ESRCH') return false; }
+    }
     const row = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
     return row.status === 0 && String(row.stdout).includes(token);
   });
@@ -456,16 +460,32 @@ export function inspectMachineJobs(folder, ports = {}) {
   return { slotJobs, totalProcesses, counts, byRole, coreDirs: [...coreDirs.entries()].map(([dirPath, meta]) => ({ dir: dirPath, ...meta })) };
 }
 
+function activeMachineBounds(states) {
+  const active = states.some(s => s?.enabled) ? states.filter(s => s?.enabled) : states;
+  const shares = active.map(s => s?.share).filter(validShare);
+  const explicitRuns = active.map(s => s?.runs).filter(r => Number.isSafeInteger(r) && r > 0);
+  return {
+    active,
+    share: shares.length ? Math.max(...shares) : undefined,
+    machineRuns: explicitRuns.length ? Math.max(...explicitRuns) : undefined,
+  };
+}
 async function coreGuard(state, p, ports, stateFile) {
   const folder = dirname(stateFile);
   const repoRuns = read(join(state.cwd, 'pdd.json'), {})?.autopilot?.runs;
   const inv = inspectMachineJobs(folder, ports);
-  const loginPool = readLoginPoolSummary(folder, state.cwd, p.env, ports, [state, ...readSavedStates(folder).saved], inv.coreDirs);
+  const allSaved = readSavedStates(folder).saved;
+  const states = [state, ...allSaved.filter(s => s.stateFile !== stateFile)];
+  const bounds = activeMachineBounds(states);
+  const loginPool = state?.poolPath === 'off'
+    ? { source: 'none', state: 'not-configured', counts: null, readyLogins: null, accounts: [] }
+    : readLoginPoolSummary(folder, state.cwd, p.env, ports, [state, ...bounds.active.filter(s => s !== state)], inv.coreDirs);
   return (ports.machineGuard ?? readMachineGuard)({
     cwd: state.cwd,
     runs: state.runs,
     repoRuns,
-    share: state.share,
+    ...(bounds.machineRuns !== undefined ? { machineRuns: bounds.machineRuns } : {}),
+    share: validShare(state.share) ? state.share : bounds.share,
     jobs: inv.slotJobs,
     ...(Number.isSafeInteger(loginPool.readyLogins) ? { readyLogins: loginPool.readyLogins } : {}),
   }, { env: p.env });
@@ -937,7 +957,15 @@ function readLoginPoolSummary(folder, here, env, ports = {}, savedStates = [], c
       }
       const accounts = pool.logins.map(login => {
         const cd = cooldowns[login.id];
-        const state = login.disabled === true ? 'disabled' : cd ? 'cooling' : 'ready';
+        const state = login.disabled === true
+          ? 'disabled'
+          : login.paused === true
+            ? 'paused'
+            : isCreditOrResetAccount(login)
+              ? 'guarded'
+              : cd
+                ? 'cooling'
+                : 'ready';
         return {
           id: login.id,
           label: login.label ?? login.id,
@@ -947,15 +975,16 @@ function readLoginPoolSummary(folder, here, env, ports = {}, savedStates = [], c
           fiveHourResetAt: null,
           weeklyUsedPercent: null,
           weeklyResetAt: null,
-          cooldownUntil: cd?.until ? new Date(cd.until).toISOString() : null,
+          cooldownUntil: state === 'cooling' && cd?.until ? new Date(cd.until).toISOString() : null,
         };
       });
       const ready = accounts.filter(a => a.state === 'ready').length;
       const cooling = accounts.filter(a => a.state === 'cooling').length;
+      const paused = accounts.filter(a => a.state === 'paused' || a.state === 'disabled' || a.state === 'guarded').length;
       return {
         source: 'local-pool',
-        state: ready > 0 ? 'ready' : cooling > 0 ? 'cooling' : 'empty',
-        counts: { total: accounts.length, ready, cooling, reauth_required: 0 },
+        state: ready > 0 ? 'ready' : cooling > 0 ? 'cooling' : paused > 0 ? 'paused' : 'empty',
+        counts: { total: accounts.length, ready, cooling, paused, reauth_required: 0 },
         readyLogins: ready,
         accounts,
       };
@@ -1022,14 +1051,14 @@ async function collectMachineObservability(folder, ports, env, cwd) {
   const here = isFolder(cwd) ? cwd : effectiveEnv?.HOME || homedir();
   const { saved, unreadable } = readSavedStates(folder);
   const inventory = inspectMachineJobs(folder, ports);
-  const loginPool = readLoginPoolSummary(folder, here, effectiveEnv, ports, saved, inventory.coreDirs);
-  const activeStates = saved.some(s => s.enabled) ? saved.filter(s => s.enabled) : saved;
-  const shares = activeStates.map(s => s.share).filter(validShare);
-  const explicitRuns = activeStates.map(s => s.runs).filter(r => Number.isSafeInteger(r) && r > 0);
+  const bounds = activeMachineBounds(saved);
+  const loginPool = bounds.active.length > 0 && bounds.active.every(s => s?.poolPath === 'off')
+    ? { source: 'none', state: 'not-configured', counts: null, readyLogins: null, accounts: [] }
+    : readLoginPoolSummary(folder, here, effectiveEnv, ports, bounds.active, inventory.coreDirs);
   const guardInput = {
     cwd: here,
-    ...(shares.length ? { share: Math.max(...shares) } : {}),
-    ...(explicitRuns.length ? { runs: Math.max(...explicitRuns) } : {}),
+    ...(bounds.share !== undefined ? { share: bounds.share } : {}),
+    ...(bounds.machineRuns !== undefined ? { runs: bounds.machineRuns, machineRuns: bounds.machineRuns } : {}),
     jobs: inventory.slotJobs,
     ...(Number.isSafeInteger(loginPool.readyLogins) ? { readyLogins: loginPool.readyLogins } : {}),
   };
@@ -1063,7 +1092,7 @@ function formatObservabilityLines({ inventory, guard, suiteQueue, loginPool, con
     }
   } else if (loginPool.source === 'local-pool' && loginPool.counts) {
     const c = loginPool.counts;
-    poolLine = `Login pool (local): ready ${c.ready}, cooling ${c.cooling} of ${c.total}`;
+    poolLine = `Login pool (local): ready ${c.ready}, cooling ${c.cooling}${c.paused ? `, paused ${c.paused}` : ''} of ${c.total}`;
   }
   const t = conversion.totals;
   const ownerDrops = Object.entries(conversion.dropsByOwner).filter(([, b]) => b.count > 0).map(([owner, b]) => `${owner} ${b.count}`).join(', ');
@@ -1116,6 +1145,8 @@ async function statusJsonPayload(input, ports, p) {
       share: g.share ?? null,
       shareSource: g.shareSource ?? null,
       slots: g.slots ?? null,
+      machineSlots: g.machineSlots ?? g.slots ?? null,
+      machineRuns: g.machineRuns ?? null,
       requestedSlots: g.requestedSlots ?? null,
       hardwareSlots: g.hardwareSlots ?? null,
       limiter: g.limiter ?? null,

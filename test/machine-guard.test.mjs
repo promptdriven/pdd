@@ -345,4 +345,44 @@ test('automatic capacity scales with readyLogins when supplied and stays capped 
   // readyLogins = 12 caps at GUARD.maxLoginSlots = 16, and smaller hardware still bounds logins.
   assert.equal(capacityMath(vm, 50, { readyLogins: 12 }).slots, 16);
   assert.equal(capacityMath(box(10, 32), 50, { readyLogins: 5 }).slots, 2);
+
+  // Explicit --runs 8 with readyLogins: 0 still clamps effective slots and machineSlots to 0 and holds admission.
+  const runsWithZeroLogins = await readMachineGuard({ cwd: '/', runs: 8, jobs: 0, readyLogins: 0 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 0, cores: 0 }),
+  });
+  assert.equal(runsWithZeroLogins.slots, 0);
+  assert.equal(runsWithZeroLogins.machineSlots, 0);
+  assert.deepEqual(runsWithZeroLogins.room, { ok: false, reason: 'no ready Cloud or local logins', free: 0 });
+  assert.match(runsWithZeroLogins.line, /→ 0 \(this machine, --runs 8, limited by 0 ready logins\)/);
+});
+
+test('cross-repository machineRuns lifts whole-machine machineSlots while keeping sibling repo slots at its own cap', async () => {
+  const vm = box(64, 251, { disk: { available: 200 * GiB, total: 500 * GiB } });
+  // Sibling Repo A configured --runs 8 and runs 5 jobs; Repo B has default runs (slots = 4) and 0 jobs of its own.
+  const repoBOpen = await readMachineGuard({ cwd: '/', machineRuns: 8, jobs: 5 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 3 * GiB, cores: 3 }),
+  });
+  assert.equal(repoBOpen.slots, 4);
+  assert.equal(repoBOpen.machineSlots, 8);
+  assert.deepEqual(repoBOpen.room, { ok: true, reason: null, free: 3 });
+  assert.match(repoBOpen.line, /→ 4 \(automatic, machine max 8\).*new work: ok$/);
+
+  // When Repo A reaches 8 jobs, Repo B also sees 8 of 8 held.
+  const repoBHeld = await readMachineGuard({ cwd: '/', machineRuns: 8, jobs: 8 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 6 * GiB, cores: 6 }),
+  });
+  assert.equal(repoBHeld.slots, 4);
+  assert.equal(repoBHeld.machineSlots, 8);
+  assert.deepEqual(repoBHeld.room, { ok: false, reason: '8 of 8 Autopilot jobs on this machine run (all repositories, 50% share)', free: 0 });
+
+  // Hardware ceiling still clamps machineRuns > hardwareSlots (24 -> 16).
+  const repoBClamped = await readMachineGuard({ cwd: '/', machineRuns: 24, jobs: 16 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 8 * GiB, cores: 8 }),
+  });
+  assert.equal(repoBClamped.machineSlots, 16);
+  assert.match(repoBClamped.room.reason, /16 of 16 Autopilot jobs.*--runs 24 limited by cores/);
 });

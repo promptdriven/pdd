@@ -649,7 +649,12 @@ test('inspectMachineJobs counts still-running jobs in disabled repos and invento
     runtimeWait: { head: 'abc', state: 'sent', agent: fakePart('21-runtime', 9004) },
   }));
 
-  // 1. Real native process check on Repo A alone: #11 counts 1 issue slot while liveBuild/liveSuite run; #12 (no live PID) and #19 (intake) add 0 slots.
+  // 1. Real native process check (unmocked aliveCheck reading /proc/<pid>/cmdline on Linux) detects liveBuild, liveSuite, and liveIntake!
+  const nativeCheck = f.module.inspectMachineJobs(stateRoot);
+  assert.equal(nativeCheck.counts.build, 1);
+  assert.equal(nativeCheck.counts.suite, 1);
+  assert.equal(nativeCheck.counts.intake, 1);
+
   const realOnly = f.module.inspectMachineJobs(stateRoot, {
     jobAlive: (pid, token) => [9001, 9002, 9003, 9004].includes(pid) ? true : [liveBuild.pid, liveSuite.pid, liveIntake.pid].includes(pid) && Boolean(token),
   });
@@ -895,4 +900,136 @@ test('status --all and status --json create or modify zero files on disk, and ti
   const tickRes = await f.module.tickAutopilot(stateFile, f.ports);
   assert.equal(tickRes.exitCode, 0, tickRes.message);
   assert.match(tickRes.message, /0 of 10 slots busy/, 'tickAutopilot uses the exact same 10 login-scaled slots as status');
+});
+
+test('paused local pool login reports readyLogins: 0 and holds admission across status and tickAutopilot', async t => {
+  const { readMachineGuard } = await import('../src/machine-guard.mjs');
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-paused-pool-' });
+  const stateRoot = f.ports.stateRoot;
+  mkdirSync(stateRoot, { recursive: true });
+
+  const cHome = join(f.home, '.codex-paused');
+  mkdirSync(cHome, { recursive: true });
+  writeFileSync(join(cHome, 'auth.json'), JSON.stringify({ tokens: { access_token: 'tok-paused' } }));
+  const poolFile = join(f.dir, 'paused-pool.json');
+  writeFileSync(poolFile, JSON.stringify({
+    reset: 'never',
+    logins: [{ id: 'codex-paused', kind: 'codex', paused: true, codexHome: cHome }],
+  }));
+
+  const id = createHash('sha256').update(f.cwd).digest('hex').slice(0, 20);
+  const stateFile = join(stateRoot, `${id}.json`);
+  writeFileSync(stateFile, JSON.stringify({
+    enabled: true, cwd: f.cwd, repo: 'owner/repo', defaultBranch: 'main', baseBranch: 'main',
+    coordinatorId: 'coord-paused', machine: 'machine-paused', engine: 'core', mode: 'observe',
+    label: 'pdd:autopilot', poolPath: poolFile,
+    agent: { id: 'codex-paused', kind: 'codex', command: 'codex' },
+    packageRoot: f.packageRoot,
+  }));
+
+  const GiB = 1024 ** 3;
+  const server = {
+    cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null },
+    disk: { available: 500 * GiB, total: 1000 * GiB }, cgroup: { cpus: null, memoryMax: null, memoryFree: null },
+    check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' },
+  };
+  f.ports.machineGuard = input => readMachineGuard(input, {
+    machineResources: async () => server,
+    autopilotUse: async () => ({ rss: 0, cores: 0 }),
+  });
+
+  const jsonRes = await f.invoke('status', { json: true });
+  assert.equal(jsonRes.exitCode, 0);
+  const payload = JSON.parse(jsonRes.message);
+  assert.equal(payload.loginPool.source, 'local-pool');
+  assert.equal(payload.loginPool.state, 'paused');
+  assert.equal(payload.loginPool.readyLogins, 0);
+  assert.deepEqual(payload.loginPool.counts, { total: 1, ready: 0, cooling: 0, paused: 1, reauth_required: 0 });
+  assert.equal(payload.machineGuard.slots, 0);
+  assert.deepEqual(payload.machineGuard.room, { ok: false, reason: 'no ready Cloud or local logins', free: 0 });
+
+  const allRes = await f.invoke('status', { all: true });
+  assert.equal(allRes.exitCode, 0);
+  assert.match(allRes.message, /Login pool \(local\): ready 0, cooling 0, paused 1 of 1/);
+  assert.match(allRes.message, /held \(no ready Cloud or local logins\)/);
+
+  const repoRes = await f.invoke('status');
+  assert.equal(repoRes.exitCode, 0);
+  assert.match(repoRes.message, /held \(no ready Cloud or local logins\)/);
+});
+
+test('cross-repository --runs 8 lifts whole-machine capacity consistently across status and sibling repo coreGuard', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const { readMachineGuard } = await import('../src/machine-guard.mjs');
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-cross-runs-' });
+  const stateRoot = f.ports.stateRoot;
+  mkdirSync(stateRoot, { recursive: true });
+
+  // Repo A: enabled with --runs 8 and 5 active jobs.
+  const cwdA = join(f.dir, 'repo-a'), cwdB = f.cwd;
+  mkdirSync(cwdA, { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: cwdA });
+  execFileSync('git', ['init', '-q'], { cwd: cwdB });
+  writeFileSync(join(cwdB, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'observe', trust: [], engine: 'core', testCommand: 'npm test' } }));
+
+  const idA = createHash('sha256').update(realpathSync(cwdA)).digest('hex').slice(0, 20);
+  const idB = createHash('sha256').update(realpathSync(cwdB)).digest('hex').slice(0, 20);
+  const stateFileA = join(stateRoot, `${idA}.json`), coreA = join(stateRoot, `${idA}-core`);
+  const stateFileB = join(stateRoot, `${idB}.json`);
+  mkdirSync(join(coreA, 'jobs'), { recursive: true });
+
+  writeFileSync(stateFileA, JSON.stringify({
+    enabled: true, cwd: realpathSync(cwdA), repo: 'owner/repo-a', defaultBranch: 'main', baseBranch: 'main',
+    coordinatorId: 'coord-a', machine: 'machine-ab', engine: 'core', mode: 'observe', runs: 8,
+    label: 'pdd:autopilot', agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: f.packageRoot,
+  }));
+  writeFileSync(stateFileB, JSON.stringify({
+    enabled: true, cwd: realpathSync(cwdB), repo: 'owner/repo-b', defaultBranch: 'main', baseBranch: 'main',
+    coordinatorId: 'coord-b', machine: 'machine-ab', engine: 'core', mode: 'observe',
+    label: 'pdd:autopilot', agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: f.packageRoot,
+  }));
+  for (let i = 1; i <= 5; i++) {
+    writeFileSync(join(coreA, 'jobs', `${i}.json`), JSON.stringify({ issue: i, phase: 'running', role: 'build' }));
+  }
+
+  const GiB = 1024 ** 3;
+  const server = {
+    cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null },
+    disk: { available: 500 * GiB, total: 1000 * GiB }, cgroup: { cpus: null, memoryMax: null, memoryFree: null },
+    check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' },
+  };
+  f.ports.machineGuard = input => readMachineGuard(input, {
+    machineResources: async () => server,
+    autopilotUse: async () => ({ rss: 3 * GiB, cores: 3 }),
+  });
+
+  // 1. With 5 jobs in Repo A (--runs 8) and 0 jobs in Repo B (default 4), BOTH global status AND Repo B status/coreGuard agree 3 machine slots remain free!
+  const globalJson = JSON.parse((await f.invoke('status', { json: true, all: true })).message);
+  assert.equal(globalJson.machineGuard.machineSlots, 8);
+  assert.deepEqual(globalJson.machineGuard.room, { ok: true, reason: null, free: 3 });
+
+  const repoBStatus = await f.invoke('status');
+  assert.equal(repoBStatus.exitCode, 0, repoBStatus.message);
+  assert.match(repoBStatus.message, /Jobs: 0 of 4 slots busy/);
+  assert.match(repoBStatus.message, /→ 4 \(automatic, machine max 8\) · .* · new work: ok/);
+
+  f.ports.queryIssues = async () => ({ status: 200, issues: [{ number: 77, title: 'Ready issue', body: 'Fix x', labels: [{ name: 'pdd:autopilot' }] }], etag: '"e1"' });
+  f.ports.corePorts = {
+    checkBase: async () => ({ exitCode: 0, message: 'ok' }),
+    agentReady: async () => true,
+    intake: async () => ({ started: 0, skipped: 0 }),
+  };
+  const tickBOpen = await f.module.tickAutopilot(stateFileB, f.ports);
+  assert.equal(tickBOpen.exitCode, 0, tickBOpen.message);
+  assert.doesNotMatch(tickBOpen.message, /intake held:/, 'Repo B coreGuard must not hold at 5 of 4 when Repo A configured --runs 8');
+
+  // 2. When Repo A reaches 8 active jobs, BOTH global status AND Repo B status hold at 8 of 8!
+  for (let i = 6; i <= 8; i++) {
+    writeFileSync(join(coreA, 'jobs', `${i}.json`), JSON.stringify({ issue: i, phase: 'running', role: 'build' }));
+  }
+  const globalFull = JSON.parse((await f.invoke('status', { json: true, all: true })).message);
+  assert.deepEqual(globalFull.machineGuard.room, { ok: false, reason: '8 of 8 Autopilot jobs on this machine run (all repositories, 50% share)', free: 0 });
+
+  const repoBFull = await f.invoke('status');
+  assert.match(repoBFull.message, /held \(8 of 8 Autopilot jobs on this machine run \(all repositories, 50% share\)\)/);
 });

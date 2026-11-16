@@ -175,11 +175,11 @@ multi-harness login pool is configured (`loadLoginPool(...).configured`), `selec
 one alert of the given kind for the issue through this machine's [alert destination](autopilot-alerts.prompt.md) with
 the core's cause, tried and need, the core state folder, the report folder and `tickMinutes` (the installed
 interval). When using native alerts (`!ports.sendAlert`), before `tickCore` runs, the tick runs `runAutopilotAlerts({action: 'retry', ...})` so open `failed` or newly-configured `not-configured` incidents of this repository from earlier ticks are retried once credentials recover. Before the core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
-(`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, share: state.share, jobs, readyLogins})`, where
-`readyLogins` is passed when locally known from `readLoginPoolSummary` (and omitted when Cloud pool count is unknown locally so single-login and lease-only hosts keep default `autoSlots`), and
+(`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, machineRuns, share, jobs, readyLogins})`, where
+`machineRuns` is the highest saved `runs` across active repositories in `stateRoot` (so `--runs N` above 4 on one repository lifts whole-machine `machineSlots` consistently in both `coreGuard` and `status` while keeping sibling repositories at their own `slots`), `share` uses `state.share` or the active machine `share`, `readyLogins` is passed when locally known from `readLoginPoolSummary` unless `state.poolPath === 'off'` (and omitted when Cloud pool count is unknown locally so single-login and lease-only hosts keep default `autoSlots`), and
 `jobs` comes from `inspectMachineJobs(stateRoot, ports)`: it scans every saved `*-core` folder under `stateRoot`
 including disabled repositories, counting `busySlots` for enabled repositories and still-running slot-holding jobs with
-live child processes (`pid > 1` with matching wrapper token) for disabled repositories so disabling a repository while workers finish never hides active machine
+live child processes (`pid > 1` with matching wrapper token, reading `/proc/PID/cmdline` first on Linux before `ps`) for disabled repositories so disabling a repository while workers finish never hides active machine
 load, and inventories live child roles (`build`, `repair`, `review`, `suite`, `vectors`, `runtime`, `intake`) across
 `*-core/jobs/*.json` and `*-core/intake/jobs/*.json` without inflating issue-slot count; tests replace the guard with
 `ports.machineGuard`, #3231). The machine
@@ -252,15 +252,16 @@ inactive or unknown; a state that has not moved yet adds `moves from the full en
 tick`. Without saved state it prints `No Autopilot on this machine.` A state file that is not a JSON object prints
 `FILE: saved state unreadable`. Each line is independent, and the timer reads run from the caller's folder. Both
 **Status --all** (text, which checks saved repository modes and user timers) and **Status --json** (JSON, with or without
-`--all`, which reads local files and local machine observations only — spawning zero `gh`, Herdr, `systemctl`, or
-`launchctl` subprocesses and making zero network calls) write zero snapshot or ownership files on disk (computing run
-costs in memory with `captureCosts`) and include read-only machine observability: (1) one machine-level `machineGuard`
-summary (`guard.line` in text, structured `machineGuard` object in JSON, passing locally known `readyLogins` and saved
-`share`/`runs`), (2) role-grouped `activeJobs` (`{build, repair, review, suite, vectors, runtime, intake}`) and
-`suiteQueue` (`readCheckStatus`), (3) local-disk-only `loginPool` summary (cached `accounts-state.json` entries when
-Cloud Accounts is enrolled, or local `loadLoginPool` + `readPoolCooldowns`: `ready`, `cooling`, `reauth_required`,
-`5H`/`7D` usage and reset times with `null` shown as `?` and never fabricated `0%`, or `unavailable` when no local
-Cloud cache exists), and (4) read-only core `conversion` summary wired from `summarizeConversionDrops()` over saved
+`--all`, which reads local state files and local OS/Git observations only — making zero `gh`, Herdr, OAuth, agent, or
+network calls, and skipping `systemctl` and `launchctl` timer probes) write zero snapshot or ownership files on disk
+(computing run costs in memory with `captureCosts`) and include read-only machine observability: (1) one machine-level
+`machineGuard` summary (`guard.line` in text, structured `machineGuard` object in JSON, passing locally known
+`readyLogins` and active `share`/`runs`/`machineRuns` identically with `coreGuard`), (2) role-grouped `activeJobs`
+(`{build, repair, review, suite, vectors, runtime, intake}`) and `suiteQueue` (`readCheckStatus`), (3) local-disk-only
+`loginPool` summary (cached `accounts-state.json` entries when Cloud Accounts is enrolled, or local `loadLoginPool` +
+`readPoolCooldowns` excluding `paused`, `disabled`, and credit/reset-guarded logins from `ready`: `ready`, `cooling`,
+`paused`, `reauth_required`, `5H`/`7D` usage and reset times with `null` shown as `?` and never fabricated `0%`, or
+`unavailable` when no local Cloud cache exists), and (4) read-only core `conversion` summary wired from `summarizeConversionDrops()` over saved
 `*-core/history.jsonl`, `*-core/intake`, and `core-reports` drafts. **Status --json** preserves top-level local cost
 report fields alongside `costs` and `repositories`, exiting `0`.
 
