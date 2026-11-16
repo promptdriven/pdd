@@ -251,13 +251,15 @@ adds the local cost lines. **Status --json** prints the local cost report as JSO
 **Add** creates the `pdd:autopilot` label when it is missing and adds it to each named issue of this repository (an
 issue of another repository returns exit 2): `Marked N issue(s) with pdd:autopilot.`
 
-**Release** releases this machine's own claim on ISSUE through the shared `releaseRunClaim` of the workflow runner
-(the run lock, worker and check-custody guard, chat cleanup and local allocation result stay with the runner), and
-returns its result unchanged. A core claim names this machine by its id (`machineIdOf(state)` of the core engine), an
-older claim by the host name, so release tries the id first and then the host name (#3389). A failed try of the
-other form makes no change; the first try that succeeds gives the result, and when both fail the id try's result is
-returned. Release does not end the core job itself: the
-next tick finds `pdd:working` removed and stops that job as a person stop, keeping its branch and PR.
+**Release** delegates `pdd autopilot release ISSUE` to `releaseCoreJob` of the [core engine](autopilot-core.prompt.md#release)
+with this repository's state file, resolved `state` (`machine` defaulting to the host name when unsaved), counted
+`gh` and `git` ports (purpose `claims`), `ports.corePorts`, and a `releaseClaim` callback to `releaseRunClaim` of the
+workflow runner (keeping the workflow run lock, worker and check-custody guard, Herdr chat cleanup and local allocation
+release with the runner), and returns its `{exitCode, message}` unchanged. Under the shared `STATE.lock` tick lock,
+release checks ownership across `machineIdOf(state)` and `state.machine`, immediately stops any live local core job
+processes without waiting for a later tick, frees any held `pdd:merge-lane` label without closing PRs or deleting
+worktrees, logs or branches, removes `pdd:working` and `pdd:stuck`, appends one `released` history record and removes
+`jobs/N.json`.
 
 **Audit** (`pdd autopilot audit RUN PR`) resolves the saved run with `resolveRun` and calls `auditMerge` of the
 [audit owner](autopilot-audit.prompt.md) with that run and PR, through this launcher's counted process port (purpose
@@ -285,7 +287,7 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
 
 - [Autopilot core](autopilot-core.prompt.md), [Autopilot reports](autopilot-reports.prompt.md) and
   [intake cards](autopilot-intake.prompt.md): required native generation and verification context for the core tick,
-  core status, the report and intake commands.
+  core status, release, and the report and intake commands.
 - [Post-merge audit](autopilot-audit.prompt.md): required native generation and verification context for the audit
   command.
 - [The move from the full engine](autopilot-retire.prompt.md): required native generation and verification context

@@ -606,3 +606,52 @@ test('#3230 start with explicit --agent, profile folder env, or --pool overwrite
   assert.equal(f.state().poolPath, mixedPool);
   assert.equal(f.state().intake, 'active');
 });
+
+test('3389: release serializes on STATE.lock with concurrent ticks and refuses cleanly when STATE.lock times out', async t => {
+  const { coreWorld } = await import('./helpers/core-world.mjs');
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const { spawnSync } = await import('node:child_process');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test', label: 'pdd:autopilot' } }));
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, engine: 'core', cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a',
+    agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
+  let clock = 0;
+  const basePorts = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {}, authority: { read: async () => ({ authority: 'trusted' }) },
+    run: async (command, args, options = {}) => {
+      if (command === 'gh') return w.gh(args, options);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+
+  await tickAutopilot(stateFile, basePorts);
+  const jobFile = join(stateFile.replace(/\.json$/, '-core'), 'jobs', '17.json');
+  assert.ok(existsSync(jobFile));
+
+  // Contended STATE.lock that stays held past 5s timeout refuses without touching jobs/17.json or pdd:working.
+  writeFileSync(`${stateFile}.lock`, String(process.pid), { mode: 0o600 });
+  try {
+    const busy = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: basePorts.env, issues: ['17'] }, {
+      ...basePorts, elapsedNow: () => clock, sleep: async ms => { clock += ms; },
+    });
+    assert.equal(busy.exitCode, 1);
+    assert.match(busy.message, /timed out/i);
+    assert.ok(existsSync(jobFile), 'jobs/17.json untouched when STATE.lock is held');
+    assert.ok(w.labels(17).includes('pdd:working'));
+  } finally {
+    rmSync(`${stateFile}.lock`, { force: true });
+  }
+
+  // Contended STATE.lock released while waiting succeeds cleanly.
+  writeFileSync(`${stateFile}.lock`, String(process.pid), { mode: 0o600 });
+  clock = 0;
+  const ok = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: basePorts.env, issues: ['17'] }, {
+    ...basePorts, elapsedNow: () => clock, sleep: async ms => { clock += ms; rmSync(`${stateFile}.lock`, { force: true }); },
+  });
+  assert.equal(ok.exitCode, 0, ok.message);
+  assert.ok(!existsSync(jobFile));
+  assert.ok(!w.labels(17).includes('pdd:working'));
+});

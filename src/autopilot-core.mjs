@@ -1,6 +1,6 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: f4feeec369f2b055d4cf51202d46c2e1124bf0134eabeb8dd80f2450e678f9e9).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 5a19a1216da7276cdd21083a37fbac6d969762b9b4b0f5e44e75ef79ccc5a67f).
 import * as nativeFs from 'node:fs';
-import { availableParallelism } from 'node:os';
+import { availableParallelism, hostname } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -35,6 +35,26 @@ const LANE = 'pdd:merge-lane', WOULD_MERGE = 'pdd:would-merge', DECISION = 'pdd:
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 // The machine id in claim records: a short hash of the host name, so no public text names the host.
 export const machineIdOf = state => named(state?.machineId) ? state.machineId : `m-${createHash('sha256').update(String(state?.machine ?? '')).digest('hex').slice(0, 12)}`;
+export function claimTickLock(file, fs = nativeFs) {
+  fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const owner = `${file}.${randomUUID()}.owner`;
+  fs.writeFileSync(owner, String(process.pid), { flag: 'wx', mode: 0o600 });
+  try {
+    for (;;) {
+      try { fs.linkSync(owner, file); return true; }
+      catch (e) { if (e.code !== 'EEXIST') throw e; }
+      let raw;
+      try { raw = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+      const pid = Number(raw);
+      if (/^[1-9][0-9]*$/.test(raw) && Number.isSafeInteger(pid)) {
+        try { process.kill(pid, 0); return false; }
+        catch (e) { if (e.code !== 'ESRCH' && !(e instanceof RangeError)) return false; }
+      }
+      try { if (fs.readFileSync(file, 'utf8') === raw) fs.unlinkSync(file); }
+      catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
+  } finally { try { fs.unlinkSync(owner); } catch { /* Already unlinked. */ } }
+}
 const named = value => typeof value === 'string' && value.trim().length > 0;
 const short = sha => String(sha ?? '').slice(0, 7);
 const oneLine = (value, max = 300) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -208,7 +228,7 @@ function setJobCompanions(job, kept) {
 // A job whose Runtime step waits for the interpreter maintenance, or whose PR waits for the login pool to cool down,
 // runs no process: it holds no slot (#3241, #3252).
 const poolWaiting = job => job.phase === 'pr' && job.stepStop?.poolExhausted === true && !job.stepStop.resumed;
-const holdsSlot = job => job.phase !== 'ending' && !runtimeWaiting(job) && !poolWaiting(job);
+const holdsSlot = job => !['ending', 'released'].includes(job.phase) && !runtimeWaiting(job) && !poolWaiting(job);
 // The slots that the jobs of one core folder hold now: the machine guard sums them over every repository of this
 // machine (#3231). An unreadable folder holds none.
 export function busySlots(root, fs = nativeFs) { try { return readJobs(fs, root).filter(holdsSlot).length; } catch { return 0; } }
@@ -283,7 +303,7 @@ function context({ state, settings, budget }, ports) {
   const execFile = (file, args, options = {}) => file === 'gh' ? ports.gh(args, options) : ports.git(args, options);
   let reader;
   const owners = ports.owners ?? (async numbers => {
-    reader ??= createDependencyReadPorts({ cwd: '' }, { execFile, now });
+    reader ??= createDependencyReadPorts({ cwd: '' }, { execFile, now, ...(ports.authority ? { authority: ports.authority } : {}) });
     return JSON.parse((await reader.owners.read({ repository: repo, issues: numbers.map(n => issueKey(repo, n)) })).json).claims ?? [];
   });
   // Claims name this machine by an id, never by its host name. A claim from an older build names the host: also ours.
@@ -1292,7 +1312,7 @@ const namedPaths = text => [...new Set([...String(text ?? '').matchAll(PATH_WORD
 // pdd:working issues. Read once per tick.
 async function otherJobs(ctx, rows) {
   if (ctx.others) return ctx.others;
-  const local = readJobs(ctx.fs, ctx.root).filter(j => j.phase !== 'ending').map(j => ({
+  const local = readJobs(ctx.fs, ctx.root).filter(j => !['ending', 'released'].includes(j.phase)).map(j => ({
     issue: j.issue, issues: jobIssues(j), title: j.title, text: `${j.title}\n${j.body}`,
     files: j.files ?? [], areas: Array.isArray(j.areas) ? j.areas : [],
   }));
@@ -2729,11 +2749,11 @@ async function writeEvidenceBlock(ctx, job) {
   if (next !== String(pr?.body ?? '')) await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: next });
 }
 
-async function stopChecks(ctx, job) {
+async function stopChecks(ctx, job, recover = false) {
   const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
     [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
   for (const [part, role] of parts) {
-    const hasError = Boolean(part.watch?.stopped || part.processesUncertain || (typeof part.token === 'string' && ctx.fs.existsSync?.(`${part.token}.processes.error`)));
+    const hasError = Boolean(recover || part.watch?.stopped || part.processesUncertain || (typeof part.token === 'string' && ctx.fs.existsSync?.(`${part.token}.processes.error`)));
     if (!await cleanupPart(ctx, job, part, role, hasError ? { recoverStopped: true } : null)) return false;
   }
   return true;
@@ -4682,6 +4702,7 @@ function serviceProblem(ctx, part) {
 const stopReason = row => !row ? 'the issue is closed' : !labelsOf(row).includes('pdd:working') ? 'pdd:working was removed'
   : labelsOf(row).includes('pdd:stuck') ? 'pdd:stuck was added' : row.assignees?.length ? 'the issue was assigned to a person' : null;
 async function advance(ctx, job) {
+  if (job.phase === 'released') return;
   if (job.phase === 'ending') return continueEnd(ctx, job);
   // After a tick gap longer than the quiet period (a laptop sleep) nothing could make progress: the quiet clock starts
   // again. A claim that expired in the gap, or an agent that died in it, is the machine's fault: a no-result release
@@ -4840,7 +4861,7 @@ export async function tickCore(input, ports) {
   // The part of a shorter tick gap beyond one timer interval (a short sleep or a late timer) is not quiet time either.
   ctx.tickGap = before.lastTick !== null && !ctx.gap ? Math.max(0, ctx.now() - before.lastTick - (ports.tickMinutes ?? 10) * MIN) : 0;
   ctx.saveMachine({ ...before, lastTick: ctx.now() });
-  const own = readJobs(ctx.fs, ctx.root).some(job => job.phase !== 'ending' && job.claim && ctx.now() - job.claim.lastSeen < CLAIM_EXPIRES);
+  const own = readJobs(ctx.fs, ctx.root).some(job => !['ending', 'released'].includes(job.phase) && job.claim && ctx.now() - job.claim.lastSeen < CLAIM_EXPIRES);
   const machines = Math.max(1, new Set([...Object.keys(before.peers), ...(own ? [ctx.machineId] : [])]).size);
   ctx.budget = coreBudget(input.budget, machines);
   let rows = null;
@@ -4850,7 +4871,7 @@ export async function tickCore(input, ports) {
   // Only open issues by trusted authors reach a prompt (the same rule as intake).
   ctx.trustedOpen = async () => ctx.openRows ??= Array.isArray(rows) ? (await Promise.all(rows.filter(row => !row.pull_request).map(async row => await ctx.trust(row) ? row : null))).filter(Boolean) : null;
   if (open) for (const job of readJobs(ctx.fs, ctx.root)) {
-    const why = job.phase === 'ending' ? null : stopReason(open.get(job.issue));
+    const why = ['ending', 'released'].includes(job.phase) ? null : stopReason(open.get(job.issue));
     if (why) {
       try {
         // A closed issue can be the merge itself ("Fixes #N"): a merged PR finishes as merged, not as a person stop.
@@ -4864,7 +4885,7 @@ export async function tickCore(input, ports) {
       } catch (error) { ctx.warn(`Autopilot core #${job.issue}: ${error.message}`); }
       continue;
     }
-    if (job.phase !== 'ending' && jobCompanions(job).length) {
+    if (!['ending', 'released'].includes(job.phase) && jobCompanions(job).length) {
       const kept = [];
       let dropped = false;
       for (const comp of jobCompanions(job)) {
@@ -4885,7 +4906,7 @@ export async function tickCore(input, ports) {
   for (const job of readJobs(ctx.fs, ctx.root)) {
     // A job that made no progress for the quiet period gets no heartbeat: it ends in this tick, and its claim must not
     // outlive it.
-    if (job.phase === 'ending' || !job.claim || ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES || isQuiet(ctx, job)) continue;
+    if (['ending', 'released'].includes(job.phase) || !job.claim || ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES || isQuiet(ctx, job)) continue;
     try {
       const claim = await confirmClaim(ctx, job);
       if (ctx.lost(claim, job)) { await handOver(ctx, job, 'another machine holds the claim now'); continue; }
@@ -4984,10 +5005,14 @@ export async function tickCore(input, ports) {
 // days, then the oldest such logs while the logs folder is over 500 MiB. Each step only warns.
 async function sweepFiles(ctx) {
   const live = new Set(readJobs(ctx.fs, ctx.root).map(job => String(job.issue)));
+  const latest = new Map();
+  for (const row of chronological(ctx.fs, ctx.root)) if (typeof row.outcome === 'string' && Number.isSafeInteger(row.issue)) latest.set(String(row.issue), row);
   const list = dir => { try { return ctx.fs.readdirSync(dir); } catch { return []; } };
   for (const name of list(ctx.dirs.worktrees)) {
     const issue = /^(\d+)(?:-|$)/.exec(name)?.[1];
-    if (issue && !live.has(issue)) await removeTree(ctx, join(ctx.dirs.worktrees, name)).catch(error => ctx.warn(`Autopilot core could not remove ${name}: ${error.message}`));
+    if (!issue || live.has(issue)) continue;
+    if (name === issue && latest.get(issue)?.personRelease === true) continue;
+    await removeTree(ctx, join(ctx.dirs.worktrees, name)).catch(error => ctx.warn(`Autopilot core could not remove ${name}: ${error.message}`));
   }
   const files = [];
   for (const name of list(ctx.dirs.logs)) {
@@ -5041,6 +5066,7 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
     if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
       job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${runtimeWords(job)}${poolWords(job)}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
+    else if (job.phase === 'released') lines.push(`#${job.issue} release pending: retry pdd autopilot release ${job.issue}`);
     else lines.push(`#${job.issue} ${job.role} running ${age(job.agent?.started ?? job.started)} (log ${job.agent?.log ?? 'none'})${running(job, job.agent, job.role)}`);
   }
   const all = readHistory(fs, ports.root, Infinity), history = all.filter(row => typeof row.outcome === 'string').slice(0, 5);
@@ -5049,4 +5075,174 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   const drafts = ports.reportRoot ? listReportDrafts({ root: ports.reportRoot }, { fs }).length : 0;
   if (drafts) lines.push(`Reports: ${drafts} local draft(s); run pdd autopilot report to list or send them.`);
   return lines.join('\n');
+}
+
+export async function releaseCoreJob(stateFile, issue, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const text = String(issue ?? '').trim().replace(/\/$/, '');
+  const match = /^#?([1-9][0-9]*)$/.exec(text) ?? /^([^/\s#]+\/[^/\s#]+)#([1-9][0-9]*)$/.exec(text)
+    ?? /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/([1-9][0-9]*)$/.exec(text);
+  if (!match) return { exitCode: 1, message: `"${String(issue).slice(0, 80)}" is not an issue number, owner/repo#N or issue URL.` };
+  const number = Number(match.at(-1)), refRepo = match.length === 3 ? match[1] : null;
+  const savedState = object(ports.state) ? ports.state : (typeof stateFile === 'string' ? readJson(fs, stateFile) : null) ?? {};
+  const hasSavedMachine = named(savedState.machine);
+  const host = hasSavedMachine ? savedState.machine : (ports.hostname ?? hostname)();
+  const state = { ...savedState, machine: host };
+  const repo = state.repo || refRepo || '';
+  if (refRepo && state.repo && refRepo.toLowerCase() !== state.repo.toLowerCase())
+    return { exitCode: 1, message: `Issue ${issue} does not belong to ${state.repo}.` };
+
+  const sleep = ports.sleep ?? (ms => new Promise(done => setTimeout(done, ms)));
+  const lock = typeof stateFile === 'string' && stateFile ? `${stateFile}.lock` : null;
+  if (lock) {
+    const elapsed = ports.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
+    const began = elapsed();
+    let warned = false, locked = false;
+    for (;;) {
+      if (claimTickLock(lock, fs)) { locked = true; break; }
+      if (elapsed() - began >= 5000) break;
+      if (!warned) { ports.warn?.('Waiting for the current Autopilot operation to finish...'); warned = true; }
+      const remaining = 5000 - Math.max(0, elapsed() - began);
+      if (remaining <= 0) break;
+      await sleep(Math.min(100, remaining));
+      if (elapsed() - began >= 5000) break;
+    }
+    if (!locked) return { exitCode: 1, message: 'Timed out waiting for the current Autopilot operation; retry.' };
+  }
+
+  try {
+    const root = ports.root ?? (typeof stateFile === 'string' ? stateFile.replace(/\.json$/, '-core') : '');
+    const settings = coreSettings(state.cwd ? (readJson(fs, join(state.cwd, 'pdd.json')) ?? {}) : {});
+    const ghPort = ports.gh ?? (async () => ({ code: 1, stdout: '', stderr: 'gh unavailable' }));
+    const gitPort = ports.git ?? (async () => ({ code: 1, stdout: '', stderr: 'git unavailable' }));
+    const ctx = context({ state: { ...state, repo }, settings, budget: { state: 'normal' } }, {
+      ...ports, fs, root, gh: ghPort, git: gitPort,
+    });
+    const ownedForms = [...new Set([ctx.machineId, state.machine].filter(named))];
+    const claimForms = hasSavedMachine ? ownedForms : [...new Set([ctx.machineId, undefined, state.machine])];
+    const runReleaseClaim = ports.releaseClaim ?? (async machine => {
+      const { releaseRunClaim } = await import('./workflow-runner.mjs');
+      return releaseRunClaim({
+        ref: issue, cwd: state.cwd, repository: repo || undefined,
+        machine, coordinatorId: state.coordinatorId,
+      }, {
+        now: ctx.now,
+        ...(ports.authority ? { authority: ports.authority } : {}),
+        execFile: async (file, args, options) => {
+          const reply = await (file === 'gh' ? ghPort(args, options) : gitPort(args, options));
+          if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
+          return reply;
+        },
+      });
+    });
+    const tryForms = async (forms = claimForms) => {
+      let first = null;
+      for (const machine of forms) {
+        const result = await runReleaseClaim(machine);
+        if (result.exitCode === 0) return result;
+        first ??= result;
+      }
+      return first ?? { exitCode: 1, message: `Could not confirm claim cleanup for ${repo || 'this repository'}#${number}; retry the release.` };
+    };
+    const refuseForeign = current => {
+      const owner = named(current.machine) ? current.machine : 'unknown';
+      return { exitCode: 1, message: current.active
+        ? (owner === 'unknown' ? `Cannot release ${repo}#${number}: claim ownership is unknown.` : `Cannot release ${repo}#${number}: ${owner} holds a live claim.`)
+        : `Could not confirm claim cleanup for ${repo}#${number}; retry the release.` };
+    };
+
+    const jobFile = root ? join(ctx.dirs.jobs, `${number}.json`) : null;
+    const rawJob = jobFile ? readJson(fs, jobFile) : null;
+    const job = object(rawJob) && rawJob.issue === number ? rawJob : null;
+
+    if (!job) {
+      if (root) {
+        const parent = readJobs(fs, root).find(j => jobCompanions(j).some(c => c.issue === number));
+        const comp = parent ? jobCompanions(parent).find(c => c.issue === number) : null;
+        if (parent && comp) {
+          if ((named(comp.claim?.machine) && !ownedForms.includes(comp.claim.machine))
+            || (named(comp.claim?.coordinatorId) && comp.claim.coordinatorId !== state.coordinatorId))
+            return { exitCode: 1, message: `Cannot release ${repo}#${number}: ${comp.claim?.machine || 'another coordinator'} holds a live claim.` };
+          let current;
+          try { current = await ctx.readClaim(number); }
+          catch { return { exitCode: 1, message: `Could not confirm claim cleanup for ${repo}#${number}; retry the release.` }; }
+          if (current && !ctx.ours(current)) return refuseForeign(current);
+          const released = await tryForms(ownedForms);
+          if (released.exitCode !== 0) return { exitCode: released.exitCode, message: released.message };
+          setJobCompanions(parent, jobCompanions(parent).filter(c => c.issue !== number));
+          ctx.saveJob(parent);
+          return { exitCode: 0, message: released.message };
+        }
+      }
+      const released = await tryForms();
+      return { exitCode: released.exitCode, message: released.message };
+    }
+
+    if ((named(job.claim?.machine) && !ownedForms.includes(job.claim.machine))
+      || (named(job.claim?.coordinatorId) && job.claim.coordinatorId !== state.coordinatorId)) {
+      return { exitCode: 1, message: `Cannot release ${repo}#${number}: ${job.claim?.machine || 'another coordinator'} holds a live claim.` };
+    }
+    let current;
+    try { current = await confirmClaim(ctx, job); }
+    catch { return { exitCode: 1, message: `Could not confirm claim cleanup for ${repo}#${number}; retry the release.` }; }
+    if (current && !ctx.ours(current)) return refuseForeign(current);
+
+    const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
+      [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
+    const hadRunning = parts.some(([part]) => { try { return ctx.jobs.read(part)?.state === 'running'; } catch { return false; } });
+    let stoppedOk = await stopChecks(ctx, job);
+    for (let attempt = 1; !stoppedOk && attempt < 10; attempt++) {
+      await sleep(50);
+      stoppedOk = await stopChecks(ctx, job, true);
+    }
+    if (!stoppedOk) {
+      return { exitCode: 1, message: `Cannot release ${repo}#${number}: could not confirm that the local Autopilot job stopped; retry the release.` };
+    }
+    job.phase = 'released';
+    job.releaseStopped = Boolean(job.releaseStopped || hadRunning);
+    ctx.saveJob(job);
+
+    if (Number.isSafeInteger(job.pr)) {
+      try {
+        if (job.lane?.state === 'final') await leaveLane(ctx, job);
+        else {
+          const prIssue = await ctx.gh.ok('GET', `repos/${ctx.repo}/issues/${job.pr}`);
+          if (labelsOf(prIssue).includes(LANE)) await dropLabel(ctx, job.pr);
+          if (job.lane) { job.lane = null; ctx.saveJob(job); }
+        }
+      } catch {
+        return { exitCode: 1, message: `Could not confirm merge-lane cleanup for ${repo}#${number} (PR #${job.pr}); retry the release.` };
+      }
+    }
+    await releaseCompanions(ctx, job);
+
+    const released = await tryForms(ownedForms);
+    if (released.exitCode !== 0) return { exitCode: released.exitCode, message: released.message };
+
+    try {
+      appendHistory(ctx, {
+        at: ctx.now(),
+        issue: job.issue,
+        ...(jobIssues(job).length > 1 ? { issues: jobIssues(job) } : {}),
+        outcome: 'released',
+        stopped: Boolean(job.releaseStopped),
+        personRelease: true,
+        text: 'released by a person (pdd autopilot release)',
+        pr: job.pr ?? null,
+        log: job.agent?.log ?? null,
+        evidence: honestEvidence(job) ?? null,
+        ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
+        ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
+        ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}),
+      });
+    } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
+    try { fs.rmSync(jobFile, { force: true }); }
+    catch (error) { nativeFs.rmSync(jobFile, { force: true }); ctx.warn(`Autopilot core job file of #${job.issue}: ${error.message}`); }
+
+    const suffix = job.worktree && job.branch && !released.message.includes('The worktree stays at')
+      ? ` The worktree stays at ${job.worktree} (branch ${job.branch}).` : '';
+    return { exitCode: 0, message: `${released.message}${suffix}` };
+  } finally {
+    if (lock) try { fs.unlinkSync(lock); } catch { /* Already unlinked. */ }
+  }
 }
