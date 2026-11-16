@@ -4,7 +4,8 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, chmodSync, 
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { coreWorld } from './helpers/core-world.mjs';
-import { nativeFacts, issueVersion, personComments, readCard, parseCardText, cardCommand, cardEnvironment, readIntake, intakeText, intakeMode, intakeFolders, wouldPick, shadowIntake, activeIntake, stopCardJobs } from '../src/autopilot-intake.mjs';
+import * as nodeFs from 'node:fs';
+import { nativeFacts, issueVersion, personComments, readCard, readImprovement, parseCardText, cardCommand, improveCommand, cardEnvironment, readIntake, intakeText, intakeMode, intakeFolders, wouldPick, shadowIntake, activeIntake, stopCardJobs } from '../src/autopilot-intake.mjs';
 
 const intakeJobs = w => w.started.filter(job => job.role === 'intake');
 const workJobs = w => w.started.filter(job => job.role !== 'intake').map(job => `${job.issue}:${job.role}`);
@@ -83,8 +84,23 @@ test('autopilot-intake-shadow: the card agent has no tools and no write access, 
   assert.equal(claude.args.includes('--mcp-config'), false);
   const env = cardEnvironment({ PATH: '/bin', GH_TOKEN: 'a', GITHUB_TOKEN: 'b', GH_ENTERPRISE_TOKEN: 'c', GITHUB_PERSONAL_ACCESS_TOKEN: 'd', OPENAI_API_KEY: 'e', CLAUDECODE: '1' });
   assert.deepEqual(env, { PATH: '/bin', OPENAI_API_KEY: 'e' }, 'no GitHub token and no session key reaches a card');
-  for (const run of [codex, claude]) for (const bad of ['--dangerously-bypass-approvals-and-sandbox', 'bypassPermissions', '--dangerously-skip-permissions']) assert.equal(run.args.includes(bad), false, bad);
-  assert.throws(() => cardCommand({ kind: 'gemini' }), /codex or claude/);
+  const gemini = cardCommand({ kind: 'gemini' }, { model: 'gemini-2.5-flash' });
+  const geminiImp = improveCommand({ kind: 'gemini', command: '/opt/bin/gemini' }, { model: 'gemini-2.5-pro' });
+  assert.equal(gemini.command, 'gemini'); assert.equal(geminiImp.command, '/opt/bin/gemini');
+  for (const g of [gemini, geminiImp]) {
+    assert.equal(after(g.args, '-p'), ''); assert.equal(after(g.args, '--approval-mode'), 'plan');
+    assert.equal(after(g.args, '--extensions'), 'none'); assert.equal(after(g.args, '--output-format'), 'json');
+  }
+  const agy = cardCommand({ kind: 'agy' }, { model: 'gemini-2.5-flash' });
+  const agyImp = improveCommand({ kind: 'agy', command: '/opt/bin/agy' }, {});
+  assert.equal(after(agy.args, '--mode'), 'plan'); assert.equal(after(agy.args, '--effort'), 'low');
+  assert.equal(after(agyImp.args, '--mode'), 'plan'); assert.equal(after(agyImp.args, '--effort'), 'medium');
+  for (const a of [agy, agyImp]) for (const flag of ['--sandbox', '--disable-slash-commands']) assert.ok(a.args.includes(flag), flag);
+  for (const run of [codex, claude, gemini, geminiImp, agy, agyImp]) {
+    for (const bad of ['--dangerously-bypass-approvals-and-sandbox', 'bypassPermissions', '--dangerously-skip-permissions', '--yolo', 'yolo']) assert.equal(run.args.includes(bad), false, bad);
+  }
+  assert.throws(() => cardCommand({ kind: 'other' }), /codex, claude, gemini or agy/);
+  assert.throws(() => improveCommand({ kind: 'other' }), /codex, claude, gemini or agy/);
 });
 
 test('autopilot-intake-shadow: one card job per issue version for trusted authors only, at most 2 per tick, in an empty folder', async t => {
@@ -271,7 +287,7 @@ test('autopilot-intake-shadow: start --intake saves the machine mode, the tick u
   const saved = { enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a', engine: 'core', label: 'pdd:autopilot',
     agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') };
   writeFileSync(stateFile, JSON.stringify(saved));
-  const ports = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
+  const ports = { stateRoot, now: w.now, env: { HOME: w.dir, PATH: process.env.PATH }, timer: async () => true, warn: () => {},
     run: async (command, args, options = {}) => {
       if (command === 'gh') return w.gh(args, options);
       if (command !== 'git') assert.fail(`unexpected program ${command}`);
@@ -658,4 +674,123 @@ test('autopilot-intake-cloud: shadowIntake and activeIntake materialize prepareS
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+function miniHarness(root, { repo = 'acme/widgets', cwd = root, agent = { kind: 'codex' }, intake = 'active', env = {}, selectLogin } = {}) {
+  let now = Date.parse('2026-11-16T02:00:00Z'), pid = 100;
+  const alive = new Set(), started = [], comments = new Map(), labelWrites = [], closed = [], alerts = [];
+  const jobs = {
+    start: spec => { const job = { ...spec, pid: ++pid, log: join(spec.dir, `${spec.id}.log`), exit: join(spec.dir, `${spec.id}.exit.json`) }; writeFileSync(job.log, ''); alive.add(job.pid); started.push(job); return job; },
+    read: job => ({ state: alive.has(job.pid) ? 'running' : 'exited', exit: { code: 0, signal: null }, result: null }),
+    stop: job => alive.delete(job.pid),
+  };
+  const gh = {
+    all: async ep => { const m = /issues\/(\d+)\/comments/.exec(ep); return m ? (comments.get(Number(m[1])) ?? []) : []; },
+    ok: async (method, ep, body) => {
+      const cm = method === 'POST' && /issues\/(\d+)\/comments$/.exec(ep);
+      if (cm) comments.set(Number(cm[1]), [...(comments.get(Number(cm[1])) ?? []), { body: body.body, user: { login: 'acme' }, created_at: new Date(now).toISOString() }]);
+      if (method === 'POST' && /\/labels$/.test(ep)) labelWrites.push([ep, body]);
+      if (method === 'PATCH' && body?.state === 'closed') closed.push(ep);
+      return {};
+    },
+  };
+  const ctx = {
+    fs: nodeFs, now: () => now, root, repo, state: { agent, cwd }, settings: { intake }, budget: { state: 'normal' }, gh, jobs,
+    ports: { trusted: async () => true, agentReady: async () => true, env: { HOME: root, ...env }, ...(selectLogin ? { selectLogin } : {}), alert: async a => alerts.push(a) }, warn: () => {},
+  };
+  return { ctx, alive, started, comments, labelWrites, closed, alerts, now: () => now };
+}
+
+test('autopilot-intake-multi-agent: gemini and agy run shadow and active card + improve passes with token-free env and root_cause/out_of_scope refinement', async () => {
+  const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os');
+  const root = mkdtempSync(join(tmpdir(), 'pdd-intake-ma-'));
+  try {
+    const rows = [{ number: 31, title: 'Clarify timeout handling', body: 'Make timeout clear.', labels: [], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:00:00Z' }];
+    const gem = miniHarness(root, { agent: { kind: 'gemini', model: 'gemini-2.5-flash' }, intake: 'shadow', env: { GH_TOKEN: 'sec-gh', GITHUB_TOKEN: 'sec-gh2', GEMINI_API_KEY: 'gem-key' } });
+    await shadowIntake(gem.ctx, rows);
+    assert.equal(gem.started[0].command, 'gemini');
+    assert.equal(gem.started[0].env.GH_TOKEN, undefined); assert.equal(gem.started[0].env.GITHUB_TOKEN, undefined); assert.equal(gem.started[0].env.GEMINI_API_KEY, 'gem-key');
+    writeFileSync(gem.started[0].log, `Loaded cached credentials.\n${JSON.stringify({ response: '\`\`\`json\n{"class":"ready","reason":"Clear gemini card.","confidence":0.9,"areas":["src/a.mjs"],"size":"small","model":"gemini-2.5-flash"}\n\`\`\`', stats: {} }, null, 2)}\n`);
+    gem.alive.delete(gem.started[0].pid);
+    await shadowIntake(gem.ctx, rows);
+    assert.equal(readIntake({ root, now: gem.now() }).cards[0].card.class, 'ready');
+
+    const agyRoot = join(root, 'agy'); mkdirSync(agyRoot, { recursive: true });
+    const agy = miniHarness(agyRoot, {
+      agent: { kind: 'agy', model: 'gemini-2.5-pro' }, intake: 'active', env: { GH_TOKEN: 'sec' },
+      selectLogin: async ({ allowedKinds } = {}) => allowedKinds?.includes('agy')
+        ? { state: 'ready', configured: true, poolSize: 1, login: { id: 'agy-1', kind: 'agy', command: 'agy' }, agent: { id: 'agy-1', kind: 'agy', command: 'agy' }, env: { HOME: agyRoot, GH_TOKEN: 'sec' } }
+        : { state: 'unavailable', configured: true, poolSize: 0, cooling: [], unavailable: [] },
+    });
+    await activeIntake(agy.ctx, rows);
+    assert.equal(agy.started[0].command, 'agy'); assert.equal(agy.started[0].env.GH_TOKEN, undefined);
+    writeFileSync(agy.started[0].log, `${JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify({ class: 'improve', reason: 'Needs repo check.', confidence: 0.8, areas: ['src/a.mjs'] }) })}\n`);
+    agy.alive.delete(agy.started[0].pid);
+    await activeIntake(agy.ctx, rows);
+    assert.equal(agy.started[1].command, 'agy'); assert.equal(agy.started[1].cwd, agyRoot);
+    writeFileSync(agy.started[1].log, JSON.stringify({ response: JSON.stringify({
+      outcome: 'ready', reason: 'Grounded in src/a.mjs.', areas: ['src/a.mjs'],
+      root_cause: 'parseTimeout ignores 0 in src/a.mjs', reproduction: 'parseTimeout(0) falls back to 30000',
+      out_of_scope: ['Do not change CLI flag names'], acceptance_criteria: ['parseTimeout(0) returns 0'], size: 'small', model: 'gemini-2.5-pro',
+    }) }));
+    agy.alive.delete(agy.started[1].pid);
+    await activeIntake(agy.ctx, rows);
+    const promoted = readIntake({ root: agyRoot, now: agy.now() }).cards[0], posted = agy.comments.get(31)?.[0]?.body ?? '';
+    assert.equal(promoted.card.class, 'ready'); assert.equal(promoted.card.root_cause, 'parseTimeout ignores 0 in src/a.mjs');
+    assert.deepEqual(promoted.card.out_of_scope, ['Do not change CLI flag names']);
+    assert.match(promoted.refinedSpec, /Root cause: parseTimeout ignores 0 in src\/a\.mjs/);
+    assert.match(promoted.refinedSpec, /Out of scope:\n- Do not change CLI flag names/);
+    assert.match(posted, /- Root cause: parseTimeout ignores 0 in src\/a\.mjs/);
+    assert.match(posted, /- Reproduction: parseTimeout\(0\) falls back to 30000/);
+    assert.match(posted, /- Out of scope:\n  - Do not change CLI flag names/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('autopilot-intake-preflight-dispositions: downgrades text-only ready bugs with missing repo paths and records fixed/elsewhere once without decision alerts', async () => {
+  const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os');
+  const root = mkdtempSync(join(tmpdir(), 'pdd-intake-disp-'));
+  try {
+    const repoCwd = join(root, 'repo'); mkdirSync(join(repoCwd, 'src'), { recursive: true });
+    writeFileSync(join(repoCwd, 'src', 'existing.mjs'), 'export const ok = true;\n');
+    const h = miniHarness(root, { repo: 'acme/widgets', cwd: repoCwd });
+    const rows = [
+      { number: 71, title: 'Fix stream crash in src/legacy-split/driver.mjs', body: 'Throws in src/legacy-split/driver.mjs on EOF.', labels: ['bug'], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:00:00Z' },
+      { number: 72, title: 'Add new module src/new-feature.mjs', body: 'Create new module src/new-feature.mjs.', labels: ['enhancement'], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:01:00Z' },
+      { number: 73, title: 'Fix null check in src/existing.mjs', body: 'Bug in src/existing.mjs.', labels: ['bug'], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:02:00Z' },
+    ];
+    const finish = (job, obj) => { writeFileSync(job.args[job.args.indexOf('--output-last-message') + 1], JSON.stringify(obj)); h.alive.delete(job.pid); };
+    await activeIntake(h.ctx, rows);
+    finish(h.started.find(j => j.issue === 71), { class: 'ready', reason: 'Fix EOF crash.', confidence: 0.9, areas: ['src/legacy-split/driver.mjs'], size: 'small' });
+    finish(h.started.find(j => j.issue === 72), { class: 'ready', reason: 'Add helper module.', confidence: 0.9, areas: ['src/new-feature.mjs'], size: 'small' });
+    await activeIntake(h.ctx, rows);
+    const by1 = Object.fromEntries(readIntake({ root, now: h.now() }).cards.map(c => [c.issue, c]));
+    assert.equal(by1[71].card.class, 'improve', 'missing bug path downgraded from text-only ready to improve');
+    assert.match(by1[71].card.reason, /src\/legacy-split\/driver\.mjs not found on HEAD/);
+    assert.equal(by1[72].card.class, 'ready', 'feature adding new file is never downgraded');
+    finish(h.started.find(j => j.issue === 71 && j.role === 'intake-improve'), {
+      outcome: 'elsewhere', reason: 'Driver moved to acme/driver-client.', target_repo: 'https://github.com/acme/driver-client',
+      evidence: 'src/legacy-split/ is absent on HEAD; driver moved to acme/driver-client.', areas: ['package.json'], model: 'gpt-test',
+    });
+    finish(h.started.find(j => j.issue === 73 && j.role === 'intake'), { class: 'ready', reason: 'Guard null in src/existing.mjs.', confidence: 0.9, areas: ['src/existing.mjs'], size: 'small' });
+    rows.push({ number: 74, title: 'Fix stale guard in src/existing.mjs', body: 'Needs check.', labels: ['bug'], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:03:00Z' });
+    await activeIntake(h.ctx, rows);
+    finish(h.started.find(j => j.issue === 74 && j.role === 'intake'), { class: 'improve', reason: 'Check if already fixed.', confidence: 0.8, areas: ['src/existing.mjs'] });
+    await activeIntake(h.ctx, rows);
+    finish(h.started.find(j => j.issue === 74 && j.role === 'intake-improve'), {
+      outcome: 'fixed', reason: 'Null guard already exists on HEAD.', evidence: 'src/existing.mjs already exports ok = true with guard.', areas: ['src/existing.mjs'], model: 'gpt-test',
+    });
+    const jobsBefore = h.started.length;
+    await activeIntake(h.ctx, rows); await activeIntake(h.ctx, rows); await activeIntake(h.ctx, rows);
+    assert.equal(h.started.length, jobsBefore, 'no extra card or improve jobs on subsequent ticks');
+    const finalBy = Object.fromEntries(readIntake({ root, now: h.now() }).cards.map(c => [c.issue, c]));
+    assert.equal(finalBy[73].card.class, 'ready', 'bug citing existing path stays ready');
+    assert.equal(finalBy[71].card.class, 'elsewhere'); assert.equal(finalBy[71].card.start, false);
+    assert.equal(finalBy[71].card.target_repo, 'https://github.com/acme/driver-client');
+    assert.equal(finalBy[74].card.class, 'fixed'); assert.equal(finalBy[74].card.start, false);
+    assert.equal(h.comments.get(71)?.length, 1); assert.match(h.comments.get(71)[0].body, /<!-- pdd:autopilot-intake:disposition:71:/);
+    assert.equal(h.comments.get(74)?.length, 1); assert.match(h.comments.get(74)[0].body, /<!-- pdd:autopilot-intake:disposition:74:/);
+    assert.deepEqual(h.labelWrites, []); assert.deepEqual(h.closed, []); assert.deepEqual(h.alerts, []);
+    assert.deepEqual(readIntake({ root, now: h.now() }).wouldPick, [73, 72]);
+    assert.equal(readImprovement({ outcome: 'fixed', reason: 'Done on HEAD.', evidence: 'line 1' })?.outcome, 'fixed');
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

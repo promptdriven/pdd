@@ -78,12 +78,16 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   plugins, apps, browser and computer use, multi-agent, shell, unified exec, code
   mode) and `--output-last-message ANSWER`; Claude runs
   `-p --safe-mode --tools "" --permission-mode plan --permission-prompts none
-  --strict-mcp-config --no-chrome --no-session-persistence --output-format json`.
+  --strict-mcp-config --no-chrome --no-session-persistence --output-format json`;
+  Gemini runs `-p "" --approval-mode plan --extensions none --allowed-mcp-server-names
+  pdd-disabled-none --output-format json`; Agy runs `--input-format text --output-format
+  json --mode plan --sandbox --disable-slash-commands --effort low`.
   The configured model is passed with `--model`. Any other agent gets no card.
   Card jobs never use the bypass flags of build jobs. When the core supplies
   `ports.selectLogin` of the [Cloud accounts and login pool](login-pool.prompt.md),
-  both `shadowIntake` and `activeIntake` call
-  `ports.selectLogin({allowedKinds: ["codex", "claude"]})` so sandboxed card and
+  both `shadowIntake` and `activeIntake` prefer `allowedKinds: ["codex", "claude"]` and
+  widen to `["codex", "claude", "gemini", "agy"]` when no `codex` or `claude` login is in
+  the pool, so sandboxed card and
   auto-improve jobs run on the first healthy `codex` or `claude` login: each started
   job invokes `selected.prepareStep(env, {detached: true})` when present so Cloud
   Codex steps get a fresh disposable `0700` `pdd-cx-*` overlay (`cleanupDirs` passed
@@ -117,9 +121,10 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   decision is needed), duplicate (same problem or goal as another listed issue;
   same words are not enough), blocked, held, fixed (the comments show it no longer
   happens) and elsewhere (another repository).
-- Answer: Codex's ANSWER file, or the last JSON line with a `result` string in
-  Claude's log; at most 64 KB, else an error card. `parseCardText` takes the JSON
-  object between the first `{` and the last `}` (a code fence is fine).
+- Answer: Codex's ANSWER file, or the JSON envelope (`result` / `response` / card
+  JSON) in Claude's, Gemini's or Agy's log; at most 64 KB, else an error card.
+  `parseCardText` takes the JSON object between the first `{` and the last `}` (a code
+  fence is fine).
 - Card result (`readCard(result)`): `class` must be one of the eight classes and
   `reason` a non-empty string, else the card fails. Control characters are removed
   from every kept string. Kept fields: `start` (true for ready and improve),
@@ -131,23 +136,38 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   unique positive integers of related open issues sharing the same module or root
   cause, at most 8), `size` (`small`, `medium` or `large`, else null) and
   `reported_model`.
+- Repo-path pre-flight (`active` mode only): when a newly evaluated text-only card
+  (without an existing `spec_refinement`) returns `ready` for a bug or fix citing
+  paths under `src/`, `prompts/` or `skills/`, and `state.cwd` has that top-level
+  directory on disk while none of the cited module paths exist (excluding feature or
+  new-file requests), downgrade the saved card to `improve` so read-only repository
+  inspection checks whether the code moved, was renamed or is already fixed before
+  claiming a worker slot.
 - Auto-improve before asking (`#3190`, `active` mode only): when an issue's
-  current card has class `improve` and no auto-improve comment has been posted
-  since the latest trusted human comment or issue title/body edit, start at most
-  one bounded read-only repo-inspection job (`improveCommand`: Codex
-  `exec --ignore-user-config --sandbox read-only --ephemeral` in `cwd: state.cwd`,
-  or Claude `-p --safe-mode --permission-mode plan --tools "Read,Glob,Grep"` in
-  `cwd: state.cwd`, still with `cardEnvironment` stripping every GitHub token).
-  `readImprovement` parses `{outcome: "ready" | "person", reason, areas,
-  reproduction, acceptance_criteria, size, group_with, question, model}`. When
-  `outcome` is `ready`, post one structured spec-refinement comment with hidden
+  current card has class `improve` and no auto-improve or disposition comment has
+  been posted since the latest trusted human comment or issue title/body edit, start
+  at most one bounded read-only repo-inspection job (`improveCommand`: Codex
+  `exec --ignore-user-config --sandbox read-only --ephemeral`, Claude
+  `-p --safe-mode --permission-mode plan --tools "Read,Glob,Grep"`, Gemini
+  `-p "" --approval-mode plan`, or Agy `--input-format text --output-format json
+  --mode plan --sandbox --effort medium` in `cwd: state.cwd`, still with
+  `cardEnvironment` stripping every GitHub token). `readImprovement` parses
+  `{outcome: "ready" | "person" | "fixed" | "elsewhere", reason, areas, root_cause,
+  reproduction, out_of_scope, acceptance_criteria, evidence, target_repo, size,
+  group_with, question, model}`. When `outcome` is `ready`, post one structured
+  spec-refinement comment (rendering optional `root_cause` and `out_of_scope`
+  alongside `areas`, `reproduction`, `acceptance_criteria` and `size`) with hidden
   marker `<!-- pdd:autopilot-intake:improve:N:VERSION:BODYKEY -->` and promote the
   saved card to `ready` for the updated issue state (tracking pre- and post-comment
   versions and human/body digests so Autopilot never loops on its own comment,
-  passing trusted spec-refinement comments into active `cardPrompt` as
-  `spec_refinement` so another machine or rebuilt `cards/` also grades `#N` as
-  `ready`, and reconciling `prevImproved` across non-human version bumps strictly
-  for `ready` cards, never `person` cards). When `outcome` is `person` (only for a
+  passing trusted spec-refinement or disposition comments into active `cardPrompt`
+  as `spec_refinement`, and reconciling `prevImproved` across non-human version
+  bumps for `ready`, `fixed` and `elsewhere` cards, never `person` cards). When
+  `outcome` is `fixed` or `elsewhere`, save the card with `class: outcome`
+  (`start: false`) and optional `evidence` and `target_repo`, and post at most one
+  marker-guarded comment `<!-- pdd:autopilot-intake:disposition:N:VERSION:BODYKEY -->`
+  without closing the issue, adding `pdd:needs-decision` or firing a `decision`
+  alert. When `outcome` is `person` (only for a
   genuine human product, money, access or contract choice), post one concise
   question comment with
   `<!-- pdd:autopilot-core:question:N:intake-VERSION:BODYKEY -->`, add label
@@ -188,9 +208,9 @@ read-only pass inspect the repository checkout, still with no GitHub token.
 - `intakeTick(ctx, rows)` and `shadowIntake(ctx, rows)` take the core's tick context
   (`fs`, `now`, `root`, `repo`, `state`, `settings`, `budget`, `gh`, `jobs`,
   `ports`, `warn`); `shadowIntake` returns `{cards, started, pick}`.
-- `cardCommand(agent, {model, result})` returns `{command, args}` for Codex or
-  Claude and throws for any other agent; `cardEnvironment(env)` returns the card
-  environment.
+- `cardCommand(agent, {model, result})` and `improveCommand(agent, {model, result})`
+  return `{command, args}` for `codex`, `claude`, `gemini` or `agy` and throw for any
+  other agent; `cardEnvironment(env)` returns the card environment.
 - `stopCardJobs({root, fs, jobs, warn})` stops the running card jobs under `root`
   and returns how many it stopped.
 - `readIntake({root, now, date}, fs)` returns `{day, cards, running, wouldPick,
@@ -202,6 +222,7 @@ read-only pass inspect the repository checkout, still with no GitHub token.
 
 - [Headless job runner](agent-job.prompt.md): required to start, read and stop card
   jobs and for the job environment.
-- [Areas](autopilot-areas.prompt.md): required to normalize card `areas` paths.
+- [Areas](autopilot-areas.prompt.md): required to normalize card `areas` paths and
+  extract cited issue paths.
 - [Multi-harness login pool](login-pool.prompt.md): required for
   `isQuotaExhaustionMessage` when rotating pooled `codex` and `claude` logins.
