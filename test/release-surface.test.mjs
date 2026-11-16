@@ -37,15 +37,3 @@ test('RELEASE13: Runtime guidance binds factories and supported resources withou
     assert.doesNotMatch(source,/native factory.*is not a JSON Runtime operation|Native installed factories need an explicit JSON contract|invent a DTO or\s+adapter|mark an unavailable JSON binding incomplete/);
   }
 });
-test('RELEASE14: runtime client uses the exact public npm release', () => {
-  const manifest=JSON.parse(read('package.json'));
-  const lockfile=JSON.parse(read('package-lock.json'));
-  const name='@promptdriven/runtime-client';
-  const locked=lockfile.packages[`node_modules/${name}`];
-  assert.equal(manifest.dependencies[name],'1.0.0');
-  assert.equal(lockfile.packages[''].dependencies[name],'1.0.0');
-  assert.equal(locked.version,'1.0.0');
-  assert.match(locked.resolved,/^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.0\.0\.tgz$/);
-  assert.match(locked.integrity,/^sha512-/);
-  assert.doesNotMatch(locked.resolved,/^(?:github:|git\+)/);
-});

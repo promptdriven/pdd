@@ -2408,6 +2408,10 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   assert.equal(seam.workspace, index.workspace);
   assert.equal(seam.version, index.version);
   assert.equal(seam.exactValue, index.exactValue);
+  for (const name of ['evaluateCheckBudget', 'failedCheckCount', 'providerText']) {
+    assert.equal(seam[name], index[name], `seam.${name} must directly expose the pure Runtime binding`);
+  }
+  assert.notEqual(seam.observeTryCall, index.observeTryCall, 'seam.observeTryCall must bind host selection ports');
 
   // Reproduce Claude M3-3 probe: seam.health must register gh token into host secret-redaction registry.
   const markerToken = `ghp_seam18HealthSecretMarker${Date.now()}xyz987654321`;
@@ -2701,4 +2705,17 @@ test('SEAM24: no file under test/ outside test/runtime-seam.test.mjs imports or 
   assert.ok(findSeamViolations('test/example.test.mjs', "import { runCheck } from '../src/runtime/runtime-client.mjs';\n").length > 0);
   assert.ok(findSeamViolations('test/helpers/example.mjs', "const m = await import('../../src/runtime/index.mjs');\n").length > 0);
   assert.ok(findSeamViolations('test/example.test.mjs', "import { runCheck } from '@promptdriven/runtime-client';\n").length > 0);
+});
+
+test('SEAM25: runtime client uses the exact public npm release', () => {
+  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const lockfile = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
+  const name = '@promptdriven/runtime-client';
+  const locked = lockfile.packages[`node_modules/${name}`];
+  assert.equal(manifest.dependencies[name], '1.0.0');
+  assert.equal(lockfile.packages[''].dependencies[name], '1.0.0');
+  assert.equal(locked.version, '1.0.0');
+  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.0\.0\.tgz$/);
+  assert.match(locked.integrity, /^sha512-/);
+  assert.doesNotMatch(locked.resolved, /^(?:github:|git\+)/);
 });
