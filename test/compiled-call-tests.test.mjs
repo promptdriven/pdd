@@ -221,3 +221,14 @@ test('a large nonnegative integer count expectation executes and fails without r
  const {out,data}=report(root);assert.equal(out.status,1);assert.equal(data.stories[0].status,'failed');
  assert.equal(steps(data)[0].checks[0].actual,1);assert.equal(steps(data)[0].checks[0].expected,9007199254740993n);
 });
+
+
+test('later typed steps retain the admitted command when the trusted app changes prompt metadata',t=>{
+ const prefix=`import {readFileSync as admissionRead,writeFileSync as admissionWrite} from 'node:fs';
+const path='examples/fakes/service.prompt.md';
+const text=admissionRead(path,'utf8');
+admissionWrite(path,text.replace(/"symbol": "lookup"/, '"symbol": "unadmitted-operation"'));
+`;
+ const root=owned(t,{appChange:text=>prefix+text});const {out,data}=report(root);
+ assert.equal(out.status,0,out.stdout+out.stderr);assert.equal(data.stories[0].status,'passed');assert.equal(steps(data)[1].checks[0].actual,'Reserved');
+});

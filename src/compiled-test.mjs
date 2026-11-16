@@ -123,11 +123,13 @@ function callAdmissionText(text) {
 function admitScenario(root, found, test, source) {
   const prompts = new Map();
   for (const step of test.doc?.steps ?? []) {
-    source.read({path:step.entry_path});
-    prompts.set(step.entry_path, readPrompt(root, found.visible, step.entry_path, found.workspace));
+    const text = source.read({path:step.entry_path}).content;
+    const prompt = readPrompt(root, found.visible, step.entry_path, found.workspace);
+    if (prompt.rawText !== text) throw Error('Entry source changed during admission.');
+    prompts.set(step.entry_path,prompt);
   }
   const typed = [...prompts.values()].some(prompt => prompt.interface?.entries?.some?.(entry => entry?.implementation?.kind === 'call'));
-  if (!typed) return preflight({root,found,selected:[test]}).rows[0];
+  if (!typed) return {row:preflight({root,found,selected:[test]}).rows[0],prompts};
   // Capture owns required-source closure, references, Git visibility, policy and
   // strict symlink checks. Copy raw bytes from that closure, never captured
   // executable bytes (which can contain other Runtime projections).
@@ -148,7 +150,7 @@ function admitScenario(root, found, test, source) {
     // Passing the same bounded policy preserves restrictions without inventing
     // a project policy file or copying unrelated worktree material.
     const projected = {...found,visible:new Set(files.map(file => file.path))};
-    return preflight({root:projection,found:projected,selected:[test],workspace:found.workspace}).rows[0];
+    return {row:preflight({root:projection,found:projected,selected:[test],workspace:found.workspace}).rows[0],prompts};
   } finally { rmSync(projection,{recursive:true,force:true}); }
 }
 
@@ -267,9 +269,10 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
   for (const item of missing) groups.set(item.storyPath, [{scenario:null, step:unrun({step_id:item.storyPath}, item.line)}]);
   for (const test of selection.selected) {
     const story = test.storyPath ?? test.path, steps = groups.get(story) ?? [];
-    let refusal = test.error || scenarioShapeRefusal(test.doc,test.path), doc;
+    let refusal = test.error || scenarioShapeRefusal(test.doc,test.path), doc, admittedPrompts;
     try {
-      const admission = admitScenario(root,found,test,source);
+      const admitted = admitScenario(root,found,test,source), admission = admitted.row;
+      admittedPrompts = admitted.prompts;
       if (admission.native_only?.length) {
         steps.push({scenario:test.path, step:unrun({step_id:test.path}, `Native-only interface: ${admission.native_only.map(item => item.reason).join('; ')}`)});
         groups.set(story,steps);
@@ -288,7 +291,7 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
       if (doc.criteria.some(criterion => !covered.has(criterion.id))) steps.push({scenario:test.path, step:unrun({step_id:test.path}, 'A Story criterion has no check.')});
       let world = doc.initial_world, worldKnown = true;
       for (const step of doc.steps) {
-        const prompt = readPrompt(root,found.visible,step.entry_path,found.workspace);
+        const prompt = admittedPrompts.get(step.entry_path);
         const typed = prompt.interface?.entries?.find(entry => entry.operation === step.operation)?.implementation?.kind === 'call';
         let outcome;
         if (typed) {
