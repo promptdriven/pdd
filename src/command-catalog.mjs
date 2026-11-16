@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: d9cbc21d5d216ea84abc1964afb9c5e058193a4b25a62ae8266d65cbb7ee9c5c).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 24426d4bcb61a0db6c49b47f2944f2bbeccce3ae1e8e9cbe1e2a6d631296274d).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -214,6 +214,8 @@ const routes = [
     forms: [form('pdd accounts log LABEL [--json]', 'Show the lease and sharing audit log for LABEL.')] },
   { id: 'setup', prefix: ['setup'], local: 'setup', operands: [], options: [{ name: '--yes', kind: 'flag' }],
     forms: [form('pdd setup [--yes]', 'Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.')] },
+  { id: 'upgrade', prefix: ['upgrade'], local: 'upgrade', operands: [], options: [{ name: '--main', kind: 'flag' }],
+    forms: [form('pdd upgrade [--main]', 'Upgrade a user-owned global pdd installation from the latest GitHub release (or pinned main commit with --main) and refresh installed user PDD skills.')] },
 ];
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),

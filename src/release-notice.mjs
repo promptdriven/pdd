@@ -1,4 +1,4 @@
-// Generated from prompts/cli/release-notice.prompt.md (sha256: 294a463aab7b4aa81a94e58070578e5e1ca03ce8d7f510483d5b7092f364c340).
+// Generated from prompts/cli/release-notice.prompt.md (sha256: dc2889c71c052d8a7bb7c33585c9be247b1dd1cd9996c978c6c8977cc405296a).
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -85,7 +85,7 @@ export async function checkReleaseNotice({ currentVersion, isVersionCommand = fa
   }
   const latestVersion = parseReleaseVersion(cache?.latestVersion);
   if (!latestVersion || !isNewerRelease(latestVersion, baseVersion)) return null;
-  const message = `A newer PDD release is available (${baseVersion} -> ${latestVersion}). To update, run: npm install -g github:promptdriven/pdd && pdd setup`;
+  const message = `A newer PDD release is available (${baseVersion} -> ${latestVersion}). To update, run: pdd upgrade`;
   if (isVersionCommand) return message;
   if (!interactive) return null;
   if (Number.isFinite(cache?.notifiedAt) && now - cache.notifiedAt < DAY_MS) return null;

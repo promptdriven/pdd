@@ -198,6 +198,7 @@ For an optional input field, leave it out of `required`. Do not use `oneOf` with
 ## 4. Expected values
 
 - Expected values come from the story and the person. Never take them from a run, a simulation or the code.
+- Derive numeric expected values directly from the Story's requirements and constants, not by running the implementation under test or writing throwaway vector-generator scripts that duplicate module logic.
 - If the story allows two answers, ask the person. Example: "every 10th coffee free" gives $4.95 off, but
   "the price of its cheapest drink" gives $2.75 off. Do not choose yourself.
 - A person decides expected values. If you think one is wrong, propose a change to the person; never make it yourself.
