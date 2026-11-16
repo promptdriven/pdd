@@ -709,10 +709,11 @@ are unsupported. Cases supply string `argv` and optional UTF-8 `stdin`.
 The runner supports `equals` checks on `/exit_code`, `/stdout` and `/stderr`.
 Typed `call` entries can instead declare a project-supplied
 [JSON-stdio adapter](code-call-adapters.md). That bounded route carries the
-original world and saved `fixture.lookup` replies to the real application and
+original world and saved `fixture.lookup` replies for ports or read-only command
+resources to the real application, without launching a live resource command, and
 supports literal `equals` and `count` checks on result, error, world and calls.
 The adapter is trusted project code. Native call metadata is local to this
-route; ordinary interpreter checks omit it. Unsupported operators, other port
+route; ordinary interpreter checks omit it. Unsupported operators, other resource
 actions, references, step overrides and HTTP entries report `not run` with a
 reason. Results are saved in
 `.pdd/code-test/latest.json` with the commit and worktree dirty state; a failed

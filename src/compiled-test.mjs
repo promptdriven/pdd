@@ -1,4 +1,4 @@
-// Generated from prompts/cli/compiled-test.prompt.md (sha256: 7180c37a237430287d7e29a8746810278036d01ed260e3ae2d745b5c98eceb22).
+// Generated from prompts/cli/compiled-test.prompt.md (sha256: 88917b0119d2abfe09f06bd9778730863d638844dc09ef65e4a837e91e828f20).
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, lstatSync, statSync, realpathSync, mkdtempSync, rmSync } from 'node:fs';
 import { join, resolve, relative, sep, dirname, basename } from 'node:path';
@@ -159,15 +159,18 @@ function fixturePlan(iface, entryPath, doc, world) {
   if ((iface.calls ?? []).length) return 'Internal prompt calls are unsupported.';
   const resources = iface.resources ?? [], bindings = new Map(), counters = [];
   for (const resource of resources) {
-    if (!object(resource) || resource.kind !== 'port' || !Array.isArray(resource.operations)) return 'Only declared port resources are supported.';
+    if (!object(resource) || !['port','command'].includes(resource.kind) || !Array.isArray(resource.operations))
+      return 'Only declared port or read-only command resources are supported.';
+    if (resource.kind === 'command' && (resource.access !== 'read' || resource.operations.some(operation => operation?.access !== 'read')))
+      return 'Recorded command resources and operations must be read-only.';
     for (const operation of resource.operations) {
       const name = `${resource.name}.${operation.name}`, counterName = `${basename(entryPath,'.prompt.md')}-${resource.name}-${operation.name}`;
-      if (bindings.has(name)) return 'Duplicate port operation.';
+      if (bindings.has(name)) return 'Duplicate resource operation.';
       bindings.set(name,{operation,counterName});
     }
   }
   const simulation = doc.simulation ?? {};
-  if (!same([...bindings.keys()].sort(),Object.keys(simulation).sort())) return 'Every declared port needs exactly one saved fixture binding.';
+  if (!same([...bindings.keys()].sort(),Object.keys(simulation).sort())) return 'Every declared resource operation needs exactly one saved fixture binding.';
   for (const [name,{operation}] of bindings) {
     const binding = simulation[name];
     if (!keysExactly(binding,['action','world_pointer','cases','result_template','result_value_pointer']) || binding.action !== 'fixture.lookup' ||
@@ -182,7 +185,7 @@ function fixturePlan(iface, entryPath, doc, world) {
       if (!keysExactly(item,['args','call_index','result']) || !object(item.args) || !literal(item.args) ||
           !safeCount(item.call_index) || item.call_index === 0 || indices.has(item.call_index) ||
           !schemaAccepts(item.args,operation.arguments_schema) || !schemaAccepts(item.result,operation.result_schema))
-        return 'Saved fixture cases are malformed or do not satisfy the port schema.';
+        return 'Saved fixture cases are malformed or do not satisfy the resource schema.';
       indices.add(item.call_index);
     }
   }
