@@ -1273,10 +1273,13 @@ runs until its end):
    code file a binding or a Generated from header (path c); a non-code change takes
    path d, with no new prompt.`); R4 a file of the base with no owner (for a renamed
    file, its source) that the head gives a binding or header, unless the issue asks to
-   adopt PDD or the file is an eligible production/app code file (never `README.md`,
-   `RUNBOOK.md`, `AGENTS.md`, `docs/*`, `skills/*`, `test/*`, `tests/*`, `.github/*`,
-   `prompts/*`, `stories/*`, `user_stories/*`, fixtures/examples, dotfiles, or
-   package/config/lock files) on a `Path: e` line paired with a newly added owning
+   adopt PDD or the file (and its base source when renamed) is an eligible production/app
+   source-code file matching the recognized source-code extension allowlist (or an
+   extensionless script under `bin/` or `scripts/`, and never `README.md`, `RUNBOOK.md`,
+   `AGENTS.md`, `docs/*`, `skills/*`, `test/*`, `tests/*`, `.github/*`, `prompts/*`,
+   `stories/*`, `user_stories/*`, `data/*`, `assets/*`, `static/*`, `public/*`,
+   `vendor/*`, `dist/*`, `build/*`, `out/*`, `coverage/*`, `logs/*`, `tmp/*`, `temp/*`,
+   fixtures/examples, dotfiles, or package/config/lock files) on a `Path: e` line paired with a newly added owning
    `.prompt.md` in this PR (in which case that new owning prompt and its path `e` pairing
    also satisfy R3 and R7); R6 no `Path:` line; R8 the PR changes `pdd-bindings.json`, the base one
    can be read and the head's cannot (`pdd-bindings.json cannot be read at this head: fix it (pdd owner

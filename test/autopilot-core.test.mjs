@@ -4230,6 +4230,41 @@ test('cross-family reviewer preference picks an alternate model family when read
     reviewFamily: 'google',
     reviewIndependence: 'cross-family',
   });
+
+  // 5. Custom selector with caller-injected probeLogin + non-installed binaries (/not-installed/agy): opts.pool preserves probeLogin and picks alternate
+  const wCustomProbe = await coreWorld(t, { settings: { runs: 1 } });
+  const customPoolPath = join(wCustomProbe.dir, 'custom-probe-pool.json');
+  writeFileSync(customPoolPath, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'builder', kind: 'claude', command: '/not-installed/claude' },
+      { id: 'same', kind: 'agy', model: 'claude-sonnet-4-6', command: '/not-installed/agy' },
+      { id: 'alternate', kind: 'agy', model: 'gemini-2.5-pro', command: '/not-installed/agy' },
+    ],
+  }));
+  const selectorWithProbe = opts => selectPoolLogin(
+    { cwd: wCustomProbe.cwd, env: { HOME: wCustomProbe.dir, PATH: process.env.PATH }, poolPath: customPoolPath, stateRoot: wCustomProbe.root, ...opts },
+    { probeLogin: async () => ({ ok: true }) },
+  );
+  wCustomProbe.issue(21, { title: 'Injected probeLogin mixed agy pool', body: 'Preserve caller probeLogin when filtering mixed agy pool.' });
+  await wCustomProbe.tick({ selectLogin: selectorWithProbe });
+  const { pr: pr5, head: head5 } = wCustomProbe.build(21);
+  await wCustomProbe.tick({ selectLogin: selectorWithProbe });
+  const customInReview = JSON.parse(readFileSync(join(wCustomProbe.root, 'jobs', '21.json'), 'utf8'));
+  assert.equal(customInReview.review.agent.loginId, 'alternate');
+  assert.equal(customInReview.review.reviewFamily, 'google');
+  assert.equal(customInReview.review.reviewIndependence, 'cross-family');
+  wCustomProbe.review(21, 'PASS');
+  wCustomProbe.suite(21, 0);
+  await wCustomProbe.tick({ selectLogin: selectorWithProbe });
+  assert.deepEqual(wCustomProbe.github.merges, [pr5.number]);
+  const evidence5 = JSON.parse(readFileSync(join(wCustomProbe.root, 'logs', `21-evidence-${head5}.json`), 'utf8'));
+  assert.deepEqual(evidence5.review, {
+    state: 'pass',
+    builderFamily: 'anthropic',
+    reviewFamily: 'google',
+    reviewIndependence: 'cross-family',
+  });
 });
 
 test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt creation for existing unowned code', async t => {
@@ -4291,6 +4326,10 @@ test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt
     ['package.json', h => `{"_owner":"// Generated from prompts/bad.prompt.md (sha256: ${h})."}\n`],
     ['pnpm-lock.yaml', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nlockfileVersion: '9.0'\n`],
     ['tsconfig.json', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\n{}\n`],
+    ['data/data.log', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nlog line\n`],
+    ['assets/logo.avif', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nbinary\n`],
+    ['data/archive.zip', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\npk\n`],
+    ['src/archive.zip', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\npk\n`],
   ];
   for (const [targetFile, renderHead] of nonCodeCases) {
     const baseDir = mkdtempSync(join(w.dir, 'pe-base-'));
@@ -4312,6 +4351,27 @@ test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt
       adopting: false,
     });
     assert.ok(out.reds.length > 0, `${targetFile} must be rejected on path e`);
+  }
+
+  // Renaming a non-code base file (data/data.log -> src/foo.mjs) cannot bypass path e eligibility
+  {
+    const baseDir = mkdtempSync(join(w.dir, 'pe-ren-base-'));
+    const headDir = mkdtempSync(join(w.dir, 'pe-ren-head-'));
+    const badPrompt = 'prompts/foo.prompt.md';
+    const badPromptText = '# Foo\n\nOwn `src/foo.mjs`.\n';
+    const badHash = promptHeaderHash(Buffer.from(badPromptText, 'utf8'));
+    writeIn(baseDir, 'data/data.log', 'initial\n');
+    writeIn(headDir, 'src/foo.mjs', `// Generated from ${badPrompt} (sha256: ${badHash}).\nexport const foo = 1;\n`);
+    writeIn(headDir, badPrompt, badPromptText);
+    const renameOut = pathRules({
+      changed: [{ status: 'A', path: badPrompt }, { status: 'R100', path: 'src/foo.mjs', from: 'data/data.log' }],
+      baseFiles: ['data/data.log'],
+      before: ownerRead({ readFileSync }, baseDir, ['data/data.log']),
+      after: ownerRead({ readFileSync }, headDir, [badPrompt, 'src/foo.mjs']),
+      body: `Fixes #99\n\nRuntime: PASS\nPath: e — ${badPrompt}, src/foo.mjs — ${badPrompt} — new prompt — Test: done check\n`,
+      adopting: false,
+    });
+    assert.ok(renameOut.reds.length > 0, 'renaming data/data.log -> src/foo.mjs must be rejected on path e');
   }
 
   for (const [index, [targetFile, badPrompt]] of [['README.md', 'prompts/readme-adopt.prompt.md'], ['docs/guide.md', 'prompts/guide-adopt.prompt.md']].entries()) {

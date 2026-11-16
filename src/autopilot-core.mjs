@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: b1766aa7c813f7777a669436f0a73dc1236c28073c4d890d3b0dee0d8409ef5c).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: d4b6a1c55dea35a027923b1e3d7aee5bc1773dbae6290f5a1b092025a602c69f).
 import * as nativeFs from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -1215,6 +1215,7 @@ async function selectAgentStep(ctx, issue = null, opts = null) {
   }
   const callOpts = allowedKinds ? {
     allowedKinds,
+    ...(object(opts?.pool) ? { pool: opts.pool } : {}),
     ...(named(opts?.excludeFamily) ? { excludeFamily: opts.excludeFamily } : {}),
     ...(typeof opts?.filterLogin === 'function' ? { filterLogin: opts.filterLogin } : {}),
     ...(Array.isArray(opts?.skipLoginIds) && opts.skipLoginIds.length ? { skipLoginIds: opts.skipLoginIds } : {}),
@@ -1289,12 +1290,24 @@ async function selectCrossFamilyReviewer(ctx, job) {
       const crossLogins = loaded.logins.filter(login => isAlternateEntry(login, loginEnvironment(poolBaseEnv, login)));
       if (crossLogins.length) {
         const crossKinds = [...new Set(crossLogins.map(login => login.harness ?? login.kind))];
+        const crossPool = { ...loaded, logins: crossLogins };
+        const viaSelector = await selectAgentStep(ctx, job.issue, {
+          allowedKinds: crossKinds,
+          pool: crossPool,
+          excludeFamily: job.builderFamily,
+          filterLogin,
+          fresh: true,
+          probeOnly: true,
+        });
+        if (viaSelector.state === 'ready' && isAlternateEntry(selectedEntryOf(viaSelector), viaSelector.selected?.env ?? poolBaseEnv)) {
+          return viaSelector;
+        }
         const filtered = await selectPoolLogin(
           {
             cwd: ctx.state.cwd,
             env: poolBaseEnv,
-            poolPath: probe.selected.poolPath,
-            pool: { ...loaded, logins: crossLogins },
+            poolPath: resolvedPoolPath,
+            pool: crossPool,
             fallbackAgent: ctx.state.agent,
             stateRoot: ctx.root,
             allowedKinds: crossKinds,
@@ -3771,19 +3784,18 @@ export function pathRules({ changed = [], baseFiles = [], before = EMPTY_READ, a
   if (before.bindings && !after.bindings && changed.some(c => c.path === 'pdd-bindings.json')) red('pdd-bindings.json cannot be read at this head: fix it (pdd owner needs valid JSON with schema_version pdd.bindings.v1 and a modules array, at most 64 KiB).');
   const moved = c => c.from && c.from !== c.path ? ` (moved from ${c.from})` : '';
   const readLine = line => `read "${line.field}" in the files field of the line "${line.line}"`;
-  const PATH_E_EXCLUDED_DIR = /^(?:docs?|skills|prompts|user_stories|stories|\.github|\.agents|\.claude|\.codex)\//i;
+  const PATH_E_EXCLUDED_DIR = /^(?:docs?|skills|prompts|user_stories|stories|\.github|\.agents|\.claude|\.codex|data|assets|static|public|vendor|dist|build|out|coverage|logs|tmp|temp)\//i;
   const PATH_E_FIXTURE_DIR = /(?:^|\/)((?:fixtures|examples))\//i;
   const PATH_E_DOTFILE = /(?:^|\/)\.[^/]+$/;
   const PATH_E_CONFIG_OR_META = /^(?:[^/]+\.config\.[^/]+)$|(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.(?:toml|lock)|poetry\.lock|Pipfile(?:\.lock)?|pyproject\.toml|Gemfile(?:\.lock)?|composer\.(?:json|lock)|go\.(?:mod|sum)|pdd(?:-bindings)?\.json|tsconfig[^/]*\.json|jsconfig\.json|(?:eslint|prettier|vite|vitest|jest|babel|rollup|webpack|tailwind|postcss)\.config\.[^/]+|Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Justfile|Vagrantfile|Rakefile|LICENSE(?:\.[^/]+)?|NOTICE(?:\.[^/]+)?|COPYING(?:\.[^/]+)?|CODEOWNERS|OWNERS|AUTHORS)$/i;
-  const PATH_E_NON_CODE_EXT = /\.(?:mdx?|rst|txt|adoc|json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|eot)$/i;
+  const PATH_E_SOURCE_CODE_EXT = /\.(?:m?[jt]sx?|cjs|cts|mts|py|pyi|rs|go|rb|java|kt|kts|swift|c|cc|cpp|cxx|h|hh|hpp|cs|php|scala|ex|exs|erl|hrl|clj|cljs|lua|r|jl|zig|nim|dart|sol|sql|sh|bash|zsh|ps1|vue|svelte|astro|css|scss|sass|less)$/i;
   const isEligiblePathECode = path => {
     if (!named(path) || path.startsWith('/') || /[\\\x00-\x1f\x7f]/.test(path)) return false;
     const parts = path.split('/');
     if (parts.some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')) return false;
     if (path.endsWith('.prompt.md') || isTestOwnedPath(path) || /\.stories\.[^/]+$/i.test(path)) return false;
-    if (PATH_E_EXCLUDED_DIR.test(path) || PATH_E_FIXTURE_DIR.test(path) || PATH_E_DOTFILE.test(path) || PATH_E_CONFIG_OR_META.test(path) || PATH_E_NON_CODE_EXT.test(path)) return false;
-    const base = parts.at(-1), dot = base.lastIndexOf('.');
-    return (dot > 0 && dot < base.length - 1) || /^(?:bin|scripts)\/[^/.]+$/i.test(path);
+    if (PATH_E_EXCLUDED_DIR.test(path) || PATH_E_FIXTURE_DIR.test(path) || PATH_E_DOTFILE.test(path) || PATH_E_CONFIG_OR_META.test(path)) return false;
+    return PATH_E_SOURCE_CODE_EXT.test(path) || /^(?:bin|scripts)\/[A-Za-z0-9_-]+$/i.test(path);
   };
   const recorded = (path, prompt) => { const o = after.owners.get(path); return !!o && (o.how === 'binding' || o.how === 'header') && o.owners.includes(prompt); };
   const added = changed.filter(c => c.status.startsWith('A')).map(c => c.path);
