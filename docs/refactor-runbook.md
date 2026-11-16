@@ -41,7 +41,7 @@ Declare one of three structural classes in every cleanup pull request:
 | Class | Scope | `.prompt.md` changes | Test changes | Interpreter calls |
 |---|---|---|---|---|
 | **Class A** | Internal structure | None (`pdd owner` stays current) | Existing assertions stay unchanged; extend the module's test file only for a shared helper | `0` |
-| **Class B** | Module and boundary splits | Step 1: none (code keeps source header). Step 2: separate prompt-split PR | Import paths or generated module lists only; behavior assertions stay unchanged | `0` in Step 1 |
+| **Class B** | Module and boundary splits | Step 1: none (code keeps source header). Step 2: separate prompt-split PR | Import paths, generated module lists, or direct unit tests for extracted helpers; existing behavior assertions stay unchanged | `0` in Step 1 |
 | **Class C** | Verified dead-code removal | Remove dead prompts and dead `## Dependencies` links in the same PR | Delete only tests that cover the removed dead surface; all other tests stay unchanged | `0` (unless an active Story prompt changes) |
 
 - **Class A (Internal structure):** Deduplicate helpers, simplify control flow, or remove
@@ -105,9 +105,14 @@ missing paths on large branches):
 gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' --jq '.[].number' |
   while read -r pr; do
     gh api --paginate "repos/{owner}/{repo}/pulls/${pr}/files?per_page=100" \
-      --jq ".[] | \"#${pr}: \(.filename)\""
+      --jq ".[] | (.filename, (.previous_filename // empty)) | \"#${pr}: \(.)\""
   done
 ```
+
+GitHub's `pulls/{pr}/files` REST endpoint caps at 3,000 files; for any pull request with
+`changed_files >= 3000` (or 3,000 returned entries), fetch the pull request ref directly
+(`git fetch origin "pull/${pr}/head" && git diff --no-renames --name-only origin/main...FETCH_HEAD`)
+to list every path.
 
 Exclude every file touched by an open pull request, along with files claimed by active
 `pdd workflow` runs or high-churn shared command catalogs. Leaving active paths untouched prevents
