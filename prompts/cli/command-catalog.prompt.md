@@ -450,3 +450,7 @@ Extend the existing simulate route with Boolean --product, text --parts and text
 The lint route accepts optional integer `--max-calls`, minimum 1 and maximum 1000. Its help says this selects a cap for zero-AI structural call preflight; warnings never change the cap or guarantee completion. Existing hidden `test --lint` keeps the same remote semantics; removed commands remain removed. Local lint does not accept a call cap.
 
 `pdd test --target code [STORY...] [--json]` checks selected Story scenarios on real CLI implementations without interpreter or AI calls. Its result is saved with the current commit. Unsupported steps are not run and cannot pass.
+
+## Owner-local flags (draft, client 34)
+
+Add Boolean `--live-local`, text-valued `--command-manifest PATH`, and Boolean `--allow-live-writes` to test and simulate routes only. Help/completion expose `pdd test [STORY...] --live-local --command-manifest PATH [--allow-live-writes] [--max-calls N]` and `pdd simulate [STORY] --live-local --command-manifest PATH [--allow-live-writes] [--max-calls N]`. Explain: explicit read-only manifest; writes need the flag plus a real terminal confirmation for each call; owner-local outputs are redacted before upload and live reports are private. Do not add these options to lint or offer raw commands/argv/env through CLI. Runtime-client owns semantic combination checks; catalog/parser own only typed flags and help. Keep docs/cli.md command forms aligned during implementation.
