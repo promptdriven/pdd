@@ -25,7 +25,7 @@ async function world(t, {name='bug'}={}) {
   const exec=f.ports.execFile;
   f.ports.execFile=async(file,args,opts)=>{
     const effect = file==='git' && ['checkout','branch','push'].includes(args[0])
-      || file==='gh' && args[0]==='pr' && ['create','edit'].includes(args[1]);
+      || file==='gh' && (args[0]==='pr' && args[1]==='create' || args[0]==='api' && args.includes('PATCH'));
     if(effect) f.effects.push({file,args:[...args],saved:f.record()});
     const result=await exec(file,args,opts);
     if(file==='git' && args[0]==='push') {
