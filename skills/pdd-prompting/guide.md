@@ -327,13 +327,27 @@ person can read and approve in about one minute: pricing or incentive rules,
 admission rules, state changes, and CLI or UX flows. If a single issue appears
 to need more than 3 Stories, stop and ask the person before creating them.
 
+Check the enclosing user-facing flow before choosing `0` Runtime Stories:
+
+- `0` Runtime Stories applies **only** when either (a) no user-observable
+  accept, reject, state, or output outcome changes, or (b) an existing Story and
+  Runtime test in `user_stories/` already check the enclosing user-facing flow
+  over an injected port.
+- When a native, cryptographic, or I/O change alters a user-observable flow
+  (such as login, request admission, permissions, redaction, or error reporting)
+  and **no Story covers that flow yet**, write `1` Story and Runtime test for
+  the enclosing checkable flow prompt over an injected port (RUNBOOK §21),
+  alongside any thin `kind: native-only` adapter prompt (`0` Stories of its
+  own).
+
 Real process termination, filesystem durability (`fsync`, atomic rename),
 concurrency fences, cryptographic primitives, pure byte codecs, GPU memory
 behavior and similar physical or byte-level plumbing with no user-facing policy
 route to frontmatter `kind: native-only` (with a required nonblank `reason` naming the
 effect bound ports cannot fake) plus deterministic native tests (`node --test`
-or the repo's runner), with `0` Runtime Stories. A native-only declaration does
-not make a prompt check pass; it records why the check cannot run.
+or the repo's runner), with `0` Runtime Stories of their own. A native-only
+declaration does not make a prompt check pass; it records why the check cannot
+run.
 
 Test suites, fixtures, CI workflows, package manifests, build configs and
 documentation do not get `.prompt.md` owners. Internal test observers and
@@ -349,7 +363,10 @@ native-only when it also has a useful deterministic policy contract.
 A behavior prompt is plain Markdown: purpose, `## Domain decisions`, public
 operations, failure edges and `## Dependencies`. Do not write an embedded
 `Runtime interface` block; the PDD interpreter synthesizes and caches interfaces
-on demand from the prompt and its linked contracts.
+on demand from the prompt and its linked contracts. Owned code files name their
+prompt in a `Generated from <path>.prompt.md` comment near the top of the file;
+executable scripts starting with `#!` can place their `Generated from` comment
+on line 2, while commentless files use `pdd-bindings.json`.
 
 Use YAML frontmatter at the very top of the file only when a prompt owns pure
 native plumbing with `0` Runtime Stories:

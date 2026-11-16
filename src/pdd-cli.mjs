@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 93b7513da4ab428e9a005e96ecc39aa0696eb4124ce75466313bdbf518d24fb2).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3b1fb570d0a8cd11112dde1d528a186a8fb86d374e71e27e129d6d868a7915aa).
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -8,7 +8,7 @@ import { renderCompletion } from './completion.mjs';
 import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
-import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills } from './skills-install.mjs';
+import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills, syncOwnedUserSkills as defaultSyncOwnedUserSkills } from './skills-install.mjs';
 import { pathDiagnostic as defaultPathDiagnostic } from './path-diagnostic.mjs';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 import { setupMayAsk } from './setup-interaction.mjs';
@@ -94,12 +94,31 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
   setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {} } = {}) {
+  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
+  }
+  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'mcp', 'setup', 'upgrade'].includes(plan.local)
+    && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
+    && plan.options['--json'] !== true
+    && !argv.includes('--json')) {
+    try {
+      const { updated } = syncOwnedUserSkills({
+        packageRoot,
+        home: env.HOME || homedir(),
+        claudeConfigDir: env.CLAUDE_CONFIG_DIR,
+        ...(env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}),
+        ...(env.PDD_STATE_DIR ? { stateRoot: env.PDD_STATE_DIR } : {}),
+      });
+      if (updated?.length > 0 && stderr?.isTTY === true) {
+        const metadata = await readPackageVersion({ packageRoot });
+        if (metadata?.ok && typeof metadata.version === 'string' && metadata.version)
+          line(stderr, `Updated PDD skills to ${metadata.version} (${updated.join(', ')}).`);
+      }
+    } catch { /* Post-upgrade skill sync never blocks or fails a CLI command. */ }
   }
   if (['setup', 'version', 'workflow-run'].includes(plan.local)) {
     try {
@@ -316,7 +335,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const interactive = setupMayAsk({ yes: plan.options['--yes'], stdinIsTTY: stdin.isTTY, stdoutIsTTY: stdout.isTTY });
       return setupWithWorkflowAgent({ cwd, env }, { ...workflowAgentPorts, checkWorkflowAgents: workflowAgents.checkWorkflowAgents, stderr, setup: async () => {
       let code = 0;
-      for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR })) {
+      for (const result of setupSkills({ packageRoot, cwd, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, ...(setupSkills === defaultSetupSkills && env.CODEX_HOME ? { codexHome: env.CODEX_HOME } : {}) })) {
         if (result.updated.length) line(stdout, `Updated ${skillCount(result.updated)} in ${result.root}: ${skillNames(result.updated)}`);
         if (result.found && result.stale) {
           const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
@@ -358,6 +377,24 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `Autopilot settings failed.${reason(error)}`); code = 1; }
       return code;
       } });
+    }
+    case 'upgrade': {
+      try {
+        const module = cliUpgrade ?? await import('./autopilot-update.mjs');
+        const result = await module.runCliUpgrade({
+          env,
+          stdout,
+          stderr,
+          main: plan.options['--main'] === true,
+          packageRoot,
+          home: env.HOME || homedir(),
+          cwd,
+        }, cliUpgradePorts);
+        if (typeof result === 'number') return result;
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255) throw Error('Invalid upgrade reply');
+        if (typeof result.message === 'string' && result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `pdd upgrade failed.${reason(error)}`); return 1; }
     }
     case 'runtime-jobs':
       try {
@@ -411,7 +448,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

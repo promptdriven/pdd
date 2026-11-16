@@ -11,8 +11,9 @@ Typing `pdd check` or `pdd try` runs nothing and prints the name of the command 
 | Command | What it does |
 |---|---|
 | `pdd setup [--yes]` | Check for a ready agent, install the seven [PDD skills](USAGE.md#4-the-pdd-skills) when they are missing, and say where. Then add or update the short PDD block (7 lines, between `<!-- pdd:start -->` and `<!-- pdd:end -->`) in `CLAUDE.md` of this folder, else in `AGENTS.md`. If neither exists, make `AGENTS.md`. In a Git repository, add the line `.pdd/` at the end of the root `.gitignore` when no line there is `.pdd`, `.pdd/`, `/.pdd` or `/.pdd/`; `pdd test` keeps its local cache there. Setup only appends: all other bytes stay the same. When the last such line starts with `!`, or no such line exists but a `!` line names `.pdd` or a path in it (such as `!.pdd/config.json`), setup changes nothing and says so. Repeat setup keeps an existing Autopilot mode |
+| `pdd upgrade [--main]` | Update a user-owned global `pdd` installation from the latest GitHub release (or the pinned `main` commit with `--main`) using `--ignore-scripts`, refresh `.pdd-skill.json`-marked user PDD skills across supported agent folders, and clear cached release notices |
 
-`pdd setup` copies the skills to `~/.agents/skills` (Codex and Gemini) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path (Claude Code). If `npx skills` already installed them, it copies nothing. When the skills it finds are older than this pdd, or differ from its skills, it says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, without `-g` for a copy in the project. After an update of the pdd command, it replaces an older or same-version differing copy with the `.pdd-skill.json` marker, including an invalid marker. It never touches a copy without the marker, or a symlink. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd-feature is 0.1.20`. Run `pdd setup` to update copies installed by pdd in user folders. For copies from another installer, use the shown `npx skills add` command. No other pdd command copies skills. The `pdd-setup` skill adds the project block and ignore rule in a chat; it installs nothing and does not register MCP tools. Run it in the top folder of the repo.
+`pdd setup` copies the skills to `~/.agents/skills` (Codex and Gemini) and `~/.claude/skills`, or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path (Claude Code), and updates existing `.pdd-skill.json`-marked folders in `~/.codex/skills` and `$CODEX_HOME/skills`. If `npx skills` already installed them, it copies nothing. When the skills it finds are older than this pdd, or differ from its skills, it says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, without `-g` for a copy in the project. After an update of the pdd command, `pdd setup`, `pdd upgrade`, and the once-per-version automatic sync on normal `pdd` commands replace older or same-version differing copies with the `.pdd-skill.json` marker (including invalid markers), add missing bundled skills to existing marked folders, and remove `.pdd-skill.json`-marked retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`). Direct `npm install -g github:promptdriven/pdd` runs no lifecycle scripts; `pdd upgrade` updates the CLI and `.pdd-skill.json`-marked skills together in one command (including when the CLI is already at the latest version), and normal `pdd` commands sync existing `.pdd-skill.json`-marked user folders automatically. Unmarked folders, customized copies, symlinks and unrelated custom skills are never modified; `pdd upgrade` reports updated marked folders, lists skipped unmarked or customized folders with `npx skills add promptdriven/pdd -g --skill '*'` (without `-g` for project folders), and reports failed folders with their recovery commands. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd-feature is 0.1.20`. Run `pdd upgrade` or `pdd setup` to update copies installed by pdd in user folders. For copies from another installer, use the shown `npx skills add` command. Discovery and `--json` commands write nothing. The `pdd-setup` skill adds the project block and ignore rule in a chat; it installs nothing and does not register MCP tools. Run it in the top folder of the repo.
 
 Setup previews the exact MCP configuration changes for the Codex, Claude Code and Gemini agents it finds, then asks once (y/N). Only `y` writes those changes, including the approval setting for this Codex server. Registrations pin this running pdd executable, so another installation earlier on PATH cannot receive its tools. Other configuration is preserved. Codex uses `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and the `mcp_servers.pdd` entry with `default_tools_approval_mode = "approve"`. Claude Code uses the `mcpServers.pdd` entry in its configuration; Gemini uses `mcpServers.pdd` in `~/.gemini/settings.json` with server trust. Each entry runs `pdd mcp`. A conflicting existing entry is preserved and reported.
 
@@ -331,30 +332,35 @@ of `@openai/codex` (`~/.codex/auth.json`) and `@anthropic-ai/claude-code`
 
 | Command | What it does |
 |---|---|
-| `pdd accounts [--json]` | List enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
-| `pdd accounts list [--json]` | List enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
-| `pdd accounts add [--provider codex\|claude] [--label NAME]` | Sign in with `codex login` or `claude setup-token`, upload the credential bundle to PDD Cloud over TLS, and replace the local Codex file with a stripped pass (`refresh_token: ""`) |
-| `pdd accounts import [--provider codex\|claude] [--label NAME]` | Import an existing local `~/.codex/auth.json` or Claude token into PDD Cloud and replace the local Codex file with a stripped pass (`refresh_token: ""`) |
-| `pdd accounts use LABEL` | Pin `LABEL` and write its short-lived stripped pass to `~/.codex/auth.json` (`0600`) or `~/.claude/settings.json` (`0600`) |
+| `pdd accounts [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
+| `pdd accounts list [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
+| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside an isolated folder (`--device-auth` for headless Codex), upload the credential bundle to PDD Cloud over TLS, strip the local refresh token, and optionally enroll multiple accounts (`--loop`) or share (`--with`) |
+| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--with USER\|ORG/TEAM[,...]]` | Import a local or external Codex `auth.json` or Claude token into PDD Cloud, replace any local Codex file with a stripped pass (`refresh_token: ""`), and optionally share (`--with`) |
+| `pdd accounts use LABEL` | Pin `LABEL` and materialize its owner pass or shared gateway grant in `~/.codex/` (`0600`) or `~/.claude/settings.json` (`0600`) |
 | `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch the local install to the next ready account sorted by soonest weekly reset |
 | `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Return in 0 ms when the cached lease is below 100% on both windows and more than 15 minutes from expiry; else lease a fresh pass within `--timeout-ms` (default 1200 ms) and fail open when offline |
 | `pdd accounts auto on\|off\|status` | Turn on, turn off or inspect the opt-in fail-open shell wrapper in `~/.zshrc` and `~/.bashrc` for plain terminal `codex` and `claude` commands (off by default) |
 | `pdd accounts pause LABEL` | Pause automatic leasing for `LABEL` |
 | `pdd accounts unpause LABEL` | Resume automatic leasing for `LABEL` |
-| `pdd accounts share LABEL --with USER\|ORG/TEAM` | Share `LABEL` with a GitHub user or organization team without exposing raw owner credentials |
-| `pdd accounts accept INVITE` | Accept a pending Cloud account share invite |
+| `pdd accounts share LABEL --with USER\|ORG/TEAM[,...]` | Share `LABEL` with GitHub users, organization teams, or `@ORG` targets without exposing raw owner credentials |
+| `pdd accounts share --all [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or `@ORG` targets |
+| `pdd accounts accept INVITE` | Accept a pending Cloud account share invite and materialize the shared grant if no account is pinned for that provider |
 | `pdd accounts unshare LABEL --user USER` | Revoke shared access to `LABEL` for `USER` |
-| `pdd accounts leave LABEL` | Leave a shared Cloud account |
+| `pdd accounts unshare [LABEL] [--all] [--provider codex\|claude] [--user USER] [--with USER\|ORG/TEAM[,...]]` | Revoke shared access for users, organization teams, or `@ORG` targets across `LABEL` or all owned accounts |
+| `pdd accounts leave LABEL` | Leave a shared Cloud account and clean up its local gateway configuration |
 | `pdd accounts remove LABEL` | Delete `LABEL` from PDD Cloud and revoke active leases |
 | `pdd accounts log LABEL [--json]` | Show the lease and sharing audit log for `LABEL` |
 
-- **Encrypted vault and stripped local passes.** PDD Cloud encrypts each account's
-  refresh credential with envelope encryption bound to the account record. Local
-  Codex files receive only a short-lived `access_token` and `id_token` with
-  `refresh_token: ""` (`0600` permissions), so only PDD Cloud refreshes single-use
-  OAuth tokens and two machines never invalidate each other. Local state in
-  `$PDD_STATE_DIR/accounts-state.json` (`0600`) stores metadata and timestamps
-  only, with zero tokens.
+- **Encrypted vault, stripped owner passes, and tokenless shared gateways.** PDD
+  Cloud encrypts each account's refresh credential with envelope encryption bound
+  to the account record. Owner Codex leases write a short-lived `access_token` and
+  `id_token` with `refresh_token: ""` (`0600`), so only PDD Cloud refreshes
+  single-use OAuth tokens. Shared Codex and Claude leases (`delivery_mode: "gateway_grant"`)
+  deliver only a short-lived revocable `pddg_…` gateway grant routed through PDD
+  Cloud (`[model_providers.pdd_codex_gateway]` for Codex, `ANTHROPIC_BASE_URL` for
+  Claude), with zero OpenAI or Anthropic OAuth tokens written to borrower disk.
+  Local state in `$PDD_STATE_DIR/accounts-state.json` (`0600`) stores metadata and
+  timestamps only, with zero tokens.
 - **Stick-Until-100% step rotation.** Inside `pdd` and `pdd autopilot`, steps stay
   on the active leased account with zero switches while both the 5-hour and weekly
   windows remain below 100%. Brief burst `429` responses below 100% retry on the
@@ -362,14 +368,17 @@ of `@openai/codex` (`~/.codex/auth.json`) and `@anthropic-ai/claude-code`
   reports the window to PDD Cloud, cools the account until `reset_at` (hours for a
   5-hour window, days for a weekly window), and switches to the ready account whose
   weekly window resets soonest.
-- **Per-step isolation.** Codex steps write the leased stripped `auth.json` (`0600`)
-  into a disposable `0700` temporary folder (`/tmp/pdd-cx-…`) that symlinks
-  `~/.codex/{config.toml,skills,memories,sessions,rules}`, pass `CODEX_HOME` to the
-  child, and delete the folder when the step exits. Concurrent plain terminal chats
-  keep their own `~/.codex/auth.json` untouched, and zero tokens appear in process
-  arguments. Claude steps pass `CLAUDE_CODE_OAUTH_TOKEN` in the child environment,
-  plus `ANTHROPIC_BASE_URL` when a shared account uses a short-lived PDD Cloud
-  gateway grant (`delivery_mode: "gateway_grant"`).
+- **Per-step isolation.** Owner Codex steps write the leased stripped `auth.json`
+  (`0600`) into a disposable `0700` temporary folder (`/tmp/pdd-cx-…`) that symlinks
+  `~/.codex/{config.toml,skills,memories,sessions,rules}`. Shared Codex gateway
+  steps write zero `auth.json` in `/tmp/pdd-cx-…`, symlink
+  `~/.codex/{skills,memories,sessions,rules}`, merge user settings such as
+  `[mcp_servers.pdd]` into `/tmp/pdd-cx-…/config.toml` (`0600`), and pass
+  `PDD_CODEX_GATEWAY_GRANT` via the child environment with `shell_snapshot = false`
+  and `shell_environment_policy.filters`. Concurrent plain terminal chats keep their
+  own `~/.codex/` untouched, and zero tokens appear in process arguments. Claude
+  steps pass `CLAUDE_CODE_OAUTH_TOKEN` in the child environment, plus
+  `ANTHROPIC_BASE_URL` on shared gateway grants.
 - **Opt-in terminal auto-switch.** Plain terminal `codex` and `claude` commands are
   untouched by default. `pdd accounts auto on` writes one marked block in `~/.zshrc`
   and `~/.bashrc` that runs `pdd accounts sync --provider <p> --quiet --timeout-ms 1200`
