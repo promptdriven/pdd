@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { version as runtimeVersion } from '../src/runtime-seam.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const installer = join(root, '.github/scripts/ci-install.mjs');
@@ -23,12 +24,15 @@ const credentialNames = [
 ];
 
 function fixtureLock(resolved) {
+  const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
+  const runtimePackage = runtimeVersion().package;
+  const runtimeSpec = lock.packages[''].dependencies[runtimePackage];
+  const packageKey = `node_modules/${runtimePackage}`;
   return JSON.stringify({
-    name: '@promptdriven/pdd',
-    lockfileVersion: 3,
+    ...lock,
     packages: {
-      '': { dependencies: { '@promptdriven/runtime-client': '1.0.0' } },
-      'node_modules/@promptdriven/runtime-client': { version: '1.0.0', resolved },
+      '': { ...lock.packages[''], dependencies: { [runtimePackage]: runtimeSpec } },
+      [packageKey]: { ...lock.packages[packageKey], version: runtimeSpec, resolved },
     },
   });
 }
