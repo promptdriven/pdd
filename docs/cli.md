@@ -687,7 +687,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 
 | Command | What it does |
 |---|---|
-| `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared real CLI commands, with 0 AI calls. Compare arguments, optional stdin, exit code, stdout and stderr using the same cases. Save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
+| `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared CLI commands or native typed-call adapters, with 0 AI calls. Apply the same supported checks and save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
 | `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every Story affected by local changes against the unique saved-run base or HEAD, including all variants and criteria. Uncertain scope keeps complete coverage. Read omitted baseline obligations from local original Check history in a separate historical report. Status describes selected checks only. Required full-pass gates still apply. |
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
 | `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
@@ -707,8 +707,14 @@ For `--target code`, each tested Runtime entry declares
 is split into words without a shell; quoted or shell-dependent command strings
 are unsupported. Cases supply string `argv` and optional UTF-8 `stdin`.
 The runner supports `equals` checks on `/exit_code`, `/stdout` and `/stderr`.
-Other checks, HTTP and call entries, and world or port simulations without a
-native bridge report `not run` with a reason. Results are saved in
+Typed `call` entries can instead declare a project-supplied
+[JSON-stdio adapter](code-call-adapters.md). That bounded route carries the
+original world and saved `fixture.lookup` replies to the real application and
+supports literal `equals` and `count` checks on result, error, world and calls.
+The adapter is trusted project code. Native call metadata is local to this
+route; ordinary interpreter checks omit it. Unsupported operators, other port
+actions, references, step overrides and HTTP entries report `not run` with a
+reason. Results are saved in
 `.pdd/code-test/latest.json` with the commit and worktree dirty state; a failed
 or unrun Story makes the command nonzero.
 
