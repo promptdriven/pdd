@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: ee83952b9399af2669737c496a0accda9685e1122eb3e1c41f3d96afcb9d3797).
+// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: e629ad6481d3cd0248a8e0765b0405bc0f98d7d97beef9ee6f2d1ca17bd20c5a).
 const login = x => typeof x === 'string' && /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(x);
 const repo = x => typeof x === 'string' && /^[\w.-]+\/[\w.-]+$/.test(x);
 const owner = x => x === 'autopilot' || login(x) || typeof x === 'string' && x.startsWith('repo:') && repo(x.slice(5));
@@ -285,7 +285,19 @@ export function issueAreas(row, card = null, options = undefined) {
   const opts = options === undefined && isAreaOptions(card) ? card : (options ?? {});
   const resolvedCard = options === undefined && isAreaOptions(card) ? (row?.card ?? null) : card;
   const cardPaths = [...(Array.isArray(resolvedCard?.areas) ? resolvedCard.areas : []), ...(Array.isArray(resolvedCard?.area_hint) ? resolvedCard.area_hint : [])];
-  const raw = normalizeAreaList([...cardPaths, ...areaLabelsOf(row), ...textPathsOf(`${row?.title ?? ''}\n${row?.body ?? ''}`)], MAX_AREAS);
+  const candidates = [...cardPaths, ...areaLabelsOf(row), ...textPathsOf(`${row?.title ?? ''}\n${row?.body ?? ''}`)];
+  const raw = [], seen = new Set();
+  let pathCount = 0;
+  for (const item of candidates) {
+    const norm = normalizeAreaPath(item);
+    if (!norm || seen.has(norm)) continue;
+    if (!isToken(norm)) {
+      if (pathCount >= MAX_AREAS) continue;
+      pathCount += 1;
+    }
+    seen.add(norm);
+    raw.push(norm);
+  }
   const expanded = normalizeAreaList(expandImpliedPaths(raw), Infinity);
   if (opts?.owners === undefined || opts?.owners === null) return expanded;
   return normalizeAreaList([...expanded, ...ownerAreas(expanded, opts.owners)], Infinity);

@@ -194,6 +194,34 @@ test('single-issue and grouped footprints retain all raw paths and synthesized o
   assert.ok(singleFootprint.includes('src/mod-23.mjs'));
   assert.ok(singleFootprint.includes('owner:prompts/cli/mod-23.prompt.md'));
 
+  // 1b. area:* labels do not consume the 24-path extraction budget (mapped and unmapped 24th file),
+  // while preserving deterministic cardPaths -> area:* labels -> textPaths ordering.
+  const labeledMapped = issueAreas(
+    { title: 'Touch 24 modules with area label', body: bodyPaths.join(' '), labels: ['area:billing'] },
+    null,
+    { owners: singleOwners },
+  );
+  assert.equal(labeledMapped[0], 'area:billing');
+  assert.equal(labeledMapped.length, 49);
+  assert.ok(labeledMapped.includes('src/mod-23.mjs'));
+  assert.ok(labeledMapped.includes('owner:prompts/cli/mod-23.prompt.md'));
+
+  const nestedPaths = Array.from({ length: 24 }, (_, i) => `src/part-${i}/file-${i}.mjs`);
+  const partialOwners = new Map(nestedPaths.slice(0, 23).map((p, i) => [p, `prompts/owner-${i}.prompt.md`]));
+  const labeledUncertain = issueAreas(
+    { body: nestedPaths.join(' '), labels: ['area:billing'] },
+    null,
+    { owners: partialOwners },
+  );
+  assert.ok(labeledUncertain.includes('area:billing'));
+  assert.ok(labeledUncertain.includes(nestedPaths[23]));
+  assert.ok(labeledUncertain.includes('uncertain:src/part-23'));
+  assert.equal(areasOverlap(labeledUncertain, ['src/part-23/helper.mjs'], { owners: partialOwners }).overlap, true);
+  assert.deepEqual(areasOverlap(labeledUncertain, ['src/part-23/deep/helper.mjs'], { owners: partialOwners }), {
+    overlap: true,
+    reason: 'uncertain:src/part-23',
+  });
+
   // 2. 3 explicitly linked small cards (group_with), each targeting 5 separately owned files (15 files + 15 owner:* = 30 entries).
   const owners = new Map();
   const rows = [], cards = new Map();
