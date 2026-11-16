@@ -692,6 +692,8 @@ const RECORDED_BASE_ENTRIES = {
   'lib:product.mjs': [0,2,10,11,14,16,19,23,29,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
   'lib:autopilot-doctor.mjs': [0,2,10,11,14,16,18,19,23,29,30,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
 };
+const RUNTIME_OUTPUT_PURE_LEAVES = ['src/lint-compatibility-display.mjs'];
+const RUNTIME_CLIENT_PURE_LEAVES = ['src/try-session.mjs'];
 
 test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and library entry matches recorded base module sets, cycles and guarded load failures', async t => {
   const { execFile, execFileSync, spawnSync } = await import('node:child_process');
@@ -827,6 +829,16 @@ registerHooks({
   }
   const novelStaticCycles = findTarjanCycles(staticAdj).filter(c => !ALLOWED_BASE_CYCLES.has(c));
   assert.deepEqual(novelStaticCycles, [], `unexpected new static import cycle: ${novelStaticCycles.join('; ')}`);
+  for (const [parent, leaves] of [
+    ['src/runtime/runtime-output.mjs', RUNTIME_OUTPUT_PURE_LEAVES],
+    ['src/runtime/runtime-client.mjs', RUNTIME_CLIENT_PURE_LEAVES],
+  ]) {
+    for (const leaf of leaves) {
+      const runtimeLeaf = `src/runtime/${leaf.slice('src/'.length)}`;
+      assert.ok(staticAdj.get(parent)?.has(runtimeLeaf), `${leaf} must remain a ${parent} dependency`);
+      assert.deepEqual([...staticAdj.get(runtimeLeaf) ?? []], [], `${leaf} must remain a pure leaf`);
+    }
+  }
 
   const ASYNC_SEAM_BRIDGE_PROBES = new Set([
     'cli:test', 'cli:lint', 'cli:simulate', 'cli:contracts', 'cli:contracts-sync',
@@ -982,7 +994,12 @@ registerHooks({
     const chunk = probes.slice(i, i + 8);
     const probeBatch = await Promise.all(chunk.map(([key, args, cwd]) => runProbe(key, args, cwd)));
     chunk.forEach(([key], idx) => {
-      const expected = RECORDED_BASE_ENTRIES[key].map(n => BASE_SRC_CATALOG[n]);
+      const baseExpected = RECORDED_BASE_ENTRIES[key].map(n => BASE_SRC_CATALOG[n]);
+      const expected = [
+        ...baseExpected,
+        ...(baseExpected.includes('src/runtime-output.mjs') ? RUNTIME_OUTPUT_PURE_LEAVES : []),
+        ...(baseExpected.includes('src/runtime-client.mjs') ? RUNTIME_CLIENT_PURE_LEAVES : []),
+      ].sort();
       const { loaded, cycles } = probeBatch[idx];
       assert.deepEqual(loaded, expected, `loaded modules mismatch for ${key}`);
       if (ACYCLIC_ENTRIES.has(key)) {
