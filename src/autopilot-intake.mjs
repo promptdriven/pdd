@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: beb2fee495a3e965b8483f5c430a247c59b325a763e5ce49c462b4a608528e1b).
+// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: 67b42a9c4c2742bddca035f0a7bef1d4a13ad79b42b9dd1b6106eff896a6f199).
 import * as nativeFs from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -9,7 +9,6 @@ import { classifyRateLimitFailure, isQuotaExhaustionMessage } from './login-pool
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
 export const CARD_CLASSES = Object.freeze(['ready', 'improve', 'person', 'duplicate', 'blocked', 'held', 'fixed', 'elsewhere']);
 const STARTS = new Set(['ready', 'improve']), REUSABLE_IMPROVED = new Set(['ready', 'fixed', 'elsewhere']);
-const INTAKE_KINDS = ['codex', 'claude', 'gemini', 'agy'], PRIMARY_POOL_KINDS = ['codex', 'claude'];
 const MIN = 60000, HOUR = 60 * MIN;
 export const INTAKE_LIMITS = Object.freeze({ startsPerTick: 2, running: 2, timeout: 20 * MIN, retryAfter: 6 * HOUR, comments: 20, commentChars: 3000, bodyChars: 20000, pool: 200, resultBytes: 64 * 1024, logDays: 7, lookups: 40, trustHours: 6 });
 // Labels that the core itself treats as "do not start": an issue with one of them gets a native reason and no card.
@@ -151,31 +150,26 @@ export function cardMatchesRow(entry, row) {
 // The bypass flags of build jobs are never used for cards.
 const CODEX_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host'];
 const CODEX_IMPROVE_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'code_mode', 'code_mode_host'];
-const cmdOf = (value, fallback) => typeof value === 'string' && value.trim() ? value.trim() : fallback;
 export function cardCommand(agent, { model, result } = {}) {
   const extra = model ? ['--model', model] : [];
   // --ignore-user-config: no MCP servers, profiles or features from the person's config.toml (auth still loads).
-  if (agent?.kind === 'codex') return { command: cmdOf(agent.command, 'codex'), args: ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--ignore-rules',
+  if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--ignore-rules',
     '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'model_reasoning_effort="low"', ...CODEX_OFF.flatMap(name => ['-c', `features.${name}=false`]), '--output-last-message', result, ...extra, '-'] };
-  if (agent?.kind === 'claude') return { command: cmdOf(agent.command, 'claude'), args: ['-p', '--safe-mode', '--tools', '', '--permission-mode', 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome',
+  if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--safe-mode', '--tools', '', '--permission-mode', 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome',
     '--no-session-persistence', '--output-format', 'json', ...extra] };
-  if (agent?.kind === 'gemini') return { command: cmdOf(agent.command, 'gemini'), args: ['-p', '', '--approval-mode', 'plan', '--extensions', 'none', '--allowed-mcp-server-names', 'pdd-disabled-none', '--output-format', 'json', ...extra] };
-  if (agent?.kind === 'agy') return { command: cmdOf(agent.command, 'agy'), args: ['--input-format', 'text', '--output-format', 'json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--effort', 'low', ...extra] };
-  throw Error('Intake cards need codex, claude, gemini or agy');
+  throw Error('Intake cards need codex or claude');
 }
 
 // Bounded read-only repository inspection command for auto-improving `improve` cards (#3190). Runs with cwd set to
 // the repository checkout inside a read-only sandbox and with zero GitHub write tokens in cardEnvironment.
 export function improveCommand(agent, { model, result } = {}) {
   const extra = model ? ['--model', model] : [];
-  if (agent?.kind === 'codex') return { command: cmdOf(agent.command, 'codex'), args: ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--ephemeral', '--color', 'never',
+  if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--ephemeral', '--color', 'never',
     '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'model_reasoning_effort="medium"',
     ...CODEX_IMPROVE_OFF.flatMap(name => ['-c', `features.${name}=false`]), '--output-last-message', result, ...extra, '-'] };
-  if (agent?.kind === 'claude') return { command: cmdOf(agent.command, 'claude'), args: ['-p', '--safe-mode', '--tools', 'Read,Glob,Grep', '--permission-mode', 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome',
+  if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--safe-mode', '--tools', 'Read,Glob,Grep', '--permission-mode', 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome',
     '--no-session-persistence', '--output-format', 'json', ...extra] };
-  if (agent?.kind === 'gemini') return { command: cmdOf(agent.command, 'gemini'), args: ['-p', '', '--approval-mode', 'plan', '--extensions', 'none', '--allowed-mcp-server-names', 'pdd-disabled-none', '--output-format', 'json', ...extra] };
-  if (agent?.kind === 'agy') return { command: cmdOf(agent.command, 'agy'), args: ['--input-format', 'text', '--output-format', 'json', '--mode', 'plan', '--sandbox', '--disable-slash-commands', '--effort', 'medium', ...extra] };
-  throw Error('Intake auto-improve needs codex, claude, gemini or agy');
+  throw Error('Intake auto-improve needs codex or claude');
 }
 
 // The card job environment: the core's job environment without GitHub tokens; a card needs no GitHub access.
@@ -289,43 +283,41 @@ export function readImprovement(result, { selfIssue = null } = {}) {
   return { outcome: 'person', ...base, evidence: null, target_repo: null, question, options, recommended: plain(result.recommended, 10) || null };
 }
 
-// The answer text: one JSON object, maybe inside a code fence or other words.
-export function parseCardText(value) {
-  const t = text(value), from = t.indexOf('{'), to = t.lastIndexOf('}');
-  if (from < 0 || to <= from) return null;
-  try { return JSON.parse(t.slice(from, to + 1)); } catch { return null; }
-}
-function unwrapEnvelope(value) {
-  if (!object(value)) return null;
-  if (value.is_error === true || (object(value.error) && !value.class && !value.outcome)) return { error: 'the card job ended with no answer' };
-  if (typeof value.class === 'string' || typeof value.outcome === 'string') return { parsed: value };
-  for (const key of ['result', 'response', 'output', 'text', 'content']) {
-    if (typeof value[key] === 'string') return { parsed: parseCardText(value[key]) };
-    if (object(value[key]) && (typeof value[key].class === 'string' || typeof value[key].outcome === 'string')) return { parsed: value[key] };
+// The answer text: one balanced JSON object, even after warning lines with braces or inside a code fence.
+function parseBalancedAt(t, end) {
+  let pos = end, tries = 0;
+  while (pos > 0 && (pos = t.lastIndexOf('{', pos - 1)) >= 0) {
+    if (!' \t\n\r"}'.includes(t[pos + 1] ?? '')) continue;
+    const lineStart = pos === 0 || t[pos - 1] === '\n' || t[pos - 1] === '\r';
+    if (++tries > 256 && !lineStart) continue;
+    try { const parsed = JSON.parse(t.slice(pos, end + 1)); if (object(parsed)) return { parsed, start: pos }; } catch {}
   }
   return null;
 }
+function extractJsonObjects(value) {
+  const t = text(value), out = [];
+  let end = t.length, endTries = 0;
+  while (end > 0 && (end = t.lastIndexOf('}', end - 1)) > 0 && out.length < 16 && ++endTries <= 32) {
+    const hit = parseBalancedAt(t, end);
+    if (hit) { out.push(hit.parsed); end = hit.start; }
+  }
+  return out;
+}
+export function parseCardText(value) {
+  const objs = extractJsonObjects(value);
+  return objs.find(o => typeof o.class === 'string' || typeof o.outcome === 'string') ?? objs[0] ?? null;
+}
 function rawJobAnswer(ctx, saved) {
-  const kind = saved.agent?.kind, logBased = kind === 'claude' || kind === 'gemini' || kind === 'agy';
-  let file = logBased ? saved.job?.log : saved.answer, size = 0;
-  try { size = ctx.fs.statSync(file).size; } catch {
-    if (kind !== 'gemini' && kind !== 'agy') return { error: 'the card job ended with no answer' };
-    try { file = saved.answer; size = ctx.fs.statSync(file).size; } catch { return { error: 'the card job ended with no answer' }; }
-  }
-  if (size === 0 && (kind === 'gemini' || kind === 'agy') && saved.answer) {
-    try { const alt = ctx.fs.statSync(saved.answer).size; if (alt > 0) { file = saved.answer; size = alt; } } catch {}
-  }
+  const file = saved.agent?.kind === 'claude' ? saved.job?.log : saved.answer;
+  let size = 0;
+  try { size = ctx.fs.statSync(file).size; } catch { return { error: 'the card job ended with no answer' }; }
   if (size > INTAKE_LIMITS.resultBytes) return { error: `the card answer is too large (${size} bytes)` };
   const raw = ctx.fs.readFileSync(file, 'utf8');
-  if (kind === 'claude') {
-    const reply = raw.split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(object).reverse().find(x => typeof x.result === 'string');
-    return !reply || reply.is_error ? { error: 'the card job ended with no answer' } : { parsed: parseCardText(reply.result) };
-  }
-  if (kind === 'gemini' || kind === 'agy') {
-    for (const item of raw.split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(object).reverse()) {
-      const hit = unwrapEnvelope(item); if (hit) return hit;
-    }
-    return unwrapEnvelope(parseCardText(raw)) ?? { error: 'the card job ended with no answer' };
+  if (saved.agent?.kind === 'claude') {
+    const lines = raw.split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(object).reverse();
+    const reply = lines.find(x => typeof x.result === 'string') ?? extractJsonObjects(raw).find(x => typeof x.result === 'string');
+    if (!reply || reply.is_error) return { error: 'the card job ended with no answer' };
+    return { parsed: parseCardText(reply.result) };
   }
   return { parsed: parseCardText(raw) };
 }
@@ -417,7 +409,7 @@ async function maybeExhaustIntakeLogin(ctx, f, saved, errorText = '') {
     cloud: saved.cloud === true,
     reason: saved.cloud ? (sample.slice(0, 500) || 'quota') : 'quota',
     accountWindows: saved.accountWindows ?? null,
-    allowedKinds: PRIMARY_POOL_KINDS.includes(saved.agent?.kind) ? PRIMARY_POOL_KINDS : INTAKE_KINDS,
+    allowedKinds: ['codex', 'claude'],
   });
   return true;
 }
@@ -447,21 +439,16 @@ function startIntakeJob(ctx, runner, spec) {
 }
 
 async function resolveIntakeRunner(ctx) {
-  if (ctx.budget?.state === 'low' || ctx.budget?.state === 'reserve') return { ok: false, reason: 'GitHub budget is low' };
-  if (intakeMode(ctx.settings?.intake) === 'active' && typeof ctx.state?.intakeNote === 'string' && ctx.state.intakeNote.startsWith('intake held:')) {
-    return { ok: false, reason: ctx.state.intakeNote };
+  if (ctx.budget?.state === 'low' || ctx.budget?.state === 'reserve') {
+    return { ok: false, reason: 'GitHub budget is low' };
   }
   if (typeof ctx.ports?.selectLogin === 'function') {
-    let selected = await ctx.ports.selectLogin({ allowedKinds: PRIMARY_POOL_KINDS }).catch(() => null);
-    if ((!selected || selected.state !== 'ready') && !(Array.isArray(selected?.cooling) && selected.cooling.length > 0)) {
-      const wider = await ctx.ports.selectLogin({ allowedKinds: INTAKE_KINDS }).catch(() => null);
-      if (wider?.state === 'ready' || !selected) selected = wider;
-    }
-    if (!selected || selected.state !== 'ready' || !INTAKE_KINDS.includes(selected.agent?.kind)) {
+    const selected = await ctx.ports.selectLogin({ allowedKinds: ['codex', 'claude'] }).catch(() => null);
+    if (!selected || selected.state !== 'ready' || !['codex', 'claude'].includes(selected.agent?.kind)) {
       const cooling = Array.isArray(selected?.cooling) && selected.cooling.length > 0;
       const reason = cooling
         ? `active intake login pool is cooling down${selected?.resetAt ? ` until ${new Date(selected.resetAt).toISOString()}` : ''}`
-        : 'active intake needs a codex, claude, gemini or agy login';
+        : 'active intake needs a codex or claude login';
       return { ok: false, reason, selected };
     }
     const model = selected.agent.model
@@ -485,8 +472,11 @@ async function resolveIntakeRunner(ctx) {
       prepareStep: typeof selected.prepareStep === 'function' ? selected.prepareStep : null,
     };
   }
-  const kind = ctx.state?.agent?.kind ?? null, model = ctx.state?.agent?.model ?? null;
-  if (!INTAKE_KINDS.includes(kind)) return { ok: false, reason: 'active intake needs a codex, claude, gemini or agy login' };
+  const kind = ctx.state?.agent?.kind ?? null;
+  const model = ctx.state?.agent?.model ?? null;
+  if (!['codex', 'claude'].includes(kind)) {
+    return { ok: false, reason: 'active intake needs a codex or claude login' };
+  }
   const ready = !ctx.ports?.agentReady || await ctx.ports.agentReady().catch(() => false);
   if (!ready) {
     return { ok: false, reason: 'the intake agent is not ready (sign-in or usage limit)' };

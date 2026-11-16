@@ -84,23 +84,11 @@ test('autopilot-intake-shadow: the card agent has no tools and no write access, 
   assert.equal(claude.args.includes('--mcp-config'), false);
   const env = cardEnvironment({ PATH: '/bin', GH_TOKEN: 'a', GITHUB_TOKEN: 'b', GH_ENTERPRISE_TOKEN: 'c', GITHUB_PERSONAL_ACCESS_TOKEN: 'd', OPENAI_API_KEY: 'e', CLAUDECODE: '1' });
   assert.deepEqual(env, { PATH: '/bin', OPENAI_API_KEY: 'e' }, 'no GitHub token and no session key reaches a card');
-  const gemini = cardCommand({ kind: 'gemini' }, { model: 'gemini-2.5-flash' });
-  const geminiImp = improveCommand({ kind: 'gemini', command: '/opt/bin/gemini' }, { model: 'gemini-2.5-pro' });
-  assert.equal(gemini.command, 'gemini'); assert.equal(geminiImp.command, '/opt/bin/gemini');
-  for (const g of [gemini, geminiImp]) {
-    assert.equal(after(g.args, '-p'), ''); assert.equal(after(g.args, '--approval-mode'), 'plan');
-    assert.equal(after(g.args, '--extensions'), 'none'); assert.equal(after(g.args, '--output-format'), 'json');
+  for (const run of [codex, claude]) for (const bad of ['--dangerously-bypass-approvals-and-sandbox', 'bypassPermissions', '--dangerously-skip-permissions']) assert.equal(run.args.includes(bad), false, bad);
+  for (const kind of ['gemini', 'agy']) {
+    assert.throws(() => cardCommand({ kind }), /codex or claude/);
+    assert.throws(() => improveCommand({ kind }), /codex or claude/);
   }
-  const agy = cardCommand({ kind: 'agy' }, { model: 'gemini-2.5-flash' });
-  const agyImp = improveCommand({ kind: 'agy', command: '/opt/bin/agy' }, {});
-  assert.equal(after(agy.args, '--mode'), 'plan'); assert.equal(after(agy.args, '--effort'), 'low');
-  assert.equal(after(agyImp.args, '--mode'), 'plan'); assert.equal(after(agyImp.args, '--effort'), 'medium');
-  for (const a of [agy, agyImp]) for (const flag of ['--sandbox', '--disable-slash-commands']) assert.ok(a.args.includes(flag), flag);
-  for (const run of [codex, claude, gemini, geminiImp, agy, agyImp]) {
-    for (const bad of ['--dangerously-bypass-approvals-and-sandbox', 'bypassPermissions', '--dangerously-skip-permissions', '--yolo', 'yolo']) assert.equal(run.args.includes(bad), false, bad);
-  }
-  assert.throws(() => cardCommand({ kind: 'other' }), /codex, claude, gemini or agy/);
-  assert.throws(() => improveCommand({ kind: 'other' }), /codex, claude, gemini or agy/);
 });
 
 test('autopilot-intake-shadow: one card job per issue version for trusted authors only, at most 2 per tick, in an empty folder', async t => {
@@ -676,7 +664,7 @@ test('autopilot-intake-cloud: shadowIntake and activeIntake materialize prepareS
   }
 });
 
-function miniHarness(root, { repo = 'acme/widgets', cwd = root, agent = { kind: 'codex' }, intake = 'active', env = {}, selectLogin } = {}) {
+function miniHarness(root, { repo = 'acme/widgets', cwd = root, agent = { kind: 'codex' }, intake = 'active', env = {} } = {}) {
   let now = Date.parse('2026-11-16T02:00:00Z'), pid = 100;
   const alive = new Set(), started = [], comments = new Map(), labelWrites = [], closed = [], alerts = [];
   const jobs = {
@@ -696,46 +684,39 @@ function miniHarness(root, { repo = 'acme/widgets', cwd = root, agent = { kind: 
   };
   const ctx = {
     fs: nodeFs, now: () => now, root, repo, state: { agent, cwd }, settings: { intake }, budget: { state: 'normal' }, gh, jobs,
-    ports: { trusted: async () => true, agentReady: async () => true, env: { HOME: root, ...env }, ...(selectLogin ? { selectLogin } : {}), alert: async a => alerts.push(a) }, warn: () => {},
+    ports: { trusted: async () => true, agentReady: async () => true, env: { HOME: root, ...env }, alert: async a => alerts.push(a) }, warn: () => {},
   };
   return { ctx, alive, started, comments, labelWrites, closed, alerts, now: () => now };
 }
 
-test('autopilot-intake-multi-agent: gemini and agy run shadow and active card + improve passes with token-free env and root_cause/out_of_scope refinement', async () => {
+test('autopilot-intake-multiline-and-refinement: parses multiline JSON after brace warnings and renders root_cause/out_of_scope', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os');
-  const root = mkdtempSync(join(tmpdir(), 'pdd-intake-ma-'));
+  const root = mkdtempSync(join(tmpdir(), 'pdd-intake-ml-'));
   try {
-    const rows = [{ number: 31, title: 'Clarify timeout handling', body: 'Make timeout clear.', labels: [], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:00:00Z' }];
-    const gem = miniHarness(root, { agent: { kind: 'gemini', model: 'gemini-2.5-flash' }, intake: 'shadow', env: { GH_TOKEN: 'sec-gh', GITHUB_TOKEN: 'sec-gh2', GEMINI_API_KEY: 'gem-key' } });
-    await shadowIntake(gem.ctx, rows);
-    assert.equal(gem.started[0].command, 'gemini');
-    assert.equal(gem.started[0].env.GH_TOKEN, undefined); assert.equal(gem.started[0].env.GITHUB_TOKEN, undefined); assert.equal(gem.started[0].env.GEMINI_API_KEY, 'gem-key');
-    writeFileSync(gem.started[0].log, `Loaded cached credentials.\n${JSON.stringify({ response: '\`\`\`json\n{"class":"ready","reason":"Clear gemini card.","confidence":0.9,"areas":["src/a.mjs"],"size":"small","model":"gemini-2.5-flash"}\n\`\`\`', stats: {} }, null, 2)}\n`);
-    gem.alive.delete(gem.started[0].pid);
-    await shadowIntake(gem.ctx, rows);
-    assert.equal(readIntake({ root, now: gem.now() }).cards[0].card.class, 'ready');
+    const cardPayload = { class: 'improve', reason: 'Needs repo check.', confidence: 0.85, areas: ['src/a.mjs'], size: 'small' };
+    assert.equal(parseCardText('Warning: ignored configuration {}\n' + JSON.stringify(cardPayload, null, 2))?.class, 'improve');
 
-    const agyRoot = join(root, 'agy'); mkdirSync(agyRoot, { recursive: true });
-    const agy = miniHarness(agyRoot, {
-      agent: { kind: 'agy', model: 'gemini-2.5-pro' }, intake: 'active', env: { GH_TOKEN: 'sec' },
-      selectLogin: async ({ allowedKinds } = {}) => allowedKinds?.includes('agy')
-        ? { state: 'ready', configured: true, poolSize: 1, login: { id: 'agy-1', kind: 'agy', command: 'agy' }, agent: { id: 'agy-1', kind: 'agy', command: 'agy' }, env: { HOME: agyRoot, GH_TOKEN: 'sec' } }
-        : { state: 'unavailable', configured: true, poolSize: 0, cooling: [], unavailable: [] },
-    });
-    await activeIntake(agy.ctx, rows);
-    assert.equal(agy.started[0].command, 'agy'); assert.equal(agy.started[0].env.GH_TOKEN, undefined);
-    writeFileSync(agy.started[0].log, `${JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify({ class: 'improve', reason: 'Needs repo check.', confidence: 0.8, areas: ['src/a.mjs'] }) })}\n`);
-    agy.alive.delete(agy.started[0].pid);
-    await activeIntake(agy.ctx, rows);
-    assert.equal(agy.started[1].command, 'agy'); assert.equal(agy.started[1].cwd, agyRoot);
-    writeFileSync(agy.started[1].log, JSON.stringify({ response: JSON.stringify({
-      outcome: 'ready', reason: 'Grounded in src/a.mjs.', areas: ['src/a.mjs'],
-      root_cause: 'parseTimeout ignores 0 in src/a.mjs', reproduction: 'parseTimeout(0) falls back to 30000',
-      out_of_scope: ['Do not change CLI flag names'], acceptance_criteria: ['parseTimeout(0) returns 0'], size: 'small', model: 'gemini-2.5-pro',
-    }) }));
-    agy.alive.delete(agy.started[1].pid);
-    await activeIntake(agy.ctx, rows);
-    const promoted = readIntake({ root: agyRoot, now: agy.now() }).cards[0], posted = agy.comments.get(31)?.[0]?.body ?? '';
+    const rows = [{ number: 31, title: 'Clarify timeout handling', body: 'Make timeout clear.', labels: [], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:00:00Z' }];
+    const cl = miniHarness(root, { agent: { kind: 'claude', model: 'claude-sonnet-4-6' }, intake: 'active', env: { GH_TOKEN: 'sec' } });
+    await activeIntake(cl.ctx, rows);
+    assert.equal(cl.started[0].command, 'claude'); assert.equal(cl.started[0].env.GH_TOKEN, undefined);
+    const cardEnvelope = { type: 'result', is_error: false, result: 'Warning: ignored configuration {}\n' + JSON.stringify(cardPayload, null, 2) };
+    writeFileSync(cl.started[0].log, 'Warning: ignored configuration {}\n' + JSON.stringify(cardEnvelope, null, 2));
+    cl.alive.delete(cl.started[0].pid);
+    await activeIntake(cl.ctx, rows);
+    assert.equal(cl.started[1].command, 'claude'); assert.equal(cl.started[1].role, 'intake-improve');
+    const impEnvelope = {
+      type: 'result', is_error: false,
+      result: JSON.stringify({
+        outcome: 'ready', reason: 'Grounded in src/a.mjs.', areas: ['src/a.mjs'],
+        root_cause: 'parseTimeout ignores 0 in src/a.mjs', reproduction: 'parseTimeout(0) falls back to 30000',
+        out_of_scope: ['Do not change CLI flag names'], acceptance_criteria: ['parseTimeout(0) returns 0'], size: 'small', model: 'claude-sonnet-4-6',
+      }, null, 2),
+    };
+    writeFileSync(cl.started[1].log, 'Warning: ignored configuration {}\n' + JSON.stringify(impEnvelope, null, 2));
+    cl.alive.delete(cl.started[1].pid);
+    await activeIntake(cl.ctx, rows);
+    const promoted = readIntake({ root, now: cl.now() }).cards[0], posted = cl.comments.get(31)?.[0]?.body ?? '';
     assert.equal(promoted.card.class, 'ready'); assert.equal(promoted.card.root_cause, 'parseTimeout ignores 0 in src/a.mjs');
     assert.deepEqual(promoted.card.out_of_scope, ['Do not change CLI flag names']);
     assert.match(promoted.refinedSpec, /Root cause: parseTimeout ignores 0 in src\/a\.mjs/);
