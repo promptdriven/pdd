@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 0a619d072eab6bf687f4eeece01bdad3842e582b3b0731b4b6ef56e7f784df44).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 7751a3c0fc8382eafd98fbac0d9514e9e4fc36feeb14bed44ee5f7648f732ae1).
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -10,14 +10,20 @@ import {
   CloudAccountsError,
   cloudAccountsRequest,
   isCloudAccountsActive,
+  isLocalReauthUnresolved,
+  isReauthRequiredAccount,
+  isReauthRequiredFailure,
   leaseCloudAccount,
   listCloudAccounts,
   localClaudePaths,
   localCodexAuthPath,
-  localCodexConfigPath,
   localCodexHome,
+  managedCodexAuthPath,
+  managedCodexConfigPath,
+  markLocalAccountReauthRequired,
   materializeLocalClaudeAuth,
   materializeLocalCodexAuth,
+  pddManagedCodexHome,
   readCloudAccountsState,
   readCodexUsageWindows,
   reportCloudAccountUsage,
@@ -31,29 +37,195 @@ const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const AUTO_BEGIN = '# >>> pdd accounts auto >>>';
 const AUTO_END = '# <<< pdd accounts auto <<<';
 
-export function renderAutoSwitchBlock() {
+export function renderAutoSwitchBlock(shell = 'sh') {
+  if (shell === 'fish') {
+    return [
+      AUTO_BEGIN,
+      "functions -e codex claude 2>/dev/null; or true",
+      "function codex --wraps codex",
+      "  set -l _pdd_mhome \"$HOME/.local/state/pdd/codex-home\"",
+      "  if set -q XDG_STATE_HOME; and test -n \"$XDG_STATE_HOME\"",
+      "    set _pdd_mhome (string replace -r '/+$' '' -- \"$XDG_STATE_HOME\")\"/pdd/codex-home\"",
+      "  end",
+      "  if set -q PDD_STATE_DIR; and test -n \"$PDD_STATE_DIR\"",
+      "    set _pdd_mhome (string replace -r '/+$' '' -- \"$PDD_STATE_DIR\")\"/codex-home\"",
+      "  end",
+      "  set _pdd_mhome (string replace -a '/./' '/' -- \"$_pdd_mhome\")",
+      "  set -l _pdd_cur_home \"\"",
+      "  set -l _pdd_is_mhome 0",
+      "  if set -q CODEX_HOME; and test -n \"$CODEX_HOME\"",
+      "    set _pdd_cur_home (string replace -a '/./' '/' -- (string replace -r '/+$' '' -- \"$CODEX_HOME\"))",
+      "    if test \"$_pdd_cur_home\" = \"$_pdd_mhome\"",
+      "      set _pdd_is_mhome 1",
+      "    else if test -e \"$_pdd_cur_home\"; and test -e \"$_pdd_mhome\"; and test \"$_pdd_cur_home\" -ef \"$_pdd_mhome\"",
+      "      set _pdd_is_mhome 1",
+      "    end",
+      "  end",
+      "  set -l _pdd_sub \"\"",
+      "  set -l _pdd_next \"\"",
+      "  set -l _pdd_skip 0",
+      "  for _pdd_arg in $argv",
+      "    if test $_pdd_skip -eq 1",
+      "      set _pdd_skip 0",
+      "      continue",
+      "    end",
+      "    if test \"$_pdd_arg\" = \"--\"",
+      "      break",
+      "    end",
+      "    if test -z \"$_pdd_sub\"",
+      "      switch \"$_pdd_arg\"",
+      "        case -c --config --enable --disable --remote --remote-auth-token-env -i --image -m --model --local-provider -p --profile -s --sandbox -C --cd --add-dir -a --ask-for-approval --color -o --output-last-message",
+      "          set _pdd_skip 1",
+      "          continue",
+      "        case '-*'",
+      "          continue",
+      "        case logout login",
+      "          set _pdd_sub \"$_pdd_arg\"",
+      "          continue",
+      "        case agents exec e review mcp mcp-server plugin app-server remote-control completion update doctor sandbox debug apply a resume queue archive delete migrate-rollouts unarchive fork cloud exec-server features help",
+      "          set _pdd_sub \"$_pdd_arg\"",
+      "          break",
+      "      end",
+      "    else if test -z \"$_pdd_next\"",
+      "      switch \"$_pdd_arg\"",
+      "        case '-*'",
+      "          continue",
+      "      end",
+      "      set _pdd_next \"$_pdd_arg\"",
+      "      break",
+      "    end",
+      "  end",
+      "  if test \"$_pdd_sub\" = \"logout\"; or begin; test \"$_pdd_sub\" = \"login\"; and test \"$_pdd_next\" != \"status\"; end",
+      "    if test $_pdd_is_mhome -eq 1",
+      "      echo \"pdd accounts: refusing to run 'codex $_pdd_sub' inside PDD-managed CODEX_HOME ($_pdd_mhome) so the Cloud token is not revoked. Use 'pdd accounts pause', 'pdd accounts remove', or 'pdd accounts use' instead (or set -e CODEX_HOME to manage ~/.codex).\" >&2",
+      "      return 1",
+      "    end",
+      "    command codex $argv",
+      "    return $status",
+      "  end",
+      "  if test \"$_pdd_sub\" = \"login\"",
+      "    command codex $argv",
+      "    return $status",
+      "  end",
+      "  if test -z \"$_pdd_cur_home\"; or test $_pdd_is_mhome -eq 1",
+      "    set -l _pdd_cx_home \"\"",
+      "    if command -sq pdd",
+      "      set _pdd_cx_home (env PDD_PRINT_CODEX_HOME=1 pdd accounts sync --provider codex --quiet --timeout-ms 1200 2>/dev/null; or true)",
+      "    end",
+      "    if test -n \"$_pdd_cx_home\"; and test -f \"$_pdd_cx_home/auth.json\"",
+      "      CODEX_HOME=\"$_pdd_cx_home\" command codex $argv",
+      "      return $status",
+      "    end",
+      "    if set -q CODEX_HOME",
+      "      env -u CODEX_HOME codex $argv",
+      "      return $status",
+      "    end",
+      "  end",
+      "  command codex $argv",
+      "end",
+      "function claude --wraps claude",
+      "  command -sq pdd; and pdd accounts sync --provider claude --quiet --timeout-ms 1200 2>/dev/null; or true",
+      "  command claude $argv",
+      "end",
+      AUTO_END,
+    ].join('\n');
+  }
   return [
     AUTO_BEGIN,
-    'unalias codex claude 2>/dev/null || true',
-    'codex() {',
-    '  command -v pdd >/dev/null 2>&1 && pdd accounts sync --provider codex --quiet --timeout-ms 1200 2>/dev/null || true',
-    '  command codex "$@"',
-    '}',
-    'claude() {',
-    '  command -v pdd >/dev/null 2>&1 && pdd accounts sync --provider claude --quiet --timeout-ms 1200 2>/dev/null || true',
-    '  command claude "$@"',
-    '}',
+    "unalias codex claude 2>/dev/null || true",
+    "codex() {",
+    "  local _pdd_mhome=\"$HOME/.local/state/pdd/codex-home\"",
+    "  if [ -n \"${XDG_STATE_HOME:-}\" ]; then",
+    "    _pdd_mhome=\"${XDG_STATE_HOME%/}/pdd/codex-home\"",
+    "  fi",
+    "  if [ -n \"${PDD_STATE_DIR:-}\" ]; then",
+    "    _pdd_mhome=\"${PDD_STATE_DIR%/}/codex-home\"",
+    "  fi",
+    "  while [ \"${_pdd_mhome#*/./}\" != \"$_pdd_mhome\" ]; do _pdd_mhome=\"${_pdd_mhome%%/./*}/${_pdd_mhome#*/./}\"; done",
+    "  local _pdd_cur_home=\"${CODEX_HOME:-}\" _pdd_is_mhome=0",
+    "  while [ -n \"$_pdd_cur_home\" ] && [ \"${_pdd_cur_home%/}\" != \"$_pdd_cur_home\" ]; do _pdd_cur_home=\"${_pdd_cur_home%/}\"; done",
+    "  while [ \"${_pdd_cur_home#*/./}\" != \"$_pdd_cur_home\" ]; do _pdd_cur_home=\"${_pdd_cur_home%%/./*}/${_pdd_cur_home#*/./}\"; done",
+    "  if [ -n \"$_pdd_cur_home\" ]; then",
+    "    if [ \"$_pdd_cur_home\" = \"$_pdd_mhome\" ]; then",
+    "      _pdd_is_mhome=1",
+    "    elif [ -e \"$_pdd_cur_home\" ] && [ -e \"$_pdd_mhome\" ] && [ \"$_pdd_cur_home\" -ef \"$_pdd_mhome\" ]; then",
+    "      _pdd_is_mhome=1",
+    "    fi",
+    "  fi",
+    "  local _pdd_sub=\"\" _pdd_next=\"\" _pdd_skip=0 _pdd_arg",
+    "  for _pdd_arg in \"$@\"; do",
+    "    if [ \"$_pdd_skip\" -eq 1 ]; then",
+    "      _pdd_skip=0",
+    "      continue",
+    "    fi",
+    "    if [ \"$_pdd_arg\" = \"--\" ]; then",
+    "      break",
+    "    fi",
+    "    if [ -z \"$_pdd_sub\" ]; then",
+    "      case \"$_pdd_arg\" in",
+    "        -c|--config|--enable|--disable|--remote|--remote-auth-token-env|-i|--image|-m|--model|--local-provider|-p|--profile|-s|--sandbox|-C|--cd|--add-dir|-a|--ask-for-approval|--color|-o|--output-last-message)",
+    "          _pdd_skip=1",
+    "          continue",
+    "          ;;",
+    "        -*) continue ;;",
+    "        logout|login)",
+    "          _pdd_sub=\"$_pdd_arg\"",
+    "          continue",
+    "          ;;",
+    "        agents|exec|e|review|mcp|mcp-server|plugin|app-server|remote-control|completion|update|doctor|sandbox|debug|apply|a|resume|queue|archive|delete|migrate-rollouts|unarchive|fork|cloud|exec-server|features|help)",
+    "          _pdd_sub=\"$_pdd_arg\"",
+    "          break",
+    "          ;;",
+    "      esac",
+    "    elif [ -z \"$_pdd_next\" ]; then",
+    "      case \"$_pdd_arg\" in",
+    "        -*) continue ;;",
+    "      esac",
+    "      _pdd_next=\"$_pdd_arg\"",
+    "      break",
+    "    fi",
+    "  done",
+    "  if [ \"$_pdd_sub\" = \"logout\" ] || { [ \"$_pdd_sub\" = \"login\" ] && [ \"$_pdd_next\" != \"status\" ]; }; then",
+    "    if [ \"$_pdd_is_mhome\" -eq 1 ]; then",
+    "      printf '%s\\n' \"pdd accounts: refusing to run 'codex $_pdd_sub' inside PDD-managed CODEX_HOME ($_pdd_mhome) so the Cloud token is not revoked. Use 'pdd accounts pause', 'pdd accounts remove', or 'pdd accounts use' instead (or unset CODEX_HOME to manage ~/.codex).\" >&2",
+    "      return 1",
+    "    fi",
+    "    command codex \"$@\"",
+    "    return $?",
+    "  fi",
+    "  if [ \"$_pdd_sub\" = \"login\" ]; then",
+    "    command codex \"$@\"",
+    "    return $?",
+    "  fi",
+    "  if [ -z \"$_pdd_cur_home\" ] || [ \"$_pdd_is_mhome\" -eq 1 ]; then",
+    "    local _pdd_cx_home=\"\"",
+    "    if command -v pdd >/dev/null 2>&1; then",
+    "      _pdd_cx_home=\"$(PDD_PRINT_CODEX_HOME=1 pdd accounts sync --provider codex --quiet --timeout-ms 1200 2>/dev/null || true)\"",
+    "    fi",
+    "    if [ -n \"$_pdd_cx_home\" ] && [ -f \"$_pdd_cx_home/auth.json\" ]; then",
+    "      CODEX_HOME=\"$_pdd_cx_home\" command codex \"$@\"",
+    "      return $?",
+    "    fi",
+    "    if [ -n \"${CODEX_HOME:-}\" ]; then",
+    "      (unset CODEX_HOME; command codex \"$@\")",
+    "      return $?",
+    "    fi",
+    "  fi",
+    "  command codex \"$@\"",
+    "}",
+    "claude() {",
+    "  command -v pdd >/dev/null 2>&1 && pdd accounts sync --provider claude --quiet --timeout-ms 1200 2>/dev/null || true",
+    "  command claude \"$@\"",
+    "}",
     AUTO_END,
   ].join('\n');
 }
 
-const AUTO_BLOCK_RE = /(?:^|\n)# >>> pdd accounts auto >>>[\s\S]*?# <<< pdd accounts auto <<<\n?/g;
-
-export function applyAutoSwitchBlock(existingText = '') {
-  const block = `${renderAutoSwitchBlock()}\n`;
+export function applyAutoSwitchBlock(existingText = '', shell = 'sh') {
+  const block = `${renderAutoSwitchBlock(shell)}\n`;
   const source = String(existingText ?? '');
   if (source.includes(AUTO_BEGIN) && source.includes(AUTO_END)) {
-    return source.replace(/# >>> pdd accounts auto >>>[\s\S]*?# <<< pdd accounts auto <<<\n?/, block);
+    return source.replace(/# >>> pdd accounts auto >>>[\s\S]*?# <<< pdd accounts auto <<<\n?/, () => block);
   }
   if (!source) return block;
   return source.endsWith('\n') ? `${source}\n${block}` : `${source}\n\n${block}`;
@@ -67,9 +239,16 @@ export function removeAutoSwitchBlock(existingText = '') {
   return cleaned;
 }
 
-function shellProfilePaths(env = process.env) {
+function shellProfileEntries(env = process.env) {
   const home = env?.HOME || homedir();
-  return [join(home, '.zshrc'), join(home, '.bashrc')];
+  const xdgConfig = (typeof env?.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.trim())
+    ? env.XDG_CONFIG_HOME.trim()
+    : join(home, '.config');
+  return [
+    { path: join(home, '.zshrc'), shell: 'zsh' },
+    { path: join(home, '.bashrc'), shell: 'bash' },
+    { path: join(xdgConfig, 'fish', 'config.fish'), shell: 'fish' },
+  ];
 }
 
 function formatShortReset(iso) {
@@ -86,17 +265,71 @@ function formatWindow(pct, resetAt) {
   return reset ? `${rounded}% (${reset})` : `${rounded}%`;
 }
 
-function renderAccountsTable(accounts, pendingInvites, activeByProvider) {
+function hasUnresolvedLocalReauth(acc, activeEntry = null, localReauth = null) {
+  const accId = acc?.account_id;
+  if (!accId) return false;
+  const refreshedIso = acc?.last_refresh_at ?? acc?.refreshed_at ?? null;
+  if (isLocalReauthUnresolved(accId, refreshedIso, localReauth)) return true;
+  if (object(localReauth) && object(localReauth[accId])) return false;
+  if (activeEntry?.account_id === accId && activeEntry?.state === 'reauth_required') {
+    const refreshedMs = refreshedIso ? Date.parse(refreshedIso) : NaN;
+    const leasedMs = activeEntry.leased_at ? Date.parse(activeEntry.leased_at) : NaN;
+    if (Number.isFinite(refreshedMs) && Number.isFinite(leasedMs) && refreshedMs > leasedMs) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function accountDisplayState(acc, activeEntry = null, localReauth = null) {
+  if (isReauthRequiredAccount(acc)) return 'reauth_required';
+  const rawState = typeof acc?.state === 'string' && acc.state.trim() ? acc.state.trim() : '';
+  if (rawState && rawState !== 'ready') return rawState;
+  if (hasUnresolvedLocalReauth(acc, activeEntry, localReauth)) {
+    return 'reauth_required';
+  }
+  return rawState || 'ready';
+}
+
+function formatRefreshColumn(acc, activeEntry, nowMs = Date.now()) {
+  const state = accountDisplayState(acc, activeEntry);
+  if (state === 'reauth_required') return 'reauth required';
+  const isSameActive = Boolean(activeEntry?.account_id && activeEntry.account_id === acc?.account_id);
+  const lastRefresh = acc?.last_refresh_at
+    ?? acc?.refreshed_at
+    ?? (isSameActive ? activeEntry?.last_refresh_at : null)
+    ?? null;
+  const expiresAt = acc?.access_token_expires_at
+    ?? (isSameActive ? (activeEntry?.access_token_expires_at ?? activeEntry?.expires_at) : null)
+    ?? null;
+  const refShort = formatShortReset(lastRefresh);
+  const expShort = formatShortReset(expiresAt);
+  const expMs = expiresAt ? Date.parse(expiresAt) : NaN;
+  const expPart = expShort
+    ? (Number.isFinite(expMs) && expMs <= nowMs ? `expired ${expShort}` : `exp ${expShort}`)
+    : '';
+  if (refShort && expPart) return `refreshed ${refShort} (${expPart})`;
+  if (refShort) return `refreshed ${refShort}`;
+  if (expPart) return expPart;
+  return '-';
+}
+
+function renderAccountsTable(accounts, pendingInvites, activeByProvider, nowMs = Date.now()) {
   const lines = [];
+  const reauthAccounts = [];
   if (!accounts.length) {
     lines.push('No Cloud accounts enrolled. Run pdd accounts add or pdd accounts import.');
   } else {
     const rows = accounts.map(acc => {
-      const isActive = activeByProvider?.[acc.provider]?.account_id === acc.account_id;
+      const activeEntry = activeByProvider?.[acc.provider] ?? null;
+      const isActive = activeEntry?.account_id === acc.account_id;
       const isSharedBorrower = typeof acc.is_owner === 'boolean' ? !acc.is_owner : Boolean(acc.shared);
       const access = isSharedBorrower
         ? `shared${acc.owner_login ? ` (${acc.owner_login})` : ''}`
         : `owner${acc.owner_login ? ` (${acc.owner_login})` : ''}`;
+      const dispState = accountDisplayState(acc, activeEntry);
+      if (dispState === 'reauth_required') reauthAccounts.push(acc);
       return [
         isActive ? '*' : ' ',
         String(acc.label ?? acc.account_id ?? '-'),
@@ -104,14 +337,21 @@ function renderAccountsTable(accounts, pendingInvites, activeByProvider) {
         access,
         formatWindow(acc.five_hour_used_percent, acc.five_hour_reset_at),
         formatWindow(acc.weekly_used_percent, acc.weekly_reset_at),
-        String(acc.state ?? 'ready'),
+        dispState,
+        formatRefreshColumn(acc, activeEntry, nowMs),
       ];
     });
-    const headers = [' ', 'LABEL', 'PROVIDER', 'ACCESS', '5H', '7D', 'STATE'];
+    const headers = [' ', 'LABEL', 'PROVIDER', 'ACCESS', '5H', '7D', 'STATE', 'REFRESH'];
     const widths = headers.map((h, col) => Math.max(h.length, ...rows.map(r => r[col].length)));
     const formatRow = cols => cols.map((val, col) => (col === cols.length - 1 ? val : val.padEnd(widths[col]))).join('  ').trimEnd();
     lines.push(formatRow(headers));
     for (const row of rows) lines.push(formatRow(row));
+    if (reauthAccounts.length > 0) {
+      lines.push('');
+      for (const acc of reauthAccounts) {
+        lines.push(`Re-authentication required for "${acc.label ?? acc.account_id}": run pdd accounts add --provider ${acc.provider ?? 'codex'} --label ${acc.label ?? acc.account_id}`);
+      }
+    }
   }
   if (Array.isArray(pendingInvites) && pendingInvites.length > 0) {
     lines.push('');
@@ -121,6 +361,16 @@ function renderAccountsTable(accounts, pendingInvites, activeByProvider) {
     }
   }
   return lines.join('\n');
+}
+
+function formatExpiryRemaining(iso, nowMs) {
+  if (typeof iso !== 'string' || !iso.trim()) return 'unknown';
+  const expMs = Date.parse(iso);
+  if (!Number.isFinite(expMs)) return iso;
+  const diffMin = Math.round((expMs - nowMs) / 60_000);
+  const short = formatShortReset(iso);
+  if (diffMin <= 0) return `expired (${short})`;
+  return `valid (${diffMin}m remaining, ${short})`;
 }
 
 function decodeJwtPayload(jwt) {
@@ -393,6 +643,7 @@ function applyMaterializedLease(leaseReply, { env }, ports = {}) {
       }, ports);
       saveActiveLeaseMetadata(leaseReply, {
         env,
+        materializedLocal: true,
         managedCodexGateway: mat.managedCodexGateway,
         codexGatewayUrl: mat.codexGatewayUrl,
         previousCodexModelProvider: mat.previousCodexModelProvider,
@@ -407,6 +658,7 @@ function applyMaterializedLease(leaseReply, { env }, ports = {}) {
       }, ports);
       saveActiveLeaseMetadata(leaseReply, {
         env,
+        materializedLocal: true,
         managedCodexGateway: false,
         codexGatewayUrl: null,
         previousCodexModelProvider: null,
@@ -417,7 +669,7 @@ function applyMaterializedLease(leaseReply, { env }, ports = {}) {
   if (provider === 'claude') {
     const prevManaged = Boolean(saved.active?.claude?.managed_anthropic_base_url);
     const { managedBaseUrl } = materializeLocalClaudeAuth(lease, { env, previousManagedBaseUrl: prevManaged }, ports);
-    saveActiveLeaseMetadata(leaseReply, { env, managedBaseUrl }, ports);
+    saveActiveLeaseMetadata(leaseReply, { env, materializedLocal: true, managedBaseUrl }, ports);
   }
 }
 
@@ -658,14 +910,33 @@ async function resolveAccount(labelOrId, { cwd, env }, ports = {}) {
   const lower = target.toLowerCase();
   const ciMatches = accounts.filter(a => String(a.label ?? '').toLowerCase() === lower);
   if (ciMatches.length === 1) return { account: ciMatches[0], accounts };
+  const sanitized = sanitizeLabel(target, '');
+  if (sanitized) {
+    const sanitizedMatches = accounts.filter(a => {
+      const accLabel = String(a.label ?? '');
+      return accLabel.toLowerCase() === sanitized || sanitizeLabel(accLabel, '') === sanitized;
+    });
+    if (sanitizedMatches.length === 1) return { account: sanitizedMatches[0], accounts };
+  }
   throw new CloudAccountsError(`Account "${target}" was not found. Run pdd accounts list.`, { code: 'not_found' });
 }
 
 async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, fallbackAuthJson, fallbackOauthToken, { cwd, env }, ports = {}) {
+  const nowMs = (ports.now ?? Date.now)();
+  if (acc?.account_id) {
+    const preEnrollState = readCloudAccountsState({ env }, ports);
+    if (preEnrollState.reauth?.[acc.account_id]) {
+      const cleanedReauth = { ...preEnrollState.reauth };
+      delete cleanedReauth[acc.account_id];
+      writeCloudAccountsState({ ...preEnrollState, reauth: cleanedReauth }, { env }, ports);
+    }
+  }
   try {
-    const leased = await leaseCloudAccount({ provider, preferredLabel: acc.label, holderId: 'local-cli' }, { cwd, env }, ports);
-    if (leased?.state === 'leased') {
+    const leased = await leaseCloudAccount({ provider, preferredLabel: acc.label, holderId: 'local-cli', updateState: false }, { cwd, env }, ports);
+    if (leased?.state === 'leased' && !isReauthRequiredAccount(leased.account)) {
       applyMaterializedLease(leased, { env }, ports);
+    } else if (leased?.state === 'leased' && isReauthRequiredAccount(leased.account)) {
+      markLocalAccountReauthRequired(leased.account?.account_id ?? acc.account_id, { env }, ports);
     } else {
       if (provider === 'codex' && fallbackAuthJson) {
         const saved = readCloudAccountsState({ env }, ports);
@@ -710,8 +981,12 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, fallbackAut
           account_id: acc.account_id,
           label: acc.label ?? fallbackLabel,
           provider,
+          state: accountDisplayState(acc),
           lease_id: null,
-          expires_at: new Date(((ports.now ?? Date.now)()) + 45 * 60 * 1000).toISOString(),
+          leased_at: new Date(nowMs).toISOString(),
+          expires_at: new Date(nowMs + 45 * 60 * 1000).toISOString(),
+          last_refresh_at: acc.last_refresh_at ?? fallbackAuthJson?.last_refresh ?? new Date(nowMs).toISOString(),
+          materialized_local: true,
           delivery_mode: provider === 'codex' ? 'direct_stripped' : 'direct_oauth',
           five_hour_used_percent: acc.five_hour_used_percent ?? 0,
           five_hour_reset_at: acc.five_hour_reset_at ?? null,
@@ -743,7 +1018,6 @@ async function enrollSingleIteration(mode, {
       let authJson;
       let bundle;
       let probeCodexHome = null;
-      let shouldStripDefaultLocal = false;
 
       if (mode === 'add') {
         tempLoginDir = createTempPrivateDir(fs, 'pdd-codex-login-', ports.tmpRoot);
@@ -757,22 +1031,12 @@ async function enrollSingleIteration(mode, {
           };
         }
         const tempAuthFile = join(tempLoginDir, 'auth.json');
-        let hasTempAuth = false;
-        try { hasTempAuth = Boolean(fs.statSync(tempAuthFile)?.isFile()); } catch {}
-        if (hasTempAuth || typeof ports.runLogin !== 'function') {
-          ({ authJson, bundle } = readCodexFullAuthBundle(fs, loginEnv, tempAuthFile));
-          probeCodexHome = tempLoginDir;
-        } else {
-          // Compatibility with unit test runLogin mocks that write directly to HOME/.codex/auth.json.
-          ({ authJson, bundle } = readCodexFullAuthBundle(fs, env));
-          probeCodexHome = localCodexHome(env);
-          shouldStripDefaultLocal = true;
-        }
+        ({ authJson, bundle } = readCodexFullAuthBundle(fs, loginEnv, tempAuthFile));
+        probeCodexHome = tempLoginDir;
       } else {
         const importSource = resolveCodexImportSource(fs, cwd, env, fromOption);
         ({ authJson, bundle } = readCodexFullAuthBundle(fs, env, importSource.authPath));
         probeCodexHome = importSource.probeCodexHome;
-        shouldStripDefaultLocal = importSource.isDefaultLocal;
       }
 
       const subjectAccountId = bundle.auth_json.tokens.account_id;
@@ -806,16 +1070,6 @@ async function enrollSingleIteration(mode, {
 
       acc = await probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome, { fs, cwd, env }, ports);
 
-      if (shouldStripDefaultLocal) {
-        const saved = readCloudAccountsState({ env }, ports);
-        const prevCodex = saved.active?.codex;
-        materializeLocalCodexAuth(authJson, {
-          env,
-          previousManagedCodexGateway: Boolean(prevCodex?.managed_codex_gateway),
-          previousCodexModelProvider: prevCodex?.previous_codex_model_provider ?? null,
-        }, ports);
-      }
-
       await leaseAndSyncAfterEnroll('codex', acc, candidateLabel, authJson, null, { cwd, env }, ports);
 
       const finalLabel = acc.label ?? candidateLabel;
@@ -842,13 +1096,16 @@ async function enrollSingleIteration(mode, {
           message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
         };
       }
+      const importNote = (mode === 'import' && !fromOption)
+        ? ' (~/.codex/auth.json was left untouched; prefer "pdd accounts add --provider codex" so Cloud uses an independent OAuth session.)'
+        : '';
       return {
         exitCode: 0,
         duplicate: false,
         account: acc,
         label: finalLabel,
         shareNotes,
-        message: `Enrolled Codex account "${finalLabel}" in PDD Cloud and stripped the local refresh token.${shareSuffix}`,
+        message: `Enrolled Codex account "${finalLabel}" in PDD Cloud (materialized in ${pddManagedCodexHome(env)}).${shareSuffix}${importNote}`,
       };
     } finally {
       removeTempPrivateDir(fs, tempLoginDir);
@@ -981,27 +1238,27 @@ async function enrollOrImportAccount(mode, {
     return { exitCode: single.exitCode, message: single.message };
   }
 
-  // Interactive --loop enrollment mode
   const promptFn = ports.prompt ?? ports.confirm ?? null;
   const stdout = ports.stdout ?? process.stdout;
   const interactive = Boolean(promptFn) || Boolean(stdin?.isTTY && stdout?.isTTY);
   if (!interactive) {
-    return { exitCode: 2, message: 'pdd accounts add --loop requires an interactive terminal.' };
+    return { exitCode: 2, message: '--loop requires an interactive terminal (TTY).' };
   }
-  const prefix = requestedLabel ? sanitizeLabel(requestedLabel, '') : provider;
-  if (!prefix) return { exitCode: 2, message: 'Provide a valid --label NAME.' };
 
-  const existingList = await fetchAccountsList({ cwd, env, refresh: false }, ports).catch(() => ({ accounts: [] }));
-  const usedLabels = new Set(
-    existingList.accounts
-      .filter(a => a && !a.revoked)
-      .map(a => String(a.label ?? '').toLowerCase())
-      .filter(Boolean),
-  );
+  const prefix = sanitizeLabel(requestedLabel || provider, provider);
+  const { accounts: initialAccounts } = await fetchAccountsList({ cwd, env, refresh: false }, ports);
+  const usedLabels = new Set();
+  const seenAccountIds = new Set();
+  for (const existing of initialAccounts) {
+    if (!existing || existing.revoked) continue;
+    if (existing.label) usedLabels.add(String(existing.label).toLowerCase());
+    if (existing.account_id) seenAccountIds.add(existing.account_id);
+  }
+
   let counter = 1;
   const loopState = {
     bySubjectId: new Map(),
-    seenAccountIds: new Set(),
+    seenAccountIds,
     peekNextLabel() {
       while (usedLabels.has(`${prefix}-${counter}`.toLowerCase())) counter += 1;
       return `${prefix}-${counter}`;
@@ -1074,83 +1331,123 @@ async function enrollOrImportAccount(mode, {
   return { exitCode: 0, message: redactSecrets(fullOutput) };
 }
 
-function hasLocalMaterializedFile(fs, provider, env, cachedEntry = null) {
+function hasLocalMaterializedFile(fs, provider, env) {
   try {
     if (provider === 'claude') {
       return Boolean(fs.statSync(localClaudePaths(env).settingsPath)?.isFile());
     }
-    const hasAuth = Boolean(fs.statSync(localCodexAuthPath(env))?.isFile());
+    const hasAuth = Boolean(fs.statSync(managedCodexAuthPath(env))?.isFile());
     if (!hasAuth) return false;
-    if (cachedEntry?.managed_codex_gateway === true || cachedEntry?.delivery_mode === 'gateway_grant') {
-      return Boolean(fs.statSync(localCodexConfigPath(env))?.isFile());
-    }
-    return true;
+    return Boolean(fs.statSync(managedCodexConfigPath(env))?.isFile());
   } catch {
     return false;
   }
 }
 
-async function runSyncCommand({ provider: requestedProvider, quiet = false, timeoutMs = 1200, cwd, env }, ports = {}) {
+async function runSyncCommand({ provider: requestedProvider, quiet = false, printCodexHome = false, timeoutMs = 1200, cwd, env }, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const now = (ports.now ?? Date.now)();
   const saved = readCloudAccountsState({ env }, ports);
   let providers = requestedProvider
     ? [requestedProvider]
     : (saved.providers.length ? saved.providers : ['codex']);
-  if (quiet) {
+  if (quiet || printCodexHome) {
     providers = (requestedProvider ? [requestedProvider] : saved.providers)
       .filter(provider => isCloudAccountsActive({ env, provider }, ports));
     if (!providers.length) return { exitCode: 0, message: '' };
   }
 
   const messages = [];
+  let codexHealthyHome = '';
   for (const provider of providers) {
     const cached = saved.active?.[provider];
     const expiresMs = cached?.expires_at ? Date.parse(cached.expires_at) : NaN;
+    const tokenExpiresMs = cached?.access_token_expires_at ? Date.parse(cached.access_token_expires_at) : NaN;
+    const tokenFreshEnough = !Number.isFinite(tokenExpiresMs) || (tokenExpiresMs - now) > 5 * 60 * 1000;
     const fiveH = cached?.five_hour_used_percent ?? 0;
     const sevenD = cached?.weekly_used_percent ?? 0;
+    const cachedState = cached?.state ?? 'ready';
+    const isRevokedCached = cachedState === 'reauth_required' || Boolean(cached?.account_id && saved.reauth?.[cached.account_id]);
+    const isHealthyCachedState = cachedState === 'ready' && !isRevokedCached;
+    const isCoolingCached = Boolean(saved.cooling?.[provider]);
     const validCache = Boolean(
       cached?.account_id
+      && cached?.materialized_local === true
+      && isHealthyCachedState
+      && !isCoolingCached
       && Number.isFinite(expiresMs)
       && (expiresMs - now) > 15 * 60 * 1000
+      && tokenFreshEnough
       && fiveH < 100
       && sevenD < 100
-      && hasLocalMaterializedFile(fs, provider, env, cached),
+      && hasLocalMaterializedFile(fs, provider, env),
     );
     if (validCache) {
-      if (!quiet) messages.push(`Active ${provider} account "${cached.label}" is fresh.`);
+      if (provider === 'codex') codexHealthyHome = pddManagedCodexHome(env);
+      if (!quiet && !printCodexHome) messages.push(`Active ${provider} account "${cached.label}" is fresh.`);
       continue;
     }
 
     // Fail-open on timeout, offline, or unauthenticated state so plain terminal launches never break.
     try {
-      const skip = (fiveH >= 100 || sevenD >= 100) && cached?.account_id ? [cached.account_id] : [];
+      const shouldSkipCached = Boolean((fiveH >= 100 || sevenD >= 100 || isRevokedCached) && cached?.account_id);
+      const skip = shouldSkipCached ? [cached.account_id] : [];
       const reply = await leaseCloudAccount({
         provider,
-        currentAccountId: cached?.account_id ?? null,
+        currentAccountId: shouldSkipCached ? null : (cached?.account_id ?? null),
         skipAccountIds: skip,
         holderId: 'terminal-sync',
-      }, { cwd, env, timeoutMs }, ports);
-      if (reply?.state === 'leased') {
+        updateState: false,
+      }, { cwd, env, timeoutMs, ...(quiet || printCodexHome ? { maxRetries: 0 } : {}) }, ports);
+      if (reply?.state === 'leased' && !isReauthRequiredAccount(reply.account)) {
         applyMaterializedLease(reply, { env }, ports);
-        if (!quiet) messages.push(`Synced ${provider} account "${reply.account?.label ?? reply.account?.account_id}".`);
-      } else if (reply?.state === 'all_cooling' && !quiet) {
-        messages.push(`All ${provider} accounts are cooling${reply.wake_at ? ` until ${reply.wake_at}` : ''}; keeping current local credentials.`);
+        if (provider === 'codex' && hasLocalMaterializedFile(fs, 'codex', env)) {
+          codexHealthyHome = pddManagedCodexHome(env);
+        }
+        if (!quiet && !printCodexHome) messages.push(`Synced ${provider} account "${reply.account?.label ?? reply.account?.account_id}".`);
+      } else if (reply?.state === 'leased' && isReauthRequiredAccount(reply.account)) {
+        markLocalAccountReauthRequired(reply.account?.account_id, { env }, ports);
+        if (!quiet && !printCodexHome) messages.push(`Account "${reply.account?.label ?? reply.account?.account_id}" requires re-authentication.`);
+      } else if (reply?.state === 'all_cooling') {
+        const latestSaved = readCloudAccountsState({ env }, ports);
+        if (latestSaved.enrolled && latestSaved.providers.includes(provider)) {
+          writeCloudAccountsState({
+            ...latestSaved,
+            cooling: { ...latestSaved.cooling, [provider]: { wake_at: reply.wake_at ?? null } },
+          }, { env }, ports);
+        }
+        if (!quiet && !printCodexHome) {
+          messages.push(`All ${provider} accounts are cooling${reply.wake_at ? ` until ${reply.wake_at}` : ''}; keeping current local credentials.`);
+        }
       }
-    } catch {
-      if (!quiet) messages.push(`Cloud sync skipped for ${provider}; keeping current local credentials.`);
+    } catch (error) {
+      if (isReauthRequiredFailure(error)) {
+        const explicitId = error?.payload?.account_id
+          ?? error?.payload?.detail?.account_id
+          ?? error?.payload?.account?.account_id
+          ?? null;
+        if (typeof explicitId === 'string' && explicitId) {
+          markLocalAccountReauthRequired(explicitId, { env }, ports);
+        }
+      }
+      if (!quiet && !printCodexHome) messages.push(`Cloud sync skipped for ${provider}; keeping current local credentials.`);
     }
+  }
+  if (printCodexHome) {
+    return { exitCode: 0, message: codexHealthyHome };
   }
   return { exitCode: 0, message: quiet ? '' : messages.join('\n') };
 }
 
 function runAutoCommand(mode, { env }, ports = {}) {
   const fs = ports.fs ?? nativeFs;
-  const targets = shellProfilePaths(env);
+  const targets = shellProfileEntries(env);
   if (mode === 'status') {
-    const activeFiles = targets.filter(path => {
-      try { return fs.readFileSync(path, 'utf8').includes(AUTO_BEGIN); } catch { return false; }
-    });
+    const activeFiles = targets
+      .filter(entry => {
+        try { return fs.readFileSync(entry.path, 'utf8').includes(AUTO_BEGIN); } catch { return false; }
+      })
+      .map(entry => entry.path);
     return {
       exitCode: 0,
       message: activeFiles.length
@@ -1159,30 +1456,194 @@ function runAutoCommand(mode, { env }, ports = {}) {
     };
   }
   if (mode === 'on') {
-    for (const path of targets) {
+    for (const entry of targets) {
       let current = '';
-      try { current = fs.readFileSync(path, 'utf8'); } catch (err) { if (err?.code !== 'ENOENT') throw err; }
-      const updated = applyAutoSwitchBlock(current);
-      if (updated !== current) fs.writeFileSync(path, updated, { mode: 0o644 });
+      try { current = fs.readFileSync(entry.path, 'utf8'); } catch (err) { if (err?.code !== 'ENOENT') throw err; }
+      const updated = applyAutoSwitchBlock(current, entry.shell);
+      if (updated !== current) {
+        fs.mkdirSync(dirname(entry.path), { recursive: true });
+        fs.writeFileSync(entry.path, updated, { mode: 0o644 });
+      }
     }
     return {
       exitCode: 0,
-      message: 'Enabled opt-in terminal auto-switch in ~/.zshrc and ~/.bashrc. Open a new shell or source your profile.',
+      message: 'Enabled opt-in terminal auto-switch in ~/.zshrc, ~/.bashrc, and ~/.config/fish/config.fish. Open a new shell or source your profile.',
     };
   }
   if (mode === 'off') {
-    for (const path of targets) {
+    for (const entry of targets) {
       let current;
-      try { current = fs.readFileSync(path, 'utf8'); } catch (err) { if (err?.code === 'ENOENT') continue; throw err; }
+      try { current = fs.readFileSync(entry.path, 'utf8'); } catch (err) { if (err?.code === 'ENOENT') continue; throw err; }
       const updated = removeAutoSwitchBlock(current);
-      if (updated !== current) fs.writeFileSync(path, updated, { mode: 0o644 });
+      if (updated !== current) fs.writeFileSync(entry.path, updated, { mode: 0o644 });
     }
     return {
       exitCode: 0,
-      message: 'Removed terminal auto-switch wrapper from ~/.zshrc and ~/.bashrc.',
+      message: 'Removed terminal auto-switch wrapper from ~/.zshrc, ~/.bashrc, and ~/.config/fish/config.fish.',
     };
   }
   return { exitCode: 2, message: 'Use pdd accounts auto on|off|status.' };
+}
+
+function reconcileListedState(accounts, current, { env }, ports = {}) {
+  const nowIso = new Date((ports.now ?? Date.now)()).toISOString();
+  const accessible = accounts.filter(a => !a.revoked);
+  const validIds = new Set(accessible.map(a => a.account_id).filter(Boolean));
+  const nextProviders = [...new Set(accessible.map(a => a.provider).filter(Boolean))];
+  const nextReauth = {};
+  for (const [accId, meta] of Object.entries(current.reauth ?? {})) {
+    if (!validIds.has(accId)) continue;
+    const acc = accessible.find(a => a.account_id === accId);
+    const refreshedIso = acc?.last_refresh_at ?? acc?.refreshed_at ?? null;
+    if (!acc || isReauthRequiredAccount(acc) || isLocalReauthUnresolved(accId, refreshedIso, current.reauth)) {
+      nextReauth[accId] = meta;
+    }
+  }
+  for (const acc of accessible) {
+    if (acc?.account_id && isReauthRequiredAccount(acc) && !nextReauth[acc.account_id]) {
+      nextReauth[acc.account_id] = { marked_at: nowIso };
+    }
+  }
+  const nextActive = {};
+  for (const [prov, entry] of Object.entries(current.active ?? {})) {
+    if (!validIds.has(entry?.account_id)) continue;
+    const acc = accessible.find(a => a.account_id === entry.account_id);
+    const wasClearedByNewRefresh = Boolean(current.reauth?.[entry.account_id] && !nextReauth[entry.account_id]);
+    const effectiveEntry = wasClearedByNewRefresh && entry.state === 'reauth_required'
+      ? { ...entry, state: 'ready' }
+      : entry;
+    nextActive[prov] = acc
+      ? {
+          ...entry,
+          label: acc.label ?? acc.account_id,
+          state: accountDisplayState(acc, effectiveEntry, nextReauth),
+          last_refresh_at: acc.last_refresh_at ?? acc.refreshed_at ?? entry.last_refresh_at ?? null,
+          access_token_expires_at: entry.access_token_expires_at ?? null,
+          materialized_local: wasClearedByNewRefresh ? false : (entry.materialized_local === true),
+          five_hour_used_percent: typeof acc.five_hour_used_percent === 'number' ? acc.five_hour_used_percent : entry.five_hour_used_percent,
+          five_hour_reset_at: acc.five_hour_reset_at ?? entry.five_hour_reset_at,
+          weekly_used_percent: typeof acc.weekly_used_percent === 'number' ? acc.weekly_used_percent : entry.weekly_used_percent,
+          weekly_reset_at: acc.weekly_reset_at ?? entry.weekly_reset_at,
+        }
+      : entry;
+  }
+  const prevCodex = current.active?.codex;
+  if (prevCodex && (!nextActive.codex || (prevCodex.managed_codex_gateway === true && !nextActive.codex?.managed_codex_gateway))) {
+    restoreLocalCodexGatewayConfig({
+      env,
+      previousModelProvider: prevCodex.previous_codex_model_provider ?? null,
+      removeAuthFile: !nextActive.codex,
+    }, ports);
+  }
+  const nextCooling = Object.fromEntries(
+    Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
+  );
+  const updatedState = writeCloudAccountsState({
+    enrolled: accessible.length > 0,
+    providers: nextProviders,
+    active: nextActive,
+    cooling: nextCooling,
+    reauth: nextReauth,
+  }, { env }, ports);
+  return { accessible, updatedState };
+}
+
+async function runStatusCommand({ json = false, cwd, env }, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const nowMs = (ports.now ?? Date.now)();
+  let current = readCloudAccountsState({ env }, ports);
+  let accessible = [];
+  let pendingInvites = [];
+  let cloudReachable = false;
+
+  try {
+    const listed = await fetchAccountsList({ cwd, env, refresh: true }, ports);
+    cloudReachable = true;
+    pendingInvites = listed.pendingInvites;
+    const reconciled = reconcileListedState(listed.accounts, current, { env }, ports);
+    accessible = reconciled.accessible;
+    current = reconciled.updatedState;
+  } catch {
+    cloudReachable = false;
+  }
+
+  const codexHomePath = pddManagedCodexHome(env);
+  let codexAuthPresent = false;
+  let codexConfigPresent = false;
+  try { codexAuthPresent = Boolean(fs.statSync(managedCodexAuthPath(env))?.isFile()); } catch {}
+  try { codexConfigPresent = Boolean(fs.statSync(managedCodexConfigPath(env))?.isFile()); } catch {}
+
+  const activeAutoProfiles = shellProfileEntries(env)
+    .filter(entry => {
+      try { return fs.readFileSync(entry.path, 'utf8').includes(AUTO_BEGIN); } catch { return false; }
+    })
+    .map(entry => entry.path);
+
+  const reauthRequired = accessible
+    .filter(a => accountDisplayState(a, current.active?.[a.provider], current.reauth) === 'reauth_required')
+    .map(a => ({ account_id: a.account_id, label: a.label ?? a.account_id, provider: a.provider }));
+  for (const [prov, entry] of Object.entries(current.active ?? {})) {
+    if (entry?.state === 'reauth_required' && !reauthRequired.some(r => r.account_id === entry.account_id)) {
+      reauthRequired.push({ account_id: entry.account_id, label: entry.label ?? entry.account_id, provider: prov });
+    }
+  }
+
+  if (json) {
+    return {
+      exitCode: 0,
+      message: redactSecrets(JSON.stringify({
+        enrolled: current.enrolled,
+        cloud_reachable: cloudReachable,
+        providers: current.providers,
+        codex_home: {
+          path: codexHomePath,
+          materialized: codexAuthPresent && codexConfigPresent,
+          auth_present: codexAuthPresent,
+          config_present: codexConfigPresent,
+        },
+        auto_switch: {
+          enabled: activeAutoProfiles.length > 0,
+          profiles: activeAutoProfiles,
+        },
+        active: current.active,
+        cooling: current.cooling,
+        reauth_required: reauthRequired,
+        accounts: accessible.map(a => ({ ...a, state: accountDisplayState(a, current.active?.[a.provider], current.reauth) })),
+        pending_invites: pendingInvites,
+      }, null, 2)),
+    };
+  }
+
+  const lines = [];
+  const countNote = cloudReachable
+    ? `${accessible.length} account${accessible.length === 1 ? '' : 's'}`
+    : 'offline — showing cached local state';
+  lines.push(`Cloud accounts: ${current.enrolled ? 'enrolled' : 'not enrolled'} (${countNote})`);
+  lines.push(`Codex isolated home: ${codexHomePath} (${codexAuthPresent && codexConfigPresent ? 'materialized' : 'not materialized'}; ~/.codex/auth.json untouched)`);
+  lines.push(activeAutoProfiles.length
+    ? `Terminal auto-switch: on (${activeAutoProfiles.join(', ')})`
+    : 'Terminal auto-switch: off (default)');
+
+  const activeProviders = Object.keys(current.active ?? {});
+  if (activeProviders.length > 0) {
+    for (const prov of activeProviders) {
+      const entry = current.active[prov];
+      const liveAcc = accessible.find(a => a.account_id === entry.account_id) ?? null;
+      const dispState = liveAcc ? accountDisplayState(liveAcc, entry) : (entry.state || 'ready');
+      const refreshStr = formatShortReset(liveAcc?.last_refresh_at ?? entry.last_refresh_at) || '-';
+      const expTarget = liveAcc?.access_token_expires_at ?? entry.access_token_expires_at ?? entry.expires_at;
+      const expStr = formatExpiryRemaining(expTarget, nowMs);
+      const fiveH = formatWindow(liveAcc?.five_hour_used_percent ?? entry.five_hour_used_percent, liveAcc?.five_hour_reset_at ?? entry.five_hour_reset_at);
+      const sevenD = formatWindow(liveAcc?.weekly_used_percent ?? entry.weekly_used_percent, liveAcc?.weekly_reset_at ?? entry.weekly_reset_at);
+      lines.push(`Active ${prov}: ${entry.label} [${dispState}] (mode: ${entry.delivery_mode ?? 'default'}, 5h: ${fiveH}, 7d: ${sevenD}, last refresh: ${refreshStr}, lease: ${expStr})`);
+    }
+  }
+  if (reauthRequired.length > 0) {
+    for (const item of reauthRequired) {
+      lines.push(`Re-authentication required: "${item.label}" — run pdd accounts add --provider ${item.provider ?? 'codex'} --label ${item.label}`);
+    }
+  }
+  return { exitCode: 0, message: redactSecrets(lines.join('\n')) };
 }
 
 async function resolveGitHubUser(login, { cwd, env }, ports = {}) {
@@ -1238,7 +1699,7 @@ function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {
     }
   }
   const prevCodex = current.active?.codex;
-  if (prevCodex?.managed_codex_gateway === true && !nextActive.codex?.managed_codex_gateway) {
+  if (prevCodex && (!nextActive.codex || (prevCodex.managed_codex_gateway === true && !nextActive.codex?.managed_codex_gateway))) {
     restoreLocalCodexGatewayConfig({
       env,
       previousModelProvider: prevCodex.previous_codex_model_provider ?? null,
@@ -1248,11 +1709,15 @@ function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {
   const nextCooling = Object.fromEntries(
     Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
   );
+  const nextReauth = Object.fromEntries(
+    Object.entries(current.reauth ?? {}).filter(([accId]) => accId !== account.account_id && remainingIds.has(accId)),
+  );
   writeCloudAccountsState({
     enrolled: remaining.length > 0,
     providers: nextProviders,
     active: nextActive,
     cooling: nextCooling,
+    reauth: nextReauth,
   }, { env }, ports);
 }
 
@@ -1268,54 +1733,28 @@ export async function runAccountsCli({
   try {
     switch (sub) {
       case 'list': {
+        const nowMs = (ports.now ?? Date.now)();
         const { accounts, pendingInvites } = await fetchAccountsList({ cwd, env, refresh: true }, ports);
         const current = readCloudAccountsState({ env }, ports);
-        const accessible = accounts.filter(a => !a.revoked);
-        const validIds = new Set(accessible.map(a => a.account_id).filter(Boolean));
-        const nextProviders = [...new Set(accessible.map(a => a.provider).filter(Boolean))];
-        const nextActive = {};
-        for (const [prov, entry] of Object.entries(current.active ?? {})) {
-          if (!validIds.has(entry?.account_id)) continue;
-          const acc = accessible.find(a => a.account_id === entry.account_id);
-          nextActive[prov] = acc
-            ? {
-                ...entry,
-                label: acc.label ?? acc.account_id,
-                five_hour_used_percent: typeof acc.five_hour_used_percent === 'number' ? acc.five_hour_used_percent : entry.five_hour_used_percent,
-                five_hour_reset_at: acc.five_hour_reset_at ?? entry.five_hour_reset_at,
-                weekly_used_percent: typeof acc.weekly_used_percent === 'number' ? acc.weekly_used_percent : entry.weekly_used_percent,
-                weekly_reset_at: acc.weekly_reset_at ?? entry.weekly_reset_at,
-              }
-            : entry;
-        }
-        const prevCodex = current.active?.codex;
-        if (prevCodex?.managed_codex_gateway === true && !nextActive.codex?.managed_codex_gateway) {
-          restoreLocalCodexGatewayConfig({
-            env,
-            previousModelProvider: prevCodex.previous_codex_model_provider ?? null,
-            removeAuthFile: !nextActive.codex,
-          }, ports);
-        }
-        const nextCooling = Object.fromEntries(
-          Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
-        );
-        const updatedState = writeCloudAccountsState({
-          enrolled: accessible.length > 0,
-          providers: nextProviders,
-          active: nextActive,
-          cooling: nextCooling,
-        }, { env }, ports);
+        const { accessible, updatedState } = reconcileListedState(accounts, current, { env }, ports);
+        const normalizedAccounts = accessible.map(acc => ({
+          ...acc,
+          state: accountDisplayState(acc, updatedState.active?.[acc.provider], updatedState.reauth),
+        }));
         if (options['--json'] === true) {
           return {
             exitCode: 0,
-            message: redactSecrets(JSON.stringify({ accounts: accessible, pending_invites: pendingInvites, active: updatedState.active }, null, 2)),
+            message: redactSecrets(JSON.stringify({ accounts: normalizedAccounts, pending_invites: pendingInvites, active: updatedState.active }, null, 2)),
           };
         }
         return {
           exitCode: 0,
-          message: redactSecrets(renderAccountsTable(accessible, pendingInvites, updatedState.active)),
+          message: redactSecrets(renderAccountsTable(normalizedAccounts, pendingInvites, updatedState.active, nowMs)),
         };
       }
+
+      case 'status':
+        return await runStatusCommand({ json: options['--json'] === true, cwd, env }, ports);
 
       case 'add':
         return await enrollOrImportAccount('add', {
@@ -1343,14 +1782,44 @@ export async function runAccountsCli({
       case 'use': {
         const targetLabel = operands[0];
         const { account, accounts } = await resolveAccount(targetLabel, { cwd, env }, ports);
-        const reply = await leaseCloudAccount({
-          provider: account.provider,
-          preferredLabel: account.label,
-          currentAccountId: account.account_id,
-          holderId: 'local-cli',
-        }, { cwd, env }, ports);
+        if (isReauthRequiredAccount(account)) {
+          markLocalAccountReauthRequired(account.account_id, { env }, ports);
+          return {
+            exitCode: 1,
+            message: `Account "${account.label}" requires re-authentication (state: reauth_required). Run pdd accounts add --provider ${account.provider} --label ${account.label}.`,
+          };
+        }
+        let reply;
+        try {
+          reply = await leaseCloudAccount({
+            provider: account.provider,
+            preferredLabel: account.label,
+            currentAccountId: account.account_id,
+            holderId: 'local-cli',
+            updateState: false,
+          }, { cwd, env }, ports);
+        } catch (err) {
+          const attributedId = err?.payload?.account_id ?? err?.payload?.detail?.account_id ?? err?.payload?.account?.account_id ?? null;
+          if (isReauthRequiredFailure(err) && attributedId) {
+            markLocalAccountReauthRequired(attributedId, { env }, ports);
+            return {
+              exitCode: 1,
+              message: `Account "${account.label}" requires re-authentication (state: reauth_required). Run pdd accounts add --provider ${account.provider} --label ${account.label}.`,
+            };
+          }
+          throw err;
+        }
         if (reply?.state === 'all_cooling') {
           return { exitCode: 1, message: `All ${account.provider} accounts are cooling${reply.wake_at ? ` until ${reply.wake_at}` : ''}.` };
+        }
+        const currentBeforeUse = readCloudAccountsState({ env }, ports);
+        const replyRefreshIso = reply?.account?.last_refresh_at ?? reply?.account?.refreshed_at ?? reply?.lease?.last_refresh_at ?? null;
+        if (isReauthRequiredAccount(reply?.account) || isLocalReauthUnresolved(reply?.account?.account_id ?? account.account_id, replyRefreshIso, currentBeforeUse.reauth)) {
+          markLocalAccountReauthRequired(account.account_id, { env }, ports);
+          return {
+            exitCode: 1,
+            message: `Account "${account.label}" requires re-authentication (state: reauth_required). Run pdd accounts add --provider ${account.provider} --label ${account.label}.`,
+          };
         }
         applyMaterializedLease(reply, { env }, ports);
         const synced = readCloudAccountsState({ env }, ports);
@@ -1367,14 +1836,45 @@ export async function runAccountsCli({
         const saved = readCloudAccountsState({ env }, ports);
         const provider = options['--provider'] || (saved.providers.length === 1 ? saved.providers[0] : 'codex');
         const currentId = saved.active?.[provider]?.account_id ?? null;
-        const reply = await leaseCloudAccount({
-          provider,
-          currentAccountId: currentId,
-          skipAccountIds: currentId ? [currentId] : [],
-          holderId: 'local-cli',
-        }, { cwd, env }, ports);
+        const skipIds = currentId ? [currentId] : [];
+        let reply = null;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          try {
+            reply = await leaseCloudAccount({
+              provider,
+              currentAccountId: null,
+              skipAccountIds: skipIds,
+              holderId: 'local-cli',
+              updateState: false,
+            }, { cwd, env }, ports);
+          } catch (err) {
+            if (isReauthRequiredFailure(err)) {
+              const failedId = err?.payload?.account_id ?? err?.payload?.detail?.account_id ?? null;
+              if (failedId) markLocalAccountReauthRequired(failedId, { env }, ports);
+              return { exitCode: 1, message: `All remaining ${provider} accounts require re-authentication (state: reauth_required). Run pdd accounts add --provider ${provider}.` };
+            }
+            throw err;
+          }
+          if (reply?.state === 'leased' && isReauthRequiredAccount(reply.account) && reply.account?.account_id && !skipIds.includes(reply.account.account_id)) {
+            markLocalAccountReauthRequired(reply.account.account_id, { env }, ports);
+            skipIds.push(reply.account.account_id);
+            continue;
+          }
+          break;
+        }
         if (reply?.state === 'all_cooling') {
+          const latestSaved = readCloudAccountsState({ env }, ports);
+          if (latestSaved.enrolled && latestSaved.providers.includes(provider)) {
+            writeCloudAccountsState({
+              ...latestSaved,
+              cooling: { ...latestSaved.cooling, [provider]: { wake_at: reply.wake_at ?? null } },
+            }, { env }, ports);
+          }
           return { exitCode: 1, message: `All ${provider} accounts are cooling${reply.wake_at ? ` until ${reply.wake_at}` : ''}.` };
+        }
+        if (!reply || reply.state !== 'leased' || isReauthRequiredAccount(reply.account)) {
+          if (reply?.account?.account_id) markLocalAccountReauthRequired(reply.account.account_id, { env }, ports);
+          return { exitCode: 1, message: `All remaining ${provider} accounts require re-authentication (state: reauth_required). Run pdd accounts add --provider ${provider}.` };
         }
         applyMaterializedLease(reply, { env }, ports);
         return { exitCode: 0, message: `Switched ${provider} account to "${reply.account?.label ?? reply.account?.account_id}".` };
@@ -1382,9 +1882,11 @@ export async function runAccountsCli({
 
       case 'sync': {
         const timeoutMs = options['--timeout-ms'] !== undefined ? Number(options['--timeout-ms']) : 1200;
+        const printCodexHome = options['--print-codex-home'] === true || env?.PDD_PRINT_CODEX_HOME === '1';
         return await runSyncCommand({
           provider: options['--provider'],
           quiet: options['--quiet'] === true,
+          printCodexHome,
           timeoutMs,
           cwd,
           env,
@@ -1459,7 +1961,13 @@ export async function runAccountsCli({
         let inviteId = rawInvite;
         if (!rawInvite.startsWith('inv_')) {
           const { pendingInvites } = await fetchAccountsList({ cwd, env }, ports);
-          const match = pendingInvites.find(inv => inv.invite_id === rawInvite || inv.label === rawInvite || inv.account_id === rawInvite);
+          const sanitizedInvite = sanitizeLabel(rawInvite, '');
+          const match = pendingInvites.find(inv => (
+            inv.invite_id === rawInvite
+            || inv.label === rawInvite
+            || inv.account_id === rawInvite
+            || (sanitizedInvite && sanitizeLabel(inv.label, '') === sanitizedInvite)
+          ));
           if (match?.invite_id) inviteId = match.invite_id;
         }
         const res = await cloudAccountsRequest('POST', `/v1/accounts/invites/${encodeURIComponent(inviteId)}/accept`, { body: {}, cwd, env }, ports);
@@ -1485,8 +1993,9 @@ export async function runAccountsCli({
               preferredLabel: acceptedAcc?.label ?? null,
               currentAccountId: acceptedAcc?.account_id ?? null,
               holderId: 'local-cli',
+              updateState: false,
             }, { cwd, env }, ports);
-            if (leased?.state === 'leased') {
+            if (leased?.state === 'leased' && !isReauthRequiredAccount(leased.account)) {
               applyMaterializedLease(leased, { env }, ports);
               const refreshed = readCloudAccountsState({ env }, ports);
               writeCloudAccountsState({
