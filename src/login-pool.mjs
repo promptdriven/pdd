@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: c2ea5d61b6e5b5ba48f9394b596e54dfe834f12cff2cb3276122b8f6d41c2647).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 2f735a31d465554f889fdfa9616535357db58de38cabebf1ed74425ced345c69).
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -6,6 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { parseAgentAuthStatus, runAgentProcess } from './agent-adapters.mjs';
 import * as codexLimitsModule from './codex-limits.mjs';
 import { knownSecretValues, redactSecrets, rememberSecrets } from './secret-redaction.mjs';
+import { parse as parseToml } from './vendor/smol-toml/parse.js';
 import { checkWorkflowAgents } from './workflow-agents.mjs';
 
 const readCodexLimits = (...args) => codexLimitsModule.readCodexLimits(...args);
@@ -32,6 +33,9 @@ const TOP_KEYS = new Set(['reset', 'weeklyStopPercent', 'logins']);
 const CONTROLS = /[\u0000-\u001f\u007f-\u009f]/;
 const SECRET_ENV_KEY = /(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD|_CREDENTIAL|^SECRET_|API_KEY$|^OPENAI_API_KEY$|^ANTHROPIC_API_KEY$|^GEMINI_API_KEY$|^GOOGLE_API_KEY$|^CLAUDE_CODE_OAUTH_TOKEN$|^CODEX_ACCESS_TOKEN$)/i;
 const CODEX_OVERLAY_LINKS = ['config.toml', 'skills', 'memories', 'sessions', 'rules'];
+const CODEX_GATEWAY_OVERLAY_LINKS = ['skills', 'memories', 'sessions', 'rules'];
+const CODEX_GATEWAY_PROVIDER_ID = 'pdd_codex_gateway';
+const INLINE_TOML_TABLE_KEYS = new Set(['http_headers', 'env_http_headers', 'filters', 'set']);
 const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/;
 export const DEFAULT_CLOUD_URL = 'https://pdd-byok-api-c437voydwa-uc.a.run.app';
 export const POOL_FALLBACK_COOLDOWN_MS = 30 * 60 * 1000;
@@ -152,7 +156,7 @@ function rememberLeaseSecrets(payload) {
   rememberSecrets(...knownSecretValues(payload));
   const lease = payload.lease;
   if (object(lease)) {
-    for (const key of ['claude_oauth_token', 'gateway_bearer_token']) {
+    for (const key of ['claude_oauth_token', 'codex_gateway_token', 'gateway_bearer_token']) {
       if (typeof lease[key] === 'string' && lease[key]) rememberSecrets(lease[key]);
     }
     if (object(lease.codex_auth_json?.tokens)) {
@@ -244,6 +248,11 @@ export async function cloudAccountsRequest(method, path, { body, cwd = process.c
   }
 }
 
+export async function listCloudAccounts({ refresh = false, cwd = process.cwd(), env = process.env, timeoutMs = 10_000 } = {}, ports = {}) {
+  const path = refresh === true ? '/v1/accounts?refresh=true' : '/v1/accounts';
+  return cloudAccountsRequest('GET', path, { cwd, env, timeoutMs }, ports);
+}
+
 export function accountsStatePath(env = process.env) {
   const home = env?.HOME || homedir();
   const base = (typeof env?.PDD_STATE_DIR === 'string' && env.PDD_STATE_DIR.trim())
@@ -272,6 +281,9 @@ export function readCloudAccountsState({ env = process.env } = {}, ports = {}) {
           delivery_mode: typeof entry.delivery_mode === 'string' ? entry.delivery_mode : null,
           anthropic_base_url: typeof entry.anthropic_base_url === 'string' ? entry.anthropic_base_url : null,
           managed_anthropic_base_url: entry.managed_anthropic_base_url === true,
+          codex_gateway_url: typeof entry.codex_gateway_url === 'string' ? entry.codex_gateway_url : null,
+          managed_codex_gateway: entry.managed_codex_gateway === true,
+          previous_codex_model_provider: typeof entry.previous_codex_model_provider === 'string' && entry.previous_codex_model_provider ? entry.previous_codex_model_provider : null,
           five_hour_used_percent: typeof entry.five_hour_used_percent === 'number' && Number.isFinite(entry.five_hour_used_percent) ? entry.five_hour_used_percent : null,
           five_hour_reset_at: typeof entry.five_hour_reset_at === 'string' ? entry.five_hour_reset_at : null,
           weekly_used_percent: typeof entry.weekly_used_percent === 'number' && Number.isFinite(entry.weekly_used_percent) ? entry.weekly_used_percent : null,
@@ -307,6 +319,9 @@ export function writeCloudAccountsState(state, { env = process.env } = {}, ports
         delivery_mode: typeof entry.delivery_mode === 'string' ? entry.delivery_mode : null,
         anthropic_base_url: typeof entry.anthropic_base_url === 'string' ? entry.anthropic_base_url : null,
         managed_anthropic_base_url: entry.managed_anthropic_base_url === true,
+        codex_gateway_url: typeof entry.codex_gateway_url === 'string' ? entry.codex_gateway_url : null,
+        managed_codex_gateway: entry.managed_codex_gateway === true,
+        previous_codex_model_provider: typeof entry.previous_codex_model_provider === 'string' && entry.previous_codex_model_provider ? entry.previous_codex_model_provider : null,
         five_hour_used_percent: typeof entry.five_hour_used_percent === 'number' && Number.isFinite(entry.five_hour_used_percent) ? entry.five_hour_used_percent : null,
         five_hour_reset_at: typeof entry.five_hour_reset_at === 'string' ? entry.five_hour_reset_at : null,
         weekly_used_percent: typeof entry.weekly_used_percent === 'number' && Number.isFinite(entry.weekly_used_percent) ? entry.weekly_used_percent : null,
@@ -364,10 +379,168 @@ export function stripCodexAuthBundle(authJson) {
   };
 }
 
-export function localCodexAuthPath(env = process.env) {
+export function localCodexHome(env = process.env) {
   const home = env?.HOME || homedir();
-  const codexHome = (typeof env?.CODEX_HOME === 'string' && env.CODEX_HOME.trim()) ? env.CODEX_HOME.trim() : join(home, '.codex');
-  return join(codexHome, 'auth.json');
+  return (typeof env?.CODEX_HOME === 'string' && env.CODEX_HOME.trim()) ? env.CODEX_HOME.trim() : join(home, '.codex');
+}
+
+export function localCodexAuthPath(env = process.env) {
+  return join(localCodexHome(env), 'auth.json');
+}
+
+export function localCodexConfigPath(env = process.env) {
+  return join(localCodexHome(env), 'config.toml');
+}
+
+function assertNoSymlinkCodexPath(fs, targetPath) {
+  const lstat = typeof fs?.lstatSync === 'function' ? fs.lstatSync.bind(fs) : (fs === nativeFs ? nativeFs.lstatSync : null);
+  if (!lstat) return;
+  const parentDir = dirname(targetPath);
+  try {
+    const dirStat = lstat(parentDir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+      throw new CloudAccountsError(`Refusing symlink or non-directory Codex folder at ${parentDir}.`, { code: 'symlink_refused' });
+    }
+  } catch (error) {
+    if (error instanceof CloudAccountsError) throw error;
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  try {
+    const fileStat = lstat(targetPath);
+    if (fileStat.isSymbolicLink() || !fileStat.isFile()) {
+      throw new CloudAccountsError(`Refusing symlink or non-regular Codex file at ${targetPath}.`, { code: 'symlink_refused' });
+    }
+  } catch (error) {
+    if (error instanceof CloudAccountsError) throw error;
+    if (error?.code !== 'ENOENT') throw error;
+  }
+}
+
+function validateCodexGatewayUrl(rawUrl) {
+  const raw = String(rawUrl ?? '').trim().replace(/\/+$/, '');
+  if (!raw) throw new CloudAccountsError('Cloud lease returned no Codex gateway URL.', { code: 'invalid_lease' });
+  let parsed;
+  try { parsed = new URL(raw); } catch { throw new CloudAccountsError('Invalid Codex gateway URL in Cloud lease.', { code: 'invalid_lease' }); }
+  if (parsed.username || parsed.password) {
+    throw new CloudAccountsError('Codex gateway URL must not include embedded credentials.', { code: 'invalid_lease' });
+  }
+  const loopback = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(parsed.hostname.toLowerCase());
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    throw new CloudAccountsError('Codex gateway URL requires https://.', { code: 'invalid_lease' });
+  }
+  return raw;
+}
+
+function resolveCodexGatewayGrant(lease) {
+  const token = String(lease?.codex_gateway_token || lease?.gateway_bearer_token || '').trim();
+  if (!token) throw new CloudAccountsError('Cloud lease returned no Codex gateway token.', { code: 'invalid_lease' });
+  rememberSecrets(token);
+  if (!token.startsWith('pddg_')) {
+    throw new CloudAccountsError('Codex gateway token must start with pddg_.', { code: 'invalid_lease' });
+  }
+  return token;
+}
+
+const isTomlTable = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date) && typeof value.toISOString !== 'function';
+const formatTomlKey = key => (/^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key));
+
+function formatTomlValue(value) {
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'bigint') return String(value);
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return String(value);
+    if (Number.isNaN(value)) return 'nan';
+    return value > 0 ? 'inf' : '-inf';
+  }
+  if (value instanceof Date || typeof value?.toISOString === 'function') return value.toISOString();
+  if (Array.isArray(value)) return `[${value.map(formatTomlValue).join(', ')}]`;
+  if (isTomlTable(value)) {
+    const pairs = Object.entries(value)
+      .filter(([, v]) => v !== undefined && v !== null)
+      .map(([k, v]) => `${formatTomlKey(k)} = ${formatTomlValue(v)}`);
+    return pairs.length ? `{ ${pairs.join(', ')} }` : '{}';
+  }
+  return JSON.stringify(String(value));
+}
+
+function isInlineLeafMap(key, value, depth) {
+  return depth >= 1
+    && INLINE_TOML_TABLE_KEYS.has(key)
+    && isTomlTable(value)
+    && Object.values(value).every(v => v === undefined || v === null || (!isTomlTable(v) && !Array.isArray(v)));
+}
+
+function serializeTomlConfig(root, fileLabel = 'config.toml') {
+  const blocks = [];
+  const visit = (table, path) => {
+    const scalars = [];
+    const subtables = [];
+    const tableArrays = [];
+    for (const [key, val] of Object.entries(table)) {
+      if (val === undefined || val === null) continue;
+      if (Array.isArray(val) && val.length > 0 && val.every(isTomlTable)) {
+        tableArrays.push([key, val]);
+      } else if (isTomlTable(val) && !isInlineLeafMap(key, val, path.length)) {
+        subtables.push([key, val]);
+      } else {
+        scalars.push([key, val]);
+      }
+    }
+    if (path.length === 0) {
+      if (scalars.length > 0) {
+        blocks.push(scalars.map(([k, v]) => `${formatTomlKey(k)} = ${formatTomlValue(v)}`).join('\n'));
+      }
+    } else if (scalars.length > 0 || (subtables.length === 0 && tableArrays.length === 0)) {
+      const header = `[${path.map(formatTomlKey).join('.')}]`;
+      const lines = scalars.map(([k, v]) => `${formatTomlKey(k)} = ${formatTomlValue(v)}`);
+      blocks.push([header, ...lines].join('\n'));
+    }
+    for (const [key, sub] of subtables) {
+      visit(sub, [...path, key]);
+    }
+    for (const [key, list] of tableArrays) {
+      const arrPath = [...path, key];
+      const header = `[[${arrPath.map(formatTomlKey).join('.')}]]`;
+      for (const item of list) {
+        const itemScalars = [];
+        const itemSubs = [];
+        for (const [ik, iv] of Object.entries(item)) {
+          if (iv === undefined || iv === null) continue;
+          if (isTomlTable(iv) && !isInlineLeafMap(ik, iv, arrPath.length)) itemSubs.push([ik, iv]);
+          else itemScalars.push([ik, iv]);
+        }
+        blocks.push([header, ...itemScalars.map(([k, v]) => `${formatTomlKey(k)} = ${formatTomlValue(v)}`)].join('\n'));
+        for (const [sk, sv] of itemSubs) visit(sv, [...arrPath, sk]);
+      }
+    }
+  };
+  visit(root, []);
+  const text = blocks.length ? `${blocks.join('\n\n')}\n` : '';
+  try {
+    parseToml(text);
+  } catch {
+    throw new CloudAccountsError(`Failed to serialize valid TOML for ${fileLabel}.`, { code: 'invalid_codex_config' });
+  }
+  return text;
+}
+
+function readCodexTomlObject(fs, configPath, { strict = true } = {}) {
+  let raw = '';
+  try {
+    raw = fs.readFileSync(configPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { exists: false, data: {} };
+    if (!strict) return { exists: false, data: {} };
+    throw error;
+  }
+  try {
+    const parsed = parseToml(raw);
+    return { exists: true, data: isTomlTable(parsed) ? parsed : {} };
+  } catch {
+    if (!strict) return { exists: true, data: {} };
+    throw new CloudAccountsError(`${configPath} contains malformed TOML; fix it before updating Codex Cloud accounts.`, { code: 'invalid_codex_config' });
+  }
 }
 
 export function localClaudePaths(env = process.env) {
@@ -379,12 +552,121 @@ export function localClaudePaths(env = process.env) {
   };
 }
 
-export function materializeLocalCodexAuth(authJson, { env = process.env } = {}, ports = {}) {
+export function restoreLocalCodexGatewayConfig({ env = process.env, previousModelProvider = null, removeAuthFile = false } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
-  const stripped = stripCodexAuthBundle(authJson);
-  const target = localCodexAuthPath(env);
-  writeAtomicPrivate(fs, target, `${JSON.stringify(stripped, null, 2)}\n`);
-  return { authPath: target, stripped };
+  const configPath = localCodexConfigPath(env);
+  const authPath = localCodexAuthPath(env);
+  let restoredConfig = false;
+  let removedAuth = false;
+
+  assertNoSymlinkCodexPath(fs, configPath);
+  const { exists: hasConfig, data: configData } = readCodexTomlObject(fs, configPath);
+  if (hasConfig) {
+    const hasGatewaySection = isTomlTable(configData.model_providers) && Object.hasOwn(configData.model_providers, CODEX_GATEWAY_PROVIDER_ID);
+    const hasGatewayProvider = configData.model_provider === CODEX_GATEWAY_PROVIDER_ID;
+    if (hasGatewaySection || hasGatewayProvider) {
+      const nextData = { ...configData };
+      if (isTomlTable(nextData.model_providers)) {
+        const nextProviders = { ...nextData.model_providers };
+        delete nextProviders[CODEX_GATEWAY_PROVIDER_ID];
+        if (Object.keys(nextProviders).length > 0) nextData.model_providers = nextProviders;
+        else delete nextData.model_providers;
+      }
+      if (nextData.model_provider === CODEX_GATEWAY_PROVIDER_ID) {
+        if (typeof previousModelProvider === 'string' && previousModelProvider.trim() && previousModelProvider.trim() !== CODEX_GATEWAY_PROVIDER_ID) {
+          nextData.model_provider = previousModelProvider.trim();
+        } else {
+          delete nextData.model_provider;
+        }
+      }
+      const nextText = serializeTomlConfig(nextData, configPath);
+      writeAtomicPrivate(fs, configPath, nextText);
+      restoredConfig = true;
+    }
+  }
+
+  if (removeAuthFile) {
+    assertNoSymlinkCodexPath(fs, authPath);
+    const currentAuth = readJsonObject(fs, authPath);
+    if (currentAuth?.auth_mode === 'apikey' && typeof currentAuth?.OPENAI_API_KEY === 'string' && currentAuth.OPENAI_API_KEY.startsWith('pddg_')) {
+      try {
+        if (typeof fs.rmSync === 'function') fs.rmSync(authPath, { force: true });
+        else fs.unlinkSync?.(authPath);
+        removedAuth = true;
+      } catch {}
+    }
+  }
+
+  return { configPath, authPath, restoredConfig, removedAuth };
+}
+
+export function materializeLocalCodexAuth(authOrLease, { env = process.env, previousManagedCodexGateway = false, previousCodexModelProvider = null } = {}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const authPath = localCodexAuthPath(env);
+  const configPath = localCodexConfigPath(env);
+  assertNoSymlinkCodexPath(fs, authPath);
+
+  if (object(authOrLease) && authOrLease.delivery_mode === 'gateway_grant') {
+    const gatewayUrl = validateCodexGatewayUrl(authOrLease.codex_gateway_url);
+    const grantToken = resolveCodexGatewayGrant(authOrLease);
+    assertNoSymlinkCodexPath(fs, configPath);
+    const { data: existingConfig } = readCodexTomlObject(fs, configPath);
+    const currentProvider = typeof existingConfig.model_provider === 'string' ? existingConfig.model_provider.trim() : '';
+    const savedPreviousModelProvider = (currentProvider && currentProvider !== CODEX_GATEWAY_PROVIDER_ID)
+      ? currentProvider
+      : (typeof previousCodexModelProvider === 'string' && previousCodexModelProvider.trim() && previousCodexModelProvider.trim() !== CODEX_GATEWAY_PROVIDER_ID
+          ? previousCodexModelProvider.trim()
+          : null);
+    const prevProviders = isTomlTable(existingConfig.model_providers) ? { ...existingConfig.model_providers } : {};
+    const nextConfig = {
+      ...existingConfig,
+      model_provider: CODEX_GATEWAY_PROVIDER_ID,
+      model_providers: {
+        ...prevProviders,
+        [CODEX_GATEWAY_PROVIDER_ID]: {
+          name: 'PDD Codex Gateway',
+          base_url: gatewayUrl,
+          wire_api: 'responses',
+          requires_openai_auth: false,
+          supports_websockets: false,
+          http_headers: { 'x-pdd-gateway-grant': grantToken },
+        },
+      },
+    };
+    const serializedConfig = serializeTomlConfig(nextConfig, configPath);
+    const gatewayAuth = {
+      auth_mode: 'apikey',
+      OPENAI_API_KEY: grantToken,
+    };
+    writeAtomicPrivate(fs, authPath, `${JSON.stringify(gatewayAuth, null, 2)}\n`);
+    writeAtomicPrivate(fs, configPath, serializedConfig);
+    return {
+      authPath,
+      configPath,
+      managedCodexGateway: true,
+      codexGatewayUrl: gatewayUrl,
+      previousCodexModelProvider: savedPreviousModelProvider,
+    };
+  }
+
+  const stripped = stripCodexAuthBundle(authOrLease);
+  if (previousManagedCodexGateway) {
+    restoreLocalCodexGatewayConfig({ env, previousModelProvider: previousCodexModelProvider, removeAuthFile: false }, ports);
+  } else {
+    try {
+      restoreLocalCodexGatewayConfig({ env, previousModelProvider: previousCodexModelProvider, removeAuthFile: false }, ports);
+    } catch (error) {
+      if (error instanceof CloudAccountsError && error.code === 'symlink_refused') throw error;
+    }
+  }
+  writeAtomicPrivate(fs, authPath, `${JSON.stringify(stripped, null, 2)}\n`);
+  return {
+    authPath,
+    stripped,
+    managedCodexGateway: false,
+    codexGatewayUrl: null,
+    previousCodexModelProvider: null,
+  };
 }
 
 export function materializeLocalClaudeAuth(lease, { env = process.env, previousManagedBaseUrl = false } = {}, ports = {}) {
@@ -412,10 +694,12 @@ export function materializeLocalClaudeAuth(lease, { env = process.env, previousM
   return { settingsPath, onboardingPath, managedBaseUrl };
 }
 
-export function createCodexStepOverlay(authJson, { env = process.env, tmpRoot, detached = false } = {}, ports = {}) {
+export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot, detached = false } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
-  const home = env?.HOME || homedir();
-  const sourceCodexHome = (typeof env?.CODEX_HOME === 'string' && env.CODEX_HOME.trim()) ? env.CODEX_HOME.trim() : join(home, '.codex');
+  const sourceCodexHome = localCodexHome(env);
+  const isGateway = object(authOrLease) && authOrLease.delivery_mode === 'gateway_grant';
+  const gatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
+  const gatewayToken = isGateway ? resolveCodexGatewayGrant(authOrLease) : null;
   const rootDir = tmpRoot || (fs.existsSync?.('/tmp') !== false ? '/tmp' : tmpdir());
   let overlayDir;
   if (typeof fs.mkdtempSync === 'function') {
@@ -438,15 +722,94 @@ export function createCodexStepOverlay(authJson, { env = process.env, tmpRoot, d
     activeOverlayCleanups.add(cleanup);
     syncOverlayHooks();
   }
+  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
   try {
-    for (const name of CODEX_OVERLAY_LINKS) {
+    const linkNames = isGateway ? CODEX_GATEWAY_OVERLAY_LINKS : CODEX_OVERLAY_LINKS;
+    for (const name of linkNames) {
       const src = join(sourceCodexHome, name);
       try {
-        (fs.lstatSync ?? nativeFs.lstatSync)(src);
-        fs.symlinkSync(src, join(overlayDir, name));
+        const st = lstat(src);
+        if (!st.isSymbolicLink()) {
+          fs.symlinkSync(src, join(overlayDir, name));
+        }
       } catch {}
     }
-    const stripped = stripCodexAuthBundle(authJson);
+    if (isGateway) {
+      let baseConfig = {};
+      const srcConfigPath = join(sourceCodexHome, 'config.toml');
+      try {
+        const cfgStat = lstat(srcConfigPath);
+        if (cfgStat.isFile() && !cfgStat.isSymbolicLink()) {
+          baseConfig = readCodexTomlObject(fs, srcConfigPath, { strict: false }).data;
+        }
+      } catch {}
+      const prevFeatures = isTomlTable(baseConfig.features) ? { ...baseConfig.features } : {};
+      const prevPolicy = isTomlTable(baseConfig.shell_environment_policy) ? { ...baseConfig.shell_environment_policy } : {};
+      const prevFilters = isTomlTable(prevPolicy.filters) ? { ...prevPolicy.filters } : {};
+      const hasFilterIgnoreCase = key => {
+        const lower = key.toLowerCase();
+        return Object.keys(prevFilters).some(k => k.toLowerCase() === lower);
+      };
+      if (Array.isArray(prevPolicy.exclude)) {
+        for (const item of prevPolicy.exclude) {
+          if (typeof item === 'string' && item.trim() && !hasFilterIgnoreCase(item.trim())) {
+            prevFilters[item.trim()] = 'exclude';
+          }
+        }
+      }
+      if (Array.isArray(prevPolicy.include_only)) {
+        for (const item of prevPolicy.include_only) {
+          if (typeof item === 'string' && item.trim() && !hasFilterIgnoreCase(item.trim())) {
+            prevFilters[item.trim()] = 'include';
+          }
+        }
+      }
+      delete prevPolicy.exclude;
+      delete prevPolicy.include_only;
+      for (const k of Object.keys(prevFilters)) {
+        if (k.toLowerCase() === 'pdd_codex_gateway_grant') {
+          delete prevFilters[k];
+        }
+      }
+      if (isTomlTable(prevPolicy.set)) {
+        const nextSet = { ...prevPolicy.set };
+        for (const k of Object.keys(nextSet)) {
+          if (k.toLowerCase() === 'pdd_codex_gateway_grant') {
+            delete nextSet[k];
+          }
+        }
+        if (Object.keys(nextSet).length > 0) prevPolicy.set = nextSet;
+        else delete prevPolicy.set;
+      }
+      prevFilters.PDD_CODEX_GATEWAY_GRANT = 'exclude';
+      prevPolicy.filters = prevFilters;
+      const prevProviders = isTomlTable(baseConfig.model_providers) ? { ...baseConfig.model_providers } : {};
+      delete prevProviders[CODEX_GATEWAY_PROVIDER_ID];
+      const overlayConfig = {
+        ...baseConfig,
+        model_provider: CODEX_GATEWAY_PROVIDER_ID,
+        features: {
+          ...prevFeatures,
+          shell_snapshot: false,
+        },
+        shell_environment_policy: prevPolicy,
+        model_providers: {
+          ...prevProviders,
+          [CODEX_GATEWAY_PROVIDER_ID]: {
+            name: 'PDD Codex Gateway',
+            base_url: gatewayUrl,
+            wire_api: 'responses',
+            requires_openai_auth: false,
+            supports_websockets: false,
+            env_http_headers: { 'x-pdd-gateway-grant': 'PDD_CODEX_GATEWAY_GRANT' },
+          },
+        },
+      };
+      const configPath = join(overlayDir, 'config.toml');
+      writeAtomicPrivate(fs, configPath, serializeTomlConfig(overlayConfig, configPath));
+      return { overlayDir, authPath: null, configPath, gatewayToken, gatewayUrl, cleanup };
+    }
+    const stripped = stripCodexAuthBundle(authOrLease);
     const authPath = join(overlayDir, 'auth.json');
     writeAtomicPrivate(fs, authPath, `${JSON.stringify(stripped, null, 2)}\n`);
     return { overlayDir, authPath, cleanup };
@@ -480,6 +843,20 @@ export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, por
   const lease = leaseReply?.lease;
   const cleanBase = loginEnvironment(baseEnv, { kind: provider || 'codex' });
   if (provider === 'codex') {
+    if (lease?.delivery_mode === 'gateway_grant') {
+      const overlay = createCodexStepOverlay(lease, { env: baseEnv, tmpRoot: ports.tmpRoot, detached }, ports);
+      const env = {
+        ...cleanBase,
+        CODEX_HOME: overlay.overlayDir,
+        PDD_CODEX_GATEWAY_GRANT: overlay.gatewayToken,
+        PDD_CLOUD_STEP_ISOLATED: '1',
+      };
+      delete env.OPENAI_API_KEY;
+      delete env.CODEX_API_KEY;
+      delete env.CODEX_ACCESS_TOKEN;
+      delete env.OPENAI_BASE_URL;
+      return { env, cleanupDirs: [overlay.overlayDir], cleanup: overlay.cleanup, overlayDir: overlay.overlayDir };
+    }
     if (!object(lease?.codex_auth_json)) {
       throw new CloudAccountsError('Cloud lease returned no Codex auth bundle.', { code: 'invalid_lease' });
     }
@@ -555,7 +932,13 @@ export async function reportCloudAccountUsage(accountId, report, { cwd = process
   return cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(accountId)}/usage-report`, { body, cwd, env, timeoutMs }, ports);
 }
 
-export function saveActiveLeaseMetadata(leaseReply, { env = process.env, managedBaseUrl } = {}, ports = {}) {
+export function saveActiveLeaseMetadata(leaseReply, {
+  env = process.env,
+  managedBaseUrl,
+  managedCodexGateway,
+  codexGatewayUrl,
+  previousCodexModelProvider,
+} = {}, ports = {}) {
   if (!object(leaseReply?.account) || !object(leaseReply?.lease)) return null;
   const current = readCloudAccountsState({ env }, ports);
   const acc = leaseReply.account;
@@ -572,6 +955,9 @@ export function saveActiveLeaseMetadata(leaseReply, { env = process.env, managed
       delivery_mode: lease.delivery_mode ?? null,
       anthropic_base_url: lease.anthropic_base_url ?? null,
       managed_anthropic_base_url: managedBaseUrl !== undefined ? Boolean(managedBaseUrl) : Boolean(prev?.managed_anthropic_base_url),
+      codex_gateway_url: codexGatewayUrl !== undefined ? codexGatewayUrl : (lease.codex_gateway_url ?? prev?.codex_gateway_url ?? null),
+      managed_codex_gateway: managedCodexGateway !== undefined ? Boolean(managedCodexGateway) : Boolean(prev?.managed_codex_gateway),
+      previous_codex_model_provider: previousCodexModelProvider !== undefined ? previousCodexModelProvider : (prev?.previous_codex_model_provider ?? null),
       five_hour_used_percent: typeof acc.five_hour_used_percent === 'number' ? acc.five_hour_used_percent : null,
       five_hour_reset_at: acc.five_hour_reset_at ?? null,
       weekly_used_percent: typeof acc.weekly_used_percent === 'number' ? acc.weekly_used_percent : null,
@@ -715,7 +1101,7 @@ export async function selectCloudPoolLogin({
       }
 
       // Optional live Codex window probe when explicitly supplied via ports (weeklyStopPercent = 100, never 97).
-      if (provider === 'codex' && (ports.readCodexUsageWindows || ports.readCodexLimits)) {
+      if (provider === 'codex' && reply.lease?.delivery_mode !== 'gateway_grant' && (ports.readCodexUsageWindows || ports.readCodexLimits)) {
         const probeStep = prepareCloudStepExecution(reply, env, ports);
         let probeLimits;
         try {
@@ -1000,7 +1386,7 @@ export function loginEnvironment(baseEnv = process.env, login) {
   for (const [k, v] of Object.entries(baseEnv ?? {})) {
     if (typeof v === 'string') out[k] = v;
   }
-  for (const key of [...ALL_CONFIG_VARS, 'CLAUDECODE', 'CLAUDE_CODE_OAUTH_TOKEN']) delete out[key];
+  for (const key of [...ALL_CONFIG_VARS, 'CLAUDECODE', 'CLAUDE_CODE_OAUTH_TOKEN', 'PDD_CODEX_GATEWAY_GRANT']) delete out[key];
   if (MANAGED_CLAUDE_GATEWAY_RE.test(String(out.ANTHROPIC_BASE_URL ?? ''))) {
     delete out.ANTHROPIC_BASE_URL;
   }
