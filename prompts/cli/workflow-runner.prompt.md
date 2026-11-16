@@ -642,59 +642,24 @@ Standalone prompt journal evidence and gate decisions use [run records](workflow
 
 ## Automatic PR 1 full-pass gate
 
-Export `advanceAutomaticPr1({ref,cwd,packageRoot,coordinatorId,machine},ports)`.
-This native boundary serializes publication attempts with a per-run
-`automatic-pr1.lock`, using the existing exclusive-lock ownership and recovery
-rules. It leaves `chat-replacement.lock` available for cancellation and claim
-cleanup; the progress guards below stop publication after cancellation.
-It considers only a waiting,
-unpublished `approve-pr` gate in a bug or feature prompt PR area whose required
-steps are done, with no open question or pending chat replacement. A parking
-record is eligible only in phase parked for a person blocker bound to this same
-approve-pr gate, with no bound question, explicit independent blocker, runtime
-wait or held check custody; the current parking policy must still classify the
-wait as person. Preserve its closed chats, session identities and reservation
-age. Publication binds that reservation to the new code gate without resuming a
-worker, so a reply to the old approval wait cannot clear the new gate.
-Other parking causes and incomplete cleanup or wake reservations stay protected.
-Require a valid saved automatic origin matching this source checkout, coordinator
-and machine, the current enabled matching operator start scope in `auto` mode,
-the selected workflow Autopilot overlay, and non-strict policy from `sourceRoot`.
+For a run with a saved automatic origin, require the current enabled matching
+operator start scope in `auto` mode, the selected workflow Autopilot overlay, and
+non-strict policy from `sourceRoot`.
 Current winning claim custody must pass the ordinary continuation check. Missing,
-unavailable or changed authority never supplies approval.
+unavailable or changed authority never supplies approval. When a parked person
+wait is bound to the published approve-pr gate, preserve its closed chats, session
+identities and reservation age. Publication binds that reservation to the new code
+gate without resuming a worker, so a reply to the old approval wait cannot clear
+the new gate.
 
 Reuse the normal-run full-pass route below and its Story coverage, selected prompt
 paths, saved-batch freshness/completeness and pinned publication evidence rules.
 Automatic Story coverage is the latest saved decision's `storyCoverage`, falling
-back to `storyApproval`. If coverage is absent, derive it once from the latest
-recorded approval of the workflow's Story area. Require its identified evidence
-to match the approval journal, including the approved prompt paths and hashes.
-Require a saved Story contract and paths bound to that approval. An earlier
-Story-step source hash, even when matched by a local ancestor and unchanged
-prompt prose, cannot establish which Story the later approval covered. Missing
-approval-bound evidence keeps the person gate with a coverage hold reason.
-Capture the current Story contract and fingerprint from the same immutable file
-snapshot so an edit between contract validation and fingerprint capture cannot
-become approved coverage. Read source inventory through the program port; do
-not change the source worktree while recovering its fingerprint.
-Compare the snapshot contract with the approval's saved contract, and its Story,
-plan, expected values and prompt paths with the current selection before saving.
-Every fingerprinted Story and scenario must belong to that contract's file
-inventory. An unbound file keeps the person gate. A difference or intervening
-edit reopens the Story card and saves no derived coverage. Otherwise save
-`storyApproval` with `gateId`, `evidenceId`, original approval `at`, `fingerprint`,
-`prompts`, and `source: "derived from the recorded approval"`. Its `derivedFrom`
-records `storyContract` for the approval-bound snapshot. Preserve the original
-decision and journal; this is coverage recovery, not a new approval. Guard the save against changed run,
-decision, gate, scope and custody, and recheck current source before publication.
-Retries reuse saved coverage. Normal runs never derive coverage and retain their
-person gate when it is missing. A changed Story,
+back to `storyApproval`. A changed Story,
 plan, expected value or prompt list reopens the Story gate; an already reopened
-Story gate requires explicit approval and is never crossed by this boundary.
-When this command reopens a Story gate that owns an eligible parked person wait,
-bind that reservation to the revised gate in the same saved transition. Replace
-any earlier check-failure hold with the Story approval reason; status next-step
-guidance and later ticks must retain that reason. The JSON/list summary words
+Story gate requires explicit approval and is never crossed by this route.
+When this route reopens a Story gate that owns an eligible parked person wait,
+bind that reservation to the revised gate in the same saved transition. The JSON/list summary words
 for a parked run must also include its current automaticHold, beside the parking
 cause, so resource release does not hide the action that still blocks PR 1. Keep the new gate identity
 distinct from the old one, so an earlier reply cannot approve the revised Story.
@@ -702,20 +667,17 @@ Preserve parked chats, reservation age and every publication guard. Do not rebin
 an unrelated or changed wait.
 A prompt-only repair can use a fresh full pass under the same Story coverage.
 Failed, partial, missing, stale or no-verdict checks, and pure `native-only` prompt selections (`check.nativeOnly` nonempty with `0` judged tests and `0` problems, where `native-only` prompts require a person approval), keep the gate and publish
-nothing. Keep a gate hold reason that status detail and list/JSON words show,
-including strict policy, missing scope, missing Story coverage, Story changes,
-native-only person approval, check problems or unavailable custody. A hold reason never authorizes a gate.
+nothing. Keep a gate hold reason that status detail, next-step guidance and list/JSON
+words show. A hold reason never authorizes a gate.
 
 On a full pass, publish PR 1 through the existing `automatic-check-pass` route,
 with no words or AI decision. Its evidence basis also records `origin:"automatic"`
 and the admitted `automaticOrigin` tuple. Recheck current scope and strict policy
 before preparation and authorization, and winning custody before authorization.
 Guard progress against the latest saved run before approval writes, Git mutations
-and PR publication effects. Require the same run, area, gate, automatic origin
-and Story approval coverage, with the waiting state and all eligibility guards
-above still satisfied. Cancellation, a new person question or another eligibility
-change during preparation or publication stops further effects and preserves the
-saved blocker. The run lock alone does not exclude cancellation or questions.
+and PR publication effects. Cancellation during preparation or publication stops
+further effects and preserves the saved blocker. The run lock alone does not
+exclude cancellation or questions.
 Supply the current-run progress guard to the approval journal's guarded commit
 boundary. After acquiring journal custody, await a fresh winning-claim ownership
 read before preparing the append. Then synchronously recheck current sourceRoot
@@ -736,8 +698,7 @@ non-strict policy and current Story coverage continues through the existing
 validated code-entry path and resumes the same PR 2. A later Story decision may
 replace that coverage before continuation. Missing prior code authority, changed
 Story coverage or strict policy never gains code authority from PR 1 publication.
-Do not merge, answer a question or create another run. Repeating the coordinator
-call after PR 1 opens makes no duplicate approval, push or PR.
+Do not merge, answer a question or create another run.
 
 ## Normal-run gates
 
@@ -1694,7 +1655,7 @@ Export recoverAutomaticRunOwner({ref,cwd,coordinatorId,machine},ports), with the
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"partial","status":"draft","prose_sha256":"611eb07e1c180fbae42e8a88c97a1d950e72e8fe48c4eb9a93b908622b4f45c3","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"storyCount","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runtimeHistory":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}},"done":{"type":"object","properties":{},"required":[],"additionalProperties":false},"evidence":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}}},"required":["root","runtimeHistory","done","evidence"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"pass":{"type":"integer"},"total":{"type":"integer"},"failing":{"type":"array","items":{"type":"string"}},"unknown":{"type":"array","items":{"type":"string"}},"evidence":{"type":"string"}},"required":["pass","total","failing"],"additionalProperties":false},"errors":[]},{"operation":"runStatus","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"cwd":{"type":"string"},"json":{"type":"boolean"},"all":{"type":"boolean"},"cancelled":{"type":"boolean"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"source","kind":"port","access":"read","operations":[{"name":"fingerprint","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["value"],"additionalProperties":false}},{"name":"capture","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}},"appMap":{"type":"null"}},"required":["root","tests","appMap"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"sha256":{"type":"string"},"error":{"type":"string"}},"required":["sha256","error"],"additionalProperties":false}}]},{"name":"runs","kind":"port","access":"read","operations":[{"name":"resolveRun","access":"read","arguments_schema":{"type":"object","properties":{"ref":{"type":"string"},"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},{"name":"files","kind":"port","access":"read","operations":[{"name":"readFileSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["content"],"additionalProperties":false}},{"name":"readdirSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"entries":{"oneOf":[{"type":"array","items":{"type":"string"}},{"type":"null"}]}},"required":["entries"],"additionalProperties":false}},{"name":"realpathSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"path":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["path"],"additionalProperties":false}},{"name":"lstatSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stat":{"oneOf":[{"type":"object","properties":{"isFile":{"type":"boolean"},"isDirectory":{"type":"boolean"},"size":{"type":"integer"}},"required":["isFile","isDirectory","size"],"additionalProperties":false},{"type":"null"}]}},"required":["stat"],"additionalProperties":false}},{"name":"existsSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exists":{"type":"boolean"}},"required":["exists"],"additionalProperties":false}}]},{"name":"program","kind":"port","access":"read","operations":[{"name":"execFile","access":"read","arguments_schema":{"type":"object","properties":{"file":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["file","args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"},"code":{"type":"integer"}},"required":["stdout","code"],"additionalProperties":false}}]},{"name":"results","kind":"port","access":"read","operations":[{"name":"readRunResults","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"oneOf":[{"type":"string"},{"type":"null"}]},"runId":{"oneOf":[{"type":"string"},{"type":"null"}]},"since":{"type":"integer"},"baseBranch":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]}],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
+{"kind":"partial","status":"draft","prose_sha256":"b268794db941829dcb3c71f1805d965615680bb2a0063268390aa686a7fd39ba","entries":[{"operation":"changeRun","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"text":{"type":"string"},"cwd":{"type":"string"}},"required":["ref","text","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"acknowledgeRequest","input_schema":{"type":"object","properties":{"requestId":{"type":"string"},"summary":{"type":"string"},"cwd":{"type":"string"}},"required":["requestId","summary","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]},{"operation":"storyCount","input_schema":{"type":"object","properties":{"root":{"type":"string"},"runtimeHistory":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}},"done":{"type":"object","properties":{},"required":[],"additionalProperties":false},"evidence":{"type":"array","items":{"type":"object","properties":{"summary":{"type":"string"},"at":{"type":"integer"},"source":{"type":"object","properties":{"kind":{"type":"string"},"sha256":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}}},"required":["kind","sha256"],"additionalProperties":false}},"required":["summary","at"],"additionalProperties":false}}},"required":["root","runtimeHistory","done","evidence"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"pass":{"type":"integer"},"total":{"type":"integer"},"failing":{"type":"array","items":{"type":"string"}},"unknown":{"type":"array","items":{"type":"string"}},"evidence":{"type":"string"}},"required":["pass","total","failing"],"additionalProperties":false},"errors":[]},{"operation":"runStatus","input_schema":{"type":"object","properties":{"ref":{"type":"string"},"cwd":{"type":"string"},"json":{"type":"boolean"},"all":{"type":"boolean"},"cancelled":{"type":"boolean"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"source","kind":"port","access":"read","operations":[{"name":"fingerprint","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"value":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["value"],"additionalProperties":false}},{"name":"capture","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"tests":{"type":"array","items":{"type":"string"}},"appMap":{"type":"null"}},"required":["root","tests","appMap"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"sha256":{"type":"string"},"error":{"type":"string"}},"required":["sha256","error"],"additionalProperties":false}}]},{"name":"runs","kind":"port","access":"read","operations":[{"name":"resolveRun","access":"read","arguments_schema":{"type":"object","properties":{"ref":{"type":"string"},"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},{"name":"files","kind":"port","access":"read","operations":[{"name":"readFileSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"content":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["content"],"additionalProperties":false}},{"name":"readdirSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"entries":{"oneOf":[{"type":"array","items":{"type":"string"}},{"type":"null"}]}},"required":["entries"],"additionalProperties":false}},{"name":"realpathSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"path":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["path"],"additionalProperties":false}},{"name":"lstatSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stat":{"oneOf":[{"type":"object","properties":{"isFile":{"type":"boolean"},"isDirectory":{"type":"boolean"},"size":{"type":"integer"}},"required":["isFile","isDirectory","size"],"additionalProperties":false},{"type":"null"}]}},"required":["stat"],"additionalProperties":false}},{"name":"existsSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exists":{"type":"boolean"}},"required":["exists"],"additionalProperties":false}}]},{"name":"program","kind":"port","access":"read","operations":[{"name":"execFile","access":"read","arguments_schema":{"type":"object","properties":{"file":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["file","args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"},"code":{"type":"integer"}},"required":["stdout","code"],"additionalProperties":false}}]},{"name":"results","kind":"port","access":"read","operations":[{"name":"readRunResults","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"runDir":{"oneOf":[{"type":"string"},{"type":"null"}]},"runId":{"oneOf":[{"type":"string"},{"type":"null"}]},"since":{"type":"integer"},"baseBranch":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]}],"limits":{"max_steps":12,"max_model_calls":6},"conventions":[]}
 ```
 </details>
 
