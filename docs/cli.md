@@ -332,30 +332,35 @@ of `@openai/codex` (`~/.codex/auth.json`) and `@anthropic-ai/claude-code`
 
 | Command | What it does |
 |---|---|
-| `pdd accounts [--json]` | List enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
-| `pdd accounts list [--json]` | List enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
-| `pdd accounts add [--provider codex\|claude] [--label NAME]` | Sign in with `codex login` or `claude setup-token`, upload the credential bundle to PDD Cloud over TLS, and replace the local Codex file with a stripped pass (`refresh_token: ""`) |
-| `pdd accounts import [--provider codex\|claude] [--label NAME]` | Import an existing local `~/.codex/auth.json` or Claude token into PDD Cloud and replace the local Codex file with a stripped pass (`refresh_token: ""`) |
-| `pdd accounts use LABEL` | Pin `LABEL` and write its short-lived stripped pass to `~/.codex/auth.json` (`0600`) or `~/.claude/settings.json` (`0600`) |
+| `pdd accounts [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
+| `pdd accounts list [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
+| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside an isolated folder (`--device-auth` for headless Codex), upload the credential bundle to PDD Cloud over TLS, strip the local refresh token, and optionally enroll multiple accounts (`--loop`) or share (`--with`) |
+| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--with USER\|ORG/TEAM[,...]]` | Import a local or external Codex `auth.json` or Claude token into PDD Cloud, replace any local Codex file with a stripped pass (`refresh_token: ""`), and optionally share (`--with`) |
+| `pdd accounts use LABEL` | Pin `LABEL` and materialize its owner pass or shared gateway grant in `~/.codex/` (`0600`) or `~/.claude/settings.json` (`0600`) |
 | `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch the local install to the next ready account sorted by soonest weekly reset |
 | `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Return in 0 ms when the cached lease is below 100% on both windows and more than 15 minutes from expiry; else lease a fresh pass within `--timeout-ms` (default 1200 ms) and fail open when offline |
 | `pdd accounts auto on\|off\|status` | Turn on, turn off or inspect the opt-in fail-open shell wrapper in `~/.zshrc` and `~/.bashrc` for plain terminal `codex` and `claude` commands (off by default) |
 | `pdd accounts pause LABEL` | Pause automatic leasing for `LABEL` |
 | `pdd accounts unpause LABEL` | Resume automatic leasing for `LABEL` |
-| `pdd accounts share LABEL --with USER\|ORG/TEAM` | Share `LABEL` with a GitHub user or organization team without exposing raw owner credentials |
-| `pdd accounts accept INVITE` | Accept a pending Cloud account share invite |
+| `pdd accounts share LABEL --with USER\|ORG/TEAM[,...]` | Share `LABEL` with GitHub users, organization teams, or `@ORG` targets without exposing raw owner credentials |
+| `pdd accounts share --all [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or `@ORG` targets |
+| `pdd accounts accept INVITE` | Accept a pending Cloud account share invite and materialize the shared grant if no account is pinned for that provider |
 | `pdd accounts unshare LABEL --user USER` | Revoke shared access to `LABEL` for `USER` |
-| `pdd accounts leave LABEL` | Leave a shared Cloud account |
+| `pdd accounts unshare [LABEL] [--all] [--provider codex\|claude] [--user USER] [--with USER\|ORG/TEAM[,...]]` | Revoke shared access for users, organization teams, or `@ORG` targets across `LABEL` or all owned accounts |
+| `pdd accounts leave LABEL` | Leave a shared Cloud account and clean up its local gateway configuration |
 | `pdd accounts remove LABEL` | Delete `LABEL` from PDD Cloud and revoke active leases |
 | `pdd accounts log LABEL [--json]` | Show the lease and sharing audit log for `LABEL` |
 
-- **Encrypted vault and stripped local passes.** PDD Cloud encrypts each account's
-  refresh credential with envelope encryption bound to the account record. Local
-  Codex files receive only a short-lived `access_token` and `id_token` with
-  `refresh_token: ""` (`0600` permissions), so only PDD Cloud refreshes single-use
-  OAuth tokens and two machines never invalidate each other. Local state in
-  `$PDD_STATE_DIR/accounts-state.json` (`0600`) stores metadata and timestamps
-  only, with zero tokens.
+- **Encrypted vault, stripped owner passes, and tokenless shared gateways.** PDD
+  Cloud encrypts each account's refresh credential with envelope encryption bound
+  to the account record. Owner Codex leases write a short-lived `access_token` and
+  `id_token` with `refresh_token: ""` (`0600`), so only PDD Cloud refreshes
+  single-use OAuth tokens. Shared Codex and Claude leases (`delivery_mode: "gateway_grant"`)
+  deliver only a short-lived revocable `pddg_…` gateway grant routed through PDD
+  Cloud (`[model_providers.pdd_codex_gateway]` for Codex, `ANTHROPIC_BASE_URL` for
+  Claude), with zero OpenAI or Anthropic OAuth tokens written to borrower disk.
+  Local state in `$PDD_STATE_DIR/accounts-state.json` (`0600`) stores metadata and
+  timestamps only, with zero tokens.
 - **Stick-Until-100% step rotation.** Inside `pdd` and `pdd autopilot`, steps stay
   on the active leased account with zero switches while both the 5-hour and weekly
   windows remain below 100%. Brief burst `429` responses below 100% retry on the
@@ -363,14 +368,17 @@ of `@openai/codex` (`~/.codex/auth.json`) and `@anthropic-ai/claude-code`
   reports the window to PDD Cloud, cools the account until `reset_at` (hours for a
   5-hour window, days for a weekly window), and switches to the ready account whose
   weekly window resets soonest.
-- **Per-step isolation.** Codex steps write the leased stripped `auth.json` (`0600`)
-  into a disposable `0700` temporary folder (`/tmp/pdd-cx-…`) that symlinks
-  `~/.codex/{config.toml,skills,memories,sessions,rules}`, pass `CODEX_HOME` to the
-  child, and delete the folder when the step exits. Concurrent plain terminal chats
-  keep their own `~/.codex/auth.json` untouched, and zero tokens appear in process
-  arguments. Claude steps pass `CLAUDE_CODE_OAUTH_TOKEN` in the child environment,
-  plus `ANTHROPIC_BASE_URL` when a shared account uses a short-lived PDD Cloud
-  gateway grant (`delivery_mode: "gateway_grant"`).
+- **Per-step isolation.** Owner Codex steps write the leased stripped `auth.json`
+  (`0600`) into a disposable `0700` temporary folder (`/tmp/pdd-cx-…`) that symlinks
+  `~/.codex/{config.toml,skills,memories,sessions,rules}`. Shared Codex gateway
+  steps write zero `auth.json` in `/tmp/pdd-cx-…`, symlink
+  `~/.codex/{skills,memories,sessions,rules}`, merge user settings such as
+  `[mcp_servers.pdd]` into `/tmp/pdd-cx-…/config.toml` (`0600`), and pass
+  `PDD_CODEX_GATEWAY_GRANT` via the child environment with `shell_snapshot = false`
+  and `shell_environment_policy.filters`. Concurrent plain terminal chats keep their
+  own `~/.codex/` untouched, and zero tokens appear in process arguments. Claude
+  steps pass `CLAUDE_CODE_OAUTH_TOKEN` in the child environment, plus
+  `ANTHROPIC_BASE_URL` on shared gateway grants.
 - **Opt-in terminal auto-switch.** Plain terminal `codex` and `claude` commands are
   untouched by default. `pdd accounts auto on` writes one marked block in `~/.zshrc`
   and `~/.bashrc` that runs `pdd accounts sync --provider <p> --quiet --timeout-ms 1200`
