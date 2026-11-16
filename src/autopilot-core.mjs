@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: d3731af4638d5f358e1c07f2d077d154ab0d8170892f6cc9bf488a7f1d8e5e15).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 092cf846a13653032587b0e225cc1a4e1afdc516c90c858f5088da1400424b78).
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -44,7 +44,16 @@ export function claimTickLock(file, fs = nativeFs) {
     catch (e) { return e.code !== 'ESRCH' && !(e instanceof RangeError); }
   };
   fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const owner = `${file}.${randomUUID()}.owner`, reclaim = `${file}.reclaim`;
+  const token = randomUUID();
+  const owner = `${file}.${token}.owner`, reclaimDir = `${file}.reclaim.d`;
+  const tmpGuard = `${file}.${token}.guard`, myEntry = `owner-${token}`;
+  let tmpGuardExists = false;
+  const cleanupTmpGuard = () => {
+    if (!tmpGuardExists) return;
+    tmpGuardExists = false;
+    try { fs.unlinkSync(join(tmpGuard, myEntry)); } catch { /* Already unlinked. */ }
+    try { fs.rmdirSync(tmpGuard); } catch { /* Already removed. */ }
+  };
   fs.writeFileSync(owner, String(process.pid), { flag: 'wx', mode: 0o600 });
   try {
     for (let spin = 0; spin < 8; spin++) {
@@ -53,38 +62,73 @@ export function claimTickLock(file, fs = nativeFs) {
       let raw;
       try { raw = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
       if (isLivePid(raw)) return false;
-      try {
-        fs.writeFileSync(reclaim, String(process.pid), { flag: 'wx', mode: 0o600 });
-      } catch (e) {
-        if (e.code !== 'EEXIST') throw e;
-        let holder;
-        try { holder = fs.readFileSync(reclaim, 'utf8'); } catch (re) { if (re.code === 'ENOENT') continue; throw re; }
-        if (isLivePid(holder)) return false;
-        const staleEnough = typeof fs.statSync === 'function'
-          ? (() => { try { return Date.now() - fs.statSync(reclaim).mtimeMs >= 10_000; } catch { return false; } })()
-          : true;
-        if (!staleEnough) return false;
-        try { fs.unlinkSync(reclaim); } catch (re) { if (re.code !== 'ENOENT') throw re; }
-        continue;
+
+      if (!tmpGuardExists) {
+        fs.mkdirSync(tmpGuard, { mode: 0o700 });
+        tmpGuardExists = true;
+        fs.writeFileSync(join(tmpGuard, myEntry), JSON.stringify({ pid: process.pid, token, at: Date.now() }), { flag: 'wx', mode: 0o600 });
       }
+
+      let guardHeld = false;
       try {
-        let current;
-        try { current = fs.readFileSync(file, 'utf8'); }
-        catch (e) {
-          if (e.code !== 'ENOENT') throw e;
-          try { fs.linkSync(owner, file); return true; }
-          catch (le) { if (le.code === 'EEXIST') continue; throw le; }
+        fs.renameSync(tmpGuard, reclaimDir);
+        tmpGuardExists = false;
+        guardHeld = true;
+      } catch (e) {
+        if (!['ENOTEMPTY', 'EEXIST'].includes(e.code)) throw e;
+        let entries;
+        try { entries = fs.readdirSync(reclaimDir); }
+        catch (re) { if (re.code === 'ENOENT') continue; throw re; }
+        let liveHolder = false;
+        for (const entry of entries) {
+          if (!entry.startsWith('owner-')) { liveHolder = true; break; }
+          const entryPath = join(reclaimDir, entry);
+          let rawEntry;
+          try { rawEntry = fs.readFileSync(entryPath, 'utf8'); }
+          catch (re) { if (re.code === 'ENOENT') continue; throw re; }
+          let parsed = null;
+          try { parsed = JSON.parse(rawEntry); } catch { /* Corrupt dead entry. */ }
+          if (object(parsed) && isLivePid(parsed.pid)) { liveHolder = true; break; }
+          try { fs.unlinkSync(entryPath); } catch (re) { if (re.code !== 'ENOENT') throw re; }
         }
-        if (current !== raw || isLivePid(current)) return false;
-        try { fs.unlinkSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-        try { fs.linkSync(owner, file); return true; }
-        catch (e) { if (e.code !== 'EEXIST') throw e; }
-      } finally {
-        try { fs.unlinkSync(reclaim); } catch { /* Already unlinked. */ }
+        if (liveHolder) return false;
+        try { fs.rmdirSync(reclaimDir); } catch { /* Non-empty or already removed. */ }
+        try {
+          fs.renameSync(tmpGuard, reclaimDir);
+          tmpGuardExists = false;
+          guardHeld = true;
+        } catch (re) {
+          if (['ENOTEMPTY', 'EEXIST'].includes(re.code)) return false;
+          if (re.code === 'ENOENT') continue;
+          throw re;
+        }
+      }
+
+      if (guardHeld) {
+        try {
+          if (readJson(fs, join(reclaimDir, myEntry))?.token !== token) return false;
+          let current;
+          try { current = fs.readFileSync(file, 'utf8'); }
+          catch (e) {
+            if (e.code !== 'ENOENT') throw e;
+            try { fs.linkSync(owner, file); return true; }
+            catch (le) { if (le.code === 'EEXIST') continue; throw le; }
+          }
+          if (current !== raw || isLivePid(current)) return false;
+          try { fs.unlinkSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+          try { fs.linkSync(owner, file); return true; }
+          catch (e) { if (e.code !== 'EEXIST') throw e; }
+        } finally {
+          try { fs.unlinkSync(join(reclaimDir, myEntry)); } catch { /* Already unlinked. */ }
+          try { fs.rmdirSync(reclaimDir); } catch { /* Non-empty or already removed. */ }
+        }
       }
     }
     return false;
-  } finally { try { fs.unlinkSync(owner); } catch { /* Already unlinked. */ } }
+  } finally {
+    cleanupTmpGuard();
+    try { fs.unlinkSync(owner); } catch { /* Already unlinked. */ }
+  }
 }
 const named = value => typeof value === 'string' && value.trim().length > 0;
 const short = sha => String(sha ?? '').slice(0, 7);
@@ -5285,9 +5329,14 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
     const latestHistory = issueRows(chronological(fs, root), job.issue).at(-1);
     const alreadyRecorded = Boolean(latestHistory?.outcome === 'released' && latestHistory?.personRelease === true
       && (!named(job.id) || !named(latestHistory.jobId) || latestHistory.jobId === job.id));
-    if (!alreadyRecorded) {
-      try {
-        appendHistory(ctx, {
+    try {
+      fs.mkdirSync(ctx.root, { recursive: true, mode: 0o700 });
+      let appendText = null;
+      if (!alreadyRecorded) {
+        let lead = '';
+        try { if (!fs.readFileSync(ctx.dirs.history, 'utf8').match(/(^|\n)$/)) lead = '\n'; }
+        catch (e) { if (e.code !== 'ENOENT') throw e; }
+        appendText = lead + JSON.stringify({
           at: ctx.now(),
           issue: job.issue,
           ...(named(job.id) ? { jobId: job.id } : {}),
@@ -5302,10 +5351,27 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
           ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
           ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
           ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}),
-        });
-      } catch {
-        return { exitCode: 1, message: `Could not record release history for ${repo}#${number}; retry the release.` };
+        }) + '\n';
       }
+      const fd = fs.openSync(ctx.dirs.history, 'a', 0o600);
+      try {
+        if (appendText !== null) {
+          const buf = Buffer.from(appendText, 'utf8');
+          for (let off = 0; off < buf.length;) off += fs.writeSync(fd, buf, off, buf.length - off);
+        }
+        fs.fsyncSync(fd);
+      } finally {
+        try { fs.closeSync(fd); } catch { /* Already closed. */ }
+      }
+      try {
+        const dirFd = fs.openSync(dirname(ctx.dirs.history), 'r');
+        try { fs.fsyncSync(dirFd); }
+        finally { try { fs.closeSync(dirFd); } catch { /* Already closed. */ } }
+      } catch (e) {
+        if (!['EINVAL', 'EBADF', 'EISDIR', 'ENOTSUP', 'EPERM', 'EACCES'].includes(e?.code)) throw e;
+      }
+    } catch {
+      return { exitCode: 1, message: `Could not record release history for ${repo}#${number}; retry the release.` };
     }
     const confirmedHistory = issueRows(chronological(fs, root), job.issue).at(-1);
     if (!(confirmedHistory?.outcome === 'released' && confirmedHistory?.personRelease === true)) {

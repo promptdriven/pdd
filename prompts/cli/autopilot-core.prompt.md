@@ -1724,10 +1724,11 @@ agent's commits may exist only there.
 ## Release
 
 Export `claimTickLock(file, fs)` (atomic PID lock file with serialized dead-owner
-reclamation behind an exclusive `${file}.reclaim` guard that re-verifies the dead
-payload before unlinking and linking, reclaiming an abandoned `${file}.reclaim` only
-after 10 seconds with a dead PID; shared by `tickAutopilot` and `releaseCoreJob`) and
-`releaseCoreJob(stateFile, issue, ports)`.
+reclamation behind a pre-populated `${file}.reclaim.d` directory guard published via
+`renameSync`, where each contender writes its own unique `owner-<token>` entry before
+publication, only dead-PID entries are unlinked by exact entry name, and the dead
+payload is re-verified inside the guard before unlinking and linking; shared by
+`tickAutopilot` and `releaseCoreJob`) and `releaseCoreJob(stateFile, issue, ports)`.
 
 `releaseCoreJob(stateFile, issue, ports)` accepts the repository state file path, the
 issue operand (`N`, `#N`, `OWNER/REPO#N`, or GitHub issue URL), and `{state, root, gh,
@@ -1774,13 +1775,13 @@ state.machine]` (with `state.machine` defaulting to the host name when unsaved) 
      first and then `state.machine`, removing `pdd:working` and `pdd:stuck` when no
      foreign claim holds the issue. If claim cleanup returns nonzero, return that
      result unchanged while `jobs/N.json` stays in `phase: "released"` for retry.
-   - **Durable history before removal:** persist (or confirm from a prior try) one
-     `history.jsonl` record (`{at, issue: N, outcome: "released", stopped,
+   - **Durable history before removal:** append (if not already present from a prior try)
+     one `history.jsonl` record (`{at, issue: N, outcome: "released", stopped,
      personRelease: true, text: "released by a person (pdd autopilot release)", pr,
-     log, evidence, ...}`, with no `noResult`, cooldown, or strike) before unlinking
-     `jobs/N.json`. If `history.jsonl` cannot be persisted or `jobs/N.json` cannot be
-     removed, keep `jobs/N.json` intact and return exit code 1 so `sweepFiles` never
-     deletes `worktrees/N`. Return exit code 0 with `Released the Autopilot claim for
+     log, evidence, ...}`, with no `noResult`, cooldown, or strike) and flush
+     `history.jsonl` to disk with `fsyncSync` before unlinking `jobs/N.json`. If
+     writing, flushing, confirming, or removing `jobs/N.json` fails, keep `jobs/N.json`
+     intact and return exit code 1 so `sweepFiles` never deletes `worktrees/N`. Return exit code 0 with `Released the Autopilot claim for
      REPO#N. The worktree stays at WORKTREE (branch BRANCH).` (keeping `releaseClaim`'s
      own worktree suffix when a workflow run already supplied one).
 2. When `jobs/N.json` does not exist (an orphan claim on GitHub, a workflow run claim,

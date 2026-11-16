@@ -4214,19 +4214,23 @@ test('3389: disabled daemon (enabled: false) immediately terminates a real detac
   assert.ok(existsSync(wtDir), 'worktree preserved');
 });
 
-test('3389: claimTickLock serializes stale dead-PID reclamation behind .reclaim so concurrent contenders never both win', async t => {
+test('3389: claimTickLock serializes stale dead-PID and abandoned-guard reclamation behind .reclaim.d so concurrent contenders never both win', async t => {
   const nativeFs = await import('node:fs');
   const { tmpdir } = await import('node:os');
+  const { Worker } = await import('node:worker_threads');
+  const { once } = await import('node:events');
   const { claimTickLock } = await import('../src/autopilot-core.mjs');
   const dir = mkdtempSync(join(tmpdir(), 'pdd-lock-3389-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const lockFile = join(dir, 'STATE.lock');
+  const reclaimDir = `${lockFile}.reclaim.d`;
 
   const deadChild = spawnSync(process.execPath, ['-e', '']);
-  const deadPid = String(deadChild.pid);
-  assert.throws(() => process.kill(Number(deadPid), 0), { code: 'ESRCH' });
+  const deadPidNum = deadChild.pid;
+  const deadPid = String(deadPidNum);
+  assert.throws(() => process.kill(deadPidNum, 0), { code: 'ESRCH' });
 
-  // Interleaving 1: Contender B completes stale-lock reclamation right after Contender A reads deadPid, before A opens .reclaim.
+  // Interleaving 1: Contender B completes stale-lock reclamation right after Contender A reads deadPid, before A acquires .reclaim.d.
   writeFileSync(lockFile, deadPid, { mode: 0o600 });
   let b1 = null, hooked1 = false;
   const fsBeforeReclaim = {
@@ -4241,12 +4245,12 @@ test('3389: claimTickLock serializes stale dead-PID reclamation behind .reclaim 
     },
   };
   const a1 = claimTickLock(lockFile, fsBeforeReclaim);
-  assert.deepEqual([a1, b1], [false, true], 'only Contender B wins when B reclaims before A acquires .reclaim');
+  assert.deepEqual([a1, b1], [false, true], 'only Contender B wins when B reclaims before A acquires .reclaim.d');
   assert.equal(readFileSync(lockFile, 'utf8'), String(process.pid));
-  assert.ok(!existsSync(`${lockFile}.reclaim`));
+  assert.ok(!existsSync(reclaimDir));
   rmSync(lockFile, { force: true });
 
-  // Interleaving 2: Contender B contends while Contender A holds .reclaim right before A unlinks the stale lock.
+  // Interleaving 2: Contender B contends while Contender A holds .reclaim.d right before A unlinks the stale lock.
   writeFileSync(lockFile, deadPid, { mode: 0o600 });
   let b2 = null, hooked2 = false;
   const fsInsideReclaim = {
@@ -4260,19 +4264,139 @@ test('3389: claimTickLock serializes stale dead-PID reclamation behind .reclaim 
     },
   };
   const a2 = claimTickLock(lockFile, fsInsideReclaim);
-  assert.deepEqual([a2, b2], [true, false], 'only Contender A wins while A holds .reclaim');
+  assert.deepEqual([a2, b2], [true, false], 'only Contender A wins while A holds .reclaim.d');
   assert.equal(readFileSync(lockFile, 'utf8'), String(process.pid));
-  assert.ok(!existsSync(`${lockFile}.reclaim`));
+  assert.ok(!existsSync(reclaimDir));
   rmSync(lockFile, { force: true });
 
-  // Abandoned .reclaim with dead PID: respected while fresh (<10s), reclaimed once >=10s old.
+  // Interleaving 3 (3-party abandoned guard race via real Worker threads + SharedArrayBuffer):
+  // Dead contender Z left owner-deadZ in .reclaim.d. Worker A pauses right before unlinking owner-deadZ;
+  // Worker B reclaims owner-deadZ, acquires .reclaim.d with owner-B, validates dead main lock, and pauses right before unlinking STATE.lock;
+  // Worker A resumes (cannot delete B's owner-B!) -> Worker B resumes -> [true, true] MUST NEVER occur!
   writeFileSync(lockFile, deadPid, { mode: 0o600 });
-  writeFileSync(`${lockFile}.reclaim`, deadPid, { mode: 0o600 });
-  assert.equal(claimTickLock(lockFile, nativeFs), false, 'fresh dead .reclaim holds briefly');
-  const past = new Date(Date.now() - 15_000);
-  nativeFs.utimesSync(`${lockFile}.reclaim`, past, past);
-  assert.equal(claimTickLock(lockFile, nativeFs), true, 'aged dead .reclaim is reclaimed safely');
-  assert.ok(!existsSync(`${lockFile}.reclaim`));
+  mkdirSync(reclaimDir, { mode: 0o700 });
+  const deadEntry = join(reclaimDir, 'owner-dead-z');
+  writeFileSync(deadEntry, JSON.stringify({ pid: deadPidNum, token: 'dead-z', at: Date.now() - 20_000 }), { mode: 0o600 });
+
+  const moduleUrl = new URL('../src/autopilot-core.mjs', import.meta.url).href;
+  const workerScript = `
+    import * as fs from 'node:fs';
+    import { parentPort, workerData } from 'node:worker_threads';
+    const { claimTickLock } = await import(${JSON.stringify(moduleUrl)});
+    const { lockFile, deadEntry, role, barrier } = workerData;
+    const gate = new Int32Array(barrier);
+    let paused = false;
+    const port = {
+      ...fs,
+      unlinkSync(target) {
+        const trigger = role === 'A' ? deadEntry : lockFile;
+        if (!paused && target === trigger) {
+          paused = true;
+          parentPort.postMessage({ paused: role, target });
+          if (Atomics.wait(gate, 0, 0, 15000) === 'timed-out') throw new Error('barrier timeout');
+        }
+        return fs.unlinkSync(target);
+      },
+    };
+    parentPort.postMessage({ role, result: claimTickLock(lockFile, port) });
+  `;
+  const startWorker = role => {
+    const barrier = new SharedArrayBuffer(4);
+    const worker = new Worker(workerScript, { eval: true, type: 'module', workerData: { lockFile, deadEntry, role, barrier } });
+    return { worker, barrier, first: once(worker, 'message') };
+  };
+  const resumeWorker = w => {
+    const arr = new Int32Array(w.barrier);
+    Atomics.store(arr, 0, 1);
+    Atomics.notify(arr, 0);
+  };
+  const wa = startWorker('A');
+  await wa.first;
+  const wb = startWorker('B');
+  await wb.first;
+  const nextA = once(wa.worker, 'message');
+  resumeWorker(wa);
+  const [resA] = await nextA;
+  const nextB = once(wb.worker, 'message');
+  resumeWorker(wb);
+  const [resB] = await nextB;
+  await Promise.all([wa.worker.terminate(), wb.worker.terminate()]);
+  assert.deepEqual([resA.result, resB.result], [false, true], 'abandoned guard race never produces two winners');
+  assert.ok(!existsSync(reclaimDir), '.reclaim.d cleaned up after winner finishes');
+});
+
+test('3389: history.jsonl fsyncSync EIO failure retains jobs/N.json across retries without duplicate rows until durable flush succeeds', async t => {
+  const nativeFs = await import('node:fs');
+  const { tickAutopilot } = await import('../src/autopilot-launcher.mjs');
+  const { releaseCoreJob } = await import('../src/autopilot-core.mjs');
+  const w = await coreWorld(t);
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const { stateFile, coreDir, ports } = launcherHarness(w);
+
+  await tickAutopilot(stateFile, ports);
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  const startedJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+  const historyPath = join(coreDir, 'history.jsonl');
+
+  let failFsync = true;
+  const openFds = new Map();
+  const fsWithEio = {
+    ...nativeFs,
+    openSync(path, flags, mode) {
+      const fd = nativeFs.openSync(path, flags, mode);
+      openFds.set(fd, String(path));
+      return fd;
+    },
+    closeSync(fd) {
+      openFds.delete(fd);
+      return nativeFs.closeSync(fd);
+    },
+    fsyncSync(fd) {
+      if (failFsync && openFds.get(fd) === historyPath) {
+        throw Object.assign(new Error('Input/output error'), { code: 'EIO' });
+      }
+      return nativeFs.fsyncSync(fd);
+    },
+  };
+  const releaseOpts = {
+    state: JSON.parse(readFileSync(stateFile, 'utf8')),
+    root: coreDir,
+    now: w.now,
+    env: ports.env,
+    warn: () => {},
+    authority: ports.authority,
+    gh: args => w.gh(args),
+    git: (args, options = {}) => ports.run('git', args, options),
+    ...ports.corePorts,
+    fs: fsWithEio,
+  };
+
+  // Attempt 1: writeSync writes row to page cache, fsyncSync throws EIO -> exit 1, jobs/17.json retained!
+  const first = await releaseCoreJob(stateFile, '17', releaseOpts);
+  assert.equal(first.exitCode, 1);
+  assert.ok(existsSync(jobFile), 'jobs/17.json retained when fsyncSync fails with EIO');
+  assert.equal(JSON.parse(readFileSync(jobFile, 'utf8')).phase, 'released');
+
+  // Attempt 2 while fsyncSync STILL throws EIO: even though cached read sees the row, fsyncSync STILL runs and fails!
+  const second = await releaseCoreJob(stateFile, '17', releaseOpts);
+  assert.equal(second.exitCode, 1, 'cached unflushed row does not bypass fsyncSync requirement');
+  assert.ok(existsSync(jobFile), 'jobs/17.json still retained on repeated EIO');
+
+  // Tick runs sweepFiles while EIO persists: worktrees/17 survives!
+  w.github.unlabel(17, 'pdd:autopilot');
+  await tickAutopilot(stateFile, ports);
+  assert.ok(existsSync(startedJob.worktree), 'worktrees/17 preserved across sweepFiles during fsync failure');
+
+  // Attempt 3 once fsyncSync recovers: flushes durably with ZERO duplicate rows and removes jobs/17.json.
+  failFsync = false;
+  const third = await releaseCoreJob(stateFile, '17', releaseOpts);
+  assert.equal(third.exitCode, 0, third.message);
+  assert.ok(!existsSync(jobFile));
+  const rows = readFileSync(historyPath, 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.issue === 17);
+  assert.equal(rows.length, 1, 'no duplicate history row appended across fsync retries');
+  assert.equal(rows[0].personRelease, true);
+  await tickAutopilot(stateFile, ports);
+  assert.ok(existsSync(startedJob.worktree), 'worktrees/17 remains preserved after durable flush and sweepFiles');
 });
 
 test('3389: companion claim cleanup failure keeps jobs/N.json in phase released and retries companion release idempotently', async t => {
