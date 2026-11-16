@@ -97,11 +97,16 @@ git worktree add -b refactor/cleanup-pass ../repo-cleanup origin/main
 cd ../repo-cleanup
 ```
 
-Query open pull requests and list every path they touch:
+Query every open pull request and paginate its touched files (`gh pr list --state open --json number,files`
+caps both pull requests and per-PR file lists at 100 entries, so paginate through `gh api` to avoid
+missing paths on large branches):
 
 ```sh
-gh pr list --state open --limit 100 --json number,files \
-  -q '.[] | "\(.number): \([.files[].path] | join(", "))"'
+gh api --paginate 'repos/{owner}/{repo}/pulls?state=open&per_page=100' --jq '.[].number' |
+  while read -r pr; do
+    gh api --paginate "repos/{owner}/{repo}/pulls/${pr}/files?per_page=100" \
+      --jq ".[] | \"#${pr}: \(.filename)\""
+  done
 ```
 
 Exclude every file touched by an open pull request, along with files claimed by active
@@ -171,9 +176,10 @@ security or error contracts.
 Agents copy the comment density of surrounding files, and stale comments can mislead future edits.
 Keep only four comment kinds in source code:
 
-1. **Generated ownership headers** on line 1: `// Generated from prompts/<module>.prompt.md (sha256: <hash>)`.
-   `pdd owner` reads the first 4 KiB—never strip this header or place `import` statements above it.
-2. **Shebangs**, such as `#!/usr/bin/env node`.
+1. **Generated ownership headers** on line 1 (or line 2 in executable scripts that start with a `#!` shebang on line 1):
+   `// Generated from prompts/<module>.prompt.md (sha256: <hash>)`. `pdd owner` reads the first 4 KiB—never
+   strip this header or place `import` statements above it (commentless files use `pdd-bindings.json`).
+2. **Shebangs** on line 1 of executable scripts, such as `#!/usr/bin/env node`.
 3. **License notices** required by your project or third-party code.
 4. **Non-obvious external or OS invariants** forced by an operating system, language runtime,
    protocol, or third-party tool that your code cannot reshape:
@@ -215,8 +221,10 @@ Run all five checks before requesting merge:
    Confirm every touched source file reports its expected `.prompt.md` owner with `current` header state.
 2. **Focused module tests:** run the unit and vector tests for every touched module locally.
 3. **Full test suite on your CI or runner machine:** run `npm test` (or your project's full test
-   command) in a clean environment. Confirm test counts match the base branch on Class A and Class B
-   changes, or base minus only the deleted dead-surface tests on Class C changes.
+   command) in a clean environment. Confirm all pre-existing tests continue to pass without weakened
+   assertions (`after >= before` test count on Class A and Class B changes, accounting explicitly for
+   any new direct helper tests; on Class C changes, base minus only the explicitly listed dead-surface
+   tests, never silently dropping surviving behavioral cases).
 4. **Golden CLI diff:** re-run your Step 2 edge harness and confirm `0` behavior delta between
    `origin/main` and `HEAD`.
 5. **Fresh independent review:** have an independent reviewer—preferably a fresh session from
