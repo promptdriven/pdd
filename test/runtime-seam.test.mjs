@@ -671,7 +671,7 @@ test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and li
     'autopilot-status', 'autopilot-doctor', 'autopilot-regressions', 'autopilot-alerts', 'autopilot-alert',
     'autopilot-start', 'autopilot-stop', 'autopilot-add', 'autopilot-release', 'autopilot-report',
     'autopilot-intake', 'autopilot-audit', 'autopilot-check-base',
-    'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot-trust', 'autopilot-untrust', 'accounts',
+    'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot-trust', 'autopilot-untrust', 'accounts', 'upgrade',
   ]);
   for (const route of PUBLIC_COMMAND_ROUTES) {
     assert.ok(coveredLocals.has(route.local), `PUBLIC_COMMAND_ROUTES local ${route.local} (${route.id}) must be covered in SEAM5`);

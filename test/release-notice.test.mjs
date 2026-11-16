@@ -56,7 +56,7 @@ test('#2710 checkReleaseNotice caches for 24h, always informs --version, dedupli
   const first = await checkReleaseNotice({ currentVersion: '0.1.31', interactive: true, env: cleanEnv }, ports);
   assert.equal(fetches, 1);
   assert.match(first, /0\.1\.31 -> 0\.1\.99/);
-  assert.match(first, /npm install -g github:promptdriven\/pdd && pdd setup/);
+  assert.match(first, /To update, run: pdd upgrade/);
 
   // 3. Second interactive command 5 minutes later Neither fetches Nor re-notifies.
   now += 5 * 60 * 1000;
@@ -113,6 +113,20 @@ test('#2710 runPdd prints cached release notice on --version stderr while keepin
   assert.equal(code, 0);
   assert.equal(stdout.text, `${version}\n`);
   assert.match(stderr.text, /99\.0\.0/);
+  assert.match(stderr.text, /pdd upgrade/);
+
+  // pdd upgrade never emits a trailing cached release notice on stderr.
+  const upgOut = capture(true), upgErr = capture(true);
+  const upgCode = await runPdd(['upgrade'], {
+    cwd: home,
+    packageRoot: root,
+    env: { HOME: home, PATH: '' },
+    stdout: upgOut,
+    stderr: upgErr,
+    cliUpgrade: { runCliUpgrade: async () => ({ exitCode: 0, message: 'Upgraded.' }) },
+  });
+  assert.equal(upgCode, 0);
+  assert.equal(upgErr.text, '');
 
   // workflow list --json never receives a stderr notice even on a TTY.
   const jsonOut = capture(true), jsonErr = capture(true);

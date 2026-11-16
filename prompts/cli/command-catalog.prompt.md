@@ -5,7 +5,7 @@ The `pdd test --files` usage form also accepts optional `--json` for its manifes
 
 The public command catalog also includes `pdd autopilot off`, `pdd autopilot observe`, `pdd autopilot auto`, `pdd autopilot trust <name>...`, and `pdd autopilot untrust <name>`. Expose these forms in help and completion; reject missing or extra operands through the existing parser contract.
 
-Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version (also -V), -VV, completion bash|zsh, workflow list [--json] and setup (`pdd setup [--yes]`, local `setup`, no operands, optional flag `--yes` selecting safe defaults without questions; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
+Own `src/command-catalog.mjs`; export only `PUBLIC_COMMAND_ROUTES`, `PUBLIC_COMMAND_IDS`, `PUBLIC_COMMAND_MANIFEST`, `NAMES` ([Names](#names)), `PUBLIC_HELP_TEXT` ([Help text](#help-text)) and `BUNDLED_WORKFLOW_NAMES` (feature, bug, small-change, product). Catalog the complete small alpha surface: root help, --version (also -V), -VV, completion bash|zsh, workflow list [--json], setup (`pdd setup [--yes]`, local `setup`, no operands, optional flag `--yes` selecting safe defaults without questions; its help says that it installs the PDD skills for Codex and Claude if they are missing, adds the short PDD block to CLAUDE.md, else AGENTS.md, and that repeat setup keeps an existing Autopilot mode) and upgrade (`pdd upgrade [--main]`, local `upgrade`, no operands, optional Boolean flag `--main`; its help says that it upgrades a user-owned global pdd installation from the latest GitHub release, or pinned main commit with `--main`, and refreshes installed user PDD skills). Each route has stable id, exact prefix, local disposition, operand/option specs and plain help forms. Expose no excluded command, private schema/type, service flag or hosted execution operation. Help, parser and completion share this one authority.
 
 Catalog `dependencies prepare` (local `dependencies-prepare`, optional text `--issue`), `dependencies complete` (local `dependencies-complete`, text `--input`), and `workflow yield` (local `workflow-yield`, run reference). Show their forms `pdd dependencies prepare [--issue N]`, `pdd dependencies complete --input -`, and `pdd workflow yield N`.
 
@@ -199,13 +199,13 @@ interpreter calls, and their help says "no interpreter calls". [Product](product
 Catalog local disposition `accounts` ([Cloud accounts CLI](accounts-cli.prompt.md)) immediately before `setup`, with zero usage-reset routes or options:
 - `accounts` (`accounts`, flag `--json`): `pdd accounts [--json]`
 - `accounts.list` (`accounts list`, flag `--json`): `pdd accounts list [--json]`
-- `accounts.add` (`accounts add`, value `--provider` choices `codex`, `claude`, text `--label`): `pdd accounts add [--provider codex|claude] [--label NAME]`
-- `accounts.import` (`accounts import`, value `--provider` choices `codex`, `claude`, text `--label`): `pdd accounts import [--provider codex|claude] [--label NAME]`
+- `accounts.add` (`accounts add`, value `--provider` choices `codex`, `claude`, text `--label`, flag `--loop`, flag `--device-auth`, text `--with`): `pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]`
+- `accounts.import` (`accounts import`, value `--provider` choices `codex`, `claude`, text `--from`, text `--label`, text `--with`): `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]`
 - `accounts.use` (`accounts use`, operand `label`): `pdd accounts use LABEL`
 - `accounts.next` (`accounts next`, value `--provider` choices `codex`, `claude`): `pdd accounts next [--provider codex|claude]`
 - `accounts.sync` (`accounts sync`, value `--provider` choices `codex`, `claude`, flag `--quiet`, integer `--timeout-ms` 50..60000): `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`
 - `accounts.auto` (`accounts auto`, operand choice `on`, `off`, `status`): `pdd accounts auto on|off|status`
-- `accounts.pause` (`accounts pause`, operand `label`), `accounts.unpause` (`accounts unpause`, operand `label`), `accounts.share` (`accounts share`, operand `label`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, operand `label`, text `--user`), `accounts.leave` (`accounts leave`, operand `label`), `accounts.remove` (`accounts remove`, operand `label`), and `accounts.log` (`accounts log`, operand `label`, flag `--json`).
+- `accounts.pause` (`accounts pause`, operand `label`), `accounts.unpause` (`accounts unpause`, operand `label`), `accounts.share` (`accounts share`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--user`, text `--with`), `accounts.leave` (`accounts leave`, operand `label`), `accounts.remove` (`accounts remove`, operand `label`), and `accounts.log` (`accounts log`, operand `label`, flag `--json`).
 
 ## Help forms
 
@@ -266,21 +266,24 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd autopilot untrust NAME  Remove an explicitly trusted GitHub name.
   pdd accounts [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.
   pdd accounts list [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.
-  pdd accounts add [--provider codex|claude] [--label NAME]  Sign in with codex login or claude setup-token, upload the encrypted bundle to PDD Cloud, and strip the local refresh token.
-  pdd accounts import [--provider codex|claude] [--label NAME]  Import an existing local ~/.codex/auth.json or Claude token into PDD Cloud and replace the local Codex file with a stripped pass.
-  pdd accounts use LABEL  Pin and materialize LABEL in ~/.codex/auth.json or ~/.claude/settings.json.
+  pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]  Sign in inside an isolated folder, upload the encrypted bundle to PDD Cloud, strip the local refresh token, and optionally enroll in a loop or share immediately.
+  pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]  Import a local or external Codex auth.json or Claude token into PDD Cloud, strip any local refresh token, and optionally share immediately.
+  pdd accounts use LABEL  Pin and materialize LABEL in ~/.codex/ or ~/.claude/settings.json.
   pdd accounts next [--provider codex|claude]  Skip the active login and switch the local install to the next ready account sorted by soonest weekly reset.
-  pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]  Refresh the local stripped login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.
+  pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]  Refresh the local stripped or gateway login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.
   pdd accounts auto on|off|status  Manage the opt-in fail-open shell wrapper in ~/.zshrc and ~/.bashrc for plain terminal codex and claude launches (off by default).
   pdd accounts pause LABEL  Pause automatic leasing for LABEL.
   pdd accounts unpause LABEL  Resume automatic leasing for LABEL.
-  pdd accounts share LABEL --with USER|ORG/TEAM  Share LABEL with a GitHub user or organization team without exposing raw credentials.
+  pdd accounts share LABEL --with USER|ORG/TEAM[,...]  Share LABEL with GitHub users, organization teams, or @ORG targets without exposing raw credentials.
+  pdd accounts share --all [--provider codex|claude] --with USER|ORG/TEAM[,...]  Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or @ORG targets.
   pdd accounts accept INVITE  Accept a pending Cloud account share invite.
   pdd accounts unshare LABEL --user USER  Revoke shared access to LABEL for USER.
+  pdd accounts unshare [LABEL] [--all] [--provider codex|claude] [--user USER] [--with USER|ORG/TEAM[,...]]  Revoke shared access for users, organization teams, or @ORG targets across LABEL or all owned accounts.
   pdd accounts leave LABEL  Leave a shared Cloud account.
   pdd accounts remove LABEL  Delete LABEL from PDD Cloud and revoke active leases.
   pdd accounts log LABEL [--json]  Show the lease and sharing audit log for LABEL.
   pdd setup [--yes]  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.
+  pdd upgrade [--main]  Upgrade a user-owned global pdd installation from the latest GitHub release (or pinned main commit with --main) and refresh installed user PDD skills.
 ```
 
 

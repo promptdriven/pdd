@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: bd620d750767f96706399b15e0b376f88234848acced9c48d7ebdbcc599cdbae).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: bd9ddac71782ad18366a7a5601d8895b3710413d13b7c8264e35e541b7b93464).
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -34,7 +34,7 @@ export function ownedPr1Head(run) {
 }
 export function selectedCapture(root,tests,capture,listGitFiles) {
   const readGitFiles = listGitFiles ?? (dir => seam().gitFiles(dir));
-  const runCapture = capture ?? ((dir, options) => seam().captureSource(dir, options));
+  const runCapture = capture ?? ((dir, options) => seam().captureSource(dir, { ...options, allowMissingInterfaces: true }));
   const visible=new Set(readGitFiles(root));
   if(tests.some(path=>!visible.has(path)))throw Error('A selected authored source is missing or unavailable.');
   return runCapture(root,{tests,appMap:null});
@@ -66,7 +66,7 @@ export function checkedAssociation(run,a,capture,listGitFiles) {
 // The existing registered authority remains the only permission rule.
 export function readEvidenceEligibility({root,producerRoot,tests,source_sha256,runId=null,stage=null},ports={}){
   const canonicalPath=ports.realpath??realpathSync;
-  const capture=ports.captureSource??((dir,options)=>seam().captureSource(dir,options));
+  const capture=ports.captureSource??((dir,options)=>seam().captureSource(dir,{...options,allowMissingInterfaces:true}));
   const listGitFiles=ports.gitFiles??(dir=>seam().gitFiles(dir));
   let result={state:'unavailable',reason:'source or ownership unavailable',runId:null,repo:null,producerRoot:null,tests:[],stage:null,sourceAnchor:null,source_sha256:source_sha256??null};
   try{

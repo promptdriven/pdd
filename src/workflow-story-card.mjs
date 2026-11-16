@@ -1,10 +1,10 @@
-// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 8b6caa4104db6e5704bb9ee5bf89909bdf850211040e2b02e7e8880e6c9b6221).
+// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 43b67da8bb3584265775ca370a61dcf98ab9b86b5c7ba90756074b120770a1fb).
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { format, runtimePreflightSlice, runtimeScenarioJsonSlice, source } from './runtime-seam.mjs';
+import { allowsRuntimePath, format, gitFiles, interfaceBlocks, loadRuntimeWorkspace, parsePromptFrontmatter, promptRefusal, readPrompt, runtimePreflightSlice, runtimeScenarioJsonSlice, source } from './runtime-seam.mjs';
 
 const { findTests } = runtimePreflightSlice();
 runtimeScenarioJsonSlice();
@@ -228,8 +228,40 @@ export function fingerprintChanges(saved, current) {
 function readJson(path) { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; } }
 const real = path => { try { return realpathSync(path); } catch { return resolve(path); } };
 const NO_VERDICT_STATES = new Set(['refused', 'not run', 'partial', 'waiting', 'sent', 'not_run', 'unknown', 'queued', 'running']);
+function scenarioDirectPrompts(doc) {
+  if (!doc || typeof doc !== 'object') return [];
+  const out = [], add = value => { if (typeof value === 'string' && value.endsWith('.prompt.md')) out.push(value.replace(/^\.\//, '')); };
+  add(doc.entry_path);
+  if (Array.isArray(doc.entry_paths)) for (const path of doc.entry_paths) add(path);
+  if (Array.isArray(doc.steps)) for (const step of doc.steps) add(step?.entry_path);
+  if (Array.isArray(doc.context)) for (const item of doc.context) {
+    if (typeof item === 'string') add(item);
+    else if (item && typeof item === 'object') {
+      add(item.path); add(item.prompt_path);
+      if (Array.isArray(item.paths)) for (const path of item.paths) add(path);
+    }
+  }
+  return out;
+}
+function storyBoundaryPrompts(text) {
+  if (typeof text !== 'string') return [];
+  const out = [];
+  for (const match of text.matchAll(/^[ \t]*`{3,}[ \t]*pdd-boundary\b[^\n]*\r?\n([\s\S]*?)\r?\n[ \t]*`{3,}[ \t]*(?=\r?\n|$)/gm)) {
+    for (const raw of match[1].split(/\r?\n/)) {
+      const path = raw.trim().replace(/^\.\//, '');
+      if (path.endsWith('.prompt.md')) out.push(path);
+    }
+  }
+  return out;
+}
+function snapshotPromptPaths(captured) {
+  const paths = new Set(), add = item => { const path = typeof item === 'string' ? item : item?.path; if (typeof path === 'string') paths.add(path); };
+  for (const file of Array.isArray(captured?.files) ? captured.files : []) add(file);
+  for (const story of Array.isArray(captured?.stories) ? captured.stories : []) for (const file of Array.isArray(story?.files) ? story.files : []) add(file);
+  return paths;
+}
 // pdd's own saved check results decide whether the prompt check passed in full on the current files.
-export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stories = [] } = {}, ports = {}) {
+export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stories = [], scoped = false } = {}, ports = {}) {
   const env = ports.env ?? process.env;
   const capture = ports.capture
     ? (r, opts) => ports.capture(r, opts)
@@ -240,9 +272,25 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stori
   try { names = readdirSync(directory).filter(name => BATCH.test(name)).sort(); } catch { names = []; }
   for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
-    if (!batch || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows) || real(batch.root) !== wanted) continue;
+    if (!batch || batch.batch !== name || batch.intent !== 'check' || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
     const at = Date.parse(batch.created_at);
     if (!Number.isFinite(at) || at < since) continue;
+    if (ports.workspace) {
+      let association;
+      try {
+        association = ports.workspace({
+          root,
+          producerRoot: batch.root,
+          tests: [...new Set(batch.rows.map(row => row?.test).filter(t => typeof t === 'string'))],
+          source_sha256: batch.source_sha256,
+          runId: batch.association?.runId ?? null,
+          stage: batch.association?.stage ?? null,
+        });
+      } catch { continue; }
+      if (association?.state === 'eligible') {
+        if (association.stage !== 'current') continue;
+      } else if (real(batch.root) !== wanted || batch.association || association?.reason?.startsWith('before-the-fix evidence is historical')) continue;
+    } else if (real(batch.root) !== wanted || batch.association) continue;
     const summary = readJson(join(directory, name, 'summary.json'));
     for (const row of batch.rows) {
       if (typeof row?.test !== 'string') continue;
@@ -250,25 +298,104 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stori
       if (!prior || at > prior.at || at === prior.at && name > prior.name) latest.set(row.test, { name, at, batch, summary });
     }
   }
-  let discovered = [], untested = [];
-  try { const found=(ports.findTests ?? findTests)({root,excludeFixtureProjects:true}); discovered=found.tests.map(test=>test.path); untested=(found.untested??[]).map(item=>item.storyPath); }
-  catch (error) { problems.push({ kind: 'unavailable', path: '.', detail: `cannot discover the project tests (${clip(error.message, 120)})` }); }
-  const selected = [...new Set([...tests, ...discovered, ...[...latest.keys()].filter(path => existsSync(join(root, path)))])].sort();
-  const associated=new Set(selected.map(path=>readScenario(root,path).doc?.story_path).filter(path=>typeof path==='string'));
-  for(const path of [...new Set([...untested,...stories])].sort()) if(!associated.has(path))
-    problems.push({kind:'missing',path,detail:'Story has no scenario test for its criteria'});
+  let foundTests = null, discoveredRows = [], rawUntested = [];
+  try {
+    foundTests = (ports.findTests ?? findTests)({ root, excludeFixtureProjects: true });
+    discoveredRows = Array.isArray(foundTests?.tests) ? foundTests.tests : [];
+    rawUntested = (foundTests?.untested ?? []).map(item => item.storyPath).filter(path => typeof path === 'string');
+  } catch (error) { problems.push({ kind: 'unavailable', path: '.', detail: `cannot discover the project tests (${clip(error.message, 120)})` }); }
+  const uniquePrompts = [...new Set(prompts)].filter(path => typeof path === 'string' && path).sort();
+  const verifiedNativePrompts = [], checkablePrompts = [], promptRefusalDetail = new Map(), promptTexts = new Map();
+  let workspaceFailed = false;
+  if (uniquePrompts.length) {
+    let visible = foundTests?.visible instanceof Set ? foundTests.visible : Array.isArray(foundTests?.visible) ? new Set(foundTests.visible) : null;
+    let workspace = null, repoVisible = null;
+    try { workspace = loadRuntimeWorkspace({ root }); } catch { workspaceFailed = true; }
+    if (!visible || workspace?.configured) {
+      try { repoVisible = new Set(gitFiles(root)); }
+      catch { repoVisible = new Set([...(visible ?? []), ...uniquePrompts.filter(path => readBytes(root, path) !== null)]); }
+      visible ??= repoVisible;
+    } else {
+      repoVisible = visible;
+    }
+    for (const path of uniquePrompts) {
+      const text = repoVisible.has(path) && path.endsWith('.prompt.md') ? readText(root, path) : null;
+      if (text !== null) promptTexts.set(path, text);
+      if (!workspaceFailed && workspace?.configured && !allowsRuntimePath(workspace, path)) {
+        if (text !== null) {
+          const frontmatter = parsePromptFrontmatter(text), blocks = interfaceBlocks(text);
+          if (frontmatter.hasFrontmatter) {
+            const reason = typeof frontmatter.reason === 'string' ? frontmatter.reason.trim() : '';
+            if (!blocks.length && !frontmatter.error && frontmatter.kind === 'native-only' && reason.length > 0) {
+              verifiedNativePrompts.push({ path, reason });
+              continue;
+            }
+            checkablePrompts.push(path);
+            promptRefusalDetail.set(path, blocks.length
+              ? `${path} has more than one Runtime interface declaration. Keep one.`
+              : frontmatter.error === 'native-reason-missing'
+                ? `${path} /reason must state in plain words why the effect cannot be faked.`
+                : `${path} frontmatter must declare only kind: native-only and reason.`);
+            continue;
+          }
+        }
+        checkablePrompts.push(path);
+        continue;
+      }
+      let parsed = null;
+      if (!workspaceFailed) { try { parsed = readPrompt(root, visible, path, workspace); } catch { parsed = null; } }
+      const refusal = parsed ? promptRefusal(parsed, 'prompt') : null;
+      const reason = typeof parsed?.interface?.reason === 'string' ? parsed.interface.reason.trim() : '';
+      if (parsed && !parsed.error && !refusal && parsed.interface?.kind === 'native-only' && reason.length > 0) {
+        verifiedNativePrompts.push({ path, reason });
+      } else {
+        checkablePrompts.push(path);
+        if ((parsed?.frontmatter || parsed?.interface?.kind === 'native-only' || parsed?.error === 'pdd-two-interfaces' || parsed?.error === 'invalid-json') && refusal?.message) {
+          promptRefusalDetail.set(path, refusal.message);
+        }
+      }
+    }
+  }
   const captures = new Map(), covered = new Set();
   const captured = list => {
     const key = JSON.stringify([...list].sort());
-    if (!captures.has(key)) { try { captures.set(key, capture(root, { tests: [...list].sort(), appMap: null })); } catch (error) { captures.set(key, { error }); } }
+    if (!captures.has(key)) { try { captures.set(key, capture(root, { tests: [...list].sort(), appMap: null, allowMissingInterfaces: true })); } catch (error) { captures.set(key, { error }); } }
     return captures.get(key);
   };
+  const discovered = discoveredRows.map(item => typeof item === 'string' ? item : item?.path).filter(path => typeof path === 'string');
+  const requiredSet = new Set(stories), checkableSet = new Set(checkablePrompts);
+  let selected;
+  if (scoped) {
+    const givenSet = new Set(tests), scopedSet = new Set(tests);
+    for (const item of discoveredRows) {
+      const path = typeof item === 'string' ? item : item?.path;
+      if (typeof path !== 'string' || givenSet.has(path)) continue;
+      const itemStories = [item?.storyPath, ...(Array.isArray(item?.storyPaths) ? item.storyPaths : []), readScenario(root, path).doc?.story_path].filter(story => typeof story === 'string');
+      if (itemStories.some(story => requiredSet.has(story))) { scopedSet.add(path); continue; }
+      if (!checkableSet.size) continue;
+      const now = captured([path]);
+      if (!now.error) {
+        for (const filePath of snapshotPromptPaths(now)) if (checkableSet.has(filePath)) { scopedSet.add(path); break; }
+      } else if (scenarioDirectPrompts(readScenario(root, path).doc).some(promptPath => checkableSet.has(promptPath))) {
+        scopedSet.add(path);
+      }
+    }
+    selected = [...scopedSet].sort();
+  } else {
+    selected = [...new Set([...tests, ...discovered, ...[...latest.keys()].filter(path => existsSync(join(root, path)))])].sort();
+  }
+  const storiesToRequire = scoped
+    ? [...new Set([...rawUntested.filter(path => requiredSet.has(path)), ...stories])].sort()
+    : [...new Set([...rawUntested, ...stories])].sort();
+  const associated = new Set(selected.map(path => readScenario(root, path).doc?.story_path).filter(path => typeof path === 'string'));
+  for (const path of storiesToRequire) if (!associated.has(path))
+    problems.push({ kind: 'missing', path, detail: 'Story has no scenario test for its criteria' });
   for (const path of selected) {
     const found = latest.get(path);
     if (!found) { problems.push({ kind: 'missing', path, detail: 'no saved check has this test' }); continue; }
-    const summary = found.summary;
-    if (!summary || summary.batch !== found.name || typeof summary.repo !== 'string' || real(summary.repo) !== wanted
-      || typeof summary.source_sha256 !== 'string' || summary.source_sha256 !== found.batch.source_sha256) {
+    const summary = found.summary, batchRoot = real(found.batch.root);
+    if (!summary || summary.batch !== found.name || typeof summary.repo !== 'string'
+      || real(summary.repo) !== batchRoot || typeof summary.source_sha256 !== 'string' || summary.source_sha256 !== found.batch.source_sha256) {
       problems.push({ kind: 'unavailable', path, detail: `batch ${found.name}: summary identity does not match the batch` }); continue;
     }
     const row = Array.isArray(found.summary?.rows) ? found.summary.rows.find(item => item?.test === path) : undefined;
@@ -308,6 +435,32 @@ export function fullCheckPass({ root, since = 0, tests = [], prompts = [], stori
       for (const file of Array.isArray(found.batch.files) ? found.batch.files : []) covered.add(typeof file === 'string' ? file : file?.path);
     }
   }
-  for (const path of [...new Set(prompts)].sort()) if (!covered.has(path)) problems.push({ kind: 'prompt-not-checked', path, detail: 'no passing check reads this prompt' });
-  return { pass: judged.length > 0 && !problems.length, tests: judged, problems };
+  const plainUnreferencedSet = new Set();
+  if (scoped && judged.length > 0 && problems.length === 0 && checkablePrompts.some(path => !covered.has(path))) {
+    const referencedPrompts = new Set();
+    const storySet = new Set(stories.filter(path => typeof path === 'string'));
+    for (const path of selected) {
+      const doc = readScenario(root, path).doc;
+      if (typeof doc?.story_path === 'string') storySet.add(doc.story_path);
+      for (const promptPath of scenarioDirectPrompts(doc)) referencedPrompts.add(promptPath);
+      const now = captured([path]);
+      if (!now.error) for (const filePath of snapshotPromptPaths(now)) referencedPrompts.add(filePath);
+    }
+    for (const storyPath of storySet) {
+      for (const promptPath of storyBoundaryPrompts(readText(root, storyPath))) referencedPrompts.add(promptPath);
+    }
+    for (const path of checkablePrompts) {
+      const text = promptTexts.get(path) ?? null;
+      if (text !== null && !workspaceFailed && !parsePromptFrontmatter(text).hasFrontmatter
+        && interfaceBlocks(text).length === 0 && !promptRefusalDetail.has(path) && !referencedPrompts.has(path)) {
+        plainUnreferencedSet.add(path);
+      }
+    }
+  }
+  const hasUncoveredRequiredPrompt = checkablePrompts.some(path => !covered.has(path) && !plainUnreferencedSet.has(path));
+  const allowPlainModulePrompts = scoped && judged.length > 0 && problems.length === 0 && !hasUncoveredRequiredPrompt;
+  for (const path of checkablePrompts) if (!covered.has(path) && !(allowPlainModulePrompts && plainUnreferencedSet.has(path))) {
+    problems.push({ kind: 'prompt-not-checked', path, detail: promptRefusalDetail.get(path) ?? 'no passing check reads this prompt' });
+  }
+  return { pass: judged.length > 0 && !problems.length, tests: judged, problems, nativeOnly: verifiedNativePrompts };
 }
