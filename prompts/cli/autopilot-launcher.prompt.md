@@ -250,18 +250,21 @@ settings, read only when the folder exists and is its Git root; else `unknown (n
 missing)`, `unknown (not a Git repository)` or `unknown (settings unreadable)`), enabled or disabled, and timer active,
 inactive or unknown; a state that has not moved yet adds `moves from the full engine to the core engine at its next
 tick`. Without saved state it prints `No Autopilot on this machine.` A state file that is not a JSON object prints
-`FILE: saved state unreadable`. Each line is independent, and the timer reads run from the caller's folder. Both
+`FILE: saved state unreadable`. Each line is independent, and the timer reads run from the caller's folder. `runAutopilotLauncher` itself performs zero file writes on disk across all `status` forms (`status`, `status --all`,
+`status --json`, and `status --all --json`, computing run costs in memory with `captureCosts`; at the outer
+[CLI entrypoint](pdd-cli.prompt.md), `--json` also bypasses `#3424` pre-dispatch `syncOwnedUserSkills`). Both
 **Status --all** (text, which checks saved repository modes and user timers) and **Status --json** (JSON, with or without
 `--all`, which reads local state files and local OS/Git observations only — making zero `gh`, Herdr, OAuth, agent, or
-network calls, and skipping `systemctl` and `launchctl` timer probes) write zero snapshot or ownership files on disk
-(computing run costs in memory with `captureCosts`) and include read-only machine observability: (1) one machine-level
-`machineGuard` summary (`guard.line` in text, structured `machineGuard` object in JSON, passing locally known
-`readyLogins` and active `share`/`runs`/`machineRuns` identically with `coreGuard`), (2) role-grouped `activeJobs`
+network calls, and skipping `systemctl` and `launchctl` timer probes) include read-only machine observability: (1) one
+machine-level `machineGuard` summary (`guard.line` in text, structured `machineGuard` object in JSON, passing locally
+known `readyLogins` and active `share`/`runs`/`machineRuns` identically with `coreGuard`), (2) role-grouped `activeJobs`
 (`{build, repair, review, suite, vectors, runtime, intake}`) and `suiteQueue` (`readCheckStatus`), (3) local-disk-only
 `loginPool` summary (cached `accounts-state.json` entries when Cloud Accounts is enrolled, or local `loadLoginPool` +
-`readPoolCooldowns` excluding `paused`, `disabled`, and credit/reset-guarded logins from `ready`: `ready`, `cooling`,
-`paused`, `reauth_required`, `5H`/`7D` usage and reset times with `null` shown as `?` and never fabricated `0%`, or
-`unavailable` when no local Cloud cache exists), and (4) read-only core `conversion` summary wired from `summarizeConversionDrops()` over saved
+`readPoolCooldowns` excluding `paused` and credit/reset-guarded logins from `ready` — failing closed with state `invalid`
+and `readyLogins: 0` when an explicit or default local pool file fails `loadLoginPool` validation, and returning
+`not-configured` with `readyLogins: null` only when no pool file is configured: `ready`, `cooling`, `paused`,
+`reauth_required`, `5H`/`7D` usage and reset times with `null` shown as `?` and never fabricated `0%`, or `unavailable`
+when no local Cloud cache exists), and (4) read-only core `conversion` summary wired from `summarizeConversionDrops()` over saved
 `*-core/history.jsonl`, `*-core/intake`, and `core-reports` drafts. **Status --json** preserves top-level local cost
 report fields alongside `costs` and `repositories`, exiting `0`.
 

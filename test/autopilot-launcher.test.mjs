@@ -1033,3 +1033,76 @@ test('cross-repository --runs 8 lifts whole-machine capacity consistently across
   const repoBFull = await f.invoke('status');
   assert.match(repoBFull.message, /held \(8 of 8 Autopilot jobs on this machine run \(all repositories, 50% share\)\)/);
 });
+
+test('invalid or unknown-key local login pool fails closed with state invalid, readyLogins 0, and held admission', async t => {
+  const { coreWorld } = await import('./helpers/core-world.mjs');
+  const { readMachineGuard } = await import('../src/machine-guard.mjs');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'observe', trust: [], engine: 'core', testCommand: 'npm test' } }));
+  w.issue(88, { labels: ['pdd:autopilot'] });
+
+  const home = join(w.dir, 'home-invalid-pool');
+  const defaultPoolDir = join(home, '.config', 'pdd');
+  mkdirSync(defaultPoolDir, { recursive: true });
+  // Unknown key disabled: true is rejected by loadLoginPool; status & coreGuard must fail closed (readyLogins: 0), never not-configured!
+  writeFileSync(join(defaultPoolDir, 'pool.json'), JSON.stringify({
+    logins: [{ id: 'x', kind: 'codex', codexHome: join(w.dir, 'x'), disabled: true }],
+  }));
+
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({
+    enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', baseBranch: 'main',
+    coordinatorId: 'coord-inv', machine: 'machine-inv', engine: 'core', mode: 'observe', runs: 8,
+    label: 'pdd:autopilot', agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg'),
+  }));
+
+  const GiB = 1024 ** 3;
+  const server = {
+    cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null },
+    disk: { available: 500 * GiB, total: 1000 * GiB }, cgroup: { cpus: null, memoryMax: null, memoryFree: null },
+    check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' },
+  };
+  const env = { HOME: home, PATH: process.env.PATH };
+  const ports = {
+    stateRoot,
+    now: w.now,
+    env,
+    timer: async () => true,
+    warn: () => {},
+    machineGuard: input => readMachineGuard(input, { machineResources: async () => server, autopilotUse: async () => ({ rss: 0, cores: 0 }) }),
+    run: async (command, args, options = {}) => {
+      if (command === 'gh') return w.gh(args, options);
+      const { spawnSync } = await import('node:child_process');
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' });
+      return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true },
+  };
+
+  const { runAutopilotLauncher, tickAutopilot } = await import('../src/autopilot-launcher.mjs');
+  const jsonRes = await runAutopilotLauncher({ command: 'status', json: true, cwd, packageRoot: join(w.dir, 'pkg'), env }, ports);
+  assert.equal(jsonRes.exitCode, 0);
+  const payload = JSON.parse(jsonRes.message);
+  assert.equal(payload.loginPool.source, 'local-pool');
+  assert.equal(payload.loginPool.state, 'invalid');
+  assert.equal(payload.loginPool.readyLogins, 0);
+  assert.equal(payload.machineGuard.slots, 0);
+  assert.equal(payload.machineGuard.machineSlots, 0);
+  assert.deepEqual(payload.machineGuard.room, { ok: false, reason: 'no ready Cloud or local logins', free: 0 });
+
+  const allRes = await runAutopilotLauncher({ command: 'status', all: true, cwd, packageRoot: join(w.dir, 'pkg'), env }, ports);
+  assert.equal(allRes.exitCode, 0);
+  assert.match(allRes.message, /Login pool \(local\): invalid \(0 ready\)/);
+  assert.match(allRes.message, /held \(no ready Cloud or local logins\)/);
+
+  const repoRes = await runAutopilotLauncher({ command: 'status', cwd, packageRoot: join(w.dir, 'pkg'), env }, ports);
+  assert.equal(repoRes.exitCode, 0);
+  assert.match(repoRes.message, /held \(no ready Cloud or local logins\)/);
+
+  const tickRes = await tickAutopilot(stateFile, ports);
+  assert.equal(tickRes.exitCode, 0, tickRes.message);
+  assert.equal(w.started.length, 0, 'invalid pool must start zero jobs');
+  assert.match(tickRes.message, /intake held: no ready Cloud or local logins/);
+});

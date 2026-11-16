@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 4d1c2df0e62fc2b82341b9d91625a1db82efa0e29850cf7404d6c3e682636909).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: f25f3551d5213a7578e26c01ba2b6817fdbd498a79a2d64f4d289d12ad2868fe).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -957,15 +957,13 @@ function readLoginPoolSummary(folder, here, env, ports = {}, savedStates = [], c
       }
       const accounts = pool.logins.map(login => {
         const cd = cooldowns[login.id];
-        const state = login.disabled === true
-          ? 'disabled'
-          : login.paused === true
-            ? 'paused'
-            : isCreditOrResetAccount(login)
-              ? 'guarded'
-              : cd
-                ? 'cooling'
-                : 'ready';
+        const state = login.paused === true
+          ? 'paused'
+          : isCreditOrResetAccount(login)
+            ? 'guarded'
+            : cd
+              ? 'cooling'
+              : 'ready';
         return {
           id: login.id,
           label: login.label ?? login.id,
@@ -980,7 +978,7 @@ function readLoginPoolSummary(folder, here, env, ports = {}, savedStates = [], c
       });
       const ready = accounts.filter(a => a.state === 'ready').length;
       const cooling = accounts.filter(a => a.state === 'cooling').length;
-      const paused = accounts.filter(a => a.state === 'paused' || a.state === 'disabled' || a.state === 'guarded').length;
+      const paused = accounts.filter(a => a.state === 'paused' || a.state === 'guarded').length;
       return {
         source: 'local-pool',
         state: ready > 0 ? 'ready' : cooling > 0 ? 'cooling' : paused > 0 ? 'paused' : 'empty',
@@ -989,7 +987,15 @@ function readLoginPoolSummary(folder, here, env, ports = {}, savedStates = [], c
         accounts,
       };
     }
-  } catch { /* Fall through to single-login local mode. */ }
+  } catch {
+    return {
+      source: 'local-pool',
+      state: 'invalid',
+      counts: { total: 0, ready: 0, cooling: 0, paused: 0, reauth_required: 0 },
+      readyLogins: 0,
+      accounts: [],
+    };
+  }
   return { source: 'none', state: 'not-configured', counts: null, readyLogins: null, accounts: [] };
 }
 function readConversionSummary(folder, env, ports = {}, coreDirs = []) {
@@ -1090,9 +1096,13 @@ function formatObservabilityLines({ inventory, guard, suiteQueue, loginPool, con
       }).join('; ');
       poolLine = `Login pool (cloud): ready ${c.ready}, cooling ${c.cooling}, reauth_required ${c.reauth_required} · ${acctWords}`;
     }
-  } else if (loginPool.source === 'local-pool' && loginPool.counts) {
-    const c = loginPool.counts;
-    poolLine = `Login pool (local): ready ${c.ready}, cooling ${c.cooling}${c.paused ? `, paused ${c.paused}` : ''} of ${c.total}`;
+  } else if (loginPool.source === 'local-pool') {
+    if (loginPool.state === 'invalid') {
+      poolLine = 'Login pool (local): invalid (0 ready)';
+    } else if (loginPool.counts) {
+      const c = loginPool.counts;
+      poolLine = `Login pool (local): ready ${c.ready}, cooling ${c.cooling}${c.paused ? `, paused ${c.paused}` : ''} of ${c.total}`;
+    }
   }
   const t = conversion.totals;
   const ownerDrops = Object.entries(conversion.dropsByOwner).filter(([, b]) => b.count > 0).map(([owner, b]) => `${owner} ${b.count}`).join(', ');
