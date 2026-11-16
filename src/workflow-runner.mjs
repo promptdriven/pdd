@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: dc56990a4d12f20cf5b28181e6c5526812cf86ec2b8b49614c9af0c59c23084f).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: da23ee8c686eec8b7ba11042b2304ed56cd46f27834ca021d47b75e3efa2e2b0).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -51,7 +51,7 @@ import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat,
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
-import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, causeText, format, isStoryPath, loadRuntimeWorkspace, promptRefusal, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
+import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, allowsRuntimePath, causeText, format, isStoryPath, loadRuntimeWorkspace, parsePromptFrontmatter, promptRefusal, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
@@ -688,7 +688,7 @@ function describe(run, chat = null, { drafts = [], nothing = false, health = nul
   if (run.state === 'completed') return 'complete: the PR is merged';
   if (run.gate?.automaticHold) return `PR 1 waits: ${run.gate.automaticHold}`;
   if (run.gate && chat === 'working') return revising(run) ? `the agent works on your changes to the ${run.gate.area} area` : `the agent writes the gate message for the ${run.gate.area} area`;
-  if (normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run)) return 'the agent must finish the prompt check before PR 1';
+  if (normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run) && !run.gate.nativeOnly?.length) return 'the agent must finish the prompt check before PR 1';
   if (normal && run.storyApproval && run.gate?.kind === 'ask-code' && !drafts.length) return run.through === 'code'
     ? `code PR requested; code entry waits. Fix the reported problem, then run pdd workflow done check.`
     : `stopped after PR 1 (${pr1?.url}). ${codeLater(run)}`;
@@ -1147,7 +1147,8 @@ function runtimeTop(text) {
   if (!stories.length) return lines.map(line => line.line);
   return [...stories.map(line => line.line), ...(stories.length > 1 ? [totalLine(stories)] : [])];
 }
-export function matchesSource(record, root, fingerprint, capture = captureSource) {
+const captureSourceAllowMissing = (dir, options) => captureSource(dir, { ...options, allowMissingInterfaces: true });
+export function matchesSource(record, root, fingerprint, capture = captureSourceAllowMissing) {
   const source = record.source;
   if (!source?.sha256) return false;
   if (source.kind === 'git-content-v1') return fingerprint !== null && fingerprint === source.sha256;
@@ -1170,7 +1171,7 @@ function sameStoryTests(run,frozen,tests) {
   }
 }
 // One eligibility rule for import, status/Story counts and prepared PR lines.
-function eligibleEvidence(run,record,{stage='current',root=run.root,fingerprint=null,capture=captureSource}={}) {
+function eligibleEvidence(run,record,{stage='current',root=run.root,fingerprint=null,capture=captureSourceAllowMissing}={}) {
   try {
     // Only a registered before association establishes historical before-the-fix evidence.
     if (stage === 'before' && record.association?.stage !== 'before') return false;
@@ -1246,13 +1247,13 @@ async function associateEvidenceWorkspaceCommand({ref,workspace,stage,tests,comm
     const selection=evidenceTests(tests),head=stage==='pr1'?ownedPr1Head(run):stage==='before'?commit:null;
     const root=stage==='current'?owned.toplevel:await retainPr1Source(run,head,p,stage);
     if(stage==='before'){try{sameStoryTests(run,root,selection);}catch(error){throw Error(`${error.message} Register only an earlier result of the same Story.`);}}
-    const captured=selectedCapture(root,selection);
-    if(stage==='current' && selectedCapture(producer.toplevel,selection).sha256!==captured.sha256)throw Error('The producer source does not match the current authored selection.');
+    const captured=selectedCapture(root,selection,captureSourceAllowMissing);
+    if(stage==='current' && selectedCapture(producer.toplevel,selection,captureSourceAllowMissing).sha256!==captured.sha256)throw Error('The producer source does not match the current authored selection.');
     const association={runId:run.runId,repo:run.repo,workspaceRoot:producer.toplevel,stage,sourceAnchor:{root,head},tests:selection,
       source_sha256:captured.sha256,registration:{operation:'evidence-associate',cwd:owned.toplevel,at:p.now()}};
-    checkedAssociation(run,association);
+    checkedAssociation(run,association,captureSourceAllowMissing);
     commitRun(run,p,latest=>{
-      checkedAssociation(latest,association);
+      checkedAssociation(latest,association,captureSourceAllowMissing);
       latest.evidenceAssociations=[...(latest.evidenceAssociations??[]).filter(a=>associationKey(a)!==associationKey(association)),association];
     });
     return done(`Registered ${stage === 'pr1'?'PR 1':stage === 'before'?`before-the-fix (commit ${commit.slice(0,7)})`:'current'} evidence workspace for ${run.repo}#${run.number}. No check, approval or workflow progress was recorded.`);
@@ -1568,9 +1569,13 @@ async function nativeOnlyPrompts(run, area, p, head = 'HEAD') {
         mkdirSync(dirname(full), { recursive: true });
         writeFileSync(full, buf, { mode: 0o600, flag: 'wx' });
       }
+      const unconfigured = Object.freeze({ configured: false, allowed_paths: Object.freeze([]) });
+      const runtimeVisible = workspace.configured ? new Set([...visible].filter(item => allowsRuntimePath(workspace, item))) : visible;
       const verified = [];
       for (const path of paths) {
-        const parsed = readPrompt(tempRoot, visible, path, workspace);
+        const parsed = allowsRuntimePath(workspace, path)
+          ? readPrompt(tempRoot, runtimeVisible, path, workspace)
+          : readPrompt(tempRoot, visible, path, unconfigured);
         if (promptRefusal(parsed, 'interface')) return null;
         const reason = typeof parsed.interface?.reason === 'string' ? parsed.interface.reason.trim() : '';
         if (parsed.interface?.kind !== 'native-only' || !reason) return null;
@@ -2574,12 +2579,11 @@ async function finishPr(run, area, step, p, lines, packageRoot = PACKAGE_ROOT) {
 const promptPathChanges = (approved, current) => !Array.isArray(approved) ? [] : [
   ...current.filter(path => !approved.includes(path)).map(path => `Prompt added: ${path}`),
   ...approved.filter(path => !current.includes(path)).map(path => `Prompt removed: ${path}`)];
-async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.promptSnapshot) {
-  const approval = storyCoverage(run);
+async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.promptSnapshot, approval = storyCoverage(run), extraChanges = []) {
   if (!approval?.fingerprint || !Array.isArray(snapshot)) return null;
   const paths = snapshot.map(row => row.path);
   const current = storyFingerprint({ root: run.root, changed: await changedFiles(run, p) });
-  const changes = [...fingerprintChanges(approval.fingerprint, current), ...promptPathChanges(approval.prompts, paths)];
+  const changes = [...extraChanges, ...fingerprintChanges(approval.fingerprint, current), ...promptPathChanges(approval.prompts, paths)];
   if (changes.length) {
     const contract=await storyContract(run,p),paths=await storyContractPaths(run,p);
     const gateId = run.gate.id;
@@ -2598,6 +2602,26 @@ async function changedStoryGate(run, area, step, p, lines, snapshot = run.gate?.
   }
   return null;
 }
+const pureNativeCheck = check => !check.pass && !check.tests.length && !check.problems.length && check.nativeOnly?.length ? check.nativeOnly : null;
+const workspacePortsForRun = (run, p) => ({
+  ...p,
+  allRuns: opts => {
+    const indexed = (p.allRuns ?? allRuns)(opts, p);
+    return indexed.some(item => item?.runId === run.runId) ? indexed : [...indexed, run];
+  },
+  captureSource: p.captureSource ?? captureSourceAllowMissing,
+});
+const fullCheckForRun = (run, { tests = [], stories = [], prompts = [] }, p) => fullCheckPass({
+  root: run.root,
+  since: run.promptReturn?.at ?? run.startedAt ?? 0,
+  tests,
+  stories,
+  prompts,
+  scoped: true,
+}, {
+  ...p,
+  workspace: p.workspace ?? (input => readEvidenceEligibility(input, workspacePortsForRun(run, p))),
+});
 // A later code request is not approval of a changed Story or a replacement for current check evidence.
 async function normalCodeReview(run, area, p) {
   if (!normalRun(run, p) || !run.storyApproval?.fingerprint) return null;
@@ -2611,7 +2635,17 @@ async function normalCodeReview(run, area, p) {
     if (!pending && !untracked) return null;
   }
   const contents = await worktreeContents(run, p);
-  const check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests, stories: (run.storyApproval?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: snapshot.map(row => row.path) }, p);
+  const stories = (run.storyApproval?.fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path);
+  const check = fullCheckForRun(run, { tests: contents.tests, stories, prompts: snapshot.map(row => row.path) }, p);
+  if (pureNativeCheck(check)) {
+    const approvals = readPromptApprovals(await promptApprovalContext(run, p), p);
+    const approvedSet = new Set(approvals.flatMap(entry => Array.isArray(entry?.prompts) ? entry.prompts : []).map(row => `${row?.path}\0${row?.proseSha256}`));
+    const unapproved = snapshot.filter(row => !approvedSet.has(`${row.path}\0${row.proseSha256}`));
+    if (!unapproved.length) return null;
+    return fail(['The native-only prompt changed after approval or has not been approved yet. No code approval was recorded or source synchronized.',
+      ...unapproved.map(row => `Not approved: ${row.path}`),
+      'Approve the updated prompt in prompt space first.'].join('\n'));
+  }
   if (!check.pass) return fail(['The prompt check did not pass in full on the current files. No code approval was recorded or source synchronized.',
     ...check.problems.slice(0, 20).map(problem => `Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`),
     'Repair and check again, then run pdd workflow done check.'].join('\n'));
@@ -2622,8 +2656,19 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
   const changed = await changedStoryGate(run, area, step, p, lines);
   if (changed) return changed;
   const paths = run.gate.promptSnapshot.map(row => row.path);
-  const check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests, stories: (storyCoverage(run)?.fingerprint.stories??[]).filter(story=>story.criteria.length).map(story=>story.path), prompts: paths }, p);
+  const stories = (storyCoverage(run)?.fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path);
+  const check = fullCheckForRun(run, { tests: contents.tests, stories, prompts: paths }, p);
   if (check.pass) return automaticPr1(run, area, step, p, lines, check, packageRoot);
+  const nativeOnly = pureNativeCheck(check);
+  if (nativeOnly) {
+    const gateId = run.gate.id;
+    commitRun(run, p, latest => { if (latest.gate?.id === gateId) latest.gate.nativeOnly = nativeOnly; });
+    return null;
+  }
+  if (run.gate?.nativeOnly) {
+    const gateId = run.gate.id;
+    commitRun(run, p, latest => { if (latest.gate?.id === gateId) delete latest.gate.nativeOnly; });
+  }
   // A typed summary cannot replace pdd's saved check results.
   if (!check.tests.length) lines.push('pdd has no saved check result of its own for this run. Run the check; do not ask the person to approve.');
   const shown = check.problems.slice(0, 20).map(problem => `Not passed (${problem.kind}): ${problem.path}: ${problem.detail}`);
@@ -2643,7 +2688,133 @@ function automaticPr1Scope(run, p, packageRoot) {
   } catch { return 'current automatic approval policy or operator scope is unavailable'; }
   return null;
 }
-async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
+function automaticPr1ParkingEligible(run, p) {
+  const park = run.parking;
+  return !park || park.phase === 'parked' && park.blocker?.kind === 'person'
+    && sameGate(park.personWait?.gate, run.gate) && !park.personWait?.question
+    && !run.blockedOn && !run.runtimeWait && !park.checkHeld
+    && blockerFor({...run, parking: null})?.kind === 'person' && !continuationCheckHeld(run, p);
+}
+function automaticPr1Eligible(run, {cwd, coordinatorId, machine}, p, published = null) {
+  const area = run.areas[run.area];
+  return validSavedAutomaticOrigin(run) && run.automaticOrigin.coordinatorId === coordinatorId
+    && run.automaticOrigin.machine === machine && samePath(run.sourceRoot, cwd)
+    && ['pdd-bug', 'pdd-feature'].includes(run.skill) && run.state === 'waiting'
+    && automaticPr1ParkingEligible(run, p) && !openQuestion(run) && !run.repairLimit && !run.integrationLimit
+    && (!run.chatReplacement || ['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
+    && run.gate?.kind === 'approve-pr' && run.gate.area === area?.name
+    && area.gate === 'pr' && area.before === 'approve'
+    && (!prOf(run, area.name) || published && sameFact(prOf(run, area.name), published))
+    && area.steps.every(step => run.done[step]);
+}
+const recordedStoryDecision = run => [...run.decisions].reverse().find(decision =>
+  decision.stage === run.areas[storyGateIndex(run)]?.name && decision.decision === 'approve');
+
+async function deriveStoryCoverage(run, decision, p) {
+  const evidence = decision?.evidence;
+  if (!evidence?.id || !Array.isArray(evidence.prompts) || !readPromptApprovals({commonDir: run.commonDir}, p).some(row => sameFact(row, evidence)))
+    throw Error('recorded Story approval evidence is unavailable');
+  if (typeof decision.storyContract !== 'string' || !Array.isArray(decision.storyPaths))
+    throw Error('approval-bound Story contract is unavailable');
+  const paths = await storyContractPaths(run, p), changed = await changedFiles(run, p, true);
+  const inventory = [...new Set([...paths, ...changed.filter(path => path.endsWith('.json') || path.endsWith('.md') && path.split('/').includes('user_stories'))])].sort();
+  const folder = mkdtempSync(join(tmpdir(), 'pdd-story-coverage-'));
+  let recovered, changes = [];
+  try {
+    const texts = [];
+    // Freeze each file once. Contract and fingerprint then read the same bytes,
+    // without another asynchronous inventory or a read from the live worktree.
+    for (const path of inventory) {
+      const file = resolve(run.root, path);
+      if (!file.startsWith(resolve(run.root) + '/') || path.includes('\\') || path.split('/').includes('.git'))
+        throw Error('unsafe Story contract path');
+      let bytes;
+      try {
+        if (!lstatSync(file).isFile()) throw Error('Story contract files must be regular files');
+        bytes = readFileSync(file);
+      } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      texts.push([path, bytes.toString('utf8')]);
+      mkdirSync(dirname(join(folder, path)), {recursive: true});
+      writeFileSync(join(folder, path), bytes);
+    }
+    if (storyContractHash(run, texts) !== decision.storyContract)
+      changes = ['Story contract changed since its recorded approval'];
+    const fingerprint = storyFingerprint({root: folder, changed});
+    if (!changes.length && [...fingerprint.stories, ...fingerprint.tests].some(row => !decision.storyPaths.includes(row.path)))
+      changes = ['Story fingerprint contains files outside the approved contract'];
+    recovered = {fingerprint, derivedFrom: {storyContract: decision.storyContract}};
+  } finally { rmSync(folder, {recursive: true, force: true}); }
+  if (!changes.length && !recovered.fingerprint.stories.some(row => row.sha256 && row.criteria.length))
+    throw Error('recorded approval has no Story coverage');
+  return {coverage: {gateId: decision.gateId, evidenceId: evidence.id, at: decision.at,
+    fingerprint: recovered.fingerprint, prompts: evidence.prompts.map(row => row.path),
+    source: 'derived from the recorded approval', derivedFrom: recovered.derivedFrom}, changes};
+}
+export const advanceAutomaticPr1 = saveGuard((args, ports = {}) => lockedMutation(args, ports, async ({ref, cwd, packageRoot = PACKAGE_ROOT, coordinatorId, machine}, ports) => {
+  const p = deps(ports); p.pdd = pddFor(p, packageRoot);
+  const found = await resolveRun(ref, {cwd}, p);
+  if (found.error) return fail(found.error);
+  const run = found.run, area = run.areas[run.area];
+  const owner = {cwd, coordinatorId, machine};
+  if (!automaticPr1Eligible(run, owner, p)) return done('Automatic PR 1 gate skipped.');
+  const selected = structuredClone({origin: run.automaticOrigin, coverage: storyCoverage(run), storyDecision: recordedStoryDecision(run), area, index: run.area, branch: run.branch});
+  let publicationGate;
+  const progressRecorded = protectProgress(run, p, {validate: latest => {
+    // Only this invocation's durably saved PR may appear during its final transition.
+    if (!automaticPr1Eligible(latest, owner, p, prOf(run, area.name)) || !sameFact(latest.automaticOrigin, selected.origin)
+      || !sameFact(storyCoverage(latest), selected.coverage) || !sameFact(latest.areas[latest.area], selected.area)
+      || !sameFact(recordedStoryDecision(latest), selected.storyDecision)
+      || latest.area !== selected.index || latest.branch !== selected.branch
+      || publicationGate && (!sameGate(latest.gate, publicationGate) || latest.gate.storyChanges?.length))
+      throw Object.assign(Error('Automatic PR 1 eligibility changed. Preserve the current blocker and inspect the run.'), {code: 'workflow_progress_refused'});
+  }});
+  p.inspectProgress();
+  const hold = reason => {
+    const gateId = run.gate.id;
+    commitRun(run, p, latest => { if (latest.gate?.id === gateId) latest.gate.automaticHold = reason; });
+    return done(`PR 1 waits: ${reason}.`);
+  };
+  const scope = automaticPr1Scope(run, p, packageRoot);
+  if (scope) return hold(scope);
+  if (run.gate.storyChanges?.length) return hold('Story changes require a person approval');
+  const ownership = await continuationOwnership(run, run.root, p);
+  if (ownership) return hold(ownership);
+  let snapshot = await gatePromptSnapshot(run, p);
+  if (!storyCoverage(run)?.fingerprint) {
+    let recovered;
+    try { recovered = await deriveStoryCoverage(run, selected.storyDecision, p); }
+    catch (error) { return hold(`saved Story approval coverage is missing: ${oneLine(error.message)}`); }
+    snapshot = await gatePromptSnapshot(run, p);
+    const changed = await changedStoryGate(run, area, 'check', p, [], snapshot, recovered.coverage, recovered.changes);
+    if (changed) return hold('Story changes require a person approval');
+    const scope = automaticPr1Scope(run, p, packageRoot), ownership = await continuationOwnership(run, run.root, p);
+    if (scope || ownership) return hold(scope || ownership);
+    snapshot = await gatePromptSnapshot(run, p);
+    const changedAgain = await changedStoryGate(run, area, 'check', p, [], snapshot, recovered.coverage, recovered.changes);
+    if (changedAgain) return hold('Story changes require a person approval');
+    commitRun(run, p, latest => {
+      if (automaticPr1Scope(latest, p, packageRoot)
+        || !readPromptApprovals({commonDir: latest.commonDir}, p).some(row => sameFact(row, selected.storyDecision.evidence)))
+        throw Object.assign(Error('Recorded Story coverage authority changed. Keep the current gate.'), {code: 'workflow_progress_refused'});
+      latest.storyApproval = recovered.coverage;
+    });
+    selected.coverage = structuredClone(recovered.coverage);
+  }
+  const changed = await changedStoryGate(run, area, 'check', p, [], snapshot);
+  if (changed) return hold('Story changes require a person approval');
+  const contents = await worktreeContents(run, p);
+  const check = fullCheckForRun(run, {
+    tests: contents.tests,
+    stories: (storyCoverage(run).fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path),
+    prompts: snapshot.map(row => row.path),
+  }, p);
+  if (pureNativeCheck(check)) return hold('native-only prompts require a person approval');
+  if (!check.pass) return hold(`prompt check is not a full pass: ${check.problems.slice(0, 20).map(problem => `${problem.kind}: ${problem.path}: ${problem.detail}`).join('; ')}`);
+  publicationGate = structuredClone(run.gate);
+  p.inspectProgress();
+  return automaticPr1(run, area, 'check', p, [], check, packageRoot, progressRecorded);
+}, 'automatic-pr1.lock'));
+async function automaticPr1(run, area, step, p, lines, check, packageRoot, progressRecorded = () => {}) {
   const ownership = await continuationOwnership(run, run.root, p);
   if (ownership) return fail(ownership);
   let snapshot, edits = [], approvalRecorded = false;
@@ -2665,9 +2836,11 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
       const changed = await changedStoryGate(run, area, step, p, lines, snapshot);
       if (changed) return changed;
       const contents = await worktreeContents(run, p);
-      check = fullCheckPass({ root: run.root, since: run.promptReturn?.at ?? run.startedAt ?? 0, tests: contents.tests,
+      check = fullCheckForRun(run, {
+        tests: contents.tests,
         stories: (storyCoverage(run).fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path),
-        prompts: snapshot.map(row => row.path) }, p);
+        prompts: snapshot.map(row => row.path),
+      }, p);
       if (!check.pass) return refused();
       try { edits = await approveGatePrompts(run, p, snapshot); }
       catch (error) { return fail(`Cannot approve the selected prompts: ${error.message}`); }
@@ -2748,6 +2921,7 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot) {
     }
     if (equalFact(latest.question, selectedQuestion)) latest.question = null;
   });
+  progressRecorded();
   const label = prLabel(run, area), url = prOf(run, area.name).url;
   const head = [...lines, ...edits.map(edit => `Approved ${edit.path} ${edit.proseSha256} (full check pass under the Story approval)`),
     `pdd recorded ${step}. The prompt check passed in full on the current prompts (${check.tests.length} test${check.tests.length === 1 ? '' : 's'}), so pdd opened ${label === 'the PR' ? 'the PR' : label} with no approval question (route automatic-check-pass).`, ...published];
@@ -2838,7 +3012,7 @@ async function recordEvidenceCommand({ ref, summaryFile, cwd }, ports) {
     if(previous && (!association || previous.association.stage!==association.stage || !sameFact(previous.association.sourceAnchor,association.sourceAnchor)))
       throw Error('The original evidence stage is no longer registered; it cannot be relabelled.');
     let root=run.root;
-    if(association)root=checkedAssociation(run,association);
+    if(association)root=checkedAssociation(run,association,captureSourceAllowMissing);
     else {
       if(producer!==realpathSync(run.root))throw Error('The evidence belongs to a different repository/worktree without a registered association.');
       if(!matchesSource({source},run.root,null))throw Error('The saved source does not match the current selected files. Read a compatible receipt or run a fresh selected check.');
@@ -3118,6 +3292,24 @@ async function stepDoneCommand({ step, summary, skipped, noPublish = false, cwd,
     if (normal || automaticReturn) {
       const routed = await normalPromptGate(run, area, step, p, lines, contents, packageRoot);
       if (routed) return doneWithRequests(routed, run, p);
+    }
+    const nativeScope = run.gate?.nativeOnly ?? (!contents.tests.length && !contents.stories && run.gate?.promptSnapshot?.length
+      ? pureNativeCheck(fullCheckForRun(run, { tests: [], stories: [], prompts: run.gate.promptSnapshot.map(row => row.path) }, p))
+      : null);
+    if (nativeScope && !run.gate?.nativeOnly && run.gate?.id) {
+      const gateId = run.gate.id;
+      commitRun(run, p, latest => { if (latest.gate?.id === gateId) latest.gate.nativeOnly = nativeScope; });
+    }
+    if (nativeScope) {
+      lines.push(
+        ...nativeScope.map(item => `Native-only prompt: ${item.path} (${cleanNativeReason(item.reason)})`),
+        `pdd recorded ${step}. All selected prompts declare kind: native-only (Runtime check not applicable); pdd opens ${prLabel(run, area)} after the person approves.`,
+        'Gate: show the person each Native-only prompt and its reason above. There is nothing to try in the Simulator. Ask them to approve or ask for changes. Stop. Do not approve for them.',
+        ...(prLabel(run, area) === 'PR 1' ? [`Tell the person what PR 1 holds, in these words: "${holdsLine(contents)}"`] : []),
+        approvalGuide(run, p.pdd),
+        'If they ask for changes, revise in this chat, run done again for the step you changed, and ask again.',
+      );
+      return doneWithRequests(done(lines.join('\n')), run, p);
     }
     lines.push(`pdd recorded ${step}. The ${area.name} area is done; pdd opens ${prLabel(run, area)} after the person approves.`,
       nothingToTry(run, area, contents)
@@ -3541,6 +3733,8 @@ async function approveGatePrompts(run, p, snapshot = null) {
   snapshot ??= await gatePromptSnapshot(run, p);
   const paths = snapshot.map(row => row.path);
   const visible = new Set(gitFiles(run.root));
+  const workspace = loadRuntimeWorkspace({ root: run.root });
+  const runtimeVisible = workspace.configured ? new Set([...visible].filter(item => allowsRuntimePath(workspace, item))) : visible;
   const edits = [];
   for (const path of paths) {
     const file = join(run.root, path);
@@ -3549,10 +3743,20 @@ async function approveGatePrompts(run, p, snapshot = null) {
     if (!stat.isFile() || fs.realpathSync(file) !== file) throw Error(`Cannot approve unsafe prompt: ${path}`);
     const text = fs.readFileSync(file, 'utf8'), blocks = interfaceBlocks(text);
     if (!blocks.length) {
+      if (workspace.configured && !allowsRuntimePath(workspace, path)) {
+        const frontmatter = parsePromptFrontmatter(text);
+        if (frontmatter.hasFrontmatter && frontmatter.error) {
+          const detail = frontmatter.error === 'native-reason-missing'
+            ? `${path} /reason must state in plain words why the effect cannot be faked.`
+            : `${path} frontmatter must declare only kind: native-only and reason.`;
+          throw Error(`${path}: ${frontmatter.error} interface ${detail}`);
+        }
+        continue;
+      }
       let prompt, problems;
       try {
-        prompt = readPrompt(run.root, visible, path);
-        problems = promptSchemaRefusals(run.root, { visible }, prompt, new Map([[path, prompt]]), new Set(), { allowMissingInterfaces: true });
+        prompt = readPrompt(run.root, runtimeVisible, path, workspace);
+        problems = promptSchemaRefusals(run.root, { visible: runtimeVisible, workspace }, prompt, new Map([[path, prompt]]), new Set(), { allowMissingInterfaces: true });
       } catch (error) { throw Error(`${path}: ${error.message}`); }
       if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.section} ${item.message}`).join('; ')}`);
       continue;
@@ -3561,7 +3765,7 @@ async function approveGatePrompts(run, p, snapshot = null) {
     let iface;
     try { iface = JSON.parse(blocks[0][1]); } catch { throw Error(`${path} has invalid Runtime interface JSON.`); }
     let prompt, problems;
-    try { prompt = readPrompt(run.root, visible, path); problems = promptSchemaRefusals(run.root, { visible }, prompt, new Map([[path, prompt]])); }
+    try { prompt = readPrompt(run.root, runtimeVisible, path, workspace); problems = promptSchemaRefusals(run.root, { visible: runtimeVisible, workspace }, prompt, new Map([[path, prompt]])); }
     catch (error) { throw Error(`${path}: ${error.message}`); }
     if (problems.length) throw Error(`${path}: ${problems.map(item => `${item.code} ${item.section} ${item.message}`).join('; ')}`);
     const hash = proseSha256(text);
@@ -3653,7 +3857,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   // Normal runs (#2962): the Story approval saves the Story fingerprint and the code-or-stop choice of the card.
   const normal = !policy.strictApprovals && !Object.hasOwn(run, 'automaticOrigin');
   const storyGate = run.gate?.kind === 'approve' && run.area >= 0 && run.area === storyGateIndex(run);
-  if (through !== undefined && (!normal || !(storyGate || beforePr && run.gate?.storyChanges?.length))) return fail('--through applies only at the Story gate or the prompt PR gate of a normal run, not in strict mode or an automatic run. Nothing changed.');
+  if (through !== undefined && (!normal || !(storyGate || beforePr))) return fail('--through applies only at the Story gate or the prompt PR gate of a normal run, not in strict mode or an automatic run. Nothing changed.');
   if (approvalWords === undefined && viaChat) return fail(approvalGuide(run, p.pdd));
   try { if (approvalWords !== undefined) approvalWords = await readSaidWords(approvalWords, p); p.inspectProgress(); } catch (error) { return fail(error.message); }
   if (approvalWords !== undefined && (!run.gate || area.steps.some(step => !run.done[step]))) return fail('The gate is not ready. Finish its steps and run done first.');
@@ -3679,6 +3883,10 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   if (normal && run.gate?.storySnapshot && (storyGate || beforePr)) {
     const late = fingerprintChanges(run.gate.storySnapshot, storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }));
     if (late.length) return fail(`The Story or its test cases changed after pdd showed the card (${late.slice(0, 3).join('; ')}). Run done again for the step you changed, show the new card and ask the person again.`);
+  }
+  if (beforePr && normal && run.storyApproval?.fingerprint && !run.gate?.storyChanges?.length) {
+    const reopened = await changedStoryGate(run, area, 'check', p, [], await gatePromptSnapshot(run, p));
+    if (reopened) return fail(reopened.message);
   }
   const hygiene = await runHygieneRefusal(run, p);
   if (hygiene) return fail(hygiene);
@@ -3764,6 +3972,10 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     if (fingerprintChanges(run.gate.storySnapshot,reviewedStory).length)
       return fail('The Story or its expected cases changed during approval. Show the new card with done and ask again.');
   }
+  if (beforePr && normal && run.storyApproval?.fingerprint && !run.gate?.storyChanges?.length) {
+    const reopened = await changedStoryGate(run, area, 'check', p, [], approvalSnapshot ?? await gatePromptSnapshot(run, p));
+    if (reopened) return fail(reopened.message);
+  }
   if (askCode && !beforePr) {
     const changed=await codeEntryFailure(run,p);
     if (changed) return fail(changed);
@@ -3792,25 +4004,34 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   } else if (approvalWords !== undefined && askArea(run) && prOf(run, askArea(run).name)) carried.push(...await draftDescription(run, prOf(run, askArea(run).name), await pr1Drafts(run, p), p));
   const said = record.text !== undefined ? ` The person wrote: "${oneLine(record.text).slice(0, 300)}".` : '';
   if (beforePr) {
-    // Try before PR 1 (#13): the approval opens the area's PR; the code question comes after it.
-    const refreshed = normal && run.storyApproval && storyGateIndex(run) >= 0 ? { gateId: saved?.gateId ?? selectedGate?.id ?? null, evidenceId: saved?.evidence?.id ?? null, at: invocationAt,
+    // Try before PR 1 (#13): an explicit approval opens PR 1 unless this gate was a reopened Story card waiting on checks.
+    const reopenedStory = Boolean(selectedGate?.storyChanges?.length);
+    const refreshed = reopenedStory && normal && run.storyApproval && storyGateIndex(run) >= 0 ? { gateId: saved?.gateId ?? selectedGate?.id ?? null, evidenceId: saved?.evidence?.id ?? null, at: invocationAt,
       fingerprint: reviewedStory ?? storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;
     if (refreshed) {
+      const contents = await worktreeContents(run, p);
+      const refreshedStories = (refreshed.fingerprint.stories ?? []).filter(story => story.criteria.length).map(story => story.path);
+      const isPureNative = refreshedStories.length === 0 && Boolean(pureNativeCheck(fullCheckForRun(run, { tests: contents.tests, stories: refreshedStories, prompts: refreshed.prompts }, p)));
       commitRun(run, p, latest => {
         latest.storyApproval = refreshed;
         if (through !== undefined) latest.through = through;
-        latest.gate = { ...latest.gate, id: p.randomUUID(), storySnapshot: refreshed.fingerprint };
+        latest.gate = { ...latest.gate, ...(isPureNative ? {} : { id: p.randomUUID() }), storySnapshot: refreshed.fingerprint };
         delete latest.gate.storyChanges;
+        delete latest.gate.nativeOnly;
         if (equalFact(latest.question, selectedQuestion)) latest.question = null;
       });
-      approvalRecorded();
-      return normalPromptGate(run, area, 'check', p, [...carried, `Recorded the Story approval.${said}`], await worktreeContents(run, p), packageRoot);
+      if (!isPureNative) {
+        approvalRecorded();
+        return normalPromptGate(run, area, 'check', p, [...carried, `Recorded the Story approval.${said}`], contents, packageRoot);
+      }
+      carried.push(`Recorded the Story approval.${said}`);
     }
     const lines = [], failed = await publishAreaPr(run, area, p, lines, approvalRetry(run, p.pdd));
     if (failed) return failed;
     const at = invocationAt, url = prOf(run, area.name).url;
     const observedQuestion=selectedQuestion;
     commitRun(run,p,latest=>{
+      if(through!==undefined&&normal)latest.through=through;
       if(latest.area===selectedArea&&sameGate(latest.gate,selectedGate)){latest.state='waiting';latest.gate=askCode?{id:p.randomUUID(),area:area.name,at,kind:'ask-code'}:null;}
       if(equalFact(latest.question,observedQuestion))latest.question=null;
     });
@@ -3818,6 +4039,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     const shownGate = run.gate ? await showGate(run, p) : [];
     const head = [...carried, ...shownGate, `Approved the ${area.name} area of ${label}.${said} pdd opened ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)}.`, ...lines];
     if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
+    if (normal && (run.storyApproval || through !== undefined || run.through !== undefined)) return afterPr1(run, area, p, head, packageRoot);
     if (approvalWords !== undefined) return done([...head, `PR 1: ${url}`, `Stopped at PR 1. ${codeLater(run)}`].join('\n'));
     if (viaChat) return done([...head, ...await askCodeLines(run, area, p)].join('\n'));
     // A draft prompt in PR 1: pdd does not offer the code PR, and says how to approve the prompt first.
@@ -4964,7 +5186,7 @@ function detail(run, chat = null, facts = {}) {
     : environmentRecovery(run) ? (environmentRecovery(run).attempts >= ENVIRONMENT_BACKOFF.length
       ? 'Environment retries are exhausted. Inspect the environment alert in pdd autopilot status before resuming the failed validation.'
       : 'Autopilot retries only this validation when the host is healthy; inspect pdd autopilot status for any environment alert.')
-    : facts.normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run) ? `pdd workflow done check --summary \"Prompt tests line\"`
+    : facts.normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run) && !run.gate.nativeOnly?.length ? `pdd workflow done check --summary \"Prompt tests line\"`
     : facts.normal && run.storyApproval && run.gate?.kind === 'ask-code' ? run.through === 'code' ? 'Fix the reported code entry problem, then run pdd workflow done check.' : codeLater(run)
     : run.gate ? approvalGuide(run)
     : runtimeWaiting(run) ? `nothing for a person unless an Autopilot alert asks (pdd autopilot status). Autopilot wakes this run when the interpreter is back; the worker then reads pdd test --read${run.runtimeWait.batch ? ` ${run.runtimeWait.batch}` : ''} first.`
@@ -5043,7 +5265,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     : run.gate?.kind === 'ask-code' && drafts.length ? `waiting for you: approve the draft prompt${drafts.length > 1 ? 's' : ''}, then the code PR (PR 1 open)`
     : run.gate?.kind === 'ask-code' && cardRun ? run.through === 'code' ? 'code PR requested; code entry waits' : 'stopped after PR 1; code can start when requested'
     : run.gate?.kind === 'ask-code' ? 'waiting for you: code PR now or stop (PR 1 open)'
-    : run.gate?.kind === 'approve-pr' && cardRun && !atStoryGate(run) ? 'agent must finish the prompt check before PR 1'
+    : run.gate?.kind === 'approve-pr' && cardRun && !atStoryGate(run) && !run.gate.nativeOnly?.length ? 'agent must finish the prompt check before PR 1'
     : run.gate?.kind === 'approve-pr' ? `waiting for you: ${nothing ? '' : 'try it, then '}approve to open ${area.then === 'ask-code' ? 'PR 1' : 'the PR'}`
     : run.gate ? `waiting for you: approve the ${run.gate.area}`
     : group === 'pr-open' ? `${!ask ? 'PR' : area.then === 'ask-code' ? 'PR 1' : 'PR 2'} open`
@@ -6032,7 +6254,7 @@ export const resendChecks = saveGuard(async ({refs, cwd, said, packageRoot = PAC
       if ((run.checkResends ?? []).some(row => row.oldBatch === lost.batch && row.state !== 'authorized'))
         return fail(`Run #${run.number}, batch ${lost.batch}, already consumed its resend decision. Nothing was resent.`);
       const saved = JSON.parse(readFileSync(join(p.env.PDD_STATE_DIR || join(p.env.HOME || homedir(), '.pdd','runtime'), 'batches',lost.batch,'batch.json'),'utf8'));
-      const capture = (p.captureSource ?? captureSource)(run.root, {tests:[...new Set(saved.rows.filter(row=>!row.unsent).map(row=>row.test))],appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
+      const capture = (p.captureSource ?? captureSource)(run.root, {tests:[...new Set(saved.rows.filter(row=>!row.unsent).map(row=>row.test))],appMap:null,allowMissingInterfaces:true,excludeFixtureProjects:saved.exclude_fixture_projects === true});
       if (capture.sha256 !== lost.sourceSha256) return fail(`Run #${run.number}: source changed. Nothing was resent.`);
       const strict = readApprovalPolicy({root:run.sourceRoot},p).strictApprovals;
       if (strict && (said !== undefined || !p.isTTY || isAgentSession(p.env))) return fail(`Run #${run.number} requires a person terminal for resend.`);
@@ -6046,7 +6268,7 @@ export const resendChecks = saveGuard(async ({refs, cwd, said, packageRoot = PAC
     else if (!await confirm(p, `${listing}\nResend these lost checks once? [y/N] `)) return done('Nothing was resent.');
     const unchanged = ({run,lost,saved}) => {
       const latest=readOwnResults(run,p).find(row=>row.kind==='pdd test');
-      const source=(p.captureSource ?? captureSource)(run.root,{tests:[...new Set(saved.rows.filter(row=>!row.unsent).map(row=>row.test))],appMap:null,excludeFixtureProjects:saved.exclude_fixture_projects === true});
+      const source=(p.captureSource ?? captureSource)(run.root,{tests:[...new Set(saved.rows.filter(row=>!row.unsent).map(row=>row.test))],appMap:null,allowMissingInterfaces:true,excludeFixtureProjects:saved.exclude_fixture_projects === true});
       return latest?.batch===lost.batch && source.sha256===lost.sourceSha256;
     };
     if (!checks.every(unchanged)) return fail('The saved batch or source changed during the decision. Nothing was resent.');
