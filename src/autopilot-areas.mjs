@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: da5af90cd8090df7a2739d0326433db5736e2b8e42477a138fad5e39ffcabe4c).
+// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: ee83952b9399af2669737c496a0accda9685e1122eb3e1c41f3d96afcb9d3797).
 const login = x => typeof x === 'string' && /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(x);
 const repo = x => typeof x === 'string' && /^[\w.-]+\/[\w.-]+$/.test(x);
 const owner = x => x === 'autopilot' || login(x) || typeof x === 'string' && x.startsWith('repo:') && repo(x.slice(5));
@@ -58,7 +58,9 @@ export function resolveAreas(input) {
   return one.state === 'resolved' ? [one] : [];
 }
 
-const TOP_BUCKETS = new Set(['src', 'app', 'lib', 'bin', 'test', 'tests', 'test/helpers', 'tests/helpers', 'test/runtime', 'tests/runtime', 'prompts', 'prompts/cli', 'docs', 'scripts', 'user_stories']);
+const TOP_BUCKETS = new Set(['src', 'lib', 'bin', 'test', 'tests', 'test/helpers', 'tests/helpers', 'test/runtime', 'tests/runtime', 'prompts', 'prompts/cli', 'docs', 'scripts', 'user_stories']);
+const CODE_ROOTS = new Set(['src', 'app']);
+const MAX_AREAS = 24;
 const GENERIC_STEMS = new Set(['index', 'main', 'cli', 'utils', 'helpers', 'types', 'config', 'constants', 'readme', 'agents', 'package']);
 const NON_CODE_EXT = /\.(?:mdx?|rst|txt|json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
 const stripCtl = text => String(text).replace(/\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\x1b]*(?:\u0007|\x1b\\)|[@-Z\\-_])/g, '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '');
@@ -145,7 +147,9 @@ function expandImpliedPaths(paths) {
 }
 
 function isSrcOrAppCodePath(path) {
-  if (!path || isToken(path) || !/^(?:src|app)\//i.test(path) || /\.prompt\.md$/i.test(path)) return false;
+  if (!path || isToken(path) || /\.prompt\.md$/i.test(path) || !path.includes('/')) return false;
+  const first = path.slice(0, path.indexOf('/')).toLowerCase();
+  if (!CODE_ROOTS.has(first)) return false;
   if (/(?:^|\/)(?:tests?|__tests__|fixtures|examples)\//i.test(path)) return false;
   const base = path.split('/').at(-1) ?? '';
   if (!base || base.startsWith('.') || !/\.[a-z0-9]{1,8}$/i.test(base) || NON_CODE_EXT.test(base)) return false;
@@ -240,14 +244,16 @@ function stemOf(path) {
   return { stem, isPrompt };
 }
 
-function dirOf(path) {
+function dirOf(path, ignoreCodeRoots = false) {
   if (!path || isToken(path) || !path.includes('/')) return null;
   const dir = path.slice(0, path.lastIndexOf('/'));
-  return TOP_BUCKETS.has(dir.toLowerCase()) ? null : dir;
+  const lower = dir.toLowerCase();
+  if (TOP_BUCKETS.has(lower) || (ignoreCodeRoots && CODE_ROOTS.has(lower))) return null;
+  return dir;
 }
 
 export function ownerAreas(paths, owners = null) {
-  const normalized = expandImpliedPaths(normalizeAreaList(paths, 64));
+  const normalized = expandImpliedPaths(normalizeAreaList(paths, Infinity));
   const lookup = buildOwnerLookup(owners);
   const out = [];
   for (const item of normalized) {
@@ -264,12 +270,12 @@ export function ownerAreas(paths, owners = null) {
     const found = lookup.get(item);
     if (found?.prompts.length) {
       for (const prompt of found.prompts) out.push(`owner:${prompt}`);
-      if (found.uncertain) out.push(`uncertain:${dirOf(item) || 'root'}`);
+      if (found.uncertain) out.push(`uncertain:${dirOf(item, true) || 'root'}`);
     } else if (found?.uncertain || isSrcOrAppCodePath(item)) {
-      out.push(`uncertain:${dirOf(item) || 'root'}`);
+      out.push(`uncertain:${dirOf(item, true) || 'root'}`);
     }
   }
-  return normalizeAreaList(out, 32);
+  return normalizeAreaList(out, Infinity);
 }
 
 const isAreaOptions = value => Boolean(value) && typeof value === 'object' && !(value instanceof Map) && !Array.isArray(value)
@@ -279,19 +285,23 @@ export function issueAreas(row, card = null, options = undefined) {
   const opts = options === undefined && isAreaOptions(card) ? card : (options ?? {});
   const resolvedCard = options === undefined && isAreaOptions(card) ? (row?.card ?? null) : card;
   const cardPaths = [...(Array.isArray(resolvedCard?.areas) ? resolvedCard.areas : []), ...(Array.isArray(resolvedCard?.area_hint) ? resolvedCard.area_hint : [])];
-  const raw = normalizeAreaList([...cardPaths, ...areaLabelsOf(row), ...textPathsOf(`${row?.title ?? ''}\n${row?.body ?? ''}`)], 16);
-  const expanded = normalizeAreaList(expandImpliedPaths(raw), 18);
-  if (opts?.owners === undefined || opts?.owners === null) return normalizeAreaList(expanded, 16);
-  return normalizeAreaList([...expanded, ...ownerAreas(expanded, opts.owners)], 24);
+  const raw = normalizeAreaList([...cardPaths, ...areaLabelsOf(row), ...textPathsOf(`${row?.title ?? ''}\n${row?.body ?? ''}`)], MAX_AREAS);
+  const expanded = normalizeAreaList(expandImpliedPaths(raw), Infinity);
+  if (opts?.owners === undefined || opts?.owners === null) return expanded;
+  return normalizeAreaList([...expanded, ...ownerAreas(expanded, opts.owners)], Infinity);
 }
 
 function expandForOverlap(values, owners) {
-  const base = expandImpliedPaths(normalizeAreaList(values, 32));
-  return normalizeAreaList([...base, ...ownerAreas(base, owners)], 48);
+  const base = expandImpliedPaths(normalizeAreaList(values, Infinity));
+  return normalizeAreaList([...base, ...ownerAreas(base, owners)], Infinity);
 }
 
+const hasExplicitOwnerTokens = values => Array.isArray(values) && values.some(x => typeof x === 'string' && /^(?:owner|uncertain):/i.test(x.trim()));
+
 export function areasOverlap(left, right, options = {}) {
-  const owners = options?.owners ?? null;
+  const hasOwners = options?.owners !== undefined && options?.owners !== null;
+  const ignoreCodeRoots = hasOwners || (hasExplicitOwnerTokens(left) && hasExplicitOwnerTokens(right));
+  const owners = hasOwners ? options.owners : null;
   const aList = expandForOverlap(left, owners), bList = expandForOverlap(right, owners);
   for (const a of aList) for (const b of bList) {
     if (a === b) return { overlap: true, reason: a };
@@ -301,12 +311,12 @@ export function areasOverlap(left, right, options = {}) {
       const ua = a.startsWith('uncertain:') ? a.slice(10) : null;
       const ub = b.startsWith('uncertain:') ? b.slice(10) : null;
       if (ua && ub) {
-        if (ua !== 'root' && ub !== 'root') {
-          if (ub.startsWith(`${ua}/`)) return { overlap: true, reason: a };
-          if (ua.startsWith(`${ub}/`)) return { overlap: true, reason: b };
-        }
+        if (ua === 'root') return { overlap: true, reason: a };
+        if (ub === 'root') return { overlap: true, reason: b };
+        if (ub.startsWith(`${ua}/`)) return { overlap: true, reason: a };
+        if (ua.startsWith(`${ub}/`)) return { overlap: true, reason: b };
         continue;
-      }
+    }
       const scope = ua ?? ub, plain = ua ? b : a, token = ua ? a : b;
       if (scope !== 'root' && (plain === scope || plain.startsWith(`${scope}/`) || scope.startsWith(`${plain}/`))) {
         return { overlap: true, reason: token };
@@ -315,7 +325,7 @@ export function areasOverlap(left, right, options = {}) {
     }
     if (b.startsWith(`${a}/`)) return { overlap: true, reason: a };
     if (a.startsWith(`${b}/`)) return { overlap: true, reason: b };
-    const da = dirOf(a), db = dirOf(b);
+    const da = dirOf(a, ignoreCodeRoots), db = dirOf(b, ignoreCodeRoots);
     if (da && da === db) return { overlap: true, reason: da };
     const sa = stemOf(a), sb = stemOf(b);
     if (sa && sb && sa.stem === sb.stem && (sa.stem.length >= 3 || sa.isPrompt !== sb.isPrompt)) {
@@ -335,7 +345,11 @@ export function isSmallCard(card) {
 
 const cardFor = (cards, row) => {
   const n = row?.number;
-  const raw = cards instanceof Map ? cards.get(n) : cards?.[n];
+  const raw = cards instanceof Map
+    ? cards.get(n)
+    : Array.isArray(cards)
+      ? cards.find(c => (c?.issue ?? c?.number) === n)
+      : cards?.[n];
   return raw?.card ?? raw ?? row?.card ?? (row?.class ? row : null);
 };
 
@@ -354,7 +368,6 @@ export function groupReadyIssues(rows, cards = null, options = undefined) {
   const cap = Math.max(1, Math.min(3, Number(opts.maxGroupSize) || 3));
   const withOwners = opts.owners !== undefined && opts.owners !== null;
   const areaOpts = withOwners ? { owners: opts.owners } : {};
-  const areaCap = withOwners ? 24 : 16;
   const list = Array.isArray(rows) ? rows : [], used = new Set(), groups = [];
   for (let i = 0; i < list.length; i++) {
     const primary = list[i], n = primary?.number;
@@ -365,7 +378,7 @@ export function groupReadyIssues(rows, cards = null, options = undefined) {
     if (cap <= 1 || !isSmallCard(primaryCard)) {
       groups.push({ primary, companions: [], issues: [n], areas });
       continue;
-    }
+      }
     const members = [n], companions = [];
     const hints = new Set((primaryCard?.group_with ?? []).filter(x => Number.isSafeInteger(x) && x > 0));
     for (let j = i + 1; j < list.length && companions.length < cap - 1; j++) {
@@ -388,7 +401,7 @@ export function groupReadyIssues(rows, cards = null, options = undefined) {
       if (!linked && !sameArea) continue;
       used.add(m); members.push(m); companions.push(other);
       for (const h of otherHints) hints.add(h);
-      areas = normalizeAreaList([...areas, ...otherAreas], areaCap);
+      areas = normalizeAreaList([...areas, ...otherAreas], Infinity);
     }
     groups.push({ primary, companions, issues: members, areas });
   }

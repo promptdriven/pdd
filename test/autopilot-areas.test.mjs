@@ -118,7 +118,8 @@ test('ownerAreas and issueAreas include implied docs/cli.md target and serialize
     reason: 'docs/cli.md',
   });
 
-  // Uncertain or unknown ownership on src/ and app/ code files reserves uncertain:<dir|root>.
+  // Uncertain or unknown ownership on src/ and app/ code files reserves uncertain:<dir|root>,
+  // and top-level uncertain:root overlaps both uncertain:root and nested uncertain:<folder>.
   const owners = new Map([
     ['src/known.mjs', { prompt: 'prompts/cli/known.prompt.md', state: 'resolved' }],
     ['src/shaky.mjs', { prompt: null, state: 'uncertain' }],
@@ -126,11 +127,97 @@ test('ownerAreas and issueAreas include implied docs/cli.md target and serialize
   assert.deepEqual(ownerAreas(['src/shaky.mjs'], owners), ['uncertain:root']);
   assert.deepEqual(ownerAreas(['app/unmapped.ts'], owners), ['uncertain:root']);
   assert.deepEqual(ownerAreas(['src/billing/unmapped.mjs'], owners), ['uncertain:src/billing']);
+  assert.deepEqual(ownerAreas(['app/billing/new-beta.ts'], owners), ['uncertain:app/billing']);
   assert.deepEqual(ownerAreas(['docs/cli.md', 'test/known.test.mjs'], owners), []);
 
+  assert.equal(areasOverlap(['uncertain:root'], ['uncertain:root']).overlap, true);
+  assert.equal(areasOverlap(['uncertain:root'], ['uncertain:app/billing']).overlap, true);
+  assert.equal(areasOverlap(['uncertain:app/billing'], ['uncertain:root']).overlap, true);
+  assert.equal(areasOverlap(['src/new-alpha.mjs'], ['app/billing/new-beta.ts'], { owners }).overlap, true);
   assert.equal(areasOverlap(['src/shaky.mjs'], ['app/unmapped.ts'], { owners }).overlap, true);
   assert.equal(areasOverlap(['src/shaky.mjs'], ['src/known.mjs'], { owners }).overlap, false);
   assert.equal(areasOverlap(['src/billing/unmapped.mjs'], ['src/billing/invoice.mjs'], { owners }).overlap, true);
+});
+
+test('owner-free fallback preserves app/* folder overlap and grouping while owners separates distinct app/* owners', () => {
+  assert.deepEqual(areasOverlap(['app/alpha.ts'], ['app/beta.ts']), { overlap: true, reason: 'app' });
+
+  const appRows = [
+    { number: 1, title: 'Update alpha', body: 'In app/alpha.ts' },
+    { number: 2, title: 'Update beta', body: 'In app/beta.ts' },
+  ];
+  const appCards = new Map([
+    [1, { class: 'ready', size: 'small', areas: ['app/alpha.ts'] }],
+    [2, { class: 'ready', size: 'small', areas: ['app/beta.ts'] }],
+  ]);
+  assert.deepEqual(
+    groupReadyIssues(appRows, appCards).map(g => g.issues),
+    [[1, 2]],
+    'without owners, app/* preserves base folder grouping',
+  );
+
+  const appOwners = new Map([
+    ['app/alpha.ts', { prompt: 'prompts/app/alpha.prompt.md', state: 'resolved' }],
+    ['app/beta.ts', { prompt: 'prompts/app/beta.prompt.md', state: 'resolved' }],
+  ]);
+  assert.equal(areasOverlap(['app/alpha.ts'], ['app/beta.ts'], { owners: appOwners }).overlap, false);
+  assert.equal(
+    areasOverlap(
+      issueAreas(appRows[0], appCards.get(1), { owners: appOwners }),
+      issueAreas(appRows[1], appCards.get(2), { owners: appOwners }),
+    ).overlap,
+    false,
+    'precomputed issueAreas(..., { owners }) footprints also separate distinct app/* prompt owners',
+  );
+  assert.deepEqual(
+    groupReadyIssues(appRows, appCards, { owners: appOwners }).map(g => g.issues),
+    [[1], [2]],
+    'with owners, distinct app/* prompt owners stay separate',
+  );
+});
+
+test('single-issue and grouped footprints retain all raw paths and synthesized owner tokens without truncation', () => {
+  // 1. Single issue with 24 distinct owned files keeps all 24 raw paths + all 24 owner:* tokens (48 entries).
+  const singleOwners = new Map();
+  const bodyPaths = [];
+  for (let i = 0; i < 24; i++) {
+    const file = `src/mod-${i}.mjs`, prompt = `prompts/cli/mod-${i}.prompt.md`;
+    singleOwners.set(file, { prompt, state: 'resolved' });
+    bodyPaths.push(file);
+  }
+  const singleFootprint = issueAreas(
+    { title: 'Touch 24 modules', body: bodyPaths.join(' ') },
+    null,
+    { owners: singleOwners },
+  );
+  assert.equal(singleFootprint.length, 48);
+  assert.ok(singleFootprint.includes('src/mod-23.mjs'));
+  assert.ok(singleFootprint.includes('owner:prompts/cli/mod-23.prompt.md'));
+
+  // 2. 3 explicitly linked small cards (group_with), each targeting 5 separately owned files (15 files + 15 owner:* = 30 entries).
+  const owners = new Map();
+  const rows = [], cards = new Map();
+  for (let issue = 1; issue <= 3; issue++) {
+    const areas = [];
+    for (let k = 0; k < 5; k++) {
+      const file = `src/issue-${issue}-file-${k}.mjs`;
+      const prompt = `prompts/cli/issue-${issue}-file-${k}.prompt.md`;
+      owners.set(file, { prompt, state: 'resolved' });
+      areas.push(file);
+    }
+    rows.push({ number: issue, title: `Issue ${issue}`, body: '' });
+    cards.set(issue, { class: 'ready', size: 'small', areas, group_with: [1, 2, 3].filter(x => x !== issue) });
+  }
+  owners.set('src/issue-3-file-4-helper.mjs', { prompt: 'prompts/cli/issue-3-file-4.prompt.md', state: 'resolved' });
+
+  const [group] = groupReadyIssues(rows, cards, { owners, maxGroupSize: 3 });
+  assert.deepEqual(group.issues, [1, 2, 3]);
+  assert.equal(group.areas.length, 30, 'all 15 raw paths and all 15 owner:* tokens retained');
+  assert.equal(areasOverlap(group.areas, ['src/issue-3-file-4.mjs'], { owners }).overlap, true);
+  assert.deepEqual(areasOverlap(group.areas, ['src/issue-3-file-4-helper.mjs'], { owners }), {
+    overlap: true,
+    reason: 'owner:prompts/cli/issue-3-file-4.prompt.md',
+  });
 });
 
 test('groupReadyIssues clusters small issues only on explicit group_with or the same single owning prompt when owners is supplied', () => {
