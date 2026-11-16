@@ -4,6 +4,7 @@ Run `pdd metrics` from a GitHub repository to see its current open issue queue. 
 
 - `pdd metrics --json` prints the same report as JSON.
 - `pdd metrics --date 2026-11-05 --timezone America/New_York` reports activity on that local calendar date.
+- `pdd metrics --week --timezone America/New_York` reports the current Monday-to-Sunday week through today and refreshes every Monday; pass `--week 2026-11-15` to anchor a specific Monday-to-Sunday week through that date.
 - `pdd metrics --snapshot ID` follows the issue membership of a saved snapshot.
 - `pdd metrics export FILE` writes a shareable bundle; `pdd metrics import FILE` combines a compatible bundle for the current repository. Export explicitly from each participating machine; importing one machine does not establish complete participation.
 - `pdd metrics record FILE` records one event object or an array of event objects in JSON. Use this for explicitly evidenced required outcomes, human reports and recovery facts that are not captured automatically. Supply the event schema described below; use stable source and event IDs so re-importing a fact does not count it twice.
@@ -14,7 +15,7 @@ An independent check is distinct from a test run and is tied to the candidate he
 
 Exports include all retained events for the repository, without an implicit selected-date filter, and retain imported source coverage metadata and declared scopes when passed between machines. A source without a declared scope has unknown scope. A GitHub observation can show the current PR head or a merged code PR; a matching checker comment alone does not establish that its review met the independent-check rules. Current head and checker evidence do not establish that a PR is still open or awaiting merge; its closure state is unclassified. When GitHub is unavailable, remote evidence is unknown. Workflow creation timestamps do not establish that a worker started.
 
-Use `--at 2026-11-05T12:00:00Z` with `--date` or `--snapshot` for a cutoff and use `--expected-source ID...` for machines expected in the report. An expected source with no observed events is listed as a coverage gap.
+Use `--at 2026-11-05T12:00:00Z` with `--date`, `--week` or `--snapshot` for a cutoff and use `--expected-source ID...` for machines expected in the report. An expected source with no observed events is listed as a coverage gap.
 
 The terminal report shows the same stage and transition fractions as JSON, with unknown counts and activity. Implementation readiness is measured against confirmed Autopilot starts; PR creation is a separate transition. Current-head CI observations are separate from independent checker verdicts.
 
