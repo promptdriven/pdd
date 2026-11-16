@@ -1,11 +1,11 @@
-// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: e4e99e1d9eecf43628faca7769f7bcdee3d524cac298de50f6551ef7502635e9).
+// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: 4bc1de90dedc83c895c5ce850fc5cccbfcacb358211d7149d58414a0df162ee9).
 const login = x => typeof x === 'string' && /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(x);
 const repo = x => typeof x === 'string' && /^[\w.-]+\/[\w.-]+$/.test(x);
 const owner = x => x === 'autopilot' || login(x) || typeof x === 'string' && x.startsWith('repo:') && repo(x.slice(5));
 const validAreas = areas => !(!Array.isArray(areas) || !areas.length || new Set(areas.map(a => a?.name)).size !== areas.length || areas.some(a => !a || typeof a.name !== 'string' || !a.name.trim() || !owner(a.owner) || a.mixed !== undefined && !['whole','split'].includes(a.mixed) || !a.match || Object.keys(a.match).some(k => !['paths','keywords','labels','repositories'].includes(k) || !Array.isArray(a.match[k]) || a.match[k].some(v => typeof v !== 'string' || !v))));
 const unsure = source => ({ state: 'unsure', area: '', owner: '', source });
 function glob(pattern, path) {
-  if (typeof pattern !== 'string' || /[!\[\]\\]/.test(pattern)) return false;
+  if (typeof pattern !== 'string' || /[![\]\\]/.test(pattern)) return false;
   let value = pattern.replace(/^\//, '');
   if (value.endsWith('/')) value += '**';
   const anchored = pattern.startsWith('/') || value.includes('/');
@@ -15,7 +15,7 @@ function glob(pattern, path) {
 export function parseCodeowners(text = '') {
   return text.split(/\r?\n/).map(line => line.replace(/\s*#.*$/, '').trim()).filter(Boolean).flatMap(line => {
     const [pattern, ...owners] = line.split(/\s+/);
-    return /[!\[\]\\]/.test(pattern) ? [] : [{ pattern, owners: owners.map(x => x.replace(/^@/, '')) }];
+    return /[![\]\\]/.test(pattern) ? [] : [{ pattern, owners: owners.map(x => x.replace(/^@/, '')) }];
   });
 }
 export function resolveArea({ areas, codeowners = '', evidence = {} }) {
@@ -66,6 +66,10 @@ export function normalizeAreaPath(raw) {
   if (typeof raw !== 'string') return null;
   let value = stripCtl(raw).trim().replace(/^[`'"]+|[`'"]+$/g, '').trim().replaceAll('\\', '/');
   if (/^area:\s*[a-z0-9_./-]+$/i.test(value)) return `area:${value.slice(5).trim().toLowerCase()}`.slice(0, 120);
+  if (/^owner:\s*\S+$/i.test(value)) {
+    const inner = normalizeAreaPath(value.slice(6).trim());
+    return inner && !inner.startsWith('area:') && !inner.startsWith('owner:') && inner.endsWith('.prompt.md') ? `owner:${inner}`.slice(0, 160) : null;
+  }
   if (/^[a-z]+:\/\//i.test(value)) return null;
   value = value.replace(/^(?:\.\/|\/)+/, '').replace(/\/+/g, '/').replace(/\/+$/, '');
   if (!value || value === '.' || value === '..' || value.startsWith('../') || value.endsWith('/..') || value.includes('/../') || /\s/.test(value)) return null;
@@ -80,6 +84,49 @@ export function normalizeAreaList(values, limit = 6) {
     if (!norm || seen.has(norm)) continue;
     seen.add(norm); out.push(norm);
     if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function resolveOwnerPrompts(path, owners) {
+  if (!owners || typeof owners !== 'object') return [];
+  const extract = record => {
+    if (!record) return [];
+    if (typeof record === 'string') return [record];
+    if (Array.isArray(record)) return record.filter(x => typeof x === 'string');
+    if (typeof record === 'object') {
+      const list = Array.isArray(record.owners) && record.owners.length ? record.owners : typeof record.prompt === 'string' ? [record.prompt] : typeof record.owner === 'string' ? [record.owner] : [];
+      return list.filter(x => typeof x === 'string');
+    }
+    return [];
+  };
+  if (owners instanceof Map) return extract(owners.get(path));
+  if (owners.owners instanceof Map) return extract(owners.owners.get(path));
+  if (Array.isArray(owners.files)) {
+    const row = owners.files.find(f => normalizeAreaPath(f?.path) === path);
+    return extract(row);
+  }
+  return extract(Object.hasOwn(owners, path) ? owners[path] : null);
+}
+
+export function ownerAreas(paths, owners = null) {
+  if (!Array.isArray(paths)) return [];
+  const out = [], seen = new Set();
+  const pushPrompt = rawPrompt => {
+    const normPrompt = normalizeAreaPath(rawPrompt);
+    if (!normPrompt || normPrompt.startsWith('area:') || normPrompt.startsWith('owner:') || !normPrompt.endsWith('.prompt.md')) return;
+    const token = `owner:${normPrompt}`;
+    if (!seen.has(token)) { seen.add(token); out.push(token); }
+  };
+  for (const item of paths) {
+    const norm = normalizeAreaPath(item);
+    if (!norm || norm.startsWith('area:')) continue;
+    if (norm.startsWith('owner:')) {
+      if (!seen.has(norm)) { seen.add(norm); out.push(norm); }
+      continue;
+    }
+    if (norm.endsWith('.prompt.md')) { pushPrompt(norm); continue; }
+    for (const promptPath of resolveOwnerPrompts(norm, owners)) pushPrompt(promptPath);
   }
   return out;
 }
@@ -119,13 +166,15 @@ function textPathsOf(text) {
   return out;
 }
 
-export function issueAreas(row, card = null) {
+export function issueAreas(row, card = null, { owners = null } = {}) {
   const cardPaths = [...(Array.isArray(card?.areas) ? card.areas : []), ...(Array.isArray(card?.area_hint) ? card.area_hint : [])];
-  return normalizeAreaList([...cardPaths, ...areaLabelsOf(row), ...textPathsOf(`${row?.title ?? ''}\n${row?.body ?? ''}`)], 16);
+  const base = normalizeAreaList([...cardPaths, ...areaLabelsOf(row), ...textPathsOf(`${row?.title ?? ''}\n${row?.body ?? ''}`)], 16);
+  if (!owners) return base;
+  return normalizeAreaList([...base, ...ownerAreas(base, owners)], 24);
 }
 
 function stemOf(path) {
-  if (!path || path.startsWith('area:')) return null;
+  if (!path || path.startsWith('area:') || path.startsWith('owner:')) return null;
   const base = path.split('/').at(-1) ?? '';
   const isPrompt = base.endsWith('.prompt.md');
   const stem = base
@@ -139,16 +188,18 @@ function stemOf(path) {
 }
 
 function dirOf(path) {
-  if (!path || path.startsWith('area:') || !path.includes('/')) return null;
+  if (!path || path.startsWith('area:') || path.startsWith('owner:') || !path.includes('/')) return null;
   const dir = path.slice(0, path.lastIndexOf('/'));
   return TOP_BUCKETS.has(dir.toLowerCase()) ? null : dir;
 }
 
-export function areasOverlap(left, right) {
-  const aList = normalizeAreaList(left, 32), bList = normalizeAreaList(right, 32);
+export function areasOverlap(left, right, { owners = null } = {}) {
+  const baseA = normalizeAreaList(left, 32), baseB = normalizeAreaList(right, 32);
+  const aList = owners ? normalizeAreaList([...baseA, ...ownerAreas(baseA, owners)], 48) : baseA;
+  const bList = owners ? normalizeAreaList([...baseB, ...ownerAreas(baseB, owners)], 48) : baseB;
   for (const a of aList) for (const b of bList) {
     if (a === b) return { overlap: true, reason: a };
-    if (a.startsWith('area:') || b.startsWith('area:')) continue;
+    if (a.startsWith('area:') || b.startsWith('area:') || a.startsWith('owner:') || b.startsWith('owner:')) continue;
     if (b.startsWith(`${a}/`)) return { overlap: true, reason: a };
     if (a.startsWith(`${b}/`)) return { overlap: true, reason: b };
     const da = dirOf(a), db = dirOf(b);
@@ -174,7 +225,7 @@ const cardFor = (cards, n) => {
   return raw?.card ?? raw ?? null;
 };
 
-export function groupReadyIssues(rows, cards, { maxGroupSize = 3 } = {}) {
+export function groupReadyIssues(rows, cards, { maxGroupSize = 3, owners = null } = {}) {
   const cap = Math.max(1, Math.min(3, Number(maxGroupSize) || 3));
   const list = Array.isArray(rows) ? rows : [], used = new Set(), groups = [];
   for (let i = 0; i < list.length; i++) {
@@ -198,8 +249,8 @@ export function groupReadyIssues(rows, cards, { maxGroupSize = 3 } = {}) {
       const linked = hints.has(m) || otherHints.some(x => members.includes(x) || hints.has(x));
       const otherAreas = issueAreas(other, otherCard);
       const nonLabelA = areas.filter(x => !x.startsWith('area:')), nonLabelB = otherAreas.filter(x => !x.startsWith('area:'));
-      const sameArea = (nonLabelA.length > 0 && nonLabelB.length > 0 && areasOverlap(nonLabelA, nonLabelB).overlap)
-        || (areas.some(x => x.startsWith('area:')) && areasOverlap(areas, otherAreas).overlap);
+      const sameArea = (nonLabelA.length > 0 && nonLabelB.length > 0 && areasOverlap(nonLabelA, nonLabelB, { owners }).overlap)
+        || (areas.some(x => x.startsWith('area:')) && areasOverlap(areas, otherAreas, { owners }).overlap);
       if (!linked && !sameArea) continue;
       used.add(m); members.push(m); companions.push(other);
       for (const h of otherHints) hints.add(h);
@@ -208,4 +259,57 @@ export function groupReadyIssues(rows, cards, { maxGroupSize = 3 } = {}) {
     groups.push({ primary, companions, issues: members, areas });
   }
   return groups;
+}
+
+export function orderGroupsSpreadFirst(candidateGroups, busyAreas = [], { owners = null } = {}) {
+  const activeIssues = new Set(), placedFootprints = [], looseStrings = [];
+  for (const item of Array.isArray(busyAreas) ? busyAreas : []) {
+    if (typeof item === 'string') { looseStrings.push(item); continue; }
+    if (Array.isArray(item)) {
+      const fp = normalizeAreaList(item, 32);
+      if (fp.length) placedFootprints.push(fp);
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const ids = Array.isArray(item.issues) ? item.issues : Number.isSafeInteger(item.issue) ? [item.issue] : [];
+      for (const id of ids) if (Number.isSafeInteger(id)) activeIssues.add(id);
+      const fp = normalizeAreaList([...(Array.isArray(item.areas) ? item.areas : []), ...(Array.isArray(item.files) ? item.files : [])], 32);
+      if (fp.length) placedFootprints.push(fp);
+    }
+  }
+  if (looseStrings.length) {
+    const fp = normalizeAreaList(looseStrings, 32);
+    if (fp.length) placedFootprints.unshift(fp);
+  }
+  const seenIssues = new Set(activeIssues), pass1 = [], pass2 = [];
+  for (const rawGroup of Array.isArray(candidateGroups) ? candidateGroups : []) {
+    if (!rawGroup || typeof rawGroup !== 'object') continue;
+    const primaryNum = rawGroup.primary?.number ?? (Array.isArray(rawGroup.issues) ? rawGroup.issues[0] : null);
+    if (Number.isSafeInteger(primaryNum) && seenIssues.has(primaryNum)) continue;
+    if (Number.isSafeInteger(primaryNum)) seenIssues.add(primaryNum);
+    let group = rawGroup;
+    if (Array.isArray(rawGroup.companions) && rawGroup.companions.length) {
+      const keptCompanions = rawGroup.companions.filter(c => Number.isSafeInteger(c?.number) && !seenIssues.has(c.number));
+      for (const c of keptCompanions) seenIssues.add(c.number);
+      if (keptCompanions.length !== rawGroup.companions.length) {
+        group = { ...rawGroup, companions: keptCompanions, issues: [primaryNum, ...keptCompanions.map(c => c.number)].filter(Number.isSafeInteger) };
+      }
+    } else if (Array.isArray(rawGroup.issues)) {
+      const keptIssues = [];
+      for (const id of rawGroup.issues) {
+        if (!Number.isSafeInteger(id)) continue;
+        if (id === primaryNum || !seenIssues.has(id)) { seenIssues.add(id); keptIssues.push(id); }
+      }
+      if (keptIssues.length !== rawGroup.issues.length) group = { ...rawGroup, issues: keptIssues };
+    }
+    const gAreas = Array.isArray(group.areas) ? group.areas : [];
+    const overlaps = gAreas.length > 0 && placedFootprints.some(fp => areasOverlap(gAreas, fp, { owners }).overlap);
+    if (!overlaps) {
+      pass1.push(group);
+      if (gAreas.length > 0) placedFootprints.push(gAreas);
+    } else {
+      pass2.push(group);
+    }
+  }
+  return [...pass1, ...pass2];
 }

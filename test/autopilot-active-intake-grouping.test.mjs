@@ -304,11 +304,11 @@ test('active-intake 3a: claims 2-3 small ready grouped issues into one job/PR (C
   await seedCardFile(w, r24, { class: 'ready', reason: 'Small fix 4.', confidence: 0.9, areas: ['src/widget-parser.mjs'], group_with: [21], size: 'small' });
 
   await w.tick();
-  assert.deepEqual(workJobs(w).map(j => `${j.issue}:${j.role}`), ['21:build'], 'one grouped build job starts; #24 waits because src/widget-parser.mjs is busy');
+  // Spread-first Pass 2 overflow (#3455): grouped [21, 22, 23] takes slot 1 and remaining #24 overflows into free slot 2 (0 idle slots!).
+  assert.deepEqual(workJobs(w).map(j => `${j.issue}:${j.role}`), ['21:build', '24:build'], 'grouped [21,22,23] takes slot 1 and #24 overflows into free slot 2');
 
-  // All 3 grouped issues (#21, #22, #23) hold pdd:working on GitHub, while #24 does not.
-  for (const n of [21, 22, 23]) assert.ok(w.labels(n).includes('pdd:working'), `#${n} claimed with pdd:working`);
-  assert.equal(w.labels(24).includes('pdd:working'), false, '#24 not claimed while area is busy');
+  // All 3 grouped issues (#21, #22, #23) AND overflow #24 hold pdd:working on GitHub.
+  for (const n of [21, 22, 23, 24]) assert.ok(w.labels(n).includes('pdd:working'), `#${n} claimed with pdd:working`);
 
   // Primary job prompt includes companion specs and instructs closing all grouped issues.
   const buildJob = w.job(21, 'build');
@@ -335,9 +335,10 @@ test('active-intake 3a: claims 2-3 small ready grouped issues into one job/PR (C
     assert.equal(w.labels(n).includes('pdd:working'), false, `#${n} pdd:working removed`);
   }
 
-  // In the same/next tick after merge freed src/widget-parser.mjs, #24 is now free to start!
+  // #24 was already running in parallel in slot 2; finish #24 so slots are free for companion cleanup check below.
+  assert.ok(workJobs(w).some(j => j.issue === 24 && j.role === 'build'), '#24 stayed running in its isolated worktree');
+  w.finish(24, 'build', { result: { outcome: 'failed', kind: 'job', component: 'agent', code: 'done', cause: 'Stop test job' } });
   await w.tick();
-  assert.ok(workJobs(w).some(j => j.issue === 24 && j.role === 'build'), '#24 starts once grouped job releases the area');
 
   // Also verify companion cleanup when a grouped job fails/ends: no dangling pdd:working on companions!
   const r25 = w.issue(25, { title: 'Small config fix A', body: 'In src/cfg/load.mjs.' });
@@ -352,7 +353,9 @@ test('active-intake 3a: claims 2-3 small ready grouped issues into one job/PR (C
   assert.equal(w.labels(26).includes('pdd:working'), false, 'companion #26 pdd:working cleanly released when grouped job ends');
 });
 
-test('active-intake 3b: serializes overlapping areas across parallel slots while running disjoint areas in parallel', async t => {
+test('active-intake 3b: spreads Pass 1 across disjoint areas first and overflows Pass 2 into remaining free slots with zero idle workers (#3455)', async t => {
+  // Part A: When #31 (invoice), #32 (invoice overlap), and #33 (disjoint CLI help) are all ready with runs: 2,
+  // Pass 1 picks disjoint #31 + #33 ahead of overlapping #32!
   const w = await coreWorld(t, { settings: { runs: 2 } });
   w.settings.intake = 'active';
   w.settings.labelRequired = true;
@@ -360,24 +363,33 @@ test('active-intake 3b: serializes overlapping areas across parallel slots while
 
   const r31 = w.issue(31, { title: 'Refactor invoice totals', body: 'Large update in src/billing/invoice.mjs.' });
   const r32 = w.issue(32, { title: 'Adjust invoice rounding', body: 'Large update in prompts/cli/invoice.prompt.md.' });
-  await seedCardFile(w, r31, { class: 'ready', reason: 'Clear large refactor.', confidence: 0.9, areas: ['src/billing/invoice.mjs'], size: 'large' });
-  await seedCardFile(w, r32, { class: 'ready', reason: 'Clear large prompt change.', confidence: 0.9, areas: ['prompts/cli/invoice.prompt.md'], size: 'large' });
-
-  // Slot 1 takes #31; slot 2 stays free because #32 overlaps on stem `invoice`!
-  await w.tick();
-  assert.deepEqual(workJobs(w).map(j => `${j.issue}:${j.role}`), ['31:build']);
-
-  // On the next tick with only #32 waiting and slot 2 still open, tick message reports area-busy hold reason!
-  const heldTick = await w.tick();
-  assert.match(heldTick.message, /intake held: area busy \(#31 touches /);
-  assert.deepEqual(workJobs(w).map(j => `${j.issue}:${j.role}`), ['31:build']);
-
-  // Now add disjoint #33 touching src/cli/help.mjs -> slot 2 starts #33 in parallel and tells #33 about #31's areas!
   const r33 = w.issue(33, { title: 'Improve CLI help spacing', body: 'Update src/cli/help.mjs.' });
-  await seedCardFile(w, r33, { class: 'ready', reason: 'Disjoint CLI change.', confidence: 0.9, areas: ['src/cli/help.mjs'], size: 'medium' });
+  await seedCardFile(w, r31, { class: 'ready', reason: 'Clear large refactor.', confidence: 0.95, areas: ['src/billing/invoice.mjs'], size: 'large' });
+  await seedCardFile(w, r32, { class: 'ready', reason: 'Clear large prompt change.', confidence: 0.94, areas: ['prompts/cli/invoice.prompt.md'], size: 'large' });
+  await seedCardFile(w, r33, { class: 'ready', reason: 'Disjoint CLI change.', confidence: 0.85, areas: ['src/cli/help.mjs'], size: 'large' });
+
   await w.tick();
-  assert.deepEqual(workJobs(w).map(j => `${j.issue}:${j.role}`), ['31:build', '33:build'], 'disjoint area runs in parallel slot 2 while #32 waits');
+  assert.deepEqual(workJobs(w).map(j => `${j.issue}:${j.role}`), ['31:build', '33:build'], 'Pass 1 spreads parallel slots across disjoint #31 and #33 before overlapping #32');
+  assert.equal(w.labels(32).includes('pdd:working'), false, '#32 waits only because all 2 worker slots are busy');
   assert.match(w.job(33, 'build').input, /#31 Refactor invoice totals: areas src\/billing\/invoice\.mjs/);
+
+  // Part B: Small/single-module repo where ONLY overlapping issues (#34 and #35) exist with runs: 2 ->
+  // Pass 2 overflows into slot 2 so 0 worker slots sit idle!
+  const wOverflow = await coreWorld(t, { settings: { runs: 2 } });
+  wOverflow.settings.intake = 'active';
+  wOverflow.settings.labelRequired = true;
+  wOverflow.settings.label = null;
+
+  const r34 = wOverflow.issue(34, { title: 'Fix parser edge case A', body: 'In src/billing/invoice.mjs.' });
+  const r35 = wOverflow.issue(35, { title: 'Fix parser edge case B', body: 'In prompts/cli/invoice.prompt.md.' });
+  await seedCardFile(wOverflow, r34, { class: 'ready', reason: 'Medium fix A.', confidence: 0.92, areas: ['src/billing/invoice.mjs'], size: 'medium' });
+  await seedCardFile(wOverflow, r35, { class: 'ready', reason: 'Medium fix B.', confidence: 0.9, areas: ['prompts/cli/invoice.prompt.md'], size: 'medium' });
+
+  const overflowTick = await wOverflow.tick();
+  assert.doesNotMatch(overflowTick.message, /area busy/);
+  assert.deepEqual(workJobs(wOverflow).map(j => `${j.issue}:${j.role}`), ['34:build', '35:build'], 'Pass 2 dispatches overlapping #35 in free slot 2 rather than stalling idle');
+  assert.notEqual(wOverflow.job(34, 'build').cwd, wOverflow.job(35, 'build').cwd, 'each job runs in its own isolated worktree');
+  assert.match(wOverflow.job(35, 'build').input, /#34 Fix parser edge case A: areas src\/billing\/invoice\.mjs/);
 });
 
 test('active-intake 4: ranks unblockers, active group continuations, high-clarity small/bug wins, and priority ahead of oldest age', async t => {
