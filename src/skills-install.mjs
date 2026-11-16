@@ -1,6 +1,6 @@
-// Generated from prompts/cli/skills-install.prompt.md (sha256: 00ad884238d2710bc65a0c8d391f1bb6bb00d45312918778f082780d96eae57b).
+// Generated from prompts/cli/skills-install.prompt.md (sha256: 52b84637caed16b8ed92ec231f78fa4e9e5802948b2a66695805e0c469838151).
 import { createHash } from 'node:crypto';
-import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 export const PDD_SKILL_NAMES = Object.freeze(['pdd-prompting', 'pdd-setup', 'pdd-small-change', 'pdd-bug', 'pdd-feature', 'pdd-product', 'pdd-graph']);
@@ -27,7 +27,10 @@ function copyState(dest, version, sum) {
   try { info = lstatSync(dest); } catch (error) { if (error.code === 'ENOENT') return 'missing'; throw error; }
   if (!info.isDirectory()) return 'keep';
   let text;
-  try { text = readFileSync(join(dest, MARKER), 'utf8'); } catch (error) { if (error.code === 'ENOENT') return 'keep'; throw error; }
+  try {
+    if (!lstatSync(join(dest, MARKER)).isFile()) return 'keep';
+    text = readFileSync(join(dest, MARKER), 'utf8');
+  } catch (error) { if (error.code === 'ENOENT') return 'keep'; throw error; }
   let marker;
   try { marker = JSON.parse(text); } catch { return 'update'; }
   const order = compareVersions(marker?.version, version);
@@ -123,9 +126,108 @@ function layout({ packageRoot, cwd, home, claudeConfigDir }) {
   return { version, skills, agents, claudeRoot };
 }
 
+const canonicalPath = folder => { try { return realpathSync(folder); } catch { return folder; } };
+
+function secondaryCodexRoots({ home, codexHome }) {
+  if (!home) return [];
+  return [
+    join(home, '.codex/skills'),
+    ...(codexHome && isAbsolute(codexHome) ? [join(codexHome, 'skills')] : []),
+  ];
+}
+
+function hasOwnedSkill(root) {
+  try { if (!statSync(root).isDirectory()) return false; } catch { return false; }
+  for (const name of [...PDD_SKILL_NAMES, ...RETIRED_SKILL_NAMES]) {
+    try { if (pddOwned(join(root, name))) return true; } catch { /* Unreadable entry is not owned. */ }
+  }
+  return false;
+}
+
 export function setupSkills(options) {
   const { version, skills, agents } = layout(options);
-  return agents.map(agent => setupAgent(agent, skills, version));
+  const results = agents.map(agent => setupAgent(agent, skills, version));
+  const seen = new Set(results.map(result => canonicalPath(result.root)));
+  for (const root of secondaryCodexRoots(options)) {
+    const key = canonicalPath(root);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (hasOwnedSkill(root)) results.push(setupAgent({ agent: 'Codex', root, read: [root] }, skills, version));
+  }
+  return results;
+}
+
+export function syncOwnedUserSkills({ packageRoot, home, claudeConfigDir, codexHome, stateRoot, force = false, onError } = {}) {
+  if (!home || !packageRoot) return { updated: [] };
+  let version;
+  try {
+    version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))?.version;
+    if (typeof version !== 'string' || !version) return { updated: [] };
+  } catch { return { updated: [] }; }
+  const resolvedStateRoot = stateRoot || join(home, '.local', 'state', 'pdd');
+  const syncFile = join(resolvedStateRoot, 'skills-sync.json');
+  if (!force) {
+    try {
+      if (JSON.parse(readFileSync(syncFile, 'utf8'))?.version === version) return { updated: [] };
+    } catch { /* Missing or unreadable sync state falls through to folder inspection. */ }
+  }
+  const claudeRoot = claudeConfigDir && isAbsolute(claudeConfigDir) ? join(claudeConfigDir, 'skills') : join(home, '.claude/skills');
+  const candidates = [
+    join(home, '.agents/skills'),
+    ...secondaryCodexRoots({ home, codexHome }),
+    claudeRoot,
+  ];
+  const seen = new Set();
+  const ownedRoots = [];
+  for (const root of candidates) {
+    const key = canonicalPath(root);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (hasOwnedSkill(root)) ownedRoots.push(root);
+  }
+  if (!ownedRoots.length) return { updated: [] };
+  let skills;
+  try {
+    skills = PDD_SKILL_NAMES.map(name => ({ name, source: join(packageRoot, 'skills', name) }))
+      .map(skill => ({ ...skill, digest: digest(skill.source) }));
+  } catch (error) {
+    onError?.(packageRoot, error);
+    return { updated: [] };
+  }
+  const updated = [];
+  let hadError = false;
+  for (const root of ownedRoots) {
+    let changed = false;
+    try {
+      for (const { name, source, digest: sum } of skills) {
+        const state = copyState(join(root, name), version, sum);
+        if (state === 'update' || state === 'missing') {
+          copySkill(source, root, name, version, sum);
+          changed = true;
+        }
+      }
+      for (const name of RETIRED_SKILL_NAMES) {
+        const dest = join(root, name);
+        if (pddOwned(dest)) {
+          rmSync(dest, { recursive: true, force: true });
+          changed = true;
+        }
+      }
+      if (changed) updated.push(root);
+    } catch (error) {
+      hadError = true;
+      onError?.(root, error);
+    }
+  }
+  if (!hadError) {
+    try {
+      mkdirSync(resolvedStateRoot, { recursive: true, mode: 0o700 });
+      const tmp = `${syncFile}.${process.pid}.${Date.now()}.tmp`;
+      writeFileSync(tmp, `${JSON.stringify({ version })}\n`, { mode: 0o600 });
+      renameSync(tmp, syncFile);
+    } catch { /* Read-only state folders never disrupt CLI execution. */ }
+  }
+  return { updated };
 }
 
 // The same find and stale check with no writes, for pdd --version (#3324 also inspects .codex/skills and partial folders).
