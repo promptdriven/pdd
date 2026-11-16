@@ -2305,7 +2305,8 @@ test('SEAM17 (S3): stateless header reader in runtime-check-plan matches file-ow
 
 test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy loading and binds all host ports on runtime-seam', async t => {
   const { execFileSync, spawnSync } = await import('node:child_process');
-  const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } = await import('node:fs');
+  const { createHash } = await import('node:crypto');
   const { tmpdir } = await import('node:os');
   const { pathToFileURL } = await import('node:url');
 
@@ -2425,6 +2426,63 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
     },
   );
   assert.equal(redactSecrets(`token=${markerToken}`), 'token=[redacted]');
+
+  // A saved Try observation signs in too, so its synthetic token must reach the
+  // same host registry as every other seam Runtime entry point.
+  const observeState = mkdtempSync(join(tmpdir(), 'pdd-seam18-observe-'));
+  t.after(() => rmSync(observeState, { recursive: true, force: true }));
+  const observeRoot = realpathSync(root);
+  const observeTryId = '11111111-1111-4111-8111-111111111111';
+  const observeRunId = '22222222-2222-4222-8222-222222222222';
+  const observeOrigin = 'http://127.0.0.1:45678';
+  const observeToken = 'synthetic-observer-token-unique-20261115';
+  const observeRepoKey = createHash('sha256').update(observeRoot).digest('hex').slice(0, 16);
+  mkdirSync(join(observeState, 'repos'), { recursive: true });
+  writeFileSync(
+    join(observeState, 'repos', `${observeRepoKey}.json`),
+    JSON.stringify({
+      root: observeRoot,
+      last_batch: null,
+      tries: {
+        'tests/__stopped__.json': {
+          id: observeTryId,
+          origin: observeOrigin,
+          login: 'fixture',
+          story: 'stopped',
+          storyPath: '',
+        },
+      },
+    }),
+  );
+  const observation = await seam.observeTryCall(
+    { cwd: observeRoot, tryId: observeTryId, runId: observeRunId },
+    {
+      env: { ...process.env, PDD_STATE_DIR: observeState, PDD_RUNTIME_URL: observeOrigin },
+      gh: args => (args[0] === 'auth'
+        ? { status: 0, stdout: observeToken }
+        : { status: 0, stdout: 'fixture 1' }),
+      fetch: async (url, init) => {
+        assert.equal(String(url), `${observeOrigin}/v1/try/${observeTryId}/calls/${observeRunId}/observation`);
+        assert.equal(init.method, 'GET');
+        assert.equal(init.headers.Authorization, `Bearer ${observeToken}`);
+        return new Response(
+          JSON.stringify({
+            session_id: observeTryId,
+            request_id: observeRunId,
+            action_id: 'act',
+            state: 'passed',
+            session_state: 'running',
+            source_sha256: null,
+            server_commit: null,
+            engine_sha: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      },
+    },
+  );
+  assert.equal(observation.state, 'passed');
+  assert.equal(redactSecrets(`marker:${observeToken}`), 'marker:[redacted]');
 
   // seam.lint({ root, local: true }) binds lintSvgLayouts and selection ports (whereas index.lint throws unboundPort).
   const tmp = mkdtempSync(join(tmpdir(), 'pdd-seam18-'));

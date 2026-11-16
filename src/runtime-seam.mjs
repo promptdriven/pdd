@@ -708,7 +708,11 @@ export async function readTryOwner(input = {}, ports = {}) {
 }
 
 export async function observeTryCall(input = {}, ports = {}) {
-  return runtimeObserveTryCall(input, seamSelectionPorts(ports));
+  await import('./secret-redaction.mjs');
+  return runtimeObserveTryCall(
+    input,
+    seamSelectionPorts(withPortDefaults(ports, { redaction: seamRedaction(ports) })),
+  );
 }
 
 export function createTryTools(input, ports = {}) {
