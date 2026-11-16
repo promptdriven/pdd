@@ -65,18 +65,22 @@ a 4-CPU, 8 GB Linux container gets 1. At a share of 100 the 32 GB Mac gets 4.
   known term `slots` is 1.
   `autoSlots` is its `slots`.
 - `capacityMath(resources, share, {slots, runs, repoRuns, readyLogins})` computes the
-  hardware slot ceiling `hardwareSlots` from `byCores`, `byMemory`, and `byDisk`
-  (when disk is readable and at or above `max(diskBytes, diskShare × total)`,
-  `floor(available ÷ diskBytes)`), at least 1 when any hardware term is known, else
-  null. When `runs` is omitted: without `readyLogins`, automatic slots use `maxSlots`
-  (4) bounded by `byDisk`; when a safe integer `readyLogins >= 0` is supplied, `0`
-  gives `0` automatic slots, and `readyLogins > 0` scales automatic slots up to
+  hardware slot ceiling `hardwareSlots` from `max(1, byCores)`, `max(1, byMemory)`,
+  and `byDisk` (`0` when readable disk is below `max(diskBytes, diskShare × total)`,
+  `floor(available ÷ diskBytes)` at or above it, or omitted when disk is unreadable),
+  taking the lowest known term (including `0` when disk is exhausted), else null. When
+  `runs` is omitted: without `readyLogins`, automatic slots use `maxSlots` (4) bounded
+  by `byDisk`; when a safe integer `readyLogins >= 0` is supplied, `0` gives `0`
+  automatic slots, and `readyLogins > 0` scales automatic slots up to
   `min(maxLoginSlots, slotsPerLogin × readyLogins, hardwareSlots)`. When `--runs N` is
-  set, the effective slot limit is `runs` bounded by `hardwareSlots`, and `limiter`
+  set, the repository's `slots` is `runs` bounded by `hardwareSlots`, while whole-machine
+  `machineSlots` is `max(auto, slots)` bounded by `hardwareSlots` (so `--runs 1` lowers
+  that repository without shrinking whole-machine room for sibling repositories, and
+  `--runs 8` raises whole-machine room up to `min(8, hardwareSlots)`), and `limiter`
   records which term bounds admission (`cores`, `memory`, `disk`, `logins`,
   `maxLoginSlots`, `maxSlots`, `repoRuns`, or `runs`).
 - `slotCount({auto, runs, repoRuns, hardwareSlots})` returns `{slots, source}` (capped
-  by `hardwareSlots` when given). The machine's own `pdd autopilot start --runs N`
+  by non-negative `hardwareSlots` when given). The machine's own `pdd autopilot start --runs N`
   (`runs`, saved in the launcher state) wins: source `this machine, --runs N`. Else
   the repository's `autopilot.runs` in `pdd.json` (`repoRuns`) can only lower `auto`
   (pdd.json is shared by every machine of a repository, so it never raises one):
@@ -87,7 +91,7 @@ a 4-CPU, 8 GB Linux container gets 1. At a share of 100 the 32 GB Mac gets 4.
   `{slots, runs, repoRuns, readyLogins}` so explicit `--runs N` above 4 and
   login-scaled capacity are honored up to `hardwareSlots`. `use` is what all Autopilot
   jobs on this machine use now, every repository together: `{jobs, rss, cores}`.
-  `free` is `effectiveSlots - jobs`, at least 0 (0 with no room). The reasons, in this
+  `free` is `machineSlots - jobs`, at least 0 (0 with no room). The reasons, in this
   order, the first that holds: `no ready Cloud or local logins` (when `readyLogins ===
   0`), `J of M Autopilot jobs on this machine run (all repositories, P% share)` (adding
   `; SOURCE limited by LIMITER` when `--runs` was clamped by hardware), `memory cannot
@@ -119,8 +123,8 @@ a 4-CPU, 8 GB Linux container gets 1. At a share of 100 the 32 GB Mac gets 4.
   machine once through `readMachineResources({cwd}, {...ports, includeChecks: true,
   includeGuard: true})` (or `ports.machineResources`) and the use of all Autopilot
   jobs through `readAutopilotUse` (or `ports.autopilotUse`). It returns `{share,
-  shareSource, slots, requestedSlots, hardwareSlots, limiter, limiterDetail, source,
-  auto, readyLogins, room, resources, use, priority(role), line}`. A failed read gives
+  shareSource, slots, machineSlots, requestedSlots, hardwareSlots, limiter,
+  limiterDetail, source, auto, readyLogins, room, resources, use, priority(role), line}`. A failed read gives
   `auto` 1 (or 0 when `readyLogins === 0`), the slots of `slotCount`, and no room
   (`machine resources cannot be read`).
 

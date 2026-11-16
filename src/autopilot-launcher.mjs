@@ -1,10 +1,10 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 3879e82bd78ec1b5fba8fb4d3bd7e4b40cdffc7c6144e13c0e28a899d234cc47).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 543b52ba602495608abc93012276af5be607c2ac116c4b5da832a10ba79ac47e).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
 import { releaseCheckCapacity, readCheckStatus } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
-import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, loginEnvironment, isCloudAccountsActive, isCreditOrResetAccount, selectCloudPoolLogin, exhaustCloudPoolLogin, listCloudAccounts, readCloudAccountsState, readPoolCooldowns } from './login-pool.mjs';
+import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, loginEnvironment, isCloudAccountsActive, isCreditOrResetAccount, selectCloudPoolLogin, exhaustCloudPoolLogin, accountsStatePath, readCloudAccountsState, readPoolCooldowns } from './login-pool.mjs';
 import { spawn, spawnSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
@@ -15,13 +15,13 @@ import { fileURLToPath } from 'node:url';
 import { runAgentProcess } from './agent-adapters.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
-import { allRuns, updateRunCosts, listRuns, resolveRun } from './workflow-runs.mjs';
+import { allRuns, listRuns, resolveRun } from './workflow-runs.mjs';
 import { auditMerge } from './autopilot-audit.mjs';
 import { releaseIssueClaim } from './workflow-worktree.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubUsage } from './github-calls.mjs';
-import { costReport, costStatusLines } from './cost-ledger.mjs';
+import { captureCosts, costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { readCoreSettings, tickCore, coreStatus, busySlots } from './autopilot-core.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
@@ -415,7 +415,7 @@ export function inspectMachineJobs(folder, ports = {}) {
     if (typeof part.exit === 'string' && part.exit) {
       try { const ex = read(part.exit, null); if (ex && typeof ex === 'object') return false; } catch {}
     }
-    if (!(Number.isSafeInteger(part.pid) && part.pid > 0 && typeof part.token === 'string' && part.token)) return false;
+    if (!(Number.isSafeInteger(part.pid) && part.pid > 1 && typeof part.token === 'string' && part.token)) return false;
     try { return Boolean(aliveCheck(part.pid, part.token)); } catch { return false; }
   };
   let slotJobs = 0;
@@ -432,7 +432,7 @@ export function inspectMachineJobs(folder, ports = {}) {
       for (const [role, part] of [[mainRole, job.agent], ['review', job.review?.agent], ['suite', job.suite?.agent], ['vectors', job.vectors?.agent], ['runtime', job.runtimeWait?.agent]]) {
         if (isRunning(part)) {
           liveChild = true;
-          byRole[role].push({ repo: meta.repo, issue: job.issue, role, pid: Number.isSafeInteger(part.pid) ? part.pid : null, enabled: meta.enabled });
+          byRole[role].push({ repo: meta.repo, issue: job.issue, role, pid: Number.isSafeInteger(part.pid) && part.pid > 1 ? part.pid : null, enabled: meta.enabled });
         }
       }
       if (holdsIssueSlot(job) && (meta.enabled || liveChild)) repoSlotJobs += 1;
@@ -447,7 +447,7 @@ export function inspectMachineJobs(folder, ports = {}) {
       if (!saved || typeof saved !== 'object') continue;
       const part = saved.job && typeof saved.job === 'object' ? saved.job : saved;
       if (isRunning(part)) {
-        byRole.intake.push({ repo: meta.repo, issue: Number.isSafeInteger(saved.issue) ? saved.issue : Number.parseInt(iName, 10), stage: typeof saved.stage === 'string' ? saved.stage : null, role: 'intake', pid: Number.isSafeInteger(part.pid) ? part.pid : null, enabled: meta.enabled });
+        byRole.intake.push({ repo: meta.repo, issue: Number.isSafeInteger(saved.issue) ? saved.issue : Number.parseInt(iName, 10), stage: typeof saved.stage === 'string' ? saved.stage : null, role: 'intake', pid: Number.isSafeInteger(part.pid) && part.pid > 1 ? part.pid : null, enabled: meta.enabled });
       }
     }
   }
@@ -457,8 +457,18 @@ export function inspectMachineJobs(folder, ports = {}) {
 }
 
 async function coreGuard(state, p, ports, stateFile) {
+  const folder = dirname(stateFile);
   const repoRuns = read(join(state.cwd, 'pdd.json'), {})?.autopilot?.runs;
-  return (ports.machineGuard ?? readMachineGuard)({ cwd: state.cwd, runs: state.runs, repoRuns, share: state.share, jobs: machineJobs(stateFile, ports) }, { env: p.env });
+  const inv = inspectMachineJobs(folder, ports);
+  const loginPool = readLoginPoolSummary(folder, state.cwd, p.env, ports, [state, ...readSavedStates(folder).saved], inv.coreDirs);
+  return (ports.machineGuard ?? readMachineGuard)({
+    cwd: state.cwd,
+    runs: state.runs,
+    repoRuns,
+    share: state.share,
+    jobs: inv.slotJobs,
+    ...(Number.isSafeInteger(loginPool.readyLogins) ? { readyLogins: loginPool.readyLogins } : {}),
+  }, { env: p.env });
 }
 function machineJobs(stateFile, ports = {}) {
   return inspectMachineJobs(dirname(stateFile), ports).slotJobs;
@@ -485,7 +495,7 @@ async function runCoreTick(stateFile, state, p, ports) {
     catch (error) { release(); throw error; }
   };
   machine.reserve = reserveMachine;
-  const core = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs, hardwareSlots: guard.hardwareSlots });
+  const core = readCoreSettings(state.cwd, undefined, { auto: Math.max(1, guard.auto ?? 1), runs: state.runs, ...(Number.isSafeInteger(guard.hardwareSlots) && guard.hardwareSlots > 0 ? { hardwareSlots: guard.hardwareSlots } : {}) });
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
@@ -833,38 +843,88 @@ function readSuiteQueueSummary(env, ports = {}) {
     return { state: 'unavailable', checks: null, runs: null, busyChecks: null, waitingChecks: null, usableCores: null, coresPerCheck: null };
   }
 }
-async function readLoginPoolSummary(folder, here, env, ports = {}, savedStates = [], coreDirs = []) {
+function mapCachedCloudAccount(acc) {
+  return {
+    id: cleanStr(acc.account_id ?? acc.id),
+    label: cleanStr(acc.label ?? acc.account_id ?? acc.id) ?? 'account',
+    provider: cleanStr(acc.provider) ?? 'unknown',
+    state: normalizeLoginState(acc.state ?? acc.status),
+    fiveHourUsedPercent: finitePct(acc.five_hour_used_percent ?? acc.fiveHourUsedPercent),
+    fiveHourResetAt: cleanStr(acc.five_hour_reset_at ?? acc.fiveHourResetAt),
+    weeklyUsedPercent: finitePct(acc.weekly_used_percent ?? acc.weeklyUsedPercent),
+    weeklyResetAt: cleanStr(acc.weekly_reset_at ?? acc.weeklyResetAt),
+    cooldownUntil: cleanStr(acc.cooldown_until ?? acc.cooldownUntil ?? acc.cooling_until),
+  };
+}
+function readLoginPoolSummary(folder, here, env, ports = {}, savedStates = [], coreDirs = []) {
   const fsPort = ports.fs ?? nativeFs;
-  let cloudState = { enrolled: false };
-  try { cloudState = readCloudAccountsState({ env }, { fs: fsPort }); } catch { cloudState = { enrolled: false }; }
-  if (cloudState.enrolled === true || typeof ports.listCloudAccounts === 'function') {
+  const now = (ports.now ?? Date.now)();
+  let rawCloud = null, cloudFileError = false;
+  if (Object.hasOwn(ports, 'cloudAccountsSnapshot')) {
+    rawCloud = ports.cloudAccountsSnapshot;
+    if (!rawCloud || typeof rawCloud !== 'object' || Array.isArray(rawCloud)) { rawCloud = null; cloudFileError = true; }
+  } else {
     try {
-      const reply = await (ports.listCloudAccounts ?? listCloudAccounts)({ refresh: false, cwd: here, env, timeoutMs: 2000 }, ports.cloudPorts ?? {});
-      if (!Array.isArray(reply?.accounts)) throw Error('Cloud account list unavailable');
-      const accounts = reply.accounts.map(acc => ({
-        id: cleanStr(acc.account_id ?? acc.id),
-        label: cleanStr(acc.label ?? acc.account_id ?? acc.id) ?? 'account',
-        provider: cleanStr(acc.provider) ?? 'unknown',
-        state: normalizeLoginState(acc.state ?? acc.status),
-        fiveHourUsedPercent: finitePct(acc.five_hour_used_percent ?? acc.fiveHourUsedPercent),
-        fiveHourResetAt: cleanStr(acc.five_hour_reset_at ?? acc.fiveHourResetAt),
-        weeklyUsedPercent: finitePct(acc.weekly_used_percent ?? acc.weeklyUsedPercent),
-        weeklyResetAt: cleanStr(acc.weekly_reset_at ?? acc.weeklyResetAt),
-        cooldownUntil: cleanStr(acc.cooldown_until ?? acc.cooldownUntil),
-      }));
-      const ready = accounts.filter(a => a.state === 'ready').length;
-      const cooling = accounts.filter(a => a.state === 'cooling').length;
-      const reauthRequired = accounts.filter(a => a.state === 'reauth_required').length;
-      return {
-        source: 'cloud',
-        state: accounts.length === 0 ? 'empty' : ready > 0 ? 'ready' : cooling > 0 ? 'cooling' : 'reauth_required',
-        counts: { total: accounts.length, ready, cooling, reauth_required: reauthRequired },
-        readyLogins: ready,
-        accounts,
-      };
-    } catch {
+      rawCloud = JSON.parse(fsPort.readFileSync(accountsStatePath(env), 'utf8'));
+      if (!rawCloud || typeof rawCloud !== 'object' || Array.isArray(rawCloud)) { rawCloud = null; cloudFileError = true; }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') cloudFileError = true;
+      rawCloud = null;
+    }
+  }
+  if (cloudFileError) {
+    return { source: 'cloud', state: 'unavailable', counts: null, readyLogins: null, accounts: [] };
+  }
+  if (Array.isArray(rawCloud?.accounts)) {
+    const accounts = rawCloud.accounts.filter(a => a && typeof a === 'object').map(mapCachedCloudAccount);
+    const ready = accounts.filter(a => a.state === 'ready').length;
+    const cooling = accounts.filter(a => a.state === 'cooling').length;
+    const reauthRequired = accounts.filter(a => a.state === 'reauth_required').length;
+    return {
+      source: 'cloud',
+      state: accounts.length === 0 ? 'empty' : ready > 0 ? 'ready' : cooling > 0 ? 'cooling' : 'reauth_required',
+      counts: { total: accounts.length, ready, cooling, reauth_required: reauthRequired },
+      readyLogins: ready,
+      accounts,
+    };
+  }
+  let cloudState = { enrolled: false, providers: [], active: {}, cooling: {} };
+  try { cloudState = readCloudAccountsState({ env }, { fs: fsPort }); } catch { cloudState = { enrolled: false, providers: [], active: {}, cooling: {} }; }
+  if (cloudState.enrolled === true) {
+    const providers = [...new Set([...(cloudState.providers ?? []), ...Object.keys(cloudState.active ?? {}), ...Object.keys(cloudState.cooling ?? {})])];
+    const accounts = [];
+    for (const provider of providers) {
+      const activeEntry = cloudState.active?.[provider] ?? null;
+      const coolEntry = cloudState.cooling?.[provider] ?? null;
+      const wakeAt = cleanStr(coolEntry?.wake_at ?? coolEntry?.until);
+      const wakeMs = wakeAt ? Date.parse(wakeAt) : NaN;
+      const isCooling = Boolean(coolEntry && (!Number.isFinite(wakeMs) || wakeMs > now));
+      if (activeEntry) {
+        accounts.push(mapCachedCloudAccount({
+          ...activeEntry,
+          provider,
+          state: isCooling ? 'cooling' : 'ready',
+          cooldown_until: isCooling ? wakeAt : null,
+        }));
+      } else if (isCooling) {
+        accounts.push({
+          id: null, label: provider, provider, state: 'cooling',
+          fiveHourUsedPercent: null, fiveHourResetAt: null, weeklyUsedPercent: null, weeklyResetAt: null, cooldownUntil: wakeAt,
+        });
+      }
+    }
+    if (!accounts.length) {
       return { source: 'cloud', state: 'unavailable', counts: null, readyLogins: null, accounts: [] };
     }
+    const ready = accounts.filter(a => a.state === 'ready').length;
+    const cooling = accounts.filter(a => a.state === 'cooling').length;
+    return {
+      source: 'cloud',
+      state: ready > 0 ? 'ready' : cooling > 0 ? 'cooling' : 'unavailable',
+      counts: { total: accounts.length, ready, cooling, reauth_required: 0 },
+      readyLogins: null,
+      accounts,
+    };
   }
   const poolPath = savedStates.map(s => s?.poolPath).find(p => typeof p === 'string' && p.trim() && p !== 'off' && p !== 'none');
   try {
@@ -962,7 +1022,7 @@ async function collectMachineObservability(folder, ports, env, cwd) {
   const here = isFolder(cwd) ? cwd : effectiveEnv?.HOME || homedir();
   const { saved, unreadable } = readSavedStates(folder);
   const inventory = inspectMachineJobs(folder, ports);
-  const loginPool = await readLoginPoolSummary(folder, here, effectiveEnv, ports, saved, inventory.coreDirs);
+  const loginPool = readLoginPoolSummary(folder, here, effectiveEnv, ports, saved, inventory.coreDirs);
   const activeStates = saved.some(s => s.enabled) ? saved.filter(s => s.enabled) : saved;
   const shares = activeStates.map(s => s.share).filter(validShare);
   const explicitRuns = activeStates.map(s => s.runs).filter(r => Number.isSafeInteger(r) && r > 0);
@@ -990,7 +1050,7 @@ function formatObservabilityLines({ inventory, guard, suiteQueue, loginPool, con
     : `Suite queue: ${suiteQueue.busyChecks} running, ${suiteQueue.waitingChecks} waiting of ${suiteQueue.checks} slot${suiteQueue.checks === 1 ? '' : 's'} (${suiteQueue.coresPerCheck} core${suiteQueue.coresPerCheck === 1 ? '' : 's'}/suite)`;
   let poolLine = 'Login pool: single local login (not configured)';
   if (loginPool.source === 'cloud') {
-    if (loginPool.state === 'unavailable') poolLine = 'Login pool (cloud): unavailable (cached read failed; usage unknown)';
+    if (loginPool.state === 'unavailable') poolLine = 'Login pool (cloud): unavailable (no local cache; usage unknown)';
     else if (!loginPool.accounts.length) poolLine = 'Login pool (cloud): 0 enrolled';
     else {
       const c = loginPool.counts;
@@ -1083,10 +1143,11 @@ async function localCosts(input, ports, state = {}) {
   const options = { ...ports, env: input.env ?? ports.env };
   const runs = await (ports.costRuns ?? (async () => input.all ? allRuns({ cancelled: true }, options) : listRuns({ cwd: state.cwd ?? input.cwd, cancelled: true }, options)))();
   const measured = runs.map(run => {
-    try { return updateRunCosts(run.runDir, latest => {
-      if (latest.runId !== run.runId || latest.startedAt !== run.startedAt) throw Error('Cost attempt changed');
-      return latest;
-    }, options); } catch { return run; }
+    try {
+      const observed = structuredClone(run);
+      observed.cost = captureCosts(run, observed, options);
+      return observed;
+    } catch { return run; }
   });
   return costReport(measured, (ports.now ?? Date.now)());
 }
@@ -1254,7 +1315,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     if (command === 'status' && input.json) return ok(JSON.stringify(await statusJsonPayload(input, ports, p), null, 2));
     if (command === 'status' && input.all) {
-      const status = await machineStatus(stateFolder(ports, p.env), ports, input.env, input.cwd);
+      const status = await machineStatus(stateFolder(ports, p.env), ports, input.env ?? p.env, input.cwd);
       try { status.message += '\n' + costStatusLines(await localCosts(input, ports)); } catch {}
       return status;
     }
@@ -1287,7 +1348,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     if (command === 'status') {
       const timerActive = Boolean(await timer('status', state, p)), guard = await coreGuard(state, p, ports, stateFile);
-      const settingsNow = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs, hardwareSlots: guard.hardwareSlots });
+      const settingsNow = readCoreSettings(state.cwd, undefined, { auto: Math.max(1, guard.auto ?? 1), runs: state.runs, ...(Number.isSafeInteger(guard.hardwareSlots) && guard.hardwareSlots > 0 ? { hardwareSlots: guard.hardwareSlots } : {}) });
       const label = machineLabel(state) ?? settingsNow.label;
       if (machineMode(state)) settingsNow.mode = machineMode(state);
       if (machineReport(state)) settingsNow.report = machineReport(state);

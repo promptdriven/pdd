@@ -287,6 +287,28 @@ test('explicit --runs N honors concurrency above 4 up to real hardware limits an
   assert.equal(diskBound.limiter, 'disk');
   assert.deepEqual(diskBound.room, { ok: true, reason: null, free: 1 });
   assert.match(diskBound.line, /limited by 55 GiB disk ÷ 10 GiB = 5/);
+
+  // Exhausted disk (byDisk === 0) clamps hardwareSlots and slots to 0 with limiter 'disk' and holds new work.
+  const zeroDisk = await readMachineGuard({ cwd: '/', runs: 8, jobs: 0 }, {
+    machineResources: async () => box(64, 251, { disk: { available: 0, total: 500 * GiB } }),
+    autopilotUse: async () => ({ rss: 0, cores: 0 }),
+  });
+  assert.equal(zeroDisk.byDisk ?? capacityMath(box(64, 251, { disk: { available: 0, total: 500 * GiB } }), 50, { runs: 8 }).byDisk, 0);
+  assert.equal(zeroDisk.hardwareSlots, 0);
+  assert.equal(zeroDisk.slots, 0);
+  assert.equal(zeroDisk.limiter, 'disk');
+  assert.deepEqual(zeroDisk.room, { ok: false, reason: 'only 0 GiB of disk free; a job needs 10 GiB and 5%', free: 0 });
+  assert.match(zeroDisk.line, /→ 0 \(this machine, --runs 8, limited by 0 GiB disk < 25 GiB reserve\)/);
+
+  // Lowering a single repo (--runs 1) keeps repo slots = 1 while leaving whole-machine room (machineSlots = 4) open for sibling repos.
+  const singleRepoLowered = await readMachineGuard({ cwd: '/', share: 70, runs: 1, jobs: 1 }, {
+    machineResources: async () => box(64, 251, { disk: { available: 500 * GiB, total: 1000 * GiB } }),
+    autopilotUse: async () => ({ rss: GiB, cores: 1 }),
+  });
+  assert.equal(singleRepoLowered.slots, 1);
+  assert.equal(singleRepoLowered.machineSlots, 4);
+  assert.deepEqual(singleRepoLowered.room, { ok: true, reason: null, free: 3 });
+  assert.match(singleRepoLowered.line, /Machine: share 70% \(this machine, --share\) of 64 cores and 251 GiB · slots min\(4, 44\.8 cores ÷ 2, 175\.7 GiB ÷ 3 GiB\) = 4 → 1 \(this machine, --runs 1\) · .* · new work: ok$/);
 });
 
 test('automatic capacity scales with readyLogins when supplied and stays capped at 4 when omitted', async () => {
