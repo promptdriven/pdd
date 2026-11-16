@@ -8,7 +8,9 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promptHeaderHash } from '../src/file-owner.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
+import * as autopilotCore from '../src/autopilot-core.mjs';
 import { autopilotEngine, busySlots, coreSettings, failingTests, readyIssues, coreStatus, tickCore } from '../src/autopilot-core.mjs';
+const { agentModelFamily } = autopilotCore;
 import { listReportDrafts, sendReportDraft } from '../src/autopilot-reports.mjs';
 import { cleanupAgentJob } from '../src/agent-job.mjs';
 
@@ -2497,7 +2499,7 @@ test('O1 the build brief has the owner table (binding, header line in the first 
   assert.match(input, /- src\/money\.js: prompts\/money\.prompt\.md \(prose, not certain: treat as owned\)/, 'the opening sentence (pdd owner)');
   assert.doesNotMatch(input, /- src\/(?:other|third)\.js:/, 'only the opening sentence counts');
   assert.match(input, /run the same lookup \(`pdd owner FILE`\)/); assert.match(input, /A file that you add is never path e/);
-  assert.match(input, /e\. Existing code that no prompt owns: change it directly, with a regression test/);
+  assert.match(input, /e\.[^\n]*\.prompt\.md/); assert.match(input, /Generated from/);
   assert.match(input, /The prompt and the code may be in one commit\. Never rewrite history/);
   assert.match(input, /"adopt":\[/);
 });
@@ -4025,4 +4027,192 @@ test('3154 & 3782 opt-in model tiering routes worker vs reviewer launches and re
   assert.equal(mergedRow.telemetry.tokens.byTier.reviewer.outputTokens, 600);
   assert.equal(mergedRow.telemetry.tokens.byAgent.codex.inputTokens, 23_000);
   assert.equal(mergedRow.telemetry.tokens.total.totalTokens, 24_800);
+});
+
+test('agentModelFamily maps codex, claude, gemini and agy model families', () => {
+  assert.equal(agentModelFamily({ kind: 'codex' }), 'openai');
+  assert.equal(agentModelFamily('claude'), 'anthropic');
+  assert.equal(agentModelFamily({ kind: 'gemini' }), 'google');
+  assert.equal(agentModelFamily({ kind: 'agy' }), 'google');
+  assert.equal(agentModelFamily({ kind: 'agy', model: 'gemini-3.1-pro' }), 'google');
+  assert.equal(agentModelFamily({ kind: 'agy', model: 'claude-sonnet-4-6' }), 'anthropic');
+  assert.equal(agentModelFamily({ kind: 'agy' }, 'claude-opus-4-6'), 'anthropic');
+  assert.equal(agentModelFamily({ kind: 'agy', model: 'gpt-5.4' }), 'openai');
+  assert.equal(agentModelFamily({ kind: 'agy' }, 'o1'), 'openai');
+  assert.equal(agentModelFamily({ kind: 'agy' }, 'o3-mini'), 'openai');
+  assert.equal(agentModelFamily({ kind: 'agy' }, 'o4-mini'), 'openai');
+  assert.equal(agentModelFamily({ kind: 'other' }), null);
+});
+
+test('cross-family reviewer preference picks an alternate model family when ready and falls back non-blockingly with disclosed independence', async t => {
+  // 1. Multi-family pool: codex builder -> claude reviewer (cross-family), single selection probe with no leaked call
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  const selectCalls = [];
+  const selectCross = async opts => {
+    selectCalls.push(opts ?? null);
+    if (Array.isArray(opts?.allowedKinds)) {
+      assert.deepEqual(opts.allowedKinds, ['claude', 'gemini', 'agy']);
+      return {
+        state: 'ready',
+        configured: true,
+        poolSize: 2,
+        login: { id: 'claude-1', kind: 'claude' },
+        agent: { id: 'claude-1', kind: 'claude', command: '/opt/bin/claude' },
+        env: { HOME: w.dir },
+      };
+    }
+    return {
+      state: 'ready',
+      configured: true,
+      poolSize: 2,
+      login: { id: 'codex-1', kind: 'codex' },
+      agent: { id: 'codex-1', kind: 'codex', command: '/opt/bin/codex' },
+      env: { HOME: w.dir },
+    };
+  };
+  w.issue(17, { title: 'Cross-family review check', body: 'Prefer another model family for review.' });
+  await w.tick({ selectLogin: selectCross });
+  const builtJob = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
+  assert.equal(builtJob.agentKind, 'codex');
+  assert.equal(builtJob.builderFamily, 'openai');
+  assert.equal(builtJob.builderLoginId, 'codex-1');
+
+  selectCalls.length = 0;
+  const { pr, head } = w.build(17);
+  await w.tick({ selectLogin: selectCross });
+  assert.equal(selectCalls.length, 1, 'ready alternate-family probe starts review directly without a second pool selection');
+  const reviewJob = w.job(17, 'review');
+  assert.equal(reviewJob.command, '/opt/bin/claude');
+  const inReview = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
+  assert.equal(inReview.review.reviewFamily, 'anthropic');
+  assert.equal(inReview.review.reviewIndependence, 'cross-family');
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, w.ports()), /review running \(cross-family\)/);
+
+  w.review(17, 'PASS');
+  w.suite(17, 0);
+  await w.tick({ selectLogin: selectCross });
+  assert.deepEqual(w.github.merges, [pr.number]);
+  const evidence = JSON.parse(readFileSync(join(w.root, 'logs', `17-evidence-${head}.json`), 'utf8'));
+  assert.deepEqual(evidence.review, {
+    state: 'pass',
+    builderFamily: 'openai',
+    reviewFamily: 'anthropic',
+    reviewIndependence: 'cross-family',
+  });
+  const prComments = w.github.prs.get(pr.number).comments.map(c => c.body);
+  assert.ok(prComments.some(body => body.includes('cross-family, anthropic')));
+  assert.ok(prComments.some(body => body.includes('- Reviewer independence: cross-family (reviewer anthropic, builder openai)')));
+  assert.match(w.github.prs.get(pr.number).body, /- Reviewer independence: cross-family \(reviewer anthropic, builder openai\)/);
+
+  // 2. Non-blocking fallback: alternate family is cooling, same-family login is ready -> starts review immediately without pool-pause or alert
+  const wFallback = await coreWorld(t, { settings: { runs: 1 } });
+  const alerts = [];
+  const selectFallback = async opts => {
+    if (Array.isArray(opts?.allowedKinds)) {
+      return {
+        state: 'all_cooling',
+        configured: true,
+        poolSize: 2,
+        resetAt: wFallback.now() + 30 * MIN,
+        cooling: [{ id: 'claude-1', reason: 'quota' }],
+        unavailable: [],
+      };
+    }
+    return {
+      state: 'ready',
+      configured: true,
+      poolSize: 2,
+      login: { id: 'codex-2', kind: 'codex' },
+      agent: { id: 'codex-2', kind: 'codex', command: '/opt/bin/codex' },
+      env: { HOME: wFallback.dir },
+    };
+  };
+  wFallback.issue(18, { title: 'Same-family fallback check', body: 'Do not block review when only same-family is ready.' });
+  await wFallback.tick({ selectLogin: selectFallback, alert: async a => alerts.push(a) });
+  const { pr: pr2, head: head2 } = wFallback.build(18);
+  await wFallback.tick({ selectLogin: selectFallback, alert: async a => alerts.push(a) });
+  assert.equal(alerts.length, 0, 'cooling alternate family never triggers a pool-exhausted alert when same-family is ready');
+  assert.equal(existsSync(join(wFallback.root, 'pool-exhausted.json')), false);
+  const fallbackSaved = JSON.parse(readFileSync(join(wFallback.root, 'jobs', '18.json'), 'utf8'));
+  assert.equal(fallbackSaved.poolPaused, undefined);
+  assert.equal(fallbackSaved.review.reviewFamily, 'openai');
+  assert.equal(fallbackSaved.review.reviewIndependence, 'same-family');
+  assert.equal(wFallback.job(18, 'review').command, '/opt/bin/codex');
+
+  wFallback.review(18, 'PASS');
+  wFallback.suite(18, 0);
+  await wFallback.tick({ selectLogin: selectFallback, alert: async a => alerts.push(a) });
+  assert.deepEqual(wFallback.github.merges, [pr2.number]);
+  const evidence2 = JSON.parse(readFileSync(join(wFallback.root, 'logs', `18-evidence-${head2}.json`), 'utf8'));
+  assert.deepEqual(evidence2.review, {
+    state: 'pass',
+    builderFamily: 'openai',
+    reviewFamily: 'openai',
+    reviewIndependence: 'same-family',
+  });
+  assert.match(wFallback.github.prs.get(pr2.number).body, /- Reviewer independence: same-family \(reviewer openai, builder openai\)/);
+
+  // 3. Resumed / legacy job without builderFamily records unknown-builder
+  const wUnknown = await coreWorld(t, { settings: { runs: 1 } });
+  wUnknown.issue(19, { title: 'Unknown builder family check', body: 'Resumed job without builderFamily.' });
+  await wUnknown.tick();
+  const job19Path = join(wUnknown.root, 'jobs', '19.json');
+  const legacyJob = JSON.parse(readFileSync(job19Path, 'utf8'));
+  delete legacyJob.agentKind;
+  delete legacyJob.builderFamily;
+  delete legacyJob.builderLoginId;
+  writeFileSync(job19Path, JSON.stringify(legacyJob));
+  const { pr: pr3, head: head3 } = wUnknown.build(19);
+  await wUnknown.tick();
+  const unknownSaved = JSON.parse(readFileSync(job19Path, 'utf8'));
+  assert.equal(unknownSaved.review.reviewIndependence, 'unknown-builder');
+  wUnknown.review(19, 'PASS');
+  wUnknown.suite(19, 0);
+  await wUnknown.tick();
+  assert.deepEqual(wUnknown.github.merges, [pr3.number]);
+  const evidence3 = JSON.parse(readFileSync(join(wUnknown.root, 'logs', `19-evidence-${head3}.json`), 'utf8'));
+  assert.equal(evidence3.review.reviewIndependence, 'unknown-builder');
+});
+
+test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt creation for existing unowned code', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('src/util.js', 'export const util = () => 0;\n');
+  w.issue(17, { title: 'Fix off-by-one return value in src/util.js', body: 'Return 1 from util().' });
+  await w.tick();
+
+  const input = w.job(17, 'build').input;
+  const rule1 = input.split('\n').find(line => line.startsWith('1. Choose the PDD skill')) ?? '';
+  assert.match(rule1, /pdd-small-change/);
+  assert.match(rule1, /path d/);
+  assert.match(rule1, /never[^\n]*\*\.prompt\.md/);
+  assert.match(rule1, /pdd-bug/);
+  assert.match(rule1, /pdd-feature/);
+  assert.doesNotMatch(rule1, /pdd-small-change for a small contained change/);
+
+  assert.match(input, /e\.[^\n]*\.prompt\.md/);
+  assert.match(input, /Generated from/);
+  assert.doesNotMatch(input, /change it directly, with a regression test, and put the file in the result's "adopt" list/);
+
+  const promptText = '# Util\n\nOwn `src/util.js`: return 1 from `util()`.\n';
+  const headerHash = promptHeaderHash(Buffer.from(promptText, 'utf8'));
+  editIn(w, 17, 'prompts/util.prompt.md', promptText);
+  editIn(w, 17, 'src/util.js', `// Generated from prompts/util.prompt.md (sha256: ${headerHash}).\nexport const util = () => 1;\n`);
+  editIn(w, 17, 'test/util.test.js', 'import assert from "node:assert"; import { util } from "../src/util.js"; assert.equal(util(), 1);\n');
+  const { pr } = w.build(17, {
+    write: false,
+    body: [
+      'Fixes #17',
+      '',
+      'Runtime: PASS',
+      'Path: e — prompts/util.prompt.md, src/util.js — prompts/util.prompt.md — new prompt — Test: test/util.test.js',
+      'Path: d — test/util.test.js — unowned — new prompt — Test: test/util.test.js',
+    ].join('\n'),
+    result: { promptChanged: true },
+  });
+  await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined, 'creating the owning prompt and Generated from header on path e passes pathChecks without repair');
+  w.review(17, 'PASS');
+  w.suite(17, 0);
+  await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
 });

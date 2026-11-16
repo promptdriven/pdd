@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: d424990cc3119cfc260d7d0d65afe67c444b540949afd2d9638f4534e80f26e8).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: f4fb01416060a7a7a02668ff073f576e100b3a047348c44001ca103eb0c6c3bf).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -30,8 +30,9 @@ export function agentCommand(agent, { model } = {}) {
   if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', ...extra, '-'] };
   // Claude streams its events (stream-json) so that its log grows while it works; the core reads the result file.
   if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', ...extra] };
+  if (agent?.kind === 'gemini') return { command: typeof agent.command === 'string' && agent.command.trim() ? agent.command.trim() : 'gemini', args: ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo', ...extra] };
   if (agent?.kind === 'agy') return { command: agent.command ?? 'agy', args: ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions', ...extra] };
-  throw Error('Autopilot core jobs need codex, claude or agy');
+  throw Error('Autopilot core jobs need codex, claude, gemini or agy');
 }
 
 export function jobEnvironment(env = {}) {
