@@ -253,7 +253,7 @@ issue of another repository returns exit 2): `Marked N issue(s) with pdd:autopil
 
 **Release** delegates `pdd autopilot release ISSUE` to `releaseCoreJob` of the [core engine](autopilot-core.prompt.md#release)
 with this repository's state file, resolved `state` (`machine` defaulting to the host name when unsaved), counted
-`gh` and `git` ports (purpose `claims`), `ports.corePorts`, and a `releaseClaim` callback to `releaseRunClaim` of the
+`gh` and `git` ports (purpose `claims`), `ports.corePorts`, and a `releaseClaim(machine, ref = ISSUE)` callback to `releaseRunClaim` of the
 workflow runner (keeping the workflow run lock, worker and check-custody guard, Herdr chat cleanup and local allocation
 release with the runner), and returns its `{exitCode, message}` unchanged. Under the shared `STATE.lock` tick lock,
 release checks ownership across `machineIdOf(state)` and `state.machine`, immediately stops any live local core job

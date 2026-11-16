@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: c2c28600bc3ac3d1ef21f5d218a769631c98dae88a7e2603e4e4300d585882ea).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 8bc968b6cd4c809355e03f480128d715fc07d51d2ce39001b1fe3dfb82ef40f0).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -986,8 +986,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
         ...(p.sleep ? { sleep: p.sleep } : {}),
         gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, purpose: 'claims', ...options }),
         git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
-        releaseClaim: machine => releaseRunClaim({
-          ref: issues[0], cwd: state.cwd, repository: state.repo,
+        releaseClaim: (machine, ref = issues[0]) => releaseRunClaim({
+          ref, cwd: state.cwd, repository: state.repo,
           machine, coordinatorId: state.coordinatorId,
         }, { ...cleanup, execFile: async (file, args, options) => {
           const reply = await p.execute(file, args, { purpose: 'claims', ...options });

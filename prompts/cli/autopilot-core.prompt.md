@@ -1723,8 +1723,11 @@ agent's commits may exist only there.
 
 ## Release
 
-Export `claimTickLock(file, fs)` (atomic PID lock file with dead-owner reclaim, shared
-by `tickAutopilot` and `releaseCoreJob`) and `releaseCoreJob(stateFile, issue, ports)`.
+Export `claimTickLock(file, fs)` (atomic PID lock file with serialized dead-owner
+reclamation behind an exclusive `${file}.reclaim` guard that re-verifies the dead
+payload before unlinking and linking, reclaiming an abandoned `${file}.reclaim` only
+after 10 seconds with a dead PID; shared by `tickAutopilot` and `releaseCoreJob`) and
+`releaseCoreJob(stateFile, issue, ports)`.
 
 `releaseCoreJob(stateFile, issue, ports)` accepts the repository state file path, the
 issue operand (`N`, `#N`, `OWNER/REPO#N`, or GitHub issue URL), and `{state, root, gh,
@@ -1740,10 +1743,12 @@ state.machine]` (with `state.machine` defaulting to the host name when unsaved) 
 `state.coordinatorId`:
 
 1. When `jobs/N.json` exists:
-   - **Ownership:** refuse with exit code 1 before stopping any process or modifying
-     local or GitHub state when `jobs/N.json` names another machine or coordinator, or
-     when reading the current GitHub claim (`confirmClaim`) fails or returns a claim
-     that is not `ctx.ours` (`Cannot release REPO#N: OWNER holds a live claim.`,
+   - **Read-only ownership check:** inspect `jobs/N.json` and read GitHub claim
+     ownership strictly without mutating GitHub comments or labels (`ctx.readClaim`
+     plus a read-only check that no foreign claim comment competes on the active
+     `labelEventId`; never call `confirmClaim` here). Refuse with exit code 1 before
+     stopping any process or modifying local or GitHub state when ownership is foreign,
+     ambiguous, or unreadable (`Cannot release REPO#N: OWNER holds a live claim.`,
      `Cannot release REPO#N: claim ownership is unknown.`, or `Could not confirm claim
      cleanup for REPO#N; retry the release.`).
    - **Immediate process stop:** stop every owned job and step wrapper (`agent`,
@@ -1752,31 +1757,38 @@ state.machine]` (with `state.machine` defaulting to the host name when unsaved) 
      `recoverStopped: true` while wrapper groups reap exiting children, removing any
      step account-lease `cleanupDirs` and freeing any held suite-queue slot). When cleanup cannot confirm
      every saved identity stopped, return exit code 1 while keeping `jobs/N.json` and
-     the GitHub claim for retry. Once confirmed, save `phase: "released"` and
-     `releaseStopped` (`true` if a live step was stopped) on `jobs/N.json` so
-     `holdsSlot` is `false` and no later tick resumes the job, closes its PR, or
-     deletes its worktrees before a retry finishes.
-   - **Lane and companions (non-destructive):** if the job has `pr`, remove
-     `pdd:merge-lane` when held on that PR and release any companion claims
-     (`releaseCompanions`), without closing or drafting any PR and without deleting the
-     job's worktrees, logs, or branch.
+     the GitHub claim for retry. Once confirmed, save `phase: "released"`,
+     `releaseStopped` (`true` if a live step was stopped), and `releaseIssues` on
+     `jobs/N.json` so `holdsSlot` is `false` and no later tick resumes the job, closes
+     its PR, or deletes its worktrees before a retry finishes.
+   - **Lane and companions (confirmed, non-destructive):** if the job has `pr`, remove
+     `pdd:merge-lane` when held on that PR; for each companion issue in `companions`,
+     verify read-only ownership and confirm companion claim/label cleanup through the
+     same `[machineIdOf(state), state.machine]` `releaseClaim` loop before removing
+     that companion from `jobs/N.json`, without closing or drafting any PR and without
+     deleting the job's worktrees, logs, or branch. Any failure returns exit code 1
+     with `jobs/N.json` retained in `phase: "released"` so retry finishes remaining
+     companion and main cleanup idempotently.
    - **GitHub claim cleanup:** call `ports.releaseClaim` (default `releaseRunClaim` of
      the [workflow runner](workflow-runner.prompt.md)) trying `machineIdOf(state)`
      first and then `state.machine`, removing `pdd:working` and `pdd:stuck` when no
      foreign claim holds the issue. If claim cleanup returns nonzero, return that
      result unchanged while `jobs/N.json` stays in `phase: "released"` for retry.
-   - **History and removal:** append one `history.jsonl` record (`{at, issue: N,
-     outcome: "released", stopped, personRelease: true, text: "released by a person (pdd autopilot release)",
-     pr, log, evidence, ...}`, with no `noResult`, cooldown, or strike) and remove
-     `jobs/N.json`. Return exit code 0 with `Released the Autopilot claim for REPO#N.
-     The worktree stays at WORKTREE (branch BRANCH).` (keeping `releaseClaim`'s own
-     worktree suffix when a workflow run already supplied one).
+   - **Durable history before removal:** persist (or confirm from a prior try) one
+     `history.jsonl` record (`{at, issue: N, outcome: "released", stopped,
+     personRelease: true, text: "released by a person (pdd autopilot release)", pr,
+     log, evidence, ...}`, with no `noResult`, cooldown, or strike) before unlinking
+     `jobs/N.json`. If `history.jsonl` cannot be persisted or `jobs/N.json` cannot be
+     removed, keep `jobs/N.json` intact and return exit code 1 so `sweepFiles` never
+     deletes `worktrees/N`. Return exit code 0 with `Released the Autopilot claim for
+     REPO#N. The worktree stays at WORKTREE (branch BRANCH).` (keeping `releaseClaim`'s
+     own worktree suffix when a workflow run already supplied one).
 2. When `jobs/N.json` does not exist (an orphan claim on GitHub, a workflow run claim,
-   or a repeat `release N`): if another local job carries `N` in `companions` and its
-   claim is `ctx.ours`, drop `N` from that job's companions; then run the same
-   `[machineIdOf(state), state.machine]` `releaseClaim` loop and return the first exit-0
-   result (or the first try's failure when all fail) with no duplicate `history.jsonl`
-   entry.
+   or a repeat `release N`): if another local job carries `N` in `companions`, verify
+   read-only ownership on `N`, run the `[machineIdOf(state), state.machine]`
+   `releaseClaim` loop, and drop `N` from that job's companions only after exit code 0;
+   otherwise run the same `releaseClaim` loop and return the first exit-0 result (or
+   the first try's failure when all fail) with no duplicate `history.jsonl` entry.
 
 ## Status
 

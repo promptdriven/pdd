@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 5a19a1216da7276cdd21083a37fbac6d969762b9b4b0f5e44e75ef79ccc5a67f).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: d3731af4638d5f358e1c07f2d077d154ab0d8170892f6cc9bf488a7f1d8e5e15).
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -36,23 +36,54 @@ const object = value => value !== null && typeof value === 'object' && !Array.is
 // The machine id in claim records: a short hash of the host name, so no public text names the host.
 export const machineIdOf = state => named(state?.machineId) ? state.machineId : `m-${createHash('sha256').update(String(state?.machine ?? '')).digest('hex').slice(0, 12)}`;
 export function claimTickLock(file, fs = nativeFs) {
+  const isLivePid = raw => {
+    const text = String(raw ?? '');
+    const pid = Number(text);
+    if (!/^[1-9][0-9]*$/.test(text) || !Number.isSafeInteger(pid)) return false;
+    try { process.kill(pid, 0); return true; }
+    catch (e) { return e.code !== 'ESRCH' && !(e instanceof RangeError); }
+  };
   fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  const owner = `${file}.${randomUUID()}.owner`;
+  const owner = `${file}.${randomUUID()}.owner`, reclaim = `${file}.reclaim`;
   fs.writeFileSync(owner, String(process.pid), { flag: 'wx', mode: 0o600 });
   try {
-    for (;;) {
+    for (let spin = 0; spin < 8; spin++) {
       try { fs.linkSync(owner, file); return true; }
       catch (e) { if (e.code !== 'EEXIST') throw e; }
       let raw;
       try { raw = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
-      const pid = Number(raw);
-      if (/^[1-9][0-9]*$/.test(raw) && Number.isSafeInteger(pid)) {
-        try { process.kill(pid, 0); return false; }
-        catch (e) { if (e.code !== 'ESRCH' && !(e instanceof RangeError)) return false; }
+      if (isLivePid(raw)) return false;
+      try {
+        fs.writeFileSync(reclaim, String(process.pid), { flag: 'wx', mode: 0o600 });
+      } catch (e) {
+        if (e.code !== 'EEXIST') throw e;
+        let holder;
+        try { holder = fs.readFileSync(reclaim, 'utf8'); } catch (re) { if (re.code === 'ENOENT') continue; throw re; }
+        if (isLivePid(holder)) return false;
+        const staleEnough = typeof fs.statSync === 'function'
+          ? (() => { try { return Date.now() - fs.statSync(reclaim).mtimeMs >= 10_000; } catch { return false; } })()
+          : true;
+        if (!staleEnough) return false;
+        try { fs.unlinkSync(reclaim); } catch (re) { if (re.code !== 'ENOENT') throw re; }
+        continue;
       }
-      try { if (fs.readFileSync(file, 'utf8') === raw) fs.unlinkSync(file); }
-      catch (e) { if (e.code !== 'ENOENT') throw e; }
+      try {
+        let current;
+        try { current = fs.readFileSync(file, 'utf8'); }
+        catch (e) {
+          if (e.code !== 'ENOENT') throw e;
+          try { fs.linkSync(owner, file); return true; }
+          catch (le) { if (le.code === 'EEXIST') continue; throw le; }
+        }
+        if (current !== raw || isLivePid(current)) return false;
+        try { fs.unlinkSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        try { fs.linkSync(owner, file); return true; }
+        catch (e) { if (e.code !== 'EEXIST') throw e; }
+      } finally {
+        try { fs.unlinkSync(reclaim); } catch { /* Already unlinked. */ }
+      }
     }
+    return false;
   } finally { try { fs.unlinkSync(owner); } catch { /* Already unlinked. */ } }
 }
 const named = value => typeof value === 'string' && value.trim().length > 0;
@@ -5120,35 +5151,57 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
     });
     const ownedForms = [...new Set([ctx.machineId, state.machine].filter(named))];
     const claimForms = hasSavedMachine ? ownedForms : [...new Set([ctx.machineId, undefined, state.machine])];
-    const runReleaseClaim = ports.releaseClaim ?? (async machine => {
-      const { releaseRunClaim } = await import('./workflow-runner.mjs');
-      return releaseRunClaim({
-        ref: issue, cwd: state.cwd, repository: repo || undefined,
-        machine, coordinatorId: state.coordinatorId,
-      }, {
-        now: ctx.now,
-        ...(ports.authority ? { authority: ports.authority } : {}),
-        execFile: async (file, args, options) => {
-          const reply = await (file === 'gh' ? ghPort(args, options) : gitPort(args, options));
-          if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
-          return reply;
-        },
-      });
-    });
-    const tryForms = async (forms = claimForms) => {
+    const runReleaseClaim = ports.releaseClaim
+      ? (machine, targetRef = issue) => ports.releaseClaim(machine, targetRef)
+      : (async (machine, targetRef = issue) => {
+          const { releaseRunClaim } = await import('./workflow-runner.mjs');
+          return releaseRunClaim({
+            ref: targetRef, cwd: state.cwd, repository: repo || undefined,
+            machine, coordinatorId: state.coordinatorId,
+          }, {
+            now: ctx.now,
+            ...(ports.authority ? { authority: ports.authority } : {}),
+            execFile: async (file, args, options) => {
+              const reply = await (file === 'gh' ? ghPort(args, options) : gitPort(args, options));
+              if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
+              return reply;
+            },
+          });
+        });
+    const tryForms = async (forms = claimForms, targetRef = issue, targetNum = number) => {
       let first = null;
       for (const machine of forms) {
-        const result = await runReleaseClaim(machine);
+        const result = await runReleaseClaim(machine, targetRef);
         if (result.exitCode === 0) return result;
         first ??= result;
       }
-      return first ?? { exitCode: 1, message: `Could not confirm claim cleanup for ${repo || 'this repository'}#${number}; retry the release.` };
+      return first ?? { exitCode: 1, message: `Could not confirm claim cleanup for ${repo || 'this repository'}#${targetNum}; retry the release.` };
     };
-    const refuseForeign = current => {
+    const refuseForeign = (current, targetNum = number) => {
       const owner = named(current.machine) ? current.machine : 'unknown';
       return { exitCode: 1, message: current.active
-        ? (owner === 'unknown' ? `Cannot release ${repo}#${number}: claim ownership is unknown.` : `Cannot release ${repo}#${number}: ${owner} holds a live claim.`)
-        : `Could not confirm claim cleanup for ${repo}#${number}; retry the release.` };
+        ? (owner === 'unknown' ? `Cannot release ${repo}#${targetNum}: claim ownership is unknown.` : `Cannot release ${repo}#${targetNum}: ${owner} holds a live claim.`)
+        : `Could not confirm claim cleanup for ${repo}#${targetNum}; retry the release.` };
+    };
+    const inspectClaimReadOnly = async (targetNum, savedClaim = null) => {
+      let current;
+      try { current = await ctx.readClaim(targetNum); }
+      catch { return { ok: false, response: { exitCode: 1, message: `Could not confirm claim cleanup for ${repo}#${targetNum}; retry the release.` } }; }
+      if (current && !ctx.ours(current)) return { ok: false, response: refuseForeign(current, targetNum) };
+      const eventId = current?.labelEventId ?? savedClaim?.labelEventId ?? null;
+      if (current && eventId) {
+        let comments;
+        try { comments = await ctx.gh.all(`repos/${ctx.repo}/issues/${targetNum}/comments?per_page=100`); }
+        catch { return { ok: false, response: { exitCode: 1, message: `Could not confirm claim cleanup for ${repo}#${targetNum}; retry the release.` } }; }
+        const competing = comments.some(c => {
+          const rec = claimRecord(c.body);
+          return Boolean(rec && String(rec.labelEventId) === String(eventId) && !ctx.ours(rec));
+        });
+        if (competing) {
+          return { ok: false, response: { exitCode: 1, message: `Cannot release ${repo}#${targetNum}: claim ownership is unknown.` } };
+        }
+      }
+      return { ok: true, current };
     };
 
     const jobFile = root ? join(ctx.dirs.jobs, `${number}.json`) : null;
@@ -5163,11 +5216,9 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
           if ((named(comp.claim?.machine) && !ownedForms.includes(comp.claim.machine))
             || (named(comp.claim?.coordinatorId) && comp.claim.coordinatorId !== state.coordinatorId))
             return { exitCode: 1, message: `Cannot release ${repo}#${number}: ${comp.claim?.machine || 'another coordinator'} holds a live claim.` };
-          let current;
-          try { current = await ctx.readClaim(number); }
-          catch { return { exitCode: 1, message: `Could not confirm claim cleanup for ${repo}#${number}; retry the release.` }; }
-          if (current && !ctx.ours(current)) return refuseForeign(current);
-          const released = await tryForms(ownedForms);
+          const check = await inspectClaimReadOnly(number, comp.claim);
+          if (!check.ok) return check.response;
+          const released = await tryForms(ownedForms, String(number), number);
           if (released.exitCode !== 0) return { exitCode: released.exitCode, message: released.message };
           setJobCompanions(parent, jobCompanions(parent).filter(c => c.issue !== number));
           ctx.saveJob(parent);
@@ -5182,10 +5233,8 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
       || (named(job.claim?.coordinatorId) && job.claim.coordinatorId !== state.coordinatorId)) {
       return { exitCode: 1, message: `Cannot release ${repo}#${number}: ${job.claim?.machine || 'another coordinator'} holds a live claim.` };
     }
-    let current;
-    try { current = await confirmClaim(ctx, job); }
-    catch { return { exitCode: 1, message: `Could not confirm claim cleanup for ${repo}#${number}; retry the release.` }; }
-    if (current && !ctx.ours(current)) return refuseForeign(current);
+    const mainCheck = await inspectClaimReadOnly(number, job.claim);
+    if (!mainCheck.ok) return mainCheck.response;
 
     const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
       [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
@@ -5198,6 +5247,7 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
     if (!stoppedOk) {
       return { exitCode: 1, message: `Cannot release ${repo}#${number}: could not confirm that the local Autopilot job stopped; retry the release.` };
     }
+    job.releaseIssues ??= jobIssues(job);
     job.phase = 'released';
     job.releaseStopped = Boolean(job.releaseStopped || hadRunning);
     ctx.saveJob(job);
@@ -5214,30 +5264,59 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
         return { exitCode: 1, message: `Could not confirm merge-lane cleanup for ${repo}#${number} (PR #${job.pr}); retry the release.` };
       }
     }
-    await releaseCompanions(ctx, job);
 
-    const released = await tryForms(ownedForms);
+    for (const comp of [...jobCompanions(job)]) {
+      if ((named(comp.claim?.machine) && !ownedForms.includes(comp.claim.machine))
+        || (named(comp.claim?.coordinatorId) && comp.claim.coordinatorId !== state.coordinatorId)) {
+        return { exitCode: 1, message: `Cannot release ${repo}#${comp.issue}: ${comp.claim?.machine || 'another coordinator'} holds a live claim.` };
+      }
+      const compCheck = await inspectClaimReadOnly(comp.issue, comp.claim);
+      if (!compCheck.ok) return compCheck.response;
+      const compReleased = await tryForms(ownedForms, String(comp.issue), comp.issue);
+      if (compReleased.exitCode !== 0) return { exitCode: compReleased.exitCode, message: compReleased.message };
+      setJobCompanions(job, jobCompanions(job).filter(c => c.issue !== comp.issue));
+      ctx.saveJob(job);
+    }
+
+    const released = await tryForms(ownedForms, issue, number);
     if (released.exitCode !== 0) return { exitCode: released.exitCode, message: released.message };
 
-    try {
-      appendHistory(ctx, {
-        at: ctx.now(),
-        issue: job.issue,
-        ...(jobIssues(job).length > 1 ? { issues: jobIssues(job) } : {}),
-        outcome: 'released',
-        stopped: Boolean(job.releaseStopped),
-        personRelease: true,
-        text: 'released by a person (pdd autopilot release)',
-        pr: job.pr ?? null,
-        log: job.agent?.log ?? null,
-        evidence: honestEvidence(job) ?? null,
-        ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
-        ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
-        ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}),
-      });
-    } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
-    try { fs.rmSync(jobFile, { force: true }); }
-    catch (error) { nativeFs.rmSync(jobFile, { force: true }); ctx.warn(`Autopilot core job file of #${job.issue}: ${error.message}`); }
+    const releasedIssues = Array.isArray(job.releaseIssues) && job.releaseIssues.length ? job.releaseIssues : jobIssues(job);
+    const latestHistory = issueRows(chronological(fs, root), job.issue).at(-1);
+    const alreadyRecorded = Boolean(latestHistory?.outcome === 'released' && latestHistory?.personRelease === true
+      && (!named(job.id) || !named(latestHistory.jobId) || latestHistory.jobId === job.id));
+    if (!alreadyRecorded) {
+      try {
+        appendHistory(ctx, {
+          at: ctx.now(),
+          issue: job.issue,
+          ...(named(job.id) ? { jobId: job.id } : {}),
+          ...(releasedIssues.length > 1 ? { issues: releasedIssues } : {}),
+          outcome: 'released',
+          stopped: Boolean(job.releaseStopped),
+          personRelease: true,
+          text: 'released by a person (pdd autopilot release)',
+          pr: job.pr ?? null,
+          log: job.agent?.log ?? null,
+          evidence: honestEvidence(job) ?? null,
+          ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
+          ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
+          ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}),
+        });
+      } catch {
+        return { exitCode: 1, message: `Could not record release history for ${repo}#${number}; retry the release.` };
+      }
+    }
+    const confirmedHistory = issueRows(chronological(fs, root), job.issue).at(-1);
+    if (!(confirmedHistory?.outcome === 'released' && confirmedHistory?.personRelease === true)) {
+      return { exitCode: 1, message: `Could not record release history for ${repo}#${number}; retry the release.` };
+    }
+    try { fs.rmSync(jobFile); }
+    catch (error) {
+      if (error?.code !== 'ENOENT') {
+        return { exitCode: 1, message: `Could not remove local job record for ${repo}#${number}; retry the release.` };
+      }
+    }
 
     const suffix = job.worktree && job.branch && !released.message.includes('The worktree stays at')
       ? ` The worktree stays at ${job.worktree} (branch ${job.branch}).` : '';

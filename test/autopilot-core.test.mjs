@@ -4213,3 +4213,202 @@ test('3389: disabled daemon (enabled: false) immediately terminates a real detac
   assert.ok(!w.labels(17).includes('pdd:working'));
   assert.ok(existsSync(wtDir), 'worktree preserved');
 });
+
+test('3389: claimTickLock serializes stale dead-PID reclamation behind .reclaim so concurrent contenders never both win', async t => {
+  const nativeFs = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { claimTickLock } = await import('../src/autopilot-core.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-lock-3389-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const lockFile = join(dir, 'STATE.lock');
+
+  const deadChild = spawnSync(process.execPath, ['-e', '']);
+  const deadPid = String(deadChild.pid);
+  assert.throws(() => process.kill(Number(deadPid), 0), { code: 'ESRCH' });
+
+  // Interleaving 1: Contender B completes stale-lock reclamation right after Contender A reads deadPid, before A opens .reclaim.
+  writeFileSync(lockFile, deadPid, { mode: 0o600 });
+  let b1 = null, hooked1 = false;
+  const fsBeforeReclaim = {
+    ...nativeFs,
+    readFileSync(target, encoding) {
+      const val = nativeFs.readFileSync(target, encoding);
+      if (!hooked1 && target === lockFile) {
+        hooked1 = true;
+        b1 = claimTickLock(lockFile, nativeFs);
+      }
+      return val;
+    },
+  };
+  const a1 = claimTickLock(lockFile, fsBeforeReclaim);
+  assert.deepEqual([a1, b1], [false, true], 'only Contender B wins when B reclaims before A acquires .reclaim');
+  assert.equal(readFileSync(lockFile, 'utf8'), String(process.pid));
+  assert.ok(!existsSync(`${lockFile}.reclaim`));
+  rmSync(lockFile, { force: true });
+
+  // Interleaving 2: Contender B contends while Contender A holds .reclaim right before A unlinks the stale lock.
+  writeFileSync(lockFile, deadPid, { mode: 0o600 });
+  let b2 = null, hooked2 = false;
+  const fsInsideReclaim = {
+    ...nativeFs,
+    unlinkSync(target) {
+      if (!hooked2 && target === lockFile) {
+        hooked2 = true;
+        b2 = claimTickLock(lockFile, nativeFs);
+      }
+      return nativeFs.unlinkSync(target);
+    },
+  };
+  const a2 = claimTickLock(lockFile, fsInsideReclaim);
+  assert.deepEqual([a2, b2], [true, false], 'only Contender A wins while A holds .reclaim');
+  assert.equal(readFileSync(lockFile, 'utf8'), String(process.pid));
+  assert.ok(!existsSync(`${lockFile}.reclaim`));
+  rmSync(lockFile, { force: true });
+
+  // Abandoned .reclaim with dead PID: respected while fresh (<10s), reclaimed once >=10s old.
+  writeFileSync(lockFile, deadPid, { mode: 0o600 });
+  writeFileSync(`${lockFile}.reclaim`, deadPid, { mode: 0o600 });
+  assert.equal(claimTickLock(lockFile, nativeFs), false, 'fresh dead .reclaim holds briefly');
+  const past = new Date(Date.now() - 15_000);
+  nativeFs.utimesSync(`${lockFile}.reclaim`, past, past);
+  assert.equal(claimTickLock(lockFile, nativeFs), true, 'aged dead .reclaim is reclaimed safely');
+  assert.ok(!existsSync(`${lockFile}.reclaim`));
+});
+
+test('3389: companion claim cleanup failure keeps jobs/N.json in phase released and retries companion release idempotently', async t => {
+  const { runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const { machineIdOf } = await import('../src/autopilot-core.mjs');
+  const w = await coreWorld(t);
+  const { cwd, coreDir, ports } = launcherHarness(w);
+  const machineId = machineIdOf({ machine: 'machine-a' });
+
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  w.issue(18, { labels: ['pdd:autopilot'] });
+  const c17 = w.github.claim(17, { coordinatorId: 'coord-a', machine: machineId, lastSeen: '' });
+  const ev17 = w.github.issues.get(17).timeline.find(e => e.label === 'pdd:working').id;
+  const c18 = w.github.claim(18, { coordinatorId: 'coord-a', machine: machineId, lastSeen: '' });
+  const ev18 = w.github.issues.get(18).timeline.find(e => e.label === 'pdd:working').id;
+
+  mkdirSync(join(coreDir, 'jobs'), { recursive: true });
+  mkdirSync(join(coreDir, 'logs'), { recursive: true });
+  const wt17 = join(coreDir, 'worktrees', '17');
+  mkdirSync(wt17, { recursive: true });
+  const agent17 = w.jobs.start({ id: '17-build-comp', dir: join(coreDir, 'logs'), role: 'build' });
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  writeFileSync(jobFile, JSON.stringify({
+    schema: 'pdd.core-job.v1', id: 'comp-job-17', issue: 17, issues: [17, 18],
+    companions: [{ issue: 18, title: 'Companion 18', url: 'https://github.com/acme/widgets/issues/18', body: '', claim: { commentId: c18.id, labelEventId: ev18, lastSeen: w.now(), machine: machineId } }],
+    branch: 'pdd/core-17-comp', worktree: wt17,
+    claim: { commentId: c17.id, labelEventId: ev17, lastSeen: w.now(), machine: machineId },
+    phase: 'running', role: 'build', repairs: 0, started: w.now(), agent: agent17,
+  }));
+
+  // Simulate gh going offline specifically for companion #18 on first release attempt.
+  let fail18 = true;
+  const flakyPorts = {
+    ...ports,
+    run: async (command, args, options = {}) => {
+      if (command === 'gh' && fail18 && args.some(a => String(a).includes('/issues/18'))) {
+        return { code: 1, stdout: '', stderr: 'network unavailable' };
+      }
+      return ports.run(command, args, options);
+    },
+  };
+
+  const first = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, flakyPorts);
+  assert.equal(first.exitCode, 1);
+  assert.ok(!w.alive.has(agent17.pid), 'local job stopped before companion retry wait');
+  assert.ok(existsSync(jobFile), 'jobs/17.json kept on disk when companion #18 cleanup fails');
+  assert.equal(JSON.parse(readFileSync(jobFile, 'utf8')).phase, 'released');
+  assert.ok(w.labels(18).includes('pdd:working'), '#18 still has pdd:working while offline');
+
+  // Restore gh and retry release 17: finishes both #18 and #17 cleanly.
+  fail18 = false;
+  const second = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, flakyPorts);
+  assert.equal(second.exitCode, 0, second.message);
+  assert.ok(!w.labels(18).includes('pdd:working'), 'companion #18 pdd:working removed on retry');
+  assert.ok(!w.labels(17).includes('pdd:working'), 'parent #17 pdd:working removed on retry');
+  assert.ok(!existsSync(jobFile), 'jobs/17.json removed only after both claims confirmed released');
+  const historyRows = readFileSync(join(coreDir, 'history.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.issue === 17);
+  assert.equal(historyRows.length, 1);
+  assert.deepEqual(historyRows[0].issues, [17, 18]);
+  assert.equal(historyRows[0].personRelease, true);
+});
+
+test('3389: history.jsonl write failure retains jobs/N.json so sweepFiles never deletes worktrees/N', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const w = await coreWorld(t);
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const { cwd, stateFile, coreDir, ports } = launcherHarness(w);
+
+  await tickAutopilot(stateFile, ports);
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  const startedJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+  const historyPath = join(coreDir, 'history.jsonl');
+
+  // Make history.jsonl a directory so appendFileSync fails with EISDIR.
+  mkdirSync(historyPath, { recursive: true });
+  const failed = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(failed.exitCode, 1);
+  assert.ok(existsSync(jobFile), 'jobs/17.json retained when history.jsonl cannot be persisted');
+  assert.equal(JSON.parse(readFileSync(jobFile, 'utf8')).phase, 'released');
+
+  // A subsequent tick runs sweepFiles: worktrees/17 MUST survive because jobs/17.json was retained!
+  w.github.unlabel(17, 'pdd:autopilot');
+  await tickAutopilot(stateFile, ports);
+  assert.ok(existsSync(startedJob.worktree), 'worktrees/17 preserved across sweepFiles even when history.jsonl write failed');
+
+  // Unblock history.jsonl and retry release 17: persists personRelease: true, unlinks jobs/17.json, and still survives sweepFiles.
+  rmSync(historyPath, { recursive: true, force: true });
+  const retried = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(retried.exitCode, 0, retried.message);
+  assert.ok(!existsSync(jobFile));
+  await tickAutopilot(stateFile, ports);
+  assert.ok(existsSync(startedJob.worktree), 'worktrees/17 remains preserved across sweepFiles after retry succeeds');
+});
+
+test('3389: competing foreign claim comment on active labelEventId refuses release read-only with zero GitHub mutations', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const w = await coreWorld(t);
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const { cwd, stateFile, coreDir, ports } = launcherHarness(w);
+
+  await tickAutopilot(stateFile, ports);
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  const startedJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+
+  // Add a competing foreign machine claim comment referencing the SAME active labelEventId (test both same-actor and different-actor comments).
+  for (const login of [w.github.owner, 'other-trusted-bot']) {
+    const issueData = w.github.issues.get(17);
+    const foreignBody = `Autopilot claimed this issue.\n\n\`\`\`json\n${JSON.stringify({
+      repository: 'acme/widgets', coordinatorId: 'coord-foreign', machine: 'm-foreign999999',
+      labelEventId: String(startedJob.claim.labelEventId), lastSeen: '',
+    })}\n\`\`\``;
+    w.github.comment(17, foreignBody, login);
+
+    const mutations = [];
+    const spyPorts = {
+      ...ports,
+      run: async (command, args, options = {}) => {
+        if (command === 'gh') {
+          const methodIdx = args.indexOf('--method');
+          const method = methodIdx >= 0 ? args[methodIdx + 1] : 'GET';
+          if (method !== 'GET') mutations.push({ method, args });
+        }
+        return ports.run(command, args, options);
+      },
+    };
+
+    const commentsBefore = issueData.comments.length;
+    const refused = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, spyPorts);
+    assert.equal(refused.exitCode, 1);
+    assert.match(refused.message, /claim ownership is unknown/);
+    assert.deepEqual(mutations, [], `zero GitHub mutations when competing claim exists (${login})`);
+    assert.equal(issueData.comments.length, commentsBefore, 'competing foreign claim comment is NOT deleted');
+    assert.ok(w.labels(17).includes('pdd:working'));
+    assert.ok(existsSync(jobFile));
+    assert.ok(w.alive.has(startedJob.agent.pid), 'running process untouched on ambiguous ownership refusal');
+
+    issueData.comments.pop();
+  }
+});
