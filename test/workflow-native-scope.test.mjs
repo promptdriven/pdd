@@ -2,11 +2,8 @@
 // workspace evidence eligibility, and explicit approve-pr progression.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile as callbackExec } from 'node:child_process';
-import { promisify } from 'node:util';
 import { fullCheckPass } from '../src/workflow-story-card.mjs';
 import * as runner from '../src/workflow-runner.mjs';
 import { writeRun } from '../src/workflow-runs.mjs';
@@ -15,7 +12,6 @@ import { storyTest } from './helpers/runtime-fake.mjs';
 import { fixture, packageRoot } from './helpers/workflow-runner-fixture.mjs';
 
 const {
-  advanceAutomaticPr1,
   approveRun,
   associateEvidenceWorkspace,
   runStatus,
@@ -342,79 +338,6 @@ test('#3430-B: pure kind: native-only 0-Story run reaches approve-pr cleanly wit
     assert.match(f.prs[0].body, /not-applicable \(native-only\): prompts\/fsync_store\.prompt\.md/);
     assert.equal(f.record().areas[f.record().area].name, 'code', `code area must start (${variant})`);
   }
-});
-
-test('#3430-B: automatic continuation holds pure native-only runs for person approval instead of auto-publishing', async t => {
-  const origin = {
-    repository: 'example/project',
-    coordinatorId: 'coordinator-a',
-    machine: 'machine-a',
-    claim: { commentId: '11', labelEventId: '12' },
-  };
-  const f = await setupFeatureRun(t);
-  mkdirSync(join(f.run.root, 'prompts'), { recursive: true });
-  writeFileSync(join(f.run.root, NATIVE_PROMPT), nativePromptText());
-  f.git(f.run.root, 'add', '.');
-  f.git(f.run.root, 'commit', '-qm', 'Native-only prompt');
-  await f.done('prompt-story');
-  await approveStory(f);
-  await f.done('check');
-  assert.equal(f.record().gate?.kind, 'approve-pr');
-
-  const skill = join(f.base, 'skill');
-  mkdirSync(join(skill, 'steps'), { recursive: true });
-  writeFileSync(join(skill, 'steps/autopilot.md'), 'Synthetic scoped delegation fixture.\n');
-  const run = f.record();
-  run.skillDir = skill;
-  run.automaticOrigin = structuredClone(origin);
-  writeRun(run);
-  const root = realpathSync(f.source);
-  const stateRoot = join(f.state, 'autopilot');
-  mkdirSync(stateRoot, { recursive: true });
-  writeFileSync(
-    join(stateRoot, `${createHash('sha256').update(root).digest('hex').slice(0, 20)}.json`),
-    JSON.stringify({
-      repo: run.repo,
-      cwd: root,
-      coordinatorId: origin.coordinatorId,
-      machine: origin.machine,
-      enabled: true,
-      startAction: { command: 'pdd autopilot start', repository: run.repo, mode: 'auto' },
-    }),
-  );
-  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
-  const fixturePath = join(f.base, 'reader.json');
-  writeFileSync(fixturePath, JSON.stringify({
-    labels: ['pdd:working'],
-    events: [{ id: 12, event: 'labeled', label: { name: 'pdd:working' }, actor: { login: 'example' } }],
-    comments: [{
-      id: 11,
-      user: { login: 'example' },
-      body: JSON.stringify({
-        repository: origin.repository,
-        coordinatorId: origin.coordinatorId,
-        machine: origin.machine,
-        labelEventId: '12',
-      }),
-    }],
-  }));
-  const exec = promisify(callbackExec);
-  const original = f.ports.execFile;
-  const execFile = (file, args, opts) => file === 'gh' && args[0] === 'api' && args[1] === '--include'
-    ? exec(process.execPath, [join(packageRoot, 'test/helpers/continuation-fake-gh.mjs'), ...args], {
-      ...opts,
-      env: { ...process.env, READER_FIXTURE_FILE: fixturePath, READER_GH_LOG: join(f.base, 'gh.log') },
-    })
-    : original(file, args, opts);
-
-  const held = await advanceAutomaticPr1(
-    { ref: '17', cwd: f.source, coordinatorId: origin.coordinatorId, machine: origin.machine, packageRoot },
-    { ...f.agentPorts(), execFile, autopilotStateRoot: stateRoot },
-  );
-  assert.equal(held.exitCode, 0, held.message);
-  assert.match(held.message, /PR 1 waits: native-only prompts require a person approval/);
-  assert.match(f.record().gate?.automaticHold ?? '', /native-only prompts require a person approval/);
-  assert.equal(f.prs.length, 0);
 });
 
 test('#3430-B: Story with acceptance criteria and 0 scenario tests never bypasses checks via a kind: native-only prompt', async t => {

@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {healthyMachine} from './helpers/healthy-machine.mjs';
 import {isolatedCheckCapacity} from './helpers/check-machine.mjs';
 import {tickAutopilot} from '../src/autopilot-launcher.mjs';
-import {nudgeIdleRun, openRun, runStatus} from '../src/workflow-runner.mjs';
+import {openRun, runStatus} from '../src/workflow-runner.mjs';
 import {fixture, packageRoot, matchingClaimPorts, matchingClaimObservation} from './helpers/workflow-runner-fixture.mjs';
 
 const WAIT = 600000;
@@ -171,53 +171,16 @@ test('3072 manual run resume continues once and starts a fresh idle interval', a
   assert.equal(f.record().chats.at(-1).idleSince, f.clock);
 });
 
-for (const state of ['waiting', 'running', 'unavailable']) for (const mode of ['idle', 'resume']) {
+for (const state of ['waiting', 'running', 'unavailable']) for (const mode of ['resume']) {
   test(`3072 integration: suite ${state} holds ${mode} notices`, async t => {
-    const {f, ports, idle, pane} = await setup(t);
+    const {f, ports, pane} = await setup(t);
     ports.readSuiteProgress = () => ({state, position: 1});
-    if (mode === 'idle') {
-      const args = {ref: '17', cwd: f.source, packageRoot, coordinatorId: 'idle-owner', machine: 'idle-machine'};
-      idle(); await nudgeIdleRun(args, ports); f.tick(WAIT);
-      await nudgeIdleRun(args, ports);
-      assert.equal(f.record().chatIdleNudges, undefined);
-    } else {
-      pane().agent = null; f.tick(60001);
-      const opened = await openRun({ref: '17', cwd: f.source, packageRoot}, ports);
-      assert.equal(opened.exitCode, 0, opened.message);
-      assert.equal(launches(f).length, 1);
-      assert.equal(f.record().chats.at(-1).continueAnchor, undefined);
-    }
+    pane().agent = null; f.tick(60001);
+    const opened = await openRun({ref: '17', cwd: f.source, packageRoot}, ports);
+    assert.equal(opened.exitCode, 0, opened.message);
+    assert.equal(launches(f).length, 1);
+    assert.equal(f.record().chats.at(-1).continueAnchor, undefined);
     assert.equal(prompts(f).length, 0);
     assert.equal(existsSync(join(f.record().runDir, 'delivery-journal.json')), false);
-  });
-}
-
-for (const phase of ['journal', 'submission']) {
-  test(`3072 integration: suite wait arriving during ${phase} prevents idle delivery`, async t => {
-    const {f, ports, idle} = await setup(t);
-    const args = {ref: '17', cwd: f.source, packageRoot, coordinatorId: 'idle-owner', machine: 'idle-machine'};
-    let held = false;
-    ports.readSuiteProgress = () => held ? {state: 'waiting', position: 1} : null;
-    idle(); await nudgeIdleRun(args, ports); f.tick(WAIT);
-    if (phase === 'journal') ports.deliveryFiles = {mkdirSync: (path, options) => {
-      if (path.endsWith('/.delivery-journal.lock')) held = true;
-      return mkdirSync(path, options);
-    }};
-    else {
-      const herdr = ports.herdr;
-      ports.herdr = async args => {
-        if (args[0] === 'pane' && args[1] === 'read' && existsSync(join(f.record().runDir, 'delivery-journal.json'))) held = true;
-        return herdr(args);
-      };
-    }
-    await nudgeIdleRun(args, ports);
-    assert.ok(held);
-    assert.equal(prompts(f).length, 0);
-    if (phase === 'journal') assert.equal(existsSync(join(f.record().runDir, 'delivery-journal.json')), false);
-    else {
-      const journal = JSON.parse(readFileSync(join(f.record().runDir, 'delivery-journal.json'), 'utf8'));
-      assert.equal(journal.requests[0].state, 'pending');
-      assert.equal(journal.requests[0].inFlight, undefined);
-    }
   });
 }

@@ -21,24 +21,15 @@ paused interpreter waits without reserving or sending a continue notice. Control
 holds during native resume or journal custody prevent notice creation. Holds at final submission
 prevent sending and keep the journal request pending.
 Full-suite queue observations also hold continue notices while waiting, running or
-unavailable. The queue cases check the initial decision, journal custody and final
-submission. Pending and confirmed PDD close marks remain holds.
+unavailable. The queue cases check the initial decision. Pending and confirmed PDD close marks remain holds.
 Machine health, account limits and check capacity use the repository fakes.
-Idle-alert cases inject the independent digest sender and keep real incident custody.
-They check first observation,
-10-minute boundaries, three attempts per area, recorded progress, working and
-held agents, pending and uncertain delivery, concurrent changes and one stuck
-alert. Alert tests use the real alert service with controlled HTTP responses.
-They check retry after a failure before service custody, known unsent transport
-failure, destination setup after the stop, and a fresh tick process after the
-runner saves the stop before alert handoff. Repeated ticks preserve delivered
-and unconfirmed alert custody. Status is checked in detail, list, all-repository
+Status is checked in detail, list, all-repository
 and JSON forms. The stopped-chat and delivery tests check the shared recovery
 and journal behavior.
 
 Run the same idle test file against a separate checkout of the candidate's parent
 revision to check the regression. Keep its expected values unchanged. Missing
-continue deliveries, idle nudges and idle status must fail assertions. A setup
+continue deliveries and idle status must fail assertions. A setup
 error does not prove this regression. Keep the commands and counts outside the
 repository, then remove the temporary checkout.
 

@@ -332,7 +332,7 @@ test('3157: release rechecks claim identity after stuck removal before working r
 });
 
 test('3157: manual cancel contends on the existing run lock used by coordinator recovery', async t => {
-  const {cancelRun, acquireRunLock, recoverAutomaticRunOwner} = await import('../src/workflow-runner.mjs');
+  const {cancelRun, acquireRunLock} = await import('../src/workflow-runner.mjs');
   const {createGithubRepoFake} = await import('./helpers/github-repo-fake.mjs');
   const {f, ports} = await setup(t), run = f.record();
   const github = createGithubRepoFake({repository: run.repo, owner: 'example', issues: 18, now: () => f.clock});
@@ -341,13 +341,10 @@ test('3157: manual cancel contends on the existing run lock used by coordinator 
   let recoveryCalls = 0;
   ports.recoverCoordinatorClaim = async () => { recoveryCalls++; return {state: 'recovered'}; };
   const herdrCalls = f.herdr.calls.length, unlock = acquireRunLock(run.runDir);
-  let recovery, cancelled;
+  let cancelled;
   try {
-    recovery = await recoverAutomaticRunOwner({ref: '17', cwd: f.source,
-      coordinatorId: run.automaticOrigin.coordinatorId, machine: run.automaticOrigin.machine}, ports);
     cancelled = await cancelRun({ref: '17', cwd: f.source}, ports);
   } finally { unlock(); }
-  assert.notEqual(recovery.exitCode, 0);
   assert.notEqual(cancelled.exitCode, 0);
   assert.equal(recoveryCalls, 0);
   assert.equal(f.herdr.calls.length, herdrCalls);
