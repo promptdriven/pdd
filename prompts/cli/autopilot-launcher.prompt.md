@@ -176,13 +176,17 @@ one alert of the given kind for the issue through this machine's [alert destinat
 the core's cause, tried and need, the core state folder, the report folder and `tickMinutes` (the installed
 interval). When using native alerts (`!ports.sendAlert`), before `tickCore` runs, the tick runs `runAutopilotAlerts({action: 'retry', ...})` so open `failed` or newly-configured `not-configured` incidents of this repository from earlier ticks are retried once credentials recover. Before the core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
 (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, share: state.share, jobs})`, where
-`jobs` is the sum of the core's `busySlots` over the core folder of every enabled state file beside this one: the
-share is for the whole machine, every repository; tests replace it with `ports.machineGuard`, #3231). The machine
+`jobs` comes from `inspectMachineJobs(stateRoot, ports)`: it scans every saved `*-core` folder under `stateRoot`
+including disabled repositories, counting `busySlots` for enabled repositories and still-running slot-holding jobs with
+live child processes for disabled repositories so disabling a repository while workers finish never hides active machine
+load, and inventories live child roles (`build`, `repair`, `review`, `suite`, `vectors`, `runtime`, `intake`) across
+`*-core/jobs/*.json` and `*-core/intake/jobs/*.json` without inflating issue-slot count; tests replace the guard with
+`ports.machineGuard`, #3231). The machine
 port includes `reserve()`: only when ready intake exists, it takes the shared machine-admission lock, refreshes this
 guard object from the current job files, and returns a release function. The core calls it immediately before its
 room check and releases it after all new job records and agents are started, so the snapshot stays current while the
 core makes its admission decision without blocking unrelated core work. The core
-settings come from `readCoreSettings(cwd, fs, {auto, runs: state.runs})`, so this machine's `start --runs N` reaches
+settings come from `readCoreSettings(cwd, fs, {auto, runs: state.runs, hardwareSlots: guard.hardwareSlots})`, so this machine's `start --runs N` reaches
 the core and a machine without it gets its automatic slots; the core gets the guard as its `machine` port (the room
 check and each job's priority). Tests may replace core ports with `ports.corePorts`. Afterwards, under the admission lock and only while
 still enabled, it saves the issue-list cache, the base fields, `intakeNote` when present, `nextTick` (now plus `timerMinutes`) and `core: {at,
@@ -245,8 +249,17 @@ settings, read only when the folder exists and is its Git root; else `unknown (n
 missing)`, `unknown (not a Git repository)` or `unknown (settings unreadable)`), enabled or disabled, and timer active,
 inactive or unknown; a state that has not moved yet adds `moves from the full engine to the core engine at its next
 tick`. Without saved state it prints `No Autopilot on this machine.` A state file that is not a JSON object prints
-`FILE: saved state unreadable`. Each line is independent, and the timer reads run from the caller's folder. Then it
-adds the local cost lines. **Status --json** prints the local cost report as JSON.
+`FILE: saved state unreadable`. Each line is independent, and the timer reads run from the caller's folder. Both
+**Status --all** (text) and **Status --json** (JSON, with or without `--all`) also include read-only machine
+observability with zero GitHub writes or OAuth refreshes: (1) one machine-level `machineGuard` summary (`guard.line` in
+text, structured `machineGuard` object in JSON, passing known `readyLogins` from the login pool and saved `share`/`runs`),
+(2) role-grouped `activeJobs` (`{build, repair, review, suite, vectors, runtime, intake}`) and `suiteQueue`
+(`readCheckStatus`), (3) fast cached Cloud & local `loginPool` summary (`listCloudAccounts({refresh: false})` fail-open
+when Cloud Accounts is enrolled, or local `loadLoginPool` + `readPoolCooldowns`: `ready`, `cooling`, `reauth_required`,
+`5H`/`7D` usage and reset times, or `unavailable` when offline without fabricating `0%`), and (4) read-only core
+`conversion` summary wired from `summarizeConversionDrops()` over saved `*-core/history.jsonl`, `*-core/intake`, and
+`core-reports` drafts. **Status --json** preserves top-level local cost report fields alongside `costs` and
+`repositories`, exiting `0`.
 
 **Add** creates the `pdd:autopilot` label when it is missing and adds it to each named issue of this repository (an
 issue of another repository returns exit 2): `Marked N issue(s) with pdd:autopilot.`
@@ -300,7 +313,7 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
   verification context for run listing and the local cost report.
 - [Worktree allocator](workflow-worktree.prompt.md): required native generation and verification context for
   `releaseIssueClaim`.
-- [Shared full-suite queue](test-suite-queue.prompt.md): required context for `releaseCheckCapacity`.
+- [Shared full-suite queue](test-suite-queue.prompt.md): required context for `releaseCheckCapacity` and `readCheckStatus`.
 - [Codex limits](codex-limits.prompt.md) and [multi-harness login pool](login-pool.prompt.md): required native
   generation and verification context for the read-only usage read and ordered multi-harness login rotation.
 - [GitHub calls](github-calls.prompt.md): required native generation and verification context for the call ledger,

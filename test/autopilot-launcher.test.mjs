@@ -606,3 +606,151 @@ test('#3230 start with explicit --agent, profile folder env, or --pool overwrite
   assert.equal(f.state().poolPath, mixedPool);
   assert.equal(f.state().intake, 'active');
 });
+
+test('inspectMachineJobs counts still-running jobs in disabled repos and inventories child roles without inflating issue slots', async t => {
+  const { startAgentJob, stopAgentJob } = await import('../src/agent-job.mjs');
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-jobs-' });
+  const stateRoot = f.ports.stateRoot;
+  mkdirSync(stateRoot, { recursive: true });
+
+  // Repo A: disabled while issue #11 still has live build + suite child processes, #12 is parked with no live PID, and #19 runs intake.
+  const idA = 'a'.repeat(20), coreA = join(stateRoot, `${idA}-core`);
+  mkdirSync(join(coreA, 'jobs'), { recursive: true });
+  mkdirSync(join(coreA, 'intake', 'jobs'), { recursive: true });
+  mkdirSync(join(coreA, 'logs'), { recursive: true });
+  writeFileSync(join(stateRoot, `${idA}.json`), JSON.stringify({ repo: 'owner/disabled-repo', cwd: f.cwd, enabled: false, engine: 'core' }));
+
+  const liveBuild = startAgentJob({ id: '11-build', dir: join(coreA, 'logs'), cwd: f.dir, command: '/bin/sh', args: ['-c', 'sleep 10'], env: { PATH: process.env.PATH } });
+  const liveSuite = startAgentJob({ id: '11-suite', dir: join(coreA, 'logs'), cwd: f.dir, command: '/bin/sh', args: ['-c', 'sleep 10'], env: { PATH: process.env.PATH } });
+  const liveIntake = startAgentJob({ id: '19-intake', dir: join(coreA, 'logs'), cwd: f.dir, command: '/bin/sh', args: ['-c', 'sleep 10'], env: { PATH: process.env.PATH } });
+  t.after(() => { stopAgentJob(liveBuild); stopAgentJob(liveSuite); stopAgentJob(liveIntake); });
+
+  writeFileSync(join(coreA, 'jobs', '11.json'), JSON.stringify({
+    issue: 11, phase: 'pr', role: 'build', agent: liveBuild, suite: { agent: liveSuite },
+  }));
+  writeFileSync(join(coreA, 'jobs', '12.json'), JSON.stringify({
+    issue: 12, phase: 'pr', role: 'build',
+  }));
+  writeFileSync(join(coreA, 'intake', 'jobs', '19.json'), JSON.stringify({
+    issue: 19, stage: 'card', job: liveIntake,
+  }));
+
+  // Repo B: enabled with 1 active repair/review/vectors/runtime job (#21) using injected jobAlive for remaining roles.
+  const idB = 'b'.repeat(20), coreB = join(stateRoot, `${idB}-core`);
+  mkdirSync(join(coreB, 'jobs'), { recursive: true });
+  writeFileSync(join(stateRoot, `${idB}.json`), JSON.stringify({ repo: 'owner/enabled-repo', cwd: f.cwd, enabled: true, engine: 'core' }));
+  const fakePart = (id, pid) => ({ id, pid, token: `tok-${id}`, exit: join(coreA, 'logs', `missing-${id}.exit.json`) });
+  writeFileSync(join(coreB, 'jobs', '21.json'), JSON.stringify({
+    issue: 21, phase: 'pr', role: 'repair',
+    agent: fakePart('21-repair', 9001),
+    review: { agent: fakePart('21-review', 9002) },
+    vectors: { agent: fakePart('21-vectors', 9003) },
+    runtimeWait: { head: 'abc', state: 'sent', agent: fakePart('21-runtime', 9004) },
+  }));
+
+  // 1. Real native process check on Repo A alone: #11 counts 1 issue slot while liveBuild/liveSuite run; #12 (no live PID) and #19 (intake) add 0 slots.
+  const realOnly = f.module.inspectMachineJobs(stateRoot, {
+    jobAlive: (pid, token) => [9001, 9002, 9003, 9004].includes(pid) ? true : [liveBuild.pid, liveSuite.pid, liveIntake.pid].includes(pid) && Boolean(token),
+  });
+  assert.equal(realOnly.slotJobs, 2, '1 finishing issue in disabled repo + 1 issue in enabled repo; child roles and intake never inflate slots');
+  assert.deepEqual(realOnly.counts, { build: 1, repair: 1, review: 1, suite: 1, vectors: 1, runtime: 1, intake: 1 });
+  assert.equal(realOnly.totalProcesses, 7);
+
+  // 2. Stopping the disabled repo workers frees its slot reservation once processes exit.
+  stopAgentJob(liveBuild); stopAgentJob(liveSuite); stopAgentJob(liveIntake);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && (!existsSync(liveBuild.exit) || !existsSync(liveSuite.exit) || !existsSync(liveIntake.exit))) {
+    await new Promise(r => setTimeout(r, 40));
+  }
+  const afterStop = f.module.inspectMachineJobs(stateRoot, { jobAlive: pid => [9001, 9002, 9003, 9004].includes(pid) });
+  assert.equal(afterStop.slotJobs, 1, 'disabled repo slot drops to 0 after workers finish');
+  assert.equal(afterStop.counts.build, 0);
+  assert.equal(afterStop.counts.suite, 0);
+  assert.equal(afterStop.counts.intake, 0);
+});
+
+test('status --all and status --json report machineGuard, role-grouped jobs, suiteQueue, Cloud/offline loginPool without fabricated 0%, and conversion drops cleanly', async t => {
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-obs-' });
+  const stateRoot = f.ports.stateRoot;
+  mkdirSync(stateRoot, { recursive: true });
+
+  const id = createHash('sha256').update(f.cwd).digest('hex').slice(0, 20);
+  const stateFile = join(stateRoot, `${id}.json`), coreDir = join(stateRoot, `${id}-core`);
+  mkdirSync(join(coreDir, 'jobs'), { recursive: true });
+  mkdirSync(join(coreDir, 'intake', 'cards'), { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({
+    repo: 'owner/repo', cwd: f.cwd, baseBranch: 'trunk', mode: 'observe', enabled: true, engine: 'core', runs: 8, share: 50,
+  }));
+  writeFileSync(join(coreDir, 'jobs', '42.json'), JSON.stringify({
+    issue: 42, phase: 'running', role: 'build',
+    agent: { id: '42-build', pid: 7771, token: 'tok-42', exit: join(coreDir, 'missing.exit.json') },
+  }));
+  writeFileSync(join(coreDir, 'intake', 'cards', '42.json'), JSON.stringify({ issue: 42, card: { class: 'ready', confidence: 0.9, reason: 'clear' } }));
+  writeFileSync(join(coreDir, 'history.jsonl'), [
+    JSON.stringify({ at: f.time - 3000, issue: 10, outcome: 'merged', pr: 101, text: 'merged cleanly' }),
+    JSON.stringify({ at: f.time - 2000, issue: 11, outcome: 'would-merge', pr: 102, text: 'green in observe mode' }),
+    JSON.stringify({ at: f.time - 1500, issue: 12, strike: true, owner: 'issue' }),
+    JSON.stringify({ at: f.time - 1000, issue: 12, outcome: 'ended', pr: null, poolExhausted: true, text: 'all accounts cooling' }),
+    JSON.stringify({ at: f.time - 500, issue: 13, outcome: 'ended', pr: 103, owner: 'pdd', text: 'review loop ended' }),
+  ].join('\n') + '\n');
+
+  let cloudCalls = [];
+  f.ports.jobAlive = pid => pid === 7771;
+  f.ports.machineGuard = async input => ({
+    share: input.share ?? 50, shareSource: 'default', slots: input.runs ?? 8, requestedSlots: 8, hardwareSlots: 16,
+    limiter: 'runs', limiterDetail: '--runs 8', readyLogins: input.readyLogins ?? null, source: 'this machine, --runs 8',
+    auto: 6, room: { ok: true, reason: null, free: 7 }, use: { jobs: input.jobs, rss: 1024 ** 3, cores: 1 },
+    line: `Machine: share 50% (default) · slots 8 · jobs ${input.jobs} · new work: ok`,
+  });
+  f.ports.listCloudAccounts = async opts => {
+    cloudCalls.push(opts);
+    return {
+      accounts: [
+        { account_id: 'acc-1', label: 'codex-alpha', provider: 'codex', state: 'ready', five_hour_used_percent: 35, five_hour_reset_at: '2026-11-04T03:00:00Z', weekly_used_percent: 62, weekly_reset_at: '2026-11-08T00:00:00Z' },
+        { account_id: 'acc-2', label: 'claude-beta', provider: 'claude', state: 'cooling', five_hour_used_percent: 100, five_hour_reset_at: '2026-11-04T02:00:00Z', weekly_used_percent: null, weekly_reset_at: null },
+        { account_id: 'acc-3', label: 'codex-expired', provider: 'codex', state: 'reauth_required', five_hour_used_percent: null, weekly_used_percent: null },
+      ],
+    };
+  };
+
+  const ghCallsBefore = f.runs.filter(([cmd]) => cmd === 'gh').length;
+  const textRes = await f.invoke('status', { all: true });
+  assert.equal(textRes.exitCode, 0, textRes.message);
+  assert.match(textRes.message, /Autopilot on this machine \(1\):/);
+  assert.match(textRes.message, /Machine: share 50% \(default\) · slots 8 · jobs 1 · new work: ok/);
+  assert.match(textRes.message, /Active jobs: 1 issue slot · roles build 1 \(#42\), repair 0, review 0, suite 0, vectors 0, runtime 0, intake 0/);
+  assert.match(textRes.message, /Suite queue: 0 running, 0 waiting/);
+  assert.match(textRes.message, /Login pool \(cloud\): ready 1, cooling 1, reauth_required 1/);
+  assert.match(textRes.message, /claude-beta \[claude cooling, 5H 100% \(2026-11-04T02:00Z\), 7D \?\]/);
+  assert.ok(textRes.message.includes('Conversion: claimed 4 → clear-spec 4 → PR 3 → merged/would-merge 2 (dropped 2: pdd 1, quota_or_service 1; pending drafts 0; intake cards 1)'), textRes.message);
+  assert.equal(cloudCalls.length, 1);
+  assert.equal(cloudCalls[0].refresh, false, 'status never triggers OAuth refresh sweeps');
+
+  const jsonRes = await f.invoke('status', { json: true });
+  assert.equal(jsonRes.exitCode, 0);
+  const payload = JSON.parse(jsonRes.message);
+  // Backward-compatible top-level cost fields + structured observability fields.
+  assert.equal(payload.schema, 'pdd.cost-report.v1');
+  assert.equal(payload.costs.schema, 'pdd.cost-report.v1');
+  assert.equal(payload.repositories.length, 1);
+  assert.equal(payload.repositories[0].repo, 'owner/repo');
+  assert.equal(payload.machineGuard.slots, 8);
+  assert.equal(payload.activeJobs.issueSlots, 1);
+  assert.equal(payload.activeJobs.counts.build, 1);
+  assert.equal(payload.suiteQueue.busyChecks, 0);
+  assert.deepEqual(payload.loginPool.counts, { total: 3, ready: 1, cooling: 1, reauth_required: 1 });
+  assert.equal(payload.loginPool.accounts[1].weeklyUsedPercent, null, 'unknown window stays null, never fabricated 0%');
+  assert.deepEqual(payload.conversion.totals, { backlog: 4, claimable: 4, claimed: 4, clearSpec: 4, prOpened: 3, mergedOrWouldMerge: 2, dropped: 2 });
+  assert.equal(payload.conversion.dropsByOwner.quota_or_service.count, 1);
+  assert.equal(payload.conversion.dropsByOwner.pdd.count, 1);
+  assert.equal(f.runs.filter(([cmd]) => cmd === 'gh').length, ghCallsBefore, 'status makes zero GitHub calls');
+
+  // Offline Cloud fail-open: reports unavailable with zero fabricated 0% values.
+  f.ports.listCloudAccounts = async () => { throw Error('network unreachable'); };
+  const offlineText = await f.invoke('status', { all: true });
+  assert.equal(offlineText.exitCode, 0);
+  assert.match(offlineText.message, /Login pool \(cloud\): unavailable/);
+  assert.doesNotMatch(offlineText.message, /Login pool.*0%/);
+  const offlineJson = JSON.parse((await f.invoke('status', { json: true })).message);
+  assert.deepEqual(offlineJson.loginPool, { source: 'cloud', state: 'unavailable', counts: null, readyLogins: null, accounts: [] });
+});
