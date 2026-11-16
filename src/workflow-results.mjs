@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: dc500739fe35c5fea8e1b5a001ec23c3ef1f76daabad195efd2820a2558aaea5).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 17e46594474fb4b9c37efc4c1ac39119eb2b10aff348c698274a925ef9e9cf26).
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -15,6 +15,7 @@ const { checkPlanResults, checkPlanResultLines } = runtimeCheckPlanSlice();
 const { outcomeText, resultOutcome } = runtimeOutcomeSlice();
 const { PROMPT_TESTS_WORDS } = runtimeOutputSlice();
 const { captureSource, gitFiles, proseSha256, sourceFilePort } = runtimePreflightSlice();
+const captureSourceAllowMissing = (dir, options) => captureSource(dir, { ...options, allowMissingInterfaces: true });
 
 const BATCH = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 export const PDD_RESULT = 'pdd result';
@@ -126,7 +127,7 @@ function savedResultState(row) {
 // pdd's own saved results for one run: the newest `pdd test` check batch, the newest `pdd lint` batch (both from the
 // runtime state folder, for this worktree, made at or after the run started) and the run's `pdd workflow prove` record.
 // It reads files only. It never runs a test, calls the interpreter or changes a file.
-export function readRunResults({ root, runDir = null, runId = null, since = 0, baseBranch = null }, { env = process.env, capture = captureSource, git = gitLine, workspace, ...nativePorts } = {}) {
+export function readRunResults({ root, runDir = null, runId = null, since = 0, baseBranch = null }, { env = process.env, capture = captureSourceAllowMissing, git = gitLine, workspace, ...nativePorts } = {}) {
   const results = [], wanted = real(root);
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
   let names = [];
@@ -516,7 +517,7 @@ function reviewedNative(selectors,selection,retained,ports,snapshotOnly=false) {
 function nativeSource(selectors,selection,reviewed,ports) {
   if(ports.source)return ports.source({...selectors,selection,reviewed});
   const profile=selection.profile, paths=distinct([...profile.sourcePaths,...profile.testPaths,selection.promptPath]);
-  const capture=(ports.capture ?? captureSource)(selectors.root,{tests:paths,appMap:null});
+  const capture=(ports.capture ?? captureSourceAllowMissing)(selectors.root,{tests:paths,appMap:null});
   const hashPaths=paths=>digest(Buffer.concat(paths.map(path=>Buffer.concat([Buffer.from(`${path}\0`),Buffer.from(selection.read(path)),Buffer.from('\0')]))));
   return {sourceId:capture.sha256,implementationId:hashPaths(profile.sourcePaths),testsId:hashPaths(profile.testPaths),requirementsId:digest(`${selection.promptPath}\0${selectors.profileId}\0${proseSha256(selection.content)}`),paths,tests:profile.testPaths,source_sha256:capture.sha256};
 }
