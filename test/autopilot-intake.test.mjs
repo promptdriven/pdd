@@ -682,41 +682,45 @@ function miniHarness(root, { repo = 'acme/widgets', cwd = root, agent = { kind: 
       return {};
     },
   };
-  const ctx = {
-    fs: nodeFs, now: () => now, root, repo, state: { agent, cwd }, settings: { intake }, budget: { state: 'normal' }, gh, jobs,
-    ports: { trusted: async () => true, agentReady: async () => true, env: { HOME: root, ...env }, alert: async a => alerts.push(a) }, warn: () => {},
-  };
+  const ctx = { fs: nodeFs, now: () => now, root, repo, state: { agent, cwd }, settings: { intake }, budget: { state: 'normal' }, gh, jobs,
+    ports: { trusted: async () => true, agentReady: async () => true, env: { HOME: root, ...env }, alert: async a => alerts.push(a) }, warn: () => {} };
   return { ctx, alive, started, comments, labelWrites, closed, alerts, now: () => now };
 }
 
-test('autopilot-intake-multiline-and-refinement: parses multiline JSON after brace warnings and renders root_cause/out_of_scope', async () => {
+test('autopilot-intake-multiline-and-refinement: linear scanner handles deep braces, string braces, newest Claude envelope, and root_cause/out_of_scope', async () => {
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os');
   const root = mkdtempSync(join(tmpdir(), 'pdd-intake-ml-'));
   try {
-    const cardPayload = { class: 'improve', reason: 'Needs repo check.', confidence: 0.85, areas: ['src/a.mjs'], size: 'small' };
-    assert.equal(parseCardText('Warning: ignored configuration {}\n' + JSON.stringify(cardPayload, null, 2))?.class, 'improve');
+    const t0 = performance.now();
+    parseCardText('{"a":\n'.repeat(8000) + '0' + '}'.repeat(8000));
+    assert.equal(parseCardText('{"bad":\n'.repeat(8000) + 'x' + '}'.repeat(8000)), null);
+    assert.ok(performance.now() - t0 < 200, 'deeply nested braces parse in linear time (<200ms)');
+    assert.equal(parseCardText('Warning: ignored configuration {}\n  ' + JSON.stringify({ class: 'ready', reason: '{} '.repeat(300) }, null, 2))?.class, 'ready');
 
-    const rows = [{ number: 31, title: 'Clarify timeout handling', body: 'Make timeout clear.', labels: [], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:00:00Z' }];
+    const rows = [
+      { number: 31, title: 'Clarify timeout handling', body: 'Make timeout clear.', labels: [], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:00:00Z' },
+      { number: 32, title: 'Normalize flag order', body: 'Clean up order.', labels: [], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:01:00Z' },
+    ];
     const cl = miniHarness(root, { agent: { kind: 'claude', model: 'claude-sonnet-4-6' }, intake: 'active', env: { GH_TOKEN: 'sec' } });
     await activeIntake(cl.ctx, rows);
     assert.equal(cl.started[0].command, 'claude'); assert.equal(cl.started[0].env.GH_TOKEN, undefined);
-    const cardEnvelope = { type: 'result', is_error: false, result: 'Warning: ignored configuration {}\n' + JSON.stringify(cardPayload, null, 2) };
-    writeFileSync(cl.started[0].log, 'Warning: ignored configuration {}\n' + JSON.stringify(cardEnvelope, null, 2));
-    cl.alive.delete(cl.started[0].pid);
+    const cardPayload = { class: 'improve', reason: 'Needs repo check.', confidence: 0.85, areas: ['src/a.mjs'], size: 'small' };
+    writeFileSync(cl.started.find(j => j.issue === 31).log, 'Warning: ignored configuration {}\n' + JSON.stringify({ type: 'result', is_error: false, result: 'Warning: ignored configuration {}\n' + JSON.stringify(cardPayload, null, 2) }, null, 2));
+    const staleSingle = JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify({ class: 'blocked', reason: 'Stale earlier line.', confidence: 0.9 }) });
+    const newerPretty = JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify({ class: 'ready', reason: 'Newer multiline.', confidence: 0.95, areas: ['src/b.mjs'], size: 'small' }, null, 2) }, null, 2);
+    writeFileSync(cl.started.find(j => j.issue === 32).log, `${staleSingle}\nWarning: ignored configuration {}\n${newerPretty}\n`);
+    for (const j of cl.started) cl.alive.delete(j.pid);
     await activeIntake(cl.ctx, rows);
-    assert.equal(cl.started[1].command, 'claude'); assert.equal(cl.started[1].role, 'intake-improve');
-    const impEnvelope = {
-      type: 'result', is_error: false,
-      result: JSON.stringify({
-        outcome: 'ready', reason: 'Grounded in src/a.mjs.', areas: ['src/a.mjs'],
-        root_cause: 'parseTimeout ignores 0 in src/a.mjs', reproduction: 'parseTimeout(0) falls back to 30000',
-        out_of_scope: ['Do not change CLI flag names'], acceptance_criteria: ['parseTimeout(0) returns 0'], size: 'small', model: 'claude-sonnet-4-6',
-      }, null, 2),
-    };
-    writeFileSync(cl.started[1].log, 'Warning: ignored configuration {}\n' + JSON.stringify(impEnvelope, null, 2));
-    cl.alive.delete(cl.started[1].pid);
+    const impJob = cl.started.find(j => j.issue === 31 && j.role === 'intake-improve');
+    writeFileSync(impJob.log, 'Warning: ignored configuration {}\n' + JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify({
+      outcome: 'ready', reason: 'Grounded in src/a.mjs.', areas: ['src/a.mjs'], root_cause: 'parseTimeout ignores 0 in src/a.mjs',
+      reproduction: 'parseTimeout(0) falls back to 30000', out_of_scope: ['Do not change CLI flag names'], acceptance_criteria: ['parseTimeout(0) returns 0'], size: 'small', model: 'claude-sonnet-4-6',
+    }, null, 2) }, null, 2));
+    cl.alive.delete(impJob.pid);
     await activeIntake(cl.ctx, rows);
-    const promoted = readIntake({ root, now: cl.now() }).cards[0], posted = cl.comments.get(31)?.[0]?.body ?? '';
+    const by = Object.fromEntries(readIntake({ root, now: cl.now() }).cards.map(c => [c.issue, c]));
+    assert.equal(by[32].card.class, 'ready', 'newer multiline Claude envelope wins over older single-line envelope');
+    const promoted = by[31], posted = cl.comments.get(31)?.[0]?.body ?? '';
     assert.equal(promoted.card.class, 'ready'); assert.equal(promoted.card.root_cause, 'parseTimeout ignores 0 in src/a.mjs');
     assert.deepEqual(promoted.card.out_of_scope, ['Do not change CLI flag names']);
     assert.match(promoted.refinedSpec, /Root cause: parseTimeout ignores 0 in src\/a\.mjs/);
@@ -727,51 +731,51 @@ test('autopilot-intake-multiline-and-refinement: parses multiline JSON after bra
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('autopilot-intake-preflight-dispositions: downgrades text-only ready bugs with missing repo paths and records fixed/elsewhere once without decision alerts', async () => {
+test('autopilot-intake-preflight-dispositions: downgrades missing-path ready bugs, enforces non-empty disposition evidence, and records fixed/elsewhere once', async () => {
+  for (const outcome of ['fixed', 'elsewhere']) {
+    for (const evidence of [undefined, null, '', '   ', '\u0000\u0007\u001b \t\n']) {
+      assert.equal(readImprovement({ outcome, reason: 'No proof.', evidence, target_repo: 'acme/other' }), null, `${outcome} rejects blank evidence`);
+    }
+  }
+  assert.equal(readImprovement({ outcome: 'fixed', reason: 'Done on HEAD.', evidence: 'line 1' })?.outcome, 'fixed');
   const { mkdtempSync } = await import('node:fs'); const { tmpdir } = await import('node:os');
   const root = mkdtempSync(join(tmpdir(), 'pdd-intake-disp-'));
   try {
     const repoCwd = join(root, 'repo'); mkdirSync(join(repoCwd, 'src'), { recursive: true });
     writeFileSync(join(repoCwd, 'src', 'existing.mjs'), 'export const ok = true;\n');
     const h = miniHarness(root, { repo: 'acme/widgets', cwd: repoCwd });
-    const rows = [
-      { number: 71, title: 'Fix stream crash in src/legacy-split/driver.mjs', body: 'Throws in src/legacy-split/driver.mjs on EOF.', labels: ['bug'], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:00:00Z' },
-      { number: 72, title: 'Add new module src/new-feature.mjs', body: 'Create new module src/new-feature.mjs.', labels: ['enhancement'], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:01:00Z' },
-      { number: 73, title: 'Fix null check in src/existing.mjs', body: 'Bug in src/existing.mjs.', labels: ['bug'], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:02:00Z' },
-    ];
+    const mk = (number, title, body, labels = ['bug']) => ({ number, title, body, labels, assignees: [], comments: 0, user: { login: 'acme' }, created_at: `2026-11-01T00:0${number - 70}:00Z` });
+    const rows = [mk(71, 'Fix stream crash in src/legacy-split/driver.mjs', 'Throws in src/legacy-split/driver.mjs on EOF.'), mk(72, 'Add new module src/new-feature.mjs', 'Create new module src/new-feature.mjs.', ['enhancement']), mk(73, 'Fix null check in src/existing.mjs', 'Bug in src/existing.mjs.')];
     const finish = (job, obj) => { writeFileSync(job.args[job.args.indexOf('--output-last-message') + 1], JSON.stringify(obj)); h.alive.delete(job.pid); };
     await activeIntake(h.ctx, rows);
     finish(h.started.find(j => j.issue === 71), { class: 'ready', reason: 'Fix EOF crash.', confidence: 0.9, areas: ['src/legacy-split/driver.mjs'], size: 'small' });
     finish(h.started.find(j => j.issue === 72), { class: 'ready', reason: 'Add helper module.', confidence: 0.9, areas: ['src/new-feature.mjs'], size: 'small' });
     await activeIntake(h.ctx, rows);
     const by1 = Object.fromEntries(readIntake({ root, now: h.now() }).cards.map(c => [c.issue, c]));
-    assert.equal(by1[71].card.class, 'improve', 'missing bug path downgraded from text-only ready to improve');
-    assert.match(by1[71].card.reason, /src\/legacy-split\/driver\.mjs not found on HEAD/);
-    assert.equal(by1[72].card.class, 'ready', 'feature adding new file is never downgraded');
-    finish(h.started.find(j => j.issue === 71 && j.role === 'intake-improve'), {
-      outcome: 'elsewhere', reason: 'Driver moved to acme/driver-client.', target_repo: 'https://github.com/acme/driver-client',
-      evidence: 'src/legacy-split/ is absent on HEAD; driver moved to acme/driver-client.', areas: ['package.json'], model: 'gpt-test',
-    });
+    assert.equal(by1[71].card.class, 'improve'); assert.match(by1[71].card.reason, /src\/legacy-split\/driver\.mjs not found on HEAD/);
+    assert.equal(by1[72].card.class, 'ready');
+    finish(h.started.find(j => j.issue === 71 && j.role === 'intake-improve'), { outcome: 'elsewhere', reason: 'Driver moved to acme/driver-client.', target_repo: 'https://github.com/acme/driver-client', evidence: 'src/legacy-split/ is absent on HEAD; driver moved to acme/driver-client.', areas: ['package.json'], model: 'gpt-test' });
     finish(h.started.find(j => j.issue === 73 && j.role === 'intake'), { class: 'ready', reason: 'Guard null in src/existing.mjs.', confidence: 0.9, areas: ['src/existing.mjs'], size: 'small' });
-    rows.push({ number: 74, title: 'Fix stale guard in src/existing.mjs', body: 'Needs check.', labels: ['bug'], assignees: [], comments: 0, user: { login: 'acme' }, created_at: '2026-11-01T00:03:00Z' });
+    rows.push(mk(74, 'Fix stale guard in src/existing.mjs', 'Needs check.'), mk(75, 'Fix unproved claim in src/existing.mjs', 'Needs proof.'));
     await activeIntake(h.ctx, rows);
     finish(h.started.find(j => j.issue === 74 && j.role === 'intake'), { class: 'improve', reason: 'Check if already fixed.', confidence: 0.8, areas: ['src/existing.mjs'] });
+    finish(h.started.find(j => j.issue === 75 && j.role === 'intake'), { class: 'improve', reason: 'Check proof.', confidence: 0.8, areas: ['src/existing.mjs'] });
     await activeIntake(h.ctx, rows);
-    finish(h.started.find(j => j.issue === 74 && j.role === 'intake-improve'), {
-      outcome: 'fixed', reason: 'Null guard already exists on HEAD.', evidence: 'src/existing.mjs already exports ok = true with guard.', areas: ['src/existing.mjs'], model: 'gpt-test',
-    });
+    finish(h.started.find(j => j.issue === 74 && j.role === 'intake-improve'), { outcome: 'fixed', reason: 'Null guard already exists on HEAD.', evidence: 'src/existing.mjs already exports ok = true with guard.', areas: ['src/existing.mjs'], model: 'gpt-test' });
+    finish(h.started.find(j => j.issue === 75 && j.role === 'intake-improve'), { outcome: 'elsewhere', reason: 'Claims elsewhere without proof.', target_repo: 'https://github.com/acme/driver-client', evidence: ' \u0007\u001b ', areas: ['src/existing.mjs'], model: 'gpt-test' });
     const jobsBefore = h.started.length;
     await activeIntake(h.ctx, rows); await activeIntake(h.ctx, rows); await activeIntake(h.ctx, rows);
     assert.equal(h.started.length, jobsBefore, 'no extra card or improve jobs on subsequent ticks');
     const finalBy = Object.fromEntries(readIntake({ root, now: h.now() }).cards.map(c => [c.issue, c]));
-    assert.equal(finalBy[73].card.class, 'ready', 'bug citing existing path stays ready');
-    assert.equal(finalBy[71].card.class, 'elsewhere'); assert.equal(finalBy[71].card.start, false);
-    assert.equal(finalBy[71].card.target_repo, 'https://github.com/acme/driver-client');
+    assert.equal(finalBy[73].card.class, 'ready');
+    assert.equal(finalBy[71].card.class, 'elsewhere'); assert.equal(finalBy[71].card.start, false); assert.equal(finalBy[71].card.target_repo, 'https://github.com/acme/driver-client');
     assert.equal(finalBy[74].card.class, 'fixed'); assert.equal(finalBy[74].card.start, false);
+    assert.equal(finalBy[75].card, undefined, 'proof-free disposition fails closed without saving fixed/elsewhere card');
+    assert.match(finalBy[75].error ?? '', /disposition requires concrete repository evidence/);
+    assert.equal(h.comments.get(75), undefined, 'proof-free disposition posts zero GitHub comments');
     assert.equal(h.comments.get(71)?.length, 1); assert.match(h.comments.get(71)[0].body, /<!-- pdd:autopilot-intake:disposition:71:/);
     assert.equal(h.comments.get(74)?.length, 1); assert.match(h.comments.get(74)[0].body, /<!-- pdd:autopilot-intake:disposition:74:/);
     assert.deepEqual(h.labelWrites, []); assert.deepEqual(h.closed, []); assert.deepEqual(h.alerts, []);
     assert.deepEqual(readIntake({ root, now: h.now() }).wouldPick, [73, 72]);
-    assert.equal(readImprovement({ outcome: 'fixed', reason: 'Done on HEAD.', evidence: 'line 1' })?.outcome, 'fixed');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

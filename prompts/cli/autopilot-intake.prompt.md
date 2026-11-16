@@ -117,10 +117,11 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   decision is needed), duplicate (same problem or goal as another listed issue;
   same words are not enough), blocked, held, fixed (the comments show it no longer
   happens) and elsewhere (another repository).
-- Answer: Codex's ANSWER file, or the last JSON line (or balanced multiline JSON
-  object) with a `result` string in Claude's log; at most 64 KB, else an error card.
-  `parseCardText` extracts the balanced trailing JSON object (ignoring code fences or
-  leading warning lines that contain braces).
+- Answer: Codex's ANSWER file, or the latest JSON object (single-line or
+  multiline) with a `result` string in Claude's log; at most 64 KB, else an error
+  card. `parseCardText` uses a linear string-aware brace scanner to extract
+  balanced JSON objects newest-first (ignoring code fences, braces inside strings
+  or leading warning lines that contain braces).
 - Card result (`readCard(result)`): `class` must be one of the eight classes and
   `reason` a non-empty string, else the card fails. Control characters are removed
   from every kept string. Kept fields: `start` (true for ready and improve),
@@ -158,11 +159,13 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   passing trusted spec-refinement or disposition comments into active `cardPrompt`
   as `spec_refinement`, and reconciling `prevImproved` across non-human version
   bumps for `ready`, `fixed` and `elsewhere` cards, never `person` cards). When
-  `outcome` is `fixed` or `elsewhere`, save the card with `class: outcome`
-  (`start: false`) and optional `evidence` and `target_repo`, and post at most one
-  marker-guarded comment `<!-- pdd:autopilot-intake:disposition:N:VERSION:BODYKEY -->`
-  without closing the issue, adding `pdd:needs-decision` or firing a `decision`
-  alert. When `outcome` is `person` (only for a
+  `outcome` is `fixed` or `elsewhere`, require non-empty cleaned `evidence` (else
+  reject so dispositions fail closed), save the card with `class: outcome`
+  (`start: false`), required `evidence` and optional `target_repo`, and post at
+  most one marker-guarded comment
+  `<!-- pdd:autopilot-intake:disposition:N:VERSION:BODYKEY -->` without closing the
+  issue, adding `pdd:needs-decision` or firing a `decision` alert. When `outcome`
+  is `person` (only for a
   genuine human product, money, access or contract choice), post one concise
   question comment with
   `<!-- pdd:autopilot-core:question:N:intake-VERSION:BODYKEY -->`, add label
