@@ -615,10 +615,11 @@ warns. The numbers are the guard's `logDays` and `logBytes`.
 
 Jobs run through the [headless job runner](agent-job.prompt.md) with
 `agentCommand` for Codex, Claude, Gemini and agy and `jobEnvironment(env)` (using the selected pool login's `agent` and isolated `env` when `ports.selectLogin` is present), in `logs/`, with id
-`N-ROLE-STAMP`. `agentModelFamily(agent, explicitModel = null)` (exported) maps core
-agent kinds to model families: `codex` -> `openai`, `claude` -> `anthropic`, `gemini` ->
-`google`, and `agy` -> `google` unless an explicit model string on the agent or resolved
-step tier clearly names `claude` (`anthropic`) or `gpt-`/`o1`/`o3`/`o4` (`openai`).
+`N-ROLE-STAMP`. `agentModelFamily(agent, explicitModel = null)` (exported) maps a core
+agent kind or pool login spec (`agent.harness ?? agent.kind`) to model families:
+`codex` -> `openai`, `claude` -> `anthropic`, `gemini` -> `google`, and `agy` ->
+`google` unless an explicit model string on the login/agent or resolved step tier
+clearly names `claude` (`anthropic`) or `gpt-`/`o1`/`o3`/`o4` (`openai`).
 When a `build` or `repair` job starts (or a `conflict` job when no builder family is
 recorded yet), the job persists the builder's `agentKind`, `builderFamily` and, when
 present, `builderLoginId`. The prompt names the job's result file path. Every job runs the pdd
@@ -833,10 +834,12 @@ the evidence record.
   accepted too) when the failure does not reproduce and the repair made no code changes.
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
   that did not write the change. When `job.builderFamily` is known and no login is
-  preselected from a quota retry, `reviewState` first probes `selectAgentStep` with
-  `allowedKinds` set to the core kinds (`codex`, `claude`, `gemini`, `agy`) whose
-  reviewer model family differs from `job.builderFamily`. When an alternate-family
-  reviewer is selected, `job.review` records `reviewFamily` and `reviewIndependence:
+  preselected from a quota retry, `reviewState` first probes `selectAgentStep` across
+  candidate core kinds and filters pool logins individually by per-login effective
+  `agentModelFamily(login.harness ?? login.kind, login.model) !== job.builderFamily`
+  (so a multi-family harness such as `agy` skips same-family logins while still
+  selecting ready alternate-family `agy` logins rather than excluding `agy` as a whole).
+  When an alternate-family reviewer is selected, `job.review` records `reviewFamily` and `reviewIndependence:
   "cross-family"`. When no alternate-family login is ready or available (for example a
   single-provider setup or an alternate family on cooldown), `reviewState` immediately
   falls back to `selectAgentStep` across any ready kind without parking the PR, leaking
@@ -1270,7 +1273,10 @@ runs until its end):
    code file a binding or a Generated from header (path c); a non-code change takes
    path d, with no new prompt.`); R4 a file of the base with no owner (for a renamed
    file, its source) that the head gives a binding or header, unless the issue asks to
-   adopt PDD or the file is on a `Path: e` line paired with a newly added owning
+   adopt PDD or the file is an eligible production/app code file (never `README.md`,
+   `RUNBOOK.md`, `AGENTS.md`, `docs/*`, `skills/*`, `test/*`, `tests/*`, `.github/*`,
+   `prompts/*`, `stories/*`, `user_stories/*`, fixtures/examples, dotfiles, or
+   package/config/lock files) on a `Path: e` line paired with a newly added owning
    `.prompt.md` in this PR (in which case that new owning prompt and its path `e` pairing
    also satisfy R3 and R7); R6 no `Path:` line; R8 the PR changes `pdd-bindings.json`, the base one
    can be read and the head's cannot (`pdd-bindings.json cannot be read at this head: fix it (pdd owner

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 2bb3df4eb23edbee4eaac19eb87f09e131f9f40b12fb1a3f38b8c2d99dd9b8d2).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: b1766aa7c813f7777a669436f0a73dc1236c28073c4d890d3b0dee0d8409ef5c).
 import * as nativeFs from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -11,12 +11,12 @@ import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mj
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
-import { findOwners, promptHeaderHash, resolveOwners } from './file-owner.mjs';
+import { findOwners, isTestOwnedPath, promptHeaderHash, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode } from './autopilot-intake.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
-import { classifyRateLimitFailure, isQuotaExhaustionMessage, POOL_FALLBACK_COOLDOWN_MS } from './login-pool.mjs';
+import { classifyRateLimitFailure, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 
 const { interfaceBlocks, proseSha256, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
@@ -1097,7 +1097,8 @@ function skillsCheck(ctx, agent = ctx.state.agent, baseEnv = ctx.ports.env ?? pr
 }
 const CORE_AGENT_KINDS = ['codex', 'claude', 'gemini', 'agy'];
 export function agentModelFamily(agent, explicitModel = null) {
-  const kind = typeof agent === 'string' ? agent.trim().toLowerCase() : (named(agent?.kind) ? agent.kind.trim().toLowerCase() : '');
+  const rawKind = typeof agent === 'string' ? agent : (named(agent?.harness) ? agent.harness : (named(agent?.kind) ? agent.kind : ''));
+  const kind = rawKind.trim().toLowerCase();
   if (kind === 'codex') return 'openai';
   if (kind === 'claude') return 'anthropic';
   if (kind === 'gemini') return 'google';
@@ -1133,13 +1134,17 @@ function resolveEffectiveAgentModel(ctx, role, agent = ctx.state.agent, env = ct
   }
 }
 function resolveAgentFamily(ctx, role, agent = ctx.state.agent, env = ctx.ports.env ?? process.env) {
-  return agentModelFamily(agent, resolveEffectiveAgentModel(ctx, role, agent, env));
+  const kind = named(agent?.harness) ? agent.harness.trim() : agent?.kind;
+  const spec = object(agent) ? { ...agent, ...(named(kind) ? { kind } : {}) } : agent;
+  return agentModelFamily(spec, resolveEffectiveAgentModel(ctx, role, spec, env));
 }
 function alternateReviewerKinds(ctx, builderFamily) {
   if (!named(builderFamily)) return [];
   const env = ctx.ports.env ?? process.env;
+  const pooled = Boolean(ctx.ports.selectLogin);
   return CORE_AGENT_KINDS.filter(kind => {
-    const probe = ctx.state.agent?.kind === kind ? ctx.state.agent : { kind };
+    if (pooled && kind === 'agy') return true;
+    const probe = !pooled && ctx.state.agent?.kind === kind ? ctx.state.agent : { kind };
     const family = resolveAgentFamily(ctx, 'review', probe, env);
     return Boolean(family && family !== builderFamily);
   });
@@ -1208,7 +1213,15 @@ async function selectAgentStep(ctx, issue = null, opts = null) {
     if (allowedKinds && !allowedKinds.includes(ctx.state.agent?.kind)) return { state: 'unavailable', selected: null };
     return { state: 'ready', selected: null };
   }
-  const selected = allowedKinds ? await ctx.ports.selectLogin({ allowedKinds }) : await ctx.ports.selectLogin();
+  const callOpts = allowedKinds ? {
+    allowedKinds,
+    ...(named(opts?.excludeFamily) ? { excludeFamily: opts.excludeFamily } : {}),
+    ...(typeof opts?.filterLogin === 'function' ? { filterLogin: opts.filterLogin } : {}),
+    ...(Array.isArray(opts?.skipLoginIds) && opts.skipLoginIds.length ? { skipLoginIds: opts.skipLoginIds } : {}),
+    ...(Array.isArray(opts?.skipAccountIds) && opts.skipAccountIds.length ? { skipAccountIds: opts.skipAccountIds } : {}),
+    ...(opts?.fresh === true ? { fresh: true } : {}),
+  } : undefined;
+  const selected = callOpts ? await ctx.ports.selectLogin(callOpts) : await ctx.ports.selectLogin();
   if (selected === null) {
     if (allowedKinds && !allowedKinds.includes(ctx.state.agent?.kind)) return { state: 'unavailable', selected: null };
     return { state: 'ready', selected: null };
@@ -1221,6 +1234,87 @@ async function selectAgentStep(ctx, issue = null, opts = null) {
   const reason = selected?.cooling?.[0]?.reason ?? selected?.unavailable?.[0]?.reason ?? 'usage-limit';
   const poolOut = await recordPoolExhausted(ctx, selected, reason, issue);
   return { state: 'exhausted', poolOut };
+}
+async function selectCrossFamilyReviewer(ctx, job) {
+  if (!named(job.builderFamily)) return null;
+  const baseEnv = ctx.ports.env ?? process.env;
+  const isAlternateEntry = (entry, env = baseEnv) => {
+    const family = resolveAgentFamily(ctx, 'review', entry, env);
+    return Boolean(family && family !== job.builderFamily);
+  };
+  if (!ctx.ports.selectLogin) {
+    return isAlternateEntry(ctx.state.agent, baseEnv) ? { state: 'ready', selected: null } : { state: 'unavailable', selected: null };
+  }
+  const alternateFamilyKinds = alternateReviewerKinds(ctx, job.builderFamily);
+  if (!alternateFamilyKinds.length) return { state: 'unavailable', selected: null };
+  const filterLogin = login => isAlternateEntry(login, loginEnvironment(baseEnv, login));
+  let probe = await selectAgentStep(ctx, job.issue, { allowedKinds: alternateFamilyKinds, excludeFamily: job.builderFamily, filterLogin, probeOnly: true });
+  if (probe.state !== 'ready') return { state: 'unavailable', selected: null };
+  const selectedEntryOf = step => step.selected?.agent ?? step.selected?.login ?? ctx.state.agent;
+  if (isAlternateEntry(selectedEntryOf(probe), probe.selected?.env ?? baseEnv)) return probe;
+  if (probe.selected?.cloud) return { state: 'unavailable', selected: null };
+
+  const skippedIds = new Set();
+  const initialId = probe.selected?.login?.id ?? probe.selected?.agent?.id;
+  if (named(initialId)) skippedIds.add(initialId);
+  const maxProbes = Math.min(24, Math.max(1, probe.selected?.poolSize ?? 8));
+  for (let i = 0; i < maxProbes && skippedIds.size > 0; i++) {
+    const next = await selectAgentStep(ctx, job.issue, {
+      allowedKinds: alternateFamilyKinds,
+      excludeFamily: job.builderFamily,
+      filterLogin,
+      skipLoginIds: [...skippedIds],
+      skipAccountIds: [...skippedIds],
+      fresh: true,
+      probeOnly: true,
+    });
+    if (next.state !== 'ready') break;
+    if (isAlternateEntry(selectedEntryOf(next), next.selected?.env ?? baseEnv)) return next;
+    const nextId = next.selected?.login?.id ?? next.selected?.agent?.id;
+    if (!named(nextId) || skippedIds.has(nextId) || next.selected?.cloud) break;
+    skippedIds.add(nextId);
+  }
+
+  if (named(probe.selected?.poolPath) || probe.selected?.configured === true) {
+    try {
+      const poolBaseEnv = ctx.ports.env ?? (() => {
+        const copy = { ...(probe.selected?.env ?? process.env) };
+        for (const k of Object.keys(probe.selected?.login?.env ?? {})) {
+          if (!(k in process.env)) delete copy[k];
+        }
+        return copy;
+      })();
+      const resolvedPoolPath = named(probe.selected?.poolPath) ? probe.selected.poolPath : undefined;
+      const loaded = loadLoginPool({ cwd: ctx.state.cwd, env: poolBaseEnv, poolPath: resolvedPoolPath, fallbackAgent: ctx.state.agent }, { fs: ctx.fs });
+      const crossLogins = loaded.logins.filter(login => isAlternateEntry(login, loginEnvironment(poolBaseEnv, login)));
+      if (crossLogins.length) {
+        const crossKinds = [...new Set(crossLogins.map(login => login.harness ?? login.kind))];
+        const filtered = await selectPoolLogin(
+          {
+            cwd: ctx.state.cwd,
+            env: poolBaseEnv,
+            poolPath: probe.selected.poolPath,
+            pool: { ...loaded, logins: crossLogins },
+            fallbackAgent: ctx.state.agent,
+            stateRoot: ctx.root,
+            allowedKinds: crossKinds,
+          },
+          { fs: ctx.fs, now: ctx.now, ...(object(ctx.ports.loginPoolPorts) ? ctx.ports.loginPoolPorts : {}) },
+        );
+        if (filtered?.state === 'ready' && isAlternateEntry(filtered.agent ?? filtered.login, filtered.env ?? poolBaseEnv)) {
+          clearPoolExhausted(ctx);
+          return { state: 'ready', selected: filtered };
+        }
+      }
+    } catch { /* Fall through to strict non-multi-family kind probe. */ }
+  }
+
+  const strictKinds = alternateFamilyKinds.filter(kind => kind !== 'agy' && resolveAgentFamily(ctx, 'review', { kind }, baseEnv) !== job.builderFamily);
+  if (strictKinds.length) {
+    const retry = await selectAgentStep(ctx, job.issue, { allowedKinds: strictKinds, fresh: true, probeOnly: true });
+    if (retry.state === 'ready' && isAlternateEntry(selectedEntryOf(retry), retry.selected?.env ?? baseEnv)) return retry;
+  }
+  return { state: 'unavailable', selected: null };
 }
 async function pausePrForPool(ctx, job, poolOut, reason) {
   await stopChecks(ctx, job);
@@ -1786,19 +1880,8 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
     if (job.review?.agent && !await cleanupPart(ctx, job, job.review.agent, 'review')) return { state: 'running' };
     let step = preselected ? { state: 'ready', selected: preselected } : null;
     if (!step && named(job.builderFamily)) {
-      const alternateFamilyKinds = alternateReviewerKinds(ctx, job.builderFamily);
-      if (alternateFamilyKinds.length) {
-        let preferred = await selectAgentStep(ctx, job.issue, { allowedKinds: alternateFamilyKinds, probeOnly: true });
-        if (preferred.state === 'ready' && !preferred.selected?.cloud && preferred.selected?.agent?.kind === 'agy'
-          && resolveAgentFamily(ctx, 'review', preferred.selected.agent, preferred.selected.env) === job.builderFamily) {
-          const narrower = alternateFamilyKinds.filter(kind => kind !== 'agy');
-          if (narrower.length) {
-            const retry = await selectAgentStep(ctx, job.issue, { allowedKinds: narrower, probeOnly: true });
-            if (retry.state === 'ready') preferred = retry;
-          }
-        }
-        if (preferred.state === 'ready') step = preferred;
-      }
+      const preferred = await selectCrossFamilyReviewer(ctx, job);
+      if (preferred?.state === 'ready') step = preferred;
     }
     if (!step) step = await selectAgentStep(ctx, job.issue);
     if (step.state === 'exhausted') {
@@ -3688,11 +3771,25 @@ export function pathRules({ changed = [], baseFiles = [], before = EMPTY_READ, a
   if (before.bindings && !after.bindings && changed.some(c => c.path === 'pdd-bindings.json')) red('pdd-bindings.json cannot be read at this head: fix it (pdd owner needs valid JSON with schema_version pdd.bindings.v1 and a modules array, at most 64 KiB).');
   const moved = c => c.from && c.from !== c.path ? ` (moved from ${c.from})` : '';
   const readLine = line => `read "${line.field}" in the files field of the line "${line.line}"`;
+  const PATH_E_EXCLUDED_DIR = /^(?:docs?|skills|prompts|user_stories|stories|\.github|\.agents|\.claude|\.codex)\//i;
+  const PATH_E_FIXTURE_DIR = /(?:^|\/)((?:fixtures|examples))\//i;
+  const PATH_E_DOTFILE = /(?:^|\/)\.[^/]+$/;
+  const PATH_E_CONFIG_OR_META = /^(?:[^/]+\.config\.[^/]+)$|(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.(?:toml|lock)|poetry\.lock|Pipfile(?:\.lock)?|pyproject\.toml|Gemfile(?:\.lock)?|composer\.(?:json|lock)|go\.(?:mod|sum)|pdd(?:-bindings)?\.json|tsconfig[^/]*\.json|jsconfig\.json|(?:eslint|prettier|vite|vitest|jest|babel|rollup|webpack|tailwind|postcss)\.config\.[^/]+|Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Justfile|Vagrantfile|Rakefile|LICENSE(?:\.[^/]+)?|NOTICE(?:\.[^/]+)?|COPYING(?:\.[^/]+)?|CODEOWNERS|OWNERS|AUTHORS)$/i;
+  const PATH_E_NON_CODE_EXT = /\.(?:mdx?|rst|txt|adoc|json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|eot)$/i;
+  const isEligiblePathECode = path => {
+    if (!named(path) || path.startsWith('/') || /[\\\x00-\x1f\x7f]/.test(path)) return false;
+    const parts = path.split('/');
+    if (parts.some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')) return false;
+    if (path.endsWith('.prompt.md') || isTestOwnedPath(path) || /\.stories\.[^/]+$/i.test(path)) return false;
+    if (PATH_E_EXCLUDED_DIR.test(path) || PATH_E_FIXTURE_DIR.test(path) || PATH_E_DOTFILE.test(path) || PATH_E_CONFIG_OR_META.test(path) || PATH_E_NON_CODE_EXT.test(path)) return false;
+    const base = parts.at(-1), dot = base.lastIndexOf('.');
+    return (dot > 0 && dot < base.length - 1) || /^(?:bin|scripts)\/[^/.]+$/i.test(path);
+  };
   const recorded = (path, prompt) => { const o = after.owners.get(path); return !!o && (o.how === 'binding' || o.how === 'header') && o.owners.includes(prompt); };
   const added = changed.filter(c => c.status.startsWith('A')).map(c => c.path);
   const addedPrompts = new Set(added.filter(path => path.endsWith('.prompt.md')));
   const onPathE = path => lines.some(line => line.path === 'e' && line.files.has(path));
-  const adoptedOnPathE = new Set(changed.filter(c => state(c) === 'unowned' && (onPathE(c.path) || (c.from && onPathE(c.from))) && [...addedPrompts].some(prompt => recorded(c.path, prompt))).map(c => c.path));
+  const adoptedOnPathE = new Set(changed.filter(c => state(c) === 'unowned' && isEligiblePathECode(c.path) && (!c.from || isEligiblePathECode(c.from)) && (onPathE(c.path) || (c.from && onPathE(c.from))) && [...addedPrompts].some(prompt => recorded(c.path, prompt))).map(c => c.path));
   const pathEPrompts = new Set([...addedPrompts].filter(prompt => [...adoptedOnPathE].some(path => recorded(path, prompt))));
   for (const c of changed) {
     const on = lines.filter(line => line.files.has(c.path) || (c.from && line.files.has(c.from)));

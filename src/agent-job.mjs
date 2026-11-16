@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: f4fb01416060a7a7a02668ff073f576e100b3a047348c44001ca103eb0c6c3bf).
+// Generated from prompts/cli/agent-job.prompt.md (sha256: 6d999d98bc2ee0c6347783aed92d6ee05f535821d83b162494bec89e9d5fdef4).
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
@@ -9,7 +9,7 @@ import { descendants, parseProcessTable, sameProcess, terminateCaptured } from '
 const self = fileURLToPath(import.meta.url), GRACE_MS = 2000;
 export const SNAPSHOT_INTERVAL_MS = 2000;
 export const MAX_CAPTURED_PROCESSES = 512;
-const SESSION_KEYS = /^(?:ANTIGRAVITY_(?!APP_DATA_DIR$)|CLAUDECODE$|CLAUDE_CODE_(?!OAUTH_TOKEN$)|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
+const SESSION_KEYS = /^(?:ANTIGRAVITY_(?!APP_DATA_DIR$)|CLAUDECODE$|CLAUDE_CODE_(?!OAUTH_TOKEN$)|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|GEMINI_CLI_SESSION_ID$|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const cleanOverlayDirs = value => Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string' && item.trim()).map(item => resolve(item)).filter(item => basename(item).startsWith('pdd-cx-')))] : [];

@@ -39,7 +39,7 @@ is uncertain; those records let a later tick retry without a live controller.
   caller's own agent, Herdr or coordinator session: `ANTIGRAVITY_*` (except
   `ANTIGRAVITY_APP_DATA_DIR`), `CLAUDECODE`, `CLAUDE_CODE_*` (except
   `CLAUDE_CODE_OAUTH_TOKEN`), `CLAUDE_PID`,
-  `CODEX_THREAD_ID`, `CODEX_SANDBOX*`, `HERDR_*`, `PDD_AGENT_SESSION` and
+  `CODEX_THREAD_ID`, `CODEX_SANDBOX*`, `GEMINI_CLI_SESSION_ID`, `HERDR_*`, `PDD_AGENT_SESSION` and
   `PDD_AUTOPILOT_CONTEXT`. Account settings such as `CODEX_HOME`,
   `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL` and
   `ANTIGRAVITY_APP_DATA_DIR` stay.

@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -13,6 +13,7 @@ import { autopilotEngine, busySlots, coreSettings, failingTests, readyIssues, co
 const { agentModelFamily } = autopilotCore;
 import { listReportDrafts, sendReportDraft } from '../src/autopilot-reports.mjs';
 import { cleanupAgentJob } from '../src/agent-job.mjs';
+import { selectPoolLogin } from '../src/login-pool.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN;
 const endComments = (w, n) => w.comments(n).filter(body => body.includes('<!-- pdd:autopilot-core:end:'));
@@ -4035,7 +4036,9 @@ test('agentModelFamily maps codex, claude, gemini and agy model families', () =>
   assert.equal(agentModelFamily({ kind: 'gemini' }), 'google');
   assert.equal(agentModelFamily({ kind: 'agy' }), 'google');
   assert.equal(agentModelFamily({ kind: 'agy', model: 'gemini-3.1-pro' }), 'google');
+  assert.equal(agentModelFamily({ harness: 'agy', model: 'gemini-2.5-pro' }), 'google');
   assert.equal(agentModelFamily({ kind: 'agy', model: 'claude-sonnet-4-6' }), 'anthropic');
+  assert.equal(agentModelFamily({ harness: 'agy', model: 'claude-sonnet-4-6' }), 'anthropic');
   assert.equal(agentModelFamily({ kind: 'agy' }, 'claude-opus-4-6'), 'anthropic');
   assert.equal(agentModelFamily({ kind: 'agy', model: 'gpt-5.4' }), 'openai');
   assert.equal(agentModelFamily({ kind: 'agy' }, 'o1'), 'openai');
@@ -4172,6 +4175,61 @@ test('cross-family reviewer preference picks an alternate model family when read
   assert.deepEqual(wUnknown.github.merges, [pr3.number]);
   const evidence3 = JSON.parse(readFileSync(join(wUnknown.root, 'logs', `19-evidence-${head3}.json`), 'utf8'));
   assert.equal(evidence3.review.reviewIndependence, 'unknown-builder');
+
+  // 4. Claude builder + mixed-model agy login pool (agy+claude-sonnet AND agy+gemini): filters per-login effective family and picks Google-family agy reviewer
+  const wMixed = await coreWorld(t, { settings: { runs: 1 } });
+  const fakeBin = join(wMixed.dir, 'pool-bin');
+  mkdirSync(fakeBin, { recursive: true });
+  const claudeBin = join(fakeBin, 'claude');
+  const agyBin = join(fakeBin, 'agy');
+  writeFileSync(claudeBin, '#!/bin/sh\necho \x27{"loggedIn":true}\x27\n');
+  writeFileSync(agyBin, '#!/bin/sh\necho "gemini-2.5-pro"\n');
+  chmodSync(claudeBin, 0o755);
+  chmodSync(agyBin, 0o755);
+  const poolPath = join(wMixed.dir, 'mixed-pool.json');
+  writeFileSync(poolPath, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'claude-main', kind: 'claude', command: claudeBin },
+      { id: 'agy-claude', kind: 'agy', command: agyBin, model: 'claude-sonnet-4-6' },
+      { id: 'agy-gemini', kind: 'agy', command: agyBin, model: 'gemini-2.5-pro' },
+    ],
+  }));
+  const selectMixedPool = opts => selectPoolLogin({
+    cwd: wMixed.cwd,
+    env: { HOME: wMixed.dir, PATH: `${fakeBin}:${process.env.PATH}` },
+    poolPath,
+    stateRoot: wMixed.root,
+    ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
+  });
+  wMixed.issue(20, { title: 'Mixed agy pool cross-family review', body: 'Skip anthropic agy login and select google agy login.' });
+  await wMixed.tick({ selectLogin: selectMixedPool });
+  const builtMixed = JSON.parse(readFileSync(join(wMixed.root, 'jobs', '20.json'), 'utf8'));
+  assert.equal(builtMixed.agentKind, 'claude');
+  assert.equal(builtMixed.builderFamily, 'anthropic');
+  assert.equal(builtMixed.builderLoginId, 'claude-main');
+
+  const { pr: pr4, head: head4 } = wMixed.build(20);
+  await wMixed.tick({ selectLogin: selectMixedPool });
+  const mixedReviewJob = wMixed.job(20, 'review');
+  assert.equal(mixedReviewJob.command, agyBin);
+  assert.ok(mixedReviewJob.args.includes('gemini-2.5-pro'), 'selected the Google-family agy login rather than the Anthropic-family agy login');
+  const mixedInReview = JSON.parse(readFileSync(join(wMixed.root, 'jobs', '20.json'), 'utf8'));
+  assert.equal(mixedInReview.review.agent.loginId, 'agy-gemini');
+  assert.equal(mixedInReview.review.reviewFamily, 'google');
+  assert.equal(mixedInReview.review.reviewIndependence, 'cross-family');
+
+  wMixed.review(20, 'PASS');
+  wMixed.suite(20, 0);
+  await wMixed.tick({ selectLogin: selectMixedPool });
+  assert.deepEqual(wMixed.github.merges, [pr4.number]);
+  const evidence4 = JSON.parse(readFileSync(join(wMixed.root, 'logs', `20-evidence-${head4}.json`), 'utf8'));
+  assert.deepEqual(evidence4.review, {
+    state: 'pass',
+    builderFamily: 'anthropic',
+    reviewFamily: 'google',
+    reviewIndependence: 'cross-family',
+  });
 });
 
 test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt creation for existing unowned code', async t => {
@@ -4215,4 +4273,65 @@ test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt
   w.suite(17, 0);
   await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
+
+  // Non-code / outside-PDD files (README.md, RUNBOOK.md, AGENTS.md, docs/*, skills/*, test/*, tests/*, .github/*, prompts/*, stories/*, package/config/lockfiles) are rejected on path e even with a new prompt + Generated from header
+  const { ownerRead, pathRules } = autopilotCore;
+  const nonCodeCases = [
+    ['README.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Docs\n`],
+    ['RUNBOOK.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Runbook\n`],
+    ['AGENTS.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Agents\n`],
+    ['docs/guide.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Guide\n`],
+    ['docs/snippet.js', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['skills/pdd-bug/helper.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['test/helper.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['tests/helper.py', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nx = 1\n`],
+    ['.github/scripts/ci.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['prompts/helper.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['stories/Button.stories.tsx', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const Story = {};\n`],
+    ['package.json', h => `{"_owner":"// Generated from prompts/bad.prompt.md (sha256: ${h})."}\n`],
+    ['pnpm-lock.yaml', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nlockfileVersion: '9.0'\n`],
+    ['tsconfig.json', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\n{}\n`],
+  ];
+  for (const [targetFile, renderHead] of nonCodeCases) {
+    const baseDir = mkdtempSync(join(w.dir, 'pe-base-'));
+    const headDir = mkdtempSync(join(w.dir, 'pe-head-'));
+    const badPrompt = 'prompts/bad.prompt.md';
+    const badPromptText = `# Bad Owner\n\nOwn \`${targetFile}\`.\n`;
+    const badHash = promptHeaderHash(Buffer.from(badPromptText, 'utf8'));
+    writeIn(baseDir, targetFile, 'initial\n');
+    writeIn(headDir, targetFile, renderHead(badHash));
+    writeIn(headDir, badPrompt, badPromptText);
+    const baseFiles = [targetFile];
+    const headFiles = [badPrompt, targetFile].sort();
+    const out = pathRules({
+      changed: [{ status: 'A', path: badPrompt }, { status: 'M', path: targetFile }],
+      baseFiles,
+      before: ownerRead({ readFileSync }, baseDir, baseFiles),
+      after: ownerRead({ readFileSync }, headDir, headFiles),
+      body: `Fixes #99\n\nRuntime: PASS\nPath: e — ${badPrompt}, ${targetFile} — ${badPrompt} — new prompt — Test: done check\n`,
+      adopting: false,
+    });
+    assert.ok(out.reds.length > 0, `${targetFile} must be rejected on path e`);
+  }
+
+  for (const [index, [targetFile, badPrompt]] of [['README.md', 'prompts/readme-adopt.prompt.md'], ['docs/guide.md', 'prompts/guide-adopt.prompt.md']].entries()) {
+    const issueNum = 30 + index;
+    const wReject = await coreWorld(t, { settings: { runs: 1 } });
+    wReject.baseCommit(targetFile, 'initial\n');
+    wReject.issue(issueNum, { title: `Update ${targetFile}`, body: 'Keep path e restricted to eligible product code.' });
+    await wReject.tick();
+    const badPromptText = `# Bad Owner\n\nOwn \`${targetFile}\`.\n`;
+    const badHash = promptHeaderHash(Buffer.from(badPromptText, 'utf8'));
+    editIn(wReject, issueNum, badPrompt, badPromptText);
+    editIn(wReject, issueNum, targetFile, `<!-- Generated from ${badPrompt} (sha256: ${badHash}). -->\n# Docs\n`);
+    wReject.build(issueNum, {
+      write: false,
+      body: `Fixes #${issueNum}\n\nRuntime: PASS\nPath: e — ${badPrompt}, ${targetFile} — ${badPrompt} — new prompt — Test: done check`,
+      result: { promptChanged: true },
+    });
+    await wReject.tick();
+    const repair = wReject.job(issueNum, 'repair');
+    assert.ok(repair, `${targetFile} on path e must be rejected by pathChecks`);
+    assert.match(repair.input, /exists on the base with no owner|owns no new code file|cannot take path e/);
+  }
 });

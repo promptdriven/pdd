@@ -50,7 +50,8 @@ test('job environment drops caller agent, Herdr and coordinator session markers'
   const env = jobEnvironment({ HOME: '/h', PATH: '/bin', CODEX_HOME: '/c', ANTIGRAVITY_APP_DATA_DIR: '/a',
     ANTIGRAVITY_AGENT: '1', ANTIGRAVITY_CONVERSATION_ID: 'conv', ANTIGRAVITY_CSRF_TOKEN: 'csrf',
     CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'x', CODEX_THREAD_ID: 't',
-    CODEX_SANDBOX: 'seatbelt', HERDR_PANE: 'p', PDD_AGENT_SESSION: 's', PDD_AUTOPILOT_CONTEXT: '{}', GH_TOKEN: 'keep' });
+    CODEX_SANDBOX: 'seatbelt', GEMINI_CLI_SESSION_ID: 'gem-session', HERDR_PANE: 'p',
+    PDD_AGENT_SESSION: 's', PDD_AUTOPILOT_CONTEXT: '{}', GH_TOKEN: 'keep' });
   assert.deepEqual(env, { HOME: '/h', PATH: '/bin', CODEX_HOME: '/c', ANTIGRAVITY_APP_DATA_DIR: '/a', GH_TOKEN: 'keep' });
 });
 
