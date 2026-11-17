@@ -336,10 +336,10 @@ of `@openai/codex` (isolated in `$PDD_STATE_DIR/codex-home`, default `~/.local/s
 | `pdd accounts list [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling`, `paused`, or `reauth_required`), refresh status, and pending invites |
 | `pdd accounts status [--json]` | Show Cloud account enrollment, isolated Codex home path, shell auto-switch status, active leases, and token refresh and expiry health |
 | `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside a disposable folder (`--device-auth` for headless Codex, interactive TTY `claude setup-token` for Claude), upload the credential bundle to PDD Cloud over TLS, delete temporary login files immediately, materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json` without touching `~/.codex/auth.json`, and optionally enroll multiple accounts (`--loop`), replace an existing owned label (`--replace`), or share (`--with`) |
-| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--replace] [--with USER\|ORG/TEAM[,...]]` | Import an external (`--from PATH`) or local Codex `auth.json` or Claude token into PDD Cloud without modifying `~/.codex/auth.json` (prefer `pdd accounts add` so Cloud gets an independent OAuth session), materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json`, and optionally replace an existing owned label (`--replace`) or share (`--with`) |
+| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--replace] [--with USER\|ORG/TEAM[,...]]` | Import an external (`--from PATH`) or local Codex `auth.json` or Claude token into PDD Cloud, scrub the single-use `refresh_token` from the imported local Codex `auth.json` after upload so local `codex` cannot collide with Cloud refresh (prefer `pdd accounts add` for a fresh OAuth session), materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json`, and optionally replace an existing owned label (`--replace`) or share (`--with`) |
 | `pdd accounts use LABEL [--provider codex\|claude]` | Pin `LABEL` (matching `+` and `-` punctuation, scoped by `--provider` when both Codex and Claude use `LABEL`) and materialize its leased pass in `$PDD_STATE_DIR/codex-home` (`0600`) or `~/.claude/settings.json` (`0600`) |
 | `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch to the next ready account sorted by soonest weekly reset |
-| `pdd accounts codex [-- ARGS...]` | Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session `codex resume` rotation |
+| `pdd accounts codex [ARGS...]` | Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session `codex resume` rotation |
 | `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Return in 0 ms when the cached lease is below 100% on both windows and more than 15 minutes from expiry; else lease a fresh pass within `--timeout-ms` (default 1200 ms) and fail open when offline |
 | `pdd accounts auto on\|off\|status` | Turn on, turn off or inspect the opt-in fail-open shell wrapper in `~/.zshrc`, `~/.bashrc`, and `~/.config/fish/config.fish` for plain terminal `codex` and `claude` commands (off by default) |
 | `pdd accounts pause LABEL [--provider codex\|claude]` | Pause automatic leasing for `LABEL` |
@@ -358,7 +358,8 @@ of `@openai/codex` (isolated in `$PDD_STATE_DIR/codex-home`, default `~/.local/s
   to the account record. Codex and shared Claude `gateway_grant` leases
   (`delivery_mode: "gateway_grant"`) deliver only a short-lived revocable `pddg_…`
   gateway grant routed through PDD Cloud (`[model_providers.pdd_codex_gateway]` with
-  the constant `<origin>/v1/codex-gateway` base URL for `pddg_lse_…` grants,
+  the constant `<origin>/v1/codex-gateway` base URL and `<origin>/v1/codex-gateway/models`
+  model catalog URL for `pddg_lse_…` grants,
   `ANTHROPIC_BASE_URL` for Claude), with zero OpenAI or Anthropic OAuth tokens
   written to disk and dynamic `auth.json` reload across account rotations. Legacy
   `direct_stripped` Codex passes write `refresh_token: ""` (`0600`) inside

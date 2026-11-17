@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 8afd85ac73cfaa3cd40006e3191c56b074510e8c54ddc3c440e6eee671748a8a).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 5c8b8f3d8729fd01cf0f2ffa0ee7014a0ed94a73909f16d579b4f9d7fc4bf4e0).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -84,7 +84,7 @@ export function renderAutoSwitchBlock(shell = 'sh') {
       "        case logout login",
       "          set _pdd_sub \"$_pdd_arg\"",
       "          continue",
-      "        case agents exec e review mcp mcp-server plugin app-server remote-control completion update doctor sandbox debug apply a resume queue archive delete migrate-rollouts unarchive fork cloud exec-server features help",
+      "        case agents exec e review mcp mcp-server plugin app-server remote-control app completion update doctor sandbox debug apply a resume queue archive delete migrate-rollouts migrate-nfs-db unarchive fork cloud exec-server features help",
       "          set _pdd_sub \"$_pdd_arg\"",
       "          break",
       "      end",
@@ -178,7 +178,7 @@ export function renderAutoSwitchBlock(shell = 'sh') {
     "          _pdd_sub=\"$_pdd_arg\"",
     "          continue",
     "          ;;",
-    "        agents|exec|e|review|mcp|mcp-server|plugin|app-server|remote-control|completion|update|doctor|sandbox|debug|apply|a|resume|queue|archive|delete|migrate-rollouts|unarchive|fork|cloud|exec-server|features|help)",
+    "        agents|exec|e|review|mcp|mcp-server|plugin|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|resume|queue|archive|delete|migrate-rollouts|migrate-nfs-db|unarchive|fork|cloud|exec-server|features|help)",
     "          _pdd_sub=\"$_pdd_arg\"",
     "          break",
     "          ;;",
@@ -799,6 +799,58 @@ function resolveCodexImportSource(fs, cwd, env, fromOption) {
   };
 }
 
+function assertNonSymlinkImportFile(fs, authPath) {
+  if (!authPath) return;
+  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  let st = null;
+  try { st = lstat(authPath); } catch { return; }
+  if (st?.isSymbolicLink()) {
+    throw new CloudAccountsError(`Refusing to import symlinked Codex credential file: ${authPath}`, { code: 'symlink_refused' });
+  }
+}
+
+function scrubImportedCodexSourceRefreshToken(fs, authPath) {
+  if (!authPath) return false;
+  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  let st = null;
+  try { st = lstat(authPath); } catch { return false; }
+  if (!st || st.isSymbolicLink() || !st.isFile()) {
+    if (st?.isSymbolicLink()) {
+      throw new CloudAccountsError(`Refusing to rewrite symlinked Codex credential file: ${authPath}`, { code: 'symlink_refused' });
+    }
+    return false;
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+  } catch {
+    return false;
+  }
+  if (!object(parsed) || !object(parsed.tokens)) return false;
+  if (typeof parsed.tokens.refresh_token !== 'string' || parsed.tokens.refresh_token === '') {
+    return false;
+  }
+  rememberCodexPayloadSecrets(parsed);
+  const scrubbed = {
+    ...parsed,
+    tokens: {
+      ...parsed.tokens,
+      refresh_token: '',
+    },
+  };
+  const dir = dirname(authPath);
+  const tmpPath = join(dir, `.pdd-scrub-${process.pid}-${randomBytes(6).toString('hex')}.tmp`);
+  try {
+    fs.writeFileSync(tmpPath, `${JSON.stringify(scrubbed, null, 2)}\n`, { mode: 0o600 });
+    try { (fs.chmodSync ?? nativeFs.chmodSync)(tmpPath, 0o600); } catch {}
+    fs.renameSync(tmpPath, authPath);
+    return true;
+  } catch (err) {
+    try { (fs.rmSync ?? nativeFs.rmSync)(tmpPath, { force: true }); } catch {}
+    throw err;
+  }
+}
+
 export function detectImportProvider(fs, env = process.env, options = {}) {
   const cwd = options?.cwd ?? process.cwd();
   const fromOption = options?.fromOption ?? options?.from ?? null;
@@ -981,7 +1033,7 @@ async function runProviderLogin(provider, { cwd, env, deviceAuth = false, stdin 
   const activeStdout = ports.stdout ?? process.stdout;
   const activeStderr = ports.stderr ?? process.stderr;
   if (provider === 'claude') {
-    if (!activeStdin?.isTTY) {
+    if (!activeStdin?.isTTY || !activeStdout?.isTTY) {
       throw new CloudAccountsError(
         'claude setup-token requires an interactive terminal (TTY) to paste the OAuth authorization code. Run "pdd accounts add --provider claude" in an interactive terminal, pipe a token to stdin, or run "pdd accounts import --provider claude".',
         { code: 'non_interactive_claude_login', exitCode: 1 },
@@ -1142,6 +1194,7 @@ function sharePayloadKey(item) {
   if (b.team && b.org) return `team:${String(b.org).toLowerCase()}/${String(b.team).toLowerCase()}`;
   if (b.org) return `org:${String(b.org).toLowerCase()}`;
   if (b.github_login) return `user:${String(b.github_login).toLowerCase()}`;
+  if (Number.isSafeInteger(b.github_user_id)) return `uid:${b.github_user_id}`;
   return '';
 }
 
@@ -1225,6 +1278,32 @@ function collectExistingShareKeys(account, pendingInvites = [], sessionSharedKey
 function extractSharePayloadsFromAccount(account, pendingInvites = []) {
   const existing = [];
   if (!object(account)) return existing;
+  const loginToUid = new Map();
+  const coveredUids = new Set();
+  const inspectRawEntry = entry => {
+    if (!object(entry)) return;
+    const st = typeof entry.state === 'string' ? entry.state.toLowerCase() : '';
+    if (st === 'revoked' || st === 'declined' || st === 'cancelled' || st === 'expired') return;
+    if (entry.team || entry.org) return;
+    const rawLogin = entry.github_login ?? entry.recipient_login ?? entry.invited_login ?? entry.login ?? entry.user ?? '';
+    const login = typeof rawLogin === 'string' ? rawLogin.trim().toLowerCase() : '';
+    const uid = entry.github_user_id ?? entry.recipient_github_id ?? entry.user_id ?? null;
+    if (login && Number.isSafeInteger(uid)) {
+      loginToUid.set(login, uid);
+      coveredUids.add(uid);
+    }
+  };
+  for (const field of ['shares', 'shared_with', 'active_shares', 'pending_shares', 'pending_invites', 'invites', 'accepted_users', 'accepted_logins']) {
+    if (Array.isArray(account[field])) {
+      for (const entry of account[field]) inspectRawEntry(entry);
+    }
+  }
+  if (account.account_id && Array.isArray(pendingInvites)) {
+    for (const inv of pendingInvites) {
+      if (inv?.account_id === account.account_id) inspectRawEntry(inv);
+    }
+  }
+
   const keys = collectExistingShareKeys(account, pendingInvites);
   for (const k of keys) {
     if (k.startsWith('org:')) {
@@ -1235,19 +1314,38 @@ function extractSharePayloadsFromAccount(account, pendingInvites = []) {
       if (org && team) existing.push({ display: `${org}/${team}`, body: { org, team } });
     } else if (k.startsWith('user:')) {
       const login = k.slice(5);
-      existing.push({ display: login, body: { github_login: login } });
+      const body = { github_login: login };
+      if (loginToUid.has(login)) body.github_user_id = loginToUid.get(login);
+      existing.push({ display: login, body });
+    } else if (k.startsWith('uid:')) {
+      const uid = Number(k.slice(4));
+      if (Number.isSafeInteger(uid) && !coveredUids.has(uid)) {
+        existing.push({ display: `github_user_id:${uid}`, body: { github_user_id: uid } });
+      }
     }
   }
   return existing;
 }
 
 function mergeSharePayloads(basePayloads, extraPayloads) {
-  const seen = new Set();
+  const seenKeys = new Set();
+  const uidIndex = new Map();
   const merged = [];
   for (const item of [...basePayloads, ...extraPayloads]) {
     const key = sharePayloadKey(item);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
+    if (!key) continue;
+    const uid = Number.isSafeInteger(item?.body?.github_user_id) ? item.body.github_user_id : null;
+    if (uid !== null && uidIndex.has(uid)) {
+      const prevIdx = uidIndex.get(uid);
+      if (!merged[prevIdx]?.body?.github_login && item?.body?.github_login) {
+        merged[prevIdx] = item;
+        seenKeys.add(key);
+      }
+      continue;
+    }
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    if (uid !== null) uidIndex.set(uid, merged.length);
     merged.push(item);
   }
   return merged;
@@ -1535,9 +1633,9 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
           last_refresh_at: acc.last_refresh_at ?? new Date(nowMs).toISOString(),
           materialized_local: provider === 'claude' && Boolean(fallbackOauthToken),
           delivery_mode: provider === 'codex' ? 'gateway_grant' : 'direct_oauth',
-          five_hour_used_percent: acc.five_hour_used_percent ?? 0,
+          five_hour_used_percent: acc.five_hour_used_percent ?? null,
           five_hour_reset_at: acc.five_hour_reset_at ?? null,
-          weekly_used_percent: acc.weekly_used_percent ?? 0,
+          weekly_used_percent: acc.weekly_used_percent ?? null,
           weekly_reset_at: acc.weekly_reset_at ?? null,
         },
       },
@@ -1577,6 +1675,30 @@ function isTransientUploadError(err) {
   return err.code === 'timeout' || err.code === 'network_error' || err.status === 429 || err.status >= 500;
 }
 
+function assertValidUploadBundle(provider, bundle) {
+  if (provider === 'codex') {
+    const tokens = bundle?.auth_json?.tokens;
+    for (const key of ['access_token', 'refresh_token', 'id_token', 'account_id']) {
+      if (typeof tokens?.[key] !== 'string' || !tokens[key].trim()) {
+        throw new CloudAccountsError(`Invalid local Codex credential bundle: missing ${key}.`, { code: 'invalid_local_login' });
+      }
+    }
+    return;
+  }
+  if (typeof bundle?.oauth_token !== 'string' || !bundle.oauth_token.trim()) {
+    throw new CloudAccountsError('Invalid local Claude OAuth token.', { code: 'invalid_local_login' });
+  }
+}
+
+function formatDeletedAccountRecoverySummary(backup, provider, sourceHint = null) {
+  if (!backup) return '';
+  const shareNote = backup.shares.length
+    ? ` (preserved shares: --with ${backup.shares.join(',')})`
+    : '';
+  const sourceNote = sourceHint ? ` Local credential file "${sourceHint}" was left unscrubbed.` : '';
+  return ` Previous ${provider} account "${backup.label}" (${backup.account_id}) was removed before the replacement upload failed${shareNote}.${sourceNote} Re-run enroll/import to restore "${backup.label}".`;
+}
+
 async function uploadAccountWithConflictAndRetry({
   provider,
   initialLabel,
@@ -1586,6 +1708,7 @@ async function uploadAccountWithConflictAndRetry({
   plan,
   bundle,
   sharePayloads,
+  sourceHint = null,
   knownAccounts = null,
   knownPendingInvites = [],
   usedLabels = null,
@@ -1595,12 +1718,14 @@ async function uploadAccountWithConflictAndRetry({
   stdin,
   stdout,
 }, ports = {}) {
+  assertValidUploadBundle(provider, bundle);
   let candidateLabel = initialLabel;
   let cachedAccounts = Array.isArray(knownAccounts) ? knownAccounts : null;
   let cachedInvites = Array.isArray(knownPendingInvites) ? knownPendingInvites : [];
   const labelSet = usedLabels instanceof Set ? usedLabels : new Set();
   let inheritedShares = [];
   let deletedExistingId = null;
+  let deletedBackup = null;
 
   const ensureAccountsLoaded = async () => {
     if (!cachedAccounts) {
@@ -1624,8 +1749,19 @@ async function uploadAccountWithConflictAndRetry({
     a => isOwnedAccount(a) && a.provider === provider && String(a.label ?? '').toLowerCase() === String(label).toLowerCase(),
   );
 
-  if (replace) {
-    await ensureAccountsLoaded();
+  const deleteConfirmedExisting = async existingOwned => {
+    inheritedShares = mergeSharePayloads(inheritedShares, extractSharePayloadsFromAccount(existingOwned, cachedInvites));
+    await cloudAccountsRequest('DELETE', `/v1/accounts/${encodeURIComponent(existingOwned.account_id)}`, { cwd, env }, ports);
+    deletedExistingId = existingOwned.account_id;
+    deletedBackup = {
+      account_id: existingOwned.account_id,
+      label: existingOwned.label ?? candidateLabel,
+      shares: inheritedShares.map(s => s.display),
+    };
+    cachedAccounts = (cachedAccounts ?? []).filter(a => a.account_id !== existingOwned.account_id);
+  };
+
+  if (replace && Array.isArray(cachedAccounts)) {
     const prior = findExistingOwnedSameLabel(candidateLabel);
     if (prior) inheritedShares = extractSharePayloadsFromAccount(prior, cachedInvites);
   }
@@ -1642,8 +1778,10 @@ async function uploadAccountWithConflictAndRetry({
         cwd,
         env,
       }, ports);
+      deletedBackup = null;
 
       if (replace && created?.already_enrolled !== true) {
+        await ensureAccountsLoaded();
         const prior = findExistingOwnedSameLabel(candidateLabel);
         const createdId = created?.account?.account_id ?? created?.account_id ?? null;
         if (prior && prior.account_id && prior.account_id !== deletedExistingId && prior.account_id !== createdId) {
@@ -1668,10 +1806,7 @@ async function uploadAccountWithConflictAndRetry({
         const existingOwned = findExistingOwnedSameLabel(candidateLabel);
 
         if (replace && existingOwned && existingOwned.account_id !== deletedExistingId) {
-          inheritedShares = mergeSharePayloads(inheritedShares, extractSharePayloadsFromAccount(existingOwned, cachedInvites));
-          await cloudAccountsRequest('DELETE', `/v1/accounts/${encodeURIComponent(existingOwned.account_id)}`, { cwd, env }, ports);
-          deletedExistingId = existingOwned.account_id;
-          cachedAccounts = (cachedAccounts ?? []).filter(a => a.account_id !== existingOwned.account_id);
+          await deleteConfirmedExisting(existingOwned);
           continue;
         }
 
@@ -1689,10 +1824,7 @@ async function uploadAccountWithConflictAndRetry({
           );
           const norm = choice === undefined || choice === null ? 's' : String(choice).trim().toLowerCase();
           if ((norm === 'r' || norm === 'replace') && existingOwned && existingOwned.account_id !== deletedExistingId) {
-            inheritedShares = mergeSharePayloads(inheritedShares, extractSharePayloadsFromAccount(existingOwned, cachedInvites));
-            await cloudAccountsRequest('DELETE', `/v1/accounts/${encodeURIComponent(existingOwned.account_id)}`, { cwd, env }, ports);
-            deletedExistingId = existingOwned.account_id;
-            cachedAccounts = (cachedAccounts ?? []).filter(a => a.account_id !== existingOwned.account_id);
+            await deleteConfirmedExisting(existingOwned);
             continue;
           }
           if (norm === '2' || norm === 'd' || norm === 'n' || norm === 'new' || norm === 'y' || norm === 'yes' || norm === '') {
@@ -1733,7 +1865,7 @@ async function uploadAccountWithConflictAndRetry({
           return {
             skipped: true,
             candidateLabel,
-            message: `Skipped ${provider} account "${candidateLabel}" after upload failure.`,
+            message: `Skipped ${provider} account "${candidateLabel}" after upload failure.${formatDeletedAccountRecoverySummary(deletedBackup, provider, sourceHint)}`,
           };
         }
         const normRetry = String(retryAns).trim().toLowerCase();
@@ -1741,16 +1873,25 @@ async function uploadAccountWithConflictAndRetry({
           return {
             skipped: true,
             candidateLabel,
-            message: `Skipped ${provider} account "${candidateLabel}" after upload failure.`,
+            message: `Skipped ${provider} account "${candidateLabel}" after upload failure.${formatDeletedAccountRecoverySummary(deletedBackup, provider, sourceHint)}`,
           };
         }
         continue;
       }
 
+      if (deletedBackup) {
+        throw new CloudAccountsError(
+          `${err.message}${formatDeletedAccountRecoverySummary(deletedBackup, provider, sourceHint)}`,
+          { status: err.status, code: err.code, payload: err.payload, exitCode: err.exitCode },
+        );
+      }
       throw err;
     }
   }
-  throw new CloudAccountsError(`Unable to enroll ${provider} account "${candidateLabel}" after multiple attempts.`, { code: 'enroll_failed' });
+  throw new CloudAccountsError(
+    `Unable to enroll ${provider} account "${candidateLabel}" after multiple attempts.${formatDeletedAccountRecoverySummary(deletedBackup, provider, sourceHint)}`,
+    { code: 'enroll_failed' },
+  );
 }
 
 function formatShareSuffix(shareNotes) {
@@ -1786,6 +1927,7 @@ async function enrollSingleIteration(mode, {
       let authJson;
       let bundle;
       let probeCodexHome = null;
+      let importSourcePath = null;
 
       if (mode === 'add') {
         tempLoginDir = createTempPrivateDir(fs, 'pdd-codex-login-', ports.tmpRoot);
@@ -1803,8 +1945,10 @@ async function enrollSingleIteration(mode, {
         probeCodexHome = tempLoginDir;
       } else {
         const importSource = resolveCodexImportSource(fs, cwd, env, fromOption);
+        assertNonSymlinkImportFile(fs, importSource.authPath);
         ({ authJson, bundle } = readCodexFullAuthBundle(fs, env, importSource.authPath));
         probeCodexHome = importSource.probeCodexHome;
+        importSourcePath = importSource.authPath;
       }
 
       const email = extractCodexEmail(authJson);
@@ -1869,6 +2013,7 @@ async function enrollSingleIteration(mode, {
         plan: detectCodexPlan(authJson),
         bundle,
         sharePayloads,
+        sourceHint: importSourcePath,
         knownAccounts,
         knownPendingInvites,
         usedLabels,
@@ -1902,6 +2047,13 @@ async function enrollSingleIteration(mode, {
 
       await leaseAndSyncAfterEnroll('codex', acc, candidateLabel, null, null, { cwd, env }, ports);
 
+      // P0 single-use OpenAI refresh_token collision guard: once uploaded, probed, and leased,
+      // scrub tokens.refresh_token from the imported local source file so local codex cannot
+      // refresh the same token family and cause refresh_token_invalidated in PDD Cloud.
+      const scrubbedSource = mode === 'import' && importSourcePath
+        ? scrubImportedCodexSourceRefreshToken(fs, importSourcePath)
+        : false;
+
       const finalLabel = acc.label ?? candidateLabel;
       if (loopState) {
         if (subjectAccountId) loopState.bySubjectId.set(subjectAccountId, finalLabel);
@@ -1933,8 +2085,8 @@ async function enrollSingleIteration(mode, {
         };
       }
       const identityNote = email ? `${email} -> "${finalLabel}", ` : '';
-      const importNote = (mode === 'import' && !fromOption)
-        ? ' (~/.codex/auth.json was left untouched; prefer "pdd accounts add --provider codex" so Cloud uses an independent OAuth session.)'
+      const importNote = scrubbedSource
+        ? ` (scrubbed single-use refresh_token from ${importSourcePath} so local codex cannot invalidate Cloud refresh.)`
         : '';
       return {
         exitCode: 0,
@@ -2631,13 +2783,12 @@ const CODEX_PRESERVED_VALUE_OPTIONS = new Set([
   '-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env',
   '-m', '--model', '--local-provider', '-p', '--profile',
   '-s', '--sandbox', '-C', '--cd', '--add-dir', '-a', '--ask-for-approval',
-  '--color',
 ]);
 
 const CODEX_PRESERVED_FLAG_OPTIONS = new Set([
   '--oss', '--strict-config', '--approve-for-me',
-  '--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust',
-  '--worktree', '--search', '--no-alt-screen', '--no-daemon',
+  '--dangerously-bypass-approvals-and-sandbox', '--yolo', '--dangerously-bypass-hook-trust',
+  '--worktree', '--search', '--no-alt-screen', '--no-daemon', '--include-non-interactive',
 ]);
 
 const CODEX_NON_INTERACTIVE_SUBCOMMANDS = new Set([
@@ -2651,10 +2802,20 @@ const CODEX_NON_INTERACTIVE_SUBCOMMANDS = new Set([
 const CODEX_INTERACTIVE_SUBCOMMANDS = new Set(['resume', 'fork']);
 const UUID_TOKEN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OUTPUT_SESSION_ID_RE = /(?:session[_\s-]*id|thread[_\s-]*id|conversation[_\s-]*id)["'\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+const ROLLOUT_FILE_RE = /^rollout-.*\.jsonl$/i;
 const ROLLOUT_UUID_FILE_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+const QUOTA_ERROR_CODES = new Set([
+  'usage_limit_exceeded',
+  'usage_limit_reached',
+  'insufficient_quota',
+  'quota_exceeded',
+  'out_of_credits',
+  'billing_hard_limit_reached',
+]);
 
 const PYTHON_PTY_SUPERVISOR_SCRIPT = [
-  'import errno, fcntl, os, pty, select, signal, struct, sys, termios',
+  'import errno, fcntl, os, pty, select, signal, struct, sys, termios, time',
+  'initial_ppid = os.getppid()',
   'rows = int(os.environ.get("PDD_PTY_ROWS", "24") or "24")',
   'cols = int(os.environ.get("PDD_PTY_COLS", "80") or "80")',
   'master_fd, slave_fd = pty.openpty()',
@@ -2665,6 +2826,10 @@ const PYTHON_PTY_SUPERVISOR_SCRIPT = [
   'pid = os.fork()',
   'if pid == 0:',
   '    os.close(master_fd)',
+  '    try:',
+  '        os.close(3)',
+  '    except Exception:',
+  '        pass',
   '    os.setsid()',
   '    try:',
   '        fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)',
@@ -2677,24 +2842,77 @@ const PYTHON_PTY_SUPERVISOR_SCRIPT = [
   '        os.close(slave_fd)',
   '    os.execvp(sys.argv[1], sys.argv[1:])',
   'os.close(slave_fd)',
-  'def _fwd(signum, _frame):',
+  'ctrl_open = True',
+  'try:',
+  '    fcntl.fcntl(3, fcntl.F_GETFD)',
+  'except OSError:',
+  '    ctrl_open = False',
+  'def _killpg_safe(sig):',
   '    try:',
-  '        os.killpg(pid, signum)',
+  '        os.killpg(pid, sig)',
+  '        return True',
+  '    except ProcessLookupError:',
+  '        return False',
   '    except Exception:',
   '        try:',
-  '            os.kill(pid, signum)',
+  '            os.kill(pid, sig)',
+  '            return True',
+  '        except ProcessLookupError:',
+  '            return False',
   '        except Exception:',
-  '            pass',
+  '            return False',
+  'stop_requested = False',
+  'def _fwd(signum, _frame):',
+  '    global stop_requested',
+  '    _killpg_safe(signum)',
+  '    if signum in (signal.SIGTERM, signal.SIGHUP):',
+  '        stop_requested = True',
   'for _s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):',
   '    signal.signal(_s, _fwd)',
+  'reaped_status = None',
+  'def _terminate_child_group():',
+  '    global reaped_status',
+  '    if reaped_status is not None:',
+  '        return',
+  '    if not _killpg_safe(signal.SIGTERM):',
+  '        return',
+  '    deadline = time.monotonic() + 0.5',
+  '    while time.monotonic() < deadline:',
+  '        try:',
+  '            wpid, st = os.waitpid(pid, os.WNOHANG)',
+  '            if wpid == pid:',
+  '                reaped_status = st',
+  '                return',
+  '        except ChildProcessError:',
+  '            reaped_status = 0',
+  '            return',
+  '        time.sleep(0.02)',
+  '    _killpg_safe(signal.SIGKILL)',
+  'def _drain_master_nonblocking():',
+  '    while True:',
+  '        try:',
+  '            rdy, _, _ = select.select([master_fd], [], [], 0)',
+  '            if not rdy:',
+  '                break',
+  '            chunk = os.read(master_fd, 16384)',
+  '            if not chunk:',
+  '                break',
+  '            os.write(1, chunk)',
+  '        except Exception:',
+  '            break',
   'stdin_open = True',
+  'ctrl_buf = b""',
   'while True:',
-  '    watch = [master_fd] + ([0] if stdin_open else [])',
+  '    if stop_requested or os.getppid() == 1 or os.getppid() != initial_ppid:',
+  '        _terminate_child_group()',
+  '        break',
+  '    watch = [master_fd] + ([0] if stdin_open else []) + ([3] if ctrl_open else [])',
   '    try:',
   '        rlist, _, _ = select.select(watch, [], [], 0.2)',
   '    except InterruptedError:',
   '        continue',
   '    except Exception:',
+  '        _terminate_child_group()',
   '        break',
   '    if master_fd in rlist:',
   '        try:',
@@ -2706,6 +2924,27 @@ const PYTHON_PTY_SUPERVISOR_SCRIPT = [
   '        if not data:',
   '            break',
   '        os.write(1, data)',
+  '    if ctrl_open and 3 in rlist:',
+  '        try:',
+  '            cdata = os.read(3, 4096)',
+  '        except OSError:',
+  '            cdata = b""',
+  '        if not cdata:',
+  '            ctrl_open = False',
+  '            _terminate_child_group()',
+  '            break',
+  '        ctrl_buf += cdata',
+  '        while b"\\n" in ctrl_buf:',
+  '            line, ctrl_buf = ctrl_buf.split(b"\\n", 1)',
+  '            parts = line.strip().split()',
+  '            if len(parts) == 2:',
+  '                try:',
+  '                    r_val, c_val = int(parts[0]), int(parts[1])',
+  '                    if r_val > 0 and c_val > 0:',
+  '                        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", r_val, c_val, 0, 0))',
+  '                        _killpg_safe(signal.SIGWINCH)',
+  '                except Exception:',
+  '                    pass',
   '    if stdin_open and 0 in rlist:',
   '        try:',
   '            inp = os.read(0, 16384)',
@@ -2713,20 +2952,36 @@ const PYTHON_PTY_SUPERVISOR_SCRIPT = [
   '            inp = b""',
   '        if not inp:',
   '            stdin_open = False',
+  '            _terminate_child_group()',
+  '            break',
   '        else:',
   '            os.write(master_fd, inp)',
-  'os.close(master_fd)',
-  '_, status = os.waitpid(pid, 0)',
-  'if os.WIFSIGNALED(status):',
-  '    sys.exit(128 + os.WTERMSIG(status))',
-  'sys.exit(os.WEXITSTATUS(status))',
+  '_drain_master_nonblocking()',
+  'try:',
+  '    os.close(master_fd)',
+  'except Exception:',
+  '    pass',
+  'if ctrl_open:',
+  '    try:',
+  '        os.close(3)',
+  '    except Exception:',
+  '        pass',
+  'if reaped_status is None:',
+  '    try:',
+  '        _, reaped_status = os.waitpid(pid, 0)',
+  '    except ChildProcessError:',
+  '        reaped_status = 0',
+  'if os.WIFSIGNALED(reaped_status):',
+  '    sys.exit(128 + os.WTERMSIG(reaped_status))',
+  'sys.exit(os.WEXITSTATUS(reaped_status))',
 ].join('\n');
 
-function inspectCodexInvocation(args) {
+function inspectCodexInvocation(args, baseCwd = process.cwd()) {
   let subcommand = '';
   let hasHelpOrVersion = false;
   let explicitSessionId = null;
   let afterSubcommand = false;
+  let cdOverride = null;
 
   for (let i = 0; i < args.length; i += 1) {
     const word = String(args[i] ?? '');
@@ -2735,7 +2990,16 @@ function inspectCodexInvocation(args) {
       hasHelpOrVersion = true;
       continue;
     }
+    const eqIdx = word.indexOf('=');
+    if (eqIdx > 0 && CODEX_VALUE_OPTIONS.has(word.slice(0, eqIdx))) {
+      const flagName = word.slice(0, eqIdx);
+      if (flagName === '-C' || flagName === '--cd') cdOverride = word.slice(eqIdx + 1);
+      continue;
+    }
     if (CODEX_VALUE_OPTIONS.has(word)) {
+      if ((word === '-C' || word === '--cd') && i + 1 < args.length) {
+        cdOverride = String(args[i + 1] ?? '');
+      }
       i += 1;
       continue;
     }
@@ -2754,10 +3018,15 @@ function inspectCodexInvocation(args) {
     }
   }
 
+  const effectiveCwd = cdOverride
+    ? resolve(baseCwd || process.cwd(), cdOverride)
+    : resolve(baseCwd || process.cwd());
+
   return {
     subcommand,
     interactive: !hasHelpOrVersion && (subcommand === '' || CODEX_INTERACTIVE_SUBCOMMANDS.has(subcommand)),
     explicitSessionId,
+    effectiveCwd,
   };
 }
 
@@ -2778,6 +3047,9 @@ function buildCodexResumeArgs(initialArgs, sessionId) {
       preserved.push(word);
       continue;
     }
+    if (eqIdx > 0 && CODEX_VALUE_OPTIONS.has(word.slice(0, eqIdx))) {
+      continue;
+    }
     if (CODEX_VALUE_OPTIONS.has(word)) {
       i += 1;
       continue;
@@ -2791,43 +3063,120 @@ function buildCodexResumeArgs(initialArgs, sessionId) {
     : ['resume', ...preserved, '--last'];
 }
 
-function findRecentCodexSessionId(fs, codexHomes, minMtimeMs) {
-  const homes = [...new Set(codexHomes.filter(Boolean))];
-  for (const home of homes) {
-    try {
-      const idxPath = join(home, 'session_index.jsonl');
-      const idxStat = fs.statSync(idxPath);
-      if (idxStat?.isFile() && idxStat.mtimeMs >= minMtimeMs) {
-        const lines = fs.readFileSync(idxPath, 'utf8').trim().split('\n');
-        for (let i = lines.length - 1; i >= 0; i -= 1) {
-          try {
-            const row = JSON.parse(lines[i]);
-            if (typeof row?.id === 'string' && UUID_TOKEN_RE.test(row.id)) return row.id;
-          } catch {}
-        }
-      }
-    } catch {}
+function canonicalPathSafe(fs, targetPath) {
+  if (!targetPath) return '';
+  try {
+    const realpath = fs.realpathSync ?? nativeFs.realpathSync;
+    return realpath(targetPath);
+  } catch {
+    return resolve(targetPath);
   }
+}
 
-  let newestUuid = null;
-  let newestMtime = -1;
+function pathsMatchCwd(fs, candidateCwd, expectedCwd) {
+  if (!candidateCwd || !expectedCwd) return false;
+  if (resolve(candidateCwd) === resolve(expectedCwd)) return true;
+  return canonicalPathSafe(fs, candidateCwd) === canonicalPathSafe(fs, expectedCwd);
+}
+
+function safeFileSize(fs, filePath) {
+  if (!filePath) return 0;
+  try {
+    const st = fs.statSync(filePath);
+    return st?.isFile() ? st.size : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function readFirstJsonLine(fs, filePath) {
+  let fd;
+  try {
+    if (typeof fs.openSync === 'function' && typeof fs.readSync === 'function' && typeof fs.closeSync === 'function') {
+      fd = fs.openSync(filePath, 'r');
+      const buf = Buffer.alloc(16_384);
+      const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+      const text = buf.subarray(0, bytesRead).toString('utf8');
+      const nl = text.indexOf('\n');
+      const firstLine = (nl >= 0 ? text.slice(0, nl) : text).trim();
+      if (!firstLine) return null;
+      const parsed = JSON.parse(firstLine);
+      return object(parsed) ? parsed : null;
+    }
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const nl = raw.indexOf('\n');
+    const firstLine = (nl >= 0 ? raw.slice(0, nl) : raw).trim();
+    if (!firstLine) return null;
+    const parsed = JSON.parse(firstLine);
+    return object(parsed) ? parsed : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
+function readFileSliceUtf8(fs, filePath, startOffset) {
+  let fd;
+  try {
+    if (typeof fs.openSync === 'function' && typeof fs.fstatSync === 'function' && typeof fs.readSync === 'function' && typeof fs.closeSync === 'function') {
+      fd = fs.openSync(filePath, 'r');
+      const size = fs.fstatSync(fd).size;
+      if (size <= startOffset) return '';
+      const len = Math.min(size - startOffset, 2_097_152);
+      const buf = Buffer.alloc(len);
+      let readTotal = 0;
+      while (readTotal < len) {
+        const n = fs.readSync(fd, buf, readTotal, len - readTotal, startOffset + readTotal);
+        if (!n) break;
+        readTotal += n;
+      }
+      return buf.subarray(0, readTotal).toString('utf8');
+    }
+    const raw = Buffer.from(fs.readFileSync(filePath, 'utf8'), 'utf8');
+    if (raw.length <= startOffset) return '';
+    return raw.subarray(startOffset).toString('utf8');
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
+function collectRolloutFiles(fs, codexHomes) {
+  const homes = [...new Set(codexHomes.filter(Boolean))];
+  const visitedDirs = new Set();
+  const seenFiles = new Set();
+  const files = [];
+
   const walkSessions = (dir, depth) => {
     if (depth > 4) return;
+    const canonDir = canonicalPathSafe(fs, dir);
+    if (!canonDir || visitedDirs.has(canonDir)) return;
+    visitedDirs.add(canonDir);
     let entries = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const ent of entries) {
       const full = join(dir, ent.name);
       if (ent.isDirectory()) {
         walkSessions(full, depth + 1);
-      } else if (ent.isFile()) {
-        const match = ROLLOUT_UUID_FILE_RE.exec(ent.name);
-        if (!match) continue;
+      } else if (ent.isFile() && ROLLOUT_FILE_RE.test(ent.name)) {
+        const canonFile = canonicalPathSafe(fs, full);
+        if (seenFiles.has(canonFile)) continue;
+        seenFiles.add(canonFile);
         try {
           const st = fs.statSync(full);
-          if (st.mtimeMs >= minMtimeMs && st.mtimeMs > newestMtime) {
-            newestMtime = st.mtimeMs;
-            newestUuid = match[1];
-          }
+          const uuidMatch = ROLLOUT_UUID_FILE_RE.exec(ent.name);
+          files.push({
+            path: full,
+            canonicalPath: canonFile,
+            uuid: uuidMatch ? uuidMatch[1] : null,
+            mtimeMs: st.mtimeMs,
+          });
         } catch {}
       }
     }
@@ -2836,7 +3185,184 @@ function findRecentCodexSessionId(fs, codexHomes, minMtimeMs) {
   for (const home of homes) {
     walkSessions(join(home, 'sessions'), 0);
   }
-  return newestUuid;
+  return files;
+}
+
+function readSessionIndexIds(fs, codexHomes) {
+  const ids = new Set();
+  const seenIdx = new Set();
+  for (const home of new Set(codexHomes.filter(Boolean))) {
+    const idxPath = join(home, 'session_index.jsonl');
+    const canonIdx = canonicalPathSafe(fs, idxPath);
+    if (seenIdx.has(canonIdx)) continue;
+    seenIdx.add(canonIdx);
+    try {
+      const lines = fs.readFileSync(idxPath, 'utf8').split('\n');
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const row = JSON.parse(line);
+          if (typeof row?.id === 'string' && UUID_TOKEN_RE.test(row.id)) ids.add(row.id);
+        } catch {}
+      }
+    } catch {}
+  }
+  return ids;
+}
+
+function snapshotPreSpawnCodexSessions(fs, codexHomes) {
+  const files = collectRolloutFiles(fs, codexHomes);
+  return {
+    rolloutPaths: new Set(files.map(f => f.canonicalPath)),
+    sessionIds: readSessionIndexIds(fs, codexHomes),
+  };
+}
+
+function findRolloutPathBySessionId(fs, codexHomes, targetSessionId) {
+  if (!targetSessionId) return null;
+  const targetLower = targetSessionId.toLowerCase();
+  const candidates = [];
+  for (const item of collectRolloutFiles(fs, codexHomes)) {
+    if (item.uuid && item.uuid.toLowerCase() === targetLower) {
+      candidates.push(item);
+      continue;
+    }
+    const header = readFirstJsonLine(fs, item.path);
+    const meta = object(header?.payload) ? header.payload : header;
+    const id = String(meta?.id ?? meta?.session_id ?? '').toLowerCase();
+    if (id === targetLower) candidates.push(item);
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0]?.path ?? null;
+}
+
+function discoverPinnedCodexRollout(fs, codexHomes, {
+  preSpawnSnapshot,
+  expectedCwd,
+  turnStartedMs,
+  explicitSessionId = null,
+}) {
+  if (explicitSessionId) {
+    return {
+      sessionId: explicitSessionId,
+      rolloutPath: findRolloutPathBySessionId(fs, codexHomes, explicitSessionId),
+    };
+  }
+  const matches = [];
+  for (const item of collectRolloutFiles(fs, codexHomes)) {
+    if (preSpawnSnapshot?.rolloutPaths?.has(item.canonicalPath)) continue;
+    const header = readFirstJsonLine(fs, item.path);
+    if (header?.type !== 'session_meta') continue;
+    const meta = object(header.payload) ? header.payload : header;
+    if (meta?.thread_source === 'subagent') continue;
+    const sid = [meta?.id, meta?.session_id, item.uuid].find(v => typeof v === 'string' && UUID_TOKEN_RE.test(v)) ?? null;
+    if (!sid || preSpawnSnapshot?.sessionIds?.has(sid)) continue;
+    const metaCwd = typeof meta?.cwd === 'string' && meta.cwd.trim() ? meta.cwd.trim() : null;
+    if (!metaCwd || !pathsMatchCwd(fs, metaCwd, expectedCwd)) continue;
+    const parsedTs = Date.parse(meta?.timestamp ?? header.timestamp ?? '');
+    const sortTime = Number.isFinite(parsedTs) ? parsedTs : item.mtimeMs;
+    if (sortTime < turnStartedMs - 2000) continue;
+    matches.push({ sessionId: sid, rolloutPath: item.path, sortTime });
+  }
+  matches.sort((a, b) => a.sortTime - b.sortTime);
+  return matches[0] ? { sessionId: matches[0].sessionId, rolloutPath: matches[0].rolloutPath } : null;
+}
+
+function hasStructuredHttpStatus(value, statusCode, depth = 0) {
+  if (depth > 4 || !object(value)) return false;
+  for (const [k, v] of Object.entries(value)) {
+    if ((k === 'status' || k === 'http_status' || k === 'status_code' || k === 'http_status_code') && Number(v) === statusCode) {
+      return true;
+    }
+    if (object(v) && hasStructuredHttpStatus(v, statusCode, depth + 1)) return true;
+  }
+  return false;
+}
+
+function inspectRolloutQuotaError(fs, rolloutPath, fromByteOffset, turnStartedMs) {
+  if (!rolloutPath) return { nextOffset: fromByteOffset, quotaError: null };
+  const sliceText = readFileSliceUtf8(fs, rolloutPath, fromByteOffset);
+  if (!sliceText) return { nextOffset: fromByteOffset, quotaError: null };
+  const lastNewline = sliceText.lastIndexOf('\n');
+  if (lastNewline < 0) return { nextOffset: fromByteOffset, quotaError: null };
+  const completeChunk = sliceText.slice(0, lastNewline + 1);
+  const nextOffset = fromByteOffset + Buffer.byteLength(completeChunk, 'utf8');
+
+  for (const rawLine of completeChunk.split('\n')) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    let row = null;
+    try { row = JSON.parse(trimmed); } catch { continue; }
+    if (!object(row)) continue;
+
+    if (typeof row.timestamp === 'string') {
+      const rowMs = Date.parse(row.timestamp);
+      if (Number.isFinite(rowMs) && rowMs < turnStartedMs - 2000) continue;
+    }
+
+    let errObj = null;
+    let isTerminalTurnError = false;
+    if (row.type === 'event_msg' && object(row.payload)) {
+      if (row.payload.type === 'task_complete' && object(row.payload.error)) {
+        errObj = row.payload.error;
+        isTerminalTurnError = true;
+      } else if (row.payload.type === 'error' || row.payload.type === 'turn_failed') {
+        errObj = object(row.payload.error) ? row.payload.error : row.payload;
+        isTerminalTurnError = row.payload.type === 'turn_failed';
+      }
+    } else if (row.type === 'error' || row.type === 'turn.failed' || row.type === 'response.failed') {
+      errObj = object(row.error)
+        ? row.error
+        : (object(row.payload?.error) ? row.payload.error : (object(row.payload) ? row.payload : row));
+      isTerminalTurnError = true;
+    }
+
+    if (!object(errObj)) continue;
+
+    const info = errObj.codex_error_info;
+    const infoCode = typeof info === 'string' ? info.trim().toLowerCase() : '';
+    const errCode = String(
+      errObj.code
+      ?? errObj.error_code
+      ?? (typeof errObj.type === 'string' && errObj.type !== 'error' && errObj.type !== 'turn_failed' ? errObj.type : ''),
+    ).trim().toLowerCase();
+    const message = String(errObj.message ?? row.payload?.message ?? row.message ?? '').trim();
+    const isHttp429 = hasStructuredHttpStatus(errObj, 429) || hasStructuredHttpStatus(row, 429);
+
+    const isStructuredQuota = QUOTA_ERROR_CODES.has(infoCode)
+      || QUOTA_ERROR_CODES.has(errCode)
+      || ((isHttp429 || errCode === 'rate_limit_exceeded') && (!message || classifyRateLimitFailure(message) === 'quota_exhausted'))
+      || (isTerminalTurnError && message && classifyRateLimitFailure(message) === 'quota_exhausted');
+
+    if (isStructuredQuota) {
+      return {
+        nextOffset,
+        quotaError: {
+          message: message || errCode || infoCode || 'usage_limit_reached',
+        },
+      };
+    }
+  }
+
+  return { nextOffset, quotaError: null };
+}
+
+function isCloudAccountStructurallyExhausted(acc) {
+  if (!object(acc)) return false;
+  if (acc.limit_reached === true) return true;
+  if (typeof acc.five_hour_used_percent === 'number' && acc.five_hour_used_percent >= 100) return true;
+  if (typeof acc.weekly_used_percent === 'number' && acc.weekly_used_percent >= 100) return true;
+  return false;
+}
+
+async function checkCloudAccountQuotaExhausted(accountId, { cwd, env }, ports = {}) {
+  if (!accountId) return null;
+  try {
+    const listed = await fetchAccountsList({ cwd, env, refresh: false }, ports);
+    const acc = listed.accounts.find(a => a?.account_id === accountId) ?? null;
+    if (isCloudAccountStructurallyExhausted(acc)) return acc;
+  } catch {}
+  return null;
 }
 
 function buildCodexExecutionEnv(baseEnv, managedHome) {
@@ -2855,6 +3381,7 @@ function buildCodexExecutionEnv(baseEnv, managedHome) {
 }
 
 async function runSingleSupervisedCodexTurn({
+  fs,
   args,
   cwd,
   env,
@@ -2862,13 +3389,25 @@ async function runSingleSupervisedCodexTurn({
   stdout,
   stderr,
   turn,
+  turnStartedMs,
   activeEntry,
+  codexHomes,
+  preSpawnSnapshot,
+  expectedCwd,
+  sessionState,
+  initialRolloutOffset = 0,
 }, ports = {}) {
   let rollingPlain = '';
   let capturedSessionId = null;
   let quotaExhausted = false;
+  let quotaReasonText = '';
+  let exhaustedAccountSnapshot = null;
+  let rolloutOffset = initialRolloutOffset;
+  let abortedByParentSignal = null;
   const abortController = new AbortController();
   const settleMs = ports.quotaSettleMs ?? 60;
+  const rolloutPollMs = ports.rolloutPollIntervalMs ?? 200;
+  const cloudPollMs = ports.cloudQuotaPollIntervalMs ?? 0;
 
   const inspectChunk = rawChunk => {
     const clean = stripAnsiText(String(rawChunk ?? ''));
@@ -2876,34 +3415,118 @@ async function runSingleSupervisedCodexTurn({
     const sidMatch = OUTPUT_SESSION_ID_RE.exec(clean);
     if (sidMatch?.[1]) capturedSessionId = sidMatch[1];
     rollingPlain = `${rollingPlain}${clean}`.slice(-16_384);
-    if (!quotaExhausted && classifyRateLimitFailure(rollingPlain, activeEntry) === 'quota_exhausted') {
-      quotaExhausted = true;
-      abortController.abort();
+  };
+
+  const triggerStructuredQuotaAbort = (reasonText, cloudAccount = null) => {
+    if (quotaExhausted) return;
+    quotaExhausted = true;
+    quotaReasonText = String(reasonText || 'usage_limit_reached');
+    if (cloudAccount) exhaustedAccountSnapshot = cloudAccount;
+    abortController.abort();
+  };
+
+  const pollRolloutOnce = () => {
+    if (!sessionState.rolloutPath) {
+      if (sessionState.sessionId) {
+        const foundPath = findRolloutPathBySessionId(fs, codexHomes, sessionState.sessionId);
+        if (foundPath) {
+          sessionState.rolloutPath = foundPath;
+          rolloutOffset = 0;
+        }
+      } else {
+        const discovered = discoverPinnedCodexRollout(fs, codexHomes, {
+          preSpawnSnapshot,
+          expectedCwd,
+          turnStartedMs,
+          explicitSessionId: null,
+        });
+        if (discovered) {
+          sessionState.sessionId = discovered.sessionId;
+          sessionState.rolloutPath = discovered.rolloutPath;
+          rolloutOffset = 0;
+        }
+      }
+    }
+    if (sessionState.rolloutPath && !quotaExhausted) {
+      const checked = inspectRolloutQuotaError(fs, sessionState.rolloutPath, rolloutOffset, turnStartedMs);
+      rolloutOffset = checked.nextOffset;
+      if (checked.quotaError) {
+        triggerStructuredQuotaAbort(checked.quotaError.message);
+      }
+    }
+  };
+
+  let rolloutInterval = null;
+  let cloudInterval = null;
+  let cloudCheckInFlight = false;
+
+  const startStructuredMonitors = () => {
+    if (rolloutPollMs > 0) {
+      rolloutInterval = setInterval(pollRolloutOnce, rolloutPollMs);
+      rolloutInterval.unref?.();
+    }
+    if (cloudPollMs > 0 && activeEntry?.account_id) {
+      cloudInterval = setInterval(() => {
+        if (quotaExhausted || cloudCheckInFlight) return;
+        cloudCheckInFlight = true;
+        checkCloudAccountQuotaExhausted(activeEntry.account_id, { cwd, env }, ports)
+          .then(acc => {
+            if (acc) triggerStructuredQuotaAbort('usage_limit_reached', acc);
+          })
+          .finally(() => {
+            cloudCheckInFlight = false;
+          });
+      }, cloudPollMs);
+      cloudInterval.unref?.();
+    }
+  };
+
+  const stopStructuredMonitors = () => {
+    if (rolloutInterval) {
+      clearInterval(rolloutInterval);
+      rolloutInterval = null;
+    }
+    if (cloudInterval) {
+      clearInterval(cloudInterval);
+      cloudInterval = null;
     }
   };
 
   if (typeof ports.spawnCodexPty === 'function') {
-    const res = await ports.spawnCodexPty({
-      command: 'codex',
-      args,
-      cwd,
-      env,
-      turn,
-      signal: abortController.signal,
-      onOutput(chunk) {
-        try { stdout?.write?.(chunk); } catch {}
-        inspectChunk(chunk);
-      },
-    });
+    startStructuredMonitors();
+    let res;
+    try {
+      res = await ports.spawnCodexPty({
+        command: 'codex',
+        args,
+        cwd,
+        env,
+        turn,
+        signal: abortController.signal,
+        onOutput(chunk) {
+          try { stdout?.write?.(chunk); } catch {}
+          inspectChunk(chunk);
+        },
+      });
+    } finally {
+      stopStructuredMonitors();
+    }
     if (res?.stdout) inspectChunk(res.stdout);
     if (res?.stderr) inspectChunk(res.stderr);
     if (typeof res?.sessionId === 'string' && UUID_TOKEN_RE.test(res.sessionId)) {
       capturedSessionId = res.sessionId;
     }
+    pollRolloutOnce();
+    if (!sessionState.sessionId && capturedSessionId) {
+      sessionState.sessionId = capturedSessionId;
+    }
     return {
       code: res?.code ?? 0,
       signal: res?.signal ?? null,
       quotaExhausted,
+      quotaReasonText,
+      exhaustedAccountSnapshot,
+      abortedByParentSignal,
       rollingPlain,
       capturedSessionId,
     };
@@ -2914,11 +3537,14 @@ async function runSingleSupervisedCodexTurn({
 
   const runWithChild = tryPython => new Promise((resolveTurn, rejectTurn) => {
     let settled = false;
+    let ttyRestored = false;
     let settleTimer = null;
     let killTimer = null;
     let wasRaw = false;
     let rawEnabled = false;
     let onStdinData = null;
+    let onStdinEnd = null;
+    let onResize = null;
 
     const childEnv = tryPython
       ? {
@@ -2934,7 +3560,7 @@ async function runSingleSupervisedCodexTurn({
         ? spawnImpl('python3', ['-u', '-c', PYTHON_PTY_SUPERVISOR_SCRIPT, 'codex', ...args], {
             cwd,
             env: childEnv,
-            stdio: ['pipe', 'pipe', 'pipe'],
+            stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
             shell: false,
           })
         : spawnImpl('codex', args, {
@@ -2948,10 +3574,26 @@ async function runSingleSupervisedCodexTurn({
       return;
     }
 
-    const restoreTty = () => {
-      if (onStdinData && stdin?.off) {
-        try { stdin.off('data', onStdinData); } catch {}
+    const resizePipe = tryPython ? (child.stdio?.[3] ?? null) : null;
+    resizePipe?.on?.('error', () => {});
+
+    const removeStreamListener = (stream, eventName, handler) => {
+      if (!stream || !handler) return;
+      if (typeof stream.off === 'function') {
+        try { stream.off(eventName, handler); return; } catch {}
       }
+      if (typeof stream.removeListener === 'function') {
+        try { stream.removeListener(eventName, handler); } catch {}
+      }
+    };
+
+    const restoreTty = () => {
+      if (ttyRestored) return;
+      ttyRestored = true;
+      removeStreamListener(stdin, 'data', onStdinData);
+      removeStreamListener(stdin, 'end', onStdinEnd);
+      removeStreamListener(stdin, 'close', onStdinEnd);
+      removeStreamListener(stdout, 'resize', onResize);
       if (rawEnabled && typeof stdin?.setRawMode === 'function') {
         try { stdin.setRawMode(wasRaw); } catch {}
       }
@@ -2961,12 +3603,42 @@ async function runSingleSupervisedCodexTurn({
     };
 
     const terminateChild = () => {
+      try { resizePipe?.end?.(); } catch {}
+      try { child.stdin?.end?.(); } catch {}
       try { child.kill('SIGTERM'); } catch {}
-      killTimer = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch {}
-      }, 600);
-      killTimer.unref?.();
+      if (!killTimer) {
+        killTimer = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch {}
+        }, 600);
+        killTimer.unref?.();
+      }
     };
+
+    const onProcessExit = () => {
+      restoreTty();
+      try { resizePipe?.destroy?.(); } catch {}
+      try { child.kill('SIGTERM'); } catch {}
+    };
+    const onSigterm = () => {
+      abortedByParentSignal = 'SIGTERM';
+      restoreTty();
+      terminateChild();
+    };
+    const onSighup = () => {
+      abortedByParentSignal = 'SIGHUP';
+      restoreTty();
+      terminateChild();
+    };
+    const onSigint = () => {
+      if (tryPython) {
+        try { child.kill('SIGINT'); } catch {}
+      }
+    };
+
+    process.on('exit', onProcessExit);
+    process.on('SIGTERM', onSigterm);
+    process.on('SIGHUP', onSighup);
+    process.on('SIGINT', onSigint);
 
     const onAbort = () => {
       if (settleMs <= 0) {
@@ -2977,26 +3649,55 @@ async function runSingleSupervisedCodexTurn({
       }
     };
     abortController.signal.addEventListener('abort', onAbort, { once: true });
+    startStructuredMonitors();
 
     const finish = (err, code, signal) => {
       if (settled) return;
       settled = true;
+      stopStructuredMonitors();
       if (settleTimer) clearTimeout(settleTimer);
       if (killTimer) clearTimeout(killTimer);
       abortController.signal.removeEventListener('abort', onAbort);
+      process.off('exit', onProcessExit);
+      process.off('SIGTERM', onSigterm);
+      process.off('SIGHUP', onSighup);
+      process.off('SIGINT', onSigint);
+      try { resizePipe?.end?.(); } catch {}
       restoreTty();
       if (err) {
         rejectTurn(err);
         return;
       }
+      pollRolloutOnce();
+      if (!sessionState.sessionId && capturedSessionId) {
+        sessionState.sessionId = capturedSessionId;
+      }
+      const effectiveSignal = abortedByParentSignal ?? signal ?? null;
+      const effectiveCode = effectiveSignal === 'SIGINT'
+        ? 130
+        : (abortedByParentSignal === 'SIGTERM' ? 143 : (abortedByParentSignal === 'SIGHUP' ? 129 : (code ?? 0)));
       resolveTurn({
-        code: signal === 'SIGINT' ? 130 : (code ?? 0),
-        signal: signal ?? null,
+        code: effectiveCode,
+        signal: effectiveSignal,
         quotaExhausted,
+        quotaReasonText,
+        exhaustedAccountSnapshot,
+        abortedByParentSignal,
         rollingPlain,
         capturedSessionId,
       });
     };
+
+    if (tryPython && resizePipe && typeof stdout?.on === 'function') {
+      onResize = () => {
+        const nextRows = Number(stdout?.rows) || 24;
+        const nextCols = Number(stdout?.columns) || 80;
+        if (nextRows > 0 && nextCols > 0) {
+          try { resizePipe.write(`${nextRows} ${nextCols}\n`); } catch {}
+        }
+      };
+      stdout.on('resize', onResize);
+    }
 
     if (tryPython && stdin && child.stdin) {
       if (stdin.isTTY && typeof stdin.setRawMode === 'function') {
@@ -3009,7 +3710,13 @@ async function runSingleSupervisedCodexTurn({
       onStdinData = chunk => {
         try { child.stdin.write(chunk); } catch {}
       };
+      onStdinEnd = () => {
+        try { child.stdin.end(); } catch {}
+        try { resizePipe?.end?.(); } catch {}
+      };
       stdin.on?.('data', onStdinData);
+      stdin.once?.('end', onStdinEnd);
+      stdin.once?.('close', onStdinEnd);
       stdin.resume?.();
       child.stdin.on('error', () => {});
     } else if (!tryPython && stdin && stdin !== process.stdin && typeof stdin.pipe === 'function' && child.stdin) {
@@ -3128,8 +3835,8 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
   const activeStdin = ports.stdin ?? stdin ?? process.stdin;
   const activeStdout = ports.stdout ?? process.stdout;
   const activeStderr = ports.stderr ?? process.stderr;
-  const initialArgs = args[0] === '--' ? args.slice(1) : [...args];
-  const invocation = inspectCodexInvocation(initialArgs);
+  const initialArgs = [...args];
+  const invocation = inspectCodexInvocation(initialArgs, cwd);
 
   let managedHome = '';
   const expectedManagedHome = pddManagedCodexHome(env);
@@ -3163,8 +3870,16 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
   }
 
   const userCodexHome = localCodexHome({ ...env, CODEX_HOME: '' });
+  const codexHomes = [managedHome, userCodexHome];
+  const preSpawnSnapshot = snapshotPreSpawnCodexSessions(fs, codexHomes);
+  const sessionState = {
+    sessionId: invocation.explicitSessionId ?? null,
+    rolloutPath: invocation.explicitSessionId
+      ? findRolloutPathBySessionId(fs, codexHomes, invocation.explicitSessionId)
+      : null,
+  };
+
   let currentArgs = initialArgs;
-  let sessionId = invocation.explicitSessionId;
   const triedAccountIds = new Set();
   const maxRotations = 8;
 
@@ -3173,8 +3888,10 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
     const stateBefore = readCloudAccountsState({ env }, ports);
     const activeBefore = stateBefore.active?.codex ?? null;
     const childEnv = buildCodexExecutionEnv(env, managedHome);
+    const initialRolloutOffset = sessionState.rolloutPath ? safeFileSize(fs, sessionState.rolloutPath) : 0;
 
     const turnRes = await runSingleSupervisedCodexTurn({
+      fs,
       args: currentArgs,
       cwd,
       env: childEnv,
@@ -3182,14 +3899,32 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
       stdout: activeStdout,
       stderr: activeStderr,
       turn,
+      turnStartedMs,
       activeEntry: activeBefore,
+      codexHomes,
+      preSpawnSnapshot,
+      expectedCwd: invocation.effectiveCwd,
+      sessionState,
+      initialRolloutOffset,
     }, ports);
 
-    const diskSessionId = findRecentCodexSessionId(fs, [managedHome, userCodexHome], turnStartedMs - 2000);
-    sessionId = turnRes.capturedSessionId || diskSessionId || sessionId;
+    if (turnRes.abortedByParentSignal) {
+      return { exitCode: turnRes.code ?? 1, message: '' };
+    }
 
-    const hitQuota = turnRes.quotaExhausted
-      || (turnRes.code !== 0 && classifyRateLimitFailure(turnRes.rollingPlain, activeBefore) === 'quota_exhausted');
+    let hitQuota = turnRes.quotaExhausted;
+    let cloudExhaustedAcc = turnRes.exhaustedAccountSnapshot;
+
+    if (!hitQuota && turnRes.code !== 0 && turnRes.code !== 130 && turnRes.signal !== 'SIGINT') {
+      if (activeBefore?.account_id) {
+        cloudExhaustedAcc = await checkCloudAccountQuotaExhausted(activeBefore.account_id, { cwd, env }, ports);
+        if (cloudExhaustedAcc) hitQuota = true;
+      }
+      // Early startup failure fallback ONLY when codex exited non-zero on its own before creating a session rollout file.
+      if (!hitQuota && !sessionState.rolloutPath && classifyRateLimitFailure(turnRes.rollingPlain, activeBefore) === 'quota_exhausted') {
+        hitQuota = true;
+      }
+    }
 
     if (!hitQuota) {
       return { exitCode: turnRes.code ?? 0, message: '' };
@@ -3200,7 +3935,8 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
     const exhaustedId = exhaustedEntry?.account_id ?? null;
     if (exhaustedId) {
       triedAccountIds.add(exhaustedId);
-      const report = extractRateLimitReport(turnRes.rollingPlain, exhaustedEntry, (ports.now ?? Date.now)());
+      const reportSourceText = turnRes.quotaReasonText || (!sessionState.rolloutPath ? turnRes.rollingPlain : 'usage_limit_reached');
+      const report = extractRateLimitReport(reportSourceText, cloudExhaustedAcc ?? exhaustedEntry, (ports.now ?? Date.now)());
       await reportCloudAccountUsage(exhaustedId, report, { cwd, env, timeoutMs: 3500 }, ports).catch(() => {});
     }
 
@@ -3224,13 +3960,13 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
     const prevLabel = exhaustedEntry?.label ?? exhaustedId ?? 'previous';
     const nextLabel = nextLease.reply.account?.label ?? nextLease.reply.account?.account_id ?? 'next';
     const quotaInfo = formatAccountQuotaSummary(nextLease.reply.account);
-    const resumeDesc = sessionId ? `session ${sessionId}` : '--last';
+    const resumeDesc = sessionState.sessionId ? `session ${sessionState.sessionId}` : '--last';
     try {
       activeStderr?.write?.(
         redactSecrets(`\n[pdd accounts] Quota reached on "${prevLabel}"; switched active Codex account to "${nextLabel}"${quotaInfo} and resuming (${resumeDesc}).\n`),
       );
     } catch {}
-    currentArgs = buildCodexResumeArgs(initialArgs, sessionId);
+    currentArgs = buildCodexResumeArgs(initialArgs, sessionState.sessionId);
   }
 
   return { exitCode: 1, message: 'No additional ready Codex Cloud accounts are available.' };

@@ -2084,7 +2084,12 @@ test('3427: isolated temp CODEX_HOME on add, --device-auth, --loop auto-labels &
   assert.equal(impFrom.exit, 0, impFrom.stderr);
   assert.match(impFrom.stdout, /Enrolled Codex account "cx-imported"/);
   assert.match(impFrom.stdout, /Shared with promptdriven\/eng \(invite inv_\d+\), @promptdriven \(invite inv_\d+\)/);
-  assert.equal(readFileSync(extAuthPath, 'utf8'), extRawJson, 'external --from file left intact');
+  const scrubbedExtRaw = readFileSync(extAuthPath, 'utf8');
+  assert.equal(scrubbedExtRaw.includes('rt_ext_import_secret8888'), false, 'single-use refresh_token scrubbed from --from source file');
+  const scrubbedExtJson = JSON.parse(scrubbedExtRaw);
+  assert.equal(scrubbedExtJson.tokens.refresh_token, '');
+  assert.equal(scrubbedExtJson.tokens.account_id, 'acct_ext_import');
+  assert.equal(statSync(extAuthPath).mode & 0o777, 0o600);
 
   // 6. Upfront validation on `share` & `unshare` BEFORE network mutations!
   const reqCountBeforeInvalid = cloud.state.requests.length;

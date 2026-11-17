@@ -87,18 +87,20 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     `[model_providers.pdd_codex_gateway]` block from `~/.codex/config.toml` without ever reading
     or writing `~/.codex/auth.json`, and always sets `cli_auth_credentials_store = "file"` in
     `managedCodexConfigPath(env)` (`0600`, round-trip verified with `./vendor/smol-toml/parse.js`).
-  - When `authOrLease.delivery_mode === "gateway_grant"`, `materializeLocalCodexAuth` validates
-    `codex_gateway_url` (`https:` or loopback `http:`) and `codex_gateway_token || gateway_bearer_token`
-    (requiring `"pddg_"` prefix with `code: "invalid_lease"`), writes `0600`
+  - When `authOrLease` has delivery mode `"gateway_grant"`, `materializeLocalCodexAuth` validates
+    `codex_gateway_url` (`https:` or loopback `http:`) and `codex_gateway_token` (or `gateway_bearer_token`,
+    requiring the `"pddg_"` prefix and throwing `code: "invalid_lease"` otherwise), writes `0600`
     `managedCodexAuthPath(env)` with `{"auth_mode": "apikey", "OPENAI_API_KEY": "<pddg_grant>"}`,
     and writes `0600` `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"`,
     `model_provider = "pdd_codex_gateway"` and `[model_providers.pdd_codex_gateway]`:
     when `<pddg_grant>` starts with `"pddg_lse_"`, strip any trailing `/lse_[^/]+` segment from
-    `<codex_gateway_url>` so `base_url = "<origin>/v1/codex-gateway"`, set `wire_api = "responses"`,
+    `<codex_gateway_url>` so `base_url = "<origin>/v1/codex-gateway"`, set
+    `model_catalog_url = "<origin>/v1/codex-gateway/models"`, `wire_api = "responses"`,
     `requires_openai_auth = true`, `supports_websockets = false`, and omit `http_headers` so
     `config.toml` remains constant across account rotations; for legacy non-`"pddg_lse_"` grants,
-    preserve `base_url = "<codex_gateway_url>"`, `requires_openai_auth = false`,
-    `supports_websockets = false`, and `http_headers = {"x-pdd-gateway-grant": "<pddg_grant>"}`.
+    preserve `base_url = "<codex_gateway_url>"`, set `model_catalog_url = "<codex_gateway_url>/models"`,
+    `requires_openai_auth = false`, `supports_websockets = false`, and
+    `http_headers = {"x-pdd-gateway-grant": "<pddg_grant>"}`.
   - For legacy `direct_stripped` bundles, `materializeLocalCodexAuth` writes `0600`
     `managedCodexAuthPath(env)` with `tokens.refresh_token: ""` and `0600`
     `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"` and user settings
@@ -134,7 +136,8 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     `include_only`, removing any case-insensitive `PDD_CODEX_GATEWAY_GRANT` entry from `filters` and
     `set`, and setting `filters.PDD_CODEX_GATEWAY_GRANT = "exclude"`,
     and `[model_providers.pdd_codex_gateway]` (`name = "PDD Codex Gateway"`,
-    `base_url = "<normalized_codex_gateway_url>"`, `wire_api = "responses"`, `requires_openai_auth = false`,
+    `base_url = "<normalized_codex_gateway_url>"`, `model_catalog_url = "<normalized_codex_gateway_url>/models"`,
+    `wire_api = "responses"`, `requires_openai_auth = false`,
     `supports_websockets = false`, `env_http_headers = {"x-pdd-gateway-grant": "PDD_CODEX_GATEWAY_GRANT"}`
     with no static `http_headers`), sets `CODEX_HOME=<overlay>` and
     `PDD_CODEX_GATEWAY_GRANT=<grant>` in `step.env`, and deletes `OPENAI_API_KEY`,

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: f19e21c3452b0361ca008b385cb46b5cec99ba377db451c00abdf0f3ff6ba626).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: b7884ca79221cca835d3724b7625f770d56b592cf6b3b0a741210d44a2af88b8).
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -905,10 +905,12 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
 
   if (isGateway) {
     const prevProviders = isTomlTable(cleanedUser.nextData.model_providers) ? { ...cleanedUser.nextData.model_providers } : {};
+    const modelCatalogUrl = `${gatewayUrl}/models`;
     const gatewayProviderBlock = embeddedLeaseGrant
       ? {
           name: 'PDD Codex Gateway',
           base_url: gatewayUrl,
+          model_catalog_url: modelCatalogUrl,
           wire_api: 'responses',
           requires_openai_auth: true,
           supports_websockets: false,
@@ -916,6 +918,7 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
       : {
           name: 'PDD Codex Gateway',
           base_url: gatewayUrl,
+          model_catalog_url: modelCatalogUrl,
           wire_api: 'responses',
           requires_openai_auth: false,
           supports_websockets: false,
@@ -1100,6 +1103,7 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
           [CODEX_GATEWAY_PROVIDER_ID]: {
             name: 'PDD Codex Gateway',
             base_url: gatewayUrl,
+            model_catalog_url: `${gatewayUrl}/models`,
             wire_api: 'responses',
             requires_openai_auth: false,
             supports_websockets: false,

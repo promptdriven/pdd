@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5026656e6fc067093cfff09a2fdae6b0345ccbb7fa70fd4ffcd1d3765054431a).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 88e77ae8532532ac50e527b6a5578d978bb6b772f8ded3e56644ed2686b1adf3).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -189,8 +189,8 @@ const routes = [
     forms: [form('pdd accounts use LABEL [--provider codex|claude]', "Pin and materialize LABEL in PDD's isolated Codex home or ~/.claude/settings.json.")] },
   { id: 'accounts.next', prefix: ['accounts', 'next'], local: 'accounts', operands: [], options: [{ name: '--provider', kind: 'value', choices: ['codex', 'claude'] }],
     forms: [form('pdd accounts next [--provider codex|claude]', 'Skip the active login and switch to the next ready account sorted by soonest weekly reset.')] },
-  { id: 'accounts.codex', prefix: ['accounts', 'codex'], local: 'accounts', operands: [{ name: 'arg', type: 'text', optional: true, repeat: true }], options: [],
-    forms: [form('pdd accounts codex [-- ARGS...]', 'Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session resume rotation.')] },
+  { id: 'accounts.codex', prefix: ['accounts', 'codex'], local: 'accounts', passthrough: true, operands: [{ name: 'arg', type: 'text', optional: true, repeat: true }], options: [],
+    forms: [form('pdd accounts codex [ARGS...]', 'Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session resume rotation.')] },
   { id: 'accounts.sync', prefix: ['accounts', 'sync'], local: 'accounts', operands: [], options: [{ name: '--provider', kind: 'value', choices: ['codex', 'claude'] }, { name: '--quiet', kind: 'flag' }, { name: '--print-codex-home', kind: 'flag', hidden: true }, { name: '--timeout-ms', kind: 'integer', min: 50, max: 60000 }],
     forms: [form('pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]', 'Refresh the PDD-managed login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.')] },
   { id: 'accounts.auto', prefix: ['accounts', 'auto'], local: 'accounts', operands: [{ name: 'mode', type: 'choice:on,off,status' }], options: [],
@@ -226,6 +226,7 @@ export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.fr
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),
   ...(route.removed ? { removed: Object.freeze(route.removed) } : {}),
   ...(route.implies ? { implies: Object.freeze(route.implies) } : {}),
+  ...(route.passthrough ? { passthrough: true } : {}),
   ...(route.topics ? { topics: Object.freeze(route.topics) } : {}), operands: Object.freeze(route.operands.map(Object.freeze)),
   options: Object.freeze(route.options.map(Object.freeze)), forms: Object.freeze(route.forms) })));
 export const PUBLIC_COMMAND_IDS = Object.freeze(PUBLIC_COMMAND_ROUTES.map(route => route.id));

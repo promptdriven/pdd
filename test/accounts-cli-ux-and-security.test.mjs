@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import http from 'node:http';
 import { PassThrough } from 'node:stream';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,9 +20,12 @@ import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
 import {
+  createCodexStepOverlay,
   managedCodexAuthPath,
   managedCodexConfigPath,
   pddManagedCodexHome,
+  prepareCloudStepExecution,
+  readCloudAccountsState,
 } from '../src/login-pool.mjs';
 import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
 
@@ -95,7 +99,9 @@ async function createPoolGatewayServer(t, opts = {}) {
     enforceUniqueLabel: opts.enforceUniqueLabel !== false,
     embeddedLeaseTokens: opts.embeddedLeaseTokens !== false,
     ownerGatewayGrant: opts.ownerGatewayGrant !== false,
+    unpopulatedWindowsOnCreate: Boolean(opts.unpopulatedWindowsOnCreate),
     failNextPostAccountsStatus: 0,
+    failPostAccountsAfterDeleteStatus: 0,
     leaseOverrideState: null,
   };
 
@@ -165,10 +171,10 @@ async function createPoolGatewayServer(t, opts = {}) {
         is_owner: true,
         shared: false,
         state: 'ready',
-        five_hour_used_percent: 5,
-        five_hour_reset_at: '2026-11-18T01:00:00Z',
-        weekly_used_percent: 12,
-        weekly_reset_at: '2026-11-22T00:00:00Z',
+        five_hour_used_percent: state.unpopulatedWindowsOnCreate ? null : 5,
+        five_hour_reset_at: state.unpopulatedWindowsOnCreate ? null : '2026-11-18T01:00:00Z',
+        weekly_used_percent: state.unpopulatedWindowsOnCreate ? null : 12,
+        weekly_reset_at: state.unpopulatedWindowsOnCreate ? null : '2026-11-22T00:00:00Z',
         shares: [],
         org_shares: [],
         team_shares: [],
@@ -306,9 +312,13 @@ async function createPoolGatewayServer(t, opts = {}) {
       }
       if (req.method === 'POST' && action === 'share') {
         const invId = `inv_${state.nextSeq++}`;
-        if (body?.github_login) {
+        if (body?.github_login || Number.isSafeInteger(body?.github_user_id)) {
           acc.shares = acc.shares ?? [];
-          acc.shares.push({ github_login: body.github_login, github_user_id: body.github_user_id ?? null, state: 'pending' });
+          acc.shares.push({
+            github_login: body.github_login ?? null,
+            github_user_id: body.github_user_id ?? null,
+            state: 'pending',
+          });
         } else if (body?.team && body?.org) {
           acc.team_shares = acc.team_shares ?? [];
           acc.team_shares.push(`${body.org}/${body.team}`);
@@ -336,6 +346,10 @@ async function createPoolGatewayServer(t, opts = {}) {
       const acc = state.accounts.find(a => a.account_id === id);
       if (!acc) return send(404, { detail: 'Not found' });
       acc.revoked = true;
+      if (state.failPostAccountsAfterDeleteStatus > 0) {
+        state.failNextPostAccountsStatus = state.failPostAccountsAfterDeleteStatus;
+        state.failPostAccountsAfterDeleteStatus = 0;
+      }
       return send(200, { deleted: true });
     }
 
@@ -343,7 +357,10 @@ async function createPoolGatewayServer(t, opts = {}) {
   });
 
   await new Promise(r => server.listen(0, '127.0.0.1', r));
-  t.after(() => server.close());
+  t.after(() => {
+    server.closeAllConnections?.();
+    server.close();
+  });
   const addr = server.address();
   serverUrl = `http://127.0.0.1:${addr.port}`;
   return { serverUrl, state };
@@ -730,8 +747,43 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
   const parsedCfg = parseToml(configTextBeforeSwitch);
   assert.equal(parsedCfg.model_provider, 'pdd_codex_gateway');
   assert.equal(parsedCfg.model_providers.pdd_codex_gateway.base_url, `${cloud.serverUrl}/v1/codex-gateway`);
+  assert.equal(parsedCfg.model_providers.pdd_codex_gateway.model_catalog_url, `${cloud.serverUrl}/v1/codex-gateway/models`);
   assert.equal(parsedCfg.model_providers.pdd_codex_gateway.requires_openai_auth, true);
   assert.equal(parsedCfg.model_providers.pdd_codex_gateway.http_headers, undefined);
+
+  // Also verify step overlay (`createCodexStepOverlay` / `prepareCloudStepExecution`) writes `model_catalog_url`!
+  const stepExec = prepareCloudStepExecution({
+    account: { account_id: 'acc_step_1', label: 'glt', provider: 'codex' },
+    lease: {
+      lease_id: 'lse_00aabbcc',
+      delivery_mode: 'gateway_grant',
+      codex_gateway_url: `${cloud.serverUrl}/v1/codex-gateway/lse_00aabbcc`,
+      codex_gateway_token: 'pddg_lse_00aabbcc_stepSecret123',
+    },
+  }, sb.env, { tmpRoot: sb.root });
+  try {
+    const stepCfg = parseToml(readFileSync(join(stepExec.overlayDir, 'config.toml'), 'utf8'));
+    assert.equal(stepCfg.model_providers.pdd_codex_gateway.base_url, `${cloud.serverUrl}/v1/codex-gateway`);
+    assert.equal(stepCfg.model_providers.pdd_codex_gateway.model_catalog_url, `${cloud.serverUrl}/v1/codex-gateway/models`);
+  } finally {
+    stepExec.cleanup();
+  }
+
+  const legacyOverlay = createCodexStepOverlay({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: `${cloud.serverUrl}/v1/codex-gateway/lse_legacy99`,
+    codex_gateway_token: 'pddg_legacy_stepToken99',
+  }, {
+    env: sb.env,
+    tmpRoot: sb.root,
+  });
+  try {
+    const legacyStepCfg = parseToml(readFileSync(join(legacyOverlay.overlayDir, 'config.toml'), 'utf8'));
+    assert.equal(legacyStepCfg.model_providers.pdd_codex_gateway.base_url, `${cloud.serverUrl}/v1/codex-gateway/lse_legacy99`);
+    assert.equal(legacyStepCfg.model_providers.pdd_codex_gateway.model_catalog_url, `${cloud.serverUrl}/v1/codex-gateway/lse_legacy99/models`);
+  } finally {
+    legacyOverlay.cleanup();
+  }
 
   const nextRes = await invokeCli(['accounts', 'next', '--provider', 'codex'], sb);
   assert.equal(nextRes.exit, 0, nextRes.stderr);
@@ -741,11 +793,13 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
   assert.equal(readFileSync(configPath, 'utf8'), configTextBeforeSwitch, 'config.toml bytes remain 100% constant across switches');
   assert.equal(statSync(configPath).ino, configInodeBeforeSwitch, 'config.toml was not rewritten when unchanged');
 
-  // Verify zero-plaintext fallback when post-enroll `/v1/accounts/lease` returns `all_cooling` or `500`!
+  // Verify zero-plaintext fallback AND `null` (never `0` / `100% left`) quota state when post-enroll `/v1/accounts/lease` fails!
   const sbCooling = makeSandbox(t, cloud.serverUrl);
   cloud.state.leaseOverrideState = 'error_500';
+  cloud.state.unpopulatedWindowsOnCreate = true;
   const coolingEnroll = await invokeCli(['accounts', 'add', '--provider', 'codex', '--label', 'glt-offline-lease'], sbCooling, {
     tmpRoot: sbCooling.root,
+    readCodexUsageWindows: async () => null,
     run: async (_cmd, _args, opts) => {
       writeFileSync(join(opts.env.CODEX_HOME, 'auth.json'), JSON.stringify({
         auth_mode: 'chatgpt',
@@ -761,27 +815,36 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
     },
   });
   cloud.state.leaseOverrideState = null;
+  cloud.state.unpopulatedWindowsOnCreate = false;
   assert.equal(coolingEnroll.exit, 0, coolingEnroll.stderr);
   assert.equal(existsSync(managedCodexAuthPath(sbCooling.env)), false, 'must never fall back to writing raw OAuth auth.json when lease fails');
+  const coolingSavedState = readCloudAccountsState({ env: sbCooling.env });
+  assert.equal(coolingSavedState.active.codex.five_hour_used_percent, null, 'unprobed 5h window stays null, never 0');
+  assert.equal(coolingSavedState.active.codex.weekly_used_percent, null, 'unprobed 7d window stays null, never 0');
+  const sbCoolingOffline = { ...sbCooling, env: { ...sbCooling.env, PDD_CLOUD_URL: 'http://127.0.0.1:1' } };
+  const offlineStatus = await invokeCli(['accounts', 'status'], sbCoolingOffline);
+  assert.equal(offlineStatus.exit, 0);
+  assert.match(offlineStatus.stdout, /5h: -, 7d: -/, 'offline status displays "-" rather than misleading 100% left');
 
-  // Backward compatibility: legacy server returning non-`pddg_lse_` token keeps lease-scoped URL + `http_headers`!
+  // Backward compatibility: legacy server returning non-`pddg_lse_` token keeps lease-scoped URL + `http_headers` + `model_catalog_url`!
   cloud.state.embeddedLeaseTokens = false;
   const legacyUse = await invokeCli(['accounts', 'use', 'glt'], sb);
   assert.equal(legacyUse.exit, 0, legacyUse.stderr);
   const legacyCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.match(legacyCfg.model_providers.pdd_codex_gateway.base_url, /\/v1\/codex-gateway\/lse_[0-9a-f]+$/);
+  assert.match(legacyCfg.model_providers.pdd_codex_gateway.model_catalog_url, /\/v1\/codex-gateway\/lse_[0-9a-f]+\/models$/);
   assert.equal(legacyCfg.model_providers.pdd_codex_gateway.requires_openai_auth, false);
   assert.match(legacyCfg.model_providers.pdd_codex_gateway.http_headers['x-pdd-gateway-grant'], /^pddg_legacy_/);
 });
 
-test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform live mid-session quota rotation and resume seamlessly', async t => {
+test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured live mid-session quota rotation without PTY stdout false positives', async t => {
   // 1. Shell wrapper blocks (`sh` and `fish`) delegate interactive TTY codex sessions to `pdd accounts codex -- "$@"`!
   const shWrapper = renderAutoSwitchBlock('sh');
   const fishWrapper = renderAutoSwitchBlock('fish');
   assert.match(shWrapper, /pdd accounts codex -- "\$@"/);
   assert.match(fishWrapper, /pdd accounts codex -- \$argv/);
 
-  // 2. Live mid-session quota exhaustion rotates `auth.json` to next ready account and relaunches `codex resume <session-id>`!
+  // 2. Live mid-session quota exhaustion from structured rollout JSONL rotates `auth.json` to next ready account and relaunches `codex resume <session-id>`!
   const cloud = await createPoolGatewayServer(t, {
     accounts: [
       {
@@ -843,6 +906,51 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform live mid-ses
   const configSnapshot = readFileSync(configPath, 'utf8');
   const firstGrant = JSON.parse(readFileSync(authPath, 'utf8')).OPENAI_API_KEY;
 
+  // 2a. CRITICAL negative guard: raw PTY stdout/stderr & rollout tool outputs containing quota keywords MUST NEVER kill interactive codex or poison Cloud `/usage-report`!
+  const safeSessionUuid = '019a5555-6666-7000-8000-112233445566';
+  let safeSignalAborted = false;
+  const safeRes = await invokeCli(
+    ['accounts', 'codex', '-m', 'gpt-5.4', 'inspect login-pool'],
+    sb,
+    {
+      quotaSettleMs: 0,
+      rolloutPollIntervalMs: 15,
+      async spawnCodexPty({ env, signal, onOutput }) {
+        const nowIso = new Date().toISOString();
+        const dayDir = join(env.CODEX_HOME, 'sessions', '2026', '11', '17');
+        mkdirSync(dayDir, { recursive: true });
+        const rolloutFile = join(dayDir, `rollout-2026-11-17T20-00-00-${safeSessionUuid}.jsonl`);
+        writeFileSync(
+          rolloutFile,
+          [
+            JSON.stringify({ timestamp: nowIso, type: 'session_meta', payload: { id: safeSessionUuid, cwd: sb.root, timestamp: nowIso } }),
+            JSON.stringify({
+              timestamp: nowIso,
+              type: 'response_item',
+              payload: {
+                type: 'function_call_output',
+                output: 'src/login-pool.mjs: "You\'ve hit your usage limit (usage_limit_reached) and exceeded your current quota (insufficient_quota)"',
+              },
+            }),
+          ].join('\n') + '\n',
+        );
+        onOutput('rg "exceeded your current quota"\nError: You\'ve hit your usage limit (usage_limit_reached). insufficient_quota\n');
+        await new Promise(r => setTimeout(r, 50));
+        safeSignalAborted = signal.aborted;
+        return { code: 1, signal: null };
+      },
+    },
+    { isTTY: true },
+  );
+  assert.equal(safeSignalAborted, false, 'raw PTY stdout quota substrings NEVER abort live interactive codex');
+  assert.equal(safeRes.exit, 1, 'propagates codex exit code without false-positive quota rotation');
+  assert.equal(
+    cloud.state.requests.filter(r => r.method === 'POST' && r.path.endsWith('/usage-report')).length,
+    0,
+    'zero false-positive /usage-report requests sent to Cloud',
+  );
+
+  // 2b. Structured rollout `task_complete` quota error aborts live turn, reports usage, rotates `auth.json`, and resumes pinned UUID without re-triggering on Turn 0's error line!
   const capturedSessionUuid = '019a7777-8888-7000-9000-abcdef123456';
   const seenTurns = [];
 
@@ -851,15 +959,45 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform live mid-ses
     sb,
     {
       quotaSettleMs: 0,
+      rolloutPollIntervalMs: 15,
       async spawnCodexPty({ args, env, turn, signal, onOutput }) {
         const activeGrantOnDisk = JSON.parse(readFileSync(join(env.CODEX_HOME, 'auth.json'), 'utf8')).OPENAI_API_KEY;
         seenTurns.push({ turn, args, codexHome: env.CODEX_HOME, grant: activeGrantOnDisk });
+        const dayDir = join(env.CODEX_HOME, 'sessions', '2026', '11', '17');
+        mkdirSync(dayDir, { recursive: true });
+        const rolloutFile = join(dayDir, `rollout-2026-11-17T20-05-00-${capturedSessionUuid}.jsonl`);
         if (turn === 0) {
-          onOutput(`Codex session started (session id: ${capturedSessionUuid})\nWorking on refactor...\n`);
-          onOutput('\x1b[31mError: You\'ve hit your usage limit (usage_limit_reached). Resets at 2026-11-18T01:30:00Z.\x1b[0m\n');
-          assert.equal(signal.aborted, true, 'supervisor immediately aborts exhausted interactive turn');
+          const nowIso = new Date().toISOString();
+          writeFileSync(
+            rolloutFile,
+            `${JSON.stringify({ timestamp: nowIso, type: 'session_meta', payload: { id: capturedSessionUuid, cwd: sb.root, timestamp: nowIso } })}\n`,
+          );
+          onOutput('Working on refactor...\n');
+          writeFileSync(
+            rolloutFile,
+            `${JSON.stringify({
+              timestamp: new Date().toISOString(),
+              type: 'event_msg',
+              payload: {
+                type: 'task_complete',
+                error: {
+                  message: 'You\'ve hit your usage limit (usage_limit_reached). Resets at 2026-11-18T01:30:00Z.',
+                  codex_error_info: 'usage_limit_exceeded',
+                },
+              },
+            })}\n`,
+            { flag: 'a' },
+          );
+          await new Promise(resolveAbort => {
+            if (signal.aborted) return resolveAbort();
+            signal.addEventListener('abort', resolveAbort, { once: true });
+          });
+          assert.equal(signal.aborted, true, 'supervisor aborts turn when structured rollout quota error arrives');
           return { code: 1, signal: 'SIGTERM' };
         }
+        // Wait >2 poll cycles on Turn 1 while the same rollout file still has Turn 0's error line prior to `initialRolloutOffset`!
+        await new Promise(r => setTimeout(r, 45));
+        assert.equal(signal.aborted, false, 'Turn 1 starts at end-of-file offset and does not re-trigger on Turn 0 error');
         onOutput('Resumed conversation seamlessly on rotated account!\nDone.\n');
         return { code: 0, signal: null };
       },
@@ -888,7 +1026,7 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform live mid-ses
   assert.equal(usageReports[0].body.five_hour_used_percent, 100);
   assert.equal(usageReports[0].body.five_hour_reset_at, '2026-11-18T01:00:00Z');
 
-  // 3. Disk rollout UUID discovery when TUI emits no session ID to stdout!
+  // 3. Structured Cloud gateway quota exhaustion (`cloudQuotaPollIntervalMs`) rotates and resumes pinned disk rollout UUID!
   cloud.state.accounts[0].state = 'ready';
   cloud.state.accounts[0].five_hour_used_percent = 5;
   assert.equal((await invokeCli(['accounts', 'use', 'glt'], sb)).exit, 0);
@@ -897,13 +1035,25 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform live mid-ses
   const rolloutTurns = [];
   const rolloutRes = await invokeCli(['accounts', 'codex'], sb, {
     quotaSettleMs: 0,
-    async spawnCodexPty({ args, env, turn, onOutput }) {
+    rolloutPollIntervalMs: 15,
+    cloudQuotaPollIntervalMs: 15,
+    async spawnCodexPty({ args, env, turn, signal }) {
       rolloutTurns.push({ turn, args });
       if (turn === 0) {
+        const nowIso = new Date().toISOString();
         const dayDir = join(env.CODEX_HOME, 'sessions', '2026', '11', '17');
         mkdirSync(dayDir, { recursive: true });
-        writeFileSync(join(dayDir, `rollout-2026-11-17T20-00-00-${rolloutUuid}.jsonl`), '{"type":"session_meta"}\n');
-        onOutput('Error: usage_limit_reached — quota exceeded for current window.\n');
+        writeFileSync(
+          join(dayDir, `rollout-2026-11-17T20-10-00-${rolloutUuid}.jsonl`),
+          `${JSON.stringify({ timestamp: nowIso, type: 'session_meta', payload: { id: rolloutUuid, cwd: sb.root, timestamp: nowIso } })}\n`,
+        );
+        // Cloud gateway marks active account 100% exhausted mid-turn:
+        cloud.state.accounts[0].five_hour_used_percent = 100;
+        cloud.state.accounts[0].limit_reached = true;
+        await new Promise(resolveAbort => {
+          if (signal.aborted) return resolveAbort();
+          signal.addEventListener('abort', resolveAbort, { once: true });
+        });
         return { code: 1, signal: 'SIGTERM' };
       }
       return { code: 0, signal: null };
@@ -912,12 +1062,13 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform live mid-ses
 
   assert.equal(rolloutRes.exit, 0, rolloutRes.stderr);
   assert.equal(rolloutTurns.length, 2);
-  assert.deepEqual(rolloutTurns[1].args, ['resume', rolloutUuid], 'discovered active session UUID from sessions rollout file');
+  assert.deepEqual(rolloutTurns[1].args, ['resume', rolloutUuid], 'discovered active session UUID from sessions rollout file and rotated on Cloud exhaustion');
 
-  // 4. `--last` fallback when neither stdout nor disk rollout files contain a session UUID!
+  // 4. Early startup failure `--last` fallback when codex exits non-zero on its own before creating any rollout file!
   rmSync(join(pddManagedCodexHome(sb.env), 'sessions'), { recursive: true, force: true });
   cloud.state.accounts[0].state = 'ready';
   cloud.state.accounts[0].five_hour_used_percent = 5;
+  cloud.state.accounts[0].limit_reached = false;
   cloud.state.accounts[1].state = 'ready';
   cloud.state.accounts[1].five_hour_used_percent = 5;
   assert.equal((await invokeCli(['accounts', 'use', 'glt'], sb)).exit, 0);
@@ -937,5 +1088,413 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform live mid-ses
 
   assert.equal(fallbackRes.exit, 0, fallbackRes.stderr);
   assert.equal(fallbackTurns.length, 2);
-  assert.deepEqual(fallbackTurns[1].args, ['resume', '--search', '--last'], 'falls back to resume --last preserving flags when no UUID was captured');
+  assert.deepEqual(fallbackTurns[1].args, ['resume', '--search', '--last'], 'falls back to resume --last preserving flags when codex exits before rollout creation');
+});
+
+test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-validation + uid shares + failure backup, multi-terminal rollout pinning, direct flag passthrough, and real Python PTY SIGWINCH/killpg', async t => {
+  const cloud = await createPoolGatewayServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_existing_replace',
+        label: 'cx-prod',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: true,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 20,
+        five_hour_reset_at: '2026-11-18T01:00:00Z',
+        weekly_used_percent: 35,
+        weekly_reset_at: '2026-11-22T00:00:00Z',
+        shares: [
+          { github_user_id: 98765, state: 'active' },
+          { github_login: 'octocat', github_user_id: 583231, state: 'active' },
+        ],
+        org_shares: ['promptdriven'],
+        team_shares: [],
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+
+  // 1. [P0] `pdd accounts import --provider codex` scrubs single-use `tokens.refresh_token` from `~/.codex/auth.json` after Cloud upload (and leaves it intact if upload fails)!
+  const userCodexDir = join(sb.home, '.codex');
+  mkdirSync(userCodexDir, { recursive: true });
+  const homeAuthPath = join(userCodexDir, 'auth.json');
+  const rawHomeRefreshToken = 'rt_single_use_family_MUST_BE_SCRUBBED_777777';
+  const validImportPayload = {
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_home_import_111111',
+      refresh_token: rawHomeRefreshToken,
+      id_token: makeJwt({ email: 'home@promptdriven.ai', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_home_import_1',
+    },
+  };
+  writeFileSync(homeAuthPath, JSON.stringify(validImportPayload, null, 2), { mode: 0o600 });
+
+  cloud.state.failNextPostAccountsStatus = 500;
+  const failedImport = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'home-cx'], sb);
+  assert.equal(failedImport.exit, 1);
+  assert.equal(
+    JSON.parse(readFileSync(homeAuthPath, 'utf8')).tokens.refresh_token,
+    rawHomeRefreshToken,
+    'failed upload leaves local refresh_token unscrubbed so user does not lose credentials',
+  );
+
+  const okImport = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'home-cx'], sb);
+  assert.equal(okImport.exit, 0, okImport.stderr);
+  const scrubbedHomeText = readFileSync(homeAuthPath, 'utf8');
+  assert.equal(scrubbedHomeText.includes(rawHomeRefreshToken), false, 'raw single-use refresh_token completely removed from ~/.codex/auth.json');
+  assert.equal(JSON.parse(scrubbedHomeText).tokens.refresh_token, '');
+  assert.equal(statSync(homeAuthPath).mode & 0o777, 0o600);
+
+  // 2. [HIGH] Pre-validate local credentials BEFORE `DELETE` on `--replace`, preserve `uid:<id>` shares, and report backup summary on post-DELETE upload failure!
+  const invalidFromPath = join(sb.root, 'invalid-codex-auth.json');
+  writeFileSync(invalidFromPath, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'only_access', refresh_token: '' } }), { mode: 0o600 });
+  const deletesBeforeInvalid = cloud.state.requests.filter(r => r.method === 'DELETE').length;
+  const badReplace = await invokeCli(['accounts', 'import', '--provider', 'codex', '--from', invalidFromPath, '--label', 'cx-prod', '--replace'], sb);
+  assert.equal(badReplace.exit, 1);
+  assert.equal(
+    cloud.state.requests.filter(r => r.method === 'DELETE').length,
+    deletesBeforeInvalid,
+    'invalid/stripped local credential rejected BEFORE sending any DELETE on --replace',
+  );
+
+  // Preserve `uid:98765` (`{ github_user_id: 98765 }` without `github_login`) across `--replace`!
+  const replaceAuthPath = join(sb.root, 'replace-prod-auth.json');
+  writeFileSync(replaceAuthPath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_replace_prod_222',
+      refresh_token: 'rt_replace_prod_secret_222',
+      id_token: makeJwt({ email: 'prod@promptdriven.ai', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_replace_prod_2',
+    },
+  }), { mode: 0o600 });
+
+  const reqIdxBeforeReplace = cloud.state.requests.length;
+  const okReplace = await invokeCli(['accounts', 'import', '--provider', 'codex', '--from', replaceAuthPath, '--label', 'cx-prod', '--replace'], sb);
+  assert.equal(okReplace.exit, 0, okReplace.stderr);
+  const replaceShareReqs = cloud.state.requests
+    .slice(reqIdxBeforeReplace)
+    .filter(r => r.method === 'POST' && r.path.endsWith('/share'));
+  assert.equal(
+    replaceShareReqs.some(r => r.body?.github_user_id === 98765 && !r.body?.github_login),
+    true,
+    're-shared uid-only share { github_user_id: 98765 } on replaced account',
+  );
+  assert.equal(replaceShareReqs.some(r => r.body?.github_login === 'octocat'), true);
+  assert.equal(replaceShareReqs.some(r => r.body?.org === 'promptdriven'), true);
+  assert.equal(JSON.parse(readFileSync(replaceAuthPath, 'utf8')).tokens.refresh_token, '', 'scrubbed after successful --replace');
+
+  // Post-DELETE replacement `POST /v1/accounts` failure includes backup recovery summary AND leaves local credential file unscrubbed!
+  const failAfterDeletePath = join(sb.root, 'fail-after-delete-auth.json');
+  writeFileSync(failAfterDeletePath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_fail_after_del_333',
+      refresh_token: 'rt_keep_me_for_recovery_333',
+      id_token: makeJwt({ email: 'recover@promptdriven.ai', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_fail_after_del_3',
+    },
+  }), { mode: 0o600 });
+  cloud.state.failPostAccountsAfterDeleteStatus = 502;
+  const failedReplaceAfterDel = await invokeCli(
+    ['accounts', 'import', '--provider', 'codex', '--from', failAfterDeletePath, '--label', 'cx-prod', '--replace'],
+    sb,
+  );
+  assert.equal(failedReplaceAfterDel.exit, 1);
+  assert.match(failedReplaceAfterDel.stderr, /Previous codex account "cx-prod" \(acc_\d+\) was removed before the replacement upload failed/);
+  assert.match(failedReplaceAfterDel.stderr, /preserved shares: --with/);
+  assert.match(failedReplaceAfterDel.stderr, /was left unscrubbed/);
+  assert.equal(
+    JSON.parse(readFileSync(failAfterDeletePath, 'utf8')).tokens.refresh_token,
+    'rt_keep_me_for_recovery_333',
+    'local credential file retained refresh_token when post-DELETE upload failed',
+  );
+
+  // Re-enroll a second ready Codex account so rotation tests have 2 healthy Codex accounts (`home-cx` + `cx-backup`).
+  const backupAuthPath = join(sb.root, 'backup-codex-auth.json');
+  writeFileSync(backupAuthPath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_backup_444',
+      refresh_token: 'rt_backup_444',
+      id_token: makeJwt({ email: 'backup@promptdriven.ai', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_backup_4',
+    },
+  }), { mode: 0o600 });
+  assert.equal((await invokeCli(['accounts', 'import', '--provider', 'codex', '--from', backupAuthPath, '--label', 'cx-backup'], sb)).exit, 0);
+  assert.equal((await invokeCli(['accounts', 'use', 'home-cx'], sb)).exit, 0);
+
+  // 3. [HIGH] Multi-terminal rollout race & session pinning (`-C subproj`): ignores pre-existing, wrong-cwd, subagent, and later concurrent rollouts!
+  const subprojDir = join(sb.root, 'subproj');
+  mkdirSync(subprojDir, { recursive: true });
+  const managedHome = pddManagedCodexHome(sb.env);
+  const dayDir = join(managedHome, 'sessions', '2026', '11', '17');
+  mkdirSync(dayDir, { recursive: true });
+
+  const preExistingUuid = '019a0000-0000-7000-8000-000000000001';
+  const wrongCwdUuid = '019a0000-0000-7000-8000-000000000002';
+  const subagentUuid = '019a0000-0000-7000-8000-000000000003';
+  const myPinnedUuid = '019a0000-0000-7000-8000-000000000004';
+  const laterConcurrentUuid = '019a0000-0000-7000-8000-000000000005';
+
+  const preIso = new Date(Date.now() - 60_000).toISOString();
+  writeFileSync(
+    join(dayDir, `rollout-2026-11-17T19-00-00-${preExistingUuid}.jsonl`),
+    `${JSON.stringify({ timestamp: preIso, type: 'session_meta', payload: { id: preExistingUuid, cwd: subprojDir, timestamp: preIso } })}\n`,
+  );
+  writeFileSync(join(managedHome, 'session_index.jsonl'), `${JSON.stringify({ id: preExistingUuid })}\n`);
+
+  const multiTermTurns = [];
+  const multiTermRes = await invokeCli(
+    // Direct flag passthrough WITHOUT `--` + full 0.169.0 flag preservation check (including `--color always` dropped on resume)!
+    [
+      'accounts', 'codex',
+      '-C', 'subproj',
+      '-m', 'gpt-5.4',
+      '--enable', 'fast_apply',
+      '--disable', 'telemetry',
+      '--local-provider', 'ollama',
+      '--remote', 'ws://127.0.0.1:9100',
+      '--remote-auth-token-env', 'REMOTE_TOKEN',
+      '--oss',
+      '--approve-for-me',
+      '--dangerously-bypass-hook-trust',
+      '--no-daemon',
+      '--strict-config',
+      '--worktree',
+      '--color', 'always',
+      'implement feature',
+    ],
+    sb,
+    {
+      quotaSettleMs: 0,
+      rolloutPollIntervalMs: 15,
+      async spawnCodexPty({ args, turn, signal }) {
+        multiTermTurns.push({ turn, args });
+        if (turn === 0) {
+          const t0 = new Date().toISOString();
+          const wrongFile = join(dayDir, `rollout-2026-11-17T20-20-01-${wrongCwdUuid}.jsonl`);
+          const subFile = join(dayDir, `rollout-2026-11-17T20-20-02-${subagentUuid}.jsonl`);
+          const myFile = join(dayDir, `rollout-2026-11-17T20-20-03-${myPinnedUuid}.jsonl`);
+          const laterFile = join(dayDir, `rollout-2026-11-17T20-20-04-${laterConcurrentUuid}.jsonl`);
+
+          writeFileSync(wrongFile, `${JSON.stringify({ timestamp: t0, type: 'session_meta', payload: { id: wrongCwdUuid, cwd: sb.root, timestamp: t0 } })}\n`);
+          writeFileSync(subFile, `${JSON.stringify({ timestamp: t0, type: 'session_meta', payload: { id: subagentUuid, cwd: subprojDir, timestamp: t0, thread_source: 'subagent' } })}\n`);
+          writeFileSync(myFile, `${JSON.stringify({ timestamp: t0, type: 'session_meta', payload: { id: myPinnedUuid, cwd: subprojDir, timestamp: t0 } })}\n`);
+
+          // Let monitor pin `myPinnedUuid`, then spawn a later concurrent session in the same cwd and hit quota in BOTH other terminals!
+          await new Promise(r => setTimeout(r, 35));
+          const t1 = new Date(Date.now() + 1000).toISOString();
+          writeFileSync(laterFile, `${JSON.stringify({ timestamp: t1, type: 'session_meta', payload: { id: laterConcurrentUuid, cwd: subprojDir, timestamp: t1 } })}\n`);
+          const otherQuotaErr = `${JSON.stringify({ timestamp: t1, type: 'error', error: { status: 429, code: 'insufficient_quota', message: 'You exceeded your current quota' } })}\n`;
+          writeFileSync(wrongFile, otherQuotaErr, { flag: 'a' });
+          writeFileSync(laterFile, otherQuotaErr, { flag: 'a' });
+          await new Promise(r => setTimeout(r, 35));
+          assert.equal(signal.aborted, false, 'quota errors in other terminals NEVER abort this pinned session');
+
+          // Now append structured 429 quota error to THIS pinned session's rollout file!
+          writeFileSync(myFile, otherQuotaErr, { flag: 'a' });
+          await new Promise(resolveAbort => {
+            if (signal.aborted) return resolveAbort();
+            signal.addEventListener('abort', resolveAbort, { once: true });
+          });
+          return { code: 1, signal: 'SIGTERM' };
+        }
+        return { code: 0, signal: null };
+      },
+    },
+    { isTTY: true },
+  );
+
+  assert.equal(multiTermRes.exit, 0, multiTermRes.stderr);
+  assert.equal(multiTermTurns.length, 2);
+  assert.deepEqual(multiTermTurns[1].args, [
+    'resume',
+    '-C', 'subproj',
+    '-m', 'gpt-5.4',
+    '--enable', 'fast_apply',
+    '--disable', 'telemetry',
+    '--local-provider', 'ollama',
+    '--remote', 'ws://127.0.0.1:9100',
+    '--remote-auth-token-env', 'REMOTE_TOKEN',
+    '--oss',
+    '--approve-for-me',
+    '--dangerously-bypass-hook-trust',
+    '--no-daemon',
+    '--strict-config',
+    '--worktree',
+    myPinnedUuid,
+  ], 'pinned exact session UUID and preserved all codex-resume-compatible 0.169.0 flags while dropping --color');
+
+  // 4. [MEDIUM] Passthrough `--` handling: `pdd accounts codex --help` shows local help; `pdd accounts codex -- --help` and `pdd accounts codex -- -- -dash-prompt` strip at most one `--`!
+  let spawnedHelp = false;
+  const localHelp = await invokeCli(['accounts', 'codex', '--help'], sb, {
+    async spawnCodexPty() {
+      spawnedHelp = true;
+      return { code: 0 };
+    },
+  });
+  assert.equal(localHelp.exit, 0);
+  assert.equal(spawnedHelp, false, '`pdd accounts codex --help` prints PDD help without spawning codex');
+  assert.match(localHelp.stdout, /pdd accounts codex/);
+
+  let forwardedDoubleDashArgs = null;
+  const dashPromptRes = await invokeCli(['accounts', 'codex', '--', '--', '-dash-prompt'], sb, {
+    async spawnCodexPty({ args }) {
+      forwardedDoubleDashArgs = args;
+      return { code: 0 };
+    },
+  });
+  assert.equal(dashPromptRes.exit, 0);
+  assert.deepEqual(forwardedDoubleDashArgs, ['--', '-dash-prompt'], 'strips at most one leading `--` so codex receives `-- -dash-prompt`');
+
+  // 5. [MEDIUM] `OUT=$(pdd accounts add --provider claude)` (`stdin.isTTY === true` while `stdout.isTTY === false`) fails fast without spawning `claude`!
+  let spawnedClaudeWhenStdoutPiped = false;
+  const ttyIn = Object.assign(new PassThrough(), { isTTY: true });
+  ttyIn.end();
+  const pipedOut = sink(false);
+  const ttyErr = sink(true);
+  const subshellClaudeAdd = await invokeCli(
+    ['accounts', 'add', '--provider', 'claude'],
+    sb,
+    {
+      spawnInteractive() {
+        spawnedClaudeWhenStdoutPiped = true;
+        throw new Error('must not spawn claude when stdout is non-TTY');
+      },
+    },
+    { stdin: ttyIn, stdout: pipedOut, stderr: ttyErr },
+  );
+  assert.equal(subshellClaudeAdd.exit, 1);
+  assert.equal(spawnedClaudeWhenStdoutPiped, false);
+  assert.match(subshellClaudeAdd.stderr, /requires an interactive terminal \(TTY\)/);
+
+  // 6. [HIGH] Real Python PTY supervisor forwards `SIGWINCH` (`TIOCSWINSZ`) via fd 3 control pipe, restores TTY raw mode, and kills child process group (`os.killpg`) on close!
+  const fakeBinDir = join(sb.root, 'fake-bin');
+  mkdirSync(fakeBinDir, { recursive: true });
+  const fakeCodexPath = join(fakeBinDir, 'codex');
+  writeFileSync(
+    fakeCodexPath,
+    [
+      '#!/usr/bin/env python3',
+      'import fcntl, os, signal, struct, sys, termios, time',
+      'bg_pid = os.fork()',
+      'if bg_pid == 0:',
+      '    time.sleep(30)',
+      '    os._exit(0)',
+      'def read_winsz():',
+      '    r, c, _, _ = struct.unpack("HHHH", fcntl.ioctl(1, termios.TIOCGWINSZ, b"\\x00" * 8))',
+      '    return f"{r}x{c}"',
+      'def on_winch(_s, _f):',
+      '    sys.stdout.write(f"RESIZED={read_winsz()}\\n")',
+      '    sys.stdout.flush()',
+      'signal.signal(signal.SIGWINCH, on_winch)',
+      'sys.stdout.write(f"BG_PID={bg_pid} INIT_SIZE={read_winsz()}\\n")',
+      'sys.stdout.flush()',
+      'while True:',
+      '    time.sleep(0.05)',
+    ].join('\n') + '\n',
+    { mode: 0o755 },
+  );
+  chmodSync(fakeCodexPath, 0o755);
+
+  const ptyStdin = Object.assign(new PassThrough(), {
+    isTTY: true,
+    isRaw: false,
+    rawCalls: [],
+    setRawMode(flag) {
+      this.isRaw = Boolean(flag);
+      this.rawCalls.push(Boolean(flag));
+    },
+  });
+  const ptyStdout = Object.assign(new EventEmitter(), {
+    isTTY: true,
+    rows: 30,
+    columns: 100,
+    text: '',
+    write(chunk) {
+      const s = String(chunk);
+      this.text += s;
+      this.emit('chunk', s);
+      return true;
+    },
+  });
+
+  const sbPty = {
+    ...sb,
+    env: {
+      ...sb.env,
+      PATH: `${fakeBinDir}:${sb.env.PATH}`,
+    },
+  };
+
+  let bgGrandchildPid = 0;
+  t.after(() => {
+    if (bgGrandchildPid > 0) {
+      try { process.kill(bgGrandchildPid, 'SIGKILL'); } catch {}
+    }
+  });
+
+  const waitForPtyPattern = (re, timeoutMs = 4000) => new Promise((resolveMatch, rejectMatch) => {
+    const existing = re.exec(ptyStdout.text);
+    if (existing) return resolveMatch(existing);
+    const timer = setTimeout(() => {
+      ptyStdout.off('chunk', onChunk);
+      rejectMatch(new Error(`Timed out waiting for ${re} in PTY output: ${JSON.stringify(ptyStdout.text)}`));
+    }, timeoutMs);
+    const onChunk = () => {
+      const m = re.exec(ptyStdout.text);
+      if (m) {
+        clearTimeout(timer);
+        ptyStdout.off('chunk', onChunk);
+        resolveMatch(m);
+      }
+    };
+    ptyStdout.on('chunk', onChunk);
+  });
+
+  const ptyRunPromise = invokeCli(['accounts', 'codex'], sbPty, {}, {
+    stdin: ptyStdin,
+    stdout: ptyStdout,
+    stderr: sink(true),
+  });
+
+  const initMatch = await waitForPtyPattern(/BG_PID=(\d+)\s+INIT_SIZE=30x100/);
+  bgGrandchildPid = Number(initMatch[1]);
+  assert.ok(bgGrandchildPid > 0);
+  assert.equal(ptyStdin.isRaw, true, 'TTY raw mode enabled while interactive PTY is active');
+
+  ptyStdout.rows = 48;
+  ptyStdout.columns = 140;
+  ptyStdout.emit('resize');
+  await waitForPtyPattern(/RESIZED=48x140/);
+
+  // Closing stdin triggers Python PTY `_terminate_child_group()` (`os.killpg(pid, SIGTERM)`), reaping both `codex` and its `bg_pid` grandchild!
+  ptyStdin.end();
+  await ptyRunPromise;
+
+  assert.equal(ptyStdin.isRaw, false, 'TTY raw mode restored to initial state on PTY exit');
+  assert.deepEqual(ptyStdin.rawCalls, [true, false]);
+
+  let grandchildAlive = true;
+  for (let i = 0; i < 25; i += 1) {
+    try {
+      process.kill(bgGrandchildPid, 0);
+      await new Promise(r => setTimeout(r, 20));
+    } catch (err) {
+      if (err?.code === 'ESRCH') {
+        grandchildAlive = false;
+        break;
+      }
+    }
+  }
+  assert.equal(grandchildAlive, false, 'Python PTY os.killpg terminated entire child process group with zero orphans');
 });
