@@ -3,35 +3,35 @@
   "story_path": "user_stories/workflow-prove.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-3c5c77dc40a19518d5614ed9a79c3efc39b15487d86f02f5",
       "text": "With a committed changed test, a nonzero old-code exit containing the literal \"defect-x\" and a zero new-code exit produce a successful old-code proof and exit 0."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
       "text": "If the old code passes, or fails with \"other-error\" instead of \"defect-x\", the report distinguishes \"old-passes\" from \"wrong-reason\", includes the observed wrong-reason excerpt and exits 1."
     },
     {
-      "id": "AC3",
+      "id": "ac-sha256-c64ae49bc450633b4c70890de4685b6cb16c013af0c637fa",
       "text": "If the new code fails, the report says \"head-fails\", includes the observed cause and short actual output tail before a trailing TAP summary when available and exits 1 even when the old code fails with \"defect-x\"."
     },
     {
-      "id": "AC4",
+      "id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
       "text": "Each phase requests the per-phase limit (10 minutes by default, or the person's `--timeout` of 1 to 120 whole minutes), a 2-second process-group kill grace and a 1 MiB output cap; base timeout, head timeout, output overflow and child signals have distinct unsuccessful reports and exit 1."
     },
     {
-      "id": "AC5",
+      "id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
       "text": "Missing commits, unsafe overlay setup, exit 126/127 and known missing-fixture/import failures give \"setup-error\" with a cause and short actual output tail when available even when output contains \"defect-x\"; setup-looking output from a passing phase does not disqualify proof."
     },
     {
-      "id": "AC6",
+      "id": "ac-sha256-58020059b15b52f8ed3a9d026dadf3f6ad86a9b9238ef0fa",
       "text": "When tests change, the overlay contains committed regular added, modified or renamed tests and supplemental files from the diff against the merge-base of HEAD with the fetched selected base branch, excluding base-branch changes already merged into HEAD, deleted files and implementation."
     },
     {
-      "id": "AC7",
+      "id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
       "text": "The v2 saved result keeps parent interruption separately from child signals, the computed old base and captured head, exact command and expectation, copied paths, phase exits, final output and observed excerpt; the immutable saved run base stays unchanged, cleanup always runs, and each report names the command and actual base/head exits with safe code spans preserving literal command quotes and backslashes with visible control escapes rather than claiming copied files were executed tests."
     },
     {
-      "id": "AC8",
+      "id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
       "text": "The quoted command \"node --test test/new.test.mjs\" and expectation \"defect x\" reach the proof unchanged; missing, duplicate or blank options and extra operands exit 2 before proof execution."
     }
   ],
@@ -4503,42 +4503,42 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-3c5c77dc40a19518d5614ed9a79c3efc39b15487d86f02f5",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-3c5c77dc40a19518d5614ed9a79c3efc39b15487d86f02f5",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✓ `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-3c5c77dc40a19518d5614ed9a79c3efc39b15487d86f02f5",
           "target": "world",
           "path": "/saved/0/record/outcome",
           "op": "equals",
           "value": "proved"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-3c5c77dc40a19518d5614ed9a79c3efc39b15487d86f02f5",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-3c5c77dc40a19518d5614ed9a79c3efc39b15487d86f02f5",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-58020059b15b52f8ed3a9d026dadf3f6ad86a9b9238ef0fa",
           "target": "world",
           "path": "/saved/0/record/paths",
           "op": "equals",
@@ -4549,14 +4549,14 @@
           ]
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-58020059b15b52f8ed3a9d026dadf3f6ad86a9b9238ef0fa",
           "target": "calls",
           "path": "/resources/workflow-prove-host-createWorktree",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/0",
           "op": "equals",
@@ -4609,7 +4609,7 @@
           }
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/host_readRun/0/reply/run/baseSha",
           "op": "equals",
@@ -4630,35 +4630,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ old-passes; command `node --test test/new.test.mjs`; old-code exit `0`; new-code exit `0`; expected `defect-x`; cause `no output`."
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "world",
           "path": "/saved/1/record/outcome",
           "op": "equals",
           "value": "old-passes"
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -4679,49 +4679,49 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ wrong-reason; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect-x`; cause `code: other-error`."
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "world",
           "path": "/saved/2/record/outcome",
           "op": "equals",
           "value": "wrong-reason"
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "world",
           "path": "/saved/2/record/base/observedError",
           "op": "equals",
           "value": "code: other-error"
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-af8cb411390dc41629994950e2d2ed3e2c0cd12c1e7c5928",
           "target": "world",
           "path": "/saved/2/record/base/stdoutTail",
           "op": "equals",
@@ -4749,14 +4749,14 @@
           ]
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/2/record/base/observedError",
           "op": "equals",
           "value": "code: other-error"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/2/record/base/stdoutTail",
           "op": "equals",
@@ -4798,42 +4798,42 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-c64ae49bc450633b4c70890de4685b6cb16c013af0c637fa",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-c64ae49bc450633b4c70890de4685b6cb16c013af0c637fa",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `defect-x`; tail `defect-x`."
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-c64ae49bc450633b4c70890de4685b6cb16c013af0c637fa",
           "target": "world",
           "path": "/saved/3/record/outcome",
           "op": "equals",
           "value": "head-fails"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-c64ae49bc450633b4c70890de4685b6cb16c013af0c637fa",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-c64ae49bc450633b4c70890de4685b6cb16c013af0c637fa",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -4854,35 +4854,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ base-timeout; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `0`; expected `defect-x`; cause `defect-x`."
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "world",
           "path": "/saved/4/record/outcome",
           "op": "equals",
           "value": "base-timeout"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -4903,35 +4903,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ head-timeout; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `none`; expected `defect-x`; cause `no output`."
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "world",
           "path": "/saved/5/record/outcome",
           "op": "equals",
           "value": "head-timeout"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -4952,35 +4952,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ output-limit; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `0`; expected `defect-x`; cause `defect-x`."
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "world",
           "path": "/saved/6/record/outcome",
           "op": "equals",
           "value": "output-limit"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -5001,42 +5001,42 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ signalled; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `0`; expected `defect-x`; cause `defect-x`."
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "world",
           "path": "/saved/7/record/outcome",
           "op": "equals",
           "value": "signalled"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-49fb90946ad1c983e2cac111d38e6cbc92de93d9b4f6dbff",
           "target": "world",
           "path": "/saved/7/record/interruptSignal",
           "op": "equals",
@@ -5057,35 +5057,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `none`; expected `defect-x`; cause `merge-base unavailable`."
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "world",
           "path": "/saved/8/record/outcome",
           "op": "equals",
           "value": "setup-error"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -5106,35 +5106,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `none`; new-code exit `none`; expected `defect-x`; cause `unsafe symlink ancestry`."
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "world",
           "path": "/saved/9/record/outcome",
           "op": "equals",
           "value": "setup-error"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -5155,35 +5155,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `0`; expected `defect-x`; cause `missing fixture`; tail `defect-x`."
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "world",
           "path": "/saved/10/record/outcome",
           "op": "equals",
           "value": "setup-error"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "calls",
           "path": "/resources/workflow-prove-host-runProcess",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -5210,21 +5210,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/exit_code",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/stdout",
           "op": "equals",
           "value": "Old-code proof: synthetic reply.\n"
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "world",
           "path": "/dispatches",
           "op": "equals",
@@ -5238,63 +5238,63 @@
           ]
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-startRun",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupAgentMcp",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupProject",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupSkills",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-capture",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-fingerprint",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "world",
           "path": "/outside_requests",
           "op": "equals",
@@ -5319,91 +5319,91 @@
       },
       "checks": [
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/exit_code",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/stdout",
           "op": "equals",
           "value": ""
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-prove",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/stderr",
           "op": "equals",
           "value": "pdd workflow prove requires nonblank --test and --expect.\n"
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-startRun",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupAgentMcp",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupProject",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupSkills",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-capture",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-fingerprint",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "world",
           "path": "/outside_requests",
           "op": "equals",
@@ -5432,84 +5432,84 @@
       },
       "checks": [
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/exit_code",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/stdout",
           "op": "equals",
           "value": ""
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-prove",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-startRun",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupAgentMcp",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupProject",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupSkills",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-capture",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-fingerprint",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "world",
           "path": "/outside_requests",
           "op": "equals",
@@ -5536,84 +5536,84 @@
       },
       "checks": [
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/exit_code",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/stdout",
           "op": "equals",
           "value": ""
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-prove",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-startRun",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupAgentMcp",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupProject",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupSkills",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-capture",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-fingerprint",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "world",
           "path": "/outside_requests",
           "op": "equals",
@@ -5641,84 +5641,84 @@
       },
       "checks": [
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/exit_code",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "result",
           "path": "/stdout",
           "op": "equals",
           "value": ""
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-prove",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-agents-checkWorkflowAgents",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-diagnostics-pathDiagnostic",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-dispatch-startRun",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupAgentMcp",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupProject",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/pdd-cli-setup-setupSkills",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-capture",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "calls",
           "path": "/resources/workflow-runner-source-fingerprint",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC8",
+          "criterion_id": "ac-sha256-3d358496d5d6649eb036929c1f4208ceb8daf8f39df92603",
           "target": "world",
           "path": "/outside_requests",
           "op": "equals",
@@ -5739,35 +5739,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-3c5c77dc40a19518d5614ed9a79c3efc39b15487d86f02f5",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✓ `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/11/record/baseSha",
           "op": "equals",
           "value": "000000000000000000000000000000000000012d"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/11/record/v",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-58020059b15b52f8ed3a9d026dadf3f6ad86a9b9238ef0fa",
           "target": "world",
           "path": "/saved/11/record/paths",
           "op": "equals",
@@ -5778,7 +5778,7 @@
           ]
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -5799,35 +5799,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `126`; new-code exit `0`; expected `defect-x`; cause `command exited 126`; tail `command unavailable`."
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/12/record/baseSha",
           "op": "equals",
           "value": "000000000000000000000000000000000000012e"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/12/record/v",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-58020059b15b52f8ed3a9d026dadf3f6ad86a9b9238ef0fa",
           "target": "world",
           "path": "/saved/12/record/paths",
           "op": "equals",
@@ -5838,7 +5838,7 @@
           ]
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -5859,35 +5859,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ setup-error; command `node --test test/new.test.mjs`; old-code exit `127`; new-code exit `0`; expected `defect-x`; cause `command exited 127`; tail `command unavailable`."
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/13/record/baseSha",
           "op": "equals",
           "value": "000000000000000000000000000000000000012f"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/13/record/v",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-58020059b15b52f8ed3a9d026dadf3f6ad86a9b9238ef0fa",
           "target": "world",
           "path": "/saved/13/record/paths",
           "op": "equals",
@@ -5898,7 +5898,7 @@
           ]
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -5919,35 +5919,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-be6fdc096f6f6e1203a65b37042acd5af8d8dce9fec5a0f5",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✓ `node --test test/new.test.mjs`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/14/record/baseSha",
           "op": "equals",
           "value": "0000000000000000000000000000000000000130"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/14/record/v",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-58020059b15b52f8ed3a9d026dadf3f6ad86a9b9238ef0fa",
           "target": "world",
           "path": "/saved/14/record/paths",
           "op": "equals",
@@ -5958,7 +5958,7 @@
           ]
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -5979,35 +5979,35 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-3c5c77dc40a19518d5614ed9a79c3efc39b15487d86f02f5",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✓ ``printf \"@octocat #17 `x` pdd-workflow\\u003a\"``: old-code exit `1`; output contains ``@octocat #17 `x` pdd-workflow\\u003a``; new-code exit `0`."
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/15/record/baseSha",
           "op": "equals",
           "value": "0000000000000000000000000000000000000131"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/15/record/v",
           "op": "equals",
           "value": 2
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-58020059b15b52f8ed3a9d026dadf3f6ad86a9b9238ef0fa",
           "target": "world",
           "path": "/saved/15/record/paths",
           "op": "equals",
@@ -6018,7 +6018,7 @@
           ]
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -6039,42 +6039,42 @@
       },
       "checks": [
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✓ `printf \"C:\\tmp\\q\"\\r\\n\\t\\u0000\\u007f\\u0085\\u2028\\u2029 pdd-workflow\\u003a`: old-code exit `1`; output contains `defect-x`; new-code exit `0`."
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/16/record/test",
           "op": "equals",
           "value": "printf \"C:\\tmp\\q\"\r\n\t\u0000   pdd-workflow:"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/16/record/expect",
           "op": "equals",
           "value": "defect-x"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/16/record/outcome",
           "op": "equals",
           "value": "proved"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",
@@ -6095,21 +6095,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-c64ae49bc450633b4c70890de4685b6cb16c013af0c637fa",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-c64ae49bc450633b4c70890de4685b6cb16c013af0c637fa",
           "target": "result",
           "path": "/message",
           "op": "equals",
           "value": "Old-code proof: ✗ head-fails; command `node --test test/new.test.mjs`; old-code exit `1`; new-code exit `1`; expected `defect-x`; cause `AssertionError: defect-x`; tail `AssertionError: defect-x\\n  expected: open\\n  actual: closed`."
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/17/record/head/stdoutTail",
           "op": "equals",
@@ -6129,21 +6129,21 @@
           ]
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/17/record/head/observedError",
           "op": "equals",
           "value": "AssertionError: defect-x"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "world",
           "path": "/saved/17/record/outcome",
           "op": "equals",
           "value": "head-fails"
         },
         {
-          "criterion_id": "AC7",
+          "criterion_id": "ac-sha256-e4e17a62298830c99289de6b877a449d87025707ab9eee47",
           "target": "calls",
           "path": "/resources/workflow-prove-host-cleanup",
           "op": "equals",

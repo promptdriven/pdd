@@ -188,6 +188,7 @@ Autopilot opens no chat and needs no Herdr.
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
 | `pdd autopilot status [--all] [--json]` | Show this machine's Autopilot for this repo: enabled or disabled, the timer, the next tick, the jobs, an [alert](#alerts) that was not delivered and the last tick. `--all` lists every repository with Autopilot on this machine, from any folder. `--json` prints the [local cost report](#local-issue-costs) |
+| `pdd autopilot logs [--issue N [--follow]]` | List this repo's current local workers, show one worker's recent output and evidence, or follow it live. Read-only |
 | `pdd autopilot add N...` | Create the `pdd:autopilot` label when it is missing and add it to each named issue of this repository. Use it to choose the issues that Autopilot may take |
 | `pdd autopilot release ISSUE` | Release this machine's claim and remove `pdd:working` and `pdd:stuck`; keep the run folder, branch and PRs |
 | `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub CI, parent checks, revert, reopen and issue-link evidence. Classify each merge as ok, suspect or proven; count distinct proven PRs per UTC evidence day. Issue-body attribution uses issue creation time even if added in a later edit; these buckets require a consumer confirmation policy before use as daily scorecard counts. At most 100 GitHub requests per scan; rate exhaustion or Retry-After stops further reads, preserving collected evidence and marking missing evidence incomplete. --json prints structured results; --file exclusively creates a local report without overwriting existing files. No GitHub writes or reverts. Incomplete reads exit 1; complete scans exit 0 even when they detect regressions |
@@ -200,7 +201,14 @@ Autopilot opens no chat and needs no Herdr.
 | `pdd autopilot alerts clear [--destination autopilot\|infrastructure]` | Remove the alert destination from this machine |
 | `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | Record one alert and send it to this machine's destination. See [Alerts](#alerts) |
 
-Outside a Git repository, `start`, `stop`, `status`, `add`, `off`, `observe`,
+From the repository checkout where you started Autopilot, run `pdd autopilot logs`
+to choose an issue. `pdd autopilot logs --issue 42` shows a snapshot and recent output;
+add `--follow` for live updates. The view shows the stage, last activity, wrapper
+state, check queue position or execution, and local evidence paths. Ctrl-C exits
+the viewer without stopping the worker. It never approves or merges anything,
+and needs no GitHub connection. Treat local log output as private.
+
+Outside a Git repository, `start`, `stop`, `status`, `logs`, `add`, `off`, `observe`,
 `auto`, `trust` and `untrust` stop with exit code 1 and say: `This folder is not a
 Git repository. cd into the repo you want Autopilot to work on, then run the
 command again.` `status --all` works from any folder.

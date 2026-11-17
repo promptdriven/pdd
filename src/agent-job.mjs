@@ -74,16 +74,26 @@ function nativeAlive(pid, token) {
   return row.status === 0 && String(row.stdout).includes(token);
 }
 
-export function readAgentJob(job, ports = {}) {
-  if (!object(job)) return { state: 'dead', exit: null, result: null, log: null };
-  const alive = Number.isSafeInteger(job?.pid) && job.pid > 0 && (ports.alive ?? nativeAlive)(job.pid, job.token);
-  if (alive) snapshotAgentJob(job, ports);
-  const exit = readJson(job.exit), result = readJson(job.result);
+function observeAgentJob(job, ports, refresh) {
+  if (!object(job)) return { state: 'dead', exit: null, log: null };
+  const alive = Number.isSafeInteger(job.pid) && job.pid > 0 && (refresh || typeof job.token === 'string' && job.token.trim())
+    && (ports.alive ?? nativeAlive)(job.pid, job.token);
+  if (alive && refresh) snapshotAgentJob(job, ports);
+  const exit = readJson(job.exit);
   // The log's size and change time show progress while the job runs.
   let log = null;
   try { const stat = statSync(job.log); log = { size: stat.size, mtime: stat.mtimeMs }; } catch { /* No log yet. */ }
-  return { state: alive ? 'running' : object(exit) ? 'exited' : 'dead', exit: object(exit) ? exit : null,
-    result: result === undefined ? null : object(result) ? result : 'invalid', log };
+  return { state: alive ? 'running' : object(exit) ? 'exited' : 'dead', exit: object(exit) ? exit : null, log };
+}
+
+export function inspectAgentJob(job, ports = {}) {
+  return observeAgentJob(job, ports, false);
+}
+
+export function readAgentJob(job, ports = {}) {
+  if (!object(job)) return { state: 'dead', exit: null, result: null, log: null };
+  const { state, exit, log } = observeAgentJob(job, ports, true), result = readJson(job.result);
+  return { state, exit, result: result === undefined ? null : object(result) ? result : 'invalid', log };
 }
 
 export function waitForAgentJob(jobs, { timeoutMs = 600000, ...ports } = {}) {

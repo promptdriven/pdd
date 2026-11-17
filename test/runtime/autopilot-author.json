@@ -3,19 +3,19 @@
   "story_path": "user_stories/autopilot-author.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-117d9678d973ba92ff613bf194a8552b909e2cd4af04f1fe",
       "text": "An issue by owner Ada is trusted."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-77d4398c716d700daf2021003eae2fb8c4bd3064f9329f7d",
       "text": "An issue by write collaborator Bo is trusted."
     },
     {
-      "id": "AC3",
+      "id": "ac-sha256-67e7ac1b1df947b8596d49dd9215d106af570abeabc24744",
       "text": "An issue by explicitly trusted Dana is trusted when GitHub provides neither owner nor writers."
     },
     {
-      "id": "AC4",
+      "id": "ac-sha256-1df01235fcafced7e150d102243a9fd9d5991315e52a521c",
       "text": "An issue by outside author Eve is not trusted when GitHub provides neither owner nor writers."
     }
   ],
@@ -130,7 +130,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-117d9678d973ba92ff613bf194a8552b909e2cd4af04f1fe",
           "target": "result",
           "path": "/trusted",
           "op": "equals",
@@ -148,7 +148,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-77d4398c716d700daf2021003eae2fb8c4bd3064f9329f7d",
           "target": "result",
           "path": "/trusted",
           "op": "equals",
@@ -166,7 +166,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-67e7ac1b1df947b8596d49dd9215d106af570abeabc24744",
           "target": "result",
           "path": "/trusted",
           "op": "equals",
@@ -184,7 +184,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-1df01235fcafced7e150d102243a9fd9d5991315e52a521c",
           "target": "result",
           "path": "/trusted",
           "op": "equals",

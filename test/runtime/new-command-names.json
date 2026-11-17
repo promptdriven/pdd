@@ -2,20 +2,20 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/new-command-names.md",
   "criteria": [
-    {"id": "AC1", "text": "`pdd --help` lists `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run`, never says \"pdd check\", \"pdd try\" or \"workflow start\", prints nothing to stderr and exits with code 0."},
-    {"id": "AC2", "text": "`pdd test --help` lists the `pdd test` forms with --read, --retry, --files and --screen, prints nothing to stderr and exits with code 0."},
-    {"id": "AC3", "text": "`pdd lint --help` lists the `pdd lint` forms, including `pdd lint --local`, prints nothing to stderr and exits with code 0."},
-    {"id": "AC4", "text": "`pdd check --help` prints nothing to stdout, prints one line to stderr that names `pdd check` and `pdd test`, and exits with code 2."},
-    {"id": "AC5", "text": "`pdd check --lint --help` and `pdd check new-command-names --lint` each print nothing to stdout, print one line to stderr that names `pdd check --lint` and `pdd lint`, and exit with code 2."},
-    {"id": "AC6", "text": "`pdd try --help` prints nothing to stdout, prints one line to stderr that names `pdd try` and `pdd simulate`, and exits with code 2."},
-    {"id": "AC7", "text": "`pdd help check` and `pdd help try` each print nothing to stdout, print one line to stderr that names the old and the new command, and exit with code 2."},
-    {"id": "AC8", "text": "`pdd check new-command-names --json`, `pdd check --bogus` and `pdd try new-command-names --new` each print nothing to stdout, print one line to stderr that names the old and the new command, and exit with code 2."},
-    {"id": "AC9", "text": "`pdd workflow run --help` prints the `pdd workflow run` help to stdout, prints nothing to stderr and exits with code 0."},
-    {"id": "AC10", "text": "`pdd workflow start --help` prints the same `pdd workflow run` help to stdout, never says \"workflow start\", prints nothing to stderr and exits with code 0."},
-    {"id": "AC11", "text": "`pdd workflow run 81` still prints only \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\" to stderr, prints nothing to stdout and exits with code 2."},
-    {"id": "AC12", "text": "`pdd workflow start 81` prints only the same line, \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\", to stderr, prints nothing to stdout and exits with code 2."},
-    {"id": "AC13", "text": "`pdd test --bogus` prints a usage error to stderr, with no \"Unknown command\" and no \"was removed\", prints nothing to stdout and exits with code 2."},
-    {"id": "AC14", "text": "`pdd sim --help` prints the `pdd simulate` help to stdout, prints nothing to stderr and exits with code 0."}
+    {"id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "text": "`pdd --help` lists `pdd test`, `pdd lint`, `pdd simulate` and `pdd workflow run`, never says \"pdd check\", \"pdd try\" or \"workflow start\", prints nothing to stderr and exits with code 0."},
+    {"id": "ac-sha256-3570ad0c79cc9308ec29c301dfd8a745de09cab483583d1a", "text": "`pdd test --help` lists the `pdd test` forms with --read, --retry, --files and --screen, prints nothing to stderr and exits with code 0."},
+    {"id": "ac-sha256-a5f794ba8456df0689747cefddac813899b82cf5e5e87056", "text": "`pdd lint --help` lists the `pdd lint` forms, including `pdd lint --local`, prints nothing to stderr and exits with code 0."},
+    {"id": "ac-sha256-71691038773863c4ff50881af8fd665dfbb0c70741f3a6a6", "text": "`pdd check --help` prints nothing to stdout, prints one line to stderr that names `pdd check` and `pdd test`, and exits with code 2."},
+    {"id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "text": "`pdd check --lint --help` and `pdd check new-command-names --lint` each print nothing to stdout, print one line to stderr that names `pdd check --lint` and `pdd lint`, and exit with code 2."},
+    {"id": "ac-sha256-412140e4f51f2651dacfbc9e4974113268efd92b6ffed450", "text": "`pdd try --help` prints nothing to stdout, prints one line to stderr that names `pdd try` and `pdd simulate`, and exits with code 2."},
+    {"id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "text": "`pdd help check` and `pdd help try` each print nothing to stdout, print one line to stderr that names the old and the new command, and exit with code 2."},
+    {"id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "text": "`pdd check new-command-names --json`, `pdd check --bogus` and `pdd try new-command-names --new` each print nothing to stdout, print one line to stderr that names the old and the new command, and exit with code 2."},
+    {"id": "ac-sha256-f12bae9827329ddc08df713556553d6ed55c5db3ed396da5", "text": "`pdd workflow run --help` prints the `pdd workflow run` help to stdout, prints nothing to stderr and exits with code 0."},
+    {"id": "ac-sha256-343754202c6ab03e9842ed8efcc741c6243742aef29ec1c9", "text": "`pdd workflow start --help` prints the same `pdd workflow run` help to stdout, never says \"workflow start\", prints nothing to stderr and exits with code 0."},
+    {"id": "ac-sha256-20c3c8300d5345c1b6c678de31e60b8a46df9a0e012fbfee", "text": "`pdd workflow run 81` still prints only \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\" to stderr, prints nothing to stdout and exits with code 2."},
+    {"id": "ac-sha256-244456ee9d517a28f5e60411f8beb05d37f12fc398c52009", "text": "`pdd workflow start 81` prints only the same line, \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\", to stderr, prints nothing to stdout and exits with code 2."},
+    {"id": "ac-sha256-addfc248fbefa17d89dc68d812d6f0b814bfb177375def5f", "text": "`pdd test --bogus` prints a usage error to stderr, with no \"Unknown command\" and no \"was removed\", prints nothing to stdout and exits with code 2."},
+    {"id": "ac-sha256-78367a6d8efce76eee27f2f7eff677a1d2955ee143a43f24", "text": "`pdd sim --help` prints the `pdd simulate` help to stdout, prints nothing to stderr and exits with code 0."}
   ],
   "initial_world": {},
   "simulation": {},
@@ -27,15 +27,15 @@
       "operation": "runPdd",
       "input": {"argv": ["--help"]},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd simulate"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow run"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test"},
+        {"criterion_id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint"},
+        {"criterion_id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd simulate"},
+        {"criterion_id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow run"},
+        {"criterion_id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
+        {"criterion_id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
+        {"criterion_id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
+        {"criterion_id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-e3ad99361124ab3cc0838e0b62dc347a175f6d3447152add", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -44,12 +44,12 @@
       "operation": "runPdd",
       "input": {"argv": ["test", "--help"]},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --read"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --retry"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --files"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --screen"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-3570ad0c79cc9308ec29c301dfd8a745de09cab483583d1a", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --read"},
+        {"criterion_id": "ac-sha256-3570ad0c79cc9308ec29c301dfd8a745de09cab483583d1a", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --retry"},
+        {"criterion_id": "ac-sha256-3570ad0c79cc9308ec29c301dfd8a745de09cab483583d1a", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --files"},
+        {"criterion_id": "ac-sha256-3570ad0c79cc9308ec29c301dfd8a745de09cab483583d1a", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test --screen"},
+        {"criterion_id": "ac-sha256-3570ad0c79cc9308ec29c301dfd8a745de09cab483583d1a", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-3570ad0c79cc9308ec29c301dfd8a745de09cab483583d1a", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -58,9 +58,9 @@
       "operation": "runPdd",
       "input": {"argv": ["lint", "--help"]},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint --local"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC3", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-a5f794ba8456df0689747cefddac813899b82cf5e5e87056", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint --local"},
+        {"criterion_id": "ac-sha256-a5f794ba8456df0689747cefddac813899b82cf5e5e87056", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-a5f794ba8456df0689747cefddac813899b82cf5e5e87056", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -69,11 +69,11 @@
       "operation": "runPdd",
       "input": {"argv": ["check", "--help"]},
       "checks": [
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-71691038773863c4ff50881af8fd665dfbb0c70741f3a6a6", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-71691038773863c4ff50881af8fd665dfbb0c70741f3a6a6", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
+        {"criterion_id": "ac-sha256-71691038773863c4ff50881af8fd665dfbb0c70741f3a6a6", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
+        {"criterion_id": "ac-sha256-71691038773863c4ff50881af8fd665dfbb0c70741f3a6a6", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "ac-sha256-71691038773863c4ff50881af8fd665dfbb0c70741f3a6a6", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -82,11 +82,11 @@
       "operation": "runPdd",
       "input": {"argv": ["check", "--lint", "--help"]},
       "checks": [
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check --lint"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd lint"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check --lint"},
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd lint"},
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -95,11 +95,11 @@
       "operation": "runPdd",
       "input": {"argv": ["check", "new-command-names", "--lint"]},
       "checks": [
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check --lint"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd lint"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check --lint"},
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd lint"},
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "ac-sha256-a65ea76e60e0d584514dd0fe6b1518157e7898fcc0e6b03f", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -108,11 +108,11 @@
       "operation": "runPdd",
       "input": {"argv": ["try", "--help"]},
       "checks": [
-        {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd try"},
-        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd simulate"},
-        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC6", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-412140e4f51f2651dacfbc9e4974113268efd92b6ffed450", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-412140e4f51f2651dacfbc9e4974113268efd92b6ffed450", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd try"},
+        {"criterion_id": "ac-sha256-412140e4f51f2651dacfbc9e4974113268efd92b6ffed450", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd simulate"},
+        {"criterion_id": "ac-sha256-412140e4f51f2651dacfbc9e4974113268efd92b6ffed450", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "ac-sha256-412140e4f51f2651dacfbc9e4974113268efd92b6ffed450", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -121,11 +121,11 @@
       "operation": "runPdd",
       "input": {"argv": ["help", "check"]},
       "checks": [
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -134,11 +134,11 @@
       "operation": "runPdd",
       "input": {"argv": ["help", "try"]},
       "checks": [
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd try"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd simulate"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd try"},
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd simulate"},
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "ac-sha256-b14fc2666450214bcfd695d826d50517464e88a0a35227ce", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -147,11 +147,11 @@
       "operation": "runPdd",
       "input": {"argv": ["check", "new-command-names", "--json"]},
       "checks": [
-        {"criterion_id": "AC8", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC8", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -160,13 +160,13 @@
       "operation": "runPdd",
       "input": {"argv": ["check", "--bogus"]},
       "checks": [
-        {"criterion_id": "AC8", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "--bogus"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "Unknown command"},
-        {"criterion_id": "AC8", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd check"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd test"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "not_contains", "value": "--bogus"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "not_contains", "value": "Unknown command"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -175,11 +175,11 @@
       "operation": "runPdd",
       "input": {"argv": ["try", "new-command-names", "--new"]},
       "checks": [
-        {"criterion_id": "AC8", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd try"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd simulate"},
-        {"criterion_id": "AC8", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
-        {"criterion_id": "AC8", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd try"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd simulate"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/stderr", "op": "not_contains", "value": "is now"},
+        {"criterion_id": "ac-sha256-f782343f31c75d4633614f13b064068e9f0acd9064f9b100", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -188,10 +188,10 @@
       "operation": "runPdd",
       "input": {"argv": ["workflow", "run", "--help"]},
       "checks": [
-        {"criterion_id": "AC9", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow run NAME ISSUE"},
-        {"criterion_id": "AC9", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
-        {"criterion_id": "AC9", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC9", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-f12bae9827329ddc08df713556553d6ed55c5db3ed396da5", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow run NAME ISSUE"},
+        {"criterion_id": "ac-sha256-f12bae9827329ddc08df713556553d6ed55c5db3ed396da5", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
+        {"criterion_id": "ac-sha256-f12bae9827329ddc08df713556553d6ed55c5db3ed396da5", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-f12bae9827329ddc08df713556553d6ed55c5db3ed396da5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -200,10 +200,10 @@
       "operation": "runPdd",
       "input": {"argv": ["workflow", "start", "--help"]},
       "checks": [
-        {"criterion_id": "AC10", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow run NAME ISSUE"},
-        {"criterion_id": "AC10", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
-        {"criterion_id": "AC10", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC10", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-343754202c6ab03e9842ed8efcc741c6243742aef29ec1c9", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd workflow run NAME ISSUE"},
+        {"criterion_id": "ac-sha256-343754202c6ab03e9842ed8efcc741c6243742aef29ec1c9", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
+        {"criterion_id": "ac-sha256-343754202c6ab03e9842ed8efcc741c6243742aef29ec1c9", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-343754202c6ab03e9842ed8efcc741c6243742aef29ec1c9", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -212,9 +212,9 @@
       "operation": "runPdd",
       "input": {"argv": ["workflow", "run", "81"]},
       "checks": [
-        {"criterion_id": "AC11", "target": "result", "path": "/stderr", "op": "equals", "value": "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\n"},
-        {"criterion_id": "AC11", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC11", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-20c3c8300d5345c1b6c678de31e60b8a46df9a0e012fbfee", "target": "result", "path": "/stderr", "op": "equals", "value": "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\n"},
+        {"criterion_id": "ac-sha256-20c3c8300d5345c1b6c678de31e60b8a46df9a0e012fbfee", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-20c3c8300d5345c1b6c678de31e60b8a46df9a0e012fbfee", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -223,9 +223,9 @@
       "operation": "runPdd",
       "input": {"argv": ["workflow", "start", "81"]},
       "checks": [
-        {"criterion_id": "AC12", "target": "result", "path": "/stderr", "op": "equals", "value": "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\n"},
-        {"criterion_id": "AC12", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC12", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-244456ee9d517a28f5e60411f8beb05d37f12fc398c52009", "target": "result", "path": "/stderr", "op": "equals", "value": "Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\n"},
+        {"criterion_id": "ac-sha256-244456ee9d517a28f5e60411f8beb05d37f12fc398c52009", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-244456ee9d517a28f5e60411f8beb05d37f12fc398c52009", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -234,11 +234,11 @@
       "operation": "runPdd",
       "input": {"argv": ["test", "--bogus"]},
       "checks": [
-        {"criterion_id": "AC13", "target": "result", "path": "/stderr", "op": "not_equals", "value": ""},
-        {"criterion_id": "AC13", "target": "result", "path": "/stderr", "op": "not_contains", "value": "Unknown command"},
-        {"criterion_id": "AC13", "target": "result", "path": "/stderr", "op": "not_contains", "value": "was removed"},
-        {"criterion_id": "AC13", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC13", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+        {"criterion_id": "ac-sha256-addfc248fbefa17d89dc68d812d6f0b814bfb177375def5f", "target": "result", "path": "/stderr", "op": "not_equals", "value": ""},
+        {"criterion_id": "ac-sha256-addfc248fbefa17d89dc68d812d6f0b814bfb177375def5f", "target": "result", "path": "/stderr", "op": "not_contains", "value": "Unknown command"},
+        {"criterion_id": "ac-sha256-addfc248fbefa17d89dc68d812d6f0b814bfb177375def5f", "target": "result", "path": "/stderr", "op": "not_contains", "value": "was removed"},
+        {"criterion_id": "ac-sha256-addfc248fbefa17d89dc68d812d6f0b814bfb177375def5f", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-addfc248fbefa17d89dc68d812d6f0b814bfb177375def5f", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
       ]
     },
     {
@@ -247,10 +247,10 @@
       "operation": "runPdd",
       "input": {"argv": ["sim", "--help"]},
       "checks": [
-        {"criterion_id": "AC14", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd simulate --stop"},
-        {"criterion_id": "AC14", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
-        {"criterion_id": "AC14", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC14", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-78367a6d8efce76eee27f2f7eff677a1d2955ee143a43f24", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd simulate --stop"},
+        {"criterion_id": "ac-sha256-78367a6d8efce76eee27f2f7eff677a1d2955ee143a43f24", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
+        {"criterion_id": "ac-sha256-78367a6d8efce76eee27f2f7eff677a1d2955ee143a43f24", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-78367a6d8efce76eee27f2f7eff677a1d2955ee143a43f24", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     }
   ]

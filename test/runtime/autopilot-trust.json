@@ -3,11 +3,11 @@
   "story_path": "user_stories/autopilot-trust.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-da734c9d0207f4032488d215edc3dc1bae5acb00b852fd2b",
       "text": "Running `pdd autopilot trust Dana` adds Dana to the saved trust list."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-c540a2ff2723dc06484127224cb501a8d044626252584303",
       "text": "Running `pdd autopilot untrust Dana` removes Dana from the saved trust list."
     }
   ],
@@ -87,14 +87,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-da734c9d0207f4032488d215edc3dc1bae5acb00b852fd2b",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",
           "value": "{\"mode\":\"off\",\"trust\":[\"Dana\"]}"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-da734c9d0207f4032488d215edc3dc1bae5acb00b852fd2b",
           "target": "world",
           "path": "/kv/unrelated",
           "op": "equals",
@@ -116,14 +116,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-c540a2ff2723dc06484127224cb501a8d044626252584303",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",
           "value": "{\"mode\":\"off\",\"trust\":[]}"
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-c540a2ff2723dc06484127224cb501a8d044626252584303",
           "target": "world",
           "path": "/kv/unrelated",
           "op": "equals",
