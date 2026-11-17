@@ -13,7 +13,7 @@ operator or worker command; it does not schedule tests or approve publication.
 Export `suiteQueueRoot(env = process.env)`, returning the shared absolute queue
 path selected below, or throwing for a relative path. Export
 `suiteStatusWords(suite)`, returning one status line for the public status shape:
-waiting with position, running, failure with reason, successful completion, or
+waiting with position, running, interrupted before starting with reason, failure with reason, successful completion, or
 queue unavailable with its cause.
 
 Export native port adapter `executeSuite(command, {cwd, env, timeoutMs, onChild, onOutput, startGate = false, cpuIds, taskset}, ports = {})`,
@@ -194,7 +194,7 @@ atomically save the terminal receipt before returning or forwarding completion.
 
 Receipts and `readSuiteProgress` expose the added fields above plus `exitCode`
 (integer or null), `signal` (termination signal or null), `outcome` (`running`,
-`completed`, or `unknown`), and `counts` (null without a complete TAP summary,
+`completed`, `interrupted`, or `unknown`), and `counts` (null without a complete TAP summary,
 else `{tests, suites, pass, fail, cancelled, skipped, todo}`, each a nonnegative
 integer). Parse only a complete final top-level stdout TAP summary after a TAP 13 header
 and a top-level plan. Later non-summary output or an unfinished final line
@@ -207,9 +207,18 @@ receipts and logs remain available through the queue. Default this port to true.
 Older records without evidence fields remain readable and provide null values.
 
 A later process observes the same ticket and recorder through the shared queue.
+On native SIGINT or SIGTERM before admission, the waiting owner atomically
+finishes its ticket with `outcome: interrupted`, `finishedAt` set to the current
+time, the received `signal`, and a reason that says the tests did not run. Keep
+`startedAt`, `recorderPid`, `childPid`, `exitCode` and `counts` null and leave
+the raw output empty. Do not admit the interrupted attempt. The owner still
+terminates by that signal, so its caller does not get a numeric test exit.
+If the owner disappears without a terminal receipt, observation projects the
+same not-run outcome for a dead, unstarted waiter without inventing a signal or
+changing the stored record. Live or uncertain execution is not a not-run result.
 A live recorder keeps custody even after its original caller dies. An identity
 mismatch is not proof that the recorder still owns that PID. If neither recorder
-nor suite group is live, report `outcome: unknown`, `exitCode: null` and unknown
+nor suite group is live after admission, report `outcome: unknown`, `exitCode: null` and unknown
 counts unless a terminal receipt exists. Do not invent an exit, infer failure
 causes from output tails, repeat an uncertain command, or signal a recovered PID.
 Live or uncertain descendants retain their slot. Status remains read-only.

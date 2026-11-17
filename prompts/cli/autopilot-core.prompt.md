@@ -962,7 +962,14 @@ the evidence record.
   or was killed by a signal, the wrapper's exit 127 (could not start), no output at
   all, or a runner line in the log ("Shared test suite queue failed", "Test suite
   execution timeout", "Test suite could not start", "Test suite ended by SIG…",
-  "Test suite descendants could not be confirmed", "Supply a suite command"). It
+  "Test suite descendants could not be confirmed", "Supply a suite command").
+  Read the shared queue ticket for the current suite checkout and attempt.
+  Report a live ticket waiting for admission as waiting, not executing tests.
+  A ticket interrupted before admission is a runner failure, never a test
+  verdict. Preserve its signal (fall back to the wrapper's signal if necessary)
+  and null test exit. Keep the most recent such interruption visible across
+  retries, separately from the replacement attempt. Wait for wrapper exit and
+  the usual ownership cleanup before replacing it. The existing budget applies: it
   starts again in the same checkout, at most twice. On the 3rd failure, a runner that
   died on all 3 tries (the deaths count over every try of this suite run) is a
   `no-result` end; any other runner failure ends the job with a
@@ -1476,7 +1483,9 @@ runs until its end):
    changes): the PR's Runtime lines and claims, the T01 result with the saved rows that
    it read (Story, pass, current, time, tests, failed checks, refusal codes, sent; at
    most 50) and the merge base read (commit, passing Stories, error), the replay and formal run with
-   each file's result, the full suite (state, exit, log name, failed tests), CI and review
+   each file's result, the full suite (state, exit, log name, failed tests and,
+   if known, `interruption: {ticket, signal, log}` for its most recent not-run
+   attempt), CI and review
    states (with `builderFamily`, `reviewFamily` and `reviewIndependence` when known),
    the PR's Evidence claim and the honest Evidence (above), and **one "Not
    covered" list (B3)**: what the engine did not check at this head, for example each

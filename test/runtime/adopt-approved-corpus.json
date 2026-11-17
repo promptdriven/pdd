@@ -2,11 +2,11 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/adopt-approved-corpus.md",
   "criteria": [
-    {"id": "AC1", "text": "I can start a fresh evidence-enabled workflow with my complete declared unchanged corpus from an explicitly identified approved commit, without editing its scenarios or reapproving unchanged prompt content."},
-    {"id": "AC2", "text": "I see adoption refused for a foreign source, unavailable approved snapshot, an approved commit unrelated to my selected base, or missing explicit external human approval assertion."},
-    {"id": "AC3", "text": "I see adoption refused when a declared scenario is omitted or missing, the selected inventory has extra rows, or its raw bytes or original check identities change."},
-    {"id": "AC4", "text": "I see adoption refused when the current prompt or any required dependency differs from the approved source."},
-    {"id": "AC5", "text": "I keep the original repository, commit, declared scenario scope and human approval reference, with a clear warning that pdd cannot independently authenticate that external authorization."}
+    {"id": "ac-sha256-63a4d1397d1f6a493b4866b8e664a1b94fffcbb8f9d02c49", "text": "I can start a fresh evidence-enabled workflow with my complete declared unchanged corpus from an explicitly identified approved commit, without editing its scenarios or reapproving unchanged prompt content."},
+    {"id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "text": "I see adoption refused for a foreign source, unavailable approved snapshot, an approved commit unrelated to my selected base, or missing explicit external human approval assertion."},
+    {"id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "text": "I see adoption refused when a declared scenario is omitted or missing, the selected inventory has extra rows, or its raw bytes or original check identities change."},
+    {"id": "ac-sha256-5dcc474084141b468ec5b37e30c55c883f8c0e4dc053c357", "text": "I see adoption refused when the current prompt or any required dependency differs from the approved source."},
+    {"id": "ac-sha256-6ba2e1ddad65a6c3d232c679fbfe3873815aee467414f875", "text": "I keep the original repository, commit, declared scenario scope and human approval reference, with a clear warning that pdd cannot independently authenticate that external authorization."}
   ],
   "initial_world": {"snapshots": [
     {"path": "unchanged.json", "snapshot": {"available": true, "repository": "example/project", "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "declaration": {"schema_version": "pdd.replay-adoption.v1", "repository": "example/project", "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "prompts": ["prompts/count.prompt.md"], "approval": {"kind": "external-human-assertion", "reference": "review:synthetic-42", "asserted_by": "Synthetic Reviewer"}, "scenarios": ["tests/one.json", "tests/two.json"]}, "approved_vectors": [{"path": "tests/one.json", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "checks": ["[\"tests/one.json\",\"count\",0,\"prompts/count.prompt.md\",\"count\",\"AC1\",\"result\",\"/count\",\"equals\"]"]}, {"path": "tests/two.json", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "checks": ["[\"tests/two.json\",\"count\",0,\"prompts/count.prompt.md\",\"count\",\"AC1\",\"result\",\"/count\",\"equals\"]"]}], "approved_context": [{"path": "prompts/count.prompt.md", "sha256": "3333333333333333333333333333333333333333333333333333333333333333"}, {"path": "rules/count.md", "sha256": "4444444444444444444444444444444444444444444444444444444444444444"}], "current_vectors": [{"path": "tests/one.json", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "checks": ["[\"tests/one.json\",\"count\",0,\"prompts/count.prompt.md\",\"count\",\"AC1\",\"result\",\"/count\",\"equals\"]"]}, {"path": "tests/two.json", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "checks": ["[\"tests/two.json\",\"count\",0,\"prompts/count.prompt.md\",\"count\",\"AC1\",\"result\",\"/count\",\"equals\"]"]}], "current_context": [{"path": "prompts/count.prompt.md", "sha256": "3333333333333333333333333333333333333333333333333333333333333333"}, {"path": "rules/count.md", "sha256": "4444444444444444444444444444444444444444444444444444444444444444"}], "declaration_sha256": "9999999999999999999999999999999999999999999999999999999999999999", "approved_commit_ancestor": true, "cause": ""}},
@@ -42,10 +42,10 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "unchanged.json"},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/outcome", "op": "equals", "value": "adopted"},
-        {"criterion_id": "AC1", "target": "result", "path": "/reason", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/paths", "op": "equals", "value": ["tests/one.json", "tests/two.json"]},
-        {"criterion_id": "AC5", "target": "result", "path": "/provenance", "op": "equals", "value": {"repository": "example/project", "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reference": "review:synthetic-42", "asserted_by": "Synthetic Reviewer", "trust": "external-assertion-unverified", "declaration_sha256": "9999999999999999999999999999999999999999999999999999999999999999", "prompts": ["prompts/count.prompt.md"], "scenarios": ["tests/one.json", "tests/two.json"]}}
+        {"criterion_id": "ac-sha256-63a4d1397d1f6a493b4866b8e664a1b94fffcbb8f9d02c49", "target": "result", "path": "/outcome", "op": "equals", "value": "adopted"},
+        {"criterion_id": "ac-sha256-63a4d1397d1f6a493b4866b8e664a1b94fffcbb8f9d02c49", "target": "result", "path": "/reason", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-63a4d1397d1f6a493b4866b8e664a1b94fffcbb8f9d02c49", "target": "result", "path": "/paths", "op": "equals", "value": ["tests/one.json", "tests/two.json"]},
+        {"criterion_id": "ac-sha256-6ba2e1ddad65a6c3d232c679fbfe3873815aee467414f875", "target": "result", "path": "/provenance", "op": "equals", "value": {"repository": "example/project", "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reference": "review:synthetic-42", "asserted_by": "Synthetic Reviewer", "trust": "external-assertion-unverified", "declaration_sha256": "9999999999999999999999999999999999999999999999999999999999999999", "prompts": ["prompts/count.prompt.md"], "scenarios": ["tests/one.json", "tests/two.json"]}}
       ]
     },
     {
@@ -54,9 +54,9 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "foreign.json"},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC2", "target": "result", "path": "/reason", "op": "equals", "value": "foreign-source"},
-        {"criterion_id": "AC2", "target": "result", "path": "/paths", "op": "equals", "value": []}
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/reason", "op": "equals", "value": "foreign-source"},
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {
@@ -65,9 +65,9 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "unavailable.json"},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC2", "target": "result", "path": "/reason", "op": "equals", "value": "unavailable"},
-        {"criterion_id": "AC2", "target": "result", "path": "/paths", "op": "equals", "value": []}
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/reason", "op": "equals", "value": "unavailable"},
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {
@@ -76,9 +76,9 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "no-approval.json"},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC2", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"},
-        {"criterion_id": "AC2", "target": "result", "path": "/paths", "op": "equals", "value": []}
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"},
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {
@@ -87,9 +87,9 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "subset.json"},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "inventory-mismatch"},
-        {"criterion_id": "AC3", "target": "result", "path": "/paths", "op": "equals", "value": []}
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "inventory-mismatch"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {
@@ -98,10 +98,10 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "added.json"},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "inventory-mismatch"},
-        {"criterion_id": "AC3", "target": "result", "path": "/paths", "op": "equals", "value": []},
-        {"criterion_id": "AC5", "target": "result", "path": "/provenance/scenarios", "op": "equals", "value": ["tests/one.json", "tests/two.json"]}
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "inventory-mismatch"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/paths", "op": "equals", "value": []},
+        {"criterion_id": "ac-sha256-6ba2e1ddad65a6c3d232c679fbfe3873815aee467414f875", "target": "result", "path": "/provenance/scenarios", "op": "equals", "value": ["tests/one.json", "tests/two.json"]}
       ]
     },
     {
@@ -110,9 +110,9 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "changed-bytes.json"},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "content-mismatch"},
-        {"criterion_id": "AC3", "target": "result", "path": "/paths", "op": "equals", "value": []}
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "content-mismatch"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {
@@ -121,9 +121,9 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "changed-check.json"},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "content-mismatch"},
-        {"criterion_id": "AC3", "target": "result", "path": "/paths", "op": "equals", "value": []}
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "content-mismatch"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {
@@ -132,9 +132,9 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "changed-prompt.json"},
       "checks": [
-        {"criterion_id": "AC4", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC4", "target": "result", "path": "/reason", "op": "equals", "value": "content-mismatch"},
-        {"criterion_id": "AC4", "target": "result", "path": "/paths", "op": "equals", "value": []}
+        {"criterion_id": "ac-sha256-5dcc474084141b468ec5b37e30c55c883f8c0e4dc053c357", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-5dcc474084141b468ec5b37e30c55c883f8c0e4dc053c357", "target": "result", "path": "/reason", "op": "equals", "value": "content-mismatch"},
+        {"criterion_id": "ac-sha256-5dcc474084141b468ec5b37e30c55c883f8c0e4dc053c357", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {
@@ -143,9 +143,9 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "changed-dependency.json"},
       "checks": [
-        {"criterion_id": "AC4", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC4", "target": "result", "path": "/reason", "op": "equals", "value": "content-mismatch"},
-        {"criterion_id": "AC4", "target": "result", "path": "/paths", "op": "equals", "value": []}
+        {"criterion_id": "ac-sha256-5dcc474084141b468ec5b37e30c55c883f8c0e4dc053c357", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-5dcc474084141b468ec5b37e30c55c883f8c0e4dc053c357", "target": "result", "path": "/reason", "op": "equals", "value": "content-mismatch"},
+        {"criterion_id": "ac-sha256-5dcc474084141b468ec5b37e30c55c883f8c0e4dc053c357", "target": "result", "path": "/paths", "op": "equals", "value": []}
       ]
     },
     {
@@ -154,8 +154,8 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "unrelated-commit.json"},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC2", "target": "result", "path": "/reason", "op": "equals", "value": "unrelated-commit"}
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/reason", "op": "equals", "value": "unrelated-commit"}
       ]
     },
     {
@@ -164,8 +164,8 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "declared-omission.json"},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "inventory-mismatch"}
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "inventory-mismatch"}
       ]
     },
     {
@@ -174,8 +174,8 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "unrelated-fixtures-outside-scope.json"},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/outcome", "op": "equals", "value": "adopted"},
-        {"criterion_id": "AC1", "target": "result", "path": "/reason", "op": "equals", "value": ""}
+        {"criterion_id": "ac-sha256-63a4d1397d1f6a493b4866b8e664a1b94fffcbb8f9d02c49", "target": "result", "path": "/outcome", "op": "equals", "value": "adopted"},
+        {"criterion_id": "ac-sha256-63a4d1397d1f6a493b4866b8e664a1b94fffcbb8f9d02c49", "target": "result", "path": "/reason", "op": "equals", "value": ""}
       ]
     },
     {
@@ -184,9 +184,9 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "clean-native-cause.json"},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC2", "target": "result", "path": "/reason", "op": "equals", "value": "unavailable"},
-        {"criterion_id": "AC2", "target": "result", "path": "/cause", "op": "contains", "value": "missing"}
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/reason", "op": "equals", "value": "unavailable"},
+        {"criterion_id": "ac-sha256-b083fd1651ea9352a7878b0b545c7c33b514fa3d457f01a9", "target": "result", "path": "/cause", "op": "contains", "value": "missing"}
       ]
     },
     {
@@ -195,10 +195,10 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "duplicate-declaration.json"},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"},
-        {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "duplicate"},
-        {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "tests/one.json"}
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "duplicate"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "tests/one.json"}
       ]
     },
     {
@@ -207,16 +207,16 @@
       "operation": "adoptReplayCorpus",
       "input": {"root": "/synthetic/repo", "declarationPath": "empty-declaration.json"},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
-        {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"},
+        {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}
       ]
     },
-    {"step_id": "over-limit-declaration", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "over-limit-declaration.json"}, "checks": [{"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "201"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "200"}]},
-    {"step_id": "missing-scenarios-key", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "missing-scenarios-key.json"}, "checks": [{"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "scenarios"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "missing"}]},
-    {"step_id": "noncanonical-declaration", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "noncanonical-declaration.json"}, "checks": [{"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "canonical"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "./tests/a.json"}]},
-    {"step_id": "uppercase-git-declaration", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "uppercase-git-declaration.json"}, "checks": [{"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": ".GIT/config"}]},
-    {"step_id": "equal-strict-subset", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "equal-strict-subset.json"}, "checks": [{"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "inventory-mismatch"}]},
-    {"step_id": "missing-approved-scenario", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "missing-approved-scenario.json"}, "checks": [{"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "unavailable"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "approved"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "missing"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "tests/two.json"}]},
-    {"step_id": "missing-current-scenario", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "missing-current-scenario.json"}, "checks": [{"criterion_id": "AC3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "AC3", "target": "result", "path": "/reason", "op": "equals", "value": "unavailable"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "current"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "missing"}, {"criterion_id": "AC3", "target": "result", "path": "/cause", "op": "contains", "value": "tests/two.json"}]}
+    {"step_id": "over-limit-declaration", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "over-limit-declaration.json"}, "checks": [{"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "201"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "200"}]},
+    {"step_id": "missing-scenarios-key", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "missing-scenarios-key.json"}, "checks": [{"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "scenarios"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "missing"}]},
+    {"step_id": "noncanonical-declaration", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "noncanonical-declaration.json"}, "checks": [{"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "canonical"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "./tests/a.json"}]},
+    {"step_id": "uppercase-git-declaration", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "uppercase-git-declaration.json"}, "checks": [{"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "invalid-approval"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": ".GIT/config"}]},
+    {"step_id": "equal-strict-subset", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "equal-strict-subset.json"}, "checks": [{"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "inventory-mismatch"}]},
+    {"step_id": "missing-approved-scenario", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "missing-approved-scenario.json"}, "checks": [{"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "unavailable"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "approved"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "missing"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "tests/two.json"}]},
+    {"step_id": "missing-current-scenario", "entry_path": "prompts/cli/workflow-replay.prompt.md", "operation": "adoptReplayCorpus", "input": {"root": "/synthetic/repo", "declarationPath": "missing-current-scenario.json"}, "checks": [{"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/outcome", "op": "equals", "value": "blocked"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/reason", "op": "equals", "value": "unavailable"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "current"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "missing"}, {"criterion_id": "ac-sha256-fa527aecf489d183f1a4c3ff09c5b31b8542eaa35ffe57f3", "target": "result", "path": "/cause", "op": "contains", "value": "tests/two.json"}]}
   ]
 }

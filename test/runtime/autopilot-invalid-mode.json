@@ -3,11 +3,11 @@
   "story_path": "user_stories/autopilot-invalid-mode.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-d35069ed75728daf2aa0463db79c87f9139b6f98e007698e",
       "text": "Setup treats saved invalid mode turbo as off and leaves it unchanged."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-4bf79fe185a530a0abd8ec5f03c37afc5f993c6e75d61183",
       "text": "Running `pdd autopilot auto` replaces saved invalid mode turbo with auto."
     }
   ],
@@ -84,21 +84,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-d35069ed75728daf2aa0463db79c87f9139b6f98e007698e",
           "target": "result",
           "path": "/mode",
           "op": "equals",
           "value": "off"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-d35069ed75728daf2aa0463db79c87f9139b6f98e007698e",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "invalid"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-d35069ed75728daf2aa0463db79c87f9139b6f98e007698e",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",
@@ -116,7 +116,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-4bf79fe185a530a0abd8ec5f03c37afc5f993c6e75d61183",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",

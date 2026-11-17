@@ -3,7 +3,7 @@
   "story_path": "user_stories/product-worktree-links.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-5407f6f737a9e53284631e3ddfcb70933ac43605e1331808",
       "text": "Starting phone-1 in a second checkout reuses legacy issue 82, starts one feature run and makes no search or new issue."
     }
   ],
@@ -179,42 +179,42 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-5407f6f737a9e53284631e3ddfcb70933ac43605e1331808",
           "target": "result",
           "path": "/issue",
           "op": "equals",
           "value": 82
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-5407f6f737a9e53284631e3ddfcb70933ac43605e1331808",
           "target": "result",
           "path": "/created",
           "op": "equals",
           "value": false
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-5407f6f737a9e53284631e3ddfcb70933ac43605e1331808",
           "target": "result",
           "path": "/started",
           "op": "equals",
           "value": true
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-5407f6f737a9e53284631e3ddfcb70933ac43605e1331808",
           "target": "calls",
           "path": "/resources/product-github-issuePage",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-5407f6f737a9e53284631e3ddfcb70933ac43605e1331808",
           "target": "world",
           "path": "/creates",
           "op": "count",
           "value": 0
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-5407f6f737a9e53284631e3ddfcb70933ac43605e1331808",
           "target": "world",
           "path": "/starts",
           "op": "count",
