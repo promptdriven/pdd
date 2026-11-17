@@ -605,10 +605,16 @@ async function runCoreTick(stateFile, state, p, ports) {
     try { await runAutopilotAlerts({ action: 'retry', cwd: state.cwd, env: p.env }, alertPorts); }
     catch { /* Alert retry never stops the tick. */ }
   }
+  const wakeIdentity = { stateFile, cwd: state.cwd, repo: state.repo, coordinatorId: state.coordinatorId, machine: state.machine, controlRevision: state.controlRevision };
+  const wake = p.wake ?? (!ports.run && !ports.queryIssues && !ports.corePorts && state.coordinatorId && state.machine
+    ? { command: process.execPath, args: [self, '--start-scan-wait', JSON.stringify(wakeIdentity)], cwd: state.cwd, env: p.env }
+    : null);
   const result = await tickCore({ state, settings: core, budget }, {
     gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, ...options }),
     git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
     now: p.now, env: p.env, warn: p.warn, root: cRoot, reportRoot: coreReports(ports, p.env), tickMinutes: timerMinutes(state),
+    etags: p.etags,
+    ...(wake ? { wake } : {}),
     version: read(join(state.packageRoot ?? dirname(dirname(self)), 'package.json'), {})?.version, listIssues,
     trusted: row => trusted(row, state, { trust: core.trust }, p),
     agentReady: async () => (pool.configured || cloudMainActive) ? (await selectPool())?.state === 'ready' : localAgentReady(),
@@ -620,6 +626,7 @@ async function runCoreTick(stateFile, state, p, ports) {
     machine,
     ...p.corePorts,
   });
+  try { p.etags?.save(); } catch { /* A lost cache only costs counted reads. */ }
   const release = await claimAdmission(state, p);
   if (release) try {
     const latest = read(stateFile);
@@ -1396,7 +1403,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     for (const [name,value] of [['runs',runs],['checks',checks]]) if (command === 'start' && value !== undefined && (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)))) return {exitCode:2,message:`Use --${name} with a positive safe integer, or omit it for machine capacity.`};
     if (command === 'start') {
       const config = await settings(state, p);
-      if (config.mode === 'off') return ok(`${line(config.message)} Choose observe or auto with pdd autopilot observe or pdd autopilot auto.`);
+      if (!machineMode(state) && config.mode === 'off') return ok(`${line(config.message)} Choose observe or auto with pdd autopilot observe or pdd autopilot auto.`);
       state.packageRoot = packageRoot;
     }
     if (!state.repo || command === 'start') {
@@ -1467,7 +1474,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       : (input.agent !== undefined && previous?.poolPath && previous.poolPath !== 'off' ? 'off' : previous?.poolPath);
     const postCloudIntake = postPoolPath !== 'off' && !activePool?.configured
       && ['codex', 'claude'].some(kind => isCloudAccountsActive({ env: p.env, poolPath: postPoolPath || undefined, provider: kind }, { fs: p.fs }));
-    if (effectiveIntake(state, readCoreSettings(state.cwd)) === 'active' && !activePool?.configured && !postCloudIntake && !['codex', 'claude'].includes(agent.kind)) {
+    const coreSettingsNow = readCoreSettings(state.cwd);
+    if ((machineMode(state) ?? coreSettingsNow.mode) !== 'off' && effectiveIntake(state, coreSettingsNow) === 'active' && !activePool?.configured && !postCloudIntake && !['codex', 'claude'].includes(agent.kind)) {
       return bad(ACTIVE_INTAKE_AGENT_MSG);
     }
     const version = read(join(packageRoot, 'package.json')).version;

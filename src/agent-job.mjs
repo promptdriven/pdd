@@ -1,6 +1,6 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 6d999d98bc2ee0c6347783aed92d6ee05f535821d83b162494bec89e9d5fdef4).
+// Prompt: prompts/cli/agent-job.prompt.md
 import { execFile, spawn, spawnSync } from 'node:child_process';
-import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ const self = fileURLToPath(import.meta.url), GRACE_MS = 2000;
 export const SNAPSHOT_INTERVAL_MS = 2000;
 export const MAX_CAPTURED_PROCESSES = 512;
 const SESSION_KEYS = /^(?:ANTIGRAVITY_(?!APP_DATA_DIR$)|CLAUDECODE$|CLAUDE_CODE_(?!OAUTH_TOKEN$)|CLAUDE_PID$|CODEX_THREAD_ID$|CODEX_SANDBOX|GEMINI_CLI_SESSION_ID$|HERDR_|PDD_AGENT_SESSION$|PDD_AUTOPILOT_CONTEXT$)/;
+const GITHUB_TOKEN_KEYS = /^(?:GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|GITHUB_PERSONAL_ACCESS_TOKEN)$/i;
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const cleanOverlayDirs = value => Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string' && item.trim()).map(item => resolve(item)).filter(item => basename(item).startsWith('pdd-cx-')))] : [];
@@ -35,23 +36,31 @@ export function agentCommand(agent, { model } = {}) {
   throw Error('Autopilot core jobs need codex, claude, gemini or agy');
 }
 
-export function jobEnvironment(env = {}) {
-  return Object.fromEntries(Object.entries(env).filter(([key, value]) => typeof value === 'string' && !SESSION_KEYS.test(key)));
+export function jobEnvironment(env = {}, { stripGithubTokens = false } = {}) {
+  return Object.fromEntries(Object.entries(env).filter(([key, value]) => typeof value === 'string' && !SESSION_KEYS.test(key) && !(stripGithubTokens && GITHUB_TOKEN_KEYS.test(key))));
 }
 
 // The hung-command watch settings: after (ms of log silence), every (ms between rounds), cpu (seconds of growth).
 const hungSettings = value => object(value) && [value.after, value.every].every(n => Number.isFinite(n) && n > 0) && Number.isFinite(value.cpu) && value.cpu >= 0
   ? { after: value.after, every: value.every, cpu: value.cpu } : null;
-export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null, pddCheck = null, hung = null, custodyRoot = null, cleanupDirs = null }, ports = {}) {
+const wakeSettings = value => object(value) && typeof value.command === 'string' && value.command.trim()
+  ? {
+    command: value.command,
+    args: Array.isArray(value.args) ? value.args.map(String) : [],
+    ...(typeof value.cwd === 'string' && value.cwd ? { cwd: value.cwd } : {}),
+    ...(object(value.env) ? { env: Object.fromEntries(Object.entries(value.env).filter(([, v]) => typeof v === 'string')) } : {}),
+  }
+  : null;
+export function startAgentJob({ id, dir, cwd, command, args = [], input = '', env = {}, priority = null, pddCheck = null, hung = null, custodyRoot = null, cleanupDirs = null, wake = null }, ports = {}) {
   if (!/^[A-Za-z0-9._-]+$/.test(String(id))) throw Error('Invalid job id');
-  const base = join(resolve(dir), id), now = ports.now ?? Date.now, watch = hungSettings(hung), custody = typeof custodyRoot === 'string' && custodyRoot ? resolve(custodyRoot) : null;
-  const overlays = cleanOverlayDirs(cleanupDirs);
+  const base = join(resolve(dir), id), now = ports.now ?? Date.now, watchCfg = hungSettings(hung), custody = typeof custodyRoot === 'string' && custodyRoot ? resolve(custodyRoot) : null;
+  const overlays = cleanOverlayDirs(cleanupDirs), wakeCfg = wakeSettings(wake);
   const job = { id, token: `${base}.spec.json`, log: `${base}.log`, exit: `${base}.exit.json`, result: `${base}.result.json`, input: `${base}.input`, hangs: `${base}.hangs.json`, ...(overlays.length ? { cleanupDirs: overlays } : {}) };
   writeFileSync(job.input, input, { mode: 0o600 });
   // This boundary precedes the spec and wrapper spawn. `started`, sampled after
   // spawn, would not safely exclude an already-running descendant.
   const custodyBoundary = custody ? now() : null;
-  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}), ...(watch ? { hung: watch } : {}), ...(custody ? { custodyRoot: custody, custodyBoundary } : {}), ...(overlays.length ? { cleanupDirs: overlays } : {}) }));
+  writeAtomic(job.token, JSON.stringify({ command, args, cwd, input: job.input, log: job.log, exit: job.exit, hangs: job.hangs, ...(priority ? { priority } : {}), ...(pddCheck ? { pddCheck } : {}), ...(watchCfg ? { hung: watchCfg } : {}), ...(custody ? { custodyRoot: custody, custodyBoundary } : {}), ...(overlays.length ? { cleanupDirs: overlays } : {}), ...(wakeCfg ? { wake: wakeCfg } : {}) }));
   const child = (ports.spawn ?? spawn)(process.execPath, [self, '--wrapper', job.token], { cwd, env, detached: true, stdio: 'ignore' });
   // A spawn that fails later (a cwd that is gone, EAGAIN, ENOMEM) is an exit with code 127, never an uncaught error.
   child.on?.('error', error => { try { writeAtomic(job.exit, JSON.stringify({ code: 127, signal: null, at: now(), error: String(error.code ?? error.message) })); } catch { /* The job reads as dead. */ } finally { removeCleanupDirs(overlays); } });
@@ -75,6 +84,61 @@ export function readAgentJob(job, ports = {}) {
   try { const stat = statSync(job.log); log = { size: stat.size, mtime: stat.mtimeMs }; } catch { /* No log yet. */ }
   return { state: alive ? 'running' : object(exit) ? 'exited' : 'dead', exit: object(exit) ? exit : null,
     result: result === undefined ? null : object(result) ? result : 'invalid', log };
+}
+
+export function waitForAgentJob(jobs, { timeoutMs = 600000, ...ports } = {}) {
+  const list = (Array.isArray(jobs) ? jobs : [jobs]).filter(object);
+  if (!list.length) return Promise.resolve({ job: null, seen: null, reason: 'empty' });
+  const exitNames = new Set(list.map(job => typeof job.exit === 'string' ? basename(resolve(job.exit)) : null).filter(Boolean));
+  return new Promise(resolveWait => {
+    const watchers = [];
+    let timer = null, recheck = null, settled = false;
+    const setTimer = ports.setTimer ?? setTimeout;
+    const clearTimer = ports.clearTimer ?? clearTimeout;
+    const isAlive = ports.alive ?? nativeAlive;
+    const done = value => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimer(timer);
+      if (recheck) clearTimer(recheck);
+      for (const w of watchers) try { w.close(); } catch { /* Already closed. */ }
+      resolveWait(value);
+    };
+    // Read exit and liveness without writing snapshot files into watched directories (avoids fs.watch feedback loops).
+    const check = () => {
+      if (settled) return true;
+      let exitingSoon = false;
+      for (const job of list) {
+        const alive = Number.isSafeInteger(job?.pid) && job.pid > 0 && isAlive(job.pid, job.token);
+        if (!alive) {
+          done({ job, seen: readAgentJob(job, { ...ports, alive: () => false }), reason: 'worker-exit' });
+          return true;
+        }
+        if (object(readJson(job.exit))) exitingSoon = true;
+      }
+      if (exitingSoon && !recheck) {
+        recheck = setTimer(() => { recheck = null; check(); }, 15);
+      }
+      return false;
+    };
+    if (check()) return;
+    const dirs = [...new Set(list.map(job => typeof job.exit === 'string' ? dirname(resolve(job.exit)) : null).filter(Boolean))];
+    for (const dir of dirs) {
+      try {
+        const w = (ports.watch ?? watch)(dir, (_event, filename) => {
+          if (typeof filename === 'string' && filename.length > 0 && !exitNames.has(filename)) return;
+          check();
+        });
+        w.on?.('error', () => {});
+        watchers.push(w);
+      } catch { /* Fallback timeout still resolves. */ }
+    }
+    if (check()) return;
+    const fallbackMs = Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : 600000;
+    timer = setTimer(() => {
+      if (!check()) done({ job: null, seen: null, reason: 'timeout' });
+    }, fallbackMs);
+  });
 }
 
 // CPU seconds of each process under the job, by pid, without the wrapper and its direct child (the agent CLI or the
@@ -843,7 +907,7 @@ function lowerPriority(spec) {
 // whole group, itself last. A failed write never skips the SIGKILL. A second stop changes nothing. A child that ends by
 // a stop signal before the wrapper's own handler runs is that stop (guard, Nov 11).
 const STOP_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'];
-export function jobStopper({ killGroup, setTimer, writeExit, exit, now = Date.now, grace = GRACE_MS }) {
+export function jobStopper({ killGroup, setTimer, writeExit, exit, wake = null, now = Date.now, grace = GRACE_MS }) {
   let finished = false, stopping = null, ended = null;
   const finish = (code, signal, group = false) => {
     if (finished) return; finished = true;
@@ -851,6 +915,7 @@ export function jobStopper({ killGroup, setTimer, writeExit, exit, now = Date.no
     catch { /* The exit record is best effort; the job then reads as dead. */ }
     finally {
       if (group) try { killGroup('SIGKILL'); } catch { /* Only this wrapper is left. */ }
+      else try { wake?.({ code, signal: signal ?? null }); } catch { /* Wakeup is best effort; the periodic timer still reconciles. */ }
       exit();
     }
   };
@@ -878,6 +943,46 @@ export function selectChildGroups(saved, nowRows, wrapperPid = process.pid, allo
   }
   return groups;
 }
+function spawnDetachedWake(cfg, fallbackCwd) {
+  try {
+    const child = spawn(cfg.command, cfg.args, { cwd: cfg.cwd ?? fallbackCwd, env: cfg.env ?? process.env, detached: true, stdio: 'ignore' });
+    child.on?.('error', () => {});
+    child.unref?.();
+  } catch { /* Best effort; the periodic timer still reconciles. */ }
+}
+function triggerWake(wake, fallbackCwd, wrapperPid = null, specFile = '') {
+  const cfg = wakeSettings(wake);
+  if (!cfg) return;
+  if (Number.isSafeInteger(wrapperPid) && wrapperPid > 0 && specFile) {
+    try {
+      const relay = spawn(process.execPath, [self, '--wake-after', String(wrapperPid), specFile, JSON.stringify({ ...cfg, cwd: cfg.cwd ?? fallbackCwd })], {
+        cwd: cfg.cwd ?? fallbackCwd,
+        env: cfg.env ?? process.env,
+        detached: true,
+        stdio: 'ignore',
+      });
+      relay.on?.('error', () => {});
+      relay.unref?.();
+      return;
+    } catch { /* Fall back to direct wake spawn. */ }
+  }
+  spawnDetachedWake(cfg, fallbackCwd);
+}
+function wakeAfterWrapperExit(pidArg, tokenArg, rawSpec) {
+  const pid = Number(pidArg);
+  let cfg;
+  try { cfg = wakeSettings(JSON.parse(rawSpec)); } catch { return; }
+  if (!cfg) return;
+  const deadline = Date.now() + 5000;
+  const poll = () => {
+    if (Number.isSafeInteger(pid) && pid > 0 && Date.now() < deadline && nativeAlive(pid, tokenArg)) {
+      setTimeout(poll, 10);
+      return;
+    }
+    spawnDetachedWake(cfg, cfg.cwd);
+  };
+  poll();
+}
 // The detached wrapper: it owns the agent process and records how it ended.
 function wrap(specFile) {
   const spec = JSON.parse(readFileSync(specFile, 'utf8'));
@@ -895,6 +1000,8 @@ function wrap(specFile) {
     if (signal === 'SIGTERM') activeChildGroups = groups;
     for (const pgid of groups) try { process.kill(-pgid, signal); } catch { /* Already gone. */ }
   };
+  let cleaned = false;
+  const cleanOnce = () => { if (cleaned) return; cleaned = true; removeCleanupDirs(spec.cleanupDirs); };
   const { finish, stop, exited } = jobStopper({
     killGroup: signal => {
       signalChildGroups(signal);
@@ -902,7 +1009,8 @@ function wrap(specFile) {
     },
     setTimer: (fn, ms) => setTimeout(fn, ms),
     writeExit: record => { try { writeAtomic(spec.exit, JSON.stringify(record)); } finally { for (const fd of [stdin, out]) try { closeSync(fd); } catch { /* Already closed. */ } } },
-    exit: () => { removeCleanupDirs(spec.cleanupDirs); process.exit(0); } });
+    wake: () => { cleanOnce(); triggerWake(spec.wake, spec.cwd, process.pid, specFile); },
+    exit: () => { cleanOnce(); process.exit(0); } });
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => stop(signal));
   const run = jobCommand(spec);
   try {
@@ -930,4 +1038,7 @@ function wrap(specFile) {
   if (spec.pddCheck) { checkSkills(spec, out); checkShellPdd(spec, out); }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === self && process.argv[2] === '--wrapper') wrap(process.argv[3]);
+if (process.argv[1] && resolve(process.argv[1]) === self) {
+  if (process.argv[2] === '--wrapper') wrap(process.argv[3]);
+  else if (process.argv[2] === '--wake-after') wakeAfterWrapperExit(process.argv[3], process.argv[4], process.argv[5]);
+}
