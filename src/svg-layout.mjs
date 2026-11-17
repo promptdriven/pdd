@@ -105,12 +105,21 @@ function partsOf(source) {
 }
 const REF_DEF_RE = /^\s*\[([^\]]+)\]:\s*<?([^\s>]+)>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*$/gm;
 const refDefs = text => new Map([...text.matchAll(REF_DEF_RE)].map(m => [normalize(m[1]), m[2]]));
-function links(text, refs = refDefs(text)) {
+function links(text, refs = refDefs(text), imagesOnly = false) {
+  const inlineRe = imagesOnly
+    ? /!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g
+    : /!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g;
+  const refRe = imagesOnly ? /!\[([^\]]*)\]\[([^\]]*)\]/g : /!?\[([^\]]*)\]\[([^\]]*)\]/g;
+  const shortRe = imagesOnly ? /!\[([^\]]+)\](?![\[(:])/g : /!?\[([^\]]+)\](?![\[(:])/g;
   return [...new Set([
-    ...[...text.matchAll(/!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g)].map(m => m[1] || m[2]),
-    ...[...text.matchAll(/!?\[([^\]]*)\]\[([^\]]*)\]/g)].map(m => refs.get(normalize(m[2] || m[1]))),
-    ...[...text.matchAll(/!?\[([^\]]+)\](?![\[(:])/g)].map(m => refs.get(normalize(m[1]))),
+    ...[...text.matchAll(inlineRe)].map(m => m[1] || m[2]),
+    ...[...text.matchAll(refRe)].map(m => refs.get(normalize(m[2] || m[1]))),
+    ...[...text.matchAll(shortRe)].map(m => refs.get(normalize(m[1]))),
   ].filter(value => value && !/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(value) && /\.ui\.svg(?:#.*)?$/i.test(value)).map(value => value.split('#')[0]))];
+}
+function uploadCapturedSvgLinks(text, refs = refDefs(text)) {
+  const depsBody = [...text.matchAll(/^##+[ \t]+Dependencies\b[^\n]*\n([\s\S]*?)(?=^##?[ \t]|$(?![\s\S]))/gim)].map(m => m[1]).join('\n');
+  return [...new Set([...links(text, refs, true), ...links(depsBody, refs, false)])];
 }
 const mentioned = (prose, value) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalize(prose));
 const resolveDrawing = (root, prompt, link) => {
@@ -609,8 +618,22 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     source = source.replace(/<details\b[^>]*>\s*<summary[^>]*>[^\n]*Runtime interface[^\n]*<\/summary>[\s\S]*?<\/details>/gi, '')
       .replace(/(^##+ Runtime interface[^\n]*\n)[\s\S]*?(?=^##+ |$(?![\s\S]))/gmi, '');
     const decodedSource = decodeHtml(source), drawings = [];
-    const resolvedLinks = [...new Set(links(source).sort().map(link => resolveDrawing(root, prompt, link)))].sort();
-    for (const drawing of resolvedLinks) if (drawing && drawing !== '..' && !drawing.startsWith('../')) drawings.push(drawing);
+    const promptRefs = refDefs(source);
+    const resolvedLinks = [...new Set(links(source, promptRefs).sort().map(link => resolveDrawing(root, prompt, link)))].sort();
+    const capturedSet = new Set(uploadCapturedSvgLinks(source, promptRefs).map(link => resolveDrawing(root, prompt, link)));
+    for (const drawing of resolvedLinks) {
+      if (drawing && drawing !== '..' && !drawing.startsWith('../')) {
+        drawings.push(drawing);
+        if (!capturedSet.has(drawing)) {
+          add(
+            prompt,
+            drawing,
+            'link syntax',
+            'plain Markdown link outside "## Dependencies" is skipped by scoped uploads (causes dependency-file-unreadable); use image syntax ![label](...) or link it under "## Dependencies"',
+          );
+        }
+      }
+    }
     const scopedSources = drawings.length > 1 ? scopedSourcesByDrawing(source, root, prompt, drawings) : null;
     for (const drawing of resolvedLinks) {
       let parts;

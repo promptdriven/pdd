@@ -6,7 +6,7 @@
 
 ### The drawing is the layout spec
 
-When a screen prompt links a `.ui.svg`, declare its purpose: illustrative content or a comparison-reference state.
+When a screen prompt links a `.ui.svg`, use Markdown image syntax `![label](views/name.ui.svg)` under `## Appearance` (never a plain `[label](...)` text link outside `## Dependencies`, which scoped uploads skip), keep the file tracked in Git, and declare its purpose: illustrative content or a comparison-reference state.
 The SVG owns appearance. Prose owns behavior, accessibility and the authority for actual values. Illustrative sample
 values do not become required runtime values. For a comparison reference, declare the state and its values so the
 page can reproduce them. Prose and drawing must agree on owned parts, visible words, spatial order and stable ids.

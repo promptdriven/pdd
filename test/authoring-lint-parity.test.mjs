@@ -400,3 +400,25 @@ test('3459 lint --local: validates app-map.json timers, screen prompt_path, and 
   assert.match(streams.out, /prompt-runtime\.program-scenario\.v1/);
   assert.match(streams.out, /generation_pointer.*9007199254740991/);
 });
+
+test('lintSvgLayouts warns when a .ui.svg is linked only via plain [label](...) outside ## Dependencies', t => {
+  const root = initRepo(t, {
+    'views/game.ui.svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><g id="board"><text>2048</text></g></svg>',
+    'prompts/game.prompt.md': [
+      '# 2048 Screen',
+      '',
+      '## Appearance',
+      '',
+      'Render region `board` with heading 2048 following [the screen reference](../views/game.ui.svg).',
+      '',
+      '## Dependencies',
+      '',
+      'None.',
+    ].join('\n'),
+  });
+  const warnings = lintSvgLayouts({ root, files: gitFiles(root) });
+  assert.ok(
+    warnings.some(w => w.includes('prompts/game.prompt.md -> views/game.ui.svg: link syntax:') && w.includes('dependency-file-unreadable')),
+    warnings.join('\n'),
+  );
+});
