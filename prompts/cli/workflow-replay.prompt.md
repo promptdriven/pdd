@@ -383,7 +383,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 ```json
 {
   "status": "approved",
-  "prose_sha256": "1e33b05732de6ee39ded88d14250981f25af96387498a72f0d73550d05aee9ed",
+  "prose_sha256": "24a451c00c3fa4fa95b1d7525f656410652e7565e0621a461a175307e5085f22",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
