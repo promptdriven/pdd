@@ -255,6 +255,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const result = await module.runAutopilot(input, { cwd, stdin, stdout, ...autopilotPorts });
         line(result.exitCode === 0 ? stdout : stderr, result.message);
         if (result.exitCode === 0) {
+          if (input.action === 'mode') {
+            try {
+              const launcher = autopilotLauncher ?? await import('./autopilot-launcher.mjs');
+              if (typeof launcher.resetAutopilotCircuitBreaker === 'function') {
+                await launcher.resetAutopilotCircuitBreaker({ cwd, env, mode: input.mode }, { ...autopilotPorts, ...autopilotLauncherPorts });
+              }
+            } catch { /* Local breaker reset never blocks pdd.json settings writes. */ }
+          }
           const retry = ['pdd', 'autopilot', input.action === 'mode' ? input.mode : input.action, ...(input.names ?? [])].join(' ');
           const next = await autopilotGithub(autopilotGithubModule, 'publishAutopilotSettings', { cwd, action: input.action, mode: input.mode, names: input.names, retry },
             autopilotGithubPorts, `pdd.json on GitHub was not updated. To retry, run ${retry}.`);
