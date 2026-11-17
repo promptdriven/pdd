@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-selection.prompt.md (sha256: cc8e71acdec3a69af1f81fa4f25af00916bface4ad2116ff1d2ec4819d2159bd).
+// Generated from prompts/cli/test-selection.prompt.md (sha256: 0ff1e1edecfab67e4a28928ea0459abedc72abdea6dff178e36f948d594db00c).
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
@@ -210,7 +210,7 @@ function normalizeRepoPath(value) {
 
 function isSafeRepoPath(path) {
   if (typeof path !== 'string' || !path.length || path.length > 1000) return false;
-  if (path.startsWith('/') || /^[A-Za-z]:(?:\/|$)/.test(path) || path.includes('\\') || /[\x00-\x1f\x7f]/.test(path)) return false;
+  if (path.startsWith('/') || /^[A-Za-z]:/.test(path) || path.includes('\\') || /[\x00-\x1f\x7f]/.test(path)) return false;
   return path.split('/').every(part => part && part !== '.' && part !== '..' && part.toLowerCase() !== '.git');
 }
 
@@ -486,6 +486,8 @@ function scanModuleSource(source, collectRefs = false) {
       if (templateStack.length > 0 && templateStack[templateStack.length - 1].braceDepth === 0) {
         const resumed = templateStack.pop();
         i++;
+        stripped += ' ) ';
+        pushTail(')');
         consumeTemplateText(resumed);
         continue;
       }
@@ -584,6 +586,31 @@ function extractModuleExports(stripped) {
     } catch {}
   }
 
+  const localImports = new Map();
+  for (const match of stripped.matchAll(/\bimport\s+([A-Za-z0-9_$*,\s{}]+?)\s*\bfrom\s*"((?:\\.|[^"\\])*)"/g)) {
+    let spec;
+    try {
+      spec = JSON.parse(`"${match[2]}"`);
+    } catch {
+      continue;
+    }
+    const clause = match[1].trim().replace(/^type\b\s*(?=\{|\*|[A-Za-z_$])/, '');
+    const braceMatch = /\{([^}]*)\}/.exec(clause);
+    if (braceMatch) {
+      for (const rawPart of braceMatch[1].split(',')) {
+        const cleaned = rawPart.trim().replace(/^type\b\s+(?=[A-Za-z_$])/, '');
+        if (!cleaned) continue;
+        const localIdent = cleaned.split(/\s+as\s+/).pop()?.trim();
+        if (localIdent && IDENT_RE.test(localIdent)) localImports.set(localIdent, spec);
+      }
+    }
+    const rest = clause.replace(/\{[^}]*\}/, '').trim();
+    const nsMatch = /\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(rest);
+    if (nsMatch) localImports.set(nsMatch[1], spec);
+    const defPart = rest.replace(/\*\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*/, '').replaceAll(',', '').trim();
+    if (defPart && IDENT_RE.test(defPart)) localImports.set(defPart, spec);
+  }
+
   for (const match of stripped.matchAll(/\bexport\s*(?:type\s*)?\{([^}]*)\}\s*from\s*"((?:\\.|[^"\\])*)"/g)) {
     let spec;
     try {
@@ -593,7 +620,7 @@ function extractModuleExports(stripped) {
     }
     const exported = [];
     for (const rawPart of match[1].split(',')) {
-      const cleaned = rawPart.trim().replace(/^type\s+/, '');
+      const cleaned = rawPart.trim().replace(/^type\b\s+(?=[A-Za-z_$])/, '');
       if (!cleaned) continue;
       const alias = cleaned.split(/\s+as\s+/).pop()?.trim();
       if (alias && IDENT_RE.test(alias)) {
@@ -604,13 +631,26 @@ function extractModuleExports(stripped) {
     if (exported.length) namedFromSpecs.push({ spec, exported });
   }
 
+  const reexportedBySpec = new Map();
   for (const match of stripped.matchAll(/\bexport\s*(?:type\s*)?\{([^}]*)\}(?!\s*from\b)/g)) {
     for (const rawPart of match[1].split(',')) {
-      const cleaned = rawPart.trim().replace(/^type\s+/, '');
+      const cleaned = rawPart.trim().replace(/^type\b\s+(?=[A-Za-z_$])/, '');
       if (!cleaned) continue;
-      const alias = cleaned.split(/\s+as\s+/).pop()?.trim();
-      if (alias && IDENT_RE.test(alias)) ownExports.add(alias);
+      const parts = cleaned.split(/\s+as\s+/).map(s => s.trim()).filter(Boolean);
+      const localIdent = parts[0];
+      const exportedAlias = parts[parts.length - 1];
+      if (exportedAlias && IDENT_RE.test(exportedAlias)) {
+        ownExports.add(exportedAlias);
+        if (localIdent && localImports.has(localIdent)) {
+          const spec = localImports.get(localIdent);
+          if (!reexportedBySpec.has(spec)) reexportedBySpec.set(spec, new Set());
+          reexportedBySpec.get(spec).add(exportedAlias);
+        }
+      }
     }
+  }
+  for (const [spec, aliases] of reexportedBySpec.entries()) {
+    namedFromSpecs.push({ spec, exported: [...aliases] });
   }
 
   return { ownExports, wildcardSpecs, namedFromSpecs };
@@ -825,10 +865,11 @@ export function selectAffectedTests(options = {}, ports = {}) {
     if (!CODE_EXTENSIONS.test(basename(path))) return false;
     const parts = folders(path);
     if (parts.some(p => SKIP_WALK_DIRS.has(p) || p === 'fixtures' || p === 'helpers' || p === 'examples')) return false;
-    return /^(?:src|lib|app|test|tests|__tests__)\//.test(path);
+    return /^(?:src|lib|app|test|tests|__tests__)\//i.test(path);
   };
-  const isProductionCodeFile = path => /^(?:src|lib|app)\//.test(path) && CODE_EXTENSIONS.test(basename(path));
-  const isLocalTestHelper = path => !totalTestSet.has(path) && /^(?:test|tests|__tests__)\//.test(path) && isGraphCodeFile(path);
+  const isProductionPath = path => /^(?:src|lib|app)\//i.test(path);
+  const isProductionCodeFile = path => isProductionPath(path) && CODE_EXTENSIONS.test(basename(path));
+  const isLocalTestHelper = path => !totalTestSet.has(path) && /^(?:test|tests|__tests__)\//i.test(path) && isGraphCodeFile(path);
 
   if (fileSet.has('pdd-bindings.json')) {
     try {
@@ -969,7 +1010,7 @@ export function selectAffectedTests(options = {}, ports = {}) {
   for (const file of changedFiles) {
     // Any test literally referencing this changed file path (e.g. docs/cli.md, .github/workflows/ci.yml).
     for (const refTest of pathToRefTests.get(file) ?? []) {
-      if (isProductionCodeFile(file)) recordProdModTest(file, refTest, `references:${file}`);
+      if (isProductionPath(file)) recordProdModTest(file, refTest, `references:${file}`);
       else addTest(refTest, `references:${file}`);
     }
 
@@ -983,12 +1024,12 @@ export function selectAffectedTests(options = {}, ports = {}) {
       continue;
     }
 
-    if (/^(?:test|tests|__tests__)\//.test(file) && CODE_EXTENSIONS.test(basename(file))) {
+    if (/^(?:test|tests|__tests__)\//i.test(file) && CODE_EXTENSIONS.test(basename(file))) {
       addSeedModule(file, `test-module:${file}`);
       continue;
     }
 
-    if (isProductionCodeFile(file)) {
+    if (isProductionPath(file)) {
       directProdChanges.add(file);
       addSeedModule(file, `reverse-import:${file}`, file);
       for (const hit of matchTestsByStem(extractStem(file), totalTests)) {
@@ -1021,9 +1062,9 @@ export function selectAffectedTests(options = {}, ports = {}) {
           };
           return { ...plan, summary: formatAffectedTestsSummary(plan) };
         }
-        addSeedModule(owned, `prompt-owner:${file}`, isProductionCodeFile(owned) ? owned : null);
+        addSeedModule(owned, `prompt-owner:${file}`, isProductionPath(owned) ? owned : null);
         for (const hit of matchTestsByStem(extractStem(owned), totalTests)) {
-          if (isProductionCodeFile(owned)) recordProdModTest(owned, hit, `prompt-owner-stem:${owned}`);
+          if (isProductionPath(owned)) recordProdModTest(owned, hit, `prompt-owner-stem:${owned}`);
           else addTest(hit, `prompt-owner-stem:${owned}`);
         }
       }
@@ -1214,8 +1255,8 @@ export function selectAffectedTests(options = {}, ports = {}) {
       }
     }
 
-    // Step C: if a directly changed production code module still has 0 tests while runnable tests exist, fall back safely to full suite.
-    if (directProdChanges.has(prodMod) && (prodModTests.get(prodMod)?.size ?? 0) === 0 && totalTests.length > 0) {
+    // Step C: if a directly changed production path still has 0 tests, fall back safely to full suite.
+    if (directProdChanges.has(prodMod) && (prodModTests.get(prodMod)?.size ?? 0) === 0) {
       const fallbackReason = `no isolated test mapping for changed code (${prodMod})`;
       const reasons = Object.fromEntries(totalTests.map(t => [t, ['fallback:unmapped-code-change']]));
       const plan = {

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-prove.prompt.md (sha256: cf2a1e9a6c65f1262821ab3d5c00bcbaac0d77b8f61281bed946a9aef827d791).
+// Generated from prompts/cli/workflow-prove.prompt.md (sha256: ea04b2e52eee9f432df280bd6738f573b0e2387ee0e0d45564b12a5da115091b).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { resolveRun, updateRun } from './workflow-runs.mjs';
@@ -261,7 +261,7 @@ export async function proveRun({ref,test,expect,cwd,timeoutMinutes=DEFAULT_PHASE
 const ITERATIVE_MODES = new Set(['iterative', 'verify', 'affected']);
 const FINAL_MODES = new Set(['final', 'merge', 'full']);
 const DEFAULT_MAX_COMMAND_LENGTH = 65536;
-const PROD_CODE_PATH_RE = /^(?:src|lib|app)\/.*\.(?:m?js|cjs|jsx|m?ts|cts|tsx)$/i;
+const PROD_CODE_PATH_RE = /^(?:src|lib|app)\//i;
 const shellQuote = value => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${String(value).replaceAll("'", `'\\''`)}'`);
 
 function filePresent(root, relPath, ports = {}) {
@@ -361,17 +361,17 @@ export function resolveVerifyPlan(options = {}, ports = {}) {
 
   if (selection.mode === 'full') {
     return {
+      ...selection,
       mode: 'iterative',
       executionMode: 'full',
       selectionMode: 'full',
-      ...selection,
       command: fullCommand,
     };
   }
 
   if (selection.selectedCount === 0) {
     const touchedProdCode = selection.changedFiles.find(f => PROD_CODE_PATH_RE.test(f));
-    if (touchedProdCode && selection.totalCount > 0) {
+    if (touchedProdCode) {
       const fallbackReason = `no isolated test mapping for changed code (${touchedProdCode})`;
       const fullPlan = {
         ...selection,
@@ -382,19 +382,19 @@ export function resolveVerifyPlan(options = {}, ports = {}) {
         fallbackCategory: 'unmapped-code-change',
       };
       return {
+        ...fullPlan,
         mode: 'iterative',
         executionMode: 'full',
         selectionMode: 'full',
-        ...fullPlan,
         summary: formatAffectedTestsSummary(fullPlan),
         command: fullCommand,
       };
     }
     return {
+      ...selection,
       mode: 'iterative',
       executionMode: 'skip',
       selectionMode: 'affected',
-      ...selection,
       command: '',
     };
   }
@@ -416,20 +416,20 @@ export function resolveVerifyPlan(options = {}, ports = {}) {
       fallbackCategory: 'command-length-limit',
     };
     return {
+      ...fullPlan,
       mode: 'iterative',
       executionMode: 'full',
       selectionMode: 'full',
-      ...fullPlan,
       summary: formatAffectedTestsSummary(fullPlan),
       command: fullCommand,
     };
   }
 
   return {
+    ...selection,
     mode: 'iterative',
     executionMode: 'affected',
     selectionMode: 'affected',
-    ...selection,
     command: affectedCommand,
   };
 }

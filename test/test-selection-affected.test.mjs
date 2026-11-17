@@ -110,12 +110,16 @@ test('3065 isRunnableTestPath and Windows path normalization handle POSIX and Wi
   assert.equal(isRunnableTestPath('../test/escape.test.mjs'), false);
   assert.equal(isRunnableTestPath('..\\test\\escape.test.mjs'), false);
   assert.equal(isRunnableTestPath('C:\\repo\\test\\escape.test.mjs'), false);
+  assert.equal(isRunnableTestPath('C:..\\escape.test.mjs'), false);
+  assert.equal(isRunnableTestPath('C:test\\escape.test.mjs'), false);
   assert.equal(isRunnableTestPath('\\\\server\\share\\test\\escape.test.mjs'), false);
 
   assert.equal(classifyGlobalSuiteTrigger(['src\\foo.mjs']).fallback, false);
   assert.equal(classifyGlobalSuiteTrigger(['test\\helpers\\test-home.mjs']).category, 'global-test-helper');
   assert.equal(classifyGlobalSuiteTrigger(['..\\outside.mjs']).category, 'unsafe-path');
   assert.equal(classifyGlobalSuiteTrigger(['C:\\outside\\foo.mjs']).category, 'unsafe-path');
+  assert.equal(classifyGlobalSuiteTrigger(['C:..\\escape.test.mjs']).category, 'unsafe-path');
+  assert.equal(classifyGlobalSuiteTrigger(['d:relative\\foo.mjs']).category, 'unsafe-path');
 
   const winRepo = {
     'src\\foo.mjs': 'export const runFoo = () => 1;\n',
@@ -140,10 +144,11 @@ test('3065 scanModuleSource handles regex literals with quotes/classes and neste
       "const importPattern = /\\bimport\\s+(?:[^;]*?\\bfrom\\s*)?(['\"`])((?:\\\\[\\s\\S]|(?!\\1)[\\s\\S])*)\\1/g;",
       "const slashInClass = /[/'\"`]/;",
       'const nested = `${String("a").replace(\'a\', `inner ${1 + 2} end`)}`;',
+      'const adjacentInterp = `${req}${"../src/other.mjs"}`;',
       'const dynInTemplate = `${await import(\'../src/inside-interpolation.mjs\')}`;',
       "const modA = await import('../src/after-regex.mjs');",
       "const modB = await import('../src/after-template.mjs');",
-      'export { importPattern, slashInClass, nested, dynInTemplate, modA, modB };',
+      'export { importPattern, slashInClass, nested, adjacentInterp, dynInTemplate, modA, modB };',
     ].join('\n'),
     'test/other-only.test.mjs': "import { other } from '../src/other.mjs';\n",
   };
@@ -154,6 +159,10 @@ test('3065 scanModuleSource handles regex literals with quotes/classes and neste
     assert.equal(res.mode, 'affected');
     assert.deepEqual(res.selectedTests, ['test/regex-and-template.test.mjs'], `failed for ${target}`);
   }
+
+  // Adjacent `${req}${"../src/other.mjs"}` must not merge `req` + `(` across template close
+  const vOther = virtualPorts(repo, ['src/other.mjs']);
+  assert.deepEqual(selectAffectedTests(vOther.options, vOther.ports).selectedTests, ['test/other-only.test.mjs']);
 });
 
 test('3065 selectAffectedTests resolves multi-hop reverse imports, stem variants, deleted modules, and ignores comments/string literals', () => {
@@ -204,6 +213,10 @@ test('3065 dispatcher hubs bridge export *, aliased re-exports, 1-char symbols, 
       if (idx === 2) return ['src/mod-2.mjs', 'export const x = () => 2;\n'];
       if (idx === 3) return ['src/mod-3.mjs', 'export const internalCalc = () => 3;\n'];
       if (idx === 4) return ['src/mod-4.mjs', 'export const unexportedLeaf = () => 4;\n'];
+      if (idx === 5) return ['src/mod-5.mjs', 'export const leafFive = () => 5;\n'];
+      if (idx === 6) return ['src/mod-6.mjs', 'export const leafSix = () => 6;\n'];
+      if (idx === 7) return ['src/mod-7.mjs', 'export const leafSeven = () => 7;\n'];
+      if (idx === 8) return ['src/mod-8.mjs', 'const p = "v";\nexport const firstDecl = `${p}`, afterInterpExport = 8;\n'];
       return [`src/mod-${idx}.mjs`, `export const fn${idx} = () => ${idx};\n`];
     }),
   );
@@ -212,16 +225,33 @@ test('3065 dispatcher hubs bridge export *, aliased re-exports, 1-char symbols, 
     if (idx === 2) return "export * from './mod-2.mjs';";
     if (idx === 3) return "export { internalCalc as publicAlias } from './mod-3.mjs';";
     if (idx === 4) return "import { unexportedLeaf } from './mod-4.mjs';";
+    if (idx === 5) return "import { leafFive as twoStmtImportedAlias } from './mod-5.mjs';";
+    if (idx === 6) return "import { leafSix } from './mod-6.mjs';";
+    if (idx === 7) return "import * as mod7Ns from './mod-7.mjs';";
+    if (idx === 8) return "export * from './mod-8.mjs';";
     return `import { fn${idx} } from './mod-${idx}.mjs';`;
   }).join('\n');
   const repo = {
     ...deps,
     'src/standalone-unmapped.mjs': 'export const orphanFn = () => 99;\n',
-    'src/hub.mjs': `${hubImports}\nexport { fn0, $tag };\nexport const runHub = () => fn1() + unexportedLeaf();\n`,
+    'src/schema.sql': 'CREATE TABLE items (id INTEGER PRIMARY KEY);\n',
+    'lib/rules.json': '{"strict":true}\n',
+    'src/hub.mjs': [
+      hubImports,
+      'export { fn0, $tag };',
+      'export { twoStmtImportedAlias };',
+      'export { leafSix as twoStmtExportAlias };',
+      'export { mod7Ns };',
+      'export const runHub = () => fn1() + unexportedLeaf();',
+    ].join('\n'),
     'test/hub-local-helper.mjs': "import { publicAlias } from '../src/hub.mjs';\nexport const callAlias = () => publicAlias();\n",
     'test/uses-reexport.test.mjs': "import { $tag } from '../src/hub.mjs';\n",
     'test/uses-star-1char.test.mjs': "import { x } from '../src/hub.mjs';\n",
     'test/uses-alias-via-helper.test.mjs': "import { callAlias } from './hub-local-helper.mjs';\n",
+    'test/uses-two-stmt-import-alias.test.mjs': "import { twoStmtImportedAlias } from '../src/hub.mjs';\n",
+    'test/uses-two-stmt-export-alias.test.mjs': "import { twoStmtExportAlias } from '../src/hub.mjs';\n",
+    'test/uses-two-stmt-ns.test.mjs': "import { mod7Ns } from '../src/hub.mjs';\n",
+    'test/uses-after-interp-export.test.mjs': "import { afterInterpExport } from '../src/hub.mjs';\n",
     'test/uses-hub-only.test.mjs': "import { runHub } from '../src/hub.mjs';\n",
     'test/mod-1-direct.test.mjs': "import { fn1 } from '../src/mod-1.mjs';\n",
   };
@@ -242,6 +272,20 @@ test('3065 dispatcher hubs bridge export *, aliased re-exports, 1-char symbols, 
   const v3 = virtualPorts(repo, ['src/mod-3.mjs']);
   assert.deepEqual(selectAffectedTests(v3.options, v3.ports).selectedTests, ['test/uses-alias-via-helper.test.mjs']);
 
+  // Editing mod-5, mod-6, mod-7 bridges 2-statement `import ...; export { ... };` re-exports through hub.mjs
+  const v5 = virtualPorts(repo, ['src/mod-5.mjs']);
+  assert.deepEqual(selectAffectedTests(v5.options, v5.ports).selectedTests, ['test/uses-two-stmt-import-alias.test.mjs']);
+
+  const v6 = virtualPorts(repo, ['src/mod-6.mjs']);
+  assert.deepEqual(selectAffectedTests(v6.options, v6.ports).selectedTests, ['test/uses-two-stmt-export-alias.test.mjs']);
+
+  const v7 = virtualPorts(repo, ['src/mod-7.mjs']);
+  assert.deepEqual(selectAffectedTests(v7.options, v7.ports).selectedTests, ['test/uses-two-stmt-ns.test.mjs']);
+
+  // Editing mod-8 bridges `afterInterpExport` declared after `${p}` on the same `export const` line
+  const v8 = virtualPorts(repo, ['src/mod-8.mjs']);
+  assert.deepEqual(selectAffectedTests(v8.options, v8.ports).selectedTests, ['test/uses-after-interp-export.test.mjs']);
+
   // Editing mod-4 (imported by hub without re-export or direct test) bridges to hub's test importers instead of returning 0 tests
   const v4 = virtualPorts(repo, ['src/mod-4.mjs']);
   const r4 = selectAffectedTests(v4.options, v4.ports);
@@ -249,20 +293,26 @@ test('3065 dispatcher hubs bridge export *, aliased re-exports, 1-char symbols, 
   assert.ok(r4.selectedCount > 0);
   assert.ok(r4.selectedTests.includes('test/uses-hub-only.test.mjs'));
 
-  // Editing standalone-unmapped.mjs (production code with 0 tests in graph) safely falls back to full suite instead of skipping
-  const vUnmapped = virtualPorts(repo, ['src/standalone-unmapped.mjs']);
-  const rUnmapped = selectAffectedTests(vUnmapped.options, vUnmapped.ports);
-  assert.equal(rUnmapped.mode, 'full');
-  assert.equal(rUnmapped.fallbackCategory, 'unmapped-code-change');
-  assert.equal(rUnmapped.selectedCount, 5);
+  // Editing standalone-unmapped.mjs or non-JS production files (src/schema.sql, lib/rules.json) with 0 mapped tests safely falls back to full suite
+  for (const unmappedProd of ['src/standalone-unmapped.mjs', 'src/schema.sql', 'lib/rules.json']) {
+    const vUnmapped = virtualPorts(repo, [unmappedProd]);
+    const rUnmapped = selectAffectedTests(vUnmapped.options, vUnmapped.ports);
+    assert.equal(rUnmapped.mode, 'full', `expected full fallback for ${unmappedProd}`);
+    assert.equal(rUnmapped.fallbackCategory, 'unmapped-code-change');
+    assert.equal(rUnmapped.selectedCount, 9);
+  }
 
   // Editing hub.mjs directly selects all tests importing hub.mjs (including via local test helper)
   const vHub = virtualPorts(repo, ['src/hub.mjs']);
   assert.deepEqual(selectAffectedTests(vHub.options, vHub.ports).selectedTests, [
+    'test/uses-after-interp-export.test.mjs',
     'test/uses-alias-via-helper.test.mjs',
     'test/uses-hub-only.test.mjs',
     'test/uses-reexport.test.mjs',
     'test/uses-star-1char.test.mjs',
+    'test/uses-two-stmt-export-alias.test.mjs',
+    'test/uses-two-stmt-import-alias.test.mjs',
+    'test/uses-two-stmt-ns.test.mjs',
   ]);
 });
 
@@ -386,8 +436,9 @@ test('3065 resolveVerifyPlan and verifyAffected run only affected tests iterativ
   f.git('add', 'src/calc.mjs');
   f.git('commit', '-qm', 'fix calc');
 
-  // 1. Iterative plan selects ONLY test/billing.test.mjs (1 of 2 test files) using quoted process.execPath
+  // 1. Iterative plan selects ONLY test/billing.test.mjs (1 of 2 test files) using quoted process.execPath and preserves mode: 'iterative'
   const iterPlan = resolveVerifyPlan({ root: f.root, baseBranch: 'main', mode: 'iterative', concurrency: 2 });
+  assert.equal(iterPlan.mode, 'iterative');
   assert.equal(iterPlan.executionMode, 'affected');
   assert.equal(iterPlan.selectionMode, 'affected');
   assert.deepEqual(iterPlan.selectedTests, ['test/billing.test.mjs']);
@@ -395,11 +446,12 @@ test('3065 resolveVerifyPlan and verifyAffected run only affected tests iterativ
   assert.equal(iterPlan.totalCount, 2);
   assert.equal(iterPlan.command, `${quotedExec} --test-concurrency=2 --test test/billing.test.mjs`);
 
-  // Custom execPath with spaces is shell-quoted, and maxCommandLength falls back to fullCommand safely
+  // Custom execPath with spaces is shell-quoted, and maxCommandLength falls back to fullCommand safely while preserving mode: 'iterative'
   const spacedExecPlan = resolveVerifyPlan(
     { root: f.root, changedFiles: ['src/calc.mjs'], mode: 'iterative' },
     { execPath: '/opt/node custom/bin/node' },
   );
+  assert.equal(spacedExecPlan.mode, 'iterative');
   assert.equal(spacedExecPlan.command, "'/opt/node custom/bin/node' --test test/billing.test.mjs");
 
   const argMaxFallback = resolveVerifyPlan({
@@ -409,11 +461,40 @@ test('3065 resolveVerifyPlan and verifyAffected run only affected tests iterativ
     maxCommandLength: 24,
     fullTestCommand: 'npm run test:ci',
   });
+  assert.equal(argMaxFallback.mode, 'iterative');
   assert.equal(argMaxFallback.executionMode, 'full');
   assert.equal(argMaxFallback.selectionMode, 'full');
   assert.equal(argMaxFallback.fallbackCategory, 'command-length-limit');
   assert.equal(argMaxFallback.command, 'npm run test:ci');
   assert.equal(argMaxFallback.selectedCount, 2);
+
+  // Global-fallback and skip plans also preserve mode: 'iterative'; repos with 0 JS/TS test files never skip production changes
+  const globalIterPlan = resolveVerifyPlan({ root: f.root, changedFiles: ['package.json'], mode: 'verify' });
+  assert.equal(globalIterPlan.mode, 'iterative');
+  assert.equal(globalIterPlan.executionMode, 'full');
+  assert.equal(globalIterPlan.selectionMode, 'full');
+
+  const skipIterPlan = resolveVerifyPlan({ root: f.root, changedFiles: [], mode: 'affected' });
+  assert.equal(skipIterPlan.mode, 'iterative');
+  assert.equal(skipIterPlan.executionMode, 'skip');
+  assert.equal(skipIterPlan.selectionMode, 'affected');
+
+  const nonJsProdPlan = resolveVerifyPlan(
+    {
+      root: '/virtual-py',
+      files: ['src/worker.py', 'pyproject.toml'],
+      changedFiles: ['src/worker.py'],
+      fullTestCommand: 'pytest -q',
+      mode: 'iterative',
+    },
+    { readFile: () => '' },
+  );
+  assert.equal(nonJsProdPlan.mode, 'iterative');
+  assert.equal(nonJsProdPlan.executionMode, 'full');
+  assert.equal(nonJsProdPlan.selectionMode, 'full');
+  assert.equal(nonJsProdPlan.totalCount, 0);
+  assert.equal(nonJsProdPlan.fallbackCategory, 'unmapped-code-change');
+  assert.equal(nonJsProdPlan.command, 'pytest -q');
 
   // 2. Final pre-merge plan selects the full suite (2 of 2 test files)
   const finalPlan = resolveVerifyPlan({ root: f.root, baseBranch: 'main', mode: 'final' });
@@ -441,6 +522,7 @@ test('3065 resolveVerifyPlan and verifyAffected run only affected tests iterativ
 
   const savedVerify = JSON.parse(readFileSync(join(f.runDir, 'affected-verify.json'), 'utf8'));
   assert.equal(savedVerify.origin, 'pdd.workflow-verify-affected.v1');
+  assert.equal(savedVerify.mode, 'iterative');
   assert.equal(savedVerify.selectedCount, 1);
   assert.equal(savedVerify.totalCount, 2);
   assert.deepEqual(savedVerify.selectedTests, ['test/billing.test.mjs']);
