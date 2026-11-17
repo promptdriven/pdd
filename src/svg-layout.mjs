@@ -1,4 +1,4 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: cdb76a7d10a17bfca1048c6df738bc7572d6586774cd6bd40f2355a3d23204e8).
+// Prompt: prompts/cli/svg-layout.prompt.md
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';
@@ -105,12 +105,40 @@ function partsOf(source) {
 }
 const REF_DEF_RE = /^\s*\[([^\]]+)\]:\s*<?([^\s>]+)>?(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*$/gm;
 const refDefs = text => new Map([...text.matchAll(REF_DEF_RE)].map(m => [normalize(m[1]), m[2]]));
-function links(text, refs = refDefs(text)) {
+function links(text, refs = refDefs(text), imagesOnly = false) {
+  const inlineRe = imagesOnly
+    ? /!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g
+    : /!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g;
+  const refRe = imagesOnly ? /!\[([^\]]*)\]\[([^\]]*)\]/g : /!?\[([^\]]*)\]\[([^\]]*)\]/g;
+  const shortRe = imagesOnly ? /!\[([^\]]+)\](?![\[(:])/g : /!?\[([^\]]+)\](?![\[(:])/g;
   return [...new Set([
-    ...[...text.matchAll(/!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g)].map(m => m[1] || m[2]),
-    ...[...text.matchAll(/!?\[([^\]]*)\]\[([^\]]*)\]/g)].map(m => refs.get(normalize(m[2] || m[1]))),
-    ...[...text.matchAll(/!?\[([^\]]+)\](?![\[(:])/g)].map(m => refs.get(normalize(m[1]))),
+    ...[...text.matchAll(inlineRe)].map(m => m[1] || m[2]),
+    ...[...text.matchAll(refRe)].map(m => refs.get(normalize(m[2] || m[1]))),
+    ...[...text.matchAll(shortRe)].map(m => refs.get(normalize(m[1]))),
   ].filter(value => value && !/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(value) && /\.ui\.svg(?:#.*)?$/i.test(value)).map(value => value.split('#')[0]))];
+}
+function stripCodeFences(text) {
+  const out = [];
+  let fence = null;
+  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const fm = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      if (fm && fm[1][0] === fence[0] && fm[1].length >= fence.length && /^ {0,3}(?:`+|~+)[ \t]*$/.test(line)) fence = null;
+      out.push('');
+      continue;
+    }
+    if (fm) {
+      fence = fm[1];
+      out.push('');
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+function uploadCapturedSvgLinks(text, refs = refDefs(text)) {
+  const depsBody = [...stripCodeFences(text).matchAll(/^##+[ \t]+Dependencies\b[^\n]*\n([\s\S]*?)(?=^##?[ \t]|$(?![\s\S]))/gim)].map(m => m[1]).join('\n');
+  return [...new Set([...links(text, refs, true), ...links(depsBody, refs, false)])];
 }
 const mentioned = (prose, value) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalize(prose));
 const resolveDrawing = (root, prompt, link) => {
@@ -493,6 +521,175 @@ function extractControls(source, parts) {
   return controls;
 }
 
+
+const INTERFACE_SUMMARY_RE = /<details>\s*<summary>\s*Runtime interface\s*<\/summary>\s*```json\s*([\s\S]*?)```\s*<\/details>/gi;
+function parsePromptMeta(text) {
+  let fmKind = null, hasFrontmatter = false;
+  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (fm) {
+    hasFrontmatter = true;
+    const km = fm[1].match(/^kind:\s*['"]?([A-Za-z0-9_-]+)['"]?\s*$/m);
+    if (km) fmKind = km[1];
+  }
+  const blocks = [...text.matchAll(INTERFACE_SUMMARY_RE)];
+  let iface = null;
+  if (blocks.length === 1) {
+    try { iface = JSON.parse(blocks[0][1]); } catch { iface = null; }
+  }
+  const hasEmbeddedInterface = blocks.length > 0;
+  const isNativeOnly = fmKind === 'native-only' || iface?.kind === 'native-only';
+  const prose = text.replace(INTERFACE_SUMMARY_RE, '');
+  return { hasFrontmatter, hasEmbeddedInterface, isNativeOnly, iface, prose };
+}
+
+function promptTargets(text, fromPrompt, visibleSet) {
+  const noFences = stripCodeFences(text);
+  const noCode = noFences.replace(/`+[^`\n]*`+/g, '');
+  const refs = refDefs(noCode);
+  const depsNoFences = [...noFences.matchAll(/^##[ \t]+Dependencies[ \t]*\n([\s\S]*?)(?=^#{1,2}[ \t]+|$(?![\s\S]))/gim)].map(m => m[1]).join('\n');
+  const depsNoCode = depsNoFences.replace(/`+[^`\n]*`+/g, '');
+  const candidates = [
+    ...[...depsNoCode.matchAll(/!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g)].map(m => m[1] || m[2]),
+    ...[...depsNoCode.matchAll(/!?\[([^\]]*)\]\[([^\]]*)\]/g)].map(m => refs.get(normalize(m[2] || m[1]))),
+    ...[...depsNoFences.matchAll(/^ {0,3}(?:[-+*]|[0-9]+[.)])[ \t]+`([^`\n]+)`(?=[ \t:]|$)/gm)].map(m => m[1]),
+  ];
+  const out = [];
+  for (const raw of candidates) {
+    if (!raw || /^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(raw)) continue;
+    const pathPart = raw.split('#')[0].split('?')[0];
+    if (!pathPart || !pathPart.endsWith('.prompt.md')) continue;
+    const rel = relative(rootPlaceholder, resolve(dirname(resolve(rootPlaceholder, fromPrompt)), pathPart)).split(sep).join('/');
+    if (visibleSet.has(rel)) out.push(rel);
+  }
+  return [...new Set(out)];
+}
+const rootPlaceholder = '/__pdd_root__';
+
+function readPointer(obj, pointer) {
+  if (typeof pointer !== 'string') return { found: false, value: undefined };
+  if (pointer === '') return { found: obj !== undefined, value: obj };
+  if (!pointer.startsWith('/')) return { found: false, value: undefined };
+  let cur = obj;
+  for (const seg of pointer.slice(1).split('/')) {
+    if (cur === null || typeof cur !== 'object') return { found: false, value: undefined };
+    const key = seg.replaceAll('~1', '/').replaceAll('~0', '~');
+    if (Array.isArray(cur)) {
+      const idx = Number(key);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= cur.length) return { found: false, value: undefined };
+      cur = cur[idx];
+    } else {
+      if (!Object.hasOwn(cur, key)) return { found: false, value: undefined };
+      cur = cur[key];
+    }
+  }
+  return { found: true, value: cur };
+}
+
+function readSchemaPointer(stateSchema, pointer) {
+  if (!stateSchema || typeof stateSchema !== 'object' || typeof pointer !== 'string' || !pointer.startsWith('/')) {
+    return { exists: false, required: false, schema: null };
+  }
+  let cur = stateSchema;
+  let required = true;
+  for (const seg of pointer.slice(1).split('/')) {
+    if (!cur || typeof cur !== 'object' || cur.type !== 'object' || !cur.properties || typeof cur.properties !== 'object') {
+      return { exists: false, required: false, schema: null };
+    }
+    const key = seg.replaceAll('~1', '/').replaceAll('~0', '~');
+    if (!Object.hasOwn(cur.properties, key)) return { exists: false, required: false, schema: null };
+    if (!Array.isArray(cur.required) || !cur.required.includes(key)) required = false;
+    cur = cur.properties[key];
+  }
+  return { exists: Boolean(cur && typeof cur === 'object'), required, schema: cur && typeof cur === 'object' ? cur : null };
+}
+
+function hasPointer(obj, pointer) {
+  if (typeof pointer !== 'string') return false;
+  if (pointer === '') return obj !== undefined;
+  if (!pointer.startsWith('/')) return false;
+  let cur = obj;
+  for (const seg of pointer.slice(1).split('/')) {
+    if (cur === null || typeof cur !== 'object') return false;
+    const key = seg.replaceAll('~1', '/').replaceAll('~0', '~');
+    if (Array.isArray(cur)) {
+      const idx = Number(key);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= cur.length) return false;
+      cur = cur[idx];
+    } else {
+      if (!Object.hasOwn(cur, key)) return false;
+      cur = cur[key];
+    }
+  }
+  return true;
+}
+
+function setPointer(obj, pointer, value) {
+  if (!obj || typeof obj !== 'object' || typeof pointer !== 'string' || !pointer.startsWith('/')) return;
+  const segs = pointer.slice(1).split('/').map(s => s.replaceAll('~1', '/').replaceAll('~0', '~'));
+  let cur = obj;
+  for (let i = 0; i < segs.length - 1; i++) {
+    const key = segs[i];
+    if (Array.isArray(cur)) {
+      const idx = Number(key);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= cur.length || cur[idx] === null || typeof cur[idx] !== 'object') return;
+      cur = cur[idx];
+    } else {
+      if (!Object.hasOwn(cur, key) || cur[key] === null || typeof cur[key] !== 'object') {
+        Object.defineProperty(cur, key, { value: {}, writable: true, enumerable: true, configurable: true });
+      }
+      cur = cur[key];
+    }
+  }
+  const last = segs.at(-1);
+  if (Array.isArray(cur)) {
+    const idx = Number(last);
+    if (Number.isInteger(idx) && idx >= 0 && idx <= cur.length) cur[idx] = value;
+  } else {
+    Object.defineProperty(cur, last, { value, writable: true, enumerable: true, configurable: true });
+  }
+}
+
+function resolveInitialWorld(root, testFile, initialWorld) {
+  if (!initialWorld || typeof initialWorld !== 'object' || Array.isArray(initialWorld)) return { resolvable: true, world: initialWorld };
+  if (typeof initialWorld.$seed !== 'string') return { resolvable: true, world: initialWorld };
+  const rawSeed = initialWorld.$seed.trim();
+  if (!rawSeed) return { resolvable: false, world: null };
+  let seedDoc = null;
+  const relCandidate = relative(rootPlaceholder, resolve(dirname(resolve(rootPlaceholder, testFile)), rawSeed)).split(sep).join('/');
+  for (const candidate of [...new Set([rawSeed, relCandidate])]) {
+    try {
+      seedDoc = JSON.parse(safeRead(root, candidate));
+      break;
+    } catch { /* try fallback or mark unresolvable */ }
+  }
+  if (!seedDoc || typeof seedDoc !== 'object') return { resolvable: false, world: null };
+  const world = structuredClone(seedDoc);
+  if (initialWorld.set && typeof initialWorld.set === 'object' && !Array.isArray(initialWorld.set)) {
+    for (const [ptr, val] of Object.entries(initialWorld.set)) {
+      if (ptr === '') continue;
+      setPointer(world, ptr, val);
+    }
+  }
+  for (const [k, v] of Object.entries(initialWorld)) {
+    if (k === '$seed' || k === 'set') continue;
+    Object.defineProperty(world, k, { value: v, writable: true, enumerable: true, configurable: true });
+  }
+  return { resolvable: true, world };
+}
+
+const APP_MAP_PATH_RE = /(?:^|\/)(?:app-map\.json|app\/maps\/[^/]+\.json)$/;
+const isFixturePath = path => /(?:^|\/)fixtures\//.test(path);
+
+function proseMentionsPortOp(prose, opKey) {
+  if (prose.includes(opKey)) return true;
+  const dot = opKey.indexOf('.');
+  if (dot <= 0) return false;
+  const port = opKey.slice(0, dot), op = opKey.slice(dot + 1);
+  const portRe = new RegExp(`(?<![A-Za-z0-9_-])${escaped(port)}(?![A-Za-z0-9_-])`, 'i');
+  const opRe = new RegExp(`(?<![A-Za-z0-9_-])${escaped(op)}(?![A-Za-z0-9_-])`, 'i');
+  return portRe.test(prose) && opRe.test(prose);
+}
+
 export function lintSvgLayouts({ root, files, promptPaths }) {
   const policy=workspace.policy({root});files=files.filter(path=>workspace.allows(policy,path));
   const warnings = [], promptRecords = [], add = (prompt, drawing, part, reason) => warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
@@ -502,8 +699,22 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     source = source.replace(/<details\b[^>]*>\s*<summary[^>]*>[^\n]*Runtime interface[^\n]*<\/summary>[\s\S]*?<\/details>/gi, '')
       .replace(/(^##+ Runtime interface[^\n]*\n)[\s\S]*?(?=^##+ |$(?![\s\S]))/gmi, '');
     const decodedSource = decodeHtml(source), drawings = [];
-    const resolvedLinks = [...new Set(links(source).sort().map(link => resolveDrawing(root, prompt, link)))].sort();
-    for (const drawing of resolvedLinks) if (drawing && drawing !== '..' && !drawing.startsWith('../')) drawings.push(drawing);
+    const promptRefs = refDefs(source);
+    const resolvedLinks = [...new Set(links(source, promptRefs).sort().map(link => resolveDrawing(root, prompt, link)))].sort();
+    const capturedSet = new Set(uploadCapturedSvgLinks(source, promptRefs).map(link => resolveDrawing(root, prompt, link)));
+    for (const drawing of resolvedLinks) {
+      if (drawing && drawing !== '..' && !drawing.startsWith('../')) {
+        drawings.push(drawing);
+        if (!capturedSet.has(drawing)) {
+          add(
+            prompt,
+            drawing,
+            'link syntax',
+            'plain Markdown link outside "## Dependencies" is skipped by scoped uploads (causes dependency-file-unreadable); use image syntax ![label](...) or link it under "## Dependencies"',
+          );
+        }
+      }
+    }
     const scopedSources = drawings.length > 1 ? scopedSourcesByDrawing(source, root, prompt, drawings) : null;
     for (const drawing of resolvedLinks) {
       let parts;
@@ -523,11 +734,11 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     promptRecords.push({ path: prompt, prose: source, drawings });
   }
   if (promptRecords.some(record => record.drawings.length > 0)) {
-    const mapPaths = new Set(files.filter(path => /(?:^|\/)app-map\.json$/.test(path)));
-    for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path))) {
+    const mapPaths = new Set(files.filter(path => !isFixturePath(path) && APP_MAP_PATH_RE.test(path)));
+    for (const testFile of files.filter(path => !isFixturePath(path) && /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path))) {
       try {
         const doc = JSON.parse(safeRead(root, testFile));
-        if (Array.isArray(doc?.app_maps)) for (const candidate of doc.app_maps) if (typeof candidate === 'string' && workspace.allows(policy, candidate)) mapPaths.add(candidate);
+        if (Array.isArray(doc?.app_maps)) for (const candidate of doc.app_maps) if (typeof candidate === 'string' && !isFixturePath(candidate) && workspace.allows(policy, candidate)) mapPaths.add(candidate);
       } catch { /* non-scenario or unreadable JSON */ }
     }
     const appMaps = [], cssPaths = new Set(), inspectedPrompts = new Set(promptRecords.map(record => record.path));
@@ -559,6 +770,366 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         catch (error) { return { path: cssPath, content: null, error: error.message }; }
       });
       for (const text of lintScreenDesign({ appMaps, stylesheets, prompts: promptRecords }).warnings) warnings.push({ key: text, text });
+    }
+  }
+  const visiblePromptSet = new Set(files.filter(f => f.endsWith('.prompt.md') && workspace.allows(policy, f)));
+  const metaCache = new Map();
+  const getMeta = p => {
+    if (metaCache.has(p)) return metaCache.get(p);
+    try {
+      const meta = parsePromptMeta(safeRead(root, p));
+      metaCache.set(p, meta);
+      return meta;
+    } catch {
+      metaCache.set(p, null);
+      return null;
+    }
+  };
+  const collectClosure = startPrompt => {
+    const visited = new Set();
+    const queue = [startPrompt];
+    while (queue.length) {
+      const cur = queue.shift();
+      if (!cur || visited.has(cur) || !visiblePromptSet.has(cur)) continue;
+      visited.add(cur);
+      const meta = getMeta(cur);
+      if (!meta) continue;
+      for (const call of Array.isArray(meta.iface?.calls) ? meta.iface.calls : []) {
+        if (typeof call?.target === 'string') queue.push(call.target);
+      }
+      if (!meta.hasEmbeddedInterface || meta.hasFrontmatter) {
+        for (const target of promptTargets(meta.prose, cur, visiblePromptSet)) queue.push(target);
+      }
+    }
+    return visited;
+  };
+  const promptFilter = promptPaths ? new Set(promptPaths) : null;
+  const promptExists = promptPath => {
+    if (typeof promptPath !== 'string' || !promptPath.endsWith('.prompt.md')) return false;
+    if (visiblePromptSet.size > 0) return visiblePromptSet.has(promptPath);
+    try { safeRead(root, promptPath); return true; } catch { return false; }
+  };
+  const promptDeclaresOp = (promptPath, op) => {
+    const meta = getMeta(promptPath);
+    if (!meta || typeof op !== 'string' || !op.trim()) return false;
+    if (meta.hasEmbeddedInterface && Array.isArray(meta.iface?.entries)) {
+      return meta.iface.entries.some(entry => entry?.operation === op);
+    }
+    return new RegExp(`(?<![A-Za-z0-9_-])${escaped(op)}(?![A-Za-z0-9_-])`).test(meta.prose);
+  };
+  const allMapPaths = new Set(files.filter(path => !isFixturePath(path) && APP_MAP_PATH_RE.test(path) && workspace.allows(policy, path)));
+  for (const testFile of files.filter(path => !isFixturePath(path) && /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && workspace.allows(policy, path))) {
+    try {
+      const doc = JSON.parse(safeRead(root, testFile));
+      if (Array.isArray(doc?.app_maps)) {
+        for (const candidate of doc.app_maps) {
+          if (typeof candidate === 'string' && !isFixturePath(candidate) && workspace.allows(policy, candidate)) allMapPaths.add(candidate);
+        }
+      }
+    } catch { /* handled below when Story-paired */ }
+  }
+  const parsedAppMaps = new Map();
+  const MAX_SAFE_TIMER_INT = 9007199254740991;
+  for (const mapPath of [...allMapPaths].sort()) {
+    let mapDoc;
+    try { mapDoc = JSON.parse(safeRead(root, mapPath)); }
+    catch {
+      if (!promptFilter) {
+        const text = `Warning: ${mapPath}: app-map.json is not valid JSON; fix syntax and set "schema_version": "prompt-runtime.app-map.v1".`;
+        warnings.push({ key: `${mapPath}\0mapjson`, text });
+      }
+      continue;
+    }
+    if (!mapDoc || typeof mapDoc !== 'object' || Array.isArray(mapDoc)) continue;
+    parsedAppMaps.set(mapPath, mapDoc);
+    const screens = Array.isArray(mapDoc.screens) ? mapDoc.screens.filter(s => s && typeof s === 'object') : [];
+    const timers = Array.isArray(mapDoc.timers) ? mapDoc.timers : [];
+    if (promptFilter) {
+      const referenced = new Set([
+        ...screens.map(s => s.prompt_path).filter(p => typeof p === 'string'),
+        ...timers.map(t => t?.handler?.prompt_path).filter(p => typeof p === 'string'),
+      ]);
+      if (![...referenced].some(p => promptFilter.has(p))) continue;
+    }
+    if (mapDoc.schema_version !== 'prompt-runtime.app-map.v1') {
+      const text = `Warning: ${mapPath}: app-map schema_version ${JSON.stringify(mapDoc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.app-map.v1".`;
+      warnings.push({ key: `${mapPath}\0mapschema`, text });
+    }
+    const validScreenIds = new Set();
+    const screenPromptById = new Map();
+    for (const [sIdx, screen] of screens.entries()) {
+      const sId = typeof screen.id === 'string' && screen.id ? screen.id : `screens[${sIdx}]`;
+      if (typeof screen.id === 'string' && screen.id && screen.id !== '*') validScreenIds.add(screen.id);
+      if (typeof screen.prompt_path === 'string' && screen.prompt_path.trim()) {
+        if (typeof screen.id === 'string' && screen.id) screenPromptById.set(screen.id, screen.prompt_path);
+        if (!promptExists(screen.prompt_path)) {
+          const text = `Warning: ${mapPath} (screen "${sId}"): screen prompt_path "${screen.prompt_path}" does not exist in Git-visible prompts; point prompt_path to an existing prompts/*.prompt.md file and run git add.`;
+          warnings.push({ key: `${mapPath}\0mapscreen\0${sIdx}`, text });
+        }
+      } else if (screen.source !== 'static') {
+        const text = `Warning: ${mapPath} (screen "${sId}"): screen prompt_path is missing; set "prompt_path": "prompts/<screen>.prompt.md".`;
+        warnings.push({ key: `${mapPath}\0mapscreenmissing\0${sIdx}`, text });
+      }
+    }
+    if (mapDoc.timers !== undefined) {
+      if (!Array.isArray(mapDoc.timers) || mapDoc.timers.length > 16) {
+        const text = `Warning: ${mapPath}: timers must be an array of at most 16 timer objects.`;
+        warnings.push({ key: `${mapPath}\0timersarr`, text });
+      } else {
+        const seenTimerScreens = new Set();
+        for (const [tIdx, timer] of mapDoc.timers.entries()) {
+          const tLabel = typeof timer?.id === 'string' && timer.id ? timer.id : `timers[${tIdx}]`;
+          if (!timer || typeof timer !== 'object' || Array.isArray(timer)) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): timer entry must be an object with id, screen, interval_ms, enabled_pointer, generation_pointer, handler, input, state and next.`;
+            warnings.push({ key: `${mapPath}\0timerobj\0${tIdx}`, text });
+            continue;
+          }
+          if (typeof timer.screen !== 'string' || timer.screen === '*' || !validScreenIds.has(timer.screen) || seenTimerScreens.has(timer.screen)) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): timer screen ${JSON.stringify(timer.screen ?? null)} must name a unique existing non-wildcard screen id from screens[].`;
+            warnings.push({ key: `${mapPath}\0timerscreen\0${tIdx}`, text });
+          } else {
+            seenTimerScreens.add(timer.screen);
+          }
+          if (!Number.isInteger(timer.interval_ms) || timer.interval_ms < 1000 || timer.interval_ms > 3600000) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): interval_ms (${JSON.stringify(timer.interval_ms)}) must be an integer from 1000 to 3600000 (for example "interval_ms": 1000).`;
+            warnings.push({ key: `${mapPath}\0timerinterval\0${tIdx}`, text });
+          }
+          const enInit = readPointer(mapDoc.initial_state, timer.enabled_pointer);
+          const enSchema = readSchemaPointer(mapDoc.state_schema, timer.enabled_pointer);
+          if (
+            typeof enInit.value !== 'boolean'
+            || !enSchema.exists
+            || !enSchema.required
+            || enSchema.schema?.type !== 'boolean'
+            || Array.isArray(enSchema.schema?.oneOf)
+          ) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): enabled_pointer ${JSON.stringify(timer.enabled_pointer ?? null)} must resolve to a boolean in initial_state and a required {"type": "boolean"} property (without oneOf) in state_schema.`;
+            warnings.push({ key: `${mapPath}\0timerenabled\0${tIdx}`, text });
+          }
+          const genInit = readPointer(mapDoc.initial_state, timer.generation_pointer);
+          const genSchema = readSchemaPointer(mapDoc.state_schema, timer.generation_pointer);
+          const genMin = genSchema.schema?.minimum;
+          const genMax = genSchema.schema?.maximum;
+          const validGenInit = Number.isSafeInteger(genInit.value) && genInit.value >= 0 && genInit.value <= MAX_SAFE_TIMER_INT;
+          const validGenMax = genMax === undefined || (Number.isSafeInteger(genMax) && genMax <= MAX_SAFE_TIMER_INT && Number.isSafeInteger(genMin) && genMin <= genMax);
+          const validGenSchema = genSchema.exists
+            && genSchema.required
+            && genSchema.schema?.type === 'integer'
+            && !Array.isArray(genSchema.schema?.oneOf)
+            && Number.isSafeInteger(genMin)
+            && genMin >= 0
+            && genMin <= MAX_SAFE_TIMER_INT
+            && validGenMax;
+          if (!validGenInit || !validGenSchema) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): generation_pointer ${JSON.stringify(timer.generation_pointer ?? null)} must resolve to a safe integer 0..9007199254740991 in initial_state and a required {"type": "integer", "minimum": 0} property (without oneOf) in state_schema.`;
+            warnings.push({ key: `${mapPath}\0timergen\0${tIdx}`, text });
+          }
+          if (timer.tick_operation !== undefined && (!timer.handler || typeof timer.handler !== 'object')) {
+            const fallbackPrompt = screenPromptById.get(timer.screen) ?? 'prompts/<screen>.prompt.md';
+            const opHint = typeof timer.tick_operation === 'string' && timer.tick_operation.trim() ? timer.tick_operation : '<tick_op>';
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): replace tick_operation ${JSON.stringify(timer.tick_operation)} with "handler": {"prompt_path": "${fallbackPrompt}", "operation": "${opHint}"} naming an existing prompt and declared tick operation.`;
+            warnings.push({ key: `${mapPath}\0timertickkey\0${tIdx}`, text });
+          } else {
+            const hPrompt = timer.handler?.prompt_path;
+            const hOp = timer.handler?.operation;
+            if (typeof hPrompt !== 'string' || !promptExists(hPrompt)) {
+              const text = `Warning: ${mapPath} (timer "${tLabel}"): handler.prompt_path ${JSON.stringify(hPrompt ?? null)} must reference an existing Git-visible prompts/*.prompt.md file.`;
+              warnings.push({ key: `${mapPath}\0timerhprompt\0${tIdx}`, text });
+            } else if (typeof hOp !== 'string' || !hOp.trim() || !promptDeclaresOp(hPrompt, hOp)) {
+              const text = `Warning: ${mapPath} (timer "${tLabel}"): tick_operation / handler.operation ${JSON.stringify(hOp ?? null)} is not declared in ${hPrompt}; declare "${hOp || '<tick_op>'}" in ${hPrompt} or update handler.operation.`;
+              warnings.push({ key: `${mapPath}\0timerhop\0${tIdx}`, text });
+            }
+          }
+        }
+      }
+    }
+  }
+  const storyStems = new Set(
+    files
+      .filter(p => p.endsWith('.md') && p.split('/').slice(0, -1).includes('user_stories'))
+      .map(p => p.split('/').at(-1))
+      .filter(base => !['plan.md', 'readme.md'].includes(base.toLowerCase()))
+      .map(base => base.slice(0, -3)),
+  );
+  const checkableScenarioEntries = new Set();
+  const PORT_OP_RE = /^[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*$/;
+  for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && workspace.allows(policy, path))) {
+    const isFixtureJson = isFixturePath(testFile);
+    const baseStem = testFile.split('/').at(-1).slice(0, -5);
+    const primaryStem = baseStem.split('.')[0];
+    const isCasesJson = baseStem === 'cases' || baseStem.endsWith('-cases');
+    const pairedWithStory = !isFixtureJson && !isCasesJson && (storyStems.has(baseStem) || storyStems.has(primaryStem));
+    let doc;
+    try { doc = JSON.parse(safeRead(root, testFile)); }
+    catch {
+      if (pairedWithStory && !promptFilter) {
+        const text = `Warning: ${testFile}: scenario test file is not valid JSON; write a JSON object with "schema_version": "prompt-runtime.program-scenario.v1".`;
+        warnings.push({ key: `${testFile}\0testjson`, text });
+      }
+      continue;
+    }
+    const isNativeCaseDoc = isCasesJson || Array.isArray(doc?.cases) || /^pdd\.native-cases\./.test(String(doc?.schema_version ?? ''));
+    const looksLikeScenario = !isFixtureJson && !isNativeCaseDoc && doc && typeof doc === 'object' && !Array.isArray(doc) && (
+      pairedWithStory
+      || typeof doc.story_path === 'string'
+      || (Array.isArray(doc.steps) && doc.steps.some(s => s && typeof s === 'object' && (typeof s.entry_path === 'string' || typeof s.operation === 'string') && Array.isArray(s.checks)))
+    );
+    if (looksLikeScenario && doc.schema_version !== 'prompt-runtime.program-scenario.v1') {
+      const candidateSteps = Array.isArray(doc.steps) ? doc.steps : [];
+      const matchesFilter = !promptFilter || candidateSteps.some(s => typeof s?.entry_path === 'string' && promptFilter.has(s.entry_path));
+      if (matchesFilter) {
+        const text = `Warning: ${testFile}: scenario schema_version ${JSON.stringify(doc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.program-scenario.v1".`;
+        warnings.push({ key: `${testFile}\0testschema`, text });
+      }
+    }
+    if (isFixtureJson || isNativeCaseDoc || !doc || typeof doc !== 'object' || doc.schema_version !== 'prompt-runtime.program-scenario.v1' || !Array.isArray(doc.steps)) continue;
+    for (const mapCandidate of Array.isArray(doc.app_maps) ? doc.app_maps : []) {
+      const mapDoc = typeof mapCandidate === 'string' ? parsedAppMaps.get(mapCandidate) : null;
+      if (!mapDoc) continue;
+      for (const s of Array.isArray(mapDoc.screens) ? mapDoc.screens : []) {
+        if (typeof s?.prompt_path === 'string' && visiblePromptSet.has(s.prompt_path) && !getMeta(s.prompt_path)?.isNativeOnly) checkableScenarioEntries.add(s.prompt_path);
+      }
+      for (const h of Array.isArray(mapDoc.handlers) ? mapDoc.handlers : []) {
+        const hp = h?.handler?.prompt_path;
+        if (typeof hp === 'string' && visiblePromptSet.has(hp) && !getMeta(hp)?.isNativeOnly) checkableScenarioEntries.add(hp);
+      }
+      for (const t of Array.isArray(mapDoc.timers) ? mapDoc.timers : []) {
+        const tp = t?.handler?.prompt_path;
+        if (typeof tp === 'string' && visiblePromptSet.has(tp) && !getMeta(tp)?.isNativeOnly) checkableScenarioEntries.add(tp);
+      }
+    }
+    const inRepoSteps = doc.steps.filter(step => step && typeof step.entry_path === 'string' && visiblePromptSet.has(step.entry_path));
+    for (const step of inRepoSteps) {
+      if (!getMeta(step.entry_path)?.isNativeOnly) checkableScenarioEntries.add(step.entry_path);
+    }
+    if (!inRepoSteps.length) continue;
+    const stepClosures = new Map();
+    const allClosurePrompts = new Set();
+    for (const step of inRepoSteps) {
+      if (!stepClosures.has(step.entry_path)) stepClosures.set(step.entry_path, collectClosure(step.entry_path));
+      for (const p of stepClosures.get(step.entry_path)) allClosurePrompts.add(p);
+    }
+    if (promptFilter && ![...allClosurePrompts].some(p => promptFilter.has(p))) continue;
+    const resolvedWorld = resolveInitialWorld(root, testFile, doc.initial_world);
+    const summarizeClosure = closureSet => {
+      const resources = new Map();
+      const addResourceAccess = (key, access) => {
+        if (typeof key !== 'string' || !key) return;
+        if (!resources.has(key)) resources.set(key, new Set());
+        if (typeof access === 'string' && access) resources.get(key).add(access);
+      };
+      let hasPlainPrompt = false;
+      const proseChunks = [];
+      for (const p of closureSet) {
+        const meta = getMeta(p);
+        if (!meta) continue;
+        proseChunks.push(meta.prose);
+        if (!meta.hasEmbeddedInterface) hasPlainPrompt = true;
+        for (const res of Array.isArray(meta.iface?.resources) ? meta.iface.resources : []) {
+          if (res?.kind === 'port' && typeof res.name === 'string' && Array.isArray(res.operations)) {
+            for (const op of res.operations) {
+              if (typeof op?.name === 'string' && op.name) {
+                addResourceAccess(`${res.name}.${op.name}`, op.access ?? res.access);
+              }
+            }
+          } else if (typeof res?.operation === 'string') {
+            addResourceAccess(res.operation, res.access);
+          }
+        }
+      }
+      return { resources, hasPlainPrompt, combinedProse: proseChunks.join('\n') };
+    };
+    const criteriaById = new Map(
+      (Array.isArray(doc.criteria) ? doc.criteria : [])
+        .filter(c => c && typeof c.id === 'string')
+        .map(c => [c.id, typeof c.text === 'string' ? c.text : '']),
+    );
+    const wholeSummary = summarizeClosure(allClosurePrompts);
+    if (wholeSummary.hasPlainPrompt && doc.simulation && typeof doc.simulation === 'object' && !Array.isArray(doc.simulation)) {
+      for (const [opKey] of Object.entries(doc.simulation)) {
+        if (!PORT_OP_RE.test(opKey)) {
+          const text = `Warning: ${testFile}: simulation key "${opKey}" must have <port>.<operation> form`;
+          warnings.push({ key: `${testFile}\0simfmt\0${opKey}`, text });
+        } else if (!wholeSummary.resources.has(opKey) && !proseMentionsPortOp(wholeSummary.combinedProse, opKey)) {
+          const text = `Warning: ${testFile}: simulation port "${opKey}" is not mentioned in reachable prompt prose; name ${opKey} explicitly so lazy interface synthesis binds the port`;
+          warnings.push({ key: `${testFile}\0simprose\0${opKey}`, text });
+        }
+      }
+    }
+    for (const [idx, step] of doc.steps.entries()) {
+      const overrides = step?.simulation_overrides;
+      if (!overrides || typeof overrides !== 'object' || typeof step.entry_path !== 'string' || !visiblePromptSet.has(step.entry_path)) continue;
+      const stepLabel = typeof step.step_id === 'string' && step.step_id ? step.step_id : `steps[${idx}]`;
+      const summary = summarizeClosure(stepClosures.get(step.entry_path) ?? collectClosure(step.entry_path));
+      const checkedIds = new Set((Array.isArray(step.checks) ? step.checks : []).map(ch => ch?.criterion_id).filter(Boolean));
+      const entries = Array.isArray(overrides)
+        ? overrides.filter(row => row && typeof row === 'object').map((row, rowIdx) => ({
+            opKey: typeof row.operation === 'string' ? row.operation : '',
+            binding: row.binding && typeof row.binding === 'object' ? row.binding : row,
+            cid: typeof row.criterion_id === 'string' ? row.criterion_id : '',
+            fquote: typeof row.failure_quote === 'string' ? row.failure_quote : '',
+            rowKey: String(rowIdx),
+          }))
+        : Object.entries(overrides).map(([opKey, binding]) => ({
+            opKey,
+            binding: binding?.binding && typeof binding.binding === 'object' ? binding.binding : binding,
+            cid: typeof binding?.criterion_id === 'string' ? binding.criterion_id : '',
+            fquote: typeof binding?.failure_quote === 'string' ? binding.failure_quote : '',
+            rowKey: opKey,
+          }));
+      if (!Array.isArray(overrides)) {
+        const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides should be an array of {operation, criterion_id, failure_quote, reason, binding} objects`;
+        warnings.push({ key: `${testFile}\0ovshape\0${stepLabel}`, text });
+      }
+      for (const { opKey, binding, cid, fquote, rowKey } of entries) {
+        if (!PORT_OP_RE.test(opKey)) {
+          const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides operation "${opKey}" must have <port>.<operation> form`;
+          warnings.push({ key: `${testFile}\0ovfmt\0${stepLabel}\0${rowKey}`, text });
+          continue;
+        }
+        const declared = summary.resources.get(opKey);
+        if (!declared) {
+          if (!summary.hasPlainPrompt) {
+            const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides port "${opKey}" is not declared in reachable Runtime interface resources for ${step.entry_path}`;
+            warnings.push({ key: `${testFile}\0ovres\0${stepLabel}\0${rowKey}`, text });
+          } else if (!proseMentionsPortOp(summary.combinedProse, opKey)) {
+            const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides port "${opKey}" is not mentioned in reachable prompt prose (${step.entry_path}); name ${opKey} explicitly so lazy interface synthesis binds the port`;
+            warnings.push({ key: `${testFile}\0ovprose\0${stepLabel}\0${rowKey}`, text });
+          }
+        } else if (binding?.action === 'port.write' && !declared.has('read') && !declared.has('write') && !declared.has('read_write')) {
+          const text = `Warning: ${testFile} (${stepLabel}): port.write simulation_overrides on "${opKey}" requires read or write port access in reachable Runtime interface resources`;
+          warnings.push({ key: `${testFile}\0ovacc\0${stepLabel}\0${rowKey}`, text });
+        }
+        if (binding?.action === 'port.write' && typeof binding.world_pointer === 'string' && resolvedWorld.resolvable && !hasPointer(resolvedWorld.world, binding.world_pointer)) {
+          const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" world_pointer "${binding.world_pointer}" is missing from initial_world`;
+          warnings.push({ key: `${testFile}\0ovwp\0${stepLabel}\0${rowKey}`, text });
+        }
+        if (!cid || !checkedIds.has(cid)) {
+          const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" criterion_id "${cid}" is not checked by step ${stepLabel}`;
+          warnings.push({ key: `${testFile}\0ovcid\0${stepLabel}\0${rowKey}`, text });
+        } else if (fquote.trim() && !criteriaById.get(cid)?.includes(fquote)) {
+          const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" failure_quote "${fquote}" is absent from criterion ${cid}`;
+          warnings.push({ key: `${testFile}\0ovfq\0${stepLabel}\0${rowKey}`, text });
+        }
+      }
+    }
+  }
+  const storyReachablePrompts = new Set();
+  for (const entry of checkableScenarioEntries) {
+    const closure = collectClosure(entry);
+    if (promptFilter && ![...closure].some(p => promptFilter.has(p))) continue;
+    for (const p of closure) storyReachablePrompts.add(p);
+  }
+  for (const prompt of [...storyReachablePrompts].sort()) {
+    if (promptFilter && !promptFilter.has(prompt)) continue;
+    const meta = getMeta(prompt);
+    if (!meta || meta.isNativeOnly || (meta.hasEmbeddedInterface && !meta.hasFrontmatter)) continue;
+    for (const dep of collectClosure(prompt)) {
+      if (dep === prompt) continue;
+      if (getMeta(dep)?.isNativeOnly) {
+        const text = `Warning: ${prompt}: checkable prompt links kind: native-only prompt ${dep} (invert the dependency and inject a <port>.<op> port so Story checks do not skip)`;
+        warnings.push({ key: `${prompt}\0native\0${dep}`, text });
+      }
     }
   }
   return [...new Map(warnings.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0).map(warning => [warning.text, warning.text])).values()];

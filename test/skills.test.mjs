@@ -325,11 +325,11 @@ test('SKILLS18: no skill text tells a Codex user to type /pdd-…', () => {
 // Wrong (0.1.6, plan first): one big Story for a request with many behaviors, one test file for all of them,
 // one check line for everything, or a change request that redoes every Story.
 test('SKILLS19: feature plans many Stories, each with its own test file and check line; changes name one Story', () => {
-  assert.match(read('pdd-prompting/SKILL.md'), /A Story is one "I can…" behavior, checked in a minute\./);
+  assert.match(read('pdd-prompting/SKILL.md'), /1 cohesive standalone-loop Story/);
   const understand = read('pdd-feature/steps/understand.md'), story = read('pdd-feature/steps/prompt-story.md'), check = read('pdd-feature/steps/check.md');
-  assert.match(understand, /Count the separate behaviors/);
+  assert.match(understand, /1`? Story per cohesive standalone user loop/);
   assert.match(understand, /`user_stories\/PLAN\.md`: a numbered list, one line per Story, in build order/);
-  assert.match(understand, /With 1 behavior, write one Story and no plan\./);
+  assert.match(understand, /With 1 standalone user loop, write one Story and no plan\./);
   assert.match(story, /Write every Story in `user_stories\/PLAN\.md`, each with its own test file/);
   assert.match(story, /Exact data \(seeds, long boards\) goes in the tests; the Story says it in plain words\./);
   // Real 2048 run: one check per Story, then one Story's overall line pasted as the total. The runner sums the lines itself.
@@ -356,12 +356,17 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
 
 // Wrong (real-user 2048 run, 0.1.6): the agent wrote its own JSON test format and `board.prompt` files with no Runtime
 // interface block, because no step told it the runtime's file format before the check step.
-test('SKILLS20: every step that writes prompts or tests reads RUNBOOK and files-and-runtime-block (§2–§4) first', () => {
+test('SKILLS20: every step that writes prompts or tests reads guide.md, story-guide.md and the honest RUNBOOK.md topic router with coupling-based subagent rules', () => {
   for (const file of ['pdd-feature/steps/prompt-story.md', 'pdd-bug/steps/prompt-story.md'])
-    assert.match(read(file).split('\n').find(text => text.startsWith('- ')), /Read pdd-prompting's guide\.md in full and its RUNBOOK\.md router, then open `runbook\/files-and-runtime-block\.md` \(§2–§4:/, file);
+    assert.match(read(file).split('\n').find(text => text.startsWith('- ')), /Read pdd-prompting's guide\.md in full, story-guide\.md in full and RUNBOOK\.md/, file);
   const prompting = read('pdd-prompting/SKILL.md');
-  assert.match(prompting, /- `RUNBOOK\.md`: short index and router for `runbook\/` topic files/);
-  assert.match(prompting, /Read RUNBOOK\.md first, then `runbook\/files-and-runtime-block\.md` \(§2–§4\)/);
+  const router = read('pdd-prompting/RUNBOOK.md');
+  assert.match(prompting, /- `RUNBOOK\.md`: concise topic router/);
+  assert.match(prompting, /Read `RUNBOOK\.md` first, `guide\.md` in full/);
+  assert.ok(Buffer.byteLength(prompting) + Buffer.byteLength(router) <= 60 * 1024);
+  const featureSkill = read('pdd-feature/SKILL.md');
+  assert.match(featureSkill, /Single coupled slice \(1–2 prompts.*0 authoring subagents.*`pdd files`/);
+  assert.match(featureSkill, /3\+ independent prompts\/modules.*lock shared contracts/i);
   const setup = read('pdd-setup/SKILL.md').split('\n');
   const block = setup.slice(setup.indexOf('<!-- pdd:start -->'), setup.indexOf('<!-- pdd:end -->') + 1);
   assert.ok(block.includes('Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.'));
@@ -399,10 +404,10 @@ test('SKILLS22: for a page or a screen, visual writes the app map, and the perso
 
 // Wrong (2048 test, 0.1.7): 30 tests in a row of one AI call each, and a check refused for its AI-call budget, because
 // the steps pointed only to RUNBOOK §2–§4. The writing step says it once; no other file of the skill repeats it.
-test('SKILLS23: the step that writes prompts and tests routes through RUNBOOK.md to only the relevant topic files, once', () => {
+test('SKILLS23: the step that writes prompts and tests stays on RUNBOOK.md fast path and states step-size budget once', () => {
   for (const [name, writer] of [['pdd-feature', 'prompt-story'], ['pdd-bug', 'prompt-story']]) {
     const step = read(`${name}/steps/${writer}.md`);
-    assert.equal(step.split('\n').filter(line => /From RUNBOOK\.md, open only the 1–2 `runbook\/` topic files/.test(line) && /10 moves\/rows\/calls/.test(line) && /10[- ]minute/i.test(line)).length, 1, `${name}/${writer}`);
+    assert.equal(step.split('\n').filter(line => /RUNBOOK\.md/.test(line) && /10 moves\/rows\/calls/.test(line) && /10[- ]minute/i.test(line)).length, 1, `${name}/${writer}`);
     for (const file of filesUnder(join(skills, name)).filter(file => !file.endsWith(`/steps/${writer}.md`)))
       assert.equal(/§(10|18)\b/.test(readFileSync(file, 'utf8')), false, `${file} repeats the RUNBOOK pointers`);
   }
