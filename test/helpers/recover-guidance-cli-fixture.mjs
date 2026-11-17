@@ -1,7 +1,8 @@
 import './test-home.mjs';
 import assert from 'node:assert/strict';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {gitTemplateDir} from './git-template.mjs';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -18,19 +19,28 @@ export function fixture(t) {
   const root = join(base, 'project'), remote = join(base, 'remote.git'), bin = join(base, 'bin');
   const transport = join(base, 'transport.json'), herdrState = join(base, 'herdr.json'), race = join(base, 'race.json');
   const home = join(base, 'home'), status = join(root, '.git/pdd/runs/17/status.json');
-  for (const dir of [root, bin, join(home, '.codex')]) mkdirSync(dir, {recursive:true});
+  for (const dir of [bin, join(home, '.codex')]) mkdirSync(dir, {recursive:true});
   const route = `url.file://${remote}.insteadOf=https://github.com/example/project.git`;
   const env = {...process.env, HOME:home, CODEX_HOME:join(home, '.codex'), CLAUDE_CONFIG_DIR:join(home, '.claude'),
     XDG_CONFIG_HOME:join(home, '.config'), PDD_SUITE_QUEUE:join(base, 'suite-queue'), PATH:`${bin}:${dirname(process.execPath)}:/usr/bin:/bin`, PDD_AGENT_SESSION:'1',
     GIT_CONFIG_NOSYSTEM:'1', GIT_CONFIG_GLOBAL:join(base, 'gitconfig')};
   writeFileSync(env.GIT_CONFIG_GLOBAL, '');
   const git = (...args) => execFileSync('/usr/bin/git', ['-c', route, ...args], {cwd:root, env, encoding:'utf8', stdio:['ignore','pipe','pipe']}).trim();
-  git('init', '--bare', '-q', remote); git('init', '-qb', 'main');
-  git('config', 'user.name', 'Synthetic regression'); git('config', 'user.email', 'test@example.invalid');
-  git('remote', 'add', 'origin', 'https://github.com/example/project.git');
-  writeFileSync(join(root, 'guidance.md'), 'Original guidance.\n'); git('add', '.'); git('commit', '-qm', 'Base'); git('push', '-q', 'origin', 'main');
-  const baseSha = git('rev-parse', 'HEAD'); git('switch', '-qc', 'guidance-topic');
-  writeFileSync(join(root, 'guidance.md'), 'Reviewed guidance.\n'); git('commit', '-qam', 'Guidance only');
+  const tpl = gitTemplateDir('recover-guidance-cli', d => {
+    const tplRoot = join(d, 'project'), tplRemote = join(d, 'remote.git');
+    mkdirSync(tplRoot, {recursive:true});
+    const tplRoute = `url.file://${tplRemote}.insteadOf=https://github.com/example/project.git`;
+    const tplGit = (...args) => execFileSync('/usr/bin/git', ['-c', tplRoute, ...args], {cwd:tplRoot, env, encoding:'utf8', stdio:['ignore','pipe','pipe']}).trim();
+    tplGit('init', '--bare', '-q', tplRemote); tplGit('init', '-qb', 'main');
+    tplGit('config', 'user.name', 'Synthetic regression'); tplGit('config', 'user.email', 'test@example.invalid');
+    tplGit('remote', 'add', 'origin', 'https://github.com/example/project.git');
+    writeFileSync(join(tplRoot, 'guidance.md'), 'Original guidance.\n'); tplGit('add', '.'); tplGit('commit', '-qm', 'Base'); tplGit('push', '-q', 'origin', 'main');
+    writeFileSync(join(d, 'baseSha'), tplGit('rev-parse', 'HEAD')); tplGit('switch', '-qc', 'guidance-topic');
+    writeFileSync(join(tplRoot, 'guidance.md'), 'Reviewed guidance.\n'); tplGit('commit', '-qam', 'Guidance only');
+  });
+  cpSync(join(tpl, 'remote.git'), remote, {recursive:true});
+  cpSync(join(tpl, 'project'), root, {recursive:true});
+  const baseSha = readFileSync(join(tpl, 'baseSha'), 'utf8');
   const runDir = dirname(status);
   mkdirSync(runDir, {recursive:true});
   writeFileSync(status, JSON.stringify({v:1, runId:'synthetic-guidance-review', repo:'example/project', number:17,

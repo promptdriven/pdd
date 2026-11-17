@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-selection.prompt.md (sha256: ed963f190cf7ad94534728d15170c8b22aac1db9f2d39da2e1b7e62a76a671d9).
+// Generated from prompts/cli/test-selection.prompt.md (sha256: e0ebec7cda7aa32cc8def10de3fe68c177bc896d09d0fed9c821f4b128cb3b68).
 import { basename, posix } from 'node:path';
 
 const AC_HEADING = /(?<![^\n])##[ \t]+Acceptance(?:[ \t]+Criteria)?[ \t]*(?![^\n])/i;

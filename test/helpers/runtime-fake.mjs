@@ -7,6 +7,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { copyGitTemplate, gitTemplateDir } from './git-template.mjs';
 
 // Shared helpers for the runtime client tests: a Harbor repo, a fake runtime on 127.0.0.1 and in-process ports.
 export const root = fileURLToPath(new URL('../..', import.meta.url));
@@ -20,9 +21,19 @@ export const filesUnder = dir => readdirSync(dir, { recursive: true }).map(name 
 
 export function harbor(t, edit) {
   const sandbox = temp(t), repo = join(sandbox, 'repo'), home = join(sandbox, 'home');
-  cpSync(join(root, 'test/fixtures/harbor'), repo, { recursive: true }); mkdirSync(home);
-  edit?.(repo);
-  git(repo, 'init', '-q'); git(repo, 'add', '-A'); git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
+  mkdirSync(home);
+  if (!edit) {
+    copyGitTemplate('harbor-clean', repo, tpl => {
+      cpSync(join(root, 'test/fixtures/harbor'), tpl, { recursive: true });
+      git(tpl, 'init', '-q'); git(tpl, 'add', '-A'); git(tpl, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
+    });
+  } else {
+    cpSync(join(root, 'test/fixtures/harbor'), repo, { recursive: true });
+    edit(repo);
+    const emptyGit = gitTemplateDir('empty-git', tpl => git(tpl, 'init', '-q'));
+    cpSync(join(emptyGit, '.git'), join(repo, '.git'), { recursive: true });
+    git(repo, 'add', '-A'); git(repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'init');
+  }
   return { sandbox, repo, home, state: join(sandbox, 'state') };
 }
 

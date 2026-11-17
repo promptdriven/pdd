@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 10e332cf5abc9566fa6310f184faada9dfbe66e2406ab8599e4423ba3f1bacaa).
+// Prompt: prompts/cli/runtime-seam.prompt.md
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -41,12 +41,14 @@ import {
   discoveryRefusal,
   discoveryVisibleFiles,
   estimateCheckCalls,
+  evaluateCheckBudget,
   exactIntegerLeaves,
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
   fillHashes as rawFillHashes,
   findTests as rawFindTests,
+  failedCheckCount,
   format,
   formatSize,
   formatWarningLines,
@@ -64,6 +66,7 @@ import {
   loadRuntimeWorkspace,
   migrateRuntimeWorkspace as runtimeMigrateWorkspace,
   numberWarnings,
+  observeTryCall as runtimeObserveTryCall,
   openCli as runtimeOpenCli,
   openServe as runtimeOpenServe,
   otherFiles,
@@ -74,6 +77,7 @@ import {
   parsePromptFrontmatter,
   parseScenarioJson,
   preflight,
+  providerText,
   productTapCallBound,
   progressText,
   progressTicker,
@@ -374,10 +378,12 @@ export function runtimePreflightSlice() {
     isStoryPath,
     lintLocalHygiene: (input, ports = {}) => {
       const { isTestOwnedPath, promptClaims, resolveOwners } = req('./file-owner.mjs');
-      return mod.lintLocalHygiene(
+      const { lintRepoAntiPatterns } = req('./repo-hygiene-lint.mjs');
+      const baseWarnings = mod.lintLocalHygiene(
         input,
         withPortDefaults(seamSelectionPorts(ports), { isTestOwnedPath, promptClaims, resolveOwners }),
       );
+      return [...new Set([...baseWarnings, ...lintRepoAntiPatterns(input)])];
     },
     matchTests,
     orphanSummary,
@@ -483,7 +489,7 @@ export function runContracts(input, ports = {}) {
 }
 
 export async function runJobs(input = {}, ports = {}) {
-  const [{ NAMES }] = await Promise.all([import('./command-catalog.mjs'), import('./product.mjs')]);
+  const { NAMES } = await import('./command-catalog.mjs');
   const commands = input?.client?.commands ?? { test: NAMES.test, lint: NAMES.lint, simulate: NAMES.simulate };
   const client = { ...(input?.client ?? {}), commands };
   return runtimeRunJobs({ ...input, client }, ports);
@@ -515,16 +521,17 @@ export async function runCheck(input = {}, ports = {}) {
     { allRuns },
     { assessNativeEvidence, resultLines, usableResult },
     { lintSvgLayouts },
+    { lintRepoAntiPatterns },
     { compareScreen, formatScreenComparison },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./file-owner.mjs'),
-    import('./workflow-runner.mjs'),
+    import('./workflow-eligibility.mjs'),
     import('./workflow-runs.mjs'),
     import('./workflow-results.mjs'),
     import('./svg-layout.mjs'),
+    import('./repo-hygiene-lint.mjs'),
     import('./screen-compare.mjs'),
-    import('./product.mjs'),
   ]);
   const env = ports.env ?? process.env;
   const client = input?.client
@@ -547,7 +554,7 @@ export async function runCheck(input = {}, ports = {}) {
         assessNativeEvidence,
         usableResult,
         resultLines,
-        lintSvgLayouts,
+        lintSvgLayouts: arg => [...lintSvgLayouts(arg), ...lintRepoAntiPatterns(arg)],
         compareScreen,
         formatScreenComparison,
         redaction: seamRedaction(ports),
@@ -572,8 +579,8 @@ export async function runTry(input = {}, ports = {}) {
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
-    import('./workflow-runner.mjs'),
-    import('./product.mjs'),
+    import('./workflow-eligibility.mjs'),
+    import('./product-documents.mjs'),
     import('./prompt-approve.mjs'),
   ]);
   const defaultDiscoverAgents = async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args);
@@ -614,7 +621,7 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./agent-adapters.mjs'),
-    import('./workflow-runner.mjs'),
+    import('./workflow-eligibility.mjs'),
   ]);
   const boundRun = seamPorts.runAgentProcess ?? seamPorts.agents?.run ?? runAgentProcess;
   const defaultAsk = turnInput =>
@@ -658,7 +665,6 @@ export async function runShim(descriptorPath, argv, ports = {}) {
   const [, { lineReader }] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./prompt-approve.mjs'),
-    import('./product.mjs'),
   ]);
   return runtimeRunShim(
     descriptorPath,
@@ -687,8 +693,8 @@ export async function runDoorCall(descriptor, input, ports = {}) {
 export async function readTryOwner(input = {}, ports = {}) {
   const [, { readEvidenceEligibility }, { parseProductDocuments, parseProductWorldWriters }] = await Promise.all([
     import('./secret-redaction.mjs'),
-    import('./workflow-runner.mjs'),
-    import('./product.mjs'),
+    import('./workflow-eligibility.mjs'),
+    import('./product-documents.mjs'),
   ]);
   return runtimeReadTryOwner(
     input,
@@ -700,6 +706,14 @@ export async function readTryOwner(input = {}, ports = {}) {
         redaction: seamRedaction(ports),
       }),
     ),
+  );
+}
+
+export async function observeTryCall(input = {}, ports = {}) {
+  await import('./secret-redaction.mjs');
+  return runtimeObserveTryCall(
+    input,
+    seamSelectionPorts(withPortDefaults(ports, { redaction: seamRedaction(ports) })),
   );
 }
 
@@ -723,8 +737,8 @@ export function createTryTools(input, ports = {}) {
 export async function runMcp(input, ports = {}) {
   const [, { readEvidenceEligibility }, { parseProductDocuments, parseProductWorldWriters }] = await Promise.all([
     import('./secret-redaction.mjs'),
-    import('./workflow-runner.mjs'),
-    import('./product.mjs'),
+    import('./workflow-eligibility.mjs'),
+    import('./product-documents.mjs'),
   ]);
   return runtimeRunMcp(
     input,
@@ -741,7 +755,7 @@ export async function runMcp(input, ports = {}) {
 }
 
 export async function migrateRuntimeWorkspace(input, ports = {}) {
-  const { readEvidenceEligibility } = await import('./workflow-runner.mjs');
+  const { readEvidenceEligibility } = await import('./workflow-eligibility.mjs');
   return runtimeMigrateWorkspace(input, seamSelectionPorts(withEligibilityDefault(ports, readEvidenceEligibility)));
 }
 
@@ -998,10 +1012,12 @@ export {
   discoveryRefusal,
   discoveryVisibleFiles,
   estimateCheckCalls,
+  evaluateCheckBudget,
   exactIntegerLeaves,
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
+  failedCheckCount,
   format,
   formatSize,
   formatWarningLines,
@@ -1025,6 +1041,7 @@ export {
   parsePromptFrontmatter,
   parseScenarioJson,
   preflight,
+  providerText,
   productTapCallBound,
   progressText,
   progressTicker,
