@@ -201,11 +201,12 @@ interpreter calls, and their help says "no interpreter calls". [Product](product
 Catalog local disposition `accounts` ([Cloud accounts CLI](accounts-cli.prompt.md)) immediately before `setup`, with zero usage-reset routes or options:
 - `accounts` (`accounts`, flag `--json`): `pdd accounts [--json]`
 - `accounts.list` (`accounts list`, flag `--json`): `pdd accounts list [--json]`
+- `accounts.status` (`accounts status`, flag `--json`): `pdd accounts status [--json]`
 - `accounts.add` (`accounts add`, value `--provider` choices `codex`, `claude`, text `--label`, flag `--loop`, flag `--device-auth`, text `--with`): `pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]`
 - `accounts.import` (`accounts import`, value `--provider` choices `codex`, `claude`, text `--from`, text `--label`, text `--with`): `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]`
 - `accounts.use` (`accounts use`, operand `label`): `pdd accounts use LABEL`
 - `accounts.next` (`accounts next`, value `--provider` choices `codex`, `claude`): `pdd accounts next [--provider codex|claude]`
-- `accounts.sync` (`accounts sync`, value `--provider` choices `codex`, `claude`, flag `--quiet`, integer `--timeout-ms` 50..60000): `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`
+- `accounts.sync` (`accounts sync`, value `--provider` choices `codex`, `claude`, flag `--quiet`, hidden flag `--print-codex-home`, integer `--timeout-ms` 50..60000): `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`
 - `accounts.auto` (`accounts auto`, operand choice `on`, `off`, `status`): `pdd accounts auto on|off|status`
 - `accounts.pause` (`accounts pause`, operand `label`), `accounts.unpause` (`accounts unpause`, operand `label`), `accounts.share` (`accounts share`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--user`, text `--with`), `accounts.leave` (`accounts leave`, operand `label`), `accounts.remove` (`accounts remove`, operand `label`), and `accounts.log` (`accounts log`, operand `label`, flag `--json`).
 
@@ -267,14 +268,15 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd autopilot auto  Set the repository Autopilot mode to auto.
   pdd autopilot trust NAME...  Add explicitly trusted GitHub names.
   pdd autopilot untrust NAME  Remove an explicitly trusted GitHub name.
-  pdd accounts [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.
-  pdd accounts list [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.
-  pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]  Sign in inside an isolated folder, upload the encrypted bundle to PDD Cloud, strip the local refresh token, and optionally enroll in a loop or share immediately.
-  pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]  Import a local or external Codex auth.json or Claude token into PDD Cloud, strip any local refresh token, and optionally share immediately.
-  pdd accounts use LABEL  Pin and materialize LABEL in ~/.codex/ or ~/.claude/settings.json.
-  pdd accounts next [--provider codex|claude]  Skip the active login and switch the local install to the next ready account sorted by soonest weekly reset.
-  pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]  Refresh the local stripped or gateway login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.
-  pdd accounts auto on|off|status  Manage the opt-in fail-open shell wrapper in ~/.zshrc and ~/.bashrc for plain terminal codex and claude launches (off by default).
+  pdd accounts [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites.
+  pdd accounts list [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites.
+  pdd accounts status [--json]  Show Cloud account enrollment, isolated Codex home, shell auto-switch status, active leases, and token refresh/expiry health.
+  pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]  Sign in inside an isolated folder, upload the encrypted bundle to PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally enroll in a loop or share immediately.
+  pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]  Import a local or external Codex auth.json or Claude token into PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally share immediately.
+  pdd accounts use LABEL  Pin and materialize LABEL in PDD's isolated Codex home or ~/.claude/settings.json.
+  pdd accounts next [--provider codex|claude]  Skip the active login and switch to the next ready account sorted by soonest weekly reset.
+  pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]  Refresh the PDD-managed login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.
+  pdd accounts auto on|off|status  Manage the opt-in fail-open shell wrapper in ~/.zshrc, ~/.bashrc, and ~/.config/fish/config.fish for plain terminal codex and claude launches (off by default).
   pdd accounts pause LABEL  Pause automatic leasing for LABEL.
   pdd accounts unpause LABEL  Resume automatic leasing for LABEL.
   pdd accounts share LABEL --with USER|ORG/TEAM[,...]  Share LABEL with GitHub users, organization teams, or @ORG targets without exposing raw credentials.
