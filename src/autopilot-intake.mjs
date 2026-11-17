@@ -1,10 +1,11 @@
-// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: 21cdd5edb8811c81c90d236564ce8189ebf3421e4ee66815cb55fad9f1aa1f01).
+// Prompt: prompts/cli/autopilot-intake.prompt.md
 import * as nativeFs from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { jobEnvironment, readAgentJob, stopAgentJob } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
 import { classifyRateLimitFailure, isQuotaExhaustionMessage } from './login-pool.mjs';
+import { extractJsonObjects, findConfiguredSkipLabel, findExternalRepoLabel } from './autopilot-forensics.mjs';
 
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
 export const CARD_CLASSES = Object.freeze(['ready', 'improve', 'person', 'duplicate', 'blocked', 'held', 'fixed', 'elsewhere']);
@@ -56,8 +57,12 @@ export function intakeRows(rows, label) {
 }
 
 // Layer 1: native facts from the issue row only. No AI and no GitHub call.
-export function nativeFacts(row) {
+export function nativeFacts(row, options = {}) {
   const people = loginsOf(row), labels = labelsOf(row);
+  const external = findExternalRepoLabel(labels);
+  if (external) return { kind: 'elsewhere', reason: `label ${external}` };
+  const skipped = findConfiguredSkipLabel(labels, options?.skipLabels);
+  if (skipped) return { kind: 'held', reason: `skip label ${skipped}` };
   if (people.length || row?.assignee) return { kind: 'held', reason: `assigned to ${people.length ? people.map(p => `@${p}`).join(', ') : 'a person'}` };
   const deps = row?.issue_dependencies_summary;
   if (Number(deps?.blocked_by) > 0) return { kind: 'waiting', reason: `${deps.blocked_by} open native blocked-by link(s)` };
@@ -286,11 +291,9 @@ export function readImprovement(result, { selfIssue = null } = {}) {
     size, group_with: groupWith, question, options, recommended, reported_model: plain(result.model, 100) || null };
 }
 
-// The answer text: one JSON object, maybe inside a code fence or other words.
+// The answer text: one JSON object, maybe inside a code fence, multiline envelope, or log prose.
 export function parseCardText(value) {
-  const t = text(value), from = t.indexOf('{'), to = t.lastIndexOf('}');
-  if (from < 0 || to <= from) return null;
-  try { return JSON.parse(t.slice(from, to + 1)); } catch { return null; }
+  return extractJsonObjects(text(value)).at(-1) ?? null;
 }
 function rawJobAnswer(ctx, saved) {
   const file = saved.agent?.kind === 'claude' ? saved.job?.log : saved.answer;
@@ -299,7 +302,7 @@ function rawJobAnswer(ctx, saved) {
   if (size > INTAKE_LIMITS.resultBytes) return { error: `the card answer is too large (${size} bytes)` };
   const raw = ctx.fs.readFileSync(file, 'utf8');
   if (saved.agent?.kind === 'claude') {
-    const reply = raw.split('\n').map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(object).reverse().find(x => typeof x.result === 'string');
+    const reply = extractJsonObjects(raw).reverse().find(x => typeof x.result === 'string');
     if (!reply || reply.is_error) return { error: 'the card job ended with no answer' };
     return { parsed: parseCardText(reply.result) };
   }
@@ -483,7 +486,7 @@ async function collect(ctx, f, scope) {
     const n = saved.issue, file = join(f.jobs, `${n}.json`);
     try {
       const row = scope.get(n), state = ctx.jobs.read(saved.job);
-      const drop = !row || issueVersion(row) !== saved.version || nativeFacts(row) || existsCoreJob(ctx, n);
+      const drop = !row || issueVersion(row) !== saved.version || nativeFacts(row, { skipLabels: ctx.settings?.skipLabels }) || existsCoreJob(ctx, n);
       if (state.state === 'running' && (drop || ctx.now() - saved.startedAt > INTAKE_LIMITS.timeout)) {
         ctx.jobs.stop(saved.job);
         if (!drop) saveCard(ctx, f, n, failed(ctx, saved, 'the card job ran out of time'));
@@ -641,7 +644,7 @@ export async function collectActiveIntake(ctx, rows) {
     const n = saved.issue, file = join(f.jobs, `${n}.json`);
     try {
       const row = scope.get(n), state = ctx.jobs.read(saved.job);
-      const drop = !row || issueVersion(row) !== saved.version || nativeFacts(row) || existsCoreJob(ctx, n);
+      const drop = !row || issueVersion(row) !== saved.version || nativeFacts(row, { skipLabels: ctx.settings?.skipLabels }) || existsCoreJob(ctx, n);
       if (state.state === 'running' && (drop || ctx.now() - saved.startedAt > INTAKE_LIMITS.timeout)) {
         ctx.jobs.stop(saved.job);
         if (!drop) saveCard(ctx, f, n, failed(ctx, saved, saved.stage === 'improve' ? 'the auto-improve job ran out of time' : 'the card job ran out of time'));
@@ -737,6 +740,31 @@ export function wouldPick(rows, cards, options = {}) {
 }
 
 // Current active ready cards for core selection (Map<issueNumber, cardEntry>).
+export function recordForensicsFixedCard(ctx, row, forensics, preCommentRow = null) {
+  const f = intakeFolders(ctx.root);
+  if (intakeMode(ctx.settings?.intake) === 'off' && !ctx.fs.existsSync(f.cards)) return;
+  for (const dir of [f.base, f.cards]) ctx.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const n = row.number;
+  const areas = normalizeAreaList([...(forensics?.verifying_files ?? []), ...(forensics?.verifying_tests ?? [])], 6);
+  const reason = plain(forensics?.summary || forensics?.evidence, 500) || 'Already resolved on base branch.';
+  const agent = { kind: ctx.state?.agent?.kind ?? null, model: ctx.state?.agent?.model ?? null };
+  const card = {
+    class: 'fixed', start: false, reason, confidence: 1,
+    canonical: null, suggested_links: [], question: null,
+    areas, area_hint: areas, group_with: [], size: null, reported_model: agent.model,
+  };
+  saveCard(ctx, f, n, {
+    issue: n,
+    version: issueVersion(row),
+    ...(preCommentRow ? { preCommentVersion: issueVersion(preCommentRow) } : {}),
+    at: ctx.now(),
+    agent,
+    seconds: 0,
+    native: null,
+    card,
+  });
+}
+
 export function activeReadyCards(root, rows, fs = nativeFs) {
   const f = intakeFolders(root);
   const byNumber = new Map(listJson(fs, f.cards).filter(c => Number.isSafeInteger(c.issue)).map(c => [c.issue, c]));
@@ -784,7 +812,7 @@ export async function shadowIntake(ctx, rows) {
   for (const row of scoped) {
     const n = row.number;
     try {
-      const version = issueVersion(row), native = nativeFacts(row) ?? (own.has(n) ? { kind: 'working', reason: 'a core job of this machine holds the issue' } : null), card = cards.get(n);
+      const version = issueVersion(row), native = nativeFacts(row, { skipLabels: ctx.settings?.skipLabels }) ?? (own.has(n) ? { kind: 'working', reason: 'a core job of this machine holds the issue' } : null), card = cards.get(n);
       if (native) {
         if (!card?.native || card.native.kind !== native.kind || card.version !== version) { const next = { issue: n, version, at: ctx.now(), agent: runner?.agent ?? defaultAgent, native, card: null, previous: card?.card ?? card?.previous ?? null }; saveCard(ctx, f, n, next); cards.set(n, next); }
         continue;
@@ -919,7 +947,7 @@ export async function activeIntake(ctx, rows) {
     const n = row.number;
     try {
       const version = issueVersion(row);
-      const native = nativeFacts(row) ?? (own.has(n) ? { kind: 'working', reason: 'a core job of this machine holds the issue' } : null);
+      const native = nativeFacts(row, { skipLabels: ctx.settings?.skipLabels }) ?? (own.has(n) ? { kind: 'working', reason: 'a core job of this machine holds the issue' } : null);
       const card = cards.get(n);
       if (native) {
         if (!card?.native || card.native.kind !== native.kind || card.version !== version) {
