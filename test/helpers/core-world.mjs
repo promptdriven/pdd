@@ -46,6 +46,7 @@ function extend(f, w) {
       f.writes.push(['merge', ...args]);
       const pr = f.prs.get(Number(args[2])), head = args[args.indexOf('--match-head-commit') + 1];
       if (!pr || pr.state !== 'open') return { code: 1, stdout: '', stderr: 'not open' };
+      if (pr.draft) return { code: 1, stdout: '', stderr: 'Pull Request is still a draft' };
       if (head !== pr.head) return { code: 1, stdout: '', stderr: 'head changed' };
       if (!args.includes('--merge')) return { code: 1, stdout: '', stderr: 'merge method' };
       pr.state = 'closed'; pr.merged = true; pr.mergedAt = new Date(f.now()).toISOString(); pr.mergeSha = 'f'.repeat(40); f.merges.push(pr.number);

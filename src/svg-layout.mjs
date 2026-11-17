@@ -1011,12 +1011,42 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     }
     if (promptFilter && ![...allClosurePrompts].some(p => promptFilter.has(p))) continue;
     const resolvedWorld = resolveInitialWorld(root, testFile, doc.initial_world);
+    const schemaAllowsPointer = (schema, pointer) => {
+      if (typeof pointer !== 'string' || pointer === '') return true;
+      if (!pointer.startsWith('/')) return false;
+      const walk = (cur, segs) => {
+        if (!segs.length || !cur || typeof cur !== 'object') return true;
+        for (const union of ['oneOf', 'anyOf']) {
+          if (Array.isArray(cur[union])) return cur[union].some(branch => walk(branch, segs));
+        }
+        const kind = cur.type;
+        if (Array.isArray(kind)) return kind.some(candidate => walk({ ...cur, type: candidate }, segs));
+        const token = segs[0].replaceAll('~1', '/').replaceAll('~0', '~');
+        const rest = segs.slice(1);
+        if (kind === 'object') {
+          const props = cur.properties && typeof cur.properties === 'object' ? cur.properties : {};
+          if (Object.hasOwn(props, token)) return walk(props[token], rest);
+          if (cur.additionalProperties === false) return false;
+          return true;
+        }
+        if (kind === 'array') {
+          if (!/^(?:0|[1-9]\d*)$/.test(token)) return false;
+          const items = cur.items;
+          return items && typeof items === 'object' ? walk(items, rest) : true;
+        }
+        if (kind === undefined || kind === null) return true;
+        return false;
+      };
+      return walk(schema, pointer.slice(1).split('/'));
+    };
     const summarizeClosure = closureSet => {
       const resources = new Map();
-      const addResourceAccess = (key, access) => {
+      const resultSchemas = new Map();
+      const addResourceAccess = (key, access, resultSchema) => {
         if (typeof key !== 'string' || !key) return;
         if (!resources.has(key)) resources.set(key, new Set());
         if (typeof access === 'string' && access) resources.get(key).add(access);
+        if (resultSchema && typeof resultSchema === 'object' && !resultSchemas.has(key)) resultSchemas.set(key, resultSchema);
       };
       let hasPlainPrompt = false;
       const proseChunks = [];
@@ -1029,15 +1059,15 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
           if (res?.kind === 'port' && typeof res.name === 'string' && Array.isArray(res.operations)) {
             for (const op of res.operations) {
               if (typeof op?.name === 'string' && op.name) {
-                addResourceAccess(`${res.name}.${op.name}`, op.access ?? res.access);
+                addResourceAccess(`${res.name}.${op.name}`, op.access ?? res.access, op.result_schema ?? op.output_schema ?? null);
               }
             }
           } else if (typeof res?.operation === 'string') {
-            addResourceAccess(res.operation, res.access);
+            addResourceAccess(res.operation, res.access, res.result_schema ?? res.output_schema ?? null);
           }
         }
       }
-      return { resources, hasPlainPrompt, combinedProse: proseChunks.join('\n') };
+      return { resources, resultSchemas, hasPlainPrompt, combinedProse: proseChunks.join('\n') };
     };
     const criteriaById = new Map(
       (Array.isArray(doc.criteria) ? doc.criteria : [])
@@ -1045,14 +1075,31 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         .map(c => [c.id, typeof c.text === 'string' ? c.text : '']),
     );
     const wholeSummary = summarizeClosure(allClosurePrompts);
-    if (wholeSummary.hasPlainPrompt && doc.simulation && typeof doc.simulation === 'object' && !Array.isArray(doc.simulation)) {
-      for (const [opKey] of Object.entries(doc.simulation)) {
+    if (doc.simulation && typeof doc.simulation === 'object' && !Array.isArray(doc.simulation)) {
+      for (const [opKey, rawSim] of Object.entries(doc.simulation)) {
         if (!PORT_OP_RE.test(opKey)) {
-          const text = `Warning: ${testFile}: simulation key "${opKey}" must have <port>.<operation> form`;
-          warnings.push({ key: `${testFile}\0simfmt\0${opKey}`, text });
-        } else if (!wholeSummary.resources.has(opKey) && !proseMentionsPortOp(wholeSummary.combinedProse, opKey)) {
+          if (wholeSummary.hasPlainPrompt) {
+            const text = `Warning: ${testFile}: simulation key "${opKey}" must have <port>.<operation> form`;
+            warnings.push({ key: `${testFile}\0simfmt\0${opKey}`, text });
+          }
+          continue;
+        }
+        if (wholeSummary.hasPlainPrompt && !wholeSummary.resources.has(opKey) && !proseMentionsPortOp(wholeSummary.combinedProse, opKey)) {
           const text = `Warning: ${testFile}: simulation port "${opKey}" is not mentioned in reachable prompt prose; name ${opKey} explicitly so lazy interface synthesis binds the port`;
           warnings.push({ key: `${testFile}\0simprose\0${opKey}`, text });
+        }
+        const simBinding = rawSim?.binding && typeof rawSim.binding === 'object' ? rawSim.binding : rawSim;
+        const rvp = typeof simBinding?.result_value_pointer === 'string' ? simBinding.result_value_pointer : null;
+        if (rvp !== null) {
+          const rSchema = wholeSummary.resultSchemas.get(opKey);
+          if (rSchema && !schemaAllowsPointer(rSchema, rvp)) {
+            const text = `Warning: ${testFile}: simulation "${opKey}" result_value_pointer "${rvp}" is excluded by "${opKey}" result_schema (impossible-result-value-pointer)`;
+            warnings.push({ key: `${testFile}\0simrvpschema\0${opKey}`, text });
+          }
+          if (rvp !== '' && simBinding && Object.hasOwn(simBinding, 'result_template') && !hasPointer(simBinding.result_template, rvp)) {
+            const text = `Warning: ${testFile}: simulation "${opKey}" result_template is missing result_value_pointer "${rvp}" (missing-result-placeholder)`;
+            warnings.push({ key: `${testFile}\0simrvptpl\0${opKey}`, text });
+          }
         }
       }
     }
@@ -1103,6 +1150,18 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         if (binding?.action === 'port.write' && typeof binding.world_pointer === 'string' && resolvedWorld.resolvable && !hasPointer(resolvedWorld.world, binding.world_pointer)) {
           const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" world_pointer "${binding.world_pointer}" is missing from initial_world`;
           warnings.push({ key: `${testFile}\0ovwp\0${stepLabel}\0${rowKey}`, text });
+        }
+        const ovRvp = typeof binding?.result_value_pointer === 'string' ? binding.result_value_pointer : null;
+        if (ovRvp !== null) {
+          const ovSchema = summary.resultSchemas.get(opKey);
+          if (ovSchema && !schemaAllowsPointer(ovSchema, ovRvp)) {
+            const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" result_value_pointer "${ovRvp}" is excluded by "${opKey}" result_schema (impossible-result-value-pointer)`;
+            warnings.push({ key: `${testFile}\0ovrvpschema\0${stepLabel}\0${rowKey}`, text });
+          }
+          if (ovRvp !== '' && binding && Object.hasOwn(binding, 'result_template') && !hasPointer(binding.result_template, ovRvp)) {
+            const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" result_template is missing result_value_pointer "${ovRvp}" (missing-result-placeholder)`;
+            warnings.push({ key: `${testFile}\0ovrvptpl\0${stepLabel}\0${rowKey}`, text });
+          }
         }
         if (!cid || !checkedIds.has(cid)) {
           const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" criterion_id "${cid}" is not checked by step ${stepLabel}`;

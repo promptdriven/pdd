@@ -131,7 +131,7 @@ Then make sure that every criterion still has a check, and run `pdd test <story>
 
 - The report page drops line breaks in strings. The check itself is exact: `"Added #1: Buy milk"` fails against
   `"Added #1: Buy milk\n"`. If expected and got look the same, look for a `\n`.
-- Some refusals give no reason ("See the reported reason"). Use the refusal table in section 11.
+- Some refusals give no reason ("See the reported reason"). Use the refusal table in section 11. For `impossible-result-value-pointer`, set `result_value_pointer` to `""` when the port returns the value directly, or state the exact returned JSON object keys in the prompt's Ports section so `result_schema` includes that pointer.
 - The report page says "Run in your signed-in terminal: `pdd replay …`". That command does not exist yet.
 - In a simulation, the action that uses the last AI calls may not show its answer. The page says "This Try has ended".
 - The Simulator says "1 AI call each". A step with saved data or a prompt call uses 2 to 3.

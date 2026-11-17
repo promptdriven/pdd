@@ -17,7 +17,7 @@ export const forensicsFixedMarker = issue => `${FORENSICS_FIXED_MARKER_PREFIX}${
 
 const CODEX_FORENSICS_OFF = [
   'hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access',
-  'computer_use', 'multi_agent', 'multi_agent_v2', 'code_mode', 'code_mode_host',
+  'computer_use', 'multi_agent', 'multi_agent_v2', 'code_mode',
 ];
 const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);

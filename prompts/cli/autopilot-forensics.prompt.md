@@ -42,7 +42,7 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
   read-only headless CLI invocation for every supported Autopilot agent kind:
   - `codex`: `exec --ignore-user-config --sandbox read-only --ephemeral --color never`
     with `approval_policy="never"`, `web_search="disabled"`, `mcp_servers={}`,
-    `model_reasoning_effort` (`low` default), non-essential agent features disabled,
+    `model_reasoning_effort` (`low` default), non-essential agent features disabled (preserving `code_mode_host` so read-only tool inspection works),
     optional `--output-last-message FILE`, optional `--model MODEL`, and `-` stdin.
   - `claude`: `-p --safe-mode --tools Read,Glob,Grep --permission-mode plan
     --permission-prompts none --strict-mcp-config --no-chrome

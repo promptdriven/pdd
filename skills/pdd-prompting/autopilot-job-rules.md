@@ -60,7 +60,10 @@ line against its own records. A line that the records do not support is red.
   maintenance (below), or a refusal that pdd gives no fix for.
 - A changed Story with no Runtime test is no such cause. Write its Runtime test (one step for each criterion) and run
   `pdd test`, or mark the owning prompt native-only with frontmatter kind and reason.
-- A refusal with a fix from pdd is this PR's work. Apply the fix and check again.
+- A refusal with a fix from pdd is this PR's work. Apply the fix and check again. For `impossible-result-value-pointer`,
+  the port's `result_schema` excluded `simulation` `result_value_pointer`: set `result_value_pointer` to `""` when the
+  port returns the value directly, or state the exact returned JSON object keys in the prompt's Ports section so
+  `result_schema` includes that pointer (fix it in the prompt/scenario rather than shipping `not run`).
 - Write the exact cause in the line: `Runtime: not run (STORY: CAUSE)`.
 
 ## Large whole numbers

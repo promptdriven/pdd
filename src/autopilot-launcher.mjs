@@ -8,7 +8,7 @@ import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns,
 import { spawn, spawnSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, watch, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, watch, realpathSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -732,7 +732,12 @@ async function moveTick(stateFile, state, p, ports) {
     },
     uid: typeof process.getuid === 'function' ? process.getuid() : null,
     cwdOf: async pid => {
-      if (process.platform === 'linux') try { return realpathSync(`/proc/${pid}/cwd`); } catch { return null; }
+      if (process.platform === 'linux') {
+        try { return realpathSync(`/proc/${pid}/cwd`); }
+        catch {
+          try { return readlinkSync(`/proc/${pid}/cwd`).replace(/ \(deleted\)$/, ''); } catch { return null; }
+        }
+      }
       if (process.platform === 'darwin') {
         const text = (await promisify(execFile)('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8', timeout: 5000 })).stdout;
         return /^n(.+)$/m.exec(text)?.[1] ?? null;

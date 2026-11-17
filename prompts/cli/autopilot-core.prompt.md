@@ -42,7 +42,7 @@ string `core`; any other value, or none, is `full`.
 
 When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics` (omitting unset optional keys so the default settings shape stays unchanged).
 
-`detectTestCommand(cwd, fs, packageJson)` auto-detects standard external repository test commands when `autopilot.testCommand` is unset: `pnpm-lock.yaml` -> `pnpm test`, `yarn.lock` -> `yarn test`, `bun.lockb` or `bun.lock` -> `bun test`, `package.json` `scripts.test` -> `npm test`, `pyproject.toml` or `pytest.ini` -> `pytest`, `Cargo.toml` -> `cargo test`, `go.mod` -> `go test ./...`, `package.json` -> `npm test`, else `null`. `readCoreSettings(cwd, fs, machine = null)` applies `coreSettings` to `cwd/pdd.json` and `cwd/package.json` (an unreadable file counts as absent) and fills `testCommand` from `detectTestCommand(cwd, fs, packageJson)` whenever `autopilot.testCommand` is unset (when `main` is a greenfield or `product/` repository with no manifest yet, intake still claims ready issues and `suiteState`, `workRules`, `notCovered`, and suite failure/hang records resolve `detectTestCommand` against the checked-out PR head `N-suite`/`headTree` and `job.worktree` so a PR that introduces `package.json`, `pyproject.toml`, `Cargo.toml` or `go.mod` runs and reports its detected test command cleanly); the full-suite runner also installs lockfile dependencies for `pnpm-lock.yaml`, `yarn.lock` (Classic `--frozen-lockfile --ignore-scripts` vs Modern `--immutable --mode=skip-build`/`--skip-builds`), `bun.lockb`/`bun.lock` and `package-lock.json`.
+`detectTestCommand(cwd, fs, packageJson)` auto-detects standard external repository test commands when `autopilot.testCommand` is unset: `pnpm-lock.yaml` -> `pnpm test`, `yarn.lock` -> `yarn test`, `bun.lockb` or `bun.lock` -> `bun test`, `package.json` `scripts.test` -> `npm test`, `pyproject.toml` or `pytest.ini` -> `pytest`, `Cargo.toml` -> `cargo test`, `go.mod` -> `go test ./...`, `package.json` -> `npm test`, else zero-manifest `test/` or `tests/` discovery (`*.test.{js,mjs,cjs}` or `*.spec.{js,mjs,cjs}` -> `node --test`; `test_*.py` or `*_test.py` -> `pytest`), else `null`. `readCoreSettings(cwd, fs, machine = null)` applies `coreSettings` to `cwd/pdd.json` and `cwd/package.json` (an unreadable file counts as absent) and fills `testCommand` from `detectTestCommand(cwd, fs, packageJson)` whenever `autopilot.testCommand` is unset (when `main` is a greenfield or `product/` repository with no manifest yet, intake still claims ready issues and `suiteState`, `workRules`, `notCovered`, and suite failure/hang records resolve `detectTestCommand` against the checked-out PR head `N-suite`/`headTree` and `job.worktree` so a PR that introduces `package.json`, `pyproject.toml`, `Cargo.toml` or `go.mod` runs and reports its detected test command cleanly); the full-suite runner also installs lockfile dependencies for `pnpm-lock.yaml`, `yarn.lock` (Classic `--frozen-lockfile --ignore-scripts` vs Modern `--immutable --mode=skip-build`/`--skip-builds`), `bun.lockb`/`bun.lock` and `package-lock.json`.
 
 ## State
 
@@ -1273,8 +1273,11 @@ runs until its end):
    prompt with pdd approve on its branch and push), then remove pdd:needs-decision:
    Autopilot checks the same PR again, with no new build. To give up on it, close the
    PR.", the PR stays open with one note `<!-- pdd:autopilot-core:needs-approval:P -->`.
-   After a trusted removal of the label, intake resumes that PR (phase `pr`, its
-   branch in the job worktree, `resumed: true`) instead of a new build (a failed fetch or
+   After a trusted removal of the label (or after `pdd autopilot release N` when an open
+   core PR carries this engine's `<!-- pdd:autopilot-core:end-pr:N:... -->` note), intake
+   resumes that PR (phase `pr`, its branch in the job worktree, `resumed: true`, marking a
+   draft PR ready for review before merge) instead of closing it as `superseded` and starting
+   a new build (a failed fetch or
    checkout of that branch undoes the claim and removes the worktree, as other intake
    failures do; the next tick tries again); in other repositories they are red,
    with the approval command and words in the finding (one repair, then END as usual).
