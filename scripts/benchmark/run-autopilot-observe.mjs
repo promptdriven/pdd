@@ -3,12 +3,15 @@
 // Strictly GET-only against GitHub: zero issue, label, comment, branch, or PR writes.
 
 import * as nativeFs from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, basename } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
+  CliUsageError,
   computeNorthStarScorecard,
+  parsePositiveNumberFlag,
+  readCliFlagValue,
   roundNum,
   sanitizePublicData,
   sanitizePublicText,
@@ -1140,6 +1143,10 @@ export function runAutopilotObserve(options = {}, ports = {}) {
     repoSpecs = [{ repo: 'promptdriven/pdd', checkout: options.checkouts?.['promptdriven/pdd'] || null }];
   }
 
+  const defaultSlots = options.slots !== undefined
+    ? parsePositiveNumberFlag(options.slots, '--slots', { integer: true })
+    : 4;
+
   const etagCache = ports.etagCache ?? createObserveEtagCache({
     cacheFile: join(stateDir, 'observe-etags.json'),
     fs,
@@ -1147,45 +1154,50 @@ export function runAutopilotObserve(options = {}, ports = {}) {
   });
 
   const records = [];
-  for (const spec of repoSpecs) {
-    const repoClient = ports.ghClientFactory
-      ? ports.ghClientFactory(spec.repo)
-      : createReadOnlyGithubClient({ exec, etagCache });
+  try {
+    for (const spec of repoSpecs) {
+      const specSlots = spec.slots !== undefined
+        ? parsePositiveNumberFlag(spec.slots, 'repo.slots', { integer: true })
+        : defaultSlots;
+      const repoClient = ports.ghClientFactory
+        ? ports.ghClientFactory(spec.repo)
+        : createReadOnlyGithubClient({ exec, etagCache });
 
-    const localContext = ports.localContextFactory
-      ? ports.localContextFactory(spec.repo)
-      : loadLocalAutopilotContext({
+      const localContext = ports.localContextFactory
+        ? ports.localContextFactory(spec.repo)
+        : loadLocalAutopilotContext({
+          repo: spec.repo,
+          checkoutDir: spec.checkout || options.checkouts?.[spec.repo] || null,
+          autopilotStateDir,
+          stateDir,
+          pddBin,
+          fs,
+          exec,
+          env,
+        });
+
+      const row = observeRepository({
         repo: spec.repo,
-        checkoutDir: spec.checkout || options.checkouts?.[spec.repo] || null,
-        autopilotStateDir,
-        stateDir,
-        pddBin,
-        fs,
-        exec,
-        env,
+        checkoutDir: localContext?.checkoutDir || null,
+        optInLabel: spec.optInLabel || null,
+        skipLabels: spec.skipLabels || [],
+        slots: specSlots,
+        maxIssuePages: spec.maxIssuePages ?? options.maxIssuePages ?? 10,
+        ghClient: repoClient,
+        localContext,
+        now,
       });
 
-    const row = observeRepository({
-      repo: spec.repo,
-      checkoutDir: localContext?.checkoutDir || null,
-      optInLabel: spec.optInLabel || null,
-      skipLabels: spec.skipLabels || [],
-      slots: spec.slots ?? options.slots ?? 4,
-      maxIssuePages: spec.maxIssuePages ?? options.maxIssuePages ?? 10,
-      ghClient: repoClient,
-      localContext,
-      now,
-    });
-
-    const ghStats = repoClient.stats();
-    const enriched = sanitizePublicData({
-      ...row,
-      ...ghStats,
-    });
-    records.push(enriched);
+      const ghStats = repoClient.stats();
+      const enriched = sanitizePublicData({
+        ...row,
+        ...ghStats,
+      });
+      records.push(enriched);
+    }
+  } finally {
+    etagCache.save();
   }
-
-  etagCache.save();
 
   if (options.writeJsonl !== false) {
     fs.mkdirSync(dirname(outJsonl), { recursive: true });
@@ -1199,7 +1211,7 @@ export function runAutopilotObserve(options = {}, ports = {}) {
     generated_at: new Date(now()).toISOString(),
     mode: 'observe',
     mutations: 0,
-    jsonl_path: outJsonl,
+    jsonl_path: options.writeJsonl === false ? null : basename(outJsonl),
     runs: records,
     north_star_scorecard: northStar,
   });
@@ -1220,25 +1232,32 @@ export function formatObserveSummary(batch) {
   return sanitizePublicText(lines.join('\n'));
 }
 
-function parseCliArgs(argv) {
+export function parseObserveCliArgs(argv) {
   const opts = { repos: [], checkouts: {}, mode: 'observe' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--observe') opts.mode = 'observe';
-    else if (arg === '--repo') opts.repos.push(argv[++i]);
+    else if (arg === '--repo') { opts.repos.push(readCliFlagValue(argv, i, arg)); i++; }
     else if (arg === '--checkout') {
-      const pair = String(argv[++i] || '');
+      const pair = readCliFlagValue(argv, i, arg);
+      i++;
       const eq = pair.indexOf('=');
-      if (eq > 0) opts.checkouts[pair.slice(0, eq)] = pair.slice(eq + 1);
-    } else if (arg === '--config') opts.configFile = argv[++i];
-    else if (arg === '--state-dir') opts.stateDir = argv[++i];
-    else if (arg === '--autopilot-state-dir') opts.autopilotStateDir = argv[++i];
-    else if (arg === '--out') opts.outFile = argv[++i];
-    else if (arg === '--slots') opts.slots = Number(argv[++i]);
-    else if (arg === '--no-write') opts.writeJsonl = false;
+      if (eq <= 0 || eq === pair.length - 1) {
+        throw new CliUsageError(`Invalid --checkout value "${pair}": expected OWNER/REPO=DIR`);
+      }
+      opts.checkouts[pair.slice(0, eq)] = pair.slice(eq + 1);
+    } else if (arg === '--config') { opts.configFile = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--state-dir') { opts.stateDir = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--autopilot-state-dir') { opts.autopilotStateDir = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--out') { opts.outFile = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--slots') {
+      const raw = readCliFlagValue(argv, i, arg, { allowLeadingDash: true });
+      i++;
+      opts.slots = parsePositiveNumberFlag(raw, arg, { integer: true });
+    } else if (arg === '--no-write') opts.writeJsonl = false;
     else if (arg === '--json') opts.json = true;
     else if (arg === '--help' || arg === '-h') opts.help = true;
-    else throw new Error(`Unknown argument: ${arg}`);
+    else throw new CliUsageError(`Unknown argument: ${arg}`);
   }
   return opts;
 }
@@ -1250,13 +1269,13 @@ const USAGE = `Usage: node scripts/benchmark/run-autopilot-observe.mjs [--observ
   --config FILE                 JSON config file with { "repos": [{ "repo": "...", "checkout": "..." }] }
   --state-dir DIR               Directory for observe-etags.json and observe-runs.jsonl
   --out FILE                    JSONL output path (default: <state-dir>/observe-runs.jsonl)
-  --slots N                     Parallel spread-first dispatch slots (default: 4)
+  --slots N                     Parallel spread-first dispatch slots (default: 4; positive integer)
   --json                        Print structured JSON result to stdout
 `;
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const opts = parseCliArgs(process.argv.slice(2));
+    const opts = parseObserveCliArgs(process.argv.slice(2));
     if (opts.help) {
       process.stdout.write(USAGE);
       process.exit(0);
@@ -1269,6 +1288,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
   } catch (err) {
     process.stderr.write(`Autopilot observe error: ${err.message}\n`);
-    process.exit(2);
+    process.exit(err?.exitCode === 2 ? 2 : 1);
   }
 }

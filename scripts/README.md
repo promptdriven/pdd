@@ -120,7 +120,7 @@ node scripts/benchmark/run-autopilot-observe.mjs --observe \
   --out ~/.local/state/pdd/observe/observe-runs.jsonl
 ```
 
-Or pass an operator config file outside the repository (`--config ~/.local/state/pdd/observe/config.json`) listing multiple public or private repositories and optional local checkouts:
+Or pass an operator config file outside the repository (`--config ~/.local/state/pdd/observe/config.json`) listing repositories and optional local checkouts:
 
 ```json
 {
@@ -130,12 +130,13 @@ Or pass an operator config file outside the repository (`--config ~/.local/state
 }
 ```
 
-Render the self-contained HTML + inline SVG dashboard (strips and rejects commit hashes and UUIDs):
+Render the self-contained HTML + inline SVG dashboard. By default, only `promptdriven/pdd` is shown by repository slug and linked; any other repository in `observe-runs.jsonl` is automatically redacted to a generic `private-repo-N` label without a GitHub link unless explicitly allowlisted via repeatable `--public-repo OWNER/REPO`. Output hygiene also scrubs and rejects commit hashes, UUIDs, and common credential tokens:
 
 ```sh
 node scripts/benchmark/render-benchmark-report.mjs \
   --release-json /path/to/release-report.json \
   --observe-jsonl ~/.local/state/pdd/observe/observe-runs.jsonl \
+  --public-repo promptdriven/pdd \
   --out ~/.local/state/pdd/observe/latest-benchmark.html
 ```
 

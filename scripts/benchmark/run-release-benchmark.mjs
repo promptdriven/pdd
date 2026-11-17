@@ -2,15 +2,18 @@
 // Part A: PDD Release Authoring & Runtime Matrix Benchmark Runner & Comparator.
 
 import * as nativeFs from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
+import { join, resolve, dirname, basename } from 'node:path';
+import { tmpdir, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   BENCHMARK_WORKLOADS,
+  CliUsageError,
   DEFAULT_PRICING_PER_MILLION,
   computeNorthStarScorecard,
   estimateTokenUsd,
+  parsePositiveNumberFlag,
+  readCliFlagValue,
   roundNum,
   sanitizePublicData,
   sanitizePublicText,
@@ -80,9 +83,11 @@ export function measureSkillsFootprint(packageRoot = DEFAULT_ROOT, fs = nativeFs
 
 export function parseRuntimeCheckOutput(stdout = '', stderr = '', exitCode = 0) {
   const combined = `${stdout ?? ''}\n${stderr ?? ''}`;
+  const combinedWithoutZeroNative = combined.replace(/\b0\s+native-only\b/gi, '');
   const refusalCodes = [];
   for (const code of REFUSAL_PATTERNS) {
-    if (combined.includes(code)) refusalCodes.push(code);
+    const haystack = code === 'native-only' ? combinedWithoutZeroNative : combined;
+    if (haystack.includes(code)) refusalCodes.push(code);
   }
   const genericRefusals = [...combined.matchAll(/\brefused\s*\(([a-z0-9-]+)\)/gi)].map(m => m[1].toLowerCase());
   for (const code of genericRefusals) {
@@ -93,15 +98,35 @@ export function parseRuntimeCheckOutput(stdout = '', stderr = '', exitCode = 0) 
   let outputTokens = null;
   let tokensUnreported = false;
 
-  const inMatch = combined.match(/([\d,]+)\s*(?:input tokens|\bin\b)/i)
-    || combined.match(/"input_tokens"\s*:\s*(\d+)/i);
-  if (inMatch) inputTokens = Number(inMatch[1].replaceAll(',', ''));
+  const pairedMatch = combined.match(/\b([\d,]+)\s*in\s*\/\s*([\d,]+)\s*out(?:\s*tokens?)?\b/i);
+  const usageLineMatch = combined.match(
+    /\bToken usage:\s*([\d,]+)\s+input\s*\([\d,]+\s+cached[^)]*\)(?:\s*·\s*([\d,]+)\s+output\b)?/i,
+  );
 
-  if (/output[_ ]tokens\s*:\s*"?unknown"?/i.test(combined) || /tokens:\s*unknown/i.test(combined)) {
+  if (pairedMatch) {
+    inputTokens = Number(pairedMatch[1].replaceAll(',', ''));
+    outputTokens = Number(pairedMatch[2].replaceAll(',', ''));
+  } else if (usageLineMatch) {
+    inputTokens = Number(usageLineMatch[1].replaceAll(',', ''));
+    if (usageLineMatch[2] !== undefined) {
+      outputTokens = Number(usageLineMatch[2].replaceAll(',', ''));
+    }
+  }
+
+  if (inputTokens === null) {
+    const inMatch = combined.match(/\b([\d,]+)\s*input[ _]tokens\b/i)
+      || combined.match(/"?(?:input_tokens|tokens_in)"?\s*[:=]\s*([\d,]+)/i);
+    if (inMatch) inputTokens = Number(inMatch[1].replaceAll(',', ''));
+  }
+
+  if (
+    /(?:output_tokens|tokens_out|output tokens)\s*[:=]\s*"?unknown"?/i.test(combined)
+    || /\btokens\s*:\s*unknown\b/i.test(combined)
+  ) {
     tokensUnreported = true;
-  } else {
-    const outMatch = combined.match(/([\d,]+)\s*(?:output tokens|\bout\b)/i)
-      || combined.match(/"output_tokens"\s*:\s*(\d+)/i);
+  } else if (outputTokens === null) {
+    const outMatch = combined.match(/\b([\d,]+)\s*output[ _]tokens\b/i)
+      || combined.match(/"?(?:output_tokens|tokens_out)"?\s*[:=]\s*([\d,]+)/i);
     if (outMatch) outputTokens = Number(outMatch[1].replaceAll(',', ''));
   }
 
@@ -517,6 +542,75 @@ function executeFixtureChecks({ workloadId, fixtureDir, pddBin, run = nativeRun,
   });
 }
 
+export const STRIPPED_AGENT_AUTH_VARS = Object.freeze([
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
+]);
+
+export function resolveIsolatedCodexHome({
+  pddBin,
+  baseEnv = process.env,
+  fallbackDir = null,
+  requireMaterialized = false,
+  fs = nativeFs,
+  run = nativeRun,
+} = {}) {
+  const userHome = baseEnv.HOME || baseEnv.USERPROFILE || homedir();
+  const rawDefaultCodexHome = resolve(userHome, '.codex');
+
+  const isValidIsolatedHome = (candidate, trustAuthFlag = false) => {
+    if (typeof candidate !== 'string' || !candidate.trim()) return false;
+    const resolved = resolve(candidate.trim());
+    if (!resolved || resolved === rawDefaultCodexHome) return false;
+    return trustAuthFlag || fs.existsSync(join(resolved, 'auth.json'));
+  };
+
+  if (pddBin) {
+    const syncRes = run(
+      process.execPath,
+      [pddBin, 'accounts', 'sync', '--provider', 'codex', '--quiet', '--timeout-ms', '2500'],
+      { env: { ...baseEnv, PDD_PRINT_CODEX_HOME: '1' }, timeoutMs: 5_000 },
+    );
+    if (syncRes.code === 0) {
+      const printed = String(syncRes.stdout || '').trim().split('\n').map(l => l.trim()).filter(Boolean).at(-1);
+      if (isValidIsolatedHome(printed)) return resolve(printed);
+    }
+
+    const statusRes = run(
+      process.execPath,
+      [pddBin, 'accounts', 'status', '--json'],
+      { env: baseEnv, timeoutMs: 5_000 },
+    );
+    if (statusRes.code === 0) {
+      try {
+        const parsed = JSON.parse(statusRes.stdout || '{}');
+        const ch = parsed?.codex_home ?? parsed?.codexHome;
+        const chPath = typeof ch === 'string' ? ch : ch?.path;
+        const hasAuth = Boolean(ch?.auth_present || ch?.materialized);
+        if (isValidIsolatedHome(chPath, hasAuth)) return resolve(chPath.trim());
+      } catch {
+        // Ignore malformed status JSON and check explicit isolated CODEX_HOME next.
+      }
+    }
+  }
+
+  if (isValidIsolatedHome(baseEnv.CODEX_HOME)) {
+    return resolve(baseEnv.CODEX_HOME.trim());
+  }
+
+  if (requireMaterialized) {
+    throw new Error(
+      'Refusing to run codex without an isolated PDD-managed CODEX_HOME (will not fall back to ~/.codex/auth.json). Run "pdd accounts status" or provide an isolated CODEX_HOME.',
+    );
+  }
+
+  const emptyHome = join(fallbackDir || tmpdir(), 'isolated-codex-home');
+  fs.mkdirSync(emptyHome, { recursive: true, mode: 0o700 });
+  return emptyHome;
+}
+
 export function executeLiveAgentWorkload({
   workload,
   pddBin,
@@ -524,172 +618,243 @@ export function executeLiveAgentWorkload({
   agentCommand,
   workDirRoot,
   brownfieldSeedDir = null,
+  keepWorkDir = false,
+  shimTimeoutMs = 600_000,
+  env: inputEnv,
   fs = nativeFs,
   run = nativeRun,
   now = Date.now,
 }) {
+  const baseEnv = inputEnv ?? process.env;
   const armDir = fs.mkdtempSync(join(workDirRoot || tmpdir(), `pdd-bench-${workload.id}-`));
-  run('git', ['init', '-q'], { cwd: armDir });
-  if (workload.tier === 'brownfield') {
-    seedBrownfieldTemplate(armDir, { seedDir: brownfieldSeedDir, fs, run });
-  }
-  const shimDir = join(armDir, '.bench-shim');
-  const shimLog = join(shimDir, 'pdd-calls.jsonl');
-  const shimPath = join(shimDir, 'pdd');
-  fs.mkdirSync(shimDir, { recursive: true });
+  const authVaultDir = fs.mkdtempSync(join(tmpdir(), `pdd-bench-auth-${workload.id}-`));
+  fs.chmodSync?.(authVaultDir, 0o700);
 
-  const shimSource = `#!/usr/bin/env node
+  try {
+    run('git', ['init', '-q'], { cwd: armDir });
+    if (workload.tier === 'brownfield') {
+      seedBrownfieldTemplate(armDir, { seedDir: brownfieldSeedDir, fs, run });
+    }
+    const shimDir = join(armDir, '.bench-shim');
+    const shimLog = join(shimDir, 'pdd-calls.jsonl');
+    const shimPath = join(shimDir, 'pdd');
+    fs.mkdirSync(shimDir, { recursive: true });
+
+    const shimAuthEnv = {};
+    for (const key of STRIPPED_AGENT_AUTH_VARS) {
+      if (typeof baseEnv[key] === 'string' && baseEnv[key].length > 0) {
+        shimAuthEnv[key] = baseEnv[key];
+      }
+    }
+    const authFilePath = join(authVaultDir, 'runtime-auth.json');
+    fs.writeFileSync(authFilePath, JSON.stringify(shimAuthEnv), { mode: 0o600 });
+
+    const boundedShimTimeoutMs = Number.isFinite(shimTimeoutMs) && shimTimeoutMs > 0
+      ? Math.round(shimTimeoutMs)
+      : 600_000;
+
+    const shimSource = `#!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+const sub = args[0] || '';
+const isHelp = args.includes('--help') || args.includes('-h');
+const needsRuntimeAuth = !isHelp && (
+  (sub === 'lint' && !args.includes('--local'))
+  || (sub === 'test' && !args.includes('--files'))
+);
+const childEnv = { ...process.env };
+const authFile = ${JSON.stringify(authFilePath)};
+if (needsRuntimeAuth && existsSync(authFile)) {
+  try {
+    Object.assign(childEnv, JSON.parse(readFileSync(authFile, 'utf8')));
+  } catch {}
+}
 const start = Date.now();
-const res = spawnSync(${JSON.stringify(process.execPath)}, [${JSON.stringify(pddBin)}, ...process.argv.slice(2)], {
+const res = spawnSync(${JSON.stringify(process.execPath)}, [${JSON.stringify(pddBin)}, ...args], {
   encoding: 'utf8',
+  timeout: ${boundedShimTimeoutMs},
+  killSignal: 'SIGTERM',
   maxBuffer: 32 * 1024 * 1024,
+  env: childEnv,
 });
 const end = Date.now();
+const timedOut = res.error?.code === 'ETIMEDOUT';
+const stderrOut = (res.stderr ?? '') + (timedOut ? '\\npdd benchmark shim timed out\\n' : '');
 if (res.stdout) process.stdout.write(res.stdout);
-if (res.stderr) process.stderr.write(res.stderr);
+if (stderrOut) process.stderr.write(stderrOut);
+const exitCode = timedOut ? 124 : (res.status ?? 1);
 appendFileSync(${JSON.stringify(shimLog)}, JSON.stringify({
-  argv: process.argv.slice(2),
+  argv: args,
   start_ms: start,
   end_ms: end,
   duration_s: (end - start) / 1000,
-  exit_code: res.status ?? 1,
+  exit_code: exitCode,
+  timed_out: timedOut,
   stdout: res.stdout ?? '',
-  stderr: res.stderr ?? '',
+  stderr: stderrOut,
 }) + '\\n');
-process.exit(res.status ?? 1);
+process.exit(exitCode);
 `;
-  fs.writeFileSync(shimPath, shimSource, { mode: 0o755 });
+    fs.writeFileSync(shimPath, shimSource, { mode: 0o755 });
 
-  const env = { ...process.env, PATH: `${shimDir}:${process.env.PATH || ''}` };
-  const cmd = Array.isArray(agentCommand) && agentCommand.length
-    ? agentCommand
-    : ['codex', 'exec', '--json', '--dangerously-bypass-approvals-and-sandbox', workload.prompt];
+    const cmd = Array.isArray(agentCommand) && agentCommand.length
+      ? agentCommand
+      : ['codex', 'exec', '--json', '--dangerously-bypass-approvals-and-sandbox', workload.prompt];
+    const agentBinName = basename(String(cmd[0] || '')).toLowerCase();
+    const isolatedCodexHome = resolveIsolatedCodexHome({
+      pddBin,
+      baseEnv,
+      fallbackDir: authVaultDir,
+      requireMaterialized: agentBinName === 'codex' || agentBinName === 'codex.exe',
+      fs,
+      run,
+    });
 
-  const startMs = now();
-  const agentRes = run(cmd[0], cmd.slice(1), { cwd: armDir, env, timeoutMs: 1_200_000 });
-  const endMs = now();
-
-  const usage = parseAgentSessionUsage(agentRes.stdout, { fs });
-  const skillFootprint = measureSkillsFootprint(packageRoot, fs);
-
-  const calls = fs.existsSync(shimLog)
-    ? fs.readFileSync(shimLog, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
-    : [];
-
-  const lintCalls = calls.filter(c => c.argv?.[0] === 'lint' && !c.argv.includes('--help'));
-  const testCalls = calls.filter(c => c.argv?.[0] === 'test' && !c.argv.includes('--help') && !c.argv.includes('--files'));
-  const firstTestCall = testCalls[0] || null;
-  const lintCall = lintCalls.at(-1) || null;
-  const testCall = testCalls.at(-1) || null;
-  const allCheckCalls = [...lintCalls, ...testCalls].sort((a, b) => a.start_ms - b.start_ms);
-  const firstCheckCall = allCheckCalls[0] || null;
-
-  let latestPromptMtimeMs = startMs;
-  for (const sub of ['prompts', 'user_stories']) {
-    const dir = join(armDir, sub);
-    if (!fs.existsSync(dir)) continue;
-    for (const name of fs.readdirSync(dir)) {
-      const st = fs.statSync(join(dir, name));
-      if (st.mtimeMs > latestPromptMtimeMs) latestPromptMtimeMs = st.mtimeMs;
+    const agentEnv = { ...baseEnv };
+    for (const key of STRIPPED_AGENT_AUTH_VARS) {
+      delete agentEnv[key];
     }
-  }
+    agentEnv.CODEX_HOME = isolatedCodexHome;
+    agentEnv.PATH = `${shimDir}:${baseEnv.PATH || ''}`;
 
-  const authoringEndMs = firstTestCall ? firstTestCall.start_ms : endMs;
-  const totalAuthoringSec = Math.max(0, (authoringEndMs - startMs) / 1000);
-  const promptOnlySec = Math.min(totalAuthoringSec, Math.max(0, (latestPromptMtimeMs - startMs) / 1000));
-  const postPromptSec = Math.max(0, totalAuthoringSec - promptOnlySec);
+    const startMs = now();
+    const agentRes = run(cmd[0], cmd.slice(1), { cwd: armDir, env: agentEnv, timeoutMs: 1_200_000 });
+    const endMs = now();
 
-  const parsedLint = lintCall
-    ? parseRuntimeCheckOutput(lintCall.stdout, lintCall.stderr, lintCall.exit_code)
-    : { status: 'not_run', exit_code: null };
-  const parsedTest = testCall
-    ? parseRuntimeCheckOutput(testCall.stdout, testCall.stderr, testCall.exit_code)
-    : { status: 'not_run', exit_code: null, refusal_codes: [], input_tokens: null, output_tokens: null, tokens_unreported: false };
+    const usage = parseAgentSessionUsage(agentRes.stdout, { fs });
+    const skillFootprint = measureSkillsFootprint(packageRoot, fs);
 
-  // Measure live rework_usd: 0 when first-try lint & test pass with no retries, else post-first-check repair share + retry test tokens.
-  let measuredReworkUsd = null;
-  if (Number.isFinite(usage.authoring_usd) && firstCheckCall) {
-    const hadCheckFailureOrRetry = lintCalls.length > 1
-      || testCalls.length > 1
-      || allCheckCalls.some(c => c.exit_code !== 0);
-    if (!hadCheckFailureOrRetry) {
-      measuredReworkUsd = 0;
-    } else {
-      const totalSessionMs = Math.max(1, endMs - startMs);
-      const reworkWindowMs = Math.max(0, endMs - firstCheckCall.end_ms);
-      const authoringReworkShare = usage.authoring_usd * Math.min(1, reworkWindowMs / totalSessionMs);
-      let retryRuntimeUsd = 0;
-      for (const retryCall of testCalls.slice(1)) {
-        const parsedRetry = parseRuntimeCheckOutput(retryCall.stdout, retryCall.stderr, retryCall.exit_code);
-        if (Number.isFinite(parsedRetry.input_tokens) && Number.isFinite(parsedRetry.output_tokens)) {
-          retryRuntimeUsd += estimateTokenUsd({
-            uncachedInputTokens: parsedRetry.input_tokens,
-            cachedTokens: 0,
-            outputTokens: parsedRetry.output_tokens,
-          }) || 0;
-        }
+    const calls = fs.existsSync(shimLog)
+      ? fs.readFileSync(shimLog, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+      : [];
+
+    const lintCalls = calls.filter(c => c.argv?.[0] === 'lint' && !c.argv.includes('--help'));
+    const testCalls = calls.filter(c => c.argv?.[0] === 'test' && !c.argv.includes('--help') && !c.argv.includes('--files'));
+    const firstTestCall = testCalls[0] || null;
+    const lintCall = lintCalls.at(-1) || null;
+    const testCall = testCalls.at(-1) || null;
+    const allCheckCalls = [...lintCalls, ...testCalls].sort((a, b) => a.start_ms - b.start_ms);
+    const firstCheckCall = allCheckCalls[0] || null;
+
+    let latestPromptMtimeMs = startMs;
+    for (const sub of ['prompts', 'user_stories']) {
+      const dir = join(armDir, sub);
+      if (!fs.existsSync(dir)) continue;
+      for (const name of fs.readdirSync(dir)) {
+        const st = fs.statSync(join(dir, name));
+        if (st.mtimeMs > latestPromptMtimeMs) latestPromptMtimeMs = st.mtimeMs;
       }
-      measuredReworkUsd = roundNum(authoringReworkShare + retryRuntimeUsd, 4);
     }
-  }
 
-  let existingTestsPass = false;
-  if (workload.tier === 'brownfield') {
-    const unitRes = run(process.execPath, ['--test', 'test/existing.test.mjs'], { cwd: armDir });
-    const promptsDir = join(armDir, 'prompts');
-    const storiesDir = join(armDir, 'user_stories');
-    let syncedExistingModule = false;
-    if (fs.existsSync(promptsDir)) {
-      const collectMd = dir => {
-        const files = [];
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          const full = join(dir, entry.name);
-          if (entry.isDirectory()) files.push(...collectMd(full));
-          else if (entry.isFile() && entry.name.endsWith('.prompt.md')) files.push(full);
+    const authoringEndMs = firstTestCall ? firstTestCall.start_ms : endMs;
+    const totalAuthoringSec = Math.max(0, (authoringEndMs - startMs) / 1000);
+    const promptOnlySec = Math.min(totalAuthoringSec, Math.max(0, (latestPromptMtimeMs - startMs) / 1000));
+    const postPromptSec = Math.max(0, totalAuthoringSec - promptOnlySec);
+
+    const parsedLint = lintCall
+      ? parseRuntimeCheckOutput(lintCall.stdout, lintCall.stderr, lintCall.exit_code)
+      : { status: 'not_run', exit_code: null };
+    const parsedTest = testCall
+      ? parseRuntimeCheckOutput(testCall.stdout, testCall.stderr, testCall.exit_code)
+      : { status: 'not_run', exit_code: null, refusal_codes: [], input_tokens: null, output_tokens: null, tokens_unreported: false };
+
+    // Measure live rework_usd: 0 when first-try lint & test pass with no retries, else post-first-check repair share + retry test tokens.
+    let measuredReworkUsd = null;
+    if (Number.isFinite(usage.authoring_usd) && firstCheckCall) {
+      const hadCheckFailureOrRetry = lintCalls.length > 1
+        || testCalls.length > 1
+        || allCheckCalls.some(c => c.exit_code !== 0);
+      if (!hadCheckFailureOrRetry) {
+        measuredReworkUsd = 0;
+      } else {
+        const totalSessionMs = Math.max(1, endMs - startMs);
+        const reworkWindowMs = Math.max(0, endMs - firstCheckCall.end_ms);
+        const authoringReworkShare = usage.authoring_usd * Math.min(1, reworkWindowMs / totalSessionMs);
+        let retryRuntimeUsd = 0;
+        for (const retryCall of testCalls.slice(1)) {
+          const parsedRetry = parseRuntimeCheckOutput(retryCall.stdout, retryCall.stderr, retryCall.exit_code);
+          if (Number.isFinite(parsedRetry.input_tokens) && Number.isFinite(parsedRetry.output_tokens)) {
+            retryRuntimeUsd += estimateTokenUsd({
+              uncachedInputTokens: parsedRetry.input_tokens,
+              cachedTokens: 0,
+              outputTokens: parsedRetry.output_tokens,
+            }) || 0;
+          }
         }
-        return files;
-      };
-      const promptFiles = collectMd(promptsDir);
-      syncedExistingModule = promptFiles.some(pf => {
-        const body = fs.readFileSync(pf, 'utf8');
-        return /\bsrc\/(?:catalog|orders|summary)\.mjs\b/.test(body) || /\b(?:catalog|orders|summary)\.prompt\.md\b/.test(pf);
-      });
+        measuredReworkUsd = roundNum(authoringReworkShare + retryRuntimeUsd, 4);
+      }
     }
-    const hasStory = fs.existsSync(storiesDir)
-      && fs.readdirSync(storiesDir).some(name => name.endsWith('.md'));
-    existingTestsPass = unitRes.code === 0
-      && syncedExistingModule
-      && hasStory
-      && parsedLint.status === 'pass'
-      && parsedTest.status === 'pass';
-  }
 
-  return normalizeWorkloadRecord({
-    workload: workload.id,
-    prompt_only_seconds: promptOnlySec,
-    post_prompt_pre_test_seconds: postPromptSec,
-    total_authoring_seconds: totalAuthoringSec,
-    existing_repo_sync_ready: existingTestsPass,
-    rework_usd: measuredReworkUsd,
-    ...usage,
-    skill_total_bytes: usage.skill_total_bytes || skillFootprint.total_bytes,
-    pdd_lint_status: {
-      status: parsedLint.status,
-      duration_seconds: lintCall ? lintCall.duration_s : null,
-      exit_code: parsedLint.exit_code,
-    },
-    pdd_test_status: {
-      ...parsedTest,
-      first_try_pass: firstTestCall
-        ? parseRuntimeCheckOutput(firstTestCall.stdout, firstTestCall.stderr, firstTestCall.exit_code).status === 'pass'
-        : false,
-      duration_seconds: testCall
-        ? roundNum(testCalls.reduce((sum, c) => sum + (Number(c.duration_s) || 0), 0), 2)
-        : null,
-    },
-  });
+    let existingTestsPass = false;
+    if (workload.tier === 'brownfield') {
+      const unitRes = run(process.execPath, ['--test', 'test/existing.test.mjs'], { cwd: armDir });
+      const promptsDir = join(armDir, 'prompts');
+      const storiesDir = join(armDir, 'user_stories');
+      let syncedExistingModule = false;
+      if (fs.existsSync(promptsDir)) {
+        const collectMd = dir => {
+          const files = [];
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = join(dir, entry.name);
+            if (entry.isDirectory()) files.push(...collectMd(full));
+            else if (entry.isFile() && entry.name.endsWith('.prompt.md')) files.push(full);
+          }
+          return files;
+        };
+        const promptFiles = collectMd(promptsDir);
+        syncedExistingModule = promptFiles.some(pf => {
+          const body = fs.readFileSync(pf, 'utf8');
+          return /\bsrc\/(?:catalog|orders|summary)\.mjs\b/.test(body) || /\b(?:catalog|orders|summary)\.prompt\.md\b/.test(pf);
+        });
+      }
+      const hasStory = fs.existsSync(storiesDir)
+        && fs.readdirSync(storiesDir).some(name => name.endsWith('.md'));
+      existingTestsPass = unitRes.code === 0
+        && syncedExistingModule
+        && hasStory
+        && parsedLint.status === 'pass'
+        && parsedTest.status === 'pass';
+    }
+
+    return normalizeWorkloadRecord({
+      workload: workload.id,
+      prompt_only_seconds: promptOnlySec,
+      post_prompt_pre_test_seconds: postPromptSec,
+      total_authoring_seconds: totalAuthoringSec,
+      existing_repo_sync_ready: existingTestsPass,
+      rework_usd: measuredReworkUsd,
+      ...usage,
+      skill_total_bytes: usage.skill_total_bytes || skillFootprint.total_bytes,
+      pdd_lint_status: {
+        status: parsedLint.status,
+        duration_seconds: lintCall ? lintCall.duration_s : null,
+        exit_code: parsedLint.exit_code,
+      },
+      pdd_test_status: {
+        ...parsedTest,
+        first_try_pass: firstTestCall
+          ? parseRuntimeCheckOutput(firstTestCall.stdout, firstTestCall.stderr, firstTestCall.exit_code).status === 'pass'
+          : false,
+        duration_seconds: testCall
+          ? roundNum(testCalls.reduce((sum, c) => sum + (Number(c.duration_s) || 0), 0), 2)
+          : null,
+      },
+    });
+  } finally {
+    try {
+      fs.rmSync(authVaultDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort temp auth cleanup.
+    }
+    if (!keepWorkDir) {
+      try {
+        fs.rmSync(armDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort workspace cleanup.
+      }
+    }
+  }
 }
 
 function readJsonFile(path, fs) {
@@ -708,8 +873,13 @@ export function runReleaseBenchmark(options = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const run = ports.run ?? nativeRun;
   const now = ports.now ?? Date.now;
+  const env = ports.env ?? options.env ?? process.env;
   const packageRoot = resolve(options.packageRoot || DEFAULT_ROOT);
   const pddBin = resolve(options.pddBin || join(packageRoot, 'bin/pdd.mjs'));
+
+  const regressionThresholdPct = options.regressionThresholdPct !== undefined
+    ? parsePositiveNumberFlag(options.regressionThresholdPct, '--regression-pct')
+    : 25;
 
   let candidate;
   if (options.candidateJson) {
@@ -725,9 +895,10 @@ export function runReleaseBenchmark(options = {}, ports = {}) {
       workloads: (raw.workloads || []).map(normalizeWorkloadRecord),
     };
   } else {
+    const fixtureKeys = Object.keys(options.fixtureDirs || {});
     const selectedIds = Array.isArray(options.workloads) && options.workloads.length
       ? options.workloads
-      : ['snake', '2048', 'task-manager'];
+      : [...new Set(['snake', '2048', 'task-manager', ...fixtureKeys])];
     const workloads = [];
     for (const id of selectedIds) {
       const spec = BENCHMARK_WORKLOADS[id];
@@ -748,6 +919,9 @@ export function runReleaseBenchmark(options = {}, ports = {}) {
           agentCommand: options.agentCommand,
           workDirRoot: options.workDirRoot,
           brownfieldSeedDir: options.brownfieldSeedDir,
+          keepWorkDir: Boolean(options.keepWorkDir),
+          shimTimeoutMs: options.shimTimeoutMs,
+          env,
           fs,
           run,
           now,
@@ -783,7 +957,7 @@ export function runReleaseBenchmark(options = {}, ports = {}) {
     : (options.historyJson ? readJsonFile(options.historyJson, fs) : []);
 
   const comparison = compareReleaseRuns(candidate, baseline, {
-    regressionThresholdPct: options.regressionThresholdPct ?? 25,
+    regressionThresholdPct,
   });
   const northStar = computeNorthStarScorecard({
     releaseRun: candidate,
@@ -830,28 +1004,36 @@ export function formatReleaseBenchmarkSummary(report) {
   return sanitizePublicText(lines.join('\n'));
 }
 
-function parseCliArgs(argv) {
+export function parseReleaseBenchmarkCliArgs(argv) {
   const opts = { workloads: [], fixtureDirs: {} };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--candidate') opts.candidateJson = argv[++i];
-    else if (arg === '--baseline') opts.baselineJson = argv[++i];
-    else if (arg === '--history') opts.historyJson = argv[++i];
-    else if (arg === '--package-root') opts.packageRoot = argv[++i];
-    else if (arg === '--pdd-bin') opts.pddBin = argv[++i];
-    else if (arg === '--brownfield-seed-dir') opts.brownfieldSeedDir = argv[++i];
-    else if (arg === '--workload') opts.workloads.push(argv[++i]);
+    if (arg === '--candidate') { opts.candidateJson = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--baseline') { opts.baselineJson = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--history') { opts.historyJson = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--package-root') { opts.packageRoot = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--pdd-bin') { opts.pddBin = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--brownfield-seed-dir') { opts.brownfieldSeedDir = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--workload') { opts.workloads.push(readCliFlagValue(argv, i, arg)); i++; }
     else if (arg === '--fixture') {
-      const pair = String(argv[++i] || '');
+      const pair = readCliFlagValue(argv, i, arg);
+      i++;
       const eq = pair.indexOf('=');
-      if (eq > 0) opts.fixtureDirs[pair.slice(0, eq)] = pair.slice(eq + 1);
-    } else if (arg === '--regression-pct') opts.regressionThresholdPct = Number(argv[++i]);
-    else if (arg === '--out') opts.outFile = argv[++i];
+      if (eq <= 0 || eq === pair.length - 1) {
+        throw new CliUsageError(`Invalid --fixture value "${pair}": expected ID=DIR`);
+      }
+      opts.fixtureDirs[pair.slice(0, eq)] = pair.slice(eq + 1);
+    } else if (arg === '--regression-pct') {
+      const raw = readCliFlagValue(argv, i, arg, { allowLeadingDash: true });
+      i++;
+      opts.regressionThresholdPct = parsePositiveNumberFlag(raw, arg);
+    } else if (arg === '--out') { opts.outFile = readCliFlagValue(argv, i, arg); i++; }
     else if (arg === '--execute') opts.execute = true;
+    else if (arg === '--keep-workdir') opts.keepWorkDir = true;
     else if (arg === '--json') opts.json = true;
     else if (arg === '--fail-on-regression') opts.failOnRegression = true;
     else if (arg === '--help' || arg === '-h') opts.help = true;
-    else throw new Error(`Unknown argument: ${arg}`);
+    else throw new CliUsageError(`Unknown argument: ${arg}`);
   }
   return opts;
 }
@@ -865,14 +1047,15 @@ const USAGE = `Usage: node scripts/benchmark/run-release-benchmark.mjs [options]
   --workload ID             Workload id (snake, 2048, task-manager, brownfield-repo-sync)
   --fixture ID=DIR          Run pdd lint and pdd test against an authored workspace
   --execute                 Launch live isolated agent authoring runs per workload
-  --regression-pct N        Advisory warning threshold percent (default: 25)
+  --keep-workdir            Keep temporary agent workspaces under tmpdir for inspection
+  --regression-pct N        Advisory warning threshold percent (default: 25; positive number)
   --out FILE                Write structured report JSON to FILE
   --json                    Print JSON report to stdout
 `;
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const opts = parseCliArgs(process.argv.slice(2));
+    const opts = parseReleaseBenchmarkCliArgs(process.argv.slice(2));
     if (opts.help) {
       process.stdout.write(USAGE);
       process.exit(0);
@@ -888,6 +1071,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
   } catch (err) {
     process.stderr.write(`Benchmark error: ${err.message}\n`);
-    process.exit(2);
+    process.exit(err?.exitCode === 2 ? 2 : 1);
   }
 }

@@ -19,7 +19,9 @@ import {
   executeLiveAgentWorkload,
   measureSkillsFootprint,
   parseAgentSessionUsage,
+  parseReleaseBenchmarkCliArgs,
   parseRuntimeCheckOutput,
+  resolveIsolatedCodexHome,
   runReleaseBenchmark,
   seedBrownfieldTemplate,
 } from '../scripts/benchmark/run-release-benchmark.mjs';
@@ -30,9 +32,11 @@ import {
   createReadOnlyGithubClient,
   evaluateQualityAndZeroEdit,
   observeRepository,
+  parseObserveCliArgs,
   runAutopilotObserve,
 } from '../scripts/benchmark/run-autopilot-observe.mjs';
 import {
+  parseRenderReportCliArgs,
   renderBenchmarkReport,
   renderSvgDualBarChart,
 } from '../scripts/benchmark/render-benchmark-report.mjs';
@@ -843,4 +847,358 @@ test('sanitizePublicText scrubs underscore-delimited hashes/UUIDs/URLs, SVG/HTML
   const bfScorecard = computeNorthStarScorecard({ releaseRun: { workloads: [bfRecord] } });
   assert.equal(bfScorecard.pdd_vs_direct_coding.large_codebases.rework_cost_reduction_pct, 100);
   assert.equal(bfScorecard.pdd_vs_direct_coding.large_codebases.meets_target, true);
+});
+
+test('executeLiveAgentWorkload removes temp workspace by default, honors keepWorkDir, isolates CODEX_HOME & GH_TOKEN, and bounds shim timeout', t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-bench-iso-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const fakeUserHome = join(root, 'user-home');
+  const dotCodex = join(fakeUserHome, '.codex');
+  const managedCodex = join(root, 'managed-codex-home');
+  mkdirSync(dotCodex, { recursive: true });
+  mkdirSync(managedCodex, { recursive: true });
+  writeFileSync(join(dotCodex, 'auth.json'), '{"personal":true}');
+  writeFileSync(join(managedCodex, 'auth.json'), '{"managed":true}');
+
+  // Refuses fallback to ~/.codex/auth.json when codex agent has no isolated PDD-managed CODEX_HOME
+  assert.throws(
+    () => resolveIsolatedCodexHome({
+      pddBin: '/fake/pdd.mjs',
+      baseEnv: { HOME: fakeUserHome, CODEX_HOME: dotCodex },
+      requireMaterialized: true,
+      run: () => ({ code: 1, stdout: '', stderr: '' }),
+    }),
+    /Refusing to run codex without an isolated PDD-managed CODEX_HOME/,
+  );
+
+  // Resolves isolated CODEX_HOME via pdd accounts status --json
+  const resolvedHome = resolveIsolatedCodexHome({
+    pddBin: '/fake/pdd.mjs',
+    baseEnv: { HOME: fakeUserHome },
+    requireMaterialized: true,
+    run: (_bin, args) => {
+      if (args.includes('status')) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({ codex_home: { path: managedCodex, materialized: true, auth_present: true } }),
+          stderr: '',
+        };
+      }
+      return { code: 1, stdout: '', stderr: '' };
+    },
+  });
+  assert.equal(resolvedHome, resolve(managedCodex));
+
+  // Real subprocess shim check: strips GH_TOKEN/GITHUB_TOKEN from agent, restores only for hosted lint/test, enforces shimTimeoutMs, cleans armDir
+  const workDirRoot = join(root, 'workspaces');
+  mkdirSync(workDirRoot, { recursive: true });
+
+  const fakePdd = join(root, 'fake-pdd.mjs');
+  writeFileSync(fakePdd, [
+    'const args = process.argv.slice(2);',
+    'if (args[0] === "accounts" && args[1] === "sync") { process.exit(0); }',
+    'if (args[0] === "accounts" && args[1] === "status") {',
+    `  console.log(JSON.stringify({ codex_home: { path: ${JSON.stringify(managedCodex)}, materialized: true, auth_present: true } }));`,
+    '  process.exit(0);',
+    '}',
+    'if (args[0] === "lint" && args.includes("--local")) {',
+    '  console.log("LOCAL_GH=" + (process.env.GH_TOKEN || "NONE"));',
+    '  process.exit(0);',
+    '}',
+    'if (args[0] === "lint") {',
+    '  console.log("HOSTED_LINT_GH=" + (process.env.GH_TOKEN || "NONE") + " PASS");',
+    '  process.exit(0);',
+    '}',
+    'if (args[0] === "test" && args.includes("--hang")) {',
+    '  setTimeout(() => {}, 10000);',
+    '} else if (args[0] === "test") {',
+    '  console.log("HOSTED_TEST_GH=" + (process.env.GH_TOKEN || "NONE") + " · 500 input tokens · 120 output tokens · 1 AI call");',
+    '  process.exit(0);',
+    '}',
+  ].join('\n'));
+
+  const envDumpFile = join(root, 'agent-env.json');
+  const fakeAgent = join(root, 'fake-agent.mjs');
+  writeFileSync(fakeAgent, [
+    "import { spawnSync } from 'node:child_process';",
+    "import { writeFileSync } from 'node:fs';",
+    `writeFileSync(${JSON.stringify(envDumpFile)}, JSON.stringify({`,
+    '  GH_TOKEN: process.env.GH_TOKEN ?? null,',
+    '  GITHUB_TOKEN: process.env.GITHUB_TOKEN ?? null,',
+    '  GH_ENTERPRISE_TOKEN: process.env.GH_ENTERPRISE_TOKEN ?? null,',
+    '  GITHUB_ENTERPRISE_TOKEN: process.env.GITHUB_ENTERPRISE_TOKEN ?? null,',
+    '  CODEX_HOME: process.env.CODEX_HOME ?? null,',
+    '}));',
+    "const localLint = spawnSync('pdd', ['lint', '--local'], { encoding: 'utf8', env: process.env });",
+    "const hostedLint = spawnSync('pdd', ['lint'], { encoding: 'utf8', env: process.env });",
+    "const hungTest = spawnSync('pdd', ['test', '--hang'], { encoding: 'utf8', env: process.env });",
+    "const hostedTest = spawnSync('pdd', ['test'], { encoding: 'utf8', env: process.env });",
+    `writeFileSync(${JSON.stringify(join(root, 'shim-results.json'))}, JSON.stringify({`,
+    '  localOut: localLint.stdout.trim(),',
+    '  hostedLintOut: hostedLint.stdout.trim(),',
+    '  hungExit: hungTest.status,',
+    '  hungStderr: hungTest.stderr,',
+    '  hostedTestOut: hostedTest.stdout.trim(),',
+    '}));',
+    'console.log(JSON.stringify({ usage: { input_tokens: 1000, cached_input_tokens: 500, output_tokens: 100 } }));',
+  ].join('\n'));
+
+  const rec = executeLiveAgentWorkload({
+    workload: BENCHMARK_WORKLOADS.snake,
+    pddBin: fakePdd,
+    packageRoot: root,
+    workDirRoot,
+    shimTimeoutMs: 120,
+    agentCommand: [process.execPath, fakeAgent],
+    env: {
+      ...process.env,
+      HOME: fakeUserHome,
+      GH_TOKEN: 'ghp_SecretBenchTokenValue12345',
+      GITHUB_TOKEN: 'gho_SecretBenchTokenValue67890',
+      GH_ENTERPRISE_TOKEN: 'ghp_EnterpriseSecret12345',
+      GITHUB_ENTERPRISE_TOKEN: 'ghp_EnterpriseSecret67890',
+    },
+  });
+
+  const agentSeenEnv = JSON.parse(readFileSync(envDumpFile, 'utf8'));
+  assert.equal(agentSeenEnv.GH_TOKEN, null);
+  assert.equal(agentSeenEnv.GITHUB_TOKEN, null);
+  assert.equal(agentSeenEnv.GH_ENTERPRISE_TOKEN, null);
+  assert.equal(agentSeenEnv.GITHUB_ENTERPRISE_TOKEN, null);
+  assert.equal(agentSeenEnv.CODEX_HOME, resolve(managedCodex));
+
+  const shimResults = JSON.parse(readFileSync(join(root, 'shim-results.json'), 'utf8'));
+  assert.equal(shimResults.localOut, 'LOCAL_GH=NONE');
+  assert.ok(shimResults.hostedLintOut.includes('HOSTED_LINT_GH=ghp_SecretBenchTokenValue12345'));
+  assert.equal(shimResults.hungExit, 124);
+  assert.match(shimResults.hungStderr, /timed out/);
+  assert.ok(shimResults.hostedTestOut.includes('HOSTED_TEST_GH=ghp_SecretBenchTokenValue12345'));
+  assert.equal(rec.pdd_test_status.status, 'pass');
+  assert.equal(rec.pdd_test_status.input_tokens, 500);
+  assert.equal(rec.pdd_test_status.output_tokens, 120);
+
+  // Default run cleaned up temporary armDir under workDirRoot
+  const remainingDefault = spawnSync(process.execPath, ['-e', `import fs from "node:fs"; console.log(JSON.stringify(fs.readdirSync(${JSON.stringify(workDirRoot)})));`], { encoding: 'utf8' });
+  assert.deepEqual(JSON.parse(remainingDefault.stdout), []);
+
+  // Even when agent throws, armDir is removed unless keepWorkDir is true
+  assert.throws(() => executeLiveAgentWorkload({
+    workload: BENCHMARK_WORKLOADS.snake,
+    pddBin: fakePdd,
+    packageRoot: root,
+    workDirRoot,
+    agentCommand: ['fake-throwing-agent'],
+    env: { HOME: fakeUserHome },
+    run: bin => {
+      if (bin === 'fake-throwing-agent') throw new Error('boom');
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  }), /boom/);
+  const remainingAfterThrow = spawnSync(process.execPath, ['-e', `import fs from "node:fs"; console.log(JSON.stringify(fs.readdirSync(${JSON.stringify(workDirRoot)})));`], { encoding: 'utf8' });
+  assert.deepEqual(JSON.parse(remainingAfterThrow.stdout), []);
+
+  // keepWorkDir: true preserves armDir for inspection
+  executeLiveAgentWorkload({
+    workload: BENCHMARK_WORKLOADS.snake,
+    pddBin: fakePdd,
+    packageRoot: root,
+    workDirRoot,
+    keepWorkDir: true,
+    agentCommand: [process.execPath, '-e', 'process.exit(0)'],
+    env: { ...process.env, HOME: fakeUserHome },
+  });
+  const keptDirs = JSON.parse(spawnSync(process.execPath, ['-e', `import fs from "node:fs"; console.log(JSON.stringify(fs.readdirSync(${JSON.stringify(workDirRoot)})));`], { encoding: 'utf8' }).stdout);
+  assert.equal(keptDirs.length, 1);
+});
+
+test('parseRuntimeCheckOutput ignores bare in/out prose and 0 native-only while parsing explicit & paired token counts', () => {
+  const proseFalsePositive = parseRuntimeCheckOutput(
+    '1 out of 2 stories passed · error at line 2 in prompts/app.prompt.md · Interpreter coverage: 1 of 1 prompts checkable, 0 native-only · 2 AI calls',
+    '',
+    0,
+  );
+  assert.equal(proseFalsePositive.status, 'pass');
+  assert.deepEqual(proseFalsePositive.refusal_codes, []);
+  assert.equal(proseFalsePositive.input_tokens, null);
+  assert.equal(proseFalsePositive.output_tokens, null);
+  assert.equal(proseFalsePositive.tokens_unreported, true);
+
+  const paired = parseRuntimeCheckOutput('PASS · 12,500 in / 850 out tokens · 2 AI calls', '', 0);
+  assert.equal(paired.input_tokens, 12500);
+  assert.equal(paired.output_tokens, 850);
+  assert.equal(paired.tokens_unreported, false);
+
+  const runtimeUsage = parseRuntimeCheckOutput(
+    'Token usage: 14819 input (0 cached, 0.0%) · 762 output\n1 of 1 stories passed · 2 AI calls',
+    '',
+    0,
+  );
+  assert.equal(runtimeUsage.input_tokens, 14819);
+  assert.equal(runtimeUsage.output_tokens, 762);
+  assert.equal(runtimeUsage.tokens_unreported, false);
+
+  const explicitKv = parseRuntimeCheckOutput('tokens_in: 4200, tokens_out=310 · 1 AI call', '', 0);
+  assert.equal(explicitKv.input_tokens, 4200);
+  assert.equal(explicitKv.output_tokens, 310);
+  assert.equal(explicitKv.tokens_unreported, false);
+});
+
+test('renderBenchmarkReport redacts non-allowlisted repositories by default and scrubs credential tokens', () => {
+  const ghp = `ghp_${'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'}`;
+  const gho = `gho_${'Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2'}`;
+  const pat = `github_pat_${'11ABCDEFG_0123456789abcdefXYZ987654321'}`;
+  const sk = `sk-proj-${'AbCdEfGhIjKlMnOpQrStUvWxYz123456'}`;
+  const bearer = 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.secretpayload';
+
+  for (const secret of [ghp, gho, pat, sk, bearer]) {
+    assert.throws(() => assertCleanPublicText(secret), /Forbidden/);
+    const scrubbed = sanitizePublicText(`Header: ${secret}`);
+    assertCleanPublicText(scrubbed);
+    assert.ok(!scrubbed.includes(secret.replace(/^Bearer\s+/, '')));
+  }
+
+  const runs = [
+    {
+      repo: 'promptdriven/pdd',
+      date: '2026-11-16',
+      mutations: 0,
+      repo_open_issues: 47,
+      eligible_issues: 16,
+      taken_pct: 34,
+      skipped_by_reason: {},
+      dispatch_plan: { selected: [{ slot: 1, issue: 100, areas: ['src/cli.mjs'], companions: [] }] },
+      api_calls: 10,
+      etag_hit_rate: 0.8,
+      latency_ms: 300,
+      quality: { evaluated_runs: 10, zero_edit_merged_runs: 9, zero_edit_completion_pct: 90, reopened_7d: 0 },
+    },
+    {
+      repo: 'stealth-org/internal-pocket',
+      date: '2026-11-16',
+      mutations: 0,
+      repo_open_issues: 25,
+      eligible_issues: 8,
+      taken_pct: 32,
+      skipped_by_reason: {},
+      dispatch_plan: {
+        selected: [{ slot: 1, issue: 7, areas: ['https://github.com/stealth-org/internal-pocket/issues/7'], companions: [] }],
+      },
+      api_calls: 5,
+      etag_hit_rate: 1.0,
+      latency_ms: 150,
+      quality: { evaluated_runs: 5, zero_edit_merged_runs: 4, zero_edit_completion_pct: 80, reopened_7d: 0 },
+    },
+  ];
+
+  // Default allowlist shows promptdriven/pdd and redacts stealth-org/internal-pocket to private-repo-1 with no link
+  const defaultHtml = renderBenchmarkReport({ observeRuns: runs, subtitle: `Token leak test ${ghp}` });
+  assert.ok(defaultHtml.includes('https://github.com/promptdriven/pdd'));
+  assert.ok(defaultHtml.includes('private-repo-1'));
+  assert.ok(!defaultHtml.includes('stealth-org'));
+  assert.ok(!defaultHtml.includes('internal-pocket'));
+  assert.ok(!defaultHtml.includes('https://github.com/private-repo-1'));
+  assertCleanPublicText(defaultHtml);
+
+  // Explicit allowlist includes opted-in public repository
+  const optedInHtml = renderBenchmarkReport({
+    observeRuns: runs,
+    publicRepos: ['promptdriven/pdd', 'stealth-org/internal-pocket'],
+  });
+  assert.ok(optedInHtml.includes('https://github.com/stealth-org/internal-pocket'));
+});
+
+test('CLI validation rejects missing/bad flag values with exit 2, runtime missing files exit 1, --fixture updates selectedIds, and observe saves ETags on partial error', t => {
+  const tmp = mkdtempSync(join(tmpdir(), 'pdd-cli-val-'));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+
+  // Unit-level parser checks
+  assert.throws(() => parseReleaseBenchmarkCliArgs(['--candidate']), /Missing value/);
+  assert.throws(() => parseReleaseBenchmarkCliArgs(['--candidate', '--json']), /Missing value/);
+  assert.throws(() => parseReleaseBenchmarkCliArgs(['--regression-pct', '0']), /positive number/);
+  assert.throws(() => parseReleaseBenchmarkCliArgs(['--regression-pct', '-5']), /positive number/);
+  assert.throws(() => parseReleaseBenchmarkCliArgs(['--regression-pct', 'abc']), /positive number/);
+  assert.throws(() => parseObserveCliArgs(['--slots', '0']), /positive integer/);
+  assert.throws(() => parseObserveCliArgs(['--slots', '-2']), /positive integer/);
+  assert.throws(() => parseObserveCliArgs(['--slots', '2.5']), /positive integer/);
+  assert.throws(() => parseObserveCliArgs(['--repo']), /Missing value/);
+  assert.throws(() => parseRenderReportCliArgs(['--observe-jsonl']), /Missing value/);
+
+  // Process exit code checks: 2 for bad flags vs 1 for runtime errors (e.g. missing --observe-jsonl)
+  const badFlagRes = spawnSync(
+    process.execPath,
+    [resolve('scripts/benchmark/run-release-benchmark.mjs'), '--regression-pct', 'NaN'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(badFlagRes.status, 2);
+
+  const badSlotsRes = spawnSync(
+    process.execPath,
+    [resolve('scripts/benchmark/run-autopilot-observe.mjs'), '--slots', '0'],
+    { encoding: 'utf8' },
+  );
+  assert.equal(badSlotsRes.status, 2);
+
+  const missingObserveRes = spawnSync(
+    process.execPath,
+    [
+      resolve('scripts/benchmark/render-benchmark-report.mjs'),
+      '--observe-jsonl',
+      join(tmp, 'does-not-exist.jsonl'),
+      '--out',
+      join(tmp, 'out.html'),
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.equal(missingObserveRes.status, 1);
+  assert.match(missingObserveRes.stderr, /does not exist/);
+
+  // --fixture keys are included in selectedIds even when --workload is omitted
+  const bfFixtureDir = join(tmp, 'bf-fixture');
+  mkdirSync(bfFixtureDir, { recursive: true });
+  const seenFixtures = [];
+  const fixtureReport = runReleaseBenchmark(
+    { fixtureDirs: { 'brownfield-repo-sync': bfFixtureDir } },
+    {
+      run: (_bin, args, opts) => {
+        seenFixtures.push({ sub: args[1], cwd: opts.cwd });
+        return { code: 0, stdout: 'PASS · 300 input tokens · 80 output tokens · 1 AI call', stderr: '' };
+      },
+    },
+  );
+  assert.ok(fixtureReport.candidate.workloads.some(w => w.workload === 'brownfield-repo-sync' && w.pdd_test_status.status === 'pass'));
+  assert.equal(seenFixtures.filter(x => x.cwd === resolve(bfFixtureDir)).length, 2);
+
+  // runAutopilotObserve omits local home path from jsonl_path and persists ETag cache in finally when repo #2 fails
+  const stateDir = join(tmp, 'observe-state');
+  const okBatch = runAutopilotObserve(
+    { repos: ['promptdriven/pdd'], stateDir },
+    {
+      exec: (_cmd, args) => {
+        const ep = args.find(a => a.startsWith('repos/')) || '';
+        return { code: 0, stdout: `HTTP/2.0 200 OK\r\nEtag: W/"tag-${ep.slice(0, 12)}"\r\n\r\n[]`, stderr: '' };
+      },
+      localContextFactory: () => ({ historyRows: [], intakeCardsByIssue: new Map(), mainFixedIssues: new Set() }),
+    },
+  );
+  assert.equal(okBatch.jsonl_path, 'observe-runs.jsonl');
+  assert.ok(!JSON.stringify(okBatch).includes(stateDir));
+
+  const partialStateDir = join(tmp, 'partial-state');
+  assert.throws(
+    () => runAutopilotObserve(
+      { repos: ['promptdriven/pdd', 'promptdriven/failing-repo'], stateDir: partialStateDir },
+      {
+        exec: (_cmd, args) => {
+          const ep = args.find(a => a.startsWith('repos/')) || '';
+          if (ep.includes('failing-repo')) throw new Error('simulated network failure on second repo');
+          return { code: 0, stdout: 'HTTP/2.0 200 OK\r\nEtag: W/"saved-from-first-repo"\r\n\r\n[]', stderr: '' };
+        },
+        localContextFactory: () => ({ historyRows: [], intakeCardsByIssue: new Map(), mainFixedIssues: new Set() }),
+      },
+    ),
+    /simulated network failure/,
+  );
+  const savedEtags = readFileSync(join(partialStateDir, 'observe-etags.json'), 'utf8');
+  assert.ok(savedEtags.includes('saved-from-first-repo'));
 });

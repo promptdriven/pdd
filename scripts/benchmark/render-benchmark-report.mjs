@@ -6,11 +6,76 @@ import * as nativeFs from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  CliUsageError,
   assertCleanPublicText,
   computeNorthStarScorecard,
+  readCliFlagValue,
   roundNum,
   sanitizePublicText,
 } from './scorecard.mjs';
+
+export const DEFAULT_PUBLIC_REPOS = Object.freeze(['promptdriven/pdd']);
+const SAFE_REPO_SLUG_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function redactObserveRepositories(observeRuns = [], publicRepos = DEFAULT_PUBLIC_REPOS) {
+  const effectiveAllow = Array.isArray(publicRepos) ? publicRepos : DEFAULT_PUBLIC_REPOS;
+  const allowSet = new Set(effectiveAllow.map(r => String(r || '').trim().toLowerCase()).filter(Boolean));
+  const aliasBySlug = new Map();
+  let nextIdx = 1;
+
+  const aliasFor = rawSlug => {
+    const slug = String(rawSlug || '').trim();
+    if (!slug) return 'private-repo';
+    const lower = slug.toLowerCase();
+    if (allowSet.has(lower)) return slug;
+    if (!aliasBySlug.has(lower)) {
+      aliasBySlug.set(lower, `private-repo-${nextIdx++}`);
+    }
+    return aliasBySlug.get(lower);
+  };
+
+  for (const row of Array.isArray(observeRuns) ? observeRuns : []) {
+    if (row && typeof row.repo === 'string' && row.repo.trim()) {
+      aliasFor(row.repo);
+    }
+  }
+
+  const scrubRepoRefsInValue = node => {
+    if (typeof node === 'string') {
+      let text = node.replace(
+        /https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:\/[^\s"'<>)]*)?/gi,
+        (full, slug) => (allowSet.has(String(slug).toLowerCase()) ? full : aliasFor(slug)),
+      );
+      for (const [lowerSlug, alias] of aliasBySlug.entries()) {
+        text = text.replace(new RegExp(escapeRegExp(lowerSlug), 'gi'), alias);
+      }
+      return text;
+    }
+    if (Array.isArray(node)) return node.map(scrubRepoRefsInValue);
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(node)) {
+        out[scrubRepoRefsInValue(k)] = scrubRepoRefsInValue(v);
+      }
+      return out;
+    }
+    return node;
+  };
+
+  const runs = (Array.isArray(observeRuns) ? observeRuns : []).map(row => {
+    if (!row || typeof row !== 'object') return row;
+    const mappedRepo = typeof row.repo === 'string' && row.repo.trim()
+      ? aliasFor(row.repo)
+      : row.repo;
+    return scrubRepoRefsInValue({ ...row, repo: mappedRepo });
+  });
+
+  return { runs, allowSet, scrubText: text => scrubRepoRefsInValue(String(text ?? '')) };
+}
 
 function esc(value) {
   return sanitizePublicText(String(value ?? ''))
@@ -159,9 +224,11 @@ function parseJsonl(text = '') {
 export function renderBenchmarkReport({
   releaseReport = null,
   observeRuns = [],
+  publicRepos = DEFAULT_PUBLIC_REPOS,
   title = 'PDD Release Benchmark & Autopilot Daily Observe Scorecard',
   subtitle = null,
 } = {}) {
+  const { runs: safeObserveRuns, allowSet, scrubText } = redactObserveRepositories(observeRuns, publicRepos);
   const candidate = releaseReport?.candidate || null;
   const baseline = releaseReport?.baseline || null;
   const history = Array.isArray(releaseReport?.history) && releaseReport.history.length
@@ -170,13 +237,13 @@ export function renderBenchmarkReport({
   const comparison = releaseReport?.comparison || { advisory_warning_count: 0, warnings: [] };
   const northStar = computeNorthStarScorecard({
     releaseRun: candidate,
-    observeRuns,
+    observeRuns: safeObserveRuns,
   });
 
   const bar1 = northStar.pdd_vs_direct_coding;
   const bar2 = northStar.autopilot_zero_edit;
 
-  const generatedDate = (candidate?.date || observeRuns[observeRuns.length - 1]?.date || new Date().toISOString().slice(0, 10));
+  const generatedDate = (candidate?.date || safeObserveRuns[safeObserveRuns.length - 1]?.date || new Date().toISOString().slice(0, 10));
   const subLine = subtitle || `Prepared ${generatedDate} · Tracks locked next-month investor North-Star targets, release authoring/runtime trends, and live read-only Autopilot observe telemetry.`;
 
   // Build Part A SVG charts from history
@@ -249,7 +316,7 @@ export function renderBenchmarkReport({
 
   // Build Part B Autopilot Observe SVG charts
   const latestByRepo = new Map();
-  for (const r of observeRuns) {
+  for (const r of safeObserveRuns) {
     if (r?.repo) latestByRepo.set(r.repo, r);
   }
   const latestObserve = [...latestByRepo.values()];
@@ -317,7 +384,6 @@ export function renderBenchmarkReport({
     : '<p><span class="pill ok">CLEAN</span> Zero release regressions flagged against baseline threshold.</p>';
 
   // Observe table rows
-  const safeRepoSlugRe = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
   const observeRowsHtml = latestObserve.map(r => {
     const repoNs = bar2.repos.find(x => x.repo === r.repo) || null;
     const sk = r.skipped_by_reason || {};
@@ -341,7 +407,8 @@ export function renderBenchmarkReport({
       ? ` · ${obsPct}% incl. ${wouldMergeClean} observe would-merge`
       : '';
     const repoSlug = String(r.repo || '');
-    const repoCell = safeRepoSlugRe.test(repoSlug)
+    const isPublicAllowed = allowSet.has(repoSlug.toLowerCase()) && SAFE_REPO_SLUG_RE.test(repoSlug);
+    const repoCell = isPublicAllowed
       ? `<a href="https://github.com/${esc(repoSlug)}">${esc(repoSlug)}</a>`
       : esc(repoSlug);
     return `
@@ -549,49 +616,72 @@ export function renderBenchmarkReport({
 </html>
 `;
 
-  const sanitized = sanitizePublicText(html);
+  const sanitized = sanitizePublicText(scrubText(html));
   return assertCleanPublicText(sanitized, 'HTML benchmark dashboard');
 }
 
-function parseCliArgs(argv) {
-  const opts = {};
+export function parseRenderReportCliArgs(argv) {
+  const opts = { publicRepos: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--release-json') opts.releaseJson = argv[++i];
-    else if (arg === '--observe-jsonl') opts.observeJsonl = argv[++i];
-    else if (arg === '--title') opts.title = argv[++i];
-    else if (arg === '--subtitle') opts.subtitle = argv[++i];
-    else if (arg === '--out') opts.outFile = argv[++i];
+    if (arg === '--release-json') { opts.releaseJson = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--observe-jsonl') { opts.observeJsonl = readCliFlagValue(argv, i, arg); i++; }
+    else if (arg === '--public-repo') {
+      const slug = readCliFlagValue(argv, i, arg);
+      i++;
+      if (!SAFE_REPO_SLUG_RE.test(slug)) {
+        throw new CliUsageError(`Invalid --public-repo slug "${slug}": expected OWNER/REPO`);
+      }
+      if (!opts.publicRepos) opts.publicRepos = [];
+      opts.publicRepos.push(slug);
+    } else if (arg === '--title') { opts.title = readCliFlagValue(argv, i, arg, { allowLeadingDash: true }); i++; }
+    else if (arg === '--subtitle') { opts.subtitle = readCliFlagValue(argv, i, arg, { allowLeadingDash: true }); i++; }
+    else if (arg === '--out') { opts.outFile = readCliFlagValue(argv, i, arg); i++; }
     else if (arg === '--help' || arg === '-h') opts.help = true;
-    else throw new Error(`Unknown argument: ${arg}`);
+    else throw new CliUsageError(`Unknown argument: ${arg}`);
   }
   return opts;
 }
 
 const USAGE = `Usage: node scripts/benchmark/render-benchmark-report.mjs [options]
-  --release-json FILE     Release benchmark JSON from run-release-benchmark.mjs
-  --observe-jsonl FILE    JSONL file of Autopilot observe runs from run-autopilot-observe.mjs
-  --title TEXT            Custom HTML report title
-  --subtitle TEXT         Custom HTML subtitle
-  --out FILE              Output self-contained HTML file path (required)
+  --release-json FILE       Release benchmark JSON from run-release-benchmark.mjs
+  --observe-jsonl FILE      JSONL file of Autopilot observe runs from run-autopilot-observe.mjs
+  --public-repo OWNER/REPO  Allowlist public repository in HTML output (repeatable; default: promptdriven/pdd)
+  --title TEXT              Custom HTML report title
+  --subtitle TEXT           Custom HTML subtitle
+  --out FILE                Output self-contained HTML file path (required)
 `;
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const opts = parseCliArgs(process.argv.slice(2));
-    if (opts.help || !opts.outFile) {
+    const opts = parseRenderReportCliArgs(process.argv.slice(2));
+    if (opts.help) {
       process.stdout.write(USAGE);
-      process.exit(opts.help ? 0 : 2);
+      process.exit(0);
     }
-    const releaseReport = opts.releaseJson
-      ? JSON.parse(nativeFs.readFileSync(resolve(opts.releaseJson), 'utf8'))
-      : null;
-    const observeRuns = opts.observeJsonl && nativeFs.existsSync(resolve(opts.observeJsonl))
-      ? parseJsonl(nativeFs.readFileSync(resolve(opts.observeJsonl), 'utf8'))
-      : [];
+    if (!opts.outFile) {
+      throw new CliUsageError('Missing required --out FILE argument');
+    }
+    let releaseReport = null;
+    if (opts.releaseJson) {
+      const relPath = resolve(opts.releaseJson);
+      if (!nativeFs.existsSync(relPath)) {
+        throw new Error(`Release JSON file does not exist: ${relPath}`);
+      }
+      releaseReport = JSON.parse(nativeFs.readFileSync(relPath, 'utf8'));
+    }
+    let observeRuns = [];
+    if (opts.observeJsonl) {
+      const obsPath = resolve(opts.observeJsonl);
+      if (!nativeFs.existsSync(obsPath)) {
+        throw new Error(`Observe JSONL file does not exist: ${obsPath}`);
+      }
+      observeRuns = parseJsonl(nativeFs.readFileSync(obsPath, 'utf8'));
+    }
     const html = renderBenchmarkReport({
       releaseReport,
       observeRuns,
+      publicRepos: opts.publicRepos ?? DEFAULT_PUBLIC_REPOS,
       title: opts.title,
       subtitle: opts.subtitle,
     });
@@ -601,6 +691,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.stdout.write(`Wrote clean benchmark dashboard to ${outPath} (${Buffer.byteLength(html, 'utf8').toLocaleString()} bytes)\n`);
   } catch (err) {
     process.stderr.write(`Render report error: ${err.message}\n`);
-    process.exit(2);
+    process.exit(err?.exitCode === 2 ? 2 : 1);
   }
 }

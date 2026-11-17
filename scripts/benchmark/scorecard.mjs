@@ -91,15 +91,53 @@ export function estimateTokenUsd({
 
 export const REQUIRED_SMALL_WORKLOADS = Object.freeze(['snake', '2048', 'task-manager']);
 
-// Match hex commit/receipt hashes (40-64 hex chars), commit URLs, labeled/bare short SHAs, and UUIDs.
+// Match credential tokens, hex commit/receipt hashes (40-64 hex chars), commit URLs, labeled/bare short SHAs, and UUIDs.
+const GITHUB_TOKEN_RE = /\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g;
+const SK_TOKEN_RE = /\bsk-[A-Za-z0-9_-]{12,}\b/g;
+const BEARER_TOKEN_RE = /\bBearer\s+(?!redacted-token\b)\S+/gi;
 const UUID_RE = /(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])/gi;
 const SHA40_RE = /(?<![0-9a-f])[0-9a-f]{40,64}(?![0-9a-f])/gi;
 const COMMIT_URL_RE = /\/commits?\/[0-9a-f]{7,64}(?![0-9a-f])/gi;
 const HEAD_HEX_RE = /\b(head|at|commit|rev|revision|sha)(\s*[:=]\s*|\s+)[0-9a-f]{7,64}(?![0-9a-f])/gi;
 const BARE_SHORT_HEX_RE = /(?<![#0-9a-z_.-])(?=[0-9a-f]*[a-f])(?=[0-9a-f]*[0-9])[0-9a-f]{7,64}(?![0-9a-z_.-])/gi;
 
+export class CliUsageError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'CliUsageError';
+    this.exitCode = 2;
+  }
+}
+
+export function readCliFlagValue(argv, index, flag, { allowLeadingDash = false } = {}) {
+  const next = argv[index + 1];
+  if (
+    next === undefined
+    || next === ''
+    || next === '-h'
+    || next === '--help'
+    || (allowLeadingDash ? next.startsWith('--') : next.startsWith('-'))
+  ) {
+    throw new CliUsageError(`Missing value for ${flag}`);
+  }
+  return next;
+}
+
+export function parsePositiveNumberFlag(rawValue, flag, { integer = false } = {}) {
+  const num = Number(rawValue);
+  if (!Number.isFinite(num) || num <= 0 || (integer && !Number.isInteger(num))) {
+    throw new CliUsageError(
+      `Invalid value for ${flag}: expected a positive ${integer ? 'integer' : 'number'}, got "${rawValue}"`,
+    );
+  }
+  return num;
+}
+
 export function sanitizePublicText(value) {
   return String(value ?? '')
+    .replace(GITHUB_TOKEN_RE, 'redacted-token')
+    .replace(SK_TOKEN_RE, 'redacted-token')
+    .replace(BEARER_TOKEN_RE, 'Bearer redacted-token')
     .replace(UUID_RE, 'redacted-id')
     .replace(SHA40_RE, 'redacted-ref')
     .replace(COMMIT_URL_RE, '/commit/redacted-ref')
@@ -108,6 +146,7 @@ export function sanitizePublicText(value) {
 }
 
 const SENSITIVE_REF_KEY_RE = /(?:^|[_-])(?:commit|commits|sha|rev|revision|head|hash|receipt|run_id|runid|version)(?:$|[_-])/i;
+const SENSITIVE_SECRET_KEY_RE = /(?:^|[_-])(?:auth_token|access_token|github_token|gh_token|secret|password|authorization|api_key|apikey)(?:$|[_-])/i;
 const SHORT_HEX_VALUE_RE = /^[0-9a-f]{7,64}$/i;
 
 function isSensitiveRefKey(key = '') {
@@ -115,8 +154,16 @@ function isSensitiveRefKey(key = '') {
   return SENSITIVE_REF_KEY_RE.test(norm);
 }
 
+function isSensitiveSecretKey(key = '') {
+  const norm = String(key).replace(/([a-z0-9])([A-Z])/g, '$1_$2');
+  return SENSITIVE_SECRET_KEY_RE.test(norm);
+}
+
 export function sanitizePublicData(node, parentKey = '') {
   if (typeof node === 'string') {
+    if (parentKey && isSensitiveSecretKey(parentKey) && node.trim()) {
+      return 'redacted-token';
+    }
     if (parentKey && isSensitiveRefKey(parentKey) && SHORT_HEX_VALUE_RE.test(node.trim())) {
       return 'redacted-ref';
     }
@@ -135,12 +182,18 @@ export function sanitizePublicData(node, parentKey = '') {
 
 export function assertCleanPublicText(value, label = 'output') {
   const text = String(value ?? '');
-  const sha = text.match(SHA40_RE);
-  if (sha) throw new Error(`Forbidden commit/receipt hash in ${label}: ${sha[0]}`);
-  const commitUrl = text.match(COMMIT_URL_RE);
-  if (commitUrl) throw new Error(`Forbidden commit URL hash in ${label}: ${commitUrl[0]}`);
-  const uuid = text.match(UUID_RE);
-  if (uuid) throw new Error(`Forbidden UUID in ${label}: ${uuid[0]}`);
+  for (const [kind, re] of [
+    ['credential token', GITHUB_TOKEN_RE],
+    ['API secret key', SK_TOKEN_RE],
+    ['Bearer token', BEARER_TOKEN_RE],
+    ['commit/receipt hash', SHA40_RE],
+    ['commit URL hash', COMMIT_URL_RE],
+    ['UUID', UUID_RE],
+  ]) {
+    re.lastIndex = 0;
+    const match = re.exec(text);
+    if (match) throw new Error(`Forbidden ${kind} in ${label}: ${match[0]}`);
+  }
   return text;
 }
 
