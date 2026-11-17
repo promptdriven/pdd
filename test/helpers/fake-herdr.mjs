@@ -72,11 +72,27 @@ export function fakeHerdr() {
       const kind = / claude /.test(command) ? 'claude' : / codex /.test(command) ? 'codex' : / gemini /.test(command) ? 'gemini' : / agy /.test(command) ? 'agy' : null;
       const session = command.match(/--(?:session-id|resume) '?([0-9a-f-]{36})/)?.[1] ?? command.match(/ resume '?([0-9a-f-]{36})/)?.[1] ?? `00000000-0000-4000-8000-${String(h.nextSession++).padStart(12, '0')}`;
       p.commands = [...(p.commands ?? []), command];
+      if (h.fishUnsubmitted) {
+        p.pendingLaunch = { kind, session };
+        p.screen = h.fishUnsubmitted === 'wrap80' ? (() => { const line = `user@host ~> ${command}`, splitAt = line.indexOf('PDD_AGENT_') + 10; return `${line.slice(0, splitAt)}\n${(line.slice(splitAt).match(/.{1,80}/g) ?? []).join('\n')}`; })() : typeof h.fishUnsubmitted === 'string' ? h.fishUnsubmitted : `user@host ~> ${command}`;
+        return {};
+      }
       if (kind) {
         p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };
         if (!h.sessions.some(item => item.id === session && item.agent === kind)) h.sessions.push({ agent: kind, id: session, root: p.cwd, at: h.now() });
       }
       return {};
+    }
+    if (group === 'pane' && verb === 'send-keys') {
+      const p = h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found');
+      if (rest[1] === 'Enter' && p.pendingLaunch?.kind) {
+        const { kind, session } = p.pendingLaunch;
+        delete p.pendingLaunch;
+        p.screen = '';
+        p.agent = { agent: kind, agent_status: 'working', agent_session: { agent: kind, kind: 'id', value: session }, prompts: [] };
+        if (!h.sessions.some(item => item.id === session && item.agent === kind)) h.sessions.push({ agent: kind, id: session, root: p.cwd, at: h.now() });
+      }
+      return { id: 'cli:pane:send_keys', result: { type: 'ok' } };
     }
     // The plain-text screen of a pane (empty unless a test draws one, for example an agent dialog).
     if (group === 'pane' && verb === 'read') return (h.panes.find(p => p.pane_id === rest[0]) ?? fail('pane_not_found')).screen ?? '';

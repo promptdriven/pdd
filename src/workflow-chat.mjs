@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 1f69a24142d1c9c6a10721dde708b9f59d280a2d394a52d638ad192126906d95).
+// Generated from prompts/cli/workflow-chat.prompt.md (sha256: 173a84c576dc7062b90eca5957a8629eacc0f19303aad4acba2b07b9efe23078).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -248,8 +248,26 @@ async function launchInPane(herdr, paneId, options, { run, env, ports = {}, befo
     const command = chatCommand({ ...options, ...launch, excludeDynamicSystemPromptSections });
     await beforeLaunch?.();
     const reply = await herdr(['pane', 'run', paneId, command]);
+    const isFish = /\bfish(?:\.exe)?$/i.test(String(env?.SHELL ?? ''));
+    let live = options.namingChat ? await chatSession(options.namingChat, {...ports, run, env, herdr}) : null;
+    if (isFish && (!live || (!live.alive && live.code === 'agent_not_found'))) {
+      if (!live) live = await chatSession({ paneId, agent: options.agent ?? run.agent }, { ...ports, run, env, herdr });
+      if (!live.alive && live.code === 'agent_not_found') {
+        await (ports.sleep ?? (ms => new Promise(done => setTimeout(done, ms))))(ports.fishPromptDelayMs ?? 250);
+        live = await chatSession(options.namingChat ?? { paneId, agent: options.agent ?? run.agent }, { ...ports, run, env, herdr });
+        if (!live.alive && live.code === 'agent_not_found') {
+          const screen = await herdr(['pane', 'read', paneId, '--source', 'detection']).catch(() => '');
+          const rowBudget = Math.max(24, Math.ceil(command.length / 20) + 8);
+          const tailCompact = typeof screen === 'string' ? screen.trimEnd().split(/\r?\n/).slice(-rowBudget).join('').replace(/\s+/g, '') : '';
+          const cmdCompact = command.replace(/\s+/g, '');
+          if (cmdCompact.includes('PDD_AGENT_SESSION=1') && tailCompact.endsWith(cmdCompact) && !screenDialog(screen)) {
+            await herdr(['pane', 'send-keys', paneId, 'Enter']).catch(() => {});
+            if (options.namingChat) live = await chatSession(options.namingChat, {...ports, run, env, herdr});
+          }
+        }
+      }
+    }
     if (options.namingChat) {
-      const live = await chatSession(options.namingChat, {...ports, run, env, herdr});
       if (options.retainNaming !== false) {
         if (live.namingError) options.namingChat.namingError = live.namingError;
         else delete options.namingChat.namingError;

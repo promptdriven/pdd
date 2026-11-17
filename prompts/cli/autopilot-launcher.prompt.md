@@ -224,6 +224,8 @@ ticks, and `no new work starts before that.`
 
 ## Stop, status and the other commands
 
+Export `requestAutopilotCompletion({ cwd, env }, ports)` for capacity handoff ticks: resolve the Git checkout root and its saved launcher state file; return `{ state: "inactive" }` when Autopilot is not enabled, run one guarded `runTick` otherwise, and return `{ state: "busy" }`, `{ state: "reconciled" }` or `{ state: "unknown" }`.
+
 **Stop** first saves this repo as disabled (with a new control revision) so a queued tick cannot act even if the
 timer cleanup fails, then disables its timer and removes its timer definition, stops the intake card jobs, releases
 this state file's check-capacity snapshot, and returns `Autopilot stopped on this machine; the current step can

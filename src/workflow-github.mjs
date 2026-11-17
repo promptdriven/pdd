@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 7f58e4c8e869f7adfaa42d302bfb3a559064db882b2654b7258bdf19596e78e8).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: bb63c65586f09443a096503cff993d6352acda3b6b9517017b5e2797b2654d1a).
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { runtimeOutputSlice, causeText } from './runtime-seam.mjs';
@@ -298,8 +298,14 @@ export async function readWorkflowPrStatus(input, ports = {}) {
     if (!state) fail('workflow_github_pr_state_invalid');
     const checks = Array.isArray(row.statusCheckRollup) ? row.statusCheckRollup : [];
     const outcome = check => String(check?.conclusion ?? check?.state ?? '').toUpperCase();
+    const billingStartup = /^(?:The job was not started because [^\r\n]*(?:recent account payments have failed|spending limit|account is locked due to a billing|included minutes|out of (?:included |GitHub Actions )?minutes|minutes (?:quota|limit))[^\r\n]*|GitHub Actions is disabled for this repository\.?)$/i;
+    const billingText = check => check?.__typename !== 'StatusContext' && !(check?.state && !check?.conclusion)
+      && outcome(check) === 'STARTUP_FAILURE' && !String(check?.text ?? '').trim()
+      && (!String(check?.summary ?? '').trim() || billingStartup.test(String(check?.summary ?? '').trim()))
+      && [check?.title, check?.summary].some(v => billingStartup.test(String(v ?? '').trim()));
+    const failed = checks.filter(check => ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome(check)));
     const ci = !checks.length ? 'none'
-      : checks.some(check => ['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(outcome(check))) ? 'failing'
+      : failed.length ? (failed.every(billingText) ? 'billing' : 'failing')
       : checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(outcome(check))) ? 'pending' : 'passing';
     return { state, ci, ...(text(row.baseRefName) ? { base: row.baseRefName } : {}),
       ...(text(row.headRefOid) ? { headSha: row.headRefOid } : {}),

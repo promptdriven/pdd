@@ -132,21 +132,65 @@ test('3139 native publication shares docs exemption in body, proof and saved sta
   assert.equal(readSmallChangeChecklist(run).status, 'stale');
 });
 
-test('3139 oversized checklist refuses publication without dropping requests', async t => {
+test('3139 oversized checklist compacts verbose quotes and evidence within 60k while refusing oversized request text without dropping rows', async t => {
   const f = await fixture(t); assert.equal((await f.run()).exitCode, 0);
   const run = f.record();
   writeFileSync(join(run.root, 'README.md'), 'Synthetic documentation\n');
   f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'Documentation fixture');
   const source = {kind: 'git-content-v1', sha256: sourceFingerprint(run.root)};
-  const items = [{...completed()[0], quote: 'q'.repeat(57000)}];
-  writeFileSync(join(run.runDir, 'small-change-checklist.json'), JSON.stringify({schema_version: 'pdd.small-change-checklist.v1', run_id: run.runId, source, items}));
+  const tooLongRequest = [{...completed()[0], request: 'r'.repeat(57000)}];
+  writeFileSync(join(run.runDir, 'small-change-checklist.json'), JSON.stringify({schema_version: 'pdd.small-change-checklist.v1', run_id: run.runId, source, items: tooLongRequest}));
   writeFileSync(join(run.runDir, 'replay-evidence.json'), JSON.stringify({schema_version: 'pdd.replay-evidence.v1', run_id: run.runId, source, formal: exemption}));
   await stepDone({step: 'scope', cwd: run.root}, f.ports);
   await approveRun({ref: '17', cwd: f.source}, f.ports);
   for (const step of ['change', 'verify']) await stepDone({step, cwd: run.root}, f.ports);
-  const out = await stepDone({step: 'formal', cwd: run.root}, f.ports);
-  assert.notEqual(out.exitCode, 0, 'CHECKLIST_BUDGET_3139');
+  const refused = await stepDone({step: 'formal', cwd: run.root}, f.ports);
+  assert.notEqual(refused.exitCode, 0, 'CHECKLIST_BUDGET_3139');
   assert.equal(f.pushes.length, 0);
   assert.equal(f.prs.length, 0);
-  assert.equal(JSON.parse(readFileSync(join(run.runDir, 'small-change-checklist.json'))).items[0].quote.length, 57000);
+
+  const f2 = await fixture(t); assert.equal((await f2.run()).exitCode, 0);
+  const run2 = f2.record();
+  writeFileSync(join(run2.root, 'README.md'), 'Synthetic documentation\n');
+  f2.git(run2.root, 'add', '.'); f2.git(run2.root, 'commit', '-qm', 'Documentation fixture');
+  const source2 = {kind: 'git-content-v1', sha256: sourceFingerprint(run2.root)};
+  const manyItems = Array.from({length: 40}, (_, index) => ({
+    id: `R${index + 1}`,
+    request: `Distinct checklist requirement number ${index + 1}`,
+    source: 'https://github.com/example/project/issues/17',
+    quote: index === 0 ? 'q'.repeat(57000) : `quote-${index + 1}-${'q'.repeat(1500)}`,
+    state: 'done',
+    evidence: `evidence-${index + 1}-${'e'.repeat(1500)}`,
+  }));
+  writeFileSync(join(run2.runDir, 'small-change-checklist.json'), JSON.stringify({schema_version: 'pdd.small-change-checklist.v1', run_id: run2.runId, source: source2, items: manyItems}));
+  writeFileSync(join(run2.runDir, 'replay-evidence.json'), JSON.stringify({schema_version: 'pdd.replay-evidence.v1', run_id: run2.runId, source: source2, formal: exemption}));
+  await stepDone({step: 'scope', cwd: run2.root}, f2.ports);
+  await approveRun({ref: '17', cwd: f2.source}, f2.ports);
+  for (const step of ['change', 'verify']) await stepDone({step, cwd: run2.root}, f2.ports);
+  const published = await stepDone({step: 'formal', cwd: run2.root}, f2.ports);
+  assert.equal(published.exitCode, 0, published.message);
+  assert.equal(f2.prs.length, 1);
+  assert.ok(f2.prs[0].body.length <= 60000, `body length ${f2.prs[0].body.length} <= 60000`);
+  const plainBody = f2.prs[0].body.replaceAll('\u200b', '');
+  for (let index = 1; index <= 40; index++) assert.ok(plainBody.includes(`Distinct checklist requirement number ${index}`), `row ${index} preserved`);
+  assert.equal(JSON.parse(readFileSync(join(run2.runDir, 'small-change-checklist.json'))).items[0].quote.length, 57000);
+
+  // When Details grows large and status refreshes the readable top, refreshReadableTop re-compacts the top within 60k.
+  const openIdx = f2.prs[0].body.indexOf(DETAILS_OPEN);
+  f2.prs[0].body = `${f2.prs[0].body.slice(0, openIdx)}${DETAILS_OPEN}\n${'d'.repeat(42000)}\n${f2.prs[0].body.slice(openIdx + DETAILS_OPEN.length)}`;
+  f2.ci = [{conclusion: 'SUCCESS'}];
+  const statusPorts = {
+    ...f2.ports,
+    execFile: async (file, args, opts) => {
+      const reply = await f2.ports.execFile(file, args, opts);
+      if (file === 'gh' && args[0] === 'pr' && args[1] === 'view') {
+        const parsed = JSON.parse(reply.stdout);
+        return { ...reply, stdout: JSON.stringify({ ...parsed, headRefOid: f2.prs[0].headRefOid, comments: [] }) };
+      }
+      return reply;
+    },
+  };
+  const refreshed = await runStatus({ref: '17', cwd: f2.source}, statusPorts);
+  assert.equal(refreshed.exitCode, 0, refreshed.message);
+  assert.ok([...f2.prs[0].body].length <= 60000, `refreshed body length ${[...f2.prs[0].body].length} <= 60000`);
 });

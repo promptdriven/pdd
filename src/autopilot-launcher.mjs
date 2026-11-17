@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 8ea9dc7f289888e608c3cfea708a8551f13c03d67712fe7ad821aec9aa05409c).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b278515e214af6e04d86e02fa69a0da7d60292b8f1a1b424c6c6d11439abbea4).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -677,6 +677,28 @@ async function waitStartScan(identity, ports = {}) {
       if (!busy) return;
     }
   } catch { /* A later supported start or timer can reconcile. */ }
+}
+
+export async function requestAutopilotCompletion({ cwd, env } = {}, ports = {}) {
+  try {
+    const state = { cwd, environment: keepEnv(env ?? process.env) };
+    const run = ports.execFile ? async (command, args, options) => {
+      try { const value = await ports.execFile(command, args, { cwd: options.cwd, env: options.env, encoding: 'utf8' }); return { code: value.code ?? 0, stdout: value.stdout ?? '', stderr: value.stderr ?? '' }; }
+      catch (error) { return { code: error.code === 'ENOENT' ? -1 : 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
+    } : ports.run;
+    const p = portsFor(state, { ...ports, ...(run ? { run } : {}), env });
+    const root = await gitRootIn(p);
+    if (root.code !== 0 || !root.stdout.trim()) return { state: 'unknown' };
+    const resolved = root.stdout.trim();
+    const folder = ports.stateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+    const id = createHash('sha256').update(resolved).digest('hex').slice(0, 20), stateFile = join(folder, `${id}.json`);
+    if (!read(stateFile)?.enabled) return { state: 'inactive' };
+    let busy = false;
+    const outcome = await runTick(stateFile, { ...ports, ...(run ? { run } : {}), env: p.env, tickBusy: () => { busy = true; } });
+    if (busy) return { state: 'busy' };
+    if (!read(stateFile)?.enabled) return { state: 'inactive' };
+    return outcome?.exitCode === 0 ? { state: 'reconciled' } : { state: 'unknown' };
+  } catch { return { state: 'unknown' }; }
 }
 
 export async function withAutopilotModeLock({ cwd, env }, action, ports = {}) {

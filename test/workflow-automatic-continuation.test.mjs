@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {mkdirSync, writeFileSync, realpathSync, existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {startRun, stepDone, approveRun, yieldAutomaticCapacity, changeRun} from '../src/workflow-runner.mjs';
+import {startRun, stepDone, approveRun, parkAutomaticRun, yieldAutomaticCapacity, changeRun} from '../src/workflow-runner.mjs';
+import * as autopilotLauncher from '../src/autopilot-launcher.mjs';
 import {writeRun} from '../src/workflow-runs.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
@@ -107,4 +108,54 @@ test('invalid automatic inputs are refused before allocating a run',async t=>{
   assert.ok(existsSync(run.root)); assert.deepEqual(f.record(),completed);
   assert.equal(readFileSync(join(f.base,'gh.log'),'utf8'),ghBefore);
   assert.equal(f.herdr.calls.slice(calls).filter(call=>call[0]==='pane' && ['run','close'].includes(call[1])).length,0);
+});
+
+
+test('3446 cancelled automatic runs reconcile cleanly in park and yield-capacity and launcher exports requestAutopilotCompletion', async t => {
+  const {f, state, ports} = await ready(t);
+  assert.equal(typeof autopilotLauncher.requestAutopilotCompletion, 'function');
+  const unconfiguredDir = join(f.base, 'unconfigured-repo');
+  mkdirSync(unconfiguredDir, {recursive: true});
+  f.git(unconfiguredDir, 'init', '-q');
+  const inactive = await autopilotLauncher.requestAutopilotCompletion({cwd: unconfiguredDir, env: f.ports.env});
+  assert.equal(inactive.state, 'inactive');
+
+  const run = f.record();
+  const chat = run.chats.find(item => item.area === run.areas[run.area].name);
+  // Close worker pane and drop remote GitHub claim as happens when a run was cancelled.
+  f.herdr.panes = f.herdr.panes.filter(item => item.pane_id !== chat.paneId);
+  state.claimed = false;
+  run.state = 'cancelled';
+  run.cancelledAt = f.clock;
+  writeRun(run);
+
+  const common = f.git(f.source, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  const index = join(common, 'pdd', 'worktree-assignments', 'issues', '17.json');
+  mkdirSync(join(common, 'pdd', 'worktree-assignments', 'issues'), {recursive: true});
+  writeFileSync(index, JSON.stringify({issueNumber: 17, runId: run.runId, worktreePath: run.root, branch: run.branch, updatedAt: f.clock}));
+
+  // Unconfirmed Herdr error or running suite check refuses to release custody on a cancelled run.
+  const refusedPark = await parkAutomaticRun({reason: 'Already handed off', cwd: run.root}, {...ports(), herdr: async () => { throw Error('herdr offline'); }});
+  assert.notEqual(refusedPark.exitCode, 0);
+  assert.equal(existsSync(index), true);
+  const refusedSuite = await parkAutomaticRun({reason: 'Already handed off', cwd: run.root}, {...ports(), readSuiteProgress: () => ({state: 'running'})});
+  assert.notEqual(refusedSuite.exitCode, 0);
+  assert.equal(existsSync(index), true);
+
+  const parked = await parkAutomaticRun({reason: 'Already handed off', cwd: run.root}, ports());
+  assert.equal(parked.exitCode, 0, parked.message);
+  assert.equal(f.record().state, 'cancelled');
+  assert.equal(existsSync(index), false);
+
+  // Re-seed lingering claim index and verify yieldAutomaticCapacity succeeds on cancelled run without live GitHub claim.
+  writeFileSync(index, JSON.stringify({issueNumber: 17, runId: run.runId, worktreePath: run.root, branch: run.branch, updatedAt: f.clock}));
+  let wakes = 0;
+  const yielded = await yieldAutomaticCapacity({ref: '17', cwd: f.source}, {
+    ...ports(),
+    requestAutopilotCompletion: async () => { wakes++; return {state: 'reconciled'}; },
+  });
+  assert.equal(yielded.exitCode, 0, yielded.message);
+  assert.equal(wakes, 1);
+  assert.equal(existsSync(index), false);
+  assert.equal(f.record().state, 'cancelled');
 });

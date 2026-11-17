@@ -1,5 +1,6 @@
 import {routeQuestionFor, idleParkingBlocker, idleSince, interpreterWaitFor, blockerFor} from './autopilot-parking.mjs';
 import { selectAutopilotBase } from './autopilot-base.mjs';
+import { workflowRunsOnPr } from './autopilot-core.mjs';
 import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
 import { classifyStuckCause, environmentRecovery, environmentStatus, environmentWakeTag, environmentHealthy, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { launchProfile, selectLaunchProfile, validLaunchProfile } from './workflow-launch-profile.mjs';
@@ -8,7 +9,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: bd9ddac71782ad18366a7a5601d8895b3710413d13b7c8264e35e541b7b93464).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d67b5efb33372215e7561c82a1f1720d2d4f77a4e090cefb5897edb8ca2732ab).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -1898,6 +1899,127 @@ async function prStatusOf(run, pr, p, cwd = run.root, view = false) {
 async function checkerOf(pr, headSha, p, cwd, view) {
   try { return await (p.readPrChecker ?? readWorkflowPrChecker)({ cwd, url: pr.url, headSha, ...(Array.isArray(view?.comments) ? { comments: view.comments } : {}) }, p.commandPorts); } catch { return null; }
 }
+const BILLING_CI = /^(?:The job was not started because [^\r\n]*(?:recent account payments have failed|spending limit|account is locked due to a billing|included minutes|out of (?:included |GitHub Actions )?minutes|minutes (?:quota|limit))[^\r\n]*|GitHub Actions is disabled for this repository\.?)$/i;
+const UNPROTECTED_CLASSIC = /Branch not protected|Required status checks not enabled|Upgrade to GitHub Pro or make this repository public to enable this feature/i;
+const UNPROTECTED_RULESETS = /Upgrade to GitHub Pro or make this repository public to enable this feature/i;
+async function localPrWorkflowExists(run, p, headSha, branch, baseBranch, files) {
+  try {
+    for (const rev of [headSha, `refs/remotes/origin/${baseBranch}`]) {
+      await rawGit(p, run.root, 'rev-parse', '--verify', '--end-of-options', `${rev}^{commit}`);
+      const entries = (await rawGit(p, run.root, 'ls-tree', '-z', rev, '--', '.github/workflows/')).split('\0').filter(Boolean);
+      if (entries.length > 50) return true;
+      for (const entry of entries) {
+        const match = /^(?:100644|100755) (blob) ([0-9a-f]+)\t(.+)$|^040000 (tree) ([0-9a-f]+)\t(.+)$/.exec(entry);
+        if (!match) return true;
+        if (match[4] === 'tree') continue;
+        if (!/\.ya?ml$/i.test(match[3])) continue;
+        const rawText = await rawGit(p, run.root, 'cat-file', 'blob', match[2]);
+        const text = rev === headSha ? rawText : rawText.replace(/\bpull_request\b(?!_target)/g, 'workflow_dispatch').replace(/\bpush\b/g, 'workflow_dispatch');
+        if (workflowRunsOnPr(text, branch, baseBranch, files)) return true;
+      }
+    }
+    return false;
+  } catch { return true; }
+}
+async function baseRequiresStatusChecks(run, p, baseBranch = run.baseBranch, cwd = run.root) {
+  p.requiredChecksCache ??= new Map();
+  const key = `${run.repo}@${baseBranch}`;
+  if (p.requiredChecksCache.has(key)) return p.requiredChecksCache.get(key);
+  const classicRequired = async () => {
+    try {
+      const reply = await p.execFile('gh', ['api', `repos/${run.repo}/branches/${encodeURIComponent(baseBranch)}/protection/required_status_checks`], { cwd });
+      if (reply.code === undefined || reply.code === 0) {
+        const parsed = JSON.parse(String(reply.stdout ?? '{}'));
+        return (parsed?.contexts?.length ?? 0) + (parsed?.checks?.length ?? 0) > 0;
+      }
+      return !UNPROTECTED_CLASSIC.test(`${reply.stderr ?? ''}\n${reply.stdout ?? ''}`);
+    } catch (error) {
+      return !UNPROTECTED_CLASSIC.test(`${error?.stderr ?? ''}\n${error?.stdout ?? ''}\n${error?.message ?? ''}`);
+    }
+  };
+  const rulesetRequired = async () => {
+    try {
+      const reply = await p.execFile('gh', ['api', `repos/${run.repo}/rules/branches/${encodeURIComponent(baseBranch)}?per_page=100`], { cwd });
+      if (reply.code === undefined || reply.code === 0) {
+        const rules = JSON.parse(String(reply.stdout ?? '[]'));
+        if (!Array.isArray(rules) || rules.length >= 100) return true;
+        return rules.some(rule => rule?.type === 'required_status_checks' && (rule?.parameters?.required_status_checks?.length ?? 1) > 0);
+      }
+      return !UNPROTECTED_RULESETS.test(`${reply.stderr ?? ''}\n${reply.stdout ?? ''}`);
+    } catch (error) {
+      return !UNPROTECTED_RULESETS.test(`${error?.stderr ?? ''}\n${error?.stdout ?? ''}\n${error?.message ?? ''}`);
+    }
+  };
+  const required = await classicRequired() || await rulesetRequired();
+  p.requiredChecksCache.set(key, required);
+  return required;
+}
+async function allFailedChecksAreBilling(run, p, headSha, cwd = run.root) {
+  if (!commitSha(headSha)) return false;
+  try {
+    const statusReply = await p.execFile('gh', ['api', `repos/${run.repo}/commits/${headSha}/status?per_page=100`], { cwd });
+    if (statusReply.code !== undefined && statusReply.code !== 0) return false;
+    const statusDoc = JSON.parse(String(statusReply.stdout ?? '{}')), statuses = statusDoc?.statuses;
+    if (!Array.isArray(statuses) || (statusDoc?.total_count ?? statuses.length) > statuses.length) return false;
+    if (statuses.some(s => String(s?.state ?? '').toLowerCase() !== 'success')) return false;
+    const reply = await p.execFile('gh', ['api', `repos/${run.repo}/commits/${headSha}/check-runs?per_page=100`], { cwd });
+    if (reply.code !== undefined && reply.code !== 0) return false;
+    const parsed = JSON.parse(String(reply.stdout ?? '{}')), rows = parsed?.check_runs;
+    if (!Array.isArray(rows) || !rows.length || (parsed?.total_count ?? rows.length) > rows.length) return false;
+    if (rows.some(r => r.status !== 'completed')) return false;
+    const failed = rows.filter(r => !['success', 'neutral', 'skipped'].includes(String(r.conclusion ?? '').toLowerCase()));
+    if (!failed.length || failed.length > 20) return false;
+    for (const row of failed) {
+      if (row.app?.slug !== 'github-actions') return false;
+      const conclusion = String(row.conclusion ?? '').toLowerCase();
+      if (conclusion !== 'failure' && conclusion !== 'startup_failure') return false;
+      const count = row.output?.annotations_count ?? 0;
+      if (count > 0) {
+        if (!Number.isSafeInteger(row.id) || row.id <= 0) return false;
+        const ann = await p.execFile('gh', ['api', `repos/${run.repo}/check-runs/${row.id}/annotations?per_page=20`], { cwd }).catch(() => null);
+        if (!ann || (ann.code !== undefined && ann.code !== 0)) return false;
+        const items = JSON.parse(String(ann.stdout ?? 'null'));
+        if (!Array.isArray(items) || items.length < count) return false;
+        if (!items.some(a => a?.path === '.github' && BILLING_CI.test(String(a?.message ?? '').trim()))) return false;
+        if (!items.every(a => String(a?.annotation_level ?? 'failure').toLowerCase() === 'notice'
+          || (a?.path === '.github' && BILLING_CI.test(String(a?.message ?? '').trim())))) return false;
+      }
+      if (conclusion === 'startup_failure') {
+        if (String(row.output?.text ?? '').trim()) return false;
+        if (String(row.output?.summary ?? '').trim() && !BILLING_CI.test(String(row.output?.summary ?? '').trim())) return false;
+        if (!(count > 0) && ![row.output?.title, row.output?.summary].some(v => BILLING_CI.test(String(v ?? '').trim()))) return false;
+      } else {
+        if (!(count > 0) || String(row.output?.summary ?? '').trim() || String(row.output?.text ?? '').trim()) return false;
+        const jobMatch = /\/actions\/runs\/\d+\/job\/(\d+)/.exec(String(row.details_url ?? row.html_url ?? ''));
+        const jobId = jobMatch ? Number(jobMatch[1]) : row.id;
+        if (!Number.isSafeInteger(jobId) || jobId <= 0) return false;
+        const jobReply = await p.execFile('gh', ['api', `repos/${run.repo}/actions/jobs/${jobId}`], { cwd }).catch(() => null);
+        if (!jobReply || (jobReply.code !== undefined && jobReply.code !== 0)) return false;
+        const job = JSON.parse(String(jobReply.stdout ?? 'null'));
+        if (!job || typeof job !== 'object' || (job.id !== undefined && Number(job.id) !== jobId)) return false;
+        if (!Array.isArray(job.steps) || job.steps.length > 0 || job.runner_id || String(job.runner_name ?? '').trim()) return false;
+      }
+    }
+    return true;
+  } catch { return false; }
+}
+async function resolveLocalSuiteCi(run, p, { ci, headSha, files = null, branch = run.branch, baseBranch = run.baseBranch, cwd = run.root } = {}) {
+  if (!['none', 'billing', 'failing'].includes(ci)) return { ci, localSuitePassed: false };
+  const suite = (p.readSuiteProgress ?? readSuiteProgress)({ cwd: run.root, since: 0, env: p.env }, p);
+  const emptyDiff = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+  const suitePassed = suite?.state === 'finished' && suite.outcome === 'completed' && suite.exitCode === 0 && !suite.reason
+    && !suite.source?.error && commitSha(suite.source?.head) && suite.source?.fingerprint === emptyDiff
+    && commitSha(headSha) && suite.source.head.toLowerCase() === headSha.toLowerCase();
+  if (!suitePassed) return { ci, localSuitePassed: false };
+  let effectiveCi = ci;
+  if (effectiveCi === 'failing' || effectiveCi === 'billing') {
+    if (!await allFailedChecksAreBilling(run, p, headSha, cwd)) return { ci: effectiveCi === 'billing' ? 'failing' : ci, localSuitePassed: false };
+    effectiveCi = 'billing';
+  }
+  if (effectiveCi === 'none' && await localPrWorkflowExists(run, p, headSha, branch, baseBranch, files)) return { ci: 'none', localSuitePassed: false };
+  if (await baseRequiresStatusChecks(run, p, baseBranch, cwd)) return { ci: effectiveCi, localSuitePassed: false };
+  return { ci: effectiveCi, localSuitePassed: true };
+}
 // CI and the checker verdict for the head of a published PR, and its base on GitHub. A read problem stays unknown.
 async function publishedChecks(run, pr, headSha, p) {
   const status = await prStatusOf(run, pr, p, run.root, true);
@@ -2027,6 +2149,9 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   // A code PR reads PR 1's state and CI on every render, also a new code PR (the red pair of RUNBOOK §2).
   const first = layout === 'code' && pr1 ? await prStatusOf(run, pr1, p) : null;
   const pr1Merged = Boolean(pr1) && (run.prBase === run.baseBranch || first?.state === 'merged');
+  let resolvedHead = commitSha(head) ? head : '';
+  if (!resolvedHead) { try { resolvedHead = await git(p, run.root, 'rev-parse', '--verify', `${head}^{commit}`); } catch {} }
+  const resolvedCi = published ? await resolveLocalSuiteCi(run, p, { ci: published.ci ?? null, headSha: resolvedHead, files: diff ? paths : null, branch: run.branch, baseBranch: base ?? run.baseBranch }) : { ci: null, localSuitePassed: false };
   return { layout, single: label === 'the PR', workflow: run.workflow, number: run.number, baseBranch: run.baseBranch, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
     stories, storyPaths, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'no Story applies to this PR',
     fields, thisPr: holds.length ? `${others.length ? '' : 'no code change. '}It holds ${listed(holds)}.` : 'no code change.', diff,
@@ -2042,7 +2167,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
       proof: layout === 'code' ? { kind: proofKind, status: pending ? 'pending' : evidence.proofStatus, ...(native ? { passed: Number(native[1]), total: Number(native[2]) } : {}) } : null,
       review: layout === 'code' ? reviewVerdict(run, area) : null, formalStep: area.steps.includes('formal'), formalDone: Boolean(run.done.formal && !run.done.formal.skipped),
       rulesToCheck: storyRulesToCheck(run, files),
-      ci: published?.ci ?? null, checker: published?.checker ?? null, drafts: layout === 'spec' ? drafts : [] },
+      ci: resolvedCi.ci, ...(resolvedCi.localSuitePassed ? { localSuitePassed: true } : {}), checker: published?.checker ?? null, drafts: layout === 'spec' ? drafts : [] },
     approval: mode !== 'manual'
       ? { kind: 'auto', mode, login: await githubLogin(run, p), date: Number.isFinite(automatic.startedAt) ? new Date(automatic.startedAt).toISOString().slice(0, 10) : '', person: approvals.some(item => item.route === 'terminal') }
       : { kind: 'words', items: approvals },
@@ -2053,12 +2178,31 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
     notFixed: /^Refs #/.test(evidence.issueReference ?? ''), updatedAt: p.now() };
 }
 // The readable part, made safe like the rest of the body and kept to a bounded size.
-function readableTopText(facts, run) {
+function readableTopText(facts, run, maxCharacters = 24_000) {
   let top = readablePrTop(facts);
-  if (characters(top.text) > 12_000) top = readablePrTop(facts, { fileLimit: 10 });
-  if (facts.workflow === 'small-change' && facts.single && characters(top.text) > BODY_BUDGET - 4000)
+  if (characters(top.text) > Math.min(12_000, maxCharacters)) top = readablePrTop(facts, { fileLimit: 10 });
+  const fit = candidate => {
+    const safeText = hideLocalPaths(redactTry(candidate.text), run);
+    const safeNotes = candidate.notes.map(note => hideLocalPaths(redactTry(note), run));
+    return { text: safeText, notes: safeNotes, size: characters(safeText) + (safeNotes.length ? characters(safeNotes.join('\n')) + 2 : 0) };
+  };
+  let current = fit(top);
+  if (facts.workflow === 'small-change' && facts.single && current.size > maxCharacters) {
+    let low = 32, high = 8_000;
+    const smallest = fit(readablePrTop(facts, { fileLimit: 10, checklistLimit: low }));
+    current = smallest;
+    if (smallest.size < maxCharacters) {
+      while (high - low > 1) {
+        const middle = Math.floor((low + high) / 2);
+        const candidate = fit(readablePrTop(facts, { fileLimit: 10, checklistLimit: middle }));
+        if (candidate.size <= maxCharacters) { low = middle; current = candidate; }
+        else high = middle;
+      }
+    }
+  }
+  if (facts.workflow === 'small-change' && facts.single && current.size > BODY_BUDGET - 4000)
     throw Object.assign(Error('The complete issue checklist exceeds the PR description budget. Keep every request; shorten evidence references before publishing.'), {code: 'workflow_pr_body_too_large'});
-  return { text: hideLocalPaths(redactTry(top.text), run), notes: top.notes.map(note => hideLocalPaths(redactTry(note), run)) };
+  return { text: current.text, notes: current.notes, facts };
 }
 
 // The Details line of a stacked code PR (#3042): where it stands on PR 1, and PR 1's place in the merge order by the same
@@ -2126,10 +2270,16 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
     ...(!noted && hasReportLink([...lines, ...Object.values(full), ...preparedLines, verify ?? ''].join('\n'), env) ? ['', 'Interpreter report links expire after 7 days.'] : []),
     ...(text !== null ? ['', '## Verify', '', text] : []), ''].join('\n'), run);
   const approvalLines = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
-  const notes = readable?.notes ?? [], budget = BODY_BUDGET - (readable ? characters(readablePrBody(readable.text, notes.join('\n'))) + 2 : 0);
   // Room for protected summary evidence and the omission notice comes first. The top evidence,
   // approvals and verify.md then fit as before, and the full summaries get the room that is left.
   const least = fullSummaries(steps, full, 0);
+  if (readable?.facts?.workflow === 'small-change' && readable.facts.single) {
+    const minDetails = characters(body(verify === null ? null : '', [], [], least)) + (verify === null ? 0 : 1200) + 400;
+    const roomForTop = Math.max(4000, BODY_BUDGET - minDetails - 400);
+    if (characters(readablePrBody(readable.text, (readable.notes ?? []).join('\n'))) + 2 > BODY_BUDGET - minDetails)
+      readable = readableTopText(readable.facts, run, roomForTop);
+  }
+  const notes = readable?.notes ?? [], budget = BODY_BUDGET - (readable ? characters(readablePrBody(readable.text, notes.join('\n'))) + 2 : 0);
   const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, budget - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], [], least))), env);
   if(replayResult){
     const room=Math.max(0,budget-200-(verify===null?0:1000)-characters(body(null,lifted,approvals,least)));
@@ -2505,7 +2655,12 @@ async function refreshReadableTop(run, pr, p, { observed = new Map(), pr2 = null
     const rows = body.split('\n'), open = rows.indexOf(DETAILS_OPEN);
     if (open < 1) return [];
     const facts = structuredClone(pr.readable.facts);
-    facts.records = { ...facts.records, ci: status.ci ?? 'unknown', checker: await checkerOf(pr, head, p, cwd, seen) };
+    const completeFiles = Array.isArray(facts.diff?.files) && (facts.diff.count ?? facts.diff.files.length) <= facts.diff.files.length
+      ? facts.diff.files.map(file => file.path) : null;
+    const resolvedCi = await resolveLocalSuiteCi(run, p, { ci: status.ci ?? 'unknown', headSha: head, files: completeFiles, branch: pr.branch ?? run.branch, baseBranch: status.base ?? pr.base ?? run.baseBranch, cwd });
+    const nextRecords = { ...facts.records, ci: resolvedCi.ci, checker: await checkerOf(pr, head, p, cwd, seen) };
+    if (resolvedCi.localSuitePassed) nextRecords.localSuitePassed = true; else delete nextRecords.localSuitePassed;
+    facts.records = nextRecords;
     facts.headChanged = head.toLowerCase() !== String(pr.readable.head).toLowerCase();
     facts.updatedAt = p.now();
     const ask = askArea(run), first = ask && prOf(run, ask.name);
@@ -2518,12 +2673,16 @@ async function refreshReadableTop(run, pr, p, { observed = new Map(), pr2 = null
       const code = pr2 ?? run.areas.filter(item => item.gate === 'pr' && item.name !== pr.stage).map(item => prOf(run, item.name)).find(Boolean);
       if (code) facts.pr2 = { number: code.number, url: code.url };
     }
-    const top = readableTopText(facts, run).text, details = rows.slice(open);
+    const details = rows.slice(open);
     if (facts.layout === 'code' && first) {
       const anchor = details.indexOf(`PR 2 of this run: the code. It builds on PR 1: ${first.url}.`), line = stackedLine(run, facts);
       if (anchor >= 0 && line && STACKED.test(details[anchor + 1] ?? '')) details[anchor + 1] = line;
     }
-    const next = `${top.trimEnd()}\n\n${details.join('\n')}`;
+    const detailsText = details.join('\n');
+    const maxTop = Math.min(24_000, Math.max(4_000, BODY_BUDGET - characters(detailsText) - 2));
+    const top = readableTopText(facts, run, maxTop).text;
+    const next = `${top.trimEnd()}\n\n${detailsText}`;
+    if (characters(next) > BODY_BUDGET) throw Object.assign(Error('refreshed PR description exceeds budget'), { code: 'workflow_pr_body_too_large' });
     if (sameReadableTop(next, body)) return [];
     await requireExistingDraft(run, pr, p);
     // #3042 review 2: a `done` in another process can publish between the first read and this write.
@@ -4151,6 +4310,15 @@ async function parkAutomaticRunCommand({ reason, runtime = false, step, blocker,
   const text = String(reason ?? '').trim();
   if (!text) return fail('Give the actual stop reason with --reason.');
   if (!run.automaticOrigin) return fail('Park requires an automatic run.');
+  if (run.state === 'cancelled') {
+    if (!validSavedAutomaticOrigin(run)) return fail('Park requires a valid saved automatic origin and repository association.');
+    const held = await releaseWorkerHeld(run, p);
+    if (held) return fail(held);
+    const released = await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts);
+    if (released.state !== 'released' && !/belongs to another run/i.test(released.message ?? ''))
+      return fail(`Cancelled run reconciliation could not release the issue allocation: ${released.message}`);
+    return done('Automatic run is already cancelled; local issue allocation is reconciled.');
+  }
   if (ended(run)) return fail('An ended run cannot be parked.');
   if (explicitlyStopped(run, p)) return fail('Autopilot is stopped.');
   const ownership = await continuationOwnership(run, cwd, p);
@@ -6234,23 +6402,35 @@ async function yieldAutomaticCapacityCommand({ ref, cwd }, ports) {
       return fail('Capacity handoff refused: completion identity changed.');
   }
   if (!run.automaticOrigin) return fail('Capacity handoff requires a saved automatic run.');
-  const reason = run.state === 'completed'
+  const reason = ['completed', 'cancelled'].includes(run.state)
     ? (validSavedAutomaticOrigin(run) ? null : 'Capacity handoff requires a valid saved automatic origin and repository association.')
     : await continuationOwnership(run, cwd, p);
   if (reason) return fail(reason);
   if (!['waiting', 'paused', 'stuck', 'question', 'completed', 'cancelled'].includes(run.state))
     return fail('Capacity handoff requires a waiting or ended run.');
   const chat = currentChat(run);
-  if (!chat || chat.startUnconfirmed || run.chatFailure || run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
-    return fail('Capacity handoff cannot confirm the current chat has stopped.');
-  const live = await chatSession(chat, {...p, run}), now = p.now();
-  const own = sessionEvidenceDue(chat, live, now) && !observedSession(chat, chat.agent ?? run.agent)
-    ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
-  const observed = observeLifecycle(chat, live, now, chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
-  const completedTurn = live.alive && live.status === 'done' && observed.exact;
-  const endedChat = !live.alive && ['agent_not_found', 'server_not_running', ...(chat.closed ? ['pane_not_found','tab_not_found'] : [])].includes(live.code) && ['ended', 'failed'].includes(observed.state);
-  if (!completedTurn && !endedChat)
-    return fail('Capacity handoff cannot confirm the current chat has stopped.');
+  if (run.state === 'cancelled') {
+    const held = await releaseWorkerHeld(run, p);
+    if (held) return fail(held);
+    if (chat) {
+      const live = await chatSession(chat, { ...p, run }), now = p.now();
+      const observed = observeLifecycle(chat, live, now, chat.agent ?? run.agent, null);
+      const completedTurn = live.alive && live.status === 'done' && observed.exact;
+      const endedCancelled = !live.alive && (live.workspaceClosed || ['agent_not_found', 'server_not_running', 'pane_not_found', 'tab_not_found'].includes(live.code));
+      if (!completedTurn && !endedCancelled) return fail('Capacity handoff cannot confirm the current chat has stopped.');
+    }
+  } else {
+    if (!chat || chat.startUnconfirmed || run.chatFailure || run.chatReplacement && !['launched', 'rolledBack', 'ended'].includes(run.chatReplacement.phase))
+      return fail('Capacity handoff cannot confirm the current chat has stopped.');
+    const live = await chatSession(chat, {...p, run}), now = p.now();
+    const own = sessionEvidenceDue(chat, live, now) && !observedSession(chat, chat.agent ?? run.agent)
+      ? await ownSession({ run, chat, since: launchAnchor(chat), ports: p }) : null;
+    const observed = observeLifecycle(chat, live, now, chat.agent ?? run.agent, own?.kind === 'match' ? own.id : null);
+    const completedTurn = live.alive && live.status === 'done' && observed.exact;
+    const endedChat = !live.alive && ['agent_not_found', 'server_not_running', ...(chat.closed ? ['pane_not_found','tab_not_found'] : [])].includes(live.code) && ['ended', 'failed'].includes(observed.state);
+    if (!completedTurn && !endedChat)
+      return fail('Capacity handoff cannot confirm the current chat has stopped.');
+  }
   if (['completed', 'cancelled'].includes(run.state)) {
     const released = await releaseIssueClaim({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, p.commandPorts);
     if (released.state !== 'released') return fail(`Capacity handoff could not release the issue allocation: ${released.message}`);

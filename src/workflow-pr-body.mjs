@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 9b9e06ea557b14ab77b8f27077c9bc31a6b423e873207fd54837b25bbe89bc8f).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: f3c8cdfba037d5fd4b10e62f13eca01c3df6458488489d5382fcca07fecbceb0).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
@@ -170,7 +170,7 @@ export function pr1Order(facts) {
   if (facts?.layout !== 'code' || !pr1 || pr1.merged || !facts.stacked) return null;
   if (pr1.state === 'closed') return 'closed';
   if (facts.carriesPr1 || pr1.ci === 'failing') return 'carried';
-  return ['passing', 'none'].includes(pr1.ci) ? 'first' : 'ci';
+  return ['passing', 'none'].includes(pr1.ci) || (pr1.ci === 'billing' && facts.records?.localSuitePassed === true) ? 'first' : 'ci';
 }
 
 // The rows and the status of a PR, from pdd's own records only: saved pdd test/lint results, replay evidence, the
@@ -257,11 +257,16 @@ function proofRows(facts) {
       else if (!['proved', 'pending', 'not-run', 'no-changed-tests'].includes(proof.status)) blocked.push(`the old-code proof says ${inertText(proof.status, 40)}`);
     } else if (pair) waiting.push('the old-code proof');
   }
-  const ci = r.ci === 'passing' ? '✓ green' : r.ci === 'failing' ? '✗ failing' : r.ci === 'none' ? 'no CI checks configured' : '⏳ pending';
+  const localSuiteOk = r.localSuitePassed === true && ['none', 'billing'].includes(r.ci);
+  const ci = r.ci === 'passing' ? '✓ green'
+    : r.ci === 'failing' ? '✗ failing'
+    : r.ci === 'none' ? (localSuiteOk ? 'none configured (local suite passed)' : 'no CI checks configured')
+    : r.ci === 'billing' ? (localSuiteOk ? 'Actions unavailable (local suite passed)' : '⏳ Actions unavailable (billing)')
+    : '⏳ pending';
   rows.push([code ? 'Full test suite (CI) on this commit' : 'Full test suite (CI)', ci, ...(code ? ['—'] : [])]);
   if (r.ci === 'failing') blocked.push('CI fails');
-  else if (r.ci === 'none') blocked.push('no CI checks configured');
-  else if (r.ci !== 'passing') waiting.push('CI');
+  else if (r.ci === 'none' && !localSuiteOk) blocked.push('no CI checks configured');
+  else if (r.ci !== 'passing' && !localSuiteOk) waiting.push('CI');
   if (code && r.review !== null && r.review !== undefined) {
     const review = r.review === 'missing' ? 'not recorded' : r.review.mustFix ? `✗ ${r.review.mustFix} must-fix` : 'no must-fix';
     rows.push(['Fresh review', review, '—']);
@@ -299,15 +304,24 @@ export const sameReadableTop = (a, b) => [a, b].map(text => String(text ?? '').t
 function table(header, rows) {
   return [`| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`, ...rows.map(row => `| ${row.join(' | ')} |`)];
 }
-function issueChecklist(facts) {
+function issueChecklist(facts, checklistLimit = Infinity) {
   if (facts.workflow !== 'small-change' || facts.single !== true) return [];
   const items = facts.records?.checklist?.items ?? [];
   if (!items.length) return [];
-  return ['## Issue checklist', '', ...table(['Item', 'Request', 'State', 'Source / quote', 'Evidence / exclusion'], items.map(item => [
+  let compacted = false;
+  const bounded = value => {
+    const full = cell(value, Infinity);
+    if (!Number.isFinite(checklistLimit)) return full;
+    const short = cell(value, checklistLimit);
+    if (short !== full) compacted = true;
+    return short;
+  };
+  const rendered = table(['Item', 'Request', 'State', 'Source / quote', 'Evidence / exclusion'], items.map(item => [
     cell(item.id, Infinity), cell(item.request, Infinity), cell(item.state),
-    cell(`${item.source}: ${item.quote}`, Infinity),
-    cell(item.state === 'excluded' ? `${item.exclusion?.reason ?? ''}: "${item.exclusion?.quote ?? ''}"` : item.evidence, Infinity),
-  ])), ''];
+    bounded(`${item.source}: ${item.quote}`),
+    bounded(item.state === 'excluded' ? `${item.exclusion?.reason ?? ''}: "${item.exclusion?.quote ?? ''}"` : item.evidence),
+  ]));
+  return ['## Issue checklist', '', ...rendered, ...(compacted ? ['', '_Checklist quotes and evidence were compacted to fit the PR size limit; every request is preserved._'] : []), ''];
 }
 function casesTable(facts) {
   const cases = facts.fields?.cases ?? [];
@@ -368,7 +382,7 @@ export function readableNextLines(facts) {
 
 // The readable part as Markdown, plus the notes that the runner puts into Details. It never holds IDs, batches,
 // request IDs, step notes or approval records; those stay in Details.
-export function readablePrTop(facts, { fileLimit = MAX_FILES } = {}) {
+export function readablePrTop(facts, { fileLimit = MAX_FILES, checklistLimit = Infinity } = {}) {
   const notes = [];
   const stories = (facts.stories ?? []).slice(0, MAX_STORIES);
   if (!stories.length) notes.push(`User story: ${facts.storyNote ?? 'no Story file of this run has an "As a …, I want …, so that …" line'}, so this PR has no User story section.`);
@@ -377,7 +391,7 @@ export function readablePrTop(facts, { fileLimit = MAX_FILES } = {}) {
   const header = facts.layout === 'spec' ? ['Check', 'Result'] : ['Check', 'New code', facts.workflow === 'feature' ? 'Planted mistake' : 'Old code'];
   const lines = [`${prStatus(facts)}${stamp(facts.updatedAt)}`, '', ...(facts.notFixed ? [NOT_FIXED_LINE, ''] : []),
     ...(stories.length ? ['## User story', '', ...stories.flatMap((story, index) => [...(index ? [''] : []), inertText(story, 600)]), ''] : []),
-    ...summary(facts), ...issueChecklist(facts), ...casesTable(facts), ...changes(facts, fileLimit),
+    ...summary(facts), ...issueChecklist(facts, checklistLimit), ...casesTable(facts), ...changes(facts, fileLimit),
     `## ${facts.layout === 'spec' ? 'Checks' : 'Proof'}`, '', ...table(header, rows), '',
     ...(facts.layout === 'spec' ? [approvalLine(facts), ''] : []), ...readableNextLines(facts)];
   return { text: lines.join('\n'), notes };

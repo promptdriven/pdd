@@ -2,7 +2,7 @@ import {parkingSummary} from './autopilot-parking.mjs';
 import {readSuiteProgress} from './test-suite-queue.mjs';
 import { readOwnerChoice, readSplitComment, partIdentity } from './issue-mixed.mjs';
 import { readSortGroups, sortPastAssignees, sortBookkeeping, readSortComment, addSortContext } from './issue-sort-github.mjs';
-// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: 7731cf8d90d1a79eed1451bc211fcba434b14b62603c4d2a72d78eb6b376beb0).
+// Generated from prompts/cli/issue-dependencies-github.prompt.md (sha256: c4efb25b17b1919d3e393259cb2241f777db06e0d32c9ba4eb45ae8ca6cdb6b8).
 import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -871,23 +871,64 @@ function nativeEvidence(cwd, ports) {
         });
       }
     }
-    // Explicit source paths in trusted requirements retain subject scope. Other
-    // repository files remain optional context for the coordinator to examine.
-    for (const r of requirements) for (const m of r.text.matchAll(/(?:https:\/\/github\.com\/[^/]+\/[^/]+\/blob\/HEAD\/)?\b((?:src|lib|docs|plans?|user_stories|prompts|test|tests)\/[A-Za-z0-9_./% -]+\.[A-Za-z0-9]+)\b/g)) {
-      const path = m[1].trim(), key = `https://github.com/${repository.toLowerCase()}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
-      const targets = required.get(key) ?? new Set(); targets.add(r.issue); required.set(key, targets);
-    }
-    const root = await selectedCheckout(at, repository, readPorts);
-    if (root) {
-      const files = (await service(root, readPorts).run('git', ['ls-files', '-z'])).split('\0').filter(Boolean);
-      for (const path of files) if (/\.(?:[cm]?[jt]sx?|py|md|json|toml|ya?ml|sql|html|css|sh)$/.test(path) && !/(?:^|\/)(?:node_modules|\.git|package-lock\.json)(?:\/|$)/.test(path)) {
-        const key = `https://github.com/${repository.toLowerCase()}/blob/HEAD/${path.split('/').map(encodeURIComponent).join('/')}`;
-        if (!required.has(key)) required.set(key, new Set());
+    // Explicit source paths in trusted requirements retain subject scope without dumping unreferenced repository files.
+    const cleanRel = raw => {
+      const cleaned = raw.replace(/^\.\//, '').replace(/\/+/g, '/').replace(/\.+$/, '');
+      const parts = cleaned.split('/');
+      return !cleaned || parts.some(p => !p || p === '.' || p === '..' || p === '.git' || p === 'node_modules') ? '' : cleaned;
+    };
+    const root = requirements.length ? await selectedCheckout(at, repository, readPorts) : null;
+    let trackedSet = null;
+    if (root) try {
+      trackedSet = new Set((await service(root, readPorts).run('git', ['ls-files', '-z'])).split('\0').filter(Boolean));
+    } catch { trackedSet = null; }
+    const addPath = (raw, issue) => {
+      const cleaned = cleanRel(raw);
+      if (!cleaned || (trackedSet && !trackedSet.has(cleaned))) return;
+      const key = `https://github.com/${repository.toLowerCase()}/blob/HEAD/${cleaned.split('/').map(encodeURIComponent).join('/')}`;
+      const targets = required.get(key) ?? new Set(); targets.add(issue); required.set(key, targets);
+    };
+    if (trackedSet) {
+      const trackable = p => (p.includes('/') || p.includes('.') || /^(?:Makefile|Dockerfile|Procfile|Gemfile|Pipfile|Rakefile|Justfile|Vagrantfile|Brewfile|CODEOWNERS|LICENSE|NOTICE|AUTHORS)$/.test(p))
+        && !/(?:^|\/)\.git(?:\/|$)|(?:^|\/)node_modules(?:\/|$)/.test(p);
+      const mentions = (str, relPath) => {
+        for (const needle of new Set([relPath, relPath.split('/').map(encodeURIComponent).join('/')])) {
+          for (let idx = str.indexOf(needle); idx !== -1; idx = str.indexOf(needle, idx + 1)) {
+            const start = str.slice(Math.max(0, idx - 2), idx) === './' ? idx - 2 : idx;
+            const before = start > 0 ? str[start - 1] : '', after = str.slice(idx + needle.length);
+            const bm = /https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/blob\/HEAD\/$/i.exec(str.slice(Math.max(0, start - 120), start));
+            const blobPrefix = Boolean(bm && sameRepo(`${bm[1]}/${bm[2]}`, repository));
+            if ((blobPrefix || !/[A-Za-z0-9_./:@-]/.test(before)) && !/^[A-Za-z0-9_/-]|^\.[A-Za-z0-9]/.test(after)) return true;
+          }
+        }
+        return false;
+      };
+      for (const relPath of trackedSet) if (trackable(relPath)) for (const r of requirements) if (mentions(r.text, relPath)) addPath(relPath, r.issue);
+    } else {
+      const BLOB_URL = /https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/blob\/HEAD\/([A-Za-z0-9_./%-]+)/gi;
+      const SUB_PATH = /(?<![A-Za-z0-9_./:@-])(?:\.\/)?((?:\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+)(?:\/[A-Za-z0-9_.-]+)*\/[A-Za-z0-9_.-]*\.[A-Za-z0-9]+)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9])/g;
+      const ROOT_FILE = /(?<![A-Za-z0-9_./:@-])(?:\.\/)?(?!(?:Node|Next|Vue|React|Angular|Express|Nuxt|Svelte)\.js(?![A-Za-z0-9_.-]))([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:[cm]?[jt]sx?|py|md|json|toml|ya?ml|sql|html|css|sh|rs|go|rb|mod|sum|lock|ini|cfg|xml|txt))(?![A-Za-z0-9_/-]|\.[A-Za-z0-9])/g;
+      for (const r of requirements) {
+        for (const m of r.text.matchAll(BLOB_URL)) if (sameRepo(`${m[1]}/${m[2]}`, repository)) {
+          const decoded = m[3].replace(/\.+$/, '').split('/').map(s => { try { return decodeURIComponent(s); } catch { return s; } }).join('/');
+          addPath(decoded, r.issue);
+        }
+        for (const m of r.text.matchAll(SUB_PATH)) addPath(m[1], r.issue);
+        for (const m of r.text.matchAll(ROOT_FILE)) addPath(m[1], r.issue);
       }
     }
+    const MAX_EVIDENCE_TEXT = 65536, HALF_EVIDENCE_TEXT = 32768;
+    const cleanSlice = (text, start, end) => {
+      let s = start, e = end;
+      if (s > 0 && text.charCodeAt(s) >= 0xdc00 && text.charCodeAt(s) <= 0xdfff) s++;
+      if (e < text.length && text.charCodeAt(e - 1) >= 0xd800 && text.charCodeAt(e - 1) <= 0xdbff) e--;
+      return text.slice(s, e);
+    };
+    const boundText = value => typeof value === 'string' && value.length > MAX_EVIDENCE_TEXT
+      ? `${cleanSlice(value, 0, HALF_EVIDENCE_TEXT)}\n...[middle omitted]...\n${cleanSlice(value, value.length - HALF_EVIDENCE_TEXT, value.length)}` : value;
     for (const [key, targets] of required) try {
       const item = await readLocator({ key }, at, repository, readPorts);
-      if (item.path) source.push({ ...item, issues: [...targets] });
+      if (item.path) source.push({ ...item, text: boundText(item.text), issues: [...targets] });
     } catch { /* Unavailable required rows stay absent on completion. */ }
     return { json: JSON.stringify({ source, requirements }) };
   };
