@@ -15,7 +15,8 @@ import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './fil
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard } from './autopilot-intake.mjs';
 import { evaluateForensicsResult, findConfiguredSkipLabel, findExternalRepoLabel, formatForensicsBrief, formatForensicsComment, runPreRunForensics } from './autopilot-forensics.mjs';
-import { issueAreas, areasOverlap, groupReadyIssues, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
+import { issueAreas, areasOverlap, groupReadyIssues, orderGroupsSpreadFirst, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
+import { enqueueMergeQueueItem, mergeQueueStatusLine, processMergeQueue, readMergeQueue } from './autopilot-merge-queue.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
 import { classifyRateLimitFailure, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
@@ -273,6 +274,7 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
   return { engine: autopilotEngine(config), mode: ['off', 'observe', 'auto'].includes(a.mode) ? a.mode : 'off',
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: machine ? slotCount({ ...machine, repoRuns: a.runs }).slots : count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
     ...(a.intake !== undefined ? { intake: intakeMode(a.intake) } : {}),
+    ...(a.mergeQueue !== undefined ? { mergeQueue: a.mergeQueue === true } : {}),
     quietMinutes: count(a.quietMinutes, 45), ciStuckMinutes: count(a.ciStuckMinutes, 360), maxJobHours: count(a.maxJobHours, 24), report: ['file', 'draft', 'off'].includes(a.report) ? a.report : 'draft',
     decisions: ['ask', 'decide'].includes(a.decisions) ? a.decisions : 'decide',
     runtimeRepo: /^[\w.-]+\/[\w.-]+$/.test(String(a.reports?.runtimeRepo ?? '')) ? a.reports.runtimeRepo : null,
@@ -1691,7 +1693,7 @@ async function intake(ctx, rows) {
     }
     return m.poolOut ? poolHeldText(m.poolOut) : null;
   };
-  let others = [], candidateGroups = [], cards = null, busyJobs = [], areaBusyNote = null;
+  let others = [], candidateGroups = [], cards = null, busyJobs = [];
   if (activeMode) {
     delete state.intakeNote;
     const checkActiveIntakeLogin = async () => {
@@ -1737,7 +1739,9 @@ async function intake(ctx, rows) {
       .filter(Number.isSafeInteger);
     const activeGroupIssues = new Set([...others.flatMap(o => o.issues ?? [o.issue]), ...recentGroupHistory]);
     const ranked = rankReadyRows(ready, cards, { activeGroupIssues });
-    candidateGroups = groupReadyIssues(ranked, cards, { maxGroupSize: 3 });
+    let repoOwners = null;
+    try { if (state.cwd) repoOwners = ownerTable(ctx.fs, state.cwd, treeFiles(state.cwd)); } catch { repoOwners = null; }
+    candidateGroups = groupReadyIssues(ranked, cards, { maxGroupSize: 3, owners: repoOwners });
     if (!candidateGroups.length) return (await checkActiveIntakeLogin()) ?? await checkIdlePool();
     const rowByNumber = new Map((rows ?? []).filter(r => !r.pull_request).map(r => [r.number, r]));
     busyJobs = others.map(o => {
@@ -1745,8 +1749,10 @@ async function intake(ctx, rows) {
       const derived = memberRows.length
         ? memberRows.flatMap(r => issueAreas(r))
         : issueAreas({ title: o.title, body: o.text, labels: o.labels });
-      return { issue: o.issue, areas: normalizeAreaList([...(o.areas ?? []), ...(o.files ?? []), ...derived], 24) };
+      return { issue: o.issue, issues: o.issues ?? [o.issue], areas: normalizeAreaList([...(o.areas ?? []), ...(o.files ?? []), ...derived], 24) };
     });
+    candidateGroups = orderGroupsSpreadFirst(candidateGroups, busyJobs, { owners: repoOwners });
+    if (!candidateGroups.length) return (await checkActiveIntakeLogin()) ?? await checkIdlePool();
   } else {
     // S2 (debate B): among the first ready issues, start first one whose named paths meet no running job (its named
     // paths and its changed files); else the oldest. A hint only: it never leaves a slot idle.
@@ -1784,13 +1790,7 @@ async function intake(ctx, rows) {
   for (const group of candidateGroups) {
       if (free <= 0 || tries >= CLAIM_TRIES) break;
       const row = group.primary;
-      if (activeMode && group.areas.length) {
-        const conflict = busyJobs.map(b => ({ issue: b.issue, ...areasOverlap(group.areas, b.areas) })).find(x => x.overlap);
-        if (conflict) {
-          areaBusyNote ??= `intake held: area busy (#${conflict.issue} touches ${conflict.reason})`;
-          continue;
-        }
-      }
+      // Spread-first dispatch (#3455): candidateGroups already orders disjoint areas first and overflows into free slots.
       tries++;
       const n = row.number, stamp = `${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, branch = `pdd/core-${n}-${stamp}`, worktree = join(ctx.dirs.worktrees, String(n));
       const step = ctx.ports.selectLogin ? (firstStep ?? await selectAgentStep(ctx, n)) : null;
@@ -2001,7 +2001,7 @@ async function intake(ctx, rows) {
         if (pausedText()) return pausedText();
       }
   }
-  return ctx.counts.started === 0 && areaBusyNote ? areaBusyNote : null;
+  return null;
 }
 
 // ---- Merge check ----------------------------------------------------------------------------------------
@@ -3551,6 +3551,22 @@ async function mergeCheck(ctx, job) {
   if (job.paths?.unchecked?.length) { Object.assign(job, { lastError: `the merge waits: ${job.paths.wait}`, lastErrorTool: false, lastErrorStep: job.paths.bindingsWait ? 'bindings' : 'owners' }); ctx.saveJob(job); return; }
   // #3241 (rule B5): a Runtime check that was never sent, or got no verdict with no failed check, is sent once more.
   if ((await runtimeResend(ctx, job, pr)).hold) return;
+  if (ctx.settings.mergeQueue && ctx.settings.mode === 'auto') {
+    const claim = await confirmClaim(ctx, job);
+    if (ctx.lost(claim, job)) return handOver(ctx, job, 'another machine holds the claim now');
+    if (!ctx.owns(claim, job) || !claim.active) { Object.assign(job, { lastError: 'the claim of this machine is not confirmed', lastErrorTool: false, lastErrorStep: 'claim' }); ctx.saveJob(job); return; }
+    await enqueueMergeQueueItem({
+      stateDir: ctx.root, pr: job.pr, issue: job.issue, issues: jobIssues(job),
+      branch: job.branch, baseBranch: state.baseBranch, headSha: job.head, readyAt: job.prAt ?? ctx.now(),
+    }, { fs: ctx.fs, now: ctx.now });
+    const mqOut = await runCoreMergeQueue(ctx, 'auto');
+    const item = mqOut?.queue?.items?.find(i => i.pr === job.pr);
+    if (item?.state === 'merged') return finishMerge(ctx, job);
+    if (item?.state === 'ejected') return end(ctx, job, cause('job', 'checks-red', `merge queue ejected PR #${job.pr}: ${item.ejectReason || 'rebase verification failed'}`));
+    if (item?.headSha && item.headSha !== job.head) job.head = item.headSha;
+    ctx.saveJob(job);
+    return;
+  }
   // The merge lane: one PR per repository in the final step. Other green PRs wait in claim order with their reviews.
   if (await enterLane(ctx, job) !== 'final') return;
   // L2: the exact conflict check. A conflict never goes to repairOrEnd: mechanical hunks are fixed in the lane, other
@@ -4508,6 +4524,18 @@ async function wouldMerge(ctx, job, pr) {
     await gh.call('DELETE', `repos/${repo}/issues/${comp.issue}/labels/${encodeURIComponent('pdd:working')}`).catch(() => {});
   }
   if (keptCompanions.length !== jobCompanions(job).length) setJobCompanions(job, keptCompanions);
+  const syncedBaseSha = (await ctx.git(['rev-parse', `origin/${ctx.state.baseBranch}`], job.worktree).catch(() => '')) || null;
+  await enqueueMergeQueueItem({
+    stateDir: ctx.root,
+    pr: job.pr,
+    issue: job.issue,
+    issues: [job.issue, ...keptCompanions.map(c => c.issue)],
+    branch: job.branch,
+    baseBranch: ctx.state.baseBranch,
+    headSha: job.head,
+    readyAt: ctx.now(),
+    syncedBaseSha,
+  }, { fs: ctx.fs, now: ctx.now }).catch(err => ctx.warn(`Autopilot core could not enqueue PR #${job.pr} into merge queue: ${err.message}`));
   ctx.counts.wouldMerge++; ctx.produced();
   return finishLocal(ctx, job, 'would-merge', `observe mode: PR #${job.pr} passed every check at ${short(job.head)}; not merged`);
 }
@@ -4638,6 +4666,29 @@ async function finishMerge(ctx, job, read = null) {
   applyTelemetrySpan(ctx, job, mergeTracker.finishPhase('merge'), null, `merge:${job.head ?? job.pr}`);
   ctx.counts.merged++; ctx.produced();
   await finishLocal(ctx, job, 'merged', `merged PR #${job.pr}`);
+}
+function runCoreMergeQueue(ctx, mode) {
+  return processMergeQueue({
+    stateDir: ctx.root,
+    repoRoot: ctx.state.cwd,
+    baseBranch: ctx.state.baseBranch,
+    mode,
+    agent: ctx.state.agent,
+  }, {
+    fs: ctx.fs,
+    now: ctx.now,
+    warn: ctx.warn,
+    git: ctx.ports.git,
+    getPullRequest: async prNum => {
+      const p = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${prNum}`);
+      return p ? { number: p.number, state: p.state, merged: Boolean(p.merged || p.merged_at), headSha: p.head?.sha ?? '', branch: p.head?.ref ?? '', baseBranch: p.base?.ref ?? '', mergeable: p.mergeable, mergeStateStatus: p.mergeable_state } : null;
+    },
+    mergePullRequest: async ({ pr: prNum, headSha }) => {
+      const res = await ctx.ports.gh(['pr', 'merge', String(prNum), '--repo', ctx.repo, '--merge', '--match-head-commit', headSha]);
+      return res.code === 0 ? { merged: true } : { merged: false, error: res.stderr || res.stdout || 'gh pr merge failed' };
+    },
+    commentOnPr: (prNum, body) => ctx.comment(prNum, body),
+  });
 }
 async function sweepWouldMerge(ctx, open, rows) {
   if (!open) return;
@@ -5592,6 +5643,9 @@ export async function tickCore(input, ports) {
   if (input.budget?.state !== 'reserve') try { rows = await ports.listIssues(); } catch (error) { ctx.warn(`Autopilot core could not list issues: ${error.message}`); }
   const open = rows && new Map(rows.filter(row => !row.pull_request).map(row => [row.number, row]));
   if (open) await sweepWouldMerge(ctx, open, rows).catch(error => ctx.warn(`Autopilot core could not sweep would-merge issues: ${error.message}`));
+  if (ctx.state.cwd && readMergeQueue(ctx.root, { fs: ctx.fs }).items.some(i => ['queued', 'processing', 'synced'].includes(i.state))) {
+    await runCoreMergeQueue(ctx, settings.mode === 'auto' ? 'auto' : 'observe').catch(error => ctx.warn(`Autopilot core merge queue skipped: ${error.message}`));
+  }
   // Only open issues by trusted authors reach a prompt (the same rule as intake).
   ctx.trustedOpen = async () => ctx.openRows ??= Array.isArray(rows) ? (await Promise.all(rows.filter(row => !row.pull_request).map(async row => await ctx.trust(row) ? row : null))).filter(Boolean) : null;
   if (open) for (const job of readJobs(ctx.fs, ctx.root)) {
@@ -5822,6 +5876,8 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   lines.push(...poolLines(machine));
   lines.push(...ciLines(machine));
   if (intakeMode(settings.intake) === 'active' && named(state.intakeNote)) lines.push(oneLine(state.intakeNote, 300));
+  const mqLine = mergeQueueStatusLine(ports.root, { fs });
+  if (mqLine) lines.push(mqLine);
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}${pddWords(fs, part)}` : '';
   for (const job of jobs) {
