@@ -1,0 +1,61 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/accounts-claude-add.md",
+  "criteria": [
+    {"id": "AC1", "text": "When Claude displays a wrapped OAuth token, `pdd accounts add --provider claude` submits the complete new token to PDD Cloud."},
+    {"id": "AC2", "text": "When Claude prints no OAuth token to stdout, enrollment fails without uploading an existing token."}
+  ],
+  "initial_world": {"logins": [], "requests": []},
+  "simulation": {
+    "login.run": {
+      "action": "port.write",
+      "world_pointer": "/logins",
+      "result_template": {
+        "code": 0,
+        "stdout": "Your OAuth token:\n\n\u001b[32msk-ant-oat01-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDE\u001b[0m\n    \u001b]0;OAuth\u0007\u001b[32mFGHIJKLMNOPQRSTUVWXYZ0123456789_-\u001b[0m\nDone\n",
+        "stderr": ""
+      }
+    },
+    "cloud.fetch": {
+      "action": "port.write",
+      "world_pointer": "/requests",
+      "result_template": {"status": 400, "ok": false, "text": "{\"detail\":\"synthetic fixture stops after the enrollment request\"}"}
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "wrapped-token",
+      "entry_path": "prompts/cli/accounts-cli.prompt.md",
+      "operation": "runAccountsCli",
+      "input": {"commandId": "accounts.add", "options": {"--provider": "claude"}, "cwd": "/project", "stdin": "", "env": {"HOME": "/home/dev", "GH_TOKEN": "synthetic-gh-token", "PDD_CLOUD_URL": "https://cloud.example"}},
+      "checks": [
+        {"criterion_id": "AC1", "target": "world", "path": "/requests/0/body", "op": "contains", "value": "\"sk-ant-oat01-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-\""},
+        {"criterion_id": "AC1", "target": "world", "path": "/requests/0/method", "op": "equals", "value": "POST"}
+      ]
+    },
+    {
+      "step_id": "missing-token",
+      "entry_path": "prompts/cli/accounts-cli.prompt.md",
+      "operation": "runAccountsCli",
+      "input": {"commandId": "accounts.add", "options": {"--provider": "claude"}, "cwd": "/project", "stdin": "", "env": {"HOME": "/home/dev", "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-synthetic-stale-token-0000", "GH_TOKEN": "synthetic-gh-token", "PDD_CLOUD_URL": "https://cloud.example"}},
+      "simulation_overrides": [
+        {
+          "operation": "login.run",
+          "criterion_id": "AC2",
+          "failure_quote": "enrollment fails",
+          "reason": "Exercise a successful process exit with no new OAuth token in stdout.",
+          "binding": {
+            "action": "port.write",
+            "world_pointer": "/logins",
+            "result_template": {"code": 0, "stdout": "Setup finished.\n", "stderr": "sk-ant-oat01-synthetic-diagnostic-token-1111"}
+          }
+        }
+      ],
+      "checks": [
+        {"criterion_id": "AC2", "target": "result", "path": "/exitCode", "op": "equals", "value": 1},
+        {"criterion_id": "AC2", "target": "world", "path": "/requests", "op": "count", "value": 1}
+      ]
+    }
+  ]
+}
