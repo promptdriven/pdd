@@ -56,8 +56,17 @@ Native authoring, generation and verification of the default `readRun` adapter r
 
 Measure elapsed wall minutes around each native test phase, including failed phases, using an injected `suiteNow` clock (native performance.now). Record those minutes through injected `recordSuiteCost` (native ordinary run update with applyCostMeasurement) once per phase with a unique id. Do not retain command text in cost measurements. Measurement failure never changes proof outcome.
 
+## Iterative affected-tests-first verification and final suite separation
+
+Export native helpers `resolveVerifyPlan(options = {}, ports = {})`, `verifyAffected(options = {}, ports = {})`, and `proveAffectedRun(options = {}, ports = {})` alongside `proveRun` so iterative worker check, verify, and repair loops run only affected native test files in seconds while reserving the full test suite for once before merge (or global-fallback changes):
+
+- **`resolveVerifyPlan`:** In iterative mode (`mode: 'iterative' | 'verify' | 'affected'`, default), resolve affected test files via [Test selection](test-selection.prompt.md) (`selectAffectedTests`). Build a fast Node `--test` command over `selectedTests` (preserving repository preload `--import` helpers such as `test-home.mjs` and `test-net-guard.mjs` when present, plus optional `--test-concurrency` from `concurrency` or `PDD_CHECK_CPUS`), skip execution cleanly when `selectedCount === 0` (`executionMode: 'skip'`), and fall back to the repository's full test command (`executionMode: 'full'`) ONLY when `selectAffectedTests` reports `mode: 'full'` (`global-test-helper`, `package-config`, `core-shared-infrastructure`, or unavailable diff). In final pre-merge mode (`mode: 'final' | 'merge' | 'full'`), select the full test suite (`totalCount` of `totalCount` test files) for execution once on the merge head.
+- **`verifyAffected`:** Validate `timeoutMinutes` (`1..120`, exit 2 on invalid input), resolve the optional workflow run (`ports.readRun`) to obtain `root`/`baseBranch`/`runDir`, compute `resolveVerifyPlan`, execute the selected command with the same isolated process-group lifecycle, parent signal handling (`SIGINT`=130, `SIGTERM`=143, `SIGHUP`=129), stream head/tail bounds, and `applyCostMeasurement` suite-minute recording as `proveRun`, atomically write `affected-verify.json` in `runDir` when a run is bound (leaving `old-code-proof.json` untouched), and return `{exitCode, mode, executed, selectedTests, totalTests, selectedCount, totalCount, fallbackReason, fallbackCategory, command, durationMs, message}` whose `message` always reports `selectedCount` vs `totalCount` test files.
+- **`proveAffectedRun`:** When `test` is omitted or `'auto'`, inspect the committed merge-base to `HEAD` diff (`ports.snapshot`), resolve the affected-or-fallback command via `resolveVerifyPlan`, run `proveRun` with that command, and attach `selection` counts and summary to the returned proof result; when explicit `test` is given, forward directly to `proveRun` unchanged.
+
 ## Dependencies
 
+- [Test selection](test-selection.prompt.md): affected native test graph resolution, global fallback detection, and selection summary formatting.
 - [Cost ledger](cost-ledger.prompt.md): native generation and verification context for suite-minute observations.
 
 - Actual injected callbacks `ports.readRun`, `snapshot`, `createWorktree`, `overlay`, `runProcess`, `cleanup`, `saveProof` correspond one-for-one to resource `host` operations. Defaults perform real local run/Git/filesystem/process operations; decision logic calls no host APIs directly. `readRun` resolves and returns only runId/runDir/root/baseSha/baseBranch plus error; `snapshot({root,baseBranch})` fetches/computes the committed base/head identity and returns baseSha plus exact NUL-safe changed-file descriptors; error is empty on success. `createWorktree` returns its path even on a partial failure when cleanup is required. `overlay` and `cleanup` return an empty error on success. `runProcess` returns bounded stdout/stderr and termination facts, with an error for spawn/host failure and setupError for the recognized setup diagnostics above. `saveProof` performs atomic persistence. Resource schemas below are the actual callback contracts, not alternate check-only arguments.
@@ -70,7 +79,7 @@ Runtime fakes establish forwarding and classification only. Native Git isolation
 ```json
 {
   "status":"approved",
-  "prose_sha256":"76f93ca20abcda792b603b659c3205b0e9a9d7de1e26e0c1747fb26956e1f21d",
+  "prose_sha256":"483f696d3a2ec3c34d719e998ddeea3c149cb0e8382a2a2bea9efd82c2524b8f",
   "value_reference_protocol":"pdd.graph-value-reference.v1",
   "entries": [
     {

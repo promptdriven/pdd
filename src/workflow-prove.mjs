@@ -3,6 +3,7 @@ import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { resolveRun, updateRun } from './workflow-runs.mjs';
 import { applyCostMeasurement } from './cost-ledger.mjs';
+import { selectAffectedTests } from './test-selection.mjs';
 import { constants, fchmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -253,4 +254,399 @@ export async function proveRun({ref,test,expect,cwd,timeoutMinutes=DEFAULT_PHASE
     if(record.interruptSignal!==interruptSignal){record.interruptSignal=interruptSignal;record.outcome=classifyProof(record);try{await p.saveProof({runDir:run.runDir,record});}catch{}}
     return {exitCode:interruptExit()??(record.outcome==='proved'?0:1),message:formatProof(record)};
   } finally {for(const [signal,handler] of handlers)process.removeListener(signal,handler);}
+}
+
+// --- Iterative affected-tests-first verification and final suite separation (#3065) ---
+
+const ITERATIVE_MODES = new Set(['iterative', 'verify', 'affected']);
+const FINAL_MODES = new Set(['final', 'merge', 'full']);
+const shellQuote = value => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${String(value).replaceAll("'", `'\\''`)}'`);
+
+function filePresent(root, relPath, ports = {}) {
+  if (Array.isArray(ports.files)) return ports.files.includes(relPath);
+  if (typeof ports.readFile === 'function') return ports.readFile(relPath, root) !== null;
+  try {
+    return lstatSync(join(root, relPath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function detectFullTestCommand(root, ports = {}) {
+  const readText = relPath => {
+    if (typeof ports.readFile === 'function') return ports.readFile(relPath, root);
+    try {
+      return readFileSync(join(root, relPath), 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  let pkg = null;
+  const rawPkg = readText('package.json');
+  if (typeof rawPkg === 'string') {
+    try {
+      pkg = JSON.parse(rawPkg);
+    } catch {
+      pkg = null;
+    }
+  }
+  if (filePresent(root, 'pnpm-lock.yaml', ports) && pkg?.scripts?.test) return 'pnpm test';
+  if (filePresent(root, 'yarn.lock', ports) && pkg?.scripts?.test) return 'yarn test';
+  if (pkg?.scripts?.test) return 'npm test';
+  return 'node --test';
+}
+
+function buildAffectedNodeCommand({ root, selectedTests, concurrency, ports = {} }) {
+  const args = ['node'];
+  for (const preload of ['test/helpers/test-home.mjs', 'test/helpers/test-net-guard.mjs']) {
+    if (filePresent(root, preload, ports)) args.push('--import', `./${preload}`);
+  }
+  const cpus = Number(concurrency ?? ports.env?.PDD_CHECK_CPUS ?? process.env.PDD_CHECK_CPUS);
+  if (Number.isInteger(cpus) && cpus >= 1) args.push(`--test-concurrency=${cpus}`);
+  args.push('--test', ...selectedTests.map(shellQuote));
+  return args.join(' ');
+}
+
+export function resolveVerifyPlan(options = {}, ports = {}) {
+  const root = options.root ?? process.cwd();
+  const baseBranch = options.baseBranch ?? 'main';
+  const requestedMode = options.mode ?? 'iterative';
+  const isFinal = FINAL_MODES.has(requestedMode);
+  const fullCommand =
+    typeof options.fullTestCommand === 'string' && options.fullTestCommand.trim()
+      ? options.fullTestCommand.trim()
+      : detectFullTestCommand(root, { ...ports, files: options.files });
+
+  if (isFinal) {
+    const inventory = selectAffectedTests(
+      { root, files: options.files, changedFiles: [], smokeTests: [] },
+      ports,
+    );
+    return {
+      mode: 'final',
+      executionMode: 'full',
+      selectionMode: 'full',
+      selectedTests: inventory.totalTests,
+      totalTests: inventory.totalTests,
+      selectedCount: inventory.totalCount,
+      totalCount: inventory.totalCount,
+      changedFiles: Array.isArray(options.changedFiles) ? [...options.changedFiles] : [],
+      smokeTests: [],
+      fallbackReason: null,
+      fallbackCategory: null,
+      reasons: {},
+      command: fullCommand,
+      summary: `Full test suite (before merge): running all ${inventory.totalCount} of ${inventory.totalCount} test files.`,
+    };
+  }
+
+  const selection = selectAffectedTests(
+    {
+      root,
+      baseRef: options.baseRef ?? `origin/${baseBranch}`,
+      changedFiles: options.changedFiles,
+      files: options.files,
+      smokeTests: options.smokeTests,
+      coreInfrastructure: options.coreInfrastructure,
+      dispatcherImportThreshold: options.dispatcherImportThreshold,
+    },
+    ports,
+  );
+
+  if (selection.mode === 'full') {
+    return {
+      mode: 'iterative',
+      executionMode: 'full',
+      selectionMode: 'full',
+      ...selection,
+      command: fullCommand,
+    };
+  }
+
+  if (selection.selectedCount === 0) {
+    return {
+      mode: 'iterative',
+      executionMode: 'skip',
+      selectionMode: 'affected',
+      ...selection,
+      command: '',
+    };
+  }
+
+  return {
+    mode: 'iterative',
+    executionMode: 'affected',
+    selectionMode: 'affected',
+    ...selection,
+    command: buildAffectedNodeCommand({
+      root,
+      selectedTests: selection.selectedTests,
+      concurrency: options.concurrency,
+      ports: { ...ports, files: options.files },
+    }),
+  };
+}
+
+async function saveAffectedVerify({ runDir, record }) {
+  const temporary = join(runDir, `.affected-verify-${randomBytes(8).toString('hex')}.tmp`);
+  try {
+    writeFileSync(temporary, JSON.stringify(record, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    renameSync(temporary, join(runDir, 'affected-verify.json'));
+    return { error: '' };
+  } catch (error) {
+    return { error: diagnostic(error) };
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+export async function verifyAffected(options = {}, ports = {}) {
+  const timeoutMinutes = options.timeoutMinutes ?? DEFAULT_PHASE_MINUTES;
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 120) {
+    return { exitCode: 2, message: 'pdd workflow prove --timeout takes whole minutes from 1 to 120.' };
+  }
+  const requestedMode = options.mode ?? 'iterative';
+  if (!ITERATIVE_MODES.has(requestedMode) && !FINAL_MODES.has(requestedMode)) {
+    return { exitCode: 2, message: `Unknown verify mode: ${String(requestedMode)}.` };
+  }
+
+  const p = { ...defaults, saveAffectedVerify, ...ports };
+  let run = null;
+  if (options.ref !== undefined && options.ref !== null && String(options.ref).trim()) {
+    try {
+      const resolved = await p.readRun({ ref: String(options.ref), cwd: options.cwd ?? options.root ?? process.cwd() });
+      if (resolved.error || !resolved.run) throw Error('Run unavailable.');
+      run = resolved.run;
+    } catch {
+      return { exitCode: 1, message: 'Affected tests: ✗ setup-error (run unavailable).' };
+    }
+  }
+
+  const root = options.root ?? run?.root ?? options.cwd ?? process.cwd();
+  const baseBranch = options.baseBranch ?? run?.baseBranch ?? 'main';
+  const plan = resolveVerifyPlan({ ...options, root, baseBranch, mode: requestedMode }, ports);
+
+  const persistRecord = async (extra = {}) => {
+    if (!run?.runDir) return;
+    try {
+      await p.saveAffectedVerify({
+        runDir: run.runDir,
+        record: {
+          v: 1,
+          origin: 'pdd.workflow-verify-affected.v1',
+          runId: run.runId,
+          mode: plan.mode,
+          executionMode: plan.executionMode,
+          selectionMode: plan.selectionMode,
+          selectedCount: plan.selectedCount,
+          totalCount: plan.totalCount,
+          selectedTests: plan.selectedTests,
+          changedFiles: plan.changedFiles,
+          fallbackReason: plan.fallbackReason,
+          fallbackCategory: plan.fallbackCategory,
+          command: plan.command,
+          summary: plan.summary,
+          ...extra,
+        },
+      });
+    } catch {
+      // Verification result still returns to caller if optional run-folder persistence fails.
+    }
+  };
+
+  if (plan.executionMode === 'skip') {
+    await persistRecord({ executed: false, exitCode: 0, durationMs: 0, observedError: '' });
+    return {
+      exitCode: 0,
+      mode: plan.selectionMode,
+      executionMode: 'skip',
+      executed: false,
+      selectedTests: [],
+      totalTests: plan.totalTests,
+      selectedCount: 0,
+      totalCount: plan.totalCount,
+      fallbackReason: null,
+      fallbackCategory: null,
+      command: '',
+      durationMs: 0,
+      summary: plan.summary,
+      message: `${plan.summary} Skipped execution (0 affected test files).`,
+    };
+  }
+
+  const controller = new AbortController();
+  let interruptSignal = '';
+  const handlers = new Map(
+    ['SIGINT', 'SIGTERM', 'SIGHUP'].map(signal => [
+      signal,
+      () => {
+        if (!interruptSignal) {
+          interruptSignal = signal;
+          controller.abort();
+        }
+      },
+    ]),
+  );
+  for (const [signal, handler] of handlers) process.on(signal, handler);
+  const interruptExit = () => ({ SIGINT: 130, SIGTERM: 143, SIGHUP: 129 }[interruptSignal]);
+
+  try {
+    const suiteNow = ports.suiteNow ?? (() => performance.now());
+    const started = suiteNow();
+    let response;
+    try {
+      const input = {
+        command: plan.command,
+        cwd: root,
+        timeoutMs: timeoutMinutes * 60000,
+        killGraceMs: 2000,
+        outputLimitBytes: 1048576,
+      };
+      response = await (ports.runProcess ? p.runProcess(input) : runProcess(input, controller.signal, ''));
+    } catch (error) {
+      response = {
+        result: {
+          exitCode: null,
+          signal: '',
+          timedOut: false,
+          outputLimited: false,
+          stdout: '',
+          stderr: '',
+          error: diagnostic(error),
+          setupError: '',
+        },
+      };
+    }
+    const durationMs = Math.max(0, suiteNow() - started);
+    if (run?.runDir) {
+      try {
+        const measurement = { id: `verify-${randomUUID()}`, suiteMinutes: durationMs / 60000 };
+        await (ports.recordSuiteCost ?? (input => updateRun(run.runDir, latest => applyCostMeasurement(latest, input, Date.now()))))(measurement);
+      } catch {}
+    }
+
+    const phase = phaseRecord(response.result, '');
+    const passed =
+      !interruptSignal &&
+      !phase.error &&
+      !phase.setupError &&
+      !phase.timedOut &&
+      !phase.outputLimited &&
+      !phase.signal &&
+      phase.exitCode === 0;
+    const exitCode = interruptExit() ?? (passed ? 0 : 1);
+    const label = plan.mode === 'final' ? 'Full test suite (before merge)' : 'Affected tests';
+    const countDetail =
+      plan.mode === 'final'
+        ? `${plan.totalCount} of ${plan.totalCount} test files`
+        : plan.selectionMode === 'full'
+          ? `${plan.totalCount} of ${plan.totalCount} test files; fallback: ${plan.fallbackReason}`
+          : `${plan.selectedCount} of ${plan.totalCount} test files`;
+
+    let message;
+    if (passed) {
+      const preview =
+        plan.selectionMode === 'affected' && plan.selectedTests.length <= 5
+          ? `: ${plan.selectedTests.join(', ')}`
+          : '';
+      message = `${label}: ✓ passed (${countDetail}${preview}).`;
+    } else {
+      const cause = interruptSignal
+        ? `parent ${interruptSignal}`
+        : phase.setupError || phase.error || (phase.timedOut ? 'timed out' : phase.observedError || 'failed');
+      const tail = actualTail({ outcome: 'head-fails', base: emptyPhase(), head: phase });
+      message = `${label}: ✗ failed (${countDetail}); command ${safeValue(plan.command, true)}; exit ${safeValue(phase.exitCode ?? 'none')}; cause ${safeValue(cause)}${tail ? `; tail ${safeValue(tail)}` : ''}.`;
+    }
+
+    await persistRecord({
+      executed: true,
+      exitCode,
+      durationMs,
+      interruptSignal,
+      observedError: passed ? '' : phase.observedError,
+    });
+
+    return {
+      exitCode,
+      mode: plan.selectionMode,
+      executionMode: plan.executionMode,
+      executed: true,
+      selectedTests: plan.selectedTests,
+      totalTests: plan.totalTests,
+      selectedCount: plan.selectedCount,
+      totalCount: plan.totalCount,
+      fallbackReason: plan.fallbackReason,
+      fallbackCategory: plan.fallbackCategory,
+      command: plan.command,
+      durationMs,
+      summary: plan.summary,
+      message,
+    };
+  } finally {
+    for (const [signal, handler] of handlers) process.removeListener(signal, handler);
+  }
+}
+
+export async function proveAffectedRun({ ref, expect, cwd, test, smokeTests = [], coreInfrastructure, concurrency, timeoutMinutes = DEFAULT_PHASE_MINUTES } = {}, ports = {}) {
+  if (typeof test === 'string' && test.trim() && test.trim() !== 'auto') {
+    return proveRun({ ref, test, expect, cwd, timeoutMinutes }, ports);
+  }
+  if (typeof expect !== 'string' || !expect.trim()) {
+    return { exitCode: 2, message: 'pdd workflow prove requires nonblank --test and --expect.' };
+  }
+  if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 120) {
+    return { exitCode: 2, message: 'pdd workflow prove --timeout takes whole minutes from 1 to 120.' };
+  }
+
+  const p = { ...defaults, ...ports };
+  let runRes;
+  try {
+    runRes = await p.readRun({ ref, cwd });
+    if (runRes.error || !runRes.run) throw Error('Run unavailable.');
+  } catch {
+    return { exitCode: 1, message: 'Old-code proof: ✗ setup-error (run unavailable).' };
+  }
+
+  let snapRes;
+  try {
+    snapRes = await p.snapshot({ root: runRes.run.root, baseBranch: runRes.run.baseBranch });
+    if (snapRes.snapshot?.error || !snapRes.snapshot?.baseAvailable || !snapRes.snapshot?.headAvailable) {
+      return proveRun({ ref, test: detectFullTestCommand(runRes.run.root, ports), expect, cwd, timeoutMinutes }, { ...ports, readRun: async () => runRes, snapshot: async () => snapRes });
+    }
+  } catch (error) {
+    return proveRun({ ref, test: detectFullTestCommand(runRes.run.root, ports), expect, cwd, timeoutMinutes }, { ...ports, readRun: async () => runRes, snapshot: async () => { throw error; } });
+  }
+
+  const changedFiles = snapRes.snapshot.files.map(f => f.path);
+  const plan = resolveVerifyPlan(
+    {
+      root: runRes.run.root,
+      baseBranch: runRes.run.baseBranch,
+      changedFiles,
+      smokeTests,
+      coreInfrastructure,
+      concurrency,
+      mode: 'iterative',
+    },
+    ports,
+  );
+  const resolvedCommand = plan.command || detectFullTestCommand(runRes.run.root, ports);
+  const proof = await proveRun(
+    { ref, test: resolvedCommand, expect, cwd, timeoutMinutes },
+    { ...ports, readRun: async () => runRes, snapshot: async () => snapRes },
+  );
+  return {
+    ...proof,
+    selection: {
+      mode: plan.selectionMode,
+      executionMode: plan.executionMode,
+      selectedCount: plan.selectedCount,
+      totalCount: plan.totalCount,
+      selectedTests: plan.selectedTests,
+      fallbackReason: plan.fallbackReason,
+      fallbackCategory: plan.fallbackCategory,
+      summary: plan.summary,
+    },
+    message: `${proof.message} (${plan.summary})`,
+  };
 }
