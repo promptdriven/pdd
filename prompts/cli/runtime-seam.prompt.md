@@ -54,7 +54,7 @@ Expose every public binding and scoped slice loader of `@promptdriven/runtime-cl
 - `openCli`, `openServe`, `runShim`, `saveLast`
 - `buildAgentInput`
 
-The seam holds no mutable request state and loads zero additional pdd or Runtime modules when `src/runtime-seam.mjs` itself evaluates; each caller loads only its requested slice or command graph. Both static imports and dynamic `import('./runtime-seam.mjs')` callers receive the same namespace.
+The seam holds no mutable request state and loads zero additional pdd or Runtime modules when `src/runtime-seam.mjs` itself evaluates; each caller loads only its requested slice or command graph. Both static imports and dynamic `import('./runtime-seam.mjs')` callers receive the same namespace. Normalize any legacy hosted `pdd test --fill-hash` (`--fill-hash`) hint to `pdd test` across rendered Runtime text/JSON and Runtime stream ports (`stdout`, `stderr`) without `Proxy` wrappers.
 
 ## Dependencies
 
@@ -72,6 +72,6 @@ The seam holds no mutable request state and loads zero additional pdd or Runtime
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "5f79f0b5add375a0b90f45b8585b026765ff8f9ba37b0548412e44873eeaa404","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "f42c2562f56a4499dde68e293db4081a441dc4da69a46dddbff007aa355be360","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>

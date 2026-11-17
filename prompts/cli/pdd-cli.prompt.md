@@ -233,7 +233,7 @@ For `runtime-jobs`, dynamically import the [Runtime seam](runtime-seam.prompt.md
 
 For the `prompt-approve` plan, import [prompt approve](prompt-approve.prompt.md) dynamically and return `runApprove({words, cwd, ...(options["--said"] !== undefined ? {said: options["--said"]} : {})}, {stdout, stderr, env})` unchanged.
 
-For the `runtime-check` and `runtime-try` plans, import the [Runtime seam](runtime-seam.prompt.md) dynamically and call `check`, `lint` (when `--lint` is set) or `simulate` with the operands (`words`), the options and cwd, plus stdout, stderr and the injected env. Pass `cache:true` for every `runtime-check` plan (test and lint); the runtime client decides which modes use it. Return its exit code unchanged. The runtime client also owns local `lint --local` and `test --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for test, lint and simulate stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
+For the `runtime-check` and `runtime-try` plans, import the [Runtime seam](runtime-seam.prompt.md) dynamically and call `check`, `lint` (when `--lint` is set) or `simulate` with the operands (`words`), the options and cwd, plus stdout, stderr and the injected env. Before `runtime-check` Story runs (when none of `--local`, `--files`, `--explain-bindings`, `--read`, `--retry`, `--request` or `--screen` is set), emit a non-blocking `Advisory [inverted-native-only-dependency]` warning on `stderr` whenever a selected Story enters a checkable prompt (`kind !== 'native-only'`) whose dependency closure reaches a `kind: native-only` adapter prompt, without adding a refusal gate. Pass `cache:true` for every `runtime-check` plan (test and lint); the runtime client decides which modes use it. Return its exit code unchanged. The runtime client also owns local `lint --local` and `test --screen URL --drawing PATH`; dispatch them with the same operands, options, cwd and ports, without adding runtime authentication in this router. Help for test, lint and simulate stays local. If the client throws, write `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.` to stderr and return 3, because checks may have been sent.
 
 For `workflow-view`, dynamically import [read-only review](workflow-view.prompt.md) and call `viewRun({ref: operands[0], cwd})`. Print the result once (stdout on success, stderr on failure) and return its exit code. This route must not import the workflow runner, inspect Herdr, or execute PATH version probes.
 
@@ -308,7 +308,7 @@ reply.
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "df6c5713fb162ceffbeaf5d1bba4c26a3cca9b623a7d3253cb5c27b954e395eb",
+  "prose_sha256": "5a064cb27c300ac49be98aa70a30d46923562888f4a94b34a3813cedfa7ed584",
   "entries": [
     {
       "operation": "runPdd",
