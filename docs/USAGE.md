@@ -88,7 +88,7 @@ Important:
 - Always install and update with the full `github:promptdriven/pdd` line.
 - Do not run `npm install -g pdd`. That installs a different, unrelated package from the npm registry.
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace your pdd with it. You can see this with `npm outdated -g`.
-- If npm says `EEXIST` on `<prefix>/bin/pdd`, an unscoped `pdd` npm package still owns `bin/pdd` while PDD installs as `@promptdriven/pdd`. Remove the unscoped package first instead of passing `--force`: `npm uninstall -g pdd && npm install -g github:promptdriven/pdd` (`pdd upgrade` removes unscoped `pdd` automatically).
+- If npm says `EEXIST` on `<prefix>/bin/pdd`, an unscoped `pdd` npm package still owns `bin/pdd` while PDD installs as `@promptdriven/pdd`. Remove the unscoped package first instead of passing `--force`: `npm uninstall -g pdd && npm install -g github:promptdriven/pdd`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
 
 ### 2.3 Start Autopilot on your repository

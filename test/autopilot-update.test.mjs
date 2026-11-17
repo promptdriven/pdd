@@ -680,12 +680,22 @@ test('#3474 pdd upgrade and Autopilot self-update uninstall unscoped pdd before 
   assert.match(errEexist.text, /already exists from a non-npm binary or symlink/);
   assert.ok(errEexist.text.includes(`npm install -g --prefix ${expectedQuotedPrefix} --ignore-scripts github:promptdriven/pdd#0123456789abcdef0123456789abcdef01234567 && pdd setup`), errEexist.text);
 
-  // 3. Rollback in runCliUpgrade when npm install fails AFTER npm uninstall removes legacy unscoped pdd:
+  // 3. Rollback in runCliUpgrade when npm install fails AFTER npm uninstall removes legacy unscoped pdd,
+  //    while protecting a `<prefix>/pdd` directory (e.g. `~/pdd` clone), a `.git`/symlinked sibling `node_modules/pdd`, and unrelated root files:
   const rbPrefix = join(sandbox, "rollback 'cli' prefix");
   const rbQuoted = `'${rbPrefix.replace(/'/g, "'\\''")}'`;
   const rbLegacy = join(rbPrefix, 'lib/node_modules/pdd');
+  const rbCloneDir = join(rbPrefix, 'pdd');
+  const rbSiblingGit = join(rbPrefix, 'node_modules/pdd');
   mkdirSync(join(rbLegacy, 'bin'), { recursive: true });
   mkdirSync(join(rbPrefix, 'bin'), { recursive: true });
+  mkdirSync(join(rbCloneDir, '.git'), { recursive: true });
+  mkdirSync(join(rbSiblingGit, '.git'), { recursive: true });
+  writeFileSync(join(rbCloneDir, 'precious.txt'), 'user git clone at ~/pdd\n');
+  writeFileSync(join(rbSiblingGit, 'package.json'), JSON.stringify({ name: 'pdd', version: '0.1.31', bin: 'bin/pdd.mjs' }));
+  writeFileSync(join(rbSiblingGit, 'sibling-checkout.txt'), 'unverified .git sibling\n');
+  writeFileSync(join(rbPrefix, 'pdd.cmd'), 'REM unrelated user script\r\n');
+  writeFileSync(join(rbPrefix, 'pdd.ps1'), '#!/usr/bin/env pwsh\n& node "$basedir/node_modules/pdd/bin/pdd.mjs" $args\n');
   writeFileSync(join(rbLegacy, 'package.json'), JSON.stringify({ name: 'pdd', version: '0.1.31', bin: { pdd: 'bin/pdd.mjs' } }));
   writeFileSync(join(rbLegacy, 'bin/pdd.mjs'), '#!/usr/bin/env node\nconsole.log("0.1.31");\n', { mode: 0o755 });
   symlinkSync('../lib/node_modules/pdd/bin/pdd.mjs', join(rbPrefix, 'bin/pdd'));
@@ -699,6 +709,7 @@ test('#3474 pdd upgrade and Autopilot self-update uninstall unscoped pdd before 
     spawnSyncImpl: (file, args) => {
       if (file === 'npm' && args[0] === 'uninstall') {
         rmSync(join(rbPrefix, 'bin/pdd'), { force: true });
+        rmSync(join(rbPrefix, 'pdd.ps1'), { force: true });
         rmSync(rbLegacy, { recursive: true, force: true });
         return { status: 0, stdout: 'removed\n', stderr: '' };
       }
@@ -714,12 +725,47 @@ test('#3474 pdd upgrade and Autopilot self-update uninstall unscoped pdd before 
   assert.equal(resRb.exitCode, 1);
   assert.equal(hasLegacyUnscopedPdd(rbPrefix, { uid: process.getuid() }), true, 'legacy unscoped pdd restored on disk');
   assert.equal(readlinkSync(join(rbPrefix, 'bin/pdd')), '../lib/node_modules/pdd/bin/pdd.mjs', 'bin/pdd symlink restored');
+  assert.match(readFileSync(join(rbPrefix, 'pdd.ps1'), 'utf8'), /node_modules\/pdd\/bin\/pdd\.mjs/, 'verified Windows npm shim restored');
+  assert.equal(lstatSync(rbCloneDir).isDirectory(), true, '<prefix>/pdd directory preserved untouched');
+  assert.equal(readFileSync(join(rbCloneDir, 'precious.txt'), 'utf8'), 'user git clone at ~/pdd\n');
+  assert.equal(readFileSync(join(rbSiblingGit, 'sibling-checkout.txt'), 'utf8'), 'unverified .git sibling\n');
+  assert.equal(readFileSync(join(rbPrefix, 'pdd.cmd'), 'utf8'), 'REM unrelated user script\r\n');
   assert.equal(readdirSync(rbPrefix).some(entry => entry.startsWith('.pdd-upgrade-backup-')), false, 'backup dir cleaned up after rollback');
   assert.ok(errRb.text.includes(`npm uninstall -g --prefix ${rbQuoted} pdd && npm install -g --prefix ${rbQuoted} --ignore-scripts github:promptdriven/pdd#alpha-v${targetVersion} && pdd setup`), errRb.text);
 
-  // 3b. When rollback itself fails in runCliUpgrade, stderr explicitly warns unscoped pdd was removed and prints quoted restore command.
+  // Also verify a symlinked sibling `<prefix>/node_modules/pdd` remains an untouched symlink across staging and rollback:
+  rmSync(rbSiblingGit, { recursive: true, force: true });
+  symlinkSync(symlinkPkgTarget, rbSiblingGit);
+  const resRbSym = await runCliUpgrade({
+    env: { HOME: home },
+    stdout: captureStream(),
+    stderr: captureStream(),
+    fetchImpl,
+    spawnSyncImpl: (file, args) => {
+      if (file === 'npm' && args[0] === 'uninstall') {
+        rmSync(join(rbPrefix, 'bin/pdd'), { force: true });
+        rmSync(rbLegacy, { recursive: true, force: true });
+        return { status: 0, stdout: 'removed\n', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: 'npm error ECONNRESET\n' };
+    },
+    packageRoot: rbLegacy,
+    home,
+    cwd: join(sandbox, 'empty-cwd'),
+  }, { uid: process.getuid() });
+  assert.equal(resRbSym.exitCode, 1);
+  assert.equal(lstatSync(rbSiblingGit).isSymbolicLink(), true, 'symlinked sibling node_modules/pdd untouched');
+  rmSync(rbSiblingGit, { force: true });
+
+  // 3b. When rollback itself fails during restore, backupDir is preserved on disk (never deleted) and stderr prints its path + quoted restore command.
   const outRbFail = captureStream(), errRbFail = captureStream();
-  const brokenBackupFs = { ...nativeFs, cpSync: () => { throw Error('ENOSPC'); } };
+  const restoreFailFs = {
+    ...nativeFs,
+    cpSync(src, dst, opts) {
+      if (String(src).includes('.pdd-upgrade-backup-')) throw Error('ENOSPC');
+      return nativeFs.cpSync(src, dst, opts);
+    },
+  };
   const resRbFail = await runCliUpgrade({
     env: { HOME: home },
     stdout: outRbFail,
@@ -736,9 +782,13 @@ test('#3474 pdd upgrade and Autopilot self-update uninstall unscoped pdd before 
     packageRoot: rbLegacy,
     home,
     cwd: join(sandbox, 'empty-cwd'),
-  }, { uid: process.getuid(), fs: brokenBackupFs });
+  }, { uid: process.getuid(), fs: restoreFailFs });
   assert.equal(resRbFail.exitCode, 1);
-  assert.match(errRbFail.text, /Warning: unscoped pdd was removed .* automatic rollback failed/);
+  const preservedCliBackup = readdirSync(rbPrefix).find(entry => entry.startsWith('.pdd-upgrade-backup-'));
+  assert.ok(preservedCliBackup, 'staged backup directory preserved when restore fails');
+  assert.equal(existsSync(join(rbPrefix, preservedCliBackup, 'items/lib/node_modules/pdd/package.json')), true);
+  assert.match(errRbFail.text, /Warning: unscoped pdd was removed .* automatic rollback failed \(staged backup preserved at /);
+  assert.ok(errRbFail.text.includes(preservedCliBackup), errRbFail.text);
   assert.ok(errRbFail.text.includes(`Restore pdd with: npm install -g --prefix ${rbQuoted} --ignore-scripts github:promptdriven/pdd#alpha-v${targetVersion} && pdd setup`), errRbFail.text);
 
   // 4. maybeAutoUpdateAutopilot removes unscoped pdd before installing @promptdriven/pdd (even at same version) and rolls back if install fails.
@@ -816,7 +866,7 @@ test('#3474 pdd upgrade and Autopilot self-update uninstall unscoped pdd before 
   assert.deepEqual(autoCmds[0], ['npm', 'uninstall', '-g', '--prefix', autoPrefix, '--ignore-scripts', '--no-audit', '--no-fund', 'pdd']);
   assert.deepEqual(autoCmds[1], ['npm', 'install', '-g', '--prefix', autoPrefix, '--ignore-scripts', '--no-audit', '--no-fund', `github:promptdriven/pdd#alpha-v${targetVersion}`]);
 
-  // 4c. When rollback itself fails in maybeAutoUpdateAutopilot, lastError warns unscoped pdd was removed and includes quoted restore command.
+  // 4c. When rollback itself fails in maybeAutoUpdateAutopilot, backupDir is preserved and lastError includes its path + quoted restore command.
   mkdirSync(join(autoLegacy, 'bin'), { recursive: true });
   writeFileSync(join(autoLegacy, 'package.json'), JSON.stringify({ name: 'pdd', version: targetVersion, bin: 'bin/pdd.mjs' }));
   writeFileSync(join(autoLegacy, 'bin/pdd.mjs'), '#!/usr/bin/env node\n', { mode: 0o755 });
@@ -829,7 +879,7 @@ test('#3474 pdd upgrade and Autopilot self-update uninstall unscoped pdd before 
   }, {
     now: () => 1_700_008_000_000,
     uid: process.getuid(),
-    fs: brokenBackupFs,
+    fs: restoreFailFs,
     fetchLatestRelease: async () => ({ tag_name: `alpha-v${targetVersion}`, draft: false }),
     setupSkills: () => [],
     execute: async (file, args) => {
@@ -841,6 +891,9 @@ test('#3474 pdd upgrade and Autopilot self-update uninstall unscoped pdd before 
     },
   });
   assert.equal(autoRbFail.action, 'failed');
-  assert.match(autoRbFail.error, /unscoped pdd was removed and rollback failed/);
+  const preservedAutoBackup = readdirSync(autoPrefix).find(entry => entry.startsWith('.pdd-upgrade-backup-'));
+  assert.ok(preservedAutoBackup, 'staged backup directory preserved in maybeAutoUpdateAutopilot when restore fails');
+  assert.match(autoRbFail.error, /unscoped pdd was removed and rollback failed \(staged backup preserved at /);
+  assert.ok(autoRbFail.error.includes(preservedAutoBackup), autoRbFail.error);
   assert.ok(autoRbFail.error.includes(`npm install -g --prefix ${autoQuoted} --ignore-scripts github:promptdriven/pdd#alpha-v${targetVersion}`), autoRbFail.error);
 });
