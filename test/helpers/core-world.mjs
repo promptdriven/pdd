@@ -78,11 +78,22 @@ function extend(f, w) {
       const params = new URLSearchParams(endpoint.split('?')[1] ?? ''), head = params.get('head')?.split(':').pop(), base = params.get('base'), state = params.get('state') ?? 'open';
       return ok(200, [...f.prs.values()].filter(pr => (state === 'all' || pr.state === state) && (!head || pr.branch === head) && (!base || pr.base === base)).map(restPr));
     }
+    if (route === '/pulls' && method === 'POST') {
+      const branch = String(input?.head ?? '').includes(':') ? String(input.head).split(':').pop() : String(input?.head ?? '');
+      const tip = spawnSync('git', ['--git-dir', w.remote, 'rev-parse', '--verify', '-q', `refs/heads/${branch}`], { encoding: 'utf8' }).stdout.trim();
+      const pr = f.openPr({ branch, head: /^[0-9a-f]{40}$/.test(tip) ? tip : '0'.repeat(40), base: input?.base ?? 'main', title: input?.title ?? branch, body: input?.body ?? '' });
+      pr.syncedTip = pr.head;
+      return ok(201, restPr(pr));
+    }
     if ((m = /^\/pulls\/(\d+)$/.exec(route))) {
       const pr = f.prs.get(Number(m[1])); if (!pr) return ok(404, { message: 'Not Found' });
       const tip = spawnSync('git', ['--git-dir', w.remote, 'rev-parse', '--verify', '-q', `refs/heads/${pr.branch}`], { encoding: 'utf8' }).stdout.trim();
       if (/^[0-9a-f]{40}$/.test(tip) && tip !== pr.syncedTip) { pr.head = tip; pr.syncedTip = tip; }
-      if (method === 'PATCH') { if (input.body !== undefined) pr.body = input.body; if (input.state) pr.state = input.state; }
+      if (method === 'PATCH') {
+        if (input.body !== undefined) pr.body = input.body;
+        if (input.title !== undefined) pr.title = input.title;
+        if (input.state) pr.state = input.state;
+      }
       return ok(200, restPr(pr));
     }
     // Labels on PRs (the merge lane) and the open issues-and-PRs list for one label.

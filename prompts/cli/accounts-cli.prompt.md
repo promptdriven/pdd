@@ -1,7 +1,10 @@
 # Cloud accounts CLI
 
 Own `src/accounts-cli.mjs`. Export `runAccountsCli(input, ports)`,
-`readCodexFullAuthBundle(fs, env)`, and shell-wrapper helpers
+`readCodexFullAuthBundle(fs, env, explicitAuthPath)`,
+`readClaudeTokenFromPath(fs, fromPath, options)`,
+`readLocalClaudeToken(fs, env, extraText, options)`,
+`detectImportProvider(fs, env, options)`, and shell-wrapper helpers
 `renderAutoSwitchBlock(shell)`, `applyAutoSwitchBlock(text, shell)` and
 `removeAutoSwitchBlock(text)` for the `pdd accounts` command family. Zero
 usage-reset credit commands, options or calls exist.
@@ -12,6 +15,7 @@ usage-reset credit commands, options or calls exist.
 - **Shell auto-switch across `zsh`, `bash`, and `fish` with logout guard and fail-safe fallback:** `pdd accounts auto on|off|status` manages `~/.zshrc`, `~/.bashrc`, and `${XDG_CONFIG_HOME || ~/.config}/fish/config.fish`. For `codex`, the wrapper runs `pdd accounts sync --provider codex --quiet --timeout-ms 1200` and sets `CODEX_HOME` to `pddManagedCodexHome(env)` only when a healthy active lease is materialized and the command is neither `codex logout` nor `codex login`. On `codex logout` or `codex login`, it leaves normal `~/.codex` untouched (or refuses with guidance to run `pdd accounts pause`, `remove` or `use` if `CODEX_HOME` was manually exported to `pddManagedCodexHome(env)`). When PDD Cloud is unreachable or no valid active lease exists, `CODEX_HOME` stays unset so `codex` falls back to `~/.codex/auth.json`.
 - **Symmetric `+`/`-` label lookup, `reauth_required` surfacing, and refresh visibility:** `resolveAccount` falls back to `sanitizeLabel(target, "")` (case-insensitive) when exact and lowercase matches miss so `glt+oai2` resolves `glt-oai2`. `pdd accounts list` and `pdd accounts status` surface `reauth_required` clearly (never as `ready`) alongside `last_refresh_at` and lease/token expiry status.
 - **Upfront target validation and initial usage probe:** `--with` accepts comma-separated `USER`, `ORG/TEAM` and `@ORG` targets validated before network mutations, and initial Codex `add`/`import` probes local usage fail-open when server windows are unpopulated.
+- **Claude `.credentials.json` fallback and expired short-lived token guard:** Standard `claude auth login` stores OAuth credentials in `<configDir>/.credentials.json` under `claudeAiOauth` (`accessToken`, `refreshToken`, `expiresAt`) without setting `env.CLAUDE_CODE_OAUTH_TOKEN` in `<configDir>/settings.json`. When `--from <dir>` or default local discovery (`CLAUDE_CONFIG_DIR` or `~/.claude`) finds no `CLAUDE_CODE_OAUTH_TOKEN` in `settings.json`, `readClaudeTokenFromPath`, `readLocalClaudeToken` and `detectImportProvider` inspect `<dir>/.credentials.json`. Whenever `claudeAiOauth` is present (including when `--from` targets a `.credentials.json` file directly, checked before regex token extraction), register its secret fields in `rememberSecrets` and check `expiresAt` (numeric epoch ms or ISO timestamp): if `expiresAt` is present and invalid or expired (`expiresAt <= now + 60_000`), throw `CloudAccountsError` (`code: "expired_local_login"`) naming `<target>` and instructing the user to run `pdd accounts add --provider claude` or `claude setup-token` before uploading to PDD Cloud or modifying `~/.claude/settings.json`; otherwise accept a non-empty `claudeAiOauth.accessToken`.
 
 ## Commands
 
@@ -44,7 +48,7 @@ usage-reset credit commands, options or calls exist.
   and prompt `Enroll another <provider> account? [Y/n] `.
 - `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]`:
   Validate `--with` targets upfront, read `~/.codex/auth.json` (or `PATH` / `PATH/auth.json` when
-  `--from PATH` is given, refusing bundles with a stripped refresh token) or a Claude OAuth token,
+  `--from PATH` is given, refusing bundles with a stripped refresh token) or a validated Claude OAuth token from `settings.json`, `.credentials.json` or `PATH`,
   validate all four Codex OAuth token fields, upload to `POST /v1/accounts`, probe local Codex usage
   fail-open if server windows are unpopulated, materialize the leased pass into `pddManagedCodexHome(env)`
   without writing to `~/.codex/auth.json`, and apply any `--with` shares.

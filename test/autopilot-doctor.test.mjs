@@ -394,3 +394,63 @@ test('doctor: warns when Linux AppArmor restricts unprivileged userns and bwrap 
   const resPresent=await runAutopilotDoctor(present.input,present.ports);
   assert.equal(resPresent.checks.find(c=>c.id==='codex-sandbox'),undefined);
 });
+
+test('doctor: private-repo HTTP 403 plan-gated branch rulesets and HTTP 404 branch not protected pass without gh auth login advice',async()=>{
+  const planGated=doctorFixture({permission:'ADMIN'});
+  planGated.permission='ADMIN';
+  const baseRun=planGated.ports.run;
+  planGated.ports.run=(file,args,o)=>{
+    if(file==='gh'&&args[0]==='api'&&args[1]==='repos/example/project/rules/branches/main'){
+      return Promise.resolve({
+        code:1,
+        stdout:'{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","documentation_url":"https://docs.github.com/rest/repos/rules#get-rules-for-a-branch","status":"403"}',
+        stderr:'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)',
+      });
+    }
+    return baseRun(file,args,o);
+  };
+  const r403=await invoke(planGated);
+  assert.equal(r403.code,0,r403.text);
+  check(r403,'merge-rules','PASS');
+  assert.doesNotMatch(r403.text,/WARN merge-rules:/);
+  const rep403=await runAutopilotDoctor(planGated.input,planGated.ports);
+  const row403=rep403.checks.find(c=>c.id==='merge-rules');
+  assert.equal(row403.status,'pass');
+  assert.match(row403.detail,/Branch rules: none/);
+  assert.doesNotMatch(row403.fix,/gh auth login/);
+
+  const notProtected=doctorFixture();
+  const baseRun404=notProtected.ports.run;
+  notProtected.ports.run=(file,args,o)=>{
+    if(file==='gh'&&args[0]==='api'&&args[1]==='repos/example/project/rules/branches/main'){
+      return Promise.resolve({
+        code:1,
+        stdout:'{"message":"Branch not protected","status":"404"}',
+        stderr:'gh: Branch not protected (HTTP 404)',
+      });
+    }
+    return baseRun404(file,args,o);
+  };
+  const r404=await invoke(notProtected);
+  assert.equal(r404.code,0,r404.text);
+  check(r404,'merge-rules','PASS');
+  const rep404=await runAutopilotDoctor(notProtected.input,notProtected.ports);
+  assert.doesNotMatch(rep404.checks.find(c=>c.id==='merge-rules').fix,/gh auth login/);
+
+  // Other HTTP 403 errors (for example rate limits or missing token scopes) remain visible warnings.
+  const rateLimited=doctorFixture();
+  const baseRunLimit=rateLimited.ports.run;
+  rateLimited.ports.run=(file,args,o)=>{
+    if(file==='gh'&&args[0]==='api'&&args[1]==='repos/example/project/rules/branches/main'){
+      return Promise.resolve({
+        code:1,
+        stdout:'{"message":"API rate limit exceeded","status":"403"}',
+        stderr:'gh: API rate limit exceeded (HTTP 403)',
+      });
+    }
+    return baseRunLimit(file,args,o);
+  };
+  const rLimit=await invoke(rateLimited);
+  assert.equal(rLimit.code,0,rLimit.text);
+  check(rLimit,'merge-rules','WARN');
+});

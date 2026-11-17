@@ -35,15 +35,17 @@ is uncertain; those records let a later tick retry without a live controller.
   All four read the prompt on stdin and have full access, like the post-merge auditor
   launch in [the audit owner](autopilot-audit.prompt.md). Another kind throws
   `Error("Autopilot core jobs need codex, claude, gemini or agy")`.
-- `jobEnvironment(env)` returns a copy of `env` without keys that would join the
+- `jobEnvironment(env, {stripGithubTokens = false} = {})` returns a copy of `env` without keys that would join the
   caller's own agent, Herdr or coordinator session: `ANTIGRAVITY_*` (except
   `ANTIGRAVITY_APP_DATA_DIR`), `CLAUDECODE`, `CLAUDE_CODE_*` (except
   `CLAUDE_CODE_OAUTH_TOKEN`), `CLAUDE_PID`,
   `CODEX_THREAD_ID`, `CODEX_SANDBOX*`, `GEMINI_CLI_SESSION_ID`, `HERDR_*`, `PDD_AGENT_SESSION` and
-  `PDD_AUTOPILOT_CONTEXT`. Account settings such as `CODEX_HOME`,
+  `PDD_AUTOPILOT_CONTEXT`. When `stripGithubTokens` is true (used for read-only review jobs), it also strips
+  `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN` and `GITHUB_PERSONAL_ACCESS_TOKEN`
+  case-insensitively so the child cannot mutate GitHub. Account settings such as `CODEX_HOME`,
   `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL` and
   `ANTIGRAVITY_APP_DATA_DIR` stay.
-- `startAgentJob({id, dir, cwd, command, args, input, env, hung, custodyRoot, cleanupDirs}, ports)` writes
+- `startAgentJob({id, dir, cwd, command, args, input, env, hung, custodyRoot, cleanupDirs, wake}, ports)` writes
   `dir/ID.input` (the prompt, mode 0600) and `dir/ID.spec.json`, then starts
   `node src/agent-job.mjs --wrapper SPEC` detached in its own process group, with
   `env` and no inherited stdio, and returns at once with
@@ -63,6 +65,7 @@ is uncertain; those records let a later tick retry without a live controller.
   saved in the spec and removed best-effort when the wrapper finishes (after any
   group `SIGKILL`) and in `cleanupAgentJob` whenever the wrapper is no longer live
   (including when `!processManifest(saved)`) or when process termination is confirmed.
+  `wake` is optional: `{command, args, cwd?, env?}` saved in the spec. When the child finishes normally (not stopped by a wrapper group stop), right after `ID.exit.json` is written and `cleanupDirs` are removed, the wrapper spawns a detached `--wake-after` relay with ignored stdio and `unref()` that waits until the wrapper PID exits before launching `wake` (`0s` slot idle gap, with `readAgentJob` guaranteed to observe `state: 'exited'`).
 - `startAgentJob` also takes `priority` (`{nice, qos, cpus, taskset}` from the
   [machine guard](machine-guard.prompt.md)) and saves it in the spec. Every job
   runs at the lowest priority (#3231), the child and not the wrapper: the wrapper only
@@ -312,10 +315,11 @@ is uncertain; those records let a later tick retry without a live controller.
     (5 s timeout), or null. The job goes on; the wrapper never stops the agent CLI or the
     whole job for a hang, and a failed round only waits for the next one.
 - Pure decision helpers are exported so tests check the order and PID-reuse decisions without wall time (lead, Nov 11):
-  `jobStopper({killGroup, setTimer, writeExit, exit, now, grace})` returns `{stop, exited, finish}` with the stop
-  order above (SIGTERM to the group and one timer of `grace` ms, then the exit record, SIGKILL to the group and the
+  `jobStopper({killGroup, setTimer, writeExit, exit, wake, now, grace})` returns `{stop, exited, finish}` with the stop
+  order above (SIGTERM to the group and one timer of `grace` ms, then the exit record, SIGKILL to the group when stopping or best-effort `wake({code, signal})` when the child exited without a group stop, and the
   exit; a second stop changes nothing; a failed write never skips the SIGKILL; a child that ends by a stop signal is
-  that stop); `selectChildGroups(saved, nowRows, wrapperPid, allowedGroups)` selects verified un-reused active child
+  that stop);
+- `waitForAgentJob(jobs, {timeoutMs = 600000, ...ports} = {})` watches the exit-record filenames in the folder(s) of one job or a list of jobs with `fs.watch` (checking liveness and `ID.exit.json` without writing process snapshots into watched directories so `fs.watch` never triggers a feedback loop) and resolves `{job, seen, reason}` with `reason` `"worker-exit"` as soon as any watched job leaves `"running"` (`"empty"` for an empty list, `"timeout"` after `timeoutMs`). `selectChildGroups(saved, nowRows, wrapperPid, allowedGroups)` selects verified un-reused active child
   process groups for wrapper `SIGTERM`/`SIGKILL`; `hungRound(memo, {rows, log, now, agentPid, settings})` is one round of the hung-command watch over a
   process table (`memo` keeps the helpers, the reference CPU of each command and the stopped commands) and returns
   the commands to stop, `[{row, sub, minutes}]`; and `hungKillTargets(sub, latestRows, {wrapperPid, agentPid})` selects
