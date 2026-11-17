@@ -2,12 +2,12 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/name-the-interpreter.md",
   "criteria": [
-    {"id": "AC1", "text": "`pdd --help` calls the hosted service the \"PDD interpreter\", never says \"PDD runtime\" or \"runtime call\", prints nothing to stderr and exits with code 0."},
-    {"id": "AC2", "text": "`pdd test --help` says that it checks Stories on the PDD interpreter with my gh login, never says \"PDD runtime\" and exits with code 0."},
-    {"id": "AC3", "text": "`pdd lint --help` says that it runs the PDD interpreter lint with 0 AI calls, never says \"PDD runtime\" and exits with code 0."},
-    {"id": "AC4", "text": "`pdd simulate --help` says that it opens the PDD Simulator on the PDD interpreter, never says \"PDD runtime\" and exits with code 0."},
-    {"id": "AC5", "text": "`pdd product --help` says that the product commands make no interpreter calls, never says \"runtime\" and exits with code 0."},
-    {"id": "AC6", "text": "`pdd approve --help` still says \"runtime interface\", the name of the block in a prompt file, prints nothing to stderr and exits with code 0."}
+    {"id": "ac-sha256-2ad194314052e435f1636417cf9d8e7fca36e796396f7dbf", "text": "`pdd --help` calls the hosted service the \"PDD interpreter\", never says \"PDD runtime\" or \"runtime call\", prints nothing to stderr and exits with code 0."},
+    {"id": "ac-sha256-3a90f192c046287f45eae41774871a11aad62f8c5417dd96", "text": "`pdd test --help` says that it checks Stories on the PDD interpreter with my gh login, never says \"PDD runtime\" and exits with code 0."},
+    {"id": "ac-sha256-e27e18a3059e59a864142ec4874bbd7b6f97864ebbb6a402", "text": "`pdd lint --help` says that it runs the PDD interpreter lint with 0 AI calls, never says \"PDD runtime\" and exits with code 0."},
+    {"id": "ac-sha256-3d3c69944c9c60b3bc296162e1b716c044a031dcaa2dfd07", "text": "`pdd simulate --help` says that it opens the PDD Simulator on the PDD interpreter, never says \"PDD runtime\" and exits with code 0."},
+    {"id": "ac-sha256-f99094c87f5d9250df35f6212e412be9fd5aafb7289bd59b", "text": "`pdd product --help` says that the product commands make no interpreter calls, never says \"runtime\" and exits with code 0."},
+    {"id": "ac-sha256-2a0258cf06bb7f0fa7992e289db215ecfabe4c13fafcd28a", "text": "`pdd approve --help` still says \"runtime interface\", the name of the block in a prompt file, prints nothing to stderr and exits with code 0."}
   ],
   "initial_world": {},
   "simulation": {},
@@ -19,11 +19,11 @@
       "operation": "runPdd",
       "input": {"argv": ["--help"]},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "not_contains", "value": "runtime call"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-2ad194314052e435f1636417cf9d8e7fca36e796396f7dbf", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
+        {"criterion_id": "ac-sha256-2ad194314052e435f1636417cf9d8e7fca36e796396f7dbf", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
+        {"criterion_id": "ac-sha256-2ad194314052e435f1636417cf9d8e7fca36e796396f7dbf", "target": "result", "path": "/stdout", "op": "not_contains", "value": "runtime call"},
+        {"criterion_id": "ac-sha256-2ad194314052e435f1636417cf9d8e7fca36e796396f7dbf", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-2ad194314052e435f1636417cf9d8e7fca36e796396f7dbf", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -32,10 +32,10 @@
       "operation": "runPdd",
       "input": {"argv": ["test", "--help"]},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "gh login"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
-        {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-3a90f192c046287f45eae41774871a11aad62f8c5417dd96", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
+        {"criterion_id": "ac-sha256-3a90f192c046287f45eae41774871a11aad62f8c5417dd96", "target": "result", "path": "/stdout", "op": "contains", "value": "gh login"},
+        {"criterion_id": "ac-sha256-3a90f192c046287f45eae41774871a11aad62f8c5417dd96", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
+        {"criterion_id": "ac-sha256-3a90f192c046287f45eae41774871a11aad62f8c5417dd96", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -44,10 +44,10 @@
       "operation": "runPdd",
       "input": {"argv": ["lint", "--help"]},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "0 AI calls"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
-        {"criterion_id": "AC3", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-e27e18a3059e59a864142ec4874bbd7b6f97864ebbb6a402", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
+        {"criterion_id": "ac-sha256-e27e18a3059e59a864142ec4874bbd7b6f97864ebbb6a402", "target": "result", "path": "/stdout", "op": "contains", "value": "0 AI calls"},
+        {"criterion_id": "ac-sha256-e27e18a3059e59a864142ec4874bbd7b6f97864ebbb6a402", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
+        {"criterion_id": "ac-sha256-e27e18a3059e59a864142ec4874bbd7b6f97864ebbb6a402", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -56,10 +56,10 @@
       "operation": "runPdd",
       "input": {"argv": ["simulate", "--help"]},
       "checks": [
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD Simulator"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
-        {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-3d3c69944c9c60b3bc296162e1b716c044a031dcaa2dfd07", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD interpreter"},
+        {"criterion_id": "ac-sha256-3d3c69944c9c60b3bc296162e1b716c044a031dcaa2dfd07", "target": "result", "path": "/stdout", "op": "contains", "value": "PDD Simulator"},
+        {"criterion_id": "ac-sha256-3d3c69944c9c60b3bc296162e1b716c044a031dcaa2dfd07", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD runtime"},
+        {"criterion_id": "ac-sha256-3d3c69944c9c60b3bc296162e1b716c044a031dcaa2dfd07", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -68,9 +68,9 @@
       "operation": "runPdd",
       "input": {"argv": ["product", "--help"]},
       "checks": [
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "interpreter calls"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "not_contains", "value": "runtime"},
-        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-f99094c87f5d9250df35f6212e412be9fd5aafb7289bd59b", "target": "result", "path": "/stdout", "op": "contains", "value": "interpreter calls"},
+        {"criterion_id": "ac-sha256-f99094c87f5d9250df35f6212e412be9fd5aafb7289bd59b", "target": "result", "path": "/stdout", "op": "not_contains", "value": "runtime"},
+        {"criterion_id": "ac-sha256-f99094c87f5d9250df35f6212e412be9fd5aafb7289bd59b", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -79,9 +79,9 @@
       "operation": "runPdd",
       "input": {"argv": ["approve", "--help"]},
       "checks": [
-        {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "contains", "value": "runtime interface"},
-        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC6", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-2a0258cf06bb7f0fa7992e289db215ecfabe4c13fafcd28a", "target": "result", "path": "/stdout", "op": "contains", "value": "runtime interface"},
+        {"criterion_id": "ac-sha256-2a0258cf06bb7f0fa7992e289db215ecfabe4c13fafcd28a", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-2a0258cf06bb7f0fa7992e289db215ecfabe4c13fafcd28a", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     }
   ]

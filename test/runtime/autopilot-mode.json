@@ -3,15 +3,15 @@
   "story_path": "user_stories/autopilot-mode.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-b1be2414a308737e786dc0a238b93c7eea92b0d099c66959",
       "text": "Running `pdd autopilot auto` saves auto."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-a8cc09ced9eb64f43fc7b93328a73440c6cfd175a59859c4",
       "text": "Running `pdd autopilot observe` saves observe."
     },
     {
-      "id": "AC3",
+      "id": "ac-sha256-ff46a62d2ec1c07310bb9844a80bb83e97d4282320d3659e",
       "text": "Running `pdd autopilot off` saves off."
     }
   ],
@@ -89,14 +89,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-b1be2414a308737e786dc0a238b93c7eea92b0d099c66959",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",
           "value": "{\"mode\":\"auto\",\"trust\":[]}"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-b1be2414a308737e786dc0a238b93c7eea92b0d099c66959",
           "target": "world",
           "path": "/kv/unrelated",
           "op": "equals",
@@ -116,14 +116,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-a8cc09ced9eb64f43fc7b93328a73440c6cfd175a59859c4",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",
           "value": "{\"mode\":\"observe\",\"trust\":[]}"
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-a8cc09ced9eb64f43fc7b93328a73440c6cfd175a59859c4",
           "target": "world",
           "path": "/kv/unrelated",
           "op": "equals",
@@ -143,14 +143,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-ff46a62d2ec1c07310bb9844a80bb83e97d4282320d3659e",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",
           "value": "{\"mode\":\"off\",\"trust\":[]}"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-ff46a62d2ec1c07310bb9844a80bb83e97d4282320d3659e",
           "target": "world",
           "path": "/kv/unrelated",
           "op": "equals",
