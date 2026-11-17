@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 3423be6eb7afd9b2c34bcf9ca0f87a85dcbc5296c2e223a8b03b84feb2da5799).
+// Prompt: prompts/cli/runtime-seam.prompt.md
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -489,7 +489,7 @@ export function runContracts(input, ports = {}) {
 }
 
 export async function runJobs(input = {}, ports = {}) {
-  const [{ NAMES }] = await Promise.all([import('./command-catalog.mjs'), import('./product.mjs')]);
+  const { NAMES } = await import('./command-catalog.mjs');
   const commands = input?.client?.commands ?? { test: NAMES.test, lint: NAMES.lint, simulate: NAMES.simulate };
   const client = { ...(input?.client ?? {}), commands };
   return runtimeRunJobs({ ...input, client }, ports);
@@ -526,13 +526,12 @@ export async function runCheck(input = {}, ports = {}) {
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./file-owner.mjs'),
-    import('./workflow-runner.mjs'),
+    import('./workflow-eligibility.mjs'),
     import('./workflow-runs.mjs'),
     import('./workflow-results.mjs'),
     import('./svg-layout.mjs'),
     import('./repo-hygiene-lint.mjs'),
     import('./screen-compare.mjs'),
-    import('./product.mjs'),
   ]);
   const env = ports.env ?? process.env;
   const client = input?.client
@@ -580,8 +579,8 @@ export async function runTry(input = {}, ports = {}) {
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
-    import('./workflow-runner.mjs'),
-    import('./product.mjs'),
+    import('./workflow-eligibility.mjs'),
+    import('./product-documents.mjs'),
     import('./prompt-approve.mjs'),
   ]);
   const defaultDiscoverAgents = async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args);
@@ -622,7 +621,7 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./agent-adapters.mjs'),
-    import('./workflow-runner.mjs'),
+    import('./workflow-eligibility.mjs'),
   ]);
   const boundRun = seamPorts.runAgentProcess ?? seamPorts.agents?.run ?? runAgentProcess;
   const defaultAsk = turnInput =>
@@ -666,7 +665,6 @@ export async function runShim(descriptorPath, argv, ports = {}) {
   const [, { lineReader }] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./prompt-approve.mjs'),
-    import('./product.mjs'),
   ]);
   return runtimeRunShim(
     descriptorPath,
@@ -695,8 +693,8 @@ export async function runDoorCall(descriptor, input, ports = {}) {
 export async function readTryOwner(input = {}, ports = {}) {
   const [, { readEvidenceEligibility }, { parseProductDocuments, parseProductWorldWriters }] = await Promise.all([
     import('./secret-redaction.mjs'),
-    import('./workflow-runner.mjs'),
-    import('./product.mjs'),
+    import('./workflow-eligibility.mjs'),
+    import('./product-documents.mjs'),
   ]);
   return runtimeReadTryOwner(
     input,
@@ -739,8 +737,8 @@ export function createTryTools(input, ports = {}) {
 export async function runMcp(input, ports = {}) {
   const [, { readEvidenceEligibility }, { parseProductDocuments, parseProductWorldWriters }] = await Promise.all([
     import('./secret-redaction.mjs'),
-    import('./workflow-runner.mjs'),
-    import('./product.mjs'),
+    import('./workflow-eligibility.mjs'),
+    import('./product-documents.mjs'),
   ]);
   return runtimeRunMcp(
     input,
@@ -757,7 +755,7 @@ export async function runMcp(input, ports = {}) {
 }
 
 export async function migrateRuntimeWorkspace(input, ports = {}) {
-  const { readEvidenceEligibility } = await import('./workflow-runner.mjs');
+  const { readEvidenceEligibility } = await import('./workflow-eligibility.mjs');
   return runtimeMigrateWorkspace(input, seamSelectionPorts(withEligibilityDefault(ports, readEvidenceEligibility)));
 }
 

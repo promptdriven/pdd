@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 17e46594474fb4b9c37efc4c1ac39119eb2b10aff348c698274a925ef9e9cf26).
+// Prompt: prompts/cli/workflow-results.prompt.md
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -6,7 +6,6 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { readPromptApprovals } from './approval-policy.mjs';
-import './file-owner.mjs';
 import { readRun } from './workflow-runs.mjs';
 import { runtimeCheckPlanSlice, runtimeOutcomeSlice, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
 import { judgeOldCodeProof } from './workflow-pr-evidence.mjs';

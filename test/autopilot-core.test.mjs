@@ -1,16 +1,21 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import * as nodeFs from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promptHeaderHash } from '../src/file-owner.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
+import * as autopilotCore from '../src/autopilot-core.mjs';
 import { autopilotEngine, busySlots, coreSettings, failingTests, readyIssues, coreStatus, tickCore } from '../src/autopilot-core.mjs';
+const { agentModelFamily } = autopilotCore;
 import { listReportDrafts, sendReportDraft } from '../src/autopilot-reports.mjs';
 import { cleanupAgentJob } from '../src/agent-job.mjs';
+import { selectPoolLogin } from '../src/login-pool.mjs';
 
 const MIN = 60 * 1000, HOUR = 60 * MIN;
 const endComments = (w, n) => w.comments(n).filter(body => body.includes('<!-- pdd:autopilot-core:end:'));
@@ -2497,7 +2502,7 @@ test('O1 the build brief has the owner table (binding, header line in the first 
   assert.match(input, /- src\/money\.js: prompts\/money\.prompt\.md \(prose, not certain: treat as owned\)/, 'the opening sentence (pdd owner)');
   assert.doesNotMatch(input, /- src\/(?:other|third)\.js:/, 'only the opening sentence counts');
   assert.match(input, /run the same lookup \(`pdd owner FILE`\)/); assert.match(input, /A file that you add is never path e/);
-  assert.match(input, /e\. Existing code that no prompt owns: change it directly, with a regression test/);
+  assert.match(input, /e\.[^\n]*\.prompt\.md/); assert.match(input, /Generated from/);
   assert.match(input, /The prompt and the code may be in one commit\. Never rewrite history/);
   assert.match(input, /"adopt":\[/);
 });
@@ -2599,27 +2604,109 @@ test('Q2 mechanical conflicts are fixed in the lane with no agent and no repair:
   assert.equal(w.started.filter(j => j.role === 'review').length, 1);
 });
 
-test('Q2b M-a: a conflict only in a derived hash header is fixed by recomputing it from the merged prompt', async t => {
+test('Q2b M-a: a conflict only in provenance headers resolves mechanically to a clean path-only header', async t => {
   const prompt = lines => approvedText(lines.join('\n'));
   const sha = text => promptHeaderHash(text);
   const base = prompt(['Rule 1.', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6.']);
   assert.notEqual(createHash('sha256').update(base).digest('hex'), sha(base), 'approval metadata is excluded from the generated prompt hash');
+  const pad = `// ${'p'.repeat(4200)}\n`;
+  const bodyTail = `export const x = 1;\n${pad}export const tpl = \`\n// Generated from prompts/tpl.prompt.md (sha256: ${'f'.repeat(64)})\n\`;\n`;
   const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
   w.baseCommit('prompts/x.prompt.md', base);
-  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${createHash('sha256').update(base).digest('hex')})\nexport const x = 1;\n`);
+  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${createHash('sha256').update(base).digest('hex')})\n${bodyTail}`);
   recordApproval(w, 'prompts/x.prompt.md', base);
   w.issue(17); await w.tick();
   const mine = prompt(['Rule 1 (PR).', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6.']);
-  editIn(w, 17, 'prompts/x.prompt.md', mine); editIn(w, 17, 'src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(mine)})\nexport const x = 1;\n`);
+  editIn(w, 17, 'prompts/x.prompt.md', mine); editIn(w, 17, 'src/x.js', `// Prompt: prompts/x.prompt.md sha256=${sha(mine)}\n${bodyTail}`);
   recordApproval(w, 'prompts/x.prompt.md', mine);
   w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: b — src/x.js, prompts/x.prompt.md — prompts/x.prompt.md — prompt changed — Test: done check' }); await greenLane(w, 17);
-  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(base)})\nexport const x = 1;\n`);
+  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(base)})\n${bodyTail}`);
   await w.tick();
   const job = jobFile(w, 17);
   assert.ok(job.mechanical, `${roles(w, 17).join(',')}: ${job.conflict?.files?.join(',') ?? ''}`);
   const merged = w.git(job.worktree, 'show', `${job.head}:prompts/x.prompt.md`) + '\n';
   assert.match(merged, /Rule 1 \(PR\)\.[\s\S]*Rule 6\./);
-  assert.match(w.git(job.worktree, 'show', `${job.head}:src/x.js`), new RegExp(`sha256: ${sha(merged)}`), 'the header is recomputed from the merged prompt');
+  assert.equal(`${w.git(job.worktree, 'show', `${job.head}:src/x.js`)}\n`, `// Prompt: prompts/x.prompt.md\n${bodyTail}`, 'only the resolved line-1 provenance header loses its hash; template literals beyond 4 KiB stay untouched');
+
+  // Conflicting prompt-owner paths (b.prompt.md vs c.prompt.md) must NOT resolve mechanically via M-a.
+  const w2 = await coreWorld(t, { settings: { runs: 1 } }); w2.github.mergeMovesBase = true;
+  w2.baseCommit('prompts/a.prompt.md', base); w2.baseCommit('prompts/b.prompt.md', base); w2.baseCommit('prompts/c.prompt.md', base);
+  w2.baseCommit('src/owned.js', '// Prompt: prompts/a.prompt.md\nexport const owned = 1;\n');
+  for (const p of ['prompts/a.prompt.md', 'prompts/b.prompt.md', 'prompts/c.prompt.md']) recordApproval(w2, p, base);
+  w2.issue(18); await w2.tick();
+  editIn(w2, 18, 'src/owned.js', '// Prompt: prompts/b.prompt.md\nexport const owned = 1;\n');
+  w2.build(18, { body: 'Fixes #18\n\nRuntime: PASS\nPath: a — src/owned.js — prompts/b.prompt.md — code changed — Test: done check' }); await greenLane(w2, 18);
+  w2.baseCommit('src/owned.js', '// Prompt: prompts/c.prompt.md\nexport const owned = 1;\n');
+  await w2.tick();
+  const job2 = jobFile(w2, 18);
+  assert.equal(Boolean(job2.mechanical), false, 'conflicting prompt-owner paths must go to agent conflict resolution');
+  assert.ok(w2.started.some(j => j.issue === 18 && j.role === 'conflict'), 'agent conflict job starts when prompt owners disagree');
+
+  // Moving a provenance header from line 1 beyond the 4 KiB window during a conflict update must NOT preserve review.kept.
+  const w3 = await coreWorld(t, { settings: { runs: 1 } }); w3.github.mergeMovesBase = true;
+  w3.baseCommit('prompts/m.prompt.md', base); recordApproval(w3, 'prompts/m.prompt.md', base);
+  w3.baseCommit('src/m.js', `// Prompt: prompts/m.prompt.md\n${pad}export const v = 0;\n`);
+  w3.issue(19); await w3.tick();
+  editIn(w3, 19, 'src/m.js', `// Prompt: prompts/m.prompt.md\n${pad}export const v = 1;\n`);
+  w3.build(19, { body: 'Fixes #19\n\nRuntime: PASS\nPath: a — src/m.js — prompts/m.prompt.md — code changed — Test: done check' }); await greenLane(w3, 19);
+  w3.baseCommit('src/m.js', `// Prompt: prompts/m.prompt.md\n${pad}export const v = 2;\n`);
+  await w3.tick();
+  const fix3 = w3.job(19, 'conflict');
+  assert.ok(fix3, 'conflict job started');
+  w3.git(fix3.cwd, 'fetch', '-q', 'origin', 'main');
+  try { w3.git(fix3.cwd, 'merge', '-q', 'origin/main'); } catch {}
+  writeFileSync(join(fix3.cwd, 'src/m.js'), `${pad}// Prompt: prompts/m.prompt.md\nexport const v = 1;\n`);
+  w3.git(fix3.cwd, 'add', '.'); w3.git(fix3.cwd, 'commit', '-qm', 'merge main moving header past 4 KiB');
+  w3.build(19, { role: 'conflict', write: false }); await w3.tick();
+  const job3 = jobFile(w3, 19);
+  assert.notEqual(job3.review?.kept, true, 'moving a header beyond 4 KiB changes F so the prior PASS review is not silently kept');
+  assert.ok(job3.review?.scoped, 'a scoped review check is required when a header moves');
+
+  // Deleting >4 KiB padding on ours must not allow M-a on a line that sat past 4 KiB in base and theirs; malformed hashes are not mechanical either.
+  const w4 = await coreWorld(t, { settings: { runs: 1 } }); w4.github.mergeMovesBase = true;
+  const ctxLines = '// context\n'.repeat(5);
+  w4.baseCommit('prompts/x.prompt.md', base); recordApproval(w4, 'prompts/x.prompt.md', base);
+  w4.baseCommit('pdd-bindings.json', bindings([['src/deep.js', 'prompts/x.prompt.md'], ['src/badhash.js', 'prompts/x.prompt.md']]));
+  w4.baseCommit('src/deep.js', `${pad}${ctxLines}// Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nexport const deep = 1;\n`);
+  w4.baseCommit('src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad0\nexport const bad = 1;\n');
+  w4.issue(20); await w4.tick();
+  editIn(w4, 20, 'src/deep.js', `${ctxLines}// Prompt: prompts/x.prompt.md sha256=${'a'.repeat(64)}\nexport const deep = 1;\n`);
+  w4.build(20, { body: 'Fixes #20\n\nRuntime: PASS\nPath: a — src/deep.js — prompts/x.prompt.md — code changed — Test: done check' }); await greenLane(w4, 20);
+  w4.baseCommit('src/deep.js', `${pad}${ctxLines}// Prompt: prompts/x.prompt.md sha256=${'c'.repeat(64)}\nexport const deep = 1;\n`);
+  await w4.tick();
+  assert.equal(Boolean(jobFile(w4, 20).mechanical), false, 'header-shaped line past 4 KiB in base/theirs does not resolve via M-a');
+
+  const w5 = await coreWorld(t, { settings: { runs: 1 } }); w5.github.mergeMovesBase = true;
+  w5.baseCommit('prompts/x.prompt.md', base); recordApproval(w5, 'prompts/x.prompt.md', base);
+  w5.baseCommit('pdd-bindings.json', bindings([['src/badhash.js', 'prompts/x.prompt.md']]));
+  w5.baseCommit('src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad0\nexport const bad = 1;\n');
+  w5.issue(21); await w5.tick();
+  editIn(w5, 21, 'src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad1\nexport const bad = 1;\n');
+  w5.build(21, { body: 'Fixes #21\n\nRuntime: PASS\nPath: a — src/badhash.js — prompts/x.prompt.md — code changed — Test: done check' }); await greenLane(w5, 21);
+  w5.baseCommit('src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad2\nexport const bad = 1;\n');
+  await w5.tick();
+  assert.equal(Boolean(jobFile(w5, 21).mechanical), false, 'malformed non-64-hex sha256 suffixes do not resolve via M-a');
+
+  // Deleting a >4 KiB `-- ` comment during conflict resolution (moving a header into the 4 KiB window) must NOT preserve review.kept.
+  const w6 = await coreWorld(t, { settings: { runs: 1 } }); w6.github.mergeMovesBase = true;
+  const luaPad = `-- ${'p'.repeat(4050)}\n`;
+  w6.baseCommit('prompts/x.prompt.md', base); recordApproval(w6, 'prompts/x.prompt.md', base);
+  w6.baseCommit('pdd-bindings.json', bindings([['src/x.lua', 'prompts/x.prompt.md']]));
+  w6.baseCommit('src/x.lua', `${luaPad}-- Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nreturn 0\n`);
+  w6.issue(22); await w6.tick();
+  editIn(w6, 22, 'src/x.lua', `${luaPad}-- Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nreturn 1\n`);
+  w6.build(22, { body: 'Fixes #22\n\nRuntime: PASS\nPath: a — src/x.lua — prompts/x.prompt.md — code changed — Test: done check' }); await greenLane(w6, 22);
+  w6.baseCommit('src/x.lua', `${luaPad}-- Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nreturn 2\n`);
+  await w6.tick();
+  const fix6 = w6.job(22, 'conflict');
+  assert.ok(fix6, 'lua conflict job started');
+  w6.git(fix6.cwd, 'fetch', '-q', 'origin', 'main');
+  try { w6.git(fix6.cwd, 'merge', '-q', 'origin/main'); } catch {}
+  writeFileSync(join(fix6.cwd, 'src/x.lua'), `-- Prompt: prompts/x.prompt.md sha256=${'a'.repeat(64)}\nreturn 1\n`);
+  w6.git(fix6.cwd, 'add', '.'); w6.git(fix6.cwd, 'commit', '-qm', 'merge main deleting -- padding');
+  w6.build(22, { role: 'conflict', write: false }); await w6.tick();
+  assert.notEqual(jobFile(w6, 22).review?.kept, true, 'deleted -- comment inside hunk is not ignored as diff metadata');
+  assert.ok(jobFile(w6, 22).review?.scoped, 'scoped review required when -- padding is deleted');
 });
 
 test('Q3 an agent conflict is a base update outside the lane (not a repair); a change inside the conflict file gets a scoped check, then it merges', async t => {
@@ -4025,4 +4112,1165 @@ test('3154 & 3782 opt-in model tiering routes worker vs reviewer launches and re
   assert.equal(mergedRow.telemetry.tokens.byTier.reviewer.outputTokens, 600);
   assert.equal(mergedRow.telemetry.tokens.byAgent.codex.inputTokens, 23_000);
   assert.equal(mergedRow.telemetry.tokens.total.totalTokens, 24_800);
+});
+
+test('agentModelFamily maps codex, claude, gemini and agy model families', () => {
+  assert.equal(agentModelFamily({ kind: 'codex' }), 'openai');
+  assert.equal(agentModelFamily('claude'), 'anthropic');
+  assert.equal(agentModelFamily({ kind: 'gemini' }), 'google');
+  assert.equal(agentModelFamily({ kind: 'agy' }), 'google');
+  assert.equal(agentModelFamily({ kind: 'agy', model: 'gemini-3.1-pro' }), 'google');
+  assert.equal(agentModelFamily({ harness: 'agy', model: 'gemini-2.5-pro' }), 'google');
+  assert.equal(agentModelFamily({ kind: 'agy', model: 'claude-sonnet-4-6' }), 'anthropic');
+  assert.equal(agentModelFamily({ harness: 'agy', model: 'claude-sonnet-4-6' }), 'anthropic');
+  assert.equal(agentModelFamily({ kind: 'agy' }, 'claude-opus-4-6'), 'anthropic');
+  assert.equal(agentModelFamily({ kind: 'agy', model: 'gpt-5.4' }), 'openai');
+  assert.equal(agentModelFamily({ kind: 'agy' }, 'o1'), 'openai');
+  assert.equal(agentModelFamily({ kind: 'agy' }, 'o3-mini'), 'openai');
+  assert.equal(agentModelFamily({ kind: 'agy' }, 'o4-mini'), 'openai');
+  assert.equal(agentModelFamily({ kind: 'other' }), null);
+});
+
+test('cross-family reviewer preference picks an alternate model family when ready and falls back non-blockingly with disclosed independence', async t => {
+  // 1. Multi-family pool: codex builder -> claude reviewer (cross-family), single selection probe with no leaked call
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  const selectCalls = [];
+  const selectCross = async opts => {
+    selectCalls.push(opts ?? null);
+    if (Array.isArray(opts?.allowedKinds)) {
+      assert.deepEqual(opts.allowedKinds, ['claude', 'gemini', 'agy']);
+      return {
+        state: 'ready',
+        configured: true,
+        poolSize: 2,
+        login: { id: 'claude-1', kind: 'claude' },
+        agent: { id: 'claude-1', kind: 'claude', command: '/opt/bin/claude' },
+        env: { HOME: w.dir },
+      };
+    }
+    return {
+      state: 'ready',
+      configured: true,
+      poolSize: 2,
+      login: { id: 'codex-1', kind: 'codex' },
+      agent: { id: 'codex-1', kind: 'codex', command: '/opt/bin/codex' },
+      env: { HOME: w.dir },
+    };
+  };
+  w.issue(17, { title: 'Cross-family review check', body: 'Prefer another model family for review.' });
+  await w.tick({ selectLogin: selectCross });
+  const builtJob = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
+  assert.equal(builtJob.agentKind, 'codex');
+  assert.equal(builtJob.builderFamily, 'openai');
+  assert.equal(builtJob.builderLoginId, 'codex-1');
+
+  selectCalls.length = 0;
+  const { pr, head } = w.build(17);
+  await w.tick({ selectLogin: selectCross });
+  assert.equal(selectCalls.length, 1, 'ready alternate-family probe starts review directly without a second pool selection');
+  const reviewJob = w.job(17, 'review');
+  assert.equal(reviewJob.command, '/opt/bin/claude');
+  const inReview = JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8'));
+  assert.equal(inReview.review.reviewFamily, 'anthropic');
+  assert.equal(inReview.review.reviewIndependence, 'cross-family');
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, w.ports()), /review running \(cross-family\)/);
+
+  w.review(17, 'PASS');
+  w.suite(17, 0);
+  await w.tick({ selectLogin: selectCross });
+  assert.deepEqual(w.github.merges, [pr.number]);
+  const evidence = JSON.parse(readFileSync(join(w.root, 'logs', `17-evidence-${head}.json`), 'utf8'));
+  assert.deepEqual(evidence.review, {
+    state: 'pass',
+    builderFamily: 'openai',
+    reviewFamily: 'anthropic',
+    reviewIndependence: 'cross-family',
+  });
+  const prComments = w.github.prs.get(pr.number).comments.map(c => c.body);
+  assert.ok(prComments.some(body => body.includes('cross-family, anthropic')));
+  assert.ok(prComments.some(body => body.includes('- Reviewer independence: cross-family (reviewer anthropic, builder openai)')));
+  assert.match(w.github.prs.get(pr.number).body, /- Reviewer independence: cross-family \(reviewer anthropic, builder openai\)/);
+
+  // 2. Non-blocking fallback: alternate family is cooling, same-family login is ready -> starts review immediately without pool-pause or alert
+  const wFallback = await coreWorld(t, { settings: { runs: 1 } });
+  const alerts = [];
+  const selectFallback = async opts => {
+    if (Array.isArray(opts?.allowedKinds)) {
+      return {
+        state: 'all_cooling',
+        configured: true,
+        poolSize: 2,
+        resetAt: wFallback.now() + 30 * MIN,
+        cooling: [{ id: 'claude-1', reason: 'quota' }],
+        unavailable: [],
+      };
+    }
+    return {
+      state: 'ready',
+      configured: true,
+      poolSize: 2,
+      login: { id: 'codex-2', kind: 'codex' },
+      agent: { id: 'codex-2', kind: 'codex', command: '/opt/bin/codex' },
+      env: { HOME: wFallback.dir },
+    };
+  };
+  wFallback.issue(18, { title: 'Same-family fallback check', body: 'Do not block review when only same-family is ready.' });
+  await wFallback.tick({ selectLogin: selectFallback, alert: async a => alerts.push(a) });
+  const { pr: pr2, head: head2 } = wFallback.build(18);
+  await wFallback.tick({ selectLogin: selectFallback, alert: async a => alerts.push(a) });
+  assert.equal(alerts.length, 0, 'cooling alternate family never triggers a pool-exhausted alert when same-family is ready');
+  assert.equal(existsSync(join(wFallback.root, 'pool-exhausted.json')), false);
+  const fallbackSaved = JSON.parse(readFileSync(join(wFallback.root, 'jobs', '18.json'), 'utf8'));
+  assert.equal(fallbackSaved.poolPaused, undefined);
+  assert.equal(fallbackSaved.review.reviewFamily, 'openai');
+  assert.equal(fallbackSaved.review.reviewIndependence, 'same-family');
+  assert.equal(wFallback.job(18, 'review').command, '/opt/bin/codex');
+
+  wFallback.review(18, 'PASS');
+  wFallback.suite(18, 0);
+  await wFallback.tick({ selectLogin: selectFallback, alert: async a => alerts.push(a) });
+  assert.deepEqual(wFallback.github.merges, [pr2.number]);
+  const evidence2 = JSON.parse(readFileSync(join(wFallback.root, 'logs', `18-evidence-${head2}.json`), 'utf8'));
+  assert.deepEqual(evidence2.review, {
+    state: 'pass',
+    builderFamily: 'openai',
+    reviewFamily: 'openai',
+    reviewIndependence: 'same-family',
+  });
+  assert.match(wFallback.github.prs.get(pr2.number).body, /- Reviewer independence: same-family \(reviewer openai, builder openai\)/);
+
+  // 3. Resumed / legacy job without builderFamily records unknown-builder
+  const wUnknown = await coreWorld(t, { settings: { runs: 1 } });
+  wUnknown.issue(19, { title: 'Unknown builder family check', body: 'Resumed job without builderFamily.' });
+  await wUnknown.tick();
+  const job19Path = join(wUnknown.root, 'jobs', '19.json');
+  const legacyJob = JSON.parse(readFileSync(job19Path, 'utf8'));
+  delete legacyJob.agentKind;
+  delete legacyJob.builderFamily;
+  delete legacyJob.builderLoginId;
+  writeFileSync(job19Path, JSON.stringify(legacyJob));
+  const { pr: pr3, head: head3 } = wUnknown.build(19);
+  await wUnknown.tick();
+  const unknownSaved = JSON.parse(readFileSync(job19Path, 'utf8'));
+  assert.equal(unknownSaved.review.reviewIndependence, 'unknown-builder');
+  wUnknown.review(19, 'PASS');
+  wUnknown.suite(19, 0);
+  await wUnknown.tick();
+  assert.deepEqual(wUnknown.github.merges, [pr3.number]);
+  const evidence3 = JSON.parse(readFileSync(join(wUnknown.root, 'logs', `19-evidence-${head3}.json`), 'utf8'));
+  assert.equal(evidence3.review.reviewIndependence, 'unknown-builder');
+
+  // 4. Claude builder + mixed-model agy login pool (agy+claude-sonnet AND agy+gemini): filters per-login effective family and picks Google-family agy reviewer
+  const wMixed = await coreWorld(t, { settings: { runs: 1 } });
+  const fakeBin = join(wMixed.dir, 'pool-bin');
+  mkdirSync(fakeBin, { recursive: true });
+  const claudeBin = join(fakeBin, 'claude');
+  const agyBin = join(fakeBin, 'agy');
+  writeFileSync(claudeBin, '#!/bin/sh\necho \x27{"loggedIn":true}\x27\n');
+  writeFileSync(agyBin, '#!/bin/sh\necho "gemini-2.5-pro"\n');
+  chmodSync(claudeBin, 0o755);
+  chmodSync(agyBin, 0o755);
+  const poolPath = join(wMixed.dir, 'mixed-pool.json');
+  writeFileSync(poolPath, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'claude-main', kind: 'claude', command: claudeBin },
+      { id: 'agy-claude', kind: 'agy', command: agyBin, model: 'claude-sonnet-4-6' },
+      { id: 'agy-gemini', kind: 'agy', command: agyBin, model: 'gemini-2.5-pro' },
+    ],
+  }));
+  const selectMixedPool = opts => selectPoolLogin({
+    cwd: wMixed.cwd,
+    env: { HOME: wMixed.dir, PATH: `${fakeBin}:${process.env.PATH}` },
+    poolPath,
+    stateRoot: wMixed.root,
+    ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
+  });
+  wMixed.issue(20, { title: 'Mixed agy pool cross-family review', body: 'Skip anthropic agy login and select google agy login.' });
+  await wMixed.tick({ selectLogin: selectMixedPool });
+  const builtMixed = JSON.parse(readFileSync(join(wMixed.root, 'jobs', '20.json'), 'utf8'));
+  assert.equal(builtMixed.agentKind, 'claude');
+  assert.equal(builtMixed.builderFamily, 'anthropic');
+  assert.equal(builtMixed.builderLoginId, 'claude-main');
+
+  const { pr: pr4, head: head4 } = wMixed.build(20);
+  await wMixed.tick({ selectLogin: selectMixedPool });
+  const mixedReviewJob = wMixed.job(20, 'review');
+  assert.equal(mixedReviewJob.command, agyBin);
+  assert.ok(mixedReviewJob.args.includes('gemini-2.5-pro'), 'selected the Google-family agy login rather than the Anthropic-family agy login');
+  const mixedInReview = JSON.parse(readFileSync(join(wMixed.root, 'jobs', '20.json'), 'utf8'));
+  assert.equal(mixedInReview.review.agent.loginId, 'agy-gemini');
+  assert.equal(mixedInReview.review.reviewFamily, 'google');
+  assert.equal(mixedInReview.review.reviewIndependence, 'cross-family');
+
+  wMixed.review(20, 'PASS');
+  wMixed.suite(20, 0);
+  await wMixed.tick({ selectLogin: selectMixedPool });
+  assert.deepEqual(wMixed.github.merges, [pr4.number]);
+  const evidence4 = JSON.parse(readFileSync(join(wMixed.root, 'logs', `20-evidence-${head4}.json`), 'utf8'));
+  assert.deepEqual(evidence4.review, {
+    state: 'pass',
+    builderFamily: 'anthropic',
+    reviewFamily: 'google',
+    reviewIndependence: 'cross-family',
+  });
+
+  // 5. Custom selector with caller-injected probeLogin + non-installed binaries (/not-installed/agy): opts.pool preserves probeLogin and picks alternate
+  const wCustomProbe = await coreWorld(t, { settings: { runs: 1 } });
+  const customPoolPath = join(wCustomProbe.dir, 'custom-probe-pool.json');
+  writeFileSync(customPoolPath, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'builder', kind: 'claude', command: '/not-installed/claude' },
+      { id: 'same', kind: 'agy', model: 'claude-sonnet-4-6', command: '/not-installed/agy' },
+      { id: 'alternate', kind: 'agy', model: 'gemini-2.5-pro', command: '/not-installed/agy' },
+    ],
+  }));
+  const selectorWithProbe = opts => selectPoolLogin(
+    { cwd: wCustomProbe.cwd, env: { HOME: wCustomProbe.dir, PATH: process.env.PATH }, poolPath: customPoolPath, stateRoot: wCustomProbe.root, ...opts },
+    { probeLogin: async () => ({ ok: true }) },
+  );
+  wCustomProbe.issue(21, { title: 'Injected probeLogin mixed agy pool', body: 'Preserve caller probeLogin when filtering mixed agy pool.' });
+  await wCustomProbe.tick({ selectLogin: selectorWithProbe });
+  const { pr: pr5, head: head5 } = wCustomProbe.build(21);
+  await wCustomProbe.tick({ selectLogin: selectorWithProbe });
+  const customInReview = JSON.parse(readFileSync(join(wCustomProbe.root, 'jobs', '21.json'), 'utf8'));
+  assert.equal(customInReview.review.agent.loginId, 'alternate');
+  assert.equal(customInReview.review.reviewFamily, 'google');
+  assert.equal(customInReview.review.reviewIndependence, 'cross-family');
+  wCustomProbe.review(21, 'PASS');
+  wCustomProbe.suite(21, 0);
+  await wCustomProbe.tick({ selectLogin: selectorWithProbe });
+  assert.deepEqual(wCustomProbe.github.merges, [pr5.number]);
+  const evidence5 = JSON.parse(readFileSync(join(wCustomProbe.root, 'logs', `21-evidence-${head5}.json`), 'utf8'));
+  assert.deepEqual(evidence5.review, {
+    state: 'pass',
+    builderFamily: 'anthropic',
+    reviewFamily: 'google',
+    reviewIndependence: 'cross-family',
+  });
+});
+
+test('cross-family reviewer runtime failures automatically fall back to same-family provider without exhausting review attempts', async t => {
+  // Case A: Only same-family provider exists (single local provider with no pool AND single-provider codex pool) -> uses same-family immediately
+  const wSingle = await coreWorld(t, { settings: { runs: 1 } });
+  wSingle.issue(50, { title: 'Single provider review', body: 'Use same provider immediately when no cross-family exists.' });
+  await wSingle.tick();
+  const { pr: prA, head: headA } = wSingle.build(50);
+  await wSingle.tick();
+  const singleSaved = JSON.parse(readFileSync(join(wSingle.root, 'jobs', '50.json'), 'utf8'));
+  assert.equal(singleSaved.builderFamily, 'openai');
+  assert.equal(singleSaved.review.reviewFamily, 'openai');
+  assert.equal(singleSaved.review.reviewIndependence, 'same-family');
+  assert.equal(singleSaved.review.attempts, 1);
+  wSingle.review(50, 'PASS');
+  wSingle.suite(50, 0);
+  await wSingle.tick();
+  assert.deepEqual(wSingle.github.merges, [prA.number]);
+  const evidenceA = JSON.parse(readFileSync(join(wSingle.root, 'logs', `50-evidence-${headA}.json`), 'utf8'));
+  assert.deepEqual(evidenceA.review, {
+    state: 'pass',
+    builderFamily: 'openai',
+    reviewFamily: 'openai',
+    reviewIndependence: 'same-family',
+  });
+
+  // Case B1: Cross-family provider (claude, listed FIRST in pool before codex) fails at runtime with non-zero exit / auth error (no result JSON)
+  // -> reviewState marks crossFamilyFallback: true, retries with same-family codex without burning an attempt, and merges cleanly
+  const wAuthFail = await coreWorld(t, { settings: { runs: 1 } });
+  const authPoolPath = join(wAuthFail.dir, 'auth-fail-pool.json');
+  writeFileSync(authPoolPath, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'claude-broken', kind: 'claude', command: '/opt/bin/claude' },
+      { id: 'codex-working', kind: 'codex', command: '/opt/bin/codex' },
+    ],
+  }));
+  let buildPhase = true;
+  const selectAuthPool = opts => selectPoolLogin(
+    {
+      cwd: wAuthFail.cwd,
+      env: { HOME: wAuthFail.dir, PATH: process.env.PATH },
+      poolPath: authPoolPath,
+      stateRoot: wAuthFail.root,
+      ...(buildPhase && !Array.isArray(opts?.allowedKinds) ? { allowedKinds: ['codex'] } : {}),
+      ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
+    },
+    { probeLogin: async () => ({ ok: true }), readCodexLimits: async () => ({ state: 'ok' }) },
+  );
+  wAuthFail.issue(51, { title: 'Cross-family auth failure fallback', body: 'Fall back to codex when claude fails with 401.' });
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+  buildPhase = false;
+  const { pr: prB1, head: headB1 } = wAuthFail.build(51);
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+  const firstReview51 = wAuthFail.job(51, 'review');
+  assert.equal(firstReview51.command, '/opt/bin/claude', 'claude cross-family reviewer selected first');
+  assert.equal(JSON.parse(readFileSync(join(wAuthFail.root, 'jobs', '51.json'), 'utf8')).review.reviewIndependence, 'cross-family');
+
+  // Claude fails at runtime with 401 auth error and exit code 1 (no verdict JSON)
+  wAuthFail.say(51, 'review', 'Error: 401 Unauthorized — authentication failed, run claude login');
+  wAuthFail.finish(51, 'review', { code: 1 });
+  wAuthFail.suite(51, 0);
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+
+  const fallbackReview51 = wAuthFail.job(51, 'review');
+  assert.notEqual(fallbackReview51.id, firstReview51.id, 'started a new fallback review job');
+  assert.equal(fallbackReview51.command, '/opt/bin/codex', 'automatically fell back to codex despite claude being first in pool');
+  const savedAfterFallback51 = JSON.parse(readFileSync(join(wAuthFail.root, 'jobs', '51.json'), 'utf8'));
+  assert.equal(savedAfterFallback51.review.crossFamilyFallback, true);
+  assert.equal(savedAfterFallback51.review.reviewFamily, 'openai');
+  assert.equal(savedAfterFallback51.review.reviewIndependence, 'same-family');
+  assert.equal(savedAfterFallback51.review.attempts, 1, 'failed cross-family attempt did not consume the review attempt cap');
+
+  // Even if same-family codex needs 1 transient retry before returning PASS, it still succeeds (attempts 1 -> 2, not aborted at 1)
+  wAuthFail.finish(51, 'review', { code: 1 });
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+  const secondSameFamily51 = wAuthFail.job(51, 'review');
+  assert.equal(secondSameFamily51.command, '/opt/bin/codex', 'retry stays on same-family codex rather than re-picking broken claude');
+  assert.equal(JSON.parse(readFileSync(join(wAuthFail.root, 'jobs', '51.json'), 'utf8')).review.attempts, 2);
+
+  wAuthFail.review(51, 'PASS');
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+  assert.deepEqual(wAuthFail.github.merges, [prB1.number]);
+  const evidenceB1 = JSON.parse(readFileSync(join(wAuthFail.root, 'logs', `51-evidence-${headB1}.json`), 'utf8'));
+  assert.deepEqual(evidenceB1.review, {
+    state: 'pass',
+    builderFamily: 'openai',
+    reviewFamily: 'openai',
+    reviewIndependence: 'same-family',
+  });
+
+  // Case B2: Cross-family provider (gemini) fails at runtime with quota/rate-limit OR malformed result JSON -> marks cooldown, never parks PR, falls back to codex
+  const wQuotaFail = await coreWorld(t, { settings: { runs: 1 } });
+  const exhaustedCalls = [];
+  const quotaAlerts = [];
+  const selectGeminiCross = async opts => {
+    if (Array.isArray(opts?.allowedKinds)) {
+      if (opts.allowedKinds.includes('gemini')) {
+        return {
+          state: 'ready',
+          configured: true,
+          poolSize: 2,
+          login: { id: 'gemini-1', kind: 'gemini' },
+          agent: { id: 'gemini-1', kind: 'gemini', command: '/opt/bin/gemini' },
+          env: { HOME: wQuotaFail.dir },
+        };
+      }
+      return { state: 'unavailable', configured: true, poolSize: 0, cooling: [], unavailable: [] };
+    }
+    return {
+      state: 'ready',
+      configured: true,
+      poolSize: 2,
+      login: { id: 'codex-1', kind: 'codex' },
+      agent: { id: 'codex-1', kind: 'codex', command: '/opt/bin/codex' },
+      env: { HOME: wQuotaFail.dir },
+    };
+  };
+  const exhaustGemini = async call => {
+    exhaustedCalls.push(call);
+    return { state: 'exhausted', configured: true, poolSize: 1, cooling: [{ id: 'gemini-1', reason: call.reason }], unavailable: [] };
+  };
+  wQuotaFail.issue(52, { title: 'Cross-family quota and malformed JSON fallback', body: 'Fall back to codex on gemini quota error.' });
+  await wQuotaFail.tick({ selectLogin: selectGeminiCross, exhaustLogin: exhaustGemini, alert: async a => quotaAlerts.push(a) });
+  const { pr: prB2 } = wQuotaFail.build(52);
+  await wQuotaFail.tick({ selectLogin: selectGeminiCross, exhaustLogin: exhaustGemini, alert: async a => quotaAlerts.push(a) });
+  assert.equal(wQuotaFail.job(52, 'review').command, '/opt/bin/gemini');
+
+  // Gemini writes corrupt non-JSON to result file AND logs quota exhaustion, then exits 1
+  const geminiJob = wQuotaFail.job(52, 'review');
+  wQuotaFail.say(52, 'review', 'Error: 429 Too Many Requests — exceeded your current quota');
+  wQuotaFail.alive.delete(geminiJob.pid);
+  writeFileSync(geminiJob.result, '{corrupt-json');
+  writeFileSync(geminiJob.exit, JSON.stringify({ code: 1, signal: null, at: wQuotaFail.now() }));
+  wQuotaFail.suite(52, 0);
+
+  await wQuotaFail.tick({ selectLogin: selectGeminiCross, exhaustLogin: exhaustGemini, alert: async a => quotaAlerts.push(a) });
+  assert.equal(exhaustedCalls.length, 1);
+  assert.equal(exhaustedCalls[0].loginId, 'gemini-1');
+  assert.equal(quotaAlerts.length, 0, 'cross-family quota fallback never fires a pool-exhausted alert when same-family is ready');
+  assert.equal(wQuotaFail.job(52, 'review').command, '/opt/bin/codex', 'fell back to codex after gemini quota + corrupt JSON failure');
+  const savedAfterQuota52 = JSON.parse(readFileSync(join(wQuotaFail.root, 'jobs', '52.json'), 'utf8'));
+  assert.equal(savedAfterQuota52.stepStop, undefined, 'PR was not pool-paused');
+  assert.equal(savedAfterQuota52.review.crossFamilyFallback, true);
+  assert.equal(savedAfterQuota52.review.reviewIndependence, 'same-family');
+
+  wQuotaFail.review(52, 'PASS');
+  await wQuotaFail.tick({ selectLogin: selectGeminiCross, exhaustLogin: exhaustGemini, alert: async a => quotaAlerts.push(a) });
+  assert.deepEqual(wQuotaFail.github.merges, [prB2.number]);
+
+  // Case B3: Cross-family selector error OR missing binary launch error (ENOENT in jobs.start) -> falls back cleanly to same-family codex
+  const wLaunchFail = await coreWorld(t, { settings: { runs: 1 } });
+  let throwOnSelect = true;
+  const selectWithErrorThenMissingBin = async opts => {
+    if (Array.isArray(opts?.allowedKinds) && opts.allowedKinds.includes('claude')) {
+      if (throwOnSelect) {
+        throwOnSelect = false;
+        throw new Error('cross-family probe failed');
+      }
+      return {
+        state: 'ready',
+        configured: true,
+        poolSize: 2,
+        login: { id: 'claude-missing-bin', kind: 'claude' },
+        agent: { id: 'claude-missing-bin', kind: 'claude', command: '/missing/bin/claude' },
+        env: { HOME: wLaunchFail.dir },
+      };
+    }
+    if (Array.isArray(opts?.allowedKinds) && !opts.allowedKinds.includes('codex')) {
+      return { state: 'unavailable', configured: true, poolSize: 0, cooling: [], unavailable: [] };
+    }
+    return {
+      state: 'ready',
+      configured: true,
+      poolSize: 2,
+      login: { id: 'codex-ok', kind: 'codex' },
+      agent: { id: 'codex-ok', kind: 'codex', command: '/opt/bin/codex' },
+      env: { HOME: wLaunchFail.dir },
+    };
+  };
+  const origStart = wLaunchFail.jobs.start;
+  wLaunchFail.jobs.start = spec => {
+    if (spec.command === '/missing/bin/claude') {
+      throw Object.assign(new Error('spawn /missing/bin/claude ENOENT'), { code: 'ENOENT' });
+    }
+    return origStart(spec);
+  };
+  // Issue 53: selectCrossFamilyReviewer throws -> falls back immediately to codex
+  wLaunchFail.issue(53, { title: 'Selector error fallback', body: 'Fall back when cross-family selector throws.' });
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  const { pr: pr53 } = wLaunchFail.build(53);
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  assert.equal(wLaunchFail.job(53, 'review').command, '/opt/bin/codex');
+  wLaunchFail.review(53, 'PASS');
+  wLaunchFail.suite(53, 0);
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  assert.deepEqual(wLaunchFail.github.merges, [pr53.number]);
+
+  // Issue 54: cross-family binary missing at launch (jobs.start throws ENOENT) -> marks crossFamilyFallback: true and starts codex immediately
+  wLaunchFail.issue(54, { title: 'Missing binary launch fallback', body: 'Fall back when cross-family binary is missing.' });
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  const { pr: pr54 } = wLaunchFail.build(54);
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  assert.equal(wLaunchFail.job(54, 'review').command, '/opt/bin/codex');
+  const saved54 = JSON.parse(readFileSync(join(wLaunchFail.root, 'jobs', '54.json'), 'utf8'));
+  assert.equal(saved54.review.crossFamilyFallback, true);
+  assert.equal(saved54.review.reviewIndependence, 'same-family');
+  assert.equal(saved54.review.attempts, 1);
+  wLaunchFail.review(54, 'PASS');
+  wLaunchFail.suite(54, 0);
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  assert.deepEqual(wLaunchFail.github.merges, [pr53.number, pr54.number]);
+});
+
+test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt creation for existing unowned code', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('src/util.js', 'export const util = () => 0;\n');
+  w.issue(17, { title: 'Fix off-by-one return value in src/util.js', body: 'Return 1 from util().' });
+  await w.tick();
+
+  const input = w.job(17, 'build').input;
+  const rule1 = input.split('\n').find(line => line.startsWith('1. Choose the PDD skill')) ?? '';
+  assert.match(rule1, /pdd-small-change/);
+  assert.match(rule1, /path d/);
+  assert.match(rule1, /never[^\n]*\*\.prompt\.md/);
+  assert.match(rule1, /pdd-bug/);
+  assert.match(rule1, /pdd-feature/);
+  assert.doesNotMatch(rule1, /pdd-small-change for a small contained change/);
+
+  assert.match(input, /e\.[^\n]*\.prompt\.md/);
+  assert.match(input, /Generated from/);
+  assert.doesNotMatch(input, /change it directly, with a regression test, and put the file in the result's "adopt" list/);
+
+  const promptText = '# Util\n\nOwn `src/util.js`: return 1 from `util()`.\n';
+  const headerHash = promptHeaderHash(Buffer.from(promptText, 'utf8'));
+  editIn(w, 17, 'prompts/util.prompt.md', promptText);
+  editIn(w, 17, 'src/util.js', `// Generated from prompts/util.prompt.md (sha256: ${headerHash}).\nexport const util = () => 1;\n`);
+  editIn(w, 17, 'test/util.test.js', 'import assert from "node:assert"; import { util } from "../src/util.js"; assert.equal(util(), 1);\n');
+  const { pr } = w.build(17, {
+    write: false,
+    body: [
+      'Fixes #17',
+      '',
+      'Runtime: PASS',
+      'Path: e — prompts/util.prompt.md, src/util.js — prompts/util.prompt.md — new prompt — Test: test/util.test.js',
+      'Path: d — test/util.test.js — unowned — new prompt — Test: test/util.test.js',
+    ].join('\n'),
+    result: { promptChanged: true },
+  });
+  await w.tick();
+  assert.equal(w.job(17, 'repair'), undefined, 'creating the owning prompt and Generated from header on path e passes pathChecks without repair');
+  w.review(17, 'PASS');
+  w.suite(17, 0);
+  await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+
+  // Positive control + non-code / outside-PDD rejection matrix with real node:fs passed to ownerRead
+  const { ownerRead, pathRules } = autopilotCore;
+  const runPathEHeaderCase = (targetFile, renderHead, { from = null } = {}) => {
+    const baseDir = mkdtempSync(join(tmpdir(), 'pdd-pe-base-'));
+    const headDir = mkdtempSync(join(tmpdir(), 'pdd-pe-head-'));
+    t.after(() => {
+      rmSync(baseDir, { recursive: true, force: true });
+      rmSync(headDir, { recursive: true, force: true });
+    });
+    const baseFile = from ?? targetFile;
+    const badPrompt = 'prompts/bad.prompt.md';
+    const badPromptText = `# Candidate Owner\n\nOwn \`${targetFile}\`.\n`;
+    const badHash = promptHeaderHash(Buffer.from(badPromptText, 'utf8'));
+    writeIn(baseDir, baseFile, 'initial\n');
+    writeIn(headDir, targetFile, renderHead(badHash));
+    writeIn(headDir, badPrompt, badPromptText);
+    const baseFiles = [baseFile];
+    const headFiles = [badPrompt, targetFile].sort();
+    const before = ownerRead(nodeFs, baseDir, baseFiles);
+    const after = ownerRead(nodeFs, headDir, headFiles);
+    assert.equal(before.bindings, true);
+    assert.equal(before.unchecked.size, 0, `${baseFile}: base ownerRead must be checked`);
+    assert.equal(after.bindings, true);
+    assert.equal(after.unchecked.size, 0, `${targetFile}: head ownerRead must be checked`);
+    assert.equal(after.owners.get(targetFile)?.how, 'header', `${targetFile}: ownerRead must read header ownership`);
+    assert.ok(after.owners.get(targetFile)?.owners.includes(badPrompt), `${targetFile}: ownerRead must record ${badPrompt}`);
+    const changeEntry = from ? { status: 'R100', path: targetFile, from } : { status: 'M', path: targetFile };
+    return pathRules({
+      changed: [{ status: 'A', path: badPrompt }, changeEntry],
+      baseFiles,
+      before,
+      after,
+      body: `Fixes #99\n\nRuntime: PASS\nPath: e — ${badPrompt}, ${targetFile} — ${badPrompt} — new prompt — Test: done check\n`,
+      adopting: false,
+    }).reds;
+  };
+
+  // Positive controls: eligible product code and extensionless bin/ script pass with 0 reds through the exact same real-fs helper
+  assert.deepEqual(
+    runPathEHeaderCase('src/legit-mod.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const ok = 1;\n`),
+    [],
+    'eligible product source file passes path e prompt creation with 0 reds',
+  );
+  assert.deepEqual(
+    runPathEHeaderCase('bin/my-cli', h => `#!/usr/bin/env node\n// Generated from prompts/bad.prompt.md (sha256: ${h}).\nconsole.log(1);\n`),
+    [],
+    'eligible extensionless script under bin/ passes path e prompt creation with 0 reds',
+  );
+
+  const nonCodeCases = [
+    ['README.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Docs\n`],
+    ['RUNBOOK.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Runbook\n`],
+    ['AGENTS.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Agents\n`],
+    ['docs/guide.md', h => `<!-- Generated from prompts/bad.prompt.md (sha256: ${h}). -->\n# Guide\n`],
+    ['docs/snippet.js', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['skills/pdd-bug/helper.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['test/helper.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['tests/helper.py', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nx = 1\n`],
+    ['.github/scripts/ci.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['prompts/helper.mjs', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const x = 1;\n`],
+    ['stories/Button.stories.tsx', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const Story = {};\n`],
+    ['package.json', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\n{"name":"x"}\n`],
+    ['pnpm-lock.yaml', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nlockfileVersion: '9.0'\n`],
+    ['tsconfig.json', h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\n{}\n`],
+    ['data/data.log', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nlog line\n`],
+    ['assets/logo.avif', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\nbinary\n`],
+    ['data/archive.zip', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\npk\n`],
+    ['src/archive.zip', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\npk\n`],
+    ['bin/archive.zip', h => `# Generated from prompts/bad.prompt.md (sha256: ${h}).\npk\n`],
+  ];
+  for (const [targetFile, renderHead] of nonCodeCases) {
+    const reds = runPathEHeaderCase(targetFile, renderHead);
+    assert.ok(reds.some(r => r.includes(`${targetFile} exists on the base with no owner`)), `${targetFile}: must fire R4 via isEligiblePathECode`);
+  }
+
+  // Renaming a non-code base file (data/data.log -> src/foo.mjs) cannot bypass path e eligibility
+  const renameReds = runPathEHeaderCase(
+    'src/foo.mjs',
+    h => `// Generated from prompts/bad.prompt.md (sha256: ${h}).\nexport const foo = 1;\n`,
+    { from: 'data/data.log' },
+  );
+  assert.ok(renameReds.some(r => r.includes('src/foo.mjs exists on the base with no owner')), 'renaming data/data.log -> src/foo.mjs must fire R4 via isEligiblePathECode');
+
+  for (const [index, [targetFile, badPrompt]] of [['README.md', 'prompts/readme-adopt.prompt.md'], ['docs/guide.md', 'prompts/guide-adopt.prompt.md']].entries()) {
+    const issueNum = 30 + index;
+    const wReject = await coreWorld(t, { settings: { runs: 1 } });
+    wReject.baseCommit(targetFile, 'initial\n');
+    wReject.issue(issueNum, { title: `Update ${targetFile}`, body: 'Keep path e restricted to eligible product code.' });
+    await wReject.tick();
+    const badPromptText = `# Bad Owner\n\nOwn \`${targetFile}\`.\n`;
+    const badHash = promptHeaderHash(Buffer.from(badPromptText, 'utf8'));
+    editIn(wReject, issueNum, badPrompt, badPromptText);
+    editIn(wReject, issueNum, targetFile, `<!-- Generated from ${badPrompt} (sha256: ${badHash}). -->\n# Docs\n`);
+    wReject.build(issueNum, {
+      write: false,
+      body: `Fixes #${issueNum}\n\nRuntime: PASS\nPath: e — ${badPrompt}, ${targetFile} — ${badPrompt} — new prompt — Test: done check`,
+      result: { promptChanged: true },
+    });
+    await wReject.tick();
+    const repair = wReject.job(issueNum, 'repair');
+    assert.ok(repair, `${targetFile} on path e must be rejected by pathChecks`);
+    assert.match(repair.input, /exists on the base with no owner|owns no new code file|cannot take path e/);
+  }
+});
+
+function launcherHarness(w, { enabled = true, corePorts = {} } = {}) {
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test', label: 'pdd:autopilot' } }));
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  const coreDir = stateFile.replace(/\.json$/, '-core');
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({
+    enabled, engine: 'core', cwd, repo: 'acme/widgets', defaultBranch: 'main',
+    coordinatorId: 'coord-a', machine: 'machine-a',
+    agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg'),
+  }));
+  const ports = {
+    stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH },
+    timer: async () => true, warn: () => {}, authority: { read: async () => ({ authority: 'trusted' }) },
+    run: async (command, args, options = {}) => {
+      if (command === 'gh') return w.gh(args, options);
+      if (command !== 'git') assert.fail(`unexpected program ${command}`);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' });
+      return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    machineGuard: w.machineGuard,
+    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true, ...corePorts },
+  };
+  return { cwd, stateRoot, stateFile, coreDir, ports };
+}
+
+test('3389: pdd autopilot release immediately stops a live m-<12hex> core job, frees pdd:working and pdd:merge-lane, preserves worktree/branch/PR, and is idempotent', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const { busySlots } = await import('../src/autopilot-core.mjs');
+  const w = await coreWorld(t);
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const { cwd, stateFile, coreDir, ports } = launcherHarness(w);
+
+  assert.match((await tickAutopilot(stateFile, ports)).message, /Autopilot core: 1 started/);
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  const startedJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+  assert.match(startedJob.claim.machine, /^m-[0-9a-f]{12}$/);
+  assert.ok(w.labels(17).includes('pdd:working'));
+  assert.ok(existsSync(startedJob.worktree), 'core job worktree exists');
+
+  // Agent builds an open PR in this worktree, then the next tick starts live review + suite steps on it.
+  const { pr, head } = w.build(17);
+  await tickAutopilot(stateFile, ports);
+  pr.labels.push('pdd:merge-lane');
+
+  const prJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+  assert.equal(prJob.phase, 'pr');
+  assert.ok(w.alive.size > 0, 'review/suite steps are actively running before release');
+  w.github.label(17, 'pdd:stuck');
+
+  // Release WITHOUT running any subsequent tick.
+  const released = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(released.exitCode, 0, released.message);
+
+  // Immediate termination, terminalization, label cleanup, and preservation of worktree, branch, logs, and open PR.
+  assert.equal(w.alive.size, 0, 'all running job steps stopped immediately without waiting for a tick');
+  assert.ok(released.message.includes(startedJob.worktree), 'release output reports retained worktree path');
+  assert.ok(!existsSync(jobFile), 'jobs/17.json removed immediately');
+  assert.equal(busySlots(coreDir), 0);
+  assert.ok(!w.labels(17).includes('pdd:working'));
+  assert.ok(!w.labels(17).includes('pdd:stuck'));
+  assert.equal(pr.state, 'open', 'open PR is NOT closed');
+  assert.equal(Boolean(pr.draft), false, 'open PR is NOT converted to draft');
+  assert.ok(!pr.labels.includes('pdd:merge-lane'), 'pdd:merge-lane freed from open PR');
+  assert.ok(existsSync(startedJob.worktree), 'job worktree preserved');
+  assert.ok(existsSync(startedJob.agent.log), 'job log preserved');
+  assert.equal(w.git(startedJob.worktree, 'rev-parse', 'HEAD'), head, 'branch commits preserved');
+
+  const historyPath = join(coreDir, 'history.jsonl');
+  const readRows = () => readFileSync(historyPath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(r => r.issue === 17);
+  const rows = readRows();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].outcome, 'released');
+  assert.equal(rows[0].stopped, true);
+  assert.equal(rows[0].noResult, undefined);
+
+  // Repeat release is safe and idempotent (no duplicate history entry).
+  const again = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(again.exitCode, 0, again.message);
+  assert.equal(readRows().length, 1, 'repeat release appends no duplicate history row');
+  assert.ok(existsSync(startedJob.worktree), 'worktree still preserved after repeat release');
+
+  // Even when a later tick runs for another issue (#18), sweepFiles preserves the person-released worktree of #17.
+  w.github.unlabel(17, 'pdd:autopilot');
+  w.issue(18, { labels: ['pdd:autopilot'] });
+  await tickAutopilot(stateFile, ports);
+  assert.ok(existsSync(startedJob.worktree), 'subsequent tick for #18 preserves person-released worktrees/17');
+});
+
+test('3389: legacy hostname claim releases cleanly while foreign machine claim is refused with local and remote state untouched', async t => {
+  const { runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const w = await coreWorld(t);
+  const { cwd, coreDir, ports } = launcherHarness(w);
+  mkdirSync(join(coreDir, 'jobs'), { recursive: true });
+  mkdirSync(join(coreDir, 'logs'), { recursive: true });
+
+  // 1. Legacy hostname claim (machine-a) with local live core job + orphan legacy claim without local job file.
+  w.issue(19, { labels: ['pdd:autopilot'] });
+  const c19 = w.github.claim(19, { coordinatorId: 'coord-a', machine: 'machine-a' });
+  const ev19 = w.github.issues.get(19).timeline.find(e => e.label === 'pdd:working').id;
+  const agent19 = w.jobs.start({ id: '19-build-legacy', dir: join(coreDir, 'logs'), role: 'build' });
+  const wt19 = join(coreDir, 'worktrees', '19');
+  mkdirSync(wt19, { recursive: true });
+  writeFileSync(join(coreDir, 'jobs', '19.json'), JSON.stringify({
+    schema: 'pdd.core-job.v1', id: 'legacy-19', issue: 19, branch: 'pdd/core-19-legacy', worktree: wt19,
+    claim: { commentId: c19.id, labelEventId: ev19, lastSeen: w.now(), machine: 'machine-a' },
+    phase: 'running', role: 'build', repairs: 0, started: w.now(), agent: agent19,
+  }));
+  const rel19 = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['19'] }, ports);
+  assert.equal(rel19.exitCode, 0, rel19.message);
+  assert.ok(!w.alive.has(agent19.pid), 'legacy job process stopped');
+  assert.ok(!existsSync(join(coreDir, 'jobs', '19.json')));
+  assert.ok(!w.labels(19).includes('pdd:working'));
+  assert.ok(existsSync(wt19), 'legacy job worktree preserved');
+
+  w.issue(20, { labels: ['pdd:autopilot'] });
+  w.github.claim(20, { coordinatorId: 'coord-a', machine: 'machine-a' });
+  const rel20 = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['20'] }, ports);
+  assert.equal(rel20.exitCode, 0, rel20.message);
+  assert.ok(!w.labels(20).includes('pdd:working'));
+
+  // 2. Foreign machine claim (m-other123456) is refused: nonzero exit, pdd:working untouched, local job & process untouched.
+  w.issue(21, { labels: ['pdd:autopilot'] });
+  w.github.claim(21, { coordinatorId: 'coord-b', machine: 'm-other123456' });
+  const agent21 = w.jobs.start({ id: '21-build-local', dir: join(coreDir, 'logs'), role: 'build' });
+  const job21Path = join(coreDir, 'jobs', '21.json');
+  writeFileSync(job21Path, JSON.stringify({
+    schema: 'pdd.core-job.v1', id: 'local-21', issue: 21, branch: 'pdd/core-21-local', worktree: join(coreDir, 'worktrees', '21'),
+    claim: { commentId: '1', labelEventId: '1', lastSeen: w.now() },
+    phase: 'running', role: 'build', repairs: 0, started: w.now(), agent: agent21,
+  }));
+  const beforeJob21 = readFileSync(job21Path, 'utf8');
+  const refused21 = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['21'] }, ports);
+  assert.equal(refused21.exitCode, 1);
+  assert.match(refused21.message, /Cannot release acme\/widgets#21: m-other123456 holds a live claim/);
+  assert.ok(w.labels(21).includes('pdd:working'), 'foreign pdd:working untouched');
+  assert.equal(readFileSync(job21Path, 'utf8'), beforeJob21, 'local job file untouched');
+  assert.ok(w.alive.has(agent21.pid), 'local process untouched on foreign refusal');
+});
+
+test('3389: disabled daemon (enabled: false) immediately terminates a real detached startAgentJob process and wipes its lease overlay on release', async t => {
+  const { runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const { startAgentJob, readAgentJob, cleanupAgentJob } = await import('../src/agent-job.mjs');
+  const { machineIdOf } = await import('../src/autopilot-core.mjs');
+  const { tmpdir } = await import('node:os');
+  const w = await coreWorld(t);
+  // Daemon is disabled (pdd autopilot stop ran; no future ticks will ever run).
+  const { cwd, coreDir, ports } = launcherHarness(w, { enabled: false, corePorts: { jobs: undefined } });
+  delete ports.corePorts.jobs;
+
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const machineId = machineIdOf({ machine: 'machine-a' });
+  const claimComment = w.github.claim(17, { coordinatorId: 'coord-a', machine: machineId, lastSeen: '' });
+  const labelEventId = w.github.issues.get(17).timeline.find(e => e.label === 'pdd:working').id;
+
+  const logsDir = join(coreDir, 'logs'), wtDir = join(coreDir, 'worktrees', '17');
+  const overlayDir = mkdtempSync(join(tmpdir(), 'pdd-cx-3389-'));
+  writeFileSync(join(overlayDir, 'auth.json'), '{}');
+  mkdirSync(logsDir, { recursive: true });
+  mkdirSync(wtDir, { recursive: true });
+
+  const realAgent = startAgentJob({
+    id: '17-build-real', dir: logsDir, cwd: wtDir, custodyRoot: wtDir,
+    command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'],
+    input: '', env: { PATH: process.env.PATH }, cleanupDirs: [overlayDir],
+  });
+  t.after(() => cleanupAgentJob(realAgent).catch(() => {}));
+  assert.equal(readAgentJob(realAgent).state, 'running');
+
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  mkdirSync(join(coreDir, 'jobs'), { recursive: true });
+  writeFileSync(jobFile, JSON.stringify({
+    schema: 'pdd.core-job.v1', id: 'real-17', issue: 17, branch: 'pdd/core-17-real', worktree: wtDir,
+    claim: { commentId: claimComment.id, labelEventId, lastSeen: w.now(), machine: machineId },
+    phase: 'running', role: 'build', repairs: 0, started: w.now(), agent: realAgent,
+  }));
+
+  const released = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(released.exitCode, 0, released.message);
+  assert.notEqual(readAgentJob(realAgent).state, 'running', 'real detached agent job stopped immediately');
+  assert.throws(() => process.kill(realAgent.pid, 0), { code: 'ESRCH' });
+  assert.ok(!existsSync(overlayDir), 'disposable account lease overlay dir removed on release');
+  assert.ok(!existsSync(jobFile), 'jobs/17.json removed');
+  assert.ok(!w.labels(17).includes('pdd:working'));
+  assert.ok(existsSync(wtDir), 'worktree preserved');
+});
+
+test('3389: claimTickLock serializes stale dead-PID and abandoned-guard reclamation behind .reclaim.d so concurrent contenders never both win', async t => {
+  const nativeFs = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { Worker } = await import('node:worker_threads');
+  const { once } = await import('node:events');
+  const { claimTickLock } = await import('../src/autopilot-core.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-lock-3389-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const lockFile = join(dir, 'STATE.lock');
+  const reclaimDir = `${lockFile}.reclaim.d`;
+
+  const deadChild = spawnSync(process.execPath, ['-e', '']);
+  const deadPidNum = deadChild.pid;
+  const deadPid = String(deadPidNum);
+  assert.throws(() => process.kill(deadPidNum, 0), { code: 'ESRCH' });
+
+  // Interleaving 1: Contender B completes stale-lock reclamation right after Contender A reads deadPid, before A acquires .reclaim.d.
+  writeFileSync(lockFile, deadPid, { mode: 0o600 });
+  let b1 = null, hooked1 = false;
+  const fsBeforeReclaim = {
+    ...nativeFs,
+    readFileSync(target, encoding) {
+      const val = nativeFs.readFileSync(target, encoding);
+      if (!hooked1 && target === lockFile) {
+        hooked1 = true;
+        b1 = claimTickLock(lockFile, nativeFs);
+      }
+      return val;
+    },
+  };
+  const a1 = claimTickLock(lockFile, fsBeforeReclaim);
+  assert.deepEqual([a1, b1], [false, true], 'only Contender B wins when B reclaims before A acquires .reclaim.d');
+  assert.equal(readFileSync(lockFile, 'utf8'), String(process.pid));
+  assert.ok(!existsSync(reclaimDir));
+  rmSync(lockFile, { force: true });
+
+  // Interleaving 2: Contender B contends while Contender A holds .reclaim.d right before A unlinks the stale lock.
+  writeFileSync(lockFile, deadPid, { mode: 0o600 });
+  let b2 = null, hooked2 = false;
+  const fsInsideReclaim = {
+    ...nativeFs,
+    unlinkSync(target) {
+      if (!hooked2 && target === lockFile) {
+        hooked2 = true;
+        b2 = claimTickLock(lockFile, nativeFs);
+      }
+      return nativeFs.unlinkSync(target);
+    },
+  };
+  const a2 = claimTickLock(lockFile, fsInsideReclaim);
+  assert.deepEqual([a2, b2], [true, false], 'only Contender A wins while A holds .reclaim.d');
+  assert.equal(readFileSync(lockFile, 'utf8'), String(process.pid));
+  assert.ok(!existsSync(reclaimDir));
+  rmSync(lockFile, { force: true });
+
+  // Interleaving 3 (3-party abandoned guard race via real Worker threads + SharedArrayBuffer):
+  // Dead contender Z left owner-deadZ in .reclaim.d. Worker A pauses right before unlinking owner-deadZ;
+  // Worker B reclaims owner-deadZ, acquires .reclaim.d with owner-B, validates dead main lock, and pauses right before unlinking STATE.lock;
+  // Worker A resumes (cannot delete B's owner-B!) -> Worker B resumes -> [true, true] MUST NEVER occur!
+  writeFileSync(lockFile, deadPid, { mode: 0o600 });
+  mkdirSync(reclaimDir, { mode: 0o700 });
+  const deadEntry = join(reclaimDir, 'owner-dead-z');
+  writeFileSync(deadEntry, JSON.stringify({ pid: deadPidNum, token: 'dead-z', at: Date.now() - 20_000 }), { mode: 0o600 });
+
+  const moduleUrl = new URL('../src/autopilot-core.mjs', import.meta.url).href;
+  const workerScript = `
+    import * as fs from 'node:fs';
+    import { parentPort, workerData } from 'node:worker_threads';
+    const { claimTickLock } = await import(${JSON.stringify(moduleUrl)});
+    const { lockFile, deadEntry, role, barrier } = workerData;
+    const gate = new Int32Array(barrier);
+    let paused = false;
+    const port = {
+      ...fs,
+      unlinkSync(target) {
+        const trigger = role === 'A' ? deadEntry : lockFile;
+        if (!paused && target === trigger) {
+          paused = true;
+          parentPort.postMessage({ paused: role, target });
+          if (Atomics.wait(gate, 0, 0, 15000) === 'timed-out') throw new Error('barrier timeout');
+        }
+        return fs.unlinkSync(target);
+      },
+    };
+    parentPort.postMessage({ role, result: claimTickLock(lockFile, port) });
+  `;
+  const startWorker = role => {
+    const barrier = new SharedArrayBuffer(4);
+    const worker = new Worker(workerScript, { eval: true, type: 'module', workerData: { lockFile, deadEntry, role, barrier } });
+    return { worker, barrier, first: once(worker, 'message') };
+  };
+  const resumeWorker = w => {
+    const arr = new Int32Array(w.barrier);
+    Atomics.store(arr, 0, 1);
+    Atomics.notify(arr, 0);
+  };
+  const wa = startWorker('A');
+  await wa.first;
+  const wb = startWorker('B');
+  await wb.first;
+  const nextA = once(wa.worker, 'message');
+  resumeWorker(wa);
+  const [resA] = await nextA;
+  const nextB = once(wb.worker, 'message');
+  resumeWorker(wb);
+  const [resB] = await nextB;
+  await Promise.all([wa.worker.terminate(), wb.worker.terminate()]);
+  assert.deepEqual([resA.result, resB.result], [false, true], 'abandoned guard race never produces two winners');
+  assert.ok(!existsSync(reclaimDir), '.reclaim.d cleaned up after winner finishes');
+});
+
+test('3389: history.jsonl fsyncSync EIO failure retains jobs/N.json across retries without duplicate rows until durable flush succeeds', async t => {
+  const nativeFs = await import('node:fs');
+  const { tickAutopilot } = await import('../src/autopilot-launcher.mjs');
+  const { releaseCoreJob } = await import('../src/autopilot-core.mjs');
+  const w = await coreWorld(t);
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const { stateFile, coreDir, ports } = launcherHarness(w);
+
+  await tickAutopilot(stateFile, ports);
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  const startedJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+  const historyPath = join(coreDir, 'history.jsonl');
+
+  let failFsync = true;
+  const openFds = new Map();
+  const fsWithEio = {
+    ...nativeFs,
+    openSync(path, flags, mode) {
+      const fd = nativeFs.openSync(path, flags, mode);
+      openFds.set(fd, String(path));
+      return fd;
+    },
+    closeSync(fd) {
+      openFds.delete(fd);
+      return nativeFs.closeSync(fd);
+    },
+    fsyncSync(fd) {
+      if (failFsync && openFds.get(fd) === historyPath) {
+        throw Object.assign(new Error('Input/output error'), { code: 'EIO' });
+      }
+      return nativeFs.fsyncSync(fd);
+    },
+  };
+  const releaseOpts = {
+    state: JSON.parse(readFileSync(stateFile, 'utf8')),
+    root: coreDir,
+    now: w.now,
+    env: ports.env,
+    warn: () => {},
+    authority: ports.authority,
+    gh: args => w.gh(args),
+    git: (args, options = {}) => ports.run('git', args, options),
+    ...ports.corePorts,
+    fs: fsWithEio,
+  };
+
+  // Attempt 1: writeSync writes row to page cache, fsyncSync throws EIO -> exit 1, jobs/17.json retained!
+  const first = await releaseCoreJob(stateFile, '17', releaseOpts);
+  assert.equal(first.exitCode, 1);
+  assert.ok(existsSync(jobFile), 'jobs/17.json retained when fsyncSync fails with EIO');
+  assert.equal(JSON.parse(readFileSync(jobFile, 'utf8')).phase, 'released');
+
+  // Attempt 2 while fsyncSync STILL throws EIO: even though cached read sees the row, fsyncSync STILL runs and fails!
+  const second = await releaseCoreJob(stateFile, '17', releaseOpts);
+  assert.equal(second.exitCode, 1, 'cached unflushed row does not bypass fsyncSync requirement');
+  assert.ok(existsSync(jobFile), 'jobs/17.json still retained on repeated EIO');
+
+  // Tick runs sweepFiles while EIO persists: worktrees/17 survives!
+  w.github.unlabel(17, 'pdd:autopilot');
+  await tickAutopilot(stateFile, ports);
+  assert.ok(existsSync(startedJob.worktree), 'worktrees/17 preserved across sweepFiles during fsync failure');
+
+  // Attempt 3 once fsyncSync recovers: flushes durably with ZERO duplicate rows and removes jobs/17.json.
+  failFsync = false;
+  const third = await releaseCoreJob(stateFile, '17', releaseOpts);
+  assert.equal(third.exitCode, 0, third.message);
+  assert.ok(!existsSync(jobFile));
+  const rows = readFileSync(historyPath, 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.issue === 17);
+  assert.equal(rows.length, 1, 'no duplicate history row appended across fsync retries');
+  assert.equal(rows[0].personRelease, true);
+  await tickAutopilot(stateFile, ports);
+  assert.ok(existsSync(startedJob.worktree), 'worktrees/17 remains preserved after durable flush and sweepFiles');
+});
+
+test('3389: companion claim cleanup failure keeps jobs/N.json in phase released and retries companion release idempotently', async t => {
+  const { runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const { machineIdOf } = await import('../src/autopilot-core.mjs');
+  const w = await coreWorld(t);
+  const { cwd, coreDir, ports } = launcherHarness(w);
+  const machineId = machineIdOf({ machine: 'machine-a' });
+
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  w.issue(18, { labels: ['pdd:autopilot'] });
+  const c17 = w.github.claim(17, { coordinatorId: 'coord-a', machine: machineId, lastSeen: '' });
+  const ev17 = w.github.issues.get(17).timeline.find(e => e.label === 'pdd:working').id;
+  const c18 = w.github.claim(18, { coordinatorId: 'coord-a', machine: machineId, lastSeen: '' });
+  const ev18 = w.github.issues.get(18).timeline.find(e => e.label === 'pdd:working').id;
+
+  mkdirSync(join(coreDir, 'jobs'), { recursive: true });
+  mkdirSync(join(coreDir, 'logs'), { recursive: true });
+  const wt17 = join(coreDir, 'worktrees', '17');
+  mkdirSync(wt17, { recursive: true });
+  const agent17 = w.jobs.start({ id: '17-build-comp', dir: join(coreDir, 'logs'), role: 'build' });
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  writeFileSync(jobFile, JSON.stringify({
+    schema: 'pdd.core-job.v1', id: 'comp-job-17', issue: 17, issues: [17, 18],
+    companions: [{ issue: 18, title: 'Companion 18', url: 'https://github.com/acme/widgets/issues/18', body: '', claim: { commentId: c18.id, labelEventId: ev18, lastSeen: w.now(), machine: machineId } }],
+    branch: 'pdd/core-17-comp', worktree: wt17,
+    claim: { commentId: c17.id, labelEventId: ev17, lastSeen: w.now(), machine: machineId },
+    phase: 'running', role: 'build', repairs: 0, started: w.now(), agent: agent17,
+  }));
+
+  // Simulate gh going offline specifically for companion #18 on first release attempt.
+  let fail18 = true;
+  const flakyPorts = {
+    ...ports,
+    run: async (command, args, options = {}) => {
+      if (command === 'gh' && fail18 && args.some(a => String(a).includes('/issues/18'))) {
+        return { code: 1, stdout: '', stderr: 'network unavailable' };
+      }
+      return ports.run(command, args, options);
+    },
+  };
+
+  const first = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, flakyPorts);
+  assert.equal(first.exitCode, 1);
+  assert.ok(!w.alive.has(agent17.pid), 'local job stopped before companion retry wait');
+  assert.ok(existsSync(jobFile), 'jobs/17.json kept on disk when companion #18 cleanup fails');
+  assert.equal(JSON.parse(readFileSync(jobFile, 'utf8')).phase, 'released');
+  assert.ok(w.labels(18).includes('pdd:working'), '#18 still has pdd:working while offline');
+
+  // Restore gh and retry release 17: finishes both #18 and #17 cleanly.
+  fail18 = false;
+  const second = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, flakyPorts);
+  assert.equal(second.exitCode, 0, second.message);
+  assert.ok(!w.labels(18).includes('pdd:working'), 'companion #18 pdd:working removed on retry');
+  assert.ok(!w.labels(17).includes('pdd:working'), 'parent #17 pdd:working removed on retry');
+  assert.ok(!existsSync(jobFile), 'jobs/17.json removed only after both claims confirmed released');
+  const historyRows = readFileSync(join(coreDir, 'history.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.issue === 17);
+  assert.equal(historyRows.length, 1);
+  assert.deepEqual(historyRows[0].issues, [17, 18]);
+  assert.equal(historyRows[0].personRelease, true);
+});
+
+test('3389: history.jsonl write failure retains jobs/N.json so sweepFiles never deletes worktrees/N', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const w = await coreWorld(t);
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const { cwd, stateFile, coreDir, ports } = launcherHarness(w);
+
+  await tickAutopilot(stateFile, ports);
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  const startedJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+  const historyPath = join(coreDir, 'history.jsonl');
+
+  // Make history.jsonl a directory so appendFileSync fails with EISDIR.
+  mkdirSync(historyPath, { recursive: true });
+  const failed = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(failed.exitCode, 1);
+  assert.ok(existsSync(jobFile), 'jobs/17.json retained when history.jsonl cannot be persisted');
+  assert.equal(JSON.parse(readFileSync(jobFile, 'utf8')).phase, 'released');
+
+  // A subsequent tick runs sweepFiles: worktrees/17 MUST survive because jobs/17.json was retained!
+  w.github.unlabel(17, 'pdd:autopilot');
+  await tickAutopilot(stateFile, ports);
+  assert.ok(existsSync(startedJob.worktree), 'worktrees/17 preserved across sweepFiles even when history.jsonl write failed');
+
+  // Unblock history.jsonl and retry release 17: persists personRelease: true, unlinks jobs/17.json, and still survives sweepFiles.
+  rmSync(historyPath, { recursive: true, force: true });
+  const retried = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(retried.exitCode, 0, retried.message);
+  assert.ok(!existsSync(jobFile));
+  await tickAutopilot(stateFile, ports);
+  assert.ok(existsSync(startedJob.worktree), 'worktrees/17 remains preserved across sweepFiles after retry succeeds');
+});
+
+test('3389: competing foreign claim comment on active labelEventId refuses release read-only with zero GitHub mutations', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const w = await coreWorld(t);
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const { cwd, stateFile, coreDir, ports } = launcherHarness(w);
+
+  await tickAutopilot(stateFile, ports);
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  const startedJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+
+  // Add a competing foreign machine claim comment referencing the SAME active labelEventId (test both same-actor and different-actor comments).
+  for (const login of [w.github.owner, 'other-trusted-bot']) {
+    const issueData = w.github.issues.get(17);
+    const foreignBody = `Autopilot claimed this issue.\n\n\`\`\`json\n${JSON.stringify({
+      repository: 'acme/widgets', coordinatorId: 'coord-foreign', machine: 'm-foreign999999',
+      labelEventId: String(startedJob.claim.labelEventId), lastSeen: '',
+    })}\n\`\`\``;
+    w.github.comment(17, foreignBody, login);
+
+    const mutations = [];
+    const spyPorts = {
+      ...ports,
+      run: async (command, args, options = {}) => {
+        if (command === 'gh') {
+          const methodIdx = args.indexOf('--method');
+          const method = methodIdx >= 0 ? args[methodIdx + 1] : 'GET';
+          if (method !== 'GET') mutations.push({ method, args });
+        }
+        return ports.run(command, args, options);
+      },
+    };
+
+    const commentsBefore = issueData.comments.length;
+    const refused = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, spyPorts);
+    assert.equal(refused.exitCode, 1);
+    assert.match(refused.message, /claim ownership is unknown/);
+    assert.deepEqual(mutations, [], `zero GitHub mutations when competing claim exists (${login})`);
+    assert.equal(issueData.comments.length, commentsBefore, 'competing foreign claim comment is NOT deleted');
+    assert.ok(w.labels(17).includes('pdd:working'));
+    assert.ok(existsSync(jobFile));
+    assert.ok(w.alive.has(startedJob.agent.pid), 'running process untouched on ambiguous ownership refusal');
+
+    issueData.comments.pop();
+  }
+});
+
+test('3389: orphan m-<12hex> claim without jobs/N.json releases cleanly while no-run release never deletes a concurrent takeover claim', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const w = await coreWorld(t);
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const { cwd, stateFile, coreDir, ports } = launcherHarness(w);
+
+  // 1. Start a core job to create an m-<12hex> claim on GitHub, then delete local jobs/17.json to simulate an orphan core claim.
+  await tickAutopilot(stateFile, ports);
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  const startedJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+  const coreMachineId = startedJob.claim.machine;
+  assert.match(coreMachineId, /^m-[0-9a-f]{12}$/);
+  rmSync(jobFile, { force: true });
+
+  const orphanReleased = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(orphanReleased.exitCode, 0, orphanReleased.message);
+  assert.ok(!w.labels(17).includes('pdd:working'), 'orphan m-<12hex> claim released cleanly without local jobs/17.json');
+
+  // 2. Now issue #18 has only pdd:stuck (no initial pdd:working claim); inject a concurrent m-<12hex> core takeover right after DELETE /labels/pdd%3Astuck.
+  w.issue(18, { labels: ['pdd:stuck'] });
+  let injected = false;
+  let replacement = null;
+  const deletions = [];
+  const takeoverPorts = {
+    ...ports,
+    run: async (command, args, options = {}) => {
+      if (command === 'gh' && args[0] === 'api') {
+        const labelArg = args.find(v => v.includes('/labels/'));
+        const methodIdx = args.indexOf('--method');
+        const deleting = methodIdx >= 0 && args[methodIdx + 1] === 'DELETE';
+        if (deleting && labelArg) deletions.push(labelArg.split('/labels/').at(-1));
+        const res = await ports.run(command, args, options);
+        if (deleting && labelArg?.endsWith('/labels/pdd%3Astuck') && !injected) {
+          injected = true;
+          const c = w.github.claim(18, { coordinatorId: 'coord-a', machine: coreMachineId });
+          const evId = w.github.issues.get(18).timeline.filter(ev => ev.label === 'pdd:working').at(-1).id;
+          const rec = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(c.body)[1]);
+          w.github.editComment(18, c.id, `Autopilot claimed this issue.\n\n\`\`\`json\n${JSON.stringify({ ...rec, labelEventId: evId, lastSeen: new Date(w.now()).toISOString() })}\n\`\`\``);
+          w.github.label(18, 'pdd:stuck');
+          replacement = { commentId: c.id, eventId: evId };
+        }
+        return res;
+      }
+      return ports.run(command, args, options);
+    },
+  };
+
+  const raceResult = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['18'] }, takeoverPorts);
+  assert.equal(injected, true);
+  assert.equal(raceResult.exitCode, 1, 'no-run release aborts instead of retrying m-<12hex> after mutating pdd:stuck');
+  assert.deepEqual(deletions, ['pdd%3Astuck'], 'second machine form never deletes the concurrent takeover labels');
+  assert.deepEqual(w.labels(18), ['pdd:working', 'pdd:stuck']);
+  assert.ok(w.github.issues.get(18).comments.some(c => c.id === replacement.commentId), 'concurrent m-<12hex> replacement comment stays intact');
 });

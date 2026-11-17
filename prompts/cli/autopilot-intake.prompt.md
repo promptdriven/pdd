@@ -42,14 +42,19 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   wider than the core's ready rule: it does not skip issues that cool down after a
   no-result, or issues whose blocker is named only in the text or in an END comment.
   A person who reads the would-pick list must keep that in mind.
-- Native facts first (`nativeFacts(row)`), from the issue row only, in this order:
-  an assignee → `held`; `issue_dependencies_summary.blocked_by` > 0 → `waiting`;
+- Native facts first (`nativeFacts(row, {skipLabels})`), from the issue row only,
+  in this order: an external-repository label (`external`, `other-repo`,
+  `elsewhere`, `pdd:elsewhere`, matched case-insensitively via
+  [pre-run forensics](autopilot-forensics.prompt.md)) → `elsewhere`; a configured
+  `autopilot.skipLabels` label (case-insensitive) → `held`; an assignee → `held`;
+  `issue_dependencies_summary.blocked_by` > 0 → `waiting`;
   `sub_issues_summary.total` > `completed` → `tracking` (the sub-issues are the
   work); a label `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge` → `parked`;
   the label `pdd:working`, or a core job file of this machine for the issue (the row
   can be older than this tick's claim) → `working`. Each gives a short reason. An
-  issue with a native fact gets no AI card. Text patterns in the issue never count
-  as native facts. A native record keeps the last AI card as `previous`.
+  issue with a native fact gets no AI card and zero AI or GitHub calls. Text or
+  missing-path heuristics never count as native facts or downgrade cards. A native
+  record keeps the last AI card as `previous`.
 - Trust: a card job starts only for an issue whose author passes the core's own
   trust check (`ports.trusted`, the same check that the core uses before it gives an
   issue to an agent). An issue that fails it gets the native-style record
@@ -117,9 +122,16 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   decision is needed), duplicate (same problem or goal as another listed issue;
   same words are not enough), blocked, held, fixed (the comments show it no longer
   happens) and elsewhere (another repository).
-- Answer: Codex's ANSWER file, or the last JSON line with a `result` string in
-  Claude's log; at most 64 KB, else an error card. `parseCardText` takes the JSON
-  object between the first `{` and the last `}` (a code fence is fine).
+- Answer: Codex's ANSWER file, or the last top-level JSON envelope with a `result`
+  string in Claude's single-line or multiline log; at most 64 KB, else an error
+  card. `parseCardText` uses the linear string-aware top-level JSON object scanner
+  of [pre-run forensics](autopilot-forensics.prompt.md) (`extractJsonObjects`) and
+  takes the last valid JSON object so leading warning braces, code fences, and
+  braces inside JSON strings never corrupt parsing. When core pre-run forensics
+  proves an issue `already_fixed` on `origin/BASE`, `recordForensicsFixedCard(ctx,
+  row, forensics)` updates any existing intake card folder with a `fixed` card
+  (`start: false`) for the post-comment issue version so `activeReadyCards` and
+  `wouldPick` stay in sync.
 - Card result (`readCard(result)`): `class` must be one of the eight classes and
   `reason` a non-empty string, else the card fails. Control characters are removed
   from every kept string. Kept fields: `start` (true for ready and improve),
@@ -205,3 +217,6 @@ read-only pass inspect the repository checkout, still with no GitHub token.
 - [Areas](autopilot-areas.prompt.md): required to normalize card `areas` paths.
 - [Multi-harness login pool](login-pool.prompt.md): required for
   `isQuotaExhaustionMessage` when rotating pooled `codex` and `claude` logins.
+- [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
+  external-repository / configured skip-label matching and linear string-aware JSON
+  object scanning.

@@ -336,3 +336,61 @@ test('#3252 doctor: saved agy profile binds ANTIGRAVITY_APP_DATA_DIR, non-agy pr
     assert.ok(!gRes.message.includes('GEM_REFRESH_SECRET'));
   }
 });
+
+test('doctor: setup-skills hints pdd setup and warns advisories on unmarked retired skill folders only',async t=>{
+  const f=doctorFixture();
+  f.paths.delete(join('/home/fake','.agents','skills','pdd-graph','SKILL.md'));
+  const missingSkill=await runAutopilotDoctor(f.input,f.ports);
+  assert.equal(missingSkill.checks.find(c=>c.id==='setup-skills').fix,'pdd setup');
+
+  // Unmarked retired skill folders with pdd-skills: frontmatter warn with quoted mv backup and exitCode 0.
+  const u=doctorFixture({home:"/home/o'neil user"});
+  u.paths.set(join("/home/o'neil user",'.agents','skills','pdd-autopilot','SKILL.md'),'---\nname: pdd-autopilot\nmetadata:\n  pdd-skills: 0.1.28\n---\n');
+  u.paths.set(join("/home/o'neil user",'.claude','skills','pdd-merge','SKILL.md'),'---\nname: pdd-merge\npdd-skills: 0.1.25\n---\n');
+  // Marked copy (.pdd-skill.json) and unrelated user skill (no pdd-skills: frontmatter) are ignored.
+  u.paths.set(join("/home/o'neil user",'.agents','skills','pdd-check','SKILL.md'),'---\nname: pdd-check\npdd-skills: 0.1.28\n---\n');
+  u.paths.set(join("/home/o'neil user",'.agents','skills','pdd-check','.pdd-skill.json'),'{"name":"pdd-check"}');
+  u.paths.set(join("/home/o'neil user",'.claude','skills','pdd-autopilot','SKILL.md'),'---\nname: pdd-autopilot\ndescription: custom user skill\n---\n');
+  const warned=await runAutopilotDoctor(u.input,u.ports);
+  assert.equal(warned.exitCode,0,warned.message);
+  const row=warned.checks.find(c=>c.id==='retired-skills');
+  assert.ok(row,'expected retired-skills warning');
+  assert.equal(row.status,'warn');
+  assert.match(row.detail,/pdd-autopilot/);
+  assert.match(row.detail,/pdd-merge/);
+  assert.doesNotMatch(row.detail,/pdd-check/);
+  assert.ok(row.fix.includes("mkdir -p '/home/o'\\''neil user/.agents/skills/.pdd-retired' && mv '/home/o'\\''neil user/.agents/skills/pdd-autopilot' '/home/o'\\''neil user/.agents/skills/.pdd-retired/'"), row.fix);
+
+  // Symlinked retired skill directory on real filesystem is ignored (not flagged).
+  const { mkdtempSync, mkdirSync, writeFileSync: wf, symlinkSync, rmSync, lstatSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const tmp=mkdtempSync(join(tmpdir(),'pdd-doc-retired-'));
+  t.after(()=>rmSync(tmp,{recursive:true,force:true}));
+  const target=join(tmp,'target-skill'), agentsSkills=join(tmp,'home','.agents','skills');
+  mkdirSync(target,{recursive:true});
+  mkdirSync(agentsSkills,{recursive:true});
+  wf(join(target,'SKILL.md'),'---\nname: pdd-autopilot\npdd-skills: 0.1.28\n---\n');
+  symlinkSync(target,join(agentsSkills,'pdd-autopilot'));
+  const s=doctorFixture({home:join(tmp,'home')});
+  s.paths.set(join(agentsSkills,'pdd-autopilot','SKILL.md'),'---\nname: pdd-autopilot\npdd-skills: 0.1.28\n---\n');
+  s.ports.files.lstatSync=path=>lstatSync(path);
+  const symRes=await runAutopilotDoctor(s.input,s.ports);
+  assert.equal(symRes.checks.find(c=>c.id==='retired-skills'),undefined);
+});
+
+test('doctor: warns when Linux AppArmor restricts unprivileged userns and bwrap is missing for Codex, and stays quiet when bwrap is on PATH',async()=>{
+  const missing=doctorFixture({kind:'codex',platform:'linux'});
+  missing.paths.set('/proc/sys/kernel/apparmor_restrict_unprivileged_userns','1\n');
+  const resMissing=await runAutopilotDoctor(missing.input,missing.ports);
+  assert.equal(resMissing.exitCode,0,resMissing.message);
+  const warnRow=resMissing.checks.find(c=>c.id==='codex-sandbox');
+  assert.ok(warnRow,'expected codex-sandbox warning');
+  assert.equal(warnRow.status,'warn');
+  assert.equal(warnRow.fix,'sudo apt-get install -y bubblewrap');
+
+  const present=doctorFixture({kind:'codex',platform:'linux'});
+  present.paths.set('/proc/sys/kernel/apparmor_restrict_unprivileged_userns','1\n');
+  present.ports.files.accessSync=path=>{if(path!=='/tools/pdd'&&path!=='/tools/bwrap')throw Error('missing');};
+  const resPresent=await runAutopilotDoctor(present.input,present.ports);
+  assert.equal(resPresent.checks.find(c=>c.id==='codex-sandbox'),undefined);
+});
