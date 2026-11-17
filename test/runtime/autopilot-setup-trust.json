@@ -3,23 +3,23 @@
   "story_path": "user_stories/autopilot-setup-trust.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-b4c2fce698a259ab0b2db15447bfd1fd707b1e240d347466",
       "text": "Setup shows owner Ada and write collaborators Bo and Cy."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-54e83a607ed06623f7c4e2ae4f5bf2c4659e00848420e5c0",
       "text": "An empty additional names answer adds nobody."
     },
     {
-      "id": "AC3",
+      "id": "ac-sha256-3c60465b5e47f507c9e629dd859c13136c0cf842827e11c7",
       "text": "Setup warns when the trusted list may be incomplete and continues."
     },
     {
-      "id": "AC4",
+      "id": "ac-sha256-7fb837afeba2fcc8684928a988253023a8be8d16b080bc32",
       "text": "Setup warns and continues when GitHub provides neither owner nor writers."
     },
     {
-      "id": "AC5",
+      "id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
       "text": "If GitHub does not answer within a short time, setup warns that the trusted list may be incomplete and continues, keeping confirmed people trusted without trusting unconfirmed people."
     }
   ],
@@ -151,21 +151,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-54e83a607ed06623f7c4e2ae4f5bf2c4659e00848420e5c0",
           "target": "result",
           "path": "/trust",
           "op": "equals",
           "value": []
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-b4c2fce698a259ab0b2db15447bfd1fd707b1e240d347466",
           "target": "world",
           "path": "/names_questions/0/owner",
           "op": "equals",
           "value": "Ada"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-b4c2fce698a259ab0b2db15447bfd1fd707b1e240d347466",
           "target": "world",
           "path": "/names_questions/0/writers",
           "op": "equals",
@@ -175,35 +175,35 @@
           ]
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-b4c2fce698a259ab0b2db15447bfd1fd707b1e240d347466",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "Ada"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-b4c2fce698a259ab0b2db15447bfd1fd707b1e240d347466",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "Bo"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-b4c2fce698a259ab0b2db15447bfd1fd707b1e240d347466",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "Cy"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-b4c2fce698a259ab0b2db15447bfd1fd707b1e240d347466",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "owner"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-b4c2fce698a259ab0b2db15447bfd1fd707b1e240d347466",
           "target": "result",
           "path": "/message",
           "op": "contains",
@@ -222,14 +222,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-3c60465b5e47f507c9e629dd859c13136c0cf842827e11c7",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-3c60465b5e47f507c9e629dd859c13136c0cf842827e11c7",
           "target": "result",
           "path": "/message",
           "op": "contains",
@@ -248,42 +248,42 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-7fb837afeba2fcc8684928a988253023a8be8d16b080bc32",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-7fb837afeba2fcc8684928a988253023a8be8d16b080bc32",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "incomplete"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "incomplete"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "world",
           "path": "/names_questions/2/owner",
           "op": "equals",
           "value": ""
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "world",
           "path": "/names_questions/2/writers",
           "op": "equals",
@@ -302,63 +302,63 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "incomplete"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "Ada"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "owner"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "world",
           "path": "/names_questions/3/owner",
           "op": "equals",
           "value": "Ada"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "world",
           "path": "/names_questions/3/writers",
           "op": "equals",
           "value": []
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "world",
           "path": "/names_questions/3/complete",
           "op": "equals",
           "value": false
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "world",
           "path": "/names_questions",
           "op": "count",
           "value": 4
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "world",
           "path": "/mode_questions",
           "op": "count",
@@ -376,7 +376,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "result",
           "path": "/trusted",
           "op": "equals",
@@ -394,7 +394,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-5bb76c17d5ef7550dcb8a5d5169a6ee9c6bcdc4c3a74fe97",
           "target": "result",
           "path": "/trusted",
           "op": "equals",

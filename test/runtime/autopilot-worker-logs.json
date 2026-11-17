@@ -2,10 +2,10 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/autopilot-worker-logs.md",
   "criteria": [
-    { "id": "AC1", "text": "When issue 42 is second in the check queue, its suite status says \"waiting for a check slot (position 2)\" and shows the last activity time." },
-    { "id": "AC2", "text": "When that suite actually executes, its status says \"tests running\" and shows where to find its log and receipt." },
-    { "id": "AC3", "text": "An old running receipt without a confirmed live test process is shown as stale or uncertain, not as running tests." },
-    { "id": "AC4", "text": "When the worker switches to repair, the process status names \"repair\" and says whether its wrapper is running." }
+    { "id": "ac-sha256-891ac26185001a3c5add6f4ce62f9f8c65d724ec839c1766", "text": "When issue 42 is second in the check queue, its suite status says \"waiting for a check slot (position 2)\" and shows the last activity time." },
+    { "id": "ac-sha256-967f28e5e63f50d3aad50a9a40ee418fab89e58236983305", "text": "When that suite actually executes, its status says \"tests running\" and shows where to find its log and receipt." },
+    { "id": "ac-sha256-90aadee8314254f62d2f80f65ba1732c5bc171a11e48092e", "text": "An old running receipt without a confirmed live test process is shown as stale or uncertain, not as running tests." },
+    { "id": "ac-sha256-8c08cd538e7f9844eef9c474f9aebdfc5d2a7287272bffff", "text": "When the worker switches to repair, the process status names \"repair\" and says whether its wrapper is running." }
   ],
   "initial_world": {},
   "simulation": {},
@@ -27,7 +27,7 @@
         "evidence": null
       },
       "checks": [
-        { "criterion_id": "AC1", "target": "result", "path": "", "op": "equals", "value": "suite: wrapper running; waiting for a check slot (position 2); last activity 2026-11-17T20:05:00.000Z" }
+        { "criterion_id": "ac-sha256-891ac26185001a3c5add6f4ce62f9f8c65d724ec839c1766", "target": "result", "path": "", "op": "equals", "value": "suite: wrapper running; waiting for a check slot (position 2); last activity 2026-11-17T20:05:00.000Z" }
       ]
     },
     {
@@ -46,7 +46,7 @@
         "evidence": "/fixture/queue/ticket-2.json"
       },
       "checks": [
-        { "criterion_id": "AC2", "target": "result", "path": "", "op": "equals", "value": "suite: wrapper running; tests running; last activity 2026-11-17T20:06:00.000Z\n  Log: /fixture/logs/42-suite.log\n  Evidence: /fixture/queue/ticket-2.json" }
+        { "criterion_id": "ac-sha256-967f28e5e63f50d3aad50a9a40ee418fab89e58236983305", "target": "result", "path": "", "op": "equals", "value": "suite: wrapper running; tests running; last activity 2026-11-17T20:06:00.000Z\n  Log: /fixture/logs/42-suite.log\n  Evidence: /fixture/queue/ticket-2.json" }
       ]
     },
     {
@@ -65,7 +65,7 @@
         "evidence": null
       },
       "checks": [
-        { "criterion_id": "AC3", "target": "result", "path": "", "op": "equals", "value": "suite: wrapper exited (status 1); no live test process confirmed (stale or uncertain receipt); last activity 2026-11-17T20:07:00.000Z" }
+        { "criterion_id": "ac-sha256-90aadee8314254f62d2f80f65ba1732c5bc171a11e48092e", "target": "result", "path": "", "op": "equals", "value": "suite: wrapper exited (status 1); no live test process confirmed (stale or uncertain receipt); last activity 2026-11-17T20:07:00.000Z" }
       ]
     },
     {
@@ -84,7 +84,7 @@
         "evidence": null
       },
       "checks": [
-        { "criterion_id": "AC4", "target": "result", "path": "", "op": "equals", "value": "repair: wrapper running; last activity 2026-11-17T20:08:00.000Z" }
+        { "criterion_id": "ac-sha256-8c08cd538e7f9844eef9c474f9aebdfc5d2a7287272bffff", "target": "result", "path": "", "op": "equals", "value": "repair: wrapper running; last activity 2026-11-17T20:08:00.000Z" }
       ]
     }
   ]

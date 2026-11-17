@@ -3,27 +3,27 @@
   "story_path": "user_stories/native-criterion-evidence.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
       "text": "I can select a Story and see its exact criterion identity, reviewed profile, executed native test IDs and relevant fixture and gate evidence."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-e31ec695ed7d70c2e08fbdddb91dd11951981b812a973c73",
       "text": "A criterion with several required mapped tests has support only when all execute and pass; failed, skipped or missing required tests leave it unproved."
     },
     {
-      "id": "AC3",
+      "id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
       "text": "A missing mapping, changed criterion text or out-of-profile test stays unproved with a reason; a Story has native support only when every current criterion has valid executed support."
     },
     {
-      "id": "AC4",
+      "id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
       "text": "Stale or incomplete profile evidence cannot prove a criterion; the executed observations remain visible."
     },
     {
-      "id": "AC5",
+      "id": "ac-sha256-9dba7b868a3f7db8ec4cb731c5822e5553b4754eb3053603",
       "text": "Original external machine evidence keeps its source and limits and gives qualified support; only PDD-observed execution is labeled PDD-observed."
     },
     {
-      "id": "AC6",
+      "id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
       "text": "A declaration, lint pass, typed count, replay manifest or modeled physical result alone cannot prove a native criterion."
     }
   ],
@@ -307,21 +307,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
           "target": "result",
           "path": "/criteria/0/id",
           "op": "equals",
           "value": "AC1"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
           "target": "result",
           "path": "/criteria/0/text",
           "op": "equals",
           "value": "The prepared checkout contains the expected file."
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
           "target": "result",
           "path": "/criteria/0/nativeIds",
           "op": "equals",
@@ -331,42 +331,42 @@
           ]
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
           "target": "result",
           "path": "/profileId",
           "op": "equals",
           "value": "prepared"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "supported"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
           "value": "qualified-external"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
           "target": "result",
           "path": "/profileState",
           "op": "equals",
           "value": "complete"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
           "target": "result",
           "path": "/prerequisites",
           "op": "equals",
@@ -381,7 +381,7 @@
           ]
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-c4e0d32700ce5d475f4dbf3b38b094fb0bcb0a8e46ea886b",
           "target": "result",
           "path": "/gates",
           "op": "equals",
@@ -408,14 +408,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-e31ec695ed7d70c2e08fbdddb91dd11951981b812a973c73",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-e31ec695ed7d70c2e08fbdddb91dd11951981b812a973c73",
           "target": "result",
           "path": "/failedIds",
           "op": "equals",
@@ -424,7 +424,7 @@
           ]
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
@@ -446,14 +446,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-e31ec695ed7d70c2e08fbdddb91dd11951981b812a973c73",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-e31ec695ed7d70c2e08fbdddb91dd11951981b812a973c73",
           "target": "result",
           "path": "/skippedIds",
           "op": "equals",
@@ -462,7 +462,7 @@
           ]
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
@@ -484,14 +484,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-e31ec695ed7d70c2e08fbdddb91dd11951981b812a973c73",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-e31ec695ed7d70c2e08fbdddb91dd11951981b812a973c73",
           "target": "result",
           "path": "/missingIds",
           "op": "equals",
@@ -500,7 +500,7 @@
           ]
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
@@ -522,49 +522,49 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/criteria/0/reason",
           "op": "equals",
           "value": "unmapped"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileState",
           "op": "equals",
           "value": "complete"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "qualified-external"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
           "value": "none"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/criteria/1/state",
           "op": "equals",
@@ -586,42 +586,42 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/criteria/0/reason",
           "op": "equals",
           "value": "criterion-changed"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileState",
           "op": "equals",
           "value": "complete"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "qualified-external"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
@@ -643,42 +643,42 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/criteria/0/reason",
           "op": "equals",
           "value": "invalid-mapping"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileState",
           "op": "equals",
           "value": "complete"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "qualified-external"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
@@ -700,28 +700,28 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/criteria/0/reason",
           "op": "equals",
           "value": "profile-unverified"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/observations/0/outcome",
           "op": "equals",
           "value": "passed"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
@@ -743,14 +743,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/criteria/0/reason",
           "op": "equals",
           "value": "profile-incomplete"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/criteria/0/nativeIds",
           "op": "equals",
@@ -760,14 +760,14 @@
           ]
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/observations/0/outcome",
           "op": "equals",
           "value": "passed"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
@@ -789,21 +789,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-9dba7b868a3f7db8ec4cb731c5822e5553b4754eb3053603",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "qualified-external"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-9dba7b868a3f7db8ec4cb731c5822e5553b4754eb3053603",
           "target": "result",
           "path": "/origin",
           "op": "equals",
           "value": "external-machine"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-9dba7b868a3f7db8ec4cb731c5822e5553b4754eb3053603",
           "target": "result",
           "path": "/limits",
           "op": "equals",
@@ -812,14 +812,14 @@
           ]
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-9dba7b868a3f7db8ec4cb731c5822e5553b4754eb3053603",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
@@ -841,28 +841,28 @@
       },
       "checks": [
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-9dba7b868a3f7db8ec4cb731c5822e5553b4754eb3053603",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "pdd-observed"
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-9dba7b868a3f7db8ec4cb731c5822e5553b4754eb3053603",
           "target": "result",
           "path": "/origin",
           "op": "equals",
           "value": "pdd-observed"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC5",
+          "criterion_id": "ac-sha256-9dba7b868a3f7db8ec4cb731c5822e5553b4754eb3053603",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
@@ -884,21 +884,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
@@ -920,21 +920,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
@@ -956,21 +956,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
@@ -992,28 +992,28 @@
       },
       "checks": [
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "result",
           "path": "/profileState",
           "op": "equals",
           "value": "unverified"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "result",
           "path": "/criteria/0/state",
           "op": "equals",
           "value": "unproved"
         },
         {
-          "criterion_id": "AC6",
+          "criterion_id": "ac-sha256-04ee91820c10081eac841b0aa3df0a5e897de2de80871587",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
@@ -1035,28 +1035,28 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileState",
           "op": "equals",
           "value": "complete"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "qualified-external"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
@@ -1078,28 +1078,28 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileState",
           "op": "equals",
           "value": "complete"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "qualified-external"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
@@ -1121,28 +1121,28 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "calls",
           "path": "/resources/workflow-results-native-read_context",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileState",
           "op": "equals",
           "value": "complete"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "qualified-external"
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-813c279afaea787a1f7341e7e44ce85f2ec02b8df4969583",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
@@ -1164,28 +1164,28 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/sourceState",
           "op": "equals",
           "value": "stale"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/profileNativeProof",
           "op": "equals",
           "value": "none"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/storyNativeProof",
           "op": "equals",
           "value": "none"
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-f224ba4090730a14746a98a085446e8bb75ac5d63cc1f330",
           "target": "result",
           "path": "/identity/stage",
           "op": "equals",
