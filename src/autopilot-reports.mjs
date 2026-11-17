@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: f7a66e21ccc69b0968ef3a5cb701222f5bda8a54f1e936edcf572a1a3bd1e32d).
+// Generated from prompts/cli/autopilot-reports.prompt.md (sha256: 67c33fefbdf172f2960da86732c718a82a502df3c8c871deb7e16ddc9d33d8d7).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -7,8 +7,9 @@ import { redactSecrets } from './secret-redaction.mjs';
 export const REPORT_REPOSITORY = 'promptdriven/pdd';
 export const DEFAULT_RUNTIME_REPORT_REPOSITORY = 'promptdriven/prompt-runtime';
 export const DEFAULT_DAILY_REPORT_LIMIT = 3;
+export const AUTOPILOT_ZERO_EDIT_TARGET = Object.freeze({ min: 0.9, max: 0.95, label: '90-95%' });
 
-const DAY = 24 * 60 * 60 * 1000, RECENT = 14 * DAY;
+const DAY = 24 * 60 * 60 * 1000;
 const LOGIN = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 const SAFE_VERSION = /^[\w.+-]{1,40}$/;
 const SAFE_ID = /^[a-z0-9_.:-]{1,80}$/i;
@@ -207,7 +208,8 @@ function publicReport(draft) {
   ];
   const name = f.kind === 'runtime' ? 'Runtime' : 'PDD';
   const title = `Autopilot report: ${name} ${f.component} ${f.code} (PDD ${minor(f.versions.pdd)})`;
-  const body = [f.code === 'adopt-pdd' ? 'Autopilot changed existing code that no prompt owns (path e, a direct change with a regression test). Please adopt PDD for those modules (the local draft on the Autopilot machine lists them): give each one a prompt and a binding or header.'
+  const body = [/^post-merge-(?:revert|reopen|ci)$/.test(f.code) ? 'Autopilot detected a post-merge regression on a previously merged change (reopened issue, reverted merge, or post-merge CI failure).'
+    : f.code === 'adopt-pdd' ? 'Autopilot changed existing code that no prompt owns (path e, a direct change with a regression test). Please adopt PDD for those modules (the local draft on the Autopilot machine lists them): give each one a prompt and a binding or header.'
     : draft.shipped === true && f.code === 'vector-replay' && f.component === 'autopilot-core' ? 'Autopilot could not run the replay or formal tests of one PR. The PR went on, with that claim marked as not checked in its merge note.'
     : draft.shipped === true ? 'Autopilot shipped one PR with "Runtime: not run" because Runtime could not check it. The job did not wait for a fix.'
     : draft.stopped === true && f.code === 'stop-loop' ? 'Autopilot holds one issue: its own steps or a service stopped 3 jobs of it in 24 hours. The issue gets no strike; Autopilot takes it again after a new engine version or a person\'s comment on it.'
@@ -305,8 +307,8 @@ function issueMatchesCause(row, draft) {
   return body.includes(`- Kind: ${f.kind}`) && body.includes(`- Component: ${f.component}`) && body.includes(`- Error code: ${f.code}`);
 }
 
-// Rule 3: Live duplicate check across versions (open issues first, then rejected closures, then <14d closed issues).
-async function findReport(api, draft, now) {
+// Rule 3: Live duplicate check across versions (open issues first, then rejected closures, then existing closed issues to reopen).
+async function findReport(api, draft) {
   let endpoint = `repos/${draft.repository}/issues?state=all&labels=${encodeURIComponent(draft.labels[0])}&per_page=100`;
   const matches = [];
   for (let page = 0; endpoint && page < 5; page++) {
@@ -318,8 +320,10 @@ async function findReport(api, draft, now) {
   }
   const rejectedClosed = matches.find(row => row.state === 'closed' && isRejectedIssue(row));
   if (rejectedClosed) return { row: rejectedClosed, rejected: isRejectedIssue(rejectedClosed) };
-  const recentClosed = matches.find(row => row.state === 'closed' && now - Date.parse(row.closed_at) < RECENT);
-  if (recentClosed) return { row: recentClosed, rejected: null };
+  const closedMatches = matches
+    .filter(row => row.state === 'closed')
+    .sort((a, b) => (Date.parse(b.closed_at ?? '') || 0) - (Date.parse(a.closed_at ?? '') || 0) || Number(b.number ?? 0) - Number(a.number ?? 0));
+  if (closedMatches.length) return { row: closedMatches[0], rejected: null };
   return null;
 }
 
@@ -342,6 +346,7 @@ async function sendDraft(draft, { root, machine, runtimeRepo, runtimeOwner = nul
   const ledger = readJson(fs, file, { filed: [], seen: {} });
   ledger.filed = Array.isArray(ledger.filed) ? ledger.filed : [];
   ledger.seen = ledger.seen && typeof ledger.seen === 'object' ? ledger.seen : {};
+  ledger.pendingReopen = ledger.pendingReopen && typeof ledger.pendingReopen === 'object' && !Array.isArray(ledger.pendingReopen) ? ledger.pendingReopen : {};
   const destination = runtimeRepo ?? draft.runtimeRepo;
   const repository = await ownerRepository(api, draft, destination);
   const ownerLogin = runtimeOwner ?? draft.runtimeOwner;
@@ -350,15 +355,45 @@ async function sendDraft(draft, { root, machine, runtimeRepo, runtimeOwner = nul
   draft = { ...draft, repository, labels: [LABELS[draft.kind === 'runtime' ? 'runtime' : 'pdd']], assignees };
   const ref = number => `${draft.repository}#${number}`;
 
-  const match = await findReport(api, draft, now);
+  const match = await findReport(api, draft);
   if (match) {
     const { row: found, rejected } = match;
+    const issueRef = ref(found.number);
     if (rejected) {
-      return { state: 'needs-person', reason: rejected, number: found.number, id: found.id, ref: ref(found.number) };
+      return { state: 'needs-person', reason: rejected, number: found.number, id: found.id, ref: issueRef };
     }
     const f = draftFields(draft);
     const versionKey = seenLedgerKey(draft);
     const ver = known(f.versions.pdd);
+    if (found.state === 'closed') {
+      const { value: reopened } = await api('PATCH', `repos/${draft.repository}/issues/${found.number}`, { state: 'open' });
+      const { body: summaryBody } = publicReport(draft);
+      ledger.pendingReopen[issueRef] = { at: now, body: summaryBody };
+      save(fs, file, ledger);
+      await api('POST', `repos/${draft.repository}/issues/${found.number}/comments`, {
+        body: `Reopened automatically because this cause occurred again at ${new Date(now).toISOString()}.\n\n${summaryBody}`,
+      });
+      delete ledger.pendingReopen[issueRef];
+      ledger.seen[versionKey] = now;
+      if (ver === 'unknown') ledger.seen[draft.fingerprint] = now;
+      save(fs, file, ledger);
+      return { state: 'reopened', number: found.number, id: found.id ?? reopened?.id, ref: issueRef };
+    }
+    if (ledger.pendingReopen[issueRef]) {
+      const pending = ledger.pendingReopen[issueRef];
+      const reopenAt = Number.isFinite(pending?.at) ? pending.at : now;
+      const summaryBody = (Array.isArray(draft.issues) && draft.issues.length) || draft.reproduced || (draft.count ?? 0) > 1 || !pending?.body
+        ? publicReport(draft).body
+        : pending.body;
+      await api('POST', `repos/${draft.repository}/issues/${found.number}/comments`, {
+        body: `Reopened automatically because this cause occurred again at ${new Date(reopenAt).toISOString()}.\n\n${summaryBody}`,
+      });
+      delete ledger.pendingReopen[issueRef];
+      ledger.seen[versionKey] = now;
+      if (ver === 'unknown') ledger.seen[draft.fingerprint] = now;
+      save(fs, file, ledger);
+      return { state: 'reopened', number: found.number, id: found.id, ref: issueRef };
+    }
     const lastSeen = Math.max(
       ledger.seen[versionKey] ?? -Infinity,
       ver === 'unknown' ? (ledger.seen[draft.fingerprint] ?? -Infinity) : -Infinity,
@@ -435,7 +470,8 @@ export function reportKind(cause) {
   return PDD_OWNED.test(`${slug(cause.component)} ${slug(cause.code)}`) || !RUNTIME_CODES.has(stableCode(cause.code)) ? 'pdd' : 'runtime';
 }
 // Stable fingerprints: an agent writes the code and the component as free text, so each is mapped to a fixed word.
-const CODES = [['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/], ['maintenance', /maintenance/],
+const CODES = [['post-merge-revert', /^post-merge-revert$/], ['post-merge-reopen', /^post-merge-reopen$/], ['post-merge-ci', /^post-merge-ci$/],
+  ['merge-check-tool', /^merge-check-tool$/], ['suite-broken', /^suite-broken$/], ['adopt-pdd', /^adopt-pdd$/], ['no-verdict', /verdict/], ['maintenance', /maintenance/],
   ['scenario-limit', /scenario|safe-integer|integer-out-of-range|out-of-range/], ['vector-replay', /vector|replay/], ['runtime-case', /runtime-case|test-case/],
   ['lint-refusal', /lint/], ['interface-refusal', /interface/], ['binding-refusal', /binding/], ['input-refusal', /refus|reject/], ['interpreter-error', /interpreter/],
   ['server-internal', /server-internal|internal-server|server-error|(?:^|-)5\d\d(?:-|$)|unavailable|bad-gateway/], ['server-incompatible', /server|compat/], ['crash', /crash|panic|segfault|exception/], ['claim-error', /claim/], ['not-run', /not-run/],
@@ -506,14 +542,25 @@ export async function fileReport(
   }
 
   if (mode === 'file') {
+    const existing = readJson(fs, join(root, 'drafts', `${draft.fingerprint}.json`), null);
+    const candidate = existing ? mergeDraftRecord(existing, draft, now) : draft;
     try {
-      const sent = await sendDraft(draft, { root, machine, runtimeRepo }, ports);
+      const sent = await sendDraft(candidate, { root, machine, runtimeRepo }, ports);
       if (sent.state === 'needs-person') {
-        keepDraft(fs, root, { ...draft, status: 'needs-person', statusReason: sent.reason }, now);
+        save(fs, join(root, 'drafts', `${draft.fingerprint}.json`), { ...candidate, status: 'needs-person', statusReason: sent.reason });
         return { ...sent, fingerprint: draft.fingerprint };
       }
-      if (sent.state !== 'limit') return { ...sent, fingerprint: draft.fingerprint };
-    } catch (error) { ports.warn?.(`Autopilot report kept as a local draft: ${error.message}`); }
+      if (sent.state !== 'limit') {
+        removeDraftIfPresent(fs, root, draft.fingerprint);
+        return { ...sent, fingerprint: draft.fingerprint };
+      }
+      save(fs, join(root, 'drafts', `${draft.fingerprint}.json`), candidate);
+      return { state: 'draft', reason: sent.reason ?? 'other-daily-cap', fingerprint: draft.fingerprint };
+    } catch (error) {
+      ports.warn?.(`Autopilot report kept as a local draft: ${error.message}`);
+      save(fs, join(root, 'drafts', `${draft.fingerprint}.json`), candidate);
+      return { state: 'draft', fingerprint: draft.fingerprint };
+    }
   }
   keepDraft(fs, root, draft, now);
   return { state: 'draft', fingerprint: draft.fingerprint };
@@ -555,6 +602,7 @@ export async function autoFileValidatedReports(
   return {
     results,
     filed: results.filter(r => r.state === 'filed'),
+    reopened: results.filter(r => r.state === 'reopened'),
     seen: results.filter(r => r.state === 'seen'),
     counted: results.filter(r => r.state === 'counted'),
     filtered: results.filter(r => r.state === 'filtered'),
@@ -579,7 +627,7 @@ export async function sendReportDraft({ root, fingerprint, machine, runtimeRepo 
       return { exitCode: 1, state: 'needs-person', message: `Report ${sent.ref} was closed as not planned or marked invalid; human review required. The draft stays.` };
     }
     fs.unlinkSync(file);
-    return { exitCode: 0, state: sent.state, message: `${sent.state === 'filed' ? 'Filed' : 'Counted on'} ${sent.ref}.` };
+    return { exitCode: 0, state: sent.state, message: `${sent.state === 'filed' ? 'Filed' : sent.state === 'reopened' ? 'Reopened' : 'Counted on'} ${sent.ref}.` };
   } catch (error) { return { exitCode: 1, message: `Report not sent: ${error.message}. The draft stays.` }; }
 }
 
@@ -618,12 +666,15 @@ function classifyDropOwner(run) {
 // Deterministic JSON summary helper for stats-branch daily conversion-drop logging (#3361).
 export function summarizeConversionDrops({
   runs = [],
+  openIssuesCount = null,
   backlogCount = null,
   claimableCount = null,
   claimedCount = null,
   clearSpecCount = null,
   prOpenedCount = null,
+  zeroEditCount = null,
   mergedOrWouldMergeCount = null,
+  reopenedCount = null,
   drafts = [],
   filed = [],
   filtered = [],
@@ -645,13 +696,27 @@ export function summarizeConversionDrops({
   };
 
   const backlog = Number.isSafeInteger(backlogCount) && backlogCount >= 0 ? backlogCount : validRuns.length;
+  const openIssues = Number.isSafeInteger(openIssuesCount) && openIssuesCount >= 0 ? openIssuesCount : backlog;
   const claimable = Number.isSafeInteger(claimableCount) && claimableCount >= 0 ? claimableCount : claimedRuns.length;
   const claimed = Number.isSafeInteger(claimedCount) && claimedCount >= 0 ? claimedCount : claimedRuns.length;
   const clearSpec = Number.isSafeInteger(clearSpecCount) && clearSpecCount >= 0 ? clearSpecCount : claimedRuns.filter(hasClearSpec).length;
   const prOpened = Number.isSafeInteger(prOpenedCount) && prOpenedCount >= 0 ? prOpenedCount : claimedRuns.filter(r => hasClearSpec(r) && hasPr(r)).length;
+  const isZeroEdit = r => {
+    if (typeof r.zeroEdit === 'boolean') return r.zeroEdit && isMergedOrWm(r);
+    if (!hasPr(r) || !isMergedOrWm(r)) return false;
+    if (r.humanEdited === true || r.humanIntervention === true || r.needsDecision === true || Boolean(r.ask)) return false;
+    if (r.owner === 'person_decision' || longSlug(r.outcome ?? r.status ?? '') === 'needs-person') return false;
+    return true;
+  };
   const mergedOrWouldMerge = Number.isSafeInteger(mergedOrWouldMergeCount) && mergedOrWouldMergeCount >= 0
     ? mergedOrWouldMergeCount
     : claimedRuns.filter(r => hasPr(r) && isMergedOrWm(r)).length;
+  const zeroEditMergedOrWouldMerge = Number.isSafeInteger(zeroEditCount) && zeroEditCount >= 0
+    ? zeroEditCount
+    : claimedRuns.filter(isZeroEdit).length;
+  const reopened = Number.isSafeInteger(reopenedCount) && reopenedCount >= 0
+    ? reopenedCount
+    : validRuns.filter(r => r.reopened === true || r.reverted === true || r.postMergeRegression === true).length;
 
   const dropsByOwner = Object.fromEntries(DROP_OWNERS.map(owner => [owner, { count: 0, causes: {}, issues: [] }]));
   let dropped = 0;
@@ -682,7 +747,7 @@ export function summarizeConversionDrops({
   for (const item of reportItems) {
     const fp = typeof item.fingerprint === 'string' && item.fingerprint ? item.fingerprint : 'unknown';
     const f = draftFields(item);
-    if (item.state === 'filed' || item.state === 'seen' || item.state === 'counted') {
+    if (item.state === 'filed' || item.state === 'reopened' || item.state === 'seen' || item.state === 'counted') {
       verifiedByKey.set(`${fp}:${item.ref ?? ''}`, {
         fingerprint: fp,
         state: item.state,
@@ -721,13 +786,29 @@ export function summarizeConversionDrops({
   return {
     date: typeof date === 'string' && date ? date : null,
     totals: {
+      openIssues,
       backlog,
       claimable,
       claimed,
       clearSpec,
       prOpened,
+      zeroEditMergedOrWouldMerge,
       mergedOrWouldMerge,
       dropped,
+      reopened,
+    },
+    funnel: {
+      openIssues,
+      taken: claimed,
+      openToTaken: stageRatio(claimed, openIssues),
+      zeroEditMergedOrWouldMerge,
+      zeroEditRate: stageRatio(zeroEditMergedOrWouldMerge, claimed),
+      zeroEditTarget: { ...AUTOPILOT_ZERO_EDIT_TARGET },
+      mergedOrWouldMerge,
+      takenToMergedOrWouldMerge: stageRatio(mergedOrWouldMerge, claimed),
+      reopened,
+      reopenRate: stageRatio(reopened, mergedOrWouldMerge),
+      reopenTarget: 0,
     },
     stages: {
       backlogToClaimable: stageRatio(claimable, backlog),

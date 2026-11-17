@@ -52,7 +52,7 @@ It holds `jobs/N.json` (one file per issue in progress), `logs/` (job inputs,
 logs, exit records and result files), `worktrees/` (`N` for the job branch,
 `N-review` and `N-suite` for clean checkouts of the PR head), `history.jsonl`
 (one line per finished job: time, issue, outcome, text, PR, log; and strike lines,
-below) and `core.json` (the machine pause and the pending no-result). The job file and the GitHub labels are the whole state; a
+below) and `core.json` (the machine pause and the pending no-result), plus `post-merge.json` once [post-merge regression checks](autopilot-regressions.prompt.md) track merged PRs. The job file and the GitHub labels are the whole state; a
 restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `branch`, `worktree`, `claim {commentId, labelEventId, lastSeen}`, `phase`
 (`running`, `pr` or `ending`), `role` (`build`, `repair` or `conflict`), `repairs`, `started`,
@@ -205,8 +205,16 @@ ended or moved to the merge check before free slots are counted.
 changes nothing on the issue (no comment, no label), marks this machine's own open
 PR of that job as draft with one note (one try; a failure only warns) and cleans up
 locally with outcome `handed-over`. It never merges.
-6. Intake fills free slots (see below).
-7. After intake, call `intakeTick(ctx, rows)` of the
+6. Post-merge check (`#3182`): when `history.jsonl` has at least one `merged` PR and
+   `budget.state` is neither `low` nor `reserve`, run one bounded incremental post-merge
+   check (`ports.checkPostMerge`, default `checkPostMergeRegressions` loaded on demand)
+   inside a try/catch without holding any worker slot. For each `newlyDetected`
+   regression (`post-merge-reopen`, `post-merge-revert`, `post-merge-ci`), file or reopen
+   one deduplicated PDD report through the [report owner](autopilot-reports.prompt.md)
+   (`reproduced: true`, step `post-merge`) and append a `postMerge: true` forensic record
+   to `history.jsonl`. An error only warns and never blocks intake or jobs.
+7. Intake fills free slots (see below).
+8. After intake, call `intakeTick(ctx, rows)` of the
    [intake cards](autopilot-intake.prompt.md) inside a try/catch: with
    `settings.intake` `shadow` (the launcher sets it from the machine) and an issue
    list it runs one shadow pass; otherwise it only stops card jobs that still run.
@@ -1684,7 +1692,8 @@ step wait, never an END ([Stop owners](#stop-owners)). It stops the job's proces
 3. A `runtime` or `pdd` cause whose report has a GitHub reference **waits for the
    report, not for a person**. Loop breaker first: when an earlier END comment on
    this issue has a blocked-by marker with the same fingerprint and that report is
-   now closed, the cause came back after its fix, so a person decides. Otherwise
+   now closed (or was closed and just reopened by step 2), the cause came back after
+   its fix, so a person decides. Otherwise
    link the issue natively: `POST repos/REPO/issues/N/dependencies/blocked_by` with
    the report's issue id. A refused link (for example across repositories) leaves
    the hidden marker in the END comment as the only record; the ready rule reads it.
@@ -1735,7 +1744,7 @@ slot` or `; Runtime: the check that was not sent runs again`, `#N ending: …`),
 (`#N waits: OWNER stop CODE: TEXT; next try after TIME (try K)`, with `; report REF` when one was filed), one line per
 held issue (`#N held since TIME: TEXT; it goes on after a new engine version or a person's comment on the issue`), one
 line per issue that cools down (`#N cools down until TIME (owner OWNER): TEXT`), the last 5 results (`#N ended TIME: cause`,
-with ` (owner OWNER)` when the line has one; strike lines are not results) and the count
+with ` (owner OWNER)` when the line has one; strike lines are not results), non-blocking scorecard telemetry (`Scorecard: Z/T (P%) zero-edit completion (target 90-95%); …` when history has completed deliveries) and any tracked post-merge regression summary from `post-merge.json` (`Post-merge: R regression(s) (target 0: …; reopen/revert P%)`), and the count
 of local report drafts.
 
 ## Text on GitHub
@@ -1778,7 +1787,7 @@ room check and the job runner's default priority), `untestedStories(tree)` (defa
 (default `resendableStoryChecks` with `env`) of the runtime client, and the replaceable `jobs`
 (`start`, `read`, `snapshot(part)`, `cleanup(part)`, `cpu`, `hangs`). `cleanup(part)` owns
 the fresh process capture and stop, and returns `{confirmed}`. A separate status read or
-snapshot is not cleanup proof. `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
+snapshot is not cleanup proof. `owners(numbers)`, `heartbeat(job)`, `checkBase(input)` and optional `checkPostMerge(input)`
 with the native defaults named above.
 
 ## Dependencies
@@ -1794,6 +1803,7 @@ with the native defaults named above.
   winning-claim read (owners port), `refreshClaimHeartbeat` and `takeoverLimited`.
 - [Automatic base](autopilot-base.prompt.md): required for `checkAutopilotBase`.
 - [Report owner](autopilot-reports.prompt.md): required for `fileReport` and drafts.
+- [Autopilot regression detection](autopilot-regressions.prompt.md): loaded on demand for bounded post-merge reopen, revert and CI regression checks (`#3182`).
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
