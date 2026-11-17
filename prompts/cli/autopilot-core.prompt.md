@@ -40,7 +40,7 @@ string `core`; any other value, or none, is `full`.
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
-When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering` (omitting the key when unset so the default settings shape stays unchanged).
+When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics` (omitting unset optional keys so the default settings shape stays unchanged).
 
 `readCoreSettings(cwd, fs, machine = null)` applies it to `cwd/pdd.json` and `cwd/package.json`;
 an unreadable file counts as absent.
@@ -52,7 +52,7 @@ It holds `jobs/N.json` (one file per issue in progress), `logs/` (job inputs,
 logs, exit records and result files), `worktrees/` (`N` for the job branch,
 `N-review` and `N-suite` for clean checkouts of the PR head), `history.jsonl`
 (one line per finished job: time, issue, outcome, text, PR, log; and strike lines,
-below) and `core.json` (the machine pause and the pending no-result). The job file and the GitHub labels are the whole state; a
+below) and `core.json` (the machine pause and the pending no-result), plus `post-merge.json` once [post-merge regression checks](autopilot-regressions.prompt.md) track merged PRs. The job file and the GitHub labels are the whole state; a
 restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `branch`, `worktree`, `claim {commentId, labelEventId, lastSeen}`, `phase`
 (`running`, `pr` or `ending`), `role` (`build`, `repair` or `conflict`), `repairs`, `started`,
@@ -161,9 +161,11 @@ ended or moved to the merge check before free slots are counted.
    latest repository PR (head branch `pdd/core-N-*`) is merged into `baseBranch`, read its
    timeline, remove `pdd:would-merge` and (unless the issue was reopened after that
    `pdd:would-merge` label or that PR body marks the work partial with `Refs`, `Part of` or
-   `Not fixed yet:`) close the issue (`state_reason: completed`); a failure only warns.
+   `Not fixed yet:`) close the issue (`state_reason: completed`); a failure only warns. Validated `observe` `would-merge` PRs (and `auto` PRs when `autopilot.mergeQueue` is `true`) also enqueue into the [serialized FIFO landing queue](autopilot-merge-queue.prompt.md) (`ROOT/merge-queue.json`), which processes one head PR at a time per tick to rebase onto `origin/BASE`, refresh stale PDD headers with `promptHeaderHash`, run bounded conflict resolution and fast post-rebase verification, and either keep `would-merge` PRs synced or land `auto` PRs in FIFO order (ejecting after 2 failures on the same base tip without blocking later PRs).
 3. A person stops a job by closing the issue, removing `pdd:working`, adding
-   `pdd:stuck` or assigning someone. Then stop its processes and clean up locally,
+   `pdd:stuck`, adding an external-repository label (`external`, `other-repo`,
+   `elsewhere`, `pdd:elsewhere`, case-insensitive) or configured `skipLabels` label,
+   or assigning someone. Then stop its processes and clean up locally,
    with no GitHub write, and do not take that issue again in this tick. A job with a
    PR reads it first: a merged PR (GitHub closes the issue from "Fixes #N") finishes
    as merged, not as a person stop.
@@ -205,8 +207,16 @@ ended or moved to the merge check before free slots are counted.
 changes nothing on the issue (no comment, no label), marks this machine's own open
 PR of that job as draft with one note (one try; a failure only warns) and cleans up
 locally with outcome `handed-over`. It never merges.
-6. Intake fills free slots (see below).
-7. After intake, call `intakeTick(ctx, rows)` of the
+6. Post-merge check (`#3182`): when `history.jsonl` has at least one `merged` PR and
+   `budget.state` is neither `low` nor `reserve`, run one bounded incremental post-merge
+   check (`ports.checkPostMerge`, default `checkPostMergeRegressions` loaded on demand)
+   inside a try/catch without holding any worker slot. For each `newlyDetected`
+   regression (`post-merge-reopen`, `post-merge-revert`, `post-merge-ci`), file or reopen
+   one deduplicated PDD report through the [report owner](autopilot-reports.prompt.md)
+   (`reproduced: true`, step `post-merge`) and append a `postMerge: true` forensic record
+   to `history.jsonl`. An error only warns and never blocks intake or jobs.
+7. Intake fills free slots (see below).
+8. After intake, call `intakeTick(ctx, rows)` of the
    [intake cards](autopilot-intake.prompt.md) inside a try/catch: with
    `settings.intake` `shadow` (the launcher sets it from the machine) and an issue
    list it runs one shadow pass; otherwise it only stops card jobs that still run.
@@ -235,7 +245,9 @@ flowchart TD
 
 `readyIssues({state, settings}, ports, rows)` returns the issue numbers in intake
 order. An issue is ready when all hold: it is an open issue (not a PR); it has no
-assignee; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; it is not cooling down (no `noResult` history
+assignee; it carries no external-repository label (`external`, `other-repo`,
+`elsewhere`, `pdd:elsewhere`, matched case-insensitively with zero AI calls) or
+configured `skipLabels` label; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; it has no active pre-run `fixed` disposition hold in `history.jsonl` (cleared when a trusted person comments after the forensics note or edits the issue title/body); it is not cooling down (no `noResult` history
 line of the last 24 hours on this machine after the issue's latest `reset` line); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
 opt-in label when `label` is set; it is not held (the loop guard of
@@ -258,7 +270,7 @@ that issue for this tick.
 nothing and returns `intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with
 pdd autopilot add N`. Jobs still advance. Without `labelRequired` (a direct `tickCore` call) or when `intake` is `active`, no opt-in label is required.
 
-**Active intake selection, grouping and area serialization (#3189, #3190, #3233).** When `settings.intake` is `active`, `tickCore` first calls `collectActiveIntake` of [intake cards](autopilot-intake.prompt.md) so finished card and auto-improve passes update `ROOT/intake/cards/` before core selection. Active intake card checks run only on sandboxed `codex` or `claude` logins (never `gemini`, `agy`, `--yolo` or `--dangerously-skip-permissions`): when neither `ports.selectLogin({allowedKinds: ["codex", "claude"]})` nor `state.agent` can supply a ready `codex` or `claude` login and no ready cards can start, `intake()` records `state.intakeNote` (`intake held: active intake needs a codex or claude login` or the active intake pool cooldown note) and surfaces it in the tick hold and `coreStatus` so status never sits silent with zero issues claimed. In `active` mode, core selection considers only ready issues whose saved intake card matches the current `issueVersion(row)` (or pre-comment auto-improved version) with `card.class === "ready"`; unvetted, `improve`, `person` and other card classes never start a build. Eligible issues are ranked with `wouldPick` (unblockers with `total_blocking > 0` first, then issues continuing an active group, then high-clarity small or bug wins, then priority labels, ahead of oldest age). When 2 to 3 small `ready` issues share a `group_with` cluster or overlapping module `areas` (`groupReadyIssues`), core claims them together into one grouped job (`job.issues = [primary, ...companions]`, `job.companions`, `job.areas`), includes all companion specs and any refined specification in `issueText`, requires `Closes #A`, `Closes #B` in the PR body and `writeEvidenceBlock`, heartbeats all member claims (detaching any companion whose claim expired or was won by another machine), and closes, marks or releases only verified-owned member issues on merge, observe `would-merge`, END or stop. Any candidate or group whose `areas` (card `areas`, named paths or `area:*` labels) overlap a running job's `areas`, changed `files`, named paths or `area:*` labels (`areasOverlap`) waits out that slot (`intake held: area busy (#M touches AREA)`) while disjoint candidates take free slots.
+**Active intake selection, grouping and area serialization (#3189, #3190, #3233).** When `settings.intake` is `active`, `tickCore` first calls `collectActiveIntake` of [intake cards](autopilot-intake.prompt.md) so finished card and auto-improve passes update `ROOT/intake/cards/` before core selection. Active intake card checks run only on sandboxed `codex` or `claude` logins (never `gemini`, `agy`, `--yolo` or `--dangerously-skip-permissions`): when neither `ports.selectLogin({allowedKinds: ["codex", "claude"]})` nor `state.agent` can supply a ready `codex` or `claude` login and no ready cards can start, `intake()` records `state.intakeNote` (`intake held: active intake needs a codex or claude login` or the active intake pool cooldown note) and surfaces it in the tick hold and `coreStatus` so status never sits silent with zero issues claimed. In `active` mode, core selection considers only ready issues whose saved intake card matches the current `issueVersion(row)` (or pre-comment auto-improved version) with `card.class === "ready"`; unvetted, `improve`, `person` and other card classes never start a build. Eligible issues are ranked with `wouldPick` (unblockers with `total_blocking > 0` first, then issues continuing an active group, then high-clarity small or bug wins, then priority labels, ahead of oldest age). When 2 to 3 small `ready` issues share a `group_with` cluster or overlapping module `areas` (`groupReadyIssues`), core claims them together into one grouped job (`job.issues = [primary, ...companions]`, `job.companions`, `job.areas`), includes all companion specs and any refined specification in `issueText`, requires `Closes #A`, `Closes #B` in the PR body and `writeEvidenceBlock`, heartbeats all member claims (detaching any companion whose claim expired or was won by another machine), and closes, marks or releases only verified-owned member issues on merge, observe `would-merge`, END or stop. Candidate groups are ordered with spread-first two-pass dispatch (`orderGroupsSpreadFirst` of [areas](autopilot-areas.prompt.md), enriched with resolved repository prompt owners from `ownerTable` without any catch-all root lock): Pass 1 places groups that overlap neither running `busyJobs` nor earlier Pass-1 selections first so parallel slots spread across distinct prompts and files, and Pass 2 places remaining overlapping groups right behind Pass 1 so free worker slots never sit idle on small or shared-module repositories (#3455, never double-claiming a running issue).
 
 **Collisions at start (debate B 5.1, 5.2; notes and hints, never a lock).** S2: in `off` and `shadow` intake modes, intake
 reads up to the free slots plus 4 ready issues and starts first those whose named
@@ -309,8 +321,21 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    winner's actor is this machine's login (its comment's author, else `GET user`),
    and no other claim comment names that event. Otherwise (another login, a later era,
    or an error in these reads) the label stays.
-3. Prepare the build brief before machine admission, including the collision note and
-   the open-issues brief. These local and GitHub reads can be slow. They never hold a
+3. Run the fast bounded read-only [pre-run forensics](autopilot-forensics.prompt.md)
+   check on the fresh `origin/BASE` worktree before companion claiming and machine
+   admission (enabled unless `settings.forensics === false`; skipped in unit tests
+   that stub `ports.jobs` without providing `ports.forensics` or
+   `ports.forensicsRun`). When `already_fixed: true` is proven by existing files or
+   tests on disk in `worktree`, confirm the claim is still owned, post one concise
+   comment citing the verifying files/tests on `BASE` (with zero commit hashes,
+   SHA-256 digests, receipt IDs, or UUIDs), record disposition `fixed` in
+   `history.jsonl` (and sync any saved intake card via `recordForensicsFixedCard`),
+   undo the claim, remove the worktree and branch, increment `ended`, and continue
+   with the free slot open. When `already_fixed: false` (`still_needed`), pass any
+   verified forensics brief (target files, existing tests, reproduction notes) into
+   `issueText(job)` so `buildPrompt` and `repairPrompt` start grounded. Then prepare
+   the build brief before machine admission, including the collision note and the
+   open-issues brief. These local and GitHub reads can be slow. They never hold a
    shared machine admission lock. If the open-issues read fails, retain that failure
    through admission: a denied job uses rollback, while an admitted new build closes
    older PRs and then ends as `no-result` without starting an agent.
@@ -1729,7 +1754,8 @@ step wait, never an END ([Stop owners](#stop-owners)). It stops the job's proces
 3. A `runtime` or `pdd` cause whose report has a GitHub reference **waits for the
    report, not for a person**. Loop breaker first: when an earlier END comment on
    this issue has a blocked-by marker with the same fingerprint and that report is
-   now closed, the cause came back after its fix, so a person decides. Otherwise
+   now closed (or was closed and just reopened by step 2), the cause came back after
+   its fix, so a person decides. Otherwise
    link the issue natively: `POST repos/REPO/issues/N/dependencies/blocked_by` with
    the report's issue id. A refused link (for example across repositories) leaves
    the hidden marker in the END comment as the only record; the ready rule reads it.
@@ -1859,7 +1885,7 @@ slot` or `; Runtime: the check that was not sent runs again`, `#N ending: …`),
 (`#N waits: OWNER stop CODE: TEXT; next try after TIME (try K)`, with `; report REF` when one was filed), one line per
 held issue (`#N held since TIME: TEXT; it goes on after a new engine version or a person's comment on the issue`), one
 line per issue that cools down (`#N cools down until TIME (owner OWNER): TEXT`), the last 5 results (`#N ended TIME: cause`,
-with ` (owner OWNER)` when the line has one; strike lines are not results) and the count
+with ` (owner OWNER)` when the line has one; strike lines are not results), non-blocking scorecard telemetry (`Scorecard: Z/T (P%) zero-edit completion (target 90-95%); …` when history has completed deliveries) and any tracked post-merge regression summary from `post-merge.json` (`Post-merge: R regression(s) (target 0: …; reopen/revert P%)`), and the count
 of local report drafts.
 
 ## Text on GitHub
@@ -1902,12 +1928,17 @@ room check and the job runner's default priority), `untestedStories(tree)` (defa
 (default `resendableStoryChecks` with `env`) of the runtime client, and the replaceable `jobs`
 (`start`, `read`, `snapshot(part)`, `cleanup(part)`, `cpu`, `hangs`). `cleanup(part)` owns
 the fresh process capture and stop, and returns `{confirmed}`. A separate status read or
-snapshot is not cleanup proof. `owners(numbers)`, `heartbeat(job)` and `checkBase(input)`
+snapshot is not cleanup proof. `owners(numbers)`, `heartbeat(job)`, `checkBase(input)` and optional `checkPostMerge(input)`
 with the native defaults named above.
 
 ## Dependencies
 
+- [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.
+- [Serialized FIFO landing queue](autopilot-merge-queue.prompt.md): required for `enqueueMergeQueueItem`, `processMergeQueue`, `mergeQueueStatusLine`, and `buildConflictAgentInvocation`.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.
+- [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
+  external-repository / configured skip-label matching and the fast read-only
+  pre-run repository forensics check on `origin/BASE`.
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
 - [Multi-harness login pool](login-pool.prompt.md): required for `isQuotaExhaustionMessage` and optional login selection/cooldown rotation.
 - [Autopilot telemetry](autopilot-telemetry.prompt.md): required for opt-in worker/reviewer model tiering, per-phase wall-clock tracking, and harness log token summaries.
@@ -1918,6 +1949,7 @@ with the native defaults named above.
 - [Automatic base](autopilot-base.prompt.md): required for `checkAutopilotBase`.
 - [Workflow runner](workflow-runner.prompt.md): required for default `releaseRunClaim` in `releaseCoreJob`.
 - [Report owner](autopilot-reports.prompt.md): required for `fileReport` and drafts.
+- [Autopilot regression detection](autopilot-regressions.prompt.md): loaded on demand for bounded post-merge reopen, revert and CI regression checks (`#3182`).
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
   `pdd workflow suite` job.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.

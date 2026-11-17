@@ -1,9 +1,11 @@
 # Autopilot regression detection
 
-Own `src/autopilot-regressions.mjs`. New behavior authorized by the regression
-builder brief: inspect core merge history and GitHub evidence without changing
-GitHub, running agents, rerunning tests, reverting, or changing engine state.
-The core engine and its prompt remain unchanged. Existing CLI behavior is preserved.
+Own `src/autopilot-regressions.mjs`. Inspect core merge history and GitHub
+evidence without changing GitHub, running agents, rerunning tests, or reverting.
+Provide both the stateless full-scan API (`regressionScan` and CLI command
+`runAutopilotRegressions`) and the bounded incremental post-merge check
+(`checkPostMergeRegressions`) used by [Autopilot core](autopilot-core.prompt.md)
+(`#3182`).
 
 ## Scan contract
 
@@ -87,6 +89,62 @@ including duplicate history lines. Never count suspects or undated proof in a
 daily total. `errors` is an array of safe diagnostic strings. A repeated scan
 recomputes from evidence, with no saved ledger or metric write. Reporting days
 are UTC; a future scorecard consumer owns its timezone/window conversion.
+
+## Incremental post-merge check
+
+Export async `checkPostMergeRegressions(ports)` for [Autopilot core](autopilot-core.prompt.md)
+post-merge monitoring (`#3182`). Required ports are `root`, `repo` and GET-only
+`gh(args)`; optional ports are `fs`, `now`, `maxRequests` (default `40`),
+`maxMerges` (default `10`) and `minRecheckMs` (default `900000`, 15 minutes).
+Read distinct `outcome === "merged"` rows from `root/history.jsonl` (recording
+both `issue` and any companion `issues` array) and persist incremental state
+atomically at `root/post-merge.json` (`schema: "pdd.autopilot-post-merge.v1"`).
+When no merged PRs exist in history, return zero counts without calling GitHub
+or writing `post-merge.json`.
+
+Each call starts at the saved `cursor`, skips merges merged in the current tick
+(`at >= now`) or checked within `minRecheckMs`, and examines at most `maxMerges`
+eligible merges within `maxRequests` GET calls (caching immutable resolved PR
+`mergeCommit`, `mergedAt`, `title`, and first `parent` once read, and setting
+`parentChecked: true` only after all parent CI pages succeed with no pending or
+in-progress check runs or commit statuses). Follow GitHub `Link: <...>;
+rel="next"` pagination strictly within the repository REST namespace across all
+list reads (`check-runs`, `statuses`, `issues/N/timeline`, `commits?since=...`,
+and `pulls?state=all&sort=updated&direction=desc`, stopping PR pagination early
+once a descending-`updated_at` page reaches `updated_at <= since`), validating
+row shapes and counting every page against `maxRequests`. When `budgetStop`
+interrupts pagination mid-merge or mid-shared scan, persist resumable compact
+stream cursors in `post-merge.json` (`activeSweep`) so subsequent ticks continue
+from the next unread page instead of restarting at page 1. Stop further GitHub
+reads before exceeding `maxRequests` or after HTTP 429, `Retry-After`, or
+`x-ratelimit-remaining <= 0`, setting `budgetStopped: true` and `stopReason`.
+Record and emit any `proven` regression signals immediately as each independent
+signal stream (`check-runs`, `statuses`, each issue's `timeline`, and each
+shared commit or PR page) finishes so a later HTTP error or budget stop on
+another stream never drops observed proof; meanwhile, any failed, malformed,
+pending-parent-CI (`parentChecked: false`) or budget-stopped read keeps the
+merge unverified (never turning a merge with pending parent CI or unavailable
+evidence into `ok` and never advancing `checkedAt`), leaving unexamined merges
+at their prior state (`pending` when never checked).
+
+For each examined merge, detect three actionable post-merge regression signals
+after `mergedAt` (up to `now`):
+- `reopened`: any recorded issue of the merge has a later non-machine `reopened`
+  timeline event (ignoring `<!-- pdd:... -->` markers as above) or is currently
+  `open` on GitHub without a machine-marked reopen;
+- `revert`: a later default-branch commit reverts `mergeCommit` (`This reverts
+  commit FULL_SHA...`) or a later merged PR explicitly `Reverts` the PR;
+- `ci`: a red check run or commit status on `mergeCommit` dated at or after
+  `mergedAt` whose matching parent observation was `success`.
+
+Persist per-merge status (`pending`, `ok`, `reopened`, `reverted`, `ci`,
+`suspect`), `reportedKeys`, `cursor`, and aggregate `counts` (`tracked`,
+`pending`, `ok`, `reopened`, `reverted`, `ci`, `regressions`, `reopenOrRevert`,
+`suspect`, where `regressions` targets `0`). Return
+`{state, counts, newlyDetected, budgetStopped, stopReason, requests}`, emitting
+each newly seen signal key once in `newlyDetected` (`{pr, issue, issues,
+mergeCommit, mergedAt, kind, code, at, url, detail}`, with `code` equal to
+`post-merge-reopen`, `post-merge-revert` or `post-merge-ci`).
 
 ## Command adapter
 
