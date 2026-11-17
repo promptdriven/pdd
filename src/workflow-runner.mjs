@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a45e0017249b1f96aa7cb102926531a8f00930a455873d62119b94f7ba340fdf).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: b4ec6a171bbcf08dca8a702a653d0fc1658e57c2a9a16b4bb53783ec2f8a76b2).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -3624,7 +3624,7 @@ async function draftDescription(run, pr1, drafts, p, recoveryView = null) {
     if (recoveryView && commitSha(view.headRefOid)) {
       recovery = { url: pr1.url, body, nextBody, head: view.headRefOid,
         ...(!run.publicationPending && commitSha(headSha) ? { readable: savedReadable(facts, headSha) } : {}) };
-      await requireExistingDraft(run, pr1, p);
+      if (recoveryView.pr1Open !== false) await requireExistingDraft(run, pr1, p);
       const current = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
       if (current.body !== body || current.headRefOid !== view.headRefOid) throw Error('PR 1 description or head changed; inspect it before recovery.');
       p.inspectProgress?.();
@@ -3874,7 +3874,8 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     try {
       p.inspectProgress();
       if (!pr1) throw Error('The saved PR 1 is unavailable.');
-      await requireExistingDraft(run, pr1, p);
+      if (run.draft === true && (await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts)).state === 'open')
+        await requireExistingDraft(run, pr1, p);
       const view = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
       if (view.body !== recovery.body || view.headRefOid !== recovery.head) throw Error('PR 1 description or head changed; inspect it before recovery.');
       p.inspectProgress?.();
@@ -4128,9 +4129,11 @@ ${approvalGuide(run)}`, p, true);
   if (askCode) {
     try {
       const pr1 = prOf(run, area.name);
-      await requireExistingDraft(run, pr1, p);
+      const pr1Open = run.draft === true ? (await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts)).state === 'open' : true;
+      if (pr1Open) await requireExistingDraft(run, pr1, p);
       recoveryView = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
       if (typeof recoveryView.body !== 'string' || !commitSha(recoveryView.headRefOid)) throw Error('PR 1 description or head unavailable.');
+      recoveryView.pr1Open = pr1Open;
       p.inspectProgress?.();
     } catch (error) {
       if (error?.code === 'workflow_progress_refused') throw error;
