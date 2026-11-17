@@ -46,8 +46,7 @@ internal multi-harness fallback helpers:
 ## Domain decisions
 
 - **Isolated PDD-managed Codex home (`pddManagedCodexHome`):** Local Codex lease materialization writes exclusively inside `${PDD_STATE_DIR || join(XDG_STATE_HOME, "pdd") || ~/.local/state/pdd}/codex-home` (mode `0700`), never reading from or writing to `~/.codex/auth.json`. Plain `codex logout` or `codex login` against `~/.codex` cannot revoke PDD Cloud tokens or mutate credentials under running `codex app-server` processes, and legacy `[model_providers.pdd_codex_gateway]` entries in `~/.codex/config.toml` are cleaned up safely without touching `~/.codex/auth.json`.
-- **Zero borrower credentials for shared Codex (`gateway_grant`):** Shared Codex leases never deliver OpenAI `access_token`, `id_token` or `refresh_token` to borrower machines. Step overlays route Codex through `pdd_codex_gateway` using `PDD_CODEX_GATEWAY_GRANT` with zero `auth.json` inside `/tmp/pdd-cx-*`, while `pddManagedCodexHome(env)` writes only the short-lived revocable `pddg_*` grant as an API-key stub alongside `[model_providers.pdd_codex_gateway]` and `cli_auth_credentials_store = "file"`.
-- **Single-refresh invariant for owner passes (`direct_stripped`):** Owner Codex leases deliver short-lived `access_token` and `id_token` with `tokens.refresh_token: ""` so only PDD Cloud refreshes single-use OpenAI refresh tokens.
+- **Zero-plaintext local Codex keys (`gateway_grant` + constant gateway URL):** Both owner and shared Codex leases materialize `gateway_grant` passes (`delivery_mode: "gateway_grant"`) with zero OpenAI `access_token`, `id_token` or `refresh_token` written to disk. Step overlays route Codex through `pdd_codex_gateway` using `PDD_CODEX_GATEWAY_GRANT` with zero `auth.json` inside `/tmp/pdd-cx-*`, while `pddManagedCodexHome(env)` writes only the short-lived revocable `pddg_*` grant as an API-key stub alongside `[model_providers.pdd_codex_gateway]` and `cli_auth_credentials_store = "file"`. When the grant token embeds its lease ID (`pddg_lse_<hex>_<secret>`), normalize `codex_gateway_url` by stripping any trailing `/lse_<id>` segment to the constant `<origin>/v1/codex-gateway` base URL and write `requires_openai_auth = true` without static `http_headers` in `managedCodexConfigPath(env)` so `config.toml` stays constant across syncs and account switches while running Codex processes dynamically pick up updated `auth.json` tokens via `Authorization: Bearer pddg_lse_...` with zero `403` errors. Preserve backward compatibility for legacy non-`pddg_lse_` `pddg_*` grants and legacy `direct_stripped` responses (`tokens.refresh_token: ""` so only PDD Cloud refreshes single-use OpenAI refresh tokens).
 - **Cold-start resilience and opt-in live refresh:** `cloudAccountsRequest` defaults `timeoutMs` to `20_000` ms (`gh auth token` budget up to `10_000` ms) and `listCloudAccounts` defaults `timeoutMs` to `30_000` ms, `leaseCloudAccount` defaults `timeoutMs` to `15_000` ms (enforcing `timeoutMs` as an overall wall-clock deadline across bounded `reauth_required` skip retries and `maxRetries: 0` on `--quiet` shell-hook sync), and `cloudAccountsRequest` performs `1` bounded retry on timeout/abort for idempotent `GET` and `POST /v1/accounts/lease` requests. `listCloudAccounts({refresh = false})` appends `?refresh=true` only when `refresh === true`.
 
 ## Cloud Accounts transport and isolated local materialization
@@ -93,11 +92,14 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     (requiring `"pddg_"` prefix with `code: "invalid_lease"`), writes `0600`
     `managedCodexAuthPath(env)` with `{"auth_mode": "apikey", "OPENAI_API_KEY": "<pddg_grant>"}`,
     and writes `0600` `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"`,
-    `model_provider = "pdd_codex_gateway"` and `[model_providers.pdd_codex_gateway]`
-    (`name = "PDD Codex Gateway"`, `base_url = "<codex_gateway_url>"`, `wire_api = "responses"`,
-    `requires_openai_auth = false`, `supports_websockets = false`,
-    `http_headers = {"x-pdd-gateway-grant": "<pddg_grant>"}`).
-  - For owner `direct_stripped` bundles, `materializeLocalCodexAuth` writes `0600`
+    `model_provider = "pdd_codex_gateway"` and `[model_providers.pdd_codex_gateway]`:
+    when `<pddg_grant>` starts with `"pddg_lse_"`, strip any trailing `/lse_[^/]+` segment from
+    `<codex_gateway_url>` so `base_url = "<origin>/v1/codex-gateway"`, set `wire_api = "responses"`,
+    `requires_openai_auth = true`, `supports_websockets = false`, and omit `http_headers` so
+    `config.toml` remains constant across account rotations; for legacy non-`"pddg_lse_"` grants,
+    preserve `base_url = "<codex_gateway_url>"`, `requires_openai_auth = false`,
+    `supports_websockets = false`, and `http_headers = {"x-pdd-gateway-grant": "<pddg_grant>"}`.
+  - For legacy `direct_stripped` bundles, `materializeLocalCodexAuth` writes `0600`
     `managedCodexAuthPath(env)` with `tokens.refresh_token: ""` and `0600`
     `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"` and user settings
     without `pdd_codex_gateway`. `restoreLocalCodexGatewayConfig` strips any
@@ -120,8 +122,9 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   - For owner `direct_stripped` passes, symlinks existing non-symlink
     `~/.codex/{config.toml,skills,memories,sessions,rules}`, writes leased stripped
     `auth.json` (`0600`, `refresh_token: ""`), and sets `CODEX_HOME=<overlay>`.
-  - For shared `gateway_grant` leases, validates the `"pddg_"` grant prefix (`code: "invalid_lease"`),
-    writes **no `auth.json`** in `<overlay>`, symlinks only existing non-symlink
+  - For `gateway_grant` leases, validates the `"pddg_"` grant prefix (`code: "invalid_lease"`),
+    normalizes `base_url` by stripping any trailing `/lse_[^/]+` segment when the grant starts with
+    `"pddg_lse_"`, writes **no `auth.json`** in `<overlay>`, symlinks only existing non-symlink
     `~/.codex/{skills,memories,sessions,rules}` (never `auth.json` or `config.toml`), parses
     `~/.codex/config.toml` when it is a regular non-symlink file to preserve user settings such as
     `[mcp_servers.pdd]`, writes `0600` `<overlay>/config.toml` with
@@ -131,7 +134,7 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     `include_only`, removing any case-insensitive `PDD_CODEX_GATEWAY_GRANT` entry from `filters` and
     `set`, and setting `filters.PDD_CODEX_GATEWAY_GRANT = "exclude"`,
     and `[model_providers.pdd_codex_gateway]` (`name = "PDD Codex Gateway"`,
-    `base_url = "<codex_gateway_url>"`, `wire_api = "responses"`, `requires_openai_auth = false`,
+    `base_url = "<normalized_codex_gateway_url>"`, `wire_api = "responses"`, `requires_openai_auth = false`,
     `supports_websockets = false`, `env_http_headers = {"x-pdd-gateway-grant": "PDD_CODEX_GATEWAY_GRANT"}`
     with no static `http_headers`), sets `CODEX_HOME=<overlay>` and
     `PDD_CODEX_GATEWAY_GRANT=<grant>` in `step.env`, and deletes `OPENAI_API_KEY`,

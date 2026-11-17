@@ -202,13 +202,14 @@ Catalog local disposition `accounts` ([Cloud accounts CLI](accounts-cli.prompt.m
 - `accounts` (`accounts`, flag `--json`): `pdd accounts [--json]`
 - `accounts.list` (`accounts list`, flag `--json`): `pdd accounts list [--json]`
 - `accounts.status` (`accounts status`, flag `--json`): `pdd accounts status [--json]`
-- `accounts.add` (`accounts add`, value `--provider` choices `codex`, `claude`, text `--label`, flag `--loop`, flag `--device-auth`, text `--with`): `pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]`
-- `accounts.import` (`accounts import`, value `--provider` choices `codex`, `claude`, text `--from`, text `--label`, text `--with`): `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]`
-- `accounts.use` (`accounts use`, operand `label`): `pdd accounts use LABEL`
+- `accounts.add` (`accounts add`, value `--provider` choices `codex`, `claude`, text `--label`, flag `--loop`, flag `--replace`, flag `--device-auth`, text `--with`): `pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER|ORG/TEAM[,...]]`
+- `accounts.import` (`accounts import`, value `--provider` choices `codex`, `claude`, text `--from`, text `--label`, flag `--replace`, text `--with`): `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--replace] [--with USER|ORG/TEAM[,...]]`
+- `accounts.use` (`accounts use`, operand `label`, value `--provider` choices `codex`, `claude`): `pdd accounts use LABEL [--provider codex|claude]`
 - `accounts.next` (`accounts next`, value `--provider` choices `codex`, `claude`): `pdd accounts next [--provider codex|claude]`
+- `accounts.codex` (`accounts codex`, optional repeated text operand `arg`): `pdd accounts codex [-- ARGS...]`
 - `accounts.sync` (`accounts sync`, value `--provider` choices `codex`, `claude`, flag `--quiet`, hidden flag `--print-codex-home`, integer `--timeout-ms` 50..60000): `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`
 - `accounts.auto` (`accounts auto`, operand choice `on`, `off`, `status`): `pdd accounts auto on|off|status`
-- `accounts.pause` (`accounts pause`, operand `label`), `accounts.unpause` (`accounts unpause`, operand `label`), `accounts.share` (`accounts share`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--user`, text `--with`), `accounts.leave` (`accounts leave`, operand `label`), `accounts.remove` (`accounts remove`, operand `label`), and `accounts.log` (`accounts log`, operand `label`, flag `--json`).
+- `accounts.pause` (`accounts pause`, operand `label`, value `--provider` choices `codex`, `claude`), `accounts.unpause` (`accounts unpause`, operand `label`, value `--provider` choices `codex`, `claude`), `accounts.share` (`accounts share`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--with`), `accounts.accept` (`accounts accept`, operand `invite`), `accounts.unshare` (`accounts unshare`, optional operand `label`, flag `--all`, value `--provider` choices `codex`, `claude`, text `--user`, text `--with`), `accounts.leave` (`accounts leave`, operand `label`, value `--provider` choices `codex`, `claude`), `accounts.remove` (`accounts remove`, operand `label`, value `--provider` choices `codex`, `claude`), and `accounts.log` (`accounts log`, operand `label`, value `--provider` choices `codex`, `claude`, flag `--json`).
 
 ## Help forms
 
@@ -271,22 +272,23 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd accounts [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites.
   pdd accounts list [--json]  List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites.
   pdd accounts status [--json]  Show Cloud account enrollment, isolated Codex home, shell auto-switch status, active leases, and token refresh/expiry health.
-  pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]  Sign in inside an isolated folder, upload the encrypted bundle to PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally enroll in a loop or share immediately.
-  pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]  Import a local or external Codex auth.json or Claude token into PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally share immediately.
-  pdd accounts use LABEL  Pin and materialize LABEL in PDD's isolated Codex home or ~/.claude/settings.json.
+  pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER|ORG/TEAM[,...]]  Sign in inside an isolated folder, upload the encrypted bundle to PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally enroll in a loop, replace an existing label, or share immediately.
+  pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--replace] [--with USER|ORG/TEAM[,...]]  Import a local or external Codex auth.json or Claude token into PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally replace an existing label or share immediately.
+  pdd accounts use LABEL [--provider codex|claude]  Pin and materialize LABEL in PDD's isolated Codex home or ~/.claude/settings.json.
   pdd accounts next [--provider codex|claude]  Skip the active login and switch to the next ready account sorted by soonest weekly reset.
+  pdd accounts codex [-- ARGS...]  Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session resume rotation.
   pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]  Refresh the PDD-managed login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.
   pdd accounts auto on|off|status  Manage the opt-in fail-open shell wrapper in ~/.zshrc, ~/.bashrc, and ~/.config/fish/config.fish for plain terminal codex and claude launches (off by default).
-  pdd accounts pause LABEL  Pause automatic leasing for LABEL.
-  pdd accounts unpause LABEL  Resume automatic leasing for LABEL.
-  pdd accounts share LABEL --with USER|ORG/TEAM[,...]  Share LABEL with GitHub users, organization teams, or @ORG targets without exposing raw credentials.
+  pdd accounts pause LABEL [--provider codex|claude]  Pause automatic leasing for LABEL.
+  pdd accounts unpause LABEL [--provider codex|claude]  Resume automatic leasing for LABEL.
+  pdd accounts share LABEL [--provider codex|claude] --with USER|ORG/TEAM[,...]  Share LABEL with GitHub users, organization teams, or @ORG targets without exposing raw credentials.
   pdd accounts share --all [--provider codex|claude] --with USER|ORG/TEAM[,...]  Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or @ORG targets.
   pdd accounts accept INVITE  Accept a pending Cloud account share invite.
-  pdd accounts unshare LABEL --user USER  Revoke shared access to LABEL for USER.
+  pdd accounts unshare LABEL [--provider codex|claude] --user USER  Revoke shared access to LABEL for USER.
   pdd accounts unshare [LABEL] [--all] [--provider codex|claude] [--user USER] [--with USER|ORG/TEAM[,...]]  Revoke shared access for users, organization teams, or @ORG targets across LABEL or all owned accounts.
-  pdd accounts leave LABEL  Leave a shared Cloud account.
-  pdd accounts remove LABEL  Delete LABEL from PDD Cloud and revoke active leases.
-  pdd accounts log LABEL [--json]  Show the lease and sharing audit log for LABEL.
+  pdd accounts leave LABEL [--provider codex|claude]  Leave a shared Cloud account.
+  pdd accounts remove LABEL [--provider codex|claude]  Delete LABEL from PDD Cloud and revoke active leases.
+  pdd accounts log LABEL [--provider codex|claude] [--json]  Show the lease and sharing audit log for LABEL.
   pdd setup [--yes]  Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions.
   pdd upgrade [--main]  Upgrade a user-owned global pdd installation from the latest GitHub release (or pinned main commit with --main) and refresh installed user PDD skills.
 ```

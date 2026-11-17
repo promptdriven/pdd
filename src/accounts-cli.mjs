@@ -1,5 +1,5 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 1a0c1b7b54d29ece6ffd27c7ab1b03ff523035f664505de92078edc25f507d8a).
-import { spawnSync } from 'node:child_process';
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 199a7490ecbf8c1a9f63bbce8c40e5d6a9c414d5b0e7cedf9e29841eb4e035c8).
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -8,7 +8,9 @@ import { createInterface } from 'node:readline';
 import { runAgentProcess } from './agent-adapters.mjs';
 import {
   CloudAccountsError,
+  classifyRateLimitFailure,
   cloudAccountsRequest,
+  extractRateLimitReport,
   isCloudAccountsActive,
   isLocalReauthUnresolved,
   isReauthRequiredAccount,
@@ -113,6 +115,10 @@ export function renderAutoSwitchBlock(shell = 'sh') {
       "      set _pdd_cx_home (env PDD_PRINT_CODEX_HOME=1 pdd accounts sync --provider codex --quiet --timeout-ms 1200 2>/dev/null; or true)",
       "    end",
       "    if test -n \"$_pdd_cx_home\"; and test -f \"$_pdd_cx_home/auth.json\"",
+      "      if isatty stdin; and isatty stdout; and begin; test -z \"$_pdd_sub\"; or test \"$_pdd_sub\" = \"resume\"; or test \"$_pdd_sub\" = \"fork\"; end",
+      "        CODEX_HOME=\"$_pdd_cx_home\" pdd accounts codex -- $argv",
+      "        return $status",
+      "      end",
       "      CODEX_HOME=\"$_pdd_cx_home\" command codex $argv",
       "      return $status",
       "    end",
@@ -203,6 +209,10 @@ export function renderAutoSwitchBlock(shell = 'sh') {
     "      _pdd_cx_home=\"$(PDD_PRINT_CODEX_HOME=1 pdd accounts sync --provider codex --quiet --timeout-ms 1200 2>/dev/null || true)\"",
     "    fi",
     "    if [ -n \"$_pdd_cx_home\" ] && [ -f \"$_pdd_cx_home/auth.json\" ]; then",
+    "      if [ -t 0 ] && [ -t 1 ] && { [ -z \"$_pdd_sub\" ] || [ \"$_pdd_sub\" = \"resume\" ] || [ \"$_pdd_sub\" = \"fork\" ]; }; then",
+    "        CODEX_HOME=\"$_pdd_cx_home\" pdd accounts codex -- \"$@\"",
+    "        return $?",
+    "      fi",
     "      CODEX_HOME=\"$_pdd_cx_home\" command codex \"$@\"",
     "      return $?",
     "    fi",
@@ -401,13 +411,31 @@ function sanitizeLabel(raw, fallback) {
   return cleaned || fallback;
 }
 
+function extractCodexEmail(authJson) {
+  const payload = decodeJwtPayload(authJson?.tokens?.id_token) ?? decodeJwtPayload(authJson?.tokens?.access_token);
+  return typeof payload?.email === 'string' && payload.email.trim() ? payload.email.trim() : '';
+}
+
+function deriveEmailBaseLabel(authJson) {
+  const email = extractCodexEmail(authJson);
+  const emailUser = email ? email.split('@')[0] : '';
+  return sanitizeLabel(emailUser, '');
+}
+
 function defaultAccountLabel(provider, authJson = null) {
   if (provider === 'codex') {
-    const payload = decodeJwtPayload(authJson?.tokens?.id_token);
-    const emailUser = typeof payload?.email === 'string' ? payload.email.split('@')[0] : '';
-    if (emailUser) return sanitizeLabel(`codex-${emailUser}`, 'codex-main');
+    const slug = deriveEmailBaseLabel(authJson);
+    if (slug) return slug;
   }
   return `${provider}-main`;
+}
+
+function nextDisambiguatedLabel(baseLabel, usedLabels, startSuffix = 2) {
+  const cleanBase = sanitizeLabel(baseLabel, 'account');
+  if (!usedLabels.has(cleanBase.toLowerCase())) return cleanBase;
+  let idx = Math.max(2, startSuffix);
+  while (usedLabels.has(`${cleanBase}-${idx}`.toLowerCase())) idx += 1;
+  return `${cleanBase}-${idx}`;
 }
 
 async function readStdinString(stdin, { idleTimeoutMs = 50 } = {}) {
@@ -489,8 +517,42 @@ export function readCodexFullAuthBundle(fs, env, explicitAuthPath = null) {
   };
 }
 
+function stripAnsiText(raw) {
+  return String(raw ?? '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b[@-Z\\-_]/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+}
+
+function unwrapClaudeTokenLines(cleanText) {
+  const lines = cleanText.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    let cur = lines[i];
+    const tokenTail = /(sk-ant-oat[A-Za-z0-9_-]{8,})\s*$/.exec(cur);
+    if (tokenTail && (cur.trimEnd().length >= 50 || tokenTail[1].length >= 45)) {
+      cur = cur.trimEnd();
+      let tokLen = tokenTail[1].length;
+      while (i + 1 < lines.length) {
+        const contMatch = /^\s*([A-Za-z0-9_-]+)\s*$/.exec(lines[i + 1]);
+        if (!contMatch) break;
+        const frag = contMatch[1];
+        if (tokLen >= 95 && !/[0-9_-]/.test(frag)) break;
+        cur += frag;
+        tokLen += frag.length;
+        i += 1;
+      }
+    }
+    out.push(cur);
+  }
+  return out.join('\n');
+}
+
 function extractClaudeToken(text) {
-  const match = /\b(sk-ant-oat[A-Za-z0-9_-]{8,})\b/.exec(String(text ?? ''));
+  const cleaned = unwrapClaudeTokenLines(stripAnsiText(text));
+  const match = /\b(sk-ant-oat[A-Za-z0-9_-]{8,})\b/.exec(cleaned);
   return match ? match[1] : '';
 }
 
@@ -791,7 +853,90 @@ function removeTempPrivateDir(fs, dir) {
   try { (fs.rmSync ?? nativeFs.rmSync)(dir, { recursive: true, force: true }); } catch {}
 }
 
-async function runProviderLogin(provider, { cwd, env, deviceAuth = false }, ports = {}) {
+function runInteractiveClaudeSetupToken({ cwd, env, stdin, stdout, stderr, timeoutMs = 300_000 }, ports = {}) {
+  const spawnImpl = ports.spawnInteractive ?? spawn;
+  return new Promise((resolveRun, rejectRun) => {
+    let child = null;
+    let stdoutBuf = '';
+    let stderrBuf = '';
+    let settled = false;
+    let killTimer = null;
+    let interrupted = false;
+
+    const cleanupSigint = () => process.off('SIGINT', onSigint);
+    const stopChild = () => {
+      if (!child) return;
+      try { child.kill('SIGTERM'); } catch {}
+      killTimer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+      }, 500);
+      killTimer.unref?.();
+    };
+    const finish = (err, code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      cleanupSigint();
+      if (err) {
+        err.stdout = stdoutBuf;
+        err.stderr = stderrBuf;
+        rejectRun(err);
+        return;
+      }
+      resolveRun({
+        code: interrupted || signal === 'SIGINT' ? 130 : (code ?? 1),
+        signal: interrupted ? 'SIGINT' : (signal ?? null),
+        stdout: stdoutBuf,
+        stderr: stderrBuf,
+      });
+    };
+    const onSigint = () => {
+      interrupted = true;
+      stopChild();
+      finish(null, 130, 'SIGINT');
+    };
+    const timer = setTimeout(() => {
+      stopChild();
+      finish(new CloudAccountsError('claude setup-token timed out waiting for browser OAuth completion.', { code: 'timeout' }));
+    }, timeoutMs);
+    timer.unref?.();
+
+    const childEnv = { ...env, COLUMNS: env?.COLUMNS || '500' };
+    const useInheritedStdin = stdin === process.stdin || !stdin || typeof stdin.pipe !== 'function';
+    try {
+      child = spawnImpl('claude', ['setup-token'], {
+        cwd,
+        env: childEnv,
+        stdio: [useInheritedStdin ? 'inherit' : 'pipe', 'pipe', 'pipe'],
+        shell: false,
+      });
+    } catch (err) {
+      finish(err);
+      return;
+    }
+
+    process.on('SIGINT', onSigint);
+    if (!useInheritedStdin && child.stdin) {
+      stdin.pipe(child.stdin);
+      child.stdin.on('error', () => {});
+    }
+    child.stdout?.on('data', chunk => {
+      const str = String(chunk);
+      stdoutBuf += str;
+      try { stdout?.write?.(chunk); } catch {}
+    });
+    child.stderr?.on('data', chunk => {
+      const str = String(chunk);
+      stderrBuf += str;
+      try { stderr?.write?.(chunk); } catch {}
+    });
+    child.on('error', err => finish(err));
+    child.on('close', (code, signal) => finish(null, code, signal));
+  });
+}
+
+async function runProviderLogin(provider, { cwd, env, deviceAuth = false, stdin = process.stdin }, ports = {}) {
   if (typeof ports.runLogin === 'function') {
     return ports.runLogin(provider, { cwd, env, deviceAuth });
   }
@@ -802,7 +947,26 @@ async function runProviderLogin(provider, { cwd, env, deviceAuth = false }, port
   if (typeof ports.run === 'function') {
     return ports.run(cmd, args, { cwd, env, input: '', timeoutMs: 120_000, maxBytes: 65_536 });
   }
-  if (provider === 'codex' && process.stdin?.isTTY && process.stdout?.isTTY) {
+  const activeStdin = ports.stdin ?? stdin ?? process.stdin;
+  const activeStdout = ports.stdout ?? process.stdout;
+  const activeStderr = ports.stderr ?? process.stderr;
+  if (provider === 'claude') {
+    if (!activeStdin?.isTTY) {
+      throw new CloudAccountsError(
+        'claude setup-token requires an interactive terminal (TTY) to paste the OAuth authorization code. Run "pdd accounts add --provider claude" in an interactive terminal, pipe a token to stdin, or run "pdd accounts import --provider claude".',
+        { code: 'non_interactive_claude_login', exitCode: 1 },
+      );
+    }
+    return runInteractiveClaudeSetupToken({
+      cwd,
+      env,
+      stdin: activeStdin,
+      stdout: activeStdout,
+      stderr: activeStderr,
+      timeoutMs: ports.claudeLoginTimeoutMs ?? 300_000,
+    }, ports);
+  }
+  if (provider === 'codex' && activeStdin?.isTTY && activeStdout?.isTTY) {
     const res = spawnSync(cmd, args, { cwd, env, stdio: 'inherit' });
     return {
       code: res.signal === 'SIGINT' ? 130 : (res.status ?? 1),
@@ -943,21 +1107,171 @@ async function resolveSharePayloads(parsedTargets, { cwd, env }, ports = {}) {
   return payloads;
 }
 
-async function applySharePayloadsToAccounts(accounts, sharePayloads, { cwd, env }, ports = {}) {
+function sharePayloadKey(item) {
+  const b = item?.body ?? {};
+  if (b.team && b.org) return `team:${String(b.org).toLowerCase()}/${String(b.team).toLowerCase()}`;
+  if (b.org) return `org:${String(b.org).toLowerCase()}`;
+  if (b.github_login) return `user:${String(b.github_login).toLowerCase()}`;
+  return '';
+}
+
+function addRawShareEntryKeys(keys, entry) {
+  if (!entry) return;
+  if (typeof entry === 'string') {
+    const trimmed = entry.trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith('@')) {
+      keys.add(`org:${trimmed.slice(1).toLowerCase()}`);
+    } else if (trimmed.includes('/')) {
+      keys.add(`team:${trimmed.toLowerCase()}`);
+    } else {
+      keys.add(`user:${trimmed.toLowerCase()}`);
+    }
+    return;
+  }
+  if (!object(entry)) return;
+  const st = typeof entry.state === 'string' ? entry.state.toLowerCase() : '';
+  if (st === 'revoked' || st === 'declined' || st === 'cancelled' || st === 'expired') return;
+  if (entry.team && entry.org) {
+    keys.add(`team:${String(entry.org).toLowerCase()}/${String(entry.team).toLowerCase()}`);
+    return;
+  }
+  if (typeof entry.team === 'string' && entry.team.includes('/')) {
+    keys.add(`team:${entry.team.toLowerCase()}`);
+    return;
+  }
+  if (entry.org) {
+    keys.add(`org:${String(entry.org).toLowerCase()}`);
+    return;
+  }
+  const login = entry.github_login ?? entry.recipient_login ?? entry.invited_login ?? entry.login ?? entry.user ?? '';
+  if (typeof login === 'string' && login.trim()) {
+    keys.add(`user:${login.trim().toLowerCase()}`);
+  }
+  const uid = entry.github_user_id ?? entry.recipient_github_id ?? entry.user_id ?? null;
+  if (Number.isSafeInteger(uid)) {
+    keys.add(`uid:${uid}`);
+  }
+}
+
+function collectExistingShareKeys(account, pendingInvites = [], sessionSharedKeys = null) {
+  const keys = new Set();
+  if (!object(account)) return keys;
+  const accId = account.account_id;
+  for (const field of ['shares', 'shared_with', 'active_shares', 'pending_shares', 'pending_invites', 'invites', 'accepted_users', 'accepted_logins']) {
+    if (Array.isArray(account[field])) {
+      for (const entry of account[field]) addRawShareEntryKeys(keys, entry);
+    }
+  }
+  if (Array.isArray(account.org_shares)) {
+    for (const org of account.org_shares) {
+      if (typeof org === 'string' && org.trim()) keys.add(`org:${org.trim().replace(/^@/, '').toLowerCase()}`);
+    }
+  }
+  if (Array.isArray(account.team_shares)) {
+    for (const team of account.team_shares) {
+      if (typeof team === 'string' && team.trim()) keys.add(`team:${team.trim().toLowerCase()}`);
+    }
+  }
+  if (Array.isArray(account.accepted_user_ids)) {
+    for (const uid of account.accepted_user_ids) {
+      if (Number.isSafeInteger(uid)) keys.add(`uid:${uid}`);
+    }
+  }
+  if (accId && Array.isArray(pendingInvites)) {
+    for (const inv of pendingInvites) {
+      if (inv?.account_id === accId) addRawShareEntryKeys(keys, inv);
+    }
+  }
+  if (accId && sessionSharedKeys instanceof Set) {
+    const prefix = `${accId}:`;
+    for (const sk of sessionSharedKeys) {
+      if (sk.startsWith(prefix)) keys.add(sk.slice(prefix.length));
+    }
+  }
+  return keys;
+}
+
+function extractSharePayloadsFromAccount(account, pendingInvites = []) {
+  const existing = [];
+  if (!object(account)) return existing;
+  const keys = collectExistingShareKeys(account, pendingInvites);
+  for (const k of keys) {
+    if (k.startsWith('org:')) {
+      const org = k.slice(4);
+      existing.push({ display: `@${org}`, body: { org } });
+    } else if (k.startsWith('team:')) {
+      const [org, team] = k.slice(5).split('/');
+      if (org && team) existing.push({ display: `${org}/${team}`, body: { org, team } });
+    } else if (k.startsWith('user:')) {
+      const login = k.slice(5);
+      existing.push({ display: login, body: { github_login: login } });
+    }
+  }
+  return existing;
+}
+
+function mergeSharePayloads(basePayloads, extraPayloads) {
+  const seen = new Set();
+  const merged = [];
+  for (const item of [...basePayloads, ...extraPayloads]) {
+    const key = sharePayloadKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
+async function applySharePayloadsToAccounts(accounts, sharePayloads, { cwd, env, pendingInvites = [], sessionSharedKeys = null }, ports = {}) {
   const notes = [];
   for (const account of accounts) {
+    const existingKeys = collectExistingShareKeys(account, pendingInvites, sessionSharedKeys);
     for (const item of sharePayloads) {
-      const res = await cloudAccountsRequest(
-        'POST',
-        `/v1/accounts/${encodeURIComponent(account.account_id)}/share`,
-        { body: item.body, cwd, env },
-        ports,
-      );
-      const inviteId = res?.invite?.invite_id ?? res?.invite_id ?? null;
+      const key = sharePayloadKey(item);
+      const uidKey = Number.isSafeInteger(item?.body?.github_user_id) ? `uid:${item.body.github_user_id}` : '';
+      if ((key && existingKeys.has(key)) || (uidKey && existingKeys.has(uidKey))) {
+        notes.push({
+          label: account.label ?? account.account_id,
+          display: item.display,
+          inviteId: null,
+          alreadyShared: true,
+        });
+        continue;
+      }
+      let res = null;
+      try {
+        res = await cloudAccountsRequest(
+          'POST',
+          `/v1/accounts/${encodeURIComponent(account.account_id)}/share`,
+          { body: item.body, cwd, env },
+          ports,
+        );
+      } catch (err) {
+        if (err instanceof CloudAccountsError && err.status === 409) {
+          notes.push({
+            label: account.label ?? account.account_id,
+            display: item.display,
+            inviteId: null,
+            alreadyShared: true,
+          });
+          continue;
+        }
+        throw err;
+      }
+      if (key) {
+        existingKeys.add(key);
+        if (account.account_id && sessionSharedKeys instanceof Set) {
+          sessionSharedKeys.add(`${account.account_id}:${key}`);
+        }
+      }
+      if (uidKey) existingKeys.add(uidKey);
+      const inviteId = res?.already_shared === true ? null : (res?.invite?.invite_id ?? res?.invite_id ?? null);
       notes.push({
         label: account.label ?? account.account_id,
         display: item.display,
         inviteId,
+        alreadyShared: Boolean(res?.already_shared === true),
       });
     }
   }
@@ -1032,6 +1346,10 @@ async function probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome
       },
       ports.codexLimitPorts,
     );
+    if (tempProbeDir) {
+      removeTempPrivateDir(fs, tempProbeDir);
+      tempProbeDir = null;
+    }
     const hasFiveH = typeof windows?.five_hour_used_percent === 'number' && Number.isFinite(windows.five_hour_used_percent);
     const hasSevenD = typeof windows?.weekly_used_percent === 'number' && Number.isFinite(windows.weekly_used_percent);
     if (hasFiveH || hasSevenD) {
@@ -1052,63 +1370,91 @@ async function probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome
   return acc;
 }
 
-async function askLoopContinue(question, { stdin, stdout }, ports = {}) {
+async function askPromptRaw(question, { stdin, stdout }, ports = {}) {
   const promptFn = ports.prompt ?? ports.confirm ?? null;
-  let answer;
   if (typeof promptFn === 'function') {
     try {
-      answer = await promptFn(question);
+      return await promptFn(question);
     } catch {
-      return false;
-    }
-  } else {
-    const rl = createInterface({ input: stdin, output: stdout });
-    try {
-      answer = await new Promise(resolveAnswer => {
-        let settled = false;
-        const finish = val => {
-          if (settled) return;
-          settled = true;
-          resolveAnswer(val);
-        };
-        rl.once('SIGINT', () => {
-          finish(undefined);
-          rl.close();
-        });
-        rl.once('close', () => finish(undefined));
-        rl.question(question, val => finish(val));
-      });
-    } finally {
-      rl.close();
+      return undefined;
     }
   }
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    return await new Promise(resolveAnswer => {
+      let settled = false;
+      const finish = val => {
+        if (settled) return;
+        settled = true;
+        resolveAnswer(val);
+      };
+      rl.once('SIGINT', () => {
+        finish(undefined);
+        rl.close();
+      });
+      rl.once('close', () => finish(undefined));
+      rl.question(question, val => finish(val));
+    });
+  } finally {
+    rl.close();
+  }
+}
+
+async function askLoopContinue(question, { stdin, stdout }, ports = {}) {
+  const answer = await askPromptRaw(question, { stdin, stdout }, ports);
   if (answer === undefined || answer === null || answer === false) return false;
   if (answer === true) return true;
   const normalized = String(answer).trim().toLowerCase();
   return normalized === '' || normalized === 'y' || normalized === 'yes';
 }
 
-async function resolveAccount(labelOrId, { cwd, env }, ports = {}) {
+async function resolveAccount(labelOrId, { cwd, env, provider = null }, ports = {}) {
   const target = String(labelOrId ?? '').trim();
-  if (!target) throw new CloudAccountsError('Account label is required.', { code: 'missing_label' });
-  const { accounts } = await fetchAccountsList({ cwd, env }, ports);
-  const exact = accounts.find(a => a.label === target || a.account_id === target);
-  if (exact) return { account: exact, accounts };
+  if (!target) throw new CloudAccountsError('Account label is required.', { code: 'missing_label', exitCode: 2 });
+  const { accounts, pendingInvites } = await fetchAccountsList({ cwd, env }, ports);
+  const activePool = accounts.filter(a => !a.revoked);
+  const candidates = provider ? activePool.filter(a => a.provider === provider) : activePool;
+
+  const pickTier = matches => {
+    if (matches.length === 1) return { account: matches[0], accounts, pendingInvites };
+    if (matches.length > 1) {
+      const providers = [...new Set(matches.map(a => a.provider).filter(Boolean))];
+      if (!provider && providers.length > 1) {
+        const flags = providers.map(p => `--provider ${p}`).join(' or ');
+        throw new CloudAccountsError(
+          `Account label "${target}" exists for multiple providers (${providers.join(', ')}). Pass ${flags}.`,
+          { code: 'ambiguous_provider', exitCode: 2 },
+        );
+      }
+      return { account: matches[0], accounts, pendingInvites };
+    }
+    return null;
+  };
+
+  const byId = pickTier(candidates.filter(a => a.account_id === target));
+  if (byId) return byId;
+
+  const byExact = pickTier(candidates.filter(a => a.label === target));
+  if (byExact) return byExact;
+
   const lower = target.toLowerCase();
-  const ciMatches = accounts.filter(a => String(a.label ?? '').toLowerCase() === lower);
-  if (ciMatches.length === 1) return { account: ciMatches[0], accounts };
+  const byCi = pickTier(candidates.filter(a => String(a.label ?? '').toLowerCase() === lower));
+  if (byCi) return byCi;
+
   const sanitized = sanitizeLabel(target, '');
   if (sanitized) {
-    const sanitizedMatches = accounts.filter(a => {
+    const bySanitized = pickTier(candidates.filter(a => {
       const accLabel = String(a.label ?? '');
       return accLabel.toLowerCase() === sanitized || sanitizeLabel(accLabel, '') === sanitized;
-    });
-    if (sanitizedMatches.length === 1) return { account: sanitizedMatches[0], accounts };
+    }));
+    if (bySanitized) return bySanitized;
   }
-  throw new CloudAccountsError(`Account "${target}" was not found. Run pdd accounts list.`, { code: 'not_found' });
+
+  const suffix = provider ? ` for provider "${provider}"` : '';
+  throw new CloudAccountsError(`Account "${target}"${suffix} was not found. Run pdd accounts list.`, { code: 'not_found' });
 }
 
-async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, fallbackAuthJson, fallbackOauthToken, { cwd, env }, ports = {}) {
+async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAuthJson, fallbackOauthToken, { cwd, env }, ports = {}) {
   const nowMs = (ports.now ?? Date.now)();
   if (acc?.account_id) {
     const preEnrollState = readCloudAccountsState({ env }, ports);
@@ -1125,15 +1471,7 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, fallbackAut
     } else if (leased?.state === 'leased' && isReauthRequiredAccount(leased.account)) {
       markLocalAccountReauthRequired(leased.account?.account_id ?? acc.account_id, { env }, ports);
     } else {
-      if (provider === 'codex' && fallbackAuthJson) {
-        const saved = readCloudAccountsState({ env }, ports);
-        const prevCodex = saved.active?.codex;
-        materializeLocalCodexAuth(fallbackAuthJson, {
-          env,
-          previousManagedCodexGateway: Boolean(prevCodex?.managed_codex_gateway),
-          previousCodexModelProvider: prevCodex?.previous_codex_model_provider ?? null,
-        }, ports);
-      } else if (provider === 'claude' && fallbackOauthToken) {
+      if (provider === 'claude' && fallbackOauthToken) {
         materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
       }
       const current = readCloudAccountsState({ env }, ports);
@@ -1147,15 +1485,7 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, fallbackAut
       }, { env }, ports);
     }
   } catch {
-    if (provider === 'codex' && fallbackAuthJson) {
-      const saved = readCloudAccountsState({ env }, ports);
-      const prevCodex = saved.active?.codex;
-      materializeLocalCodexAuth(fallbackAuthJson, {
-        env,
-        previousManagedCodexGateway: Boolean(prevCodex?.managed_codex_gateway),
-        previousCodexModelProvider: prevCodex?.previous_codex_model_provider ?? null,
-      }, ports);
-    } else if (provider === 'claude' && fallbackOauthToken) {
+    if (provider === 'claude' && fallbackOauthToken) {
       materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
     }
     const current = readCloudAccountsState({ env }, ports);
@@ -1172,9 +1502,9 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, fallbackAut
           lease_id: null,
           leased_at: new Date(nowMs).toISOString(),
           expires_at: new Date(nowMs + 45 * 60 * 1000).toISOString(),
-          last_refresh_at: acc.last_refresh_at ?? fallbackAuthJson?.last_refresh ?? new Date(nowMs).toISOString(),
-          materialized_local: true,
-          delivery_mode: provider === 'codex' ? 'direct_stripped' : 'direct_oauth',
+          last_refresh_at: acc.last_refresh_at ?? new Date(nowMs).toISOString(),
+          materialized_local: provider === 'claude' && Boolean(fallbackOauthToken),
+          delivery_mode: provider === 'codex' ? 'gateway_grant' : 'direct_oauth',
           five_hour_used_percent: acc.five_hour_used_percent ?? 0,
           five_hour_reset_at: acc.five_hour_reset_at ?? null,
           weekly_used_percent: acc.weekly_used_percent ?? 0,
@@ -1186,9 +1516,227 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, fallbackAut
   }
 }
 
+function extractIsolatedClaudeSetupToken(fs, tempClaudeDir, loginOutput, nowFn) {
+  const nowMs = (typeof nowFn === 'function' ? nowFn : Date.now)();
+  if (typeof loginOutput === 'string' && loginOutput.trim()) {
+    const fromOutput = parseClaudeTokenText(loginOutput, 'claude setup-token output', nowMs, { allowBareToken: false });
+    if (fromOutput) return fromOutput;
+  }
+  if (tempClaudeDir) {
+    try {
+      const fromTempDir = readClaudeTokenFromPath(fs, tempClaudeDir, { now: nowFn });
+      if (fromTempDir) return fromTempDir;
+    } catch (err) {
+      if (err instanceof CloudAccountsError && err.code === 'expired_local_login') throw err;
+    }
+  }
+  throw new CloudAccountsError(
+    'No Claude OAuth token found in claude setup-token output. Run "pdd accounts add --provider claude" in an interactive terminal and complete the browser sign-in.',
+    { code: 'missing_local_login' },
+  );
+}
+
+function isDuplicateLabelConflictError(err) {
+  if (!(err instanceof CloudAccountsError)) return false;
+  if (err.status === 409) return true;
+  return /duplicate[_ ]label|label.*already exists|already exists.*label/i.test(`${err.code ?? ''} ${err.message ?? ''}`);
+}
+
+function isTransientUploadError(err) {
+  if (!(err instanceof CloudAccountsError)) return false;
+  return err.code === 'timeout' || err.code === 'network_error' || err.status === 429 || err.status >= 500;
+}
+
+async function uploadAccountWithConflictAndRetry({
+  provider,
+  initialLabel,
+  baseLabel,
+  labelWasExplicit,
+  replace = false,
+  plan,
+  bundle,
+  sharePayloads,
+  knownAccounts = null,
+  knownPendingInvites = [],
+  usedLabels = null,
+  interactive = false,
+  cwd,
+  env,
+  stdin,
+  stdout,
+}, ports = {}) {
+  let candidateLabel = initialLabel;
+  let cachedAccounts = Array.isArray(knownAccounts) ? knownAccounts : null;
+  let cachedInvites = Array.isArray(knownPendingInvites) ? knownPendingInvites : [];
+  const labelSet = usedLabels instanceof Set ? usedLabels : new Set();
+  let inheritedShares = [];
+  let deletedExistingId = null;
+
+  const ensureAccountsLoaded = async () => {
+    if (!cachedAccounts) {
+      try {
+        const fetched = await fetchAccountsList({ cwd, env, refresh: false }, ports);
+        cachedAccounts = fetched.accounts;
+        cachedInvites = fetched.pendingInvites;
+      } catch {
+        cachedAccounts = [];
+      }
+    }
+    for (const item of cachedAccounts) {
+      if (item && !item.revoked && item.provider === provider && item.label) {
+        labelSet.add(String(item.label).toLowerCase());
+      }
+    }
+    return cachedAccounts;
+  };
+
+  const findExistingOwnedSameLabel = label => (cachedAccounts ?? []).find(
+    a => isOwnedAccount(a) && a.provider === provider && String(a.label ?? '').toLowerCase() === String(label).toLowerCase(),
+  );
+
+  if (replace) {
+    await ensureAccountsLoaded();
+    const prior = findExistingOwnedSameLabel(candidateLabel);
+    if (prior) inheritedShares = extractSharePayloadsFromAccount(prior, cachedInvites);
+  }
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
+      const created = await cloudAccountsRequest('POST', '/v1/accounts', {
+        body: {
+          label: candidateLabel,
+          provider,
+          plan,
+          bundle,
+        },
+        cwd,
+        env,
+      }, ports);
+
+      if (replace && created?.already_enrolled !== true) {
+        const prior = findExistingOwnedSameLabel(candidateLabel);
+        const createdId = created?.account?.account_id ?? created?.account_id ?? null;
+        if (prior && prior.account_id && prior.account_id !== deletedExistingId && prior.account_id !== createdId) {
+          inheritedShares = mergeSharePayloads(inheritedShares, extractSharePayloadsFromAccount(prior, cachedInvites));
+          await cloudAccountsRequest('DELETE', `/v1/accounts/${encodeURIComponent(prior.account_id)}`, { cwd, env }, ports).catch(() => {});
+          deletedExistingId = prior.account_id;
+          cachedAccounts = (cachedAccounts ?? []).filter(a => a.account_id !== prior.account_id);
+        }
+      }
+
+      return {
+        skipped: false,
+        created,
+        candidateLabel,
+        effectiveSharePayloads: mergeSharePayloads(inheritedShares, sharePayloads),
+        pendingInvites: cachedInvites,
+      };
+    } catch (err) {
+      if (isDuplicateLabelConflictError(err)) {
+        await ensureAccountsLoaded();
+        labelSet.add(candidateLabel.toLowerCase());
+        const existingOwned = findExistingOwnedSameLabel(candidateLabel);
+
+        if (replace && existingOwned && existingOwned.account_id !== deletedExistingId) {
+          inheritedShares = mergeSharePayloads(inheritedShares, extractSharePayloadsFromAccount(existingOwned, cachedInvites));
+          await cloudAccountsRequest('DELETE', `/v1/accounts/${encodeURIComponent(existingOwned.account_id)}`, { cwd, env }, ports);
+          deletedExistingId = existingOwned.account_id;
+          cachedAccounts = (cachedAccounts ?? []).filter(a => a.account_id !== existingOwned.account_id);
+          continue;
+        }
+
+        if (!labelWasExplicit) {
+          candidateLabel = nextDisambiguatedLabel(baseLabel || candidateLabel, labelSet);
+          continue;
+        }
+
+        if (interactive) {
+          const disambiguated = nextDisambiguatedLabel(baseLabel || candidateLabel, labelSet);
+          const choice = await askPromptRaw(
+            `Account label "${candidateLabel}" already exists for ${provider}. [r]eplace existing, save as "${disambiguated}", or [s]kip? [r/2/s] `,
+            { stdin, stdout },
+            ports,
+          );
+          const norm = choice === undefined || choice === null ? 's' : String(choice).trim().toLowerCase();
+          if ((norm === 'r' || norm === 'replace') && existingOwned && existingOwned.account_id !== deletedExistingId) {
+            inheritedShares = mergeSharePayloads(inheritedShares, extractSharePayloadsFromAccount(existingOwned, cachedInvites));
+            await cloudAccountsRequest('DELETE', `/v1/accounts/${encodeURIComponent(existingOwned.account_id)}`, { cwd, env }, ports);
+            deletedExistingId = existingOwned.account_id;
+            cachedAccounts = (cachedAccounts ?? []).filter(a => a.account_id !== existingOwned.account_id);
+            continue;
+          }
+          if (norm === '2' || norm === 'd' || norm === 'n' || norm === 'new' || norm === 'y' || norm === 'yes' || norm === '') {
+            candidateLabel = disambiguated;
+            continue;
+          }
+          if (norm === 's' || norm === 'skip' || choice === false) {
+            return {
+              skipped: true,
+              candidateLabel,
+              message: `Skipped enrolling ${provider} account "${candidateLabel}".`,
+            };
+          }
+          const customLabel = sanitizeLabel(norm, '');
+          if (customLabel && !labelSet.has(customLabel.toLowerCase())) {
+            candidateLabel = customLabel;
+            continue;
+          }
+          candidateLabel = disambiguated;
+          continue;
+        }
+
+        const hint = /--replace/.test(err.message) ? '' : ' Pass --replace to replace the existing account.';
+        throw new CloudAccountsError(`${err.message}${hint}`, {
+          status: err.status || 409,
+          code: err.code || 'duplicate_label',
+          payload: err.payload,
+        });
+      }
+
+      if (interactive && isTransientUploadError(err)) {
+        const retryAns = await askPromptRaw(
+          `Upload failed (${err.message}). [R]etry upload without signing in again, or [s]kip? [R/s] `,
+          { stdin, stdout },
+          ports,
+        );
+        if (retryAns === false || retryAns === undefined || retryAns === null) {
+          return {
+            skipped: true,
+            candidateLabel,
+            message: `Skipped ${provider} account "${candidateLabel}" after upload failure.`,
+          };
+        }
+        const normRetry = String(retryAns).trim().toLowerCase();
+        if (normRetry === 's' || normRetry === 'skip' || normRetry === 'n' || normRetry === 'no') {
+          return {
+            skipped: true,
+            candidateLabel,
+            message: `Skipped ${provider} account "${candidateLabel}" after upload failure.`,
+          };
+        }
+        continue;
+      }
+
+      throw err;
+    }
+  }
+  throw new CloudAccountsError(`Unable to enroll ${provider} account "${candidateLabel}" after multiple attempts.`, { code: 'enroll_failed' });
+}
+
+function formatShareSuffix(shareNotes) {
+  if (!shareNotes.length) return '';
+  const formatted = shareNotes.map(n => {
+    if (n.inviteId) return `${n.display} (invite ${n.inviteId})`;
+    if (n.alreadyShared) return `${n.display} (already shared)`;
+    return n.display;
+  });
+  return ` Shared with ${formatted.join(', ')}.`;
+}
+
 async function enrollSingleIteration(mode, {
   provider,
   requestedLabel = null,
+  replace = false,
   fromOption = null,
   deviceAuth = false,
   sharePayloads = [],
@@ -1198,6 +1746,9 @@ async function enrollSingleIteration(mode, {
   stdin,
 }, ports = {}) {
   const fs = ports.fs ?? nativeFs;
+  const stdout = ports.stdout ?? process.stdout;
+  const promptFn = ports.prompt ?? ports.confirm ?? null;
+  const interactive = Boolean(loopState) || Boolean(promptFn) || Boolean(stdin?.isTTY && stdout?.isTTY);
 
   if (provider === 'codex') {
     let tempLoginDir = null;
@@ -1209,7 +1760,7 @@ async function enrollSingleIteration(mode, {
       if (mode === 'add') {
         tempLoginDir = createTempPrivateDir(fs, 'pdd-codex-login-', ports.tmpRoot);
         const loginEnv = { ...env, CODEX_HOME: tempLoginDir };
-        const loginRes = await runProviderLogin('codex', { cwd, env: loginEnv, deviceAuth }, ports);
+        const loginRes = await runProviderLogin('codex', { cwd, env: loginEnv, deviceAuth, stdin }, ports);
         if (!loginRes || loginRes.code !== 0) {
           return {
             exitCode: 1,
@@ -1226,28 +1777,84 @@ async function enrollSingleIteration(mode, {
         probeCodexHome = importSource.probeCodexHome;
       }
 
+      const email = extractCodexEmail(authJson);
+      const emailBase = deriveEmailBaseLabel(authJson);
       const subjectAccountId = bundle.auth_json.tokens.account_id;
       const seenLabel = loopState ? (loopState.bySubjectId.get(subjectAccountId) ?? null) : null;
+      const labelWasExplicit = Boolean(requestedLabel && String(requestedLabel).trim()) || Boolean(loopState?.hasExplicitPrefix);
 
+      let knownAccounts = loopState?.knownAccounts ?? null;
+      let knownPendingInvites = loopState?.knownPendingInvites ?? [];
+      const usedLabels = loopState ? loopState.usedLabels : new Set();
+
+      let baseLabel;
       let candidateLabel;
       if (loopState) {
-        candidateLabel = seenLabel || loopState.peekNextLabel();
+        if (seenLabel) {
+          baseLabel = seenLabel;
+          candidateLabel = seenLabel;
+        } else if (loopState.hasExplicitPrefix) {
+          candidateLabel = loopState.peekNextNumberedLabel();
+          baseLabel = candidateLabel;
+        } else if (emailBase) {
+          baseLabel = emailBase;
+          candidateLabel = replace
+            ? nextDisambiguatedLabel(emailBase, loopState.sessionEnrolledLabels)
+            : nextDisambiguatedLabel(emailBase, usedLabels);
+        } else {
+          candidateLabel = loopState.peekNextNumberedLabel();
+          baseLabel = candidateLabel;
+        }
+      } else if (requestedLabel && String(requestedLabel).trim()) {
+        baseLabel = sanitizeLabel(requestedLabel, '');
+        candidateLabel = baseLabel;
       } else {
-        candidateLabel = requestedLabel ? sanitizeLabel(requestedLabel, '') : defaultAccountLabel('codex', authJson);
+        baseLabel = defaultAccountLabel('codex', authJson);
+        if (!replace && emailBase) {
+          try {
+            const listed = await fetchAccountsList({ cwd, env, refresh: false }, ports);
+            knownAccounts = listed.accounts;
+            knownPendingInvites = listed.pendingInvites;
+            for (const item of knownAccounts) {
+              if (item && !item.revoked && item.provider === 'codex' && item.label) {
+                usedLabels.add(String(item.label).toLowerCase());
+              }
+            }
+            candidateLabel = nextDisambiguatedLabel(emailBase, usedLabels);
+          } catch {
+            candidateLabel = baseLabel;
+          }
+        } else {
+          candidateLabel = baseLabel;
+        }
       }
       if (!candidateLabel) return { exitCode: 2, message: 'Provide a valid --label NAME.' };
 
-      const created = await cloudAccountsRequest('POST', '/v1/accounts', {
-        body: {
-          label: candidateLabel,
-          provider: 'codex',
-          plan: detectCodexPlan(authJson),
-          bundle,
-        },
+      const upload = await uploadAccountWithConflictAndRetry({
+        provider: 'codex',
+        initialLabel: candidateLabel,
+        baseLabel,
+        labelWasExplicit,
+        replace,
+        plan: detectCodexPlan(authJson),
+        bundle,
+        sharePayloads,
+        knownAccounts,
+        knownPendingInvites,
+        usedLabels,
+        interactive,
         cwd,
         env,
+        stdin,
+        stdout,
       }, ports);
 
+      if (upload.skipped) {
+        return { exitCode: 0, skipped: true, label: upload.candidateLabel, message: upload.message };
+      }
+
+      const { created, effectiveSharePayloads, pendingInvites: uploadInvites } = upload;
+      candidateLabel = upload.candidateLabel;
       let acc = created?.account ?? { account_id: created?.account_id ?? candidateLabel, label: candidateLabel, provider: 'codex' };
       const isDuplicate = Boolean(
         created?.already_enrolled === true
@@ -1257,21 +1864,32 @@ async function enrollSingleIteration(mode, {
 
       acc = await probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome, { fs, cwd, env }, ports);
 
-      await leaseAndSyncAfterEnroll('codex', acc, candidateLabel, authJson, null, { cwd, env }, ports);
+      // Zero-plaintext guarantee (#3497): wipe temporary plaintext OAuth login directory immediately after Cloud upload + usage probe.
+      if (tempLoginDir) {
+        removeTempPrivateDir(fs, tempLoginDir);
+        tempLoginDir = null;
+      }
+
+      await leaseAndSyncAfterEnroll('codex', acc, candidateLabel, null, null, { cwd, env }, ports);
 
       const finalLabel = acc.label ?? candidateLabel;
       if (loopState) {
         if (subjectAccountId) loopState.bySubjectId.set(subjectAccountId, finalLabel);
         if (acc.account_id) loopState.seenAccountIds.add(acc.account_id);
-        if (!isDuplicate) loopState.commitCandidateLabel(candidateLabel, finalLabel);
+        if (!isDuplicate) {
+          loopState.commitCandidateLabel(candidateLabel, finalLabel, Boolean(loopState.hasExplicitPrefix || !emailBase));
+        }
       }
 
-      const shareNotes = sharePayloads.length
-        ? await applySharePayloadsToAccounts([acc], sharePayloads, { cwd, env }, ports)
+      const shareNotes = effectiveSharePayloads.length
+        ? await applySharePayloadsToAccounts([acc], effectiveSharePayloads, {
+            cwd,
+            env,
+            pendingInvites: uploadInvites,
+            sessionSharedKeys: loopState?.sharedKeys ?? null,
+          }, ports)
         : [];
-      const shareSuffix = shareNotes.length
-        ? ` Shared with ${shareNotes.map(n => `${n.display}${n.inviteId ? ` (invite ${n.inviteId})` : ''}`).join(', ')}.`
-        : '';
+      const shareSuffix = formatShareSuffix(shareNotes);
 
       if (isDuplicate) {
         return {
@@ -1279,10 +1897,12 @@ async function enrollSingleIteration(mode, {
           duplicate: true,
           account: acc,
           label: finalLabel,
+          email,
           shareNotes,
           message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
         };
       }
+      const identityNote = email ? `${email} -> "${finalLabel}", ` : '';
       const importNote = (mode === 'import' && !fromOption)
         ? ' (~/.codex/auth.json was left untouched; prefer "pdd accounts add --provider codex" so Cloud uses an independent OAuth session.)'
         : '';
@@ -1291,8 +1911,9 @@ async function enrollSingleIteration(mode, {
         duplicate: false,
         account: acc,
         label: finalLabel,
+        email,
         shareNotes,
-        message: `Enrolled Codex account "${finalLabel}" in PDD Cloud (materialized in ${pddManagedCodexHome(env)}).${shareSuffix}${importNote}`,
+        message: `Enrolled Codex account "${finalLabel}" in PDD Cloud (${identityNote}materialized in ${pddManagedCodexHome(env)}).${shareSuffix}${importNote}`,
       };
     } finally {
       removeTempPrivateDir(fs, tempLoginDir);
@@ -1301,47 +1922,76 @@ async function enrollSingleIteration(mode, {
 
   // Claude enrollment / import
   let oauthToken = '';
-  if (mode === 'add') {
-    const piped = !loopState ? await readStdinString(stdin) : '';
-    if (piped.trim()) {
-      oauthToken = readLocalClaudeToken(fs, env, piped, { now: ports.now });
-    } else {
-      const loginRes = await runProviderLogin('claude', { cwd, env, deviceAuth: false }, ports);
-      if (!loginRes || loginRes.code !== 0) {
-        return {
-          exitCode: 1,
-          aborted: loginRes?.code === 130 || loginRes?.signal === 'SIGINT',
-          message: 'claude setup-token did not complete.',
-        };
+  let tempClaudeDir = null;
+  try {
+    if (mode === 'add') {
+      const piped = !loopState ? await readStdinString(stdin) : '';
+      if (piped.trim()) {
+        oauthToken = extractIsolatedClaudeSetupToken(fs, null, piped, ports.now);
+      } else {
+        tempClaudeDir = createTempPrivateDir(fs, 'pdd-claude-login-', ports.tmpRoot);
+        const claudeLoginEnv = { ...env, CLAUDE_CONFIG_DIR: tempClaudeDir, COLUMNS: env?.COLUMNS || '500' };
+        delete claudeLoginEnv.CLAUDE_CODE_OAUTH_TOKEN;
+        const loginRes = await runProviderLogin('claude', { cwd, env: claudeLoginEnv, deviceAuth: false, stdin }, ports);
+        if (!loginRes || loginRes.code !== 0) {
+          return {
+            exitCode: 1,
+            aborted: loginRes?.code === 130 || loginRes?.signal === 'SIGINT',
+            message: 'claude setup-token did not complete.',
+          };
+        }
+        const loginOutput = `${loginRes?.stdout ?? ''}\n${loginRes?.stderr ?? ''}`;
+        oauthToken = extractIsolatedClaudeSetupToken(fs, tempClaudeDir, loginOutput, ports.now);
+        removeTempPrivateDir(fs, tempClaudeDir);
+        tempClaudeDir = null;
       }
-      const loginOutput = `${loginRes?.stdout ?? ''}\n${loginRes?.stderr ?? ''}`;
+    } else if (fromOption) {
+      oauthToken = readClaudeTokenFromPath(fs, resolve(cwd, String(fromOption).trim()), { now: ports.now });
+    } else {
+      const loginOutput = await readStdinString(stdin);
       oauthToken = readLocalClaudeToken(fs, env, loginOutput, { now: ports.now });
     }
-  } else if (fromOption) {
-    oauthToken = readClaudeTokenFromPath(fs, resolve(cwd, String(fromOption).trim()), { now: ports.now });
-  } else {
-    const loginOutput = await readStdinString(stdin);
-    oauthToken = readLocalClaudeToken(fs, env, loginOutput, { now: ports.now });
+  } finally {
+    removeTempPrivateDir(fs, tempClaudeDir);
   }
 
+  const labelWasExplicit = Boolean(requestedLabel && String(requestedLabel).trim()) || Boolean(loopState?.hasExplicitPrefix);
+  let baseLabel;
   let candidateLabel;
   if (loopState) {
-    candidateLabel = loopState.peekNextLabel();
+    candidateLabel = loopState.peekNextNumberedLabel();
+    baseLabel = candidateLabel;
   } else {
-    candidateLabel = requestedLabel ? sanitizeLabel(requestedLabel, '') : defaultAccountLabel('claude');
+    baseLabel = requestedLabel ? sanitizeLabel(requestedLabel, '') : defaultAccountLabel('claude');
+    candidateLabel = baseLabel;
   }
   if (!candidateLabel) return { exitCode: 2, message: 'Provide a valid --label NAME.' };
 
-  const created = await cloudAccountsRequest('POST', '/v1/accounts', {
-    body: {
-      label: candidateLabel,
-      provider: 'claude',
-      plan: 'max',
-      bundle: { oauth_token: oauthToken },
-    },
+  const upload = await uploadAccountWithConflictAndRetry({
+    provider: 'claude',
+    initialLabel: candidateLabel,
+    baseLabel,
+    labelWasExplicit,
+    replace,
+    plan: 'max',
+    bundle: { oauth_token: oauthToken },
+    sharePayloads,
+    knownAccounts: loopState?.knownAccounts ?? null,
+    knownPendingInvites: loopState?.knownPendingInvites ?? [],
+    usedLabels: loopState?.usedLabels ?? null,
+    interactive,
     cwd,
     env,
+    stdin,
+    stdout,
   }, ports);
+
+  if (upload.skipped) {
+    return { exitCode: 0, skipped: true, label: upload.candidateLabel, message: upload.message };
+  }
+
+  const { created, effectiveSharePayloads, pendingInvites: uploadInvites } = upload;
+  candidateLabel = upload.candidateLabel;
   const acc = created?.account ?? { account_id: created?.account_id ?? candidateLabel, label: candidateLabel, provider: 'claude' };
   const isDuplicate = Boolean(
     created?.already_enrolled === true
@@ -1354,15 +2004,18 @@ async function enrollSingleIteration(mode, {
   const finalLabel = acc.label ?? candidateLabel;
   if (loopState) {
     if (acc.account_id) loopState.seenAccountIds.add(acc.account_id);
-    if (!isDuplicate) loopState.commitCandidateLabel(candidateLabel, finalLabel);
+    if (!isDuplicate) loopState.commitCandidateLabel(candidateLabel, finalLabel, true);
   }
 
-  const shareNotes = sharePayloads.length
-    ? await applySharePayloadsToAccounts([acc], sharePayloads, { cwd, env }, ports)
+  const shareNotes = effectiveSharePayloads.length
+    ? await applySharePayloadsToAccounts([acc], effectiveSharePayloads, {
+        cwd,
+        env,
+        pendingInvites: uploadInvites,
+        sessionSharedKeys: loopState?.sharedKeys ?? null,
+      }, ports)
     : [];
-  const shareSuffix = shareNotes.length
-    ? ` Shared with ${shareNotes.map(n => `${n.display}${n.inviteId ? ` (invite ${n.inviteId})` : ''}`).join(', ')}.`
-    : '';
+  const shareSuffix = formatShareSuffix(shareNotes);
 
   if (isDuplicate) {
     return {
@@ -1387,6 +2040,7 @@ async function enrollSingleIteration(mode, {
 async function enrollOrImportAccount(mode, {
   provider: requestedProvider,
   label: requestedLabel,
+  replace = false,
   from: fromOption,
   loop = false,
   deviceAuth = false,
@@ -1414,6 +2068,7 @@ async function enrollOrImportAccount(mode, {
     const single = await enrollSingleIteration(mode, {
       provider,
       requestedLabel,
+      replace,
       fromOption,
       deviceAuth,
       sharePayloads,
@@ -1432,28 +2087,43 @@ async function enrollOrImportAccount(mode, {
     return { exitCode: 2, message: '--loop requires an interactive terminal (TTY).' };
   }
 
+  const hasExplicitPrefix = Boolean(requestedLabel && String(requestedLabel).trim());
   const prefix = sanitizeLabel(requestedLabel || provider, provider);
-  const { accounts: initialAccounts } = await fetchAccountsList({ cwd, env, refresh: false }, ports);
+  const { accounts: initialAccounts, pendingInvites: initialInvites } = await fetchAccountsList({ cwd, env, refresh: false }, ports);
   const usedLabels = new Set();
   const seenAccountIds = new Set();
   for (const existing of initialAccounts) {
     if (!existing || existing.revoked) continue;
-    if (existing.label) usedLabels.add(String(existing.label).toLowerCase());
+    if (existing.provider === provider && existing.label) {
+      usedLabels.add(String(existing.label).toLowerCase());
+    }
     if (existing.account_id) seenAccountIds.add(existing.account_id);
   }
 
   let counter = 1;
   const loopState = {
+    hasExplicitPrefix,
+    knownAccounts: initialAccounts,
+    knownPendingInvites: initialInvites,
+    usedLabels,
+    sessionEnrolledLabels: new Set(),
     bySubjectId: new Map(),
     seenAccountIds,
-    peekNextLabel() {
-      while (usedLabels.has(`${prefix}-${counter}`.toLowerCase())) counter += 1;
+    sharedKeys: new Set(),
+    peekNextNumberedLabel() {
+      while (!replace && usedLabels.has(`${prefix}-${counter}`.toLowerCase())) counter += 1;
       return `${prefix}-${counter}`;
     },
-    commitCandidateLabel(candidate, actual) {
-      usedLabels.add(String(candidate).toLowerCase());
-      if (actual) usedLabels.add(String(actual).toLowerCase());
-      counter += 1;
+    commitCandidateLabel(candidate, actual, advanceCounter = true) {
+      const candLower = String(candidate).toLowerCase();
+      usedLabels.add(candLower);
+      this.sessionEnrolledLabels.add(candLower);
+      if (actual) {
+        const actLower = String(actual).toLowerCase();
+        usedLabels.add(actLower);
+        this.sessionEnrolledLabels.add(actLower);
+      }
+      if (advanceCounter) counter += 1;
     },
   };
 
@@ -1463,9 +2133,16 @@ async function enrollOrImportAccount(mode, {
   const refreshedLabels = [];
 
   for (let iteration = 0; ; iteration += 1) {
+    const labelHint = hasExplicitPrefix ? `prefix "${prefix}"` : 'auto-label from account';
+    const banner = `--- Account #${iteration + 1} (${provider}, ${labelHint}, ${enrolledLabels.length} enrolled so far) ---`;
+    if (streamedLive) {
+      stdout.write(`\n${banner}\n`);
+    }
+
     const step = await enrollSingleIteration('add', {
       provider,
       requestedLabel: null,
+      replace,
       fromOption: null,
       deviceAuth,
       sharePayloads,
@@ -1478,22 +2155,24 @@ async function enrollOrImportAccount(mode, {
     if (step.exitCode !== 0) {
       if (step.aborted) break;
       if (iteration === 0) return { exitCode: step.exitCode, message: step.message };
-      iterationMessages.push(step.message);
+      iterationMessages.push(banner, step.message);
       break;
     }
 
-    if (step.duplicate) {
-      if (!refreshedLabels.includes(step.label) && !enrolledLabels.includes(step.label)) {
-        refreshedLabels.push(step.label);
+    if (!step.skipped) {
+      if (step.duplicate) {
+        if (!refreshedLabels.includes(step.label) && !enrolledLabels.includes(step.label)) {
+          refreshedLabels.push(step.label);
+        }
+      } else if (!enrolledLabels.includes(step.label)) {
+        enrolledLabels.push(step.label);
       }
-    } else if (!enrolledLabels.includes(step.label)) {
-      enrolledLabels.push(step.label);
     }
 
     if (streamedLive) {
       stdout.write(`${redactSecrets(step.message)}\n`);
     } else {
-      iterationMessages.push(step.message);
+      iterationMessages.push(banner, step.message);
     }
 
     const keepGoing = await askLoopContinue(`Enroll another ${provider} account? [Y/n] `, { stdin, stdout }, ports);
@@ -1908,6 +2587,621 @@ function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {
   }, { env }, ports);
 }
 
+const CODEX_VALUE_OPTIONS = new Set([
+  '-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env',
+  '-i', '--image', '-m', '--model', '--local-provider', '-p', '--profile',
+  '-s', '--sandbox', '-C', '--cd', '--add-dir', '-a', '--ask-for-approval',
+  '--color', '-o', '--output-last-message',
+]);
+
+const CODEX_PRESERVED_VALUE_OPTIONS = new Set([
+  '-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env',
+  '-m', '--model', '--local-provider', '-p', '--profile',
+  '-s', '--sandbox', '-C', '--cd', '--add-dir', '-a', '--ask-for-approval',
+  '--color',
+]);
+
+const CODEX_PRESERVED_FLAG_OPTIONS = new Set([
+  '--oss', '--strict-config', '--approve-for-me',
+  '--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust',
+  '--worktree', '--search', '--no-alt-screen', '--no-daemon',
+]);
+
+const CODEX_NON_INTERACTIVE_SUBCOMMANDS = new Set([
+  'agents', 'exec', 'e', 'review', 'login', 'logout', 'mcp', 'mcp-server',
+  'plugin', 'app-server', 'remote-control', 'app', 'completion', 'update',
+  'doctor', 'sandbox', 'debug', 'apply', 'a', 'queue', 'archive', 'delete',
+  'migrate-rollouts', 'migrate-nfs-db', 'unarchive', 'cloud', 'exec-server',
+  'features', 'help',
+]);
+
+const CODEX_INTERACTIVE_SUBCOMMANDS = new Set(['resume', 'fork']);
+const UUID_TOKEN_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const OUTPUT_SESSION_ID_RE = /(?:session[_\s-]*id|thread[_\s-]*id|conversation[_\s-]*id)["'\s:=]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+const ROLLOUT_UUID_FILE_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+
+const PYTHON_PTY_SUPERVISOR_SCRIPT = [
+  'import errno, fcntl, os, pty, select, signal, struct, sys, termios',
+  'rows = int(os.environ.get("PDD_PTY_ROWS", "24") or "24")',
+  'cols = int(os.environ.get("PDD_PTY_COLS", "80") or "80")',
+  'master_fd, slave_fd = pty.openpty()',
+  'try:',
+  '    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))',
+  'except Exception:',
+  '    pass',
+  'pid = os.fork()',
+  'if pid == 0:',
+  '    os.close(master_fd)',
+  '    os.setsid()',
+  '    try:',
+  '        fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)',
+  '    except Exception:',
+  '        pass',
+  '    os.dup2(slave_fd, 0)',
+  '    os.dup2(slave_fd, 1)',
+  '    os.dup2(slave_fd, 2)',
+  '    if slave_fd > 2:',
+  '        os.close(slave_fd)',
+  '    os.execvp(sys.argv[1], sys.argv[1:])',
+  'os.close(slave_fd)',
+  'def _fwd(signum, _frame):',
+  '    try:',
+  '        os.killpg(pid, signum)',
+  '    except Exception:',
+  '        try:',
+  '            os.kill(pid, signum)',
+  '        except Exception:',
+  '            pass',
+  'for _s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):',
+  '    signal.signal(_s, _fwd)',
+  'stdin_open = True',
+  'while True:',
+  '    watch = [master_fd] + ([0] if stdin_open else [])',
+  '    try:',
+  '        rlist, _, _ = select.select(watch, [], [], 0.2)',
+  '    except InterruptedError:',
+  '        continue',
+  '    except Exception:',
+  '        break',
+  '    if master_fd in rlist:',
+  '        try:',
+  '            data = os.read(master_fd, 16384)',
+  '        except OSError as exc:',
+  '            if exc.errno == errno.EIO:',
+  '                break',
+  '            raise',
+  '        if not data:',
+  '            break',
+  '        os.write(1, data)',
+  '    if stdin_open and 0 in rlist:',
+  '        try:',
+  '            inp = os.read(0, 16384)',
+  '        except OSError:',
+  '            inp = b""',
+  '        if not inp:',
+  '            stdin_open = False',
+  '        else:',
+  '            os.write(master_fd, inp)',
+  'os.close(master_fd)',
+  '_, status = os.waitpid(pid, 0)',
+  'if os.WIFSIGNALED(status):',
+  '    sys.exit(128 + os.WTERMSIG(status))',
+  'sys.exit(os.WEXITSTATUS(status))',
+].join('\n');
+
+function inspectCodexInvocation(args) {
+  let subcommand = '';
+  let hasHelpOrVersion = false;
+  let explicitSessionId = null;
+  let afterSubcommand = false;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const word = String(args[i] ?? '');
+    if (word === '--') break;
+    if (word === '-h' || word === '--help' || word === '-V' || word === '--version') {
+      hasHelpOrVersion = true;
+      continue;
+    }
+    if (CODEX_VALUE_OPTIONS.has(word)) {
+      i += 1;
+      continue;
+    }
+    if (word.startsWith('-')) continue;
+    if (!afterSubcommand) {
+      if (CODEX_INTERACTIVE_SUBCOMMANDS.has(word) || CODEX_NON_INTERACTIVE_SUBCOMMANDS.has(word)) {
+        subcommand = word;
+        afterSubcommand = true;
+        continue;
+      }
+      break;
+    }
+    if (subcommand === 'resume' && !explicitSessionId && UUID_TOKEN_RE.test(word)) {
+      explicitSessionId = word;
+      break;
+    }
+  }
+
+  return {
+    subcommand,
+    interactive: !hasHelpOrVersion && (subcommand === '' || CODEX_INTERACTIVE_SUBCOMMANDS.has(subcommand)),
+    explicitSessionId,
+  };
+}
+
+function buildCodexResumeArgs(initialArgs, sessionId) {
+  const preserved = [];
+  for (let i = 0; i < initialArgs.length; i += 1) {
+    const word = String(initialArgs[i] ?? '');
+    if (word === '--') break;
+    if (CODEX_PRESERVED_VALUE_OPTIONS.has(word)) {
+      if (i + 1 < initialArgs.length) {
+        preserved.push(word, String(initialArgs[i + 1]));
+        i += 1;
+      }
+      continue;
+    }
+    const eqIdx = word.indexOf('=');
+    if (eqIdx > 0 && CODEX_PRESERVED_VALUE_OPTIONS.has(word.slice(0, eqIdx))) {
+      preserved.push(word);
+      continue;
+    }
+    if (CODEX_VALUE_OPTIONS.has(word)) {
+      i += 1;
+      continue;
+    }
+    if (CODEX_PRESERVED_FLAG_OPTIONS.has(word)) {
+      preserved.push(word);
+    }
+  }
+  return sessionId
+    ? ['resume', ...preserved, sessionId]
+    : ['resume', ...preserved, '--last'];
+}
+
+function findRecentCodexSessionId(fs, codexHomes, minMtimeMs) {
+  const homes = [...new Set(codexHomes.filter(Boolean))];
+  for (const home of homes) {
+    try {
+      const idxPath = join(home, 'session_index.jsonl');
+      const idxStat = fs.statSync(idxPath);
+      if (idxStat?.isFile() && idxStat.mtimeMs >= minMtimeMs) {
+        const lines = fs.readFileSync(idxPath, 'utf8').trim().split('\n');
+        for (let i = lines.length - 1; i >= 0; i -= 1) {
+          try {
+            const row = JSON.parse(lines[i]);
+            if (typeof row?.id === 'string' && UUID_TOKEN_RE.test(row.id)) return row.id;
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+
+  let newestUuid = null;
+  let newestMtime = -1;
+  const walkSessions = (dir, depth) => {
+    if (depth > 4) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      const full = join(dir, ent.name);
+      if (ent.isDirectory()) {
+        walkSessions(full, depth + 1);
+      } else if (ent.isFile()) {
+        const match = ROLLOUT_UUID_FILE_RE.exec(ent.name);
+        if (!match) continue;
+        try {
+          const st = fs.statSync(full);
+          if (st.mtimeMs >= minMtimeMs && st.mtimeMs > newestMtime) {
+            newestMtime = st.mtimeMs;
+            newestUuid = match[1];
+          }
+        } catch {}
+      }
+    }
+  };
+
+  for (const home of homes) {
+    walkSessions(join(home, 'sessions'), 0);
+  }
+  return newestUuid;
+}
+
+function buildCodexExecutionEnv(baseEnv, managedHome) {
+  const out = {};
+  for (const [k, v] of Object.entries(baseEnv ?? {})) {
+    if (typeof v === 'string') out[k] = v;
+  }
+  if (managedHome) {
+    out.CODEX_HOME = managedHome;
+    delete out.OPENAI_API_KEY;
+    delete out.CODEX_API_KEY;
+    delete out.CODEX_ACCESS_TOKEN;
+    delete out.OPENAI_BASE_URL;
+  }
+  return out;
+}
+
+async function runSingleSupervisedCodexTurn({
+  args,
+  cwd,
+  env,
+  stdin,
+  stdout,
+  stderr,
+  turn,
+  activeEntry,
+}, ports = {}) {
+  let rollingPlain = '';
+  let capturedSessionId = null;
+  let quotaExhausted = false;
+  const abortController = new AbortController();
+  const settleMs = ports.quotaSettleMs ?? 60;
+
+  const inspectChunk = rawChunk => {
+    const clean = stripAnsiText(String(rawChunk ?? ''));
+    if (!clean) return;
+    const sidMatch = OUTPUT_SESSION_ID_RE.exec(clean);
+    if (sidMatch?.[1]) capturedSessionId = sidMatch[1];
+    rollingPlain = `${rollingPlain}${clean}`.slice(-16_384);
+    if (!quotaExhausted && classifyRateLimitFailure(rollingPlain, activeEntry) === 'quota_exhausted') {
+      quotaExhausted = true;
+      abortController.abort();
+    }
+  };
+
+  if (typeof ports.spawnCodexPty === 'function') {
+    const res = await ports.spawnCodexPty({
+      command: 'codex',
+      args,
+      cwd,
+      env,
+      turn,
+      signal: abortController.signal,
+      onOutput(chunk) {
+        try { stdout?.write?.(chunk); } catch {}
+        inspectChunk(chunk);
+      },
+    });
+    if (res?.stdout) inspectChunk(res.stdout);
+    if (res?.stderr) inspectChunk(res.stderr);
+    if (typeof res?.sessionId === 'string' && UUID_TOKEN_RE.test(res.sessionId)) {
+      capturedSessionId = res.sessionId;
+    }
+    return {
+      code: res?.code ?? 0,
+      signal: res?.signal ?? null,
+      quotaExhausted,
+      rollingPlain,
+      capturedSessionId,
+    };
+  }
+
+  const spawnImpl = ports.spawnInteractive ?? spawn;
+  const usePythonPty = ports.usePythonPty !== false && Boolean(stdin?.isTTY && stdout?.isTTY);
+
+  const runWithChild = tryPython => new Promise((resolveTurn, rejectTurn) => {
+    let settled = false;
+    let settleTimer = null;
+    let killTimer = null;
+    let wasRaw = false;
+    let rawEnabled = false;
+    let onStdinData = null;
+
+    const childEnv = tryPython
+      ? {
+          ...env,
+          PDD_PTY_ROWS: String(stdout?.rows || 24),
+          PDD_PTY_COLS: String(stdout?.columns || 80),
+        }
+      : env;
+
+    let child;
+    try {
+      child = tryPython
+        ? spawnImpl('python3', ['-u', '-c', PYTHON_PTY_SUPERVISOR_SCRIPT, 'codex', ...args], {
+            cwd,
+            env: childEnv,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            shell: false,
+          })
+        : spawnImpl('codex', args, {
+            cwd,
+            env: childEnv,
+            stdio: [stdin === process.stdin || !stdin ? 'inherit' : 'pipe', 'pipe', 'pipe'],
+            shell: false,
+          });
+    } catch (err) {
+      rejectTurn(err);
+      return;
+    }
+
+    const restoreTty = () => {
+      if (onStdinData && stdin?.off) {
+        try { stdin.off('data', onStdinData); } catch {}
+      }
+      if (rawEnabled && typeof stdin?.setRawMode === 'function') {
+        try { stdin.setRawMode(wasRaw); } catch {}
+      }
+      if (rawEnabled && typeof stdin?.pause === 'function') {
+        try { stdin.pause(); } catch {}
+      }
+    };
+
+    const terminateChild = () => {
+      try { child.kill('SIGTERM'); } catch {}
+      killTimer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch {}
+      }, 600);
+      killTimer.unref?.();
+    };
+
+    const onAbort = () => {
+      if (settleMs <= 0) {
+        terminateChild();
+      } else {
+        settleTimer = setTimeout(terminateChild, settleMs);
+        settleTimer.unref?.();
+      }
+    };
+    abortController.signal.addEventListener('abort', onAbort, { once: true });
+
+    const finish = (err, code, signal) => {
+      if (settled) return;
+      settled = true;
+      if (settleTimer) clearTimeout(settleTimer);
+      if (killTimer) clearTimeout(killTimer);
+      abortController.signal.removeEventListener('abort', onAbort);
+      restoreTty();
+      if (err) {
+        rejectTurn(err);
+        return;
+      }
+      resolveTurn({
+        code: signal === 'SIGINT' ? 130 : (code ?? 0),
+        signal: signal ?? null,
+        quotaExhausted,
+        rollingPlain,
+        capturedSessionId,
+      });
+    };
+
+    if (tryPython && stdin && child.stdin) {
+      if (stdin.isTTY && typeof stdin.setRawMode === 'function') {
+        wasRaw = Boolean(stdin.isRaw);
+        try {
+          stdin.setRawMode(true);
+          rawEnabled = true;
+        } catch {}
+      }
+      onStdinData = chunk => {
+        try { child.stdin.write(chunk); } catch {}
+      };
+      stdin.on?.('data', onStdinData);
+      stdin.resume?.();
+      child.stdin.on('error', () => {});
+    } else if (!tryPython && stdin && stdin !== process.stdin && typeof stdin.pipe === 'function' && child.stdin) {
+      stdin.pipe(child.stdin);
+      child.stdin.on('error', () => {});
+    }
+
+    child.stdout?.on('data', chunk => {
+      try { stdout?.write?.(chunk); } catch {}
+      inspectChunk(chunk);
+    });
+    child.stderr?.on('data', chunk => {
+      try { stderr?.write?.(chunk); } catch {}
+      inspectChunk(chunk);
+    });
+    child.on('error', err => finish(err));
+    child.on('close', (code, signal) => finish(null, code, signal));
+  });
+
+  if (usePythonPty) {
+    try {
+      return await runWithChild(true);
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
+    }
+  }
+  return runWithChild(false);
+}
+
+async function runPlainCodexOnce(args, { cwd, env, stdin, stdout }, ports = {}) {
+  if (typeof ports.spawnCodexPty === 'function') {
+    const res = await ports.spawnCodexPty({
+      command: 'codex',
+      args,
+      cwd,
+      env,
+      turn: 0,
+      signal: new AbortController().signal,
+      onOutput(chunk) {
+        try { stdout?.write?.(chunk); } catch {}
+      },
+    });
+    return { exitCode: res?.code ?? 0, message: '' };
+  }
+  if (typeof ports.run === 'function') {
+    const res = await ports.run('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
+    return { exitCode: res?.code ?? 0, message: '' };
+  }
+  if (stdin?.isTTY && stdout?.isTTY) {
+    const res = spawnSync('codex', args, { cwd, env, stdio: 'inherit' });
+    return { exitCode: res.signal === 'SIGINT' ? 130 : (res.status ?? 1), message: '' };
+  }
+  const res = await runAgentProcess('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
+  return { exitCode: res?.code ?? 0, message: '' };
+}
+
+async function leaseNextHealthyCodexForRotation(skipAccountIds, { cwd, env }, ports = {}) {
+  const skipIds = [...new Set(skipAccountIds.filter(Boolean))];
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    let reply = null;
+    try {
+      reply = await leaseCloudAccount({
+        provider: 'codex',
+        currentAccountId: null,
+        skipAccountIds: skipIds,
+        holderId: 'codex-pty',
+        updateState: false,
+      }, { cwd, env, timeoutMs: ports.leaseTimeoutMs ?? 8000 }, ports);
+    } catch (err) {
+      if (isReauthRequiredFailure(err)) {
+        const failedId = err?.payload?.account_id ?? err?.payload?.detail?.account_id ?? null;
+        if (failedId && !skipIds.includes(failedId)) {
+          markLocalAccountReauthRequired(failedId, { env }, ports);
+          skipIds.push(failedId);
+          continue;
+        }
+        return { state: 'reauth_required', reply: null };
+      }
+      return { state: 'error', error: err, reply: null };
+    }
+
+    if (reply?.state === 'all_cooling') {
+      const latestSaved = readCloudAccountsState({ env }, ports);
+      if (latestSaved.enrolled && latestSaved.providers.includes('codex')) {
+        writeCloudAccountsState({
+          ...latestSaved,
+          cooling: { ...latestSaved.cooling, codex: { wake_at: reply.wake_at ?? null } },
+        }, { env }, ports);
+      }
+      return { state: 'all_cooling', reply };
+    }
+
+    if (!reply || reply.state !== 'leased' || !object(reply.account) || !object(reply.lease)) {
+      return { state: 'unavailable', reply };
+    }
+
+    const acc = reply.account;
+    if (isReauthRequiredAccount(acc) && acc.account_id && !skipIds.includes(acc.account_id)) {
+      markLocalAccountReauthRequired(acc.account_id, { env }, ports);
+      skipIds.push(acc.account_id);
+      continue;
+    }
+    if (((typeof acc.five_hour_used_percent === 'number' && acc.five_hour_used_percent >= 100)
+      || (typeof acc.weekly_used_percent === 'number' && acc.weekly_used_percent >= 100))
+      && acc.account_id && !skipIds.includes(acc.account_id)) {
+      skipIds.push(acc.account_id);
+      continue;
+    }
+    return { state: 'leased', reply };
+  }
+  return { state: 'unavailable', reply: null };
+}
+
+async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin }, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const activeStdin = ports.stdin ?? stdin ?? process.stdin;
+  const activeStdout = ports.stdout ?? process.stdout;
+  const activeStderr = ports.stderr ?? process.stderr;
+  const initialArgs = args[0] === '--' ? args.slice(1) : [...args];
+  const invocation = inspectCodexInvocation(initialArgs);
+
+  let managedHome = '';
+  const expectedManagedHome = pddManagedCodexHome(env);
+  if (isCloudAccountsActive({ env, provider: 'codex' }, ports)) {
+    const synced = await runSyncCommand({
+      provider: 'codex',
+      quiet: true,
+      printCodexHome: true,
+      timeoutMs: ports.syncTimeoutMs ?? 2000,
+      cwd,
+      env,
+    }, ports);
+    managedHome = synced.message.trim();
+    if (!managedHome && hasLocalMaterializedFile(fs, 'codex', env)) {
+      const curState = readCloudAccountsState({ env }, ports);
+      if (curState.active?.codex?.state === 'ready') managedHome = expectedManagedHome;
+    }
+  }
+
+  if (!managedHome) {
+    const fallbackEnv = { ...env };
+    if (fallbackEnv.CODEX_HOME && resolve(fallbackEnv.CODEX_HOME) === resolve(expectedManagedHome)) {
+      delete fallbackEnv.CODEX_HOME;
+    }
+    return runPlainCodexOnce(initialArgs, { cwd, env: fallbackEnv, stdin: activeStdin, stdout: activeStdout }, ports);
+  }
+
+  if (!invocation.interactive) {
+    const execEnv = buildCodexExecutionEnv(env, managedHome);
+    return runPlainCodexOnce(initialArgs, { cwd, env: execEnv, stdin: activeStdin, stdout: activeStdout }, ports);
+  }
+
+  const userCodexHome = localCodexHome({ ...env, CODEX_HOME: '' });
+  let currentArgs = initialArgs;
+  let sessionId = invocation.explicitSessionId;
+  const triedAccountIds = new Set();
+  const maxRotations = 8;
+
+  for (let turn = 0; turn <= maxRotations; turn += 1) {
+    const turnStartedMs = (ports.now ?? Date.now)();
+    const stateBefore = readCloudAccountsState({ env }, ports);
+    const activeBefore = stateBefore.active?.codex ?? null;
+    const childEnv = buildCodexExecutionEnv(env, managedHome);
+
+    const turnRes = await runSingleSupervisedCodexTurn({
+      args: currentArgs,
+      cwd,
+      env: childEnv,
+      stdin: activeStdin,
+      stdout: activeStdout,
+      stderr: activeStderr,
+      turn,
+      activeEntry: activeBefore,
+    }, ports);
+
+    const diskSessionId = findRecentCodexSessionId(fs, [managedHome, userCodexHome], turnStartedMs - 2000);
+    sessionId = turnRes.capturedSessionId || diskSessionId || sessionId;
+
+    const hitQuota = turnRes.quotaExhausted
+      || (turnRes.code !== 0 && classifyRateLimitFailure(turnRes.rollingPlain, activeBefore) === 'quota_exhausted');
+
+    if (!hitQuota) {
+      return { exitCode: turnRes.code ?? 0, message: '' };
+    }
+
+    const latestState = readCloudAccountsState({ env }, ports);
+    const exhaustedEntry = latestState.active?.codex ?? activeBefore;
+    const exhaustedId = exhaustedEntry?.account_id ?? null;
+    if (exhaustedId) {
+      triedAccountIds.add(exhaustedId);
+      const report = extractRateLimitReport(turnRes.rollingPlain, exhaustedEntry, (ports.now ?? Date.now)());
+      await reportCloudAccountUsage(exhaustedId, report, { cwd, env, timeoutMs: 3500 }, ports).catch(() => {});
+    }
+
+    if (turn >= maxRotations) {
+      return {
+        exitCode: 1,
+        message: 'Reached maximum automatic Codex account rotations for this session.',
+      };
+    }
+
+    const nextLease = await leaseNextHealthyCodexForRotation([...triedAccountIds], { cwd, env }, ports);
+    if (nextLease.state !== 'leased' || !nextLease.reply) {
+      const wakeAt = nextLease.reply?.wake_at;
+      const msg = nextLease.state === 'all_cooling'
+        ? `All codex accounts are cooling${wakeAt ? ` until ${wakeAt}` : ''}.`
+        : 'No additional ready Codex Cloud accounts are available to resume this session.';
+      return { exitCode: 1, message: msg };
+    }
+
+    applyMaterializedLease(nextLease.reply, { env }, ports);
+    const prevLabel = exhaustedEntry?.label ?? exhaustedId ?? 'previous';
+    const nextLabel = nextLease.reply.account?.label ?? nextLease.reply.account?.account_id ?? 'next';
+    const resumeDesc = sessionId ? `session ${sessionId}` : '--last';
+    try {
+      activeStderr?.write?.(
+        redactSecrets(`\n[pdd accounts] Quota reached on "${prevLabel}"; switched active Codex account to "${nextLabel}" and resuming (${resumeDesc}).\n`),
+      );
+    } catch {}
+    currentArgs = buildCodexResumeArgs(initialArgs, sessionId);
+  }
+
+  return { exitCode: 1, message: 'No additional ready Codex Cloud accounts are available.' };
+}
+
 export async function runAccountsCli({
   commandId = 'accounts',
   operands = [],
@@ -1947,6 +3241,7 @@ export async function runAccountsCli({
         return await enrollOrImportAccount('add', {
           provider: options['--provider'],
           label: options['--label'],
+          replace: options['--replace'] === true,
           loop: options['--loop'] === true,
           deviceAuth: options['--device-auth'] === true,
           withTargets: options['--with'] ?? '',
@@ -1960,6 +3255,7 @@ export async function runAccountsCli({
           provider: options['--provider'],
           from: options['--from'] ?? null,
           label: options['--label'],
+          replace: options['--replace'] === true,
           withTargets: options['--with'] ?? '',
           cwd,
           env,
@@ -1968,7 +3264,7 @@ export async function runAccountsCli({
 
       case 'use': {
         const targetLabel = operands[0];
-        const { account, accounts } = await resolveAccount(targetLabel, { cwd, env }, ports);
+        const { account, accounts } = await resolveAccount(targetLabel, { cwd, env, provider: options['--provider'] || null }, ports);
         if (isReauthRequiredAccount(account)) {
           markLocalAccountReauthRequired(account.account_id, { env }, ports);
           return {
@@ -2067,6 +3363,9 @@ export async function runAccountsCli({
         return { exitCode: 0, message: `Switched ${provider} account to "${reply.account?.label ?? reply.account?.account_id}".` };
       }
 
+      case 'codex':
+        return await runInteractiveCodexWithAutoRotate({ args: operands, cwd, env, stdin }, ports);
+
       case 'sync': {
         const timeoutMs = options['--timeout-ms'] !== undefined ? Number(options['--timeout-ms']) : 1200;
         const printCodexHome = options['--print-codex-home'] === true || env?.PDD_PRINT_CODEX_HOME === '1';
@@ -2084,13 +3383,13 @@ export async function runAccountsCli({
         return runAutoCommand(operands[0], { env }, ports);
 
       case 'pause': {
-        const { account } = await resolveAccount(operands[0], { cwd, env }, ports);
+        const { account } = await resolveAccount(operands[0], { cwd, env, provider: options['--provider'] || null }, ports);
         await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/pause`, { body: {}, cwd, env }, ports);
         return { exitCode: 0, message: `Paused account "${account.label}".` };
       }
 
       case 'unpause': {
-        const { account } = await resolveAccount(operands[0], { cwd, env }, ports);
+        const { account } = await resolveAccount(operands[0], { cwd, env, provider: options['--provider'] || null }, ports);
         await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/unpause`, { body: {}, cwd, env }, ports);
         return { exitCode: 0, message: `Unpaused account "${account.label}".` };
       }
@@ -2102,9 +3401,6 @@ export async function runAccountsCli({
         if (Boolean(labelArg) === allFlag) {
           return { exitCode: 2, message: 'Specify either LABEL or --all on pdd accounts share, not both.' };
         }
-        if (!allFlag && providerFilter) {
-          return { exitCode: 2, message: '--provider requires --all on pdd accounts share.' };
-        }
         const rawWith = typeof options['--with'] === 'string' ? options['--with'] : '';
         const parsedWith = parseWithTargets(rawWith);
         if (parsedWith.error) return { exitCode: 2, message: parsedWith.error };
@@ -2114,30 +3410,36 @@ export async function runAccountsCli({
         const sharePayloads = await resolveSharePayloads(parsedWith.targets, { cwd, env }, ports);
 
         let targetAccounts;
+        let pendingInvites = [];
         if (allFlag) {
-          const { accounts } = await fetchAccountsList({ cwd, env, refresh: false }, ports);
-          targetAccounts = accounts.filter(acc => isOwnedAccount(acc) && (!providerFilter || acc.provider === providerFilter));
+          const listed = await fetchAccountsList({ cwd, env, refresh: false }, ports);
+          pendingInvites = listed.pendingInvites;
+          targetAccounts = listed.accounts.filter(acc => isOwnedAccount(acc) && (!providerFilter || acc.provider === providerFilter));
           if (!targetAccounts.length) {
             return { exitCode: 1, message: providerFilter ? `No owned ${providerFilter} Cloud accounts found.` : 'No owned Cloud accounts found.' };
           }
         } else {
-          const { account } = await resolveAccount(labelArg, { cwd, env }, ports);
-          targetAccounts = [account];
+          const resolved = await resolveAccount(labelArg, { cwd, env, provider: providerFilter }, ports);
+          targetAccounts = [resolved.account];
+          pendingInvites = resolved.pendingInvites ?? [];
         }
 
-        const notes = await applySharePayloadsToAccounts(targetAccounts, sharePayloads, { cwd, env }, ports);
+        const notes = await applySharePayloadsToAccounts(targetAccounts, sharePayloads, { cwd, env, pendingInvites }, ports);
         if (targetAccounts.length === 1 && sharePayloads.length === 1) {
+          if (notes[0]?.alreadyShared) {
+            return { exitCode: 0, message: `Account "${targetAccounts[0].label}" is already shared with ${notes[0].display}.` };
+          }
           const inviteNote = notes[0]?.inviteId ? ` (invite ${notes[0].inviteId})` : '';
           return { exitCode: 0, message: `Shared "${targetAccounts[0].label}" with ${notes[0].display}${inviteNote}.` };
         }
         const acctNames = targetAccounts.map(a => `"${a.label}"`).join(', ');
-        const targetNames = notes
-          .filter((_, idx) => idx < sharePayloads.length)
-          .map((n, idx) => {
-            const invitesForTarget = notes
-              .filter(row => row.display === sharePayloads[idx].display && row.inviteId)
-              .map(row => row.inviteId);
-            return invitesForTarget.length ? `${n.display} (invite ${invitesForTarget.join(', ')})` : n.display;
+        const targetNames = sharePayloads
+          .map(payload => {
+            const matching = notes.filter(row => row.display === payload.display);
+            const invitesForTarget = matching.filter(row => row.inviteId).map(row => row.inviteId);
+            if (invitesForTarget.length) return `${payload.display} (invite ${invitesForTarget.join(', ')})`;
+            if (matching.length && matching.every(row => row.alreadyShared)) return `${payload.display} (already shared)`;
+            return payload.display;
           })
           .join(', ');
         return { exitCode: 0, message: `Shared ${acctNames} with ${targetNames}.` };
@@ -2203,9 +3505,6 @@ export async function runAccountsCli({
         if (Boolean(labelArg) === allFlag) {
           return { exitCode: 2, message: 'Specify either LABEL or --all on pdd accounts unshare, not both.' };
         }
-        if (!allFlag && providerFilter) {
-          return { exitCode: 2, message: '--provider requires --all on pdd accounts unshare.' };
-        }
         const built = buildUnsharePayloads({
           userOption: options['--user'],
           withOption: options['--with'],
@@ -2223,7 +3522,7 @@ export async function runAccountsCli({
             return { exitCode: 1, message: providerFilter ? `No owned ${providerFilter} Cloud accounts found.` : 'No owned Cloud accounts found.' };
           }
         } else {
-          const { account } = await resolveAccount(labelArg, { cwd, env }, ports);
+          const { account } = await resolveAccount(labelArg, { cwd, env, provider: providerFilter }, ports);
           targetAccounts = [account];
         }
 
@@ -2246,21 +3545,21 @@ export async function runAccountsCli({
       }
 
       case 'leave': {
-        const { account, accounts } = await resolveAccount(operands[0], { cwd, env }, ports);
+        const { account, accounts } = await resolveAccount(operands[0], { cwd, env, provider: options['--provider'] || null }, ports);
         await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/leave`, { body: {}, cwd, env }, ports);
         syncStateAfterAccountRemoval(account, accounts, { env }, ports);
         return { exitCode: 0, message: `Left shared account "${account.label}".` };
       }
 
       case 'remove': {
-        const { account, accounts } = await resolveAccount(operands[0], { cwd, env }, ports);
+        const { account, accounts } = await resolveAccount(operands[0], { cwd, env, provider: options['--provider'] || null }, ports);
         await cloudAccountsRequest('DELETE', `/v1/accounts/${encodeURIComponent(account.account_id)}`, { cwd, env }, ports);
         syncStateAfterAccountRemoval(account, accounts, { env }, ports);
         return { exitCode: 0, message: `Removed account "${account.label}".` };
       }
 
       case 'log': {
-        const { account } = await resolveAccount(operands[0], { cwd, env }, ports);
+        const { account } = await resolveAccount(operands[0], { cwd, env, provider: options['--provider'] || null }, ports);
         const data = await cloudAccountsRequest('GET', `/v1/accounts/${encodeURIComponent(account.account_id)}/log`, { cwd, env }, ports);
         const entries = Array.isArray(data?.entries) ? data.entries : Array.isArray(data?.events) ? data.events : Array.isArray(data?.log) ? data.log : [];
         if (options['--json'] === true) {
@@ -2281,7 +3580,8 @@ export async function runAccountsCli({
         return { exitCode: 2, message: 'Unsupported accounts command. Run pdd accounts --help.' };
     }
   } catch (error) {
+    const exitCode = (error instanceof CloudAccountsError && Number.isInteger(error.exitCode)) ? error.exitCode : 1;
     const safeMsg = redactSecrets(error instanceof CloudAccountsError ? error.message : `Accounts command failed: ${error?.message ?? 'unknown error'}`);
-    return { exitCode: 1, message: safeMsg };
+    return { exitCode, message: safeMsg };
   }
 }
