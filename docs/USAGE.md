@@ -96,6 +96,8 @@ Important:
 
 The GitHub package installs as `@promptdriven/pdd`. If the unscoped npm package `pdd` still owns the `pdd` executable in your npm prefix, installing the scoped package can fail with `EEXIST`. Select the Node installation and npm prefix that own that `pdd`, then uninstall the unscoped package and install from GitHub in the same prefix. Do not use `--force` to overwrite the executable.
 
+If Autopilot uses this installation, run `pdd autopilot stop` in each affected repository and let its current step finish before uninstalling. After verifying the scoped executable, repeat `pdd autopilot start` with your usual options from those repositories so the timers point to the scoped installation.
+
 ```sh
 prefix="$(npm prefix -g)"
 npm uninstall -g --prefix "$prefix" pdd &&

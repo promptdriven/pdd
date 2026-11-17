@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-update.prompt.md (sha256: 6d702987a6dd93a644d1ca740633b07bd3d1715b475dbce3641d3e9bdcd2d5c8).
+// Generated from prompts/cli/autopilot-update.prompt.md (sha256: dbe32409ac50bb74d45b6d3d7be0538d345a8cf42f4c9d7e7148813d98d53fd2).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
@@ -124,8 +124,8 @@ export function autoUpdateStatusLine({ stateRoot }, ports = {}) {
   if (!saved) return '';
   if (saved.lastError) {
     const error = String(saved.lastError);
-    const detail = error.startsWith(MIGRATION_ERROR) ? error : error.replace(/\s+/g, ' ').slice(0, 160);
-    return `Auto-update (${saved.channel ?? 'release'}): last try failed (${detail})`;
+    if (error.startsWith(MIGRATION_ERROR)) return `Auto-update (${saved.channel ?? 'release'}): ${error}`;
+    return `Auto-update (${saved.channel ?? 'release'}): last try failed (${error.replace(/\s+/g, ' ').slice(0, 160)})`;
   }
   if (saved.action === 'updated' && saved.toVersion && saved.updatedAt)
     return `Auto-update (${saved.channel ?? 'release'}): updated pdd ${saved.fromVersion ?? 'previous'} -> ${saved.toVersion} at ${new Date(saved.updatedAt).toISOString()}`;

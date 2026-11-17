@@ -15,7 +15,7 @@ Own `src/autopilot-update.mjs`. Export `validAutoUpdateMode(mode)`, `detectGloba
 
 ## Update execution
 
-After the mode, throttle, mid-write and global prefix checks, but before lookup or any subprocess, check for required migration. If required, save the recovery message as `lastError` with the normal `checkedAt` backoff and return `{action: 'failed', error: <recovery message>}`. `autoUpdateStatusLine` includes the entire migration command, even when longer than a normal error excerpt.
+After the mode, throttle, mid-write and global prefix checks, but before lookup or any subprocess, check for required migration. If required, save the recovery message as `lastError` with the normal `checkedAt` backoff and return `{action: 'failed', error: <recovery message>}`. `autoUpdateStatusLine` ends with the entire migration command, without truncation or trailing punctuation.
 
 1. Query the target version, failing whenever `gh api` exits non-zero or returns no valid release/commit:
    - `'release'`: fetch `repos/promptdriven/pdd/releases?per_page=10`, pick the newest non-draft release with a valid version tag (`pickLatestRelease`, supporting prerelease-only `alpha-v*` repositories), throw when none is valid, and compare `version` against `<packageRoot>/package.json` `version` via `isNewerRelease`. Target spec: `github:promptdriven/pdd#<tag>`.

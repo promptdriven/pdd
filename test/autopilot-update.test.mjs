@@ -309,7 +309,7 @@ test('#3474 auto-update keeps the legacy package intact and reports the complete
     assert.equal(result.action, 'failed');
     assert.ok(result.error.includes(commands), result.error);
     const status = autoUpdateStatusLine({ stateRoot });
-    assert.ok(status.includes(commands), status);
+    assert.ok(status.endsWith(commands), status);
     assert.deepEqual(lookups, []);
     assert.deepEqual(subprocesses, []);
     assert.deepEqual(await maybeAutoUpdateAutopilot(input, ports), { action: 'throttled' });
