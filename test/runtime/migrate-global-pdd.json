@@ -1,0 +1,57 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/migrate-global-pdd.md",
+  "criteria": [
+    {
+      "id": "same-prefix-migration",
+      "text": "When pdd upgrade runs from the unscoped global package, it exits with code 1, explains the npm executable collision, and prints the uninstall and install commands for that npm prefix without running them."
+    }
+  ],
+  "initial_world": {"realpaths": 0, "stats": 0, "exists": 0, "stderr": []},
+  "simulation": {
+    "fs.realpathSync": {
+      "action": "fixture.lookup",
+      "world_pointer": "/realpaths",
+      "cases": [
+        {"args": {"path": "/pdd migration/lib/node_modules/pdd"}, "call_index": 1, "result": "/pdd migration/lib/node_modules/pdd"}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "fs.statSync": {
+      "action": "fixture.lookup",
+      "world_pointer": "/stats",
+      "cases": [
+        {"args": {"path": "/pdd migration/lib/node_modules/pdd"}, "call_index": 1, "result": {"isDirectory": true}},
+        {"args": {"path": "/pdd migration"}, "call_index": 2, "result": {"isDirectory": true}}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "fs.existsSync": {
+      "action": "fixture.lookup",
+      "world_pointer": "/exists",
+      "cases": [
+        {"args": {"path": "/pdd migration/lib/node_modules/pdd/.git"}, "call_index": 1, "result": false}
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    },
+    "stderr.write": {"action": "port.write", "world_pointer": "/stderr", "result_template": true}
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "explain-the-collision",
+      "entry_path": "prompts/cli/autopilot-update.prompt.md",
+      "operation": "runCliUpgrade",
+      "input": {"packageRoot": "/pdd migration/lib/node_modules/pdd", "env": {"HOME": "/home/developer"}},
+      "checks": [
+        {"criterion_id": "same-prefix-migration", "target": "result", "path": "/exitCode", "op": "equals", "value": 1},
+        {"criterion_id": "same-prefix-migration", "target": "world", "path": "/stderr/0/text", "op": "equals", "value": "pdd upgrade: The unscoped npm package pdd can block @promptdriven/pdd from installing its pdd executable (EEXIST). To migrate, run: npm uninstall -g --prefix '/pdd migration' pdd && npm install -g --prefix '/pdd migration' --ignore-scripts github:promptdriven/pdd\n"},
+        {"criterion_id": "same-prefix-migration", "target": "calls", "path": "/resources/autopilot-update-process-spawnSync", "op": "equals", "value": 0}
+      ],
+      "model": "gpt-6.1-sol"
+    }
+  ]
+}

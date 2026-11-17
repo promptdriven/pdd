@@ -19,6 +19,8 @@ PDD is the `pdd` command and a set of skills for your agent. Your agent writes t
 
 You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. For `pdd setup` and workflow runs, install Codex, Claude Code, Gemini CLI or Antigravity CLI. Without `--agent`, pdd selects the first ready agent in that order. Codex and Claude status probes check for configured credentials; Gemini checks installation and leaves sign-in to the chat; Antigravity lists models for a signed-in account. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
+If your global PDD installation is the unscoped npm package `pdd`, [migrate it first](docs/USAGE.md#migrate-an-unscoped-global-installation). The GitHub package installs as `@promptdriven/pdd`; npm can report `EEXIST` because both packages claim the `pdd` executable.
+
 ```sh
 npm install -g github:promptdriven/pdd
 npx skills add promptdriven/pdd -g --skill '*'
@@ -33,7 +35,7 @@ pdd setup
 4. `pdd --version` must print `0.1.35`. When your skills are older than pdd, it also prints the command that updates them.
 5. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
 
-To update a global installation and its `.pdd-skill.json`-marked user skills in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. Direct `npm install -g github:promptdriven/pdd` runs no lifecycle scripts; normal `pdd` commands sync existing `.pdd-skill.json`-marked user skill folders automatically, and `pdd upgrade` prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked or symlinked copies are older.
+To update a scoped global installation and its `.pdd-skill.json`-marked user skills in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. Direct `npm install -g github:promptdriven/pdd` runs no lifecycle scripts; normal `pdd` commands sync existing `.pdd-skill.json`-marked user skill folders automatically, and `pdd upgrade` prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked or symlinked copies are older.
 
 > [!IMPORTANT]
 > Do not run `npm install -g pdd` or `npm update -g`. The npm registry has a different package with the name `pdd`.

@@ -233,6 +233,90 @@ test('#2710 runAutopilotLauncher validates --auto-update values before effects',
 
 const captureStream = () => ({ text: '', write(s) { this.text += s; } });
 
+function makeMigrationInstall(t) {
+  const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-upgrade-migration-')));
+  t.after(() => rmSync(sandbox, { recursive: true, force: true }));
+  const prefix = join(sandbox, "developer's npm");
+  const legacy = join(prefix, 'lib/node_modules/pdd');
+  const scoped = join(prefix, 'lib/node_modules/@promptdriven/pdd');
+  const bin = join(prefix, 'bin/pdd');
+  mkdirSync(join(legacy, 'bin'), { recursive: true });
+  mkdirSync(scoped, { recursive: true });
+  mkdirSync(dirname(bin), { recursive: true });
+  writeFileSync(join(legacy, 'package.json'), '{"name":"pdd","version":"0.1.31"}');
+  writeFileSync(join(scoped, 'package.json'), '{"name":"@promptdriven/pdd","version":"0.1.34"}');
+  writeFileSync(join(legacy, 'bin/pdd.mjs'), '');
+  symlinkSync('../lib/node_modules/pdd/bin/pdd.mjs', bin);
+  const quotedPrefix = `'${sandbox}/developer'\\''s npm'`;
+  const commands = `npm uninstall -g --prefix ${quotedPrefix} pdd && npm install -g --prefix ${quotedPrefix} --ignore-scripts github:promptdriven/pdd`;
+  return { sandbox, legacy, scoped, bin, commands };
+}
+
+test('#3474 pdd upgrade --main explains the legacy collision before invoking npm, even if launched from the scoped package', async t => {
+  const { sandbox, legacy, scoped, bin, commands } = makeMigrationInstall(t);
+  const stdout = captureStream(), stderr = captureStream();
+  const cache = join(sandbox, 'release-check.json');
+  writeFileSync(cache, '{}');
+  const subprocesses = [], lookups = [];
+  const exit = await runPdd(['upgrade', '--main'], {
+    packageRoot: scoped,
+    cwd: sandbox,
+    env: { HOME: sandbox, PDD_STATE_DIR: sandbox, PATH: '' },
+    stdout,
+    stderr,
+    cliUpgrade: {
+      runCliUpgrade: (opts, ports) => runCliUpgrade({
+        ...opts,
+        fetchImpl: async url => {
+          lookups.push(url);
+          return { ok: true, json: async () => ({ sha: 'a'.repeat(40) }) };
+        },
+        spawnSyncImpl: (...args) => {
+          subprocesses.push(args);
+          return { status: 1, stderr: 'npm error code EEXIST' };
+        },
+      }, ports),
+    },
+  });
+  assert.equal(exit, 1);
+  assert.equal(stdout.text, '');
+  assert.match(stderr.text, /unscoped npm package pdd can block @promptdriven\/pdd/);
+  assert.ok(stderr.text.includes(commands), stderr.text);
+  assert.deepEqual(lookups, []);
+  assert.deepEqual(subprocesses, []);
+  assert.equal(readFileSync(cache, 'utf8'), '{}');
+  assert.equal(realpathSync(bin), join(legacy, 'bin/pdd.mjs'));
+});
+
+test('#3474 auto-update keeps the legacy package intact and reports the complete migration commands with backoff', async t => {
+  const { sandbox, legacy, scoped, bin, commands } = makeMigrationInstall(t);
+  for (const packageRoot of [legacy, scoped]) {
+    const stateRoot = join(sandbox, packageRoot === legacy ? 'legacy-state' : 'scoped-state');
+    const subprocesses = [], lookups = [];
+    const input = { state: { autoUpdate: 'release' }, packageRoot, stateRoot, env: { HOME: sandbox } };
+    const ports = {
+      now: () => 1_700_000_000_000,
+      fetchLatestRelease: async () => {
+        lookups.push('release');
+        return { tag_name: 'alpha-v0.1.35' };
+      },
+      execute: async (...args) => {
+        subprocesses.push(args);
+        return { code: 1, stderr: 'npm error code EEXIST' };
+      },
+    };
+    const result = await maybeAutoUpdateAutopilot(input, ports);
+    assert.equal(result.action, 'failed');
+    assert.ok(result.error.includes(commands), result.error);
+    const status = autoUpdateStatusLine({ stateRoot });
+    assert.ok(status.endsWith(commands), status);
+    assert.deepEqual(lookups, []);
+    assert.deepEqual(subprocesses, []);
+    assert.deepEqual(await maybeAutoUpdateAutopilot(input, ports), { action: 'throttled' });
+    assert.equal(realpathSync(bin), join(legacy, 'bin/pdd.mjs'));
+  }
+});
+
 test('#3424 pdd upgrade updates global CLI and marked skills across agent folders (including 6-skill 0.1.12 bundles and .codex/skills), clears release-check.json, handles repeated upgrades, and pins --main SHA', async t => {
   const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-cli-upgrade-')));
   t.after(() => rmSync(sandbox, { recursive: true, force: true }));
@@ -242,6 +326,7 @@ test('#3424 pdd upgrade updates global CLI and marked skills across agent folder
   const home = join(sandbox, 'home');
   const repoDir = join(sandbox, 'repo');
   mkdirSync(globalPkg, { recursive: true });
+  mkdirSync(join(prefix, 'lib/node_modules/pdd'), { recursive: true });
   mkdirSync(home, { recursive: true });
   mkdirSync(repoDir, { recursive: true });
   cpSync(join(packageRoot, 'skills'), join(globalPkg, 'skills'), { recursive: true });
