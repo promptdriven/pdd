@@ -2231,7 +2231,7 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
   const idxBeforeList = cloud.state.requests.length;
   const listOut = await invokeCli(['accounts', 'list'], sb);
   assert.equal(listOut.exit, 0);
-  assert.match(listOut.stdout, /probe-add\s+codex\s+owner \(Serhan-Asad\)\s+34%/);
+  assert.match(listOut.stdout, /probe-add\s+codex\s+owner \(Serhan-Asad\)\s+66% left/);
   const rootListOut = await invokeCli(['accounts'], sb);
   assert.equal(rootListOut.exit, 0);
   const listReqs = cloud.state.requests.slice(idxBeforeList).filter(r => r.method === 'GET' && r.path === '/v1/accounts');

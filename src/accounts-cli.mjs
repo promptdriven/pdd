@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 199a7490ecbf8c1a9f63bbce8c40e5d6a9c414d5b0e7cedf9e29841eb4e035c8).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 8afd85ac73cfaa3cd40006e3191c56b074510e8c54ddc3c440e6eee671748a8a).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -268,11 +268,41 @@ function formatShortReset(iso) {
   return new Date(ms).toISOString().replace(/:\d{2}(?:\.\d+)?Z$/, 'Z');
 }
 
+function computeLeftPercent(usedPct) {
+  if (typeof usedPct !== 'number' || !Number.isFinite(usedPct)) return null;
+  return Math.min(100, Math.max(0, Math.round(100 - usedPct)));
+}
+
 function formatWindow(pct, resetAt) {
-  if (typeof pct !== 'number' || !Number.isFinite(pct)) return '-';
-  const rounded = Math.round(pct);
+  const left = computeLeftPercent(pct);
+  if (left === null) return '-';
   const reset = formatShortReset(resetAt);
-  return reset ? `${rounded}% (${reset})` : `${rounded}%`;
+  return reset ? `${left}% left (${reset})` : `${left}% left`;
+}
+
+function formatAccountQuotaSummary(acc) {
+  const fiveH = formatWindow(acc?.five_hour_used_percent, acc?.five_hour_reset_at);
+  const sevenD = formatWindow(acc?.weekly_used_percent, acc?.weekly_reset_at);
+  if (fiveH === '-' && sevenD === '-') return '';
+  return ` (5h: ${fiveH}, 7d: ${sevenD})`;
+}
+
+function withLeftPercentFields(entry) {
+  if (!object(entry)) return entry;
+  return {
+    ...entry,
+    five_hour_left_percent: computeLeftPercent(entry.five_hour_used_percent),
+    weekly_left_percent: computeLeftPercent(entry.weekly_used_percent),
+  };
+}
+
+function withLeftPercentActiveMap(activeMap) {
+  if (!object(activeMap)) return activeMap;
+  const out = {};
+  for (const [prov, entry] of Object.entries(activeMap)) {
+    out[prov] = withLeftPercentFields(entry);
+  }
+  return out;
 }
 
 function hasUnresolvedLocalReauth(acc, activeEntry = null, localReauth = null) {
@@ -2471,10 +2501,13 @@ async function runStatusCommand({ json = false, cwd, env }, ports = {}) {
           enabled: activeAutoProfiles.length > 0,
           profiles: activeAutoProfiles,
         },
-        active: current.active,
+        active: withLeftPercentActiveMap(current.active),
         cooling: current.cooling,
         reauth_required: reauthRequired,
-        accounts: accessible.map(a => ({ ...a, state: accountDisplayState(a, current.active?.[a.provider], current.reauth) })),
+        accounts: accessible.map(a => withLeftPercentFields({
+          ...a,
+          state: accountDisplayState(a, current.active?.[a.provider], current.reauth),
+        })),
         pending_invites: pendingInvites,
       }, null, 2)),
     };
@@ -3190,10 +3223,11 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
     applyMaterializedLease(nextLease.reply, { env }, ports);
     const prevLabel = exhaustedEntry?.label ?? exhaustedId ?? 'previous';
     const nextLabel = nextLease.reply.account?.label ?? nextLease.reply.account?.account_id ?? 'next';
+    const quotaInfo = formatAccountQuotaSummary(nextLease.reply.account);
     const resumeDesc = sessionId ? `session ${sessionId}` : '--last';
     try {
       activeStderr?.write?.(
-        redactSecrets(`\n[pdd accounts] Quota reached on "${prevLabel}"; switched active Codex account to "${nextLabel}" and resuming (${resumeDesc}).\n`),
+        redactSecrets(`\n[pdd accounts] Quota reached on "${prevLabel}"; switched active Codex account to "${nextLabel}"${quotaInfo} and resuming (${resumeDesc}).\n`),
       );
     } catch {}
     currentArgs = buildCodexResumeArgs(initialArgs, sessionId);
@@ -3218,14 +3252,18 @@ export async function runAccountsCli({
         const { accounts, pendingInvites } = await fetchAccountsList({ cwd, env, refresh: true }, ports);
         const current = readCloudAccountsState({ env }, ports);
         const { accessible, updatedState } = reconcileListedState(accounts, current, { env }, ports);
-        const normalizedAccounts = accessible.map(acc => ({
+        const normalizedAccounts = accessible.map(acc => withLeftPercentFields({
           ...acc,
           state: accountDisplayState(acc, updatedState.active?.[acc.provider], updatedState.reauth),
         }));
         if (options['--json'] === true) {
           return {
             exitCode: 0,
-            message: redactSecrets(JSON.stringify({ accounts: normalizedAccounts, pending_invites: pendingInvites, active: updatedState.active }, null, 2)),
+            message: redactSecrets(JSON.stringify({
+              accounts: normalizedAccounts,
+              pending_invites: pendingInvites,
+              active: withLeftPercentActiveMap(updatedState.active),
+            }, null, 2)),
           };
         }
         return {
@@ -3312,7 +3350,8 @@ export async function runAccountsCli({
           enrolled: allProviders.length > 0,
           providers: allProviders,
         }, { env }, ports);
-        return { exitCode: 0, message: `Active ${account.provider} account set to "${reply.account?.label ?? account.label}".` };
+        const useQuota = formatAccountQuotaSummary(reply.account ?? account);
+        return { exitCode: 0, message: `Active ${account.provider} account set to "${reply.account?.label ?? account.label}"${useQuota}.` };
       }
 
       case 'next': {
@@ -3360,7 +3399,8 @@ export async function runAccountsCli({
           return { exitCode: 1, message: `All remaining ${provider} accounts require re-authentication (state: reauth_required). Run pdd accounts add --provider ${provider}.` };
         }
         applyMaterializedLease(reply, { env }, ports);
-        return { exitCode: 0, message: `Switched ${provider} account to "${reply.account?.label ?? reply.account?.account_id}".` };
+        const nextQuota = formatAccountQuotaSummary(reply.account);
+        return { exitCode: 0, message: `Switched ${provider} account to "${reply.account?.label ?? reply.account?.account_id}"${nextQuota}.` };
       }
 
       case 'codex':

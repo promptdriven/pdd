@@ -813,7 +813,30 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform live mid-ses
     ],
   });
   const sb = makeSandbox(t, cloud.serverUrl);
-  assert.equal((await invokeCli(['accounts', 'use', 'glt'], sb)).exit, 0);
+  const useInitial = await invokeCli(['accounts', 'use', 'glt'], sb);
+  assert.equal(useInitial.exit, 0);
+  assert.match(useInitial.stdout, /Active codex account set to "glt" \(5h: 12% left \(2026-11-18T01:00Z\), 7d: 70% left \(2026-11-22T00:00Z\)\)\./);
+
+  // Verify `pdd accounts list`, `pdd accounts status`, and `--json` surface remaining `XX% left` clearly!
+  const listHuman = await invokeCli(['accounts', 'list'], sb);
+  assert.equal(listHuman.exit, 0);
+  assert.match(listHuman.stdout, /12% left \(2026-11-18T01:00Z\)/);
+  assert.match(listHuman.stdout, /70% left \(2026-11-22T00:00Z\)/);
+  assert.match(listHuman.stdout, /90% left \(2026-11-18T02:00Z\)/);
+  assert.match(listHuman.stdout, /85% left \(2026-11-23T00:00Z\)/);
+
+  const listJson = JSON.parse((await invokeCli(['accounts', 'list', '--json'], sb)).stdout);
+  const gltRow = listJson.accounts.find(a => a.label === 'glt');
+  assert.equal(gltRow.five_hour_used_percent, 88);
+  assert.equal(gltRow.five_hour_left_percent, 12);
+  assert.equal(gltRow.weekly_used_percent, 30);
+  assert.equal(gltRow.weekly_left_percent, 70);
+  assert.equal(listJson.active.codex.five_hour_left_percent, 12);
+  assert.equal(listJson.active.codex.weekly_left_percent, 70);
+
+  const statusHuman = await invokeCli(['accounts', 'status'], sb);
+  assert.equal(statusHuman.exit, 0);
+  assert.match(statusHuman.stdout, /5h: 12% left \(2026-11-18T01:00Z\), 7d: 70% left \(2026-11-22T00:00Z\)/);
 
   const authPath = managedCodexAuthPath(sb.env);
   const configPath = managedCodexConfigPath(sb.env);
@@ -854,7 +877,10 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform live mid-ses
   assert.deepEqual(seenTurns[1].args, ['resume', '-m', 'gpt-5.4', capturedSessionUuid]);
   assert.notEqual(seenTurns[1].grant, firstGrant, 'rotated auth.json to second account grant before resuming');
   assert.equal(readFileSync(configPath, 'utf8'), configSnapshot, 'config.toml stayed constant across live PTY rotation');
-  assert.match(liveRes.stderr, /Quota reached on "glt"; switched active Codex account to "glt-oai2" and resuming/);
+  assert.match(
+    liveRes.stderr,
+    /Quota reached on "glt"; switched active Codex account to "glt-oai2" \(5h: 90% left \(2026-11-18T02:00Z\), 7d: 85% left \(2026-11-23T00:00Z\)\) and resuming/,
+  );
 
   const usageReports = cloud.state.requests.filter(r => r.method === 'POST' && r.path === '/v1/accounts/acc_live_1/usage-report');
   assert.equal(usageReports.length, 1);

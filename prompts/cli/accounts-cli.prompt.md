@@ -27,12 +27,15 @@ usage-reset credit commands, options or calls exist.
   active Codex account), mark the locally active account per provider with `*`, and render an
   aligned table (`*`, `LABEL`, `PROVIDER`, `ACCESS`, `5H`, `7D`, `STATE`:
   `ready | cooling | draining | paused | reauth_required`, `REFRESH`: last refresh and expiry summary)
-  followed by any `reauth_required` re-auth hints and `pending_invites`. `--json` prints structured JSON with zero secrets.
+  where `5H` and `7D` show remaining quota as `XX% left (RESET)` (`100 - used_percent`, clamped `0..100%`),
+  followed by any `reauth_required` re-auth hints and `pending_invites`. `--json` prints structured JSON
+  with zero secrets, preserving `five_hour_used_percent` / `weekly_used_percent` alongside
+  `five_hour_left_percent` / `weekly_left_percent`.
 - `pdd accounts status [--json]`: Inspect live or cached Cloud accounts state (failing open to
   local `accounts-state.json` when offline), reporting enrollment count, `pddManagedCodexHome(env)`
   isolation status, `zsh`/`bash`/`fish` `auto` wrapper status, per-provider active account
-  (`label`, `delivery_mode`, `state`, `5h`/`7d` usage, `last_refresh_at`, token/lease
-  `expires_at` remaining time), and any `reauth_required` accounts.
+  (`label`, `delivery_mode`, `state`, `5h`/`7d` remaining `XX% left` with reset time, `last_refresh_at`, token/lease
+  `expires_at` remaining time), and any `reauth_required` accounts (with `five_hour_left_percent` / `weekly_left_percent` in `--json`).
 - `pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER|ORG/TEAM[,...]]`:
   Reject `--device-auth` for Claude with `exitCode: 2` before starting `claude`, and validate
   `--with` targets before sign-in. Run `codex login -c 'cli_auth_credentials_store="file"'`
@@ -60,17 +63,17 @@ usage-reset credit commands, options or calls exist.
   validate all four Codex OAuth token fields, upload to `POST /v1/accounts` (supporting `--replace` and interactive `409` label conflict recovery), probe local Codex usage
   fail-open if server windows are unpopulated, materialize the leased pass into `pddManagedCodexHome(env)`
   without writing to `~/.codex/auth.json`, and apply any non-duplicate `--with` shares.
-- `pdd accounts use LABEL [--provider codex|claude]`: Resolve `LABEL` (scoped to `--provider` when passed, or exiting `2` when `LABEL` is ambiguous across providers), refuse `reauth_required` accounts with a clear re-authentication command, and pin/materialize
-  `LABEL` in `pddManagedCodexHome(env)` or `~/.claude/settings.json` via `POST /v1/accounts/lease`.
-- `pdd accounts next [--provider codex|claude]`: Skip the current active account
-  and switch `pddManagedCodexHome(env)` or `~/.claude/settings.json` to the next ready account
-  (`soonest weekly_reset_at`) via `POST /v1/accounts/lease`.
+- `pdd accounts use LABEL [--provider codex|claude]`: Resolve `LABEL` (scoped to `--provider` when passed, or exiting `2` when `LABEL` is ambiguous across providers), refuse `reauth_required` accounts with a clear re-authentication command, pin/materialize
+  `LABEL` in `pddManagedCodexHome(env)` or `~/.claude/settings.json` via `POST /v1/accounts/lease`, and show remaining `5h`/`7d` `XX% left` summary.
+- `pdd accounts next [--provider codex|claude]`: Skip the current active account,
+  switch `pddManagedCodexHome(env)` or `~/.claude/settings.json` to the next ready account
+  (`soonest weekly_reset_at`) via `POST /v1/accounts/lease`, and show remaining `5h`/`7d` `XX% left` summary.
 - `pdd accounts codex [-- ARGS...]`: Sync/lease a healthy Codex account into `pddManagedCodexHome(env)`
   (failing open to plain `codex` when Cloud accounts are unenrolled or offline without an active lease),
   launch interactive `codex` under a live PTY/session supervisor that captures the active session ID and
   monitors output for hard quota exhaustion (`usage_limit_reached`, `You've hit your usage limit`,
   `quota_exceeded`), report usage fail-open, atomically rotate `pddManagedCodexHome(env)/auth.json` to the
-  next ready Codex lease, and automatically relaunch `codex resume <session-id>` (or `codex resume --last`)
+  next ready Codex lease (displaying the rotated account's `5h`/`7d` `XX% left` summary), and automatically relaunch `codex resume <session-id>` (or `codex resume --last`)
   so the interactive session continues seamlessly.
 - `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`:
   When `--quiet` is passed and `isCloudAccountsActive({env, provider})` is false,
