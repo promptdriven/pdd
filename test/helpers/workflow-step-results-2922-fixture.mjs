@@ -65,7 +65,7 @@ export async function setup(t, { completed = true } = {}) {
       f.prs.push(pr); return { stdout: `${pr.url}\n` };
     }
     if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ ...f.prs[0], state: f.merged ? 'MERGED' : 'OPEN', statusCheckRollup: [] }) };
-    if (args[0] === 'pr' && args[1] === 'edit') { f.prs[0].body = String(options.input ?? ''); return { stdout: '' }; }
+    if (args[0] === 'api' && args.includes('PATCH')) { f.prs[0].body = JSON.parse(options.input).body; return { stdout: '' }; }
     assert.fail(`Unexpected GitHub port request: ${args.join(' ')}`);
   };
   f.ports = { execFile, herdr: h.herdr, stateDir, layoutDirectory: join(stateDir, 'layout'), now: () => f.clock,
