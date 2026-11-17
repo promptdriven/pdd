@@ -1,4 +1,4 @@
-// Generated from prompts/cli/live-local-host.prompt.md (sha256: c37214e2aa63a69e0da814551bfe766faf5b935ac50dd1596fe420450af63440).
+// Generated from prompts/cli/live-local-host.prompt.md (sha256: c15695438ed2fc475141dc394e114bdf7974fa01b59bedced3da94da77222aa4).
 // Owned by prompts/cli/live-local-host.prompt.md.
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
@@ -13,9 +13,18 @@ const aborted = () => Object.assign(new Error('Local command cancelled.'), { nam
 
 // All hosts use the same physical stdin. Keep its ownership outside the factory.
 let confirmationTail = Promise.resolve();
-function confirmOnTerminal(label) {
+function confirmOnTerminal(label, signal) {
+  let cancelled = signal?.aborted === true; let abortActive; let resolveCancelled;
+  const cancellation = new Promise(resolve => { resolveCancelled = resolve; });
+  const cancel = () => {
+    cancelled = true;
+    abortActive?.();
+    resolveCancelled({ confirmed: false });
+  };
+  signal?.addEventListener('abort', cancel, { once: true });
+  if (cancelled) cancel();
   const confirmation = confirmationTail.then(() => {
-    if (!process.stdin.isTTY || !process.stdout.isTTY || process.stdin.destroyed || process.stdin.readableEnded) return { confirmed: false };
+    if (cancelled || !process.stdin.isTTY || !process.stdout.isTTY || process.stdin.destroyed || process.stdin.readableEnded) return { confirmed: false };
     return new Promise(resolveAnswer => {
       let reader; let settled = false; let prompt; let drainRevision = 0;
       const onDrainData = () => { drainRevision++; };
@@ -36,8 +45,10 @@ function confirmOnTerminal(label) {
         try { releaseReader(); } catch { confirmed = false; }
         process.stdin.removeListener('error', onError);
         process.stdin.removeListener('data', onDrainData);
-        resolveAnswer({ confirmed });
+        abortActive = undefined;
+        resolveAnswer({ confirmed: confirmed && !cancelled && !signal?.aborted });
       };
+      abortActive = () => finish();
       const onError = () => finish();
       const openReader = () => {
         process.stdin.removeListener('error', onError);
@@ -75,7 +86,8 @@ function confirmOnTerminal(label) {
   });
   // Rejection must release the queue as well as normal decline or acceptance.
   confirmationTail = confirmation.then(() => {}, () => {});
-  return confirmation;
+  // Keep the queue tied to the real slot, even when a queued caller cancels early.
+  return Promise.race([confirmation, cancellation]).finally(() => signal?.removeEventListener('abort', cancel));
 }
 function parseStrict(text) {
   const parsed = JSON.parse(text);
@@ -277,10 +289,10 @@ export function createLiveLocalHost({ env = process.env, redaction, root = proce
         if (signal?.aborted) cancel();
       });
     },
-    async confirm({ binding_id, executable, argv }) {
-      if (!terminal || !process.stdin.isTTY || !process.stdout.isTTY) return { confirmed: false };
+    async confirm({ binding_id, executable, argv, signal }) {
+      if (signal?.aborted || !terminal || !process.stdin.isTTY || !process.stdout.isTTY) return { confirmed: false };
       const label = redact({ text: JSON.stringify({ binding_id, executable, argv }) }).text.replace(/[\x00-\x1f\x7f-\x9f]/g, '').replace(/[\u202a-\u202e\u2066-\u2069]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
-      return confirmOnTerminal(label);
+      return confirmOnTerminal(label, signal);
     },
     journal: {
       async read(key) {
