@@ -13,7 +13,7 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 2. prompt-pr: steps/check.md, steps/try.md (optional) → approve, then gate: pr, then ask
 3. code: steps/build.md, steps/verify.md, steps/formal.md, steps/review.md → gate: pr
 
-- In runs (>2 prompts too), main chat coordinates; no code or checks. Outside runs on <=2 prompts, author prompts, Stories, tests and `app-map.json` in-session (0 authoring subagents) and run `pdd files` + `pdd lint --local` before `pdd test`.
+- In runs (>2 prompts too), main chat coordinates; no code or checks. Outside runs on <=2 prompts, read `pdd-prompting/RUNBOOK.md` first, author prompts, Stories, tests and `app-map.json` in-session (0 authoring subagents), and run `pdd files` + `pdd lint --local` before `pdd test`.
 - Fresh subagents in step order for runs, >2 prompts and code; never reuse builders or let them check code. Step file/paths at once, no chat history; wait one long time-out, no small follow-ups (§11).
 - Checks: fresh first. Only verify/formal may reuse after startup failure; no code, tests or prompts this run.
 - Review: always fresh; no build/verify/formal/prior reviews or context. Blocked: RUNBOOK §17.
