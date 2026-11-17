@@ -264,11 +264,9 @@ The checker or person decides whether the changes are correct. These diagnostics
 agent to edit test values in code space; the authoring rules stay with the Prompting guide.
 Do not cap the saved list of changed values. The runner saves it in status.json at /replayEvidence/warnings.
 
-Render complete JSON Pointers and before/after JSON values reversibly, without path/URL cleaning or
-identity truncation. Distinct values must remain visibly distinct. Use JSON Unicode escapes for code
-units outside printable ASCII, including invisible and bidi characters. Escape Markdown, HTML, controls and
-path separators so outer body cleaning cannot collapse different paths or damage quoted URLs.
-Escape pdd-workflow: and pdd-product: as in the runner's inert summary text; they cannot become ownership markers.
+Use the [saved-value warning renderer](saved-value-warning.prompt.md) for each warning. Pass the optional
+`warningFormat` option (`markdown` by default or `plain` for command output) through to it without changing
+the rest of the report. Pass complete vector paths, reasons or JSON Pointers and serialized before/after values.
 Missing is distinct from a literal string or null. The default report shows all warnings. Optional
 maxCharacters is a display budget for the entire replay section: retain its status, counts and trust
 boundary, show the longest prefix of whole warning items that fits, then name the exact omitted count
@@ -377,6 +375,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 
 - [Runtime seam](runtime-seam.prompt.md#public-contract): required generation/runtime context for `gitFiles(root)`, safe diagnostic text (`causeText`), and exact scenario numbers (`parseScenarioJson`, `stringifyScenarioJson`).
 - [File owner lookup](file-owner.prompt.md#generated-from-header): required generation context for the header rule.
+- [Saved-value warning](saved-value-warning.prompt.md): required context for PR and terminal warning rendering.
 
 <details>
 <summary>Runtime interface</summary>
@@ -384,7 +383,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 ```json
 {
   "status": "approved",
-  "prose_sha256": "1e33b05732de6ee39ded88d14250981f25af96387498a72f0d73550d05aee9ed",
+  "prose_sha256": "24a451c00c3fa4fa95b1d7525f656410652e7565e0621a461a175307e5085f22",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

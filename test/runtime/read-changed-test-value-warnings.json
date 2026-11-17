@@ -1,0 +1,58 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/read-changed-test-value-warnings.md",
+  "criteria": [
+    {
+      "id": "terminal-plain-text",
+      "text": "When a saved value in `tests/add.json` changes from `3` to `https://example.test/new?a=1&b=2`, the terminal warning shows the path and link as plain text."
+    },
+    {
+      "id": "pull-request-literal-text",
+      "text": "The pull request warning preserves the same path and link as literal text, escaped in the description so Markdown does not interpret it as a link."
+    }
+  ],
+  "initial_world": {},
+  "steps": [
+    {
+      "step_id": "terminal-warning",
+      "entry_path": "prompts/cli/saved-value-warning.prompt.md",
+      "operation": "formatSavedValueWarning",
+      "input": {
+        "format": "plain",
+        "vector": "tests/add.json",
+        "path": "/steps/0/checks/0/value",
+        "before": "3",
+        "after": "\"https://example.test/new?a=1&b=2\""
+      },
+      "checks": [
+        {
+          "criterion_id": "terminal-plain-text",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": "warning: Saved test values changed: tests/add.json /steps/0/checks/0/value 3 -> \"https://example.test/new?a=1&b=2\""
+        }
+      ]
+    },
+    {
+      "step_id": "pull-request-warning",
+      "entry_path": "prompts/cli/saved-value-warning.prompt.md",
+      "operation": "formatSavedValueWarning",
+      "input": {
+        "vector": "tests/add.json",
+        "path": "/steps/0/checks/0/value",
+        "before": "3",
+        "after": "\"https://example.test/new?a=1&b=2\""
+      },
+      "checks": [
+        {
+          "criterion_id": "pull-request-literal-text",
+          "target": "result",
+          "path": "",
+          "op": "equals",
+          "value": "warning: Saved test values changed: tests&#47;add.json &#47;steps&#47;0&#47;checks&#47;0&#47;value 3 -> \"https:&#47;&#47;example.test&#47;new?a=1&amp;b=2\""
+        }
+      ]
+    }
+  ]
+}

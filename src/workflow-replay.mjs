@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 547f3d06247888b142fc53b1407d208f9e06c3c03eda5948574be3664c4f0be0).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 8d17b91aebb2417f624259e2b89789e90e2bada5e8cc1a1ac798df3ba05a5bf3).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -6,6 +6,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, rea
 import { dirname, isAbsolute, join, relative, resolve, sep, basename } from 'node:path';
 import { headerPrompts } from './file-owner.mjs';
 import { cleanText, format, runtimeOutputSlice, runtimePreflightSlice, runtimeScenarioJsonSlice } from './runtime-seam.mjs';
+import { formatSavedValueWarning } from './saved-value-warning.mjs';
 
 const { gitFiles } = runtimePreflightSlice();
 runtimeOutputSlice();
@@ -459,12 +460,6 @@ function valueChanges(before, after, path = '') {
   return [changeRow(path,before,after)];
 }
 const changeValue=value=>value===undefined ? '(missing)' : stringifyScenario(value);
-// JSON escaping keeps identities and values distinct. Entities display complete
-// separators without exposing URLs or matching the outer body's path cleaner.
-const renderValue=value=>inertMarkers(String(value).replace(/[^\x20-\x7e]/g,char=>'\\u'+char.charCodeAt(0).toString(16).padStart(4,'0')))
-  .replace(/[\\`*_[\]()|]/g,'\\$&').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-const reviewText=value=>renderValue(value).replaceAll('/','&#47;');
-const reviewIdentity=value=>reviewText(JSON.stringify(String(value)).slice(1,-1));
 // The original assertion identities of the saved anchor; with them, a proved formal result binds to the mutation.
 function anchorChecks(run) {
   const vectors = Array.isArray(run.replayBaseline?.vectors) ? run.replayBaseline.vectors : [];
@@ -654,13 +649,19 @@ export function formatFormalEvidence(value, rules) {
   if (shown.notNeeded) return `Formal check: not needed (no Rules to check in the Story).${formal.status === 'missing' ? '' : ` The formal block is not accepted: ${shown.words} — ${shown.cause}.`}`;
   return `Formal check (agent reported): ${shown.words} — ${shown.detail}. Repair: ${shown.repair}.${shown.note ? ` ${shown.note}` : ''}`;
 }
-export function formatReplayEvidence(result, {maxCharacters=Infinity, rules} = {}) {
+export function formatReplayEvidence(result, {maxCharacters=Infinity, rules, warningFormat} = {}) {
   const counts=result.counts??emptyCounts(), emptyPass=result.outcome==='pass' && !(Number.isSafeInteger(counts.total) && counts.total>0);
   const label=String(emptyPass?'blocked':result.outcome).replace('_',' ').toUpperCase();
   const failedFormal=formalStatus(result.formal).status==='recorded' && result.formal.result==='failed';
   const head=[ ...(counts.fail ? [`✗ ${counts.fail} replay assertions fail`] : []), ...(failedFormal ? ['✗ Formal check failed (counterexample in replay-evidence.json).'] : []),
     `Code replay: ${label} — ${render(emptyPass?'Replay cannot pass with zero checks.':result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`];
-  const warnings=(result.warnings??[]).map(w=>`warning: Saved test values changed: ${reviewIdentity(w.vector)} ${w.reason ? reviewIdentity(w.reason) : `${reviewIdentity(w.path)} ${reviewText(typeof w.exact?.before==='string'?w.exact.before:changeValue(w.before))} -> ${reviewText(typeof w.exact?.after==='string'?w.exact.after:changeValue(w.after))}`}`);
+  const warnings=(result.warnings??[]).map(warning=>formatSavedValueWarning({
+    format:warningFormat, vector:warning.vector, reason:warning.reason, path:warning.path,
+    ...(!warning.reason ? {
+      before:typeof warning.exact?.before==='string' ? warning.exact.before : changeValue(warning.before),
+      after:typeof warning.exact?.after==='string' ? warning.exact.after : changeValue(warning.after),
+    } : {}),
+  }));
   const tail=[...(warnings.length ? ['Saved-value changes are advisory; the checker or person decides.'] : []),
     ...(result.adoption ? [`Anchor adopted from ${render(result.adoption.repository)}@${render(result.adoption.commit)}; approval reference ${render(result.adoption.reference)} by ${render(result.adoption.asserted_by)}; external-assertion-unverified`] : []),
     ...(result.anchor ? [anchorLine(result.anchor)] : []),

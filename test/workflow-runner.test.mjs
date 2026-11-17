@@ -2207,6 +2207,19 @@ test('2870: vector edits after prompt-space approval warn and replay without rep
   assert.deepEqual(f.record().replayBaseline,original);
 });
 
+for(const noPublish of [false,true])test(`2953: saved-value warnings use plain command output ${noPublish?'without':'with'} PR publication`,async t=>{
+  const {f,run,vector}=await replayArea(t);
+  vector.steps[0].checks[0].value='https://example.test/new?a=1&b=2';
+  writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
+  writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
+  const out=await stepDone({step:'verify',noPublish,cwd:run.root},f.agentPorts());
+  assert.equal(out.exitCode,0,out.message);
+  const warning=text=>text.split('\n').find(line=>line.startsWith('warning: Saved test values changed:'));
+  assert.equal(warning(out.message),'warning: Saved test values changed: tests/add.json /steps/0/checks/0/value 3 -> "https://example.test/new?a=1&b=2"');
+  if(noPublish)assert.equal(f.prs.length,1);
+  else assert.equal(warning(f.prs[1].body),'warning: Saved test values changed: tests&#47;add.json &#47;steps&#47;0&#47;checks&#47;0&#47;value 3 -> "https:&#47;&#47;example.test&#47;new?a=1&amp;b=2"');
+});
+
 test('2530: an open code PR refreshes stale evidence and keeps its ownership marker',async t=>{
   const {f,run,vector}=await replayArea(t);writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
   writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
