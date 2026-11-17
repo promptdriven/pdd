@@ -8,7 +8,7 @@ A report names metric-definition version, repository, declared IANA timezone, se
 
 Each event contains `schema` = `pdd.metrics.event.v1`, stable `id`, canonical `repo`, positive `issue`, `type`, UTC `at`, UTC `observedAt`, `source`, optional `attempt`, and `data`. Data supports selection (`snapshotId`, `inScope`, `state`, `reasons`), launch/start (`origin`, `decisionId`, `status`, CLI/skill/candidate versions, `requiredOutcome`), step history (`step`, `status`, `area`), outcome, milestone (`stage`, `reason`, PR and head), checker (`verdict`, `reviewer`, `evidence`, `acceptance`, PR and head), CI, delivery (`explicit`, evidence, PR and head), report (`classification`, `humanReported`, evidence), assistance and coverage. Missing facts are unknown. Observations after the cutoff do not establish facts at the cutoff.
 
-Queue uses the supplied snapshot's issue membership and selector state, with ready, excluded, waiting and unknown separately, including capacity separately from dependency. Activity counts actual starts, candidate completions, validation results and deliveries occurring on the local calendar date in the declared timezone, not a conversion funnel. Activity is null outside an explicit activity scope. Poll-only or snapshot-only observations (`selection`, `ci`, `coverage`, and `milestone` stages `candidate-head` and `pr-mapped`) do not establish `activity`-scope date membership. Cohort follows the fixed snapshot membership through the cutoff, including never-started issues and later deliveries; distinguish issue counts from attempts and event counts. An attempted/failed/uncertain launch is not a confirmed start. A start states autopilot, manual or unknown without inferring source from a workflow or label. Retries do not add issues.
+Queue uses the supplied snapshot's issue membership and selector state, with ready, excluded, waiting and unknown separately, including capacity separately from dependency. Activity counts actual starts, candidate completions, validation results and deliveries occurring on the local calendar date in the declared timezone, not a conversion funnel. Activity is null outside an explicit `activity` or `week` scope. Poll-only or snapshot-only observations (`selection`, `ci`, `coverage`, and `milestone` stages `candidate-head` and `pr-mapped`) do not establish `activity`- or `week`-scope membership. Cohort follows the fixed snapshot membership through the cutoff, including never-started issues and later deliveries; distinguish issue counts from attempts and event counts. An attempted/failed/uncertain launch is not a confirmed start. A start states autopilot, manual or unknown without inferring source from a workflow or label. Retries do not add issues.
 
 Prompt-only is a valid stopping outcome, not failed code. A prompt PR alone is not delivery. A single small-change PR or a code PR carrying prompt content can deliver; a shared PR requires an explicit issue mapping and relevant proof for each issue. Implementation readiness is explicitly recorded and identifies the code candidate; PR creation or internal review alone is not independent validation. Record validation, CI, Runtime and native tests separately. A checker result is fresh only for the current candidate head and the existing evidence acceptance rule; stale, missing or conflicting evidence is unknown, not pass. The calculator reports evidence and does not create an approval gate. Keep independently observed later stages even when earlier evidence is missing.
 
@@ -19,6 +19,8 @@ For a daily-start group, membership is issues with confirmed starts on the selec
 Waits list elapsed duration at cutoff, stage and known reasons; planned prompt-only, observe-mode and new-product holds remain distinct from failures. Human-reported failed fixes require an explicit linked human complaint about the delivered fix. Administrative reopen, new scope, revert and unclassified reports are separate. Keep every qualifying report after a delivered fix even if another delivery follows. Count an explicit linked human complaint about the delivered issue as an issue-level known report even when no delivery identity is provided. Associate it with a delivery only when its attempt or PR identifies a matching preceding delivery; never assign an unlinked report to the latest delivery. Expose unassociated known reports separately from ambiguous or unevidenced reports; attribution and follow-up remain unknown where unassociated reports could apply. For each delivery expose its associated reports and 7- and 30-day windows measured from that delivery; later reports remain in the associated list. The existing issue followUp describes the latest delivery, while failedFixReports and failedFix cover all deliveries. Show immature windows. No report yet is not proven lasting success. Recorded recovery indicates assistance; an initial authorization is not recovery, and missing capture cannot establish an unassisted run. Missing machines and historical capture limitations are visible rather than zero.
 
 In `queue` scope, `queue` summarizes the supplied snapshot's open membership, while `issues` and `bySkill` also include distinct issues with non-selection observations at or before the cutoff so merged or closed work observed from GitHub receipts remains visible. Each issue exposes `skill` (`small-change`, `bug`, `feature`, `no-behavior-change`, or `unknown`), `wouldMerge` (`yes` when a non-conflicting `would-merge` milestone exists, else `unknown`), and `skillChecks` (`runtime`, `vectors`, `formal`, `complete` each `done`, `missed`, `not-applicable`, or `unknown`). When explicit receipt milestones mark `runtime`, `vectors` and `formal` as `not-applicable` (docs, config or test-only work with no behavior change), or an explicit `no-behavior-change` skill is recorded, `skill` is `no-behavior-change`. `bySkill` reports rows for `small-change`, `bug`, `feature`, `no-behavior-change`, and `all` (aggregated across distinct issues in `issues`). Each row exposes `issues`, `runs`, `pr`, `merged`, `wouldMerge` (non-merged issues with `wouldMerge` = `yes`), `mergedOrWouldMerge` (`merged + wouldMerge`), `conversionPct` (`mergedOrWouldMerge * 100 / issues`, or `null` when `issues` is `0`), and `checks` (`runtime`, `vectors`, `formal`, `complete` as `{done, applies, unknown}` where `not-applicable` runs do not increment `applies` and missing receipts increment `unknown` rather than `applies`).
+
+In `week` scope (`scope: { kind: 'week', date: 'YYYY-MM-DD' }`), validate `scope.date` as a strict calendar date and resolve the ISO Monday-to-Sunday week containing `scope.date` (`weekStart` Monday through `weekEnd` Sunday, refreshing every Monday). Evaluate `days` as the ordered calendar dates from `weekStart` through `scope.date` inclusive (`1` elapsed day on Monday through `7` elapsed days on Sunday). Weekly `issues` and `bySkill` include distinct issues with at least one activity observation on `[weekStart .. scope.date]` in `timezone` (never summing daily issue counts across days), `activity` summarizes `{ starts, candidateCompletions, validationResults, deliveries }` across `[weekStart .. scope.date]`, and `week` exposes `{ weekStart, weekEnd, throughDate: scope.date, elapsedDays: days.length, refreshesOn: 'Monday', mergedOrWouldMergePerDay: bySkill.all.mergedOrWouldMerge / days.length, days }`, where each entry in `days` summarizes distinct issues active on `date` with `{ date, weekday ('Mon'..'Sun'), issues, merged, wouldMerge, mergedOrWouldMerge, conversionPct, pr, activity: { starts, candidateCompletions, validationResults, deliveries } }` without mutating weekly totals. Outside `week` scope, `week` is `null`.
 </details>
 
 A FAIL is negative only with accepted evidence. A split across sources remains unknown until two fresh accepted checks after the last opposing verdict agree, with distinct structured sessions and either different families or same-family mode on both checks. Compare family identities case-insensitively while preserving the original recorded identity. Opaque identities alone cannot establish that pair; retain every observation. Repeated observations of the same checker comment may refine unknown acceptance to accepted without making contradictory claims. At each cutoff, a later unknown acceptance does not erase an earlier known acceptance; differing known acceptance claims remain conflicts. Retain genuinely different claims as conflicts and preserve the earliest observation of each claim for historical cutoffs.
@@ -32,7 +34,7 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
 ```json
 {
   "status": "draft",
-  "prose_sha256": "6809c4e3639639048960740d511d958990aedbe2f90b1f76b08008bb425ad592",
+  "prose_sha256": "bb41adb3b86a60ad691ca82a9ce43043eda4803f3016e7770e7513ac1827fdcd",
   "entries": [
     {
       "operation": "calculateMetrics",
@@ -5387,6 +5389,53 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
             },
             "required": ["small-change", "bug", "feature", "no-behavior-change", "all"],
             "additionalProperties": false
+          },
+          "week": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "properties": {
+                  "weekStart": { "type": "string" },
+                  "weekEnd": { "type": "string" },
+                  "throughDate": { "type": "string" },
+                  "elapsedDays": { "type": "integer" },
+                  "refreshesOn": { "type": "string", "enum": ["Monday"] },
+                  "mergedOrWouldMergePerDay": { "type": "number" },
+                  "days": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "date": { "type": "string" },
+                        "weekday": { "type": "string", "enum": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] },
+                        "issues": { "type": "integer" },
+                        "merged": { "type": "integer" },
+                        "wouldMerge": { "type": "integer" },
+                        "mergedOrWouldMerge": { "type": "integer" },
+                        "conversionPct": { "oneOf": [{ "type": "number" }, { "type": "null" }] },
+                        "pr": { "type": "integer" },
+                        "activity": {
+                          "type": "object",
+                          "properties": {
+                            "starts": { "type": "integer" },
+                            "candidateCompletions": { "type": "integer" },
+                            "validationResults": { "type": "integer" },
+                            "deliveries": { "type": "integer" }
+                          },
+                          "required": ["starts", "candidateCompletions", "validationResults", "deliveries"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["date", "weekday", "issues", "merged", "wouldMerge", "mergedOrWouldMerge", "conversionPct", "pr", "activity"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["weekStart", "weekEnd", "throughDate", "elapsedDays", "refreshesOn", "mergedOrWouldMergePerDay", "days"],
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "required": [
@@ -5404,7 +5453,8 @@ None. Timezone conversion is deterministic and uses the supplied timezone and cu
           "stages",
           "waits",
           "transitions",
-          "bySkill"
+          "bySkill",
+          "week"
         ],
         "additionalProperties": false
       },

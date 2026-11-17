@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 26f342964ad59edaa6f5ad71c87b4b839eaddaee9c436be2924ee94e882e3f24).
+// Generated from prompts/cli/product.prompt.md (sha256: 2dc2faa2532283575a88580d4debb6de60768f2505ae6524750ac46aec86c891).
 export const invalid = message => { throw Object.assign(Error(message), { code: 'invalid-product' }); };
 const clean = value => String(value ?? '').trim().replace(/^`(.*)`$/, '$1');
 const csv = value => !value || value === '-' ? [] : value.split(',').map(clean).filter(Boolean);

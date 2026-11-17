@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 2f735a31d465554f889fdfa9616535357db58de38cabebf1ed74425ced345c69).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: f73502c8e230b798a18fc6180771a02274a486e006ed5b4b44b1bf221fe63a36).
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -34,9 +34,12 @@ const CONTROLS = /[\u0000-\u001f\u007f-\u009f]/;
 const SECRET_ENV_KEY = /(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD|_CREDENTIAL|^SECRET_|API_KEY$|^OPENAI_API_KEY$|^ANTHROPIC_API_KEY$|^GEMINI_API_KEY$|^GOOGLE_API_KEY$|^CLAUDE_CODE_OAUTH_TOKEN$|^CODEX_ACCESS_TOKEN$)/i;
 const CODEX_OVERLAY_LINKS = ['config.toml', 'skills', 'memories', 'sessions', 'rules'];
 const CODEX_GATEWAY_OVERLAY_LINKS = ['skills', 'memories', 'sessions', 'rules'];
+const MANAGED_CODEX_HOME_LINKS = ['skills', 'memories', 'sessions', 'archived_sessions', 'history.jsonl', 'session_index.jsonl', 'rules'];
 const CODEX_GATEWAY_PROVIDER_ID = 'pdd_codex_gateway';
 const INLINE_TOML_TABLE_KEYS = new Set(['http_headers', 'env_http_headers', 'filters', 'set']);
 const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/;
+const REAUTH_CODE_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked)\b/i;
+const REAUTH_TEXT_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked)\b|(?:status|http|error)[:=\s]+401\b|\b401\s+unauthorized\b/i;
 export const DEFAULT_CLOUD_URL = 'https://pdd-byok-api-c437voydwa-uc.a.run.app';
 export const POOL_FALLBACK_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -102,6 +105,65 @@ function readJsonObject(fs, file) {
   } catch {
     return null;
   }
+}
+
+function extractJwtExpiresAtIso(jwt) {
+  if (typeof jwt !== 'string' || !jwt.trim()) return null;
+  const parts = jwt.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    if (typeof payload?.exp === 'number' && Number.isFinite(payload.exp) && payload.exp > 0) {
+      return new Date(payload.exp * 1000).toISOString();
+    }
+  } catch {}
+  return null;
+}
+
+export function isReauthRequiredAccount(entry) {
+  if (!object(entry)) return false;
+  const state = String(entry.state ?? '').trim().toLowerCase();
+  if (state === 'reauth_required' || state === 'needs_reauth' || entry.needs_reauth === true) return true;
+  const errFields = [entry.last_refresh_error, entry.auth_error, entry.error_code, entry.reason]
+    .filter(v => typeof v === 'string' && v.trim())
+    .join(' ');
+  return Boolean(errFields && (REAUTH_CODE_RE.test(errFields) || /\b401\b|unauthorized/i.test(errFields)));
+}
+
+export function isLocalReauthUnresolved(accountId, refreshedAtIso, reauthMap) {
+  if (!accountId || !object(reauthMap) || !object(reauthMap[accountId])) return false;
+  const mark = reauthMap[accountId];
+  const markedMs = mark.marked_at ? Date.parse(mark.marked_at) : NaN;
+  const refreshedMs = refreshedAtIso ? Date.parse(refreshedAtIso) : NaN;
+  return !Number.isFinite(markedMs) || !Number.isFinite(refreshedMs) || refreshedMs <= markedMs;
+}
+
+export function isReauthRequiredFailure(errorOrText) {
+  if (!errorOrText) return false;
+  if (typeof errorOrText === 'string') {
+    return REAUTH_TEXT_RE.test(errorOrText);
+  }
+  if (typeof errorOrText === 'object') {
+    if (errorOrText.code === 'missing_auth_token') return false;
+    const code = String(errorOrText.code ?? '');
+    if (REAUTH_CODE_RE.test(code)) return true;
+    const reason = String(errorOrText.payload?.reason ?? errorOrText.payload?.state ?? errorOrText.reason ?? '');
+    if (REAUTH_CODE_RE.test(reason)) return true;
+    const msg = String(errorOrText.message ?? '');
+    if (REAUTH_CODE_RE.test(msg)) return true;
+    if (object(errorOrText.payload) && REAUTH_CODE_RE.test(JSON.stringify(errorOrText.payload))) {
+      return true;
+    }
+    const hasAccountContext = Boolean(
+      errorOrText.payload?.account_id
+      || errorOrText.payload?.detail?.account_id
+      || errorOrText.payload?.account?.account_id,
+    );
+    if (errorOrText.status === 401 && hasAccountContext) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function resolveCloudAccountsEndpoint(env = process.env) {
@@ -198,75 +260,119 @@ function extractCloudErrorInfo(parsed, status) {
   };
 }
 
-export async function cloudAccountsRequest(method, path, { body, cwd = process.cwd(), env = process.env, timeoutMs = 10_000 } = {}, ports = {}) {
+export async function cloudAccountsRequest(method, path, { body, cwd = process.cwd(), env = process.env, timeoutMs = 20_000, maxRetries, deadlineMs } = {}, ports = {}) {
+  const nowFn = ports.now ?? Date.now;
+  const upperMethod = String(method ?? 'GET').toUpperCase();
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const pathnameOnly = normalizedPath.split('?')[0];
+  const isIdempotentRetryable = upperMethod === 'GET' || (upperMethod === 'POST' && pathnameOnly === '/v1/accounts/lease');
+  const retries = maxRetries !== undefined
+    ? Math.max(0, Math.trunc(Number(maxRetries) || 0))
+    : (isIdempotentRetryable ? 1 : 0);
+
+  const totalLimit = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 20_000;
+  const effectiveDeadline = typeof deadlineMs === 'number' && Number.isFinite(deadlineMs)
+    ? deadlineMs
+    : (nowFn() + totalLimit);
+
   const baseUrl = resolveCloudAccountsEndpoint(env);
-  const token = await resolveCloudAccountsToken({ cwd, env, timeoutMs }, ports);
+  const tokenBudget = effectiveDeadline - nowFn();
+  if (tokenBudget <= 0) throw new CloudAccountsError('Cloud Accounts request timed out.', { code: 'timeout' });
+  const token = await resolveCloudAccountsToken({ cwd, env, timeoutMs: Math.min(tokenBudget, 4000) }, ports);
   const { machineId } = resolveMachineIdentity(env, ports);
   const fetchImpl = ports.fetch ?? globalThis.fetch;
   if (typeof fetchImpl !== 'function') throw new CloudAccountsError('HTTP fetch is unavailable.', { code: 'fetch_unavailable' });
-  const controller = new AbortController();
-  const limit = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 10_000;
-  const timer = setTimeout(() => controller.abort(new Error('timeout')), limit);
-  timer.unref?.();
   if (body !== undefined) rememberSecrets(...knownSecretValues(body));
-  try {
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      'X-PDD-Machine-Id': machineId,
-      Accept: 'application/json',
-      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    };
-    const response = await fetchImpl(`${baseUrl}${path.startsWith('/') ? path : `/${path}`}`, {
-      method,
-      headers,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: controller.signal,
-    });
-    const rawText = await response.text();
-    let parsed = null;
-    if (rawText.trim()) {
-      try { parsed = JSON.parse(rawText); } catch { parsed = null; }
+  const serializedBody = body !== undefined ? JSON.stringify(body) : undefined;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'X-PDD-Machine-Id': machineId,
+    Accept: 'application/json',
+    ...(serializedBody !== undefined ? { 'Content-Type': 'application/json' } : {}),
+  };
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const remainingMs = effectiveDeadline - nowFn();
+    if (remainingMs <= 0) {
+      throw new CloudAccountsError('Cloud Accounts request timed out.', { code: 'timeout' });
     }
-    if (parsed) rememberLeaseSecrets(parsed);
-    if (!response.ok) {
-      const info = extractCloudErrorInfo(parsed, response.status);
-      throw new CloudAccountsError(`Cloud Accounts ${method} ${path} failed (${response.status}): ${info.message}`, {
-        status: response.status,
-        code: String(info.code),
-        payload: info.payload,
+    const attemptLimit = attempt < retries
+      ? Math.max(1, Math.ceil(remainingMs * 0.65))
+      : Math.max(1, remainingMs);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('timeout')), attemptLimit);
+    try {
+      const response = await fetchImpl(`${baseUrl}${normalizedPath}`, {
+        method: upperMethod,
+        headers,
+        ...(serializedBody !== undefined ? { body: serializedBody } : {}),
+        signal: controller.signal,
       });
+      const rawText = await response.text();
+      let parsed = null;
+      if (rawText.trim()) {
+        try { parsed = JSON.parse(rawText); } catch { parsed = null; }
+      }
+      if (parsed) rememberLeaseSecrets(parsed);
+      if (!response.ok) {
+        const info = extractCloudErrorInfo(parsed, response.status);
+        throw new CloudAccountsError(`Cloud Accounts ${upperMethod} ${path} failed (${response.status}): ${info.message}`, {
+          status: response.status,
+          code: String(info.code),
+          payload: info.payload,
+        });
+      }
+      return parsed ?? {};
+    } catch (error) {
+      if (error instanceof CloudAccountsError) throw error;
+      const timedOut = error?.name === 'AbortError' || error?.name === 'TimeoutError' || /timed?\s*out|aborted/i.test(String(error?.message ?? ''));
+      if (timedOut && isIdempotentRetryable && attempt < retries && (effectiveDeadline - nowFn()) > 0) {
+        continue;
+      }
+      throw new CloudAccountsError(timedOut ? 'Cloud Accounts request timed out.' : `Cloud Accounts unreachable: ${error?.message ?? 'network error'}`, {
+        code: timedOut ? 'timeout' : 'network_error',
+      });
+    } finally {
+      clearTimeout(timer);
     }
-    return parsed ?? {};
-  } catch (error) {
-    if (error instanceof CloudAccountsError) throw error;
-    const timedOut = error?.name === 'AbortError' || /timeout|aborted/i.test(String(error?.message ?? ''));
-    throw new CloudAccountsError(timedOut ? 'Cloud Accounts request timed out.' : `Cloud Accounts unreachable: ${error?.message ?? 'network error'}`, {
-      code: timedOut ? 'timeout' : 'network_error',
-    });
-  } finally {
-    clearTimeout(timer);
   }
+  throw new CloudAccountsError('Cloud Accounts request timed out.', { code: 'timeout' });
 }
 
-export async function listCloudAccounts({ refresh = false, cwd = process.cwd(), env = process.env, timeoutMs = 10_000 } = {}, ports = {}) {
+export async function listCloudAccounts({ refresh = false, cwd = process.cwd(), env = process.env, timeoutMs = 20_000, maxRetries } = {}, ports = {}) {
   const path = refresh === true ? '/v1/accounts?refresh=true' : '/v1/accounts';
-  return cloudAccountsRequest('GET', path, { cwd, env, timeoutMs }, ports);
+  return cloudAccountsRequest('GET', path, { cwd, env, timeoutMs, maxRetries }, ports);
 }
 
-export function accountsStatePath(env = process.env) {
+function resolvePddStateBase(env = process.env) {
   const home = env?.HOME || homedir();
-  const base = (typeof env?.PDD_STATE_DIR === 'string' && env.PDD_STATE_DIR.trim())
+  return (typeof env?.PDD_STATE_DIR === 'string' && env.PDD_STATE_DIR.trim())
     ? env.PDD_STATE_DIR.trim()
     : (typeof env?.XDG_STATE_HOME === 'string' && env.XDG_STATE_HOME.trim())
       ? join(env.XDG_STATE_HOME.trim(), 'pdd')
       : join(home, '.local', 'state', 'pdd');
-  return join(base, 'accounts-state.json');
+}
+
+export function accountsStatePath(env = process.env) {
+  return join(resolvePddStateBase(env), 'accounts-state.json');
+}
+
+export function pddManagedCodexHome(env = process.env) {
+  return join(resolvePddStateBase(env), 'codex-home');
+}
+
+export function managedCodexAuthPath(env = process.env) {
+  return join(pddManagedCodexHome(env), 'auth.json');
+}
+
+export function managedCodexConfigPath(env = process.env) {
+  return join(pddManagedCodexHome(env), 'config.toml');
 }
 
 export function readCloudAccountsState({ env = process.env } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const raw = readJsonObject(fs, accountsStatePath(env));
-  if (!raw) return { enrolled: false, providers: [], active: {}, cooling: {} };
+  if (!raw) return { enrolled: false, providers: [], active: {}, cooling: {}, reauth: {} };
   const active = {};
   if (object(raw.active)) {
     for (const provider of CLOUD_PROVIDERS) {
@@ -276,8 +382,13 @@ export function readCloudAccountsState({ env = process.env } = {}, ports = {}) {
           account_id: entry.account_id,
           label: typeof entry.label === 'string' ? entry.label : entry.account_id,
           provider,
+          state: typeof entry.state === 'string' && entry.state ? entry.state : 'ready',
           lease_id: typeof entry.lease_id === 'string' ? entry.lease_id : null,
+          leased_at: typeof entry.leased_at === 'string' ? entry.leased_at : null,
           expires_at: typeof entry.expires_at === 'string' ? entry.expires_at : null,
+          last_refresh_at: typeof entry.last_refresh_at === 'string' ? entry.last_refresh_at : null,
+          access_token_expires_at: typeof entry.access_token_expires_at === 'string' ? entry.access_token_expires_at : null,
+          materialized_local: entry.materialized_local === true,
           delivery_mode: typeof entry.delivery_mode === 'string' ? entry.delivery_mode : null,
           anthropic_base_url: typeof entry.anthropic_base_url === 'string' ? entry.anthropic_base_url : null,
           managed_anthropic_base_url: entry.managed_anthropic_base_url === true,
@@ -293,29 +404,41 @@ export function readCloudAccountsState({ env = process.env } = {}, ports = {}) {
     }
   }
   const providers = Array.isArray(raw.providers) ? raw.providers.filter(p => CLOUD_PROVIDERS.includes(p)) : Object.keys(active);
-  const cooling = object(raw.cooling) ? { ...raw.cooling } : {};
+  const cooling = object(raw.cooling) ? raw.cooling : {};
+  const reauth = {};
+  if (object(raw.reauth)) {
+    for (const [accId, meta] of Object.entries(raw.reauth)) {
+      if (accId && object(meta)) {
+        reauth[accId] = { marked_at: typeof meta.marked_at === 'string' ? meta.marked_at : null };
+      }
+    }
+  }
   return {
-    enrolled: raw.enrolled === true || Object.keys(active).length > 0,
+    enrolled: raw.enrolled === true,
     providers: [...new Set([...providers, ...Object.keys(active)])],
     active,
     cooling,
+    reauth,
   };
 }
 
 export function writeCloudAccountsState(state, { env = process.env } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const active = {};
-  if (object(state?.active)) {
-    for (const provider of CLOUD_PROVIDERS) {
-      const entry = state.active[provider];
-      if (!object(entry) || typeof entry.account_id !== 'string' || !entry.account_id) continue;
-      // Never persist tokens or credentials in accounts-state.json.
+  for (const provider of CLOUD_PROVIDERS) {
+    const entry = state?.active?.[provider];
+    if (object(entry) && typeof entry.account_id === 'string' && entry.account_id) {
       active[provider] = {
         account_id: entry.account_id,
-        label: typeof entry.label === 'string' ? entry.label : entry.account_id,
+        label: String(entry.label ?? entry.account_id),
         provider,
+        state: typeof entry.state === 'string' && entry.state ? entry.state : 'ready',
         lease_id: typeof entry.lease_id === 'string' ? entry.lease_id : null,
+        leased_at: typeof entry.leased_at === 'string' ? entry.leased_at : null,
         expires_at: typeof entry.expires_at === 'string' ? entry.expires_at : null,
+        last_refresh_at: typeof entry.last_refresh_at === 'string' ? entry.last_refresh_at : null,
+        access_token_expires_at: typeof entry.access_token_expires_at === 'string' ? entry.access_token_expires_at : null,
+        materialized_local: entry.materialized_local === true,
         delivery_mode: typeof entry.delivery_mode === 'string' ? entry.delivery_mode : null,
         anthropic_base_url: typeof entry.anthropic_base_url === 'string' ? entry.anthropic_base_url : null,
         managed_anthropic_base_url: entry.managed_anthropic_base_url === true,
@@ -330,15 +453,42 @@ export function writeCloudAccountsState(state, { env = process.env } = {}, ports
     }
   }
   const providers = [...new Set([...(Array.isArray(state?.providers) ? state.providers.filter(p => CLOUD_PROVIDERS.includes(p)) : []), ...Object.keys(active)])];
+  const enrolled = state?.enrolled === true;
+  const sourceReauth = state?.reauth !== undefined
+    ? state.reauth
+    : (enrolled || providers.length > 0 ? readCloudAccountsState({ env }, ports).reauth : {});
+  const reauth = {};
+  if (object(sourceReauth)) {
+    for (const [accId, meta] of Object.entries(sourceReauth)) {
+      if (accId && object(meta)) {
+        reauth[accId] = { marked_at: typeof meta.marked_at === 'string' ? meta.marked_at : null };
+      }
+    }
+  }
   const payload = {
     enrolled: state?.enrolled === true,
     updated_at: new Date((ports.now ?? Date.now)()).toISOString(),
     providers,
     active,
     cooling: object(state?.cooling) ? state.cooling : {},
+    ...(Object.keys(reauth).length > 0 ? { reauth } : {}),
   };
   writeAtomicPrivate(fs, accountsStatePath(env), `${JSON.stringify(payload, null, 2)}\n`);
   return payload;
+}
+
+export function markLocalAccountReauthRequired(accountId, { env = process.env } = {}, ports = {}) {
+  if (!accountId) return null;
+  const nowIso = new Date((ports.now ?? Date.now)()).toISOString();
+  const saved = readCloudAccountsState({ env }, ports);
+  const nextActive = { ...saved.active };
+  for (const [prov, entry] of Object.entries(nextActive)) {
+    if (entry?.account_id === accountId && entry.state !== 'reauth_required') {
+      nextActive[prov] = { ...entry, state: 'reauth_required' };
+    }
+  }
+  const nextReauth = { ...(saved.reauth ?? {}), [accountId]: { marked_at: nowIso } };
+  return writeCloudAccountsState({ ...saved, active: nextActive, reauth: nextReauth }, { env }, ports);
 }
 
 export function isCloudAccountsActive({ env = process.env, poolPath, provider } = {}, ports = {}) {
@@ -381,7 +531,15 @@ export function stripCodexAuthBundle(authJson) {
 
 export function localCodexHome(env = process.env) {
   const home = env?.HOME || homedir();
-  return (typeof env?.CODEX_HOME === 'string' && env.CODEX_HOME.trim()) ? env.CODEX_HOME.trim() : join(home, '.codex');
+  const defaultHome = join(home, '.codex');
+  const explicit = typeof env?.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
+  if (!explicit) return defaultHome;
+  const managed = pddManagedCodexHome(env);
+  if (resolve(explicit) === resolve(managed)) return defaultHome;
+  try {
+    if (nativeFs.realpathSync(explicit) === nativeFs.realpathSync(managed)) return defaultHome;
+  } catch {}
+  return explicit;
 }
 
 export function localCodexAuthPath(env = process.env) {
@@ -526,7 +684,7 @@ function serializeTomlConfig(root, fileLabel = 'config.toml') {
 }
 
 function readCodexTomlObject(fs, configPath, { strict = true } = {}) {
-  let raw = '';
+  let raw;
   try {
     raw = fs.readFileSync(configPath, 'utf8');
   } catch (error) {
@@ -552,74 +710,189 @@ export function localClaudePaths(env = process.env) {
   };
 }
 
+function stripGatewayFromTomlObject(configData, previousModelProvider = null) {
+  const hasGatewaySection = isTomlTable(configData?.model_providers) && Object.hasOwn(configData.model_providers, CODEX_GATEWAY_PROVIDER_ID);
+  const hasGatewayProvider = configData?.model_provider === CODEX_GATEWAY_PROVIDER_ID;
+  const nextData = { ...(isTomlTable(configData) ? configData : {}) };
+  if (isTomlTable(nextData.model_providers)) {
+    const nextProviders = { ...nextData.model_providers };
+    delete nextProviders[CODEX_GATEWAY_PROVIDER_ID];
+    if (Object.keys(nextProviders).length > 0) nextData.model_providers = nextProviders;
+    else delete nextData.model_providers;
+  }
+  if (nextData.model_provider === CODEX_GATEWAY_PROVIDER_ID) {
+    if (typeof previousModelProvider === 'string' && previousModelProvider.trim() && previousModelProvider.trim() !== CODEX_GATEWAY_PROVIDER_ID) {
+      nextData.model_provider = previousModelProvider.trim();
+    } else {
+      delete nextData.model_provider;
+    }
+  }
+  return { changed: hasGatewaySection || hasGatewayProvider, nextData };
+}
+
+function syncManagedCodexHomeLinks(fs, sourceHome, managedHome) {
+  fs.mkdirSync(managedHome, { recursive: true, mode: 0o700 });
+  try { (fs.chmodSync ?? nativeFs.chmodSync)?.(managedHome, 0o700); } catch {}
+  if (resolve(sourceHome) === resolve(managedHome)) return;
+  const lstat = typeof fs?.lstatSync === 'function' ? fs.lstatSync.bind(fs) : (fs === nativeFs ? nativeFs.lstatSync : null);
+  const symlink = typeof fs?.symlinkSync === 'function' ? fs.symlinkSync.bind(fs) : null;
+  if (!lstat || !symlink) return;
+  const removeLink = dst => {
+    try {
+      if (typeof fs.unlinkSync === 'function') fs.unlinkSync(dst);
+      else fs.rmSync?.(dst, { force: true });
+    } catch {}
+  };
+  for (const name of MANAGED_CODEX_HOME_LINKS) {
+    const src = join(sourceHome, name);
+    const dst = join(managedHome, name);
+    let srcValid = false;
+    try {
+      const srcStat = lstat(src);
+      srcValid = !srcStat.isSymbolicLink();
+    } catch {}
+    if (srcValid) {
+      let dstStat = null;
+      try { dstStat = lstat(dst); } catch {}
+      if (!dstStat) {
+        try { symlink(src, dst); } catch {}
+      } else if (dstStat.isSymbolicLink()) {
+        let currentTarget = null;
+        try { currentTarget = fs.readlinkSync?.(dst) ?? null; } catch {}
+        if (currentTarget !== src) {
+          removeLink(dst);
+          try { symlink(src, dst); } catch {}
+        }
+      }
+    } else {
+      try {
+        const dstStat = lstat(dst);
+        if (dstStat.isSymbolicLink()) removeLink(dst);
+      } catch {}
+    }
+  }
+}
+
 export function restoreLocalCodexGatewayConfig({ env = process.env, previousModelProvider = null, removeAuthFile = false } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
-  const configPath = localCodexConfigPath(env);
-  const authPath = localCodexAuthPath(env);
+  const managedHome = pddManagedCodexHome(env);
+  const configPath = managedCodexConfigPath(env);
+  const authPath = managedCodexAuthPath(env);
+  const userConfigPath = localCodexConfigPath(env);
   let restoredConfig = false;
   let removedAuth = false;
 
   assertNoSymlinkCodexPath(fs, configPath);
-  const { exists: hasConfig, data: configData } = readCodexTomlObject(fs, configPath);
-  if (hasConfig) {
-    const hasGatewaySection = isTomlTable(configData.model_providers) && Object.hasOwn(configData.model_providers, CODEX_GATEWAY_PROVIDER_ID);
-    const hasGatewayProvider = configData.model_provider === CODEX_GATEWAY_PROVIDER_ID;
-    if (hasGatewaySection || hasGatewayProvider) {
-      const nextData = { ...configData };
-      if (isTomlTable(nextData.model_providers)) {
-        const nextProviders = { ...nextData.model_providers };
-        delete nextProviders[CODEX_GATEWAY_PROVIDER_ID];
-        if (Object.keys(nextProviders).length > 0) nextData.model_providers = nextProviders;
-        else delete nextData.model_providers;
-      }
-      if (nextData.model_provider === CODEX_GATEWAY_PROVIDER_ID) {
-        if (typeof previousModelProvider === 'string' && previousModelProvider.trim() && previousModelProvider.trim() !== CODEX_GATEWAY_PROVIDER_ID) {
-          nextData.model_provider = previousModelProvider.trim();
-        } else {
-          delete nextData.model_provider;
-        }
-      }
-      const nextText = serializeTomlConfig(nextData, configPath);
-      writeAtomicPrivate(fs, configPath, nextText);
+  assertNoSymlinkCodexPath(fs, userConfigPath);
+
+  // Clean up any legacy PDD-managed gateway section in user ~/.codex/config.toml without touching ~/.codex/auth.json.
+  const { exists: hasUserConfig, data: userConfigData } = readCodexTomlObject(fs, userConfigPath);
+  if (hasUserConfig) {
+    const strippedUser = stripGatewayFromTomlObject(userConfigData, previousModelProvider);
+    if (strippedUser.changed) {
+      const nextUserText = serializeTomlConfig(strippedUser.nextData, userConfigPath);
+      writeAtomicPrivate(fs, userConfigPath, nextUserText);
       restoredConfig = true;
     }
   }
 
-  if (removeAuthFile) {
-    assertNoSymlinkCodexPath(fs, authPath);
-    const currentAuth = readJsonObject(fs, authPath);
-    if (currentAuth?.auth_mode === 'apikey' && typeof currentAuth?.OPENAI_API_KEY === 'string' && currentAuth.OPENAI_API_KEY.startsWith('pddg_')) {
-      try {
-        if (typeof fs.rmSync === 'function') fs.rmSync(authPath, { force: true });
-        else fs.unlinkSync?.(authPath);
-        removedAuth = true;
-      } catch {}
+  // Update managed PDD CODEX_HOME/config.toml if present.
+  const { exists: hasManagedConfig, data: managedConfigData } = readCodexTomlObject(fs, configPath);
+  if (hasManagedConfig) {
+    const strippedManaged = stripGatewayFromTomlObject(managedConfigData, previousModelProvider);
+    if (strippedManaged.changed) {
+      const nextManagedData = {
+        ...strippedManaged.nextData,
+        cli_auth_credentials_store: 'file',
+      };
+      const nextManagedText = serializeTomlConfig(nextManagedData, configPath);
+      writeAtomicPrivate(fs, configPath, nextManagedText);
+      restoredConfig = true;
     }
   }
 
-  return { configPath, authPath, restoredConfig, removedAuth };
+  // Never touch ~/.codex/auth.json; only remove PDD-managed auth.json inside pddManagedCodexHome(env).
+  if (removeAuthFile) {
+    assertNoSymlinkCodexPath(fs, authPath);
+    try {
+      const hasManagedAuth = Boolean(fs.statSync?.(authPath)?.isFile());
+      if (hasManagedAuth) {
+        if (typeof fs.rmSync === 'function') fs.rmSync(authPath, { force: true });
+        else fs.unlinkSync?.(authPath);
+        removedAuth = true;
+      }
+    } catch {}
+  }
+
+  return { codexHome: managedHome, configPath, authPath, userConfigPath, restoredConfig, removedAuth };
+}
+
+function writeAtomicCodexPair(fs, authPath, authText, configPath, configText) {
+  let prevAuth = null;
+  let prevConfig = null;
+  try { prevAuth = fs.readFileSync(authPath, 'utf8'); } catch {}
+  try { prevConfig = fs.readFileSync(configPath, 'utf8'); } catch {}
+  try {
+    writeAtomicPrivate(fs, configPath, configText);
+    writeAtomicPrivate(fs, authPath, authText);
+  } catch (err) {
+    try {
+      if (prevConfig !== null) writeAtomicPrivate(fs, configPath, prevConfig);
+      else (fs.rmSync ?? nativeFs.rmSync)(configPath, { force: true });
+    } catch {}
+    try {
+      if (prevAuth !== null) writeAtomicPrivate(fs, authPath, prevAuth);
+      else (fs.rmSync ?? nativeFs.rmSync)(authPath, { force: true });
+    } catch {}
+    throw err;
+  }
 }
 
 export function materializeLocalCodexAuth(authOrLease, { env = process.env, previousManagedCodexGateway = false, previousCodexModelProvider = null } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
-  const authPath = localCodexAuthPath(env);
-  const configPath = localCodexConfigPath(env);
-  assertNoSymlinkCodexPath(fs, authPath);
+  const managedHome = pddManagedCodexHome(env);
+  const authPath = managedCodexAuthPath(env);
+  const configPath = managedCodexConfigPath(env);
+  const userHome = localCodexHome(env);
+  const userConfigPath = localCodexConfigPath(env);
 
-  if (object(authOrLease) && authOrLease.delivery_mode === 'gateway_grant') {
-    const gatewayUrl = validateCodexGatewayUrl(authOrLease.codex_gateway_url);
-    const grantToken = resolveCodexGatewayGrant(authOrLease);
-    assertNoSymlinkCodexPath(fs, configPath);
-    const { data: existingConfig } = readCodexTomlObject(fs, configPath);
-    const currentProvider = typeof existingConfig.model_provider === 'string' ? existingConfig.model_provider.trim() : '';
-    const savedPreviousModelProvider = (currentProvider && currentProvider !== CODEX_GATEWAY_PROVIDER_ID)
-      ? currentProvider
+  const isGateway = object(authOrLease) && authOrLease.delivery_mode === 'gateway_grant';
+  const gatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
+  const grantToken = isGateway ? resolveCodexGatewayGrant(authOrLease) : null;
+  const stripped = isGateway ? null : stripCodexAuthBundle(authOrLease);
+
+  assertNoSymlinkCodexPath(fs, authPath);
+  assertNoSymlinkCodexPath(fs, configPath);
+  assertNoSymlinkCodexPath(fs, userConfigPath);
+
+  const { exists: hasUserConfig, data: rawUserConfig } = readCodexTomlObject(fs, userConfigPath);
+  const userCurrentProvider = typeof rawUserConfig.model_provider === 'string' ? rawUserConfig.model_provider.trim() : '';
+  const { exists: hasManagedConfig, data: rawManagedConfig } = readCodexTomlObject(fs, configPath, { strict: false });
+  const managedCurrentProvider = typeof rawManagedConfig.model_provider === 'string' ? rawManagedConfig.model_provider.trim() : '';
+
+  const fallbackPriorProvider = (userCurrentProvider && userCurrentProvider !== CODEX_GATEWAY_PROVIDER_ID)
+    ? userCurrentProvider
+    : (managedCurrentProvider && managedCurrentProvider !== CODEX_GATEWAY_PROVIDER_ID)
+      ? managedCurrentProvider
       : (typeof previousCodexModelProvider === 'string' && previousCodexModelProvider.trim() && previousCodexModelProvider.trim() !== CODEX_GATEWAY_PROVIDER_ID
           ? previousCodexModelProvider.trim()
           : null);
-    const prevProviders = isTomlTable(existingConfig.model_providers) ? { ...existingConfig.model_providers } : {};
+
+  // Clean up any legacy PDD-managed gateway section in ~/.codex/config.toml safely (never touching ~/.codex/auth.json).
+  const cleanedUser = stripGatewayFromTomlObject(rawUserConfig, fallbackPriorProvider);
+  if (hasUserConfig && (cleanedUser.changed || previousManagedCodexGateway)) {
+    if (cleanedUser.changed) {
+      writeAtomicPrivate(fs, userConfigPath, serializeTomlConfig(cleanedUser.nextData, userConfigPath));
+    }
+  }
+
+  syncManagedCodexHomeLinks(fs, userHome, managedHome);
+
+  if (isGateway) {
+    const prevProviders = isTomlTable(cleanedUser.nextData.model_providers) ? { ...cleanedUser.nextData.model_providers } : {};
     const nextConfig = {
-      ...existingConfig,
+      ...cleanedUser.nextData,
+      cli_auth_credentials_store: 'file',
       model_provider: CODEX_GATEWAY_PROVIDER_ID,
       model_providers: {
         ...prevProviders,
@@ -638,30 +911,27 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
       auth_mode: 'apikey',
       OPENAI_API_KEY: grantToken,
     };
-    writeAtomicPrivate(fs, authPath, `${JSON.stringify(gatewayAuth, null, 2)}\n`);
-    writeAtomicPrivate(fs, configPath, serializedConfig);
+    writeAtomicCodexPair(fs, authPath, `${JSON.stringify(gatewayAuth, null, 2)}\n`, configPath, serializedConfig);
     return {
+      codexHome: managedHome,
       authPath,
       configPath,
       managedCodexGateway: true,
       codexGatewayUrl: gatewayUrl,
-      previousCodexModelProvider: savedPreviousModelProvider,
+      previousCodexModelProvider: fallbackPriorProvider,
     };
   }
 
-  const stripped = stripCodexAuthBundle(authOrLease);
-  if (previousManagedCodexGateway) {
-    restoreLocalCodexGatewayConfig({ env, previousModelProvider: previousCodexModelProvider, removeAuthFile: false }, ports);
-  } else {
-    try {
-      restoreLocalCodexGatewayConfig({ env, previousModelProvider: previousCodexModelProvider, removeAuthFile: false }, ports);
-    } catch (error) {
-      if (error instanceof CloudAccountsError && error.code === 'symlink_refused') throw error;
-    }
-  }
-  writeAtomicPrivate(fs, authPath, `${JSON.stringify(stripped, null, 2)}\n`);
+  const nextOwnerConfig = {
+    ...cleanedUser.nextData,
+    cli_auth_credentials_store: 'file',
+  };
+  const serializedOwnerConfig = serializeTomlConfig(nextOwnerConfig, configPath);
+  writeAtomicCodexPair(fs, authPath, `${JSON.stringify(stripped, null, 2)}\n`, configPath, serializedOwnerConfig);
   return {
+    codexHome: managedHome,
     authPath,
+    configPath,
     stripped,
     managedCodexGateway: false,
     codexGatewayUrl: null,
@@ -934,6 +1204,7 @@ export async function reportCloudAccountUsage(accountId, report, { cwd = process
 
 export function saveActiveLeaseMetadata(leaseReply, {
   env = process.env,
+  materializedLocal,
   managedBaseUrl,
   managedCodexGateway,
   codexGatewayUrl,
@@ -944,14 +1215,39 @@ export function saveActiveLeaseMetadata(leaseReply, {
   const acc = leaseReply.account;
   const lease = leaseReply.lease;
   const prev = current.active?.[acc.provider];
+  const nowIso = new Date((ports.now ?? Date.now)()).toISOString();
+  const explicitRefreshAt = acc.last_refresh_at
+    ?? acc.refreshed_at
+    ?? lease.last_refresh_at
+    ?? lease.codex_auth_json?.last_refresh
+    ?? null;
+  const lastRefreshAt = explicitRefreshAt
+    ?? (prev?.account_id === acc.account_id ? prev?.last_refresh_at : null)
+    ?? null;
+  const accessTokenExpiresAt = acc.access_token_expires_at
+    ?? lease.access_token_expires_at
+    ?? extractJwtExpiresAtIso(lease.codex_auth_json?.tokens?.access_token)
+    ?? null;
+  const stillLocallyRevoked = isLocalReauthUnresolved(acc.account_id, explicitRefreshAt, current.reauth);
+  const accountState = (isReauthRequiredAccount(acc) || stillLocallyRevoked)
+    ? 'reauth_required'
+    : (typeof acc.state === 'string' && acc.state ? acc.state : 'ready');
+  const isMaterializedLocal = materializedLocal !== undefined
+    ? Boolean(materializedLocal)
+    : Boolean(prev?.account_id === acc.account_id && prev?.lease_id && prev.lease_id === lease.lease_id && prev.materialized_local === true);
   const nextActive = {
     ...current.active,
     [acc.provider]: {
       account_id: acc.account_id,
       label: acc.label ?? acc.account_id,
       provider: acc.provider,
+      state: accountState,
       lease_id: lease.lease_id ?? null,
+      leased_at: lease.leased_at ?? nowIso,
       expires_at: lease.expires_at ?? null,
+      last_refresh_at: typeof lastRefreshAt === 'string' ? lastRefreshAt : null,
+      access_token_expires_at: typeof accessTokenExpiresAt === 'string' ? accessTokenExpiresAt : null,
+      materialized_local: isMaterializedLocal,
       delivery_mode: lease.delivery_mode ?? null,
       anthropic_base_url: lease.anthropic_base_url ?? null,
       managed_anthropic_base_url: managedBaseUrl !== undefined ? Boolean(managedBaseUrl) : Boolean(prev?.managed_anthropic_base_url),
@@ -966,11 +1262,16 @@ export function saveActiveLeaseMetadata(leaseReply, {
   };
   const nextCooling = { ...current.cooling };
   delete nextCooling[acc.provider];
+  const nextReauth = { ...(current.reauth ?? {}) };
+  if (accountState !== 'reauth_required' && acc.account_id) {
+    delete nextReauth[acc.account_id];
+  }
   return writeCloudAccountsState({
     enrolled: true,
     providers: [...new Set([...current.providers, acc.provider])],
     active: nextActive,
     cooling: nextCooling,
+    reauth: nextReauth,
   }, { env }, ports);
 }
 
@@ -981,31 +1282,92 @@ export async function leaseCloudAccount({
   skipAccountIds = [],
   holderId = 'pdd-step',
   updateState = true,
-} = {}, { cwd = process.cwd(), env = process.env, timeoutMs = 5000 } = {}, ports = {}) {
-  const { machineLabel } = resolveMachineIdentity(env, ports);
-  const saved = readCloudAccountsState({ env }, ports);
-  const stickyId = currentAccountId !== undefined ? currentAccountId : (saved.active?.[provider]?.account_id ?? null);
-  const skip = [...new Set((Array.isArray(skipAccountIds) ? skipAccountIds : []).filter(Boolean))];
-  const reply = await cloudAccountsRequest('POST', '/v1/accounts/lease', {
-    body: {
-      provider,
-      current_account_id: skip.includes(stickyId) ? null : stickyId,
-      preferred_label: preferredLabel ?? null,
-      skip_account_ids: skip,
-      machine_label: machineLabel,
-      holder_id: holderId,
-    },
-    cwd,
-    env,
-    timeoutMs,
-  }, ports);
-  if (reply?.state === 'leased' && updateState) {
-    saveActiveLeaseMetadata(reply, { env }, ports);
-  } else if (reply?.state === 'all_cooling' && updateState && saved.enrolled && saved.providers.includes(provider)) {
-    writeCloudAccountsState({
-      ...saved,
-      cooling: { ...saved.cooling, [provider]: { wake_at: reply.wake_at ?? null } },
-    }, { env }, ports);
+} = {}, { cwd = process.cwd(), env = process.env, timeoutMs = 15_000, maxRetries, now } = {}, ports = {}) {
+  const nowFn = now ?? ports.now ?? Date.now;
+  const effectivePorts = ports.now ? ports : { ...ports, now: nowFn };
+  const { machineLabel } = resolveMachineIdentity(env, effectivePorts);
+  const saved = readCloudAccountsState({ env }, effectivePorts);
+  const savedActive = saved.active?.[provider];
+  const locallyRevokedIds = Object.keys(saved.reauth ?? {});
+  const savedStickyRevoked = currentAccountId === undefined
+    && savedActive?.account_id
+    && (savedActive?.state === 'reauth_required' || locallyRevokedIds.includes(savedActive.account_id));
+  const stickyId = currentAccountId !== undefined
+    ? currentAccountId
+    : (savedStickyRevoked ? null : (savedActive?.account_id ?? null));
+  const skip = [...new Set([
+    ...(Array.isArray(skipAccountIds) ? skipAccountIds : []).filter(Boolean),
+    ...(savedStickyRevoked && !preferredLabel ? [savedActive.account_id] : []),
+    ...(!preferredLabel ? locallyRevokedIds : []),
+  ])];
+  let activeStickyId = stickyId;
+  const maxReauthSkips = preferredLabel ? 0 : (maxRetries === 0 ? 1 : 4);
+  const totalBudgetMs = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 15_000;
+  const deadlineMs = nowFn() + totalBudgetMs;
+  let reply;
+  for (let attempt = 0; ; attempt++) {
+    const remainingMs = deadlineMs - nowFn();
+    if (remainingMs <= 0) {
+      throw new CloudAccountsError('Cloud Accounts request timed out.', { code: 'timeout' });
+    }
+    const reqCurrentId = activeStickyId && !skip.includes(activeStickyId) ? activeStickyId : null;
+    try {
+      reply = await cloudAccountsRequest('POST', '/v1/accounts/lease', {
+        body: {
+          provider,
+          current_account_id: reqCurrentId,
+          preferred_label: preferredLabel ?? null,
+          skip_account_ids: [...skip],
+          machine_label: machineLabel,
+          holder_id: holderId,
+        },
+        cwd,
+        env,
+        timeoutMs: remainingMs,
+        deadlineMs,
+        maxRetries,
+      }, effectivePorts);
+    } catch (error) {
+      if (attempt < maxReauthSkips && isReauthRequiredFailure(error) && (deadlineMs - nowFn()) > 0) {
+        const explicitAccountId = error?.payload?.account_id
+          ?? error?.payload?.detail?.account_id
+          ?? error?.payload?.account?.account_id
+          ?? null;
+        if (typeof explicitAccountId === 'string' && explicitAccountId) {
+          markLocalAccountReauthRequired(explicitAccountId, { env }, effectivePorts);
+        }
+        const skipCandidate = explicitAccountId ?? reqCurrentId;
+        if (typeof skipCandidate === 'string' && skipCandidate && !skip.includes(skipCandidate)) {
+          skip.push(skipCandidate);
+          activeStickyId = null;
+          continue;
+        }
+      }
+      throw error;
+    }
+    if (attempt < maxReauthSkips && reply?.state === 'leased' && isReauthRequiredAccount(reply.account) && (deadlineMs - nowFn()) > 0) {
+      const revokedId = reply.account?.account_id;
+      if (typeof revokedId === 'string' && revokedId && !skip.includes(revokedId)) {
+        markLocalAccountReauthRequired(revokedId, { env }, effectivePorts);
+        skip.push(revokedId);
+        activeStickyId = null;
+        continue;
+      }
+    }
+    break;
+  }
+  if (reply?.state === 'leased' && updateState && !isReauthRequiredAccount(reply.account)) {
+    saveActiveLeaseMetadata(reply, { env }, effectivePorts);
+  } else if (reply?.state === 'leased' && isReauthRequiredAccount(reply.account)) {
+    markLocalAccountReauthRequired(reply.account?.account_id, { env }, effectivePorts);
+  } else if (reply?.state === 'all_cooling' && updateState) {
+    const latestSaved = readCloudAccountsState({ env }, effectivePorts);
+    if (latestSaved.enrolled && latestSaved.providers.includes(provider)) {
+      writeCloudAccountsState({
+        ...latestSaved,
+        cooling: { ...latestSaved.cooling, [provider]: { wake_at: reply.wake_at ?? null } },
+      }, { env }, effectivePorts);
+    }
   }
   return reply;
 }
@@ -1048,6 +1410,9 @@ export async function selectCloudPoolLogin({
   for (const provider of providers) {
     const tried = new Set(Array.isArray(skipAccountIds) ? skipAccountIds.filter(Boolean) : []);
     for (let round = 0; round < 12; round++) {
+      const roundCurrentId = round === 0 && preferredAccountId !== undefined
+        ? preferredAccountId
+        : (round === 0 ? (saved.active?.[provider]?.account_id ?? undefined) : undefined);
       let reply;
       try {
         reply = await leaseCloudAccount({
@@ -1055,16 +1420,27 @@ export async function selectCloudPoolLogin({
           currentAccountId: round === 0 && preferredAccountId !== undefined ? preferredAccountId : undefined,
           skipAccountIds: [...tried],
           holderId,
-        }, { cwd, env, timeoutMs: ports.timeoutMs ?? 5000 }, ports);
+        }, { cwd, env, timeoutMs: ports.timeoutMs ?? 15_000 }, ports);
       } catch (error) {
+        if (isReauthRequiredFailure(error)) {
+          const failedAccId = error?.payload?.account_id ?? (typeof roundCurrentId === 'string' && !tried.has(roundCurrentId) ? roundCurrentId : null);
+          if (failedAccId && !tried.has(failedAccId)) {
+            markLocalAccountReauthRequired(failedAccId, { env }, ports);
+            unavailable.push({ id: failedAccId, reason: 'reauth_required' });
+            tried.add(failedAccId);
+            continue;
+          }
+          unavailable.push({ id: provider, reason: 'reauth_required' });
+          break;
+        }
         unavailable.push({ id: provider, reason: error.code ?? 'unavailable' });
         break;
       }
 
       if (reply?.state === 'all_cooling') {
         const wakeAt = typeof reply.wake_at === 'string' ? reply.wake_at : null;
-        const wakeMs = wakeAt ? Date.parse(wakeAt) : NaN;
-        const validMs = Number.isFinite(wakeMs) ? wakeMs : null;
+        const resetMs = wakeAt ? Date.parse(wakeAt) : null;
+        const validMs = Number.isFinite(resetMs) ? resetMs : null;
         cooling.push({ id: provider, until: validMs, resetAt: validMs, wakeAt, reason: wakeAt ? `Waiting on AI quota until ${wakeAt}` : 'all_cooling' });
         if (validMs != null && (earliestResetMs == null || validMs < earliestResetMs)) {
           earliestResetMs = validMs;
@@ -1081,6 +1457,12 @@ export async function selectCloudPoolLogin({
       }
 
       const acc = reply.account;
+      if (isReauthRequiredAccount(acc)) {
+        markLocalAccountReauthRequired(acc.account_id, { env }, ports);
+        unavailable.push({ id: acc.account_id, reason: 'reauth_required' });
+        tried.add(acc.account_id);
+        continue;
+      }
       if (!allowCredits && isCreditOrResetAccount(acc)) {
         unavailable.push({ id: acc.account_id, reason: 'credit_or_reset_guarded' });
         tried.add(acc.account_id);
@@ -1111,6 +1493,12 @@ export async function selectCloudPoolLogin({
             : await ports.readCodexLimits({ command: cmd, cwd, env: probeStep.env, weeklyStopPercent: 100 }, ports.codexLimitPorts);
         } finally {
           probeStep.cleanup();
+        }
+        if (probeLimits?.state === 'signed_out' || isReauthRequiredFailure(probeLimits?.detail ?? probeLimits?.error)) {
+          markLocalAccountReauthRequired(acc.account_id, { env }, ports);
+          unavailable.push({ id: acc.account_id, reason: 'reauth_required' });
+          tried.add(acc.account_id);
+          continue;
         }
         if (probeLimits?.state === 'limited') {
           const now = (ports.now ?? Date.now)();
