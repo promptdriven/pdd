@@ -46,7 +46,7 @@ When `isShortScenarioDoc(doc)` is `false`, `compileScenario(doc)` returns `{ doc
 
 4. **Steps (`doc.steps`):**
    - Require a nonempty `steps` array (`missing-steps`).
-   - Map `id` -> `step_id` (defaulting to `"step-" + (index + 1)`), `op` -> `operation`, `error` -> `expected_error`, and default `entry_path` from top-level `entry_path` (or single `entry_paths[0]`). Refuse conflicting duplicate aliases (such as both `id` and `step_id` with different values) or unknown step keys (`invalid-step`).
+   - Map `id` -> `step_id` (defaulting to `"step-" + (index + 1)`), `op` -> `operation`, `error` -> `expected_error` (normalizing `{"code": "<code>"}` to `"<code>"`, and when both `error` and `expected_error` are omitted, auto-inferring `expected_error` when step `checks` assert a single distinct `target: "error", path: "/code", op: "equals"` nonblank string code), and default `entry_path` from top-level `entry_path` (or single `entry_paths[0]`). Refuse conflicting duplicate aliases (such as both `id` and `step_id` with different values) or unknown step keys (`invalid-step`).
    - Build `input` from `step.from` (resolving a seed name, `$seed.<name>`, or an earlier step's `step_id`) or `step.input` (default `{}`), then apply optional `step.patch` and `step.set`. Refuse specifying both `from` and `input` (`invalid-step`).
 
 5. **Checks (`step.checks`):**
@@ -72,6 +72,6 @@ None.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256":"82db877bfdb7c724859d1f6595ae8f7b5277f23d815e623b8bf1f68ec4949635","reason":"Pure synchronous BigInt-preserving JSON compiler leaf loaded directly by src/runtime-seam.mjs without external ports."}
+{"kind":"native-only","status":"draft","prose_sha256":"dd8fe0e0b70c00b6fdbd2d4c444370ab396d3b4fc72d991e38a5883301f40700","reason":"Pure synchronous BigInt-preserving JSON compiler leaf loaded directly by src/runtime-seam.mjs without external ports."}
 ```
 </details>

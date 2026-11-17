@@ -1,4 +1,4 @@
-// Generated from prompts/cli/scenario-compile.prompt.md (sha256: 94138d774179d0eca67230236f7de7b32970bf6c8a52fbd84895350223eaed3e).
+// Generated from prompts/cli/scenario-compile.prompt.md (sha256: 25f1b2026b804e0b2013414d1b7b861159292cc8993d42ed69be7682120af458).
 import { basename } from 'node:path';
 
 export const V1_SCENARIO_SCHEMA = 'prompt-runtime.program-scenario.v1';
@@ -818,7 +818,13 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
       if (Object.hasOwn(step, 'operation') && Object.hasOwn(step, 'op') && step.operation !== step.op) {
         fail('invalid-step', section, 'Step specifies conflicting "operation" and "op".', at);
       }
-      if (Object.hasOwn(step, 'expected_error') && Object.hasOwn(step, 'error') && step.expected_error !== step.error) {
+      const normalizeErrSpec = val =>
+        isPlainObject(val) && Object.keys(val).length === 1 && typeof val.code === 'string' && val.code.trim()
+          ? val.code
+          : val;
+      const normExpectedErr = normalizeErrSpec(step.expected_error);
+      const normErr = normalizeErrSpec(step.error);
+      if (Object.hasOwn(step, 'expected_error') && Object.hasOwn(step, 'error') && normExpectedErr !== normErr) {
         fail('invalid-step', section, 'Step specifies conflicting "expected_error" and "error".', at);
       }
       if (Object.hasOwn(step, 'from') && Object.hasOwn(step, 'input')) {
@@ -906,14 +912,36 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
         fail('invalid-check', `${section}.checks`, 'Step "checks" must be an array or a criterion-keyed object.', at);
       }
 
+      let hasExpectedError = Object.hasOwn(step, 'expected_error') || Object.hasOwn(step, 'error');
+      let resolvedExpectedError = normExpectedErr ?? normErr;
+      if (!hasExpectedError) {
+        const inferredErrorCodes = [
+          ...new Set(
+            compiledChecks
+              .filter(
+                chk =>
+                  isPlainObject(chk) &&
+                  chk.target === 'error' &&
+                  chk.path === '/code' &&
+                  chk.op === 'equals' &&
+                  typeof chk.value === 'string' &&
+                  chk.value.trim().length > 0,
+              )
+              .map(chk => chk.value),
+          ),
+        ];
+        if (inferredErrorCodes.length === 1) {
+          hasExpectedError = true;
+          resolvedExpectedError = inferredErrorCodes[0];
+        }
+      }
+
       const outStep = {
         step_id: stepId,
         entry_path: entryPath,
         operation,
         input: stepInput,
-        ...(Object.hasOwn(step, 'expected_error') || Object.hasOwn(step, 'error')
-          ? { expected_error: step.expected_error ?? step.error }
-          : {}),
+        ...(hasExpectedError ? { expected_error: resolvedExpectedError } : {}),
         ...(Object.hasOwn(step, 'simulation_overrides')
           ? { simulation_overrides: expandValue(step.simulation_overrides, `${section}.simulation_overrides`, [], at) }
           : {}),

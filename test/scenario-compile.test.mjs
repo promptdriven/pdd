@@ -533,3 +533,40 @@ test('End-to-end seam integration: Short JSON works across findTests, preflight,
   );
   writeFileSync(join(setup.repo, 'tests/place-order.json'), savedGood);
 });
+
+test('Short JSON auto-infers expected_error from error /code = checks and normalizes {code} error objects', () => {
+  const shortDoc = {
+    entry_path: 'prompts/task-manager.prompt.md',
+    steps: [
+      {
+        id: 'blank-shorthand',
+        op: 'add_task',
+        input: { title: '' },
+        checks: { 1: [['error', '=', 'blank-title'], ['calls', 'tasks.write_all', '=', 0]] },
+      },
+      {
+        id: 'whitespace-explicit-path',
+        op: 'add_task',
+        input: { title: '   ' },
+        checks: { 1: [['error', '/code', '=', 'blank-title']] },
+      },
+      {
+        id: 'object-code-error',
+        op: 'add_task',
+        input: { title: '\t' },
+        error: { code: 'blank-title' },
+        checks: { 1: [['error', '=', 'blank-title']] },
+      },
+    ],
+  };
+  const { doc, changed, refusal } = compileScenario(shortDoc, {
+    path: 'tests/task-manager.json',
+    storyPath: 'user_stories/task-manager.md',
+    storySource: '# Tasks\n\n## Acceptance criteria\n\n1. Blank titles fail with blank-title.\n',
+  });
+  assert.equal(refusal, null);
+  assert.equal(changed, true);
+  assert.equal(doc.steps[0].expected_error, 'blank-title');
+  assert.equal(doc.steps[1].expected_error, 'blank-title');
+  assert.equal(doc.steps[2].expected_error, 'blank-title');
+});
