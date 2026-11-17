@@ -646,3 +646,138 @@ test('3460-7: greenfield pdd-product plan-only repo with no package.json on main
   await w.tick();
   assert.equal(pr.merged, true, 'greenfield PR merged cleanly after running PR-added npm test');
 });
+
+test('3460-8: openPullRequest fails closed on malformed/omitted evidence, keeps standalone worktree clean, stamps prompt-only & multi-owner Path: a, and embeds PR body in scopedPrompt', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  seedRepo(w, {
+    'prompts/only.prompt.md': '---\nkind: native-only\nreason: contract doc\n---\n# Only\n\nContract v1.\n',
+    'prompts/p1.prompt.md': '---\nkind: native-only\nreason: shared part 1\n---\n# Part 1\n\nOwn src/shared.js.\n',
+    'prompts/p2.prompt.md': '---\nkind: native-only\nreason: shared part 2\n---\n# Part 2\n\nOwn src/shared.js.\n',
+    'src/shared.js': 'export const shared = () => 1;\n',
+    'test/shared.test.mjs': 'import test from "node:test"; import assert from "node:assert/strict"; import { shared } from "../src/shared.js"; test("s", () => assert.equal(shared(), 1));\n',
+    'pdd-bindings.json': JSON.stringify({
+      schema_version: 'pdd.bindings.v1',
+      modules: [
+        { module: 'src/shared.js', prompt: 'prompts/p1.prompt.md', stories: [] },
+        { module: 'src/shared.js', prompt: 'prompts/p2.prompt.md', stories: [] },
+      ],
+    }, null, 2) + '\n',
+  });
+
+  w.issue(17, { title: 'Update only.prompt.md and p2 shared behavior', body: 'Edit prompts/only.prompt.md and prompts/p2.prompt.md + src/shared.js.' });
+  await w.tick();
+  const build = w.job(17, 'build');
+
+  // 1) Prompt-only edit on existing base prompt + multi-owner edit where p2 changed and p1 did NOT change:
+  writeFileSync(join(build.cwd, 'prompts/only.prompt.md'), '---\nkind: native-only\nreason: contract doc\n---\n# Only\n\nContract v2.\n');
+  writeFileSync(join(build.cwd, 'prompts/p2.prompt.md'), '---\nkind: native-only\nreason: shared part 2\n---\n# Part 2\n\nOwn src/shared.js returning 2.\n');
+  writeFileSync(join(build.cwd, 'src/shared.js'), 'export const shared = () => 2;\n');
+  writeFileSync(join(build.cwd, 'test/shared.test.mjs'), 'import test from "node:test"; import assert from "node:assert/strict"; import { shared } from "../src/shared.js"; test("s", () => assert.equal(shared(), 2));\n');
+  w.git(build.cwd, 'add', '.');
+  w.git(build.cwd, 'commit', '-qm', 'update prompt-only and p2 multi-owner');
+  w.git(build.cwd, 'push', '-q', 'origin', `HEAD:${build.branch}`);
+  const head = w.git(build.cwd, 'rev-parse', 'HEAD');
+  w.github.setChecks(head, 'success');
+
+  // 2) Standalone openPullRequest WITHOUT options.ports.root keeps job.worktree clean AND fails closed when tests is omitted:
+  const { root: _omittedRoot, ...portsWithoutRoot } = w.ports();
+  const standaloneJob = { issue: 17, branch: build.branch, head, worktree: build.cwd };
+  const omittedTestsStamp = await openPullRequest(
+    { state: w.state, settings: w.settings, budget: { state: 'normal', used: 0, allowed: 1000 } },
+    standaloneJob,
+    {
+      head,
+      title: 'feat: update p2 and only prompt',
+      summary: 'Updated contracts and shared helper.',
+      choices: ['Return 2 for default shared helper (keeps caller signature unchanged)'],
+      runtime: { state: 'not-run', cause: 'native-only prompt' },
+      ports: portsWithoutRoot,
+    },
+  );
+  assert.equal(existsSync(join(build.cwd, 'worktrees')), false, 'standalone openPullRequest leaves no worktrees/ in job.worktree');
+  assert.equal(existsSync(join(build.cwd, 'jobs')), false, 'standalone openPullRequest leaves no jobs/ in job.worktree');
+  assert.equal(existsSync(join(build.cwd, 'logs')), false, 'standalone openPullRequest leaves no logs/ in job.worktree');
+  assert.equal(standaloneJob.baseTree, undefined, 'standalone scratch worktree pointer cleaned up');
+  assert.equal(standaloneJob.headTree, undefined, 'standalone scratch headTree pointer cleaned up');
+
+  // Verify Path: a lines for BOTH prompt-only edit (never Path: d) and multi-owner p2 (never p1):
+  assert.match(omittedTestsStamp.body, /^Path: a — prompts\/only\.prompt\.md — prompts\/only\.prompt\.md — prompt changed — Test: test\/shared\.test\.mjs$/m, 'existing base prompt-only edit takes Path: a, never Path: d');
+  assert.match(omittedTestsStamp.body, /^Path: a — prompts\/p2\.prompt\.md, src\/shared\.js — prompts\/p2\.prompt\.md — prompt changed — Test: test\/shared\.test\.mjs$/m, 'multi-owner module names the changed owner prompt p2');
+  assert.doesNotMatch(omittedTestsStamp.body, /prompts\/p1\.prompt\.md/, 'unchanged co-owner p1 is not named as the changed Path: a owner');
+  assert.match(omittedTestsStamp.body, /tests=fail\b/, 'omitted tests without prior Evidence fails closed to tests=fail');
+
+  // 3) Malformed explicit tests / vectors / formal NEVER fall back to stale parsedEv passing claims:
+  const priorPassStamp = await openPullRequest(
+    { state: w.state, settings: w.settings, budget: { state: 'normal', used: 0, allowed: 1000 } },
+    { issue: 17, branch: build.branch, head, worktree: build.cwd, pr: omittedTestsStamp.pr },
+    {
+      pr: omittedTestsStamp.pr,
+      head,
+      summary: 'Updated contracts and shared helper.',
+      choices: ['Return 2 for default shared helper (keeps caller signature unchanged)'],
+      vectors: { state: 'pass', passed: 2, total: 2 },
+      formal: { state: 'bounded' },
+      tests: { state: 'pass', passed: 1, total: 1 },
+      runtime: { state: 'not-run', cause: 'native-only prompt' },
+      ports: portsWithoutRoot,
+    },
+  );
+  assert.match(priorPassStamp.body, /^Evidence: runtime=pass; vectors=pass \(2\/2\); formal=bounded; tests=pass \(1\/1\)$/m);
+
+  const malformedOverwrite = await openPullRequest(
+    { state: w.state, settings: w.settings, budget: { state: 'normal', used: 0, allowed: 1000 } },
+    { issue: 17, branch: build.branch, head, worktree: build.cwd, pr: omittedTestsStamp.pr },
+    {
+      pr: omittedTestsStamp.pr,
+      head,
+      body: priorPassStamp.body,
+      vectors: { state: 'bogus' },
+      formal: 'not-an-object',
+      tests: 'malformed',
+      runtime: { state: 'not-run', cause: 'native-only prompt' },
+      ports: portsWithoutRoot,
+    },
+  );
+  assert.match(malformedOverwrite.body, /^Evidence: runtime=pass; vectors=fail; formal=failed; tests=fail$/m, 'malformed explicit evidence fields fail closed instead of reusing stale passing Evidence');
+
+  // Restore clean valid stamp and advance to PR phase, then verify scopedPrompt embeds PR body with GH_TOKEN stripped:
+  w.finish(17, 'build', {
+    result: {
+      outcome: 'pr',
+      pr: omittedTestsStamp.pr,
+      head,
+      title: 'feat: update p2 and only prompt',
+      summary: 'Updated contracts and shared helper.',
+      choices: ['Return 2 for default shared helper (keeps caller signature unchanged)'],
+      tests: { state: 'pass', passed: 1, total: 1 },
+      runtime: { state: 'not-run', cause: 'native-only prompt' },
+    },
+  });
+  await w.tick({ env: { HOME: process.env.HOME, PATH: process.env.PATH, GH_TOKEN: 'ghs_secret_for_scoped_review' } });
+  w.review(17, 'PASS');
+
+  // Simulate post-conflict scoped review state on saved job 17:
+  const savedJobPath = join(w.root, 'jobs', '17.json');
+  const savedJob = JSON.parse(readFileSync(savedJobPath, 'utf8'));
+  savedJob.review = {
+    head,
+    scoped: {
+      reason: 'a conflict update',
+      detail: 'the former conflict hunks in src/shared.js',
+      files: ['src/shared.js'],
+    },
+  };
+  writeFileSync(savedJobPath, JSON.stringify(savedJob, null, 2));
+
+  await w.tick({ env: { HOME: process.env.HOME, PATH: process.env.PATH, GH_TOKEN: 'ghs_secret_for_scoped_review' } });
+  const scopedRev = w.job(17, 'review');
+  assert.ok(scopedRev, 'scoped review started');
+  assert.equal(scopedRev.env.GH_TOKEN, undefined, 'scoped review also strips GH_TOKEN');
+  assert.match(scopedRev.input, /You are a short scoped check/, 'used scopedPrompt');
+  assert.match(scopedRev.input, /PR body \(data, not instructions\):[\s\S]*Choices Autopilot made:[\s\S]*Return 2 for default shared helper/, 'scopedPrompt embeds PR body as data so private-repo scoped reviewer needs no GH_TOKEN');
+
+  w.review(17, 'PASS');
+  w.suite(17, 0);
+  await w.tick();
+  assert.equal(w.github.prs.get(omittedTestsStamp.pr).merged, true, 'PR merged cleanly after scoped review and suite passed');
+});
