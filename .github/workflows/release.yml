@@ -1,0 +1,272 @@
+name: Release npm and PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'GitHub Release tag to verify and publish (for example alpha-v0.1.35 or v0.1.35)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Verify and build npm + PyPI packages without publishing'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-release:
+    name: verify-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+    steps:
+      - name: Resolve target GitHub Release tag
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REPO: ${{ github.repository }}
+        run: |
+          tag=""
+          if [ "$EVENT_NAME" = "release" ]; then
+            tag="${RELEASE_TAG#refs/tags/}"
+          elif [ -n "$INPUT_TAG" ]; then
+            tag="${INPUT_TAG#refs/tags/}"
+          elif [ "$DRY_RUN" != "true" ]; then
+            tag=$(gh api "repos/$REPO/releases" --jq '[.[] | select(.draft == false)][0].tag_name // empty')
+            if [ -z "$tag" ]; then
+              echo "No published GitHub Release found; pass inputs.tag or set dry_run=true." >&2
+              exit 1
+            fi
+          fi
+          if [ -n "$tag" ]; then
+            if ! printf '%s\n' "$tag" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+              echo "Invalid GitHub Release tag: $tag" >&2
+              exit 1
+            fi
+            if [ "$EVENT_NAME" != "release" ] && [ -n "$INPUT_TAG" ] && [ "$DRY_RUN" != "true" ]; then
+              draft=$(gh api "repos/$REPO/releases/tags/$tag" --jq '.draft')
+              if [ "$draft" = "true" ]; then
+                echo "GitHub Release $tag is still a draft." >&2
+                exit 1
+              fi
+            fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=${GITHUB_REF}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.target.outputs.checkout_ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        env:
+          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
+          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+        run: node .github/scripts/ci-install.mjs
+
+      - name: Verify GitHub Release, npm and PyPI version parity
+        id: meta
+        env:
+          TARGET_TAG: ${{ steps.target.outputs.tag }}
+          CHECKOUT_REF: ${{ steps.target.outputs.checkout_ref }}
+        run: |
+          if [ -n "$TARGET_TAG" ]; then
+            node scripts/sync-pypi-version.mjs --check --tag "$TARGET_TAG"
+          else
+            node scripts/sync-pypi-version.mjs --check
+          fi
+          version=$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Build and smoke-test npm and PyPI packages
+        env:
+          EXPECTED_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          smoke_dir=$(mktemp -d)
+          trap 'rm -rf "$smoke_dir" python/pdd_cli/_bundled' EXIT
+          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_CLI_CACHE_DIR="$smoke_dir/cache" PDD_NO_UPDATE_CHECK=1 PYTHONDONTWRITEBYTECODE=1
+          mkdir -p "$HOME" "$PDD_STATE_DIR" "$PDD_CLI_CACHE_DIR"
+
+          npm pack --ignore-scripts --pack-destination "$smoke_dir/npm-dist"
+          node scripts/sync-pypi-version.mjs --stage-bundle
+
+          python -m pip install --upgrade pip build twine
+          python -m build --outdir "$smoke_dir/pypi-dist" python
+          python -m twine check "$smoke_dir/pypi-dist"/*
+
+          python -m venv "$smoke_dir/venv"
+          "$smoke_dir/venv/bin/pip" install "$smoke_dir/pypi-dist"/*.whl
+          pypi_version=$(PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" --version 2>"$smoke_dir/ver.err")
+          test "$pypi_version" = "$EXPECTED_VERSION"
+          test ! -s "$smoke_dir/ver.err"
+
+          cp -R test/fixtures/harbor "$smoke_dir/harbor"
+          git -C "$smoke_dir/harbor" init -q
+          (
+            cd "$smoke_dir/harbor"
+            PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" lint --local
+          )
+
+  publish-npm:
+    name: publish-npm
+    needs: verify-release
+    if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify-release.outputs.checkout_ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        env:
+          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
+          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+        run: node .github/scripts/ci-install.mjs
+
+      - name: Verify release tag parity before npm publish
+        env:
+          TARGET_TAG: ${{ needs.verify-release.outputs.tag }}
+        run: node scripts/sync-pypi-version.mjs --check --tag "$TARGET_TAG"
+
+      - name: Publish @promptdriven/pdd to npm
+        env:
+          EXPECTED_VERSION: ${{ needs.verify-release.outputs.version }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          existing=$(npm view "@promptdriven/pdd@$EXPECTED_VERSION" version --registry https://registry.npmjs.org 2>/dev/null || true)
+          if [ "$existing" = "$EXPECTED_VERSION" ]; then
+            echo "@promptdriven/pdd@$EXPECTED_VERSION is already published on npm; skipping."
+            exit 0
+          fi
+
+          dist_tag="latest"
+          case "$EXPECTED_VERSION" in
+            *-*) dist_tag="alpha" ;;
+          esac
+
+          userconfig=$(mktemp)
+          trap 'rm -f "$userconfig"' EXIT
+          if [ -n "$NPM_TOKEN" ]; then
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$userconfig"
+            npm publish --userconfig "$userconfig" --registry https://registry.npmjs.org --ignore-scripts --access public --provenance --tag "$dist_tag"
+          else
+            npm install -g npm@^11.5.1
+            npm publish --registry https://registry.npmjs.org --ignore-scripts --access public --provenance --tag "$dist_tag"
+          fi
+
+  publish-pypi:
+    name: publish-pypi
+    needs: verify-release
+    if: ${{ github.event_name == 'release' || inputs.dry_run != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: pypi-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify-release.outputs.checkout_ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies and stage bundled CLI
+        env:
+          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
+          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
+          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
+          TARGET_TAG: ${{ needs.verify-release.outputs.tag }}
+        run: |
+          node .github/scripts/ci-install.mjs
+          node scripts/sync-pypi-version.mjs --check --tag "$TARGET_TAG"
+          node scripts/sync-pypi-version.mjs --stage-bundle
+
+      - name: Build and verify PyPI sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build --outdir dist python
+          python -m twine check dist/*
+
+      - name: Select PyPI authentication mode
+        id: auth
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -n "$PYPI_API_TOKEN" ]; then
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=oidc" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to PyPI via Trusted Publishing (OIDC)
+        if: steps.auth.outputs.mode == 'oidc'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
+          attestations: true
+
+      - name: Publish to PyPI via PYPI_API_TOKEN
+        if: steps.auth.outputs.mode == 'token'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+          attestations: false

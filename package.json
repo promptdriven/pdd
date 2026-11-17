@@ -3,6 +3,14 @@
   "version": "0.1.35",
   "description": "PDD: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/promptdriven/pdd.git"
+  },
+  "homepage": "https://github.com/promptdriven/pdd#readme",
+  "bugs": {
+    "url": "https://github.com/promptdriven/pdd/issues"
+  },
   "bin": {
     "pdd": "bin/pdd.mjs"
   },
@@ -22,7 +30,8 @@
     "user_stories/fake-*.md"
   ],
   "scripts": {
-    "test": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/*.test.mjs"
+    "test": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/*.test.mjs",
+    "version": "node scripts/sync-pypi-version.mjs && git add python/pyproject.toml python/pdd_cli/__init__.py"
   },
   "dependencies": {
     "@promptdriven/runtime-client": "1.0.0"
@@ -31,5 +40,7 @@
     "node": ">=22.16.0"
   },
   "license": "MIT",
-  "private": true
+  "publishConfig": {
+    "access": "public"
+  }
 }
