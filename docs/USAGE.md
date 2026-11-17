@@ -618,7 +618,7 @@ This is a pre-release. These limits are known today:
 | `pdd test` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
 | `pdd approve is for a person at a terminal` | In strict mode, run the approval yourself in a normal terminal. In easy mode, your agent can record your actual chat approval with --said. |
 | PR 1 says `Draft prompts: …` | Approve the ready gate and its drafts together, or approve one prompt at a time in a terminal. See [approval commands](cli.md#record-a-chat-approval). |
-| `npm error code EEXIST` on `<prefix>/bin/pdd` | An unscoped `pdd` npm package owns `bin/pdd`. Run `npm uninstall -g pdd && npm install -g github:promptdriven/pdd` without `--force`, or run `pdd upgrade`. |
+| `npm error code EEXIST` on `<prefix>/bin/pdd` | An unscoped `pdd` npm package owns `bin/pdd`. Run `npm uninstall -g pdd && npm install -g github:promptdriven/pdd` (do not use `--force`). |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
 
 ## 14. Report a problem
