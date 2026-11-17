@@ -181,8 +181,9 @@ Catalog `contracts` (stable id `contracts`, local `contracts`) with form
 stale since their last check. Catalog `contracts.sync` (local `contracts-sync`)
 with form `pdd contracts sync [--write]`, no operands and only flag `--write`.
 Help says preview moving copies to references, and apply only with --write.
-Both routes are local, use working files and make no runtime call. Include them
-in root help and completion; do not import the runtime client for parsing/help.
+Both routes are local, use working files and make no runtime call. Root help
+advertises the `pdd contracts` family, and family help lists `pdd contracts sync`.
+Include both routes in completion; do not import the runtime client for parsing/help.
 
 ## Product routes
 

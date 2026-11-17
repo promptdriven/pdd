@@ -14,7 +14,7 @@ test('public workflow approval help requires explicit person relay or person ter
   const line = result.stdout.split('\n').find(row => /^\s+pdd workflow approve /.test(row));
   const prose = result.stdout.replace(/\s+/g, ' ');
   assert.ok(line, 'workflow approve must appear in public help');
-  assert.doesNotMatch(line, /no-said keeps terminal\/native-chat approval|or use terminal\/native area-chat approval/i, 'help must not advertise independent native-chat approval');
+  assert.doesNotMatch(prose, /no-said keeps terminal\/native-chat approval|or use terminal\/native area-chat approval/i, 'help must not advertise independent native-chat approval');
   assert.match(line, /--said/);
   assert.match(prose, /gate.*all.*draft/i);
   assert.match(result.stdout, /nonblank|non-empty|nonempty/i);
