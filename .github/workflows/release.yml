@@ -45,16 +45,9 @@ jobs:
         run: |
           tag=""
           if [ "$EVENT_NAME" = "release" ]; then
-            tag="$RELEASE_TAG"
+            tag="${RELEASE_TAG#refs/tags/}"
           elif [ -n "$INPUT_TAG" ]; then
-            tag="$INPUT_TAG"
-            if [ "$DRY_RUN" != "true" ]; then
-              draft=$(gh api "repos/$REPO/releases/tags/$tag" --jq '.draft')
-              if [ "$draft" = "true" ]; then
-                echo "GitHub Release $tag is still a draft." >&2
-                exit 1
-              fi
-            fi
+            tag="${INPUT_TAG#refs/tags/}"
           elif [ "$DRY_RUN" != "true" ]; then
             tag=$(gh api "repos/$REPO/releases" --jq '[.[] | select(.draft == false)][0].tag_name // empty')
             if [ -z "$tag" ]; then
@@ -63,6 +56,17 @@ jobs:
             fi
           fi
           if [ -n "$tag" ]; then
+            if ! printf '%s\n' "$tag" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+              echo "Invalid GitHub Release tag: $tag" >&2
+              exit 1
+            fi
+            if [ "$EVENT_NAME" != "release" ] && [ -n "$INPUT_TAG" ] && [ "$DRY_RUN" != "true" ]; then
+              draft=$(gh api "repos/$REPO/releases/tags/$tag" --jq '.draft')
+              if [ "$draft" = "true" ]; then
+                echo "GitHub Release $tag is still a draft." >&2
+                exit 1
+              fi
+            fi
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
             echo "checkout_ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
           else
@@ -114,8 +118,8 @@ jobs:
         run: |
           smoke_dir=$(mktemp -d)
           trap 'rm -rf "$smoke_dir" python/pdd_cli/_bundled' EXIT
-          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_NO_UPDATE_CHECK=1
-          mkdir -p "$HOME" "$PDD_STATE_DIR"
+          export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_CLI_CACHE_DIR="$smoke_dir/cache" PDD_NO_UPDATE_CHECK=1 PYTHONDONTWRITEBYTECODE=1
+          mkdir -p "$HOME" "$PDD_STATE_DIR" "$PDD_CLI_CACHE_DIR"
 
           npm pack --ignore-scripts --pack-destination "$smoke_dir/npm-dist"
           node scripts/sync-pypi-version.mjs --stage-bundle
@@ -126,8 +130,16 @@ jobs:
 
           python -m venv "$smoke_dir/venv"
           "$smoke_dir/venv/bin/pip" install "$smoke_dir/pypi-dist"/*.whl
-          pypi_version=$("$smoke_dir/venv/bin/pdd" --version)
+          pypi_version=$(PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" --version 2>"$smoke_dir/ver.err")
           test "$pypi_version" = "$EXPECTED_VERSION"
+          test ! -s "$smoke_dir/ver.err"
+
+          cp -R test/fixtures/harbor "$smoke_dir/harbor"
+          git -C "$smoke_dir/harbor" init -q
+          (
+            cd "$smoke_dir/harbor"
+            PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" lint --local
+          )
 
   publish-npm:
     name: publish-npm
@@ -257,3 +269,4 @@ jobs:
           packages-dir: dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
+          attestations: false

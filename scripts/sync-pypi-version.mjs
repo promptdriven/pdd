@@ -117,13 +117,13 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
   return version;
 }
 
-export function stagePypiBundle({ root = DEFAULT_ROOT } = {}) {
+export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDir = null } = {}) {
   const parity = checkVersionParity({ root });
   if (!parity.ok) {
     throw new Error(`Cannot stage PyPI bundle:\n${parity.problems.join('\n')}`);
   }
 
-  const bundleDir = join(root, 'python', 'pdd_cli', '_bundled');
+  const bundleDir = customBundleDir ?? join(root, 'python', 'pdd_cli', '_bundled');
   rmSync(bundleDir, { recursive: true, force: true });
 
   const scratch = mkdtempSync(join(tmpdir(), 'pdd-pypi-stage-'));
