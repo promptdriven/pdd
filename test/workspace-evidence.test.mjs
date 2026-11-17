@@ -16,7 +16,7 @@ const registerArgs=['workflow','evidence-associate','17','--workspace','./clone 
 test('2899 CLI requires explicit registration input and forwards the immutable selection unchanged',async()=>{
   assert.equal(typeof associateEvidenceWorkspace,'function','2899 native evidence registration must exist');
   const plan=parseArgv(registerArgs);assert.deepEqual(plan.options['--test'],[...selection,'tests/unknown-item.json']);assert.ok(Object.isFrozen(plan.options['--test']));
-  assert.match(renderHelp(['workflow']),/evidence-associate ISSUE/);
+  assert.match(renderHelp(['workflow', 'evidence-associate']),/evidence-associate ISSUE/);
   for(const shell of ['bash','zsh'])assert.match(renderCompletion(shell),/evidence-associate/);
   const calls=[],runner={associateEvidenceWorkspace:async(input,ports)=>{calls.push({input,ports});return {exitCode:0,message:'registered'};}};
   const stdout=sink(),stderr=sink();assert.equal(await runPdd(registerArgs,{cwd:'/owned',workflowRunner:runner,stdout,stderr}),0);

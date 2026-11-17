@@ -3,7 +3,7 @@
   "story_path": "user_stories/autopilot-setup-observe.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-4da0eff0bc65096e58f968bdce8927d394fba8ae172934ab",
       "text": "In a fresh Git repository, selecting observe during terminal setup saves observe."
     }
   ],
@@ -78,14 +78,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-4da0eff0bc65096e58f968bdce8927d394fba8ae172934ab",
           "target": "result",
           "path": "/mode",
           "op": "equals",
           "value": "observe"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-4da0eff0bc65096e58f968bdce8927d394fba8ae172934ab",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",

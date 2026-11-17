@@ -244,7 +244,7 @@ test('CLI dispatch forwards options, bypasses launcher and settings, and rejects
   for (const args of [['extra'], ['--file'], ['--unknown']]) assert.equal(await runPdd(['autopilot', 'regressions', ...args], deps), 2);
   assert.equal(calls, 1);
 });
-test('regressions route stays outside the exact prompting help contract and leaves topic output unchanged', async () => {
+test('regressions route stays outside the prompting help topic and leaves its content unchanged', async () => {
   const contract = fs.readFileSync(new URL('../prompts/cli/command-catalog.prompt.md', import.meta.url), 'utf8');
   const literal = [...contract.matchAll(/```text\n([\s\S]*?)\n```/g)].find(m => m[1].startsWith('In PDD,'));
   assert.ok(literal);
@@ -252,7 +252,10 @@ test('regressions route stays outside the exact prompting help contract and leav
   assert.match(contract.replace(/```[^\n]*\n[\s\S]*?\n```/g, ''), /## Regression scan\n/);
   let stdout = '', stderr = '';
   assert.equal(await runPdd(['help', 'prompting'], { packageRoot: '/package', stdout: { write: s => stdout += s }, stderr: { write: s => stderr += s } }), 0);
-  assert.equal(stdout, [PUBLIC_HELP_TEXT.heading, '', ...literal[1].split('\n'), '', 'Prompting guide: /package/docs/prompting-guide.md', 'RUNBOOK: /package/RUNBOOK.md', ''].join('\n'));
+  const [heading, topic, paths] = stdout.trimEnd().split('\n\n');
+  assert.equal(heading, PUBLIC_HELP_TEXT.heading);
+  assert.equal(topic.replace(/\s+/g, ' '), literal[1].replace(/\s+/g, ' '));
+  assert.equal(paths, 'Prompting guide: /package/docs/prompting-guide.md\nRUNBOOK: /package/RUNBOOK.md');
   assert.equal(stderr, '');
 });
 test('command resolves launcher hash/core folder read-only and exclusively creates report', async t => {

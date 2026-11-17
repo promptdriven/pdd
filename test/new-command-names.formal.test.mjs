@@ -213,7 +213,10 @@ test('the new words are data in one place', async t => {
   const completion = await import(pathToFileURL(join(copy, 'completion.mjs')));
   const help = cli.renderHelp();
   for (const word of ['exam', 'sweep', 'sandbox']) assert.match(help, new RegExp(`\\n  pdd ${word}\\b`), word);
-  assert.match(help, /\n {2}pdd workflow begin\b/); assert.match(help, /\bworkflow begin\b.*Herdr/);
+  assert.match(help, /\n {2}pdd workflow begin\b/);
+  const workflowHelp = cli.renderHelp(['workflow', 'begin']);
+  assert.match(workflowHelp, /^pdd workflow begin\n/);
+  assert.match(workflowHelp, /Herdr session pdd/);
   for (const word of ['test', 'lint', 'simulate']) assert.doesNotMatch(help, new RegExp(`\\bpdd ${word}\\b`), word);
   assert.doesNotMatch(help, /\bworkflow (?:start|run)\b/);
   for (const [before, after] of [[['check'], 'exam'], [['check', '--lint'], 'sweep'], [['try'], 'sandbox']]) {

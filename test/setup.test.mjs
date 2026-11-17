@@ -95,11 +95,11 @@ test('SETUP4: an unmatched marker or extra words refuse without writing', t => {
 });
 
 // Wrong (0.1.4): help says /pdd-… only; Codex calls a skill with $pdd-….
-test('SETUP5: pdd help says how to call a PDD skill in Codex and in Claude Code', () => {
+test('SETUP5: setup help says how to call a PDD skill in Codex and in Claude Code', () => {
   // --help writes nothing to HOME, so the real environment is safe here.
-  const help = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), '--help'], { encoding: 'utf8' });
+  const help = spawnSync(process.execPath, [join(root, 'bin/pdd.mjs'), 'setup', '--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0, help.stderr);
-  assert.ok(help.stdout.includes('Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).'), help.stdout);
+  assert.ok(help.stdout.replace(/\s+/g, ' ').includes('Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).'), help.stdout);
 });
 
 // Wrong: setup leaves .pdd/ (the pdd test cache) open to a commit, adds the line twice, or loses the person's ignore rules.

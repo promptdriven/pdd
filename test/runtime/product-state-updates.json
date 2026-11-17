@@ -3,7 +3,7 @@
   "story_path": "user_stories/product-state-updates.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-e4779711824828ad6b0c588f821470e1d4affbebdce95b8d",
       "text": "Preparing phone-1 preserves server-1 issue 71 while adding issue 82 under a state lock, and releases the lock."
     }
   ],
@@ -174,28 +174,28 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-e4779711824828ad6b0c588f821470e1d4affbebdce95b8d",
           "target": "result",
           "path": "/issue",
           "op": "equals",
           "value": 82
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-e4779711824828ad6b0c588f821470e1d4affbebdce95b8d",
           "target": "result",
           "path": "/created",
           "op": "equals",
           "value": true
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-e4779711824828ad6b0c588f821470e1d4affbebdce95b8d",
           "target": "calls",
           "path": "/resources/product-productState-lock",
           "op": "not_equals",
           "value": 0
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-e4779711824828ad6b0c588f821470e1d4affbebdce95b8d",
           "target": "calls",
           "path": "/resources/product-productState-unlock",
           "op": "not_equals",
@@ -214,28 +214,28 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-e4779711824828ad6b0c588f821470e1d4affbebdce95b8d",
           "target": "result",
           "path": "/issue",
           "op": "equals",
           "value": 71
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-e4779711824828ad6b0c588f821470e1d4affbebdce95b8d",
           "target": "result",
           "path": "/created",
           "op": "equals",
           "value": false
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-e4779711824828ad6b0c588f821470e1d4affbebdce95b8d",
           "target": "calls",
           "path": "/resources/product-github-issuePage",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-e4779711824828ad6b0c588f821470e1d4affbebdce95b8d",
           "target": "world",
           "path": "/creates",
           "op": "count",

@@ -116,7 +116,7 @@ for(const v of vectors.cases.filter(v=>!v.id.startsWith('probe-I')))test(`2722 v
   const calls=[];const spy={acknowledgeRequest:async input=>{calls.push(input);return {exitCode:0,message:'Recorded uptake'};}};const invoke=args=>runPdd(args,{cwd:f.record().root,stdout:{write(){}},stderr:{write(){}},workflowRunner:spy});
   assert.equal(await invoke(['workflow','ack','r1','--summary','Added reason']),e.validExitCode);assert.equal(calls[0].requestId,e.forwarded.requestId);assert.equal(calls[0].summary,e.forwarded.summary);
   const count=calls.length;for(const tail of [['r1'],['r1','--summary',' '],['r1','--summary','one','--summary','two'],['--summary','one'],['r1','extra','--summary','one']])assert.equal(await invoke(['workflow','ack',...tail]),2);assert.equal(calls.length,count);
-  const route=PUBLIC_COMMAND_ROUTES.find(r=>r.id==='workflow.request-uptake');assert.deepEqual(route.prefix,['workflow','ack']);facts(renderHelp(),[route.forms[0].form]);facts(renderCompletion('bash'),['ack']);break;
+  const route=PUBLIC_COMMAND_ROUTES.find(r=>r.id==='workflow.request-uptake');assert.deepEqual(route.prefix,['workflow','ack']);facts(renderHelp(['workflow', 'ack']),[route.forms[0].form]);facts(renderCompletion('bash'),['ack']);break;
  }
  case 'visibility-snapshot-has-no-journal-effects':{
   f.save([f.orphan(),f.entry('open')]);const bytes=f.bytes();let claims=0;const ports={...f.ports,deliveryFiles:{...fs,mkdirSync:()=>{claims++;throw Error('visibility must not claim');}}};

@@ -3,7 +3,7 @@
   "story_path": "user_stories/autopilot-setup-auto.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-617b3cd6b85f3e7a55f01696888f700eb3396074f7596839",
       "text": "In a fresh Git repository, selecting auto during terminal setup saves auto."
     }
   ],
@@ -78,14 +78,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-617b3cd6b85f3e7a55f01696888f700eb3396074f7596839",
           "target": "result",
           "path": "/mode",
           "op": "equals",
           "value": "auto"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-617b3cd6b85f3e7a55f01696888f700eb3396074f7596839",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",
