@@ -295,3 +295,108 @@ test('3459 CLI: sanitizes stale server pdd test --fill-hash hints from runtime o
   const combined = `${streams.out}\n${streams.err}`;
   assert.doesNotMatch(combined, /--fill-hash/);
 });
+
+test('3459 lint --local: validates app-map.json timers, screen prompt_path, and tests/<story>.json schema_version in <150ms with 1-line fixes (exit 0)', async t => {
+  const root = makeRepo(t, {
+    'prompts/snake.prompt.md': [
+      '# Snake game',
+      '',
+      'Own `src/snake.mjs`. Expose `render({ state })` returning `{ html }` and `step_tick({ state })` returning `{ state }`.',
+      '',
+      '## Domain decisions',
+      '',
+      'Advance the snake on each timer tick while `running` is true.',
+      '',
+    ].join('\n'),
+    'user_stories/play-snake.md': [
+      '# Play Snake',
+      '',
+      'As a player, I want the snake to advance on each tick, so that the game progresses.',
+      '',
+      '## Acceptance criteria',
+      '',
+      '1. One tick moves the snake head forward by 1 cell.',
+      '',
+    ].join('\n'),
+    'tests/play-snake.json': {
+      schema_version: 'pdd.wrong-scenario.v0',
+      story_path: 'user_stories/play-snake.md',
+      criteria: [{ id: 'AC1', text: 'One tick moves the snake head forward by 1 cell.' }],
+      initial_world: {},
+      simulation: {},
+      steps: [
+        {
+          step_id: 'tick-1',
+          entry_path: 'prompts/snake.prompt.md',
+          operation: 'step_tick',
+          input: {},
+          checks: [{ criterion_id: 'AC1', target: 'result', path: '/moved', op: 'equals', value: true }],
+        },
+      ],
+    },
+    'app-map.json': {
+      schema_version: 'prompt-runtime.app-map.v1',
+      name: 'Snake',
+      initial_screen: 'board',
+      initial_route: null,
+      initial_state: { running: 'yes', tick_gen: -1 },
+      state_schema: {
+        type: 'object',
+        properties: {
+          running: { type: 'string' },
+          tick_gen: { type: 'integer', minimum: 0 },
+        },
+        required: ['running', 'tick_gen'],
+        additionalProperties: false,
+      },
+      screens: [
+        { id: 'board', prompt_path: 'prompts/snake.prompt.md', operation: 'render', source: 'operation', format: 'html', input: {}, result_pointer: '/html' },
+        { id: 'gameover', prompt_path: 'prompts/missing-gameover.prompt.md', operation: 'render', source: 'operation', format: 'html', input: {}, result_pointer: '/html' },
+      ],
+      handlers: [],
+      timers: [
+        {
+          id: 'game-loop',
+          screen: 'board',
+          interval_ms: 250,
+          enabled_pointer: '/running',
+          generation_pointer: '/tick_gen',
+          handler: { prompt_path: 'prompts/snake.prompt.md', operation: 'undeclared_tick' },
+          input: {},
+          state: {},
+          next: { kind: 'stay' },
+        },
+        {
+          id: 'legacy-key',
+          screen: 'gameover',
+          interval_ms: 1000,
+          enabled_pointer: '/running',
+          generation_pointer: '/tick_gen',
+          tick_operation: 'step_tick',
+          input: {},
+          state: {},
+          next: { kind: 'stay' },
+        },
+      ],
+    },
+  });
+
+  const t0 = performance.now();
+  const warnings = lintSvgLayouts({ root, files: gitFiles(root) });
+  const elapsedMs = performance.now() - t0;
+  assert.ok(elapsedMs < 150, `lintSvgLayouts took ${elapsedMs.toFixed(1)}ms (expected <150ms)`);
+
+  assert.ok(warnings.some(w => w.includes('tests/play-snake.json') && w.includes('"schema_version": "prompt-runtime.program-scenario.v1"')), warnings.join('\n'));
+  assert.ok(warnings.some(w => w.includes('prompts/missing-gameover.prompt.md') && w.includes('does not exist')), warnings.join('\n'));
+  assert.ok(warnings.some(w => w.includes('interval_ms') && w.includes('1000 to 3600000')), warnings.join('\n'));
+  assert.ok(warnings.some(w => w.includes('enabled_pointer') && w.includes('boolean')), warnings.join('\n'));
+  assert.ok(warnings.some(w => w.includes('generation_pointer') && w.includes('9007199254740991')), warnings.join('\n'));
+  assert.ok(warnings.some(w => w.includes('undeclared_tick') && w.includes('not declared in prompts/snake.prompt.md')), warnings.join('\n'));
+  assert.ok(warnings.some(w => w.includes('replace tick_operation') && w.includes('"handler"')), warnings.join('\n'));
+
+  const streams = captureStreams();
+  const exitCode = await runPdd(['lint', '--local'], { cwd: root, env: { ...process.env }, stdout: streams.stdout, stderr: streams.stderr });
+  assert.equal(exitCode, 0, 'pdd lint --local remains advisory (exit 0)');
+  assert.match(streams.out, /prompt-runtime\.program-scenario\.v1/);
+  assert.match(streams.out, /generation_pointer.*9007199254740991/);
+});

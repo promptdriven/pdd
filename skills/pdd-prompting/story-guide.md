@@ -1,18 +1,19 @@
 # Story guide
 
-A Story states what one person does and what observable result they get. Its scenario test checks each numbered criterion against the prompt, and the person reads and approves the Story in about one minute. Read this page in full before writing or changing a Story.
+A Story states one cohesive standalone user loop—who acts, what they do, and what observable outcome they get—so a person can read and approve it in about one minute (`<= 35` lines, `1` to `6` criteria). Read this page in full before writing or changing a Story.
 
-## Files and structure
+## When to write, edit, or skip a Story
 
-- **Story (`user_stories/<story>.md`):** `user_stories/PLAN.md` is a build-order index, not a Story. One user behavior = one Story (`1` to `4` criteria).
-- **Scenario test (`<story>.json` in `tests/` or `test/`, following RUNBOOK §2 when the repo already has `tests/`):** Copy every numbered criterion into `criteria` word for word on one line, using straight quotes (`"`).
+- **`0` Stories + `"No Story: <reason>"` PR line:** Use for internal refactors, `kind: native-only` plumbing, or changes whose user-observable slice is unchanged or already covered by an existing Story.
+- **Edit the existing Story:** When modifying or extending an existing user-facing slice, update its Story in `user_stories/` and its paired scenario instead of minting a parallel Story.
+- **`1` Story per cohesive standalone user loop:** Keep related steps of one user loop together (never split on `"and"` or into micro-Stories per sub-action). Create `2–3` Stories (indexed in `user_stories/PLAN.md`) only for genuinely independent user loops, and ask the person before `> 3`.
 
-Write a Story with these parts:
+## Structure
 
-1. `# Title`: the user action in a few plain words.
-2. One role line: `As a <specific role>, I want <action>, so that <reason>.` (Requires `As a`/`As an`, `I want`, and `so that`.)
-3. `## Acceptance criteria`: a numbered list starting at `1.` (the only numbered list in the file).
-4. Optional bullet-only (`-`) sections: `## What must not change` (context for the person) and `## Rules to check` (invariants proved in PR 2's formal check, each naming its `Forbidden:` outcome).
+1. `# Title`: the user loop in a few plain words.
+2. One role line: `As a <specific role>, I want <action>, so that <reason>.`
+3. `## Acceptance criteria`: `1` to `6` numbered items starting at `1.` (the only numbered list in the file). Copy each criterion word-for-word on one line with straight quotes (`"`) into `criteria` in `<story>.json` (`tests/` or `test/`, following RUNBOOK §2 when native tests already use `tests/`).
+4. Optional bullet (`-`) sections: `## What must not change` (short user context) and `## Rules to check` (user-visible forbidden outcomes only). Route technical invariants and edge cases (symlinks, `.GIT` casing, V1/V2 schemas, numeric/buffer bounds) to `.prompt.md` `## Domain decisions`, never `user_stories/*.md`.
 
 ```markdown
 # Finish a task
@@ -30,15 +31,10 @@ As a person who keeps a to-do list in the terminal, I want to mark a task as don
 - Marking an unknown task fails cleanly. Forbidden: mutating any saved task when the id is missing.
 ```
 
-## Five rules
+## Five authoring rules
 
 1. **Name a real person or narrowed role** ("a customer", "a shop owner", "a developer running `pdd test`") and concrete values ("Sam", "08:30", "$9.00"). Never write generic roles ("a user", "the system").
-2. **One criterion = one action and its observable outcome.** Split compound actions. Never put file paths (`src/…`, `*.mjs`), function signatures, schema keys, raw hashes/UUIDs, or vague fillers ("correctly", "gracefully", "as expected") in a Story; workflow Story lint refuses them.
-3. **Every criterion needs at least one exact check** (`equals`, `not_equals`, `one_of`, `count`, `at_least`, `at_most`, `not_contains`, `all_in`, `equals_ignore_case`, or HTML `exists`) on `result`, `error`, `world`, or `calls`. Unchecked criteria block automatic PR 1 opening; zero exact checks refuses with `unchecked-criteria`.
-4. **Negative and failure criteria need an observable target:** count `0` calls on a declared `<port>.<op>` (`calls`), read unchanged state in `world`, or inject a failure on a declared `<port>.<op>` via `simulation_overrides` (with a checked `criterion_id` and un-negated `failure_quote` from that criterion). Put unobservable invariants or physical disk/process failures in `## Rules to check` and PR 2 native tests.
-5. **Keep long fixtures in the test JSON**, describing them in plain words in the Story. Prompts own production modules, never test files.
-
-## Before showing the Story
-
-- Verify every criterion maps to `result`, `error`, `world`, or `calls`, uses straight quotes (`"`), and enters a checkable prompt (never a `kind: native-only` adapter).
-- Run `pdd lint --local` for fast local hygiene checks; do not run hosted `pdd lint` right before `pdd test` because `pdd test` includes lint.
+2. **Keep implementation out of Stories:** Never put file paths (`src/…`, `*.mjs`), function signatures, schema keys, raw hashes/UUIDs, technical edge-case matrices, or vague fillers ("correctly", "gracefully", "as expected") in a Story.
+3. **`1` observable check per material claim:** Check every criterion with an exact operator (`equals`, `not_equals`, `one_of`, `count`, `at_least`, `at_most`, `not_contains`, `all_in`, `equals_ignore_case`, or HTML `exists`) on `result`, `error`, `world`, or `calls` without piling duplicate assertions onto one claim.
+4. **Ground negative and failure criteria:** Count `0` calls on `<port>.<op>` (`calls`), read unchanged `world` state, or inject a `<port>.<op>` failure via `simulation_overrides` (with a checked `criterion_id` and un-negated `failure_quote`).
+5. **Keep long fixtures in `<story>.json`:** Describe boards, seeds, or tables in plain words in the Story. Check `pdd files` + `pdd lint --local` (`<= 35` lines, `<= 6` criteria, checkable `entry_path`) before `pdd test`.

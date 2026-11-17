@@ -13,17 +13,18 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 2. prompt-pr: steps/check.md, steps/try.md (optional) → approve, then gate: pr, then ask
 3. code: steps/build.md, steps/verify.md, steps/formal.md, steps/review.md → gate: pr
 
-- In runs (>2 prompts too), main chat coordinates; no code or checks. Outside runs on <=2 prompts, read `pdd-prompting/RUNBOOK.md` first, author prompts, Stories, tests and `app-map.json` in-session (0 authoring subagents), and run `pdd files` + `pdd lint --local` before `pdd test`.
-- Fresh subagents in step order for runs, >2 prompts and code; never reuse builders or let them check code. Step file/paths at once, no chat history; wait one long time-out, no small follow-ups (§11).
+- Single coupled slice (1–2 prompts, CLI/Autopilot): read `pdd-prompting/RUNBOOK.md`, author Story, prompt, test, `.ui.svg` and `app-map.json` in 1 session (0 authoring subagents), and run `pdd files` + `pdd lint --local`.
+- On 3+ independent prompts/modules, main chat coordinates; no code or checks: lock shared contracts (`app-map.json`/interfaces) first, then parallelize.
+- Fresh subagents in step order for verify, review and 3+ builds; never reuse builders or let them check code. Step file/paths at once, no chat history; wait one long time-out, no small follow-ups (§11).
 - Checks: fresh first. Only verify/formal may reuse after startup failure; no code, tests or prompts this run.
 - Review: always fresh; no build/verify/formal/prior reviews or context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
-- Ask at gates. Normal runs open PR 1 on full check pass; strict keeps gates. Outside runs, ask before PRs; merge on request (§2).
+- Ask at gates. Normal runs open PR 1 on check pass; strict keeps gates. Outside runs, ask before PRs; merge on request (§2).
 - Use full URLs.
 - Before an optional step, ask the person and wait for the answer: "Do you want a visual design step? yes/no". In a run, run `<pdd> workflow ask` first. For a page or a screen, recommend visual: it makes the app map.
-- At the story gate, give the full paths of the Story files and the plan, and show the plan list. They can say "make it one Story", "split part 5" or "change Story 5: …". A change request names a Story: redo only that Story and its test file. For issue-only prompts, offer "adopt PDD for this module" later. You may offer `pdd simulate <story>` before the check. Opens shell/page/Form (no Story: project). If visual made an app map, tell the person to run `pdd simulate <story> --new`. Ask for approval or changes in their own words. In runs, show pdd's Story card verbatim (batch: card, then answer).
+- At the story gate, give the full paths of the Story files and the plan, and show the plan list. They can say "make it one Story", "split part 5" or "change Story 5: …". A change request names a Story: redo only that Story and its test file. Issue-only prompts: offer "adopt PDD for this module" later. You may offer `pdd simulate <story>` before the check. If visual made an app map, tell the person to run `pdd simulate <story> --new`. Ask for approval or changes in their own words. In runs, show pdd's Story card verbatim (batch: card, then answer).
 - Strict: Before PR 1, show one `Prompt tests` line per Story with its report link, and the Simulator links. pdd opens PR 1 only after the approval. Then show the PR 1 link and ask: "Do you want the code PR now, or stop here and merge PR 1 first?"
-- On verify/formal failure or review must-fixes, allow 2 repairs after initial review. Use fresh build, verify, formal and review agents. PR 2 starts with `Review:` verdict, left must-fixes and "✗ N vectors fail". No extra gate.
+- On verify/formal failure or review must-fixes, allow 2 repairs after initial review. Use fresh build, verify, formal and review agents. PR 2: `Review:` verdict, must-fixes, "✗ N vectors fail". No extra gate.
   - Repair pending: with must-fixes and fewer than 2 repairs, do not run `workflow done review`; fresh build with the must-fix list.
   - Final review: clear or 2 repairs used; run `workflow done review` to open PR 2.
 - A person decides expected values. Never change a test to make it pass. Inject ports for DB, files, net, clocks, RNG, programs; no direct calls (§21).

@@ -6,11 +6,11 @@ Each production module has one canonical `.prompt.md` (including independently g
 
 ## Contract content and ownership
 
-A contract states its preservation promise and permitted supporting evidence across three owners (small modules may combine them):
+A contract states its preservation promise across three owners (small modules may combine them):
 
 | Owner | Required meaning | Placement |
 |---|---|---|
-| Domain decisions | Purpose, responsibility, inputs, outcomes, guards, precedence and why consequential rules exist | Visible first; enough to trace normal flow and consequential edges |
+| Domain decisions | Purpose, responsibility, inputs, outcomes, guards, precedence, technical invariants (symlinks, `.GIT` casing, V1/V2 schema rules, bounds) and why rules exist | `## Domain decisions` near the top; audited in PR 2's formal check without ratcheting `user_stories/*.md` |
 | Public contract | Exact operation names, signatures, defaults, bindings, units and input/output/error shapes | Beside a small rule, or in one named interface/contract section |
 | Consequential operations | Evaluation order, port effects and surviving state when a guard or dependency fails | Beside the affected rule, or in one compact boundary table |
 
@@ -59,7 +59,7 @@ Every user-facing frontend module links minimal representative `.ui.svg` mockups
 
 - **Single source of truth:** SVG owns visual layout, visible labels, spatial order and stable intent-based `id`s (`viewBox`, `<title>`, `<desc>`; mark unowned surroundings `data-context-only="true"` or class `context-only`; exclude scripts, event handlers, framework classes, external fonts/assets and base64 blobs). Prose owns behavior, responsive rules, keyboard/click flows, accessibility/focus order and dynamic data authority.
 - **Fidelity and purpose:** Declare whether each view is **illustrative** or a **comparison reference** for a named state, and state fidelity once (**Relational**, **Measured** at a reference viewport with comparator/tolerances, or **Exact**).
-- **Stylesheets and fast authoring lint:** HTML operation screens (`"source": "operation"`, `"format": "html"`) list CSS files under `"stylesheets"` in `app-map.json` and name matching CSS classes in the screen prompt. During authoring, verify `.ui.svg` alignment with `pdd lint --local` (`<50ms`, zero browser/AI calls); render `.ui.svg` to PNG only when a person explicitly requests PNG previews.
+- **Stylesheets and fast authoring lint:** HTML operation screens (`"source": "operation"`, `"format": "html"`) list CSS files under `"stylesheets"` in `app-map.json` and name matching CSS classes in the screen prompt. During authoring, verify `.ui.svg` and `app-map.json` alignment with `pdd lint --local` (`<150ms`, zero browser/AI calls); render `.ui.svg` to PNG only when a person explicitly requests PNG previews.
 
 <a id="preservation"></a>
 <details>
@@ -75,13 +75,13 @@ Policy comes from authorized requirements and accepted consumer or shared contra
 
 </details>
 
-## Choose evidence before Stories
+## Story scope and scenario evidence
 
-List each claimed behavior and its proof before splitting work into Stories. Stories cover user-observable behavior that a person can read and approve in one minute (ask the person before creating `> 3` Stories for one issue):
+Choose the proof boundary before touching `user_stories/` (see `story-guide.md` for Story structure and `<= 35`-line / `<= 6`-criteria bounds):
 
-- `0` Runtime Stories applies **only** when (a) no user-observable accept, reject, state or output outcome changes, or (b) an existing Story and Runtime test in `user_stories/` already cover the enclosing user-facing flow over an injected port.
-- When a native, cryptographic or I/O change alters an uncovered user-observable flow, write `1` Story and Runtime test for the enclosing checkable flow prompt over an injected port alongside any thin `kind: native-only` adapter (`0` Stories of its own).
-- Test suites, fixtures, CI configs, package manifests and docs never get `.prompt.md` owners. Mixed modules keep deterministic policy in a checkable prompt and isolate raw OS/socket/byte-level I/O in a thin `kind: native-only` adapter proved by native tests.
+- **`0` Stories + `"No Story: <reason>"` PR line:** Internal refactors, `kind: native-only` adapters, or changes already covered by an existing Story over an injected port.
+- **Edit existing Story vs `1` Story per cohesive standalone user loop:** Modify the existing Story when changing an existing user slice; write `1` Story per new standalone user loop (ask before `> 3`), and assert `1` observable check per material claim in its scenario JSON.
+- **Technical invariants stay in `.prompt.md`:** Put symlink, `.GIT` casing, V1/V2 schema, and boundary invariants in `.prompt.md` `## Domain decisions` (verified by PR 2 native/formal checks), never in `user_stories/*.md`. Test suites, fixtures, CI configs, manifests and docs never get `.prompt.md` owners.
 
 ## Prompt format and native-only declarations
 

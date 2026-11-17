@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: f6decc8c36d4d78f4f7161e1a0f08eb341cd2f6d7858b9724710c75c09c7dda2).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 0b3d490e7b1a63bec3b6ee4c4423f2a2f11aef9c2ef5fff592138d31ac4052da).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -240,13 +240,39 @@ function seamSelectionPorts(ports = {}) {
   });
 }
 
+function normalizeRuntimeHints(text) {
+  return typeof text === 'string' && text.includes('--fill-hash')
+    ? text.replace(/pdd\s+test\s+--fill-hash\b/g, 'pdd test').replace(/\s+--fill-hash\b/g, '')
+    : text;
+}
+
+function normalizeHintStream(stream) {
+  if (!stream || typeof stream.write !== 'function' || stream.__pddHintNormalized) return stream;
+  return Object.assign(Object.create(stream), {
+    __pddHintNormalized: true,
+    ...(stream.isTTY !== undefined ? { isTTY: stream.isTTY } : {}),
+    write(chunk, ...rest) {
+      const text =
+        typeof chunk === 'string'
+          ? chunk
+          : Buffer.isBuffer(chunk) || chunk instanceof Uint8Array
+            ? Buffer.from(chunk).toString('utf8')
+            : String(chunk);
+      return stream.write(normalizeRuntimeHints(text), ...rest);
+    },
+  });
+}
+
 function seamRuntimePorts(ports = {}) {
   const exit = hostExit();
-  return withPortDefaults(seamSelectionPorts(ports), {
+  const merged = withPortDefaults(seamSelectionPorts(ports), {
     exitFor: exit.exitFor,
     exitCodeFor: exit.exitCodeFor,
     promptTestsLabel: PROMPT_TESTS_LABEL,
   });
+  if (merged.stdout) merged.stdout = normalizeHintStream(merged.stdout);
+  if (merged.stderr) merged.stderr = normalizeHintStream(merged.stderr);
+  return merged;
 }
 
 function withEligibilityDefault(ports = {}, defaultEligibility) {
@@ -357,11 +383,11 @@ export function storyLines(rows, ports = {}) {
 }
 
 export function renderJson(input, ports = {}) {
-  return rawRenderJson(input, withPortDefaults(ports, { promptTestsLabel: PROMPT_TESTS_LABEL }));
+  return normalizeRuntimeHints(rawRenderJson(input, withPortDefaults(ports, { promptTestsLabel: PROMPT_TESTS_LABEL })));
 }
 
 export function renderText(input, ports = {}) {
-  return rawRenderText(input, withPortDefaults(ports, { promptTestsLabel: PROMPT_TESTS_LABEL }));
+  return normalizeRuntimeHints(rawRenderText(input, withPortDefaults(ports, { promptTestsLabel: PROMPT_TESTS_LABEL })));
 }
 
 export function runtimePreflightSlice() {

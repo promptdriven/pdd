@@ -325,11 +325,11 @@ test('SKILLS18: no skill text tells a Codex user to type /pdd-…', () => {
 // Wrong (0.1.6, plan first): one big Story for a request with many behaviors, one test file for all of them,
 // one check line for everything, or a change request that redoes every Story.
 test('SKILLS19: feature plans many Stories, each with its own test file and check line; changes name one Story', () => {
-  assert.match(read('pdd-prompting/SKILL.md'), /A Story is one "I can…" behavior, checked in a minute\./);
+  assert.match(read('pdd-prompting/SKILL.md'), /1 cohesive standalone-loop Story/);
   const understand = read('pdd-feature/steps/understand.md'), story = read('pdd-feature/steps/prompt-story.md'), check = read('pdd-feature/steps/check.md');
-  assert.match(understand, /Count the separate behaviors/);
+  assert.match(understand, /1`? Story per cohesive standalone user loop/);
   assert.match(understand, /`user_stories\/PLAN\.md`: a numbered list, one line per Story, in build order/);
-  assert.match(understand, /With 1 behavior, write one Story and no plan\./);
+  assert.match(understand, /With 1 standalone user loop, write one Story and no plan\./);
   assert.match(story, /Write every Story in `user_stories\/PLAN\.md`, each with its own test file/);
   assert.match(story, /Exact data \(seeds, long boards\) goes in the tests; the Story says it in plain words\./);
   // Real 2048 run: one check per Story, then one Story's overall line pasted as the total. The runner sums the lines itself.
@@ -356,15 +356,21 @@ test('SKILLS19: feature plans many Stories, each with its own test file and chec
 
 // Wrong (real-user 2048 run, 0.1.6): the agent wrote its own JSON test format and `board.prompt` files with no Runtime
 // interface block, because no step told it the runtime's file format before the check step.
-test('SKILLS20: every step that writes prompts or tests reads the compact core path (guide.md, story-guide.md, RUNBOOK.md) without mandatory runbook fan-out', () => {
+test('SKILLS20: every step that writes prompts or tests reads guide.md, story-guide.md and the honest RUNBOOK.md topic router with coupling-based subagent rules', () => {
   for (const file of ['pdd-feature/steps/prompt-story.md', 'pdd-bug/steps/prompt-story.md'])
     assert.match(read(file).split('\n').find(text => text.startsWith('- ')), /Read pdd-prompting's guide\.md in full, story-guide\.md in full and RUNBOOK\.md/, file);
   const prompting = read('pdd-prompting/SKILL.md');
-  assert.match(prompting, /- `RUNBOOK\.md`: self-contained authoring fast path and router/);
+  const router = read('pdd-prompting/RUNBOOK.md');
+  assert.match(prompting, /- `RUNBOOK\.md`: concise topic router/);
   assert.match(prompting, /Read `RUNBOOK\.md` first, `guide\.md` in full/);
-  assert.ok(Buffer.byteLength(prompting) + Buffer.byteLength(read('pdd-prompting/RUNBOOK.md')) <= 60 * 1024);
-  assert.match(read('pdd-feature/SKILL.md'), /pdd-prompting\/RUNBOOK\.md.*0 authoring subagents.*`pdd files`/);
-  assert.match(read('pdd-prompting/RUNBOOK.md'), /generation_pointer.*9007199254740991/);
+  assert.doesNotMatch(router, /do not open `runbook\/\*\.md`/i);
+  assert.doesNotMatch(router, /9007199254740991/);
+  assert.doesNotMatch(router, /Stories in parallel/i);
+  assert.ok(router.trimEnd().split('\n').length <= 45, `RUNBOOK.md stays ~40 lines (${router.trimEnd().split('\n').length})`);
+  assert.ok(Buffer.byteLength(prompting) + Buffer.byteLength(router) <= 60 * 1024);
+  const featureSkill = read('pdd-feature/SKILL.md');
+  assert.match(featureSkill, /Single coupled slice \(1–2 prompts.*0 authoring subagents.*`pdd files`/);
+  assert.match(featureSkill, /3\+ independent prompts\/modules.*lock shared contracts/i);
   const setup = read('pdd-setup/SKILL.md').split('\n');
   const block = setup.slice(setup.indexOf('<!-- pdd:start -->'), setup.indexOf('<!-- pdd:end -->') + 1);
   assert.ok(block.includes('Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.'));

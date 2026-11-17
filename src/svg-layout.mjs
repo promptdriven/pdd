@@ -1,4 +1,4 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: afeb7ad9e6e6670a69f556f294344295e8cf563bc7767459d5007408a488223a).
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: 3cf4af56ad0e2ef6f92bdb4ce9dfb9a714ab545f3f5b1a56f2b3b2c36b776f38).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';
@@ -532,6 +532,44 @@ function promptTargets(text, fromPrompt, visibleSet) {
 }
 const rootPlaceholder = '/__pdd_root__';
 
+function readPointer(obj, pointer) {
+  if (typeof pointer !== 'string') return { found: false, value: undefined };
+  if (pointer === '') return { found: obj !== undefined, value: obj };
+  if (!pointer.startsWith('/')) return { found: false, value: undefined };
+  let cur = obj;
+  for (const seg of pointer.slice(1).split('/')) {
+    if (cur === null || typeof cur !== 'object') return { found: false, value: undefined };
+    const key = seg.replaceAll('~1', '/').replaceAll('~0', '~');
+    if (Array.isArray(cur)) {
+      const idx = Number(key);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= cur.length) return { found: false, value: undefined };
+      cur = cur[idx];
+    } else {
+      if (!Object.hasOwn(cur, key)) return { found: false, value: undefined };
+      cur = cur[key];
+    }
+  }
+  return { found: true, value: cur };
+}
+
+function readSchemaPointer(stateSchema, pointer) {
+  if (!stateSchema || typeof stateSchema !== 'object' || typeof pointer !== 'string' || !pointer.startsWith('/')) {
+    return { exists: false, required: false, schema: null };
+  }
+  let cur = stateSchema;
+  let required = true;
+  for (const seg of pointer.slice(1).split('/')) {
+    if (!cur || typeof cur !== 'object' || cur.type !== 'object' || !cur.properties || typeof cur.properties !== 'object') {
+      return { exists: false, required: false, schema: null };
+    }
+    const key = seg.replaceAll('~1', '/').replaceAll('~0', '~');
+    if (!Object.hasOwn(cur.properties, key)) return { exists: false, required: false, schema: null };
+    if (!Array.isArray(cur.required) || !cur.required.includes(key)) required = false;
+    cur = cur.properties[key];
+  }
+  return { exists: Boolean(cur && typeof cur === 'object'), required, schema: cur && typeof cur === 'object' ? cur : null };
+}
+
 function hasPointer(obj, pointer) {
   if (typeof pointer !== 'string') return false;
   if (pointer === '') return obj !== undefined;
@@ -674,10 +712,169 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     }
   }
   const promptFilter = promptPaths ? new Set(promptPaths) : null;
+  const promptExists = promptPath => {
+    if (typeof promptPath !== 'string' || !promptPath.endsWith('.prompt.md')) return false;
+    if (visiblePromptSet.has(promptPath)) return true;
+    try { safeRead(root, promptPath); return true; } catch { return false; }
+  };
+  const promptDeclaresOp = (promptPath, op) => {
+    const meta = getMeta(promptPath);
+    if (!meta || typeof op !== 'string' || !op.trim()) return false;
+    if (meta.hasEmbeddedInterface && Array.isArray(meta.iface?.entries)) {
+      return meta.iface.entries.some(entry => entry?.operation === op);
+    }
+    return new RegExp(`(?<![A-Za-z0-9_-])${escaped(op)}(?![A-Za-z0-9_-])`).test(meta.prose);
+  };
+  const allMapPaths = new Set(files.filter(path => /(?:^|\/)app-map\.json$/.test(path) && workspace.allows(policy, path)));
+  for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && workspace.allows(policy, path))) {
+    try {
+      const doc = JSON.parse(safeRead(root, testFile));
+      if (Array.isArray(doc?.app_maps)) {
+        for (const candidate of doc.app_maps) {
+          if (typeof candidate === 'string' && workspace.allows(policy, candidate)) allMapPaths.add(candidate);
+        }
+      }
+    } catch { /* handled below when Story-paired */ }
+  }
+  const MAX_SAFE_TIMER_INT = 9007199254740991;
+  for (const mapPath of [...allMapPaths].sort()) {
+    let mapDoc;
+    try { mapDoc = JSON.parse(safeRead(root, mapPath)); }
+    catch {
+      if (!promptFilter) {
+        const text = `Warning: ${mapPath}: app-map.json is not valid JSON; fix syntax and set "schema_version": "prompt-runtime.app-map.v1".`;
+        warnings.push({ key: `${mapPath}\0mapjson`, text });
+      }
+      continue;
+    }
+    if (!mapDoc || typeof mapDoc !== 'object' || Array.isArray(mapDoc)) continue;
+    const screens = Array.isArray(mapDoc.screens) ? mapDoc.screens.filter(s => s && typeof s === 'object') : [];
+    const timers = Array.isArray(mapDoc.timers) ? mapDoc.timers : [];
+    if (promptFilter) {
+      const referenced = new Set([
+        ...screens.map(s => s.prompt_path).filter(p => typeof p === 'string'),
+        ...timers.map(t => t?.handler?.prompt_path).filter(p => typeof p === 'string'),
+      ]);
+      if (![...referenced].some(p => promptFilter.has(p))) continue;
+    }
+    if (mapDoc.schema_version !== 'prompt-runtime.app-map.v1') {
+      const text = `Warning: ${mapPath}: app-map schema_version ${JSON.stringify(mapDoc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.app-map.v1".`;
+      warnings.push({ key: `${mapPath}\0mapschema`, text });
+    }
+    const validScreenIds = new Set();
+    const screenPromptById = new Map();
+    for (const [sIdx, screen] of screens.entries()) {
+      const sId = typeof screen.id === 'string' && screen.id ? screen.id : `screens[${sIdx}]`;
+      if (typeof screen.id === 'string' && screen.id && screen.id !== '*') validScreenIds.add(screen.id);
+      if (typeof screen.prompt_path === 'string' && screen.prompt_path.trim()) {
+        if (typeof screen.id === 'string' && screen.id) screenPromptById.set(screen.id, screen.prompt_path);
+        if (!promptExists(screen.prompt_path)) {
+          const text = `Warning: ${mapPath} (screen "${sId}"): screen prompt_path "${screen.prompt_path}" does not exist in Git-visible prompts; point prompt_path to an existing prompts/*.prompt.md file and run git add.`;
+          warnings.push({ key: `${mapPath}\0mapscreen\0${sIdx}`, text });
+        }
+      } else if (screen.source !== 'static') {
+        const text = `Warning: ${mapPath} (screen "${sId}"): screen prompt_path is missing; set "prompt_path": "prompts/<screen>.prompt.md".`;
+        warnings.push({ key: `${mapPath}\0mapscreenmissing\0${sIdx}`, text });
+      }
+    }
+    if (mapDoc.timers !== undefined) {
+      if (!Array.isArray(mapDoc.timers) || mapDoc.timers.length > 16) {
+        const text = `Warning: ${mapPath}: timers must be an array of at most 16 timer objects.`;
+        warnings.push({ key: `${mapPath}\0timersarr`, text });
+      } else {
+        const seenTimerScreens = new Set();
+        for (const [tIdx, timer] of mapDoc.timers.entries()) {
+          const tLabel = typeof timer?.id === 'string' && timer.id ? timer.id : `timers[${tIdx}]`;
+          if (!timer || typeof timer !== 'object' || Array.isArray(timer)) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): timer entry must be an object with id, screen, interval_ms, enabled_pointer, generation_pointer, handler, input, state and next.`;
+            warnings.push({ key: `${mapPath}\0timerobj\0${tIdx}`, text });
+            continue;
+          }
+          if (typeof timer.screen !== 'string' || timer.screen === '*' || !validScreenIds.has(timer.screen) || seenTimerScreens.has(timer.screen)) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): timer screen ${JSON.stringify(timer.screen ?? null)} must name a unique existing non-wildcard screen id from screens[].`;
+            warnings.push({ key: `${mapPath}\0timerscreen\0${tIdx}`, text });
+          } else {
+            seenTimerScreens.add(timer.screen);
+          }
+          if (!Number.isInteger(timer.interval_ms) || timer.interval_ms < 1000 || timer.interval_ms > 3600000) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): interval_ms (${JSON.stringify(timer.interval_ms)}) must be an integer from 1000 to 3600000 (for example "interval_ms": 1000).`;
+            warnings.push({ key: `${mapPath}\0timerinterval\0${tIdx}`, text });
+          }
+          const enInit = readPointer(mapDoc.initial_state, timer.enabled_pointer);
+          const enSchema = readSchemaPointer(mapDoc.state_schema, timer.enabled_pointer);
+          if (typeof enInit.value !== 'boolean' || !enSchema.exists || !enSchema.required || enSchema.schema?.type !== 'boolean') {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): enabled_pointer ${JSON.stringify(timer.enabled_pointer ?? null)} must resolve to a boolean in initial_state and a required {"type": "boolean"} property in state_schema.`;
+            warnings.push({ key: `${mapPath}\0timerenabled\0${tIdx}`, text });
+          }
+          const genInit = readPointer(mapDoc.initial_state, timer.generation_pointer);
+          const genSchema = readSchemaPointer(mapDoc.state_schema, timer.generation_pointer);
+          const genMin = genSchema.schema?.minimum;
+          const genMax = genSchema.schema?.maximum;
+          const validGenInit = Number.isSafeInteger(genInit.value) && genInit.value >= 0 && genInit.value <= MAX_SAFE_TIMER_INT;
+          const validGenSchema = genSchema.exists && genSchema.required && genSchema.schema?.type === 'integer'
+            && Number.isSafeInteger(genMin) && genMin >= 0
+            && Number.isSafeInteger(genMax) && genMax <= MAX_SAFE_TIMER_INT && genMin <= genMax;
+          if (!validGenInit || !validGenSchema) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): generation_pointer ${JSON.stringify(timer.generation_pointer ?? null)} must resolve to a safe integer 0..9007199254740991 in initial_state and a required {"type": "integer", "minimum": 0, "maximum": 9007199254740991} property in state_schema.`;
+            warnings.push({ key: `${mapPath}\0timergen\0${tIdx}`, text });
+          }
+          if (timer.tick_operation !== undefined && (!timer.handler || typeof timer.handler !== 'object')) {
+            const fallbackPrompt = screenPromptById.get(timer.screen) ?? 'prompts/<screen>.prompt.md';
+            const opHint = typeof timer.tick_operation === 'string' && timer.tick_operation.trim() ? timer.tick_operation : '<tick_op>';
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): replace tick_operation ${JSON.stringify(timer.tick_operation)} with "handler": {"prompt_path": "${fallbackPrompt}", "operation": "${opHint}"} naming an existing prompt and declared tick operation.`;
+            warnings.push({ key: `${mapPath}\0timertickkey\0${tIdx}`, text });
+          } else {
+            const hPrompt = timer.handler?.prompt_path;
+            const hOp = timer.handler?.operation;
+            if (typeof hPrompt !== 'string' || !promptExists(hPrompt)) {
+              const text = `Warning: ${mapPath} (timer "${tLabel}"): handler.prompt_path ${JSON.stringify(hPrompt ?? null)} must reference an existing Git-visible prompts/*.prompt.md file.`;
+              warnings.push({ key: `${mapPath}\0timerhprompt\0${tIdx}`, text });
+            } else if (typeof hOp !== 'string' || !hOp.trim() || !promptDeclaresOp(hPrompt, hOp)) {
+              const text = `Warning: ${mapPath} (timer "${tLabel}"): tick_operation / handler.operation ${JSON.stringify(hOp ?? null)} is not declared in ${hPrompt}; declare "${hOp || '<tick_op>'}" in ${hPrompt} or update handler.operation.`;
+              warnings.push({ key: `${mapPath}\0timerhop\0${tIdx}`, text });
+            }
+          }
+        }
+      }
+    }
+  }
+  const storyStems = new Set(
+    files
+      .filter(p => p.endsWith('.md') && p.split('/').slice(0, -1).includes('user_stories'))
+      .map(p => p.split('/').at(-1))
+      .filter(base => !['plan.md', 'readme.md'].includes(base.toLowerCase()))
+      .map(base => base.slice(0, -3)),
+  );
   const PORT_OP_RE = /^[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*$/;
   for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && workspace.allows(policy, path))) {
+    const isFixtureJson = /(?:^|\/)fixtures\//.test(testFile);
+    const baseStem = testFile.split('/').at(-1).slice(0, -5);
+    const primaryStem = baseStem.split('.')[0];
+    const isCasesJson = baseStem === 'cases' || baseStem.endsWith('-cases');
+    const pairedWithStory = !isFixtureJson && !isCasesJson && (storyStems.has(baseStem) || storyStems.has(primaryStem));
     let doc;
-    try { doc = JSON.parse(safeRead(root, testFile)); } catch { continue; }
+    try { doc = JSON.parse(safeRead(root, testFile)); }
+    catch {
+      if (pairedWithStory && !promptFilter) {
+        const text = `Warning: ${testFile}: scenario test file is not valid JSON; write a JSON object with "schema_version": "prompt-runtime.program-scenario.v1".`;
+        warnings.push({ key: `${testFile}\0testjson`, text });
+      }
+      continue;
+    }
+    const isNativeCaseDoc = isCasesJson || Array.isArray(doc?.cases) || /^pdd\.native-cases\./.test(String(doc?.schema_version ?? ''));
+    const looksLikeScenario = !isFixtureJson && !isNativeCaseDoc && doc && typeof doc === 'object' && !Array.isArray(doc) && (
+      pairedWithStory
+      || typeof doc.story_path === 'string'
+      || (Array.isArray(doc.steps) && doc.steps.some(s => s && typeof s === 'object' && (typeof s.entry_path === 'string' || typeof s.operation === 'string') && Array.isArray(s.checks)))
+    );
+    if (looksLikeScenario && doc.schema_version !== 'prompt-runtime.program-scenario.v1') {
+      const candidateSteps = Array.isArray(doc.steps) ? doc.steps : [];
+      const matchesFilter = !promptFilter || candidateSteps.some(s => typeof s?.entry_path === 'string' && promptFilter.has(s.entry_path));
+      if (matchesFilter) {
+        const text = `Warning: ${testFile}: scenario schema_version ${JSON.stringify(doc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.program-scenario.v1".`;
+        warnings.push({ key: `${testFile}\0testschema`, text });
+      }
+    }
     if (!doc || typeof doc !== 'object' || doc.schema_version !== 'prompt-runtime.program-scenario.v1' || !Array.isArray(doc.steps)) continue;
     const inRepoSteps = doc.steps.filter(step => step && typeof step.entry_path === 'string' && visiblePromptSet.has(step.entry_path));
     if (!inRepoSteps.length) continue;

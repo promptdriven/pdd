@@ -42,7 +42,7 @@ Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt pat
 
 - [Screen rules](../../skills/pdd-prompting/runbook/screens-and-svg.md#13-give-your-app-a-screen-app-map): authoring and verification context.
 
-## Plain-Markdown native-only dependency and simulation override advisories
+## Local app-map timer, scenario schema_version, native-only dependency, and simulation override advisories
 
 Using the same local file access and workspace policy (`0` AI or network calls, never mutating files or blocking `pdd lint --local`):
 
@@ -51,6 +51,8 @@ Using the same local file access and workspace policy (`0` AI or network calls, 
   - Warn when an operation key does not match `<port>.<operation>`.
   - When all reachable prompts carry embedded `Runtime interface` blocks, warn when a `simulation_overrides` operation is absent from reachable `resources` (or lacks `write` / `read_write` access for `port.write`). When any reachable prompt is plain Markdown without that embedded resource, warn when neither `<port>.<operation>` nor both `<port>` and `<operation>` appear in reachable prompt prose.
   - On `simulation_overrides`, warn when a `port.write` `world_pointer` does not resolve inside `initial_world`, when `criterion_id` is not checked by that step, or when a nonblank `failure_quote` is absent from that criterion's text.
+- **App-map `schema_version`, screen `prompt_path`s, and `timers` preflight (`<150ms`, advisory):** On every workspace-allowed `app-map.json` (and string entries of `app_maps` in scenario JSON files) in scope, warn with an exact 1-line fix when `schema_version` is not `"prompt-runtime.app-map.v1"`, when a screen `prompt_path` is absent from Git-visible `.prompt.md` files, or when any `timers` entry (max 16) has a missing/duplicate/wildcard `screen`, non-integer or out-of-range `interval_ms` (`1000..3600000`), `enabled_pointer` not resolving to a `boolean` in `initial_state` and a required `{"type": "boolean"}` property in `state_schema`, `generation_pointer` not resolving to a safe integer `0..9007199254740991` in `initial_state` and a required `{"type": "integer", "minimum": 0, "maximum": 9007199254740991}` property in `state_schema`, or a `tick_operation` / `handler` (`{prompt_path, operation}`) whose prompt path is missing or whose tick operation is not declared.
+- **Scenario `schema_version` preflight (`<150ms`, advisory):** On non-fixture JSON files under `test/` or `tests/` paired by basename with a `user_stories/**/<story>.md` Story (or declaring `story_path` or `steps[].entry_path`), warn with an exact 1-line fix when JSON is malformed or `schema_version` is not `"prompt-runtime.program-scenario.v1"`.
 
 ## Caller navigation
 
