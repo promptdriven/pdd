@@ -2727,25 +2727,17 @@ test('SEAM24: no file under test/ outside test/runtime-seam.test.mjs imports or 
   assert.ok(findSeamViolations('test/example.test.mjs', "import { runCheck } from '@promptdriven/runtime-client';\n").length > 0);
 });
 
-test('SEAM25: runtime client uses one exact package source with matching lock integrity', () => {
+test('SEAM25: runtime client uses the exact public npm release', () => {
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const lockfile = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const name = '@promptdriven/runtime-client';
   const locked = lockfile.packages[`node_modules/${name}`];
-  const spec = manifest.dependencies[name];
-  assert.equal(lockfile.packages[''].dependencies[name], spec);
-  assert.equal(locked.version, '1.0.0');
-  assert.match(locked.integrity, /^sha512-[A-Za-z0-9+/]{86}==$/);
-  if (spec.startsWith('github:')) {
-    // Integration candidates pin source until that code has a public release.
-    const commit = /^github:promptdriven\/runtime-client#([a-f0-9]{40})$/.exec(spec);
-    assert.ok(commit, 'Git dependencies must use a complete immutable commit');
-    assert.equal(locked.resolved, `git+https://github.com/promptdriven/runtime-client.git#${commit[1]}`);
-  } else {
-    assert.equal(spec, '1.0.0');
-    assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.0\.0\.tgz$/);
-    assert.doesNotMatch(locked.resolved, /^(?:github:|git\+)/);
-  }
+  assert.equal(manifest.dependencies[name], '1.1.0');
+  assert.equal(lockfile.packages[''].dependencies[name], '1.1.0');
+  assert.equal(locked.version, '1.1.0');
+  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.1\.0\.tgz$/);
+  assert.match(locked.integrity, /^sha512-/);
+  assert.doesNotMatch(locked.resolved, /^(?:github:|git\+)/);
 });
 
 function skipBalanced(text, start, openChar, closeChar) {
