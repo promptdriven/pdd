@@ -309,8 +309,8 @@ reply.
 ```json
 {
   "kind": "partial",
-  "status": "approved",
-  "prose_sha256": "474428b1732eac654830e259d5ef79f7e6926c1d00d6d7cbc4c86db7c5bbb21d",
+  "status": "draft",
+  "prose_sha256": "91557830c34a68b1751ca7de1551abcefb4a32fda9ddd66db732627ff959f920",
   "entries": [
     {
       "operation": "runPdd",

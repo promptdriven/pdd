@@ -12,7 +12,7 @@ const bin=fileURLToPath(new URL('../bin/pdd.mjs',import.meta.url));
 const capture=()=>({text:'',write(chunk){this.text+=chunk;}});
 const forbidden=()=>assert.fail('Help must not invoke native/workflow/definition operations');
 
-test('launch help is local and keeps the PR warning for root and every runner route without admitting a workflow',async()=>{
+test('launch help is local and explains PR creation on the run page without admitting a workflow',async()=>{
  const forms=[[],['--help'],['-h'],['help'],['workflow','--help']];
  for(const command of ['run','done','approve','changes','cancel','status','open'])forms.push(['workflow',command,'--help'],['workflow',command,'-h'],['help','workflow',command]);
  for(const words of forms){
@@ -25,7 +25,7 @@ test('launch help is local and keeps the PR warning for root and every runner ro
    const description=stdout.text.split('\n').find(line=>line.startsWith('  pdd workflow '+words[1]+' '));
    assert.ok(description,words.join(' '));assert.doesNotMatch(description,/PREVIEW:/);
   }
-  assert.match(stdout.text,/opens a real PR/);
+  if(words.includes('run')) assert.match(stdout.text.replace(/\s+/g,' '),/opens a real PR/);
  }
  for(const words of [['session','--help'],['workflow','bug','--help']])assert.equal(await runPdd(words,{stdout:capture(),stderr:capture(),workflowRunner:new Proxy({},{get:forbidden})}),2,words.join(' '));
 });
@@ -37,7 +37,8 @@ test('actual public bin launch help works offline in empty consumer folder; unre
  for(const words of [['--help'],['workflow','start','--help'],['workflow','approve','--help'],['workflow','open','--help']]){
   const result=spawnSync(process.execPath,[bin,...words],{cwd,env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:'',PATH:''},encoding:'utf8',timeout:5000});
   assert.equal(result.status,0,result.stderr);assert.equal(result.stderr,'');assert.doesNotMatch(result.stdout,/PREVIEW|real workflow PR is not yet proven/);
-  assert.equal(result.stdout.split('\n')[0],'PDD: prompt-driven development for your coding agent.');
+  const heading=words[0]==='--help'?'PDD: prompt-driven development for your coding agent.':`pdd workflow ${words[1]==='start'?'run':words[1]}`;
+  assert.equal(result.stdout.split('\n')[0],heading);
  }
  const unknown=spawnSync(process.execPath,[bin,'not-a-command','--help'],{cwd,env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:'',PATH:''},encoding:'utf8',timeout:5000});
  assert.equal(unknown.status,2);assert.equal(unknown.stdout,'');assert.match(unknown.stderr,/unsupported|unknown/i);
