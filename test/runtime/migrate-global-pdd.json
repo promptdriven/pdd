@@ -3,7 +3,7 @@
   "story_path": "user_stories/migrate-global-pdd.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "same-prefix-migration",
       "text": "When pdd upgrade runs from the unscoped global package, it exits with code 1 and explains the executable collision, giving the uninstall and install commands for the same npm prefix without running them."
     }
   ],
@@ -47,9 +47,9 @@
       "operation": "runCliUpgrade",
       "input": {"packageRoot": "/pdd migration/lib/node_modules/pdd", "env": {"HOME": "/home/developer"}},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/exitCode", "op": "equals", "value": 1},
-        {"criterion_id": "AC1", "target": "world", "path": "/stderr/0/text", "op": "equals", "value": "pdd upgrade: The unscoped npm package pdd can block @promptdriven/pdd from installing its pdd executable (EEXIST). To migrate, run: npm uninstall -g --prefix '/pdd migration' pdd && npm install -g --prefix '/pdd migration' --ignore-scripts github:promptdriven/pdd\n"},
-        {"criterion_id": "AC1", "target": "calls", "path": "/resources/autopilot-update-process-spawnSync", "op": "equals", "value": 0}
+        {"criterion_id": "same-prefix-migration", "target": "result", "path": "/exitCode", "op": "equals", "value": 1},
+        {"criterion_id": "same-prefix-migration", "target": "world", "path": "/stderr/0/text", "op": "equals", "value": "pdd upgrade: The unscoped npm package pdd can block @promptdriven/pdd from installing its pdd executable (EEXIST). To migrate, run: npm uninstall -g --prefix '/pdd migration' pdd && npm install -g --prefix '/pdd migration' --ignore-scripts github:promptdriven/pdd\n"},
+        {"criterion_id": "same-prefix-migration", "target": "calls", "path": "/resources/autopilot-update-process-spawnSync", "op": "equals", "value": 0}
       ],
       "model": "gpt-6.1-sol"
     }
