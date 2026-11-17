@@ -698,6 +698,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared real CLI commands, with 0 AI calls. Compare arguments, optional stdin, exit code, stdout and stderr using the same cases. Save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
 | `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every Story affected by local changes against the unique saved-run base or HEAD, including all variants and criteria. Uncertain scope keeps complete coverage. Read omitted baseline obligations from local original Check history in a separate historical report. Status describes selected checks only. Required full-pass gates still apply. |
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
+| `pdd test [PATH\|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]` | Cap logical interpreter calls across all selected Stories and any permitted `service-restarted` replacement (`--max-total-calls` 1..999999), or decline automatic `service-restarted` replacement (`--no-restart-replacement`, saved across `--read` and `--retry`). Also accepted with `--affected` and `--journeys` |
 | `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
@@ -708,7 +709,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
 | `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Simulator page for screens and typed operations. With no Story, open the whole project. |
 | `pdd simulate [STORY] --page [--new]` | Open the Simulator page explicitly |
-| `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story |
+| `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story or exact Try ID |
 
 For `--target code`, each tested Runtime entry declares
 `"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}`. The command
@@ -797,7 +798,7 @@ The Simulator's agent fills the fields directly when supported. It runs the acti
 |---|---|
 | `pdd mcp` | Start the stdio MCP server for the current repository; select the Story through tool input. Your agent can open a simulation, inspect its state, run input, check the result against the Story and save a case |
 
-The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case`. `try_open` and `try_state` include `source_sha256` and `engine_sha` for the open Try. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
+The tools are `try_open`, `try_state`, `try_run`, `try_observe`, `try_check` and `try_save_case`. `try_open` and `try_state` include `source_sha256`, `engine_sha` and `server_commit` for the open Try. Supply `try_id` to bind an existing running simulation without opening or reopening one, and use `try_observe` to read call and session state without replaying a run. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
 
 ## Used by the agent
 
