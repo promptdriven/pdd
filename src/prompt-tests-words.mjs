@@ -1,3 +1,3 @@
-// Generated from prompts/cli/prompt-tests-words.prompt.md (sha256: 7c436dd45577c29c0a34175cc4241e5de6153f3782f5b5f205a4dd5a0cd87305).
+// Generated from prompts/cli/prompt-tests-words.prompt.md (sha256: 79eaf22b503ab8b5c1a4fbe3238e726b96a431d1ef2d3f9a5622763d16e05049).
 export const PROMPT_TESTS_LABEL = 'Prompt tests';
 export const PROMPT_TESTS_WORDS = '(?:Prompt tests|Runtime check)';

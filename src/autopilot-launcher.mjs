@@ -1,11 +1,11 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 0976786707ad27fcfe5c45a893fea816d818bf90360d3ec2aaf92c66febc5e09).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 3a5f1e039174ccad15988c0425fea4a51ab796ee61c95d679dfcda46e2c11ba5).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
-import { releaseCheckCapacity } from './test-suite-queue.mjs';
+import { releaseCheckCapacity, readCheckStatus } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
-import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, loginEnvironment, isCloudAccountsActive, isCreditOrResetAccount, selectCloudPoolLogin, exhaustCloudPoolLogin } from './login-pool.mjs';
-import { spawn, execFile } from 'node:child_process';
+import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, loginEnvironment, isCloudAccountsActive, isCreditOrResetAccount, selectCloudPoolLogin, exhaustCloudPoolLogin, accountsStatePath, readCloudAccountsState, readPoolCooldowns } from './login-pool.mjs';
+import { spawn, spawnSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, watch, realpathSync } from 'node:fs';
@@ -15,17 +15,17 @@ import { fileURLToPath } from 'node:url';
 import { runAgentProcess } from './agent-adapters.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
-import { allRuns, updateRunCosts, listRuns, resolveRun } from './workflow-runs.mjs';
+import { allRuns, listRuns, resolveRun } from './workflow-runs.mjs';
 import { auditMerge } from './autopilot-audit.mjs';
 import { releaseIssueClaim } from './workflow-worktree.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubUsage } from './github-calls.mjs';
-import { costReport, costStatusLines } from './cost-ledger.mjs';
+import { captureCosts, costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { readCoreSettings, tickCore, coreStatus, busySlots } from './autopilot-core.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
-import { listReportDrafts, sendReportDraft } from './autopilot-reports.mjs';
+import { listReportDrafts, sendReportDraft, summarizeConversionDrops } from './autopilot-reports.mjs';
 import { INTAKE_MODES, intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
 import { moveToCore, moved, movedState, engineBefore, procTable, MAX_DEFERS, FULL_ENGINE_REMOVED } from './autopilot-retire.mjs';
 import * as nativeFs from 'node:fs';
@@ -370,17 +370,128 @@ const coreRoot = stateFile => stateFile.replace(/\.json$/, '-core');
 const coreReports = (ports, env) => join(stateFolder(ports, env), 'core-reports');
 // #3231: the machine guard reads this machine once: Autopilot's share of it (start --share, default 50%), the slots
 // (this machine's --runs wins), the room for new work and the priority of each job.
-async function coreGuard(state, p, ports, stateFile) {
-  const repoRuns = read(join(state.cwd, 'pdd.json'), {})?.autopilot?.runs;
-  return (ports.machineGuard ?? readMachineGuard)({ cwd: state.cwd, runs: state.runs, repoRuns, share: state.share, jobs: machineJobs(stateFile) }, { env: p.env });
+const JOB_ROLES = ['build', 'repair', 'review', 'suite', 'vectors', 'runtime', 'intake'];
+const runtimeJobCurrent = job => Boolean(job?.runtimeWait && job.runtimeWait.head === (job.agentHead ?? job.head));
+const runtimeJobWaiting = job => job?.phase === 'pr' && runtimeJobCurrent(job) && job.runtimeWait.state === 'waiting';
+const poolJobWaiting = job => job?.phase === 'pr' && job?.stepStop?.poolExhausted === true && !job.stepStop.resumed;
+const holdsIssueSlot = job => job?.phase !== 'ending' && !runtimeJobWaiting(job) && !poolJobWaiting(job);
+
+// Inspect all saved *-core folders under stateRoot (including disabled repositories whose workers still run)
+// and inventory live child processes by role without inflating issue-slot reservations.
+export function inspectMachineJobs(folder, ports = {}) {
+  const byRole = Object.fromEntries(JOB_ROLES.map(role => [role, []]));
+  let entries = [];
+  try { entries = readdirSync(folder).sort(); }
+  catch { return { slotJobs: 0, totalProcesses: 0, counts: Object.fromEntries(JOB_ROLES.map(r => [r, 0])), byRole, coreDirs: [] }; }
+  const coreDirs = new Map();
+  for (const name of entries) {
+    if (!name.endsWith('.json')) continue;
+    let st = null;
+    try { st = read(join(folder, name), null); } catch { st = null; }
+    const cDir = coreRoot(join(folder, name));
+    if (st && typeof st === 'object' && !Array.isArray(st) && (/^[0-9a-f]{20}\.json$/.test(name) || 'enabled' in st || isFolder(cDir))) {
+      coreDirs.set(cDir, { id: name.slice(0, -5), repo: typeof st.repo === 'string' ? st.repo : null, cwd: typeof st.cwd === 'string' ? st.cwd : null, enabled: st.enabled === true, state: st });
+    }
+  }
+  for (const name of entries) {
+    if (!name.endsWith('-core')) continue;
+    const cDir = join(folder, name);
+    if (!coreDirs.has(cDir) && isFolder(cDir)) {
+      let st = null;
+      try { st = read(join(folder, name.replace(/-core$/, '.json')), null); } catch { st = null; }
+      coreDirs.set(cDir, { id: name.slice(0, -5), repo: typeof st?.repo === 'string' ? st.repo : null, cwd: typeof st?.cwd === 'string' ? st.cwd : null, enabled: st?.enabled === true, state: st });
+    }
+  }
+  const aliveCheck = ports.jobAlive ?? ((pid, token) => {
+    try { process.kill(pid, 0); } catch (error) { if (error.code !== 'EPERM') return false; }
+    if (process.platform === 'linux') {
+      try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ').includes(token); }
+      catch (error) { if (error?.code === 'ENOENT' || error?.code === 'ESRCH') return false; }
+    }
+    const row = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
+    return row.status === 0 && String(row.stdout).includes(token);
+  });
+  const isRunning = part => {
+    if (!part || typeof part !== 'object') return false;
+    if (typeof ports.readAgentJob === 'function') {
+      try { return ports.readAgentJob(part).state === 'running'; } catch { return false; }
+    }
+    if (typeof part.exit === 'string' && part.exit) {
+      try { const ex = read(part.exit, null); if (ex && typeof ex === 'object') return false; } catch {}
+    }
+    if (!(Number.isSafeInteger(part.pid) && part.pid > 1 && typeof part.token === 'string' && part.token)) return false;
+    try { return Boolean(aliveCheck(part.pid, part.token)); } catch { return false; }
+  };
+  let slotJobs = 0;
+  for (const [cDir, meta] of coreDirs.entries()) {
+    let jobNames = [];
+    try { jobNames = readdirSync(join(cDir, 'jobs')).filter(n => /^\d+\.json$/.test(n)).sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10)); } catch { jobNames = []; }
+    let repoSlotJobs = 0;
+    for (const jName of jobNames) {
+      let job = null;
+      try { job = read(join(cDir, 'jobs', jName), null); } catch { job = null; }
+      if (!job || typeof job !== 'object' || !Number.isSafeInteger(job.issue)) continue;
+      let liveChild = false;
+      const mainRole = job.role === 'repair' || job.role === 'conflict' ? 'repair' : 'build';
+      for (const [role, part] of [[mainRole, job.agent], ['review', job.review?.agent], ['suite', job.suite?.agent], ['vectors', job.vectors?.agent], ['runtime', job.runtimeWait?.agent]]) {
+        if (isRunning(part)) {
+          liveChild = true;
+          byRole[role].push({ repo: meta.repo, issue: job.issue, role, pid: Number.isSafeInteger(part.pid) && part.pid > 1 ? part.pid : null, enabled: meta.enabled });
+        }
+      }
+      if (holdsIssueSlot(job) && (meta.enabled || liveChild)) repoSlotJobs += 1;
+    }
+    slotJobs += meta.enabled ? Math.max(repoSlotJobs, busySlots(cDir)) : repoSlotJobs;
+
+    let intakeNames = [];
+    try { intakeNames = readdirSync(join(cDir, 'intake', 'jobs')).filter(n => /^\d+\.json$/.test(n)).sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10)); } catch { intakeNames = []; }
+    for (const iName of intakeNames) {
+      let saved = null;
+      try { saved = read(join(cDir, 'intake', 'jobs', iName), null); } catch { saved = null; }
+      if (!saved || typeof saved !== 'object') continue;
+      const part = saved.job && typeof saved.job === 'object' ? saved.job : saved;
+      if (isRunning(part)) {
+        byRole.intake.push({ repo: meta.repo, issue: Number.isSafeInteger(saved.issue) ? saved.issue : Number.parseInt(iName, 10), stage: typeof saved.stage === 'string' ? saved.stage : null, role: 'intake', pid: Number.isSafeInteger(part.pid) && part.pid > 1 ? part.pid : null, enabled: meta.enabled });
+      }
+    }
+  }
+  const counts = Object.fromEntries(JOB_ROLES.map(role => [role, byRole[role].length]));
+  const totalProcesses = JOB_ROLES.reduce((sum, role) => sum + counts[role], 0);
+  return { slotJobs, totalProcesses, counts, byRole, coreDirs: [...coreDirs.entries()].map(([dirPath, meta]) => ({ dir: dirPath, ...meta })) };
 }
-// The jobs that hold a slot now in every enabled repository of this machine (the core folders beside the state files).
-function machineJobs(stateFile) {
+
+function activeMachineBounds(states) {
+  const active = states.some(s => s?.enabled) ? states.filter(s => s?.enabled) : states;
+  const shares = active.map(s => s?.share).filter(validShare);
+  const explicitRuns = active.map(s => s?.runs).filter(r => Number.isSafeInteger(r) && r > 0);
+  return {
+    active,
+    share: shares.length ? Math.max(...shares) : undefined,
+    machineRuns: explicitRuns.length ? Math.max(...explicitRuns) : undefined,
+  };
+}
+async function coreGuard(state, p, ports, stateFile) {
   const folder = dirname(stateFile);
-  let names = [];
-  try { names = readdirSync(folder); } catch { return 0; }
-  return names.filter(name => name.endsWith('.json') && read(join(folder, name), null)?.enabled === true)
-    .reduce((sum, name) => sum + busySlots(coreRoot(join(folder, name))), 0);
+  const repoRuns = read(join(state.cwd, 'pdd.json'), {})?.autopilot?.runs;
+  const inv = inspectMachineJobs(folder, ports);
+  const allSaved = readSavedStates(folder).saved;
+  const states = [state, ...allSaved.filter(s => s.stateFile !== stateFile)];
+  const bounds = activeMachineBounds(states);
+  const loginPool = state?.poolPath === 'off'
+    ? { source: 'none', state: 'not-configured', counts: null, readyLogins: null, accounts: [] }
+    : readLoginPoolSummary(folder, state.cwd, p.env, ports, [state, ...bounds.active.filter(s => s !== state)], inv.coreDirs);
+  return (ports.machineGuard ?? readMachineGuard)({
+    cwd: state.cwd,
+    runs: state.runs,
+    repoRuns,
+    ...(bounds.machineRuns !== undefined ? { machineRuns: bounds.machineRuns } : {}),
+    share: validShare(state.share) ? state.share : bounds.share,
+    jobs: inv.slotJobs,
+    ...(Number.isSafeInteger(loginPool.readyLogins) ? { readyLogins: loginPool.readyLogins } : {}),
+  }, { env: p.env });
+}
+function machineJobs(stateFile, ports = {}) {
+  return inspectMachineJobs(dirname(stateFile), ports).slotJobs;
 }
 // pdd autopilot start --share N: the percent of this machine's CPU and memory that Autopilot may use, saved for this
 // repository on this machine; a later start without it keeps it.
@@ -404,7 +515,7 @@ async function runCoreTick(stateFile, state, p, ports) {
     catch (error) { release(); throw error; }
   };
   machine.reserve = reserveMachine;
-  const core = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs });
+  const core = readCoreSettings(state.cwd, undefined, { auto: Math.max(1, guard.auto ?? 1), runs: state.runs, ...(Number.isSafeInteger(guard.hardwareSlots) && guard.hardwareSlots > 0 ? { hardwareSlots: guard.hardwareSlots } : {}) });
   if (machineLabel(state)) core.label = machineLabel(state);
   if (machineMode(state)) core.mode = machineMode(state);
   if (machineReport(state)) core.report = machineReport(state);
@@ -728,35 +839,363 @@ async function savedMode(state, ports, env) {
 const GONE = Symbol('gone');
 // Every saved launcher state on this machine, read-only: local files and timer status only.
 // Each line is independent. Timer reads run from the caller's folder, never from a saved folder.
-async function machineStatus(folder, ports, env, cwd) {
+const finitePct = v => typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 10) / 10 : null;
+const cleanStr = v => typeof v === 'string' && v.trim() ? v.trim() : null;
+const shortResetIso = iso => {
+  const s = cleanStr(iso);
+  if (!s) return null;
+  const ms = Date.parse(s);
+  return Number.isFinite(ms) ? new Date(ms).toISOString().replace(/:\d{2}(?:\.\d+)?Z$/, 'Z') : s.slice(0, 19);
+};
+function normalizeLoginState(raw) {
+  const s = String(raw ?? 'ready').toLowerCase();
+  if (s.includes('reauth') || s === 'expired' || s === 'revoked') return 'reauth_required';
+  if (['cooling', 'exhausted', 'limited', 'rate_limited'].includes(s)) return 'cooling';
+  if (['disabled', 'paused'].includes(s)) return 'disabled';
+  return 'ready';
+}
+function readSuiteQueueSummary(env, ports = {}) {
+  try {
+    const sq = (ports.readCheckStatus ?? readCheckStatus)({ env }, ports.checkCapacityPorts ?? ports);
+    return {
+      state: sq.busy ? 'busy' : 'ok',
+      checks: sq.checks,
+      runs: sq.runs,
+      busyChecks: sq.busyChecks,
+      waitingChecks: sq.waitingChecks,
+      usableCores: sq.usableCores,
+      coresPerCheck: sq.coresPerCheck,
+    };
+  } catch {
+    return { state: 'unavailable', checks: null, runs: null, busyChecks: null, waitingChecks: null, usableCores: null, coresPerCheck: null };
+  }
+}
+function mapCachedCloudAccount(acc) {
+  return {
+    id: cleanStr(acc.account_id ?? acc.id),
+    label: cleanStr(acc.label ?? acc.account_id ?? acc.id) ?? 'account',
+    provider: cleanStr(acc.provider) ?? 'unknown',
+    state: normalizeLoginState(acc.state ?? acc.status),
+    fiveHourUsedPercent: finitePct(acc.five_hour_used_percent ?? acc.fiveHourUsedPercent),
+    fiveHourResetAt: cleanStr(acc.five_hour_reset_at ?? acc.fiveHourResetAt),
+    weeklyUsedPercent: finitePct(acc.weekly_used_percent ?? acc.weeklyUsedPercent),
+    weeklyResetAt: cleanStr(acc.weekly_reset_at ?? acc.weeklyResetAt),
+    cooldownUntil: cleanStr(acc.cooldown_until ?? acc.cooldownUntil ?? acc.cooling_until),
+  };
+}
+function readLoginPoolSummary(folder, here, env, ports = {}, savedStates = [], coreDirs = []) {
+  const fsPort = ports.fs ?? nativeFs;
+  const now = (ports.now ?? Date.now)();
+  let rawCloud = null, cloudFileError = false;
+  if (Object.hasOwn(ports, 'cloudAccountsSnapshot')) {
+    rawCloud = ports.cloudAccountsSnapshot;
+    if (!rawCloud || typeof rawCloud !== 'object' || Array.isArray(rawCloud)) { rawCloud = null; cloudFileError = true; }
+  } else {
+    try {
+      rawCloud = JSON.parse(fsPort.readFileSync(accountsStatePath(env), 'utf8'));
+      if (!rawCloud || typeof rawCloud !== 'object' || Array.isArray(rawCloud)) { rawCloud = null; cloudFileError = true; }
+    } catch (error) {
+      if (error?.code !== 'ENOENT') cloudFileError = true;
+      rawCloud = null;
+    }
+  }
+  if (cloudFileError) {
+    return { source: 'cloud', state: 'unavailable', counts: null, readyLogins: null, accounts: [] };
+  }
+  if (Array.isArray(rawCloud?.accounts)) {
+    const accounts = rawCloud.accounts.filter(a => a && typeof a === 'object').map(mapCachedCloudAccount);
+    const ready = accounts.filter(a => a.state === 'ready').length;
+    const cooling = accounts.filter(a => a.state === 'cooling').length;
+    const reauthRequired = accounts.filter(a => a.state === 'reauth_required').length;
+    return {
+      source: 'cloud',
+      state: accounts.length === 0 ? 'empty' : ready > 0 ? 'ready' : cooling > 0 ? 'cooling' : 'reauth_required',
+      counts: { total: accounts.length, ready, cooling, reauth_required: reauthRequired },
+      readyLogins: ready,
+      accounts,
+    };
+  }
+  let cloudState = { enrolled: false, providers: [], active: {}, cooling: {} };
+  try { cloudState = readCloudAccountsState({ env }, { fs: fsPort }); } catch { cloudState = { enrolled: false, providers: [], active: {}, cooling: {} }; }
+  if (cloudState.enrolled === true) {
+    const providers = [...new Set([...(cloudState.providers ?? []), ...Object.keys(cloudState.active ?? {}), ...Object.keys(cloudState.cooling ?? {})])];
+    const accounts = [];
+    for (const provider of providers) {
+      const activeEntry = cloudState.active?.[provider] ?? null;
+      const coolEntry = cloudState.cooling?.[provider] ?? null;
+      const wakeAt = cleanStr(coolEntry?.wake_at ?? coolEntry?.until);
+      const wakeMs = wakeAt ? Date.parse(wakeAt) : NaN;
+      const isCooling = Boolean(coolEntry && (!Number.isFinite(wakeMs) || wakeMs > now));
+      if (activeEntry) {
+        accounts.push(mapCachedCloudAccount({
+          ...activeEntry,
+          provider,
+          state: isCooling ? 'cooling' : 'ready',
+          cooldown_until: isCooling ? wakeAt : null,
+        }));
+      } else if (isCooling) {
+        accounts.push({
+          id: null, label: provider, provider, state: 'cooling',
+          fiveHourUsedPercent: null, fiveHourResetAt: null, weeklyUsedPercent: null, weeklyResetAt: null, cooldownUntil: wakeAt,
+        });
+      }
+    }
+    if (!accounts.length) {
+      return { source: 'cloud', state: 'unavailable', counts: null, readyLogins: null, accounts: [] };
+    }
+    const ready = accounts.filter(a => a.state === 'ready').length;
+    const cooling = accounts.filter(a => a.state === 'cooling').length;
+    return {
+      source: 'cloud',
+      state: ready > 0 ? 'ready' : cooling > 0 ? 'cooling' : 'unavailable',
+      counts: { total: accounts.length, ready, cooling, reauth_required: 0 },
+      readyLogins: null,
+      accounts,
+    };
+  }
+  const poolPath = savedStates.map(s => s?.poolPath).find(p => typeof p === 'string' && p.trim() && p !== 'off' && p !== 'none');
+  try {
+    const pool = loadLoginPool({ cwd: here, env, ...(poolPath ? { poolPath } : {}) }, { fs: fsPort });
+    if (pool?.configured && Array.isArray(pool.logins) && pool.logins.length > 0) {
+      const now = (ports.now ?? Date.now)();
+      const cooldowns = {};
+      for (const rootDir of [folder, ...coreDirs.map(c => c.dir)]) {
+        Object.assign(cooldowns, readPoolCooldowns({ stateRoot: rootDir, now }, { fs: fsPort }));
+      }
+      const accounts = pool.logins.map(login => {
+        const cd = cooldowns[login.id];
+        const state = login.paused === true
+          ? 'paused'
+          : isCreditOrResetAccount(login)
+            ? 'guarded'
+            : cd
+              ? 'cooling'
+              : 'ready';
+        return {
+          id: login.id,
+          label: login.label ?? login.id,
+          provider: login.kind,
+          state,
+          fiveHourUsedPercent: null,
+          fiveHourResetAt: null,
+          weeklyUsedPercent: null,
+          weeklyResetAt: null,
+          cooldownUntil: state === 'cooling' && cd?.until ? new Date(cd.until).toISOString() : null,
+        };
+      });
+      const ready = accounts.filter(a => a.state === 'ready').length;
+      const cooling = accounts.filter(a => a.state === 'cooling').length;
+      const paused = accounts.filter(a => a.state === 'paused' || a.state === 'guarded').length;
+      return {
+        source: 'local-pool',
+        state: ready > 0 ? 'ready' : cooling > 0 ? 'cooling' : paused > 0 ? 'paused' : 'empty',
+        counts: { total: accounts.length, ready, cooling, paused, reauth_required: 0 },
+        readyLogins: ready,
+        accounts,
+      };
+    }
+  } catch {
+    return {
+      source: 'local-pool',
+      state: 'invalid',
+      counts: { total: 0, ready: 0, cooling: 0, paused: 0, reauth_required: 0 },
+      readyLogins: 0,
+      accounts: [],
+    };
+  }
+  return { source: 'none', state: 'not-configured', counts: null, readyLogins: null, accounts: [] };
+}
+function readConversionSummary(folder, env, ports = {}, coreDirs = []) {
+  const runs = [];
+  let intakeCards = 0, intakeWouldPick = 0, intakeRunning = 0;
+  const now = (ports.now ?? Date.now)();
+  for (const entry of coreDirs) {
+    let text = '';
+    try { text = readFileSync(join(entry.dir, 'history.jsonl'), 'utf8'); } catch { text = ''; }
+    for (const rawLine of text.split('\n')) {
+      if (!rawLine.trim()) continue;
+      let row = null;
+      try { row = JSON.parse(rawLine); } catch { row = null; }
+      if (!row || typeof row !== 'object' || typeof row.outcome !== 'string') continue;
+      const merged = row.outcome === 'merged';
+      const wouldMerge = row.outcome === 'would-merge' || (row.outcome === 'observed' && Boolean(row.pr));
+      runs.push({
+        repo: entry.repo,
+        issue: row.issue,
+        outcome: row.outcome,
+        pr: row.pr ?? null,
+        prOpened: Boolean(row.pr),
+        merged,
+        wouldMerge,
+        needsDecision: Boolean(row.ask),
+        owner: row.owner ?? (row.poolExhausted ? 'quota_or_service' : row.ask ? 'person_decision' : undefined),
+        reason: row.code ?? (row.poolExhausted ? 'quota-exhausted' : row.ask ? 'question' : row.outcome),
+        message: typeof row.text === 'string' ? row.text : '',
+      });
+    }
+    try {
+      const intake = readIntake({ root: entry.dir, now });
+      intakeCards += intake.cards.length;
+      intakeWouldPick += intake.wouldPick.length;
+      intakeRunning += intake.running.length;
+    } catch { /* Optional intake folder. */ }
+  }
+  let drafts = [];
+  try { drafts = listReportDrafts({ root: coreReports(ports, env) }); } catch { drafts = []; }
+  const summary = summarizeConversionDrops({ runs, drafts });
+  return { ...summary, intake: { cards: intakeCards, wouldPick: intakeWouldPick, running: intakeRunning } };
+}
+function readSavedStates(folder) {
   let names = [];
   try { names = readdirSync(folder).filter(name => /^[0-9a-f]{20}\.json$/.test(name)).sort(); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const here = isFolder(cwd) ? cwd : env?.HOME || homedir();
-  const rows = [];
+  const saved = [], unreadable = [];
   for (const name of names) {
-    let saved;
-    try { saved = read(join(folder, name), GONE); } catch { saved = null; }
-    if (saved === GONE) continue;
-    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) { rows.push(`${name}: saved state unreadable`); continue; }
-    const state = { ...saved, id: name.slice(0, -5), stateFile: join(folder, name) };
-    const p = portsFor({ ...state, cwd: here }, { ...ports, env });
+    let raw;
+    try { raw = read(join(folder, name), GONE); } catch { raw = null; }
+    if (raw === GONE) continue;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { unreadable.push(name); continue; }
+    saved.push({ ...raw, id: name.slice(0, -5), stateFile: join(folder, name) });
+  }
+  return { saved, unreadable };
+}
+async function collectMachineObservability(folder, ports, env, cwd) {
+  const effectiveEnv = env ?? ports.env ?? process.env;
+  const here = isFolder(cwd) ? cwd : effectiveEnv?.HOME || homedir();
+  const { saved, unreadable } = readSavedStates(folder);
+  const inventory = inspectMachineJobs(folder, ports);
+  const bounds = activeMachineBounds(saved);
+  const loginPool = bounds.active.length > 0 && bounds.active.every(s => s?.poolPath === 'off')
+    ? { source: 'none', state: 'not-configured', counts: null, readyLogins: null, accounts: [] }
+    : readLoginPoolSummary(folder, here, effectiveEnv, ports, bounds.active, inventory.coreDirs);
+  const guardInput = {
+    cwd: here,
+    ...(bounds.share !== undefined ? { share: bounds.share } : {}),
+    ...(bounds.machineRuns !== undefined ? { runs: bounds.machineRuns, machineRuns: bounds.machineRuns } : {}),
+    jobs: inventory.slotJobs,
+    ...(Number.isSafeInteger(loginPool.readyLogins) ? { readyLogins: loginPool.readyLogins } : {}),
+  };
+  const guard = await (ports.machineGuard ?? readMachineGuard)(guardInput, { env: effectiveEnv });
+  const suiteQueue = readSuiteQueueSummary(effectiveEnv, ports);
+  const conversion = readConversionSummary(folder, effectiveEnv, ports, inventory.coreDirs);
+  return { here, saved, unreadable, inventory, guard, suiteQueue, loginPool, conversion };
+}
+function formatObservabilityLines({ inventory, guard, suiteQueue, loginPool, conversion }) {
+  const roleParts = JOB_ROLES.map(role => {
+    const items = inventory.byRole[role];
+    const issuesTag = items.length ? ` (${items.map(i => i.issue ? `#${i.issue}` : 'job').join(', ')})` : '';
+    return `${role} ${items.length}${issuesTag}`;
+  }).join(', ');
+  const activeLine = `Active jobs: ${inventory.slotJobs} issue slot${inventory.slotJobs === 1 ? '' : 's'} · roles ${roleParts}`;
+  const suiteLine = suiteQueue.state === 'unavailable'
+    ? 'Suite queue: unavailable'
+    : `Suite queue: ${suiteQueue.busyChecks} running, ${suiteQueue.waitingChecks} waiting of ${suiteQueue.checks} slot${suiteQueue.checks === 1 ? '' : 's'} (${suiteQueue.coresPerCheck} core${suiteQueue.coresPerCheck === 1 ? '' : 's'}/suite)`;
+  let poolLine = 'Login pool: single local login (not configured)';
+  if (loginPool.source === 'cloud') {
+    if (loginPool.state === 'unavailable') poolLine = 'Login pool (cloud): unavailable (no local cache; usage unknown)';
+    else if (!loginPool.accounts.length) poolLine = 'Login pool (cloud): 0 enrolled';
+    else {
+      const c = loginPool.counts;
+      const acctWords = loginPool.accounts.map(a => {
+        const w5 = a.fiveHourUsedPercent === null ? '?' : `${Math.round(a.fiveHourUsedPercent)}%${shortResetIso(a.fiveHourResetAt) ? ` (${shortResetIso(a.fiveHourResetAt)})` : ''}`;
+        const w7 = a.weeklyUsedPercent === null ? '?' : `${Math.round(a.weeklyUsedPercent)}%${shortResetIso(a.weeklyResetAt) ? ` (${shortResetIso(a.weeklyResetAt)})` : ''}`;
+        return `${line(a.label)} [${line(a.provider)} ${a.state}, 5H ${w5}, 7D ${w7}]`;
+      }).join('; ');
+      poolLine = `Login pool (cloud): ready ${c.ready}, cooling ${c.cooling}, reauth_required ${c.reauth_required} · ${acctWords}`;
+    }
+  } else if (loginPool.source === 'local-pool') {
+    if (loginPool.state === 'invalid') {
+      poolLine = 'Login pool (local): invalid (0 ready)';
+    } else if (loginPool.counts) {
+      const c = loginPool.counts;
+      poolLine = `Login pool (local): ready ${c.ready}, cooling ${c.cooling}${c.paused ? `, paused ${c.paused}` : ''} of ${c.total}`;
+    }
+  }
+  const t = conversion.totals;
+  const ownerDrops = Object.entries(conversion.dropsByOwner).filter(([, b]) => b.count > 0).map(([owner, b]) => `${owner} ${b.count}`).join(', ');
+  const dropWords = t.dropped > 0 && ownerDrops ? `dropped ${t.dropped}: ${ownerDrops}` : `dropped ${t.dropped}`;
+  const intakeWords = conversion.intake?.cards ? `; intake cards ${conversion.intake.cards}` : '';
+  const convLine = `Conversion: claimed ${t.claimed} → clear-spec ${t.clearSpec} → PR ${t.prOpened} → merged/would-merge ${t.mergedOrWouldMerge} (${dropWords}; pending drafts ${conversion.reports.pendingDrafts.length}${intakeWords})`;
+  return [guard.line, activeLine, suiteLine, poolLine, convLine];
+}
+async function machineStatus(folder, ports, env, cwd) {
+  const obs = await collectMachineObservability(folder, ports, env, cwd);
+  const rows = obs.unreadable.map(name => `${name}: saved state unreadable`);
+  for (const state of obs.saved) {
+    const p = portsFor({ ...state, cwd: obs.here }, { ...ports, env });
     const mode = machineMode(state) ? `${machineMode(state)} (this machine)` : await savedMode(state, ports, env);
     let timerState = 'unknown';
     try { timerState = await timer('status', state, p) ? 'active' : 'inactive'; } catch { /* Report unknown. */ }
     rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState}${moved(state) ? '' : ' · moves from the full engine to the core engine at its next tick'}`);
   }
-  return ok(rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows].join('\n') : 'No Autopilot on this machine.');
+  const header = rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows] : ['No Autopilot on this machine.'];
+  return ok([...header, ...formatObservabilityLines(obs)].join('\n'));
+}
+async function statusJsonPayload(input, ports, p) {
+  const folder = stateFolder(ports, p.env);
+  const costs = await localCosts(input, ports);
+  const obs = await collectMachineObservability(folder, ports, input.env ?? p.env, input.cwd);
+  const repositories = obs.saved.map(state => {
+    let repoMode = machineMode(state);
+    if (!repoMode && typeof state.cwd === 'string' && state.cwd) {
+      try { const cfgMode = read(join(state.cwd, 'pdd.json'), null)?.autopilot?.mode; if (['auto', 'observe', 'off'].includes(cfgMode)) repoMode = cfgMode; } catch {}
+    }
+    return {
+      id: state.id,
+      repo: typeof state.repo === 'string' ? state.repo : null,
+      cwd: typeof state.cwd === 'string' ? state.cwd : null,
+      baseBranch: typeof state.baseBranch === 'string' ? state.baseBranch : null,
+      mode: repoMode ?? null,
+      enabled: Boolean(state.enabled),
+      timerInstalled: Boolean(state.timerInstalled),
+      runs: Number.isSafeInteger(state.runs) && state.runs > 0 ? state.runs : null,
+      share: validShare(state.share) ? state.share : null,
+      busySlots: busySlots(coreRoot(state.stateFile)),
+    };
+  });
+  const g = obs.guard ?? {};
+  return {
+    ...costs,
+    costs,
+    repositories,
+    machineGuard: {
+      share: g.share ?? null,
+      shareSource: g.shareSource ?? null,
+      slots: g.slots ?? null,
+      machineSlots: g.machineSlots ?? g.slots ?? null,
+      machineRuns: g.machineRuns ?? null,
+      requestedSlots: g.requestedSlots ?? null,
+      hardwareSlots: g.hardwareSlots ?? null,
+      limiter: g.limiter ?? null,
+      limiterDetail: g.limiterDetail ?? null,
+      readyLogins: g.readyLogins ?? null,
+      source: g.source ?? null,
+      auto: g.auto ?? null,
+      room: g.room ?? null,
+      use: g.use ?? null,
+      line: g.line ?? null,
+    },
+    activeJobs: {
+      issueSlots: obs.inventory.slotJobs,
+      totalProcesses: obs.inventory.totalProcesses,
+      counts: obs.inventory.counts,
+      byRole: obs.inventory.byRole,
+    },
+    suiteQueue: obs.suiteQueue,
+    loginPool: obs.loginPool,
+    conversion: obs.conversion,
+  };
 }
 
 async function localCosts(input, ports, state = {}) {
   const options = { ...ports, env: input.env ?? ports.env };
   const runs = await (ports.costRuns ?? (async () => input.all ? allRuns({ cancelled: true }, options) : listRuns({ cwd: state.cwd ?? input.cwd, cancelled: true }, options)))();
   const measured = runs.map(run => {
-    try { return updateRunCosts(run.runDir, latest => {
-      if (latest.runId !== run.runId || latest.startedAt !== run.startedAt) throw Error('Cost attempt changed');
-      return latest;
-    }, options); } catch { return run; }
+    try {
+      const observed = structuredClone(run);
+      observed.cost = captureCosts(run, observed, options);
+      return observed;
+    } catch { return run; }
   });
   return costReport(measured, (ports.now ?? Date.now)());
 }
@@ -922,9 +1361,9 @@ export async function runAutopilotLauncher(input, ports = {}) {
       state.repo = found.run.repo;
       return checkAutopilotBase({ run: found.run, pr: issues[1] }, { execFile: (file, args, options) => p.execute(file, args, options) });
     }
-    if (command === 'status' && input.json) return ok(JSON.stringify(await localCosts(input, ports), null, 2));
+    if (command === 'status' && input.json) return ok(JSON.stringify(await statusJsonPayload(input, ports, p), null, 2));
     if (command === 'status' && input.all) {
-      const status = await machineStatus(stateFolder(ports, p.env), ports, input.env, input.cwd);
+      const status = await machineStatus(stateFolder(ports, p.env), ports, input.env ?? p.env, input.cwd);
       try { status.message += '\n' + costStatusLines(await localCosts(input, ports)); } catch {}
       return status;
     }
@@ -957,7 +1396,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     if (command === 'status') {
       const timerActive = Boolean(await timer('status', state, p)), guard = await coreGuard(state, p, ports, stateFile);
-      const settingsNow = readCoreSettings(state.cwd, undefined, { auto: guard.auto, runs: state.runs });
+      const settingsNow = readCoreSettings(state.cwd, undefined, { auto: Math.max(1, guard.auto ?? 1), runs: state.runs, ...(Number.isSafeInteger(guard.hardwareSlots) && guard.hardwareSlots > 0 ? { hardwareSlots: guard.hardwareSlots } : {}) });
       const label = machineLabel(state) ?? settingsNow.label;
       if (machineMode(state)) settingsNow.mode = machineMode(state);
       if (machineReport(state)) settingsNow.report = machineReport(state);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-prove.prompt.md (sha256: 2185da0dc8df2b16fecf3bb2701af589039d415c47dfcceef18eaa69b8c5c1f9).
+// Generated from prompts/cli/workflow-prove.prompt.md (sha256: 15022108e5ccf28d4644fc4affeeaabdcdc7be861ae096f97ac1a5bc5ec14361).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { resolveRun, updateRun } from './workflow-runs.mjs';
