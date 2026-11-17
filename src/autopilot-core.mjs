@@ -285,6 +285,38 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
     ...(skipLabels !== undefined ? { skipLabels } : {}),
     ...(forensics !== undefined ? { forensics } : {}) };
 }
+function scanZeroManifestTests(cwd, fs) {
+  if (typeof fs?.readdirSync !== 'function') return null;
+  let hasPy = false, seen = 0;
+  const walk = (dir, depth) => {
+    if (depth > 3 || seen >= 200) return null;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const entry of entries) {
+      if (++seen > 200) break;
+      const name = typeof entry === 'string' ? entry : entry?.name;
+      if (!named(name) || name.startsWith('.')) continue;
+      const isDir = typeof entry === 'object' && typeof entry.isDirectory === 'function'
+        ? entry.isDirectory()
+        : (() => { try { return Boolean(fs.statSync?.(join(dir, name))?.isDirectory?.()); } catch { return false; } })();
+      if (isDir) {
+        if (name === 'node_modules' || name === 'fixtures' || name === '__pycache__') continue;
+        const hit = walk(join(dir, name), depth + 1);
+        if (hit) return hit;
+        continue;
+      }
+      if (/\.(?:test|spec)\.(?:mjs|cjs|js)$/i.test(name)) return 'node --test';
+      if (/^(?:test_.*\.py|.*_test\.py)$/i.test(name)) hasPy = true;
+    }
+    return null;
+  };
+  for (const root of ['test', 'tests']) {
+    if (!fs.existsSync?.(join(cwd, root))) continue;
+    const hit = walk(join(cwd, root), 0);
+    if (hit) return hit;
+  }
+  return hasPy ? 'pytest' : null;
+}
 export function detectTestCommand(cwd, fs = nativeFs, packageJson = undefined) {
   if (!named(cwd)) return packageJson?.scripts?.test ? 'npm test' : null;
   const has = name => Boolean(fs.existsSync?.(join(cwd, name)));
@@ -297,7 +329,7 @@ export function detectTestCommand(cwd, fs = nativeFs, packageJson = undefined) {
   if (has('Cargo.toml')) return 'cargo test';
   if (has('go.mod')) return 'go test ./...';
   if (pkg !== null || has('package.json')) return 'npm test';
-  return null;
+  return scanZeroManifestTests(cwd, fs);
 }
 export function readCoreSettings(cwd, fs = nativeFs, machine = null) {
   const config = readJson(fs, join(cwd, 'pdd.json'), {});
@@ -1686,12 +1718,16 @@ async function undoClaim(ctx, n, claim) {
   if (claim?.labelEventId && await ownLabel(ctx, n, { id: claim.labelEventId }, { id: claim.commentId }).catch(() => false))
     await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${n}/labels/${encodeURIComponent('pdd:working')}`).catch(() => {});
 }
-// The open core PR of an issue that waits for a person's approval (this engine's needs-approval note on it).
+// The open core PR of an issue that waits for a person's approval or stayed open as a draft after an ended run (#3488).
 async function keptPr(ctx, n) {
   const me = await ctx.login();
   for (const pr of await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls?state=open&per_page=100`) ?? []) {
     if (!String(pr.head?.ref ?? '').startsWith(`pdd/core-${n}-`) || String(pr.head?.repo?.full_name ?? '').toLowerCase() !== ctx.repo.toLowerCase()) continue;
-    if ((await ctx.gh.all(`repos/${ctx.repo}/issues/${pr.number}/comments?per_page=100`)).some(c => String(c.user?.login ?? '').toLowerCase() === me && String(c.body ?? '').includes('<!-- pdd:autopilot-core:needs-approval:'))) return pr;
+    if ((await ctx.gh.all(`repos/${ctx.repo}/issues/${pr.number}/comments?per_page=100`)).some(c => {
+      if (String(c.user?.login ?? '').toLowerCase() !== me) return false;
+      const body = String(c.body ?? '');
+      return body.includes('<!-- pdd:autopilot-core:needs-approval:') || body.includes(`<!-- pdd:autopilot-core:end-pr:${n}:`);
+    })) return pr;
   }
   return null;
 }
@@ -1938,6 +1974,10 @@ async function intake(ctx, rows) {
           progress: { sig: null, at: ctx.now(), running: false }, resumed: true };
         const admission = await admitJob(ctx, resumed);
         if (admission.state !== 'admitted') return rejectAdmission(admission, n, claim, [], worktree, kept.head.ref, false);
+        if (kept.draft) {
+          const ready = await ctx.ports.gh(['pr', 'ready', String(kept.number), '--repo', ctx.repo]).catch(error => ({ code: 1, stderr: error.message }));
+          if (ready.code !== 0) ctx.warn(`Autopilot core could not mark resumed PR #${kept.number} ready: ${oneLine(ready.stderr || ready.stdout, 200)}`);
+        }
         if (Number.isSafeInteger(admission.room?.free)) free = Math.min(free, admission.room.free);
         if (activeMode && resumedAreas.length) busyJobs.push({ issue: n, areas: resumedAreas });
         ctx.counts.started++; free--;
@@ -3958,7 +3998,7 @@ async function mergeCheck(ctx, job) {
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge. Git
   // decides whether a prompt changed (the agent's promptChanged never hides a changed prompt).
   const prompts = (await changedFiles(ctx, job)).filter(file => file.endsWith('.prompt.md'));
-  const reds = runtimeReds(pr.body, job.runtime, prompts.length ? true : job.promptChanged, prompts);
+  const reds = runtimeReds(pr.body, job.runtime, prompts.length ? true : (job.resumed && job.promptChanged == null ? false : job.promptChanged), prompts);
   // T01: every positive Runtime claim must be covered by the saved Runtime checks of the change at the agent's head.
   const claims = runtimeClaims(pr.body, job), lines = runtimeVerdicts(pr.body);
   if (!reds.length && (claims.length || lines.length)) {
@@ -4165,6 +4205,10 @@ async function mergeCheck(ctx, job) {
   }
   if (observe) return wouldMerge(ctx, job, pr);
   if (!await laneStillMine(ctx, job)) return;
+  if (pr.draft) {
+    const ready = await ctx.ports.gh(['pr', 'ready', String(job.pr), '--repo', repo]);
+    if (ready.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr ready: ${ready.stderr || ready.stdout}`), lastErrorTool: false, lastErrorStep: 'merge' }); ctx.saveJob(job); return; }
+  }
   const merged = await ctx.ports.gh(['pr', 'merge', String(job.pr), '--repo', repo, '--merge', '--match-head-commit', job.head]);
   if (merged.code !== 0) { Object.assign(job, { lastError: safeLine(`gh pr merge: ${merged.stderr || merged.stdout}`), lastErrorTool: false, lastErrorStep: 'merge' }); ctx.saveJob(job); return; }
   return finishMerge(ctx, job);

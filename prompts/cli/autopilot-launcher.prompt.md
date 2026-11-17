@@ -215,7 +215,7 @@ launcher gives it these ports:
 - `processes()`: one local read of this machine's process table (`ps -A -ww -o pid= -o ppid= -o pgid= -o rss= -o uid= -o
   lstart= -o args=`; on Linux without `ps`, `procTable` of the move owner reads `/proc`); `signal(pid, name)`: `process.kill`, where an ended process is no error; `sleep(ms)`.
 - `commonDir`: the real path of this checkout's Git common folder; `coreJobs()`: the issue numbers of the core's job
-  files; `cwdOf(pid)`: exact local process working-directory evidence (`/proc/PID/cwd` on Linux or `lsof` on macOS),
+  files; `cwdOf(pid)`: exact local process working-directory evidence (`/proc/PID/cwd` on Linux — falling back to `readlinkSync` with trailing ` (deleted)` stripped when the directory was unlinked — or `lsof` on macOS),
   null where it cannot be read. The worker move asks it only for rows owned by `process.getuid()` and rechecks a null
   result against the same PID/start/command identity; `save(journal)`: saves `retiredFull` in the state file under the admission lock; `samePath`; `now`.
   Tests may replace any of them with `ports.movePorts`, or the whole step with `ports.moveToCore`.

@@ -147,7 +147,7 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   current card has class `improve` and no auto-improve comment has been posted
   since the latest trusted human comment or issue title/body edit, start at most
   one bounded read-only repo-inspection job (`improveCommand`: Codex
-  `exec --ignore-user-config --sandbox read-only --ephemeral` in `cwd: state.cwd`,
+  `exec --ignore-user-config --sandbox read-only --ephemeral` in `cwd: state.cwd` with `code_mode_host` preserved for read-only tool inspection,
   or Claude `-p --safe-mode --permission-mode plan --tools "Read,Glob,Grep"` in
   `cwd: state.cwd`, still with `cardEnvironment` stripping every GitHub token).
   `readImprovement` parses `{outcome: "ready" | "person", reason, areas,

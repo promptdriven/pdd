@@ -90,7 +90,7 @@ import {
   readContractHistory as runtimeReadContractHistory,
   readPrompt,
   readTryOwner as runtimeReadTryOwner,
-  refusalView,
+  refusalView as rawRefusalView,
   renderJson as rawRenderJson,
   renderText as rawRenderText,
   requireRuntimePath,
@@ -240,10 +240,25 @@ function seamSelectionPorts(ports = {}) {
   });
 }
 
+const IMPOSSIBLE_RVP_HINT = 'Port result_schema excluded simulation result_value_pointer (for example, synthesized {"type":"array"} instead of {"type":"object","properties":{"value":...}}). Set result_value_pointer to "" when the port returns the value directly, or state the exact returned JSON object keys in the prompt\'s Ports section so result_schema includes that pointer.';
+
+function refusalView(item, secrets) {
+  const view = rawRefusalView(item, secrets);
+  if (view && view.code === 'impossible-result-value-pointer' && !String(view.hint ?? '').includes('result_value_pointer')) {
+    return { ...view, hint: [view.hint, IMPOSSIBLE_RVP_HINT].filter(Boolean).join(' ') };
+  }
+  return view;
+}
+
 function normalizeRuntimeHints(text) {
-  return typeof text === 'string' && text.includes('--fill-hash')
+  if (typeof text !== 'string') return text;
+  let out = text.includes('--fill-hash')
     ? text.replace(/pdd\s+test\s+--fill-hash\b/g, 'pdd test').replace(/\s+--fill-hash\b/g, '')
     : text;
+  if (out.includes('impossible-result-value-pointer') && !out.includes('result_value_pointer to ""')) {
+    out = out.replace(/impossible-result-value-pointer(?![^\n]*result_value_pointer to "")/g, `impossible-result-value-pointer (${IMPOSSIBLE_RVP_HINT})`);
+  }
+  return out;
 }
 
 function normalizeHintStream(stream) {

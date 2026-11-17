@@ -153,7 +153,7 @@ export function cardMatchesRow(entry, row) {
 // writes the last message to RESULT. Claude: no tools, plan mode, no MCP servers; its JSON answer is in the log.
 // The bypass flags of build jobs are never used for cards.
 const CODEX_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host'];
-const CODEX_IMPROVE_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'code_mode', 'code_mode_host'];
+const CODEX_IMPROVE_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'code_mode'];
 export function cardCommand(agent, { model, result } = {}) {
   const extra = model ? ['--model', model] : [];
   // --ignore-user-config: no MCP servers, profiles or features from the person's config.toml (auth still loads).
