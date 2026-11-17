@@ -402,7 +402,7 @@ test('3459 lint --local: validates app-map.json timers, screen prompt_path, and 
 });
 
 test('lintSvgLayouts warns when a .ui.svg is linked only via plain [label](...) outside ## Dependencies', t => {
-  const root = initRepo(t, {
+  const root = makeRepo(t, {
     'views/game.ui.svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><g id="board"><text>2048</text></g></svg>',
     'prompts/game.prompt.md': [
       '# 2048 Screen',
