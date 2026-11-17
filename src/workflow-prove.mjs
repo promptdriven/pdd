@@ -1,9 +1,9 @@
-// Prompt: prompts/cli/workflow-prove.prompt.md
+// Generated from prompts/cli/workflow-prove.prompt.md (sha256: cf2a1e9a6c65f1262821ab3d5c00bcbaac0d77b8f61281bed946a9aef827d791).
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { resolveRun, updateRun } from './workflow-runs.mjs';
 import { applyCostMeasurement } from './cost-ledger.mjs';
-import { selectAffectedTests } from './test-selection.mjs';
+import { formatAffectedTestsSummary, selectAffectedTests } from './test-selection.mjs';
 import { constants, fchmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -260,13 +260,16 @@ export async function proveRun({ref,test,expect,cwd,timeoutMinutes=DEFAULT_PHASE
 
 const ITERATIVE_MODES = new Set(['iterative', 'verify', 'affected']);
 const FINAL_MODES = new Set(['final', 'merge', 'full']);
+const DEFAULT_MAX_COMMAND_LENGTH = 65536;
+const PROD_CODE_PATH_RE = /^(?:src|lib|app)\/.*\.(?:m?js|cjs|jsx|m?ts|cts|tsx)$/i;
 const shellQuote = value => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${String(value).replaceAll("'", `'\\''`)}'`);
 
 function filePresent(root, relPath, ports = {}) {
-  if (Array.isArray(ports.files)) return ports.files.includes(relPath);
-  if (typeof ports.readFile === 'function') return ports.readFile(relPath, root) !== null;
+  const norm = relPath.replaceAll('\\', '/');
+  if (Array.isArray(ports.files)) return ports.files.some(f => String(f).replaceAll('\\', '/').replace(/^(?:\.\/)+/, '') === norm);
+  if (typeof ports.readFile === 'function') return (ports.readFile(norm, root) ?? ports.readFile(norm.replaceAll('/', '\\'), root)) !== null;
   try {
-    return lstatSync(join(root, relPath)).isFile();
+    return lstatSync(join(root, norm)).isFile();
   } catch {
     return false;
   }
@@ -293,11 +296,11 @@ function detectFullTestCommand(root, ports = {}) {
   if (filePresent(root, 'pnpm-lock.yaml', ports) && pkg?.scripts?.test) return 'pnpm test';
   if (filePresent(root, 'yarn.lock', ports) && pkg?.scripts?.test) return 'yarn test';
   if (pkg?.scripts?.test) return 'npm test';
-  return 'node --test';
+  return `${shellQuote(ports.execPath ?? process.execPath)} --test`;
 }
 
 function buildAffectedNodeCommand({ root, selectedTests, concurrency, ports = {} }) {
-  const args = ['node'];
+  const args = [shellQuote(ports.execPath ?? process.execPath)];
   for (const preload of ['test/helpers/test-home.mjs', 'test/helpers/test-net-guard.mjs']) {
     if (filePresent(root, preload, ports)) args.push('--import', `./${preload}`);
   }
@@ -312,6 +315,9 @@ export function resolveVerifyPlan(options = {}, ports = {}) {
   const baseBranch = options.baseBranch ?? 'main';
   const requestedMode = options.mode ?? 'iterative';
   const isFinal = FINAL_MODES.has(requestedMode);
+  const maxCommandLength = Number.isInteger(options.maxCommandLength) && options.maxCommandLength > 0
+    ? options.maxCommandLength
+    : DEFAULT_MAX_COMMAND_LENGTH;
   const fullCommand =
     typeof options.fullTestCommand === 'string' && options.fullTestCommand.trim()
       ? options.fullTestCommand.trim()
@@ -364,6 +370,26 @@ export function resolveVerifyPlan(options = {}, ports = {}) {
   }
 
   if (selection.selectedCount === 0) {
+    const touchedProdCode = selection.changedFiles.find(f => PROD_CODE_PATH_RE.test(f));
+    if (touchedProdCode && selection.totalCount > 0) {
+      const fallbackReason = `no isolated test mapping for changed code (${touchedProdCode})`;
+      const fullPlan = {
+        ...selection,
+        mode: 'full',
+        selectedTests: [...selection.totalTests],
+        selectedCount: selection.totalCount,
+        fallbackReason,
+        fallbackCategory: 'unmapped-code-change',
+      };
+      return {
+        mode: 'iterative',
+        executionMode: 'full',
+        selectionMode: 'full',
+        ...fullPlan,
+        summary: formatAffectedTestsSummary(fullPlan),
+        command: fullCommand,
+      };
+    }
     return {
       mode: 'iterative',
       executionMode: 'skip',
@@ -373,17 +399,38 @@ export function resolveVerifyPlan(options = {}, ports = {}) {
     };
   }
 
+  const affectedCommand = buildAffectedNodeCommand({
+    root,
+    selectedTests: selection.selectedTests,
+    concurrency: options.concurrency,
+    ports: { ...ports, files: options.files },
+  });
+  if (affectedCommand.length > maxCommandLength) {
+    const fallbackReason = `affected command length (${affectedCommand.length} chars) exceeds ${maxCommandLength}-char command limit`;
+    const fullPlan = {
+      ...selection,
+      mode: 'full',
+      selectedTests: [...selection.totalTests],
+      selectedCount: selection.totalCount,
+      fallbackReason,
+      fallbackCategory: 'command-length-limit',
+    };
+    return {
+      mode: 'iterative',
+      executionMode: 'full',
+      selectionMode: 'full',
+      ...fullPlan,
+      summary: formatAffectedTestsSummary(fullPlan),
+      command: fullCommand,
+    };
+  }
+
   return {
     mode: 'iterative',
     executionMode: 'affected',
     selectionMode: 'affected',
     ...selection,
-    command: buildAffectedNodeCommand({
-      root,
-      selectedTests: selection.selectedTests,
-      concurrency: options.concurrency,
-      ports: { ...ports, files: options.files },
-    }),
+    command: affectedCommand,
   };
 }
 
@@ -587,7 +634,24 @@ export async function verifyAffected(options = {}, ports = {}) {
   }
 }
 
-export async function proveAffectedRun({ ref, expect, cwd, test, smokeTests = [], coreInfrastructure, concurrency, timeoutMinutes = DEFAULT_PHASE_MINUTES } = {}, ports = {}) {
+export async function proveAffectedRun(
+  {
+    ref,
+    expect,
+    cwd,
+    test,
+    files,
+    baseRef,
+    fullTestCommand,
+    smokeTests = [],
+    coreInfrastructure,
+    dispatcherImportThreshold,
+    maxCommandLength,
+    concurrency,
+    timeoutMinutes = DEFAULT_PHASE_MINUTES,
+  } = {},
+  ports = {},
+) {
   if (typeof test === 'string' && test.trim() && test.trim() !== 'auto') {
     return proveRun({ ref, test, expect, cwd, timeoutMinutes }, ports);
   }
@@ -607,14 +671,19 @@ export async function proveAffectedRun({ ref, expect, cwd, test, smokeTests = []
     return { exitCode: 1, message: 'Old-code proof: ✗ setup-error (run unavailable).' };
   }
 
+  const fallbackFullCmd =
+    typeof fullTestCommand === 'string' && fullTestCommand.trim()
+      ? fullTestCommand.trim()
+      : detectFullTestCommand(runRes.run.root, { ...ports, files });
+
   let snapRes;
   try {
     snapRes = await p.snapshot({ root: runRes.run.root, baseBranch: runRes.run.baseBranch });
     if (snapRes.snapshot?.error || !snapRes.snapshot?.baseAvailable || !snapRes.snapshot?.headAvailable) {
-      return proveRun({ ref, test: detectFullTestCommand(runRes.run.root, ports), expect, cwd, timeoutMinutes }, { ...ports, readRun: async () => runRes, snapshot: async () => snapRes });
+      return proveRun({ ref, test: fallbackFullCmd, expect, cwd, timeoutMinutes }, { ...ports, readRun: async () => runRes, snapshot: async () => snapRes });
     }
   } catch (error) {
-    return proveRun({ ref, test: detectFullTestCommand(runRes.run.root, ports), expect, cwd, timeoutMinutes }, { ...ports, readRun: async () => runRes, snapshot: async () => { throw error; } });
+    return proveRun({ ref, test: fallbackFullCmd, expect, cwd, timeoutMinutes }, { ...ports, readRun: async () => runRes, snapshot: async () => { throw error; } });
   }
 
   const changedFiles = snapRes.snapshot.files.map(f => f.path);
@@ -622,22 +691,46 @@ export async function proveAffectedRun({ ref, expect, cwd, test, smokeTests = []
     {
       root: runRes.run.root,
       baseBranch: runRes.run.baseBranch,
+      baseRef,
+      files,
+      fullTestCommand,
       changedFiles,
       smokeTests,
       coreInfrastructure,
+      dispatcherImportThreshold,
+      maxCommandLength,
       concurrency,
       mode: 'iterative',
     },
     ports,
   );
-  const resolvedCommand = plan.command || detectFullTestCommand(runRes.run.root, ports);
-  const proof = await proveRun(
-    { ref, test: resolvedCommand, expect, cwd, timeoutMinutes },
-    { ...ports, readRun: async () => runRes, snapshot: async () => snapRes },
-  );
-  return {
-    ...proof,
-    selection: {
+
+  let effectiveSelection;
+  let resolvedCommand;
+  if (plan.executionMode === 'skip') {
+    const fallbackReason = '0 affected test files matched; running full suite for old-code proof';
+    const fullPlan = {
+      mode: 'full',
+      selectedTests: [...plan.totalTests],
+      totalTests: plan.totalTests,
+      selectedCount: plan.totalCount,
+      totalCount: plan.totalCount,
+      fallbackReason,
+      fallbackCategory: 'prove-requires-execution',
+    };
+    effectiveSelection = {
+      mode: 'full',
+      executionMode: 'full',
+      selectedCount: plan.totalCount,
+      totalCount: plan.totalCount,
+      selectedTests: [...plan.totalTests],
+      fallbackReason,
+      fallbackCategory: 'prove-requires-execution',
+      summary: formatAffectedTestsSummary(fullPlan),
+    };
+    resolvedCommand = fallbackFullCmd;
+  } else {
+    effectiveSelection = {
       mode: plan.selectionMode,
       executionMode: plan.executionMode,
       selectedCount: plan.selectedCount,
@@ -646,7 +739,17 @@ export async function proveAffectedRun({ ref, expect, cwd, test, smokeTests = []
       fallbackReason: plan.fallbackReason,
       fallbackCategory: plan.fallbackCategory,
       summary: plan.summary,
-    },
-    message: `${proof.message} (${plan.summary})`,
+    };
+    resolvedCommand = plan.command;
+  }
+
+  const proof = await proveRun(
+    { ref, test: resolvedCommand, expect, cwd, timeoutMinutes },
+    { ...ports, readRun: async () => runRes, snapshot: async () => snapRes },
+  );
+  return {
+    ...proof,
+    selection: effectiveSelection,
+    message: `${proof.message} (${effectiveSelection.summary})`,
   };
 }

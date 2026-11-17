@@ -18,9 +18,13 @@ import {
   verifyAffected,
 } from '../src/workflow-prove.mjs';
 import { runOwner } from '../src/file-owner.mjs';
+import { lintSvgLayouts } from '../src/svg-layout.mjs';
 import { promptRefusal, runtimePreflightSlice } from '../src/runtime-seam.mjs';
 
 const { gitFiles, readPrompt } = runtimePreflightSlice();
+const quotedExec = /^[A-Za-z0-9_@%+=:,./-]+$/.test(process.execPath)
+  ? process.execPath
+  : `'${process.execPath.replaceAll("'", `'\\''`)}'`;
 
 function virtualPorts(fileMap, changedFiles) {
   const files = Object.keys(fileMap).sort();
@@ -88,19 +92,68 @@ function makeGitFixture(t) {
   return { root, runDir, baseSha, git, put };
 }
 
-test('3065 isRunnableTestPath identifies runnable test entries and excludes helpers, fixtures, and src', () => {
+test('3065 isRunnableTestPath and Windows path normalization handle POSIX and Windows separators safely', () => {
   assert.equal(isRunnableTestPath('test/order.test.mjs'), true);
+  assert.equal(isRunnableTestPath('test\\order.test.mjs'), true);
+  assert.equal(isRunnableTestPath('.\\tests\\unit\\order.spec.ts'), true);
   assert.equal(isRunnableTestPath('tests/unit/order.spec.ts'), true);
   assert.equal(isRunnableTestPath('test/workflow-prove.vectors.test.mjs'), true);
   assert.equal(isRunnableTestPath('./test/order.test.js'), true);
 
   assert.equal(isRunnableTestPath('test/helpers/test-home.mjs'), false);
+  assert.equal(isRunnableTestPath('test\\helpers\\test-home.mjs'), false);
   assert.equal(isRunnableTestPath('test/helpers/fake.test.mjs'), false);
   assert.equal(isRunnableTestPath('test/fixtures/sample.test.mjs'), false);
   assert.equal(isRunnableTestPath('src/order.test.mjs'), false);
   assert.equal(isRunnableTestPath('node_modules/pkg/index.test.js'), false);
   assert.equal(isRunnableTestPath('tests/place-order.json'), false);
   assert.equal(isRunnableTestPath('../test/escape.test.mjs'), false);
+  assert.equal(isRunnableTestPath('..\\test\\escape.test.mjs'), false);
+  assert.equal(isRunnableTestPath('C:\\repo\\test\\escape.test.mjs'), false);
+  assert.equal(isRunnableTestPath('\\\\server\\share\\test\\escape.test.mjs'), false);
+
+  assert.equal(classifyGlobalSuiteTrigger(['src\\foo.mjs']).fallback, false);
+  assert.equal(classifyGlobalSuiteTrigger(['test\\helpers\\test-home.mjs']).category, 'global-test-helper');
+  assert.equal(classifyGlobalSuiteTrigger(['..\\outside.mjs']).category, 'unsafe-path');
+  assert.equal(classifyGlobalSuiteTrigger(['C:\\outside\\foo.mjs']).category, 'unsafe-path');
+
+  const winRepo = {
+    'src\\foo.mjs': 'export const runFoo = () => 1;\n',
+    'test\\foo-runner.test.mjs': "import { runFoo } from '../src/foo.mjs';\n",
+    'test\\other.test.mjs': 'export const ok = true;\n',
+  };
+  const winRes = selectAffectedTests(
+    { root: '/virtual-win', files: Object.keys(winRepo), changedFiles: ['src\\foo.mjs'] },
+    { readFile: p => winRepo[p] ?? null },
+  );
+  assert.equal(winRes.mode, 'affected');
+  assert.deepEqual(winRes.selectedTests, ['test/foo-runner.test.mjs']);
+});
+
+test('3065 scanModuleSource handles regex literals with quotes/classes and nested template interpolations', () => {
+  const repo = {
+    'src/after-regex.mjs': 'export const afterRegex = () => 1;\n',
+    'src/after-template.mjs': 'export const afterTemplate = () => 2;\n',
+    'src/inside-interpolation.mjs': 'export const insideInterp = () => 3;\n',
+    'src/other.mjs': 'export const other = () => 4;\n',
+    'test/regex-and-template.test.mjs': [
+      "const importPattern = /\\bimport\\s+(?:[^;]*?\\bfrom\\s*)?(['\"`])((?:\\\\[\\s\\S]|(?!\\1)[\\s\\S])*)\\1/g;",
+      "const slashInClass = /[/'\"`]/;",
+      'const nested = `${String("a").replace(\'a\', `inner ${1 + 2} end`)}`;',
+      'const dynInTemplate = `${await import(\'../src/inside-interpolation.mjs\')}`;',
+      "const modA = await import('../src/after-regex.mjs');",
+      "const modB = await import('../src/after-template.mjs');",
+      'export { importPattern, slashInClass, nested, dynInTemplate, modA, modB };',
+    ].join('\n'),
+    'test/other-only.test.mjs': "import { other } from '../src/other.mjs';\n",
+  };
+
+  for (const target of ['src/after-regex.mjs', 'src/after-template.mjs', 'src/inside-interpolation.mjs']) {
+    const v = virtualPorts(repo, [target]);
+    const res = selectAffectedTests(v.options, v.ports);
+    assert.equal(res.mode, 'affected');
+    assert.deepEqual(res.selectedTests, ['test/regex-and-template.test.mjs'], `failed for ${target}`);
+  }
 });
 
 test('3065 selectAffectedTests resolves multi-hop reverse imports, stem variants, deleted modules, and ignores comments/string literals', () => {
@@ -144,38 +197,73 @@ test('3065 selectAffectedTests resolves multi-hop reverse imports, stem variants
   assert.equal(res2.selectedCount, 1);
 });
 
-test('3065 dispatcher hubs bound unrelated fan-out while bridging re-exported symbols to consuming tests', () => {
+test('3065 dispatcher hubs bridge export *, aliased re-exports, 1-char symbols, test helpers, and never leave changed code at 0 tests', () => {
   const deps = Object.fromEntries(
-    Array.from({ length: 12 }, (_, idx) => [
-      `src/mod-${idx}.mjs`,
-      idx === 0 ? 'export const fn0 = () => 0;\nexport const $tag = () => "ok";\n' : `export const fn${idx} = () => ${idx};\n`,
-    ]),
+    Array.from({ length: 12 }, (_, idx) => {
+      if (idx === 0) return ['src/mod-0.mjs', 'export const fn0 = () => 0;\nexport const $tag = () => "ok";\n'];
+      if (idx === 2) return ['src/mod-2.mjs', 'export const x = () => 2;\n'];
+      if (idx === 3) return ['src/mod-3.mjs', 'export const internalCalc = () => 3;\n'];
+      if (idx === 4) return ['src/mod-4.mjs', 'export const unexportedLeaf = () => 4;\n'];
+      return [`src/mod-${idx}.mjs`, `export const fn${idx} = () => ${idx};\n`];
+    }),
   );
-  const hubImports = Array.from({ length: 12 }, (_, idx) =>
-    idx === 0 ? "import { fn0, $tag } from './mod-0.mjs';" : `import { fn${idx} } from './mod-${idx}.mjs';`,
-  ).join('\n');
+  const hubImports = Array.from({ length: 12 }, (_, idx) => {
+    if (idx === 0) return "import { fn0, $tag } from './mod-0.mjs';";
+    if (idx === 2) return "export * from './mod-2.mjs';";
+    if (idx === 3) return "export { internalCalc as publicAlias } from './mod-3.mjs';";
+    if (idx === 4) return "import { unexportedLeaf } from './mod-4.mjs';";
+    return `import { fn${idx} } from './mod-${idx}.mjs';`;
+  }).join('\n');
   const repo = {
     ...deps,
-    'src/hub.mjs': `${hubImports}\nexport { fn0, $tag };\nexport const runHub = () => fn1();\n`,
+    'src/standalone-unmapped.mjs': 'export const orphanFn = () => 99;\n',
+    'src/hub.mjs': `${hubImports}\nexport { fn0, $tag };\nexport const runHub = () => fn1() + unexportedLeaf();\n`,
+    'test/hub-local-helper.mjs': "import { publicAlias } from '../src/hub.mjs';\nexport const callAlias = () => publicAlias();\n",
     'test/uses-reexport.test.mjs': "import { $tag } from '../src/hub.mjs';\n",
+    'test/uses-star-1char.test.mjs': "import { x } from '../src/hub.mjs';\n",
+    'test/uses-alias-via-helper.test.mjs': "import { callAlias } from './hub-local-helper.mjs';\n",
     'test/uses-hub-only.test.mjs': "import { runHub } from '../src/hub.mjs';\n",
     'test/mod-1-direct.test.mjs': "import { fn1 } from '../src/mod-1.mjs';\n",
   };
 
-  // Editing mod-0 bridges re-exported fn0 through hub.mjs to uses-reexport.test.mjs without pulling uses-hub-only.test.mjs
+  // Editing mod-0 bridges re-exported $tag through hub.mjs to uses-reexport.test.mjs without pulling uses-hub-only.test.mjs
   const v0 = virtualPorts(repo, ['src/mod-0.mjs']);
-  const r0 = selectAffectedTests(v0.options, v0.ports);
-  assert.deepEqual(r0.selectedTests, ['test/uses-reexport.test.mjs']);
+  assert.deepEqual(selectAffectedTests(v0.options, v0.ports).selectedTests, ['test/uses-reexport.test.mjs']);
 
   // Editing mod-1 selects its direct test without fanning out to unrelated hub tests
   const v1 = virtualPorts(repo, ['src/mod-1.mjs']);
-  const r1 = selectAffectedTests(v1.options, v1.ports);
-  assert.deepEqual(r1.selectedTests, ['test/mod-1-direct.test.mjs']);
+  assert.deepEqual(selectAffectedTests(v1.options, v1.ports).selectedTests, ['test/mod-1-direct.test.mjs']);
 
-  // Editing hub.mjs directly selects all tests importing hub.mjs
+  // Editing mod-2 bridges 1-char symbol `x` via `export * from './mod-2.mjs'`
+  const v2 = virtualPorts(repo, ['src/mod-2.mjs']);
+  assert.deepEqual(selectAffectedTests(v2.options, v2.ports).selectedTests, ['test/uses-star-1char.test.mjs']);
+
+  // Editing mod-3 bridges `export { internalCalc as publicAlias } from './mod-3.mjs'` across local test/hub-local-helper.mjs
+  const v3 = virtualPorts(repo, ['src/mod-3.mjs']);
+  assert.deepEqual(selectAffectedTests(v3.options, v3.ports).selectedTests, ['test/uses-alias-via-helper.test.mjs']);
+
+  // Editing mod-4 (imported by hub without re-export or direct test) bridges to hub's test importers instead of returning 0 tests
+  const v4 = virtualPorts(repo, ['src/mod-4.mjs']);
+  const r4 = selectAffectedTests(v4.options, v4.ports);
+  assert.equal(r4.mode, 'affected');
+  assert.ok(r4.selectedCount > 0);
+  assert.ok(r4.selectedTests.includes('test/uses-hub-only.test.mjs'));
+
+  // Editing standalone-unmapped.mjs (production code with 0 tests in graph) safely falls back to full suite instead of skipping
+  const vUnmapped = virtualPorts(repo, ['src/standalone-unmapped.mjs']);
+  const rUnmapped = selectAffectedTests(vUnmapped.options, vUnmapped.ports);
+  assert.equal(rUnmapped.mode, 'full');
+  assert.equal(rUnmapped.fallbackCategory, 'unmapped-code-change');
+  assert.equal(rUnmapped.selectedCount, 5);
+
+  // Editing hub.mjs directly selects all tests importing hub.mjs (including via local test helper)
   const vHub = virtualPorts(repo, ['src/hub.mjs']);
-  const rHub = selectAffectedTests(vHub.options, vHub.ports);
-  assert.deepEqual(rHub.selectedTests, ['test/uses-hub-only.test.mjs', 'test/uses-reexport.test.mjs']);
+  assert.deepEqual(selectAffectedTests(vHub.options, vHub.ports).selectedTests, [
+    'test/uses-alias-via-helper.test.mjs',
+    'test/uses-hub-only.test.mjs',
+    'test/uses-reexport.test.mjs',
+    'test/uses-star-1char.test.mjs',
+  ]);
 });
 
 test('3065 prompts, Stories, docs, and skills select owned dependents, scenario tests, and contract suites without global fallback', () => {
@@ -298,14 +386,34 @@ test('3065 resolveVerifyPlan and verifyAffected run only affected tests iterativ
   f.git('add', 'src/calc.mjs');
   f.git('commit', '-qm', 'fix calc');
 
-  // 1. Iterative plan selects ONLY test/billing.test.mjs (1 of 2 test files)
+  // 1. Iterative plan selects ONLY test/billing.test.mjs (1 of 2 test files) using quoted process.execPath
   const iterPlan = resolveVerifyPlan({ root: f.root, baseBranch: 'main', mode: 'iterative', concurrency: 2 });
   assert.equal(iterPlan.executionMode, 'affected');
   assert.equal(iterPlan.selectionMode, 'affected');
   assert.deepEqual(iterPlan.selectedTests, ['test/billing.test.mjs']);
   assert.equal(iterPlan.selectedCount, 1);
   assert.equal(iterPlan.totalCount, 2);
-  assert.equal(iterPlan.command, 'node --test-concurrency=2 --test test/billing.test.mjs');
+  assert.equal(iterPlan.command, `${quotedExec} --test-concurrency=2 --test test/billing.test.mjs`);
+
+  // Custom execPath with spaces is shell-quoted, and maxCommandLength falls back to fullCommand safely
+  const spacedExecPlan = resolveVerifyPlan(
+    { root: f.root, changedFiles: ['src/calc.mjs'], mode: 'iterative' },
+    { execPath: '/opt/node custom/bin/node' },
+  );
+  assert.equal(spacedExecPlan.command, "'/opt/node custom/bin/node' --test test/billing.test.mjs");
+
+  const argMaxFallback = resolveVerifyPlan({
+    root: f.root,
+    changedFiles: ['src/calc.mjs'],
+    mode: 'iterative',
+    maxCommandLength: 24,
+    fullTestCommand: 'npm run test:ci',
+  });
+  assert.equal(argMaxFallback.executionMode, 'full');
+  assert.equal(argMaxFallback.selectionMode, 'full');
+  assert.equal(argMaxFallback.fallbackCategory, 'command-length-limit');
+  assert.equal(argMaxFallback.command, 'npm run test:ci');
+  assert.equal(argMaxFallback.selectedCount, 2);
 
   // 2. Final pre-merge plan selects the full suite (2 of 2 test files)
   const finalPlan = resolveVerifyPlan({ root: f.root, baseBranch: 'main', mode: 'final' });
@@ -343,13 +451,66 @@ test('3065 resolveVerifyPlan and verifyAffected run only affected tests iterativ
   assert.equal(proofRes.selection.mode, 'affected');
   assert.equal(proofRes.selection.selectedCount, 1);
   assert.equal(proofRes.selection.totalCount, 2);
-  assert.match(proofRes.message, /Old-code proof: ✓ `node --test test\/billing\.test\.mjs`/);
+  assert.match(proofRes.message, /--test test\/billing\.test\.mjs`/);
   assert.match(proofRes.message, /Affected tests: selected 1 of 2 test files/);
 
   const savedProof = JSON.parse(readFileSync(join(f.runDir, 'old-code-proof.json'), 'utf8'));
   assert.equal(validateProofRecord(savedProof), true);
   assert.equal(savedProof.outcome, 'proved');
-  assert.equal(savedProof.test, 'node --test test/billing.test.mjs');
+  assert.equal(savedProof.test, `${quotedExec} --test test/billing.test.mjs`);
+
+  // When 0 affected tests match a non-code snapshot, proveAffectedRun forwards fullTestCommand and truthfully reports full execution (never 0 of 2)
+  const skipUpgradeCommands = [];
+  const skipUpgradeProof = await proveAffectedRun(
+    {
+      ref: '3065',
+      cwd: f.root,
+      expect: 'DEFECT_NOTES_3065',
+      fullTestCommand: 'npm run custom-full',
+      files: ['package.json', 'test/billing.test.mjs', 'test/unrelated.test.mjs'],
+    },
+    {
+      readRun: async () => ({
+        run: { runId: 'run-3065', runDir: f.runDir, root: f.root, baseSha: f.baseSha, baseBranch: 'main' },
+        error: '',
+      }),
+      snapshot: async () => ({
+        snapshot: {
+          baseSha: f.baseSha,
+          headSha: f.baseSha,
+          baseAvailable: true,
+          headAvailable: true,
+          files: [{ path: 'notes.txt', status: 'M', mode: '100644' }],
+          error: '',
+        },
+      }),
+      createWorktree: async ({ phase }) => ({ worktree: join(f.root, `.fake-${phase}`), error: '' }),
+      cleanup: async () => ({ error: '' }),
+      saveProof: async () => ({ error: '' }),
+      runProcess: async ({ command, cwd: phaseCwd }) => {
+        skipUpgradeCommands.push(command);
+        const isBase = phaseCwd.endsWith('.fake-base');
+        return {
+          result: {
+            exitCode: isBase ? 1 : 0,
+            signal: '',
+            timedOut: false,
+            outputLimited: false,
+            stdout: '',
+            stderr: isBase ? 'AssertionError: DEFECT_NOTES_3065\n' : '',
+            error: '',
+            setupError: '',
+          },
+        };
+      },
+    },
+  );
+  assert.deepEqual(skipUpgradeCommands, ['npm run custom-full', 'npm run custom-full']);
+  assert.equal(skipUpgradeProof.selection.mode, 'full');
+  assert.equal(skipUpgradeProof.selection.executionMode, 'full');
+  assert.equal(skipUpgradeProof.selection.selectedCount, 2);
+  assert.equal(skipUpgradeProof.selection.fallbackCategory, 'prove-requires-execution');
+  assert.match(skipUpgradeProof.message, /running full suite \(2 of 2 test files; fallback: 0 affected test files matched/);
 
   // 5. verifyAffected skips runner when 0 affected tests match, fails cleanly when an affected test fails, and validates options
   const skipRes = await verifyAffected({ root: f.root, changedFiles: [], mode: 'iterative' });
@@ -398,7 +559,7 @@ test('3065 resolveVerifyPlan and verifyAffected run only affected tests iterativ
   });
   assert.equal(
     preloadPlan.command,
-    'node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test-concurrency=3 --test test/billing.test.mjs',
+    `${quotedExec} --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test-concurrency=3 --test test/billing.test.mjs`,
   );
 
   let fallbackCmd = '';
@@ -467,8 +628,41 @@ test('3065 real repository prompt sync and affected selection remain aligned', (
   assert.equal(ownerCode, 0, ownerErr);
   assert.equal(ownerErr, '');
   const ownerJson = JSON.parse(ownerOut);
-  assert.equal(ownerJson.files.find(f => f.path === 'src/test-selection.mjs')?.owner, 'prompts/cli/test-selection.prompt.md');
-  assert.equal(ownerJson.files.find(f => f.path === 'src/workflow-prove.mjs')?.owner, 'prompts/cli/workflow-prove.prompt.md');
+  const tsOwner = ownerJson.files.find(f => f.path === 'src/test-selection.mjs');
+  const wpOwner = ownerJson.files.find(f => f.path === 'src/workflow-prove.mjs');
+  assert.equal(tsOwner?.owner, 'prompts/cli/test-selection.prompt.md');
+  assert.equal(wpOwner?.owner, 'prompts/cli/workflow-prove.prompt.md');
+  assert.equal(tsOwner?.headers?.[0]?.state, 'current');
+  assert.equal(tsOwner?.headers?.[0]?.legacy, false);
+  assert.equal(wpOwner?.headers?.[0]?.state, 'current');
+  assert.equal(wpOwner?.headers?.[0]?.legacy, false);
+
+  // Checkable workflow-prove.prompt.md must not emit inverted native-only dependency warnings
+  const proveLintWarnings = lintSvgLayouts({ root: repoRoot, files: [...visible] }).filter(w =>
+    w.includes('prompts/cli/workflow-prove.prompt.md'),
+  );
+  assert.deepEqual(proveLintWarnings, []);
+
+  // Real-repo lexer & hub-leaf regression assertions (#3065 review)
+  const tryDoors = selectAffectedTests({ root: repoRoot, changedFiles: ['src/try-doors.mjs'] });
+  assert.ok(tryDoors.selectedTests.includes('test/runtime-seam.test.mjs'));
+
+  const launcher = selectAffectedTests({ root: repoRoot, changedFiles: ['src/autopilot-launcher.mjs'] });
+  assert.ok(launcher.selectedTests.includes('test/autopilot-core-evidence.test.mjs'));
+
+  const compiledTest = selectAffectedTests({ root: repoRoot, changedFiles: ['src/compiled-test.mjs'] });
+  assert.ok(compiledTest.selectedCount > 0);
+  assert.ok(compiledTest.selectedTests.includes('test/compiled-story-tests.test.mjs'));
+
+  const projectFiles = selectAffectedTests({ root: repoRoot, changedFiles: ['src/project-files.mjs'] });
+  assert.ok(projectFiles.selectedCount > 0);
+  assert.ok(projectFiles.selectedTests.includes('test/plain-prompts-and-frontmatter.test.mjs'));
+  assert.ok(projectFiles.selectedTests.includes('test/runtime-seam.test.mjs'));
+
+  const setupInteraction = selectAffectedTests({ root: repoRoot, changedFiles: ['src/setup-interaction.mjs'] });
+  assert.ok(setupInteraction.selectedCount > 0);
+  assert.ok(setupInteraction.selectedTests.includes('test/setup.test.mjs'));
+  assert.ok(setupInteraction.selectedTests.includes('test/setup-defaults.test.mjs'));
 
   const realSelection = selectAffectedTests({
     root: repoRoot,

@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/test-selection.prompt.md
+// Generated from prompts/cli/test-selection.prompt.md (sha256: cc8e71acdec3a69af1f81fa4f25af00916bface4ad2116ff1d2ec4819d2159bd).
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
@@ -193,17 +193,24 @@ const SKIP_WALK_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'covera
 const EXCLUDED_TEST_DIRS = new Set(['src', 'node_modules', '.git', 'dist', 'build', 'coverage', 'vendor', 'fixtures', 'helpers', 'examples']);
 const CODE_EXTENSIONS = /\.(?:m?js|cjs|jsx|m?ts|cts|tsx)$/i;
 const RUNNABLE_TEST_RE = /\.(?:test|spec)\.(?:m?js|cjs|jsx|m?ts|cts|tsx)$/i;
-const PROMPT_HEADER_RE = /^\s*(?:(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from|(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*Prompt:)\s+(\S+\.prompt\.md)\b/m;
+const PROMPT_HEADER_RE = /^\s*(?:(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from|(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*(?:Prompt|Implements):)\s+(\S+\.prompt\.md)\b/m;
 const REPO_REF_PREFIX_RE = /^(?:docs|skills|user_stories|prompts|\.github)\/[A-Za-z0-9_@+~./-]+$|^(?:README|RUNBOOK|AGENTS|CLAUDE)\.md$/;
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return', 'throw', 'case', 'delete', 'void', 'typeof', 'in', 'instanceof', 'of', 'new', 'await', 'yield', 'else', 'do', 'export', 'default',
+]);
+const COND_KEYWORDS = new Set(['if', 'while', 'for', 'with', 'catch']);
+const GENERIC_STEM_PARTS = new Set([
+  'test', 'tests', 'spec', 'specs', 'core', 'util', 'utils', 'helper', 'helpers', 'common', 'shared', 'index', 'main', 'base', 'types', 'model', 'models', 'data', 'info',
+]);
 
 function normalizeRepoPath(value) {
   if (typeof value !== 'string') return '';
-  return value.trim().replace(/^(?:\.\/)+/, '').replace(/\/+$/, '');
+  return value.trim().replaceAll('\\', '/').replace(/^(?:\.\/)+/, '').replace(/\/+$/, '');
 }
 
 function isSafeRepoPath(path) {
   if (typeof path !== 'string' || !path.length || path.length > 1000) return false;
-  if (path.startsWith('/') || path.includes('\\') || /[\x00-\x1f\x7f]/.test(path)) return false;
+  if (path.startsWith('/') || /^[A-Za-z]:(?:\/|$)/.test(path) || path.includes('\\') || /[\x00-\x1f\x7f]/.test(path)) return false;
   return path.split('/').every(part => part && part !== '.' && part !== '..' && part.toLowerCase() !== '.git');
 }
 
@@ -225,7 +232,7 @@ export function classifyGlobalSuiteTrigger(changedFiles, { coreInfrastructure = 
     }
     const trimmed = raw.trim();
     if (!trimmed) continue;
-    const stripped = trimmed.replace(/^(?:\.\/)+/, '');
+    const stripped = trimmed.replaceAll('\\', '/').replace(/^(?:\.\/)+/, '');
     if (!isSafeRepoPath(stripped)) {
       return { fallback: true, category: 'unsafe-path', file: trimmed, reason: `unsafe changed path (${trimmed})` };
     }
@@ -256,13 +263,48 @@ export function classifyGlobalSuiteTrigger(changedFiles, { coreInfrastructure = 
   return { fallback: false, category: null, file: null, reason: null };
 }
 
-// Single-pass lexical scanner over JS/TS source: ignores comments and string-interior fake imports,
-// collects real relative module/URL specifiers and repo-relative file references inside test literals.
+function tryScanRegexLiteral(source, start) {
+  const len = source.length;
+  let j = start + 1;
+  if (j >= len || source[j] === '\n' || source[j] === '\r') return -1;
+  let inClass = false;
+  while (j < len) {
+    const c = source[j];
+    if (c === '\n' || c === '\r') return -1;
+    if (c === '\\') {
+      if (j + 1 >= len || source[j + 1] === '\n' || source[j + 1] === '\r') return -1;
+      j += 2;
+      continue;
+    }
+    if (c === '[') {
+      inClass = true;
+      j++;
+      continue;
+    }
+    if (c === ']' && inClass) {
+      inClass = false;
+      j++;
+      continue;
+    }
+    if (c === '/' && !inClass) {
+      j++;
+      while (j < len && /[A-Za-z]/.test(source[j])) j++;
+      return j;
+    }
+    j++;
+  }
+  return -1;
+}
+
+// Single-pass JS/TS lexer: handles // and /* */ comments, /.../ regex literals (including [...] classes),
+// '...' and "..." strings, and nested `...${...}...` template interpolations.
 function scanModuleSource(source, collectRefs = false) {
   const specifiers = [], refs = [];
-  if (typeof source !== 'string' || !source) return { specifiers, refs };
+  let stripped = '';
+  if (typeof source !== 'string' || !source) return { specifiers, refs, stripped };
   const len = source.length;
-  let i = 0, codeTail = '';
+  let i = 0, codeTail = '', prevToken = null, wantCondParen = false;
+  const parenStack = [], templateStack = [];
   const pushTail = chunk => {
     codeTail += chunk;
     if (codeTail.length > 128) codeTail = codeTail.slice(-48);
@@ -271,6 +313,11 @@ function scanModuleSource(source, collectRefs = false) {
     /(?:^|[^\w$])(?:from|import)\s*$/.test(codeTail) ||
     /(?:^|[^\w$])(?:import|require|req)\s*\(\s*$/.test(codeTail) ||
     /new\s+URL\s*\(\s*$/.test(codeTail);
+  const decodeEscChar = esc => (esc === 'n' ? '\n' : esc === 'r' ? '\r' : esc === 't' ? '\t' : esc);
+  const collectLiteralRefs = decoded => {
+    const cleaned = decoded.replaceAll('\\', '/').replace(/^(?:\.\/)+/, '').replace(/^(?:\.\.\/)+/, '');
+    if (REPO_REF_PREFIX_RE.test(cleaned) && isSafeRepoPath(cleaned)) refs.push(cleaned);
+  };
   const checkLiteral = (literal, afterIndex) => {
     if ((literal.startsWith('./') || literal.startsWith('../')) && isSpecifierContext()) {
       if (/new\s+URL\s*\(\s*$/.test(codeTail)) {
@@ -280,9 +327,48 @@ function scanModuleSource(source, collectRefs = false) {
         specifiers.push(literal);
       }
     }
-    if (collectRefs) {
-      const cleaned = literal.replace(/^(?:\.\/)+/, '').replace(/^(?:\.\.\/)+/, '');
-      if (REPO_REF_PREFIX_RE.test(cleaned) && isSafeRepoPath(cleaned)) refs.push(cleaned);
+    if (collectRefs) collectLiteralRefs(literal);
+  };
+  const canStartRegex = () => {
+    if (!prevToken) return true;
+    if (prevToken.kind === 'ident') return REGEX_PRECEDING_KEYWORDS.has(prevToken.value);
+    if (prevToken.kind === 'punct') return !['++', '--', ')', ']'].includes(prevToken.value);
+    return false;
+  };
+  const consumeTemplateText = frame => {
+    let chunk = '';
+    while (i < len) {
+      const c = source[i];
+      if (c === '\\') {
+        chunk += decodeEscChar(source[i + 1] ?? '');
+        i += 2;
+        continue;
+      }
+      if (c === '`') {
+        i++;
+        const isFrom = /(?:^|[^\w$])from\s*$/.test(codeTail);
+        if (!frame.hadInterpolation) checkLiteral(chunk, i);
+        else if (collectRefs && chunk) collectLiteralRefs(chunk);
+        prevToken = { kind: 'template', value: '``' };
+        wantCondParen = false;
+        stripped += !frame.hadInterpolation && isFrom ? ` ${JSON.stringify(chunk)} ` : ' "" ';
+        pushTail('""');
+        return;
+      }
+      if (c === '$' && source[i + 1] === '{') {
+        if (collectRefs && chunk) collectLiteralRefs(chunk);
+        frame.hadInterpolation = true;
+        frame.braceDepth = 0;
+        templateStack.push(frame);
+        i += 2;
+        prevToken = { kind: 'punct', value: '${' };
+        wantCondParen = false;
+        stripped += ' ( ';
+        pushTail('(');
+        return;
+      }
+      chunk += c;
+      i++;
     }
   };
 
@@ -292,6 +378,7 @@ function scanModuleSource(source, collectRefs = false) {
       i += 2;
       while (i < len && source[i] !== '\n') i++;
       pushTail(' ');
+      stripped += ' ';
       continue;
     }
     if (ch === '/' && next === '*') {
@@ -299,34 +386,137 @@ function scanModuleSource(source, collectRefs = false) {
       while (i < len && !(source[i] === '*' && source[i + 1] === '/')) i++;
       i += 2;
       pushTail(' ');
+      stripped += ' ';
       continue;
     }
-    if (ch === "'" || ch === '"' || ch === '`') {
+    if (ch === '/' && canStartRegex()) {
+      const regexEnd = tryScanRegexLiteral(source, i);
+      if (regexEnd > i) {
+        i = regexEnd;
+        prevToken = { kind: 'regexp', value: '//' };
+        wantCondParen = false;
+        pushTail('0');
+        stripped += ' 0 ';
+        continue;
+      }
+    }
+    if (ch === "'" || ch === '"') {
       const quote = ch;
+      const isFrom = /(?:^|[^\w$])from\s*$/.test(codeTail);
       i++;
-      let value = '', hasInterpolation = false;
-      while (i < len && source[i] !== quote) {
+      let value = '';
+      while (i < len && source[i] !== quote && source[i] !== '\n' && source[i] !== '\r') {
         if (source[i] === '\\') {
-          value += source.slice(i, i + 2);
+          value += decodeEscChar(source[i + 1] ?? '');
           i += 2;
           continue;
         }
-        if (quote === '`' && source[i] === '$' && source[i + 1] === '{') hasInterpolation = true;
         value += source[i++];
       }
-      i++;
-      if (!hasInterpolation) checkLiteral(value, i);
+      if (source[i] === quote) i++;
+      checkLiteral(value, i);
+      prevToken = { kind: 'string', value: '""' };
+      wantCondParen = false;
+      stripped += isFrom ? ` ${JSON.stringify(value)} ` : ' "" ';
       pushTail('""');
       continue;
     }
+    if (ch === '`') {
+      i++;
+      consumeTemplateText({ braceDepth: 0, hadInterpolation: false });
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      pushTail(ch === '\n' ? '\n' : ' ');
+      stripped += ch === '\n' ? '\n' : ' ';
+      i++;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let end = i + 1;
+      while (end < len && /[A-Za-z0-9_$]/.test(source[end])) end++;
+      const word = source.slice(i, end);
+      const prevWasDot = prevToken?.kind === 'punct' && (prevToken.value === '.' || prevToken.value === '?.');
+      prevToken = { kind: prevWasDot ? 'prop' : 'ident', value: word };
+      wantCondParen = !prevWasDot && COND_KEYWORDS.has(word);
+      pushTail(word);
+      stripped += word;
+      i = end;
+      continue;
+    }
+    if (/[0-9]/.test(ch)) {
+      let end = i + 1;
+      while (end < len && /[0-9A-Za-z_.]/.test(source[end])) end++;
+      const num = source.slice(i, end);
+      prevToken = { kind: 'number', value: num };
+      wantCondParen = false;
+      pushTail(num);
+      stripped += num;
+      i = end;
+      continue;
+    }
+    if (ch === '(') {
+      parenStack.push({ isCond: wantCondParen });
+      wantCondParen = false;
+      prevToken = { kind: 'punct', value: '(' };
+      pushTail('(');
+      stripped += '(';
+      i++;
+      continue;
+    }
+    if (ch === ')') {
+      const top = parenStack.pop();
+      wantCondParen = false;
+      prevToken = { kind: 'punct', value: top?.isCond ? ')cond' : ')' };
+      pushTail(')');
+      stripped += ')';
+      i++;
+      continue;
+    }
+    if (ch === '{') {
+      if (templateStack.length > 0) templateStack[templateStack.length - 1].braceDepth++;
+      wantCondParen = false;
+      prevToken = { kind: 'punct', value: '{' };
+      pushTail('{');
+      stripped += '{';
+      i++;
+      continue;
+    }
+    if (ch === '}') {
+      if (templateStack.length > 0 && templateStack[templateStack.length - 1].braceDepth === 0) {
+        const resumed = templateStack.pop();
+        i++;
+        consumeTemplateText(resumed);
+        continue;
+      }
+      if (templateStack.length > 0) templateStack[templateStack.length - 1].braceDepth--;
+      wantCondParen = false;
+      prevToken = { kind: 'punct', value: '}' };
+      pushTail('}');
+      stripped += '}';
+      i++;
+      continue;
+    }
+    if ((ch === '+' && next === '+') || (ch === '-' && next === '-') || (ch === '?' && next === '.')) {
+      const two = ch + next;
+      wantCondParen = false;
+      prevToken = { kind: 'punct', value: two };
+      pushTail(two);
+      stripped += two;
+      i += 2;
+      continue;
+    }
+    wantCondParen = false;
+    prevToken = { kind: 'punct', value: ch };
     pushTail(ch);
+    stripped += ch;
     i++;
   }
-  return { specifiers, refs };
+  return { specifiers, refs, stripped };
 }
 
 function resolveRelativeTarget(fromFile, specifier, fileSet) {
-  const cleanSpec = specifier.split(/[?#]/)[0];
+  const cleanSpec = specifier.replaceAll('\\', '/').split(/[?#]/)[0];
   if (!cleanSpec) return null;
   const joined = posix.normalize(posix.join(posix.dirname(fromFile), cleanSpec));
   if (!isSafeRepoPath(joined)) return null;
@@ -348,19 +538,82 @@ function resolveRelativeTarget(fromFile, specifier, fileSet) {
 }
 
 const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
-function extractExportedSymbols(source) {
-  const symbols = new Set();
-  for (const match of source.matchAll(/\bexport\s+(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)) {
-    if (match[1].length >= 2) symbols.add(match[1]);
+function extractModuleExports(stripped) {
+  const ownExports = new Set();
+  const wildcardSpecs = [];
+  const namedFromSpecs = [];
+  if (!stripped) return { ownExports, wildcardSpecs, namedFromSpecs };
+
+  for (const match of stripped.matchAll(/\bexport\s+(?:default\s+)?(?:async\s+)?(?:function|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)) {
+    ownExports.add(match[1]);
   }
-  for (const match of source.matchAll(/\bexport\s*\{([^}]+)\}/g)) {
-    for (const part of match[1].split(',')) {
-      const exported = part.trim().split(/\s+as\s+/).pop()?.trim();
-      if (exported && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(exported) && exported.length >= 2) symbols.add(exported);
+  if (/\bexport\s+default\b/.test(stripped)) ownExports.add('default');
+
+  for (const match of stripped.matchAll(/\bexport\s+(?:const|let|var)\s+([^;\n]+)/g)) {
+    let depth = 0, current = '';
+    const pushDecl = chunk => {
+      const id = /^([A-Za-z_$][A-Za-z0-9_$]*)/.exec(chunk.trim());
+      if (id) ownExports.add(id[1]);
+    };
+    for (const ch of match[1]) {
+      if (ch === '(' || ch === '[' || ch === '{') depth++;
+      else if (ch === ')' || ch === ']' || ch === '}') depth = Math.max(0, depth - 1);
+      if (ch === ',' && depth === 0) {
+        pushDecl(current);
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    pushDecl(current);
+  }
+
+  for (const match of stripped.matchAll(/\bexport\s*\*\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\s*"((?:\\.|[^"\\])*)"/g)) {
+    try {
+      const spec = JSON.parse(`"${match[2]}"`);
+      ownExports.add(match[1]);
+      namedFromSpecs.push({ spec, exported: [match[1]] });
+    } catch {}
+  }
+
+  for (const match of stripped.matchAll(/\bexport\s*\*\s*from\s*"((?:\\.|[^"\\])*)"/g)) {
+    try {
+      wildcardSpecs.push(JSON.parse(`"${match[1]}"`));
+    } catch {}
+  }
+
+  for (const match of stripped.matchAll(/\bexport\s*(?:type\s*)?\{([^}]*)\}\s*from\s*"((?:\\.|[^"\\])*)"/g)) {
+    let spec;
+    try {
+      spec = JSON.parse(`"${match[2]}"`);
+    } catch {
+      continue;
+    }
+    const exported = [];
+    for (const rawPart of match[1].split(',')) {
+      const cleaned = rawPart.trim().replace(/^type\s+/, '');
+      if (!cleaned) continue;
+      const alias = cleaned.split(/\s+as\s+/).pop()?.trim();
+      if (alias && IDENT_RE.test(alias)) {
+        ownExports.add(alias);
+        exported.push(alias);
+      }
+    }
+    if (exported.length) namedFromSpecs.push({ spec, exported });
+  }
+
+  for (const match of stripped.matchAll(/\bexport\s*(?:type\s*)?\{([^}]*)\}(?!\s*from\b)/g)) {
+    for (const rawPart of match[1].split(',')) {
+      const cleaned = rawPart.trim().replace(/^type\s+/, '');
+      if (!cleaned) continue;
+      const alias = cleaned.split(/\s+as\s+/).pop()?.trim();
+      if (alias && IDENT_RE.test(alias)) ownExports.add(alias);
     }
   }
-  return symbols;
+
+  return { ownExports, wildcardSpecs, namedFromSpecs };
 }
 
 function extractStem(filePath) {
@@ -474,7 +727,8 @@ export function selectAffectedTests(options = {}, ports = {}) {
   const dispatcherImportThreshold = options.dispatcherImportThreshold ?? 12;
   const listFiles = ports.listFiles ?? defaultListFiles;
   const readFile = ports.readFile ?? (relPath => defaultReadFile(root, relPath));
-  const readContent = relPath => (ports.readFile ? ports.readFile(relPath, root) : readFile(relPath));
+  const readContent = relPath =>
+    ports.readFile ? (ports.readFile(relPath, root) ?? ports.readFile(relPath.replaceAll('/', '\\'), root)) : readFile(relPath);
 
   const allFiles = (options.files ? [...options.files] : listFiles(root))
     .map(normalizeRepoPath)
@@ -541,8 +795,10 @@ export function selectAffectedTests(options = {}, ports = {}) {
   // Scan code and non-helper test modules once to build the reverse-import graph, prompt ownership map, and literal path references.
   const reverseImporters = new Map();
   const outgoingSrcImports = new Map();
-  const exportedSymbols = new Map();
-  const testSources = new Map();
+  const ownExportsMap = new Map();
+  const wildcardReexports = new Map();
+  const namedReexports = new Map();
+  const moduleSources = new Map();
   const promptToOwnedCode = new Map();
   const pathToRefTests = new Map();
   const addReverseEdge = (target, importer) => {
@@ -557,6 +813,13 @@ export function selectAffectedTests(options = {}, ports = {}) {
     if (!pathToRefTests.has(refPath)) pathToRefTests.set(refPath, new Set());
     pathToRefTests.get(refPath).add(testPath);
   };
+  const addNamedReexport = (hubFile, targetFile, symbols) => {
+    if (!namedReexports.has(hubFile)) namedReexports.set(hubFile, new Map());
+    const byTarget = namedReexports.get(hubFile);
+    if (!byTarget.has(targetFile)) byTarget.set(targetFile, new Set());
+    const bucket = byTarget.get(targetFile);
+    for (const sym of symbols) bucket.add(sym);
+  };
 
   const isGraphCodeFile = path => {
     if (!CODE_EXTENSIONS.test(basename(path))) return false;
@@ -565,6 +828,7 @@ export function selectAffectedTests(options = {}, ports = {}) {
     return /^(?:src|lib|app|test|tests|__tests__)\//.test(path);
   };
   const isProductionCodeFile = path => /^(?:src|lib|app)\//.test(path) && CODE_EXTENSIONS.test(basename(path));
+  const isLocalTestHelper = path => !totalTestSet.has(path) && /^(?:test|tests|__tests__)\//.test(path) && isGraphCodeFile(path);
 
   if (fileSet.has('pdd-bindings.json')) {
     try {
@@ -587,16 +851,32 @@ export function selectAffectedTests(options = {}, ports = {}) {
     const isProd = isProductionCodeFile(file);
 
     if (isProd) {
-      exportedSymbols.set(file, extractExportedSymbols(content));
       const headerMatch = PROMPT_HEADER_RE.exec(content.slice(0, 4096));
-      if (headerMatch && isSafeRepoPath(headerMatch[1])) {
-        addPromptOwner(normalizeRepoPath(headerMatch[1]), file);
+      const ownerHeader = headerMatch ? normalizeRepoPath(headerMatch[1]) : '';
+      if (ownerHeader && isSafeRepoPath(ownerHeader)) {
+        addPromptOwner(ownerHeader, file);
       }
-    } else if (isTestEntry) {
-      testSources.set(file, content);
+    } else {
+      moduleSources.set(file, content);
     }
 
-    const { specifiers, refs } = scanModuleSource(content, isTestEntry);
+    const { specifiers, refs, stripped } = scanModuleSource(content, isTestEntry);
+    if (isProd) {
+      const { ownExports, wildcardSpecs, namedFromSpecs } = extractModuleExports(stripped);
+      ownExportsMap.set(file, ownExports);
+      for (const spec of wildcardSpecs) {
+        const resolved = resolveRelativeTarget(file, spec, fileSet);
+        if (resolved) {
+          if (!wildcardReexports.has(file)) wildcardReexports.set(file, new Set());
+          wildcardReexports.get(file).add(resolved);
+        }
+      }
+      for (const { spec, exported } of namedFromSpecs) {
+        const resolved = resolveRelativeTarget(file, spec, fileSet);
+        if (resolved) addNamedReexport(file, resolved, exported);
+      }
+    }
+
     const srcDeps = isProd ? new Set() : null;
     for (const spec of specifiers) {
       const resolved = resolveRelativeTarget(file, spec, fileSet);
@@ -610,6 +890,20 @@ export function selectAffectedTests(options = {}, ports = {}) {
       for (const ref of refs) addRefTest(ref, file);
     }
   }
+
+  const effectiveExportsCache = new Map();
+  const effectiveExports = (mod, visiting = new Set()) => {
+    if (effectiveExportsCache.has(mod)) return effectiveExportsCache.get(mod);
+    if (visiting.has(mod)) return ownExportsMap.get(mod) ?? new Set();
+    visiting.add(mod);
+    const merged = new Set(ownExportsMap.get(mod) ?? []);
+    for (const target of wildcardReexports.get(mod) ?? []) {
+      for (const sym of effectiveExports(target, visiting)) merged.add(sym);
+    }
+    visiting.delete(mod);
+    effectiveExportsCache.set(mod, merged);
+    return merged;
+  };
 
   // Lazy scenario JSON inspection only when prompts, Stories, or scenario JSON files changed.
   const needsScenarioLinks = changedFiles.some(
@@ -651,8 +945,23 @@ export function selectAffectedTests(options = {}, ports = {}) {
   );
 
   const seedModules = new Map();
-  const addSeedModule = (modPath, reason) => {
-    if (!seedModules.has(modPath)) seedModules.set(modPath, reason);
+  const prodModTests = new Map();
+  const prodModHubs = new Map();
+  const directProdChanges = new Set();
+  const trackedProdMods = new Set();
+  const recordProdModTest = (prodMod, testPath, reason) => {
+    addTest(testPath, reason);
+    if (totalTestSet.has(testPath)) {
+      if (!prodModTests.has(prodMod)) prodModTests.set(prodMod, new Set());
+      prodModTests.get(prodMod).add(testPath);
+    }
+  };
+  const addSeedModule = (modPath, reason, prodOwner = null) => {
+    if (!seedModules.has(modPath)) seedModules.set(modPath, { reason, prodOwners: new Set() });
+    if (prodOwner) {
+      trackedProdMods.add(prodOwner);
+      seedModules.get(modPath).prodOwners.add(prodOwner);
+    }
   };
 
   let touchedPrompts = false, touchedStories = false, touchedDocs = false, touchedSkills = false;
@@ -660,7 +969,8 @@ export function selectAffectedTests(options = {}, ports = {}) {
   for (const file of changedFiles) {
     // Any test literally referencing this changed file path (e.g. docs/cli.md, .github/workflows/ci.yml).
     for (const refTest of pathToRefTests.get(file) ?? []) {
-      addTest(refTest, `references:${file}`);
+      if (isProductionCodeFile(file)) recordProdModTest(file, refTest, `references:${file}`);
+      else addTest(refTest, `references:${file}`);
     }
 
     if (totalTestSet.has(file)) {
@@ -679,9 +989,10 @@ export function selectAffectedTests(options = {}, ports = {}) {
     }
 
     if (isProductionCodeFile(file)) {
-      addSeedModule(file, `reverse-import:${file}`);
+      directProdChanges.add(file);
+      addSeedModule(file, `reverse-import:${file}`, file);
       for (const hit of matchTestsByStem(extractStem(file), totalTests)) {
-        addTest(hit, `stem:${file}`);
+        recordProdModTest(file, hit, `stem:${file}`);
       }
       continue;
     }
@@ -710,15 +1021,16 @@ export function selectAffectedTests(options = {}, ports = {}) {
           };
           return { ...plan, summary: formatAffectedTestsSummary(plan) };
         }
-        addSeedModule(owned, `prompt-owner:${file}`);
+        addSeedModule(owned, `prompt-owner:${file}`, isProductionCodeFile(owned) ? owned : null);
         for (const hit of matchTestsByStem(extractStem(owned), totalTests)) {
-          addTest(hit, `prompt-owner-stem:${owned}`);
+          if (isProductionCodeFile(owned)) recordProdModTest(owned, hit, `prompt-owner-stem:${owned}`);
+          else addTest(hit, `prompt-owner-stem:${owned}`);
         }
       }
       // Also match conventional src/**/<stem>.* modules when headerless or newly paired.
       for (const candidate of allFiles) {
         if (isProductionCodeFile(candidate) && stemVariants(stem).includes(extractStem(candidate))) {
-          addSeedModule(candidate, `prompt-stem-code:${file}`);
+          addSeedModule(candidate, `prompt-stem-code:${file}`, candidate);
         }
       }
       for (const scenarioFile of promptToScenarios.get(file) ?? []) {
@@ -769,35 +1081,156 @@ export function selectAffectedTests(options = {}, ports = {}) {
   }
 
   // Reverse-import BFS across src/ -> src/ -> test/ (bounded at untouched high-fanout dispatcher hubs,
-  // while bridging re-exported symbols through hubs to tests that consume them).
-  const visitedModules = new Set(seedModules.keys());
-  const queue = [...seedModules.entries()];
+  // while bridging export *, aliased re-exports, and shared symbols through hubs and local test helpers).
+  const nodeState = new Map();
+  const queue = [];
+  const enqueueModule = (modPath, reason, prodOwners) => {
+    let state = nodeState.get(modPath);
+    if (!state) {
+      state = { reason, prodOwners: new Set(prodOwners) };
+      nodeState.set(modPath, state);
+      queue.push(modPath);
+      return;
+    }
+    let addedOwner = false;
+    for (const owner of prodOwners) {
+      if (!state.prodOwners.has(owner)) {
+        state.prodOwners.add(owner);
+        addedOwner = true;
+      }
+    }
+    if (addedOwner) queue.push(modPath);
+  };
+  for (const [modPath, info] of seedModules.entries()) {
+    enqueueModule(modPath, info.reason, info.prodOwners);
+  }
+
   while (queue.length) {
-    const [current, originReason] = queue.shift();
-    const curExports = exportedSymbols.get(current);
+    const current = queue.shift();
+    const { reason: originReason, prodOwners } = nodeState.get(current);
+    const curExports = effectiveExports(current);
     for (const importer of reverseImporters.get(current) ?? []) {
       if (totalTestSet.has(importer)) {
         addTest(importer, originReason);
+        for (const owner of prodOwners) recordProdModTest(owner, importer, originReason);
         continue;
       }
-      if (visitedModules.has(importer)) continue;
       if (!seedModules.has(importer) && dispatcherHubs.has(importer)) {
-        const hubExports = exportedSymbols.get(importer);
-        if (curExports?.size && hubExports?.size) {
-          const reexported = [...curExports].filter(sym => hubExports.has(sym));
-          if (reexported.length) {
-            const symRe = new RegExp(`(?<![A-Za-z0-9_$])(?:${reexported.map(escapeRegExp).join('|')})(?![A-Za-z0-9_$])`);
-            for (const hubImporter of reverseImporters.get(importer) ?? []) {
-              if (totalTestSet.has(hubImporter) && symRe.test(testSources.get(hubImporter) ?? '')) {
-                addTest(hubImporter, `${originReason}->${importer}`);
-              }
+        for (const owner of prodOwners) {
+          if (!prodModHubs.has(owner)) prodModHubs.set(owner, new Set());
+          prodModHubs.get(owner).add(importer);
+        }
+        const hubExports = effectiveExports(importer);
+        const bridged = new Set();
+        if (wildcardReexports.get(importer)?.has(current)) {
+          for (const sym of curExports) bridged.add(sym);
+        }
+        for (const sym of namedReexports.get(importer)?.get(current) ?? []) {
+          bridged.add(sym);
+        }
+        for (const sym of curExports) {
+          if (hubExports.has(sym)) bridged.add(sym);
+        }
+        if (bridged.size > 0) {
+          const symRe = new RegExp(`(?<![A-Za-z0-9_$])(?:${[...bridged].map(escapeRegExp).join('|')})(?![A-Za-z0-9_$])`);
+          for (const hubImporter of reverseImporters.get(importer) ?? []) {
+            const src = moduleSources.get(hubImporter) ?? '';
+            if (!symRe.test(src)) continue;
+            if (totalTestSet.has(hubImporter)) {
+              const bridgeReason = `${originReason}->${importer}`;
+              addTest(hubImporter, bridgeReason);
+              for (const owner of prodOwners) recordProdModTest(owner, hubImporter, bridgeReason);
+            } else if (isLocalTestHelper(hubImporter)) {
+              enqueueModule(hubImporter, `${originReason}->${importer}`, prodOwners);
             }
           }
         }
         continue;
       }
-      visitedModules.add(importer);
-      queue.push([importer, originReason]);
+      enqueueModule(importer, originReason, prodOwners);
+    }
+  }
+
+  // Collect all runnable tests reachable from a dispatcher hub (directly or via local test helpers).
+  const hubTestsCache = new Map();
+  const collectHubTests = hub => {
+    if (hubTestsCache.has(hub)) return hubTestsCache.get(hub);
+    const tests = new Set();
+    const seen = new Set([hub]);
+    const work = [hub];
+    while (work.length) {
+      const cur = work.shift();
+      for (const imp of reverseImporters.get(cur) ?? []) {
+        if (totalTestSet.has(imp)) tests.add(imp);
+        else if (isLocalTestHelper(imp) && !seen.has(imp)) {
+          seen.add(imp);
+          work.push(imp);
+        }
+      }
+    }
+    const sortedTests = [...tests].sort(byText);
+    hubTestsCache.set(hub, sortedTests);
+    return sortedTests;
+  };
+
+  // Never allow a changed production module to resolve to 0 tests: bridge through reached hubs or fall back safely.
+  for (const prodMod of [...trackedProdMods].sort(byText)) {
+    if ((prodModTests.get(prodMod)?.size ?? 0) > 0) continue;
+    const stem = extractStem(prodMod);
+    const fullVariants = stemVariants(stem).filter(Boolean);
+    const specificParts = stem
+      .split(/[-_.]/)
+      .map(s => s.toLowerCase())
+      .filter(s => s.length >= 4 && !GENERIC_STEM_PARTS.has(s));
+    const hubs = [...(prodModHubs.get(prodMod) ?? [])];
+    const hubTests = new Set(hubs.flatMap(collectHubTests));
+
+    // Step A: match tests mentioning full stem variants, test filenames sharing specific stem parts, or hub tests quoting stem parts.
+    const fullStemRe = fullVariants.length
+      ? new RegExp(`(?<![A-Za-z0-9])(?:${fullVariants.map(escapeRegExp).join('|')})(?![A-Za-z0-9])`, 'i')
+      : null;
+    const quotedPartRe = specificParts.length
+      ? new RegExp(`['"\`](?:${specificParts.map(escapeRegExp).join('|')})['"\`]`, 'i')
+      : null;
+
+    for (const testPath of totalTests) {
+      const testStemParts = extractStem(testPath)
+        .split(/[-_.]/)
+        .map(s => s.toLowerCase());
+      const src = moduleSources.get(testPath) ?? '';
+      if (
+        (fullStemRe && fullStemRe.test(src)) ||
+        specificParts.some(part => testStemParts.includes(part)) ||
+        (hubTests.has(testPath) && quotedPartRe && quotedPartRe.test(src))
+      ) {
+        recordProdModTest(prodMod, testPath, `hub-stem-bridge:${prodMod}`);
+      }
+    }
+
+    // Step B: if still 0 tests and the module is dispatched by hub(s), select runnable tests importing those hub(s).
+    if ((prodModTests.get(prodMod)?.size ?? 0) === 0 && hubTests.size > 0) {
+      for (const testPath of hubTests) {
+        recordProdModTest(prodMod, testPath, `hub-importers:${prodMod}`);
+      }
+    }
+
+    // Step C: if a directly changed production code module still has 0 tests while runnable tests exist, fall back safely to full suite.
+    if (directProdChanges.has(prodMod) && (prodModTests.get(prodMod)?.size ?? 0) === 0 && totalTests.length > 0) {
+      const fallbackReason = `no isolated test mapping for changed code (${prodMod})`;
+      const reasons = Object.fromEntries(totalTests.map(t => [t, ['fallback:unmapped-code-change']]));
+      const plan = {
+        mode: 'full',
+        selectedTests: [...totalTests],
+        totalTests,
+        selectedCount: totalTests.length,
+        totalCount: totalTests.length,
+        changedFiles,
+        smokeTests,
+        fallbackReason,
+        fallbackCategory: 'unmapped-code-change',
+        reasons,
+      };
+      return { ...plan, summary: formatAffectedTestsSummary(plan) };
     }
   }
 
