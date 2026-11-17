@@ -968,7 +968,7 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 ## Metrics
 
-- `pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]`
+- `pdd metrics [--json] [--date YYYY-MM-DD | --week [YYYY-MM-DD] | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]`
 - `pdd metrics export FILE [--timezone IANA]`
 - `pdd metrics import FILE`
 - `pdd metrics record FILE`

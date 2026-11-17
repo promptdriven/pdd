@@ -1,6 +1,6 @@
 # Shared measurements
 
-I can follow a fixed group of issues and see what happened, including missing evidence and later deliveries.
+As a repository maintainer reviewing PDD runs, I want to follow a fixed group or Monday-to-Sunday week of issues and see what happened, so that missing evidence, weekly pace and later deliveries stay visible.
 
 ## Acceptance criteria
 
@@ -9,6 +9,7 @@ I can follow a fixed group of issues and see what happened, including missing ev
 3. A checker pass for an old candidate does not validate a changed candidate.
 4. A later delivered fix remains attributed to the original group, and an administrative reopen is separate from a human report that the fix is still broken.
 5. Importing the same event twice does not add a second issue or event, and an absent machine is shown as a coverage gap.
+6. A weekly report anchored on Wednesday 2026-11-11 covers Monday 2026-11-09 through Wednesday 2026-11-11 (3 elapsed days, refreshing Monday), counts an issue worked on both Tuesday and Wednesday once in weekly totals, and resets to 1 elapsed day on Monday 2026-11-16.
 
 ## Rules to check
 
@@ -18,3 +19,4 @@ I can follow a fixed group of issues and see what happened, including missing ev
 - A code delivery needs an explicit issue relationship and relevant evidence; a prompt PR alone or an incidental mention does not establish delivery. A later delivery remains in the original fixed group.
 - Count a failed fix only for a linked explicit human report about the delivered fix. Administrative reopen, new scope, revert, and an unclassified report are distinct. A missing report does not establish lasting success; show 7-day and 30-day follow-up maturity.
 - Identical source-event identities with identical facts count once. Conflicting observations are visible uncertainty; an absent machine or incomplete capture is a coverage gap, not evidence of zero events. A zero denominator has no applicable percentage.
+- A weekly report spans the Monday-to-Sunday calendar week of its anchor date in the declared timezone through that anchor date (1 elapsed day on Monday through 7 elapsed days on Sunday, refreshing every Monday), and counts each active issue once in weekly totals even when it has activity on multiple days.
