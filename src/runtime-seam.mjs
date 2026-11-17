@@ -41,12 +41,14 @@ import {
   discoveryRefusal,
   discoveryVisibleFiles,
   estimateCheckCalls,
+  evaluateCheckBudget,
   exactIntegerLeaves,
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
   fillHashes as rawFillHashes,
   findTests as rawFindTests,
+  failedCheckCount,
   format,
   formatSize,
   formatWarningLines,
@@ -64,6 +66,7 @@ import {
   loadRuntimeWorkspace,
   migrateRuntimeWorkspace as runtimeMigrateWorkspace,
   numberWarnings,
+  observeTryCall as runtimeObserveTryCall,
   openCli as runtimeOpenCli,
   openServe as runtimeOpenServe,
   otherFiles,
@@ -74,6 +77,7 @@ import {
   parsePromptFrontmatter,
   parseScenarioJson,
   preflight,
+  providerText,
   productTapCallBound,
   progressText,
   progressTicker,
@@ -707,6 +711,14 @@ export async function readTryOwner(input = {}, ports = {}) {
   );
 }
 
+export async function observeTryCall(input = {}, ports = {}) {
+  await import('./secret-redaction.mjs');
+  return runtimeObserveTryCall(
+    input,
+    seamSelectionPorts(withPortDefaults(ports, { redaction: seamRedaction(ports) })),
+  );
+}
+
 export function createTryTools(input, ports = {}) {
   const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
   const lazyParseProductDocuments = (...args) => req('./product-documents.mjs').parseProductDocuments(...args);
@@ -1002,10 +1014,12 @@ export {
   discoveryRefusal,
   discoveryVisibleFiles,
   estimateCheckCalls,
+  evaluateCheckBudget,
   exactIntegerLeaves,
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
+  failedCheckCount,
   format,
   formatSize,
   formatWarningLines,
@@ -1029,6 +1043,7 @@ export {
   parsePromptFrontmatter,
   parseScenarioJson,
   preflight,
+  providerText,
   productTapCallBound,
   progressText,
   progressTicker,
