@@ -2,12 +2,12 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/help-teaches-pdd.md",
   "criteria": [
-    {"id": "AC1", "text": "`pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed Prompting guide (`docs/prompting-guide.md`) and RUNBOOK (`RUNBOOK.md`), print nothing to stderr and exit with code 0."},
-    {"id": "AC2", "text": "`pdd help prompting` shows how to write a prompt with `## Dependencies`, a Story with numbered acceptance criteria, and its test; it exits with code 0 and no stderr."},
-    {"id": "AC3", "text": "`pdd --help` opens with usage and starting examples, groups commands by purpose, and points to focused help rather than listing options like `--share` or approval examples."},
-    {"id": "AC4", "text": "`pdd help prompting` names `pdd test`, `pdd lint` and `pdd approve` and the full installed guide and RUNBOOK paths."},
-    {"id": "AC5", "text": "`pdd help autopilot` lists `pdd autopilot start`, and `pdd autopilot start --help` explains the `--share` range and default. `pdd help approve` shows the quoted `--said -` heredoc. All three exit with code 0 and no stderr."},
-    {"id": "AC6", "text": "`pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says \"Unknown command\" and names `prompting`, and exits with code 2."}
+    {"id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "text": "`pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed Prompting guide (`docs/prompting-guide.md`) and RUNBOOK (`RUNBOOK.md`), print nothing to stderr and exit with code 0."},
+    {"id": "ac-sha256-8706e9c0ff69cd0531323ccc04ba93b2365f8c738687fcc0", "text": "`pdd help prompting` shows how to write a prompt with `## Dependencies`, a Story with numbered acceptance criteria, and its test; it exits with code 0 and no stderr."},
+    {"id": "ac-sha256-1dff3b648a26d8c38d7199e994fae66f8919a857a654d866", "text": "`pdd --help` opens with usage and starting examples, groups commands by purpose, and points to focused help rather than listing options like `--share` or approval examples."},
+    {"id": "ac-sha256-c29313ab1ede63cd302e1b40370eabbce089c392d1ad843c", "text": "`pdd help prompting` names `pdd test`, `pdd lint` and `pdd approve` and the full installed guide and RUNBOOK paths, and exits with code 0."},
+    {"id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "text": "`pdd help autopilot` lists `pdd autopilot start`, and `pdd autopilot start --help` explains the `--share` range and default. `pdd help approve` shows the quoted `--said -` heredoc. All three exit with code 0 and no stderr."},
+    {"id": "ac-sha256-a0a907c3c6785926d618701a7ca31ee340a2e90545559c6c", "text": "`pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says \"Unknown command\" and names `prompting`, and exits with code 2."}
   ],
   "initial_world": {"unexpected_launcher_calls": []},
   "simulation": {
@@ -21,12 +21,12 @@
       "operation": "runPdd",
       "input": {"argv": []},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id":"ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -35,19 +35,19 @@
       "operation": "runPdd",
       "input": {"argv": ["--help"]},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Usage: pdd <command> [options]"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Examples:"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Getting started:"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Prompts and tests:"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help COMMAND"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "not_contains", "value": "--share"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD_SAID"},
-        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id": "ac-sha256-1dff3b648a26d8c38d7199e994fae66f8919a857a654d866", "target": "result", "path": "/stdout", "op": "contains", "value": "Usage: pdd <command> [options]"},
+        {"criterion_id": "ac-sha256-1dff3b648a26d8c38d7199e994fae66f8919a857a654d866", "target": "result", "path": "/stdout", "op": "contains", "value": "Examples:"},
+        {"criterion_id": "ac-sha256-1dff3b648a26d8c38d7199e994fae66f8919a857a654d866", "target": "result", "path": "/stdout", "op": "contains", "value": "Getting started:"},
+        {"criterion_id": "ac-sha256-1dff3b648a26d8c38d7199e994fae66f8919a857a654d866", "target": "result", "path": "/stdout", "op": "contains", "value": "Prompts and tests:"},
+        {"criterion_id": "ac-sha256-1dff3b648a26d8c38d7199e994fae66f8919a857a654d866", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help COMMAND"},
+        {"criterion_id": "ac-sha256-1dff3b648a26d8c38d7199e994fae66f8919a857a654d866", "target": "result", "path": "/stdout", "op": "not_contains", "value": "--share"},
+        {"criterion_id": "ac-sha256-1dff3b648a26d8c38d7199e994fae66f8919a857a654d866", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD_SAID"},
+        {"criterion_id":"ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -56,12 +56,12 @@
       "operation": "runPdd",
       "input": {"argv": ["-h"]},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id":"ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -70,12 +70,12 @@
       "operation": "runPdd",
       "input": {"argv": ["help"]},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help prompting"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id":"ac-sha256-0760be3dc7a0e129a92c651aa191dcc765ad7ea05332f144","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -84,19 +84,20 @@
       "operation": "runPdd",
       "input": {"argv": ["help", "prompting"]},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "prompts/NAME.prompt.md"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "## Dependencies"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "user_stories/STORY.md"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "Acceptance criteria"},
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "tests/STORY.json"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd approve"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id":"AC2","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {"criterion_id": "ac-sha256-8706e9c0ff69cd0531323ccc04ba93b2365f8c738687fcc0", "target": "result", "path": "/stdout", "op": "contains", "value": "prompts/NAME.prompt.md"},
+        {"criterion_id": "ac-sha256-8706e9c0ff69cd0531323ccc04ba93b2365f8c738687fcc0", "target": "result", "path": "/stdout", "op": "contains", "value": "## Dependencies"},
+        {"criterion_id": "ac-sha256-8706e9c0ff69cd0531323ccc04ba93b2365f8c738687fcc0", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-8706e9c0ff69cd0531323ccc04ba93b2365f8c738687fcc0", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id": "ac-sha256-8706e9c0ff69cd0531323ccc04ba93b2365f8c738687fcc0", "target": "result", "path": "/stdout", "op": "contains", "value": "user_stories/STORY.md"},
+        {"criterion_id": "ac-sha256-8706e9c0ff69cd0531323ccc04ba93b2365f8c738687fcc0", "target": "result", "path": "/stdout", "op": "contains", "value": "Acceptance criteria"},
+        {"criterion_id": "ac-sha256-8706e9c0ff69cd0531323ccc04ba93b2365f8c738687fcc0", "target": "result", "path": "/stdout", "op": "contains", "value": "tests/STORY.json"},
+        {"criterion_id": "ac-sha256-c29313ab1ede63cd302e1b40370eabbce089c392d1ad843c", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test"},
+        {"criterion_id": "ac-sha256-c29313ab1ede63cd302e1b40370eabbce089c392d1ad843c", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint"},
+        {"criterion_id": "ac-sha256-c29313ab1ede63cd302e1b40370eabbce089c392d1ad843c", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd approve"},
+        {"criterion_id": "ac-sha256-c29313ab1ede63cd302e1b40370eabbce089c392d1ad843c", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
+        {"criterion_id": "ac-sha256-c29313ab1ede63cd302e1b40370eabbce089c392d1ad843c", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
+        {"criterion_id": "ac-sha256-c29313ab1ede63cd302e1b40370eabbce089c392d1ad843c", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id":"ac-sha256-8706e9c0ff69cd0531323ccc04ba93b2365f8c738687fcc0","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
     {
@@ -105,9 +106,9 @@
       "operation": "runPdd",
       "input": {"argv": ["help", "autopilot"]},
       "checks": [
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd autopilot start"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd autopilot start"},
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -116,10 +117,10 @@
       "operation": "runPdd",
       "input": {"argv": ["autopilot", "start", "--help"]},
       "checks": [
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "--share PERCENT"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "1-100, default 50"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/stdout", "op": "contains", "value": "--share PERCENT"},
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/stdout", "op": "contains", "value": "1-100, default 50"},
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -128,9 +129,9 @@
       "operation": "runPdd",
       "input": {"argv": ["help", "approve"]},
       "checks": [
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "--said - <<'PDD_SAID'\n<the person's exact words>\nPDD_SAID"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/stdout", "op": "contains", "value": "--said - <<'PDD_SAID'\n<the person's exact words>\nPDD_SAID"},
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-8329abe666f2c637348f3d33a77c86ed0185377b114ae056", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -139,11 +140,11 @@
       "operation": "runPdd",
       "input": {"argv": ["prompting"]},
       "checks": [
-        {"criterion_id": "AC6", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
-        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "Unknown command"},
-        {"criterion_id": "AC6", "target": "result", "path": "/stderr", "op": "contains", "value": "prompting"},
-        {"criterion_id": "AC6", "target": "result", "path": "/exit_code", "op": "equals", "value": 2},
-        {"criterion_id":"AC6","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+        {"criterion_id": "ac-sha256-a0a907c3c6785926d618701a7ca31ee340a2e90545559c6c", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-a0a907c3c6785926d618701a7ca31ee340a2e90545559c6c", "target": "result", "path": "/stderr", "op": "contains", "value": "Unknown command"},
+        {"criterion_id": "ac-sha256-a0a907c3c6785926d618701a7ca31ee340a2e90545559c6c", "target": "result", "path": "/stderr", "op": "contains", "value": "prompting"},
+        {"criterion_id": "ac-sha256-a0a907c3c6785926d618701a7ca31ee340a2e90545559c6c", "target": "result", "path": "/exit_code", "op": "equals", "value": 2},
+        {"criterion_id":"ac-sha256-a0a907c3c6785926d618701a7ca31ee340a2e90545559c6c","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     }
   ]
