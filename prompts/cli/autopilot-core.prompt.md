@@ -42,8 +42,7 @@ string `core`; any other value, or none, is `full`.
 
 When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics` (omitting unset optional keys so the default settings shape stays unchanged).
 
-`readCoreSettings(cwd, fs, machine = null)` applies it to `cwd/pdd.json` and `cwd/package.json`;
-an unreadable file counts as absent.
+`detectTestCommand(cwd, fs, packageJson)` auto-detects standard external repository test commands when `autopilot.testCommand` is unset: `pnpm-lock.yaml` -> `pnpm test`, `yarn.lock` -> `yarn test`, `bun.lockb` or `bun.lock` -> `bun test`, `package.json` `scripts.test` -> `npm test`, `pyproject.toml` or `pytest.ini` -> `pytest`, `Cargo.toml` -> `cargo test`, `go.mod` -> `go test ./...`, `package.json` -> `npm test`, else `null`. `readCoreSettings(cwd, fs, machine = null)` applies `coreSettings` to `cwd/pdd.json` and `cwd/package.json` (an unreadable file counts as absent) and fills `testCommand` from `detectTestCommand(cwd, fs, packageJson)` whenever `autopilot.testCommand` is unset (when `main` is a greenfield or `product/` repository with no manifest yet, intake still claims ready issues and `suiteState`, `workRules`, `notCovered`, and suite failure/hang records resolve `detectTestCommand` against the checked-out PR head `N-suite`/`headTree` and `job.worktree` so a PR that introduces `package.json`, `pyproject.toml`, `Cargo.toml` or `go.mod` runs and reports its detected test command cleanly); the full-suite runner also installs lockfile dependencies for `pnpm-lock.yaml`, `yarn.lock` (Classic `--frozen-lockfile --ignore-scripts` vs Modern `--immutable --mode=skip-build`/`--skip-builds`), `bun.lockb`/`bun.lock` and `package-lock.json`.
 
 ## State
 
@@ -689,7 +688,7 @@ you check the PR body".
 **No input is cut silently (B2, final battle plan).** Each cap ends with a marker that
 says how much is left out and where to read it: the issue text (20,000 characters)
 `[cut: N more characters; read the issue for the rest: URL]`, each answer (4,000
-characters) the same with the comment URL, the owner table (400 owned files) `[cut: N
+characters) the same with the comment URL, the owner table (40 owned files, prioritizing paths cited by the issue, companion issues or job files) `[cut: N
 more owned files; run pdd owner FILE before you call a file unowned]` (and the table
 then never says that every other file is unowned), and the conflict hunks (12,000
 characters, 4,000 for an add/add file) `[cut: N more characters; read the conflict in
@@ -744,14 +743,14 @@ the evidence record.
   answer with one letter. With `decisions` `decide` (the default) the job never asks a
   choice question and lists every choice; the engine decides a choice question itself
   (Needs a person, below), so only a blocker reaches a person. A vague issue is never a
-  reason to ask; a clear issue, or a person's answer in the brief, is built. The brief lists the open issues that the issue names by number and the titles
-  of up to 20 other open issues (not PRs, not this issue, only by trusted authors:
+  reason to ask; a clear issue, or a person's answer in the brief, is built. The brief lists at most 5 sibling open issues in total: those that the issue names by number first, then the titles
+  of remaining open issues up to 5 total (not PRs, not this issue, only by trusted authors:
   `ports.trusted(row)`, read once per login and tick and shared with the ready rule; a
   failed read is not trusted and warns once per login and tick), so the
   job can see an open decision;
   **the path from file ownership** (debate A, the exact text of A-VERDICT section 6.1):
-  the brief has the owner table of the job worktree (`ownerTable`, below; up to 400
-  owned files), and the rules say: a file is owned when pdd-bindings.json, a
+  the brief has the owner table of the job worktree (`ownerTable`, below; up to 40
+  owned files, relevant paths first), and the rules say: a file is owned when pdd-bindings.json, a
   `Generated from` header line or a prompt's opening sentence names it (`pdd owner
   FILE` gives the same answer; not sure = owned);
   path a (owned code, the contract changes: the owning prompt first, in the issue's
@@ -813,9 +812,9 @@ the evidence record.
   question only makes sense when a merge would follow), adds no `pdd:needs-decision`,
   and its would-merge note lists `Prompts that need a person's approval before a merge
   (strict_approvals): …`. Push the job
-  branch and open one PR against BASE with `Fixes #N`; never merge, push to BASE,
+  branch and either let `openPullRequest(ctx, job, options)` open/update the PR from the result's `head`, `title` and `summary` or open one PR against BASE with `Fixes #N`; `openPullRequest` (using a temporary scratch root cleaned up on exit without overwriting saved job files or polluting `job.worktree` when called standalone) deterministically stamps missing closing keywords (`Fixes #N` / `Closes #N`), `Path:` lines (from the Git diff and base/head `ownerRead`, grouping `Path: a` under the changed owner prompt even on multi-owner modules and placing modified existing `.prompt.md` files on `Path: a`), `Runtime:` lines (from verified saved `pdd test` checks at `head` or honest `not run` / `FAIL` state, never inventing a pass), and the `Evidence:` line in code (failing closed on malformed explicit `tests`/`vectors`/`formal` inputs or omitted `tests` without a valid existing `Evidence:` `tests=` claim, preserving contradictory test counts so `evidenceReds` catches them, and syncing `vectors=`/`formal=` counts in `mergeCheck` once engine replays finish on stamped heads) so the agent does not have to hand-type machine metadata strings. Never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
-  file is JSON: `outcome` `pr` with `pr`, `head`, `promptChanged` (Boolean),
+  file is JSON: `outcome` `pr` with `head`, optional `pr`, `title`, `summary`, `tests`, `choices`, `promptChanged` (Boolean),
   `evidence` and optional `runtime {state, cause, kind, component, code, detail}`, or
   `outcome` `failed` with `kind` (`pdd` or `job`), `component`, `code`, `cause`
   and a short `detail` without repository code, or `outcome` `needs-person` with one
@@ -836,7 +835,7 @@ the evidence record.
   contradicts itself or the checks: a `fail` (or `formal=failed`), a `pass` with fewer
   passed than total or 0 of 0, or a runtime value other than `fail` that disagrees
   with the PR's Runtime line (PASS or not run).
-- **Repair** (same worktree and branch): the red findings, the job log folder, then
+- **Repair** (same worktree and branch): before starting each repair round after a failed round, snapshot a compact 1-line summary of what failed (`round`, role/head, failed check or command, and touched files) into `job.repairHistory`, reset `job.worktree` cleanly to `job.head` (`git reset -q --hard` and `git clean -fdq`, both required to succeed before launching so a failed reset or clean defers as a Git tool error instead of starting round `N+1` on dirty state; `decideChoice` enforces the same clean reset before rerunning), and include the prior-round 1-line summaries in the repair brief alongside the red findings, the job log folder, and
   the build rules; push to the same branch, no new PR, and update the `Runtime:` and
   `Evidence:` lines when they change, with "changed" against `origin/BASE...HEAD`. After
   a merge from the base, the repair and the conflict update check that the fix is still
@@ -866,7 +865,7 @@ the evidence record.
   a CI or full-suite failure and no reproduction rerun has run at this head yet, the brief
   also allows `{"outcome": "not reproduced", "command", "detail"?}` (`"not-reproduced"`
   accepted too) when the failure does not reproduce and the repair made no code changes.
-- **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
+- **Review** (in `worktrees/N-review`, a detached checkout of the head, launched with `GH_TOKEN`/`GITHUB_TOKEN` stripped via `jobEnvironment(env, {stripGithubTokens: true})` so the read-only reviewer cannot mutate GitHub, and with the PR body included as data in both full and scoped review briefs): a fresh agent
   that did not write the change. When `job.builderFamily` is known and no login is
   preselected from a quota retry, `reviewState` first probes `selectAgentStep` across
   candidate core kinds and filters pool logins individually by per-login effective
@@ -1926,7 +1925,7 @@ merge)`.
 ## Ports
 
 `gh(args, {input})` and `git(args, {cwd})` return `{code, stdout, stderr}`; GitHub
-REST calls use `gh api --include --method M ENDPOINT [--input -]`. Also `now()`,
+REST calls use `gh api --include --method M ENDPOINT [--input -]` (with conditional `If-None-Match` and `304 Not Modified` body reuse through optional `ports.etags`, which is also passed as `githubCache` alongside optional `ports.authority` to `createDependencyReadPorts`). Optional `ports.wake` is forwarded to `jobs.start` so finished workers wake the launcher immediately. Also `now()`,
 `fs`, `root`, `reportRoot`, `env`, `version` (the PDD version), `listIssues()`,
 `trusted(row)`, `agentReady()`, optional `selectLogin()` and `exhaustLogin({loginId, resetAt, reason})` of the [login pool](login-pool.prompt.md), `warn(text)`, `alert({issue, kind, text, tried, need, update})`,
 `machine` (`{room, priority(role)}` of the [machine guard](machine-guard.prompt.md); absent: no

@@ -136,9 +136,24 @@ export async function runAutopilotDoctor(input, ports = {}) {
   add('github-permission',permission ? 'pass':'fail',`${named?repo:'repository unavailable'}; permission ${['ADMIN','MAINTAIN','WRITE','TRIAGE','READ'].includes(metadata?.viewerPermission)?metadata.viewerPermission:'unknown'}; push and PR need write access`,permission?`gh repo view ${quote(repo)} --json viewerPermission`:named?`gh repo fork ${quote(repo)} --clone`:'gh auth setup-git');
   const merge = [metadata?.mergeCommitAllowed,metadata?.squashMergeAllowed,metadata?.rebaseMergeAllowed].includes(true);
   add('merge-method',merge?'pass':'fail','Repository must enable a merge method; permission alone does not bypass reviews',merge?`gh repo view ${quote(repo)} --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`:named?`gh repo edit ${quote(repo)} --enable-squash-merge`:'gh auth login');
-  const ruleReply = named && branch ? await run('gh',['api',`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`]) : null;
+  const rulesEndpoint = named && branch ? `repos/${repo}/rules/branches/${encodeURIComponent(branch)}` : null;
+  const ruleReply = rulesEndpoint ? await run('gh',['api',rulesEndpoint]) : null;
   const rules = ready(ruleReply)?json(ruleReply.stdout):null;
-  add('merge-rules',Array.isArray(rules)?'pass':'warn',Array.isArray(rules)?`Branch rules: ${rules.map(r=>r.type).filter(x=>typeof x==='string').join(', ') || 'none'}; required reviews and checks still apply`:'Branch rules unavailable; merge eligibility is unproved',named&&branch?`${Array.isArray(rules)?'':'gh auth login && '}gh api ${quote(`repos/${repo}/rules/branches/${encodeURIComponent(branch)}`)}`:'gh auth login');
+  const ruleErrorBody = !ready(ruleReply) && ruleReply ? json(ruleReply.stdout) : null;
+  const ruleErrorText = `${ruleReply?.stderr ?? ''}\n${typeof ruleErrorBody?.message === 'string' ? ruleErrorBody.message : ''}`;
+  const rulesPlanGated = Boolean(ruleReply) && !ready(ruleReply) && /upgrade to github pro|make this repository public/i.test(ruleErrorText);
+  const rulesNotProtected = Boolean(ruleReply) && !ready(ruleReply) && !rulesPlanGated
+    && (/\(HTTP 404\)/i.test(String(ruleReply.stderr ?? '')) || String(ruleErrorBody?.status ?? '') === '404')
+    && (ready(auth) || /branch not protected/i.test(ruleErrorText));
+  const rulesKnown = Array.isArray(rules) || rulesPlanGated || rulesNotProtected;
+  const rulesDetail = Array.isArray(rules)
+    ? `Branch rules: ${rules.map(r=>r.type).filter(x=>typeof x==='string').join(', ') || 'none'}; required reviews and checks still apply`
+    : rulesPlanGated
+      ? 'Branch rules: none (branch rulesets are not enabled on this private repository plan); required reviews and checks still apply'
+      : rulesNotProtected
+        ? 'Branch rules: none; required reviews and checks still apply'
+        : 'Branch rules unavailable; merge eligibility is unproved';
+  add('merge-rules',rulesKnown?'pass':'warn',rulesDetail,rulesEndpoint?`${rulesKnown?'':'gh auth login && '}gh api ${quote(rulesEndpoint)}`:'gh auth login');
   // Autopilot jobs commit: Git needs a name and an email, from config or from the environment as Git reads it.
   const nonblank = value => typeof value === 'string' && value.trim() !== '';
   const configured = async key => { const reply = await run('git',['config',key]); return ready(reply) && nonblank(reply.stdout); };
