@@ -88,3 +88,89 @@ node --import ./test/helpers/test-home.mjs --test test/route-runtime-issues.test
 These fixtures check parsing, plans, cache/retry behavior and the CLI with fake gh
 and agent processes. They do not establish real-agent classification quality,
 live GitHub authorization or runner provisioning.
+
+## Release benchmark and Autopilot daily observe runner
+
+`scripts/benchmark/` measures PDD authoring and Runtime behavior across release candidates, runs daily read-only Autopilot `--observe` checks across configured repositories with zero GitHub writes, and renders a self-contained HTML + inline SVG scorecard tracking the two North-Star targets:
+
+1. **Bar 1 — PDD vs. Direct Coding (`pdd_vs_direct_coding`)**:
+   - **Small builds (`snake`, `2048`, `task-manager`):** speed ratio `&le; 1.0x` and cost ratio `&le; 1.0x` vs. direct AI coding, with `100%` first-try hosted Runtime pass.
+   - **Larger brownfield codebases (`brownfield-repo-sync`):** `2.0x–3.0x` faster feature iteration, `&gt; 50%` lower rework cost vs. direct AI coding (`30–60+ min` rework baseline), and step-by-step incremental repository sync readiness.
+2. **Bar 2 — Autopilot End-to-End Zero-Edit Completion (`autopilot_zero_edit`)**:
+   - `90%–95%` end-to-end completion (`prompts -> Runtime verification -> merged code` with zero human edits and zero 7-day reopens).
+
+### Entrypoints
+
+Evaluate release candidate metrics against a baseline release (advisory warnings by default):
+
+```sh
+node scripts/benchmark/run-release-benchmark.mjs \
+  --candidate /path/to/candidate.json \
+  --baseline /path/to/baseline.json \
+  --history /path/to/history.json \
+  --out /path/to/release-report.json
+```
+
+Run a live read-only Autopilot `--observe` pass across one or more repositories (strictly `GET`-only GitHub reads with local `If-None-Match` ETag caching and zero issue/PR mutations):
+
+```sh
+node scripts/benchmark/run-autopilot-observe.mjs --observe \
+  --repo promptdriven/pdd \
+  --state-dir ~/.local/state/pdd/observe \
+  --out ~/.local/state/pdd/observe/observe-runs.jsonl
+```
+
+Or pass an operator config file outside the repository (`--config ~/.local/state/pdd/observe/config.json`) listing repositories and optional local checkouts:
+
+```json
+{
+  "repos": [
+    { "repo": "promptdriven/pdd", "checkout": "/path/to/pdd" }
+  ]
+}
+```
+
+Render the self-contained HTML + inline SVG dashboard. By default, only `promptdriven/pdd` is shown by repository slug and linked; any other repository in `observe-runs.jsonl` is automatically redacted to a generic `private-repo-N` label without a GitHub link unless explicitly allowlisted via repeatable `--public-repo OWNER/REPO`. Output hygiene also scrubs and rejects commit hashes, UUIDs, and common credential tokens:
+
+```sh
+node scripts/benchmark/render-benchmark-report.mjs \
+  --release-json /path/to/release-report.json \
+  --observe-jsonl ~/.local/state/pdd/observe/observe-runs.jsonl \
+  --public-repo promptdriven/pdd \
+  --out ~/.local/state/pdd/observe/latest-benchmark.html
+```
+
+### Daily user-level systemd timer (Linux)
+
+Keep daily read-only observe telemetry accumulating under `~/.local/state/pdd/observe/` with a user `systemd` unit (`~/.config/systemd/user/pdd-autopilot-observe.service` and `.timer`):
+
+```ini
+# ~/.config/systemd/user/pdd-autopilot-observe.service
+[Unit]
+Description=Run daily read-only PDD Autopilot observe scorecard
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash %h/.local/state/pdd/observe/run-daily-observe.sh
+TimeoutStartSec=10min
+```
+
+```ini
+# ~/.config/systemd/user/pdd-autopilot-observe.timer
+[Unit]
+Description=Daily read-only PDD Autopilot observe timer
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 UTC
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+```
+
+Offline unit tests:
+
+```sh
+node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/release-benchmark.test.mjs
+```
