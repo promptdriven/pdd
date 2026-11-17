@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.35, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.35, as `pdd --help` and `pdd <command> --help` show it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help catalog is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -188,6 +188,8 @@ Autopilot opens no chat and needs no Herdr.
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
 | `pdd autopilot status [--all] [--json]` | Show this machine's Autopilot for this repo: enabled or disabled, the timer, the next tick, the jobs, an [alert](#alerts) that was not delivered and the last tick. `--all` lists every repository with Autopilot on this machine, from any folder. `--json` prints the [local cost report](#local-issue-costs) |
+| `pdd autopilot logs [ISSUE] [--follow\|-f] [--lines N] [--json]` | List current headless Autopilot workers for this repository with stage, owned process state, suite queue position, blockers, last activity and saved log or evidence paths, or inspect and follow one worker live (`--follow` / `-f` detaches on Ctrl-C without stopping the worker or changing `observe` mode). Read-only; no GitHub call or approval effect |
+| `pdd autopilot logs --issue N [--follow\|-f] [--lines N] [--json]` | Select one worker explicitly with `--issue N` (issue number, `#N`, `owner/repo#N`, or GitHub issue URL) to inspect saved progress or stream live updates |
 | `pdd autopilot add N...` | Create the `pdd:autopilot` label when it is missing and add it to each named issue of this repository. Use it to choose the issues that Autopilot may take |
 | `pdd autopilot release ISSUE` | Release this machine's claim and remove `pdd:working` and `pdd:stuck`; keep the run folder, branch and PRs |
 | `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub CI, parent checks, revert, reopen and issue-link evidence. Classify each merge as ok, suspect or proven; count distinct proven PRs per UTC evidence day. Issue-body attribution uses issue creation time even if added in a later edit; these buckets require a consumer confirmation policy before use as daily scorecard counts. At most 100 GitHub requests per scan; rate exhaustion or Retry-After stops further reads, preserving collected evidence and marking missing evidence incomplete. --json prints structured results; --file exclusively creates a local report without overwriting existing files. No GitHub writes or reverts. Incomplete reads exit 1; complete scans exit 0 even when they detect regressions |
@@ -200,7 +202,7 @@ Autopilot opens no chat and needs no Herdr.
 | `pdd autopilot alerts clear [--destination autopilot\|infrastructure]` | Remove the alert destination from this machine |
 | `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | Record one alert and send it to this machine's destination. See [Alerts](#alerts) |
 
-Outside a Git repository, `start`, `stop`, `status`, `add`, `off`, `observe`,
+Outside a Git repository, `start`, `stop`, `status`, `logs`, `add`, `off`, `observe`,
 `auto`, `trust` and `untrust` stop with exit code 1 and say: `This folder is not a
 Git repository. cd into the repo you want Autopilot to work on, then run the
 command again.` `status --all` works from any folder.
@@ -272,6 +274,20 @@ read shows `timer unknown`, and a broken state file shows `FILE: saved state
 unreadable`. One bad line changes no other line. Without saved state it prints
 `No Autopilot on this machine.` The local cost lines come last. It makes no GitHub
 call.
+
+`pdd autopilot logs` inspects headless Autopilot workers from local state files
+without knowing internal state folders or touching running jobs. With no issue
+argument, it prints the effective mode (`observe`, `auto` or `off`), active
+workers sorted by issue number (stage, owned process state, suite queue position,
+blockers, last activity, and saved log and evidence paths), recent finished
+workers, and the follow command. With `ISSUE` or `--issue N`, it prints the
+worker header and the last `--lines N` (default 40, maximum 5000) human-readable
+progress lines formatted from Codex, Claude, Gemini/agy or test-suite logs, with
+secrets redacted. It distinguishes waiting in the shared test-suite queue from a
+running full suite, a repair pass, and a stale suite receipt. Add `--follow` or
+`-f` to stream live worker and test-suite progress and stage changes; pressing
+Ctrl-C detaches the viewer without stopping the worker or changing `observe`
+mode. Add `--json` for structured snapshot output (`pdd.autopilot-logs.v1`).
 
 A machine state that ran the full engine moves to the core engine at its next
 tick. A start runs a tick, so a start moves it too. No new work starts before the
@@ -817,7 +833,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 
 | Command | What it does |
 |---|---|
-| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
+| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the grouped command overview, quick-start examples, focused-help hint (`pdd <command> --help`), and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
 | `pdd --version` | Print the version, `0.1.35`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
