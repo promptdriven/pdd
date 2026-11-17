@@ -1,6 +1,6 @@
-# Test selection by PDD file names
+# Test selection by PDD file names and affected dependency graph
 
-Own `src/test-selection.mjs`: the one PDD owner of Story and test pairing by file names, selector-word resolution (`pdd test`, `pdd lint`, `pdd simulate`), and the no-tests explanation. It opens no `*.json` file to decide what is a test.
+Own `src/test-selection.mjs`: the one PDD owner of Story and test pairing by file names, selector-word resolution (`pdd test`, `pdd lint`, `pdd simulate`), affected native test selection from changed files, and the no-tests explanation. Pairings by name open no `*.json` file; affected native test selection reads source imports and scenario links only through repository or injected ports.
 
 <a id="test-name-rule"></a>
 ## Test name rule
@@ -44,9 +44,24 @@ Export `NO_TESTS` (`'No tests found. The test of Story user_stories/S.md is S.js
 - Filter `visible` by `ports.allowsPath(root, path)` and sort. Collect lines in order: `found.untested` lines, `found.orphans` lines, and `PDD prompts must end in .prompt.md: rename <path> to <path>.md.` for each `*.prompt` file. Plain `*.prompt.md` files without embedded Runtime interface blocks are valid and emit no diagnostic.
 - Return at most 5 lines; when more exist, return the first 5 followed by `…and N more`. Open no JSON file.
 
+## Affected native test selection
+
+Export synchronous `isRunnableTestPath(path)`, `classifyGlobalSuiteTrigger(changedFiles, options = {})`, `formatAffectedTestsSummary(plan)`, and `selectAffectedTests(options = {}, ports = {})` so iterative worker check and verify runs execute only affected native test files while reserving the full suite for global infrastructure changes and pre-merge verification:
+
+- **Runnable test entries (`isRunnableTestPath(path)`).** Normalize Windows `\` separators to `/` before path checks, reject absolute/drive-letter/UNC/`..` paths, and accept safe repository-relative paths outside `src/`, `node_modules/`, `.git/`, `dist/`, `build/`, `vendor/`, `fixtures/`, and `helpers/` directories whose filename matches `*.test.*` or `*.spec.*` across JavaScript and TypeScript extensions (`js`, `mjs`, `cjs`, `jsx`, `ts`, `mts`, `cts`, `tsx`).
+- **Safe global full-suite fallback (`classifyGlobalSuiteTrigger`).** Normalize `\` separators before classification and fall back to `mode: 'full'` (`selectedTests = totalTests`) ONLY when changed files cannot be determined safely, contain unsafe path traversal, or touch:
+  - `global-test-helper`: shared helper or fixture paths under `test/helpers/**`, `tests/helpers/**`, `__tests__/helpers/**`, `test/fixtures/**`, `tests/fixtures/**`, `__tests__/fixtures/**`, or root test setup preload files;
+  - `package-config`: `package.json`, lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `bun.lockb`), `pdd.json`, `pdd-bindings.json`, `tsconfig*.json`, `jsconfig.json`, `.npmrc`, `.nvmrc`, `.node-version`, or test runner config files;
+  - `core-shared-infrastructure`: CLI entrypoints under `bin/**`, shared suite runner modules (`src/test-suite-*.mjs` and their prompts), the shared runtime seam (`src/runtime-seam.mjs` and its prompt), or caller-declared `coreInfrastructure` paths.
+- **Affected graph resolution (`selectAffectedTests`).** Normalize `\` separators across `files` and `changedFiles` (defaulting to Git branch diff against `baseRef` plus working-tree changes via `ports.readChangedFiles`), discover `totalTests` from `options.files` or `ports.listFiles`, and inspect code/test files through `ports.readFile`:
+  - *Direct and stem matches:* select changed existing runnable test files directly; for changed code modules (`src/**`, `lib/**`, `app/**`), module prompts (`prompts/**/*.prompt.md`), Stories (`user_stories/**/*.md`), and scenario files, select runnable tests matching `<stem>.test.*`, `<stem>.<variant>.test.*`, or `<stem>-<suffix>.test.*` (normalizing `_` and `-` equivalents).
+  - *Reverse-import closure (`src/` -> `src/` -> `test/`):* lex JS/TS sources with comment, string, `/…/` regex-literal, and nested `` `…${…}…` `` template-interpolation awareness to extract relative `import`, `export * from`, `export { … } from`, two-statement `import … from` + `export { … }` re-exports, dynamic `import()`, `require()`/`req()`, and `new URL(..., import.meta.url)` specifiers across code modules and non-global test helper modules. Propagate transitively across affected code modules and local test helpers to runnable `test/` files; bound fan-out at untouched high-fanout dispatcher hubs (`outgoingSrcImports >= dispatcherImportThreshold`, default `12`) while bridging `export *`, aliased one- or two-statement re-exports, and shared exported symbols through hubs and local test helpers to consuming tests. When a changed production module still yields `0` selected tests, bridge through its reached dispatcher hubs (matching specific stem-part tests and hub-importing tests referencing its stem/subcommand, else direct test importers of those hubs), and fall back to `mode: 'full'` (`unmapped-code-change`) if any changed production path under `src/**`, `lib/**`, or `app/**` still resolves to `0` tests. Record unresolved relative code targets so deleted modules still select existing importers.
+  - *Prompt, Story, doc, and skill contracts:* map changed `prompts/**/*.prompt.md` to owned code modules (`Prompt:` / `Generated from` headers, `pdd-bindings.json`, and stem matches), scenario `entry_path` tests, path-referencing tests, and existing prompt contract tests (frontmatter, prompt approval, file ownership, authoring/repo hygiene lint). Map changed `user_stories/**/*.md` and scenario JSON files to paired Story/replay/formal tests, path-referencing tests, and existing Story lint/discovery contract tests. Map changed `docs/**` (and root `README.md`, `RUNBOOK.md`, `AGENTS.md`, `CLAUDE.md`) to `docs*`/`runbook*` contract tests, path-referencing tests, and guide-parity tests. Map changed `skills/**` to `*skill*`/`runbook*`/authoring/setup contract tests and path-referencing tests. Include existing `smokeTests` when supplied.
+- **Reporting (`formatAffectedTestsSummary`).** Return `{mode, selectedTests, totalTests, selectedCount, totalCount, changedFiles, smokeTests, fallbackReason, fallbackCategory, reasons, summary}` where `summary` always states `selectedCount` vs `totalCount` (`Affected tests: selected K of M test files (...)` or `Affected tests: running full suite (M of M test files; fallback: REASON).`).
+
 ## Dependencies
 
-Node `node:path` (`basename`, `posix`) supplies pure path operations.
+Node `node:path` (`basename`, `posix`), `node:fs`, and `node:child_process` (`execFileSync`) supply path operations and default local repository file/diff ports when callers omit injected `ports`.
 
 ## Caller navigation
 
@@ -55,6 +70,6 @@ Node `node:path` (`basename`, `posix`) supplies pure path operations.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"approved","prose_sha256":"3cf3678234c3237450a8d175f0b28666ab8524aefb03def3600bc8c2e87dccb3","reason":"Exposes synchronous host-bound callbacks for native Story capture and repository interface inspection alongside pure path-matching functions consumed across pdd and Runtime ports."}
+{"kind":"native-only","status":"approved","prose_sha256":"064a5219c39e034a2e383463f43759a5d1fc8a53891626a7e57b5f14a6735999","reason":"Exposes synchronous host-bound callbacks for native Story capture, repository import-graph inspection, and pure path-matching functions consumed across pdd and Runtime ports."}
 ```
 </details>
