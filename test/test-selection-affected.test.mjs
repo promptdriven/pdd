@@ -146,13 +146,18 @@ test('3065 selectAffectedTests resolves multi-hop reverse imports, stem variants
 
 test('3065 dispatcher hubs bound unrelated fan-out while bridging re-exported symbols to consuming tests', () => {
   const deps = Object.fromEntries(
-    Array.from({ length: 12 }, (_, idx) => [`src/mod-${idx}.mjs`, `export const fn${idx} = () => ${idx};\n`]),
+    Array.from({ length: 12 }, (_, idx) => [
+      `src/mod-${idx}.mjs`,
+      idx === 0 ? 'export const fn0 = () => 0;\nexport const $tag = () => "ok";\n' : `export const fn${idx} = () => ${idx};\n`,
+    ]),
   );
-  const hubImports = Array.from({ length: 12 }, (_, idx) => `import { fn${idx} } from './mod-${idx}.mjs';`).join('\n');
+  const hubImports = Array.from({ length: 12 }, (_, idx) =>
+    idx === 0 ? "import { fn0, $tag } from './mod-0.mjs';" : `import { fn${idx} } from './mod-${idx}.mjs';`,
+  ).join('\n');
   const repo = {
     ...deps,
-    'src/hub.mjs': `${hubImports}\nexport { fn0 };\nexport const runHub = () => fn1();\n`,
-    'test/uses-reexport.test.mjs': "import { fn0 } from '../src/hub.mjs';\n",
+    'src/hub.mjs': `${hubImports}\nexport { fn0, $tag };\nexport const runHub = () => fn1();\n`,
+    'test/uses-reexport.test.mjs': "import { $tag } from '../src/hub.mjs';\n",
     'test/uses-hub-only.test.mjs': "import { runHub } from '../src/hub.mjs';\n",
     'test/mod-1-direct.test.mjs': "import { fn1 } from '../src/mod-1.mjs';\n",
   };

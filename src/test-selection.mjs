@@ -347,6 +347,8 @@ function resolveRelativeTarget(fromFile, specifier, fileSet) {
   return posix.extname(basename(joined)) ? joined : null;
 }
 
+const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 function extractExportedSymbols(source) {
   const symbols = new Set();
   for (const match of source.matchAll(/\bexport\s+(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g)) {
@@ -784,7 +786,7 @@ export function selectAffectedTests(options = {}, ports = {}) {
         if (curExports?.size && hubExports?.size) {
           const reexported = [...curExports].filter(sym => hubExports.has(sym));
           if (reexported.length) {
-            const symRe = new RegExp(`\\b(?:${reexported.map(s => s.replace(/\$/g, '\\$')).join('|')})\\b`);
+            const symRe = new RegExp(`(?<![A-Za-z0-9_$])(?:${reexported.map(escapeRegExp).join('|')})(?![A-Za-z0-9_$])`);
             for (const hubImporter of reverseImporters.get(importer) ?? []) {
               if (totalTestSet.has(hubImporter) && symRe.test(testSources.get(hubImporter) ?? '')) {
                 addTest(hubImporter, `${originReason}->${importer}`);
