@@ -628,7 +628,7 @@ const BASE_SRC_CATALOG = [
   'src/issue-sort-github.mjs', 'src/issue-sort.mjs', 'src/lint-call-preflight.mjs', 'src/login-pool.mjs', 'src/machine-guard.mjs', 'src/machine-resources.mjs',
   'src/metrics-capture.mjs', 'src/metrics-command.mjs', 'src/metrics-gap.mjs', 'src/metrics-hooks.mjs', 'src/metrics-model.mjs',
   'src/metrics-store.mjs', 'src/path-diagnostic.mjs', 'src/pdd-cli.mjs', 'src/process-lifecycle.mjs', 'src/product-composition.mjs',
-  'src/product.mjs', 'src/project-files.mjs', 'src/project-setup.mjs', 'src/prompt-approve.mjs', 'src/release-notice.mjs', 'src/runtime-binding-plan.mjs',
+  'src/product.mjs', 'src/project-files.mjs', 'src/project-setup.mjs', 'src/prompt-approve.mjs', 'src/release-notice.mjs', 'src/repo-hygiene-lint.mjs', 'src/runtime-binding-plan.mjs',
   'src/runtime-bindings.mjs', 'src/runtime-check-plan.mjs', 'src/runtime-client.mjs', 'src/runtime-lint-receipt.mjs', 'src/runtime-markdown.mjs',
   'src/runtime-outcome.mjs', 'src/runtime-output.mjs', 'src/runtime-preflight.mjs', 'src/runtime-slots.mjs', 'src/runtime-workspace-migration.mjs',
   'src/runtime-workspace.mjs', 'src/scenario-json.mjs', 'src/screen-compare.mjs', 'src/screen-design-check.mjs', 'src/setup-interaction.mjs', 'src/skills-install.mjs',
@@ -644,54 +644,56 @@ const BASE_SRC_CATALOG = [
 // (moving askAgent to src/runtime/agent-ask.mjs drops agent-packet and preflight from entries
 // that previously loaded them solely via src/agent-adapters.mjs).
 const RECORDED_BASE_ENTRIES = {
-  'cli:--help': [0,2,12,31,33,59,60,65,68,74,75,79,83,84,94,95,108],
-  'cli:help-topic': [0,2,12,31,33,59,60,65,68,74,75,79,83,84,94,95,108],
-  'cli:--version': [0,2,12,31,33,59,60,65,68,74,75,79,83,84,94,95,108],
-  'cli:completion': [0,2,12,31,33,59,60,65,68,74,75,79,83,84,94,95,108],
-  'cli:setup': [0,2,7,10,12,29,31,33,36,38,53,55,56,58,59,60,65,68,74,75,79,83,84,89,94,95,96,98,100,107,108,113],
-  'cli:files': [0,2,12,31,33,34,59,60,64,65,68,73,74,75,76,79,80,83,84,94,95,108],
-  'cli:owner': [0,2,12,31,33,34,37,59,60,65,68,73,74,75,76,79,80,83,84,94,95,108],
-  'cli:approve': [0,2,11,12,31,33,34,37,59,60,65,66,68,73,74,75,76,79,80,83,84,85,94,95,108],
-  'cli:test': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:lint': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:simulate': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:contracts': [0,2,10,11,12,14,16,19,23,29,31,33,34,35,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:contracts-sync': [0,2,10,11,12,14,16,19,23,29,31,33,34,35,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:jobs': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:mcp': [0,2,6,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:metrics': [0,2,10,12,31,33,36,38,53,54,55,56,57,58,59,60,65,68,74,75,79,83,84,89,94,95,96,98,100,107,108,113],
-  'cli:graph': [0,2,10,12,14,19,23,29,31,33,36,38,41,43,44,45,46,47,48,52,53,55,56,58,59,60,65,68,74,75,79,83,84,88,89,93,94,95,96,97,98,100,107,108,113],
-  'cli:dependencies-prepare': [0,2,10,12,14,19,23,29,31,33,36,38,41,42,43,46,47,48,52,53,55,56,58,59,60,65,68,74,75,79,83,84,88,89,93,94,95,96,97,98,100,107,108,113],
-  'cli:dependencies-complete': [0,2,10,12,14,19,23,29,31,33,36,38,41,42,43,46,47,48,52,53,55,56,58,59,60,65,68,74,75,79,83,84,88,89,93,94,95,96,97,98,100,107,108,113],
-  'cli:product-status': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:product-next': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:product-start': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:workflow-list': [0,2,12,31,33,59,60,65,68,74,75,79,83,84,94,95,108],
-  'cli:workflow-status': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:workflow-run': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:workflow-done': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:workflow-publish': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:workflow-view': [0,2,10,11,12,31,33,34,36,37,53,55,56,58,59,60,65,68,70,73,74,75,76,79,80,83,84,89,94,95,96,98,100,102,103,105,107,108,111,113],
-  'cli:workflow-cost': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:workflow-prove': [0,2,10,12,31,33,36,53,55,56,58,59,60,65,68,74,75,79,83,84,89,94,95,96,98,100,103,107,108,113],
-  'cli:autopilot-status': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,33,34,36,37,38,41,43,46,47,48,49,50,51,52,53,55,56,58,59,60,61,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:autopilot-doctor': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,33,34,36,37,38,41,43,46,47,48,49,50,51,52,53,55,56,58,59,60,61,62,63,65,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,83,84,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:autopilot-regressions': [0,2,12,24,31,33,36,38,59,60,65,68,74,75,79,83,84,94,95,108,113],
-  'cli:autopilot-alerts': [0,2,10,11,12,13,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,68,70,73,74,75,76,79,80,83,84,85,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,112,113],
-  'cli:autopilot-off': [0,2,12,29,31,33,36,38,59,60,65,68,74,75,79,83,84,94,95,108],
-  'child:workflow-worker-completion': [0,2,10,36,53,55,56,58,79,89,94,96,98,100,107,112,113],
-  'child:workflow-replay-selector': [34,68,73,76,79,80],
-  'child:try-doors-launcher': [0,2,10,11,14,16,19,23,29,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,90,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
+  'cli:--help': [0,2,12,31,33,59,60,65,69,75,76,80,84,85,95,96,109],
+  'cli:help-topic': [0,2,12,31,33,59,60,65,69,75,76,80,84,85,95,96,109],
+  'cli:--version': [0,2,12,31,33,59,60,65,69,75,76,80,84,85,95,96,109],
+  'cli:completion': [0,2,12,31,33,59,60,65,69,75,76,80,84,85,95,96,109],
+  'cli:setup': [0,2,7,10,12,29,31,33,36,38,53,55,56,58,59,60,65,69,75,76,80,84,85,90,95,96,97,99,101,108,109,114],
+  'cli:files': [0,2,12,31,33,34,59,60,64,65,69,74,75,76,77,80,81,84,85,95,96,109],
+  'cli:owner': [0,2,12,31,33,34,37,59,60,65,69,74,75,76,77,80,81,84,85,95,96,109],
+  'cli:approve': [0,2,11,12,31,33,34,37,59,60,65,66,69,74,75,76,77,80,81,84,85,86,95,96,109],
+  'cli:test': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:lint': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,68,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:simulate': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:contracts': [0,2,10,11,12,14,16,19,23,29,31,33,34,35,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:contracts-sync': [0,2,10,11,12,14,16,19,23,29,31,33,34,35,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:jobs': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:mcp': [0,2,6,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:metrics': [0,2,10,12,31,33,36,38,53,54,55,56,57,58,59,60,65,69,75,76,80,84,85,90,95,96,97,99,101,108,109,114],
+  'cli:graph': [0,2,10,12,14,19,23,29,31,33,36,38,41,43,44,45,46,47,48,52,53,55,56,58,59,60,65,69,75,76,80,84,85,89,90,94,95,96,97,98,99,101,108,109,114],
+  'cli:dependencies-prepare': [0,2,10,12,14,19,23,29,31,33,36,38,41,42,43,46,47,48,52,53,55,56,58,59,60,65,69,75,76,80,84,85,89,90,94,95,96,97,98,99,101,108,109,114],
+  'cli:dependencies-complete': [0,2,10,12,14,19,23,29,31,33,36,38,41,42,43,46,47,48,52,53,55,56,58,59,60,65,69,75,76,80,84,85,89,90,94,95,96,97,98,99,101,108,109,114],
+  'cli:product-status': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:product-next': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:product-start': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,59,60,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:workflow-list': [0,2,12,31,33,59,60,65,69,75,76,80,84,85,95,96,109],
+  'cli:workflow-status': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,69,71,74,75,76,77,80,81,84,85,86,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:workflow-run': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,69,71,74,75,76,77,80,81,84,85,86,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:workflow-done': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,69,71,74,75,76,77,80,81,84,85,86,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:workflow-publish': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,69,71,74,75,76,77,80,81,84,85,86,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:workflow-view': [0,2,10,11,12,31,33,34,36,37,53,55,56,58,59,60,65,69,71,74,75,76,77,80,81,84,85,90,95,96,97,99,101,103,104,106,108,109,112,114],
+  'cli:workflow-cost': [0,2,10,11,12,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,69,71,74,75,76,77,80,81,84,85,86,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:workflow-prove': [0,2,10,12,31,33,36,53,55,56,58,59,60,65,69,75,76,80,84,85,90,95,96,97,99,101,104,108,109,114],
+  'cli:autopilot-status': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,33,34,36,37,38,41,43,46,47,48,49,50,51,52,53,55,56,58,59,60,61,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:autopilot-doctor': [0,2,5,10,11,12,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,33,34,36,37,38,41,43,46,47,48,49,50,51,52,53,55,56,58,59,60,61,62,63,65,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,84,85,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:autopilot-regressions': [0,2,12,24,31,33,36,38,59,60,65,69,75,76,80,84,85,95,96,109,114],
+  'cli:autopilot-alerts': [0,2,10,11,12,13,14,16,19,23,29,31,33,34,36,37,38,41,43,46,47,48,52,53,55,56,58,59,60,65,66,69,71,74,75,76,77,80,81,84,85,86,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,113,114],
+  'cli:autopilot-off': [0,2,12,29,31,33,36,38,59,60,65,69,75,76,80,84,85,95,96,109],
+  'child:workflow-worker-completion': [0,2,10,36,53,55,56,58,80,90,95,97,99,101,108,113,114],
+  'child:workflow-replay-selector': [34,69,74,77,80,81],
+  'child:try-doors-launcher': [0,2,10,11,14,16,19,23,29,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,86,87,89,90,91,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,110,111,113,114],
   'child:scripts/autopilot-smoke.mjs': [],
   'child:scripts/route-runtime-issues.mjs': [],
-  'tick:autopilot-launcher': [0,2,5,10,11,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,34,36,37,38,41,43,46,47,48,49,50,51,52,53,55,56,58,59,61,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
-  'lib:svg-layout.mjs': [79,82,86],
-  'lib:prompt-approve.mjs': [11,34,37,66,68,73,76,79,80,85],
-  'lib:file-owner.mjs': [34,37,68,73,76,79,80],
-  'lib:agent-adapters.mjs': [0,2,79],
-  'lib:product.mjs': [0,2,10,11,14,16,19,23,29,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
-  'lib:autopilot-doctor.mjs': [0,2,10,11,14,16,18,19,23,29,30,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,68,69,70,71,72,73,74,75,76,77,79,80,81,82,85,86,88,89,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,109,110,112,113],
+  'tick:autopilot-launcher': [0,2,5,10,11,13,14,15,16,17,18,19,21,22,23,25,26,27,29,30,31,34,36,37,38,41,43,46,47,48,49,50,51,52,53,55,56,58,59,61,62,63,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,110,111,113,114],
+  'lib:svg-layout.mjs': [80,83,87],
+  'lib:prompt-approve.mjs': [11,34,37,66,69,74,77,80,81,86],
+  'lib:file-owner.mjs': [34,37,69,74,77,80,81],
+  'lib:agent-adapters.mjs': [0,2,80],
+  'lib:product.mjs': [0,2,10,11,14,16,19,23,29,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,110,111,113,114],
+  'lib:autopilot-doctor.mjs': [0,2,10,11,14,16,18,19,23,29,30,31,34,36,37,38,41,43,46,47,48,49,52,53,55,56,58,62,63,66,69,70,71,72,73,74,75,76,77,78,80,81,82,83,86,87,89,90,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,110,111,113,114],
 };
+const RUNTIME_OUTPUT_PURE_LEAVES = ['src/lint-compatibility-display.mjs'];
+const RUNTIME_CLIENT_PURE_LEAVES = ['src/try-session.mjs'];
 
 test('SEAM5 (R2-3): every CLI command family, child entry, Autopilot tick and library entry matches recorded base module sets, cycles and guarded load failures', async t => {
   const { execFile, execFileSync, spawnSync } = await import('node:child_process');
@@ -827,6 +829,16 @@ registerHooks({
   }
   const novelStaticCycles = findTarjanCycles(staticAdj).filter(c => !ALLOWED_BASE_CYCLES.has(c));
   assert.deepEqual(novelStaticCycles, [], `unexpected new static import cycle: ${novelStaticCycles.join('; ')}`);
+  for (const [parent, leaves] of [
+    ['src/runtime/runtime-output.mjs', RUNTIME_OUTPUT_PURE_LEAVES],
+    ['src/runtime/runtime-client.mjs', RUNTIME_CLIENT_PURE_LEAVES],
+  ]) {
+    for (const leaf of leaves) {
+      const runtimeLeaf = `src/runtime/${leaf.slice('src/'.length)}`;
+      assert.ok(staticAdj.get(parent)?.has(runtimeLeaf), `${leaf} must remain a ${parent} dependency`);
+      assert.deepEqual([...staticAdj.get(runtimeLeaf) ?? []], [], `${leaf} must remain a pure leaf`);
+    }
+  }
 
   const ASYNC_SEAM_BRIDGE_PROBES = new Set([
     'cli:test', 'cli:lint', 'cli:simulate', 'cli:contracts', 'cli:contracts-sync',
@@ -982,7 +994,12 @@ registerHooks({
     const chunk = probes.slice(i, i + 8);
     const probeBatch = await Promise.all(chunk.map(([key, args, cwd]) => runProbe(key, args, cwd)));
     chunk.forEach(([key], idx) => {
-      const expected = RECORDED_BASE_ENTRIES[key].map(n => BASE_SRC_CATALOG[n]);
+      const baseExpected = RECORDED_BASE_ENTRIES[key].map(n => BASE_SRC_CATALOG[n]);
+      const expected = [
+        ...baseExpected,
+        ...(baseExpected.includes('src/runtime-output.mjs') ? RUNTIME_OUTPUT_PURE_LEAVES : []),
+        ...(baseExpected.includes('src/runtime-client.mjs') ? RUNTIME_CLIENT_PURE_LEAVES : []),
+      ].sort();
       const { loaded, cycles } = probeBatch[idx];
       assert.deepEqual(loaded, expected, `loaded modules mismatch for ${key}`);
       if (ACYCLIC_ENTRIES.has(key)) {
@@ -2305,7 +2322,8 @@ test('SEAM17 (S3): stateless header reader in runtime-check-plan matches file-ow
 
 test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy loading and binds all host ports on runtime-seam', async t => {
   const { execFileSync, spawnSync } = await import('node:child_process');
-  const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } = await import('node:fs');
+  const { createHash } = await import('node:crypto');
   const { tmpdir } = await import('node:os');
   const { pathToFileURL } = await import('node:url');
 
@@ -2408,6 +2426,10 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
   assert.equal(seam.workspace, index.workspace);
   assert.equal(seam.version, index.version);
   assert.equal(seam.exactValue, index.exactValue);
+  for (const name of ['evaluateCheckBudget', 'failedCheckCount', 'providerText']) {
+    assert.equal(seam[name], index[name], `seam.${name} must directly expose the pure Runtime binding`);
+  }
+  assert.notEqual(seam.observeTryCall, index.observeTryCall, 'seam.observeTryCall must bind host selection ports');
 
   // Reproduce Claude M3-3 probe: seam.health must register gh token into host secret-redaction registry.
   const markerToken = `ghp_seam18HealthSecretMarker${Date.now()}xyz987654321`;
@@ -2421,6 +2443,63 @@ test('SEAM18 (M3-1, M3-2, M3-3): section 4.1 API keeps zero-static-import lazy l
     },
   );
   assert.equal(redactSecrets(`token=${markerToken}`), 'token=[redacted]');
+
+  // A saved Try observation signs in too, so its synthetic token must reach the
+  // same host registry as every other seam Runtime entry point.
+  const observeState = mkdtempSync(join(tmpdir(), 'pdd-seam18-observe-'));
+  t.after(() => rmSync(observeState, { recursive: true, force: true }));
+  const observeRoot = realpathSync(root);
+  const observeTryId = '11111111-1111-4111-8111-111111111111';
+  const observeRunId = '22222222-2222-4222-8222-222222222222';
+  const observeOrigin = 'http://127.0.0.1:45678';
+  const observeToken = 'synthetic-observer-token-unique-20261115';
+  const observeRepoKey = createHash('sha256').update(observeRoot).digest('hex').slice(0, 16);
+  mkdirSync(join(observeState, 'repos'), { recursive: true });
+  writeFileSync(
+    join(observeState, 'repos', `${observeRepoKey}.json`),
+    JSON.stringify({
+      root: observeRoot,
+      last_batch: null,
+      tries: {
+        'tests/__stopped__.json': {
+          id: observeTryId,
+          origin: observeOrigin,
+          login: 'fixture',
+          story: 'stopped',
+          storyPath: '',
+        },
+      },
+    }),
+  );
+  const observation = await seam.observeTryCall(
+    { cwd: observeRoot, tryId: observeTryId, runId: observeRunId },
+    {
+      env: { ...process.env, PDD_STATE_DIR: observeState, PDD_RUNTIME_URL: observeOrigin },
+      gh: args => (args[0] === 'auth'
+        ? { status: 0, stdout: observeToken }
+        : { status: 0, stdout: 'fixture 1' }),
+      fetch: async (url, init) => {
+        assert.equal(String(url), `${observeOrigin}/v1/try/${observeTryId}/calls/${observeRunId}/observation`);
+        assert.equal(init.method, 'GET');
+        assert.equal(init.headers.Authorization, `Bearer ${observeToken}`);
+        return new Response(
+          JSON.stringify({
+            session_id: observeTryId,
+            request_id: observeRunId,
+            action_id: 'act',
+            state: 'passed',
+            session_state: 'running',
+            source_sha256: null,
+            server_commit: null,
+            engine_sha: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      },
+    },
+  );
+  assert.equal(observation.state, 'passed');
+  assert.equal(redactSecrets(`marker:${observeToken}`), 'marker:[redacted]');
 
   // seam.lint({ root, local: true }) binds lintSvgLayouts and selection ports (whereas index.lint throws unboundPort).
   const tmp = mkdtempSync(join(tmpdir(), 'pdd-seam18-'));
@@ -2701,4 +2780,1478 @@ test('SEAM24: no file under test/ outside test/runtime-seam.test.mjs imports or 
   assert.ok(findSeamViolations('test/example.test.mjs', "import { runCheck } from '../src/runtime/runtime-client.mjs';\n").length > 0);
   assert.ok(findSeamViolations('test/helpers/example.mjs', "const m = await import('../../src/runtime/index.mjs');\n").length > 0);
   assert.ok(findSeamViolations('test/example.test.mjs', "import { runCheck } from '@promptdriven/runtime-client';\n").length > 0);
+});
+
+test('SEAM25: runtime client uses the exact public npm release', () => {
+  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const lockfile = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
+  const name = '@promptdriven/runtime-client';
+  const locked = lockfile.packages[`node_modules/${name}`];
+  assert.equal(manifest.dependencies[name], '1.0.0');
+  assert.equal(lockfile.packages[''].dependencies[name], '1.0.0');
+  assert.equal(locked.version, '1.0.0');
+  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.0\.0\.tgz$/);
+  assert.match(locked.integrity, /^sha512-/);
+  assert.doesNotMatch(locked.resolved, /^(?:github:|git\+)/);
+});
+
+function skipBalanced(text, start, openChar, closeChar) {
+  let depth = 0;
+  let i = start;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "'" || c === '"' || c === '`') {
+      i++;
+      while (i < text.length && text[i] !== c) {
+        if (text[i] === '\\') i += 2;
+        else i++;
+      }
+      i++;
+      continue;
+    }
+    if (c === openChar) depth++;
+    else if (c === closeChar) {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+    i++;
+  }
+  return text.length;
+}
+
+function splitTopLevelCommas(text) {
+  const parts = [];
+  let depthParen = 0;
+  let depthBrace = 0;
+  let depthBracket = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "'" || c === '"' || c === '`') {
+      i++;
+      while (i < text.length && text[i] !== c) {
+        if (text[i] === '\\') i += 2;
+        else i++;
+      }
+      continue;
+    }
+    if (c === '(') depthParen++;
+    else if (c === ')') depthParen = Math.max(0, depthParen - 1);
+    else if (c === '{') depthBrace++;
+    else if (c === '}') depthBrace = Math.max(0, depthBrace - 1);
+    else if (c === '[') depthBracket++;
+    else if (c === ']') depthBracket = Math.max(0, depthBracket - 1);
+    else if (c === ',' && depthParen === 0 && depthBrace === 0 && depthBracket === 0) {
+      parts.push(text.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  const tail = text.slice(start).trim();
+  if (tail) parts.push(tail);
+  return parts;
+}
+
+function escapeRe(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function maskStringsPreservingOffsets(text) {
+  const chars = text.split('');
+  for (const lit of stringLiterals(text)) {
+    for (let i = lit.start; i < lit.end && i < chars.length; i++) {
+      if (chars[i] !== '\n') chars[i] = ' ';
+    }
+  }
+  return chars.join('');
+}
+
+function unquoteModuleExportName(token) {
+  const trimmed = token?.trim() ?? '';
+  const quoted = trimmed.match(/^(['"])([\s\S]*)\1$/);
+  return quoted ? decodeJsEscapes(quoted[2]) : trimmed;
+}
+
+function parseImportExportSpecifiers(braceInner) {
+  const items = [];
+  for (const raw of splitTopLevelCommas(braceInner)) {
+    const item = raw.trim();
+    if (!item) continue;
+    const asMatch = item.match(/^([\s\S]+?)\s+as\s+([\s\S]+)$/);
+    const imported = unquoteModuleExportName(asMatch ? asMatch[1] : item);
+    const local = unquoteModuleExportName(asMatch ? asMatch[2] : item);
+    if (imported && local) items.push({ imported, local });
+  }
+  return items;
+}
+
+function parseDestructureEntries(braceInner) {
+  const entries = [];
+  for (const raw of splitTopLevelCommas(braceInner)) {
+    const item = raw.trim();
+    if (!item) continue;
+    if (item.startsWith('...')) {
+      const rest = item.slice(3).trim();
+      if (/^[A-Za-z0-9_$]+$/.test(rest)) entries.push({ rest });
+      continue;
+    }
+    const colonIdx = item.indexOf(':');
+    const eqIdx = item.indexOf('=');
+    if (colonIdx > 0 && (eqIdx < 0 || colonIdx < eqIdx)) {
+      const imported = unquoteModuleExportName(item.slice(0, colonIdx));
+      const local = item.slice(colonIdx + 1).split('=')[0].trim();
+      if (imported && /^[A-Za-z0-9_$]+$/.test(local)) entries.push({ imported, local });
+    } else {
+      const local = item.split('=')[0].trim();
+      if (/^[A-Za-z0-9_$]+$/.test(local)) entries.push({ imported: local, local });
+    }
+  }
+  return entries;
+}
+
+function resolveRelModule(fromMod, spec) {
+  if (!spec.startsWith('.')) return null;
+  return posix.normalize(posix.join(posix.dirname(fromMod), spec));
+}
+
+function extractFlagLiterals(text) {
+  const out = [];
+  for (const m of text.matchAll(/(['"`])([^'"`\r\n\\]*(?:\\.[^'"`\r\n\\]*)*)\1/g)) {
+    if (m[1] === '`' && m[2].includes('${')) continue;
+    const decoded = decodeJsEscapes(m[2]);
+    if (/^--[a-z0-9-]+$/.test(decoded)) out.push(decoded);
+  }
+  return out;
+}
+
+function collectFlagBindings(text, inherited = new Map()) {
+  const map = new Map(inherited);
+  for (const m of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(['"`])([^'"`\r\n\\]*(?:\\.[^'"`\r\n\\]*)*)\2/g)) {
+    const decoded = decodeJsEscapes(m[3]);
+    if (/^--[a-z0-9-]+$/.test(decoded)) map.set(m[1], [decoded]);
+  }
+  const initPattern = /\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:new\s+(?:Set|Map)\s*\(\s*)?(?:Object\.freeze\s*\(\s*)?([\[{])/g;
+  let m;
+  while ((m = initPattern.exec(text)) !== null) {
+    const open = m.index + m[0].length - 1;
+    const close = skipBalanced(text, open, m[2], m[2] === '[' ? ']' : '}');
+    const flags = extractFlagLiterals(text.slice(open + 1, close - 1));
+    if (flags.length > 0) map.set(m[1], flags);
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const aliasMatch of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*([A-Za-z0-9_$]+(?:\.[A-Za-z0-9_$]+)?)\s*(?:\[|;|\n|$)/g)) {
+      if (!map.has(aliasMatch[1]) && map.has(aliasMatch[2])) {
+        map.set(aliasMatch[1], map.get(aliasMatch[2]));
+        changed = true;
+      }
+    }
+  }
+  return map;
+}
+
+function expandScopeModuleBindings(text, modPath, initialNs, initialFn, localFunctions = new Map(), sliceNs = new Map()) {
+  const nsMap = new Map(initialNs);
+  const fnMap = new Map(initialFn);
+  const handledImportOffsets = new Set();
+
+  for (const m of text.matchAll(/(?:(?:const|let|var)\s+)?([A-Za-z0-9_$]+)\s*=\s*(?:await\s+)?(import|req|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    handledImportOffsets.add(m.index + m[0].indexOf(m[2]));
+    const target = resolveRelModule(modPath, m[3]);
+    if (target) nsMap.set(m[1], target);
+  }
+  for (const m of text.matchAll(/(?:(?:const|let|var)\s+)?\{([^{}]*)\}\s*=\s*(?:await\s+)?(import|req|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    handledImportOffsets.add(m.index + m[0].indexOf(m[2]));
+    const target = resolveRelModule(modPath, m[3]);
+    if (!target) continue;
+    for (const entry of parseDestructureEntries(m[1])) {
+      if (entry.rest) nsMap.set(entry.rest, target);
+      else fnMap.set(entry.local, { mod: target, fn: entry.imported });
+    }
+  }
+  for (const m of text.matchAll(/\b(import|req|require)\s*\(\s*['"]([^'"]+)['"]\s*\)\s*\.\s*then\s*\(\s*(?:async\s+)?(?:\(\s*\{([^{}]*)\}\s*\)|(?:\(\s*)?([A-Za-z0-9_$]+)\s*\)?)\s*=>/g)) {
+    handledImportOffsets.add(m.index + m[0].indexOf(m[1]));
+    const target = resolveRelModule(modPath, m[2]);
+    if (!target) continue;
+    if (m[3] !== undefined) {
+      for (const entry of parseDestructureEntries(m[3])) {
+        if (entry.rest) nsMap.set(entry.rest, target);
+        else fnMap.set(entry.local, { mod: target, fn: entry.imported });
+      }
+    } else if (m[4]) {
+      nsMap.set(m[4], target);
+    }
+  }
+  for (const [sliceFnName, target] of sliceNs) {
+    const escapedSlice = escapeRe(sliceFnName);
+    for (const m of text.matchAll(new RegExp(`(?:(?:const|let|var)\\s+)?([A-Za-z0-9_$]+)\\s*=\\s*(?:await\\s+)?${escapedSlice}\\s*\\(\\s*\\)`, 'g'))) {
+      nsMap.set(m[1], target);
+    }
+    for (const m of text.matchAll(new RegExp(`(?:(?:const|let|var)\\s+)?\\{([^{}]*)\\}\\s*=\\s*(?:await\\s+)?${escapedSlice}\\s*\\(\\s*\\)`, 'g'))) {
+      for (const entry of parseDestructureEntries(m[1])) {
+        if (entry.rest) nsMap.set(entry.rest, target);
+        else fnMap.set(entry.local, { mod: target, fn: entry.imported });
+      }
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const m of text.matchAll(/\b(?:(?:const|let|var)\s+)?([A-Za-z0-9_$]+)\s*=\s*([A-Za-z0-9_$]+)(?=\s*[;,\n)])/g)) {
+      const [, lhs, rhs] = m;
+      if (nsMap.has(rhs) && !nsMap.has(lhs)) {
+        nsMap.set(lhs, nsMap.get(rhs));
+        changed = true;
+      } else if (!fnMap.has(lhs) && !localFunctions.has(lhs)) {
+        if (localFunctions.has(rhs)) {
+          fnMap.set(lhs, { mod: modPath, fn: rhs });
+          changed = true;
+        } else if (fnMap.has(rhs)) {
+          fnMap.set(lhs, fnMap.get(rhs));
+          changed = true;
+        }
+      }
+    }
+    for (const [nsVar, target] of [...nsMap.entries()]) {
+      const escNs = escapeRe(nsVar);
+      for (const m of text.matchAll(new RegExp(`\\{([^{}]*)\\}\\s*=\\s*${escNs}\\b`, 'g'))) {
+        for (const entry of parseDestructureEntries(m[1])) {
+          if (entry.rest && !nsMap.has(entry.rest)) {
+            nsMap.set(entry.rest, target);
+            changed = true;
+          } else if (entry.local && !fnMap.has(entry.local)) {
+            fnMap.set(entry.local, { mod: target, fn: entry.imported });
+            changed = true;
+          }
+        }
+      }
+      for (const m of text.matchAll(new RegExp(`\\b(?:(?:const|let|var)\\s+)?([A-Za-z0-9_$]+)\\s*=\\s*${escNs}\\s*(?:\\?\\.)?(?:\\.\\s*([A-Za-z0-9_$]+)|\\s*\\[\\s*(['"\`])([^'"\`\\r\\n\\\\]+)\\3\\s*\\])`, 'g'))) {
+        const prop = m[2] ?? decodeJsEscapes(m[4]);
+        if (prop && !fnMap.has(m[1])) {
+          fnMap.set(m[1], { mod: target, fn: prop });
+          changed = true;
+        }
+      }
+    }
+  }
+  return { nsMap, fnMap, handledImportOffsets };
+}
+
+function parseRuntimeModuleInfo(modPath, rawSource) {
+  const source = stripCommentsPreservingLines(rawSource);
+  const masked = maskStringsPreservingOffsets(source);
+  const importedFn = new Map();
+  const importedNs = new Map();
+  const reExportStars = [];
+  const reExportNs = new Map();
+  const handledStaticImportOffsets = new Set();
+  const handledReExportOffsets = new Set();
+
+  // Side-effect static imports: import './setup.mjs'
+  for (const m of source.matchAll(/(?<![.\w$])import\s*['"]([^'"]+)['"]/g)) {
+    handledStaticImportOffsets.add(m.index);
+  }
+  // Combined default + named static imports: import fallback, { a, b as c } from './mod.mjs'
+  for (const m of source.matchAll(/(?<![.\w$])import\s+([A-Za-z0-9_$]+)\s*,\s*\{([^{}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+    handledStaticImportOffsets.add(m.index);
+    const target = resolveRelModule(modPath, m[3]);
+    if (!target) continue;
+    importedFn.set(m[1], { mod: target, fn: 'default' });
+    for (const spec of parseImportExportSpecifiers(m[2])) {
+      importedFn.set(spec.local, { mod: target, fn: spec.imported });
+    }
+  }
+  // Combined default + namespace static imports: import fallback, * as ns from './mod.mjs'
+  for (const m of source.matchAll(/(?<![.\w$])import\s+([A-Za-z0-9_$]+)\s*,\s*\*\s*as\s+([A-Za-z0-9_$]+)\s+from\s*['"]([^'"]+)['"]/g)) {
+    handledStaticImportOffsets.add(m.index);
+    const target = resolveRelModule(modPath, m[3]);
+    if (!target) continue;
+    importedFn.set(m[1], { mod: target, fn: 'default' });
+    importedNs.set(m[2], target);
+  }
+  // Default-only static imports: import fallback from './mod.mjs'
+  for (const m of source.matchAll(/(?<![.\w$])import\s+([A-Za-z0-9_$]+)\s+from\s*['"]([^'"]+)['"]/g)) {
+    handledStaticImportOffsets.add(m.index);
+    const target = resolveRelModule(modPath, m[2]);
+    if (target) importedFn.set(m[1], { mod: target, fn: 'default' });
+  }
+  // Namespace-only static imports: import * as ns from './mod.mjs'
+  for (const m of source.matchAll(/(?<![.\w$])import\s*\*\s*as\s+([A-Za-z0-9_$]+)\s+from\s*['"]([^'"]+)['"]/g)) {
+    handledStaticImportOffsets.add(m.index);
+    const target = resolveRelModule(modPath, m[2]);
+    if (target) importedNs.set(m[1], target);
+  }
+  // Named-only static imports: import { a, b as c } from './mod.mjs'
+  for (const m of source.matchAll(/(?<![.\w$])import\s*\{([^{}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+    handledStaticImportOffsets.add(m.index);
+    const target = resolveRelModule(modPath, m[2]);
+    if (!target) continue;
+    for (const spec of parseImportExportSpecifiers(m[1])) {
+      importedFn.set(spec.local, { mod: target, fn: spec.imported });
+    }
+  }
+
+  // Fail closed on any unrecognized static import syntax anywhere in the module.
+  for (const hit of masked.matchAll(/(?<![.\w$])import\b/g)) {
+    const tail = masked.slice(hit.index + 6);
+    if (/^\s*(?:\.\s*meta\b|\(|:)/.test(tail)) continue;
+    if (!handledStaticImportOffsets.has(hit.index)) {
+      assert.fail(`SEAM26 encountered unrecognized static import syntax in ${modPath}`);
+    }
+  }
+
+  // Re-export forms: export * from, export * as ns from, export { ... } from
+  for (const m of source.matchAll(/(?<![.\w$])export\s*\*\s*from\s*['"]([^'"]+)['"]/g)) {
+    handledReExportOffsets.add(m.index);
+    const target = resolveRelModule(modPath, m[1]);
+    if (target) reExportStars.push(target);
+  }
+  for (const m of source.matchAll(/(?<![.\w$])export\s*\*\s*as\s+([A-Za-z0-9_$]+)\s+from\s*['"]([^'"]+)['"]/g)) {
+    handledReExportOffsets.add(m.index);
+    const target = resolveRelModule(modPath, m[2]);
+    if (target) reExportNs.set(m[1], target);
+  }
+  for (const m of source.matchAll(/(?<![.\w$])export\s*\{([^{}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+    handledReExportOffsets.add(m.index);
+    const target = resolveRelModule(modPath, m[2]);
+    if (!target) continue;
+    for (const spec of parseImportExportSpecifiers(m[1])) {
+      importedFn.set(spec.local, { mod: target, fn: spec.imported });
+    }
+  }
+  for (const hit of masked.matchAll(/(?<![.\w$])export\s+(?:\*(?:\s+as\s+[A-Za-z0-9_$]+)?|\{[^{}]*\})\s+from\b/g)) {
+    if (!handledReExportOffsets.has(hit.index)) {
+      assert.fail(`SEAM26 encountered unrecognized re-export syntax in ${modPath}`);
+    }
+  }
+
+  const defaultConstMatch = source.match(/\bexport\s+default\s+([A-Za-z0-9_$]+)\s*;?/);
+  const defaultExportBinding = defaultConstMatch ? defaultConstMatch[1] : null;
+
+  const functions = new Map();
+  const sliceNs = new Map();
+  const fnDecl = /^\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?function(?:\s*\*)?(?:\s+([A-Za-z0-9_$]+))?\s*\(/gm;
+  let match;
+  while ((match = fnDecl.exec(source)) !== null) {
+    const isDefault = /\bexport\s+default\b/.test(match[0]);
+    const name = match[1] ?? (isDefault ? 'default' : null);
+    if (!name) continue;
+    const openParen = source.indexOf('(', match.index);
+    const closeParen = skipBalanced(source, openParen, '(', ')');
+    const paramsText = source.slice(openParen + 1, closeParen - 1);
+    const rest = source.slice(closeParen);
+    const braceOffset = rest.search(/\{/);
+    if (braceOffset < 0) continue;
+    const openBrace = closeParen + braceOffset;
+    const closeBrace = skipBalanced(source, openBrace, '{', '}');
+    const body = source.slice(openBrace + 1, closeBrace - 1);
+    const entry = { name, params: splitTopLevelCommas(paramsText), body };
+    functions.set(name, entry);
+    if (isDefault) functions.set('default', entry);
+    const sliceHit = entry.params.length === 0
+      ? body.match(/^\s*return\s+\(?\s*(?:[A-Za-z0-9_$]+\s*\?\?=\s*)?(?:await\s+)?(?:import|req|require)\s*\(\s*['"]([^'"]+)['"]\s*\)\s*\)?\s*;?\s*$/)
+      : null;
+    if (sliceHit) {
+      const target = resolveRelModule(modPath, sliceHit[1]);
+      if (target) sliceNs.set(name, target);
+    }
+  }
+
+  // Function expressions assigned to variables or default export: export const fn = function(...) { ... }
+  const fnExprDecl = /^\s*(?:(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*|export\s+default\s+)(?:async\s+)?function(?:\s*\*)?(?:\s+[A-Za-z0-9_$]+)?\s*\(/gm;
+  while ((match = fnExprDecl.exec(source)) !== null) {
+    const isDefaultExpr = /\bexport\s+default\b/.test(match[0]);
+    const name = match[1] ?? (isDefaultExpr ? 'default' : null);
+    if (!name || functions.has(name)) continue;
+    const openParen = match.index + match[0].length - 1;
+    const closeParen = skipBalanced(source, openParen, '(', ')');
+    const paramsText = source.slice(openParen + 1, closeParen - 1);
+    const rest = source.slice(closeParen);
+    const braceOffset = rest.search(/\{/);
+    if (braceOffset < 0) continue;
+    const openBrace = closeParen + braceOffset;
+    const closeBrace = skipBalanced(source, openBrace, '{', '}');
+    const entry = { name, params: splitTopLevelCommas(paramsText), body: source.slice(openBrace + 1, closeBrace - 1) };
+    functions.set(name, entry);
+    if (isDefaultExpr) functions.set('default', entry);
+  }
+
+  const arrowPrefix = /^\s*(?:(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*|export\s+default\s+)(?:async\s+)?/gm;
+  while ((match = arrowPrefix.exec(source)) !== null) {
+    const isDefaultArrow = /\bexport\s+default\b/.test(match[0]);
+    const name = match[1] ?? (isDefaultArrow ? 'default' : null);
+    if (!name || functions.has(name)) continue;
+    let cursor = match.index + match[0].length;
+    let paramsText = '';
+    if (source[cursor] === '(') {
+      const closeParen = skipBalanced(source, cursor, '(', ')');
+      paramsText = source.slice(cursor + 1, closeParen - 1);
+      cursor = closeParen;
+    } else {
+      const idHit = source.slice(cursor).match(/^([A-Za-z0-9_$]+)/);
+      if (!idHit) continue;
+      paramsText = idHit[1];
+      cursor += idHit[1].length;
+    }
+    const arrowHit = source.slice(cursor).match(/^\s*=>\s*/);
+    if (!arrowHit) continue;
+    const bodyStart = cursor + arrowHit[0].length;
+    let bodyEnd;
+    if (source[bodyStart] === '{') {
+      bodyEnd = skipBalanced(source, bodyStart, '{', '}');
+    } else {
+      const semi = source.indexOf(';', bodyStart);
+      const nl = source.indexOf('\n', bodyStart);
+      bodyEnd = semi >= 0 ? semi : (nl >= 0 ? nl : source.length);
+    }
+    const entry = { name, params: splitTopLevelCommas(paramsText), body: source.slice(bodyStart, bodyEnd) };
+    functions.set(name, entry);
+    if (isDefaultArrow) functions.set('default', entry);
+  }
+
+  const classDecl = /^\s*(?:export\s+(?:default\s+)?)?class\s+([A-Za-z0-9_$]+)/gm;
+  while ((match = classDecl.exec(source)) !== null) {
+    const className = match[1];
+    const bracePos = source.indexOf('{', match.index);
+    if (bracePos < 0) continue;
+    const closeBrace = skipBalanced(source, bracePos, '{', '}');
+    const classBody = source.slice(bracePos + 1, closeBrace - 1);
+    const ctorHit = classBody.match(/\bconstructor\s*\(/);
+    if (ctorHit) {
+      const openParen = bracePos + 1 + ctorHit.index + ctorHit[0].length - 1;
+      const closeParen = skipBalanced(source, openParen, '(', ')');
+      const ctorBrace = source.indexOf('{', closeParen);
+      const ctorClose = ctorBrace >= 0 ? skipBalanced(source, ctorBrace, '{', '}') : closeBrace;
+      functions.set(className, {
+        name: className,
+        params: splitTopLevelCommas(source.slice(openParen + 1, closeParen - 1)),
+        body: ctorBrace >= 0 ? source.slice(ctorBrace + 1, ctorClose - 1) : classBody,
+      });
+    } else {
+      functions.set(className, { name: className, params: [], body: classBody });
+    }
+  }
+
+  const expandedModuleScope = expandScopeModuleBindings(source, modPath, importedNs, importedFn, functions, sliceNs);
+  for (const [k, v] of expandedModuleScope.nsMap) importedNs.set(k, v);
+  for (const [k, v] of expandedModuleScope.fnMap) importedFn.set(k, v);
+
+  const flagBindings = collectFlagBindings(source);
+  if (defaultExportBinding) {
+    if (functions.has(defaultExportBinding)) functions.set('default', functions.get(defaultExportBinding));
+    else if (importedFn.has(defaultExportBinding)) importedFn.set('default', importedFn.get(defaultExportBinding));
+    if (flagBindings.has(defaultExportBinding)) flagBindings.set('default', flagBindings.get(defaultExportBinding));
+    if (importedNs.has(defaultExportBinding)) reExportNs.set('default', importedNs.get(defaultExportBinding));
+  }
+  for (const m of source.matchAll(/(?<![.\w$])export\s*\{([^{}]*)\}(?!\s*from\b)/g)) {
+    for (const spec of parseImportExportSpecifiers(m[1])) {
+      const local = spec.imported;
+      const exported = spec.local;
+      if (local && exported && local !== exported) {
+        if (functions.has(local)) functions.set(exported, functions.get(local));
+        else if (importedFn.has(local)) importedFn.set(exported, importedFn.get(local));
+        if (flagBindings.has(local)) flagBindings.set(exported, flagBindings.get(local));
+        if (importedNs.has(local)) reExportNs.set(exported, importedNs.get(local));
+      } else if (local && importedNs.has(local)) {
+        reExportNs.set(local, importedNs.get(local));
+      }
+    }
+  }
+  return { source, importedFn, importedNs, sliceNs, reExportStars, reExportNs, functions, flagBindings };
+}
+
+function mergeContainerMap(target, varName, props) {
+  let set = target.get(varName);
+  let changed = false;
+  if (!set) {
+    set = new Set();
+    target.set(varName, set);
+  }
+  for (const p of props) {
+    if (!set.has(p)) {
+      set.add(p);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function extractOptionsAliasesFromParam(paramSpec, taintKind, propNames = ['options']) {
+  const direct = new Set();
+  const containers = new Map();
+  const paramFlags = new Set();
+  if (!paramSpec) return { direct, containers, paramFlags };
+  const lhs = paramSpec.trim();
+  if (taintKind === 'direct') {
+    if (lhs.startsWith('{')) {
+      const close = skipBalanced(lhs, 0, '{', '}');
+      for (const f of extractFlagLiterals(lhs.slice(1, close - 1))) paramFlags.add(f);
+    } else if (/^[A-Za-z0-9_$]+/.test(lhs)) {
+      direct.add(lhs.match(/^[A-Za-z0-9_$]+/)[0]);
+    }
+    return { direct, containers, paramFlags };
+  }
+  if (lhs.startsWith('{')) {
+    const close = skipBalanced(lhs, 0, '{', '}');
+    const inner = lhs.slice(1, close - 1);
+    for (const part of splitTopLevelCommas(inner)) {
+      const colonIdx = part.indexOf(':');
+      const eqIdx = part.indexOf('=');
+      if (colonIdx > 0 && (eqIdx < 0 || colonIdx < eqIdx)) {
+        const key = part.slice(0, colonIdx).trim();
+        const rhs = part.slice(colonIdx + 1).trim();
+        if (!propNames.includes(key)) continue;
+        if (rhs.startsWith('{')) {
+          const subClose = skipBalanced(rhs, 0, '{', '}');
+          for (const f of extractFlagLiterals(rhs.slice(1, subClose - 1))) paramFlags.add(f);
+        } else {
+          const local = rhs.split('=')[0].trim();
+          if (/^[A-Za-z0-9_$]+$/.test(local)) direct.add(local);
+        }
+      } else {
+        const key = part.split('=')[0].trim();
+        if (propNames.includes(key) && /^[A-Za-z0-9_$]+$/.test(key)) direct.add(key);
+      }
+    }
+  } else if (/^[A-Za-z0-9_$]+/.test(lhs)) {
+    mergeContainerMap(containers, lhs.match(/^[A-Za-z0-9_$]+/)[0], propNames);
+  }
+  return { direct, containers, paramFlags };
+}
+
+function expandBodyAliases(body, initialDirect, initialContainers) {
+  const direct = new Set(initialDirect);
+  const containers = new Map();
+  for (const [k, props] of initialContainers) mergeContainerMap(containers, k, props);
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [c, props] of [...containers.entries()]) {
+      const cAliasRe = new RegExp(`\\b(?:(?:const|let|var)\\s+)?([A-Za-z0-9_$]+)\\s*=\\s*(?:\\{[^{}]*\\.\\.\\.${c}\\b[^{}]*\\}|Object\\.assign\\s*\\(\\s*\\{\\s*\\}\\s*,\\s*${c}\\b[^)]*\\)|structuredClone\\s*\\(\\s*${c}\\b\\s*\\)|${c}\\b\\s*(?:\\?\\?\\s*\\{\\s*\\})?(?=\\s*[;,\\n)]))`, 'g');
+      for (const m of body.matchAll(cAliasRe)) {
+        if (mergeContainerMap(containers, m[1], props)) changed = true;
+      }
+      for (const prop of props) {
+        for (const m of body.matchAll(new RegExp(`\\b(?:(?:const|let|var)\\s+)?([A-Za-z0-9_$]+)\\s*=\\s*(?:\\{[^{}]*\\.\\.\\.\\(?${c}\\s*(?:\\?\\.)?\\.\\s*${prop}\\b[^{}]*\\}|${c}\\s*(?:\\?\\.)?\\.\\s*${prop}\\b)`, 'g'))) {
+          if (!direct.has(m[1])) { direct.add(m[1]); changed = true; }
+        }
+        for (const m of body.matchAll(new RegExp(`\\b(?:(?:const|let|var)\\s+)?([A-Za-z0-9_$]+)\\s*=\\s*${c}\\s*(?:\\?\\.)?\\s*\\[\\s*['"\`]${prop}['"\`]\\s*\\]`, 'g'))) {
+          if (!direct.has(m[1])) { direct.add(m[1]); changed = true; }
+        }
+      }
+      for (const m of body.matchAll(new RegExp(`\\{([^{}]*)\\}\\s*=\\s*${c}\\b`, 'g'))) {
+        for (const item of splitTopLevelCommas(m[1])) {
+          const clean = item.split('=')[0].trim();
+          const [key, localRaw] = clean.split(':').map(s => s.trim());
+          const local = localRaw ?? key;
+          if (props.has(key) && /^[A-Za-z0-9_$]+$/.test(local) && !direct.has(local)) {
+            direct.add(local);
+            changed = true;
+          }
+        }
+      }
+    }
+    for (const a of [...direct]) {
+      const aliasAssign = new RegExp(`\\b(?:(?:const|let|var)\\s+)?([A-Za-z0-9_$]+)\\s*=\\s*(?:\\{[^{}]*\\.\\.\\.${a}\\b[^{}]*\\}|Object\\.assign\\s*\\(\\s*\\{\\s*\\}\\s*,\\s*${a}\\b[^)]*\\)|structuredClone\\s*\\(\\s*${a}\\b\\s*\\)|${a}\\b\\s*(?:\\?\\?\\s*\\{\\s*\\})?)`, 'g');
+      for (const m of body.matchAll(aliasAssign)) {
+        if (!direct.has(m[1])) { direct.add(m[1]); changed = true; }
+      }
+      for (const m of body.matchAll(/\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*\{([^{}]*)\}/g)) {
+        for (const item of splitTopLevelCommas(m[2])) {
+          const kv = item.split(':').map(s => s.trim());
+          if (kv.length === 1 && kv[0] === a) {
+            if (mergeContainerMap(containers, m[1], [a])) changed = true;
+          } else if (kv.length === 2 && kv[1] === a && /^[A-Za-z0-9_$]+$/.test(kv[0])) {
+            if (mergeContainerMap(containers, m[1], [kv[0]])) changed = true;
+          }
+        }
+      }
+      for (const m of body.matchAll(new RegExp(`\\b([A-Za-z0-9_$]+)\\s*\\.\\s*([A-Za-z0-9_$]+)\\s*=\\s*${a}\\b`, 'g'))) {
+        if (mergeContainerMap(containers, m[1], [m[2]])) changed = true;
+      }
+    }
+  }
+  return { direct, containers };
+}
+
+function buildIterVarBindings(body, baseBindings) {
+  const bindings = collectFlagBindings(body, baseBindings);
+  const iterVars = new Map(bindings);
+  for (const m of body.matchAll(/\[([\s\S]*?)\]\s*\.\s*(?:some|every|filter|map|find|forEach)\s*\(\s*(?:\(\s*)?([A-Za-z0-9_$]+)/g)) {
+    const list = extractFlagLiterals(m[1]);
+    if (list.length > 0) iterVars.set(m[2], [...(iterVars.get(m[2]) ?? []), ...list]);
+  }
+  for (const m of body.matchAll(/\b([A-Za-z0-9_$]+(?:\.[A-Za-z0-9_$]+)?)\s*\.\s*(?:some|every|filter|map|find|forEach)\s*\(\s*(?:\(\s*)?([A-Za-z0-9_$]+)/g)) {
+    if (bindings.has(m[1])) iterVars.set(m[2], [...(iterVars.get(m[2]) ?? []), ...bindings.get(m[1])]);
+  }
+  for (const m of body.matchAll(/\bfor\s*\(\s*(?:const|let|var)\s+([A-Za-z0-9_$]+)\s+of\s+(?:\[([\s\S]*?)\]|([A-Za-z0-9_$]+(?:\.[A-Za-z0-9_$]+)?))\s*\)/g)) {
+    const list = m[2] !== undefined ? extractFlagLiterals(m[2]) : (bindings.get(m[3]) ?? []);
+    if (list.length > 0) iterVars.set(m[1], [...(iterVars.get(m[1]) ?? []), ...list]);
+  }
+  return iterVars;
+}
+
+function extractFlagsFromBody(body, aliases, containers, baseBindings) {
+  const flags = new Set();
+  const iterVars = buildIterVarBindings(body, baseBindings);
+  const resolveExprFlags = textSlice => {
+    for (const f of extractFlagLiterals(textSlice)) flags.add(f);
+    for (const id of textSlice.matchAll(/\b([A-Za-z0-9_$]+(?:\.[A-Za-z0-9_$]+)?)\b/g)) {
+      for (const f of iterVars.get(id[1]) ?? []) flags.add(f);
+    }
+  };
+
+  const targetExprs = [...aliases].map(a => `\\b${a}`);
+  for (const [c, props] of containers.entries()) {
+    for (const prop of props) {
+      targetExprs.push(`\\b${c}\\s*(?:\\?\\.)?\\.\\s*${prop}`);
+      targetExprs.push(`\\b${c}\\s*(?:\\?\\.)?\\s*\\[\\s*['"\`]${prop}['"\`]\\s*\\]`);
+    }
+  }
+
+  for (const expr of targetExprs) {
+    const bracketRe = new RegExp(`${expr}\\s*(?:\\?\\.)?\\s*\\[`, 'g');
+    let m;
+    while ((m = bracketRe.exec(body)) !== null) {
+      const open = m.index + m[0].length - 1;
+      const close = skipBalanced(body, open, '[', ']');
+      resolveExprFlags(body.slice(open + 1, close - 1));
+    }
+    const callKeyRe = new RegExp(`(?:Object\\.hasOwn|Reflect\\.get|(?:Object\\.prototype\\.)?hasOwnProperty\\.call)\\s*\\(\\s*${expr}\\s*,`, 'g');
+    while ((m = callKeyRe.exec(body)) !== null) {
+      const open = body.lastIndexOf('(', m.index + m[0].length);
+      const close = skipBalanced(body, open, '(', ')');
+      const args = splitTopLevelCommas(body.slice(open + 1, close - 1));
+      if (args[1]) resolveExprFlags(args[1]);
+    }
+    const methodHasOwnRe = new RegExp(`${expr}\\s*(?:\\?\\.)?\\.\\s*hasOwnProperty\\s*\\(`, 'g');
+    while ((m = methodHasOwnRe.exec(body)) !== null) {
+      const open = m.index + m[0].length - 1;
+      const close = skipBalanced(body, open, '(', ')');
+      resolveExprFlags(body.slice(open + 1, close - 1));
+    }
+    for (const inHit of body.matchAll(new RegExp(`(?:(['"\`])([^'"\`\\r\\n\\\\]*(?:\\\\.[^'"\`\\r\\n\\\\]*)*)\\1|\\b([A-Za-z0-9_$]+(?:\\.[A-Za-z0-9_$]+)?))\\s+in\\s+${expr}\\b`, 'g'))) {
+      if (inHit[2] !== undefined) {
+        const decoded = decodeJsEscapes(inHit[2]);
+        if (/^--[a-z0-9-]+$/.test(decoded)) flags.add(decoded);
+      } else if (inHit[3]) {
+        resolveExprFlags(inHit[3]);
+      }
+    }
+    for (const dHit of body.matchAll(new RegExp(`\\{([^{}]*)\\}\\s*=\\s*${expr}\\b`, 'g'))) {
+      for (const f of extractFlagLiterals(dHit[1])) flags.add(f);
+    }
+    const keysCbRe = new RegExp(`(?:Object\\.(?:keys|entries)|Reflect\\.ownKeys)\\s*\\(\\s*${expr}\\s*\\)\\s*\\.\\s*(?:some|every|filter|map|find|forEach)\\s*\\(`, 'g');
+    while ((m = keysCbRe.exec(body)) !== null) {
+      const open = m.index + m[0].length - 1;
+      const close = skipBalanced(body, open, '(', ')');
+      resolveExprFlags(body.slice(open + 1, close - 1));
+    }
+    const keysLoopRe = new RegExp(`\\bfor\\s*\\([^)]*(?:\\bin\\s+${expr}\\b|\\bof\\s+(?:Object\\.(?:keys|entries)|Reflect\\.ownKeys)\\s*\\(\\s*${expr}\\s*\\))\\s*\\)\\s*\\{`, 'g');
+    while ((m = keysLoopRe.exec(body)) !== null) {
+      const open = m.index + m[0].length - 1;
+      const close = skipBalanced(body, open, '{', '}');
+      resolveExprFlags(body.slice(open + 1, close - 1));
+    }
+  }
+  return { flags, iterVars };
+}
+
+function findCallEdges(body, modPath, fnName, modInfo, aliases, containers, iterVars, resolveExportedNamespace) {
+  const edges = [];
+  const seededNs = new Map(modInfo.importedNs);
+  const seededFn = new Map(modInfo.importedFn);
+  if (resolveExportedNamespace) {
+    for (const [localName, target] of modInfo.importedFn) {
+      const nsTarget = resolveExportedNamespace(target.mod, target.fn);
+      if (nsTarget) seededNs.set(localName, nsTarget);
+    }
+  }
+  const { nsMap: localNs, fnMap: localImportedFn, handledImportOffsets } = expandScopeModuleBindings(
+    body,
+    modPath,
+    seededNs,
+    seededFn,
+    modInfo.functions,
+    modInfo.sliceNs,
+  );
+  if (resolveExportedNamespace) {
+    let nsChanged = true;
+    while (nsChanged) {
+      nsChanged = false;
+      for (const [localName, target] of [...localImportedFn.entries()]) {
+        if (localNs.has(localName)) continue;
+        const nsTarget = resolveExportedNamespace(target.mod, target.fn);
+        if (nsTarget) {
+          localNs.set(localName, nsTarget);
+          nsChanged = true;
+        }
+      }
+      if (nsChanged) {
+        const reexpanded = expandScopeModuleBindings(body, modPath, localNs, localImportedFn, modInfo.functions, modInfo.sliceNs);
+        for (const [k, v] of reexpanded.nsMap) localNs.set(k, v);
+        for (const [k, v] of reexpanded.fnMap) localImportedFn.set(k, v);
+      }
+    }
+  }
+
+  const classifyArgs = argsList => {
+    const argTaints = [];
+    const argFlagValues = [];
+    for (let idx = 0; idx < argsList.length; idx++) {
+      const arg = argsList[idx];
+      const resolvedArgFlags = new Set(extractFlagLiterals(arg));
+      if (/^[A-Za-z0-9_$]+(?:\.[A-Za-z0-9_$]+)?$/.test(arg)) {
+        for (const f of iterVars.get(arg) ?? []) resolvedArgFlags.add(f);
+      }
+      if (resolvedArgFlags.size > 0) argFlagValues.push({ index: idx, flags: [...resolvedArgFlags] });
+
+      let isDirect = false;
+      for (const a of aliases) {
+        if (arg === a || (arg.startsWith('{') && new RegExp(`\\.\\.\\.\\s*${a}\\b`).test(arg)) || (new RegExp(`\\b${a}\\b`).test(arg) && !arg.startsWith('{') && !arg.includes('['))) {
+          isDirect = true;
+        }
+      }
+      for (const [c, cProps] of containers.entries()) {
+        for (const prop of cProps) {
+          const propAccessRe = new RegExp(`^\\s*${c}\\s*(?:\\?\\.)?(?:\\.\\s*${prop}\\b|\\s*\\[\\s*['"\`]${prop}['"\`]\\s*\\])\\s*(?:\\?\\?\\s*\\{\\s*\\})?\\s*$`);
+          const propSpreadRe = new RegExp(`\\.\\.\\.\\s*\\(?${c}\\s*(?:\\?\\.)?(?:\\.\\s*${prop}\\b|\\s*\\[\\s*['"\`]${prop}['"\`]\\s*\\])`);
+          if (propAccessRe.test(arg) || (arg.startsWith('{') && propSpreadRe.test(arg))) {
+            isDirect = true;
+          }
+        }
+        if (arg === c || (arg.startsWith('{') && new RegExp(`\\.\\.\\.\\s*${c}\\b`).test(arg) && !isDirect)) {
+          argTaints.push({ index: idx, kind: 'container', props: [...cProps] });
+        }
+      }
+      if (isDirect) {
+        argTaints.push({ index: idx, kind: 'direct', props: [] });
+        continue;
+      }
+      if (arg.startsWith('{')) {
+        const props = [];
+        for (const item of splitTopLevelCommas(arg.slice(1, -1))) {
+          const kv = item.split(':').map(s => s.trim());
+          if (kv.length === 1 && aliases.has(kv[0])) props.push(kv[0]);
+          else if (kv.length === 2 && [...aliases, ...containers.keys()].some(a => new RegExp(`\\b${a}\\b`).test(kv[1]))) props.push(kv[0]);
+        }
+        if (props.length > 0) argTaints.push({ index: idx, kind: 'container', props });
+      }
+    }
+    return { argTaints, argFlagValues };
+  };
+
+  let m;
+  const inlineImportCall = /\(\s*(?:await\s+)?(import|req|require)\s*\(\s*['"]([^'"]+)['"]\s*\)\s*\)\s*(?:\?\.)?(?:\.\s*([A-Za-z0-9_$]+)|\s*\[\s*(['"`])([^'"`\r\n\\]+)\4\s*\])\s*\(/g;
+  while ((m = inlineImportCall.exec(body)) !== null) {
+    handledImportOffsets.add(m.index + m[0].indexOf(m[1]));
+    const targetMod = resolveRelModule(modPath, m[2]);
+    const prop = m[3] ?? decodeJsEscapes(m[5]);
+    if (!targetMod || !prop) continue;
+    const open = m.index + m[0].length - 1;
+    const close = skipBalanced(body, open, '(', ')');
+    edges.push({ mod: targetMod, fn: prop, ...classifyArgs(splitTopLevelCommas(body.slice(open + 1, close - 1))) });
+  }
+
+  const masked = maskStringsPreservingOffsets(body);
+  if (!modInfo.sliceNs.has(fnName)) {
+    for (const dynHit of masked.matchAll(/(?<![.\w$])(import|req|require)\s*\(/g)) {
+      const kwOffset = dynHit.index;
+      if (handledImportOffsets.has(kwOffset)) continue;
+      const open = body.indexOf('(', kwOffset);
+      const close = skipBalanced(body, open, '(', ')');
+      const rawArg = body.slice(open + 1, close - 1).trim();
+      const litSpec = rawArg.match(/^(['"])([^'"]+)\1$/);
+      if (litSpec && !litSpec[2].startsWith('.')) continue;
+      assert.fail(`SEAM26 encountered unhandled dynamic ${dynHit[1]}(${rawArg}) in ${modPath}`);
+    }
+
+    // Fail closed if any module namespace variable is passed around or indexed dynamically outside tracked forms.
+    for (const [nsVar, targetMod] of localNs) {
+      const escNs = escapeRe(nsVar);
+      for (const nsHit of masked.matchAll(new RegExp(`(?<![.\\w$])${escNs}\\b`, 'g'))) {
+        const before = masked.slice(Math.max(0, nsHit.index - 40), nsHit.index);
+        const after = masked.slice(nsHit.index + nsVar.length, nsHit.index + nsVar.length + 40);
+        const rawAfter = body.slice(nsHit.index + nsVar.length, nsHit.index + nsVar.length + 80);
+        const isDeclOrParam =
+          /\b(?:const|let|var|as)\s+$/.test(before) ||
+          /\.\.\.\s*$/.test(before) ||
+          /^\s*=(?!=)/.test(after) ||
+          /^\s*\)?\s*=>/.test(after);
+        const isDestructOrAliasRhs =
+          /\}\s*=\s*$/.test(before) ||
+          /[A-Za-z0-9_$]\s*=\s*$/.test(before);
+        const isDotAccess = /^\s*(?:\?\.)?\.\s*[A-Za-z0-9_$]+/.test(after);
+        const isStaticBracketAccess = /^\s*(?:\?\.)?\s*\[\s*(['"`])[^'"`\r\n\\${]+\1\s*\]/.test(rawAfter);
+        const isObjPropertyKey = /^\s*:/.test(after) && !/\?\s*[^:]*$/.test(before);
+        if (!isDeclOrParam && !isDestructOrAliasRhs && !isDotAccess && !isStaticBracketAccess && !isObjPropertyKey) {
+          assert.fail(`SEAM26 encountered unhandled usage of namespace ${nsVar} (${targetMod}) in ${modPath}#${fnName}`);
+        }
+      }
+    }
+  }
+
+  const sliceCall = /\b([A-Za-z0-9_$]+)\s*\(\s*\)\s*(?:\?\.)?(?:\.\s*([A-Za-z0-9_$]+)|\s*\[\s*(['"`])([^'"`\r\n\\]+)\3\s*\])\s*\(/g;
+  while ((m = sliceCall.exec(body)) !== null) {
+    const targetMod = modInfo.sliceNs.get(m[1]);
+    const prop = m[2] ?? decodeJsEscapes(m[4]);
+    if (!targetMod || !prop) continue;
+    const open = m.index + m[0].length - 1;
+    const close = skipBalanced(body, open, '(', ')');
+    edges.push({ mod: targetMod, fn: prop, ...classifyArgs(splitTopLevelCommas(body.slice(open + 1, close - 1))) });
+  }
+
+  const nsCall = /\b([A-Za-z0-9_$]+)\s*(?:\?\.)?(?:\.\s*([A-Za-z0-9_$]+)|\s*\[\s*(['"`])([^'"`\r\n\\]+)\3\s*\])\s*\(/g;
+  while ((m = nsCall.exec(body)) !== null) {
+    const targetMod = localNs.get(m[1]);
+    const prop = m[2] ?? decodeJsEscapes(m[4]);
+    if (!targetMod || !prop) continue;
+    const open = m.index + m[0].length - 1;
+    const close = skipBalanced(body, open, '(', ')');
+    edges.push({ mod: targetMod, fn: prop, ...classifyArgs(splitTopLevelCommas(body.slice(open + 1, close - 1))) });
+  }
+
+  const directCall = /(?<![.\w$])([A-Za-z0-9_$]+)\s*\(/g;
+  while ((m = directCall.exec(body)) !== null) {
+    const callee = m[1];
+    if (['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'import', 'require', 'req'].includes(callee)) continue;
+    const target = modInfo.functions.has(callee)
+      ? { mod: modPath, fn: callee }
+      : localImportedFn.get(callee);
+    if (!target) continue;
+    const open = m.index + m[0].length - 1;
+    const close = skipBalanced(body, open, '(', ')');
+    edges.push({ mod: target.mod, fn: target.fn, ...classifyArgs(splitTopLevelCommas(body.slice(open + 1, close - 1))) });
+  }
+  return edges;
+}
+
+const parsedRuntimeModuleCache = new Map();
+
+function createModuleGraph(moduleSources) {
+  const getMod = modPath => {
+    const raw = moduleSources.get(modPath);
+    if (raw === undefined) return null;
+    const cacheKey = `${modPath}\0${raw}`;
+    let parsed = parsedRuntimeModuleCache.get(cacheKey);
+    if (!parsed) {
+      parsed = parseRuntimeModuleInfo(modPath, raw);
+      parsedRuntimeModuleCache.set(cacheKey, parsed);
+    }
+    return parsed;
+  };
+
+  const resolveExportedNamespace = (modPath, exportName, seen = new Set()) => {
+    const key = `${modPath}#${exportName}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    const info = getMod(modPath);
+    if (!info) return null;
+    if (info.reExportNs.has(exportName)) return info.reExportNs.get(exportName);
+    if (info.importedFn.has(exportName)) {
+      const re = info.importedFn.get(exportName);
+      return resolveExportedNamespace(re.mod, re.fn, seen);
+    }
+    for (const star of info.reExportStars) {
+      const hit = resolveExportedNamespace(star, exportName, seen);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  const resolvedBindingsCache = new Map();
+  const resolveExportedBinding = (modPath, exportName, seen = new Set()) => {
+    const key = `${modPath}#${exportName}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    const info = getMod(modPath);
+    if (!info) return null;
+    if (info.flagBindings.has(exportName)) return info.flagBindings.get(exportName);
+    if (info.importedFn.has(exportName)) {
+      const re = info.importedFn.get(exportName);
+      return resolveExportedBinding(re.mod, re.fn, seen);
+    }
+    for (const star of info.reExportStars) {
+      const hit = resolveExportedBinding(star, exportName, seen);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  const getModuleBindings = modPath => {
+    if (resolvedBindingsCache.has(modPath)) return resolvedBindingsCache.get(modPath);
+    const info = getMod(modPath);
+    if (!info) return new Map();
+    const merged = new Map(info.flagBindings);
+    resolvedBindingsCache.set(modPath, merged);
+    for (const [localName, target] of info.importedFn) {
+      const nsMod = resolveExportedNamespace(target.mod, target.fn);
+      if (nsMod) {
+        for (const [expName, val] of getModuleBindings(nsMod)) {
+          if (!expName.includes('.')) merged.set(`${localName}.${expName}`, val);
+        }
+        continue;
+      }
+      const val = resolveExportedBinding(target.mod, target.fn);
+      if (val) merged.set(localName, val);
+    }
+    for (const [nsName, targetMod] of info.importedNs) {
+      const nsBindings = getModuleBindings(targetMod);
+      for (const [expName, val] of nsBindings) {
+        if (!expName.includes('.')) merged.set(`${nsName}.${expName}`, val);
+      }
+    }
+    for (const star of info.reExportStars) {
+      for (const [expName, val] of getModuleBindings(star)) {
+        if (!expName.includes('.') && !merged.has(expName)) merged.set(expName, val);
+      }
+    }
+    const propagated = collectFlagBindings(info.source, merged);
+    resolvedBindingsCache.set(modPath, propagated);
+    return propagated;
+  };
+
+  const augmentFunctionBodyBindings = (modPath, body, base) => {
+    const info = getMod(modPath);
+    const out = new Map(base);
+    if (!info) return out;
+    const { nsMap, fnMap } = expandScopeModuleBindings(body, modPath, info.importedNs, info.importedFn, info.functions, info.sliceNs);
+    for (const [nsName, targetMod] of nsMap) {
+      for (const [expName, val] of getModuleBindings(targetMod)) {
+        if (!expName.includes('.')) out.set(`${nsName}.${expName}`, val);
+      }
+    }
+    for (const [localName, target] of fnMap) {
+      const val = resolveExportedBinding(target.mod, target.fn);
+      if (val) out.set(localName, val);
+    }
+    return out;
+  };
+
+  const resolveTargetFn = (modPath, fnName, seen = new Set()) => {
+    const key = `${modPath}#${fnName}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    const info = getMod(modPath);
+    if (!info) return null;
+    if (info.functions.has(fnName)) return { mod: modPath, fn: fnName, info: info.functions.get(fnName) };
+    if (info.importedFn.has(fnName)) {
+      const re = info.importedFn.get(fnName);
+      return resolveTargetFn(re.mod, re.fn, seen);
+    }
+    for (const star of info.reExportStars) {
+      const hit = resolveTargetFn(star, fnName, seen);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  return { getMod, getModuleBindings, augmentFunctionBodyBindings, resolveTargetFn, resolveExportedNamespace };
+}
+
+function extractRuntimeCommandOptions(moduleSources, entryPoints) {
+  const { getMod, getModuleBindings, augmentFunctionBodyBindings, resolveTargetFn, resolveExportedNamespace } = createModuleGraph(moduleSources);
+
+  // Ensure every module in moduleSources satisfies the static import / re-export grammar guard up front.
+  for (const modPath of moduleSources.keys()) getMod(modPath);
+
+  const state = new Map();
+  const queue = [];
+  const flags = new Set();
+
+  const seed = (mod, fn, addDirect, addContainers, addParamFlags = new Map()) => {
+    const resolved = resolveTargetFn(mod, fn);
+    if (!resolved) return;
+    const k = `${resolved.mod}#${resolved.fn}`;
+    let cur = state.get(k);
+    let changed = false;
+    if (!cur) {
+      cur = { mod: resolved.mod, fn: resolved.fn, direct: new Set(), containers: new Map(), paramFlags: new Map() };
+      state.set(k, cur);
+      changed = true;
+    }
+    for (const d of addDirect) if (!cur.direct.has(d)) { cur.direct.add(d); changed = true; }
+    for (const [c, props] of addContainers.entries()) {
+      if (mergeContainerMap(cur.containers, c, props)) changed = true;
+    }
+    for (const [paramName, list] of addParamFlags) {
+      const existing = new Set(cur.paramFlags.get(paramName) ?? []);
+      for (const f of list) {
+        if (!existing.has(f)) {
+          existing.add(f);
+          changed = true;
+        }
+      }
+      cur.paramFlags.set(paramName, [...existing]);
+    }
+    if (changed) queue.push(cur);
+  };
+
+  for (const [entryMod, entryFn] of entryPoints) {
+    const resolved = resolveTargetFn(entryMod, entryFn);
+    assert.ok(resolved, `expected ${entryFn} in ${entryMod}`);
+    const init = extractOptionsAliasesFromParam(resolved.info.params[0], 'container', ['options']);
+    for (const f of init.paramFlags) flags.add(f);
+    if (init.direct.size === 0 && init.containers.size === 0) init.direct.add('options');
+    seed(resolved.mod, resolved.fn, init.direct, init.containers);
+  }
+
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    const modInfo = getMod(cur.mod);
+    const fnInfo = modInfo?.functions.get(cur.fn);
+    if (!fnInfo) continue;
+
+    const mergedBindings = augmentFunctionBodyBindings(cur.mod, fnInfo.body, getModuleBindings(cur.mod));
+    for (const [paramName, list] of cur.paramFlags) {
+      mergedBindings.set(paramName, [...new Set([...(mergedBindings.get(paramName) ?? []), ...list])]);
+    }
+
+    const expanded = expandBodyAliases(fnInfo.body, cur.direct, cur.containers);
+    const { flags: bodyFlags, iterVars } = extractFlagsFromBody(fnInfo.body, expanded.direct, expanded.containers, mergedBindings);
+    for (const f of bodyFlags) flags.add(f);
+
+    for (const edge of findCallEdges(fnInfo.body, cur.mod, cur.fn, modInfo, expanded.direct, expanded.containers, iterVars, resolveExportedNamespace)) {
+      const resolved = resolveTargetFn(edge.mod, edge.fn);
+      if (!resolved) {
+        if (edge.mod !== cur.mod && moduleSources.has(edge.mod)) {
+          assert.fail(`SEAM26 could not resolve cross-module call ${edge.mod}#${edge.fn} from ${cur.mod}#${cur.fn}`);
+        }
+        continue;
+      }
+      const nextDirect = new Set();
+      const nextContainers = new Map();
+      const nextParamFlags = new Map();
+      for (const t of edge.argTaints) {
+        const extracted = extractOptionsAliasesFromParam(resolved.info.params[t.index], t.kind, t.props);
+        for (const f of extracted.paramFlags) flags.add(f);
+        for (const d of extracted.direct) nextDirect.add(d);
+        for (const [c, props] of extracted.containers.entries()) mergeContainerMap(nextContainers, c, props);
+      }
+      for (const fv of edge.argFlagValues) {
+        const rawParam = resolved.info.params[fv.index]?.split('=')[0]?.trim();
+        if (rawParam && /^[A-Za-z0-9_$]+$/.test(rawParam)) {
+          nextParamFlags.set(rawParam, fv.flags);
+        }
+      }
+      seed(resolved.mod, resolved.fn, nextDirect, nextContainers, nextParamFlags);
+    }
+  }
+  return [...flags].sort();
+}
+
+function collectContextualCandidateValues(moduleSources) {
+  const { getMod, getModuleBindings } = createModuleGraph(moduleSources);
+  const byFlag = new Map();
+  const addCandidate = (flag, val) => {
+    let set = byFlag.get(flag);
+    if (!set) {
+      set = new Set([true, 1, 'sample-value', '11111111-1111-4111-8111-111111111111', 'place-order']);
+      byFlag.set(flag, set);
+    }
+    set.add(val);
+  };
+
+  for (const modPath of moduleSources.keys()) {
+    const info = getMod(modPath);
+    if (!info) continue;
+    const bindings = getModuleBindings(modPath);
+    const tokensForFlag = new Map();
+    const recordToken = (flag, token) => {
+      if (!tokensForFlag.has(flag)) tokensForFlag.set(flag, new Set([flag]));
+      tokensForFlag.get(flag).add(token);
+    };
+    for (const f of extractFlagLiterals(info.source)) recordToken(f, f);
+    for (const [ident, list] of bindings) {
+      for (const f of list) recordToken(f, ident);
+    }
+
+    for (const [flag, tokens] of tokensForFlag) {
+      addCandidate(flag, true);
+      for (const token of tokens) {
+        const escaped = escapeRe(token);
+        for (const hit of info.source.matchAll(new RegExp(escaped, 'g'))) {
+          const windowText = info.source.slice(Math.max(0, hit.index - 500), Math.min(info.source.length, hit.index + 500));
+          for (const lit of windowText.matchAll(/(['"`])([^'"`\r\n\\]*(?:\\.[^'"`\r\n\\]*)*)\1/g)) {
+            if (lit[1] === '`' && lit[2].includes('${')) continue;
+            const val = decodeJsEscapes(lit[2]);
+            if (val.length > 0 && val.length <= 48 && !val.startsWith('--') && !val.startsWith('./') && !val.startsWith('../') && !val.startsWith('node:')) {
+              addCandidate(flag, val);
+              addCandidate(flag, [val]);
+            }
+          }
+          for (const num of windowText.matchAll(/\b(\d{1,7})\b/g)) {
+            const n = Number(num[1]);
+            if (Number.isSafeInteger(n)) {
+              addCandidate(flag, n);
+              addCandidate(flag, String(n));
+            }
+          }
+        }
+      }
+    }
+  }
+  return byFlag;
+}
+
+async function observeRuntimeOptionLookups(candidateFlags, baseOptions, runFn) {
+  const observed = new Set();
+  const installed = [];
+  for (const flag of candidateFlags) {
+    if (flag in Object.prototype) continue;
+    Object.defineProperty(Object.prototype, flag, {
+      configurable: true,
+      enumerable: false,
+      get() {
+        observed.add(flag);
+        return undefined;
+      },
+    });
+    installed.push(flag);
+  }
+  const recordKey = prop => {
+    if (typeof prop === 'string' && /^--[a-z0-9-]+$/.test(prop) && !Object.hasOwn(baseOptions, prop)) {
+      observed.add(prop);
+    }
+  };
+  const proxyOptions = new Proxy({ ...baseOptions }, {
+    get(target, prop, receiver) {
+      recordKey(prop);
+      return Reflect.get(target, prop, receiver);
+    },
+    has(target, prop) {
+      recordKey(prop);
+      return Object.hasOwn(target, prop);
+    },
+    getOwnPropertyDescriptor(target, prop) {
+      recordKey(prop);
+      return Reflect.getOwnPropertyDescriptor(target, prop);
+    },
+  });
+  try {
+    await runFn(proxyOptions);
+  } finally {
+    for (const flag of installed) {
+      delete Object.prototype[flag];
+    }
+  }
+  return observed;
+}
+
+function loadRuntimePackageModules() {
+  const pkgSrcRel = 'node_modules/@promptdriven/runtime-client/src';
+  const map = new Map();
+  for (const rel of walk(pkgSrcRel).filter(file => file.endsWith('.mjs'))) {
+    const subRel = rel.slice(pkgSrcRel.length + 1);
+    map.set(subRel, readFileSync(join(root, rel), 'utf8'));
+  }
+  return map;
+}
+
+test('SEAM26 (#3444): every CLI option accepted by @promptdriven/runtime-client for test, lint and simulate is declared in src/command-catalog.mjs and parses cleanly', async t => {
+  const { PUBLIC_COMMAND_ROUTES } = await import('../src/command-catalog.mjs');
+  const { parseArgv, CommandInputError } = await import('../src/argument-parser.mjs');
+  const { harbor, portsFor, fakeRuntime } = await import('./helpers/runtime-fake.mjs');
+  const seam = await import('../src/runtime-seam.mjs');
+
+  const runtimeModules = loadRuntimePackageModules();
+  assert.ok(runtimeModules.size >= 25, `expected full runtime-client module scan, got ${runtimeModules.size}`);
+
+  const staticCheckOptions = extractRuntimeCommandOptions(runtimeModules, [
+    ['index.mjs', 'runCheck'],
+    ['index.mjs', 'check'],
+    ['index.mjs', 'read'],
+    ['index.mjs', 'retry'],
+    ['index.mjs', 'local'],
+  ]);
+  const staticTryOptions = extractRuntimeCommandOptions(runtimeModules, [
+    ['index.mjs', 'runTry'],
+    ['index.mjs', 'simulate'],
+  ]);
+  assert.ok(staticCheckOptions.includes('--max-total-calls'));
+  assert.ok(staticCheckOptions.includes('--no-restart-replacement'));
+  assert.ok(staticTryOptions.includes('--shell'), 'transitive dynamic import to try-doors.mjs must be discovered automatically');
+  assert.ok(staticTryOptions.includes('--serve'), 'transitive dynamic import to try-http.mjs must be discovered automatically');
+  assert.ok(staticTryOptions.includes('--agent'), 'transitive dynamic import to agent-chat.mjs must be discovered automatically');
+
+  // Planted-mistake controls: combined default+named imports, destructured dynamic/static namespaces, function expressions,
+  // bracket namespace calls, aliased params, container body aliases, imported key constants, helper key forwarding,
+  // computed constants, multiline arrays, in/hasOwn/destructuring, and contextual enum values must all surface.
+  const plantedModules = new Map(runtimeModules);
+  plantedModules.set('runtime/synthetic-keys.mjs', [
+    "export const IMPORTED_KEY = '--planted-imported-key';",
+    "export const NS_KEY = '--planted-ns-key';",
+    "export const DYN_NS_KEY = '--planted-dyn-ns-key';",
+  ].join('\n'));
+  plantedModules.set('runtime/synthetic-companion.mjs', [
+    "import { IMPORTED_KEY } from './synthetic-keys.mjs';",
+    "import * as keyNs from './synthetic-keys.mjs';",
+    "const COMPUTED_FLAG = '--planted-computed';",
+    'const MULTI_FLAGS = [',
+    "  '--planted-multi-a',",
+    "  '--planted-multi-b',",
+    '];',
+    'function readOpt(bag, key) { return bag[key]; }',
+    'export default function defaultCompanion(cfg) {',
+    "  return cfg['--planted-mixed-default'];",
+    '}',
+    'export const fnExprCompanion = function (cfg) {',
+    "  return cfg['--planted-fn-expr'];",
+    '};',
+    'export const extraCompanion = (ctx, cfg) => {',
+    "  if (cfg['--planted-alias']) return 1;",
+    '  if (cfg[COMPUTED_FLAG]) return 2;',
+    '  if (cfg[IMPORTED_KEY] === "fast") return 21;',
+    '  if (cfg[keyNs.NS_KEY]) return 22;',
+    '  if (MULTI_FLAGS.some(k => cfg[k] !== undefined)) return 3;',
+    "  if (readOpt(cfg, '--planted-forwarded-key')) return 4;",
+    "  if (Object.hasOwn(cfg, '--planted-hasown')) return 5;",
+    "  if ('--planted-in' in cfg) return 6;",
+    "  const { '--planted-destruct': d } = cfg;",
+    '  return d;',
+    '};',
+  ].join('\n'));
+  plantedModules.set('runtime/synthetic-then.mjs', [
+    'function internalPromiseCompanion(opts) {',
+    "  return opts['--planted-then-companion'];",
+    '}',
+    'function internalBracketCompanion(opts) {',
+    "  return opts['--planted-bracket-arg'];",
+    '}',
+    'export { internalPromiseCompanion as promiseCompanion, internalBracketCompanion as bracketTarget };',
+  ].join('\n'));
+  plantedModules.set('runtime/synthetic-dyn.mjs', [
+    "import { bracketTarget } from './synthetic-then.mjs';",
+    'export function dynCheck(input) {',
+    '  const containerCopy = input;',
+    "  if (containerCopy.options['--planted-container-alias']) return true;",
+    "  bracketTarget(containerCopy['options']);",
+    '  return [',
+    "    '--planted-dyn-companion',",
+    '  ].some(flag => containerCopy.options[flag]);',
+    '}',
+    'export function destructuredDyn(opts) {',
+    "  return opts['--planted-ns-destructured'];",
+    '}',
+    'export function bracketNsTarget(opts) {',
+    "  return opts['--planted-ns-bracket'];",
+    '}',
+  ].join('\n'));
+  plantedModules.set('runtime/synthetic-entry.mjs', [
+    "import defaultCompanion, { extraCompanion, fnExprCompanion } from './synthetic-companion.mjs';",
+    'export async function runSynthetic({ options = {} } = {}) {',
+    '  const localCopy = { ...options };',
+    "  const dyn = await import('./synthetic-dyn.mjs');",
+    '  const { destructuredDyn } = dyn;',
+    "  const keysMod = await import('./synthetic-keys.mjs');",
+    '  const { DYN_NS_KEY } = keysMod;',
+    '  if (localCopy[DYN_NS_KEY]) return 99;',
+    '  defaultCompanion(localCopy);',
+    '  fnExprCompanion(localCopy);',
+    '  destructuredDyn(localCopy);',
+    "  dyn['bracketNsTarget'](localCopy);",
+    '  dyn.dynCheck({ options: localCopy });',
+    "  await import('./synthetic-then.mjs').then(mod => mod.promiseCompanion(localCopy));",
+    '  return extraCompanion({}, localCopy);',
+    '}',
+  ].join('\n'));
+  assert.deepEqual(
+    extractRuntimeCommandOptions(plantedModules, [['runtime/synthetic-entry.mjs', 'runSynthetic']]),
+    [
+      '--planted-alias',
+      '--planted-bracket-arg',
+      '--planted-computed',
+      '--planted-container-alias',
+      '--planted-destruct',
+      '--planted-dyn-companion',
+      '--planted-dyn-ns-key',
+      '--planted-fn-expr',
+      '--planted-forwarded-key',
+      '--planted-hasown',
+      '--planted-imported-key',
+      '--planted-in',
+      '--planted-mixed-default',
+      '--planted-multi-a',
+      '--planted-multi-b',
+      '--planted-ns-bracket',
+      '--planted-ns-destructured',
+      '--planted-ns-key',
+      '--planted-then-companion',
+    ],
+  );
+  assert.ok(
+    collectContextualCandidateValues(plantedModules).get('--planted-imported-key')?.has('fast'),
+    'contextual candidate synthesizer must extract enum values like "fast" even when gated via an imported key constant',
+  );
+
+  // Fail-closed controls: dynamic variable import() and opaque namespace forwarding must both throw loudly.
+  const unhandledImportModules = new Map(runtimeModules);
+  unhandledImportModules.set('runtime/unhandled-import.mjs', [
+    'export async function runUnhandled({ options = {} } = {}) {',
+    "  const spec = './other.mjs';",
+    '  return import(spec);',
+    '}',
+  ].join('\n'));
+  assert.throws(
+    () => extractRuntimeCommandOptions(unhandledImportModules, [['runtime/unhandled-import.mjs', 'runUnhandled']]),
+    /SEAM26 encountered unhandled dynamic import/,
+  );
+
+  const unhandledNsModules = new Map(runtimeModules);
+  unhandledNsModules.set('runtime/unhandled-ns.mjs', [
+    'export async function runUnhandledNs({ options = {} } = {}) {',
+    "  const ns = await import('./runtime-preflight.mjs');",
+    '  return Object.values(ns)[0](options);',
+    '}',
+  ].join('\n'));
+  assert.throws(
+    () => extractRuntimeCommandOptions(unhandledNsModules, [['runtime/unhandled-ns.mjs', 'runUnhandledNs']]),
+    /SEAM26 encountered unhandled usage of namespace ns/,
+  );
+
+  const contextualCandidatesByFlag = collectContextualCandidateValues(runtimeModules);
+  const allPackageDashFlags = new Set([
+    ...extractRuntimeCommandOptions(runtimeModules, [['index.mjs', 'lint']]),
+    ...contextualCandidatesByFlag.keys(),
+  ]);
+
+  // Live behavioral option-lookup spy across seam.check and seam.simulate (catches any runtime option lookup regardless of syntax).
+  const setup = harbor(t);
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'POST' && entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+    return f.normal(entry);
+  });
+  const observedCheckFlags = await observeRuntimeOptionLookups(allPackageDashFlags, { '--json': true }, async spyOptions => {
+    const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+    const code = await seam.check({ words: ['place-order'], options: spyOptions, cwd: setup.repo }, ports);
+    assert.equal(code, 0, ports.stderr.text);
+  });
+  const trySpySetup = harbor(t);
+  const observedTryFlags = await observeRuntimeOptionLookups(allPackageDashFlags, { '--no-wait': true }, async spyOptions => {
+    const { ports } = portsFor(
+      { HOME: trySpySetup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: trySpySetup.state },
+      { openUrl: async () => true },
+    );
+    const code = await seam.simulate({ words: ['place-order'], options: spyOptions, cwd: trySpySetup.repo }, ports);
+    assert.equal(code, 0, ports.stderr.text);
+  });
+
+  const checkRuntimeOptions = [...new Set([...staticCheckOptions, ...observedCheckFlags])].sort();
+  const tryRuntimeOptions = [...new Set([...staticTryOptions, ...observedTryFlags])].sort();
+
+  const checkRoute = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'check');
+  const lintRoute = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'lint');
+  const tryRoute = PUBLIC_COMMAND_ROUTES.find(route => route.id === 'try');
+  const checkCatalogSet = new Set(checkRoute.options.map(option => option.name));
+  const lintCatalogSet = new Set(lintRoute.options.map(option => option.name));
+  const tryCatalogSet = new Set(tryRoute.options.map(option => option.name));
+
+  const missingCheck = checkRuntimeOptions.filter(flag => !checkCatalogSet.has(flag));
+  const missingTry = tryRuntimeOptions.filter(flag => !tryCatalogSet.has(flag));
+  assert.deepEqual(missingCheck, [], `src/command-catalog.mjs check route is missing runtime-client test options: ${missingCheck.join(', ')}`);
+  assert.deepEqual(missingTry, [], `src/command-catalog.mjs try route is missing runtime-client simulate options: ${missingTry.join(', ')}`);
+
+  const sampleArgForOption = option => {
+    if (!option || option.kind === 'flag') return { argv: [option.name], value: true };
+    if (option.kind === 'optional-integer') return { argv: [option.name, String(option.default ?? option.min ?? 1)], value: option.default ?? option.min ?? 1 };
+    if (option.kind === 'integer') return { argv: [option.name, String(option.min ?? 1)], value: option.min ?? 1 };
+    if (option.kind === 'uuid') return { argv: [option.name, '11111111-1111-4111-8111-111111111111'], value: '11111111-1111-4111-8111-111111111111' };
+    if (option.choices?.length) return { argv: [option.name, option.choices[0]], value: option.choices[0] };
+    return { argv: [option.name, 'sample-value'], value: 'sample-value' };
+  };
+
+  // Whole-package behavioral lint probe: test EVERY --flag literal anywhere in @promptdriven/runtime-client/src
+  // (with contextual enum/number/string candidates from the package source) against runCheck({ '--lint': true, [flag]: candidate }).
+  const checkOptionByName = new Map(checkRoute.options.map(option => [option.name, option]));
+  const lintAcceptedAtRuntime = [];
+  for (const flag of [...allPackageDashFlags].sort()) {
+    if (flag === '--lint') continue;
+    const spec = checkOptionByName.get(flag);
+    const contextual = contextualCandidatesByFlag.get(flag) ?? new Set([true, 1, 'sample-value']);
+    const candidates = spec
+      ? [...new Set([sampleArgForOption(spec).value, ...(spec.choices ?? []), ...contextual])]
+      : [...contextual];
+    let accepted = false;
+    for (const candidate of candidates) {
+      const { ports } = portsFor(
+        { HOME: setup.home, PDD_STATE_DIR: setup.state, PDD_RUNTIME_URL: 'http://127.0.0.1:9' },
+        { gh: () => ({ status: 1, stdout: '', stderr: 'not signed in' }) },
+      );
+      const exitCode = await seam.runCheck(
+        { cwd: setup.repo, words: [], options: { '--lint': true, [flag]: candidate } },
+        ports,
+      );
+      if (exitCode !== 2) {
+        accepted = true;
+        break;
+      }
+    }
+    if (accepted) lintAcceptedAtRuntime.push(flag);
+  }
+  assert.deepEqual(lintAcceptedAtRuntime.sort(), ['--json', '--local', '--max-calls', '--timeout']);
+  const missingLint = lintAcceptedAtRuntime.filter(flag => !lintCatalogSet.has(flag));
+  assert.deepEqual(missingLint, [], `src/command-catalog.mjs lint route is missing runtime-client lint options: ${missingLint.join(', ')}`);
+
+  // Verify argument-parser accepts every declared option across test, lint and simulate.
+  for (const [route, commandWord] of [[checkRoute, 'test'], [lintRoute, 'lint'], [tryRoute, 'simulate']]) {
+    for (const option of route.options) {
+      const { argv } = sampleArgForOption(option);
+      const plan = parseArgv([commandWord, ...argv]);
+      assert.ok(Object.hasOwn(plan.options, option.name), `parseArgv must accept ${commandWord} ${option.name}`);
+    }
+  }
+
+  // Verify #3444 bounds and end-to-end runtime-client acceptance of --max-total-calls and --no-restart-replacement.
+  assert.deepEqual(
+    parseArgv(['test', '--max-total-calls', '25', '--no-restart-replacement']).options,
+    { '--max-total-calls': '25', '--no-restart-replacement': true },
+  );
+  assert.deepEqual(
+    parseArgv(['test', '--affected', '--max-total-calls', '999999', '--no-restart-replacement']).options,
+    { '--affected': true, '--max-total-calls': '999999', '--no-restart-replacement': true },
+  );
+  for (const invalid of [
+    ['test', '--max-total-calls', '0'],
+    ['test', '--max-total-calls', '1000000'],
+    ['test', '--no-restart-replacement=true'],
+  ]) {
+    assert.throws(() => parseArgv(invalid), CommandInputError, invalid.join(' '));
+  }
+
+  const budgetFake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const planFromCli = parseArgv(['test', 'place-order', '--max-total-calls', '12', '--no-restart-replacement', '--json']);
+  const { ports } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: budgetFake.origin, PDD_STATE_DIR: setup.state });
+  const exitCode = await seam.check(
+    { words: [...planFromCli.operands], options: { ...planFromCli.options }, cwd: setup.repo },
+    ports,
+  );
+  assert.equal(exitCode, 0, ports.stderr.text);
+  const checkRequests = budgetFake.posts.filter(entry => entry.command === 'check');
+  assert.equal(checkRequests.length, 1);
+  assert.equal(checkRequests[0].request.max_calls, 12, '--max-total-calls must clamp request max_calls when lower than default');
+
+  const restartedSetup = harbor(t);
+  const restartedFake = await fakeRuntime(t, (entry, f) => {
+    if (entry.method === 'POST' && entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.method === 'POST') return { status: 202, json: f.check(entry.request.requestId, 'queued') };
+    const id = entry.url.split('/').at(-1);
+    return { status: 200, json: f.check(id, 'unknown', [], [{ code: 'service-restarted', message: 'Service restarted' }]) };
+  });
+  const noRestartPlan = parseArgv(['test', 'place-order', '--no-restart-replacement', '--json']);
+  const { ports: noRestartPorts } = portsFor({
+    HOME: restartedSetup.home,
+    PDD_RUNTIME_URL: restartedFake.origin,
+    PDD_STATE_DIR: restartedSetup.state,
+  });
+  await seam.check(
+    { words: [...noRestartPlan.operands], options: { ...noRestartPlan.options }, cwd: restartedSetup.repo },
+    noRestartPorts,
+  );
+  assert.equal(
+    restartedFake.posts.filter(entry => entry.command === 'check').length,
+    1,
+    '--no-restart-replacement must prevent automatic replacement check POST on service-restarted',
+  );
 });

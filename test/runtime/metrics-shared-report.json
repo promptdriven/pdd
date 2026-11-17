@@ -21,6 +21,10 @@
     {
       "id": "AC5",
       "text": "Importing the same event twice does not add a second issue or event, and an absent machine is shown as a coverage gap."
+    },
+    {
+      "id": "AC6",
+      "text": "A weekly report anchored on Wednesday 2026-11-11 covers Monday 2026-11-09 through Wednesday 2026-11-11 (3 elapsed days, refreshing Monday), counts an issue worked on both Tuesday and Wednesday once in weekly totals, and resets to 1 elapsed day on Monday 2026-11-16."
     }
   ],
   "initial_world": {},
@@ -285,6 +289,231 @@
           "path": "/coverage/missingSources/0",
           "op": "equals",
           "value": "machine-b"
+        }
+      ]
+    },
+    {
+      "step_id": "week-wednesday",
+      "entry_path": "prompts/cli/metrics-model.prompt.md",
+      "operation": "calculateMetrics",
+      "input": {
+        "events": [
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "prior-sun-delivery",
+            "repo": "a/b",
+            "issue": 2,
+            "type": "delivery",
+            "at": "2026-11-08T18:00:00Z",
+            "observedAt": "2026-11-08T18:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "pr": 5,
+              "head": "h5",
+              "explicit": true,
+              "evidence": "https://example.test/pull/5"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "tue-start",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "start",
+            "at": "2026-11-10T10:00:00Z",
+            "observedAt": "2026-11-10T10:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "origin": "autopilot",
+              "requiredOutcome": "code"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "wed-delivery",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "delivery",
+            "at": "2026-11-11T15:00:00Z",
+            "observedAt": "2026-11-11T15:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "pr": 8,
+              "head": "h8",
+              "explicit": true,
+              "evidence": "https://example.test/pull/8"
+            }
+          }
+        ],
+        "repo": "a/b",
+        "scope": {
+          "kind": "week",
+          "date": "2026-11-11"
+        },
+        "timezone": "UTC",
+        "observedAt": "2026-11-11T23:00:00Z",
+        "sources": [
+          "machine-a"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/weekStart",
+          "op": "equals",
+          "value": "2026-11-09"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/weekEnd",
+          "op": "equals",
+          "value": "2026-11-15"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/throughDate",
+          "op": "equals",
+          "value": "2026-11-11"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/elapsedDays",
+          "op": "equals",
+          "value": 3
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/refreshesOn",
+          "op": "equals",
+          "value": "Monday"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/bySkill/all/issues",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/bySkill/all/merged",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/days",
+          "op": "count",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "step_id": "week-monday-reset",
+      "entry_path": "prompts/cli/metrics-model.prompt.md",
+      "operation": "calculateMetrics",
+      "input": {
+        "events": [
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "prior-sun-delivery",
+            "repo": "a/b",
+            "issue": 2,
+            "type": "delivery",
+            "at": "2026-11-08T18:00:00Z",
+            "observedAt": "2026-11-08T18:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "pr": 5,
+              "head": "h5",
+              "explicit": true,
+              "evidence": "https://example.test/pull/5"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "tue-start",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "start",
+            "at": "2026-11-10T10:00:00Z",
+            "observedAt": "2026-11-10T10:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "origin": "autopilot",
+              "requiredOutcome": "code"
+            }
+          },
+          {
+            "schema": "pdd.metrics.event.v1",
+            "id": "wed-delivery",
+            "repo": "a/b",
+            "issue": 1,
+            "type": "delivery",
+            "at": "2026-11-11T15:00:00Z",
+            "observedAt": "2026-11-11T15:00:00Z",
+            "source": "machine-a",
+            "data": {
+              "pr": 8,
+              "head": "h8",
+              "explicit": true,
+              "evidence": "https://example.test/pull/8"
+            }
+          }
+        ],
+        "repo": "a/b",
+        "scope": {
+          "kind": "week",
+          "date": "2026-11-16"
+        },
+        "timezone": "UTC",
+        "observedAt": "2026-11-16T12:00:00Z",
+        "sources": [
+          "machine-a"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/weekStart",
+          "op": "equals",
+          "value": "2026-11-16"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/weekEnd",
+          "op": "equals",
+          "value": "2026-11-22"
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/elapsedDays",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/bySkill/all/issues",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "AC6",
+          "target": "result",
+          "path": "/week/days",
+          "op": "count",
+          "value": 1
         }
       ]
     }
