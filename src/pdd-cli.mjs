@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 485cf4f764f6610b675659d849068b7c3be5678a7323ad82dcc308197deab574).
+// Prompt: prompts/cli/pdd-cli.prompt.md
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -408,7 +408,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const input = { words: plan.local === 'contracts-sync' ? ['sync'] : [], options: { ...plan.options }, cwd };
         const ports = { env, stdout, stderr };
         if (contracts) return await (contracts.contracts ?? contracts.runContracts).call(contracts, input, ports);
-        const [{ contracts: run }] = await Promise.all([import('./runtime-seam.mjs'), import('./product.mjs'), import('./workflow-runner.mjs')]);
+        const { contracts: run } = await import('./runtime-seam.mjs');
         return await run(input, ports);
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':

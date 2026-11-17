@@ -7,21 +7,24 @@ import {join,dirname,resolve} from 'node:path';
 import {execFileSync,spawnSync} from 'node:child_process';
 import {startRun,stepDone,approveRun} from '../../src/workflow-runner.mjs';
 import {fakeHerdr} from './fake-herdr.mjs';
+import {copyGitTemplate} from './git-template.mjs';
 export const packageRoot=resolve(import.meta.dirname,'../..');
 export const git=(root,...args)=>execFileSync('git',args,{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 export const put=(root,path,value)=>{mkdirSync(dirname(join(root,path)),{recursive:true});writeFileSync(join(root,path),typeof value==='string'?value:JSON.stringify(value));};
 export async function nativeFixture(t,{cli=process.env.PDD_NATIVE_CLI||join(packageRoot,'bin/pdd.mjs'),workflow='small-change'}={}) {
   const parent=mkdtempSync(join(tmpdir(),'pdd-native-cli-'));t.after(()=>rmSync(parent,{recursive:true,force:true}));
-  const source=join(parent,'source'),home=join(parent,'home');mkdirSync(source);mkdirSync(home);
-  git(source,'init','-q','-b','main');git(source,'config','user.name','Native fixture');git(source,'config','user.email','fixture@example.invalid');git(source,'remote','add','origin','https://github.com/example/project.git');
+  const source=join(parent,'source'),home=join(parent,'home');mkdirSync(home);
   const storyPath='user_stories/native.md',promptPath='prompts/native.prompt.md',testPath='test/native.mjs';
   const a=`${testPath}::required A@1:1`,b=`${testPath}::required B@2:1`;
   const reader={rows:'/rows',fields:Object.fromEntries(['producer','producerVersion','runner','runnerVersion','runtimeVersion','capture','complete','exitCode','source','gates','prerequisites'].map(k=>[k,'/'+k]).concat(['occurrenceId','testId','selected','started','outcome','skipReason'].map(k=>[k,'/'+k]))),outcomes:{ok:'passed',skip:'skipped',fail:'failed'}};
   const profile={schema:'pdd.native-profile.v1',profileId:'native',reportFormat:'json',requiredIds:[a,b],requiredGates:[],fixtures:[],mappings:[{storyPath,criterionId:'AC1',criterionText:'Both native effects work.',nativeIds:[a,b]}],sourcePaths:['source.mjs'],testPaths:[testPath],reader};
   const prompt=()=>`# Native module\n\n<a id="native-validation-profile-native"></a>\n<details><summary>Native validation profile: native</summary>\n\n\x60\x60\x60json\n${JSON.stringify(profile)}\n\x60\x60\x60\n</details>\n`;
-  put(source,storyPath,'# Native\n\n## Acceptance criteria\n\n1. Both native effects work.\n\n## Native validation\n\n[Owner](../prompts/native.prompt.md#native-validation-profile-native)\n');
-  put(source,promptPath,'# Placeholder\n');put(source,testPath,'test("required A",()=>{});\ntest("required B",()=>{});\n');put(source,'source.mjs','export const value=1;\n');
-  git(source,'add','.');git(source,'commit','-qm','native fixture');git(source,'update-ref','refs/remotes/origin/main',git(source,'rev-parse','HEAD'));
+  copyGitTemplate('native-cli-fixture',source,tpl=>{
+    git(tpl,'init','-q','-b','main');git(tpl,'config','user.name','Native fixture');git(tpl,'config','user.email','fixture@example.invalid');git(tpl,'remote','add','origin','https://github.com/example/project.git');
+    put(tpl,storyPath,'# Native\n\n## Acceptance criteria\n\n1. Both native effects work.\n\n## Native validation\n\n[Owner](../prompts/native.prompt.md#native-validation-profile-native)\n');
+    put(tpl,promptPath,'# Placeholder\n');put(tpl,testPath,'test("required A",()=>{});\ntest("required B",()=>{});\n');put(tpl,'source.mjs','export const value=1;\n');
+    git(tpl,'add','.');git(tpl,'commit','-qm','native fixture');git(tpl,'update-ref','refs/remotes/origin/main',git(tpl,'rev-parse','HEAD'));
+  });
   const env={...process.env,HOME:home,XDG_CONFIG_HOME:join(home,'.config'),PDD_SUITE_QUEUE:join(parent,'suite-queue'),PDD_STATE_DIR:join(parent,'runtime'),PDD_AGENT_SESSION:'1'};
   const herdr=fakeHerdr();
   const ports={env,layoutDirectory:join(parent,'layout'),herdr:herdr.herdr,isTTY:false,findNativeSessions:stage=>herdr.findNativeSessions(stage),execFile:async(file,args,options)=>{
