@@ -2740,7 +2740,7 @@ async function finishPr(run, area, step, p, lines, packageRoot = PACKAGE_ROOT) {
       latest.metricsObservations=[...(latest.metricsObservations ?? []),{type:'milestone',at:new Date(p.now()).toISOString(),data:{stage:'implementation-ready',pr:pr.number,head:pr.publishedHeadSha}}];
     }
   };
-  if(area.replay_evidence===REPLAY_POLICY)lines.push(formatReplayEvidence(run.replayEvidence,{rules:await rulesToCheck(run,p)}));
+  if(area.replay_evidence===REPLAY_POLICY)lines.push(formatReplayEvidence(run.replayEvidence,{rules:await rulesToCheck(run,p),warningFormat:'plain'}));
   if (area.then === 'ask-code') {
     // New commits on an open PR 1 keep the question's time, so a yes the person already gave still counts
     // (a change request with pdd workflow changes moves it).
@@ -3381,7 +3381,7 @@ async function stepDoneCommand({ step, summary, skipped, noPublish = false, cwd,
   const hasRuntime=runtimeLines(record.summary).length>0;
   if(hasRuntime)record.source={kind:'git-content-v1',sha256:gitFingerprint(run.root)};
   const replay=area.replay_evidence===REPLAY_POLICY && (noPublish || run.localPublication?.area === area.name || area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
-  if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p,record.summary)}));}
+  if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p,record.summary),warningFormat:'plain'}));}
   if (run.workflow === 'small-change' && !askArea(run) && ['scope','change','verify','formal'].includes(step))
     record.smallChange = {checklist: readSmallChangeChecklist(run), formal: readFormalEvidence(run)};
   const applyDone=latest=>{

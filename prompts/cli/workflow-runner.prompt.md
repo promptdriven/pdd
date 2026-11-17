@@ -1330,7 +1330,8 @@ read or JSON parse names the exact repo-relative file and the cleaned parser/rea
 For opted-in code steps, read and save the structured result as run.replayEvidence and on the step record;
 show its status separately from free-form summaries. The result always holds the formal status, read on its own
 (#3029); pass the run's `rulesToCheck` (readable facts below) as formatReplayEvidence option `rules` in the PR body
-and in the `done` and publication output, so the formal line says "not needed" only when pdd read the run's Stories, none has Rules to check and no scenario vectors need the block. Revalidate after automatic commits immediately before
+and in the `done` and publication output, so the formal line says "not needed" only when pdd read the run's Stories, none has Rules to check and no scenario vectors need the block. Supply `warningFormat: 'plain'` in command output
+only. Revalidate after automatic commits immediately before
 publication, including retries and updates of an existing code PR. The canonical report goes above every
 Prompt tests, prose PASS claim or verify.md and retains assertion/formal failure lines. Missing, stale or
 malformed reports publish as BLOCKED/NOT REPLAYED, never PASS. Real assertion failures remain publishable;
