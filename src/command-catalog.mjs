@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f0b12e421937140fc52987e2607420da7388ce5d35b780dec830c98efc1aaec8).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 52daaeaf210c1bc32a37bb9536cf7226b1f32f034d3dfbce4765d63f4beec793).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -74,7 +74,15 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
     "pdd approve --help, pdd workflow --help, or pdd autopilot --help) for",
     "all options, defaults, approval heredocs, and execution details.",
   ]),
-  closingLines: Object.freeze(["Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex, /pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).", `workflow ${run} opens the first area chat in Herdr session pdd and exits. Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.`, "The CLI has no merge command. In auto mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply."]),
+  closingLines: Object.freeze([
+    "Open Codex or Claude as usual and call a PDD skill: $pdd-feature in Codex,",
+    "/pdd-feature in Claude Code (also pdd-bug, pdd-small-change, pdd-prompting).",
+    `workflow ${run} opens the first area chat in Herdr session pdd and exits.`,
+    "Manual workflows follow RUNBOOK §2 and its person gates; pdd opens a real PR.",
+    "The CLI has no merge command. In auto mode, Autopilot merges its own pull",
+    "request after CI, a fresh review and the full test suite pass; required",
+    "human approvals still apply.",
+  ]),
   learnLines: Object.freeze(["Learn PDD: run pdd help prompting, or read the Prompting guide and the RUNBOOK.", "Prompting guide: PACKAGE_ROOT/docs/prompting-guide.md", "RUNBOOK: PACKAGE_ROOT/RUNBOOK.md"]),
   promptingLines: Object.freeze(["In PDD, prompts are the source. Code follows the prompts.", "1. Prompt: prompts/NAME.prompt.md. Write what the program does in plain English, then ## Dependencies.", "2. Story: user_stories/STORY.md. Write one thing that a person can do, then a numbered ## Acceptance criteria list.", "3. Test: tests/STORY.json. When the repo keeps its own tests in tests/ or test/, use tests/runtime/ or test/runtime/. Write steps with an exact check for each criterion.", `4. Check: run pdd ${test} --files STORY && pdd ${test} STORY in one shell call. Test includes interpreter lint (0 AI calls); use pdd ${lint} for lint-only diagnosis.`, "5. Approve: a person reads each prompt and runs pdd approve PROMPT. New behavior needs a person."])
 });
@@ -247,7 +255,7 @@ const routes = [
     forms: [form('pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto|observe|off] [--report file|draft|off] [--decisions ask|decide] [--intake off|shadow|active] [--share PERCENT] [--agent codex|claude|gemini|agy] [--auto-update release|main|off]', 'Start this repo with headless agent jobs (the core engine): check now and every 10 minutes, with no AI call on empty ticks. Autopilot works on issues with an opt-in label (--label NAME or autopilot.label in pdd.json) or on vetted ready cards when --intake active is enabled; without --intake active, a start with no label starts nothing. --runs and --checks override machine-sized run and heavy-check limits; --label, --mode and --report save this machine\'s opt-in label, mode and report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --decisions saves this machine\'s decision mode (ask asks a person only for a big decision; decide, the default, never asks); --intake saves this machine\'s intake mode (shadow writes local intake cards that never change what starts; active selects ready cards, refines improve cards via read-only repo inspection and groups related small work; off is the default). --share saves the percent of this machine\'s CPU and memory that Autopilot may use (1-100, default 50; it sets the automatic slots, the room check and the timer\'s memory limit). --agent saves or replaces this machine\'s agent and sign-in profile. --auto-update saves this machine\'s between-tick self-update mode for a user-owned global pdd install and its skills when no job is publishing or merging (release is the default; main tracks promptdriven/pdd main; off disables self-update).')] },
   { id: 'autopilot.status', prefix: ['autopilot', 'status'], local: 'autopilot-status', operands: [], options: [{name:'--all',kind:'flag'},{name:'--json',kind:'flag'}],
     forms: [form('pdd autopilot status [--all] [--json]', "Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder.")] },
-  { id: 'autopilot.logs', prefix: ['autopilot', 'logs'], local: 'autopilot-logs', operands: [{ name: 'issue', type: 'issue', optional: true }],
+  { id: 'autopilot.logs', prefix: ['autopilot', 'logs'], local: 'autopilot-logs', operands: [{ name: 'issue', type: 'text', optional: true }],
     options: [{ name: '--issue', kind: 'text' }, { name: '--follow', kind: 'flag' }, { name: '-f', kind: 'flag' }, { name: '--lines', kind: 'integer', min: 1, max: 5000 }, { name: '--json', kind: 'flag' }],
     forms: [
       form('pdd autopilot logs [ISSUE] [--follow|-f] [--lines N] [--json]', 'List current headless Autopilot workers with stage, owned process state, suite queue position, blockers and saved log or evidence paths, or inspect and follow one issue worker live (--follow / -f detaches cleanly on Ctrl-C without stopping the worker or changing observe mode). Read-only; no GitHub write or approval effect.'),

@@ -187,21 +187,38 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch { line(stderr, 'Regression scan failed.'); return 1; }
     }
     case 'autopilot-logs': {
+      const parseSelector = raw => {
+        const text = String(raw ?? '').trim().replace(/\/$/, '');
+        const plain = /^#?([1-9][0-9]*)$/.exec(text);
+        if (plain) return { ok: true, issue: Number(plain[1]), repo: null };
+        const qualified = /^([A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$/.exec(text);
+        if (qualified) return { ok: true, issue: Number(qualified[2]), repo: qualified[1] };
+        const url = /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+)\/issues\/([1-9][0-9]*)$/.exec(text);
+        if (url) return { ok: true, issue: Number(url[2]), repo: url[1] };
+        return { ok: false, issue: null, repo: null };
+      };
       const follow = Boolean(plan.options['--follow'] || plan.options['-f']);
       const json = plan.options['--json'] === true;
       if (follow && json) { line(stderr, '--json prints one snapshot and cannot be combined with --follow.'); return 2; }
-      if (plan.operands[0] !== undefined && plan.options['--issue'] !== undefined && plan.operands[0] !== plan.options['--issue']) {
+      const posRaw = plan.operands[0], optRaw = plan.options['--issue'];
+      const posParsed = posRaw !== undefined ? parseSelector(posRaw) : null;
+      const optParsed = optRaw !== undefined ? parseSelector(optRaw) : null;
+      if ((posParsed && !posParsed.ok) || (optParsed && !optParsed.ok)) {
+        line(stderr, 'Use a valid issue number, #N, owner/repo#N or GitHub issue URL.'); return 2;
+      }
+      if (posParsed && optParsed && (posParsed.issue !== optParsed.issue
+        || (posParsed.repo && optParsed.repo && posParsed.repo.toLowerCase() !== optParsed.repo.toLowerCase()))) {
         line(stderr, 'Pass the issue once: pdd autopilot logs ISSUE or pdd autopilot logs --issue ISSUE.'); return 2;
       }
-      if (follow && plan.operands[0] === undefined && plan.options['--issue'] === undefined) {
+      const issue = posParsed && optParsed ? (posParsed.repo ? posRaw : optRaw) : (posRaw ?? optRaw);
+      if (follow && issue === undefined) {
         line(stderr, 'Select an issue to follow: pdd autopilot logs ISSUE --follow.'); return 2;
       }
       try {
         const input = {
           cwd,
           env,
-          ...(plan.operands[0] !== undefined ? { positionalIssue: plan.operands[0] } : {}),
-          ...(plan.options['--issue'] !== undefined ? { optionIssue: plan.options['--issue'] } : {}),
+          ...(issue !== undefined ? { issue } : {}),
           follow,
           ...(plan.options['--lines'] !== undefined ? { lines: Number(plan.options['--lines']) } : {}),
           json,

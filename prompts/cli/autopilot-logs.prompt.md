@@ -1,11 +1,45 @@
 # Autopilot worker logs
 
 Own `src/autopilot-logs.mjs`. Export `runAutopilotLogs(input, ports)`,
-`inspectAutopilotWorkers(input, ports)` and `formatWorkerLogLine(line)`.
-Give a person a supported read-only way to list headless Autopilot workers,
-inspect a worker's stage, process state, queue position, blockers and saved
-evidence, and follow live worker output from the terminal without knowing
-internal state folders or touching running jobs.
+`inspectAutopilotWorkers(input, ports)`, `formatWorkerLogLine(line, secrets)`
+and `parseIssueSelector(raw)`. Give a person a supported read-only way to list
+headless Autopilot workers, inspect a worker's stage, process state, queue
+position, blockers and saved evidence, and follow live worker output from the
+terminal without knowing internal state folders or touching running jobs.
+
+## Domain decisions
+
+- **Strictly read-only inspection and `observe`-mode preservation**:
+  Viewing worker logs never creates, modifies or deletes files in the checkout,
+  Autopilot state folders, validation folders, or user configuration, never
+  calls `gh`, and never approves gates or alters `observe`, `auto` or `off`
+  modes.
+- **Same-user worker PID liveness boundary**:
+  Accept only safe integer PIDs with `pid > 1` across worker handles and
+  `suite.childPid`. In default liveness checks, any error from `kill(pid, 0)`
+  (both `ESRCH` and `EPERM`) returns `false` so system init (`pid 1`) or another
+  user's process is never reported as a running Autopilot worker; when a job
+  token is present, `ps` command output must also include that token.
+- **End-to-end secret redaction and line-aligned UTF-8 reads**:
+  Derive caller secrets with `knownSecretValues(env)` (including injected
+  `input.env`), strip ANSI/control characters, and run `redactSecrets(..., secrets)`
+  across human snapshots, `--follow` streams, and `--json` payloads — covering
+  log lines, worker metadata (`agentKind`, `signal`, `wakeAt`, `holder`,
+  `verdict`, `head`, `repo`, `gitRoot`) and file path strings (`logPaths`,
+  `evidencePaths`, `streams[].path`, `suite.logPath`, `suite.receiptPath`).
+  Align tail and incremental follow reads on `\n` (`0x0a`) byte boundaries
+  (expanding read windows up to 16 MiB and ignoring a trailing EOF newline when
+  locating the start of the tail window) so multi-byte UTF-8 codepoints and
+  secret prefixes are never split mid-line and single-line tails ending in `\n`
+  are never dropped.
+- **Bounded, pipe-safe `--follow` polling**:
+  Resolve `git rev-parse --show-toplevel` once and pass `gitRoot` into poll
+  iterations instead of spawning `git` on every poll. Attach `close` and `error`
+  (`EPIPE`) handlers on `stdout` and guard writes on `!stdout.destroyed &&
+  !stdout.writableEnded` so piped commands (`| head -n 5`) detach cleanly with
+  exit `0`, no `EPIPE` crash, no trailing detach message to a closed pipe, and
+  no leaked poll timer. Enforce `maxDurationMs` (default `3_600_000` ms / 60
+  minutes) so unattended follow sessions always terminate cleanly.
 
 ## Safety and observe mode
 
@@ -16,22 +50,25 @@ Every operation in this module is strictly read-only:
 - Never approve gates, merge pull requests, claim or release issues, wake
   scheduler ticks, or call GitHub (`gh`). Viewing preserves `observe`, `auto`
   and `off` modes unchanged.
-- Check process liveness read-only (`kill(pid, 0)` and `ps` command match on
-  the job's `.spec.json` token when present). Never send `SIGTERM`, `SIGKILL`,
+- Check process liveness read-only (`pid > 1`, `kill(pid, 0)` returning `false`
+  on any error including `EPERM` and `ESRCH`, and `ps` command match on the
+  job's `.spec.json` token when present). Never send `SIGTERM`, `SIGKILL`,
   `SIGINT` or any stopping signal to a worker or test-suite process.
-- Redact credentials and tokens in every displayed log line, error note and
-  path summary with `redactSecrets`. Strip terminal escape sequences so output
-  is safe in both interactive terminals and redirected files.
+- Redact credentials and tokens in every displayed log line, JSON field, error
+  note and path summary with `redactSecrets(..., knownSecretValues(env))`. Strip
+  terminal escape and control sequences so output is safe in interactive
+  terminals, pipes and redirected files.
 
 ## CLI contract
 
 `runAutopilotLogs({cwd, env, issue, follow, lines, json}, ports)` accepts:
 
 - `issue`: optional issue selector from the positional `[ISSUE]` operand or
-  `--issue N` (`17`, `#17`, `owner/repo#17`, or a GitHub issue URL). Passing
-  two different selectors, a blank/invalid selector, or `--follow` together
-  with `--json` returns exit code `2` with one clear usage message before state
-  inspection.
+  `--issue N` (`17`, `#17`, `owner/repo#17`, or a GitHub issue URL). When both
+  positional and `--issue` selectors are supplied directly, compare their parsed
+  issue numbers and optional repository qualifiers; conflicting selectors, a
+  blank/invalid selector, or `--follow` together with `--json` returns exit code
+  `2` with one clear usage message before state inspection.
 - `follow`: Boolean from `--follow` or `-f`. Requires a selected issue; calling
   `--follow` with no issue returns exit code `2` explaining how to pass an
   issue (`pdd autopilot logs ISSUE --follow`).
@@ -39,11 +76,13 @@ Every operation in this module is strictly read-only:
   `1` to `5000`).
 - `json`: Boolean from `--json` for structured machine-readable inspection.
 
-Injectable `ports` provide `fs`, `git(args, {cwd, env})`, `now()`, `stateRoot`,
-`coreRoot`, `isProcessAlive(pid, token)`, `readSuite({cwd, env})`, `stdout`,
-`signal`, `pollMs` (default `250`) and `sleep(ms)`. Resolve the repository root
-with `git rev-parse --show-toplevel` under `LC_ALL=C` and `LANG=C`. Outside a
-Git repository, return `{exitCode: 1, message: "This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run pdd autopilot logs again."}`.
+Injectable `ports` provide `fs`, `git(args, {cwd, env})`, `gitRoot`, `now()`,
+`stateRoot`, `coreRoot`, `isProcessAlive(pid, token)`, `readSuite({cwd, env})`,
+`stdout`, `signal`, `pollMs` (default `250`), `maxDurationMs` (default
+`3600000`) and `sleep(ms)`. Resolve the repository root with
+`git rev-parse --show-toplevel` under `LC_ALL=C` and `LANG=C` unless
+`ports.gitRoot` is already supplied. Outside a Git repository, return
+`{exitCode: 1, message: "This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again."}`.
 Derive the state key from `sha256(gitToplevel).slice(0, 20)` under `stateRoot`
 (default `<HOME>/.local/state/pdd/autopilot`), reading `<hash>.json`,
 `<hash>-core/core.json`, `<hash>-core/jobs/*.json`,
@@ -123,12 +162,14 @@ waiting or stale state:
   test/command text lines intact and redacted.
 - **Live follow (`--follow` / `-f`)**:
   Stream the worker header, initial tail lines, and newly appended complete log
-  lines to `stdout` as the worker runs, emitting `[stage]` notices whenever the
-  worker transitions across stages or opens a new log (including live suite
-  validation logs). Stop cleanly with exit code `0` when the job finishes (or
-  has no live process while the Autopilot timer is off) or when `signal` /
-  `SIGINT` / `SIGTERM` detaches the viewer. Detaching prints a confirmation
-  that the background worker continues untouched.
+  lines to `stdout` as the worker runs, reusing the resolved `gitRoot` on poll
+  ticks and emitting `[stage]` notices whenever the worker transitions across
+  stages or opens a new log (including live suite validation logs). Stop cleanly
+  with exit code `0` when the job finishes (or has no live process while the
+  Autopilot timer is off), when `maxDurationMs` elapses, when `stdout` closes or
+  errors (`EPIPE`), or when `signal` / `SIGINT` / `SIGTERM` detaches the viewer.
+  When `stdout` is still writable on signal detach, print a confirmation that
+  the background worker continues untouched.
 
 ## Dependencies
 
@@ -136,7 +177,5 @@ waiting or stale state:
   `core.json`, `logs/` and `history.jsonl` state shapes.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for
   read-only `readSuiteProgress` queue and validation-log inspection.
-- [Repository Autopilot settings](autopilot.prompt.md): required context for
-  `pdd.json` mode display and CLI subcommand routing.
 - [Secret redaction](secret-redaction.prompt.md): required for redacting
-  displayed log lines and diagnostics.
+  displayed log lines, JSON payloads, metadata and path summaries.

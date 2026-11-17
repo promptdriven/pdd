@@ -115,10 +115,10 @@ test('root help keeps its first line, grouped commands, learn paths and closing 
   for (const output of outputs) assert.equal(output.stdout, outputs[0].stdout);
   const rootHelp = lines(outputs[0].stdout), scoped = lines((await pdd(['test', '--help'])).stdout);
   const testRows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.split(' ')[1] === 'test').map(formLine);
-  // Command help: first line, empty line, its own forms, empty line and the three closing lines; no learn or path lines.
+  // Command help: first line, empty line, its own forms, empty line and closingLines; no learn or path lines.
   assert.equal(scoped[1], ''); assert.deepEqual(scoped.slice(2, 2 + testRows.length), testRows); assert.equal(scoped[2 + testRows.length], '');
   const closing = scoped.slice(3 + testRows.length);
-  assert.equal(closing.length, 3);
+  assert.deepEqual(closing, PUBLIC_HELP_TEXT.closingLines);
   assert.doesNotMatch(scoped.join('\n'), /help prompting|prompting-guide\.md|RUNBOOK\.md/);
   // Root help: the same first line, usage, quick start, grouped summaries, focused help note, learn/path lines, and closing lines.
   const expectedBody = [

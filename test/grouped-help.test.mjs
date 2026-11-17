@@ -55,16 +55,12 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   assert.doesNotMatch(baseline, /<<'PDD_SAID'/);
   assert.doesNotMatch(baseline, /removed full engine/i);
 
-  // Every line in usageLine, quickStartLines, groups, and focusedHelpLines fits in 80 columns
-  const wrappedLines = [
-    PUBLIC_HELP_TEXT.usageLine,
-    'Quick start:',
-    ...PUBLIC_HELP_TEXT.quickStartLines,
-    ...PUBLIC_HELP_TEXT.groups.flatMap(g => [`${g.title}:`, ...g.lines]),
-    ...PUBLIC_HELP_TEXT.focusedHelpLines,
-  ];
-  for (const line of wrappedLines) {
-    assert.ok(line.length <= 80, `line exceeds 80 columns (${line.length}): "${line}"`);
+  // Every single line of root `pdd --help` (including heading, groups, learnLines, and closingLines) fits in <= 80 columns
+  for (const line of allLines) {
+    assert.ok(line.length <= 80, `root help line exceeds 80 columns (${line.length}): "${line}"`);
+  }
+  for (const line of PUBLIC_HELP_TEXT.closingLines) {
+    assert.ok(line.length <= 80, `closingLine exceeds 80 columns (${line.length}): "${line}"`);
   }
 
   // Preserves Focused help guidance and installed Prompting guide / RUNBOOK paths

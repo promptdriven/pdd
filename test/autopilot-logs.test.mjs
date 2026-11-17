@@ -1,6 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -77,6 +78,9 @@ test('3475: pdd autopilot logs is discoverable in help and shell completion and 
     ['autopilot', 'logs', '-f'],
     ['autopilot', 'logs', '12', '--follow', '--json'],
     ['autopilot', 'logs', '12', '--issue', '13'],
+    ['autopilot', 'logs', 'acme/widgets#12', '--issue', 'other/repo#12'],
+    ['autopilot', 'logs', 'not-an-issue'],
+    ['autopilot', 'logs', '--issue', 'not-an-issue'],
     ['autopilot', 'logs', '--lines', '0'],
   ]) {
     const stdout = sink(), stderr = sink();
@@ -86,11 +90,37 @@ test('3475: pdd autopilot logs is discoverable in help and shell completion and 
     assert.ok(stderr.text.trim().length > 0);
   }
 
+  // CLI passes { issue } contract and accepts "#42", "owner/repo#42", and matching positional + --issue
+  const capturedInputs = [];
+  for (const argv of [
+    ['autopilot', 'logs', '#42'],
+    ['autopilot', 'logs', 'acme/widgets#42'],
+    ['autopilot', 'logs', '#42', '--issue', '42'],
+  ]) {
+    const stdout = sink(), stderr = sink();
+    const code = await runPdd(argv, {
+      stdout,
+      stderr,
+      cwd: '/tmp/repo',
+      autopilotLogs: {
+        runAutopilotLogs: async input => {
+          capturedInputs.push(input);
+          return { exitCode: 0, message: `ok ${input.issue}` };
+        },
+      },
+    });
+    assert.equal(code, 0, `${argv.join(' ')}: ${stderr.text}`);
+  }
+  assert.equal(capturedInputs[0].issue, '#42');
+  assert.equal(capturedInputs[1].issue, 'acme/widgets#42');
+  assert.equal(capturedInputs[2].issue, '42');
+  assert.equal('positionalIssue' in capturedInputs[0], false);
+
   const unknownSub = await runAutopilotSubcommand('unknown', {});
   assert.equal(unknownSub.exitCode, 2);
 });
 
-test('3475: outside a Git repository pdd autopilot logs exits 1 with clear guidance', async () => {
+test('3475: outside a Git repository pdd autopilot logs exits 1 with exact docs/cli.md guidance', async () => {
   const stdout = sink(), stderr = sink();
   const code = await runPdd(['autopilot', 'logs'], {
     stdout,
@@ -102,7 +132,10 @@ test('3475: outside a Git repository pdd autopilot logs exits 1 with clear guida
   });
   assert.equal(code, 1);
   assert.equal(stdout.text, '');
-  assert.match(stderr.text, /This folder is not a Git repository/);
+  assert.equal(
+    stderr.text.trim(),
+    'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.',
+  );
 });
 
 test('3475: formatWorkerLogLine renders Codex, Claude, Gemini/agy JSONL and redacts secrets & ANSI codes', () => {
@@ -310,19 +343,24 @@ test('3475: distinguishes queued suite, live running suite, repair worker, and s
   assert.match(listOut.text, /Recent finished workers[\s\S]*?#99 \(PR #199\): ready-observe/);
   assert.match(listOut.text, /Follow a worker live: pdd autopilot logs 101 --follow/);
 
-  // 2. Selected worker view via --issue N (`pdd autopilot logs --issue 102 --lines 5`)
-  const issueOut = sink(), issueErr = sink();
-  const issueCode = await runPdd(['autopilot', 'logs', '--issue', '102', '--lines', '5'], {
-    stdout: issueOut,
-    stderr: issueErr,
-    cwd: sb.gitRoot,
-    autopilotLogsPorts: ports,
-  });
-  assert.equal(issueCode, 0, issueErr.text);
-  assert.match(issueOut.text, /Stage: PR #211 \(cccc3333\): running full test suite \(pid 5202\) \[pass 2, fail 0\]/);
-  assert.match(issueOut.text, new RegExp(ev102.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(issueOut.text, /ok 1 - first suite case/);
-  assert.match(issueOut.text, /ok 2 - second suite case/);
+  // 2. Selected worker view via "#102" (`pdd autopilot logs "#102" --lines 5`) and --issue 102
+  for (const argv of [
+    ['autopilot', 'logs', '#102', '--lines', '5'],
+    ['autopilot', 'logs', '--issue', '102', '--lines', '5'],
+  ]) {
+    const issueOut = sink(), issueErr = sink();
+    const issueCode = await runPdd(argv, {
+      stdout: issueOut,
+      stderr: issueErr,
+      cwd: sb.gitRoot,
+      autopilotLogsPorts: ports,
+    });
+    assert.equal(issueCode, 0, issueErr.text);
+    assert.match(issueOut.text, /Stage: PR #211 \(cccc3333\): running full test suite \(pid 5202\) \[pass 2, fail 0\]/);
+    assert.match(issueOut.text, new RegExp(ev102.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(issueOut.text, /ok 1 - first suite case/);
+    assert.match(issueOut.text, /ok 2 - second suite case/);
+  }
 
   // 3. JSON snapshot (`pdd autopilot logs 101 --json`)
   const jsonOut = sink(), jsonErr = sink();
@@ -447,4 +485,284 @@ test('3475: --follow streams live updates across stage transitions and detaches 
   assert.equal(postSnap.workers.length, 1);
   assert.equal(postSnap.workers[0].issue, 77);
   assert.equal(postSnap.workers[0].liveProcess, true);
+});
+
+test('3475: enforces pid > 1 and treats EPERM / non-owned PIDs as not running in default liveness check', async t => {
+  const sb = makeSandbox(t, { mode: 'observe' });
+  const nowMs = Date.parse('2026-11-17T21:00:00Z');
+  const logFile = join(sb.coreRoot, 'logs', '51-build-1.log');
+  writeFileSync(logFile, 'Starting step\n');
+
+  // Job #51 has pid: 1 (system init/launchd — EPERM if probed) and suite childPid: 1
+  writeFileSync(join(sb.coreRoot, 'jobs', '51.json'), JSON.stringify({
+    issue: 51,
+    title: 'Reject pid 1 and invalid pids',
+    phase: 'pr',
+    pr: 88,
+    head: 'abcd1234',
+    agent: { pid: 1, log: logFile, started: nowMs - 5000 },
+    review: { agent: { pid: 0, log: logFile, started: nowMs - 5000 } },
+    vectors: { agent: { pid: -9, log: logFile, started: nowMs - 5000 } },
+    suite: { cwd: sb.gitRoot, head: 'abcd1234', agent: { pid: 1, log: logFile } },
+  }));
+
+  // Omit isProcessAlive so real defaultIsProcessAlive runs!
+  const snap = await inspectAutopilotWorkers({ cwd: sb.gitRoot }, {
+    git: sb.git,
+    stateRoot: sb.stateRoot,
+    now: () => nowMs,
+    readSuite: () => ({
+      ok: true,
+      state: 'running',
+      childPid: 1,
+      counts: { pass: 1, fail: 0 },
+      logPath: logFile,
+    }),
+  });
+
+  assert.equal(snap.ok, true);
+  const worker = snap.workers.find(w => w.issue === 51);
+  assert.ok(worker);
+  assert.equal(worker.suite.childPid, null, 'childPid 1 must be rejected');
+  assert.doesNotMatch(worker.suite.detail, /pid 1\b/);
+  assert.equal(worker.liveProcess, false, 'pid 1 must never be treated as a live worker');
+  assert.equal(worker.processState, 'idle');
+});
+
+test('3475: redacts input.env secrets and strips ANSI across --json, state/path fields, and long tail/follow lines without mid-line slicing', async t => {
+  const sb = makeSandbox(t, { mode: 'observe' });
+  const nowMs = Date.parse('2026-11-17T21:10:00Z');
+  const envSecret = 'custom-env-secret-value-998877';
+  const inputEnv = { ...process.env, MY_WORKER_SECRET_TOKEN: envSecret };
+
+  // Put secret and ANSI codes in launcherState, machineState, worker metadata, and file path!
+  writeFileSync(join(sb.stateRoot, `${sb.stateId}.json`), JSON.stringify({
+    repo: `acme/\x1b[31mwidgets-${envSecret}\x1b[0m`,
+    root: sb.gitRoot,
+    enabled: true,
+    mode: 'observe',
+  }));
+  writeFileSync(join(sb.coreRoot, 'core.json'), JSON.stringify({
+    poolOut: { wakeAt: `2026-11-17T22:00:00Z-${envSecret}\x1b[33m` },
+  }));
+
+  const secretDir = join(sb.base, `dir-${envSecret}`);
+  mkdirSync(secretDir, { recursive: true });
+  const longLogPath = join(secretDir, '60-build.log');
+  const receiptPath = join(secretDir, '60-receipt.json');
+  writeFileSync(receiptPath, '{"ok":true}\n');
+
+  // Create a 110 KiB single-line log ending in '\n' (exceeds initial 64 KiB readSize)
+  // with secret near the front and multi-byte UTF-8 characters throughout, to prove
+  // formatLogTail expands its window rather than dropping trailing-'\n' tails or slicing mid-line!
+  const utf8Pad = '🚀日本語テスト'.repeat(6500); // ~117 KiB of multi-byte UTF-8
+  const singleLongLine = `${envSecret} start-marker ${utf8Pad} end-marker\n`;
+  writeFileSync(longLogPath, singleLongLine);
+
+  const exitPath = join(sb.coreRoot, 'logs', '60.exit.json');
+  writeFileSync(exitPath, JSON.stringify({
+    code: null,
+    signal: `SIGTERM-${envSecret}\x1b[0m`,
+    at: nowMs - 1000,
+  }));
+
+  writeFileSync(join(sb.coreRoot, 'jobs', '60.json'), JSON.stringify({
+    issue: 60,
+    title: `Fix auth ${envSecret}`,
+    phase: 'pr',
+    pr: 310,
+    head: `${envSecret}abcdef`,
+    lane: { state: 'waiting', holder: `99-${envSecret}` },
+    review: { verdict: `FAIL-${envSecret}`, agent: { pid: 6002, exit: exitPath, agentKind: `codex-${envSecret}` } },
+    stepStop: { poolExhausted: true, wakeAt: `soon-${envSecret}` },
+    lastError: `Auth failed with ${envSecret}`,
+    agent: { pid: 6001, agentKind: `codex-${envSecret}\x1b[35m`, log: longLogPath, started: nowMs - 5000 },
+    suite: { cwd: sb.gitRoot, head: 'abcdef12' },
+  }));
+
+  const ports = {
+    git: sb.git,
+    stateRoot: sb.stateRoot,
+    now: () => nowMs,
+    isProcessAlive: pid => pid === 6001,
+    readSuite: () => ({
+      ok: true,
+      state: 'waiting',
+      position: 1,
+      logPath: longLogPath,
+      receiptPath,
+    }),
+  };
+
+  // Check list --json, issue --json, and human snapshot: zero leaks of envSecret or ANSI!
+  for (const argv of [
+    ['autopilot', 'logs', '--json'],
+    ['autopilot', 'logs', '60', '--json'],
+    ['autopilot', 'logs', '60', '--lines', '5'],
+  ]) {
+    const stdout = sink(), stderr = sink();
+    const code = await runPdd(argv, {
+      stdout,
+      stderr,
+      cwd: sb.gitRoot,
+      env: inputEnv,
+      autopilotLogsPorts: ports,
+    });
+    assert.equal(code, 0, `${argv.join(' ')}: ${stderr.text}`);
+    assert.equal(stdout.text.includes(envSecret), false, `leaked env secret in ${argv.join(' ')}:\n${stdout.text}`);
+    assert.doesNotMatch(stdout.text, /\x1b\[/, `leaked ANSI in ${argv.join(' ')}`);
+    assert.equal(stdout.text.includes('\ufffd'), false, `corrupted UTF-8 in ${argv.join(' ')}`);
+  }
+
+  // Verify the single 117 KiB line ending in '\n' was NOT dropped by formatLogTail!
+  const issueJsonOut = sink();
+  await runPdd(['autopilot', 'logs', '60', '--json'], {
+    stdout: issueJsonOut,
+    stderr: sink(),
+    cwd: sb.gitRoot,
+    env: inputEnv,
+    autopilotLogsPorts: ports,
+  });
+  const issuePayload = JSON.parse(issueJsonOut.text);
+  assert.equal(issuePayload.lines.length, 1, 'single long line ending in EOF newline must not be dropped');
+  assert.match(issuePayload.lines[0], /\[redacted\] start-marker 🚀日本語テスト/);
+
+  // Also test readAppendedCompleteLines in --follow when a > 550 KiB line (> READ_CHUNK_LIMIT) is appended!
+  const followLog = join(sb.coreRoot, 'logs', '61-build.log');
+  writeFileSync(followLog, 'initial line\n');
+  writeFileSync(join(sb.coreRoot, 'jobs', '61.json'), JSON.stringify({
+    issue: 61,
+    title: 'Large follow line',
+    role: 'build',
+    agent: { pid: 6101, log: followLog, started: nowMs - 2000 },
+  }));
+
+  const abort = new AbortController();
+  let followTick = 0;
+  const followOut = sink();
+  // Place envSecret right across the 512 KiB byte boundary inside a ~542 KiB line!
+  const prefixBytes = '🚀'.repeat(Math.floor((512 * 1024 - 12) / 4));
+  const hugeAppendedLine = `big-line ${prefixBytes}${envSecret}-${'x'.repeat(30 * 1024)}-tail-ok\n`;
+  assert.ok(Buffer.byteLength(hugeAppendedLine, 'utf8') > 530 * 1024);
+
+  const followCode = await runPdd(['autopilot', 'logs', '61', '--follow'], {
+    stdout: followOut,
+    stderr: sink(),
+    cwd: sb.gitRoot,
+    env: inputEnv,
+    autopilotLogsPorts: {
+      git: sb.git,
+      stateRoot: sb.stateRoot,
+      now: () => nowMs,
+      isProcessAlive: pid => pid === 6101,
+      signal: abort.signal,
+      pollMs: 10,
+      sleep: async () => {
+        followTick++;
+        if (followTick === 1) {
+          writeFileSync(followLog, readFileSync(followLog, 'utf8') + hugeAppendedLine);
+        } else {
+          abort.abort();
+        }
+      },
+    },
+  });
+  assert.equal(followCode, 0);
+  assert.equal(followOut.text.includes(envSecret), false, 'secret straddling 512 KiB boundary must be redacted');
+  assert.equal(followOut.text.includes('\ufffd'), false, 'multi-byte UTF-8 straddling 512 KiB boundary must not corrupt');
+  assert.match(followOut.text, /big-line 🚀/);
+});
+
+test('3475: --follow handles stdout EPIPE cleanly, reuses gitRoot across polls, and enforces maxDurationMs', async t => {
+  const sb = makeSandbox(t, { mode: 'observe' });
+  let nowMs = Date.parse('2026-11-17T21:20:00Z');
+  const logFile = join(sb.coreRoot, 'logs', '88-build.log');
+  writeFileSync(logFile, 'line 1\nline 2\nline 3\n');
+  writeFileSync(join(sb.coreRoot, 'jobs', '88.json'), JSON.stringify({
+    issue: 88,
+    title: 'Pipe and maxDuration safety',
+    role: 'build',
+    agent: { pid: 8801, log: logFile, started: nowMs - 2000 },
+  }));
+
+  // 1. Simulate `pdd autopilot logs 88 --follow | head -n 5`: stdout emits EPIPE after 5 writes
+  class BrokenPipeStdout extends EventEmitter {
+    constructor(limit) {
+      super();
+      this.limit = limit;
+      this.lines = [];
+      this.destroyed = false;
+      this.writableEnded = false;
+    }
+    write(chunk) {
+      if (this.destroyed) {
+        const err = new Error('write EPIPE');
+        err.code = 'EPIPE';
+        throw err;
+      }
+      this.lines.push(String(chunk));
+      if (this.lines.length >= this.limit) {
+        this.destroyed = true;
+        const err = new Error('write EPIPE');
+        err.code = 'EPIPE';
+        this.emit('error', err);
+        this.emit('close');
+      }
+      return true;
+    }
+  }
+
+  const pipeStdout = new BrokenPipeStdout(5);
+  let gitCalls = 0;
+  let sleepCalls = 0;
+  const pipeCode = await runPdd(['autopilot', 'logs', '#88', '--follow'], {
+    stdout: pipeStdout,
+    stderr: sink(),
+    cwd: sb.gitRoot,
+    autopilotLogsPorts: {
+      git: async (args, opts) => {
+        gitCalls++;
+        return sb.git(args, opts);
+      },
+      stateRoot: sb.stateRoot,
+      now: () => nowMs,
+      isProcessAlive: () => true,
+      pollMs: 10,
+      sleep: async () => { sleepCalls++; },
+    },
+  });
+  assert.equal(pipeCode, 0, 'broken pipe must exit 0 cleanly');
+  assert.equal(pipeStdout.lines.length, 5, 'must stop writing immediately once pipe closes');
+  assert.equal(sleepCalls, 0, 'must not enter or leak polling loop after pipe closes');
+  assert.equal(pipeStdout.listenerCount('close'), 0, 'must clean up close listener');
+  assert.equal(pipeStdout.listenerCount('error'), 0, 'must clean up error listener');
+
+  // 2. Verify git rev-parse is called ONCE and reused across polls, and maxDurationMs stops follow cleanly
+  gitCalls = 0;
+  let pollCount = 0;
+  const boundedOut = sink();
+  const boundedCode = await runPdd(['autopilot', 'logs', '88', '--follow'], {
+    stdout: boundedOut,
+    stderr: sink(),
+    cwd: sb.gitRoot,
+    autopilotLogsPorts: {
+      git: async (args, opts) => {
+        gitCalls++;
+        return sb.git(args, opts);
+      },
+      stateRoot: sb.stateRoot,
+      now: () => nowMs,
+      isProcessAlive: () => true,
+      pollMs: 10,
+      maxDurationMs: 2500,
+      sleep: async () => {
+        pollCount++;
+        nowMs += 1000;
+      },
+    },
+  });
+  assert.equal(boundedCode, 0);
+  assert.equal(gitCalls, 1, 'git rev-parse must run only once and reuse gitRoot on polls');
+  assert.equal(pollCount, 3, 'maxDurationMs must bound unattended polling');
+  assert.match(boundedOut.text, /Reached follow time limit; detached from issue #88/);
 });
