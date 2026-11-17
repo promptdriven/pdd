@@ -634,7 +634,7 @@ function collectFakeTestWarnings(text, { path = 'test/example.test.mjs' } = {}) 
 
   for (const [ident, { target, afterIdx }] of sourceTextVars.entries()) {
     const rest = skeleton.slice(afterIdx);
-    const escapedIdent = ident.replace(/\$/g, '\\$');
+    const escapedIdent = ident.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const assertPatterns = [
       new RegExp(`\\b${escapedIdent}\\s*\\.\\s*(?:includes|match|matchAll|search|indexOf|startsWith|endsWith)\\s*\\(`),
       new RegExp(`\\.test\\s*\\(\\s*${escapedIdent}\\b`),
