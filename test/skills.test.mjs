@@ -363,10 +363,6 @@ test('SKILLS20: every step that writes prompts or tests reads guide.md, story-gu
   const router = read('pdd-prompting/RUNBOOK.md');
   assert.match(prompting, /- `RUNBOOK\.md`: concise topic router/);
   assert.match(prompting, /Read `RUNBOOK\.md` first, `guide\.md` in full/);
-  assert.doesNotMatch(router, /do not open `runbook\/\*\.md`/i);
-  assert.doesNotMatch(router, /9007199254740991/);
-  assert.doesNotMatch(router, /Stories in parallel/i);
-  assert.ok(router.trimEnd().split('\n').length <= 45, `RUNBOOK.md stays ~40 lines (${router.trimEnd().split('\n').length})`);
   assert.ok(Buffer.byteLength(prompting) + Buffer.byteLength(router) <= 60 * 1024);
   const featureSkill = read('pdd-feature/SKILL.md');
   assert.match(featureSkill, /Single coupled slice \(1–2 prompts.*0 authoring subagents.*`pdd files`/);

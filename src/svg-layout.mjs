@@ -117,8 +117,27 @@ function links(text, refs = refDefs(text), imagesOnly = false) {
     ...[...text.matchAll(shortRe)].map(m => refs.get(normalize(m[1]))),
   ].filter(value => value && !/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(value) && /\.ui\.svg(?:#.*)?$/i.test(value)).map(value => value.split('#')[0]))];
 }
+function stripCodeFences(text) {
+  const out = [];
+  let fence = null;
+  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const fm = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      if (fm && fm[1][0] === fence[0] && fm[1].length >= fence.length && /^ {0,3}(?:`+|~+)[ \t]*$/.test(line)) fence = null;
+      out.push('');
+      continue;
+    }
+    if (fm) {
+      fence = fm[1];
+      out.push('');
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
 function uploadCapturedSvgLinks(text, refs = refDefs(text)) {
-  const depsBody = [...text.matchAll(/^##+[ \t]+Dependencies\b[^\n]*\n([\s\S]*?)(?=^##?[ \t]|$(?![\s\S]))/gim)].map(m => m[1]).join('\n');
+  const depsBody = [...stripCodeFences(text).matchAll(/^##+[ \t]+Dependencies\b[^\n]*\n([\s\S]*?)(?=^##?[ \t]|$(?![\s\S]))/gim)].map(m => m[1]).join('\n');
   return [...new Set([...links(text, refs, true), ...links(depsBody, refs, false)])];
 }
 const mentioned = (prose, value) => new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped(normalize(value))}($|[^\\p{L}\\p{N}_])`, 'u').test(normalize(prose));
@@ -524,10 +543,15 @@ function parsePromptMeta(text) {
 }
 
 function promptTargets(text, fromPrompt, visibleSet) {
-  const refs = refDefs(text);
+  const noFences = stripCodeFences(text);
+  const noCode = noFences.replace(/`+[^`\n]*`+/g, '');
+  const refs = refDefs(noCode);
+  const depsNoFences = [...noFences.matchAll(/^##[ \t]+Dependencies[ \t]*\n([\s\S]*?)(?=^#{1,2}[ \t]+|$(?![\s\S]))/gim)].map(m => m[1]).join('\n');
+  const depsNoCode = depsNoFences.replace(/`+[^`\n]*`+/g, '');
   const candidates = [
-    ...[...text.matchAll(/!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g)].map(m => m[1] || m[2]),
-    ...[...text.matchAll(/!?\[([^\]]*)\]\[([^\]]*)\]/g)].map(m => refs.get(normalize(m[2] || m[1]))),
+    ...[...depsNoCode.matchAll(/!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g)].map(m => m[1] || m[2]),
+    ...[...depsNoCode.matchAll(/!?\[([^\]]*)\]\[([^\]]*)\]/g)].map(m => refs.get(normalize(m[2] || m[1]))),
+    ...[...depsNoFences.matchAll(/^ {0,3}(?:[-+*]|[0-9]+[.)])[ \t]+`([^`\n]+)`(?=[ \t:]|$)/gm)].map(m => m[1]),
   ];
   const out = [];
   for (const raw of candidates) {
@@ -599,6 +623,63 @@ function hasPointer(obj, pointer) {
   return true;
 }
 
+function setPointer(obj, pointer, value) {
+  if (!obj || typeof obj !== 'object' || typeof pointer !== 'string' || !pointer.startsWith('/')) return;
+  const segs = pointer.slice(1).split('/').map(s => s.replaceAll('~1', '/').replaceAll('~0', '~'));
+  let cur = obj;
+  for (let i = 0; i < segs.length - 1; i++) {
+    const key = segs[i];
+    if (Array.isArray(cur)) {
+      const idx = Number(key);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= cur.length || cur[idx] === null || typeof cur[idx] !== 'object') return;
+      cur = cur[idx];
+    } else {
+      if (!Object.hasOwn(cur, key) || cur[key] === null || typeof cur[key] !== 'object') {
+        Object.defineProperty(cur, key, { value: {}, writable: true, enumerable: true, configurable: true });
+      }
+      cur = cur[key];
+    }
+  }
+  const last = segs.at(-1);
+  if (Array.isArray(cur)) {
+    const idx = Number(last);
+    if (Number.isInteger(idx) && idx >= 0 && idx <= cur.length) cur[idx] = value;
+  } else {
+    Object.defineProperty(cur, last, { value, writable: true, enumerable: true, configurable: true });
+  }
+}
+
+function resolveInitialWorld(root, testFile, initialWorld) {
+  if (!initialWorld || typeof initialWorld !== 'object' || Array.isArray(initialWorld)) return { resolvable: true, world: initialWorld };
+  if (typeof initialWorld.$seed !== 'string') return { resolvable: true, world: initialWorld };
+  const rawSeed = initialWorld.$seed.trim();
+  if (!rawSeed) return { resolvable: false, world: null };
+  let seedDoc = null;
+  const relCandidate = relative(rootPlaceholder, resolve(dirname(resolve(rootPlaceholder, testFile)), rawSeed)).split(sep).join('/');
+  for (const candidate of [...new Set([rawSeed, relCandidate])]) {
+    try {
+      seedDoc = JSON.parse(safeRead(root, candidate));
+      break;
+    } catch { /* try fallback or mark unresolvable */ }
+  }
+  if (!seedDoc || typeof seedDoc !== 'object') return { resolvable: false, world: null };
+  const world = structuredClone(seedDoc);
+  if (initialWorld.set && typeof initialWorld.set === 'object' && !Array.isArray(initialWorld.set)) {
+    for (const [ptr, val] of Object.entries(initialWorld.set)) {
+      if (ptr === '') continue;
+      setPointer(world, ptr, val);
+    }
+  }
+  for (const [k, v] of Object.entries(initialWorld)) {
+    if (k === '$seed' || k === 'set') continue;
+    Object.defineProperty(world, k, { value: v, writable: true, enumerable: true, configurable: true });
+  }
+  return { resolvable: true, world };
+}
+
+const APP_MAP_PATH_RE = /(?:^|\/)(?:app-map\.json|app\/maps\/[^/]+\.json)$/;
+const isFixturePath = path => /(?:^|\/)fixtures\//.test(path);
+
 function proseMentionsPortOp(prose, opKey) {
   if (prose.includes(opKey)) return true;
   const dot = opKey.indexOf('.');
@@ -653,11 +734,11 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     promptRecords.push({ path: prompt, prose: source, drawings });
   }
   if (promptRecords.some(record => record.drawings.length > 0)) {
-    const mapPaths = new Set(files.filter(path => /(?:^|\/)app-map\.json$/.test(path)));
-    for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path))) {
+    const mapPaths = new Set(files.filter(path => !isFixturePath(path) && APP_MAP_PATH_RE.test(path)));
+    for (const testFile of files.filter(path => !isFixturePath(path) && /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path))) {
       try {
         const doc = JSON.parse(safeRead(root, testFile));
-        if (Array.isArray(doc?.app_maps)) for (const candidate of doc.app_maps) if (typeof candidate === 'string' && workspace.allows(policy, candidate)) mapPaths.add(candidate);
+        if (Array.isArray(doc?.app_maps)) for (const candidate of doc.app_maps) if (typeof candidate === 'string' && !isFixturePath(candidate) && workspace.allows(policy, candidate)) mapPaths.add(candidate);
       } catch { /* non-scenario or unreadable JSON */ }
     }
     const appMaps = [], cssPaths = new Set(), inspectedPrompts = new Set(promptRecords.map(record => record.path));
@@ -722,22 +803,10 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     }
     return visited;
   };
-  for (const prompt of promptRecords.map(record => record.path)) {
-    if (!visiblePromptSet.has(prompt)) continue;
-    const meta = getMeta(prompt);
-    if (!meta || meta.isNativeOnly || (meta.hasEmbeddedInterface && !meta.hasFrontmatter)) continue;
-    for (const dep of collectClosure(prompt)) {
-      if (dep === prompt) continue;
-      if (getMeta(dep)?.isNativeOnly) {
-        const text = `Warning: ${prompt}: checkable prompt links kind: native-only prompt ${dep} (invert the dependency and inject a <port>.<op> port so Story checks do not skip)`;
-        warnings.push({ key: `${prompt}\0native\0${dep}`, text });
-      }
-    }
-  }
   const promptFilter = promptPaths ? new Set(promptPaths) : null;
   const promptExists = promptPath => {
     if (typeof promptPath !== 'string' || !promptPath.endsWith('.prompt.md')) return false;
-    if (visiblePromptSet.has(promptPath)) return true;
+    if (visiblePromptSet.size > 0) return visiblePromptSet.has(promptPath);
     try { safeRead(root, promptPath); return true; } catch { return false; }
   };
   const promptDeclaresOp = (promptPath, op) => {
@@ -748,17 +817,18 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     }
     return new RegExp(`(?<![A-Za-z0-9_-])${escaped(op)}(?![A-Za-z0-9_-])`).test(meta.prose);
   };
-  const allMapPaths = new Set(files.filter(path => /(?:^|\/)app-map\.json$/.test(path) && workspace.allows(policy, path)));
-  for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && workspace.allows(policy, path))) {
+  const allMapPaths = new Set(files.filter(path => !isFixturePath(path) && APP_MAP_PATH_RE.test(path) && workspace.allows(policy, path)));
+  for (const testFile of files.filter(path => !isFixturePath(path) && /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && workspace.allows(policy, path))) {
     try {
       const doc = JSON.parse(safeRead(root, testFile));
       if (Array.isArray(doc?.app_maps)) {
         for (const candidate of doc.app_maps) {
-          if (typeof candidate === 'string' && workspace.allows(policy, candidate)) allMapPaths.add(candidate);
+          if (typeof candidate === 'string' && !isFixturePath(candidate) && workspace.allows(policy, candidate)) allMapPaths.add(candidate);
         }
       }
     } catch { /* handled below when Story-paired */ }
   }
+  const parsedAppMaps = new Map();
   const MAX_SAFE_TIMER_INT = 9007199254740991;
   for (const mapPath of [...allMapPaths].sort()) {
     let mapDoc;
@@ -771,6 +841,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       continue;
     }
     if (!mapDoc || typeof mapDoc !== 'object' || Array.isArray(mapDoc)) continue;
+    parsedAppMaps.set(mapPath, mapDoc);
     const screens = Array.isArray(mapDoc.screens) ? mapDoc.screens.filter(s => s && typeof s === 'object') : [];
     const timers = Array.isArray(mapDoc.timers) ? mapDoc.timers : [];
     if (promptFilter) {
@@ -825,8 +896,14 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
           }
           const enInit = readPointer(mapDoc.initial_state, timer.enabled_pointer);
           const enSchema = readSchemaPointer(mapDoc.state_schema, timer.enabled_pointer);
-          if (typeof enInit.value !== 'boolean' || !enSchema.exists || !enSchema.required || enSchema.schema?.type !== 'boolean') {
-            const text = `Warning: ${mapPath} (timer "${tLabel}"): enabled_pointer ${JSON.stringify(timer.enabled_pointer ?? null)} must resolve to a boolean in initial_state and a required {"type": "boolean"} property in state_schema.`;
+          if (
+            typeof enInit.value !== 'boolean'
+            || !enSchema.exists
+            || !enSchema.required
+            || enSchema.schema?.type !== 'boolean'
+            || Array.isArray(enSchema.schema?.oneOf)
+          ) {
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): enabled_pointer ${JSON.stringify(timer.enabled_pointer ?? null)} must resolve to a boolean in initial_state and a required {"type": "boolean"} property (without oneOf) in state_schema.`;
             warnings.push({ key: `${mapPath}\0timerenabled\0${tIdx}`, text });
           }
           const genInit = readPointer(mapDoc.initial_state, timer.generation_pointer);
@@ -834,11 +911,17 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
           const genMin = genSchema.schema?.minimum;
           const genMax = genSchema.schema?.maximum;
           const validGenInit = Number.isSafeInteger(genInit.value) && genInit.value >= 0 && genInit.value <= MAX_SAFE_TIMER_INT;
-          const validGenSchema = genSchema.exists && genSchema.required && genSchema.schema?.type === 'integer'
-            && Number.isSafeInteger(genMin) && genMin >= 0
-            && Number.isSafeInteger(genMax) && genMax <= MAX_SAFE_TIMER_INT && genMin <= genMax;
+          const validGenMax = genMax === undefined || (Number.isSafeInteger(genMax) && genMax <= MAX_SAFE_TIMER_INT && Number.isSafeInteger(genMin) && genMin <= genMax);
+          const validGenSchema = genSchema.exists
+            && genSchema.required
+            && genSchema.schema?.type === 'integer'
+            && !Array.isArray(genSchema.schema?.oneOf)
+            && Number.isSafeInteger(genMin)
+            && genMin >= 0
+            && genMin <= MAX_SAFE_TIMER_INT
+            && validGenMax;
           if (!validGenInit || !validGenSchema) {
-            const text = `Warning: ${mapPath} (timer "${tLabel}"): generation_pointer ${JSON.stringify(timer.generation_pointer ?? null)} must resolve to a safe integer 0..9007199254740991 in initial_state and a required {"type": "integer", "minimum": 0, "maximum": 9007199254740991} property in state_schema.`;
+            const text = `Warning: ${mapPath} (timer "${tLabel}"): generation_pointer ${JSON.stringify(timer.generation_pointer ?? null)} must resolve to a safe integer 0..9007199254740991 in initial_state and a required {"type": "integer", "minimum": 0} property (without oneOf) in state_schema.`;
             warnings.push({ key: `${mapPath}\0timergen\0${tIdx}`, text });
           }
           if (timer.tick_operation !== undefined && (!timer.handler || typeof timer.handler !== 'object')) {
@@ -868,9 +951,10 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       .filter(base => !['plan.md', 'readme.md'].includes(base.toLowerCase()))
       .map(base => base.slice(0, -3)),
   );
+  const checkableScenarioEntries = new Set();
   const PORT_OP_RE = /^[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*$/;
   for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && workspace.allows(policy, path))) {
-    const isFixtureJson = /(?:^|\/)fixtures\//.test(testFile);
+    const isFixtureJson = isFixturePath(testFile);
     const baseStem = testFile.split('/').at(-1).slice(0, -5);
     const primaryStem = baseStem.split('.')[0];
     const isCasesJson = baseStem === 'cases' || baseStem.endsWith('-cases');
@@ -898,8 +982,26 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         warnings.push({ key: `${testFile}\0testschema`, text });
       }
     }
-    if (!doc || typeof doc !== 'object' || doc.schema_version !== 'prompt-runtime.program-scenario.v1' || !Array.isArray(doc.steps)) continue;
+    if (isFixtureJson || isNativeCaseDoc || !doc || typeof doc !== 'object' || doc.schema_version !== 'prompt-runtime.program-scenario.v1' || !Array.isArray(doc.steps)) continue;
+    for (const mapCandidate of Array.isArray(doc.app_maps) ? doc.app_maps : []) {
+      const mapDoc = typeof mapCandidate === 'string' ? parsedAppMaps.get(mapCandidate) : null;
+      if (!mapDoc) continue;
+      for (const s of Array.isArray(mapDoc.screens) ? mapDoc.screens : []) {
+        if (typeof s?.prompt_path === 'string' && visiblePromptSet.has(s.prompt_path) && !getMeta(s.prompt_path)?.isNativeOnly) checkableScenarioEntries.add(s.prompt_path);
+      }
+      for (const h of Array.isArray(mapDoc.handlers) ? mapDoc.handlers : []) {
+        const hp = h?.handler?.prompt_path;
+        if (typeof hp === 'string' && visiblePromptSet.has(hp) && !getMeta(hp)?.isNativeOnly) checkableScenarioEntries.add(hp);
+      }
+      for (const t of Array.isArray(mapDoc.timers) ? mapDoc.timers : []) {
+        const tp = t?.handler?.prompt_path;
+        if (typeof tp === 'string' && visiblePromptSet.has(tp) && !getMeta(tp)?.isNativeOnly) checkableScenarioEntries.add(tp);
+      }
+    }
     const inRepoSteps = doc.steps.filter(step => step && typeof step.entry_path === 'string' && visiblePromptSet.has(step.entry_path));
+    for (const step of inRepoSteps) {
+      if (!getMeta(step.entry_path)?.isNativeOnly) checkableScenarioEntries.add(step.entry_path);
+    }
     if (!inRepoSteps.length) continue;
     const stepClosures = new Map();
     const allClosurePrompts = new Set();
@@ -908,8 +1010,14 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       for (const p of stepClosures.get(step.entry_path)) allClosurePrompts.add(p);
     }
     if (promptFilter && ![...allClosurePrompts].some(p => promptFilter.has(p))) continue;
+    const resolvedWorld = resolveInitialWorld(root, testFile, doc.initial_world);
     const summarizeClosure = closureSet => {
       const resources = new Map();
+      const addResourceAccess = (key, access) => {
+        if (typeof key !== 'string' || !key) return;
+        if (!resources.has(key)) resources.set(key, new Set());
+        if (typeof access === 'string' && access) resources.get(key).add(access);
+      };
       let hasPlainPrompt = false;
       const proseChunks = [];
       for (const p of closureSet) {
@@ -918,9 +1026,15 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         proseChunks.push(meta.prose);
         if (!meta.hasEmbeddedInterface) hasPlainPrompt = true;
         for (const res of Array.isArray(meta.iface?.resources) ? meta.iface.resources : []) {
-          if (typeof res?.operation !== 'string') continue;
-          if (!resources.has(res.operation)) resources.set(res.operation, new Set());
-          if (typeof res.access === 'string') resources.get(res.operation).add(res.access);
+          if (res?.kind === 'port' && typeof res.name === 'string' && Array.isArray(res.operations)) {
+            for (const op of res.operations) {
+              if (typeof op?.name === 'string' && op.name) {
+                addResourceAccess(`${res.name}.${op.name}`, op.access ?? res.access);
+              }
+            }
+          } else if (typeof res?.operation === 'string') {
+            addResourceAccess(res.operation, res.access);
+          }
         }
       }
       return { resources, hasPlainPrompt, combinedProse: proseChunks.join('\n') };
@@ -982,11 +1096,11 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
             const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides port "${opKey}" is not mentioned in reachable prompt prose (${step.entry_path}); name ${opKey} explicitly so lazy interface synthesis binds the port`;
             warnings.push({ key: `${testFile}\0ovprose\0${stepLabel}\0${rowKey}`, text });
           }
-        } else if (binding?.action === 'port.write' && !declared.has('write') && !declared.has('read_write')) {
-          const text = `Warning: ${testFile} (${stepLabel}): port.write simulation_overrides on "${opKey}" requires write access in reachable Runtime interface resources`;
+        } else if (binding?.action === 'port.write' && !declared.has('read') && !declared.has('write') && !declared.has('read_write')) {
+          const text = `Warning: ${testFile} (${stepLabel}): port.write simulation_overrides on "${opKey}" requires read or write port access in reachable Runtime interface resources`;
           warnings.push({ key: `${testFile}\0ovacc\0${stepLabel}\0${rowKey}`, text });
         }
-        if (binding?.action === 'port.write' && typeof binding.world_pointer === 'string' && !hasPointer(doc.initial_world, binding.world_pointer)) {
+        if (binding?.action === 'port.write' && typeof binding.world_pointer === 'string' && resolvedWorld.resolvable && !hasPointer(resolvedWorld.world, binding.world_pointer)) {
           const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" world_pointer "${binding.world_pointer}" is missing from initial_world`;
           warnings.push({ key: `${testFile}\0ovwp\0${stepLabel}\0${rowKey}`, text });
         }
@@ -997,6 +1111,24 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
           const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" failure_quote "${fquote}" is absent from criterion ${cid}`;
           warnings.push({ key: `${testFile}\0ovfq\0${stepLabel}\0${rowKey}`, text });
         }
+      }
+    }
+  }
+  const storyReachablePrompts = new Set();
+  for (const entry of checkableScenarioEntries) {
+    const closure = collectClosure(entry);
+    if (promptFilter && ![...closure].some(p => promptFilter.has(p))) continue;
+    for (const p of closure) storyReachablePrompts.add(p);
+  }
+  for (const prompt of [...storyReachablePrompts].sort()) {
+    if (promptFilter && !promptFilter.has(prompt)) continue;
+    const meta = getMeta(prompt);
+    if (!meta || meta.isNativeOnly || (meta.hasEmbeddedInterface && !meta.hasFrontmatter)) continue;
+    for (const dep of collectClosure(prompt)) {
+      if (dep === prompt) continue;
+      if (getMeta(dep)?.isNativeOnly) {
+        const text = `Warning: ${prompt}: checkable prompt links kind: native-only prompt ${dep} (invert the dependency and inject a <port>.<op> port so Story checks do not skip)`;
+        warnings.push({ key: `${prompt}\0native\0${dep}`, text });
       }
     }
   }

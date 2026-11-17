@@ -75,9 +75,7 @@ test('3459 lint: surfaces undeclared simulation_overrides port, missing world_po
               reason: 'Simulate storage write error.',
               binding: {
                 action: 'port.write',
-                write_mode: 'append',
                 world_pointer: '/missing_saves',
-                record_fields: { direction: '/direction' },
                 result_template: { ok: false, error: 'disk-full' },
               },
             },
@@ -136,9 +134,7 @@ test('3459 lint: aligned plain-Markdown port prose and canonical simulation_over
       simulation: {
         'storage.save': {
           action: 'port.write',
-          write_mode: 'append',
           world_pointer: '/saves',
-          record_fields: { board: '/board' },
           result_template: { ok: true },
         },
       },
@@ -156,10 +152,8 @@ test('3459 lint: aligned plain-Markdown port prose and canonical simulation_over
               reason: 'Simulate storage write error.',
               binding: {
                 action: 'port.write',
-                write_mode: 'append',
                 world_pointer: '/saves',
-                record_fields: { board: '/board' },
-                result_template: { ok: false },
+                      result_template: { ok: false },
               },
             },
           ],
@@ -421,4 +415,239 @@ test('lintSvgLayouts warns when a .ui.svg is linked only via plain [label](...) 
     warnings.some(w => w.includes('prompts/game.prompt.md -> views/game.ui.svg: link syntax:') && w.includes('dependency-file-unreadable')),
     warnings.join('\n'),
   );
+});
+
+
+test('3459 lint: embedded-interface read/write port resources, initial_world.$seed, standalone app/maps/*.json timers without maximum, and ## Caller navigation links produce zero warnings', t => {
+  const embeddedServicePrompt = [
+    '# Service lookup',
+    '',
+    'Own `src/service.mjs`. Call injected `service.lookup({ id })` and return `{ label }`.',
+    '',
+    '## Dependencies',
+    '',
+    'None.',
+    '',
+    '## Caller navigation',
+    '',
+    'Exposed to the CLI by [Native adapter](native-adapter.prompt.md).',
+    '',
+    '<details><summary>Runtime interface</summary>',
+    '',
+    '```json',
+    JSON.stringify({
+      status: 'draft',
+      prose_sha256: '0'.repeat(64),
+      entries: [
+        {
+          operation: 'lookup',
+          input_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+          result_schema: { type: 'object', properties: { label: { type: 'string' } }, required: ['label'], additionalProperties: false },
+          errors: [],
+        },
+      ],
+      calls: [],
+      resources: [
+        {
+          name: 'service',
+          kind: 'port',
+          access: 'read',
+          operations: [
+            {
+              name: 'lookup',
+              access: 'read',
+              arguments_schema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+              result_schema: { type: 'object', properties: { label: { type: 'string' } }, required: ['label'], additionalProperties: false },
+            },
+          ],
+        },
+      ],
+      limits: { max_steps: 6, max_model_calls: 3 },
+      conventions: [],
+    }, null, 2),
+    '```',
+    '</details>',
+    '',
+  ].join('\n');
+
+  const root = makeRepo(t, {
+    'prompts/native-adapter.prompt.md': [
+      '---',
+      'kind: native-only',
+      'reason: Binds OS process signals and stdio.',
+      '---',
+      '',
+      '# Native adapter',
+      '',
+      'Own `src/native-adapter.mjs`.',
+      '',
+    ].join('\n'),
+    'prompts/cli-untested.prompt.md': [
+      '# CLI helper without Stories',
+      '',
+      'Own `src/cli-untested.mjs`.',
+      '',
+      '## Dependencies',
+      '',
+      '- [Native adapter](native-adapter.prompt.md): local runtime seam.',
+      '',
+    ].join('\n'),
+    'prompts/service.prompt.md': embeddedServicePrompt,
+    'prompts/board.prompt.md': [
+      '# Board screen',
+      '',
+      'Own `src/board.mjs`. Expose `render({ state })` returning `{ html }` and `step_tick({ state })` returning `{ state }`.',
+      '',
+      '## Dependencies',
+      '',
+      'None.',
+      '',
+      '## Caller navigation',
+      '',
+      'Launched by [Native adapter](native-adapter.prompt.md).',
+      '',
+    ].join('\n'),
+    'contracts/seed-world.json': {
+      seeded_requests: [],
+      other: true,
+    },
+    'user_stories/lookup-fallback.md': [
+      '# Lookup fallback',
+      '',
+      'As a reader, I want lookup failures to return Offline, so that temporary outages stay clear.',
+      '',
+      '## Acceptance criteria',
+      '',
+      '1. When lookup returns Offline, the caller sees Offline and records the request.',
+      '',
+    ].join('\n'),
+    'tests/lookup-fallback.json': {
+      schema_version: 'prompt-runtime.program-scenario.v1',
+      story_path: 'user_stories/lookup-fallback.md',
+      criteria: [{ id: 'AC1', text: 'When lookup returns Offline, the caller sees Offline and records the request.' }],
+      initial_world: {
+        $seed: 'contracts/seed-world.json',
+        set: {
+          '/override_requests': [],
+        },
+      },
+      simulation: {
+        'service.lookup': {
+          action: 'port.write',
+          world_pointer: '/seeded_requests',
+          result_template: { label: 'Available' },
+        },
+      },
+      steps: [
+        {
+          step_id: 'lookup-offline',
+          entry_path: 'prompts/service.prompt.md',
+          operation: 'lookup',
+          input: { id: 'book-7' },
+          simulation_overrides: [
+            {
+              operation: 'service.lookup',
+              criterion_id: 'AC1',
+              failure_quote: 'lookup returns Offline',
+              reason: 'Simulate read-only service port returning Offline via port.write.',
+              binding: {
+                action: 'port.write',
+                world_pointer: '/override_requests',
+                result_template: { label: 'Offline' },
+              },
+            },
+          ],
+          checks: [
+            { criterion_id: 'AC1', target: 'result', path: '/label', op: 'equals', value: 'Offline' },
+          ],
+        },
+        {
+          step_id: 'board-render',
+          entry_path: 'prompts/board.prompt.md',
+          operation: 'render',
+          input: { state: {} },
+          checks: [
+            { criterion_id: 'AC1', target: 'result', path: '/html', op: 'exists' },
+          ],
+        },
+      ],
+    },
+    'app/maps/board.json': {
+      schema_version: 'prompt-runtime.app-map.v1',
+      name: 'Board Part',
+      initial_screen: 'board',
+      initial_route: null,
+      initial_state: { running: true, tick_gen: 0 },
+      state_schema: {
+        type: 'object',
+        properties: {
+          running: { type: 'boolean' },
+          tick_gen: { type: 'integer', minimum: 0 },
+        },
+        required: ['running', 'tick_gen'],
+        additionalProperties: false,
+      },
+      screens: [
+        { id: 'board', prompt_path: 'prompts/board.prompt.md', operation: 'render', source: 'operation', format: 'html', input: {}, result_pointer: '/html' },
+      ],
+      handlers: [],
+      timers: [
+        {
+          id: 'tick',
+          screen: 'board',
+          interval_ms: 1000,
+          enabled_pointer: '/running',
+          generation_pointer: '/tick_gen',
+          handler: { prompt_path: 'prompts/board.prompt.md', operation: 'step_tick' },
+          input: {},
+          state: {},
+          next: { kind: 'stay' },
+        },
+      ],
+    },
+    'test/fixtures/broken/app-map.json': '{not valid json',
+  });
+
+  assert.deepEqual(lintSvgLayouts({ root, files: gitFiles(root) }), []);
+
+  // Untracked prompt referenced by app/maps/*.json warns until git add, and oneOf on timer schema warns.
+  writeFileSync(join(root, '.gitignore'), 'prompts/untracked.prompt.md\n');
+  writeFileSync(join(root, 'prompts/untracked.prompt.md'), '# Untracked\n\nExpose `render` and `step_tick`.\n');
+  writeFileSync(join(root, 'app/maps/board.json'), JSON.stringify({
+    schema_version: 'prompt-runtime.app-map.v1',
+    name: 'Board Part',
+    initial_screen: 'board',
+    initial_route: null,
+    initial_state: { running: true, tick_gen: 0 },
+    state_schema: {
+      type: 'object',
+      properties: {
+        running: { type: 'boolean' },
+        tick_gen: { type: 'integer', minimum: 0, oneOf: [{ minimum: 0 }] },
+      },
+      required: ['running', 'tick_gen'],
+      additionalProperties: false,
+    },
+    screens: [
+      { id: 'board', prompt_path: 'prompts/untracked.prompt.md', operation: 'render', source: 'operation', format: 'html', input: {}, result_pointer: '/html' },
+    ],
+    handlers: [],
+    timers: [
+      {
+        id: 'tick',
+        screen: 'board',
+        interval_ms: 1000,
+        enabled_pointer: '/running',
+        generation_pointer: '/tick_gen',
+        handler: { prompt_path: 'prompts/board.prompt.md', operation: 'step_tick' },
+        input: {},
+        state: {},
+        next: { kind: 'stay' },
+      },
+    ],
+  }, null, 2));
+
+  const edgeWarnings = lintSvgLayouts({ root, files: gitFiles(root) });
+  assert.ok(edgeWarnings.some(w => w.includes('prompts/untracked.prompt.md') && w.includes('Git-visible')), edgeWarnings.join('\n'));
+  assert.ok(edgeWarnings.some(w => w.includes('generation_pointer') && w.includes('without oneOf')), edgeWarnings.join('\n'));
 });
