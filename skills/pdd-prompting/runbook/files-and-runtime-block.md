@@ -98,21 +98,28 @@ types and sees, as AC1 below does. Do not name code ("`splitBill(2, 4)` returns 
 
 **The test** copies every criterion into `criteria`, word for word. From `todo-cli` (some checks cut):
 ```json
-{"schema_version": "prompt-runtime.program-scenario.v1", "story_path": "user_stories/finish-task.md",
- "criteria": [{"id": "AC1", "text": "`todo done 4` prints \"Done #4: Call mom\", exits with code 0 and saves task #4 as done."},
-              {"id": "AC2", "text": "Task #1 stays not done."},
-              {"id": "AC3", "text": "`todo done 9` prints \"todo: no task #9\" to stderr, exits with code 1 and saves nothing."}],
- "initial_world": {"kv": {"todos": [{"id": 1, "text": "Buy milk", "done": false}, {"id": 4, "text": "Call mom", "done": false}]}},
- "simulation": {"store.load": {...}, "store.save": {...}}, "context": [],
- "steps": [
-  {"step_id": "finish-task-4", "entry_path": "prompts/todo.prompt.md", "operation": "main", "input": {"argv": ["done", "4"]},
-   "checks": [{"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "equals", "value": "Done #4: Call mom\n"},
-              {"criterion_id": "AC1", "target": "world", "path": "/kv/todos/1/done", "op": "equals", "value": true},
-              {"criterion_id": "AC2", "target": "world", "path": "/kv/todos/0/done", "op": "equals", "value": false}]},
-  {"step_id": "finish-missing-task-9", "entry_path": "prompts/todo.prompt.md", "operation": "main", "input": {"argv": ["done", "9"]},
-   "checks": [{"criterion_id": "AC3", "target": "result", "path": "/stderr", "op": "equals", "value": "todo: no task #9\n"},
-              {"criterion_id": "AC3", "target": "calls", "path": "/resources/todo-store-save", "op": "equals", "value": 0}]}]}
+{
+  "entry_path": "prompts/todo.prompt.md",
+  "initial_world": {"kv": {"todos": [{"id": 1, "text": "Buy milk", "done": false}, {"id": 4, "text": "Call mom", "done": false}]}},
+  "simulation": {"store.load": {...}, "store.save": {...}},
+  "steps": [
+    {"id": "finish-task-4", "op": "main", "input": {"argv": ["done", "4"]},
+     "checks": {
+       "1": [["result", "/stdout", "=", "Done #4: Call mom\n"], ["world", "/kv/todos/1/done", "=", true]],
+       "2": [["world", "/kv/todos/0/done", "=", false]]
+     }},
+    {"id": "finish-missing-task-9", "op": "main", "input": {"argv": ["done", "9"]},
+     "checks": {
+       "3": [["result", "/stderr", "=", "todo: no task #9\n"], ["calls", "store.save", "=", 0]]
+     }}
+  ]
+}
 ```
+- **Short JSON compiles deterministically to `prompt-runtime.program-scenario.v1` before `pdd lint`, `pdd test`, `pdd test --target code` and `pdd simulate` (0 AI calls), and standard `program-scenario.v1` JSON passes through unchanged.** Run `pdd lint --emit-v1 finish-task` to inspect the expanded `v1` JSON locally.
+  - Omit `schema_version`, `story_path`, `initial_world` (defaults to `{}`), and `criteria` (auto-bound from `user_stories/<story>.md` `## Acceptance criteria` as `AC1..ACn`; optional criterion labels like `"2: Task #1 stays"` verify alignment against Story item 2 while ignoring harmless prose/quote edits elsewhere).
+  - Set top-level `"entry_path"` once (steps inherit it unless overridden) and use `"id"` (`step_id`), `"op"` (`operation`), and `"error"` (`expected_error`, auto-inferred when omitted on a step whose `checks` assert one `error` `/code` `=` string).
+  - Deduplicate repeated game boards, multi-step state inputs, worlds and port mocks with top-level `"seeds": {"base": {...}}`, `{"$use": "base", "patch": {...}, "set": {"/a/0": 1}}` (or step `"from": "base", "patch": {...}`, where `"from"` can also name an earlier step ID), `{"$json": {"$use": "base_ctx", "patch": {...}}}` for JSON-stringified port payloads, and `{"$step": "move-1#/board"}` for `$step_result` chaining—never paste the same multi-line board or fixture across steps.
+  - Write `"checks"` as a criterion-keyed map (`"1": [tuple, ...]`) or tuple array (`["1", target, path, op, value]`): operator aliases `=` (`equals`), `!=` (`not_equals`), `>=` (`at_least` value), `<=` (`at_most` value), `len>=` (`at_least` length), `len<=` (`at_most` length), `contains_all` (expands to `contains` per string); `["error", "=", "unknown-sku"]`; `["calls", "store.save", "=", 0]` or `["calls", "internal:pricing", "=", 1]` (assert `calls` `= 0` only on an operation whose contract binds that port, such as a mutating command refusing bad input; on a read-only operation like `list` that never binds `store.save`, that counter path is absent and returns `{"missing": true}`, so check unchanged state on `world` instead); and HTML tuples `["html_exists", "button#start"]`, `["html_text", "h1", "=", "Snake"]`, `["html_attr", "input#q", "placeholder", "=", "Add task"]`, and `["html", "button", "labels_include", ["Start", "Pause"]]`.
 - Each criterion needs at least one exact check: `equals`, `not_equals`, `one_of`, `count`, `at_least`, `at_most`, `not_contains`, `all_in` or `equals_ignore_case` (or HTML `exists`, section 20). Paths and operations: section 8.
 - The `input` must match the `input_schema`. Each step requires `step_id`, `entry_path`, `operation`, `input` and `checks`, with optional `expected_error`, `simulation_overrides` (section 21) and `model` (omit `model` on ordinary steps unless testing model selection, so the interpreter uses its fast default model). An error step has `"expected_error": "unknown-sku"` and a check on `error` `/code`.
 - Check facts, not values that the AI picks freely (wording that the story does not fix, generated IDs).

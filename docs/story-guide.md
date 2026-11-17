@@ -10,8 +10,7 @@ RUNBOOK §2 owns the file formats. This page restates them in short.
 
 - The Story is `user_stories/<story>.md`. `user_stories/PLAN.md` is an index, not a Story.
 - Its test is `<story>.json` in a folder named `tests` or `test` (RUNBOOK §2 names the folder when the repo already has tests/).
-- The test copies each criterion into `criteria`, word for word.
-  A criterion that wraps over lines is one line in the test, with one space at each line break.
+- Write `<story>.json` in Short JSON (RUNBOOK §2): omit `criteria` so PDD binds numbered `## Acceptance criteria` automatically from `user_stories/<story>.md`, set top-level `entry_path`, reuse shared fixture state with `seeds` and `{"$use": "base", "patch": {...}}`, and write compact criterion-keyed tuple `checks` (`"1": [["result", "/stdout", "=", "Done #4: Call mom\n"]]`). Standard `program-scenario.v1` JSON is also accepted unchanged, and `pdd lint --emit-v1 <story>` prints the expanded `program-scenario.v1` JSON locally at 0 AI calls.
 - One behavior is one Story. For more behaviors, write more Stories and list them in `user_stories/PLAN.md`.
 
 ## The parts of a Story

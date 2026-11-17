@@ -1,9 +1,10 @@
-// Generated from prompts/cli/compiled-test.prompt.md (sha256: 3da4938bedaaaa9fc5634a250848ce7a3c15ef1be094c7b5ba3ab6fd4f617943).
+// Generated from prompts/cli/compiled-test.prompt.md (sha256: f1d4d2c954770f2abc21a596e67be37773267cc5bbc193453f6e6f6bdf842fbd).
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, lstatSync, statSync, realpathSync } from 'node:fs';
 import { join, resolve, relative, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { findTests, selectTests, readPrompt, scenarioShapeRefusal, storyCriteria, checkInput, createStrictSourceAccess, preflight, exactValue, parseScenarioJson, stringifyScenarioJson } from './runtime-seam.mjs';
+import { compileScenarioText } from './scenario-compile.mjs';
 
 const commandWords = command => {
   if (typeof command !== 'string' || !command.trim() || /[\n\r;|&<>`$\\'"(){}*?\[\]]/.test(command)) return null;
@@ -81,9 +82,12 @@ export async function runCompiledTest({root, words, json}, {stdout, stderr, spaw
       }
       if (admission.refusals.length || admission.not_checked?.length) refusal = true;
       const raw = source.read({path:test.path}).content;
-      doc = parseScenarioJson(raw);
-      const story = storyCriteria(source.read({path:test.storyPath}).content);
-      if (!isDeepStrictEqual(JSON.parse(raw), test.doc) || !story.length || !isDeepStrictEqual([...story].sort(),doc.criteria.map(c=>c.text).sort())) refusal = true;
+      const storySource = source.read({path:test.storyPath}).content;
+      const compiled = compileScenarioText(raw, {path:test.path, storyPath:test.storyPath, storySource});
+      if (compiled.refusal) refusal = true;
+      doc = parseScenarioJson(compiled.text);
+      const story = storyCriteria(storySource);
+      if (!isDeepStrictEqual(compiled.doc, test.doc) || !story.length || !isDeepStrictEqual([...story].sort(),doc.criteria.map(c=>c.text).sort())) refusal = true;
       for (const step of doc.steps) source.read({path:step.entry_path});
     } catch { refusal = true; }
     if (refusal) steps.push({scenario:test.path, step:unrun({step_id:test.path}, 'Scenario is invalid or unavailable.')});
