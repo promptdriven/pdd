@@ -40,7 +40,7 @@ string `core`; any other value, or none, is `full`.
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
-When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering` (omitting the key when unset so the default settings shape stays unchanged).
+When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics` (omitting unset optional keys so the default settings shape stays unchanged).
 
 `readCoreSettings(cwd, fs, machine = null)` applies it to `cwd/pdd.json` and `cwd/package.json`;
 an unreadable file counts as absent.
@@ -163,7 +163,9 @@ ended or moved to the merge check before free slots are counted.
    `pdd:would-merge` label or that PR body marks the work partial with `Refs`, `Part of` or
    `Not fixed yet:`) close the issue (`state_reason: completed`); a failure only warns.
 3. A person stops a job by closing the issue, removing `pdd:working`, adding
-   `pdd:stuck` or assigning someone. Then stop its processes and clean up locally,
+   `pdd:stuck`, adding an external-repository label (`external`, `other-repo`,
+   `elsewhere`, `pdd:elsewhere`, case-insensitive) or configured `skipLabels` label,
+   or assigning someone. Then stop its processes and clean up locally,
    with no GitHub write, and do not take that issue again in this tick. A job with a
    PR reads it first: a merged PR (GitHub closes the issue from "Fixes #N") finishes
    as merged, not as a person stop.
@@ -235,7 +237,9 @@ flowchart TD
 
 `readyIssues({state, settings}, ports, rows)` returns the issue numbers in intake
 order. An issue is ready when all hold: it is an open issue (not a PR); it has no
-assignee; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; it is not cooling down (no `noResult` history
+assignee; it carries no external-repository label (`external`, `other-repo`,
+`elsewhere`, `pdd:elsewhere`, matched case-insensitively with zero AI calls) or
+configured `skipLabels` label; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; it has no active pre-run `fixed` disposition hold in `history.jsonl` (cleared when a trusted person comments after the forensics note or edits the issue title/body); it is not cooling down (no `noResult` history
 line of the last 24 hours on this machine after the issue's latest `reset` line); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
 opt-in label when `label` is set; it is not held (the loop guard of
@@ -309,8 +313,21 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    winner's actor is this machine's login (its comment's author, else `GET user`),
    and no other claim comment names that event. Otherwise (another login, a later era,
    or an error in these reads) the label stays.
-3. Prepare the build brief before machine admission, including the collision note and
-   the open-issues brief. These local and GitHub reads can be slow. They never hold a
+3. Run the fast bounded read-only [pre-run forensics](autopilot-forensics.prompt.md)
+   check on the fresh `origin/BASE` worktree before companion claiming and machine
+   admission (enabled unless `settings.forensics === false`; skipped in unit tests
+   that stub `ports.jobs` without providing `ports.forensics` or
+   `ports.forensicsRun`). When `already_fixed: true` is proven by existing files or
+   tests on disk in `worktree`, confirm the claim is still owned, post one concise
+   comment citing the verifying files/tests on `BASE` (with zero commit hashes,
+   SHA-256 digests, receipt IDs, or UUIDs), record disposition `fixed` in
+   `history.jsonl` (and sync any saved intake card via `recordForensicsFixedCard`),
+   undo the claim, remove the worktree and branch, increment `ended`, and continue
+   with the free slot open. When `already_fixed: false` (`still_needed`), pass any
+   verified forensics brief (target files, existing tests, reproduction notes) into
+   `issueText(job)` so `buildPrompt` and `repairPrompt` start grounded. Then prepare
+   the build brief before machine admission, including the collision note and the
+   open-issues brief. These local and GitHub reads can be slow. They never hold a
    shared machine admission lock. If the open-issues read fails, retain that failure
    through admission: a denied job uses rollback, while an admitted new build closes
    older PRs and then ends as `no-result` without starting an agent.
@@ -1908,6 +1925,9 @@ with the native defaults named above.
 ## Dependencies
 
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.
+- [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
+  external-repository / configured skip-label matching and the fast read-only
+  pre-run repository forensics check on `origin/BASE`.
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
 - [Multi-harness login pool](login-pool.prompt.md): required for `isQuotaExhaustionMessage` and optional login selection/cooldown rotation.
 - [Autopilot telemetry](autopilot-telemetry.prompt.md): required for opt-in worker/reviewer model tiering, per-phase wall-clock tracking, and harness log token summaries.
