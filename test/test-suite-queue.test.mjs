@@ -2,7 +2,7 @@ import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
 import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -16,7 +16,7 @@ const until = async (predicate, explanation) => {
   assert.fail(explanation);
 };
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), 'pdd-suite-queue-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-suite-queue-')));
   const f = { root, queue:join(root,'queue'), clock:100_000, started:[], finished:false, promises:[], outputs:[] };
   f.env = { ...process.env, PDD_SUITE_QUEUE:f.queue, HOME:join(root,'home') };
   mkdirSync(f.queue,{recursive:true});

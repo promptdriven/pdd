@@ -38,11 +38,22 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
 - `forensicsEnvironment(env)` applies `jobEnvironment(env)` and strips every
   `GH_*TOKEN` and `GITHUB_*TOKEN` variable so the forensics subprocess has zero
   GitHub write credentials.
-- `forensicsCommand(agent, {model, reasoningEffort, resultFile})` builds a bounded
-  read-only headless CLI invocation for every supported Autopilot agent kind:
+- `codexProviderConfigArgs({env, agent, fs})` reads `CODEX_HOME/config.toml` when an
+  explicit `CODEX_HOME` (`env.CODEX_HOME`, `agent.env.CODEX_HOME`, or
+  `agent.codexHome`) is configured and forwards only safe auth-store and provider
+  routing overrides (`cli_auth_credentials_store`, `model_provider`, allowlisted
+  `[model_providers.<provider>]` fields, plus
+  `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"` and
+  `features.shell_snapshot=false` when present) as `-c` flags so Cloud Accounts
+  gateway leases (`pdd_codex_gateway`) and managed `CODEX_HOME` directories work
+  alongside `--ignore-user-config` without leaking user MCP servers, hooks, plugins,
+  profiles, or web search (#3503).
+- `forensicsCommand(agent, {model, reasoningEffort, resultFile, env, fs})` builds a
+  bounded read-only headless CLI invocation for every supported Autopilot agent kind:
   - `codex`: `exec --ignore-user-config --sandbox read-only --ephemeral --color never`
     with `approval_policy="never"`, `web_search="disabled"`, `mcp_servers={}`,
     `model_reasoning_effort` (`low` default), non-essential agent features disabled (preserving `code_mode_host` so read-only tool inspection works),
+    any `codexProviderConfigArgs({env, agent, fs})` `-c` overrides (#3503),
     optional `--output-last-message FILE`, optional `--model MODEL`, and `-` stdin.
   - `claude`: `-p --safe-mode --tools Read,Glob,Grep --permission-mode plan
     --permission-prompts none --strict-mcp-config --no-chrome
@@ -85,9 +96,9 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
 - Export `EXTERNAL_REPO_LABELS`, `FORENSICS_FIXED_MARKER_PREFIX`,
   `forensicsFixedMarker`, `findExternalRepoLabel`, `findConfiguredSkipLabel`,
   `extractJsonObjects`, `parseForensicsText`, `stripForbiddenIdentifiers`,
-  `forensicsEnvironment`, `forensicsCommand`, `forensicsPrompt`,
-  `evaluateForensicsResult`, `formatForensicsComment`, `formatForensicsBrief`, and
-  `runPreRunForensics`.
+  `forensicsEnvironment`, `codexProviderConfigArgs`, `forensicsCommand`,
+  `forensicsPrompt`, `evaluateForensicsResult`, `formatForensicsComment`,
+  `formatForensicsBrief`, and `runPreRunForensics`.
 
 ## Dependencies
 

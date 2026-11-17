@@ -31,7 +31,11 @@ output inherits the caller streams. `startGate` blocks command execution until
 `onChild(pid)` succeeds, then supplies EOF on command stdin.
 
 Export `runTestSuite({cwd, command, timeout = 30, env}, ports = {})`, returning
-`{exitCode, message}`, and synchronous `readSuiteProgress({cwd, since = 0, env},
+`{exitCode, signal, message}` (`signal` omitted unless terminated by a signal),
+`reconcileSuiteQueue({cwd = null, env = process.env, signal = null} = {}, ports = {})`,
+which acquires the admission lock and persists terminal reconciled receipts for
+dead waiting or unstarted runners (returning the reconciled ticket count), and
+synchronous `readSuiteProgress({cwd, since = 0, env},
 ports = {})`. The latter returns null without records, else `{ticket, state, position,
 queuedAt, startedAt, finishedAt, reason, pausedMs}`. `ticket` is the positive submission sequence number. Times are epoch milliseconds;
 absent start/end times are null, position is a positive integer only while
@@ -194,7 +198,7 @@ atomically save the terminal receipt before returning or forwarding completion.
 
 Receipts and `readSuiteProgress` expose the added fields above plus `exitCode`
 (integer or null), `signal` (termination signal or null), `outcome` (`running`,
-`completed`, or `unknown`), and `counts` (null without a complete TAP summary,
+`completed`, `interrupted`, or `unknown`), and `counts` (null without a complete TAP summary,
 else `{tests, suites, pass, fail, cancelled, skipped, todo}`, each a nonnegative
 integer). Parse only a complete final top-level stdout TAP summary after a TAP 13 header
 and a top-level plan. Later non-summary output or an unfinished final line
@@ -207,8 +211,28 @@ receipts and logs remain available through the queue. Default this port to true.
 Older records without evidence fields remain readable and provide null values.
 
 A later process observes the same ticket and recorder through the shared queue.
+Each new ticket saves `pidIdentity` (`processIdentity(pid)`, or null when
+unavailable) and `executionStarted: false`, flipping `executionStarted` to `true`
+immediately before invoking `execute`. Register `SIGINT` and `SIGTERM` listeners
+(`ports.signals ?? process`) immediately after creating the waiting ticket, with
+a cancellable wait sleep: if signaled while waiting in the queue or after
+admission before `executionStarted` becomes `true`, save the terminal receipt
+under the admission lock (`state: "finished"`, `finishedAt: now()`,
+`outcome: "interrupted"`, `exitCode: null`, `signal`, `counts: null`, and a
+`reason` naming the signal and stating that no tests ran), remove any allocated
+private environment directory, announce receipt locations when enabled, detach
+the signal listeners, and return `{exitCode: signal === "SIGINT" ? 130 : 143,
+signal, message: reason}`.
 A live recorder keeps custody even after its original caller dies. An identity
-mismatch is not proof that the recorder still owns that PID. If neither recorder
+mismatch proves that a recycled PID is no longer the original owner or recorder.
+When checking owner liveness during observation or reconciliation, require both
+`alive(pid)` and, when `pidIdentity` is saved, `processIdentity(pid) === pidIdentity`.
+If neither recorder nor owner is live and `state === "waiting"` or
+(`executionStarted === false` with no `recorderPid` and no `childPid`), report
+`state: "finished"`, `outcome: "interrupted"`, `exitCode: null`, `counts: null`
+and a reason stating that the runner ended while waiting or before starting tests
+(`reconcileSuiteQueue` persists that terminal receipt to disk under the admission
+lock, recording `signal` when supplied). Otherwise, if neither recorder
 nor suite group is live, report `outcome: unknown`, `exitCode: null` and unknown
 counts unless a terminal receipt exists. Do not invent an exit, infer failure
 causes from output tails, repeat an uncertain command, or signal a recovered PID.

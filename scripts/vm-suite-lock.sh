@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9e342f73b7a8035a141fa00efdb17e77045e30780428ac75666eb4e8edaa845f).
+# Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 1d1598beedbb1cd8f5985fdd71f343a29bc008e547a2cd29190ef8930930183d).
 # Shared full-suite queue: machine-sized check slots, first come first served.
 # Usage: cd <clone> && <pdd checkout>/scripts/vm-suite-lock.sh > <log> 2>&1
 # SUITE is the command to run. Without SUITE, it runs the plain suite: npm test with Chrome.

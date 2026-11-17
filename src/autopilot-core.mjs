@@ -14,8 +14,9 @@ import { redactSecrets } from './secret-redaction.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
-import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard } from './autopilot-intake.mjs';
-import { evaluateForensicsResult, findConfiguredSkipLabel, findExternalRepoLabel, formatForensicsBrief, formatForensicsComment, runPreRunForensics } from './autopilot-forensics.mjs';
+import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard, detectWrongRepositoryIssue, findOtherRepoSkipLabel, routeWrongRepositoryIssue } from './autopilot-intake.mjs';
+import { evaluateForensicsResult, findConfiguredSkipLabel, formatForensicsBrief, formatForensicsComment, runPreRunForensics } from './autopilot-forensics.mjs';
+import { readSuiteProgress, reconcileSuiteQueue } from './test-suite-queue.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, orderGroupsSpreadFirst, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { enqueueMergeQueueItem, mergeQueueStatusLine, processMergeQueue, readMergeQueue } from './autopilot-merge-queue.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
@@ -138,7 +139,7 @@ const named = value => typeof value === 'string' && value.trim().length > 0;
 const short = sha => String(sha ?? '').slice(0, 7);
 const oneLine = (value, max = 300) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 const labelsOf = row => (row?.labels ?? []).map(label => typeof label === 'string' ? label : label?.name).filter(Boolean);
-const skippedIssueLabel = (row, settings) => findExternalRepoLabel(labelsOf(row)) ?? findConfiguredSkipLabel(labelsOf(row), settings?.skipLabels);
+const skippedIssueLabel = (row, settings) => findOtherRepoSkipLabel(labelsOf(row)) ?? findConfiguredSkipLabel(labelsOf(row), settings?.skipLabels);
 const issueBodyKey = row => createHash('sha256').update(JSON.stringify({ title: String(row?.title ?? ''), body: String(row?.body ?? '') })).digest('hex').slice(0, 16);
 const slug = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 const issueKey = (repo, n) => `https://github.com/${repo.toLowerCase()}/issues/${n}`;
@@ -273,10 +274,13 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
   const modelTiering = a.modelTiering === true || a.modelTiering === false || object(a.modelTiering) ? a.modelTiering : undefined;
   const skipLabels = Array.isArray(a.skipLabels) ? [...new Set(a.skipLabels.filter(named).map(s => s.trim()))] : undefined;
   const forensics = typeof a.forensics === 'boolean' ? a.forensics : undefined;
+  const ciRaw = a.ci ?? a.ciPolicy;
+  const ci = ciRaw !== undefined ? (['local', 'github'].includes(ciRaw) ? ciRaw : 'github') : undefined;
   return { engine: autopilotEngine(config), mode: ['off', 'observe', 'auto'].includes(a.mode) ? a.mode : 'off',
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: machine ? slotCount({ ...machine, repoRuns: a.runs }).slots : count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
     ...(a.intake !== undefined ? { intake: intakeMode(a.intake) } : {}),
     ...(a.mergeQueue !== undefined ? { mergeQueue: a.mergeQueue === true } : {}),
+    ...(ci !== undefined ? { ci } : {}),
     quietMinutes: count(a.quietMinutes, 45), ciStuckMinutes: count(a.ciStuckMinutes, 360), maxJobHours: count(a.maxJobHours, 24), report: ['file', 'draft', 'off'].includes(a.report) ? a.report : 'draft',
     decisions: ['ask', 'decide'].includes(a.decisions) ? a.decisions : 'decide',
     runtimeRepo: /^[\w.-]+\/[\w.-]+$/.test(String(a.reports?.runtimeRepo ?? '')) ? a.reports.runtimeRepo : null,
@@ -1246,6 +1250,9 @@ async function cleanupPart(ctx, job, part, role, extra = null) {
       ctx.warn(`Autopilot core cleanup of #${job.issue} (${role}): ${result.legacy}`);
     }
     if (result?.confirmed === true) {
+      if (role === 'suite') {
+        await reconcileSuiteQueue({ cwd: part.cwd ?? job?.suite?.cwd ?? null, env: ctx.ports.env ?? process.env, signal: 'SIGTERM' }).catch(() => {});
+      }
       if (object(job?.progress)) job.progress.running = false;
       if (object(part?.progress)) part.progress.running = false;
       recordPartTelemetry(ctx, job, part, role);
@@ -1926,7 +1933,20 @@ async function intake(ctx, rows) {
   };
   for (const group of candidateGroups) {
       if (free <= 0 || tries >= CLAIM_TRIES) break;
-      const row = group.primary;
+      const keptMembers = [];
+      for (const member of [group.primary, ...(group.companions ?? [])]) {
+        if (!member || ctx.skip.has(member.number)) continue;
+        const wrongRepo = detectWrongRepositoryIssue(member, { repo: ctx.repo, cwd: state.cwd, fs: ctx.fs });
+        if (wrongRepo) {
+          try { await routeWrongRepositoryIssue(ctx, member, wrongRepo); }
+          catch (error) { ctx.warn(`Autopilot core wrong-repository routing of #${member.number} failed: ${oneLine(error.message)}`); }
+          ctx.skip.add(member.number);
+          continue;
+        }
+        keptMembers.push(member);
+      }
+      if (!keptMembers.length) continue;
+      const [row, ...groupCompanions] = keptMembers;
       // Spread-first dispatch (#3455): candidateGroups already orders disjoint areas first and overflows into free slots.
       tries++;
       const n = row.number, stamp = `${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, branch = `pdd/core-${n}-${stamp}`, worktree = join(ctx.dirs.worktrees, String(n));
@@ -2077,8 +2097,8 @@ async function intake(ctx, rows) {
         }
       }
       const claimedCompanions = [], claimedRows = [row];
-      if (activeMode && group.companions.length) {
-        for (const compRow of group.companions) {
+      if (activeMode && groupCompanions.length) {
+        for (const compRow of groupCompanions) {
           if (ctx.skip.has(compRow.number)) continue;
           const compAns = compRow.comments ? await personAnswer(ctx, compRow.number).catch(() => null) : null;
           if (compAns && !compAns.trustedRemoval && !compAns.comments.length) continue;
@@ -2214,25 +2234,125 @@ export function workflowRunsOnPr(text, branch, base = 'main', files = null) {
 // A workflow that runs only on repository_dispatch, a schedule, a release, closed PRs, other paths or a push to other
 // branches (the PDD App's dispatch file, for example) is not PR CI. A read error, a file with no readable trigger and
 // more than 50 workflow files count as CI (the safe side).
+async function readBaseWorkflowFiles(ctx) {
+  return (ctx.ciWorkflowEntries ??= (async () => {
+    const tip = `origin/${ctx.state.baseBranch}`;
+    try {
+      await ctx.git(['fetch', '-q', 'origin', ctx.state.baseBranch]);
+      if (!await ctx.git(['rev-parse', '--verify', '-q', `${tip}:.github/workflows`]).catch(() => '')) return [];
+      const names = (await ctx.git(['ls-tree', '--name-only', `${tip}:.github/workflows`])).split('\n').filter(name => /\.ya?ml$/.test(name));
+      if (names.length > 50) return null;
+      return await Promise.all(names.map(async name => ({
+        name,
+        path: `.github/workflows/${name}`,
+        text: await ctx.git(['show', `${tip}:.github/workflows/${name}`]),
+      })));
+    } catch { return null; }
+  })());
+}
+function isUnprotected403(res) {
+  if (res?.status !== 403) return false;
+  const msg = JSON.stringify(res?.value ?? '');
+  return /upgrade to github pro|not available|make this repository public/i.test(msg);
+}
+async function baseProtection(ctx, { includeReviews = false } = {}) {
+  const base = encodeURIComponent(ctx.state.baseBranch);
+  const statusProt = await (ctx.baseStatusProt ??= (async () => {
+    const checksRes = await ctx.gh.call('GET', `repos/${ctx.repo}/branches/${base}/protection/required_status_checks`).catch(() => ({ status: 0 }));
+    let requiredStatusChecks = false;
+    if (checksRes.status === 200) {
+      requiredStatusChecks = (checksRes.value?.contexts?.length ?? 0) + (checksRes.value?.checks?.length ?? 0) > 0;
+    } else if (checksRes.status !== 404 && !isUnprotected403(checksRes)) {
+      requiredStatusChecks = true;
+    }
+    let requiredApprovals = 0;
+    const rulesRes = await ctx.gh.call('GET', `repos/${ctx.repo}/rules/branches/${base}?per_page=100`).catch(() => ({ status: 0 }));
+    if (rulesRes.status === 200 && Array.isArray(rulesRes.value)) {
+      for (const rule of rulesRes.value) {
+        if (rule?.type === 'required_status_checks' && (rule.parameters?.required_status_checks?.length ?? 1) > 0) requiredStatusChecks = true;
+        if (rule?.type === 'pull_request') requiredApprovals = Math.max(requiredApprovals, Number(rule.parameters?.required_approving_review_count ?? 0) || 0);
+      }
+    } else if (rulesRes.status !== 404 && !isUnprotected403(rulesRes)) {
+      requiredStatusChecks = true;
+    }
+    return { requiredStatusChecks, requiredApprovals };
+  })());
+  if (!includeReviews) return statusProt;
+  const reviewCount = await (ctx.baseReviewProt ??= (async () => {
+    const revRes = await ctx.gh.call('GET', `repos/${ctx.repo}/branches/${base}/protection/required_pull_request_reviews`).catch(() => ({ status: 0 }));
+    if (revRes.status === 200) return Math.max(1, Number(revRes.value?.required_approving_review_count ?? 1) || 1);
+    return 0;
+  })());
+  return {
+    requiredStatusChecks: statusProt.requiredStatusChecks,
+    requiredApprovals: Math.max(statusProt.requiredApprovals, reviewCount),
+  };
+}
+async function actionsDisabledInfo(ctx, job = null) {
+  const perms = await (ctx.actionsPerms ??= ctx.gh.call('GET', `repos/${ctx.repo}/actions/permissions`).catch(() => ({ status: 0 })));
+  if (perms.status === 200 && perms.value?.enabled === false) {
+    return { disabled: true, reason: 'GitHub Actions is disabled for this repository' };
+  }
+  const wfRes = await (ctx.actionsWorkflows ??= ctx.gh.call('GET', `repos/${ctx.repo}/actions/workflows?per_page=100`).catch(() => ({ status: 0 })));
+  if (wfRes.status === 200 && Array.isArray(wfRes.value?.workflows)) {
+    const entries = await readBaseWorkflowFiles(ctx);
+    if (Array.isArray(entries) && entries.length > 0) {
+      const tip = `origin/${ctx.state.baseBranch}`;
+      const diffFiles = job ? await ctx.git(['diff', '--name-only', `${tip}...${job.head}`], job.worktree).then(out => out.split('\n').filter(Boolean)).catch(() => null) : null;
+      const matching = job ? entries.filter(w => workflowRunsOnPr(w.text, job.branch, ctx.state.baseBranch, diffFiles)) : entries;
+      if (matching.length > 0 && matching.every(w => {
+        const apiWf = wfRes.value.workflows.find(item => item?.path === w.path || basename(String(item?.path ?? '')) === w.name);
+        return Boolean(apiWf && named(apiWf.state) && normCiState(apiWf.state) !== 'active');
+      })) {
+        return { disabled: true, reason: 'matching GitHub Actions workflow(s) are disabled' };
+      }
+    }
+  }
+  return { disabled: false, reason: null };
+}
+async function localCiPolicy(ctx, job = null) {
+  const suiteCmd = job ? resolveSuiteCommand(ctx, job) : (ctx.settings?.testCommand || detectTestCommand(ctx.state?.cwd, ctx.fs));
+  if (!named(suiteCmd)) return null;
+  const operatorLocal = (ctx.settings?.ci ?? ctx.state?.ci) === 'local';
+  const disabled = operatorLocal ? null : await actionsDisabledInfo(ctx, job);
+  if (!operatorLocal && !disabled?.disabled) return null;
+  const prot = await baseProtection(ctx, { includeReviews: true });
+  if (prot.requiredStatusChecks) return null;
+  const why = operatorLocal ? 'autopilot.ci is local' : disabled.reason;
+  return {
+    note: `${why}; local testCommand (${suiteCmd}) and fresh review gate merge`,
+    requiredApprovals: prot.requiredApprovals,
+  };
+}
+async function githubApprovedCount(ctx, job) {
+  const me = await ctx.login().catch(() => '');
+  const reviews = await ctx.gh.all(`repos/${ctx.repo}/pulls/${job.pr}/reviews?per_page=100`).catch(() => []);
+  const latestByUser = new Map();
+  for (const rev of reviews) {
+    const login = String(rev?.user?.login ?? '').toLowerCase();
+    const rState = String(rev?.state ?? '').toUpperCase();
+    if (!login || login === me || rState === 'COMMENTED' || rState === 'PENDING') continue;
+    if (rev?.commit_id && String(rev.commit_id).toLowerCase() !== job.head && rState === 'APPROVED') continue;
+    latestByUser.set(login, rState);
+  }
+  let count = 0;
+  for (const rState of latestByUser.values()) if (rState === 'APPROVED') count++;
+  return count;
+}
 async function repoHasCi(ctx, job) {
   ctx.hasCi ??= new Map();
   const key = `${job.branch}@${job.head}`;
   if (!ctx.hasCi.has(key)) ctx.hasCi.set(key, (async () => {
     const tip = `origin/${ctx.state.baseBranch}`;
-    const texts = await (ctx.ciFiles ??= (async () => {
-      try {
-        await ctx.git(['fetch', '-q', 'origin', ctx.state.baseBranch]);
-        if (!await ctx.git(['rev-parse', '--verify', '-q', `${tip}:.github/workflows`]).catch(() => '')) return [];
-        const names = (await ctx.git(['ls-tree', '--name-only', `${tip}:.github/workflows`])).split('\n').filter(name => /\.ya?ml$/.test(name));
-        if (names.length > 50) return null;
-        return await Promise.all(names.map(name => ctx.git(['show', `${tip}:.github/workflows/${name}`])));
-      } catch { return null; }
-    })());
-    if (texts === null) return true;
-    const files = texts.length ? await ctx.git(['diff', '--name-only', `${tip}...${job.head}`], job.worktree).then(out => out.split('\n').filter(Boolean)).catch(() => null) : null;
-    if (texts.some(text => workflowRunsOnPr(text, job.branch, ctx.state.baseBranch, files))) return true;
+    const entries = await readBaseWorkflowFiles(ctx);
+    if (entries === null) return true;
+    const files = entries.length ? await ctx.git(['diff', '--name-only', `${tip}...${job.head}`], job.worktree).then(out => out.split('\n').filter(Boolean)).catch(() => null) : null;
+    if (entries.some(entry => workflowRunsOnPr(entry.text, job.branch, ctx.state.baseBranch, files))) return true;
     const required = await ctx.gh.call('GET', `repos/${ctx.repo}/branches/${encodeURIComponent(ctx.state.baseBranch)}/protection/required_status_checks`);
-    return required.status === 200 ? (required.value?.contexts?.length ?? 0) + (required.value?.checks?.length ?? 0) > 0 : ![403, 404].includes(required.status);
+    if (required.status === 200 ? (required.value?.contexts?.length ?? 0) + (required.value?.checks?.length ?? 0) > 0 : ![403, 404].includes(required.status)) return true;
+    const rules = await ctx.gh.call('GET', `repos/${ctx.repo}/rules/branches/${encodeURIComponent(ctx.state.baseBranch)}?per_page=100`).catch(() => ({ status: 404 }));
+    if (rules.status === 200 && Array.isArray(rules.value) && rules.value.some(rule => rule?.type === 'required_status_checks' && (rule.parameters?.required_status_checks?.length ?? 1) > 0)) return true;
+    return false;
   })());
   return ctx.hasCi.get(key);
 }
@@ -2242,6 +2362,11 @@ const isCompletedRun = r => normCiState(r?.status) === 'completed';
 const runFailedToken = r => `r:${r.id ?? ''}:${r.name}:${r.conclusion}:${r.completed_at ?? r.completedAt ?? r.started_at ?? r.startedAt ?? ''}`;
 const statusFailedToken = s => `s:${s.context}:${s.state}:${s.updated_at ?? ''}`;
 async function ciState(ctx, head, job) {
+  const local = await localCiPolicy(ctx, job);
+  if (local) {
+    ciUp(ctx);
+    return { state: 'local', note: local.note, requiredApprovals: local.requiredApprovals, sig: `local:${local.note}` };
+  }
   const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
   const status = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/status`);
   const rawFailedTokens = [
@@ -2270,11 +2395,18 @@ async function ciState(ctx, head, job) {
   // The CI picture: each check's name, state and change time. Pending CI is progress only while this changes.
   const baseSig = [...(runs?.check_runs ?? []).map(r => `${r.name}:${r.status}:${r.conclusion}:${r.completed_at ?? r.started_at ?? ''}`), ...(status?.statuses ?? []).map(x => `${x.context}:${x.state}:${x.updated_at ?? ''}`)].sort().join('|');
   const sig = stalePending.size ? `rerun-pending:${baseSig}` : baseSig;
-  if (checks.length && !job.ciSeen) { job.ciSeen = true; ctx.saveJob(job); }
+  const markCiSeen = async () => {
+    if (!checks.length || job.ciSeen) return;
+    const wfEntries = await readBaseWorkflowFiles(ctx);
+    job.ciSeen = true;
+    job.ciSeenHadWorkflows = Boolean(Array.isArray(wfEntries) && wfEntries.length > 0);
+    ctx.saveJob(job);
+  };
   // #3260 (Stop owners): CI that GitHub does not start (queued with no job, or a billing failure) is a service wait.
   if (failed.length) {
     const out = await ciStart(ctx, job, head, runs, { state: 'red', failed, sig });
     if (out.state !== 'red') return out;
+    await markCiSeen();
     if (job.flakeRerunHead !== head && job.reproduceRerun?.head !== head) {
       const { evaluateShardFlakeRerun } = await import('./autopilot-regressions.mjs');
       const flake = evaluateShardFlakeRerun({
@@ -2302,10 +2434,18 @@ async function ciState(ctx, head, job) {
     return { ...out, failure: await ciFailureDetails(ctx, runs, status, out.failed) };
   }
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
-  // workflow file), never because a new head has no run yet.
-  if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : ciStart(ctx, job, head, runs, { state: 'pending', pending: [], sig });
-  if (stalePending.size) return { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig };
-  return ciStart(ctx, job, head, runs, checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig });
+  // workflow file), never because a new head has no run yet — unless all workflows present when ciSeen was set were removed.
+  if (!checks.length) {
+    if (job.ciSeen && job.ciSeenHadWorkflows) {
+      const wfEntries = await readBaseWorkflowFiles(ctx);
+      if (Array.isArray(wfEntries) && wfEntries.length === 0) { delete job.ciSeen; delete job.ciSeenHadWorkflows; ctx.saveJob(job); }
+    }
+    return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : ciStart(ctx, job, head, runs, { state: 'pending', pending: [], sig });
+  }
+  if (stalePending.size) { await markCiSeen(); return { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig }; }
+  const started = await ciStart(ctx, job, head, runs, checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig });
+  if (!started.notStarted) await markCiSeen();
+  return started;
 }
 async function rerunShardFlake(ctx, job, head, flake) {
   const shards = Array.isArray(flake.shards) && flake.shards.length
@@ -2594,7 +2734,7 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
 // install scripts). An install failure exits 86, a failure of the runner, not a red test result.
 // The runner lines of the suite queue and the dependency install: a failure of the runner, not a test result.
 // A runner line starts with its phrase; a failing test that quotes one (in an indented TAP line) is a test failure.
-const SUITE_RUNNER = /^(?:Shared test suite queue failed|Test suite execution timeout|Test suite could not start|Test suite ended by SIG|Test suite descendants could not be confirmed|Supply a suite command|Autopilot core: dependency install failed)/m;
+const SUITE_RUNNER = /^(?:Shared test suite queue failed|Test suite execution timeout|Test suite could not start|Test suite ended by SIG|Test suite interrupted|Test suite runner ended|Test suite descendants could not be confirmed|Supply a suite command|Autopilot core: dependency install failed)/m;
 // #3227 fix 4: the failed tests that a test log shows (also a partial log), each test once, at most `limit`, in log
 // order. node --test TAP "not ok N - NAME" lines at any depth: a failure stays open until its location line, the next
 // test line or 12 lines, so one name in two files is two tests; a TODO or SKIP directive is no failure; "\#" and "\\"
@@ -2820,7 +2960,11 @@ async function suiteState(ctx, job) {
     // deaths in all, is a no-result, never a pdd fault.
     const watch = await watchProcess(ctx, job, job.suite.agent, 'suite');
     if (watch.state === 'ceiling') return { state: 'ceiling', cause: watch.cause };
-    if (watch.state !== 'quiet') return { state: 'running' };
+    if (watch.state !== 'quiet') {
+      const qProg = job.suite.cwd ? readSuiteProgress({ cwd: job.suite.cwd, env: ctx.ports.env ?? process.env }, { fs: ctx.fs, now: ctx.now }) : null;
+      if (qProg?.state === 'waiting') return { state: 'waiting', position: qProg.position ?? null };
+      return { state: 'running' };
+    }
     // Stop owners: a suite that hung before at this head, or hangs in a test file that the PR changes, is the issue.
     const hang = await suiteHang(ctx, job);
     if (hang) return { state: 'hung', hang };
@@ -2834,11 +2978,23 @@ async function suiteState(ctx, job) {
   // A non-zero exit of the repository's test command is a red suite. Only a failure of the runner itself is not a
   // test result: it could not start, it died or was killed, it timed out, or it wrote no output. Such a run starts
   // again, at most twice, and then ends the job without spending a repair.
-  if (seen.state === 'dead' || seen.exit?.signal || [86, 127].includes(seen.exit?.code) || SUITE_RUNNER.test(stripAnsi(log)) || !log.trim()) {
-    // "Died 3 times" counts every try of this suite run.
-    const deaths = (job.suite.deaths ?? 0) + (seen.state === 'dead' ? 1 : 0);
+  const strippedSuiteLog = stripAnsi(log);
+  const suiteSignal = seen.exit?.signal ?? (seen.exit?.code === 130 ? 'SIGINT' : seen.exit?.code === 143 ? 'SIGTERM' : null);
+  const interruptedSuite = seen.state === 'dead' || Boolean(suiteSignal) || /^(?:Test suite interrupted|Test suite runner ended)/m.test(strippedSuiteLog);
+  if (interruptedSuite && job.suite.cwd) {
+    await reconcileSuiteQueue({ cwd: job.suite.cwd, env: ctx.ports.env ?? process.env, signal: suiteSignal }).catch(() => {});
+  }
+  if (interruptedSuite || [86, 127].includes(seen.exit?.code) || SUITE_RUNNER.test(strippedSuiteLog) || !log.trim()) {
+    // "Died 3 times" counts every try of this suite run (including signal-interrupted queue waits).
+    const deaths = (job.suite.deaths ?? 0) + (interruptedSuite ? 1 : 0);
     if ((job.suite.restarts ?? 0) < 2) return replace(() => job.suite.cwd ?? checkout(ctx, job, 'suite'), (job.suite.restarts ?? 0) + 1, deaths, job.suite.quiets ?? 0);
-    return { state: 'broken', dead: deaths + (job.suite.quiets ?? 0) >= 3, text: `the full test suite runner failed for head ${short(job.head)} (${seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}`}, 3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
+    const reasonWords = seen.state === 'dead' ? 'the run died' : suiteSignal ? `interrupted by ${suiteSignal}` : `exit ${seen.exit?.code}`;
+    return {
+      state: 'broken',
+      dead: deaths + (job.suite.quiets ?? 0) >= 3,
+      ...(interruptedSuite ? { interrupted: true, ...(suiteSignal ? { signal: suiteSignal } : {}), note: `not run: ${reasonWords}` } : {}),
+      text: `the full test suite runner failed for head ${short(job.head)} (${reasonWords}, 3 tries). Log: ${basename(job.suite.agent.log)} on this machine`,
+    };
   }
   recordSuccess(ctx, job, job.suite.agent, 'suite', seen);
   const clean = cleanLogText(log), failed = failingTests(clean);
@@ -3423,8 +3579,15 @@ function evidenceRecord(ctx, job, { lines = [], claims = [], ci = null, review =
     vectors: v ? { head: v.head, state: v.state, reason: v.reason ?? null, cut: v.cut ?? false, skipped: v.skipped ?? [],
       control: v.control ? { code: v.control.code ?? [], fork: v.control.fork ?? null, error: v.control.error ?? null, state: controlResult(v)?.state ?? null } : null,
       kinds: Object.fromEntries(RUN_KINDS.filter(kind => (v.files?.[kind] ?? []).length).map(kind => [kind, v.result?.[kind] ? { state: v.result[kind].state, tests: v.result[kind].tests, pass: v.result[kind].pass, fail: v.result[kind].fail, skipped: v.result[kind].skipped, files: (v.result[kind].files ?? []).map(f => ({ file: f.file, state: f.state, code: f.code, tests: f.tests, pass: f.pass, fail: f.fail, skipped: f.skipped })), failed: v.result[kind].failed ?? [] } : { state: v.state, files: v.files[kind].map(file => ({ file })) }])) } : null,
-    suite: suite ? { state: suite.state, head: job.suite?.head ?? null, exit: job.suite?.agent ? ctx.jobs.read(job.suite.agent).exit?.code ?? null : null, log: job.suite?.agent?.log ? basename(job.suite.agent.log) : null } : null,
-    ci: ci ? { state: ci.state } : null,
+    suite: suite ? {
+      state: suite.interrupted ? 'interrupted' : suite.state,
+      head: job.suite?.head ?? null,
+      exit: job.suite?.agent ? ctx.jobs.read(job.suite.agent).exit?.code ?? null : null,
+      ...(suite.signal ? { signal: suite.signal } : {}),
+      ...(suite.note ? { note: suite.note } : {}),
+      log: job.suite?.agent?.log ? basename(job.suite.agent.log) : null,
+    } : null,
+    ci: ci ? { state: ci.state, ...(ci.note ? { note: ci.note } : {}) } : null,
     review: review ? {
       state: review.state,
       ...(named(job.builderFamily) ? { builderFamily: job.builderFamily } : {}),
@@ -4071,8 +4234,14 @@ async function mergeCheck(ctx, job) {
       return end(ctx, job, { kind: 'job', component: 'review', code: 'needs-person', text: 'the change makes a choice that the issue did not make', decision: true, ask: 'choice',
         question: review.decision.question ?? `The review found a choice that issue #${job.issue} did not make: ${oneLine(item, 600)}. Which option do you want?` });
     }
-    if (suite.state === 'missing') return end(ctx, job, cause('job', 'no-test-command', 'no full test command: set autopilot.testCommand in pdd.json'));
-    if (suite.state === 'broken') return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text, { owner: 'machine' }) : cause('pdd', 'suite-broken', suite.text));
+    if (suite.state === 'missing') {
+      saveEvidence(ctx, job, { lines, claims, ci, review, suite });
+      return end(ctx, job, cause('job', 'no-test-command', 'no full test command: set autopilot.testCommand in pdd.json'));
+    }
+    if (suite.state === 'broken') {
+      saveEvidence(ctx, job, { lines, claims, ci, review, suite });
+      return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text, { owner: 'machine' }) : cause('pdd', 'suite-broken', suite.text));
+    }
     if (review.state === 'fail') { reds.push(`Review FAIL from a fresh reviewer: ${(review.mustFix ?? []).join('; ') || 'see the review comment on the PR'}`); nonTestReds++; }
     if (suite.state === 'fail') { reds.push(suite.text); if (suite.failure) reproduceChecks.push(suite.failure); }
   } else if (job.review?.head === job.head && job.review.verdict === 'FAIL') {
@@ -4094,7 +4263,7 @@ async function mergeCheck(ctx, job) {
   if (reds.length && vectors?.state === 'running' && ctx.now() - (job.redAt ??= ctx.now()) < 30 * MIN) {
     noteProgress(ctx, job, `red-wait|${job.head}|${logSig(ctx.jobs.read(job.vectors.agent))}`, true); return;
   }
-  if (reds.length && suite?.state === 'running' && job.suite?.agent) {
+  if (reds.length && ['running', 'waiting'].includes(suite?.state) && job.suite?.agent) {
     const partialLog = cleanLogText(readTail(ctx.fs, job.suite.agent.log)), partial = failingTests(partialLog);
     if (partial.length) {
       reds.push(`The full test suite (still running at head ${short(job.head)}) already shows failed tests: ${testList(partial)}.`);
@@ -4126,8 +4295,23 @@ async function mergeCheck(ctx, job) {
   }
   // Something still runs (CI that still changes, a reviewer or a suite process): wait, and the quiet clock restarts.
   noteProgress(ctx, job, [job.head, ci.state, ci.sig, review.state, suite.state, vectors?.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
-    ci.state === 'pending' || review.state === 'running' || suite.state === 'running' || vectors?.state === 'running');
-  if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass' || vectors?.state === 'running') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
+    ci.state === 'pending' || review.state === 'running' || ['running', 'waiting'].includes(suite.state) || vectors?.state === 'running');
+  if (!['green', 'none', 'local'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass' || vectors?.state === 'running') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
+  const requiredApprovals = Number(ci.requiredApprovals) || 0;
+  let missingApprovals = 0;
+  if (requiredApprovals > 0) {
+    const approved = await githubApprovedCount(ctx, job);
+    missingApprovals = Math.max(0, requiredApprovals - approved);
+    if (missingApprovals > 0 && ctx.settings.mode === 'auto') {
+      await stopChecks(ctx, job);
+      return end(ctx, job, {
+        kind: 'job', component: 'autopilot-core', code: 'needs-person',
+        text: `base branch protection requires ${requiredApprovals} human pull-request approval(s) on GitHub`,
+        keepPr: true,
+        question: `PR #${job.pr} passed local review and full test suite gates for head ${short(job.head)}, and base branch ${state.baseBranch} requires ${requiredApprovals} human pull-request approval(s) on GitHub before merging. Please approve PR #${job.pr} on GitHub and remove ${DECISION}: Autopilot checks the same PR again without rebuilding.`,
+      });
+    }
+  }
   // #3239 owner wait: files whose owners the path checks could not read on main (an unreadable pdd-bindings.json) keep
   // the PR out of the lane. The wait is not progress, so a quiet period is a pdd step stop (one PDD report, no END).
   if (job.paths?.unchecked?.length) { Object.assign(job, { lastError: `the merge waits: ${job.paths.wait}`, lastErrorTool: false, lastErrorStep: job.paths.bindingsWait ? 'bindings' : 'owners' }); ctx.saveJob(job); return; }
@@ -4194,11 +4378,12 @@ async function mergeCheck(ctx, job) {
     const runtimeLine = runtimeVerdicts(pr.body).map(l => l.line).join('; ') || 'Runtime: no line (no prompt changed)';
     job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
     await ctx.comment(job.pr, [observe ? `Autopilot would merge this PR (observe mode): every check passed for head ${job.head}. It stays open and ready for review; Autopilot does not merge it.` : `Autopilot merge check passed for head ${job.head}.`, '',
-      `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
+      `- CI: ${ci.state === 'local' ? `not required by local policy (${ci.note})` : ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
       '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', ...(reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null) ? [reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null)] : []), `- ${runtimeLine}`, `- ${evidenceText(honestEvidence(job))}`, `- Base: ${oneLine(base.message)}`,
       `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
       ...(job.coverage?.consumers?.line ? [`- ${job.coverage.consumers.line}`] : []),
       ...engineEvidenceLines(job), `- Evidence record: ${basename(saveEvidence(ctx, job, { lines: runtimeVerdicts(pr.body), claims: runtimeClaims(pr.body, job), ci, review, suite }) ?? evidencePath(ctx, job))} on this machine`,
+      ...(missingApprovals > 0 ? [`- Human pull-request approvals still needed on GitHub before merging: ${missingApprovals} of ${requiredApprovals}`] : []),
       ...(drafts.length ? [`- Prompts that need a person's approval before a merge (strict_approvals): ${drafts.join('; ')}`] : []), '',
       `<!-- pdd:autopilot-core:${observe ? 'would-merge' : 'merge'}:${job.head} -->`].join('\n'));
     job.mergeNote = job.head; ctx.saveJob(job);
@@ -5769,7 +5954,8 @@ async function ciStart(ctx, job, head, runs, ci) {
 async function ciDown(ctx, job, notStarted) {
   const m = ctx.machineState();
   if (m.ciDown) return;
-  m.ciDown = { since: notStarted.since, reason: notStarted.reason, message: notStarted.message ?? null, issue: job.issue, pr: job.pr ?? null, head: job.head, at: ctx.now() };
+  const wfEntries = await readBaseWorkflowFiles(ctx);
+  m.ciDown = { since: notStarted.since, reason: notStarted.reason, message: notStarted.message ?? null, issue: job.issue, pr: job.pr ?? null, head: job.head, at: ctx.now(), hadWorkflows: Boolean(Array.isArray(wfEntries) && wfEntries.length > 0) };
   ctx.saveMachine(m);
   try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'usage-limit', text: `Autopilot: ${ciDownText(m.ciDown)}`,
     tried: `PR #${job.pr} waits for its CI (no strike, no repair). Autopilot starts no new job in this repository until a CI run starts, then it goes on by itself.`, need: 'Check the GitHub Actions minutes and the spending limit of the account: Settings → Billing → Actions.' }); }
@@ -5785,6 +5971,15 @@ function ciUp(ctx) {
 async function ciHold(ctx) {
   let m = ctx.machineState();
   if (!m.ciDown) return null;
+  if (await localCiPolicy(ctx, null)) { ciUp(ctx); return null; }
+  if (m.ciDown.hadWorkflows) {
+    const suiteCmd = ctx.settings?.testCommand || detectTestCommand(ctx.state?.cwd, ctx.fs);
+    const wfEntries = named(suiteCmd) ? await readBaseWorkflowFiles(ctx) : null;
+    if (Array.isArray(wfEntries) && wfEntries.length === 0 && !(await baseProtection(ctx)).requiredStatusChecks) {
+      ciUp(ctx);
+      return null;
+    }
+  }
   if (!ctx.ciLooked && ctx.now() - (m.ciDown.probedAt ?? m.ciDown.at) >= CI_PROBE) {
     const runs = (await ctx.gh.ok('GET', `repos/${ctx.repo}/actions/runs?per_page=10`).catch(() => null))?.workflow_runs;
     if (Array.isArray(runs) && runs.some(r => Date.parse(r.created_at) > m.ciDown.since && (r.status === 'in_progress' || r.status === 'completed' && ['success', 'neutral', 'skipped'].includes(r.conclusion)))) { ciUp(ctx); return null; }
@@ -6564,9 +6759,26 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   if (mqLine) lines.push(mqLine);
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}${pddWords(fs, part)}` : '';
+  const suiteStatusOf = job => {
+    if (!job.suite) return { label: '-', showRunning: false };
+    const exitRec = job.suite.agent?.exit ? readJson(fs, job.suite.agent.exit, null) : null;
+    const qProg = job.suite.cwd ? readSuiteProgress({ cwd: job.suite.cwd, env: ports.env ?? process.env }, { fs, ...(ports.now ? { now: ports.now } : {}) }) : null;
+    if (exitRec) {
+      if (exitRec.code === 0) return { label: 'pass', showRunning: false };
+      const sig = exitRec.signal ?? (exitRec.code === 130 ? 'SIGINT' : exitRec.code === 143 ? 'SIGTERM' : qProg?.signal ?? null);
+      if (sig || qProg?.outcome === 'interrupted') return { label: `interrupted (${sig || 'signal'}, not run)`, showRunning: false };
+      return { label: `exited (${exitRec.code ?? 'error'})`, showRunning: false };
+    }
+    if (qProg?.outcome === 'interrupted') return { label: `interrupted (${qProg.signal || 'ended'}, not run)`, showRunning: false };
+    if (qProg?.state === 'waiting') return { label: `waiting${qProg.position ? ` (position ${qProg.position})` : ''}`, showRunning: true };
+    return { label: 'started', showRunning: true };
+  };
   for (const job of jobs) {
-    if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${named(job.review?.reviewIndependence) ? ` (${job.review.reviewIndependence})` : ''}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
-      job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${runtimeWords(job)}${poolWords(job)}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
+    if (job.phase === 'pr') {
+      const sInfo = suiteStatusOf(job);
+      lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${named(job.review?.reviewIndependence) ? ` (${job.review.reviewIndependence})` : ''}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${sInfo.label}${sInfo.showRunning ? running(job, job.suite?.agent, 'suite') : ''}, repairs ${job.repairs}${
+        job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${runtimeWords(job)}${poolWords(job)}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
+    }
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
     else if (job.phase === 'released') lines.push(`#${job.issue} release pending: retry pdd autopilot release ${job.issue}`);
     else lines.push(`#${job.issue} ${job.role} running ${age(job.agent?.started ?? job.started)} (log ${job.agent?.log ?? 'none'})${running(job, job.agent, job.role)}`);

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9e342f73b7a8035a141fa00efdb17e77045e30780428ac75666eb4e8edaa845f).
+# Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 1d1598beedbb1cd8f5985fdd71f343a29bc008e547a2cd29190ef8930930183d).
 # Run on pdd-vm: scripts/vm-suite.sh <full commit SHA>. Logs stay outside the repo.
 # The suite waits for its turn in vm-suite-lock.sh next to this script. See its header.
 # Caller validation logs use a nonempty PDD_STATE_DIR, else PDD_SUITE_QUEUE.state
