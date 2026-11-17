@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-github.prompt.md (sha256: 7f58e4c8e869f7adfaa42d302bfb3a559064db882b2654b7258bdf19596e78e8).
+// Generated from prompts/cli/workflow-github.prompt.md (sha256: 50ec289409cbf1298dfcfb781a6df63def24875a51843e959ad230cd3c461007).
 import { execFile } from 'node:child_process';
 import { isAbsolute } from 'node:path';
 import { runtimeOutputSlice, causeText } from './runtime-seam.mjs';
