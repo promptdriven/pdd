@@ -1,4 +1,4 @@
-// Generated from prompts/cli/live-local-host.prompt.md (sha256: 029ba1022cfd0a53603645cbb2d193ace42f6f228bde638f4dd3024aa26340c2).
+// Generated from prompts/cli/live-local-host.prompt.md (sha256: c37214e2aa63a69e0da814551bfe766faf5b935ac50dd1596fe420450af63440).
 // Owned by prompts/cli/live-local-host.prompt.md.
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
@@ -10,6 +10,73 @@ import { createInterface } from 'node:readline';
 const CAPTURE_LIMIT = 1024 * 1024;
 const fail = () => new Error('Local command host refused an unsafe or unavailable operation.');
 const aborted = () => Object.assign(new Error('Local command cancelled.'), { name: 'AbortError' });
+
+// All hosts use the same physical stdin. Keep its ownership outside the factory.
+let confirmationTail = Promise.resolve();
+function confirmOnTerminal(label) {
+  const confirmation = confirmationTail.then(() => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY || process.stdin.destroyed || process.stdin.readableEnded) return { confirmed: false };
+    return new Promise(resolveAnswer => {
+      let reader; let settled = false; let prompt; let drainRevision = 0;
+      const onDrainData = () => { drainRevision++; };
+      const releaseReader = () => {
+        if (!reader) return;
+        const previous = reader; reader = null;
+        previous.removeListener('close', onError);
+        try { previous.close(); }
+        finally {
+          previous.removeListener('SIGINT', onError);
+          previous.removeListener('error', onError);
+        }
+      };
+      const finish = (confirmed = false) => {
+        if (settled) return;
+        settled = true;
+        clearImmediate(prompt);
+        try { releaseReader(); } catch { confirmed = false; }
+        process.stdin.removeListener('error', onError);
+        process.stdin.removeListener('data', onDrainData);
+        resolveAnswer({ confirmed });
+      };
+      const onError = () => finish();
+      const openReader = () => {
+        process.stdin.removeListener('error', onError);
+        reader = createInterface({ input: process.stdin, output: process.stdout, terminal: true, historySize: 0 });
+        reader.once('close', onError);
+        reader.once('SIGINT', onError);
+        reader.once('error', onError);
+        process.stdin.once('error', onError);
+      };
+      try {
+        openReader();
+        process.stdin.on('data', onDrainData);
+        // Let the resumed TTY pass through an I/O poll before opening a question.
+        // Discard the drain reader's partial input and editing state too.
+        prompt = setImmediate(() => {
+          let drained = drainRevision;
+          const ask = () => {
+            if (settled) return;
+            if (drainRevision !== drained) {
+              drained = drainRevision;
+              prompt = setImmediate(ask);
+              return;
+            }
+            try {
+              process.stdin.removeListener('data', onDrainData);
+              releaseReader();
+              openReader();
+              reader.question(`Allow this local write? ${label}\nType yes to confirm: `, answer => finish(answer === 'yes'));
+            } catch { finish(); }
+          };
+          prompt = setImmediate(ask);
+        });
+      } catch { finish(); }
+    });
+  });
+  // Rejection must release the queue as well as normal decline or acceptance.
+  confirmationTail = confirmation.then(() => {}, () => {});
+  return confirmation;
+}
 function parseStrict(text) {
   const parsed = JSON.parse(text);
   let offset = 0;
@@ -213,14 +280,7 @@ export function createLiveLocalHost({ env = process.env, redaction, root = proce
     async confirm({ binding_id, executable, argv }) {
       if (!terminal || !process.stdin.isTTY || !process.stdout.isTTY) return { confirmed: false };
       const label = redact({ text: JSON.stringify({ binding_id, executable, argv }) }).text.replace(/[\x00-\x1f\x7f-\x9f]/g, '').replace(/[\u202a-\u202e\u2066-\u2069]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
-      const reader = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-      try {
-        return await new Promise(resolveAnswer => {
-          reader.once('close', () => resolveAnswer({ confirmed: false }));
-          reader.once('SIGINT', () => { reader.close(); });
-          reader.question(`Allow this local write? ${label}\nType yes to confirm: `, answer => resolveAnswer({ confirmed: answer === 'yes' }));
-        });
-      } finally { reader.close(); }
+      return confirmOnTerminal(label);
     },
     journal: {
       async read(key) {
