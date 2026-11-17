@@ -59,6 +59,12 @@ else if(a[0]==='api'&&/^repos\\/example\\/project\\/pulls\\/\\d+\\/files\\?per_p
  if(!a.includes('--paginate')||!a.includes('--slurp'))throw Error('file list must include every JSON page');
  const pages=s.prFiles?.[a[1].split('/')[4]];if(!pages)throw Error('file list unavailable');out(pages);
 }
+else if(a[0]==='api'&&a.some(x=>x.includes('/protection/required_status_checks'))){if(s.requiredStatusChecksError){process.stderr.write(s.requiredStatusChecksError);process.exit(1)}if(s.requiredStatusChecks){out(s.requiredStatusChecks)}else{process.stderr.write('HTTP 404: Branch not protected');process.exit(1)}}
+else if(a[0]==='api'&&a.some(x=>x.includes('/rules/branches/'))){if(s.branchRulesError){process.stderr.write(s.branchRulesError);process.exit(1)}out(s.branchRules||[])}
+else if(a[0]==='api'&&a.some(x=>x.includes('/commits/')&&x.includes('/status')))out(s.commitStatus||{state:'pending',total_count:0,statuses:[]});
+else if(a[0]==='api'&&a.some(x=>x.includes('/commits/')&&x.includes('/check-runs')))out({total_count:s.checkRunsTotal??(s.checkRuns||[]).length,check_runs:s.checkRuns||[]});
+else if(a[0]==='api'&&a.some(x=>x.includes('/check-runs/')&&x.includes('/annotations')))out(s.checkAnnotations||[]);
+else if(a[0]==='api'&&a.some(x=>x.includes('/actions/jobs/'))){const id=Number(a[1].split('/').pop());if(s.actionsJobError){process.stderr.write(s.actionsJobError);process.exit(1)}out(s.actionsJobs?.[id]??s.defaultActionsJob??{id,status:'completed',conclusion:'failure',runner_id:0,runner_name:'',steps:[]})}
 else if(a[0]==='api'&&a.some(x=>x.includes('/comments')))out((s.comments||[]).map(c=>JSON.stringify(c)).join('\\n'));
 else if(a[1]==='create'||patch){
  if(flag(patch?'--input':'--body-file')!=='-')throw Error('must read body from stdin');
@@ -1967,6 +1973,110 @@ test('2923 cross-branch PR 1 refresh after origin/<pr1.branch> deletion uses pr1
   assert.match(f3.data().prs[0].body, /pdd:no-verdict/);
 });
 
+
+test('3446 local suite proof clears false no-CI block on local-gate and billing-blocked repos while keeping required-check blocks', t => {
+  const f = fixture(t);
+  f.machine();
+  const queueDir = join(f.base, 'suite-queue');
+  mkdirSync(queueDir, { recursive: true });
+  const writeSuite = headSha => writeFileSync(join(queueDir, 'ticket-1.json'), JSON.stringify({
+    v: 1, ticket: 1, pid: process.pid, childPid: null, cwd: realpathSync(f.root), state: 'finished',
+    queuedAt: 1000, startedAt: 1001, finishedAt: 2000, reason: null, environmentPolicy: 'clean-v1',
+    command: '[redacted]', commandFingerprint: '0'.repeat(64),
+    source: { head: headSha, fingerprint: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', runId: f.run.runId, issue: 17, error: null },
+    logPath: join(queueDir, 'suite.log'), receiptPath: join(queueDir, 'ticket-1.json'),
+    recorderPid: null, recorderIdentity: null, exitCode: 0, signal: null, counts: null, outcome: 'completed',
+  }));
+  const runStatusWithQueue = () => {
+    const script = `import {runStatus} from ${JSON.stringify(join(packageRoot, 'src/workflow-runner.mjs'))};const r=await runStatus({ref:'17',cwd:${JSON.stringify(f.root)}},{stateDir:${JSON.stringify(join(f.base, 'pdd-state'))},isTTY:true,env:{HOME:${JSON.stringify(f.base)},PDD_SUITE_QUEUE:${JSON.stringify(queueDir)}}});process.stdout.write(JSON.stringify(r));`;
+    return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: f.root, encoding: 'utf8',
+      env: { ...process.env, PATH: `${join(f.base, 'bin')}:${process.env.PATH}`, PDD_PUBLICATION_GH_STATE: join(f.base, 'gh.json'), GIT_ALLOW_PROTOCOL: 'file' },
+    }));
+  };
+
+  assert.equal(f.invoke('Not caught because: covered.\nProof (1/1): ok.\nReview: ready.').exitCode, 0);
+  const headSha = f.git('rev-parse', 'HEAD');
+  const prs = f.data().prs;
+  prs[0].statusCheckRollup = [];
+  f.configure({ prs });
+
+  // Without local suite proof, empty statusCheckRollup stays blocked.
+  assert.equal(runStatusWithQueue().exitCode, 0);
+  assert.match(f.data().prs[0].body, /⛔ Blocked: no CI checks configured/);
+
+  // With passing local suite at HEAD and no PR workflow / required status checks -> ready!
+  writeSuite(headSha);
+  assert.equal(runStatusWithQueue().exitCode, 0);
+  assert.doesNotMatch(f.data().prs[0].body, /⛔ Blocked: no CI checks configured/);
+  assert.match(f.data().prs[0].body, /⏳ Waiting for the review/);
+  assert.match(f.data().prs[0].body, /none configured \(local suite passed\)/);
+
+  // Private GitHub Free repo with zero .github/workflows and 403 "Upgrade to GitHub Pro..." on both endpoints -> ready!
+  f.configure({
+    requiredStatusChecks: null,
+    requiredStatusChecksError: "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)",
+    branchRulesError: "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)",
+  });
+  assert.equal(runStatusWithQueue().exitCode, 0);
+  assert.doesNotMatch(f.data().prs[0].body, /⛔ Blocked: no CI checks configured/);
+  assert.match(f.data().prs[0].body, /none configured \(local suite passed\)/);
+  f.configure({ requiredStatusChecksError: null, branchRulesError: null });
+
+  // If base branch protection requires status checks, ci: 'none' still blocks!
+  f.configure({ requiredStatusChecks: { contexts: ['ci/test'], checks: [{ context: 'ci/test' }] } });
+  assert.equal(runStatusWithQueue().exitCode, 0);
+  assert.match(f.data().prs[0].body, /⛔ Blocked: no CI checks configured/);
+
+  // Generic HTTP 403 or generic HTTP 404 ("Not Found" due to missing token scope) fails closed -> stays blocked!
+  for (const errText of ['HTTP 403: Resource not accessible by personal access token', 'HTTP 404: Not Found']) {
+    f.configure({ requiredStatusChecks: null, requiredStatusChecksError: errText });
+    assert.equal(runStatusWithQueue().exitCode, 0);
+    assert.match(f.data().prs[0].body, /⛔ Blocked: no CI checks configured/);
+  }
+
+  // Repository ruleset requiring status checks also blocks even when classic protection returns 404!
+  f.configure({
+    requiredStatusChecks: null,
+    requiredStatusChecksError: null,
+    branchRules: [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'ci/ruleset' }] } }],
+  });
+  assert.equal(runStatusWithQueue().exitCode, 0);
+  assert.match(f.data().prs[0].body, /⛔ Blocked: no CI checks configured/);
+
+  // Matrix workflow (6 jobs) with billing failure on GitHub Actions + no required status checks + local suite passed -> ready!
+  const billingPrs = f.data().prs;
+  billingPrs[0].statusCheckRollup = Array.from({ length: 6 }, (_, idx) => ({ __typename: 'CheckRun', name: `matrix-${idx + 1}`, status: 'COMPLETED', conclusion: 'FAILURE' }));
+  f.configure({
+    requiredStatusChecks: null,
+    requiredStatusChecksError: null,
+    branchRules: [],
+    prs: billingPrs,
+    checkRuns: Array.from({ length: 6 }, (_, idx) => ({ id: 91 + idx, name: `matrix-${idx + 1}`, status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' }, output: { title: 'Test', summary: '', annotations_count: 1 } })),
+    checkAnnotations: [{ path: '.github', message: 'The job was not started because recent account payments have failed or your spending limit needs to be increased.' }],
+  });
+  assert.equal(runStatusWithQueue().exitCode, 0);
+  assert.doesNotMatch(f.data().prs[0].body, /⛔ Blocked: no CI checks configured/);
+  assert.match(f.data().prs[0].body, /⏳ Waiting for the review/);
+  assert.match(f.data().prs[0].body, /Actions unavailable \(local suite passed\)/);
+
+  // Ordinary failing test whose summary quotes GitHub's billing banner text stays blocked!
+  f.configure({
+    checkRuns: [{ id: 92, name: 'billing-unit', status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' }, output: { title: 'Billing UI test failed', summary: 'AssertionError: expected error banner "recent account payments have failed", received "Unknown error"', annotations_count: 0 } }],
+    checkAnnotations: [],
+  });
+  assert.equal(runStatusWithQueue().exitCode, 0);
+  assert.match(f.data().prs[0].body, /⛔ Blocked: CI fails/);
+
+  // Job that actually started on a runner and emitted a spoofed .github billing annotation also stays blocked!
+  f.configure({
+    checkRuns: [{ id: 93, name: 'spoof-billing', status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' }, output: { title: null, summary: '', annotations_count: 1 } }],
+    checkAnnotations: [{ path: '.github', message: 'The job was not started because recent account payments have failed or your spending limit needs to be increased.' }],
+    actionsJobs: { 93: { id: 93, status: 'completed', conclusion: 'failure', runner_id: 7, runner_name: 'GitHub Actions 7', steps: [{ name: 'Set up job' }, { name: 'Run spoof' }] } },
+  });
+  assert.equal(runStatusWithQueue().exitCode, 0);
+  assert.match(f.data().prs[0].body, /⛔ Blocked: CI fails/);
+});
 
 test('2830: status retries a failed PR 2 link on an older PR 1 without saved readable facts', t => {
   const f = stackedOnPr1(t);

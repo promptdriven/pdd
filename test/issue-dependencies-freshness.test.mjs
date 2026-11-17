@@ -952,3 +952,111 @@ for (const state of ['busy', 'dialog']) test(`a timed review redelivery refused 
 });
 
 
+
+
+test('3446 dependency intake excludes unreferenced repo files, bounds oversized referenced files with full-byte revisions, and compacts superseded reviews', async t => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'pdd-deps-3446-'));
+  t.after(() => rmSync(repoDir, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repoDir });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoDir });
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repoDir });
+  execFileSync('git', ['remote', 'add', 'origin', `https://github.com/${repository}.git`], { cwd: repoDir });
+  mkdirSync(join(repoDir, 'src'), { recursive: true });
+  const unreferencedText = 'UNREFERENCED_MARKER_' + 'u'.repeat(40000);
+  const referencedText = 'REFERENCED_HEAD\n' + 'x'.repeat(90000) + '\nREFERENCED_TAIL\n';
+  writeFileSync(join(repoDir, 'src/unreferenced.mjs'), unreferencedText);
+  writeFileSync(join(repoDir, 'src/referenced.mjs'), referencedText);
+  writeFileSync(join(repoDir, 'src/second.mjs'), 'export const second = 2;\n');
+  writeFileSync(join(repoDir, 'package.json'), '{"name":"example-project"}\n');
+  execFileSync('git', ['add', '.'], { cwd: repoDir });
+  execFileSync('git', ['commit', '-qm', 'initial'], { cwd: repoDir });
+
+  const i16 = issue(16, { body: 'Foundation issue 16.' });
+  const i17 = issue(17, { body: 'Reviewed issue 17.' });
+  const i18 = issue(18, { body: 'Update src/referenced.mjs and src/second.mjs. Update package.json.' });
+  const i19 = issue(19, { body: 'Issue 19 with mismatched continuation ancestry.' });
+  const manyCandidates = Array.from({ length: 120 }, (_, idx) => ({
+    key: `https://github.com/${repository}/issues/${200 + idx}`,
+    revision: sha(String(idx)),
+  }));
+  const olderReview = comment('801', recordBody({
+    analysis: 'Older superseded review.',
+    base: [], continuation: '', issue: i17.html_url,
+    inputs: [row(i17)], candidates: manyCandidates,
+    outcome: 'complete', dependencies: [{ key: i16.html_url, reason: 'Needs 16.', evidence: [i16.html_url] }],
+    questions: [], effects: 'confirmed',
+  }));
+  const currentReview = comment('802', recordBody({
+    analysis: 'Current head review.',
+    base: ['801'], continuation: '', issue: i17.html_url,
+    inputs: [row(i17)], candidates: [...manyCandidates, row(i16), row(i18)],
+    outcome: 'complete', dependencies: [{ key: i16.html_url, reason: 'Needs 16.', evidence: [i16.html_url] }],
+    questions: [], effects: 'confirmed',
+  }));
+  const i16Review = savedReview('800', i16, [i17, i18]);
+  const badIntent = comment('901', recordBody({
+    analysis: 'Pending intent 19.',
+    base: [], continuation: '', issue: i19.html_url,
+    inputs: [row(i19)], candidates: manyCandidates.slice(0, 5),
+    outcome: 'pending', dependencies: [], questions: [], effects: 'pending',
+  }));
+  const badCont = comment('902', recordBody({
+    analysis: 'Pending intent 19.',
+    base: [], continuation: '901', issue: i19.html_url,
+    inputs: [row(i19)], candidates: manyCandidates.slice(5, 10),
+    outcome: 'complete', dependencies: [], questions: [], effects: 'confirmed',
+  }));
+  const replacementOverBad = comment('903', recordBody({
+    analysis: 'Replacement over mismatched continuation.',
+    base: ['902'], continuation: '', issue: i19.html_url,
+    inputs: [row(i19)], candidates: [],
+    outcome: 'complete', dependencies: [], questions: [], effects: 'confirmed',
+  }));
+  const w = world({
+    issues: [i16, i17, i18, i19],
+    comments: { [i16.html_url]: [i16Review], [i17.html_url]: [olderReview, currentReview], [i19.html_url]: [badIntent, badCont, replacementOverBad] },
+    blockedBy: { [i17.html_url]: [i16.html_url] },
+  });
+  const execPort = async (file, args, opts = {}) => file === "gh" && args[0] === "repo"
+    ? { code: 0, stdout: JSON.stringify({ nameWithOwner: repository, defaultBranchRef: { name: "main" }, url: `https://github.com/${repository}` }), stderr: "" }
+    : { code: 0, stdout: execFileSync(file, args, { cwd: opts.cwd ?? repoDir, encoding: "utf8" }), stderr: "" };
+  const ports = w.ports({ execFile: execPort });
+  delete ports.evidence;
+  delete ports.context;
+  const { snapshot: fullSnapshot } = await readDependencySnapshot({ repository }, ports);
+  const { request, queued } = await prepareDependencyIntake({ repository, cwd: repoDir }, ports);
+  assert.deepEqual(queued, [i18.html_url]);
+
+  assert.equal(request.contextJson.includes('UNREFERENCED_MARKER_'), false);
+  assert.equal(request.contextJson.includes('src/unreferenced.mjs'), false);
+  const context = JSON.parse(request.contextJson);
+  const refEntry = context.source.find(item => item.key.endsWith('/blob/HEAD/src/referenced.mjs'));
+  const secondEntry = context.source.find(item => item.key.endsWith('/blob/HEAD/src/second.mjs'));
+  const pkgEntry = context.source.find(item => item.key.endsWith('/blob/HEAD/package.json'));
+  assert.ok(refEntry, 'referenced file included in context.source');
+  assert.ok(secondEntry, 'second multi-path file included in context.source');
+  assert.ok(pkgEntry, 'root package.json included in context.source');
+  assert.equal(refEntry.revision, sha(Buffer.from(referencedText)));
+  assert.ok(refEntry.text.length < 70000, `excerpt bounded (${refEntry.text.length})`);
+  assert.match(refEntry.text, /REFERENCED_HEAD/);
+  assert.match(refEntry.text, /REFERENCED_TAIL/);
+
+  const compactSnapshot = JSON.parse(request.snapshotJson);
+  const superseded = compactSnapshot.reviews.find(r => r.id === '801');
+  const head17 = compactSnapshot.reviews.find(r => r.id === '802');
+  assert.deepEqual(superseded.inputs, []);
+  assert.deepEqual(superseded.candidates, []);
+  assert.equal(superseded.dependencies.length, 1);
+  assert.equal(head17.candidates.length, 1);
+  assert.deepEqual(
+    projectIssueGraph({ snapshot: compactSnapshot }).nodes,
+    projectIssueGraph({ snapshot: fullSnapshot }).nodes
+  );
+  assert.deepEqual(
+    projectIssueGraph({ snapshot: compactSnapshot }).edges,
+    projectIssueGraph({ snapshot: fullSnapshot }).edges
+  );
+  const node19 = projectIssueGraph({ snapshot: compactSnapshot }).nodes.find(n => n.key === i19.html_url.toLowerCase());
+  assert.equal(node19.reviewState, 'unverified');
+  assert.equal(node19.eligible, false);
+});

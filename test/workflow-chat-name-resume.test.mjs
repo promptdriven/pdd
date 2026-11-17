@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdirSync, readFileSync, statSync, utimesSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {openRun, runStatus} from '../src/workflow-runner.mjs';
+import {openRun, runStatus, startRun} from '../src/workflow-runner.mjs';
 import {chatSession} from '../src/workflow-chat.mjs';
 import {fixture, packageRoot} from './helpers/workflow-runner-fixture.mjs';
 
@@ -78,4 +78,23 @@ for (const recovery of ['ended agent', 'closed workspace']) test(`2820 ${recover
   const unrelated = await chatSession(resumed, {...f.ports, run:f.record(), findNativeSessions:async () => [{id:otherId}]});
   assert.equal(unrelated.namingError?.code, 'chat_name_unverified');
   assert.equal(occupant.name, 'unnamed-again');
+});
+
+
+test('3446 fish login shell submits unsubmitted launch command once and never presses Enter on a dialog', async t => {
+  const f = await fixture(t, {agent: 'codex'});
+  f.ports.env.SHELL = '/usr/bin/fish';
+  f.herdr.fishUnsubmitted = 'wrap80';
+  const started = await startRun({name: 'small-change', issue: '17', agent: 'codex', cwd: f.source, packageRoot}, f.ports);
+  assert.equal(started.exitCode, 0, started.message);
+  const sendKeys = f.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'send-keys');
+  assert.equal(sendKeys.length, 1);
+  assert.equal(sendKeys[0][3], 'Enter');
+  assert.ok(f.record().chats[0].herdrAgentName);
+
+  const fDialog = await fixture(t, {agent: 'codex'});
+  fDialog.ports.env.SHELL = '/usr/bin/fish';
+  fDialog.herdr.fishUnsubmitted = 'PDD_AGENT_SESSION=1 codex\nDo you trust the files in this folder?\n❯ 1. Yes, proceed\nEnter to confirm · Esc to cancel';
+  await startRun({name: 'small-change', issue: '17', agent: 'codex', cwd: fDialog.source, packageRoot}, fDialog.ports);
+  assert.equal(fDialog.herdr.calls.filter(args => args[0] === 'pane' && args[1] === 'send-keys').length, 0);
 });

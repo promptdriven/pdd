@@ -1,5 +1,5 @@
 import {parkingSummary} from './autopilot-parking.mjs';
-// Generated from prompts/cli/issue-dependencies-intake.prompt.md (sha256: a8c195ca75ec786d920206c4681e2dabdcf2adc186c38d32e9eec61fce61f55e).
+// Prompt: prompts/cli/issue-dependencies-intake.prompt.md
 import { syncMixedParts } from './issue-mixed.mjs';
 import { sortRequestFingerprint, sortSubjects, prepareSortContext, validateSortBatch, saveSortBatch, routeSortIssues, syncSortGroups, pacedSortWrites } from './issue-sort-github.mjs';
 import { sortPlan } from './issue-sort.mjs';
@@ -83,7 +83,7 @@ function sameImpactRecord(saved, issue, impact) {
 }
 
 // Semantic packets carry observations, but text without verified authority is not instructions.
-function packetSnapshot(snapshot) {
+function packetSnapshot(snapshot, queued = null) {
   const copy = structuredClone(snapshot);
   copy.issues = copy.issues.map(issue => issue.authority === 'trusted' ? {
     ...issue,
@@ -95,11 +95,12 @@ function packetSnapshot(snapshot) {
     holds: issue.holds, ...(issue.executionClaim ? { executionClaim: issue.executionClaim } : {}),
     ...(issue.runIds ? { runIds: issue.runIds } : {}),
   });
-  copy.reviews = copy.reviews.map(review => review.authority === 'trusted' && review.intact ? review : {
+  const sanitizedReviews = copy.reviews.map(review => review.authority === 'trusted' && review.intact ? review : {
     id: review.id, analysis: '', base: [], continuation: '', issue: review.issue,
     inputs: [], candidates: [], outcome: review.outcome, dependencies: [],
     questions: [], intact: review.intact, effects: review.effects, authority: review.authority,
   });
+  copy.reviews = sanitizedReviews;
   const currentRows = rows(copy);
   const issueKeys = new Set(copy.issues.map(issue => issue.key));
   const reviewIds = new Set(copy.reviews.map(review => review.id));
@@ -109,6 +110,42 @@ function packetSnapshot(snapshot) {
     complete: impact.complete, trusted: impact.trusted, intact: impact.intact,
     ...(impact.authority ? { authority: impact.authority } : {}),
   }));
+  if (!Array.isArray(queued)) return copy;
+  const baseGraph = projectIssueGraph({ snapshot: copy }), baseHeads = headIds(copy, baseGraph);
+  const heads = new Set(baseHeads), queuedSet = new Set(queued.map(x => issueKey(x) ?? String(x).toLowerCase()));
+  const byId = new Map(sanitizedReviews.map(r => [r.id, r])), adj = new Map();
+  const link = (a, b) => { if (!adj.has(a)) adj.set(a, new Set()); adj.get(a).add(b); };
+  for (const r of sanitizedReviews) if (r.authority === 'trusted' && r.intact && r.continuation) { link(r.id, r.continuation); link(r.continuation, r.id); }
+  const sameCont = (a, b) => a && b && a.authority === 'trusted' && a.intact && b.authority === 'trusted' && b.intact
+    && ['analysis', 'base', 'issue', 'inputs', 'candidates', 'dependencies'].every(k => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+  const tierById = new Map();
+  for (const r of sanitizedReviews) {
+    if (!(r.authority === 'trusted' && r.intact) || tierById.has(r.id)) continue;
+    const comp = [], stack = [r.id], seen = new Set([r.id]);
+    while (stack.length) {
+      const cur = stack.pop(); comp.push(cur);
+      for (const next of adj.get(cur) ?? []) if (!seen.has(next)) { seen.add(next); stack.push(next); }
+    }
+    const members = comp.map(id => byId.get(id));
+    const exactMatch = members.every(m => Boolean(m) && (!m.continuation || sameCont(m, byId.get(m.continuation))));
+    const tier = !exactMatch || members.some(m => queuedSet.has(issueKey(m.issue) ?? String(m.issue).toLowerCase())) ? 'full'
+      : members.some(m => heads.has(m.id)) ? 'head' : 'superseded';
+    for (const id of comp) tierById.set(id, tier);
+  }
+  const compacted = {
+    ...copy,
+    reviews: sanitizedReviews.map(review => {
+      const tier = tierById.get(review.id);
+      if (!tier || tier === 'full') return review;
+      if (tier === 'superseded') return { ...review, analysis: [...review.analysis].slice(0, 160).join('') || '.', inputs: [], candidates: [] };
+      const deps = new Set((review.dependencies ?? []).map(d => issueKey(d.key) ?? String(d.key).toLowerCase()));
+      return { ...review, analysis: [...review.analysis].slice(0, 240).join('') || '.', candidates: (review.candidates ?? []).filter(c => deps.has(issueKey(c.key) ?? String(c.key).toLowerCase())) };
+    }),
+  };
+  try {
+    const nextGraph = projectIssueGraph({ snapshot: compacted }), nextHeads = headIds(compacted, nextGraph);
+    if (JSON.stringify(nextHeads) === JSON.stringify(baseHeads) && JSON.stringify(nextGraph) === JSON.stringify(baseGraph)) return compacted;
+  } catch { /* Fall back to uncompacted sanitized copy if graph projection ever differs. */ }
   return copy;
 }
 
@@ -200,7 +237,7 @@ export async function prepareDependencyIntake({ cwd = '', repository, issue }, p
   if (!Array.isArray(evidence.source) || !Array.isArray(evidence.requirements) || evidence.requirements.some(x => x.authority !== 'trusted')) throw Error('invalid-input');
   const current = rows(snapshot);
   for (const item of evidence.source || []) if (item.key && item.revision) { const prev = current.get(item.key); if (!prev) snapshot.inputs.push({ key: item.key, revision: item.revision }); }
-  return { request: { id: randomUUID(), repository, issues: queued, snapshotJson: JSON.stringify(packetSnapshot(snapshot)), contextJson }, queued, skipped, ...(skipReasons.length ? { skipReasons } : {}) };
+  return { request: { id: randomUUID(), repository, issues: queued, snapshotJson: JSON.stringify(packetSnapshot(snapshot, queued)), contextJson }, queued, skipped, ...(skipReasons.length ? { skipReasons } : {}) };
 }
 
 // A review that an earlier call of the same request already saved: the same trusted, intact record on the subject.

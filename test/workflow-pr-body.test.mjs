@@ -396,3 +396,35 @@ test('3088 standalone formal result owns the readable narrative and Proof row', 
   assert.match(prStatus(facts), /^⛔/);
   assert.match(top(facts), /Failed at `3088`/);
 });
+
+
+test('3446 local-gate and Actions-billing PRs pass CI row when local suite passed and block without it', () => {
+  const facts = smallChange();
+  facts.records.ci = 'none';
+  assert.equal(prStatus(facts), '⛔ Blocked: no CI checks configured');
+
+  facts.records.localSuitePassed = true;
+  assert.equal(prStatus(facts), '✅ Ready to merge');
+  assert.match(top(facts), /\| Full test suite \(CI\) on this commit \| none configured \(local suite passed\) \| — \|/);
+
+  const autoFacts = structuredClone(facts);
+  autoFacts.mode = 'auto';
+  autoFacts.records.checker = { verdict: 'PASS' };
+  assert.equal(prStatus(autoFacts), '✅ Ready to merge');
+
+  const billing = smallChange();
+  billing.records.ci = 'billing';
+  assert.equal(prStatus(billing), '⏳ Waiting for CI');
+  assert.match(top(billing), /\| Full test suite \(CI\) on this commit \| ⏳ Actions unavailable \(billing\) \| — \|/);
+
+  billing.records.localSuitePassed = true;
+  assert.equal(prStatus(billing), '✅ Ready to merge');
+  assert.match(top(billing), /\| Full test suite \(CI\) on this commit \| Actions unavailable \(local suite passed\) \| — \|/);
+
+  const stacked = featurePr2();
+  stacked.stacked = true;
+  stacked.pr1 = { number: 22, url: 'https://github.com/example/project/pull/22', merged: false, state: 'open', ci: 'none' };
+  stacked.records.ci = 'none';
+  stacked.records.localSuitePassed = true;
+  assert.doesNotMatch(prStatus(stacked), /Blocked/);
+});

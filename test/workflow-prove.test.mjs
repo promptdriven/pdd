@@ -57,9 +57,39 @@ test('PROVE-NATIVE5: fixture-only runs without overlay; symlink tests remain uns
 test('PROVE-NATIVE6: default readRun accepts real selection and rejects an absent run without a record', async t => {
  const {proveRun}=await api(),f=fixture(t);const result=await proveRun({ref:'9999',cwd:f.root,test:'true',expect:'x'});assert.equal(result.exitCode,1);assert.equal(result.message,'Old-code proof: ✗ setup-error (run unavailable).');assert.equal(existsSync(join(f.runDir,'old-code-proof.json')),false);
 });
-test('PROVE-NATIVE7: whole process group is killed on output overflow and both snapshots are removed', {timeout:20000}, async t => {
- const {proveRun}=await api(),f=fixture(t);f.put('test/new.test.mjs',regression);f.commit();const pidFile=join(f.runDir,'child.pid');const script=`/*${marker}*/const fs=require('fs');const {spawn}=require('child_process');let child=spawn(process.execPath,['-e',${JSON.stringify(`${untilGone}process.on("SIGTERM",()=>{});`)}],{stdio:'ignore'});fs.appendFileSync(${JSON.stringify(pidFile)},String(child.pid)+"\\n");process.on('SIGTERM',()=>{});${untilGone}setTimeout(()=>setInterval(()=>process.stdout.write('x'.repeat(65536)),1),100);`;
- const started=Date.now();const answer=await proveRun({ref:'2594',cwd:f.root,test:`node -e '${script.replaceAll("'", "'\\''")}'`,expect:'x'});assert.equal(answer.exitCode,1);assert.equal(f.proof().outcome,'output-limit');assert.equal(f.proof().base.outputLimited,true);assert.equal(f.proof().head.outputLimited,true);assert.ok(f.proof().base.stdoutTail.join('\n').length<=1048576);const pids=readFileSync(pidFile,'utf8').trim().split('\n').map(Number);assert.equal(pids.length,2);for(const pid of pids){let alive=false;try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8');alive=!/\) Z /.test(stat);}catch{}assert.equal(alive,false);}assert.ok(Date.now()-started>=4000);assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);
+test('PROVE-NATIVE7: verbose multi-MiB logs drain without killing the child, match --expect across chunk boundaries, keep head diagnostics and tail, and clean snapshots', {timeout:30000}, async t => {
+ const {proveRun}=await api(),f=fixture(t);f.put('test/new.test.mjs',regression);f.put('src/value.mjs','export default true;');f.commit();
+ const verbose="const fs=require('fs'),fixed=fs.readFileSync('src/value.mjs','utf8').includes('true');"
+  +"if(!fixed)process.stderr.write('code: ERR_EARLY_DEFECT\\n');"
+  +"const chunk='v'.repeat(65536)+'\\n';"
+  +"for(let i=0;i<28;i++)process.stdout.write(chunk);"
+  +"if(!fixed){process.stdout.write('prefix cross-chunk-');process.stdout.write('defect-marker suffix\\n');}"
+  +"for(let i=0;i<28;i++)process.stdout.write(chunk);"
+  +"for(let i=1;i<=25;i++)process.stdout.write('tail-line-'+i+'\\n');"
+  +"process.exitCode=fixed?0:1;";
+ const answer=await proveRun({ref:'2594',cwd:f.root,test:`node -e "${verbose}"`,expect:'cross-chunk-defect-marker'});
+ assert.equal(answer.exitCode,0,answer.message);
+ const proof=f.proof();
+ assert.equal(proof.outcome,'proved');
+ assert.equal(proof.base.outputLimited,false);
+ assert.equal(proof.head.outputLimited,false);
+ assert.match(proof.base.observedError,/ERR_EARLY_DEFECT/);
+ assert.equal(proof.base.stdoutTail.at(-1),'tail-line-25');
+ assert.ok(proof.base.stdoutTail.length<=20);
+ assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);
+ const splitStreams="const fs=require('fs'),fixed=fs.readFileSync('src/value.mjs','utf8').includes('true');"
+  +"for(let i=0;i<20;i++)process.stdout.write('v'.repeat(65536)+'\\n');"
+  +"if(!fixed){process.stdout.write('cross-chunk-');process.stderr.write('defect-marker\\n');}"
+  +"process.exitCode=fixed?0:1;";
+ const split=await proveRun({ref:'2594',cwd:f.root,test:`node -e "${splitStreams}"`,expect:'cross-chunk-defect-marker'});
+ assert.equal(split.exitCode,1);
+ assert.equal(f.proof().outcome,'wrong-reason');
+ const headTailGap="const fs=require('fs'),fixed=fs.readFileSync('src/value.mjs','utf8').includes('true');"
+  +"process.stdout.write('HEAD_SPLICE_LINE\\n'+'x'.repeat(1200000)+'\\nTAIL_SPLICE_LINE\\n');"
+  +"process.exitCode=fixed?0:1;";
+ const spliceFalseMatch=await proveRun({ref:'2594',cwd:f.root,test:`node -e "${headTailGap}"`,expect:'HEAD_SPLICE_LINE\nTAIL_SPLICE_LINE'});
+ assert.equal(spliceFalseMatch.exitCode,1);
+ assert.equal(f.proof().outcome,'wrong-reason');
 });
 test('PROVE-NATIVE8: a 1-minute --timeout deadline kills descendants then still executes committed head', {timeout:75000}, async t => {
  const {proveRun}=await api(),f=fixture(t);f.put('test/new.test.mjs',regression);f.put('src/value.mjs','export default true;');f.commit();const start=Date.now();await proveRun({ref:'2594',cwd:f.root,test:stubbornBase,expect:'defect-x',timeoutMinutes:1});const r=f.proof();assert.equal(r.outcome,'base-timeout');assert.equal(r.base.timedOut,true);assert.equal(r.head.exitCode,0);assert.ok(Date.now()-start>=60000);assert.ok(Date.now()-start<72000);assert.equal(f.git('worktree','list','--porcelain').split('worktree ').length,2);

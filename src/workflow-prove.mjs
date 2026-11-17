@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-prove.prompt.md (sha256: 15022108e5ccf28d4644fc4affeeaabdcdc7be861ae096f97ac1a5bc5ec14361).
+// Prompt: prompts/cli/workflow-prove.prompt.md
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { resolveRun, updateRun } from './workflow-runs.mjs';
@@ -6,6 +6,7 @@ import { applyCostMeasurement } from './cost-ledger.mjs';
 import { constants, fchmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
@@ -23,7 +24,7 @@ function observedError(stdout, stderr) {
 }
 function phaseRecord(result, expect) {
   return { exitCode: result.exitCode, signal: result.signal, timedOut: result.timedOut, outputLimited: result.outputLimited,
-    stdoutTail: lines(result.stdout).slice(-20), stderrTail: lines(result.stderr).slice(-20), expectedFound: result.stdout.includes(expect) || result.stderr.includes(expect), error: diagnostic(result.error), setupError: diagnostic(result.setupError), observedError: observedError(result.stdout, result.stderr) };
+    stdoutTail: lines(result.stdout).slice(-20), stderrTail: lines(result.stderr).slice(-20), expectedFound: Boolean(expect) && (typeof result.expectedFound === 'boolean' ? result.expectedFound : (result.stdout.includes(expect) || result.stderr.includes(expect))), error: diagnostic(result.error), setupError: diagnostic(result.setupError), observedError: observedError(result.stdout, result.stderr) };
 }
 export function classifyProof(record) {
   if (record.setupError || record.cleanupError || record.base.error || record.head.error || record.base.setupError || record.head.setupError || [126,127].includes(record.base.exitCode) || [126,127].includes(record.head.exitCode)) return 'setup-error';
@@ -178,20 +179,24 @@ function groupAlive(pid) {
   }
   try {process.kill(-pid,0);return true;} catch{return false;}
 }
-async function runProcess({command,cwd,timeoutMs,killGraceMs,outputLimitBytes}, abortSignal) {
-  const result={exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:'',setupError:''};
+async function runProcess({command,cwd,timeoutMs,killGraceMs,outputLimitBytes}, abortSignal, expect = '') {
+  const result={exitCode:null,signal:'',timedOut:false,outputLimited:false,expectedFound:false,stdout:'',stderr:'',error:'',setupError:''};
   return await new Promise(resolveResult => {
-    let child, bytes=0, closed=false, exited=false, stopping=false, hardTimer, timer, interval;
-    const buffers={stdout:[],stderr:[]};
+    let child, closed=false, exited=false, stopping=false, hardTimer, timer, interval;
+    const perStream=Math.max(1024,Math.floor((outputLimitBytes||1048576)/2)), headLimit=Math.floor(perStream/2), tailLimit=perStream-headLimit;
+    const makeStream=()=>({head:[],headBytes:0,tail:Buffer.alloc(0),overflowed:false,decoder:new StringDecoder('utf8'),carry:'',linePrefix:'',setupError:'',matched:false});
+    const streams={stdout:makeStream(),stderr:makeStream()};
+    const scanText=(s,piece)=>{if(!piece)return;if(expect&&!s.matched){const window=s.carry+piece;if(window.includes(expect))s.matched=true;s.carry=expect.length>1?window.slice(-(expect.length-1)):'';}if(!s.setupError){const segs=piece.replace(/\r\n/g,'\n').split('\n');if(s.linePrefix.length<256)s.linePrefix+=segs[0].slice(0,256-s.linePrefix.length);if(segs.length>1){s.setupError=setupDiagnostic(s.linePrefix)??'';for(let i=1;!s.setupError&&i<segs.length-1;i++)s.setupError=setupDiagnostic(segs[i].slice(0,256))??'';s.linePrefix=segs.at(-1).slice(0,256);}}};
+    const joinStream=s=>{scanText(s,s.decoder.end());if(!s.setupError&&s.linePrefix)s.setupError=setupDiagnostic(s.linePrefix)??'';const headText=Buffer.concat(s.head).toString('utf8');if(!s.overflowed)return headText;const tailText=s.tail.toString('utf8');const headCut=headText.includes('\n')?headText.slice(0,headText.lastIndexOf('\n')):headText;const tailCut=tailText.includes('\n')?tailText.slice(tailText.indexOf('\n')+1):tailText;return headCut&&tailCut?`${headCut}\n${tailCut}`:headCut||tailCut;};
     const signalGroup=signal=>{try {process.kill(-child.pid,signal);}catch{}};
-    const finish=()=>{if(!closed || child?.pid && groupAlive(child.pid))return;clearTimeout(timer);clearTimeout(hardTimer);clearInterval(interval);abortSignal?.removeEventListener('abort',stop);result.stdout=Buffer.concat(buffers.stdout).toString('utf8');result.stderr=Buffer.concat(buffers.stderr).toString('utf8');if(result.exitCode!==null && result.exitCode!==0)result.setupError=diagnostic(setupDiagnostic(result.stderr) ?? setupDiagnostic(result.stdout) ?? ([126,127].includes(result.exitCode)?`Command exited ${result.exitCode}.`:''));resolveResult({result});};
+    const finish=()=>{if(!closed || child?.pid && groupAlive(child.pid))return;clearTimeout(timer);clearTimeout(hardTimer);clearInterval(interval);abortSignal?.removeEventListener('abort',stop);result.stdout=joinStream(streams.stdout);result.stderr=joinStream(streams.stderr);result.expectedFound=streams.stdout.matched||streams.stderr.matched;if(result.exitCode!==null && result.exitCode!==0)result.setupError=diagnostic(streams.stderr.setupError || streams.stdout.setupError || setupDiagnostic(result.stderr) || setupDiagnostic(result.stdout) || ([126,127].includes(result.exitCode)?`Command exited ${result.exitCode}.`:''));resolveResult({result});};
     const stop=()=>{if(stopping)return;stopping=true;signalGroup('SIGTERM');hardTimer=setTimeout(()=>{signalGroup('SIGKILL');},killGraceMs);};
     abortSignal?.addEventListener('abort',stop,{once:true});
     if(abortSignal?.aborted){closed=true;result.error='Parent interrupted before spawn.';finish();return;}
     const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
     try { child=spawn(command,{cwd,env,shell:true,detached:true,stdio:['ignore','pipe','pipe']}); }
     catch(error){result.error=diagnostic(error);result.setupError=result.error;closed=true;finish();return;}
-    const capture=stream=>chunk=>{const room=Math.max(0,outputLimitBytes-bytes);if(room)buffers[stream].push(chunk.subarray(0,room));bytes+=chunk.length;if(bytes>outputLimitBytes){result.outputLimited=true;stop();}};
+    const capture=name=>chunk=>{const s=streams[name];scanText(s,s.decoder.write(chunk));let rest=chunk;if(s.headBytes<headLimit){const take=Math.min(headLimit-s.headBytes,rest.length);s.head.push(rest.subarray(0,take));s.headBytes+=take;rest=rest.subarray(take);}if(rest.length){s.overflowed=true;s.tail=rest.length>=tailLimit?Buffer.from(rest.subarray(rest.length-tailLimit)):Buffer.concat([s.tail.subarray(Math.max(0,s.tail.length+rest.length-tailLimit)),rest]);}};
     child.stdout.on('data',capture('stdout'));child.stderr.on('data',capture('stderr'));
     child.on('error',error=>{result.error=diagnostic(error);result.setupError=result.error;});
     child.on('exit',(code,signal)=>{exited=true;result.exitCode=code;result.signal=signal??'';});
@@ -234,7 +239,7 @@ export async function proveRun({ref,test,expect,cwd,timeoutMinutes=DEFAULT_PHASE
         for(const [index,phase] of ['base','head'].entries()) {
           if(interruptSignal)break;
           const suiteNow = ports.suiteNow ?? (() => performance.now()), suiteStarted = suiteNow();
-          let response;try {const input={command:test,cwd:worktrees[index],timeoutMs:timeoutMinutes*60000,killGraceMs:2000,outputLimitBytes:1048576};response=await (ports.runProcess ? p.runProcess(input) : runProcess(input,controller.signal));}catch(error){response={result:{exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:diagnostic(error),setupError:''}};}
+          let response;try {const input={command:test,cwd:worktrees[index],timeoutMs:timeoutMinutes*60000,killGraceMs:2000,outputLimitBytes:1048576};response=await (ports.runProcess ? p.runProcess(input) : runProcess(input,controller.signal,expect));}catch(error){response={result:{exitCode:null,signal:'',timedOut:false,outputLimited:false,stdout:'',stderr:'',error:diagnostic(error),setupError:''}};}
           try { const measurement = { id: `prove-${randomUUID()}`, suiteMinutes: Math.max(0, suiteNow() - suiteStarted) / 60000 };
             await (ports.recordSuiteCost ?? (input => updateRun(run.runDir, latest => applyCostMeasurement(latest, input, Date.now()))))(measurement); } catch {}
           record[phase]=phaseRecord(response.result,expect);record.setupError ||= record[phase].error || record[phase].setupError;
