@@ -137,3 +137,24 @@ test('PATH8: #2715 package uses @promptdriven/pdd and pathDiagnostic flags an un
   assert.match(r.stderr, /Found the unrelated npm package "pdd"/);
   assert.match(r.stderr, /npm uninstall -g pdd && npm install -g github:promptdriven\/pdd/);
 });
+
+test('PATH9: #3474 pathDiagnostic flags an unscoped PDD npm package owning bin/pdd and recommends explicit uninstall before install', t => {
+  const f = fixture(t);
+  rmSync(join(f.old, 'pdd'));
+  const npmPrefix = join(f.root, 'npm-legacy-pdd');
+  const npmBin = join(npmPrefix, 'bin');
+  const legacyPkg = join(npmPrefix, 'lib/node_modules/pdd');
+  mkdirSync(npmBin, { recursive: true });
+  mkdirSync(join(legacyPkg, 'bin'), { recursive: true });
+  writeFileSync(join(legacyPkg, 'package.json'), JSON.stringify({ name: 'pdd', version: '0.1.31', bin: { pdd: 'bin/pdd.mjs' } }));
+  writeFileSync(join(legacyPkg, 'bin/pdd.mjs'), '#!/bin/sh\nprintf "0.1.31\\n"\n', { mode: 0o755 });
+  symlinkSync('../lib/node_modules/pdd/bin/pdd.mjs', join(npmBin, 'pdd'));
+  f.env.PATH = [npmBin, f.alpha, f.nodeBin, '/usr/bin', '/bin'].join(':');
+
+  const r = f.run('--version');
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, `${version}\n`);
+  assert.match(r.stderr, /Found unscoped npm package "pdd".*blocks @promptdriven\/pdd on bin\/pdd/);
+  assert.match(r.stderr, /npm uninstall -g pdd && npm install -g github:promptdriven\/pdd/);
+  assert.doesNotMatch(r.stderr, /--force/);
+});
