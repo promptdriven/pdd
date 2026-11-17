@@ -3,11 +3,11 @@
   "story_path": "user_stories/product-issue-binding.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-d0c8981aaba1048a8db4c51042078df17661d6b03166f94a",
       "text": "Preparing phone-1 creates issue 82 without starting work and saves its issue binding locally."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-2895aad11981ca641a036ee429ff4d6184f4847a073a5eb0",
       "text": "Starting phone-1 again reuses issue 82, starts one feature run and makes no issue search or new issue."
     }
   ],
@@ -162,35 +162,35 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-d0c8981aaba1048a8db4c51042078df17661d6b03166f94a",
           "target": "result",
           "path": "/issue",
           "op": "equals",
           "value": 82
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-d0c8981aaba1048a8db4c51042078df17661d6b03166f94a",
           "target": "result",
           "path": "/created",
           "op": "equals",
           "value": true
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-d0c8981aaba1048a8db4c51042078df17661d6b03166f94a",
           "target": "result",
           "path": "/started",
           "op": "equals",
           "value": false
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-d0c8981aaba1048a8db4c51042078df17661d6b03166f94a",
           "target": "calls",
           "path": "/resources/product-productState-write",
           "op": "not_equals",
           "value": 0
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-d0c8981aaba1048a8db4c51042078df17661d6b03166f94a",
           "target": "world",
           "path": "/creates",
           "op": "count",
@@ -209,42 +209,42 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-2895aad11981ca641a036ee429ff4d6184f4847a073a5eb0",
           "target": "result",
           "path": "/issue",
           "op": "equals",
           "value": 82
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-2895aad11981ca641a036ee429ff4d6184f4847a073a5eb0",
           "target": "result",
           "path": "/created",
           "op": "equals",
           "value": false
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-2895aad11981ca641a036ee429ff4d6184f4847a073a5eb0",
           "target": "result",
           "path": "/started",
           "op": "equals",
           "value": true
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-2895aad11981ca641a036ee429ff4d6184f4847a073a5eb0",
           "target": "calls",
           "path": "/resources/product-github-issuePage",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-2895aad11981ca641a036ee429ff4d6184f4847a073a5eb0",
           "target": "world",
           "path": "/creates",
           "op": "count",
           "value": 1
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-2895aad11981ca641a036ee429ff4d6184f4847a073a5eb0",
           "target": "world",
           "path": "/starts",
           "op": "count",

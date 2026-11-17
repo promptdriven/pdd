@@ -1516,6 +1516,13 @@ never taken as work. A PR that says `Runtime: not run (reason)` can merge and fi
 no report by itself; a Runtime report comes only from a job that failed for a
 Runtime cause.
 
+Before claiming otherwise eligible work, core Autopilot checks for an explicit
+repository target, such as `[owner/repo]` in the title or a `Target repository:`
+line in the body. A single foreign target gets `pdd:elsewhere` and a comment
+naming the destination for a maintainer to review. Mentions and dependency links
+alone do not count. Autopilot does not transfer the issue. If it belongs here,
+correct the target and remove `pdd:elsewhere` to make it eligible again.
+
 ### Intake cards (shadow)
 
 `pdd autopilot start --intake shadow` turns on shadow intake cards for this

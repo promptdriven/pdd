@@ -3,19 +3,19 @@
   "story_path": "user_stories/autopilot-setup.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-8f503ca5906701d25daed03b38c951ea27ab99fcedf64f6e",
       "text": "In a fresh Git repository, terminal setup with no mode answer saves off and an empty trust list."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-282794c24cfea6c60dfdce68ac00d3a1633cecd4e84d6f0e",
       "text": "A second terminal setup keeps off and makes no new mode save."
     },
     {
-      "id": "AC3",
+      "id": "ac-sha256-7903faff251621c5c853b7dddbfd1f0796c838173a292488",
       "text": "Setup without a terminal asks nothing and saves nothing."
     },
     {
-      "id": "AC4",
+      "id": "ac-sha256-ef4d58ae992ce743537fcefc37cdc2ed5c14dc0fd7677f96",
       "text": "Setup outside a Git repository asks nothing and saves nothing."
     }
   ],
@@ -90,14 +90,14 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-8f503ca5906701d25daed03b38c951ea27ab99fcedf64f6e",
           "target": "result",
           "path": "/mode",
           "op": "equals",
           "value": "off"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-8f503ca5906701d25daed03b38c951ea27ab99fcedf64f6e",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",
@@ -116,21 +116,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-282794c24cfea6c60dfdce68ac00d3a1633cecd4e84d6f0e",
           "target": "result",
           "path": "/mode",
           "op": "equals",
           "value": "off"
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-282794c24cfea6c60dfdce68ac00d3a1633cecd4e84d6f0e",
           "target": "calls",
           "path": "/resources/autopilot-config-save",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-282794c24cfea6c60dfdce68ac00d3a1633cecd4e84d6f0e",
           "target": "calls",
           "path": "/resources/autopilot-terminal-mode",
           "op": "equals",
@@ -149,21 +149,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-7903faff251621c5c853b7dddbfd1f0796c838173a292488",
           "target": "calls",
           "path": "/resources/autopilot-config-save",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-7903faff251621c5c853b7dddbfd1f0796c838173a292488",
           "target": "calls",
           "path": "/resources/autopilot-terminal-mode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-7903faff251621c5c853b7dddbfd1f0796c838173a292488",
           "target": "calls",
           "path": "/resources/autopilot-terminal-names",
           "op": "equals",
@@ -182,21 +182,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-ef4d58ae992ce743537fcefc37cdc2ed5c14dc0fd7677f96",
           "target": "calls",
           "path": "/resources/autopilot-config-save",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-ef4d58ae992ce743537fcefc37cdc2ed5c14dc0fd7677f96",
           "target": "calls",
           "path": "/resources/autopilot-terminal-mode",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC4",
+          "criterion_id": "ac-sha256-ef4d58ae992ce743537fcefc37cdc2ed5c14dc0fd7677f96",
           "target": "calls",
           "path": "/resources/autopilot-terminal-names",
           "op": "equals",

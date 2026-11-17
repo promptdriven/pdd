@@ -268,6 +268,25 @@ with the dependency reader's owners port, is expired and not takeover-limited.
 Order is oldest `created_at` first, then the lower number. A read error skips only
 that issue for this tick.
 
+Before yielding an otherwise ready issue, use [explicit repository routing](autopilot-repo-routing.prompt.md)
+on the issue title and body. A foreign routing plan excludes the issue from
+`readyIssues` and from dispatch in every core intake mode, including active issues
+with no ready card. The listing operation does not publish routing annotations.
+During dispatch, reread a foreign candidate before writing; if no longer eligible
+for routing, or no longer foreign, defer it to the next tick. Apply the same check
+to the fresh issue at claim time, including companions. Never create, take over
+or remove a `pdd:working` claim for a foreign target; do not annotate a live or
+unknown claim. The normal trust, opt-in and readiness guards still apply.
+
+For a foreign candidate, ensure the plan's external-repository label exists with
+the counted GitHub port, post a comment naming the target and asking a maintainer
+to route it, then add the label to the issue. Reuse an existing identical routing
+comment on retry. A failed read or write warns and skips only this issue, without
+claiming it; the next tick can retry any unfinished annotation. Once present, the
+label is the normal external-repository hold. A maintainer can correct the target
+and remove the label to make the issue eligible again. The engine does not transfer
+issues, create issues in another repository, or establish cross-repository blockers.
+
 ## Claim and start
 
 **No label, no claim.** When the settings have `labelRequired` (the launcher sets it), no `label`, and `intake` is not `active`, intake claims
@@ -1944,6 +1963,7 @@ with the native defaults named above.
 
 ## Dependencies
 
+- [Explicit repository routing](autopilot-repo-routing.prompt.md): required for `planIssueRouting` before claim.
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.
 - [Serialized FIFO landing queue](autopilot-merge-queue.prompt.md): required for `enqueueMergeQueueItem`, `processMergeQueue`, `mergeQueueStatusLine`, and `buildConflictAgentInvocation`.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.

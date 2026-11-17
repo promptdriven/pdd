@@ -3,11 +3,11 @@
   "story_path": "user_stories/product-unresolved-link.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-238651c4a404f9612c722ea181a365d37f4ea31fc133d35e",
       "text": "Status marks phone-1 unverified after a 503 reply for issue 81, and keeps server-1 and barista-1 ready."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-4881aa5724247079da724558002c133f859f34d6fc3514be",
       "text": "Starting phone-1 after that reply fails without creating an issue or starting work, and keeps the saved hint."
     }
   ],
@@ -174,14 +174,14 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-238651c4a404f9612c722ea181a365d37f4ea31fc133d35e",
           "target": "result",
           "path": "/runs/1/state",
           "op": "equals",
           "value": "unverified"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-238651c4a404f9612c722ea181a365d37f4ea31fc133d35e",
           "target": "result",
           "path": "/ready",
           "op": "equals",
@@ -203,42 +203,42 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-4881aa5724247079da724558002c133f859f34d6fc3514be",
           "target": "result",
           "path": "/exitCode",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-4881aa5724247079da724558002c133f859f34d6fc3514be",
           "target": "result",
           "path": "/created",
           "op": "equals",
           "value": false
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-4881aa5724247079da724558002c133f859f34d6fc3514be",
           "target": "result",
           "path": "/started",
           "op": "equals",
           "value": false
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-4881aa5724247079da724558002c133f859f34d6fc3514be",
           "target": "world",
           "path": "/creates",
           "op": "count",
           "value": 0
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-4881aa5724247079da724558002c133f859f34d6fc3514be",
           "target": "world",
           "path": "/starts",
           "op": "count",
           "value": 0
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-4881aa5724247079da724558002c133f859f34d6fc3514be",
           "target": "calls",
           "path": "/resources/product-github-issueByNumber",
           "op": "equals",
