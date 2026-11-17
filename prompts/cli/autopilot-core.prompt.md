@@ -1764,17 +1764,22 @@ state.machine]` (with `state.machine` defaulting to the host name when unsaved) 
      its PR, or deletes its worktrees before a retry finishes.
    - **Lane and companions (confirmed, non-destructive):** if the job has `pr`, remove
      `pdd:merge-lane` when held on that PR; for each companion issue in `companions`,
-     verify read-only ownership and confirm companion claim/label cleanup through the
-     same `[machineIdOf(state), state.machine]` `releaseClaim` loop before removing
-     that companion from `jobs/N.json`, without closing or drafting any PR and without
-     deleting the job's worktrees, logs, or branch. Any failure returns exit code 1
-     with `jobs/N.json` retained in `phase: "released"` so retry finishes remaining
-     companion and main cleanup idempotently.
+     verify read-only ownership and confirm companion claim/label cleanup through
+     `releaseClaim` using the owned machine form observed on GitHub or saved on the
+     companion claim (retrying this machine's other owned form only if the first call
+     made no mutating GitHub API request and refused because that other owned form holds
+     a live claim) before removing that companion from `jobs/N.json`, without closing
+     or drafting any PR and without deleting the job's worktrees, logs, or branch. Any
+     failure returns exit code 1 with `jobs/N.json` retained in `phase: "released"` so
+     retry finishes remaining companion and main cleanup idempotently.
    - **GitHub claim cleanup:** call `ports.releaseClaim` (default `releaseRunClaim` of
-     the [workflow runner](workflow-runner.prompt.md)) trying `machineIdOf(state)`
-     first and then `state.machine`, removing `pdd:working` and `pdd:stuck` when no
-     foreign claim holds the issue. If claim cleanup returns nonzero, return that
-     result unchanged while `jobs/N.json` stays in `phase: "released"` for retry.
+     the [workflow runner](workflow-runner.prompt.md)) with the owned machine form
+     observed on GitHub or saved on `jobs/N.json` (retrying this machine's other owned
+     form only when the first call made no mutating GitHub API request and refused
+     because that other owned form holds a live claim), removing `pdd:working` and
+     `pdd:stuck` when no foreign claim holds the issue. If claim cleanup returns
+     nonzero, return that result unchanged while `jobs/N.json` stays in `phase:
+     "released"` for retry.
    - **Durable history before removal:** append (if not already present from a prior try)
      one `history.jsonl` record (`{at, issue: N, outcome: "released", stopped,
      personRelease: true, text: "released by a person (pdd autopilot release)", pr,
@@ -1786,10 +1791,14 @@ state.machine]` (with `state.machine` defaulting to the host name when unsaved) 
      own worktree suffix when a workflow run already supplied one).
 2. When `jobs/N.json` does not exist (an orphan claim on GitHub, a workflow run claim,
    or a repeat `release N`): if another local job carries `N` in `companions`, verify
-   read-only ownership on `N`, run the `[machineIdOf(state), state.machine]`
-   `releaseClaim` loop, and drop `N` from that job's companions only after exit code 0;
-   otherwise run the same `releaseClaim` loop and return the first exit-0 result (or
-   the first try's failure when all fail) with no duplicate `history.jsonl` entry.
+   read-only ownership on `N`, release `N` with the owned machine form observed on
+   GitHub or saved on that companion, and drop `N` from that job's companions only
+   after exit code 0; otherwise call `releaseClaim` with `state.machine` first
+   (omitting `machine` when unsaved so `releaseRunClaim` resolves any workflow run
+   origin or host name) and retry `machineIdOf(state)` only when the first call made no
+   mutating GitHub API request and refused because `machineIdOf(state)` holds a live
+   claim, so a concurrent replacement claim appearing mid-release is never removed, and
+   write no duplicate `history.jsonl` entry.
 
 ## Status
 

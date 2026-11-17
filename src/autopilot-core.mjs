@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 092cf846a13653032587b0e225cc1a4e1afdc516c90c858f5088da1400424b78).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 5f32bc74131d47f5a54fb026fb887607cb55528ea0b9a21e81b9f712e4ebf0ca).
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -5194,10 +5194,15 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
       ...ports, fs, root, gh: ghPort, git: gitPort,
     });
     const ownedForms = [...new Set([ctx.machineId, state.machine].filter(named))];
-    const claimForms = hasSavedMachine ? ownedForms : [...new Set([ctx.machineId, undefined, state.machine])];
+    const defaultForm = hasSavedMachine ? state.machine : undefined;
+    const noRunForms = [...new Set([defaultForm, ctx.machineId, ...(hasSavedMachine ? [] : [state.machine])])];
+    const formsForClaim = (observed, saved) => {
+      const preferred = [observed?.machine, saved?.machine].find(m => named(m) && ownedForms.includes(m)) ?? ownedForms[0];
+      return [...new Set([preferred, ...ownedForms].filter(named))];
+    };
     const runReleaseClaim = ports.releaseClaim
-      ? (machine, targetRef = issue) => ports.releaseClaim(machine, targetRef)
-      : (async (machine, targetRef = issue) => {
+      ? (machine, targetRef = issue, onMutate) => ports.releaseClaim(machine, targetRef, onMutate)
+      : (async (machine, targetRef = issue, onMutate) => {
           const { releaseRunClaim } = await import('./workflow-runner.mjs');
           return releaseRunClaim({
             ref: targetRef, cwd: state.cwd, repository: repo || undefined,
@@ -5206,20 +5211,29 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
             now: ctx.now,
             ...(ports.authority ? { authority: ports.authority } : {}),
             execFile: async (file, args, options) => {
+              if (file === 'gh' && args?.[0] === 'api') {
+                const idx = args.indexOf('--method');
+                const method = idx >= 0 ? String(args[idx + 1] ?? 'GET').toUpperCase() : 'GET';
+                if (method !== 'GET') onMutate?.();
+              }
               const reply = await (file === 'gh' ? ghPort(args, options) : gitPort(args, options));
               if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
               return reply;
             },
           });
         });
-    const tryForms = async (forms = claimForms, targetRef = issue, targetNum = number) => {
-      let first = null;
-      for (const machine of forms) {
-        const result = await runReleaseClaim(machine, targetRef);
-        if (result.exitCode === 0) return result;
-        first ??= result;
+    const tryForms = async (forms = noRunForms, targetRef = issue, targetNum = number) => {
+      if (!forms.length) {
+        return { exitCode: 1, message: `Could not confirm claim cleanup for ${repo || 'this repository'}#${targetNum}; retry the release.` };
       }
-      return first ?? { exitCode: 1, message: `Could not confirm claim cleanup for ${repo || 'this repository'}#${targetNum}; retry the release.` };
+      let mutated = false;
+      const first = await runReleaseClaim(forms[0], targetRef, () => { mutated = true; });
+      if (first.exitCode === 0 || mutated) return first;
+      const alt = forms.slice(1).find(candidate => named(candidate) && ownedForms.includes(candidate)
+        && typeof first.message === 'string' && first.message.startsWith('Cannot release ')
+        && first.message.endsWith(`#${targetNum}: ${candidate} holds a live claim.`));
+      if (!alt) return first;
+      return runReleaseClaim(alt, targetRef);
     };
     const refuseForeign = (current, targetNum = number) => {
       const owner = named(current.machine) ? current.machine : 'unknown';
@@ -5262,7 +5276,7 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
             return { exitCode: 1, message: `Cannot release ${repo}#${number}: ${comp.claim?.machine || 'another coordinator'} holds a live claim.` };
           const check = await inspectClaimReadOnly(number, comp.claim);
           if (!check.ok) return check.response;
-          const released = await tryForms(ownedForms, String(number), number);
+          const released = await tryForms(formsForClaim(check.current, comp.claim), String(number), number);
           if (released.exitCode !== 0) return { exitCode: released.exitCode, message: released.message };
           setJobCompanions(parent, jobCompanions(parent).filter(c => c.issue !== number));
           ctx.saveJob(parent);
@@ -5316,13 +5330,13 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
       }
       const compCheck = await inspectClaimReadOnly(comp.issue, comp.claim);
       if (!compCheck.ok) return compCheck.response;
-      const compReleased = await tryForms(ownedForms, String(comp.issue), comp.issue);
+      const compReleased = await tryForms(formsForClaim(compCheck.current, comp.claim), String(comp.issue), comp.issue);
       if (compReleased.exitCode !== 0) return { exitCode: compReleased.exitCode, message: compReleased.message };
       setJobCompanions(job, jobCompanions(job).filter(c => c.issue !== comp.issue));
       ctx.saveJob(job);
     }
 
-    const released = await tryForms(ownedForms, issue, number);
+    const released = await tryForms(formsForClaim(mainCheck.current, job.claim), issue, number);
     if (released.exitCode !== 0) return { exitCode: released.exitCode, message: released.message };
 
     const releasedIssues = Array.isArray(job.releaseIssues) && job.releaseIssues.length ? job.releaseIssues : jobIssues(job);

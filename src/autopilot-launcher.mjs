@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: 8bc968b6cd4c809355e03f480128d715fc07d51d2ce39001b1fe3dfb82ef40f0).
+// Generated from prompts/cli/autopilot-launcher.prompt.md (sha256: b16cf79d6bdd26b26513fdd5c0c5886029861c7e3c856cb19a5686f4a75140a5).
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -986,10 +986,15 @@ export async function runAutopilotLauncher(input, ports = {}) {
         ...(p.sleep ? { sleep: p.sleep } : {}),
         gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, purpose: 'claims', ...options }),
         git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
-        releaseClaim: (machine, ref = issues[0]) => releaseRunClaim({
+        releaseClaim: (machine, ref = issues[0], onMutate) => releaseRunClaim({
           ref, cwd: state.cwd, repository: state.repo,
           machine, coordinatorId: state.coordinatorId,
         }, { ...cleanup, execFile: async (file, args, options) => {
+          if (file === 'gh' && args?.[0] === 'api') {
+            const idx = args.indexOf('--method');
+            const method = idx >= 0 ? String(args[idx + 1] ?? 'GET').toUpperCase() : 'GET';
+            if (method !== 'GET') onMutate?.();
+          }
           const reply = await p.execute(file, args, { purpose: 'claims', ...options });
           if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
           return reply;

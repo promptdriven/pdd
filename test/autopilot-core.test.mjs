@@ -4536,3 +4536,58 @@ test('3389: competing foreign claim comment on active labelEventId refuses relea
     issueData.comments.pop();
   }
 });
+
+test('3389: orphan m-<12hex> claim without jobs/N.json releases cleanly while no-run release never deletes a concurrent takeover claim', async t => {
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const w = await coreWorld(t);
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const { cwd, stateFile, coreDir, ports } = launcherHarness(w);
+
+  // 1. Start a core job to create an m-<12hex> claim on GitHub, then delete local jobs/17.json to simulate an orphan core claim.
+  await tickAutopilot(stateFile, ports);
+  const jobFile = join(coreDir, 'jobs', '17.json');
+  const startedJob = JSON.parse(readFileSync(jobFile, 'utf8'));
+  const coreMachineId = startedJob.claim.machine;
+  assert.match(coreMachineId, /^m-[0-9a-f]{12}$/);
+  rmSync(jobFile, { force: true });
+
+  const orphanReleased = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['17'] }, ports);
+  assert.equal(orphanReleased.exitCode, 0, orphanReleased.message);
+  assert.ok(!w.labels(17).includes('pdd:working'), 'orphan m-<12hex> claim released cleanly without local jobs/17.json');
+
+  // 2. Now issue #18 has only pdd:stuck (no initial pdd:working claim); inject a concurrent m-<12hex> core takeover right after DELETE /labels/pdd%3Astuck.
+  w.issue(18, { labels: ['pdd:stuck'] });
+  let injected = false;
+  let replacement = null;
+  const deletions = [];
+  const takeoverPorts = {
+    ...ports,
+    run: async (command, args, options = {}) => {
+      if (command === 'gh' && args[0] === 'api') {
+        const labelArg = args.find(v => v.includes('/labels/'));
+        const methodIdx = args.indexOf('--method');
+        const deleting = methodIdx >= 0 && args[methodIdx + 1] === 'DELETE';
+        if (deleting && labelArg) deletions.push(labelArg.split('/labels/').at(-1));
+        const res = await ports.run(command, args, options);
+        if (deleting && labelArg?.endsWith('/labels/pdd%3Astuck') && !injected) {
+          injected = true;
+          const c = w.github.claim(18, { coordinatorId: 'coord-a', machine: coreMachineId });
+          const evId = w.github.issues.get(18).timeline.filter(ev => ev.label === 'pdd:working').at(-1).id;
+          const rec = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(c.body)[1]);
+          w.github.editComment(18, c.id, `Autopilot claimed this issue.\n\n\`\`\`json\n${JSON.stringify({ ...rec, labelEventId: evId, lastSeen: new Date(w.now()).toISOString() })}\n\`\`\``);
+          w.github.label(18, 'pdd:stuck');
+          replacement = { commentId: c.id, eventId: evId };
+        }
+        return res;
+      }
+      return ports.run(command, args, options);
+    },
+  };
+
+  const raceResult = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: ports.env, issues: ['18'] }, takeoverPorts);
+  assert.equal(injected, true);
+  assert.equal(raceResult.exitCode, 1, 'no-run release aborts instead of retrying m-<12hex> after mutating pdd:stuck');
+  assert.deepEqual(deletions, ['pdd%3Astuck'], 'second machine form never deletes the concurrent takeover labels');
+  assert.deepEqual(w.labels(18), ['pdd:working', 'pdd:stuck']);
+  assert.ok(w.github.issues.get(18).comments.some(c => c.id === replacement.commentId), 'concurrent m-<12hex> replacement comment stays intact');
+});
