@@ -1,4 +1,4 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: cdb76a7d10a17bfca1048c6df738bc7572d6586774cd6bd40f2355a3d23204e8).
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: afeb7ad9e6e6670a69f556f294344295e8cf563bc7767459d5007408a488223a).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';
@@ -493,6 +493,75 @@ function extractControls(source, parts) {
   return controls;
 }
 
+
+const INTERFACE_SUMMARY_RE = /<details>\s*<summary>\s*Runtime interface\s*<\/summary>\s*```json\s*([\s\S]*?)```\s*<\/details>/gi;
+function parsePromptMeta(text) {
+  let fmKind = null, hasFrontmatter = false;
+  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (fm) {
+    hasFrontmatter = true;
+    const km = fm[1].match(/^kind:\s*['"]?([A-Za-z0-9_-]+)['"]?\s*$/m);
+    if (km) fmKind = km[1];
+  }
+  const blocks = [...text.matchAll(INTERFACE_SUMMARY_RE)];
+  let iface = null;
+  if (blocks.length === 1) {
+    try { iface = JSON.parse(blocks[0][1]); } catch { iface = null; }
+  }
+  const hasEmbeddedInterface = blocks.length > 0;
+  const isNativeOnly = fmKind === 'native-only' || iface?.kind === 'native-only';
+  const prose = text.replace(INTERFACE_SUMMARY_RE, '');
+  return { hasFrontmatter, hasEmbeddedInterface, isNativeOnly, iface, prose };
+}
+
+function promptTargets(text, fromPrompt, visibleSet) {
+  const refs = refDefs(text);
+  const candidates = [
+    ...[...text.matchAll(/!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^)]*)?\)/g)].map(m => m[1] || m[2]),
+    ...[...text.matchAll(/!?\[([^\]]*)\]\[([^\]]*)\]/g)].map(m => refs.get(normalize(m[2] || m[1]))),
+  ];
+  const out = [];
+  for (const raw of candidates) {
+    if (!raw || /^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(raw)) continue;
+    const pathPart = raw.split('#')[0].split('?')[0];
+    if (!pathPart || !pathPart.endsWith('.prompt.md')) continue;
+    const rel = relative(rootPlaceholder, resolve(dirname(resolve(rootPlaceholder, fromPrompt)), pathPart)).split(sep).join('/');
+    if (visibleSet.has(rel)) out.push(rel);
+  }
+  return [...new Set(out)];
+}
+const rootPlaceholder = '/__pdd_root__';
+
+function hasPointer(obj, pointer) {
+  if (typeof pointer !== 'string') return false;
+  if (pointer === '') return obj !== undefined;
+  if (!pointer.startsWith('/')) return false;
+  let cur = obj;
+  for (const seg of pointer.slice(1).split('/')) {
+    if (cur === null || typeof cur !== 'object') return false;
+    const key = seg.replaceAll('~1', '/').replaceAll('~0', '~');
+    if (Array.isArray(cur)) {
+      const idx = Number(key);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= cur.length) return false;
+      cur = cur[idx];
+    } else {
+      if (!Object.hasOwn(cur, key)) return false;
+      cur = cur[key];
+    }
+  }
+  return true;
+}
+
+function proseMentionsPortOp(prose, opKey) {
+  if (prose.includes(opKey)) return true;
+  const dot = opKey.indexOf('.');
+  if (dot <= 0) return false;
+  const port = opKey.slice(0, dot), op = opKey.slice(dot + 1);
+  const portRe = new RegExp(`(?<![A-Za-z0-9_-])${escaped(port)}(?![A-Za-z0-9_-])`, 'i');
+  const opRe = new RegExp(`(?<![A-Za-z0-9_-])${escaped(op)}(?![A-Za-z0-9_-])`, 'i');
+  return portRe.test(prose) && opRe.test(prose);
+}
+
 export function lintSvgLayouts({ root, files, promptPaths }) {
   const policy=workspace.policy({root});files=files.filter(path=>workspace.allows(policy,path));
   const warnings = [], promptRecords = [], add = (prompt, drawing, part, reason) => warnings.push({ key: `${prompt}\0${drawing}\0${part}\0${reason}`, text: `Warning: SVG layout ${prompt} -> ${drawing}: ${part}: ${reason}.` });
@@ -559,6 +628,156 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         catch (error) { return { path: cssPath, content: null, error: error.message }; }
       });
       for (const text of lintScreenDesign({ appMaps, stylesheets, prompts: promptRecords }).warnings) warnings.push({ key: text, text });
+    }
+  }
+  const visiblePromptSet = new Set(files.filter(f => f.endsWith('.prompt.md') && workspace.allows(policy, f)));
+  const metaCache = new Map();
+  const getMeta = p => {
+    if (metaCache.has(p)) return metaCache.get(p);
+    try {
+      const meta = parsePromptMeta(safeRead(root, p));
+      metaCache.set(p, meta);
+      return meta;
+    } catch {
+      metaCache.set(p, null);
+      return null;
+    }
+  };
+  const collectClosure = startPrompt => {
+    const visited = new Set();
+    const queue = [startPrompt];
+    while (queue.length) {
+      const cur = queue.shift();
+      if (!cur || visited.has(cur) || !visiblePromptSet.has(cur)) continue;
+      visited.add(cur);
+      const meta = getMeta(cur);
+      if (!meta) continue;
+      for (const call of Array.isArray(meta.iface?.calls) ? meta.iface.calls : []) {
+        if (typeof call?.target === 'string') queue.push(call.target);
+      }
+      if (!meta.hasEmbeddedInterface || meta.hasFrontmatter) {
+        for (const target of promptTargets(meta.prose, cur, visiblePromptSet)) queue.push(target);
+      }
+    }
+    return visited;
+  };
+  for (const prompt of promptRecords.map(record => record.path)) {
+    if (!visiblePromptSet.has(prompt)) continue;
+    const meta = getMeta(prompt);
+    if (!meta || meta.isNativeOnly || (meta.hasEmbeddedInterface && !meta.hasFrontmatter)) continue;
+    for (const dep of collectClosure(prompt)) {
+      if (dep === prompt) continue;
+      if (getMeta(dep)?.isNativeOnly) {
+        const text = `Warning: ${prompt}: checkable prompt links kind: native-only prompt ${dep} (invert the dependency and inject a <port>.<op> port so Story checks do not skip)`;
+        warnings.push({ key: `${prompt}\0native\0${dep}`, text });
+      }
+    }
+  }
+  const promptFilter = promptPaths ? new Set(promptPaths) : null;
+  const PORT_OP_RE = /^[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*$/;
+  for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && workspace.allows(policy, path))) {
+    let doc;
+    try { doc = JSON.parse(safeRead(root, testFile)); } catch { continue; }
+    if (!doc || typeof doc !== 'object' || doc.schema_version !== 'prompt-runtime.program-scenario.v1' || !Array.isArray(doc.steps)) continue;
+    const inRepoSteps = doc.steps.filter(step => step && typeof step.entry_path === 'string' && visiblePromptSet.has(step.entry_path));
+    if (!inRepoSteps.length) continue;
+    const stepClosures = new Map();
+    const allClosurePrompts = new Set();
+    for (const step of inRepoSteps) {
+      if (!stepClosures.has(step.entry_path)) stepClosures.set(step.entry_path, collectClosure(step.entry_path));
+      for (const p of stepClosures.get(step.entry_path)) allClosurePrompts.add(p);
+    }
+    if (promptFilter && ![...allClosurePrompts].some(p => promptFilter.has(p))) continue;
+    const summarizeClosure = closureSet => {
+      const resources = new Map();
+      let hasPlainPrompt = false;
+      const proseChunks = [];
+      for (const p of closureSet) {
+        const meta = getMeta(p);
+        if (!meta) continue;
+        proseChunks.push(meta.prose);
+        if (!meta.hasEmbeddedInterface) hasPlainPrompt = true;
+        for (const res of Array.isArray(meta.iface?.resources) ? meta.iface.resources : []) {
+          if (typeof res?.operation !== 'string') continue;
+          if (!resources.has(res.operation)) resources.set(res.operation, new Set());
+          if (typeof res.access === 'string') resources.get(res.operation).add(res.access);
+        }
+      }
+      return { resources, hasPlainPrompt, combinedProse: proseChunks.join('\n') };
+    };
+    const criteriaById = new Map(
+      (Array.isArray(doc.criteria) ? doc.criteria : [])
+        .filter(c => c && typeof c.id === 'string')
+        .map(c => [c.id, typeof c.text === 'string' ? c.text : '']),
+    );
+    const wholeSummary = summarizeClosure(allClosurePrompts);
+    if (wholeSummary.hasPlainPrompt && doc.simulation && typeof doc.simulation === 'object' && !Array.isArray(doc.simulation)) {
+      for (const [opKey] of Object.entries(doc.simulation)) {
+        if (!PORT_OP_RE.test(opKey)) {
+          const text = `Warning: ${testFile}: simulation key "${opKey}" must have <port>.<operation> form`;
+          warnings.push({ key: `${testFile}\0simfmt\0${opKey}`, text });
+        } else if (!wholeSummary.resources.has(opKey) && !proseMentionsPortOp(wholeSummary.combinedProse, opKey)) {
+          const text = `Warning: ${testFile}: simulation port "${opKey}" is not mentioned in reachable prompt prose; name ${opKey} explicitly so lazy interface synthesis binds the port`;
+          warnings.push({ key: `${testFile}\0simprose\0${opKey}`, text });
+        }
+      }
+    }
+    for (const [idx, step] of doc.steps.entries()) {
+      const overrides = step?.simulation_overrides;
+      if (!overrides || typeof overrides !== 'object' || typeof step.entry_path !== 'string' || !visiblePromptSet.has(step.entry_path)) continue;
+      const stepLabel = typeof step.step_id === 'string' && step.step_id ? step.step_id : `steps[${idx}]`;
+      const summary = summarizeClosure(stepClosures.get(step.entry_path) ?? collectClosure(step.entry_path));
+      const checkedIds = new Set((Array.isArray(step.checks) ? step.checks : []).map(ch => ch?.criterion_id).filter(Boolean));
+      const entries = Array.isArray(overrides)
+        ? overrides.filter(row => row && typeof row === 'object').map((row, rowIdx) => ({
+            opKey: typeof row.operation === 'string' ? row.operation : '',
+            binding: row.binding && typeof row.binding === 'object' ? row.binding : row,
+            cid: typeof row.criterion_id === 'string' ? row.criterion_id : '',
+            fquote: typeof row.failure_quote === 'string' ? row.failure_quote : '',
+            rowKey: String(rowIdx),
+          }))
+        : Object.entries(overrides).map(([opKey, binding]) => ({
+            opKey,
+            binding: binding?.binding && typeof binding.binding === 'object' ? binding.binding : binding,
+            cid: typeof binding?.criterion_id === 'string' ? binding.criterion_id : '',
+            fquote: typeof binding?.failure_quote === 'string' ? binding.failure_quote : '',
+            rowKey: opKey,
+          }));
+      if (!Array.isArray(overrides)) {
+        const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides should be an array of {operation, criterion_id, failure_quote, reason, binding} objects`;
+        warnings.push({ key: `${testFile}\0ovshape\0${stepLabel}`, text });
+      }
+      for (const { opKey, binding, cid, fquote, rowKey } of entries) {
+        if (!PORT_OP_RE.test(opKey)) {
+          const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides operation "${opKey}" must have <port>.<operation> form`;
+          warnings.push({ key: `${testFile}\0ovfmt\0${stepLabel}\0${rowKey}`, text });
+          continue;
+        }
+        const declared = summary.resources.get(opKey);
+        if (!declared) {
+          if (!summary.hasPlainPrompt) {
+            const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides port "${opKey}" is not declared in reachable Runtime interface resources for ${step.entry_path}`;
+            warnings.push({ key: `${testFile}\0ovres\0${stepLabel}\0${rowKey}`, text });
+          } else if (!proseMentionsPortOp(summary.combinedProse, opKey)) {
+            const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides port "${opKey}" is not mentioned in reachable prompt prose (${step.entry_path}); name ${opKey} explicitly so lazy interface synthesis binds the port`;
+            warnings.push({ key: `${testFile}\0ovprose\0${stepLabel}\0${rowKey}`, text });
+          }
+        } else if (binding?.action === 'port.write' && !declared.has('write') && !declared.has('read_write')) {
+          const text = `Warning: ${testFile} (${stepLabel}): port.write simulation_overrides on "${opKey}" requires write access in reachable Runtime interface resources`;
+          warnings.push({ key: `${testFile}\0ovacc\0${stepLabel}\0${rowKey}`, text });
+        }
+        if (binding?.action === 'port.write' && typeof binding.world_pointer === 'string' && !hasPointer(doc.initial_world, binding.world_pointer)) {
+          const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" world_pointer "${binding.world_pointer}" is missing from initial_world`;
+          warnings.push({ key: `${testFile}\0ovwp\0${stepLabel}\0${rowKey}`, text });
+        }
+        if (!cid || !checkedIds.has(cid)) {
+          const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" criterion_id "${cid}" is not checked by step ${stepLabel}`;
+          warnings.push({ key: `${testFile}\0ovcid\0${stepLabel}\0${rowKey}`, text });
+        } else if (fquote.trim() && !criteriaById.get(cid)?.includes(fquote)) {
+          const text = `Warning: ${testFile} (${stepLabel}): simulation_overrides "${opKey}" failure_quote "${fquote}" is absent from criterion ${cid}`;
+          warnings.push({ key: `${testFile}\0ovfq\0${stepLabel}\0${rowKey}`, text });
+        }
+      }
     }
   }
   return [...new Map(warnings.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0).map(warning => [warning.text, warning.text])).values()];

@@ -42,6 +42,16 @@ Warnings start `Warning: SVG layout`, are deduplicated and ordered by prompt pat
 
 - [Screen rules](../../skills/pdd-prompting/runbook/screens-and-svg.md#13-give-your-app-a-screen-app-map): authoring and verification context.
 
+## Plain-Markdown native-only dependency and simulation override advisories
+
+Using the same local file access and workspace policy (`0` AI or network calls, never mutating files or blocking `pdd lint --local`):
+
+- **Inverted `native-only` dependency warning:** When an inspected plain-Markdown checkable prompt (no embedded `Runtime interface` block and no frontmatter `kind: native-only`) links a `.prompt.md` file inside `root` whose frontmatter or embedded `Runtime interface` declares `kind: native-only` (directly or transitively across plain-Markdown links), warn `${prompt}: checkable prompt links kind: native-only prompt ${target} (invert the dependency and inject a <port>.<op> port so Story checks do not skip)`.
+- **Scenario `simulation_overrides` and plain-Markdown `simulation` port alignment:** For each Git-visible `prompt-runtime.program-scenario.v1` JSON file in `files` whose reachable in-repo `steps[].entry_path` prompts are in scope (intersecting `promptPaths` when supplied), inspect step `simulation_overrides` entries and top-level `simulation` entries on plain-Markdown entry closures:
+  - Warn when an operation key does not match `<port>.<operation>`.
+  - When all reachable prompts carry embedded `Runtime interface` blocks, warn when a `simulation_overrides` operation is absent from reachable `resources` (or lacks `write` / `read_write` access for `port.write`). When any reachable prompt is plain Markdown without that embedded resource, warn when neither `<port>.<operation>` nor both `<port>` and `<operation>` appear in reachable prompt prose.
+  - On `simulation_overrides`, warn when a `port.write` `world_pointer` does not resolve inside `initial_world`, when `criterion_id` is not checked by that step, or when a nonblank `failure_quote` is absent from that criterion's text.
+
 ## Caller navigation
 
 The CLI exposes this advisory through [Runtime seam](runtime-seam.prompt.md).

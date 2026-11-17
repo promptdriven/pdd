@@ -17,7 +17,7 @@ Normal feature runs build the parts.
 
 ## Rules
 
-- Read pdd-prompting before writing Stories or contracts. The main chat coordinates. Run each step in a fresh subagent with its step file and paths.
+- Read pdd-prompting before writing Stories or contracts. In `pdd workflow run`, the main chat coordinates and runs each step in a fresh subagent with its step file and paths; outside runs on small (1-part, <=2-prompt) requests, author directly in-session (0 authoring subagents) and check `pdd files` + `pdd lint --local`.
 - The person approves the map, then reviews the plan PR. Never decide their open questions or approve for them. Never merge.
 - Count CORE Stories and parts in the map. Recommend small for about 10 Stories and 1 part, medium for 10–50 Stories and 2–5 parts, large for more than 50 Stories or more than 5 parts. The person can change the path.
 - Small: keep `product/map.md` only and run one feature run. Medium: make parts, contracts and planned runs. Large: also make slices; slice 1 is one thin journey through all parts.

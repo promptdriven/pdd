@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3b1fb570d0a8cd11112dde1d528a186a8fb86d374e71e27e129d6d868a7915aa).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: f30e886a668ad509d30db5aa734afd4b1429e594df1f7bb10813c027b336ae75).
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -32,6 +32,42 @@ const defaultReadPackageVersion = ({ packageRoot }) => {
   catch { return { ok: false, version: '' }; }
 };
 const line = (stream, text) => stream.write(`${text}\n`);
+const sanitizeStaleRuntimeHints = text => String(text)
+  .replace(/\(pdd test --fill-hash\)/g, '(re-run pdd test)')
+  .replace(/Run\s+`?pdd test --fill-hash`?/g, 'Re-run pdd test')
+  .replace(/`pdd test --fill-hash`/g, '`pdd test`')
+  .replace(/\bpdd test --fill-hash\b/g, 'pdd test');
+const wrapHintStream = stream => (!stream || typeof stream.write !== 'function')
+  ? stream
+  : new Proxy(stream, {
+      get(target, prop, receiver) {
+        if (prop === 'write') return (chunk, ...rest) => target.write(sanitizeStaleRuntimeHints(typeof chunk === 'string' || Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk), ...rest);
+        const val = Reflect.get(target, prop, receiver);
+        return typeof val === 'function' ? val.bind(target) : val;
+      },
+    });
+function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
+  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen'].some(flag => options[flag])) return null;
+  try {
+    const found = runtime.findTests({ root: cwd });
+    const { selected, unknown } = runtime.selectTests(found, words, options);
+    if (unknown?.length || !selected?.length) return null;
+    const { rows } = runtime.preflight({ root: cwd, found, selected, allowMissingInterfaces: true });
+    for (const row of rows) {
+      if (!row.native_only?.length) continue;
+      const nativePaths = new Set(row.native_only.map(item => item.path));
+      const checkableEntries = (row.steps ?? [])
+        .map(step => step?.entry_path)
+        .filter(entry => typeof entry === 'string' && !nativePaths.has(entry));
+      if (!checkableEntries.length) continue;
+      const entryPath = checkableEntries[0];
+      const adapter = row.native_only[0];
+      return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: adapter.path, native_only_reason: adapter.reason };
+    }
+  } catch { /* delegate workspace/selection errors to runtime[action] */ }
+  return null;
+}
+
 // The real reason of an unexpected error, after the fixed safe line.
 const reason = error => { const text = causeText(error?.message ?? error); return text ? ` Reason: ${text}` : ''; };
 // Stdin as text: a string from tests, else the whole stream.
@@ -420,8 +456,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           return await runCompiledTest({ root: cwd, words: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
         }
         const runtime = await import('./runtime-seam.mjs');
+        if (plan.local === 'runtime-check') {
+          const inverted = findInvertedNativeOnlyStory(runtime, cwd, [...plan.operands], { ...plan.options });
+          if (inverted) {
+            line(stderr, `Advisory [inverted-native-only-dependency]: Story test ${inverted.test} enters checkable prompt ${inverted.entry_path}, which links kind: native-only prompt ${inverted.native_only_path} under ## Dependencies. Invert the dependency so ${inverted.native_only_path} depends on ${inverted.entry_path} and inject a <port>.<op> port.`);
+          }
+        }
         const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
-        return await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
+        return await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout: wrapHintStream(stdout), stderr: wrapHintStream(stderr), env });
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
