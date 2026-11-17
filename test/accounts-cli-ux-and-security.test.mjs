@@ -13,6 +13,8 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1497,4 +1499,241 @@ test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-v
     }
   }
   assert.equal(grandchildAlive, false, 'Python PTY os.killpg terminated entire child process group with zero orphans');
+});
+
+test('R2 Blockers 1–5: 32 KiB session_meta + subagent parent_thread_id/source.subagent + 2.5 MiB JSONL line skip, conditional lease-materialized scrub, scrubbed-copy usage probe, and symlinked --from/parent guards', async t => {
+  const cloud = await createPoolGatewayServer(t, {
+    unpopulatedWindowsOnCreate: true,
+    accounts: [
+      {
+        account_id: 'acc_r2_2',
+        label: 'r2-backup',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 12,
+        five_hour_reset_at: '2026-11-18T02:00:00Z',
+        weekly_used_percent: 18,
+        weekly_reset_at: '2026-11-23T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+
+  // Blocker 5: Reject symlinked `--from <dir>` AND symlinked parent `~/.codex` before reading/uploading or scrubbing!
+  const realExternalDir = join(sb.root, 'real-ext-codex');
+  mkdirSync(realExternalDir, { recursive: true });
+  writeFileSync(join(realExternalDir, 'auth.json'), JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_sym_dir_111',
+      refresh_token: 'rt_sym_dir_111',
+      id_token: makeJwt({ email: 'sym@promptdriven.ai', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_sym_dir_1',
+    },
+  }), { mode: 0o600 });
+
+  const symlinkFromDir = join(sb.root, 'symlink-from-dir');
+  symlinkSync(realExternalDir, symlinkFromDir);
+  const reqBeforeSym = cloud.state.requests.length;
+  const symFromRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--from', symlinkFromDir, '--label', 'sym-cx'], sb);
+  assert.equal(symFromRes.exit, 1);
+  assert.match(symFromRes.stderr, /Refusing to import symlinked Codex credential path/);
+  assert.equal(cloud.state.requests.length, reqBeforeSym, 'symlinked --from <dir> rejected before any network call');
+
+  // Symlinked `~/.codex` parent directory is also rejected upfront!
+  symlinkSync(realExternalDir, join(sb.home, '.codex'));
+  const symHomeRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'sym-home'], sb);
+  assert.equal(symHomeRes.exit, 1);
+  assert.match(symHomeRes.stderr, /Refusing to import Codex credential file from symlinked directory/);
+  assert.equal(cloud.state.requests.length, reqBeforeSym, 'symlinked ~/.codex parent directory rejected before any network call');
+  rmSync(join(sb.home, '.codex'), { recursive: true, force: true });
+
+  // Blocker 3 & Blocker 4:
+  // - `probeInitialCodexUsageIfUnpopulated` ALWAYS passes a disposable 0700 probe CODEX_HOME with `tokens.refresh_token === ""`!
+  // - When `/v1/accounts/lease` fails (`500`) or returns `all_cooling`, `pdd accounts import` MUST NOT scrub the source `auth.json`!
+  const unleasedSourcePath = join(sb.root, 'unleased-import-auth.json');
+  const unleasedRefreshToken = 'rt_must_remain_when_lease_fails_999';
+  writeFileSync(unleasedSourcePath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_unleased_999',
+      refresh_token: unleasedRefreshToken,
+      id_token: makeJwt({ email: 'unleased@promptdriven.ai', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_unleased_999',
+    },
+  }), { mode: 0o600 });
+
+  cloud.state.leaseOverrideState = 'error_500';
+  let probeSawEmptyRefresh = false;
+  let probeHomeWasIsolated = false;
+  const leaseFailedImp = await invokeCli(
+    ['accounts', 'import', '--provider', 'codex', '--from', unleasedSourcePath, '--label', 'r2-primary'],
+    sb,
+    {
+      tmpRoot: sb.root,
+      readCodexUsageWindows: async ({ env: probeEnv }) => {
+        probeHomeWasIsolated = probeEnv.CODEX_HOME !== sb.root && (statSync(probeEnv.CODEX_HOME).mode & 0o777) === 0o700;
+        const probeAuth = JSON.parse(readFileSync(join(probeEnv.CODEX_HOME, 'auth.json'), 'utf8'));
+        probeSawEmptyRefresh = probeAuth.tokens?.access_token === 'at_unleased_999' && probeAuth.tokens?.refresh_token === '';
+        return {
+          state: 'ok',
+          five_hour_used_percent: 25,
+          five_hour_reset_at: '2026-11-18T01:00:00Z',
+          weekly_used_percent: 40,
+          weekly_reset_at: '2026-11-22T00:00:00Z',
+        };
+      },
+    },
+  );
+  assert.equal(leaseFailedImp.exit, 0, leaseFailedImp.stderr);
+  assert.equal(probeHomeWasIsolated, true, 'usage probe ran in an isolated 0700 temporary directory');
+  assert.equal(probeSawEmptyRefresh, true, 'usage probe auth.json had single-use refresh_token scrubbed to ""');
+  assert.equal(
+    JSON.parse(readFileSync(unleasedSourcePath, 'utf8')).tokens.refresh_token,
+    unleasedRefreshToken,
+    'source auth.json refresh_token MUST NOT be scrubbed when /v1/accounts/lease fails (500)',
+  );
+  assert.match(leaseFailedImp.stdout, /lease pending/);
+  assert.match(leaseFailedImp.stdout, /left .* unscrubbed/);
+
+  // Also verify `all_cooling` lease state keeps source `auth.json` unscrubbed!
+  const coolingSourcePath = join(sb.root, 'cooling-import-auth.json');
+  writeFileSync(coolingSourcePath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_cooling_888',
+      refresh_token: 'rt_must_remain_when_cooling_888',
+      id_token: makeJwt({ email: 'cooling@promptdriven.ai', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_cooling_888',
+    },
+  }), { mode: 0o600 });
+  cloud.state.leaseOverrideState = 'all_cooling';
+  const coolingImp = await invokeCli(
+    ['accounts', 'import', '--provider', 'codex', '--from', coolingSourcePath, '--label', 'r2-cooling'],
+    sb,
+    { readCodexUsageWindows: async () => null },
+  );
+  cloud.state.leaseOverrideState = null;
+  assert.equal(coolingImp.exit, 0, coolingImp.stderr);
+  assert.equal(
+    JSON.parse(readFileSync(coolingSourcePath, 'utf8')).tokens.refresh_token,
+    'rt_must_remain_when_cooling_888',
+    'source auth.json refresh_token MUST NOT be scrubbed when /v1/accounts/lease returns all_cooling',
+  );
+
+  // Pin `r2-primary` so managed codex-home is leased and active for Blocker 1 & Blocker 2 live rollout tests!
+  assert.equal((await invokeCli(['accounts', 'use', 'r2-primary'], sb)).exit, 0);
+
+  // Blocker 1 & Blocker 2:
+  // - Historical rollout file (`mtimeMs` in the past) is skipped before header reads.
+  // - Subagent rollouts with `parent_thread_id` OR `source: { subagent: "review" }` are excluded.
+  // - Partial unflushed >16 KiB `session_meta` (without `\n`) waits cleanly for `\n` flush, and 32 KiB `base_instructions` `session_meta` is parsed and pinned!
+  // - A 2.5 MiB single-line `response_item` JSONL record does NOT wedge `rolloutOffset`; the structured quota error line immediately following it triggers live rotation and resumes the pinned UUID!
+  const managedHome = pddManagedCodexHome(sb.env);
+  const dayDir = join(managedHome, 'sessions', '2026', '11', '17');
+  mkdirSync(dayDir, { recursive: true });
+
+  const historicalUuid = '019b1111-0000-7000-8000-000000000001';
+  const subParentUuid = '019b1111-0000-7000-8000-000000000002';
+  const subSourceUuid = '019b1111-0000-7000-8000-000000000003';
+  const bigMetaSessionUuid = '019b1111-0000-7000-8000-000000000004';
+
+  const histFile = join(dayDir, `rollout-2026-11-17T10-00-00-${historicalUuid}.jsonl`);
+  writeFileSync(histFile, '{"type":"session_meta","payload":{"id":"' + historicalUuid + '","cwd":' + JSON.stringify(sb.root) + '}}\n');
+  const oldDate = new Date(Date.now() - 3600_000);
+  utimesSync(histFile, oldDate, oldDate);
+
+  const r2Turns = [];
+  const r2LiveRes = await invokeCli(
+    ['accounts', 'codex', '-m', 'gpt-5.4', 'audit large rollout'],
+    sb,
+    {
+      quotaSettleMs: 0,
+      rolloutPollIntervalMs: 15,
+      async spawnCodexPty({ args, turn, signal }) {
+        r2Turns.push({ turn, args });
+        if (turn === 0) {
+          const nowIso = new Date().toISOString();
+          // Subagent 1 (`parent_thread_id`) and Subagent 2 (`source: { subagent: ... }`) in same cwd:
+          writeFileSync(
+            join(dayDir, `rollout-2026-11-17T23-30-01-${subParentUuid}.jsonl`),
+            `${JSON.stringify({
+              timestamp: nowIso,
+              type: 'session_meta',
+              payload: { id: subParentUuid, parent_thread_id: '019b0000-0000-7000-8000-999999999999', cwd: sb.root, timestamp: nowIso },
+            })}\n`,
+          );
+          writeFileSync(
+            join(dayDir, `rollout-2026-11-17T23-30-02-${subSourceUuid}.jsonl`),
+            `${JSON.stringify({
+              timestamp: nowIso,
+              type: 'session_meta',
+              payload: { id: subSourceUuid, source: { subagent: { type: 'explorer' } }, cwd: sb.root, timestamp: nowIso },
+            })}\n`,
+          );
+
+          // Main session with a 32 KiB `base_instructions` string — write WITHOUT trailing `\n` first to test partial-flush retry!
+          const bigFile = join(dayDir, `rollout-2026-11-17T23-30-03-${bigMetaSessionUuid}.jsonl`);
+          const hugeBaseInstructions = 'You are Codex 0.169.0. '.repeat(1500); // ~34.5 KiB (> 32 KiB)
+          assert.ok(Buffer.byteLength(hugeBaseInstructions, 'utf8') > 32 * 1024);
+          const metaLineNoNewline = JSON.stringify({
+            timestamp: nowIso,
+            type: 'session_meta',
+            payload: {
+              id: bigMetaSessionUuid,
+              cwd: sb.root,
+              timestamp: nowIso,
+              base_instructions: { text: hugeBaseInstructions },
+            },
+          });
+          writeFileSync(bigFile, metaLineNoNewline);
+          await new Promise(r => setTimeout(r, 30)); // poll fires while `\n` is not flushed yet
+          writeFileSync(bigFile, '\n', { flag: 'a' }); // flush `\n`!
+          await new Promise(r => setTimeout(r, 35)); // monitor pins `bigMetaSessionUuid`!
+
+          // Now append a 2.5 MiB single-line `response_item` (exceeding the 2 MiB slice cap!) followed by a structured quota error line!
+          const twoPointFiveMbBlob = 'A'.repeat(2_621_440); // 2.5 MiB
+          const oversizedLine = JSON.stringify({
+            timestamp: new Date().toISOString(),
+            type: 'response_item',
+            payload: { type: 'screenshot_base64', data: twoPointFiveMbBlob },
+          });
+          const quotaLine = JSON.stringify({
+            timestamp: new Date().toISOString(),
+            type: 'event_msg',
+            payload: {
+              type: 'task_complete',
+              error: {
+                message: 'You\'ve hit your usage limit (usage_limit_reached). Resets at 2026-11-18T03:00:00Z.',
+                codex_error_info: 'usage_limit_exceeded',
+              },
+            },
+          });
+          writeFileSync(bigFile, `${oversizedLine}\n${quotaLine}\n`, { flag: 'a' });
+
+          await new Promise(resolveAbort => {
+            if (signal.aborted) return resolveAbort();
+            signal.addEventListener('abort', resolveAbort, { once: true });
+          });
+          return { code: 1, signal: 'SIGTERM' };
+        }
+        return { code: 0, signal: null };
+      },
+    },
+    { isTTY: true },
+  );
+
+  assert.equal(r2LiveRes.exit, 0, r2LiveRes.stderr);
+  assert.equal(r2Turns.length, 2);
+  assert.deepEqual(
+    r2Turns[1].args,
+    ['resume', '-m', 'gpt-5.4', bigMetaSessionUuid],
+    'pinned 32 KiB session_meta UUID (ignoring subagent parent_thread_id/source.subagent), skipped 2.5 MiB line, and rotated on trailing quota error',
+  );
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 5c8b8f3d8729fd01cf0f2ffa0ee7014a0ed94a73909f16d579b4f9d7fc4bf4e0).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 1369a68c44af808fdbe8d24b4ab1a9fc8854c00a32d07d1b793d66109f59a033).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -788,8 +788,13 @@ function resolveCodexImportSource(fs, cwd, env, fromOption) {
     return { authPath: defaultAuth, probeCodexHome: localCodexHome(env), isDefaultLocal: true };
   }
   const resolved = resolve(cwd, String(fromOption).trim());
-  let isDir = false;
-  try { isDir = Boolean(fs.statSync(resolved)?.isDirectory()); } catch {}
+  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  let rawSt = null;
+  try { rawSt = lstat(resolved); } catch {}
+  if (rawSt?.isSymbolicLink()) {
+    throw new CloudAccountsError(`Refusing to import symlinked Codex credential path: ${resolved}`, { code: 'symlink_refused' });
+  }
+  const isDir = Boolean(rawSt?.isDirectory());
   const authPath = isDir ? join(resolved, 'auth.json') : resolved;
   const isDefaultLocal = resolve(authPath) === resolve(defaultAuth);
   return {
@@ -802,6 +807,12 @@ function resolveCodexImportSource(fs, cwd, env, fromOption) {
 function assertNonSymlinkImportFile(fs, authPath) {
   if (!authPath) return;
   const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  const parentDir = dirname(authPath);
+  let parentSt = null;
+  try { parentSt = lstat(parentDir); } catch {}
+  if (parentSt?.isSymbolicLink()) {
+    throw new CloudAccountsError(`Refusing to import Codex credential file from symlinked directory: ${parentDir}`, { code: 'symlink_refused' });
+  }
   let st = null;
   try { st = lstat(authPath); } catch { return; }
   if (st?.isSymbolicLink()) {
@@ -812,6 +823,15 @@ function assertNonSymlinkImportFile(fs, authPath) {
 function scrubImportedCodexSourceRefreshToken(fs, authPath) {
   if (!authPath) return false;
   const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  const dir = dirname(authPath);
+  let dirSt = null;
+  try { dirSt = lstat(dir); } catch { return false; }
+  if (!dirSt || dirSt.isSymbolicLink() || !dirSt.isDirectory()) {
+    if (dirSt?.isSymbolicLink()) {
+      throw new CloudAccountsError(`Refusing to rewrite Codex credential file in symlinked directory: ${dir}`, { code: 'symlink_refused' });
+    }
+    return false;
+  }
   let st = null;
   try { st = lstat(authPath); } catch { return false; }
   if (!st || st.isSymbolicLink() || !st.isFile()) {
@@ -838,7 +858,6 @@ function scrubImportedCodexSourceRefreshToken(fs, authPath) {
       refresh_token: '',
     },
   };
-  const dir = dirname(authPath);
   const tmpPath = join(dir, `.pdd-scrub-${process.pid}-${randomBytes(6).toString('hex')}.tmp`);
   try {
     fs.writeFileSync(tmpPath, `${JSON.stringify(scrubbed, null, 2)}\n`, { mode: 0o600 });
@@ -1447,7 +1466,7 @@ function buildUnsharePayloads({ userOption, withOption }) {
   return { payloads };
 }
 
-async function probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome, { fs, cwd, env }, ports = {}) {
+async function probeInitialCodexUsageIfUnpopulated(acc, authJson, _probeCodexHome, { fs, cwd, env }, ports = {}) {
   if (!acc?.account_id) return acc;
   const isUnpopulated = (acc.five_hour_used_percent ?? 0) === 0
     && (acc.weekly_used_percent ?? 0) === 0
@@ -1457,27 +1476,33 @@ async function probeInitialCodexUsageIfUnpopulated(acc, authJson, probeCodexHome
 
   let tempProbeDir = null;
   try {
-    let targetHome = probeCodexHome;
-    if (!targetHome) {
-      tempProbeDir = createTempPrivateDir(fs, 'pdd-cx-probe-', ports.tmpRoot);
-      fs.writeFileSync(join(tempProbeDir, 'auth.json'), `${JSON.stringify(authJson, null, 2)}\n`, { mode: 0o600 });
-      targetHome = tempProbeDir;
-    }
+    // Always probe inside a disposable 0700 temp directory whose auth.json copy has
+    // tokens.refresh_token cleared ("") so local `codex app-server` uses only access_token
+    // and can never consume/invalidate the single-use refresh_token uploaded to Cloud.
+    tempProbeDir = createTempPrivateDir(fs, 'pdd-cx-probe-', ports.tmpRoot);
+    const probeAuthJson = object(authJson) && object(authJson.tokens)
+      ? {
+          ...authJson,
+          tokens: {
+            ...authJson.tokens,
+            refresh_token: '',
+          },
+        }
+      : authJson;
+    fs.writeFileSync(join(tempProbeDir, 'auth.json'), `${JSON.stringify(probeAuthJson, null, 2)}\n`, { mode: 0o600 });
     const probeFn = ports.readCodexUsageWindows ?? readCodexUsageWindows;
     const windows = await probeFn(
       {
         command: 'codex',
         cwd,
-        env: { ...env, CODEX_HOME: targetHome },
+        env: { ...env, CODEX_HOME: tempProbeDir },
         weeklyStopPercent: 100,
         timeoutMs: ports.usageProbeTimeoutMs ?? 3000,
       },
       ports.codexLimitPorts,
     );
-    if (tempProbeDir) {
-      removeTempPrivateDir(fs, tempProbeDir);
-      tempProbeDir = null;
-    }
+    removeTempPrivateDir(fs, tempProbeDir);
+    tempProbeDir = null;
     const hasFiveH = typeof windows?.five_hour_used_percent === 'number' && Number.isFinite(windows.five_hour_used_percent);
     const hasSevenD = typeof windows?.weekly_used_percent === 'number' && Number.isFinite(windows.weekly_used_percent);
     if (hasFiveH || hasSevenD) {
@@ -1583,6 +1608,7 @@ async function resolveAccount(labelOrId, { cwd, env, provider = null }, ports = 
 }
 
 async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAuthJson, fallbackOauthToken, { cwd, env }, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
   const nowMs = (ports.now ?? Date.now)();
   if (acc?.account_id) {
     const preEnrollState = readCloudAccountsState({ env }, ports);
@@ -1596,24 +1622,30 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
     const leased = await leaseCloudAccount({ provider, preferredLabel: acc.label, holderId: 'local-cli', updateState: false }, { cwd, env }, ports);
     if (leased?.state === 'leased' && !isReauthRequiredAccount(leased.account)) {
       applyMaterializedLease(leased, { env }, ports);
-    } else if (leased?.state === 'leased' && isReauthRequiredAccount(leased.account)) {
-      markLocalAccountReauthRequired(leased.account?.account_id ?? acc.account_id, { env }, ports);
-    } else {
-      if (provider === 'claude' && fallbackOauthToken) {
-        materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
-      }
-      const current = readCloudAccountsState({ env }, ports);
-      writeCloudAccountsState({
-        enrolled: true,
-        providers: [...new Set([...current.providers, provider])],
-        active: current.active,
-        cooling: leased?.state === 'all_cooling'
-          ? { ...current.cooling, [provider]: { wake_at: leased.wake_at ?? null } }
-          : current.cooling,
-      }, { env }, ports);
+      return { materialized: Boolean(hasLocalMaterializedFile(fs, provider, env)) };
     }
-  } catch {
+    if (leased?.state === 'leased' && isReauthRequiredAccount(leased.account)) {
+      markLocalAccountReauthRequired(leased.account?.account_id ?? acc.account_id, { env }, ports);
+      return { materialized: false };
+    }
     if (provider === 'claude' && fallbackOauthToken) {
+      materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
+    }
+    const current = readCloudAccountsState({ env }, ports);
+    writeCloudAccountsState({
+      enrolled: true,
+      providers: [...new Set([...current.providers, provider])],
+      active: current.active,
+      cooling: leased?.state === 'all_cooling'
+        ? { ...current.cooling, [provider]: { wake_at: leased.wake_at ?? null } }
+        : current.cooling,
+    }, { env }, ports);
+    return {
+      materialized: provider === 'claude' && Boolean(fallbackOauthToken) && Boolean(hasLocalMaterializedFile(fs, 'claude', env)),
+    };
+  } catch {
+    const claudeFallbackMaterialized = provider === 'claude' && Boolean(fallbackOauthToken);
+    if (claudeFallbackMaterialized) {
       materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
     }
     const current = readCloudAccountsState({ env }, ports);
@@ -1631,7 +1663,7 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
           leased_at: new Date(nowMs).toISOString(),
           expires_at: new Date(nowMs + 45 * 60 * 1000).toISOString(),
           last_refresh_at: acc.last_refresh_at ?? new Date(nowMs).toISOString(),
-          materialized_local: provider === 'claude' && Boolean(fallbackOauthToken),
+          materialized_local: claudeFallbackMaterialized,
           delivery_mode: provider === 'codex' ? 'gateway_grant' : 'direct_oauth',
           five_hour_used_percent: acc.five_hour_used_percent ?? null,
           five_hour_reset_at: acc.five_hour_reset_at ?? null,
@@ -1641,6 +1673,9 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
       },
       cooling: current.cooling,
     }, { env }, ports);
+    return {
+      materialized: claudeFallbackMaterialized && Boolean(hasLocalMaterializedFile(fs, 'claude', env)),
+    };
   }
 }
 
@@ -2045,12 +2080,12 @@ async function enrollSingleIteration(mode, {
         tempLoginDir = null;
       }
 
-      await leaseAndSyncAfterEnroll('codex', acc, candidateLabel, null, null, { cwd, env }, ports);
+      const leaseResult = await leaseAndSyncAfterEnroll('codex', acc, candidateLabel, null, null, { cwd, env }, ports);
+      const leaseMaterialized = leaseResult?.materialized === true;
 
-      // P0 single-use OpenAI refresh_token collision guard: once uploaded, probed, and leased,
-      // scrub tokens.refresh_token from the imported local source file so local codex cannot
-      // refresh the same token family and cause refresh_token_invalidated in PDD Cloud.
-      const scrubbedSource = mode === 'import' && importSourcePath
+      // P0 single-use OpenAI refresh_token collision guard: scrub tokens.refresh_token from
+      // the imported local source file ONLY when local lease materialization succeeded.
+      const scrubbedSource = mode === 'import' && importSourcePath && leaseMaterialized
         ? scrubImportedCodexSourceRefreshToken(fs, importSourcePath)
         : false;
 
@@ -2085,9 +2120,14 @@ async function enrollSingleIteration(mode, {
         };
       }
       const identityNote = email ? `${email} -> "${finalLabel}", ` : '';
+      const materializationNote = leaseMaterialized
+        ? `materialized in ${pddManagedCodexHome(env)}`
+        : `lease pending for ${pddManagedCodexHome(env)}`;
       const importNote = scrubbedSource
         ? ` (scrubbed single-use refresh_token from ${importSourcePath} so local codex cannot invalidate Cloud refresh.)`
-        : '';
+        : (mode === 'import' && importSourcePath && !leaseMaterialized
+          ? ` (left ${importSourcePath} unscrubbed because local lease materialization did not complete.)`
+          : '');
       return {
         exitCode: 0,
         duplicate: false,
@@ -2095,7 +2135,7 @@ async function enrollSingleIteration(mode, {
         label: finalLabel,
         email,
         shareNotes,
-        message: `Enrolled Codex account "${finalLabel}" in PDD Cloud (${identityNote}materialized in ${pddManagedCodexHome(env)}).${shareSuffix}${importNote}`,
+        message: `Enrolled Codex account "${finalLabel}" in PDD Cloud (${identityNote}${materializationNote}).${shareSuffix}${importNote}`,
       };
     } finally {
       removeTempPrivateDir(fs, tempLoginDir);
@@ -2955,7 +2995,10 @@ const PYTHON_PTY_SUPERVISOR_SCRIPT = [
   '            _terminate_child_group()',
   '            break',
   '        else:',
-  '            os.write(master_fd, inp)',
+  '            try:',
+  '                os.write(master_fd, inp)',
+  '            except OSError:',
+  '                break',
   '_drain_master_nonblocking()',
   'try:',
   '    os.close(master_fd)',
@@ -3089,25 +3132,48 @@ function safeFileSize(fs, filePath) {
   }
 }
 
+const MAX_ROLLOUT_HEADER_BYTES = 4 * 1024 * 1024;
+const MAX_ROLLOUT_SLICE_BYTES = 2 * 1024 * 1024;
+
 function readFirstJsonLine(fs, filePath) {
   let fd;
   try {
     if (typeof fs.openSync === 'function' && typeof fs.readSync === 'function' && typeof fs.closeSync === 'function') {
       fd = fs.openSync(filePath, 'r');
-      const buf = Buffer.alloc(16_384);
-      const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
-      const text = buf.subarray(0, bytesRead).toString('utf8');
-      const nl = text.indexOf('\n');
-      const firstLine = (nl >= 0 ? text.slice(0, nl) : text).trim();
+      const chunkBuf = Buffer.allocUnsafe(65_536);
+      const parts = [];
+      let offset = 0;
+      let foundNewline = false;
+      while (offset < MAX_ROLLOUT_HEADER_BYTES) {
+        const toRead = Math.min(chunkBuf.length, MAX_ROLLOUT_HEADER_BYTES - offset);
+        const bytesRead = fs.readSync(fd, chunkBuf, 0, toRead, offset);
+        if (bytesRead <= 0) break;
+        const slice = chunkBuf.subarray(0, bytesRead);
+        const nlIdx = slice.indexOf(0x0a);
+        if (nlIdx >= 0) {
+          if (nlIdx > 0) parts.push(Buffer.from(slice.subarray(0, nlIdx)));
+          foundNewline = true;
+          break;
+        }
+        parts.push(Buffer.from(slice));
+        offset += bytesRead;
+      }
+      if (!foundNewline) return null;
+      const firstLine = (parts.length === 1 ? parts[0] : (parts.length === 0 ? Buffer.alloc(0) : Buffer.concat(parts)))
+        .toString('utf8')
+        .trim();
       if (!firstLine) return null;
       const parsed = JSON.parse(firstLine);
       return object(parsed) ? parsed : null;
     }
     const raw = fs.readFileSync(filePath, 'utf8');
     const nl = raw.indexOf('\n');
-    const firstLine = (nl >= 0 ? raw.slice(0, nl) : raw).trim();
-    if (!firstLine) return null;
-    const parsed = JSON.parse(firstLine);
+    if (nl < 0) return null;
+    const firstLine = raw.slice(0, nl);
+    if (Buffer.byteLength(firstLine, 'utf8') > MAX_ROLLOUT_HEADER_BYTES) return null;
+    const trimmed = firstLine.trim();
+    if (!trimmed) return null;
+    const parsed = JSON.parse(trimmed);
     return object(parsed) ? parsed : null;
   } catch {
     return null;
@@ -3118,28 +3184,87 @@ function readFirstJsonLine(fs, filePath) {
   }
 }
 
-function readFileSliceUtf8(fs, filePath, startOffset) {
+function readRolloutChunkFromOffset(fs, filePath, startOffset) {
   let fd;
   try {
     if (typeof fs.openSync === 'function' && typeof fs.fstatSync === 'function' && typeof fs.readSync === 'function' && typeof fs.closeSync === 'function') {
       fd = fs.openSync(filePath, 'r');
       const size = fs.fstatSync(fd).size;
-      if (size <= startOffset) return '';
-      const len = Math.min(size - startOffset, 2_097_152);
-      const buf = Buffer.alloc(len);
+      if (size <= startOffset) {
+        return { status: 'empty', text: '', nextOffset: startOffset, eofSize: size };
+      }
+      const len = Math.min(size - startOffset, MAX_ROLLOUT_SLICE_BYTES);
+      const buf = Buffer.allocUnsafe(len);
       let readTotal = 0;
       while (readTotal < len) {
         const n = fs.readSync(fd, buf, readTotal, len - readTotal, startOffset + readTotal);
-        if (!n) break;
+        if (n <= 0) break;
         readTotal += n;
       }
-      return buf.subarray(0, readTotal).toString('utf8');
+      const validBuf = buf.subarray(0, readTotal);
+      const lastNl = validBuf.lastIndexOf(0x0a);
+      if (lastNl >= 0) {
+        const completeBuf = validBuf.subarray(0, lastNl + 1);
+        return {
+          status: 'lines',
+          text: completeBuf.toString('utf8'),
+          nextOffset: startOffset + completeBuf.length,
+          eofSize: size,
+        };
+      }
+      if (size - startOffset <= MAX_ROLLOUT_SLICE_BYTES) {
+        return { status: 'partial', text: '', nextOffset: startOffset, eofSize: size };
+      }
+      // Single JSONL line exceeds 2 MiB with no newline in the 2 MiB slice:
+      // scan forward in 64 KiB chunks until the next newline so rolloutOffset never wedges.
+      const scanBuf = Buffer.allocUnsafe(65_536);
+      let pos = startOffset + readTotal;
+      while (pos < size) {
+        const n = fs.readSync(fd, scanBuf, 0, Math.min(scanBuf.length, size - pos), pos);
+        if (n <= 0) break;
+        const nl = scanBuf.subarray(0, n).indexOf(0x0a);
+        if (nl >= 0) {
+          return {
+            status: 'skipped_oversized',
+            text: '',
+            nextOffset: pos + nl + 1,
+            eofSize: size,
+          };
+        }
+        pos += n;
+      }
+      return { status: 'partial', text: '', nextOffset: startOffset, eofSize: size };
     }
     const raw = Buffer.from(fs.readFileSync(filePath, 'utf8'), 'utf8');
-    if (raw.length <= startOffset) return '';
-    return raw.subarray(startOffset).toString('utf8');
+    if (raw.length <= startOffset) {
+      return { status: 'empty', text: '', nextOffset: startOffset, eofSize: raw.length };
+    }
+    const windowBuf = raw.subarray(startOffset, Math.min(raw.length, startOffset + MAX_ROLLOUT_SLICE_BYTES));
+    const lastNl = windowBuf.lastIndexOf(0x0a);
+    if (lastNl >= 0) {
+      const completeBuf = windowBuf.subarray(0, lastNl + 1);
+      return {
+        status: 'lines',
+        text: completeBuf.toString('utf8'),
+        nextOffset: startOffset + completeBuf.length,
+        eofSize: raw.length,
+      };
+    }
+    if (raw.length - startOffset <= MAX_ROLLOUT_SLICE_BYTES) {
+      return { status: 'partial', text: '', nextOffset: startOffset, eofSize: raw.length };
+    }
+    const nextNl = raw.indexOf(0x0a, startOffset + windowBuf.length);
+    if (nextNl >= 0) {
+      return {
+        status: 'skipped_oversized',
+        text: '',
+        nextOffset: nextNl + 1,
+        eofSize: raw.length,
+      };
+    }
+    return { status: 'partial', text: '', nextOffset: startOffset, eofSize: raw.length };
   } catch {
-    return '';
+    return { status: 'empty', text: '', nextOffset: startOffset, eofSize: startOffset };
   } finally {
     if (fd !== undefined) {
       try { fs.closeSync(fd); } catch {}
@@ -3147,7 +3272,7 @@ function readFileSliceUtf8(fs, filePath, startOffset) {
   }
 }
 
-function collectRolloutFiles(fs, codexHomes) {
+function collectRolloutFiles(fs, codexHomes, { minMtimeMs = null } = {}) {
   const homes = [...new Set(codexHomes.filter(Boolean))];
   const visitedDirs = new Set();
   const seenFiles = new Set();
@@ -3165,11 +3290,14 @@ function collectRolloutFiles(fs, codexHomes) {
       if (ent.isDirectory()) {
         walkSessions(full, depth + 1);
       } else if (ent.isFile() && ROLLOUT_FILE_RE.test(ent.name)) {
-        const canonFile = canonicalPathSafe(fs, full);
-        if (seenFiles.has(canonFile)) continue;
-        seenFiles.add(canonFile);
         try {
           const st = fs.statSync(full);
+          if (typeof minMtimeMs === 'number' && Number.isFinite(minMtimeMs) && st.mtimeMs < minMtimeMs) {
+            continue;
+          }
+          const canonFile = canonicalPathSafe(fs, full);
+          if (seenFiles.has(canonFile)) continue;
+          seenFiles.add(canonFile);
           const uuidMatch = ROLLOUT_UUID_FILE_RE.exec(ent.name);
           files.push({
             path: full,
@@ -3186,6 +3314,12 @@ function collectRolloutFiles(fs, codexHomes) {
     walkSessions(join(home, 'sessions'), 0);
   }
   return files;
+}
+
+function isSubagentSessionMeta(meta) {
+  if (!object(meta)) return false;
+  if (meta.thread_source === 'subagent') return true;
+  return Boolean(meta.parent_thread_id || (meta.source && typeof meta.source === 'object' && meta.source.subagent));
 }
 
 function readSessionIndexIds(fs, codexHomes) {
@@ -3249,12 +3383,12 @@ function discoverPinnedCodexRollout(fs, codexHomes, {
     };
   }
   const matches = [];
-  for (const item of collectRolloutFiles(fs, codexHomes)) {
+  for (const item of collectRolloutFiles(fs, codexHomes, { minMtimeMs: turnStartedMs - 2000 })) {
     if (preSpawnSnapshot?.rolloutPaths?.has(item.canonicalPath)) continue;
     const header = readFirstJsonLine(fs, item.path);
     if (header?.type !== 'session_meta') continue;
     const meta = object(header.payload) ? header.payload : header;
-    if (meta?.thread_source === 'subagent') continue;
+    if (isSubagentSessionMeta(meta)) continue;
     const sid = [meta?.id, meta?.session_id, item.uuid].find(v => typeof v === 'string' && UUID_TOKEN_RE.test(v)) ?? null;
     if (!sid || preSpawnSnapshot?.sessionIds?.has(sid)) continue;
     const metaCwd = typeof meta?.cwd === 'string' && meta.cwd.trim() ? meta.cwd.trim() : null;
@@ -3281,70 +3415,79 @@ function hasStructuredHttpStatus(value, statusCode, depth = 0) {
 
 function inspectRolloutQuotaError(fs, rolloutPath, fromByteOffset, turnStartedMs) {
   if (!rolloutPath) return { nextOffset: fromByteOffset, quotaError: null };
-  const sliceText = readFileSliceUtf8(fs, rolloutPath, fromByteOffset);
-  if (!sliceText) return { nextOffset: fromByteOffset, quotaError: null };
-  const lastNewline = sliceText.lastIndexOf('\n');
-  if (lastNewline < 0) return { nextOffset: fromByteOffset, quotaError: null };
-  const completeChunk = sliceText.slice(0, lastNewline + 1);
-  const nextOffset = fromByteOffset + Buffer.byteLength(completeChunk, 'utf8');
+  let curOffset = fromByteOffset;
 
-  for (const rawLine of completeChunk.split('\n')) {
-    const trimmed = rawLine.trim();
-    if (!trimmed) continue;
-    let row = null;
-    try { row = JSON.parse(trimmed); } catch { continue; }
-    if (!object(row)) continue;
-
-    if (typeof row.timestamp === 'string') {
-      const rowMs = Date.parse(row.timestamp);
-      if (Number.isFinite(rowMs) && rowMs < turnStartedMs - 2000) continue;
+  for (let pass = 0; pass < 16; pass += 1) {
+    const chunk = readRolloutChunkFromOffset(fs, rolloutPath, curOffset);
+    if (chunk.status === 'empty' || chunk.status === 'partial') {
+      return { nextOffset: chunk.nextOffset, quotaError: null };
+    }
+    curOffset = chunk.nextOffset;
+    if (chunk.status === 'skipped_oversized') {
+      if (curOffset >= chunk.eofSize) break;
+      continue;
     }
 
-    let errObj = null;
-    let isTerminalTurnError = false;
-    if (row.type === 'event_msg' && object(row.payload)) {
-      if (row.payload.type === 'task_complete' && object(row.payload.error)) {
-        errObj = row.payload.error;
-        isTerminalTurnError = true;
-      } else if (row.payload.type === 'error' || row.payload.type === 'turn_failed') {
-        errObj = object(row.payload.error) ? row.payload.error : row.payload;
-        isTerminalTurnError = row.payload.type === 'turn_failed';
+    for (const rawLine of chunk.text.split('\n')) {
+      const trimmed = rawLine.trim();
+      if (!trimmed) continue;
+      let row = null;
+      try { row = JSON.parse(trimmed); } catch { continue; }
+      if (!object(row)) continue;
+
+      if (typeof row.timestamp === 'string') {
+        const rowMs = Date.parse(row.timestamp);
+        if (Number.isFinite(rowMs) && rowMs < turnStartedMs - 2000) continue;
       }
-    } else if (row.type === 'error' || row.type === 'turn.failed' || row.type === 'response.failed') {
-      errObj = object(row.error)
-        ? row.error
-        : (object(row.payload?.error) ? row.payload.error : (object(row.payload) ? row.payload : row));
-      isTerminalTurnError = true;
+
+      let errObj = null;
+      let isTerminalTurnError = false;
+      if (row.type === 'event_msg' && object(row.payload)) {
+        if (row.payload.type === 'task_complete' && object(row.payload.error)) {
+          errObj = row.payload.error;
+          isTerminalTurnError = true;
+        } else if (row.payload.type === 'error' || row.payload.type === 'turn_failed') {
+          errObj = object(row.payload.error) ? row.payload.error : row.payload;
+          isTerminalTurnError = row.payload.type === 'turn_failed';
+        }
+      } else if (row.type === 'error' || row.type === 'turn.failed' || row.type === 'response.failed') {
+        errObj = object(row.error)
+          ? row.error
+          : (object(row.payload?.error) ? row.payload.error : (object(row.payload) ? row.payload : row));
+        isTerminalTurnError = true;
+      }
+
+      if (!object(errObj)) continue;
+
+      const info = errObj.codex_error_info;
+      const infoCode = typeof info === 'string' ? info.trim().toLowerCase() : '';
+      const errCode = String(
+        errObj.code
+        ?? errObj.error_code
+        ?? (typeof errObj.type === 'string' && errObj.type !== 'error' && errObj.type !== 'turn_failed' ? errObj.type : ''),
+      ).trim().toLowerCase();
+      const message = String(errObj.message ?? row.payload?.message ?? row.message ?? '').trim();
+      const isHttp429 = hasStructuredHttpStatus(errObj, 429) || hasStructuredHttpStatus(row, 429);
+
+      const isStructuredQuota = QUOTA_ERROR_CODES.has(infoCode)
+        || QUOTA_ERROR_CODES.has(errCode)
+        || ((isHttp429 || errCode === 'rate_limit_exceeded') && (!message || classifyRateLimitFailure(message) === 'quota_exhausted'))
+        || (isTerminalTurnError && message && classifyRateLimitFailure(message) === 'quota_exhausted');
+
+      if (isStructuredQuota) {
+        return {
+          nextOffset: curOffset,
+          quotaError: {
+            message: message || errCode || infoCode || 'usage_limit_reached',
+          },
+        };
+      }
     }
 
-    if (!object(errObj)) continue;
-
-    const info = errObj.codex_error_info;
-    const infoCode = typeof info === 'string' ? info.trim().toLowerCase() : '';
-    const errCode = String(
-      errObj.code
-      ?? errObj.error_code
-      ?? (typeof errObj.type === 'string' && errObj.type !== 'error' && errObj.type !== 'turn_failed' ? errObj.type : ''),
-    ).trim().toLowerCase();
-    const message = String(errObj.message ?? row.payload?.message ?? row.message ?? '').trim();
-    const isHttp429 = hasStructuredHttpStatus(errObj, 429) || hasStructuredHttpStatus(row, 429);
-
-    const isStructuredQuota = QUOTA_ERROR_CODES.has(infoCode)
-      || QUOTA_ERROR_CODES.has(errCode)
-      || ((isHttp429 || errCode === 'rate_limit_exceeded') && (!message || classifyRateLimitFailure(message) === 'quota_exhausted'))
-      || (isTerminalTurnError && message && classifyRateLimitFailure(message) === 'quota_exhausted');
-
-    if (isStructuredQuota) {
-      return {
-        nextOffset,
-        quotaError: {
-          message: message || errCode || infoCode || 'usage_limit_reached',
-        },
-      };
-    }
+    if (curOffset >= chunk.eofSize) break;
   }
 
-  return { nextOffset, quotaError: null };
+  return { nextOffset: curOffset, quotaError: null };
 }
 
 function isCloudAccountStructurallyExhausted(acc) {
