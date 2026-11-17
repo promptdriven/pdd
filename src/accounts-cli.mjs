@@ -494,11 +494,26 @@ function extractClaudeToken(text) {
   return match ? match[1] : '';
 }
 
+function rememberCodexPayloadSecrets(raw) {
+  if (!object(raw)) return;
+  rememberSecrets(...knownSecretValues(raw));
+  if (object(raw.tokens)) {
+    for (const val of Object.values(raw.tokens)) {
+      if (typeof val === 'string' && val.length >= 8) rememberSecrets(val);
+    }
+  }
+}
+
 function rememberClaudePayloadSecrets(parsed) {
   if (!object(parsed)) return;
   rememberSecrets(...knownSecretValues(parsed));
   if (object(parsed.env)) {
     rememberSecrets(...knownSecretValues(parsed.env));
+  }
+  for (const key of ['oauth_token', 'claude_oauth_token']) {
+    if (typeof parsed[key] === 'string' && parsed[key].trim()) {
+      rememberSecrets(parsed[key], parsed[key].trim());
+    }
   }
   if (object(parsed.claudeAiOauth)) {
     rememberSecrets(...knownSecretValues(parsed.claudeAiOauth));
@@ -521,7 +536,7 @@ function parseClaudeExpiresAtMs(expiresAt) {
   return NaN;
 }
 
-function parseClaudeTokenText(rawText, target, nowMs) {
+function parseClaudeTokenText(rawText, target, nowMs, { allowBareToken = true } = {}) {
   let parsed = null;
   let isJson = false;
   try {
@@ -568,7 +583,7 @@ function parseClaudeTokenText(rawText, target, nowMs) {
       return '';
     }
     if (typeof parsed === 'string') {
-      const strCandidate = extractClaudeToken(parsed) || parsed.trim();
+      const strCandidate = extractClaudeToken(parsed) || (allowBareToken ? parsed.trim() : '');
       if (strCandidate && !/\s/.test(strCandidate)) {
         rememberSecrets(strCandidate);
         return strCandidate;
@@ -577,7 +592,7 @@ function parseClaudeTokenText(rawText, target, nowMs) {
     return '';
   }
 
-  const extracted = extractClaudeToken(rawText) || rawText.trim();
+  const extracted = extractClaudeToken(rawText) || (allowBareToken ? rawText.trim() : '');
   if (extracted && !/\s/.test(extracted)) {
     rememberSecrets(extracted);
     return extracted;
@@ -606,20 +621,15 @@ function hasClaudeJsonCredentials(raw) {
 export function readLocalClaudeToken(fs, env, extraText = '', options = {}) {
   const nowMs = (typeof options?.now === 'function' ? options.now : Date.now)();
   if (typeof extraText === 'string' && extraText.trim()) {
-    if (extraText.trim().startsWith('{')) {
-      const fromJsonExtra = parseClaudeTokenText(extraText, 'stdin', nowMs);
-      if (fromJsonExtra) return fromJsonExtra;
-    } else {
-      const fromExtra = extractClaudeToken(extraText);
-      if (fromExtra) { rememberSecrets(fromExtra); return fromExtra; }
-    }
+    const fromExtra = parseClaudeTokenText(extraText, 'stdin', nowMs, { allowBareToken: false });
+    if (fromExtra) return fromExtra;
   }
   const envTok = typeof env?.CLAUDE_CODE_OAUTH_TOKEN === 'string' ? env.CLAUDE_CODE_OAUTH_TOKEN.trim() : '';
   if (envTok) { rememberSecrets(envTok); return envTok; }
   const { settingsPath } = localClaudePaths(env);
   try {
     const settingsRaw = fs.readFileSync(settingsPath, 'utf8');
-    const savedTok = parseClaudeTokenText(settingsRaw, settingsPath, nowMs);
+    const savedTok = parseClaudeTokenText(settingsRaw, settingsPath, nowMs, { allowBareToken: false });
     if (savedTok) return savedTok;
   } catch (err) {
     if (err instanceof CloudAccountsError) throw err;
@@ -627,7 +637,7 @@ export function readLocalClaudeToken(fs, env, extraText = '', options = {}) {
   const credentialsPath = join(dirname(settingsPath), '.credentials.json');
   try {
     const credsRaw = fs.readFileSync(credentialsPath, 'utf8');
-    const credsTok = parseClaudeTokenText(credsRaw, credentialsPath, nowMs);
+    const credsTok = parseClaudeTokenText(credsRaw, credentialsPath, nowMs, { allowBareToken: false });
     if (credsTok) return credsTok;
   } catch (err) {
     if (err instanceof CloudAccountsError) throw err;
@@ -650,7 +660,7 @@ export function readClaudeTokenFromPath(fs, fromPath, options = {}) {
       const settingsRaw = fs.readFileSync(settingsPath, 'utf8');
       foundAnyFile = true;
       lastExistingPath = settingsPath;
-      const fromSettings = parseClaudeTokenText(settingsRaw, settingsPath, nowMs);
+      const fromSettings = parseClaudeTokenText(settingsRaw, settingsPath, nowMs, { allowBareToken: false });
       if (fromSettings) return fromSettings;
     } catch (err) {
       if (err instanceof CloudAccountsError) throw err;
@@ -659,7 +669,7 @@ export function readClaudeTokenFromPath(fs, fromPath, options = {}) {
       const credsRaw = fs.readFileSync(credentialsPath, 'utf8');
       foundAnyFile = true;
       lastExistingPath = credentialsPath;
-      const fromCreds = parseClaudeTokenText(credsRaw, credentialsPath, nowMs);
+      const fromCreds = parseClaudeTokenText(credsRaw, credentialsPath, nowMs, { allowBareToken: false });
       if (fromCreds) return fromCreds;
     } catch (err) {
       if (err instanceof CloudAccountsError) throw err;
@@ -675,7 +685,7 @@ export function readClaudeTokenFromPath(fs, fromPath, options = {}) {
   } catch {
     throw new CloudAccountsError(`No Claude token file found at ${fromPath}.`, { code: 'missing_local_login' });
   }
-  const token = parseClaudeTokenText(rawText, fromPath, nowMs);
+  const token = parseClaudeTokenText(rawText, fromPath, nowMs, { allowBareToken: true });
   if (token) return token;
   throw new CloudAccountsError(`No valid Claude OAuth token found in ${fromPath}.`, { code: 'invalid_local_login' });
 }
@@ -708,6 +718,7 @@ export function detectImportProvider(fs, env = process.env, options = {}) {
     if (isDir) {
       try {
         const raw = JSON.parse(fs.readFileSync(join(resolved, 'auth.json'), 'utf8'));
+        rememberCodexPayloadSecrets(raw);
         if (object(raw?.tokens)) return 'codex';
       } catch {}
       for (const fileName of ['settings.json', '.credentials.json']) {
@@ -715,9 +726,14 @@ export function detectImportProvider(fs, env = process.env, options = {}) {
           const txt = fs.readFileSync(join(resolved, fileName), 'utf8');
           try {
             const raw = JSON.parse(txt);
+            rememberClaudePayloadSecrets(raw);
             if (hasClaudeJsonCredentials(raw)) return 'claude';
           } catch {}
-          if (extractClaudeToken(txt)) return 'claude';
+          const extracted = extractClaudeToken(txt);
+          if (extracted) {
+            rememberSecrets(extracted);
+            return 'claude';
+          }
         } catch {}
       }
       return 'codex';
@@ -726,15 +742,22 @@ export function detectImportProvider(fs, env = process.env, options = {}) {
       const txt = fs.readFileSync(resolved, 'utf8');
       try {
         const raw = JSON.parse(txt);
+        rememberCodexPayloadSecrets(raw);
+        rememberClaudePayloadSecrets(raw);
         if (object(raw?.tokens)) return 'codex';
         if (hasClaudeJsonCredentials(raw)) return 'claude';
       } catch {}
-      if (extractClaudeToken(txt)) return 'claude';
+      const extracted = extractClaudeToken(txt);
+      if (extracted) {
+        rememberSecrets(extracted);
+        return 'claude';
+      }
     } catch {}
     return 'codex';
   }
   try {
     const raw = JSON.parse(fs.readFileSync(localCodexAuthPath(env), 'utf8'));
+    rememberCodexPayloadSecrets(raw);
     const t = raw?.tokens;
     if (['access_token', 'refresh_token', 'id_token', 'account_id'].every(k => typeof t?.[k] === 'string' && t[k].trim())) {
       return 'codex';
