@@ -129,6 +129,8 @@ Check also catalogs `--screen` (text URL), `--drawing` (text PATH) and Boolean f
 
 Check also catalogs `--retry` as a text option with form `pdd test --retry BATCH [--json] [--details] [--timeout MIN]`. Help says it retries only proven unstarted checks for the saved identical source, preserving completed/running results.
 
+Check also catalogs integer `--max-total-calls` (1 to 999999) and Boolean flag `--no-restart-replacement`, with the form `pdd test [PATH|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]` immediately after the ordinary `pdd test [PATH|STORY...]` form. Help says it caps logical interpreter calls across all selected Stories and any permitted service-restarted replacement (`--max-total-calls` 1..999999), or declines automatic service-restarted replacement (`--no-restart-replacement`, saved across `--read` and `--retry`), and is also accepted with `--affected` and `--journeys`. `@promptdriven/runtime-client` owns option compatibility and call-budget accounting.
+
 Try also catalogs flags --cli, --shell, --page and --save-last and optional-integer --serve (1..65535, default 8080).
 Help forms: `pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]`, `pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]`,
 `pdd simulate --save-last`. Describe real terminal commands, localhost HTTP requests and saving the last command
@@ -241,6 +243,7 @@ The ordered help-form list consists of the lines below in their displayed order,
   pdd completion bash|zsh  Print local shell completion.
   pdd workflow list [--json]  List the bundled workflows with their areas and gates.
   pdd test [PATH|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]  Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no default limit in any shell; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000.
+  pdd test [PATH|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]  Cap logical interpreter calls across all selected Stories and any permitted service-restarted replacement (--max-total-calls 1..999999), or decline automatic service-restarted replacement (--no-restart-replacement; saved across --read and --retry). Also accepted with --affected and --journeys.
   pdd test --read [BATCH|CALL_ID] [--json] [--timeout MIN]  Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work.
   pdd test --retry BATCH [--json] [--details] [--timeout MIN]  Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs.
   pdd test --files [STORY...] [--app-map PATH]  List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator's app map.
