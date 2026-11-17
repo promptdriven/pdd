@@ -22,7 +22,7 @@ Also export pure single-file helpers `lintFakeTests(text, {path})` and `lintProm
    - `prompt-code-fence-length`: a non-`mermaid` fence body exceeds 15 lines (at the opening fence line);
    - `prompt-code-fence-total`: total non-`mermaid` fenced body lines across the prompt exceed 30 lines (at the first non-`mermaid` fence line);
    - `prompt-imperative-code`: a non-JSON fence body contains imperative control-flow tokens (`export `, `function `, `const `, `let `, `if (`, `for (`, `while (`, `return `, `=>`, `def `, `impl `, `try {`) (at the first offending line in the fence).
-3. **Story criteria hygiene (`Warning: Story hygiene: <path>:<line> [<code>] …`):** Run `lintStory(text, {path, criteriaHygiene: true})` on each scoped Story file and emit one warning per reported problem (`story-missing-criteria`, `story-bloated-criteria`, `story-vague-criterion`, `story-implementation-path`, `story-code-internals`, `story-raw-digest`, `story-generic-role`).
+3. **Story criteria hygiene (`Warning: Story hygiene: <path>:<line> [<code>] …`):** Run `lintStory(text, {path, criteriaHygiene: true})` on each scoped Story file and emit one warning per reported problem (`story-missing-criteria`, `story-bloated-criteria`, `story-too-long`, `story-vague-criterion`, `story-implementation-path`, `story-code-internals`, `story-raw-digest`, `story-generic-role`).
 
 ## Dependencies
 
