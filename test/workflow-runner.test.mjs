@@ -2197,15 +2197,47 @@ test('2530: valid replay and real assertion failures both publish with canonical
 });
 
 test('2870: vector edits after prompt-space approval warn and replay without replacing the anchor',async t=>{
-  const {f,run,vector}=await replayArea(t);const original=f.record().replayBaseline;
-  vector.steps[0].checks[0].value=999;writeFileSync(join(run.root,'tests/add.json'),JSON.stringify(vector));
+  const {f,run,vector}=await replayArea(t,{extraVectorPath:'tests/add_one.json'});const original=f.record().replayBaseline;
+  const edited=structuredClone(vector);edited.steps[0].checks[0].value=999;
+  writeFileSync(join(run.root,'tests/add_one.json'),JSON.stringify(edited));
   writeFileSync(join(run.root,'value.mjs'),'export const value=2;\n');
-  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(await replayManifest(f,run,vector)));
+  const {sourceFingerprint}=await import('../src/workflow-replay.mjs');
+  const {createHash}=await import('node:crypto');
+  const step=vector.steps[0],check=step.checks[0];
+  const vecPaths=['tests/add.json','tests/add_one.json'];
+  const manifest={
+    schema_version:'pdd.replay-evidence.v1',run_id:run.runId,
+    source:{kind:'git-content-v1',sha256:sourceFingerprint(run.root)},
+    vectors:vecPaths.map(path=>({path,sha256:createHash('sha256').update(readFileSync(join(run.root,path))).digest('hex')})),
+    checks:vecPaths.map(vPath=>({vector:vPath,step_id:step.step_id,check_index:0,entry_path:step.entry_path,operation:step.operation,criterion_id:check.criterion_id,target:check.target,path:check.path,op:check.op,outcome:'pass'})),
+    operations:vecPaths.map(vPath=>({vector:vPath,step_id:step.step_id,entry_path:step.entry_path,operation:step.operation,executed:true,outcome:'returned',boundary:{kind:'function',name:'add'},command:'node test/add.vectors.test.mjs',exit_code:0})),
+    counts:{total:2,pass:2,fail:0,blocked:0,not_replayed:0},
+    mutation:{kind:'semantic',description:'Return a wrong total',command:'node test/add.vectors.test.mjs --mutant',exit_code:1,outcome:'assertion_failure',failed_checks:[{vector:'tests/add_one.json',step_id:step.step_id,check_index:0}]},
+    formal:{result:'not_applicable',scope:'src/add_one.mjs',reason:'checked add_one & bounds',control_outcome:'not_run'}
+  };
+  writeFileSync(join(run.runDir,'replay-evidence.json'),JSON.stringify(manifest));
   const out=await stepDone({step:'verify',summary:'PASS',cwd:run.root},f.agentPorts());assert.equal(out.exitCode,0,out.message);
   assert.match(f.prs[1].body,/Code replay: PASS/);assert.match(f.prs[1].body.replaceAll('&#47;','/'),/warning: Saved test values changed:.*\/value.*3.*999/);
-  assert.match(f.prs[1].body,/&#47;/);
-  assert.match(out.message,/warning: Saved test values changed: tests\/add\.json \/steps\/0\/checks\/0\/value 3 -> 999/);assert.doesNotMatch(out.message,/&#47;/);
+  assert.match(f.prs[1].body,/&#47;/);assert.match(f.prs[1].body,/add\\_one/);assert.match(f.prs[1].body,/&amp;/);
+  assert.match(out.message,/warning: Saved test values changed: tests\/add_one\.json \/steps\/0\/checks\/0\/value 3 -> 999/);
+  assert.match(out.message,/Current vector: tests\/add_one\.json/);
+  assert.match(out.message,/scope: src\/add_one\.mjs; reason: checked add_one & bounds/);
+  assert.doesNotMatch(out.message,/&#47;|&amp;|\\_/);
   assert.deepEqual(f.record().replayBaseline,original);
+
+  // Small-change terminal status (`runStatus`) also formats formal metadata without Markdown/HTML escapes (#2953).
+  const sc=await fixture(t,{name:'small-change',agent:'codex'});
+  assert.equal((await sc.run()).exitCode,0);
+  const scRun=sc.record();
+  scRun.done.formal={at:sc.clock,summary:'formal done',smallChange:{
+    checklist:{status:'pass'},
+    formal:{status:'recorded',result:'not_applicable',scope:'scripts/sync_pypi.mjs',reason:'npm & PyPI parity',control_outcome:'not_run'}
+  }};
+  writeFileSync(join(scRun.runDir,'status.json'),JSON.stringify(scRun));
+  const view=await runStatus({ref:'17',cwd:sc.source},sc.ports);
+  assert.equal(view.exitCode,0,view.message);
+  assert.match(view.message,/scope: scripts\/sync_pypi\.mjs; reason: npm & PyPI parity/);
+  assert.doesNotMatch(view.message,/&#47;|&amp;|\\_/);
 });
 
 test('2530: an open code PR refreshes stale evidence and keeps its ownership marker',async t=>{

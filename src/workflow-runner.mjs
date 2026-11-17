@@ -5478,7 +5478,7 @@ function savedRuntimeEvidence(run, results = []) {
 function runtimeStatusLines(evidence, {smallChange = true} = {}) {
   const value = evidence.runtimeCoverage;
   const scope = smallChange ? evidence.smallChange : null;
-  const small = scope ? [`Issue checklist: ${scope.checklist?.status ?? 'missing'}`, formatFormalEvidence(scope.formal, true)] : [];
+  const small = scope ? [`Issue checklist: ${scope.checklist?.status ?? 'missing'}`, formatFormalEvidence(scope.formal, true, {terminal: true})] : [];
   return [...small, ...(value ? [`Runtime coverage: ${value.checkable} of ${value.total} prompts checkable, ${value.native_only} native-only`,
     ...(evidence.nativeOnly ?? []).flatMap(row => (row.prompts ?? []).map(prompt => `${row.test} ${row.state}: ${prompt.path}: ${oneLine(prompt.reason)}`))] : [])];
 }

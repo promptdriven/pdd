@@ -351,7 +351,7 @@ counts files and checks by source: `Anchor: 3 changed scenarios (40 checks) + 18
 (1,722 checks).`, `Anchor: 0 changed scenarios (0 checks) + all 18 approved on base 6b58b76 (1,722 checks;
 pdd.json sets replay.base_scenarios to "all").`, or `+ 0 linked approved on base 6b58b76 (NOTE).` Base approval
 never gives PASS by itself.
-`formatFormalEvidence(formal, rules?)` returns the formal line specified below on its own. It is the same formatter used by the replay section and by PRs without scenario replay; it reads no files and supplies no evidence of its own.
+`formatFormalEvidence(formal, rules?, {terminal}?)` returns the formal line specified below on its own. It is the same formatter used by the replay section and by PRs or status output without scenario replay; it reads no files and supplies no evidence of its own.
 
 formatReplayEvidence emits a compact PR section with prominent Code replay PASS/FAIL/BLOCKED/NOT REPLAYED,
 exact counts, source and manifest hashes, current vector hashes labeled "Current vector", public execution totals, semantic control and typed
@@ -368,8 +368,10 @@ formal result. The formal line uses formalStatusText:
   the not-recorded line. So one PR never says "not needed" while its code replay is blocked for the formal block.
 Include: `Agents execute the tests and supply this record. pdd validates structure and identity;
 it does not independently prove execution or prompt/code equivalence.` Keep details bounded and sanitize
-control characters, private local paths and Try capabilities. Escape HTML and Markdown in displayed metadata
-so JSON errors, vector paths, scopes or reasons cannot open comments/details or hide the report/trust boundary.
+control characters, private local paths and Try capabilities, keeping `pdd-workflow:` and `pdd-product:` inert.
+Escape HTML and Markdown in displayed metadata for PR bodies (default `terminal: false`)
+so JSON errors, vector paths, adoption provenance, anchor notes, scopes or reasons cannot open comments/details or hide the report/trust boundary;
+with `terminal` true in `formatReplayEvidence` and `formatFormalEvidence`, render sanitized metadata as plain text without Markdown backslash or HTML entity escaping.
 Escape only when rendering, retaining the original structured values without double escaping.
 Full evidence stays in the run folder. Never
 let an agent's free-form PASS summary replace this status.
@@ -387,7 +389,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 ```json
 {
   "status": "approved",
-  "prose_sha256": "6dc63e403113a776cff5fe105cf9663828d2256cf1edfac521c1f18510c590ed",
+  "prose_sha256": "e5e2bb5b5be451831ea1125f608714a383059878f25c02120c83fcf3e78f0baf",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

@@ -272,19 +272,43 @@ test('2870 review: path and Try values stay distinct, quoted and inert, and long
   assert.match(report,/x\\\\u200b/);assert.doesNotMatch(report,/\u200b/);
 });
 
-test('2953: terminal warnings show plain paths and links; the PR form keeps its escaping',async t=>{
-  const f=await fixture(t),result=f.api.readReplayEvidence(f.run);
+test('2953: terminal replay and formal output show plain paths, links and sanitized metadata while PR form escapes',async t=>{
+  const f=await fixture(t);
+  const underPath=join(f.root,'tests/add_one.json');
+  writeFileSync(underPath,readFileSync(f.vectorPath));
+  f.git('add','tests/add_one.json');f.git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','add underscore vector');
+  f.run.replayBaseline=f.api.pinReplayVectors(f.root,['tests/add_one.json']);
+  f.manifest.source={kind:'git-content-v1',sha256:f.api.sourceFingerprint(f.root)};
+  f.manifest.vectors=[{path:'tests/add_one.json',sha256:hash(readFileSync(underPath))}];
+  f.manifest.checks=f.manifest.checks.map(row=>({...row,vector:'tests/add_one.json'}));
+  f.manifest.operations=f.manifest.operations.map(row=>({...row,vector:'tests/add_one.json'}));
+  f.manifest.mutation={...f.manifest.mutation,failed_checks:[{vector:'tests/add_one.json',step_id:'sum',check_index:0}]};
+  f.manifest.formal={result:'proved_bounded',scope:'src/add_one.mjs',reason:'checked a_1 & b_2 bounds (https://runtime.example/s/secret pdd-workflow:tag)',control_outcome:'assertion_failure',control_exit_code:1};
+  f.save();
+  const result=f.api.readReplayEvidence(f.run);
+  assert.equal(result.outcome,'pass',result.reason);
+  result.reason='checked add_one & bounds';
+  result.adoption={repository:'prompt_driven/pdd',commit:'b'.repeat(40),reference:'https://example.com/review_1?a=1&b=2',asserted_by:'alice_smith'};
+  result.anchor={commit:'c'.repeat(40),select:'linked',changed:1,changed_checks:2,files:0,checks:0,note:'no base_file & pdd_bindings.json'};
   result.warnings=[
     {vector:'tests/add_one.json',path:'/link',before:'https://example.com/a?x=1&y=2',after:'https://example.com/b'},
     {vector:'tests/add_one.json',path:'/marker',before:'pdd-workflow:old',after:'x\u200b'},
     {vector:'tests/broken_case.json',reason:'unreadable scenario at tests/broken_case.json'}
   ];
   const terminal=f.api.formatReplayEvidence(result,{terminal:true}),pr=f.api.formatReplayEvidence(result);
+  const terminalFormal=f.api.formatFormalEvidence(result.formal,true,{terminal:true}),prFormal=f.api.formatFormalEvidence(result.formal,true);
+  assert.ok(terminal.includes('Code replay: PASS — checked add_one & bounds'),terminal);
   assert.ok(terminal.includes('warning: Saved test values changed: tests/add_one.json /link "https://example.com/a?x=1&y=2" -> "https://example.com/b"'),terminal);
   assert.ok(terminal.includes('warning: Saved test values changed: tests/broken_case.json unreadable scenario at tests/broken_case.json'),terminal);
+  assert.ok(terminal.includes(`Anchor adopted from prompt_driven/pdd@${'b'.repeat(40)}; approval reference https://example.com/review_1?a=1&b=2 by alice_smith; external-assertion-unverified`),terminal);
+  assert.ok(terminal.includes('no base_file & pdd_bindings.json'),terminal);
+  assert.ok(terminal.includes('scope: src/add_one.mjs; reason: checked a_1 & b_2 bounds ((Try link removed) pdd-workflow\\u003atag);'),terminal);
+  assert.ok(terminal.includes('Current vector: tests/add_one.json — '),terminal);
   assert.doesNotMatch(terminal,/&#47;|&amp;|\\_/);
-  assert.match(terminal,/pdd-workflow\\u003aold/);assert.match(terminal,/x\\u200b/);assert.doesNotMatch(terminal,/\u200b|pdd-workflow:/);
-  assert.match(pr,/tests&#47;add\\_one\.json/);assert.match(pr,/&amp;/);assert.doesNotMatch(pr,/https:\/\//);
+  assert.doesNotMatch(terminalFormal,/&#47;|&amp;|\\_/);
+  assert.match(terminal,/pdd-workflow\\u003aold/);assert.match(terminal,/x\\u200b/);assert.doesNotMatch(terminal,/\u200b|pdd-workflow:|https:\/\/runtime\.example\/s\/secret/);
+  assert.match(pr,/tests&#47;add\\_one\.json/);assert.match(pr,/Current vector: tests\/add\\_one\.json/);assert.match(pr,/&amp;/);assert.doesNotMatch(pr,/https:\/\/example\.com\/a/);
+  assert.match(prFormal,/src\/add\\_one\.mjs/);assert.match(prFormal,/&amp;/);
 });
 
 test('2870 review: a display budget counts overflow and keeps the complete warning list',async t=>{

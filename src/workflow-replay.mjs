@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 781475ea2cd58139e5b7590b7798f53d7fece5c39e6fc7cf58ac6d9892da3133).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 0db4cd06a931f2ed0bacbe8a9ae7aec976b7637fdf312c5023048d376c6edea8).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -30,8 +30,10 @@ const sanitize = (value,limit=1000) => cleanText(String(value ?? '')).replace(/[
   .replace(/https?:\/\/[^\s]+\/s\/[^\s]+/g,'(Try link removed)');
 const adoptionCause = value => sanitize(value).replace(/\b(?:Bearer|Basic)\s+[^\s]+/gi,'credential removed').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b/g,'credential removed').replace(/https?:\/\/[^\s]+/g,'(URL removed)').replace(/(?<![\w./-])(?:[A-Za-z]:[\\/]|\/)[^\s,;:]+/g,'(path removed)').replace(/(?:token|password|authorization|credential)[=: ]+[^\s]+/gi,'credential removed');
 const inertMarkers = value => value.replaceAll('pdd-workflow:', 'pdd-workflow\\u003a').replaceAll('pdd-product:', 'pdd-product\\u003a');
-const render = (value,limit=1000) => inertMarkers(sanitize(value,limit)).replace(/[\\`*_[\]()|]/g,'\\$&')
-  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const render = (value,limit=1000,terminal=false) => {
+  const cleaned = inertMarkers(sanitize(value,limit));
+  return terminal ? cleaned : cleaned.replace(/[\\`*_[\]()|]/g,'\\$&').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+};
 const formalResults = ['proved_bounded','proved_solver','failed','not_run','not_applicable'];
 const FORMAL_LABEL = {proved_bounded:'Proved (bounded)',proved_solver:'Proved (solver)',failed:'Failed + counterexample',not_run:'Not run',not_applicable:'Not applicable'};
 const CONTROL_WORDS = {assertion_failure:'assertion failure',crash:'crash',survived:'survived',not_run:'not run'};
@@ -436,8 +438,8 @@ function anchorFacts(baseline) {
 const thousands=count=>String(count).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 const checkCount=count=>`${thousands(count)} check${count===1?'':'s'}`;
 // Count files and checks by source: changed in the run, linked on the base, or all on the base.
-const anchorLine=a=>`Anchor: ${plural(a.changed,'changed scenario')} (${checkCount(a.changed_checks)}) + ${a.select==='all'?`all ${a.files}`:`${a.files} linked`} approved on base ${a.commit.slice(0,7)}${a.files
-  ? ` (${checkCount(a.checks)}${a.select==='all'?'; pdd.json sets replay.base_scenarios to "all"':''}${a.note?`; ${render(a.note,Infinity)}`:''}).` : ` (${render(a.note,Infinity)}).`}`;
+const anchorLine=(a,{terminal=false}={})=>`Anchor: ${plural(a.changed,'changed scenario')} (${checkCount(a.changed_checks)}) + ${a.select==='all'?`all ${a.files}`:`${a.files} linked`} approved on base ${a.commit.slice(0,7)}${a.files
+  ? ` (${checkCount(a.checks)}${a.select==='all'?'; pdd.json sets replay.base_scenarios to "all"':''}${a.note?`; ${render(a.note,Infinity,terminal)}`:''}).` : ` (${render(a.note,Infinity,terminal)}).`}`;
 
 const emptyCounts = (total=0) => ({total,pass:0,fail:0,blocked:0,not_replayed:total});
 const exactSnapshot = vector => vector?.snapshot === undefined ? undefined : withExactIntegers(vector.snapshot, vector.exact_integers);
@@ -651,28 +653,29 @@ function replayRecord(run, paths) {
   } catch (e) { return {...result,outcome:'blocked',reason:e.code==='ENOENT' ? 'Missing replay-evidence.json or an original vector; code replay is blocked.' : sanitize(e.message || 'Malformed replay evidence.')}; }
 }
 // "not needed" only when no Story of the run has `## Rules to check` and no scenario vectors need the block.
-export function formatFormalEvidence(value, rules) {
+export function formatFormalEvidence(value, rules, {terminal=false} = {}) {
   const formal = formalStatus(value), shown = formalStatusText(formal, rules);
-  if (formal.status === 'recorded') return `Formal check (agent reported): recorded — ${FORMAL_LABEL[formal.result]}; scope: ${render(formal.scope)}; reason: ${render(formal.reason)}; control: ${CONTROL_WORDS[formal.control_outcome] ?? 'not given'}${exit(formal.control_exit_code) ? ` (exit ${formal.control_exit_code})` : ''}.`;
+  if (formal.status === 'recorded') return `Formal check (agent reported): recorded — ${FORMAL_LABEL[formal.result]}; scope: ${render(formal.scope,1000,terminal)}; reason: ${render(formal.reason,1000,terminal)}; control: ${CONTROL_WORDS[formal.control_outcome] ?? 'not given'}${exit(formal.control_exit_code) ? ` (exit ${formal.control_exit_code})` : ''}.`;
   if (shown.notNeeded) return `Formal check: not needed (no Rules to check in the Story).${formal.status === 'missing' ? '' : ` The formal block is not accepted: ${shown.words} — ${shown.cause}.`}`;
   return `Formal check (agent reported): ${shown.words} — ${shown.detail}. Repair: ${shown.repair}.${shown.note ? ` ${shown.note}` : ''}`;
 }
 export function formatReplayEvidence(result, {maxCharacters=Infinity, rules, terminal=false} = {}) {
+  const show=(value,limit=1000)=>render(value,limit,terminal);
   const counts=result.counts??emptyCounts(), emptyPass=result.outcome==='pass' && !(Number.isSafeInteger(counts.total) && counts.total>0);
   const label=String(emptyPass?'blocked':result.outcome).replace('_',' ').toUpperCase();
   const failedFormal=formalStatus(result.formal).status==='recorded' && result.formal.result==='failed';
   const head=[ ...(counts.fail ? [`✗ ${counts.fail} replay assertions fail`] : []), ...(failedFormal ? ['✗ Formal check failed (counterexample in replay-evidence.json).'] : []),
-    `Code replay: ${label} — ${render(emptyPass?'Replay cannot pass with zero checks.':result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`];
+    `Code replay: ${label} — ${show(emptyPass?'Replay cannot pass with zero checks.':result.reason)}`,`${counts.total} checks: ${counts.pass} passed, ${counts.fail} failed, ${counts.blocked} blocked, ${counts.not_replayed} not replayed.`];
   const [shownIdentity,shownText]=terminal ? [plainIdentity,plainValue] : [reviewIdentity,reviewText];
   const warnings=(result.warnings??[]).map(w=>`warning: Saved test values changed: ${shownIdentity(w.vector)} ${w.reason ? shownIdentity(w.reason) : `${shownIdentity(w.path)} ${shownText(typeof w.exact?.before==='string'?w.exact.before:changeValue(w.before))} -> ${shownText(typeof w.exact?.after==='string'?w.exact.after:changeValue(w.after))}`}`);
   const tail=[...(warnings.length ? ['Saved-value changes are advisory; the checker or person decides.'] : []),
-    ...(result.adoption ? [`Anchor adopted from ${render(result.adoption.repository)}@${render(result.adoption.commit)}; approval reference ${render(result.adoption.reference)} by ${render(result.adoption.asserted_by)}; external-assertion-unverified`] : []),
-    ...(result.anchor ? [anchorLine(result.anchor)] : []),
+    ...(result.adoption ? [`Anchor adopted from ${show(result.adoption.repository)}@${show(result.adoption.commit)}; approval reference ${show(result.adoption.reference)} by ${show(result.adoption.asserted_by)}; external-assertion-unverified`] : []),
+    ...(result.anchor ? [anchorLine(result.anchor,{terminal})] : []),
     `Public-boundary operations: ${result.operations?.executed??0}/${result.operations?.total??0} executed.`,
     `Semantic mutation control: ${result.mutation?.outcome??'not recorded'}${result.mutation ? ` (${result.mutation.failures} assertion failures)` : ''}.`,
-    formatFormalEvidence(result.formal, rules),
+    formatFormalEvidence(result.formal, rules, {terminal}),
     `Source: ${result.source?.sha256??'unconfirmed'}. Manifest SHA256: ${result.manifest_sha256??'unavailable'}.`,
-    ...(result.vectors??[]).slice(0,12).map(v=>`Current vector: ${render(v.path)} — ${sha(v.sha256)?v.sha256:'unconfirmed'}.`),
+    ...(result.vectors??[]).slice(0,12).map(v=>`Current vector: ${show(v.path)} — ${sha(v.sha256)?v.sha256:'unconfirmed'}.`),
     ...((result.vectors?.length??0)>12 ? [`${result.vectors.length-12} more current vector identities are in the full manifest.`] : []),
     'Agents execute the tests and supply this record. pdd validates structure and identity; it does not independently prove execution or prompt/code equivalence.',
     'Full evidence: replay-evidence.json in the run folder.'];
