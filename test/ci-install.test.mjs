@@ -26,13 +26,15 @@ const credentialNames = [
 function fixtureLock(resolved) {
   const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const runtimePackage = runtimeVersion().package;
-  const runtimeSpec = lock.packages[''].dependencies[runtimePackage];
   const packageKey = `node_modules/${runtimePackage}`;
+  const packageVersion = lock.packages[packageKey].version;
+  const runtimeSpec = resolved.startsWith('https://registry.npmjs.org/')
+    ? packageVersion : lock.packages[''].dependencies[runtimePackage];
   return JSON.stringify({
     ...lock,
     packages: {
       '': { ...lock.packages[''], dependencies: { [runtimePackage]: runtimeSpec } },
-      [packageKey]: { ...lock.packages[packageKey], version: runtimeSpec, resolved },
+      [packageKey]: { ...lock.packages[packageKey], version: packageVersion, resolved },
     },
   });
 }

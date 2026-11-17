@@ -72,6 +72,18 @@ The seam holds no mutable request state and loads zero additional pdd or Runtime
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "f42c2562f56a4499dde68e293db4081a441dc4da69a46dddbff007aa355be360","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "a2ef9da09f51509720270f2d3b30fecb64f3b1935b2f5b9e40bd00eea9a951ab","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>
+
+## Owner-local host capabilities (draft, client 34)
+
+For runCheck/runTry and their package-compatible wrappers, lazily supply `ports.liveLocal` with host callbacks `readManifest`, `manifestInSource`, `execute`, `confirm`, `journal`, `randomUUID`, `sleep`, `redact`, `resolveExecutable`, `environment`. Preserve every explicit override with nullish fallback; load no process/filesystem adapters for help/version/ordinary simulated invocations. The new Runtime [bridge](https://github.com/promptdriven/runtime-client/issues/34) owns safety and lifecycle; this seam only supplies filesystem/process/terminal primitives and passes typed options unchanged. Do not implement a parallel CLI command policy.
+
+Read manifest outside uploaded source with strict JSON parsing and duplicate-key refusal. Resolve executable once from the owner's PATH and keep the absolute resolution local. Execute with shell false and fixed process options; use the existing owner environment/config by reference, never write auth or shared config. Supply stdin/stdout terminal facts from real streams, explicit per-call affirmative confirmation, bounded/cancellable execution, private dispatch journal storage, and shared secret-redaction registry before any upload. Registry includes environment secret names, gh credentials read for authentication, and explicit caller secrets; never serialize its values. The Runtime bridge revalidates host inputs and remains the policy owner. Host callback signatures and admitted wire shapes are declared by the Runtime bridge/policy contracts, not a CLI-owned alternative. Full-package offline tests and a physical changed-client CLI invocation are separate required evidence.
+
+The local process/filesystem/terminal implementations are owned by [Local command host primitives](live-local-host.prompt.md). Load that host module only on a live-local invocation; fill each missing liveLocal callback with a nullish default and preserve explicit callback/terminal overrides. Use the same redaction registry as the enclosing Runtime call. Ordinary invocations do not create host ports.
+
+Forward the package public `executeLocalCommand`, `validateLocalManifest` and `validateLocalRequest` exports without changing their policy ports or results. The public `createLocalCommandBridge(input, ports)` wrapper lazily fills missing host capabilities just as live runCheck/runTry do, then delegates to Runtime. Preserve deferred package loading.
+
+Package-surface compatibility includes forwarding `evaluateCheckBudget`, `failedCheckCount`, `observeTryCall` and `providerText` with their existing package signatures and deferred behavior.

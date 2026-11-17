@@ -1686,3 +1686,55 @@ association cannot support a fit claim. An interpreter without
 `lint-call-preflight` support refuses an explicitly selected lint cap before
 submission. Ordinary lint without a cap remains available. Local lint does not
 accept a call cap. Reading a saved standalone lint never starts a paid check.
+
+
+Owner-local commands use an explicit reviewed JSON manifest.
+
+| Command | Purpose |
+| --- | --- |
+| `pdd test [STORY...] --live-local --command-manifest PATH [--allow-live-writes] [--max-calls N]` | Check Stories with fixed commands on this machine under the current login. |
+| `pdd simulate [STORY] --live-local --command-manifest PATH [--allow-live-writes] [--max-calls N]` | Keep the local command bridge running in the foreground. |
+
+Commands default to read access. Review each template and its access classification. Write calls require `--allow-live-writes` and a fresh real terminal confirmation for each call. Automatic approvals and piped input cannot confirm writes. Credentials stay on this machine. Command output is redacted before upload, and live reports are private.
+
+Live simulation accepts `--no-open` and refuses `--no-wait`. Keep its process running to serve later Simulator calls. Use the existing `pdd simulate --stop [STORY]` command to stop the session, or interrupt the foreground process. The AI cap `--max-calls` is separate from the local command cap.
+
+Live-local mode refuses target-code execution, read/retry, file or binding inspection, affected/journey/product selections, stop/save-last and standalone lint before source upload. Ordinary saved-result reads remain available without starting a local bridge.
+
+For a Story that declares a `github.read` resource operation, a read-only manifest can fix the whole command:
+
+```json
+{
+  "schema_version": "pdd.live-local-manifest.v1",
+  "selection": {
+    "schema_version": "prompt-runtime.resource-selection.v2",
+    "resources": [
+      {"resource": "github", "mode": "real", "location": "local", "binding_id": "github"}
+    ]
+  },
+  "commands": [{
+    "binding_id": "github",
+    "resource": "github",
+    "operation": "read",
+    "executable": "gh",
+    "argv": [
+      {"literal": "repo"},
+      {"literal": "view"},
+      {"literal": "promptdriven/pdd"},
+      {"literal": "--json"},
+      {"literal": "name"}
+    ],
+    "parameters": [],
+    "stdin": {"literal": ""},
+    "cwd": ".",
+    "environment": ["GH_TOKEN"],
+    "timeout_ms": 10000,
+    "stdout_limit_bytes": 4096,
+    "stderr_limit_bytes": 4096
+  }]
+}
+```
+
+Keep the manifest in a private local file outside selected upload files and pass its path with `--command-manifest`. Environment entries contain variable names. Their values and the local executable path stay on this machine. Existing home and command configuration references remain local. The resource selection must cover the Story's declared resources. Every real local resource needs a reviewed command for each selected operation. Omitted `access` means `read`.
+
+Typed parameters may fill declared argument slots. They cannot choose executable names, flags, stdin, working directories, environment names or process limits. String parameters must have an enum, pattern or length bound. Shell and interpreter executables are refused.

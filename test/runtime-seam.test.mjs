@@ -2732,10 +2732,10 @@ test('SEAM25: runtime client uses the exact public npm release', () => {
   const lockfile = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const name = '@promptdriven/runtime-client';
   const locked = lockfile.packages[`node_modules/${name}`];
-  assert.equal(manifest.dependencies[name], '1.0.0');
-  assert.equal(lockfile.packages[''].dependencies[name], '1.0.0');
-  assert.equal(locked.version, '1.0.0');
-  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.0\.0\.tgz$/);
+  assert.equal(manifest.dependencies[name], '1.1.0');
+  assert.equal(lockfile.packages[''].dependencies[name], '1.1.0');
+  assert.equal(locked.version, '1.1.0');
+  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.1\.0\.tgz$/);
   assert.match(locked.integrity, /^sha512-/);
   assert.doesNotMatch(locked.resolved, /^(?:github:|git\+)/);
 });
