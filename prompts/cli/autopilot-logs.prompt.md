@@ -20,13 +20,18 @@ terminal without knowing internal state folders or touching running jobs.
   (both `ESRCH` and `EPERM`) returns `false` so system init (`pid 1`) or another
   user's process is never reported as a running Autopilot worker; when a job
   token is present, `ps` command output must also include that token.
-- **End-to-end secret redaction and line-aligned UTF-8 reads**:
+- **End-to-end secret redaction, numeric coercion, and line-aligned UTF-8 reads**:
   Derive caller secrets with `knownSecretValues(env)` (including injected
-  `input.env`), strip ANSI/control characters, and run `redactSecrets(..., secrets)`
+  `input.env`), strip ANSI and control characters (`CTRL_RE`, including before
+  JSONL parsing in `formatWorkerLogLine`), and run `redactSecrets(..., secrets)`
   across human snapshots, `--follow` streams, and `--json` payloads — covering
   log lines, worker metadata (`agentKind`, `signal`, `wakeAt`, `holder`,
   `verdict`, `head`, `repo`, `gitRoot`) and file path strings (`logPaths`,
   `evidencePaths`, `streams[].path`, `suite.logPath`, `suite.receiptPath`).
+  Coerce `turn.completed` token counters (`input_tokens`, `output_tokens`) and
+  exit codes individually to finite numbers and guard every epoch timestamp with
+  `Number.isFinite(ts) && Math.abs(ts) <= 8.64e15` before `new Date(ts).toISOString()`
+  so malformed JSON fields never leak raw strings or throw `RangeError`.
   Align tail and incremental follow reads on `\n` (`0x0a`) byte boundaries
   (expanding read windows up to 16 MiB and ignoring a trailing EOF newline when
   locating the start of the tail window) so multi-byte UTF-8 codepoints and
@@ -173,9 +178,14 @@ waiting or stale state:
 
 ## Dependencies
 
-- [Autopilot core](autopilot-core.prompt.md): required context for `jobs/N.json`,
-  `core.json`, `logs/` and `history.jsonl` state shapes.
-- [Shared full-suite queue](test-suite-queue.prompt.md): required context for
-  read-only `readSuiteProgress` queue and validation-log inspection.
 - [Secret redaction](secret-redaction.prompt.md): required for redacting
   displayed log lines, JSON payloads, metadata and path summaries.
+
+## Caller navigation
+
+[Repository Autopilot settings](autopilot.prompt.md) and the
+[CLI](pdd-cli.prompt.md) route `pdd autopilot logs` here;
+[Autopilot core](autopilot-core.prompt.md) owns the `jobs/N.json`, `core.json`,
+`logs/` and `history.jsonl` files that this viewer reads, and
+[Shared full-suite queue](test-suite-queue.prompt.md) supplies the read-only
+`readSuiteProgress` queue and validation-log view.

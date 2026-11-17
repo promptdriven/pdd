@@ -766,3 +766,88 @@ test('3475: --follow handles stdout EPIPE cleanly, reuses gitRoot across polls, 
   assert.equal(pollCount, 3, 'maxDurationMs must bound unattended polling');
   assert.match(boundedOut.text, /Reached follow time limit; detached from issue #88/);
 });
+
+test('3475: sanitizes non-numeric turn.completed token fields, strips CTRL_RE, and guards corrupt out-of-range timestamps', async t => {
+  const secret = 'ghp_SuperSecretTokenValue1234567890ABCD';
+  // 1. Control-only line strips to empty; JSONL surrounded by control chars parses cleanly
+  assert.equal(formatWorkerLogLine('\x00\x07   \x1f'), '');
+  assert.equal(
+    formatWorkerLogLine('\x00\x07{"type":"thread.started","model":"gpt-5.4"}\x08'),
+    '[session] started (gpt-5.4)',
+  );
+
+  // 2. turn.completed coerces non-numeric token fields individually so strings/secrets/\n never leak
+  const poisonedTurn = JSON.stringify({
+    type: 'turn.completed',
+    usage: { input_tokens: 120, output_tokens: `${secret}\nINJECTED\x07` },
+  });
+  assert.equal(formatWorkerLogLine(poisonedTurn, [secret]), '[turn] completed (in 120, out 0 tokens)');
+  const poisonedBoth = JSON.stringify({
+    type: 'turn.completed',
+    usage: { input_tokens: `${secret}`, output_tokens: 'not-a-number' },
+  });
+  assert.equal(formatWorkerLogLine(poisonedBoth, [secret]), '[turn] completed');
+
+  // 3. Corrupt out-of-range timestamps (> 8.64e15 / -1e25) never throw RangeError: Invalid time value
+  const sb = makeSandbox(t, { mode: 'observe' });
+  const nowMs = Date.parse('2026-11-17T21:30:00Z');
+  writeFileSync(join(sb.coreRoot, 'core.json'), JSON.stringify({
+    pausedUntil: 9e20,
+    streak: 4,
+    poolOut: { resetAt: 1e25 },
+    ciDown: { reason: 'queued', since: -1e25 },
+  }));
+  const log99 = join(sb.coreRoot, 'logs', '99-build.log');
+  const exit99 = join(sb.coreRoot, 'logs', '99-build.exit.json');
+  writeFileSync(log99, `${poisonedTurn}\n`);
+  writeFileSync(exit99, JSON.stringify({ code: `${secret}\nbad-code`, at: 9e20 }));
+  writeFileSync(join(sb.coreRoot, 'jobs', '99.json'), JSON.stringify({
+    issue: 99,
+    title: 'Corrupt timestamps',
+    phase: 'pr',
+    pr: 3500,
+    head: 'abcdef123456',
+    started: 9e20,
+    lane: { state: 'waiting', holder: 3499, since: 9e20 },
+    runtimeWait: { state: 'waiting', until: -9e20 },
+    stepStop: { poolExhausted: true, until: 1e30 },
+    agent: { pid: 9901, log: log99, exit: exit99, started: 9e20, watch: { at: 9e20 } },
+  }));
+  writeFileSync(
+    join(sb.coreRoot, 'history.jsonl'),
+    `${JSON.stringify({ issue: 98, outcome: 'merged', pr: 3498, at: 9e20, text: 'Done' })}\n`,
+  );
+
+  const outList = sink();
+  const codeList = await runPdd(['autopilot', 'logs'], {
+    stdout: outList,
+    stderr: sink(),
+    cwd: sb.gitRoot,
+    autopilotLogsPorts: {
+      git: sb.git,
+      stateRoot: sb.stateRoot,
+      now: () => nowMs,
+      isProcessAlive: () => false,
+      readSuite: () => ({ state: 'waiting', position: 1, queuedAt: 9e20 }),
+    },
+  });
+  assert.equal(codeList, 0);
+  assert.equal(outList.text.includes(secret), false);
+
+  const outIssue = sink();
+  const codeIssue = await runPdd(['autopilot', 'logs', '99'], {
+    stdout: outIssue,
+    stderr: sink(),
+    cwd: sb.gitRoot,
+    autopilotLogsPorts: {
+      git: sb.git,
+      stateRoot: sb.stateRoot,
+      now: () => nowMs,
+      isProcessAlive: () => false,
+      readSuite: () => ({ state: 'waiting', position: 1, queuedAt: 9e20 }),
+    },
+  });
+  assert.equal(codeIssue, 0);
+  assert.equal(outIssue.text.includes(secret), false);
+  assert.match(outIssue.text, /\[turn\] completed \(in 120, out 0 tokens\)/);
+});

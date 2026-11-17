@@ -50,6 +50,7 @@ test('3496: root help is concise, grouped human-first, 80-column wrapped in its 
   // Core commands come right at the top, not buried behind metrics/internals
   assert.ok(baseline.indexOf('  pdd setup [--yes]') < baseline.indexOf('  pdd metrics'));
   assert.ok(baseline.indexOf('  pdd autopilot logs [ISSUE] [-f]') > autopilotIdx);
+  assert.ok(baseline.includes('  pdd --version | -V | pdd -VV   Show CLI version (and interpreter build).'));
 
   // No duplicate approval heredoc blocks or stale removed-engine migration note on root help
   assert.doesNotMatch(baseline, /<<'PDD_SAID'/);

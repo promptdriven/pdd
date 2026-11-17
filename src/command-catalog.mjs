@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 52daaeaf210c1bc32a37bb9536cf7226b1f32f034d3dfbce4765d63f4beec793).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: db8d0050562a42604641c6dfcaa572363a7b81e7883bef6e9b1807402ff6db68).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -66,7 +66,7 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
       "  pdd completion bash|zsh        Print shell tab-completion script.",
       "  pdd --help | pdd <cmd> --help  Show this overview or full command help.",
       "  pdd help prompting             Show the 5-step PDD authoring summary.",
-      "  pdd --version | -V | -VV       Show CLI version (and interpreter build).",
+      "  pdd --version | -V | pdd -VV   Show CLI version (and interpreter build).",
     ]),
   ]),
   focusedHelpLines: Object.freeze([

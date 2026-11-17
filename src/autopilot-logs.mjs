@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-logs.prompt.md (sha256: a237e3bf4be79bee24287f40095e81635eea35f44573885143660dc29ba5056d).
+// Generated from prompts/cli/autopilot-logs.prompt.md (sha256: 85feb34d06c1be3f4f34af79c1a95b27bc23db5d24d2c6b57416a07bc50ee035).
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -18,10 +18,14 @@ const DEFAULT_MAX_DURATION_MS = 60 * 60 * 1000;
 const MAX_CMD_PREVIEW_LINES = 6;
 const READ_CHUNK_LIMIT = 512 * 1024;
 const MAX_LINE_WINDOW_BYTES = 16 * 1024 * 1024;
+const MAX_DATE_MS = 8.64e15;
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const named = value => typeof value === 'string' && value.trim().length > 0;
 const validPid = value => Number.isSafeInteger(value) && value > 1;
+const validEpochMs = ts => typeof ts === 'number' && Number.isFinite(ts) && Math.abs(ts) <= MAX_DATE_MS;
+const validPositiveEpochMs = ts => validEpochMs(ts) && ts > 0;
+const safeIsoTimestamp = ts => validEpochMs(ts) ? new Date(ts).toISOString() : null;
 
 function resolveSecrets(secretsInput) {
   if (Array.isArray(secretsInput)) return knownSecretValues(process.env, secretsInput);
@@ -68,7 +72,7 @@ function shortSha(sha, secrets = []) {
 }
 
 function formatAge(nowMs, atMs) {
-  if (!Number.isFinite(atMs) || atMs <= 0) return 'unknown';
+  if (!validPositiveEpochMs(atMs)) return 'unknown';
   const diffSec = Math.max(0, Math.round((nowMs - atMs) / 1000));
   if (diffSec < 60) return `${diffSec}s ago`;
   const diffMin = Math.floor(diffSec / 60);
@@ -79,7 +83,7 @@ function formatAge(nowMs, atMs) {
 }
 
 function formatStamp(nowMs, atMs) {
-  if (!Number.isFinite(atMs) || atMs <= 0) return 'unknown';
+  if (!validPositiveEpochMs(atMs)) return 'unknown';
   return `${formatAge(nowMs, atMs)} (${new Date(atMs).toISOString()})`;
 }
 
@@ -172,7 +176,7 @@ function previewCommandOutput(output, secrets = []) {
 export function formatWorkerLogLine(rawLine, secretsInput = []) {
   if (typeof rawLine !== 'string') return '';
   const secrets = resolveSecrets(secretsInput);
-  const stripped = rawLine.replace(ANSI_RE, '').replace(/\r/g, '');
+  const stripped = rawLine.replace(ANSI_RE, '').replace(/\r/g, '').replace(CTRL_RE, '');
   const trimmed = stripped.trim();
   if (!trimmed) return '';
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
@@ -194,9 +198,12 @@ export function formatWorkerLogLine(rawLine, secretsInput = []) {
   if (event.type === 'turn.started' || event.type === 'message_start') return '';
   if (event.type === 'turn.completed') {
     const u = isObject(event.usage) ? event.usage : null;
-    return u && (Number.isFinite(u.input_tokens) || Number.isFinite(u.output_tokens))
-      ? `[turn] completed (in ${u.input_tokens ?? 0}, out ${u.output_tokens ?? 0} tokens)`
-      : '[turn] completed';
+    if (u && (Number.isFinite(u.input_tokens) || Number.isFinite(u.output_tokens))) {
+      const inTok = Number.isFinite(u.input_tokens) ? u.input_tokens : 0;
+      const outTok = Number.isFinite(u.output_tokens) ? u.output_tokens : 0;
+      return `[turn] completed (in ${inTok}, out ${outTok} tokens)`;
+    }
+    return '[turn] completed';
   }
   if (event.type === 'turn.failed' || event.type === 'error') {
     const msg = event.error?.message ?? event.message ?? JSON.stringify(event);
@@ -369,6 +376,7 @@ function inspectPart(part, role, { fs, isProcessAlive, secrets }) {
   const safeRole = oneLine(role, 40, secrets) || 'worker';
   const safeAgentKind = named(part.agentKind) ? oneLine(part.agentKind, 60, secrets) : null;
   const safeExitSignal = hasExit && named(exitRecord.signal) ? oneLine(exitRecord.signal, 40, secrets) : null;
+  const safeExitCode = hasExit && Number.isSafeInteger(exitRecord.code) ? exitRecord.code : null;
 
   let state = 'idle';
   let summary = `${safeRole}: idle`;
@@ -377,7 +385,7 @@ function inspectPart(part, role, { fs, isProcessAlive, secrets }) {
     summary = `${safeRole}: running (pid ${pid}${safeAgentKind ? `, ${safeAgentKind}` : ''})`;
   } else if (hasExit) {
     state = 'exited';
-    const why = safeExitSignal ? `signal ${safeExitSignal}` : `code ${exitRecord.code ?? 'null'}`;
+    const why = safeExitSignal ? `signal ${safeExitSignal}` : `code ${safeExitCode ?? 'null'}`;
     summary = `${safeRole}: exited (${why})`;
   } else if (pid !== null) {
     state = 'stale';
@@ -386,10 +394,10 @@ function inspectPart(part, role, { fs, isProcessAlive, secrets }) {
 
   const activityCandidates = [
     logStat?.mtimeMs,
-    hasExit ? exitRecord.at : null,
-    Number.isFinite(part.watch?.at) ? part.watch.at : null,
-    Number.isFinite(part.started) ? part.started : null,
-  ].filter(n => Number.isFinite(n) && n > 0);
+    hasExit && validPositiveEpochMs(exitRecord.at) ? exitRecord.at : null,
+    validPositiveEpochMs(part.watch?.at) ? part.watch.at : null,
+    validPositiveEpochMs(part.started) ? part.started : null,
+  ].filter(validPositiveEpochMs);
 
   return {
     role: safeRole,
@@ -400,10 +408,10 @@ function inspectPart(part, role, { fs, isProcessAlive, secrets }) {
     rawLogPath: typeof part.log === 'string' ? part.log : null,
     logPath: typeof part.log === 'string' ? sanitizeString(part.log, secrets) : null,
     logSize: logStat?.size ?? 0,
-    exit: hasExit ? { code: exitRecord.code, signal: safeExitSignal, at: exitRecord.at } : null,
+    exit: hasExit ? { code: safeExitCode, signal: safeExitSignal, at: validPositiveEpochMs(exitRecord.at) ? exitRecord.at : null } : null,
     hangCount: hangs.length,
     lastHang: hangs.at(-1) ?? null,
-    startedAt: Number.isFinite(part.started) ? part.started : null,
+    startedAt: validPositiveEpochMs(part.started) ? part.started : null,
     lastActivityAt: activityCandidates.length ? Math.max(...activityCandidates) : null,
   };
 }
@@ -454,6 +462,7 @@ function classifySuite(job, coreRoot, { fs, env, readSuite, secrets }) {
       lastActivityAt: null,
     });
   }
+  const validSuiteStamp = ts => validPositiveEpochMs(ts) ? ts : null;
   if (deadRunner || (progress.state === 'finished' && headMismatch)) {
     const why = deadRunner
       ? oneLine(progress.reason, 140, secrets)
@@ -465,7 +474,7 @@ function classifySuite(job, coreRoot, { fs, env, readSuite, secrets }) {
       childPid: null,
       logPath: safeLogPath,
       receiptPath: safeReceiptPath,
-      lastActivityAt: logStat?.mtimeMs ?? progress.finishedAt ?? progress.queuedAt ?? null,
+      lastActivityAt: logStat?.mtimeMs ?? validSuiteStamp(progress.finishedAt) ?? validSuiteStamp(progress.queuedAt) ?? null,
     });
   }
   if (progress.state === 'waiting') {
@@ -477,7 +486,7 @@ function classifySuite(job, coreRoot, { fs, env, readSuite, secrets }) {
       childPid: null,
       logPath: safeLogPath,
       receiptPath: safeReceiptPath,
-      lastActivityAt: progress.queuedAt ?? logStat?.mtimeMs ?? null,
+      lastActivityAt: validSuiteStamp(progress.queuedAt) ?? logStat?.mtimeMs ?? null,
     });
   }
   if (progress.state === 'running') {
@@ -495,7 +504,7 @@ function classifySuite(job, coreRoot, { fs, env, readSuite, secrets }) {
       childPid,
       logPath: safeLogPath,
       receiptPath: safeReceiptPath,
-      lastActivityAt: logStat?.mtimeMs ?? progress.startedAt ?? null,
+      lastActivityAt: logStat?.mtimeMs ?? validSuiteStamp(progress.startedAt) ?? null,
     });
   }
   return attachRawPaths({
@@ -505,7 +514,7 @@ function classifySuite(job, coreRoot, { fs, env, readSuite, secrets }) {
     childPid: null,
     logPath: safeLogPath,
     receiptPath: safeReceiptPath,
-    lastActivityAt: progress.finishedAt ?? logStat?.mtimeMs ?? null,
+    lastActivityAt: validSuiteStamp(progress.finishedAt) ?? logStat?.mtimeMs ?? null,
   });
 }
 
@@ -537,18 +546,18 @@ function collectIssueArtifacts(fs, logsDir, issue, secrets = []) {
 
 function readMachineBlockers(machine, state, nowMs, secrets = []) {
   const blockers = [];
-  if (Number.isFinite(machine?.pausedUntil) && machine.pausedUntil > nowMs) {
+  if (validEpochMs(machine?.pausedUntil) && machine.pausedUntil > nowMs) {
     const streak = Number.isSafeInteger(machine.streak) ? machine.streak : 0;
-    blockers.push(`New jobs paused until ${new Date(machine.pausedUntil).toISOString()} (${streak} no-result runs in a row)`);
+    blockers.push(`New jobs paused until ${safeIsoTimestamp(machine.pausedUntil)} (${streak} no-result runs in a row)`);
   }
   if (isObject(machine?.poolOut)) {
     const until = named(machine.poolOut.wakeAt)
       ? oneLine(machine.poolOut.wakeAt, 80, secrets)
-      : (Number.isFinite(machine.poolOut.resetAt) ? new Date(machine.poolOut.resetAt).toISOString() : null);
+      : safeIsoTimestamp(machine.poolOut.resetAt);
     blockers.push(`AI login pool exhausted${until ? ` until ${until}` : ''}`);
   }
   if (isObject(machine?.ciDown) && ['queued', 'billing'].includes(machine.ciDown.reason)) {
-    const sinceText = Number.isFinite(machine.ciDown.since) ? new Date(machine.ciDown.since).toISOString() : 'unknown';
+    const sinceText = safeIsoTimestamp(machine.ciDown.since) ?? 'unknown';
     blockers.push(`GitHub Actions hold (${machine.ciDown.reason}) since ${sinceText}`);
   }
   const breaker = (isObject(state?.circuitBreaker) && state.circuitBreaker.active !== false ? state.circuitBreaker : null)
@@ -689,15 +698,17 @@ function buildWorkerView(job, ctx) {
     blockers.push(`Recorded worker process exited without a receipt (${staleParts.map(p => `${p.role} pid ${p.pid}`).join(', ')})`);
   }
   if (job.lane?.state === 'waiting') {
-    blockers.push(`Waiting in merge lane${safeHolder ? ` for PR #${safeHolder}` : ''}${Number.isFinite(job.lane.since) ? ` since ${new Date(job.lane.since).toISOString()}` : ''}`);
+    const sinceIso = safeIsoTimestamp(job.lane.since);
+    blockers.push(`Waiting in merge lane${safeHolder ? ` for PR #${safeHolder}` : ''}${sinceIso ? ` since ${sinceIso}` : ''}`);
   }
   if (job.runtimeWait?.state === 'waiting') {
-    blockers.push(`Waiting on PDD interpreter maintenance${Number.isFinite(job.runtimeWait.until) ? ` until ${new Date(job.runtimeWait.until).toISOString()}` : ''}`);
+    const untilIso = safeIsoTimestamp(job.runtimeWait.until);
+    blockers.push(`Waiting on PDD interpreter maintenance${untilIso ? ` until ${untilIso}` : ''}`);
   }
   if (job.stepStop?.poolExhausted) {
     const wake = named(job.stepStop.wakeAt)
       ? oneLine(job.stepStop.wakeAt, 80, secrets)
-      : (Number.isFinite(job.stepStop.until) ? new Date(job.stepStop.until).toISOString() : null);
+      : safeIsoTimestamp(job.stepStop.until);
     blockers.push(`Waiting on AI quota / login pool${wake ? ` until ${wake}` : ''}`);
   }
   for (const part of parts) {
@@ -757,8 +768,8 @@ function buildWorkerView(job, ctx) {
     suiteView?.lastActivityAt,
     artifacts.latestLogMtimeMs,
     job.__fileMtimeMs,
-    Number.isFinite(job.started) ? job.started : null,
-  ].filter(n => Number.isFinite(n) && n > 0);
+    validPositiveEpochMs(job.started) ? job.started : null,
+  ].filter(validPositiveEpochMs);
   const lastActivityAt = activityTimes.length ? Math.max(...activityTimes) : null;
 
   const safeIssues = Array.isArray(job.issues)
@@ -780,7 +791,7 @@ function buildWorkerView(job, ctx) {
     suite: suiteView,
     blockers,
     lastActivityAt,
-    startedAt: Number.isFinite(job.started) ? job.started : (mainPart?.startedAt ?? null),
+    startedAt: validPositiveEpochMs(job.started) ? job.started : (mainPart?.startedAt ?? null),
     streams,
     logPaths: allLogPaths,
     evidencePaths,
@@ -832,7 +843,7 @@ function readRecentHistory(fs, coreRoot, logsDir, secrets = []) {
     unique.push({
       issue: row.issue,
       outcome: oneLine(row.outcome, 40, secrets),
-      at: Number.isFinite(row.at) ? row.at : null,
+      at: validPositiveEpochMs(row.at) ? row.at : null,
       pr: Number.isSafeInteger(row.pr) ? row.pr : null,
       text: named(row.text) ? oneLine(row.text, 180, secrets) : '',
       logPaths: artifacts.logPaths,

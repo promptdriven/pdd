@@ -126,7 +126,7 @@ test('real help, ordinary versions, invalid syntax and invalid origin never read
   }
   for (const args of [['-VV', '--help'], ['help', '-VV'], ['-V', '--help'], ['--help']]) {
     const result = await f.run(args, { PDD_RUNTIME_URL: s.origin }); assert.equal(result.code, 0);
-    assert.match(result.stdout, args[0] === '-V' ? /pdd --version/ : args[0] === '--help' ? /pdd --version \| -V \| -VV/ : /pdd -VV/);
+    assert.match(result.stdout, args[0] === '-V' ? /pdd --version/ : /pdd -VV/);
   }
   for (const args of [['-VV', 'extra'], ['-V', '-V'], ['-VVV'], ['--version', '--verbose'], ['--version', '-VV'], ['-VV', '--help', 'extra']]) {
     const result = await f.run(args, { PDD_RUNTIME_URL: s.origin }); assert.equal(result.code, 2); assert.equal(result.stdout, '');
