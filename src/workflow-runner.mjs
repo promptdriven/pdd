@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0208b486336a279f53f1b8cc9d4ce3c87a3cf886a6b19246ae7ebc1209cc73ba).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a45e0017249b1f96aa7cb102926531a8f00930a455873d62119b94f7ba340fdf).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -4124,17 +4124,14 @@ ${approvalGuide(run)}`, p, true);
     try { saved = await saveGateApproval(run, area, record, edits, p); }
     catch (error) { return fail(`Approval failed: ${error.message}`); }
   }
-  let based = '', recoveryView = null, pr1Open = true;
+  let based = '', recoveryView = null;
   if (askCode) {
     try {
       const pr1 = prOf(run, area.name);
-      pr1Open = (await (p.readPrStatus ?? readWorkflowPrStatus)({ cwd: run.root, url: pr1.url }, p.commandPorts)).state === 'open';
-      if (pr1Open) {
-        await requireExistingDraft(run, pr1, p);
-        recoveryView = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
-        if (typeof recoveryView.body !== 'string' || !commitSha(recoveryView.headRefOid)) throw Error('PR 1 description or head unavailable.');
-        p.inspectProgress?.();
-      }
+      await requireExistingDraft(run, pr1, p);
+      recoveryView = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
+      if (typeof recoveryView.body !== 'string' || !commitSha(recoveryView.headRefOid)) throw Error('PR 1 description or head unavailable.');
+      p.inspectProgress?.();
     } catch (error) {
       if (error?.code === 'workflow_progress_refused') throw error;
       return fail(`Cannot read the PR 1 description and head (${descriptionCause(error)}). ${approvalGuide(run)} `);
@@ -4159,7 +4156,7 @@ ${approvalGuide(run)}`, p, true);
     if(error?.code==='workflow_code_contract_changed')return fail(error.message);
     return fail(`${oneLine(error.message)} Check PR 1, then ${approvalRetry(run, p.pdd)}`); }
   }
-  if (askCode && pr1Open) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p, recoveryView));
+  if (askCode) carried.push(...await draftDescription(run, prOf(run, area.name), await pr1Drafts(run, p), p, recoveryView));
   const now = invocationAt;
   const storyRecord = normal && storyGate ? { gateId: saved?.gateId ?? selectedGate?.id ?? null, evidenceId: saved?.evidence?.id ?? null, at: invocationAt,
     fingerprint: reviewedStory ?? storyFingerprint({ root: run.root, changed: await changedFiles(run, p) }), prompts: (approvalSnapshot ?? []).map(row => row.path) } : null;
