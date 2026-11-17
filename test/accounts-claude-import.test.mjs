@@ -1,10 +1,12 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runPdd } from '../src/pdd-cli.mjs';
 import {
   detectImportProvider,
@@ -41,6 +43,9 @@ async function startFakeCloud(t, nowMs) {
         res.end(JSON.stringify(payload));
       };
 
+      if (req.method === 'GET' && url.pathname === '/v1/accounts') {
+        return send(200, { accounts: [] });
+      }
       if (req.method === 'POST' && url.pathname === '/v1/accounts') {
         const id = `acc_${seq++}`;
         return send(201, {
@@ -122,6 +127,134 @@ async function runCli(argv, sb, accountsPorts = {}) {
     accountsPorts,
   });
   return { exit, stdout: stdout.text, stderr: stderr.text };
+}
+
+const addArgs = ['accounts', 'add', '--provider', 'claude'];
+const enrollmentScenario = JSON.parse(fs.readFileSync(new URL('./runtime/accounts-claude-add.json', import.meta.url)));
+const wrappedLogin = enrollmentScenario.simulation['login.run'].result_template;
+const completeToken = JSON.parse(enrollmentScenario.steps[0].checks[0].value);
+
+test('3495: Claude add sends the whole token after a colored 80-column wrap, without joining the next status line', async t => {
+  const sb = makeSandbox(t, 'https://cloud.example');
+  const requests = [];
+  const result = await runCli(addArgs, sb, {
+    tmpRoot: sb.root,
+    runLogin: async () => wrappedLogin,
+    fetch: async (url, request) => {
+      requests.push({ url, ...request });
+      const reply = enrollmentScenario.simulation['cloud.fetch'].result_template;
+      return new Response(reply.text, { status: reply.status });
+    },
+  });
+  assert.match(result.stderr, /synthetic fixture stops after the enrollment request/);
+  assert.equal(requests[0]?.method, enrollmentScenario.steps[0].checks[1].value);
+  assert.equal(JSON.parse(requests[0]?.body).bundle.oauth_token, completeToken);
+  assert.doesNotMatch(result.stderr, /sk-ant-oat/);
+});
+
+test('3495: Claude add refuses stale tokens from stdout alternatives and cleans the isolated config', async t => {
+  const cloud = await startFakeCloud(t, Date.now());
+  const sb = makeSandbox(t, cloud.serverUrl);
+  const localDir = join(sb.home, '.claude');
+  const settingsPath = join(localDir, 'settings.json');
+  const settings = JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-synthetic-saved-settings-2222' } });
+  fs.mkdirSync(localDir);
+  fs.writeFileSync(settingsPath, settings);
+  fs.writeFileSync(join(localDir, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'sk-ant-oat01-synthetic-saved-credentials-3333' } }));
+  const missingTokenStep = enrollmentScenario.steps[1];
+  sb.env.CLAUDE_CODE_OAUTH_TOKEN = missingTokenStep.input.env.CLAUDE_CODE_OAUTH_TOKEN;
+  let loginEnv;
+  let loginDirMode;
+  const result = await runCli(addArgs, sb, {
+    tmpRoot: sb.root,
+    runLogin: async (provider, { env }) => {
+      assert.equal(provider, 'claude');
+      loginEnv = env;
+      if (env.CLAUDE_CONFIG_DIR) {
+        loginDirMode = fs.statSync(env.CLAUDE_CONFIG_DIR).mode & 0o777;
+        fs.writeFileSync(join(env.CLAUDE_CONFIG_DIR, 'settings.json'), settings);
+      }
+      return missingTokenStep.simulation_overrides[0].binding.result_template;
+    },
+  });
+  assert.equal(result.exit, missingTokenStep.checks[0].value, 'an existing token must not make setup succeed');
+  assert.match(result.stderr, /claude setup-token did not print a Claude OAuth token/);
+  assert.equal(cloud.requests.length, 0);
+  assert.equal(fs.readFileSync(settingsPath, 'utf8'), settings);
+  assert.equal(loginEnv.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(loginDirMode, 0o700);
+  assert.equal(fs.existsSync(loginEnv.CLAUDE_CONFIG_DIR), false);
+});
+
+const hasScriptPty = process.platform === 'linux' && spawnSync('script', ['--version']).status === 0;
+for (const { label, loop, cancel = false } of [
+  { label: 'single shows live setup prompts and accepts pasted input', loop: false },
+  { label: '--loop shows live setup prompts and accepts pasted input for each account', loop: true },
+  { label: '--loop cleans up when the setup prompt is interrupted', loop: true, cancel: true },
+]) {
+  test(`3495: Claude add ${label} in a real TTY`, { skip: !hasScriptPty, timeout: 10_000 }, async t => {
+    const cloud = await startFakeCloud(t, Date.now());
+    const sb = makeSandbox(t, cloud.serverUrl);
+    const fakeClaude = join(sb.root, 'claude');
+    const loginDirs = join(sb.root, 'login-dirs');
+    fs.writeFileSync(fakeClaude, `#!${process.execPath}
+const fs = require('node:fs');
+const readline = require('node:readline');
+if (process.argv[2] !== 'setup-token' || !process.stdin.isTTY) process.exit(2);
+const dir = process.env.CLAUDE_CONFIG_DIR;
+if (!dir || process.env.COLUMNS !== '500' || (fs.statSync(dir).mode & 0o777) !== 0o700) process.exit(3);
+fs.appendFileSync(process.env.LOGIN_DIRS, dir + '\\n');
+process.stdout.write('Open the browser sign-in link\\n');
+process.stderr.write('Paste code here if prompted > ');
+const input = readline.createInterface({ input: process.stdin });
+input.once('line', value => {
+  input.close();
+  if (value !== 'mock-authorization-code') { process.exitCode = 4; return; }
+  process.stdout.write(${JSON.stringify(wrappedLogin.stdout)});
+});
+`, { mode: 0o700 });
+
+    const child = spawn('script', ['-q', '-e', '-c', `exec "$TEST_NODE" "$TEST_PDD" ${addArgs.join(' ')}${loop ? ' --loop' : ''}`, '/dev/null'], {
+      cwd: sb.cwd,
+      env: {
+        ...sb.env,
+        PATH: `${sb.root}:${sb.env.PATH}`,
+        TERM: 'xterm',
+        TEST_NODE: process.execPath,
+        TEST_PDD: fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url)),
+        LOGIN_DIRS: loginDirs,
+      },
+    });
+    t.after(() => child.kill());
+    let transcript = '';
+    let cursor = 0;
+    const paste = ['Paste code here if prompted > ', cancel ? '\x03' : 'mock-authorization-code\n'];
+    const replies = loop && !cancel ? [paste, ['Enroll another claude account? [Y/n] ', 'y\n'], paste, ['Enroll another claude account? [Y/n] ', 'n\n']] : [paste];
+    child.stdout.on('data', chunk => {
+      transcript += chunk;
+      if (!replies.length) return;
+      const [prompt, answer] = replies[0];
+      const promptIndex = transcript.indexOf(prompt, cursor);
+      if (promptIndex === -1) return;
+      cursor = promptIndex + prompt.length;
+      replies.shift();
+      child.stdin.write(answer);
+    });
+    const exitCode = await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+    });
+    assert.match(transcript, /Paste code here if prompted > /, 'the setup prompt must reach the TTY before responding');
+    assert.match(transcript, /Open the browser sign-in link/);
+    assert.equal(exitCode, 0, transcript);
+    assert.equal(replies.length, 0);
+    if (cancel) assert.match(transcript, /Loop finished with 0 claude accounts enrolled/);
+    const uploads = cloud.requests.filter(({ method, path }) => method === 'POST' && path === '/v1/accounts');
+    assert.deepEqual(uploads.map(({ body }) => body.bundle.oauth_token), Array(cancel ? 0 : loop ? 2 : 1).fill(completeToken));
+    const usedDirs = fs.readFileSync(loginDirs, 'utf8').trim().split('\n');
+    assert.equal(new Set(usedDirs).size, cancel ? 1 : uploads.length);
+    assert.ok(usedDirs.every(dir => !fs.existsSync(dir)));
+  });
 }
 
 test('3483: --from <dir> and default local ~/.claude fall back to .credentials.json when settings.json has no token or is absent', async t => {

@@ -1,10 +1,11 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 1a0c1b7b54d29ece6ffd27c7ab1b03ff523035f664505de92078edc25f507d8a).
-import { spawnSync } from 'node:child_process';
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: d317268bc5396e25c3f4780c685f55f9a7880968730938a820b49394ff966212).
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { stripVTControlCharacters } from 'node:util';
 import { runAgentProcess } from './agent-adapters.mjs';
 import {
   CloudAccountsError,
@@ -36,6 +37,7 @@ import { knownSecretValues, redactSecrets, rememberSecrets } from './secret-reda
 const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const AUTO_BEGIN = '# >>> pdd accounts auto >>>';
 const AUTO_END = '# <<< pdd accounts auto <<<';
+const CLAUDE_SETUP_COLUMNS = '500';
 
 export function renderAutoSwitchBlock(shell = 'sh') {
   if (shell === 'fish') {
@@ -494,6 +496,27 @@ function extractClaudeToken(text) {
   return match ? match[1] : '';
 }
 
+function extractClaudeSetupToken(stdout) {
+  const lines = stripVTControlCharacters(stdout ?? '').split(/\r?\n/).map(line => line.trimEnd());
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const match = /\bsk-ant-oat[A-Za-z0-9_-]*/.exec(line);
+    if (!match) continue;
+    let token = match[0];
+    if (match.index + token.length === line.length) {
+      let width = line.length;
+      for (let next = index + 1; width === 80 || width === Number(CLAUDE_SETUP_COLUMNS); next += 1) {
+        const continuation = lines[next]?.trim();
+        if (!continuation || !/^[A-Za-z0-9_-]+$/.test(continuation)) break;
+        token += continuation;
+        width = lines[next].length;
+      }
+    }
+    if (/^sk-ant-oat[A-Za-z0-9_-]{8,}$/.test(token)) return token;
+  }
+  return '';
+}
+
 function rememberCodexPayloadSecrets(raw) {
   if (!object(raw)) return;
   rememberSecrets(...knownSecretValues(raw));
@@ -791,7 +814,29 @@ function removeTempPrivateDir(fs, dir) {
   try { (fs.rmSync ?? nativeFs.rmSync)(dir, { recursive: true, force: true }); } catch {}
 }
 
-async function runProviderLogin(provider, { cwd, env, deviceAuth = false }, ports = {}) {
+function runInteractiveClaudeLogin(cmd, args, { cwd, env, stdin, stdout }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd, env, stdio: [stdin, 'pipe', 'pipe'] });
+    let captured = '';
+    let interrupted = false;
+    const interrupt = () => {
+      interrupted = true;
+      child.kill('SIGINT');
+    };
+    process.on('SIGINT', interrupt);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => { captured += chunk; });
+    child.stdout.pipe(stdout, { end: false });
+    child.stderr.pipe(process.stderr.isTTY ? process.stderr : stdout, { end: false });
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      process.off('SIGINT', interrupt);
+      resolve({ code: interrupted ? 130 : code, signal, stdout: captured });
+    });
+  });
+}
+
+async function runProviderLogin(provider, { cwd, env, stdin, deviceAuth = false }, ports = {}) {
   if (typeof ports.runLogin === 'function') {
     return ports.runLogin(provider, { cwd, env, deviceAuth });
   }
@@ -810,6 +855,10 @@ async function runProviderLogin(provider, { cwd, env, deviceAuth = false }, port
       stdout: '',
       stderr: '',
     };
+  }
+  const stdout = ports.stdout ?? process.stdout;
+  if (provider === 'claude' && stdin?.isTTY && stdout?.isTTY) {
+    return runInteractiveClaudeLogin(cmd, args, { cwd, env, stdin, stdout });
   }
   return runAgentProcess(cmd, args, { cwd, env, input: '', timeoutMs: 120_000, maxBytes: 65_536 });
 }
@@ -1306,7 +1355,15 @@ async function enrollSingleIteration(mode, {
     if (piped.trim()) {
       oauthToken = readLocalClaudeToken(fs, env, piped, { now: ports.now });
     } else {
-      const loginRes = await runProviderLogin('claude', { cwd, env, deviceAuth: false }, ports);
+      const tempLoginDir = createTempPrivateDir(fs, 'pdd-claude-login-', ports.tmpRoot);
+      const loginEnv = { ...env, CLAUDE_CONFIG_DIR: tempLoginDir, COLUMNS: CLAUDE_SETUP_COLUMNS };
+      delete loginEnv.CLAUDE_CODE_OAUTH_TOKEN;
+      let loginRes;
+      try {
+        loginRes = await runProviderLogin('claude', { cwd, env: loginEnv, stdin }, ports);
+      } finally {
+        removeTempPrivateDir(fs, tempLoginDir);
+      }
       if (!loginRes || loginRes.code !== 0) {
         return {
           exitCode: 1,
@@ -1314,8 +1371,11 @@ async function enrollSingleIteration(mode, {
           message: 'claude setup-token did not complete.',
         };
       }
-      const loginOutput = `${loginRes?.stdout ?? ''}\n${loginRes?.stderr ?? ''}`;
-      oauthToken = readLocalClaudeToken(fs, env, loginOutput, { now: ports.now });
+      oauthToken = extractClaudeSetupToken(loginRes.stdout);
+      if (!oauthToken) {
+        throw new CloudAccountsError('claude setup-token did not print a Claude OAuth token. No account was enrolled.', { code: 'missing_local_login' });
+      }
+      rememberSecrets(oauthToken);
     }
   } else if (fromOption) {
     oauthToken = readClaudeTokenFromPath(fs, resolve(cwd, String(fromOption).trim()), { now: ports.now });
