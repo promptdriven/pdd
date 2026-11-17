@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-command.prompt.md (sha256: 370620d5487073dc9cc98242ba4977bab41e5d59e766e93b4b61aaa172806918).
+// Generated from prompts/cli/metrics-command.prompt.md (sha256: 2faf21084426e49f468c474f11bcdf13a79bd484cf56f491fcc2cdb9008d0bfa).
 import {execFile as callback, spawnSync} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readFile, writeFile, readdir} from 'node:fs/promises';
@@ -36,6 +36,16 @@ const cleanEvidence = value => {
 };
 const SKILL_NAMES = new Set(['small-change', 'bug', 'feature', 'no-behavior-change']);
 const output = (stream, text) => typeof stream === 'function' ? stream(text) : stream.write(text);
+const validCalendarDate = value => typeof value === 'string' && /^\d{4}-\d\d-\d\d$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && iso(`${value}T00:00:00Z`).slice(0,10) === value;
+const localDateInZone = (at, timeZone) => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(at)).map(p => [p.type, p.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
+const weekStartForDate = dateStr => {
+  const ms = Date.parse(`${dateStr}T00:00:00Z`);
+  const dayIdx = (new Date(ms).getUTCDay() + 6) % 7;
+  return new Date(ms - dayIdx * 86400000).toISOString().slice(0, 10);
+};
 function options(argv) {
   const out = {timezone:'UTC'}, args = [...argv];
   if (['export','import','record'].includes(args[0])) {
@@ -46,15 +56,21 @@ function options(argv) {
     const arg = args.shift();
     if (arg === '--json' && !out.json) out.json = true;
     else if (arg === '--expected-source') { const values = []; while (args[0] && !args[0].startsWith('-')) values.push(args.shift()); if (!values.length || values.some(value => !/^[A-Za-z0-9_.:@+-]+(?:\/[A-Za-z0-9_.:@+-]+)*$/.test(value))) throw Error('Invalid expected source'); (out.expectedSources ??= []).push(...values); }
+    else if (arg === '--week') {
+      if (out.week !== undefined) throw Error('Invalid --week');
+      out.week = args.length && !args[0].startsWith('-') ? args.shift() : true;
+    }
     else if (['--date','--snapshot','--timezone','--at'].includes(arg)) {
       const key = arg.slice(2), value = args.shift();
       if (!value || value.startsWith('-') || out[key] && key !== 'timezone') throw Error(`Invalid ${arg}`);
       out[key] = value;
     } else throw Error(`Unknown option: ${arg}`);
   }
-  if (out.date && out.snapshot || out.action && (out.date || out.snapshot || out.json || out.at || out.expectedSources)) throw Error('Options cannot be combined');
-  if (out.date && (!/^\d{4}-\d\d-\d\d$/.test(out.date) || !Number.isFinite(Date.parse(`${out.date}T00:00:00Z`)) || iso(`${out.date}T00:00:00Z`).slice(0,10) !== out.date)) throw Error('Invalid date');
-  if (out.at && !out.date && !out.snapshot) throw Error('--at requires --date or --snapshot');
+  const scopeFlags = [Boolean(out.date), out.week !== undefined, Boolean(out.snapshot)].filter(Boolean).length;
+  if (scopeFlags > 1 || out.action && (scopeFlags || out.json || out.at || out.expectedSources)) throw Error('Options cannot be combined');
+  if (out.date && !validCalendarDate(out.date)) throw Error('Invalid date');
+  if (typeof out.week === 'string' && !validCalendarDate(out.week)) throw Error('Invalid date');
+  if (out.at && !scopeFlags) throw Error('--at requires --date or --snapshot (or --week)');
   if (out.at && (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/.test(out.at) || !Number.isFinite(Date.parse(out.at)))) throw Error('Invalid cutoff');
   try { new Intl.DateTimeFormat('en', {timeZone:out.timezone}); } catch { throw Error('Invalid timezone'); }
   return out;
@@ -602,14 +618,15 @@ async function githubFacts({repo, observedAt, events, cwd, scope = null}) {
     const prior = discovered.discoveredPulls.get(pr);
     const priorClosed = Boolean(prior && (prior.state === 'closed' || prior.merged_at));
 
-    if (!isLocalPr && priorClosed && scope?.kind === 'activity' && scope.date) {
+    if (!isLocalPr && priorClosed && (scope?.kind === 'activity' || scope?.kind === 'week') && scope.date) {
       const priorMergedAt = immutableIso(prior.merged_at);
       const priorEvidence = cleanEvidence(prior.html_url);
       if (priorMergedAt && priorEvidence && validSha(prior.head?.sha)) {
         for (const issue of issues) if (codeMappings.has(`${pr}:${issue}`)) facts.push({schema:'pdd.metrics.event.v1',id:`merge:${pr}:${issue}`,repo,issue,type:'delivery',at:priorMergedAt,observedAt,source:`github:${repo}`,data:{pr,head:prior.head.sha,explicit:true,evidence:priorEvidence}});
       }
+      const startDate = scope.kind === 'week' ? weekStartForDate(scope.date) : scope.date;
       const lastUpdatedMs = Date.parse(prior.updated_at || prior.merged_at || prior.created_at || '');
-      const scopeStartMs = Date.parse(`${scope.date}T00:00:00Z`) - 86400000;
+      const scopeStartMs = Date.parse(`${startDate}T00:00:00Z`) - 86400000;
       if (Number.isFinite(lastUpdatedMs) && lastUpdatedMs < scopeStartMs) continue;
     }
 
@@ -702,6 +719,11 @@ function githubGaps(repo, observedAt, events) {
 }
 function render(report) {
   const lines = [`PDD metrics — ${report.repo}`, `Scope: ${report.scope.kind}${report.scope.date ? ` ${report.scope.date}` : ''}${report.scope.snapshotId ? ` ${report.scope.snapshotId}` : ''}`, `Cutoff: ${report.observedAt} (${report.timezone})`, `Sources: ${(report.sources ?? []).map(s => typeof s === 'string' ? s : s.source).join(', ') || 'none'}`, `Coverage: ${report.coverage?.complete ? 'complete' : 'incomplete'}; missing sources: ${(report.coverage?.missingSources ?? []).join(', ') || 'none recorded'}`];
+  if (report.week) {
+    const w = report.week;
+    lines.push(`Week: Mon ${w.weekStart} to Sun ${w.weekEnd} (through ${w.throughDate}, ${w.elapsedDays}/7 days; refreshes ${w.refreshesOn})`);
+    lines.push(`Weekly pace: ${Number(w.mergedOrWouldMergePerDay.toFixed(2))} M/WM per elapsed day`);
+  }
   const fraction = (name, value) => lines.push(`${name}: ${value.numerator}/${value.denominator} (${value.percentage == null ? 'n/a' : `${value.percentage}%`}; unknown: ${value.unknown}; denominator unknown: ${value.denominatorUnknown ?? 0}; issues: ${(value.issues ?? []).map(i => `#${i}`).join(', ') || 'none'})`);
   for (const [name, value] of Object.entries(report.stages ?? {})) fraction(`Stage ${name}`, value);
   for (const [name, value] of Object.entries(report.transitions ?? {})) fraction(`Transition ${name}`, value);
@@ -713,6 +735,13 @@ function render(report) {
       const row = report.bySkill[skill];
       if (!row) continue;
       lines.push(`${skill} | ${row.issues} | ${fmtConv(row)} | ${row.pr} | ${row.runs} | ${fmtCheck(row.checks.runtime)} | ${fmtCheck(row.checks.vectors)} | ${fmtCheck(row.checks.formal)} | ${fmtCheck(row.checks.complete)}`);
+    }
+  }
+  if (report.week) {
+    lines.push('Day | Date | Issues | M/WM (Conv%) | PR | Starts | Ready | Checks | Deliveries');
+    for (const day of report.week.days ?? []) {
+      const conv = day.conversionPct == null ? 'n/a' : `${Number(day.conversionPct.toFixed(1))}%`;
+      lines.push(`${day.weekday} | ${day.date} | ${day.issues} | ${day.merged}/${day.wouldMerge} (${conv}) | ${day.pr} | ${day.activity.starts} | ${day.activity.candidateCompletions} | ${day.activity.validationResults} | ${day.activity.deliveries}`);
     }
   }
   if (report.activity === null) lines.push('Daily activity: use --date YYYY-MM-DD');
@@ -763,6 +792,7 @@ export async function runMetrics({argv = [], cwd = process.cwd(), stdout = proce
     let events = [...(saved.events ?? saved), ...historic], scope;
     let githubUnavailable = false, selectorSnapshot;
     if (opt.date) scope = {kind:'activity',date:opt.date};
+    else if (opt.week !== undefined) scope = {kind:'week',date:typeof opt.week === 'string' ? opt.week : localDateInZone(cutoff, opt.timezone)};
     else if (opt.snapshot) scope = {kind:'cohort',snapshotId:opt.snapshot};
     else {
       let queue; try { queue = await (ports.selector ?? githubQueue)({repo,observedAt:now,cwd,events,commonDir:context.commonDir,snapshots:saved.snapshots ?? []}); } catch { githubUnavailable = true; queue = {snapshotId:`queue:${now}`,events:[],selectorSnapshot:(await selectorSnapshots({repo,commonDir:context.commonDir,snapshots:saved.snapshots ?? []}))[0]}; }

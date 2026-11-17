@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 26f342964ad59edaa6f5ad71c87b4b839eaddaee9c436be2924ee94e882e3f24).
+// Prompt: prompts/cli/product.prompt.md
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -11,8 +11,6 @@ import { workflowAgentEntry } from './workflow-agents.mjs';
 import { recordedRuntimeLines, storyEvidence, startRun } from './workflow-runner.mjs';
 import { resolveWorkflowRepository, sameRepo, canonicalGithubUrl } from './workflow-github.mjs';
 import { runtimeClientSlice, runtimeOutputSlice } from './runtime-seam.mjs';
-import './screen-compare.mjs';
-import './svg-layout.mjs';
 import { nativeGithubCounter, githubReply } from './github-calls.mjs';
 import { invalid, parseProductDocuments, parseProductWorldWriters } from './product-documents.mjs';
 export { parseProductDocuments, parseProductWorldWriters };

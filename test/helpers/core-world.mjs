@@ -1,11 +1,12 @@
 // A small offline world for the Autopilot core tick: a fake GitHub (one work repository and the
 // promptdriven/pdd report repository), a real local Git origin and clone, a fake clock and a scripted
 // agent job runner. No network, no real agent, no timer.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, appendFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createGithubRepoFake } from './github-repo-fake.mjs';
+import { gitTemplateDir, rewriteGitConfigUrl } from './git-template.mjs';
 import { tickCore, coreSettings } from '../../src/autopilot-core.mjs';
 
 const endpointOf = args => args.find((word, index) => index > 0 && /^repos\//.test(word));
@@ -188,16 +189,24 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   w.clock = shared?.clock ?? { now: () => w.clock.at, at: w.time };
   w.now = () => w.clock.at;
   w.advance = ms => { w.clock.at += ms; };
-  if (shared) { Object.assign(w, { remote: shared.remote, github: shared.github, reports: shared.reports }); }
-  else {
+  w.cwd = join(dir, `clone-${machine}`);
+  if (shared) {
+    Object.assign(w, { remote: shared.remote, github: shared.github, reports: shared.reports });
+    git(dir, 'clone', '-q', w.remote, w.cwd);
+  } else {
+    const tpl = gitTemplateDir('core-world', d => {
+      const origin = join(d, 'origin.git'), seed = join(d, 'clone');
+      git(d, 'init', '-q', '--bare', '-b', 'main', origin);
+      git(d, 'clone', '-q', origin, seed);
+      writeFileSync(join(seed, 'README.md'), 'value 1\n'); git(seed, 'add', '.'); git(seed, 'commit', '-qm', 'seed'); git(seed, 'push', '-q', 'origin', 'HEAD:main');
+    });
     w.remote = join(dir, 'origin.git');
-    git(dir, 'init', '-q', '--bare', '-b', 'main', w.remote);
-    const seed = join(dir, 'seed'); git(dir, 'clone', '-q', w.remote, seed);
-    writeFileSync(join(seed, 'README.md'), 'value 1\n'); git(seed, 'add', '.'); git(seed, 'commit', '-qm', 'seed'); git(seed, 'push', '-q', 'origin', 'HEAD:main');
+    cpSync(join(tpl, 'origin.git'), w.remote, { recursive: true });
+    cpSync(join(tpl, 'clone'), w.cwd, { recursive: true });
+    rewriteGitConfigUrl(join(w.cwd, '.git/config'), join(tpl, 'origin.git'), w.remote);
     w.github = extend(createGithubRepoFake({ repository, owner: 'acme', issues: 0, now: w.now }), w);
     w.reports = extend(createGithubRepoFake({ repository: 'promptdriven/pdd', owner: 'promptdriven', issues: 0, now: w.now }), w);
   }
-  w.cwd = join(dir, `clone-${machine}`); git(dir, 'clone', '-q', w.remote, w.cwd);
   w.state = { cwd: w.cwd, repo: repository, coordinatorId, machine, baseBranch: 'main', agent: { kind: 'codex', command: 'codex' },
     packageRoot: join(dir, 'pkg'), stateFile: join(dir, `state-${machine}.json`) };
   w.root = join(dir, `core-${machine}`); w.reportRoot = join(dir, `reports-${machine}`);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/story-lint.prompt.md (sha256: b2b6ca9fa92cf0d7e57ddc86db6f2f16fb8e05c81ad0e960429effad4c55dc8a).
+// Generated from prompts/cli/story-lint.prompt.md (sha256: 1bc528e4e8146eeced2e4facd736be9d6a171e9e7daf65b75fae4219f2969968).
 import { isAbsolute } from 'node:path';
 
 const IMPL_DIR = /(?:^|[\s"'(\[`])((?:src|lib|internal|pkg|cmd|__tests__)\/[A-Za-z0-9_./-]+|(?:dist|build)\/[A-Za-z0-9_./-]*[./][A-Za-z0-9_./-]+|prompts\/(?:cli|tests?|__tests__)\/[A-Za-z0-9_./-]+)/;
@@ -13,6 +13,8 @@ const GENERIC_ROLE = /\bAs\s+(?:a|an|the)\s+(?:(?:end[- ])?user|system|caller)(?
 const UI_LITERAL = /"[^"\r\n]+"|(?<![A-Za-z0-9])'[^'\r\n]+'(?![A-Za-z0-9])/g;
 const GROUNDED_OUTCOME = /\b(?:exits?\s+with\s+(?:code|status)\s+\d+|HTTP\s+\d{3}|status\s+(?:code\s+)?\d+|\d+\s+times?|saves\s+nothing)\b/i;
 const VAGUE_CRITERION = /\b(?:works?\s+correctly|handled?\s+gracefully|properly\s+handled|as\s+expected|seamlessly|gracefully|properly|correctly)\b/i;
+const NUMBERED_ITEM = /^\s*\d+[.)]\s+\S/;
+const BULLET_ITEM = /^ {0,3}[-*+]\s+\S/;
 
 const canonicalStoryPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
@@ -50,11 +52,12 @@ function findVagueCriterion(line) {
   return match[0];
 }
 
-export function lintStory(text, { path = 'user_stories/story.md' } = {}) {
+export function lintStory(text, { path = 'user_stories/story.md', criteriaHygiene = true } = {}) {
   const cleaned = String(text ?? '').replace(/<!--[\s\S]*?-->/g, comment => comment.replace(/[^\r\n]/g, ' '));
   const rawLines = String(text ?? '').split(/\r?\n/), lines = cleaned.split(/\r?\n/);
   const problems = [];
-  let fence = null, section = 'intro';
+  const numberedCriteria = [], bulletCriteria = [];
+  let fence = null, section = 'intro', criteriaHeadingLine = null, criteriaHeadingRaw = '';
 
   const checkLine = (line, rawLine, lineNo, activeSection) => {
     if (!line.trim()) return;
@@ -100,21 +103,60 @@ export function lintStory(text, { path = 'user_stories/story.md' } = {}) {
     }
     if (/^##\s+/.test(line)) {
       const heading = line.replace(/^##\s+/, '').trim().toLowerCase();
-      if (heading === 'acceptance criteria') section = 'criteria';
-      else if (heading === 'what must not change' || heading === 'must not change') section = 'must-not-change';
+      if (heading === 'acceptance criteria' || heading === 'acceptance') {
+        section = 'criteria';
+        if (criteriaHeadingLine === null) { criteriaHeadingLine = i + 1; criteriaHeadingRaw = rawLine; }
+      } else if (heading === 'what must not change' || heading === 'must not change') section = 'must-not-change';
       else section = 'other';
       continue;
     }
+    if (section === 'criteria') {
+      if (NUMBERED_ITEM.test(line)) numberedCriteria.push({ line: i + 1, raw: rawLine });
+      else if (BULLET_ITEM.test(line)) bulletCriteria.push({ line: i + 1, raw: rawLine });
+    }
     if (section === 'intro' || section === 'criteria' || section === 'must-not-change') checkLine(line, rawLine, i + 1, section);
   }
+
+  if (criteriaHygiene) {
+    const items = numberedCriteria.length > 0 ? numberedCriteria : bulletCriteria;
+    if (criteriaHeadingLine === null) {
+      const firstIdx = rawLines.findIndex(row => row.trim().length > 0);
+      problems.push({
+        path,
+        line: firstIdx >= 0 ? firstIdx + 1 : 1,
+        code: 'story-missing-criteria',
+        message: 'Story is missing an "## Acceptance criteria" section. Add "## Acceptance criteria" with 1 to 8 concrete, user-observable acceptance items.',
+        excerpt: trimExcerpt(rawLines[firstIdx >= 0 ? firstIdx : 0] ?? ''),
+      });
+    } else if (items.length === 0) {
+      problems.push({
+        path,
+        line: criteriaHeadingLine,
+        code: 'story-missing-criteria',
+        message: '"## Acceptance criteria" lists 0 acceptance items. Add 1 to 8 concrete, user-observable numbered or bulleted acceptance items.',
+        excerpt: trimExcerpt(criteriaHeadingRaw),
+      });
+    } else if (items.length > 8) {
+      const ninth = items[8];
+      problems.push({
+        path,
+        line: ninth.line,
+        code: 'story-bloated-criteria',
+        message: `"## Acceptance criteria" lists ${items.length} items (recommended at most 8). Split into smaller vertical Stories or move formal invariants to "## Rules to check".`,
+        excerpt: trimExcerpt(ninth.raw),
+      });
+    }
+  }
+
+  problems.sort((a, b) => a.line - b.line);
   return { ok: problems.length === 0, path, problems };
 }
 
-export function lintStories(entries = []) {
+export function lintStories(entries = [], { criteriaHygiene = false } = {}) {
   const problems = [];
   for (const entry of entries) {
     if (!entry || !isLintableStoryPath(entry.path)) continue;
-    problems.push(...lintStory(entry.text, { path: entry.path }).problems);
+    problems.push(...lintStory(entry.text, { path: entry.path, criteriaHygiene }).problems);
   }
   return { ok: problems.length === 0, problems };
 }

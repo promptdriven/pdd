@@ -1,6 +1,6 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 2f8bf5f51501e004d0729e050dd9f8fdb793edcd44aa5f5aec002e67eb8bd07d).
+// Prompt: prompts/cli/autopilot-core.prompt.md
 import * as nativeFs from 'node:fs';
-import { availableParallelism } from 'node:os';
+import { availableParallelism, hostname } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -11,12 +11,12 @@ import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mj
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
-import { findOwners, promptHeaderHash, resolveOwners } from './file-owner.mjs';
+import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode } from './autopilot-intake.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
-import { classifyRateLimitFailure, isQuotaExhaustionMessage, POOL_FALLBACK_COOLDOWN_MS } from './login-pool.mjs';
+import { classifyRateLimitFailure, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 
 const { interfaceBlocks, proseSha256, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
@@ -34,7 +34,102 @@ const RULES_LINE = `Read ${JOB_RULES} in full before you write the PR body.`;
 const LANE = 'pdd:merge-lane', WOULD_MERGE = 'pdd:would-merge', DECISION = 'pdd:needs-decision', QUESTION_MARKER = /<!-- pdd:autopilot-core:question:(\d+):[^ ]+ -->/;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 // The machine id in claim records: a short hash of the host name, so no public text names the host.
-const machineIdOf = state => named(state?.machineId) ? state.machineId : `m-${createHash('sha256').update(String(state?.machine ?? '')).digest('hex').slice(0, 12)}`;
+export const machineIdOf = state => named(state?.machineId) ? state.machineId : `m-${createHash('sha256').update(String(state?.machine ?? '')).digest('hex').slice(0, 12)}`;
+export function claimTickLock(file, fs = nativeFs) {
+  const isLivePid = raw => {
+    const text = String(raw ?? '');
+    const pid = Number(text);
+    if (!/^[1-9][0-9]*$/.test(text) || !Number.isSafeInteger(pid)) return false;
+    try { process.kill(pid, 0); return true; }
+    catch (e) { return e.code !== 'ESRCH' && !(e instanceof RangeError); }
+  };
+  fs.mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  const token = randomUUID();
+  const owner = `${file}.${token}.owner`, reclaimDir = `${file}.reclaim.d`;
+  const tmpGuard = `${file}.${token}.guard`, myEntry = `owner-${token}`;
+  let tmpGuardExists = false;
+  const cleanupTmpGuard = () => {
+    if (!tmpGuardExists) return;
+    tmpGuardExists = false;
+    try { fs.unlinkSync(join(tmpGuard, myEntry)); } catch { /* Already unlinked. */ }
+    try { fs.rmdirSync(tmpGuard); } catch { /* Already removed. */ }
+  };
+  fs.writeFileSync(owner, String(process.pid), { flag: 'wx', mode: 0o600 });
+  try {
+    for (let spin = 0; spin < 8; spin++) {
+      try { fs.linkSync(owner, file); return true; }
+      catch (e) { if (e.code !== 'EEXIST') throw e; }
+      let raw;
+      try { raw = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+      if (isLivePid(raw)) return false;
+
+      if (!tmpGuardExists) {
+        fs.mkdirSync(tmpGuard, { mode: 0o700 });
+        tmpGuardExists = true;
+        fs.writeFileSync(join(tmpGuard, myEntry), JSON.stringify({ pid: process.pid, token, at: Date.now() }), { flag: 'wx', mode: 0o600 });
+      }
+
+      let guardHeld = false;
+      try {
+        fs.renameSync(tmpGuard, reclaimDir);
+        tmpGuardExists = false;
+        guardHeld = true;
+      } catch (e) {
+        if (!['ENOTEMPTY', 'EEXIST'].includes(e.code)) throw e;
+        let entries;
+        try { entries = fs.readdirSync(reclaimDir); }
+        catch (re) { if (re.code === 'ENOENT') continue; throw re; }
+        let liveHolder = false;
+        for (const entry of entries) {
+          if (!entry.startsWith('owner-')) { liveHolder = true; break; }
+          const entryPath = join(reclaimDir, entry);
+          let rawEntry;
+          try { rawEntry = fs.readFileSync(entryPath, 'utf8'); }
+          catch (re) { if (re.code === 'ENOENT') continue; throw re; }
+          let parsed = null;
+          try { parsed = JSON.parse(rawEntry); } catch { /* Corrupt dead entry. */ }
+          if (object(parsed) && isLivePid(parsed.pid)) { liveHolder = true; break; }
+          try { fs.unlinkSync(entryPath); } catch (re) { if (re.code !== 'ENOENT') throw re; }
+        }
+        if (liveHolder) return false;
+        try { fs.rmdirSync(reclaimDir); } catch { /* Non-empty or already removed. */ }
+        try {
+          fs.renameSync(tmpGuard, reclaimDir);
+          tmpGuardExists = false;
+          guardHeld = true;
+        } catch (re) {
+          if (['ENOTEMPTY', 'EEXIST'].includes(re.code)) return false;
+          if (re.code === 'ENOENT') continue;
+          throw re;
+        }
+      }
+
+      if (guardHeld) {
+        try {
+          if (readJson(fs, join(reclaimDir, myEntry))?.token !== token) return false;
+          let current;
+          try { current = fs.readFileSync(file, 'utf8'); }
+          catch (e) {
+            if (e.code !== 'ENOENT') throw e;
+            try { fs.linkSync(owner, file); return true; }
+            catch (le) { if (le.code === 'EEXIST') continue; throw le; }
+          }
+          if (current !== raw || isLivePid(current)) return false;
+          try { fs.unlinkSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+          try { fs.linkSync(owner, file); return true; }
+          catch (e) { if (e.code !== 'EEXIST') throw e; }
+        } finally {
+          try { fs.unlinkSync(join(reclaimDir, myEntry)); } catch { /* Already unlinked. */ }
+          try { fs.rmdirSync(reclaimDir); } catch { /* Non-empty or already removed. */ }
+        }
+      }
+    }
+    return false;
+  } finally {
+    cleanupTmpGuard();
+    try { fs.unlinkSync(owner); } catch { /* Already unlinked. */ }
+  }
+}
 const named = value => typeof value === 'string' && value.trim().length > 0;
 const short = sha => String(sha ?? '').slice(0, 7);
 const oneLine = (value, max = 300) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -208,7 +303,7 @@ function setJobCompanions(job, kept) {
 // A job whose Runtime step waits for the interpreter maintenance, or whose PR waits for the login pool to cool down,
 // runs no process: it holds no slot (#3241, #3252).
 const poolWaiting = job => job.phase === 'pr' && job.stepStop?.poolExhausted === true && !job.stepStop.resumed;
-const holdsSlot = job => job.phase !== 'ending' && !runtimeWaiting(job) && !poolWaiting(job);
+const holdsSlot = job => !['ending', 'released'].includes(job.phase) && !runtimeWaiting(job) && !poolWaiting(job);
 // The slots that the jobs of one core folder hold now: the machine guard sums them over every repository of this
 // machine (#3231). An unreadable folder holds none.
 export function busySlots(root, fs = nativeFs) { try { return readJobs(fs, root).filter(holdsSlot).length; } catch { return 0; } }
@@ -283,7 +378,7 @@ function context({ state, settings, budget }, ports) {
   const execFile = (file, args, options = {}) => file === 'gh' ? ports.gh(args, options) : ports.git(args, options);
   let reader;
   const owners = ports.owners ?? (async numbers => {
-    reader ??= createDependencyReadPorts({ cwd: '' }, { execFile, now });
+    reader ??= createDependencyReadPorts({ cwd: '' }, { execFile, now, ...(ports.authority ? { authority: ports.authority } : {}) });
     return JSON.parse((await reader.owners.read({ repository: repo, issues: numbers.map(n => issueKey(repo, n)) })).json).claims ?? [];
   });
   // Claims name this machine by an id, never by its host name. A claim from an older build names the host: also ours.
@@ -565,7 +660,7 @@ function formatQuestion(question, options, recommended) {
   return [text, ...list.map((option, i) => `${letters[i]}) ${option}${i === chosen ? ' (recommended)' : ''}`), `Reply with one letter, for example: ${letters[Math.max(chosen, 0)]}`].join('\n');
 }
 const RESULT_RULES = (result, ctx = null, allowNotReproduced = false) => `Before you exit, write this JSON file: ${result}
-- Success: {"outcome":"pr","pr":<PR number>,"head":"<40-character SHA you pushed>","promptChanged":true|false,"evidence":"<the Evidence line of the PR body>","adopt":["<each existing unowned code file you changed (path e)>"],"runtime":{"state":"pass|fail|not-run","cause":"<exact reason>","kind":"runtime","component":"<tool, for example pdd lint>","code":"<short-error-code>","detail":"<at most 20 lines of the tool's error output, with no code from this repository>"}}. Give kind, component, code and detail when Runtime could not check.${allowNotReproduced ? `
+- Success: {"outcome":"pr","pr":<PR number>,"head":"<40-character SHA you pushed>","promptChanged":true|false,"evidence":"<the Evidence line of the PR body>","adopt":[],"runtime":{"state":"pass|fail|not-run","cause":"<exact reason>","kind":"runtime","component":"<tool, for example pdd lint>","code":"<short-error-code>","detail":"<at most 20 lines of the tool's error output, with no code from this repository>"}}. Give kind, component, code and detail when Runtime could not check.${allowNotReproduced ? `
 - Not reproduced (only when the red CI or full-suite failure did not reproduce and you changed no files): {"outcome":"not reproduced","command":"<exact reproduction command you ran>","detail":"<at most 20 lines of passing output>"}` : ''}
 - Failure: {"outcome":"failed","kind":"pdd|job","component":"<tool, for example pdd test>","code":"<short-error-code>","cause":"<one sentence>","detail":"<at most 20 lines of the failing tool's error output, with no code from this repository>"}
 - Needs a person: {"outcome":"needs-person","kind":"blocker|choice","question":"<one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"}, only when you cannot go on without a person's decision: "kind":"blocker" for a blocker or one of the two cases that always go to a person (rule 1)${ctx && !asking(ctx) ? ', and never for a choice: decide it and list it (rule 1)' : ', "kind":"choice" only for a choice that rule 1 lets you ask'}. Ask exactly one question with 2 or 3 options; Autopilot posts it on the issue and a later job gets the answer.
@@ -573,14 +668,14 @@ const RESULT_RULES = (result, ctx = null, allowNotReproduced = false) => `Before
 function workRules(ctx, job) {
   const { state, settings } = ctx;
   return `Rules:
-1. Choose the PDD skill that fits: pdd-small-change for a small contained change, pdd-bug for a defect, pdd-feature for new behavior. Read these PDD skills and their step files from "$PDD_SKILLS" (for example "$PDD_SKILLS/pdd-feature/SKILL.md"), never from ~/.agents/skills or ~/.claude/skills: the installed copies can be older than this Autopilot. Follow its method, but make ONE PR that holds the prompt, Story, tests and code together. This is not a \`pdd workflow run\`: do not run \`pdd workflow\` commands, do not use Herdr, do not wait for a person, and skip the skill's steps/autopilot.md. ${choiceRule(ctx)}
+1. Choose the PDD skill that fits: use pdd-small-change strictly when every planned file is an unowned path d file outside PDD (docs, guides, CI, lock files, packages, non-behavior config or metadata, or test-only maintenance — never *.prompt.md, user_stories/*.md, or product/app code); when an issue touches prompt-owned or product/app code (src/, app/, etc.), even when no prompt exists yet, choose pdd-bug for a defect or pdd-feature for new behavior so this PR creates or updates the owning prompt. Read these PDD skills and their step files from "$PDD_SKILLS" (for example "$PDD_SKILLS/pdd-feature/SKILL.md"), never from ~/.agents/skills or ~/.claude/skills: the installed copies can be older than this Autopilot. Follow its method, but make ONE PR that holds the prompt, Story, tests and code together. This is not a \`pdd workflow run\`: do not run \`pdd workflow\` commands, do not use Herdr, do not wait for a person, and skip the skill's steps/autopilot.md. ${choiceRule(ctx)}
 2. Path. Autopilot gives you an owner table. For each other file you change, run the same lookup (\`pdd owner FILE\`). A file is OWNED when pdd-bindings.json, a \`Generated from\` header line, or the opening sentence of a prompt names it. When you are not sure, treat it as owned. Take your path from the table:
    a. Owned code, and the contract changes (what a caller, user or program gets): change the owning prompt first, in the issue's words, never from code output. Then the Story and tests, then the code.
    b. Owned code, and the contract stays (the prompt is already right, a refactor, a log line): keep the prompt unchanged. Quote the prompt line that the fix restores (file:line), or write "no contract change".
    c. A new code file with new behavior: write its prompt first, with a binding or header. Then the Story, tests and code. Moved or split code keeps the owner of its source file.
    d. Any other file (config, CI, package metadata, lock files, docs, tests): change it directly. Never write a new prompt for it. If a prompt states the value that you change (search prompts/ for the path and the key), agree with that prompt: cite the line, or change the prompt first when the issue changes that fact. Docs take their facts from the owning prompt, not from running the code.
-   e. Existing code that no prompt owns: change it directly, with a regression test, and put the file in the result's "adopt" list: Autopilot proposes adopting PDD for it. A file that you add is never path e: a new code file takes path c, any other new file path d.
-   Never add a binding or header for a file that exists on the base, unless the issue asks to adopt PDD for it.
+   e. Existing product or app code that no prompt owns: create its owning .prompt.md first, link the code file's \`Generated from\` header, and include regression tests in this single PR. A file that you add is never path e: a new code file takes path c, any other new file path d.
+   Never add a prompt, binding or header for an existing non-code path d file, or add a header without its owning prompt, unless the issue asks to adopt PDD for it.
 3. Tests. When the change alters what a person or program gets through the repo's public surface (a return value, error, output, exit code, written file, export, command or script), add a test through that surface that fails on base. For any other change, add no test: run the issue's done check and record the command and its result.
 4. In the PR body, write one line for each path that you use: \`Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote file:line | no contract change | new prompt> — Test: <file | done check>\`. The prompt and the code may be in one commit. Never rewrite history to change the commit order.
 5. Run focused tests for the changed behavior. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish (the full test command of this repository is \`${settings.testCommand ?? 'not set'}\`). When you run tests or builds, pass \`$PDD_CHECK_CPUS\` as the worker count (for example \`node --test --test-concurrency=$PDD_CHECK_CPUS\`, \`pytest -n $PDD_CHECK_CPUS\`, \`cargo test -j $PDD_CHECK_CPUS\`): it is this machine's share for Autopilot.
@@ -1095,24 +1190,59 @@ function skillsCheck(ctx, agent = ctx.state.agent, baseEnv = ctx.ports.env ?? pr
   const read = (agent?.kind === 'claude' ? [claude] : [home ? join(home, '.agents', 'skills') : null]).filter(Boolean);
   return { dir, version, read };
 }
-function coreBaseAgentCommand(agent) {
-  if (agent?.kind === 'gemini') {
-    return { command: named(agent.command) ? agent.command.trim() : 'gemini', args: ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo'] };
+const CORE_AGENT_KINDS = ['codex', 'claude', 'gemini', 'agy'];
+export function agentModelFamily(agent, explicitModel = null) {
+  const rawKind = typeof agent === 'string' ? agent : (named(agent?.harness) ? agent.harness : (named(agent?.kind) ? agent.kind : ''));
+  const kind = rawKind.trim().toLowerCase();
+  if (kind === 'codex') return 'openai';
+  if (kind === 'claude') return 'anthropic';
+  if (kind === 'gemini') return 'google';
+  if (kind === 'agy') {
+    const raw = named(explicitModel) ? explicitModel : (object(agent) && named(agent.model) ? agent.model : '');
+    const m = raw.trim().toLowerCase();
+    if (m.includes('claude')) return 'anthropic';
+    if (/(?:^|[/:_\s-])(?:gpt-|o[134](?=$|[-._:\s/]))/.test(m)) return 'openai';
+    return 'google';
   }
-  return agentCommand(agent);
+  return null;
 }
 function coreAgentCommand(agent) {
   const model = named(agent?.model) ? agent.model.trim() : undefined;
-  if (agent?.kind === 'gemini') {
-    const base = coreBaseAgentCommand(agent);
-    return model ? { command: base.command, args: [...base.args, '--model', model] } : base;
-  }
   return agentCommand(agent, model ? { model } : {});
 }
 function resolveCoreModelTiering(ctx) {
   if (ctx.settings?.modelTiering !== undefined) return ctx.settings.modelTiering;
   const repoTiering = ctx.state?.cwd ? readJson(ctx.fs, join(ctx.state.cwd, 'pdd.json'), {})?.autopilot?.modelTiering : undefined;
   return repoTiering === true || repoTiering === false || object(repoTiering) ? repoTiering : null;
+}
+function resolveEffectiveAgentModel(ctx, role, agent = ctx.state.agent, env = ctx.ports.env ?? process.env) {
+  try {
+    return resolveStepModelTier({
+      agent: agent?.kind ?? 'codex',
+      step: role,
+      model: named(agent?.model) ? agent.model.trim() : null,
+      tiering: resolveCoreModelTiering(ctx),
+      env,
+    }).model;
+  } catch {
+    return named(agent?.model) ? agent.model.trim() : null;
+  }
+}
+function resolveAgentFamily(ctx, role, agent = ctx.state.agent, env = ctx.ports.env ?? process.env) {
+  const kind = named(agent?.harness) ? agent.harness.trim() : agent?.kind;
+  const spec = object(agent) ? { ...agent, ...(named(kind) ? { kind } : {}) } : agent;
+  return agentModelFamily(spec, resolveEffectiveAgentModel(ctx, role, spec, env));
+}
+function reviewerKindsForFamily(ctx, builderFamily, matchSame = false) {
+  if (!named(builderFamily)) return [];
+  const env = ctx.ports.env ?? process.env;
+  const pooled = Boolean(ctx.ports.selectLogin);
+  return CORE_AGENT_KINDS.filter(kind => {
+    if (pooled && kind === 'agy') return true;
+    const probe = !pooled && ctx.state.agent?.kind === kind ? ctx.state.agent : { kind };
+    const family = resolveAgentFamily(ctx, 'review', probe, env);
+    return Boolean(family && (matchSame ? family === builderFamily : family !== builderFamily));
+  });
 }
 function resolveCoreAgentCommand(ctx, role, agent = ctx.state.agent, env = ctx.ports.env ?? process.env) {
   const resolved = resolveStepModelTier({
@@ -1123,7 +1253,7 @@ function resolveCoreAgentCommand(ctx, role, agent = ctx.state.agent, env = ctx.p
     env,
   });
   if (!resolved.enabled) return coreAgentCommand(agent);
-  const base = coreBaseAgentCommand(agent);
+  const base = agentCommand(agent);
   const tierArgs = buildTieredAgentArgs(resolved);
   if (!tierArgs.length) return base;
   if (agent?.kind === 'codex' && base.args.at(-1) === '-') {
@@ -1171,18 +1301,157 @@ async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
   }
   return poolOut;
 }
-async function selectAgentStep(ctx, issue = null) {
-  if (!ctx.ports.selectLogin) return { state: 'ready', selected: null };
-  const selected = await ctx.ports.selectLogin();
-  if (selected === null) return { state: 'ready', selected: null };
+async function selectAgentStep(ctx, issue = null, opts = null) {
+  const allowedKinds = Array.isArray(opts?.allowedKinds) ? opts.allowedKinds : null;
+  const probeOnly = opts?.probeOnly === true;
+  if (!ctx.ports.selectLogin) {
+    if (allowedKinds && !allowedKinds.includes(ctx.state.agent?.kind)) return { state: 'unavailable', selected: null };
+    return { state: 'ready', selected: null };
+  }
+  const callOpts = allowedKinds ? {
+    allowedKinds,
+    ...(object(opts?.pool) ? { pool: opts.pool } : {}),
+    ...(named(opts?.excludeFamily) ? { excludeFamily: opts.excludeFamily } : {}),
+    ...(named(opts?.preferredAccountId) ? { preferredAccountId: opts.preferredAccountId } : {}),
+    ...(typeof opts?.filterLogin === 'function' ? { filterLogin: opts.filterLogin } : {}),
+    ...(Array.isArray(opts?.skipLoginIds) && opts.skipLoginIds.length ? { skipLoginIds: opts.skipLoginIds } : {}),
+    ...(Array.isArray(opts?.skipAccountIds) && opts.skipAccountIds.length ? { skipAccountIds: opts.skipAccountIds } : {}),
+    ...(opts?.fresh === true ? { fresh: true } : {}),
+  } : undefined;
+  const selected = callOpts ? await ctx.ports.selectLogin(callOpts) : await ctx.ports.selectLogin();
+  if (selected === null) {
+    if (allowedKinds && !allowedKinds.includes(ctx.state.agent?.kind)) return { state: 'unavailable', selected: null };
+    return { state: 'ready', selected: null };
+  }
   if (selected?.state === 'ready') {
     clearPoolExhausted(ctx);
     return { state: 'ready', selected };
   }
+  if (probeOnly) return { state: 'unavailable', selected: null };
   const reason = selected?.cooling?.[0]?.reason ?? selected?.unavailable?.[0]?.reason ?? 'usage-limit';
   const poolOut = await recordPoolExhausted(ctx, selected, reason, issue);
   return { state: 'exhausted', poolOut };
 }
+async function selectFamilyReviewer(ctx, job, { matchSame = false, skipIds = [] } = {}) {
+  if (!named(job.builderFamily)) return null;
+  const baseEnv = ctx.ports.env ?? process.env;
+  const blockedIds = new Set(Array.isArray(skipIds) ? skipIds.filter(named) : []);
+  const isMatchingEntry = (entry, env = baseEnv, explicitId = null) => {
+    const id = explicitId ?? entry?.id ?? entry?.login?.id ?? entry?.agent?.id ?? null;
+    if (named(id) && blockedIds.has(id)) return false;
+    const family = resolveAgentFamily(ctx, 'review', entry, env);
+    return Boolean(family && (matchSame ? family === job.builderFamily : family !== job.builderFamily));
+  };
+  if (!ctx.ports.selectLogin) {
+    return isMatchingEntry(ctx.state.agent, baseEnv) ? { state: 'ready', selected: null } : { state: 'unavailable', selected: null };
+  }
+  const candidateKinds = reviewerKindsForFamily(ctx, job.builderFamily, matchSame);
+  if (!candidateKinds.length) return { state: 'unavailable', selected: null };
+  const filterLogin = login => isMatchingEntry(login, loginEnvironment(baseEnv, login), login?.id);
+  const preferredAccountId = matchSame && named(job.builderLoginId) && !blockedIds.has(job.builderLoginId) ? job.builderLoginId : null;
+  const familyStepOpts = {
+    allowedKinds: candidateKinds,
+    ...(!matchSame ? { excludeFamily: job.builderFamily } : {}),
+    ...(preferredAccountId ? { preferredAccountId } : {}),
+    filterLogin,
+    ...(blockedIds.size ? { skipLoginIds: [...blockedIds], skipAccountIds: [...blockedIds] } : {}),
+    probeOnly: true,
+  };
+  let probe = await selectAgentStep(ctx, job.issue, familyStepOpts);
+  if (probe.state !== 'ready') return { state: 'unavailable', selected: null };
+  const selectedEntryOf = step => step.selected?.agent ?? step.selected?.login ?? ctx.state.agent;
+  const stepLoginId = step => step.selected?.login?.id ?? step.selected?.agent?.id ?? null;
+  const isMatchingStep = (step, fallbackEnv = baseEnv) => isMatchingEntry(selectedEntryOf(step), step.selected?.env ?? fallbackEnv, stepLoginId(step));
+  if (isMatchingStep(probe)) return probe;
+  if (probe.selected?.cloud) return { state: 'unavailable', selected: null };
+
+  const skippedIds = new Set(blockedIds);
+  const initialId = stepLoginId(probe);
+  if (named(initialId)) skippedIds.add(initialId);
+  const maxProbes = Math.min(24, Math.max(1, probe.selected?.poolSize ?? 8));
+  for (let i = 0; i < maxProbes && skippedIds.size > 0; i++) {
+    const next = await selectAgentStep(ctx, job.issue, {
+      ...familyStepOpts,
+      skipLoginIds: [...skippedIds],
+      skipAccountIds: [...skippedIds],
+      fresh: true,
+    });
+    if (next.state !== 'ready') break;
+    if (isMatchingStep(next)) return next;
+    const nextId = stepLoginId(next);
+    if (!named(nextId) || skippedIds.has(nextId) || next.selected?.cloud) break;
+    skippedIds.add(nextId);
+  }
+
+  if (named(probe.selected?.poolPath) || probe.selected?.configured === true) {
+    try {
+      const poolBaseEnv = ctx.ports.env ?? (() => {
+        const copy = { ...(probe.selected?.env ?? process.env) };
+        for (const k of Object.keys(probe.selected?.login?.env ?? {})) {
+          if (!(k in process.env)) delete copy[k];
+        }
+        return copy;
+      })();
+      const resolvedPoolPath = named(probe.selected?.poolPath) ? probe.selected.poolPath : undefined;
+      const loaded = loadLoginPool({ cwd: ctx.state.cwd, env: poolBaseEnv, poolPath: resolvedPoolPath, fallbackAgent: ctx.state.agent }, { fs: ctx.fs });
+      if (loaded.configured) {
+        const matchingLogins = loaded.logins.filter(login => isMatchingEntry(login, loginEnvironment(poolBaseEnv, login), login?.id));
+        if (matchingLogins.length) {
+          const matchingKinds = [...new Set(matchingLogins.map(login => login.harness ?? login.kind))];
+          const matchingPool = { ...loaded, logins: matchingLogins };
+          const viaSelector = await selectAgentStep(ctx, job.issue, {
+            allowedKinds: matchingKinds,
+            pool: matchingPool,
+            ...(!matchSame ? { excludeFamily: job.builderFamily } : {}),
+            ...(preferredAccountId ? { preferredAccountId } : {}),
+            filterLogin,
+            ...(blockedIds.size ? { skipLoginIds: [...blockedIds], skipAccountIds: [...blockedIds] } : {}),
+            fresh: true,
+            probeOnly: true,
+          });
+          if (viaSelector.state === 'ready' && isMatchingStep(viaSelector, poolBaseEnv)) {
+            return viaSelector;
+          }
+          const filtered = await selectPoolLogin(
+            {
+              cwd: ctx.state.cwd,
+              env: poolBaseEnv,
+              poolPath: resolvedPoolPath,
+              pool: matchingPool,
+              fallbackAgent: ctx.state.agent,
+              stateRoot: ctx.root,
+              allowedKinds: matchingKinds,
+            },
+            { fs: ctx.fs, now: ctx.now, ...(object(ctx.ports.loginPoolPorts) ? ctx.ports.loginPoolPorts : {}) },
+          );
+          if (filtered?.state === 'ready' && isMatchingEntry(filtered.agent ?? filtered.login, filtered.env ?? poolBaseEnv, filtered.login?.id ?? filtered.agent?.id)) {
+            clearPoolExhausted(ctx);
+            return { state: 'ready', selected: filtered };
+          }
+        }
+      }
+    } catch { /* Fall through to strict non-multi-family kind probe. */ }
+  }
+
+  const strictKinds = candidateKinds.filter(kind => {
+    if (kind === 'agy') return false;
+    const family = resolveAgentFamily(ctx, 'review', { kind }, baseEnv);
+    return Boolean(family && (matchSame ? family === job.builderFamily : family !== job.builderFamily));
+  });
+  if (strictKinds.length) {
+    const retry = await selectAgentStep(ctx, job.issue, {
+      allowedKinds: strictKinds,
+      ...(preferredAccountId ? { preferredAccountId } : {}),
+      ...(blockedIds.size ? { skipLoginIds: [...blockedIds], skipAccountIds: [...blockedIds] } : {}),
+      fresh: true,
+      probeOnly: true,
+    });
+    if (retry.state === 'ready' && isMatchingStep(retry)) return retry;
+  }
+  return { state: 'unavailable', selected: null };
+}
+const selectCrossFamilyReviewer = (ctx, job) => selectFamilyReviewer(ctx, job, { matchSame: false });
+const selectSameFamilyReviewer = (ctx, job, skipIds = []) => selectFamilyReviewer(ctx, job, { matchSame: true, skipIds });
 async function pausePrForPool(ctx, job, poolOut, reason) {
   await stopChecks(ctx, job);
   try { await leaveLane(ctx, job); job.lane = null; } catch (failure) { ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${failure.message}`); }
@@ -1223,8 +1492,10 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
   }
   if (!command && object(started)) {
     const loginId = selected?.login?.id ?? activeAgent?.id;
+    const modelFamily = resolveAgentFamily(ctx, role, activeAgent, baseEnv);
     if (named(loginId)) started.loginId = loginId;
     if (named(activeAgent?.kind)) started.agentKind = activeAgent.kind;
+    if (named(modelFamily)) started.modelFamily = modelFamily;
     if (selected?.cloud) started.cloud = true;
     if (object(selected?.account)) {
       started.accountWindows = {
@@ -1233,6 +1504,12 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
         weekly_used_percent: selected.account.weekly_used_percent ?? null,
         weekly_reset_at: selected.account.weekly_reset_at ?? null,
       };
+    }
+    if (role === 'build' || role === 'repair' || (role === 'conflict' && !named(job.builderFamily))) {
+      if (named(activeAgent?.kind)) job.agentKind = activeAgent.kind;
+      if (named(modelFamily)) job.builderFamily = modelFamily;
+      if (named(loginId)) job.builderLoginId = loginId;
+      else delete job.builderLoginId;
     }
   }
   return started;
@@ -1292,7 +1569,7 @@ const namedPaths = text => [...new Set([...String(text ?? '').matchAll(PATH_WORD
 // pdd:working issues. Read once per tick.
 async function otherJobs(ctx, rows) {
   if (ctx.others) return ctx.others;
-  const local = readJobs(ctx.fs, ctx.root).filter(j => j.phase !== 'ending').map(j => ({
+  const local = readJobs(ctx.fs, ctx.root).filter(j => !['ending', 'released'].includes(j.phase)).map(j => ({
     issue: j.issue, issues: jobIssues(j), title: j.title, text: `${j.title}\n${j.body}`,
     files: j.files ?? [], areas: Array.isArray(j.areas) ? j.areas : [],
   }));
@@ -1737,20 +2014,81 @@ async function ciState(ctx, head, job) {
 async function reviewState(ctx, job, prBody = '', preselected = null) {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
     if (job.review?.agent && !await cleanupPart(ctx, job, job.review.agent, 'review')) return { state: 'running' };
-    const step = preselected ? { state: 'ready', selected: preselected } : await selectAgentStep(ctx, job.issue);
+    const sameHead = job.review?.head === job.head;
+    const crossFamilyFallback = Boolean(sameHead && job.review?.crossFamilyFallback);
+    const failedReviewLoginIds = sameHead && Array.isArray(job.review?.failedReviewLoginIds) ? job.review.failedReviewLoginIds : [];
+    let step = preselected ? { state: 'ready', selected: preselected } : null;
+    if (!step && named(job.builderFamily)) {
+      if (!crossFamilyFallback) {
+        try {
+          const preferred = await selectCrossFamilyReviewer(ctx, job);
+          if (preferred?.state === 'ready') step = preferred;
+        } catch (error) {
+          ctx.warn?.(`Autopilot core cross-family reviewer selection failed for #${job.issue}: ${error.message}`);
+        }
+      } else {
+        try {
+          const sameFamily = await selectSameFamilyReviewer(ctx, job, failedReviewLoginIds);
+          if (sameFamily?.state === 'ready') step = sameFamily;
+        } catch (error) {
+          ctx.warn?.(`Autopilot core same-family reviewer fallback selection failed for #${job.issue}: ${error.message}`);
+        }
+      }
+    }
+    if (!step) step = await selectAgentStep(ctx, job.issue);
     if (step.state === 'exhausted') {
       await pausePrForPool(ctx, job, step.poolOut, step.poolOut.reason);
       return { state: 'pool-paused' };
     }
     // A scoped check (debate B R2) is a short review of one part; a fresh review reads the whole PR.
-    const cwd = await checkout(ctx, job, 'review'), scoped = job.review?.head === job.head ? job.review.scoped : null;
+    const cwd = await checkout(ctx, job, 'review'), scoped = sameHead ? job.review.scoped : null;
     const linked = scoped ? '(none)' : await linkedIssues(ctx, job, prBody, await changedFiles(ctx, job, job.head));
-    job.review = { head: job.head, attempts: (job.review?.head === job.head ? job.review.attempts ?? 0 : 0) + 1, ...(scoped ? { scoped } : {}),
-      agent: startJob(ctx, job, 'review', cwd, result => scoped ? scopedPrompt(ctx, job, scoped, result) : reviewPrompt(ctx, job, result, linked), null, {}, step.selected) };
-    ctx.saveJob(job); return { state: 'running' };
+    const activeReviewAgent = step.selected?.agent ?? ctx.state.agent;
+    const initialFamily = resolveAgentFamily(ctx, 'review', activeReviewAgent, step.selected?.env);
+    const computeIndependence = family => !named(job.builderFamily) ? 'unknown-builder' : (family && family !== job.builderFamily ? 'cross-family' : 'same-family');
+    const priorAttempts = sameHead ? job.review.attempts ?? 0 : 0;
+    const initialIndependence = computeIndependence(initialFamily);
+    let startedAgent;
+    try {
+      startedAgent = startJob(ctx, job, 'review', cwd, result => scoped ? scopedPrompt(ctx, job, scoped, result) : reviewPrompt(ctx, job, result, linked), null, {}, step.selected);
+    } catch (error) {
+      if (initialIndependence === 'cross-family' && !crossFamilyFallback) {
+        ctx.warn?.(`Autopilot core cross-family reviewer launch failed for #${job.issue}, falling back to same-family: ${error.message}`);
+        const failedId = step.selected?.login?.id ?? activeReviewAgent?.id;
+        const nextFailedIds = [...new Set([...failedReviewLoginIds, ...(named(failedId) ? [failedId] : [])])];
+        job.review = {
+          head: job.head,
+          attempts: priorAttempts,
+          ...(scoped ? { scoped } : {}),
+          crossFamilyFallback: true,
+          ...(nextFailedIds.length ? { failedReviewLoginIds: nextFailedIds } : {}),
+          agent: null,
+          retry: true,
+        };
+        ctx.saveJob(job);
+        return reviewState(ctx, job, prBody);
+      }
+      throw error;
+    }
+    job.review = {
+      head: job.head,
+      attempts: priorAttempts + 1,
+      ...(scoped ? { scoped } : {}),
+      ...(crossFamilyFallback ? { crossFamilyFallback: true } : {}),
+      ...(failedReviewLoginIds.length ? { failedReviewLoginIds } : {}),
+      ...(initialFamily ? { reviewFamily: initialFamily } : {}),
+      reviewIndependence: initialIndependence,
+      agent: startedAgent,
+    };
+    if (named(job.review.agent?.modelFamily) && job.review.agent.modelFamily !== job.review.reviewFamily) {
+      job.review.reviewFamily = job.review.agent.modelFamily;
+      job.review.reviewIndependence = computeIndependence(job.review.reviewFamily);
+    }
+    ctx.saveJob(job); return { state: 'running', reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence };
   }
-  if (job.review.verdict) return { state: job.review.verdict === 'PASS' ? 'pass' : 'fail', mustFix: job.review.mustFix, decision: job.review.decision ?? null };
-  const seen = ctx.jobs.read(job.review.agent);
+  if (job.review.verdict) return { state: job.review.verdict === 'PASS' ? 'pass' : 'fail', mustFix: job.review.mustFix, decision: job.review.decision ?? null, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
+  let seen;
+  try { seen = ctx.jobs.read(job.review.agent); } catch { seen = { state: 'exited', exit: null, result: 'invalid', log: null }; }
   const r = seen.result;
   if (seen.state === 'running') {
     // The process rule: a reviewer that makes nothing new is stopped (no verdict: one retry); the backstop ends the job.
@@ -1759,6 +2097,39 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
     if (watch.state !== 'quiet') return { state: 'running' };
   }
   if (!object(r) || !['PASS', 'FAIL'].includes(r.verdict) || r.head !== job.head) {
+    if (job.review.reviewIndependence === 'cross-family' && !job.review.crossFamilyFallback) {
+      const prevReviewAgent = job.review.agent;
+      if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
+      const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, prevReviewAgent) : null;
+      if (service && isQuotaExhaustionMessage(service) && (named(prevReviewAgent?.loginId) || prevReviewAgent?.cloud)) {
+        try {
+          await ctx.ports.exhaustLogin({
+            loginId: prevReviewAgent?.loginId,
+            cloud: prevReviewAgent?.cloud,
+            resetAt: null,
+            reason: service,
+            accountWindows: prevReviewAgent?.accountWindows ?? null,
+          });
+        } catch (error) {
+          ctx.warn?.(`Autopilot core could not mark cross-family reviewer cooldown for #${job.issue}: ${error.message}`);
+        }
+      }
+      const failedIds = [...new Set([
+        ...(Array.isArray(job.review.failedReviewLoginIds) ? job.review.failedReviewLoginIds : []),
+        ...(named(prevReviewAgent?.loginId) ? [prevReviewAgent.loginId] : []),
+      ])];
+      job.review = {
+        head: job.head,
+        attempts: Math.max(0, (job.review.attempts ?? 1) - 1),
+        ...(job.review.scoped ? { scoped: job.review.scoped } : {}),
+        crossFamilyFallback: true,
+        ...(failedIds.length ? { failedReviewLoginIds: failedIds } : {}),
+        agent: null,
+        retry: true,
+      };
+      ctx.saveJob(job);
+      return reviewState(ctx, job, prBody);
+    }
     const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, job.review.agent) : null;
     const reviewPooled = service && isQuotaExhaustionMessage(service)
       ? (job.review.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
@@ -1767,9 +2138,16 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
       const prevReviewAgent = job.review.agent;
       const rateClass = classifyRateLimitFailure(service, prevReviewAgent?.accountWindows);
       if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
+      const sameFamilyAllowedKinds = job.review.crossFamilyFallback && named(job.builderFamily)
+        ? reviewerKindsForFamily(ctx, job.builderFamily, true)
+        : undefined;
       if (prevReviewAgent?.cloud && rateClass === 'burst_rate_limit' && !job.review.burstRetried && ctx.ports.selectLogin) {
         await (ctx.ports.sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(ctx.ports.burstRetryMs ?? 150);
-        const same = await ctx.ports.selectLogin({ preferredAccountId: prevReviewAgent.loginId, fresh: true });
+        const same = await ctx.ports.selectLogin({
+          preferredAccountId: prevReviewAgent.loginId,
+          fresh: true,
+          ...(sameFamilyAllowedKinds?.length ? { allowedKinds: sameFamilyAllowedKinds } : {}),
+        });
         if (same?.state === 'ready' && same?.login?.id === prevReviewAgent.loginId) {
           job.review.burstRetried = true;
           job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
@@ -1796,7 +2174,13 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
           return reviewState(ctx, job, prBody, same);
         }
       }
-      const next = await ctx.ports.exhaustLogin({ loginId: prevReviewAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevReviewAgent?.accountWindows ?? null });
+      const next = await ctx.ports.exhaustLogin({
+        loginId: prevReviewAgent?.loginId ?? ctx.state.agent?.id,
+        resetAt: null,
+        reason: service,
+        accountWindows: prevReviewAgent?.accountWindows ?? null,
+        ...(sameFamilyAllowedKinds?.length ? { allowedKinds: sameFamilyAllowedKinds } : {}),
+      });
       if (next !== null) {
         if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
           job.poolRotations = (job.poolRotations ?? 0) + 1;
@@ -1809,7 +2193,12 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
           return reviewState(ctx, job, prBody, next);
         }
         const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-        job.review = job.review?.scoped ? { head: job.head, scoped: job.review.scoped } : null;
+        const preserved = {
+          ...(job.review?.scoped ? { scoped: job.review.scoped } : {}),
+          ...(job.review?.crossFamilyFallback ? { crossFamilyFallback: true } : {}),
+          ...(Array.isArray(job.review?.failedReviewLoginIds) && job.review.failedReviewLoginIds.length ? { failedReviewLoginIds: job.review.failedReviewLoginIds } : {}),
+        };
+        job.review = Object.keys(preserved).length ? { head: job.head, ...preserved } : null;
         await pausePrForPool(ctx, job, poolOut, service);
         return { state: 'pool-paused' };
       }
@@ -1827,7 +2216,8 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
   const all = raw.map(item => oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500)).filter(Boolean);
   const followUps = all.filter(isFollowUp).slice(0, 20), mustFix = all.filter(item => !isFollowUp(item)).slice(0, 20);
   const verdict = !mustFix.length && (r.verdict === 'PASS' || followUps.length) ? 'PASS' : 'FAIL';
-  await ctx.comment(job.pr, [`Review: ${verdict} for head ${job.head} (a fresh Autopilot reviewer that did not write the change).`, '',
+  const independenceNote = named(job.review.reviewIndependence) ? `; ${job.review.reviewIndependence}${named(job.review.reviewFamily) ? `, ${job.review.reviewFamily}` : ''}` : '';
+  await ctx.comment(job.pr, [`Review: ${verdict} for head ${job.head} (a fresh Autopilot reviewer that did not write the change${independenceNote}).`, '',
     oneLine(r.summary, 2000), ...(mustFix.length ? ['', 'Must fix:', ...mustFix.map(item => `- ${item}`)] : []),
     ...(followUps.length ? ['', 'Follow-ups (P3, they do not block the merge):', ...followUps.map(item => `- ${item}`)] : []), '', `<!-- pdd:autopilot-core:review:${job.head} -->`].join('\n'));
   // T10: a P2 decision item is a choice that the issue did not make: one question for a person, not a repair.
@@ -1836,7 +2226,7 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
   delete job.poolRotations; clearPoolExhausted(ctx);
   Object.assign(job.review, { verdict, mustFix, followUps, decision }); ctx.saveJob(job); ctx.produced();
   if (followUps.length) await recordFollowUps(ctx, job, followUps).catch(error => ctx.warn(`Autopilot core could not record the follow-ups of #${job.issue}: ${error.message}`));
-  return { state: verdict === 'PASS' ? 'pass' : 'fail', mustFix, decision };
+  return { state: verdict === 'PASS' ? 'pass' : 'fail', mustFix, decision, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
 }
 // A test command through the machine's suite queue, in a clean checkout. No fixed time limit (--timeout 0): the process
 // rule watches it. A fresh checkout has no node_modules: with a lockfile and dependencies, install them first (no
@@ -2633,15 +3023,28 @@ function engineEvidenceReds(ctx, job, body = '') {
 
 // #3227 fix 3: one engine record per head, logs/N-evidence-HEAD.json, written when it changes. It stays after END.
 const evidencePath = (ctx, job, head = job.head) => join(ctx.dirs.logs, `${job.issue}-evidence-${head}.json`);
+function reviewerIndependenceLine(builderFamily, reviewFamily, reviewIndependence) {
+  if (!named(reviewIndependence)) return null;
+  const detail = [named(reviewFamily) ? `reviewer ${reviewFamily}` : null, named(builderFamily) ? `builder ${builderFamily}` : null].filter(Boolean).join(', ');
+  return `- Reviewer independence: ${reviewIndependence}${detail ? ` (${detail})` : ''}`;
+}
 function evidenceRecord(ctx, job, { lines = [], claims = [], ci = null, review = null, suite = null } = {}) {
-  const v = job.vectors;
+  const v = job.vectors, currentReview = job.review?.head === job.head ? job.review : null;
+  const revFamily = review?.reviewFamily ?? currentReview?.reviewFamily ?? null;
+  const revIndependence = review?.reviewIndependence ?? currentReview?.reviewIndependence ?? null;
   return { schema: 'pdd.core-evidence.v1', issue: job.issue, pr: job.pr ?? null, head: job.head, agentHead: job.agentHead ?? job.head,
     runtime: { lines: lines.map(l => ({ line: l.line, story: l.story, verdict: l.verdict })), claims, coverage: job.coverage ? { head: job.coverage.head, ok: job.coverage.ok === true, text: job.coverage.text ?? null, stories: job.coverage.stories ?? [], rows: job.coverage.rows ?? [], base: job.coverage.base ?? null, consumers: job.coverage.consumers ?? null } : null },
     vectors: v ? { head: v.head, state: v.state, reason: v.reason ?? null, cut: v.cut ?? false, skipped: v.skipped ?? [],
       control: v.control ? { code: v.control.code ?? [], fork: v.control.fork ?? null, error: v.control.error ?? null, state: controlResult(v)?.state ?? null } : null,
       kinds: Object.fromEntries(RUN_KINDS.filter(kind => (v.files?.[kind] ?? []).length).map(kind => [kind, v.result?.[kind] ? { state: v.result[kind].state, tests: v.result[kind].tests, pass: v.result[kind].pass, fail: v.result[kind].fail, skipped: v.result[kind].skipped, files: (v.result[kind].files ?? []).map(f => ({ file: f.file, state: f.state, code: f.code, tests: f.tests, pass: f.pass, fail: f.fail, skipped: f.skipped })), failed: v.result[kind].failed ?? [] } : { state: v.state, files: v.files[kind].map(file => ({ file })) }])) } : null,
     suite: suite ? { state: suite.state, head: job.suite?.head ?? null, exit: job.suite?.agent ? ctx.jobs.read(job.suite.agent).exit?.code ?? null : null, log: job.suite?.agent?.log ? basename(job.suite.agent.log) : null } : null,
-    ci: ci ? { state: ci.state } : null, review: review ? { state: review.state } : null,
+    ci: ci ? { state: ci.state } : null,
+    review: review ? {
+      state: review.state,
+      ...(named(job.builderFamily) ? { builderFamily: job.builderFamily } : {}),
+      ...(named(revFamily) ? { reviewFamily: revFamily } : {}),
+      ...(named(revIndependence) ? { reviewIndependence: revIndependence } : {}),
+    } : null,
     claimed: job.evidence ?? null, evidence: honestEvidence(job), notCovered: notCovered(job, lines, ctx),
     ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}) };
 }
@@ -2674,7 +3077,10 @@ function saveEvidence(ctx, job, parts) {
 function evidenceSummary(ctx, job) {
   const record = readJson(ctx.fs, evidencePath(ctx, job), null), c = record?.runtime?.coverage;
   const rows = (c?.rows ?? []).filter(row => row.current).map(row => `${row.story} ${row.pass ? 'pass' : row.sent === false ? 'not sent' : 'no pass'}${row.failed ? `, ${row.failed} failed` : ''}${row.refusals?.length ? `, refused (${row.refusals.join(', ')})` : ''}${row.tests ? ` (${row.tests.length} test${row.tests.length === 1 ? '' : 's'})` : ''}`);
+  const rev = record?.review ?? (job.review?.head === job.head ? job.review : null);
+  const indepLine = reviewerIndependenceLine(rev?.builderFamily ?? job.builderFamily ?? null, rev?.reviewFamily ?? null, rev?.reviewIndependence ?? null);
   return [`- Saved pdd test checks of this source: ${rows.length ? someFiles(rows) : 'none read'}${c ? `; cover: ${c.ok ? 'yes' : 'no'}` : ''}`,
+    ...(indepLine ? [indepLine] : []),
     ...engineEvidenceLines(job).map(line => line.replace(/\b(runtime|path|evidence)\s*:/gi, '$1 -')),
     `- Not covered: ${record?.notCovered?.length ? record.notCovered.map(item => oneLine(item, 300)).join('; ') : 'nothing that Autopilot knows of'}`.replace(/\b(runtime|path|evidence)\s*:/gi, '$1 -'),
     `- Record: ${basename(evidencePath(ctx, job))} on this machine`].join('\n');
@@ -2729,11 +3135,11 @@ async function writeEvidenceBlock(ctx, job) {
   if (next !== String(pr?.body ?? '')) await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${job.pr}`, { body: next });
 }
 
-async function stopChecks(ctx, job) {
+async function stopChecks(ctx, job, recover = false) {
   const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
     [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
   for (const [part, role] of parts) {
-    const hasError = Boolean(part.watch?.stopped || part.processesUncertain || (typeof part.token === 'string' && ctx.fs.existsSync?.(`${part.token}.processes.error`)));
+    const hasError = Boolean(recover || part.watch?.stopped || part.processesUncertain || (typeof part.token === 'string' && ctx.fs.existsSync?.(`${part.token}.processes.error`)));
     if (!await cleanupPart(ctx, job, part, role, hasError ? { recoverStopped: true } : null)) return false;
   }
   return true;
@@ -2961,7 +3367,7 @@ async function mergeCheck(ctx, job) {
     if (review.state === 'fail') { reds.push(`Review FAIL from a fresh reviewer: ${(review.mustFix ?? []).join('; ') || 'see the review comment on the PR'}`); nonTestReds++; }
     if (suite.state === 'fail') { reds.push(suite.text); if (suite.failure) reproduceChecks.push(suite.failure); }
   } else if (job.review?.head === job.head && job.review.verdict === 'FAIL') {
-    review = { state: 'fail', mustFix: job.review.mustFix, decision: job.review.decision ?? null };
+    review = { state: 'fail', mustFix: job.review.mustFix, decision: job.review.decision ?? null, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
     if (review.decision && asking(ctx) && !job.answer) {
       const item = review.decision.items[0].replace(DECISION_ITEM, '').replace(/^\W+/, '');
       await stopChecks(ctx, job);
@@ -3064,7 +3470,7 @@ async function mergeCheck(ctx, job) {
     job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
     await ctx.comment(job.pr, [observe ? `Autopilot would merge this PR (observe mode): every check passed for head ${job.head}. It stays open and ready for review; Autopilot does not merge it.` : `Autopilot merge check passed for head ${job.head}.`, '',
       `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
-      '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', `- ${runtimeLine}`, `- ${evidenceText(honestEvidence(job))}`, `- Base: ${oneLine(base.message)}`,
+      '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', ...(reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null) ? [reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null)] : []), `- ${runtimeLine}`, `- ${evidenceText(honestEvidence(job))}`, `- Base: ${oneLine(base.message)}`,
       `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
       ...(job.coverage?.consumers?.line ? [`- ${job.coverage.consumers.line}`] : []),
       ...engineEvidenceLines(job), `- Evidence record: ${basename(saveEvidence(ctx, job, { lines: runtimeVerdicts(pr.body), claims: runtimeClaims(pr.body, job), ci, review, suite }) ?? evidencePath(ctx, job))} on this machine`,
@@ -3349,39 +3755,199 @@ async function leaveLane(ctx, job) {
 }
 // ---- Collision rules (debate B) -------------------------------------------------------------------------
 const IDENTITY = ['-c', 'user.name=PDD Autopilot', '-c', 'user.email=pdd@noreply.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
-const HEADER_LINE = /Generated from \S+\.prompt\.md \(sha256: [0-9a-f]*\)/;
-const RESERVE = HOUR;
-// The PR's changed lines: the + and - lines of `git diff -U0` in path order, without derived hash headers (M-a), its
-// file set and its hunks (start and length on the old side).
-function changedLines(diff, exclude = new Set()) {
-  const files = [], hunks = [], lines = [];
-  let path = null;
+const HEADER_WINDOW = 4096;
+const HEADER_STRIP = /^(\s*(?:(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from|(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*Prompt:) \S+\.prompt\.md)(?: \(sha256: [0-9a-f]{64}\)| sha256=[0-9a-f]{64})?(\.?\s*(?:\*\/|-->|"""|''')?\s*)$/;
+const gitRaw = async (ctx, args, cwd) => {
+  const r = await ctx.ports.git(args, { cwd });
+  return r.code === 0 ? String(r.stdout ?? '') : null;
+};
+function parseHeaderLine(raw) {
+  const cr = raw.endsWith('\r') ? '\r' : '', clean = cr ? raw.slice(0, -1) : raw;
+  if (clean.includes('\r')) return null;
+  const entries = headerEntries(clean);
+  if (!entries.length) return null;
+  const m = HEADER_STRIP.exec(clean);
+  return m ? { prompt: entries[0].prompt, stripped: `${m[1]}${m[2]}${cr}` } : null;
+}
+function headerLineLimit(text) {
+  if (text === null || text === undefined) return 0;
+  const raw = String(text), total = Buffer.byteLength(raw, 'utf8'), lines = raw.split('\n');
+  let pos = 0, count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const len = Buffer.byteLength(lines[i], 'utf8');
+    if (total <= HEADER_WINDOW ? pos + len <= HEADER_WINDOW : pos + len + 1 <= HEADER_WINDOW) count = i + 1;
+    else break;
+    pos += len + 1;
+  }
+  return count;
+}
+async function headerMaxLines(ctx, cwd, from, to, diff, exclude = new Set()) {
+  const needed = new Set();
+  let path = null, inSamePosHunk = false;
   for (const line of String(diff ?? '').split('\n')) {
     const file = /^diff --git a\/.* b\/(.*)$/.exec(line);
-    if (file) { path = file[1]; files.push(path); continue; }
-    if (!path || exclude.has(path) || /^(?:---|\+\+\+) /.test(line)) continue;
-    const h = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
-    if (h) { hunks.push({ path, start: Number(h[1]), length: h[2] === undefined ? 1 : Number(h[2]) }); continue; }
-    if (/^[+-]/.test(line) && !HEADER_LINE.test(line)) lines.push(`${path}\t${line}`);
+    if (file) { path = exclude.has(file[1]) ? null : file[1]; inSamePosHunk = false; continue; }
+    if (!path) continue;
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (h) { inSamePosHunk = h[1] === h[2]; continue; }
+    if (inSamePosHunk && (line.startsWith('-') || line.startsWith('+')) && parseHeaderLine(line.slice(1))) needed.add(path);
   }
+  if (!needed.size) return null;
+  const base = (await ctx.git(['merge-base', from, to], cwd).catch(() => from)).trim();
+  const out = new Map();
+  for (const file of needed) {
+    const [oldText, newText] = await Promise.all([
+      gitRaw(ctx, ['show', `${base}:${file}`], cwd),
+      gitRaw(ctx, ['show', `${to}:${file}`], cwd),
+    ]);
+    out.set(file, { old: headerLineLimit(oldText), new: headerLineLimit(newText) });
+  }
+  return out;
+}
+const RESERVE = HOUR;
+// The PR's changed lines: the + and - lines of `git diff -U0` in path order, omitting in-place hash/spelling-only
+// provenance header replacements for the same prompt path inside the 4 KiB header window, its file set and its hunks.
+function changedLines(diff, exclude = new Set(), limits = null) {
+  const files = [], hunks = [], lines = [];
+  let path = null, hunk = null;
+  const flush = () => {
+    if (!hunk) return;
+    const { filePath, oldStart, newStart, removed, added } = hunk;
+    hunk = null;
+    const skip = new Set();
+    if (oldStart === newStart) {
+      const cap = limits?.get(filePath);
+      let oldBytes = 0, newBytes = 0;
+      for (let k = 0; k < removed.length && k < added.length; k++) {
+        const rRaw = removed[k].slice(1), aRaw = added[k].slice(1);
+        const rLen = Buffer.byteLength(rRaw, 'utf8'), aLen = Buffer.byteLength(aRaw, 'utf8');
+        const inWin = cap
+          ? oldStart + k <= cap.old && newStart + k <= cap.new
+          : oldStart === 1 && oldBytes + rLen + 1 <= HEADER_WINDOW && newBytes + aLen + 1 <= HEADER_WINDOW;
+        if (inWin) {
+          const r = parseHeaderLine(rRaw), a = parseHeaderLine(aRaw);
+          if (r && a && r.prompt === a.prompt) skip.add(k);
+        }
+        oldBytes += rLen + 1; newBytes += aLen + 1;
+      }
+    }
+    for (let k = 0; k < removed.length; k++) if (!skip.has(k)) lines.push(`${filePath}\t${removed[k]}`);
+    for (let k = 0; k < added.length; k++) if (!skip.has(k)) lines.push(`${filePath}\t${added[k]}`);
+  };
+  for (const line of String(diff ?? '').split('\n')) {
+    const file = /^diff --git a\/.* b\/(.*)$/.exec(line);
+    if (file) { flush(); path = file[1]; files.push(path); continue; }
+    if (!path || exclude.has(path) || (!hunk && /^(?:---|\+\+\+) /.test(line))) continue;
+    const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (h) {
+      flush();
+      const oldStart = Number(h[1]), length = h[2] === undefined ? 1 : Number(h[2]), newStart = Number(h[3]);
+      hunks.push({ path, start: oldStart, length });
+      hunk = { filePath: path, oldStart, newStart, removed: [], added: [] };
+      continue;
+    }
+    if (!hunk) continue;
+    if (line.startsWith('-')) hunk.removed.push(line);
+    else if (line.startsWith('+')) hunk.added.push(line);
+  }
+  flush();
   return { files: files.sort(), hunks, fingerprint: createHash('sha256').update(lines.join('\n')).digest('hex') };
 }
-const changeOf = async (ctx, cwd, from, to, exclude) => changedLines(await ctx.git(['diff', '-U0', '--no-color', '--no-ext-diff', `${from}...${to}`], cwd), exclude);
+async function changeOf(ctx, cwd, from, to, exclude) {
+  const diff = await ctx.git(['diff', '-U0', '--no-color', '--no-ext-diff', `${from}...${to}`], cwd);
+  return changedLines(diff, exclude, await headerMaxLines(ctx, cwd, from, to, diff, exclude));
+}
 const sameList = (a, b) => a.length === b.length && a.every((value, i) => value === b[i]);
+function parseDiffHunks(diff) {
+  const out = [];
+  for (const line of String(diff ?? '').split('\n')) {
+    const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (!h) continue;
+    const bLen = h[2] === undefined ? 1 : Number(h[2]), sLen = h[4] === undefined ? 1 : Number(h[4]);
+    out.push({ bStart: bLen === 0 ? Number(h[1]) : Number(h[1]) - 1, bLen, sStart: sLen === 0 ? Number(h[3]) : Number(h[3]) - 1, sLen });
+  }
+  return out;
+}
+function locateConflicts(segments, bLines, oLines, tLines, h12, h13) {
+  let i12 = 0, i13 = 0, bIdx = 0, oIdx = 0, tIdx = 0;
+  const positions = new Map();
+  const atConflict = c => c && sameList(bLines.slice(bIdx, bIdx + c.base.length), c.base)
+    && sameList(oLines.slice(oIdx, oIdx + c.ours.length), c.ours)
+    && sameList(tLines.slice(tIdx, tIdx + c.theirs.length), c.theirs);
+  for (let s = 0; s < segments.length; s++) {
+    const seg = segments[s];
+    if (!seg.conflict) {
+      const nextC = segments[s + 1]?.conflict ? segments[s + 1] : null;
+      let rem = seg.clean.length;
+      while (rem > 0 || (nextC && !atConflict(nextC))) {
+        while (i12 < h12.length && (h12[i12].bStart + h12[i12].bLen < bIdx || (h12[i12].bLen > 0 && h12[i12].bStart < bIdx))) i12++;
+        while (i13 < h13.length && (h13[i13].bStart + h13[i13].bLen < bIdx || (h13[i13].bLen > 0 && h13[i13].bStart < bIdx))) i13++;
+        const a = i12 < h12.length && h12[i12].bStart === bIdx && h12[i12].sStart === oIdx ? h12[i12] : null;
+        const b = i13 < h13.length && h13[i13].bStart === bIdx && h13[i13].sStart === tIdx ? h13[i13] : null;
+        if (rem === 0 && atConflict(nextC)) break;
+        if (a && b && a.bLen === b.bLen && a.sLen === b.sLen && a.sLen <= rem) {
+          bIdx += a.bLen; oIdx += a.sLen; tIdx += b.sLen; rem -= a.sLen; i12++; i13++; continue;
+        }
+        if (a && !b && a.sLen <= rem && (i13 >= h13.length || a.bStart + a.bLen <= h13[i13].bStart)) {
+          bIdx += a.bLen; oIdx += a.sLen; tIdx += a.bLen; rem -= a.sLen; i12++; continue;
+        }
+        if (b && !a && b.sLen <= rem && (i12 >= h12.length || b.bStart + b.bLen <= h12[i12].bStart)) {
+          bIdx += b.bLen; oIdx += b.bLen; tIdx += b.sLen; rem -= b.sLen; i13++; continue;
+        }
+        if (rem === 0) break;
+        const nextB12 = i12 < h12.length ? h12[i12].bStart - bIdx : rem;
+        const nextB13 = i13 < h13.length ? h13[i13].bStart - bIdx : rem;
+        const step = Math.max(1, Math.min(rem, nextB12 > 0 ? nextB12 : rem, nextB13 > 0 ? nextB13 : rem));
+        bIdx += step; oIdx += step; tIdx += step; rem -= step;
+      }
+      continue;
+    }
+    positions.set(seg, atConflict(seg) ? { bIdx, oIdx, tIdx } : null);
+    bIdx += seg.base.length; oIdx += seg.ours.length; tIdx += seg.theirs.length;
+    while (i12 < h12.length && h12[i12].bStart + h12[i12].bLen <= bIdx && h12[i12].sStart + h12[i12].sLen <= oIdx) i12++;
+    while (i13 < h13.length && h13[i13].bStart + h13[i13].bLen <= bIdx && h13[i13].sStart + h13[i13].sLen <= tIdx) i13++;
+  }
+  return positions;
+}
+function normHeaderSide(lines, startIdx, cap) {
+  let sawHeader = false;
+  const rows = lines.map((line, idx) => {
+    const parsed = startIdx + idx + 1 <= cap ? parseHeaderLine(line) : null;
+    if (parsed) sawHeader = true;
+    return parsed;
+  });
+  return {
+    sawHeader,
+    out: lines.map((line, idx) => rows[idx] ? `\0${rows[idx].prompt}` : line),
+    stripped: lines.map((line, idx) => rows[idx] ? rows[idx].stripped : line),
+  };
+}
 // M-a to M-c for one diff3 block (arrays of lines; ours = the PR, theirs = the base branch). Null: an agent hunk.
-function resolveBlock(ours, base, theirs) {
-  if (sameList(ours, theirs) || sameList(theirs, base)) return ours;
-  if (sameList(ours, base)) return theirs;
-  if (!base.length) return [...theirs, ...ours];                                          // M-b: pure inserts, base side first
-  const strip = lines => lines.filter(line => !HEADER_LINE.test(line));
-  if (sameList(strip(ours), strip(theirs)) && sameList(strip(ours), strip(base))) return ours;   // M-a: only derived headers
+function resolveBlock(ours, base, theirs, maWindow = null) {
+  if (sameList(ours, theirs) || sameList(theirs, base)) return { lines: ours, maIndices: [] };
+  if (sameList(ours, base)) return { lines: theirs, maIndices: [] };
+  if (!base.length) return { lines: [...theirs, ...ours], maIndices: [] };                 // M-b: pure inserts, base side first
+  if (maWindow) {
+    const no = normHeaderSide(ours, maWindow.oIdx, maWindow.oCap);
+    const nb = normHeaderSide(base, maWindow.bIdx, maWindow.bCap);
+    const nt = normHeaderSide(theirs, maWindow.tIdx, maWindow.tCap);
+    if (no.sawHeader && sameList(no.out, nt.out) && sameList(no.out, nb.out)) {           // M-a: same prompt owner, only header hash/spelling differs
+      const maIndices = [];
+      const resolved = ours.map((line, idx) => {
+        if (!no.out[idx].startsWith('\0')) return line;
+        maIndices.push(idx);
+        return line !== theirs[idx] || line !== base[idx] ? no.stripped[idx] : line;
+      });
+      return { lines: resolved, maIndices };
+    }
+  }
   const region = side => { let from = 0, back = 0; while (from < base.length && from < side.length && side[from] === base[from]) from++;
     while (back < base.length - from && back < side.length - from && side[side.length - 1 - back] === base[base.length - 1 - back]) back++;
     return { from, to: base.length - back, lines: side.slice(from, side.length - back) }; };
   const a = region(ours), b = region(theirs);
   if (a.to <= b.from || b.to <= a.from) {                                                  // M-c: adjacent, not overlapping
     const [first, second] = a.from <= b.from ? [a, b] : [b, a];
-    return [...base.slice(0, first.from), ...first.lines, ...base.slice(first.to, second.from), ...second.lines, ...base.slice(second.to)];
+    return { lines: [...base.slice(0, first.from), ...first.lines, ...base.slice(first.to, second.from), ...second.lines, ...base.slice(second.to)], maIndices: [] };
   }
   return null;
 }
@@ -3412,36 +3978,67 @@ function mergeJson(base, ours, theirs) {
 }
 // One conflicted file after `git merge` with diff3 markers: its resolved text, or null with the agent hunks.
 async function resolveFile(ctx, cwd, file) {
-  const stage = n => ctx.git(['show', `:${n}:${file}`], cwd).then(text => text, () => null);
+  const stage = n => gitRaw(ctx, ['show', `:${n}:${file}`], cwd);
   if (file.endsWith('.json')) {
     const [b, o, t] = await Promise.all([stage(1), stage(2), stage(3)]);
     try {
       if (o === null || t === null) return { text: null };
       const merged = mergeJson(b === null ? undefined : JSON.parse(b), JSON.parse(o), JSON.parse(t));
       if (merged === CONFLICT) return { text: null };
-      const indent = /^\{\n(\s+)"/.exec(o)?.[1]?.length ?? (o.includes('\n') ? 2 : 0);
+      const indent = /^\{\r?\n(\s+)/.exec(o)?.[1]?.length ?? (o.includes('\n') ? 2 : 0);
       return { text: `${JSON.stringify(merged, null, indent)}\n` };
     } catch { return { text: null }; }
   }
   let text;
   try { text = ctx.fs.readFileSync(join(cwd, file), 'utf8'); } catch { return { text: null }; }
   if (text.includes('\0')) return { text: null };
+  const baseText = await stage(1);
   // A-b: an add/add of one path (no base stage) is never mechanical: an agent makes one file from both.
-  if (await stage(1) === null) return { text: null, hunks: [`(${file}: both sides added this file)\n${cutText(text, 4000, `read the conflict in the file: ${file}`)}`] };
-  const out = [], hunks = [], lines = text.split('\n');
+  if (baseText === null) return { text: null, hunks: [`(${file}: both sides added this file)\n${cutText(text, 4000, `read the conflict in the file: ${file}`)}`] };
+  const lines = text.split('\n'), segments = [], hunks = [];
+  let clean = [];
   for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].startsWith('<<<<<<< ')) { out.push(lines[i]); continue; }
-    const part = { ours: [], base: [], theirs: [] };
+    if (!lines[i].startsWith('<<<<<<< ')) { clean.push(lines[i]); continue; }
+    segments.push({ clean }); clean = [];
+    const part = { conflict: true, ours: [], base: [], theirs: [], valid: false };
     let where = 'ours', j = i + 1;
     for (; j < lines.length && !lines[j].startsWith('>>>>>>> '); j++) {
       if (lines[j].startsWith('||||||| ')) where = 'base'; else if (lines[j] === '=======') where = 'theirs'; else part[where].push(lines[j]);
     }
+    part.valid = where === 'theirs' && j < lines.length;
     hunks.push(lines.slice(i, j + 1).join('\n'));
-    const resolved = where === 'theirs' ? resolveBlock(part.ours, part.base, part.theirs) : null;
-    if (!resolved) return { text: null, hunks };
-    out.push(...resolved); i = j;
+    segments.push(part); i = j;
   }
-  return { text: out.join('\n'), hunks };
+  segments.push({ clean });
+  let positions = null, bCap = 0, oCap = 0, tCap = 0;
+  if (segments.some(seg => seg.conflict && seg.ours.some(parseHeaderLine))) {
+    const [oursText, theirsText, d12, d13] = await Promise.all([
+      stage(2),
+      stage(3),
+      gitRaw(ctx, ['diff', '-U0', '--no-color', '--no-ext-diff', `:1:${file}`, `:2:${file}`], cwd),
+      gitRaw(ctx, ['diff', '-U0', '--no-color', '--no-ext-diff', `:1:${file}`, `:3:${file}`], cwd),
+    ]);
+    if (oursText !== null && theirsText !== null && d12 !== null && d13 !== null && !baseText.includes('\0') && !oursText.includes('\0') && !theirsText.includes('\0')) {
+      bCap = headerLineLimit(baseText); oCap = headerLineLimit(oursText); tCap = headerLineLimit(theirsText);
+      positions = locateConflicts(segments, baseText.split('\n'), oursText.split('\n'), theirsText.split('\n'), parseDiffHunks(d12), parseDiffHunks(d13));
+    }
+  }
+  const out = [], maOutLines = [];
+  for (const seg of segments) {
+    if (!seg.conflict) { out.push(...seg.clean); continue; }
+    if (!seg.valid) return { text: null, hunks };
+    const loc = positions?.get(seg);
+    const resolved = resolveBlock(seg.ours, seg.base, seg.theirs, loc ? { ...loc, bCap, oCap, tCap } : null);
+    if (!resolved) return { text: null, hunks };
+    for (const idx of resolved.maIndices) maOutLines.push(out.length + idx + 1);
+    out.push(...resolved.lines);
+  }
+  const mergedText = out.join('\n');
+  if (maOutLines.length) {
+    const mCap = headerLineLimit(mergedText);
+    if (maOutLines.some(lineNo => lineNo > mCap)) return { text: null, hunks };
+  }
+  return { text: mergedText, hunks };
 }
 // The conflict rule of the final step (debate B 5.4; this is the one place). git merge-tree first: clean is null.
 // Otherwise merge with diff3 in the job worktree and resolve mechanical hunks (M-a derived hash headers, recomputed;
@@ -3467,14 +4064,6 @@ async function laneConflict(ctx, job) {
     await ctx.git(['merge', '--abort'], cwd).catch(() => {});
     const all = hunks.join('\n\n');
     return { agent: { files, hunks: cutText(all, 12000, `read the conflict in the files: ${files.join(', ')}`), cut: Math.max(0, all.length - 12000) } };
-  }
-  // M-a: recompute the derived hash headers of the fixed files from their prompts.
-  for (const file of files) {
-    const text = ctx.fs.readFileSync(join(cwd, file), 'utf8'), m = /Generated from (\S+\.prompt\.md) \(sha256: [0-9a-f]*\)/.exec(text);
-    if (m && ctx.fs.existsSync(join(cwd, m[1]))) {
-      const prompt = ctx.fs.readFileSync(join(cwd, m[1]));
-      ctx.fs.writeFileSync(join(cwd, file), text.replace(m[0], `Generated from ${m[1]} (sha256: ${promptHeaderHash(prompt)})`));
-    }
   }
   await ctx.git(['add', '--', ...files], cwd);
   await ctx.git([...IDENTITY, 'commit', '-q', '--no-edit', '-m', `Merge ${base} into ${job.branch} (mechanical conflict fix)`], cwd);
@@ -3600,6 +4189,25 @@ export function pathRules({ changed = [], baseFiles = [], before = EMPTY_READ, a
   if (before.bindings && !after.bindings && changed.some(c => c.path === 'pdd-bindings.json')) red('pdd-bindings.json cannot be read at this head: fix it (pdd owner needs valid JSON with schema_version pdd.bindings.v1 and a modules array, at most 64 KiB).');
   const moved = c => c.from && c.from !== c.path ? ` (moved from ${c.from})` : '';
   const readLine = line => `read "${line.field}" in the files field of the line "${line.line}"`;
+  const PATH_E_EXCLUDED_DIR = /^(?:docs?|skills|prompts|user_stories|stories|\.github|\.agents|\.claude|\.codex|data|assets|static|public|vendor|dist|build|out|coverage|logs|tmp|temp)\//i;
+  const PATH_E_FIXTURE_DIR = /(?:^|\/)((?:fixtures|examples))\//i;
+  const PATH_E_DOTFILE = /(?:^|\/)\.[^/]+$/;
+  const PATH_E_CONFIG_OR_META = /^(?:[^/]+\.config\.[^/]+)$|(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.(?:toml|lock)|poetry\.lock|Pipfile(?:\.lock)?|pyproject\.toml|Gemfile(?:\.lock)?|composer\.(?:json|lock)|go\.(?:mod|sum)|pdd(?:-bindings)?\.json|tsconfig[^/]*\.json|jsconfig\.json|(?:eslint|prettier|vite|vitest|jest|babel|rollup|webpack|tailwind|postcss)\.config\.[^/]+|Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Justfile|Vagrantfile|Rakefile|LICENSE(?:\.[^/]+)?|NOTICE(?:\.[^/]+)?|COPYING(?:\.[^/]+)?|CODEOWNERS|OWNERS|AUTHORS)$/i;
+  const PATH_E_SOURCE_CODE_EXT = /\.(?:m?[jt]sx?|cjs|cts|mts|py|pyi|rs|go|rb|java|kt|kts|swift|c|cc|cpp|cxx|h|hh|hpp|cs|php|scala|ex|exs|erl|hrl|clj|cljs|lua|r|jl|zig|nim|dart|sol|sql|sh|bash|zsh|ps1|vue|svelte|astro|css|scss|sass|less)$/i;
+  const isEligiblePathECode = path => {
+    if (!named(path) || path.startsWith('/') || /[\\\x00-\x1f\x7f]/.test(path)) return false;
+    const parts = path.split('/');
+    if (parts.some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git')) return false;
+    if (path.endsWith('.prompt.md') || isTestOwnedPath(path) || /\.stories\.[^/]+$/i.test(path)) return false;
+    if (PATH_E_EXCLUDED_DIR.test(path) || PATH_E_FIXTURE_DIR.test(path) || PATH_E_DOTFILE.test(path) || PATH_E_CONFIG_OR_META.test(path)) return false;
+    return PATH_E_SOURCE_CODE_EXT.test(path) || /^(?:bin|scripts)\/[A-Za-z0-9_-]+$/i.test(path);
+  };
+  const recorded = (path, prompt) => { const o = after.owners.get(path); return !!o && (o.how === 'binding' || o.how === 'header') && o.owners.includes(prompt); };
+  const added = changed.filter(c => c.status.startsWith('A')).map(c => c.path);
+  const addedPrompts = new Set(added.filter(path => path.endsWith('.prompt.md')));
+  const onPathE = path => lines.some(line => line.path === 'e' && line.files.has(path));
+  const adoptedOnPathE = new Set(changed.filter(c => state(c) === 'unowned' && isEligiblePathECode(c.path) && (!c.from || isEligiblePathECode(c.from)) && (onPathE(c.path) || (c.from && onPathE(c.from))) && [...addedPrompts].some(prompt => recorded(c.path, prompt))).map(c => c.path));
+  const pathEPrompts = new Set([...addedPrompts].filter(prompt => [...adoptedOnPathE].some(path => recorded(path, prompt))));
   for (const c of changed) {
     const on = lines.filter(line => line.files.has(c.path) || (c.from && line.files.has(c.from)));
     if (state(c) === 'owned') {
@@ -3607,21 +4215,20 @@ export function pathRules({ changed = [], baseFiles = [], before = EMPTY_READ, a
       for (const line of on.filter(l => l.path === 'd' || l.path === 'e')) red(`${c.path}${moved(c)} is owned by ${owner}, so it cannot take path ${line.path}: use path a or b.`, readLine(line));
       if (lines.length && !on.length) red(`${c.path}${moved(c)} is owned by ${owner} and this PR changes it, but no Path line names it in its files field: put it on a path a or b line.`,
         `read these files fields: ${lines.slice(0, 5).map(line => `"${line.field}"`).join('; ')}`);
-    } else if (state(c) === 'new') for (const line of on.filter(l => l.path === 'e'))
+    } else if (state(c) === 'new' && !pathEPrompts.has(c.path)) for (const line of on.filter(l => l.path === 'e'))
       red(`${c.path} is new in this PR (not on the base), so it cannot take path e (existing code that no prompt owns): a new code file takes path c, with its prompt and a binding or a Generated from header; any other new file takes path d.`, readLine(line));
   }
-  // R3: an issue that asks to adopt PDD may give an existing file its first owner, so any changed file counts.
-  const recorded = (path, prompt) => { const o = after.owners.get(path); return !!o && (o.how === 'binding' || o.how === 'header') && o.owners.includes(prompt); };
-  const added = changed.filter(c => c.status.startsWith('A')).map(c => c.path), owns = (adopting ? changed.map(c => c.path) : added).filter(path => !path.endsWith('.prompt.md'));
+  // R3: an issue that asks to adopt PDD (or creates a prompt for an existing unowned file on path e) may give an existing file its first owner.
+  const owns = (adopting ? changed.map(c => c.path) : [...new Set([...added, ...adoptedOnPathE])]).filter(path => !path.endsWith('.prompt.md'));
   const headOwner = path => after.owners.get(path) ? ownerText(after.owners.get(path)) : 'no owner';
-  for (const prompt of added.filter(path => path.endsWith('.prompt.md')))
+  for (const prompt of addedPrompts)
     if (!owns.some(path => recorded(path, prompt))) red(`${prompt} is a new prompt that owns no new code file of this PR by a binding or header (its opening sentence alone is not enough): give the new code file a binding or a Generated from header (path c); a non-code change takes path d, with no new prompt.`,
       `read these head owners of the new files: ${owns.slice(0, 5).map(path => `${path}: ${headOwner(path)}`).join('; ') || '(no new file)'}`);
   if (!adopting) {
     const sources = new Map(changed.filter(c => c.from).map(c => [c.path, c.from]));
     for (const [path, owner] of after.owners) {
       const base = sources.get(path) ?? path;
-      if ((owner.how === 'binding' || owner.how === 'header') && onBase.has(base) && !before.owners.has(base) && !before.unchecked.has(base))
+      if ((owner.how === 'binding' || owner.how === 'header') && onBase.has(base) && !before.owners.has(base) && !before.unchecked.has(base) && !adoptedOnPathE.has(path))
         red(`${path} exists on the base with no owner, and this PR adds a ${owner.how} for it: never add ownership for an existing file unless the issue asks to adopt PDD.`, `read the head owner of ${path}: ${ownerText(owner)}`);
     }
   }
@@ -4685,6 +5292,7 @@ function serviceProblem(ctx, part) {
 const stopReason = row => !row ? 'the issue is closed' : !labelsOf(row).includes('pdd:working') ? 'pdd:working was removed'
   : labelsOf(row).includes('pdd:stuck') ? 'pdd:stuck was added' : row.assignees?.length ? 'the issue was assigned to a person' : null;
 async function advance(ctx, job) {
+  if (job.phase === 'released') return;
   if (job.phase === 'ending') return continueEnd(ctx, job);
   // After a tick gap longer than the quiet period (a laptop sleep) nothing could make progress: the quiet clock starts
   // again. A claim that expired in the gap, or an agent that died in it, is the machine's fault: a no-result release
@@ -4843,7 +5451,7 @@ export async function tickCore(input, ports) {
   // The part of a shorter tick gap beyond one timer interval (a short sleep or a late timer) is not quiet time either.
   ctx.tickGap = before.lastTick !== null && !ctx.gap ? Math.max(0, ctx.now() - before.lastTick - (ports.tickMinutes ?? 10) * MIN) : 0;
   ctx.saveMachine({ ...before, lastTick: ctx.now() });
-  const own = readJobs(ctx.fs, ctx.root).some(job => job.phase !== 'ending' && job.claim && ctx.now() - job.claim.lastSeen < CLAIM_EXPIRES);
+  const own = readJobs(ctx.fs, ctx.root).some(job => !['ending', 'released'].includes(job.phase) && job.claim && ctx.now() - job.claim.lastSeen < CLAIM_EXPIRES);
   const machines = Math.max(1, new Set([...Object.keys(before.peers), ...(own ? [ctx.machineId] : [])]).size);
   ctx.budget = coreBudget(input.budget, machines);
   let rows = null;
@@ -4853,7 +5461,7 @@ export async function tickCore(input, ports) {
   // Only open issues by trusted authors reach a prompt (the same rule as intake).
   ctx.trustedOpen = async () => ctx.openRows ??= Array.isArray(rows) ? (await Promise.all(rows.filter(row => !row.pull_request).map(async row => await ctx.trust(row) ? row : null))).filter(Boolean) : null;
   if (open) for (const job of readJobs(ctx.fs, ctx.root)) {
-    const why = job.phase === 'ending' ? null : stopReason(open.get(job.issue));
+    const why = ['ending', 'released'].includes(job.phase) ? null : stopReason(open.get(job.issue));
     if (why) {
       try {
         // A closed issue can be the merge itself ("Fixes #N"): a merged PR finishes as merged, not as a person stop.
@@ -4867,7 +5475,7 @@ export async function tickCore(input, ports) {
       } catch (error) { ctx.warn(`Autopilot core #${job.issue}: ${error.message}`); }
       continue;
     }
-    if (job.phase !== 'ending' && jobCompanions(job).length) {
+    if (!['ending', 'released'].includes(job.phase) && jobCompanions(job).length) {
       const kept = [];
       let dropped = false;
       for (const comp of jobCompanions(job)) {
@@ -4888,7 +5496,7 @@ export async function tickCore(input, ports) {
   for (const job of readJobs(ctx.fs, ctx.root)) {
     // A job that made no progress for the quiet period gets no heartbeat: it ends in this tick, and its claim must not
     // outlive it.
-    if (job.phase === 'ending' || !job.claim || ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES || isQuiet(ctx, job)) continue;
+    if (['ending', 'released'].includes(job.phase) || !job.claim || ctx.now() - job.claim.lastSeen >= CLAIM_EXPIRES || isQuiet(ctx, job)) continue;
     try {
       const claim = await confirmClaim(ctx, job);
       if (ctx.lost(claim, job)) { await handOver(ctx, job, 'another machine holds the claim now'); continue; }
@@ -4988,10 +5596,14 @@ export async function tickCore(input, ports) {
 // days, then the oldest such logs while the logs folder is over 500 MiB. Each step only warns.
 async function sweepFiles(ctx) {
   const live = new Set(readJobs(ctx.fs, ctx.root).map(job => String(job.issue)));
+  const latest = new Map();
+  for (const row of chronological(ctx.fs, ctx.root)) if (typeof row.outcome === 'string' && Number.isSafeInteger(row.issue)) latest.set(String(row.issue), row);
   const list = dir => { try { return ctx.fs.readdirSync(dir); } catch { return []; } };
   for (const name of list(ctx.dirs.worktrees)) {
     const issue = /^(\d+)(?:-|$)/.exec(name)?.[1];
-    if (issue && !live.has(issue)) await removeTree(ctx, join(ctx.dirs.worktrees, name)).catch(error => ctx.warn(`Autopilot core could not remove ${name}: ${error.message}`));
+    if (!issue || live.has(issue)) continue;
+    if (name === issue && latest.get(issue)?.personRelease === true) continue;
+    await removeTree(ctx, join(ctx.dirs.worktrees, name)).catch(error => ctx.warn(`Autopilot core could not remove ${name}: ${error.message}`));
   }
   const files = [];
   for (const name of list(ctx.dirs.logs)) {
@@ -5079,9 +5691,10 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}${pddWords(fs, part)}` : '';
   for (const job of jobs) {
-    if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
+    if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${named(job.review?.reviewIndependence) ? ` (${job.review.reviewIndependence})` : ''}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
       job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${runtimeWords(job)}${poolWords(job)}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
+    else if (job.phase === 'released') lines.push(`#${job.issue} release pending: retry pdd autopilot release ${job.issue}`);
     else lines.push(`#${job.issue} ${job.role} running ${age(job.agent?.started ?? job.started)} (log ${job.agent?.log ?? 'none'})${running(job, job.agent, job.role)}`);
   }
   const all = readHistory(fs, ports.root, Infinity), history = all.filter(row => typeof row.outcome === 'string').slice(0, 5);
@@ -5106,4 +5719,258 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   const drafts = ports.reportRoot ? listReportDrafts({ root: ports.reportRoot }, { fs }).length : 0;
   if (drafts) lines.push(`Reports: ${drafts} local draft(s); run pdd autopilot report to list or send them.`);
   return lines.join('\n');
+}
+
+export async function releaseCoreJob(stateFile, issue, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const text = String(issue ?? '').trim().replace(/\/$/, '');
+  const match = /^#?([1-9][0-9]*)$/.exec(text) ?? /^([^/\s#]+\/[^/\s#]+)#([1-9][0-9]*)$/.exec(text)
+    ?? /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/([1-9][0-9]*)$/.exec(text);
+  if (!match) return { exitCode: 1, message: `"${String(issue).slice(0, 80)}" is not an issue number, owner/repo#N or issue URL.` };
+  const number = Number(match.at(-1)), refRepo = match.length === 3 ? match[1] : null;
+  const savedState = object(ports.state) ? ports.state : (typeof stateFile === 'string' ? readJson(fs, stateFile) : null) ?? {};
+  const hasSavedMachine = named(savedState.machine);
+  const host = hasSavedMachine ? savedState.machine : (ports.hostname ?? hostname)();
+  const state = { ...savedState, machine: host };
+  const repo = state.repo || refRepo || '';
+  if (refRepo && state.repo && refRepo.toLowerCase() !== state.repo.toLowerCase())
+    return { exitCode: 1, message: `Issue ${issue} does not belong to ${state.repo}.` };
+
+  const sleep = ports.sleep ?? (ms => new Promise(done => setTimeout(done, ms)));
+  const lock = typeof stateFile === 'string' && stateFile ? `${stateFile}.lock` : null;
+  if (lock) {
+    const elapsed = ports.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
+    const began = elapsed();
+    let warned = false, locked = false;
+    for (;;) {
+      if (claimTickLock(lock, fs)) { locked = true; break; }
+      if (elapsed() - began >= 5000) break;
+      if (!warned) { ports.warn?.('Waiting for the current Autopilot operation to finish...'); warned = true; }
+      const remaining = 5000 - Math.max(0, elapsed() - began);
+      if (remaining <= 0) break;
+      await sleep(Math.min(100, remaining));
+      if (elapsed() - began >= 5000) break;
+    }
+    if (!locked) return { exitCode: 1, message: 'Timed out waiting for the current Autopilot operation; retry.' };
+  }
+
+  try {
+    const root = ports.root ?? (typeof stateFile === 'string' ? stateFile.replace(/\.json$/, '-core') : '');
+    const settings = coreSettings(state.cwd ? (readJson(fs, join(state.cwd, 'pdd.json')) ?? {}) : {});
+    const ghPort = ports.gh ?? (async () => ({ code: 1, stdout: '', stderr: 'gh unavailable' }));
+    const gitPort = ports.git ?? (async () => ({ code: 1, stdout: '', stderr: 'git unavailable' }));
+    const ctx = context({ state: { ...state, repo }, settings, budget: { state: 'normal' } }, {
+      ...ports, fs, root, gh: ghPort, git: gitPort,
+    });
+    const ownedForms = [...new Set([ctx.machineId, state.machine].filter(named))];
+    const defaultForm = hasSavedMachine ? state.machine : undefined;
+    const noRunForms = [...new Set([defaultForm, ctx.machineId, ...(hasSavedMachine ? [] : [state.machine])])];
+    const formsForClaim = (observed, saved) => {
+      const preferred = [observed?.machine, saved?.machine].find(m => named(m) && ownedForms.includes(m)) ?? ownedForms[0];
+      return [...new Set([preferred, ...ownedForms].filter(named))];
+    };
+    const runReleaseClaim = ports.releaseClaim
+      ? (machine, targetRef = issue, onMutate) => ports.releaseClaim(machine, targetRef, onMutate)
+      : (async (machine, targetRef = issue, onMutate) => {
+          const { releaseRunClaim } = await import('./workflow-runner.mjs');
+          return releaseRunClaim({
+            ref: targetRef, cwd: state.cwd, repository: repo || undefined,
+            machine, coordinatorId: state.coordinatorId,
+          }, {
+            now: ctx.now,
+            ...(ports.authority ? { authority: ports.authority } : {}),
+            execFile: async (file, args, options) => {
+              if (file === 'gh' && args?.[0] === 'api') {
+                const idx = args.indexOf('--method');
+                const method = idx >= 0 ? String(args[idx + 1] ?? 'GET').toUpperCase() : 'GET';
+                if (method !== 'GET') onMutate?.();
+              }
+              const reply = await (file === 'gh' ? ghPort(args, options) : gitPort(args, options));
+              if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
+              return reply;
+            },
+          });
+        });
+    const tryForms = async (forms = noRunForms, targetRef = issue, targetNum = number) => {
+      if (!forms.length) {
+        return { exitCode: 1, message: `Could not confirm claim cleanup for ${repo || 'this repository'}#${targetNum}; retry the release.` };
+      }
+      let mutated = false;
+      const first = await runReleaseClaim(forms[0], targetRef, () => { mutated = true; });
+      if (first.exitCode === 0 || mutated) return first;
+      const alt = forms.slice(1).find(candidate => named(candidate) && ownedForms.includes(candidate)
+        && typeof first.message === 'string' && first.message.startsWith('Cannot release ')
+        && first.message.endsWith(`#${targetNum}: ${candidate} holds a live claim.`));
+      if (!alt) return first;
+      return runReleaseClaim(alt, targetRef);
+    };
+    const refuseForeign = (current, targetNum = number) => {
+      const owner = named(current.machine) ? current.machine : 'unknown';
+      return { exitCode: 1, message: current.active
+        ? (owner === 'unknown' ? `Cannot release ${repo}#${targetNum}: claim ownership is unknown.` : `Cannot release ${repo}#${targetNum}: ${owner} holds a live claim.`)
+        : `Could not confirm claim cleanup for ${repo}#${targetNum}; retry the release.` };
+    };
+    const inspectClaimReadOnly = async (targetNum, savedClaim = null) => {
+      let current;
+      try { current = await ctx.readClaim(targetNum); }
+      catch { return { ok: false, response: { exitCode: 1, message: `Could not confirm claim cleanup for ${repo}#${targetNum}; retry the release.` } }; }
+      if (current && !ctx.ours(current)) return { ok: false, response: refuseForeign(current, targetNum) };
+      const eventId = current?.labelEventId ?? savedClaim?.labelEventId ?? null;
+      if (current && eventId) {
+        let comments;
+        try { comments = await ctx.gh.all(`repos/${ctx.repo}/issues/${targetNum}/comments?per_page=100`); }
+        catch { return { ok: false, response: { exitCode: 1, message: `Could not confirm claim cleanup for ${repo}#${targetNum}; retry the release.` } }; }
+        const competing = comments.some(c => {
+          const rec = claimRecord(c.body);
+          return Boolean(rec && String(rec.labelEventId) === String(eventId) && !ctx.ours(rec));
+        });
+        if (competing) {
+          return { ok: false, response: { exitCode: 1, message: `Cannot release ${repo}#${targetNum}: claim ownership is unknown.` } };
+        }
+      }
+      return { ok: true, current };
+    };
+
+    const jobFile = root ? join(ctx.dirs.jobs, `${number}.json`) : null;
+    const rawJob = jobFile ? readJson(fs, jobFile) : null;
+    const job = object(rawJob) && rawJob.issue === number ? rawJob : null;
+
+    if (!job) {
+      if (root) {
+        const parent = readJobs(fs, root).find(j => jobCompanions(j).some(c => c.issue === number));
+        const comp = parent ? jobCompanions(parent).find(c => c.issue === number) : null;
+        if (parent && comp) {
+          if ((named(comp.claim?.machine) && !ownedForms.includes(comp.claim.machine))
+            || (named(comp.claim?.coordinatorId) && comp.claim.coordinatorId !== state.coordinatorId))
+            return { exitCode: 1, message: `Cannot release ${repo}#${number}: ${comp.claim?.machine || 'another coordinator'} holds a live claim.` };
+          const check = await inspectClaimReadOnly(number, comp.claim);
+          if (!check.ok) return check.response;
+          const released = await tryForms(formsForClaim(check.current, comp.claim), String(number), number);
+          if (released.exitCode !== 0) return { exitCode: released.exitCode, message: released.message };
+          setJobCompanions(parent, jobCompanions(parent).filter(c => c.issue !== number));
+          ctx.saveJob(parent);
+          return { exitCode: 0, message: released.message };
+        }
+      }
+      const released = await tryForms();
+      return { exitCode: released.exitCode, message: released.message };
+    }
+
+    if ((named(job.claim?.machine) && !ownedForms.includes(job.claim.machine))
+      || (named(job.claim?.coordinatorId) && job.claim.coordinatorId !== state.coordinatorId)) {
+      return { exitCode: 1, message: `Cannot release ${repo}#${number}: ${job.claim?.machine || 'another coordinator'} holds a live claim.` };
+    }
+    const mainCheck = await inspectClaimReadOnly(number, job.claim);
+    if (!mainCheck.ok) return mainCheck.response;
+
+    const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
+      [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
+    const hadRunning = parts.some(([part]) => { try { return ctx.jobs.read(part)?.state === 'running'; } catch { return false; } });
+    let stoppedOk = await stopChecks(ctx, job);
+    for (let attempt = 1; !stoppedOk && attempt < 10; attempt++) {
+      await sleep(50);
+      stoppedOk = await stopChecks(ctx, job, true);
+    }
+    if (!stoppedOk) {
+      return { exitCode: 1, message: `Cannot release ${repo}#${number}: could not confirm that the local Autopilot job stopped; retry the release.` };
+    }
+    job.releaseIssues ??= jobIssues(job);
+    job.phase = 'released';
+    job.releaseStopped = Boolean(job.releaseStopped || hadRunning);
+    ctx.saveJob(job);
+
+    if (Number.isSafeInteger(job.pr)) {
+      try {
+        if (job.lane?.state === 'final') await leaveLane(ctx, job);
+        else {
+          const prIssue = await ctx.gh.ok('GET', `repos/${ctx.repo}/issues/${job.pr}`);
+          if (labelsOf(prIssue).includes(LANE)) await dropLabel(ctx, job.pr);
+          if (job.lane) { job.lane = null; ctx.saveJob(job); }
+        }
+      } catch {
+        return { exitCode: 1, message: `Could not confirm merge-lane cleanup for ${repo}#${number} (PR #${job.pr}); retry the release.` };
+      }
+    }
+
+    for (const comp of [...jobCompanions(job)]) {
+      if ((named(comp.claim?.machine) && !ownedForms.includes(comp.claim.machine))
+        || (named(comp.claim?.coordinatorId) && comp.claim.coordinatorId !== state.coordinatorId)) {
+        return { exitCode: 1, message: `Cannot release ${repo}#${comp.issue}: ${comp.claim?.machine || 'another coordinator'} holds a live claim.` };
+      }
+      const compCheck = await inspectClaimReadOnly(comp.issue, comp.claim);
+      if (!compCheck.ok) return compCheck.response;
+      const compReleased = await tryForms(formsForClaim(compCheck.current, comp.claim), String(comp.issue), comp.issue);
+      if (compReleased.exitCode !== 0) return { exitCode: compReleased.exitCode, message: compReleased.message };
+      setJobCompanions(job, jobCompanions(job).filter(c => c.issue !== comp.issue));
+      ctx.saveJob(job);
+    }
+
+    const released = await tryForms(formsForClaim(mainCheck.current, job.claim), issue, number);
+    if (released.exitCode !== 0) return { exitCode: released.exitCode, message: released.message };
+
+    const releasedIssues = Array.isArray(job.releaseIssues) && job.releaseIssues.length ? job.releaseIssues : jobIssues(job);
+    const latestHistory = issueRows(chronological(fs, root), job.issue).at(-1);
+    const alreadyRecorded = Boolean(latestHistory?.outcome === 'released' && latestHistory?.personRelease === true
+      && (!named(job.id) || !named(latestHistory.jobId) || latestHistory.jobId === job.id));
+    try {
+      fs.mkdirSync(ctx.root, { recursive: true, mode: 0o700 });
+      let appendText = null;
+      if (!alreadyRecorded) {
+        let lead = '';
+        try { if (!fs.readFileSync(ctx.dirs.history, 'utf8').match(/(^|\n)$/)) lead = '\n'; }
+        catch (e) { if (e.code !== 'ENOENT') throw e; }
+        appendText = lead + JSON.stringify({
+          at: ctx.now(),
+          issue: job.issue,
+          ...(named(job.id) ? { jobId: job.id } : {}),
+          ...(releasedIssues.length > 1 ? { issues: releasedIssues } : {}),
+          outcome: 'released',
+          stopped: Boolean(job.releaseStopped),
+          personRelease: true,
+          text: 'released by a person (pdd autopilot release)',
+          pr: job.pr ?? null,
+          log: job.agent?.log ?? null,
+          evidence: honestEvidence(job) ?? null,
+          ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
+          ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
+          ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}),
+        }) + '\n';
+      }
+      const fd = fs.openSync(ctx.dirs.history, 'a', 0o600);
+      try {
+        if (appendText !== null) {
+          const buf = Buffer.from(appendText, 'utf8');
+          for (let off = 0; off < buf.length;) off += fs.writeSync(fd, buf, off, buf.length - off);
+        }
+        fs.fsyncSync(fd);
+      } finally {
+        try { fs.closeSync(fd); } catch { /* Already closed. */ }
+      }
+      try {
+        const dirFd = fs.openSync(dirname(ctx.dirs.history), 'r');
+        try { fs.fsyncSync(dirFd); }
+        finally { try { fs.closeSync(dirFd); } catch { /* Already closed. */ } }
+      } catch (e) {
+        if (!['EINVAL', 'EBADF', 'EISDIR', 'ENOTSUP', 'EPERM', 'EACCES'].includes(e?.code)) throw e;
+      }
+    } catch {
+      return { exitCode: 1, message: `Could not record release history for ${repo}#${number}; retry the release.` };
+    }
+    const confirmedHistory = issueRows(chronological(fs, root), job.issue).at(-1);
+    if (!(confirmedHistory?.outcome === 'released' && confirmedHistory?.personRelease === true)) {
+      return { exitCode: 1, message: `Could not record release history for ${repo}#${number}; retry the release.` };
+    }
+    try { fs.rmSync(jobFile); }
+    catch (error) {
+      if (error?.code !== 'ENOENT') {
+        return { exitCode: 1, message: `Could not remove local job record for ${repo}#${number}; retry the release.` };
+      }
+    }
+
+    const suffix = job.worktree && job.branch && !released.message.includes('The worktree stays at')
+      ? ` The worktree stays at ${job.worktree} (branch ${job.branch}).` : '';
+    return { exitCode: 0, message: `${released.message}${suffix}` };
+  } finally {
+    if (lock) try { fs.unlinkSync(lock); } catch { /* Already unlinked. */ }
+  }
 }

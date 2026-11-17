@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-exit.prompt.md (sha256: b16e65babc5fa12bea31b4f5966467fffd0d622902ec93689c50bb3cdfae54fe).
+// Generated from prompts/cli/runtime-exit.prompt.md (sha256: f84eec69f908e020e767796a3060315e1a4e5589c32b7cdfe90b8b0a52601a48).
 export const STATE_EXIT_CODES = Object.freeze({
   passed: 0,
   failed: 1,
