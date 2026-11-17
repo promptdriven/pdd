@@ -2,15 +2,20 @@
 
 Own `src/autopilot-update.mjs`. Export `validAutoUpdateMode(mode)`, `detectGlobalInstallPrefix(packageRoot, ports)`, `hasMidWriteJobs(coreRoot, ports)`, `autoUpdateStatusLine({stateRoot}, ports)`, `maybeAutoUpdateAutopilot({state, packageRoot, coreRoot, stateRoot, env}, ports)`, `resolveReleaseUpgradeTarget({fetchImpl, spawnSyncImpl, env})`, `resolveMainCommitTarget({fetchImpl, spawnSyncImpl, env})` and `runCliUpgrade({env, stdout, stderr, main, spawnSyncImpl, fetchImpl, packageRoot, home, cwd}, ports)` (#2710, #3424). Keep an active global `pdd` Autopilot installation and its PDD skills current between ticks without interrupting jobs that are publishing or merging, and provide the explicit `pdd upgrade [--main]` command that updates a user-owned global `pdd` installation and its installed PDD skills together.
 
-## Channels and safety guards
+## Domain decisions
 
 - `validAutoUpdateMode` accepts `'release'` (default when `state.autoUpdate` is unset), `'main'` and `'off'`.
 - When mode is `'off'`, or `env.CI` or `env.PDD_AGENT_SESSION` is set, do nothing and return `{action: 'disabled'}`.
 - Throttle checks to at most once every hour (`3600000` ms) using `<stateRoot>/autopilot-update.json` (`checkedAt`, written atomically with mode `0600`).
 - `hasMidWriteJobs(target, ports)` accepts a `coreRoot` path or `{coreRoot, stateRoot}` and inspects `<coreRoot>/jobs/*.json` plus every active `<repo>-core/jobs/*.json` directory under `stateRoot`. Return `true` when any job has `phase === 'ending'`, `lane?.state === 'final'`, or an active Runtime check child (`runtimeWait?.state === 'sent'` or `runtime?.state === 'running'`). When `true`, defer without advancing `checkedAt` so the next idle tick checks immediately.
 - `detectGlobalInstallPrefix(packageRoot)` accepts only a real directory inside `<prefix>/lib/node_modules/@promptdriven/pdd`, `<prefix>/lib/node_modules/pdd`, `<prefix>/node_modules/@promptdriven/pdd`, or `<prefix>/node_modules/pdd`, owned by the current user (`stat.uid === uid` when `uid` is available) and containing no `.git` entry (never update a source checkout or root-owned prefix).
+- The GitHub package installs as `@promptdriven/pdd`. npm does not replace the unscoped `pdd` package when installing it; both claim the `pdd` executable and npm can refuse with `EEXIST`. To migrate manually, uninstall `pdd` from the same global npm prefix, then install `github:promptdriven/pdd` and verify `pdd --version`. Never recommend forcing the install over the existing executable.
+- Both updaters require manual migration when the admitted running package is at an unscoped `node_modules/pdd` location, or when `<prefix>/bin/pdd` resolves to the unscoped package's `bin/pdd.mjs` in that prefix. A leftover unscoped directory by itself does not block updating a scoped installation. A missing or unresolvable executable link is not evidence of unscoped ownership.
+- For a migration refusal, explain `The unscoped npm package pdd can block @promptdriven/pdd from installing its pdd executable (EEXIST). To migrate, run: npm uninstall -g --prefix '<prefix>' pdd && npm install -g --prefix '<prefix>' --ignore-scripts github:promptdriven/pdd`. Shell-quote the actual prefix as one POSIX argument in both commands. Neither updater runs those commands itself or refreshes skills on refusal. An admitted scoped installation without the collision keeps its normal update path.
 
 ## Update execution
+
+After the mode, throttle, mid-write and global prefix checks, but before lookup or any subprocess, check for required migration. If required, save the recovery message as `lastError` with the normal `checkedAt` backoff and return `{action: 'failed', error: <recovery message>}`. `autoUpdateStatusLine` includes the entire migration command, even when longer than a normal error excerpt.
 
 1. Query the target version, failing whenever `gh api` exits non-zero or returns no valid release/commit:
    - `'release'`: fetch `repos/promptdriven/pdd/releases?per_page=10`, pick the newest non-draft release with a valid version tag (`pickLatestRelease`, supporting prerelease-only `alpha-v*` repositories), throw when none is valid, and compare `version` against `<packageRoot>/package.json` `version` via `isNewerRelease`. Target spec: `github:promptdriven/pdd#<tag>`.
@@ -27,7 +32,7 @@ Own `src/autopilot-update.mjs`. Export `validAutoUpdateMode(mode)`, `detectGloba
 
 `runCliUpgrade({env, stdout, stderr, main = false, spawnSyncImpl, fetchImpl, packageRoot, home, cwd}, ports)` upgrades a user-owned global `pdd` installation and refreshes installed PDD skills in one step (#3424):
 
-1. Check `detectGlobalInstallPrefix(packageRoot, {fs, uid: ports.uid})`. When null (such as a Git checkout or root-owned prefix) or when `<packageRoot>/package.json` has no valid version, write an actionable message with `npm install -g github:promptdriven/pdd && pdd setup` to `stderr` and return `{exitCode: 1, ...}`.
+1. Check `detectGlobalInstallPrefix(packageRoot, {fs, uid: ports.uid})`. For an admitted prefix that requires migration, write the recovery message with a `pdd upgrade: ` prefix and trailing newline via `stderr.write(text)`, leave stdout empty and return `{exitCode: 1, cliUpdated: false, updatedSkills: [], skippedSkills: [], failedSkills: []}` before reading a version, looking up GitHub, running a subprocess or clearing caches. When the detected prefix is null (such as a Git checkout or root-owned prefix) or when `<packageRoot>/package.json` has no valid version, write an actionable message with `npm install -g github:promptdriven/pdd && pdd setup` to `stderr` and return `{exitCode: 1, ...}`.
 2. Resolve the upgrade target using GitHub API `fetchImpl` (falling back to `gh api` via `spawnSyncImpl` when needed):
    - Default (`main: false`): `resolveReleaseUpgradeTarget` queries `repos/promptdriven/pdd/releases?per_page=10`, selects `pickLatestRelease`, and returns `{channel: 'release', ref: tag, version, spec: 'github:promptdriven/pdd#' + tag}`.
    - `--main` (`main: true`): `resolveMainCommitTarget` queries `repos/promptdriven/pdd/commits/main`, validates the 40-hex `sha`, and returns `{channel: 'main', ref: sha, sha, spec: 'github:promptdriven/pdd#' + sha}` (never mutable `#main`).
@@ -43,3 +48,9 @@ Own `src/autopilot-update.mjs`. Export `validAutoUpdateMode(mode)`, `detectGloba
 - Read the full [Prompting guide](../../docs/prompting-guide.md) before authoring.
 - [Cached CLI release notice](release-notice.prompt.md) for release tag version parsing and comparison.
 - [Skills install](skills-install.prompt.md) for refreshing user-folder PDD skills after a self-update.
+
+## Ports for global-install admission
+
+- The injected filesystem in `ports.fs` takes string `path` for `fs.realpathSync` (returns the canonical path string), `fs.statSync` (stat with integer `uid` when known and directory flag `isDirectory`, a method in native Node), and `fs.existsSync` (returns Boolean).
+- The injected `stderr.write` takes string `text` and the updater ignores its return value.
+- `process.spawnSync` represents the `spawnSyncImpl` port for subprocesses; it takes a command string, a string array of arguments and process options, and returns the exit status and output. Migration refusal never calls it.

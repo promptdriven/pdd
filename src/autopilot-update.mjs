@@ -1,8 +1,8 @@
-// Generated from prompts/cli/autopilot-update.prompt.md (sha256: 0377fd937a21bce9234ab7d248d5afbd584fd60fa27a2e8b27d25adaf9edb7c5).
+// Generated from prompts/cli/autopilot-update.prompt.md (sha256: 6d702987a6dd93a644d1ca740633b07bd3d1715b475dbce3641d3e9bdcd2d5c8).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isNewerRelease, parseReleaseVersion, pickLatestRelease } from './release-notice.mjs';
 
@@ -10,6 +10,7 @@ const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const HOUR_MS = 60 * 60 * 1000;
 const STATUS_FILE = 'autopilot-update.json';
+const MIGRATION_ERROR = 'The unscoped npm package pdd can block @promptdriven/pdd from installing its pdd executable (EEXIST).';
 
 export const validAutoUpdateMode = mode => ['release', 'main', 'off'].includes(mode);
 
@@ -88,6 +89,17 @@ export function detectGlobalInstallPrefix(packageRoot, ports = {}) {
   return { prefix: match[1], realPackageRoot: real };
 }
 
+function legacyMigrationMessage({ prefix, realPackageRoot }, fs) {
+  if (basename(dirname(realPackageRoot)) !== 'node_modules') {
+    let binTarget;
+    try { binTarget = fs.realpathSync(join(prefix, 'bin/pdd')); } catch { return null; }
+    if (binTarget !== join(prefix, 'lib/node_modules/pdd/bin/pdd.mjs') &&
+        binTarget !== join(prefix, 'node_modules/pdd/bin/pdd.mjs')) return null;
+  }
+  const quotedPrefix = "'" + prefix.replaceAll("'", "'\\''") + "'";
+  return `${MIGRATION_ERROR} To migrate, run: npm uninstall -g --prefix ${quotedPrefix} pdd && npm install -g --prefix ${quotedPrefix} --ignore-scripts github:promptdriven/pdd`;
+}
+
 function resolveInstalledRoot(prefix, fallbackRoot, fs) {
   for (const rel of ['lib/node_modules/@promptdriven/pdd', 'node_modules/@promptdriven/pdd', 'lib/node_modules/pdd', 'node_modules/pdd']) {
     const candidate = join(prefix, rel);
@@ -110,7 +122,11 @@ export function autoUpdateStatusLine({ stateRoot }, ports = {}) {
   if (!stateRoot) return '';
   const saved = readJson(join(stateRoot, STATUS_FILE), fs);
   if (!saved) return '';
-  if (saved.lastError) return `Auto-update (${saved.channel ?? 'release'}): last try failed (${String(saved.lastError).replace(/\s+/g, ' ').slice(0, 160)})`;
+  if (saved.lastError) {
+    const error = String(saved.lastError);
+    const detail = error.startsWith(MIGRATION_ERROR) ? error : error.replace(/\s+/g, ' ').slice(0, 160);
+    return `Auto-update (${saved.channel ?? 'release'}): last try failed (${detail})`;
+  }
   if (saved.action === 'updated' && saved.toVersion && saved.updatedAt)
     return `Auto-update (${saved.channel ?? 'release'}): updated pdd ${saved.fromVersion ?? 'previous'} -> ${saved.toVersion} at ${new Date(saved.updatedAt).toISOString()}`;
   return '';
@@ -132,6 +148,11 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
   if (!globalInstall) {
     writeJson(statusPath, { ...(previous ?? {}), checkedAt: now, channel: mode, action: 'skipped', reason: 'non-global-or-unowned' }, fs);
     return { action: 'skipped', reason: 'non-global-or-unowned' };
+  }
+  const migration = legacyMigrationMessage(globalInstall, fs);
+  if (migration) {
+    writeJson(statusPath, { ...(previous ?? {}), checkedAt: now, channel: mode, lastError: migration }, fs);
+    return { action: 'failed', error: migration };
   }
   const currentVersion = readJson(join(globalInstall.realPackageRoot, 'package.json'), fs)?.version;
   if (!parseReleaseVersion(currentVersion)) return { action: 'skipped', reason: 'unreadable-version' };
@@ -309,6 +330,11 @@ export async function runCliUpgrade({
   const globalInstall = detectGlobalInstallPrefix(packageRoot, { fs, uid: ports.uid });
   if (!globalInstall) {
     writeLine(stderr, 'pdd upgrade updates only a user-owned global npm installation (not a Git checkout or root-owned prefix). To update manually, run: npm install -g github:promptdriven/pdd && pdd setup');
+    return { exitCode: 1, cliUpdated: false, updatedSkills: [], skippedSkills: [], failedSkills: [] };
+  }
+  const migration = legacyMigrationMessage(globalInstall, fs);
+  if (migration) {
+    writeLine(stderr, `pdd upgrade: ${migration}`);
     return { exitCode: 1, cliUpdated: false, updatedSkills: [], skippedSkills: [], failedSkills: [] };
   }
   const currentVersion = readJson(join(globalInstall.realPackageRoot, 'package.json'), fs)?.version;

@@ -74,6 +74,8 @@ This is the standard skills installer. It needs only Node.js. [Section 4](#4-the
 
 You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-workflow-on-a-github-issue)) and for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve` ([section 7](#7-check-prompts-on-the-pdd-interpreter)).
 
+If you have the unscoped global PDD package `pdd`, [migrate it first](#migrate-an-unscoped-global-installation).
+
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" --version  # reports PATH conflicts without changing files
@@ -89,6 +91,19 @@ Important:
 - Do not run `npm install -g pdd`. That installs a different, unrelated package from the npm registry.
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace your pdd with it. You can see this with `npm outdated -g`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
+
+#### Migrate an unscoped global installation
+
+The GitHub package installs as `@promptdriven/pdd`. If the unscoped npm package `pdd` still owns the `pdd` executable in your npm prefix, installing the scoped package can fail with `EEXIST`. Select the Node installation and npm prefix that own that `pdd`, then uninstall the unscoped package and install from GitHub in the same prefix. Do not use `--force` to overwrite the executable.
+
+```sh
+prefix="$(npm prefix -g)"
+npm uninstall -g --prefix "$prefix" pdd &&
+  npm install -g --prefix "$prefix" --ignore-scripts github:promptdriven/pdd &&
+  "$prefix/bin/pdd" --version
+```
+
+For a custom prefix, set `prefix` to that installation's prefix instead. This installs from the GitHub default branch. Use `pdd upgrade` for subsequent scoped upgrades and to refresh marked user skills.
 
 ### 2.3 Start Autopilot on your repository
 
