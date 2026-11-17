@@ -105,16 +105,27 @@ const RUNNER_ROUTES = {
 const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
 const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
 export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
-  const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
-    || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
-  return [PUBLIC_HELP_TEXT.heading, '', ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-    ...(prefix.length ? [] : [...packageLines(packageRoot), '']), ...PUBLIC_HELP_TEXT.closingLines].join('\n');
+  if (prefix.length > 0) {
+    const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) =>
+      prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
+    return [PUBLIC_HELP_TEXT.heading, '', ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
+      ...PUBLIC_HELP_TEXT.closingLines].join('\n');
+  }
+  return [
+    PUBLIC_HELP_TEXT.heading, '',
+    PUBLIC_HELP_TEXT.usageLine, '',
+    'Quick start:', ...PUBLIC_HELP_TEXT.quickStartLines, '',
+    ...PUBLIC_HELP_TEXT.groups.flatMap((group, index) => [...(index ? [''] : []), `${group.title}:`, ...group.lines]), '',
+    ...PUBLIC_HELP_TEXT.focusedHelpLines,
+    ...packageLines(packageRoot), '',
+    ...PUBLIC_HELP_TEXT.closingLines,
+  ].join('\n');
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
-  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
+  setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
   readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
@@ -122,7 +133,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
-  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'mcp', 'setup', 'upgrade'].includes(plan.local)
+  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
     && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
     && plan.options['--json'] !== true
     && !argv.includes('--json')) {
@@ -174,6 +185,35 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string' || !result.message.trim()) throw Error();
         line(result.exitCode === 0 ? stdout : stderr, result.message); return result.exitCode;
       } catch { line(stderr, 'Regression scan failed.'); return 1; }
+    }
+    case 'autopilot-logs': {
+      const follow = Boolean(plan.options['--follow'] || plan.options['-f']);
+      const json = plan.options['--json'] === true;
+      if (follow && json) { line(stderr, '--json prints one snapshot and cannot be combined with --follow.'); return 2; }
+      if (plan.operands[0] !== undefined && plan.options['--issue'] !== undefined && plan.operands[0] !== plan.options['--issue']) {
+        line(stderr, 'Pass the issue once: pdd autopilot logs ISSUE or pdd autopilot logs --issue ISSUE.'); return 2;
+      }
+      if (follow && plan.operands[0] === undefined && plan.options['--issue'] === undefined) {
+        line(stderr, 'Select an issue to follow: pdd autopilot logs ISSUE --follow.'); return 2;
+      }
+      try {
+        const input = {
+          cwd,
+          env,
+          ...(plan.operands[0] !== undefined ? { positionalIssue: plan.operands[0] } : {}),
+          ...(plan.options['--issue'] !== undefined ? { optionIssue: plan.options['--issue'] } : {}),
+          follow,
+          ...(plan.options['--lines'] !== undefined ? { lines: Number(plan.options['--lines']) } : {}),
+          json,
+        };
+        const ports = { stdout, stderr, ...autopilotLogsPorts };
+        const result = autopilotLogs
+          ? await autopilotLogs.runAutopilotLogs(input, ports)
+          : await (await (autopilot ?? import('./autopilot.mjs'))).runAutopilotSubcommand('logs', input, ports);
+        if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255 || typeof result.message !== 'string') throw Error('Invalid Autopilot logs reply');
+        if (!result.streamed && result.message) line(result.exitCode === 0 ? stdout : stderr, result.message);
+        return result.exitCode;
+      } catch (error) { line(stderr, `Autopilot logs failed.${reason(error)}`); return 1; }
     }
     case 'autopilot-doctor': case 'autopilot-audit': case 'autopilot-check-base': case 'autopilot-start': case 'autopilot-stop': case 'autopilot-status': case 'autopilot-add': case 'autopilot-release': case 'autopilot-report': case 'autopilot-intake': {
       try {
@@ -483,7 +523,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

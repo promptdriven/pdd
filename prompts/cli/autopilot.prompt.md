@@ -29,6 +29,9 @@ unknown Autopilot keys.
 ## Dependencies
 
 - [GitHub calls](github-calls.prompt.md#budget): required generation and verification context for reading `autopilot.github` with `githubBudgetSettings`.
+- [Autopilot worker logs](autopilot-logs.prompt.md): required native generation and verification context for routing the read-only `logs` CLI subcommand (`runAutopilotSubcommand("logs", input, ports)`) to `runAutopilotLogs` without modifying `pdd.json` or `runAutopilot`.
+
+`src/autopilot.mjs` also exports `runAutopilotSubcommand(subcommand, input, ports)` as the CLI subcommand router for `pdd autopilot logs`, dynamically delegating `subcommand === "logs"` to `runAutopilotLogs(input, ports)` in `src/autopilot-logs.mjs` and returning `{exitCode: 2, message: "Unsupported Autopilot subcommand. Use pdd autopilot --help."}` for unknown subcommands. `runAutopilot` keeps its existing inputs, outputs and Runtime interface unchanged.
 
 Actions outside the stated set, invalid mode operands and missing or blank names return exit code 2 with a clear message and no save. Trust takes one or more nonblank names; untrust takes exactly one; isTrusted takes one nonblank author. Omitted interactive and inRepo default false. Successful actions return exit code 0, effective mode, explicit names, trusted false except for isTrusted, and a human-readable message (empty for outside-repository setup). Preserve unrelated top-level and Autopilot keys when saving; absent mode and trust read as off and empty. Failed writes return nonzero with a clear error and leave the file unchanged.
 
@@ -335,7 +338,7 @@ Actions outside the stated set, invalid mode operands and missing or blank names
     "max_model_calls": 6
   },
   "conventions": [],
-  "prose_sha256":"ff8929dbe22ab5e36cfbadfaaa4cc7d970a6eaf0fefdb69979443fa9d644178a"
+  "prose_sha256":"551a26c7f6f78a1aefe2e131baa14e422a8f865144d3c6c5413d6ea0f2b83fa9"
 }
 ```
 </details>
