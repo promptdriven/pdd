@@ -19,7 +19,8 @@ import { evaluateForensicsResult, findConfiguredSkipLabel, findExternalRepoLabel
 import { issueAreas, areasOverlap, groupReadyIssues, orderGroupsSpreadFirst, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { enqueueMergeQueueItem, mergeQueueStatusLine, processMergeQueue, readMergeQueue } from './autopilot-merge-queue.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
-import { classifyRateLimitFailure, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
+import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
+const isPoolRotatableService = text => Boolean(text && (isQuotaExhaustionMessage(text) || isAuthFailureMessage(text)));
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 
 const { interfaceBlocks, proseSha256, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
@@ -2461,7 +2462,7 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
       const prevReviewAgent = job.review.agent;
       if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
       const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, prevReviewAgent) : null;
-      if (service && isQuotaExhaustionMessage(service) && (named(prevReviewAgent?.loginId) || prevReviewAgent?.cloud)) {
+      if (service && isPoolRotatableService(service) && (named(prevReviewAgent?.loginId) || prevReviewAgent?.cloud)) {
         try {
           await ctx.ports.exhaustLogin({
             loginId: prevReviewAgent?.loginId,
@@ -2491,12 +2492,12 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
       return reviewState(ctx, job, prBody);
     }
     const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, job.review.agent) : null;
-    const reviewPooled = service && isQuotaExhaustionMessage(service)
+    const reviewPooled = service && isPoolRotatableService(service)
       ? (job.review.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
       : false;
-    if (service && isQuotaExhaustionMessage(service) && reviewPooled) {
+    if (service && isPoolRotatableService(service) && reviewPooled) {
       const prevReviewAgent = job.review.agent;
-      const rateClass = classifyRateLimitFailure(service, prevReviewAgent?.accountWindows);
+      const rateClass = isQuotaExhaustionMessage(service) ? classifyRateLimitFailure(service, prevReviewAgent?.accountWindows) : null;
       if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
       const sameFamilyAllowedKinds = job.review.crossFamilyFallback && named(job.builderFamily)
         ? reviewerKindsForFamily(ctx, job.builderFamily, true)
@@ -5466,15 +5467,15 @@ async function agentStop(ctx, job, seen, quiet) {
   recordPartTelemetry(ctx, job, job.agent, job.role, seen);
   const service = serviceProblem(ctx, job.agent), hang = service ? null : repeatedHang(job);
   if (hang) return issueStop(ctx, job, hang);
-  const mainPooled = service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin
+  const mainPooled = service && isPoolRotatableService(service) && ctx.ports.exhaustLogin
     ? (job.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
     : false;
-  if (service && isQuotaExhaustionMessage(service) && ctx.ports.exhaustLogin && mainPooled) {
+  if (service && isPoolRotatableService(service) && ctx.ports.exhaustLogin && mainPooled) {
     const prevAgent = job.agent;
-    const rateClass = classifyRateLimitFailure(service, prevAgent?.accountWindows);
+    const rateClass = isQuotaExhaustionMessage(service) ? classifyRateLimitFailure(service, prevAgent?.accountWindows) : null;
     if (!await cleanupPart(ctx, job, prevAgent, job.role)) return;
     const restartStepWith = async (selected, markBurstRetried = false) => {
-      const resetTarget = Number.isSafeInteger(job.pr) && job.head ? job.head : `origin/${ctx.state.baseBranch}`;
+      const resetTarget = Number.isSafeInteger(job.pr) && job.head ? job.head : (job.role === 'build' ? 'HEAD' : `origin/${ctx.state.baseBranch}`);
       await ctx.git(['reset', '-q', '--hard', resetTarget], job.worktree).catch(() => {});
       await ctx.git(['clean', '-fdq'], job.worktree).catch(() => {});
       if (job.role === 'build') {
@@ -5958,7 +5959,7 @@ async function continueEnd(ctx, job) {
       await releaseCompanions(ctx, job);
       e.released = true; ctx.saveJob(job);
     }
-    if (!e.prClosed) { await closeOwnPr(ctx, job, why.text); e.prClosed = true; ctx.saveJob(job); }
+    if (!e.prClosed) { if (job.resumed) await draftOwnPr(ctx, job, why.text); else await closeOwnPr(ctx, job, why.text); e.prClosed = true; ctx.saveJob(job); }
     return finishLocal(ctx, job, 'released', why.text);
   }
   const blocking = ['runtime', 'pdd'].includes(why.kind);
@@ -6057,7 +6058,7 @@ const SERVICE_WORDS = new RegExp([
   /\bmodel is (?:at|over) capacity\b/, /\bis out of credits\b/, /\bcredit balance is too low\b/, /\binsufficient[_ ](?:quota|credits?|funds)\b/, /\bexceeded your current quota\b/,
   /\bresource_exhausted\b/, /\bquota (?:has been )?exhausted\b/, /\b(?:weekly|daily|monthly|spending)[_ ](?:usage[_ ])?limit\b/, /\bspend[_ ]control\b/,
   /\bhit your (?:usage|rate) limit\b/, /\busage[_ ]limit[_ ](?:reached|exceeded)\b/, /\brate[_ ]limit[_ ](?:reached|exceeded|error)\b/, /\btoo many requests\b/,
-  /\boverloaded_error\b/, /\bnot logged in\b/, /\bplease (?:run \/login|log ?in|sign ?in)\b/, /\binvalid[_ ]api[_ ]key\b/, /\bauthentication_error\b/,
+  /\boverloaded_error\b/, /\bnot logged in\b/, /\bplease (?:run \/login|log ?in|sign ?in)\b/, /\bfailed to (?:authenticate|refresh token)\b/, /\boauth access token is invalid\b/, /\binvalid[_ ]api[_ ]key\b/, /\bauthentication_error\b/,
 ].map(re => re.source).join('|'), 'i');
 // In a terminal error event a clear account or service phrase counts too (an ordinary test error keeps its strike).
 const SERVICE_EVENT = /\bout of credits\b|\b(?:service|server|model|provider|api)(?: is)? (?:at|over) capacity\b|\b(?:service|server|model|provider|api)(?: is)? overloaded\b|^\W*(?:sign-?in|log-?in|login|authentication) required\b|\bquota exceeded\b/i;

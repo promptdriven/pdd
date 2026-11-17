@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { jobEnvironment, readAgentJob, stopAgentJob } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
-import { classifyRateLimitFailure, isQuotaExhaustionMessage } from './login-pool.mjs';
+import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs';
 import { extractJsonObjects, findConfiguredSkipLabel, findExternalRepoLabel } from './autopilot-forensics.mjs';
 
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
@@ -379,8 +379,8 @@ async function maybeExhaustIntakeLogin(ctx, f, saved, errorText = '') {
     readFileTail(ctx.fs, saved?.job?.log),
     readFileTail(ctx.fs, saved?.answer),
   ].filter(Boolean).join('\n');
-  if (!isQuotaExhaustionMessage(sample)) return false;
-  if (saved.cloud === true && classifyRateLimitFailure(sample, saved.accountWindows) === 'burst_rate_limit') {
+  if (!isQuotaExhaustionMessage(sample) && !isAuthFailureMessage(sample)) return false;
+  if (saved.cloud === true && isQuotaExhaustionMessage(sample) && classifyRateLimitFailure(sample, saved.accountWindows) === 'burst_rate_limit') {
     const file = burstRetryFile(f);
     const map = object(readJson(ctx.fs, file)) ? readJson(ctx.fs, file) : {};
     const key = burstRetryKey(saved);

@@ -96,7 +96,7 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   receive `CLAUDE_CODE_OAUTH_TOKEN` (and `ANTHROPIC_BASE_URL` for `gateway_grant`)
   through `cardEnvironment(prepared.env)`, recording `loginId` (`selected.login?.id ?? null`),
   `cloud`, and `accountWindows` on `jobs/N.json`; if a pooled card or auto-improve job
-  fails with a quota or rate-limit message (`isQuotaExhaustionMessage`), a first Cloud
+  fails with a quota, rate-limit, or auth failure message (`isQuotaExhaustionMessage` or `isAuthFailureMessage`), a first Cloud
   `burst_rate_limit` (`classifyRateLimitFailure`, `< 100%`) retries once on the same
   sticky Cloud account without calling `exhaustLogin` or setting `failedAt`, whereas
   `quota_exhausted` (or a repeated burst `429` on the same `loginId`) calls
@@ -216,7 +216,7 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   jobs and for the job environment.
 - [Areas](autopilot-areas.prompt.md): required to normalize card `areas` paths.
 - [Multi-harness login pool](login-pool.prompt.md): required for
-  `isQuotaExhaustionMessage` when rotating pooled `codex` and `claude` logins.
+  `isQuotaExhaustionMessage` and `isAuthFailureMessage` when rotating pooled `codex` and `claude` logins.
 - [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
   external-repository / configured skip-label matching and linear string-aware JSON
   object scanning.

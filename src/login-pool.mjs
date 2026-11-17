@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: f73502c8e230b798a18fc6180771a02274a486e006ed5b4b44b1bf221fe63a36).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: bf30fa34fabafa4c20edf0b286208194cb36df386538849510cce56a2239e46c).
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -180,7 +180,7 @@ export function resolveCloudAccountsEndpoint(env = process.env) {
   return raw;
 }
 
-export async function resolveCloudAccountsToken({ cwd = process.cwd(), env = process.env, timeoutMs = 4000 } = {}, ports = {}) {
+export async function resolveCloudAccountsToken({ cwd = process.cwd(), env = process.env, timeoutMs = 10_000 } = {}, ports = {}) {
   for (const key of ['PDD_TOKEN', 'PDD_ACCOUNTS_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN']) {
     const val = typeof env?.[key] === 'string' ? env[key].trim() : '';
     if (val) {
@@ -194,7 +194,7 @@ export async function resolveCloudAccountsToken({ cwd = process.cwd(), env = pro
   }
   try {
     const run = ports.run ?? runAgentProcess;
-    const res = await run('gh', ['auth', 'token'], { cwd, env, input: '', timeoutMs: Math.min(timeoutMs, 4000), maxBytes: 4096 });
+    const res = await run('gh', ['auth', 'token'], { cwd, env, input: '', timeoutMs: Math.min(timeoutMs, 10_000), maxBytes: 4096 });
     const tok = res?.code === 0 && typeof res.stdout === 'string' ? res.stdout.trim() : '';
     if (tok) {
       rememberSecrets(tok);
@@ -278,7 +278,7 @@ export async function cloudAccountsRequest(method, path, { body, cwd = process.c
   const baseUrl = resolveCloudAccountsEndpoint(env);
   const tokenBudget = effectiveDeadline - nowFn();
   if (tokenBudget <= 0) throw new CloudAccountsError('Cloud Accounts request timed out.', { code: 'timeout' });
-  const token = await resolveCloudAccountsToken({ cwd, env, timeoutMs: Math.min(tokenBudget, 4000) }, ports);
+  const token = await resolveCloudAccountsToken({ cwd, env, timeoutMs: Math.min(tokenBudget, 10_000) }, ports);
   const { machineId } = resolveMachineIdentity(env, ports);
   const fetchImpl = ports.fetch ?? globalThis.fetch;
   if (typeof fetchImpl !== 'function') throw new CloudAccountsError('HTTP fetch is unavailable.', { code: 'fetch_unavailable' });
@@ -339,7 +339,7 @@ export async function cloudAccountsRequest(method, path, { body, cwd = process.c
   throw new CloudAccountsError('Cloud Accounts request timed out.', { code: 'timeout' });
 }
 
-export async function listCloudAccounts({ refresh = false, cwd = process.cwd(), env = process.env, timeoutMs = 20_000, maxRetries } = {}, ports = {}) {
+export async function listCloudAccounts({ refresh = false, cwd = process.cwd(), env = process.env, timeoutMs = 30_000, maxRetries } = {}, ports = {}) {
   const path = refresh === true ? '/v1/accounts?refresh=true' : '/v1/accounts';
   return cloudAccountsRequest('GET', path, { cwd, env, timeoutMs, maxRetries }, ports);
 }
@@ -1580,8 +1580,12 @@ export async function exhaustCloudPoolLogin({
 } = {}, ports = {}) {
   const now = (ports.now ?? Date.now)();
   if (loginId) {
-    const report = extractRateLimitReport(reason, accountWindows, now);
-    await reportCloudAccountUsage(loginId, report, { cwd, env }, ports).catch(() => {});
+    if (isAuthFailureMessage(reason) && !isQuotaExhaustionMessage(reason)) {
+      markLocalAccountReauthRequired(loginId, { env }, ports);
+    } else {
+      const report = extractRateLimitReport(reason, accountWindows, now);
+      await reportCloudAccountUsage(loginId, report, { cwd, env }, ports).catch(() => {});
+    }
   }
   const skip = [...new Set([...(Array.isArray(skipAccountIds) ? skipAccountIds : []), ...(loginId ? [loginId] : [])])];
   return selectCloudPoolLogin({ cwd, env, fallbackAgent, allowedKinds, skipAccountIds: skip, holderId, allowCredits }, ports);
@@ -1785,12 +1789,23 @@ export function loginEnvironment(baseEnv = process.env, login) {
   return out;
 }
 
+function looksLikeTestDiagnostic(s) {
+  return /\b(?:test|tests|spec|specs|assert|assertion|expected|fixture|fixtures)\b/i.test(s)
+    && /\b(?:fail|failed|expected|got|fixture|spec)\b/i.test(s);
+}
+
+export function isAuthFailureMessage(text) {
+  if (typeof text !== 'string') return false;
+  const s = text.trim();
+  if (!s || looksLikeTestDiagnostic(s)) return false;
+  return /\b(?:failed to authenticate|oauth access token is invalid|failed to refresh token|authentication_error|invalid[_ ]api[_ ]key|not logged in|please (?:run \/login|log ?in|sign ?in))\b|\b(?:api error|http|status(?: code)?)\W{0,3}401\b|\b401\s+unauthorized\b/i.test(s)
+    || REAUTH_TEXT_RE.test(s);
+}
+
 export function isQuotaExhaustionMessage(text) {
   if (typeof text !== 'string') return false;
   const s = text.trim();
-  if (!s) return false;
-  if (/\b(?:test|tests|spec|specs|assert|assertion|expected|fixture|fixtures)\b/i.test(s)
-    && /\b(?:fail|failed|expected|got|fixture|spec)\b/i.test(s)) return false;
+  if (!s || looksLikeTestDiagnostic(s)) return false;
   return /out of credits|credit balance is too low|insufficient[_ ]quota|exceeded your current quota|quota (?:exceeded|has been exhausted|exhausted)|resource_exhausted|hit your usage limit|usage[_ ]limit|weekly limit|daily limit|monthly limit|spend[_ ]control|spending limit|rate[_ ]limit|too many requests|\b(?:status|http|error|code)[:\s]+429\b|\b429\s+too many requests\b/i.test(s);
 }
 
@@ -1853,9 +1868,37 @@ export function clearPoolCooldowns({ stateRoot } = {}, ports = {}) {
   try { (fs.rmSync ?? fs.unlinkSync)?.(poolStatePath(stateRoot), { force: true }); } catch {}
 }
 
-async function defaultProbeLogin(login, { cwd, env, fs = nativeFs, run = runAgentProcess }) {
+function hasExpiredClaudeCredentialsFile(fs, env, now) {
+  if (env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_API_KEY) return false;
+  const base = env.CLAUDE_CONFIG_DIR || (env.HOME ? join(env.HOME, '.claude') : '');
+  if (!base) return false;
+  try {
+    const settings = JSON.parse(fs.readFileSync(join(base, 'settings.json'), 'utf8'));
+    rememberSecrets(...knownSecretValues(settings));
+    if (settings?.env?.CLAUDE_CODE_OAUTH_TOKEN || settings?.env?.ANTHROPIC_API_KEY || settings?.apiKeyHelper) return false;
+  } catch {}
+  try {
+    const creds = JSON.parse(fs.readFileSync(join(base, '.credentials.json'), 'utf8'));
+    rememberSecrets(...knownSecretValues(creds));
+    const oauth = object(creds?.claudeAiOauth) ? creds.claudeAiOauth : creds;
+    const rawExp = oauth?.expiresAt ?? oauth?.expires_at;
+    const expNum = typeof rawExp === 'number' ? rawExp : (typeof rawExp === 'string' && rawExp.trim() ? Number(rawExp) : NaN);
+    const expMs = Number.isFinite(expNum) && expNum > 0
+      ? (expNum > 1e11 ? expNum : expNum * 1000)
+      : (typeof rawExp === 'string' ? Date.parse(rawExp) : NaN);
+    const refresh = oauth?.refreshToken ?? oauth?.refresh_token;
+    const hasRefresh = typeof refresh === 'string' && Boolean(refresh.trim());
+    if (Number.isFinite(expMs) && expMs <= now && !hasRefresh) return true;
+  } catch {}
+  return false;
+}
+
+async function defaultProbeLogin(login, { cwd, env, fs = nativeFs, now = Date.now(), run = runAgentProcess }) {
   const exec = (args, opts = {}) => run(login.command, args, { cwd, env, input: '', timeoutMs: 10_000, maxBytes: 16_384, ...opts });
   try {
+    if (login.kind === 'claude' && hasExpiredClaudeCredentialsFile(fs, env, now)) {
+      return { ok: false, reason: 'expired' };
+    }
     if (login.kind === 'codex' || login.kind === 'claude') {
       const status = await exec(login.kind === 'codex' ? ['login', 'status'] : ['auth', 'status', '--json']);
       return parseAgentAuthStatus({ agent: login.kind, result: status }) === 'ready' ? { ok: true } : { ok: false, reason: 'signed_out' };
@@ -1929,7 +1972,7 @@ export async function selectPoolLogin({ cwd = process.cwd(), env = process.env, 
     const childEnv = loginEnvironment(env, login);
     const probe = ports.probeLogin
       ? await ports.probeLogin(login, childEnv)
-      : await defaultProbeLogin(login, { cwd, env: childEnv, fs, run: ports.run });
+      : await defaultProbeLogin(login, { cwd, env: childEnv, fs, now, run: ports.run });
     const probeOk = probe === true || probe?.ok === true;
     if (!probeOk) {
       unavailable.push({ id: login.id, reason: probe?.reason ?? 'unavailable' });
