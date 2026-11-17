@@ -327,6 +327,10 @@ is uncertain; those records let a later tick retry without a live controller.
   timers.
 - `agentJobHangs(job)` returns the parsed hang list of `job.hangs` (only the objects in
   it), or `[]` when the file is absent, unreadable or not a list.
+- `inspectAgentJob(job, ports)` returns the same `{state, exit, log}` observations as
+  `readAgentJob`, without refreshing process custody or reading the result body. It
+  probes liveness only with a positive integer PID and nonempty wrapper token. A
+  missing or invalid job returns `dead` with null exit and log.
 - `readAgentJob(job, ports)` refreshes the durable descendant manifest while the wrapper
   is live, then returns `{state, exit, result, log}`; a missing job record
   is `dead`:

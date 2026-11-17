@@ -8,9 +8,9 @@ and END. The launcher owns the machine state, the user timer, the tick lock, doc
 below, and the one-time [move from the removed full engine](#the-move-from-the-full-engine). It adds no approval,
 merge, quota-reset or interactive route of its own. Preserve existing setup, workflow and interpreter behavior.
 
-`runAutopilotLauncher` accepts command doctor, start, stop, status, add, release, report, intake or check-base, cwd, packageRoot,
+`runAutopilotLauncher` accepts command doctor, start, stop, status, logs, add, release, report, intake or check-base, cwd, packageRoot,
 env, issues (argv operands), and optional runs, checks, engine, label, share, autoUpdate, mode, report, decisions, intake, agent,
-pool, all and json. Return
+pool, all and json. Logs also accepts optional issue text and Boolean follow. Return
 `{exitCode, message}`; the CLI owns streams. Outside programs, timer installation, clock and state I/O are injectable
 ports; native defaults implement them on macOS and Linux. Tests may inject `checkCapacityPorts` for the shared queue.
 
@@ -293,6 +293,12 @@ launcher's counted process port and its full reply (`{code, stdout, stderr}`), s
 error. It is read-only, does not require a running timer or agent, and supplies the pre-merge guard and post-merge
 base audit.
 
+**Logs** rejects `--follow` without `--issue N` or an invalid issue with exit 2 before reading repository state.
+An issue is positive decimal text without leading zeros whose value is a safe integer.
+It uses the same local Git root and saved launcher state location as `status` for this repository, no settings
+check on GitHub and no startup or admission lock. Pass the corresponding core root and saved worker queue
+environment to [the worker viewer](autopilot-logs.prompt.md), forwarding `ports.emit(text)` for follow updates.
+
 **Report** lists the machine's local report drafts (`FINGERPRINT: title; seen N time(s), last TIME`, then `Send one with
 pdd autopilot report send FINGERPRINT.`, or `No local Autopilot report drafts.`); `report send FINGERPRINT` sends one
 through `sendReportDraft` of the [report owner](autopilot-reports.prompt.md) with the counted `gh` port. It needs no
@@ -306,6 +312,8 @@ Another command returns exit 2 with `Use pdd autopilot start, stop, status, add 
 exit 1 with one line; a missing program says `install git and gh, and sign in to your agent, then retry.`
 
 ## Dependencies
+
+- [Autopilot worker viewer](autopilot-logs.prompt.md), native generation and verification context for `logs`.
 
 - [Autopilot core](autopilot-core.prompt.md), [Autopilot reports](autopilot-reports.prompt.md) and
   [intake cards](autopilot-intake.prompt.md): required native generation and verification context for the core tick,

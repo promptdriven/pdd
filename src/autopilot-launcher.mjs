@@ -24,6 +24,7 @@ import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, 
 import { captureCosts, costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { readCoreSettings, tickCore, coreStatus, busySlots, claimTickLock, releaseCoreJob } from './autopilot-core.mjs';
+import { runAutopilotLogs } from './autopilot-logs.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
 import { listReportDrafts, sendReportDraft, summarizeConversionDrops } from './autopilot-reports.mjs';
 import { INTAKE_MODES, intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
@@ -1266,6 +1267,10 @@ async function localCosts(input, ports, state = {}) {
 }
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, checks, issues = [] } = input;
+  if (command === 'logs' && (input.issue === undefined ? input.follow
+    : typeof input.issue !== 'string' || !/^[1-9]\d*$/.test(input.issue) || !Number.isSafeInteger(Number(input.issue)))) {
+    return { exitCode: 2, message: 'Use pdd autopilot logs [--issue N [--follow]].' };
+  }
   // Autopilot has one engine: --engine core is accepted and changes nothing; the full engine is refused.
   if (input.engine !== undefined && input.engine !== 'core') return { exitCode: 2, message: input.engine === 'full' ? FULL_ENGINE_REMOVED : 'Leave out --engine: Autopilot runs only the core engine.' };
   if (input.label !== undefined && !(typeof input.label === 'string' && input.label.trim())) return { exitCode: 2, message: 'Use --label with a GitHub label name.' };
@@ -1446,6 +1451,8 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (!releaseAdmission) return bad('Timed out waiting for the current Autopilot operation; retry.');
     }
     const previous = read(stateFile);
+    if (command === 'logs') return await runAutopilotLogs({ root: coreRoot(stateFile), issue: input.issue === undefined ? undefined : Number(input.issue),
+      follow: input.follow, env: { ...p.env, ...previous?.environment } }, { emit: ports.emit });
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
     if (command === 'start') {
       if (!input.mode && state.circuitBreakerForcedObserve && state.mode === 'observe') delete state.mode;

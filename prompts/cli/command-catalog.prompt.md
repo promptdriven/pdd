@@ -345,6 +345,14 @@ Description: Read core merge history and GitHub regression evidence; optionally
 save a local report, without GitHub writes or reverts. Preserve all other forms.
 
 
+## Autopilot logs route
+
+Catalog `autopilot.logs`, prefix `autopilot logs`, local `autopilot-logs`, no
+operands, text `--issue` and Boolean `--follow`.
+Form: `pdd autopilot logs [--issue N [--follow]]`. The help says that it lists
+local workers or shows one worker's progress, and follows only with an issue.
+The launcher owns the validation of the option combination.
+
 ## Autopilot report route
 
 Catalog `autopilot.report` with prefix `autopilot report`, local `autopilot-report`,
