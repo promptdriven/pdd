@@ -385,6 +385,20 @@ function readMachine(fs, root, warn, now = Date.now()) {
     ciDown: object(m.ciDown) && Number.isFinite(m.ciDown.since) && ['queued', 'billing'].includes(m.ciDown.reason) ? m.ciDown : null,
     // #3252: every login in the multi-harness pool is exhausted or on cooldown (one record and one alert per outage).
     poolOut: object(m.poolOut) && Number.isFinite(m.poolOut.since) ? m.poolOut : null,
+    // #3484: post-merge safety circuit breaker that downgraded mode from auto to observe.
+    circuitBreakerClearedAt: Number.isFinite(m.circuitBreakerClearedAt) && m.circuitBreakerClearedAt <= now ? m.circuitBreakerClearedAt : null,
+    circuitBreaker: object(m.circuitBreaker) && m.circuitBreaker.active !== false && Number.isSafeInteger(m.circuitBreaker.pr) && m.circuitBreaker.pr > 0 && named(m.circuitBreaker.reason)
+      ? {
+          active: true,
+          kind: ['ci_broken', 'reverted'].includes(m.circuitBreaker.kind) ? m.circuitBreaker.kind : 'ci_broken',
+          code: ['post-merge-ci', 'post-merge-revert'].includes(m.circuitBreaker.code) ? m.circuitBreaker.code : 'post-merge-ci',
+          pr: m.circuitBreaker.pr,
+          issue: Number.isSafeInteger(m.circuitBreaker.issue) && m.circuitBreaker.issue > 0 ? m.circuitBreaker.issue : null,
+          trippedAt: named(m.circuitBreaker.trippedAt) ? m.circuitBreaker.trippedAt : new Date(now).toISOString(),
+          url: named(m.circuitBreaker.url) ? m.circuitBreaker.url : null,
+          reason: oneLine(m.circuitBreaker.reason, 300),
+        }
+      : null,
     // T10: the updated_at of each issue with pdd:needs-decision when the engine last read its answer.
     decisionSeen: Object.fromEntries(Object.entries(object(m.decisionSeen) ? m.decisionSeen : {}).filter(([n, at]) => /^\d+$/.test(n) && typeof at === 'string').slice(-200)) };
 }
@@ -2181,15 +2195,17 @@ async function repoHasCi(ctx, job) {
   })());
   return ctx.hasCi.get(key);
 }
-const isGoodConclusion = conclusion => ['success', 'neutral', 'skipped'].includes(conclusion);
-const runFailedToken = r => `r:${r.id ?? ''}:${r.name}:${r.conclusion}:${r.completed_at ?? r.started_at ?? ''}`;
+const normCiState = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
+const isGoodConclusion = conclusion => ['success', 'neutral', 'skipped'].includes(normCiState(conclusion));
+const isCompletedRun = r => normCiState(r?.status) === 'completed';
+const runFailedToken = r => `r:${r.id ?? ''}:${r.name}:${r.conclusion}:${r.completed_at ?? r.completedAt ?? r.started_at ?? r.startedAt ?? ''}`;
 const statusFailedToken = s => `s:${s.context}:${s.state}:${s.updated_at ?? ''}`;
 async function ciState(ctx, head, job) {
   const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
   const status = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/status`);
   const rawFailedTokens = [
-    ...(runs?.check_runs ?? []).filter(r => r.status === 'completed' && !isGoodConclusion(r.conclusion)).map(runFailedToken),
-    ...(status?.statuses ?? []).filter(s => s.state !== 'pending' && s.state !== 'success').map(statusFailedToken),
+    ...(runs?.check_runs ?? []).filter(r => isCompletedRun(r) && !isGoodConclusion(r.conclusion)).map(runFailedToken),
+    ...(status?.statuses ?? []).filter(s => normCiState(s.state) !== 'pending' && normCiState(s.state) !== 'success').map(statusFailedToken),
   ];
   let stalePending = new Set();
   if (job.ciRerunPending?.head === head) {
@@ -2200,12 +2216,13 @@ async function ciState(ctx, head, job) {
   }
   const checks = [
     ...(runs?.check_runs ?? []).map(r => {
-      const isStale = r.status === 'completed' && !isGoodConclusion(r.conclusion) && stalePending.has(runFailedToken(r));
-      return { name: r.name, done: isStale ? false : r.status === 'completed', good: isGoodConclusion(r.conclusion) };
+      const isStale = isCompletedRun(r) && !isGoodConclusion(r.conclusion) && stalePending.has(runFailedToken(r));
+      return { name: r.name, done: isStale ? false : isCompletedRun(r), good: isGoodConclusion(r.conclusion) };
     }),
     ...(status?.statuses ?? []).map(s => {
-      const isStale = s.state !== 'pending' && s.state !== 'success' && stalePending.has(statusFailedToken(s));
-      return { name: s.context, done: isStale ? false : s.state !== 'pending', good: s.state === 'success' };
+      const st = normCiState(s.state);
+      const isStale = st !== 'pending' && st !== 'success' && stalePending.has(statusFailedToken(s));
+      return { name: s.context, done: isStale ? false : st !== 'pending', good: st === 'success' };
     }),
   ];
   const failed = [...new Set(checks.filter(c => c.done && !c.good).map(c => c.name))];
@@ -2216,13 +2233,103 @@ async function ciState(ctx, head, job) {
   // #3260 (Stop owners): CI that GitHub does not start (queued with no job, or a billing failure) is a service wait.
   if (failed.length) {
     const out = await ciStart(ctx, job, head, runs, { state: 'red', failed, sig });
-    return out.state === 'red' ? { ...out, failure: await ciFailureDetails(ctx, runs, status, out.failed) } : out;
+    if (out.state !== 'red') return out;
+    if (job.flakeRerunHead !== head && job.reproduceRerun?.head !== head) {
+      const { evaluateShardFlakeRerun } = await import('./autopilot-regressions.mjs');
+      const flake = evaluateShardFlakeRerun({
+        checkRuns: runs?.check_runs ?? [],
+        statuses: status?.statuses ?? [],
+        headSha: head,
+        flakeRerunHead: job.flakeRerunHead ?? null,
+      });
+      if (flake.action === 'wait-siblings') {
+        return { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig: `shard-wait:${sig}` };
+      }
+      if (flake.action === 'rerun') {
+        const reran = await rerunShardFlake(ctx, job, head, flake);
+        if (reran.allReran) return { state: 'pending', pending: out.failed, sig: `flake-rerun:${sig}` };
+        if (reran.reranCount > 0) {
+          const unreranFailed = [...new Set([
+            ...(runs?.check_runs ?? []).filter(r => isCompletedRun(r) && !isGoodConclusion(r.conclusion) && !reran.staleSet.has(runFailedToken(r))).map(r => r.name),
+            ...(status?.statuses ?? []).filter(s => normCiState(s.state) !== 'pending' && normCiState(s.state) !== 'success').map(s => s.context),
+          ])];
+          if (!unreranFailed.length) return { state: 'pending', pending: out.failed, sig: `flake-rerun:${sig}` };
+          return { ...out, failed: unreranFailed, failure: await ciFailureDetails(ctx, runs, status, unreranFailed) };
+        }
+      }
+    }
+    return { ...out, failure: await ciFailureDetails(ctx, runs, status, out.failed) };
   }
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
   // workflow file), never because a new head has no run yet.
   if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : ciStart(ctx, job, head, runs, { state: 'pending', pending: [], sig });
   if (stalePending.size) return { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig };
   return ciStart(ctx, job, head, runs, checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig });
+}
+async function rerunShardFlake(ctx, job, head, flake) {
+  const shards = Array.isArray(flake.shards) && flake.shards.length
+    ? flake.shards
+    : (flake.staleTokens ?? []).map((staleToken, idx) => ({
+        runId: Number.isSafeInteger(flake.runIds?.[idx]) ? flake.runIds[idx] : (flake.runIds?.length === 1 && Number.isSafeInteger(flake.runIds[0]) ? flake.runIds[0] : null),
+        checkId: Number.isSafeInteger(flake.checkIds?.[idx]) ? flake.checkIds[idx] : null,
+        name: flake.failedNames?.[idx] ?? '',
+        staleToken,
+      }));
+  const okStatus = res => Number.isInteger(res?.status) && res.status >= 200 && res.status < 300;
+  const runIds = [...new Set([
+    ...shards.map(s => s.runId).filter(id => Number.isSafeInteger(id) && id > 0),
+    ...(flake.runIds ?? []).filter(id => Number.isSafeInteger(id) && id > 0),
+  ])];
+  const reranRunIds = new Set();
+  for (const id of runIds.slice(0, 10)) {
+    const cli = await ctx.ports.gh(['run', 'rerun', String(id), '--repo', ctx.repo, '--failed']).catch(() => ({ code: 1 }));
+    if (cli?.code === 0) { reranRunIds.add(id); continue; }
+    const res = await ctx.gh.call('POST', `repos/${ctx.repo}/actions/runs/${id}/rerun-failed-jobs`).catch(() => ({ status: 0 }));
+    if (okStatus(res)) reranRunIds.add(id);
+  }
+  let fallbackWorkflowReran = false;
+  if (!runIds.length && shards.some(s => !s.runId)) {
+    const wRuns = (await ctx.gh.ok('GET', `repos/${ctx.repo}/actions/runs?head_sha=${head}&per_page=20`).catch(() => null))?.workflow_runs ?? [];
+    const fallbackIds = wRuns.filter(r => normCiState(r.status) === 'completed' && !isGoodConclusion(r.conclusion) && Number.isSafeInteger(r.id) && r.id > 0).map(r => r.id).slice(0, 10);
+    let fallbackSucceeded = 0;
+    for (const id of fallbackIds) {
+      const cli = await ctx.ports.gh(['run', 'rerun', String(id), '--repo', ctx.repo, '--failed']).catch(() => ({ code: 1 }));
+      if (cli?.code === 0) { fallbackSucceeded++; continue; }
+      const res = await ctx.gh.call('POST', `repos/${ctx.repo}/actions/runs/${id}/rerun-failed-jobs`).catch(() => ({ status: 0 }));
+      if (okStatus(res)) fallbackSucceeded++;
+    }
+    fallbackWorkflowReran = fallbackIds.length > 0 && fallbackSucceeded === fallbackIds.length;
+  }
+  const rerequestedChecks = new Map();
+  let rerequestCount = 0;
+  const reranShards = [];
+  for (const shard of shards) {
+    if ((shard.runId && reranRunIds.has(shard.runId)) || (!shard.runId && fallbackWorkflowReran)) {
+      reranShards.push(shard);
+      continue;
+    }
+    if (Number.isSafeInteger(shard.checkId) && shard.checkId > 0 && rerequestCount < 10) {
+      if (!rerequestedChecks.has(shard.checkId)) {
+        rerequestCount++;
+        const res = await ctx.gh.call('POST', `repos/${ctx.repo}/check-runs/${shard.checkId}/rerequest`).catch(() => ({ status: 0 }));
+        rerequestedChecks.set(shard.checkId, okStatus(res));
+      }
+      if (rerequestedChecks.get(shard.checkId)) reranShards.push(shard);
+    }
+  }
+  const reranTokens = [...new Set(reranShards.map(s => s.staleToken).filter(Boolean))];
+  job.flakeRerunHead = head;
+  if (reranTokens.length > 0) {
+    job.ciRerunPending = { head, staleTokens: reranTokens, until: ctx.now() + 2 * MIN };
+  } else {
+    delete job.ciRerunPending;
+  }
+  ctx.saveJob(job);
+  return {
+    reranCount: reranShards.length,
+    allReran: shards.length > 0 && reranShards.length === shards.length,
+    staleSet: new Set(reranTokens),
+  };
 }
 async function reviewState(ctx, job, prBody = '', preselected = null) {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
@@ -6127,6 +6234,13 @@ export async function tickCore(input, ports) {
   if (settings.mode === 'off') return { exitCode: 0, message: 'Autopilot is off.' };
   // The tick gap: a gap longer than the quiet period is a sleep (C1 rule in advance).
   const before = ctx.machineState();
+  const activeBreaker = (object(state.circuitBreaker) && state.circuitBreaker.active !== false ? state.circuitBreaker : null) ?? before.circuitBreaker;
+  if (activeBreaker && settings.mode === 'auto') {
+    if (state.mode !== 'observe') state.circuitBreakerForcedObserve = true;
+    settings.mode = 'observe';
+    state.mode = 'observe';
+    state.circuitBreaker = activeBreaker;
+  }
   ctx.gap = before.lastTick !== null && ctx.now() - before.lastTick > ctx.quiet ? { from: before.lastTick, hours: (ctx.now() - before.lastTick) / HOUR } : null;
   // The part of a shorter tick gap beyond one timer interval (a short sleep or a late timer) is not quiet time either.
   ctx.tickGap = before.lastTick !== null && !ctx.gap ? Math.max(0, ctx.now() - before.lastTick - (ports.tickMinutes ?? 10) * MIN) : 0;
@@ -6138,6 +6252,7 @@ export async function tickCore(input, ports) {
   if (input.budget?.state !== 'reserve') try { rows = await ports.listIssues(); } catch (error) { ctx.warn(`Autopilot core could not list issues: ${error.message}`); }
   const open = rows && new Map(rows.filter(row => !row.pull_request).map(row => [row.number, row]));
   if (open) await sweepWouldMerge(ctx, open, rows).catch(error => ctx.warn(`Autopilot core could not sweep would-merge issues: ${error.message}`));
+  await runPostMergeCheck(ctx);
   if (ctx.state.cwd && readMergeQueue(ctx.root, { fs: ctx.fs }).items.some(i => ['queued', 'processing', 'synced'].includes(i.state))) {
     await runCoreMergeQueue(ctx, settings.mode === 'auto' ? 'auto' : 'observe').catch(error => ctx.warn(`Autopilot core merge queue skipped: ${error.message}`));
   }
@@ -6244,7 +6359,6 @@ export async function tickCore(input, ports) {
     }
   }
   await sweepFiles(ctx);
-  await runPostMergeCheck(ctx);
   const b = ctx.budget;
   if (intakeMode(settings.intake) === 'active' && rows && b?.state !== 'low') {
     try { await collectActiveIntake(ctx, rows); } catch (error) { ctx.warn(`Autopilot intake (active) collect skipped: ${error.message}`); }
@@ -6271,7 +6385,11 @@ export async function tickCore(input, ports) {
   } catch (error) { ctx.warn(`Autopilot intake (${intakeMode(settings.intake)}) skipped this tick: ${error.message}`); }
   if (ctx.peers.size) { const m = ctx.machineState(); ctx.saveMachine({ ...m, peers: { ...m.peers, ...Object.fromEntries(ctx.peers) } }); }
   const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length, c = ctx.counts;
-  return { exitCode: 0, message: `Autopilot core${settings.mode === 'observe' ? ' (observe: no merge)' : ''}: ${c.started} started, ${c.merged} merged, ${c.wouldMerge ? `${c.wouldMerge} would merge, ` : ''}${c.ended} ended, ${c.repairs} repair(s); ${busy} of ${settings.runs} slots busy${hold ? `; ${hold}` : ''}.` };
+  return {
+    exitCode: 0,
+    message: `Autopilot core${settings.mode === 'observe' ? ' (observe: no merge)' : ''}: ${c.started} started, ${c.merged} merged, ${c.wouldMerge ? `${c.wouldMerge} would merge, ` : ''}${c.ended} ended, ${c.repairs} repair(s); ${busy} of ${settings.runs} slots busy${hold ? `; ${hold}` : ''}.`,
+    ...(ctx.circuitBreaker ? { circuitBreaker: ctx.circuitBreaker } : {}),
+  };
 }
 
 // ---- Cleanup (#3231) ----------------------------------------------------------------------------------------
@@ -6306,8 +6424,8 @@ async function runPostMergeCheck(ctx) {
   const hasMerged = chronological(ctx.fs, ctx.root).some(row => row.outcome === 'merged' && Number.isSafeInteger(row.pr) && row.pr > 0);
   if (!hasMerged && typeof ctx.ports.checkPostMerge !== 'function') return;
   try {
-    const checker = ctx.ports.checkPostMerge
-      ?? (await import('./autopilot-regressions.mjs')).checkPostMergeRegressions;
+    const regressionsMod = await import('./autopilot-regressions.mjs');
+    const checker = ctx.ports.checkPostMerge ?? regressionsMod.checkPostMergeRegressions;
     const result = await checker({ root: ctx.root, repo: ctx.repo, gh: ctx.ports.gh, fs: ctx.fs, now: ctx.now });
     for (const item of result?.newlyDetected ?? []) {
       const filed = await report(ctx, null, {
@@ -6334,6 +6452,28 @@ async function runPostMergeCheck(ctx) {
           ...(filed?.ref ? { report: filed.ref, reportState: filed.state } : { reportState: filed?.state ?? null }),
         });
       } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
+    }
+    const m = ctx.machineState();
+    const stateCleared = Number.isFinite(ctx.state?.circuitBreakerClearedAt) ? ctx.state.circuitBreakerClearedAt : null;
+    const machineCleared = Number.isFinite(m.circuitBreakerClearedAt) ? m.circuitBreakerClearedAt : null;
+    const clearedAfter = stateCleared !== null && machineCleared !== null ? Math.max(stateCleared, machineCleared) : (stateCleared ?? machineCleared);
+    const breaker = regressionsMod.selectCircuitBreakerRegression(result?.newlyDetected ?? [], { now: ctx.now, clearedAfter });
+    if (breaker && (ctx.settings.mode === 'auto' || ctx.state.mode === 'auto')) {
+      if (ctx.state.mode !== 'observe') ctx.state.circuitBreakerForcedObserve = true;
+      ctx.settings.mode = 'observe';
+      ctx.state.mode = 'observe';
+      ctx.state.circuitBreaker = breaker;
+      ctx.circuitBreaker = breaker;
+      ctx.saveMachine({ ...m, circuitBreaker: breaker });
+      if (typeof ctx.ports.alert === 'function') {
+        await Promise.resolve(ctx.ports.alert({
+          issue: breaker.issue ?? breaker.pr,
+          kind: 'test-suite',
+          text: `Post-merge safety circuit breaker tripped (${breaker.code}): ${breaker.reason}`,
+          tried: 'Autopilot downgraded this repository from auto to observe mode so no more pull requests merge onto a broken default branch.',
+          need: 'Fix the default branch and run pdd autopilot start --mode auto to resume automatic merges.',
+        })).catch(error => ctx.warn(`Autopilot circuit-breaker alert failed: ${error.message}`));
+      }
     }
   } catch (error) { ctx.warn(`Autopilot post-merge check skipped this tick: ${error.message}`); }
 }
@@ -6370,6 +6510,10 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);
   lines.push(...poolLines(machine));
   lines.push(...ciLines(machine));
+  const breaker = (object(state?.circuitBreaker) && state.circuitBreaker.active !== false ? state.circuitBreaker : null) ?? machine.circuitBreaker;
+  if (breaker) {
+    lines.push(`Circuit breaker: mode downgraded from auto to observe at ${breaker.trippedAt} (${breaker.reason}); fix the default branch and run pdd autopilot start --mode auto to resume merges.`);
+  }
   if (intakeMode(settings.intake) === 'active' && named(state.intakeNote)) lines.push(oneLine(state.intakeNote, 300));
   const mqLine = mergeQueueStatusLine(ports.root, { fs });
   if (mqLine) lines.push(mqLine);

@@ -254,6 +254,58 @@ function clearPauseState(stateFile) {
     save(coreFile, current);
   }
 }
+function clearCircuitBreaker(stateFile, state, nowMs = Date.now(), { clearObserveOverride = false, clearForcedObserve = false } = {}) {
+  const clearedAt = Number.isFinite(nowMs) ? nowMs : Date.now();
+  if (state && typeof state === 'object') {
+    delete state.circuitBreaker;
+    state.circuitBreakerClearedAt = clearedAt;
+    if (clearObserveOverride && state.mode === 'observe') delete state.mode;
+    else if (clearForcedObserve && state.circuitBreakerForcedObserve && state.mode === 'observe') delete state.mode;
+    delete state.circuitBreakerForcedObserve;
+  }
+  const root = coreRoot(stateFile), coreFile = join(root, 'core.json'), current = read(coreFile);
+  if (current && typeof current === 'object' && !Array.isArray(current)) {
+    delete current.circuitBreaker;
+    current.circuitBreakerClearedAt = clearedAt;
+    save(coreFile, current);
+  } else if (existsSync(root) || existsSync(stateFile)) {
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    save(coreFile, { circuitBreakerClearedAt: clearedAt });
+  }
+}
+
+export async function resetAutopilotCircuitBreaker({ cwd, env, mode } = {}, ports = {}) {
+  const effectiveEnv = env ?? ports.env ?? process.env;
+  const folder = ports.stateRoot ?? join(effectiveEnv.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+  if (!existsSync(folder)) return { cleared: false };
+  let state = { cwd, environment: keepEnv(effectiveEnv) };
+  const run = ports.execFile ? async (command, args, options) => {
+    try { const value = await ports.execFile(command, args, { cwd: options.cwd, env: options.env, encoding: 'utf8' }); return { code: value.code ?? 0, stdout: value.stdout ?? '', stderr: value.stderr ?? '' }; }
+    catch (error) { return { code: error.code === 'ENOENT' ? -1 : 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }; }
+  } : ports.run;
+  const p = portsFor(state, { ...ports, ...(run ? { run } : {}), env: effectiveEnv });
+  const root = await gitRootIn(p);
+  if (root.code !== 0) return { cleared: false };
+  state.cwd = root.stdout.trim();
+  const id = createHash('sha256').update(state.cwd).digest('hex').slice(0, 20), stateFile = join(folder, `${id}.json`);
+  const coreFile = join(coreRoot(stateFile), 'core.json');
+  if (!existsSync(stateFile) && !existsSync(coreFile)) return { cleared: false };
+  let releaseAdmission;
+  try {
+    releaseAdmission = await claimAdmission(state, p, lockWait(p));
+    if (!releaseAdmission) return { cleared: false };
+    const latest = read(stateFile);
+    clearCircuitBreaker(stateFile, latest, p.now(), {
+      clearObserveOverride: mode === 'auto' || mode === 'off',
+      clearForcedObserve: true,
+    });
+    if (latest && typeof latest === 'object' && !Array.isArray(latest)) {
+      latest.controlRevision = randomUUID();
+      save(stateFile, latest);
+    }
+    return { cleared: true };
+  } finally { releaseAdmission?.(); }
+}
 function lockWait(p) {
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   return { elapsed, began: elapsed(), sleep: p.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))), warned: false };
@@ -632,6 +684,11 @@ async function runCoreTick(stateFile, state, p, ports) {
     const latest = read(stateFile);
     if (latest?.enabled) {
       for (const key of ['defaultBranch', 'baseBranch', 'cachedIssues', 'etag', 'pages', 'issuesSince', 'issuesFullAt', 'intakeNote']) if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
+      if (state.circuitBreaker && result?.circuitBreaker) {
+        if (latest.mode !== 'observe') latest.circuitBreakerForcedObserve = true;
+        latest.mode = 'observe';
+        latest.circuitBreaker = state.circuitBreaker;
+      }
       latest.core = { at: p.now(), message: result.message }; latest.nextTick = p.now() + timerMinutes(latest) * 60000; save(stateFile, latest);
     }
   } finally { release(); }
@@ -1153,6 +1210,7 @@ async function statusJsonPayload(input, ports, p) {
       runs: Number.isSafeInteger(state.runs) && state.runs > 0 ? state.runs : null,
       share: validShare(state.share) ? state.share : null,
       busySlots: busySlots(coreRoot(state.stateFile)),
+      ...(state.circuitBreaker ? { circuitBreaker: state.circuitBreaker } : {}),
     };
   });
   const g = obs.guard ?? {};
@@ -1229,7 +1287,10 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const id=createHash('sha256').update(cwd).digest('hex').slice(0,20);
       const previous=read(join(stateFolder(ports,env),`${id}.json`));
       // Autopilot takes only the issues that a person marks unless active intake evaluates open issues.
-      const saved={...previous,...(input.label?{label:input.label.trim()}:{}),...(input.mode?{mode:input.mode}:{}),...(input.intake?{intake:input.intake}:{})};
+      const basePrevious = !input.mode && previous?.circuitBreakerForcedObserve && previous?.mode === 'observe'
+        ? (({ mode: _m, circuitBreakerForcedObserve: _f, ...rest }) => rest)(previous)
+        : previous;
+      const saved={...basePrevious,...(input.label?{label:input.label.trim()}:{}),...(input.mode?{mode:input.mode}:{}),...(input.intake?{intake:input.intake}:{})};
       const repoSettings=readCoreSettings(cwd);
       activeIntakeStart = command === 'start' && effectiveIntake(saved, repoSettings) === 'active' && (machineMode(saved) ?? repoSettings.mode) !== 'off';
       if (command==='start' && !(machineLabel(saved) ?? repoSettings.label) && !activeIntakeStart && (machineMode(saved) ?? repoSettings.mode)!=='off') throw Error(NO_LABEL);
@@ -1381,7 +1442,17 @@ export async function runAutopilotLauncher(input, ports = {}) {
     }
     const previous = read(stateFile);
     state = { ...state, ...previous, cwd: state.cwd, id, stateFile };
-    if (command === 'start') { if (input.label) state.label = input.label.trim(); if (input.mode) state.mode = input.mode; if (input.report) state.report = input.report; if (input.decisions) state.decisions = input.decisions; if (input.intake) state.intake = input.intake; if (input.autoUpdate) state.autoUpdate = input.autoUpdate; }
+    if (command === 'start') {
+      if (!input.mode && state.circuitBreakerForcedObserve && state.mode === 'observe') delete state.mode;
+      delete state.circuitBreakerForcedObserve;
+      delete state.circuitBreaker;
+      if (input.label) state.label = input.label.trim();
+      if (input.mode) state.mode = input.mode;
+      if (input.report) state.report = input.report;
+      if (input.decisions) state.decisions = input.decisions;
+      if (input.intake) state.intake = input.intake;
+      if (input.autoUpdate) state.autoUpdate = input.autoUpdate;
+    }
     shareOption(command, input, state);
     let initialRevision = previous?.controlRevision ?? null;
     // A new state is a core state: only a state that an older pdd saved can need the move from the full engine.
@@ -1540,6 +1611,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (machineMode(state)) currentConfig.mode = machineMode(state);
     // A machine mode off is saved, and the timer stops: no tick runs until a start with --mode auto or observe.
     if (machineMode(state) === 'off') {
+      clearCircuitBreaker(stateFile, state, p.now());
       Object.assign(state, { enabled: false, timerInstalled: false, nextTick: null, controlRevision: randomUUID() }); save(stateFile, state);
       let stopped = '';
       try { await timer('stop', state, p); } catch (error) { stopped = ` The timer could not stop (${line(error.message)}); its ticks do nothing while the mode is off.`; }
@@ -1553,6 +1625,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return bad('Autopilot timer could not start; enable your systemd user session on Linux or launchctl user session on macOS, then retry.');
     }
     if (accountOverride && previous) clearPauseState(stateFile);
+    clearCircuitBreaker(stateFile, state, p.now(), { clearForcedObserve: !input.mode });
     state.startAction = { command: 'pdd autopilot start', repository: state.repo, mode: currentConfig.mode };
     save(stateFile, state);
     let warning = '';

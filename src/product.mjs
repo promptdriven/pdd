@@ -132,6 +132,10 @@ const portsFor = given => {
     return {};
   };
   p.currentActor ??= async ({ cwd }) => parse(await command(p, cwd, 'gh', ['api', 'user', '--jq', '{login}']));
+  p.reopenIssue ??= async ({ cwd, repository, number }) => {
+    await command(p, cwd, 'gh', ['api', `repos/${repository}/issues/${number}`, '-X', 'PATCH', '-f', 'state=open']);
+    return {};
+  };
   const owned = new Map();
   p.openBaseSource ??= input => openBaseSource(input, p, owned);
   p.closeBaseSource ??= async ({ handle }) => {
@@ -358,15 +362,22 @@ async function issueLookup(p, cwd, repository, localRuns, warning) {
 }
 const ownProductMarker = (body, run) => new Set(body.match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? []).size === 1
   && body.split(/\r?\n/).some(line => line === marker(run));
-function eligiblePr(pr, number, repository, run, local, warning) {
-  const reject = () => { if (typeof pr?.body === 'string' && pr.body.split(/\r?\n/).includes(marker(run))) warning.push(`Warning: PR #${number} could not be verified as ${run}'s PR.`); return false; };
+const foreignProductMarkerOnly = (body, run) => {
+  const markers = body.match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? [];
+  return markers.length > 0 && !body.split(/\r?\n/).some(line => line === marker(run));
+};
+function sameRepoPr(pr, number, repository) {
   if (!pr || pr.number !== number || typeof pr.body !== 'string' || !['OPEN', 'MERGED', 'CLOSED'].includes(pr.state)
-    || !canonicalGithubUrl(pr.url, repository, 'pull', number)) return reject();
+    || !canonicalGithubUrl(pr.url, repository, 'pull', number)) return false;
   const [owner, name] = repository.split('/');
   const headOwner = pr.headRepositoryOwner?.login, headName = pr.headRepository?.name;
   if (pr.isCrossRepository === true || typeof headOwner === 'string' && !sameRepo(headOwner, owner)
-    || typeof headName === 'string' && !sameRepo(headName, name)) return reject();
-  if (!(pr.isCrossRepository === false || sameRepo(headOwner, owner) && sameRepo(headName, name))) return reject();
+    || typeof headName === 'string' && !sameRepo(headName, name)) return false;
+  return Boolean(pr.isCrossRepository === false || sameRepo(headOwner, owner) && sameRepo(headName, name));
+}
+function eligiblePr(pr, number, repository, run, local, warning) {
+  const reject = () => { if (typeof pr?.body === 'string' && pr.body.split(/\r?\n/).includes(marker(run))) warning.push(`Warning: PR #${number} could not be verified as ${run}'s PR.`); return false; };
+  if (!sameRepoPr(pr, number, repository)) return reject();
   const branches = [local?.branch, ...(local?.pr ?? []).map(saved => saved.branch)].filter(branch => typeof branch === 'string');
   return ownProductMarker(pr.body, run) || branches.includes(pr.headRefName) || reject();
 }
@@ -383,11 +394,16 @@ async function pullRequests(p, cwd, repository, issue, local, run, warning) {
     if (events.length < pageSize) break;
   }
   const prs = [];
+  let hasMergedSameRepoPr = false;
   for (const number of numbers) {
     const pr = await p.pullRequest({ cwd, repository, number });
-    if (eligiblePr(pr, number, repository, run, local, warning)) prs.push(pr);
+    const eligible = eligiblePr(pr, number, repository, run, local, warning);
+    if (eligible) prs.push(pr);
+    if (pr?.state === 'MERGED' && (eligible || (sameRepoPr(pr, number, repository) && !foreignProductMarkerOnly(pr.body, run)))) {
+      hasMergedSameRepoPr = true;
+    }
   }
-  return prs;
+  return { prs, hasMergedSameRepoPr };
 }
 const codePr = (pr, local) => local?.pr?.some(saved => saved.number === pr.number && saved.stage === 'code'
     && typeof saved.branch === 'string' && saved.branch === pr.headRefName)
@@ -395,6 +411,46 @@ const codePr = (pr, local) => local?.pr?.some(saved => saved.number === pr.numbe
     && (pr.body.match(/pdd-workflow:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+/g) ?? []).length === 1
     && pr.body.split(/\r?\n/).filter(line => /^<!-- pdd-workflow:[A-Za-z0-9_.-]+:code -->$/.test(line)).length === 1;
 const storyMatches = (name, id) => { const token = basename(name).replace(/\.md$/, ''); return token === id || token.startsWith(`${id}-`) || token.startsWith(`${id}.`); };
+const isStoryMarkdown = path => typeof path === 'string' && path.endsWith('.md') && !path.endsWith('.prompt.md');
+async function collectLocalMarkdownFiles(dir, depth = 0, out = []) {
+  if (depth > 4) return out;
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); }
+  catch { return out; }
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) await collectLocalMarkdownFiles(full, depth + 1, out);
+    else if ((entry.isFile() || entry.isSymbolicLink()) && isStoryMarkdown(entry.name)) out.push(entry.name);
+  }
+  return out;
+}
+async function plannedStoryFilesPresent(p, { cwd, baseBranch, product, run }) {
+  if (!Array.isArray(run.stories) || !run.stories.length) return false;
+  const partFolder = product.parts.find(part => part.part === run.part)?.folder ?? 'user_stories/journeys';
+  const folders = [...new Set([partFolder, 'user_stories'].filter(f => typeof f === 'string' && f.trim()))];
+  const found = [];
+  if (typeof p.storyFiles === 'function') {
+    const custom = await p.storyFiles({ cwd, baseBranch, run: run.run, folder: partFolder });
+    if (Array.isArray(custom)) found.push(...custom.filter(isStoryMarkdown));
+  }
+  for (const rel of folders) await collectLocalMarkdownFiles(join(cwd, rel), 0, found);
+  const allMatched = () => run.stories.every(id => found.some(file => storyMatches(file, id)));
+  if (allMatched()) return true;
+  if (typeof baseBranch === 'string' && baseBranch.trim() && existsSync(cwd)) {
+    for (const ref of [`refs/remotes/origin/${baseBranch}`, `refs/heads/${baseBranch}`]) {
+      try {
+        const present = await command(p, cwd, 'git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], true);
+        if (present === null) continue;
+        const out = await command(p, cwd, 'git', ['ls-tree', '-r', '--name-only', ref, '--', ...folders], true);
+        if (typeof out === 'string' && out.trim()) {
+          for (const line of out.split(/\r?\n/)) if (isStoryMarkdown(line.trim())) found.push(line.trim());
+          if (allMatched()) return true;
+        }
+      } catch { /* Virtual or non-git test fixtures may not support ls-tree. */ }
+    }
+  }
+  return false;
+}
 const warnings = product => product.runs.filter(run => run.stories.length > 12).map(run => `Warning: ${run.run} has ${run.stories.length} Stories; aim for about 12 per run.`);
 function cycles(product) {
   const finished = new Set(), warnings = [];
@@ -439,7 +495,9 @@ async function progress(input, given, target) {
     for (const run of plannedRuns) {
       const selected = await lookup.find(run.run, run.run === target), { issue = null, local = null, unverified = false } = selected ?? {};
       if (unverified) { const evidence = (await savedFor(cwd, cwd)).filter(row => run.stories.some(id => storyMatches(row.story, id))); details.push({ run, issue, local: null, prs: [], evidence, fromPr: null, done: false, unverified: true, reason: selected.reason }); continue; }
-      const prs = issue ? await pullRequests(p, cwd, repo.repository, issue, local, run.run, warning) : [];
+      const { prs, hasMergedSameRepoPr } = issue
+        ? await pullRequests(p, cwd, repo.repository, issue, local, run.run, warning)
+        : { prs: [], hasMergedSameRepoPr: false };
       const done = prs.some(pr => pr.state === 'MERGED' && codePr(pr, local));
       const latest = [...prs].filter(pr => recordedRuntimeLines(pr.body).some(row => row.story)).sort((a, b) => String(a.updatedAt ?? '').localeCompare(String(b.updatedAt ?? '')) || a.number - b.number).at(-1);
       let evidence, comparisonRoot = local?.root ?? cwd;
@@ -457,7 +515,7 @@ async function progress(input, given, target) {
       else evidence = latest ? recordedRuntimeLines(latest.body).filter(row => row.story).map(row => ({ ...row, current: false, remote: true, at: Date.parse(latest.updatedAt) || 0 })) : [];
       const saved = [...await savedFor(cwd, done ? comparisonRoot : cwd), ...(local?.root && local.root !== cwd ? await savedFor(local.root, comparisonRoot) : [])];
       evidence = [...evidence, ...saved.filter(row => run.stories.some(id => storyMatches(row.story, id)))];
-      details.push({ run, issue, local, prs, evidence, fromPr: !local && latest ? latest.number : null, done });
+      details.push({ run, issue, local, prs, hasMergedSameRepoPr, evidence, fromPr: !local && latest ? latest.number : null, done });
     }
   } finally {
     const errors = [];
@@ -466,8 +524,27 @@ async function progress(input, given, target) {
     }
     if (errors.length) throw Error(`Could not release the base-source view: ${errors.join('; ')}`);
   }
+  for (const detail of details) {
+    detail.storyCounts = counts(detail.run.stories, details);
+    const activeLocal = Boolean(detail.local && ['running', 'waiting'].includes(detail.local.state));
+    const hasOpenPr = Array.isArray(detail.prs) && detail.prs.some(pr => pr.state === 'OPEN');
+    const hasMergedPr = Boolean(detail.hasMergedSameRepoPr || (Array.isArray(detail.prs) && detail.prs.some(pr => pr.state === 'MERGED')));
+    const isClosed = typeof detail.issue?.state === 'string' && detail.issue.state.toUpperCase() === 'CLOSED';
+    const storiesIncomplete = detail.storyCounts.total === 0 || detail.storyCounts.pass < detail.storyCounts.total;
+    let hasPlannedStories = false;
+    if (!detail.unverified && !detail.done && !activeLocal && !hasOpenPr && !hasMergedPr && isClosed && storiesIncomplete) {
+      hasPlannedStories = await plannedStoryFilesPresent(p, {
+        cwd,
+        baseBranch: detail.local?.baseBranch ?? parent?.baseBranch ?? repo.defaultBranch,
+        product,
+        run: detail.run,
+      });
+    }
+    detail.closedUnbuilt = !detail.unverified && !detail.done && !activeLocal && !hasOpenPr && !hasMergedPr && isClosed && storiesIncomplete && !hasPlannedStories;
+  }
+  const canStart = detail => !detail.unverified && (!detail.issue || detail.closedUnbuilt);
   const needsFor = run => run.needs.filter(need => need === 'plan PR' ? !planReady : targetBound ? false : !details.find(detail => detail.run.run === need)?.done);
-  const ready = details.filter(detail => !detail.issue && !needsFor(detail.run).length).map(detail => detail.run.run);
+  const ready = details.filter(detail => canStart(detail) && !needsFor(detail.run).length).map(detail => detail.run.run);
   return { p, product, details, ready, needsFor, localRuns, repo, lookup, bases: [...views.keys()], warning: [...new Set(warning)] };
 }
 
@@ -491,14 +568,18 @@ export async function productStatus(input, given = {}) {
   if (journeyIds.length) parts.push({ part: 'journeys', ...counts(journeyIds, details) });
   const result = { name: product.name, size: product.size, parts,
     slices: [...new Set(product.runs.map(run => run.slice))].map(slice => ({ slice, ...counts(product.runs.filter(run => run.slice === slice).flatMap(run => run.stories).filter(id => journeyIds.includes(id) || core.some(story => story.id === id)), details) })),
-    runs: details.map(detail => ({ run: detail.run.run, issue: detail.issue?.number ?? null,
-      state: detail.unverified ? 'unverified' : detail.done ? 'merged' : detail.local ? `${detail.local.state}${detail.local.stage?.id ? ` (step: ${detail.local.stage.id})` : ''}` : detail.prs.length ? detail.prs.map(pr => `PR #${pr.number} (${pr.isDraft ? 'draft' : pr.state.toLowerCase()})`).join(', ') : detail.issue ? 'issue ready' : 'planned',
-      prs: detail.prs.map(pr => pr.number), fromPr: detail.fromPr })), ready, questions: product.questions, ...(warning.length ? { warnings: warning } : {}) };
+    runs: details.map(detail => {
+      const prSummary = detail.prs.map(pr => `PR #${pr.number} (${pr.isDraft ? 'draft' : pr.state.toLowerCase()})`).join(', ');
+      const hasMergedDisplayPr = detail.prs.some(pr => pr.state === 'MERGED');
+      return { run: detail.run.run, issue: detail.issue?.number ?? null,
+        state: detail.unverified ? 'unverified' : detail.done ? 'merged' : detail.closedUnbuilt ? `issue closed (${detail.storyCounts.pass} of ${detail.storyCounts.total} pass)` : detail.local ? `${detail.local.state}${detail.local.stage?.id ? ` (step: ${detail.local.stage.id})` : ''}` : hasMergedDisplayPr ? prSummary : detail.prs.length ? prSummary : detail.issue ? 'issue ready' : 'planned',
+        prs: detail.prs.map(pr => pr.number), fromPr: detail.fromPr };
+    }), ready, questions: product.questions, ...(warning.length ? { warnings: warning } : {}) };
   Object.defineProperty(result, comparisonBases, { value: bases }); return result;
 }
 export async function productNext(input, given = {}) {
   const { product, details, ready, needsFor, warning } = await progress(input, given);
-  return { ready, waiting: details.filter(detail => !detail.issue && needsFor(detail.run).length).map(detail => ({ run: detail.run.run, needs: needsFor(detail.run) })),
+  return { ready, waiting: details.filter(detail => !detail.unverified && (!detail.issue || detail.closedUnbuilt) && needsFor(detail.run).length).map(detail => ({ run: detail.run.run, needs: needsFor(detail.run) })),
     guidance: product.size === 'small' ? 'run one feature run' : ready.length >= 2 ? 'These can run in parallel, or one person can start them in order.' : '', ...(warning.length ? { warnings: warning } : {}) };
 }
 function issueTitle(product, run, warning) {
@@ -535,6 +616,9 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
       if (!createdNumber) invalid('Issue creation was not confirmed. Inspect GitHub before trying again.');
       issue = { number: createdNumber }; created = true;
       await state.lookup.bind(run, issue.number);
+    } else if (selected.closedUnbuilt) {
+      await p.reopenIssue({ cwd, repository: repo.repository, number: issue.number });
+      issue = { ...issue, state: 'OPEN' };
     }
     const warning = [...state.warning, ...warnings(product).filter(text => text.startsWith(`Warning: ${run} `)), ...(state.needsFor(planned).length ? [`Advice: ${run} still needs ${state.needsFor(planned).join(', ')}.`] : [])].join('\n');
     if (noRun) return { exitCode: 0, message: [warning, `Issue #${issue.number} ready for ${run}.`].filter(Boolean).join('\n'), issue: issue.number, created, started: false };

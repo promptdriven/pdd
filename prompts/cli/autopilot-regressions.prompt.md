@@ -146,6 +146,37 @@ each newly seen signal key once in `newlyDetected` (`{pr, issue, issues,
 mergeCommit, mergedAt, kind, code, at, url, detail}`, with `code` equal to
 `post-merge-reopen`, `post-merge-revert` or `post-merge-ci`).
 
+### Safety circuit-breaker and shard-flake helpers (#3484)
+
+Export synchronous `selectCircuitBreakerRegression(newlyDetected, {now,
+clearedAfter}?)`. Ignore `reopened` (`post-merge-reopen`) and, when finite
+`clearedAfter` (epoch ms or ISO string) is supplied, ignore items with
+`at <= clearedAfter` (and `post-merge-ci` or undated items with
+`mergedAt <= clearedAfter`). Choose the first remaining `revert`/`reverted`
+(`post-merge-revert`) item, or else the first `ci`/`ci_broken`
+(`post-merge-ci`) item. Return `{active: true, kind, code, pr, issue, trippedAt,
+url, reason}` with redacted single-line detail, or `null` when none qualifies.
+
+Export synchronous `evaluateShardFlakeRerun({checkRuns, statuses, headSha,
+flakeRerunHead})`. Reject check names over 300 characters and parse shard
+families by linear bracket/suffix slicing without backtracking regexes.
+Normalize check `status`, `conclusion` and commit-status `state` to lowercase;
+treat `completed` with `skipped` or `neutral` as finished non-failures, count a
+check run as `pending` strictly when `status` is `queued`, `in_progress`,
+`waiting`, `requested` or `pending`, and extract workflow run IDs from
+`run_id`/`runId` or `details_url`/`detailsUrl`/`html_url`/`htmlUrl`. Return
+`{action: none}` when `headSha` is empty, `flakeRerunHead === headSha`, any
+commit status failed, zero or more than two check runs failed, or any failed
+check run is outside a matrix shard family (such as `lint`, `build` or
+`CI (lint)`). When 1 or 2 matrix shard check runs fail: if pending checks share
+a failed workflow run or a failed shard group still has pending siblings (or
+fewer than 4 checks have completed while total checks are at least 4 and passing
+plus pending siblings are at least 3), return `{action: wait-siblings}`; once
+those pending checks finish, require at least 4 completed check runs and at
+least 3 `success` sibling shards in every failed shard group, returning
+`{action: rerun, runIds, checkIds, failedNames, staleTokens, shards}` (otherwise
+`{action: none}`).
+
 ## Command adapter
 
 Export async `runAutopilotRegressions({cwd,env,json,file}, ports={})` returning
