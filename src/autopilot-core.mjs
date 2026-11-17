@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: d4b6a1c55dea35a027923b1e3d7aee5bc1773dbae6290f5a1b092025a602c69f).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 08da34dd4627783e00eb8cb5d2edae26d994839bab6c34c6eabe671297cb8445).
 import * as nativeFs from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -1138,7 +1138,7 @@ function resolveAgentFamily(ctx, role, agent = ctx.state.agent, env = ctx.ports.
   const spec = object(agent) ? { ...agent, ...(named(kind) ? { kind } : {}) } : agent;
   return agentModelFamily(spec, resolveEffectiveAgentModel(ctx, role, spec, env));
 }
-function alternateReviewerKinds(ctx, builderFamily) {
+function reviewerKindsForFamily(ctx, builderFamily, matchSame = false) {
   if (!named(builderFamily)) return [];
   const env = ctx.ports.env ?? process.env;
   const pooled = Boolean(ctx.ports.selectLogin);
@@ -1146,7 +1146,7 @@ function alternateReviewerKinds(ctx, builderFamily) {
     if (pooled && kind === 'agy') return true;
     const probe = !pooled && ctx.state.agent?.kind === kind ? ctx.state.agent : { kind };
     const family = resolveAgentFamily(ctx, 'review', probe, env);
-    return Boolean(family && family !== builderFamily);
+    return Boolean(family && (matchSame ? family === builderFamily : family !== builderFamily));
   });
 }
 function resolveCoreAgentCommand(ctx, role, agent = ctx.state.agent, env = ctx.ports.env ?? process.env) {
@@ -1217,6 +1217,7 @@ async function selectAgentStep(ctx, issue = null, opts = null) {
     allowedKinds,
     ...(object(opts?.pool) ? { pool: opts.pool } : {}),
     ...(named(opts?.excludeFamily) ? { excludeFamily: opts.excludeFamily } : {}),
+    ...(named(opts?.preferredAccountId) ? { preferredAccountId: opts.preferredAccountId } : {}),
     ...(typeof opts?.filterLogin === 'function' ? { filterLogin: opts.filterLogin } : {}),
     ...(Array.isArray(opts?.skipLoginIds) && opts.skipLoginIds.length ? { skipLoginIds: opts.skipLoginIds } : {}),
     ...(Array.isArray(opts?.skipAccountIds) && opts.skipAccountIds.length ? { skipAccountIds: opts.skipAccountIds } : {}),
@@ -1236,42 +1237,53 @@ async function selectAgentStep(ctx, issue = null, opts = null) {
   const poolOut = await recordPoolExhausted(ctx, selected, reason, issue);
   return { state: 'exhausted', poolOut };
 }
-async function selectCrossFamilyReviewer(ctx, job) {
+async function selectFamilyReviewer(ctx, job, { matchSame = false, skipIds = [] } = {}) {
   if (!named(job.builderFamily)) return null;
   const baseEnv = ctx.ports.env ?? process.env;
-  const isAlternateEntry = (entry, env = baseEnv) => {
+  const blockedIds = new Set(Array.isArray(skipIds) ? skipIds.filter(named) : []);
+  const isMatchingEntry = (entry, env = baseEnv, explicitId = null) => {
+    const id = explicitId ?? entry?.id ?? entry?.login?.id ?? entry?.agent?.id ?? null;
+    if (named(id) && blockedIds.has(id)) return false;
     const family = resolveAgentFamily(ctx, 'review', entry, env);
-    return Boolean(family && family !== job.builderFamily);
+    return Boolean(family && (matchSame ? family === job.builderFamily : family !== job.builderFamily));
   };
   if (!ctx.ports.selectLogin) {
-    return isAlternateEntry(ctx.state.agent, baseEnv) ? { state: 'ready', selected: null } : { state: 'unavailable', selected: null };
+    return isMatchingEntry(ctx.state.agent, baseEnv) ? { state: 'ready', selected: null } : { state: 'unavailable', selected: null };
   }
-  const alternateFamilyKinds = alternateReviewerKinds(ctx, job.builderFamily);
-  if (!alternateFamilyKinds.length) return { state: 'unavailable', selected: null };
-  const filterLogin = login => isAlternateEntry(login, loginEnvironment(baseEnv, login));
-  let probe = await selectAgentStep(ctx, job.issue, { allowedKinds: alternateFamilyKinds, excludeFamily: job.builderFamily, filterLogin, probeOnly: true });
+  const candidateKinds = reviewerKindsForFamily(ctx, job.builderFamily, matchSame);
+  if (!candidateKinds.length) return { state: 'unavailable', selected: null };
+  const filterLogin = login => isMatchingEntry(login, loginEnvironment(baseEnv, login), login?.id);
+  const preferredAccountId = matchSame && named(job.builderLoginId) && !blockedIds.has(job.builderLoginId) ? job.builderLoginId : null;
+  const familyStepOpts = {
+    allowedKinds: candidateKinds,
+    ...(!matchSame ? { excludeFamily: job.builderFamily } : {}),
+    ...(preferredAccountId ? { preferredAccountId } : {}),
+    filterLogin,
+    ...(blockedIds.size ? { skipLoginIds: [...blockedIds], skipAccountIds: [...blockedIds] } : {}),
+    probeOnly: true,
+  };
+  let probe = await selectAgentStep(ctx, job.issue, familyStepOpts);
   if (probe.state !== 'ready') return { state: 'unavailable', selected: null };
   const selectedEntryOf = step => step.selected?.agent ?? step.selected?.login ?? ctx.state.agent;
-  if (isAlternateEntry(selectedEntryOf(probe), probe.selected?.env ?? baseEnv)) return probe;
+  const stepLoginId = step => step.selected?.login?.id ?? step.selected?.agent?.id ?? null;
+  const isMatchingStep = (step, fallbackEnv = baseEnv) => isMatchingEntry(selectedEntryOf(step), step.selected?.env ?? fallbackEnv, stepLoginId(step));
+  if (isMatchingStep(probe)) return probe;
   if (probe.selected?.cloud) return { state: 'unavailable', selected: null };
 
-  const skippedIds = new Set();
-  const initialId = probe.selected?.login?.id ?? probe.selected?.agent?.id;
+  const skippedIds = new Set(blockedIds);
+  const initialId = stepLoginId(probe);
   if (named(initialId)) skippedIds.add(initialId);
   const maxProbes = Math.min(24, Math.max(1, probe.selected?.poolSize ?? 8));
   for (let i = 0; i < maxProbes && skippedIds.size > 0; i++) {
     const next = await selectAgentStep(ctx, job.issue, {
-      allowedKinds: alternateFamilyKinds,
-      excludeFamily: job.builderFamily,
-      filterLogin,
+      ...familyStepOpts,
       skipLoginIds: [...skippedIds],
       skipAccountIds: [...skippedIds],
       fresh: true,
-      probeOnly: true,
     });
     if (next.state !== 'ready') break;
-    if (isAlternateEntry(selectedEntryOf(next), next.selected?.env ?? baseEnv)) return next;
-    const nextId = next.selected?.login?.id ?? next.selected?.agent?.id;
+    if (isMatchingStep(next)) return next;
+    const nextId = stepLoginId(next);
     if (!named(nextId) || skippedIds.has(nextId) || next.selected?.cloud) break;
     skippedIds.add(nextId);
   }
@@ -1287,48 +1299,64 @@ async function selectCrossFamilyReviewer(ctx, job) {
       })();
       const resolvedPoolPath = named(probe.selected?.poolPath) ? probe.selected.poolPath : undefined;
       const loaded = loadLoginPool({ cwd: ctx.state.cwd, env: poolBaseEnv, poolPath: resolvedPoolPath, fallbackAgent: ctx.state.agent }, { fs: ctx.fs });
-      const crossLogins = loaded.logins.filter(login => isAlternateEntry(login, loginEnvironment(poolBaseEnv, login)));
-      if (crossLogins.length) {
-        const crossKinds = [...new Set(crossLogins.map(login => login.harness ?? login.kind))];
-        const crossPool = { ...loaded, logins: crossLogins };
-        const viaSelector = await selectAgentStep(ctx, job.issue, {
-          allowedKinds: crossKinds,
-          pool: crossPool,
-          excludeFamily: job.builderFamily,
-          filterLogin,
-          fresh: true,
-          probeOnly: true,
-        });
-        if (viaSelector.state === 'ready' && isAlternateEntry(selectedEntryOf(viaSelector), viaSelector.selected?.env ?? poolBaseEnv)) {
-          return viaSelector;
-        }
-        const filtered = await selectPoolLogin(
-          {
-            cwd: ctx.state.cwd,
-            env: poolBaseEnv,
-            poolPath: resolvedPoolPath,
-            pool: crossPool,
-            fallbackAgent: ctx.state.agent,
-            stateRoot: ctx.root,
-            allowedKinds: crossKinds,
-          },
-          { fs: ctx.fs, now: ctx.now, ...(object(ctx.ports.loginPoolPorts) ? ctx.ports.loginPoolPorts : {}) },
-        );
-        if (filtered?.state === 'ready' && isAlternateEntry(filtered.agent ?? filtered.login, filtered.env ?? poolBaseEnv)) {
-          clearPoolExhausted(ctx);
-          return { state: 'ready', selected: filtered };
+      if (loaded.configured) {
+        const matchingLogins = loaded.logins.filter(login => isMatchingEntry(login, loginEnvironment(poolBaseEnv, login), login?.id));
+        if (matchingLogins.length) {
+          const matchingKinds = [...new Set(matchingLogins.map(login => login.harness ?? login.kind))];
+          const matchingPool = { ...loaded, logins: matchingLogins };
+          const viaSelector = await selectAgentStep(ctx, job.issue, {
+            allowedKinds: matchingKinds,
+            pool: matchingPool,
+            ...(!matchSame ? { excludeFamily: job.builderFamily } : {}),
+            ...(preferredAccountId ? { preferredAccountId } : {}),
+            filterLogin,
+            ...(blockedIds.size ? { skipLoginIds: [...blockedIds], skipAccountIds: [...blockedIds] } : {}),
+            fresh: true,
+            probeOnly: true,
+          });
+          if (viaSelector.state === 'ready' && isMatchingStep(viaSelector, poolBaseEnv)) {
+            return viaSelector;
+          }
+          const filtered = await selectPoolLogin(
+            {
+              cwd: ctx.state.cwd,
+              env: poolBaseEnv,
+              poolPath: resolvedPoolPath,
+              pool: matchingPool,
+              fallbackAgent: ctx.state.agent,
+              stateRoot: ctx.root,
+              allowedKinds: matchingKinds,
+            },
+            { fs: ctx.fs, now: ctx.now, ...(object(ctx.ports.loginPoolPorts) ? ctx.ports.loginPoolPorts : {}) },
+          );
+          if (filtered?.state === 'ready' && isMatchingEntry(filtered.agent ?? filtered.login, filtered.env ?? poolBaseEnv, filtered.login?.id ?? filtered.agent?.id)) {
+            clearPoolExhausted(ctx);
+            return { state: 'ready', selected: filtered };
+          }
         }
       }
     } catch { /* Fall through to strict non-multi-family kind probe. */ }
   }
 
-  const strictKinds = alternateFamilyKinds.filter(kind => kind !== 'agy' && resolveAgentFamily(ctx, 'review', { kind }, baseEnv) !== job.builderFamily);
+  const strictKinds = candidateKinds.filter(kind => {
+    if (kind === 'agy') return false;
+    const family = resolveAgentFamily(ctx, 'review', { kind }, baseEnv);
+    return Boolean(family && (matchSame ? family === job.builderFamily : family !== job.builderFamily));
+  });
   if (strictKinds.length) {
-    const retry = await selectAgentStep(ctx, job.issue, { allowedKinds: strictKinds, fresh: true, probeOnly: true });
-    if (retry.state === 'ready' && isAlternateEntry(selectedEntryOf(retry), retry.selected?.env ?? baseEnv)) return retry;
+    const retry = await selectAgentStep(ctx, job.issue, {
+      allowedKinds: strictKinds,
+      ...(preferredAccountId ? { preferredAccountId } : {}),
+      ...(blockedIds.size ? { skipLoginIds: [...blockedIds], skipAccountIds: [...blockedIds] } : {}),
+      fresh: true,
+      probeOnly: true,
+    });
+    if (retry.state === 'ready' && isMatchingStep(retry)) return retry;
   }
   return { state: 'unavailable', selected: null };
 }
+const selectCrossFamilyReviewer = (ctx, job) => selectFamilyReviewer(ctx, job, { matchSame: false });
+const selectSameFamilyReviewer = (ctx, job, skipIds = []) => selectFamilyReviewer(ctx, job, { matchSame: true, skipIds });
 async function pausePrForPool(ctx, job, poolOut, reason) {
   await stopChecks(ctx, job);
   try { await leaveLane(ctx, job); job.lane = null; } catch (failure) { ctx.warn(`Autopilot core could not leave the merge lane for #${job.issue}: ${failure.message}`); }
@@ -1891,10 +1919,26 @@ async function ciState(ctx, head, job) {
 async function reviewState(ctx, job, prBody = '', preselected = null) {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
     if (job.review?.agent && !await cleanupPart(ctx, job, job.review.agent, 'review')) return { state: 'running' };
+    const sameHead = job.review?.head === job.head;
+    const crossFamilyFallback = Boolean(sameHead && job.review?.crossFamilyFallback);
+    const failedReviewLoginIds = sameHead && Array.isArray(job.review?.failedReviewLoginIds) ? job.review.failedReviewLoginIds : [];
     let step = preselected ? { state: 'ready', selected: preselected } : null;
     if (!step && named(job.builderFamily)) {
-      const preferred = await selectCrossFamilyReviewer(ctx, job);
-      if (preferred?.state === 'ready') step = preferred;
+      if (!crossFamilyFallback) {
+        try {
+          const preferred = await selectCrossFamilyReviewer(ctx, job);
+          if (preferred?.state === 'ready') step = preferred;
+        } catch (error) {
+          ctx.warn?.(`Autopilot core cross-family reviewer selection failed for #${job.issue}: ${error.message}`);
+        }
+      } else {
+        try {
+          const sameFamily = await selectSameFamilyReviewer(ctx, job, failedReviewLoginIds);
+          if (sameFamily?.state === 'ready') step = sameFamily;
+        } catch (error) {
+          ctx.warn?.(`Autopilot core same-family reviewer fallback selection failed for #${job.issue}: ${error.message}`);
+        }
+      }
     }
     if (!step) step = await selectAgentStep(ctx, job.issue);
     if (step.state === 'exhausted') {
@@ -1902,14 +1946,45 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
       return { state: 'pool-paused' };
     }
     // A scoped check (debate B R2) is a short review of one part; a fresh review reads the whole PR.
-    const cwd = await checkout(ctx, job, 'review'), scoped = job.review?.head === job.head ? job.review.scoped : null;
+    const cwd = await checkout(ctx, job, 'review'), scoped = sameHead ? job.review.scoped : null;
     const linked = scoped ? '(none)' : await linkedIssues(ctx, job, prBody, await changedFiles(ctx, job, job.head));
     const activeReviewAgent = step.selected?.agent ?? ctx.state.agent;
     const initialFamily = resolveAgentFamily(ctx, 'review', activeReviewAgent, step.selected?.env);
     const computeIndependence = family => !named(job.builderFamily) ? 'unknown-builder' : (family && family !== job.builderFamily ? 'cross-family' : 'same-family');
-    const attempts = (job.review?.head === job.head ? job.review.attempts ?? 0 : 0) + 1;
-    job.review = { head: job.head, attempts, ...(scoped ? { scoped } : {}), ...(initialFamily ? { reviewFamily: initialFamily } : {}), reviewIndependence: computeIndependence(initialFamily), agent: null };
-    job.review.agent = startJob(ctx, job, 'review', cwd, result => scoped ? scopedPrompt(ctx, job, scoped, result) : reviewPrompt(ctx, job, result, linked), null, {}, step.selected);
+    const priorAttempts = sameHead ? job.review.attempts ?? 0 : 0;
+    const initialIndependence = computeIndependence(initialFamily);
+    let startedAgent;
+    try {
+      startedAgent = startJob(ctx, job, 'review', cwd, result => scoped ? scopedPrompt(ctx, job, scoped, result) : reviewPrompt(ctx, job, result, linked), null, {}, step.selected);
+    } catch (error) {
+      if (initialIndependence === 'cross-family' && !crossFamilyFallback) {
+        ctx.warn?.(`Autopilot core cross-family reviewer launch failed for #${job.issue}, falling back to same-family: ${error.message}`);
+        const failedId = step.selected?.login?.id ?? activeReviewAgent?.id;
+        const nextFailedIds = [...new Set([...failedReviewLoginIds, ...(named(failedId) ? [failedId] : [])])];
+        job.review = {
+          head: job.head,
+          attempts: priorAttempts,
+          ...(scoped ? { scoped } : {}),
+          crossFamilyFallback: true,
+          ...(nextFailedIds.length ? { failedReviewLoginIds: nextFailedIds } : {}),
+          agent: null,
+          retry: true,
+        };
+        ctx.saveJob(job);
+        return reviewState(ctx, job, prBody);
+      }
+      throw error;
+    }
+    job.review = {
+      head: job.head,
+      attempts: priorAttempts + 1,
+      ...(scoped ? { scoped } : {}),
+      ...(crossFamilyFallback ? { crossFamilyFallback: true } : {}),
+      ...(failedReviewLoginIds.length ? { failedReviewLoginIds } : {}),
+      ...(initialFamily ? { reviewFamily: initialFamily } : {}),
+      reviewIndependence: initialIndependence,
+      agent: startedAgent,
+    };
     if (named(job.review.agent?.modelFamily) && job.review.agent.modelFamily !== job.review.reviewFamily) {
       job.review.reviewFamily = job.review.agent.modelFamily;
       job.review.reviewIndependence = computeIndependence(job.review.reviewFamily);
@@ -1917,7 +1992,8 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
     ctx.saveJob(job); return { state: 'running', reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence };
   }
   if (job.review.verdict) return { state: job.review.verdict === 'PASS' ? 'pass' : 'fail', mustFix: job.review.mustFix, decision: job.review.decision ?? null, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
-  const seen = ctx.jobs.read(job.review.agent);
+  let seen;
+  try { seen = ctx.jobs.read(job.review.agent); } catch { seen = { state: 'exited', exit: null, result: 'invalid', log: null }; }
   const r = seen.result;
   if (seen.state === 'running') {
     // The process rule: a reviewer that makes nothing new is stopped (no verdict: one retry); the backstop ends the job.
@@ -1926,6 +2002,39 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
     if (watch.state !== 'quiet') return { state: 'running' };
   }
   if (!object(r) || !['PASS', 'FAIL'].includes(r.verdict) || r.head !== job.head) {
+    if (job.review.reviewIndependence === 'cross-family' && !job.review.crossFamilyFallback) {
+      const prevReviewAgent = job.review.agent;
+      if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
+      const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, prevReviewAgent) : null;
+      if (service && isQuotaExhaustionMessage(service) && (named(prevReviewAgent?.loginId) || prevReviewAgent?.cloud)) {
+        try {
+          await ctx.ports.exhaustLogin({
+            loginId: prevReviewAgent?.loginId,
+            cloud: prevReviewAgent?.cloud,
+            resetAt: null,
+            reason: service,
+            accountWindows: prevReviewAgent?.accountWindows ?? null,
+          });
+        } catch (error) {
+          ctx.warn?.(`Autopilot core could not mark cross-family reviewer cooldown for #${job.issue}: ${error.message}`);
+        }
+      }
+      const failedIds = [...new Set([
+        ...(Array.isArray(job.review.failedReviewLoginIds) ? job.review.failedReviewLoginIds : []),
+        ...(named(prevReviewAgent?.loginId) ? [prevReviewAgent.loginId] : []),
+      ])];
+      job.review = {
+        head: job.head,
+        attempts: Math.max(0, (job.review.attempts ?? 1) - 1),
+        ...(job.review.scoped ? { scoped: job.review.scoped } : {}),
+        crossFamilyFallback: true,
+        ...(failedIds.length ? { failedReviewLoginIds: failedIds } : {}),
+        agent: null,
+        retry: true,
+      };
+      ctx.saveJob(job);
+      return reviewState(ctx, job, prBody);
+    }
     const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, job.review.agent) : null;
     const reviewPooled = service && isQuotaExhaustionMessage(service)
       ? (job.review.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
@@ -1934,9 +2043,16 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
       const prevReviewAgent = job.review.agent;
       const rateClass = classifyRateLimitFailure(service, prevReviewAgent?.accountWindows);
       if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
+      const sameFamilyAllowedKinds = job.review.crossFamilyFallback && named(job.builderFamily)
+        ? reviewerKindsForFamily(ctx, job.builderFamily, true)
+        : undefined;
       if (prevReviewAgent?.cloud && rateClass === 'burst_rate_limit' && !job.review.burstRetried && ctx.ports.selectLogin) {
         await (ctx.ports.sleep ?? (ms => new Promise(r => setTimeout(r, ms))))(ctx.ports.burstRetryMs ?? 150);
-        const same = await ctx.ports.selectLogin({ preferredAccountId: prevReviewAgent.loginId, fresh: true });
+        const same = await ctx.ports.selectLogin({
+          preferredAccountId: prevReviewAgent.loginId,
+          fresh: true,
+          ...(sameFamilyAllowedKinds?.length ? { allowedKinds: sameFamilyAllowedKinds } : {}),
+        });
         if (same?.state === 'ready' && same?.login?.id === prevReviewAgent.loginId) {
           job.review.burstRetried = true;
           job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
@@ -1963,7 +2079,13 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
           return reviewState(ctx, job, prBody, same);
         }
       }
-      const next = await ctx.ports.exhaustLogin({ loginId: prevReviewAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevReviewAgent?.accountWindows ?? null });
+      const next = await ctx.ports.exhaustLogin({
+        loginId: prevReviewAgent?.loginId ?? ctx.state.agent?.id,
+        resetAt: null,
+        reason: service,
+        accountWindows: prevReviewAgent?.accountWindows ?? null,
+        ...(sameFamilyAllowedKinds?.length ? { allowedKinds: sameFamilyAllowedKinds } : {}),
+      });
       if (next !== null) {
         if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
           job.poolRotations = (job.poolRotations ?? 0) + 1;
@@ -1976,7 +2098,12 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
           return reviewState(ctx, job, prBody, next);
         }
         const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-        job.review = job.review?.scoped ? { head: job.head, scoped: job.review.scoped } : null;
+        const preserved = {
+          ...(job.review?.scoped ? { scoped: job.review.scoped } : {}),
+          ...(job.review?.crossFamilyFallback ? { crossFamilyFallback: true } : {}),
+          ...(Array.isArray(job.review?.failedReviewLoginIds) && job.review.failedReviewLoginIds.length ? { failedReviewLoginIds: job.review.failedReviewLoginIds } : {}),
+        };
+        job.review = Object.keys(preserved).length ? { head: job.head, ...preserved } : null;
         await pausePrForPool(ctx, job, poolOut, service);
         return { state: 'pool-paused' };
       }

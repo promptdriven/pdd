@@ -841,11 +841,19 @@ the evidence record.
   selecting ready alternate-family `agy` logins rather than excluding `agy` as a whole).
   When an alternate-family reviewer is selected, `job.review` records `reviewFamily` and `reviewIndependence:
   "cross-family"`. When no alternate-family login is ready or available (for example a
-  single-provider setup or an alternate family on cooldown), `reviewState` immediately
+  single-provider setup, an alternate family on cooldown, or an error during cross-family
+  selection), `reviewState` immediately
   falls back to `selectAgentStep` across any ready kind without parking the PR, leaking
   an unused pool/Cloud lease, or recording `poolOut` when fallback succeeds, and records
   `reviewFamily` and `reviewIndependence: "same-family"` (or `"unknown-builder"` when
-  `job.builderFamily` is absent, such as a resumed PR). It gets the path checks' table of the PR's changed
+  `job.builderFamily` is absent, such as a resumed PR). Likewise, if a selected
+  `cross-family` review attempt fails at launch or at runtime before producing a valid
+  `PASS` or `FAIL` verdict for `job.head` (missing CLI binary, auth failure, quota or
+  rate-limit error, non-zero exit without a valid result file, quiet stall, or malformed
+  result JSON), `reviewState` marks `crossFamilyFallback: true` on `job.review` for
+  `job.head` and immediately retries with a ready `same-family` login (falling back to
+  default `selectAgentStep` if needed) without counting the failed cross-family attempt
+  against the review attempt cap. It gets the path checks' table of the PR's changed
   files, each in one of three states (owned on the base, with its owner; unowned on the
   base; new in this PR, not on the base; or not checked when main's owners cannot be
   read), and the R5 hints (below), and checks the

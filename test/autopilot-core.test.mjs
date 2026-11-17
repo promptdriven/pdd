@@ -4269,6 +4269,218 @@ test('cross-family reviewer preference picks an alternate model family when read
   });
 });
 
+test('cross-family reviewer runtime failures automatically fall back to same-family provider without exhausting review attempts', async t => {
+  // Case A: Only same-family provider exists (single local provider with no pool AND single-provider codex pool) -> uses same-family immediately
+  const wSingle = await coreWorld(t, { settings: { runs: 1 } });
+  wSingle.issue(50, { title: 'Single provider review', body: 'Use same provider immediately when no cross-family exists.' });
+  await wSingle.tick();
+  const { pr: prA, head: headA } = wSingle.build(50);
+  await wSingle.tick();
+  const singleSaved = JSON.parse(readFileSync(join(wSingle.root, 'jobs', '50.json'), 'utf8'));
+  assert.equal(singleSaved.builderFamily, 'openai');
+  assert.equal(singleSaved.review.reviewFamily, 'openai');
+  assert.equal(singleSaved.review.reviewIndependence, 'same-family');
+  assert.equal(singleSaved.review.attempts, 1);
+  wSingle.review(50, 'PASS');
+  wSingle.suite(50, 0);
+  await wSingle.tick();
+  assert.deepEqual(wSingle.github.merges, [prA.number]);
+  const evidenceA = JSON.parse(readFileSync(join(wSingle.root, 'logs', `50-evidence-${headA}.json`), 'utf8'));
+  assert.deepEqual(evidenceA.review, {
+    state: 'pass',
+    builderFamily: 'openai',
+    reviewFamily: 'openai',
+    reviewIndependence: 'same-family',
+  });
+
+  // Case B1: Cross-family provider (claude, listed FIRST in pool before codex) fails at runtime with non-zero exit / auth error (no result JSON)
+  // -> reviewState marks crossFamilyFallback: true, retries with same-family codex without burning an attempt, and merges cleanly
+  const wAuthFail = await coreWorld(t, { settings: { runs: 1 } });
+  const authPoolPath = join(wAuthFail.dir, 'auth-fail-pool.json');
+  writeFileSync(authPoolPath, JSON.stringify({
+    reset: 'never',
+    logins: [
+      { id: 'claude-broken', kind: 'claude', command: '/opt/bin/claude' },
+      { id: 'codex-working', kind: 'codex', command: '/opt/bin/codex' },
+    ],
+  }));
+  let buildPhase = true;
+  const selectAuthPool = opts => selectPoolLogin(
+    {
+      cwd: wAuthFail.cwd,
+      env: { HOME: wAuthFail.dir, PATH: process.env.PATH },
+      poolPath: authPoolPath,
+      stateRoot: wAuthFail.root,
+      ...(buildPhase && !Array.isArray(opts?.allowedKinds) ? { allowedKinds: ['codex'] } : {}),
+      ...(Array.isArray(opts?.allowedKinds) ? { allowedKinds: opts.allowedKinds } : {}),
+    },
+    { probeLogin: async () => ({ ok: true }), readCodexLimits: async () => ({ state: 'ok' }) },
+  );
+  wAuthFail.issue(51, { title: 'Cross-family auth failure fallback', body: 'Fall back to codex when claude fails with 401.' });
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+  buildPhase = false;
+  const { pr: prB1, head: headB1 } = wAuthFail.build(51);
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+  const firstReview51 = wAuthFail.job(51, 'review');
+  assert.equal(firstReview51.command, '/opt/bin/claude', 'claude cross-family reviewer selected first');
+  assert.equal(JSON.parse(readFileSync(join(wAuthFail.root, 'jobs', '51.json'), 'utf8')).review.reviewIndependence, 'cross-family');
+
+  // Claude fails at runtime with 401 auth error and exit code 1 (no verdict JSON)
+  wAuthFail.say(51, 'review', 'Error: 401 Unauthorized — authentication failed, run claude login');
+  wAuthFail.finish(51, 'review', { code: 1 });
+  wAuthFail.suite(51, 0);
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+
+  const fallbackReview51 = wAuthFail.job(51, 'review');
+  assert.notEqual(fallbackReview51.id, firstReview51.id, 'started a new fallback review job');
+  assert.equal(fallbackReview51.command, '/opt/bin/codex', 'automatically fell back to codex despite claude being first in pool');
+  const savedAfterFallback51 = JSON.parse(readFileSync(join(wAuthFail.root, 'jobs', '51.json'), 'utf8'));
+  assert.equal(savedAfterFallback51.review.crossFamilyFallback, true);
+  assert.equal(savedAfterFallback51.review.reviewFamily, 'openai');
+  assert.equal(savedAfterFallback51.review.reviewIndependence, 'same-family');
+  assert.equal(savedAfterFallback51.review.attempts, 1, 'failed cross-family attempt did not consume the review attempt cap');
+
+  // Even if same-family codex needs 1 transient retry before returning PASS, it still succeeds (attempts 1 -> 2, not aborted at 1)
+  wAuthFail.finish(51, 'review', { code: 1 });
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+  const secondSameFamily51 = wAuthFail.job(51, 'review');
+  assert.equal(secondSameFamily51.command, '/opt/bin/codex', 'retry stays on same-family codex rather than re-picking broken claude');
+  assert.equal(JSON.parse(readFileSync(join(wAuthFail.root, 'jobs', '51.json'), 'utf8')).review.attempts, 2);
+
+  wAuthFail.review(51, 'PASS');
+  await wAuthFail.tick({ selectLogin: selectAuthPool });
+  assert.deepEqual(wAuthFail.github.merges, [prB1.number]);
+  const evidenceB1 = JSON.parse(readFileSync(join(wAuthFail.root, 'logs', `51-evidence-${headB1}.json`), 'utf8'));
+  assert.deepEqual(evidenceB1.review, {
+    state: 'pass',
+    builderFamily: 'openai',
+    reviewFamily: 'openai',
+    reviewIndependence: 'same-family',
+  });
+
+  // Case B2: Cross-family provider (gemini) fails at runtime with quota/rate-limit OR malformed result JSON -> marks cooldown, never parks PR, falls back to codex
+  const wQuotaFail = await coreWorld(t, { settings: { runs: 1 } });
+  const exhaustedCalls = [];
+  const quotaAlerts = [];
+  const selectGeminiCross = async opts => {
+    if (Array.isArray(opts?.allowedKinds)) {
+      if (opts.allowedKinds.includes('gemini')) {
+        return {
+          state: 'ready',
+          configured: true,
+          poolSize: 2,
+          login: { id: 'gemini-1', kind: 'gemini' },
+          agent: { id: 'gemini-1', kind: 'gemini', command: '/opt/bin/gemini' },
+          env: { HOME: wQuotaFail.dir },
+        };
+      }
+      return { state: 'unavailable', configured: true, poolSize: 0, cooling: [], unavailable: [] };
+    }
+    return {
+      state: 'ready',
+      configured: true,
+      poolSize: 2,
+      login: { id: 'codex-1', kind: 'codex' },
+      agent: { id: 'codex-1', kind: 'codex', command: '/opt/bin/codex' },
+      env: { HOME: wQuotaFail.dir },
+    };
+  };
+  const exhaustGemini = async call => {
+    exhaustedCalls.push(call);
+    return { state: 'exhausted', configured: true, poolSize: 1, cooling: [{ id: 'gemini-1', reason: call.reason }], unavailable: [] };
+  };
+  wQuotaFail.issue(52, { title: 'Cross-family quota and malformed JSON fallback', body: 'Fall back to codex on gemini quota error.' });
+  await wQuotaFail.tick({ selectLogin: selectGeminiCross, exhaustLogin: exhaustGemini, alert: async a => quotaAlerts.push(a) });
+  const { pr: prB2 } = wQuotaFail.build(52);
+  await wQuotaFail.tick({ selectLogin: selectGeminiCross, exhaustLogin: exhaustGemini, alert: async a => quotaAlerts.push(a) });
+  assert.equal(wQuotaFail.job(52, 'review').command, '/opt/bin/gemini');
+
+  // Gemini writes corrupt non-JSON to result file AND logs quota exhaustion, then exits 1
+  const geminiJob = wQuotaFail.job(52, 'review');
+  wQuotaFail.say(52, 'review', 'Error: 429 Too Many Requests — exceeded your current quota');
+  wQuotaFail.alive.delete(geminiJob.pid);
+  writeFileSync(geminiJob.result, '{corrupt-json');
+  writeFileSync(geminiJob.exit, JSON.stringify({ code: 1, signal: null, at: wQuotaFail.now() }));
+  wQuotaFail.suite(52, 0);
+
+  await wQuotaFail.tick({ selectLogin: selectGeminiCross, exhaustLogin: exhaustGemini, alert: async a => quotaAlerts.push(a) });
+  assert.equal(exhaustedCalls.length, 1);
+  assert.equal(exhaustedCalls[0].loginId, 'gemini-1');
+  assert.equal(quotaAlerts.length, 0, 'cross-family quota fallback never fires a pool-exhausted alert when same-family is ready');
+  assert.equal(wQuotaFail.job(52, 'review').command, '/opt/bin/codex', 'fell back to codex after gemini quota + corrupt JSON failure');
+  const savedAfterQuota52 = JSON.parse(readFileSync(join(wQuotaFail.root, 'jobs', '52.json'), 'utf8'));
+  assert.equal(savedAfterQuota52.stepStop, undefined, 'PR was not pool-paused');
+  assert.equal(savedAfterQuota52.review.crossFamilyFallback, true);
+  assert.equal(savedAfterQuota52.review.reviewIndependence, 'same-family');
+
+  wQuotaFail.review(52, 'PASS');
+  await wQuotaFail.tick({ selectLogin: selectGeminiCross, exhaustLogin: exhaustGemini, alert: async a => quotaAlerts.push(a) });
+  assert.deepEqual(wQuotaFail.github.merges, [prB2.number]);
+
+  // Case B3: Cross-family selector error OR missing binary launch error (ENOENT in jobs.start) -> falls back cleanly to same-family codex
+  const wLaunchFail = await coreWorld(t, { settings: { runs: 1 } });
+  let throwOnSelect = true;
+  const selectWithErrorThenMissingBin = async opts => {
+    if (Array.isArray(opts?.allowedKinds) && opts.allowedKinds.includes('claude')) {
+      if (throwOnSelect) {
+        throwOnSelect = false;
+        throw new Error('cross-family probe failed');
+      }
+      return {
+        state: 'ready',
+        configured: true,
+        poolSize: 2,
+        login: { id: 'claude-missing-bin', kind: 'claude' },
+        agent: { id: 'claude-missing-bin', kind: 'claude', command: '/missing/bin/claude' },
+        env: { HOME: wLaunchFail.dir },
+      };
+    }
+    if (Array.isArray(opts?.allowedKinds) && !opts.allowedKinds.includes('codex')) {
+      return { state: 'unavailable', configured: true, poolSize: 0, cooling: [], unavailable: [] };
+    }
+    return {
+      state: 'ready',
+      configured: true,
+      poolSize: 2,
+      login: { id: 'codex-ok', kind: 'codex' },
+      agent: { id: 'codex-ok', kind: 'codex', command: '/opt/bin/codex' },
+      env: { HOME: wLaunchFail.dir },
+    };
+  };
+  const origStart = wLaunchFail.jobs.start;
+  wLaunchFail.jobs.start = spec => {
+    if (spec.command === '/missing/bin/claude') {
+      throw Object.assign(new Error('spawn /missing/bin/claude ENOENT'), { code: 'ENOENT' });
+    }
+    return origStart(spec);
+  };
+  // Issue 53: selectCrossFamilyReviewer throws -> falls back immediately to codex
+  wLaunchFail.issue(53, { title: 'Selector error fallback', body: 'Fall back when cross-family selector throws.' });
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  const { pr: pr53 } = wLaunchFail.build(53);
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  assert.equal(wLaunchFail.job(53, 'review').command, '/opt/bin/codex');
+  wLaunchFail.review(53, 'PASS');
+  wLaunchFail.suite(53, 0);
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  assert.deepEqual(wLaunchFail.github.merges, [pr53.number]);
+
+  // Issue 54: cross-family binary missing at launch (jobs.start throws ENOENT) -> marks crossFamilyFallback: true and starts codex immediately
+  wLaunchFail.issue(54, { title: 'Missing binary launch fallback', body: 'Fall back when cross-family binary is missing.' });
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  const { pr: pr54 } = wLaunchFail.build(54);
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  assert.equal(wLaunchFail.job(54, 'review').command, '/opt/bin/codex');
+  const saved54 = JSON.parse(readFileSync(join(wLaunchFail.root, 'jobs', '54.json'), 'utf8'));
+  assert.equal(saved54.review.crossFamilyFallback, true);
+  assert.equal(saved54.review.reviewIndependence, 'same-family');
+  assert.equal(saved54.review.attempts, 1);
+  wLaunchFail.review(54, 'PASS');
+  wLaunchFail.suite(54, 0);
+  await wLaunchFail.tick({ selectLogin: selectWithErrorThenMissingBin });
+  assert.deepEqual(wLaunchFail.github.merges, [pr53.number, pr54.number]);
+});
+
 test('3412 workRules align Rule 1 and path e with #3376 and accept path e prompt creation for existing unowned code', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit('src/util.js', 'export const util = () => 0;\n');
