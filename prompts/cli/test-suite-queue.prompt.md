@@ -211,6 +211,11 @@ receipts and logs remain available through the queue. Default this port to true.
 Older records without evidence fields remain readable and provide null values.
 
 A later process observes the same ticket and recorder through the shared queue.
+Canonicalize `cwd` with `fs.realpathSync(resolve(cwd))` (falling back to
+`resolve(cwd)` when unavailable or missing) across `runTestSuite`,
+`readSuiteProgress`, and `reconcileSuiteQueue` so symlinked worktrees or platform
+temp paths (`/var/folders` vs `/private/var/folders`) match identically between
+parent and child processes.
 Each new ticket saves `pidIdentity` (`processIdentity(pid)`, or null when
 unavailable) and `executionStarted: false`, flipping `executionStarted` to `true`
 immediately before invoking `execute`. Register `SIGINT` and `SIGTERM` listeners
@@ -331,7 +336,10 @@ fields: ticket, owner PID, child PID when known, cwd, state, timestamps,
 failure reason, assigned CPU IDs (`cpuIds`), share (`coresPerCheck`), taskset path and `environmentPolicy`. Never record inherited environment values. Report changed queue
 positions as `waiting for a check slot (position N)`, including full builds
 and waits on a busy machine. Autopilot reports the shared
-work as check slots. Retain completed intervals
+work as check slots. `suiteStatusWords(suite)` checks `suite.outcome ===
+"interrupted"` before generic `suite.reason` so interrupted runs render `"full
+test suite interrupted: <reason>"` instead of `"full test suite failed: ..."`.
+Retain completed intervals
 so the stuck clock excludes queue wait and suite execution after restart. Status
 is read-only and must not mutate workflow state or touch a live chat. A successful
 suite resumes the prior stuck clock, rather than consuming it. A suite failure,

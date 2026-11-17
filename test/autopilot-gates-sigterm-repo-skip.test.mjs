@@ -1,7 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { coreWorld } from './helpers/core-world.mjs';
 import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
 import { coreSettings, coreStatus } from '../src/autopilot-core.mjs';
-import { calculateCheckCapacity, readSuiteProgress, reconcileSuiteQueue, runTestSuite } from '../src/test-suite-queue.mjs';
+import { calculateCheckCapacity, readSuiteProgress, reconcileSuiteQueue, runTestSuite, suiteStatusWords } from '../src/test-suite-queue.mjs';
 import {
   NEEDS_OTHER_REPO_LABEL,
   OTHER_REPO_MARKER_PREFIX,
@@ -52,22 +52,39 @@ test('#3471: autopilot.ci="local" clears saved ciDown holds, requires local test
   assert.equal(coreSettings({ autopilot: { ci: 'github' } }).ci, 'github');
   assert.equal(coreSettings({ autopilot: { ci: 'invalid' } }).ci, 'github', 'unknown ci value falls back safely to github');
 
-  const w = await coreWorld(t, { settings: { runs: 1, ci: 'local' } });
+  const w = await coreWorld(t, { settings: { runs: 1 } });
   seedPullRequestWorkflow(w);
   w.github.mergeMovesBase = true;
 
-  // Seed a saved CI outage hold from before switching to local CI policy.
+  // Seed a valid saved CI outage hold that loadMachine retains, and prove it holds intake under ci="github".
   mkdirSync(w.root, { recursive: true });
   writeFileSync(
     join(w.root, 'core.json'),
-    JSON.stringify({ ciDown: { since: w.now() - 600_000, alerted: true } }, null, 2),
+    JSON.stringify({
+      streak: 0,
+      hours: 1,
+      ciDown: {
+        since: w.now() - 600_000,
+        reason: 'billing',
+        message: 'The job was not started because your spending limit needs to be increased.',
+        issue: 99,
+        pr: 99,
+        head: 'a'.repeat(40),
+        at: w.now() - 50_000,
+      },
+    }, null, 2),
   );
 
   w.issue(1, { labels: ['pdd:autopilot'], title: 'Fix widget rounding', body: 'Fix rounding in widget.' });
 
-  // First tick clears ciDown hold and starts build for #1 instead of holding intake.
+  const heldTick = await w.tick();
+  assert.match(heldTick.message, /intake held: GitHub Actions did not start a run/, 'valid ciDown record holds intake before switching to local CI');
+  assert.equal(w.job(1, 'build'), undefined, 'no job started while ci="github" is held by ciDown');
+
+  // Switch to autopilot.ci="local": next tick clears ciDown hold and starts build for #1!
+  w.settings.ci = 'local';
   const first = await w.tick();
-  assert.doesNotMatch(first.message, /CI outage/i);
+  assert.doesNotMatch(first.message, /intake held:/i);
   const coreSaved = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8'));
   assert.equal(coreSaved.ciDown, null, 'saved ciDown outage hold is cleared under local CI policy');
   assert.ok(w.job(1, 'build'), 'build started immediately after clearing ciDown');
@@ -127,14 +144,22 @@ test('#3471: autopilot.ci="local" clears saved ciDown holds, requires local test
   assert.equal(evidence.ci?.state, 'local');
 });
 
-test('#3471: auto-detects disabled GitHub Actions on GitHub while honoring server-side required checks and human approvals', async t => {
+test('#3471: auto-detects disabled GitHub Actions, filters non-PR release workflows in ciHold, fails closed on protection/review API errors, preserves 0 approvals, and filters bots/outsiders across local and green PRs', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
   seedPullRequestWorkflow(w);
+  w.baseCommit('.github/workflows/release.yml', 'name: Release\non:\n  push:\n    tags:\n      - "v*"\njobs:\n  publish:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo publish\n');
+  w.git(w.cwd, 'pull', '-q', 'origin', 'main');
   w.github.mergeMovesBase = true;
 
-  let actionsEnabled = false;
+  let actionsEnabled = true;
+  let workflowsPayload = [
+    { path: '.github/workflows/ci.yml', state: 'disabled_manually' },
+    { path: '.github/workflows/release.yml', state: 'active' },
+  ];
   let requiredContexts = [];
+  let reviewProtStatus = 404;
   let requiredApprovals = 0;
+  let reviewsApiStatus = 200;
 
   const baseGh = w.gh;
   const customGh = async (args, options) => {
@@ -143,26 +168,47 @@ test('#3471: auto-detects disabled GitHub Actions on GitHub while honoring serve
     if (method === 'GET' && ep === 'repos/acme/widgets/actions/permissions') {
       return okHttp(200, { enabled: actionsEnabled });
     }
+    if (method === 'GET' && ep === 'repos/acme/widgets/actions/workflows') {
+      return okHttp(200, { total_count: workflowsPayload.length, workflows: workflowsPayload });
+    }
     if (method === 'GET' && ep === 'repos/acme/widgets/branches/main/protection/required_status_checks') {
       return requiredContexts.length
         ? okHttp(200, { contexts: requiredContexts, checks: [] })
         : okHttp(404, { message: 'Required status checks not enabled' });
     }
     if (method === 'GET' && ep === 'repos/acme/widgets/branches/main/protection/required_pull_request_reviews') {
-      return requiredApprovals > 0
-        ? okHttp(200, { required_approving_review_count: requiredApprovals })
-        : okHttp(404, { message: 'Protected branch review not enabled' });
+      if (reviewProtStatus !== 200) return okHttp(reviewProtStatus, { message: `HTTP ${reviewProtStatus}` });
+      return okHttp(200, { required_approving_review_count: requiredApprovals });
     }
     if (method === 'GET' && ep === 'repos/acme/widgets/rules/branches/main') {
-      return okHttp(200, []);
+      return okHttp(404, { message: 'Not Found' });
+    }
+    if (method === 'GET' && /^repos\/acme\/widgets\/pulls\/\d+\/reviews$/.test(ep) && reviewsApiStatus !== 200) {
+      return okHttp(reviewsApiStatus, { message: 'Server Error' });
     }
     return baseGh(args, options);
   };
 
-  // Case A: GitHub Actions disabled in repo settings + server-side branch protection requires status check "external-ci".
-  requiredContexts = ['external-ci'];
+  // Legacy saved ciDown (no hadWorkflows field) clears in ciHold even while non-PR release.yml is active and PR ci.yml is disabled!
+  mkdirSync(w.root, { recursive: true });
+  writeFileSync(
+    join(w.root, 'core.json'),
+    JSON.stringify({
+      streak: 0,
+      hours: 1,
+      ciDown: { since: w.now() - 600_000, reason: 'queued', at: w.now() - 50_000, issue: 90, pr: 90, head: 'b'.repeat(40) },
+    }),
+  );
+
+  // Case A: Server-side branch protection requires status check "external-ci" -> ciHold stays held until cleared, and PR waits on required checks.
+  actionsEnabled = false;
+  requiredContexts = [];
   w.issue(2, { labels: ['pdd:autopilot'], title: 'Handle disabled actions', body: 'Test local gate.' });
   await w.tick({ gh: customGh });
+  assert.equal(JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8')).ciDown, null, 'legacy ciDown cleared when PR workflow is disabled despite active release.yml');
+  assert.ok(w.job(2, 'build'), 'intake resumed after clearing legacy ciDown');
+
+  requiredContexts = ['external-ci'];
   const { pr } = w.build(2, { body: 'Fixes #2.\n\nRuntime: PASS', checks: false });
   await w.tick({ gh: customGh });
   w.review(2, 'PASS');
@@ -172,32 +218,87 @@ test('#3471: auto-detects disabled GitHub Actions on GitHub while honoring serve
   const evidenceWhileServerRequired = JSON.parse(readFileSync(join(w.root, 'logs', `2-evidence-${pr.head}.json`), 'utf8'));
   assert.equal(evidenceWhileServerRequired.ci?.state, 'pending', 'waits on server-side required status checks');
 
-  // Clear required status checks, enable required human approval = 1 -> parks as needs-person in auto mode!
+  // Case B: 403 on required_pull_request_reviews fails closed (waits as retryable github error; neither merges nor parks!).
   requiredContexts = [];
-  requiredApprovals = 1;
+  reviewProtStatus = 403;
   await w.tick({ gh: customGh });
-  assert.equal(w.github.merges.length, 0, 'missing required human approval prevents doomed merge');
+  assert.equal(w.github.merges.length, 0, '403 on review protection fails closed and blocks merge');
+  assert.equal(w.labels(2).includes('pdd:needs-decision'), false, '403 transient/permission error does not park PR');
+  assert.equal(JSON.parse(readFileSync(join(w.root, 'jobs', '2.json'), 'utf8')).lastErrorTool, true);
+
+  // Case C: Transient 500 on /pulls/N/reviews when requiredApprovals = 1 retries without parking!
+  reviewProtStatus = 200;
+  requiredApprovals = 1;
+  reviewsApiStatus = 500;
+  await w.tick({ gh: customGh });
+  assert.equal(w.github.merges.length, 0);
+  assert.equal(w.labels(2).includes('pdd:needs-decision'), false, 'transient reviews API error retries instead of parking');
+  assert.equal(JSON.parse(readFileSync(join(w.root, 'jobs', '2.json'), 'utf8')).lastErrorTool, true);
+
+  // Case D: Bot, [bot] login, untrusted NONE outsider, and stale commit_id reviews do NOT count -> parks with branch-protection PR note!
+  reviewsApiStatus = 200;
+  w.github.prs.get(pr.number).reviews = [
+    { state: 'APPROVED', commit_id: pr.head, user: { login: 'ci-helper', type: 'Bot' }, author_association: 'COLLABORATOR' },
+    { state: 'APPROVED', commit_id: pr.head, user: { login: 'copilot-reviewer[bot]', type: 'User' }, author_association: 'COLLABORATOR' },
+    { state: 'APPROVED', commit_id: pr.head, user: { login: 'outside-contrib', type: 'User' }, author_association: 'NONE' },
+    { state: 'APPROVED', commit_id: '0'.repeat(40), user: { login: 'reviewer-alice', type: 'User' }, author_association: 'COLLABORATOR' },
+  ];
+  await w.tick({ gh: customGh });
+  assert.equal(w.github.merges.length, 0, 'bot, outsider, and stale-commit approvals do not satisfy requiredApprovals');
   assert.ok(w.labels(2).includes('pdd:needs-decision'), 'parks issue for human PR approval');
+  const parkedPrNotes = w.github.prs.get(pr.number).comments.map(c => c.body);
   assert.ok(
-    w.comments(2).some(body => /human pull-request approval/i.test(body)),
-    'decision comment explains that base branch requires a human approval',
+    parkedPrNotes.some(body => /pull-request review approval on GitHub required by branch protection/i.test(body)),
+    'PR comment accurately states branch-protection review approval wait',
+  );
+  assert.equal(
+    parkedPrNotes.some(body => /approval of the prompt changes/i.test(body)),
+    false,
+    'never mislabels branch-protection review wait as prompt-change approval',
   );
 
-  // Human reviewer approves PR #100 and removes pdd:needs-decision -> resumes and merges cleanly with honest disabled-Actions CI note!
-  w.github.prs.get(pr.number).reviews = [{ state: 'APPROVED', user: { login: 'reviewer-alice', type: 'User' } }];
+  //Trusted collaborator approves at current head (case-insensitive SHA) and removes pdd:needs-decision -> merges!
+  w.github.prs.get(pr.number).reviews.push({
+    state: 'APPROVED',
+    commit_id: pr.head.toUpperCase(),
+    user: { login: 'reviewer-alice', type: 'User' },
+    author_association: 'COLLABORATOR',
+  });
   w.github.unlabel(2, 'pdd:needs-decision');
-  await w.tick({ gh: customGh }); // intake resumes kept PR #100
-  await w.tick({ gh: customGh }); // mergeCheck starts review + suite on resumed PR #100
+  await w.tick({ gh: customGh });
+  await w.tick({ gh: customGh });
   if (w.job(2, 'review') && w.alive.has(w.job(2, 'review').pid)) w.review(2, 'PASS');
   if (w.job(2, 'suite') && w.alive.has(w.job(2, 'suite').pid)) w.suite(2, 0);
   await w.tick({ gh: customGh });
-
   assert.deepEqual(w.github.merges, [pr.number]);
-  const prComments = w.github.prs.get(pr.number).comments.map(c => c.body);
-  assert.ok(
-    prComments.some(body => body.includes('GitHub Actions is disabled for this repository')),
-    'merge comment notes that GitHub Actions is disabled for the repository',
-  );
+
+  // Case E: Explicit required_approving_review_count: 0 is preserved as 0 (not inflated to 1), AND green GitHub CI PRs also honor requiredApprovals > 0!
+  actionsEnabled = true;
+  workflowsPayload = [
+    { path: '.github/workflows/ci.yml', state: 'active' },
+    { path: '.github/workflows/release.yml', state: 'active' },
+  ];
+  reviewProtStatus = 200;
+  requiredApprovals = 1;
+  w.issue(3, { labels: ['pdd:autopilot'], title: 'Green CI approval gate', body: 'Check green CI.' });
+  await w.tick({ gh: customGh });
+  const { pr: greenPr } = w.build(3, { body: 'Fixes #3.\n\nRuntime: PASS', checks: 'success' });
+  await w.tick({ gh: customGh });
+  w.review(3, 'PASS');
+  w.suite(3, 0);
+  await w.tick({ gh: customGh });
+  assert.equal(w.github.merges.includes(greenPr.number), false, 'green GitHub CI PR also honors requiredApprovals = 1');
+  assert.ok(w.labels(3).includes('pdd:needs-decision'));
+
+  // Lower required_approving_review_count explicitly to 0 and remove pdd:needs-decision -> merges with 0 human reviews!
+  requiredApprovals = 0;
+  w.github.unlabel(3, 'pdd:needs-decision');
+  await w.tick({ gh: customGh });
+  await w.tick({ gh: customGh });
+  if (w.job(3, 'review') && w.alive.has(w.job(3, 'review').pid)) w.review(3, 'PASS');
+  if (w.job(3, 'suite') && w.alive.has(w.job(3, 'suite').pid)) w.suite(3, 0);
+  await w.tick({ gh: customGh });
+  assert.deepEqual(w.github.merges, [pr.number, greenPr.number], 'explicit required_approving_review_count: 0 merges without inflating 0 to 1');
 });
 
 test('#3473: SIGTERM during runTestSuite queue wait finalizes ticket to interrupted and releases queue capacity', async t => {
@@ -241,10 +342,12 @@ test('#3473: SIGTERM during runTestSuite queue wait finalizes ticket to interrup
     await new Promise(r => setTimeout(r, 10));
   }
 
-  // Spawn real test-suite-entry.mjs child process waiting in the queue for repo2, then send SIGTERM while it waits!
+  // Spawn real test-suite-entry.mjs child process via a symlinked cwd waiting in the queue for repo2, then send SIGTERM while it waits!
+  const repo2Link = join(dir, 'repo-2-link');
+  symlinkSync(repo2, repo2Link);
   const entryPath = fileURLToPath(new URL('../src/test-suite-entry.mjs', import.meta.url));
   const waiter = spawn(process.execPath, [entryPath], {
-    cwd: repo2,
+    cwd: repo2Link,
     env: { ...env, SUITE: `${JSON.stringify(process.execPath)} -e "process.exit(0)"` },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -269,6 +372,14 @@ test('#3473: SIGTERM during runTestSuite queue wait finalizes ticket to interrup
   assert.equal(ticket2.signal, 'SIGTERM');
   assert.equal(ticket2.counts, null);
   assert.equal(typeof ticket2.finishedAt, 'number');
+
+  // Verify readSuiteProgress matches BOTH un-realpathed symlink path and canonical path, and suiteStatusWords reports "interrupted"!
+  const progViaTarget = readSuiteProgress({ cwd: repo2, env });
+  const progViaSymlink = readSuiteProgress({ cwd: repo2Link, env });
+  assert.equal(progViaTarget?.outcome, 'interrupted');
+  assert.equal(progViaSymlink?.outcome, 'interrupted');
+  assert.match(suiteStatusWords(progViaTarget), /^full test suite interrupted:/);
+  assert.doesNotMatch(suiteStatusWords(progViaTarget), /full test suite failed:/);
 
   // Release slot #1 and verify a third suite immediately acquires the slot without being blocked by ticket #2.
   releaseFirst();
@@ -332,8 +443,10 @@ test('#3473: reconcileSuiteQueue reclaims recycled PIDs via pidIdentity, and aut
     }),
   );
 
+  const repoStaleLink = join(dir, 'repo-stale-link');
+  symlinkSync(repoStale, repoStaleLink);
   const progress = readSuiteProgress(
-    { cwd: repoStale, since: 500, env },
+    { cwd: repoStaleLink, since: 500, env },
     {
       now: () => 5000,
       alive: () => true,
@@ -342,9 +455,10 @@ test('#3473: reconcileSuiteQueue reclaims recycled PIDs via pidIdentity, and aut
   );
   assert.equal(progress.state, 'finished');
   assert.equal(progress.outcome, 'interrupted');
+  assert.match(suiteStatusWords(progress), /^full test suite interrupted:/);
 
   const reconciledCount = await reconcileSuiteQueue(
-    { env },
+    { cwd: repoStaleLink, env },
     {
       now: () => 5000,
       alive: () => true,
@@ -406,6 +520,17 @@ test('#3500: detectWrongRepositoryIssue skips wrong-repo issues before claim wit
     ),
     null,
     'missing greenfield paths in the current repo never trigger wrong-repo skip',
+  );
+  assert.equal(
+    detectWrongRepositoryIssue(
+      {
+        title: 'Add src/runtime-retry.mjs for prompt-runtime transient 503s',
+        body: 'Create `src/runtime-retry.mjs` and `test/runtime-retry.test.mjs` so PDD retries transient 503s from `prompt-runtime` (see https://github.com/promptdriven/pdd-cloud/blob/main/pdd_cloud/gateway/retry.py for reference).',
+      },
+      { repo: 'promptdriven/pdd', cwd: w.cwd },
+    ),
+    null,
+    'greenfield local-root paths in pdd are never skipped even when prose mentions prompt-runtime and links an external GitHub blob URL',
   );
   assert.equal(
     detectWrongRepositoryIssue(
@@ -528,20 +653,24 @@ test('#3503: cardCommand, improveCommand, forensicsCommand, activeIntake, shadow
       '[model_providers.pdd_codex_gateway]',
       'name = "PDD Codex Gateway"',
       'base_url = "https://gateway.example.test/v1"',
+      'model_catalog_url = "https://gateway.example.test/v1/models"',
       'wire_api = "responses"',
       'requires_openai_auth = false',
       'supports_websockets = false',
-      'http_headers = { "x-pdd-gateway-grant" = "pddg_direct_token_1234567890" }',
+      'http_headers = { "x-pdd-gateway-grant" = "pddg_direct_token_1234567890", "authorization" = "Bearer sk-secret-never-on-argv" }',
+      'experimental_bearer_token = "pddg_bearer_secret_999"',
+      'query_params = { api_key = "qp_secret_888" }',
       '',
     ].join('\n'),
   );
 
-  const directEnv = { HOME: dir, PATH: '/usr/bin', CODEX_HOME: managedHome };
-  for (const cmd of [
-    cardCommand({ kind: 'codex' }, { model: 'gpt-5.4-mini', result: '/tmp/card.txt', env: directEnv }),
-    improveCommand({ kind: 'codex' }, { model: 'gpt-5.4-mini', result: '/tmp/imp.txt', env: directEnv }),
-    forensicsCommand({ kind: 'codex' }, { model: 'gpt-5.4-mini', resultFile: '/tmp/for.txt', env: directEnv }),
+  for (const build of [
+    env => cardCommand({ kind: 'codex' }, { model: 'gpt-5.4-mini', result: '/tmp/card.txt', env }),
+    env => improveCommand({ kind: 'codex' }, { model: 'gpt-5.4-mini', result: '/tmp/imp.txt', env }),
+    env => forensicsCommand({ kind: 'codex' }, { model: 'gpt-5.4-mini', resultFile: '/tmp/for.txt', env }),
   ]) {
+    const cmdEnv = { HOME: dir, PATH: '/usr/bin', CODEX_HOME: managedHome };
+    const cmd = build(cmdEnv);
     assert.ok(cmd.args.includes('--ignore-user-config'), 'keeps --ignore-user-config');
     const cVals = getConfigFlagValues(cmd.args);
     assert.ok(cVals.includes('mcp_servers={}'), 'keeps mcp_servers={}');
@@ -549,12 +678,21 @@ test('#3503: cardCommand, improveCommand, forensicsCommand, activeIntake, shadow
     assert.ok(cVals.includes('cli_auth_credentials_store="file"'));
     assert.ok(cVals.includes('model_provider="pdd_codex_gateway"'));
     assert.ok(cVals.includes('model_providers.pdd_codex_gateway.base_url="https://gateway.example.test/v1"'));
+    assert.ok(cVals.includes('model_providers.pdd_codex_gateway.model_catalog_url="https://gateway.example.test/v1/models"'));
     assert.ok(cVals.includes('model_providers.pdd_codex_gateway.wire_api="responses"'));
     assert.ok(cVals.includes('model_providers.pdd_codex_gateway.requires_openai_auth=false'));
     assert.ok(cVals.includes('model_providers.pdd_codex_gateway.supports_websockets=false'));
-    assert.ok(cVals.includes('model_providers.pdd_codex_gateway.http_headers={ x-pdd-gateway-grant = "pddg_direct_token_1234567890" }'));
+    assert.ok(cVals.includes('model_providers.pdd_codex_gateway.env_http_headers={ x-pdd-gateway-grant = "PDD_CODEX_GATEWAY_GRANT" }'));
     assert.ok(cVals.includes('shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"'));
     assert.ok(cVals.includes('features.shell_snapshot=false'));
+    assert.equal(cmdEnv.PDD_CODEX_GATEWAY_GRANT, 'pddg_direct_token_1234567890', 'legacy http_headers grant moved into child env');
+    const serializedArgs = JSON.stringify(cmd.args);
+    assert.equal(serializedArgs.includes('pddg_'), false, 'raw pddg_* secret NEVER appears in CLI args');
+    assert.equal(serializedArgs.includes('sk-secret-never-on-argv'), false, 'raw bearer secret NEVER appears in CLI args');
+    assert.equal(serializedArgs.includes('qp_secret_888'), false, 'raw query_params secret NEVER appears in CLI args');
+    assert.equal(/\.http_headers=/.test(serializedArgs), false, 'http_headers NEVER serialized into CLI args');
+    assert.equal(serializedArgs.includes('experimental_bearer_token'), false, 'experimental_bearer_token NEVER serialized into CLI args');
+    assert.equal(serializedArgs.includes('query_params'), false, 'query_params NEVER serialized into CLI args');
     assert.equal(cVals.some(v => v.includes('bad_user_server') || v.includes('bad_profile') || v.includes('hooks=true')), false, 'never leaks user MCP, profiles, or hooks');
   }
 
@@ -563,6 +701,16 @@ test('#3503: cardCommand, improveCommand, forensicsCommand, activeIntake, shadow
   mkdirSync(userDotCodex, { recursive: true });
   writeFileSync(join(userDotCodex, 'config.toml'), 'model_provider = "should_not_load"\n');
   assert.deepEqual(codexProviderConfigArgs({ env: { HOME: dir, PATH: '/usr/bin' }, agent: { kind: 'codex' } }), []);
+
+  // Symlinked config.toml (as created by OAuth step overlays pointing to ~/.codex/config.toml) MUST be skipped!
+  const symlinkOverlayHome = join(dir, 'symlink-overlay-home');
+  mkdirSync(symlinkOverlayHome, { recursive: true });
+  symlinkSync(join(userDotCodex, 'config.toml'), join(symlinkOverlayHome, 'config.toml'));
+  assert.deepEqual(
+    codexProviderConfigArgs({ env: { HOME: dir, PATH: '/usr/bin', CODEX_HOME: symlinkOverlayHome }, agent: { kind: 'codex' } }),
+    [],
+    'symlinked config.toml is rejected so personal ~/.codex/config.toml never leaks past --ignore-user-config',
+  );
 
   // 2. Cloud Accounts gateway_grant lease via prepareCloudStepExecution (runner.prepareStep) in shadowIntake, activeIntake (card + improve), and runPreRunForensics!
   const leaseReply = {
@@ -675,5 +823,8 @@ test('#3503: cardCommand, improveCommand, forensicsCommand, activeIntake, shadow
   assert.ok(improveCVals.includes('model_providers.pdd_codex_gateway.env_http_headers={ x-pdd-gateway-grant = "PDD_CODEX_GATEWAY_GRANT" }'));
   assert.ok(improveCVals.includes('shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"'));
   assert.equal(improveJob.env.PDD_CODEX_GATEWAY_GRANT, 'pddg_step_lease_token_abcdef123456');
+  for (const argsList of [seenForensicsArgs, shadowJob.args, activeCardJob.args, improveJob.args]) {
+    assert.equal(JSON.stringify(argsList).includes('pddg_'), false, 'step lease token NEVER appears in job CLI args');
+  }
   for (const d of improveJob.cleanupDirs ?? []) rmSync(d, { recursive: true, force: true });
 });

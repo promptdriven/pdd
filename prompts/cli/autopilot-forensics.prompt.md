@@ -38,16 +38,25 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
 - `forensicsEnvironment(env)` applies `jobEnvironment(env)` and strips every
   `GH_*TOKEN` and `GITHUB_*TOKEN` variable so the forensics subprocess has zero
   GitHub write credentials.
-- `codexProviderConfigArgs({env, agent, fs})` reads `CODEX_HOME/config.toml` when an
-  explicit `CODEX_HOME` (`env.CODEX_HOME`, `agent.env.CODEX_HOME`, or
-  `agent.codexHome`) is configured and forwards only safe auth-store and provider
-  routing overrides (`cli_auth_credentials_store`, `model_provider`, allowlisted
-  `[model_providers.<provider>]` fields, plus
+- `codexProviderConfigArgs({env, agent, fs})` reads `CODEX_HOME/config.toml` with the
+  vendored `smol-toml` parser (`src/vendor/smol-toml/parse.js`) when an explicit
+  `CODEX_HOME` (`env.CODEX_HOME`, `agent.env.CODEX_HOME`, or `agent.codexHome`) is
+  configured and `config.toml` is a regular file (skipping symlinked `config.toml`
+  overlays via `lstatSync` so personal `~/.codex/config.toml` settings never leak past
+  `--ignore-user-config`). It forwards only non-secret auth-store and provider routing
+  overrides (`cli_auth_credentials_store`, `model_provider`, allowlisted non-secret
+  `[model_providers.<provider>]` metadata: `name`, `base_url`, `model_catalog_url`,
+  `wire_api`, `requires_openai_auth`, `supports_websockets`, `env_key`,
+  `env_key_instructions`, `env_http_headers` naming environment variables only,
+  `request_max_retries`, `stream_max_retries`, `stream_idle_timeout_ms`, plus
   `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"` and
-  `features.shell_snapshot=false` when present) as `-c` flags so Cloud Accounts
-  gateway leases (`pdd_codex_gateway`) and managed `CODEX_HOME` directories work
-  alongside `--ignore-user-config` without leaking user MCP servers, hooks, plugins,
-  profiles, or web search (#3503).
+  `features.shell_snapshot=false` when present) as `-c` flags (#3503). Raw secret
+  fields (`http_headers`, `experimental_bearer_token`, `query_params`) are never
+  serialized onto CLI `args` or `<id>.spec.json`; if a legacy managed `config.toml`
+  sets `http_headers["x-pdd-gateway-grant"]`, `codexProviderConfigArgs` registers the
+  grant with `rememberSecrets`, moves it into `env.PDD_CODEX_GATEWAY_GRANT`, and emits
+  `env_http_headers={ x-pdd-gateway-grant = "PDD_CODEX_GATEWAY_GRANT" }` with
+  `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"`.
 - `forensicsCommand(agent, {model, reasoningEffort, resultFile, env, fs})` builds a
   bounded read-only headless CLI invocation for every supported Autopilot agent kind:
   - `codex`: `exec --ignore-user-config --sandbox read-only --ephemeral --color never`
@@ -111,5 +120,8 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
   `resolveStepModelTier` worker-tier model routing.
 - [Multi-harness login pool](login-pool.prompt.md): required for
   `isQuotaExhaustionMessage` and `isAuthFailureMessage` when rotating pooled logins.
-- [Secret redaction](secret-redaction.prompt.md): required for `redactSecrets` on
-  user-facing comment text and builder briefs.
+- [Secret redaction](secret-redaction.prompt.md): required for `redactSecrets` and
+  `rememberSecrets` on gateway grant tokens, user-facing comment text, and builder
+  briefs.
+- Vendored `smol-toml` (`src/vendor/smol-toml/parse.js`): required for parsing
+  `CODEX_HOME/config.toml` provider overrides.

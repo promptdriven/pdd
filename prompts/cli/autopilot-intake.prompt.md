@@ -57,8 +57,8 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   greenfield paths alone never count as native facts or wrong-repository skips. A native
   record keeps the last AI card as `previous`.
 - Pre-claim wrong-repository detection and routing (`#3500`): export
-  `NEEDS_OTHER_REPO_LABEL = "needs-other-repo"`,
-  `OTHER_REPO_MARKER_PREFIX = "<!-- pdd:autopilot-intake:other-repo:"`,
+  `NEEDS_OTHER_REPO_LABEL = "needs-other-repo"`, `OTHER_REPO_MARKER_PREFIX`
+  (the prefix of `<!-- pdd:autopilot-intake:other-repo:N -->`),
   `findOtherRepoSkipLabel(input)`,
   `detectWrongRepositoryIssue(row, {repo, cwd, fs, repoFiles})` and
   `routeWrongRepositoryIssue(ctx, row, match)`. `detectWrongRepositoryIssue` returns
@@ -66,18 +66,26 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   code, prompt or test paths referenced in the issue exist in `cwd` / `repoFiles`
   (except when an explicit `Repo:` / `Repository:` / `Target repo:` /
   `Target repository:` header names another repository and only generic root files
-  such as `README.md` or `package.json` appear incidentally). High-confidence signals
-  are: an explicit repository metadata header naming a repository different from
-  `repo`; GitHub `blob` or `tree` URLs into another repository; explicit root paths
+  such as `README.md` or `package.json` appear incidentally). Missing specific paths
+  are partitioned into **local-root greenfield paths** (whose top-level directory
+  such as `src/`, `prompts/`, `test/`, `tests/`, `bin/`, `scripts/`, `docs/`, or
+  `user_stories/` exists as a directory in `cwd` / `repoFiles` and is not an absent
+  external sibling root) versus **foreign/unrooted missing paths**. Local-root
+  greenfield paths never count as foreign missing evidence in URL or sibling-prose
+  checks, and whenever local-root greenfield paths are present, only an explicit
+  `Repo:` header naming another repository can trigger a skip. High-confidence
+  signals are: (A) an explicit repository metadata header naming a repository
+  different from `repo`; (B) GitHub `blob` or `tree` URLs into another repository
+  with zero local files or local-root greenfield paths; (C) explicit root paths
   belonging to sibling repositories (`pdd_cloud/...`,
   `extensions/github_pdd_app/...`, `prompt-runtime/...`, `runtime-client/...`,
-  `packages/runtime-client/...`) absent from `cwd`; or prose targeting a known
+  `packages/runtime-client/...`) absent from `cwd`; or (D) prose targeting a known
   sibling service/repository (`prompt-runtime`, `runtime-client`, `pdd_cloud` /
-  `pdd-cloud`, `github_pdd_app`) absent from `cwd` without naming local `pdd`
-  modules or CLI settings. Missing greenfield paths in the current repository never
-  trigger a skip. In `active` intake (when a card evaluates to `elsewhere` or
-  `detectWrongRepositoryIssue` matches) and pre-claim in the core (never in
-  read-only `shadow` mode), `routeWrongRepositoryIssue` adds label
+  `pdd-cloud`, `github_pdd_app`) absent from `cwd` with foreign missing paths or
+  explicit sibling framing and without local `pdd` modules, CLI settings, or
+  local-root greenfield paths. In `active` intake (when a card evaluates to
+  `elsewhere` or `detectWrongRepositoryIssue` matches) and pre-claim in the core
+  (never in read-only `shadow` mode), `routeWrongRepositoryIssue` adds label
   `needs-other-repo` (creating it if missing) and posts at most one deduplicated
   routing comment with hidden marker `<!-- pdd:autopilot-intake:other-repo:N -->`
   naming the target repository/service and verified missing paths, recording the
@@ -234,8 +242,9 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   `ports`, `warn`); `shadowIntake` returns `{cards, started, pick}`.
 - `cardCommand(agent, {model, result, env, fs})` and
   `improveCommand(agent, {model, result, env, fs})` return `{command, args}` for
-  Codex or Claude (forwarding `codexProviderConfigArgs` `-c` overrides when
-  `CODEX_HOME/config.toml` configures auth-store or provider routing, #3503) and
+  Codex or Claude (forwarding non-secret `codexProviderConfigArgs` `-c` overrides
+  from regular `CODEX_HOME/config.toml` files into a cloned child step `env` without
+  serializing raw secrets onto `args`, #3503) and
   throw for any other agent; `cardEnvironment(env)` returns the card environment.
 - `stopCardJobs({root, fs, jobs, warn})` stops the running card jobs under `root`
   and returns how many it stopped.
@@ -250,7 +259,8 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   jobs and for the job environment.
 - [Areas](autopilot-areas.prompt.md): required to normalize card `areas` paths.
 - [Multi-harness login pool](login-pool.prompt.md): required for
-  `isQuotaExhaustionMessage` and `isAuthFailureMessage` when rotating pooled `codex` and `claude` logins.
+  `isQuotaExhaustionMessage`, `isAuthFailureMessage`, and `classifyRateLimitFailure`
+  when rotating or retrying pooled `codex` and `claude` logins.
 - [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
-  external-repository / configured skip-label matching and linear string-aware JSON
-  object scanning.
+  external-repository / configured skip-label matching, linear string-aware JSON
+  object scanning, and `codexProviderConfigArgs` non-secret Codex provider forwarding.

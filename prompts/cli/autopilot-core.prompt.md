@@ -573,20 +573,26 @@ in any CI read clears `ciDown`; when no job read CI in a tick, intake reads the 
 (`resolveSuiteCommand(ctx, job)` or configured/detected `testCommand`) AND
 server-side branch protection and rulesets on `BASE` do not require status checks
 (`GET repos/REPO/branches/BASE/protection/required_status_checks` and
-`GET repos/REPO/rules/branches/BASE?per_page=100`, failing closed on unexpected
-read errors while treating `404` and private-Free `403 Upgrade to GitHub Pro` as
-unprotected), AND either the operator selected `autopilot.ci: "local"` (or
-`state.ci: "local"`) OR GitHub Actions is disabled on GitHub
-(`GET repos/REPO/actions/permissions` returns `enabled: false`, or
-`GET repos/REPO/actions/workflows` shows every matching PR workflow in
-`.github/workflows/` on `origin/BASE` has a non-`active` disabled state):
-`ciHold` clears any saved `ciDown` immediately so intake resumes without needing
-another Actions run, and `ciState` clears `ciDown`, skips billing/queued
+`GET repos/REPO/rules/branches/BASE?per_page=100`, treating only `404` as
+unprotected and failing closed with `unknown: true` / retryable `{code: "github"}`
+on `403`, `5xx`, `status === 0`, or any non-`200`/non-`404` response), AND either
+the operator selected `autopilot.ci: "local"` (or `state.ci: "local"`) OR GitHub
+Actions is disabled on GitHub (`GET repos/REPO/actions/permissions` returns
+`enabled: false`, or `GET repos/REPO/actions/workflows` shows every PR-matching
+workflow via `workflowRunsOnPr` in `.github/workflows/` on `origin/BASE` —
+evaluated both for a job PR and for `ciHold` when `job === null` so non-PR
+workflows like tag-only `release.yml` never keep `ciDown` stuck — has a
+non-`active` disabled state): `ciHold` clears any saved `ciDown` immediately
+(also when zero PR workflows remain on `origin/BASE`, including legacy saved
+`ciDown` records without `hadWorkflows` when `.github/workflows` or
+`actions/workflows` confirms zero active PR workflows) so intake resumes without
+needing another Actions run, and `ciState` clears `ciDown`, skips billing/queued
 `notStarted` waiting even if `ciSeen` was set or billing/queued check runs exist
 on the head, and returns `{state: "local", note, sig}`. Likewise, a head whose
 only checks are billing startup failures does not set `job.ciSeen = true`, and
-removing all `.github/workflows` files that were present when `ciSeen` was recorded allows a later
-zero-check head to resolve without being pinned forever by an earlier `ciSeen`.
+when zero PR workflows remain on `origin/BASE` after PR workflows were removed,
+`job.ciSeen` clears so a later zero-check head resolves cleanly instead of staying
+pinned forever.
 
 **Single bounded shard-flake rerun** (#3484). In `ciState`, when a PR head is red and neither `job.flakeRerunHead` nor `job.reproduceRerun?.head` equals `head`, call `evaluateShardFlakeRerun`: on `wait-siblings` keep CI `pending` while sibling shards finish; on `rerun` invoke `gh run rerun <runId> --repo <repo> --failed` once per failed workflow run (falling back to REST `rerun-failed-jobs`, and per failed shard whose `runId` is absent or failed to rerun to `check-runs/<id>/rerequest`), record `job.flakeRerunHead = head` and `job.ciRerunPending` containing `staleTokens` only for actually-reran shards, and return `pending` when all failed shards were reran (otherwise report the remaining un-reran failed checks immediately). If the rerun fails again at `head`, proceed normally to repair.
 
@@ -1659,7 +1665,7 @@ runs until its end):
    and a new agent result clear `runtimeWait`. The PR body is written back with a
    PATCH of the PR; a failed PATCH waits for the next tick.
 6. **Merge lane** (one final step per repository). A green PR (CI green, local or none,
-   review PASS, suite pass) enters the lane. When server-side branch protection or rulesets on `BASE` require human pull-request approvals (`requiredApprovals > 0`) and no non-engine GitHub `APPROVED` review is present on the current head, `auto` mode stops checks and parks as `needs-person` (`keepPr: true`, asking a trusted person to approve on GitHub and remove `pdd:needs-decision`) before merging, while `observe` mode prepares full evidence, notes the required human approval on the `would-merge` comment, and leaves merging to the person. The lane is the label `pdd:merge-lane` on
+   review PASS, suite pass) enters the lane. Before entering the lane across all green PR states (`green`, `local`, `none`), read server-side branch protection and rulesets on `BASE` (`GET repos/REPO/branches/BASE/protection/required_pull_request_reviews` and `rules/branches/BASE`, preserving an explicit `required_approving_review_count: 0`, treating only `404` as no review protection, and surfacing non-`200`/non-`404` responses as retryable `{code: "github"}` waits rather than merging). When `requiredApprovals > 0`, count distinct non-engine, non-bot (`user.type !== "Bot"` and no `[bot]` suffix) trusted (`author_association` in `OWNER`, `MEMBER`, `COLLABORATOR`, or `ports.trusted` when `author_association` is absent) `APPROVED` reviews whose `commit_id` matches `job.head` case-insensitively (surfacing transient review API errors as retryable `{code: "github"}` waits rather than swallowing them into `0` approvals). When approvals are still missing, `auto` mode stops checks and parks as `needs-person` (`keepPr: true`, `branchApproval: true`, posting a branch-protection PR review wait comment rather than the prompt-change approval comment, and asking a trusted person to approve on GitHub and remove `pdd:needs-decision`) before merging, while `observe` mode prepares full evidence, notes the required human approval on the `would-merge` comment, and leaves merging to the person. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
    PRs only). Because that label search index can lag behind both `POST` and `DELETE` or
    merge writes, every holder read (before `POST`, on the post-`POST` readback, and in
@@ -1979,6 +1985,7 @@ with the native defaults named above.
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.
 - [Serialized FIFO landing queue](autopilot-merge-queue.prompt.md): required for `enqueueMergeQueueItem`, `processMergeQueue`, `mergeQueueStatusLine`, and `buildConflictAgentInvocation`.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.
+- [Autopilot intake cards](autopilot-intake.prompt.md): required for active and shadow intake passes, pre-claim wrong-repository detection and routing, trusted person-comment filtering, and forensics fixed-card sync.
 - [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
   external-repository / configured skip-label matching and the fast read-only
   pre-run repository forensics check on `origin/BASE`.
@@ -1994,7 +2001,8 @@ with the native defaults named above.
 - [Report owner](autopilot-reports.prompt.md): required for `fileReport` and drafts.
 - [Autopilot regression detection](autopilot-regressions.prompt.md): loaded on demand for bounded post-merge reopen, revert and CI regression checks (`#3182`).
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
-  `pdd workflow suite` job.
+  `pdd workflow suite` job, `readSuiteProgress` interrupted/failed receipt reading,
+  and `reconcileSuiteQueue` dead-worker slot reclamation.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
 - [Runtime seam](runtime-seam.prompt.md#public-contract): required for `savedStoryEvidence` (the
   saved checks of T01, with `comparisonRoot` and `withTests`; the merge base read also

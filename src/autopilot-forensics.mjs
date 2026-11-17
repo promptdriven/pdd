@@ -25,19 +25,18 @@ const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
 const CODEX_PROVIDER_KEYS = new Set([
   'name',
   'base_url',
+  'model_catalog_url',
   'wire_api',
   'requires_openai_auth',
   'supports_websockets',
-  'http_headers',
-  'env_http_headers',
-  'query_params',
   'env_key',
   'env_key_instructions',
-  'experimental_bearer_token',
+  'env_http_headers',
   'request_max_retries',
   'stream_max_retries',
   'stream_idle_timeout_ms',
 ]);
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SAFE_CONTROL_RE = /[\x00-\x1f\x7f]/;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isTomlTable = value => object(value) && !(value instanceof Date) && typeof value.toISOString !== 'function';
@@ -176,20 +175,19 @@ function cleanEffort(effort) {
 function formatProviderOverrideValue(key, val) {
   if (typeof val === 'string') {
     if (SAFE_CONTROL_RE.test(val)) return null;
-    if (key === 'experimental_bearer_token' && val) rememberSecrets(val);
+    if (key === 'env_key' && !ENV_NAME_RE.test(val)) return null;
     return JSON.stringify(val);
   }
   if (typeof val === 'boolean') return val ? 'true' : 'false';
   if (typeof val === 'bigint') return String(val);
   if (typeof val === 'number' && Number.isFinite(val)) return String(val);
-  if (isTomlTable(val)) {
+  if (key === 'env_http_headers' && isTomlTable(val)) {
     const entries = Object.entries(val).filter(
-      ([hk, hv]) => typeof hk === 'string' && hk && !SAFE_CONTROL_RE.test(hk) && typeof hv === 'string' && !SAFE_CONTROL_RE.test(hv),
+      ([hk, hv]) => typeof hk === 'string' && hk && !SAFE_CONTROL_RE.test(hk) && typeof hv === 'string' && ENV_NAME_RE.test(hv),
     );
-    if (key === 'http_headers') rememberSecrets(...entries.map(([, hv]) => hv));
     return entries.length
       ? `{ ${entries.map(([hk, hv]) => `${formatTomlKey(hk)} = ${JSON.stringify(hv)}`).join(', ')} }`
-      : '{}';
+      : null;
   }
   return null;
 }
@@ -206,14 +204,24 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
   const codexHome = rawHome.startsWith('~/') && typeof env?.HOME === 'string' && env.HOME.trim()
     ? join(env.HOME.trim(), rawHome.slice(2))
     : rawHome;
+  const configPath = join(codexHome, 'config.toml');
+  if (typeof fs?.lstatSync === 'function') {
+    try {
+      const st = fs.lstatSync(configPath);
+      if (st.isSymbolicLink() || (typeof st.isFile === 'function' && !st.isFile())) return [];
+    } catch {
+      return [];
+    }
+  }
   let parsed;
   try {
-    parsed = parseToml(fs.readFileSync(join(codexHome, 'config.toml'), 'utf8'));
+    parsed = parseToml(fs.readFileSync(configPath, 'utf8'));
   } catch {
     return [];
   }
   if (!isTomlTable(parsed)) return [];
   const out = [];
+  let needGrantExcludeFilter = false;
   if (typeof parsed.cli_auth_credentials_store === 'string' && parsed.cli_auth_credentials_store.trim() && !SAFE_CONTROL_RE.test(parsed.cli_auth_credentials_store)) {
     out.push('-c', `cli_auth_credentials_store=${JSON.stringify(parsed.cli_auth_credentials_store.trim())}`);
   }
@@ -222,23 +230,57 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
     out.push('-c', `model_provider=${JSON.stringify(provider)}`);
     const providerCfg = isTomlTable(parsed.model_providers) ? parsed.model_providers[provider] : null;
     if (isTomlTable(providerCfg)) {
+      if (typeof providerCfg.experimental_bearer_token === 'string' && providerCfg.experimental_bearer_token) {
+        rememberSecrets(providerCfg.experimental_bearer_token);
+      }
+      let legacyGrantValue = null;
+      if (isTomlTable(providerCfg.http_headers)) {
+        for (const [hk, hv] of Object.entries(providerCfg.http_headers)) {
+          if (typeof hv === 'string' && hv) rememberSecrets(hv);
+          if (typeof hk === 'string' && hk.toLowerCase() === 'x-pdd-gateway-grant' && typeof hv === 'string' && hv.trim() && !SAFE_CONTROL_RE.test(hv)) {
+            legacyGrantValue = hv.trim();
+          }
+        }
+      }
+      const mergedEnvHeaders = isTomlTable(providerCfg.env_http_headers) ? { ...providerCfg.env_http_headers } : {};
+      if (legacyGrantValue) {
+        if (env && typeof env === 'object' && env !== process.env && !env.PDD_CODEX_GATEWAY_GRANT) {
+          env.PDD_CODEX_GATEWAY_GRANT = legacyGrantValue;
+        }
+        if (!Object.keys(mergedEnvHeaders).some(k => k.toLowerCase() === 'x-pdd-gateway-grant')) {
+          mergedEnvHeaders['x-pdd-gateway-grant'] = 'PDD_CODEX_GATEWAY_GRANT';
+        }
+        needGrantExcludeFilter = true;
+      }
       const provSeg = formatTomlKey(provider);
       for (const [k, v] of Object.entries(providerCfg)) {
-        if (!CODEX_PROVIDER_KEYS.has(k)) continue;
+        if (!CODEX_PROVIDER_KEYS.has(k) || k === 'env_http_headers') continue;
         const formatted = formatProviderOverrideValue(k, v);
         if (formatted !== null) out.push('-c', `model_providers.${provSeg}.${formatTomlKey(k)}=${formatted}`);
+      }
+      if (Object.keys(mergedEnvHeaders).length > 0) {
+        const formattedHeaders = formatProviderOverrideValue('env_http_headers', mergedEnvHeaders);
+        if (formattedHeaders !== null) {
+          out.push('-c', `model_providers.${provSeg}.env_http_headers=${formattedHeaders}`);
+          if (Object.values(mergedEnvHeaders).includes('PDD_CODEX_GATEWAY_GRANT')) needGrantExcludeFilter = true;
+        }
       }
     }
   }
   const filters = isTomlTable(parsed.shell_environment_policy) && isTomlTable(parsed.shell_environment_policy.filters)
     ? parsed.shell_environment_policy.filters
     : null;
+  let filterKey = 'PDD_CODEX_GATEWAY_GRANT';
   if (filters) {
     for (const [fk, fv] of Object.entries(filters)) {
       if (fk.toLowerCase() === 'pdd_codex_gateway_grant' && typeof fv === 'string' && fv.trim().toLowerCase() === 'exclude' && !SAFE_CONTROL_RE.test(fk)) {
-        out.push('-c', `shell_environment_policy.filters.${formatTomlKey(fk)}="exclude"`);
+        needGrantExcludeFilter = true;
+        filterKey = fk;
       }
     }
+  }
+  if (needGrantExcludeFilter) {
+    out.push('-c', `shell_environment_policy.filters.${formatTomlKey(filterKey)}="exclude"`);
   }
   if (isTomlTable(parsed.features) && parsed.features.shell_snapshot === false) {
     out.push('-c', 'features.shell_snapshot=false');

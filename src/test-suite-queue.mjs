@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 1d1598beedbb1cd8f5985fdd71f343a29bc008e547a2cd29190ef8930930183d).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9a6fbeb4f0e51d65db80cee642a73f0977c1943b8a6548f9c24281b66b319d3c).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -196,12 +196,17 @@ function records(p) {
     return reconciledRow(row, p, p.fs.statSync(join(p.root, name)).mtimeMs);
   }).sort((a, b) => a.ticket - b.ticket);
 }
+function canonicalCwd(cwd, fs = files) {
+  const abs = resolve(cwd);
+  try { return typeof fs?.realpathSync === 'function' ? fs.realpathSync(abs) : abs; }
+  catch { return abs; }
+}
 export async function reconcileSuiteQueue({ cwd = null, env = process.env, signal = null } = {}, ports = {}) {
   const p = portsFor(env, ports);
   let names;
   try { names = p.fs.readdirSync(p.root); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
   if (!names.some(name => /^ticket-.*\.json$/.test(name))) return 0;
-  const targetCwd = cwd ? resolve(cwd) : null;
+  const targetCwd = cwd ? canonicalCwd(cwd, p.fs) : null;
   return underLock(p, () => {
     let curNames;
     try { curNames = p.fs.readdirSync(p.root); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
@@ -210,7 +215,7 @@ export async function reconcileSuiteQueue({ cwd = null, env = process.env, signa
       let row;
       try { row = JSON.parse(p.fs.readFileSync(join(p.root, name), 'utf8')); validateTicketRow(row); }
       catch { continue; }
-      if (row.state === 'finished' || (targetCwd && row.cwd !== targetCwd)) continue;
+      if (row.state === 'finished' || (targetCwd && canonicalCwd(row.cwd, p.fs) !== targetCwd)) continue;
       const next = reconciledRow(row, p, p.now(), signal);
       if (next.state === 'finished') { save(p, next); count++; }
     }
@@ -238,7 +243,8 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
   let p, all;
   try { p = portsFor(env, ports); all = records(p); }
   catch (error) { return { state: 'unavailable', reason: safeEvidenceText(error.message), pausedMs: 0 }; }
-  const own = all.filter(row => row.cwd === resolve(cwd));
+  const targetCwd = canonicalCwd(cwd, p.fs);
+  const own = all.filter(row => canonicalCwd(row.cwd, p.fs) === targetCwd);
   if (!own.length) return null;
   const row = own.findLast(row => row.state !== 'finished') ?? own.at(-1);
   return { ticket: row.ticket, state: row.state, position: row.state === 'waiting' ? positionOf(all, row) : null,
@@ -248,6 +254,7 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
 }
 export function suiteStatusWords(suite) {
   return suite.state === 'unavailable' ? `full test suite queue unavailable: ${suite.reason}`
+    : suite.outcome === 'interrupted' ? `full test suite interrupted${suite.reason ? `: ${suite.reason}` : ''}`
     : suite.reason ? `full test suite failed: ${suite.reason}`
     : suite.state === 'waiting' ? `waiting for a check slot (position ${suite.position})`
     : suite.state === 'running' ? 'running the full test suite'
@@ -266,7 +273,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     p.fs.mkdirSync(p.root, { recursive: true, mode: 0o700 });
     row = await underLock(p, () => {
       const all = records(p), ticket = (all.at(-1)?.ticket ?? 0) + 1;
-      const record = { ticket, pid: p.pid, pidIdentity: p.processIdentity(p.pid), executionStarted: false, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
+      const record = { ticket, pid: p.pid, pidIdentity: p.processIdentity(p.pid), executionStarted: false, childPid: null, cwd: canonicalCwd(cwd, p.fs), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
       const logFolder = join(env.PDD_STATE_DIR ?? join(env.HOME || process.env.HOME,'.local','state','pdd'), 'validation', createHash('sha256').update(p.root).digest('hex').slice(0,20));
       // Content identity for a validation attempt; never used to verify a password.
       Object.assign(record, {command:'[redacted]', commandFingerprint:contentDigest('sha256', command, 'hex'), source:ports.source ? ports.source(cwd) : sourceIdentity(cwd,p),

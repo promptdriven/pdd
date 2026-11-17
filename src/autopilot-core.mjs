@@ -2250,42 +2250,61 @@ async function readBaseWorkflowFiles(ctx) {
     } catch { return null; }
   })());
 }
-function isUnprotected403(res) {
-  if (res?.status !== 403) return false;
-  const msg = JSON.stringify(res?.value ?? '');
-  return /upgrade to github pro|not available|make this repository public/i.test(msg);
+const ghFail = (method, endpoint, status) =>
+  Object.assign(Error(`GitHub ${method} ${endpoint.split('?')[0]} returned ${status || 'no reply'}`), { code: 'github' });
+function prWorkflowEntries(entries, baseBranch, branch = 'pdd/issue-1', diffFiles = null) {
+  if (!Array.isArray(entries)) return null;
+  return entries.filter(w => workflowRunsOnPr(w.text, branch || 'pdd/issue-1', baseBranch, diffFiles));
 }
 async function baseProtection(ctx, { includeReviews = false } = {}) {
   const base = encodeURIComponent(ctx.state.baseBranch);
   const statusProt = await (ctx.baseStatusProt ??= (async () => {
-    const checksRes = await ctx.gh.call('GET', `repos/${ctx.repo}/branches/${base}/protection/required_status_checks`).catch(() => ({ status: 0 }));
     let requiredStatusChecks = false;
+    let requiredApprovals = 0;
+    let unknown = false;
+    let error = null;
+    const checksEp = `repos/${ctx.repo}/branches/${base}/protection/required_status_checks`;
+    const checksRes = await ctx.gh.call('GET', checksEp).catch(() => ({ status: 0 }));
     if (checksRes.status === 200) {
       requiredStatusChecks = (checksRes.value?.contexts?.length ?? 0) + (checksRes.value?.checks?.length ?? 0) > 0;
-    } else if (checksRes.status !== 404 && !isUnprotected403(checksRes)) {
+    } else if (checksRes.status !== 404) {
       requiredStatusChecks = true;
+      unknown = true;
+      error ??= ghFail('GET', checksEp, checksRes.status);
     }
-    let requiredApprovals = 0;
-    const rulesRes = await ctx.gh.call('GET', `repos/${ctx.repo}/rules/branches/${base}?per_page=100`).catch(() => ({ status: 0 }));
+    const rulesEp = `repos/${ctx.repo}/rules/branches/${base}?per_page=100`;
+    const rulesRes = await ctx.gh.call('GET', rulesEp).catch(() => ({ status: 0 }));
     if (rulesRes.status === 200 && Array.isArray(rulesRes.value)) {
       for (const rule of rulesRes.value) {
         if (rule?.type === 'required_status_checks' && (rule.parameters?.required_status_checks?.length ?? 1) > 0) requiredStatusChecks = true;
-        if (rule?.type === 'pull_request') requiredApprovals = Math.max(requiredApprovals, Number(rule.parameters?.required_approving_review_count ?? 0) || 0);
+        if (rule?.type === 'pull_request') {
+          const c = rule.parameters?.required_approving_review_count;
+          if (Number.isInteger(c) && c >= 0) requiredApprovals = Math.max(requiredApprovals, c);
+        }
       }
-    } else if (rulesRes.status !== 404 && !isUnprotected403(rulesRes)) {
+    } else if (rulesRes.status !== 404) {
       requiredStatusChecks = true;
+      unknown = true;
+      error ??= ghFail('GET', rulesEp, rulesRes.status);
     }
-    return { requiredStatusChecks, requiredApprovals };
+    return { requiredStatusChecks, requiredApprovals, unknown, error };
   })());
   if (!includeReviews) return statusProt;
-  const reviewCount = await (ctx.baseReviewProt ??= (async () => {
-    const revRes = await ctx.gh.call('GET', `repos/${ctx.repo}/branches/${base}/protection/required_pull_request_reviews`).catch(() => ({ status: 0 }));
-    if (revRes.status === 200) return Math.max(1, Number(revRes.value?.required_approving_review_count ?? 1) || 1);
-    return 0;
+  const revProt = await (ctx.baseReviewProt ??= (async () => {
+    const revEp = `repos/${ctx.repo}/branches/${base}/protection/required_pull_request_reviews`;
+    const revRes = await ctx.gh.call('GET', revEp).catch(() => ({ status: 0 }));
+    if (revRes.status === 200) {
+      const c = revRes.value?.required_approving_review_count;
+      return { count: Number.isInteger(c) && c >= 0 ? c : 1, unknown: false, error: null };
+    }
+    if (revRes.status === 404) return { count: 0, unknown: false, error: null };
+    return { count: 0, unknown: true, error: ghFail('GET', revEp, revRes.status) };
   })());
   return {
     requiredStatusChecks: statusProt.requiredStatusChecks,
-    requiredApprovals: Math.max(statusProt.requiredApprovals, reviewCount),
+    requiredApprovals: Math.max(statusProt.requiredApprovals, revProt.count),
+    unknown: statusProt.unknown || revProt.unknown,
+    error: statusProt.error ?? revProt.error,
   };
 }
 async function actionsDisabledInfo(ctx, job = null) {
@@ -2299,8 +2318,8 @@ async function actionsDisabledInfo(ctx, job = null) {
     if (Array.isArray(entries) && entries.length > 0) {
       const tip = `origin/${ctx.state.baseBranch}`;
       const diffFiles = job ? await ctx.git(['diff', '--name-only', `${tip}...${job.head}`], job.worktree).then(out => out.split('\n').filter(Boolean)).catch(() => null) : null;
-      const matching = job ? entries.filter(w => workflowRunsOnPr(w.text, job.branch, ctx.state.baseBranch, diffFiles)) : entries;
-      if (matching.length > 0 && matching.every(w => {
+      const matching = prWorkflowEntries(entries, ctx.state.baseBranch, job?.branch ?? 'pdd/issue-1', diffFiles);
+      if (matching && matching.length > 0 && matching.every(w => {
         const apiWf = wfRes.value.workflows.find(item => item?.path === w.path || basename(String(item?.path ?? '')) === w.name);
         return Boolean(apiWf && named(apiWf.state) && normCiState(apiWf.state) !== 'active');
       })) {
@@ -2316,23 +2335,41 @@ async function localCiPolicy(ctx, job = null) {
   const operatorLocal = (ctx.settings?.ci ?? ctx.state?.ci) === 'local';
   const disabled = operatorLocal ? null : await actionsDisabledInfo(ctx, job);
   if (!operatorLocal && !disabled?.disabled) return null;
-  const prot = await baseProtection(ctx, { includeReviews: true });
-  if (prot.requiredStatusChecks) return null;
+  const statusProt = await baseProtection(ctx);
+  if (statusProt.unknown) {
+    if (job) throw statusProt.error;
+    return null;
+  }
+  if (statusProt.requiredStatusChecks) return null;
   const why = operatorLocal ? 'autopilot.ci is local' : disabled.reason;
   return {
     note: `${why}; local testCommand (${suiteCmd}) and fresh review gate merge`,
-    requiredApprovals: prot.requiredApprovals,
   };
 }
 async function githubApprovedCount(ctx, job) {
-  const me = await ctx.login().catch(() => '');
-  const reviews = await ctx.gh.all(`repos/${ctx.repo}/pulls/${job.pr}/reviews?per_page=100`).catch(() => []);
+  const me = await ctx.login();
+  let reviews;
+  try {
+    reviews = await ctx.gh.all(`repos/${ctx.repo}/pulls/${job.pr}/reviews?per_page=100`);
+  } catch (err) {
+    throw Object.assign(err instanceof Error ? err : Error(String(err)), { code: 'github' });
+  }
+  const head = String(job.head ?? '').toLowerCase();
   const latestByUser = new Map();
   for (const rev of reviews) {
-    const login = String(rev?.user?.login ?? '').toLowerCase();
+    const rawLogin = String(rev?.user?.login ?? '').trim();
+    const login = rawLogin.toLowerCase();
     const rState = String(rev?.state ?? '').toUpperCase();
     if (!login || login === me || rState === 'COMMENTED' || rState === 'PENDING') continue;
-    if (rev?.commit_id && String(rev.commit_id).toLowerCase() !== job.head && rState === 'APPROVED') continue;
+    if (String(rev?.user?.type ?? '').toLowerCase() === 'bot' || /\[bot\]$/i.test(rawLogin)) continue;
+    const assoc = String(rev?.author_association ?? '').toUpperCase();
+    const trustedReviewer = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(assoc)
+      || (!assoc && Boolean(await ctx.ports?.trusted?.({ user: rev.user })));
+    if (!trustedReviewer) continue;
+    if (rState === 'APPROVED' && String(rev?.commit_id ?? '').toLowerCase() !== head) {
+      latestByUser.set(login, 'STALE_APPROVED');
+      continue;
+    }
     latestByUser.set(login, rState);
   }
   let count = 0;
@@ -2365,7 +2402,7 @@ async function ciState(ctx, head, job) {
   const local = await localCiPolicy(ctx, job);
   if (local) {
     ciUp(ctx);
-    return { state: 'local', note: local.note, requiredApprovals: local.requiredApprovals, sig: `local:${local.note}` };
+    return { state: 'local', note: local.note, sig: `local:${local.note}` };
   }
   const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
   const status = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/status`);
@@ -2398,8 +2435,9 @@ async function ciState(ctx, head, job) {
   const markCiSeen = async () => {
     if (!checks.length || job.ciSeen) return;
     const wfEntries = await readBaseWorkflowFiles(ctx);
+    const prWfs = prWorkflowEntries(wfEntries, ctx.state.baseBranch, job.branch, null);
     job.ciSeen = true;
-    job.ciSeenHadWorkflows = Boolean(Array.isArray(wfEntries) && wfEntries.length > 0);
+    job.ciSeenHadWorkflows = Boolean(prWfs && prWfs.length > 0);
     ctx.saveJob(job);
   };
   // #3260 (Stop owners): CI that GitHub does not start (queued with no job, or a billing failure) is a service wait.
@@ -2436,9 +2474,15 @@ async function ciState(ctx, head, job) {
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
   // workflow file), never because a new head has no run yet — unless all workflows present when ciSeen was set were removed.
   if (!checks.length) {
-    if (job.ciSeen && job.ciSeenHadWorkflows) {
+    if (job.ciSeen && job.ciSeenHadWorkflows !== false) {
       const wfEntries = await readBaseWorkflowFiles(ctx);
-      if (Array.isArray(wfEntries) && wfEntries.length === 0) { delete job.ciSeen; delete job.ciSeenHadWorkflows; ctx.saveJob(job); }
+      const prWfs = prWorkflowEntries(wfEntries, ctx.state.baseBranch, job.branch, null);
+      if (Array.isArray(prWfs) && prWfs.length === 0) {
+        const wfApiOk = job.ciSeenHadWorkflows === true
+          || (Array.isArray(wfEntries) && wfEntries.length > 0)
+          || (await (ctx.actionsWorkflows ??= ctx.gh.call('GET', `repos/${ctx.repo}/actions/workflows?per_page=100`).catch(() => ({ status: 0 }))))?.status === 200;
+        if (wfApiOk) { delete job.ciSeen; delete job.ciSeenHadWorkflows; ctx.saveJob(job); }
+      }
     }
     return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : ciStart(ctx, job, head, runs, { state: 'pending', pending: [], sig });
   }
@@ -4297,18 +4341,22 @@ async function mergeCheck(ctx, job) {
   noteProgress(ctx, job, [job.head, ci.state, ci.sig, review.state, suite.state, vectors?.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
     ci.state === 'pending' || review.state === 'running' || ['running', 'waiting'].includes(suite.state) || vectors?.state === 'running');
   if (!['green', 'none', 'local'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass' || vectors?.state === 'running') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
-  const requiredApprovals = Number(ci.requiredApprovals) || 0;
+  const prot = await baseProtection(ctx, { includeReviews: true });
+  if (prot.unknown) throw prot.error;
+  const requiredApprovals = prot.requiredApprovals;
   let missingApprovals = 0;
   if (requiredApprovals > 0) {
     const approved = await githubApprovedCount(ctx, job);
     missingApprovals = Math.max(0, requiredApprovals - approved);
     if (missingApprovals > 0 && ctx.settings.mode === 'auto') {
       await stopChecks(ctx, job);
+      const gatesNote = ci.state === 'green' ? 'GitHub CI, local review, and full test suite gates' : 'local review and full test suite gates';
       return end(ctx, job, {
         kind: 'job', component: 'autopilot-core', code: 'needs-person',
         text: `base branch protection requires ${requiredApprovals} human pull-request approval(s) on GitHub`,
         keepPr: true,
-        question: `PR #${job.pr} passed local review and full test suite gates for head ${short(job.head)}, and base branch ${state.baseBranch} requires ${requiredApprovals} human pull-request approval(s) on GitHub before merging. Please approve PR #${job.pr} on GitHub and remove ${DECISION}: Autopilot checks the same PR again without rebuilding.`,
+        branchApproval: true,
+        question: `PR #${job.pr} passed ${gatesNote} for head ${short(job.head)}, and base branch ${state.baseBranch} requires ${requiredApprovals} human pull-request approval(s) on GitHub before merging. Please approve PR #${job.pr} on GitHub and remove ${DECISION}: Autopilot checks the same PR again without rebuilding.`,
       });
     }
   }
@@ -5955,7 +6003,8 @@ async function ciDown(ctx, job, notStarted) {
   const m = ctx.machineState();
   if (m.ciDown) return;
   const wfEntries = await readBaseWorkflowFiles(ctx);
-  m.ciDown = { since: notStarted.since, reason: notStarted.reason, message: notStarted.message ?? null, issue: job.issue, pr: job.pr ?? null, head: job.head, at: ctx.now(), hadWorkflows: Boolean(Array.isArray(wfEntries) && wfEntries.length > 0) };
+  const prWfs = prWorkflowEntries(wfEntries, ctx.state.baseBranch, job.branch, null);
+  m.ciDown = { since: notStarted.since, reason: notStarted.reason, message: notStarted.message ?? null, issue: job.issue, pr: job.pr ?? null, head: job.head, at: ctx.now(), hadWorkflows: Boolean(prWfs && prWfs.length > 0) };
   ctx.saveMachine(m);
   try { await (ctx.ports.alert ?? (async () => {}))({ issue: job.issue, kind: 'usage-limit', text: `Autopilot: ${ciDownText(m.ciDown)}`,
     tried: `PR #${job.pr} waits for its CI (no strike, no repair). Autopilot starts no new job in this repository until a CI run starts, then it goes on by itself.`, need: 'Check the GitHub Actions minutes and the spending limit of the account: Settings → Billing → Actions.' }); }
@@ -5972,12 +6021,19 @@ async function ciHold(ctx) {
   let m = ctx.machineState();
   if (!m.ciDown) return null;
   if (await localCiPolicy(ctx, null)) { ciUp(ctx); return null; }
-  if (m.ciDown.hadWorkflows) {
+  if (m.ciDown.hadWorkflows !== false) {
     const suiteCmd = ctx.settings?.testCommand || detectTestCommand(ctx.state?.cwd, ctx.fs);
     const wfEntries = named(suiteCmd) ? await readBaseWorkflowFiles(ctx) : null;
-    if (Array.isArray(wfEntries) && wfEntries.length === 0 && !(await baseProtection(ctx)).requiredStatusChecks) {
-      ciUp(ctx);
-      return null;
+    const prWfs = prWorkflowEntries(wfEntries, ctx.state.baseBranch, 'pdd/issue-1', null);
+    if (Array.isArray(prWfs) && prWfs.length === 0) {
+      const wfApiOk = m.ciDown.hadWorkflows === true
+        || (Array.isArray(wfEntries) && wfEntries.length > 0)
+        || (await (ctx.actionsWorkflows ??= ctx.gh.call('GET', `repos/${ctx.repo}/actions/workflows?per_page=100`).catch(() => ({ status: 0 }))))?.status === 200;
+      const prot = wfApiOk ? await baseProtection(ctx) : null;
+      if (prot && !prot.unknown && !prot.requiredStatusChecks) {
+        ciUp(ctx);
+        return null;
+      }
     }
   }
   if (!ctx.ciLooked && ctx.now() - (m.ciDown.probedAt ?? m.ciDown.at) >= CI_PROBE) {
@@ -6126,7 +6182,10 @@ async function continueEnd(ctx, job) {
         'Please answer in a comment (one letter is enough). Autopilot reads your answer at its next check, removes the `' + DECISION + '` label itself and goes on.', '', marker].join('\n'))).id); ctx.saveJob(job);
     }
     if (why.keepPr && job.pr && !e.prNoted) {
-      await ctx.comment(job.pr, `Autopilot waits for a person's approval of the prompt changes in this PR (see issue #${job.issue}). It stays open; Autopilot does not merge it.\n\n<!-- pdd:autopilot-core:needs-approval:${job.pr} -->`);
+      const prNote = why.branchApproval
+        ? `Autopilot waits for a person's pull-request review approval on GitHub required by branch protection on \`${ctx.state.baseBranch}\` (see issue #${job.issue}). It stays open; Autopilot does not merge it.`
+        : `Autopilot waits for a person's approval of the prompt changes in this PR (see issue #${job.issue}). It stays open; Autopilot does not merge it.`;
+      await ctx.comment(job.pr, `${prNote}\n\n<!-- pdd:autopilot-core:needs-approval:${job.pr} -->`);
       e.prNoted = true; ctx.saveJob(job);
     }
     if (why.decision && job.pr && !e.prNoted) {

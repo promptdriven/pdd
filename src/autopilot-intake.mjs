@@ -122,10 +122,56 @@ export function detectWrongRepositoryIssue(row, { repo = null, cwd = null, fs = 
     return false;
   };
 
+  const dirExists = relDir => {
+    const clean = String(relDir).replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
+    if (!clean || clean.includes('..') || clean.includes('/')) return false;
+    if (fileSet) {
+      const prefix = `${clean}/`;
+      for (const item of fileSet) if (item.startsWith(prefix)) return true;
+      return false;
+    }
+    if (typeof cwd === 'string' && cwd) {
+      try {
+        if (typeof fs?.statSync === 'function') return Boolean(fs.statSync(join(cwd, clean))?.isDirectory?.());
+        return Boolean(fs.existsSync(join(cwd, clean)));
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
+
+  const externalRoots = [
+    { prefix: 'pdd_cloud/', root: 'pdd_cloud', target: 'pdd_cloud' },
+    { prefix: 'extensions/github_pdd_app/', root: 'extensions/github_pdd_app', target: 'extensions/github_pdd_app' },
+    { prefix: 'github_pdd_app/', root: 'github_pdd_app', target: 'extensions/github_pdd_app' },
+    { prefix: 'prompt-runtime/', root: 'prompt-runtime', target: 'prompt-runtime' },
+    { prefix: 'runtime-client/', root: 'runtime-client', target: 'runtime-client' },
+    { prefix: 'packages/runtime-client/', root: 'packages/runtime-client', target: 'runtime-client' },
+  ];
+  const isExternalRootPath = p => {
+    const lower = p.toLowerCase();
+    return externalRoots.some(
+      cand => currentShort !== cand.target.split('/').at(-1)?.toLowerCase() && !pathExists(cand.root) && lower.startsWith(cand.prefix),
+    );
+  };
+
   const allPaths = extractReferencedPaths(fullText);
   const specificPaths = allPaths.filter(p => !GENERIC_ROOT_FILES.has(p.toLowerCase()));
   const existingSpecific = canCheckDisk ? specificPaths.filter(pathExists) : [];
   const missingSpecific = canCheckDisk ? specificPaths.filter(p => !pathExists(p)) : specificPaths;
+
+  const localGreenfieldPaths = [];
+  const foreignMissingPaths = [];
+  for (const p of missingSpecific) {
+    const slash = p.indexOf('/');
+    const topDir = slash > 0 ? p.slice(0, slash) : '';
+    if (canCheckDisk && topDir && !isExternalRootPath(p) && dirExists(topDir)) {
+      localGreenfieldPaths.push(p);
+    } else {
+      foreignMissingPaths.push(p);
+    }
+  }
 
   // Signal A: explicit repository metadata header ("Repo: owner/other", "Target repository: prompt-runtime", etc.)
   for (const line of fullText.split('\n')) {
@@ -138,13 +184,13 @@ export function detectWrongRepositoryIssue(row, { repo = null, cwd = null, fs = 
       return {
         targetRepo: declared,
         signal: 'repo-header',
-        missingPaths: missingSpecific,
+        missingPaths: foreignMissingPaths.length ? foreignMissingPaths : missingSpecific,
         reason: `Issue header targets repository ${declared}, and none of the referenced implementation paths exist in ${repo || 'this repository'}.`,
       };
     }
   }
 
-  if (existingSpecific.length > 0) return null;
+  if (existingSpecific.length > 0 || localGreenfieldPaths.length > 0) return null;
 
   // Guard: if the issue names a local src/<module>.mjs or pdd CLI command without external root paths, keep it local.
   const namesLocalCliOrModule = (() => {
@@ -169,7 +215,7 @@ export function detectWrongRepositoryIssue(row, { repo = null, cwd = null, fs = 
   }
   if (urlRepos.size > 0 && currentRepo && !namesLocalCliOrModule) {
     const first = [...urlRepos.values()][0];
-    const missing = [...new Set([...missingSpecific, ...first.paths])];
+    const missing = [...new Set([...foreignMissingPaths, ...first.paths])];
     return {
       targetRepo: first.slug,
       signal: 'github-url',
@@ -181,28 +227,20 @@ export function detectWrongRepositoryIssue(row, { repo = null, cwd = null, fs = 
   if (!canCheckDisk) return null;
 
   // Signal C: explicit root paths belonging to sibling repositories absent from cwd.
-  const externalRoots = [
-    { prefix: 'pdd_cloud/', root: 'pdd_cloud', target: 'pdd_cloud' },
-    { prefix: 'extensions/github_pdd_app/', root: 'extensions/github_pdd_app', target: 'extensions/github_pdd_app' },
-    { prefix: 'github_pdd_app/', root: 'github_pdd_app', target: 'extensions/github_pdd_app' },
-    { prefix: 'prompt-runtime/', root: 'prompt-runtime', target: 'prompt-runtime' },
-    { prefix: 'runtime-client/', root: 'runtime-client', target: 'runtime-client' },
-    { prefix: 'packages/runtime-client/', root: 'packages/runtime-client', target: 'runtime-client' },
-  ];
   for (const cand of externalRoots) {
     if (currentShort === cand.target.split('/').at(-1)?.toLowerCase() || pathExists(cand.root)) continue;
-    const hits = missingSpecific.filter(p => p.toLowerCase().startsWith(cand.prefix));
+    const hits = foreignMissingPaths.filter(p => p.toLowerCase().startsWith(cand.prefix));
     if (hits.length > 0) {
       return {
         targetRepo: cand.target,
         signal: 'external-root-path',
-        missingPaths: missingSpecific,
+        missingPaths: foreignMissingPaths,
         reason: `Issue targets ${cand.target} paths (${hits.slice(0, 3).join(', ')}) that do not exist in ${repo || 'this repository'}.`,
       };
     }
   }
 
-  // Signal D: prose targets a known sibling repository/service absent from cwd and cites only missing paths (or frames the issue explicitly for that sibling without local pdd modules).
+  // Signal D: prose targets a known sibling repository/service absent from cwd and cites only foreign missing paths (or frames the issue explicitly for that sibling without local pdd modules).
   if (!namesLocalCliOrModule) {
     const siblings = [
       {
@@ -237,12 +275,12 @@ export function detectWrongRepositoryIssue(row, { repo = null, cwd = null, fs = 
     for (const sib of siblings) {
       if (currentShort === sib.short || sib.roots.some(pathExists)) continue;
       if (!sib.mentionRe.test(fullText)) continue;
-      if (missingSpecific.length > 0 || sib.framedRe.test(fullText)) {
+      if (foreignMissingPaths.length > 0 || sib.framedRe.test(fullText)) {
         return {
           targetRepo: sib.target,
           signal: 'sibling-service',
-          missingPaths: missingSpecific,
-          reason: `Issue targets ${sib.target} implementation${missingSpecific.length ? ` (${missingSpecific.slice(0, 3).join(', ')})` : ''}, which is absent from ${repo || 'this repository'}.`,
+          missingPaths: foreignMissingPaths,
+          reason: `Issue targets ${sib.target} implementation${foreignMissingPaths.length ? ` (${foreignMissingPaths.slice(0, 3).join(', ')})` : ''}, which is absent from ${repo || 'this repository'}.`,
         };
       }
     }
@@ -657,7 +695,7 @@ function startIntakeJob(ctx, runner, spec) {
   const prepared = typeof runner?.prepareStep === 'function'
     ? runner.prepareStep(ctx.ports?.env ?? process.env, { detached: true })
     : null;
-  const env = prepared ? cardEnvironment(prepared.env) : runner.env;
+  const env = { ...(prepared ? cardEnvironment(prepared.env) : runner.env) };
   const cleanupDirs = Array.isArray(prepared?.cleanupDirs) && prepared.cleanupDirs.length
     ? prepared.cleanupDirs
     : (typeof prepared?.overlayDir === 'string' && prepared.overlayDir ? [prepared.overlayDir] : []);
