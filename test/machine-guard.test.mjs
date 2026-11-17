@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GUARD, validShare, shareOf, autoSlots, slotMath, slotCount, machineRoom, jobPriority, timerPriority, guardLine, readMachineGuard, usableCores, freeMemory, memoryLimit } from '../src/machine-guard.mjs';
+import { GUARD, validShare, shareOf, autoSlots, slotMath, capacityMath, slotCount, machineRoom, jobPriority, timerPriority, guardLine, readMachineGuard, usableCores, freeMemory, memoryLimit } from '../src/machine-guard.mjs';
 import { readAutopilotUse } from '../src/machine-resources.mjs';
 import { coreSettings } from '../src/autopilot-core.mjs';
 import { readMachineResources } from '../src/machine-resources.mjs';
@@ -247,4 +247,142 @@ test('a child that a stop signal ends before the wrapper sees the stop still end
   while (Date.now() < end && !gone()) await new Promise(r => setTimeout(r, 100));
   assert.equal(gone(), true, 'the grandchild that ignores SIGTERM is gone');
   assert.equal(JSON.parse(readFileSync(job.exit, 'utf8')).signal, 'SIGTERM');
+});
+
+test('explicit --runs N honors concurrency above 4 up to real hardware limits and discloses limiters', async () => {
+  const vm = box(64, 251, { disk: { available: 200 * GiB, total: 500 * GiB } });
+  // --runs 8 on pdd-vm (hardwareSlots = 16): 5 active jobs still leaves 3 free slots.
+  const open = await readMachineGuard({ cwd: '/', runs: 8, jobs: 5 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 4 * GiB, cores: 4 }),
+  });
+  assert.equal(open.slots, 8);
+  assert.equal(open.hardwareSlots, 16);
+  assert.deepEqual(open.room, { ok: true, reason: null, free: 3 });
+  assert.match(open.line, /→ 8 \(this machine, --runs 8, hardware max 16 by cores\)/);
+  assert.match(open.line, /new work: ok$/);
+
+  // At 8 active jobs, --runs 8 holds at 8 of 8 (not 4).
+  const full = machineRoom(vm, 50, { jobs: 8, rss: 6 * GiB, cores: 6 }, { runs: 8 });
+  assert.deepEqual(full, { ok: false, reason: '8 of 8 Autopilot jobs on this machine run (all repositories, 50% share)', free: 0 });
+
+  // --runs 24 clamps to hardwareSlots (16 by cores) and discloses the limiter.
+  const clamped = await readMachineGuard({ cwd: '/', runs: 24, jobs: 16 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 8 * GiB, cores: 8 }),
+  });
+  assert.equal(clamped.slots, 16);
+  assert.equal(clamped.requestedSlots, 24);
+  assert.equal(clamped.limiter, 'cores');
+  assert.equal(clamped.room.ok, false);
+  assert.match(clamped.room.reason, /16 of 16 Autopilot jobs.*--runs 24 limited by cores/);
+  assert.match(clamped.line, /→ 16 \(this machine, --runs 24, limited by 32 cores ÷ 2 = 16\)/);
+
+  // Disk-limited hardware ceiling: 55 GiB free (>= 25 GiB reserve) allows 5 disk slots even when CPU and memory allow 16+.
+  const diskBound = await readMachineGuard({ cwd: '/', runs: 10, jobs: 4 }, {
+    machineResources: async () => box(64, 251, { disk: { available: 55 * GiB, total: 500 * GiB } }),
+    autopilotUse: async () => ({ rss: 2 * GiB, cores: 2 }),
+  });
+  assert.equal(diskBound.slots, 5);
+  assert.equal(diskBound.limiter, 'disk');
+  assert.deepEqual(diskBound.room, { ok: true, reason: null, free: 1 });
+  assert.match(diskBound.line, /limited by 55 GiB disk ÷ 10 GiB = 5/);
+
+  // Exhausted disk (byDisk === 0) clamps hardwareSlots and slots to 0 with limiter 'disk' and holds new work.
+  const zeroDisk = await readMachineGuard({ cwd: '/', runs: 8, jobs: 0 }, {
+    machineResources: async () => box(64, 251, { disk: { available: 0, total: 500 * GiB } }),
+    autopilotUse: async () => ({ rss: 0, cores: 0 }),
+  });
+  assert.equal(zeroDisk.byDisk ?? capacityMath(box(64, 251, { disk: { available: 0, total: 500 * GiB } }), 50, { runs: 8 }).byDisk, 0);
+  assert.equal(zeroDisk.hardwareSlots, 0);
+  assert.equal(zeroDisk.slots, 0);
+  assert.equal(zeroDisk.limiter, 'disk');
+  assert.deepEqual(zeroDisk.room, { ok: false, reason: 'only 0 GiB of disk free; a job needs 10 GiB and 5%', free: 0 });
+  assert.match(zeroDisk.line, /→ 0 \(this machine, --runs 8, limited by 0 GiB disk < 25 GiB reserve\)/);
+
+  // Lowering a single repo (--runs 1) keeps repo slots = 1 while leaving whole-machine room (machineSlots = 4) open for sibling repos.
+  const singleRepoLowered = await readMachineGuard({ cwd: '/', share: 70, runs: 1, jobs: 1 }, {
+    machineResources: async () => box(64, 251, { disk: { available: 500 * GiB, total: 1000 * GiB } }),
+    autopilotUse: async () => ({ rss: GiB, cores: 1 }),
+  });
+  assert.equal(singleRepoLowered.slots, 1);
+  assert.equal(singleRepoLowered.machineSlots, 4);
+  assert.deepEqual(singleRepoLowered.room, { ok: true, reason: null, free: 3 });
+  assert.match(singleRepoLowered.line, /Machine: share 70% \(this machine, --share\) of 64 cores and 251 GiB · slots min\(4, 44\.8 cores ÷ 2, 175\.7 GiB ÷ 3 GiB\) = 4 → 1 \(this machine, --runs 1\) · .* · new work: ok$/);
+});
+
+test('automatic capacity scales with readyLogins when supplied and stays capped at 4 when omitted', async () => {
+  const vm = box(64, 251, { disk: { available: 200 * GiB, total: 500 * GiB } });
+  // Omitted readyLogins preserves default 4-slot automatic cap.
+  const legacy = await readMachineGuard({ cwd: '/', jobs: 4 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 2 * GiB, cores: 2 }),
+  });
+  assert.equal(legacy.slots, 4);
+  assert.equal(legacy.room.ok, false);
+
+  // readyLogins === 0 holds admission clearly with 0 automatic slots.
+  const zero = await readMachineGuard({ cwd: '/', jobs: 0, readyLogins: 0 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 0, cores: 0 }),
+  });
+  assert.equal(zero.auto, 0);
+  assert.equal(zero.slots, 0);
+  assert.deepEqual(zero.room, { ok: false, reason: 'no ready Cloud or local logins', free: 0 });
+  assert.match(zero.line, /→ 0 \(automatic, limited by 0 ready logins\)/);
+  assert.match(zero.line, /held \(no ready Cloud or local logins\)$/);
+
+  // readyLogins = 5 scales automatic capacity to 2 * 5 = 10 on pdd-vm.
+  const five = await readMachineGuard({ cwd: '/', jobs: 7, readyLogins: 5 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 4 * GiB, cores: 4 }),
+  });
+  assert.equal(five.slots, 10);
+  assert.equal(five.limiter, 'logins');
+  assert.deepEqual(five.room, { ok: true, reason: null, free: 3 });
+  assert.match(five.line, /→ 10 \(automatic, limited by 2 × 5 ready logins = 10\)/);
+
+  // readyLogins = 12 caps at GUARD.maxLoginSlots = 16, and smaller hardware still bounds logins.
+  assert.equal(capacityMath(vm, 50, { readyLogins: 12 }).slots, 16);
+  assert.equal(capacityMath(box(10, 32), 50, { readyLogins: 5 }).slots, 2);
+
+  // Explicit --runs 8 with readyLogins: 0 still clamps effective slots and machineSlots to 0 and holds admission.
+  const runsWithZeroLogins = await readMachineGuard({ cwd: '/', runs: 8, jobs: 0, readyLogins: 0 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 0, cores: 0 }),
+  });
+  assert.equal(runsWithZeroLogins.slots, 0);
+  assert.equal(runsWithZeroLogins.machineSlots, 0);
+  assert.deepEqual(runsWithZeroLogins.room, { ok: false, reason: 'no ready Cloud or local logins', free: 0 });
+  assert.match(runsWithZeroLogins.line, /→ 0 \(this machine, --runs 8, limited by 0 ready logins\)/);
+});
+
+test('cross-repository machineRuns lifts whole-machine machineSlots while keeping sibling repo slots at its own cap', async () => {
+  const vm = box(64, 251, { disk: { available: 200 * GiB, total: 500 * GiB } });
+  // Sibling Repo A configured --runs 8 and runs 5 jobs; Repo B has default runs (slots = 4) and 0 jobs of its own.
+  const repoBOpen = await readMachineGuard({ cwd: '/', machineRuns: 8, jobs: 5 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 3 * GiB, cores: 3 }),
+  });
+  assert.equal(repoBOpen.slots, 4);
+  assert.equal(repoBOpen.machineSlots, 8);
+  assert.deepEqual(repoBOpen.room, { ok: true, reason: null, free: 3 });
+  assert.match(repoBOpen.line, /→ 4 \(automatic, machine max 8\).*new work: ok$/);
+
+  // When Repo A reaches 8 jobs, Repo B also sees 8 of 8 held.
+  const repoBHeld = await readMachineGuard({ cwd: '/', machineRuns: 8, jobs: 8 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 6 * GiB, cores: 6 }),
+  });
+  assert.equal(repoBHeld.slots, 4);
+  assert.equal(repoBHeld.machineSlots, 8);
+  assert.deepEqual(repoBHeld.room, { ok: false, reason: '8 of 8 Autopilot jobs on this machine run (all repositories, 50% share)', free: 0 });
+
+  // Hardware ceiling still clamps machineRuns > hardwareSlots (24 -> 16).
+  const repoBClamped = await readMachineGuard({ cwd: '/', machineRuns: 24, jobs: 16 }, {
+    machineResources: async () => vm,
+    autopilotUse: async () => ({ rss: 8 * GiB, cores: 8 }),
+  });
+  assert.equal(repoBClamped.machineSlots, 16);
+  assert.match(repoBClamped.room.reason, /16 of 16 Autopilot jobs.*--runs 24 limited by cores/);
 });
