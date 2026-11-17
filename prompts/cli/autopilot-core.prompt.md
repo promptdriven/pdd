@@ -295,7 +295,8 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    comment `Autopilot core claim.` with a fenced JSON record
    `{repository, coordinatorId, machine, labelEventId, lastSeen: ""}`, where `machine`
    is this machine's id (`state.machineId`, else `m-` and the first 12 hex digits of
-   the SHA-256 of the host name), never the host name. The job saves it as
+   the SHA-256 of the host name; exported as `machineIdOf(state)`, so the launcher's
+   release uses the same id), never the host name. The job saves it as
    `claim.machine` and heartbeats with it. A claim whose record names this machine's
    host name (an older build) or its id is this machine's. The machine
    wins only when its comment is by the winning event's actor and is the earliest
@@ -608,7 +609,8 @@ build, repair and conflict rules say: "When you run tests or builds, pass
 
 **Cleanup (#3231).** Once per tick, after the jobs advance and before intake,
 `sweepFiles` removes each `worktrees/` entry whose issue (`N` or `N-…`) has no job
-file (with the intake removal: unlock, `remove -f -f`, the folder, `prune`), and each
+file, except `worktrees/N` when the issue's latest history outcome is a person's
+`pdd autopilot release` (`personRelease: true`), and each
 `logs/` file of no job with a file (by its `N-` prefix) that is older than 14 days,
 then such files oldest first while the folder holds more than 500 MiB. Each step only
 warns. The numbers are the guard's `logDays` and `logBytes`.
@@ -1762,6 +1764,85 @@ append the history line. Each step has its own error boundary and only warns.
 `jobs/N.json` goes last only after cleanup is confirmed. A merge also deletes the local branch; other outcomes keep it, because the
 agent's commits may exist only there.
 
+## Release
+
+Export `claimTickLock(file, fs)` (atomic PID lock file with serialized dead-owner
+reclamation behind a pre-populated `${file}.reclaim.d` directory guard published via
+`renameSync`, where each contender writes its own unique `owner-<token>` entry before
+publication, only dead-PID entries are unlinked by exact entry name, and the dead
+payload is re-verified inside the guard before unlinking and linking; shared by
+`tickAutopilot` and `releaseCoreJob`) and `releaseCoreJob(stateFile, issue, ports)`.
+
+`releaseCoreJob(stateFile, issue, ports)` accepts the repository state file path, the
+issue operand (`N`, `#N`, `OWNER/REPO#N`, or GitHub issue URL), and `{state, root, gh,
+git, now, env, warn, jobs, owners, authority, releaseClaim, sleep, elapsedNow, fs}`.
+Validate the issue operand and repository match before any local or remote effect.
+Then wait up to 5 seconds to take `STATE.lock` (`claimTickLock`) so a concurrent tick
+cannot overwrite `jobs/N.json` during release; when the lock stays busy, return exit
+code 1 (`Timed out waiting for the current Autopilot operation; retry.`) without
+changing local or GitHub state.
+
+Under `STATE.lock`, resolve this machine's accepted claim names `[machineIdOf(state),
+state.machine]` (with `state.machine` defaulting to the host name when unsaved) and
+`state.coordinatorId`:
+
+1. When `jobs/N.json` exists:
+   - **Read-only ownership check:** inspect `jobs/N.json` and read GitHub claim
+     ownership strictly without mutating GitHub comments or labels (`ctx.readClaim`
+     plus a read-only check that no foreign claim comment competes on the active
+     `labelEventId`; never call `confirmClaim` here). Refuse with exit code 1 before
+     stopping any process or modifying local or GitHub state when ownership is foreign,
+     ambiguous, or unreadable (`Cannot release REPO#N: OWNER holds a live claim.`,
+     `Cannot release REPO#N: claim ownership is unknown.`, or `Could not confirm claim
+     cleanup for REPO#N; retry the release.`).
+   - **Immediate process stop:** stop every owned job and step wrapper (`agent`,
+     `review`, `suite`, `vectors`, `runtimeWait`) through `stopChecks` (identity-checked
+     `SIGTERM` -> `SIGKILL` process-group cleanup, retrying briefly with
+     `recoverStopped: true` while wrapper groups reap exiting children, removing any
+     step account-lease `cleanupDirs` and freeing any held suite-queue slot). When cleanup cannot confirm
+     every saved identity stopped, return exit code 1 while keeping `jobs/N.json` and
+     the GitHub claim for retry. Once confirmed, save `phase: "released"`,
+     `releaseStopped` (`true` if a live step was stopped), and `releaseIssues` on
+     `jobs/N.json` so `holdsSlot` is `false` and no later tick resumes the job, closes
+     its PR, or deletes its worktrees before a retry finishes.
+   - **Lane and companions (confirmed, non-destructive):** if the job has `pr`, remove
+     `pdd:merge-lane` when held on that PR; for each companion issue in `companions`,
+     verify read-only ownership and confirm companion claim/label cleanup through
+     `releaseClaim` using the owned machine form observed on GitHub or saved on the
+     companion claim (retrying this machine's other owned form only if the first call
+     made no mutating GitHub API request and refused because that other owned form holds
+     a live claim) before removing that companion from `jobs/N.json`, without closing
+     or drafting any PR and without deleting the job's worktrees, logs, or branch. Any
+     failure returns exit code 1 with `jobs/N.json` retained in `phase: "released"` so
+     retry finishes remaining companion and main cleanup idempotently.
+   - **GitHub claim cleanup:** call `ports.releaseClaim` (default `releaseRunClaim` of
+     the [workflow runner](workflow-runner.prompt.md)) with the owned machine form
+     observed on GitHub or saved on `jobs/N.json` (retrying this machine's other owned
+     form only when the first call made no mutating GitHub API request and refused
+     because that other owned form holds a live claim), removing `pdd:working` and
+     `pdd:stuck` when no foreign claim holds the issue. If claim cleanup returns
+     nonzero, return that result unchanged while `jobs/N.json` stays in `phase:
+     "released"` for retry.
+   - **Durable history before removal:** append (if not already present from a prior try)
+     one `history.jsonl` record (`{at, issue: N, outcome: "released", stopped,
+     personRelease: true, text: "released by a person (pdd autopilot release)", pr,
+     log, evidence, ...}`, with no `noResult`, cooldown, or strike) and flush
+     `history.jsonl` to disk with `fsyncSync` before unlinking `jobs/N.json`. If
+     writing, flushing, confirming, or removing `jobs/N.json` fails, keep `jobs/N.json`
+     intact and return exit code 1 so `sweepFiles` never deletes `worktrees/N`. Return exit code 0 with `Released the Autopilot claim for
+     REPO#N. The worktree stays at WORKTREE (branch BRANCH).` (keeping `releaseClaim`'s
+     own worktree suffix when a workflow run already supplied one).
+2. When `jobs/N.json` does not exist (an orphan claim on GitHub, a workflow run claim,
+   or a repeat `release N`): if another local job carries `N` in `companions`, verify
+   read-only ownership on `N`, release `N` with the owned machine form observed on
+   GitHub or saved on that companion, and drop `N` from that job's companions only
+   after exit code 0; otherwise call `releaseClaim` with `state.machine` first
+   (omitting `machine` when unsaved so `releaseRunClaim` resolves any workflow run
+   origin or host name) and retry `machineIdOf(state)` only when the first call made no
+   mutating GitHub API request and refused because `machineIdOf(state)` holds a live
+   claim, so a concurrent replacement claim appearing mid-release is never removed, and
+   write no duplicate `history.jsonl` entry.
+
 ## Status
 
 `coreStatus({state, settings, guard}, {root, reportRoot, now, fs})` returns text from local
@@ -1835,6 +1916,7 @@ with the native defaults named above.
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required for the
   winning-claim read (owners port), `refreshClaimHeartbeat` and `takeoverLimited`.
 - [Automatic base](autopilot-base.prompt.md): required for `checkAutopilotBase`.
+- [Workflow runner](workflow-runner.prompt.md): required for default `releaseRunClaim` in `releaseCoreJob`.
 - [Report owner](autopilot-reports.prompt.md): required for `fileReport` and drafts.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
   `pdd workflow suite` job.
