@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 10e332cf5abc9566fa6310f184faada9dfbe66e2406ab8599e4423ba3f1bacaa).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: f6decc8c36d4d78f4f7161e1a0f08eb341cd2f6d7858b9724710c75c09c7dda2).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -378,10 +378,12 @@ export function runtimePreflightSlice() {
     isStoryPath,
     lintLocalHygiene: (input, ports = {}) => {
       const { isTestOwnedPath, promptClaims, resolveOwners } = req('./file-owner.mjs');
-      return mod.lintLocalHygiene(
+      const { lintRepoAntiPatterns } = req('./repo-hygiene-lint.mjs');
+      const baseWarnings = mod.lintLocalHygiene(
         input,
         withPortDefaults(seamSelectionPorts(ports), { isTestOwnedPath, promptClaims, resolveOwners }),
       );
+      return [...new Set([...baseWarnings, ...lintRepoAntiPatterns(input)])];
     },
     matchTests,
     orphanSummary,
@@ -519,6 +521,7 @@ export async function runCheck(input = {}, ports = {}) {
     { allRuns },
     { assessNativeEvidence, resultLines, usableResult },
     { lintSvgLayouts },
+    { lintRepoAntiPatterns },
     { compareScreen, formatScreenComparison },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
@@ -527,6 +530,7 @@ export async function runCheck(input = {}, ports = {}) {
     import('./workflow-runs.mjs'),
     import('./workflow-results.mjs'),
     import('./svg-layout.mjs'),
+    import('./repo-hygiene-lint.mjs'),
     import('./screen-compare.mjs'),
     import('./product.mjs'),
   ]);
@@ -551,7 +555,7 @@ export async function runCheck(input = {}, ports = {}) {
         assessNativeEvidence,
         usableResult,
         resultLines,
-        lintSvgLayouts,
+        lintSvgLayouts: arg => [...lintSvgLayouts(arg), ...lintRepoAntiPatterns(arg)],
         compareScreen,
         formatScreenComparison,
         redaction: seamRedaction(ports),

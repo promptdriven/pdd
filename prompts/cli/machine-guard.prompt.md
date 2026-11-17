@@ -31,7 +31,8 @@ else in pdd repeats them.
 | Name | Value | Meaning |
 |---|---|---|
 | `share` | 50 | the default percent of the CPU and memory that Autopilot may use |
-| `maxSlots` | 4 | never more jobs at once |
+| `maxSlots` | 4 | the default automatic slot cap when login pool count is not given |
+| `maxLoginSlots`, `slotsPerLogin` | 16, 2 | the automatic slot ceiling when ready Cloud or local logins are given (`2 × readyLogins`, up to 16) |
 | `jobCores`, `jobBytes` | 2 cores, 3 GiB | one job: an agent (0.1-0.3 GiB, under one core) and its part of one full suite (2.3-2.8 GiB) |
 | `diskBytes`, `diskShare` | 10 GiB, 5% | the free disk that new work needs (a job makes up to 3 checkouts and installs dependencies) |
 | `pressurePsi` | 10 | Linux PSI `memory some avg10` at or above it is memory pressure; on macOS a pressure level above 1 (normal) is |
@@ -40,7 +41,8 @@ else in pdd repeats them.
 | `logDays`, `logBytes` | 14 days, 500 MiB | the cleanup of old job logs |
 
 Examples at 50% (one test each): an 8 GB, 8-core Mac gets 1 slot; a 32 GB, 10-core
-Mac gets 2; pdd-vm (64 cores, 251 GB) gets 4, and with 2 repositories they share those 4;
+Mac gets 2; pdd-vm (64 cores, 251 GB) gets 4 by default, scales up to 16 with ready
+logins or `--runs N`, and with 2 repositories they share the machine's slots;
 a 4-CPU, 8 GB Linux container gets 1. At a share of 100 the 32 GB Mac gets 4.
 
 ## Public contract
@@ -62,26 +64,47 @@ a 4-CPU, 8 GB Linux container gets 1. At a share of 100 the 32 GB Mac gets 4.
   at least 1 and at most `maxSlots`; an unknown value leaves out its term, and with no
   known term `slots` is 1.
   `autoSlots` is its `slots`.
-- `slotCount({auto, runs, repoRuns})` returns `{slots, source}`. The machine's own
-  `pdd autopilot start --runs N` (`runs`, saved in the launcher state) wins: source
-  `this machine, --runs N`. Else the repository's `autopilot.runs` in `pdd.json`
-  (`repoRuns`) can only lower `auto` (pdd.json is shared by every machine of a
-  repository, so it never raises one): source `pdd.json autopilot.runs`; else
-  `automatic`. A `runs` or `repoRuns` that is not a positive safe integer is absent.
-- `machineRoom(resources, share, use)` returns `{ok, reason, free}`, the one room check
-  before new work, for the whole machine. `use` is what all Autopilot jobs on this
-  machine use now, every repository together: `{jobs, rss, cores}` (the slot-holding
-  jobs of every repository, and the memory and CPU of every job process tree). `free`
-  is `slotMath(...).slots - jobs`, at least 0 (0 with no room): the jobs that the
-  machine's share still allows. The reasons, in this order, the first that holds: `J of
-  M Autopilot jobs on this machine run (all repositories, P% share)`, `memory cannot be
-  read`, `only N GiB of memory free; a job needs 3 GiB`, `Autopilot uses N GiB on this
-  machine; a new job would pass its S GiB share (P%)` (use plus one job above the share
-  of the memory limit), `memory pressure`, `disk cannot be read`, `only N GiB of disk
-  free; a job needs 10 GiB and 5%`, `Autopilot uses N cores on this machine, its P%
-  share is C` (use at or above `shareCores`). Unreadable pressure falls back to the
-  memory numbers alone; an unknown use is not checked. Numbers in a reason have at most
-  one decimal.
+- `capacityMath(resources, share, {slots, runs, repoRuns, machineRuns, readyLogins})`
+  computes the hardware slot ceiling `hardwareSlots` from `max(1, byCores)`,
+  `max(1, byMemory)`, and `byDisk` (`0` when readable disk is below
+  `max(diskBytes, diskShare × total)`, `floor(available ÷ diskBytes)` at or above it,
+  or omitted when disk is unreadable), taking the lowest known term (including `0` when
+  disk is exhausted), else null. When `runs` is omitted: without `readyLogins`,
+  automatic slots use `maxSlots` (4) bounded by `byDisk`; when a safe integer
+  `readyLogins >= 0` is supplied, `0` gives `0` automatic slots (and `0` effective
+  `slots`/`machineSlots`), and `readyLogins > 0` scales automatic slots up to
+  `min(maxLoginSlots, slotsPerLogin × readyLogins, hardwareSlots)`. When `--runs N` is
+  set, the repository's `slots` is `runs` bounded by `hardwareSlots`, while whole-machine
+  `machineSlots` is `max(auto, slots, machineRuns)` bounded by `hardwareSlots` (so
+  `--runs 1` lowers that repository without shrinking whole-machine room for sibling
+  repositories, and `--runs 8` on this repository or another active repository via
+  `machineRuns` raises whole-machine room up to `min(8, hardwareSlots)` while keeping
+  sibling repositories at their own `slots`), and `limiter` records which term bounds
+  admission (`cores`, `memory`, `disk`, `logins`, `maxLoginSlots`, `maxSlots`,
+  `repoRuns`, or `runs`).
+- `slotCount({auto, runs, repoRuns, hardwareSlots})` returns `{slots, source}` (capped
+  by non-negative `hardwareSlots` when given). The machine's own `pdd autopilot start --runs N`
+  (`runs`, saved in the launcher state) wins: source `this machine, --runs N`. Else
+  the repository's `autopilot.runs` in `pdd.json` (`repoRuns`) can only lower `auto`
+  (pdd.json is shared by every machine of a repository, so it never raises one):
+  source `pdd.json autopilot.runs`; else `automatic` (including `0` when `auto` is
+  `0`). A `runs` or `repoRuns` that is not a positive safe integer is absent.
+- `machineRoom(resources, share, use, options)` returns `{ok, reason, free}`, the one
+  room check before new work, for the whole machine. `options` accepts optional
+  `{slots, runs, repoRuns, machineRuns, readyLogins}` so explicit `--runs N` above 4
+  (on this repository or another active repository via `machineRuns`) and login-scaled
+  capacity are honored up to `hardwareSlots`. `use` is what all Autopilot jobs on this
+  machine use now, every repository together: `{jobs, rss, cores}`. `free` is
+  `machineSlots - jobs`, at least 0 (0 with no room). The reasons, in this order, the
+  first that holds: `no ready Cloud or local logins` (when `readyLogins === 0`),
+  `J of M Autopilot jobs on this machine run (all repositories, P% share)` (adding
+  `; SOURCE limited by LIMITER` when `--runs` or `machineRuns` was clamped by hardware), `memory cannot
+  be read`, `only N GiB of memory free; a job needs 3 GiB`, `Autopilot uses N GiB on
+  this machine; a new job would pass its S GiB share (P%)`, `memory pressure`, `disk
+  cannot be read`, `only N GiB of disk free; a job needs 10 GiB and 5%`, `Autopilot
+  uses N cores on this machine, its P% share is C`. Unreadable pressure falls back to
+  the memory numbers alone; an unknown use is not checked. Numbers in a reason have at
+  most one decimal.
 - `jobPriority({platform, role, resources, share, taskset})` returns the spec part
   that the [job runner](agent-job.prompt.md) applies, `{nice: 19, qos, cpus, taskset,
   checkCpus}`. `qos` is `utility` on macOS, else null. `cpus` is a CPU list (`0-3` or
@@ -94,24 +117,21 @@ a 4-CPU, 8 GB Linux container gets 1. At a share of 100 the 32 GB Mac gets 4.
 - `timerPriority(platform, share)` returns the timer lines `{plist, unit}`: on macOS
   `plist` is `<key>Nice</key><integer>19</integer>` (launchd); on Linux `unit` is
   `Nice=19\nCPUWeight=W\nMemoryHigh=SHARE%\n` (a systemd service section; SHARE is
-  `shareOf(share)`, W is 1 below 100 and 100 at 100). Linux shares CPU between cgroups by weight before nice counts, and
-  the detached jobs stay in the service's cgroup after the tick, so these lines cover
-  all Autopilot work there. `MemoryHigh` slows Autopilot under memory pressure and
-  kills nothing. Other platforms get empty strings.
-- `guardLine(guard)` is the status line, local facts only, with the slot math, for
-  example `Machine: share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷
-  2, 8 GiB ÷ 3 GiB) = 2 → 2 (automatic) · Autopilot on this machine now: 1 job, 0.4 GiB,
-  0.3 cores · memory 6.1 GiB free, pressure normal · disk 210 GiB free · load 3.2 ·
-  priority low · new work: ok`, or `… · new work: held (REASON)`. The share source is `default` or `this machine, --share`. Unknown values
-  are `unknown` (in the math `?`).
-- `readMachineGuard({cwd, runs, repoRuns, share, jobs}, ports)` reads the machine once
-  through `readMachineResources({cwd}, {...ports, includeChecks: true, includeGuard:
-  true})` (or `ports.machineResources`) and the use of all Autopilot jobs through
-  `readAutopilotUse` (or `ports.autopilotUse`); `jobs` is the slot-holding jobs of every
-  repository of this machine (the launcher counts them). It returns `{share,
-  shareSource, slots, source, auto, room, resources, use, priority(role), line}`. `priority(role)` is `jobPriority` with
-  the machine's facts; `line` is `guardLine`. A failed read gives `auto` 1, the slots
-  of `slotCount`, and no room (`machine resources cannot be read`).
+  `shareOf(share)`, W is 1 below 100 and 100 at 100). Other platforms get empty strings.
+- `guardLine(guard)` is the status line, local facts only, with the slot math, the
+  effective slot limit (noting `machine max M` when `machineSlots` exceeds both `slots`
+  and `slotMath` via sibling `machineRuns`), and the limiting term when scaled by
+  logins, raised above 4, or clamped by hardware, ending in `new work: ok` or
+  `new work: held (REASON)`. The share source is `default` or `this machine, --share`.
+  Unknown values are `unknown` (in the math `?`).
+- `readMachineGuard({cwd, runs, repoRuns, machineRuns, share, jobs, readyLogins}, ports)`
+  reads the machine once through `readMachineResources({cwd}, {...ports, includeChecks:
+  true, includeGuard: true})` (or `ports.machineResources`) and the use of all Autopilot
+  jobs through `readAutopilotUse` (or `ports.autopilotUse`). It returns `{share,
+  shareSource, slots, machineSlots, machineRuns, requestedSlots, hardwareSlots, limiter,
+  limiterDetail, source, auto, readyLogins, room, resources, use, priority(role), line}`. A failed read gives
+  `auto` 1 (or 0 when `readyLogins === 0`), the slots of `slotCount`, and no room
+  (`machine resources cannot be read`).
 
 ## Dependencies
 

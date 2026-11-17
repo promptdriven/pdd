@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 50c01340d9154ce348c60955b22de9ad92adeaaf74ea22f2567ddfb78bb61a9e).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 35a8327d47854af6d29c311f20d6882e34b07ca097af289211d8af506687235c).
 // Source: prompts/cli/autopilot-doctor.prompt.md.
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
@@ -17,6 +17,7 @@ const {runtimeOrigin} = runtimeClientSlice();
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
 const skills = ['pdd-prompting','pdd-setup','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph'];
+const retiredSkills = ['pdd-autopilot','pdd-check','pdd-merge'];
 const ready = value => value?.code === 0;
 
 const PROVIDER_CONFIG_VARS = {codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME',agy:'ANTIGRAVITY_APP_DATA_DIR'};
@@ -163,13 +164,45 @@ export async function runAutopilotDoctor(input, ports = {}) {
   let usage = {state:'unknown'};
   if (agent?.kind==='codex') { try { usage = await (ports.codexLimits ?? readCodexLimits)({command:agent.command??'codex',cwd,env}, {spawn:ports.spawn}); } catch {} }
   add('agent-usage',usage.state==='healthy'?'pass':'warn',usage.state==='limited'?'Agent usage limit reached; retry after allowance is available':usage.state==='healthy'?'Read-only usage check healthy':`${agent?.kind ?? 'Agent'} usage is unproved${agent?.kind==='claude'?'; run /usage in Claude Code':''}`,agent?.kind==='claude'?quote(agent.command??'claude'):retry);
+  if (platform==='linux' && (agent?.kind ?? preferred?.kind)==='codex' && (read('/proc/sys/kernel/apparmor_restrict_unprivileged_userns')??'').trim()==='1') {
+    const hasBwrap = (env.PATH ?? '').split(delimiter).map(dir => resolve(cwd, dir || '.', 'bwrap')).some(executable);
+    if (!hasBwrap) add('codex-sandbox','warn','Linux AppArmor restricts unprivileged user namespaces and bwrap is missing on PATH; Codex read-only sandboxes need system bubblewrap','sudo apt-get install -y bubblewrap');
+  }
 
   const block = ['CLAUDE.md','AGENTS.md'].some(name=>/<!-- pdd:start -->[\s\S]*<!-- pdd:end -->/.test(read(join(cwd,name))??''));
   add('setup-block',block?'pass':'fail','PDD instructions in AGENTS.md or CLAUDE.md','pdd setup');
   const kind = agent?.kind ?? preferred?.kind ?? 'codex';
   const roots = kind==='claude'?[join(cwd,'.claude','skills'),join(env.CLAUDE_CONFIG_DIR??join(env.HOME??'','.claude'),'skills')]:[join(cwd,'.agents','skills'),join(env.HOME??'','.agents','skills')];
   const complete = roots.some(root=>skills.every(skill=>read(join(root,skill,'SKILL.md'))!==null));
-  add('setup-skills',complete?'pass':'fail',`${kind} PDD skill bundle`,'npx skills add promptdriven/pdd -g');
+  add('setup-skills',complete?'pass':'fail',`${kind} PDD skill bundle`,'pdd setup');
+  const userRoots = [...new Set([env.HOME?join(env.HOME,'.agents','skills'):null, env.CLAUDE_CONFIG_DIR?join(env.CLAUDE_CONFIG_DIR,'skills'):(env.HOME?join(env.HOME,'.claude','skills'):null)].filter(Boolean))];
+  const retiredByRoot = [];
+  for (const userRoot of userRoots) {
+    const found = [];
+    for (const retired of retiredSkills) {
+      const dirPath = join(userRoot, retired);
+      if (typeof files.lstatSync === 'function') {
+        let st;
+        try { st = files.lstatSync(dirPath); } catch { continue; }
+        if (st?.isSymbolicLink?.() || (typeof st?.isDirectory === 'function' && !st.isDirectory())) continue;
+      }
+      if (read(join(dirPath, '.pdd-skill.json')) !== null) continue;
+      const skillMd = read(join(dirPath, 'SKILL.md'));
+      if (skillMd === null) continue;
+      const frontmatter = skillMd.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] ?? '';
+      if (!/^\s*pdd-skills\s*:/m.test(frontmatter)) continue;
+      found.push(dirPath);
+    }
+    if (found.length) retiredByRoot.push({ root: userRoot, dirs: found });
+  }
+  if (retiredByRoot.length) {
+    const allRetired = retiredByRoot.flatMap(entry => entry.dirs);
+    const retiredFix = retiredByRoot.map(({ root: userRoot, dirs }) => {
+      const backupDir = join(userRoot, '.pdd-retired');
+      return `mkdir -p ${quote(backupDir)} && mv ${dirs.map(quote).join(' ')} ${quote(`${backupDir}/`)}`;
+    }).join(' && ');
+    add('retired-skills','warn',`Unmarked retired PDD skill folder(s) found: ${allRetired.join(', ')}; move them aside so agents use the 7 current skills`,retiredFix);
+  }
   const config = json(read(join(cwd,'pdd.json'))), auto = config?.autopilot;
   const valid = auto && ['auto','observe'].includes(auto.mode) && (auto.trust===undefined || Array.isArray(auto.trust)&&auto.trust.every(x=>typeof x==='string'&&x.trim()));
   add('setup-mode',valid?'pass':'fail',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}`:'Choose mode and trust in pdd setup; off does not start work','pdd setup');
