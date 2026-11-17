@@ -183,33 +183,50 @@ test('3453 lintStory checks missing and bloated acceptance criteria while keepin
   assert.equal(resEmpty.ok, false);
   assert.ok(resEmpty.problems.some(p => p.line === 5 && p.code === 'story-missing-criteria'));
 
-  const eightBullets = [
+  const sixBullets = [
     '# Export receipt',
     '',
     'As a shop owner, I want a receipt summary, so that I can reconcile daily sales.',
     '',
     '## Acceptance criteria',
     '',
-    ...Array.from({ length: 8 }, (_, i) => `- AC${i + 1}: Summary row ${i + 1} prints "$${i + 1}.00"\n  with two decimal places.`),
+    ...Array.from({ length: 6 }, (_, i) => `- AC${i + 1}: Summary row ${i + 1} prints "$${i + 1}.00"\n  with two decimal places.`),
   ].join('\n');
-  assert.equal(lintStory(eightBullets, { path: 'user_stories/eight.md' }).ok, true);
+  assert.equal(lintStory(sixBullets, { path: 'user_stories/six.md' }).ok, true);
 
-  const nineNumbered = [
+  const sevenNumbered = [
     '# Export receipt',
     '',
     'As a shop owner, I want a receipt summary, so that I can reconcile daily sales.',
     '',
     '## Acceptance criteria',
     '',
-    ...Array.from({ length: 9 }, (_, i) => `${i + 1}. Summary row ${i + 1} prints "$${i + 1}.00".`),
+    ...Array.from({ length: 7 }, (_, i) => `${i + 1}. Summary row ${i + 1} prints "$${i + 1}.00".`),
   ].join('\n');
-  const resNine = lintStory(nineNumbered, { path: 'user_stories/nine.md' });
-  assert.equal(resNine.ok, false);
-  assert.ok(resNine.problems.some(p => p.line === 15 && p.code === 'story-bloated-criteria'));
+  const resSeven = lintStory(sevenNumbered, { path: 'user_stories/seven.md' });
+  assert.equal(resSeven.ok, false);
+  assert.ok(resSeven.problems.some(p => p.line === 13 && p.code === 'story-bloated-criteria'));
 
-  // Default lintStories keeps existing workflow/approve gates non-blocking on criteria count unless opted in.
-  assert.equal(lintStories([{ path: 'user_stories/nine.md', text: nineNumbered }]).ok, true);
-  assert.equal(lintStories([{ path: 'user_stories/nine.md', text: nineNumbered }], { criteriaHygiene: true }).ok, false);
+  const longStory = [
+    '# Export receipt',
+    '',
+    'As a shop owner, I want a receipt summary, so that I can reconcile daily sales.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. Summary row 1 prints "$1.00".',
+    '',
+    '## Rules to check',
+    '',
+    ...Array.from({ length: 28 }, (_, i) => `- Invariant ${i + 1}: row ${i + 1} stays balanced.`),
+  ].join('\n');
+  const resLong = lintStory(longStory, { path: 'user_stories/long.md' });
+  assert.equal(resLong.ok, false);
+  assert.ok(resLong.problems.some(p => p.line === 36 && p.code === 'story-too-long'));
+
+  // Default lintStories keeps existing workflow/approve gates non-blocking on criteria count and Story length unless opted in.
+  assert.equal(lintStories([{ path: 'user_stories/seven.md', text: sevenNumbered }, { path: 'user_stories/long.md', text: longStory }]).ok, true);
+  assert.equal(lintStories([{ path: 'user_stories/seven.md', text: sevenNumbered }], { criteriaHygiene: true }).ok, false);
 });
 
 test('3453 pdd lint --local emits advisory repo-hygiene warnings with exit code 0, honors Story scope and preserves port overrides', async t => {
@@ -309,7 +326,7 @@ test('3453 pdd lint --local emits advisory repo-hygiene warnings with exit code 
   assert.equal(parsed.exit_code, 0);
   assert.deepEqual(parsed.problems, []);
   assert.ok(parsed.warnings.some(w => w.startsWith('Warning:') && w.includes('prompts/bloated.prompt.md:6') && w.includes('[prompt-imperative-code]')));
-  assert.ok(parsed.warnings.some(w => w.startsWith('Warning:') && w.includes('user_stories/bloated-story.md:15') && w.includes('[story-bloated-criteria]')));
+  assert.ok(parsed.warnings.some(w => w.startsWith('Warning:') && w.includes('user_stories/bloated-story.md:13') && w.includes('[story-bloated-criteria]')));
   assert.ok(parsed.warnings.some(w => w.startsWith('Warning:') && w.includes('test/fake-bloated.test.mjs:5') && w.includes('[fake-test-prompt-read]')));
 
   // 2. Plain-text pdd lint --local also exits 0 and prints Warning: lines.
@@ -317,7 +334,7 @@ test('3453 pdd lint --local emits advisory repo-hygiene warnings with exit code 
   const exitTxt = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: txtOut, stderr: txtErr });
   assert.equal(exitTxt, 0, txtErr.text);
   assert.match(txtOut.text, /Warning:.*prompts\/bloated\.prompt\.md:6/);
-  assert.match(txtOut.text, /Warning:.*user_stories\/bloated-story\.md:15/);
+  assert.match(txtOut.text, /Warning:.*user_stories\/bloated-story\.md:13/);
   assert.match(txtOut.text, /Warning:.*test\/fake-bloated\.test\.mjs:5/);
 
   // 3. Story-scoped pdd lint --local clean-order omits unrelated prompts, Stories and fake tests.
@@ -332,7 +349,7 @@ test('3453 pdd lint --local emits advisory repo-hygiene warnings with exit code 
   const { lintLocalHygiene } = runtimePreflightSlice();
   const directWarnings = lintLocalHygiene({ root: repo });
   assert.ok(directWarnings.some(w => w.includes('prompts/bloated.prompt.md:6')));
-  assert.ok(directWarnings.some(w => w.includes('user_stories/bloated-story.md:15')));
+  assert.ok(directWarnings.some(w => w.includes('user_stories/bloated-story.md:13')));
   assert.ok(directWarnings.some(w => w.includes('test/fake-bloated.test.mjs:5')));
   assert.ok(lintRepoAntiPatterns({ root: repo }).length >= 3);
 

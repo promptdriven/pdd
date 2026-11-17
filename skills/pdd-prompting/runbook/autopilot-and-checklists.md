@@ -154,125 +154,19 @@ In PR 2 the same case has four cells: `Case: 1205 | $12.50 | $12.05 | $12.05`.
 
 ### Autopilot core jobs
 
-A job of the Autopilot core engine (`pdd autopilot start --engine core`) makes one PR with no workflow run. It
-writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot checks each line against its own
-records. A line that the records do not support is red. The same rules, short enough for one read, are in
-`autopilot-job-rules.md` of the pdd-prompting skill; a job reads that file in full.
-
-- **Skill choice:** use `pdd-small-change` only when every planned file is an unowned path `d` file outside PDD (docs,
-  guides, CI, lock files, packages, non-behavior config or metadata, or test-only maintenance — never `*.prompt.md`,
-  `user_stories/*.md`, or product/app code), also when the issue is written as a bug. Write no new Story or prompt for
-  path `d` files. If an issue touches prompt-owned or product/app code (`src/`, `app/`, etc.), even when no prompt
-  exists yet, pick `pdd-bug` or `pdd-feature` instead. If a `pdd-small-change` run already touched owned or product
-  code, note it and keep the Story test, replay and `Runtime:` evidence or rerun under `pdd-bug` or `pdd-feature`. A
-  repair on a path-`d`-only PR keeps path `d` without adding a new Story or prompt.
-- **Changed** means changed against the base: `git diff --name-only origin/BASE...HEAD` (BASE is the PR's base
-  branch, usually `main`). It never means changed since the previous PR head. A Story or prompt that a merge from the
-  base brought in is not changed. A changed Story is a Story whose Story file or test file changed, or whose test
-  reaches a changed prompt.
-- Commit every change, then run `pdd test` for each changed Story, all of them in one `pdd test` batch where you
-  can (`pdd test STORY STORY ...`); every Story whose test reaches a changed prompt counts, however many. Write one
-  `Runtime:` line for each changed Story.
-  Put the verdict first. Then put the Story file path (as `git diff` shows it) first in the parentheses:
-  ```text
-  Runtime: PASS (user_stories/format-bytes.md, 19/19 checks)
-  Runtime: FAIL (user_stories/format-bytes.md, 2 of 19 checks failed: steps format-10, zibi)
-  Runtime: not run (user_stories/package-repository.md: native-only prompt, no Runtime test)
-  ```
-  A single line with no Story (for example `Runtime: PASS`) is valid only when the PR changes one Story or none. Two
-  lines for the same Story are red. A PASS of a Story that the PR does not change never counts. A FAIL line blocks
-  the merge.
-- A failed check is a FAIL, also when its check has no verdict (§11). Find the cause and fix it ("After a ✗"). Never
-  write a failed check as `not run`.
-- `not run` is only for a cause that this PR cannot fix: a native-only prompt, no verdict with no failed step, or a
-  refusal that pdd gives no fix for. A changed Story with no Runtime test is no such cause: write its Runtime test
-  (one step for each criterion) and run `pdd test`, or mark the owning prompt native-only with frontmatter kind and reason.
-  A refusal with a fix from pdd is this PR's work. For example, a whole number outside the interpreter's range: apply
-  the Number spelling that pdd prints (§3 "Large whole numbers") and check again.
-- Do not wait for maintenance. When pdd prints that the interpreter is in maintenance (§11), it has sent nothing yet.
-  Stop pdd then. For each changed Story that pdd did not send, write `Runtime: not run (STORY: maintenance until
-  HH:MM UTC)` with the end time that pdd printed. Autopilot sends the check itself when maintenance ends and rewrites the line. Never send it again yourself. Never
-  cut short a check that pdd has already sent.
-- `vectors=` counts the replay files (`*.vectors.test.*`) that the PR changes or that read a changed scenario file.
-  Count `node:test` tests (the `# tests` and `# pass` lines), not steps or checks, for example `vectors=pass (36/36)`.
-- After a merge from the base, check that the fix is still needed. Check out the new merge base
-  (`git merge-base origin/BASE HEAD`) in a throwaway worktree, copy in the PR's changed tests, and run them. When they
-  pass on the base code too, the base already holds the fix. Then keep the base's code, keep only what the base does
-  not hold, and say so in the PR body.
-
-**Choices and questions.** These rules are in rule 1 of the job brief too.
-
-- Autopilot decides when at least one reasonable fix solves the problem and breaks nothing that people use today: pick
-  that fix and list it in the PR body under "Choices Autopilot made:", one line each with its reason
-  ("- CHOICE (REASON)"), with "(changes public behavior: WHAT)" when users see a change. For example, "make remove
-  safer" is decided: ask y/N only in an interactive terminal, --yes skips it, scripts stay unchanged; nothing is asked.
-- A pdd-bug or pdd-small-change run never asks a choice question: pick the fix that makes the reported behavior right
-  with the least surprise.
-- With `decisions` `decide` (the default): never ask a person about a choice. Decide every choice yourself,
-  product-direction ones too, and list each; list the big ones first, each marked "(big)". A choice question is never
-  posted: Autopilot starts the job once more with "Autopilot decides this choice: do not ask."
-- With `decisions` `ask`: routine compatible choices of command syntax, options or data representation are agent
-  decisions when a safe, low-surprise choice exists. Preserve existing APIs, defaults and behavior unless the request
-  authorizes a change. Several valid designs alone are not a reason to ask. A choice may be a question
-  (`"kind":"choice"`) only when every reasonable fix breaks something that people use today, or, in a pdd-feature
-  run, when the choice actually changes product direction: whether a new feature
-  area or capability should exist, removing a feature, an on-purpose change to a core contract, security, privacy or
-  data policy, or something that costs money; an open trusted issue that asks the same product question counts too.
-  Then do not choose and open no PR. Decide and list every other choice. An issue gets at most one choice question.
-- A bug fix may change an approved rule (Serhan, D1): when the fix of a pdd-bug or pdd-small-change run changes a
-  rule in an approved prompt, change it without asking and list it with "(changes approved rule: OLD -> NEW)", so a
-  person sees it. The repository's approval setting still applies to the changed prompt.
-- Two cases always go to a person, in every run: a change against a person's recorded answer to an earlier question
-  (an answer above, a decision issue), and a change of what blocks merges (a new required check, a gate, a hash pin,
-  CI policy). Do not make such a change: write the needs-person result with `"kind":"blocker"`. A real blocker (missing access or a secret, an issue that contradicts
-  itself, work that cannot be done) is `"kind":"blocker"` too.
-- The needs-person result asks exactly one question with 2 or 3 options, so a person can answer with one letter:
-  ```json
-  {"outcome":"needs-person","kind":"blocker|choice","question":"<one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"}
-  ```
-- A vague issue is never a reason to ask. When the issue, or a person's answer above, settles a choice, build.
-- Autopilot posts the question on the issue, adds `pdd:needs-decision` and says: "Please answer in a comment (one
-  letter is enough)." A trusted person's reply ends the wait: at its next check Autopilot reads the answer, removes
-  the label itself and goes on. The next job gets the answer.
-
-For the reviewer:
-
-- Non-code path `d` files (docs, config, CI settings, `package.json`, lock files, and test files or fixtures) need no
-  prompt and no Story; never ask for a new prompt or Story for them, and treat a new prompt or Story added for a
-  non-code file as a must-fix.
-- Every choice that the issue did not settle must be listed in the PR body under "Choices Autopilot made:" with its
-  reason (with "(changes public behavior: ...)" when users see a change); a missing or wrong line is a P2 must-fix
-  (fix the list).
-- A bug or small-change fix may change a rule in an approved prompt; it must be listed with "(changes approved rule:
-  OLD -> NEW)", and a missing mark is a P2 must-fix (fix the list). A change against a person's recorded answer to an
-  earlier question, or a change of what blocks merges (a required check, a gate, a hash pin, CI policy), is a P1
-  must-fix in every mode: undo it, or end with the needs-person result `"kind":"blocker"`.
+Autopilot core jobs (`pdd autopilot start --engine core`) open one PR without a workflow run and record `Runtime:` and `Evidence:` lines in the PR body. Read [`../autopilot-job-rules.md`](../autopilot-job-rules.md) in full when running an Autopilot core job; it is the single authoritative owner of skill choice, changed-Story scope, `Runtime:` / `Evidence:` syntax, `not run` admission, large whole-number spelling, and `Choices Autopilot made:` reporting.
 
 ## 22. Bounded handoffs and measurement
 
-This is an agent instruction example, not an executable Runtime program. The workflow skill owns gates, role eligibility and repair limits; §11 owns CHECK waiting, §17 owns code verification and §10 owns interpreter budgets. Keep those instructions available. No new wait API is needed.
-
 ### A small handoff through a long check
 
-Use a small task such as a change to `examples/fakes/service.prompt.md`, its `user_stories/fake-service.md` and `test/runtime/fake-service.json`. The following is an illustrative route, not approval or a command to spend calls. The coordinator records the task, accepted decisions, source identity, exclusive file owners, current stage, unresolved failures/approvals and durable report paths in the run folder. It keeps that ledger between stages instead of each child's full conversation.
+Keep the coordinator thin and launch fresh subagents strictly in stage order only after prior-stage files exist on disk:
 
-1. **Author.** Give a fresh author the governing AGENTS and skill instructions, full prompting guide, relevant RUNBOOK sections, task and acceptance, owning prompt, dependencies and relevant callers and cases. Assign exclusive draft paths without inherited chat. The author returns the paths, changed behavior, missing context, case coverage and open choices; the coordinator shows the required Story gate.
-2. **Long CHECK.** Start stages strictly in order: launch `Long CHECK` or `build` only after `Author` finishes and its draft files exist on disk—never spawn checker or builder subagents in parallel with `Author` on an empty folder or poll them in short status loops. Give a fresh checker the governing instructions, frozen drafts, dependencies, source, authorized call cap and §11. After authorization, run `pdd test fake-service --max-calls 6` once. Retain the printed batch/read command, report links and each Story's actual verdict, including failures, refusals and no verdict. For a check expected to exceed a short wait, choose the longest blocking wait allowed by the tool and the active progress and cancellation requirements on the first call. If it returns a session or cell ID, continue bounded waits on that same ID until terminal, cancelled or interrupted, within tool limits. These are tool wait continuations, not separate process/status polling; do not restart or separately poll an uncertain check. If the tool stops CHECK, use its printed saved-batch read command as §11 directs; do not resubmit uncertain work. The CLI's progress stream and internal receipt polling need no coordinator turn; reads can continue lint-held checks under §11.
-3. **Repair.** Give a fresh author the failed criterion, exact input, expected and actual values, owning prompt, dependencies, report and authorized repair scope. Preserve the original failure and expected values, make a minimal repair, return changed prompts to the required gate and check only the affected Story under the existing rules.
-4. **Independent verify.** After the person requests code and build completes, give a fresh eligible verifier the approved cases, current source, dependencies, regressions and failure evidence. Verify the real public boundary and regressions under §17. Independent review remains separately eligible; unrun or unmapped checks are not passes.
-
-For a long external native process, retain its runner session ID or PID, start time, command, stdout/stderr and terminal receipt. Use that runner's completion wait or exit notification, not CHECK's batch recovery. Report compact progress or failure changes from the existing runner/log stream. Cancel only the owned session or process through its supported control, then wait for termination and record the actual exit, signal or unknown result. If the runner cannot notify or wait until exit, state that limit and record necessary bounded status turns. A missing receipt or lost connection is unknown, not success or permission to start a second process.
-
-The coordinator resumes reasoning on a stage change, actionable failure, user steering or completion. Preserve source evidence, dependencies, failures and approvals; request missing governing context. After a successful CHECK, follow the existing prompt/Simulator review and person approval before PR 1, then ask for code. After build, follow verify, formal and fresh independent review under §17. Keep a native failure's first receipt and repair or rerun under the existing limit; record incomplete results and recovery decisions after interruption. Try stays optional; ask the person and wait for agreement before it starts.
-
-In a synthetic prompt-only benchmark, independent draft verification stays a draft/manual review. It never claims that an unchanged native implementation fulfills the newly drafted rule, and it is separate from §17 code proof.
+1. **Author:** supply the issue, owning prompt/Story/scenario paths, and `RUNBOOK.md` fast path in one complete brief; wait once with a long timeout (no short status polls).
+2. **Check:** run one `pdd test` batch for all selected Stories; if the tool wait times out, resume with `pdd test --read` rather than resending.
+3. **Repair:** give a fresh author the failing criterion, input, expected vs actual values, and owning prompt without changing expected values.
+4. **Independent verify & review:** after `build`, run fresh eligible `verify`, `formal`, and `review` subagents under §17. For external native processes, wait on runner exit notifications rather than polling loops.
 
 ### Freeze and measure before setting a target
 
-Keep the benchmark manifest, raw logs, context inventories, scripts and results in the task's run folder, outside product commits. Freeze one small task/source snapshot, acceptance and full coverage, model/effort, CLI/agent/shell/tool versions, permitted tools, cache state, run order/repetitions and repair/stop policy. Both arms get these same conditions. The baseline is current shipped guidance, including fresh agents and one-call CHECK; the revised arm changes only the selected guidance. Freeze each arm's bytes before starting. A version change or unequal outcome/coverage limits comparison.
-
-Record coordinator, each child and interpreter separately, by actual session/request identity with provenance. For each report requests, total input, cached input, uncached input, output, start/end, wall time and terminal outcome. Keep absent usage unknown. Derive uncached as total minus cached only when the receipt defines cached as a subset; do not add cached to a total that already includes it. Deduplicate provider receipts and nested interpreter accounting by request identity. Overall elapsed time is arm end minus start; never sum overlapping role durations.
-
-Record each role's initial brief, inheritance setting, supplied file paths/bytes, handoff bytes and tool/report output bytes. Distinguish supplied files from content actually read, and available per-request input from retained-history telemetry. File bytes do not establish token counts, cache reuse or what the model retained. If retained-history telemetry is unavailable, say so.
-
-Classify tool-internal polls, saved-report reads, model-driven waiting/status and actionable reasoning separately. A report read may be internal or model-driven; count actual model requests rather than report files. Include failed, aborted, refused and missing runs. Compare equivalent completed outcomes and disclose incomplete attribution. Synthetic accounting fixtures or fake-clock waits prove only their stated arithmetic/boundary; they do not establish model savings. Choose numeric regression targets only after the controlled baseline. Dollar claims also need authoritative measured usage and applicable rates. Present the frozen task and proposed per-arm authoring/interpreter ceilings for a person's budget decision before any live arm.
+Keep benchmark manifests, logs, and scripts in the run folder outside product commits. Freeze task snapshot, model/effort, CLI/tool versions, cache state, and stop policy across baseline and revised arms. Record coordinator, child subagent, and interpreter sessions separately (`requests`, `input_tokens`, `cached_input`, `output_tokens`, wall time `end - start`, and terminal outcome; never sum overlapping durations or fabricate missing usage).

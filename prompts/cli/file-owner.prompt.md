@@ -95,8 +95,8 @@ JSON does not parse as an object stays as written.
 
 So the hash covers the prose and every interface declaration: entries,
 operations, schemas, errors, calls, resources, limits, kind, reason and
-conventions. It ignores the approval metadata: `pdd approve` and
-`pdd test --fill-hash` change only `status` and `prose_sha256`, and approval
+conventions. It ignores the approval metadata: `pdd approve` changes only
+`status` and `prose_sha256` when an embedded block is present, and approval
 evidence is kept outside the prompt. Approving a prompt therefore leaves its
 headers current. It also ignores white space inside the interface JSON.
 

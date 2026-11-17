@@ -1,4 +1,4 @@
-// Generated from prompts/cli/story-lint.prompt.md (sha256: 1bc528e4e8146eeced2e4facd736be9d6a171e9e7daf65b75fae4219f2969968).
+// Prompt: prompts/cli/story-lint.prompt.md
 import { isAbsolute } from 'node:path';
 
 const IMPL_DIR = /(?:^|[\s"'(\[`])((?:src|lib|internal|pkg|cmd|__tests__)\/[A-Za-z0-9_./-]+|(?:dist|build)\/[A-Za-z0-9_./-]*[./][A-Za-z0-9_./-]+|prompts\/(?:cli|tests?|__tests__)\/[A-Za-z0-9_./-]+)/;
@@ -125,7 +125,7 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
         path,
         line: firstIdx >= 0 ? firstIdx + 1 : 1,
         code: 'story-missing-criteria',
-        message: 'Story is missing an "## Acceptance criteria" section. Add "## Acceptance criteria" with 1 to 8 concrete, user-observable acceptance items.',
+        message: 'Story is missing an "## Acceptance criteria" section. Add "## Acceptance criteria" with 1 to 6 concrete, user-observable acceptance items.',
         excerpt: trimExcerpt(rawLines[firstIdx >= 0 ? firstIdx : 0] ?? ''),
       });
     } else if (items.length === 0) {
@@ -133,17 +133,27 @@ export function lintStory(text, { path = 'user_stories/story.md', criteriaHygien
         path,
         line: criteriaHeadingLine,
         code: 'story-missing-criteria',
-        message: '"## Acceptance criteria" lists 0 acceptance items. Add 1 to 8 concrete, user-observable numbered or bulleted acceptance items.',
+        message: '"## Acceptance criteria" lists 0 acceptance items. Add 1 to 6 concrete, user-observable numbered or bulleted acceptance items.',
         excerpt: trimExcerpt(criteriaHeadingRaw),
       });
-    } else if (items.length > 8) {
-      const ninth = items[8];
+    } else if (items.length > 6) {
+      const seventh = items[6];
       problems.push({
         path,
-        line: ninth.line,
+        line: seventh.line,
         code: 'story-bloated-criteria',
-        message: `"## Acceptance criteria" lists ${items.length} items (recommended at most 8). Split into smaller vertical Stories or move formal invariants to "## Rules to check".`,
-        excerpt: trimExcerpt(ninth.raw),
+        message: `"## Acceptance criteria" lists ${items.length} items (recommended at most 6). Keep 1 Story per cohesive user loop and move technical invariants to .prompt.md "## Domain decisions" or "## Rules to check".`,
+        excerpt: trimExcerpt(seventh.raw),
+      });
+    }
+    const lineCount = rawLines.length > 0 && rawLines.at(-1) === '' ? rawLines.length - 1 : rawLines.length;
+    if (lineCount > 35) {
+      problems.push({
+        path,
+        line: 36,
+        code: 'story-too-long',
+        message: `Story is ${lineCount} lines long (recommended at most 35 lines). Move technical invariants, schemas or edge-case matrices to .prompt.md "## Domain decisions" or test JSON fixtures.`,
+        excerpt: trimExcerpt(rawLines[35] ?? ''),
       });
     }
   }

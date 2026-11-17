@@ -5,5 +5,5 @@
 - Use plain customer words on every screen: never show internal IDs, schema keys, version counters or backend terms (`router`, `dispatches`, `fleet`), and explain setup steps or codes right on the card.
 - For a page or a screen, also write the app map and its SVG mockups from that design (RUNBOOK §13), so `pdd simulate` shows the real screen (the Screen tab) and keys or taps work.
 - Linked `.ui.svg` is the layout spec for parts, words, order, ids and states. Keep prose and drawing in agreement; follow RUNBOOK §13.
-- Before showing the person, run `pdd lint --local`, render each `.ui.svg` to PNG in a headless browser, and inspect the image to fix overlaps, clipped borders, bad wrapping or crowded sections.
+- Before showing the person, run `pdd lint --local` (`<50ms`) to verify `.ui.svg` XML, `viewBox`, labels, controls and regions. Do not render `.ui.svg` to PNG in a headless browser unless the person explicitly asks for PNG previews.
 - Put the app map path in your `done` summary.
