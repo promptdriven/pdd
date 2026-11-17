@@ -214,11 +214,10 @@ locally with outcome `handed-over`. It never merges.
    holding any worker slot. For each `newlyDetected` regression (`post-merge-reopen`,
    `post-merge-revert`, `post-merge-ci`), file or reopen one deduplicated PDD report
    through the [report owner](autopilot-reports.prompt.md) (`reproduced: true`, step
-   `post-merge`) and append a `postMerge: true` forensic record to `history.jsonl`. When
-   `selectCircuitBreakerRegression` selects a `post-merge-ci` or `post-merge-revert`
+   `post-merge`) and append a `postMerge: true` forensic record to `history.jsonl`. Pass `clearedAfter` from `state.circuitBreakerClearedAt` / `core.json` `circuitBreakerClearedAt` into `selectCircuitBreakerRegression` so pre-reset reverts or CI failures do not re-trip `observe`. When `selectCircuitBreakerRegression` selects a `post-merge-ci` or `post-merge-revert`
    regression while the repository mode is `auto` (or `core.json` / `state` already holds
    an active `circuitBreaker`), trip the safety circuit breaker: downgrade `settings.mode`
-   and `state.mode` from `auto` to `observe`, save `circuitBreaker` in `state` and
+   and `state.mode` from `auto` to `observe` (marking `state.circuitBreakerForcedObserve = true` when `state.mode` was not already `observe`), save `circuitBreaker` in `state` and
    `core.json`, and send one deduplicated `test-suite` alert through `ports.alert`. An
    error only warns and never blocks intake or jobs.
 7. Intake fills free slots (see below).
@@ -562,7 +561,7 @@ in any CI read clears `ciDown`; when no job read CI in a tick, intake reads the 
 10 workflow runs at most every 10 minutes and clears it when one created after
 `since` is in progress or completed with success, neutral or skipped.
 
-**Single bounded shard-flake rerun** (#3484). In `ciState`, when a PR head is red and neither `job.flakeRerunHead` nor `job.reproduceRerun?.head` equals `head`, call `evaluateShardFlakeRerun`: on `wait-siblings` keep CI `pending` while sibling shards finish; on `rerun` invoke `gh run rerun <runId> --repo <repo> --failed` once per failed workflow run (falling back to REST `rerun-failed-jobs` or `check-runs/<id>/rerequest`), record `job.flakeRerunHead = head` and `job.ciRerunPending`, and wait on the next check instead of spending a repair round. If the rerun fails again at `head`, proceed normally to repair.
+**Single bounded shard-flake rerun** (#3484). In `ciState`, when a PR head is red and neither `job.flakeRerunHead` nor `job.reproduceRerun?.head` equals `head`, call `evaluateShardFlakeRerun`: on `wait-siblings` keep CI `pending` while sibling shards finish; on `rerun` invoke `gh run rerun <runId> --repo <repo> --failed` once per failed workflow run (falling back to REST `rerun-failed-jobs`, and per failed shard whose `runId` is absent or failed to rerun to `check-runs/<id>/rerequest`), record `job.flakeRerunHead = head` and `job.ciRerunPending` containing `staleTokens` only for actually-reran shards, and return `pending` when all failed shards were reran (otherwise report the remaining un-reran failed checks immediately). If the rerun fails again at `head`, proceed normally to repair.
 
 **The loop guard** (lead decision, Nov 11): a fault of Autopilot or a service that
 never ends must not loop forever on one issue. Each step stop writes the history line

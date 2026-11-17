@@ -350,6 +350,7 @@ function readMachine(fs, root, warn, now = Date.now()) {
     // #3252: every login in the multi-harness pool is exhausted or on cooldown (one record and one alert per outage).
     poolOut: object(m.poolOut) && Number.isFinite(m.poolOut.since) ? m.poolOut : null,
     // #3484: post-merge safety circuit breaker that downgraded mode from auto to observe.
+    circuitBreakerClearedAt: Number.isFinite(m.circuitBreakerClearedAt) && m.circuitBreakerClearedAt <= now ? m.circuitBreakerClearedAt : null,
     circuitBreaker: object(m.circuitBreaker) && m.circuitBreaker.active !== false && Number.isSafeInteger(m.circuitBreaker.pr) && m.circuitBreaker.pr > 0 && named(m.circuitBreaker.reason)
       ? {
           active: true,
@@ -2108,15 +2109,17 @@ async function repoHasCi(ctx, job) {
   })());
   return ctx.hasCi.get(key);
 }
-const isGoodConclusion = conclusion => ['success', 'neutral', 'skipped'].includes(conclusion);
-const runFailedToken = r => `r:${r.id ?? ''}:${r.name}:${r.conclusion}:${r.completed_at ?? r.started_at ?? ''}`;
+const normCiState = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
+const isGoodConclusion = conclusion => ['success', 'neutral', 'skipped'].includes(normCiState(conclusion));
+const isCompletedRun = r => normCiState(r?.status) === 'completed';
+const runFailedToken = r => `r:${r.id ?? ''}:${r.name}:${r.conclusion}:${r.completed_at ?? r.completedAt ?? r.started_at ?? r.startedAt ?? ''}`;
 const statusFailedToken = s => `s:${s.context}:${s.state}:${s.updated_at ?? ''}`;
 async function ciState(ctx, head, job) {
   const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
   const status = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/status`);
   const rawFailedTokens = [
-    ...(runs?.check_runs ?? []).filter(r => r.status === 'completed' && !isGoodConclusion(r.conclusion)).map(runFailedToken),
-    ...(status?.statuses ?? []).filter(s => s.state !== 'pending' && s.state !== 'success').map(statusFailedToken),
+    ...(runs?.check_runs ?? []).filter(r => isCompletedRun(r) && !isGoodConclusion(r.conclusion)).map(runFailedToken),
+    ...(status?.statuses ?? []).filter(s => normCiState(s.state) !== 'pending' && normCiState(s.state) !== 'success').map(statusFailedToken),
   ];
   let stalePending = new Set();
   if (job.ciRerunPending?.head === head) {
@@ -2127,12 +2130,13 @@ async function ciState(ctx, head, job) {
   }
   const checks = [
     ...(runs?.check_runs ?? []).map(r => {
-      const isStale = r.status === 'completed' && !isGoodConclusion(r.conclusion) && stalePending.has(runFailedToken(r));
-      return { name: r.name, done: isStale ? false : r.status === 'completed', good: isGoodConclusion(r.conclusion) };
+      const isStale = isCompletedRun(r) && !isGoodConclusion(r.conclusion) && stalePending.has(runFailedToken(r));
+      return { name: r.name, done: isStale ? false : isCompletedRun(r), good: isGoodConclusion(r.conclusion) };
     }),
     ...(status?.statuses ?? []).map(s => {
-      const isStale = s.state !== 'pending' && s.state !== 'success' && stalePending.has(statusFailedToken(s));
-      return { name: s.context, done: isStale ? false : s.state !== 'pending', good: s.state === 'success' };
+      const st = normCiState(s.state);
+      const isStale = st !== 'pending' && st !== 'success' && stalePending.has(statusFailedToken(s));
+      return { name: s.context, done: isStale ? false : st !== 'pending', good: st === 'success' };
     }),
   ];
   const failed = [...new Set(checks.filter(c => c.done && !c.good).map(c => c.name))];
@@ -2157,7 +2161,15 @@ async function ciState(ctx, head, job) {
       }
       if (flake.action === 'rerun') {
         const reran = await rerunShardFlake(ctx, job, head, flake);
-        if (reran > 0) return { state: 'pending', pending: out.failed, sig: `flake-rerun:${sig}` };
+        if (reran.allReran) return { state: 'pending', pending: out.failed, sig: `flake-rerun:${sig}` };
+        if (reran.reranCount > 0) {
+          const unreranFailed = [...new Set([
+            ...(runs?.check_runs ?? []).filter(r => isCompletedRun(r) && !isGoodConclusion(r.conclusion) && !reran.staleSet.has(runFailedToken(r))).map(r => r.name),
+            ...(status?.statuses ?? []).filter(s => normCiState(s.state) !== 'pending' && normCiState(s.state) !== 'success').map(s => s.context),
+          ])];
+          if (!unreranFailed.length) return { state: 'pending', pending: out.failed, sig: `flake-rerun:${sig}` };
+          return { ...out, failed: unreranFailed, failure: await ciFailureDetails(ctx, runs, status, unreranFailed) };
+        }
       }
     }
     return { ...out, failure: await ciFailureDetails(ctx, runs, status, out.failed) };
@@ -2169,31 +2181,69 @@ async function ciState(ctx, head, job) {
   return ciStart(ctx, job, head, runs, checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig });
 }
 async function rerunShardFlake(ctx, job, head, flake) {
-  let runIds = [...new Set((flake.runIds ?? []).filter(Number.isSafeInteger))];
-  if (!runIds.length) {
-    const wRuns = (await ctx.gh.ok('GET', `repos/${ctx.repo}/actions/runs?head_sha=${head}&per_page=20`).catch(() => null))?.workflow_runs ?? [];
-    runIds = wRuns.filter(r => r.status === 'completed' && !isGoodConclusion(r.conclusion) && Number.isSafeInteger(r.id)).map(r => r.id);
-  }
+  const shards = Array.isArray(flake.shards) && flake.shards.length
+    ? flake.shards
+    : (flake.staleTokens ?? []).map((staleToken, idx) => ({
+        runId: Number.isSafeInteger(flake.runIds?.[idx]) ? flake.runIds[idx] : (flake.runIds?.length === 1 && Number.isSafeInteger(flake.runIds[0]) ? flake.runIds[0] : null),
+        checkId: Number.isSafeInteger(flake.checkIds?.[idx]) ? flake.checkIds[idx] : null,
+        name: flake.failedNames?.[idx] ?? '',
+        staleToken,
+      }));
   const okStatus = res => Number.isInteger(res?.status) && res.status >= 200 && res.status < 300;
-  let reran = 0;
+  const runIds = [...new Set([
+    ...shards.map(s => s.runId).filter(id => Number.isSafeInteger(id) && id > 0),
+    ...(flake.runIds ?? []).filter(id => Number.isSafeInteger(id) && id > 0),
+  ])];
+  const reranRunIds = new Set();
   for (const id of runIds.slice(0, 10)) {
     const cli = await ctx.ports.gh(['run', 'rerun', String(id), '--repo', ctx.repo, '--failed']).catch(() => ({ code: 1 }));
-    if (cli?.code === 0) { reran++; continue; }
+    if (cli?.code === 0) { reranRunIds.add(id); continue; }
     const res = await ctx.gh.call('POST', `repos/${ctx.repo}/actions/runs/${id}/rerun-failed-jobs`).catch(() => ({ status: 0 }));
-    if (okStatus(res)) reran++;
+    if (okStatus(res)) reranRunIds.add(id);
   }
-  if (!reran) {
-    for (const id of [...new Set((flake.checkIds ?? []).filter(Number.isSafeInteger))].slice(0, 10)) {
-      const res = await ctx.gh.call('POST', `repos/${ctx.repo}/check-runs/${id}/rerequest`).catch(() => ({ status: 0 }));
-      if (okStatus(res)) reran++;
+  let fallbackWorkflowReran = false;
+  if (!runIds.length && shards.some(s => !s.runId)) {
+    const wRuns = (await ctx.gh.ok('GET', `repos/${ctx.repo}/actions/runs?head_sha=${head}&per_page=20`).catch(() => null))?.workflow_runs ?? [];
+    const fallbackIds = wRuns.filter(r => normCiState(r.status) === 'completed' && !isGoodConclusion(r.conclusion) && Number.isSafeInteger(r.id) && r.id > 0).map(r => r.id).slice(0, 10);
+    let fallbackSucceeded = 0;
+    for (const id of fallbackIds) {
+      const cli = await ctx.ports.gh(['run', 'rerun', String(id), '--repo', ctx.repo, '--failed']).catch(() => ({ code: 1 }));
+      if (cli?.code === 0) { fallbackSucceeded++; continue; }
+      const res = await ctx.gh.call('POST', `repos/${ctx.repo}/actions/runs/${id}/rerun-failed-jobs`).catch(() => ({ status: 0 }));
+      if (okStatus(res)) fallbackSucceeded++;
+    }
+    fallbackWorkflowReran = fallbackIds.length > 0 && fallbackSucceeded === fallbackIds.length;
+  }
+  const rerequestedChecks = new Map();
+  let rerequestCount = 0;
+  const reranShards = [];
+  for (const shard of shards) {
+    if ((shard.runId && reranRunIds.has(shard.runId)) || (!shard.runId && fallbackWorkflowReran)) {
+      reranShards.push(shard);
+      continue;
+    }
+    if (Number.isSafeInteger(shard.checkId) && shard.checkId > 0 && rerequestCount < 10) {
+      if (!rerequestedChecks.has(shard.checkId)) {
+        rerequestCount++;
+        const res = await ctx.gh.call('POST', `repos/${ctx.repo}/check-runs/${shard.checkId}/rerequest`).catch(() => ({ status: 0 }));
+        rerequestedChecks.set(shard.checkId, okStatus(res));
+      }
+      if (rerequestedChecks.get(shard.checkId)) reranShards.push(shard);
     }
   }
+  const reranTokens = [...new Set(reranShards.map(s => s.staleToken).filter(Boolean))];
   job.flakeRerunHead = head;
-  if (reran > 0 && flake.staleTokens?.length) {
-    job.ciRerunPending = { head, staleTokens: flake.staleTokens, until: ctx.now() + 2 * MIN };
+  if (reranTokens.length > 0) {
+    job.ciRerunPending = { head, staleTokens: reranTokens, until: ctx.now() + 2 * MIN };
+  } else {
+    delete job.ciRerunPending;
   }
   ctx.saveJob(job);
-  return reran;
+  return {
+    reranCount: reranShards.length,
+    allReran: shards.length > 0 && reranShards.length === shards.length,
+    staleSet: new Set(reranTokens),
+  };
 }
 async function reviewState(ctx, job, prBody = '', preselected = null) {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
@@ -5691,6 +5741,7 @@ export async function tickCore(input, ports) {
   const before = ctx.machineState();
   const activeBreaker = (object(state.circuitBreaker) && state.circuitBreaker.active !== false ? state.circuitBreaker : null) ?? before.circuitBreaker;
   if (activeBreaker && settings.mode === 'auto') {
+    if (state.mode !== 'observe') state.circuitBreakerForcedObserve = true;
     settings.mode = 'observe';
     state.mode = 'observe';
     state.circuitBreaker = activeBreaker;
@@ -5907,13 +5958,17 @@ async function runPostMergeCheck(ctx) {
         });
       } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
     }
-    const breaker = regressionsMod.selectCircuitBreakerRegression(result?.newlyDetected ?? [], { now: ctx.now });
+    const m = ctx.machineState();
+    const stateCleared = Number.isFinite(ctx.state?.circuitBreakerClearedAt) ? ctx.state.circuitBreakerClearedAt : null;
+    const machineCleared = Number.isFinite(m.circuitBreakerClearedAt) ? m.circuitBreakerClearedAt : null;
+    const clearedAfter = stateCleared !== null && machineCleared !== null ? Math.max(stateCleared, machineCleared) : (stateCleared ?? machineCleared);
+    const breaker = regressionsMod.selectCircuitBreakerRegression(result?.newlyDetected ?? [], { now: ctx.now, clearedAfter });
     if (breaker && (ctx.settings.mode === 'auto' || ctx.state.mode === 'auto')) {
+      if (ctx.state.mode !== 'observe') ctx.state.circuitBreakerForcedObserve = true;
       ctx.settings.mode = 'observe';
       ctx.state.mode = 'observe';
       ctx.state.circuitBreaker = breaker;
       ctx.circuitBreaker = breaker;
-      const m = ctx.machineState();
       ctx.saveMachine({ ...m, circuitBreaker: breaker });
       if (typeof ctx.ports.alert === 'function') {
         await Promise.resolve(ctx.ports.alert({

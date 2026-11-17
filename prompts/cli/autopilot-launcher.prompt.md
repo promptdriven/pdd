@@ -1,7 +1,7 @@
 # Autopilot launcher
 
 Own `src/autopilot-launcher.mjs`. Export module functions `runAutopilotLauncher(input, ports)`,
-`tickAutopilot(stateFile, ports)` and `withAutopilotModeLock({cwd, env}, action, ports)`. This launcher connects a
+`tickAutopilot(stateFile, ports)`, `withAutopilotModeLock({cwd, env}, action, ports)` and `resetAutopilotCircuitBreaker({cwd, env, mode}, ports)`. This launcher connects a
 repository on this machine to the [core engine](autopilot-core.prompt.md): headless agent jobs with no coordinator
 chat, no Herdr session, no parking and no AI scheduling. The core engine owns the jobs, claims, merge check, repair
 and END. The launcher owns the machine state, the user timer, the tick lock, doctor at start, status, the commands
@@ -190,7 +190,7 @@ core makes its admission decision without blocking unrelated core work. The core
 settings come from `readCoreSettings(cwd, fs, {auto, runs: state.runs, hardwareSlots: guard.hardwareSlots})`, so this machine's `start --runs N` reaches
 the core and a machine without it gets its automatic slots; the core gets the guard as its `machine` port (the room
 check and each job's priority). Tests may replace core ports with `ports.corePorts`. Afterwards, under the admission lock and only while
-still enabled, it saves the issue-list cache, the base fields, `intakeNote` when present, `mode: "observe"` plus `circuitBreaker` when `tickCore` newly tripped the post-merge safety circuit breaker (#3484; cleared when an operator runs `pdd autopilot start --mode auto` or `--mode off`), `nextTick` (now plus `timerMinutes`) and `core: {at,
+still enabled, it saves the issue-list cache, the base fields, `intakeNote` when present, `mode: "observe"` (recording `circuitBreakerForcedObserve: true` when `latest.mode` was not already `observe`) plus `circuitBreaker` when `tickCore` newly tripped the post-merge safety circuit breaker (#3484; cleared with `circuitBreakerClearedAt = now` saved in both `stateFile` and `core.json` on every `pdd autopilot start` — dropping breaker-forced `state.mode` when `--mode` is omitted so `"mode": "auto"` in `pdd.json` resumes `auto`, and clearing stale `circuitBreaker` banners on `--mode observe` — and via `resetAutopilotCircuitBreaker` on `pdd autopilot auto|observe|off`, which also clears machine `observe` overrides on `auto` and `off`), `nextTick` (now plus `timerMinutes`) and `core: {at,
 message}`.
 
 Each `gh` call goes through `countGithubCalls` into this repository's ledger in `ROOT/github/`, with its purpose
