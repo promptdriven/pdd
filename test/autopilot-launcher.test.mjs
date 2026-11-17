@@ -766,7 +766,7 @@ test('status --all and status --json read local cached loginPool only (zero gh/H
   assert.equal(payload.suiteQueue.busyChecks, 0);
   assert.deepEqual(payload.loginPool.counts, { total: 3, ready: 1, cooling: 1, reauth_required: 1 });
   assert.equal(payload.loginPool.accounts[1].weeklyUsedPercent, null, 'unknown window stays null, never fabricated 0%');
-  assert.deepEqual(payload.conversion.totals, { backlog: 4, claimable: 4, claimed: 4, clearSpec: 4, prOpened: 3, mergedOrWouldMerge: 2, dropped: 2 });
+  assert.deepEqual(payload.conversion.totals, { openIssues: 4, backlog: 4, claimable: 4, claimed: 4, clearSpec: 4, prOpened: 3, zeroEditMergedOrWouldMerge: 2, mergedOrWouldMerge: 2, dropped: 2, reopened: 0 });
   assert.equal(payload.conversion.dropsByOwner.quota_or_service.count, 1);
   assert.equal(payload.conversion.dropsByOwner.pdd.count, 1);
   assert.equal(f.runs.filter(([cmd]) => cmd === 'gh').length, ghCallsBefore, 'status makes zero GitHub calls');

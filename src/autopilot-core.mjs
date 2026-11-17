@@ -5354,7 +5354,10 @@ async function continueEnd(ctx, job) {
     e.loop = false;
     for (const c of await gh.all(`repos/${repo}/issues/${job.issue}/comments?per_page=100`)) {
       const m = BLOCK_MARKER.exec(String(c.body ?? ''));
-      if (m?.[3] === fp && (await gh.ok('GET', `repos/${m[1] ?? repo}/issues/${m[2]}`))?.state === 'closed') e.loop = true;
+      if (m?.[3] === fp && (
+        (e.report.state === 'reopened' && `${m[1] ?? repo}#${m[2]}`.toLowerCase() === String(e.report.ref).toLowerCase())
+        || (await gh.ok('GET', `repos/${m[1] ?? repo}/issues/${m[2]}`))?.state === 'closed'
+      )) e.loop = true;
     }
     if (!e.loop && e.report.id) e.native = (await gh.call('POST', `repos/${repo}/issues/${job.issue}/dependencies/blocked_by`, { issue_id: e.report.id })).status < 300;
     ctx.saveJob(job);
@@ -5746,6 +5749,7 @@ export async function tickCore(input, ports) {
     }
   }
   await sweepFiles(ctx);
+  await runPostMergeCheck(ctx);
   const b = ctx.budget;
   if (intakeMode(settings.intake) === 'active' && rows && b?.state !== 'low') {
     try { await collectActiveIntake(ctx, rows); } catch (error) { ctx.warn(`Autopilot intake (active) collect skipped: ${error.message}`); }
@@ -5802,6 +5806,43 @@ async function sweepFiles(ctx) {
   }
 }
 
+async function runPostMergeCheck(ctx) {
+  if (!ctx.repo || ctx.budget?.state === 'low' || ctx.budget?.state === 'reserve') return;
+  const hasMerged = chronological(ctx.fs, ctx.root).some(row => row.outcome === 'merged' && Number.isSafeInteger(row.pr) && row.pr > 0);
+  if (!hasMerged && typeof ctx.ports.checkPostMerge !== 'function') return;
+  try {
+    const checker = ctx.ports.checkPostMerge
+      ?? (await import('./autopilot-regressions.mjs')).checkPostMergeRegressions;
+    const result = await checker({ root: ctx.root, repo: ctx.repo, gh: ctx.ports.gh, fs: ctx.fs, now: ctx.now });
+    for (const item of result?.newlyDetected ?? []) {
+      const filed = await report(ctx, null, {
+        kind: 'pdd',
+        component: 'autopilot-core',
+        code: item.code,
+        reproduced: true,
+        ...(item.issue ? { issue: item.issue } : {}),
+        ...(Array.isArray(item.issues) && item.issues.length ? { issues: item.issues } : {}),
+        ...(item.mergeCommit ? { head: item.mergeCommit } : {}),
+        text: item.detail,
+        detail: `PR #${item.pr}${item.issue ? ` (issue #${item.issue})` : ''} merged at ${item.mergedAt ?? 'unknown'}: ${item.detail}${item.url ? `\nEvidence: ${item.url}` : ''}`,
+      }, 'post-merge');
+      try {
+        appendHistory(ctx, {
+          at: ctx.now(),
+          issue: item.issue ?? null,
+          ...(Array.isArray(item.issues) && item.issues.length > 1 ? { issues: item.issues } : {}),
+          pr: item.pr,
+          postMerge: true,
+          kind: item.kind,
+          code: item.code,
+          text: oneLine(item.detail, 300),
+          ...(filed?.ref ? { report: filed.ref, reportState: filed.state } : { reportState: filed?.state ?? null }),
+        });
+      } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
+    }
+  } catch (error) { ctx.warn(`Autopilot post-merge check skipped this tick: ${error.message}`); }
+}
+
 // ---- Status (local files only) --------------------------------------------------------------------------
 // #3177: the wrapper's note when the agent's shell finds another pdd than the engine's.
 const pddWords = (fs, part) => [pddCheckFile, skillsCheckFile].map(file => readJson(fs, file(part.log ?? ''), null)?.line).filter(named).map(line => `; ${oneLine(line, 300)}`).join('');
@@ -5849,6 +5890,22 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   const all = readHistory(fs, ports.root, Infinity), history = all.filter(row => typeof row.outcome === 'string').slice(0, 5);
   lines.push(...stopLines(jobs, all, now));
   if (history.length) lines.push('Last results:', ...history.map(row => `#${row.issue} ${row.outcome} ${new Date(row.at).toISOString()}${row.owner ? ` (owner ${row.owner})` : ''}: ${row.text}`));
+  const outcomeRows = all.filter(row => !row.postMerge && typeof row.outcome === 'string' && Number.isSafeInteger(row.issue) && row.issue > 0);
+  const takenSet = new Set([...outcomeRows.map(row => row.issue), ...jobs.map(job => job.issue).filter(n => Number.isSafeInteger(n) && n > 0)]);
+  const humanSet = new Set(outcomeRows.filter(row => row.outcome === 'needs-person' || row.owner === 'person_decision' || Boolean(row.ask) || row.humanEdited === true || row.humanIntervention === true).map(row => row.issue));
+  const mwmSet = new Set(outcomeRows.filter(row => row.outcome === 'merged' || row.outcome === 'would-merge').map(row => row.issue));
+  if (mwmSet.size > 0 && takenSet.size > 0) {
+    const zeCount = [...mwmSet].filter(n => !humanSet.has(n)).length;
+    const zePct = Math.round((zeCount / takenSet.size) * 100);
+    const mwmPct = Math.round((mwmSet.size / takenSet.size) * 100);
+    lines.push(`Scorecard: ${zeCount}/${takenSet.size} (${zePct}%) zero-edit completion (target 90-95%); ${mwmSet.size}/${takenSet.size} (${mwmPct}%) merged/would-merge.`);
+  }
+  const postMerge = ports.root ? readJson(fs, join(ports.root, 'post-merge.json'), null) : null;
+  if (object(postMerge?.counts) && postMerge.counts.tracked > 0) {
+    const pm = postMerge.counts;
+    const reopenPct = `${Math.round(((pm.reopenOrRevert ?? 0) / pm.tracked) * 100)}%`;
+    lines.push(`Post-merge: ${pm.regressions ?? 0} regression(s) (target 0: ${pm.reopened ?? 0} reopened, ${pm.reverted ?? 0} reverted, ${pm.ci ?? 0} CI; reopen/revert ${reopenPct}) across ${pm.tracked} merged PR(s)${pm.pending ? `; ${pm.pending} pending check` : ''}.`);
+  }
   const drafts = ports.reportRoot ? listReportDrafts({ root: ports.reportRoot }, { fs }).length : 0;
   if (drafts) lines.push(`Reports: ${drafts} local draft(s); run pdd autopilot report to list or send them.`);
   return lines.join('\n');
