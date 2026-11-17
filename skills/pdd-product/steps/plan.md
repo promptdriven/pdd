@@ -1,16 +1,11 @@
 # plan
 
-Review the map, boundaries, contracts, planned prompts and run order together.
-Verify that every part crossing real HTTP, auth, database, CLI/OS or browser I/O
-plans its thin native-boundary adapter prompt(s) and startup entrypoint alongside
-its fake-port domain prompt(s), and that headless parts carry no UI screens.
-Each run must name its Stories, part, slice and needs. Show which runs can start
-in parallel. Before feature tests exist, run `pdd product status` for structural
-problems (it may read GitHub), and `pdd contracts` for an inventory, not schema
-validation. Manually review contracts with normal, refusal and empty-world
-examples and domain boundaries. Hosted `pdd lint` needs Story tests; `pdd lint
---local` is partial and does not validate shared schemas. Do not add placeholder
-tests. Once feature tests exist, `pdd test` includes lint. Put the files in the
-plan PR and state the open questions. Keep the small path's PR to the map. After
-the PR, give `pdd product next`; normal feature runs do the building. Do not
-start all runs automatically.
+Order feature runs in `product/plan.md`. Check that `## Prompts` (separate from
+`## Boundaries` and `## Runs`) names how every part starts and wires its thin
+`kind: native-only` boundary adapter(s) onto its checkable fake-port domain prompt(s)
+(adapters depend on domain prompts, never the reverse, so Story `pdd test` never skips
+with `native-only`), and that headless parts carry `0` UI screens.
+Each run names its Stories, part, slice and needs; show parallel runs. Before feature
+tests exist, run `pdd product status` and `pdd contracts`, and review contract examples.
+Do not add placeholder tests. Put the files and open questions in the plan PR (small
+maps keep only the map). After the PR, give `pdd product next`; do not auto-start runs.

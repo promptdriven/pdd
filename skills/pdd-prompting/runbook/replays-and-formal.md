@@ -53,7 +53,7 @@ In verify after the last commit, run one `pdd workflow prove <run> --test "<comm
   **Failed + counterexample**, **Not run + reason** or **Not applicable + reason**.
 - Use it for a precise rule with a clear forbidden result: money and rounding, limits, who may do what,
   order of states, parsers. It is not applicable for looks, wording or plain wiring.
-- Take the rule from the approved Story's `## Rules to check` section. Never take it from the code.
+- Take the rule from touched `.prompt.md` `## Domain decisions` (technical invariants, symlinks, casing, schema versions, bounds) or the approved Story's `## Rules to check` section without ratcheting `user_stories/*.md`. Never take it from the code.
 - Default method: a **bounded check**. Loop over EVERY input in a small, stated range, call the real code, and
   compare with an oracle written from the Story. State the bounds in the PR.
 - Use a solver (Z3, or CrossHair for Python) only when the range is too big to loop. Replay each counterexample

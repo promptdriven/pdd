@@ -200,7 +200,7 @@ test('HTML screen with .ui.svg warns on missing stylesheet or missing CSS classe
   assert.deepEqual(clean, []);
 
   rmSync(join(setup.repo, 'styles/pocket.css'));
-  const missingFile = lintSvgLayouts({ root: setup.repo, files: ['app-map.json', 'prompts/ledger_screen.prompt.md', 'prompts/views/ledger__stacked.ui.svg'] });
+  const missingFile = lintSvgLayouts({ root: setup.repo, files: ['app-map.json', 'prompts/ledger_screen.prompt.md', 'prompts/notes_screen.prompt.md', 'prompts/place_order.prompt.md', 'prompts/views/ledger__stacked.ui.svg'] });
   assert.equal(missingFile.length, 1);
   assert.match(missingFile[0], /app-map\.json -> styles\/pocket\.css: stylesheet:/);
 });
