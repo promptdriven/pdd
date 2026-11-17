@@ -363,7 +363,8 @@ test('SKILLS20: every step that writes prompts or tests reads the compact core p
   assert.match(prompting, /- `RUNBOOK\.md`: self-contained authoring fast path and router/);
   assert.match(prompting, /Read `RUNBOOK\.md` first, `guide\.md` in full/);
   assert.ok(Buffer.byteLength(prompting) + Buffer.byteLength(read('pdd-prompting/RUNBOOK.md')) <= 60 * 1024);
-  assert.match(read('pdd-feature/SKILL.md'), /0 authoring subagents.*`pdd files`/);
+  assert.match(read('pdd-feature/SKILL.md'), /pdd-prompting\/RUNBOOK\.md.*0 authoring subagents.*`pdd files`/);
+  assert.match(read('pdd-prompting/RUNBOOK.md'), /generation_pointer.*9007199254740991/);
   const setup = read('pdd-setup/SKILL.md').split('\n');
   const block = setup.slice(setup.indexOf('<!-- pdd:start -->'), setup.indexOf('<!-- pdd:end -->') + 1);
   assert.ok(block.includes('Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.'));
