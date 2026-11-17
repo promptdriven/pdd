@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9e342f73b7a8035a141fa00efdb17e77045e30780428ac75666eb4e8edaa845f).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 45d6764243e0b5f18993b9f5f9a60bc3906315c397ec54be86956f50f93a3ca3).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -155,6 +155,8 @@ function writeAtomic(p, target, content) {
 }
 const save = (p, record) => writeAtomic(p, join(p.root, `ticket-${record.ticket}.json`), serializeValidationReceipt(record));
 const announceReceipt = (ports, p, row) => { if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; output evidence: ${row.logPath}`); };
+const waitingInterruption = (finishedAt, signal) => ({ state:'finished', finishedAt, outcome:'interrupted', signal,
+  exitCode:null, counts:null, reason:`Test suite did not run: the queue owner ${signal ? `was interrupted by ${signal}` : 'exited'} while waiting.` });
 function records(p) {
   let names;
   try { names = p.fs.readdirSync(p.root); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
@@ -169,13 +171,16 @@ function records(p) {
     // A dead runner does not make its live or uncertain child safe to reclaim.
     const recorderLive = row.recorderPid && p.alive(row.recorderPid)
       && (!row.recorderIdentity || p.processIdentity(row.recorderPid) === row.recorderIdentity);
-    if (row.state !== 'finished' && !recorderLive && !p.alive(row.pid)
-      && (row.state === 'waiting' || row.childPid && !p.alive(-row.childPid))) {
+    const ownerGone = row.state !== 'finished' && !recorderLive && !p.alive(row.pid);
+    if (ownerGone && row.state === 'waiting' && row.startedAt === null && !row.childPid && !row.recorderPid) {
+      return { ...row, ...waitingInterruption(p.fs.statSync(join(p.root, name)).mtimeMs, row.signal ?? null) };
+    }
+    if (ownerGone && row.childPid && !p.alive(-row.childPid)) {
       return { ...row, state: 'finished', finishedAt: p.fs.statSync(join(p.root, name)).mtimeMs,
         outcome:'unknown', exitCode:null, counts:null,
         reason: 'Test suite runner ended before reporting a result.' };
     }
-    if (row.state !== 'finished' && !recorderLive && !p.alive(row.pid)) return { ...row,
+    if (ownerGone) return { ...row,
       outcome:'unknown', exitCode:null, counts:null,
       reason: 'Test suite runner ended; suite descendants are still live or their ownership is unknown.' };
     return row;
@@ -212,6 +217,7 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
 }
 export function suiteStatusWords(suite) {
   return suite.state === 'unavailable' ? `full test suite queue unavailable: ${suite.reason}`
+    : suite.outcome === 'interrupted' ? `full test suite interrupted: ${suite.reason}`
     : suite.reason ? `full test suite failed: ${suite.reason}`
     : suite.state === 'waiting' ? `waiting for a check slot (position ${suite.position})`
     : suite.state === 'running' ? 'running the full test suite'
@@ -222,7 +228,17 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
   if (typeof command !== 'string' || !command.trim() || !Number.isInteger(timeout) || timeout < 0 || timeout > 120)
     return { exitCode: 2, message: 'Supply a suite command and a timeout of 1 to 120 minutes, or 0 for no time limit.' };
   rememberSecrets(...knownSecretValues(env));
-  let p, row, environmentRoot, executionStarted = false, keepEnvironment = false;
+  let p, row, environmentRoot, interrupted, executionStarted = false, keepEnvironment = false;
+  const stopWatchingWait = () => {
+    process.off('SIGINT', interruptWait); process.off('SIGTERM', interruptWait);
+  };
+  const interruptWait = signal => {
+    interrupted = signal;
+    Object.assign(row, waitingInterruption(p.now(), signal));
+    try { save(p, row); } catch {}
+    stopWatchingWait();
+    process.kill(process.pid, signal);
+  };
   try {
     p = portsFor(env, ports);
     p.fs.mkdirSync(p.root, { recursive: true, mode: 0o700 });
@@ -246,10 +262,12 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       catch (error) { try { p.fs.unlinkSync(record.logPath); } catch {} throw error; }
       return record;
     });
+    process.on('SIGINT', interruptWait); process.on('SIGTERM', interruptWait);
     announceReceipt(ports, p, row);
     let lastPosition;
     for (;;) {
       const position = await underLock(p, () => {
+        if (interrupted) return 0;
         const all = records(p), place = positionOf(all, row), capacity = admissionCapacity(p, env);
         const running = all.filter(other => other.state === 'running');
         const occupied = new Set(running.flatMap(other => other.cpuIds ?? []));
@@ -267,6 +285,8 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       if (position !== lastPosition) { p.say(`waiting for a check slot (position ${position})`); lastPosition = position; }
       await p.sleep(250);
     }
+    stopWatchingWait();
+    if (interrupted) return { exitCode: interrupted === 'SIGINT' ? 130 : 143, message: row.reason };
     p.say('running the full test suite');
     environmentRoot = p.fs.mkdtempSync(join(p.root, 'suite-env-'));
     const childEnv = Object.fromEntries(Object.entries(env).filter(([key, value]) =>
@@ -308,6 +328,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     }
     return { exitCode: 1, message: safeEvidenceText(`Shared test suite queue failed: ${error.code ?? error.message}`) };
   } finally {
+    stopWatchingWait();
     if (environmentRoot && !keepEnvironment) p.fs.rmSync(environmentRoot, {recursive:true, force:true});
   }
 }

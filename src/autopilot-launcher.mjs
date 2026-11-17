@@ -1483,7 +1483,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       if (intakeNow !== 'off') settingsNow.intake = intakeNow;
       return ok(`Autopilot ${state.enabled ? 'enabled' : 'disabled'}; timer ${timerLine(state, timerActive)}; next tick: ${timerActive && state.nextTick ? new Date(state.nextTick).toISOString() : 'none'}\n`
         + coreStatus({ state, guard: guard.line, settings: { ...settingsNow, label }, sources: { label: machineLabel(state) ? 'machine' : label ? 'pdd.json' : null, mode: machineMode(state) ? 'machine' : 'pdd.json', report: machineReport(state) ? 'machine' : 'pdd.json', decisions: machineDecisions(state) ? 'machine' : 'pdd.json' } },
-          { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now })
+          { root: coreRoot(stateFile), reportRoot: coreReports(ports, p.env), now: p.now, env: p.env })
         + (label || intakeNow === 'active' ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
         + alertLine(state, p, ports)
         + (await updateLine(stateFile, ports))

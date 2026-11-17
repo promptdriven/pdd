@@ -10,6 +10,7 @@ import { githubFullLastPage } from './github-calls.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
+import { readSuiteProgress } from './test-suite-queue.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './file-owner.mjs';
@@ -2798,29 +2799,42 @@ function queuedCommand(ctx, cwd, testCommand) {
     ? { command: '/bin/sh', args: ['-c', `${install} || { echo "Autopilot core: dependency install failed" >&2; exit 86; }; exec "$@"`, 'pdd-suite', process.execPath, ...suite] }
     : { command: process.execPath, args: suite };
 }
+function suiteQueueProgress(fs, env, suite) {
+  if (!suite?.cwd || !Number.isFinite(suite.agent?.started)) return null;
+  const progress = readSuiteProgress({cwd:suite.cwd, env}, {fs});
+  return progress?.queuedAt >= suite.agent.started && progress.ticket !== suite.interruption?.ticket ? progress : null;
+}
+const interruptedSuiteWords = signal => `interrupted before starting${signal ? ` (${signal})` : ''}; tests did not run`;
+
 async function suiteState(ctx, job) {
-  const start = (cwd, restarts = 0, deaths = 0, quiets = 0) => {
+  const start = (cwd, restarts = 0, deaths = 0, quiets = 0, interruption = null) => {
     const suiteCommand = resolveSuiteCommand(ctx, job, cwd);
     if (!suiteCommand) return { state: 'missing' };
     // CI=true stops watch modes.
     const command = queuedCommand(ctx, cwd, suiteCommand);
-    job.suite = { head: job.head, cwd, command: suiteCommand, restarts, deaths, quiets, agent: startJob(ctx, job, 'suite', cwd, '', command, { CI: 'true' }) }; ctx.saveJob(job); return { state: 'running' };
+    job.suite = { head: job.head, cwd, command: suiteCommand, restarts, deaths, quiets, ...(interruption ? { interruption } : {}), agent: startJob(ctx, job, 'suite', cwd, '', command, { CI: 'true' }) }; ctx.saveJob(job); return { state: 'running' };
   };
-  const replace = async (cwdOf, restarts = 0, deaths = 0, quiets = 0) => {
-    if (job.suite?.agent && !await cleanupPart(ctx, job, job.suite.agent, 'suite')) return { state: 'running' };
+  const replace = async (cwdOf, restarts = 0, deaths = 0, quiets = 0, interruption = null) => {
+    if (job.suite?.agent && !await cleanupPart(ctx, job, job.suite.agent, 'suite')) return interruption ? {state:'interrupted', interruption} : { state: 'running' };
     if (job.headTree?.commit === job.head && ctx.fs.existsSync?.(job.headTree.path) && !resolveSuiteCommand(ctx, job)) return { state: 'missing' };
-    return start(await cwdOf(), restarts, deaths, quiets);
+    const prior = job.suite?.head === job.head ? job.suite.interruption : null;
+    return start(await cwdOf(), restarts, deaths, quiets, interruption ?? prior);
   };
   if (!job.suite || job.suite.head !== job.head) return replace(() => checkout(ctx, job, 'suite'));
   const suiteCommand = resolveSuiteCommand(ctx, job);
   if (!suiteCommand) return { state: 'missing' };
   const seen = ctx.jobs.read(job.suite.agent);
+  const queue = suiteQueueProgress(ctx.fs, ctx.ports.env, job.suite);
+  const waiting = queue?.state === 'waiting';
+  const interruption = queue?.outcome === 'interrupted'
+    ? {ticket:queue.ticket, signal:queue.signal ?? seen.exit?.signal ?? null, log:basename(job.suite.agent.log)} : null;
   if (seen.state === 'running') {
     // The process rule: a suite that prints nothing new is a runner failure (retried); nothing new 3 times, or 3
     // deaths in all, is a no-result, never a pdd fault.
     const watch = await watchProcess(ctx, job, job.suite.agent, 'suite');
     if (watch.state === 'ceiling') return { state: 'ceiling', cause: watch.cause };
-    if (watch.state !== 'quiet') return { state: 'running' };
+    if (interruption) return {state:'interrupted', interruption};
+    if (waiting || watch.state !== 'quiet') return { state: waiting ? 'waiting' : 'running' };
     // Stop owners: a suite that hung before at this head, or hangs in a test file that the PR changes, is the issue.
     const hang = await suiteHang(ctx, job);
     if (hang) return { state: 'hung', hang };
@@ -2828,17 +2842,18 @@ async function suiteState(ctx, job) {
     if (restarts < 2) return replace(() => job.suite.cwd ?? checkout(ctx, job, 'suite'), restarts + 1, job.suite.deaths ?? 0, quiets);
     return { state: 'broken', dead: true, text: `${quietText(ctx, 'full test suite')} for head ${short(job.head)} (3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
   }
-  if (seen.exit?.code === 0) { recordSuccess(ctx, job, job.suite.agent, 'suite', seen); return { state: 'pass' }; }
+  if (!interruption && seen.exit?.code === 0) { recordSuccess(ctx, job, job.suite.agent, 'suite', seen); return { state: 'pass' }; }
   const log = readTail(ctx.fs, job.suite.agent.log);
   const tail = cleanLogText(log.split('\n').slice(-15).join('\n'));
   // A non-zero exit of the repository's test command is a red suite. Only a failure of the runner itself is not a
   // test result: it could not start, it died or was killed, it timed out, or it wrote no output. Such a run starts
   // again, at most twice, and then ends the job without spending a repair.
-  if (seen.state === 'dead' || seen.exit?.signal || [86, 127].includes(seen.exit?.code) || SUITE_RUNNER.test(stripAnsi(log)) || !log.trim()) {
+  if (interruption || seen.state === 'dead' || seen.exit?.signal || [86, 127].includes(seen.exit?.code) || SUITE_RUNNER.test(stripAnsi(log)) || !log.trim()) {
     // "Died 3 times" counts every try of this suite run.
     const deaths = (job.suite.deaths ?? 0) + (seen.state === 'dead' ? 1 : 0);
-    if ((job.suite.restarts ?? 0) < 2) return replace(() => job.suite.cwd ?? checkout(ctx, job, 'suite'), (job.suite.restarts ?? 0) + 1, deaths, job.suite.quiets ?? 0);
-    return { state: 'broken', dead: deaths + (job.suite.quiets ?? 0) >= 3, text: `the full test suite runner failed for head ${short(job.head)} (${seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}`}, 3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
+    if ((job.suite.restarts ?? 0) < 2) return replace(() => job.suite.cwd ?? checkout(ctx, job, 'suite'), (job.suite.restarts ?? 0) + 1, deaths, job.suite.quiets ?? 0, interruption);
+    const reason = interruption ? interruptedSuiteWords(interruption.signal) : seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}`;
+    return { state: 'broken', interruption, dead: deaths + (job.suite.quiets ?? 0) >= 3, text: `the full test suite runner failed for head ${short(job.head)} (${reason}, 3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
   }
   recordSuccess(ctx, job, job.suite.agent, 'suite', seen);
   const clean = cleanLogText(log), failed = failingTests(clean);
@@ -3418,12 +3433,13 @@ function evidenceRecord(ctx, job, { lines = [], claims = [], ci = null, review =
   const v = job.vectors, currentReview = job.review?.head === job.head ? job.review : null;
   const revFamily = review?.reviewFamily ?? currentReview?.reviewFamily ?? null;
   const revIndependence = review?.reviewIndependence ?? currentReview?.reviewIndependence ?? null;
+  const interruption = suite?.interruption ?? job.suite?.interruption;
   return { schema: 'pdd.core-evidence.v1', issue: job.issue, pr: job.pr ?? null, head: job.head, agentHead: job.agentHead ?? job.head,
     runtime: { lines: lines.map(l => ({ line: l.line, story: l.story, verdict: l.verdict })), claims, coverage: job.coverage ? { head: job.coverage.head, ok: job.coverage.ok === true, text: job.coverage.text ?? null, stories: job.coverage.stories ?? [], rows: job.coverage.rows ?? [], base: job.coverage.base ?? null, consumers: job.coverage.consumers ?? null } : null },
     vectors: v ? { head: v.head, state: v.state, reason: v.reason ?? null, cut: v.cut ?? false, skipped: v.skipped ?? [],
       control: v.control ? { code: v.control.code ?? [], fork: v.control.fork ?? null, error: v.control.error ?? null, state: controlResult(v)?.state ?? null } : null,
       kinds: Object.fromEntries(RUN_KINDS.filter(kind => (v.files?.[kind] ?? []).length).map(kind => [kind, v.result?.[kind] ? { state: v.result[kind].state, tests: v.result[kind].tests, pass: v.result[kind].pass, fail: v.result[kind].fail, skipped: v.result[kind].skipped, files: (v.result[kind].files ?? []).map(f => ({ file: f.file, state: f.state, code: f.code, tests: f.tests, pass: f.pass, fail: f.fail, skipped: f.skipped })), failed: v.result[kind].failed ?? [] } : { state: v.state, files: v.files[kind].map(file => ({ file })) }])) } : null,
-    suite: suite ? { state: suite.state, head: job.suite?.head ?? null, exit: job.suite?.agent ? ctx.jobs.read(job.suite.agent).exit?.code ?? null : null, log: job.suite?.agent?.log ? basename(job.suite.agent.log) : null } : null,
+    suite: suite ? { state: suite.interruption ? 'interrupted' : suite.state, head: job.suite?.head ?? null, exit: !suite.interruption && job.suite?.agent ? ctx.jobs.read(job.suite.agent).exit?.code ?? null : null, log: job.suite?.agent?.log ? basename(job.suite.agent.log) : null, ...(interruption ? { interruption } : {}) } : null,
     ci: ci ? { state: ci.state } : null,
     review: review ? {
       state: review.state,
@@ -4072,7 +4088,10 @@ async function mergeCheck(ctx, job) {
         question: review.decision.question ?? `The review found a choice that issue #${job.issue} did not make: ${oneLine(item, 600)}. Which option do you want?` });
     }
     if (suite.state === 'missing') return end(ctx, job, cause('job', 'no-test-command', 'no full test command: set autopilot.testCommand in pdd.json'));
-    if (suite.state === 'broken') return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text, { owner: 'machine' }) : cause('pdd', 'suite-broken', suite.text));
+    if (suite.state === 'broken') {
+      if (suite.interruption || job.suite.interruption) saveEvidence(ctx, job, { lines, claims, ci, review, suite });
+      return end(ctx, job, suite.dead ? cause('job', 'no-result', suite.text, { owner: 'machine' }) : cause('pdd', 'suite-broken', suite.text));
+    }
     if (review.state === 'fail') { reds.push(`Review FAIL from a fresh reviewer: ${(review.mustFix ?? []).join('; ') || 'see the review comment on the PR'}`); nonTestReds++; }
     if (suite.state === 'fail') { reds.push(suite.text); if (suite.failure) reproduceChecks.push(suite.failure); }
   } else if (job.review?.head === job.head && job.review.verdict === 'FAIL') {
@@ -4126,7 +4145,7 @@ async function mergeCheck(ctx, job) {
   }
   // Something still runs (CI that still changes, a reviewer or a suite process): wait, and the quiet clock restarts.
   noteProgress(ctx, job, [job.head, ci.state, ci.sig, review.state, suite.state, vectors?.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
-    ci.state === 'pending' || review.state === 'running' || suite.state === 'running' || vectors?.state === 'running');
+    ci.state === 'pending' || review.state === 'running' || ['waiting', 'running', 'interrupted'].includes(suite.state) || vectors?.state === 'running');
   if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass' || vectors?.state === 'running') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
   // #3239 owner wait: files whose owners the path checks could not read on main (an unreadable pdd-bindings.json) keep
   // the PR out of the lane. The wait is not progress, so a quiet period is a pdd step stop (one PDD report, no END).
@@ -6564,8 +6583,15 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   if (mqLine) lines.push(mqLine);
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}${pddWords(fs, part)}` : '';
+  const suiteWords = (job) => {
+    if (!job.suite) return '-';
+    const queue = suiteQueueProgress(fs, ports.env, job.suite);
+    if (queue?.outcome === 'interrupted') return interruptedSuiteWords(queue.signal ?? readJson(fs, job.suite.agent?.exit)?.signal);
+    const current = queue?.state === 'waiting' ? `waiting for a check slot (position ${queue.position})` : `started${running(job, job.suite.agent, 'suite')}`;
+    return current + (job.suite.interruption ? `; last suite attempt ${interruptedSuiteWords(job.suite.interruption.signal)}` : '');
+  };
   for (const job of jobs) {
-    if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${named(job.review?.reviewIndependence) ? ` (${job.review.reviewIndependence})` : ''}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
+    if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${named(job.review?.reviewIndependence) ? ` (${job.review.reviewIndependence})` : ''}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${suiteWords(job)}, repairs ${job.repairs}${
       job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${runtimeWords(job)}${poolWords(job)}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
     else if (job.phase === 'released') lines.push(`#${job.issue} release pending: retry pdd autopilot release ${job.issue}`);

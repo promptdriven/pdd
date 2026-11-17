@@ -1,5 +1,6 @@
 import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
-import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
+import { calculateCheckCapacity, readSuiteProgress, suiteStatusWords } from '../src/test-suite-queue.mjs';
+import { startAgentJob } from '../src/agent-job.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -111,6 +112,9 @@ test('dead waiter is removed from position while an orphan with a live child ret
   assert.equal(f.started.length, 0, 'live orphan suites still occupy all slots');
   const orphan = (await import('../src/test-suite-queue.mjs')).readSuiteProgress({cwd:join(f.root,'seed-1'),env:f.env},f.ports);
   assert.equal(orphan.state, 'running'); assert.match(orphan.reason, /runner ended/);
+  const waiter = readSuiteProgress({cwd:join(f.root,'seed-4'),env:f.env},f.ports);
+  assert.deepEqual([waiter.state, waiter.outcome, waiter.signal, waiter.exitCode], ['finished', 'interrupted', null, null]);
+  assert.equal(JSON.parse(readFileSync(join(f.queue,'ticket-4.json'),'utf8')).state, 'waiting', 'status does not write the ticket');
   f.isAlive = pid => pid === process.pid || pid === -21 || pid === -22;
   await until(() => f.started.length === 1, 'dead child can release its slot');
 });
@@ -220,6 +224,49 @@ test('separate CLI processes and the compatibility script share the same three n
   assert.deepEqual(await Promise.all(children.map(item=>item.done)),[0,0,0,0,0]);
 });
 
+
+test('SIGTERM to a native waiting owner saves an interrupted ticket before wrapper exit', async t => {
+  const root = mkdtempSync(join(tmpdir(),'pdd-native-interruption-')), queue = join(root,'queue');
+  const env = {...process.env, HOME:root, PDD_STATE_DIR:root, PDD_SUITE_QUEUE:queue};
+  const activeCwd = join(root,'active'), waitingCwd = join(root,'waiting');
+  for (const path of [queue, activeCwd, waitingCwd]) mkdirSync(path);
+  writeFileSync(join(queue,'capacity.json'),JSON.stringify(withCheckLifetime(calculateCheckCapacity({checks:1},checkMachine({taskset:null}).ports))));
+  const args = command => [resolve('bin/pdd.mjs'), 'workflow', 'suite', '--command', command];
+  const active = spawn(process.execPath, args('touch started; until [ -e release ]; do sleep 0.05; done'), {cwd:activeCwd,env,stdio:'ignore'});
+  const activeDone = new Promise(done => active.once('close', done));
+  let waiter;
+  t.after(async () => {
+    writeFileSync(join(activeCwd,'release'),'');
+    await activeDone;
+    if (waiter && !existsSync(waiter.exit)) {
+      try { process.kill(-waiter.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      await until(() => existsSync(waiter.exit), 'wrapper finishes cleanup');
+    }
+    rmSync(root,{recursive:true,force:true});
+  });
+  await until(() => existsSync(join(activeCwd,'started')), 'the first suite holds the slot');
+  waiter = startAgentJob({id:'waiting',dir:root,cwd:waitingCwd,command:process.execPath,args:args('touch started; echo unexpected'),env});
+  const ticket = join(queue,'ticket-2.json');
+  await until(() => existsSync(ticket) && readFileSync(waiter.log,'utf8').includes('waiting for a check slot'), 'the second suite is waiting');
+  const read = () => JSON.parse(readFileSync(ticket,'utf8'));
+  const waiting = read();
+  assert.equal(readSuiteProgress({cwd:waitingCwd,env}).state, 'waiting');
+  assert.deepEqual([waiting.startedAt, waiting.childPid, waiting.recorderPid], [null, null, null]);
+  process.kill(waiting.pid, 'SIGTERM');
+  await until(() => existsSync(waiter.exit), 'the wrapper records the waiting owner exit');
+  const {code, signal} = JSON.parse(readFileSync(waiter.exit,'utf8'));
+  assert.deepEqual({code, signal}, {code:null, signal:'SIGTERM'});
+  const {state, outcome, startedAt, finishedAt, childPid, recorderPid, exitCode, counts, signal: ticketSignal} = read();
+  assert.deepEqual({state, outcome, startedAt, childPid, recorderPid, exitCode, counts, ticketSignal},
+    {state:'finished', outcome:'interrupted', startedAt:null, childPid:null, recorderPid:null, exitCode:null, counts:null, ticketSignal:'SIGTERM'});
+  assert.ok(finishedAt >= waiting.queuedAt);
+  const progress = readSuiteProgress({cwd:waitingCwd,env});
+  assert.equal(progress.outcome, 'interrupted');
+  assert.match(suiteStatusWords(progress), /interrupted.*did not run/i);
+  assert.equal(readFileSync(waiting.logPath).length, 0);
+  assert.equal(existsSync(join(waitingCwd,'started')), false);
+  assert.equal(readSuiteProgress({cwd:activeCwd,env}).state, 'running');
+});
 
 test('default queue identity is independent of repository homes and agent profiles', async () => {
   const {suiteQueueRoot} = await import('../src/test-suite-queue.mjs');
