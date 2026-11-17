@@ -1603,9 +1603,9 @@ test('E79 (B2, B3) a cut input ends with a marker and a pointer; the evidence re
   assert.match(w.job(17, 'review').input, /- Not covered: a "not run" line: Runtime - not run \(no prompt changed\); input cut: issue text \(25 more characters\)/);
 });
 
-test('E80 (B2) the owner table over 400 owned files is cut with a marker and never calls the rest unowned', async t => {
+test('E80 (B2) the owner table over 40 owned files is cut with a marker and never calls the rest unowned', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
-  const files = Object.fromEntries(Array.from({ length: 402 }, (_, i) => [`src/m${String(i).padStart(3, '0')}.js`, `export const m = ${i};\n`]));
+  const files = Object.fromEntries(Array.from({ length: 42 }, (_, i) => [`src/m${String(i).padStart(3, '0')}.js`, `export const m = ${i};\n`]));
   seed(w, { ...files, 'prompts/m.prompt.md': '# M\n\nThe modules.\n',
     'pdd-bindings.json': JSON.stringify({ schema_version: 'pdd.bindings.v1', modules: Object.keys(files).map(path => ({ module: path, stories: ['user_stories/s.md'], prompt: 'prompts/m.prompt.md' })) }) });
   w.issue(17); await w.tick();

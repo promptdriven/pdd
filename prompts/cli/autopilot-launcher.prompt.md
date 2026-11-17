@@ -91,8 +91,8 @@ start message. A doctor pass alone grants no approval or merge authority.
 A start then, in this order:
 
 1. Takes the admission lock to read and, for a new state, save the disabled state (`enabled: false`, no timer).
-2. Reads the repository settings ([Autopilot settings](autopilot.prompt.md)). Mode off returns exit 0 with its
-   message and `Choose observe or auto with pdd autopilot observe or pdd autopilot auto.`
+2. Reads the repository settings ([Autopilot settings](autopilot.prompt.md)). When no machine mode is set (`!machineMode(state)`) and the repository mode is `off` (including an external repository with no `pdd.json` when no `--mode` override is set), start returns exit 0 with its
+   message and `Choose observe or auto with pdd autopilot observe or pdd autopilot auto.` When a machine mode is set (`observe`, `auto`, or `off` which continues to step 7 to disable and stop the timer), start continues without requiring `pdd.json`.
 3. Reads the repository metadata (`gh repo view --json nameWithOwner,defaultBranchRef`) and saves `repo` and
    `defaultBranch`. A different saved repository refuses.
 4. Refuses an `autopilot.quietMinutes` below 2 times the core timer (20): `Autopilot did not start:
@@ -173,8 +173,8 @@ read-only Codex limits as `agentReady` (only `limited` holds intake; 97% weekly 
 multi-harness login pool is configured (`loadLoginPool(...).configured`), `selectLogin(opts)` (forwarding optional `allowedKinds` to `selectPoolLogin` and caching per-`allowedKinds` key until `exhaustLogin` clears it) and `exhaustLogin` from the
 [login pool](login-pool.prompt.md), the package version, an `alert` port that sends
 one alert of the given kind for the issue through this machine's [alert destination](autopilot-alerts.prompt.md) with
-the core's cause, tried and need, the core state folder, the report folder and `tickMinutes` (the installed
-interval). When using native alerts (`!ports.sendAlert`), before `tickCore` runs, the tick runs `runAutopilotAlerts({action: 'retry', ...})` so open `failed` or newly-configured `not-configured` incidents of this repository from earlier ticks are retried once credentials recover. Before the core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
+the core's cause, tried and need, the core state folder, the report folder, `tickMinutes` (the installed
+interval), `etags` (`p.etags`, persisted right after `tickCore` as well as in the tick `finally` block so conditional `If-None-Match` `304 Not Modified` reads work across poll ticks), and on native ticks `wake` (`node src/autopilot-launcher.mjs --start-scan-wait IDENTITY`) so a finished child worker triggers an immediate follow-up tick with zero slot idle gap. When using native alerts (`!ports.sendAlert`), before `tickCore` runs, the tick runs `runAutopilotAlerts({action: 'retry', ...})` so open `failed` or newly-configured `not-configured` incidents of this repository from earlier ticks are retried once credentials recover. Before the core tick, the [machine guard](machine-guard.prompt.md) reads this machine once
 (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, share: state.share, jobs})`, where
 `jobs` is the sum of the core's `busySlots` over the core folder of every enabled state file beside this one: the
 share is for the whole machine, every repository; tests replace it with `ports.machineGuard`, #3231). The machine
