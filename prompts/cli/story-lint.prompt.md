@@ -1,6 +1,6 @@
 # Story quality lint
 
-Own `src/story-lint.mjs`. Check authored Story files locally so that Stories state user-observable behavior instead of implementation plumbing. Never call GitHub, Herdr, the PDD interpreter or a model, and never write a file.
+Own `src/story-lint.mjs`. Check authored Story files locally so that Stories state user-observable behavior and bounded acceptance criteria instead of implementation plumbing. Never call GitHub, Herdr, the PDD interpreter or a model, and never write a file.
 
 ## Scope
 
@@ -8,8 +8,8 @@ Own `src/story-lint.mjs`. Check authored Story files locally so that Stories sta
 
 When scanning a Story's lines (1-based line numbers):
 
-- Ignore fenced code blocks (```` ``` ```` or `~~~`, closed by a fence of the same mark and at least the opening length) and HTML comments (`<!-- … -->`), including multi-line comments, while keeping the original line numbers of surrounding text.
-- Inspect the `# ` title heading, the opening lines before the first `## ` heading, `## Acceptance criteria`, and `## What must not change` (also `## Must not change`; any letter case).
+- Ignore fenced code blocks (``` ``` ``` or `~~~`, closed by a fence of the same mark and at least the opening length) and HTML comments (`<!-- … -->`), including multi-line comments, while keeping the original line numbers of surrounding text.
+- Inspect the `# ` title heading, the opening lines before the first `## ` heading, `## Acceptance criteria` (also `## Acceptance`; any letter case), and `## What must not change` (also `## Must not change`; any letter case).
 - Skip other `## ` sections such as `## Rules to check`, `## Native checks`, `## Native validation` and `## Verification boundary`, where formal invariants or boundary notes belong.
 
 ## Problems
@@ -22,13 +22,18 @@ Check each inspected non-empty line in rule order and emit at most one problem p
 4. `story-generic-role`: the line names an unqualified non-person role (`As a user`, `As an end user`, `As the user`, `As a system`, `As the system` or `As a caller`, followed directly by punctuation, end-of-line or `I want` / `I can` / `I need`) instead of a real person or narrowed role. Qualified roles (`As a user of …`, `As a user with …`, `As a person who …`), named roles (`As a customer`, `As a shop owner`), `I can …`, or `# Title` followed by `## Acceptance criteria` are allowed.
 5. `story-vague-criterion`: inside `## Acceptance criteria`, the unquoted prose uses an ungrounded filler phrase (`works correctly`, `work correctly`, `handled gracefully`, `handle gracefully`, `properly handled`, `as expected`, `seamlessly`, `gracefully`, `properly` or `correctly`) without a concrete observable anchor on the same line (such as a quoted UI literal or an explicit exit/HTTP status or call count).
 
+When `criteriaHygiene` is enabled (`true` by default in `lintStory`):
+
+6. `story-missing-criteria`: the Story has no `## Acceptance criteria` (`## Acceptance`) heading or that section has zero numbered (`1.`, `1)`) or top-level bullet (`-`, `*`, `+`) items outside fenced blocks and comments. Report at the heading line when present, otherwise line 1.
+7. `story-bloated-criteria`: `## Acceptance criteria` (`## Acceptance`) has more than 8 acceptance items (counted across numbered items when any numbered item is present, otherwise top-level bullet items, without counting wrapped continuation lines). Report at the 9th item's line with the total count and advise splitting into smaller vertical Stories or moving formal invariants to `## Rules to check`.
+
 Each problem is `{path, line, code, message, excerpt}`, where `excerpt` is the trimmed offending line cut to at most 140 characters, and `message` states both why the match failed and how to rewrite it in user-observable terms.
 
 ## Public contract
 
 - `isLintableStoryPath(path)`: return `true` when `path` is a lintable Story path as above.
-- `lintStory(text, {path = 'user_stories/story.md'} = {})`: pure. Return `{ok, path, problems}`, with `ok` equal to `problems.length === 0`.
-- `lintStories(entries = [])`: pure. Accept `{path, text}` rows, skip rows where `!isLintableStoryPath(path)`, lint the rest in order, and return `{ok, problems}`.
+- `lintStory(text, {path = 'user_stories/story.md', criteriaHygiene = true} = {})`: pure. Return `{ok, path, problems}`, with `ok` equal to `problems.length === 0`.
+- `lintStories(entries = [], {criteriaHygiene = false} = {})`: pure. Accept `{path, text}` rows, skip rows where `!isLintableStoryPath(path)`, lint the rest with `{path: entry.path, criteriaHygiene}` in order, and return `{ok, problems}` so pre-PR and approval callers preserve existing admission unless `criteriaHygiene: true` is requested.
 - `formatStoryLint(result)`: pure. Return `''` when `!result` or `result.ok` or `!result.problems?.length`. Otherwise return plain text starting with `Story quality check failed:`, listing each `  PATH:LINE [CODE] MESSAGE` and `    > EXCERPT`, and ending with one rewrite instruction telling the author to state who uses the behavior, what they do and what they see, while keeping file paths, function signatures, hashes and bit-level internals in module prompts or tests.
 
 ## Callers and context

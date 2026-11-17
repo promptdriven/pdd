@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 1050aa4055fab55561d94b49373dc24cbde6473d57dc1171c5e976456d8f4092).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 0462bc1987c0a817bb5fb26daf0425cbb4634d0490dee1e484ba557f21446e45).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -16,8 +16,8 @@ ${command} --said - <<'PDD_SAID'
 PDD_SAID
 Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
-  { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--json',kind:'flag'},{name:'--date',kind:'text'},{name:'--snapshot',kind:'text'},{name:'--timezone',kind:'text'},{name:'--at',kind:'text'},{name:'--expected-source',kind:'text-list'}],
-    forms: [form('pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]', 'Show metrics for this repository.')] },
+  { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--json',kind:'flag'},{name:'--date',kind:'text'},{name:'--week',kind:'optional-text'},{name:'--snapshot',kind:'text'},{name:'--timezone',kind:'text'},{name:'--at',kind:'text'},{name:'--expected-source',kind:'text-list'}],
+    forms: [form('pdd metrics [--json] [--date YYYY-MM-DD | --week [YYYY-MM-DD] | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]', 'Show metrics for this repository.')] },
   { id: 'metrics.export', prefix: ['metrics', 'export'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [{name:'--timezone',kind:'text'}], forms: [form('pdd metrics export FILE [--timezone IANA]', 'Export metrics for sharing.')] },
   { id: 'metrics.import', prefix: ['metrics', 'import'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics import FILE', 'Import a metrics bundle.')] },
   { id: 'metrics.record', prefix: ['metrics', 'record'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics record FILE', 'Record explicit metrics observations.')] },
@@ -176,21 +176,23 @@ const routes = [
   { id: 'autopilot.trust', prefix: ['autopilot', 'trust'], local: 'autopilot-trust', operands: [{name:'name',type:'text',repeat:true}], options: [], forms: [form('pdd autopilot trust NAME...', 'Add explicitly trusted GitHub names.')] },
   { id: 'autopilot.untrust', prefix: ['autopilot', 'untrust'], local: 'autopilot-untrust', operands: [{name:'name',type:'text'}], options: [], forms: [form('pdd autopilot untrust NAME', 'Remove an explicitly trusted GitHub name.')] },
   { id: 'accounts', prefix: ['accounts'], local: 'accounts', operands: [], options: [{ name: '--json', kind: 'flag' }],
-    forms: [form('pdd accounts [--json]', 'List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.')] },
+    forms: [form('pdd accounts [--json]', 'List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites.')] },
   { id: 'accounts.list', prefix: ['accounts', 'list'], local: 'accounts', operands: [], options: [{ name: '--json', kind: 'flag' }],
-    forms: [form('pdd accounts list [--json]', 'List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, and pending invites.')] },
+    forms: [form('pdd accounts list [--json]', 'List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites.')] },
+  { id: 'accounts.status', prefix: ['accounts', 'status'], local: 'accounts', operands: [], options: [{ name: '--json', kind: 'flag' }],
+    forms: [form('pdd accounts status [--json]', 'Show Cloud account enrollment, isolated Codex home, shell auto-switch status, active leases, and token refresh/expiry health.')] },
   { id: 'accounts.add', prefix: ['accounts', 'add'], local: 'accounts', operands: [], options: [{ name: '--provider', kind: 'value', choices: ['codex', 'claude'] }, { name: '--label', kind: 'text' }, { name: '--loop', kind: 'flag' }, { name: '--device-auth', kind: 'flag' }, { name: '--with', kind: 'text' }],
-    forms: [form('pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]', 'Sign in inside an isolated folder, upload the encrypted bundle to PDD Cloud, strip the local refresh token, and optionally enroll in a loop or share immediately.')] },
+    forms: [form('pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]', "Sign in inside an isolated folder, upload the encrypted bundle to PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally enroll in a loop or share immediately.")] },
   { id: 'accounts.import', prefix: ['accounts', 'import'], local: 'accounts', operands: [], options: [{ name: '--provider', kind: 'value', choices: ['codex', 'claude'] }, { name: '--from', kind: 'text' }, { name: '--label', kind: 'text' }, { name: '--with', kind: 'text' }],
-    forms: [form('pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]', 'Import a local or external Codex auth.json or Claude token into PDD Cloud, strip any local refresh token, and optionally share immediately.')] },
+    forms: [form('pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]', "Import a local or external Codex auth.json or Claude token into PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally share immediately.")] },
   { id: 'accounts.use', prefix: ['accounts', 'use'], local: 'accounts', operands: [{ name: 'label', type: 'text' }], options: [],
-    forms: [form('pdd accounts use LABEL', 'Pin and materialize LABEL in ~/.codex/ or ~/.claude/settings.json.')] },
+    forms: [form('pdd accounts use LABEL', "Pin and materialize LABEL in PDD's isolated Codex home or ~/.claude/settings.json.")] },
   { id: 'accounts.next', prefix: ['accounts', 'next'], local: 'accounts', operands: [], options: [{ name: '--provider', kind: 'value', choices: ['codex', 'claude'] }],
-    forms: [form('pdd accounts next [--provider codex|claude]', 'Skip the active login and switch the local install to the next ready account sorted by soonest weekly reset.')] },
-  { id: 'accounts.sync', prefix: ['accounts', 'sync'], local: 'accounts', operands: [], options: [{ name: '--provider', kind: 'value', choices: ['codex', 'claude'] }, { name: '--quiet', kind: 'flag' }, { name: '--timeout-ms', kind: 'integer', min: 50, max: 60000 }],
-    forms: [form('pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]', 'Refresh the local stripped or gateway login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.')] },
+    forms: [form('pdd accounts next [--provider codex|claude]', 'Skip the active login and switch to the next ready account sorted by soonest weekly reset.')] },
+  { id: 'accounts.sync', prefix: ['accounts', 'sync'], local: 'accounts', operands: [], options: [{ name: '--provider', kind: 'value', choices: ['codex', 'claude'] }, { name: '--quiet', kind: 'flag' }, { name: '--print-codex-home', kind: 'flag', hidden: true }, { name: '--timeout-ms', kind: 'integer', min: 50, max: 60000 }],
+    forms: [form('pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]', 'Refresh the PDD-managed login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline.')] },
   { id: 'accounts.auto', prefix: ['accounts', 'auto'], local: 'accounts', operands: [{ name: 'mode', type: 'choice:on,off,status' }], options: [],
-    forms: [form('pdd accounts auto on|off|status', 'Manage the opt-in fail-open shell wrapper in ~/.zshrc and ~/.bashrc for plain terminal codex and claude launches (off by default).')] },
+    forms: [form('pdd accounts auto on|off|status', 'Manage the opt-in fail-open shell wrapper in ~/.zshrc, ~/.bashrc, and ~/.config/fish/config.fish for plain terminal codex and claude launches (off by default).')] },
   { id: 'accounts.pause', prefix: ['accounts', 'pause'], local: 'accounts', operands: [{ name: 'label', type: 'text' }], options: [],
     forms: [form('pdd accounts pause LABEL', 'Pause automatic leasing for LABEL.')] },
   { id: 'accounts.unpause', prefix: ['accounts', 'unpause'], local: 'accounts', operands: [{ name: 'label', type: 'text' }], options: [],
