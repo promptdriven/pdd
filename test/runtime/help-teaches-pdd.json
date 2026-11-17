@@ -3,12 +3,11 @@
   "story_path": "user_stories/help-teaches-pdd.md",
   "criteria": [
     {"id": "AC1", "text": "`pdd`, `pdd --help`, `pdd -h` and `pdd help` each name `pdd help prompting` and the full paths of the installed Prompting guide (`docs/prompting-guide.md`) and RUNBOOK (`RUNBOOK.md`), print nothing to stderr and exit with code 0."},
-    {"id": "AC2", "text": "`pdd help prompting` shows how to write a prompt file, `prompts/NAME.prompt.md`, with its `## Dependencies` section, prints nothing to stderr and exits with code 0."},
-    {"id": "AC3", "text": "`pdd help prompting` shows how to write a Story file, `user_stories/STORY.md`, with its numbered acceptance criteria, and the Story's test file, `tests/STORY.json`, and exits with code 0."},
-    {"id": "AC4", "text": "`pdd help prompting` names the commands `pdd test`, `pdd lint` and `pdd approve`, and exits with code 0."},
-    {"id": "AC5", "text": "`pdd help prompting` names the full paths of the installed `docs/prompting-guide.md` and `RUNBOOK.md`, and exits with code 0."},
-    {"id": "AC6", "text": "`pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says \"Unknown command\" and names `prompting`, and exits with code 2."},
-    {"id": "AC7", "text": "`pdd --help` and `pdd help prompting` never name a removed command (\"pdd check\", \"pdd try\" or \"workflow start\") and exit with code 0."}
+    {"id": "AC2", "text": "`pdd help prompting` shows how to write a prompt with `## Dependencies`, a Story with numbered acceptance criteria, and its test; it exits with code 0 and no stderr."},
+    {"id": "AC3", "text": "`pdd --help` opens with usage and starting examples, groups commands by purpose, and points to focused help rather than listing options like `--share` or approval examples."},
+    {"id": "AC4", "text": "`pdd help prompting` names `pdd test`, `pdd lint` and `pdd approve` and the full installed guide and RUNBOOK paths."},
+    {"id": "AC5", "text": "`pdd help autopilot` lists `pdd autopilot start`, and `pdd autopilot start --help` explains the `--share` range and default. `pdd help approve` shows the quoted `--said -` heredoc. All three exit with code 0 and no stderr."},
+    {"id": "AC6", "text": "`pdd prompting` is still an unknown command: it prints nothing to stdout, prints one line to stderr that says \"Unknown command\" and names `prompting`, and exits with code 2."}
   ],
   "initial_world": {"unexpected_launcher_calls": []},
   "simulation": {
@@ -41,10 +40,13 @@
         {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
         {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
         {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
-        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Usage: pdd <command> [options]"},
+        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Examples:"},
+        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Getting started:"},
+        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Prompts and tests:"},
+        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd help COMMAND"},
+        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "not_contains", "value": "--share"},
+        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "not_contains", "value": "PDD_SAID"},
         {"criterion_id":"AC1","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
       ]
     },
@@ -86,22 +88,49 @@
         {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "## Dependencies"},
         {"criterion_id": "AC2", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
         {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "user_stories/STORY.md"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "Acceptance criteria"},
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "contains", "value": "tests/STORY.json"},
-        {"criterion_id": "AC3", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "user_stories/STORY.md"},
+        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "Acceptance criteria"},
+        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "contains", "value": "tests/STORY.json"},
         {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd test"},
         {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd lint"},
         {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd approve"},
-        {"criterion_id": "AC4", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
-        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
-        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd check"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "pdd try"},
-        {"criterion_id": "AC7", "target": "result", "path": "/stdout", "op": "not_contains", "value": "workflow start"},
-        {"criterion_id": "AC7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0},
+        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "/docs/prompting-guide.md"},
+        {"criterion_id": "AC4", "target": "result", "path": "/stdout", "op": "contains", "value": "/RUNBOOK.md"},
         {"criterion_id":"AC2","target":"calls","path":"/resources/pdd-cli-autopilotLauncher-runAutopilotLauncher","op":"equals","value":0}
+      ]
+    },
+    {
+      "step_id": "help-autopilot-lists-commands",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["help", "autopilot"]},
+      "checks": [
+        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "pdd autopilot start"},
+        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "start-help-explains-share",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["autopilot", "start", "--help"]},
+      "checks": [
+        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "--share PERCENT"},
+        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "1-100, default 50"},
+        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "approval-help-has-quoted-example",
+      "entry_path": "prompts/cli/pdd-cli.prompt.md",
+      "operation": "runPdd",
+      "input": {"argv": ["help", "approve"]},
+      "checks": [
+        {"criterion_id": "AC5", "target": "result", "path": "/stdout", "op": "contains", "value": "--said - <<'PDD_SAID'\n<the person's exact words>\nPDD_SAID"},
+        {"criterion_id": "AC5", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "AC5", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {

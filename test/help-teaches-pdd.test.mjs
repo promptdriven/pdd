@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from '../src/argument-parser.mjs';
-import { PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
+import { PUBLIC_COMMAND_ROUTES } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 
 // Node checks of user_stories/help-teaches-pdd.md that the PDD interpreter cannot make: the two printed paths
@@ -15,11 +15,12 @@ import { runPdd } from '../src/pdd-cli.mjs';
 const root = realpathSync(fileURLToPath(new URL('..', import.meta.url)));
 const ROOT_HELP = [[], ['--help'], ['-h'], ['-help'], ['help']];
 const TOPIC = ['help', 'prompting'];
+const SCOPED_HELP = [['autopilot', '--help'], ['help', 'autopilot', 'start'], ['approve', '--help']];
 const FILES = { guide: 'docs/prompting-guide.md', runbook: 'RUNBOOK.md' };
 const sink = () => ({ text: '', write(value) { this.text += value; return true; } });
 const temp = t => { const p = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-help-'))); t.after(() => rmSync(p, { recursive: true, force: true })); return p; };
 const lines = text => text.replace(/\n$/, '').split('\n');
-const formLine = ({ form, description }) => `  ${form}  ${description}`;
+const withoutWrapping = text => text.replace(/\s+/g, ' ');
 const noRunner = new Proxy({}, { get() { assert.fail('Help must not reach the workflow runner'); } });
 async function pdd(argv, extra = {}) {
   const stdout = sink(), stderr = sink();
@@ -86,10 +87,10 @@ for(const key of ['readFileSync','readdirSync','statSync','lstatSync','existsSyn
   const original=fs[key];fs[key]=function(path,...rest){if(String(path)===home||String(path).startsWith(home+'/'))stop('fs.'+key+' in HOME')();return original.call(this,path,...rest);};}
 syncBuiltinESMExports();`);
   const env = { HOME: home, PATH: '', CLAUDE_CONFIG_DIR: '' };
-  for (const argv of [...ROOT_HELP, TOPIC]) {
+  for (const argv of [...ROOT_HELP, TOPIC, ...SCOPED_HELP]) {
     const result = spawnSync(process.execPath, ['--import', guard, join(root, 'bin', 'pdd.mjs'), ...argv], { cwd, env, encoding: 'utf8', timeout: 5000 });
     assert.equal(result.status, 0, `${argv.join(' ')}: ${result.stderr}`); assert.equal(result.stderr, '', argv.join(' '));
-    assertPackagePaths(result.stdout, root);
+    if (!SCOPED_HELP.includes(argv)) assertPackagePaths(result.stdout, root);
   }
   assert.equal(existsSync(log), false, existsSync(log) ? readFileSync(log, 'utf8') : '');
   assert.deepEqual(readdirSync(home), []); assert.deepEqual(readdirSync(cwd), []);
@@ -110,34 +111,62 @@ test('prompting is a help topic, not a command, and takes no other word', async 
   }
 });
 
-test('root help keeps its first line, every form line and its closing lines; command help is unchanged', async () => {
+test('root help opens with examples, groups commands and defers the detailed reference', async () => {
   const outputs = await Promise.all(ROOT_HELP.map(argv => pdd(argv)));
   for (const output of outputs) assert.equal(output.stdout, outputs[0].stdout);
-  const rootHelp = lines(outputs[0].stdout), scoped = lines((await pdd(['test', '--help'])).stdout);
-  const testRows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.split(' ')[1] === 'test').map(formLine);
-  // Command help: first line, empty line, its own forms, empty line and the three closing lines; no learn or path lines.
-  assert.equal(scoped[1], ''); assert.deepEqual(scoped.slice(2, 2 + testRows.length), testRows); assert.equal(scoped[2 + testRows.length], '');
-  const closing = scoped.slice(3 + testRows.length);
-  assert.equal(closing.length, 3);
-  assert.doesNotMatch(scoped.join('\n'), /help prompting|prompting-guide\.md|RUNBOOK\.md/);
-  // Root help: the same first line, every catalog form in order, the learn line and two path lines, the same closing lines.
-  const all = PUBLIC_COMMAND_MANIFEST.flatMap(row => formLine(row).split('\n'));
-  assert.ok(all.some(line => line.startsWith('  pdd help prompting  ')));
-  assert.equal(rootHelp[0], scoped[0]); assert.ok(rootHelp[0].startsWith('PDD'));
-  assert.equal(rootHelp[1], ''); assert.deepEqual(rootHelp.slice(2, 2 + all.length), all);
-  const rest = rootHelp.slice(2 + all.length);
-  assert.equal(rest[0], ''); assert.equal(rest[4], ''); assert.deepEqual(rest.slice(5), closing);
-  assert.ok(rest[1].includes('pdd help prompting'), rest[1]);
-  assert.ok(rest[2].endsWith(`/${FILES.guide}`) && rest[3].endsWith(`/${FILES.runbook}`), rest.join('\n'));
-  // The topic: the same first line, the steps, then only the two path lines; no closing lines.
-  const topic = lines((await pdd(TOPIC)).stdout);
-  assert.equal(topic[0], rootHelp[0]); assert.equal(topic[1], ''); assert.equal(topic.at(-3), '');
-  assert.deepEqual(topic.slice(-2), rest.slice(2, 4));
-  for (const line of closing) assert.ok(!topic.includes(line), line);
-  const text = topic.join('\n');
+  const text = outputs[0].stdout;
+  assert.match(text, /^PDD: .*\n\nUsage: pdd <command> \[options\]\n\nExamples:\n  pdd setup /);
+  assert.match(text, /Getting started:\n  pdd setup [\s\S]*Prompts and tests:\n  pdd test [\s\S]*Workflows:\n  pdd workflow [\s\S]*Autopilot:\n  pdd autopilot [\s\S]*Accounts:\n  pdd accounts [\s\S]*Inspection and tools:/);
+  assert.match(text, /pdd help COMMAND.*pdd COMMAND --help/);
+  assert.match(text, /pdd help workflow run/);
+  assert.doesNotMatch(text, /--share|--max-calls|PDD_SAID|pdd workflow approve/);
+  assert.ok(lines(text).length <= 60, 'root help stays scannable');
+  for (const line of lines(text)) {
+    if (!/^(Prompting guide|RUNBOOK):/.test(line)) assert.ok(line.length <= 80, line);
+  }
+  assert.doesNotMatch(text, /\bpdd (?:check|try)\b|\bworkflow start\b|\x1b/);
+});
+
+test('family help indexes commands and each route keeps its complete public usage', async () => {
+  const rootHelp = (await pdd(['--help'])).stdout;
+  const families = new Set(PUBLIC_COMMAND_ROUTES.filter(({ prefix }) => prefix.length > 1).map(({ prefix }) => prefix[0]));
+  for (const family of families) {
+    assert.ok(rootHelp.includes(`  pdd ${family} `), `${family} is discoverable from root help`);
+    const result = await pdd(['help', family]);
+    assert.deepEqual(result, await pdd([family, '--help']));
+    assert.equal(result.exit, 0, family);
+    const commands = lines(result.stdout);
+    for (const { prefix } of PUBLIC_COMMAND_ROUTES.filter(({ prefix }) => prefix.length > 1 && prefix[0] === family)) {
+      assert.ok(commands.includes(`  pdd ${prefix.join(' ')}`), prefix.join(' '));
+    }
+    assert.doesNotMatch(result.stdout, /PDD_SAID|--share|--adopt-corpus/);
+  }
+
+  for (const { prefix, forms } of PUBLIC_COMMAND_ROUTES) {
+    const result = await pdd(['help', ...prefix]);
+    assert.equal(result.exit, 0, prefix.join(' '));
+    assert.equal(result.stderr, '', prefix.join(' '));
+    const usages = result.stdout.replace('Usage:\n', 'Usage:\n\n').split('\n\n')
+      .filter(block => /^  pdd(?: |$)/.test(block)).map(block => withoutWrapping(block.trim()).replace(/\| (?=\w)/g, '|'));
+    for (const { form } of forms) assert.ok(usages.includes(form), form);
+    for (const line of lines(result.stdout)) assert.ok(line.length <= 80, line);
+  }
+  assert.equal((await pdd(['test', '--help'])).stdout, (await pdd(['help', 'test'])).stdout);
+  assert.doesNotMatch((await pdd(['test', '--help'])).stdout, /help prompting|RUNBOOK\.md|PDD_SAID/);
+  const start = (await pdd(['autopilot', 'start', '--help'])).stdout;
+  assert.match(withoutWrapping(start), /--share PERCENT.*1-100, default 50/);
+  for (const prefix of [['approve'], ['workflow', 'approve']]) {
+    const approval = (await pdd(['help', ...prefix])).stdout;
+    assert.match(approval, /^pdd (?:workflow )?approve (?:PATH|N) --said - <<'PDD_SAID'\n<the person's exact words>\nPDD_SAID$/m);
+    assert.match(withoutWrapping(approval), /strict_approvals true requires a person terminal/);
+  }
+});
+
+test('the prompting topic still teaches the local authoring loop and wraps its prose', async () => {
+  const result = await pdd(TOPIC, { packageRoot: '/package' });
+  const text = withoutWrapping(result.stdout);
   for (const name of ['prompts/NAME.prompt.md', '## Dependencies', 'user_stories/STORY.md', 'Acceptance criteria',
     'tests/STORY.json', 'pdd test', 'pdd lint', 'pdd approve']) assert.ok(text.includes(name), name);
-  for (const pattern of [/\bpdd check\b/, /\bpdd try\b/, /\bworkflow start\b/, /simulat/i]) {
-    assert.doesNotMatch(text, pattern); assert.doesNotMatch(rest.join('\n'), pattern);
-  }
+  assert.doesNotMatch(text, /\bpdd (?:check|try)\b|\bworkflow start\b|simulat/i);
+  for (const line of lines(result.stdout)) assert.ok(line.length <= 80, line);
 });

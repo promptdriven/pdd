@@ -5,7 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from './argument-parser.mjs';
 import { renderCompletion } from './completion.mjs';
-import { NAMES, PUBLIC_COMMAND_MANIFEST, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
+import { NAMES, PUBLIC_COMMAND_ROUTES, PUBLIC_HELP_TEXT } from './command-catalog.mjs';
 import { listWorkflowAreas, formatWorkflowList } from './workflow-areas.mjs';
 import { ignorePddFolder, setupProject as defaultSetupProject } from './project-setup.mjs';
 import { findSkills as defaultFindSkills, setupSkills as defaultSetupSkills, syncOwnedUserSkills as defaultSyncOwnedUserSkills } from './skills-install.mjs';
@@ -103,12 +103,50 @@ const RUNNER_ROUTES = {
   'workflow-open': plan => ['openRun', { ...profileOptions(plan), ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
 };
 const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));
-const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '', ...PUBLIC_HELP_TEXT.promptingLines, '', ...packageLines(packageRoot).slice(1)].join('\n');
+function wrapHelp(words, initial = '', continuation = initial) {
+  const lines = [];
+  let current = initial;
+  for (const word of words) {
+    const separator = current && !current.endsWith(' ') ? ' ' : '';
+    if (current.trim() && current.length + separator.length + word.length > 80) {
+      lines.push(current.trimEnd());
+      current = continuation + word;
+    } else current += separator + word;
+  }
+  return [...lines, current].join('\n');
+}
+const wrapHelpProse = (text, initial, continuation) => wrapHelp(text.split(/\s+/), initial, continuation);
+const renderTopic = (topic, packageRoot) => [PUBLIC_HELP_TEXT.heading, '',
+  ...PUBLIC_HELP_TEXT.promptingLines.map(text => wrapHelpProse(text, '', '   ')), '', ...packageLines(packageRoot).slice(1)].join('\n');
+const renderHelpGroup = ({ heading, entries }) => [`${heading}:`, ...entries.map(({ form, description }) =>
+  wrapHelpProse(description, `  ${form.padEnd(28)}  `, ' '.repeat(32)))].join('\n');
+function renderHelpEntry({ form, description }) {
+  const terms = form.match(/\[(?:[^\[\]]|\[[^\[\]]*\])*\]|\S+/g)
+    .flatMap(term => term.length <= 76 ? [term] : term.split(/\s+|(?<=\|)/));
+  return [wrapHelp(terms, '  ', '    '), ...description.split('\n\n').map(block =>
+    block.includes('\n') ? block : wrapHelpProse(block, '    '))].join('\n\n');
+}
 export function renderHelp(prefix = [], packageRoot = PACKAGE_ROOT) {
-  const rows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => !prefix.length
-    || prefix.every((word, index) => form.slice(4).split(/\s+/)[index] === word));
-  return [PUBLIC_HELP_TEXT.heading, '', ...rows.map(({ form, description }) => `  ${form}  ${description}`), '',
-    ...(prefix.length ? [] : [...packageLines(packageRoot), '']), ...PUBLIC_HELP_TEXT.closingLines].join('\n');
+  const { heading, usage, examples, groups, navigation } = PUBLIC_HELP_TEXT;
+  if (!prefix.length) return [heading, usage, renderHelpGroup(examples), ...groups.map(renderHelpGroup),
+    navigation.join('\n'), packageLines(packageRoot).join('\n')].join('\n\n');
+
+  const scope = prefix.join(' ');
+  const routes = PUBLIC_COMMAND_ROUTES.filter(route => prefix.every((word, index) => route.prefix[index] === word));
+  const ownRoute = routes.find(route => route.prefix.length === prefix.length);
+  const children = routes.filter(route => route !== ownRoute);
+  const command = `pdd ${scope}`;
+  const sections = [command];
+  if (children.length) {
+    const summary = groups.flatMap(group => group.entries).find(entry => entry.form === command)?.description;
+    if (summary) sections.push(wrapHelpProse(summary));
+  }
+  if (ownRoute) sections.push(`Usage:\n${ownRoute.forms.map(renderHelpEntry).join('\n\n')}`);
+  if (children.length) {
+    sections.push(['Commands:', ...children.map(route => `  pdd ${route.prefix.join(' ')}`)].join('\n'),
+      `For arguments and options: pdd help ${scope} COMMAND`);
+  }
+  return sections.join('\n\n');
 }
 export async function runPdd(argv, { stdout = process.stdout, stderr = process.stderr,
   cwd = process.cwd(), packageRoot = PACKAGE_ROOT, env = process.env, workflowRunner, workflowAreas,

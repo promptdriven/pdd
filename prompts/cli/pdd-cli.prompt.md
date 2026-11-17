@@ -161,7 +161,7 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 - [Autopilot alerts](autopilot-alerts.prompt.md): required native generation, verification and testing context for alert and destination dispatch.
 
-- [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for route facts, complete help entries and `PUBLIC_HELP_TEXT` heading, closing, Learn PDD and prompting topic templates. This module renders the common help wrapper and forwards parsed values; it does not own a second help table.
+- [Command catalog](command-catalog.prompt.md): required authoring/generation/runtime/verification/testing context for route facts, focused help entries and `PUBLIC_HELP_TEXT` overview, Learn PDD and prompting topic templates. This module renders help and forwards parsed values; it does not own a second help table.
 
 - [Workflow runner](workflow-runner.prompt.md#workspace-evidence-association): required authoring/generation/verification/testing context for the native evidence association dispatch. It owns registration, source and persistence policy; the syntax-only Interpreter entry does not bind this operation.
 - [Old-code proof](workflow-prove.prompt.md): required authoring/generation/runtime/verification context for the explicit prove dispatch and injected callback contract.
@@ -217,13 +217,15 @@ authentication or runtime-client import belongs to these routes.
 
 ## Help contract
 
-The required [catalog help text](command-catalog.prompt.md#help-text) owns the heading and closing lines. Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) prints the heading, one empty line, every complete [catalog help entry](command-catalog.prompt.md#help-forms) in order, one empty line, the learn line and the two path lines of [Learn PDD](command-catalog.prompt.md#learn-pdd), one empty line, then the closing lines. `pdd WORDS --help` prints the heading, one empty line, only the complete catalog help entries whose form starts with `pdd WORDS`, one empty line and the closing lines, with no learn or path lines. A [quiet name](argument-parser.prompt.md#quiet-names) gets the lines of its route: `pdd sim --help` gives the `pdd simulate` lines and `pdd workflow start --help` the `pdd workflow run` line. A removed name gets no help, also with a help flag or after `help`. Print each help entry exactly as the catalog lists it, including quoted heredocs, never a made-up `Usage:` line.
+Root help (`pdd`, `pdd --help`, `pdd -h`, `pdd help`) is identical for all four invocations. Start with the [catalog heading and usage](command-catalog.prompt.md#help-text), then `Examples:`, the named command groups, focused-help navigation and the [Learn PDD](command-catalog.prompt.md#learn-pdd) lines. Show only short labels and summaries, not the reference manifest.
 
-Render `pdd help prompting` from the catalog's heading, one empty line, prompting lines, one empty line and the two path lines. Substitute `PACKAGE_ROOT` with the absolute `packageRoot` of `runPdd`, defaulting to the parent folder of `src/`, never cwd or the person's repo. Read no file to print the paths. Help is exit 0, writes nothing to stderr and is local, with no runner, network or auth effects.
+`pdd help WORDS` and `pdd WORDS --help` render the same focused help for a known scope. Show `pdd WORDS` as the heading. For an exact route, show `Usage:` followed by all its [catalog forms](command-catalog.prompt.md#help-forms) and their descriptions. For a family, use `Commands:` to list each child route's canonical command with no operands or options, in catalog order, and explain how to request a child's help. Show the family's own forms first when it also has an exact route. Match on route prefixes, not substrings of formatted usages. A [quiet name](argument-parser.prompt.md#quiet-names) gets the help of its route. A removed name gets no help, also with a help flag or after `help`.
+
+Render `pdd help prompting` from the catalog's heading, one empty line, prompting lines, one empty line and the two path lines. Substitute `PACKAGE_ROOT` with the absolute `packageRoot` of `runPdd`, defaulting to the parent folder of `src/`, never cwd or the person's repo. Read no file to print the paths. Help is exit 0, writes nothing to stderr and is local, with no runner, network or auth effects. Do not probe PATH, inspect skills or change files for help.
 
 ## Help forms
 
-The required [command catalog](command-catalog.prompt.md#help-forms) owns every route form, description, order and multiline approval example. Render its complete selected help entries, including quoted heredocs. The catalog also owns the Learn PDD lines and prompting topic text. This dispatcher owns only the common wrapper, package-root path substitution and route-prefix filtering above. Do not keep a separate exact help table here.
+Render plain text for both terminals and pipes. Wrap prose and long usage lines at 80 columns, with indented continuations and blank lines between reference entries. Wrap at word boundaries, keeping bracketed option groups together when they fit and allowing a break after `|` in an overlong list of choices. Preserve whole installed-path lines and verbatim multiline examples (including unindented heredoc delimiters), even when a literal cannot fit the width. The catalog owns contents and order; do not keep a separate exact help table here.
 
 ## Local jobs
 
