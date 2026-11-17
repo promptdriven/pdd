@@ -421,6 +421,121 @@ function computePostMergeCounts(mergeRows, entries) {
   return counts;
 }
 
+export function selectCircuitBreakerRegression(newlyDetected, options = {}) {
+  if (!Array.isArray(newlyDetected) || !newlyDetected.length) return null;
+  const isRevert = item => object(item) && (item.kind === 'revert' || item.kind === 'reverted' || item.code === 'post-merge-revert');
+  const isCi = item => object(item) && (item.kind === 'ci' || item.kind === 'ci_broken' || item.code === 'post-merge-ci');
+  const chosen = newlyDetected.find(isRevert) ?? newlyDetected.find(isCi);
+  if (!chosen || !positive(chosen.pr)) return null;
+  const kind = isRevert(chosen) ? 'reverted' : 'ci_broken';
+  const code = isRevert(chosen) ? 'post-merge-revert' : 'post-merge-ci';
+  const issue = positive(chosen.issue) ? chosen.issue : Array.isArray(chosen.issues) ? chosen.issues.find(positive) ?? null : null;
+  const nowMs = (options.now ?? Date.now)();
+  const trippedAt = new Date(Number.isFinite(nowMs) ? nowMs : Date.now()).toISOString();
+  const detail = typeof chosen.detail === 'string' && chosen.detail.trim()
+    ? safe(chosen.detail).slice(0, 240)
+    : kind === 'reverted' ? 'merged change was reverted on the default branch' : 'default-branch CI failed after merge';
+  const reason = `PR #${chosen.pr}${issue ? ` (issue #${issue})` : ''} ${kind === 'reverted' ? 'reverted' : 'broke default-branch CI'}: ${detail}`;
+  return {
+    active: true,
+    kind,
+    code,
+    pr: chosen.pr,
+    issue,
+    trippedAt,
+    url: link(chosen.url),
+    reason,
+  };
+}
+
+const UNIVERSAL_NON_SHARD = /\b(?:lint|typecheck|build|install|setup|format|audit)\b/i;
+function parseShardFamily(name) {
+  if (typeof name !== 'string' || !name.trim()) return null;
+  const trimmed = name.trim();
+  const bracketed = /^(.+?)\s*(?:\(([^()]+)\)|\[([^\[\]]+)\])\s*$/.exec(trimmed);
+  if (bracketed) {
+    const family = bracketed[1].trim().toLowerCase();
+    const member = (bracketed[2] ?? bracketed[3] ?? '').trim().toLowerCase();
+    if (!family || !member) return null;
+    const familyNamedShard = /\b(?:shard|shards|matrix)\b/.test(family);
+    if (!familyNamedShard && UNIVERSAL_NON_SHARD.test(`${family} ${member}`)) return null;
+    const indexedMember = /\b(?:shard|part|slice|chunk)[-_\s]*\d+\b/.test(member)
+      || /\b\d+\s*\/\s*\d+\b/.test(member)
+      || /^(?:[^,]+,\s*)*\d+(?:\s*,\s*[^,]+)*$/.test(member);
+    if (familyNamedShard || indexedMember) return family;
+    return null;
+  }
+  const suffixed = /^(.+?)(?:[-_/\s]+(?:shard|matrix)[-_\s]*\d+(?:[-_\s]*of[-_\s]*\d+|\s*\/\s*\d+)?)\s*$/i.exec(trimmed);
+  if (suffixed && suffixed[1].trim() && !UNIVERSAL_NON_SHARD.test(suffixed[1])) {
+    return `${suffixed[1].trim().toLowerCase()}:shard`;
+  }
+  return null;
+}
+
+const extractRunId = row => positive(row?.run_id)
+  ? row.run_id
+  : Number(/\/actions\/runs\/(\d+)/.exec(String(row?.details_url ?? row?.html_url ?? ''))?.[1] ?? 0) || null;
+const goodConclusion = conclusion => ['success', 'neutral', 'skipped'].includes(conclusion);
+
+export function evaluateShardFlakeRerun({ checkRuns = [], statuses = [], headSha = '', flakeRerunHead = null } = {}) {
+  if (typeof headSha !== 'string' || !headSha || flakeRerunHead === headSha) return { action: 'none' };
+  if (!Array.isArray(checkRuns) || !checkRuns.length) return { action: 'none' };
+  if (Array.isArray(statuses) && statuses.some(s => object(s) && s.state !== 'pending' && s.state !== 'success')) {
+    return { action: 'none' };
+  }
+  const validRuns = checkRuns.filter(r => object(r) && typeof r.name === 'string' && r.name.trim());
+  const completed = validRuns.filter(r => r.status === 'completed');
+  const pending = validRuns.filter(r => r.status !== 'completed');
+  const failedRuns = completed.filter(r => !goodConclusion(r.conclusion));
+  if (failedRuns.length < 1 || failedRuns.length > 2) return { action: 'none' };
+
+  const familyOf = new Map();
+  const groups = new Map();
+  for (const run of validRuns) {
+    const family = parseShardFamily(run.name);
+    familyOf.set(run, family);
+    if (family) {
+      if (!groups.has(family)) groups.set(family, []);
+      groups.get(family).push(run);
+    }
+  }
+  const failedFamilies = new Set();
+  for (const run of failedRuns) {
+    const family = familyOf.get(run);
+    if (!family) return { action: 'none' };
+    failedFamilies.add(family);
+  }
+  const failedRunIds = new Set(failedRuns.map(extractRunId).filter(Boolean));
+  const sameWorkflowPending = pending.some(r => {
+    const id = extractRunId(r);
+    return id !== null && failedRunIds.has(id);
+  });
+
+  let needsSiblingWait = sameWorkflowPending;
+  for (const family of failedFamilies) {
+    const members = groups.get(family) ?? [];
+    const groupFailed = members.filter(r => r.status === 'completed' && !goodConclusion(r.conclusion));
+    const groupSucceeded = members.filter(r => r.status === 'completed' && r.conclusion === 'success');
+    const groupPending = members.filter(r => r.status !== 'completed');
+    if (groupFailed.length > 2) return { action: 'none' };
+    if (groupSucceeded.length + groupPending.length < 3) return { action: 'none' };
+    if (groupPending.length > 0 || groupSucceeded.length < 3) needsSiblingWait = true;
+  }
+
+  if (completed.length + pending.length < 4) return { action: 'none' };
+  if (needsSiblingWait || completed.length < 4) {
+    return pending.length > 0 ? { action: 'wait-siblings' } : { action: 'none' };
+  }
+
+  return {
+    action: 'rerun',
+    runIds: [...failedRunIds],
+    checkIds: [...new Set(failedRuns.map(r => r.id).filter(positive))],
+    failedNames: [...new Set(failedRuns.map(r => r.name))],
+    staleTokens: failedRuns.map(r => `r:${r.id ?? ''}:${r.name}:${r.conclusion}:${r.completed_at ?? r.started_at ?? ''}`),
+  };
+}
+
 export async function checkPostMergeRegressions(ports) {
   if (!ports?.root || !repository(ports.repo) || typeof ports.gh !== 'function') {
     throw Error('Post-merge regression check requires root, repo and gh ports.');

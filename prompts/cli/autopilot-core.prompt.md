@@ -207,14 +207,20 @@ ended or moved to the merge check before free slots are counted.
 changes nothing on the issue (no comment, no label), marks this machine's own open
 PR of that job as draft with one note (one try; a failure only warns) and cleans up
 locally with outcome `handed-over`. It never merges.
-6. Post-merge check (`#3182`): when `history.jsonl` has at least one `merged` PR and
-   `budget.state` is neither `low` nor `reserve`, run one bounded incremental post-merge
-   check (`ports.checkPostMerge`, default `checkPostMergeRegressions` loaded on demand)
-   inside a try/catch without holding any worker slot. For each `newlyDetected`
-   regression (`post-merge-reopen`, `post-merge-revert`, `post-merge-ci`), file or reopen
-   one deduplicated PDD report through the [report owner](autopilot-reports.prompt.md)
-   (`reproduced: true`, step `post-merge`) and append a `postMerge: true` forensic record
-   to `history.jsonl`. An error only warns and never blocks intake or jobs.
+6. Post-merge check (`#3182`, `#3484`): before the merge queue and active job loop, when
+   `history.jsonl` has at least one `merged` PR and `budget.state` is neither `low` nor
+   `reserve`, run one bounded incremental post-merge check (`ports.checkPostMerge`,
+   default `checkPostMergeRegressions` loaded on demand) inside a try/catch without
+   holding any worker slot. For each `newlyDetected` regression (`post-merge-reopen`,
+   `post-merge-revert`, `post-merge-ci`), file or reopen one deduplicated PDD report
+   through the [report owner](autopilot-reports.prompt.md) (`reproduced: true`, step
+   `post-merge`) and append a `postMerge: true` forensic record to `history.jsonl`. When
+   `selectCircuitBreakerRegression` selects a `post-merge-ci` or `post-merge-revert`
+   regression while the repository mode is `auto` (or `core.json` / `state` already holds
+   an active `circuitBreaker`), trip the safety circuit breaker: downgrade `settings.mode`
+   and `state.mode` from `auto` to `observe`, save `circuitBreaker` in `state` and
+   `core.json`, and send one deduplicated `test-suite` alert through `ports.alert`. An
+   error only warns and never blocks intake or jobs.
 7. Intake fills free slots (see below).
 8. After intake, call `intakeTick(ctx, rows)` of the
    [intake cards](autopilot-intake.prompt.md) inside a try/catch: with
@@ -555,6 +561,8 @@ until a CI run starts.` A check run in progress or completed (not a billing fail
 in any CI read clears `ciDown`; when no job read CI in a tick, intake reads the latest
 10 workflow runs at most every 10 minutes and clears it when one created after
 `since` is in progress or completed with success, neutral or skipped.
+
+**Single bounded shard-flake rerun** (#3484). In `ciState`, when a PR head is red and neither `job.flakeRerunHead` nor `job.reproduceRerun?.head` equals `head`, call `evaluateShardFlakeRerun`: on `wait-siblings` keep CI `pending` while sibling shards finish; on `rerun` invoke `gh run rerun <runId> --repo <repo> --failed` once per failed workflow run (falling back to REST `rerun-failed-jobs` or `check-runs/<id>/rerequest`), record `job.flakeRerunHead = head` and `job.ciRerunPending`, and wait on the next check instead of spending a repair round. If the rerun fails again at `head`, proceed normally to repair.
 
 **The loop guard** (lead decision, Nov 11): a fault of Autopilot or a service that
 never ends must not loop forever on one issue. Each step stop writes the history line
@@ -1878,7 +1886,7 @@ guard's machine line when the launcher gives one (`guard`, for example `Machine:
 share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷ 2, 8 GiB ÷ 3 GiB) = 2
 → 2 (automatic) · … · new work: held (memory pressure)`), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), the login-pool exhaustion line while `poolOut` is set (`Login pool exhausted since TIME: next reset at TIME.` or `Bounded retry window applies.`), the CI line
-while `ciDown` is set (`CI does not start: …`), any active-intake login hold (`state.intakeNote`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
+while `ciDown` is set (`CI does not start: …`), the circuit-breaker line while `circuitBreaker` is active in `state` or `core.json` (`Circuit breaker: mode downgraded from auto to observe at TIME (REASON); fix the default branch and run pdd autopilot start --mode auto to resume merges.`), any active-intake login hold (`state.intakeNote`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, with `; merge lane: final step`, `; merge lane: waiting for PR #P since TIME`,
 `; Runtime: waits for the interpreter maintenance since HH:MM UTC (until HH:MM UTC); no
 slot` or `; Runtime: the check that was not sent runs again`, `#N ending: …`), one line per step wait

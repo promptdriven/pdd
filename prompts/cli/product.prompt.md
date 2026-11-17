@@ -258,7 +258,9 @@ flowchart TD
     N -->|No| F[Start normal feature run]
 ```
 
-`productNext` lists unstarted runs whose Needs are satisfied and lists unresolved
+When a planned run's trusted issue is `CLOSED` on GitHub while the run is not `merged`, has no active local workflow (`running` or `waiting`), has no `OPEN` eligible PR, and its planned Stories do not all pass (`total === 0` or `pass < total`), `productStatus` reports its `state` as `issue closed (PASS of TOTAL pass)` (printed as `RUN: issue closed (PASS of TOTAL pass) · issue #N`) and treats the run as unstarted for `ready` and `waiting` (#3484).
+
+`productNext` lists unstarted runs (including closed-unbuilt runs above) whose Needs are satisfied and lists unresolved
 needs for waiting runs. Preserve plan order. When at least two runs are ready,
 its guidance says "These can run in parallel, or one person can start them in order."
 `runProduct` prints that guidance and the exact `pdd product start RUN` for each ready run.
@@ -278,7 +280,7 @@ its map ID first, such as `P01-menu.md` (use the first planned ID for its exampl
 fakes from contracts and `contracts/` must not change. Include exactly one run
 marker. Pass multiline text as data (a body argument or body file), never shell
 code. Repeated sequential starts reuse the issue, including a closed one; do not
-create another. Exactly-once issue creation by concurrent starts of the same
+create another. When the reused issue is closed-unbuilt as above, `productStart` reopens it on GitHub via optional port `reopenIssue({cwd, repository, number})` (defaulting to `gh api repos/OWNER/REPO/issues/N -X PATCH -f state=open` through `execFile`) before returning `--no-run` or starting the feature run. Exactly-once issue creation by concurrent starts of the same
 run is outside this promise.
 
 After saving the issue binding, `--no-run` returns it. Otherwise invoke
@@ -419,7 +421,7 @@ In product status, report journeys as a separate `parts` row with `part: "journe
 
 ```json
 {
-  "status": "approved", "prose_sha256": "f17c1578928d1c28b576b45b88c66b89429f93edafb5269c6bee5cbf5c98786f",
+  "status": "approved", "prose_sha256": "0ee00cf350782568fc91c82765f0a8770deca772742710c3a4b94859b8440bfd",
   "entries": [
     {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},

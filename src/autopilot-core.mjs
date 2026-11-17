@@ -349,6 +349,19 @@ function readMachine(fs, root, warn, now = Date.now()) {
     ciDown: object(m.ciDown) && Number.isFinite(m.ciDown.since) && ['queued', 'billing'].includes(m.ciDown.reason) ? m.ciDown : null,
     // #3252: every login in the multi-harness pool is exhausted or on cooldown (one record and one alert per outage).
     poolOut: object(m.poolOut) && Number.isFinite(m.poolOut.since) ? m.poolOut : null,
+    // #3484: post-merge safety circuit breaker that downgraded mode from auto to observe.
+    circuitBreaker: object(m.circuitBreaker) && m.circuitBreaker.active !== false && Number.isSafeInteger(m.circuitBreaker.pr) && m.circuitBreaker.pr > 0 && named(m.circuitBreaker.reason)
+      ? {
+          active: true,
+          kind: ['ci_broken', 'reverted'].includes(m.circuitBreaker.kind) ? m.circuitBreaker.kind : 'ci_broken',
+          code: ['post-merge-ci', 'post-merge-revert'].includes(m.circuitBreaker.code) ? m.circuitBreaker.code : 'post-merge-ci',
+          pr: m.circuitBreaker.pr,
+          issue: Number.isSafeInteger(m.circuitBreaker.issue) && m.circuitBreaker.issue > 0 ? m.circuitBreaker.issue : null,
+          trippedAt: named(m.circuitBreaker.trippedAt) ? m.circuitBreaker.trippedAt : new Date(now).toISOString(),
+          url: named(m.circuitBreaker.url) ? m.circuitBreaker.url : null,
+          reason: oneLine(m.circuitBreaker.reason, 300),
+        }
+      : null,
     // T10: the updated_at of each issue with pdd:needs-decision when the engine last read its answer.
     decisionSeen: Object.fromEntries(Object.entries(object(m.decisionSeen) ? m.decisionSeen : {}).filter(([n, at]) => /^\d+$/.test(n) && typeof at === 'string').slice(-200)) };
 }
@@ -2130,13 +2143,57 @@ async function ciState(ctx, head, job) {
   // #3260 (Stop owners): CI that GitHub does not start (queued with no job, or a billing failure) is a service wait.
   if (failed.length) {
     const out = await ciStart(ctx, job, head, runs, { state: 'red', failed, sig });
-    return out.state === 'red' ? { ...out, failure: await ciFailureDetails(ctx, runs, status, out.failed) } : out;
+    if (out.state !== 'red') return out;
+    if (job.flakeRerunHead !== head && job.reproduceRerun?.head !== head) {
+      const { evaluateShardFlakeRerun } = await import('./autopilot-regressions.mjs');
+      const flake = evaluateShardFlakeRerun({
+        checkRuns: runs?.check_runs ?? [],
+        statuses: status?.statuses ?? [],
+        headSha: head,
+        flakeRerunHead: job.flakeRerunHead ?? null,
+      });
+      if (flake.action === 'wait-siblings') {
+        return { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig: `shard-wait:${sig}` };
+      }
+      if (flake.action === 'rerun') {
+        const reran = await rerunShardFlake(ctx, job, head, flake);
+        if (reran > 0) return { state: 'pending', pending: out.failed, sig: `flake-rerun:${sig}` };
+      }
+    }
+    return { ...out, failure: await ciFailureDetails(ctx, runs, status, out.failed) };
   }
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
   // workflow file), never because a new head has no run yet.
   if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : ciStart(ctx, job, head, runs, { state: 'pending', pending: [], sig });
   if (stalePending.size) return { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig };
   return ciStart(ctx, job, head, runs, checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig });
+}
+async function rerunShardFlake(ctx, job, head, flake) {
+  let runIds = [...new Set((flake.runIds ?? []).filter(Number.isSafeInteger))];
+  if (!runIds.length) {
+    const wRuns = (await ctx.gh.ok('GET', `repos/${ctx.repo}/actions/runs?head_sha=${head}&per_page=20`).catch(() => null))?.workflow_runs ?? [];
+    runIds = wRuns.filter(r => r.status === 'completed' && !isGoodConclusion(r.conclusion) && Number.isSafeInteger(r.id)).map(r => r.id);
+  }
+  const okStatus = res => Number.isInteger(res?.status) && res.status >= 200 && res.status < 300;
+  let reran = 0;
+  for (const id of runIds.slice(0, 10)) {
+    const cli = await ctx.ports.gh(['run', 'rerun', String(id), '--repo', ctx.repo, '--failed']).catch(() => ({ code: 1 }));
+    if (cli?.code === 0) { reran++; continue; }
+    const res = await ctx.gh.call('POST', `repos/${ctx.repo}/actions/runs/${id}/rerun-failed-jobs`).catch(() => ({ status: 0 }));
+    if (okStatus(res)) reran++;
+  }
+  if (!reran) {
+    for (const id of [...new Set((flake.checkIds ?? []).filter(Number.isSafeInteger))].slice(0, 10)) {
+      const res = await ctx.gh.call('POST', `repos/${ctx.repo}/check-runs/${id}/rerequest`).catch(() => ({ status: 0 }));
+      if (okStatus(res)) reran++;
+    }
+  }
+  job.flakeRerunHead = head;
+  if (reran > 0 && flake.staleTokens?.length) {
+    job.ciRerunPending = { head, staleTokens: flake.staleTokens, until: ctx.now() + 2 * MIN };
+  }
+  ctx.saveJob(job);
+  return reran;
 }
 async function reviewState(ctx, job, prBody = '', preselected = null) {
   if (!job.review || job.review.head !== job.head || job.review.retry || !job.review.agent && !job.review.verdict) {
@@ -5632,6 +5689,12 @@ export async function tickCore(input, ports) {
   if (settings.mode === 'off') return { exitCode: 0, message: 'Autopilot is off.' };
   // The tick gap: a gap longer than the quiet period is a sleep (C1 rule in advance).
   const before = ctx.machineState();
+  const activeBreaker = (object(state.circuitBreaker) && state.circuitBreaker.active !== false ? state.circuitBreaker : null) ?? before.circuitBreaker;
+  if (activeBreaker && settings.mode === 'auto') {
+    settings.mode = 'observe';
+    state.mode = 'observe';
+    state.circuitBreaker = activeBreaker;
+  }
   ctx.gap = before.lastTick !== null && ctx.now() - before.lastTick > ctx.quiet ? { from: before.lastTick, hours: (ctx.now() - before.lastTick) / HOUR } : null;
   // The part of a shorter tick gap beyond one timer interval (a short sleep or a late timer) is not quiet time either.
   ctx.tickGap = before.lastTick !== null && !ctx.gap ? Math.max(0, ctx.now() - before.lastTick - (ports.tickMinutes ?? 10) * MIN) : 0;
@@ -5643,6 +5706,7 @@ export async function tickCore(input, ports) {
   if (input.budget?.state !== 'reserve') try { rows = await ports.listIssues(); } catch (error) { ctx.warn(`Autopilot core could not list issues: ${error.message}`); }
   const open = rows && new Map(rows.filter(row => !row.pull_request).map(row => [row.number, row]));
   if (open) await sweepWouldMerge(ctx, open, rows).catch(error => ctx.warn(`Autopilot core could not sweep would-merge issues: ${error.message}`));
+  await runPostMergeCheck(ctx);
   if (ctx.state.cwd && readMergeQueue(ctx.root, { fs: ctx.fs }).items.some(i => ['queued', 'processing', 'synced'].includes(i.state))) {
     await runCoreMergeQueue(ctx, settings.mode === 'auto' ? 'auto' : 'observe').catch(error => ctx.warn(`Autopilot core merge queue skipped: ${error.message}`));
   }
@@ -5749,7 +5813,6 @@ export async function tickCore(input, ports) {
     }
   }
   await sweepFiles(ctx);
-  await runPostMergeCheck(ctx);
   const b = ctx.budget;
   if (intakeMode(settings.intake) === 'active' && rows && b?.state !== 'low') {
     try { await collectActiveIntake(ctx, rows); } catch (error) { ctx.warn(`Autopilot intake (active) collect skipped: ${error.message}`); }
@@ -5776,7 +5839,11 @@ export async function tickCore(input, ports) {
   } catch (error) { ctx.warn(`Autopilot intake (${intakeMode(settings.intake)}) skipped this tick: ${error.message}`); }
   if (ctx.peers.size) { const m = ctx.machineState(); ctx.saveMachine({ ...m, peers: { ...m.peers, ...Object.fromEntries(ctx.peers) } }); }
   const busy = readJobs(ctx.fs, ctx.root).filter(holdsSlot).length, c = ctx.counts;
-  return { exitCode: 0, message: `Autopilot core${settings.mode === 'observe' ? ' (observe: no merge)' : ''}: ${c.started} started, ${c.merged} merged, ${c.wouldMerge ? `${c.wouldMerge} would merge, ` : ''}${c.ended} ended, ${c.repairs} repair(s); ${busy} of ${settings.runs} slots busy${hold ? `; ${hold}` : ''}.` };
+  return {
+    exitCode: 0,
+    message: `Autopilot core${settings.mode === 'observe' ? ' (observe: no merge)' : ''}: ${c.started} started, ${c.merged} merged, ${c.wouldMerge ? `${c.wouldMerge} would merge, ` : ''}${c.ended} ended, ${c.repairs} repair(s); ${busy} of ${settings.runs} slots busy${hold ? `; ${hold}` : ''}.`,
+    ...(ctx.circuitBreaker ? { circuitBreaker: ctx.circuitBreaker } : {}),
+  };
 }
 
 // ---- Cleanup (#3231) ----------------------------------------------------------------------------------------
@@ -5811,8 +5878,8 @@ async function runPostMergeCheck(ctx) {
   const hasMerged = chronological(ctx.fs, ctx.root).some(row => row.outcome === 'merged' && Number.isSafeInteger(row.pr) && row.pr > 0);
   if (!hasMerged && typeof ctx.ports.checkPostMerge !== 'function') return;
   try {
-    const checker = ctx.ports.checkPostMerge
-      ?? (await import('./autopilot-regressions.mjs')).checkPostMergeRegressions;
+    const regressionsMod = await import('./autopilot-regressions.mjs');
+    const checker = ctx.ports.checkPostMerge ?? regressionsMod.checkPostMergeRegressions;
     const result = await checker({ root: ctx.root, repo: ctx.repo, gh: ctx.ports.gh, fs: ctx.fs, now: ctx.now });
     for (const item of result?.newlyDetected ?? []) {
       const filed = await report(ctx, null, {
@@ -5839,6 +5906,24 @@ async function runPostMergeCheck(ctx) {
           ...(filed?.ref ? { report: filed.ref, reportState: filed.state } : { reportState: filed?.state ?? null }),
         });
       } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
+    }
+    const breaker = regressionsMod.selectCircuitBreakerRegression(result?.newlyDetected ?? [], { now: ctx.now });
+    if (breaker && (ctx.settings.mode === 'auto' || ctx.state.mode === 'auto')) {
+      ctx.settings.mode = 'observe';
+      ctx.state.mode = 'observe';
+      ctx.state.circuitBreaker = breaker;
+      ctx.circuitBreaker = breaker;
+      const m = ctx.machineState();
+      ctx.saveMachine({ ...m, circuitBreaker: breaker });
+      if (typeof ctx.ports.alert === 'function') {
+        await Promise.resolve(ctx.ports.alert({
+          issue: breaker.issue ?? breaker.pr,
+          kind: 'test-suite',
+          text: `Post-merge safety circuit breaker tripped (${breaker.code}): ${breaker.reason}`,
+          tried: 'Autopilot downgraded this repository from auto to observe mode so no more pull requests merge onto a broken default branch.',
+          need: 'Fix the default branch and run pdd autopilot start --mode auto to resume automatic merges.',
+        })).catch(error => ctx.warn(`Autopilot circuit-breaker alert failed: ${error.message}`));
+      }
     }
   } catch (error) { ctx.warn(`Autopilot post-merge check skipped this tick: ${error.message}`); }
 }
@@ -5875,6 +5960,10 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);
   lines.push(...poolLines(machine));
   lines.push(...ciLines(machine));
+  const breaker = (object(state?.circuitBreaker) && state.circuitBreaker.active !== false ? state.circuitBreaker : null) ?? machine.circuitBreaker;
+  if (breaker) {
+    lines.push(`Circuit breaker: mode downgraded from auto to observe at ${breaker.trippedAt} (${breaker.reason}); fix the default branch and run pdd autopilot start --mode auto to resume merges.`);
+  }
   if (intakeMode(settings.intake) === 'active' && named(state.intakeNote)) lines.push(oneLine(state.intakeNote, 300));
   const mqLine = mergeQueueStatusLine(ports.root, { fs });
   if (mqLine) lines.push(mqLine);

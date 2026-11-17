@@ -146,6 +146,27 @@ each newly seen signal key once in `newlyDetected` (`{pr, issue, issues,
 mergeCommit, mergedAt, kind, code, at, url, detail}`, with `code` equal to
 `post-merge-reopen`, `post-merge-revert` or `post-merge-ci`).
 
+### Safety circuit-breaker and shard-flake helpers (#3484)
+
+Export synchronous `selectCircuitBreakerRegression(newlyDetected, {now}?)`. Choose
+the first `revert`/`reverted` (`post-merge-revert`) item, or else the first
+`ci`/`ci_broken` (`post-merge-ci`) item, from `newlyDetected`; ignore `reopened`
+(`post-merge-reopen`). Return `{active: true, kind, code, pr, issue, trippedAt,
+url, reason}` with redacted single-line detail, or `null` when none qualifies.
+
+Export synchronous `evaluateShardFlakeRerun({checkRuns, statuses, headSha,
+flakeRerunHead})`. Return `{action: none}` when `headSha` is empty,
+`flakeRerunHead === headSha`, any commit status failed, zero or more than two
+check runs failed, or any failed check run is outside a matrix shard family
+(such as `lint`, `build`, `CI (lint)` or an unsharded job). When 1 or 2 matrix
+shard check runs fail: if sibling shards in a failed group or checks sharing a
+failed workflow run are still pending (or fewer than 4 checks have completed
+while total checks are at least 4 and passing plus pending siblings are at least
+3), return `{action: wait-siblings}`; once those pending checks finish, require
+at least 4 completed check runs and at least 3 `success` sibling shards in every
+failed shard group, returning `{action: rerun, runIds, checkIds, failedNames,
+staleTokens}` (otherwise `{action: none}`).
+
 ## Command adapter
 
 Export async `runAutopilotRegressions({cwd,env,json,file}, ports={})` returning

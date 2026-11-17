@@ -190,7 +190,7 @@ core makes its admission decision without blocking unrelated core work. The core
 settings come from `readCoreSettings(cwd, fs, {auto, runs: state.runs, hardwareSlots: guard.hardwareSlots})`, so this machine's `start --runs N` reaches
 the core and a machine without it gets its automatic slots; the core gets the guard as its `machine` port (the room
 check and each job's priority). Tests may replace core ports with `ports.corePorts`. Afterwards, under the admission lock and only while
-still enabled, it saves the issue-list cache, the base fields, `intakeNote` when present, `nextTick` (now plus `timerMinutes`) and `core: {at,
+still enabled, it saves the issue-list cache, the base fields, `intakeNote` when present, `mode: "observe"` plus `circuitBreaker` when `tickCore` newly tripped the post-merge safety circuit breaker (#3484; cleared when an operator runs `pdd autopilot start --mode auto` or `--mode off`), `nextTick` (now plus `timerMinutes`) and `core: {at,
 message}`.
 
 Each `gh` call goes through `countGithubCalls` into this repository's ledger in `ROOT/github/`, with its purpose

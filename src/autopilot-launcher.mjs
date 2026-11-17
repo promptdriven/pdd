@@ -254,6 +254,14 @@ function clearPauseState(stateFile) {
     save(coreFile, current);
   }
 }
+function clearCircuitBreaker(stateFile, state) {
+  delete state.circuitBreaker;
+  const coreFile = join(coreRoot(stateFile), 'core.json'), current = read(coreFile);
+  if (current && typeof current === 'object' && !Array.isArray(current) && 'circuitBreaker' in current) {
+    delete current.circuitBreaker;
+    save(coreFile, current);
+  }
+}
 function lockWait(p) {
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n));
   return { elapsed, began: elapsed(), sleep: p.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))), warned: false };
@@ -625,6 +633,7 @@ async function runCoreTick(stateFile, state, p, ports) {
     const latest = read(stateFile);
     if (latest?.enabled) {
       for (const key of ['defaultBranch', 'baseBranch', 'cachedIssues', 'etag', 'pages', 'issuesSince', 'issuesFullAt', 'intakeNote']) if (Object.hasOwn(state, key)) latest[key] = state[key]; else delete latest[key];
+      if (state.circuitBreaker && result?.circuitBreaker) { latest.mode = 'observe'; latest.circuitBreaker = state.circuitBreaker; }
       latest.core = { at: p.now(), message: result.message }; latest.nextTick = p.now() + timerMinutes(latest) * 60000; save(stateFile, latest);
     }
   } finally { release(); }
@@ -1124,6 +1133,7 @@ async function statusJsonPayload(input, ports, p) {
       runs: Number.isSafeInteger(state.runs) && state.runs > 0 ? state.runs : null,
       share: validShare(state.share) ? state.share : null,
       busySlots: busySlots(coreRoot(state.stateFile)),
+      ...(state.circuitBreaker ? { circuitBreaker: state.circuitBreaker } : {}),
     };
   });
   const g = obs.guard ?? {};
@@ -1510,6 +1520,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
     if (machineMode(state)) currentConfig.mode = machineMode(state);
     // A machine mode off is saved, and the timer stops: no tick runs until a start with --mode auto or observe.
     if (machineMode(state) === 'off') {
+      clearCircuitBreaker(stateFile, state);
       Object.assign(state, { enabled: false, timerInstalled: false, nextTick: null, controlRevision: randomUUID() }); save(stateFile, state);
       let stopped = '';
       try { await timer('stop', state, p); } catch (error) { stopped = ` The timer could not stop (${line(error.message)}); its ticks do nothing while the mode is off.`; }
@@ -1523,6 +1534,7 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return bad('Autopilot timer could not start; enable your systemd user session on Linux or launchctl user session on macOS, then retry.');
     }
     if (accountOverride && previous) clearPauseState(stateFile);
+    if (input.mode === 'auto') clearCircuitBreaker(stateFile, state);
     state.startAction = { command: 'pdd autopilot start', repository: state.repo, mode: currentConfig.mode };
     save(stateFile, state);
     let warning = '';

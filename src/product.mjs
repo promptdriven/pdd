@@ -132,6 +132,10 @@ const portsFor = given => {
     return {};
   };
   p.currentActor ??= async ({ cwd }) => parse(await command(p, cwd, 'gh', ['api', 'user', '--jq', '{login}']));
+  p.reopenIssue ??= async ({ cwd, repository, number }) => {
+    await command(p, cwd, 'gh', ['api', `repos/${repository}/issues/${number}`, '-X', 'PATCH', '-f', 'state=open']);
+    return {};
+  };
   const owned = new Map();
   p.openBaseSource ??= input => openBaseSource(input, p, owned);
   p.closeBaseSource ??= async ({ handle }) => {
@@ -466,8 +470,17 @@ async function progress(input, given, target) {
     }
     if (errors.length) throw Error(`Could not release the base-source view: ${errors.join('; ')}`);
   }
+  for (const detail of details) {
+    detail.storyCounts = counts(detail.run.stories, details);
+    const activeLocal = Boolean(detail.local && !['cancelled', 'completed'].includes(detail.local.state));
+    const hasOpenPr = Array.isArray(detail.prs) && detail.prs.some(pr => pr.state === 'OPEN');
+    const isClosed = typeof detail.issue?.state === 'string' && detail.issue.state.toUpperCase() === 'CLOSED';
+    const storiesIncomplete = detail.storyCounts.total === 0 || detail.storyCounts.pass < detail.storyCounts.total;
+    detail.closedUnbuilt = !detail.unverified && !detail.done && !activeLocal && !hasOpenPr && isClosed && storiesIncomplete;
+  }
+  const canStart = detail => !detail.unverified && (!detail.issue || detail.closedUnbuilt);
   const needsFor = run => run.needs.filter(need => need === 'plan PR' ? !planReady : targetBound ? false : !details.find(detail => detail.run.run === need)?.done);
-  const ready = details.filter(detail => !detail.issue && !needsFor(detail.run).length).map(detail => detail.run.run);
+  const ready = details.filter(detail => canStart(detail) && !needsFor(detail.run).length).map(detail => detail.run.run);
   return { p, product, details, ready, needsFor, localRuns, repo, lookup, bases: [...views.keys()], warning: [...new Set(warning)] };
 }
 
@@ -492,13 +505,13 @@ export async function productStatus(input, given = {}) {
   const result = { name: product.name, size: product.size, parts,
     slices: [...new Set(product.runs.map(run => run.slice))].map(slice => ({ slice, ...counts(product.runs.filter(run => run.slice === slice).flatMap(run => run.stories).filter(id => journeyIds.includes(id) || core.some(story => story.id === id)), details) })),
     runs: details.map(detail => ({ run: detail.run.run, issue: detail.issue?.number ?? null,
-      state: detail.unverified ? 'unverified' : detail.done ? 'merged' : detail.local ? `${detail.local.state}${detail.local.stage?.id ? ` (step: ${detail.local.stage.id})` : ''}` : detail.prs.length ? detail.prs.map(pr => `PR #${pr.number} (${pr.isDraft ? 'draft' : pr.state.toLowerCase()})`).join(', ') : detail.issue ? 'issue ready' : 'planned',
+      state: detail.unverified ? 'unverified' : detail.done ? 'merged' : detail.closedUnbuilt ? `issue closed (${detail.storyCounts.pass} of ${detail.storyCounts.total} pass)` : detail.local ? `${detail.local.state}${detail.local.stage?.id ? ` (step: ${detail.local.stage.id})` : ''}` : detail.prs.length ? detail.prs.map(pr => `PR #${pr.number} (${pr.isDraft ? 'draft' : pr.state.toLowerCase()})`).join(', ') : detail.issue ? 'issue ready' : 'planned',
       prs: detail.prs.map(pr => pr.number), fromPr: detail.fromPr })), ready, questions: product.questions, ...(warning.length ? { warnings: warning } : {}) };
   Object.defineProperty(result, comparisonBases, { value: bases }); return result;
 }
 export async function productNext(input, given = {}) {
   const { product, details, ready, needsFor, warning } = await progress(input, given);
-  return { ready, waiting: details.filter(detail => !detail.issue && needsFor(detail.run).length).map(detail => ({ run: detail.run.run, needs: needsFor(detail.run) })),
+  return { ready, waiting: details.filter(detail => !detail.unverified && (!detail.issue || detail.closedUnbuilt) && needsFor(detail.run).length).map(detail => ({ run: detail.run.run, needs: needsFor(detail.run) })),
     guidance: product.size === 'small' ? 'run one feature run' : ready.length >= 2 ? 'These can run in parallel, or one person can start them in order.' : '', ...(warning.length ? { warnings: warning } : {}) };
 }
 function issueTitle(product, run, warning) {
@@ -535,6 +548,9 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
       if (!createdNumber) invalid('Issue creation was not confirmed. Inspect GitHub before trying again.');
       issue = { number: createdNumber }; created = true;
       await state.lookup.bind(run, issue.number);
+    } else if (selected.closedUnbuilt) {
+      await p.reopenIssue({ cwd, repository: repo.repository, number: issue.number });
+      issue = { ...issue, state: 'OPEN' };
     }
     const warning = [...state.warning, ...warnings(product).filter(text => text.startsWith(`Warning: ${run} `)), ...(state.needsFor(planned).length ? [`Advice: ${run} still needs ${state.needsFor(planned).join(', ')}.`] : [])].join('\n');
     if (noRun) return { exitCode: 0, message: [warning, `Issue #${issue.number} ready for ${run}.`].filter(Boolean).join('\n'), issue: issue.number, created, started: false };
