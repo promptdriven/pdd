@@ -4,4 +4,8 @@ As a developer with the unscoped global `pdd` installation, I want upgrade to te
 
 ## Acceptance criteria
 
-1. When `pdd upgrade` runs from the unscoped global package, it exits with code 1 and explains the executable collision, giving the uninstall and install commands for the same npm prefix without running them.
+1. When pdd upgrade runs from the unscoped global package, it exits with code 1 and explains the executable collision, giving the uninstall and install commands for the same npm prefix without running them.
+
+```pdd-boundary
+prompts/cli/autopilot-update.prompt.md
+```

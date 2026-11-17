@@ -4,7 +4,7 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "When `pdd upgrade` runs from the unscoped global package, it exits with code 1 and explains the executable collision, giving the uninstall and install commands for the same npm prefix without running them."
+      "text": "When pdd upgrade runs from the unscoped global package, it exits with code 1 and explains the executable collision, giving the uninstall and install commands for the same npm prefix without running them."
     }
   ],
   "initial_world": {"realpaths": 0, "stats": 0, "exists": 0, "stderr": []},
