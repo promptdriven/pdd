@@ -1593,9 +1593,9 @@ runs until its end):
    or 1 leaves the decision to the refresh merge. On exit 1, merge with
    `merge.conflictStyle=diff3` in the job worktree and classify each conflicted file. A
    conflict never goes to a repair. Mechanical (fixed in the lane, no agent, the review
-   kept as `mechanical`, never a repair): M-a a hunk that differs only in derived
-   `Generated from P (sha256: …)` header lines (the header is then recomputed with
-   `promptHeaderHash` from the merged prompt P, so approval metadata does not change it);
+   kept as `mechanical`, never a repair): M-a a hunk inside the 4096-byte provenance header window that differs only in the hash suffix or header spelling of provenance
+   `Generated from P` / comment-prefixed `Prompt: P` header lines for the same prompt
+   path `P` (disagreeing prompt paths are not mechanical; M-a strips the hash suffix on those resolved header lines only);
    M-b pure inserts (one copy of identical text, else the base side
    first); M-c adjacent hunks that do not overlap (both applied); M-d a JSON file merged
    3-way (union of keys, a key changed on both sides is not mechanical, arrays that
@@ -1619,7 +1619,7 @@ runs until its end):
    a recheck: at the 3rd recheck the PR leaves the lane with no penalty and goes first
    again (L4); rechecks never count as conflict exits. There is no other refresh cap.
    **Review keep (debate B 5.5)**: F is the SHA-256 of the `+` and `-` lines of `git
-   diff -U0` from the merge base (without derived header lines), in path order. R1:
+   diff -U0` from the merge base (omitting in-place provenance header hash/spelling replacements for the same prompt path inside the 4096-byte header window), in path order. R1:
    the same F and file set before and after keeps the PASS review (`kept`). R2: a scoped
    check (`review.scoped {reason, detail, files}`: a short reviewer that reads only that
    part and answers "does the result keep both changes and break neither?") when the
@@ -1783,8 +1783,7 @@ with the native defaults named above.
 
 ## Dependencies
 
-- [File owner lookup](file-owner.prompt.md): required for `findOwners`, `resolveOwners`
-  and `promptHeaderHash` (M-a derived prompt headers).
+- [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries` and `resolveOwners`.
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
 - [Multi-harness login pool](login-pool.prompt.md): required for `isQuotaExhaustionMessage` and optional login selection/cooldown rotation.
 - [Autopilot telemetry](autopilot-telemetry.prompt.md): required for opt-in worker/reviewer model tiering, per-phase wall-clock tracking, and harness log token summaries.

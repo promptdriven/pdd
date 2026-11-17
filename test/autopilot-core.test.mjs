@@ -2599,27 +2599,109 @@ test('Q2 mechanical conflicts are fixed in the lane with no agent and no repair:
   assert.equal(w.started.filter(j => j.role === 'review').length, 1);
 });
 
-test('Q2b M-a: a conflict only in a derived hash header is fixed by recomputing it from the merged prompt', async t => {
+test('Q2b M-a: a conflict only in provenance headers resolves mechanically to a clean path-only header', async t => {
   const prompt = lines => approvedText(lines.join('\n'));
   const sha = text => promptHeaderHash(text);
   const base = prompt(['Rule 1.', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6.']);
   assert.notEqual(createHash('sha256').update(base).digest('hex'), sha(base), 'approval metadata is excluded from the generated prompt hash');
+  const pad = `// ${'p'.repeat(4200)}\n`;
+  const bodyTail = `export const x = 1;\n${pad}export const tpl = \`\n// Generated from prompts/tpl.prompt.md (sha256: ${'f'.repeat(64)})\n\`;\n`;
   const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
   w.baseCommit('prompts/x.prompt.md', base);
-  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${createHash('sha256').update(base).digest('hex')})\nexport const x = 1;\n`);
+  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${createHash('sha256').update(base).digest('hex')})\n${bodyTail}`);
   recordApproval(w, 'prompts/x.prompt.md', base);
   w.issue(17); await w.tick();
   const mine = prompt(['Rule 1 (PR).', 'Rule 2.', 'Rule 3.', 'Rule 4.', 'Rule 5.', 'Rule 6.']);
-  editIn(w, 17, 'prompts/x.prompt.md', mine); editIn(w, 17, 'src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(mine)})\nexport const x = 1;\n`);
+  editIn(w, 17, 'prompts/x.prompt.md', mine); editIn(w, 17, 'src/x.js', `// Prompt: prompts/x.prompt.md sha256=${sha(mine)}\n${bodyTail}`);
   recordApproval(w, 'prompts/x.prompt.md', mine);
   w.build(17, { body: 'Fixes #17\n\nRuntime: PASS\nPath: b — src/x.js, prompts/x.prompt.md — prompts/x.prompt.md — prompt changed — Test: done check' }); await greenLane(w, 17);
-  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(base)})\nexport const x = 1;\n`);
+  w.baseCommit('src/x.js', `// Generated from prompts/x.prompt.md (sha256: ${sha(base)})\n${bodyTail}`);
   await w.tick();
   const job = jobFile(w, 17);
   assert.ok(job.mechanical, `${roles(w, 17).join(',')}: ${job.conflict?.files?.join(',') ?? ''}`);
   const merged = w.git(job.worktree, 'show', `${job.head}:prompts/x.prompt.md`) + '\n';
   assert.match(merged, /Rule 1 \(PR\)\.[\s\S]*Rule 6\./);
-  assert.match(w.git(job.worktree, 'show', `${job.head}:src/x.js`), new RegExp(`sha256: ${sha(merged)}`), 'the header is recomputed from the merged prompt');
+  assert.equal(`${w.git(job.worktree, 'show', `${job.head}:src/x.js`)}\n`, `// Prompt: prompts/x.prompt.md\n${bodyTail}`, 'only the resolved line-1 provenance header loses its hash; template literals beyond 4 KiB stay untouched');
+
+  // Conflicting prompt-owner paths (b.prompt.md vs c.prompt.md) must NOT resolve mechanically via M-a.
+  const w2 = await coreWorld(t, { settings: { runs: 1 } }); w2.github.mergeMovesBase = true;
+  w2.baseCommit('prompts/a.prompt.md', base); w2.baseCommit('prompts/b.prompt.md', base); w2.baseCommit('prompts/c.prompt.md', base);
+  w2.baseCommit('src/owned.js', '// Prompt: prompts/a.prompt.md\nexport const owned = 1;\n');
+  for (const p of ['prompts/a.prompt.md', 'prompts/b.prompt.md', 'prompts/c.prompt.md']) recordApproval(w2, p, base);
+  w2.issue(18); await w2.tick();
+  editIn(w2, 18, 'src/owned.js', '// Prompt: prompts/b.prompt.md\nexport const owned = 1;\n');
+  w2.build(18, { body: 'Fixes #18\n\nRuntime: PASS\nPath: a — src/owned.js — prompts/b.prompt.md — code changed — Test: done check' }); await greenLane(w2, 18);
+  w2.baseCommit('src/owned.js', '// Prompt: prompts/c.prompt.md\nexport const owned = 1;\n');
+  await w2.tick();
+  const job2 = jobFile(w2, 18);
+  assert.equal(Boolean(job2.mechanical), false, 'conflicting prompt-owner paths must go to agent conflict resolution');
+  assert.ok(w2.started.some(j => j.issue === 18 && j.role === 'conflict'), 'agent conflict job starts when prompt owners disagree');
+
+  // Moving a provenance header from line 1 beyond the 4 KiB window during a conflict update must NOT preserve review.kept.
+  const w3 = await coreWorld(t, { settings: { runs: 1 } }); w3.github.mergeMovesBase = true;
+  w3.baseCommit('prompts/m.prompt.md', base); recordApproval(w3, 'prompts/m.prompt.md', base);
+  w3.baseCommit('src/m.js', `// Prompt: prompts/m.prompt.md\n${pad}export const v = 0;\n`);
+  w3.issue(19); await w3.tick();
+  editIn(w3, 19, 'src/m.js', `// Prompt: prompts/m.prompt.md\n${pad}export const v = 1;\n`);
+  w3.build(19, { body: 'Fixes #19\n\nRuntime: PASS\nPath: a — src/m.js — prompts/m.prompt.md — code changed — Test: done check' }); await greenLane(w3, 19);
+  w3.baseCommit('src/m.js', `// Prompt: prompts/m.prompt.md\n${pad}export const v = 2;\n`);
+  await w3.tick();
+  const fix3 = w3.job(19, 'conflict');
+  assert.ok(fix3, 'conflict job started');
+  w3.git(fix3.cwd, 'fetch', '-q', 'origin', 'main');
+  try { w3.git(fix3.cwd, 'merge', '-q', 'origin/main'); } catch {}
+  writeFileSync(join(fix3.cwd, 'src/m.js'), `${pad}// Prompt: prompts/m.prompt.md\nexport const v = 1;\n`);
+  w3.git(fix3.cwd, 'add', '.'); w3.git(fix3.cwd, 'commit', '-qm', 'merge main moving header past 4 KiB');
+  w3.build(19, { role: 'conflict', write: false }); await w3.tick();
+  const job3 = jobFile(w3, 19);
+  assert.notEqual(job3.review?.kept, true, 'moving a header beyond 4 KiB changes F so the prior PASS review is not silently kept');
+  assert.ok(job3.review?.scoped, 'a scoped review check is required when a header moves');
+
+  // Deleting >4 KiB padding on ours must not allow M-a on a line that sat past 4 KiB in base and theirs; malformed hashes are not mechanical either.
+  const w4 = await coreWorld(t, { settings: { runs: 1 } }); w4.github.mergeMovesBase = true;
+  const ctxLines = '// context\n'.repeat(5);
+  w4.baseCommit('prompts/x.prompt.md', base); recordApproval(w4, 'prompts/x.prompt.md', base);
+  w4.baseCommit('pdd-bindings.json', bindings([['src/deep.js', 'prompts/x.prompt.md'], ['src/badhash.js', 'prompts/x.prompt.md']]));
+  w4.baseCommit('src/deep.js', `${pad}${ctxLines}// Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nexport const deep = 1;\n`);
+  w4.baseCommit('src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad0\nexport const bad = 1;\n');
+  w4.issue(20); await w4.tick();
+  editIn(w4, 20, 'src/deep.js', `${ctxLines}// Prompt: prompts/x.prompt.md sha256=${'a'.repeat(64)}\nexport const deep = 1;\n`);
+  w4.build(20, { body: 'Fixes #20\n\nRuntime: PASS\nPath: a — src/deep.js — prompts/x.prompt.md — code changed — Test: done check' }); await greenLane(w4, 20);
+  w4.baseCommit('src/deep.js', `${pad}${ctxLines}// Prompt: prompts/x.prompt.md sha256=${'c'.repeat(64)}\nexport const deep = 1;\n`);
+  await w4.tick();
+  assert.equal(Boolean(jobFile(w4, 20).mechanical), false, 'header-shaped line past 4 KiB in base/theirs does not resolve via M-a');
+
+  const w5 = await coreWorld(t, { settings: { runs: 1 } }); w5.github.mergeMovesBase = true;
+  w5.baseCommit('prompts/x.prompt.md', base); recordApproval(w5, 'prompts/x.prompt.md', base);
+  w5.baseCommit('pdd-bindings.json', bindings([['src/badhash.js', 'prompts/x.prompt.md']]));
+  w5.baseCommit('src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad0\nexport const bad = 1;\n');
+  w5.issue(21); await w5.tick();
+  editIn(w5, 21, 'src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad1\nexport const bad = 1;\n');
+  w5.build(21, { body: 'Fixes #21\n\nRuntime: PASS\nPath: a — src/badhash.js — prompts/x.prompt.md — code changed — Test: done check' }); await greenLane(w5, 21);
+  w5.baseCommit('src/badhash.js', '// Prompt: prompts/x.prompt.md sha256=bad2\nexport const bad = 1;\n');
+  await w5.tick();
+  assert.equal(Boolean(jobFile(w5, 21).mechanical), false, 'malformed non-64-hex sha256 suffixes do not resolve via M-a');
+
+  // Deleting a >4 KiB `-- ` comment during conflict resolution (moving a header into the 4 KiB window) must NOT preserve review.kept.
+  const w6 = await coreWorld(t, { settings: { runs: 1 } }); w6.github.mergeMovesBase = true;
+  const luaPad = `-- ${'p'.repeat(4050)}\n`;
+  w6.baseCommit('prompts/x.prompt.md', base); recordApproval(w6, 'prompts/x.prompt.md', base);
+  w6.baseCommit('pdd-bindings.json', bindings([['src/x.lua', 'prompts/x.prompt.md']]));
+  w6.baseCommit('src/x.lua', `${luaPad}-- Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nreturn 0\n`);
+  w6.issue(22); await w6.tick();
+  editIn(w6, 22, 'src/x.lua', `${luaPad}-- Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nreturn 1\n`);
+  w6.build(22, { body: 'Fixes #22\n\nRuntime: PASS\nPath: a — src/x.lua — prompts/x.prompt.md — code changed — Test: done check' }); await greenLane(w6, 22);
+  w6.baseCommit('src/x.lua', `${luaPad}-- Prompt: prompts/x.prompt.md sha256=${'b'.repeat(64)}\nreturn 2\n`);
+  await w6.tick();
+  const fix6 = w6.job(22, 'conflict');
+  assert.ok(fix6, 'lua conflict job started');
+  w6.git(fix6.cwd, 'fetch', '-q', 'origin', 'main');
+  try { w6.git(fix6.cwd, 'merge', '-q', 'origin/main'); } catch {}
+  writeFileSync(join(fix6.cwd, 'src/x.lua'), `-- Prompt: prompts/x.prompt.md sha256=${'a'.repeat(64)}\nreturn 1\n`);
+  w6.git(fix6.cwd, 'add', '.'); w6.git(fix6.cwd, 'commit', '-qm', 'merge main deleting -- padding');
+  w6.build(22, { role: 'conflict', write: false }); await w6.tick();
+  assert.notEqual(jobFile(w6, 22).review?.kept, true, 'deleted -- comment inside hunk is not ignored as diff metadata');
+  assert.ok(jobFile(w6, 22).review?.scoped, 'scoped review required when -- padding is deleted');
 });
 
 test('Q3 an agent conflict is a base update outside the lane (not a repair); a change inside the conflict file gets a scoped check, then it merges', async t => {

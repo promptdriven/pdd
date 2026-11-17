@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 4cf6a1a5b0695ed9d5e194d9825fef84cdc51b14c7be20b8c3dba3014cfade87).
+// Prompt: prompts/cli/autopilot-core.prompt.md
 import * as nativeFs from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -11,7 +11,7 @@ import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mj
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
-import { findOwners, promptHeaderHash, resolveOwners } from './file-owner.mjs';
+import { findOwners, headerEntries, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode } from './autopilot-intake.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
@@ -3349,39 +3349,199 @@ async function leaveLane(ctx, job) {
 }
 // ---- Collision rules (debate B) -------------------------------------------------------------------------
 const IDENTITY = ['-c', 'user.name=PDD Autopilot', '-c', 'user.email=pdd@noreply.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null'];
-const HEADER_LINE = /Generated from \S+\.prompt\.md \(sha256: [0-9a-f]*\)/;
-const RESERVE = HOUR;
-// The PR's changed lines: the + and - lines of `git diff -U0` in path order, without derived hash headers (M-a), its
-// file set and its hunks (start and length on the old side).
-function changedLines(diff, exclude = new Set()) {
-  const files = [], hunks = [], lines = [];
-  let path = null;
+const HEADER_WINDOW = 4096;
+const HEADER_STRIP = /^(\s*(?:(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from|(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*Prompt:) \S+\.prompt\.md)(?: \(sha256: [0-9a-f]{64}\)| sha256=[0-9a-f]{64})?(\.?\s*(?:\*\/|-->|"""|''')?\s*)$/;
+const gitRaw = async (ctx, args, cwd) => {
+  const r = await ctx.ports.git(args, { cwd });
+  return r.code === 0 ? String(r.stdout ?? '') : null;
+};
+function parseHeaderLine(raw) {
+  const cr = raw.endsWith('\r') ? '\r' : '', clean = cr ? raw.slice(0, -1) : raw;
+  if (clean.includes('\r')) return null;
+  const entries = headerEntries(clean);
+  if (!entries.length) return null;
+  const m = HEADER_STRIP.exec(clean);
+  return m ? { prompt: entries[0].prompt, stripped: `${m[1]}${m[2]}${cr}` } : null;
+}
+function headerLineLimit(text) {
+  if (text === null || text === undefined) return 0;
+  const raw = String(text), total = Buffer.byteLength(raw, 'utf8'), lines = raw.split('\n');
+  let pos = 0, count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const len = Buffer.byteLength(lines[i], 'utf8');
+    if (total <= HEADER_WINDOW ? pos + len <= HEADER_WINDOW : pos + len + 1 <= HEADER_WINDOW) count = i + 1;
+    else break;
+    pos += len + 1;
+  }
+  return count;
+}
+async function headerMaxLines(ctx, cwd, from, to, diff, exclude = new Set()) {
+  const needed = new Set();
+  let path = null, inSamePosHunk = false;
   for (const line of String(diff ?? '').split('\n')) {
     const file = /^diff --git a\/.* b\/(.*)$/.exec(line);
-    if (file) { path = file[1]; files.push(path); continue; }
-    if (!path || exclude.has(path) || /^(?:---|\+\+\+) /.test(line)) continue;
-    const h = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line);
-    if (h) { hunks.push({ path, start: Number(h[1]), length: h[2] === undefined ? 1 : Number(h[2]) }); continue; }
-    if (/^[+-]/.test(line) && !HEADER_LINE.test(line)) lines.push(`${path}\t${line}`);
+    if (file) { path = exclude.has(file[1]) ? null : file[1]; inSamePosHunk = false; continue; }
+    if (!path) continue;
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (h) { inSamePosHunk = h[1] === h[2]; continue; }
+    if (inSamePosHunk && (line.startsWith('-') || line.startsWith('+')) && parseHeaderLine(line.slice(1))) needed.add(path);
   }
+  if (!needed.size) return null;
+  const base = (await ctx.git(['merge-base', from, to], cwd).catch(() => from)).trim();
+  const out = new Map();
+  for (const file of needed) {
+    const [oldText, newText] = await Promise.all([
+      gitRaw(ctx, ['show', `${base}:${file}`], cwd),
+      gitRaw(ctx, ['show', `${to}:${file}`], cwd),
+    ]);
+    out.set(file, { old: headerLineLimit(oldText), new: headerLineLimit(newText) });
+  }
+  return out;
+}
+const RESERVE = HOUR;
+// The PR's changed lines: the + and - lines of `git diff -U0` in path order, omitting in-place hash/spelling-only
+// provenance header replacements for the same prompt path inside the 4 KiB header window, its file set and its hunks.
+function changedLines(diff, exclude = new Set(), limits = null) {
+  const files = [], hunks = [], lines = [];
+  let path = null, hunk = null;
+  const flush = () => {
+    if (!hunk) return;
+    const { filePath, oldStart, newStart, removed, added } = hunk;
+    hunk = null;
+    const skip = new Set();
+    if (oldStart === newStart) {
+      const cap = limits?.get(filePath);
+      let oldBytes = 0, newBytes = 0;
+      for (let k = 0; k < removed.length && k < added.length; k++) {
+        const rRaw = removed[k].slice(1), aRaw = added[k].slice(1);
+        const rLen = Buffer.byteLength(rRaw, 'utf8'), aLen = Buffer.byteLength(aRaw, 'utf8');
+        const inWin = cap
+          ? oldStart + k <= cap.old && newStart + k <= cap.new
+          : oldStart === 1 && oldBytes + rLen + 1 <= HEADER_WINDOW && newBytes + aLen + 1 <= HEADER_WINDOW;
+        if (inWin) {
+          const r = parseHeaderLine(rRaw), a = parseHeaderLine(aRaw);
+          if (r && a && r.prompt === a.prompt) skip.add(k);
+        }
+        oldBytes += rLen + 1; newBytes += aLen + 1;
+      }
+    }
+    for (let k = 0; k < removed.length; k++) if (!skip.has(k)) lines.push(`${filePath}\t${removed[k]}`);
+    for (let k = 0; k < added.length; k++) if (!skip.has(k)) lines.push(`${filePath}\t${added[k]}`);
+  };
+  for (const line of String(diff ?? '').split('\n')) {
+    const file = /^diff --git a\/.* b\/(.*)$/.exec(line);
+    if (file) { flush(); path = file[1]; files.push(path); continue; }
+    if (!path || exclude.has(path) || (!hunk && /^(?:---|\+\+\+) /.test(line))) continue;
+    const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (h) {
+      flush();
+      const oldStart = Number(h[1]), length = h[2] === undefined ? 1 : Number(h[2]), newStart = Number(h[3]);
+      hunks.push({ path, start: oldStart, length });
+      hunk = { filePath: path, oldStart, newStart, removed: [], added: [] };
+      continue;
+    }
+    if (!hunk) continue;
+    if (line.startsWith('-')) hunk.removed.push(line);
+    else if (line.startsWith('+')) hunk.added.push(line);
+  }
+  flush();
   return { files: files.sort(), hunks, fingerprint: createHash('sha256').update(lines.join('\n')).digest('hex') };
 }
-const changeOf = async (ctx, cwd, from, to, exclude) => changedLines(await ctx.git(['diff', '-U0', '--no-color', '--no-ext-diff', `${from}...${to}`], cwd), exclude);
+async function changeOf(ctx, cwd, from, to, exclude) {
+  const diff = await ctx.git(['diff', '-U0', '--no-color', '--no-ext-diff', `${from}...${to}`], cwd);
+  return changedLines(diff, exclude, await headerMaxLines(ctx, cwd, from, to, diff, exclude));
+}
 const sameList = (a, b) => a.length === b.length && a.every((value, i) => value === b[i]);
+function parseDiffHunks(diff) {
+  const out = [];
+  for (const line of String(diff ?? '').split('\n')) {
+    const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (!h) continue;
+    const bLen = h[2] === undefined ? 1 : Number(h[2]), sLen = h[4] === undefined ? 1 : Number(h[4]);
+    out.push({ bStart: bLen === 0 ? Number(h[1]) : Number(h[1]) - 1, bLen, sStart: sLen === 0 ? Number(h[3]) : Number(h[3]) - 1, sLen });
+  }
+  return out;
+}
+function locateConflicts(segments, bLines, oLines, tLines, h12, h13) {
+  let i12 = 0, i13 = 0, bIdx = 0, oIdx = 0, tIdx = 0;
+  const positions = new Map();
+  const atConflict = c => c && sameList(bLines.slice(bIdx, bIdx + c.base.length), c.base)
+    && sameList(oLines.slice(oIdx, oIdx + c.ours.length), c.ours)
+    && sameList(tLines.slice(tIdx, tIdx + c.theirs.length), c.theirs);
+  for (let s = 0; s < segments.length; s++) {
+    const seg = segments[s];
+    if (!seg.conflict) {
+      const nextC = segments[s + 1]?.conflict ? segments[s + 1] : null;
+      let rem = seg.clean.length;
+      while (rem > 0 || (nextC && !atConflict(nextC))) {
+        while (i12 < h12.length && (h12[i12].bStart + h12[i12].bLen < bIdx || (h12[i12].bLen > 0 && h12[i12].bStart < bIdx))) i12++;
+        while (i13 < h13.length && (h13[i13].bStart + h13[i13].bLen < bIdx || (h13[i13].bLen > 0 && h13[i13].bStart < bIdx))) i13++;
+        const a = i12 < h12.length && h12[i12].bStart === bIdx && h12[i12].sStart === oIdx ? h12[i12] : null;
+        const b = i13 < h13.length && h13[i13].bStart === bIdx && h13[i13].sStart === tIdx ? h13[i13] : null;
+        if (rem === 0 && atConflict(nextC)) break;
+        if (a && b && a.bLen === b.bLen && a.sLen === b.sLen && a.sLen <= rem) {
+          bIdx += a.bLen; oIdx += a.sLen; tIdx += b.sLen; rem -= a.sLen; i12++; i13++; continue;
+        }
+        if (a && !b && a.sLen <= rem && (i13 >= h13.length || a.bStart + a.bLen <= h13[i13].bStart)) {
+          bIdx += a.bLen; oIdx += a.sLen; tIdx += a.bLen; rem -= a.sLen; i12++; continue;
+        }
+        if (b && !a && b.sLen <= rem && (i12 >= h12.length || b.bStart + b.bLen <= h12[i12].bStart)) {
+          bIdx += b.bLen; oIdx += b.bLen; tIdx += b.sLen; rem -= b.sLen; i13++; continue;
+        }
+        if (rem === 0) break;
+        const nextB12 = i12 < h12.length ? h12[i12].bStart - bIdx : rem;
+        const nextB13 = i13 < h13.length ? h13[i13].bStart - bIdx : rem;
+        const step = Math.max(1, Math.min(rem, nextB12 > 0 ? nextB12 : rem, nextB13 > 0 ? nextB13 : rem));
+        bIdx += step; oIdx += step; tIdx += step; rem -= step;
+      }
+      continue;
+    }
+    positions.set(seg, atConflict(seg) ? { bIdx, oIdx, tIdx } : null);
+    bIdx += seg.base.length; oIdx += seg.ours.length; tIdx += seg.theirs.length;
+    while (i12 < h12.length && h12[i12].bStart + h12[i12].bLen <= bIdx && h12[i12].sStart + h12[i12].sLen <= oIdx) i12++;
+    while (i13 < h13.length && h13[i13].bStart + h13[i13].bLen <= bIdx && h13[i13].sStart + h13[i13].sLen <= tIdx) i13++;
+  }
+  return positions;
+}
+function normHeaderSide(lines, startIdx, cap) {
+  let sawHeader = false;
+  const rows = lines.map((line, idx) => {
+    const parsed = startIdx + idx + 1 <= cap ? parseHeaderLine(line) : null;
+    if (parsed) sawHeader = true;
+    return parsed;
+  });
+  return {
+    sawHeader,
+    out: lines.map((line, idx) => rows[idx] ? `\0${rows[idx].prompt}` : line),
+    stripped: lines.map((line, idx) => rows[idx] ? rows[idx].stripped : line),
+  };
+}
 // M-a to M-c for one diff3 block (arrays of lines; ours = the PR, theirs = the base branch). Null: an agent hunk.
-function resolveBlock(ours, base, theirs) {
-  if (sameList(ours, theirs) || sameList(theirs, base)) return ours;
-  if (sameList(ours, base)) return theirs;
-  if (!base.length) return [...theirs, ...ours];                                          // M-b: pure inserts, base side first
-  const strip = lines => lines.filter(line => !HEADER_LINE.test(line));
-  if (sameList(strip(ours), strip(theirs)) && sameList(strip(ours), strip(base))) return ours;   // M-a: only derived headers
+function resolveBlock(ours, base, theirs, maWindow = null) {
+  if (sameList(ours, theirs) || sameList(theirs, base)) return { lines: ours, maIndices: [] };
+  if (sameList(ours, base)) return { lines: theirs, maIndices: [] };
+  if (!base.length) return { lines: [...theirs, ...ours], maIndices: [] };                 // M-b: pure inserts, base side first
+  if (maWindow) {
+    const no = normHeaderSide(ours, maWindow.oIdx, maWindow.oCap);
+    const nb = normHeaderSide(base, maWindow.bIdx, maWindow.bCap);
+    const nt = normHeaderSide(theirs, maWindow.tIdx, maWindow.tCap);
+    if (no.sawHeader && sameList(no.out, nt.out) && sameList(no.out, nb.out)) {           // M-a: same prompt owner, only header hash/spelling differs
+      const maIndices = [];
+      const resolved = ours.map((line, idx) => {
+        if (!no.out[idx].startsWith('\0')) return line;
+        maIndices.push(idx);
+        return line !== theirs[idx] || line !== base[idx] ? no.stripped[idx] : line;
+      });
+      return { lines: resolved, maIndices };
+    }
+  }
   const region = side => { let from = 0, back = 0; while (from < base.length && from < side.length && side[from] === base[from]) from++;
     while (back < base.length - from && back < side.length - from && side[side.length - 1 - back] === base[base.length - 1 - back]) back++;
     return { from, to: base.length - back, lines: side.slice(from, side.length - back) }; };
   const a = region(ours), b = region(theirs);
   if (a.to <= b.from || b.to <= a.from) {                                                  // M-c: adjacent, not overlapping
     const [first, second] = a.from <= b.from ? [a, b] : [b, a];
-    return [...base.slice(0, first.from), ...first.lines, ...base.slice(first.to, second.from), ...second.lines, ...base.slice(second.to)];
+    return { lines: [...base.slice(0, first.from), ...first.lines, ...base.slice(first.to, second.from), ...second.lines, ...base.slice(second.to)], maIndices: [] };
   }
   return null;
 }
@@ -3412,36 +3572,67 @@ function mergeJson(base, ours, theirs) {
 }
 // One conflicted file after `git merge` with diff3 markers: its resolved text, or null with the agent hunks.
 async function resolveFile(ctx, cwd, file) {
-  const stage = n => ctx.git(['show', `:${n}:${file}`], cwd).then(text => text, () => null);
+  const stage = n => gitRaw(ctx, ['show', `:${n}:${file}`], cwd);
   if (file.endsWith('.json')) {
     const [b, o, t] = await Promise.all([stage(1), stage(2), stage(3)]);
     try {
       if (o === null || t === null) return { text: null };
       const merged = mergeJson(b === null ? undefined : JSON.parse(b), JSON.parse(o), JSON.parse(t));
       if (merged === CONFLICT) return { text: null };
-      const indent = /^\{\n(\s+)"/.exec(o)?.[1]?.length ?? (o.includes('\n') ? 2 : 0);
+      const indent = /^\{\r?\n(\s+)/.exec(o)?.[1]?.length ?? (o.includes('\n') ? 2 : 0);
       return { text: `${JSON.stringify(merged, null, indent)}\n` };
     } catch { return { text: null }; }
   }
   let text;
   try { text = ctx.fs.readFileSync(join(cwd, file), 'utf8'); } catch { return { text: null }; }
   if (text.includes('\0')) return { text: null };
+  const baseText = await stage(1);
   // A-b: an add/add of one path (no base stage) is never mechanical: an agent makes one file from both.
-  if (await stage(1) === null) return { text: null, hunks: [`(${file}: both sides added this file)\n${cutText(text, 4000, `read the conflict in the file: ${file}`)}`] };
-  const out = [], hunks = [], lines = text.split('\n');
+  if (baseText === null) return { text: null, hunks: [`(${file}: both sides added this file)\n${cutText(text, 4000, `read the conflict in the file: ${file}`)}`] };
+  const lines = text.split('\n'), segments = [], hunks = [];
+  let clean = [];
   for (let i = 0; i < lines.length; i++) {
-    if (!lines[i].startsWith('<<<<<<< ')) { out.push(lines[i]); continue; }
-    const part = { ours: [], base: [], theirs: [] };
+    if (!lines[i].startsWith('<<<<<<< ')) { clean.push(lines[i]); continue; }
+    segments.push({ clean }); clean = [];
+    const part = { conflict: true, ours: [], base: [], theirs: [], valid: false };
     let where = 'ours', j = i + 1;
     for (; j < lines.length && !lines[j].startsWith('>>>>>>> '); j++) {
       if (lines[j].startsWith('||||||| ')) where = 'base'; else if (lines[j] === '=======') where = 'theirs'; else part[where].push(lines[j]);
     }
+    part.valid = where === 'theirs' && j < lines.length;
     hunks.push(lines.slice(i, j + 1).join('\n'));
-    const resolved = where === 'theirs' ? resolveBlock(part.ours, part.base, part.theirs) : null;
-    if (!resolved) return { text: null, hunks };
-    out.push(...resolved); i = j;
+    segments.push(part); i = j;
   }
-  return { text: out.join('\n'), hunks };
+  segments.push({ clean });
+  let positions = null, bCap = 0, oCap = 0, tCap = 0;
+  if (segments.some(seg => seg.conflict && seg.ours.some(parseHeaderLine))) {
+    const [oursText, theirsText, d12, d13] = await Promise.all([
+      stage(2),
+      stage(3),
+      gitRaw(ctx, ['diff', '-U0', '--no-color', '--no-ext-diff', `:1:${file}`, `:2:${file}`], cwd),
+      gitRaw(ctx, ['diff', '-U0', '--no-color', '--no-ext-diff', `:1:${file}`, `:3:${file}`], cwd),
+    ]);
+    if (oursText !== null && theirsText !== null && d12 !== null && d13 !== null && !baseText.includes('\0') && !oursText.includes('\0') && !theirsText.includes('\0')) {
+      bCap = headerLineLimit(baseText); oCap = headerLineLimit(oursText); tCap = headerLineLimit(theirsText);
+      positions = locateConflicts(segments, baseText.split('\n'), oursText.split('\n'), theirsText.split('\n'), parseDiffHunks(d12), parseDiffHunks(d13));
+    }
+  }
+  const out = [], maOutLines = [];
+  for (const seg of segments) {
+    if (!seg.conflict) { out.push(...seg.clean); continue; }
+    if (!seg.valid) return { text: null, hunks };
+    const loc = positions?.get(seg);
+    const resolved = resolveBlock(seg.ours, seg.base, seg.theirs, loc ? { ...loc, bCap, oCap, tCap } : null);
+    if (!resolved) return { text: null, hunks };
+    for (const idx of resolved.maIndices) maOutLines.push(out.length + idx + 1);
+    out.push(...resolved.lines);
+  }
+  const mergedText = out.join('\n');
+  if (maOutLines.length) {
+    const mCap = headerLineLimit(mergedText);
+    if (maOutLines.some(lineNo => lineNo > mCap)) return { text: null, hunks };
+  }
+  return { text: mergedText, hunks };
 }
 // The conflict rule of the final step (debate B 5.4; this is the one place). git merge-tree first: clean is null.
 // Otherwise merge with diff3 in the job worktree and resolve mechanical hunks (M-a derived hash headers, recomputed;
@@ -3467,14 +3658,6 @@ async function laneConflict(ctx, job) {
     await ctx.git(['merge', '--abort'], cwd).catch(() => {});
     const all = hunks.join('\n\n');
     return { agent: { files, hunks: cutText(all, 12000, `read the conflict in the files: ${files.join(', ')}`), cut: Math.max(0, all.length - 12000) } };
-  }
-  // M-a: recompute the derived hash headers of the fixed files from their prompts.
-  for (const file of files) {
-    const text = ctx.fs.readFileSync(join(cwd, file), 'utf8'), m = /Generated from (\S+\.prompt\.md) \(sha256: [0-9a-f]*\)/.exec(text);
-    if (m && ctx.fs.existsSync(join(cwd, m[1]))) {
-      const prompt = ctx.fs.readFileSync(join(cwd, m[1]));
-      ctx.fs.writeFileSync(join(cwd, file), text.replace(m[0], `Generated from ${m[1]} (sha256: ${promptHeaderHash(prompt)})`));
-    }
   }
   await ctx.git(['add', '--', ...files], cwd);
   await ctx.git([...IDENTITY, 'commit', '-q', '--no-edit', '-m', `Merge ${base} into ${job.branch} (mechanical conflict fix)`], cwd);
