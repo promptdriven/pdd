@@ -3,11 +3,11 @@
   "story_path": "user_stories/read-changed-test-value-warnings.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "terminal-plain-text",
       "text": "When a saved value in `tests/add.json` changes from `3` to `https://example.test/new?a=1&b=2`, the terminal warning shows the path and link as plain text."
     },
     {
-      "id": "AC2",
+      "id": "pull-request-literal-text",
       "text": "The pull request warning preserves the same path and link as literal text, escaped in the description so Markdown does not interpret it as a link."
     }
   ],
@@ -26,7 +26,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "terminal-plain-text",
           "target": "result",
           "path": "",
           "op": "equals",
@@ -46,7 +46,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "pull-request-literal-text",
           "target": "result",
           "path": "",
           "op": "equals",
