@@ -1,4 +1,4 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: 3cf4af56ad0e2ef6f92bdb4ce9dfb9a714ab545f3f5b1a56f2b3b2c36b776f38).
+// Prompt: prompts/cli/svg-layout.prompt.md
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';

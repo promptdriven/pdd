@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 678371f44bf3221f9cdf62ee5139df325fc659cd2ceb9d70c82a675faed0b310).
+// Prompt: prompts/cli/repo-hygiene-lint.prompt.md
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { isTestOwnedPath } from './file-owner.mjs';

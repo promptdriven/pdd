@@ -1,4 +1,4 @@
-// Generated from prompts/cli/story-lint.prompt.md (sha256: 3817742917fae7d0515522c4945a7bac64015469b3784dab2a3e3c87ecd69d41).
+// Prompt: prompts/cli/story-lint.prompt.md
 import { isAbsolute } from 'node:path';
 
 const IMPL_DIR = /(?:^|[\s"'(\[`])((?:src|lib|internal|pkg|cmd|__tests__)\/[A-Za-z0-9_./-]+|(?:dist|build)\/[A-Za-z0-9_./-]*[./][A-Za-z0-9_./-]+|prompts\/(?:cli|tests?|__tests__)\/[A-Za-z0-9_./-]+)/;

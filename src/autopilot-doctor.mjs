@@ -1,5 +1,4 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 35a8327d47854af6d29c311f20d6882e34b07ca097af289211d8af506687235c).
-// Source: prompts/cli/autopilot-doctor.prompt.md.
+// Prompt: prompts/cli/autopilot-doctor.prompt.md
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
 import {constants} from 'node:fs';
@@ -9,7 +8,6 @@ import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
-import './product.mjs';
 import {health as runtimeHealthCheck, runtimeClientSlice} from './runtime-seam.mjs';
 
 const {runtimeOrigin} = runtimeClientSlice();

@@ -1,3 +1,4 @@
+import { gitTemplateDir } from './git-template.mjs';
 import './test-home.mjs';
 import * as fs from 'node:fs';
 import {join,dirname,resolve} from 'node:path';
@@ -13,7 +14,7 @@ export const get=(root,path)=>JSON.parse(read(root,path));
 export function fixture(t,{bounded=true}={}){
   const temporary=fs.mkdtempSync(join(tmpdir(),'pdd-workspace-')),parent=fs.realpathSync(temporary),root=join(parent,'repo'),state=join(parent,'state');fs.mkdirSync(root);
   t.after(()=>fs.rmSync(temporary,{recursive:true,force:true}));
-  const git=spawnSync('git',['init','-q'],{cwd:root});if(git.status!==0)throw Error('fixture git init failed');
+  const emptyGit=gitTemplateDir('empty-git',tpl=>{const r=spawnSync('git',['init','-q'],{cwd:tpl});if(r.status!==0)throw Error('fixture git init failed');});fs.cpSync(join(emptyGit,'.git'),join(root,'.git'),{recursive:true});
   const story='simulation/user_stories/order.md',prompt='simulation/prompts/order.prompt.md',test='simulation/tests/order.json',second='simulation/tests/order.second.json';
   write(root,story,'# Order\n\nI can keep my values.\n\n## Acceptance criteria\n\n1. Keep value.\n');
   let text='# Order\n\nReturn the value.\n\n## Dependencies\n\n<details><summary>Runtime interface</summary>\n```json\n'+JSON.stringify({status:'draft',prose_sha256:'',entries:[{operation:'order',input_schema:{type:'object',properties:{},required:[],additionalProperties:false},result_schema:{type:'integer'},errors:[]}],calls:[],resources:[],limits:{max_steps:1,max_model_calls:1},conventions:[]})+'\n```\n</details>\n';
