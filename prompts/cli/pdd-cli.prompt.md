@@ -309,7 +309,7 @@ reply.
 ```json
 {
   "kind": "partial",
-  "status": "draft",
+  "status": "approved",
   "prose_sha256": "91557830c34a68b1751ca7de1551abcefb4a32fda9ddd66db732627ff959f920",
   "entries": [
     {
