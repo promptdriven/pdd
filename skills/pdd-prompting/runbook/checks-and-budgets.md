@@ -122,12 +122,11 @@ Keep the prompt short (500 prose lines or fewer; `pdd lint` warns above 500 line
 repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt. Keep each Story scenario JSON focused on policy and authority boundaries (15 steps or fewer and 1,000 lines or fewer), and prove multi-step state-machine or wire-protocol sequences with native tests (section 17).
 
 **A pure function:** one operation, input → result, no saved data, no `calls`. Each step costs 1 AI call.
-`initial_world` and `simulation` are `{}`. One step for the 2048 `board` prompt:
+One Short JSON step for the 2048 `board` prompt (`entry_path: "prompts/board.prompt.md"`):
 ```json
-{"step_id": "merge-row-left", "entry_path": "prompts/board.prompt.md", "operation": "move",
+{"id": "merge-row-left", "op": "move",
  "input": {"board": [[2,2,2,2],[0,0,0,0],[0,0,0,0],[0,0,0,0]], "dir": "left"},
- "checks": [{"criterion_id": "AC1", "target": "result", "path": "/board/0", "op": "equals", "value": [4,4,0,0]},
-            {"criterion_id": "AC1", "target": "result", "path": "/gained", "op": "equals", "value": 8}]}
+ "checks": {"1": [["result", "/board/0", "=", [4,4,0,0]], ["result", "/gained", "=", 8]]}}
 ```
 
 **A state sequence** (N moves in a row): one test step for each move. Steps run in order. Use one of these ways:
@@ -135,8 +134,7 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
   `{"kv": {"game": {"board": […], "score": 0}}}`. Each step makes one move. `world` checks read the state after it.
   Each step costs 2 to 3 AI calls.
 - The state goes in and comes out (`step(state, dir)` returns the new state): give each step the result of the step
-  before it. `"input": {"state": {"$step_result": {"step_id": "move-1", "path": ""}}, "dir": "up"}`. The path `""` is
-  the whole result. Put the reference inside `input`, not as all of `input`. It cannot name an error step. 1 AI call for each step.
+  before it with Short JSON `{"$step": "move-1"}` (or `"move-1#/board"` for a field, expanding to `{"$step_result": {"step_id": "move-1", "path": ""}}`). Put the reference inside `input`, not as all of `input`. It cannot name an error step. 1 AI call for each step.
 - If the app really accepts a list of moves, use short lists of about 10 per step. Check the expected state after
   each part and pass it to the next part; keep the same complete replay coverage. Link its rule prompt under
   `## Dependencies`. Do not invent a replay operation only for tests, or expand a short action into an unbounded
