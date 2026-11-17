@@ -2,9 +2,9 @@
   "schema_version": "prompt-runtime.program-scenario.v1",
   "story_path": "user_stories/service-build-version.md",
   "criteria": [
-    {"id": "AC1", "text": "When `/v1/version` reports engine revision \"0123456789abcdef0123456789abcdef01234567\" and service revision \"fedcba0987654321fedcba0987654321fedcba09\", `pdd -VV` prints \"PDD CLI: 0.1.29\", \"PDD interpreter: 0123456789abcdef0123456789abcdef01234567\", \"PDD service: fedcba0987654321fedcba0987654321fedcba09\" and the supported format lines, exiting with code 0."},
-    {"id": "AC2", "text": "When `/v1/version` includes `service_sha` as \"unknown\" or a value that is not 40 hexadecimal digits, `pdd -VV` prints \"PDD service: unknown\" without printing raw server text, exiting with code 0."},
-    {"id": "AC3", "text": "When `/v1/version` omits `service_sha`, `pdd -VV` omits the \"PDD service:\" line and keeps its existing output, exiting with code 0."}
+    {"id": "ac-sha256-7d8758126633673a3c742b24d58d4fa4b1bfeafb9fc78b08", "text": "When `/v1/version` reports engine revision \"0123456789abcdef0123456789abcdef01234567\" and service revision \"fedcba0987654321fedcba0987654321fedcba09\", `pdd -VV` prints \"PDD CLI: 0.1.29\", \"PDD interpreter: 0123456789abcdef0123456789abcdef01234567\", \"PDD service: fedcba0987654321fedcba0987654321fedcba09\" and the supported format lines, exiting with code 0."},
+    {"id": "ac-sha256-f0afe55645ba0ee18b03df33a75d3468a734dfe2c7708dc4", "text": "When `/v1/version` includes `service_sha` as \"unknown\" or a value that is not 40 hexadecimal digits, `pdd -VV` prints \"PDD service: unknown\" without printing raw server text, exiting with code 0."},
+    {"id": "ac-sha256-f2c1c6737572ddba9988cf0e8f60e924deaa0bb242d9d3ab", "text": "When `/v1/version` omits `service_sha`, `pdd -VV` omits the \"PDD service:\" line and keeps its existing output, exiting with code 0."}
   ],
   "initial_world": {
     "counters": {"origin": 0, "token": 0, "metadata": 0}
@@ -83,9 +83,9 @@
       "operation": "runDetailedVersion",
       "input": {"version": "0.1.29", "env": {}},
       "checks": [
-        {"criterion_id": "AC1", "target": "result", "path": "/stdout", "op": "equals", "value": "PDD CLI: 0.1.29\nPDD interpreter: 0123456789abcdef0123456789abcdef01234567\nPDD service: fedcba0987654321fedcba0987654321fedcba09\nInterface formats: prompt-runtime.interface.v4\nTest formats: prompt-runtime.program-scenario.v1\nApp-map formats: prompt-runtime.app-map.v1\n"},
-        {"criterion_id": "AC1", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
-        {"criterion_id": "AC1", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-7d8758126633673a3c742b24d58d4fa4b1bfeafb9fc78b08", "target": "result", "path": "/stdout", "op": "equals", "value": "PDD CLI: 0.1.29\nPDD interpreter: 0123456789abcdef0123456789abcdef01234567\nPDD service: fedcba0987654321fedcba0987654321fedcba09\nInterface formats: prompt-runtime.interface.v4\nTest formats: prompt-runtime.program-scenario.v1\nApp-map formats: prompt-runtime.app-map.v1\n"},
+        {"criterion_id": "ac-sha256-7d8758126633673a3c742b24d58d4fa4b1bfeafb9fc78b08", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-7d8758126633673a3c742b24d58d4fa4b1bfeafb9fc78b08", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -94,8 +94,8 @@
       "operation": "runDetailedVersion",
       "input": {"version": "0.1.29", "env": {}},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "equals", "value": "PDD CLI: 0.1.29\nPDD interpreter: 0123456789abcdef0123456789abcdef01234567\nPDD service: unknown\nInterface formats: prompt-runtime.interface.v4\nTest formats: prompt-runtime.program-scenario.v1\nApp-map formats: none\n"},
-        {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-f0afe55645ba0ee18b03df33a75d3468a734dfe2c7708dc4", "target": "result", "path": "/stdout", "op": "equals", "value": "PDD CLI: 0.1.29\nPDD interpreter: 0123456789abcdef0123456789abcdef01234567\nPDD service: unknown\nInterface formats: prompt-runtime.interface.v4\nTest formats: prompt-runtime.program-scenario.v1\nApp-map formats: none\n"},
+        {"criterion_id": "ac-sha256-f0afe55645ba0ee18b03df33a75d3468a734dfe2c7708dc4", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -104,8 +104,8 @@
       "operation": "runDetailedVersion",
       "input": {"version": "0.1.29", "env": {}},
       "checks": [
-        {"criterion_id": "AC2", "target": "result", "path": "/stdout", "op": "equals", "value": "PDD CLI: 0.1.29\nPDD interpreter: 0123456789abcdef0123456789abcdef01234567\nPDD service: unknown\nInterface formats: prompt-runtime.interface.v4\nTest formats: prompt-runtime.program-scenario.v1\nApp-map formats: none\n"},
-        {"criterion_id": "AC2", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-f0afe55645ba0ee18b03df33a75d3468a734dfe2c7708dc4", "target": "result", "path": "/stdout", "op": "equals", "value": "PDD CLI: 0.1.29\nPDD interpreter: 0123456789abcdef0123456789abcdef01234567\nPDD service: unknown\nInterface formats: prompt-runtime.interface.v4\nTest formats: prompt-runtime.program-scenario.v1\nApp-map formats: none\n"},
+        {"criterion_id": "ac-sha256-f0afe55645ba0ee18b03df33a75d3468a734dfe2c7708dc4", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     },
     {
@@ -114,8 +114,8 @@
       "operation": "runDetailedVersion",
       "input": {"version": "0.1.29", "env": {}},
       "checks": [
-        {"criterion_id": "AC3", "target": "result", "path": "/stdout", "op": "equals", "value": "PDD CLI: 0.1.29\nPDD interpreter: 0123456789abcdef0123456789abcdef01234567\nInterface formats: prompt-runtime.interface.v4\nTest formats: prompt-runtime.program-scenario.v1\nApp-map formats: none\n"},
-        {"criterion_id": "AC3", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+        {"criterion_id": "ac-sha256-f2c1c6737572ddba9988cf0e8f60e924deaa0bb242d9d3ab", "target": "result", "path": "/stdout", "op": "equals", "value": "PDD CLI: 0.1.29\nPDD interpreter: 0123456789abcdef0123456789abcdef01234567\nInterface formats: prompt-runtime.interface.v4\nTest formats: prompt-runtime.program-scenario.v1\nApp-map formats: none\n"},
+        {"criterion_id": "ac-sha256-f2c1c6737572ddba9988cf0e8f60e924deaa0bb242d9d3ab", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
       ]
     }
   ]

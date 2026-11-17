@@ -3,11 +3,11 @@
   "story_path": "user_stories/product-search-cache.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-7c7d286a7b44a60c31a75e106b39ce5159034e0378640bd3",
       "text": "Status searches all four planned runs with one shared marker-prefix query."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-1d7240b9f59f218f0038f00f64ddaa81a38ff4e5e05a71bb",
       "text": "Next immediately reuses the saved complete search snapshot and makes no issue search."
     }
   ],
@@ -160,14 +160,14 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-7c7d286a7b44a60c31a75e106b39ce5159034e0378640bd3",
           "target": "calls",
           "path": "/resources/product-github-issuePage",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-7c7d286a7b44a60c31a75e106b39ce5159034e0378640bd3",
           "target": "result",
           "path": "/runs/1/issue",
           "op": "equals",
@@ -185,14 +185,14 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-1d7240b9f59f218f0038f00f64ddaa81a38ff4e5e05a71bb",
           "target": "calls",
           "path": "/resources/product-github-issuePage",
           "op": "equals",
           "value": 0
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-1d7240b9f59f218f0038f00f64ddaa81a38ff4e5e05a71bb",
           "target": "result",
           "path": "/ready",
           "op": "equals",

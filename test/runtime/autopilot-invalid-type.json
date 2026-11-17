@@ -3,7 +3,7 @@
   "story_path": "user_stories/autopilot-invalid-type.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-beeb4613f5f3c5e0a9919ab755a648d08a9b329240f9c9de",
       "text": "Setup treats saved invalid mode false as off and leaves it unchanged."
     }
   ],
@@ -80,21 +80,21 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-beeb4613f5f3c5e0a9919ab755a648d08a9b329240f9c9de",
           "target": "result",
           "path": "/mode",
           "op": "equals",
           "value": "off"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-beeb4613f5f3c5e0a9919ab755a648d08a9b329240f9c9de",
           "target": "result",
           "path": "/message",
           "op": "contains",
           "value": "invalid"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-beeb4613f5f3c5e0a9919ab755a648d08a9b329240f9c9de",
           "target": "world",
           "path": "/kv/autopilot",
           "op": "equals",
