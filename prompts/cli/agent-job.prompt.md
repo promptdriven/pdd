@@ -19,23 +19,27 @@ is uncertain; those records let a later tick retry without a live controller.
 ## Public contract
 
 - `agentCommand(agent, {model}={})` returns `{command, args}` for `agent.kind`
-  `codex`, `claude` or `agy`, using `agent.command` or the kind as the program:
+  `codex`, `claude`, `gemini` or `agy`, using `agent.command` (trimmed when nonblank
+  for `gemini`) or the kind as the program:
   - codex: `exec --json --dangerously-bypass-approvals-and-sandbox -c features.multi_agent=false [--model M] -`
   - claude: `-p --output-format stream-json --verbose --permission-mode bypassPermissions [--model M]`
     (a stream of events, so the log grows while the agent works; the result is the
     result file, not the output)
+  - gemini: `-p "" --output-format stream-json --approval-mode yolo [--model M]`
+    (headless mode with an empty `-p ""` prompt argument so Gemini CLI reads the full
+    prompt on stdin and streams JSON events)
   - agy: `--input-format text --output-format stream-json --dangerously-skip-permissions [--model M]`
     (non-interactive print mode reading plain text on stdin and streaming events;
     `--print` takes a prompt string argument rather than stdin)
 
-  All three read the prompt on stdin and have full access, like the post-merge auditor
+  All four read the prompt on stdin and have full access, like the post-merge auditor
   launch in [the audit owner](autopilot-audit.prompt.md). Another kind throws
-  `Error("Autopilot core jobs need codex, claude or agy")`.
+  `Error("Autopilot core jobs need codex, claude, gemini or agy")`.
 - `jobEnvironment(env)` returns a copy of `env` without keys that would join the
   caller's own agent, Herdr or coordinator session: `ANTIGRAVITY_*` (except
   `ANTIGRAVITY_APP_DATA_DIR`), `CLAUDECODE`, `CLAUDE_CODE_*` (except
   `CLAUDE_CODE_OAUTH_TOKEN`), `CLAUDE_PID`,
-  `CODEX_THREAD_ID`, `CODEX_SANDBOX*`, `HERDR_*`, `PDD_AGENT_SESSION` and
+  `CODEX_THREAD_ID`, `CODEX_SANDBOX*`, `GEMINI_CLI_SESSION_ID`, `HERDR_*`, `PDD_AGENT_SESSION` and
   `PDD_AUTOPILOT_CONTEXT`. Account settings such as `CODEX_HOME`,
   `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL` and
   `ANTIGRAVITY_APP_DATA_DIR` stay.

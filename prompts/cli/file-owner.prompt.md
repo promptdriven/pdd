@@ -59,20 +59,25 @@ Join several notes with `; `, in this order:
 
 ### Generated from header
 
-A header line names the prompt that a file was generated from. Read only the
+A provenance header line names the prompt that owns a file. Read only the
 complete lines inside the first 4,096 bytes of the file (decode as UTF-8; when
 the file is longer, drop the last line of that window because it can be cut).
 Skip lines longer than 1,100 characters. A header line is, in order: optional
-white space, an optional comment opener (`//`, `#`, `--`, `;`, `/*`, `*`,
-`<!--`, `"""` or `'''`, each of the repeatable marks repeated), optional white
-space, `Generated from `, PATH, optionally ` (sha256: HEX)` with 64 lowercase
-hex digits, optionally `.`, optional white space, an optional closer (`*/`,
-`-->`, `"""` or `'''`) and optional white space. PATH has no white space and
-ends in `.prompt.md`. Other text, such as `Generated from the canonical m1_policy
-prompt` or a `Generated from` inside a string, is no header. A file can have
-more than one header; each names an owner. The header can be on any line in the
-window, for example after a `#!` line, a license or imports. HEX is the
-[header hash](#header-hash) of the prompt that the file follows.
+white space, either an optional comment opener (`//`, `#`, `--`, `;`, `/*`, `*`,
+`<!--`, `"""` or `'''`, each of the repeatable marks repeated) with optional
+white space followed by `Generated from ` or one of those comment openers with
+optional white space followed by `Prompt: `, PATH, optionally either
+` (sha256: HEX)` or ` sha256=HEX` with 64 lowercase hex digits, optionally `.`,
+optional white space, an optional closer (`*/`, `-->`, `"""` or `'''`) and
+optional white space. PATH has no white space and ends in `.prompt.md`. Path-only
+headers (such as `// Prompt: prompts/foo.prompt.md` or
+`// Generated from prompts/foo.prompt.md`) are canonical on write; optional hash
+suffixes remain parsed when present. Other text, such as
+`Generated from the canonical m1_policy prompt`, plain `Prompt: prompts/foo.prompt.md`
+outside a comment, or `Generated from` inside a string, is no header. A file can
+have more than one header; each names an owner. The header can be on any line in
+the window, for example after a `#!` line, a license or imports. When present,
+HEX is the [header hash](#header-hash) of the prompt that the file follows.
 
 A canonical path is a nonblank string of at most 1,000 characters, not absolute,
 with no backslash, no control character and no empty, `.`, `..` or `.git`
@@ -105,9 +110,9 @@ Each header has a hash state:
 | `none` | The header has no hash. |
 | `unknown` | The named prompt is not a Git-visible prompt, or its content is not available. |
 
-A stale or missing hash is a report, not an error. Writing the hash is the
-writer's claim that the file follows that prompt version; pdd computes the hash
-and never rewrites a header.
+Path-only headers (`state: "none"`) are canonical. A stale or legacy hash is a
+report, not an error. pdd computes the hash when present and never rewrites a
+header during owner lookup.
 
 ### Prompt claims
 
@@ -288,11 +293,10 @@ it, print one line for each path:
 - with `certain: false`, add `, not certain: treat as owned` inside the brackets;
 - with no owner: `PATH: no owner`, or `PATH: no owner (not certain: treat as owned)`;
 - when the note is not empty, print it on the next line after two spaces;
-- for each header that is not plain `current`, print one more line after two
-  spaces: `PROMPT header hash is stale (HEX); current is EXPECTED`,
-  `PROMPT header has no hash; current is EXPECTED` or
-  `PROMPT header uses the whole-file hash; current is EXPECTED`. An `unknown`
-  state adds no line.
+- for each header whose hash is `stale` or `legacy`, print one more line after
+  two spaces: `PROMPT header hash is stale (HEX); current is EXPECTED` or
+  `PROMPT header uses the whole-file hash; current is EXPECTED`. Path-only
+  (`none`) and `unknown` states add no line.
 
 Return 0 unless a misplaced test prompt (`isTestPromptPath`) is queried or
 claims a requested file. When any requested path in `paths` satisfies

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/screen-design-check.prompt.md (sha256: e079c38dc45c2fb401d18cdf19a0789388d7d20894d54cf49f8c824d1ef665ce).
+// Generated from prompts/cli/screen-design-check.prompt.md (sha256: 3fc73417ccffade4965588a3a28d77be430a1a27c09fc0125f93fe1ab3c72cf5).
 
 const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const hex = ([r, g, b]) => `#${[r, g, b].map(channel => Math.round(channel).toString(16).padStart(2, '0')).join('')}`;
