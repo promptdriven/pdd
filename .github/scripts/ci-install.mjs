@@ -1,6 +1,6 @@
 import { createSign } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,40 @@ const baseHeaders = {
   'X-GitHub-Api-Version': '2022-11-28',
   'User-Agent': 'pdd-ci',
 };
+const publicCredentialEnvironment = [
+  'RUNTIME_CLIENT_DEPLOY_KEY',
+  'PRIVATE_REPO_TOKEN',
+  'PDS_TOKEN',
+  'PDD_CLOUD_APP_ID',
+  'PDD_CLOUD_APP_PRIVATE_KEY',
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'NPM_TOKEN',
+  'NODE_AUTH_TOKEN',
+];
+
+function credentialFreeEnvironment() {
+  return Object.assign({ ...process.env }, ...publicCredentialEnvironment.map(name => ({ [name]: '' })));
+}
+
+function usesPublicRegistryRuntimeClient() {
+  try {
+    const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+    const manifest = lock.packages?.[''];
+    const runtime = lock.packages?.['node_modules/@promptdriven/runtime-client'];
+    const spec = manifest?.dependencies?.['@promptdriven/runtime-client'];
+    if (!runtime || typeof runtime.version !== 'string' || spec !== runtime.version || typeof runtime.resolved !== 'string') return false;
+    const resolved = new URL(runtime.resolved);
+    return resolved.origin === 'https://registry.npmjs.org'
+      && !resolved.username
+      && !resolved.password
+      && !resolved.search
+      && !resolved.hash
+      && resolved.pathname === `/@promptdriven/runtime-client/-/runtime-client-${runtime.version}.tgz`;
+  } catch {
+    return false;
+  }
+}
 
 async function checkRepoAccess(token) {
   if (!token) return { ok: false, status: 0 };
@@ -80,7 +114,10 @@ const attempts = [];
 let selected = null;
 let keyDir = '';
 
-try {
+if (usesPublicRegistryRuntimeClient()) {
+  console.log('Installing public @promptdriven/runtime-client from the npm registry.');
+  execFileSync('npm', ['ci', '--ignore-scripts'], { env: credentialFreeEnvironment(), stdio: 'inherit' });
+} else try {
   const deployKey = normalizePem(process.env.RUNTIME_CLIENT_DEPLOY_KEY);
   if (!deployKey) {
     attempts.push('RUNTIME_CLIENT_DEPLOY_KEY=unset');
