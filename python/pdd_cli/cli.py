@@ -8,19 +8,42 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 from typing import Mapping, Sequence
+import uuid
 
 from . import __version__
 
 PACKAGE_NAME = "@promptdriven/pdd"
 MAX_WRAPPER_DEPTH = 3
+_PY_INTERP_RE = re.compile(r"^(?:python(?:\d+(?:\.\d+)*)?|pypy(?:\d+(?:\.\d+)*)?)$")
 
 
-def _real_or_none(path: Path | str) -> str | None:
+def _real_or_none(path: Path | str | None) -> str | None:
+    if not path:
+        return None
     try:
+        if not os.path.exists(path):
+            return None
         return os.path.realpath(path)
     except OSError:
         return None
+
+
+def _lexical_exe_id(path: Path | str) -> str:
+    abs_p = os.path.abspath(path)
+    return os.path.join(os.path.realpath(os.path.dirname(abs_p)), os.path.basename(abs_p))
+
+
+def _resolve_argv0_real(argv0: str | None, env: Mapping[str, str]) -> tuple[str | None, str | None]:
+    eff = sys.argv[0] if argv0 is None else argv0
+    if not eff:
+        return None, None
+    has_sep = (os.sep in eff) or (bool(os.altsep) and os.altsep in eff)
+    resolved_cmd = eff if has_sep else shutil.which(eff, path=env.get("PATH"))
+    if not resolved_cmd:
+        return Path(eff).name, None
+    return Path(resolved_cmd).name, _real_or_none(resolved_cmd)
 
 
 def _read_pkg_version(entry_mjs: Path) -> str | None:
@@ -156,7 +179,7 @@ def resolve_cli_entry(
         if checkout.is_file() and _read_pkg_version(checkout) == version:
             return checkout, ""
 
-    self_real = _real_or_none(argv0 or sys.argv[0])
+    _, self_real = _resolve_argv0_real(argv0, active_env)
     on_path = _find_installed_on_path(version, active_env, self_real)
     if on_path is not None:
         return on_path, ""
@@ -165,10 +188,54 @@ def resolve_cli_entry(
     return _install_into_cache(version, cache_dir, active_env)
 
 
+def _extract_shebang_interpreter(text: str) -> str | None:
+    lines = text.splitlines()
+    if not lines or not lines[0].startswith("#!"):
+        return None
+    raw = lines[0][2:].strip()
+    if not raw:
+        return None
+    parts = raw.split()
+    interp = parts[0]
+    if Path(interp).name == "env":
+        for token in parts[1:]:
+            if not token.startswith("-") and "=" not in token:
+                return token
+        return None
+    return interp
+
+
+def _belongs_to_current_python_env(candidate: Path, text: str) -> bool:
+    try:
+        cand_dir = os.path.realpath(candidate.parent)
+    except OSError:
+        return False
+    try:
+        if cand_dir == os.path.realpath(Path(sys.executable).parent):
+            return True
+    except OSError:
+        pass
+    scripts_dir = sysconfig.get_path("scripts")
+    if scripts_dir:
+        try:
+            if cand_dir == os.path.realpath(scripts_dir):
+                return True
+        except OSError:
+            pass
+    interp = _extract_shebang_interpreter(text)
+    if interp and ((os.sep in interp) or (bool(os.altsep) and os.altsep in interp)):
+        try:
+            if _lexical_exe_id(interp) == _lexical_exe_id(sys.executable):
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def _is_own_python_wrapper(candidate: Path, self_real: str | None) -> bool:
     cand_real = _real_or_none(candidate)
-    if self_real and cand_real == self_real:
-        return True
+    if self_real is not None:
+        return cand_real is not None and cand_real == self_real
     try:
         st = candidate.stat()
         if st.st_size > 65536:
@@ -180,7 +247,9 @@ def _is_own_python_wrapper(candidate: Path, self_real: str | None) -> bool:
     if not head.startswith(b"#!"):
         return False
     text = head.decode("utf-8", errors="ignore")
-    return bool(re.search(r"\bpdd_cli\b", text))
+    if not re.search(r"\bpdd_cli\b", text):
+        return False
+    return _belongs_to_current_python_env(candidate, text)
 
 
 def _set_symlink(link_path: Path, target: str | Path) -> None:
@@ -190,9 +259,49 @@ def _set_symlink(link_path: Path, target: str | Path) -> None:
             return
     except OSError:
         pass
-    if link_path.exists() or link_path.is_symlink():
-        link_path.unlink()
-    link_path.symlink_to(target_str)
+    tmp_link = link_path.parent / f".tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    try:
+        os.symlink(target_str, tmp_link)
+        os.replace(tmp_link, link_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_link)
+        except OSError:
+            pass
+        raise
+
+
+def _sh_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
+def _set_exec_wrapper(wrapper_path: Path, target: Path) -> None:
+    content = f"#!/bin/sh\nexec {_sh_single_quote(str(target))} \"$@\"\n"
+    try:
+        if (
+            not wrapper_path.is_symlink()
+            and wrapper_path.is_file()
+            and os.access(wrapper_path, os.X_OK)
+            and wrapper_path.read_text(encoding="utf-8") == content
+        ):
+            return
+    except OSError:
+        pass
+    tmp_file = wrapper_path.parent / f".tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    try:
+        fd = os.open(tmp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o755)
+        try:
+            os.write(fd, content.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.chmod(tmp_file, 0o755)
+        os.replace(tmp_file, wrapper_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_file)
+        except OSError:
+            pass
+        raise
 
 
 def _sync_mirrored_shim(folder: Path, entry_real: str, cache_root: Path) -> Path:
@@ -202,8 +311,16 @@ def _sync_mirrored_shim(folder: Path, entry_real: str, cache_root: Path) -> Path
     shim_bin = shim_root / "bin"
     shim_bin.mkdir(parents=True, exist_ok=True)
 
+    legacy_cfg = shim_root / "pyvenv.cfg"
+    if legacy_cfg.exists() or legacy_cfg.is_symlink():
+        try:
+            legacy_cfg.unlink()
+        except OSError:
+            pass
+
     _set_symlink(shim_bin / "pdd", entry_real)
 
+    is_venv = (folder_abs.parent / "pyvenv.cfg").is_file()
     present = {"pdd"}
     try:
         with os.scandir(folder_abs) as it:
@@ -211,8 +328,13 @@ def _sync_mirrored_shim(folder: Path, entry_real: str, cache_root: Path) -> Path
                 if item.name == "pdd":
                     continue
                 present.add(item.name)
+                dst = shim_bin / item.name
+                src = folder_abs / item.name
                 try:
-                    _set_symlink(shim_bin / item.name, folder_abs / item.name)
+                    if is_venv and _PY_INTERP_RE.match(item.name) and os.access(src, os.X_OK):
+                        _set_exec_wrapper(dst, src)
+                    else:
+                        _set_symlink(dst, src)
                 except OSError:
                     pass
     except OSError:
@@ -221,7 +343,7 @@ def _sync_mirrored_shim(folder: Path, entry_real: str, cache_root: Path) -> Path
     try:
         with os.scandir(shim_bin) as it:
             for existing in it:
-                if existing.name not in present:
+                if existing.name not in present and not existing.name.startswith(".tmp."):
                     try:
                         Path(existing.path).unlink()
                     except OSError:
@@ -229,12 +351,6 @@ def _sync_mirrored_shim(folder: Path, entry_real: str, cache_root: Path) -> Path
     except OSError:
         pass
 
-    pyvenv_cfg = folder_abs.parent / "pyvenv.cfg"
-    if pyvenv_cfg.exists():
-        try:
-            _set_symlink(shim_root / "pyvenv.cfg", pyvenv_cfg.resolve())
-        except OSError:
-            pass
     return shim_bin
 
 
@@ -268,10 +384,12 @@ def _prepare_child_env(
     if not entry_real:
         return child_env
 
-    eff_argv0 = argv0 or sys.argv[0]
-    self_real: str | None = None
-    if eff_argv0 and Path(eff_argv0).name.lower() in ("pdd", "pdd.cmd", "pdd.exe"):
-        self_real = _real_or_none(eff_argv0)
+    cmd_name, cand_self_real = _resolve_argv0_real(argv0, child_env)
+    self_real = (
+        cand_self_real
+        if (cmd_name and cmd_name.lower() in ("pdd", "pdd.cmd", "pdd.exe"))
+        else None
+    )
 
     cache_root = _cache_root(child_env)
     raw_path = child_env.get("PATH", "")

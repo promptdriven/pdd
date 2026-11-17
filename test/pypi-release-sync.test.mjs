@@ -2,7 +2,7 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -134,20 +134,28 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
   assert.equal(existsSync(join(stagedBundleDir, 'bin', 'pdd.mjs')), true);
   assert.equal(existsSync(join(root, 'python', 'pdd_cli', '_bundled')), false, 'repo working tree stays clean');
 
-  const pyBinDir = join(sandbox, 'venv', 'bin');
-  mkdirSync(pyBinDir, { recursive: true });
-  writeFileSync(join(sandbox, 'venv', 'pyvenv.cfg'), 'home = /usr/bin\n');
-  const siblingTool = join(pyBinDir, 'venv-helper');
-  writeFileSync(siblingTool, '#!/bin/sh\necho ok\n', { mode: 0o755 });
+  // 2. Create a real `python -m venv --without-pip` with a site-packages module (`demo_mod.py`) to verify:
+  //    (a) `<venv>/bin/pdd --version` and `<venv>/bin/python -m pdd_cli --version` run offline with empty stderr, and
+  //    (b) invoking `python` via the shimmed child PATH preserves `sys.prefix == realpath(venv)` and imports `demo_mod`!
+  const realVenv = join(sandbox, 'real-venv');
+  execFileSync(py, ['-B', '-m', 'venv', '--without-pip', realVenv], { env: PY_NO_BYTECODE_ENV });
+  const venvPy = join(realVenv, 'bin', 'python');
+  const sitePackagesDir = execFileSync(
+    venvPy,
+    ['-B', '-c', 'import sysconfig; print(sysconfig.get_path("purelib"))'],
+    { env: PY_NO_BYTECODE_ENV, encoding: 'utf8' },
+  ).trim();
+  mkdirSync(sitePackagesDir, { recursive: true });
+  writeFileSync(join(sitePackagesDir, 'demo_mod.py'), 'VALUE = 42\n');
 
+  const pyBinDir = join(realVenv, 'bin');
   const pyWrapperBin = join(pyBinDir, 'pdd');
   writeFileSync(
     pyWrapperBin,
-    `#!${py}\nimport sys\nsys.path.insert(0, ${JSON.stringify(isolatedPyPkg)})\nfrom pdd_cli.cli import main\nraise SystemExit(main())\n`,
+    `#!${venvPy}\nimport sys\nsys.path.insert(0, ${JSON.stringify(isolatedPyPkg)})\nfrom pdd_cli.cli import main\nraise SystemExit(main())\n`,
   );
   chmodSync(pyWrapperBin, 0o755);
 
-  // 2. Running real bin/pdd.mjs --version via both `<venv>/bin/pdd` and `python -m pdd_cli` with `pyBinDir` on PATH emits empty stderr (zero false PATH conflict warnings!).
   const baseOfflineEnv = {
     ...PY_NO_BYTECODE_ENV,
     HOME: home,
@@ -166,10 +174,40 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
   assert.equal(wrapperVer.stdout, `${pkgVersion}\n`);
   assert.equal(wrapperVer.stderr, '');
 
-  const moduleVer = spawnSync(py, ['-B', '-m', 'pdd_cli', '--version'], { cwd: sandbox, env: baseOfflineEnv, encoding: 'utf8' });
+  const moduleVer = spawnSync(venvPy, ['-B', '-m', 'pdd_cli', '--version'], { cwd: sandbox, env: baseOfflineEnv, encoding: 'utf8' });
   assert.equal(moduleVer.status, 0, moduleVer.stderr);
   assert.equal(moduleVer.stdout, `${pkgVersion}\n`);
   assert.equal(moduleVer.stderr, '');
+
+  const shimmedPathOut = spawnSync(
+    venvPy,
+    [
+      '-B',
+      '-c',
+      [
+        'import os',
+        'from pathlib import Path',
+        'from pdd_cli import cli',
+        `entry = Path(${JSON.stringify(join(stagedBundleDir, 'bin', 'pdd.mjs'))})`,
+        `child_env = cli._prepare_child_env(entry, os.environ, 0, argv0=${JSON.stringify(pyWrapperBin)})`,
+        'print(child_env["PATH"])',
+      ].join('\n'),
+    ],
+    { cwd: sandbox, env: baseOfflineEnv, encoding: 'utf8' },
+  );
+  assert.equal(shimmedPathOut.status, 0, shimmedPathOut.stderr);
+  const shimmedPath = shimmedPathOut.stdout.trim();
+  const venvCheck = spawnSync(
+    'python',
+    ['-B', '-c', 'import os, sys, demo_mod; assert demo_mod.VALUE == 42; print(os.path.realpath(sys.prefix))'],
+    {
+      cwd: sandbox,
+      env: { ...PY_NO_BYTECODE_ENV, PATH: [shimmedPath, '/bin', '/usr/bin'].join(delimiter) },
+      encoding: 'utf8',
+    },
+  );
+  assert.equal(venvCheck.status, 0, venvCheck.stderr);
+  assert.equal(venvCheck.stdout.trim(), realpathSync(realVenv));
 
   // 3. Offline `pdd lint --local` on a git-initialized harbor fixture succeeds with empty stderr.
   const harborDir = join(sandbox, 'harbor');
@@ -180,17 +218,16 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
   assert.equal(lintRun.stderr, '');
   assert.match(lintRun.stdout, /0 warnings\./);
 
-  // 4. Real PATH shadowing ahead of `pyBinDir` is NOT hidden: stale `/fake-old-bin/pdd` ahead of `pyBinDir` still triggers the shadowed warning!
+  // 4. Real PATH shadowing ahead of `pyBinDir` is NOT hidden — BOTH for a foreign `pdd` binary AND for a competing stale `pdd_cli` install in another prefix (e.g. pipx)!
   const fakeOldBinDir = join(sandbox, 'fake-old-bin');
   mkdirSync(fakeOldBinDir, { recursive: true });
-  const fakeOldPdd = join(fakeOldBinDir, 'pdd');
-  writeFileSync(fakeOldPdd, `#!${process.execPath}\nconsole.log('0.0.242');\n`, { mode: 0o755 });
+  writeFileSync(join(fakeOldBinDir, 'pdd'), `#!${process.execPath}\nconsole.log('0.0.242');\n`, { mode: 0o755 });
 
   const shadowedEnv = {
     ...baseOfflineEnv,
     PATH: [fakeOldBinDir, pyBinDir, nodeOnlyBinDir].join(delimiter),
   };
-  const shadowedMod = spawnSync(py, ['-B', '-m', 'pdd_cli', '--version'], { cwd: sandbox, env: shadowedEnv, encoding: 'utf8' });
+  const shadowedMod = spawnSync(venvPy, ['-B', '-m', 'pdd_cli', '--version'], { cwd: sandbox, env: shadowedEnv, encoding: 'utf8' });
   assert.equal(shadowedMod.status, 0);
   assert.equal(shadowedMod.stdout, `${pkgVersion}\n`);
   assert.match(shadowedMod.stderr, /PATH selects: .*fake-old-bin\/pdd \(0\.0\.242\)/);
@@ -199,6 +236,29 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
   assert.equal(shadowedWrap.status, 0);
   assert.equal(shadowedWrap.stdout, `${pkgVersion}\n`);
   assert.match(shadowedWrap.stderr, /PATH selects: .*fake-old-bin\/pdd \(0\.0\.242\)/);
+
+  const stalePipxVenv = join(sandbox, 'stale-pipx-venv');
+  execFileSync(py, ['-B', '-m', 'venv', '--without-pip', stalePipxVenv], { env: PY_NO_BYTECODE_ENV });
+  const stalePipxBin = join(sandbox, 'stale-pipx-bin');
+  mkdirSync(stalePipxBin, { recursive: true });
+  writeFileSync(
+    join(stalePipxBin, 'pdd'),
+    `#!${join(stalePipxVenv, 'bin', 'python')}\n# stale pdd_cli console_script wrapper\nprint("0.1.10")\n`,
+    { mode: 0o755 },
+  );
+  const stalePipxEnv = {
+    ...baseOfflineEnv,
+    PATH: [stalePipxBin, pyBinDir, nodeOnlyBinDir].join(delimiter),
+  };
+  const staleWrap = spawnSync(pyWrapperBin, ['--version'], { cwd: sandbox, env: stalePipxEnv, encoding: 'utf8' });
+  assert.equal(staleWrap.status, 0);
+  assert.equal(staleWrap.stdout, `${pkgVersion}\n`);
+  assert.match(staleWrap.stderr, /PATH selects: .*stale-pipx-bin\/pdd \(0\.1\.10\)/);
+
+  const staleMod = spawnSync(venvPy, ['-B', '-m', 'pdd_cli', '--version'], { cwd: sandbox, env: stalePipxEnv, encoding: 'utf8' });
+  assert.equal(staleMod.status, 0);
+  assert.equal(staleMod.stdout, `${pkgVersion}\n`);
+  assert.match(staleMod.stderr, /PATH selects: .*stale-pipx-bin\/pdd \(0\.1\.10\)/);
 
   // 5. Unbundled installed PATH resolution + mirrored sibling binaries + fresh-machine npm cache fallback:
   const unbundledPyDir = join(sandbox, 'unbundled-bin');
@@ -300,6 +360,13 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
         `expected = Path(${JSON.stringify(winEntry)}).resolve()`,
         'found = cli._find_installed_on_path(__version__, {"PATH": win_dir}, None, is_windows=True)',
         'assert found == expected, f"expected {expected}, got {found}"',
+        `assert cli._real_or_none(${JSON.stringify(join(sandbox, 'definitely-missing-path'))}) is None`,
+        // Bare argv0="pdd" resolves via PATH (shutil.which) rather than cwd, skipping self-wrapper on PATH:
+        `cwd_decoy = Path(${JSON.stringify(join(sandbox, 'pdd'))})`,
+        'cwd_decoy.mkdir(exist_ok=True)',
+        `bare_env = {"PATH": os.pathsep.join([${JSON.stringify(unbundledPyDir)}, ${JSON.stringify(npmBinDir)}]), "PDD_CLI_IGNORE_CHECKOUT": "1", "PDD_CLI_OFFLINE": "1", "PDD_CLI_CACHE_DIR": ${JSON.stringify(cacheDir)}}`,
+        'resolved_entry, err = cli.resolve_cli_entry(__version__, bare_env, argv0="pdd")',
+        `assert resolved_entry == Path(${JSON.stringify(fakeEntry)}).resolve(), f"got {resolved_entry} ({err})"`,
         'with mock.patch.object(subprocess, "run", side_effect=KeyboardInterrupt):',
         '    assert cli._run_interruptible(["true"], {}) == 130',
         'class NegProc: returncode = -15',
