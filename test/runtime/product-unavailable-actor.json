@@ -3,11 +3,11 @@
   "story_path": "user_stories/product-unavailable-actor.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-0b601f8fd5db9960e63160a6bd0d7e49a1f3190095eb05c7",
       "text": "Status and next ignore outsider marker claims when the account reply has no login, and each looks up the account at most once."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-376149bddf10860be9a2751ad38c7f3a81a8329f2d29def4",
       "text": "Preparing phone-1 still creates issue 82 and starts no workflow when outsider claims cannot be trusted."
     }
   ],
@@ -160,14 +160,14 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-0b601f8fd5db9960e63160a6bd0d7e49a1f3190095eb05c7",
           "target": "result",
           "path": "/runs/1/issue",
           "op": "equals",
           "value": null
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-0b601f8fd5db9960e63160a6bd0d7e49a1f3190095eb05c7",
           "target": "calls",
           "path": "/resources/product-github-currentActor",
           "op": "equals",
@@ -185,7 +185,7 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-0b601f8fd5db9960e63160a6bd0d7e49a1f3190095eb05c7",
           "target": "result",
           "path": "/ready",
           "op": "equals",
@@ -196,7 +196,7 @@
           ]
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-0b601f8fd5db9960e63160a6bd0d7e49a1f3190095eb05c7",
           "target": "calls",
           "path": "/resources/product-github-currentActor",
           "op": "equals",
@@ -216,35 +216,35 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-376149bddf10860be9a2751ad38c7f3a81a8329f2d29def4",
           "target": "result",
           "path": "/issue",
           "op": "equals",
           "value": 82
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-376149bddf10860be9a2751ad38c7f3a81a8329f2d29def4",
           "target": "result",
           "path": "/created",
           "op": "equals",
           "value": true
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-376149bddf10860be9a2751ad38c7f3a81a8329f2d29def4",
           "target": "result",
           "path": "/started",
           "op": "equals",
           "value": false
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-376149bddf10860be9a2751ad38c7f3a81a8329f2d29def4",
           "target": "calls",
           "path": "/resources/product-github-currentActor",
           "op": "equals",
           "value": 1
         },
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-376149bddf10860be9a2751ad38c7f3a81a8329f2d29def4",
           "target": "world",
           "path": "/starts",
           "op": "count",

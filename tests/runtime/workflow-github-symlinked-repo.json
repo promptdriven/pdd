@@ -3,7 +3,7 @@
   "story_path": "user_stories/workflow-github-symlinked-repo.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-8512d9ace1f3ecf179f62479de6fe4dcfd859f11b0d5982b",
       "text": "Preparing a pull request from a repository path reached through a folder symlink succeeds and returns the prepared intent with its marker; preparation does not read, write or validate a PR body file."
     }
   ],
@@ -24,7 +24,7 @@
       },
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-8512d9ace1f3ecf179f62479de6fe4dcfd859f11b0d5982b",
           "target": "result",
           "path": "/marker",
           "op": "equals",

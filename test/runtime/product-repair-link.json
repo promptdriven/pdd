@@ -3,15 +3,15 @@
   "story_path": "user_stories/product-repair-link.md",
   "criteria": [
     {
-      "id": "AC1",
+      "id": "ac-sha256-dbba67739ba1e5b47aef6eedacdcab860f24e552b8e343f4",
       "text": "Status marks phone-1 unverified when its saved issue 81 is gone, while server-1 and barista-1 stay ready."
     },
     {
-      "id": "AC2",
+      "id": "ac-sha256-a7a0aefd924f3e9294b28e9ff5ca140697f77e17462279b8",
       "text": "Next keeps server-1 and barista-1 ready despite the same invalid local run hint."
     },
     {
-      "id": "AC3",
+      "id": "ac-sha256-882d5b325deac31d7049eeb8b60f3b851bec290dcc42ab6b",
       "text": "Preparing phone-1 again creates issue 82 after a complete empty search, starts no workflow and replaces the broken link."
     }
   ],
@@ -178,21 +178,21 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-dbba67739ba1e5b47aef6eedacdcab860f24e552b8e343f4",
           "target": "result",
           "path": "/runs/1/state",
           "op": "equals",
           "value": "unverified"
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-dbba67739ba1e5b47aef6eedacdcab860f24e552b8e343f4",
           "target": "result",
           "path": "/runs/1/issue",
           "op": "equals",
           "value": 81
         },
         {
-          "criterion_id": "AC1",
+          "criterion_id": "ac-sha256-dbba67739ba1e5b47aef6eedacdcab860f24e552b8e343f4",
           "target": "result",
           "path": "/ready",
           "op": "equals",
@@ -213,7 +213,7 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC2",
+          "criterion_id": "ac-sha256-a7a0aefd924f3e9294b28e9ff5ca140697f77e17462279b8",
           "target": "result",
           "path": "/ready",
           "op": "equals",
@@ -236,28 +236,28 @@
       "model": "gpt-6.1-sol",
       "checks": [
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-882d5b325deac31d7049eeb8b60f3b851bec290dcc42ab6b",
           "target": "result",
           "path": "/issue",
           "op": "equals",
           "value": 82
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-882d5b325deac31d7049eeb8b60f3b851bec290dcc42ab6b",
           "target": "result",
           "path": "/created",
           "op": "equals",
           "value": true
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-882d5b325deac31d7049eeb8b60f3b851bec290dcc42ab6b",
           "target": "result",
           "path": "/started",
           "op": "equals",
           "value": false
         },
         {
-          "criterion_id": "AC3",
+          "criterion_id": "ac-sha256-882d5b325deac31d7049eeb8b60f3b851bec290dcc42ab6b",
           "target": "world",
           "path": "/creates",
           "op": "count",
