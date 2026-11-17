@@ -1091,13 +1091,16 @@ test('renderBenchmarkReport redacts non-allowlisted repositories by default and 
     },
   ];
 
+  const extractHrefs = html => [...html.matchAll(/href="([^"]+)"/g)].map(m => new URL(m[1], 'https://example.invalid'));
+
   // Default allowlist shows promptdriven/pdd and redacts stealth-org/internal-pocket to private-repo-1 with no link
   const defaultHtml = renderBenchmarkReport({ observeRuns: runs, subtitle: `Token leak test ${ghp}` });
-  assert.ok(defaultHtml.includes('https://github.com/promptdriven/pdd'));
+  const defaultUrls = extractHrefs(defaultHtml);
+  assert.ok(defaultUrls.some(u => u.origin === 'https://github.com' && u.pathname === '/promptdriven/pdd'));
   assert.ok(defaultHtml.includes('private-repo-1'));
   assert.ok(!defaultHtml.includes('stealth-org'));
   assert.ok(!defaultHtml.includes('internal-pocket'));
-  assert.ok(!defaultHtml.includes('https://github.com/private-repo-1'));
+  assert.ok(!defaultUrls.some(u => u.pathname.includes('private-repo-1')));
   assertCleanPublicText(defaultHtml);
 
   // Explicit allowlist includes opted-in public repository
@@ -1105,7 +1108,8 @@ test('renderBenchmarkReport redacts non-allowlisted repositories by default and 
     observeRuns: runs,
     publicRepos: ['promptdriven/pdd', 'stealth-org/internal-pocket'],
   });
-  assert.ok(optedInHtml.includes('https://github.com/stealth-org/internal-pocket'));
+  const optedInUrls = extractHrefs(optedInHtml);
+  assert.ok(optedInUrls.some(u => u.origin === 'https://github.com' && u.pathname === '/stealth-org/internal-pocket'));
 });
 
 test('CLI validation rejects missing/bad flag values with exit 2, runtime missing files exit 1, --fixture updates selectedIds, and observe saves ETags on partial error', t => {
