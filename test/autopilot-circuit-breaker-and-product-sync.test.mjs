@@ -985,4 +985,34 @@ Size: medium (4 CORE Stories, 3 parts)
   // Starting unbuilt-1 (0 Story files, 0 merged PRs) DOES reopen #11!
   await productStart({ cwd, run: 'unbuilt-1', noRun: true }, ports);
   assert.deepEqual(reopened, [11]);
+
+  // Terminal local workflow records (cancelled or failed) must NOT shadow closedUnbuilt or block recovery!
+  for (const terminalState of ['cancelled', 'failed']) {
+    const termPorts = {
+      ...ports,
+      listRuns: async () => [{ id: `r-${terminalState}`, workflow: 'feature', issue: 11, run: 'unbuilt-1', state: terminalState, baseBranch: 'main' }],
+    };
+    const termStatus = await productStatus({ cwd }, termPorts);
+    assert.deepEqual(
+      termStatus.runs.find(r => r.run === 'unbuilt-1'),
+      { run: 'unbuilt-1', issue: 11, state: 'issue closed (0 of 1 pass)', prs: [], fromPr: null },
+      `terminal local state ${terminalState} still surfaces issue closed (0 of 1 pass)`,
+    );
+    assert.deepEqual(termStatus.ready, ['unbuilt-1']);
+  }
+
+  // Story files committed only on git baseBranch (main) when absent from cwd working tree still prevent false reopen via git ls-tree!
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd });
+  execFileSync('git', ['config', 'user.name', 'Test'], { cwd });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
+  execFileSync('git', ['add', '.'], { cwd });
+  execFileSync('git', ['commit', '-qm', 'base stories on main'], { cwd });
+  execFileSync('git', ['checkout', '-qb', 'clean-wt'], { cwd });
+  rmSync(join(cwd, 'user_stories'), { recursive: true, force: true });
+  reopened.length = 0;
+  const gitBranchStatus = await productStatus({ cwd }, ports);
+  assert.equal(gitBranchStatus.runs.find(r => r.run === 'single-1')?.state, 'issue ready', 'git ls-tree on main detects planned Story files even when absent from cwd');
+  await productStart({ cwd, run: 'single-1', noRun: true }, ports);
+  assert.deepEqual(reopened, [], 'closed slice with Story files on main branch is NOT reopened');
 });

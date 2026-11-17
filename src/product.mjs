@@ -526,7 +526,7 @@ async function progress(input, given, target) {
   }
   for (const detail of details) {
     detail.storyCounts = counts(detail.run.stories, details);
-    const activeLocal = Boolean(detail.local && !['cancelled', 'completed'].includes(detail.local.state));
+    const activeLocal = Boolean(detail.local && ['running', 'waiting'].includes(detail.local.state));
     const hasOpenPr = Array.isArray(detail.prs) && detail.prs.some(pr => pr.state === 'OPEN');
     const hasMergedPr = Boolean(detail.hasMergedSameRepoPr || (Array.isArray(detail.prs) && detail.prs.some(pr => pr.state === 'MERGED')));
     const isClosed = typeof detail.issue?.state === 'string' && detail.issue.state.toUpperCase() === 'CLOSED';
@@ -572,7 +572,7 @@ export async function productStatus(input, given = {}) {
       const prSummary = detail.prs.map(pr => `PR #${pr.number} (${pr.isDraft ? 'draft' : pr.state.toLowerCase()})`).join(', ');
       const hasMergedDisplayPr = detail.prs.some(pr => pr.state === 'MERGED');
       return { run: detail.run.run, issue: detail.issue?.number ?? null,
-        state: detail.unverified ? 'unverified' : detail.done ? 'merged' : detail.local ? `${detail.local.state}${detail.local.stage?.id ? ` (step: ${detail.local.stage.id})` : ''}` : hasMergedDisplayPr ? prSummary : detail.closedUnbuilt ? `issue closed (${detail.storyCounts.pass} of ${detail.storyCounts.total} pass)` : detail.prs.length ? prSummary : detail.issue ? 'issue ready' : 'planned',
+        state: detail.unverified ? 'unverified' : detail.done ? 'merged' : detail.closedUnbuilt ? `issue closed (${detail.storyCounts.pass} of ${detail.storyCounts.total} pass)` : detail.local ? `${detail.local.state}${detail.local.stage?.id ? ` (step: ${detail.local.stage.id})` : ''}` : hasMergedDisplayPr ? prSummary : detail.prs.length ? prSummary : detail.issue ? 'issue ready' : 'planned',
         prs: detail.prs.map(pr => pr.number), fromPr: detail.fromPr };
     }), ready, questions: product.questions, ...(warning.length ? { warnings: warning } : {}) };
   Object.defineProperty(result, comparisonBases, { value: bases }); return result;
