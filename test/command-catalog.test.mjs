@@ -54,3 +54,29 @@ test(proposed('parser accepts --new without changing the issue operand'), () => 
 test(proposed('parser retains AREA and --new together'), () => {
   accepts(['17', 'build', '--new'], ['17', 'build'], { '--new': true });
 });
+
+test('3444 check route exposes --max-total-calls and --no-restart-replacement in options, manifest and help', () => {
+  const checkRoute = PUBLIC_COMMAND_ROUTES.find(item => item.id === 'check');
+  assert.ok(checkRoute);
+  const maxTotal = checkRoute.options.find(item => item.name === '--max-total-calls');
+  const noRestart = checkRoute.options.find(item => item.name === '--no-restart-replacement');
+  assert.deepEqual(maxTotal, { name: '--max-total-calls', kind: 'integer', min: 1, max: 999999 });
+  assert.deepEqual(noRestart, { name: '--no-restart-replacement', kind: 'flag' });
+  const formEntry = PUBLIC_COMMAND_MANIFEST.find(({ form }) =>
+    form === 'pdd test [PATH|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]',
+  );
+  assert.ok(formEntry, 'manifest must advertise the invocation call-budget and restart-replacement form');
+  const help = renderHelp(['test']);
+  assert.match(help, /--max-total-calls N/);
+  assert.match(help, /--no-restart-replacement/);
+  assert.match(help, /1\.\.999999/);
+  assert.deepEqual(
+    parseArgv(['test', '--journeys', 'checkout', '--max-total-calls', '40', '--no-restart-replacement']),
+    {
+      commandId: 'check',
+      local: 'runtime-check',
+      operands: ['checkout'],
+      options: { '--journeys': true, '--max-total-calls': '40', '--no-restart-replacement': true },
+    },
+  );
+});
