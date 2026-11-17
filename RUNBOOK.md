@@ -36,4 +36,4 @@ Read this index first, then open **only the 1–2 topic files** that match your 
 - Open an interactive Simulator session (`--new` reloads changed prompts or `app-map.json`): `pdd simulate place-order --new`
 - Execute CLI Story scenarios directly against real code (0 AI calls): `pdd test --target code place-order`
 
-Report pages may show `pdd replay …`. That command does not exist yet. Use native vector replay tests (`runbook/replays-and-formal.md`) or `pdd test --target code place-order` for CLI entries. When reporting a problem with `pdd` itself, follow [docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md).
+Report pages may show `pdd replay …`. That command does not exist yet. Use native vector replay tests (`runbook/replays-and-formal.md`) or `pdd test --target code place-order` for CLI entries. For structural cleanup and refactoring passes without behavior drift, follow [docs/refactor-runbook.md](https://github.com/promptdriven/pdd/blob/main/docs/refactor-runbook.md). When reporting a problem with `pdd` itself, follow [docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md).

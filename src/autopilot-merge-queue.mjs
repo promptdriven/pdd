@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-merge-queue.prompt.md (sha256: 58d126586af3a3520b4d6ba4a960ad2c19153daf1d9a676b6997d4fe1fdc491c).
+// Prompt: prompts/cli/autopilot-merge-queue.prompt.md
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -13,7 +13,7 @@ const LOCK_FILE = 'merge-queue.lock';
 const LOCK_STALE_MS = 15 * 60 * 1000;
 const GIT_IDENTITY = ['-c', 'user.name=Autopilot', '-c', 'user.email=autopilot@promptdriven.local'];
 const PROTECTED_BRANCHES = new Set(['main', 'master', 'trunk', 'develop', 'production', 'release', 'head']);
-const HEADER_LINE = /^(\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*)Generated from (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{0,64})\))?(\.?\s*(?:\*\/|-->|"""|''')?\s*)$/;
+const HEADER_LINE = /^(\s*(?:(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from|(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*Prompt:)) (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{0,64})\)| sha256=([a-f0-9]{0,64}))?(\.?\s*(?:\*\/|-->|"""|''')?\s*)$/;
 const CONFLICT_MARKER_LINE = /^(?:<<<<<<< |\|\|\|\|\|\|\| |=======\r?$|>>>>>>> )/m;
 
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -345,9 +345,15 @@ export function resolveGeneratedHeaderConflicts(content, { worktree, fs = native
     }
     const promptText = promptBytes.toString('utf8');
     if (hasGitConflictMarkers(promptText)) return { resolved: false, content: null, prompts: [] };
-    const expected = promptHeaderHash(promptBytes);
-    const suffix = templateMatch[4] || '';
-    out.push(`${templateMatch[1]}Generated from ${promptPath} (sha256: ${expected})${suffix}`);
+    const oursFirst = HEADER_LINE.exec(sections.ours[0]);
+    if (oursFirst && oursFirst[3] === undefined && oursFirst[4] === undefined) {
+      out.push(`${oursFirst[1]} ${promptPath}${oursFirst[5] || ''}`);
+    } else {
+      const expected = promptHeaderHash(promptBytes);
+      const suffix = templateMatch[5] || '';
+      const hashPart = templateMatch[4] !== undefined ? ` sha256=${expected}` : ` (sha256: ${expected})`;
+      out.push(`${templateMatch[1]} ${promptPath}${hashPart}${suffix}`);
+    }
     prompts.add(promptPath);
     i = j;
   }
@@ -412,7 +418,8 @@ export function refreshOwnedPromptHeaders({ worktree, touchedFiles = [], fs = na
       if (!m) continue;
       const expected = staleByPrompt.get(m[2]);
       if (!expected) continue;
-      const updated = `${m[1]}Generated from ${m[2]} (sha256: ${expected})${m[4]}`;
+      const hashPart = m[4] !== undefined ? ` sha256=${expected}` : ` (sha256: ${expected})`;
+      const updated = `${m[1]} ${m[2]}${hashPart}${m[5]}`;
       if (updated !== lines[idx]) {
         lines[idx] = updated;
         changed = true;
@@ -476,7 +483,7 @@ function defaultVerifyOwners({ cwd, touchedFiles }) {
     if (isTestOwnedPath(row.path) && row.owners?.length) problems.push(`${row.path} cannot be owned by ${row.owners.join(', ')}`);
     if (String(row.note ?? '').includes('pdd-bindings.json could not be read')) problems.push('pdd-bindings.json could not be read');
     for (const h of row.headers ?? []) {
-      if (h.state !== 'current') problems.push(`${row.path} has ${h.state} Generated from header for ${h.prompt}`);
+      if (h.state !== 'current' && h.state !== 'none') problems.push(`${row.path} has ${h.state} Generated from header for ${h.prompt}`);
     }
   }
   return problems.length ? { ok: false, reason: problems.join('; ') } : { ok: true };

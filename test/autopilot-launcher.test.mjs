@@ -5,9 +5,10 @@ import { healthyMachine } from './helpers/healthy-machine.mjs';
 import test from 'node:test';
 import * as nativeFs from 'node:fs';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, statSync, utimesSync, existsSync, realpathSync, renameSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { runPdd } from '../src/pdd-cli.mjs';
@@ -605,4 +606,555 @@ test('#3230 start with explicit --agent, profile folder env, or --pool overwrite
   assert.equal(f.state().agent.id, 'gemini-flat');
   assert.equal(f.state().poolPath, mixedPool);
   assert.equal(f.state().intake, 'active');
+});
+
+test('inspectMachineJobs counts still-running jobs in disabled repos and inventories child roles without inflating issue slots', async t => {
+  const { startAgentJob, stopAgentJob } = await import('../src/agent-job.mjs');
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-jobs-' });
+  const stateRoot = f.ports.stateRoot;
+  mkdirSync(stateRoot, { recursive: true });
+
+  // Repo A: disabled while issue #11 still has live build + suite child processes, #12 is parked with no live PID, and #19 runs intake.
+  const idA = 'a'.repeat(20), coreA = join(stateRoot, `${idA}-core`);
+  mkdirSync(join(coreA, 'jobs'), { recursive: true });
+  mkdirSync(join(coreA, 'intake', 'jobs'), { recursive: true });
+  mkdirSync(join(coreA, 'logs'), { recursive: true });
+  writeFileSync(join(stateRoot, `${idA}.json`), JSON.stringify({ repo: 'owner/disabled-repo', cwd: f.cwd, enabled: false, engine: 'core' }));
+
+  const liveBuild = startAgentJob({ id: '11-build', dir: join(coreA, 'logs'), cwd: f.dir, command: '/bin/sh', args: ['-c', 'sleep 10'], env: { PATH: process.env.PATH } });
+  const liveSuite = startAgentJob({ id: '11-suite', dir: join(coreA, 'logs'), cwd: f.dir, command: '/bin/sh', args: ['-c', 'sleep 10'], env: { PATH: process.env.PATH } });
+  const liveIntake = startAgentJob({ id: '19-intake', dir: join(coreA, 'logs'), cwd: f.dir, command: '/bin/sh', args: ['-c', 'sleep 10'], env: { PATH: process.env.PATH } });
+  t.after(() => { stopAgentJob(liveBuild); stopAgentJob(liveSuite); stopAgentJob(liveIntake); });
+
+  writeFileSync(join(coreA, 'jobs', '11.json'), JSON.stringify({
+    issue: 11, phase: 'pr', role: 'build', agent: liveBuild, suite: { agent: liveSuite },
+  }));
+  writeFileSync(join(coreA, 'jobs', '12.json'), JSON.stringify({
+    issue: 12, phase: 'pr', role: 'build',
+  }));
+  writeFileSync(join(coreA, 'intake', 'jobs', '19.json'), JSON.stringify({
+    issue: 19, stage: 'card', job: liveIntake,
+  }));
+
+  // Repo B: enabled with 1 active repair/review/vectors/runtime job (#21) using injected jobAlive for remaining roles.
+  const idB = 'b'.repeat(20), coreB = join(stateRoot, `${idB}-core`);
+  mkdirSync(join(coreB, 'jobs'), { recursive: true });
+  writeFileSync(join(stateRoot, `${idB}.json`), JSON.stringify({ repo: 'owner/enabled-repo', cwd: f.cwd, enabled: true, engine: 'core' }));
+  const fakePart = (id, pid) => ({ id, pid, token: `tok-${id}`, exit: join(coreA, 'logs', `missing-${id}.exit.json`) });
+  writeFileSync(join(coreB, 'jobs', '21.json'), JSON.stringify({
+    issue: 21, phase: 'pr', role: 'repair',
+    agent: fakePart('21-repair', 9001),
+    review: { agent: fakePart('21-review', 9002) },
+    vectors: { agent: fakePart('21-vectors', 9003) },
+    runtimeWait: { head: 'abc', state: 'sent', agent: fakePart('21-runtime', 9004) },
+  }));
+  writeFileSync(join(coreB, 'jobs', '22.json'), JSON.stringify({
+    issue: 22, phase: 'released', role: 'build',
+  }));
+
+  // 1. Real native process check (unmocked aliveCheck reading /proc/<pid>/cmdline on Linux) detects liveBuild, liveSuite, and liveIntake!
+  const nativeCheck = f.module.inspectMachineJobs(stateRoot);
+  assert.equal(nativeCheck.counts.build, 1);
+  assert.equal(nativeCheck.counts.suite, 1);
+  assert.equal(nativeCheck.counts.intake, 1);
+
+  const realOnly = f.module.inspectMachineJobs(stateRoot, {
+    jobAlive: (pid, token) => [9001, 9002, 9003, 9004].includes(pid) ? true : [liveBuild.pid, liveSuite.pid, liveIntake.pid].includes(pid) && Boolean(token),
+  });
+  assert.equal(realOnly.slotJobs, 2, '1 finishing issue in disabled repo + 1 issue in enabled repo; child roles and intake never inflate slots');
+  assert.deepEqual(realOnly.counts, { build: 1, repair: 1, review: 1, suite: 1, vectors: 1, runtime: 1, intake: 1 });
+  assert.equal(realOnly.totalProcesses, 7);
+
+  // 2. Stopping the disabled repo workers frees its slot reservation once processes exit.
+  stopAgentJob(liveBuild); stopAgentJob(liveSuite); stopAgentJob(liveIntake);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && (!existsSync(liveBuild.exit) || !existsSync(liveSuite.exit) || !existsSync(liveIntake.exit))) {
+    await new Promise(r => setTimeout(r, 40));
+  }
+  const afterStop = f.module.inspectMachineJobs(stateRoot, { jobAlive: pid => [9001, 9002, 9003, 9004].includes(pid) });
+  assert.equal(afterStop.slotJobs, 1, 'disabled repo slot drops to 0 after workers finish');
+  assert.equal(afterStop.counts.build, 0);
+  assert.equal(afterStop.counts.suite, 0);
+  assert.equal(afterStop.counts.intake, 0);
+
+  // 3. PID <= 1 (e.g. PID 1 init/systemd or PID 0) is rejected before probing liveness.
+  writeFileSync(join(coreA, 'jobs', '13.json'), JSON.stringify({
+    issue: 13, phase: 'running', role: 'build',
+    agent: fakePart('13-init', 1),
+    suite: { agent: fakePart('13-zero', 0) },
+  }));
+  const probedPids = [];
+  const pidGuard = f.module.inspectMachineJobs(stateRoot, {
+    jobAlive: pid => { probedPids.push(pid); return true; },
+  });
+  assert.equal(probedPids.includes(1), false, 'PID 1 is never probed');
+  assert.equal(probedPids.includes(0), false, 'PID 0 is never probed');
+  assert.equal(pidGuard.byRole.build.some(j => j.issue === 13), false);
+});
+
+test('status --all and status --json read local cached loginPool only (zero gh/HTTP/timer in --json, zero fabricated 0%) and wire conversion drops', async t => {
+  const { accountsStatePath } = await import('../src/login-pool.mjs');
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-obs-' });
+  const stateRoot = f.ports.stateRoot;
+  mkdirSync(stateRoot, { recursive: true });
+
+  const id = createHash('sha256').update(f.cwd).digest('hex').slice(0, 20);
+  const stateFile = join(stateRoot, `${id}.json`), coreDir = join(stateRoot, `${id}-core`);
+  mkdirSync(join(coreDir, 'jobs'), { recursive: true });
+  mkdirSync(join(coreDir, 'intake', 'cards'), { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({
+    repo: 'owner/repo', cwd: f.cwd, baseBranch: 'trunk', mode: 'observe', enabled: true, engine: 'core', runs: 8, share: 50,
+  }));
+  writeFileSync(join(coreDir, 'jobs', '42.json'), JSON.stringify({
+    issue: 42, phase: 'running', role: 'build',
+    agent: { id: '42-build', pid: 7771, token: 'tok-42', exit: join(coreDir, 'missing.exit.json') },
+  }));
+  writeFileSync(join(coreDir, 'intake', 'cards', '42.json'), JSON.stringify({ issue: 42, card: { class: 'ready', confidence: 0.9, reason: 'clear' } }));
+  writeFileSync(join(coreDir, 'history.jsonl'), [
+    JSON.stringify({ at: f.time - 3000, issue: 10, outcome: 'merged', pr: 101, text: 'merged cleanly' }),
+    JSON.stringify({ at: f.time - 2000, issue: 11, outcome: 'would-merge', pr: 102, text: 'green in observe mode' }),
+    JSON.stringify({ at: f.time - 1500, issue: 12, strike: true, owner: 'issue' }),
+    JSON.stringify({ at: f.time - 1000, issue: 12, outcome: 'ended', pr: null, poolExhausted: true, text: 'all accounts cooling' }),
+    JSON.stringify({ at: f.time - 500, issue: 13, outcome: 'ended', pr: 103, owner: 'pdd', text: 'review loop ended' }),
+  ].join('\n') + '\n');
+
+  const cloudStateFile = accountsStatePath({ HOME: f.home });
+  mkdirSync(dirname(cloudStateFile), { recursive: true });
+  writeFileSync(cloudStateFile, JSON.stringify({
+    enrolled: true,
+    accounts: [
+      { account_id: 'acc-1', label: 'codex-alpha', provider: 'codex', state: 'ready', five_hour_used_percent: 35, five_hour_reset_at: '2026-11-04T03:00:00Z', weekly_used_percent: 62, weekly_reset_at: '2026-11-08T00:00:00Z' },
+      { account_id: 'acc-2', label: 'claude-beta', provider: 'claude', state: 'cooling', five_hour_used_percent: 100, five_hour_reset_at: '2026-11-04T02:00:00Z', weekly_used_percent: null, weekly_reset_at: null },
+      { account_id: 'acc-3', label: 'codex-expired', provider: 'codex', state: 'reauth_required', five_hour_used_percent: null, weekly_used_percent: null },
+    ],
+  }));
+
+  f.ports.jobAlive = pid => pid === 7771;
+  f.ports.machineGuard = async input => ({
+    share: input.share ?? 50, shareSource: 'default', slots: input.runs ?? 8, requestedSlots: 8, hardwareSlots: 16,
+    limiter: 'runs', limiterDetail: '--runs 8', readyLogins: input.readyLogins ?? null, source: 'this machine, --runs 8',
+    auto: 6, room: { ok: true, reason: null, free: 7 }, use: { jobs: input.jobs, rss: 1024 ** 3, cores: 1 },
+    line: `Machine: share 50% (default) · slots 8 · jobs ${input.jobs} · new work: ok`,
+  });
+
+  const ghCallsBefore = f.runs.filter(([cmd]) => cmd === 'gh').length;
+  const textRes = await f.invoke('status', { all: true });
+  assert.equal(textRes.exitCode, 0, textRes.message);
+  assert.match(textRes.message, /Autopilot on this machine \(1\):/);
+  assert.match(textRes.message, /Machine: share 50% \(default\) · slots 8 · jobs 1 · new work: ok/);
+  assert.match(textRes.message, /Active jobs: 1 issue slot · roles build 1 \(#42\), repair 0, review 0, suite 0, vectors 0, runtime 0, intake 0/);
+  assert.match(textRes.message, /Suite queue: 0 running, 0 waiting/);
+  assert.match(textRes.message, /Login pool \(cloud\): ready 1, cooling 1, reauth_required 1/);
+  assert.match(textRes.message, /claude-beta \[claude cooling, 5H 100% \(2026-11-04T02:00Z\), 7D \?\]/);
+  assert.ok(textRes.message.includes('Conversion: claimed 4 → clear-spec 4 → PR 3 → merged/would-merge 2 (dropped 2: pdd 1, quota_or_service 1; pending drafts 0; intake cards 1)'), textRes.message);
+
+  // status --json spawns zero timer/gh/herdr probes!
+  const prevTimer = f.ports.timer;
+  f.ports.timer = async () => assert.fail('status --json must never probe user timers');
+  const jsonRes = await f.invoke('status', { json: true });
+  f.ports.timer = prevTimer;
+  assert.equal(jsonRes.exitCode, 0);
+  const payload = JSON.parse(jsonRes.message);
+  assert.equal(payload.schema, 'pdd.cost-report.v1');
+  assert.equal(payload.costs.schema, 'pdd.cost-report.v1');
+  assert.equal(payload.repositories.length, 1);
+  assert.equal(payload.repositories[0].repo, 'owner/repo');
+  assert.equal(payload.machineGuard.slots, 8);
+  assert.equal(payload.machineGuard.readyLogins, 1);
+  assert.equal(payload.activeJobs.issueSlots, 1);
+  assert.equal(payload.activeJobs.counts.build, 1);
+  assert.equal(payload.suiteQueue.busyChecks, 0);
+  assert.deepEqual(payload.loginPool.counts, { total: 3, ready: 1, cooling: 1, reauth_required: 1 });
+  assert.equal(payload.loginPool.accounts[1].weeklyUsedPercent, null, 'unknown window stays null, never fabricated 0%');
+  assert.deepEqual(payload.conversion.totals, { backlog: 4, claimable: 4, claimed: 4, clearSpec: 4, prOpened: 3, mergedOrWouldMerge: 2, dropped: 2 });
+  assert.equal(payload.conversion.dropsByOwner.quota_or_service.count, 1);
+  assert.equal(payload.conversion.dropsByOwner.pdd.count, 1);
+  assert.equal(f.runs.filter(([cmd]) => cmd === 'gh').length, ghCallsBefore, 'status makes zero GitHub calls');
+
+  // Enrolled with active lease metadata only (no full pool count): shows cached lease windows while keeping readyLogins null.
+  writeFileSync(cloudStateFile, JSON.stringify({
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc-lease', label: 'codex-lease', provider: 'codex', five_hour_used_percent: 45, weekly_used_percent: null } },
+    cooling: {},
+  }));
+  const leaseJson = JSON.parse((await f.invoke('status', { json: true })).message);
+  assert.equal(leaseJson.loginPool.readyLogins, null, 'lease-only cache leaves readyLogins null so autoSlots is not lowered');
+  assert.equal(leaseJson.loginPool.accounts[0].fiveHourUsedPercent, 45);
+  assert.equal(leaseJson.loginPool.accounts[0].weeklyUsedPercent, null);
+
+  // Enrolled with no cached account entries on disk: reports unavailable with zero fabricated 0% values.
+  writeFileSync(cloudStateFile, JSON.stringify({ enrolled: true, providers: ['codex'], active: {}, cooling: {} }));
+  const offlineText = await f.invoke('status', { all: true });
+  assert.equal(offlineText.exitCode, 0);
+  assert.match(offlineText.message, /Login pool \(cloud\): unavailable/);
+  assert.doesNotMatch(offlineText.message, /Login pool.*0%/);
+  const offlineJson = JSON.parse((await f.invoke('status', { json: true })).message);
+  assert.deepEqual(offlineJson.loginPool, { source: 'cloud', state: 'unavailable', counts: null, readyLogins: null, accounts: [] });
+});
+
+test('status --all and status --json create or modify zero files on disk, and tickAutopilot agrees with status on login-scaled slots', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const { readMachineGuard } = await import('../src/machine-guard.mjs');
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-ro-' });
+  const stateRoot = f.ports.stateRoot;
+  mkdirSync(stateRoot, { recursive: true });
+
+  // Configure a 5-login local pool (scales automatic slots from 4 -> 2 * 5 = 10 on a 64-core server).
+  const logins = [];
+  for (let i = 1; i <= 5; i++) {
+    const cHome = join(f.home, `.codex-p${i}`);
+    mkdirSync(cHome, { recursive: true });
+    writeFileSync(join(cHome, 'auth.json'), JSON.stringify({ tokens: { access_token: `tok-${i}` } }));
+    logins.push({ id: `codex-${i}`, kind: 'codex', codexHome: cHome });
+  }
+  const poolFile = join(f.dir, 'five-pool.json');
+  writeFileSync(poolFile, JSON.stringify({ reset: 'never', logins }));
+
+  const id = createHash('sha256').update(f.cwd).digest('hex').slice(0, 20);
+  const stateFile = join(stateRoot, `${id}.json`);
+  writeFileSync(stateFile, JSON.stringify({
+    enabled: true, cwd: f.cwd, repo: 'owner/repo', defaultBranch: 'main', baseBranch: 'main',
+    coordinatorId: 'coord-ro', machine: 'machine-ro', engine: 'core', mode: 'observe',
+    label: 'pdd:autopilot', poolPath: poolFile,
+    agent: { id: 'codex-1', kind: 'codex', command: 'codex' },
+    packageRoot: f.packageRoot,
+  }));
+
+  // Initialize a real git repo in f.cwd and seed .git/pdd/runs/17/status.json + ~/.local/state/pdd/runs.json to prove localCosts writes zero files!
+  execFileSync('git', ['init', '-q'], { cwd: f.cwd });
+  const gitCommonDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: f.cwd, encoding: 'utf8' }).trim();
+  const runDir = join(gitCommonDir, 'pdd', 'runs', '17');
+  mkdirSync(runDir, { recursive: true });
+  const savedRun = {
+    v: 1, runId: 'run-ro-17', number: 17, repo: 'owner/repo', startedAt: f.time - 60000, updatedAt: f.time - 30000,
+    runDir, commonDir: gitCommonDir, sourceRoot: f.cwd, root: f.cwd, state: 'running', workflow: 'feature',
+    agent: 'codex', chats: [], pr: [], areas: [{ name: 'code' }],
+  };
+  writeFileSync(join(runDir, 'status.json'), JSON.stringify(savedRun, null, 2) + '\n');
+  const runsIndexDir = join(f.home, '.local', 'state', 'pdd');
+  mkdirSync(runsIndexDir, { recursive: true });
+  writeFileSync(join(runsIndexDir, 'runs.json'), JSON.stringify({ runs: [{ number: 17, repo: 'owner/repo', runDir }] }));
+
+  const GiB = 1024 ** 3;
+  const server = {
+    cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null },
+    disk: { available: 500 * GiB, total: 1000 * GiB }, cgroup: { cpus: null, memoryMax: null, memoryFree: null },
+    check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' },
+  };
+  f.ports.machineGuard = input => readMachineGuard(input, {
+    machineResources: async () => server,
+    autopilotUse: async () => ({ rss: GiB, cores: 1 }),
+  });
+
+  // 1. Recursive filesystem snapshot before status --all & status --json: zero creates, deletes, or mutations!
+  const snapshotTree = rootDir => {
+    const entries = [];
+    const walk = cur => {
+      for (const name of readdirSync(cur).sort()) {
+        const full = join(cur, name);
+        const st = statSync(full);
+        if (st.isDirectory()) { entries.push(`D:${full}`); walk(full); }
+        else entries.push(`F:${full}:${st.size}:${st.mtimeMs}:${createHash('sha256').update(readFileSync(full)).digest('hex')}`);
+      }
+    };
+    walk(rootDir);
+    return entries;
+  };
+
+  const beforeSnap = snapshotTree(f.dir);
+  const allRes = await f.invoke('status', { all: true });
+  assert.equal(allRes.exitCode, 0, allRes.message);
+  const jsonRes = await f.invoke('status', { json: true });
+  assert.equal(jsonRes.exitCode, 0);
+  const jsonAllRes = await f.invoke('status', { json: true, all: true });
+  assert.equal(jsonAllRes.exitCode, 0);
+  const afterSnap = snapshotTree(f.dir);
+  assert.deepEqual(afterSnap, beforeSnap, 'status --all and status --json must create or modify zero files on disk');
+
+  // 2. Also verify real CLI subprocess for status --json spawns zero gh/herdr/systemctl/launchctl even with enrolled accounts-state.json!
+  const { accountsStatePath } = await import('../src/login-pool.mjs');
+  const enrolledPath = accountsStatePath({ HOME: f.home });
+  mkdirSync(dirname(enrolledPath), { recursive: true });
+  writeFileSync(enrolledPath, JSON.stringify({ enrolled: true, providers: ['codex'], active: {}, cooling: {} }));
+  const deniedBin = join(f.dir, 'denied-bin'), deniedMarker = join(f.dir, 'denied-called');
+  mkdirSync(deniedBin, { recursive: true });
+  for (const prog of ['gh', 'herdr', 'systemctl', 'launchctl']) {
+    writeFileSync(join(deniedBin, prog), `#!/bin/sh\nprintf "%s\n" "${prog}" >> "${deniedMarker}"\nexit 99\n`, { mode: 0o755 });
+  }
+  const cliBin = fileURLToPath(new URL('../bin/pdd.mjs', import.meta.url));
+  const rawCliJson = execFileSync(process.execPath, [cliBin, 'autopilot', 'status', '--json'], {
+    cwd: f.cwd, encoding: 'utf8',
+    env: { HOME: f.home, PATH: `${deniedBin}:${process.env.PATH}` },
+  });
+  assert.equal(existsSync(deniedMarker), false, 'real CLI status --json must spawn zero gh/herdr/systemctl/launchctl subprocesses');
+  assert.equal(JSON.parse(rawCliJson).loginPool.state, 'unavailable');
+  rmSync(enrolledPath, { force: true });
+
+  // 3. Consistent 10-slot login-scaled capacity across repo status, status --all, status --json, and tickAutopilot (coreGuard)!
+  const repoStatus = await f.invoke('status');
+  assert.equal(repoStatus.exitCode, 0, repoStatus.message);
+  assert.match(repoStatus.message, /Jobs: 0 of 10 slots busy/);
+  assert.match(repoStatus.message, /→ 10 \(automatic, limited by 2 × 5 ready logins = 10\)/);
+  assert.match(allRes.message, /→ 10 \(automatic, limited by 2 × 5 ready logins = 10\)/);
+  assert.equal(JSON.parse(jsonRes.message).machineGuard.slots, 10);
+
+  f.ports.corePorts = { checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true };
+  const tickRes = await f.module.tickAutopilot(stateFile, f.ports);
+  assert.equal(tickRes.exitCode, 0, tickRes.message);
+  assert.match(tickRes.message, /0 of 10 slots busy/, 'tickAutopilot uses the exact same 10 login-scaled slots as status');
+});
+
+test('paused local pool login reports readyLogins: 0 and holds admission across status and tickAutopilot', async t => {
+  const { readMachineGuard } = await import('../src/machine-guard.mjs');
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-paused-pool-' });
+  const stateRoot = f.ports.stateRoot;
+  mkdirSync(stateRoot, { recursive: true });
+
+  const cHome = join(f.home, '.codex-paused');
+  mkdirSync(cHome, { recursive: true });
+  writeFileSync(join(cHome, 'auth.json'), JSON.stringify({ tokens: { access_token: 'tok-paused' } }));
+  const poolFile = join(f.dir, 'paused-pool.json');
+  writeFileSync(poolFile, JSON.stringify({
+    reset: 'never',
+    logins: [{ id: 'codex-paused', kind: 'codex', paused: true, codexHome: cHome }],
+  }));
+
+  const id = createHash('sha256').update(f.cwd).digest('hex').slice(0, 20);
+  const stateFile = join(stateRoot, `${id}.json`);
+  writeFileSync(stateFile, JSON.stringify({
+    enabled: true, cwd: f.cwd, repo: 'owner/repo', defaultBranch: 'main', baseBranch: 'main',
+    coordinatorId: 'coord-paused', machine: 'machine-paused', engine: 'core', mode: 'observe',
+    label: 'pdd:autopilot', poolPath: poolFile,
+    agent: { id: 'codex-paused', kind: 'codex', command: 'codex' },
+    packageRoot: f.packageRoot,
+  }));
+
+  const GiB = 1024 ** 3;
+  const server = {
+    cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null },
+    disk: { available: 500 * GiB, total: 1000 * GiB }, cgroup: { cpus: null, memoryMax: null, memoryFree: null },
+    check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' },
+  };
+  f.ports.machineGuard = input => readMachineGuard(input, {
+    machineResources: async () => server,
+    autopilotUse: async () => ({ rss: 0, cores: 0 }),
+  });
+
+  const jsonRes = await f.invoke('status', { json: true });
+  assert.equal(jsonRes.exitCode, 0);
+  const payload = JSON.parse(jsonRes.message);
+  assert.equal(payload.loginPool.source, 'local-pool');
+  assert.equal(payload.loginPool.state, 'paused');
+  assert.equal(payload.loginPool.readyLogins, 0);
+  assert.deepEqual(payload.loginPool.counts, { total: 1, ready: 0, cooling: 0, paused: 1, reauth_required: 0 });
+  assert.equal(payload.machineGuard.slots, 0);
+  assert.deepEqual(payload.machineGuard.room, { ok: false, reason: 'no ready Cloud or local logins', free: 0 });
+
+  const allRes = await f.invoke('status', { all: true });
+  assert.equal(allRes.exitCode, 0);
+  assert.match(allRes.message, /Login pool \(local\): ready 0, cooling 0, paused 1 of 1/);
+  assert.match(allRes.message, /held \(no ready Cloud or local logins\)/);
+
+  const repoRes = await f.invoke('status');
+  assert.equal(repoRes.exitCode, 0);
+  assert.match(repoRes.message, /held \(no ready Cloud or local logins\)/);
+});
+
+test('cross-repository --runs 8 lifts whole-machine capacity consistently across status and sibling repo coreGuard', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const { readMachineGuard } = await import('../src/machine-guard.mjs');
+  const f = await fixture(t, { tempPrefix: 'pdd-autopilot-cross-runs-' });
+  const stateRoot = f.ports.stateRoot;
+  mkdirSync(stateRoot, { recursive: true });
+
+  // Repo A: enabled with --runs 8 and 5 active jobs.
+  const cwdA = join(f.dir, 'repo-a'), cwdB = f.cwd;
+  mkdirSync(cwdA, { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: cwdA });
+  execFileSync('git', ['init', '-q'], { cwd: cwdB });
+  writeFileSync(join(cwdB, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'observe', trust: [], engine: 'core', testCommand: 'npm test' } }));
+
+  const idA = createHash('sha256').update(realpathSync(cwdA)).digest('hex').slice(0, 20);
+  const idB = createHash('sha256').update(realpathSync(cwdB)).digest('hex').slice(0, 20);
+  const stateFileA = join(stateRoot, `${idA}.json`), coreA = join(stateRoot, `${idA}-core`);
+  const stateFileB = join(stateRoot, `${idB}.json`);
+  mkdirSync(join(coreA, 'jobs'), { recursive: true });
+
+  writeFileSync(stateFileA, JSON.stringify({
+    enabled: true, cwd: realpathSync(cwdA), repo: 'owner/repo-a', defaultBranch: 'main', baseBranch: 'main',
+    coordinatorId: 'coord-a', machine: 'machine-ab', engine: 'core', mode: 'observe', runs: 8,
+    label: 'pdd:autopilot', agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: f.packageRoot,
+  }));
+  writeFileSync(stateFileB, JSON.stringify({
+    enabled: true, cwd: realpathSync(cwdB), repo: 'owner/repo-b', defaultBranch: 'main', baseBranch: 'main',
+    coordinatorId: 'coord-b', machine: 'machine-ab', engine: 'core', mode: 'observe',
+    label: 'pdd:autopilot', agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: f.packageRoot,
+  }));
+  for (let i = 1; i <= 5; i++) {
+    writeFileSync(join(coreA, 'jobs', `${i}.json`), JSON.stringify({ issue: i, phase: 'running', role: 'build' }));
+  }
+
+  const GiB = 1024 ** 3;
+  const server = {
+    cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null },
+    disk: { available: 500 * GiB, total: 1000 * GiB }, cgroup: { cpus: null, memoryMax: null, memoryFree: null },
+    check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' },
+  };
+  f.ports.machineGuard = input => readMachineGuard(input, {
+    machineResources: async () => server,
+    autopilotUse: async () => ({ rss: 3 * GiB, cores: 3 }),
+  });
+
+  // 1. With 5 jobs in Repo A (--runs 8) and 0 jobs in Repo B (default 4), BOTH global status AND Repo B status/coreGuard agree 3 machine slots remain free!
+  const globalJson = JSON.parse((await f.invoke('status', { json: true, all: true })).message);
+  assert.equal(globalJson.machineGuard.machineSlots, 8);
+  assert.deepEqual(globalJson.machineGuard.room, { ok: true, reason: null, free: 3 });
+
+  const repoBStatus = await f.invoke('status');
+  assert.equal(repoBStatus.exitCode, 0, repoBStatus.message);
+  assert.match(repoBStatus.message, /Jobs: 0 of 4 slots busy/);
+  assert.match(repoBStatus.message, /→ 4 \(automatic, machine max 8\) · .* · new work: ok/);
+
+  f.ports.queryIssues = async () => ({ status: 200, issues: [{ number: 77, title: 'Ready issue', body: 'Fix x', labels: [{ name: 'pdd:autopilot' }] }], etag: '"e1"' });
+  f.ports.corePorts = {
+    checkBase: async () => ({ exitCode: 0, message: 'ok' }),
+    agentReady: async () => true,
+    intake: async () => ({ started: 0, skipped: 0 }),
+  };
+  const tickBOpen = await f.module.tickAutopilot(stateFileB, f.ports);
+  assert.equal(tickBOpen.exitCode, 0, tickBOpen.message);
+  assert.doesNotMatch(tickBOpen.message, /intake held:/, 'Repo B coreGuard must not hold at 5 of 4 when Repo A configured --runs 8');
+
+  // 2. When Repo A reaches 8 active jobs, BOTH global status AND Repo B status hold at 8 of 8!
+  for (let i = 6; i <= 8; i++) {
+    writeFileSync(join(coreA, 'jobs', `${i}.json`), JSON.stringify({ issue: i, phase: 'running', role: 'build' }));
+  }
+  const globalFull = JSON.parse((await f.invoke('status', { json: true, all: true })).message);
+  assert.deepEqual(globalFull.machineGuard.room, { ok: false, reason: '8 of 8 Autopilot jobs on this machine run (all repositories, 50% share)', free: 0 });
+
+  const repoBFull = await f.invoke('status');
+  assert.match(repoBFull.message, /held \(8 of 8 Autopilot jobs on this machine run \(all repositories, 50% share\)\)/);
+});
+
+test('invalid or unknown-key local login pool fails closed with state invalid, readyLogins 0, and held admission', async t => {
+  const { coreWorld } = await import('./helpers/core-world.mjs');
+  const { readMachineGuard } = await import('../src/machine-guard.mjs');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'observe', trust: [], engine: 'core', testCommand: 'npm test' } }));
+  w.issue(88, { labels: ['pdd:autopilot'] });
+
+  const home = join(w.dir, 'home-invalid-pool');
+  const defaultPoolDir = join(home, '.config', 'pdd');
+  mkdirSync(defaultPoolDir, { recursive: true });
+  // Unknown key disabled: true is rejected by loadLoginPool; status & coreGuard must fail closed (readyLogins: 0), never not-configured!
+  writeFileSync(join(defaultPoolDir, 'pool.json'), JSON.stringify({
+    logins: [{ id: 'x', kind: 'codex', codexHome: join(w.dir, 'x'), disabled: true }],
+  }));
+
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({
+    enabled: true, cwd, repo: 'acme/widgets', defaultBranch: 'main', baseBranch: 'main',
+    coordinatorId: 'coord-inv', machine: 'machine-inv', engine: 'core', mode: 'observe', runs: 8,
+    label: 'pdd:autopilot', agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg'),
+  }));
+
+  const GiB = 1024 ** 3;
+  const server = {
+    cpuCount: 64, load: 1, memory: { available: 200 * GiB, total: 251 * GiB }, pressure: { io: 0, memory: 0, level: null },
+    disk: { available: 500 * GiB, total: 1000 * GiB }, cgroup: { cpus: null, memoryMax: null, memoryFree: null },
+    check: { cpuIds: Array.from({ length: 64 }, (_, i) => i), platform: 'linux', battery: false, virtualized: true, taskset: '/usr/bin/taskset' },
+  };
+  const env = { HOME: home, PATH: process.env.PATH };
+  const ports = {
+    stateRoot,
+    now: w.now,
+    env,
+    timer: async () => true,
+    warn: () => {},
+    machineGuard: input => readMachineGuard(input, { machineResources: async () => server, autopilotUse: async () => ({ rss: 0, cores: 0 }) }),
+    run: async (command, args, options = {}) => {
+      if (command === 'gh') return w.gh(args, options);
+      const { spawnSync } = await import('node:child_process');
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' });
+      return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true },
+  };
+
+  const { runAutopilotLauncher, tickAutopilot } = await import('../src/autopilot-launcher.mjs');
+  const jsonRes = await runAutopilotLauncher({ command: 'status', json: true, cwd, packageRoot: join(w.dir, 'pkg'), env }, ports);
+  assert.equal(jsonRes.exitCode, 0);
+  const payload = JSON.parse(jsonRes.message);
+  assert.equal(payload.loginPool.source, 'local-pool');
+  assert.equal(payload.loginPool.state, 'invalid');
+  assert.equal(payload.loginPool.readyLogins, 0);
+  assert.equal(payload.machineGuard.slots, 0);
+  assert.equal(payload.machineGuard.machineSlots, 0);
+  assert.deepEqual(payload.machineGuard.room, { ok: false, reason: 'no ready Cloud or local logins', free: 0 });
+
+  const allRes = await runAutopilotLauncher({ command: 'status', all: true, cwd, packageRoot: join(w.dir, 'pkg'), env }, ports);
+  assert.equal(allRes.exitCode, 0);
+  assert.match(allRes.message, /Login pool \(local\): invalid \(0 ready\)/);
+  assert.match(allRes.message, /held \(no ready Cloud or local logins\)/);
+
+  const repoRes = await runAutopilotLauncher({ command: 'status', cwd, packageRoot: join(w.dir, 'pkg'), env }, ports);
+  assert.equal(repoRes.exitCode, 0);
+  assert.match(repoRes.message, /held \(no ready Cloud or local logins\)/);
+
+  const tickRes = await tickAutopilot(stateFile, ports);
+  assert.equal(tickRes.exitCode, 0, tickRes.message);
+  assert.equal(w.started.length, 0, 'invalid pool must start zero jobs');
+  assert.match(tickRes.message, /intake held: no ready Cloud or local logins/);
+});
+
+test('3389: release serializes on STATE.lock with concurrent ticks and refuses cleanly when STATE.lock times out', async t => {
+  const { coreWorld } = await import('./helpers/core-world.mjs');
+  const { tickAutopilot, runAutopilotLauncher } = await import('../src/autopilot-launcher.mjs');
+  const { spawnSync } = await import('node:child_process');
+  const w = await coreWorld(t);
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [], engine: 'core', testCommand: 'npm test', label: 'pdd:autopilot' } }));
+  w.issue(17, { labels: ['pdd:autopilot'] });
+  const cwd = w.git(w.cwd, 'rev-parse', '--show-toplevel'), stateRoot = join(w.dir, 'state');
+  const stateFile = join(stateRoot, `${createHash('sha256').update(cwd).digest('hex').slice(0, 20)}.json`);
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({ enabled: true, engine: 'core', cwd, repo: 'acme/widgets', defaultBranch: 'main', coordinatorId: 'coord-a', machine: 'machine-a',
+    agent: { id: 'codex', kind: 'codex', command: 'codex' }, packageRoot: join(w.dir, 'pkg') }));
+  let clock = 0;
+  const basePorts = { stateRoot, now: w.now, env: { HOME: process.env.HOME, PATH: process.env.PATH }, timer: async () => true, warn: () => {}, authority: { read: async () => ({ authority: 'trusted' }) },
+    run: async (command, args, options = {}) => {
+      if (command === 'gh') return w.gh(args, options);
+      const r = spawnSync('git', args, { cwd: options.cwd ?? cwd, encoding: 'utf8' }); return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+    },
+    machineGuard: w.machineGuard, corePorts: { jobs: w.jobs, checkBase: async () => ({ exitCode: 0, message: 'ok' }), agentReady: async () => true } };
+
+  await tickAutopilot(stateFile, basePorts);
+  const jobFile = join(stateFile.replace(/\.json$/, '-core'), 'jobs', '17.json');
+  assert.ok(existsSync(jobFile));
+
+  // Contended STATE.lock that stays held past 5s timeout refuses without touching jobs/17.json or pdd:working.
+  writeFileSync(`${stateFile}.lock`, String(process.pid), { mode: 0o600 });
+  try {
+    const busy = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: basePorts.env, issues: ['17'] }, {
+      ...basePorts, elapsedNow: () => clock, sleep: async ms => { clock += ms; },
+    });
+    assert.equal(busy.exitCode, 1);
+    assert.match(busy.message, /timed out/i);
+    assert.ok(existsSync(jobFile), 'jobs/17.json untouched when STATE.lock is held');
+    assert.ok(w.labels(17).includes('pdd:working'));
+  } finally {
+    rmSync(`${stateFile}.lock`, { force: true });
+  }
+
+  // Contended STATE.lock released while waiting succeeds cleanly.
+  writeFileSync(`${stateFile}.lock`, String(process.pid), { mode: 0o600 });
+  clock = 0;
+  const ok = await runAutopilotLauncher({ command: 'release', cwd, packageRoot: join(w.dir, 'pkg'), env: basePorts.env, issues: ['17'] }, {
+    ...basePorts, elapsedNow: () => clock, sleep: async ms => { clock += ms; rmSync(`${stateFile}.lock`, { force: true }); },
+  });
+  assert.equal(ok.exitCode, 0, ok.message);
+  assert.ok(!existsSync(jobFile));
+  assert.ok(!w.labels(17).includes('pdd:working'));
 });

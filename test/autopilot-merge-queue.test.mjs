@@ -17,6 +17,7 @@ import {
   mergeQueueStatusLine,
   processMergeQueue,
   readMergeQueue,
+  resolveGeneratedHeaderConflicts,
   sanitizePublicQueueNote,
 } from '../src/autopilot-merge-queue.mjs';
 import { coreSettings, coreStatus } from '../src/autopilot-core.mjs';
@@ -177,14 +178,14 @@ function createCalcRepoFixture(t) {
     return { merged: true, baseTipSha: newMainSha };
   };
 
-  return { dir, remote, repo, stateDir, initialMainSha, makeBranch, landOnRemoteMain };
+  return { dir, remote, repo, stateDir, basePrompt, initialMainSha, makeBranch, landOnRemoteMain };
 }
 
 test('MQ1: serialized FIFO landing train rebases 3 concurrent PRs touching the same prompt & owned module with 0 AI calls for PDD header-hash conflicts', async t => {
   const fx = createCalcRepoFixture(t);
 
   const sha101 = fx.makeBranch('pdd/core-101-add', fx.initialMainSha, wt => {
-    const p = readFileSync(join(wt, 'prompts/cli/calc.prompt.md'), 'utf8')
+    const p = fx.basePrompt
       .replace('- Reserved for addition.', '- `add(a, b)` returns `a + b`.');
     writeFileSync(join(wt, 'prompts/cli/calc.prompt.md'), p);
     const h = promptHeaderHash(Buffer.from(p));
@@ -198,7 +199,7 @@ test('MQ1: serialized FIFO landing train rebases 3 concurrent PRs touching the s
   });
 
   const sha102 = fx.makeBranch('pdd/core-102-mul', fx.initialMainSha, wt => {
-    const p = readFileSync(join(wt, 'prompts/cli/calc.prompt.md'), 'utf8')
+    const p = fx.basePrompt
       .replace('- Reserved for multiplication.', '- `mul(a, b)` returns `a * b`.');
     writeFileSync(join(wt, 'prompts/cli/calc.prompt.md'), p);
     const h = promptHeaderHash(Buffer.from(p));
@@ -212,7 +213,7 @@ test('MQ1: serialized FIFO landing train rebases 3 concurrent PRs touching the s
   });
 
   const sha103 = fx.makeBranch('pdd/core-103-clamp', fx.initialMainSha, wt => {
-    const p = readFileSync(join(wt, 'prompts/cli/calc.prompt.md'), 'utf8')
+    const p = fx.basePrompt
       .replace('- Reserved for clamping.', '- `clamp(v, lo, hi)` bounds `v` to `[lo, hi]`.');
     writeFileSync(join(wt, 'prompts/cli/calc.prompt.md'), p);
     const h = promptHeaderHash(Buffer.from(p));
@@ -302,7 +303,7 @@ test('MQ2: post-rebase PDD header-hash drift sweep refreshes owned headers with 
   const fx = createCalcRepoFixture(t);
 
   const sha201 = fx.makeBranch('pdd/core-201-slot-a', fx.initialMainSha, wt => {
-    const p = readFileSync(join(wt, 'prompts/cli/calc.prompt.md'), 'utf8')
+    const p = fx.basePrompt
       .replace('- Reserved for addition.', '- `add(a, b)` returns `a + b`.');
     writeFileSync(join(wt, 'prompts/cli/calc.prompt.md'), p);
     const h = promptHeaderHash(Buffer.from(p));
@@ -313,7 +314,7 @@ test('MQ2: post-rebase PDD header-hash drift sweep refreshes owned headers with 
   fx.landOnRemoteMain({ branch: 'pdd/core-201-slot-a', headSha: sha201 });
 
   const sha202 = fx.makeBranch('pdd/core-202-prompt-only', fx.initialMainSha, wt => {
-    const p = readFileSync(join(wt, 'prompts/cli/calc.prompt.md'), 'utf8')
+    const p = fx.basePrompt
       .replace('- Reserved for multiplication.', '- Clarified multiplication wording.');
     writeFileSync(join(wt, 'prompts/cli/calc.prompt.md'), p);
   });
@@ -336,6 +337,18 @@ test('MQ2: post-rebase PDD header-hash drift sweep refreshes owned headers with 
   gitSync(fx.repo, 'fetch', '-q', 'origin', 'main');
   gitSync(fx.repo, 'checkout', '-q', 'origin/main');
   assert.equal(findOwners({ root: fx.repo, paths: ['src/calc.mjs'] }).files[0].headers[0].state, 'current');
+
+  // Also resolves path-only Prompt: vs hashed Generated from header conflicts cleanly (#3476 compatibility)
+  const mixedHeader = resolveGeneratedHeaderConflicts([
+    '<<<<<<< HEAD',
+    '// Prompt: prompts/cli/calc.prompt.md',
+    '=======',
+    '// Generated from prompts/cli/calc.prompt.md (sha256: 0000000000000000000000000000000000000000000000000000000000000000).',
+    '>>>>>>> pdd/core-203',
+    'export const x = 1;',
+  ].join('\n'), { worktree: fx.repo });
+  assert.equal(mixedHeader.resolved, true);
+  assert.equal(mixedHeader.content, '// Prompt: prompts/cli/calc.prompt.md\nexport const x = 1;');
 });
 
 test('MQ3: observe mode keeps waiting would-merge PRs conflict-free as humans merge earlier PRs, and integrates with tickCore & coreStatus', async t => {
@@ -344,7 +357,7 @@ test('MQ3: observe mode keeps waiting would-merge PRs conflict-free as humans me
   const fx = createCalcRepoFixture(t);
 
   const sha301 = fx.makeBranch('pdd/core-301-add', fx.initialMainSha, wt => {
-    const p = readFileSync(join(wt, 'prompts/cli/calc.prompt.md'), 'utf8').replace('- Reserved for addition.', '- `add(a, b)` returns `a + b`.');
+    const p = fx.basePrompt.replace('- Reserved for addition.', '- `add(a, b)` returns `a + b`.');
     writeFileSync(join(wt, 'prompts/cli/calc.prompt.md'), p);
     const h = promptHeaderHash(Buffer.from(p));
     writeFileSync(join(wt, 'src/calc.mjs'), readFileSync(join(wt, 'src/calc.mjs'), 'utf8')
@@ -352,7 +365,7 @@ test('MQ3: observe mode keeps waiting would-merge PRs conflict-free as humans me
       .replace('export const slotA = null;', 'export function add(a, b) { return a + b; }'));
   });
   const sha302 = fx.makeBranch('pdd/core-302-mul', fx.initialMainSha, wt => {
-    const p = readFileSync(join(wt, 'prompts/cli/calc.prompt.md'), 'utf8').replace('- Reserved for multiplication.', '- `mul(a, b)` returns `a * b`.');
+    const p = fx.basePrompt.replace('- Reserved for multiplication.', '- `mul(a, b)` returns `a * b`.');
     writeFileSync(join(wt, 'prompts/cli/calc.prompt.md'), p);
     const h = promptHeaderHash(Buffer.from(p));
     writeFileSync(join(wt, 'src/calc.mjs'), readFileSync(join(wt, 'src/calc.mjs'), 'utf8')

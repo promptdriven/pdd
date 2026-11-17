@@ -1,4 +1,4 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: 8af32b588f8e11d16ec5a3a3ca5811c5d718d6effc7ed31672f125291828363b).
+// Prompt: prompts/cli/file-owner.prompt.md
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { runtimePreflightSlice } from './runtime-seam.mjs';
 const { gitFiles, interfaceBlocks } = runtimePreflightSlice();
 
 const HEAD = 4096, PROMPT = 65536, LINE = 1100, WHOLE = 10 * 1024 * 1024;
-const HEADER = /^\s*(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
+const HEADER = /^\s*(?:(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from|(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*Prompt:) (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\)| sha256=([a-f0-9]{64}))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const unique = values => [...new Set(values)];
 const bytesOf = content => typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
@@ -22,7 +22,7 @@ export function headerEntries(content) {
   if (bytes.length > HEAD) lines.pop();
   for (const line of lines.filter(line => line.length <= LINE)) {
     const match = HEADER.exec(line);
-    if (match && canonicalPath(match[1]) && !rows.has(match[1])) rows.set(match[1], { prompt: match[1], sha256: match[2] ?? null });
+    if (match && canonicalPath(match[1]) && !rows.has(match[1])) rows.set(match[1], { prompt: match[1], sha256: match[2] ?? match[3] ?? null });
   }
   return [...rows.values()];
 }
@@ -407,7 +407,7 @@ export function runOwner({ cwd = process.cwd(), paths = [], json = false } = {},
     const line = row.owners.length ? `${row.path}: ${row.owners.join(', ')} (${[row.source, doubt].filter(Boolean).join(', ')})`
       : `${row.path}: no owner${doubt ? ` (${doubt})` : ''}`;
     const hashes = row.headers.map(({ prompt, sha256: hash, expected, state, legacy }) => state === 'stale' ? `${prompt} header hash is stale (${hash}); current is ${expected}`
-      : state === 'none' ? `${prompt} header has no hash; current is ${expected}` : legacy ? `${prompt} header uses the whole-file hash; current is ${expected}` : '');
+      : legacy ? `${prompt} header uses the whole-file hash; current is ${expected}` : '');
     stdout.write([line, row.note, ...hashes].filter(Boolean).map((text, index) => `${index ? '  ' : ''}${text}\n`).join(''));
   }
   return exitCode;

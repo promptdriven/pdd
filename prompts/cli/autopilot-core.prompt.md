@@ -295,7 +295,8 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    comment `Autopilot core claim.` with a fenced JSON record
    `{repository, coordinatorId, machine, labelEventId, lastSeen: ""}`, where `machine`
    is this machine's id (`state.machineId`, else `m-` and the first 12 hex digits of
-   the SHA-256 of the host name), never the host name. The job saves it as
+   the SHA-256 of the host name; exported as `machineIdOf(state)`, so the launcher's
+   release uses the same id), never the host name. The job saves it as
    `claim.machine` and heartbeats with it. A claim whose record names this machine's
    host name (an older build) or its id is this machine's. The machine
    wins only when its comment is by the winning event's actor and is the earliest
@@ -608,14 +609,22 @@ build, repair and conflict rules say: "When you run tests or builds, pass
 
 **Cleanup (#3231).** Once per tick, after the jobs advance and before intake,
 `sweepFiles` removes each `worktrees/` entry whose issue (`N` or `N-…`) has no job
-file (with the intake removal: unlock, `remove -f -f`, the folder, `prune`), and each
+file, except `worktrees/N` when the issue's latest history outcome is a person's
+`pdd autopilot release` (`personRelease: true`), and each
 `logs/` file of no job with a file (by its `N-` prefix) that is older than 14 days,
 then such files oldest first while the folder holds more than 500 MiB. Each step only
 warns. The numbers are the guard's `logDays` and `logBytes`.
 
 Jobs run through the [headless job runner](agent-job.prompt.md) with
-`agentCommand` for Codex, Claude and agy (or Gemini headless CLI `-p "" --output-format stream-json --approval-mode yolo` with optional `--model MODEL` and stdin prompt) and `jobEnvironment(env)` (using the selected pool login's `agent` and isolated `env` when `ports.selectLogin` is present), in `logs/`, with id
-`N-ROLE-STAMP`. The prompt names the job's result file path. Every job runs the pdd
+`agentCommand` for Codex, Claude, Gemini and agy and `jobEnvironment(env)` (using the selected pool login's `agent` and isolated `env` when `ports.selectLogin` is present), in `logs/`, with id
+`N-ROLE-STAMP`. `agentModelFamily(agent, explicitModel = null)` (exported) maps a core
+agent kind or pool login spec (`agent.harness ?? agent.kind`) to model families:
+`codex` -> `openai`, `claude` -> `anthropic`, `gemini` -> `google`, and `agy` ->
+`google` unless an explicit model string on the login/agent or resolved step tier
+clearly names `claude` (`anthropic`) or `gpt-`/`o1`/`o3`/`o4` (`openai`).
+When a `build` or `repair` job starts (or a `conflict` job when no builder family is
+recorded yet), the job persists the builder's `agentKind`, `builderFamily` and, when
+present, `builderLoginId`. The prompt names the job's result file path. Every job runs the pdd
 that runs the tick: the tick writes `bin/pdd` in `ROOT` (`#!/bin/sh` and `exec 'NODE'
 'PACKAGE/bin/pdd.mjs' "$@"`, with this Node and this package, quoted for the shell;
 rewritten only when it differs) and puts `ROOT/bin` first on the job's `PATH`, before
@@ -656,8 +665,13 @@ the files: FILES]`. Each cut is saved in the job (`cuts`) and listed under Not c
 the evidence record.
 
 - **Build** (in `worktrees/N`): the issue title, URL and body as data from a trusted
-  author, and these rules: choose pdd-small-change, pdd-bug or pdd-feature, but make
-  ONE PR with prompt, Story, tests and code; this is not a `pdd workflow run`, so no
+  author, and these rules: choose `pdd-small-change` strictly when every planned file is
+  an unowned path `d` file outside PDD (docs, guides, CI, lock files, packages,
+  non-behavior config or metadata, or test-only maintenance — never `*.prompt.md`,
+  `user_stories/*.md`, or product/app code), and choose `pdd-bug` or `pdd-feature`
+  whenever an issue touches prompt-owned or product/app code (`src/`, `app/`, etc.),
+  even when no prompt exists yet, making ONE PR with prompt, Story, tests and code; this
+  is not a `pdd workflow run`, so no
   `pdd workflow` command, no Herdr, no person wait and no `steps/autopilot.md`. Rule 1
   also carries the choice rule (T10; Serhan, Nov 11: a bug fix is not a big decision;
   big decisions are like adding Autopilot to pdd and how it should work). **Autopilot
@@ -713,10 +727,12 @@ the evidence record.
   quote the restored line or "no contract change"), c (a new code file with new
   behavior: its prompt first, with a binding or header; moved code keeps its owner), d
   (any other file: direct, never a new prompt; a value that a prompt states must agree
-  with it; docs take facts from the owning prompt), e (existing unowned code, never a
-  file that the PR adds: direct, with a regression test, and the file in the result's
-  `adopt` list); never add a
-  binding or header for a file of the base unless the issue asks to adopt PDD; tests
+  with it; docs take facts from the owning prompt), e (existing product/app code with no
+  owning prompt on the base, never a file that the PR adds: create its owning
+  `.prompt.md` first, link the code file's `Generated from` header, and include
+  regression tests in this single PR); never add a prompt, binding or header for an
+  existing non-code path `d` file, or add a header without its owning prompt, unless the
+  issue asks to adopt PDD; tests
   only for a change of the public surface (a test that fails on base), else the done
   check; one `Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote
   file:line | no contract change | new prompt> — Test: <file | done check>` line per
@@ -819,7 +835,27 @@ the evidence record.
   also allows `{"outcome": "not reproduced", "command", "detail"?}` (`"not-reproduced"`
   accepted too) when the failure does not reproduce and the repair made no code changes.
 - **Review** (in `worktrees/N-review`, a detached checkout of the head): a fresh agent
-  that did not write the change. It gets the path checks' table of the PR's changed
+  that did not write the change. When `job.builderFamily` is known and no login is
+  preselected from a quota retry, `reviewState` first probes `selectAgentStep` across
+  candidate core kinds and filters pool logins individually by per-login effective
+  `agentModelFamily(login.harness ?? login.kind, login.model) !== job.builderFamily`
+  (so a multi-family harness such as `agy` skips same-family logins while still
+  selecting ready alternate-family `agy` logins rather than excluding `agy` as a whole).
+  When an alternate-family reviewer is selected, `job.review` records `reviewFamily` and `reviewIndependence:
+  "cross-family"`. When no alternate-family login is ready or available (for example a
+  single-provider setup, an alternate family on cooldown, or an error during cross-family
+  selection), `reviewState` immediately
+  falls back to `selectAgentStep` across any ready kind without parking the PR, leaking
+  an unused pool/Cloud lease, or recording `poolOut` when fallback succeeds, and records
+  `reviewFamily` and `reviewIndependence: "same-family"` (or `"unknown-builder"` when
+  `job.builderFamily` is absent, such as a resumed PR). Likewise, if a selected
+  `cross-family` review attempt fails at launch or at runtime before producing a valid
+  `PASS` or `FAIL` verdict for `job.head` (missing CLI binary, auth failure, quota or
+  rate-limit error, non-zero exit without a valid result file, quiet stall, or malformed
+  result JSON), `reviewState` marks `crossFamilyFallback: true` on `job.review` for
+  `job.head` and immediately retries with a ready `same-family` login (falling back to
+  default `selectAgentStep` if needed) without counting the failed cross-family attempt
+  against the review attempt cap. It gets the path checks' table of the PR's changed
   files, each in one of three states (owned on the base, with its owner; unowned on the
   base; new in this PR, not on the base; or not checked when main's owners cannot be
   read), and the R5 hints (below), and checks the
@@ -1004,8 +1040,8 @@ read with the same port, as `findOwners` reads it; a missing file is readable). 
 an owner is `PROMPT (binding)`, `PROMPT (header)`, `PROMPT (prose, not certain: treat as
 owned)`, or another uncertain answer `PROMPT (HOW, not certain: NOTE)`. The build brief
 lists the owned files; with `bindings` false it adds the line `- (pdd-bindings.json
-cannot be read here, so no binding is known)`. **Path e** results carry `adopt` (file
-paths): the job keeps the union of the `adopt` lists of its results (`job.adopt`). It
+cannot be read here, so no binding is known)`. For backward compatibility when legacy or saved **Path e** results carry `adopt` (file
+paths), the job keeps the union of the `adopt` lists of its results (`job.adopt`). It
 files them only when the PR passed every check at its final head, right before the
 merge note or the would-merge note, once per job: one deduped PDD report
 (`autopilot-core` / `adopt-pdd`) with only the paths that the path checks of that head
@@ -1247,7 +1283,15 @@ runs until its end):
    code file a binding or a Generated from header (path c); a non-code change takes
    path d, with no new prompt.`); R4 a file of the base with no owner (for a renamed
    file, its source) that the head gives a binding or header, unless the issue asks to
-   adopt PDD; R6 no `Path:` line; R8 the PR changes `pdd-bindings.json`, the base one
+   adopt PDD or the file (and its base source when renamed) is an eligible production/app
+   source-code file matching the recognized source-code extension allowlist (or an
+   extensionless script under `bin/` or `scripts/`, and never `README.md`, `RUNBOOK.md`,
+   `AGENTS.md`, `docs/*`, `skills/*`, `test/*`, `tests/*`, `.github/*`, `prompts/*`,
+   `stories/*`, `user_stories/*`, `data/*`, `assets/*`, `static/*`, `public/*`,
+   `vendor/*`, `dist/*`, `build/*`, `out/*`, `coverage/*`, `logs/*`, `tmp/*`, `temp/*`,
+   fixtures/examples, dotfiles, or package/config/lock files) on a `Path: e` line paired with a newly added owning
+   `.prompt.md` in this PR (in which case that new owning prompt and its path `e` pairing
+   also satisfy R3 and R7); R6 no `Path:` line; R8 the PR changes `pdd-bindings.json`, the base one
    can be read and the head's cannot (`pdd-bindings.json cannot be read at this head: fix it (pdd owner
    needs valid JSON with schema_version pdd.bindings.v1 and a modules array, at most 64
    KiB).`). A not-checked file gets no R1, R7 or R4 red: when the base
@@ -1397,7 +1441,8 @@ runs until its end):
    it read (Story, pass, current, time, tests, failed checks, refusal codes, sent; at
    most 50) and the merge base read (commit, passing Stories, error), the replay and formal run with
    each file's result, the full suite (state, exit, log name, failed tests), CI and review
-   states, the PR's Evidence claim and the honest Evidence (above), and **one "Not
+   states (with `builderFamily`, `reviewFamily` and `reviewIndependence` when known),
+   the PR's Evidence claim and the honest Evidence (above), and **one "Not
    covered" list (B3)**: what the engine did not check at this head, for example each
    "not run" Runtime line, the consumers above 10 that no check covered, a reader or
    merge-base read error, each replay or formal file that it does not run, a kind that it
@@ -1406,7 +1451,7 @@ runs until its end):
    Autopilot knows of`). The agent's lines are
    claims that the engine checks; the record is the engine's own. The reviewer's brief
    names the record's path and a short summary. The merge and would-merge note take
-   their engine lines from it and name it, and the PR body gets one engine block between
+   their engine lines from it (including reviewer independence and model family when recorded) and name it, and the PR body gets one engine block between
    `<!-- pdd:autopilot-core:evidence:start -->` and `<!-- pdd:autopilot-core:evidence:end -->`
    (replaced in place, before the follow-ups section; its lines never read as a
    Runtime, Path or Evidence line). When the PR body outside fenced code blocks, code
@@ -1593,9 +1638,9 @@ runs until its end):
    or 1 leaves the decision to the refresh merge. On exit 1, merge with
    `merge.conflictStyle=diff3` in the job worktree and classify each conflicted file. A
    conflict never goes to a repair. Mechanical (fixed in the lane, no agent, the review
-   kept as `mechanical`, never a repair): M-a a hunk that differs only in derived
-   `Generated from P (sha256: …)` header lines (the header is then recomputed with
-   `promptHeaderHash` from the merged prompt P, so approval metadata does not change it);
+   kept as `mechanical`, never a repair): M-a a hunk inside the 4096-byte provenance header window that differs only in the hash suffix or header spelling of provenance
+   `Generated from P` / comment-prefixed `Prompt: P` header lines for the same prompt
+   path `P` (disagreeing prompt paths are not mechanical; M-a strips the hash suffix on those resolved header lines only);
    M-b pure inserts (one copy of identical text, else the base side
    first); M-c adjacent hunks that do not overlap (both applied); M-d a JSON file merged
    3-way (union of keys, a key changed on both sides is not mechanical, arrays that
@@ -1619,7 +1664,7 @@ runs until its end):
    a recheck: at the 3rd recheck the PR leaves the lane with no penalty and goes first
    again (L4); rechecks never count as conflict exits. There is no other refresh cap.
    **Review keep (debate B 5.5)**: F is the SHA-256 of the `+` and `-` lines of `git
-   diff -U0` from the merge base (without derived header lines), in path order. R1:
+   diff -U0` from the merge base (omitting in-place provenance header hash/spelling replacements for the same prompt path inside the 4096-byte header window), in path order. R1:
    the same F and file set before and after keeps the PASS review (`kept`). R2: a scoped
    check (`review.scoped {reason, detail, files}`: a short reviewer that reads only that
    part and answers "does the result keep both changes and break neither?") when the
@@ -1719,6 +1764,85 @@ append the history line. Each step has its own error boundary and only warns.
 `jobs/N.json` goes last only after cleanup is confirmed. A merge also deletes the local branch; other outcomes keep it, because the
 agent's commits may exist only there.
 
+## Release
+
+Export `claimTickLock(file, fs)` (atomic PID lock file with serialized dead-owner
+reclamation behind a pre-populated `${file}.reclaim.d` directory guard published via
+`renameSync`, where each contender writes its own unique `owner-<token>` entry before
+publication, only dead-PID entries are unlinked by exact entry name, and the dead
+payload is re-verified inside the guard before unlinking and linking; shared by
+`tickAutopilot` and `releaseCoreJob`) and `releaseCoreJob(stateFile, issue, ports)`.
+
+`releaseCoreJob(stateFile, issue, ports)` accepts the repository state file path, the
+issue operand (`N`, `#N`, `OWNER/REPO#N`, or GitHub issue URL), and `{state, root, gh,
+git, now, env, warn, jobs, owners, authority, releaseClaim, sleep, elapsedNow, fs}`.
+Validate the issue operand and repository match before any local or remote effect.
+Then wait up to 5 seconds to take `STATE.lock` (`claimTickLock`) so a concurrent tick
+cannot overwrite `jobs/N.json` during release; when the lock stays busy, return exit
+code 1 (`Timed out waiting for the current Autopilot operation; retry.`) without
+changing local or GitHub state.
+
+Under `STATE.lock`, resolve this machine's accepted claim names `[machineIdOf(state),
+state.machine]` (with `state.machine` defaulting to the host name when unsaved) and
+`state.coordinatorId`:
+
+1. When `jobs/N.json` exists:
+   - **Read-only ownership check:** inspect `jobs/N.json` and read GitHub claim
+     ownership strictly without mutating GitHub comments or labels (`ctx.readClaim`
+     plus a read-only check that no foreign claim comment competes on the active
+     `labelEventId`; never call `confirmClaim` here). Refuse with exit code 1 before
+     stopping any process or modifying local or GitHub state when ownership is foreign,
+     ambiguous, or unreadable (`Cannot release REPO#N: OWNER holds a live claim.`,
+     `Cannot release REPO#N: claim ownership is unknown.`, or `Could not confirm claim
+     cleanup for REPO#N; retry the release.`).
+   - **Immediate process stop:** stop every owned job and step wrapper (`agent`,
+     `review`, `suite`, `vectors`, `runtimeWait`) through `stopChecks` (identity-checked
+     `SIGTERM` -> `SIGKILL` process-group cleanup, retrying briefly with
+     `recoverStopped: true` while wrapper groups reap exiting children, removing any
+     step account-lease `cleanupDirs` and freeing any held suite-queue slot). When cleanup cannot confirm
+     every saved identity stopped, return exit code 1 while keeping `jobs/N.json` and
+     the GitHub claim for retry. Once confirmed, save `phase: "released"`,
+     `releaseStopped` (`true` if a live step was stopped), and `releaseIssues` on
+     `jobs/N.json` so `holdsSlot` is `false` and no later tick resumes the job, closes
+     its PR, or deletes its worktrees before a retry finishes.
+   - **Lane and companions (confirmed, non-destructive):** if the job has `pr`, remove
+     `pdd:merge-lane` when held on that PR; for each companion issue in `companions`,
+     verify read-only ownership and confirm companion claim/label cleanup through
+     `releaseClaim` using the owned machine form observed on GitHub or saved on the
+     companion claim (retrying this machine's other owned form only if the first call
+     made no mutating GitHub API request and refused because that other owned form holds
+     a live claim) before removing that companion from `jobs/N.json`, without closing
+     or drafting any PR and without deleting the job's worktrees, logs, or branch. Any
+     failure returns exit code 1 with `jobs/N.json` retained in `phase: "released"` so
+     retry finishes remaining companion and main cleanup idempotently.
+   - **GitHub claim cleanup:** call `ports.releaseClaim` (default `releaseRunClaim` of
+     the [workflow runner](workflow-runner.prompt.md)) with the owned machine form
+     observed on GitHub or saved on `jobs/N.json` (retrying this machine's other owned
+     form only when the first call made no mutating GitHub API request and refused
+     because that other owned form holds a live claim), removing `pdd:working` and
+     `pdd:stuck` when no foreign claim holds the issue. If claim cleanup returns
+     nonzero, return that result unchanged while `jobs/N.json` stays in `phase:
+     "released"` for retry.
+   - **Durable history before removal:** append (if not already present from a prior try)
+     one `history.jsonl` record (`{at, issue: N, outcome: "released", stopped,
+     personRelease: true, text: "released by a person (pdd autopilot release)", pr,
+     log, evidence, ...}`, with no `noResult`, cooldown, or strike) and flush
+     `history.jsonl` to disk with `fsyncSync` before unlinking `jobs/N.json`. If
+     writing, flushing, confirming, or removing `jobs/N.json` fails, keep `jobs/N.json`
+     intact and return exit code 1 so `sweepFiles` never deletes `worktrees/N`. Return exit code 0 with `Released the Autopilot claim for
+     REPO#N. The worktree stays at WORKTREE (branch BRANCH).` (keeping `releaseClaim`'s
+     own worktree suffix when a workflow run already supplied one).
+2. When `jobs/N.json` does not exist (an orphan claim on GitHub, a workflow run claim,
+   or a repeat `release N`): if another local job carries `N` in `companions`, verify
+   read-only ownership on `N`, release `N` with the owned machine form observed on
+   GitHub or saved on that companion, and drop `N` from that job's companions only
+   after exit code 0; otherwise call `releaseClaim` with `state.machine` first
+   (omitting `machine` when unsaved so `releaseRunClaim` resolves any workflow run
+   origin or host name) and retry `machineIdOf(state)` only when the first call made no
+   mutating GitHub API request and refused because `machineIdOf(state)` holds a live
+   claim, so a concurrent replacement claim appearing mid-release is never removed, and
+   write no duplicate `history.jsonl` entry.
+
 ## Status
 
 `coreStatus({state, settings, guard}, {root, reportRoot, now, fs})` returns text from local
@@ -1785,8 +1909,7 @@ with the native defaults named above.
 
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.
 - [Serialized FIFO landing queue](autopilot-merge-queue.prompt.md): required for `enqueueMergeQueueItem`, `processMergeQueue`, `mergeQueueStatusLine`, and `buildConflictAgentInvocation`.
-- [File owner lookup](file-owner.prompt.md): required for `findOwners`, `resolveOwners`
-  and `promptHeaderHash` (M-a derived prompt headers).
+- [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
 - [Multi-harness login pool](login-pool.prompt.md): required for `isQuotaExhaustionMessage` and optional login selection/cooldown rotation.
 - [Autopilot telemetry](autopilot-telemetry.prompt.md): required for opt-in worker/reviewer model tiering, per-phase wall-clock tracking, and harness log token summaries.
@@ -1795,6 +1918,7 @@ with the native defaults named above.
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required for the
   winning-claim read (owners port), `refreshClaimHeartbeat` and `takeoverLimited`.
 - [Automatic base](autopilot-base.prompt.md): required for `checkAutopilotBase`.
+- [Workflow runner](workflow-runner.prompt.md): required for default `releaseRunClaim` in `releaseCoreJob`.
 - [Report owner](autopilot-reports.prompt.md): required for `fileReport` and drafts.
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
   `pdd workflow suite` job.

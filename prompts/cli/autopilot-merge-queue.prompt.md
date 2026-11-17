@@ -22,7 +22,7 @@ Export:
 - `sanitizePublicQueueNote(text)`: strip control characters, hexadecimal commit or SHA-256 digests, UUIDs, and receipt tokens from person-facing queue notes and comments.
 - `hasGitConflictMarkers(text)`: detect line-start Git conflict markers (`<<<<<<< `, `||||||| `, `=======`, `>>>>>>> `).
 - `buildConflictAgentInvocation(agent = {})`: return `{kind, command, args}` for `codex`, `claude`, `gemini`, or `agy` headless execution with optional `model`, throwing on unsupported agent kinds.
-- `resolveGeneratedHeaderConflicts(content, {worktree, fs})`: resolve conflict blocks in `content` when every conflict block touches only `Generated from <prompt.prompt.md>` header lines for an existing conflict-free prompt in `worktree`, returning `{resolved, content, prompts}`.
+- `resolveGeneratedHeaderConflicts(content, {worktree, fs})`: resolve conflict blocks in `content` when every conflict block touches only `Generated from` or `Prompt:` provenance header lines for an existing conflict-free prompt in `worktree`, returning `{resolved, content, prompts}`.
 - `refreshOwnedPromptHeaders({worktree, touchedFiles, fs})`: update stale `Generated from <prompt.prompt.md> (sha256: ...)` headers on owned files in `worktree` whose file or owning prompt is in `touchedFiles`, returning `{refreshedFiles}`.
 - `discoverFocusedTestFiles(worktree, touchedFiles, {fs} = {})`: return sorted repository-relative focused test files (`*.test.{mjs,js,cjs}`) in `worktree` matching `touchedFiles` directly or by stem under `test/` and `tests/` (excluding `*.e2e.test.*` unless directly touched).
 - `readMergeQueue(stateDir, ports = {})`: read `merge-queue.json` from `stateDir` and return `{schema, updatedAt, items}` sorted in deterministic FIFO `(readyAt, pr)` order.

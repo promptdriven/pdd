@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-areas.prompt.md (sha256: 4bc1de90dedc83c895c5ce850fc5cccbfcacb358211d7149d58414a0df162ee9).
+// Prompt: prompts/cli/autopilot-areas.prompt.md
 const login = x => typeof x === 'string' && /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(x);
 const repo = x => typeof x === 'string' && /^[\w.-]+\/[\w.-]+$/.test(x);
 const owner = x => x === 'autopilot' || login(x) || typeof x === 'string' && x.startsWith('repo:') && repo(x.slice(5));
