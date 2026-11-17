@@ -1,0 +1,73 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-route-other-repo.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "Autopilot selects `promptdriven/prompt-runtime` for an issue titled `[prompt-runtime] Fix duplicate retries` and marks it `pdd:elsewhere` instead of claiming it."
+    },
+    {
+      "id": "AC2",
+      "text": "A file explicitly targeted in `promptdriven/runtime-client` or a service explicitly targeted in `promptdriven/pdd_cloud` gets the same treatment for its own repository."
+    },
+    {
+      "id": "AC3",
+      "text": "Mentioning another repository for context, or explicitly targeting both the current and another repository, does not trigger routing."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "title-names-runtime",
+      "entry_path": "prompts/cli/autopilot-repo-routing.prompt.md",
+      "operation": "planIssueRouting",
+      "input": {"repository": "promptdriven/pdd", "title": "[prompt-runtime] Fix duplicate retries", "body": "The retry happens twice."},
+      "checks": [{
+        "criterion_id": "AC1", "target": "result", "path": "", "op": "equals",
+        "value": {"targetRepository": "promptdriven/prompt-runtime", "label": "pdd:elsewhere"}
+      }]
+    },
+    {
+      "step_id": "file-names-runtime-client",
+      "entry_path": "prompts/cli/autopilot-repo-routing.prompt.md",
+      "operation": "planIssueRouting",
+      "input": {"repository": "promptdriven/pdd", "title": "Fix response validation", "body": "File: `runtime-client/src/validation.mjs`"},
+      "checks": [{
+        "criterion_id": "AC2", "target": "result", "path": "", "op": "equals",
+        "value": {"targetRepository": "promptdriven/runtime-client", "label": "pdd:elsewhere"}
+      }]
+    },
+    {
+      "step_id": "service-names-cloud",
+      "entry_path": "prompts/cli/autopilot-repo-routing.prompt.md",
+      "operation": "planIssueRouting",
+      "input": {"repository": "promptdriven/pdd", "title": "Show the billing notice", "body": "Target service: PDD_CLOUD"},
+      "checks": [{
+        "criterion_id": "AC2", "target": "result", "path": "", "op": "equals",
+        "value": {"targetRepository": "promptdriven/pdd_cloud", "label": "pdd:elsewhere"}
+      }]
+    },
+    {
+      "step_id": "mention-does-not-route",
+      "entry_path": "prompts/cli/autopilot-repo-routing.prompt.md",
+      "operation": "planIssueRouting",
+      "input": {"repository": "promptdriven/pdd", "title": "Autopilot should classify failures", "body": "The CLI should improve its error when calling promptdriven/prompt-runtime."},
+      "checks": [{
+        "criterion_id": "AC3", "target": "result", "path": "", "op": "equals",
+        "value": {"targetRepository": null, "label": null}
+      }]
+    },
+    {
+      "step_id": "mixed-targets-do-not-route",
+      "entry_path": "prompts/cli/autopilot-repo-routing.prompt.md",
+      "operation": "planIssueRouting",
+      "input": {"repository": "promptdriven/pdd", "title": "[promptdriven/pdd] Improve retries", "body": "Target repository: https://github.com/promptdriven/prompt-runtime"},
+      "checks": [{
+        "criterion_id": "AC3", "target": "result", "path": "", "op": "equals",
+        "value": {"targetRepository": null, "label": null}
+      }]
+    }
+  ]
+}

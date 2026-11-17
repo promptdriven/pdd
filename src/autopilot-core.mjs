@@ -16,6 +16,7 @@ import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './fil
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard } from './autopilot-intake.mjs';
 import { evaluateForensicsResult, findConfiguredSkipLabel, findExternalRepoLabel, formatForensicsBrief, formatForensicsComment, runPreRunForensics } from './autopilot-forensics.mjs';
+import { planIssueRouting } from './autopilot-repo-routing.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, orderGroupsSpreadFirst, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
 import { enqueueMergeQueueItem, mergeQueueStatusLine, processMergeQueue, readMergeQueue } from './autopilot-merge-queue.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
@@ -621,7 +622,38 @@ async function activeFixedHold(ctx, history, issue, row = null) {
   try { appendHistory(ctx, { at: ctx.now(), issue, unfixed: true, text: `the fixed hold ended: ${why}` }); } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
   return null;
 }
-async function* readyRows(ctx, rows) {
+const issueRouting = (ctx, row) => planIssueRouting({ repository: ctx.repo, title: row.title ?? '', body: row.body ?? '' });
+
+async function routeOtherRepository(ctx, row, issue, plan = issueRouting(ctx, issue)) {
+  const { gh, repo, settings } = ctx, labels = labelsOf(issue);
+  if (!plan.label || issue.pull_request || issue.state !== 'open' || issue.assignee || issue.assignees?.length
+    || skippedIssueLabel(issue, settings) || labels.some(name => ['pdd:stuck', DECISION, WOULD_MERGE, ...REPORT_LABELS].includes(name))
+    || (settings.label && !labels.includes(settings.label))) return;
+  if (labels.includes('pdd:working')) {
+    const current = await ctx.readClaim(issue.number);
+    if (!current?.expired || takeoverLimited(current, { coordinatorId: ctx.state.coordinatorId, machine: ctx.machineId })
+      || String((await labelWinner(ctx, issue.number))?.id) !== String(current.labelEventId)) return;
+  }
+  if (!await ctx.trust(issue) || await blocked(ctx, issue)) return;
+  const repoLabels = `repos/${repo}/labels`, labelEndpoint = `${repoLabels}/${encodeURIComponent(plan.label)}`;
+  const existing = await gh.call('GET', labelEndpoint);
+  if (existing.status === 404) {
+    const created = await gh.call('POST', repoLabels, { name: plan.label, color: 'd4c5f9', description: 'Work targeted at a different repository' });
+    if (created.status !== 201) await gh.ok('GET', labelEndpoint);
+  } else if (existing.status !== 200) {
+    throw Error(`GitHub could not read the routing label (HTTP ${existing.status})`);
+  }
+  const endpoint = `repos/${repo}/issues/${issue.number}`;
+  const note = 'Autopilot did not claim this issue because its stated work target is `'
+    + plan.targetRepository + '`. Please review and route it to the owning repository.';
+  const comments = issue.comments > 0 ? await gh.all(`${endpoint}/comments?per_page=100`) : [];
+  if (!comments.some(comment => comment.body === ctx.publicBody(note))) await ctx.comment(issue.number, note);
+  const applied = await gh.ok('POST', `${endpoint}/labels`, { labels: [plan.label] });
+  if (findExternalRepoLabel(applied)?.toLowerCase() !== plan.label) throw Error(`GitHub did not confirm the routing label on #${issue.number}`);
+  row.labels = [...(row.labels ?? []), plan.label];
+}
+
+async function* readyRows(ctx, rows, { route = false, cards = null } = {}) {
   const local = new Set(readJobs(ctx.fs, ctx.root).flatMap(jobIssues)), self = { coordinatorId: ctx.state.coordinatorId, machine: ctx.machineId };
   const replied = await decisionReplies(ctx, rows);
   // An issue with a counted no-result in the last 24 hours (since its latest reset) cools down.
@@ -636,9 +668,18 @@ async function* readyRows(ctx, rows) {
     && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number))
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
   for (const row of candidates) {
+    const plan = issueRouting(ctx, row);
+    if (cards && !cards.has(row.number) && !plan.label) continue;
     try {
       if (!await ctx.trust(row) || await blocked(ctx, row) || holding.has(row.number) && await activeHold(ctx, row.number, { row }) || fixedHolding.has(row.number) && await activeFixedHold(ctx, history, row.number, row)) continue;
       if (labelsOf(row).includes('pdd:working')) { const claim = await ctx.readClaim(row.number); if (!claim?.expired || takeoverLimited(claim, self)) continue; }
+      if (plan.label) {
+        if (route) {
+          const issue = await ctx.gh.ok('GET', `repos/${ctx.repo}/issues/${row.number}`);
+          await routeOtherRepository(ctx, row, issue);
+        }
+        continue;
+      }
     } catch (error) { ctx.warn(`Autopilot core skipped #${row.number} this tick: ${error.message}`); continue; }
     yield row;
   }
@@ -686,9 +727,15 @@ async function ownLabel(ctx, n, seen, mine) {
     .filter(c => String(c.id) !== String(mine?.id) && String(claimRecord(c.body)?.labelEventId) === String(current.id));
   return others.length === 0;
 }
-async function claimIssue(ctx, n) {
+async function claimIssue(ctx, row) {
+  const n = row.number;
   const { gh, repo, state } = ctx, issue = await gh.ok('GET', `repos/${repo}/issues/${n}`), label = encodeURIComponent('pdd:working');
   if (issue.state !== 'open' || labelsOf(issue).includes('pdd:stuck') || skippedIssueLabel(issue, ctx.settings) || issue.assignees?.length) return null;
+  const plan = issueRouting(ctx, issue);
+  if (plan.label) {
+    await routeOtherRepository(ctx, row, issue, plan);
+    return null;
+  }
   if (labelsOf(issue).includes('pdd:working')) {
     const current = await ctx.readClaim(n);
     if (!current?.expired || takeoverLimited(current, { coordinatorId: state.coordinatorId, machine: ctx.machineId })) return null;
@@ -1856,15 +1903,9 @@ async function intake(ctx, rows) {
       return await checkActiveIntakeLogin();
     }
     // Check decision replies even before ready cards exist so answered questions clear pdd:needs-decision promptly.
-    const cardsNow = activeReadyCards(ctx.root, rows, ctx.fs);
-    cards = cardsNow;
-    if (!cards.size) {
-      await decisionReplies(ctx, rows);
-      return (await checkActiveIntakeLogin()) ?? await checkIdlePool();
-    }
+    cards = activeReadyCards(ctx.root, rows, ctx.fs);
     const ready = [];
-    for await (const row of readyRows(ctx, rows)) {
-      if (!cards.has(row.number)) continue;
+    for await (const row of readyRows(ctx, rows, { route: true, cards })) {
       ready.push(row);
       if (ready.length >= 100) break;
     }
@@ -1894,7 +1935,7 @@ async function intake(ctx, rows) {
     // S2 (debate B): among the first ready issues, start first one whose named paths meet no running job (its named
     // paths and its changed files); else the oldest. A hint only: it never leaves a slot idle.
     const ready = [];
-    for await (const row of readyRows(ctx, rows)) { ready.push(row); if (ready.length >= free + 4) break; }
+    for await (const row of readyRows(ctx, rows, { route: true })) { ready.push(row); if (ready.length >= free + 4) break; }
     // The other jobs' files are read only when an issue is ready (they cost GitHub reads).
     others = ready.length ? await otherJobs(ctx, rows) : [];
     const busyPaths = new Set(others.flatMap(o => [...o.files, ...namedPaths(o.text)]));
@@ -1944,7 +1985,7 @@ async function intake(ctx, rows) {
       const intakeTracker = createPhaseTracker({ issue: n, repo: ctx.repo, machine: state.machine ?? null, now: ctx.now });
       intakeTracker.startPhase('intake', { step: 'intake' });
       let claim = null;
-      try { claim = await claimIssue(ctx, n); } catch (error) { ctx.warn(`Autopilot core claim of #${n} failed: ${error.message}`); }
+      try { claim = await claimIssue(ctx, row); } catch (error) { ctx.warn(`Autopilot core claim of #${n} failed: ${error.message}`); }
       if (!claim) { await removeTree(ctx, worktree); await ctx.git(['branch', '-D', branch]).catch(() => {}); continue; }
       const answer = row.comments ? await personAnswer(ctx, n).catch(error => { ctx.warn(`Autopilot core could not read the answer of #${n}: ${error.message}`); return null; }) : null;
       // A trusted reply or a trusted person's label removal answers a question: otherwise the label goes back and nothing starts.
@@ -2083,7 +2124,7 @@ async function intake(ctx, rows) {
           const compAns = compRow.comments ? await personAnswer(ctx, compRow.number).catch(() => null) : null;
           if (compAns && !compAns.trustedRemoval && !compAns.comments.length) continue;
           let compClaim = null;
-          try { compClaim = await claimIssue(ctx, compRow.number); } catch (error) { ctx.warn(`Autopilot core companion claim of #${compRow.number} failed: ${error.message}`); }
+          try { compClaim = await claimIssue(ctx, compRow); } catch (error) { ctx.warn(`Autopilot core companion claim of #${compRow.number} failed: ${error.message}`); }
           if (!compClaim) continue;
           const compEntry = cards?.get(compRow.number);
           claimedRows.push(compRow);
