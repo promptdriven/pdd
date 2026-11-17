@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { executeLocalCommand, createLocalCommandBridge } from '@promptdriven/runtime-client';
+import { executeLocalCommand, createLocalCommandBridge } from '../../src/runtime-seam.mjs';
 
 const moduleUrl = process.env.PDD_CONSENT_HOST_MODULE
   ? pathToFileURL(process.env.PDD_CONSENT_HOST_MODULE).href

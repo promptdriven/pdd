@@ -25,7 +25,7 @@
     "test": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/*.test.mjs"
   },
   "dependencies": {
-    "@promptdriven/runtime-client": "1.0.0"
+    "@promptdriven/runtime-client": "github:promptdriven/runtime-client#a8f96b642386be6679c7de557ddbb6abe3fd815f"
   },
   "engines": {
     "node": ">=22.16.0"

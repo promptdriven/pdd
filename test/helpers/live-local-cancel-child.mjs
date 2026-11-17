@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-const { createLocalCommandBridge } = await import(process.env.PDD_CONSENT_CLIENT_MODULE ? pathToFileURL(process.env.PDD_CONSENT_CLIENT_MODULE).href : '@promptdriven/runtime-client');
+const { createLocalCommandBridge } = await import(process.env.PDD_CONSENT_CLIENT_MODULE ? pathToFileURL(process.env.PDD_CONSENT_CLIENT_MODULE).href : new URL('../../src/runtime-seam.mjs', import.meta.url).href);
 import { getEventListeners } from 'node:events';
 
 const moduleUrl = process.env.PDD_CONSENT_HOST_MODULE
