@@ -1,10 +1,11 @@
-// Generated from prompts/cli/autopilot-update.prompt.md (sha256: 0377fd937a21bce9234ab7d248d5afbd584fd60fa27a2e8b27d25adaf9edb7c5).
+// Generated from prompts/cli/autopilot-update.prompt.md (sha256: 91496f7a383a30a8ea4251453a800de19f4ee2b6b9db84e2631a3d88cef8b7c0).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isNewerRelease, parseReleaseVersion, pickLatestRelease } from './release-notice.mjs';
+import * as defaultSkillsInstall from './skills-install.mjs';
 
 const PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -88,6 +89,22 @@ export function detectGlobalInstallPrefix(packageRoot, ports = {}) {
   return { prefix: match[1], realPackageRoot: real };
 }
 
+export function hasLegacyUnscopedPdd(prefix, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  if (typeof prefix !== 'string' || !prefix) return false;
+  for (const rel of ['lib/node_modules/pdd', 'node_modules/pdd']) {
+    if (readJson(join(prefix, rel, 'package.json'), fs)?.name === 'pdd') return true;
+  }
+  try {
+    const binPath = join(prefix, 'bin/pdd');
+    if (typeof fs.lstatSync === 'function' && fs.lstatSync(binPath).isSymbolicLink() && typeof fs.readlinkSync === 'function') {
+      const linkTarget = String(fs.readlinkSync(binPath)).replace(/\\/g, '/');
+      if (/(?:^|\/)node_modules\/pdd(?:\/|$)/.test(linkTarget)) return true;
+    }
+  } catch { /* Missing or non-symlink bin/pdd. */ }
+  return false;
+}
+
 function resolveInstalledRoot(prefix, fallbackRoot, fs) {
   for (const rel of ['lib/node_modules/@promptdriven/pdd', 'node_modules/@promptdriven/pdd', 'lib/node_modules/pdd', 'node_modules/pdd']) {
     const candidate = join(prefix, rel);
@@ -137,6 +154,7 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
   if (!parseReleaseVersion(currentVersion)) return { action: 'skipped', reason: 'unreadable-version' };
   const execute = ports.execute;
   if (typeof execute !== 'function') return { action: 'skipped', reason: 'missing-executor' };
+  const legacyUnscoped = hasLegacyUnscopedPdd(globalInstall.prefix, { fs });
 
   let targetSpec = null, targetLabel = null, nextSha = null;
   try {
@@ -146,7 +164,7 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
         : await ghApiJson(execute, 'repos/promptdriven/pdd/releases?per_page=10');
       const picked = pickLatestRelease(payload);
       if (!picked) throw Error('Could not find a valid PDD release tag');
-      if (!isNewerRelease(picked.version, currentVersion)) {
+      if (!legacyUnscoped && !isNewerRelease(picked.version, currentVersion)) {
         writeJson(statusPath, { ...(previous ?? {}), checkedAt: now, channel: mode, action: 'up-to-date', version: currentVersion, lastError: null }, fs);
         return { action: 'up-to-date', version: currentVersion };
       }
@@ -158,7 +176,7 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
         : await ghApiJson(execute, 'repos/promptdriven/pdd/commits/main');
       const sha = typeof payload?.sha === 'string' && /^[0-9a-f]{40}$/i.test(payload.sha) ? payload.sha : null;
       if (!sha) throw Error('Could not read promptdriven/pdd main head');
-      if (previous?.installedSha === sha) {
+      if (!legacyUnscoped && previous?.installedSha === sha) {
         writeJson(statusPath, { ...(previous ?? {}), checkedAt: now, channel: mode, action: 'up-to-date', version: currentVersion, installedSha: sha, lastError: null }, fs);
         return { action: 'up-to-date', version: currentVersion };
       }
@@ -186,12 +204,16 @@ export async function maybeAutoUpdateAutopilot({ state, packageRoot, coreRoot, s
           await execute('git', ['pull', '--ff-only', 'origin', state.baseBranch], { cwd: state.cwd, timeoutMs: 30000 });
       } catch { /* Checkout fast-forward is best-effort only. */ }
     }
+    if (hasLegacyUnscopedPdd(globalInstall.prefix, { fs })) {
+      const uninstall = await execute('npm', ['uninstall', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', 'pdd'], { timeoutMs: 60000 });
+      if (uninstall.code !== 0) throw Error((uninstall.stderr || uninstall.stdout || 'npm uninstall pdd failed').trim().split('\n')[0]);
+    }
     const install = await execute('npm', ['install', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', targetSpec], { timeoutMs: 120000 });
     if (install.code !== 0) throw Error((install.stderr || install.stdout || 'npm install failed').trim().split('\n')[0]);
     const installedRoot = resolveInstalledRoot(globalInstall.prefix, globalInstall.realPackageRoot, fs);
     const toVersion = readJson(join(installedRoot, 'package.json'), fs)?.version ?? currentVersion;
     try {
-      const setup = ports.setupSkills ?? (await import('./skills-install.mjs')).setupSkills;
+      const setup = ports.setupSkills ?? defaultSkillsInstall.setupSkills;
       setup({
         packageRoot: installedRoot,
         cwd: state?.cwd ?? process.cwd(),
@@ -328,8 +350,22 @@ export async function runCliUpgrade({
   }
 
   const effectiveSpawn = spawnSyncImpl ?? nativeSpawnSync;
+  const legacyUnscoped = hasLegacyUnscopedPdd(globalInstall.prefix, { fs });
   let cliUpdated = false;
-  if (main || isNewerRelease(target.version, currentVersion)) {
+  if (main || legacyUnscoped || isNewerRelease(target.version, currentVersion)) {
+    if (legacyUnscoped) {
+      const uninstall = effectiveSpawn('npm', ['uninstall', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', 'pdd'], {
+        encoding: 'utf8',
+        timeout: 60000,
+        env,
+      });
+      const uninstallCode = uninstall?.status ?? uninstall?.code ?? (uninstall?.error ? 1 : 0);
+      if (uninstallCode !== 0) {
+        const detail = (uninstall?.stderr || uninstall?.stdout || uninstall?.error?.message || 'npm uninstall pdd failed').trim().split('\n')[0];
+        writeLine(stderr, `pdd upgrade failed to remove the unscoped pdd package in ${globalInstall.prefix} (${detail}). To migrate manually, run: npm uninstall -g --prefix ${globalInstall.prefix} pdd && npm install -g --prefix ${globalInstall.prefix} --ignore-scripts ${target.spec} && pdd setup`);
+        return { exitCode: 1, cliUpdated: false, fromVersion: currentVersion, toVersion: currentVersion, updatedSkills: [], skippedSkills: [], failedSkills: [] };
+      }
+    }
     const install = effectiveSpawn('npm', ['install', '-g', '--prefix', globalInstall.prefix, '--ignore-scripts', '--no-audit', '--no-fund', target.spec], {
       encoding: 'utf8',
       timeout: 120000,
@@ -337,8 +373,13 @@ export async function runCliUpgrade({
     });
     const code = install?.status ?? install?.code ?? (install?.error ? 1 : 0);
     if (code !== 0) {
+      const rawOut = `${install?.stderr || ''}\n${install?.stdout || ''}\n${install?.error?.message || ''}`;
       const detail = (install?.stderr || install?.stdout || install?.error?.message || 'npm install failed').trim().split('\n')[0];
-      writeLine(stderr, `pdd upgrade failed to install ${target.spec} (${detail}). To retry, run: npm install -g --prefix ${globalInstall.prefix} --ignore-scripts ${target.spec} && pdd setup`);
+      const needsUninstall = /\bEEXIST\b/.test(rawOut) || hasLegacyUnscopedPdd(globalInstall.prefix, { fs });
+      const retryCmd = needsUninstall
+        ? `npm uninstall -g --prefix ${globalInstall.prefix} pdd && npm install -g --prefix ${globalInstall.prefix} --ignore-scripts ${target.spec} && pdd setup`
+        : `npm install -g --prefix ${globalInstall.prefix} --ignore-scripts ${target.spec} && pdd setup`;
+      writeLine(stderr, `pdd upgrade failed to install ${target.spec} (${detail}). To retry, run: ${retryCmd}`);
       return { exitCode: 1, cliUpdated: false, fromVersion: currentVersion, toVersion: currentVersion, updatedSkills: [], skippedSkills: [], failedSkills: [] };
     }
     cliUpdated = true;
@@ -359,7 +400,7 @@ export async function runCliUpgrade({
   const updatedSet = new Set();
   let skillsModule = null;
   try {
-    skillsModule = ports.skillsInstall ?? await import('./skills-install.mjs');
+    skillsModule = ports.skillsInstall ?? defaultSkillsInstall;
     const { updated } = skillsModule.syncOwnedUserSkills({
       packageRoot: targetPkgRoot,
       home: resolvedHome,

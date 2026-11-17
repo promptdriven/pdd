@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   autoUpdateStatusLine,
   detectGlobalInstallPrefix,
+  hasLegacyUnscopedPdd,
   hasMidWriteJobs,
   maybeAutoUpdateAutopilot,
   runCliUpgrade,
@@ -538,4 +539,151 @@ test('#3424 pdd upgrade refreshes stale marked skills when CLI is already curren
   });
   assert.equal(resCheckout.exitCode, 1);
   assert.match(errCheckout.text, /npm install -g github:promptdriven\/pdd && pdd setup/);
+});
+
+test('#3474 pdd upgrade and Autopilot self-update uninstall unscoped pdd before installing @promptdriven/pdd to avoid EEXIST on bin/pdd without --force', async t => {
+  const sandbox = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-legacy-unscoped-3474-')));
+  t.after(() => rmSync(sandbox, { recursive: true, force: true }));
+
+  const targetVersion = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
+  const marker = '.pdd-skill.json';
+
+  // 1. Migrate unscoped pdd@0.1.31 owning <prefix>/bin/pdd -> @promptdriven/pdd@<targetVersion> without EEXIST or --force.
+  const prefix = join(sandbox, 'npm-prefix');
+  const legacyPkg = join(prefix, 'lib/node_modules/pdd');
+  const scopedPkg = join(prefix, 'lib/node_modules/@promptdriven/pdd');
+  const binDir = join(prefix, 'bin');
+  const home = join(sandbox, 'home');
+  mkdirSync(join(legacyPkg, 'bin'), { recursive: true });
+  mkdirSync(binDir, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(legacyPkg, 'package.json'), JSON.stringify({ name: 'pdd', version: '0.1.31', bin: { pdd: 'bin/pdd.mjs' } }));
+  writeFileSync(join(legacyPkg, 'bin/pdd.mjs'), '#!/usr/bin/env node\n', { mode: 0o755 });
+  symlinkSync('../lib/node_modules/pdd/bin/pdd.mjs', join(binDir, 'pdd'));
+
+  for (const name of PDD_SKILL_NAMES) {
+    cpSync(join(packageRoot, 'skills', name), join(home, '.agents/skills', name), { recursive: true });
+    writeFileSync(join(home, '.agents/skills', name, marker), JSON.stringify({ package: 'pdd', version: '0.1.31', digest: 'old' }));
+  }
+
+  assert.equal(hasLegacyUnscopedPdd(prefix), true);
+
+  const spawned = [];
+  const spawnSyncImpl = (file, args) => {
+    spawned.push([file, ...args]);
+    assert.ok(!args.includes('--force'), 'must never pass --force during migration');
+    if (file === 'npm' && args[0] === 'uninstall') {
+      rmSync(join(binDir, 'pdd'), { force: true });
+      rmSync(legacyPkg, { recursive: true, force: true });
+      return { status: 0, stdout: 'removed 1 package\n', stderr: '' };
+    }
+    if (file === 'npm' && args[0] === 'install') {
+      // Simulate real npm EEXIST if unscoped pdd still owns bin/pdd!
+      if (existsSync(join(binDir, 'pdd')) && String(readFileSync(join(legacyPkg, 'package.json'), 'utf8')).includes('"pdd"')) {
+        return {
+          status: 1,
+          stdout: '',
+          stderr: `npm error code EEXIST\nnpm error path ${join(binDir, 'pdd')}\nnpm error EEXIST: file already exists\n`,
+        };
+      }
+      mkdirSync(join(scopedPkg, 'bin'), { recursive: true });
+      cpSync(join(packageRoot, 'skills'), join(scopedPkg, 'skills'), { recursive: true });
+      writeFileSync(join(scopedPkg, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version: targetVersion, bin: { pdd: 'bin/pdd.mjs' } }));
+      writeFileSync(join(scopedPkg, 'bin/pdd.mjs'), '#!/usr/bin/env node\n', { mode: 0o755 });
+      rmSync(join(binDir, 'pdd'), { force: true });
+      symlinkSync('../lib/node_modules/@promptdriven/pdd/bin/pdd.mjs', join(binDir, 'pdd'));
+      return { status: 0, stdout: 'added 1 package\n', stderr: '' };
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => [{ tag_name: `alpha-v${targetVersion}`, draft: false, prerelease: true, published_at: '2026-11-16T12:00:00Z' }],
+  });
+
+  const out = captureStream(), err = captureStream();
+  const res = await runCliUpgrade({
+    env: { HOME: home },
+    stdout: out,
+    stderr: err,
+    spawnSyncImpl,
+    fetchImpl,
+    packageRoot: legacyPkg,
+    home,
+    cwd: join(sandbox, 'empty-cwd'),
+  }, { uid: process.getuid() });
+
+  assert.equal(res.exitCode, 0, err.text);
+  assert.equal(res.cliUpdated, true);
+  assert.equal(res.fromVersion, '0.1.31');
+  assert.equal(res.toVersion, targetVersion);
+  assert.equal(existsSync(legacyPkg), false, 'unscoped pdd directory removed');
+  assert.equal(hasLegacyUnscopedPdd(prefix), false, 'scoped @promptdriven/pdd no longer triggers legacy unscoped detection');
+  assert.equal(spawned.length, 2);
+  assert.deepEqual(spawned[0], ['npm', 'uninstall', '-g', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', 'pdd']);
+  assert.deepEqual(spawned[1], ['npm', 'install', '-g', '--prefix', prefix, '--ignore-scripts', '--no-audit', '--no-fund', `github:promptdriven/pdd#alpha-v${targetVersion}`]);
+  assert.ok(out.text.includes(`Upgraded pdd 0.1.31 -> ${targetVersion} (alpha-v${targetVersion}).`), out.text);
+  assert.deepEqual(res.updatedSkills, [join(home, '.agents/skills')]);
+
+  // 2. If npm install still fails with EEXIST, stderr recommends explicit uninstall without --force.
+  const outEexist = captureStream(), errEexist = captureStream();
+  const resEexist = await runCliUpgrade({
+    env: { HOME: home },
+    stdout: outEexist,
+    stderr: errEexist,
+    main: true,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ sha: '0123456789abcdef0123456789abcdef01234567' }) }),
+    spawnSyncImpl: () => ({
+      status: 1,
+      stdout: '',
+      stderr: `npm error code EEXIST\nnpm error path ${join(binDir, 'pdd')}\n`,
+    }),
+    packageRoot: scopedPkg,
+    home,
+    cwd: join(sandbox, 'empty-cwd'),
+  }, { uid: process.getuid() });
+  assert.equal(resEexist.exitCode, 1);
+  assert.match(errEexist.text, /npm uninstall -g --prefix .* pdd && npm install -g --prefix .* --ignore-scripts/);
+  assert.doesNotMatch(errEexist.text, /--force/);
+
+  // 3. maybeAutoUpdateAutopilot also removes unscoped pdd before installing @promptdriven/pdd (even at same version).
+  const autoPrefix = join(sandbox, 'auto-prefix');
+  const autoLegacy = join(autoPrefix, 'lib/node_modules/pdd');
+  const autoScoped = join(autoPrefix, 'lib/node_modules/@promptdriven/pdd');
+  const stateRoot = join(sandbox, 'auto-state');
+  const coreRoot = join(sandbox, 'auto-core');
+  mkdirSync(autoLegacy, { recursive: true });
+  mkdirSync(stateRoot, { recursive: true });
+  mkdirSync(join(coreRoot, 'jobs'), { recursive: true });
+  writeFileSync(join(autoLegacy, 'package.json'), JSON.stringify({ name: 'pdd', version: targetVersion }));
+
+  const autoCmds = [];
+  const autoRes = await maybeAutoUpdateAutopilot({
+    state: { autoUpdate: 'release' },
+    packageRoot: autoLegacy,
+    coreRoot,
+    stateRoot,
+    env: { HOME: home },
+  }, {
+    now: () => 1_700_000_000_000,
+    uid: process.getuid(),
+    fetchLatestRelease: async () => ({ tag_name: `alpha-v${targetVersion}`, draft: false }),
+    setupSkills: () => [],
+    execute: async (file, args) => {
+      autoCmds.push([file, ...args]);
+      if (file === 'npm' && args[0] === 'uninstall') {
+        rmSync(autoLegacy, { recursive: true, force: true });
+        return { code: 0, stdout: 'removed\n', stderr: '' };
+      }
+      if (file === 'npm' && args[0] === 'install') {
+        mkdirSync(autoScoped, { recursive: true });
+        writeFileSync(join(autoScoped, 'package.json'), JSON.stringify({ name: '@promptdriven/pdd', version: targetVersion }));
+        return { code: 0, stdout: 'installed\n', stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+  assert.deepEqual(autoRes, { action: 'updated', fromVersion: targetVersion, toVersion: targetVersion });
+  assert.deepEqual(autoCmds[0], ['npm', 'uninstall', '-g', '--prefix', autoPrefix, '--ignore-scripts', '--no-audit', '--no-fund', 'pdd']);
+  assert.deepEqual(autoCmds[1], ['npm', 'install', '-g', '--prefix', autoPrefix, '--ignore-scripts', '--no-audit', '--no-fund', `github:promptdriven/pdd#alpha-v${targetVersion}`]);
 });
