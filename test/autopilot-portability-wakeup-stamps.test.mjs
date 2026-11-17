@@ -554,3 +554,95 @@ test('3460-6: wake runs only after wrapper PID exits, waitForAgentJob ignores no
   assert.match(pr18.body, /vectors=pass \(3\/3\)/, 'stamped PR synced vectors=pass (3/3) after engine replay');
   assert.equal(pr18.merged, true, 'stamped PR with replay tests merged cleanly without spurious repair');
 });
+
+test('3460-7: greenfield pdd-product plan-only repo with no package.json on main claims ready issue and runs PR-added npm test in suiteState', async t => {
+  const w = await coreWorld(t, { settings: { testCommand: null } });
+  seedRepo(w, {
+    'AGENTS.md': '<!-- pdd:start -->\nUse PDD\n<!-- pdd:end -->\n',
+    'product/map.md': '# Pocket map\n',
+    'product/plan.md': '# Pocket plan\n\n- hub-1: create initial hub package and tests\n',
+    'contracts/hub.md': '# Hub contract\n',
+  });
+  w.settings.testCommand = readCoreSettings(w.cwd).testCommand;
+  assert.equal(w.settings.testCommand, null, 'greenfield main has no manifest or testCommand yet');
+
+  w.issue(17, { title: 'hub-1: bootstrap hub module and package.json', body: 'Implement hub-1 from product/plan.md.' });
+  await w.tick();
+  const build = w.job(17, 'build');
+  assert.ok(build, 'greenfield plan-only repo claims issue #17 without blocking on null testCommand');
+
+  // Push PR head from a separate clone so job.worktree stays on main without package.json (proving suiteState & notCovered inspect the checked-out PR head).
+  const builderClone = join(w.dir, 'builder-clone');
+  w.git(w.dir, 'clone', '-q', w.remote, builderClone);
+  w.git(builderClone, 'checkout', '-qb', build.branch);
+  mkdirSync(join(builderClone, 'prompts'), { recursive: true });
+  mkdirSync(join(builderClone, 'src'), { recursive: true });
+  mkdirSync(join(builderClone, 'test'), { recursive: true });
+  writeFileSync(join(builderClone, 'package.json'), JSON.stringify({ name: 'pocket-hub', type: 'module', scripts: { test: 'node --test' } }, null, 2) + '\n');
+  writeFileSync(join(builderClone, 'prompts/hub.prompt.md'), '---\nkind: native-only\nreason: local process socket bootstrap\n---\n# Hub\n\nOwn `src/hub.mjs`.\n');
+  writeFileSync(join(builderClone, 'src/hub.mjs'), '// Prompt: prompts/hub.prompt.md\nexport const hubReady = () => true;\n');
+  writeFileSync(join(builderClone, 'test/hub.test.mjs'), 'import test from "node:test"; import assert from "node:assert/strict"; import { hubReady } from "../src/hub.mjs"; test("hub", () => assert.equal(hubReady(), true));\n');
+  w.git(builderClone, 'add', '.');
+  w.git(builderClone, 'commit', '-qm', 'feat(hub): bootstrap package.json, prompt, src and tests');
+  w.git(builderClone, 'push', '-q', 'origin', `HEAD:${build.branch}`);
+  const head1 = w.git(builderClone, 'rev-parse', 'HEAD');
+  w.github.setChecks(head1, 'success');
+
+  w.finish(17, 'build', {
+    result: {
+      outcome: 'pr',
+      head: head1,
+      title: 'feat(hub): bootstrap hub-1',
+      summary: 'Bootstrapped hub-1 package, prompt, code and tests.',
+      tests: { state: 'pass', passed: 1, total: 1 },
+      runtime: { state: 'not-run', cause: 'native-only prompt' },
+    },
+  });
+  await w.tick();
+
+  const rev1 = w.job(17, 'review');
+  const suite1 = w.job(17, 'suite');
+  assert.ok(rev1, 'review started on greenfield PR');
+  assert.doesNotMatch(rev1.input, /no test command/, 'reviewer evidence summary sees PR-added package.json test command');
+  assert.ok(suite1, 'suite started using PR-added package.json instead of failing with no-test-command');
+  assert.match(suite1.args.join(' '), /npm test/);
+
+  // Suite failure reports real detected command ("npm test", never null) in repair instructions.
+  w.review(17, 'PASS');
+  w.say(17, 'suite', 'not ok 1 - hub\n  ---\n  location: test/hub.test.mjs:1:1\n  ...\n# tests 1\n# fail 1\n');
+  w.finish(17, 'suite', { code: 1 });
+  await w.tick();
+
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'suite failure triggered repair');
+  assert.match(repair.input, /Full test suite failure \(`npm test`/, 'repair reproduction block names detected npm test command');
+  assert.match(repair.input, /failed suite \(npm test\)/, 'prior round summary names detected npm test command');
+  assert.match(repair.input, /the full test command of this repository is `npm test`/, 'workRules names detected npm test command');
+
+  // Repair pushes green head and PR merges cleanly.
+  writeFileSync(join(repair.cwd, 'src/hub.mjs'), '// Prompt: prompts/hub.prompt.md\nexport const hubReady = () => true; // fixed\n');
+  w.git(repair.cwd, 'add', '.');
+  w.git(repair.cwd, 'commit', '-qm', 'fix(hub): green suite');
+  w.git(repair.cwd, 'push', '-q', 'origin', `HEAD:${repair.branch}`);
+  const head2 = w.git(repair.cwd, 'rev-parse', 'HEAD');
+  w.github.setChecks(head2, 'success');
+  const pr = [...w.github.prs.values()][0];
+  pr.head = head2;
+  pr.syncedTip = head2;
+  w.finish(17, 'repair', {
+    result: {
+      outcome: 'pr',
+      pr: pr.number,
+      head: head2,
+      title: 'feat(hub): bootstrap hub-1',
+      summary: 'Bootstrapped hub-1 package, prompt, code and tests.',
+      tests: { state: 'pass', passed: 1, total: 1 },
+      runtime: { state: 'not-run', cause: 'native-only prompt' },
+    },
+  });
+  await w.tick();
+  w.review(17, 'PASS');
+  w.suite(17, 0);
+  await w.tick();
+  assert.equal(pr.merged, true, 'greenfield PR merged cleanly after running PR-added npm test');
+});

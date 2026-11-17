@@ -178,7 +178,7 @@ interval), `etags` (`p.etags`, persisted right after `tickCore` as well as in th
 (`readMachineGuard({cwd, runs: state.runs, repoRuns: pdd.json autopilot.runs, machineRuns, share, jobs, readyLogins})`, where
 `machineRuns` is the highest saved `runs` across active repositories in `stateRoot` (so `--runs N` above 4 on one repository lifts whole-machine `machineSlots` consistently in both `coreGuard` and `status` while keeping sibling repositories at their own `slots`), `share` uses `state.share` or the active machine `share`, `readyLogins` is passed when locally known from `readLoginPoolSummary` unless `state.poolPath === 'off'` (and omitted when Cloud pool count is unknown locally so single-login and lease-only hosts keep default `autoSlots`), and
 `jobs` comes from `inspectMachineJobs(stateRoot, ports)`: it scans every saved `*-core` folder under `stateRoot`
-including disabled repositories, counting `busySlots` for enabled repositories and still-running slot-holding jobs with
+including disabled repositories, counting `busySlots` for enabled repositories and still-running slot-holding jobs (excluding phase `ending` or `released`, interpreter maintenance `runtimeWait`, and unresumed `poolExhausted` PR waits) with
 live child processes (`pid > 1` with matching wrapper token, reading `/proc/PID/cmdline` first on Linux before `ps`) for disabled repositories so disabling a repository while workers finish never hides active machine
 load, and inventories live child roles (`build`, `repair`, `review`, `suite`, `vectors`, `runtime`, `intake`) across
 `*-core/jobs/*.json` and `*-core/intake/jobs/*.json` without inflating issue-slot count; tests replace the guard with
@@ -271,9 +271,15 @@ report fields alongside `costs` and `repositories`, exiting `0`.
 **Add** creates the `pdd:autopilot` label when it is missing and adds it to each named issue of this repository (an
 issue of another repository returns exit 2): `Marked N issue(s) with pdd:autopilot.`
 
-**Release** releases this machine's own claim on ISSUE through the shared `releaseRunClaim` of the workflow runner
-(the run lock, worker and check-custody guard, chat cleanup and local allocation result stay with the runner), and
-returns its result unchanged.
+**Release** delegates `pdd autopilot release ISSUE` to `releaseCoreJob` of the [core engine](autopilot-core.prompt.md#release)
+with this repository's state file, resolved `state` (`machine` defaulting to the host name when unsaved), counted
+`gh` and `git` ports (purpose `claims`), `ports.corePorts`, and a `releaseClaim(machine, ref = ISSUE, onMutate)` callback to `releaseRunClaim` of the
+workflow runner (keeping the workflow run lock, worker and check-custody guard, Herdr chat cleanup and local allocation
+release with the runner), and returns its `{exitCode, message}` unchanged. Under the shared `STATE.lock` tick lock,
+release checks ownership across `machineIdOf(state)` and `state.machine`, immediately stops any live local core job
+processes without waiting for a later tick, frees any held `pdd:merge-lane` label without closing PRs or deleting
+worktrees, logs or branches, removes `pdd:working` and `pdd:stuck`, appends one `released` history record and removes
+`jobs/N.json`.
 
 **Audit** (`pdd autopilot audit RUN PR`) resolves the saved run with `resolveRun` and calls `auditMerge` of the
 [audit owner](autopilot-audit.prompt.md) with that run and PR, through this launcher's counted process port (purpose
@@ -301,7 +307,7 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
 
 - [Autopilot core](autopilot-core.prompt.md), [Autopilot reports](autopilot-reports.prompt.md) and
   [intake cards](autopilot-intake.prompt.md): required native generation and verification context for the core tick,
-  core status, the report and intake commands.
+  core status, release, and the report and intake commands.
 - [Post-merge audit](autopilot-audit.prompt.md): required native generation and verification context for the audit
   command.
 - [The move from the full engine](autopilot-retire.prompt.md): required native generation and verification context

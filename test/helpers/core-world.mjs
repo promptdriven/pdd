@@ -1,11 +1,12 @@
 // A small offline world for the Autopilot core tick: a fake GitHub (one work repository and the
 // promptdriven/pdd report repository), a real local Git origin and clone, a fake clock and a scripted
 // agent job runner. No network, no real agent, no timer.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, appendFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createGithubRepoFake } from './github-repo-fake.mjs';
+import { gitTemplateDir, rewriteGitConfigUrl } from './git-template.mjs';
 import { tickCore, coreSettings } from '../../src/autopilot-core.mjs';
 
 const endpointOf = args => args.find((word, index) => index > 0 && /^repos\//.test(word));
@@ -19,9 +20,10 @@ function extend(f, w) {
   let nextCheckId = 8000;
   const prefix = `repos/${f.repo}`;
   const restPr = pr => ({ number: pr.number, state: pr.state, merged: pr.merged, body: pr.body, title: pr.title, html_url: `https://github.com/${f.repo}/pull/${pr.number}`,
+    created_at: pr.createdAt ?? '2026-11-07T12:00:00Z', merged_at: pr.mergedAt ?? null,
     head: { sha: pr.head, ref: pr.branch, repo: { full_name: f.repo } }, base: { ref: pr.base, repo: { full_name: f.repo } }, merge_commit_sha: pr.mergeSha ?? null, draft: Boolean(pr.draft) });
   f.openPr = ({ branch, head, body = 'Fixes the issue.\n\nRuntime: PASS\nPath: d — change.txt — unowned — no contract change — Test: done check', base = 'main', title = 'Change' }) => {
-    const pr = { number: 100 + f.prs.size, branch, head, base, body, title, state: 'open', merged: false, comments: [], labels: [] };
+    const pr = { number: 100 + f.prs.size, branch, head, base, body, title, state: 'open', merged: false, createdAt: new Date(f.now()).toISOString(), mergedAt: null, comments: [], labels: [] };
     f.prs.set(pr.number, pr); return pr;
   };
   f.setChecks = (sha, conclusion = 'success', status = 'completed', extra = {}) => {
@@ -46,7 +48,7 @@ function extend(f, w) {
       if (!pr || pr.state !== 'open') return { code: 1, stdout: '', stderr: 'not open' };
       if (head !== pr.head) return { code: 1, stdout: '', stderr: 'head changed' };
       if (!args.includes('--merge')) return { code: 1, stdout: '', stderr: 'merge method' };
-      pr.state = 'closed'; pr.merged = true; pr.mergeSha = 'f'.repeat(40); f.merges.push(pr.number);
+      pr.state = 'closed'; pr.merged = true; pr.mergedAt = new Date(f.now()).toISOString(); pr.mergeSha = 'f'.repeat(40); f.merges.push(pr.number);
       // With mergeMovesBase, the merge lands on the remote main like on GitHub (a merge commit of the PR head).
       if (f.mergeMovesBase) {
         const seed = join(w.dir, `merge-${pr.number}`); git(w.dir, 'clone', '-q', w.remote, seed);
@@ -114,7 +116,24 @@ function extend(f, w) {
       if (method === 'POST') { const c = { id: f.nextComment++, body: input.body, user: { login: f.owner } }; pr.comments.push(c); return ok(201, c); }
       return ok(200, pr.comments);
     }
+    if (route === '/commits' && method === 'GET') {
+      const raw = spawnSync('git', ['--git-dir', w.remote, 'log', '--format=%H%x09%cI%x09%B%x00', 'refs/heads/main'], { encoding: 'utf8' });
+      const items = raw.status === 0
+        ? raw.stdout.split('\0').filter(s => s.trim()).map(rec => {
+            const [shaVal, dateVal, ...msgParts] = rec.replace(/^\n+/, '').split('\t');
+            return { sha: shaVal, html_url: `https://github.com/${f.repo}/commit/${shaVal}`, commit: { message: msgParts.join('\t').trim(), committer: { date: dateVal } } };
+          })
+        : [];
+      return ok(200, items);
+    }
+    if ((m = /^\/commits\/([0-9a-f]{40})$/.exec(route)) && method === 'GET') {
+      const rev = spawnSync('git', ['--git-dir', w.remote, 'rev-list', '--parents', '-n', '1', m[1]], { encoding: 'utf8' });
+      const parts = rev.status === 0 ? rev.stdout.trim().split(/\s+/).filter(Boolean) : [];
+      const parents = parts.length > 1 ? parts.slice(1).map(s => ({ sha: s })) : [{ sha: '0'.repeat(40) }];
+      return ok(200, { sha: m[1], parents });
+    }
     if ((m = /^\/commits\/([0-9a-f]{40})\/check-runs$/.exec(route))) { const runs = f.checks.get(m[1]) ?? []; return ok(200, { total_count: runs.length, check_runs: runs }); }
+    if ((m = /^\/commits\/([0-9a-f]{40})\/statuses$/.exec(route)) && method === 'GET') return ok(200, f.statuses.get(m[1]) ?? []);
     if ((m = /^\/commits\/([0-9a-f]{40})\/status$/.exec(route))) { const statuses = f.statuses.get(m[1]) ?? []; return ok(200, { state: statuses.length ? statuses.every(s => s.state === 'success') ? 'success' : 'failure' : 'pending', statuses }); }
     if ((m = /^\/check-runs\/(\d+)\/annotations$/.exec(route)) && method === 'GET') return ok(200, f.annotations.get(Number(m[1])) ?? []);
     if (route === '/actions/runs' && method === 'GET') {
@@ -181,16 +200,24 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   w.clock = shared?.clock ?? { now: () => w.clock.at, at: w.time };
   w.now = () => w.clock.at;
   w.advance = ms => { w.clock.at += ms; };
-  if (shared) { Object.assign(w, { remote: shared.remote, github: shared.github, reports: shared.reports }); }
-  else {
+  w.cwd = join(dir, `clone-${machine}`);
+  if (shared) {
+    Object.assign(w, { remote: shared.remote, github: shared.github, reports: shared.reports });
+    git(dir, 'clone', '-q', w.remote, w.cwd);
+  } else {
+    const tpl = gitTemplateDir('core-world', d => {
+      const origin = join(d, 'origin.git'), seed = join(d, 'clone');
+      git(d, 'init', '-q', '--bare', '-b', 'main', origin);
+      git(d, 'clone', '-q', origin, seed);
+      writeFileSync(join(seed, 'README.md'), 'value 1\n'); git(seed, 'add', '.'); git(seed, 'commit', '-qm', 'seed'); git(seed, 'push', '-q', 'origin', 'HEAD:main');
+    });
     w.remote = join(dir, 'origin.git');
-    git(dir, 'init', '-q', '--bare', '-b', 'main', w.remote);
-    const seed = join(dir, 'seed'); git(dir, 'clone', '-q', w.remote, seed);
-    writeFileSync(join(seed, 'README.md'), 'value 1\n'); git(seed, 'add', '.'); git(seed, 'commit', '-qm', 'seed'); git(seed, 'push', '-q', 'origin', 'HEAD:main');
+    cpSync(join(tpl, 'origin.git'), w.remote, { recursive: true });
+    cpSync(join(tpl, 'clone'), w.cwd, { recursive: true });
+    rewriteGitConfigUrl(join(w.cwd, '.git/config'), join(tpl, 'origin.git'), w.remote);
     w.github = extend(createGithubRepoFake({ repository, owner: 'acme', issues: 0, now: w.now }), w);
     w.reports = extend(createGithubRepoFake({ repository: 'promptdriven/pdd', owner: 'promptdriven', issues: 0, now: w.now }), w);
   }
-  w.cwd = join(dir, `clone-${machine}`); git(dir, 'clone', '-q', w.remote, w.cwd);
   w.state = { cwd: w.cwd, repo: repository, coordinatorId, machine, baseBranch: 'main', agent: { kind: 'codex', command: 'codex' },
     packageRoot: join(dir, 'pkg'), stateFile: join(dir, `state-${machine}.json`) };
   w.root = join(dir, `core-${machine}`); w.reportRoot = join(dir, `reports-${machine}`);

@@ -243,17 +243,19 @@ header. pdd reads the header from the file on the base commit and from the file 
 any complete line in the first 4 KiB of the file, for example after a `#!` line, a license or imports:
 
 ```text
+// Prompt: prompts/cli/workflow-runner.prompt.md
+# Prompt: prompts/modules/src/app/policy.py.prompt.md
 // Generated from prompts/cli/workflow-runner.prompt.md.
-# Generated from prompts/modules/src/app/policy.py.prompt.md.
 """Generated from prompts/app.prompt.md."""
-<!-- Generated from prompts/page.prompt.md -->
+<!-- Prompt: prompts/page.prompt.md -->
 ```
 
-The line can start with a comment mark (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`, `"""` or `'''`). Then it
-has `Generated from` and a repository path that ends in `.prompt.md`. After the path, it can have
-` (sha256: HEX)` with 64 lowercase hex characters, and a `.`. HEX is the prompt's header hash; `pdd owner`
-shows it ([Find the prompt that owns a file](cli.md#find-the-prompt-that-owns-a-file)). Replay reads only the
-path. A line without such a path is not a header.
+A `Prompt:` header starts with a comment mark (`//`, `#`, `--`, `;`, `/*`, `*`, `<!--`, `"""` or `'''`), followed
+by `Prompt:` and a repository path that ends in `.prompt.md`. A `Generated from` header can start with an optional
+comment mark, followed by `Generated from` and the `.prompt.md` path. Path-only headers are canonical on write.
+When an optional ` (sha256: HEX)` or ` sha256=HEX` suffix (64 lowercase hex characters) and optional `.` are
+present, `pdd owner` checks that hash ([Find the prompt that owns a file](cli.md#find-the-prompt-that-owns-a-file)).
+Replay reads only the path. A line without such a path is not a header.
 For example, `Generated from the canonical m1_policy prompt` names no file, so it adds no link.
 Lines longer than 1,100 characters are not parsed as headers. A file can have more than one header; each
 one links its prompt. `pdd owner` and `pdd test` read headers with the same rule. Git color settings do not

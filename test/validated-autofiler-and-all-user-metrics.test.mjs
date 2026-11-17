@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 import { checkInput, interfaceBlocks } from '../src/runtime-seam.mjs';
 import { runMetrics } from '../src/metrics-command.mjs';
 import {
+  AUTOPILOT_ZERO_EDIT_TARGET,
   DEFAULT_DAILY_REPORT_LIMIT,
   DEFAULT_RUNTIME_REPORT_REPOSITORY,
   REPORT_REPOSITORY,
@@ -16,6 +17,7 @@ import {
   fileReport,
   listReportDrafts,
   reportMarker,
+  sendReportDraft,
   summarizeConversionDrops,
   validateReportDraft,
 } from '../src/autopilot-reports.mjs';
@@ -69,6 +71,21 @@ function createFakeReportGithub({ readableRepos = new Set([REPORT_REPOSITORY, DE
         return item.labels.some(l => (typeof l === 'string' ? l : l?.name) === wantedLabel);
       });
       return reply(200, matching);
+    }
+    if (method === 'PATCH' && /\/issues\/\d+$/.test(endpoint)) {
+      const [, repo, num] = /^repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(endpoint);
+      const payload = JSON.parse(options.input ?? '{}');
+      writes.push({ method, endpoint, payload });
+      const found = issues.find(item => item.repo === repo && item.number === Number(num));
+      if (!found) return reply(404, { message: 'Not Found' });
+      if (payload.state) {
+        found.state = payload.state;
+        if (payload.state === 'open') {
+          found.state_reason = 'reopened';
+          found.closed_at = null;
+        }
+      }
+      return reply(200, { number: found.number, id: found.id, state: found.state });
     }
     if (method === 'POST' && /\/issues\/\d+\/comments$/.test(endpoint)) {
       const [, repo, num] = /^repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments$/.exec(endpoint);
@@ -1242,4 +1259,195 @@ test('Drafted noise reports preserve detail text and operatorStop so autoFileVal
     batch.filtered.map(r => r.reason).sort(),
     ['auth-expiry', 'operator-stop', 'quota-or-credit', 'transient-network-blip'],
   );
+});
+
+test('Closed matching issue (even >14d old) is reopened with scrubbed forensic summary instead of filing a duplicate (#3182)', async t => {
+  const root = tempDir(t);
+  const now = Date.parse('2026-11-16T18:00:00Z');
+  const fake = createFakeReportGithub({
+    seededIssues: [
+      {
+        number: 520,
+        id: 9520,
+        repo: REPORT_REPOSITORY,
+        state: 'closed',
+        state_reason: 'completed',
+        closed_at: '2026-07-01T00:00:00Z', // closed > 130 days ago
+        title: 'Autopilot report: PDD autopilot-core post-merge-reopen (PDD 0.1)',
+        body: [
+          'Autopilot detected a post-merge regression on a previously merged change (reopened issue, reverted merge, or post-merge CI failure).',
+          '',
+          '- Kind: pdd',
+          '- Component: autopilot-core',
+          '- Error code: post-merge-reopen',
+          '- Step: post-merge',
+          '- Versions: PDD 0.1.15, Node v22.0.0, linux, agent codex',
+          '- Seen on this machine: 1',
+          '',
+          reportMarker('pdd.autopilot-core.post-merge-reopen.0.1'),
+        ].join('\n'),
+        labels: ['pdd:autopilot-report'],
+      },
+    ],
+  });
+
+  const reopenedRes = await fileReport(
+    {
+      cause: {
+        kind: 'pdd',
+        component: 'autopilot-core',
+        code: 'post-merge-reopen',
+        reproduced: true,
+        issues: [42, 43],
+        heads: ['a'.repeat(40)],
+        command: 'TOKEN=secret_abc123 pdd autopilot --repo acme/private-app https://internal.acme.test/hook',
+        text: 'Private customer text for acme/private-app issue #42',
+        detail: 'SECRET_KEY=topsecret /Users/bob/acme/private-app/src/secret.js',
+      },
+      mode: 'validated',
+      root,
+      machine: 'vm-1',
+      versions: { ...VERSIONS, pdd: '0.2.0' },
+      step: 'post-merge',
+      words: ['acme/private-app', 'acme', 'private-app'],
+    },
+    { gh: fake.gh, now: () => now },
+  );
+
+  assert.equal(reopenedRes.state, 'reopened');
+  assert.equal(reopenedRes.number, 520);
+  assert.equal(reopenedRes.ref, `${REPORT_REPOSITORY}#520`);
+  assert.equal(fake.issues.length, 1, 'never opened a duplicate GitHub issue');
+  assert.equal(fake.issues[0].state, 'open', 'reopened the existing closed issue');
+  assert.equal(fake.writes.filter(w => w.method === 'PATCH').length, 1);
+  assert.equal(fake.comments.length, 1, 'appended the scrubbed forensic summary comment');
+  assert.match(fake.comments[0].body, /Reopened automatically because this cause occurred again/);
+  assert.match(fake.comments[0].body, /- Error code: post-merge-reopen/);
+  assert.match(fake.comments[0].body, /- Proof: reproduced, 2 issues/);
+  assert.match(fake.comments[0].body, /- Command: TOKEN=\[redacted\] pdd autopilot --repo \[repository\] \[url\]/i);
+  assert.doesNotMatch(fake.comments[0].body, /secret_abc123|topsecret|private-app|acme|\/Users\/bob|Private customer/);
+
+  // Immediate repeat on the now-open issue within 24h is counted without extra comments or PATCH calls.
+  const repeatRes = await fileReport(
+    {
+      cause: { kind: 'pdd', component: 'autopilot-core', code: 'post-merge-reopen', reproduced: true, step: 'post-merge' },
+      mode: 'validated',
+      root,
+      machine: 'vm-1',
+      versions: { ...VERSIONS, pdd: '0.2.0' },
+      step: 'post-merge',
+    },
+    { gh: fake.gh, now: () => now + 60_000 },
+  );
+  assert.equal(repeatRes.state, 'counted');
+  assert.equal(fake.comments.length, 1);
+
+  assert.deepEqual(AUTOPILOT_ZERO_EDIT_TARGET, { min: 0.9, max: 0.95, label: '90-95%' });
+  const summary = summarizeConversionDrops({
+    date: '2026-11-16',
+    openIssuesCount: 50,
+    backlogCount: 20,
+    claimableCount: 15,
+    claimedCount: 10,
+    clearSpecCount: 8,
+    prOpenedCount: 6,
+    zeroEditCount: 4,
+    mergedOrWouldMergeCount: 5,
+    reopenedCount: 0,
+    filed: [reopenedRes],
+  });
+  assert.deepEqual(summary.funnel, {
+    openIssues: 50,
+    taken: 10,
+    openToTaken: { numerator: 10, denominator: 50, rate: 0.2 },
+    zeroEditMergedOrWouldMerge: 4,
+    zeroEditRate: { numerator: 4, denominator: 10, rate: 0.4 },
+    zeroEditTarget: { min: 0.9, max: 0.95, label: '90-95%' },
+    mergedOrWouldMerge: 5,
+    takenToMergedOrWouldMerge: { numerator: 5, denominator: 10, rate: 0.5 },
+    reopened: 0,
+    reopenRate: { numerator: 0, denominator: 5, rate: 0 },
+    reopenTarget: 0,
+  });
+  assert.equal(summary.reports.verifiedIssues.length, 1);
+  assert.equal(summary.reports.verifiedIssues[0].state, 'reopened');
+});
+
+
+test('If reopening a closed report succeeds (PATCH 200) and comment POST fails (HTTP 500), retry still posts the full reopened forensic summary instead of Seen again (#3182)', async t => {
+  const root = tempDir(t);
+  const now = Date.parse('2026-11-16T19:00:00Z');
+  const fake = createFakeReportGithub({
+    seededIssues: [
+      {
+        number: 530,
+        id: 9530,
+        repo: REPORT_REPOSITORY,
+        state: 'closed',
+        state_reason: 'completed',
+        closed_at: '2026-10-01T00:00:00Z',
+        title: 'Autopilot report: PDD autopilot-core post-merge-revert (PDD 0.1)',
+        body: [
+          'Autopilot detected a post-merge regression on a previously merged change (reopened issue, reverted merge, or post-merge CI failure).',
+          '',
+          '- Kind: pdd',
+          '- Component: autopilot-core',
+          '- Error code: post-merge-revert',
+          '- Step: post-merge',
+          '- Versions: PDD 0.1.20, Node v22.0.0, linux, agent codex',
+          '- Seen on this machine: 1',
+          '',
+          reportMarker('pdd.autopilot-core.post-merge-revert.0.1'),
+        ].join('\n'),
+        labels: ['pdd:autopilot-report'],
+      },
+    ],
+  });
+
+  let failCommentOnce = true;
+  const wrappedGh = async (args, opts) => {
+    const methodIdx = args.indexOf('--method');
+    const method = methodIdx >= 0 ? args[methodIdx + 1] : 'GET';
+    const endpoint = args[args.length - (args.includes('--input') ? 3 : 1)];
+    if (failCommentOnce && method === 'POST' && endpoint.endsWith('/issues/530/comments')) {
+      failCommentOnce = false;
+      return { code: 1, stdout: 'HTTP/2 500 Internal Server Error\r\n\r\n{"message":"transient"}', stderr: 'gh: HTTP 500' };
+    }
+    return fake.gh(args, opts);
+  };
+
+  // Attempt 1: PATCH reopens #530, POST /comments fails with 500 -> kept as local draft!
+  const first = await fileReport(
+    {
+      cause: {
+        kind: 'pdd',
+        component: 'autopilot-core',
+        code: 'post-merge-revert',
+        reproduced: true,
+        issues: [77],
+        command: 'API_SECRET=xyz pdd autopilot',
+      },
+      mode: 'validated',
+      root,
+      machine: 'vm-1',
+      versions: { ...VERSIONS, pdd: '0.2.0' },
+      step: 'post-merge',
+    },
+    { gh: wrappedGh, now: () => now },
+  );
+  assert.equal(first.state, 'draft', 'failed comment POST keeps draft locally');
+  assert.equal(fake.issues[0].state, 'open', 'issue #530 is already open on GitHub');
+  assert.equal(fake.comments.length, 0);
+  assert.equal(listReportDrafts({ root }).length, 1);
+
+  // Attempt 2 (retry via sendReportDraft): sees #530 open + pendingReopen in ledger -> posts full forensic summary, NOT Seen again!
+  const retry = await sendReportDraft({ root, fingerprint: first.fingerprint, machine: 'vm-1' }, { gh: wrappedGh, now: () => now + 5000 });
+  assert.equal(retry.exitCode, 0);
+  assert.equal(retry.state, 'reopened');
+  assert.equal(listReportDrafts({ root }).length, 0, 'retained draft deleted only after forensic summary succeeded');
+  assert.equal(fake.comments.length, 1);
+  assert.match(fake.comments[0].body, /Reopened automatically because this cause occurred again/);
+  assert.match(fake.comments[0].body, /- Error code: post-merge-revert/);
+  assert.match(fake.comments[0].body, /- Proof: reproduced/);
+  assert.doesNotMatch(fake.comments[0].body, /Seen again|xyz/);
 });

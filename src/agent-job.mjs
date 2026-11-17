@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-job.prompt.md (sha256: 58c070427d4923279bf2b7b8e06042512f745d3db6dc70bfda4b93e3c9abfbe2).
+// Prompt: prompts/cli/agent-job.prompt.md
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { accessSync, closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync, writeSync } from 'node:fs';
 import { setPriority } from 'node:os';

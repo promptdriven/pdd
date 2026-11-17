@@ -13,17 +13,20 @@ export const packageRoot = resolve(import.meta.dirname, '../..');
 const issueUrl = 'https://github.com/example/project/issues/17';
 
 import {fakeHerdr} from './fake-herdr.mjs';
+import {copyGitTemplate} from './git-template.mjs';
 
 export async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-runner-')));
   t.after(() => rmSync(base, { recursive: true, force: true }));
   const source = join(base, 'project'), state = join(base, 'state'), home = join(base, 'home');
-  for (const dir of [source, state, home, join(home, '.claude')]) mkdirSync(dir);
+  for (const dir of [state, home, join(home, '.claude')]) mkdirSync(dir);
   const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
-  git(source, 'init', '-q', '-b', 'main'); git(source, 'config', 'user.email', 'test@example.invalid'); git(source, 'config', 'user.name', 'Runner Test');
-  git(source, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
-  writeFileSync(join(source, 'value.mjs'), 'export const value = 1;\n'); git(source, 'add', '.'); git(source, 'commit', '-qm', 'initial');
-  git(source, 'update-ref', 'refs/remotes/origin/main', git(source, 'rev-parse', 'HEAD'));
+  copyGitTemplate('workflow-runner-source', source, tpl => {
+    git(tpl, 'init', '-q', '-b', 'main'); git(tpl, 'config', 'user.email', 'test@example.invalid'); git(tpl, 'config', 'user.name', 'Runner Test');
+    git(tpl, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
+    writeFileSync(join(tpl, 'value.mjs'), 'export const value = 1;\n'); git(tpl, 'add', '.'); git(tpl, 'commit', '-qm', 'initial');
+    git(tpl, 'update-ref', 'refs/remotes/origin/main', git(tpl, 'rev-parse', 'HEAD'));
+  });
   const f = { base, source, state, git, herdr: fakeHerdr(), prs: [], pushes: [], edits: [], fetches: 0, clock: Date.parse('2026-10-27T17:00:00Z'), ci: [], merged: false, mergedNumbers: [] };
   f.herdr.now = () => f.clock;
   async function execFile(file, args, opts) {
@@ -66,11 +69,13 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
     }
     if (args[0] === 'pr' && args[1] === 'view') {
       const pr = f.prs.find(item => item.url === args[2]);
-      return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body }) };
+      return { stdout: JSON.stringify({ state: f.merged || f.mergedNumbers.includes(pr?.number) ? 'MERGED' : 'OPEN', mergedAt: null, statusCheckRollup: f.ci, body: pr?.body, headRefOid: pr?.headRefOid }) };
     }
-    if (args[0] === 'pr' && args[1] === 'edit') {
-      const pr = f.prs.find(item => item.url === args[2]) ?? assert.fail(`no PR ${args[2]}`);
-      pr.body = String(opts.input ?? ''); f.edits.push(pr.number); return { stdout: '' };
+    if (args[0] === 'api' && args.includes('PATCH')) {
+      const endpoint = args.find(arg => /^repos\/example\/project\/pulls\/\d+$/.test(arg));
+      const pr = f.prs.find(item => item.number === Number(endpoint?.split('/').at(-1))) ?? assert.fail(`no PR ${endpoint}`);
+      assert.equal(args[args.indexOf('--input') + 1], '-');
+      pr.body = JSON.parse(opts.input).body; f.edits.push(pr.number); return { stdout: '' };
     }
     throw Error(`unexpected gh ${args.join(' ')}`);
   }

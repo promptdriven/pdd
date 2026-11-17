@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.34, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.35, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -80,7 +80,7 @@ pdd reads three records, in this order:
 | Source | Record | Certain |
 |---|---|---|
 | `binding` | An entry of the root `pdd-bindings.json` with `module` PATH and a `prompt` | yes |
-| `header` | A `Generated from PROMPT` line in the first 4 KiB of the file ([header form](replay-evidence.md#approved-scenarios-on-the-base)) | yes |
+| `header` | A `Prompt: PROMPT` or `Generated from PROMPT` comment line in the first 4 KiB of the file ([header form](replay-evidence.md#approved-scenarios-on-the-base)) | yes |
 | `prose` | The first sentence of a prompt's opening paragraph names PATH, for example ``Own `src/x.mjs`.`` | no |
 
 The prose record is used only when no binding or header names a prompt. A prose
@@ -104,7 +104,7 @@ first, then headers in line order; or the sorted prose owners), `source`
 (`binding`, `header`, `prose` or null), `certain`, `note` (empty when there is
 nothing to add) and `headers`.
 
-`headers` has one row for each `Generated from` header of the file: `prompt`,
+`headers` has one row for each provenance header of the file: `prompt`,
 `sha256` (the header's hash or null), `expected` (the prompt's header hash, or
 null when the prompt is not available), `state` and `legacy`. The header hash
 is the SHA-256 of the prompt's behavior text: for a plain prompt, the prompt
@@ -118,12 +118,12 @@ prompt current.
 | `current` | The hash is the prompt's header hash. |
 | `current` with `legacy: true` | The hash is the SHA-256 of the whole prompt file. pdd accepts this form for compatibility and marks it `legacy: true`. Write the expected hash for a canonical header. |
 | `stale` | The prompt changed after the header was written. Check that the file follows the prompt, then write the expected hash. |
-| `none` | The header has no hash. |
+| `none` | Canonical path-only header without a hash. |
 | `unknown` | The named prompt is not available. |
 
-The text form adds one line for each header that is not plain current, with
-the expected hash. pdd never rewrites a header: a hash in a header says that
-the file follows that prompt version. The command returns 0 when it can answer, also for an uncertain
+The text form adds one line only when a header carries a `stale` or whole-file
+`legacy` hash, showing the expected hash; canonical path-only headers (`none`)
+add no extra line. `pdd owner` does not rewrite headers. The command returns 0 when it can answer, also for an uncertain
 or missing owner. When a prompt claims ownership of a test file (`test/**`,
 `tests/**`, `*.test.*`, `*_test.*` or `test_*.*`), `pdd owner` writes a
 non-blocking warning on `stderr` and keeps exit code 0 and `stdout` unchanged.
@@ -819,7 +819,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.34`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.35`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |

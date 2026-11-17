@@ -65,8 +65,14 @@ Check these boundaries in order and continue after failures:
 - Node >=22.20.0; Git present; Git checkout and GitHub origin; gh signed in;
   repo viewerPermission is ADMIN, MAINTAIN or WRITE and at least one merge method
   is enabled. Missing tools, gh auth or write permission warn. Read effective
-  rules for the default branch separately. Unreadable rules warn; list rule types
-  and say required reviews/checks still apply. Do not claim merge eligibility.
+  rules for the default branch separately (`repos/REPO/rules/branches/BRANCH`).
+  When `gh repo view` confirmed `REPO` and `BRANCH`, an HTTP 403 reply stating
+  `Upgrade to GitHub Pro or make this repository public` or an HTTP 404 reply
+  (when `gh` sign-in passed or the reply states `Branch not protected`) means no
+  branch rulesets are enforced (`pass` with `Branch rules: none...; required
+  reviews and checks still apply` and the `gh api` read command, never `gh auth
+  login`). Other unreadable rules warn; list rule types and say required
+  reviews/checks still apply. Do not claim merge eligibility.
 - Git identity (`git-identity`): Autopilot jobs commit, so they need a name and an
   email. Read the effective `git config user.name` and `git config user.email` in
   the repository folder with the invocation environment. In that environment, a
