@@ -50,6 +50,8 @@ Option kind `optional-integer` consumes the following word only when it is decim
 min/max and store it as a string. With no number, store the catalog's default as a string. A subsequent option
 or Story operand remains available for ordinary parsing. This supports --serve [PORT].
 
+Option kind `optional-text` consumes the following word when present and not starting with `-` (requiring nonblank text and preserving exact bytes); otherwise store Boolean `true` and leave subsequent options available for ordinary parsing.
+
 Accept the catalog's `pdd mcp` route without operands or options; normal local help forms apply. Parsing never starts the server or registers it.
 
 ## Scope command syntax

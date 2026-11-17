@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-model.prompt.md (sha256: cdd0a3fa913076378475fc66f7a70f2ac2162475ad7d4433d21f4f219a003a97).
+// Generated from prompts/cli/metrics-model.prompt.md (sha256: 217a9c91b2c84d70b7da0b1bbc481dec648a313640831621649cf8b29d66cb0c).
 const stable = value => {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stable(value[k])}`).join(',')}}`;
@@ -9,6 +9,15 @@ const order = (a, b) => time(a.at) - time(b.at) || time(a.observedAt) - time(b.o
 const latest = events => [...events].sort(order).at(-1);
 const reasonList = events => [...new Set(events.flatMap(e => [...(Array.isArray(e.data.reasons) ? e.data.reasons : []), ...(e.data.reason ? [e.data.reason] : [])]))].sort();
 const state = (yes, unknown = false) => yes ? 'yes' : unknown ? 'unknown' : 'no';
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const parseCalendarDate = value => {
+  if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\d$/.test(value)) throw new TypeError('Invalid week date');
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== value) throw new TypeError('Invalid week date');
+  return ms;
+};
+const addCalendarDays = (dateStr, offsetDays) => new Date(parseCalendarDate(dateStr) + offsetDays * 86400000).toISOString().slice(0, 10);
+const isoWeekdayIndex = dateStr => (new Date(parseCalendarDate(dateStr)).getUTCDay() + 6) % 7;
 const SKILL_SET = new Set(['small-change', 'bug', 'feature', 'no-behavior-change']);
 const RECEIPT_SET = new Set(['done', 'missed', 'not-applicable', 'unknown']);
 const parseSkillTag = value => {
@@ -31,6 +40,13 @@ export function calculateMetrics({ events, repo, scope, timezone, observedAt, so
   if (!Number.isFinite(cutoff)) throw new TypeError('Invalid observation time');
   const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
   const dateOf = at => { const parts = Object.fromEntries(formatter.formatToParts(new Date(at)).map(p => [p.type, p.value])); return `${parts.year}-${parts.month}-${parts.day}`; };
+  const weekMeta = scope.kind === 'week' ? (() => {
+    const dayIdx = isoWeekdayIndex(scope.date);
+    const weekStart = addCalendarDays(scope.date, -dayIdx);
+    const weekEnd = addCalendarDays(weekStart, 6);
+    const days = Array.from({ length: dayIdx + 1 }, (_, idx) => addCalendarDays(weekStart, idx));
+    return { weekStart, weekEnd, throughDate: scope.date, days };
+  })() : null;
   const identities = new Map();
   for (const event of events) {
     if (typeof event.repo !== 'string' || event.repo.toLowerCase() !== canonicalRepo || time(event.at) > cutoff || time(event.observedAt) > cutoff || !Number.isFinite(time(event.at)) || !Number.isFinite(time(event.observedAt))) continue;
@@ -72,6 +88,8 @@ export function calculateMetrics({ events, repo, scope, timezone, observedAt, so
     ? [...new Set(clean.filter(e => e.type === 'start' && dateOf(e.at) === scope.date).map(e => e.issue))]
     : scope.kind === 'activity'
     ? [...new Set(clean.filter(e => isActivityObservation(e) && dateOf(e.at) === scope.date).map(e => e.issue))]
+    : scope.kind === 'week'
+    ? [...new Set(clean.filter(e => isActivityObservation(e) && (() => { const d = dateOf(e.at); return d >= weekMeta.weekStart && d <= weekMeta.throughDate; })()).map(e => e.issue))]
     : scope.kind === 'queue'
     ? [...new Set([...snapshotIssueSet, ...clean.filter(e => e.type !== 'selection').map(e => e.issue)])]
     : [...snapshotIssueSet];
@@ -228,8 +246,13 @@ export function calculateMetrics({ events, repo, scope, timezone, observedAt, so
   }
   const queueIssues = scope.kind === 'queue' ? issues.filter(i => snapshotIssueSet.has(i.issue)) : issues;
   const queue = Object.fromEntries(['ready', 'excluded', 'waiting', 'unknown'].map(s => [s, { count: queueIssues.filter(i => i.selection.state === s).length, issues: queueIssues.filter(i => i.selection.state === s).map(i => ({ issue: i.issue, reasons: i.selection.reasons })) }]));
-  const activityRows = clean.filter(e => dateOf(e.at) === scope.date);
-  const activity = scope.kind !== 'activity' ? null : Object.fromEntries(Object.entries({ starts: e => e.type === 'start', candidateCompletions: e => e.type === 'milestone' && e.data.stage === 'implementation-ready' && e.data.pr != null && e.data.head, validationResults: e => e.type === 'check', deliveries: e => e.type === 'delivery' && e.data.explicit === true && e.data.evidence && e.data.pr != null }).map(([name, matches]) => { const matched = activityRows.filter(matches); return [name, { count: matched.length, issues: [...new Set(matched.map(e => e.issue))].sort((a,b) => a-b), events: matched }]; }));
+  const activityMatchers = { starts: e => e.type === 'start', candidateCompletions: e => e.type === 'milestone' && e.data.stage === 'implementation-ready' && e.data.pr != null && e.data.head, validationResults: e => e.type === 'check', deliveries: e => e.type === 'delivery' && e.data.explicit === true && e.data.evidence && e.data.pr != null };
+  const summarizeActivity = rows => Object.fromEntries(Object.entries(activityMatchers).map(([name, matches]) => { const matched = rows.filter(matches); return [name, { count: matched.length, issues: [...new Set(matched.map(e => e.issue))].sort((a, b) => a - b), events: matched }]; }));
+  const activity = scope.kind === 'activity'
+    ? summarizeActivity(clean.filter(e => dateOf(e.at) === scope.date))
+    : scope.kind === 'week'
+    ? summarizeActivity(clean.filter(e => { const d = dateOf(e.at); return d >= weekMeta.weekStart && d <= weekMeta.throughDate; }))
+    : null;
   const summarizeCheck = (group, key) => ({
     done: group.filter(i => i.skillChecks[key] === 'done').length,
     applies: group.filter(i => i.skillChecks[key] === 'done' || i.skillChecks[key] === 'missed').length,
@@ -265,7 +288,36 @@ export function calculateMetrics({ events, repo, scope, timezone, observedAt, so
     'no-behavior-change': summarizeSkill(issues.filter(i => i.skill === 'no-behavior-change')),
     all: summarizeSkill(issues),
   };
+  const week = !weekMeta ? null : {
+    weekStart: weekMeta.weekStart,
+    weekEnd: weekMeta.weekEnd,
+    throughDate: weekMeta.throughDate,
+    elapsedDays: weekMeta.days.length,
+    refreshesOn: 'Monday',
+    mergedOrWouldMergePerDay: bySkill.all.mergedOrWouldMerge / weekMeta.days.length,
+    days: weekMeta.days.map(d => {
+      const dayIssueSet = new Set(clean.filter(e => isActivityObservation(e) && dateOf(e.at) === d).map(e => e.issue));
+      const daySummary = summarizeSkill(issues.filter(i => dayIssueSet.has(i.issue)));
+      const dayActivity = summarizeActivity(clean.filter(e => dateOf(e.at) === d));
+      return {
+        date: d,
+        weekday: WEEKDAYS[isoWeekdayIndex(d)],
+        issues: daySummary.issues,
+        merged: daySummary.merged,
+        wouldMerge: daySummary.wouldMerge,
+        mergedOrWouldMerge: daySummary.mergedOrWouldMerge,
+        conversionPct: daySummary.conversionPct,
+        pr: daySummary.pr,
+        activity: {
+          starts: dayActivity.starts.count,
+          candidateCompletions: dayActivity.candidateCompletions.count,
+          validationResults: dayActivity.validationResults.count,
+          deliveries: dayActivity.deliveries.count,
+        },
+      };
+    }),
+  };
   const coverage = clean.filter(e => e.type === 'coverage');
   const sourceId = s => typeof s === 'string' ? s : s.source;
-  return { definitionVersion: 'pdd.metrics.v1', repo: canonicalRepo, scope: { ...scope }, timezone, observedAt, sources: [...sources].sort((a,b) => String(sourceId(a)).localeCompare(String(sourceId(b)))), coverage: { events: coverage, missingSources: sources.map(sourceId).filter(s => !clean.some(e => e.source === s)).sort(), complete: false }, conflicts, issues, queue, activity, stages, transitions, bySkill, waits: issues.flatMap(i => i.waits) };
+  return { definitionVersion: 'pdd.metrics.v1', repo: canonicalRepo, scope: { ...scope }, timezone, observedAt, sources: [...sources].sort((a,b) => String(sourceId(a)).localeCompare(String(sourceId(b)))), coverage: { events: coverage, missingSources: sources.map(sourceId).filter(s => !clean.some(e => e.source === s)).sort(), complete: false }, conflicts, issues, queue, activity, week, stages, transitions, bySkill, waits: issues.flatMap(i => i.waits) };
 }
