@@ -12,3 +12,7 @@ As a maintainer watching headless Autopilot in observe mode, I want to follow a 
 ## What must not change
 
 - Viewing progress or leaving the viewer does not stop a worker, approve anything or merge a pull request.
+
+```pdd-boundary
+prompts/cli/autopilot-logs.prompt.md
+```

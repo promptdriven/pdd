@@ -7,6 +7,9 @@
     { "id": "AC3", "text": "An old running receipt without a confirmed live test process is shown as stale or uncertain, not as running tests." },
     { "id": "AC4", "text": "When the worker switches to repair, the process status names \"repair\" and says whether its wrapper is running." }
   ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
   "steps": [
     {
       "step_id": "queued",
