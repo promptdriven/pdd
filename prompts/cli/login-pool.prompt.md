@@ -37,7 +37,7 @@ internal multi-harness fallback helpers:
 `exhaustCloudPoolLogin(options, ports)`,
 `resolvePoolPath({env, poolPath})`,
 `loadLoginPool({cwd, env, poolPath, fallbackAgent}, ports)`,
-`loginEnvironment(baseEnv, login)`, `isQuotaExhaustionMessage(text)`,
+`loginEnvironment(baseEnv, login)`, `isQuotaExhaustionMessage(text)`, `isAuthFailureMessage(text)`,
 `readPoolCooldowns({stateRoot, now}, ports)`,
 `markLoginExhausted({stateRoot, loginId, resetAt, reason, now}, ports)`,
 `clearPoolCooldowns({stateRoot}, ports)` and
@@ -48,7 +48,7 @@ internal multi-harness fallback helpers:
 - **Isolated PDD-managed Codex home (`pddManagedCodexHome`):** Local Codex lease materialization writes exclusively inside `${PDD_STATE_DIR || join(XDG_STATE_HOME, "pdd") || ~/.local/state/pdd}/codex-home` (mode `0700`), never reading from or writing to `~/.codex/auth.json`. Plain `codex logout` or `codex login` against `~/.codex` cannot revoke PDD Cloud tokens or mutate credentials under running `codex app-server` processes, and legacy `[model_providers.pdd_codex_gateway]` entries in `~/.codex/config.toml` are cleaned up safely without touching `~/.codex/auth.json`.
 - **Zero borrower credentials for shared Codex (`gateway_grant`):** Shared Codex leases never deliver OpenAI `access_token`, `id_token` or `refresh_token` to borrower machines. Step overlays route Codex through `pdd_codex_gateway` using `PDD_CODEX_GATEWAY_GRANT` with zero `auth.json` inside `/tmp/pdd-cx-*`, while `pddManagedCodexHome(env)` writes only the short-lived revocable `pddg_*` grant as an API-key stub alongside `[model_providers.pdd_codex_gateway]` and `cli_auth_credentials_store = "file"`.
 - **Single-refresh invariant for owner passes (`direct_stripped`):** Owner Codex leases deliver short-lived `access_token` and `id_token` with `tokens.refresh_token: ""` so only PDD Cloud refreshes single-use OpenAI refresh tokens.
-- **Cold-start resilience and opt-in live refresh:** `cloudAccountsRequest` and `listCloudAccounts` default `timeoutMs` to `20_000` ms, `leaseCloudAccount` defaults `timeoutMs` to `15_000` ms (enforcing `timeoutMs` as an overall wall-clock deadline across bounded `reauth_required` skip retries and `maxRetries: 0` on `--quiet` shell-hook sync), and `cloudAccountsRequest` performs `1` bounded retry on timeout/abort for idempotent `GET` and `POST /v1/accounts/lease` requests. `listCloudAccounts({refresh = false})` appends `?refresh=true` only when `refresh === true`.
+- **Cold-start resilience and opt-in live refresh:** `cloudAccountsRequest` defaults `timeoutMs` to `20_000` ms (`gh auth token` budget up to `10_000` ms) and `listCloudAccounts` defaults `timeoutMs` to `30_000` ms, `leaseCloudAccount` defaults `timeoutMs` to `15_000` ms (enforcing `timeoutMs` as an overall wall-clock deadline across bounded `reauth_required` skip retries and `maxRetries: 0` on `--quiet` shell-hook sync), and `cloudAccountsRequest` performs `1` bounded retry on timeout/abort for idempotent `GET` and `POST /v1/accounts/lease` requests. `listCloudAccounts({refresh = false})` appends `?refresh=true` only when `refresh === true`.
 
 ## Cloud Accounts transport and isolated local materialization
 
@@ -173,8 +173,12 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
 For internal test fixtures and explicit local `pool.json` configurations, preserve
 `resolvePoolPath`, `loadLoginPool` (`reset: "never"`, `weeklyStopPercent` default `97`,
 optional boolean `credits`, `allowReset` / `allow_reset`),
-`loginEnvironment`, `readPoolCooldowns`, `markLoginExhausted`, `clearPoolCooldowns`
-and `selectPoolLogin`.
+`loginEnvironment`, `isAuthFailureMessage` (matching `401`, `OAuth access token is invalid`,
+`Failed to authenticate`, `Failed to refresh token`, `authentication_error`, `invalid_api_key`,
+and signed-out prompts while ignoring test assertion diagnostics), `readPoolCooldowns`,
+`markLoginExhausted`, `clearPoolCooldowns` and `selectPoolLogin` (whose default Claude probe
+rejects on-disk `.credentials.json` files with an expired `expiresAt` and no `refreshToken`
+as `reason: "expired"` even if `claude auth status --json` reports `loggedIn: true`).
 
 ## Dependencies
 

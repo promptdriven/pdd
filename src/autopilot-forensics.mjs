@@ -7,7 +7,8 @@ import { runAgentProcess } from './agent-adapters.mjs';
 import { jobEnvironment } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
 import { resolveStepModelTier } from './autopilot-telemetry.mjs';
-import { isQuotaExhaustionMessage } from './login-pool.mjs';
+import { isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs';
+const isRotatablePoolFailure = text => isQuotaExhaustionMessage(text) || isAuthFailureMessage(text);
 import { redactSecrets } from './secret-redaction.mjs';
 
 export const EXTERNAL_REPO_LABELS = Object.freeze(['external', 'other-repo', 'elsewhere', 'pdd:elsewhere']);
@@ -402,7 +403,7 @@ export async function runPreRunForensics(
       } catch { /* Fall back to stdout when --output-last-message was not written. */ }
     }
     const sample = [rawOutput, text(execResult?.stderr)].filter(Boolean).join('\n');
-    if (execResult?.code !== 0 && selected?.login?.id && typeof ports.exhaustLogin === 'function' && isQuotaExhaustionMessage(sample)) {
+    if (execResult?.code !== 0 && selected?.login?.id && typeof ports.exhaustLogin === 'function' && isRotatablePoolFailure(sample)) {
       await ports.exhaustLogin({
         loginId: selected.login.id,
         cloud: selected.cloud === true,
@@ -421,7 +422,7 @@ export async function runPreRunForensics(
     return { ...evaluated, brief: formatForensicsBrief(evaluated, baseBranch) };
   } catch (error) {
     const sample = [text(error?.message), text(error?.stdout), text(error?.stderr)].filter(Boolean).join('\n');
-    if (selected?.login?.id && typeof ports.exhaustLogin === 'function' && isQuotaExhaustionMessage(sample)) {
+    if (selected?.login?.id && typeof ports.exhaustLogin === 'function' && isRotatablePoolFailure(sample)) {
       await ports.exhaustLogin({
         loginId: selected.login.id,
         cloud: selected.cloud === true,

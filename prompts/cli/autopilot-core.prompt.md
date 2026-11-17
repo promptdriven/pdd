@@ -399,7 +399,9 @@ reviewer that twice gives no valid verdict and a suite runner that died 3 times 
 end as `no-result`. Every job kind follows the same rules, in every machine state.
 
 1. A `no-result` end releases the issue: delete this machine's claim comment, remove
-   `pdd:working`, post no issue comment and add no label. Close this job's own open PR
+   `pdd:working`, post no issue comment and add no label. When the job adopted a pre-existing
+   PR (`job.resumed === true`), keep that PR open as a draft with `draftOwnPr` instead of
+   closing it; otherwise close this job's own open PR
    (found by its number, or by its branch through `pulls?state=open&head=OWNER:BRANCH`):
    first set `state: closed`, then post one short note with the marker
    `<!-- pdd:autopilot-core:release:N:JOB-ID -->`; the branch stays. A GitHub error
@@ -1949,7 +1951,7 @@ with the native defaults named above.
   external-repository / configured skip-label matching and the fast read-only
   pre-run repository forensics check on `origin/BASE`.
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
-- [Multi-harness login pool](login-pool.prompt.md): required for `isQuotaExhaustionMessage` and optional login selection/cooldown rotation.
+- [Multi-harness login pool](login-pool.prompt.md): required for `isQuotaExhaustionMessage`, `isAuthFailureMessage` and optional login selection/cooldown rotation (preserving clean committed `build` progress at `HEAD` across in-place pool rotations).
 - [Autopilot telemetry](autopilot-telemetry.prompt.md): required for opt-in worker/reviewer model tiering, per-phase wall-clock tracking, and harness log token summaries.
 - [Machine guard](machine-guard.prompt.md): required for `slotCount` (the slots) and
   `GUARD` (the cleanup limits).

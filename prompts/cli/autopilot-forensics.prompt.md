@@ -99,6 +99,6 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
 - [Autopilot telemetry](autopilot-telemetry.prompt.md): required for
   `resolveStepModelTier` worker-tier model routing.
 - [Multi-harness login pool](login-pool.prompt.md): required for
-  `isQuotaExhaustionMessage` when rotating pooled logins.
+  `isQuotaExhaustionMessage` and `isAuthFailureMessage` when rotating pooled logins.
 - [Secret redaction](secret-redaction.prompt.md): required for `redactSecrets` on
   user-facing comment text and builder briefs.
