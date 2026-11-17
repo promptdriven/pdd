@@ -27,11 +27,17 @@ import {
   DEFAULT_CLOUD_URL,
   cloudAccountsRequest,
   createCodexStepOverlay,
+  leaseCloudAccount,
+  listCloudAccounts,
   localCodexAuthPath,
   localCodexConfigPath,
+  localCodexHome,
   loginEnvironment,
+  managedCodexAuthPath,
+  managedCodexConfigPath,
   materializeLocalClaudeAuth,
   materializeLocalCodexAuth,
+  pddManagedCodexHome,
   normalizeUsagePercentInt,
   prepareCloudStepExecution,
   reportCloudAccountUsage,
@@ -92,7 +98,7 @@ async function createMockCloudServer(t, initial = {}) {
   };
 
   const refreshAccountState = acc => {
-    if (acc.state === 'paused') return;
+    if (acc.state === 'paused' || acc.state === 'reauth_required') return;
     if (acc.cooling_until) {
       const untilMs = Date.parse(acc.cooling_until);
       if (Number.isFinite(untilMs) && untilMs <= state.nowMs) {
@@ -259,6 +265,19 @@ async function createMockCloudServer(t, initial = {}) {
           chosen = readyPool[0] ?? null;
           switched = Boolean(chosen && body?.current_account_id && chosen.account_id !== body.current_account_id);
         }
+      }
+
+      if (chosen && chosen._leaseErrorStatus) {
+        const status = chosen._leaseErrorStatus;
+        const payload = chosen._leaseErrorBody ?? {
+          detail: { error: 'token_revoked', message: 'Upstream OAuth refresh token revoked' },
+          account_id: chosen.account_id,
+        };
+        if (chosen._markReauthOnLeaseError !== false) {
+          chosen.state = 'reauth_required';
+          chosen.last_refresh_error = 'token_revoked';
+        }
+        return send(status, payload);
       }
 
       if (!chosen) {
@@ -500,7 +519,7 @@ test('3252 T1: pdd accounts add, import, and list enroll Codex & Claude bundles,
   const addCodex = await invokeCli(['accounts', 'add', '--provider', 'codex', '--label', 'plus-1'], sb, {
     runLogin: async (provider, { env }) => {
       assert.equal(provider, 'codex');
-      const codexDir = join(env.HOME, '.codex');
+      const codexDir = env.CODEX_HOME;
       mkdirSync(codexDir, { recursive: true });
       writeFileSync(join(codexDir, 'auth.json'), JSON.stringify({
         auth_mode: 'chatgpt',
@@ -525,15 +544,16 @@ test('3252 T1: pdd accounts add, import, and list enroll Codex & Claude bundles,
   assert.equal(enrollReq.body.plan, 'plus');
   assert.equal(enrollReq.body.bundle.auth_json.tokens.refresh_token, rawRefresh);
 
-  // Local ~/.codex/auth.json is mode 0600 and has refresh_token === "".
-  const localCodexPath = join(sb.home, '.codex', 'auth.json');
+  // User ~/.codex/auth.json was NEVER created; managed codex-home/auth.json is mode 0600 with refresh_token === "".
+  assert.equal(existsSync(join(sb.home, '.codex', 'auth.json')), false, '~/.codex/auth.json never touched');
+  const localCodexPath = managedCodexAuthPath(sb.env);
   assert.equal(statSync(localCodexPath).mode & 0o777, 0o600);
   const localCodex = JSON.parse(readFileSync(localCodexPath, 'utf8'));
   assert.equal(localCodex.tokens.refresh_token, '');
   assert.equal(localCodex.auth_mode, 'chatgpt');
 
-  // Re-importing an already-stripped local auth.json refuses cleanly instead of overwriting Cloud with "".
-  const reimportStripped = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'dup'], sb);
+  // Re-importing an already-stripped auth.json refuses cleanly instead of overwriting Cloud with "".
+  const reimportStripped = await invokeCli(['accounts', 'import', '--provider', 'codex', '--from', pddManagedCodexHome(sb.env), '--label', 'dup'], sb);
   assert.equal(reimportStripped.exit, 1);
   assert.match(reimportStripped.stderr, /already has a stripped refresh token/);
 
@@ -643,7 +663,8 @@ test('3252 T2: use, next, shared Claude gateway_grant, share/accept/unshare/leav
   const nextRes = await invokeCli(['accounts', 'next', '--provider', 'codex'], sb);
   assert.equal(nextRes.exit, 0);
   assert.match(nextRes.stdout, /Switched codex account to "cx-sooner"/);
-  const codexAuth = JSON.parse(readFileSync(join(sb.home, '.codex', 'auth.json'), 'utf8'));
+  assert.equal(existsSync(join(sb.home, '.codex', 'auth.json')), false, '~/.codex/auth.json untouched on use/next');
+  const codexAuth = JSON.parse(readFileSync(managedCodexAuthPath(sb.env), 'utf8'));
   assert.equal(codexAuth.tokens.access_token, 'acc_tok_cx-sooner_secret12345');
   assert.equal(codexAuth.tokens.refresh_token, '');
 
@@ -759,7 +780,7 @@ test('3252 T3 & T4: sync 0ms cache hit, offline 1.2s fail-open, opt-in auto on|o
   assert.equal(cloud.state.requests.length, requestsBefore + 1);
 
   // 3. Offline / slow Cloud server (> timeout-ms) fails open cleanly without touching local auth.json!
-  const authBeforeTimeout = readFileSync(join(sb.home, '.codex', 'auth.json'), 'utf8');
+  const authBeforeTimeout = readFileSync(managedCodexAuthPath(sb.env), 'utf8');
   cloud.state.nowMs += 45 * 60 * 1000;
   cloud.state.delayLeaseMs = 600;
   const timeoutStart = performance.now();
@@ -770,7 +791,8 @@ test('3252 T3 & T4: sync 0ms cache hit, offline 1.2s fail-open, opt-in auto on|o
   assert.equal(failOpen.stdout, '');
   assert.equal(failOpen.stderr, '');
   assert.ok(timeoutElapsed < 550, `timeout respected within budget: ${timeoutElapsed}ms`);
-  assert.equal(readFileSync(join(sb.home, '.codex', 'auth.json'), 'utf8'), authBeforeTimeout);
+  assert.equal(readFileSync(managedCodexAuthPath(sb.env), 'utf8'), authBeforeTimeout);
+  assert.equal(existsSync(join(sb.home, '.codex', 'auth.json')), false);
 
   // 4. Opt-in terminal auto-switch: off by default, idempotent `on`, zero-trace `off`.
   const zshrc = join(sb.home, '.zshrc');
@@ -1683,8 +1705,11 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
   assert.equal(accRes.exit, 0, accRes.stderr);
   assert.match(accRes.stdout, /Accepted shared account "cx-shared-1"/);
 
-  const authPath = localCodexAuthPath(sb.env);
-  const configPath = localCodexConfigPath(sb.env);
+  assert.equal(existsSync(localCodexAuthPath(sb.env)), false, '~/.codex/auth.json untouched on shared Codex accept');
+  const managedHome = pddManagedCodexHome(sb.env);
+  const authPath = managedCodexAuthPath(sb.env);
+  const configPath = managedCodexConfigPath(sb.env);
+  assert.equal(statSync(managedHome).mode & 0o777, 0o700);
   assert.equal(statSync(authPath).mode & 0o777, 0o600);
   assert.equal(statSync(configPath).mode & 0o777, 0o600);
 
@@ -1720,7 +1745,7 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
   const hasRealCodex = codexWhich.status === 0;
   if (hasRealCodex) {
     const statusCheck = spawnSync('codex', ['login', 'status'], {
-      env: { ...sb.env, CODEX_HOME: codexDir },
+      env: { ...sb.env, CODEX_HOME: managedHome },
       encoding: 'utf8',
     });
     assert.equal(statusCheck.status, 0, `codex login status failed: ${statusCheck.stderr}`);
@@ -1729,7 +1754,7 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
       'ready',
     );
     const featCheck = spawnSync('codex', ['features', 'list'], {
-      env: { ...sb.env, CODEX_HOME: codexDir },
+      env: { ...sb.env, CODEX_HOME: managedHome },
       encoding: 'utf8',
     });
     assert.equal(featCheck.status, 0, `codex features list failed on local config.toml: ${featCheck.stderr}`);
@@ -2244,11 +2269,12 @@ test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ 
   const sb = makeTempSandbox(t, cloud.serverUrl);
   const codexDir = join(sb.home, '.codex');
   mkdirSync(codexDir, { recursive: true });
-  const authPath = localCodexAuthPath(sb.env);
-  const configPath = localCodexConfigPath(sb.env);
+  const userConfigPath = localCodexConfigPath(sb.env);
+  const authPath = managedCodexAuthPath(sb.env);
+  const configPath = managedCodexConfigPath(sb.env);
 
   // 1. Legacy [shell_environment_policy] migration + case-insensitive grant scrub in `createCodexStepOverlay`!
-  writeFileSync(configPath, [
+  writeFileSync(userConfigPath, [
     'model = "gpt-5.4"',
     'model_provider = "custom_upstream"',
     '',
@@ -2383,4 +2409,788 @@ test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ 
   });
   assert.equal(singleNullCodeClaude.exit, 1);
   assert.match(singleNullCodeClaude.stderr, /claude setup-token did not complete\./);
+});
+
+
+test('3445 T1: isolated pddManagedCodexHome never touches ~/.codex/auth.json, symlinks user dirs, cleans legacy gateway config, and guards zsh/bash/fish logout + fail-safe fallback', async t => {
+  const { spawn } = await import('node:child_process');
+  const execShellAsync = (bin, args, opts = {}) => new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { ...opts, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', d => { stdout += d.toString('utf8'); });
+    child.stderr.on('data', d => { stderr += d.toString('utf8'); });
+    child.on('error', reject);
+    child.on('close', status => resolve({ status, stdout, stderr }));
+  });
+
+  const liveNow = Date.now();
+  const future5h = new Date(liveNow + 4 * 3600_000).toISOString();
+  const future7dA = new Date(liveNow + 5 * 86400_000).toISOString();
+  const future7dB = new Date(liveNow + 3 * 86400_000).toISOString();
+
+  const cloud = await createMockCloudServer(t, {
+    nowMs: liveNow,
+    accounts: [
+      {
+        account_id: 'acc_iso_1',
+        label: 'iso-cx-1',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 12,
+        five_hour_reset_at: future5h,
+        weekly_used_percent: 25,
+        weekly_reset_at: future7dA,
+        cooling_until: null,
+        last_refresh_at: new Date(liveNow - 60_000).toISOString(),
+        created_at: '2026-11-01T00:00:00Z',
+      },
+      {
+        account_id: 'acc_iso_2',
+        label: 'iso-cx-2',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 4,
+        five_hour_reset_at: future5h,
+        weekly_used_percent: 9,
+        weekly_reset_at: future7dB,
+        cooling_until: null,
+        last_refresh_at: new Date(liveNow - 30_000).toISOString(),
+        created_at: '2026-11-02T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+
+  // Path resolution symmetry across PDD_STATE_DIR, XDG_STATE_HOME, and default HOME.
+  assert.equal(pddManagedCodexHome({ HOME: '/tmp/h', PDD_STATE_DIR: '/tmp/s' }), '/tmp/s/codex-home');
+  assert.equal(pddManagedCodexHome({ HOME: '/tmp/h', XDG_STATE_HOME: '/tmp/xdg' }), '/tmp/xdg/pdd/codex-home');
+  assert.equal(pddManagedCodexHome({ HOME: '/tmp/h' }), '/tmp/h/.local/state/pdd/codex-home');
+  assert.equal(
+    localCodexHome({ ...sb.env, CODEX_HOME: pddManagedCodexHome(sb.env) }),
+    join(sb.home, '.codex'),
+    'localCodexHome ignores self-referential pddManagedCodexHome',
+  );
+
+  // Seed personal ~/.codex/auth.json sentinel, user directories/files, and legacy gateway block in ~/.codex/config.toml.
+  const userCodexDir = join(sb.home, '.codex');
+  mkdirSync(userCodexDir, { recursive: true, mode: 0o700 });
+  const sentinelAuthRaw = JSON.stringify({
+    auth_mode: 'chatgpt',
+    tokens: {
+      access_token: 'SENTINEL_PERSONAL_ACCESS_TOKEN_KEEP',
+      refresh_token: 'SENTINEL_PERSONAL_REFRESH_TOKEN_KEEP',
+      id_token: makeJwt({ email: 'personal@example.com' }),
+      account_id: 'org_personal_sentinel',
+    },
+  }, null, 2) + '\n';
+  const userAuthFile = join(userCodexDir, 'auth.json');
+  writeFileSync(userAuthFile, sentinelAuthRaw, { mode: 0o600 });
+
+  for (const dirName of ['skills', 'memories', 'sessions', 'archived_sessions', 'rules']) {
+    mkdirSync(join(userCodexDir, dirName), { recursive: true });
+    writeFileSync(join(userCodexDir, dirName, 'marker.txt'), dirName);
+  }
+  writeFileSync(join(userCodexDir, 'history.jsonl'), '{"ts":1}\n');
+  writeFileSync(join(userCodexDir, 'session_index.jsonl'), '{"id":"s1"}\n');
+
+  const userConfigFile = join(userCodexDir, 'config.toml');
+  writeFileSync(userConfigFile, [
+    'model = "gpt-5.4"',
+    'model_provider = "pdd_codex_gateway"',
+    '',
+    '[mcp_servers.pdd]',
+    'command = "node"',
+    'args = ["bin/pdd.mjs", "mcp"]',
+    '',
+    '[model_providers.pdd_codex_gateway]',
+    'name = "PDD Codex Gateway"',
+    'base_url = "https://cloud.example.com/v1/codex-gateway/lse_old_legacy"',
+    'wire_api = "responses"',
+    'requires_openai_auth = false',
+    '',
+  ].join('\n'), { mode: 0o600 });
+
+  // Materialize via use and next -> ~/.codex/auth.json MUST remain byte-for-byte identical!
+  assert.equal((await invokeCli(['accounts', 'use', 'iso-cx-1'], sb, { now: () => cloud.state.nowMs })).exit, 0);
+  assert.equal(readFileSync(userAuthFile, 'utf8'), sentinelAuthRaw, '~/.codex/auth.json untouched after use');
+
+  // Legacy gateway block in ~/.codex/config.toml was cleaned safely without deleting ~/.codex/auth.json.
+  const cleanedUserCfg = parseToml(readFileSync(userConfigFile, 'utf8'));
+  assert.equal(cleanedUserCfg.model_provider, undefined, 'legacy pdd_codex_gateway stripped from ~/.codex/config.toml');
+  assert.equal(cleanedUserCfg.model_providers, undefined);
+  assert.equal(cleanedUserCfg.mcp_servers?.pdd?.command, 'node');
+
+  // Managed CODEX_HOME has 0700 dir, 0600 auth.json, 0600 config.toml with cli_auth_credentials_store = "file", merged MCP config, and symlinks!
+  const managedHome = pddManagedCodexHome(sb.env);
+  assert.equal(statSync(managedHome).mode & 0o777, 0o700);
+  assert.equal(statSync(managedCodexAuthPath(sb.env)).mode & 0o777, 0o600);
+  assert.equal(statSync(managedCodexConfigPath(sb.env)).mode & 0o777, 0o600);
+
+  const mCfg = parseToml(readFileSync(managedCodexConfigPath(sb.env), 'utf8'));
+  assert.equal(mCfg.cli_auth_credentials_store, 'file');
+  assert.equal(mCfg.model, 'gpt-5.4');
+  assert.equal(mCfg.mcp_servers?.pdd?.command, 'node');
+
+  for (const name of ['skills', 'memories', 'sessions', 'archived_sessions', 'history.jsonl', 'session_index.jsonl', 'rules']) {
+    const linkPath = join(managedHome, name);
+    assert.equal(lstatSync(linkPath).isSymbolicLink(), true, `${name} symlinked inside managed CODEX_HOME`);
+    assert.equal(realpathSync(linkPath), realpathSync(join(userCodexDir, name)));
+  }
+
+  assert.equal((await invokeCli(['accounts', 'next', '--provider', 'codex'], sb, { now: () => cloud.state.nowMs })).exit, 0);
+  assert.equal(readFileSync(userAuthFile, 'utf8'), sentinelAuthRaw, '~/.codex/auth.json untouched after next');
+  assert.equal(JSON.parse(readFileSync(managedCodexAuthPath(sb.env), 'utf8')).tokens.access_token, 'acc_tok_iso-cx-2_secret12345');
+
+  // Shell auto-switch across zsh, bash, AND fish (~/.config/fish/config.fish created automatically).
+  const autoOn = await invokeCli(['accounts', 'auto', 'on'], sb);
+  assert.equal(autoOn.exit, 0, autoOn.stderr);
+  const autoOnRepeat = await invokeCli(['accounts', 'auto', 'on'], sb);
+  assert.equal(autoOnRepeat.exit, 0);
+
+  const zshrc = join(sb.home, '.zshrc');
+  const bashrc = join(sb.home, '.bashrc');
+  const fishCfg = join(sb.home, '.config', 'fish', 'config.fish');
+  for (const rc of [zshrc, bashrc, fishCfg]) {
+    assert.equal(existsSync(rc), true, `${rc} created by auto on`);
+    assert.equal(readFileSync(rc, 'utf8').match(/# >>> pdd accounts auto >>>/g)?.length, 1);
+  }
+  const autoStatus = await invokeCli(['accounts', 'auto', 'status'], sb);
+  assert.match(autoStatus.stdout, /Terminal auto-switch: on/);
+  assert.match(autoStatus.stdout, /config\.fish/);
+
+  // Create stub bin directory with spy codex and real CLI wrapper pdd.
+  const binDir = join(sb.root, 'stub-bin');
+  mkdirSync(binDir, { recursive: true });
+  const nodeBin = process.execPath;
+  const pddEntry = join(process.cwd(), 'bin', 'pdd.mjs');
+  const spyCodex = join(binDir, 'codex');
+  writeFileSync(spyCodex, [
+    `#!${nodeBin}`,
+    'console.log(JSON.stringify({ codexHome: process.env.CODEX_HOME ?? null, args: process.argv.slice(2) }));',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  const wrapperPdd = join(binDir, 'pdd');
+  writeFileSync(wrapperPdd, [
+    '#!/bin/sh',
+    `exec ${JSON.stringify(nodeBin)} ${JSON.stringify(pddEntry)} "$@"`,
+    '',
+  ].join('\n'), { mode: 0o755 });
+
+  const shellEnvBase = {
+    ...sb.env,
+    PATH: `${binDir}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+  };
+  delete shellEnvBase.CODEX_HOME;
+
+  const shellsToTest = [
+    { name: 'bash', bin: 'bash', runCmd: cmd => ['--norc', '--noprofile', '-c', `source ${JSON.stringify(bashrc)}; ${cmd}`] },
+    { name: 'zsh', bin: 'zsh', runCmd: cmd => ['--no-rcs', '-c', `source ${JSON.stringify(zshrc)}; ${cmd}`] },
+    { name: 'fish', bin: 'fish', runCmd: cmd => ['--no-config', '-c', `source ${JSON.stringify(fishCfg)}; ${cmd}`] },
+  ].filter(s => spawnSync(s.bin, ['--version'], { encoding: 'utf8' }).status === 0);
+
+  assert.ok(shellsToTest.some(sh => sh.name === 'bash'), 'bash shell available');
+  if (spawnSync('fish', ['--version'], { encoding: 'utf8' }).status === 0) {
+    assert.ok(shellsToTest.some(sh => sh.name === 'fish'), 'fish shell tested when installed');
+  }
+
+  const symlinkManagedHome = join(sb.root, 'symlink-codex-home');
+  symlinkSync(managedHome, symlinkManagedHome);
+  const dotAliasManagedHome = `${sb.stateDir}/./codex-home`;
+  assert.equal(
+    localCodexHome({ ...sb.env, CODEX_HOME: symlinkManagedHome }),
+    join(sb.home, '.codex'),
+    'localCodexHome ignores symlink pointing at pddManagedCodexHome',
+  );
+  assert.equal(
+    localCodexHome({ ...sb.env, CODEX_HOME: dotAliasManagedHome }),
+    join(sb.home, '.codex'),
+    'localCodexHome ignores path alias pointing at pddManagedCodexHome',
+  );
+
+  for (const sh of shellsToTest) {
+    // A) Healthy lease + normal command (including non-auth subcommands passing "logout" as prompt) -> CODEX_HOME points to pddManagedCodexHome!
+    for (const [cmd, expectedArgs] of [
+      ['codex exec "ship it"', ['exec', 'ship it']],
+      ['codex exec logout', ['exec', 'logout']],
+    ]) {
+      const execRun = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: shellEnvBase });
+      assert.equal(execRun.status, 0, `${sh.name} ${cmd} failed: ${execRun.stderr}`);
+      const execParsed = JSON.parse(execRun.stdout.trim());
+      assert.equal(execParsed.codexHome, managedHome, `${sh.name} ${cmd} sets CODEX_HOME to managedHome`);
+      assert.deepEqual(execParsed.args, expectedArgs);
+    }
+
+    // B) Logout & login guard with CODEX_HOME unset (including top-level value options like --add-dir) -> leaves CODEX_HOME unset!
+    for (const cmd of ['codex logout', 'codex login', 'codex login --device-auth', 'codex -m gpt-5.4 logout', 'codex --add-dir /tmp logout']) {
+      const guardUnset = await execShellAsync(sh.bin, sh.runCmd(cmd), { env: shellEnvBase });
+      assert.equal(guardUnset.status, 0, `${sh.name} ${cmd} failed: ${guardUnset.stderr}`);
+      const parsed = JSON.parse(guardUnset.stdout.trim());
+      assert.equal(parsed.codexHome, null, `${sh.name} ${cmd} does NOT point CODEX_HOME at managedHome`);
+    }
+
+    // C) Logout & login guard when CODEX_HOME points to managedHome directly, via /./ alias, or via symlink -> friendly refusal (exit 1)!
+    for (const exportedHome of [managedHome, dotAliasManagedHome, symlinkManagedHome]) {
+      for (const cmd of ['codex logout', 'codex --add-dir /tmp logout', 'codex login']) {
+        const guardExported = await execShellAsync(sh.bin, sh.runCmd(cmd), {
+          env: { ...shellEnvBase, CODEX_HOME: exportedHome },
+        });
+        assert.equal(guardExported.status, 1, `${sh.name} ${cmd} refuses when CODEX_HOME=${exportedHome}`);
+        assert.equal(guardExported.stdout.trim(), '', `${sh.name} ${cmd} did not invoke codex binary`);
+        assert.match(guardExported.stderr, /pdd accounts pause/);
+        assert.match(guardExported.stderr, /pdd accounts remove/);
+      }
+    }
+  }
+
+  // D) Fail-safe fallback when no valid active lease exists or Cloud is unreachable -> leaves/unsets CODEX_HOME so ~/.codex/auth.json works!
+  const deadEnv = {
+    ...shellEnvBase,
+    PDD_ACCOUNTS_URL: 'http://127.0.0.1:1',
+    PDD_STATE_DIR: join(sb.root, 'offline-empty-state'),
+  };
+  mkdirSync(deadEnv.PDD_STATE_DIR, { recursive: true });
+  const deadManagedHome = pddManagedCodexHome(deadEnv);
+  for (const sh of shellsToTest) {
+    const fallbackUnset = await execShellAsync(sh.bin, sh.runCmd('codex exec "offline work"'), { env: deadEnv });
+    assert.equal(fallbackUnset.status, 0, `${sh.name} offline fallback failed: ${fallbackUnset.stderr}`);
+    assert.equal(JSON.parse(fallbackUnset.stdout.trim()).codexHome, null, `${sh.name} leaves CODEX_HOME unset when Cloud unreachable`);
+
+    const fallbackClearManaged = await execShellAsync(sh.bin, sh.runCmd('codex exec "offline work"'), {
+      env: { ...deadEnv, CODEX_HOME: deadManagedHome },
+    });
+    assert.equal(fallbackClearManaged.status, 0);
+    assert.equal(JSON.parse(fallbackClearManaged.stdout.trim()).codexHome, null, `${sh.name} clears stale managed CODEX_HOME on fail-safe fallback`);
+  }
+
+  // E) auto off cleans all three shell configs cleanly, and sentinel ~/.codex/auth.json is STILL untouched!
+  assert.equal((await invokeCli(['accounts', 'auto', 'off'], sb)).exit, 0);
+  for (const rc of [zshrc, bashrc, fishCfg]) {
+    assert.doesNotMatch(readFileSync(rc, 'utf8'), /pdd accounts auto/);
+  }
+  assert.equal(readFileSync(userAuthFile, 'utf8'), sentinelAuthRaw, '~/.codex/auth.json untouched across entire lifecycle');
+});
+
+test('3445 T2: cold-start default timeouts (20s GET / 15s lease) and 1 bounded retry on timeout/abort for idempotent GET and /v1/accounts/lease', async t => {
+  const sb = makeTempSandbox(t, 'https://cloud.example.com');
+
+  // 1. GET /v1/accounts retries once on AbortError and succeeds on attempt 2.
+  let getCalls = 0;
+  const listRes = await listCloudAccounts({ cwd: sb.cwd, env: sb.env }, {
+    fetch: async (_url, init) => {
+      getCalls += 1;
+      assert.ok(init.signal, 'AbortSignal passed to fetch');
+      if (getCalls === 1) {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      return new Response(JSON.stringify({ accounts: [{ account_id: 'acc_1', label: 'cx-1', provider: 'codex', state: 'ready' }], pending_invites: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  assert.equal(getCalls, 2, 'GET /v1/accounts retried once on cold-start abort');
+  assert.equal(listRes.accounts.length, 1);
+
+  // 2. POST /v1/accounts/lease retries once on TimeoutError, then throws timeout after 2 total attempts if still timing out.
+  let leaseCalls = 0;
+  const leasedRes = await leaseCloudAccount({ provider: 'codex', updateState: false }, { cwd: sb.cwd, env: sb.env }, {
+    fetch: async () => {
+      leaseCalls += 1;
+      if (leaseCalls === 1) {
+        const err = new Error('Timed out');
+        err.name = 'TimeoutError';
+        throw err;
+      }
+      return new Response(JSON.stringify({
+        state: 'leased',
+        account: { account_id: 'acc_1', label: 'cx-1', provider: 'codex', state: 'ready' },
+        lease: { lease_id: 'lse_1', expires_at: '2026-11-16T22:00:00Z', delivery_mode: 'direct_stripped', codex_auth_json: { auth_mode: 'chatgpt', tokens: { access_token: 'tok', refresh_token: '', id_token: 'id', account_id: 'org_1' } } },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    },
+  });
+  assert.equal(leaseCalls, 2, 'POST /v1/accounts/lease retried once on cold-start timeout');
+  assert.equal(leasedRes.state, 'leased');
+
+  let doubleTimeoutCalls = 0;
+  await assert.rejects(
+    () => leaseCloudAccount({ provider: 'codex', updateState: false }, { cwd: sb.cwd, env: sb.env, timeoutMs: 50 }, {
+      fetch: async () => {
+        doubleTimeoutCalls += 1;
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        throw err;
+      },
+    }),
+    err => err instanceof CloudAccountsError && err.code === 'timeout',
+  );
+  assert.equal(doubleTimeoutCalls, 2, 'bounded at 1 retry (2 total attempts)');
+
+  // Real wall-clock budget check: 2 attempts under timeoutMs: 120 share one deadline and never take 2x (240ms)!
+  let realTimerCalls = 0;
+  const wallStart = performance.now();
+  await assert.rejects(
+    () => leaseCloudAccount({ provider: 'codex', updateState: false }, { cwd: sb.cwd, env: sb.env, timeoutMs: 120 }, {
+      fetch: (_url, init) => new Promise((_resolve, reject) => {
+        realTimerCalls += 1;
+        init.signal.addEventListener('abort', () => {
+          const err = new Error('Aborted');
+          err.name = 'AbortError';
+          reject(err);
+        }, { once: true });
+      }),
+    }),
+    err => err instanceof CloudAccountsError && err.code === 'timeout',
+  );
+  const wallElapsed = performance.now() - wallStart;
+  assert.equal(realTimerCalls, 2, 'both transport attempts executed within shared deadline');
+  assert.ok(wallElapsed < 210, 'shared deadline respected (<210ms)');
+
+  // 3. Non-idempotent POST /v1/accounts does NOT retry on AbortError (1 attempt only).
+  let enrollCalls = 0;
+  await assert.rejects(
+    () => cloudAccountsRequest('POST', '/v1/accounts', { body: { label: 'x' }, cwd: sb.cwd, env: sb.env, timeoutMs: 50 }, {
+      fetch: async () => {
+        enrollCalls += 1;
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        throw err;
+      },
+    }),
+    err => err instanceof CloudAccountsError && err.code === 'timeout',
+  );
+  assert.equal(enrollCalls, 1, 'non-idempotent POST /v1/accounts makes 0 retries');
+});
+
+test('3445 T3: + -> - label lookup symmetry in resolveAccount across use, pause, unpause, and log', async t => {
+  const cloud = await createMockCloudServer(t);
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+
+  const addRes = await invokeCli(['accounts', 'add', '--provider', 'codex', '--label', 'glt+oai2'], sb, {
+    runLogin: async (_provider, { env }) => {
+      mkdirSync(env.CODEX_HOME, { recursive: true });
+      writeFileSync(join(env.CODEX_HOME, 'auth.json'), JSON.stringify({
+        auth_mode: 'chatgpt',
+        tokens: {
+          access_token: 'at_glt_oai2_secret',
+          refresh_token: 'rt_glt_oai2_secret',
+          id_token: makeJwt({ email: 'glt+oai2@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+          account_id: 'acct_glt_oai2',
+        },
+      }));
+      return { code: 0, stdout: 'ok\n', stderr: '' };
+    },
+  });
+  assert.equal(addRes.exit, 0, addRes.stderr);
+  assert.match(addRes.stdout, /Enrolled Codex account "glt-oai2"/);
+
+  // Lookup with '+' and mixed case resolves 'glt-oai2' across commands.
+  const pausePlus = await invokeCli(['accounts', 'pause', 'glt+oai2'], sb);
+  assert.equal(pausePlus.exit, 0, pausePlus.stderr);
+  assert.match(pausePlus.stdout, /Paused account "glt-oai2"/);
+
+  const unpausePlus = await invokeCli(['accounts', 'unpause', 'GLT+OAI2'], sb);
+  assert.equal(unpausePlus.exit, 0, unpausePlus.stderr);
+  assert.match(unpausePlus.stdout, /Unpaused account "glt-oai2"/);
+
+  const usePlus = await invokeCli(['accounts', 'use', 'glt+oai2'], sb);
+  assert.equal(usePlus.exit, 0, usePlus.stderr);
+  assert.match(usePlus.stdout, /Active codex account set to "glt-oai2"/);
+
+  const logPlus = await invokeCli(['accounts', 'log', 'glt+oai2'], sb);
+  assert.equal(logPlus.exit, 0, logPlus.stderr);
+});
+
+test('3445 T4: reauth_required (401 / token_revoked / invalid_grant) visibility, rotation skip, and refresh/expiry status', async t => {
+  const cloud = await createMockCloudServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_rev_1',
+        label: 'revoked-cx',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        _leaseErrorStatus: 401,
+        _leaseErrorBody: {
+          detail: { error: 'token_revoked', message: 'Your refresh token has already been used or revoked (invalid_grant).' },
+          account_id: 'acc_rev_1',
+        },
+        five_hour_used_percent: 10,
+        five_hour_reset_at: '2026-11-15T02:00:00Z',
+        weekly_used_percent: 20,
+        weekly_reset_at: '2026-11-16T12:00:00Z',
+        cooling_until: null,
+        last_refresh_at: '2026-11-14T22:00:00Z',
+        created_at: '2026-11-01T00:00:00Z',
+      },
+      {
+        account_id: 'acc_ok_2',
+        label: 'healthy-cx',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 15,
+        five_hour_reset_at: '2026-11-15T03:00:00Z',
+        weekly_used_percent: 30,
+        weekly_reset_at: '2026-11-19T12:00:00Z',
+        cooling_until: null,
+        last_refresh_at: '2026-11-15T00:45:00Z',
+        token_expires_at: '2026-11-15T01:55:00Z',
+        created_at: '2026-11-02T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+
+  // Seed state as enrolled with sticky acc_rev_1 so rotation must hit 401 token_revoked on acc_rev_1 and fall over to healthy-cx!
+  writeFileSync(join(sb.stateDir, 'accounts-state.json'), JSON.stringify({
+    version: 1,
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc_rev_1', label: 'revoked-cx', provider: 'codex' } },
+    cooling: {},
+  }));
+
+  // 1. selectCloudPoolLogin & leaseCloudAccount automatically skip 401 token_revoked acc_rev_1 and lease healthy-cx!
+  const sel = await selectCloudPoolLogin(
+    { cwd: sb.cwd, env: sb.env, fallbackAgent: { kind: 'codex', command: 'codex' } },
+    { tmpRoot: sb.root },
+  );
+  assert.equal(sel.state, 'ready');
+  assert.equal(sel.account.label, 'healthy-cx');
+  assert.equal(cloud.state.accounts[0].state, 'reauth_required');
+
+  // 2. Pinning a reauth_required account explicitly refuses with actionable re-auth message.
+  const useRevoked = await invokeCli(['accounts', 'use', 'revoked-cx'], sb, { now: () => cloud.state.nowMs });
+  assert.equal(useRevoked.exit, 1);
+  assert.match(useRevoked.stderr, /reauth_required|re-authentication/i);
+  assert.match(useRevoked.stderr, /pdd accounts add --provider codex --label revoked-cx/);
+
+  // 3. Pin healthy-cx, then verify pdd accounts list & pdd accounts status [--json] surface REFRESH timestamps and reauth_required!
+  assert.equal((await invokeCli(['accounts', 'use', 'healthy-cx'], sb, { now: () => cloud.state.nowMs })).exit, 0);
+
+  const listOut = await invokeCli(['accounts', 'list'], sb, { now: () => cloud.state.nowMs });
+  assert.equal(listOut.exit, 0, listOut.stderr);
+  assert.match(listOut.stdout, /LABEL\s+PROVIDER\s+ACCESS\s+5H\s+7D\s+STATE\s+REFRESH/);
+  assert.match(listOut.stdout, /revoked-cx\s+codex[\s\S]*?reauth_required/);
+  assert.doesNotMatch(listOut.stdout, /revoked-cx[^\n]*\bready\b/);
+  assert.match(listOut.stdout, /2026-11-15T00:45Z/);
+  assert.match(listOut.stdout, /Re-authentication required/);
+
+  const statusHuman = await invokeCli(['accounts', 'status'], sb, { now: () => cloud.state.nowMs });
+  assert.equal(statusHuman.exit, 0, statusHuman.stderr);
+  assert.match(statusHuman.stdout, /Codex isolated home:/);
+  assert.match(statusHuman.stdout, /codex-home/);
+  assert.match(statusHuman.stdout, /Active codex: healthy-cx/);
+  assert.match(statusHuman.stdout, /last refresh: 2026-11-15T00:45Z/);
+  assert.match(statusHuman.stdout, /Re-authentication required: "revoked-cx"/);
+
+  const statusJsonRes = await invokeCli(['accounts', 'status', '--json'], sb, { now: () => cloud.state.nowMs });
+  assert.equal(statusJsonRes.exit, 0, statusJsonRes.stderr);
+  const statusJson = JSON.parse(statusJsonRes.stdout);
+  assert.equal(statusJson.codex_home.path, pddManagedCodexHome(sb.env));
+  assert.equal(statusJson.codex_home.materialized, true);
+  assert.deepEqual(statusJson.reauth_required, [{ account_id: 'acc_rev_1', label: 'revoked-cx', provider: 'codex' }]);
+  const revEntry = statusJson.accounts.find(a => a.label === 'revoked-cx');
+  const okEntry = statusJson.accounts.find(a => a.label === 'healthy-cx');
+  assert.equal(revEntry.state, 'reauth_required');
+  assert.equal(okEntry.state, 'ready');
+  assert.equal(okEntry.last_refresh_at, '2026-11-15T00:45:00Z');
+
+  // 4. Live mid-step 401 token_revoked failure during runStepAgentProcess marks account reauth_required and rotates to backup!
+  cloud.state.accounts.push({
+    account_id: 'acc_ok_3',
+    label: 'backup-cx',
+    provider: 'codex',
+    plan: 'pro',
+    owner_login: 'Serhan-Asad',
+    is_owner: true,
+    shared: false,
+    state: 'ready',
+    five_hour_used_percent: 5,
+    five_hour_reset_at: '2026-11-15T04:00:00Z',
+    weekly_used_percent: 10,
+    weekly_reset_at: '2026-11-20T12:00:00Z',
+    cooling_until: null,
+    created_at: '2026-11-03T00:00:00Z',
+  });
+  let stepCalls = 0;
+  const stepRotated = await runStepAgentProcess({
+    agent: 'codex',
+    step: 'build',
+    args: ['exec', 'hi'],
+    cwd: sb.cwd,
+    env: sb.env,
+    accountsPorts: { tmpRoot: sb.root },
+    run: async () => {
+      stepCalls += 1;
+      if (stepCalls === 1) {
+        return { code: 1, stdout: '', stderr: 'Error: 401 Unauthorized: token_revoked (refresh_token_reused)' };
+      }
+      return { code: 0, stdout: 'rotated-after-revoke-ok', stderr: '' };
+    },
+  });
+  assert.equal(stepRotated.code, 0);
+  assert.equal(stepCalls, 2);
+  assert.equal(stepRotated.account.label, 'backup-cx');
+});
+
+
+test('3445 T5: sync guards paused/expiring/step-only leases, Cloud bearer 401 safety, persistent active & inactive reauth lifecycle, failed materialization atomicity, and cross-provider heal', async t => {
+  const baseMs = Date.parse('2026-11-16T20:00:00Z');
+  const cloud = await createMockCloudServer(t, {
+    nowMs: baseMs,
+    accounts: [
+      {
+        account_id: 'acc_sync_1',
+        label: 'sync-cx',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 10,
+        five_hour_reset_at: '2026-11-17T01:00:00Z',
+        weekly_used_percent: 20,
+        weekly_reset_at: '2026-11-22T00:00:00Z',
+        cooling_until: null,
+        last_refresh_at: '2026-11-16T19:55:00Z',
+        created_at: '2026-11-01T00:00:00Z',
+      },
+      {
+        account_id: 'acc_bare_401',
+        label: 'bare-401-cx',
+        provider: 'codex',
+        plan: 'pro',
+        owner_login: 'Serhan-Asad',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        _leaseErrorStatus: 401,
+        _leaseErrorBody: {
+          detail: { message: 'Unauthorized' },
+          account_id: 'acc_bare_401',
+        },
+        five_hour_used_percent: 5,
+        five_hour_reset_at: '2026-11-17T01:00:00Z',
+        weekly_used_percent: 10,
+        weekly_reset_at: '2026-11-21T00:00:00Z',
+        cooling_until: null,
+        last_refresh_at: '2026-11-16T18:00:00Z',
+        created_at: '2026-11-02T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeTempSandbox(t, cloud.serverUrl);
+  const stateFile = join(sb.stateDir, 'accounts-state.json');
+
+  // 1. Seed a healthy materialized lease first.
+  assert.equal((await invokeCli(['accounts', 'use', 'sync-cx'], sb, { now: () => baseMs })).exit, 0);
+
+  // 1a. Cached state: "paused" must NOT short-circuit sync --quiet as a valid cache hit!
+  const pausedState = JSON.parse(readFileSync(stateFile, 'utf8'));
+  pausedState.active.codex.state = 'paused';
+  pausedState.active.codex.expires_at = new Date(baseMs + 3600_000).toISOString();
+  writeFileSync(stateFile, JSON.stringify(pausedState));
+  const reqBeforePausedSync = cloud.state.requests.length;
+  assert.equal((await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet'], sb, { now: () => baseMs })).exit, 0);
+  assert.ok(cloud.state.requests.length > reqBeforePausedSync, 'paused cached entry did not bypass Cloud sync');
+
+  // 1b. Cached state: "ready" with far expires_at but near-expiry access_token_expires_at (< 5m) must refresh from Cloud!
+  const expiringTokState = JSON.parse(readFileSync(stateFile, 'utf8'));
+  expiringTokState.active.codex.state = 'ready';
+  expiringTokState.active.codex.expires_at = new Date(baseMs + 3600_000).toISOString();
+  expiringTokState.active.codex.access_token_expires_at = new Date(baseMs + 60_000).toISOString();
+  writeFileSync(stateFile, JSON.stringify(expiringTokState));
+  const reqBeforeExpiringSync = cloud.state.requests.length;
+  assert.equal((await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet'], sb, { now: () => baseMs })).exit, 0);
+  assert.ok(cloud.state.requests.length > reqBeforeExpiringSync, 'expiring access_token_expires_at triggered Cloud refresh');
+
+  // 1c. Step-only lease rotation sets materialized_local: false so terminal sync updates codex-home!
+  cloud.state.accounts.push({
+    account_id: 'acc_step_b',
+    label: 'step-b-cx',
+    provider: 'codex',
+    plan: 'pro',
+    owner_login: 'Serhan-Asad',
+    is_owner: true,
+    shared: false,
+    state: 'ready',
+    five_hour_used_percent: 2,
+    five_hour_reset_at: '2026-11-17T01:00:00Z',
+    weekly_used_percent: 4,
+    weekly_reset_at: '2026-11-18T00:00:00Z',
+    cooling_until: null,
+    last_refresh_at: '2026-11-16T19:58:00Z',
+    created_at: '2026-11-03T00:00:00Z',
+  });
+  const stepLease = await leaseCloudAccount(
+    { provider: 'codex', currentAccountId: null, skipAccountIds: ['acc_sync_1', 'acc_bare_401'], holderId: 'pdd-step' },
+    { cwd: sb.cwd, env: sb.env, now: () => baseMs },
+  );
+  assert.equal(stepLease.account.account_id, 'acc_step_b');
+  assert.equal(JSON.parse(readFileSync(managedCodexAuthPath(sb.env), 'utf8')).tokens.access_token, 'acc_tok_sync-cx_secret12345', 'step lease did not touch codex-home');
+  assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).active.codex.materialized_local, false);
+
+  const syncAfterStepRotate = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet'], sb, { now: () => baseMs });
+  assert.equal(syncAfterStepRotate.exit, 0);
+  assert.equal(
+    JSON.parse(readFileSync(managedCodexAuthPath(sb.env), 'utf8')).tokens.access_token,
+    'acc_tok_step-b-cx_secret12345',
+    'sync detected materialized_local === false and materialized step-b-cx into codex-home',
+  );
+  cloud.state.accounts = cloud.state.accounts.filter(a => a.account_id !== 'acc_step_b');
+
+  // 1d. Cloud bearer 401 (expired PDD_TOKEN, no account_id in response) must NEVER blacklist the active provider account!
+  assert.equal((await invokeCli(['accounts', 'use', 'sync-cx'], sb, { now: () => baseMs })).exit, 0);
+  await assert.rejects(
+    () => leaseCloudAccount(
+      { provider: 'codex' },
+      { cwd: sb.cwd, env: { ...sb.env, PDD_TOKEN: 'expired-cloud-bearer-token' }, now: () => baseMs },
+    ),
+    err => err instanceof CloudAccountsError && err.status === 401,
+  );
+  const stateAfterCloud401 = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.equal(stateAfterCloud401.reauth, undefined, 'Cloud bearer 401 did not taint reauth map');
+  assert.equal(stateAfterCloud401.active.codex.state, 'ready', 'active account stayed ready after Cloud bearer 401');
+
+  // 2. Account-specific bare 401 + subsequent all_cooling preserves persistent local reauth_required,
+  //    refuses stale "use", and recovers BOTH reauth map AND active.codex.state once a newer refresh arrives!
+  cloud.state.accounts[0].state = 'cooling';
+  cloud.state.accounts[0].cooling_until = '2026-11-16T22:00:00Z';
+  writeFileSync(stateFile, JSON.stringify({
+    version: 1,
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc_bare_401', label: 'bare-401-cx', provider: 'codex', state: 'ready' } },
+    cooling: {},
+  }));
+
+  const leaseAllCool = await leaseCloudAccount({ provider: 'codex' }, { cwd: sb.cwd, env: sb.env, now: () => baseMs });
+  assert.equal(leaseAllCool.state, 'all_cooling');
+  const savedAfterAllCool = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.ok(savedAfterAllCool.reauth?.acc_bare_401?.marked_at, 'reauth marker survived all_cooling state write');
+  assert.equal(savedAfterAllCool.active.codex.state, 'reauth_required');
+
+  delete cloud.state.accounts[1]._leaseErrorStatus;
+  delete cloud.state.accounts[1].last_refresh_error;
+  cloud.state.accounts[1].state = 'ready';
+  cloud.state.accounts[1].last_refresh_at = '2026-11-16T18:00:00Z';
+
+  const staleUse = await invokeCli(['accounts', 'use', 'bare-401-cx'], sb, { now: () => baseMs });
+  assert.equal(staleUse.exit, 1, 'stale lease without newer refresh cannot clear local reauth_required');
+  assert.match(staleUse.stderr, /reauth_required|re-authentication/i);
+
+  const statusStale = await invokeCli(['accounts', 'status', '--json'], sb, { now: () => baseMs });
+  assert.equal(statusStale.exit, 0);
+  const parsedStale = JSON.parse(statusStale.stdout);
+  assert.equal(parsedStale.accounts.find(a => a.account_id === 'acc_bare_401').state, 'reauth_required');
+
+  // Once Cloud reports a newer successful refresh after marked_at, BOTH reauth marker AND active.codex.state recover to ready!
+  cloud.state.accounts[1].last_refresh_at = '2026-11-16T20:05:00Z';
+  const listCleared = await invokeCli(['accounts', 'list'], sb, { now: () => baseMs + 10 * 60_000 });
+  assert.equal(listCleared.exit, 0);
+  const savedAfterHeal = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.equal(savedAfterHeal.reauth?.acc_bare_401, undefined, 'newer Cloud last_refresh_at cleared local reauth marker');
+  assert.equal(savedAfterHeal.active.codex.state, 'ready', 'active entry recovered from reauth_required to ready');
+
+  // 2b. Inactive Cloud-reported revocation is persisted on list so a subsequent stale ready read cannot flip it back!
+  cloud.state.accounts.push({
+    account_id: 'acc_inactive_rev',
+    label: 'inactive-rev-cx',
+    provider: 'codex',
+    plan: 'pro',
+    owner_login: 'Serhan-Asad',
+    is_owner: true,
+    shared: false,
+    state: 'reauth_required',
+    last_refresh_at: '2026-11-16T19:00:00Z',
+    created_at: '2026-11-04T00:00:00Z',
+  });
+  assert.equal((await invokeCli(['accounts', 'list'], sb, { now: () => baseMs + 12 * 60_000 })).exit, 0);
+  const savedInactiveRev = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.ok(savedInactiveRev.reauth?.acc_inactive_rev?.marked_at, 'inactive Cloud-reported revocation persisted locally');
+
+  cloud.state.accounts.find(a => a.account_id === 'acc_inactive_rev').state = 'ready';
+  const statusAfterStaleInactive = JSON.parse((await invokeCli(['accounts', 'status', '--json'], sb, { now: () => baseMs + 13 * 60_000 })).stdout);
+  assert.equal(statusAfterStaleInactive.accounts.find(a => a.account_id === 'acc_inactive_rev').state, 'reauth_required');
+  cloud.state.accounts = cloud.state.accounts.filter(a => a.account_id !== 'acc_inactive_rev');
+
+  // Also verify last_refresh_error: "401 Unauthorized" on Cloud account record surfaces as reauth_required!
+  cloud.state.accounts[1].last_refresh_error = 'HTTP 401 Unauthorized from auth.openai.com';
+  const statusRefresh401 = JSON.parse((await invokeCli(['accounts', 'status', '--json'], sb, { now: () => baseMs + 14 * 60_000 })).stdout);
+  assert.equal(statusRefresh401.accounts.find(a => a.account_id === 'acc_bare_401').state, 'reauth_required');
+  delete cloud.state.accounts[1].last_refresh_error;
+
+  // 3. Failed materialization (symlinked config.toml inside managed CODEX_HOME) does NOT write active lease metadata to accounts-state.json!
+  cloud.state.accounts[0].state = 'ready';
+  cloud.state.accounts[0].cooling_until = null;
+  writeFileSync(stateFile, JSON.stringify({ version: 1, enrolled: true, providers: ['codex'], active: {}, cooling: {} }));
+  const managedCfg = managedCodexConfigPath(sb.env);
+  rmSync(managedCfg, { force: true });
+  const dummyTarget = join(sb.root, 'dummy-cfg.toml');
+  writeFileSync(dummyTarget, 'model = "gpt-5.4"\n');
+  symlinkSync(dummyTarget, managedCfg);
+
+  const failedUse = await invokeCli(['accounts', 'use', 'sync-cx'], sb, { now: () => baseMs });
+  assert.equal(failedUse.exit, 1);
+  const stateAfterFailedUse = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.equal(stateAfterFailedUse.active?.codex, undefined, 'active.codex not persisted when materialization fails');
+  rmSync(managedCfg, { force: true });
+
+  // 4. Cross-provider zero-account heal in runStepAgentProcess preserves unrelated Claude reauth markers!
+  cloud.state.accounts = [
+    {
+      account_id: 'acc_cl_rev',
+      label: 'revoked-claude',
+      provider: 'claude',
+      plan: 'max',
+      owner_login: 'Serhan-Asad',
+      is_owner: true,
+      shared: false,
+      state: 'reauth_required',
+      created_at: '2026-11-05T00:00:00Z',
+    },
+  ];
+  writeFileSync(stateFile, JSON.stringify({
+    enrolled: true,
+    providers: ['codex', 'claude'],
+    active: { codex: { account_id: 'acc_deleted_cx', label: 'gone-cx', provider: 'codex', state: 'ready' } },
+    cooling: {},
+    reauth: { acc_cl_rev: { marked_at: '2026-11-16T20:00:00.000Z' } },
+  }));
+  const crossHeal = await runStepAgentProcess({
+    agent: 'codex',
+    step: 'build',
+    args: ['exec', 'hi'],
+    cwd: sb.cwd,
+    env: sb.env,
+    accountsPorts: { tmpRoot: sb.root },
+    run: async () => ({ code: 0, stdout: 'local-codex-ok', stderr: '' }),
+  });
+  assert.equal(crossHeal.code, 0);
+  const stateAfterCrossHeal = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.deepEqual(stateAfterCrossHeal.providers, ['claude']);
+  assert.equal(
+    stateAfterCrossHeal.reauth?.acc_cl_rev?.marked_at,
+    '2026-11-16T20:00:00.000Z',
+    'unrelated Claude reauth marker survived Codex zero-account heal',
+  );
 });

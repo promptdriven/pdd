@@ -1,4 +1,4 @@
-// Generated from prompts/cli/interpreter-version.prompt.md (sha256: f1bed8436021cc3c9de032271b559c07e8189351a80bde97f32dad67fda70b29).
+// Generated from prompts/cli/interpreter-version.prompt.md (sha256: dded345fe9b9cd3460e190e9bfbf816ca8f97afbe6a3929f09648a7ce5b61705).
 import { spawnSync } from 'node:child_process';
 import { runtimeOrigin } from './runtime-seam.mjs';
 

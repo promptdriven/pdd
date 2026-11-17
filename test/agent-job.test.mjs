@@ -28,23 +28,30 @@ let text=''; process.stdin.on('data',c=>text+=c); process.stdin.on('end',()=>{
   if(m.sleep) setTimeout(()=>process.exit(0), m.sleep); else process.exit(m.code ?? 0);
 });`;
 
-test('agent commands follow the headless auditor launch for codex, claude and agy', () => {
+test('agent commands follow the headless auditor launch for codex, claude, gemini and agy', () => {
   assert.deepEqual(agentCommand({ kind: 'codex', command: '/bin/codex' }), { command: '/bin/codex',
     args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false', '-'] });
   assert.deepEqual(agentCommand({ kind: 'claude' }, { model: 'opus' }), { command: 'claude',
     args: ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'bypassPermissions', '--model', 'opus'] });
+  assert.deepEqual(agentCommand({ kind: 'gemini' }), { command: 'gemini',
+    args: ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo'] });
+  assert.deepEqual(agentCommand({ kind: 'gemini', command: ' /opt/bin/gemini ' }, { model: 'gemini-2.5-pro' }), { command: '/opt/bin/gemini',
+    args: ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo', '--model', 'gemini-2.5-pro'] });
+  assert.deepEqual(agentCommand({ kind: 'gemini', command: '   ' }), { command: 'gemini',
+    args: ['-p', '', '--output-format', 'stream-json', '--approval-mode', 'yolo'] });
   assert.deepEqual(agentCommand({ kind: 'agy' }), { command: 'agy',
     args: ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions'] });
   assert.deepEqual(agentCommand({ kind: 'agy', command: '/opt/bin/agy' }, { model: 'gemini-3.8-flash-medium' }), { command: '/opt/bin/agy',
     args: ['--input-format', 'text', '--output-format', 'stream-json', '--dangerously-skip-permissions', '--model', 'gemini-3.8-flash-medium'] });
-  assert.throws(() => agentCommand({ kind: 'gemini' }), /codex, claude or agy/);
+  assert.throws(() => agentCommand({ kind: 'other' }), /codex, claude, gemini or agy/);
 });
 
 test('job environment drops caller agent, Herdr and coordinator session markers', () => {
   const env = jobEnvironment({ HOME: '/h', PATH: '/bin', CODEX_HOME: '/c', ANTIGRAVITY_APP_DATA_DIR: '/a',
     ANTIGRAVITY_AGENT: '1', ANTIGRAVITY_CONVERSATION_ID: 'conv', ANTIGRAVITY_CSRF_TOKEN: 'csrf',
     CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'x', CODEX_THREAD_ID: 't',
-    CODEX_SANDBOX: 'seatbelt', HERDR_PANE: 'p', PDD_AGENT_SESSION: 's', PDD_AUTOPILOT_CONTEXT: '{}', GH_TOKEN: 'keep' });
+    CODEX_SANDBOX: 'seatbelt', GEMINI_CLI_SESSION_ID: 'gem-session', HERDR_PANE: 'p',
+    PDD_AGENT_SESSION: 's', PDD_AUTOPILOT_CONTEXT: '{}', GH_TOKEN: 'keep' });
   assert.deepEqual(env, { HOME: '/h', PATH: '/bin', CODEX_HOME: '/c', ANTIGRAVITY_APP_DATA_DIR: '/a', GH_TOKEN: 'keep' });
 });
 

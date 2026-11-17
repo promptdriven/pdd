@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-agents.prompt.md (sha256: f1089425b0414524298a313e6983fe018947580d206179ec3df7ccc48de02369).
+// Generated from prompts/cli/workflow-agents.prompt.md (sha256: 3754e3d6a8ec5ba1f208398d2a944cc261276acfb41a15ff6d44e6fee51aa684).
 import { runAgentProcess, parseAgentAuthStatus } from './agent-adapters.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 

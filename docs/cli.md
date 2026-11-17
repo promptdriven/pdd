@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.34, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.35, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -80,7 +80,7 @@ pdd reads three records, in this order:
 | Source | Record | Certain |
 |---|---|---|
 | `binding` | An entry of the root `pdd-bindings.json` with `module` PATH and a `prompt` | yes |
-| `header` | A `Generated from PROMPT` line in the first 4 KiB of the file ([header form](replay-evidence.md#approved-scenarios-on-the-base)) | yes |
+| `header` | A `Prompt: PROMPT` or `Generated from PROMPT` comment line in the first 4 KiB of the file ([header form](replay-evidence.md#approved-scenarios-on-the-base)) | yes |
 | `prose` | The first sentence of a prompt's opening paragraph names PATH, for example ``Own `src/x.mjs`.`` | no |
 
 The prose record is used only when no binding or header names a prompt. A prose
@@ -104,7 +104,7 @@ first, then headers in line order; or the sorted prose owners), `source`
 (`binding`, `header`, `prose` or null), `certain`, `note` (empty when there is
 nothing to add) and `headers`.
 
-`headers` has one row for each `Generated from` header of the file: `prompt`,
+`headers` has one row for each provenance header of the file: `prompt`,
 `sha256` (the header's hash or null), `expected` (the prompt's header hash, or
 null when the prompt is not available), `state` and `legacy`. The header hash
 is the SHA-256 of the prompt's behavior text: for a plain prompt, the prompt
@@ -118,12 +118,12 @@ prompt current.
 | `current` | The hash is the prompt's header hash. |
 | `current` with `legacy: true` | The hash is the SHA-256 of the whole prompt file. pdd accepts this form for compatibility and marks it `legacy: true`. Write the expected hash for a canonical header. |
 | `stale` | The prompt changed after the header was written. Check that the file follows the prompt, then write the expected hash. |
-| `none` | The header has no hash. |
+| `none` | Canonical path-only header without a hash. |
 | `unknown` | The named prompt is not available. |
 
-The text form adds one line for each header that is not plain current, with
-the expected hash. pdd never rewrites a header: a hash in a header says that
-the file follows that prompt version. The command returns 0 when it can answer, also for an uncertain
+The text form adds one line only when a header carries a `stale` or whole-file
+`legacy` hash, showing the expected hash; canonical path-only headers (`none`)
+add no extra line. `pdd owner` does not rewrite headers. The command returns 0 when it can answer, also for an uncertain
 or missing owner. When a prompt claims ownership of a test file (`test/**`,
 `tests/**`, `*.test.*`, `*_test.*` or `test_*.*`), `pdd owner` writes a
 non-blocking warning on `stderr` and keeps exit code 0 and `stdout` unchanged.
@@ -327,19 +327,20 @@ machine and sends one alert; see [Core engine](#core-engine).
 ## Cloud accounts
 
 `pdd accounts` manages Codex and Claude logins in PDD Cloud from one local install
-of `@openai/codex` (`~/.codex/auth.json`) and `@anthropic-ai/claude-code`
+of `@openai/codex` (isolated in `$PDD_STATE_DIR/codex-home`, default `~/.local/state/pdd/codex-home`, leaving `~/.codex/auth.json` untouched) and `@anthropic-ai/claude-code`
 (`~/.claude/settings.json`). PDD never spends or triggers usage-reset credits.
 
 | Command | What it does |
 |---|---|
-| `pdd accounts [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
-| `pdd accounts list [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling` or `paused`), and pending invites |
-| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside an isolated folder (`--device-auth` for headless Codex), upload the credential bundle to PDD Cloud over TLS, strip the local refresh token, and optionally enroll multiple accounts (`--loop`) or share (`--with`) |
-| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--with USER\|ORG/TEAM[,...]]` | Import a local or external Codex `auth.json` or Claude token into PDD Cloud, replace any local Codex file with a stripped pass (`refresh_token: ""`), and optionally share (`--with`) |
-| `pdd accounts use LABEL` | Pin `LABEL` and materialize its owner pass or shared gateway grant in `~/.codex/` (`0600`) or `~/.claude/settings.json` (`0600`) |
-| `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch the local install to the next ready account sorted by soonest weekly reset |
+| `pdd accounts [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling`, `paused`, or `reauth_required`), refresh status, and pending invites |
+| `pdd accounts list [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling`, `paused`, or `reauth_required`), refresh status, and pending invites |
+| `pdd accounts status [--json]` | Show Cloud account enrollment, isolated Codex home path, shell auto-switch status, active leases, and token refresh and expiry health |
+| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside a disposable folder (`--device-auth` for headless Codex), upload the credential bundle to PDD Cloud over TLS, materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json` without touching `~/.codex/auth.json`, and optionally enroll multiple accounts (`--loop`) or share (`--with`) |
+| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--with USER\|ORG/TEAM[,...]]` | Import an external (`--from PATH`) or local Codex `auth.json` or Claude token into PDD Cloud without modifying `~/.codex/auth.json` (prefer `pdd accounts add` so Cloud gets an independent OAuth session), materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json`, and optionally share (`--with`) |
+| `pdd accounts use LABEL` | Pin `LABEL` (matching `+` and `-` punctuation) and materialize its owner pass or shared gateway grant in `$PDD_STATE_DIR/codex-home` (`0600`) or `~/.claude/settings.json` (`0600`) |
+| `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch to the next ready account sorted by soonest weekly reset |
 | `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Return in 0 ms when the cached lease is below 100% on both windows and more than 15 minutes from expiry; else lease a fresh pass within `--timeout-ms` (default 1200 ms) and fail open when offline |
-| `pdd accounts auto on\|off\|status` | Turn on, turn off or inspect the opt-in fail-open shell wrapper in `~/.zshrc` and `~/.bashrc` for plain terminal `codex` and `claude` commands (off by default) |
+| `pdd accounts auto on\|off\|status` | Turn on, turn off or inspect the opt-in fail-open shell wrapper in `~/.zshrc`, `~/.bashrc`, and `~/.config/fish/config.fish` for plain terminal `codex` and `claude` commands (off by default) |
 | `pdd accounts pause LABEL` | Pause automatic leasing for `LABEL` |
 | `pdd accounts unpause LABEL` | Resume automatic leasing for `LABEL` |
 | `pdd accounts share LABEL --with USER\|ORG/TEAM[,...]` | Share `LABEL` with GitHub users, organization teams, or `@ORG` targets without exposing raw owner credentials |
@@ -354,20 +355,22 @@ of `@openai/codex` (`~/.codex/auth.json`) and `@anthropic-ai/claude-code`
 - **Encrypted vault, stripped owner passes, and tokenless shared gateways.** PDD
   Cloud encrypts each account's refresh credential with envelope encryption bound
   to the account record. Owner Codex leases write a short-lived `access_token` and
-  `id_token` with `refresh_token: ""` (`0600`), so only PDD Cloud refreshes
-  single-use OAuth tokens. Shared Codex and Claude leases (`delivery_mode: "gateway_grant"`)
-  deliver only a short-lived revocable `pddg_…` gateway grant routed through PDD
-  Cloud (`[model_providers.pdd_codex_gateway]` for Codex, `ANTHROPIC_BASE_URL` for
-  Claude), with zero OpenAI or Anthropic OAuth tokens written to borrower disk.
-  Local state in `$PDD_STATE_DIR/accounts-state.json` (`0600`) stores metadata and
-  timestamps only, with zero tokens.
-- **Stick-Until-100% step rotation.** Inside `pdd` and `pdd autopilot`, steps stay
-  on the active leased account with zero switches while both the 5-hour and weekly
-  windows remain below 100%. Brief burst `429` responses below 100% retry on the
-  same account so the prompt cache stays warm. At 100% on either window, `pdd`
-  reports the window to PDD Cloud, cools the account until `reset_at` (hours for a
-  5-hour window, days for a weekly window), and switches to the ready account whose
-  weekly window resets soonest.
+  `id_token` with `refresh_token: ""` (`0600`) inside `$PDD_STATE_DIR/codex-home`,
+  so only PDD Cloud refreshes single-use OAuth tokens. Shared Codex and Claude leases
+  (`delivery_mode: "gateway_grant"`) deliver only a short-lived revocable `pddg_…`
+  gateway grant routed through PDD Cloud (`[model_providers.pdd_codex_gateway]` for
+  Codex, `ANTHROPIC_BASE_URL` for Claude), with zero OpenAI or Anthropic OAuth tokens
+  written to borrower disk. Local state in `$PDD_STATE_DIR/accounts-state.json`
+  (`0600`) stores metadata and refresh timestamps only, with zero tokens.
+- **Stick-Until-100% and automatic `reauth_required` skip.** Inside `pdd` and
+  `pdd autopilot`, steps stay on the active leased account with zero switches while
+  both the 5-hour and weekly windows remain below 100%. Brief burst `429` responses
+  below 100% retry on the same account so the prompt cache stays warm. Revoked or
+  expired credentials (`reauth_required`, `401`, `token_revoked`, `invalid_grant`)
+  surface as `reauth_required` in `pdd accounts list` and `pdd accounts status`
+  and are skipped automatically during rotation. At 100% on either window, `pdd`
+  reports the window to PDD Cloud, cools the account until `reset_at`, and switches
+  to the ready account whose weekly window resets soonest.
 - **Per-step isolation.** Owner Codex steps write the leased stripped `auth.json`
   (`0600`) into a disposable `0700` temporary folder (`/tmp/pdd-cx-…`) that symlinks
   `~/.codex/{config.toml,skills,memories,sessions,rules}`. Shared Codex gateway
@@ -379,12 +382,17 @@ of `@openai/codex` (`~/.codex/auth.json`) and `@anthropic-ai/claude-code`
   own `~/.codex/` untouched, and zero tokens appear in process arguments. Claude
   steps pass `CLAUDE_CODE_OAUTH_TOKEN` in the child environment, plus
   `ANTHROPIC_BASE_URL` on shared gateway grants.
-- **Opt-in terminal auto-switch.** Plain terminal `codex` and `claude` commands are
-  untouched by default. `pdd accounts auto on` writes one marked block in `~/.zshrc`
-  and `~/.bashrc` that runs `pdd accounts sync --provider <p> --quiet --timeout-ms 1200`
-  before `command <p> "$@"`, swapping an exhausted login before Turn 1 and failing
-  open if PDD Cloud is unreachable. `pdd accounts auto off` removes the marked block
-  cleanly.
+- **Isolated PDD Codex home and opt-in terminal auto-switch.** Local Codex leases
+  live inside `$PDD_STATE_DIR/codex-home` (`~/.local/state/pdd/codex-home`, mode
+  `0700`, with `cli_auth_credentials_store = "file"`, merged user `~/.codex/config.toml`
+  settings, and symlinked `~/.codex` skills, memories, sessions, history, and rules),
+  leaving `~/.codex/auth.json` untouched. `pdd accounts auto on` writes one marked
+  block in `~/.zshrc`, `~/.bashrc`, and `~/.config/fish/config.fish` that sets
+  `CODEX_HOME` to the isolated PDD Codex home when a healthy lease is active, leaves
+  `codex login` and `codex logout` on normal `~/.codex` (refusing if `CODEX_HOME`
+  was manually exported to the PDD Codex home), and leaves `CODEX_HOME` unset to fall
+  back to `~/.codex/auth.json` whenever PDD Cloud is unreachable or no valid active
+  lease exists. `pdd accounts auto off` removes the marked block cleanly.
 
 ## GitHub API budget
 
@@ -690,6 +698,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared real CLI commands, with 0 AI calls. Compare arguments, optional stdin, exit code, stdout and stderr using the same cases. Save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
 | `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every Story affected by local changes against the unique saved-run base or HEAD, including all variants and criteria. Uncertain scope keeps complete coverage. Read omitted baseline obligations from local original Check history in a separate historical report. Status describes selected checks only. Required full-pass gates still apply. |
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
+| `pdd test [PATH\|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]` | Cap logical interpreter calls across all selected Stories and any permitted `service-restarted` replacement (`--max-total-calls` 1..999999), or decline automatic `service-restarted` replacement (`--no-restart-replacement`, saved across `--read` and `--retry`). Also accepted with `--affected` and `--journeys` |
 | `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
@@ -700,7 +709,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
 | `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Simulator page for screens and typed operations. With no Story, open the whole project. |
 | `pdd simulate [STORY] --page [--new]` | Open the Simulator page explicitly |
-| `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story |
+| `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story or exact Try ID |
 
 For `--target code`, each tested Runtime entry declares
 `"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}`. The command
@@ -789,7 +798,7 @@ The Simulator's agent fills the fields directly when supported. It runs the acti
 |---|---|
 | `pdd mcp` | Start the stdio MCP server for the current repository; select the Story through tool input. Your agent can open a simulation, inspect its state, run input, check the result against the Story and save a case |
 
-The tools are `try_open`, `try_state`, `try_run`, `try_check` and `try_save_case`. `try_open` and `try_state` include `source_sha256` and `engine_sha` for the open Try. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
+The tools are `try_open`, `try_state`, `try_run`, `try_observe`, `try_check` and `try_save_case`. `try_open` and `try_state` include `source_sha256`, `engine_sha` and `server_commit` for the open Try. Supply `try_id` to bind an existing running simulation without opening or reopening one, and use `try_observe` to read call and session state without replaying a run. Use them when the person asks to try behavior. Runs count against the simulation budget and appear in the Simulator. Saved results are separate recorded cases with exact starting data. Complete missing Story coverage before `pdd test`; observations need review and are never approved expected values. MCP protocol messages use stdout; progress and diagnostics use stderr.
 
 ## Used by the agent
 
@@ -810,7 +819,7 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 |---|---|
 | `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.34`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.35`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |
@@ -959,7 +968,7 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 ## Metrics
 
-- `pdd metrics [--json] [--date YYYY-MM-DD | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]`
+- `pdd metrics [--json] [--date YYYY-MM-DD | --week [YYYY-MM-DD] | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]`
 - `pdd metrics export FILE [--timezone IANA]`
 - `pdd metrics import FILE`
 - `pdd metrics record FILE`

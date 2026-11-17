@@ -38,11 +38,12 @@ Use `# Product name: plan`. A small map with exactly one part needs no separate 
 State what never crosses a boundary. Under a separate `## Prompts` heading (not
 inside `## Boundaries` or `## Runs`), state how each part starts and connects in
 real execution, naming both its checkable domain/screen prompt(s) (faked over
-contract ports in `pdd test`) and any thin `kind: native-only` adapter prompt(s)
-for real HTTP/HTTPS routes, auth/cookies, SQLite or external databases, CLI/OS
-processes and browser DOM/network clients (RUNBOOK §21; `0` Runtime AI calls in
-`pdd test`, verified by native tests in `code` PR 2) so finished runs form a
-runnable product rather than isolated port functions. A Run is a stable name such
+injected `<port>.<op>` ports in `pdd test`, never linking `kind: native-only`
+adapters under their `## Dependencies`) and any thin `kind: native-only` boundary
+adapter prompt(s) that depend on those domain prompts for real HTTP/HTTPS routes,
+auth/cookies, SQLite or external databases, CLI/OS processes and browser DOM/network
+clients (RUNBOOK §21; `0` Runtime AI calls in `pdd test`, verified by native tests
+in `code` PR 2) so Story checks run cleanly and finished runs form a runnable product. A Run is a stable name such
 as phone-1; Part names one map part, or `all` for journeys. Slice is a label such
 as 1. Stories and Needs are comma lists. Needs names `plan PR` or earlier runs;
 empty means no needs. `plan PR` is satisfied when the plan file is on the base

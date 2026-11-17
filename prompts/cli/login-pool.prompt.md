@@ -1,17 +1,26 @@
 # Cloud accounts and login pool
 
-Own `src/login-pool.mjs`. Export the Cloud Accounts client, local `0600` lease
-materializers, disposable `0700` Codex step overlay, Stick-Until-100% and
-burst-`429` classifiers, and internal multi-harness fallback helpers:
+Own `src/login-pool.mjs`. Export the Cloud Accounts client, isolated `0700`
+local Codex home and `0600` lease materializers, disposable `0700` Codex step
+overlay, Stick-Until-100% and burst-`429` / `reauth_required` classifiers, and
+internal multi-harness fallback helpers:
 `resolveCloudAccountsEndpoint(env)`,
 `resolveCloudAccountsToken({cwd, env}, ports)`,
 `cloudAccountsRequest(method, path, options, ports)`,
 `listCloudAccounts({refresh, cwd, env, timeoutMs}, ports)`,
 `accountsStatePath(env)`,
+`pddManagedCodexHome(env)`,
+`managedCodexAuthPath(env)`,
+`managedCodexConfigPath(env)`,
 `readCloudAccountsState({env}, ports)`,
 `writeCloudAccountsState(state, {env}, ports)`,
 `isCloudAccountsActive({env, poolPath, provider}, ports)`,
+`isReauthRequiredAccount(entry)`,
+`isReauthRequiredFailure(errorOrText)`,
+`markLocalAccountReauthRequired(accountId, {env}, ports)`,
 `stripCodexAuthBundle(authJson)`,
+`localCodexHome(env)`,
+`localCodexAuthPath(env)`,
 `localCodexConfigPath(env)`,
 `materializeLocalCodexAuth(authOrLease, {env, previousManagedCodexGateway, previousCodexModelProvider}, ports)`,
 `restoreLocalCodexGatewayConfig({env, previousModelProvider, removeAuthFile}, ports)`,
@@ -22,7 +31,7 @@ burst-`429` classifiers, and internal multi-harness fallback helpers:
 `classifyRateLimitFailure(text, usageWindows)`,
 `extractRateLimitReport(text, accountOrWindows)`,
 `reportCloudAccountUsage(accountId, report, {cwd, env, timeoutMs}, ports)`,
-`leaseCloudAccount(request, {cwd, env, timeoutMs}, ports)`,
+`leaseCloudAccount(request, {cwd, env, timeoutMs, maxRetries}, ports)`,
 `isCreditOrResetAccount(entry)`,
 `selectCloudPoolLogin(options, ports)`,
 `exhaustCloudPoolLogin(options, ports)`,
@@ -36,11 +45,12 @@ burst-`429` classifiers, and internal multi-harness fallback helpers:
 
 ## Domain decisions
 
-- **Zero borrower credentials for shared Codex (`gateway_grant`):** Shared Codex leases never deliver OpenAI `access_token`, `id_token` or `refresh_token` to borrower machines. Step overlays route Codex through `pdd_codex_gateway` using an environment header (`PDD_CODEX_GATEWAY_GRANT`) with zero `auth.json` inside `/tmp/pdd-cx-*`, while local `~/.codex/` materialization writes only the short-lived revocable `pddg_*` grant as an API-key stub alongside `[model_providers.pdd_codex_gateway]` so `codex login status`, terminal `codex`, Herdr chats and workflows succeed and revoke immediately on `unshare`, `pause` or `remove`.
-- **Single-refresh invariant for owner passes (`direct_stripped`):** Owner Codex leases deliver short-lived `access_token` and `id_token` with `tokens.refresh_token: ""` so only PDD Cloud refreshes single-use OpenAI refresh tokens. Switching from a shared Codex gateway lease back to an owner pass or leaving/removing the active shared account restores `~/.codex/config.toml` without losing user settings such as `[mcp_servers.pdd]`.
-- **Opt-in live usage refresh (`listCloudAccounts`):** `listCloudAccounts({refresh = false, cwd, env, timeoutMs}, ports)` requests `GET /v1/accounts?refresh=true` only when `refresh === true` (human `pdd accounts` / `pdd accounts list`), keeping `GET /v1/accounts` fast for internal health and step checks.
+- **Isolated PDD-managed Codex home (`pddManagedCodexHome`):** Local Codex lease materialization writes exclusively inside `${PDD_STATE_DIR || join(XDG_STATE_HOME, "pdd") || ~/.local/state/pdd}/codex-home` (mode `0700`), never reading from or writing to `~/.codex/auth.json`. Plain `codex logout` or `codex login` against `~/.codex` cannot revoke PDD Cloud tokens or mutate credentials under running `codex app-server` processes, and legacy `[model_providers.pdd_codex_gateway]` entries in `~/.codex/config.toml` are cleaned up safely without touching `~/.codex/auth.json`.
+- **Zero borrower credentials for shared Codex (`gateway_grant`):** Shared Codex leases never deliver OpenAI `access_token`, `id_token` or `refresh_token` to borrower machines. Step overlays route Codex through `pdd_codex_gateway` using `PDD_CODEX_GATEWAY_GRANT` with zero `auth.json` inside `/tmp/pdd-cx-*`, while `pddManagedCodexHome(env)` writes only the short-lived revocable `pddg_*` grant as an API-key stub alongside `[model_providers.pdd_codex_gateway]` and `cli_auth_credentials_store = "file"`.
+- **Single-refresh invariant for owner passes (`direct_stripped`):** Owner Codex leases deliver short-lived `access_token` and `id_token` with `tokens.refresh_token: ""` so only PDD Cloud refreshes single-use OpenAI refresh tokens.
+- **Cold-start resilience and opt-in live refresh:** `cloudAccountsRequest` and `listCloudAccounts` default `timeoutMs` to `20_000` ms, `leaseCloudAccount` defaults `timeoutMs` to `15_000` ms (enforcing `timeoutMs` as an overall wall-clock deadline across bounded `reauth_required` skip retries and `maxRetries: 0` on `--quiet` shell-hook sync), and `cloudAccountsRequest` performs `1` bounded retry on timeout/abort for idempotent `GET` and `POST /v1/accounts/lease` requests. `listCloudAccounts({refresh = false})` appends `?refresh=true` only when `refresh === true`.
 
-## Cloud Accounts transport and single-refresh invariant
+## Cloud Accounts transport and isolated local materialization
 
 Cloud Accounts uses `PDD_ACCOUNTS_URL || PDD_CLOUD_URL ||
 "https://pdd-byok-api-c437voydwa-uc.a.run.app"` (`https:` required except loopback `127.0.0.1`,
@@ -53,9 +63,10 @@ Every credential read or leased (including `codex_gateway_token` and `gateway_be
 is registered with `rememberSecrets` from `src/secret-redaction.mjs` and is never printed or
 logged. Zero usage-reset credit fields, endpoints or calls exist.
 
-- Local cache (`${PDD_STATE_DIR || XDG_STATE_HOME || ~/.local/state}/pdd/accounts-state.json`,
+- Local cache (`${PDD_STATE_DIR || join(XDG_STATE_HOME, "pdd") || ~/.local/state/pdd}/accounts-state.json`,
   mode `0600`, atomic rename) stores only non-secret active lease metadata
-  (`enrolled`, `providers`, per-provider `account_id`, `label`, `lease_id`, `expires_at`,
+  (`enrolled`, `providers`, per-provider `account_id`, `label`, `state`, `lease_id`,
+  `leased_at`, `expires_at`, `last_refresh_at`, `access_token_expires_at`,
   `delivery_mode`, `anthropic_base_url`, `managed_anthropic_base_url`,
   `codex_gateway_url`, `managed_codex_gateway`, `previous_codex_model_provider`,
   `five_hour_used_percent`, `five_hour_reset_at`, `weekly_used_percent`,
@@ -64,26 +75,35 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   `poolPath` is supplied, when `provider` is neither `"codex"` nor `"claude"`, when
   `!saved.enrolled`, or when `provider` is passed and absent from `saved.providers`;
   `selectCloudPoolLogin` only leases providers present in `saved.providers`.
-- `stripCodexAuthBundle`, `materializeLocalCodexAuth` and `restoreLocalCodexGatewayConfig`
-  refuse symlinks on `~/.codex` (or `$CODEX_HOME`), `auth.json` and `config.toml`:
+- `localCodexHome(env)` resolves `~/.codex` (or custom `$CODEX_HOME` when distinct from
+  `pddManagedCodexHome(env)`). `pddManagedCodexHome(env)` resolves
+  `join(dirname(accountsStatePath(env)), "codex-home")` (`0700`), with
+  `managedCodexAuthPath(env)` and `managedCodexConfigPath(env)`.
+  `materializeLocalCodexAuth` and `restoreLocalCodexGatewayConfig` refuse symlinks on
+  `pddManagedCodexHome(env)`, its `auth.json` and `config.toml`, and `~/.codex/config.toml`:
+  - `materializeLocalCodexAuth` creates `pddManagedCodexHome(env)` (`0700`), symlinks existing
+    non-symlink `~/.codex/{skills,memories,sessions,archived_sessions,history.jsonl,session_index.jsonl,rules}`
+    into `pddManagedCodexHome(env)`, merges user settings (such as `[mcp_servers.pdd]`) from
+    regular non-symlink `~/.codex/config.toml` while stripping any legacy
+    `[model_providers.pdd_codex_gateway]` block from `~/.codex/config.toml` without ever reading
+    or writing `~/.codex/auth.json`, and always sets `cli_auth_credentials_store = "file"` in
+    `managedCodexConfigPath(env)` (`0600`, round-trip verified with `./vendor/smol-toml/parse.js`).
   - When `authOrLease.delivery_mode === "gateway_grant"`, `materializeLocalCodexAuth` validates
     `codex_gateway_url` (`https:` or loopback `http:`) and `codex_gateway_token || gateway_bearer_token`
-    (registering the token in secret redaction and rejecting any value without the `"pddg_"` prefix with
-    `code: "invalid_lease"`), atomically writes `0600` `auth.json` with
-    `{"auth_mode": "apikey", "OPENAI_API_KEY": "<pddg_grant>"}`,
-    and atomically updates `0600` `config.toml` (parsed and round-trip verified with
-    `./vendor/smol-toml/parse.js`, preserving `[mcp_servers.pdd]` and all other user keys/tables)
-    to set `model_provider = "pdd_codex_gateway"` (recording any prior non-`pdd_codex_gateway`
-    `model_provider`) and `[model_providers.pdd_codex_gateway]` (`name = "PDD Codex Gateway"`,
-    `base_url = "<codex_gateway_url>"`, `wire_api = "responses"`, `requires_openai_auth = false`,
-    `supports_websockets = false`, `http_headers = {"x-pdd-gateway-grant": "<pddg_grant>"}`).
-  - For owner `direct_stripped` bundles, `materializeLocalCodexAuth` writes `0600` `auth.json`
-    with `tokens.refresh_token: ""` and, when `previousManagedCodexGateway` is true or
-    `config.toml` carries `pdd_codex_gateway`, calls `restoreLocalCodexGatewayConfig` to remove
-    `[model_providers.pdd_codex_gateway]` and restore `previousCodexModelProvider` (or remove
-    `model_provider = "pdd_codex_gateway"`). `restoreLocalCodexGatewayConfig` with
-    `removeAuthFile: true` also removes a `pddg_*` API-key `auth.json` when leaving or removing
-    the active shared Codex account with no replacement.
+    (requiring `"pddg_"` prefix with `code: "invalid_lease"`), writes `0600`
+    `managedCodexAuthPath(env)` with `{"auth_mode": "apikey", "OPENAI_API_KEY": "<pddg_grant>"}`,
+    and writes `0600` `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"`,
+    `model_provider = "pdd_codex_gateway"` and `[model_providers.pdd_codex_gateway]`
+    (`name = "PDD Codex Gateway"`, `base_url = "<codex_gateway_url>"`, `wire_api = "responses"`,
+    `requires_openai_auth = false`, `supports_websockets = false`,
+    `http_headers = {"x-pdd-gateway-grant": "<pddg_grant>"}`).
+  - For owner `direct_stripped` bundles, `materializeLocalCodexAuth` writes `0600`
+    `managedCodexAuthPath(env)` with `tokens.refresh_token: ""` and `0600`
+    `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"` and user settings
+    without `pdd_codex_gateway`. `restoreLocalCodexGatewayConfig` strips any
+    `[model_providers.pdd_codex_gateway]` block from `managedCodexConfigPath(env)` and legacy
+    `~/.codex/config.toml` (restoring `previousModelProvider`), and when `removeAuthFile: true`
+    removes `managedCodexAuthPath(env)` without ever touching `~/.codex/auth.json`.
 - `materializeLocalClaudeAuth` atomically merges `env.CLAUDE_CODE_OAUTH_TOKEN`
   into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`, mode `0600`),
   sets `env.ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`, removes a
@@ -91,7 +111,7 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   `ANTHROPIC_BASE_URL` when switching back to `direct_oauth`, and writes
   `hasCompletedOnboarding: true` in `~/.claude.json` (mode `0600`).
 
-## Disposable step isolation and Stick-Until-100%
+## Disposable step isolation, `reauth_required` rotation and Stick-Until-100%
 
 - **Codex step overlay (`createCodexStepOverlay` & `prepareCloudStepExecution`):** Allocates a
   disposable `0700` directory atomically via `mkdtempSync(join(rootDir, 'pdd-cx-'))`,
@@ -121,14 +141,17 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   `/v1/accounts/claude-gateway` `ANTHROPIC_BASE_URL` before applying profile settings so
   other profiles never inherit ambient grants; `buildClaudeStepEnv` injects leased
   `CLAUDE_CODE_OAUTH_TOKEN` (and `ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`).
-- **Stick-Until-100% (`selectCloudPoolLogin`, `exhaustCloudPoolLogin`, `reportCloudAccountUsage`):**
+- **Stick-Until-100% and `reauth_required` skip (`selectCloudPoolLogin`, `leaseCloudAccount`, `exhaustCloudPoolLogin`, `reportCloudAccountUsage`):**
   Cloud accounts never stop at `97%`. They stay on `current_account_id` (`0` switches)
   until `five_hour_used_percent >= 100` or `weekly_used_percent >= 100` (or a quota
   exhaustion error), skip local `readCodexUsageWindows` / `readCodexLimits` probes when
   `lease.delivery_mode === "gateway_grant"`, normalize reported usage percents to integers `0..100`
   (`v >= 100 ? 100 : Math.max(0, Math.floor(v))`), POST `/v1/accounts/{account_id}/usage-report`
   with `limit_reached: true`, and lease the next ready account (`soonest weekly_reset_at`)
-  with `0` issue strikes.
+  with `0` issue strikes. Accounts or account-attributed lease/refresh failures matching `reauth_required`
+  (`token_revoked`, `invalid_grant`, `refresh_token_reused`, `state === "reauth_required"`, or account-attributed `401`, while unattributed Cloud bearer `401` errors never taint provider accounts)
+  are classified as `"reauth_required"`, persisted in `accounts-state.json` `reauth` across state reconciliations until a newer `last_refresh_at` succeeds or the account is re-enrolled/removed, added to `skip_account_ids`,
+  and skipped automatically during pool rotation without masking `reauth_required` as `ready`. `active[provider]` also tracks `materialized_local` so step-only overlay leases never masquerade as locally materialized `codex-home` / `.claude` credentials, and `cloudAccountsRequest` / `leaseCloudAccount` share a single wall-clock `deadlineMs` across token resolution, cold-start transport retry, and reauth skips.
 - **Burst `429` vs quota exhaustion (`classifyRateLimitFailure`):** A transient
   burst rate limit (`429 Too Many Requests`, `rate_limit_exceeded`, RPM/TPM) with no
   hard quota-exhaustion marker while known `5h < 100%` and `7d < 100%` returns

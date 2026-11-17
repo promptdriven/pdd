@@ -43,7 +43,7 @@ valid block permits interface projection; actual Runtime calls across it refuse.
 Combined selections keep every selected Story's required edge.
 
 **1 story = 1 test file = many cases.** Each case is one step. Steps run in order and share the saved data.
-Across its steps, the test file must check every criterion of its story. Put separate user behaviors in separate Stories (`1` Story and `1` test file each) so `pdd test` runs Stories in parallel instead of running one long sequential file.
+Across its steps, the test file must check every criterion of its story. Write `1` Story per cohesive standalone user loop (or edit the existing Story when changing an existing slice; use `0` Stories + one `"No Story:"` PR line for internal changes), and write `1` observable check per material claim.
 
 Keep each test step small. One step = one action, or a short run of actions (about 10 moves, rows or calls). Split a long replay into steps with the expected state after each part. The server stops a step after 10 minutes.
 Add a second file only for a case that needs a different starting world. Name it `<story>.<world>.json`, for example `tests/place-order.empty-shop.json`. That file also checks every criterion. pdd prints every story with no test (and the path it expects), one line for the `.json` files in test folders that match no story (`pdd test --files` lists them), and two files with the same name for one story as an error that names both.

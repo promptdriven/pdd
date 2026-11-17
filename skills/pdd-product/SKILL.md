@@ -2,7 +2,7 @@
 name: pdd-product
 description: Use when a person wants to build a whole product from one sentence and needs a story map, parts, shared contracts and a plan of feature runs.
 metadata:
-  pdd-skills: 0.1.34
+  pdd-skills: 0.1.35
 ---
 
 # PDD product
@@ -17,7 +17,7 @@ Normal feature runs build the parts.
 
 ## Rules
 
-- Read pdd-prompting before writing Stories or contracts. The main chat coordinates. Run each step in a fresh subagent with its step file and paths.
+- Read pdd-prompting before writing Stories or contracts (`1` Story per cohesive standalone user loop). For a single coupled slice (`1–2` prompts), author Story, prompt, test, `.ui.svg` and `app-map.json` in 1 session (0 authoring subagents) and check `pdd files` + `pdd lint --local`; for `3+` independent modules, lock shared contracts first and parallelize independent workers.
 - The person approves the map, then reviews the plan PR. Never decide their open questions or approve for them. Never merge.
 - Count CORE Stories and parts in the map. Recommend small for about 10 Stories and 1 part, medium for 10–50 Stories and 2–5 parts, large for more than 50 Stories or more than 5 parts. The person can change the path.
 - Small: keep `product/map.md` only and run one feature run. Medium: make parts, contracts and planned runs. Large: also make slices; slice 1 is one thin journey through all parts.

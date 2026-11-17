@@ -16,7 +16,7 @@ comments on a known cause at most once a day.
 - Only causes of kind `runtime` and `pdd` produce reports. Kind `job` and mode `off`
   return `{state: "off"}` and write nothing.
 - Stable causes: before the fingerprint, the code becomes one fixed word
-  (`stableCode`): merge-check-tool, suite-broken, adopt-pdd (its body asks to adopt
+  (`stableCode`): post-merge-revert, post-merge-reopen, post-merge-ci, merge-check-tool, suite-broken, adopt-pdd (its body asks to adopt
   PDD for the modules that the local draft lists), no-verdict, maintenance (the
   interpreter stayed in maintenance, so the check was never sent: the
   [core](autopilot-core.prompt.md) waits 12 hours first, #3241), scenario-limit,
@@ -89,16 +89,26 @@ comments on a known cause at most once a day.
      `not_planned` or carries an `invalid` or `wontfix` label, automatic filing stops
      and returns `{state: "needs-person", reason, number, id, ref, fingerprint}` instead
      of opening or re-opening an issue.
-  3. **Live duplicate check across versions**: before creating an issue, query `state=all`
-     issues for the target label (up to 5 pages) and match either the exact
-     `reportMarker(fingerprint)` or the same `(kind, component, code)` cause across
-     versions (marker prefix, fixed `Kind`/`Component`/`Error code` lines, or standard
-     title prefix). Prefer an open match; otherwise stop on a rejected closed match
-     (`not_planned`, `invalid`, `wontfix`), or match an issue closed less than 14 days
-     ago. When an open or recent issue matches, never open a duplicate: post at most one
-     `"Seen again"` comment per `(cause, version)` per machine per 24 hours (recording
-     the version and machine count without any host name) and return `state: "seen"`, or
-     `state: "counted"` when already commented in the last 24 hours.
+  3. **Live duplicate check and closed-issue reopen across versions**: before creating an
+     issue, query `state=all` issues for the target label (up to 5 pages) and match either
+     the exact `reportMarker(fingerprint)` or the same `(kind, component, code)` cause
+     across versions (marker prefix, fixed `Kind`/`Component`/`Error code` lines, or
+     standard title prefix). Prefer an open match; otherwise stop on a rejected closed
+     match (`not_planned`, `invalid`, `wontfix`), or match an existing non-rejected closed
+     issue regardless of when it closed. Never file a duplicate issue:
+     - When a non-rejected **closed** issue matches, reopen that existing issue
+       (`PATCH repos/REPO/issues/N` with `{state: "open"}`), persist a pending reopen
+       entry in `ledger.pendingReopen[ref]` until the comment succeeds, append a comment
+       with the newly rebuilt scrubbed forensic summary (`publicReport(draft).body`),
+       clear `ledger.pendingReopen[ref]`, record the visit in `ledger.seen`, and return
+       `{state: "reopened", number, id, ref, fingerprint}` (if the comment POST fails
+       after `PATCH` succeeds, the retained draft and `ledger.pendingReopen[ref]` ensure
+       the next retry still posts the full reopened forensic summary rather than `"Seen
+       again"`).
+     - When an **open** issue matches, post at most one `"Seen again"` comment per
+       `(cause, version)` per machine per 24 hours (recording the version and machine
+       count without any host name) and return `state: "seen"`, or `state: "counted"` when
+       already commented in the last 24 hours.
 - Safe text: the title names the kind, component, code and PDD minor version. The
   public body starts with a fixed sentence for what the job did: it ended, or, for a
   cause with `shipped: true` (Runtime could not check), it shipped its PR with
@@ -110,6 +120,8 @@ comments on a known cause at most once a day.
   "Autopilot holds one issue: its own steps or a service stopped 3 jobs of it in 24
   hours. The issue gets no strike; Autopilot takes it again after a new engine version or
   a person's comment on it."), or,
+  for `post-merge-revert`, `post-merge-reopen` or `post-merge-ci`, a fixed statement that
+  Autopilot detected a post-merge regression on a previously merged change, or,
   for `adopt-pdd`, a fixed request to adopt PDD. Then it has
   only fixed, scrubbed fields: the kind, component, error code, step, optional scrubbed
   command and safe Runtime batch/report identifiers, the PDD, Node, platform
@@ -133,23 +145,31 @@ comments on a known cause at most once a day.
   (`backlogToClaimable`, `claimedToClearSpec`, `clearSpecToPrOpened`,
   `prOpenedToMergedOrWouldMerge` as `{numerator, denominator, rate}`), non-merged drop
   counts grouped by root-cause owner (`pdd`, `runtime`, `content`, `quota_or_service`,
-  `operator`, `person_decision`), and `reports` separating `verifiedIssues`,
+  `operator`, `person_decision`), non-blocking top-of-funnel, zero-edit and post-merge
+  reopen summary `funnel` (`openIssues`, `taken`, `openToTaken`,
+  `zeroEditMergedOrWouldMerge`, `zeroEditRate`, `zeroEditTarget` equal to
+  `AUTOPILOT_ZERO_EDIT_TARGET` `{min: 0.9, max: 0.95, label: "90-95%"}`,
+  `mergedOrWouldMerge`, `takenToMergedOrWouldMerge`, `reopened`, `reopenRate`,
+  `reopenTarget: 0`), and `reports` separating `verifiedIssues` (including `reopened`),
   `pendingDrafts` and `filteredNoise`.
 
 The machine ledger is `ROOT/ledger.json`: `filed` (fingerprint, number, time, the
-last 24 hours) and `seen` (cause-and-version key to last seen-again comment time).
+last 24 hours), `seen` (cause-and-version key to last seen-again comment time), and
+optional `pendingReopen` (`ref` to `{at, body}` while a reopened issue still awaits its
+forensic summary comment).
 
 ## Public contract
 
-- `DEFAULT_RUNTIME_REPORT_REPOSITORY` is `"promptdriven/prompt-runtime"` and
-  `DEFAULT_DAILY_REPORT_LIMIT` is `3`.
+- `DEFAULT_RUNTIME_REPORT_REPOSITORY` is `"promptdriven/prompt-runtime"`,
+  `DEFAULT_DAILY_REPORT_LIMIT` is `3`, and `AUTOPILOT_ZERO_EDIT_TARGET` is frozen
+  `{min: 0.9, max: 0.95, label: "90-95%"}`.
 - `classifyNonDefect(causeOrDraft)` returns `null` for a candidate defect, or
   `{reason, category, owner}` when Rule 1 filters the cause.
 - `validateReportDraft(draft, {dailyFiledCount, dailyLimit})` checks Rule 1 and Rule 2
   proof/cap readiness and returns `{ok, state, reason?, category?, owner?, targetRepository}`.
 - `fileReport({cause, mode, validate, dailyLimit, root, machine, versions, step, words, runtimeRepo, runtimeOwner}, ports)`
   returns `{state, reason?, category?, owner?, number?, id?, ref?, fingerprint}`.
-  `state` is `filed` or `seen` (with `number`, `id`, `ref`, `fingerprint`), `counted`,
+  `state` is `filed`, `reopened` or `seen` (with `number`, `id`, `ref`, `fingerprint`), `counted`,
   `needs-person`, `filtered`, `draft` or `off`. Mode `validated` (or `mode: "file"` with
   `validate: true`) enforces all three rules and `dailyLimit`; mode `file` sends with
   live dedup and unambiguous noise/rejection guards; mode `draft` records the local
@@ -158,9 +178,9 @@ last 24 hours) and `seen` (cause-and-version key to last seen-again comment time
   includes `fingerprint`.
 - `autoFileValidatedReports({root, machine, runtimeRepo, runtimeOwner, dailyLimit}, ports)`
   validates all local drafts in `ROOT/drafts` and sends only drafts that pass Rules 1, 2
-  and 3, returning `{results, filed, seen, counted, filtered, needsPerson, drafts}`.
-- `summarizeConversionDrops({runs, backlogCount, claimableCount, claimedCount, clearSpecCount, prOpenedCount, mergedOrWouldMergeCount, drafts, filed, filtered, date})`
-  returns `{date, totals, stages, dropsByOwner, reports}`.
+  and 3, returning `{results, filed, reopened, seen, counted, filtered, needsPerson, drafts}`.
+- `summarizeConversionDrops({runs, openIssuesCount, backlogCount, claimableCount, claimedCount, clearSpecCount, prOpenedCount, zeroEditCount, mergedOrWouldMergeCount, reopenedCount, drafts, filed, filtered, date})`
+  returns `{date, totals, funnel, stages, dropsByOwner, reports}`.
 - A draft is `ROOT/drafts/FP.json` with `fingerprint`, `kind`, `component`, `code`,
   `rawCode`, `step`, `command`, `batchId`, `reportId`, `reproduced`, `operatorStop`,
   `issues`, `heads`,
@@ -172,7 +192,7 @@ last 24 hours) and `seen` (cause-and-version key to last seen-again comment time
 - `listReportDrafts({root}, ports)` returns the drafts, ordered by file name.
 - `sendReportDraft({root, fingerprint, machine, runtimeRepo}, ports)` sends one draft
   through the owner and live dedup rules without proof or daily-cap blocks, deletes the
-  draft when filed or counted (keeping it if `needs-person` or failed), and returns
+  draft when filed, reopened or counted (keeping it if `needs-person` or failed), and returns
   `{exitCode, message, state?}`.
 
 Ports: `gh(args, {input})` returning `{code, stdout, stderr}` (REST through

@@ -33,12 +33,13 @@ test('3200 headerPrompts reads every strict header line in the first 4 KiB', () 
   assert.deepEqual(headerPrompts(late), ['prompts/cli/late.prompt.md']);
   assert.deepEqual(headerPrompts(Buffer.from(late)), ['prompts/cli/late.prompt.md'], 'bytes and strings read the same');
   const forms = ['# Generated from prompts/a.prompt.md.', '"""Generated from prompts/b.prompt.md."""', '<!-- Generated from prompts/c.prompt.md -->',
-    ' * Generated from prompts/d.prompt.md', '// Generated from prompts/a.prompt.md.'].join('\n');
-  assert.deepEqual(headerPrompts(forms), ['prompts/a.prompt.md', 'prompts/b.prompt.md', 'prompts/c.prompt.md', 'prompts/d.prompt.md'], 'line order, no duplicates');
+    ' * Generated from prompts/d.prompt.md', '// Prompt: prompts/e.prompt.md', `# Prompt: prompts/f.prompt.md sha256=${HEX}`,
+    '// Generated from prompts/a.prompt.md.'].join('\n');
+  assert.deepEqual(headerPrompts(forms), ['prompts/a.prompt.md', 'prompts/b.prompt.md', 'prompts/c.prompt.md', 'prompts/d.prompt.md', 'prompts/e.prompt.md', 'prompts/f.prompt.md'], 'line order, no duplicates');
   assert.deepEqual(headerPrompts(`${' '.repeat(4100)}\n// Generated from prompts/far.prompt.md.\n`), [], 'a header after 4 KiB is not read');
   assert.deepEqual(headerPrompts(`${' '.repeat(4096 - CUT.length - 1)}\n${CUT} (sha256: ${HEX}).\n`), [], 'a line cut by the window is not read');
   assert.deepEqual(headerPrompts([
-    'Generated from the canonical m1_policy prompt.', 'const x = "Generated from prompts/s.prompt.md.";',
+    'Generated from the canonical m1_policy prompt.', 'Prompt: prompts/not-a-comment.prompt.md', 'const x = "Generated from prompts/s.prompt.md.";',
     '// see Generated from prompts/t.prompt.md for details', '// Generated from ../outside.prompt.md.', '// Generated from /abs/x.prompt.md.',
     '// Generated from prompts/.git/x.prompt.md.', `// Generated from prompts/${'y'.repeat(1100)}.prompt.md.`, '// Generated from prompts/x.md.'].join('\n')), []);
   assert.deepEqual(headerPrompts(null), []);
@@ -123,7 +124,7 @@ test('3200 pdd owner prints text and JSON answers and refuses paths outside the 
   const run = async (argv, cwd = root) => { const stdout = capture(), stderr = capture(); const code = await runPdd(argv, { stdout, stderr, cwd }); return { code, out: stdout.text, err: stderr.text }; };
   const text = await run(['owner', 'src/b.mjs', 'src/a.mjs', 'docs/none.md']);
   assert.equal(text.code, 0, text.err);
-  assert.equal(text.out, ['src/b.mjs: prompts/b.prompt.md (header)', `  prompts/b.prompt.md header has no hash; current is ${promptHeaderHash('# B\n')}`,
+  assert.equal(text.out, ['src/b.mjs: prompts/b.prompt.md (header)',
     'src/a.mjs: prompts/a.prompt.md (prose, not certain: treat as owned)',
     '  named only in the opening sentence of prompts/a.prompt.md; add a Generated from header or a pdd-bindings.json entry',
     'docs/none.md: no owner', ''].join('\n'));
@@ -165,8 +166,8 @@ test('3200 header hash: approval metadata and JSON spacing do not count; prose a
   assert.deepEqual(headerHashState(sha(draft), approved), { expected: hash, state: 'stale', legacy: false });
   assert.deepEqual(headerHashState(null, approved), { expected: hash, state: 'none', legacy: false });
   assert.deepEqual(headerHashState(hash, null), { expected: null, state: 'unknown', legacy: false });
-  assert.deepEqual(headerEntries(`// Generated from prompts/a.prompt.md (sha256: ${HEX}).\n# Generated from prompts/b.prompt.md.\n// Generated from prompts/a.prompt.md.\n`),
-    [{ prompt: 'prompts/a.prompt.md', sha256: HEX }, { prompt: 'prompts/b.prompt.md', sha256: null }]);
+  assert.deepEqual(headerEntries(`// Generated from prompts/a.prompt.md (sha256: ${HEX}).\n// Prompt: prompts/b.prompt.md\n# Prompt: prompts/c.prompt.md sha256=${HEX}\n// Generated from prompts/a.prompt.md.\n`),
+    [{ prompt: 'prompts/a.prompt.md', sha256: HEX }, { prompt: 'prompts/b.prompt.md', sha256: null }, { prompt: 'prompts/c.prompt.md', sha256: HEX }]);
 });
 
 // Wrong: pdd approve makes the code header stale, or a prose change keeps it current.
@@ -195,13 +196,13 @@ test('3200 header hash: pdd approve leaves headers current; a prose change makes
 test('3200 pdd owner shows each header hash that is not current', async t => {
   const prompt = '# A\n\nOwn `src/a.mjs`.\n', hash = promptHeaderHash(prompt);
   const root = repo(t, { 'prompts/a.prompt.md': prompt,
-    'src/ok.mjs': `// Generated from prompts/a.prompt.md (sha256: ${hash}).\n`, 'src/stale.mjs': `// Generated from prompts/a.prompt.md (sha256: ${HEX}).\n`,
-    'src/bare.mjs': '// Generated from prompts/a.prompt.md.\n', 'src/gone.mjs': `// Generated from prompts/gone.prompt.md (sha256: ${HEX}).\n` });
+    'src/ok.mjs': `// Prompt: prompts/a.prompt.md sha256=${hash}\n`, 'src/stale.mjs': `// Generated from prompts/a.prompt.md (sha256: ${HEX}).\n`,
+    'src/bare.mjs': '// Prompt: prompts/a.prompt.md\n', 'src/gone.mjs': `// Generated from prompts/gone.prompt.md (sha256: ${HEX}).\n` });
   const stdout = capture(), stderr = capture();
   assert.equal(await runPdd(['owner', 'src/ok.mjs', 'src/stale.mjs', 'src/bare.mjs', 'src/gone.mjs'], { stdout, stderr, cwd: root }), 0, stderr.text);
   assert.equal(stdout.text, ['src/ok.mjs: prompts/a.prompt.md (header)',
     'src/stale.mjs: prompts/a.prompt.md (header)', `  prompts/a.prompt.md header hash is stale (${HEX}); current is ${hash}`,
-    'src/bare.mjs: prompts/a.prompt.md (header)', `  prompts/a.prompt.md header has no hash; current is ${hash}`,
+    'src/bare.mjs: prompts/a.prompt.md (header)',
     'src/gone.mjs: prompts/gone.prompt.md (header, not certain: treat as owned)', '  names prompts/gone.prompt.md, which is not a Git-visible prompt', ''].join('\n'));
   const json = capture();
   await runPdd(['owner', 'src/stale.mjs', '--json'], { stdout: json, stderr, cwd: root });

@@ -2,7 +2,7 @@
 name: pdd-small-change
 description: PDD small-change workflow. Use when the change stays outside PDD (docs, guides, packages, config, CI, lockfiles or test maintenance — never prompts, Stories or product code), also when written as a bug. Plan it, make it, verify it, one PR.
 metadata:
-  pdd-skills: 0.1.34
+  pdd-skills: 0.1.35
 ---
 
 # PDD small change
@@ -17,12 +17,13 @@ Each area is one main chat; read its step files.
 
 ## Rules
 
-- The main chat coordinates and talks with the person; no code or checks.
-- Fresh subagents in step order once input files exist; never reuse builders or let them check code. Step file/paths at once; no chat history. Every brief requires "the run's main chat" for the chat in briefs/notes; keep actual actors and root paths. Wait once: long time-out; no small follow-ups. Read §11 once; RUNBOOK "Bounded handoffs".
+- Main chat coordinates; no code or checks.
+- Fresh subagents in step order once files exist; never reuse builders or let them check code. Step file/paths at once, no chat history. Briefs: "the run's main chat", actual actors/root paths. Wait one long time-out, no small follow-ups; §11, RUNBOOK "Bounded handoffs".
 - Checks: fresh first. Only verify/formal may reuse after startup failure; wrote no code, tests or prompts this run.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
 - At gates, show results, ask and stop. Revise changes and ask again. Outside runs, ask before opening PRs. In runs, pdd opens them. Only the main chat may merge on explicit person request under RUNBOOK §2.
 - Use full URLs.
+- For structural cleanup, follow [docs/refactor-runbook.md](https://github.com/promptdriven/pdd/blob/main/docs/refactor-runbook.md).
 - Before an optional step, ask the person and wait for the answer. In a run, run `<pdd> workflow ask` first.
 - A person decides expected values. Never change a test to make it pass.
 
