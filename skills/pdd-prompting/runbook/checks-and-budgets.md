@@ -46,7 +46,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   For the `error` target, pdd prints `got no error (a normal result)` when the step returned a result and no error.
   Then the path is right, and the prompt did not refuse this input. If pdd still prints `got {"missing": true}` on
   `error`, an error came back without that field: compare the path with the prompt's declared errors.
-  A declared operation that the step did not use counts `0`. pdd does not check paths before it sends, so work out
+  A resource or call bound to that step's operation that the step did not invoke counts `0`; on a read-only operation whose synthesized contract does not bind a write port (such as `list_open` never binding `storage.save`), that write counter path is absent (`{"missing": true}`)—assert unchanged state on `world` instead. pdd does not check paths before it sends, so work out
   each path with these rules before the first check.
 
 **Check operations (`op`).** Exact checks satisfy criterion coverage; `exists` (without `html`) and `contains` are partial checks and must be paired with an exact check on the criterion.
