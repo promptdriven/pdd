@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 7751a3c0fc8382eafd98fbac0d9514e9e4fc36feeb14bed44ee5f7648f732ae1).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 1a0c1b7b54d29ece6ffd27c7ab1b03ff523035f664505de92078edc25f507d8a).
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -494,48 +494,190 @@ function extractClaudeToken(text) {
   return match ? match[1] : '';
 }
 
-function readLocalClaudeToken(fs, env, extraText = '') {
-  const fromExtra = extractClaudeToken(extraText);
-  if (fromExtra) { rememberSecrets(fromExtra); return fromExtra; }
-  const envTok = typeof env?.CLAUDE_CODE_OAUTH_TOKEN === 'string' ? env.CLAUDE_CODE_OAUTH_TOKEN.trim() : '';
-  if (envTok) { rememberSecrets(envTok); return envTok; }
-  const { settingsPath } = localClaudePaths(env);
-  try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    rememberSecrets(...knownSecretValues(settings));
-    const savedTok = typeof settings?.env?.CLAUDE_CODE_OAUTH_TOKEN === 'string' ? settings.env.CLAUDE_CODE_OAUTH_TOKEN.trim() : '';
-    if (savedTok) { rememberSecrets(savedTok); return savedTok; }
-  } catch {}
-  throw new CloudAccountsError('No Claude OAuth token found. Run claude setup-token or pass CLAUDE_CODE_OAUTH_TOKEN.', { code: 'missing_local_login' });
+function rememberClaudePayloadSecrets(parsed) {
+  if (!object(parsed)) return;
+  rememberSecrets(...knownSecretValues(parsed));
+  if (object(parsed.env)) {
+    rememberSecrets(...knownSecretValues(parsed.env));
+  }
+  if (object(parsed.claudeAiOauth)) {
+    rememberSecrets(...knownSecretValues(parsed.claudeAiOauth));
+    for (const [key, val] of Object.entries(parsed.claudeAiOauth)) {
+      if (typeof val === 'string' && val.trim() && (/token|secret|key|credential/i.test(key) || val.trim().startsWith('sk-'))) {
+        rememberSecrets(val, val.trim());
+      }
+    }
+  }
 }
 
-function readClaudeTokenFromPath(fs, fromPath) {
-  let target = fromPath;
-  try {
-    if (fs.statSync(fromPath)?.isDirectory()) target = join(fromPath, 'settings.json');
-  } catch {}
-  let rawText = '';
-  try {
-    rawText = fs.readFileSync(target, 'utf8');
-  } catch {
-    throw new CloudAccountsError(`No Claude token file found at ${target}.`, { code: 'missing_local_login' });
+function parseClaudeExpiresAtMs(expiresAt) {
+  if (typeof expiresAt === 'number') return expiresAt;
+  if (typeof expiresAt === 'string') {
+    const trimmed = expiresAt.trim();
+    if (!trimmed) return null;
+    if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) return Number(trimmed);
+    return Date.parse(trimmed);
   }
+  return NaN;
+}
+
+function parseClaudeTokenText(rawText, target, nowMs) {
+  let parsed = null;
+  let isJson = false;
   try {
-    const parsed = JSON.parse(rawText);
-    rememberSecrets(...knownSecretValues(parsed));
-    const candidate = parsed?.env?.CLAUDE_CODE_OAUTH_TOKEN ?? parsed?.oauth_token ?? parsed?.claude_oauth_token ?? '';
-    if (typeof candidate === 'string' && candidate.trim()) {
-      const clean = candidate.trim();
-      rememberSecrets(clean);
-      return clean;
-    }
+    parsed = JSON.parse(rawText);
+    isJson = true;
   } catch {}
+
+  if (isJson) {
+    rememberClaudePayloadSecrets(parsed);
+    if (object(parsed)) {
+      const candidate = parsed?.env?.CLAUDE_CODE_OAUTH_TOKEN ?? parsed?.oauth_token ?? parsed?.claude_oauth_token ?? '';
+      if (typeof candidate === 'string' && candidate.trim() && !/\s/.test(candidate.trim())) {
+        const clean = candidate.trim();
+        rememberSecrets(clean);
+        return clean;
+      }
+      if (object(parsed.claudeAiOauth)) {
+        const oauth = parsed.claudeAiOauth;
+        const rawExpiresAt = oauth.expiresAt;
+        const hasExpiresAt = rawExpiresAt !== undefined
+          && rawExpiresAt !== null
+          && !(typeof rawExpiresAt === 'string' && !rawExpiresAt.trim());
+        if (hasExpiresAt) {
+          const expMs = parseClaudeExpiresAtMs(rawExpiresAt);
+          if (!Number.isFinite(expMs) || expMs <= nowMs + 60_000) {
+            throw new CloudAccountsError(
+              `${target} contains an expired short-lived Claude OAuth access token. Run pdd accounts add --provider claude or claude setup-token.`,
+              { code: 'expired_local_login' },
+            );
+          }
+        }
+        const accessToken = typeof oauth.accessToken === 'string' ? oauth.accessToken.trim() : '';
+        if (accessToken && !/\s/.test(accessToken)) {
+          rememberSecrets(accessToken);
+          return accessToken;
+        }
+        return '';
+      }
+      const extractedFromJson = extractClaudeToken(rawText);
+      if (extractedFromJson) {
+        rememberSecrets(extractedFromJson);
+        return extractedFromJson;
+      }
+      return '';
+    }
+    if (typeof parsed === 'string') {
+      const strCandidate = extractClaudeToken(parsed) || parsed.trim();
+      if (strCandidate && !/\s/.test(strCandidate)) {
+        rememberSecrets(strCandidate);
+        return strCandidate;
+      }
+    }
+    return '';
+  }
+
   const extracted = extractClaudeToken(rawText) || rawText.trim();
   if (extracted && !/\s/.test(extracted)) {
     rememberSecrets(extracted);
     return extracted;
   }
-  throw new CloudAccountsError(`No valid Claude OAuth token found in ${target}.`, { code: 'invalid_local_login' });
+  return '';
+}
+
+function hasClaudeJsonCredentials(raw) {
+  if (!object(raw)) return false;
+  if (typeof raw?.env?.CLAUDE_CODE_OAUTH_TOKEN === 'string' && raw.env.CLAUDE_CODE_OAUTH_TOKEN.trim()) return true;
+  if (typeof raw?.oauth_token === 'string' && raw.oauth_token.trim()) return true;
+  if (typeof raw?.claude_oauth_token === 'string' && raw.claude_oauth_token.trim()) return true;
+  if (object(raw?.claudeAiOauth)) {
+    const oauth = raw.claudeAiOauth;
+    if (
+      (typeof oauth.accessToken === 'string' && oauth.accessToken.trim())
+      || oauth.expiresAt !== undefined
+      || (typeof oauth.refreshToken === 'string' && oauth.refreshToken.trim())
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function readLocalClaudeToken(fs, env, extraText = '', options = {}) {
+  const nowMs = (typeof options?.now === 'function' ? options.now : Date.now)();
+  if (typeof extraText === 'string' && extraText.trim()) {
+    if (extraText.trim().startsWith('{')) {
+      const fromJsonExtra = parseClaudeTokenText(extraText, 'stdin', nowMs);
+      if (fromJsonExtra) return fromJsonExtra;
+    } else {
+      const fromExtra = extractClaudeToken(extraText);
+      if (fromExtra) { rememberSecrets(fromExtra); return fromExtra; }
+    }
+  }
+  const envTok = typeof env?.CLAUDE_CODE_OAUTH_TOKEN === 'string' ? env.CLAUDE_CODE_OAUTH_TOKEN.trim() : '';
+  if (envTok) { rememberSecrets(envTok); return envTok; }
+  const { settingsPath } = localClaudePaths(env);
+  try {
+    const settingsRaw = fs.readFileSync(settingsPath, 'utf8');
+    const savedTok = parseClaudeTokenText(settingsRaw, settingsPath, nowMs);
+    if (savedTok) return savedTok;
+  } catch (err) {
+    if (err instanceof CloudAccountsError) throw err;
+  }
+  const credentialsPath = join(dirname(settingsPath), '.credentials.json');
+  try {
+    const credsRaw = fs.readFileSync(credentialsPath, 'utf8');
+    const credsTok = parseClaudeTokenText(credsRaw, credentialsPath, nowMs);
+    if (credsTok) return credsTok;
+  } catch (err) {
+    if (err instanceof CloudAccountsError) throw err;
+  }
+  throw new CloudAccountsError('No Claude OAuth token found. Run pdd accounts add --provider claude or claude setup-token, or pass CLAUDE_CODE_OAUTH_TOKEN.', { code: 'missing_local_login' });
+}
+
+export function readClaudeTokenFromPath(fs, fromPath, options = {}) {
+  const nowMs = (typeof options?.now === 'function' ? options.now : Date.now)();
+  let isDir = false;
+  try {
+    isDir = Boolean(fs.statSync(fromPath)?.isDirectory());
+  } catch {}
+  if (isDir) {
+    const settingsPath = join(fromPath, 'settings.json');
+    const credentialsPath = join(fromPath, '.credentials.json');
+    let foundAnyFile = false;
+    let lastExistingPath = settingsPath;
+    try {
+      const settingsRaw = fs.readFileSync(settingsPath, 'utf8');
+      foundAnyFile = true;
+      lastExistingPath = settingsPath;
+      const fromSettings = parseClaudeTokenText(settingsRaw, settingsPath, nowMs);
+      if (fromSettings) return fromSettings;
+    } catch (err) {
+      if (err instanceof CloudAccountsError) throw err;
+    }
+    try {
+      const credsRaw = fs.readFileSync(credentialsPath, 'utf8');
+      foundAnyFile = true;
+      lastExistingPath = credentialsPath;
+      const fromCreds = parseClaudeTokenText(credsRaw, credentialsPath, nowMs);
+      if (fromCreds) return fromCreds;
+    } catch (err) {
+      if (err instanceof CloudAccountsError) throw err;
+    }
+    if (!foundAnyFile) {
+      throw new CloudAccountsError(`No Claude token file found at ${settingsPath} or ${credentialsPath}.`, { code: 'missing_local_login' });
+    }
+    throw new CloudAccountsError(`No valid Claude OAuth token found in ${lastExistingPath}.`, { code: 'invalid_local_login' });
+  }
+  let rawText = '';
+  try {
+    rawText = fs.readFileSync(fromPath, 'utf8');
+  } catch {
+    throw new CloudAccountsError(`No Claude token file found at ${fromPath}.`, { code: 'missing_local_login' });
+  }
+  const token = parseClaudeTokenText(rawText, fromPath, nowMs);
+  if (token) return token;
+  throw new CloudAccountsError(`No valid Claude OAuth token found in ${fromPath}.`, { code: 'invalid_local_login' });
 }
 
 function resolveCodexImportSource(fs, cwd, env, fromOption) {
@@ -555,18 +697,38 @@ function resolveCodexImportSource(fs, cwd, env, fromOption) {
   };
 }
 
-function detectImportProvider(fs, env, { cwd = process.cwd(), fromOption = null } = {}) {
+export function detectImportProvider(fs, env = process.env, options = {}) {
+  const cwd = options?.cwd ?? process.cwd();
+  const fromOption = options?.fromOption ?? options?.from ?? null;
+  const now = typeof options?.now === 'function' ? options.now : Date.now;
   if (fromOption) {
     const resolved = resolve(cwd, String(fromOption).trim());
-    let candidate = resolved;
-    try { if (fs.statSync(resolved)?.isDirectory()) candidate = join(resolved, 'auth.json'); } catch {}
-    try {
-      const raw = JSON.parse(fs.readFileSync(candidate, 'utf8'));
-      if (object(raw?.tokens)) return 'codex';
-      if (raw?.env?.CLAUDE_CODE_OAUTH_TOKEN || raw?.oauth_token || raw?.claude_oauth_token) return 'claude';
-    } catch {}
+    let isDir = false;
+    try { isDir = Boolean(fs.statSync(resolved)?.isDirectory()); } catch {}
+    if (isDir) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(join(resolved, 'auth.json'), 'utf8'));
+        if (object(raw?.tokens)) return 'codex';
+      } catch {}
+      for (const fileName of ['settings.json', '.credentials.json']) {
+        try {
+          const txt = fs.readFileSync(join(resolved, fileName), 'utf8');
+          try {
+            const raw = JSON.parse(txt);
+            if (hasClaudeJsonCredentials(raw)) return 'claude';
+          } catch {}
+          if (extractClaudeToken(txt)) return 'claude';
+        } catch {}
+      }
+      return 'codex';
+    }
     try {
       const txt = fs.readFileSync(resolved, 'utf8');
+      try {
+        const raw = JSON.parse(txt);
+        if (object(raw?.tokens)) return 'codex';
+        if (hasClaudeJsonCredentials(raw)) return 'claude';
+      } catch {}
       if (extractClaudeToken(txt)) return 'claude';
     } catch {}
     return 'codex';
@@ -579,8 +741,10 @@ function detectImportProvider(fs, env, { cwd = process.cwd(), fromOption = null 
     }
   } catch {}
   try {
-    if (readLocalClaudeToken(fs, env)) return 'claude';
-  } catch {}
+    if (readLocalClaudeToken(fs, env, '', { now })) return 'claude';
+  } catch (err) {
+    if (err?.code === 'expired_local_login') return 'claude';
+  }
   return 'codex';
 }
 
@@ -1117,7 +1281,7 @@ async function enrollSingleIteration(mode, {
   if (mode === 'add') {
     const piped = !loopState ? await readStdinString(stdin) : '';
     if (piped.trim()) {
-      oauthToken = readLocalClaudeToken(fs, env, piped);
+      oauthToken = readLocalClaudeToken(fs, env, piped, { now: ports.now });
     } else {
       const loginRes = await runProviderLogin('claude', { cwd, env, deviceAuth: false }, ports);
       if (!loginRes || loginRes.code !== 0) {
@@ -1128,13 +1292,13 @@ async function enrollSingleIteration(mode, {
         };
       }
       const loginOutput = `${loginRes?.stdout ?? ''}\n${loginRes?.stderr ?? ''}`;
-      oauthToken = readLocalClaudeToken(fs, env, loginOutput);
+      oauthToken = readLocalClaudeToken(fs, env, loginOutput, { now: ports.now });
     }
   } else if (fromOption) {
-    oauthToken = readClaudeTokenFromPath(fs, resolve(cwd, String(fromOption).trim()));
+    oauthToken = readClaudeTokenFromPath(fs, resolve(cwd, String(fromOption).trim()), { now: ports.now });
   } else {
     const loginOutput = await readStdinString(stdin);
-    oauthToken = readLocalClaudeToken(fs, env, loginOutput);
+    oauthToken = readLocalClaudeToken(fs, env, loginOutput, { now: ports.now });
   }
 
   let candidateLabel;
@@ -1209,7 +1373,7 @@ async function enrollOrImportAccount(mode, {
   stdin,
 }, ports = {}) {
   const fs = ports.fs ?? nativeFs;
-  const provider = requestedProvider || (mode === 'import' ? detectImportProvider(fs, env, { cwd, fromOption }) : 'codex');
+  const provider = requestedProvider || (mode === 'import' ? detectImportProvider(fs, env, { cwd, fromOption, now: ports.now }) : 'codex');
 
   if (deviceAuth && provider === 'claude') {
     return { exitCode: 2, message: '--device-auth is only supported for Codex accounts.' };
