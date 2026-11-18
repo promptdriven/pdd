@@ -10,7 +10,7 @@ Keep one catalog authoritative for help/parser/completion. Parse before local re
 
 Read the entire [Prompting guide](../../docs/prompting-guide.md) before authoring prompts or Stories. Source files implement these contracts; tests exercise observable behavior from the actual packed package.
 
-The explicit local `workflow prove ISSUE --test COMMAND --expect TEXT` route may execute only the supplied proof command through [old-code proof](workflow-prove.prompt.md), which is required generation/runtime/verification context for this exception. Reading notes or replay evidence never executes supplied commands. Prove reads no gh token, calls no PDD interpreter and performs no publication or workflow approval.
+The explicit local `workflow prove ISSUE --test COMMAND --expect TEXT` route may execute only the supplied proof command through [old-code proof](workflow-prove.prompt.md), which is required generation/runtime/verification context for this exception. Reading notes or replay evidence never executes supplied commands. Prove reads no gh token, calls no PDD interpreter and performs no publication or workflow approval. The explicit `pdd lint --codex [STORY...]` route ([Codex readability and quality lint](codex-lint.prompt.md)) may invoke the local Codex CLI in read-only sandbox mode without GitHub write tokens or PDD interpreter calls.
 
 ## Caller and installer navigation
 
