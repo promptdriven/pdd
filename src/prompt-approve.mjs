@@ -1,4 +1,4 @@
-// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 93dfb4789888bb901eb64fb66539bf1b3156508ca54f1bab2a9baf09f771d2e4).
+// Generated from prompts/cli/prompt-approve.prompt.md (sha256: 52675828c996c633195c39cdae8da57a41e4579877563ade1f385690c3a5d7c6).
 import { approvalActor, readApprovalPolicy, readSaidWords, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -7,6 +7,7 @@ import { relative, resolve, sep, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
 import { findTestPromptViolations } from './file-owner.mjs';
+import { buildHumanBoundaryCard, formatApproveBoundaryCard } from './human-boundary-card.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 import { formatStoryLint, isLintableStoryPath, lintStories } from './story-lint.mjs';
 
@@ -266,7 +267,7 @@ function approvalHygieneRefusal(root, path, visible) {
 
 // Show one prompt, ask the person, and approve on y. expectedHash (from the Try page) must equal the local prose hash.
 // Returns {state: 'done' | 'declined', exitCode, message}; prints the view and the question to stdout.
-export async function askApproval({ root, path, stdout, answers, expectedHash, said, commit, approvals, commonDir, strictApprovals = false }) {
+export async function askApproval({ root, path, stdout, answers, expectedHash, said, commit, approvals, commonDir, strictApprovals = false, env = process.env }) {
   let visible, prompt, problems;
   const declined = error => ({ state: 'declined', exitCode: 4, message: error.message });
   try {
@@ -306,11 +307,17 @@ export async function askApproval({ root, path, stdout, answers, expectedHash, s
   } else if (journal.some(entry => (!strictApprovals || entry.actor?.kind === 'terminal') && entry.prompts?.some(item => item.path === path && item.proseSha256 === hash))) {
     return { state: 'done', exitCode: 0, message: `${path} is already approved and current.` };
   }
-  const headerLines = hasBlock
-    ? [...describeInterface(path, iface), ...interfaceView(root, path, text, journal)]
-    : iface?.kind === 'native-only'
-      ? [path, 'Kind: native-only', `Reason: ${iface.reason}`]
-      : [path];
+  const cardLines = formatApproveBoundaryCard(buildHumanBoundaryCard({ root, focusPrompt: path, env }));
+  let headerLines;
+  if (hasBlock) {
+    const described = describeInterface(path, iface);
+    const topCount = iface.kind === 'native-only' ? 3 : iface.kind ? 2 : 1;
+    headerLines = [...described.slice(0, topCount), ...cardLines, ...described.slice(topCount), ...interfaceView(root, path, text, journal)];
+  } else if (iface?.kind === 'native-only') {
+    headerLines = [path, 'Kind: native-only', `Reason: ${iface.reason}`, ...cardLines];
+  } else {
+    headerLines = [path, ...cardLines];
+  }
   for (const row of [...headerLines, ...proseView(root, path, text, journal)]) line(stdout, row);
   const previousApproved = lastApproved(root, path, journal);
   if ((hasBlock && iface.status === 'approved') || (!hasBlock && previousApproved && proseOf(previousApproved.text) !== proseOf(text))) {
@@ -398,7 +405,7 @@ export async function runApprove({ words = [], cwd = process.cwd(), said } = {},
       line(stdout, `Approval route: ${evidence.route}; actor: ${evidence.actor.kind} ${evidence.actor.id}; at: ${evidence.at}`);
     };
     try {
-      const result = await askApproval({ root, path, stdout, answers, said, commit, approvals, commonDir, strictApprovals });
+      const result = await askApproval({ root, path, stdout, answers, said, commit, approvals, commonDir, strictApprovals, env });
       if (result.exitCode === 1) line(stdout, 'Not approved. Nothing changed.');
       else if (result.exitCode === 4 && result.message.startsWith('Fix these')) line(stdout, 'Fix these before you approve.');
       else line(result.exitCode === 4 ? stderr : stdout, result.message);
