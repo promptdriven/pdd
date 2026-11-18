@@ -848,7 +848,7 @@ the evidence record.
   (strict_approvals): …`. Push the job
   branch and either let `openPullRequest(ctx, job, options)` open/update the PR from the result's `head`, `title` and `summary` or open one PR against BASE with `Fixes #N`; `openPullRequest` (using a temporary scratch root cleaned up on exit without overwriting saved job files or polluting `job.worktree` when called standalone) deterministically stamps missing closing keywords (`Fixes #N` / `Closes #N`), `Path:` lines (from the Git diff and base/head `ownerRead`, grouping `Path: a` under the changed owner prompt even on multi-owner modules and placing modified existing `.prompt.md` files on `Path: a`), `Runtime:` lines (from verified saved `pdd test` checks at `head` or honest `not run` / `FAIL` state, never inventing a pass), and the `Evidence:` line in code (failing closed on malformed explicit `tests`/`vectors`/`formal` inputs or omitted `tests` without a valid existing `Evidence:` `tests=` claim, preserving contradictory test counts so `evidenceReds` catches them, and syncing `vectors=`/`formal=` counts in `mergeCheck` once engine replays finish on stamped heads) so the agent does not have to hand-type machine metadata strings. Never merge, push to BASE,
   force-push or close the issue, and never assign it or change its labels. The result
-  file is JSON: `outcome` `pr` with `head`, optional `pr`, `title`, `summary`, `tests`, `choices`, `promptChanged` (Boolean),
+  file is JSON: `outcome` `pr` with `head`, optional `pr`, `title`, `summary`, optional `skill` (`small-change`, `bug` or `feature`), `tests`, `choices`, `promptChanged` (Boolean),
   `evidence` and optional `runtime {state, cause, kind, component, code, detail}`, or
   `outcome` `failed` with `kind` (`pdd` or `job`), `component`, `code`, `cause`
   and a short `detail` without repository code, or `outcome` `needs-person` with one
@@ -1992,6 +1992,7 @@ with the native defaults named above.
 - [Headless job runner](agent-job.prompt.md): required for job start, outcome, capture and cleanup.
 - [Multi-harness login pool](login-pool.prompt.md): required for `isQuotaExhaustionMessage`, `isAuthFailureMessage` and optional login selection/cooldown rotation (preserving clean committed `build` progress at `HEAD` across in-place pool rotations).
 - [Autopilot telemetry](autopilot-telemetry.prompt.md): required for opt-in worker/reviewer model tiering, per-phase wall-clock tracking, and harness log token summaries.
+- [Autopilot metrics local store](autopilot-metrics.prompt.md): required for best-effort local Autopilot metrics run recording (`recordAutopilotMetric`, honoring `metrics-config.json` `on`/`off` state and optional `skill` `"small-change" | "bug" | "feature"` reported by the builder).
 - [Machine guard](machine-guard.prompt.md): required for `slotCount` (the slots) and
   `GUARD` (the cleanup limits).
 - [GitHub dependency reader](issue-dependencies-github.prompt.md): required for the

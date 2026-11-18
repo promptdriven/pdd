@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 197fb92338b4de3679622e5a1b8b87c454410eaa78b06eaa12947de34f8e231c).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 522d46d0cf997233f3d23cecd76c116d5116983a596c4934e6995bb0f58dc5db).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -62,7 +62,7 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
       "  pdd autopilot alerts|regressions Configure alerts or scan regressions.",
     ]),
     group("Metrics, shell & help (pdd metrics --help)", [
-      "  pdd metrics [export|import|record] Show, share or record repo metrics.",
+      "  pdd metrics [stages|skills|full|on|off] Show local Autopilot metrics.",
       "  pdd completion bash|zsh        Print shell tab-completion script.",
       "  pdd --help | pdd <cmd> --help  Show this overview or full command help.",
       "  pdd help prompting             Show the 5-step PDD authoring summary.",
@@ -292,11 +292,18 @@ const routes = [
   { id: 'autopilot.check-base', prefix: ['autopilot', 'check-base'], local: 'autopilot-check-base', operands: [{name:'run',type:'text'},{name:'pr',type:'text'}], options: [],
     forms: [form('pdd autopilot check-base RUN PR', 'Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only.')] },
   // Metrics, shell & help
-  { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--json',kind:'flag'},{name:'--date',kind:'text'},{name:'--week',kind:'optional-text'},{name:'--snapshot',kind:'text'},{name:'--timezone',kind:'text'},{name:'--at',kind:'text'},{name:'--expected-source',kind:'text-list'}],
-    forms: [form('pdd metrics [--json] [--date YYYY-MM-DD | --week [YYYY-MM-DD] | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]', 'Show metrics for this repository.')] },
-  { id: 'metrics.export', prefix: ['metrics', 'export'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [{name:'--timezone',kind:'text'}], forms: [form('pdd metrics export FILE [--timezone IANA]', 'Export metrics for sharing.')] },
-  { id: 'metrics.import', prefix: ['metrics', 'import'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics import FILE', 'Import a metrics bundle.')] },
-  { id: 'metrics.record', prefix: ['metrics', 'record'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics record FILE', 'Record explicit metrics observations.')] },
+  { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--repos',kind:'flag'},{name:'--repo',kind:'text'},{name:'--date',kind:'text'},{name:'--timezone',kind:'text'},{name:'--json',kind:'flag'},{name:'--html',kind:'flag'},{name:'--file',kind:'text'}],
+    forms: [form('pdd metrics [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]', 'Show Autopilot overview metrics (Last 24h and Week Mon-Sun) across active repositories on this machine, or per repository with --repos.')] },
+  { id: 'metrics.stages', prefix: ['metrics', 'stages'], local: 'metrics', operands: [], options: [{name:'--repo',kind:'text'},{name:'--date',kind:'text'},{name:'--timezone',kind:'text'},{name:'--json',kind:'flag'},{name:'--html',kind:'flag'},{name:'--file',kind:'text'}],
+    forms: [form('pdd metrics stages [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]', 'Show Autopilot gate pass rates (Prompt tests, Vectors, Formal, Suite, Review, CI), merges, reopens, and non-merged status counts.')] },
+  { id: 'metrics.skills', prefix: ['metrics', 'skills'], local: 'metrics', operands: [], options: [{name:'--repo',kind:'text'},{name:'--date',kind:'text'},{name:'--timezone',kind:'text'},{name:'--json',kind:'flag'},{name:'--html',kind:'flag'},{name:'--file',kind:'text'}],
+    forms: [form('pdd metrics skills [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]', 'Show Autopilot work mix (small-change, bug, feature, Total) with merge conversion and median completion time.')] },
+  { id: 'metrics.full', prefix: ['metrics', 'full'], local: 'metrics', operands: [], options: [{name:'--repos',kind:'flag'},{name:'--repo',kind:'text'},{name:'--date',kind:'text'},{name:'--timezone',kind:'text'},{name:'--json',kind:'flag'},{name:'--html',kind:'flag'},{name:'--file',kind:'text'}],
+    forms: [form('pdd metrics full [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]', 'Show all three Autopilot metrics views (Overview, Stages, and Skills) together.')] },
+  { id: 'metrics.on', prefix: ['metrics', 'on'], local: 'metrics', operands: [], options: [{name:'--repo',kind:'text'},{name:'--json',kind:'flag'}],
+    forms: [form('pdd metrics on [--repo OWNER/REPO] [--json]', 'Enable Autopilot metrics recording on this machine (or for one repository).')] },
+  { id: 'metrics.off', prefix: ['metrics', 'off'], local: 'metrics', operands: [], options: [{name:'--repo',kind:'text'},{name:'--json',kind:'flag'}],
+    forms: [form('pdd metrics off [--repo OWNER/REPO] [--json]', 'Pause Autopilot metrics recording on this machine (or for one repository) while keeping existing history.')] },
   { id: 'completion', prefix: ['completion'], local: 'completion', operands: [{ name: 'shell', type: 'choice:bash,zsh' }], options: [],
     forms: [form('pdd completion bash|zsh', 'Print local shell completion.')] },
   // A help topic is a word after `help` only; it is no route prefix, so `pdd prompting` stays unknown.

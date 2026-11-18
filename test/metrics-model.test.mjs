@@ -1,39 +1,141 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateMetrics } from '../src/metrics-model.mjs';
+import {
+  applyMetricsToggle,
+  calculateAutopilotMetrics,
+  formatMetricsText,
+  isMetricsEnabled,
+  normalizeSkill,
+  renderMetricsHtml,
+} from '../src/metrics-model.mjs';
 
-const event = (id, issue, type, data, at = '2026-11-01T12:00:00Z', source = 'one') => ({ schema: 'pdd.metrics.event.v1', id, repo: 'OWNER/Repo', issue, type, at, observedAt: at, source, data });
-const run = (events, scope = { kind: 'cohort', snapshotId: 's' }, observedAt = '2026-12-10T00:00:00Z') => calculateMetrics({events, repo:'owner/repo', scope, timezone:'UTC', observedAt, sources:['one','missing']});
+test('Monday 00:00 local week refresh excludes prior Sunday and keeps Last 24h rolling', () => {
+  // Monday 2026-11-16 02:00:00 PST = 2026-11-16T10:00:00Z
+  const report = calculateAutopilotMetrics({
+    now: '2026-11-16T10:00:00Z',
+    timezone: 'America/Los_Angeles',
+    repos: ['promptdriven/pdd'],
+    openIssues: { 'promptdriven/pdd': 12 },
+    runs: [
+      // Sunday 2026-11-15 22:00 PST (2026-11-16T06:00:00Z): inside Last 24h, outside Week (Mon-Sun)!
+      { repo: 'promptdriven/pdd', issue: 1, at: '2026-11-16T06:00:00Z', status: 'merged', pr: 10 },
+      // Monday 2026-11-16 01:00 PST (2026-11-16T09:00:00Z): inside both Last 24h and Week (Mon-Sun)!
+      { repo: 'promptdriven/pdd', issue: 2, at: '2026-11-16T09:00:00Z', status: 'would-merge', pr: 11 },
+    ],
+  });
 
-test('fixed membership, retries, stale checks, delivery and follow-up retain independent evidence', () => {
-  const rows = [event('sel1',1,'selection',{snapshotId:'s',inScope:true,state:'ready',reasons:[]}),event('sel2',2,'selection',{snapshotId:'s',inScope:true,state:'waiting',reasons:['dependency']}),event('launch',1,'launch',{status:'uncertain',origin:'autopilot'}),event('start',1,'start',{origin:'manual',requiredOutcome:'code'}),event('candidate',1,'milestone',{stage:'implementation-ready',pr:10,head:'new'}),event('old',1,'check',{pr:10,head:'old',verdict:'PASS',reviewer:'checker',evidence:'link',acceptance:'accepted'}),event('delivery',2,'delivery',{pr:10,head:'new',evidence:'link',explicit:true},'2026-11-02T00:00:00Z'),event('report',2,'report',{classification:'failed-fix',humanReported:true,evidence:'complaint'},'2026-11-10T00:00:00Z')];
-  const snapshot = structuredClone(rows);
-  const report = run([...rows, rows[0]]);
-  assert.deepEqual(rows,snapshot);
-  assert.equal(report.issues.length,2);
-  assert.equal(report.issues[0].started,'yes');
-  assert.equal(report.issues[0].validated,'unknown');
-  assert.equal(report.issues[1].started,'unknown');
-  assert.equal(report.issues[1].delivered,'yes');
-  assert.equal(report.issues[1].followUp['7'].status,'no-report-observed');
-  assert.equal(report.issues[1].followUp['30'].status,'unknown');
-  assert.equal(report.stages.delivered.numerator,1);
-  assert.equal(report.stages.delivered.denominator,2);
-  assert.deepEqual(report.coverage.missingSources,['missing']);
+  const [last24h, week] = report.overview.windows;
+  assert.equal(last24h.label, 'Last 24h');
+  assert.equal(last24h.taken, 2);
+  assert.equal(last24h.mwmDisplay, '2 (100.0%)');
+
+  assert.equal(week.label, 'Week (Mon-Sun)');
+  assert.equal(week.taken, 1);
+  assert.equal(week.mwmDisplay, '1 (100.0%)');
 });
 
-test('conflicting event identity is visible and cannot establish a start', () => {
-  const sel = event('sel',1,'selection',{snapshotId:'s',inScope:true,state:'ready'});
-  const start = event('same',1,'start',{origin:'manual'});
-  const report = run([sel,start,{...start,data:{origin:'autopilot'}}]);
-  assert.equal(report.conflicts.length,1);
-  assert.equal(report.issues[0].started,'unknown');
+test('deduplicates retried issues within a window and expands grouped companion issues', () => {
+  const report = calculateAutopilotMetrics({
+    now: '2026-11-17T18:00:00Z',
+    timezone: 'UTC',
+    repos: ['promptdriven/pdd'],
+    openIssues: { 'promptdriven/pdd': 5 },
+    runs: [
+      // Retry 1 failed, Retry 2 merged -> counted once as merged
+      { repo: 'promptdriven/pdd', issue: 40, at: '2026-11-17T10:00:00Z', status: 'ended', pr: null },
+      { repo: 'promptdriven/pdd', issue: 40, at: '2026-11-17T12:00:00Z', status: 'merged', pr: 99, durationMinutes: 15 },
+      // Grouped run solving #41 and #42 together
+      { repo: 'promptdriven/pdd', issue: 41, issues: [41, 42], at: '2026-11-17T14:00:00Z', status: 'would-merge', pr: 100, durationMinutes: 20 },
+    ],
+  });
+
+  const last24h = report.overview.windows[0];
+  assert.equal(last24h.taken, 3);
+  assert.equal(last24h.prCreated, 3);
+  assert.equal(last24h.mwm, 3);
+  assert.equal(last24h.mwmDisplay, '3 (100.0%)');
 });
 
-test('activity uses timezone-local dates and actual starts, zero denominator is null', () => {
-  const rows = [event('wake',1,'launch',{status:'confirmed'},'2026-11-02T01:00:00Z'),event('start',1,'start',{origin:'autopilot'},'2026-11-02T02:00:00Z')];
-  const report = calculateMetrics({events:rows,repo:'owner/repo',scope:{kind:'activity',date:'2026-11-01'},timezone:'America/New_York',observedAt:'2026-11-03T00:00:00Z',sources:['one']});
-  assert.equal(report.activity.starts.count,1);
-  assert.equal(run([], {kind:'cohort',snapshotId:'none'}).stages.started.percentage,null);
+test('formatMetricsText renders Overview, Per-Repo, Stages, Skills, Full, and Recording OFF note without personal targets', () => {
+  const baseInput = {
+    now: '2026-11-17T18:00:00Z',
+    timezone: 'America/Los_Angeles',
+    repos: ['promptdriven/pdd', 'promptdriven/pocket'],
+    openIssues: { 'promptdriven/pdd': 14, 'promptdriven/pocket': 8 },
+    runs: [
+      { repo: 'promptdriven/pdd', issue: 1, skill: 'small-change', at: '2026-11-17T12:00:00Z', status: 'would-merge', pr: 10, durationMinutes: 9, gates: { suite: 'pass', review: 'pass', ci: 'pass' } },
+      { repo: 'promptdriven/pocket', issue: 2, skill: 'bug', at: '2026-11-17T14:00:00Z', status: 'running', pr: null, gates: {} },
+    ],
+  };
+
+  const overviewText = formatMetricsText(calculateAutopilotMetrics(baseInput));
+  assert.match(overviewText, /PDD Autopilot Metrics · Unified \(2 repos\)/);
+  assert.match(overviewText, /Window\s+Open\s+Taken\s+PR Created\s+M\/WM \(Conv%\)/);
+  assert.match(overviewText, /Last 24h\s+22\s+2\s+1\s+1 \(50\.0%\)/);
+  assert.doesNotMatch(overviewText, /Targets|Merged or would-merge\/day/i);
+
+  const reposText = formatMetricsText(calculateAutopilotMetrics({ ...baseInput, byRepo: true }));
+  assert.match(reposText, /promptdriven\/pdd/);
+  assert.match(reposText, /promptdriven\/pocket/);
+  assert.match(reposText, /Total\s+22\s+2\s+1\s+1 \(50\.0%\)/);
+
+  const stagesText = formatMetricsText(calculateAutopilotMetrics({ ...baseInput, view: 'stages' }));
+  assert.match(stagesText, /Taken\s+PR\s+Runtime\s+Vectors\s+Formal\s+Suite\s+Review\s+CI\s+M\/WM\s+Reopen/);
+  assert.match(stagesText, /Non-merged \(1\): 1 running/);
+
+  const skillsText = formatMetricsText(calculateAutopilotMetrics({ ...baseInput, view: 'skills' }));
+  assert.match(skillsText, /small-change\s+1\s+1\s+1 \(100\.0%\)\s+9m/);
+  assert.match(skillsText, /feature\s+0\s+0\s+0 \(n\/a\)\s+n\/a/);
+
+  const pausedText = formatMetricsText(calculateAutopilotMetrics({
+    ...baseInput,
+    view: 'full',
+    recording: { enabled: false },
+  }));
+  assert.match(pausedText, /Recording: OFF/);
+  assert.match(pausedText, /Autopilot Stages/);
+  assert.match(pausedText, /Work Mix/);
+
+  const html = renderMetricsHtml(calculateAutopilotMetrics({ ...baseInput, view: 'full' }));
+  assert.match(html, /<!doctype html>/i);
+  assert.match(html, /1\. Overview/);
+  assert.match(html, /2\. Autopilot Stages/);
+  assert.match(html, /3\. Work Mix by Skill/);
+});
+
+test('normalizeSkill, isMetricsEnabled, and input validation errors', () => {
+  assert.equal(normalizeSkill('pdd-small-change'), 'small-change');
+  assert.equal(normalizeSkill('BUG'), 'bug');
+  assert.equal(normalizeSkill(null, { pathsOnlyD: true }), 'small-change');
+  assert.equal(normalizeSkill(null, { title: 'fix crash on empty config' }), 'bug');
+  assert.equal(normalizeSkill(null, { title: 'add dashboard export' }), 'feature');
+
+  assert.equal(isMetricsEnabled(null), true);
+  const offGlobal = applyMetricsToggle(null, { action: 'off', at: '2026-11-17T00:00:00Z' });
+  assert.equal(isMetricsEnabled(offGlobal, 'acme/api'), false);
+  const onOneRepo = applyMetricsToggle(offGlobal, { action: 'on', repo: 'acme/api', at: '2026-11-17T01:00:00Z' });
+  assert.equal(isMetricsEnabled(onOneRepo, 'acme/api'), true);
+  assert.equal(isMetricsEnabled(onOneRepo, 'acme/other'), false);
+
+  assert.throws(() => calculateAutopilotMetrics({ now: '2026-11-17T00:00:00Z', date: '2026-02-30' }), { code: 'invalid-date' });
+  assert.throws(() => calculateAutopilotMetrics({ now: '2026-11-17T00:00:00Z', timezone: 'Mars/Phobos' }), { code: 'invalid-timezone' });
+  assert.throws(() => calculateAutopilotMetrics({ now: '2026-11-17T00:00:00Z', repoFilter: 'bad-repo' }), { code: 'invalid-repo' });
+  assert.throws(() => calculateAutopilotMetrics({ now: '2026-11-17T00:00:00Z', view: 'unknown' }), { code: 'invalid-view' });
+  assert.throws(() => calculateAutopilotMetrics({ now: 'not-a-timestamp' }), { code: 'invalid-now' });
+  assert.throws(() => applyMetricsToggle(null, { action: 'toggle' }), { code: 'invalid-action' });
+  assert.throws(() => applyMetricsToggle(null, { action: 'off', at: 'not-a-timestamp' }), { code: 'invalid-at' });
+
+  // Omitted now/at default deterministically without reading wall clock
+  assert.equal(calculateAutopilotMetrics({}).generatedAt, '1970-01-01T00:00:00.000Z');
+  assert.equal(applyMetricsToggle(null, { action: 'off' }).updatedAt, '1970-01-01T00:00:00.000Z');
+
+  // Existing canonical repository casing wins when repoFilter uses lowercase
+  const canonicalReport = calculateAutopilotMetrics({
+    now: '2026-11-17T00:00:00Z',
+    repos: ['Serhan-Asad/pdd-autopilot-sandbox'],
+    repoFilter: 'serhan-asad/pdd-autopilot-sandbox',
+  });
+  assert.deepEqual(canonicalReport.repos, ['Serhan-Asad/pdd-autopilot-sandbox']);
+  assert.equal(canonicalReport.repoFilter, 'Serhan-Asad/pdd-autopilot-sandbox');
 });
