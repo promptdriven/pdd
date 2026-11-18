@@ -41,14 +41,24 @@ test('3146 direct-story-test-and-transitive: native runCheck dispatch membership
   });
 });
 
-test('3146 global-config-conservative and git-scope-and-no-target retain complete dispatch',async t=>{
+test('3146 global-config-conservative retains complete dispatch while zero-Story diffs exit 0 with 0 AI calls',async t=>{
   const global=vector('global-config-conservative'),scope=vector('git-scope-and-no-target');
-  for(const path of [...global.given.changed_each,null,'README.md'])await t.test(path??'no changes',async t=>{
-    const setup=affectedFixture(t);if(path)put(setup.repo,path,path==='pdd-source.json'?{include:[]}:path==='pdd-workspace.json'?{allowed_paths:['prompts/','test/','user_stories/','docs/']}:path==='pdd-bindings.json'?{schema_version:'pdd.bindings.v1',modules:[]}:'Unowned note.');
+  for(const path of global.given.changed_each)await t.test(path,async t=>{
+    const setup=affectedFixture(t);put(setup.repo,path,path==='pdd-source.json'?{include:[]}:path==='pdd-workspace.json'?{allowed_paths:['prompts/','test/','user_stories/','docs/']}:{schema_version:'pdd.bindings.v1',modules:[]});
     const fake=await affectedRuntime(t,setup),result=await check(setup,fake);
     assert.equal(result.code,0,result.ports.stderr.text);
     assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),sorted(global.expected.check_tests));
     assert.equal(scope.expected.never_underselect,true);assert.equal(result.output.baseline_report.availability,'available');assert.deepEqual(result.output.baseline_report.warnings,[]);
+  });
+  for(const path of [null,'README.md','test/unit.test.mjs','.github/workflows/ci.yml'])await t.test(path??'no changes',async t=>{
+    const setup=affectedFixture(t);if(path)put(setup.repo,path,path.endsWith('.mjs')?'import test from "node:test";\n':'Unowned non-Story change.\n');
+    const fake=await affectedRuntime(t,setup),result=await check(setup,fake);
+    assert.equal(result.code,0,result.ports.stderr.text);
+    assert.deepEqual(checks(fake),scope.expected.no_working_changes_checks);
+    assert.equal(result.clock.gh.length,0,'zero-Story --affected makes zero auth calls');
+    assert.deepEqual(result.output.rows,[]);
+    assert.deepEqual(result.output.check_selection,{mode:'affected',tests:[],baseline_tests:setup.tests});
+    assert.equal(result.output.baseline_report.availability,'available');assert.deepEqual(result.output.baseline_report.warnings,[]);
   });
 });
 
@@ -109,7 +119,9 @@ test('3146 clear-and-target-prerequisites separates omitted problems and preserv
   const data=vector('clear-and-target-prerequisites');
   for(const missing of ['A','C','fallback'])await t.test(missing,async t=>{
     const setup=affectedFixture(t),path=join(setup.repo,`prompts/${missing==='fallback'?'C':missing}.prompt.md`);
-    writeFileSync(path,readFileSync(path,'utf8').split('<details>')[0]);commit(setup.repo);if(missing!=='fallback')setup.change('prompts/A.prompt.md');
+    writeFileSync(path,readFileSync(path,'utf8').split('<details>')[0]);commit(setup.repo);
+    if(missing==='fallback')put(setup.repo,'pdd-bindings.json',{schema_version:'pdd.bindings.v1',modules:[]});
+    else setup.change('prompts/A.prompt.md');
     const fake=await affectedRuntime(t,setup),result=await check(setup,fake,{options:{'--affected':true,'--cache-clear':true,'--json':true}});
     if(missing==='C'){assert.equal(result.code,0,result.ports.stderr.text);assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),sorted(data.expected.cache_clear_scope));}
     else {assert.notEqual(result.code,0);assert.equal(checks(fake).length,0);if(missing==='fallback'){assert.equal(result.output.baseline_report.availability,'available');assert.deepEqual(result.output.baseline_report.warnings,[]);}}
@@ -229,15 +241,24 @@ test('3146 staged-unstaged-untracked-saved-base: real untracked closure and comm
   });
 });
 
-test('3146 git-scope-and-no-target: unavailable Git and rename coverage remain conservative at dispatch',async t=>{
+test('3146 git-scope-and-no-target: unavailable Git and rename coverage remain conservative while feature-branch merge-base and native unit tests select accurately',async t=>{
   const data=vector('git-scope-and-no-target');
-  for(const variant of ['Git unavailable','rename deletion/addition','committed no-run changes with HEAD comparison'])await t.test(variant,async t=>{
+  for(const variant of ['Git unavailable','rename deletion/addition'])await t.test(variant,async t=>{
     const setup=affectedFixture(t);let extra={};
     if(variant==='Git unavailable'){setup.change('prompts/A.prompt.md');extra={checkPlanPorts:{git(){throw Error('Controlled Git scope unavailable');}}};}
     if(variant==='rename deletion/addition'){put(setup.repo,'src/unknown.mjs','export const x=1;');commit(setup.repo);git(setup.repo,'mv','src/unknown.mjs','src/renamed.mjs');}
-    if(variant.startsWith('committed')){setup.change('prompts/A.prompt.md');commit(setup.repo);}
     const fake=await affectedRuntime(t,setup),result=await check(setup,fake,{extra});assert.equal(result.code,0,result.ports.stderr.text);
     assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),sorted(data.expected.no_established_target_checks));
+  });
+  await t.test('committed feature-branch changes + native unit test select only Story A via merge-base',async t=>{
+    const setup=affectedFixture(t);
+    git(setup.repo,'checkout','-qb','feat/story-a');
+    setup.change('prompts/A.prompt.md');
+    put(setup.repo,'test/a-unit.test.mjs','import test from "node:test";\n');
+    commit(setup.repo);
+    const fake=await affectedRuntime(t,setup),result=await check(setup,fake);
+    assert.equal(result.code,0,result.ports.stderr.text);
+    assert.deepEqual(sorted(checks(fake).map(row=>row.request.scenario)),['test/runtime/A.json','test/runtime/A.recorded.json']);
   });
 });
 

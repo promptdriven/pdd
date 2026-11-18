@@ -1,5 +1,6 @@
 // Prompt: prompts/cli/runtime-seam.prompt.md
-import { readFileSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -315,7 +316,86 @@ function resolveWorkflowBaseSha({ root, env = process.env, allRunsPort } = {}) {
       return false;
     }
   });
-  return matching.length === 1 && /^[a-f0-9]{40}$/.test(matching[0].baseSha ?? '') ? matching[0].baseSha : null;
+  if (matching.length === 1 && /^[a-f0-9]{40}$/.test(matching[0].baseSha ?? '')) return matching[0].baseSha;
+  if (/^[a-f0-9]{40}$/.test(env?.PDD_BASE_SHA ?? '')) return env.PDD_BASE_SHA;
+  if (allRunsPort) return null;
+  const gitOut = args => {
+    const res = spawnSync('git', args, { cwd: realRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return res.status === 0 ? res.stdout.trim() : '';
+  };
+  const branch = gitOut(['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  if (branch === 'main' || branch === 'master') return null;
+  const originHead = gitOut(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).replace(/^refs\/remotes\//, '');
+  for (const ref of [...(originHead ? [originHead] : []), 'origin/main', 'origin/master', 'main', 'master']) {
+    if (ref === branch) continue;
+    const sha = gitOut(['merge-base', ref, 'HEAD']);
+    if (/^[a-f0-9]{40}$/.test(sha)) return sha;
+  }
+  return null;
+}
+
+const AFFECTED_DISCLAIMER = 'Affected checks only; this is not a full workflow pass. Required full-pass gates still apply.';
+const AFFECTED_ALLOWED_OPTIONS = new Set([
+  '--affected',
+  '--json',
+  '--details',
+  '--timeout',
+  '--max-calls',
+  '--max-total-calls',
+  '--no-restart-replacement',
+  '--cache-clear',
+]);
+
+function validPositiveOption(value, max) {
+  if (value === undefined) return true;
+  if (typeof value === 'boolean' || (typeof value === 'string' && !/^\d+$/.test(value.trim()))) return false;
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n >= 1 && n <= max;
+}
+
+function createAffectedGitPort({ getBase, headerPrompts, isTestOwnedPath }) {
+  const execGit = (root, args) => {
+    const res = spawnSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 512 * 1024 * 1024 });
+    if (res.status !== 0 && !(args.includes('--no-index') && res.status === 1)) throw Error('comparison unavailable');
+    return res.stdout;
+  };
+  const isUnownedNonStoryAux = (root, base, path) => {
+    if (!((isTestOwnedPath(path) && !path.endsWith('.json')) || /^\.github\//.test(path))) return false;
+    if (existsSync(join(root, 'pdd-bindings.json'))) {
+      try {
+        const doc = JSON.parse(readFileSync(join(root, 'pdd-bindings.json'), 'utf8'));
+        if (!doc || doc.schema_version !== 'pdd.bindings.v1' || !Array.isArray(doc.modules)) return false;
+        if (doc.modules.some(item => item?.module === path)) return false;
+      } catch {
+        return false;
+      }
+    }
+    try {
+      const full = join(root, path);
+      if (existsSync(full)) {
+        if (lstatSync(full).isSymbolicLink()) return false;
+        if (headerPrompts(readFileSync(full, 'utf8')).length > 0) return false;
+      }
+      const tree = execGit(root, ['ls-tree', '-z', base, '--', path]);
+      if (tree) {
+        if (tree.startsWith('120000 ')) return false;
+        if (headerPrompts(execGit(root, ['show', `${base}:${path}`])).length > 0) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return (root, args) => {
+    const out = execGit(root, args);
+    if (!((args[0] === 'diff' && args.includes('--name-only')) || args[0] === 'ls-files')) return out;
+    const sepAt = args.indexOf('--');
+    const base = args[0] === 'diff' && sepAt > 0 ? args[sepAt - 1] : getBase(root);
+    return out
+      .split('\0')
+      .filter(path => !path || !isUnownedNonStoryAux(root, base, path))
+      .join('\0');
+  };
 }
 
 export function isStoryPath(...args) {
@@ -578,20 +658,156 @@ export async function runCheck(input = {}, ports = {}) {
   const client = input?.client
     ? { ...input.client, version: input.client.version ?? clientVersion() }
     : { version: clientVersion() };
+  const options = input?.options ?? {};
+  const words = input?.words ?? [];
+  const resolveBase = (root, runEnv = env) =>
+    resolveWorkflowBaseSha({ root, env: runEnv, allRunsPort: ports.allRuns });
+  const getEffectiveBase = root => {
+    const raw = input?.workflow !== undefined
+      ? input.workflow?.base_sha
+      : ports.workflowBaseSha !== undefined && ports.workflowBaseSha !== null
+        ? (typeof ports.workflowBaseSha === 'function' ? ports.workflowBaseSha({ root, env }) : ports.workflowBaseSha)
+        : resolveBase(root, env);
+    return /^[a-f0-9]{40}$/.test(raw ?? '') ? raw : 'HEAD';
+  };
+  const affectedMode =
+    options['--affected'] === true &&
+    words.length === 0 &&
+    Object.keys(options).every(key => AFFECTED_ALLOWED_OPTIONS.has(key)) &&
+    validPositiveOption(options['--timeout'], 120) &&
+    validPositiveOption(options['--max-calls'], 1000) &&
+    validPositiveOption(options['--max-total-calls'], 999999) &&
+    (options['--no-restart-replacement'] === undefined || options['--no-restart-replacement'] === true);
+  const defaultAffectedGit =
+    affectedMode && !ports.checkPlanPorts?.git
+      ? createAffectedGitPort({
+          getBase: getEffectiveBase,
+          headerPrompts: ports.headerPrompts ?? headerPrompts,
+          isTestOwnedPath: ports.isTestOwnedPath ?? isTestOwnedPath,
+        })
+      : null;
+  if (affectedMode && ports.captureSource === undefined) {
+    try {
+      const cwd = input?.cwd ?? process.cwd();
+      const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      if (top.status === 0 && top.stdout.trim()) {
+        const root = realpathSync(top.stdout.trim());
+        const base = getEffectiveBase(root);
+        const gitPort = ports.checkPlanPorts?.git ?? defaultAffectedGit;
+        gitPort(root, ['rev-parse', `${base}^{tree}`]);
+        const found = findTests({ root, excludeFixtureProjects: true }, ports);
+        if (found.tests.length > 0 && !found.tests.some(t => t.error)) {
+          const sel = seamSelectionPorts(ports);
+          const plan = runtimeBuildCheckPlan(
+            {
+              root,
+              found,
+              selected: [...found.tests].sort((a, b) => a.path.localeCompare(b.path)),
+              rows: [],
+              full: true,
+              base,
+              affected: true,
+              allowMissingInterfaces: true,
+              maxCalls: options['--max-calls'] !== undefined ? Number(options['--max-calls']) : null,
+              maxTotalCalls: options['--max-total-calls'] !== undefined ? Number(options['--max-total-calls']) : null,
+              singleAttempt: env.PDD_CHECK_SINGLE_ATTEMPT === '1' || options['--no-restart-replacement'] === true,
+            },
+            {
+              headerPrompts: ports.headerPrompts ?? headerPrompts,
+              capture: captureSource,
+              isStoryPath: sel.isStoryPath,
+              hasAcceptance: sel.hasAcceptance,
+              matchTests: sel.matchTests,
+              orphanSummary: sel.orphanSummary,
+              ...ports.checkPlanPorts,
+              git: gitPort,
+            },
+          );
+          if (
+            Array.isArray(plan.changed_paths) &&
+            plan.stories.length > 0 &&
+            plan.stories.every(
+              story =>
+                story.affected_paths.length === 0 &&
+                (story.reason === 'no changed paths; conservative selection' ||
+                  story.reason === 'no affected Story established; conservative selection'),
+            )
+          ) {
+            if (options['--cache-clear'] === true) {
+              try { unlinkSync(join(root, '.pdd/cache/test/stories.json')); } catch {}
+            }
+            const storyReason = plan.changed_paths.length
+              ? 'unrelated to known changes; omitted by --affected'
+              : 'no changed paths; omitted by --affected';
+            const zeroPlan = {
+              ...plan,
+              stories: plan.stories.map(story => ({ ...story, role: 'baseline', reason: storyReason })),
+              calls: { estimated: 0, maximum: 0, check_requests: 0, lint_model_calls: 0 },
+              call_policy: { ...plan.call_policy, per_request_max_calls: [], unbounded_maximum: 0, planned_maximum: 0 },
+            };
+            const allTests = [...new Set(zeroPlan.stories.flatMap(story => story.tests))];
+            const sortedTests = [...allTests].sort();
+            const checkSelection = { mode: 'affected', tests: [], baseline_tests: allTests };
+            const zeroBaseline = baselineReport({ plan: zeroPlan, observations: [], availability: 'available', warnings: [] });
+            const checkScope = {
+              target: { tests: [], passed: [], failures: [], unresolved: [], state: 'none' },
+              baseline: {
+                tests: sortedTests,
+                passed: [],
+                failures: [],
+                unresolved: sortedTests,
+                state: sortedTests.length ? 'not_run' : 'none',
+              },
+              guidance: `0 affected Stories selected. Omitted baseline work: ${sortedTests.join(', ')}. Required full-pass gates still apply.`,
+            };
+            const outStream = ports.stdout ?? process.stdout;
+            const errStream = ports.stderr ?? process.stderr;
+            errStream.write('Check plan: 0 affected Stories; 0 Check requests; 0 AI calls.\n');
+            if (options['--json'] === true) {
+              outStream.write(
+                `${JSON.stringify({
+                  batch: null,
+                  repo: root,
+                  source_sha256: null,
+                  exit_code: 0,
+                  summary_line: '0 affected Stories. 0 AI calls.',
+                  draft: false,
+                  token_usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, cached_input_share: null, complete: true },
+                  rows: [],
+                  warnings: [AFFECTED_DISCLAIMER],
+                  check_plan: zeroPlan,
+                  check_scope: checkScope,
+                  check_selection: checkSelection,
+                  baseline_report: zeroBaseline,
+                })}\n`,
+              );
+            } else {
+              outStream.write(`0 affected Stories. 0 AI calls.\n${AFFECTED_DISCLAIMER}\n`);
+            }
+            return 0;
+          }
+        }
+      }
+    } catch {
+      /* Conservative fallback runs through runtimeRunCheck when local Git or discovery fails. */
+    }
+  }
+  const portsWithAffectedGit = defaultAffectedGit
+    ? { ...ports, checkPlanPorts: { ...ports.checkPlanPorts, git: defaultAffectedGit } }
+    : ports;
   return runtimeRunCheck(
     {
       ...input,
       client,
     },
     seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+      withPortDefaults(withEligibilityDefault(portsWithAffectedGit, readEvidenceEligibility), {
         headerPrompts,
         isTestOwnedPath,
         promptClaims,
         resolveOwners,
         allRuns,
-        workflowBaseSha: ({ root, env: runEnv }) =>
-          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
+        workflowBaseSha: ({ root, env: runEnv }) => resolveBase(root, runEnv ?? env),
         assessNativeEvidence,
         usableResult,
         resultLines,

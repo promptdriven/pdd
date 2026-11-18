@@ -296,7 +296,7 @@ test('S14 #3260 CI queued with no job for 20 minutes: a service wait (no strike,
   const state = { runs: [{ id: 901, status: 'queued', head_sha: built.head, created_at: new Date(w.now()).toISOString() }] };
   actions(w, state);
   const alerts = [], tick = () => w.tick({ alert: async a => alerts.push(a) });
-  await tick(); w.review(17, 'PASS'); w.suite(17, 0);
+  await tick(); w.review(17, 'PASS'); if (w.job(17, 'suite')) w.suite(17, 0);
   for (let i = 0; i < 3; i++) { w.advance(10 * MIN); await tick(); }
   assert.equal(alerts.filter(a => /GitHub Actions/.test(a.text)).length, 1, 'one alert');
   const [alert] = alerts.filter(a => /GitHub Actions/.test(a.text));
@@ -327,7 +327,7 @@ test('S15 #3260 a check that fails with a billing message is no red and no repai
   const state = { runs: [], annotations: [{ message: "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings." }] };
   actions(w, state);
   const alerts = [], tick = () => w.tick({ alert: async a => alerts.push(a) });
-  await tick(); w.review(17, 'PASS'); w.suite(17, 0); await tick(); await tick();
+  await tick(); w.review(17, 'PASS'); if (w.job(17, 'suite')) w.suite(17, 0); await tick(); await tick();
   assert.equal(w.job(17, 'repair'), undefined, 'a billing failure is no red');
   assert.equal(alerts.length, 1); assert.match(alerts[0].text, /did not start a run in this repository: GitHub said "The job was not started because recent account payments have failed/);
   assert.match(alerts[0].text, /Settings → Billing → Actions/);

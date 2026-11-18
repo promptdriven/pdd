@@ -1,8 +1,8 @@
 import { checkMachine, withCheckLifetime } from './helpers/check-machine.mjs';
-import { calculateCheckCapacity } from '../src/test-suite-queue.mjs';
+import { calculateCheckCapacity, readSuiteProgress } from '../src/test-suite-queue.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -152,7 +152,7 @@ test('--timeout 0 runs a suite with no time limit (a caller that watches it, suc
 });
 
 test('native CLI preserves cwd, explicit command variables, closed stdin, stdout, stderr and exit code', async t => {
-  const f = fixture(t), cwd = join(f.root,'native repo'); mkdirSync(cwd);
+  const f = fixture(t), cwd = join(realpathSync(f.root),'native repo'); mkdirSync(cwd);
   const program = join(f.root,'fake-suite.cjs'), output = join(f.root,'native.json');
   writeFileSync(program, `const fs=require('node:fs'); fs.writeFileSync(process.env.SUITE_OBSERVATION, JSON.stringify({cwd:process.cwd(),value:process.env.SUITE_VALUE,stdin:fs.readFileSync(0,'utf8')})); console.log('suite-out'); console.error('suite-err'); process.exitCode=7;`);
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
@@ -245,4 +245,47 @@ for (const damage of ['malformed','unreadable']) test(`workflow JSON status expo
   assert.ok(item.suite.reason.length>0); assert.match(item.words,/queue.*unavailable/i);
   assert.ok(item.words.includes(item.suite.reason),'status retains the queue read cause');
   assert.deepEqual(readFileSync(join(run.runDir,'status.json')),before);
+});
+
+test('3473: SIGTERM while waiting for a check slot marks the waiting receipt finished and completed with exit 143', async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-suite-3473-'))), queue = join(root, 'queue');
+  mkdirSync(queue, { recursive: true });
+  writeFileSync(join(queue, 'capacity.json'), JSON.stringify(withCheckLifetime(calculateCheckCapacity({ checks: 1 }, checkMachine({ taskset: null }).ports))));
+  const cwd1 = join(root, 'holder'), cwd2 = join(root, 'waiter'), home = join(root, 'home');
+  mkdirSync(cwd1, { recursive: true }); mkdirSync(cwd2, { recursive: true }); mkdirSync(home, { recursive: true });
+  const env = { ...process.env, HOME: home, PDD_SUITE_QUEUE: queue, PDD_VM_SUITE_LOCK: undefined };
+
+  const holder = spawn(process.execPath, [resolve('bin/pdd.mjs'), 'workflow', 'suite', '--command', 'touch started; while [ ! -f release ]; do sleep 0.05; done'], { cwd: cwd1, env });
+  const holderDone = new Promise(done => holder.once('close', done));
+  let waiter = null, waiterDone = null;
+  t.after(async () => {
+    try { writeFileSync(join(cwd1, 'release'), ''); } catch {}
+    try { holder.kill('SIGTERM'); } catch {}
+    try { waiter?.kill('SIGTERM'); } catch {}
+    await Promise.allSettled([holderDone, waiterDone].filter(Boolean));
+    rmSync(root, { recursive: true, force: true });
+  });
+  await until(() => existsSync(join(cwd1, 'started')), 'holder suite owns the single check slot');
+
+  waiter = spawn(process.execPath, [resolve('bin/pdd.mjs'), 'workflow', 'suite', '--command', 'echo should-not-run'], { cwd: cwd2, env });
+  let waiterOut = '';
+  waiter.stdout.on('data', b => { waiterOut += b; });
+  waiter.stderr.on('data', b => { waiterOut += b; });
+  waiterDone = new Promise(done => waiter.once('close', done));
+  await until(() => waiterOut.includes('waiting for a check slot (position 1)'), 'waiter is queued in waiting loop');
+
+  waiter.kill('SIGTERM');
+  const waiterExit = await waiterDone;
+  assert.equal(waiterExit, 143, waiterOut);
+
+  const progress = readSuiteProgress({ cwd: cwd2, env }, checkMachine({ taskset: null }).ports);
+  assert.equal(progress.state, 'finished');
+  assert.equal(progress.outcome, 'completed');
+  assert.equal(progress.exitCode, 143);
+  assert.equal(progress.signal, 'SIGTERM');
+  assert.equal(progress.reason, 'Test suite interrupted (SIGTERM).');
+  assert.ok(Number.isFinite(progress.finishedAt));
+
+  writeFileSync(join(cwd1, 'release'), '');
+  assert.equal(await holderDone, 0);
 });

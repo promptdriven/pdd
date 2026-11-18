@@ -439,12 +439,7 @@
           "test/runtime/B.json",
           "test/runtime/C.json"
         ],
-        "no_working_changes_checks": [
-          "test/runtime/A.json",
-          "test/runtime/A.recorded.json",
-          "test/runtime/B.json",
-          "test/runtime/C.json"
-        ]
+        "no_working_changes_checks": []
       }
     },
     {
