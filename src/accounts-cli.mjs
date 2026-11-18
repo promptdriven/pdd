@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 1369a68c44af808fdbe8d24b4ab1a9fc8854c00a32d07d1b793d66109f59a033).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: fd6d98bee7a2f50561ffeb373d5b8b7439ef8b651bdad5438c04574aca77b4a2).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -31,6 +31,7 @@ import {
   reportCloudAccountUsage,
   restoreLocalCodexGatewayConfig,
   saveActiveLeaseMetadata,
+  stopCodexAppServerDaemon,
   writeCloudAccountsState,
 } from './login-pool.mjs';
 import { knownSecretValues, redactSecrets, rememberSecrets } from './secret-redaction.mjs';
@@ -1088,11 +1089,20 @@ function applyMaterializedLease(leaseReply, { env }, ports = {}) {
     const prevManagedGateway = Boolean(prevCodex?.managed_codex_gateway);
     const prevModelProvider = prevCodex?.previous_codex_model_provider ?? null;
     if (lease?.delivery_mode === 'gateway_grant') {
-      const mat = materializeLocalCodexAuth(lease, {
+      const leasePlanType = lease.plan_type ?? leaseReply?.account?.plan_type ?? leaseReply?.account?.plan;
+      const leaseInput = lease.plan_type === undefined && typeof leasePlanType === 'string' && leasePlanType.trim()
+        ? { ...lease, plan_type: leasePlanType }
+        : lease;
+      const mat = materializeLocalCodexAuth(leaseInput, {
         env,
         previousManagedCodexGateway: prevManagedGateway,
         previousCodexModelProvider: prevModelProvider,
       }, ports);
+      stopCodexAppServerDaemon(mat.codexHome, {
+        env,
+        fs: ports.fs ?? nativeFs,
+        spawnSync: ports.spawnSync,
+      });
       saveActiveLeaseMetadata(leaseReply, {
         env,
         materializedLocal: true,
@@ -1103,11 +1113,16 @@ function applyMaterializedLease(leaseReply, { env }, ports = {}) {
       return;
     }
     if (object(lease?.codex_auth_json)) {
-      materializeLocalCodexAuth(lease.codex_auth_json, {
+      const mat = materializeLocalCodexAuth(lease.codex_auth_json, {
         env,
         previousManagedCodexGateway: prevManagedGateway,
         previousCodexModelProvider: prevModelProvider,
       }, ports);
+      stopCodexAppServerDaemon(mat.codexHome, {
+        env,
+        fs: ports.fs ?? nativeFs,
+        spawnSync: ports.spawnSync,
+      });
       saveActiveLeaseMetadata(leaseReply, {
         env,
         materializedLocal: true,
@@ -2088,6 +2103,22 @@ async function enrollSingleIteration(mode, {
       const scrubbedSource = mode === 'import' && importSourcePath && leaseMaterialized
         ? scrubImportedCodexSourceRefreshToken(fs, importSourcePath)
         : false;
+      if (scrubbedSource) {
+        const sourceCodexHome = dirname(importSourcePath);
+        const managedHome = pddManagedCodexHome(env);
+        let sameHome = resolve(sourceCodexHome) === resolve(managedHome);
+        if (!sameHome) {
+          try {
+            const realFn = fs.realpathSync?.native ?? fs.realpathSync;
+            if (typeof realFn === 'function') {
+              sameHome = realFn.call(fs, sourceCodexHome) === realFn.call(fs, managedHome);
+            }
+          } catch {}
+        }
+        if (!sameHome) {
+          stopCodexAppServerDaemon(sourceCodexHome, { env, fs, spawnSync: ports.spawnSync });
+        }
+      }
 
       const finalLabel = acc.label ?? candidateLabel;
       if (loopState) {

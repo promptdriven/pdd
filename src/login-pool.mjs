@@ -1,4 +1,5 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: b7884ca79221cca835d3724b7625f770d56b592cf6b3b0a741210d44a2af88b8).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 43918b564c2652002b96a33c6802f4da6b6a0e8d11e72ae70e8bc92fbf542b3f).
+import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -37,6 +38,7 @@ const CODEX_GATEWAY_OVERLAY_LINKS = ['skills', 'memories', 'sessions', 'rules'];
 const MANAGED_CODEX_HOME_LINKS = ['skills', 'memories', 'sessions', 'archived_sessions', 'history.jsonl', 'session_index.jsonl', 'rules'];
 const CODEX_GATEWAY_PROVIDER_ID = 'pdd_codex_gateway';
 const INLINE_TOML_TABLE_KEYS = new Set(['http_headers', 'env_http_headers', 'filters', 'set']);
+const MANAGED_CODEX_GATEWAY_RE = /\/v1\/(?:accounts\/)?codex-gateway(?:\/|$)/i;
 const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/;
 const REAUTH_CODE_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked)\b/i;
 const REAUTH_TEXT_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked)\b|(?:status|http|error)[:=\s]+401\b|\b401\s+unauthorized\b/i;
@@ -723,9 +725,49 @@ export function localClaudePaths(env = process.env) {
   };
 }
 
+function isManagedCodexGatewayUrl(value) {
+  return typeof value === 'string' && MANAGED_CODEX_GATEWAY_RE.test(value.trim());
+}
+
+export function buildSyntheticGatewayIdToken({ planType } = {}) {
+  const normalizedPlanType = typeof planType === 'string' && /^[A-Za-z0-9._-]{1,32}$/.test(planType.trim())
+    ? planType.trim().toLowerCase()
+    : '';
+  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' }), 'utf8').toString('base64url');
+  const payload = Buffer.from(JSON.stringify({
+    exp: 4102444800,
+    iat: 1700000000,
+    'https://api.openai.com/auth': {
+      chatgpt_account_id: 'acct_pdd_gateway',
+      chatgpt_plan_type: normalizedPlanType || 'pro',
+      chatgpt_user_id: 'user_pdd_gateway',
+    },
+  }), 'utf8').toString('base64url');
+  return `${header}.${payload}.sig`;
+}
+
+export function stopCodexAppServerDaemon(codexHome, { env = process.env, fs = nativeFs, spawnSync } = {}) {
+  if (typeof codexHome !== 'string' || !codexHome.trim()) return false;
+  if (fs !== nativeFs && typeof spawnSync !== 'function') return false;
+  const runner = typeof spawnSync === 'function' ? spawnSync : nativeSpawnSync;
+  try {
+    runner('codex', ['app-server', 'daemon', 'stop'], {
+      env: { ...env, CODEX_HOME: codexHome },
+      stdio: 'ignore',
+      timeout: 2500,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function stripGatewayFromTomlObject(configData, previousModelProvider = null) {
   const hasGatewaySection = isTomlTable(configData?.model_providers) && Object.hasOwn(configData.model_providers, CODEX_GATEWAY_PROVIDER_ID);
   const hasGatewayProvider = configData?.model_provider === CODEX_GATEWAY_PROVIDER_ID;
+  const hasGatewayOpenaiBaseUrl = isManagedCodexGatewayUrl(configData?.openai_base_url);
+  const hasGatewayChatgptBaseUrl = isManagedCodexGatewayUrl(configData?.chatgpt_base_url);
+  const wasGatewayManaged = hasGatewaySection || hasGatewayProvider || hasGatewayOpenaiBaseUrl || hasGatewayChatgptBaseUrl;
   const nextData = { ...(isTomlTable(configData) ? configData : {}) };
   if (isTomlTable(nextData.model_providers)) {
     const nextProviders = { ...nextData.model_providers };
@@ -733,14 +775,18 @@ function stripGatewayFromTomlObject(configData, previousModelProvider = null) {
     if (Object.keys(nextProviders).length > 0) nextData.model_providers = nextProviders;
     else delete nextData.model_providers;
   }
+  if (hasGatewayOpenaiBaseUrl) delete nextData.openai_base_url;
+  if (hasGatewayChatgptBaseUrl) delete nextData.chatgpt_base_url;
+  const priorProvider = typeof previousModelProvider === 'string' && previousModelProvider.trim() && previousModelProvider.trim() !== CODEX_GATEWAY_PROVIDER_ID
+    ? previousModelProvider.trim()
+    : null;
   if (nextData.model_provider === CODEX_GATEWAY_PROVIDER_ID) {
-    if (typeof previousModelProvider === 'string' && previousModelProvider.trim() && previousModelProvider.trim() !== CODEX_GATEWAY_PROVIDER_ID) {
-      nextData.model_provider = previousModelProvider.trim();
-    } else {
-      delete nextData.model_provider;
-    }
+    if (priorProvider) nextData.model_provider = priorProvider;
+    else delete nextData.model_provider;
+  } else if (wasGatewayManaged && !nextData.model_provider && priorProvider) {
+    nextData.model_provider = priorProvider;
   }
-  return { changed: hasGatewaySection || hasGatewayProvider, nextData };
+  return { changed: wasGatewayManaged, nextData };
 }
 
 function syncManagedCodexHomeLinks(fs, sourceHome, managedHome) {
@@ -800,8 +846,10 @@ export function restoreLocalCodexGatewayConfig({ env = process.env, previousMode
 
   // Clean up any legacy PDD-managed gateway section in user ~/.codex/config.toml without touching ~/.codex/auth.json.
   const { exists: hasUserConfig, data: userConfigData } = readCodexTomlObject(fs, userConfigPath);
+  let cleanUserData = {};
   if (hasUserConfig) {
     const strippedUser = stripGatewayFromTomlObject(userConfigData, previousModelProvider);
+    cleanUserData = strippedUser.nextData;
     if (strippedUser.changed) {
       const nextUserText = serializeTomlConfig(strippedUser.nextData, userConfigPath);
       writeAtomicPrivate(fs, userConfigPath, nextUserText);
@@ -812,12 +860,20 @@ export function restoreLocalCodexGatewayConfig({ env = process.env, previousMode
   // Update managed PDD CODEX_HOME/config.toml if present.
   const { exists: hasManagedConfig, data: managedConfigData } = readCodexTomlObject(fs, configPath);
   if (hasManagedConfig) {
+    const hadManagedGatewayOpenai = isManagedCodexGatewayUrl(managedConfigData?.openai_base_url);
+    const hadManagedGatewayChatgpt = isManagedCodexGatewayUrl(managedConfigData?.chatgpt_base_url);
     const strippedManaged = stripGatewayFromTomlObject(managedConfigData, previousModelProvider);
     if (strippedManaged.changed) {
       const nextManagedData = {
         ...strippedManaged.nextData,
         cli_auth_credentials_store: 'file',
       };
+      if (hadManagedGatewayOpenai && typeof cleanUserData.openai_base_url === 'string' && cleanUserData.openai_base_url.trim()) {
+        nextManagedData.openai_base_url = cleanUserData.openai_base_url;
+      }
+      if (hadManagedGatewayChatgpt && typeof cleanUserData.chatgpt_base_url === 'string' && cleanUserData.chatgpt_base_url.trim()) {
+        nextManagedData.chatgpt_base_url = cleanUserData.chatgpt_base_url;
+      }
       const nextManagedText = serializeTomlConfig(nextManagedData, configPath);
       writeAtomicPrivate(fs, configPath, nextManagedText);
       restoredConfig = true;
@@ -835,6 +891,10 @@ export function restoreLocalCodexGatewayConfig({ env = process.env, previousMode
         removedAuth = true;
       }
     } catch {}
+  }
+
+  if (restoredConfig || removedAuth) {
+    stopCodexAppServerDaemon(managedHome, { env, fs, spawnSync: ports.spawnSync });
   }
 
   return { codexHome: managedHome, configPath, authPath, userConfigPath, restoredConfig, removedAuth };
@@ -927,16 +987,25 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
     const nextConfig = {
       ...cleanedUser.nextData,
       cli_auth_credentials_store: 'file',
-      model_provider: CODEX_GATEWAY_PROVIDER_ID,
+      openai_base_url: gatewayUrl,
+      chatgpt_base_url: gatewayUrl,
       model_providers: {
         ...prevProviders,
         [CODEX_GATEWAY_PROVIDER_ID]: gatewayProviderBlock,
       },
     };
+    delete nextConfig.model_provider;
     const serializedConfig = serializeTomlConfig(nextConfig, configPath);
     const gatewayAuth = {
-      auth_mode: 'apikey',
-      OPENAI_API_KEY: grantToken,
+      auth_mode: 'chatgpt',
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: buildSyntheticGatewayIdToken({ planType: authOrLease?.plan_type ?? authOrLease?.plan }),
+        access_token: grantToken,
+        refresh_token: '',
+        account_id: 'acct_pdd_gateway',
+      },
+      last_refresh: new Date((ports.now ?? Date.now)()).toISOString(),
     };
     const authText = `${JSON.stringify(gatewayAuth, null, 2)}\n`;
     let existingConfigText = null;
