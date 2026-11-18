@@ -51,7 +51,7 @@ internal multi-harness fallback helpers:
 ## Domain decisions
 
 - **Isolated PDD-managed Codex home (`pddManagedCodexHome`):** Local Codex lease materialization writes exclusively inside `${PDD_STATE_DIR || join(XDG_STATE_HOME, "pdd") || ~/.local/state/pdd}/codex-home` (mode `0700`), never reading from or writing to `~/.codex/auth.json`. Plain `codex logout` or `codex login` against `~/.codex` cannot revoke PDD Cloud tokens or mutate credentials under running `codex app-server` processes, and legacy `[model_providers.pdd_codex_gateway]` entries in `~/.codex/config.toml` are cleaned up safely without touching `~/.codex/auth.json`.
-- **Zero-plaintext local Codex keys (`gateway_grant` + native `"openai"` provider routing):** Both owner and shared Codex leases materialize `gateway_grant` passes (`delivery_mode: "gateway_grant"`) with zero real OpenAI `access_token`, `id_token` or `refresh_token` written to disk. Step overlays route Codex through `pdd_codex_gateway` using `PDD_CODEX_GATEWAY_GRANT` with zero `auth.json` inside `/tmp/pdd-cx-*`, while `pddManagedCodexHome(env)` keeps Codex on its native `"openai"` provider (`openai_base_url` and `chatgpt_base_url` pointed at the gateway, no top-level `model_provider`, and `[model_providers.pdd_codex_gateway]` retained solely as a compatibility alias for older saved sessions) alongside a native `chatgpt`-mode `auth.json` (`tokens.access_token` set to the short-lived revocable `pddg_*` grant, `tokens.refresh_token: ""`, `tokens.account_id: "acct_pdd_gateway"`, and a deterministic unsigned `id_token` from `buildSyntheticGatewayIdToken`). Keeping local sessions on native `"openai"` with `chatgpt` auth lets `codex resume` and `codex fork` resume sessions saved under `"openai"` (as well as older `"pdd_codex_gateway"` sessions) without sending `pddg_*` grants to `api.openai.com`, and lets `codex app-server` `account/rateLimits/read` (`/status`) read usage windows through the gateway. When the grant token embeds its lease ID (`pddg_lse_<hex>_<secret>`), normalize `codex_gateway_url` by stripping any trailing `/lse_<id>` segment to the constant `<origin>/v1/codex-gateway` base URL and omit static `http_headers` in `managedCodexConfigPath(env)` so `config.toml` stays constant across syncs and account switches. Whenever local Codex credentials in a `CODEX_HOME` are mutated or cleaned up, `stopCodexAppServerDaemon` stops any stale background `app-server-daemon` caching prior OAuth state in memory. Preserve backward compatibility for legacy non-`pddg_lse_` `pddg_*` grants and legacy `direct_stripped` responses (`tokens.refresh_token: ""` so only PDD Cloud refreshes single-use OpenAI refresh tokens).
+- **Zero-plaintext local Codex keys (`gateway_grant` + native `"openai"` provider routing):** Both owner and shared Codex leases materialize `gateway_grant` passes (`delivery_mode: "gateway_grant"`) with zero real OpenAI `access_token`, `id_token` or `refresh_token` written to disk. Both `pddManagedCodexHome(env)` and `createCodexStepOverlay` (for `pddg_lse_*` grants, with `prepareCloudStepExecution` forwarding account `plan_type` / `plan`) keep Codex on its native `"openai"` provider (`openai_base_url` and `chatgpt_base_url` pointed at the gateway, no top-level `model_provider`, and `[model_providers.pdd_codex_gateway]` retained solely as a compatibility alias for older saved sessions) alongside a `0600` native `chatgpt`-mode `auth.json` (`tokens.access_token` set to the short-lived revocable `pddg_*` grant, `tokens.refresh_token: ""`, `tokens.account_id: "acct_pdd_gateway"`, and a deterministic unsigned `id_token` from `buildSyntheticGatewayIdToken`), falling back to `model_provider = "pdd_codex_gateway"` with `PDD_CODEX_GATEWAY_GRANT` and no `<overlay>/auth.json` only for legacy non-`pddg_lse_*` grants. Keeping local sessions on native `"openai"` with `chatgpt` auth lets `codex resume` and `codex fork` resume sessions saved under `"openai"` (as well as older `"pdd_codex_gateway"` sessions) without sending `pddg_*` grants to `api.openai.com`, and lets `codex app-server` `account/rateLimits/read` (`/status`) read usage windows through the gateway. When the grant token embeds its lease ID (`pddg_lse_<hex>_<secret>`), normalize `codex_gateway_url` by stripping any trailing `/lse_<id>` segment to the constant `<origin>/v1/codex-gateway` base URL and omit static `http_headers` in `managedCodexConfigPath(env)` so `config.toml` stays constant across syncs and account switches. Whenever local Codex credentials in a `CODEX_HOME` are mutated or cleaned up, `stopCodexAppServerDaemon` stops any stale background `app-server-daemon` caching prior OAuth state in memory. Preserve backward compatibility for legacy non-`pddg_lse_` `pddg_*` grants and legacy `direct_stripped` responses (`tokens.refresh_token: ""` so only PDD Cloud refreshes single-use OpenAI refresh tokens).
 - **Cold-start resilience and opt-in live refresh:** `cloudAccountsRequest` defaults `timeoutMs` to `20_000` ms (`gh auth token` budget up to `10_000` ms) and `listCloudAccounts` defaults `timeoutMs` to `30_000` ms, `leaseCloudAccount` defaults `timeoutMs` to `15_000` ms (enforcing `timeoutMs` as an overall wall-clock deadline across bounded `reauth_required` skip retries and `maxRetries: 0` on `--quiet` shell-hook sync), and `cloudAccountsRequest` performs `1` bounded retry on timeout/abort for idempotent `GET` and `POST /v1/accounts/lease` requests. `listCloudAccounts({refresh = false})` appends `?refresh=true` only when `refresh === true`.
 
 ## Cloud Accounts transport and isolated local materialization
@@ -91,21 +91,23 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     safe user entries from `~/.codex` (discovering entries via `fs.readdirSync(sourceHome)`, or
     falling back to baseline user entries when `readdirSync` is absent on minimal test doubles)
     except entries excluded by `isIsolatedCodexHomeEntry(name)` (`.`, `..`, `.DS_Store`,
-    `auth.json`, `auth.lock`, `config.toml`, `.config.toml.merge-lock`, `model-switch-backups`,
-    `auth.json.*`, `config.toml.*`, `*.lock`, `*-lock`, `*.bak*`, `*.tmp*`, `app-server-daemon`,
-    `app-server-control`, `ipc`, `tmp`, `.tmp`, `log`, `logs_2.sqlite` / `logs_<n>.sqlite`,
-    `models_cache.json`, `shell_snapshots`, `mcp-oauth-locks`, `.sqlite-maintenance.lock`,
-    `installation_id`, and any `*-wal` or `*-shm`, while allowing thread databases
-    `state_5.sqlite` and `thread_history_1.sqlite` alongside `AGENTS.md`, `agents`, `skills`,
-    `plugins`, `hooks.json`, `.hook-trust`, `browser`, `chrome-native-hosts-v2.json`,
-    `computer-use`, `node_repl`, `packages`, `vendor_imports`, and future user entries).
-    `isSafeCodexSourceEntry(fs, src, targetRoot)` accepts regular non-symlink entries as well as
-    symlinks in `~/.codex` whose `realpathSync` resolves to an existing path outside `targetRoot`
-    whose basename (and immediate link target basename) is neither `auth.json` nor `config.toml`
-    (`auth.json.*` / `config.toml.*`), rejecting dangling, loop, and credential/config symlinks.
+    `auth.json*`, `auth.lock`, `config.toml*`, `.config.toml.merge-lock`, `model-switch-backups`,
+    `.codex-global-state.json`, `version.json`, `vendor_imports`, `*.lock`, `*-lock`, `*.bak*`,
+    `tmp`, `.tmp`, `.tmp*`, `*.tmp`, `*.tmp[._~-]*` (preserving `.tmpl` templates), `app-server-daemon`,
+    `app-server-control`, `ipc`, `log`, `logs_*.sqlite*`, `models_cache.json`, `shell_snapshots`,
+    `mcp-oauth-locks`, `.sqlite-maintenance.lock`, `installation_id`, and any `*-wal`, `*-shm` or
+    `*-journal`, while allowing thread databases `state_5.sqlite` and `thread_history_1.sqlite`
+    alongside `AGENTS.md`, `agents`, `skills`, `plugins`, `hooks.json`, `.hook-trust`, `browser`,
+    `chrome-native-hosts-v2.json`, `computer-use`, `node_repl`, `packages`, and future user entries).
+    `isSafeCodexSourceEntry(fs, src, targetRoot, options)` accepts regular non-symlink entries (unless
+    named `auth.json*` or `config.toml*`) as well as symlinks in `~/.codex` whose `realpathSync`
+    resolves to an existing path outside all forbidden roots (`[targetHome, pddManagedCodexHome(env), sourceHome]`,
+    also rejecting symlinks resolving to an ancestor containing `sourceHome`) whose basename (and immediate
+    link target basename) matches neither `auth.json*` nor `config.toml*`, rejecting dangling, self/parent/managed
+    loop, and credential/config symlinks.
     Inside `pddManagedCodexHome(env)`, `syncManagedCodexHomeLinks` replaces pre-existing incomplete
     non-symlink bootstrap cache directories (`plugins`, `browser`, `computer-use`, `node_repl`,
-    `cache`, `packages`, `vendor_imports`), any empty auto-created non-symlink directory, or
+    `cache`, `packages`), any empty auto-created non-symlink directory, or
     non-symlink `chrome-native-hosts-v2.json` with symlinks when `~/.codex/<name>` is valid (never
     deleting non-empty non-symlink `sessions` or `memories` and never modifying `~/.codex`), and
     prunes any symlink in `pddManagedCodexHome(env)` that is denylisted or whose `~/.codex` source
@@ -172,9 +174,10 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     dynamic `syncManagedCodexHomeLinks` denylist mirror (`AGENTS.md`, `agents`, `skills`,
     `memories`, `sessions`, `rules`, `plugins`, `hooks.json`, `.hook-trust`, `browser`,
     `chrome-native-hosts-v2.json`, `computer-use`, `node_repl`, `packages`, `<profile>.config.toml`,
-    and future non-isolated entries, never `auth.json`). For owner `direct_stripped` passes, also
+    and future non-isolated entries, never `auth.json*`, `config.toml*`, or symlinks into
+    `<overlay>`, `pddManagedCodexHome(env)`, or `sourceCodexHome`). For owner `direct_stripped` passes, also
     symlinks `~/.codex/config.toml` when it exists as a regular file or valid external dotfiles
-    symlink outside `<overlay>`, writes leased stripped `auth.json` (`0600`, `refresh_token: ""`),
+    symlink outside `[<overlay>, pddManagedCodexHome(env)]`, writes leased stripped `auth.json` (`0600`, `refresh_token: ""`),
     and sets `CODEX_HOME=<overlay>`.
   - For `gateway_grant` leases, validates the `"pddg_"` grant prefix (`code: "invalid_lease"`),
     normalizes `base_url` by stripping any trailing `/lse_[^/]+` segment when the grant starts with
@@ -185,7 +188,9 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     by migrating string entries from legacy `exclude` (`"exclude"`) and `include_only` (`"include"`)
     arrays into `filters` when absent, deleting `exclude` and `include_only`, removing any
     case-insensitive `PDD_CODEX_GATEWAY_GRANT` entry from `filters` and `set`, and setting
-    `filters.PDD_CODEX_GATEWAY_GRANT = "exclude"`. When the grant starts with `"pddg_lse_"`, writes
+    `filters.PDD_CODEX_GATEWAY_GRANT = "exclude"`. `prepareCloudStepExecution` forwards
+    `plan_type: leaseReply?.lease?.plan_type ?? leaseReply?.account?.plan_type ?? leaseReply?.account?.plan`
+    into `createCodexStepOverlay`. When the grant starts with `"pddg_lse_"`, writes
     `0600` `<overlay>/auth.json` in native `chatgpt` shape (`buildSyntheticGatewayIdToken`,
     `tokens.access_token = <grant>`, `tokens.refresh_token = ""`) and `0600` `<overlay>/config.toml`
     on native `"openai"` (`cli_auth_credentials_store = "file"`, `openai_base_url`, `chatgpt_base_url`,
