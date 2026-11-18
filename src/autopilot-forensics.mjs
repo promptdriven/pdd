@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: undefined).
+// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: 0800dcf915bbc35d17d4f252038b628bbedafa8e467f2b848b74053817ebf283).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
