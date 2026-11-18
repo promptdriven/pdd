@@ -365,8 +365,8 @@ test('SKILLS20: every step that writes prompts or tests reads guide.md, story-gu
   assert.match(prompting, /Read `RUNBOOK\.md` first, `guide\.md` in full/);
   assert.ok(Buffer.byteLength(prompting) + Buffer.byteLength(router) <= 60 * 1024);
   const featureSkill = read('pdd-feature/SKILL.md');
-  assert.match(featureSkill, /Single coupled slice \(1–2 prompts.*0 authoring subagents.*`pdd files`/);
-  assert.match(featureSkill, /3\+ independent prompts\/modules.*lock shared contracts/i);
+  assert.match(featureSkill, /Single coupled slice.*0 authoring subagents.*`pdd files`/);
+  assert.match(featureSkill, /Independent decoupled modules.*lock shared contracts/i);
   const setup = read('pdd-setup/SKILL.md').split('\n');
   const block = setup.slice(setup.indexOf('<!-- pdd:start -->'), setup.indexOf('<!-- pdd:end -->') + 1);
   assert.ok(block.includes('Before you write prompts or tests, read RUNBOOK.md in the pdd-prompting skill.'));

@@ -1,7 +1,10 @@
-// Prompt: prompts/cli/runtime-seam.prompt.md
-import { readFileSync, realpathSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: eca2557973426a814626feac733ce78d794ba5e1618c5af10895c20d19fee2d4).
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import fs, { realpathSync } from 'node:fs';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   CHECK_STATES,
@@ -76,7 +79,7 @@ import {
   outcomeText,
   parsePromptFrontmatter,
   parseScenarioJson,
-  preflight,
+  preflight as rawPreflight,
   providerText,
   productTapCallBound,
   progressText,
@@ -143,6 +146,7 @@ import {
 } from '@promptdriven/runtime-client';
 
 const req = createRequire(import.meta.url);
+const initialReadFileSync = fs.readFileSync;
 const TRY_LAUNCHER_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
 
 export const NO_TESTS =
@@ -166,7 +170,7 @@ export const PROMPT_TESTS_WORDS = '(?:Prompt tests|Runtime check)';
 
 let cachedVersion = null;
 function clientVersion() {
-  return (cachedVersion ??= JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
+  return (cachedVersion ??= JSON.parse(initialReadFileSync(new URL('../package.json', import.meta.url), 'utf8')).version);
 }
 
 let cachedRedaction = null;
@@ -186,6 +190,85 @@ function hostSelection() {
 let cachedExit = null;
 function hostExit() {
   return (cachedExit ??= req('./runtime-exit.mjs'));
+}
+
+let cachedScenarioCompiler = null;
+function hostScenarioCompiler() {
+  return (cachedScenarioCompiler ??= req('./scenario-compile.mjs'));
+}
+
+const scenarioOverlayStorage = new AsyncLocalStorage();
+let scenarioFsHookInstalled = false;
+
+function ensureScenarioFsOverlay() {
+  if (scenarioFsHookInstalled) return;
+  scenarioFsHookInstalled = true;
+  fs.readFileSync = function pddScenarioReadFileSync(pathOrFd, options) {
+    const store = scenarioOverlayStorage.getStore();
+    if (store && (typeof pathOrFd === 'string' || pathOrFd instanceof URL)) {
+      const strPath = pathOrFd instanceof URL ? fileURLToPath(pathOrFd) : pathOrFd;
+      if (strPath.endsWith('.json') && !strPath.includes('/node_modules/') && !strPath.endsWith('/package.json')) {
+        if (store.map === undefined) {
+          store.map = null;
+          const root = store.root ?? repoTopRoot(store.cwd);
+          store.map = (root ? buildScenarioOverlay(root, store.ports) : null) ?? new Map();
+        }
+        if (store.map && store.map.size > 0) {
+          const virtualText = store.map.get(strPath) ?? store.map.get(resolve(strPath));
+          if (virtualText !== undefined) {
+            if (typeof options === 'string') return Buffer.from(virtualText, 'utf8').toString(options);
+            if (options && typeof options === 'object' && options.encoding) {
+              return Buffer.from(virtualText, 'utf8').toString(options.encoding);
+            }
+            return Buffer.from(virtualText, 'utf8');
+          }
+        }
+      }
+    }
+    return initialReadFileSync(pathOrFd, options);
+  };
+  syncBuiltinESMExports();
+}
+
+function withScenarioOverlay(lazyStore, fn) {
+  if (!lazyStore) return fn();
+  ensureScenarioFsOverlay();
+  return scenarioOverlayStorage.run(lazyStore, fn);
+}
+
+function repoTopRoot(cwd = process.cwd()) {
+  if (typeof cwd !== 'string' || !cwd) return null;
+  const res = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return res.status === 0 && res.stdout.trim() ? res.stdout.trim() : null;
+}
+
+function gitHeadBlobOids(root, commit, paths) {
+  if (!commit || !paths.length) return new Map();
+  const res = spawnSync('git', ['ls-tree', '-z', commit, '--', ...paths], {
+    cwd: root,
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (res.status !== 0) return new Map();
+  const map = new Map();
+  for (const rec of res.stdout.toString('utf8').split('\0')) {
+    if (!rec) continue;
+    const tab = rec.indexOf('\t');
+    if (tab < 0) continue;
+    const [mode, type, oid] = rec.slice(0, tab).trim().split(/\s+/);
+    const p = rec.slice(tab + 1);
+    if (p && oid && type === 'blob' && mode !== '120000') map.set(p, oid.toLowerCase());
+  }
+  return map;
+}
+
+function gitBlobHash(buf, commit) {
+  const algo = typeof commit === 'string' && commit.length === 64 ? 'sha256' : 'sha1';
+  return createHash(algo).update(`blob ${buf.length}\0`).update(buf).digest('hex');
 }
 
 function seamRedaction(ports = {}) {
@@ -237,6 +320,8 @@ function seamSelectionPorts(ports = {}) {
     whyNoTests: sel.whyNoTests,
     NO_TESTS: sel.NO_TESTS,
     noTestsMessage: sel.NO_TESTS,
+    findTests,
+    captureSource,
   });
 }
 
@@ -278,13 +363,242 @@ function normalizeHintStream(stream) {
   });
 }
 
-function seamRuntimePorts(ports = {}) {
+function buildLegacyCriterionBindingLookup(root, ports = {}) {
+  let cachedMap = null;
+  const loadMap = () => {
+    if (cachedMap !== null) return cachedMap;
+    cachedMap = new Map();
+    if (!root) return cachedMap;
+    let realRoot;
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      return cachedMap;
+    }
+    const sel = hostSelection();
+    const compiler = hostScenarioCompiler();
+    const names = visibleStoryAndTestPaths(realRoot, { excludeFixtureProjects: false });
+    const storyPaths = names.filter(p => sel.isStoryPath(p));
+    const basenameCounts = new Map();
+    for (const sp of storyPaths) {
+      const stem = basename(sp, '.md');
+      basenameCounts.set(stem, (basenameCounts.get(stem) ?? 0) + 1);
+    }
+    const matched = sel.matchTests(storyPaths, names).tests.filter(t => !t.problem);
+    for (const entry of matched) {
+      for (const testPath of entry.files ?? [entry.path]) {
+        let rawText;
+        try {
+          const full = realpathSync(join(realRoot, testPath));
+          if (full !== realRoot && !full.startsWith(realRoot + sep)) continue;
+          rawText = initialReadFileSync(full, 'utf8');
+        } catch {
+          continue;
+        }
+        let parsed;
+        try {
+          parsed = compiler.parseExactScenarioJson(rawText);
+        } catch {
+          continue;
+        }
+        const effectiveStoryPath = typeof parsed?.story_path === 'string' && parsed.story_path
+          ? parsed.story_path
+          : entry.storyPath;
+        if (!effectiveStoryPath) continue;
+        let storySource;
+        try {
+          const fullStory = realpathSync(join(realRoot, effectiveStoryPath));
+          if (fullStory !== realRoot && !fullStory.startsWith(realRoot + sep)) continue;
+          storySource = initialReadFileSync(fullStory, 'utf8');
+        } catch {
+          continue;
+        }
+        const classification = compiler.classifyExplicitCriteriaBinding(parsed, {
+          storyPath: effectiveStoryPath,
+          storySource,
+        });
+        if (classification.kind !== 'legacy-unbound') continue;
+        const stem = basename(effectiveStoryPath, '.md');
+        const storyArg = (basenameCounts.get(stem) ?? 0) === 1 ? stem : effectiveStoryPath;
+        const legacyLabel =
+          classification.legacyIds.length === 1
+            ? `legacy criterion ID ${JSON.stringify(classification.legacyIds[0])}`
+            : `legacy criterion IDs ${classification.legacyIds.map(id => JSON.stringify(id)).join(', ')}`;
+        const reason = `The test's criterion text already matches ${effectiveStoryPath}'s Acceptance criteria word for word, but ${legacyLabel} has no current ac-sha256-... content binding.`;
+        const fix = `Bind matching criteria and checks on disk for review with: pdd lint --bind-criteria ${storyArg}`;
+        cachedMap.set(testPath, {
+          testPath,
+          storyPath: effectiveStoryPath,
+          reason,
+          fix,
+          message: `${reason} ${fix}`,
+        });
+      }
+    }
+    return cachedMap;
+  };
+  return testPathHint => {
+    const map = loadMap();
+    if (typeof testPathHint === 'string' && testPathHint) return map.get(testPathHint) ?? null;
+    if (map.size === 1) return [...map.values()][0];
+    return null;
+  };
+}
+
+function rewriteMismatchList(items, lookup, fallbackPath = null) {
+  if (!Array.isArray(items) || !items.length) return { items, changed: false };
+  let changed = false;
+  const emittedForPath = new Set();
+  const next = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || item.code !== 'story-criterion-mismatch') {
+      next.push(item);
+      continue;
+    }
+    const candidatePath = item.file ?? item.path ?? fallbackPath;
+    const info = lookup(candidatePath);
+    if (!info) {
+      next.push(item);
+      continue;
+    }
+    changed = true;
+    if (emittedForPath.has(info.testPath)) continue;
+    emittedForPath.add(info.testPath);
+    next.push({
+      ...item,
+      code: 'story-criterion-mismatch',
+      ...(Object.hasOwn(item, 'file') ? { file: info.testPath } : { path: info.testPath }),
+      ...(Object.hasOwn(item, 'at') ? { at: 'criteria' } : {}),
+      section: 'criteria',
+      reason: info.reason,
+      fix: info.fix,
+      hint: info.fix,
+      message: info.message,
+    });
+  }
+  return { items: changed ? next : items, changed };
+}
+
+function rewriteLegacyCriterionMismatchPayload(payload, lookup) {
+  const result = payload?.result;
+  if (!result || typeof result !== 'object') return false;
+  let mutated = false;
+  let singleResultTestPath = null;
+  const listedTests = Array.isArray(result.tests)
+    ? result.tests
+    : Array.isArray(result.report?.lint?.tests)
+      ? result.report.lint.tests
+      : null;
+  if (Array.isArray(listedTests) && listedTests.length === 1 && typeof listedTests[0]?.path === 'string') {
+    singleResultTestPath = listedTests[0].path;
+  }
+
+  if (Array.isArray(result.problems)) {
+    const r = rewriteMismatchList(result.problems, lookup, singleResultTestPath);
+    if (r.changed) {
+      result.problems = r.items;
+      mutated = true;
+    }
+  }
+  if (Array.isArray(result.refusals)) {
+    const r = rewriteMismatchList(result.refusals, lookup, singleResultTestPath);
+    if (r.changed) {
+      result.refusals = r.items;
+      mutated = true;
+    }
+  }
+  if (result.report && typeof result.report === 'object') {
+    if (Array.isArray(result.report.problems)) {
+      const r = rewriteMismatchList(result.report.problems, lookup, singleResultTestPath);
+      if (r.changed) {
+        result.report.problems = r.items;
+        mutated = true;
+      }
+    }
+    if (result.report.refusal && typeof result.report.refusal === 'object') {
+      const r = rewriteMismatchList([result.report.refusal], lookup, singleResultTestPath);
+      if (r.changed && r.items[0]) {
+        result.report.refusal = r.items[0];
+        mutated = true;
+      }
+    }
+    if (Array.isArray(result.report.lint?.tests)) {
+      for (const t of result.report.lint.tests) {
+        if (t && typeof t === 'object' && Array.isArray(t.refusals)) {
+          const r = rewriteMismatchList(t.refusals, lookup, t.path ?? singleResultTestPath);
+          if (r.changed) {
+            t.refusals = r.items;
+            if (typeof t.reason === 'string' && t.reason.includes('criteria')) t.reason = r.items[0]?.message ?? t.reason;
+            mutated = true;
+          }
+        }
+      }
+    }
+  }
+  if (Array.isArray(result.tests)) {
+    for (const t of result.tests) {
+      if (t && typeof t === 'object' && Array.isArray(t.refusals)) {
+        const r = rewriteMismatchList(t.refusals, lookup, t.path ?? singleResultTestPath);
+        if (r.changed) {
+          t.refusals = r.items;
+          if (typeof t.reason === 'string' && t.reason.includes('criteria')) t.reason = r.items[0]?.message ?? t.reason;
+          mutated = true;
+        }
+      }
+    }
+  }
+  return mutated;
+}
+
+function wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, ports) {
+  if (typeof baseFetch !== 'function' || baseFetch.__pddLegacyCriteriaWrapped) return baseFetch;
+  const wrapped = async (url, init) => {
+    const res = await baseFetch(url, init);
+    if (!res || typeof res.clone !== 'function') return res;
+    const contentType = String(res.headers?.get?.('content-type') ?? '');
+    if (contentType && !contentType.includes('json')) return res;
+    let bodyText;
+    try {
+      bodyText = await res.clone().text();
+    } catch {
+      return res;
+    }
+    if (!bodyText || !bodyText.includes('story-criterion-mismatch')) return res;
+    let parsed;
+    try {
+      parsed = JSON.parse(bodyText);
+    } catch {
+      return res;
+    }
+    const activeCwd = cwd ?? scenarioOverlayStorage.getStore()?.cwd ?? process.cwd();
+    const root = repoTopRoot(activeCwd);
+    if (!root) return res;
+    const lookup = buildLegacyCriterionBindingLookup(root, ports);
+    if (!rewriteLegacyCriterionMismatchPayload(parsed, lookup)) return res;
+    const headers = new Headers(res.headers);
+    headers.delete('content-length');
+    headers.delete('content-encoding');
+    return new Response(JSON.stringify(parsed), {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
+  };
+  Object.defineProperty(wrapped, '__pddLegacyCriteriaWrapped', { value: true });
+  return wrapped;
+}
+
+function seamRuntimePorts(ports = {}, { cwd = null } = {}) {
   const exit = hostExit();
+  const baseFetch = ports.fetch ?? globalThis.fetch;
   const merged = withPortDefaults(seamSelectionPorts(ports), {
     exitFor: exit.exitFor,
     exitCodeFor: exit.exitCodeFor,
     promptTestsLabel: PROMPT_TESTS_LABEL,
   });
+  if (typeof baseFetch === 'function') {
+    merged.fetch = wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, merged);
+  }
   if (merged.stdout) merged.stdout = normalizeHintStream(merged.stdout);
   if (merged.stderr) merged.stderr = normalizeHintStream(merged.stderr);
   return merged;
@@ -338,12 +652,324 @@ export function orphanSummary(...args) {
   return hostSelection().orphanSummary(...args);
 }
 
+function readStoryForTest(root, visible, storyPath) {
+  if (typeof storyPath !== 'string' || !storyPath || (visible && !visible.has(storyPath))) return null;
+  try {
+    return initialReadFileSync(join(root, storyPath), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 export function findTests(input, ports = {}) {
-  return rawFindTests(input, seamSelectionPorts(ports));
+  const found = rawFindTests(input, seamSelectionPorts(ports));
+  if (!found || !Array.isArray(found.tests) || !found.root) return found;
+  const compiler = hostScenarioCompiler();
+  let anyCompiled = false;
+  const compiledTests = found.tests.map(test => {
+    if (test.error || !test.doc || typeof test.doc !== 'object' || Array.isArray(test.doc)) return test;
+    let rawText;
+    try {
+      rawText = initialReadFileSync(join(found.root, test.path), 'utf8');
+    } catch {
+      return test;
+    }
+    let rawParsed;
+    try {
+      rawParsed = compiler.parseExactScenarioJson(rawText);
+    } catch {
+      return test;
+    }
+    if (!compiler.needsScenarioCompile(rawParsed)) return test;
+    const targetStoryPath = typeof rawParsed.story_path === 'string' && rawParsed.story_path
+      ? rawParsed.story_path
+      : test.storyPath;
+    const storySource = test.storySource ?? readStoryForTest(found.root, found.visible, targetStoryPath);
+    const compiled = compiler.compileScenarioText(rawText, {
+      path: test.path,
+      storyPath: test.storyPath,
+      storySource,
+    });
+    if (compiled.refusal) {
+      anyCompiled = true;
+      const item = {
+        ...test,
+        error: `${test.path}: ${compiled.refusal.section}: ${compiled.refusal.message}`,
+      };
+      Object.defineProperty(item, 'rawDoc', { value: test.rawDoc ?? test.doc });
+      Object.defineProperty(item, 'shortRefusal', { value: compiled.refusal });
+      return item;
+    }
+    if (!compiled.changed) return test;
+    anyCompiled = true;
+    const item = { ...test, doc: compiled.doc };
+    Object.defineProperty(item, 'rawDoc', { value: compiled.doc });
+    Object.defineProperty(item, 'compiledText', { value: compiled.text });
+    if (storySource !== null && storySource !== undefined) {
+      Object.defineProperty(item, 'storySource', { value: storySource });
+    }
+    return item;
+  });
+  if (!anyCompiled) return found;
+  const next = { ...found, tests: compiledTests };
+  if (found.workspace !== undefined) Object.defineProperty(next, 'workspace', { value: found.workspace });
+  return next;
+}
+
+function buildScenarioOverlay(root, ports = {}) {
+  if (typeof root !== 'string' || !root) return null;
+  let found;
+  try {
+    found = findTests({ root, excludeFixtureProjects: false }, ports);
+  } catch {
+    return null;
+  }
+  let realRoot = null;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = null;
+  }
+  const overlay = new Map();
+  for (const test of found?.tests ?? []) {
+    if (test.error || typeof test.compiledText !== 'string') continue;
+    overlay.set(resolve(root, test.path), test.compiledText);
+    if (realRoot) overlay.set(join(realRoot, test.path), test.compiledText);
+  }
+  return overlay.size ? overlay : null;
+}
+
+export function preflight(input) {
+  if (!input?.root) return rawPreflight(input);
+  const directTests = Array.isArray(input.selected) ? input.selected : input.found?.tests;
+  if (Array.isArray(directTests)) {
+    const map = new Map();
+    for (const test of directTests) {
+      if (test && !test.error && typeof test.compiledText === 'string') {
+        map.set(resolve(input.root, test.path), test.compiledText);
+      }
+    }
+    if (map.size === 0) return rawPreflight(input);
+    return withScenarioOverlay({ root: input.root, map }, () => rawPreflight(input));
+  }
+  return withScenarioOverlay({ root: input.root, map: undefined }, () => rawPreflight(input));
+}
+
+function scanStoryAndTestPathsOnDisk(root) {
+  const names = [];
+  let realRoot;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    return names;
+  }
+  const visitedDirs = new Set([realRoot]);
+  const walk = (absDir, relPrefix, inStoryDir, inTestDir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.name.startsWith('.') || ent.name === 'node_modules') continue;
+      const rel = relPrefix ? `${relPrefix}/${ent.name}` : ent.name;
+      const abs = join(absDir, ent.name);
+      if (ent.isDirectory()) {
+        walk(abs, rel, inStoryDir || ent.name === 'user_stories', inTestDir || ent.name === 'test' || ent.name === 'tests');
+      } else if (ent.isFile()) {
+        if ((inStoryDir && ent.name.endsWith('.md')) || (inTestDir && ent.name.endsWith('.json'))) {
+          names.push(rel);
+        }
+      } else if (ent.isSymbolicLink()) {
+        try {
+          const realTarget = realpathSync(abs);
+          if (realTarget !== realRoot && !realTarget.startsWith(realRoot + sep)) continue;
+          const st = fs.statSync(realTarget);
+          if (st.isDirectory() && !visitedDirs.has(realTarget)) {
+            visitedDirs.add(realTarget);
+            walk(
+              realTarget,
+              rel,
+              inStoryDir || ent.name === 'user_stories',
+              inTestDir || ent.name === 'test' || ent.name === 'tests',
+            );
+          } else if (st.isFile()) {
+            if ((inStoryDir && ent.name.endsWith('.md')) || (inTestDir && ent.name.endsWith('.json'))) {
+              names.push(rel);
+            }
+          }
+        } catch {
+          // Ignore broken or outside-root links here; strict captureSource enforces link rules on selected files.
+        }
+      }
+    }
+  };
+  walk(realRoot, '', false, false);
+  return names;
+}
+
+function visibleStoryAndTestPaths(root, { excludeFixtureProjects = false } = {}) {
+  try {
+    return [...discoveryVisibleFiles({ root, excludeFixtureProjects })];
+  } catch (err) {
+    if (err?.code?.startsWith?.('workspace-')) return [];
+    return scanStoryAndTestPathsOnDisk(root);
+  }
 }
 
 export function captureSource(root, options, ports = {}) {
-  return rawCaptureSource(root, options, seamSelectionPorts(ports));
+  const selPorts = seamSelectionPorts(ports);
+  const callerPrepare = options?.prepareSource;
+  const compiledDiskBytes = new Map();
+
+  const mergedPrepare = prepPorts => {
+    const emptyTestsSelection = Array.isArray(options?.tests) && options.tests.length === 0;
+    const precompiledByPath = new Map();
+
+    if (!emptyTestsSelection) {
+      const names = visibleStoryAndTestPaths(root, {
+        excludeFixtureProjects: Boolean(options?.excludeFixtureProjects),
+      });
+      if (names.length) {
+        const storyPaths = names.filter(p => selPorts.isStoryPath(p));
+        const matched = selPorts.matchTests(storyPaths, names).tests.filter(t => !t.problem);
+        let candidates;
+        if (Array.isArray(options?.tests)) {
+          const requested = new Set(options.tests);
+          const selectedStories = new Set(
+            matched
+              .filter(t => (t.files ?? [t.path]).some(f => requested.has(f)) || requested.has(t.path))
+              .map(t => t.storyPath)
+              .filter(Boolean),
+          );
+          candidates = matched.filter(
+            t => requested.has(t.path) || (t.storyPath && selectedStories.has(t.storyPath)),
+          );
+        } else {
+          candidates = matched;
+        }
+
+        const compiler = hostScenarioCompiler();
+        for (const entry of candidates) {
+          for (const testPath of entry.files ?? [entry.path]) {
+            let probeText;
+            try {
+              const full = realpathSync(join(root, testPath));
+              const realRoot = realpathSync(root);
+              if (full !== realRoot && !full.startsWith(realRoot + sep)) continue;
+              probeText = initialReadFileSync(full, 'utf8');
+            } catch {
+              continue;
+            }
+            let probeParsed;
+            try {
+              probeParsed = compiler.parseExactScenarioJson(probeText);
+            } catch {
+              continue;
+            }
+            if (!compiler.needsScenarioCompile(probeParsed)) continue;
+
+            let rawBuf;
+            try {
+              if (!prepPorts.statFile(testPath, { presenceOnly: true })?.exists) continue;
+              rawBuf = prepPorts.readFile(testPath);
+            } catch {
+              continue;
+            }
+            const rawText = rawBuf.toString('utf8');
+            let rawParsed;
+            try {
+              rawParsed = compiler.parseExactScenarioJson(rawText);
+            } catch {
+              continue;
+            }
+            if (!compiler.needsScenarioCompile(rawParsed)) continue;
+            const targetStoryPath = typeof rawParsed.story_path === 'string' && rawParsed.story_path
+              ? rawParsed.story_path
+              : entry.storyPath;
+            let storySource = null;
+            if (typeof targetStoryPath === 'string' && targetStoryPath) {
+              try {
+                if (prepPorts.statFile(targetStoryPath, { presenceOnly: true })?.exists) {
+                  storySource = prepPorts.readFile(targetStoryPath).toString('utf8');
+                }
+              } catch {
+                storySource = null;
+              }
+            }
+            const compiled = compiler.compileScenarioText(rawText, {
+              path: testPath,
+              storyPath: entry.storyPath,
+              storySource,
+            });
+            if (compiled.refusal) {
+              throw Object.assign(
+                new PreflightError(4, `${testPath}: ${compiled.refusal.section}: ${compiled.refusal.message}`),
+                { code: compiled.refusal.code, section: compiled.refusal.section },
+              );
+            }
+            if (compiled.changed) {
+              precompiledByPath.set(testPath, {
+                diskBuf: rawBuf,
+                compiledBuf: Buffer.from(compiled.text, 'utf8'),
+              });
+            }
+          }
+        }
+      }
+    }
+
+    const wrappedPrepPorts =
+      callerPrepare !== undefined && precompiledByPath.size > 0
+        ? {
+            ...prepPorts,
+            readFile(p, ...rest) {
+              if (precompiledByPath.has(p)) {
+                const entry = precompiledByPath.get(p);
+                compiledDiskBytes.set(p, entry.diskBuf);
+                return Buffer.from(entry.compiledBuf);
+              }
+              return prepPorts.readFile(p, ...rest);
+            },
+          }
+        : prepPorts;
+
+    const callerItems = callerPrepare !== undefined ? callerPrepare(wrappedPrepPorts) : [];
+    if (!Array.isArray(callerItems) || precompiledByPath.size === 0) return callerItems;
+
+    const callerSet = new Set(
+      callerItems.map(item => (item && typeof item.path === 'string' ? item.path : null)).filter(Boolean),
+    );
+    const extraItems = [];
+    for (const [testPath, entry] of precompiledByPath.entries()) {
+      if (callerSet.has(testPath)) continue;
+      compiledDiskBytes.set(testPath, entry.diskBuf);
+      extraItems.push({ path: testPath, bytes: entry.compiledBuf });
+    }
+    return extraItems.length ? [...callerItems, ...extraItems] : callerItems;
+  };
+
+  const nextOptions = options === undefined
+    ? { prepareSource: mergedPrepare }
+    : { ...options, prepareSource: mergedPrepare };
+
+  const captured = rawCaptureSource(root, nextOptions, selPorts);
+  if (captured && compiledDiskBytes.size > 0 && captured.source_commit && Array.isArray(captured.dirty_files)) {
+    const headBlobs = gitHeadBlobOids(root, captured.source_commit, [...compiledDiskBytes.keys()]);
+    const filteredDirty = captured.dirty_files.filter(p => {
+      if (!compiledDiskBytes.has(p)) return true;
+      const headOid = headBlobs.get(p);
+      if (!headOid) return true;
+      return gitBlobHash(compiledDiskBytes.get(p), captured.source_commit) !== headOid;
+    });
+    return {
+      ...captured,
+      dirty_files: filteredDirty,
+      source_dirty: filteredDirty.length > 0,
+    };
+  }
+  return captured;
 }
 captureSource.isDefaultCapture = true;
 
@@ -405,6 +1031,337 @@ export function renderText(input, ports = {}) {
   return normalizeRuntimeHints(rawRenderText(input, withPortDefaults(ports, { promptTestsLabel: PROMPT_TESTS_LABEL })));
 }
 
+function lintShortScenarioFiles(root, ports = {}) {
+  if (typeof root !== 'string' || !root) return [];
+  try {
+    const found = findTests({ root, excludeFixtureProjects: true }, ports);
+    return (found?.tests ?? [])
+      .filter(test => test.shortRefusal && typeof test.error === 'string' && test.error.length > 0)
+      .map(test => test.error);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeSelectionWords(rawWords, cwd, root, found) {
+  let realCwd = cwd;
+  let realRoot = root;
+  try {
+    realCwd = realpathSync(cwd);
+    realRoot = realpathSync(root);
+  } catch {}
+  return rawWords.map(word => {
+    if (typeof word !== 'string' || !word) return word;
+    const abs = resolve(realCwd, word);
+    const rel = relative(realRoot, abs).split(sep).join('/');
+    const inside = rel !== '..' && !rel.startsWith('../');
+    let isDir = false;
+    try {
+      isDir = inside && fs.statSync(abs).isDirectory();
+    } catch {}
+    return word.includes('/') || found.visible?.has(rel) || isDir ? (rel || '.') : word;
+  });
+}
+
+function runEmitV1(input = {}, ports = {}) {
+  const stdout = ports.stdout ?? process.stdout;
+  const stderr = ports.stderr ?? process.stderr;
+  const options = input?.options ?? {};
+  const jsonMode = options['--json'] === true;
+  const badKey = Object.keys(options).find(key => !['--lint', '--emit-v1', '--json'].includes(key));
+  if (badKey) {
+    stderr.write('pdd lint --emit-v1 accepts only --json and Story selections.\n');
+    return 2;
+  }
+  const cwd = input?.cwd ?? process.cwd();
+  const root = repoTopRoot(cwd);
+  if (!root) {
+    stderr.write('No Git project root is available.\n');
+    return 2;
+  }
+  const rawWords = commandWords(input);
+  const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 }, ports);
+  const normalizedWords = normalizeSelectionWords(rawWords, cwd, root, found);
+  const selection = selectTests(found, normalizedWords);
+  if (selection.unknown?.length || selection.untested?.length || !selection.selected?.length) {
+    const missingNames = [...(selection.unknown ?? []), ...(selection.untested ?? [])];
+    stderr.write(
+      missingNames.length
+        ? `No selected Story tests: ${missingNames.join(', ')}\n`
+        : 'No selected Story tests.\n',
+    );
+    return 2;
+  }
+  const compiler = hostScenarioCompiler();
+  const sourcePort = createStrictSourceAccess(root, found.workspace, ports).sourceFilePort(found.visible);
+  const errors = [];
+  const emitted = [];
+  for (const test of selection.selected) {
+    if (test.error) {
+      errors.push({
+        path: test.path,
+        story_path: test.storyPath ?? null,
+        code: test.shortRefusal?.code ?? 'invalid-scenario',
+        section: test.shortRefusal?.section ?? 'document',
+        message: test.error,
+      });
+      continue;
+    }
+    let rawText;
+    try {
+      rawText = sourcePort.read({ path: test.path }).content;
+    } catch (err) {
+      errors.push({
+        path: test.path,
+        story_path: test.storyPath ?? null,
+        code: 'unreadable-scenario',
+        section: 'document',
+        message: `${test.path}: ${err?.message ?? String(err)}`,
+      });
+      continue;
+    }
+    let storySource = test.storySource ?? null;
+    if (storySource === null && typeof test.storyPath === 'string' && test.storyPath) {
+      try {
+        storySource = sourcePort.read({ path: test.storyPath }).content;
+      } catch {
+        storySource = null;
+      }
+    }
+    const compiled = compiler.compileScenarioText(rawText, {
+      path: test.path,
+      storyPath: test.storyPath,
+      storySource,
+      space: 2,
+    });
+    if (compiled.refusal) {
+      errors.push({
+        path: test.path,
+        story_path: test.storyPath ?? null,
+        code: compiled.refusal.code,
+        section: compiled.refusal.section,
+        message: `${test.path}: ${compiled.refusal.section}: ${compiled.refusal.message}`,
+      });
+      continue;
+    }
+    const finalExact = compiled.exactDoc;
+    emitted.push({
+      path: test.path,
+      story_path: test.storyPath ?? finalExact?.story_path ?? null,
+      changed: compiled.changed,
+      text: compiler.stringifyExactScenarioJson(finalExact, 2) + '\n',
+      scenario: finalExact,
+    });
+  }
+  if (errors.length > 0) {
+    if (jsonMode) {
+      stdout.write(compiler.stringifyExactScenarioJson({ ok: false, errors }, 2) + '\n');
+    } else {
+      for (const err of errors) stderr.write(`${err.message}\n`);
+    }
+    return 4;
+  }
+  if (jsonMode) {
+    stdout.write(
+      compiler.stringifyExactScenarioJson(
+        {
+          ok: true,
+          scenarios: emitted.map(({ path, story_path, changed, scenario }) => ({
+            path,
+            story_path,
+            changed,
+            scenario,
+          })),
+        },
+        2,
+      ) + '\n',
+    );
+    return 0;
+  }
+  if (emitted.length === 1) {
+    stdout.write(emitted[0].text);
+    return 0;
+  }
+  stdout.write(compiler.stringifyExactScenarioJson(emitted.map(item => item.scenario), 2) + '\n');
+  return 0;
+}
+
+function runBindCriteria(input = {}, ports = {}) {
+  const stdout = ports.stdout ?? process.stdout;
+  const stderr = ports.stderr ?? process.stderr;
+  const options = input?.options ?? {};
+  const jsonMode = options['--json'] === true;
+  const badKey = Object.keys(options).find(key => !['--lint', '--bind-criteria', '--json'].includes(key));
+  if (badKey) {
+    stderr.write('pdd lint --bind-criteria accepts only --json and Story selections.\n');
+    return 2;
+  }
+  const cwd = input?.cwd ?? process.cwd();
+  const root = repoTopRoot(cwd);
+  if (!root) {
+    stderr.write('No Git project root is available.\n');
+    return 2;
+  }
+  let realRoot;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    stderr.write('No Git project root is available.\n');
+    return 2;
+  }
+
+  const rawWords = commandWords(input);
+  const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 }, ports);
+  const normalizedWords = normalizeSelectionWords(rawWords, cwd, root, found);
+  const selection = selectTests(found, normalizedWords);
+  if (selection.unknown?.length || selection.untested?.length || !selection.selected?.length) {
+    const missingNames = [...(selection.unknown ?? []), ...(selection.untested ?? [])];
+    stderr.write(
+      missingNames.length
+        ? `No selected Story tests: ${missingNames.join(', ')}\n`
+        : 'No selected Story tests.\n',
+    );
+    return 2;
+  }
+
+  const compiler = hostScenarioCompiler();
+  const errors = [];
+  const plannedWrites = [];
+  const seenTestPaths = new Set();
+
+  for (const test of selection.selected) {
+    const filePaths = Array.isArray(test.files) && test.files.length ? test.files : [test.path];
+    for (const testPath of filePaths) {
+      if (seenTestPaths.has(testPath)) continue;
+      seenTestPaths.add(testPath);
+      if (found.workspace && !allowsRuntimePath(found.workspace, testPath)) {
+        errors.push({
+          path: testPath,
+          story_path: test.storyPath ?? null,
+          code: 'workspace-excluded',
+          section: 'document',
+          message: `${testPath}: excluded by workspace policy.`,
+        });
+        continue;
+      }
+      let fullTestPath;
+      let rawText;
+      try {
+        fullTestPath = realpathSync(join(realRoot, testPath));
+        if (fullTestPath !== realRoot && !fullTestPath.startsWith(realRoot + sep)) {
+          throw new Error('Test file resolves outside repository root.');
+        }
+        rawText = initialReadFileSync(fullTestPath, 'utf8');
+      } catch (err) {
+        errors.push({
+          path: testPath,
+          story_path: test.storyPath ?? null,
+          code: 'unreadable-scenario',
+          section: 'document',
+          message: `${testPath}: ${err?.message ?? String(err)}`,
+        });
+        continue;
+      }
+
+      let targetStoryPath = test.storyPath ?? null;
+      try {
+        const parsed = compiler.parseExactScenarioJson(rawText);
+        if (typeof parsed?.story_path === 'string' && parsed.story_path) {
+          targetStoryPath = parsed.story_path;
+        }
+      } catch {}
+
+      let storySource = null;
+      if (typeof targetStoryPath === 'string' && targetStoryPath) {
+        try {
+          const fullStory = realpathSync(join(realRoot, targetStoryPath));
+          if (fullStory === realRoot || fullStory.startsWith(realRoot + sep)) {
+            storySource = initialReadFileSync(fullStory, 'utf8');
+          }
+        } catch {
+          storySource = null;
+        }
+      }
+
+      const bound = compiler.bindScenarioCriteriaText(rawText, {
+        path: testPath,
+        storyPath: targetStoryPath,
+        storySource,
+        space: 2,
+      });
+      if (bound.refusal) {
+        errors.push({
+          path: testPath,
+          story_path: targetStoryPath,
+          code: bound.refusal.code,
+          section: bound.refusal.section,
+          message: bound.refusal.message,
+          ...(bound.refusal.hint ? { hint: bound.refusal.hint } : {}),
+        });
+        continue;
+      }
+      plannedWrites.push({
+        path: testPath,
+        fullPath: fullTestPath,
+        story_path: targetStoryPath,
+        changed: bound.changed,
+        nextText: bound.text,
+        bound_ids: bound.boundIds ?? [],
+      });
+    }
+  }
+
+  if (errors.length > 0) {
+    if (jsonMode) {
+      stdout.write(JSON.stringify({ ok: false, exit_code: 4, refusals: errors }, null, 2) + '\n');
+    } else {
+      for (const err of errors) {
+        stderr.write(`${err.message}\n`);
+        if (err.hint) stderr.write(`${err.hint}\n`);
+      }
+    }
+    return 4;
+  }
+
+  for (const item of plannedWrites) {
+    if (!item.changed) continue;
+    fs.writeFileSync(item.fullPath, item.nextText, 'utf8');
+  }
+
+  if (jsonMode) {
+    stdout.write(
+      JSON.stringify(
+        {
+          ok: true,
+          exit_code: 0,
+          updated: plannedWrites.filter(r => r.changed).map(r => r.path),
+          unchanged: plannedWrites.filter(r => !r.changed).map(r => r.path),
+          files: plannedWrites.map(({ path, story_path, changed, bound_ids }) => ({
+            path,
+            story_path,
+            changed,
+            bound_ids,
+          })),
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+    return 0;
+  }
+
+  for (const item of plannedWrites) {
+    if (item.changed) {
+      stdout.write(
+        `Bound ${item.bound_ids.length} criterion ID${item.bound_ids.length === 1 ? '' : 's'} in ${item.path} (${item.story_path}). Review with git diff.\n`,
+      );
+    } else {
+      stdout.write(`${item.path}: criteria already bound to ${item.story_path}.\n`);
+    }
+  }
+  return 0;
+}
+
 export function runtimePreflightSlice() {
   const mod = rawRuntimePreflightSlice();
   return {
@@ -424,10 +1381,17 @@ export function runtimePreflightSlice() {
         input,
         withPortDefaults(seamSelectionPorts(ports), { isTestOwnedPath, promptClaims, resolveOwners }),
       );
-      return [...new Set([...baseWarnings, ...lintRepoAntiPatterns(input)])];
+      return [
+        ...new Set([
+          ...baseWarnings,
+          ...lintRepoAntiPatterns(input),
+          ...lintShortScenarioFiles(input?.root, ports),
+        ]),
+      ];
     },
     matchTests,
     orphanSummary,
+    preflight,
     prepareHashSelection: (input, ports = {}) => mod.prepareHashSelection(input, seamSelectionPorts(ports)),
     selectTests,
     sharedSourceFiles,
@@ -492,10 +1456,74 @@ export function selectJourneys(tests, selector, ports = {}) {
 
 export function composeProductTry(input, ports = {}) {
   const { parseProductDocuments, parseProductWorldWriters } = req('./product-documents.mjs');
-  return runtimeComposeProductTry(
-    input,
-    withPortDefaults(seamSelectionPorts(ports), { parseProductDocuments, parseProductWorldWriters }),
-  );
+  const compiler = hostScenarioCompiler();
+  let effectivePorts = withPortDefaults(seamSelectionPorts(ports), { parseProductDocuments, parseProductWorldWriters });
+  if (
+    input &&
+    typeof input === 'object' &&
+    typeof input.root === 'string' &&
+    typeof input.testPath === 'string' &&
+    input.testPath &&
+    typeof effectivePorts.readFile === 'function'
+  ) {
+    const targetAbs = join(input.root, input.testPath);
+    const baseRead = effectivePorts.readFile;
+    const baseStat = effectivePorts.statFile;
+    effectivePorts = {
+      ...effectivePorts,
+      readFile(fullPath, ...rest) {
+        const raw = baseRead(fullPath, ...rest);
+        if (fullPath !== targetAbs) return raw;
+        const rawText = typeof raw === 'string' ? raw : Buffer.isBuffer(raw) ? raw.toString('utf8') : null;
+        if (rawText === null) return raw;
+        let parsed;
+        try {
+          parsed = compiler.parseExactScenarioJson(rawText);
+        } catch {
+          return raw;
+        }
+        if (!compiler.needsScenarioCompile(parsed)) return raw;
+        let pairedStoryPath = typeof parsed.story_path === 'string' && parsed.story_path ? parsed.story_path : null;
+        if (!pairedStoryPath) {
+          const base = basename(input.testPath, '.json');
+          const stems = [base];
+          for (let at = base.lastIndexOf('.'); at > 0; at = base.lastIndexOf('.', at - 1)) {
+            stems.push(base.slice(0, at));
+          }
+          for (const cand of stems.flatMap(stem => [`user_stories/journeys/${stem}.md`, `user_stories/${stem}.md`])) {
+            try {
+              if (typeof baseStat === 'function' && baseStat(join(input.root, cand), { presenceOnly: true })?.exists) {
+                pairedStoryPath = cand;
+                break;
+              }
+            } catch {}
+          }
+          if (!pairedStoryPath && typeof input.journey === 'string' && input.journey) {
+            pairedStoryPath = `user_stories/journeys/${base}.md`;
+          }
+        }
+        let storySource = null;
+        if (pairedStoryPath) {
+          try {
+            if (typeof baseStat === 'function' && baseStat(join(input.root, pairedStoryPath), { presenceOnly: true })?.exists) {
+              const sRaw = baseRead(join(input.root, pairedStoryPath));
+              storySource = typeof sRaw === 'string' ? sRaw : Buffer.isBuffer(sRaw) ? sRaw.toString('utf8') : null;
+            }
+          } catch {
+            storySource = null;
+          }
+        }
+        const compiled = compiler.compileScenarioText(rawText, {
+          path: input.testPath,
+          storyPath: pairedStoryPath,
+          storySource,
+        });
+        if (compiled.refusal || !compiled.changed) return raw;
+        return Buffer.isBuffer(raw) ? Buffer.from(compiled.text, 'utf8') : compiled.text;
+      },
+    };
+  }
+  return runtimeComposeProductTry(input, effectivePorts);
 }
 
 export function readAgentScenarios(input, ports = {}) {
@@ -554,6 +1582,163 @@ export async function loadRuntimeClient() {
   };
 }
 
+const NON_EXEC_CHECK_FLAGS = [
+  '--lint', '--local', '--files', '--explain-bindings',
+  '--read', '--retry', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--bind-criteria',
+];
+const PROMPT_DEP_LINK_RE = /\[[^\]]*\]\(([^)\s#]+\.prompt\.md)(?:#[^)\s]*)?\)/g;
+const PORT_CALL_TOKEN_RE = /\b[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*\b/;
+
+function extractDepsSection(markdown) {
+  const lines = markdown.split(/\r?\n/);
+  let inDeps = false;
+  let inFence = false;
+  const out = [];
+  for (const line of lines) {
+    if (/^\s*(?:```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence && /^##\s+/.test(line)) {
+      inDeps = /^##\s+Dependencies\s*$/i.test(line.trim());
+      continue;
+    }
+    if (inDeps && !inFence) out.push(line);
+  }
+  return out.join('\n');
+}
+
+function computeGraphAwareDefaultMaxCalls(input, ports) {
+  const opts = input?.options ?? {};
+  if (opts['--max-calls'] !== undefined) return undefined;
+  if (NON_EXEC_CHECK_FLAGS.some(flag => opts[flag] !== undefined)) return undefined;
+  const cwd = input?.cwd ?? process.cwd();
+  const root = repoTopRoot(cwd);
+  if (!root) return undefined;
+  const rawWords = commandWords(input);
+  let found;
+  try {
+    found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 }, ports);
+  } catch {
+    return undefined;
+  }
+  if (!found?.tests?.length) return undefined;
+  let candidates = found.tests;
+  if (!opts['--affected'] && rawWords.length > 0) {
+    const normalizedWords = normalizeSelectionWords(rawWords, cwd, root, found);
+    try {
+      const sel = selectTests(found, normalizedWords);
+      if (sel?.selected?.length) candidates = sel.selected;
+    } catch {
+      return undefined;
+    }
+  }
+  const readyTests = candidates.filter(
+    t => t && !t.error && Array.isArray(t.doc?.steps) && t.doc.steps.length > 0,
+  );
+  if (!readyTests.length) return undefined;
+
+  const promptCache = new Map();
+  const inspectPrompt = relPath => {
+    if (promptCache.has(relPath)) return promptCache.get(relPath);
+    const info = { deps: [], extraCallWeight: 0, hasPortToken: false, isNativeOnly: false };
+    promptCache.set(relPath, info);
+    if (found.visible && !found.visible.has(relPath)) return info;
+    let text;
+    try {
+      text = initialReadFileSync(join(root, relPath), 'utf8');
+    } catch {
+      return info;
+    }
+    try {
+      const fm = parsePromptFrontmatter(text);
+      if (fm?.frontmatter?.kind === 'native-only') info.isNativeOnly = true;
+    } catch {}
+    const promptDir = dirname(relPath);
+    const resolveRel = target => {
+      const joined = relative('.', join(promptDir === '.' ? '' : promptDir, target)).split(sep).join('/');
+      return joined && !joined.startsWith('..') ? joined : null;
+    };
+    const depsText = extractDepsSection(text);
+    for (const match of depsText.matchAll(PROMPT_DEP_LINK_RE)) {
+      const depPath = resolveRel(match[1]);
+      if (depPath && depPath !== relPath) info.deps.push(depPath);
+    }
+    for (const block of interfaceBlocks(text)) {
+      try {
+        const iface = JSON.parse(text.slice(block.indices[1][0], block.indices[1][1]));
+        if (iface?.kind === 'native-only') info.isNativeOnly = true;
+        if (Array.isArray(iface?.calls)) {
+          for (const call of iface.calls) {
+            if (typeof call?.target === 'string' && call.target.endsWith('.prompt.md')) {
+              const depPath = call.target.startsWith('prompts/') ? call.target : (resolveRel(call.target) ?? call.target);
+              if (depPath && depPath !== relPath) info.deps.push(depPath);
+              if (Number.isInteger(call.max_calls) && call.max_calls > 1) {
+                info.extraCallWeight += Math.min(8, call.max_calls - 1);
+              }
+            }
+          }
+        }
+        if (Array.isArray(iface?.resources) && iface.resources.some(r => r?.kind === 'port')) {
+          info.hasPortToken = true;
+        }
+      } catch {}
+    }
+    const stripped = text.replace(/`[^`]*`|\([^)]*\.prompt\.md[^)]*\)/g, ' ');
+    if (PORT_CALL_TOKEN_RE.test(stripped)) info.hasPortToken = true;
+    info.deps = [...new Set(info.deps)];
+    return info;
+  };
+
+  let maxCap = 0;
+  let maxFallback = 0;
+  let sumFallbacks = 0;
+  for (const test of readyTests) {
+    const doc = test.doc;
+    const steps = doc.steps.length;
+    const fallback = defaultMaxCalls(doc);
+    maxFallback = Math.max(maxFallback, fallback);
+    sumFallbacks += fallback;
+    if (steps <= 2) {
+      maxCap = Math.max(maxCap, fallback);
+      continue;
+    }
+    const entryPrompts = new Set(
+      doc.steps.map(s => s?.entry_path).filter(p => typeof p === 'string' && p.endsWith('.prompt.md')),
+    );
+    const visited = new Set();
+    const queue = [...entryPrompts];
+    let childPrompts = 0;
+    let extraWeight = 0;
+    let promptHasPorts = false;
+    while (queue.length > 0 && visited.size < 64) {
+      const cur = queue.shift();
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      const info = inspectPrompt(cur);
+      if (info.isNativeOnly) continue;
+      if (!entryPrompts.has(cur)) childPrompts += 1;
+      extraWeight += info.extraCallWeight;
+      if (info.hasPortToken) promptHasPorts = true;
+      for (const dep of info.deps) {
+        if (!visited.has(dep)) queue.push(dep);
+      }
+    }
+    const hasScenarioWorldOrPorts =
+      (doc.initial_world && typeof doc.initial_world === 'object' && Object.keys(doc.initial_world).length > 0) ||
+      (doc.simulation && typeof doc.simulation === 'object' && Object.keys(doc.simulation).length > 0) ||
+      doc.steps.some(s => Array.isArray(s?.simulation_overrides) && s.simulation_overrides.length > 0) ||
+      promptHasPorts;
+    const perStep = 4 + (hasScenarioWorldOrPorts ? 1 : 0) + Math.min(8, childPrompts * 3 + extraWeight);
+    const cap = Math.min(fallback, Math.max(24, steps * perStep + 6));
+    maxCap = Math.max(maxCap, cap);
+  }
+  if (maxCap > 0 && maxCap < maxFallback && maxCap * readyTests.length < sumFallbacks) {
+    return maxCap;
+  }
+  return undefined;
+}
+
 export async function runCheck(input = {}, ports = {}) {
   const [
     ,
@@ -574,32 +1759,55 @@ export async function runCheck(input = {}, ports = {}) {
     import('./repo-hygiene-lint.mjs'),
     import('./screen-compare.mjs'),
   ]);
+  if (input?.options?.['--emit-v1'] && input?.options?.['--bind-criteria']) {
+    const stderr = ports.stderr ?? process.stderr;
+    stderr.write('Use either --emit-v1 or --bind-criteria, not both.\n');
+    return 2;
+  }
+  if (input?.options?.['--emit-v1']) {
+    return runEmitV1(input, ports);
+  }
+  if (input?.options?.['--bind-criteria']) {
+    return runBindCriteria(input, ports);
+  }
   const env = ports.env ?? process.env;
   const client = input?.client
     ? { ...input.client, version: input.client.version ?? clientVersion() }
     : { version: clientVersion() };
-  return runtimeRunCheck(
-    {
-      ...input,
-      client,
-    },
-    seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
-        headerPrompts,
-        isTestOwnedPath,
-        promptClaims,
-        resolveOwners,
-        allRuns,
-        workflowBaseSha: ({ root, env: runEnv }) =>
-          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
-        assessNativeEvidence,
-        usableResult,
-        resultLines,
-        lintSvgLayouts: arg => [...lintSvgLayouts(arg), ...lintRepoAntiPatterns(arg)],
-        compareScreen,
-        formatScreenComparison,
-        redaction: seamRedaction(ports),
-      }),
+  const graphCap = computeGraphAwareDefaultMaxCalls(input, ports);
+  const effectiveInput =
+    graphCap !== undefined
+      ? { ...input, options: { ...(input.options ?? {}), '--max-calls': graphCap }, client }
+      : { ...input, client };
+  const cwd = effectiveInput?.cwd ?? process.cwd();
+  const lazyOverlay = { cwd, ports, map: undefined };
+
+  return withScenarioOverlay(lazyOverlay, () =>
+    runtimeRunCheck(
+      effectiveInput,
+      seamRuntimePorts(
+        withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+          headerPrompts,
+          isTestOwnedPath,
+          promptClaims,
+          resolveOwners,
+          allRuns,
+          workflowBaseSha: ({ root, env: runEnv }) =>
+            resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
+          assessNativeEvidence,
+          usableResult,
+          resultLines,
+          lintSvgLayouts: arg => [
+            ...lintSvgLayouts(arg),
+            ...lintRepoAntiPatterns(arg),
+            ...lintShortScenarioFiles(arg?.root, ports),
+          ],
+          compareScreen,
+          formatScreenComparison,
+          redaction: seamRedaction(ports),
+        }),
+        { cwd },
+      ),
     ),
   );
 }
@@ -626,6 +1834,7 @@ export async function runTry(input = {}, ports = {}) {
   ]);
   const defaultDiscoverAgents = async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args);
   const defaultAskAgent = async (turnInput, ...rest) => askAgent(turnInput, ...rest);
+  const cwd = input?.cwd ?? process.cwd();
   const defaultAgentBridge = (context, test, tryId, opts, link) =>
     createAgentBridge(context, test, tryId, opts, link, {
       redaction: ports.redaction ?? seamRedaction(ports),
@@ -637,22 +1846,27 @@ export async function runTry(input = {}, ports = {}) {
       evidenceEligibility: ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? readEvidenceEligibility,
       guidePorts: ports.guidePorts,
     });
-  return runtimeRunTry(
-    input,
-    seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
-        tryLauncherUrl: TRY_LAUNCHER_URL,
-        agentBridge: defaultAgentBridge,
-        loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
-        discoverAgents: ports.discoverAgents ?? ports.agents?.list ?? defaultDiscoverAgents,
-        askAgent: ports.askAgent ?? ports.agents?.ask ?? defaultAskAgent,
-        parseProductDocuments,
-        parseProductWorldWriters,
-        askApproval,
-        lineReader,
-        promptPath,
-        redaction: seamRedaction(ports),
-      }),
+  const lazyOverlay = { cwd, ports, map: undefined };
+  return withScenarioOverlay(lazyOverlay, () =>
+    runtimeRunTry(
+      input,
+      seamRuntimePorts(
+        withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+          tryLauncherUrl: TRY_LAUNCHER_URL,
+          agentBridge: defaultAgentBridge,
+          loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
+          discoverAgents: ports.discoverAgents ?? ports.agents?.list ?? defaultDiscoverAgents,
+          askAgent: ports.askAgent ?? ports.agents?.ask ?? defaultAskAgent,
+          parseProductDocuments,
+          parseProductWorldWriters,
+          askApproval,
+          lineReader,
+          promptPath,
+          files: wrapCaseFilesForShortJson(ports.files, ports),
+          redaction: seamRedaction(ports),
+        }),
+        { cwd },
+      ),
     ),
   );
 }
@@ -710,7 +1924,13 @@ export async function runShim(descriptorPath, argv, ports = {}) {
   return runtimeRunShim(
     descriptorPath,
     argv,
-    seamRuntimePorts(withPortDefaults(ports, { lineReader, redaction: seamRedaction(ports) })),
+    seamRuntimePorts(
+      withPortDefaults(ports, {
+        lineReader,
+        redaction: seamRedaction(ports),
+        files: wrapCaseFilesForShortJson(ports.files, ports),
+      }),
+    ),
   );
 }
 
@@ -720,7 +1940,7 @@ export async function saveLast(input) {
     input && typeof input === 'object'
       ? {
           ...input,
-          ports: seamRuntimePorts(withPortDefaults(input.ports ?? {}, { lineReader })),
+          ports: seamRuntimePorts(seamCasePorts(withPortDefaults(input.ports ?? {}, { lineReader }))),
         }
       : input;
   return runtimeSaveLast(nextInput);
@@ -789,24 +2009,230 @@ export async function runMcp(input, ports = {}) {
         tryLauncherUrl: TRY_LAUNCHER_URL,
         parseProductDocuments,
         parseProductWorldWriters,
+        applyPendingCaseWithHandoff,
         redaction: seamRedaction(ports),
       }),
     ),
   );
 }
 
+function createDefaultCaseFiles() {
+  return {
+    lstat: fs.lstatSync,
+    read: initialReadFileSync,
+    open: fs.openSync,
+    write: fs.writeFileSync,
+    close: fs.closeSync,
+    sync: fs.fsyncSync,
+    stat: fs.fstatSync,
+    mkdir: fs.mkdirSync,
+    list: fs.readdirSync,
+    rename: fs.renameSync,
+    unlink: fs.unlinkSync,
+    link: fs.linkSync,
+    realpath: realpathSync,
+  };
+}
+
+function wrapCaseFilesForShortJson(baseFiles, ports = {}) {
+  if (baseFiles?.__pddShortCaseFiles) return baseFiles;
+  const rawFiles = baseFiles ?? createDefaultCaseFiles();
+  const openReadPaths = new Map();
+
+  const convertShortText = (filePath, rawResult, options) => {
+    if (
+      typeof filePath !== 'string' ||
+      !filePath.endsWith('.json') ||
+      filePath.includes(`${sep}node_modules${sep}`) ||
+      filePath.includes(`${sep}.pdd${sep}`) ||
+      filePath.endsWith('.received.json') ||
+      filePath.endsWith('.transaction.json') ||
+      filePath.endsWith('.meta.json') ||
+      filePath.endsWith('.origin.json')
+    ) {
+      return rawResult;
+    }
+    const rawText = Buffer.isBuffer(rawResult) ? rawResult.toString('utf8') : String(rawResult);
+    const compiler = hostScenarioCompiler();
+    let parsed;
+    try {
+      parsed = compiler.parseExactScenarioJson(rawText);
+    } catch {
+      return rawResult;
+    }
+    if (!compiler.needsScenarioCompile(parsed)) return rawResult;
+    const root = repoTopRoot(dirname(filePath));
+    if (!root) return rawResult;
+    let realRoot = root;
+    let realFile = filePath;
+    try {
+      realRoot = rawFiles.realpath(root);
+      realFile = rawFiles.realpath(filePath);
+    } catch {}
+    if (realFile !== realRoot && !realFile.startsWith(realRoot + sep)) return rawResult;
+    const relPath = relative(realRoot, realFile).split(sep).join('/');
+    const formatOut = outText => {
+      if (typeof options === 'string') return Buffer.from(outText, 'utf8').toString(options);
+      if (options && typeof options === 'object' && options.encoding) {
+        return Buffer.from(outText, 'utf8').toString(options.encoding);
+      }
+      return Buffer.isBuffer(rawResult) ? Buffer.from(outText, 'utf8') : outText;
+    };
+    let storySource = null;
+    let inferredStoryPath = typeof parsed.story_path === 'string' && parsed.story_path ? parsed.story_path : null;
+    try {
+      const found = findTests({ root: realRoot, excludeFixtureProjects: false }, ports);
+      const matched = (found?.tests ?? []).find(t => t.path === relPath);
+      if (matched && !matched.error && typeof matched.compiledText === 'string') {
+        return formatOut(matched.compiledText);
+      }
+      if (matched?.storyPath && !inferredStoryPath) inferredStoryPath = matched.storyPath;
+      if (typeof matched?.storySource === 'string') storySource = matched.storySource;
+    } catch {}
+    if (!storySource && inferredStoryPath) {
+      try {
+        storySource = initialReadFileSync(join(realRoot, inferredStoryPath), 'utf8');
+      } catch {}
+    }
+    const compiled = compiler.compileScenarioText(rawText, {
+      path: relPath,
+      storyPath: inferredStoryPath,
+      storySource,
+    });
+    if (compiled.refusal || !compiled.changed) return rawResult;
+    return formatOut(compiled.text);
+  };
+
+  const wrapped = {
+    ...rawFiles,
+    open(filePath, flags, mode) {
+      const fd = rawFiles.open(filePath, flags, mode);
+      const writeMask =
+        (fs.constants?.O_WRONLY ?? 1) |
+        (fs.constants?.O_RDWR ?? 2) |
+        (fs.constants?.O_CREAT ?? 0) |
+        (fs.constants?.O_TRUNC ?? 0);
+      if (typeof fd === 'number' && typeof filePath === 'string' && (Number(flags) & writeMask) === 0) {
+        openReadPaths.set(fd, resolve(filePath));
+      }
+      return fd;
+    },
+    close(fd) {
+      openReadPaths.delete(fd);
+      return rawFiles.close(fd);
+    },
+    read(fdOrPath, options) {
+      const rawResult = rawFiles.read(fdOrPath, options);
+      const filePath =
+        typeof fdOrPath === 'number'
+          ? openReadPaths.get(fdOrPath)
+          : typeof fdOrPath === 'string'
+            ? resolve(fdOrPath)
+            : null;
+      return filePath ? convertShortText(filePath, rawResult, options) : rawResult;
+    },
+  };
+  Object.defineProperty(wrapped, '__pddShortCaseFiles', { value: true });
+  return wrapped;
+}
+
+function seamCasePorts(ports = {}) {
+  const base = seamSelectionPorts(ports);
+  return {
+    ...base,
+    files: wrapCaseFilesForShortJson(ports.files, ports),
+  };
+}
+
 export async function migrateRuntimeWorkspace(input, ports = {}) {
   const { readEvidenceEligibility } = await import('./workflow-eligibility.mjs');
-  return runtimeMigrateWorkspace(input, seamSelectionPorts(withEligibilityDefault(ports, readEvidenceEligibility)));
+  return runtimeMigrateWorkspace(input, seamCasePorts(withEligibilityDefault(ports, readEvidenceEligibility)));
 }
 
 export function runtimeWorkspaceMigrationStore(input, given = {}) {
-  return rawRuntimeWorkspaceMigrationStore(input, seamSelectionPorts(given));
+  return rawRuntimeWorkspaceMigrationStore(input, seamCasePorts(given));
+}
+
+function normalizeSavedCaseCriteria(root, saved, options, ports) {
+  if (
+    options?.rawBytes !== undefined ||
+    !saved ||
+    typeof saved !== 'object' ||
+    !saved.test ||
+    typeof saved.test !== 'object' ||
+    !Array.isArray(saved.test.criteria) ||
+    !saved.test.criteria.some(c => typeof c?.id === 'string' && c.id.startsWith('ac-sha256-'))
+  ) {
+    return saved;
+  }
+  const targetPath = options?.seedTest?.path ?? saved.original_path;
+  const storyPath = options?.seedTest?.storyPath ?? saved.story_path ?? saved.test.story_path;
+  if (typeof root !== 'string' || typeof targetPath !== 'string') return saved;
+  try {
+    const found = findTests({ root, excludeFixtureProjects: false }, ports);
+    const orig = (found?.tests ?? []).find(t => t.path === targetPath && (!storyPath || t.storyPath === storyPath));
+    if (!Array.isArray(orig?.doc?.criteria) || !orig.doc.criteria.length) return saved;
+    if (orig.doc.criteria.some(c => typeof c?.id === 'string' && c.id.startsWith('ac-sha256-'))) return saved;
+    const localIdByText = new Map(
+      orig.doc.criteria
+        .filter(c => c && typeof c.id === 'string' && typeof c.text === 'string')
+        .map(c => [c.text, c.id]),
+    );
+    const idMap = new Map();
+    const mappedCriteria = saved.test.criteria.map(c => {
+      if (!c || typeof c !== 'object' || typeof c.id !== 'string' || typeof c.text !== 'string') return c;
+      const localId = localIdByText.get(c.text);
+      if (!localId) return c;
+      idMap.set(c.id, localId);
+      return { ...c, id: localId };
+    });
+    if (!idMap.size) return saved;
+    const mapId = id => (typeof id === 'string' && idMap.has(id) ? idMap.get(id) : id);
+    const mappedSteps = Array.isArray(saved.test.steps)
+      ? saved.test.steps.map(step =>
+          !step || typeof step !== 'object'
+            ? step
+            : {
+                ...step,
+                ...(Array.isArray(step.checks)
+                  ? {
+                      checks: step.checks.map(chk =>
+                        chk && typeof chk === 'object' && Object.hasOwn(chk, 'criterion_id')
+                          ? { ...chk, criterion_id: mapId(chk.criterion_id) }
+                          : chk,
+                      ),
+                    }
+                  : {}),
+                ...(Array.isArray(step.simulation_overrides)
+                  ? {
+                      simulation_overrides: step.simulation_overrides.map(ov =>
+                        ov && typeof ov === 'object' && Object.hasOwn(ov, 'criterion_id')
+                          ? { ...ov, criterion_id: mapId(ov.criterion_id) }
+                          : ov,
+                      ),
+                    }
+                  : {}),
+              },
+        )
+      : saved.test.steps;
+    return {
+      ...saved,
+      test: {
+        ...saved.test,
+        criteria: mappedCriteria,
+        steps: mappedSteps,
+      },
+    };
+  } catch {
+    return saved;
+  }
 }
 
 export function saveDoorCaseResult(root, saved, options = {}) {
   const basePorts = options?.ports ?? (options?.env ? { env: options.env } : {});
-  return rawSaveDoorCaseResult(root, saved, { ...options, ports: seamSelectionPorts(basePorts) });
+  const casePortsBound = seamCasePorts(basePorts);
+  const normalizedSaved = normalizeSavedCaseCriteria(root, saved, options, casePortsBound);
+  return rawSaveDoorCaseResult(root, normalizedSaved, { ...options, ports: casePortsBound });
 }
 
 export function saveDoorCase(root, saved, options = {}) {
@@ -814,15 +2240,15 @@ export function saveDoorCase(root, saved, options = {}) {
 }
 
 export async function acquireCaseWriteOwnership(input, ports = {}) {
-  return rawAcquireCaseWriteOwnership(input, seamSelectionPorts(ports));
+  return rawAcquireCaseWriteOwnership(input, seamCasePorts(ports));
 }
 
 export async function applyPendingCase(input, ports = {}) {
-  return rawApplyPendingCase(input, seamSelectionPorts(ports));
+  return rawApplyPendingCase(input, seamCasePorts(ports));
 }
 
 export async function applyPendingCaseWithHandoff(input, ports = {}) {
-  return rawApplyPendingCaseWithHandoff(input, seamSelectionPorts(ports));
+  return rawApplyPendingCaseWithHandoff(input, seamCasePorts(ports));
 }
 
 export function createSavedStoryEvidenceReader(ports = {}) {
@@ -830,7 +2256,7 @@ export function createSavedStoryEvidenceReader(ports = {}) {
 }
 
 export async function resendableStoryChecks(input, ports = {}) {
-  return rawResendableStoryChecks(input, ports);
+  return rawResendableStoryChecks(input, seamSelectionPorts(ports));
 }
 
 export async function savedStoryEvidence(input, ports = {}) {
@@ -877,6 +2303,8 @@ export async function lint(input = {}, ports = {}) {
   const extraOptions = {
     '--lint': true,
     ...(input?.local === true && input?.options?.['--local'] === undefined ? { '--local': true } : {}),
+    ...(input?.emitV1 === true && input?.options?.['--emit-v1'] === undefined ? { '--emit-v1': true } : {}),
+    ...(input?.bindCriteria === true && input?.options?.['--bind-criteria'] === undefined ? { '--bind-criteria': true } : {}),
   };
   return runCheck(buildCheckInput(input, { defaultCache: true, extraOptions }), ports);
 }
@@ -1081,7 +2509,6 @@ export {
   outcomeText,
   parsePromptFrontmatter,
   parseScenarioJson,
-  preflight,
   providerText,
   productTapCallBound,
   progressText,

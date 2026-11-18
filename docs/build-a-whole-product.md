@@ -12,12 +12,13 @@ ticket done, and see Ready on the phone. Cancellation is LATER.
 
 | Path | Map | Plan |
 |---|---|---|
-| small | About 10 CORE Stories, 1 part | Keep the map; run one feature run. |
-| medium | 10–50 Stories, 2–5 parts | Parts, boundaries, contracts and small runs. |
-| large | More than 50 Stories or more than 5 parts | Also slices: slice 1 makes one thin journey work through all parts. |
+| single part | One cohesive part | Keep the map; run one feature run. |
+| multi-part | Decoupled parts with shared boundaries | Parts, boundaries, contracts and scoped runs. |
+| sliced rollout | Broad cross-part rollout | Also vertical slices: slice 1 makes one thin journey work through all parts. |
 
-The agent recommends a path; you can change it at the map gate. A planned run
-should fit about twelve Stories or five new prompts. Larger runs get a warning.
+The agent recommends a path from architecture boundaries rather than fixed Story
+counts; you can change it at the map gate. Keep each planned run scoped to one
+cohesive part or contract boundary; mixed-boundary runs get a warning.
 
 ## Files
 

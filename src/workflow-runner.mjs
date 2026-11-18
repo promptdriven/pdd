@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Prompt: prompts/cli/workflow-runner.prompt.md
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7bd85bfb491a97b473e509d067f92436557c84fff934390f0bff83f900e49a43).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -52,6 +52,7 @@ import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, allowsRuntimePath, causeText, format, isStoryPath, loadRuntimeWorkspace, parsePromptFrontmatter, promptRefusal, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
+import { isShortScenarioDoc } from './scenario-compile.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
@@ -59,7 +60,7 @@ import { collectTestInventory } from './workflow-inventory.mjs';
 import {readSmallChangeChecklist} from './workflow-small-change.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
-const { captureSource, findTests, gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
+const { captureSource, findTests, gitFiles, interfaceBlocks, matchTests, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
 runtimeOutputSlice();
 const { proseSha256 } = format;
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
@@ -1171,11 +1172,24 @@ export function matchesSource(record, root, fingerprint, capture = captureSource
   return false;
 }
 // Same Story: every selected test at the historical commit is a current test of the run with the same story_path.
+function resolvedStoryPath(root, path, getFiles) {
+  let doc;
+  try { doc = JSON.parse(readFileSync(join(root, path), 'utf8')); } catch { return undefined; }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return undefined;
+  if (typeof doc.story_path === 'string' && doc.story_path) return doc.story_path;
+  if (!isShortScenarioDoc(doc)) return undefined;
+  let files;
+  try { files = getFiles(); } catch { return undefined; }
+  const matched = matchTests(files.filter(isStoryPath), files).tests.find(t => !t.problem && (t.path === path || (t.files ?? []).includes(path)));
+  return typeof matched?.storyPath === 'string' && matched.storyPath ? matched.storyPath : undefined;
+}
 function sameStoryTests(run,frozen,tests) {
-  const current=new Set(gitFiles(run.root));
+  const currentFiles = gitFiles(run.root), current = new Set(currentFiles);
+  let frozenFiles;
+  const getFrozenFiles = () => (frozenFiles ??= gitFiles(frozen));
   for (const path of tests) {
-    let then,now;
-    try { then=JSON.parse(readFileSync(join(frozen,path),'utf8')).story_path; now=current.has(path)?JSON.parse(readFileSync(join(run.root,path),'utf8')).story_path:undefined; } catch { then=undefined; }
+    const then = resolvedStoryPath(frozen, path, getFrozenFiles);
+    const now = current.has(path) ? resolvedStoryPath(run.root, path, () => currentFiles) : undefined;
     if (typeof then !== 'string' || then !== now) throw Error(`${path} is not a current test of the same Story at that commit.`);
   }
 }

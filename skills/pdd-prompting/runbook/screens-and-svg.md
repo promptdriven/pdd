@@ -185,19 +185,26 @@ from 0 through 9007199254740991). A timer has no browser target. Its `input` can
 use only individually proved `/event/<field>` references. For example:
 
 ```json
-"input": {
-  "state": {"$ref": "/state"},
-  "timer_id": {"$ref": "/event/timer_id"},
-  "generation": {"$ref": "/event/generation"},
-  "sequence": {"$ref": "/event/sequence"},
-  "elapsed_ms": {"$ref": "/event/elapsed_ms"}
+{
+  "handlers": [
+    {"screen": "cart", "kind": "key", "match": {"value": "Escape"},
+     "handler": {"prompt_path": "prompts/cart.prompt.md", "operation": "close_drawer"},
+     "input": {"state": {"$ref": "/state"}},
+     "state": {"$ref": "/result/state"},
+     "next": {"kind": "same", "screen": null, "route_pointer": null}}
+  ],
+  "timers": [
+    {"id": "order-refresh", "screen": "cart", "interval_ms": 1000,
+     "enabled_pointer": "/polling", "generation_pointer": "/generation",
+     "handler": {"prompt_path": "prompts/cart.prompt.md", "operation": "refresh_status"},
+     "input": {"state": {"$ref": "/state"}, "generation": {"$ref": "/event/generation"}},
+     "state": {"$ref": "/result/state"},
+     "next": {"kind": "same", "screen": null, "route_pointer": null}}
+  ]
 }
 ```
 
-See the [Snake timer declaration](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/examples/snake/app-map.json#L609-L675)
-for a full map example and the [Runtime timer declaration](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/prompt_runtime/program_app_map.prompt.md#L770-L798)
-for admission rules. The [host scheduling contract](https://github.com/promptdriven/prompt-runtime/blob/main/prompts/server/web/screen_ticks.prompt.md)
-waits for a live visible Screen and for ordinary or pending work to finish. It waits a fixed delay
+The host scheduler waits for a live visible Screen and for ordinary or pending work to finish. It waits a fixed delay
 after a completed action, submits one funded tick through the existing FIFO, and does not queue missed
 ticks. Ticks use the existing action/call budget.
 

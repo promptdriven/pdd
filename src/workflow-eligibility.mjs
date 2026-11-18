@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 218116154279cf8efd54a32da56a595f6a60e4f3e325d57c20c341a966df1683).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 7bd85bfb491a97b473e509d067f92436557c84fff934390f0bff83f900e49a43).
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';

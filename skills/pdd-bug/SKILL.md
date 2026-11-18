@@ -13,8 +13,9 @@ Fix both: the brakes (the real defect) and the warning light (a test or check th
 2. prompt-pr: steps/check.md, steps/try.md (optional) → approve, then gate: pr, then ask
 3. code: steps/build.md, steps/verify.md, steps/formal.md, steps/review.md → gate: pr
 
-- Single coupled slice (1–2 prompts touched): read `pdd-prompting/RUNBOOK.md`, author Story, prompt, test and `.ui.svg` in 1 session (0 authoring subagents), and run `pdd files` + `pdd lint --local`. On 3+ modules, main chat coordinates; no code or checks (lock contracts first).
-- Fresh subagents in step order for code verification, review and 3+ module builds; never reuse builders or let them check code. Step file/paths at once, no chat history; wait one long time-out, no small follow-ups (§11).
+- Single coupled slice: read `pdd-prompting/RUNBOOK.md`, author Story, prompt and test (plus `.ui.svg` when visual) in 1 session (0 authoring subagents), and run `pdd files` + `pdd lint --local`.
+- Independent decoupled modules, main chat coordinates; no code or checks: lock shared contracts first, then parallelize.
+- Fresh subagents in step order for verify, review and decoupled builds; never reuse builders or let them check code. Step file/paths at once, no chat history; wait one long time-out, no small follow-ups (§11).
 - Checks: fresh first. Only verify/formal may reuse after startup failure; no code, tests or prompts this run.
 - Review: always fresh; no build/verify/formal/prior reviews or context. Blocked: RUNBOOK §17.
 - Read pdd-prompting RUNBOOK §17 before checks: cleanup, unrun checks, recovery and result replacement.
