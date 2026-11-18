@@ -9,7 +9,8 @@ import { normalizeAreaList } from './autopilot-areas.mjs';
 import { resolveStepModelTier } from './autopilot-telemetry.mjs';
 import { isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs';
 const isRotatablePoolFailure = text => isQuotaExhaustionMessage(text) || isAuthFailureMessage(text);
-import { redactSecrets } from './secret-redaction.mjs';
+import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
+import { parse as parseToml } from './vendor/smol-toml/parse.js';
 
 export const EXTERNAL_REPO_LABELS = Object.freeze(['external', 'other-repo', 'elsewhere', 'pdd:elsewhere']);
 const EXTERNAL_LABEL_SET = new Set(EXTERNAL_REPO_LABELS);
@@ -21,7 +22,25 @@ const CODEX_FORENSICS_OFF = [
   'computer_use', 'multi_agent', 'multi_agent_v2', 'code_mode',
 ];
 const VALID_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+const CODEX_PROVIDER_KEYS = new Set([
+  'name',
+  'base_url',
+  'model_catalog_url',
+  'wire_api',
+  'requires_openai_auth',
+  'supports_websockets',
+  'env_key',
+  'env_key_instructions',
+  'env_http_headers',
+  'request_max_retries',
+  'stream_max_retries',
+  'stream_idle_timeout_ms',
+]);
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const SAFE_CONTROL_RE = /[\x00-\x1f\x7f]/;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isTomlTable = value => object(value) && !(value instanceof Date) && typeof value.toISOString !== 'function';
+const formatTomlKey = key => (/^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key));
 const text = value => typeof value === 'string' ? value : '';
 
 function rawLabelNames(input) {
@@ -153,11 +172,128 @@ function cleanEffort(effort) {
   return VALID_EFFORTS.has(lower) ? lower : null;
 }
 
-export function forensicsCommand(agent, { model = null, reasoningEffort = null, resultFile = null } = {}) {
+function formatProviderOverrideValue(key, val) {
+  if (typeof val === 'string') {
+    if (SAFE_CONTROL_RE.test(val)) return null;
+    if (key === 'env_key' && !ENV_NAME_RE.test(val)) return null;
+    return JSON.stringify(val);
+  }
+  if (typeof val === 'boolean') return val ? 'true' : 'false';
+  if (typeof val === 'bigint') return String(val);
+  if (typeof val === 'number' && Number.isFinite(val)) return String(val);
+  if (key === 'env_http_headers' && isTomlTable(val)) {
+    const entries = Object.entries(val).filter(
+      ([hk, hv]) => typeof hk === 'string' && hk && !SAFE_CONTROL_RE.test(hk) && typeof hv === 'string' && ENV_NAME_RE.test(hv),
+    );
+    return entries.length
+      ? `{ ${entries.map(([hk, hv]) => `${formatTomlKey(hk)} = ${JSON.stringify(hv)}`).join(', ')} }`
+      : null;
+  }
+  return null;
+}
+
+export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeFs } = {}) {
+  const rawHome = (typeof env?.CODEX_HOME === 'string' && env.CODEX_HOME.trim())
+    ? env.CODEX_HOME.trim()
+    : (typeof agent?.env?.CODEX_HOME === 'string' && agent.env.CODEX_HOME.trim())
+      ? agent.env.CODEX_HOME.trim()
+      : (typeof agent?.codexHome === 'string' && agent.codexHome.trim())
+        ? agent.codexHome.trim()
+        : '';
+  if (!rawHome || typeof fs?.readFileSync !== 'function') return [];
+  const codexHome = rawHome.startsWith('~/') && typeof env?.HOME === 'string' && env.HOME.trim()
+    ? join(env.HOME.trim(), rawHome.slice(2))
+    : rawHome;
+  const configPath = join(codexHome, 'config.toml');
+  if (typeof fs?.lstatSync === 'function') {
+    try {
+      const st = fs.lstatSync(configPath);
+      if (st.isSymbolicLink() || (typeof st.isFile === 'function' && !st.isFile())) return [];
+    } catch {
+      return [];
+    }
+  }
+  let parsed;
+  try {
+    parsed = parseToml(fs.readFileSync(configPath, 'utf8'));
+  } catch {
+    return [];
+  }
+  if (!isTomlTable(parsed)) return [];
+  const out = [];
+  let needGrantExcludeFilter = false;
+  if (typeof parsed.cli_auth_credentials_store === 'string' && parsed.cli_auth_credentials_store.trim() && !SAFE_CONTROL_RE.test(parsed.cli_auth_credentials_store)) {
+    out.push('-c', `cli_auth_credentials_store=${JSON.stringify(parsed.cli_auth_credentials_store.trim())}`);
+  }
+  if (typeof parsed.model_provider === 'string' && parsed.model_provider.trim() && !SAFE_CONTROL_RE.test(parsed.model_provider)) {
+    const provider = parsed.model_provider.trim();
+    out.push('-c', `model_provider=${JSON.stringify(provider)}`);
+    const providerCfg = isTomlTable(parsed.model_providers) ? parsed.model_providers[provider] : null;
+    if (isTomlTable(providerCfg)) {
+      if (typeof providerCfg.experimental_bearer_token === 'string' && providerCfg.experimental_bearer_token) {
+        rememberSecrets(providerCfg.experimental_bearer_token);
+      }
+      let legacyGrantValue = null;
+      if (isTomlTable(providerCfg.http_headers)) {
+        for (const [hk, hv] of Object.entries(providerCfg.http_headers)) {
+          if (typeof hv === 'string' && hv) rememberSecrets(hv);
+          if (typeof hk === 'string' && hk.toLowerCase() === 'x-pdd-gateway-grant' && typeof hv === 'string' && hv.trim() && !SAFE_CONTROL_RE.test(hv)) {
+            legacyGrantValue = hv.trim();
+          }
+        }
+      }
+      const mergedEnvHeaders = isTomlTable(providerCfg.env_http_headers) ? { ...providerCfg.env_http_headers } : {};
+      if (legacyGrantValue) {
+        if (env && typeof env === 'object' && env !== process.env && !env.PDD_CODEX_GATEWAY_GRANT) {
+          env.PDD_CODEX_GATEWAY_GRANT = legacyGrantValue;
+        }
+        if (!Object.keys(mergedEnvHeaders).some(k => k.toLowerCase() === 'x-pdd-gateway-grant')) {
+          mergedEnvHeaders['x-pdd-gateway-grant'] = 'PDD_CODEX_GATEWAY_GRANT';
+        }
+        needGrantExcludeFilter = true;
+      }
+      const provSeg = formatTomlKey(provider);
+      for (const [k, v] of Object.entries(providerCfg)) {
+        if (!CODEX_PROVIDER_KEYS.has(k) || k === 'env_http_headers') continue;
+        const formatted = formatProviderOverrideValue(k, v);
+        if (formatted !== null) out.push('-c', `model_providers.${provSeg}.${formatTomlKey(k)}=${formatted}`);
+      }
+      if (Object.keys(mergedEnvHeaders).length > 0) {
+        const formattedHeaders = formatProviderOverrideValue('env_http_headers', mergedEnvHeaders);
+        if (formattedHeaders !== null) {
+          out.push('-c', `model_providers.${provSeg}.env_http_headers=${formattedHeaders}`);
+          if (Object.values(mergedEnvHeaders).includes('PDD_CODEX_GATEWAY_GRANT')) needGrantExcludeFilter = true;
+        }
+      }
+    }
+  }
+  const filters = isTomlTable(parsed.shell_environment_policy) && isTomlTable(parsed.shell_environment_policy.filters)
+    ? parsed.shell_environment_policy.filters
+    : null;
+  let filterKey = 'PDD_CODEX_GATEWAY_GRANT';
+  if (filters) {
+    for (const [fk, fv] of Object.entries(filters)) {
+      if (fk.toLowerCase() === 'pdd_codex_gateway_grant' && typeof fv === 'string' && fv.trim().toLowerCase() === 'exclude' && !SAFE_CONTROL_RE.test(fk)) {
+        needGrantExcludeFilter = true;
+        filterKey = fk;
+      }
+    }
+  }
+  if (needGrantExcludeFilter) {
+    out.push('-c', `shell_environment_policy.filters.${formatTomlKey(filterKey)}="exclude"`);
+  }
+  if (isTomlTable(parsed.features) && parsed.features.shell_snapshot === false) {
+    out.push('-c', 'features.shell_snapshot=false');
+  }
+  return out;
+}
+
+export function forensicsCommand(agent, { model = null, reasoningEffort = null, resultFile = null, env = null, fs = nativeFs } = {}) {
   const cleanModel = cleanModelName(model ?? agent?.model);
   const effort = cleanEffort(reasoningEffort);
   const cmdName = fallback => (typeof agent?.command === 'string' && agent.command.trim() ? agent.command.trim() : fallback);
   if (agent?.kind === 'codex') {
+    const providerArgs = codexProviderConfigArgs({ env, agent, fs });
     return {
       command: cmdName('codex'),
       args: [
@@ -165,6 +301,7 @@ export function forensicsCommand(agent, { model = null, reasoningEffort = null, 
         '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}',
         '-c', `model_reasoning_effort="${effort ?? 'low'}"`,
         ...CODEX_FORENSICS_OFF.flatMap(name => ['-c', `features.${name}=false`]),
+        ...providerArgs,
         ...(typeof resultFile === 'string' && resultFile ? ['--output-last-message', resultFile] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),
         '-',
@@ -384,7 +521,7 @@ export async function runPreRunForensics(
     ? join(tmpdir(), `pdd-forensics-${issue?.number ?? 0}-${process.pid}-${randomUUID().slice(0, 8)}.txt`)
     : null;
   try {
-    const cmd = forensicsCommand(activeAgent, { model, reasoningEffort, resultFile });
+    const cmd = forensicsCommand(activeAgent, { model, reasoningEffort, resultFile, env: childEnv, fs });
     const prompt = forensicsPrompt({ repo, baseBranch, issue, comments });
     const execResult = await run(cmd.command, cmd.args, {
       cwd: worktree,

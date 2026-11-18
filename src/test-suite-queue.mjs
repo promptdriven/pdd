@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9e342f73b7a8035a141fa00efdb17e77045e30780428ac75666eb4e8edaa845f).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9a6fbeb4f0e51d65db80cee642a73f0977c1943b8a6548f9c24281b66b319d3c).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -155,31 +155,72 @@ function writeAtomic(p, target, content) {
 }
 const save = (p, record) => writeAtomic(p, join(p.root, `ticket-${record.ticket}.json`), serializeValidationReceipt(record));
 const announceReceipt = (ports, p, row) => { if (ports.announceReceipt !== false) p.say(`Validation receipt: ${row.receiptPath}; output evidence: ${row.logPath}`); };
+function validateTicketRow(row) {
+  if (!Number.isSafeInteger(row.ticket) || !Number.isSafeInteger(row.pid) || row.pid <= 0 || typeof row.cwd !== 'string'
+    || !['waiting', 'running', 'finished'].includes(row.state) || !Number.isFinite(row.queuedAt)
+    || row.pidIdentity !== undefined && row.pidIdentity !== null && typeof row.pidIdentity !== 'string'
+    || row.executionStarted !== undefined && typeof row.executionStarted !== 'boolean'
+    || row.cpuIds !== undefined && (!Array.isArray(row.cpuIds) || row.cpuIds.some(id=>!Number.isSafeInteger(id) || id<0) || new Set(row.cpuIds).size !== row.cpuIds.length)
+    || row.startedAt !== null && !Number.isFinite(row.startedAt) || row.finishedAt !== null && !Number.isFinite(row.finishedAt)) {
+    throw Error('Unreadable shared suite queue ownership.');
+  }
+}
+function reconciledRow(row, p, finishedAt, signal = null) {
+  // A dead runner does not make its live or uncertain child safe to reclaim.
+  const recorderLive = row.recorderPid && p.alive(row.recorderPid)
+    && (!row.recorderIdentity || p.processIdentity(row.recorderPid) === row.recorderIdentity);
+  const ownerLive = p.alive(row.pid) && (!row.pidIdentity || p.processIdentity(row.pid) === row.pidIdentity);
+  if (row.state !== 'finished' && !recorderLive && !ownerLive) {
+    if (row.state === 'waiting' || (row.executionStarted === false && !row.recorderPid && !row.childPid)) {
+      const sig = signal ?? row.signal ?? null;
+      const reason = row.startedAt === null
+        ? (sig ? `Test suite interrupted while waiting in the queue (${sig}); no tests ran.` : 'Test suite runner ended while waiting in the queue; no tests ran.')
+        : (sig ? `Test suite interrupted before starting tests (${sig}); no tests ran.` : 'Test suite runner ended before starting tests; no tests ran.');
+      return { ...row, state: 'finished', finishedAt, outcome: 'interrupted', exitCode: null, signal: sig, counts: null, reason: safeEvidenceText(reason) };
+    }
+    if (row.childPid && !p.alive(-row.childPid)) {
+      return { ...row, state: 'finished', finishedAt, outcome: 'unknown', exitCode: null, counts: null,
+        reason: 'Test suite runner ended before reporting a result.' };
+    }
+    return { ...row, outcome: 'unknown', exitCode: null, counts: null,
+      reason: 'Test suite runner ended; suite descendants are still live or their ownership is unknown.' };
+  }
+  return row;
+}
 function records(p) {
   let names;
   try { names = p.fs.readdirSync(p.root); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   return names.filter(name => /^ticket-.*\.json$/.test(name)).map(name => {
     const row = JSON.parse(p.fs.readFileSync(join(p.root, name), 'utf8'));
-    if (!Number.isSafeInteger(row.ticket) || !Number.isSafeInteger(row.pid) || row.pid <= 0 || typeof row.cwd !== 'string'
-      || !['waiting', 'running', 'finished'].includes(row.state) || !Number.isFinite(row.queuedAt)
-      || row.cpuIds !== undefined && (!Array.isArray(row.cpuIds) || row.cpuIds.some(id=>!Number.isSafeInteger(id) || id<0) || new Set(row.cpuIds).size !== row.cpuIds.length)
-      || row.startedAt !== null && !Number.isFinite(row.startedAt) || row.finishedAt !== null && !Number.isFinite(row.finishedAt)) {
-      throw Error('Unreadable shared suite queue ownership.');
-    }
-    // A dead runner does not make its live or uncertain child safe to reclaim.
-    const recorderLive = row.recorderPid && p.alive(row.recorderPid)
-      && (!row.recorderIdentity || p.processIdentity(row.recorderPid) === row.recorderIdentity);
-    if (row.state !== 'finished' && !recorderLive && !p.alive(row.pid)
-      && (row.state === 'waiting' || row.childPid && !p.alive(-row.childPid))) {
-      return { ...row, state: 'finished', finishedAt: p.fs.statSync(join(p.root, name)).mtimeMs,
-        outcome:'unknown', exitCode:null, counts:null,
-        reason: 'Test suite runner ended before reporting a result.' };
-    }
-    if (row.state !== 'finished' && !recorderLive && !p.alive(row.pid)) return { ...row,
-      outcome:'unknown', exitCode:null, counts:null,
-      reason: 'Test suite runner ended; suite descendants are still live or their ownership is unknown.' };
-    return row;
+    validateTicketRow(row);
+    return reconciledRow(row, p, p.fs.statSync(join(p.root, name)).mtimeMs);
   }).sort((a, b) => a.ticket - b.ticket);
+}
+function canonicalCwd(cwd, fs = files) {
+  const abs = resolve(cwd);
+  try { return typeof fs?.realpathSync === 'function' ? fs.realpathSync(abs) : abs; }
+  catch { return abs; }
+}
+export async function reconcileSuiteQueue({ cwd = null, env = process.env, signal = null } = {}, ports = {}) {
+  const p = portsFor(env, ports);
+  let names;
+  try { names = p.fs.readdirSync(p.root); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
+  if (!names.some(name => /^ticket-.*\.json$/.test(name))) return 0;
+  const targetCwd = cwd ? canonicalCwd(cwd, p.fs) : null;
+  return underLock(p, () => {
+    let curNames;
+    try { curNames = p.fs.readdirSync(p.root); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
+    let count = 0;
+    for (const name of curNames.filter(item => /^ticket-.*\.json$/.test(item))) {
+      let row;
+      try { row = JSON.parse(p.fs.readFileSync(join(p.root, name), 'utf8')); validateTicketRow(row); }
+      catch { continue; }
+      if (row.state === 'finished' || (targetCwd && canonicalCwd(row.cwd, p.fs) !== targetCwd)) continue;
+      const next = reconciledRow(row, p, p.now(), signal);
+      if (next.state === 'finished') { save(p, next); count++; }
+    }
+    return count;
+  });
 }
 async function underLock(p, action) {
   const lock = p.acquireLock ?? (await import('./workflow-runner.mjs')).acquireRunLock;
@@ -202,7 +243,8 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
   let p, all;
   try { p = portsFor(env, ports); all = records(p); }
   catch (error) { return { state: 'unavailable', reason: safeEvidenceText(error.message), pausedMs: 0 }; }
-  const own = all.filter(row => row.cwd === resolve(cwd));
+  const targetCwd = canonicalCwd(cwd, p.fs);
+  const own = all.filter(row => canonicalCwd(row.cwd, p.fs) === targetCwd);
   if (!own.length) return null;
   const row = own.findLast(row => row.state !== 'finished') ?? own.at(-1);
   return { ticket: row.ticket, state: row.state, position: row.state === 'waiting' ? positionOf(all, row) : null,
@@ -212,6 +254,7 @@ export function readSuiteProgress({ cwd, since = 0, env = process.env }, ports =
 }
 export function suiteStatusWords(suite) {
   return suite.state === 'unavailable' ? `full test suite queue unavailable: ${suite.reason}`
+    : suite.outcome === 'interrupted' ? `full test suite interrupted${suite.reason ? `: ${suite.reason}` : ''}`
     : suite.reason ? `full test suite failed: ${suite.reason}`
     : suite.state === 'waiting' ? `waiting for a check slot (position ${suite.position})`
     : suite.state === 'running' ? 'running the full test suite'
@@ -223,12 +266,14 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     return { exitCode: 2, message: 'Supply a suite command and a timeout of 1 to 120 minutes, or 0 for no time limit.' };
   rememberSecrets(...knownSecretValues(env));
   let p, row, environmentRoot, executionStarted = false, keepEnvironment = false;
+  const signals = ports.signals ?? process;
+  let pendingSignal = null, wakeWait = null, signalCleanup = () => {};
   try {
     p = portsFor(env, ports);
     p.fs.mkdirSync(p.root, { recursive: true, mode: 0o700 });
     row = await underLock(p, () => {
       const all = records(p), ticket = (all.at(-1)?.ticket ?? 0) + 1;
-      const record = { ticket, pid: p.pid, childPid: null, cwd: resolve(cwd), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
+      const record = { ticket, pid: p.pid, pidIdentity: p.processIdentity(p.pid), executionStarted: false, childPid: null, cwd: canonicalCwd(cwd, p.fs), state: 'waiting', queuedAt: p.now(), startedAt: null, finishedAt: null, reason: null, environmentPolicy: 'clean-v1' };
       const logFolder = join(env.PDD_STATE_DIR ?? join(env.HOME || process.env.HOME,'.local','state','pdd'), 'validation', createHash('sha256').update(p.root).digest('hex').slice(0,20));
       // Content identity for a validation attempt; never used to verify a password.
       Object.assign(record, {command:'[redacted]', commandFingerprint:contentDigest('sha256', command, 'hex'), source:ports.source ? ports.source(cwd) : sourceIdentity(cwd,p),
@@ -246,10 +291,36 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       catch (error) { try { p.fs.unlinkSync(record.logPath); } catch {} throw error; }
       return record;
     });
+    const onSignal = sig => { if (executionStarted || pendingSignal) return; pendingSignal = sig; wakeWait?.(); };
+    const onSigint = () => onSignal('SIGINT'), onSigterm = () => onSignal('SIGTERM');
+    signals.on?.('SIGINT', onSigint); signals.on?.('SIGTERM', onSigterm);
+    signalCleanup = () => { signals.off?.('SIGINT', onSigint); signals.off?.('SIGTERM', onSigterm); signalCleanup = () => {}; };
+    const finishInterrupted = async sig => {
+      signalCleanup();
+      const apply = () => {
+        row.state = 'finished'; row.finishedAt = p.now(); row.outcome = 'interrupted';
+        row.exitCode = null; row.signal = sig; row.counts = null;
+        row.reason = safeEvidenceText(row.startedAt === null
+          ? `Test suite interrupted while waiting in the queue (${sig}); no tests ran.`
+          : `Test suite interrupted before starting tests (${sig}); no tests ran.`);
+        save(p, row);
+      };
+      try { await underLock(p, apply); } catch { try { apply(); } catch {} }
+      announceReceipt(ports, p, row);
+      return { exitCode: sig === 'SIGINT' ? 130 : 143, signal: sig, message: row.reason };
+    };
+    const waitTurn = () => ports.sleep
+      ? new Promise(done => { wakeWait = () => { wakeWait = null; done(); }; Promise.resolve(p.sleep(250)).then(() => { wakeWait = null; done(); }, () => { wakeWait = null; done(); }); })
+      : new Promise(done => {
+        const timer = setTimeout(() => { wakeWait = null; done(); }, 250);
+        wakeWait = () => { clearTimeout(timer); wakeWait = null; done(); };
+      });
     announceReceipt(ports, p, row);
     let lastPosition;
     for (;;) {
+      if (pendingSignal) return await finishInterrupted(pendingSignal);
       const position = await underLock(p, () => {
+        if (pendingSignal) return -1;
         const all = records(p), place = positionOf(all, row), capacity = admissionCapacity(p, env);
         const running = all.filter(other => other.state === 'running');
         const occupied = new Set(running.flatMap(other => other.cpuIds ?? []));
@@ -263,10 +334,12 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
         }
         return place;
       });
+      if (pendingSignal || position < 0) return await finishInterrupted(pendingSignal ?? 'SIGTERM');
       if (!position) break;
       if (position !== lastPosition) { p.say(`waiting for a check slot (position ${position})`); lastPosition = position; }
-      await p.sleep(250);
+      await waitTurn();
     }
+    if (pendingSignal) return await finishInterrupted(pendingSignal);
     p.say('running the full test suite');
     environmentRoot = p.fs.mkdtempSync(join(p.root, 'suite-env-'));
     const childEnv = Object.fromEntries(Object.entries(env).filter(([key, value]) =>
@@ -282,7 +355,9 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       for (const name of names) childEnv[name] = path;
     }
     childEnv.PDD_CHECK_CPUS = String(row.coresPerCheck);
-    executionStarted = true;
+    if (pendingSignal) return await finishInterrupted(pendingSignal);
+    executionStarted = true; row.executionStarted = true; save(p, row);
+    signalCleanup();
     const result = await p.execute(command, { cwd, env:childEnv, cpuIds:row.cpuIds, taskset:row.taskset, timeoutMs: timeout ? Number(timeout) * 60_000 : 0,
       record:row, environmentRoot, secrets:knownSecretValues(env),
       onRecorder: pid => { row.recorderPid = pid; row.recorderIdentity = p.processIdentity(pid); save(p,row); keepEnvironment = true; },
@@ -298,7 +373,8 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       save(p, row);
     }
     announceReceipt(ports, p, row);
-    return { exitCode: result.ownershipConfirmed === false ? 1 : result.exitCode, message: row.reason ? safeEvidenceText(row.reason) : 'Full test suite finished.' };
+    const sigOut = row.signal ?? result.signal ?? null;
+    return { exitCode: result.ownershipConfirmed === false ? 1 : result.exitCode, ...(sigOut ? { signal: sigOut } : {}), message: row.reason ? safeEvidenceText(row.reason) : 'Full test suite finished.' };
   } catch (error) {
     // Setup cannot have a child. Once execution starts, keep the reservation
     // unless the reported child group is confirmed dead.
@@ -308,6 +384,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
     }
     return { exitCode: 1, message: safeEvidenceText(`Shared test suite queue failed: ${error.code ?? error.message}`) };
   } finally {
+    signalCleanup();
     if (environmentRoot && !keepEnvironment) p.fs.rmSync(environmentRoot, {recursive:true, force:true});
   }
 }
