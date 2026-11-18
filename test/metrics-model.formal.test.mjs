@@ -1,53 +1,158 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateMetrics } from '../src/metrics-model.mjs';
+import {
+  GATES,
+  SKILLS,
+  applyMetricsToggle,
+  calculateAutopilotMetrics,
+  renderMetricsHtml,
+} from '../src/metrics-model.mjs';
 
-const at = '2026-11-01T00:00:00Z';
-const event = (id, issue, type, data, source = 'a', attempt) => ({schema:'pdd.metrics.event.v1', id, repo:'OWNER/Repo', issue, type, at, observedAt:at, source, ...(attempt ? {attempt} : {}), data});
-const selection = issue => event(`s${issue}`, issue, 'selection', {snapshotId:'s', inScope:true, state:'ready'});
-const run = events => calculateMetrics({events, repo:'owner/repo', scope:{kind:'cohort',snapshotId:'s'}, timezone:'UTC', observedAt:'2026-12-01T00:00:00Z', sources:['a','b']});
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function next() {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
-test('bounded fixed membership, attempts, machines, PRs and duplicate imports', () => {
-  for (let machines=1; machines<=2; machines++) for (let attempts=1; attempts<=2; attempts++) for (let prs=1; prs<=2; prs++) for (let copies=1; copies<=2; copies++) {
-    const rows=[selection(1),selection(2)];
-    for (let m=0;m<machines;m++) for (let a=0;a<attempts;a++) for (let p=0;p<prs;p++) rows.push(event(`d${m}${a}${p}`,1,'delivery',{pr:10+p,head:`h${p}`,explicit:true,evidence:'proof'},m?'b':'a',`attempt${a}`));
-    const report=run(Array.from({length:copies},()=>rows).flat());
-    assert.deepEqual(report.issues.map(i=>i.issue),[1,2]);
-    assert.equal(report.stages.delivered.numerator,1);
-    assert.equal(report.stages.delivered.denominator,2);
-    assert.equal(report.issues[1].started,'unknown');
-    assert.equal(report.issues[0].deliveries.length,machines*attempts*prs);
+test('formal invariants: funnel bounds, cross-view reconciliation, skill partition, and gate denominators hold across 200 generated worlds', () => {
+  const rng = mulberry32(0x5eed2026);
+  const reposPool = ['acme/api', 'acme/web', 'acme/cli'];
+  const statuses = ['merged', 'would-merge', 'running', 'needs-person', 'ended', 'released'];
+  const gateVals = ['pass', 'fail', 'not-run', 'na', null];
+  const nowMs = Date.parse('2026-11-18T18:00:00Z');
+
+  for (let trial = 0; trial < 200; trial++) {
+    const runCount = Math.floor(rng() * 25);
+    const runs = [];
+    for (let i = 0; i < runCount; i++) {
+      const repo = reposPool[Math.floor(rng() * reposPool.length)];
+      const issue = 1 + Math.floor(rng() * 12);
+      const offsetHours = Math.floor(rng() * 96);
+      const atMs = nowMs - offsetHours * 3_600_000;
+      const dur = 2 + Math.floor(rng() * 45);
+      const startMs = atMs - dur * 60_000;
+      const status = statuses[Math.floor(rng() * statuses.length)];
+      const skill = rng() < 0.75 ? SKILLS[Math.floor(rng() * SKILLS.length)] : undefined;
+      const gates = {};
+      for (const g of GATES) gates[g] = gateVals[Math.floor(rng() * gateVals.length)];
+      runs.push({
+        repo,
+        issue,
+        skill,
+        startedAt: new Date(startMs).toISOString(),
+        at: new Date(atMs).toISOString(),
+        status,
+        pr: rng() < 0.7 ? 100 + i : null,
+        gates,
+        reopened: rng() < 0.15,
+        durationMinutes: rng() < 0.85 ? dur : null,
+        pathsOnlyD: rng() < 0.2,
+        promptChanged: rng() < 0.5,
+      });
+    }
+
+    const report = calculateAutopilotMetrics({
+      runs,
+      repos: reposPool.slice(0, 1 + (trial % 3)),
+      openIssues: trial % 4 === 0 ? null : { 'acme/api': 10, 'acme/web': 4, 'acme/cli': 2 },
+      view: 'full',
+      byRepo: true,
+      date: trial % 5 === 0 ? '2026-11-17' : null,
+      timezone: 'America/Los_Angeles',
+      now: new Date(nowMs).toISOString(),
+    });
+
+    for (const w of report.overview.windows) {
+      assert.ok(w.taken >= 0);
+      assert.ok(w.prCreated >= 0 && w.prCreated <= w.taken, `prCreated <= taken in trial ${trial}`);
+      assert.ok(w.mwm >= 0 && w.mwm <= w.taken, `mwm <= taken in trial ${trial}`);
+    }
+
+    for (const pw of report.overview.perRepoWindows) {
+      const sumTaken = pw.rows.reduce((acc, r) => acc + r.taken, 0);
+      const sumPr = pw.rows.reduce((acc, r) => acc + r.prCreated, 0);
+      const sumMwm = pw.rows.reduce((acc, r) => acc + r.mwm, 0);
+      assert.equal(sumTaken, pw.total.taken);
+      assert.equal(sumPr, pw.total.prCreated);
+      assert.equal(sumMwm, pw.total.mwm);
+    }
+
+    const primaryOverview = report.overview.windows.at(-1);
+    assert.equal(report.stages.taken, primaryOverview.taken);
+    assert.equal(report.stages.pr, primaryOverview.prCreated);
+    assert.equal(report.stages.mwm, primaryOverview.mwm);
+    assert.equal(report.skills.total.taken, primaryOverview.taken);
+    assert.equal(report.skills.total.prCreated, primaryOverview.prCreated);
+    assert.equal(report.skills.total.mwm, primaryOverview.mwm);
+
+    assert.equal(
+      report.skills.rows.reduce((acc, r) => acc + r.taken, 0),
+      report.skills.total.taken,
+    );
+    assert.equal(
+      report.skills.rows.reduce((acc, r) => acc + r.mwm, 0),
+      report.skills.total.mwm,
+    );
+
+    for (const g of GATES) {
+      const cell = report.stages.gates[g];
+      assert.ok(cell.passed >= 0 && cell.passed <= cell.applicable);
+      assert.ok(cell.applicable <= report.stages.taken);
+      assert.equal(cell.display === '-', cell.applicable === 0);
+    }
+
+    assert.equal(report.stages.mwm + report.stages.nonMerged.total, report.stages.taken);
+    assert.equal(
+      report.stages.nonMerged.breakdown.reduce((acc, b) => acc + b.count, 0),
+      report.stages.nonMerged.total,
+    );
+    assert.ok(report.stages.reopen >= 0 && report.stages.reopen <= report.stages.mwm);
   }
 });
 
-test('bounded conflicts and stale candidate never establish positive stage', () => {
-  for (const type of ['start','delivery','check']) for (const reverse of [false,true]) {
-    const candidate=event('candidate',1,'milestone',{stage:'implementation-ready',pr:10,head:'new'});
-    const facts = type==='start' ? {origin:'manual'} : type==='delivery' ? {pr:10,head:'new',explicit:true,evidence:'proof'} : {pr:10,head:'new',verdict:'PASS',reviewer:'r',evidence:'proof',acceptance:'accepted'};
-    const first=event('conflict',1,type,facts), second={...first,data:{...facts,reason:'different'}};
-    const report=run([selection(1),candidate,...(reverse?[second,first]:[first,second])]);
-    assert.equal(report.conflicts.length,1);
-    assert.equal(report.issues[0][{start:'started',delivery:'delivered',check:'validated'}[type]],'unknown');
-  }
-  for (const head of ['old','other']) {
-    const report=run([selection(1),event('candidate',1,'milestone',{stage:'implementation-ready',pr:10,head:'new'}),event('check',1,'check',{pr:10,head,verdict:'PASS',reviewer:'r',evidence:'proof',acceptance:'accepted'})]);
-    assert.equal(report.issues[0].validated,'unknown');
-  }
+test('formal invariants: on/off toggle intervals preserve prior and resumed runs while excluding paused runs', () => {
+  let cfg = applyMetricsToggle(null, { action: 'off', at: '2026-11-17T10:00:00Z' });
+  cfg = applyMetricsToggle(cfg, { action: 'on', at: '2026-11-17T12:00:00Z' });
+  cfg = applyMetricsToggle(cfg, { action: 'off', repo: 'acme/web', at: '2026-11-17T13:00:00Z' });
+
+  const runs = [
+    { repo: 'acme/api', issue: 1, startedAt: '2026-11-17T09:00:00Z', at: '2026-11-17T09:30:00Z', status: 'merged', pr: 11 },
+    { repo: 'acme/api', issue: 2, startedAt: '2026-11-17T11:00:00Z', at: '2026-11-17T11:20:00Z', status: 'merged', pr: 12 },
+    { repo: 'acme/api', issue: 3, startedAt: '2026-11-17T12:30:00Z', at: '2026-11-17T12:45:00Z', status: 'merged', pr: 13 },
+    { repo: 'acme/web', issue: 4, startedAt: '2026-11-17T12:30:00Z', at: '2026-11-17T12:50:00Z', status: 'merged', pr: 14 },
+    { repo: 'acme/web', issue: 5, startedAt: '2026-11-17T13:30:00Z', at: '2026-11-17T13:50:00Z', status: 'merged', pr: 15 },
+  ];
+
+  const report = calculateAutopilotMetrics({
+    runs,
+    repos: ['acme/api', 'acme/web'],
+    openIssues: { 'acme/api': 1, 'acme/web': 1 },
+    now: '2026-11-17T15:00:00Z',
+    timezone: 'UTC',
+    recording: cfg,
+  });
+
+  // Issues #1, #3, #4 survive; #2 (global pause) and #5 (acme/web pause) are excluded.
+  assert.equal(report.overview.windows[0].taken, 3);
+  assert.equal(report.overview.windows[0].mwm, 3);
 });
 
-test('bounded absent early evidence and empty denominator', () => {
-  for (const later of ['none','candidate','delivery']) {
-    const rows=[selection(1)];
-    if (later==='candidate') rows.push(event('c',1,'milestone',{stage:'implementation-ready',pr:10,head:'h'}));
-    if (later==='delivery') rows.push(event('d',1,'delivery',{pr:10,head:'h',explicit:true,evidence:'proof'}));
-    const report=run(rows);
-    assert.equal(report.issues[0].started,'unknown');
-    assert.equal(report.stages.started.numerator,0);
-    assert.equal(report.issues[0].delivered,later==='delivery'?'yes':'unknown');
-  }
-  for (const stage of Object.values(run([]).stages)) {
-    assert.equal(stage.denominator,0);
-    assert.equal(stage.percentage,null);
-  }
+test('formal HTML escaping prevents unescaped markup in rendered HTML', () => {
+  const report = calculateAutopilotMetrics({
+    runs: [],
+    repos: ['acme/safe-repo'],
+    openIssues: { 'acme/safe-repo': 3 },
+    now: '2026-11-17T15:00:00Z',
+    timezone: 'UTC',
+  });
+  report.displayDate = '<script>alert("xss")</script>';
+  const html = renderMetricsHtml(report);
+  assert.doesNotMatch(html, /<script>alert/);
+  assert.match(html, /&lt;script&gt;alert\(&quot;xss&quot;\)&lt;\/script&gt;/);
 });

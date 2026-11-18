@@ -10,6 +10,7 @@ import {
   extractJsonObjects,
   findConfiguredSkipLabel,
   findExternalRepoLabel,
+  codexProviderConfigArgs,
   forensicsCommand,
   forensicsEnvironment,
   formatForensicsBrief,
@@ -478,4 +479,58 @@ test('tickCore pre-run forensics handles already_fixed (no empty PR, no loop, re
   assert.equal(rechecked, true);
   assert.ok(w.job(17, 'build'), 'unverified already_fixed fell through safely to start build');
   assert.equal(w.comments(17).filter(body => body.includes('pdd:autopilot-forensics:fixed:17')).length, 1, 'no second fixed comment posted');
+});
+
+
+test('codexProviderConfigArgs forwards native openai_base_url, chatgpt_base_url, features.responses_websockets=false, and redacts legacy grant headers', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-forensics-cfg-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  const managedHome = join(dir, 'managed-codex');
+  mkdirSync(managedHome, { recursive: true });
+  writeFileSync(join(managedHome, 'config.toml'), [
+    'cli_auth_credentials_store = "file"',
+    'openai_base_url = "https://api.promptdriven.ai/v1/codex-gateway"',
+    'chatgpt_base_url = "https://api.promptdriven.ai/v1/codex-gateway"',
+    '',
+    '[model_providers.pdd_codex_gateway]',
+    'name = "PDD Codex Gateway"',
+    'base_url = "https://api.promptdriven.ai/v1/codex-gateway"',
+    'wire_api = "responses"',
+    'requires_openai_auth = true',
+    '',
+    '[shell_environment_policy.filters]',
+    'PDD_CODEX_GATEWAY_GRANT = "exclude"',
+    '',
+    '[features]',
+    'shell_snapshot = false',
+    'responses_websockets = false',
+    '',
+  ].join('\n'));
+
+  const env = { HOME: dir, CODEX_HOME: managedHome };
+  const cmd = forensicsCommand({ kind: 'codex', command: 'codex' }, { env, resultFile: join(dir, 'out.json') });
+  assert.ok(cmd.args.includes('cli_auth_credentials_store="file"'));
+  assert.ok(cmd.args.includes('openai_base_url="https://api.promptdriven.ai/v1/codex-gateway"'));
+  assert.ok(cmd.args.includes('chatgpt_base_url="https://api.promptdriven.ai/v1/codex-gateway"'));
+  assert.ok(cmd.args.includes('shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"'));
+  assert.ok(cmd.args.includes('features.shell_snapshot=false'));
+  assert.ok(cmd.args.includes('features.responses_websockets=false'));
+  assert.equal(cmd.args.some(a => a.startsWith('model_provider=')), false, 'native provider omits top-level model_provider override');
+
+  // Legacy model_provider with inline x-pdd-gateway-grant moves secret to env and never leaks onto CLI args
+  const legacyHome = join(dir, 'legacy-codex');
+  mkdirSync(legacyHome, { recursive: true });
+  writeFileSync(join(legacyHome, 'config.toml'), [
+    'model_provider = "pdd_codex_gateway"',
+    '[model_providers.pdd_codex_gateway]',
+    'base_url = "https://api.promptdriven.ai/v1/codex-gateway/lse_leg"',
+    'http_headers = { "x-pdd-gateway-grant" = "pddg_legacy_secret_9911" }',
+    '',
+  ].join('\n'));
+  const legacyEnv = { HOME: dir, CODEX_HOME: legacyHome };
+  const legacyArgs = codexProviderConfigArgs({ env: legacyEnv });
+  assert.equal(legacyEnv.PDD_CODEX_GATEWAY_GRANT, 'pddg_legacy_secret_9911');
+  assert.equal(legacyArgs.join(' ').includes('pddg_legacy_secret_9911'), false, 'grant secret never placed in CLI args');
+  assert.ok(legacyArgs.includes('shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"'));
 });

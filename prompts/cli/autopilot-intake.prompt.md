@@ -115,8 +115,8 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   --color never --ignore-rules` (so no MCP server, profile or feature of the
   person's `config.toml` loads; safe auth-store and provider routing keys from an
   explicit `CODEX_HOME/config.toml` are forwarded via `codexProviderConfigArgs`
-  `-c` flags so Cloud Accounts `pdd_codex_gateway` leases and managed credential
-  stores still load, #3503) with approvals `never`, web search
+  `-c` flags so Cloud Accounts gateway leases and managed credential stores still
+  load, #3503) with approvals `never`, web search
   disabled, `mcp_servers={}`, reasoning effort `low`, its tool features off (hooks,
   plugins, apps, browser and computer use, multi-agent, shell, unified exec, code
   mode) and `--output-last-message ANSWER`; Claude runs

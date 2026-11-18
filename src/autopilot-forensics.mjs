@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-forensics.prompt.md
+// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: 0800dcf915bbc35d17d4f252038b628bbedafa8e467f2b848b74053817ebf283).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -225,6 +225,12 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
   if (typeof parsed.cli_auth_credentials_store === 'string' && parsed.cli_auth_credentials_store.trim() && !SAFE_CONTROL_RE.test(parsed.cli_auth_credentials_store)) {
     out.push('-c', `cli_auth_credentials_store=${JSON.stringify(parsed.cli_auth_credentials_store.trim())}`);
   }
+  if (typeof parsed.openai_base_url === 'string' && parsed.openai_base_url.trim() && !SAFE_CONTROL_RE.test(parsed.openai_base_url)) {
+    out.push('-c', `openai_base_url=${JSON.stringify(parsed.openai_base_url.trim())}`);
+  }
+  if (typeof parsed.chatgpt_base_url === 'string' && parsed.chatgpt_base_url.trim() && !SAFE_CONTROL_RE.test(parsed.chatgpt_base_url)) {
+    out.push('-c', `chatgpt_base_url=${JSON.stringify(parsed.chatgpt_base_url.trim())}`);
+  }
   if (typeof parsed.model_provider === 'string' && parsed.model_provider.trim() && !SAFE_CONTROL_RE.test(parsed.model_provider)) {
     const provider = parsed.model_provider.trim();
     out.push('-c', `model_provider=${JSON.stringify(provider)}`);
@@ -284,6 +290,9 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
   }
   if (isTomlTable(parsed.features) && parsed.features.shell_snapshot === false) {
     out.push('-c', 'features.shell_snapshot=false');
+  }
+  if (isTomlTable(parsed.features) && parsed.features.responses_websockets === false) {
+    out.push('-c', 'features.responses_websockets=false');
   }
   return out;
 }

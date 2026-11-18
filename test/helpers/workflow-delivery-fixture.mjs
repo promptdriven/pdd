@@ -12,7 +12,6 @@ const packageRoot = resolve(import.meta.dirname, '../..');
 const issueUrl = 'https://github.com/example/project/issues/17';
 import { fakeHerdr } from './fake-herdr.mjs';
 import { copyGitTemplate } from './git-template.mjs';
-import { appendEvents } from '../../src/metrics-store.mjs';
 export { fakeHerdr };
 
 export async function fixture(t, { agent = 'claude', name = 'small-change' } = {}) {
@@ -82,12 +81,7 @@ export async function fixture(t, { agent = 'claude', name = 'small-change' } = {
     throw Error(`unexpected gh ${args.join(' ')}`);
   }
   f.prompts = [];
-  f.ports = { metricsAppendEvents: input => {
-    const pending = appendEvents(input);
-    pendingMetrics.add(pending);
-    pending.then(() => pendingMetrics.delete(pending), () => pendingMetrics.delete(pending));
-    return pending;
-  }, execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, elapsedNow: () => f.elapsed, sleep: async ms => { f.clock += ms; f.elapsed += ms; },
+  f.ports = { metricsAppendEvents: () => Promise.resolve({ ok: true }), execFile, herdr: f.herdr.herdr, stateDir: state, layoutDirectory: join(state, 'herdr-layout'), now: () => f.clock, elapsedNow: () => f.elapsed, sleep: async ms => { f.clock += ms; f.elapsed += ms; },
     env: { HOME: home, CLAUDE_CONFIG_DIR: join(home, '.claude') }, isTTY: true, pdd: '/abs/node /abs/pdd.mjs',
     confirm: async question => { f.prompts.push(question); return f.answer ?? true; },
     attach: async () => 0, readApprovalEvidence: async () => assert.fail('A terminal person needs no chat evidence') };

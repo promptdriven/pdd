@@ -1,14 +1,17 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
 import { PassThrough } from 'node:stream';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -20,8 +23,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
+import { refreshInstalledAutoSwitchBlocks, renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
+import { readCodexUsageWindows } from '../src/codex-limits.mjs';
 import {
+  accountsStatePath,
+  buildSyntheticGatewayIdToken,
   createCodexStepOverlay,
   managedCodexAuthPath,
   managedCodexConfigPath,
@@ -194,6 +200,9 @@ async function createPoolGatewayServer(t, opts = {}) {
       if (state.leaseOverrideState === 'error_500') {
         return send(500, { detail: 'Temporary lease outage' });
       }
+      if (state.leaseOverrideState === 'reauth_no_id') {
+        return send(401, { detail: { error: 'reauth_required', message: 'refresh_token_reused' } });
+      }
       const provider = body?.provider ?? 'codex';
       const skip = new Set(Array.isArray(body?.skip_account_ids) ? body.skip_account_ids : []);
       const candidates = state.accounts.filter(
@@ -242,6 +251,22 @@ async function createPoolGatewayServer(t, opts = {}) {
             codex_gateway_url: `${serverUrl}/v1/codex-gateway/${leaseId}`,
             codex_gateway_token: grantToken,
             gateway_bearer_token: grantToken,
+          },
+        });
+      }
+
+      if (provider === 'claude' && chosen.is_owner === false) {
+        const clGrant = `pddg_cl_shared_${seq}`;
+        return send(200, {
+          state: 'leased',
+          switched: chosen.account_id !== body?.current_account_id,
+          account: chosen,
+          lease: {
+            lease_id: leaseId,
+            expires_at: expiresAt,
+            delivery_mode: 'gateway_grant',
+            gateway_bearer_token: clGrant,
+            anthropic_base_url: `${serverUrl}/v1/accounts/claude-gateway/${leaseId}`,
           },
         });
       }
@@ -340,6 +365,19 @@ async function createPoolGatewayServer(t, opts = {}) {
       if (req.method === 'GET' && action === 'log') {
         return send(200, { entries: [{ created_at: '2026-11-17T20:00:00Z', event: 'enrolled', actor_login: 'Serhan-Asad', detail: acc.provider }] });
       }
+    }
+
+    const acceptMatch = /^\/v1\/accounts\/invites\/([^/]+)\/accept$/.exec(url.pathname);
+    if (req.method === 'POST' && acceptMatch) {
+      const invId = decodeURIComponent(acceptMatch[1]);
+      const invIdx = state.pendingInvites.findIndex(i => i.invite_id === invId);
+      if (invIdx === -1) return send(404, { detail: 'Invite not found' });
+      const inv = state.pendingInvites.splice(invIdx, 1)[0];
+      const acc = state.accounts.find(a => a.account_id === inv.account_id) ?? inv.account;
+      if (acc && !state.accounts.some(a => a.account_id === acc.account_id)) {
+        state.accounts.push(acc);
+      }
+      return send(200, { accepted: true, account: acc, provider: acc?.provider ?? inv.provider ?? 'codex' });
     }
 
     const delMatch = /^\/v1\/accounts\/([^/]+)$/.exec(url.pathname);
@@ -739,15 +777,22 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
 
   // Pin `glt`, inspect `auth.json` + `config.toml`, then switch to `glt-oai2` via `next` and verify `config.toml` NEVER changes!
   assert.equal((await invokeCli(['accounts', 'use', 'glt'], sb)).exit, 0);
-  const auth1 = JSON.parse(readFileSync(authPath, 'utf8'));
-  assert.equal(auth1.auth_mode, 'apikey');
-  assert.match(auth1.OPENAI_API_KEY, /^pddg_lse_[0-9a-f]+_/);
-  assert.equal(auth1.tokens, undefined, 'zero raw OAuth tokens in auth.json');
+  const auth1Raw = readFileSync(authPath, 'utf8');
+  const auth1 = JSON.parse(auth1Raw);
+  assert.equal(auth1.auth_mode, 'chatgpt');
+  assert.equal(auth1.OPENAI_API_KEY, null);
+  assert.match(auth1.tokens?.access_token ?? '', /^pddg_lse_[0-9a-f]+_/);
+  assert.equal(auth1.tokens?.refresh_token, '');
+  assert.equal(auth1.tokens?.account_id, 'acct_pdd_gateway');
+  assert.equal(auth1.tokens?.id_token, buildSyntheticGatewayIdToken({ planType: 'pro' }));
+  assert.doesNotMatch(auth1Raw, /raw_access_|raw_refresh_|@promptdriven\.ai/, 'zero raw OAuth tokens in auth.json');
 
   const configTextBeforeSwitch = readFileSync(configPath, 'utf8');
   const configInodeBeforeSwitch = statSync(configPath).ino;
   const parsedCfg = parseToml(configTextBeforeSwitch);
-  assert.equal(parsedCfg.model_provider, 'pdd_codex_gateway');
+  assert.equal(parsedCfg.model_provider, undefined, 'native openai provider kept at top level');
+  assert.equal(parsedCfg.openai_base_url, `${cloud.serverUrl}/v1/codex-gateway`);
+  assert.equal(parsedCfg.chatgpt_base_url, `${cloud.serverUrl}/v1/codex-gateway`);
   assert.equal(parsedCfg.model_providers.pdd_codex_gateway.base_url, `${cloud.serverUrl}/v1/codex-gateway`);
   assert.equal(parsedCfg.model_providers.pdd_codex_gateway.model_catalog_url, `${cloud.serverUrl}/v1/codex-gateway/models`);
   assert.equal(parsedCfg.model_providers.pdd_codex_gateway.requires_openai_auth, true);
@@ -790,8 +835,10 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
   const nextRes = await invokeCli(['accounts', 'next', '--provider', 'codex'], sb);
   assert.equal(nextRes.exit, 0, nextRes.stderr);
   const auth2 = JSON.parse(readFileSync(authPath, 'utf8'));
-  assert.notEqual(auth2.OPENAI_API_KEY, auth1.OPENAI_API_KEY, 'auth.json rotated to new lease grant token');
-  assert.match(auth2.OPENAI_API_KEY, /^pddg_lse_[0-9a-f]+_/);
+  assert.equal(auth2.auth_mode, 'chatgpt');
+  assert.equal(auth2.OPENAI_API_KEY, null);
+  assert.notEqual(auth2.tokens?.access_token, auth1.tokens?.access_token, 'auth.json rotated to new lease grant token');
+  assert.match(auth2.tokens?.access_token ?? '', /^pddg_lse_[0-9a-f]+_/);
   assert.equal(readFileSync(configPath, 'utf8'), configTextBeforeSwitch, 'config.toml bytes remain 100% constant across switches');
   assert.equal(statSync(configPath).ino, configInodeBeforeSwitch, 'config.toml was not rewritten when unchanged');
 
@@ -833,6 +880,9 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
   const legacyUse = await invokeCli(['accounts', 'use', 'glt'], sb);
   assert.equal(legacyUse.exit, 0, legacyUse.stderr);
   const legacyCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(legacyCfg.model_provider, undefined);
+  assert.match(legacyCfg.openai_base_url ?? '', /\/v1\/codex-gateway\/lse_[0-9a-f]+$/);
+  assert.equal(legacyCfg.chatgpt_base_url, legacyCfg.openai_base_url);
   assert.match(legacyCfg.model_providers.pdd_codex_gateway.base_url, /\/v1\/codex-gateway\/lse_[0-9a-f]+$/);
   assert.match(legacyCfg.model_providers.pdd_codex_gateway.model_catalog_url, /\/v1\/codex-gateway\/lse_[0-9a-f]+\/models$/);
   assert.equal(legacyCfg.model_providers.pdd_codex_gateway.requires_openai_auth, false);
@@ -906,7 +956,7 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured l
   const authPath = managedCodexAuthPath(sb.env);
   const configPath = managedCodexConfigPath(sb.env);
   const configSnapshot = readFileSync(configPath, 'utf8');
-  const firstGrant = JSON.parse(readFileSync(authPath, 'utf8')).OPENAI_API_KEY;
+  const firstGrant = JSON.parse(readFileSync(authPath, 'utf8')).tokens.access_token;
 
   // 2a. CRITICAL negative guard: raw PTY stdout/stderr & rollout tool outputs containing quota keywords MUST NEVER kill interactive codex or poison Cloud `/usage-report`!
   const safeSessionUuid = '019a5555-6666-7000-8000-112233445566';
@@ -963,7 +1013,7 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured l
       quotaSettleMs: 0,
       rolloutPollIntervalMs: 15,
       async spawnCodexPty({ args, env, turn, signal, onOutput }) {
-        const activeGrantOnDisk = JSON.parse(readFileSync(join(env.CODEX_HOME, 'auth.json'), 'utf8')).OPENAI_API_KEY;
+        const activeGrantOnDisk = JSON.parse(readFileSync(join(env.CODEX_HOME, 'auth.json'), 'utf8')).tokens.access_token;
         seenTurns.push({ turn, args, codexHome: env.CODEX_HOME, grant: activeGrantOnDisk });
         const dayDir = join(env.CODEX_HOME, 'sessions', '2026', '11', '17');
         mkdirSync(dayDir, { recursive: true });
@@ -1076,7 +1126,7 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured l
   assert.equal((await invokeCli(['accounts', 'use', 'glt'], sb)).exit, 0);
 
   const fallbackTurns = [];
-  const fallbackRes = await invokeCli(['accounts', 'codex', '--', '--search'], sb, {
+  const fallbackRes = await invokeCli(['accounts', 'codex', '--', '-i', 'diagram.png', '--search', 'fix turn zero prompt'], sb, {
     quotaSettleMs: 0,
     async spawnCodexPty({ args, turn, onOutput }) {
       fallbackTurns.push({ turn, args });
@@ -1090,7 +1140,32 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured l
 
   assert.equal(fallbackRes.exit, 0, fallbackRes.stderr);
   assert.equal(fallbackTurns.length, 2);
-  assert.deepEqual(fallbackTurns[1].args, ['resume', '--search', '--last'], 'falls back to resume --last preserving flags when codex exits before rollout creation');
+  assert.deepEqual(
+    fallbackTurns[1].args,
+    ['-i', 'diagram.png', '--search', 'fix turn zero prompt'],
+    'turn-0 quota exit before rollout creation keeps initial prompt & flags instead of discarding prompt for resume --last',
+  );
+
+  // Explicit `resume` without session UUID still falls back to `resume ... --last` preserving `-i`!
+  cloud.state.accounts[0].state = 'ready';
+  cloud.state.accounts[0].five_hour_used_percent = 5;
+  cloud.state.accounts[1].state = 'ready';
+  cloud.state.accounts[1].five_hour_used_percent = 5;
+  assert.equal((await invokeCli(['accounts', 'use', 'glt'], sb)).exit, 0);
+  const resumeFallbackTurns = [];
+  const resumeFallbackRes = await invokeCli(['accounts', 'codex', '--', '-i', 'shot.png', '--search', 'resume'], sb, {
+    quotaSettleMs: 0,
+    async spawnCodexPty({ args, turn, onOutput }) {
+      resumeFallbackTurns.push({ turn, args });
+      if (turn === 0) {
+        onOutput('Error: You\'ve hit your usage limit for this window.\n');
+        return { code: 1, signal: 'SIGTERM' };
+      }
+      return { code: 0, signal: null };
+    },
+  }, { isTTY: true });
+  assert.equal(resumeFallbackRes.exit, 0, resumeFallbackRes.stderr);
+  assert.deepEqual(resumeFallbackTurns[1].args, ['resume', '-i', 'shot.png', '--search', '--last']);
 });
 
 test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-validation + uid shares + failure backup, multi-terminal rollout pinning, direct flag passthrough, and real Python PTY SIGWINCH/killpg', async t => {
@@ -1445,7 +1520,7 @@ test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-v
     }
   });
 
-  const waitForPtyPattern = (re, timeoutMs = 4000) => new Promise((resolveMatch, rejectMatch) => {
+  const waitForPtyPattern = (re, timeoutMs = 12000) => new Promise((resolveMatch, rejectMatch) => {
     const existing = re.exec(ptyStdout.text);
     if (existing) return resolveMatch(existing);
     const timer = setTimeout(() => {
@@ -1736,4 +1811,872 @@ test('R2 Blockers 1–5: 32 KiB session_meta + subagent parent_thread_id/source.
     ['resume', '-m', 'gpt-5.4', bigMetaSessionUuid],
     'pinned 32 KiB session_meta UUID (ignoring subagent parent_thread_id/source.subagent), skipped 2.5 MiB line, and rotated on trailing quota error',
   );
+});
+
+test('#3516 Part 2: codex app-server daemon stop runs on import (managed + scrubbed source CODEX_HOME), use, next, remove/leave, and skips 0ms cached sync --quiet', async t => {
+  const cloud = await createPoolGatewayServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_daemon_shared',
+        label: 'shared-daemon',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: false,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 10,
+        five_hour_reset_at: '2026-11-18T02:00:00Z',
+        weekly_used_percent: 20,
+        weekly_reset_at: '2026-11-23T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+  const managedHome = pddManagedCodexHome(sb.env);
+  const userCodexHome = join(sb.home, '.codex');
+  mkdirSync(userCodexHome, { recursive: true, mode: 0o700 });
+  writeFileSync(join(userCodexHome, 'auth.json'), JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'oa_import_daemon_test',
+      refresh_token: 'rt_single_use_import_daemon_test',
+      id_token: makeJwt({ email: 'daemon-owner@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_import_daemon_1',
+    },
+  }), { mode: 0o600 });
+
+  const daemonStops = [];
+  const spyPorts = {
+    tmpRoot: sb.root,
+    readCodexUsageWindows: async () => null,
+    spawnSync(cmd, args, opts) {
+      daemonStops.push({ cmd, args, codexHome: opts?.env?.CODEX_HOME, stdio: opts?.stdio, timeout: opts?.timeout });
+      return { status: 0 };
+    },
+  };
+
+  // 1. `pdd accounts import`: stops daemon in BOTH `managedCodexHome` AND scrubbed `~/.codex`!
+  const impRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'imported-daemon'], sb, spyPorts);
+  assert.equal(impRes.exit, 0, impRes.stderr);
+  assert.equal(JSON.parse(readFileSync(join(userCodexHome, 'auth.json'), 'utf8')).tokens.refresh_token, '');
+  assert.deepEqual(
+    daemonStops.map(c => ({ cmd: c.cmd, args: c.args, codexHome: c.codexHome, stdio: c.stdio, timeout: c.timeout })),
+    [
+      { cmd: 'codex', args: ['app-server', 'daemon', 'stop'], codexHome: managedHome, stdio: 'ignore', timeout: 2500 },
+      { cmd: 'codex', args: ['app-server', 'daemon', 'stop'], codexHome: userCodexHome, stdio: 'ignore', timeout: 2500 },
+    ],
+    'import stops stale daemons in both managedCodexHome and scrubbed source CODEX_HOME',
+  );
+
+  // 2. Cached 0ms `sync --quiet` fast path MUST NOT spawn `codex app-server daemon stop`!
+  daemonStops.length = 0;
+  const cachedSync = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet'], sb, spyPorts);
+  assert.equal(cachedSync.exit, 0, cachedSync.stderr);
+  assert.equal(daemonStops.length, 0, 'cached 0ms sync --quiet fast path never spawns codex app-server daemon stop');
+
+  // 3. Expired/stale `sync --quiet` that re-leases DOES stop stale daemon in `managedCodexHome`!
+  const farFutureNow = Date.now() + 2 * 3600 * 1000;
+  const refreshSync = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet'], sb, {
+    ...spyPorts,
+    now: () => farFutureNow,
+  });
+  assert.equal(refreshSync.exit, 0, refreshSync.stderr);
+  assert.equal(daemonStops.length, 1, 're-materializing sync stops daemon in managedCodexHome');
+  assert.equal(daemonStops[0].codexHome, managedHome);
+
+  // 4. `use` and `next` each stop stale daemon in `managedCodexHome`!
+  daemonStops.length = 0;
+  assert.equal((await invokeCli(['accounts', 'use', 'shared-daemon'], sb, spyPorts)).exit, 0);
+  assert.equal(daemonStops.length, 1);
+  assert.equal(daemonStops[0].codexHome, managedHome);
+
+  daemonStops.length = 0;
+  assert.equal((await invokeCli(['accounts', 'next', '--provider', 'codex'], sb, spyPorts)).exit, 0);
+  assert.equal(daemonStops.length, 1);
+  assert.equal(daemonStops[0].codexHome, managedHome);
+
+  // 5. `remove` + `leave` leaving zero active Codex accounts removes auth/gateway config and stops stale daemon!
+  daemonStops.length = 0;
+  assert.equal((await invokeCli(['accounts', 'remove', 'imported-daemon'], sb, spyPorts)).exit, 0);
+  assert.equal(daemonStops.length, 1, 'removing active Codex account cleans managed home and stops daemon');
+  assert.equal(daemonStops[0].codexHome, managedHome);
+
+  assert.equal((await invokeCli(['accounts', 'use', 'shared-daemon'], sb, spyPorts)).exit, 0);
+  daemonStops.length = 0;
+  assert.equal((await invokeCli(['accounts', 'leave', 'shared-daemon'], sb, spyPorts)).exit, 0);
+  assert.equal(daemonStops.length, 1, 'leaving last shared Codex account cleans managed home and stops daemon');
+  assert.equal(daemonStops[0].codexHome, managedHome);
+});
+
+function findRolloutJsonlFiles(dir) {
+  const out = [];
+  if (!existsSync(dir)) return out;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...findRolloutJsonlFiles(full));
+    else if (entry.isFile() && entry.name.endsWith('.jsonl')) out.push(full);
+  }
+  return out;
+}
+
+function spawnAsync(cmd, args, { cwd, env, timeoutMs = 20_000 }) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      rejectPromise(new Error(`${cmd} ${args.join(' ')} timed out after ${timeoutMs}ms\nstdout: ${stdout}\nstderr: ${stderr}`));
+    }, timeoutMs);
+    child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+    child.on('error', err => {
+      clearTimeout(timer);
+      rejectPromise(err);
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      resolvePromise({ code, signal, stdout, stderr });
+    });
+  });
+}
+
+test('#3516 live codex-cli integration: app-server --strict-config rateLimits/read, codex exec on native openai provider, and codex exec resume across rotated grants with 0 external requests', async t => {
+  const codexVersion = spawnSync('codex', ['--version'], { encoding: 'utf8' });
+  if (codexVersion.status !== 0) {
+    t.skip('codex binary is not installed in PATH');
+    return;
+  }
+
+  const externalProxyTargets = [];
+  const blockedProxy = http.createServer((req, res) => {
+    externalProxyTargets.push(req.url);
+    res.writeHead(502);
+    res.end('External network blocked in test');
+  });
+  blockedProxy.on('connect', (req, clientSocket) => {
+    externalProxyTargets.push(req.url);
+    clientSocket.destroy();
+  });
+  await new Promise(resolveListen => blockedProxy.listen(0, '127.0.0.1', resolveListen));
+  t.after(() => {
+    blockedProxy.closeAllConnections?.();
+    blockedProxy.close();
+  });
+  const blockedProxyUrl = `http://127.0.0.1:${blockedProxy.address().port}`;
+
+  const issuedGrants = new Map();
+  const gatewayHits = [];
+  const accounts = [
+    {
+      account_id: 'acc_live_gw_1',
+      label: 'gw-first',
+      provider: 'codex',
+      plan: 'pro',
+      is_owner: true,
+      shared: false,
+      state: 'ready',
+      five_hour_used_percent: 20,
+      five_hour_reset_at: '2026-11-18T02:00:00Z',
+      weekly_used_percent: 35,
+      weekly_reset_at: '2026-11-23T00:00:00Z',
+    },
+    {
+      account_id: 'acc_live_gw_2',
+      label: 'gw-second',
+      provider: 'codex',
+      plan: 'team',
+      is_owner: true,
+      shared: false,
+      state: 'ready',
+      five_hour_used_percent: 5,
+      five_hour_reset_at: '2026-11-18T03:00:00Z',
+      weekly_used_percent: 10,
+      weekly_reset_at: '2026-11-24T00:00:00Z',
+    },
+  ];
+  let seq = 1;
+  let mockUrl = '';
+
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const rawBody = Buffer.concat(chunks).toString('utf8');
+    let body = null;
+    try { body = rawBody ? JSON.parse(rawBody) : null; } catch {}
+    const url = new URL(req.url, 'http://127.0.0.1');
+    const sendJson = (status, payload) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+
+    if (url.pathname.startsWith('/v1/codex-gateway')) {
+      const authHeader = String(req.headers.authorization ?? '');
+      const bearerGrant = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      const headerGrant = String(req.headers['x-pdd-gateway-grant'] ?? '').trim();
+      const grant = bearerGrant || headerGrant;
+      gatewayHits.push({
+        method: req.method,
+        path: url.pathname,
+        grant,
+        accountLabel: issuedGrants.get(grant) ?? null,
+      });
+      if (!issuedGrants.has(grant)) {
+        return sendJson(401, { error: { message: 'Invalid or revoked gateway grant' } });
+      }
+      if (req.method === 'GET' && /\/models$/.test(url.pathname)) {
+        return sendJson(200, {
+          models: [
+            {
+              slug: 'gpt-5.4',
+              display_name: 'GPT-5.4',
+              description: 'Mock GPT-5.4 via PDD Gateway',
+              supported_reasoning_levels: [{ effort: 'medium', description: 'Medium' }],
+              default_reasoning_level: 'medium',
+              default_reasoning_summary: 'none',
+              supports_reasoning_summaries: false,
+              support_verbosity: false,
+              default_verbosity: null,
+              prefer_websockets: false,
+              shell_type: 'unified_exec',
+              visibility: 'list',
+              minimal_client_version: '0.1.0',
+              priority: 1,
+              supported_in_api: true,
+              availability_nux: null,
+              upgrade: null,
+              input_modalities: ['text'],
+              apply_patch_tool_type: 'freeform',
+              web_search_tool_type: 'text',
+              truncation_policy: { mode: 'tokens', limit: 10000 },
+              supports_parallel_tool_calls: true,
+              context_window: 272000,
+              effective_context_window_percent: 95,
+              experimental_supported_tools: [],
+              base_instructions: 'Reply directly without running tools.',
+            },
+          ],
+        });
+      }
+      if (req.method === 'GET' && /\/usage$/.test(url.pathname)) {
+        return sendJson(200, {
+          plan_type: 'pro',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 23,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 3600,
+              reset_at: 1800003600,
+            },
+            secondary_window: {
+              used_percent: 41,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 86400,
+              reset_at: 1800086400,
+            },
+          },
+        });
+      }
+      if (req.method === 'POST' && /\/responses$/.test(url.pathname)) {
+        const label = issuedGrants.get(grant);
+        const replyText = `GATEWAY_OK_${label}`;
+        const model = body?.model || 'gpt-5.4';
+        const respId = `resp_mock_${seq++}`;
+        const msgId = `msg_mock_${seq++}`;
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        });
+        const events = [
+          ['response.created', { type: 'response.created', response: { id: respId, object: 'response', status: 'in_progress', model, output: [] } }],
+          ['response.output_item.added', { type: 'response.output_item.added', output_index: 0, item: { id: msgId, type: 'message', status: 'in_progress', role: 'assistant', content: [] } }],
+          ['response.content_part.added', { type: 'response.content_part.added', item_id: msgId, output_index: 0, content_index: 0, part: { type: 'output_text', text: '' } }],
+          ['response.output_text.delta', { type: 'response.output_text.delta', item_id: msgId, output_index: 0, content_index: 0, delta: replyText }],
+          ['response.output_text.done', { type: 'response.output_text.done', item_id: msgId, output_index: 0, content_index: 0, text: replyText }],
+          ['response.content_part.done', { type: 'response.content_part.done', item_id: msgId, output_index: 0, content_index: 0, part: { type: 'output_text', text: replyText } }],
+          ['response.output_item.done', { type: 'response.output_item.done', output_index: 0, item: { id: msgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: replyText }] } }],
+          ['response.completed', {
+            type: 'response.completed',
+            response: {
+              id: respId,
+              object: 'response',
+              status: 'completed',
+              model,
+              output: [{ id: msgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: replyText }] }],
+              usage: {
+                input_tokens: 12,
+                input_tokens_details: { cached_tokens: 0 },
+                output_tokens: 4,
+                output_tokens_details: { reasoning_tokens: 0 },
+                total_tokens: 16,
+              },
+            },
+          }],
+        ];
+        for (const [evt, data] of events) {
+          res.write(`event: ${evt}\ndata: ${JSON.stringify(data)}\n\n`);
+        }
+        res.end();
+        return;
+      }
+      return sendJson(404, { error: `Unhandled gateway route ${url.pathname}` });
+    }
+
+    if (req.headers.authorization !== 'Bearer ghu_testCloudBearer999999') {
+      return sendJson(401, { detail: 'Unauthorized' });
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/accounts') {
+      return sendJson(200, { accounts, pending_invites: [] });
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/accounts/lease') {
+      const skip = new Set(Array.isArray(body?.skip_account_ids) ? body.skip_account_ids : []);
+      const candidates = accounts.filter(a => !skip.has(a.account_id));
+      const chosen = (body?.preferred_label && candidates.find(a => a.label === body.preferred_label))
+        || (body?.current_account_id && candidates.find(a => a.account_id === body.current_account_id))
+        || candidates[0];
+      const leaseHex = (seq++).toString(16).padStart(8, '0');
+      const leaseId = `lse_${leaseHex}`;
+      const grantToken = `pddg_lse_${leaseHex}_liveGrantSecret${seq}`;
+      issuedGrants.set(grantToken, chosen.label);
+      return sendJson(200, {
+        state: 'leased',
+        switched: chosen.account_id !== body?.current_account_id,
+        account: chosen,
+        lease: {
+          lease_id: leaseId,
+          expires_at: new Date(Date.now() + 45 * 60 * 1000).toISOString(),
+          delivery_mode: 'gateway_grant',
+          codex_gateway_url: `${mockUrl}/v1/codex-gateway/${leaseId}`,
+          codex_gateway_token: grantToken,
+          gateway_bearer_token: grantToken,
+        },
+      });
+    }
+    return sendJson(404, { detail: 'Not found' });
+  });
+
+  await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
+  t.after(() => {
+    server.closeAllConnections?.();
+    server.close();
+  });
+  mockUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const sb = makeSandbox(t, mockUrl);
+  const managedHome = pddManagedCodexHome(sb.env);
+  t.after(() => {
+    try {
+      spawnSync('codex', ['app-server', 'daemon', 'stop'], {
+        env: { ...sb.env, CODEX_HOME: managedHome },
+        stdio: 'ignore',
+        timeout: 2500,
+      });
+    } catch {}
+  });
+
+  // Pin account 1 (`gw-first`)
+  const useFirst = await invokeCli(['accounts', 'use', 'gw-first'], sb);
+  assert.equal(useFirst.exit, 0, useFirst.stderr);
+  const grantFirst = JSON.parse(readFileSync(managedCodexAuthPath(sb.env), 'utf8')).tokens.access_token;
+
+  const codexEnv = {
+    ...sb.env,
+    CODEX_HOME: managedHome,
+    HTTP_PROXY: blockedProxyUrl,
+    HTTPS_PROXY: blockedProxyUrl,
+    ALL_PROXY: blockedProxyUrl,
+    NO_PROXY: '127.0.0.1,localhost',
+  };
+
+  // 1. `codex app-server --strict-config --listen stdio://` -> `account/rateLimits/read` succeeds via local mock gateway!
+  const rateLimitsRes = await readCodexUsageWindows(
+    { command: 'codex', cwd: sb.cwd, env: codexEnv, timeoutMs: 10_000 },
+    {
+      spawn(cmd, args, opts) {
+        return spawn(cmd, [args[0], '--strict-config', ...args.slice(1)], opts);
+      },
+    },
+  );
+  assert.equal(rateLimitsRes?.state, 'healthy', `app-server rateLimits/read returned: ${JSON.stringify(rateLimitsRes)}`);
+  assert.equal(rateLimitsRes?.five_hour_used_percent, 23);
+  assert.equal(rateLimitsRes?.weekly_used_percent, 41);
+  assert.ok(
+    gatewayHits.some(h => /\/usage$/.test(h.path) && h.grant === grantFirst),
+    'codex app-server account/rateLimits/read authenticated against local mock gateway with Bearer pddg_lse_*',
+  );
+
+  // 2. `codex exec` creates a session saved with `model_provider: "openai"` and completes via local mock gateway!
+  const execRes = await spawnAsync(
+    'codex',
+    ['exec', '--skip-git-repo-check', '-m', 'gpt-5.4', 'say hello'],
+    { cwd: sb.cwd, env: codexEnv, timeoutMs: 20_000 },
+  );
+  assert.equal(execRes.code, 0, `codex exec failed:\nstdout: ${execRes.stdout}\nstderr: ${execRes.stderr}`);
+  assert.match(execRes.stdout, /GATEWAY_OK_gw-first/);
+
+  const rolloutFiles = findRolloutJsonlFiles(join(managedHome, 'sessions'));
+  assert.equal(rolloutFiles.length, 1, 'codex exec wrote session rollout JSONL');
+  const rolloutLines = readFileSync(rolloutFiles[0], 'utf8').trim().split('\n');
+  const sessionMeta = JSON.parse(rolloutLines[0]);
+  assert.equal(sessionMeta.type, 'session_meta');
+  assert.equal(sessionMeta.payload.model_provider, 'openai', 'session saved under native "openai" model_provider');
+  const openaiThreadId = sessionMeta.payload.id;
+  assert.ok(openaiThreadId);
+
+  // 3. Rotate active account to `gw-second` and verify `codex exec resume <thread-id>` of the `"openai"` session succeeds on the rotated grant!
+  const nextRes = await invokeCli(['accounts', 'next', '--provider', 'codex'], sb);
+  assert.equal(nextRes.exit, 0, nextRes.stderr);
+  const grantSecond = JSON.parse(readFileSync(managedCodexAuthPath(sb.env), 'utf8')).tokens.access_token;
+  assert.notEqual(grantSecond, grantFirst);
+
+  const resumeRes = await spawnAsync(
+    'codex',
+    ['exec', 'resume', '--skip-git-repo-check', openaiThreadId, 'continue session'],
+    { cwd: sb.cwd, env: codexEnv, timeoutMs: 20_000 },
+  );
+  assert.equal(resumeRes.code, 0, `codex exec resume failed:\nstdout: ${resumeRes.stdout}\nstderr: ${resumeRes.stderr}`);
+  assert.match(resumeRes.stdout, /GATEWAY_OK_gw-second/);
+  assert.ok(
+    gatewayHits.some(h => h.method === 'POST' && /\/responses$/.test(h.path) && h.grant === grantSecond),
+    'resumed "openai" session sent rotated Bearer pddg_lse_* grant to local mock gateway',
+  );
+
+  // 4. Backward compatibility: an older session saved with `model_provider: "pdd_codex_gateway"` ALSO resumes cleanly!
+  const legacyThreadId = '019a9999-aaaa-7000-8000-deadbeef1234';
+  const legacyMeta = structuredClone(sessionMeta);
+  legacyMeta.payload.id = legacyThreadId;
+  legacyMeta.payload.model_provider = 'pdd_codex_gateway';
+  const legacyRolloutPath = rolloutFiles[0].replace(openaiThreadId, legacyThreadId);
+  writeFileSync(legacyRolloutPath, `${[JSON.stringify(legacyMeta), ...rolloutLines.slice(1)].join('\n')}\n`, { mode: 0o600 });
+
+  const legacyResumeRes = await spawnAsync(
+    'codex',
+    ['-c', 'model_provider="pdd_codex_gateway"', 'exec', 'resume', '--skip-git-repo-check', legacyThreadId, 'continue legacy session'],
+    { cwd: sb.cwd, env: codexEnv, timeoutMs: 20_000 },
+  );
+  assert.equal(
+    legacyResumeRes.code,
+    0,
+    `legacy pdd_codex_gateway session resume failed:\nstdout: ${legacyResumeRes.stdout}\nstderr: ${legacyResumeRes.stderr}`,
+  );
+  assert.match(legacyResumeRes.stdout, /GATEWAY_OK_gw-second/);
+
+  const openaiExternalHits = externalProxyTargets.filter(target => /^(?:https?:\/\/)?(?:api\.openai\.com|(?:www\.)?chatgpt\.com)(?::\d+)?(?:\/|$)/i.test(target));
+  assert.deepEqual(openaiExternalHits, [], `expected 0 requests to api.openai.com or chatgpt.com, saw: ${JSON.stringify(externalProxyTargets)}`);
+});
+
+test('self-healing shell wrapper auto-upgrades stale 0.1.34 pdd accounts auto blocks in place while leaving unmarked profiles untouched', async t => {
+  const cloud = await createPoolGatewayServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_auto_heal_1',
+        provider: 'codex',
+        label: 'auto-heal-1',
+        is_owner: true,
+        state: 'ready',
+        plan_type: 'pro',
+        five_hour_used_percent: 10,
+        weekly_used_percent: 20,
+        five_hour_reset_at: '2099-01-01T05:00:00Z',
+        weekly_reset_at: '2099-01-07T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+
+  // Guard: missing HOME is a strict no-op
+  assert.deepEqual(refreshInstalledAutoSwitchBlocks({ env: {} }), []);
+
+  // Case 1: `.zshrc` WITHOUT `# >>> pdd accounts auto >>>` MUST remain 100% untouched (and missing `.bashrc` must NOT be created!)
+  const zshrcPath = join(sb.home, '.zshrc');
+  const bashrcPath = join(sb.home, '.bashrc');
+  const fishPath = join(sb.configHome, 'fish', 'config.fish');
+  const plainZshrc = 'export PATH="$HOME/.local/bin:$PATH"\nalias gs="git status"\n';
+  writeFileSync(zshrcPath, plainZshrc, { mode: 0o600 });
+
+  const useUnmarked = await invokeCli(['accounts', 'use', 'auto-heal-1', '--provider', 'codex'], sb);
+  assert.equal(useUnmarked.exit, 0, useUnmarked.stderr);
+  assert.equal(readFileSync(zshrcPath, 'utf8'), plainZshrc, 'unmarked .zshrc untouched');
+  assert.equal(existsSync(bashrcPath), false, 'absent .bashrc not created unless auto on is run');
+  assert.equal(existsSync(fishPath), false, 'absent config.fish not created unless auto on is run');
+
+  // Case 2: Seed a stale 0.1.34 `# >>> pdd accounts auto >>>` block (missing PDD_PRINT_CODEX_HOME & CODEX_HOME="$_pdd_cx_home")
+  // in a dotfiles-symlinked `.zshrc` (mode 0600) AND in `config.fish`, surrounded by custom user lines.
+  rmSync(zshrcPath, { force: true });
+  const dotfilesDir = join(sb.root, 'dotfiles');
+  mkdirSync(dotfilesDir, { recursive: true });
+  const dotfilesZshrc = join(dotfilesDir, 'zshrc');
+  const staleZshBlock = [
+    'export EDITOR="vim"',
+    '',
+    '# >>> pdd accounts auto >>>',
+    'codex() {',
+    '  command -v pdd >/dev/null 2>&1 && pdd accounts sync --provider codex --quiet --timeout-ms 1200 2>/dev/null || true',
+    '  command codex "$@"',
+    '}',
+    '# <<< pdd accounts auto <<<',
+    '',
+    'alias ll="ls -la"',
+    '',
+  ].join('\n');
+  writeFileSync(dotfilesZshrc, staleZshBlock, { mode: 0o600 });
+  chmodSync(dotfilesZshrc, 0o600);
+  symlinkSync(dotfilesZshrc, zshrcPath);
+
+  mkdirSync(join(sb.configHome, 'fish'), { recursive: true });
+  const staleFishBlock = [
+    '# fish greeting',
+    '# >>> pdd accounts auto >>>',
+    'function codex --wraps codex',
+    '  pdd accounts sync --provider codex --quiet 2>/dev/null; or true',
+    '  command codex $argv',
+    'end',
+    '# <<< pdd accounts auto <<<',
+    '',
+  ].join('\n');
+  writeFileSync(fishPath, staleFishBlock, { mode: 0o644 });
+
+  // Running `pdd accounts sync --provider codex --quiet` (just like the old 0.1.34 shell hook does!) upgrades both blocks in place!
+  const syncRes = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet'], sb);
+  assert.equal(syncRes.exit, 0, syncRes.stderr);
+
+  assert.equal(lstatSync(zshrcPath).isSymbolicLink(), true, 'dotfiles symlink on ~/.zshrc preserved');
+  assert.equal(statSync(dotfilesZshrc).mode & 0o777, 0o600, 'target file mode 0600 preserved');
+  const upgradedZsh = readFileSync(zshrcPath, 'utf8');
+  assert.ok(upgradedZsh.includes(renderAutoSwitchBlock('zsh')), 'zsh auto block upgraded to current wrapper');
+  assert.match(upgradedZsh, /PDD_PRINT_CODEX_HOME=1 pdd accounts sync/);
+  assert.match(upgradedZsh, /CODEX_HOME="\$_pdd_cx_home"/);
+  assert.match(upgradedZsh, /^export EDITOR="vim"\n\n# >>> pdd accounts auto >>>/);
+  assert.match(upgradedZsh, /# <<< pdd accounts auto <<<\n\nalias ll="ls -la"\n$/);
+
+  const upgradedFish = readFileSync(fishPath, 'utf8');
+  assert.ok(upgradedFish.includes(renderAutoSwitchBlock('fish')), 'fish auto block upgraded to current wrapper');
+  assert.match(upgradedFish, /PDD_PRINT_CODEX_HOME=1 pdd accounts sync/);
+  assert.equal(existsSync(bashrcPath), false, 'still-absent .bashrc was not created');
+
+  // Subsequent runs are idempotent no-ops
+  assert.deepEqual(refreshInstalledAutoSwitchBlocks({ env: sb.env }), []);
+});
+
+
+test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scrub, sync timeout resilience, bash shell wrapper (positional prompt, login status, claude ANTHROPIC_API_KEY), Claude remove/leave/list gateway cleanup, fork UUID, and accept activation + warning', async t => {
+  const forkUuid = '019a8888-1111-7000-8000-123456789abc';
+  const cloud = await createPoolGatewayServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_cx_audit_1',
+        label: 'cx-audit-1',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 10,
+        five_hour_reset_at: '2026-11-18T02:00:00Z',
+        weekly_used_percent: 20,
+        weekly_reset_at: '2026-11-23T00:00:00Z',
+      },
+      {
+        account_id: 'acc_cx_audit_2',
+        label: 'cx-audit-2',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 5,
+        five_hour_reset_at: '2026-11-18T03:00:00Z',
+        weekly_used_percent: 10,
+        weekly_reset_at: '2026-11-24T00:00:00Z',
+      },
+      {
+        account_id: 'acc_cl_shared_1',
+        label: 'cl-shared-1',
+        provider: 'claude',
+        plan: 'max',
+        is_owner: false,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 15,
+        five_hour_reset_at: '2026-11-18T02:00:00Z',
+        weekly_used_percent: 25,
+        weekly_reset_at: '2026-11-23T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+
+  // 1. Fix #2: Dotfile-symlinked `~/.codex/auth.json -> <dotfiles/auth.json>` imports cleanly and scrubs refresh_token while preserving symlink!
+  const userCodexDir = join(sb.home, '.codex');
+  mkdirSync(userCodexDir, { recursive: true });
+  const dotAuthDir = join(sb.root, 'dotfiles-codex-auth');
+  mkdirSync(dotAuthDir, { recursive: true });
+  const realDotAuthPath = join(dotAuthDir, 'auth.json');
+  writeFileSync(realDotAuthPath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_dotfile_symlink_777',
+      refresh_token: 'rt_dotfile_symlink_SCRUB_ME_777',
+      id_token: makeJwt({ email: 'dotfiles@promptdriven.ai', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_dotfile_symlink_1',
+    },
+  }, null, 2), { mode: 0o600 });
+  symlinkSync(realDotAuthPath, join(userCodexDir, 'auth.json'));
+
+  const symImpRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'cx-dotfiles'], sb);
+  assert.equal(symImpRes.exit, 0, symImpRes.stderr);
+  assert.equal(lstatSync(join(userCodexDir, 'auth.json')).isSymbolicLink(), true, 'dotfile symlink at ~/.codex/auth.json preserved');
+  assert.equal(JSON.parse(readFileSync(realDotAuthPath, 'utf8')).tokens.refresh_token, '', 'target dotfile auth.json had single-use refresh_token scrubbed');
+
+  // Symlink pointing inside managedHome MUST STILL be refused!
+  rmSync(join(userCodexDir, 'auth.json'), { force: true });
+  symlinkSync(managedCodexAuthPath(sb.env), join(userCodexDir, 'auth.json'));
+  const loopImpRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'cx-loop-refuse'], sb);
+  assert.equal(loopImpRes.exit, 1);
+  assert.match(loopImpRes.stderr, /Refusing to import symlinked Codex credential file/);
+  rmSync(join(userCodexDir, 'auth.json'), { force: true });
+
+  // 2. Fix #3a: `PDD_PRINT_CODEX_HOME=1 pdd accounts sync` keeps `pddManagedCodexHome` when Cloud times out / 500s and a valid lease is on disk!
+  cloud.state.leaseOverrideState = 'error_500';
+  const sbPrintHome = { ...sb, env: { ...sb.env, PDD_PRINT_CODEX_HOME: '1' } };
+  // Expire near-renewal window (<15m left, still > now) to force runSyncCommand to hit `leaseCloudAccount` and enter catch block!
+  const statePath = accountsStatePath(sb.env);
+  const savedBeforeTimeout = JSON.parse(readFileSync(statePath, 'utf8'));
+  savedBeforeTimeout.active.codex.expires_at = new Date(cloud.state.nowMs + 5 * 60 * 1000).toISOString();
+  writeFileSync(statePath, JSON.stringify(savedBeforeTimeout, null, 2));
+
+  const syncTimeoutRes = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet', '--timeout-ms', '1200'], sbPrintHome);
+  cloud.state.leaseOverrideState = null;
+  assert.equal(syncTimeoutRes.exit, 0);
+  assert.equal(
+    syncTimeoutRes.stdout.trim(),
+    pddManagedCodexHome(sb.env),
+    'transient sync failure keeps valid on-disk CODEX_HOME instead of returning empty string',
+  );
+
+  // Whereas an unattributed `reauth_required` lease failure MUST NOT keep `pddManagedCodexHome`!
+  cloud.state.leaseOverrideState = 'reauth_no_id';
+  const syncReauthRes = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet', '--timeout-ms', '1200'], sbPrintHome);
+  cloud.state.leaseOverrideState = null;
+  assert.equal(syncReauthRes.exit, 0);
+  assert.equal(
+    syncReauthRes.stdout.trim(),
+    '',
+    'reauth_required sync failure never keeps cached CODEX_HOME even without explicit account_id',
+  );
+
+  // 3. Fix #3b & #3c: Execute `renderAutoSwitchBlock('sh')` in real `bash`!
+  assert.equal((await invokeCli(['accounts', 'use', 'cl-shared-1'], sb)).exit, 0);
+  const clSettingsPath = join(sb.home, '.claude', 'settings.json');
+  assert.match(JSON.parse(readFileSync(clSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
+
+  const fakeBin = join(sb.root, 'wrapper-bin');
+  mkdirSync(fakeBin, { recursive: true });
+  const managedHome = pddManagedCodexHome(sb.env);
+  writeFileSync(join(fakeBin, 'pdd'), `#!/bin/sh\nif [ "\${PDD_PRINT_CODEX_HOME:-}" = "1" ]; then printf '%s\\n' ${JSON.stringify(managedHome)}; fi\nexit 0\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'codex'), `#!/bin/sh\nprintf 'CODEX_HOME=%s ARGS=%s\\n' "\${CODEX_HOME:-UNSET}" "$*"\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'claude'), `#!/bin/sh\nprintf 'API_KEY=%s ARGS=%s\\n' "\${ANTHROPIC_API_KEY:-UNSET}" "$*"\n`, { mode: 0o755 });
+  chmodSync(join(fakeBin, 'pdd'), 0o755);
+  chmodSync(join(fakeBin, 'codex'), 0o755);
+  chmodSync(join(fakeBin, 'claude'), 0o755);
+
+  const wrapperScript = join(sb.root, 'wrapper.sh');
+  writeFileSync(wrapperScript, `${renderAutoSwitchBlock('sh')}\n`);
+
+  const runBash = (cmd, extraEnv = {}) => spawnSync('bash', ['-c', `source ${JSON.stringify(wrapperScript)}\n${cmd}`], {
+    env: {
+      ...sb.env,
+      PATH: `${fakeBin}:${sb.env.PATH}`,
+      ...extraEnv,
+    },
+    encoding: 'utf8',
+  });
+
+  // 3b-i: `codex "explain login" logout` inside managed CODEX_HOME stops at `"explain login"` (`*) break ;;`) and is NOT blocked by logout guard!
+  const promptWithLogoutWord = runBash('codex "explain login" logout', { CODEX_HOME: managedHome });
+  assert.equal(promptWithLogoutWord.status, 0, promptWithLogoutWord.stderr);
+  assert.match(promptWithLogoutWord.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=explain login logout`));
+
+  // 3b-ii: `codex login status` runs WITH `CODEX_HOME="$_pdd_cx_home"`!
+  const loginStatusRun = runBash('codex login status');
+  assert.equal(loginStatusRun.status, 0, loginStatusRun.stderr);
+  assert.match(loginStatusRun.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=login status`));
+
+  // While `codex logout` and `codex login` (without `status`) inside managedHome ARE still refused!
+  assert.equal(runBash('codex logout', { CODEX_HOME: managedHome }).status, 1);
+  assert.equal(runBash('codex login', { CODEX_HOME: managedHome }).status, 1);
+
+  // 3c: `claude` unsets `ANTHROPIC_API_KEY` inside subshell when `CLAUDE_CODE_OAUTH_TOKEN` is in settings.json, while parent shell keeps `ANTHROPIC_API_KEY`!
+  const claudeRun = runBash('export ANTHROPIC_API_KEY="sk-ant-api03-ambient"; claude -p hi; printf "PARENT=%s\\n" "$ANTHROPIC_API_KEY"');
+  assert.equal(claudeRun.status, 0, claudeRun.stderr);
+  assert.match(claudeRun.stdout, /API_KEY=UNSET ARGS=-p hi/);
+  assert.match(claudeRun.stdout, /PARENT=sk-ant-api03-ambient/);
+
+  // 4. Fix #4: Leaving/removing the last Claude account cleans `pddg_*` & gateway `ANTHROPIC_BASE_URL` from `~/.claude/settings.json`!
+  const leaveClRes = await invokeCli(['accounts', 'leave', 'cl-shared-1'], sb);
+  assert.equal(leaveClRes.exit, 0, leaveClRes.stderr);
+  const clAfterLeave = JSON.parse(readFileSync(clSettingsPath, 'utf8'));
+  assert.equal(clAfterLeave.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'leave stripped pddg_* token from ~/.claude/settings.json');
+  assert.equal(clAfterLeave.env?.ANTHROPIC_BASE_URL, undefined, 'leave stripped gateway ANTHROPIC_BASE_URL from ~/.claude/settings.json');
+
+  // Reconciling via `pdd accounts list` cleans lingering gateway settings whenever `!nextActive.claude`,
+  // EVEN when another paused/inactive Claude account remains enrolled (`nextProviders.includes('claude')`)!
+  cloud.state.accounts.push({
+    account_id: 'acc_cl_paused_enrolled',
+    label: 'cl-paused-other',
+    provider: 'claude',
+    plan: 'max',
+    is_owner: true,
+    shared: false,
+    state: 'paused',
+    five_hour_used_percent: 0,
+    five_hour_reset_at: null,
+    weekly_used_percent: 0,
+    weekly_reset_at: null,
+  });
+  writeFileSync(clSettingsPath, JSON.stringify({
+    env: {
+      CLAUDE_CODE_OAUTH_TOKEN: 'pddg_stale_grant_after_revoke',
+      ANTHROPIC_BASE_URL: `${cloud.serverUrl}/v1/accounts/claude-gateway/lse_stale`,
+    },
+  }, null, 2));
+  assert.equal((await invokeCli(['accounts', 'list'], sb)).exit, 0);
+  const clAfterList = JSON.parse(readFileSync(clSettingsPath, 'utf8'));
+  assert.equal(clAfterList.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(clAfterList.env?.ANTHROPIC_BASE_URL, undefined);
+  cloud.state.accounts = cloud.state.accounts.filter(a => a.account_id !== 'acc_cl_paused_enrolled');
+
+  // 5. Fix #5a: `pdd accounts codex -- -i chart.png fork <parentUuid>` never pins pre-existing `<parentUuid>` rollout!
+  // Seed a real pre-existing `<parentUuid>` rollout file on disk before launching `fork`:
+  const sessionsDayDir = join(managedHome, 'sessions', '2026', '11', '17');
+  mkdirSync(sessionsDayDir, { recursive: true });
+  const parentRolloutPath = join(sessionsDayDir, `rollout-2026-11-17T00-00-00-${forkUuid}.jsonl`);
+  writeFileSync(parentRolloutPath, `${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    type: 'session_meta',
+    payload: { id: forkUuid, cwd: sb.root, timestamp: new Date().toISOString() },
+  })}\n`);
+
+  // 5a-i: Turn-0 startup quota exit BEFORE child rollout creation re-runs `['-i', 'chart.png', 'fork', forkUuid]` (never mutating parent via `resume`)!
+  assert.equal((await invokeCli(['accounts', 'use', 'cx-audit-1'], sb)).exit, 0);
+  const forkTurn0Turns = [];
+  const forkTurn0Res = await invokeCli(['accounts', 'codex', '--', '-i', 'chart.png', 'fork', forkUuid], sb, {
+    quotaSettleMs: 0,
+    async spawnCodexPty({ args, turn, onOutput }) {
+      forkTurn0Turns.push({ turn, args });
+      if (turn === 0) {
+        onOutput(`Forking session ${forkUuid}...\nError: You've hit your usage limit for this window.\n`);
+        return { code: 1, signal: 'SIGTERM' };
+      }
+      return { code: 0, signal: null };
+    },
+  }, { isTTY: true });
+  assert.equal(forkTurn0Res.exit, 0, forkTurn0Res.stderr);
+  assert.equal(forkTurn0Turns.length, 2);
+  assert.deepEqual(forkTurn0Turns[0].args, ['-i', 'chart.png', 'fork', forkUuid]);
+  assert.deepEqual(forkTurn0Turns[1].args, ['-i', 'chart.png', 'fork', forkUuid]);
+
+  // 5a-ii: Mid-session quota rotation AFTER newly forked `<childUuid>` rollout is created ignores `<parentUuid>` and resumes `<childUuid>`!
+  const cx1 = cloud.state.accounts.find(a => a.account_id === 'acc_cx_audit_1');
+  cx1.state = 'ready';
+  cx1.cooling_until = null;
+  cx1.five_hour_used_percent = 10;
+  assert.equal((await invokeCli(['accounts', 'use', 'cx-audit-1'], sb)).exit, 0);
+  const childUuid = '019a9999-2222-7000-8000-abcdef012345';
+  const forkMidTurns = [];
+  const forkMidRes = await invokeCli(['accounts', 'codex', '--', '-i', 'chart.png', 'fork', forkUuid], sb, {
+    rolloutPollIntervalMs: 15,
+    quotaSettleMs: 0,
+    async spawnCodexPty({ args, turn, cwd, signal }) {
+      forkMidTurns.push({ turn, args });
+      if (turn === 0) {
+        const nowIso = new Date().toISOString();
+        const childRolloutPath = join(sessionsDayDir, `rollout-2026-11-17T22-00-00-${childUuid}.jsonl`);
+        writeFileSync(childRolloutPath, [
+          JSON.stringify({
+            timestamp: nowIso,
+            type: 'session_meta',
+            payload: { id: childUuid, forked_from_id: forkUuid, cwd, timestamp: nowIso },
+          }),
+          JSON.stringify({
+            timestamp: nowIso,
+            type: 'event_msg',
+            payload: {
+              type: 'error',
+              codex_error_info: 'usage_limit_exceeded',
+              message: 'Usage limit reached for this window.',
+            },
+          }),
+          '',
+        ].join('\n'));
+        await new Promise(resolve => {
+          if (signal.aborted) return resolve();
+          signal.addEventListener('abort', resolve, { once: true });
+        });
+        return { code: 143, signal: 'SIGTERM' };
+      }
+      return { code: 0, signal: null };
+    },
+  }, { isTTY: true });
+  assert.equal(forkMidRes.exit, 0, forkMidRes.stderr);
+  assert.equal(forkMidTurns.length, 2);
+  assert.deepEqual(forkMidTurns[0].args, ['-i', 'chart.png', 'fork', forkUuid]);
+  assert.deepEqual(forkMidTurns[1].args, ['resume', '-i', 'chart.png', childUuid]);
+
+  // 6. Fix #5b: `pdd accounts accept` leases/materializes when active pass is expired/missing, AND surfaces warning when lease sync fails!
+  const sharedClaude2 = {
+    account_id: 'acc_cl_shared_2',
+    label: 'cl-invite-2',
+    provider: 'claude',
+    plan: 'max',
+    is_owner: false,
+    shared: true,
+    state: 'ready',
+    five_hour_used_percent: 5,
+    five_hour_reset_at: '2026-11-18T02:00:00Z',
+    weekly_used_percent: 10,
+    weekly_reset_at: '2026-11-23T00:00:00Z',
+  };
+  cloud.state.pendingInvites.push({ invite_id: 'inv_warn_1', account_id: 'acc_cl_shared_2', provider: 'claude', account: sharedClaude2 });
+  cloud.state.leaseOverrideState = 'error_500';
+  const acceptWarnRes = await invokeCli(['accounts', 'accept', 'inv_warn_1'], sb);
+  cloud.state.leaseOverrideState = null;
+  assert.equal(acceptWarnRes.exit, 0);
+  assert.match(acceptWarnRes.stdout, /Accepted shared account "cl-invite-2"\. Warning: initial local sync failed .* — run pdd accounts use cl-invite-2\./);
+
+  // Now seed an EXPIRED active Claude entry in accounts-state.json with missing token on disk, and verify `accept` re-leases & materializes!
+  const stExpired = JSON.parse(readFileSync(statePath, 'utf8'));
+  stExpired.active.claude = {
+    account_id: 'acc_cl_old_expired',
+    label: 'cl-old',
+    provider: 'claude',
+    state: 'ready',
+    expires_at: new Date(cloud.state.nowMs - 60_000).toISOString(),
+  };
+  writeFileSync(statePath, JSON.stringify(stExpired, null, 2));
+  rmSync(clSettingsPath, { force: true });
+
+  const sharedClaude3 = {
+    account_id: 'acc_cl_shared_3',
+    label: 'cl-invite-3',
+    provider: 'claude',
+    plan: 'max',
+    is_owner: false,
+    shared: true,
+    state: 'ready',
+    five_hour_used_percent: 5,
+    five_hour_reset_at: '2026-11-18T02:00:00Z',
+    weekly_used_percent: 10,
+    weekly_reset_at: '2026-11-23T00:00:00Z',
+  };
+  cloud.state.pendingInvites.push({ invite_id: 'inv_ok_3', account_id: 'acc_cl_shared_3', provider: 'claude', account: sharedClaude3 });
+  const acceptOkRes = await invokeCli(['accounts', 'accept', 'inv_ok_3'], sb);
+  assert.equal(acceptOkRes.exit, 0, acceptOkRes.stderr);
+  assert.equal(acceptOkRes.stdout.trim(), 'Accepted shared account "cl-invite-3".');
+  assert.match(JSON.parse(readFileSync(clSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
 });

@@ -1,7 +1,8 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: b7884ca79221cca835d3724b7625f770d56b592cf6b3b0a741210d44a2af88b8).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 0614653660d047404468ae276f814535a77ae4224ac05b0547a1c4e54b35c885).
+import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { parseAgentAuthStatus, runAgentProcess } from './agent-adapters.mjs';
 import * as codexLimitsModule from './codex-limits.mjs';
@@ -32,11 +33,68 @@ const ENTRY_KEYS = new Set(['id', 'kind', 'command', 'model', 'plan', 'credits',
 const TOP_KEYS = new Set(['reset', 'weeklyStopPercent', 'logins']);
 const CONTROLS = /[\u0000-\u001f\u007f-\u009f]/;
 const SECRET_ENV_KEY = /(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD|_CREDENTIAL|^SECRET_|API_KEY$|^OPENAI_API_KEY$|^ANTHROPIC_API_KEY$|^GEMINI_API_KEY$|^GOOGLE_API_KEY$|^CLAUDE_CODE_OAUTH_TOKEN$|^CODEX_ACCESS_TOKEN$)/i;
-const CODEX_OVERLAY_LINKS = ['config.toml', 'skills', 'memories', 'sessions', 'rules'];
-const CODEX_GATEWAY_OVERLAY_LINKS = ['skills', 'memories', 'sessions', 'rules'];
-const MANAGED_CODEX_HOME_LINKS = ['skills', 'memories', 'sessions', 'archived_sessions', 'history.jsonl', 'session_index.jsonl', 'rules'];
+const CODEX_GATEWAY_OVERLAY_LINKS = [
+  'AGENTS.md',
+  'agents',
+  'skills',
+  'memories',
+  'sessions',
+  'rules',
+  'plugins',
+  'hooks.json',
+  '.hook-trust',
+  'browser',
+  'chrome-native-hosts-v2.json',
+  'computer-use',
+  'node_repl',
+];
+const MANAGED_CODEX_HOME_BASELINE_LINKS = [
+  ...CODEX_GATEWAY_OVERLAY_LINKS,
+  'archived_sessions',
+  'history.jsonl',
+  'session_index.jsonl',
+  'state_5.sqlite',
+  'thread_history_1.sqlite',
+];
+const ISOLATED_CODEX_HOME_EXACT = new Set([
+  '.',
+  '..',
+  '.ds_store',
+  'auth.json',
+  'auth.lock',
+  'config.toml',
+  '.config.toml.merge-lock',
+  'model-switch-backups',
+  'app-server-daemon',
+  'app-server-control',
+  'ipc',
+  'tmp',
+  '.tmp',
+  'log',
+  'logs_2.sqlite',
+  'logs_2.sqlite-wal',
+  'logs_2.sqlite-shm',
+  'models_cache.json',
+  'shell_snapshots',
+  'mcp-oauth-locks',
+  '.sqlite-maintenance.lock',
+  'installation_id',
+  '.codex-global-state.json',
+  'version.json',
+  'vendor_imports',
+]);
+const REPLACED_MANAGED_CACHE_DIRS = new Set([
+  'plugins',
+  'browser',
+  'computer-use',
+  'node_repl',
+  'cache',
+  'packages',
+]);
+const REPLACED_MANAGED_CACHE_FILES = new Set(['chrome-native-hosts-v2.json']);
 const CODEX_GATEWAY_PROVIDER_ID = 'pdd_codex_gateway';
 const INLINE_TOML_TABLE_KEYS = new Set(['http_headers', 'env_http_headers', 'filters', 'set']);
+const MANAGED_CODEX_GATEWAY_RE = /\/v1\/(?:accounts\/)?codex-gateway(?:\/|$)/i;
 const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/;
 const REAUTH_CODE_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked)\b/i;
 const REAUTH_TEXT_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked)\b|(?:status|http|error)[:=\s]+401\b|\b401\s+unauthorized\b/i;
@@ -575,6 +633,78 @@ function assertNoSymlinkCodexPath(fs, targetPath) {
   }
 }
 
+function resolveUserCodexConfigTarget(fs, userConfigPath, disallowedRoots = [], { strict = true } = {}) {
+  const lstat = typeof fs?.lstatSync === 'function' ? fs.lstatSync.bind(fs) : (fs === nativeFs ? nativeFs.lstatSync : null);
+  if (!lstat) return { exists: true, readPath: userConfigPath, writePath: userConfigPath };
+  const parentDir = dirname(userConfigPath);
+  try {
+    const dirStat = lstat(parentDir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+      if (strict) throw new CloudAccountsError(`Refusing symlink or non-directory Codex folder at ${parentDir}.`, { code: 'symlink_refused' });
+      return { exists: false, readPath: null, writePath: userConfigPath };
+    }
+  } catch (error) {
+    if (error instanceof CloudAccountsError) throw error;
+    if (error?.code === 'ENOENT') return { exists: false, readPath: null, writePath: userConfigPath };
+    if (strict) throw error;
+    return { exists: false, readPath: null, writePath: userConfigPath };
+  }
+  let fileStat;
+  try {
+    fileStat = lstat(userConfigPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { exists: false, readPath: null, writePath: userConfigPath };
+    if (strict) throw error;
+    return { exists: false, readPath: null, writePath: userConfigPath };
+  }
+  if (!fileStat.isSymbolicLink()) {
+    if (!fileStat.isFile()) {
+      if (strict) throw new CloudAccountsError(`Refusing symlink or non-regular Codex file at ${userConfigPath}.`, { code: 'symlink_refused' });
+      return { exists: false, readPath: null, writePath: userConfigPath };
+    }
+    return { exists: true, readPath: userConfigPath, writePath: userConfigPath };
+  }
+  const realFn = fs?.realpathSync?.native ?? fs?.realpathSync ?? nativeFs.realpathSync?.native ?? nativeFs.realpathSync;
+  const statFn = typeof fs?.statSync === 'function' ? fs.statSync.bind(fs) : (fs === nativeFs ? nativeFs.statSync : null);
+  if (typeof realFn !== 'function' || !statFn) {
+    if (strict) throw new CloudAccountsError(`Refusing symlink or non-regular Codex file at ${userConfigPath}.`, { code: 'symlink_refused' });
+    return { exists: false, readPath: null, writePath: userConfigPath };
+  }
+  let realTarget;
+  try {
+    realTarget = String(realFn.call(fs, userConfigPath));
+    const targetStat = statFn(realTarget);
+    if (!targetStat.isFile()) {
+      if (strict) throw new CloudAccountsError(`Refusing symlink or non-regular Codex file at ${userConfigPath}.`, { code: 'symlink_refused' });
+      return { exists: false, readPath: null, writePath: userConfigPath };
+    }
+    const targetDirStat = lstat(dirname(realTarget));
+    if (targetDirStat.isSymbolicLink() || !targetDirStat.isDirectory()) {
+      if (strict) throw new CloudAccountsError(`Refusing symlink or non-directory Codex folder at ${dirname(realTarget)}.`, { code: 'symlink_refused' });
+      return { exists: false, readPath: null, writePath: userConfigPath };
+    }
+  } catch (error) {
+    if (error instanceof CloudAccountsError) throw error;
+    if (strict) throw new CloudAccountsError(`Refusing symlink or non-regular Codex file at ${userConfigPath}.`, { code: 'symlink_refused' });
+    return { exists: false, readPath: null, writePath: userConfigPath };
+  }
+  for (const root of disallowedRoots) {
+    if (typeof root !== 'string' || !root) continue;
+    if (isPathAtOrInside(realTarget, root)) {
+      if (strict) throw new CloudAccountsError(`Refusing symlink or non-regular Codex file at ${userConfigPath}.`, { code: 'symlink_refused' });
+      return { exists: false, readPath: null, writePath: userConfigPath };
+    }
+    try {
+      const realRoot = String(realFn.call(fs, root));
+      if (isPathAtOrInside(realTarget, realRoot)) {
+        if (strict) throw new CloudAccountsError(`Refusing symlink or non-regular Codex file at ${userConfigPath}.`, { code: 'symlink_refused' });
+        return { exists: false, readPath: null, writePath: userConfigPath };
+      }
+    } catch {}
+  }
+  return { exists: true, readPath: realTarget, writePath: realTarget, isSymlink: true };
+}
+
 function validateCodexGatewayUrl(rawUrl) {
   const raw = String(rawUrl ?? '').trim().replace(/\/+$/, '');
   if (!raw) throw new CloudAccountsError('Cloud lease returned no Codex gateway URL.', { code: 'invalid_lease' });
@@ -723,9 +853,49 @@ export function localClaudePaths(env = process.env) {
   };
 }
 
+function isManagedCodexGatewayUrl(value) {
+  return typeof value === 'string' && MANAGED_CODEX_GATEWAY_RE.test(value.trim());
+}
+
+export function buildSyntheticGatewayIdToken({ planType } = {}) {
+  const normalizedPlanType = typeof planType === 'string' && /^[A-Za-z0-9._-]{1,32}$/.test(planType.trim())
+    ? planType.trim().toLowerCase()
+    : '';
+  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' }), 'utf8').toString('base64url');
+  const payload = Buffer.from(JSON.stringify({
+    exp: 4102444800,
+    iat: 1700000000,
+    'https://api.openai.com/auth': {
+      chatgpt_account_id: 'acct_pdd_gateway',
+      chatgpt_plan_type: normalizedPlanType || 'pro',
+      chatgpt_user_id: 'user_pdd_gateway',
+    },
+  }), 'utf8').toString('base64url');
+  return `${header}.${payload}.sig`;
+}
+
+export function stopCodexAppServerDaemon(codexHome, { env = process.env, fs = nativeFs, spawnSync } = {}) {
+  if (typeof codexHome !== 'string' || !codexHome.trim()) return false;
+  if (fs !== nativeFs && typeof spawnSync !== 'function') return false;
+  const runner = typeof spawnSync === 'function' ? spawnSync : nativeSpawnSync;
+  try {
+    runner('codex', ['app-server', 'daemon', 'stop'], {
+      env: { ...env, CODEX_HOME: codexHome },
+      stdio: 'ignore',
+      timeout: 2500,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function stripGatewayFromTomlObject(configData, previousModelProvider = null) {
   const hasGatewaySection = isTomlTable(configData?.model_providers) && Object.hasOwn(configData.model_providers, CODEX_GATEWAY_PROVIDER_ID);
   const hasGatewayProvider = configData?.model_provider === CODEX_GATEWAY_PROVIDER_ID;
+  const hasGatewayOpenaiBaseUrl = isManagedCodexGatewayUrl(configData?.openai_base_url);
+  const hasGatewayChatgptBaseUrl = isManagedCodexGatewayUrl(configData?.chatgpt_base_url);
+  const wasGatewayManaged = hasGatewaySection || hasGatewayProvider || hasGatewayOpenaiBaseUrl || hasGatewayChatgptBaseUrl;
   const nextData = { ...(isTomlTable(configData) ? configData : {}) };
   if (isTomlTable(nextData.model_providers)) {
     const nextProviders = { ...nextData.model_providers };
@@ -733,38 +903,153 @@ function stripGatewayFromTomlObject(configData, previousModelProvider = null) {
     if (Object.keys(nextProviders).length > 0) nextData.model_providers = nextProviders;
     else delete nextData.model_providers;
   }
+  if (hasGatewayOpenaiBaseUrl) delete nextData.openai_base_url;
+  if (hasGatewayChatgptBaseUrl) delete nextData.chatgpt_base_url;
+  const priorProvider = typeof previousModelProvider === 'string' && previousModelProvider.trim() && previousModelProvider.trim() !== CODEX_GATEWAY_PROVIDER_ID
+    ? previousModelProvider.trim()
+    : null;
   if (nextData.model_provider === CODEX_GATEWAY_PROVIDER_ID) {
-    if (typeof previousModelProvider === 'string' && previousModelProvider.trim() && previousModelProvider.trim() !== CODEX_GATEWAY_PROVIDER_ID) {
-      nextData.model_provider = previousModelProvider.trim();
-    } else {
-      delete nextData.model_provider;
-    }
+    if (priorProvider) nextData.model_provider = priorProvider;
+    else delete nextData.model_provider;
+  } else if (wasGatewayManaged && !nextData.model_provider && priorProvider) {
+    nextData.model_provider = priorProvider;
   }
-  return { changed: hasGatewaySection || hasGatewayProvider, nextData };
+  return { changed: wasGatewayManaged, nextData };
 }
 
-function syncManagedCodexHomeLinks(fs, sourceHome, managedHome) {
+export function isIsolatedCodexHomeEntry(name) {
+  if (typeof name !== 'string' || !name || name.includes('/') || name.includes('\\')) return true;
+  const lower = name.toLowerCase();
+  if (ISOLATED_CODEX_HOME_EXACT.has(lower)) return true;
+  if (
+    lower.startsWith('auth.json')
+    || lower.startsWith('config.toml')
+    || lower === 'tmp'
+    || lower === '.tmp'
+    || lower.startsWith('.tmp')
+    || lower.endsWith('.tmp')
+    || /\.tmp[._~-]/i.test(lower)
+    || lower.endsWith('.lock')
+    || lower.endsWith('-lock')
+    || lower.endsWith('-wal')
+    || lower.endsWith('-shm')
+    || lower.endsWith('-journal')
+    || /\.bak[^/]*$/i.test(lower)
+    || /^logs_.*\.sqlite/i.test(lower)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isDisallowedCodexSymlinkTargetName(name) {
+  const lower = String(name ?? '').toLowerCase();
+  return lower.startsWith('auth.json') || lower.startsWith('config.toml');
+}
+
+function isPathAtOrInside(candidatePath, rootPath) {
+  const normCandidate = resolve(candidatePath);
+  const normRoot = resolve(rootPath);
+  return (
+    normCandidate === normRoot
+    || normCandidate.startsWith(normRoot + sep)
+    || normCandidate.startsWith(`${normRoot}/`)
+  );
+}
+
+export function isSafeCodexSourceEntry(fs, src, targetRoot, { sourceHome = null } = {}) {
+  if (typeof src !== 'string' || !src) return false;
+  const srcBase = basename(src).toLowerCase();
+  if (isDisallowedCodexSymlinkTargetName(srcBase)) return false;
+  const lstat = typeof fs?.lstatSync === 'function' ? fs.lstatSync.bind(fs) : (fs === nativeFs ? nativeFs.lstatSync : null);
+  if (!lstat) return false;
+  let srcStat;
+  try {
+    srcStat = lstat(src);
+  } catch {
+    return false;
+  }
+  if (!srcStat.isSymbolicLink()) {
+    return true;
+  }
+  if (typeof fs?.readlinkSync === 'function') {
+    try {
+      const rawTarget = String(fs.readlinkSync(src));
+      if (isDisallowedCodexSymlinkTargetName(basename(rawTarget))) return false;
+    } catch {}
+  }
+  const realFn = fs?.realpathSync?.native ?? fs?.realpathSync ?? nativeFs.realpathSync?.native ?? nativeFs.realpathSync;
+  if (typeof realFn !== 'function') return false;
+  let realSrc;
+  try {
+    realSrc = String(realFn.call(fs, src));
+  } catch {
+    return false;
+  }
+  if (isDisallowedCodexSymlinkTargetName(basename(realSrc))) return false;
+  const roots = (Array.isArray(targetRoot) ? targetRoot : [targetRoot]).filter(r => typeof r === 'string' && r);
+  for (const root of roots) {
+    if (isPathAtOrInside(realSrc, root)) return false;
+    try {
+      const realTarget = String(realFn.call(fs, root));
+      if (isPathAtOrInside(realSrc, realTarget)) return false;
+    } catch {}
+  }
+  if (typeof sourceHome === 'string' && sourceHome) {
+    if (isPathAtOrInside(sourceHome, realSrc)) return false;
+    try {
+      const realSource = String(realFn.call(fs, sourceHome));
+      if (isPathAtOrInside(realSource, realSrc)) return false;
+    } catch {}
+  }
+  return true;
+}
+
+function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRoots = []) {
   fs.mkdirSync(managedHome, { recursive: true, mode: 0o700 });
   try { (fs.chmodSync ?? nativeFs.chmodSync)?.(managedHome, 0o700); } catch {}
-  if (resolve(sourceHome) === resolve(managedHome)) return;
+  const resolvedSourceHome = resolve(sourceHome);
+  const resolvedManagedHome = resolve(managedHome);
+  if (resolvedSourceHome === resolvedManagedHome) return;
+  try {
+    const realFn = fs.realpathSync?.native ?? fs.realpathSync;
+    if (typeof realFn === 'function' && realFn.call(fs, sourceHome) === realFn.call(fs, managedHome)) return;
+  } catch {}
   const lstat = typeof fs?.lstatSync === 'function' ? fs.lstatSync.bind(fs) : (fs === nativeFs ? nativeFs.lstatSync : null);
   const symlink = typeof fs?.symlinkSync === 'function' ? fs.symlinkSync.bind(fs) : null;
   if (!lstat || !symlink) return;
+  try {
+    if (lstat(managedHome).isSymbolicLink()) return;
+  } catch {}
   const removeLink = dst => {
     try {
       if (typeof fs.unlinkSync === 'function') fs.unlinkSync(dst);
       else fs.rmSync?.(dst, { force: true });
     } catch {}
   };
-  for (const name of MANAGED_CODEX_HOME_LINKS) {
-    const src = join(sourceHome, name);
-    const dst = join(managedHome, name);
-    let srcValid = false;
+  const hasReaddir = typeof fs?.readdirSync === 'function';
+  let candidateNames;
+  if (hasReaddir) {
     try {
-      const srcStat = lstat(src);
-      srcValid = !srcStat.isSymbolicLink();
-    } catch {}
+      candidateNames = fs
+        .readdirSync(sourceHome)
+        .map(item => (typeof item === 'string' ? item : item?.name))
+        .filter(Boolean);
+    } catch {
+      candidateNames = [];
+    }
+  } else {
+    candidateNames = MANAGED_CODEX_HOME_BASELINE_LINKS;
+  }
+  const forbiddenRoots = [managedHome, ...extraForbiddenRoots, resolvedSourceHome];
+  const activeValidLinks = new Set();
+  for (const name of candidateNames) {
+    if (isIsolatedCodexHomeEntry(name)) continue;
+    const src = join(resolvedSourceHome, name);
+    const dst = join(managedHome, name);
+    const srcValid = isSafeCodexSourceEntry(fs, src, forbiddenRoots, { sourceHome: resolvedSourceHome });
     if (srcValid) {
+      activeValidLinks.add(name);
       let dstStat = null;
       try { dstStat = lstat(dst); } catch {}
       if (!dstStat) {
@@ -776,8 +1061,40 @@ function syncManagedCodexHomeLinks(fs, sourceHome, managedHome) {
           removeLink(dst);
           try { symlink(src, dst); } catch {}
         }
+      } else if (
+        dstStat.isDirectory()
+        && !dstStat.isSymbolicLink()
+        && (
+          REPLACED_MANAGED_CACHE_DIRS.has(name)
+          || (hasReaddir && (() => { try { return fs.readdirSync(dst).length === 0; } catch { return false; } })())
+        )
+      ) {
+        try {
+          (fs.rmSync ?? nativeFs.rmSync)?.(dst, { recursive: true, force: true });
+          symlink(src, dst);
+        } catch {}
+      } else if (REPLACED_MANAGED_CACHE_FILES.has(name) && dstStat.isFile() && !dstStat.isSymbolicLink()) {
+        removeLink(dst);
+        try { symlink(src, dst); } catch {}
       }
     } else {
+      try {
+        const dstStat = lstat(dst);
+        if (dstStat.isSymbolicLink()) removeLink(dst);
+      } catch {}
+    }
+  }
+  if (hasReaddir) {
+    let managedEntries = [];
+    try {
+      managedEntries = fs
+        .readdirSync(managedHome)
+        .map(item => (typeof item === 'string' ? item : item?.name))
+        .filter(Boolean);
+    } catch {}
+    for (const name of managedEntries) {
+      if (activeValidLinks.has(name) && !isIsolatedCodexHomeEntry(name)) continue;
+      const dst = join(managedHome, name);
       try {
         const dstStat = lstat(dst);
         if (dstStat.isSymbolicLink()) removeLink(dst);
@@ -796,15 +1113,19 @@ export function restoreLocalCodexGatewayConfig({ env = process.env, previousMode
   let removedAuth = false;
 
   assertNoSymlinkCodexPath(fs, configPath);
-  assertNoSymlinkCodexPath(fs, userConfigPath);
+  const resolvedUserCfg = resolveUserCodexConfigTarget(fs, userConfigPath, [managedHome], { strict: true });
 
   // Clean up any legacy PDD-managed gateway section in user ~/.codex/config.toml without touching ~/.codex/auth.json.
-  const { exists: hasUserConfig, data: userConfigData } = readCodexTomlObject(fs, userConfigPath);
+  const { exists: hasUserConfig, data: userConfigData } = resolvedUserCfg.exists && resolvedUserCfg.readPath
+    ? readCodexTomlObject(fs, resolvedUserCfg.readPath)
+    : { exists: false, data: {} };
+  let cleanUserData = {};
   if (hasUserConfig) {
     const strippedUser = stripGatewayFromTomlObject(userConfigData, previousModelProvider);
+    cleanUserData = strippedUser.nextData;
     if (strippedUser.changed) {
       const nextUserText = serializeTomlConfig(strippedUser.nextData, userConfigPath);
-      writeAtomicPrivate(fs, userConfigPath, nextUserText);
+      writeAtomicPrivate(fs, resolvedUserCfg.writePath, nextUserText);
       restoredConfig = true;
     }
   }
@@ -812,12 +1133,20 @@ export function restoreLocalCodexGatewayConfig({ env = process.env, previousMode
   // Update managed PDD CODEX_HOME/config.toml if present.
   const { exists: hasManagedConfig, data: managedConfigData } = readCodexTomlObject(fs, configPath);
   if (hasManagedConfig) {
+    const hadManagedGatewayOpenai = isManagedCodexGatewayUrl(managedConfigData?.openai_base_url);
+    const hadManagedGatewayChatgpt = isManagedCodexGatewayUrl(managedConfigData?.chatgpt_base_url);
     const strippedManaged = stripGatewayFromTomlObject(managedConfigData, previousModelProvider);
     if (strippedManaged.changed) {
       const nextManagedData = {
         ...strippedManaged.nextData,
         cli_auth_credentials_store: 'file',
       };
+      if (hadManagedGatewayOpenai && typeof cleanUserData.openai_base_url === 'string' && cleanUserData.openai_base_url.trim()) {
+        nextManagedData.openai_base_url = cleanUserData.openai_base_url;
+      }
+      if (hadManagedGatewayChatgpt && typeof cleanUserData.chatgpt_base_url === 'string' && cleanUserData.chatgpt_base_url.trim()) {
+        nextManagedData.chatgpt_base_url = cleanUserData.chatgpt_base_url;
+      }
       const nextManagedText = serializeTomlConfig(nextManagedData, configPath);
       writeAtomicPrivate(fs, configPath, nextManagedText);
       restoredConfig = true;
@@ -835,6 +1164,10 @@ export function restoreLocalCodexGatewayConfig({ env = process.env, previousMode
         removedAuth = true;
       }
     } catch {}
+  }
+
+  if (restoredConfig || removedAuth) {
+    stopCodexAppServerDaemon(managedHome, { env, fs, spawnSync: ports.spawnSync });
   }
 
   return { codexHome: managedHome, configPath, authPath, userConfigPath, restoredConfig, removedAuth };
@@ -878,9 +1211,11 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
 
   assertNoSymlinkCodexPath(fs, authPath);
   assertNoSymlinkCodexPath(fs, configPath);
-  assertNoSymlinkCodexPath(fs, userConfigPath);
+  const resolvedUserCfg = resolveUserCodexConfigTarget(fs, userConfigPath, [managedHome], { strict: true });
 
-  const { exists: hasUserConfig, data: rawUserConfig } = readCodexTomlObject(fs, userConfigPath);
+  const { exists: hasUserConfig, data: rawUserConfig } = resolvedUserCfg.exists && resolvedUserCfg.readPath
+    ? readCodexTomlObject(fs, resolvedUserCfg.readPath)
+    : { exists: false, data: {} };
   const userCurrentProvider = typeof rawUserConfig.model_provider === 'string' ? rawUserConfig.model_provider.trim() : '';
   const { exists: hasManagedConfig, data: rawManagedConfig } = readCodexTomlObject(fs, configPath, { strict: false });
   const managedCurrentProvider = typeof rawManagedConfig.model_provider === 'string' ? rawManagedConfig.model_provider.trim() : '';
@@ -897,7 +1232,7 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
   const cleanedUser = stripGatewayFromTomlObject(rawUserConfig, fallbackPriorProvider);
   if (hasUserConfig && (cleanedUser.changed || previousManagedCodexGateway)) {
     if (cleanedUser.changed) {
-      writeAtomicPrivate(fs, userConfigPath, serializeTomlConfig(cleanedUser.nextData, userConfigPath));
+      writeAtomicPrivate(fs, resolvedUserCfg.writePath, serializeTomlConfig(cleanedUser.nextData, userConfigPath));
     }
   }
 
@@ -924,19 +1259,33 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
           supports_websockets: false,
           http_headers: { 'x-pdd-gateway-grant': grantToken },
         };
+    const prevFeatures = isTomlTable(cleanedUser.nextData.features) ? { ...cleanedUser.nextData.features } : {};
     const nextConfig = {
       ...cleanedUser.nextData,
       cli_auth_credentials_store: 'file',
-      model_provider: CODEX_GATEWAY_PROVIDER_ID,
+      openai_base_url: gatewayUrl,
+      chatgpt_base_url: gatewayUrl,
+      features: {
+        ...prevFeatures,
+        responses_websockets: false,
+      },
       model_providers: {
         ...prevProviders,
         [CODEX_GATEWAY_PROVIDER_ID]: gatewayProviderBlock,
       },
     };
+    delete nextConfig.model_provider;
     const serializedConfig = serializeTomlConfig(nextConfig, configPath);
     const gatewayAuth = {
-      auth_mode: 'apikey',
-      OPENAI_API_KEY: grantToken,
+      auth_mode: 'chatgpt',
+      OPENAI_API_KEY: null,
+      tokens: {
+        id_token: buildSyntheticGatewayIdToken({ planType: authOrLease?.plan_type ?? authOrLease?.plan }),
+        access_token: grantToken,
+        refresh_token: '',
+        account_id: 'acct_pdd_gateway',
+      },
+      last_refresh: new Date((ports.now ?? Date.now)()).toISOString(),
     };
     const authText = `${JSON.stringify(gatewayAuth, null, 2)}\n`;
     let existingConfigText = null;
@@ -998,13 +1347,40 @@ export function materializeLocalClaudeAuth(lease, { env = process.env, previousM
   return { settingsPath, onboardingPath, managedBaseUrl };
 }
 
+export function restoreLocalClaudeGatewayConfig({ env = process.env } = {}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const { settingsPath } = localClaudePaths(env);
+  const settings = readJsonObject(fs, settingsPath);
+  if (!object(settings) || !object(settings.env)) {
+    return { settingsPath, restoredSettings: false };
+  }
+  const settingsEnv = { ...settings.env };
+  let changed = false;
+  if (typeof settingsEnv.CLAUDE_CODE_OAUTH_TOKEN === 'string' && settingsEnv.CLAUDE_CODE_OAUTH_TOKEN.trim().startsWith('pddg_')) {
+    rememberSecrets(settingsEnv.CLAUDE_CODE_OAUTH_TOKEN.trim());
+    delete settingsEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    changed = true;
+  }
+  if (MANAGED_CLAUDE_GATEWAY_RE.test(String(settingsEnv.ANTHROPIC_BASE_URL ?? ''))) {
+    delete settingsEnv.ANTHROPIC_BASE_URL;
+    changed = true;
+  }
+  if (changed) {
+    const nextSettings = { ...settings, env: settingsEnv };
+    writeAtomicPrivate(fs, settingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`);
+  }
+  return { settingsPath, restoredSettings: changed };
+}
+
 export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot, detached = false } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const sourceCodexHome = localCodexHome(env);
+  const managedHome = pddManagedCodexHome(env);
   const isGateway = object(authOrLease) && authOrLease.delivery_mode === 'gateway_grant';
   const rawGatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
   const gatewayToken = isGateway ? resolveCodexGatewayGrant(authOrLease) : null;
   const gatewayUrl = isGateway ? normalizeCodexGatewayBaseUrl(rawGatewayUrl, gatewayToken) : null;
+  const embeddedLeaseGrant = isGateway && isEmbeddedLeaseGatewayGrant(gatewayToken);
   const rootDir = tmpRoot || (fs.existsSync?.('/tmp') !== false ? '/tmp' : tmpdir());
   let overlayDir;
   if (typeof fs.mkdtempSync === 'function') {
@@ -1027,27 +1403,16 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
     activeOverlayCleanups.add(cleanup);
     syncOverlayHooks();
   }
-  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  const resolvedSourceCodexHome = resolve(sourceCodexHome);
   try {
-    const linkNames = isGateway ? CODEX_GATEWAY_OVERLAY_LINKS : CODEX_OVERLAY_LINKS;
-    for (const name of linkNames) {
-      const src = join(sourceCodexHome, name);
-      try {
-        const st = lstat(src);
-        if (!st.isSymbolicLink()) {
-          fs.symlinkSync(src, join(overlayDir, name));
-        }
-      } catch {}
-    }
+    syncManagedCodexHomeLinks(fs, sourceCodexHome, overlayDir, [managedHome]);
+    const srcConfigPath = join(resolvedSourceCodexHome, 'config.toml');
+    const resolvedSrcCfg = resolveUserCodexConfigTarget(fs, srcConfigPath, [overlayDir, managedHome], { strict: false });
     if (isGateway) {
-      let baseConfig = {};
-      const srcConfigPath = join(sourceCodexHome, 'config.toml');
-      try {
-        const cfgStat = lstat(srcConfigPath);
-        if (cfgStat.isFile() && !cfgStat.isSymbolicLink()) {
-          baseConfig = readCodexTomlObject(fs, srcConfigPath, { strict: false }).data;
-        }
-      } catch {}
+      const rawBaseConfig = resolvedSrcCfg.exists && resolvedSrcCfg.readPath
+        ? readCodexTomlObject(fs, resolvedSrcCfg.readPath, { strict: false }).data
+        : {};
+      const baseConfig = stripGatewayFromTomlObject(rawBaseConfig).nextData;
       const prevFeatures = isTomlTable(baseConfig.features) ? { ...baseConfig.features } : {};
       const prevPolicy = isTomlTable(baseConfig.shell_environment_policy) ? { ...baseConfig.shell_environment_policy } : {};
       const prevFilters = isTomlTable(prevPolicy.filters) ? { ...prevPolicy.filters } : {};
@@ -1090,12 +1455,55 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
       prevPolicy.filters = prevFilters;
       const prevProviders = isTomlTable(baseConfig.model_providers) ? { ...baseConfig.model_providers } : {};
       delete prevProviders[CODEX_GATEWAY_PROVIDER_ID];
+      const configPath = join(overlayDir, 'config.toml');
+      if (embeddedLeaseGrant) {
+        const overlayConfig = {
+          ...baseConfig,
+          cli_auth_credentials_store: 'file',
+          openai_base_url: gatewayUrl,
+          chatgpt_base_url: gatewayUrl,
+          features: {
+            ...prevFeatures,
+            shell_snapshot: false,
+            responses_websockets: false,
+          },
+          shell_environment_policy: prevPolicy,
+          model_providers: {
+            ...prevProviders,
+            [CODEX_GATEWAY_PROVIDER_ID]: {
+              name: 'PDD Codex Gateway',
+              base_url: gatewayUrl,
+              model_catalog_url: `${gatewayUrl}/models`,
+              wire_api: 'responses',
+              requires_openai_auth: true,
+              supports_websockets: false,
+            },
+          },
+        };
+        delete overlayConfig.model_provider;
+        const gatewayAuth = {
+          auth_mode: 'chatgpt',
+          OPENAI_API_KEY: null,
+          tokens: {
+            id_token: buildSyntheticGatewayIdToken({ planType: authOrLease?.plan_type ?? authOrLease?.plan }),
+            access_token: gatewayToken,
+            refresh_token: '',
+            account_id: 'acct_pdd_gateway',
+          },
+          last_refresh: new Date((ports.now ?? Date.now)()).toISOString(),
+        };
+        const authPath = join(overlayDir, 'auth.json');
+        writeAtomicPrivate(fs, configPath, serializeTomlConfig(overlayConfig, configPath));
+        writeAtomicPrivate(fs, authPath, `${JSON.stringify(gatewayAuth, null, 2)}\n`);
+        return { overlayDir, authPath, configPath, gatewayToken, gatewayUrl, cleanup };
+      }
       const overlayConfig = {
         ...baseConfig,
         model_provider: CODEX_GATEWAY_PROVIDER_ID,
         features: {
           ...prevFeatures,
           shell_snapshot: false,
+          responses_websockets: false,
         },
         shell_environment_policy: prevPolicy,
         model_providers: {
@@ -1111,9 +1519,11 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
           },
         },
       };
-      const configPath = join(overlayDir, 'config.toml');
       writeAtomicPrivate(fs, configPath, serializeTomlConfig(overlayConfig, configPath));
       return { overlayDir, authPath: null, configPath, gatewayToken, gatewayUrl, cleanup };
+    }
+    if (resolvedSrcCfg.exists) {
+      try { fs.symlinkSync(srcConfigPath, join(overlayDir, 'config.toml')); } catch {}
     }
     const stripped = stripCodexAuthBundle(authOrLease);
     const authPath = join(overlayDir, 'auth.json');
@@ -1125,12 +1535,14 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
   }
 }
 
-export function buildClaudeStepEnv(baseEnv = process.env, lease) {
+export function buildClaudeStepEnv(baseEnv = process.env, lease, ports = {}) {
+  const fs = ports?.fs ?? nativeFs;
   const out = {};
   for (const [k, v] of Object.entries(baseEnv ?? {})) {
     if (typeof v === 'string') out[k] = v;
   }
   delete out.CLAUDE_CODE_OAUTH_TOKEN;
+  delete out.ANTHROPIC_API_KEY;
   const token = String(lease?.claude_oauth_token || lease?.gateway_bearer_token || '').trim();
   if (token) {
     rememberSecrets(token);
@@ -1138,8 +1550,16 @@ export function buildClaudeStepEnv(baseEnv = process.env, lease) {
   }
   if (lease?.delivery_mode === 'gateway_grant' && typeof lease.anthropic_base_url === 'string' && lease.anthropic_base_url.trim()) {
     out.ANTHROPIC_BASE_URL = lease.anthropic_base_url.trim();
-  } else if (MANAGED_CLAUDE_GATEWAY_RE.test(String(out.ANTHROPIC_BASE_URL ?? ''))) {
-    delete out.ANTHROPIC_BASE_URL;
+  } else {
+    if (MANAGED_CLAUDE_GATEWAY_RE.test(String(out.ANTHROPIC_BASE_URL ?? ''))) {
+      delete out.ANTHROPIC_BASE_URL;
+    }
+    if (!out.ANTHROPIC_BASE_URL) {
+      const settings = readJsonObject(fs, localClaudePaths(baseEnv).settingsPath);
+      if (MANAGED_CLAUDE_GATEWAY_RE.test(String(settings?.env?.ANTHROPIC_BASE_URL ?? ''))) {
+        out.ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
+      }
+    }
   }
   return out;
 }
@@ -1150,7 +1570,10 @@ export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, por
   const cleanBase = loginEnvironment(baseEnv, { kind: provider || 'codex' });
   if (provider === 'codex') {
     if (lease?.delivery_mode === 'gateway_grant') {
-      const overlay = createCodexStepOverlay(lease, { env: baseEnv, tmpRoot: ports.tmpRoot, detached }, ports);
+      const overlay = createCodexStepOverlay({
+        ...lease,
+        plan_type: lease?.plan_type ?? leaseReply?.account?.plan_type ?? leaseReply?.account?.plan,
+      }, { env: baseEnv, tmpRoot: ports.tmpRoot, detached }, ports);
       const env = {
         ...cleanBase,
         CODEX_HOME: overlay.overlayDir,
@@ -1171,7 +1594,7 @@ export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, por
     return { env, cleanupDirs: [overlay.overlayDir], cleanup: overlay.cleanup, overlayDir: overlay.overlayDir };
   }
   if (provider === 'claude') {
-    const env = { ...buildClaudeStepEnv(cleanBase, lease), PDD_CLOUD_STEP_ISOLATED: '1' };
+    const env = { ...buildClaudeStepEnv(cleanBase, lease, ports), PDD_CLOUD_STEP_ISOLATED: '1' };
     return { env, cleanupDirs: [], cleanup: () => {}, overlayDir: null };
   }
   return { env: cleanBase, cleanupDirs: [], cleanup: () => {}, overlayDir: null };
