@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 0462bc1987c0a817bb5fb26daf0425cbb4634d0490dee1e484ba557f21446e45).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: 9dcca78addab7265aa930cd5372388ab470c79dd89817067bef8fc95027beb8f).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -16,11 +16,18 @@ ${command} --said - <<'PDD_SAID'
 PDD_SAID
 Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal.`;
 const routes = [
-  { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--json',kind:'flag'},{name:'--date',kind:'text'},{name:'--week',kind:'optional-text'},{name:'--snapshot',kind:'text'},{name:'--timezone',kind:'text'},{name:'--at',kind:'text'},{name:'--expected-source',kind:'text-list'}],
-    forms: [form('pdd metrics [--json] [--date YYYY-MM-DD | --week [YYYY-MM-DD] | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]', 'Show metrics for this repository.')] },
-  { id: 'metrics.export', prefix: ['metrics', 'export'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [{name:'--timezone',kind:'text'}], forms: [form('pdd metrics export FILE [--timezone IANA]', 'Export metrics for sharing.')] },
-  { id: 'metrics.import', prefix: ['metrics', 'import'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics import FILE', 'Import a metrics bundle.')] },
-  { id: 'metrics.record', prefix: ['metrics', 'record'], local: 'metrics', operands: [{name:'file',type:'text'}], options: [], forms: [form('pdd metrics record FILE', 'Record explicit metrics observations.')] },
+  { id: 'metrics', prefix: ['metrics'], local: 'metrics', operands: [], options: [{name:'--repos',kind:'flag'},{name:'--repo',kind:'text'},{name:'--date',kind:'text'},{name:'--timezone',kind:'text'},{name:'--json',kind:'flag'},{name:'--html',kind:'flag'},{name:'--file',kind:'text'}],
+    forms: [form('pdd metrics [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]', 'Show Autopilot overview metrics (Last 24h and Week Mon-Sun) across active repositories on this machine, or per repository with --repos.')] },
+  { id: 'metrics.stages', prefix: ['metrics', 'stages'], local: 'metrics', operands: [], options: [{name:'--repo',kind:'text'},{name:'--date',kind:'text'},{name:'--timezone',kind:'text'},{name:'--json',kind:'flag'},{name:'--html',kind:'flag'},{name:'--file',kind:'text'}],
+    forms: [form('pdd metrics stages [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]', 'Show Autopilot gate pass rates (Prompt tests, Vectors, Formal, Suite, Review, CI), merges, reopens, and non-merged status counts.')] },
+  { id: 'metrics.skills', prefix: ['metrics', 'skills'], local: 'metrics', operands: [], options: [{name:'--repo',kind:'text'},{name:'--date',kind:'text'},{name:'--timezone',kind:'text'},{name:'--json',kind:'flag'},{name:'--html',kind:'flag'},{name:'--file',kind:'text'}],
+    forms: [form('pdd metrics skills [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]', 'Show Autopilot work mix (small-change, bug, feature, Total) with merge conversion and median completion time.')] },
+  { id: 'metrics.full', prefix: ['metrics', 'full'], local: 'metrics', operands: [], options: [{name:'--repos',kind:'flag'},{name:'--repo',kind:'text'},{name:'--date',kind:'text'},{name:'--timezone',kind:'text'},{name:'--json',kind:'flag'},{name:'--html',kind:'flag'},{name:'--file',kind:'text'}],
+    forms: [form('pdd metrics full [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]', 'Show all three Autopilot metrics views (Overview, Stages, and Skills) together.')] },
+  { id: 'metrics.on', prefix: ['metrics', 'on'], local: 'metrics', operands: [], options: [{name:'--repo',kind:'text'},{name:'--json',kind:'flag'}],
+    forms: [form('pdd metrics on [--repo OWNER/REPO] [--json]', 'Enable Autopilot metrics recording on this machine (or for one repository).')] },
+  { id: 'metrics.off', prefix: ['metrics', 'off'], local: 'metrics', operands: [], options: [{name:'--repo',kind:'text'},{name:'--json',kind:'flag'}],
+    forms: [form('pdd metrics off [--repo OWNER/REPO] [--json]', 'Pause Autopilot metrics recording on this machine (or for one repository) while keeping existing history.')] },
   { id: 'autopilot.regressions', prefix: ['autopilot', 'regressions'], local: 'autopilot-regressions', operands: [], options: [{name:'--json',kind:'flag'},{name:'--file',kind:'text'}],
     forms: [form('pdd autopilot regressions [--json] [--file PATH]', 'Read core merge history and GitHub regression evidence; optionally save a local report, without GitHub writes or reverts.')] },
   { id: 'autopilot.doctor', prefix: ['autopilot', 'doctor'], local: 'autopilot-doctor', operands: [], options: [], forms: [form('pdd autopilot doctor', 'Read-only first-start checks and fix commands; no AI call or GitHub write.')] },

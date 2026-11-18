@@ -4,7 +4,6 @@ import { workflowRunsOnPr } from './autopilot-core.mjs';
 import { runTestSuite, readSuiteProgress, suiteStatusWords } from './test-suite-queue.mjs';
 import { classifyStuckCause, environmentRecovery, environmentStatus, environmentWakeTag, environmentHealthy, ENVIRONMENT_BACKOFF } from './autopilot-environment.mjs';
 import { launchProfile, selectLaunchProfile, validLaunchProfile } from './workflow-launch-profile.mjs';
-import { validateSnapshot } from './metrics-store.mjs';
 import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
@@ -913,27 +912,11 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   try { binding = await resolveWorkflowIssue({ cwd: context.toplevel, issue }, p.commandPorts); }
   catch (error) { return fail(`pdd could not read issue ${issue} with gh (${causeOf(error)}). Check "gh auth status", the origin remote and the issue number.`); }
   const number = binding.issue.number, runDir = runDirFor(context.commonDir, number), existing = readRun(runDir);
-  let actualOrigin = origin === 'manual' ? 'manual' : 'unknown';
-  if (origin === 'autopilot' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(decisionId ?? '')) {
-    try {
-      const decision=JSON.parse(readFileSync(join(context.commonDir,'pdd','metrics','decisions',`${decisionId}.json`),'utf8'));
-      const repo=binding.repository.toLowerCase(), snapshotId=decision.snapshotId;
-      if (/^snapshot:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(snapshotId ?? '')
-          && decision.id === decisionId && decision.repo === repo && decision.issue === number && decision.offered === true) {
-        const snapshot=JSON.parse(readFileSync(join(context.commonDir,'pdd','metrics','snapshots',`${snapshotId.slice(9)}.json`),'utf8'));
-        validateSnapshot(snapshot,repo);
-        const matchingSelection=event=>event?.schema === 'pdd.metrics.event.v1' && event.id === `${decisionId}:selection`
-          && event.repo === repo && event.issue === number && event.type === 'selection' && event.data?.snapshotId === snapshotId;
-        const selected=Array.isArray(decision.events) ? decision.events.filter(matchingSelection) : [];
-        if (snapshot.snapshotId === snapshotId && snapshot.repo === repo && Array.isArray(snapshot.events)
-            && selected.length === 1 && snapshot.events.some(event=>matchingSelection(event) && sameFact(event,selected[0]))) actualOrigin='autopilot';
-      }
-    } catch { /* Unknown evidence must not block a workflow. */ }
-  }
+  const actualOrigin = origin === 'manual' || origin === 'autopilot' ? origin : 'unknown';
   let cliVersion='unknown', skillVersion='unknown';
   try { cliVersion=JSON.parse(readFileSync(join(packageRoot,'package.json'),'utf8')).version || 'unknown'; } catch {}
   try { skillVersion=/^  pdd-skills:\s*(\S+)/m.exec(readFileSync(join(workflow.dir,'SKILL.md'),'utf8'))?.[1] ?? 'unknown'; } catch {}
-  const metricsOrigin={origin:actualOrigin, ...(actualOrigin === 'autopilot' ? {decisionId} : {}), requiredOutcome:['code','prompt-only'].includes(outcome) ? outcome : 'unknown',cliVersion,skillVersion,candidateVersion:installedCandidateIdentity(packageRoot,workflow.dir)};
+  const metricsOrigin={origin:actualOrigin, ...(actualOrigin === 'autopilot' && decisionId ? {decisionId} : {}), requiredOutcome:['code','prompt-only'].includes(outcome) ? outcome : 'unknown',cliVersion,skillVersion,candidateVersion:installedCandidateIdentity(packageRoot,workflow.dir)};
   let automaticOrigin;
   if (automatic) {
     try {

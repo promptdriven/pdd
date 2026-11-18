@@ -211,7 +211,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const args = [...(plan.commandId === 'metrics' ? [] : [plan.commandId.split('.')[1]]), ...plan.operands];
       for (const [name, value] of Object.entries(plan.options)) { args.push(name); if (Array.isArray(value)) args.push(...value); else if (value !== true) args.push(value); }
       const { runMetrics } = await import('./metrics-command.mjs');
-      return runMetrics({ argv: args, cwd, stdout, stderr });
+      return runMetrics({ argv: args, cwd, env, stdout, stderr });
     }
     case 'accounts': {
       try {

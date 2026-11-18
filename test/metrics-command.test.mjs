@@ -1,83 +1,241 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runMetrics} from '../src/metrics-command.mjs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { recordAutopilotMetric } from '../src/autopilot-metrics.mjs';
+import { runMetrics } from '../src/metrics-command.mjs';
+import { runPdd } from '../src/pdd-cli.mjs';
 
-const at = '2026-11-05T12:00:00.000Z';
-function setup() {
-  let out='', err='', saved=[];
-  const ports={repository:async()=>({root:'/repo',repo:'owner/repo'}),now:()=>at,historical:async()=>[],store:{readEvents:async()=>({events:saved}),appendEvents:async({events})=>{saved.push(...events);},exportMetrics:async()=>({repo:'owner/repo'}),importMetrics:async()=>{}},selector:async()=>({snapshotId:'s',events:[{schema:'pdd.metrics.event.v1',id:'1',repo:'owner/repo',issue:1,type:'selection',at,observedAt:at,source:'test',data:{snapshotId:'s',inScope:true,state:'unknown',reasons:['unobserved']}}]})};
-  return {ports, stdout:s=>out+=s,stderr:s=>err+=s,get out(){return out},get err(){return err},get saved(){return saved}};
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const pddBin = join(repoRoot, 'bin', 'pdd.mjs');
+
+function makeSandbox(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-metrics-cmd-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const stateDir = join(dir, 'state');
+  mkdirSync(join(stateDir, 'autopilot'), { recursive: true });
+  return { dir, stateDir };
 }
-test('queue JSON and text share calculation and save its membership',async()=>{
-  const x=setup(); assert.equal(await runMetrics({...x,argv:['--json']}),0); const report=JSON.parse(x.out); assert.equal(report.issues[0].selection.state,'unknown'); assert.equal(x.saved.length,1);
-  const y=setup(); assert.equal(await runMetrics({...y,argv:[]}),0); assert.match(y.out,/Scope: queue s/); assert.match(y.out,/#1/);
-});
-test('rejects malformed date and mismatched imported repository',async()=>{
-  const x=setup(); assert.equal(await runMetrics({...x,argv:['--date','2026-02-30']}),1); assert.match(x.err,/date/);
-  const y=setup(); y.ports.readFile=async()=>JSON.stringify({repo:'another/repo'}); assert.equal(await runMetrics({...y,argv:['import','bundle.json']}),1); assert.match(y.err,/another repository/);
-});
-test('record forwards explicit facts to ledger validation',async()=>{
-  const x=setup(); x.ports.readFile=async()=>JSON.stringify({repo:'owner/repo',type:'report'}); assert.equal(await runMetrics({...x,argv:['record','fact.json']}),0); assert.equal(x.saved[0].type,'report');
+
+function capture() {
+  return {
+    text: '',
+    write(chunk) {
+      this.text += String(chunk);
+    },
+  };
+}
+
+function seedTwoRepos(stateDir, nowMs) {
+  writeFileSync(join(stateDir, 'autopilot', 'a.json'), JSON.stringify({ repo: 'promptdriven/pdd', enabled: true, mode: 'observe' }));
+  writeFileSync(join(stateDir, 'autopilot', 'b.json'), JSON.stringify({ repo: 'promptdriven/pocket', enabled: true, mode: 'auto' }));
+
+  recordAutopilotMetric({
+    repo: 'promptdriven/pdd',
+    issue: 301,
+    skill: 'small-change',
+    startedAt: nowMs - 30 * 60_000,
+    at: nowMs - 20 * 60_000,
+    status: 'would-merge',
+    pr: 401,
+    durationMinutes: 10,
+    gates: { runtime: 'na', vectors: 'na', formal: 'na', suite: 'pass', review: 'pass', ci: 'pass' },
+  }, { stateDir, now: () => nowMs });
+
+  recordAutopilotMetric({
+    repo: 'promptdriven/pdd',
+    issue: 302,
+    skill: 'bug',
+    startedAt: nowMs - 50 * 60_000,
+    at: nowMs - 35 * 60_000,
+    status: 'ended',
+    pr: 402,
+    durationMinutes: 15,
+    gates: { runtime: 'pass', vectors: 'pass', formal: 'na', suite: 'fail', review: 'pass', ci: 'pass' },
+  }, { stateDir, now: () => nowMs });
+
+  recordAutopilotMetric({
+    repo: 'promptdriven/pocket',
+    issue: 12,
+    skill: 'feature',
+    startedAt: nowMs - 40 * 60_000,
+    at: nowMs - 15 * 60_000,
+    status: 'merged',
+    pr: 22,
+    durationMinutes: 25,
+    gates: { runtime: 'pass', vectors: 'pass', formal: 'bounded', suite: 'pass', review: 'pass', ci: 'pass' },
+  }, { stateDir, now: () => nowMs });
+}
+
+test('CLI overview, --repos, --repo, stages, skills, full, --date, --json, and single batched GraphQL Open query', async t => {
+  const { dir, stateDir } = makeSandbox(t);
+  const nowMs = Date.parse('2026-11-17T18:00:00Z');
+  seedTwoRepos(stateDir, nowMs);
+
+  const ghCalls = [];
+  const fakeExecFile = async (cmd, args) => {
+    ghCalls.push([cmd, ...args]);
+    return {
+      stdout: JSON.stringify({
+        data: {
+          r0: { issues: { totalCount: 14 } },
+          r1: { issues: { totalCount: 8 } },
+        },
+      }),
+    };
+  };
+
+  // 1. Unified overview
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['--timezone', 'America/Los_Angeles'],
+      cwd: dir,
+      stdout: out,
+      stderr: err,
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile },
+    });
+    assert.equal(code, 0, err.text);
+    assert.equal(ghCalls.length, 1, 'Open issue counts must use 1 batched GraphQL call');
+    assert.match(out.text, /Unified \(2 repos\)/);
+    assert.match(out.text, /Last 24h\s+22\s+3\s+3\s+2 \(66\.7%\)/);
+    assert.match(out.text, /Week \(Mon-Sun\)\s+22\s+3\s+3\s+2 \(66\.7%\)/);
+  }
+
+  // 2. Per-repo breakdown (--repos)
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['--repos', '--timezone', 'America/Los_Angeles'],
+      cwd: dir,
+      stdout: out,
+      stderr: err,
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile },
+    });
+    assert.equal(code, 0, err.text);
+    assert.match(out.text, /promptdriven\/pdd\s+14\s+2\s+2\s+1 \(50\.0%\)/);
+    assert.match(out.text, /promptdriven\/pocket\s+8\s+1\s+1\s+1 \(100\.0%\)/);
+    assert.match(out.text, /Total\s+22\s+3\s+3\s+2 \(66\.7%\)/);
+  }
+
+  // 3. Stages view
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['stages', '--timezone', 'America/Los_Angeles'],
+      cwd: dir,
+      stdout: out,
+      stderr: err,
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile },
+    });
+    assert.equal(code, 0, err.text);
+    assert.match(out.text, /Week \(Mon-Sun\)\s+3\s+3\s+2\/2\s+2\/2\s+1\/1\s+2\/3\s+3\/3\s+3\/3\s+2\s+0/);
+    assert.match(out.text, /Non-merged \(1\): 1 failed suite/);
+  }
+
+  // 4. Skills view
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['skills', '--timezone', 'America/Los_Angeles'],
+      cwd: dir,
+      stdout: out,
+      stderr: err,
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile },
+    });
+    assert.equal(code, 0, err.text);
+    assert.match(out.text, /small-change\s+1\s+1\s+1 \(100\.0%\)\s+10m/);
+    assert.match(out.text, /bug\s+1\s+1\s+0 \(0\.0%\)\s+n\/a/);
+    assert.match(out.text, /feature\s+1\s+1\s+1 \(100\.0%\)\s+25m/);
+    assert.match(out.text, /Total\s+3\s+3\s+2 \(66\.7%\)\s+18m/);
+  }
+
+  // 5. Single-repo filter + JSON
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['full', '--repo', 'promptdriven/pocket', '--json', '--timezone', 'America/Los_Angeles'],
+      cwd: dir,
+      stdout: out,
+      stderr: err,
+      ports: { stateDir, now: () => nowMs, openIssues: { 'promptdriven/pocket': 8 } },
+    });
+    assert.equal(code, 0, err.text);
+    const parsed = JSON.parse(out.text);
+    assert.equal(parsed.schema, 'pdd.autopilot.metrics.v1');
+    assert.equal(parsed.repoFilter, 'promptdriven/pocket');
+    assert.equal(parsed.overview.windows[0].taken, 1);
+    assert.equal(parsed.stages.mwm, 1);
+  }
 });
 
-test('real Git and gh boundary retains mapped merge and does not copy old queue state', async t => {
-  const {mkdtemp, mkdir, writeFile, rm} = await import('node:fs/promises');
-  const {tmpdir} = await import('node:os');
-  const {join} = await import('node:path');
-  const {execFileSync} = await import('node:child_process');
-  const root=await mkdtemp(join(tmpdir(),'metrics-command-'));
-  t.after(()=>rm(root,{recursive:true,force:true}));
-  execFileSync('git',['init','-q',root]);
-  execFileSync('git',['-C',root,'remote','add','origin','https://github.com/owner/repo.git']);
-  const bindir=join(root,'bin'); await mkdir(bindir);
-  const head='a'.repeat(40), oldPath=process.env.PATH;
-  const pull=JSON.stringify({head:{sha:head},merged_at:'2026-11-04T00:00:00Z',html_url:'https://github.com/owner/repo/pull/9'});
-  const comment=JSON.stringify({id:42,author_association:'OWNER',body:'```json\n'+JSON.stringify({verdict:'PASS',head,risk:2,family:'codex',session:'fresh-1',checker_mode:'same-family',evidence:['checked code']})+'\n```',html_url:'https://github.com/owner/repo/pull/9#issuecomment-42',created_at:at});
-  await writeFile(join(bindir,'gh'),`#!/bin/sh\ncase "$*" in\n  *check-runs*) printf '%s\\n' '{"check_runs":[{"name":"unit","head_sha":"${head}","status":"completed","conclusion":"failure","html_url":"https://github.com/check/1"}]}' ;;\n  *pulls/9/files*) printf '%s\\n' '[]' ;;\n  *pulls/9*) printf '%s\\n' '${pull}' ;;\n  *comments*) printf '%s\\n' '${comment}' ;;\n  *) printf '%s\\n' '{"number":1}' ;;\nesac\n`,{mode:0o755});
-  process.env.PATH=`${bindir}:${oldPath}`; t.after(()=>{process.env.PATH=oldPath;});
-  const {appendEvents}=await import('../src/metrics-store.mjs');
-  const base={schema:'pdd.metrics.event.v1',repo:'owner/repo',issue:1,at,observedAt:at,source:'test'};
-  await appendEvents({root,events:[{...base,id:'old-selection',type:'selection',data:{snapshotId:'old',inScope:true,state:'ready',reasons:[]}},{...base,id:'mapping',type:'milestone',data:{stage:'code-pr',pr:9}}]});
-  let out='',err=''; const code=await runMetrics({cwd:root,argv:['--json'],now:()=>at,stdout:s=>out+=s,stderr:s=>err+=s});
-  assert.equal(code,0,err); const report=JSON.parse(out);
-  assert.equal(report.issues[0].selection.state,'unknown');
-  assert.equal(report.issues[0].checks[0].data.acceptance,'accepted');
-  assert.equal(report.issues[0].ci[0].data.status,'failed');
-  assert.equal(report.issues[0].deliveries[0].data.head,head);
-  assert.equal(report.issues[0].deliveries[0].at,'2026-11-04T00:00:00.000Z');
-});
+test('CLI HTML dashboard output, on/off switch via runPdd, offline Open fallback, and input validation', async t => {
+  const { dir, stateDir } = makeSandbox(t);
+  const nowMs = Date.parse('2026-11-17T18:00:00Z');
+  seedTwoRepos(stateDir, nowMs);
 
-test('declared absent sources and past cutoff remain visible',async()=>{
-  const x=setup(); assert.equal(await runMetrics({...x,argv:['--json','--snapshot','s','--at','2026-11-04T12:00:00Z','--expected-source','install:missing']}),0);
-  const report=JSON.parse(x.out); assert.equal(report.observedAt,'2026-11-04T12:00:00.000Z'); assert.ok(report.coverage.missingSources.includes('install:missing')); assert.equal(report.issues.length,0);
-  const y=setup(); assert.equal(await runMetrics({...y,argv:['--at','2026-11-04T12:00:00Z']}),1); assert.match(y.err,/requires --date or --snapshot/);
-});
+  const htmlFile = join(dir, 'dashboard.html');
+  let openedPath = null;
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['--html', '--file', htmlFile, '--timezone', 'UTC'],
+      cwd: dir,
+      env: {},
+      stdout: out,
+      stderr: err,
+      ports: {
+        stateDir,
+        now: () => nowMs,
+        openIssues: { 'promptdriven/pdd': 14, 'promptdriven/pocket': 8 },
+        openBrowser: path => { openedPath = path; },
+      },
+    });
+    assert.equal(code, 0, err.text);
+    assert.equal(openedPath, htmlFile);
+    assert.ok(existsSync(htmlFile));
+    assert.match(readFileSync(htmlFile, 'utf8'), /PDD Autopilot Metrics/);
+  }
 
-test('equivalent head requires matching Git patch IDs and exact-head green full suite', async t => {
-  const {mkdtemp, mkdir, writeFile, rm} = await import('node:fs/promises');
-  const {tmpdir} = await import('node:os'); const {join} = await import('node:path');
-  const {execFileSync} = await import('node:child_process');
-  const root=await mkdtemp(join(tmpdir(),'metrics-equivalent-')); t.after(()=>rm(root,{recursive:true,force:true}));
-  const git=(...args)=>execFileSync('git',['-C',root,...args],{encoding:'utf8'}).trim();
-  execFileSync('git',['init','-q',root]); git('config','user.name','Fixture'); git('config','user.email','fixture@example.test'); git('remote','add','origin','https://github.com/owner/repo.git');
-  git('commit','--allow-empty','-qm','base'); const base=git('rev-parse','HEAD');
-  await writeFile(join(root,'example'),'same change\n'); git('add','example'); git('commit','-qm','first'); const old=git('rev-parse','HEAD');
-  git('reset','--hard',base); git('commit','--allow-empty','-qm','other parent'); await writeFile(join(root,'example'),'same change\n'); git('add','example'); git('commit','-qm','second'); const head=git('rev-parse','HEAD');
-  const comment=JSON.stringify({id:43,author_association:'OWNER',body:'```json\n'+JSON.stringify({verdict:'PASS',head:old,risk:2,family:'codex',session:'fresh-1',checker_mode:'same-family',evidence:['checked code']})+'\n```',html_url:'https://github.com/owner/repo/pull/9#issuecomment-43',created_at:at});
-  const pull=JSON.stringify({head:{sha:head}}), suite=JSON.stringify({check_runs:[{name:'full suite',head_sha:head,status:'completed',conclusion:'success'}]});
-  const bindir=join(root,'bin'); await mkdir(bindir); await writeFile(join(bindir,'gh'),`#!/bin/sh\ncase "$*" in\n *check-runs*) printf '%s\\n' '${suite}' ;;\n *pulls/9/files*) printf '%s\\n' 'src/example.mjs' ;;\n *pulls/9*) printf '%s\\n' '${pull}' ;;\n *comments*) printf '%s\\n' '${comment}' ;;\n *) printf '%s\\n' '{"number":1}' ;;\nesac\n`,{mode:0o755});
-  const oldPath=process.env.PATH; process.env.PATH=`${bindir}:${oldPath}`; t.after(()=>{process.env.PATH=oldPath;});
-  const {appendEvents}=await import('../src/metrics-store.mjs');
-  await appendEvents({root,events:[{schema:'pdd.metrics.event.v1',id:'mapping',repo:'owner/repo',issue:1,type:'milestone',at,observedAt:at,source:'test',data:{stage:'implementation-ready',pr:9,head}}]});
-  let out='',err=''; assert.equal(await runMetrics({cwd:root,argv:['--json'],stdout:s=>out+=s,stderr:s=>err+=s}),0,err);
-  const checks=JSON.parse(out).issues[0].checks; assert.ok(checks.some(e=>e.data.head===old)); assert.ok(checks.some(e=>e.data.head===head && e.data.acceptance==='equivalent'));
-});
+  // Real pdd CLI process: off -> check -> on, plus offline zero-gh safety
+  const env = {
+    ...process.env,
+    HOME: dir,
+    PDD_STATE_DIR: stateDir,
+    PDD_NO_OPEN: '1',
+    PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+  };
 
-test('remote observations retain actual time and cannot establish a past cutoff',async()=>{
-  const x=setup(), cutoff='2026-11-04T12:00:00.000Z'; let actual;
-  x.ports.historical=async()=>[{schema:'pdd.metrics.event.v1',id:'historic',repo:'owner/repo',issue:1,type:'selection',at:cutoff,observedAt:cutoff,source:'test',data:{snapshotId:'s',inScope:true,state:'ready',reasons:[]}}];
-  x.ports.github=async({observedAt})=>{actual=observedAt; return [{schema:'pdd.metrics.event.v1',id:'later',repo:'owner/repo',issue:1,type:'delivery',at:cutoff,observedAt,source:'test',data:{pr:9,head:'abc',explicit:true,evidence:'https://github.com/owner/repo/pull/9'}}];};
-  assert.equal(await runMetrics({...x,argv:['--json','--snapshot','s','--at',cutoff]}),0); assert.equal(actual,at);
-  const report=JSON.parse(x.out); assert.equal(report.issues[0].deliveries.length,0);
+  const offRes = spawnSync(process.execPath, [pddBin, 'metrics', 'off'], { cwd: dir, env, encoding: 'utf8' });
+  assert.equal(offRes.status, 0, offRes.stderr);
+  assert.match(offRes.stdout, /Autopilot metrics recording is OFF/);
+
+  const jsonWhileOff = spawnSync(process.execPath, [pddBin, 'metrics', '--json'], { cwd: dir, env, encoding: 'utf8' });
+  assert.equal(jsonWhileOff.status, 0, jsonWhileOff.stderr);
+  const parsedOff = JSON.parse(jsonWhileOff.stdout);
+  assert.equal(parsedOff.recording.enabled, false);
+  assert.equal(parsedOff.overview.windows[0].taken, 3, 'Existing history stays readable when recording is OFF');
+
+  const onRes = spawnSync(process.execPath, [pddBin, 'metrics', 'on', '--json'], { cwd: dir, env, encoding: 'utf8' });
+  assert.equal(onRes.status, 0, onRes.stderr);
+  assert.equal(JSON.parse(onRes.stdout).enabled, true);
+
+  // Validation errors return exit code 2 via runPdd
+  for (const badArgv of [
+    ['metrics', 'on', '--repos'],
+    ['metrics', 'stages', '--repos'],
+    ['metrics', '--json', '--html'],
+    ['metrics', '--file', 'out.html'],
+    ['metrics', '--date', 'not-a-date'],
+    ['metrics', '--repo', 'invalid'],
+  ]) {
+    const out = capture(), err = capture();
+    const exitCode = await runPdd(badArgv, { cwd: dir, env, stdout: out, stderr: err });
+    assert.equal(exitCode, 2, `Expected exit 2 for ${badArgv.join(' ')}`);
+    assert.ok(err.text.trim().length > 0);
+  }
 });

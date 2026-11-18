@@ -4,27 +4,23 @@
   "criteria": [
     {
       "id": "AC1",
-      "text": "A group containing issues 1 and 2 still contains two issues when issue 1 has two attempts and two pull requests."
+      "text": "Running `pdd metrics` at \"2026-11-17T18:00:00Z\" in \"America/Los_Angeles\" prints unified \"Last 24h\" and \"Week (Mon-Sun)\" rows with live \"Open\" issues, plain \"Taken\" and \"PR Created\" counts, and \"M/WM (Conv%)\" (\"3 (75.0%)\" when 3 of 4 taken issues merged or reached would-merge), and `pdd metrics --repos` breaks each window down by repository with a \"Total\" row."
     },
     {
       "id": "AC2",
-      "text": "An attempted launch without a confirmed start does not count as a start."
+      "text": "Running `pdd metrics stages` prints \"Taken\", \"PR\", \"Runtime\", \"Vectors\", \"Formal\", \"Suite\", \"Review\", \"CI\", \"M/WM\", and \"Reopen\", showing each check gate as \"passed/applicable\" (or \"-\" when 0 runs used that gate) and one \"Non-merged\" summary line naming where unfinished or ended runs stopped."
     },
     {
       "id": "AC3",
-      "text": "A checker pass for an old candidate does not validate a changed candidate."
+      "text": "Running `pdd metrics skills` prints \"small-change\", \"bug\", \"feature\", and \"Total\" rows with \"Taken\", \"PR Created\", \"M/WM (Conv%)\", and \"Median Time\" in minutes across merged or would-merge runs (\"n/a\" when none merged)."
     },
     {
       "id": "AC4",
-      "text": "A later delivered fix remains attributed to the original group, and an administrative reopen is separate from a human report that the fix is still broken."
+      "text": "Running `pdd metrics --date 2026-11-16` in \"America/Los_Angeles\" reports only runs active on \"2026-11-16\", and when GitHub open issue counts are unavailable \"Open\" prints \"?\" and exits with code 0."
     },
     {
       "id": "AC5",
-      "text": "Importing the same event twice does not add a second issue or event, and an absent machine is shown as a coverage gap."
-    },
-    {
-      "id": "AC6",
-      "text": "A weekly report anchored on Wednesday 2026-11-11 covers Monday 2026-11-09 through Wednesday 2026-11-11 (3 elapsed days, refreshing Monday), counts an issue worked on both Tuesday and Wednesday once in weekly totals, and resets to 1 elapsed day on Monday 2026-11-16."
+      "text": "Recording defaults to \"on\", running `pdd metrics off` (globally or with `--repo OWNER/REPO`) pauses recording new Autopilot runs while keeping earlier history in the report, and `pdd metrics on` resumes recording."
     }
   ],
   "initial_world": {},
@@ -32,489 +28,224 @@
   "context": [],
   "steps": [
     {
-      "step_id": "fixed-group",
+      "step_id": "overview-stages-and-skills",
       "entry_path": "prompts/cli/metrics-model.prompt.md",
-      "operation": "calculateMetrics",
+      "operation": "calculateAutopilotMetrics",
       "input": {
-        "events": [
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "1",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "selection",
-            "at": "2026-01-01T00:00:00Z",
-            "observedAt": "2026-01-01T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "snapshotId": "s",
-              "inScope": true,
-              "state": "ready",
-              "reasons": []
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "2",
-            "repo": "a/b",
-            "issue": 2,
-            "type": "selection",
-            "at": "2026-01-01T00:00:00Z",
-            "observedAt": "2026-01-01T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "snapshotId": "s",
-              "inScope": true,
-              "state": "ready",
-              "reasons": []
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "3",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "start",
-            "at": "2026-01-01T00:00:00Z",
-            "observedAt": "2026-01-01T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "origin": "manual"
-            },
-            "attempt": "one"
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "4",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "start",
-            "at": "2026-01-01T00:00:00Z",
-            "observedAt": "2026-01-01T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "origin": "manual"
-            },
-            "attempt": "two"
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "5",
-            "repo": "a/b",
-            "issue": 2,
-            "type": "launch",
-            "at": "2026-01-01T00:00:00Z",
-            "observedAt": "2026-01-01T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "origin": "autopilot",
-              "status": "attempted"
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "6",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "milestone",
-            "at": "2026-01-01T00:00:00Z",
-            "observedAt": "2026-01-01T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "stage": "implementation-ready",
-              "pr": 8,
-              "head": "b"
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "7",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "check",
-            "at": "2026-01-01T00:00:00Z",
-            "observedAt": "2026-01-01T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "pr": 8,
-              "head": "a",
-              "verdict": "PASS",
-              "reviewer": "r",
-              "evidence": "https://example.test/check",
-              "acceptance": "accepted"
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "8",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "delivery",
-            "at": "2026-01-02T00:00:00Z",
-            "observedAt": "2026-01-02T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "pr": 8,
-              "head": "b",
-              "explicit": true,
-              "evidence": "https://example.test/merge"
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "9",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "report",
-            "at": "2026-01-03T00:00:00Z",
-            "observedAt": "2026-01-03T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "classification": "administrative",
-              "humanReported": true,
-              "evidence": "https://example.test/reopen"
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "1",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "selection",
-            "at": "2026-01-01T00:00:00Z",
-            "observedAt": "2026-01-01T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "snapshotId": "s",
-              "inScope": true,
-              "state": "ready",
-              "reasons": []
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "10",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "milestone",
-            "at": "2026-01-01T00:00:00Z",
-            "observedAt": "2026-01-01T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "stage": "prompt-pr",
-              "pr": 7
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "11",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "report",
-            "at": "2026-01-04T00:00:00Z",
-            "observedAt": "2026-01-04T00:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "classification": "failed-fix",
-              "humanReported": true,
-              "evidence": "https://example.test/complaint"
-            }
-          }
-        ],
-        "repo": "a/b",
-        "scope": {
-          "kind": "cohort",
-          "snapshotId": "s"
+        "now": "2026-11-17T18:00:00Z",
+        "timezone": "America/Los_Angeles",
+        "view": "full",
+        "byRepo": true,
+        "repos": ["acme/api", "acme/web"],
+        "openIssues": {
+          "acme/api": 30,
+          "acme/web": 12
         },
-        "timezone": "UTC",
-        "observedAt": "2026-02-05T00:00:00Z",
-        "sources": [
-          "machine-a",
-          "machine-b"
+        "runs": [
+          {
+            "repo": "acme/api",
+            "issue": 101,
+            "skill": "small-change",
+            "startedAt": "2026-11-16T11:50:00Z",
+            "at": "2026-11-16T12:00:00Z",
+            "status": "merged",
+            "pr": 201,
+            "durationMinutes": 10,
+            "gates": { "runtime": "na", "vectors": "na", "formal": "na", "suite": "pass", "review": "pass", "ci": "pass" },
+            "reopened": false
+          },
+          {
+            "repo": "acme/api",
+            "issue": 102,
+            "skill": "bug",
+            "startedAt": "2026-11-17T01:46:00Z",
+            "at": "2026-11-17T02:00:00Z",
+            "status": "would-merge",
+            "pr": 202,
+            "durationMinutes": 14,
+            "gates": { "runtime": "pass", "vectors": "pass", "formal": "na", "suite": "pass", "review": "pass", "ci": "pass" },
+            "reopened": false
+          },
+          {
+            "repo": "acme/web",
+            "issue": 55,
+            "skill": "feature",
+            "startedAt": "2026-11-17T14:38:00Z",
+            "at": "2026-11-17T15:00:00Z",
+            "status": "merged",
+            "pr": 88,
+            "durationMinutes": 22,
+            "gates": { "runtime": "pass", "vectors": "pass", "formal": "na", "suite": "pass", "review": "pass", "ci": "pass" },
+            "reopened": true
+          },
+          {
+            "repo": "acme/web",
+            "issue": 56,
+            "skill": "bug",
+            "startedAt": "2026-11-17T16:12:00Z",
+            "at": "2026-11-17T16:30:00Z",
+            "status": "ended",
+            "pr": 89,
+            "durationMinutes": 18,
+            "gates": { "runtime": "pass", "vectors": "pass", "formal": "na", "suite": "fail", "review": "pass", "ci": "pass" },
+            "reopened": false
+          }
         ]
       },
       "checks": [
-        {
-          "criterion_id": "AC1",
-          "target": "result",
-          "path": "/issues",
-          "op": "count",
-          "value": 2
-        },
-        {
-          "criterion_id": "AC1",
-          "target": "result",
-          "path": "/issues/0/attempts",
-          "op": "count",
-          "value": 2
-        },
-        {
-          "criterion_id": "AC2",
-          "target": "result",
-          "path": "/stages/started/numerator",
-          "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC3",
-          "target": "result",
-          "path": "/issues/0/validated",
-          "op": "equals",
-          "value": "unknown"
-        },
-        {
-          "criterion_id": "AC4",
-          "target": "result",
-          "path": "/stages/delivered/numerator",
-          "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC4",
-          "target": "result",
-          "path": "/issues/0/failedFixReports",
-          "op": "count",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC5",
-          "target": "result",
-          "path": "/issues",
-          "op": "count",
-          "value": 2
-        },
-        {
-          "criterion_id": "AC5",
-          "target": "result",
-          "path": "/coverage/missingSources/0",
-          "op": "equals",
-          "value": "machine-b"
-        }
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/windows/0/label", "op": "equals", "value": "Last 24h" },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/windows/0/open", "op": "equals", "value": 42 },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/windows/0/taken", "op": "equals", "value": 3 },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/windows/0/prCreated", "op": "equals", "value": 3 },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/windows/0/mwmDisplay", "op": "equals", "value": "2 (66.7%)" },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/windows/1/label", "op": "equals", "value": "Week (Mon-Sun)" },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/windows/1/taken", "op": "equals", "value": 4 },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/windows/1/mwmDisplay", "op": "equals", "value": "3 (75.0%)" },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/perRepoWindows/0/rows/0/label", "op": "equals", "value": "acme/api" },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/perRepoWindows/0/rows/0/mwmDisplay", "op": "equals", "value": "2 (100.0%)" },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/perRepoWindows/0/rows/1/label", "op": "equals", "value": "acme/web" },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/perRepoWindows/0/total/label", "op": "equals", "value": "Total" },
+        { "criterion_id": "AC1", "target": "result", "path": "/overview/perRepoWindows/0/total/mwmDisplay", "op": "equals", "value": "3 (75.0%)" },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/taken", "op": "equals", "value": 4 },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/pr", "op": "equals", "value": 4 },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/gates/runtime/display", "op": "equals", "value": "3/3" },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/gates/vectors/display", "op": "equals", "value": "3/3" },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/gates/formal/display", "op": "equals", "value": "-" },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/gates/suite/display", "op": "equals", "value": "3/4" },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/gates/review/display", "op": "equals", "value": "4/4" },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/gates/ci/display", "op": "equals", "value": "4/4" },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/mwm", "op": "equals", "value": 3 },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/reopen", "op": "equals", "value": 1 },
+        { "criterion_id": "AC2", "target": "result", "path": "/stages/nonMergedSummary", "op": "equals", "value": "Non-merged (1): 1 failed suite" },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/rows/0/skill", "op": "equals", "value": "small-change" },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/rows/0/medianDisplay", "op": "equals", "value": "10m" },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/rows/1/skill", "op": "equals", "value": "bug" },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/rows/1/mwmDisplay", "op": "equals", "value": "1 (50.0%)" },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/rows/1/medianDisplay", "op": "equals", "value": "14m" },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/rows/2/skill", "op": "equals", "value": "feature" },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/rows/2/medianDisplay", "op": "equals", "value": "22m" },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/total/skill", "op": "equals", "value": "Total" },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/total/medianDisplay", "op": "equals", "value": "14m" },
+        { "criterion_id": "AC5", "target": "result", "path": "/recording/enabled", "op": "equals", "value": true }
       ]
     },
     {
-      "step_id": "week-wednesday",
+      "step_id": "date-filter-and-offline-open",
       "entry_path": "prompts/cli/metrics-model.prompt.md",
-      "operation": "calculateMetrics",
+      "operation": "calculateAutopilotMetrics",
       "input": {
-        "events": [
+        "now": "2026-11-17T18:00:00Z",
+        "date": "2026-11-16",
+        "timezone": "America/Los_Angeles",
+        "repos": ["acme/api", "acme/web"],
+        "openIssues": null,
+        "runs": [
           {
-            "schema": "pdd.metrics.event.v1",
-            "id": "prior-sun-delivery",
-            "repo": "a/b",
-            "issue": 2,
-            "type": "delivery",
-            "at": "2026-11-08T18:00:00Z",
-            "observedAt": "2026-11-08T18:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "pr": 5,
-              "head": "h5",
-              "explicit": true,
-              "evidence": "https://example.test/pull/5"
-            }
+            "repo": "acme/api",
+            "issue": 101,
+            "skill": "small-change",
+            "startedAt": "2026-11-16T11:50:00Z",
+            "at": "2026-11-16T12:00:00Z",
+            "status": "merged",
+            "pr": 201,
+            "durationMinutes": 10
           },
           {
-            "schema": "pdd.metrics.event.v1",
-            "id": "tue-start",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "start",
-            "at": "2026-11-10T10:00:00Z",
-            "observedAt": "2026-11-10T10:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "origin": "autopilot",
-              "requiredOutcome": "code"
-            }
+            "repo": "acme/api",
+            "issue": 102,
+            "skill": "bug",
+            "startedAt": "2026-11-17T01:46:00Z",
+            "at": "2026-11-17T02:00:00Z",
+            "status": "would-merge",
+            "pr": 202,
+            "durationMinutes": 14
           },
           {
-            "schema": "pdd.metrics.event.v1",
-            "id": "wed-delivery",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "delivery",
-            "at": "2026-11-11T15:00:00Z",
-            "observedAt": "2026-11-11T15:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "pr": 8,
-              "head": "h8",
-              "explicit": true,
-              "evidence": "https://example.test/pull/8"
-            }
+            "repo": "acme/web",
+            "issue": 55,
+            "skill": "feature",
+            "startedAt": "2026-11-17T14:38:00Z",
+            "at": "2026-11-17T15:00:00Z",
+            "status": "merged",
+            "pr": 88,
+            "durationMinutes": 22
           }
-        ],
-        "repo": "a/b",
-        "scope": {
-          "kind": "week",
-          "date": "2026-11-11"
-        },
-        "timezone": "UTC",
-        "observedAt": "2026-11-11T23:00:00Z",
-        "sources": [
-          "machine-a"
         ]
       },
       "checks": [
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/weekStart",
-          "op": "equals",
-          "value": "2026-11-09"
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/weekEnd",
-          "op": "equals",
-          "value": "2026-11-15"
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/throughDate",
-          "op": "equals",
-          "value": "2026-11-11"
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/elapsedDays",
-          "op": "equals",
-          "value": 3
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/refreshesOn",
-          "op": "equals",
-          "value": "Monday"
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/bySkill/all/issues",
-          "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/bySkill/all/merged",
-          "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/days",
-          "op": "count",
-          "value": 3
-        }
+        { "criterion_id": "AC4", "target": "result", "path": "/overview/windows/0/label", "op": "equals", "value": "2026-11-16" },
+        { "criterion_id": "AC4", "target": "result", "path": "/overview/windows/0/open", "op": "equals", "value": null },
+        { "criterion_id": "AC4", "target": "result", "path": "/overview/windows/0/openDisplay", "op": "equals", "value": "?" },
+        { "criterion_id": "AC4", "target": "result", "path": "/overview/windows/0/taken", "op": "equals", "value": 2 },
+        { "criterion_id": "AC3", "target": "result", "path": "/skills/rows/2/medianDisplay", "op": "equals", "value": "n/a" }
       ]
     },
     {
-      "step_id": "week-monday-reset",
+      "step_id": "pause-recording-preserves-history",
       "entry_path": "prompts/cli/metrics-model.prompt.md",
-      "operation": "calculateMetrics",
+      "operation": "calculateAutopilotMetrics",
       "input": {
-        "events": [
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "prior-sun-delivery",
-            "repo": "a/b",
-            "issue": 2,
-            "type": "delivery",
-            "at": "2026-11-08T18:00:00Z",
-            "observedAt": "2026-11-08T18:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "pr": 5,
-              "head": "h5",
-              "explicit": true,
-              "evidence": "https://example.test/pull/5"
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "tue-start",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "start",
-            "at": "2026-11-10T10:00:00Z",
-            "observedAt": "2026-11-10T10:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "origin": "autopilot",
-              "requiredOutcome": "code"
-            }
-          },
-          {
-            "schema": "pdd.metrics.event.v1",
-            "id": "wed-delivery",
-            "repo": "a/b",
-            "issue": 1,
-            "type": "delivery",
-            "at": "2026-11-11T15:00:00Z",
-            "observedAt": "2026-11-11T15:00:00Z",
-            "source": "machine-a",
-            "data": {
-              "pr": 8,
-              "head": "h8",
-              "explicit": true,
-              "evidence": "https://example.test/pull/8"
-            }
-          }
-        ],
-        "repo": "a/b",
-        "scope": {
-          "kind": "week",
-          "date": "2026-11-16"
+        "now": "2026-11-17T18:30:00Z",
+        "timezone": "America/Los_Angeles",
+        "repos": ["acme/api"],
+        "openIssues": { "acme/api": 5 },
+        "recording": {
+          "enabled": false,
+          "repos": {},
+          "pausedSince": "2026-11-17T18:05:00Z",
+          "pausedIntervals": [
+            { "repo": null, "from": "2026-11-17T18:05:00Z", "to": null }
+          ]
         },
-        "timezone": "UTC",
-        "observedAt": "2026-11-16T12:00:00Z",
-        "sources": [
-          "machine-a"
+        "runs": [
+          {
+            "repo": "acme/api",
+            "issue": 101,
+            "skill": "bug",
+            "startedAt": "2026-11-17T17:00:00Z",
+            "at": "2026-11-17T17:20:00Z",
+            "status": "merged",
+            "pr": 201,
+            "durationMinutes": 20
+          },
+          {
+            "repo": "acme/api",
+            "issue": 103,
+            "skill": "feature",
+            "startedAt": "2026-11-17T18:10:00Z",
+            "at": "2026-11-17T18:25:00Z",
+            "status": "merged",
+            "pr": 203,
+            "durationMinutes": 15
+          }
         ]
       },
       "checks": [
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/weekStart",
-          "op": "equals",
-          "value": "2026-11-16"
+        { "criterion_id": "AC5", "target": "result", "path": "/recording/enabled", "op": "equals", "value": false },
+        { "criterion_id": "AC5", "target": "result", "path": "/overview/windows/0/taken", "op": "equals", "value": 1 },
+        { "criterion_id": "AC5", "target": "result", "path": "/overview/windows/0/mwm", "op": "equals", "value": 1 }
+      ]
+    },
+    {
+      "step_id": "resume-recording-on",
+      "entry_path": "prompts/cli/metrics-model.prompt.md",
+      "operation": "applyMetricsToggle",
+      "input": {
+        "config": {
+          "enabled": false,
+          "repos": {},
+          "pausedSince": "2026-11-17T18:05:00.000Z",
+          "pausedIntervals": [
+            { "repo": null, "from": "2026-11-17T18:05:00.000Z", "to": null }
+          ]
         },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/weekEnd",
-          "op": "equals",
-          "value": "2026-11-22"
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/elapsedDays",
-          "op": "equals",
-          "value": 1
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/bySkill/all/issues",
-          "op": "equals",
-          "value": 0
-        },
-        {
-          "criterion_id": "AC6",
-          "target": "result",
-          "path": "/week/days",
-          "op": "count",
-          "value": 1
-        }
+        "action": "on",
+        "at": "2026-11-17T18:28:00.000Z"
+      },
+      "checks": [
+        { "criterion_id": "AC5", "target": "result", "path": "/enabled", "op": "equals", "value": true },
+        { "criterion_id": "AC5", "target": "result", "path": "/pausedSince", "op": "equals", "value": null },
+        { "criterion_id": "AC5", "target": "result", "path": "/pausedIntervals/0/to", "op": "equals", "value": "2026-11-17T18:28:00.000Z" }
       ]
     }
   ]
