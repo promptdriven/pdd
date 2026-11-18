@@ -17,7 +17,6 @@ import {
 } from '../src/scenario-compile.mjs';
 import * as seam from '../src/runtime-seam.mjs';
 import { lintSvgLayouts } from '../src/svg-layout.mjs';
-import { runCompiledTest } from '../src/compiled-test.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { associateEvidenceWorkspace } from '../src/workflow-runner.mjs';
 import { evidenceFixture } from './helpers/workspace-evidence-fixture.mjs';
@@ -779,7 +778,7 @@ test('End-to-end seam integration: Short JSON works across findTests, preflight,
   // pdd test --target code
   const codeOut = sink();
   const codeErr = sink();
-  assert.equal(await runCompiledTest({ root: setup.repo, words: ['place-order'], json: true }, { stdout: codeOut, stderr: codeErr }), 0, codeErr.text);
+  assert.equal(await runPdd(['test', '--target', 'code', 'place-order', '--json'], { cwd: setup.repo, stdout: codeOut, stderr: codeErr }), 0, codeErr.text);
   assert.equal(JSON.parse(codeOut.text).stories[0].status, 'passed');
 });
 

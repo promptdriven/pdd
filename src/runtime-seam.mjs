@@ -828,9 +828,20 @@ export function captureSource(root, options, ports = {}) {
     const precompiledByPath = new Map();
 
     if (!emptyTestsSelection) {
-      const names = visibleStoryAndTestPaths(root, {
-        excludeFixtureProjects: Boolean(options?.excludeFixtureProjects),
+      const excludeFixtureProjects = options?.excludeFixtureProjects ?? (options?.tests === undefined);
+      const scanned = scanStoryAndTestPathsOnDisk(root).filter(p => {
+        try {
+          return Boolean(prepPorts.statFile(p)?.exists);
+        } catch {
+          return false;
+        }
       });
+      let names;
+      try {
+        names = scanned.length ? [...discoveryVisibleFiles({ root, files: scanned, excludeFixtureProjects })] : [];
+      } catch (err) {
+        names = err?.code?.startsWith?.('workspace-') ? [] : scanned;
+      }
       if (names.length) {
         const storyPaths = names.filter(p => selPorts.isStoryPath(p));
         const matched = selPorts.matchTests(storyPaths, names).tests.filter(t => !t.problem);

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: f23a62f2f0f7623a0186b949a8f9b64d9ede5fe2544c87fe065b9474c657fb0e).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: b84d70377cc994cd64bf572f074461a5d67c69447f77b16cb1b0c9e9e2287d10).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -112,7 +112,7 @@ const routes = [
     options: [{ name: '--json', kind: 'flag' }, { name: '--timeout', kind: 'integer', min: 1, max: 120 }, { name: '--max-calls', kind: 'integer', min: 1, max: 1000 }, { name: '--local', kind: 'flag' }, { name: '--emit-v1', kind: 'flag' }, { name: '--bind-criteria', kind: 'flag' }],
     forms: [form(`pdd ${lint} [STORY...] [--json] [--timeout MIN] [--max-calls N]`, 'Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks. --max-calls selects 1 to 1000 calls for structural preflight; warnings do not change the cap or guarantee completion.'),
       form(`pdd ${lint} --local [STORY...] [--json]`, 'Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls.'),
-      form(`pdd ${lint} --emit-v1 [STORY...] [--json]`, 'Print expanded prompt-runtime.program-scenario.v1 JSON for selected Story tests with 0 AI/network calls.'),
+      form(`pdd ${lint} --emit-v1 [STORY...] [--json]`, 'Print expanded full scenario JSON for selected Story tests with 0 AI/network calls.'),
       form(`pdd ${lint} --bind-criteria [STORY...] [--json]`, 'Bind matching Story acceptance criteria in selected test files to current ac-sha256-... content IDs on disk for review; 0 AI/network calls.')] },
   // A quiet word (`sim`) parses like the prefix, with nothing added; help names `sim` once, completion never.
   { id: 'try', prefix: [simulate], local: 'runtime-try', quiet: ['sim'], removed: ['try'], operands: [{ name: 'story', type: 'text', optional: true }],
