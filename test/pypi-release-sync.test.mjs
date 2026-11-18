@@ -90,6 +90,9 @@ test('#3498 release workflow validates release tags, smoke-tests offline PyPI pd
   assert.match(workflow, /\^\[A-Za-z0-9\._-\]\+\$/);
   assert.match(workflow, /sync-pypi-version\.mjs --check/);
   assert.match(workflow, /sync-pypi-version\.mjs --stage-bundle/);
+  const mkdirIdx = workflow.indexOf('mkdir -p') >= 0 ? workflow.search(/mkdir -p [^\n]*"\$smoke_dir\/npm-dist"/) : -1;
+  const npmPackIdx = workflow.indexOf('npm pack --ignore-scripts --pack-destination "$smoke_dir/npm-dist"');
+  assert.equal(mkdirIdx >= 0 && mkdirIdx < npmPackIdx, true, 'verify-release creates $smoke_dir/npm-dist before npm pack --pack-destination');
   assert.match(workflow, /test ! -s "\$smoke_dir\/ver\.err"/);
   assert.match(workflow, /lint --local/);
   assert.match(workflow, /npm publish[\s\S]*--access public --provenance/);

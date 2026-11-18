@@ -119,7 +119,7 @@ jobs:
           smoke_dir=$(mktemp -d)
           trap 'rm -rf "$smoke_dir" python/pdd_cli/_bundled' EXIT
           export HOME="$smoke_dir/home" PDD_STATE_DIR="$smoke_dir/state" PDD_CLI_CACHE_DIR="$smoke_dir/cache" PDD_NO_UPDATE_CHECK=1 PYTHONDONTWRITEBYTECODE=1
-          mkdir -p "$HOME" "$PDD_STATE_DIR" "$PDD_CLI_CACHE_DIR"
+          mkdir -p "$HOME" "$PDD_STATE_DIR" "$PDD_CLI_CACHE_DIR" "$smoke_dir/npm-dist" "$smoke_dir/pypi-dist"
 
           npm pack --ignore-scripts --pack-destination "$smoke_dir/npm-dist"
           node scripts/sync-pypi-version.mjs --stage-bundle
