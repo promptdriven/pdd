@@ -294,7 +294,7 @@ Do not hold admission ownership during a suite or a wait. All test commands,
 including custom full suites, run in the supplied cwd with closed stdin and the
 clean environment below. Preserve child stdout/stderr under the evidence policy and preserve nonzero status. A running suite
 has a bounded timeout; terminate its process group before releasing its slot.
-Timeout returns 124 with a suite-specific reason. On SIGINT/SIGTERM, terminate
+Timeout returns 124 with a suite-specific reason. On SIGINT/SIGTERM while waiting for a check slot (#3473), mark the waiting ticket `state: "finished"`, `outcome: "completed"`, `exitCode` 130 (SIGINT) or 143 (SIGTERM), `signal`, `finishedAt`, and `reason: "Test suite interrupted (<SIGNAL>)."` under the admission lock before returning so no orphan `waiting`/`running` receipt remains. On SIGINT/SIGTERM after admission, terminate
 running descendants and release only after termination. Dead waiters do not block
 the queue. A dead runner with a live or uncertain suite keeps its slot and reports the
 interrupted runner with uncertain descendant ownership as its reason. Never kill

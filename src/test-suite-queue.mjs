@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9e342f73b7a8035a141fa00efdb17e77045e30780428ac75666eb4e8edaa845f).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: f94ea57ff6e14bf10100a7b4f8b8545619d8bdcf847fc5de5a297944763d4ffe).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
@@ -247,25 +247,45 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       return record;
     });
     announceReceipt(ports, p, row);
-    let lastPosition;
-    for (;;) {
-      const position = await underLock(p, () => {
-        const all = records(p), place = positionOf(all, row), capacity = admissionCapacity(p, env);
-        const running = all.filter(other => other.state === 'running');
-        const occupied = new Set(running.flatMap(other => other.cpuIds ?? []));
-        const available = capacity.cpuIds.filter(id => !occupied.has(id));
-        if (place === 1 && !capacity.busy && running.length < capacity.checks
-          && (!capacity.affinity || running.every(other=>Array.isArray(other.cpuIds) && other.cpuIds.length) && available.length >= capacity.coresPerCheck)) {
-          row.cpuIds = capacity.affinity ? available.slice(0, capacity.coresPerCheck) : [];
-          row.coresPerCheck = capacity.coresPerCheck; row.taskset = capacity.affinity ? capacity.taskset : null;
-          row.source = ports.source ? ports.source(cwd) : sourceIdentity(cwd,p);
-          row.state = 'running'; row.startedAt = p.now(); save(p, row); return 0;
-        }
-        return place;
+    let lastPosition, interruptedSignal = null, wakeWait = null;
+    const onWaitSignal = signal => { interruptedSignal = signal; wakeWait?.(); };
+    const onWaitInt = () => onWaitSignal('SIGINT'), onWaitTerm = () => onWaitSignal('SIGTERM');
+    process.on('SIGINT', onWaitInt); process.on('SIGTERM', onWaitTerm);
+    try {
+      for (;;) {
+        if (interruptedSignal) break;
+        const position = await underLock(p, () => {
+          if (interruptedSignal) return 0;
+          const all = records(p), place = positionOf(all, row), capacity = admissionCapacity(p, env);
+          const running = all.filter(other => other.state === 'running');
+          const occupied = new Set(running.flatMap(other => other.cpuIds ?? []));
+          const available = capacity.cpuIds.filter(id => !occupied.has(id));
+          if (place === 1 && !capacity.busy && running.length < capacity.checks
+            && (!capacity.affinity || running.every(other=>Array.isArray(other.cpuIds) && other.cpuIds.length) && available.length >= capacity.coresPerCheck)) {
+            row.cpuIds = capacity.affinity ? available.slice(0, capacity.coresPerCheck) : [];
+            row.coresPerCheck = capacity.coresPerCheck; row.taskset = capacity.affinity ? capacity.taskset : null;
+            row.source = ports.source ? ports.source(cwd) : sourceIdentity(cwd,p);
+            row.state = 'running'; row.startedAt = p.now(); save(p, row); return 0;
+          }
+          return place;
+        });
+        if (!position || interruptedSignal) break;
+        if (position !== lastPosition) { p.say(`waiting for a check slot (position ${position})`); lastPosition = position; }
+        await new Promise(resolveWait => { wakeWait = resolveWait; Promise.resolve(p.sleep(250)).then(resolveWait, resolveWait); });
+        wakeWait = null;
+      }
+    } finally {
+      process.off('SIGINT', onWaitInt); process.off('SIGTERM', onWaitTerm);
+    }
+    if (interruptedSignal && row.state === 'waiting') {
+      const exitCode = interruptedSignal === 'SIGINT' ? 130 : 143;
+      const reason = safeEvidenceText(`Test suite interrupted (${interruptedSignal}).`);
+      await underLock(p, () => {
+        Object.assign(row, { state: 'finished', outcome: 'completed', exitCode, signal: interruptedSignal, finishedAt: p.now(), reason });
+        save(p, row);
       });
-      if (!position) break;
-      if (position !== lastPosition) { p.say(`waiting for a check slot (position ${position})`); lastPosition = position; }
-      await p.sleep(250);
+      announceReceipt(ports, p, row);
+      return { exitCode, message: reason };
     }
     p.say('running the full test suite');
     environmentRoot = p.fs.mkdtempSync(join(p.root, 'suite-env-'));

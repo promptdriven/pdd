@@ -40,7 +40,7 @@ string `core`; any other value, or none, is `full`.
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
-When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics` (omitting unset optional keys so the default settings shape stays unchanged).
+When `autopilot.gates` is supplied (`"auto"`, `"ci"` or `"local"`; any other supplied value normalizes to `"auto"`), `coreSettings` preserves `gates` (omitted when unset, defaulting at runtime to `"auto"`). When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics` (omitting unset optional keys so the default settings shape stays unchanged).
 
 `detectTestCommand(cwd, fs, packageJson)` auto-detects standard external repository test commands when `autopilot.testCommand` is unset: `pnpm-lock.yaml` -> `pnpm test`, `yarn.lock` -> `yarn test`, `bun.lockb` or `bun.lock` -> `bun test`, `package.json` `scripts.test` -> `npm test`, `pyproject.toml` or `pytest.ini` -> `pytest`, `Cargo.toml` -> `cargo test`, `go.mod` -> `go test ./...`, `package.json` -> `npm test`, else zero-manifest `test/` or `tests/` discovery (`*.test.{js,mjs,cjs}` or `*.spec.{js,mjs,cjs}` -> `node --test`; `test_*.py` or `*_test.py` -> `pytest`), else `null`. `readCoreSettings(cwd, fs, machine = null)` applies `coreSettings` to `cwd/pdd.json` and `cwd/package.json` (an unreadable file counts as absent) and fills `testCommand` from `detectTestCommand(cwd, fs, packageJson)` whenever `autopilot.testCommand` is unset (when `main` is a greenfield or `product/` repository with no manifest yet, intake still claims ready issues and `suiteState`, `workRules`, `notCovered`, and suite failure/hang records resolve `detectTestCommand` against the checked-out PR head `N-suite`/`headTree` and `job.worktree` so a PR that introduces `package.json`, `pyproject.toml`, `Cargo.toml` or `go.mod` runs and reports its detected test command cleanly); the full-suite runner also installs lockfile dependencies for `pnpm-lock.yaml`, `yarn.lock` (Classic `--frozen-lockfile --ignore-scripts` vs Modern `--immutable --mode=skip-build`/`--skip-builds`), `bun.lockb`/`bun.lock` and `package-lock.json`.
 
@@ -560,7 +560,7 @@ jobs start when a CI run starts` and status shows `CI does not start: TEXT New j
 until a CI run starts.` A check run in progress or completed (not a billing failure)
 in any CI read clears `ciDown`; when no job read CI in a tick, intake reads the latest
 10 workflow runs at most every 10 minutes and clears it when one created after
-`since` is in progress or completed with success, neutral or skipped.
+`since` is in progress or completed with success, neutral or skipped. When `autopilot.gates` is `"local"` (#3471), `ciDown` is never recorded and any saved `ciDown` outage hold is cleared immediately in `ciHold` and `mergeCheck`.
 
 **Single bounded shard-flake rerun** (#3484). In `ciState`, when a PR head is red and neither `job.flakeRerunHead` nor `job.reproduceRerun?.head` equals `head`, call `evaluateShardFlakeRerun`: on `wait-siblings` keep CI `pending` while sibling shards finish; on `rerun` invoke `gh run rerun <runId> --repo <repo> --failed` once per failed workflow run (falling back to REST `rerun-failed-jobs`, and per failed shard whose `runId` is absent or failed to rerun to `check-runs/<id>/rerequest`), record `job.flakeRerunHead = head` and `job.ciRerunPending` containing `staleTokens` only for actually-reran shards, and return `pending` when all failed shards were reran (otherwise report the remaining un-reran failed checks immediately). If the rerun fails again at `head`, proceed normally to repair.
 
@@ -1357,13 +1357,13 @@ runs until its end):
    prompt native-only with frontmatter kind and reason." It is not red when the PR changes at
    least one prompt and every changed prompt is `native-only` (the Story is
    checked natively). A read error adds no red (the T01 read names it). The reader is a
-   port, `ports.untestedStories(tree)` → `{untested, visible}`. Then a
+   port, `ports.untestedStories(tree)` → `{untested, visible}`. **Gate mode (`autopilot.gates`, default `"auto"`):** under `"auto"`, CI runs as usual and local `suiteState` is skipped (`suite.state = "not-required"`) when a PR workflow on `origin/BASE` that triggers on the PR (`workflowRunsOnPr`) executes the test suite (`workflowRunsTestSuite`, exported), otherwise local `suiteState` runs; under `"ci"`, local `suiteState` is never spawned (`suite.state = "not-required"`) and green GitHub CI is required (a head with `ci.state === "none"` ends `no-ci`); under `"local"` (#3471), `ciDown` holds are cleared immediately, local `suiteState` is required, and optional/disabled GitHub Actions checks are skipped (`ci.state = "not-required"`) whenever `baseBranch` has no server-side required status checks (while required branch-protection status checks on `baseBranch` remain enforced). Then a
    failed CI check
    (check runs and commit statuses of the head; neutral and skipped pass); else
    a review FAIL or a failed suite. With no red finding yet, start the review and
-   the suite for this head when missing; CI may still be pending. A reviewer that
+   the suite (when required by `autopilot.gates`) for this head when missing; CI may still be pending. A reviewer that
    twice gives no valid verdict for the head ends as `no-result`; no test command
-   ends `no-test-command`; a broken suite ends `suite-broken`. The tick posts each verdict once as a PR comment with
+   ends `no-test-command`; a suite runner failure retries up to twice, and process deaths or signal interruptions (including `Test suite interrupted (SIGINT|SIGTERM)`, exit `130` or `143`, process death, signal, or quiet stops) count toward `deaths` so 3 deaths/interruptions end as machine `no-result` while runner install/timeout failures (`exit 86`, `exit 124`, `exit 127`, or a mix) end `suite-broken`. The tick posts each verdict once as a PR comment with
    the head, summary and must-fix list.
    **The engine's own replay and formal run (T04):** with the review and the suite, at the
    final head (once per head, saved as `vectors`; a repair clears it, so a repair at the

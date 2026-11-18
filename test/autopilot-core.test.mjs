@@ -5274,3 +5274,103 @@ test('3389: orphan m-<12hex> claim without jobs/N.json releases cleanly while no
   assert.deepEqual(w.labels(18), ['pdd:working', 'pdd:stuck']);
   assert.ok(w.github.issues.get(18).comments.some(c => c.id === replacement.commentId), 'concurrent m-<12hex> replacement comment stays intact');
 });
+
+test('Area 1 gates: coreSettings preserves optional gates and "auto" skips duplicate local suite only when PR CI runs tests', async t => {
+  assert.equal(coreSettings({ autopilot: { engine: 'core' } }).gates, undefined);
+  assert.equal(coreSettings({ autopilot: { engine: 'core', gates: 'auto' } }).gates, 'auto');
+  assert.equal(coreSettings({ autopilot: { engine: 'core', gates: 'ci' } }).gates, 'ci');
+  assert.equal(coreSettings({ autopilot: { engine: 'core', gates: 'local' } }).gates, 'local');
+  assert.equal(coreSettings({ autopilot: { engine: 'core', gates: 'bogus' } }).gates, 'auto');
+
+  // 1. Under gates="auto", a PR workflow that runs npm test skips spawning a duplicate local suite and merges on green CI + review.
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  w.baseCommit('.github/workflows/ci.yml', 'on: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm test\n');
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17); await w.tick();
+  assert.equal(w.job(17, 'suite'), undefined, 'duplicate local suite is not spawned when PR CI runs npm test');
+  assert.match(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, reportRoot: w.reportRoot, now: w.now }), /suite not-required/);
+  w.review(17, 'PASS'); await w.tick(); await w.tick();
+  assert.deepEqual(w.github.merges, [pr.number]);
+  const note = pr.comments.map(c => c.body).find(b => b.includes('<!-- pdd:autopilot-core:merge:'));
+  assert.match(note ?? '', /- Full test suite: not required \(covered by green GitHub CI\)/);
+
+  // 2. Under gates="auto", a PR workflow that only lints/deploys without running tests still runs the local test suite.
+  const d = await coreWorld(t, { settings: { runs: 1 } });
+  d.baseCommit('.github/workflows/preview.yml', 'on: pull_request\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo preview deploy\n');
+  d.issue(18); await d.tick();
+  const { pr: pr2 } = d.build(18); await d.tick();
+  assert.ok(d.job(18, 'suite'), 'local suite still runs when PR workflow does not run tests');
+  d.review(18, 'PASS'); d.suite(18, 0); await d.tick(); await d.tick();
+  assert.deepEqual(d.github.merges, [pr2.number]);
+});
+
+test('Area 1 gates="ci" and gates="local" (#3471): ci-only requires green CI; local clears ciDown holds while honoring required branch-protection checks', async t => {
+  // 1. gates="ci" skips local suite and ends no-ci if the repo has no CI at all.
+  const cNoCi = await coreWorld(t, { settings: { runs: 1, gates: 'ci' } });
+  cNoCi.issue(17); await cNoCi.tick();
+  cNoCi.build(17, { checks: false }); await cNoCi.tick();
+  cNoCi.advance(11 * MIN); await cNoCi.tick();
+  assert.equal(cNoCi.job(17, 'suite'), undefined);
+  assert.ok(endComments(cNoCi, 17).some(b => /no-ci|no GitHub CI check ran/.test(b)), 'gates=ci refuses merging with zero CI checks');
+  assert.deepEqual(cNoCi.github.merges, []);
+
+  // 2. gates="local" (#3471) immediately clears saved ciDown holds on intake and mergeCheck, skipping optional/disabled Actions checks when baseBranch has no required status checks.
+  const loc = await coreWorld(t, { settings: { runs: 1, gates: 'local' } });
+  mkdirSync(loc.root, { recursive: true });
+  writeFileSync(join(loc.root, 'core.json'), JSON.stringify({
+    streak: 0, hours: 1, pausedUntil: null,
+    ciDown: { since: loc.now() - HOUR, reason: 'queued', message: 'GitHub Actions does not start runs in this repository (queued since 11:00 UTC).', issue: 10, pr: 11, head: 'deadbeef', at: loc.now() - HOUR },
+  }));
+  loc.issue(19);
+  await loc.tick();
+  assert.ok(loc.job(19, 'build'), 'gates=local clears ciDown hold and claims ready issues immediately');
+  assert.equal(JSON.parse(readFileSync(join(loc.root, 'core.json'), 'utf8')).ciDown, null);
+  const { pr: localPr, head: localHead } = loc.build(19, { checks: false });
+  loc.github.checks.set(localHead, [{ id: 9001, name: 'disabled-ci', status: 'queued', conclusion: null }]);
+  await loc.tick();
+  assert.ok(loc.job(19, 'suite'), 'gates=local forces local test suite');
+  loc.review(19, 'PASS'); loc.suite(19, 0); await loc.tick(); await loc.tick();
+  assert.deepEqual(loc.github.merges, [localPr.number], 'gates=local merges via local suite + review without waiting on queued optional Actions');
+  const localNote = localPr.comments.map(c => c.body).find(b => b.includes('<!-- pdd:autopilot-core:merge:'));
+  assert.match(localNote ?? '', /- CI: not required \(autopilot\.gates is local\)/);
+
+  // 3. gates="local" still honors server-side GitHub branch-protection required status checks on baseBranch.
+  const prot = await coreWorld(t, { settings: { runs: 1, gates: 'local' } });
+  const origGh = prot.gh;
+  prot.gh = async (args, opts) =>
+    args.some(a => String(a).endsWith('/protection/required_status_checks'))
+      ? { code: 0, stdout: `HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 4000\r\n\r\n${JSON.stringify({ contexts: ['required-check'], checks: [{ context: 'required-check' }] })}`, stderr: '' }
+      : origGh(args, opts);
+  prot.issue(20); await prot.tick();
+  const { pr: protPr, head: protHead } = prot.build(20, { checks: false });
+  prot.github.checks.set(protHead, [{ id: 9002, name: 'optional-queued', status: 'queued', conclusion: null }]);
+  await prot.tick(); prot.review(20, 'PASS'); prot.suite(20, 0); await prot.tick();
+  assert.deepEqual(prot.github.merges, [], 'gates=local waits when server-side required status check is missing');
+  prot.github.checks.set(protHead, [
+    { id: 9002, name: 'optional-queued', status: 'queued', conclusion: null },
+    { id: 9003, name: 'required-check', status: 'completed', conclusion: 'success' },
+  ]);
+  await prot.tick(); await prot.tick();
+  assert.deepEqual(prot.github.merges, [protPr.number], 'gates=local merges once required status check passes even if optional check stays queued');
+});
+
+test('Area 1 suite runner interruption (#3473): SIGTERM / exit 143 retries cleanly and ends after 3 tries as machine no-result, never suite-broken', async t => {
+  const w = await coreWorld(t, { settings: { runs: 1, gates: 'local' } });
+  w.issue(17); await w.tick();
+  const { pr } = w.build(17); await w.tick();
+  w.review(17, 'PASS');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const suite = w.job(17, 'suite');
+    assert.ok(suite, `suite attempt ${attempt} started`);
+    writeFileSync(suite.log, 'waiting for a check slot (position 1)\nTest suite interrupted (SIGTERM).\n');
+    w.suite(17, 143);
+    await w.tick();
+  }
+  assert.equal(endComments(w, 17).length, 0, 'released as retryable machine no-result without marking pdd:stuck');
+  assert.equal(pr.state, 'closed');
+  const rows = readFileSync(join(w.root, 'history.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  const released = rows.find(r => r.issue === 17 && r.outcome === 'released');
+  assert.ok(released, 'job released after 3 interrupted runner tries');
+  assert.equal(released.owner, 'machine', 'runner interruptions record owner=machine (no-result), never pdd suite-broken');
+  assert.equal(listReportDrafts({ root: w.reportRoot }).some(d => d.code === 'suite-broken'), false, 'never files a suite-broken PDD defect report');
+});

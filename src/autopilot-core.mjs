@@ -275,6 +275,7 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
   const forensics = typeof a.forensics === 'boolean' ? a.forensics : undefined;
   return { engine: autopilotEngine(config), mode: ['off', 'observe', 'auto'].includes(a.mode) ? a.mode : 'off',
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: machine ? slotCount({ ...machine, repoRuns: a.runs }).slots : count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
+    ...(a.gates !== undefined ? { gates: ['auto', 'ci', 'local'].includes(a.gates) ? a.gates : 'auto' } : {}),
     ...(a.intake !== undefined ? { intake: intakeMode(a.intake) } : {}),
     ...(a.mergeQueue !== undefined ? { mergeQueue: a.mergeQueue === true } : {}),
     quietMinutes: count(a.quietMinutes, 45), ciStuckMinutes: count(a.ciStuckMinutes, 360), maxJobHours: count(a.maxJobHours, 24), report: ['file', 'draft', 'off'].includes(a.report) ? a.report : 'draft',
@@ -2209,6 +2210,38 @@ export function workflowRunsOnPr(text, branch, base = 'main', files = null) {
   if (push.branches || push['branches-ignore']) return filtered(push, branch);
   return !push.tags && !push['tags-ignore'];
 }
+const gatesMode = ctx => ['auto', 'ci', 'local'].includes(ctx?.settings?.gates) ? ctx.settings.gates : 'auto';
+export function workflowRunsTestSuite(text, suiteCommand = null) {
+  const lines = String(text ?? '').split('\n').map(l => l.replace(/#.*$/, '').trim()).filter(Boolean);
+  if (!lines.length) return false;
+  const body = lines.join('\n');
+  const custom = named(suiteCommand) ? suiteCommand.trim() : '';
+  if (custom && lines.some(line => line.includes(custom) && !/\becho\b/.test(line))) return true;
+  return /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|\bnode\b[^\n]*\s--test\b|\b(?:npx\s+|pnpm\s+exec\s+|yarn\s+)?(?:vitest|jest|mocha|ava)\b|\b(?:uv\s+run\s+|poetry\s+run\s+|python3?\s+-m\s+)?(?:pytest|unittest)\b|\bcargo\s+(?:test|nextest)\b|\bgo\s+test\b|\bmake\s+(?:test|check)\b/.test(body);
+}
+function readRepoWorkflowTexts(ctx) {
+  const tip = `origin/${ctx.state.baseBranch}`;
+  return (ctx.ciFiles ??= (async () => {
+    try {
+      await ctx.git(['fetch', '-q', 'origin', ctx.state.baseBranch]);
+      if (!await ctx.git(['rev-parse', '--verify', '-q', `${tip}:.github/workflows`]).catch(() => '')) return [];
+      const names = (await ctx.git(['ls-tree', '--name-only', `${tip}:.github/workflows`])).split('\n').filter(name => /\.ya?ml$/.test(name));
+      if (names.length > 50) return null;
+      return await Promise.all(names.map(name => ctx.git(['show', `${tip}:.github/workflows/${name}`])));
+    } catch { return null; }
+  })());
+}
+async function repoRequiredChecks(ctx) {
+  return (ctx.requiredChecks ??= (async () => {
+    const required = await ctx.gh.call('GET', `repos/${ctx.repo}/branches/${encodeURIComponent(ctx.state.baseBranch)}/protection/required_status_checks`);
+    if (required.status === 200) {
+      const names = [...new Set([...(required.value?.contexts ?? []), ...(required.value?.checks ?? []).map(c => c?.context).filter(Boolean)].filter(named))];
+      return { state: names.length ? 'required' : 'none', names };
+    }
+    if ([403, 404].includes(required.status)) return { state: 'none', names: [] };
+    return { state: 'unknown', names: null };
+  })());
+}
 // Does the repository have CI that runs on this PR head? Read once per tick from the base tip (no API call): a workflow
 // file that can run on the PR (workflowRunsOnPr, with the PR's changed files), else required status checks on the base.
 // A workflow that runs only on repository_dispatch, a schedule, a release, closed PRs, other paths or a push to other
@@ -2219,31 +2252,39 @@ async function repoHasCi(ctx, job) {
   const key = `${job.branch}@${job.head}`;
   if (!ctx.hasCi.has(key)) ctx.hasCi.set(key, (async () => {
     const tip = `origin/${ctx.state.baseBranch}`;
-    const texts = await (ctx.ciFiles ??= (async () => {
-      try {
-        await ctx.git(['fetch', '-q', 'origin', ctx.state.baseBranch]);
-        if (!await ctx.git(['rev-parse', '--verify', '-q', `${tip}:.github/workflows`]).catch(() => '')) return [];
-        const names = (await ctx.git(['ls-tree', '--name-only', `${tip}:.github/workflows`])).split('\n').filter(name => /\.ya?ml$/.test(name));
-        if (names.length > 50) return null;
-        return await Promise.all(names.map(name => ctx.git(['show', `${tip}:.github/workflows/${name}`])));
-      } catch { return null; }
-    })());
+    const texts = await readRepoWorkflowTexts(ctx);
     if (texts === null) return true;
     const files = texts.length ? await ctx.git(['diff', '--name-only', `${tip}...${job.head}`], job.worktree).then(out => out.split('\n').filter(Boolean)).catch(() => null) : null;
     if (texts.some(text => workflowRunsOnPr(text, job.branch, ctx.state.baseBranch, files))) return true;
-    const required = await ctx.gh.call('GET', `repos/${ctx.repo}/branches/${encodeURIComponent(ctx.state.baseBranch)}/protection/required_status_checks`);
-    return required.status === 200 ? (required.value?.contexts?.length ?? 0) + (required.value?.checks?.length ?? 0) > 0 : ![403, 404].includes(required.status);
+    const required = await repoRequiredChecks(ctx);
+    return required.state !== 'none';
   })());
   return ctx.hasCi.get(key);
+}
+async function repoHasSuiteCi(ctx, job) {
+  ctx.hasSuiteCi ??= new Map();
+  const key = `${job.branch}@${job.head}`;
+  if (!ctx.hasSuiteCi.has(key)) ctx.hasSuiteCi.set(key, (async () => {
+    const tip = `origin/${ctx.state.baseBranch}`;
+    const texts = await readRepoWorkflowTexts(ctx);
+    if (!Array.isArray(texts) || !texts.length) return false;
+    const files = await ctx.git(['diff', '--name-only', `${tip}...${job.head}`], job.worktree).then(out => out.split('\n').filter(Boolean)).catch(() => null);
+    const cmd = resolveSuiteCommand(ctx, job);
+    return texts.some(text => workflowRunsOnPr(text, job.branch, ctx.state.baseBranch, files) && workflowRunsTestSuite(text, cmd));
+  })());
+  return ctx.hasSuiteCi.get(key);
 }
 const normCiState = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
 const isGoodConclusion = conclusion => ['success', 'neutral', 'skipped'].includes(normCiState(conclusion));
 const isCompletedRun = r => normCiState(r?.status) === 'completed';
 const runFailedToken = r => `r:${r.id ?? ''}:${r.name}:${r.conclusion}:${r.completed_at ?? r.completedAt ?? r.started_at ?? r.startedAt ?? ''}`;
 const statusFailedToken = s => `s:${s.context}:${s.state}:${s.updated_at ?? ''}`;
-async function ciState(ctx, head, job) {
-  const runs = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
-  const status = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/status`);
+async function ciState(ctx, head, job, onlyNames = null) {
+  const runsRaw = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/check-runs?per_page=100`);
+  const statusRaw = await ctx.gh.ok('GET', `repos/${ctx.repo}/commits/${head}/status`);
+  const onlySet = Array.isArray(onlyNames) ? new Set(onlyNames) : null;
+  const runs = onlySet ? { ...runsRaw, check_runs: (runsRaw?.check_runs ?? []).filter(r => onlySet.has(r.name)) } : runsRaw;
+  const status = onlySet ? { ...statusRaw, statuses: (statusRaw?.statuses ?? []).filter(s => onlySet.has(s.context)) } : statusRaw;
   const rawFailedTokens = [
     ...(runs?.check_runs ?? []).filter(r => isCompletedRun(r) && !isGoodConclusion(r.conclusion)).map(runFailedToken),
     ...(status?.statuses ?? []).filter(s => normCiState(s.state) !== 'pending' && normCiState(s.state) !== 'success').map(statusFailedToken),
@@ -2303,7 +2344,12 @@ async function ciState(ctx, head, job) {
   }
   // "CI: none" only for a repository with no CI at all (no head of this job ever had a check, and the base has no
   // workflow file), never because a new head has no run yet.
-  if (!checks.length) return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : ciStart(ctx, job, head, runs, { state: 'pending', pending: [], sig });
+  if (!checks.length) {
+    if (onlySet?.size) return { state: 'pending', pending: [...onlySet], sig: `required-wait:${[...onlySet].join(',')}` };
+    return !job.ciSeen && !await repoHasCi(ctx, job) && ctx.now() - (job.prAt ?? ctx.now()) >= NO_CI_AFTER ? { state: 'none', sig } : ciStart(ctx, job, head, runs, { state: 'pending', pending: [], sig });
+  }
+  const missingRequired = onlySet ? [...onlySet].filter(name => !checks.some(c => c.name === name)) : [];
+  if (missingRequired.length) return { state: 'pending', pending: [...checks.filter(c => !c.done).map(c => c.name), ...missingRequired], sig: `${sig}|missing:${missingRequired.join(',')}` };
   if (stalePending.size) return { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig };
   return ciStart(ctx, job, head, runs, checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig });
 }
@@ -2594,7 +2640,7 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
 // install scripts). An install failure exits 86, a failure of the runner, not a red test result.
 // The runner lines of the suite queue and the dependency install: a failure of the runner, not a test result.
 // A runner line starts with its phrase; a failing test that quotes one (in an indented TAP line) is a test failure.
-const SUITE_RUNNER = /^(?:Shared test suite queue failed|Test suite execution timeout|Test suite could not start|Test suite ended by SIG|Test suite descendants could not be confirmed|Supply a suite command|Autopilot core: dependency install failed)/m;
+const SUITE_RUNNER = /^(?:Shared test suite queue failed|Test suite execution timeout|Test suite could not start|Test suite interrupted \(SIG|Test suite ended by SIG|Test suite descendants could not be confirmed|Supply a suite command|Autopilot core: dependency install failed)/m;
 // #3227 fix 4: the failed tests that a test log shows (also a partial log), each test once, at most `limit`, in log
 // order. node --test TAP "not ok N - NAME" lines at any depth: a failure stays open until its location line, the next
 // test line or 12 lines, so one name in two files is two tests; a TODO or SKIP directive is no failure; "\#" and "\\"
@@ -2834,9 +2880,10 @@ async function suiteState(ctx, job) {
   // A non-zero exit of the repository's test command is a red suite. Only a failure of the runner itself is not a
   // test result: it could not start, it died or was killed, it timed out, or it wrote no output. Such a run starts
   // again, at most twice, and then ends the job without spending a repair.
-  if (seen.state === 'dead' || seen.exit?.signal || [86, 127].includes(seen.exit?.code) || SUITE_RUNNER.test(stripAnsi(log)) || !log.trim()) {
-    // "Died 3 times" counts every try of this suite run.
-    const deaths = (job.suite.deaths ?? 0) + (seen.state === 'dead' ? 1 : 0);
+  if (seen.state === 'dead' || seen.exit?.signal || [86, 127, 130, 143].includes(seen.exit?.code) || SUITE_RUNNER.test(stripAnsi(log)) || !log.trim()) {
+    // "Died 3 times" counts process deaths and signal interruptions (#3473), while install/timeout runner faults stay suite-broken.
+    const died = seen.state === 'dead' || Boolean(seen.exit?.signal) || [130, 143].includes(seen.exit?.code) || /^Test suite (?:interrupted \(SIG|ended by SIG)/m.test(stripAnsi(log));
+    const deaths = (job.suite.deaths ?? 0) + (died ? 1 : 0);
     if ((job.suite.restarts ?? 0) < 2) return replace(() => job.suite.cwd ?? checkout(ctx, job, 'suite'), (job.suite.restarts ?? 0) + 1, deaths, job.suite.quiets ?? 0);
     return { state: 'broken', dead: deaths + (job.suite.quiets ?? 0) >= 3, text: `the full test suite runner failed for head ${short(job.head)} (${seen.state === 'dead' ? 'the run died' : seen.exit?.signal ? `killed by ${seen.exit.signal}` : `exit ${seen.exit?.code}`}, 3 tries). Log: ${basename(job.suite.agent.log)} on this machine` };
   }
@@ -3431,11 +3478,11 @@ function evidenceRecord(ctx, job, { lines = [], claims = [], ci = null, review =
       ...(named(revFamily) ? { reviewFamily: revFamily } : {}),
       ...(named(revIndependence) ? { reviewIndependence: revIndependence } : {}),
     } : null,
-    claimed: job.evidence ?? null, evidence: honestEvidence(job), notCovered: notCovered(job, lines, ctx),
+    claimed: job.evidence ?? null, evidence: honestEvidence(job), notCovered: notCovered(job, lines, ctx, suite),
     ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}) };
 }
 // B3 (final battle plan): what the engine did not check at this head, in one list.
-function notCovered(job, lines = [], ctx = null) {
+function notCovered(job, lines = [], ctx = null, suite = null) {
   const out = [], v = job.vectors, c = job.coverage;
   for (const l of lines) if (l.verdict === 'not-run') out.push(`a "not run" line: ${oneLine(l.line, 200)}`);
   if (c?.consumers?.line) out.push(`${c.consumers.line}: ${someFiles(c.consumers.open)} not checked`);
@@ -3447,7 +3494,7 @@ function notCovered(job, lines = [], ctx = null) {
   for (const [kind, why] of Object.entries(uncheckedOf(job))) out.push(`${kind}: Autopilot could not check it (${why})`);
   const control = controlResult(v);
   if (control?.state === 'not-run') out.push(`control: not run (${control.reason})`);
-  if (ctx && !resolveSuiteCommand(ctx, job)) out.push('full test suite: no test command (autopilot.testCommand in pdd.json)');
+  if (ctx && suite?.state !== 'not-required' && gatesMode(ctx) !== 'ci' && !resolveSuiteCommand(ctx, job)) out.push('full test suite: no test command (autopilot.testCommand in pdd.json)');
   for (const cut of job.cuts ?? []) out.push(`input cut: ${cut.input} (${cut.more} more ${cut.input === 'owner table' ? 'owned files' : 'characters'})`);
   return [...new Set(out)].slice(0, 30);
 }
@@ -4025,10 +4072,26 @@ async function mergeCheck(ctx, job) {
   if (drafts.length && approving(ctx) && !gate.strict) reds.push(`Changed prompts are not approved: ${drafts.join('; ')}. Record the operator approval for each changed prompt with the native command and commit it: printf '%s' ${quote(approvalWords(ctx))} | "$PDD_CLI" approve PROMPT --said -`);
   let nonTestReds = reds.length;
   const reproduceChecks = [];
-  const ci = reds.length ? null : await ciState(ctx, job.head, job);
+  const gates = gatesMode(ctx);
+  if (gates === 'local') ciUp(ctx);
+  let ci = null;
+  if (!reds.length) {
+    if (gates === 'local') {
+      const reqChecks = await repoRequiredChecks(ctx);
+      ci = reqChecks.state === 'none'
+        ? { state: 'not-required', sig: 'gates:local' }
+        : await ciState(ctx, job.head, job, reqChecks.state === 'required' ? reqChecks.names : null);
+    } else {
+      ci = await ciState(ctx, job.head, job);
+    }
+  }
+  if (gates === 'ci' && ci?.state === 'none') {
+    await stopChecks(ctx, job);
+    return end(ctx, job, cause('job', 'no-ci', 'no GitHub CI check ran on the PR head while autopilot.gates is ci'));
+  }
   // GitHub runs no pull_request workflow while a PR conflicts with its base, so a head with no check at all may be a
   // conflict: then the agent conflict update starts (debate B, outside the lane), not a 6-hour CI wait.
-  if (ci?.state === 'pending' && !ci.pending?.length) {
+  if (ci?.state === 'pending' && !ci.pending?.length || ci?.state === 'not-required') {
     await ctx.git(['fetch', '-q', 'origin', state.baseBranch], job.worktree).catch(() => {});
     const tree = await ctx.ports.git(['merge-tree', '--write-tree', '--name-only', '--no-messages', `origin/${state.baseBranch}`, job.head], { cwd: job.worktree });
     if (tree.code === 1) return conflictFix(ctx, job, { files: String(tree.stdout ?? '').split('\n').slice(1).map(line => line.trim()).filter(Boolean), hunks: '' });
@@ -4039,12 +4102,22 @@ async function mergeCheck(ctx, job) {
   }
   let review, suite, vectors;
   if (!reds.length) {
-    if (!ctx.settings.testCommand && resolveSuiteCommand(ctx, job)) saveEvidence(ctx, job, { lines, claims });
+    const skipLocalSuite = gates === 'ci' || (gates === 'auto' && ci?.state !== 'none' && await repoHasSuiteCi(ctx, job));
+    if (!skipLocalSuite && !ctx.settings.testCommand && resolveSuiteCommand(ctx, job)) saveEvidence(ctx, job, { lines, claims });
     // One backstop end per job: a reviewer at its backstop ends the job before the suite is read.
     review = await reviewState(ctx, job, pr.body);
     if (review.state === 'pool-paused') return;
     if (review.state === 'ceiling') { await stopChecks(ctx, job); return end(ctx, job, review.cause); }
-    suite = await suiteState(ctx, job);
+    if (skipLocalSuite) {
+      if (job.suite?.agent && !await cleanupPart(ctx, job, job.suite.agent, 'suite')) suite = { state: 'running' };
+      else {
+        if (job.suite || job.suiteSkipped !== job.head) { job.suite = null; job.suiteSkipped = job.head; ctx.saveJob(job); }
+        suite = { state: 'not-required', reason: gates === 'ci' ? 'autopilot.gates is ci' : 'covered by GitHub CI' };
+      }
+    } else {
+      delete job.suiteSkipped;
+      suite = await suiteState(ctx, job);
+    }
     if (suite.state === 'ceiling') { await stopChecks(ctx, job); return end(ctx, job, suite.cause); }
     if (suite.state === 'hung') return issueStop(ctx, job, suite.hang);
     // T04: the engine's own run of the changed replay and formal files, and the Evidence claims against it.
@@ -4127,7 +4200,9 @@ async function mergeCheck(ctx, job) {
   // Something still runs (CI that still changes, a reviewer or a suite process): wait, and the quiet clock restarts.
   noteProgress(ctx, job, [job.head, ci.state, ci.sig, review.state, suite.state, vectors?.state, logSig(job.review?.agent && ctx.jobs.read(job.review.agent))].join('|'),
     ci.state === 'pending' || review.state === 'running' || suite.state === 'running' || vectors?.state === 'running');
-  if (!['green', 'none'].includes(ci.state) || review.state !== 'pass' || suite.state !== 'pass' || vectors?.state === 'running') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
+  const ciReady = gates === 'ci' ? ci.state === 'green' : ['green', 'none', 'not-required'].includes(ci.state);
+  const suiteReady = ['pass', 'not-required'].includes(suite.state);
+  if (!ciReady || review.state !== 'pass' || !suiteReady || vectors?.state === 'running') { delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job); return; }
   // #3239 owner wait: files whose owners the path checks could not read on main (an unreadable pdd-bindings.json) keep
   // the PR out of the lane. The wait is not progress, so a quiet period is a pdd step stop (one PDD report, no END).
   if (job.paths?.unchecked?.length) { Object.assign(job, { lastError: `the merge waits: ${job.paths.wait}`, lastErrorTool: false, lastErrorStep: job.paths.bindingsWait ? 'bindings' : 'owners' }); ctx.saveJob(job); return; }
@@ -4194,8 +4269,8 @@ async function mergeCheck(ctx, job) {
     const runtimeLine = runtimeVerdicts(pr.body).map(l => l.line).join('; ') || 'Runtime: no line (no prompt changed)';
     job.evidence = parseEvidence(pr.body) ?? job.evidence ?? null;
     await ctx.comment(job.pr, [observe ? `Autopilot would merge this PR (observe mode): every check passed for head ${job.head}. It stays open and ready for review; Autopilot does not merge it.` : `Autopilot merge check passed for head ${job.head}.`, '',
-      `- CI: ${ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
-      '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', ...(reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null) ? [reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null)] : []), `- ${runtimeLine}`, `- ${evidenceText(honestEvidence(job))}`, `- Base: ${oneLine(base.message)}`,
+      `- CI: ${ci.state === 'not-required' ? 'not required (autopilot.gates is local)' : ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
+      suite.state === 'not-required' ? `- Full test suite: not required (${gates === 'ci' ? 'autopilot.gates is ci' : 'covered by green GitHub CI'})` : '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', ...(reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null) ? [reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null)] : []), `- ${runtimeLine}`, `- ${evidenceText(honestEvidence(job))}`, `- Base: ${oneLine(base.message)}`,
       `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
       ...(job.coverage?.consumers?.line ? [`- ${job.coverage.consumers.line}`] : []),
       ...engineEvidenceLines(job), `- Evidence record: ${basename(saveEvidence(ctx, job, { lines: runtimeVerdicts(pr.body), claims: runtimeClaims(pr.body, job), ci, review, suite }) ?? evidencePath(ctx, job))} on this machine`,
@@ -5746,6 +5821,7 @@ async function rerunFailedCi(ctx, job, reproduce) {
   return reran;
 }
 async function ciStart(ctx, job, head, runs, ci) {
+  if (gatesMode(ctx) === 'local') { ciUp(ctx); return ci; }
   const rows = runs?.check_runs ?? [];
   ctx.ciLooked = true;
   if (ci.state === 'red') {
@@ -5783,6 +5859,7 @@ function ciUp(ctx) {
 // The intake hold. When no job looked at CI in this tick, one read of the latest runs (at most every 10 minutes) sees a
 // run that started after the outage began.
 async function ciHold(ctx) {
+  if (gatesMode(ctx) === 'local') { ciUp(ctx); return null; }
   let m = ctx.machineState();
   if (!m.ciDown) return null;
   if (!ctx.ciLooked && ctx.now() - (m.ciDown.probedAt ?? m.ciDown.at) >= CI_PROBE) {
@@ -6565,7 +6642,7 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}${pddWords(fs, part)}` : '';
   for (const job of jobs) {
-    if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${named(job.review?.reviewIndependence) ? ` (${job.review.reviewIndependence})` : ''}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
+    if (job.phase === 'pr') lines.push(`#${job.issue} PR #${job.pr} at ${short(job.head)}: review ${job.review?.verdict ?? (job.review ? 'running' : '-')}${named(job.review?.reviewIndependence) ? ` (${job.review.reviewIndependence})` : ''}${job.review?.verdict ? '' : running(job, job.review?.agent, 'review')}, suite ${job.suite ? 'started' : job.suiteSkipped === job.head || settings.gates === 'ci' ? 'not-required' : '-'}${running(job, job.suite?.agent, 'suite')}, repairs ${job.repairs}${
       job.lane?.state === 'final' ? '; merge lane: final step' : job.lane?.state === 'waiting' ? `; merge lane: waiting${job.lane.holder ? ` for PR #${job.lane.holder}` : ''} since ${new Date(job.lane.since).toISOString()}` : ''}${runtimeWords(job)}${poolWords(job)}${job.lastError ? `; last error: ${job.lastError}` : ''}`);
     else if (job.phase === 'ending') lines.push(`#${job.issue} ending: ${job.end?.cause?.text}${job.lastError ? `; retry: ${job.lastError}` : ''}`);
     else if (job.phase === 'released') lines.push(`#${job.issue} release pending: retry pdd autopilot release ${job.issue}`);
