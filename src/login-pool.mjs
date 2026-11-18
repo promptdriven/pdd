@@ -452,6 +452,8 @@ export function readCloudAccountsState({ env = process.env } = {}, ports = {}) {
           anthropic_base_url: typeof entry.anthropic_base_url === 'string' ? entry.anthropic_base_url : null,
           managed_anthropic_base_url: entry.managed_anthropic_base_url === true,
           codex_gateway_url: typeof entry.codex_gateway_url === 'string' ? entry.codex_gateway_url : null,
+          codex_backend_api_url: typeof entry.codex_backend_api_url === 'string' ? entry.codex_backend_api_url : null,
+          auto_rotate: typeof entry.auto_rotate === 'boolean' ? entry.auto_rotate : null,
           managed_codex_gateway: entry.managed_codex_gateway === true,
           previous_codex_model_provider: typeof entry.previous_codex_model_provider === 'string' && entry.previous_codex_model_provider ? entry.previous_codex_model_provider : null,
           five_hour_used_percent: typeof entry.five_hour_used_percent === 'number' && Number.isFinite(entry.five_hour_used_percent) ? entry.five_hour_used_percent : null,
@@ -502,6 +504,8 @@ export function writeCloudAccountsState(state, { env = process.env } = {}, ports
         anthropic_base_url: typeof entry.anthropic_base_url === 'string' ? entry.anthropic_base_url : null,
         managed_anthropic_base_url: entry.managed_anthropic_base_url === true,
         codex_gateway_url: typeof entry.codex_gateway_url === 'string' ? entry.codex_gateway_url : null,
+        codex_backend_api_url: typeof entry.codex_backend_api_url === 'string' ? entry.codex_backend_api_url : null,
+        auto_rotate: typeof entry.auto_rotate === 'boolean' ? entry.auto_rotate : null,
         managed_codex_gateway: entry.managed_codex_gateway === true,
         previous_codex_model_provider: typeof entry.previous_codex_model_provider === 'string' && entry.previous_codex_model_provider ? entry.previous_codex_model_provider : null,
         five_hour_used_percent: typeof entry.five_hour_used_percent === 'number' && Number.isFinite(entry.five_hour_used_percent) ? entry.five_hour_used_percent : null,
@@ -740,6 +744,128 @@ function normalizeCodexGatewayBaseUrl(validatedUrl, grantToken) {
     return validatedUrl.replace(/(\/codex-gateway)\/lse_[^/]+$/i, '$1');
   }
   return validatedUrl;
+}
+
+/**
+ * Resolve the canonical `/v1/codex-gateway/backend-api` URL for a Codex Cloud lease.
+ */
+export function resolveCodexBackendApiUrl(authOrLease, fallbackGatewayUrl = null) {
+  const explicit = typeof authOrLease?.codex_backend_api_url === 'string' && authOrLease.codex_backend_api_url.trim()
+    ? validateCodexGatewayUrl(authOrLease.codex_backend_api_url)
+    : null;
+  if (explicit) return explicit;
+  const base = fallbackGatewayUrl
+    || (typeof authOrLease?.codex_gateway_url === 'string' && authOrLease.codex_gateway_url.trim()
+      ? normalizeCodexGatewayBaseUrl(validateCodexGatewayUrl(authOrLease.codex_gateway_url), resolveCodexGatewayGrant(authOrLease))
+      : null);
+  if (!base) return null;
+  if (/\/backend-api$/i.test(base)) return base;
+  if (/\/codex-gateway$/i.test(base)) return `${base}/backend-api`;
+  return base;
+}
+
+/**
+ * Resolve the Codex responses/models base URL (`.../backend-api/codex`) from the backend-api root.
+ */
+export function resolveCodexResponsesBaseUrl(backendApiUrl) {
+  if (!backendApiUrl) return null;
+  if (/\/backend-api$/i.test(backendApiUrl)) return `${backendApiUrl}/codex`;
+  return backendApiUrl;
+}
+
+/**
+ * Build the verified Codex CLI `-c` override flags for transparent gateway passthrough.
+ */
+export function buildCodexGatewayCliArgs({
+  backendApiUrl,
+  userCodexHome = null,
+  emptySubshellCodexHome = null,
+} = {}) {
+  const codexApiUrl = resolveCodexResponsesBaseUrl(backendApiUrl);
+  const args = [
+    '-c', 'cli_auth_credentials_store="file"',
+    '-c', `chatgpt_base_url=${JSON.stringify(backendApiUrl)}`,
+    '-c', `openai_base_url=${JSON.stringify(codexApiUrl)}`,
+  ];
+  if (typeof userCodexHome === 'string' && userCodexHome.trim()) {
+    args.push('-c', `sqlite_home=${JSON.stringify(userCodexHome.trim())}`);
+  }
+  args.push(
+    '-c', 'features.daemon_auto_start=false',
+    '-c', 'features.shell_snapshot=false',
+  );
+  if (typeof emptySubshellCodexHome === 'string' && emptySubshellCodexHome.trim()) {
+    args.push('-c', `shell_environment_policy.set.CODEX_HOME=${JSON.stringify(emptySubshellCodexHome.trim())}`);
+  }
+  args.push(
+    '-c', 'shell_environment_policy.exclude=["PDD_*","OPENAI_API_KEY","CODEX_API_KEY","CODEX_ACCESS_TOKEN"]',
+    '-c', 'model_providers.pdd_pool.name="PDD Pool"',
+    '-c', `model_providers.pdd_pool.base_url=${JSON.stringify(codexApiUrl)}`,
+    '-c', 'model_providers.pdd_pool.wire_api="responses"',
+    '-c', 'model_providers.pdd_pool.requires_openai_auth=true',
+    '-c', 'model_providers.pdd_codex_gateway.name="PDD Codex Gateway"',
+    '-c', `model_providers.pdd_codex_gateway.base_url=${JSON.stringify(codexApiUrl)}`,
+    '-c', 'model_providers.pdd_codex_gateway.wire_api="responses"',
+    '-c', 'model_providers.pdd_codex_gateway.requires_openai_auth=true',
+  );
+  return args;
+}
+
+/**
+ * Build the native `chatgpt`-mode `auth.json` payload containing only a revocable `pddg_` grant.
+ */
+export function buildGatewayAuthJson({ grantToken, planType = null, now = Date.now } = {}) {
+  const nowFn = typeof now === 'function' ? now : Date.now;
+  return {
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: buildSyntheticGatewayIdToken({ planType }),
+      access_token: grantToken,
+      refresh_token: '',
+      account_id: 'acct_pdd_gateway',
+    },
+    last_refresh: new Date(nowFn()).toISOString(),
+  };
+}
+
+const USER_CODEX_BASELINE_DIRS = [
+  'sessions',
+  'archived_sessions',
+  'plugins',
+  'skills',
+  'rules',
+  'memories',
+];
+
+/**
+ * Ensure `~/.codex/` and its baseline folders + empty `config.toml` exist so brand-new VMs
+ * persist chats, plugins, skills, and MCP servers directly into the user's real Codex home.
+ */
+export function ensureUserCodexHomeBaseline(fs, userHome) {
+  fs.mkdirSync(userHome, { recursive: true, mode: 0o700 });
+  const cfgPath = join(userHome, 'config.toml');
+  let cfgExists = false;
+  try {
+    (fs.lstatSync ?? fs.statSync)(cfgPath);
+    cfgExists = true;
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  if (!cfgExists) {
+    writeAtomicPrivate(fs, cfgPath, '');
+  }
+  for (const dirName of USER_CODEX_BASELINE_DIRS) {
+    const dirPath = join(userHome, dirName);
+    try {
+      (fs.lstatSync ?? fs.statSync)(dirPath);
+    } catch (err) {
+      if (err?.code === 'ENOENT') {
+        try { fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 }); } catch {}
+      }
+    }
+  }
+  return cfgPath;
 }
 
 const isTomlTable = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date) && typeof value.toISOString !== 'function';
@@ -1005,7 +1131,7 @@ export function isSafeCodexSourceEntry(fs, src, targetRoot, { sourceHome = null 
   return true;
 }
 
-function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRoots = []) {
+export function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRoots = []) {
   fs.mkdirSync(managedHome, { recursive: true, mode: 0o700 });
   try { (fs.chmodSync ?? nativeFs.chmodSync)?.(managedHome, 0o700); } catch {}
   const resolvedSourceHome = resolve(sourceHome);
@@ -1206,6 +1332,11 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
   const rawGatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
   const grantToken = isGateway ? resolveCodexGatewayGrant(authOrLease) : null;
   const gatewayUrl = isGateway ? normalizeCodexGatewayBaseUrl(rawGatewayUrl, grantToken) : null;
+  const hasExplicitBackendApi = isGateway
+    && typeof authOrLease.codex_backend_api_url === 'string'
+    && authOrLease.codex_backend_api_url.trim().length > 0;
+  const backendApiUrl = hasExplicitBackendApi ? resolveCodexBackendApiUrl(authOrLease, gatewayUrl) : gatewayUrl;
+  const codexApiUrl = hasExplicitBackendApi ? resolveCodexResponsesBaseUrl(backendApiUrl) : gatewayUrl;
   const embeddedLeaseGrant = isGateway && isEmbeddedLeaseGatewayGrant(grantToken);
   const stripped = isGateway ? null : stripCodexAuthBundle(authOrLease);
 
@@ -1240,34 +1371,38 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
 
   if (isGateway) {
     const prevProviders = isTomlTable(cleanedUser.nextData.model_providers) ? { ...cleanedUser.nextData.model_providers } : {};
-    const modelCatalogUrl = `${gatewayUrl}/models`;
+    const modelCatalogUrl = `${codexApiUrl}/models`;
     const gatewayProviderBlock = embeddedLeaseGrant
       ? {
           name: 'PDD Codex Gateway',
-          base_url: gatewayUrl,
+          base_url: codexApiUrl,
           model_catalog_url: modelCatalogUrl,
           wire_api: 'responses',
           requires_openai_auth: true,
-          supports_websockets: false,
+          ...(hasExplicitBackendApi ? {} : { supports_websockets: false }),
         }
       : {
           name: 'PDD Codex Gateway',
-          base_url: gatewayUrl,
+          base_url: codexApiUrl,
           model_catalog_url: modelCatalogUrl,
           wire_api: 'responses',
           requires_openai_auth: false,
-          supports_websockets: false,
+          ...(hasExplicitBackendApi ? {} : { supports_websockets: false }),
           http_headers: { 'x-pdd-gateway-grant': grantToken },
         };
     const prevFeatures = isTomlTable(cleanedUser.nextData.features) ? { ...cleanedUser.nextData.features } : {};
+    if (hasExplicitBackendApi) {
+      delete prevFeatures.responses_websockets;
+    }
     const nextConfig = {
       ...cleanedUser.nextData,
       cli_auth_credentials_store: 'file',
-      openai_base_url: gatewayUrl,
-      chatgpt_base_url: gatewayUrl,
+      openai_base_url: codexApiUrl,
+      chatgpt_base_url: backendApiUrl,
+      ...(hasExplicitBackendApi ? { sqlite_home: userHome } : {}),
       features: {
         ...prevFeatures,
-        responses_websockets: false,
+        ...(hasExplicitBackendApi ? { daemon_auto_start: false } : { responses_websockets: false }),
       },
       model_providers: {
         ...prevProviders,
@@ -1276,17 +1411,11 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
     };
     delete nextConfig.model_provider;
     const serializedConfig = serializeTomlConfig(nextConfig, configPath);
-    const gatewayAuth = {
-      auth_mode: 'chatgpt',
-      OPENAI_API_KEY: null,
-      tokens: {
-        id_token: buildSyntheticGatewayIdToken({ planType: authOrLease?.plan_type ?? authOrLease?.plan }),
-        access_token: grantToken,
-        refresh_token: '',
-        account_id: 'acct_pdd_gateway',
-      },
-      last_refresh: new Date((ports.now ?? Date.now)()).toISOString(),
-    };
+    const gatewayAuth = buildGatewayAuthJson({
+      grantToken,
+      planType: authOrLease?.plan_type ?? authOrLease?.plan,
+      now: ports.now ?? Date.now,
+    });
     const authText = `${JSON.stringify(gatewayAuth, null, 2)}\n`;
     let existingConfigText = null;
     try { existingConfigText = fs.readFileSync(configPath, 'utf8'); } catch {}
@@ -1380,6 +1509,11 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
   const rawGatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
   const gatewayToken = isGateway ? resolveCodexGatewayGrant(authOrLease) : null;
   const gatewayUrl = isGateway ? normalizeCodexGatewayBaseUrl(rawGatewayUrl, gatewayToken) : null;
+  const hasExplicitBackendApi = isGateway
+    && typeof authOrLease.codex_backend_api_url === 'string'
+    && authOrLease.codex_backend_api_url.trim().length > 0;
+  const backendApiUrl = hasExplicitBackendApi ? resolveCodexBackendApiUrl(authOrLease, gatewayUrl) : gatewayUrl;
+  const codexApiUrl = hasExplicitBackendApi ? resolveCodexResponsesBaseUrl(backendApiUrl) : gatewayUrl;
   const embeddedLeaseGrant = isGateway && isEmbeddedLeaseGatewayGrant(gatewayToken);
   const rootDir = tmpRoot || (fs.existsSync?.('/tmp') !== false ? '/tmp' : tmpdir());
   let overlayDir;
@@ -1456,46 +1590,49 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
       const prevProviders = isTomlTable(baseConfig.model_providers) ? { ...baseConfig.model_providers } : {};
       delete prevProviders[CODEX_GATEWAY_PROVIDER_ID];
       const configPath = join(overlayDir, 'config.toml');
+      if (hasExplicitBackendApi) {
+        delete prevFeatures.responses_websockets;
+      }
       if (embeddedLeaseGrant) {
+        if (hasExplicitBackendApi) {
+          const emptySubshellDir = join(overlayDir, 'empty-subshell');
+          try { fs.mkdirSync(emptySubshellDir, { recursive: true, mode: 0o700 }); } catch {}
+          prevPolicy.set = { ...(isTomlTable(prevPolicy.set) ? prevPolicy.set : {}), CODEX_HOME: emptySubshellDir };
+        }
         const overlayConfig = {
           ...baseConfig,
           cli_auth_credentials_store: 'file',
-          openai_base_url: gatewayUrl,
-          chatgpt_base_url: gatewayUrl,
+          openai_base_url: codexApiUrl,
+          chatgpt_base_url: backendApiUrl,
+          ...(hasExplicitBackendApi ? { sqlite_home: resolvedSourceCodexHome } : {}),
           features: {
             ...prevFeatures,
             shell_snapshot: false,
-            responses_websockets: false,
+            ...(hasExplicitBackendApi ? { daemon_auto_start: false } : { responses_websockets: false }),
           },
           shell_environment_policy: prevPolicy,
           model_providers: {
             ...prevProviders,
             [CODEX_GATEWAY_PROVIDER_ID]: {
               name: 'PDD Codex Gateway',
-              base_url: gatewayUrl,
-              model_catalog_url: `${gatewayUrl}/models`,
+              base_url: codexApiUrl,
+              model_catalog_url: `${codexApiUrl}/models`,
               wire_api: 'responses',
               requires_openai_auth: true,
-              supports_websockets: false,
+              ...(hasExplicitBackendApi ? {} : { supports_websockets: false }),
             },
           },
         };
         delete overlayConfig.model_provider;
-        const gatewayAuth = {
-          auth_mode: 'chatgpt',
-          OPENAI_API_KEY: null,
-          tokens: {
-            id_token: buildSyntheticGatewayIdToken({ planType: authOrLease?.plan_type ?? authOrLease?.plan }),
-            access_token: gatewayToken,
-            refresh_token: '',
-            account_id: 'acct_pdd_gateway',
-          },
-          last_refresh: new Date((ports.now ?? Date.now)()).toISOString(),
-        };
+        const gatewayAuth = buildGatewayAuthJson({
+          grantToken: gatewayToken,
+          planType: authOrLease?.plan_type ?? authOrLease?.plan,
+          now: ports.now ?? Date.now,
+        });
         const authPath = join(overlayDir, 'auth.json');
         writeAtomicPrivate(fs, configPath, serializeTomlConfig(overlayConfig, configPath));
         writeAtomicPrivate(fs, authPath, `${JSON.stringify(gatewayAuth, null, 2)}\n`);
-        return { overlayDir, authPath, configPath, gatewayToken, gatewayUrl, cleanup };
+        return { overlayDir, authPath, configPath, gatewayToken, gatewayUrl, backendApiUrl, cleanup };
       }
       const overlayConfig = {
         ...baseConfig,
@@ -1503,24 +1640,24 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
         features: {
           ...prevFeatures,
           shell_snapshot: false,
-          responses_websockets: false,
+          ...(hasExplicitBackendApi ? { daemon_auto_start: false } : { responses_websockets: false }),
         },
         shell_environment_policy: prevPolicy,
         model_providers: {
           ...prevProviders,
           [CODEX_GATEWAY_PROVIDER_ID]: {
             name: 'PDD Codex Gateway',
-            base_url: gatewayUrl,
-            model_catalog_url: `${gatewayUrl}/models`,
+            base_url: codexApiUrl,
+            model_catalog_url: `${codexApiUrl}/models`,
             wire_api: 'responses',
             requires_openai_auth: false,
-            supports_websockets: false,
+            ...(hasExplicitBackendApi ? {} : { supports_websockets: false }),
             env_http_headers: { 'x-pdd-gateway-grant': 'PDD_CODEX_GATEWAY_GRANT' },
           },
         },
       };
       writeAtomicPrivate(fs, configPath, serializeTomlConfig(overlayConfig, configPath));
-      return { overlayDir, authPath: null, configPath, gatewayToken, gatewayUrl, cleanup };
+      return { overlayDir, authPath: null, configPath, gatewayToken, gatewayUrl, backendApiUrl, cleanup };
     }
     if (resolvedSrcCfg.exists) {
       try { fs.symlinkSync(srcConfigPath, join(overlayDir, 'config.toml')); } catch {}
@@ -1661,6 +1798,32 @@ export async function reportCloudAccountUsage(accountId, report, { cwd = process
   return cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(accountId)}/usage-report`, { body, cwd, env, timeoutMs }, ports);
 }
 
+/**
+ * Revoke a gateway lease immediately on PDD Cloud when the last session using it exits.
+ */
+export async function releaseCloudLease(leaseId, { cwd = process.cwd(), env = process.env, timeoutMs = 2500 } = {}, ports = {}) {
+  if (typeof leaseId !== 'string' || !leaseId.trim()) return null;
+  return cloudAccountsRequest('POST', `/v1/accounts/leases/${encodeURIComponent(leaseId.trim())}/release`, {
+    cwd,
+    env,
+    timeoutMs,
+    maxRetries: 0,
+  }, ports);
+}
+
+/**
+ * Refresh a lease's sliding TTL and re-verify GitHub org membership for long-lived sessions.
+ */
+export async function heartbeatCloudLease(leaseId, { cwd = process.cwd(), env = process.env, timeoutMs = 5000 } = {}, ports = {}) {
+  if (typeof leaseId !== 'string' || !leaseId.trim()) return null;
+  return cloudAccountsRequest('POST', `/v1/accounts/leases/${encodeURIComponent(leaseId.trim())}/heartbeat`, {
+    cwd,
+    env,
+    timeoutMs,
+    maxRetries: 0,
+  }, ports);
+}
+
 export function saveActiveLeaseMetadata(leaseReply, {
   env = process.env,
   materializedLocal,
@@ -1711,6 +1874,8 @@ export function saveActiveLeaseMetadata(leaseReply, {
       anthropic_base_url: lease.anthropic_base_url ?? null,
       managed_anthropic_base_url: managedBaseUrl !== undefined ? Boolean(managedBaseUrl) : Boolean(prev?.managed_anthropic_base_url),
       codex_gateway_url: codexGatewayUrl !== undefined ? codexGatewayUrl : (lease.codex_gateway_url ?? prev?.codex_gateway_url ?? null),
+      codex_backend_api_url: lease.codex_backend_api_url ?? prev?.codex_backend_api_url ?? null,
+      auto_rotate: typeof lease.auto_rotate === 'boolean' ? lease.auto_rotate : (prev?.auto_rotate ?? null),
       managed_codex_gateway: managedCodexGateway !== undefined ? Boolean(managedCodexGateway) : Boolean(prev?.managed_codex_gateway),
       previous_codex_model_provider: previousCodexModelProvider !== undefined ? previousCodexModelProvider : (prev?.previous_codex_model_provider ?? null),
       five_hour_used_percent: typeof acc.five_hour_used_percent === 'number' ? acc.five_hour_used_percent : null,
@@ -1741,6 +1906,7 @@ export async function leaseCloudAccount({
   skipAccountIds = [],
   holderId = 'pdd-step',
   updateState = true,
+  autoRotate = undefined,
 } = {}, { cwd = process.cwd(), env = process.env, timeoutMs = 15_000, maxRetries, now } = {}, ports = {}) {
   const nowFn = now ?? ports.now ?? Date.now;
   const effectivePorts = ports.now ? ports : { ...ports, now: nowFn };
@@ -1779,6 +1945,7 @@ export async function leaseCloudAccount({
           skip_account_ids: [...skip],
           machine_label: machineLabel,
           holder_id: holderId,
+          ...(typeof autoRotate === 'boolean' ? { auto_rotate: autoRotate } : {}),
         },
         cwd,
         env,

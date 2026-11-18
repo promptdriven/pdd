@@ -231,6 +231,9 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
   if (typeof parsed.chatgpt_base_url === 'string' && parsed.chatgpt_base_url.trim() && !SAFE_CONTROL_RE.test(parsed.chatgpt_base_url)) {
     out.push('-c', `chatgpt_base_url=${JSON.stringify(parsed.chatgpt_base_url.trim())}`);
   }
+  if (typeof parsed.sqlite_home === 'string' && parsed.sqlite_home.trim() && !SAFE_CONTROL_RE.test(parsed.sqlite_home)) {
+    out.push('-c', `sqlite_home=${JSON.stringify(parsed.sqlite_home.trim())}`);
+  }
   if (typeof parsed.model_provider === 'string' && parsed.model_provider.trim() && !SAFE_CONTROL_RE.test(parsed.model_provider)) {
     const provider = parsed.model_provider.trim();
     out.push('-c', `model_provider=${JSON.stringify(provider)}`);
@@ -287,6 +290,15 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
   }
   if (needGrantExcludeFilter) {
     out.push('-c', `shell_environment_policy.filters.${formatTomlKey(filterKey)}="exclude"`);
+  }
+  const subshellCodexHome = isTomlTable(parsed.shell_environment_policy) && isTomlTable(parsed.shell_environment_policy.set)
+    ? parsed.shell_environment_policy.set.CODEX_HOME
+    : null;
+  if (typeof subshellCodexHome === 'string' && subshellCodexHome.trim() && !SAFE_CONTROL_RE.test(subshellCodexHome)) {
+    out.push('-c', `shell_environment_policy.set.CODEX_HOME=${JSON.stringify(subshellCodexHome.trim())}`);
+  }
+  if (isTomlTable(parsed.features) && parsed.features.daemon_auto_start === false) {
+    out.push('-c', 'features.daemon_auto_start=false');
   }
   if (isTomlTable(parsed.features) && parsed.features.shell_snapshot === false) {
     out.push('-c', 'features.shell_snapshot=false');
