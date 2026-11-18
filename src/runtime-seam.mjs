@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: eca2557973426a814626feac733ce78d794ba5e1618c5af10895c20d19fee2d4).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: b961af0352e1c1035dae4f20a5362a74a02e213826429b9dc5148de7e1e7cb4a).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -147,6 +147,11 @@ import {
 
 const req = createRequire(import.meta.url);
 const initialReadFileSync = fs.readFileSync;
+const initialOpenSync = fs.openSync;
+const initialCloseSync = fs.closeSync;
+const initialLstatSync = fs.lstatSync;
+const initialStatSync = fs.statSync;
+const initialFstatSync = fs.fstatSync;
 const TRY_LAUNCHER_URL = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'try-doors.mjs')).href;
 
 export const NO_TESTS =
@@ -198,30 +203,101 @@ function hostScenarioCompiler() {
 }
 
 const scenarioOverlayStorage = new AsyncLocalStorage();
+const scenarioOverlayOpenFds = new Map();
 let scenarioFsHookInstalled = false;
+
+function lookupScenarioOverlayVirtualText(store, rawPath) {
+  if (!store || (typeof rawPath !== 'string' && !(rawPath instanceof URL))) return undefined;
+  const strPath = rawPath instanceof URL ? fileURLToPath(rawPath) : rawPath;
+  if (!strPath.endsWith('.json') || strPath.includes('/node_modules/') || strPath.endsWith('/package.json')) {
+    return undefined;
+  }
+  if (store.map === undefined) {
+    store.map = null;
+    const root = store.root ?? repoTopRoot(store.cwd);
+    store.map = (root ? buildScenarioOverlay(root, store.ports) : null) ?? new Map();
+  }
+  if (!store.map || store.map.size === 0) return undefined;
+  return store.map.get(strPath) ?? store.map.get(resolve(strPath));
+}
+
+function statWithVirtualSize(statObj, byteLength) {
+  if (!statObj || typeof statObj.isFile !== 'function' || !statObj.isFile()) return statObj;
+  const size = typeof statObj.size === 'bigint' ? BigInt(byteLength) : byteLength;
+  return Object.assign(Object.create(Object.getPrototypeOf(statObj)), statObj, { size });
+}
 
 function ensureScenarioFsOverlay() {
   if (scenarioFsHookInstalled) return;
   scenarioFsHookInstalled = true;
+  fs.openSync = function pddScenarioOpenSync(path, flags, mode) {
+    const fd = initialOpenSync(path, flags, mode);
+    const store = scenarioOverlayStorage.getStore();
+    if (store?.interceptFd && typeof fd === 'number' && (typeof path === 'string' || path instanceof URL)) {
+      const writeMask =
+        (fs.constants?.O_WRONLY ?? 1) |
+        (fs.constants?.O_RDWR ?? 2) |
+        (fs.constants?.O_CREAT ?? 0) |
+        (fs.constants?.O_TRUNC ?? 0);
+      const numericFlags = typeof flags === 'number' ? flags : 0;
+      if ((numericFlags & writeMask) === 0 && (typeof flags !== 'string' || flags.startsWith('r'))) {
+        const strPath = path instanceof URL ? fileURLToPath(path) : path;
+        if (strPath.endsWith('.json')) scenarioOverlayOpenFds.set(fd, resolve(strPath));
+      }
+    }
+    return fd;
+  };
+  fs.closeSync = function pddScenarioCloseSync(fd) {
+    scenarioOverlayOpenFds.delete(fd);
+    return initialCloseSync(fd);
+  };
+  fs.lstatSync = function pddScenarioLstatSync(path, options) {
+    const stat = initialLstatSync(path, options);
+    const store = scenarioOverlayStorage.getStore();
+    if (store?.interceptFd && stat && !stat.isSymbolicLink?.()) {
+      const virtualText = lookupScenarioOverlayVirtualText(store, path);
+      if (virtualText !== undefined) return statWithVirtualSize(stat, Buffer.byteLength(virtualText, 'utf8'));
+    }
+    return stat;
+  };
+  fs.statSync = function pddScenarioStatSync(path, options) {
+    const stat = initialStatSync(path, options);
+    const store = scenarioOverlayStorage.getStore();
+    if (store?.interceptFd && stat) {
+      const virtualText = lookupScenarioOverlayVirtualText(store, path);
+      if (virtualText !== undefined) return statWithVirtualSize(stat, Buffer.byteLength(virtualText, 'utf8'));
+    }
+    return stat;
+  };
+  fs.fstatSync = function pddScenarioFstatSync(fd, options) {
+    const stat = initialFstatSync(fd, options);
+    const store = scenarioOverlayStorage.getStore();
+    if (store?.interceptFd && stat) {
+      const fdPath = scenarioOverlayOpenFds.get(fd);
+      if (fdPath) {
+        const virtualText = lookupScenarioOverlayVirtualText(store, fdPath);
+        if (virtualText !== undefined) return statWithVirtualSize(stat, Buffer.byteLength(virtualText, 'utf8'));
+      }
+    }
+    return stat;
+  };
   fs.readFileSync = function pddScenarioReadFileSync(pathOrFd, options) {
     const store = scenarioOverlayStorage.getStore();
-    if (store && (typeof pathOrFd === 'string' || pathOrFd instanceof URL)) {
-      const strPath = pathOrFd instanceof URL ? fileURLToPath(pathOrFd) : pathOrFd;
-      if (strPath.endsWith('.json') && !strPath.includes('/node_modules/') && !strPath.endsWith('/package.json')) {
-        if (store.map === undefined) {
-          store.map = null;
-          const root = store.root ?? repoTopRoot(store.cwd);
-          store.map = (root ? buildScenarioOverlay(root, store.ports) : null) ?? new Map();
-        }
-        if (store.map && store.map.size > 0) {
-          const virtualText = store.map.get(strPath) ?? store.map.get(resolve(strPath));
-          if (virtualText !== undefined) {
-            if (typeof options === 'string') return Buffer.from(virtualText, 'utf8').toString(options);
-            if (options && typeof options === 'object' && options.encoding) {
-              return Buffer.from(virtualText, 'utf8').toString(options.encoding);
-            }
-            return Buffer.from(virtualText, 'utf8');
+    if (store) {
+      const targetPath =
+        typeof pathOrFd === 'string' || pathOrFd instanceof URL
+          ? pathOrFd
+          : store.interceptFd && typeof pathOrFd === 'number'
+            ? scenarioOverlayOpenFds.get(pathOrFd)
+            : undefined;
+      if (targetPath !== undefined) {
+        const virtualText = lookupScenarioOverlayVirtualText(store, targetPath);
+        if (virtualText !== undefined) {
+          if (typeof options === 'string') return Buffer.from(virtualText, 'utf8').toString(options);
+          if (options && typeof options === 'object' && options.encoding) {
+            return Buffer.from(virtualText, 'utf8').toString(options.encoding);
           }
+          return Buffer.from(virtualText, 'utf8');
         }
       }
     }
@@ -338,7 +414,7 @@ function refusalView(item, secrets) {
 function normalizeRuntimeHints(text) {
   if (typeof text !== 'string') return text;
   let out = text.includes('--fill-hash')
-    ? text.replace(/pdd\s+test\s+--fill-hash\b/g, 'pdd test').replace(/\s+--fill-hash\b/g, '')
+    ? text.replace(/pdd\s+test\s+--fill-hash\b/g, 'pdd test').replace(/(?<!\s)\s+--fill-hash\b/g, '')
     : text;
   if (out.includes('impossible-result-value-pointer') && !out.includes('result_value_pointer to ""')) {
     out = out.replace(/impossible-result-value-pointer(?![^\n]*result_value_pointer to "")/g, `impossible-result-value-pointer (${IMPOSSIBLE_RVP_HINT})`);
@@ -652,17 +728,7 @@ export function orphanSummary(...args) {
   return hostSelection().orphanSummary(...args);
 }
 
-function readStoryForTest(root, visible, storyPath) {
-  if (typeof storyPath !== 'string' || !storyPath || (visible && !visible.has(storyPath))) return null;
-  try {
-    return initialReadFileSync(join(root, storyPath), 'utf8');
-  } catch {
-    return null;
-  }
-}
-
-export function findTests(input, ports = {}) {
-  const found = rawFindTests(input, seamSelectionPorts(ports));
+function enrichFoundWithCompiledScenarios(found, readText) {
   if (!found || !Array.isArray(found.tests) || !found.root) return found;
   const compiler = hostScenarioCompiler();
   let anyCompiled = false;
@@ -670,10 +736,11 @@ export function findTests(input, ports = {}) {
     if (test.error || !test.doc || typeof test.doc !== 'object' || Array.isArray(test.doc)) return test;
     let rawText;
     try {
-      rawText = initialReadFileSync(join(found.root, test.path), 'utf8');
+      rawText = readText(test.path);
     } catch {
       return test;
     }
+    if (typeof rawText !== 'string') return test;
     let rawParsed;
     try {
       rawParsed = compiler.parseExactScenarioJson(rawText);
@@ -684,7 +751,14 @@ export function findTests(input, ports = {}) {
     const targetStoryPath = typeof rawParsed.story_path === 'string' && rawParsed.story_path
       ? rawParsed.story_path
       : test.storyPath;
-    const storySource = test.storySource ?? readStoryForTest(found.root, found.visible, targetStoryPath);
+    let storySource = test.storySource ?? null;
+    if (storySource == null && typeof targetStoryPath === 'string' && targetStoryPath && (!found.visible || found.visible.has(targetStoryPath))) {
+      try {
+        storySource = readText(targetStoryPath);
+      } catch {
+        storySource = null;
+      }
+    }
     const compiled = compiler.compileScenarioText(rawText, {
       path: test.path,
       storyPath: test.storyPath,
@@ -714,6 +788,12 @@ export function findTests(input, ports = {}) {
   const next = { ...found, tests: compiledTests };
   if (found.workspace !== undefined) Object.defineProperty(next, 'workspace', { value: found.workspace });
   return next;
+}
+
+export function findTests(input, ports = {}) {
+  const found = rawFindTests(input, seamSelectionPorts(ports));
+  if (!found || !Array.isArray(found.tests) || !found.root) return found;
+  return enrichFoundWithCompiledScenarios(found, relPath => initialReadFileSync(join(found.root, relPath), 'utf8'));
 }
 
 function buildScenarioOverlay(root, ports = {}) {
@@ -818,14 +898,22 @@ function visibleStoryAndTestPaths(root, { excludeFixtureProjects = false } = {})
   }
 }
 
-export function captureSource(root, options, ports = {}) {
-  const selPorts = seamSelectionPorts(ports);
+function captureWithScenarioCompile(runCapture, root, options, selPorts) {
   const callerPrepare = options?.prepareSource;
   const compiledDiskBytes = new Map();
+  const siblingOverlayMap = new Map();
+  const explicitRequested = Array.isArray(options?.tests) ? new Set(options.tests) : null;
+  let realRoot = null;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    realRoot = null;
+  }
 
   const mergedPrepare = prepPorts => {
-    const emptyTestsSelection = Array.isArray(options?.tests) && options.tests.length === 0;
+    const emptyTestsSelection = explicitRequested !== null && explicitRequested.size === 0;
     const precompiledByPath = new Map();
+    const precompiledSelectedByPath = new Map();
 
     if (!emptyTestsSelection) {
       const excludeFixtureProjects = options?.excludeFixtureProjects ?? (options?.tests === undefined);
@@ -846,16 +934,20 @@ export function captureSource(root, options, ports = {}) {
         const storyPaths = names.filter(p => selPorts.isStoryPath(p));
         const matched = selPorts.matchTests(storyPaths, names).tests.filter(t => !t.problem);
         let candidates;
-        if (Array.isArray(options?.tests)) {
-          const requested = new Set(options.tests);
+        if (explicitRequested !== null) {
           const selectedStories = new Set(
             matched
-              .filter(t => (t.files ?? [t.path]).some(f => requested.has(f)) || requested.has(t.path))
+              .filter(
+                t =>
+                  (t.files ?? [t.path]).some(f => explicitRequested.has(f)) ||
+                  explicitRequested.has(t.path) ||
+                  (t.storyPath && explicitRequested.has(t.storyPath)),
+              )
               .map(t => t.storyPath)
               .filter(Boolean),
           );
           candidates = matched.filter(
-            t => requested.has(t.path) || (t.storyPath && selectedStories.has(t.storyPath)),
+            t => explicitRequested.has(t.path) || (t.storyPath && selectedStories.has(t.storyPath)),
           );
         } else {
           candidates = matched;
@@ -867,8 +959,8 @@ export function captureSource(root, options, ports = {}) {
             let probeText;
             try {
               const full = realpathSync(join(root, testPath));
-              const realRoot = realpathSync(root);
-              if (full !== realRoot && !full.startsWith(realRoot + sep)) continue;
+              const checkRoot = realRoot ?? realpathSync(root);
+              if (full !== checkRoot && !full.startsWith(checkRoot + sep)) continue;
               probeText = initialReadFileSync(full, 'utf8');
             } catch {
               continue;
@@ -914,17 +1006,33 @@ export function captureSource(root, options, ports = {}) {
               storyPath: entry.storyPath,
               storySource,
             });
+            const isExplicitlySelected =
+              explicitRequested === null ||
+              explicitRequested.has(testPath) ||
+              Boolean(entry.storyPath && explicitRequested.has(entry.storyPath));
             if (compiled.refusal) {
-              throw Object.assign(
-                new PreflightError(4, `${testPath}: ${compiled.refusal.section}: ${compiled.refusal.message}`),
-                { code: compiled.refusal.code, section: compiled.refusal.section },
-              );
+              if (isExplicitlySelected) {
+                throw Object.assign(
+                  new PreflightError(4, `${testPath}: ${compiled.refusal.section}: ${compiled.refusal.message}`),
+                  { code: compiled.refusal.code, section: compiled.refusal.section },
+                );
+              }
+              continue;
             }
             if (compiled.changed) {
-              precompiledByPath.set(testPath, {
+              const item = {
                 diskBuf: rawBuf,
                 compiledBuf: Buffer.from(compiled.text, 'utf8'),
-              });
+                compiledText: compiled.text,
+              };
+              precompiledByPath.set(testPath, item);
+              if (isExplicitlySelected) {
+                precompiledSelectedByPath.set(testPath, item);
+              } else {
+                compiledDiskBytes.set(testPath, rawBuf);
+                siblingOverlayMap.set(resolve(root, testPath), compiled.text);
+                if (realRoot) siblingOverlayMap.set(join(realRoot, testPath), compiled.text);
+              }
             }
           }
         }
@@ -947,13 +1055,13 @@ export function captureSource(root, options, ports = {}) {
         : prepPorts;
 
     const callerItems = callerPrepare !== undefined ? callerPrepare(wrappedPrepPorts) : [];
-    if (!Array.isArray(callerItems) || precompiledByPath.size === 0) return callerItems;
+    if (!Array.isArray(callerItems) || precompiledSelectedByPath.size === 0) return callerItems;
 
     const callerSet = new Set(
       callerItems.map(item => (item && typeof item.path === 'string' ? item.path : null)).filter(Boolean),
     );
     const extraItems = [];
-    for (const [testPath, entry] of precompiledByPath.entries()) {
+    for (const [testPath, entry] of precompiledSelectedByPath.entries()) {
       if (callerSet.has(testPath)) continue;
       compiledDiskBytes.set(testPath, entry.diskBuf);
       extraItems.push({ path: testPath, bytes: entry.compiledBuf });
@@ -965,7 +1073,10 @@ export function captureSource(root, options, ports = {}) {
     ? { prepareSource: mergedPrepare }
     : { ...options, prepareSource: mergedPrepare };
 
-  const captured = rawCaptureSource(root, nextOptions, selPorts);
+  const captured = withScenarioOverlay(
+    { map: siblingOverlayMap, interceptFd: true },
+    () => runCapture(nextOptions),
+  );
   if (captured && compiledDiskBytes.size > 0 && captured.source_commit && Array.isArray(captured.dirty_files)) {
     const headBlobs = gitHeadBlobOids(root, captured.source_commit, [...compiledDiskBytes.keys()]);
     const filteredDirty = captured.dirty_files.filter(p => {
@@ -982,6 +1093,11 @@ export function captureSource(root, options, ports = {}) {
   }
   return captured;
 }
+
+export function captureSource(root, options, ports = {}) {
+  const selPorts = seamSelectionPorts(ports);
+  return captureWithScenarioCompile(nextOpts => rawCaptureSource(root, nextOpts, selPorts), root, options, selPorts);
+}
 captureSource.isDefaultCapture = true;
 
 export function fillHashes(input, ports = {}) {
@@ -989,7 +1105,95 @@ export function fillHashes(input, ports = {}) {
 }
 
 export function createStrictSourceAccess(root, workspace, ports = {}) {
-  return rawCreateStrictSourceAccess(root, workspace, seamSelectionPorts(ports));
+  const selPorts = seamSelectionPorts(ports);
+  const rawAccess = rawCreateStrictSourceAccess(root, workspace, selPorts);
+  const wrapStrictFilePort = (rawPort, visSet) => {
+    let storyByTest = null;
+    const compiledCache = new Map();
+    const resolveStoryMap = () => {
+      if (storyByTest !== null) return storyByTest;
+      storyByTest = new Map();
+      const visArr = [...visSet];
+      const matched = selPorts.matchTests(visArr.filter(p => selPorts.isStoryPath(p)), visArr).tests.filter(t => !t.problem);
+      for (const entry of matched) {
+        for (const testPath of entry.files ?? [entry.path]) {
+          if (entry.storyPath) storyByTest.set(testPath, entry.storyPath);
+        }
+      }
+      return storyByTest;
+    };
+    const maybeCompile = path => {
+      if (typeof path !== 'string' || !path.endsWith('.json')) return null;
+      const parts = path.split('/').slice(0, -1);
+      if (!parts.some(part => part === 'test' || part === 'tests')) return null;
+      if (compiledCache.has(path)) return compiledCache.get(path);
+      compiledCache.set(path, null);
+      let rawText;
+      try {
+        rawText = rawPort.read({ path }).content;
+      } catch {
+        return null;
+      }
+      const compiler = hostScenarioCompiler();
+      let parsed;
+      try {
+        parsed = compiler.parseExactScenarioJson(rawText);
+      } catch {
+        return null;
+      }
+      if (!compiler.needsScenarioCompile(parsed)) return null;
+      const storyMap = resolveStoryMap();
+      const inferredStory = storyMap.get(path) ?? null;
+      const targetStoryPath = typeof parsed.story_path === 'string' && parsed.story_path ? parsed.story_path : inferredStory;
+      let storySource = null;
+      if (typeof targetStoryPath === 'string' && targetStoryPath && visSet.has(targetStoryPath)) {
+        try {
+          storySource = rawPort.read({ path: targetStoryPath }).content;
+        } catch {
+          storySource = null;
+        }
+      }
+      const compiled = compiler.compileScenarioText(rawText, {
+        path,
+        storyPath: inferredStory,
+        storySource,
+      });
+      if (compiled.refusal || !compiled.changed) return null;
+      const entry = { text: compiled.text, size: Buffer.byteLength(compiled.text, 'utf8') };
+      compiledCache.set(path, entry);
+      return entry;
+    };
+    return {
+      ...rawPort,
+      stat(arg) {
+        const base = rawPort.stat(arg);
+        if (!base?.exists) return base;
+        const compiled = maybeCompile(arg?.path);
+        return compiled ? { ...base, size: compiled.size } : base;
+      },
+      read(arg) {
+        const raw = rawPort.read(arg);
+        const compiled = maybeCompile(arg?.path);
+        return compiled ? { ...raw, content: compiled.text } : raw;
+      },
+    };
+  };
+  return {
+    sourceFilePort(visible) {
+      const visSet = visible instanceof Set ? visible : new Set(visible ?? gitFiles(root));
+      return wrapStrictFilePort(rawAccess.sourceFilePort(visSet), visSet);
+    },
+    findTests(opts = {}) {
+      const rawFound = rawAccess.findTests(opts);
+      if (!rawFound || !Array.isArray(rawFound.tests) || !rawFound.root) return rawFound;
+      let strictPort = null;
+      const getPort = () => (strictPort ??= rawAccess.sourceFilePort(rawFound.visible));
+      return enrichFoundWithCompiledScenarios(rawFound, relPath => getPort().read({ path: relPath }).content);
+    },
+    captureSource(opts = {}) {
+      return captureWithScenarioCompile(nextOpts => rawAccess.captureSource(nextOpts), root, opts, selPorts);
+    },
+  };
 }
 
 export function sharedSourceFiles(root, visible, options = {}, ports = {}) {
@@ -1559,13 +1763,21 @@ export function buildProjectCard(input = {}) {
 
 export function readContractHistory(input, ports = {}) {
   const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
-  return runtimeReadContractHistory(input, seamSelectionPorts(withEligibilityDefault(ports, lazyEligibility)));
+  const cwd = input?.root ?? input?.cwd ?? process.cwd();
+  return withScenarioOverlay(
+    { cwd, ports, interceptFd: true },
+    () => runtimeReadContractHistory(input, seamSelectionPorts(withEligibilityDefault(ports, lazyEligibility))),
+  );
 }
 
 export function runContracts(input, ports = {}) {
   runtimeClientSlice();
   const lazyEligibility = (...args) => req('./workflow-eligibility.mjs').readEvidenceEligibility(...args);
-  return runtimeRunContracts(input, seamSelectionPorts(withEligibilityDefault(ports, lazyEligibility)));
+  const cwd = input?.cwd ?? process.cwd();
+  return withScenarioOverlay(
+    { cwd, ports, interceptFd: true },
+    () => runtimeRunContracts(input, seamSelectionPorts(withEligibilityDefault(ports, lazyEligibility))),
+  );
 }
 
 export async function runJobs(input = {}, ports = {}) {
@@ -1597,8 +1809,45 @@ const NON_EXEC_CHECK_FLAGS = [
   '--lint', '--local', '--files', '--explain-bindings',
   '--read', '--retry', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--bind-criteria',
 ];
-const PROMPT_DEP_LINK_RE = /\[[^\]]*\]\(([^)\s#]+\.prompt\.md)(?:#[^)\s]*)?\)/g;
+const PROMPT_DEP_LINK_RE = /\[[^\[\]\r\n]*\]\(([^()\s#\r\n]+\.prompt\.md)(?:#[^()\s\r\n]*)?\)/g;
 const PORT_CALL_TOKEN_RE = /\b[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*\b/;
+
+function stripInlineCodeAndPromptLinks(text) {
+  let out = '';
+  let i = 0;
+  const len = text.length;
+  while (i < len) {
+    const ch = text[i];
+    if (ch === '`') {
+      const close = text.indexOf('`', i + 1);
+      if (close >= 0) {
+        out += ' ';
+        i = close + 1;
+        continue;
+      }
+      out += text.slice(i);
+      break;
+    }
+    if (ch === '(') {
+      let j = i + 1;
+      while (j < len && text[j] !== ')' && text[j] !== '(' && text[j] !== '\r' && text[j] !== '\n') {
+        j += 1;
+      }
+      if (j < len && text[j] === ')') {
+        const inner = text.slice(i + 1, j);
+        out += inner.includes('.prompt.md') ? ' ' : text.slice(i, j + 1);
+        i = j + 1;
+        continue;
+      }
+      out += text.slice(i, j);
+      i = j;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
 
 function extractDepsSection(markdown) {
   const lines = markdown.split(/\r?\n/);
@@ -1695,7 +1944,7 @@ function computeGraphAwareDefaultMaxCalls(input, ports) {
         }
       } catch {}
     }
-    const stripped = text.replace(/`[^`]*`|\([^)]*\.prompt\.md[^)]*\)/g, ' ');
+    const stripped = stripInlineCodeAndPromptLinks(text);
     if (PORT_CALL_TOKEN_RE.test(stripped)) info.hasPortToken = true;
     info.deps = [...new Set(info.deps)];
     return info;
@@ -2102,7 +2351,10 @@ function wrapCaseFilesForShortJson(baseFiles, ports = {}) {
     } catch {}
     if (!storySource && inferredStoryPath) {
       try {
-        storySource = initialReadFileSync(join(realRoot, inferredStoryPath), 'utf8');
+        const fullStory = rawFiles.realpath(join(realRoot, inferredStoryPath));
+        if (fullStory === realRoot || fullStory.startsWith(realRoot + sep)) {
+          storySource = initialReadFileSync(fullStory, 'utf8');
+        }
       } catch {}
     }
     const compiled = compiler.compileScenarioText(rawText, {

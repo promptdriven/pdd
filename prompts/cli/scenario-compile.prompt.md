@@ -2,6 +2,13 @@
 
 Own `src/scenario-compile.mjs`. Compile authored PDD Short JSON scenario documents and omitted-`criteria` `prompt-runtime.program-scenario.v1` scenarios deterministically into canonical `prompt-runtime.program-scenario.v1` JSON without network, model, GitHub, Herdr, or automatic filesystem writes, and provide reviewable explicit-criterion content-ID binding for `pdd lint --bind-criteria`.
 
+| Export | Input | Output / Role |
+| :--- | :--- | :--- |
+| `parseExactScenarioJson` / `stringifyExactScenarioJson` | UTF-8 JSON text or value | `BigInt`-preserving exact integer parse and `JSON.rawJSON` serialization |
+| `isShortScenarioDoc` / `needsScenarioCompile` | Parsed scenario object | Detect Short JSON constructs or omitted-`criteria` `program-scenario.v1` documents |
+| `compileScenario` / `compileScenarioText` | Scenario object or JSON text + Story context | Canonical `program-scenario.v1` document/text with `ac-sha256-...` criteria or compile refusal |
+| `classifyExplicitCriteriaBinding` / `bindScenarioCriteriaText` | Scenario object or JSON text + Story context | Classify explicit IDs (`already-bound`, `legacy-unbound`, `stale-content-id`, `text-mismatch`) and bind matching legacy IDs on disk |
+
 ## Exact JSON codec and classification
 
 Preserve exact whole numbers outside IEEE-754 `Number.MAX_SAFE_INTEGER` using `BigInt` during parsing and `JSON.rawJSON` during serialization:
@@ -41,7 +48,7 @@ Preserve exact whole numbers outside IEEE-754 `Number.MAX_SAFE_INTEGER` using `B
    - Extract Story acceptance criteria from `storySource` (`extractStoryCriteria(storySource)`), matching numbered items from `1` under `## Acceptance criteria` (`## Acceptance`) or top-level bullets when no numbered items exist.
    - When `doc.criteria` is omitted and `storySource` criteria are available, emit `criteria` directly with content-bound IDs `criterionContentId(text, effectiveStoryPath)` when `effectiveStoryPath` is a nonblank string (falling back to `AC1..ACn` only when no `storyPath` is supplied), and map positional criterion references (`1`, `"1"`, `"AC1"`, `"ac-1"`, labeled `"2: label"`, or omitted `criterion_id` on a single-criterion Story) across `steps[*].checks`, `steps[*].simulation_overrides`, `check_exemptions`, and `criteria_scope` to the matching criterion ID.
    - When a `: label` suffix is supplied and `storySource` criteria are available, verify that the referenced Story criterion text contains `label` (case-insensitively after collapsing whitespace and normalizing curly quotes to straight quotes); otherwise return `refusal('story-criterion-mismatch', section, ...)`. When `storySource` criteria are available and a positional index exceeds the Story criterion count, return `refusal('unknown-criterion', section, ...)`.
-   - When `doc.criteria` explicitly provides `{ id, text }` items, preserve explicit string IDs (`"AC1"`, `"ac-sha256-..."`, etc.) without silently rewriting legacy IDs in memory. When `doc.criteria` lists shorthand items (`1`, `"1"`, `"AC1"`, `{"id": "1"}`) without `text`, expand them against `storySource` criteria, refusing duplicates (`duplicate-criterion`).
+   - When `doc.criteria` explicitly provides `{ id, text }` items, preserve explicit string IDs (`"AC1"`, `"ac-sha256-..."`, etc.) without silently rewriting legacy IDs in memory, and map unambiguous positional check keys (`1`, `"1"`, `"AC1"`) to `criteria[index - 1].id` so bound `ac-sha256-...` explicit criteria work with Short JSON numeric check keys. When `doc.criteria` lists shorthand items (`1`, `"1"`, `"AC1"`, `{"id": "1"}`) without `text`, expand them against `storySource` criteria, refusing duplicates (`duplicate-criterion`).
 
 4. **Named `seeds` and recursive value macros:**
    - Resolve `doc.seeds` entries lazily with cycle detection (`seed-cycle`).
@@ -60,7 +67,7 @@ Preserve exact whole numbers outside IEEE-754 `Number.MAX_SAFE_INTEGER` using `B
 ## Explicit criterion binding inspection and `--bind-criteria` rewrite
 
 - `classifyExplicitCriteriaBinding(doc, { storyPath, storySource } = {})`: inspect a parsed scenario document with explicit `criteria` against `numberedStoryCriteria(storySource, { requireHeading: true })`. Return `{ kind: 'stale-content-id', criterionId, text }` whenever any `ac-sha256-` criterion ID no longer matches a current Story criterion text or its computed `criterionContentId(text, effectiveStoryPath)`; return `{ kind: 'text-mismatch' }` whenever `criteria` texts do not match the Story's numbered `## Acceptance criteria` 1-for-1 word for word; return `{ kind: 'already-bound' }` when all IDs already equal `criterionContentId(text, effectiveStoryPath)`; and return `{ kind: 'legacy-unbound', legacyIds, bindings }` only when every criterion text matches the Story word for word with zero stale `ac-sha256-` IDs and at least one non-`ac-sha256-` legacy ID.
-- `bindScenarioCriteriaText(text, { path, storyPath, storySource, space = 2 } = {})`: for `pdd lint --bind-criteria`, refuse without changing `text` whenever Story numbered `## Acceptance criteria` are missing, whenever `classifyExplicitCriteriaBinding` reports `stale-content-id` or `text-mismatch`, or whenever an omitted-`criteria` scenario has a compile/criterion refusal. When explicit legacy IDs match the Story word for word, rewrite only `criteria[*].id` and matching `criterion_id` references (`steps[*].checks`, `steps[*].simulation_overrides`, `check_exemptions`, `criteria_scope`) to `criterionContentId(text, effectiveStoryPath)`—using token-preserving JSON string replacement verified by exact `BigInt`-preserving deep equality before falling back to `stringifyExactScenarioJson`, preserving 100% of check expectations. When `criteria` is omitted on disk, materialize `criteria` and mapped `criterion_id` references with `ac-sha256-...` content IDs while preserving all check expectations.
+- `bindScenarioCriteriaText(text, { path, storyPath, storySource, space = 2 } = {})`: for `pdd lint --bind-criteria`, refuse without changing `text` whenever Story numbered `## Acceptance criteria` are missing, whenever `classifyExplicitCriteriaBinding` reports `stale-content-id` or `text-mismatch`, or whenever an omitted-`criteria` or bound Short JSON scenario has a compile/criterion refusal. When explicit legacy IDs match the Story word for word, rewrite only `criteria[*].id` and matching `criterion_id` references (`steps[*].checks`, `steps[*].simulation_overrides`, `check_exemptions`, `criteria_scope`) to `criterionContentId(text, effectiveStoryPath)`—using token-preserving JSON string replacement verified by exact `BigInt`-preserving deep equality before falling back to `stringifyExactScenarioJson`, verifying `compileScenarioText` succeeds on bound Short JSON output, and preserving 100% of check expectations. When `criteria` is omitted on disk, materialize `criteria` and mapped `criterion_id` references with `ac-sha256-...` content IDs while preserving all check expectations.
 
 ## Dependencies
 
@@ -69,6 +76,6 @@ None.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "ba89a6da3de34d07101599ebe46660dc82d4b79daa0aa6a93e9738e108e22a97","reason":"Pure synchronous BigInt-preserving JSON compiler leaf loaded directly by src/runtime-seam.mjs without external ports."}
+{"kind":"native-only","status":"draft","prose_sha256": "8d2279ffe883d0ed12dfdbef9bf9bb3267ac386c5a4cc68e04a01259f0075308","reason":"Pure synchronous BigInt-preserving JSON compiler leaf loaded directly by src/runtime-seam.mjs without external ports."}
 ```
 </details>

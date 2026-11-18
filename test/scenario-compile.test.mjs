@@ -1067,3 +1067,214 @@ test('Graph-aware default --max-calls, lintSvgLayouts app-map /state checks, and
     criterionContentId('First rule.', 'user_stories/app.md'),
   );
 });
+
+test('Review hardening: Short JSON explicit AC1 + numeric check "1", repo-boundary story_path guard, strict/contracts Short JSON access, and sibling captureSource exclusion', async t => {
+  // 1. Short JSON with explicit "AC1" + numeric check key "1" and tuple ["1", ...] through --bind-criteria and --emit-v1 / compileScenario
+  const echoText = 'The echo returns "hello".';
+  const echoId = criterionContentId(echoText, 'user_stories/echo.md');
+  const bindSetup = harbor(t, repo => {
+    rmSync(join(repo, 'tests/unknown-item.json'));
+    rmSync(join(repo, 'tests/place-order.json'));
+    rmSync(join(repo, 'user_stories/place-order.md'));
+    writeFileSync(
+      join(repo, 'user_stories/echo.md'),
+      `# Echo\n\nAs a user, I want echo.\n\n## Acceptance criteria\n\n1. ${echoText}\n`,
+    );
+    writeFileSync(
+      join(repo, 'tests/echo.json'),
+      JSON.stringify({
+        entry_path: PLACE,
+        criteria: [{ id: 'AC1', text: echoText }],
+        steps: [
+          {
+            id: 's1',
+            op: 'place_order',
+            input: { customerName: 'Sam', pickupAt: '08:30', items: [{ itemId: 'espresso', size: 'S', quantity: 2 }] },
+            checks: { '1': ['result', '/totalCents', '=', 550] },
+          },
+          {
+            id: 's2',
+            op: 'place_order',
+            input: { customerName: 'Sam', pickupAt: '08:30', items: [{ itemId: 'espresso', size: 'S', quantity: 2 }] },
+            checks: [['1', 'result', '/totalCents', '=', 550]],
+          },
+        ],
+      }, null, 2) + '\n',
+    );
+  });
+  const { ports: bindPorts } = portsFor({ HOME: bindSetup.home, PDD_STATE_DIR: bindSetup.state });
+  assert.equal(
+    await seam.lint({ cwd: bindSetup.repo, words: ['echo'], options: { '--bind-criteria': true, '--json': true } }, bindPorts),
+    0,
+    bindPorts.stderr.text,
+  );
+  const boundDisk = JSON.parse(readFileSync(join(bindSetup.repo, 'tests/echo.json'), 'utf8'));
+  assert.equal(boundDisk.criteria[0].id, echoId);
+  assert.deepEqual(boundDisk.steps[0].checks, { '1': ['result', '/totalCents', '=', 550] });
+  const compiledAfterBind = compileScenario(boundDisk, { path: 'tests/echo.json', storyPath: 'user_stories/echo.md' });
+  assert.equal(compiledAfterBind.refusal, null);
+  assert.equal(compiledAfterBind.doc.steps[0].checks[0].criterion_id, echoId);
+  assert.equal(compiledAfterBind.doc.steps[1].checks[0].criterion_id, echoId);
+  const { ports: emitPorts } = portsFor({ HOME: bindSetup.home, PDD_STATE_DIR: bindSetup.state });
+  assert.equal(
+    await seam.lint({ cwd: bindSetup.repo, words: ['echo'], options: { '--emit-v1': true } }, emitPorts),
+    0,
+    emitPorts.stderr.text,
+  );
+  const emitted = JSON.parse(emitPorts.stdout.text);
+  assert.equal(emitted.steps[0].checks[0].criterion_id, echoId);
+  assert.equal(emitted.steps[1].checks[0].criterion_id, echoId);
+
+  // 2. Repo-boundary guard in wrapCaseFilesForShortJson: "../../outside.md" cannot read outside realRoot
+  const outsideStoryText = 'Outside secret criterion that must never be read.';
+  const outsidePath = join(bindSetup.sandbox, 'outside.md');
+  writeFileSync(outsidePath, `# Outside\n\n## Acceptance criteria\n\n1. ${outsideStoryText}\n`);
+  const traversalSetup = harbor(t, repo => {
+    rmSync(join(repo, 'tests/unknown-item.json'));
+    // Unmatched test basename ("orphan-short.json") with traversal story_path pointing to ../outside.md
+    writeFileSync(
+      join(repo, 'tests/orphan-short.json'),
+      JSON.stringify({
+        story_path: '../outside.md',
+        entry_path: PLACE,
+        steps: [
+          {
+            id: 's1',
+            op: 'place_order',
+            input: { customerName: 'Sam', pickupAt: '08:30', items: [{ itemId: 'espresso', size: 'S', quantity: 2 }] },
+            checks: { '1': ['result', '/totalCents', '=', 550] },
+          },
+        ],
+      }, null, 2) + '\n',
+    );
+  });
+  const traversalSaved = seam.saveDoorCaseResult(
+    traversalSetup.repo,
+    {
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'try-traversal',
+      story_path: '../outside.md',
+      original_path: 'tests/orphan-short.json',
+      world_before: {},
+      test: {
+        schema_version: V1_SCENARIO_SCHEMA,
+        story_path: '../outside.md',
+        criteria: [{ id: 'AC1', text: 'Safe text.' }],
+        initial_world: {},
+        steps: [
+          {
+            step_id: 'try-traversal',
+            entry_path: PLACE,
+            operation: 'place_order',
+            input: { customerName: 'Sam', pickupAt: '08:30', items: [{ itemId: 'espresso', size: 'S', quantity: 2 }] },
+            checks: [{ criterion_id: 'AC1', target: 'result', path: '/totalCents', op: 'equals', value: 550 }],
+          },
+        ],
+      },
+    },
+    { env: { ...process.env, HOME: traversalSetup.home, PDD_STATE_DIR: traversalSetup.state } },
+  );
+  // Ensure outsideStoryText was never leaked into any pending case artifact or message
+  assert.equal(JSON.stringify(traversalSaved).includes(outsideStoryText), false);
+
+  // 3 & 4. createStrictSourceAccess + runContracts on Short JSON, AND captureSource sibling exclusion
+  const storyLine = 'Placing two small espressos returns totalCents 550.';
+  const expectedOrderId = criterionContentId(storyLine, 'user_stories/place-order.md');
+  const strictSetup = harbor(t, repo => {
+    rmSync(join(repo, 'tests/unknown-item.json'));
+    mkdirSync(join(repo, 'contracts'), { recursive: true });
+    writeFileSync(
+      join(repo, 'contracts/money.schema.json'),
+      JSON.stringify({ type: 'integer', minimum: 0 }, null, 2) + '\n',
+    );
+    const origPrompt = readFileSync(join(repo, PLACE), 'utf8');
+    const withContract = origPrompt.replace(
+      '"totalCents": { "type": "integer" }',
+      '"totalCents": { "$contract": "contracts/money.schema.json" }',
+    );
+    const updatedProsePrompt = withContract.replace(
+      /"prose_sha256":\s*"[0-9a-f]{64}"/,
+      `"prose_sha256": "${seam.proseSha256(withContract)}"`,
+    );
+    writeFileSync(join(repo, PLACE), updatedProsePrompt);
+    writeFileSync(
+      join(repo, 'user_stories/place-order.md'),
+      `# Place order\n\nAs a customer, I want totals.\n\n## Acceptance criteria\n\n1. ${storyLine}\n`,
+    );
+    writeFileSync(
+      join(repo, 'tests/place-order.json'),
+      JSON.stringify({
+        entry_path: PLACE,
+        steps: [
+          {
+            id: 'main-step',
+            op: 'place_order',
+            input: { customerName: 'Sam', pickupAt: '08:30', items: [{ itemId: 'espresso', size: 'S', quantity: 2 }] },
+            checks: { '1': [['result', '/totalCents', '=', 550]] },
+          },
+        ],
+      }, null, 2) + '\n',
+    );
+    writeFileSync(
+      join(repo, 'tests/place-order.extra.json'),
+      JSON.stringify({
+        entry_path: PLACE,
+        steps: [
+          {
+            id: 'extra-step',
+            op: 'place_order',
+            input: { customerName: 'Alex', pickupAt: '09:00', items: [{ itemId: 'espresso', size: 'S', quantity: 2 }] },
+            checks: { '1': [['result', '/totalCents', '=', 550]] },
+          },
+        ],
+      }, null, 2) + '\n',
+    );
+  });
+
+  // 4. Verify captureSource({ tests: ['tests/place-order.json'] }) excludes unselected sibling tests/place-order.extra.json
+  const singleCap = seam.captureSource(strictSetup.repo, { tests: ['tests/place-order.json'] });
+  const uploadedPaths = singleCap.files.map(f => f.path);
+  assert.ok(uploadedPaths.includes('tests/place-order.json'));
+  assert.equal(
+    uploadedPaths.includes('tests/place-order.extra.json'),
+    false,
+    `unselected sibling test must not enter captured.files, got ${JSON.stringify(uploadedPaths)}`,
+  );
+  assert.deepEqual(singleCap.dirty_files, []);
+  assert.equal(singleCap.source_dirty, false);
+
+  // 3a. Verify createStrictSourceAccess compiles Short JSON across sourceFilePort, findTests, and captureSource
+  const strictAccess = seam.createStrictSourceAccess(strictSetup.repo);
+  const strictVisible = new Set(seam.gitFiles(strictSetup.repo));
+  const strictPort = strictAccess.sourceFilePort(strictVisible);
+  const strictRead = JSON.parse(strictPort.read({ path: 'tests/place-order.json' }).content);
+  assert.equal(strictRead.schema_version, V1_SCENARIO_SCHEMA);
+  assert.equal(strictRead.story_path, 'user_stories/place-order.md');
+  assert.equal(strictRead.criteria[0].id, expectedOrderId);
+  assert.equal(strictRead.steps[0].entry_path, PLACE);
+  assert.equal(strictPort.stat({ path: 'tests/place-order.json' }).size, Buffer.byteLength(strictPort.read({ path: 'tests/place-order.json' }).content, 'utf8'));
+
+  const strictFound = strictAccess.findTests({ files: [...strictVisible] });
+  const foundMain = strictFound.tests.find(x => x.path === 'tests/place-order.json');
+  assert.ok(foundMain && !foundMain.error, foundMain?.error);
+  assert.equal(foundMain.doc.story_path, 'user_stories/place-order.md');
+  assert.equal(foundMain.doc.criteria[0].id, expectedOrderId);
+
+  const strictCap = strictAccess.captureSource({ tests: ['tests/place-order.json'] });
+  assert.equal(strictCap.files.some(f => f.path === 'tests/place-order.extra.json'), false);
+  assert.equal(strictCap.sha256, singleCap.sha256);
+
+  // 3b. Verify runContracts (pdd contracts) succeeds cleanly with Short JSON tests and zero footprint warnings
+  const contractsOut = sink();
+  const contractsErr = sink();
+  assert.equal(
+    seam.runContracts(
+      { cwd: strictSetup.repo, words: [], options: {} },
+      { env: { ...process.env, HOME: strictSetup.home, PDD_STATE_DIR: strictSetup.state }, stdout: contractsOut, stderr: contractsErr },
+    ),
+    0,
+    contractsErr.text,
+  );
+  assert.equal(contractsErr.text.includes('footprint unavailable'), false, contractsErr.text);
+  assert.match(contractsOut.text, /contracts\/money\.schema\.json/);
+});

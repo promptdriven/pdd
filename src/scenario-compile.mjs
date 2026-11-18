@@ -1,4 +1,4 @@
-// Generated from prompts/cli/scenario-compile.prompt.md (sha256: 144dc8f05567c095b6df2ca9eeeced14ceb585ec8fdc0cff72a1e8c7f275d33e).
+// Generated from prompts/cli/scenario-compile.prompt.md (sha256: 99405813468aa8e6cf4e8c744f049fef3a54dc23d716aeea8cc2f8a43114de21).
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -12,7 +12,14 @@ export function criterionContentId(text, storyPath = '') {
 
 const EXACT_INTEGER = /^-?(?:0|[1-9][0-9]*)$/;
 const PY_SPACE = '[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]';
-const pyStrip = text => text.replace(new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, 'g'), '');
+const PY_SPACE_CHAR = new RegExp(PY_SPACE);
+function pyStrip(text) {
+  let start = 0;
+  let end = text.length;
+  while (start < end && PY_SPACE_CHAR.test(text[start])) start += 1;
+  while (end > start && PY_SPACE_CHAR.test(text[end - 1])) end -= 1;
+  return start === 0 && end === text.length ? text : text.slice(start, end);
+}
 const pyWords = text => text.split(new RegExp(`${PY_SPACE}+`)).filter(Boolean).join(' ');
 function pySplitLines(text) {
   const lines = text.split(/\r\n|[\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029]/);
@@ -1037,6 +1044,17 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
         positionIdOverrides.set(index, boundId);
         return { id: boundId, text };
       });
+      const explicitIdSet = new Set(compiledCriteria.map(c => (typeof c === 'string' ? c : c.id)));
+      compiledCriteria.forEach((c, idx) => {
+        if (!isPlainObject(c) || typeof c.id !== 'string') return;
+        const pos = idx + 1;
+        if (positionIdOverrides.has(pos)) return;
+        const acPos = `AC${pos}`;
+        const numPos = String(pos);
+        if (c.id === acPos || c.id === numPos || (!explicitIdSet.has(acPos) && !explicitIdSet.has(numPos))) {
+          positionIdOverrides.set(pos, c.id);
+        }
+      });
     }
 
     if (!Array.isArray(doc.steps) || !doc.steps.length) {
@@ -1563,6 +1581,12 @@ export function bindScenarioCriteriaText(
       }
     } catch {
       // Fall back to canonical exact serialization.
+    }
+    if (isShortScenarioDoc(expectedExact)) {
+      const checkCompiled = compileScenarioText(outText, { path, storyPath: effectiveStoryPath, storySource });
+      if (checkCompiled.refusal) {
+        return { text, changed: false, refusal: checkCompiled.refusal };
+      }
     }
     return {
       text: outText,
