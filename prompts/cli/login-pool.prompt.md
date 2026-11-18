@@ -22,6 +22,8 @@ internal multi-harness fallback helpers:
 `localCodexHome(env)`,
 `localCodexAuthPath(env)`,
 `localCodexConfigPath(env)`,
+`buildSyntheticGatewayIdToken({planType})`,
+`stopCodexAppServerDaemon(codexHome, options)`,
 `materializeLocalCodexAuth(authOrLease, {env, previousManagedCodexGateway, previousCodexModelProvider}, ports)`,
 `restoreLocalCodexGatewayConfig({env, previousModelProvider, removeAuthFile}, ports)`,
 `materializeLocalClaudeAuth(lease, {env, previousManagedBaseUrl}, ports)`,
@@ -46,7 +48,7 @@ internal multi-harness fallback helpers:
 ## Domain decisions
 
 - **Isolated PDD-managed Codex home (`pddManagedCodexHome`):** Local Codex lease materialization writes exclusively inside `${PDD_STATE_DIR || join(XDG_STATE_HOME, "pdd") || ~/.local/state/pdd}/codex-home` (mode `0700`), never reading from or writing to `~/.codex/auth.json`. Plain `codex logout` or `codex login` against `~/.codex` cannot revoke PDD Cloud tokens or mutate credentials under running `codex app-server` processes, and legacy `[model_providers.pdd_codex_gateway]` entries in `~/.codex/config.toml` are cleaned up safely without touching `~/.codex/auth.json`.
-- **Zero-plaintext local Codex keys (`gateway_grant` + constant gateway URL):** Both owner and shared Codex leases materialize `gateway_grant` passes (`delivery_mode: "gateway_grant"`) with zero OpenAI `access_token`, `id_token` or `refresh_token` written to disk. Step overlays route Codex through `pdd_codex_gateway` using `PDD_CODEX_GATEWAY_GRANT` with zero `auth.json` inside `/tmp/pdd-cx-*`, while `pddManagedCodexHome(env)` writes only the short-lived revocable `pddg_*` grant as an API-key stub alongside `[model_providers.pdd_codex_gateway]` and `cli_auth_credentials_store = "file"`. When the grant token embeds its lease ID (`pddg_lse_<hex>_<secret>`), normalize `codex_gateway_url` by stripping any trailing `/lse_<id>` segment to the constant `<origin>/v1/codex-gateway` base URL and write `requires_openai_auth = true` without static `http_headers` in `managedCodexConfigPath(env)` so `config.toml` stays constant across syncs and account switches while running Codex processes dynamically pick up updated `auth.json` tokens via `Authorization: Bearer pddg_lse_...` with zero `403` errors. Preserve backward compatibility for legacy non-`pddg_lse_` `pddg_*` grants and legacy `direct_stripped` responses (`tokens.refresh_token: ""` so only PDD Cloud refreshes single-use OpenAI refresh tokens).
+- **Zero-plaintext local Codex keys (`gateway_grant` + native `"openai"` provider routing):** Both owner and shared Codex leases materialize `gateway_grant` passes (`delivery_mode: "gateway_grant"`) with zero real OpenAI `access_token`, `id_token` or `refresh_token` written to disk. Step overlays route Codex through `pdd_codex_gateway` using `PDD_CODEX_GATEWAY_GRANT` with zero `auth.json` inside `/tmp/pdd-cx-*`, while `pddManagedCodexHome(env)` keeps Codex on its native `"openai"` provider (`openai_base_url` and `chatgpt_base_url` pointed at the gateway, no top-level `model_provider`, and `[model_providers.pdd_codex_gateway]` retained solely as a compatibility alias for older saved sessions) alongside a native `chatgpt`-mode `auth.json` (`tokens.access_token` set to the short-lived revocable `pddg_*` grant, `tokens.refresh_token: ""`, `tokens.account_id: "acct_pdd_gateway"`, and a deterministic unsigned `id_token` from `buildSyntheticGatewayIdToken`). Keeping local sessions on native `"openai"` with `chatgpt` auth lets `codex resume` and `codex fork` resume sessions saved under `"openai"` (as well as older `"pdd_codex_gateway"` sessions) without sending `pddg_*` grants to `api.openai.com`, and lets `codex app-server` `account/rateLimits/read` (`/status`) read usage windows through the gateway. When the grant token embeds its lease ID (`pddg_lse_<hex>_<secret>`), normalize `codex_gateway_url` by stripping any trailing `/lse_<id>` segment to the constant `<origin>/v1/codex-gateway` base URL and omit static `http_headers` in `managedCodexConfigPath(env)` so `config.toml` stays constant across syncs and account switches. Whenever local Codex credentials in a `CODEX_HOME` are mutated or cleaned up, `stopCodexAppServerDaemon` stops any stale background `app-server-daemon` caching prior OAuth state in memory. Preserve backward compatibility for legacy non-`pddg_lse_` `pddg_*` grants and legacy `direct_stripped` responses (`tokens.refresh_token: ""` so only PDD Cloud refreshes single-use OpenAI refresh tokens).
 - **Cold-start resilience and opt-in live refresh:** `cloudAccountsRequest` defaults `timeoutMs` to `20_000` ms (`gh auth token` budget up to `10_000` ms) and `listCloudAccounts` defaults `timeoutMs` to `30_000` ms, `leaseCloudAccount` defaults `timeoutMs` to `15_000` ms (enforcing `timeoutMs` as an overall wall-clock deadline across bounded `reauth_required` skip retries and `maxRetries: 0` on `--quiet` shell-hook sync), and `cloudAccountsRequest` performs `1` bounded retry on timeout/abort for idempotent `GET` and `POST /v1/accounts/lease` requests. `listCloudAccounts({refresh = false})` appends `?refresh=true` only when `refresh === true`.
 
 ## Cloud Accounts transport and isolated local materialization
@@ -83,18 +85,28 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   - `materializeLocalCodexAuth` creates `pddManagedCodexHome(env)` (`0700`), symlinks existing
     non-symlink `~/.codex/{skills,memories,sessions,archived_sessions,history.jsonl,session_index.jsonl,rules}`
     into `pddManagedCodexHome(env)`, merges user settings (such as `[mcp_servers.pdd]`) from
-    regular non-symlink `~/.codex/config.toml` while stripping any legacy
-    `[model_providers.pdd_codex_gateway]` block from `~/.codex/config.toml` without ever reading
-    or writing `~/.codex/auth.json`, and always sets `cli_auth_credentials_store = "file"` in
-    `managedCodexConfigPath(env)` (`0600`, round-trip verified with `./vendor/smol-toml/parse.js`).
+    regular non-symlink `~/.codex/config.toml` while stripping any legacy PDD gateway keys
+    (`[model_providers.pdd_codex_gateway]`, `model_provider = "pdd_codex_gateway"`, and PDD-managed
+    `/v1/codex-gateway` `openai_base_url` / `chatgpt_base_url`) from `~/.codex/config.toml` without
+    ever reading or writing `~/.codex/auth.json`, and always sets `cli_auth_credentials_store = "file"`
+    in `managedCodexConfigPath(env)` (`0600`, round-trip verified with `./vendor/smol-toml/parse.js`).
+  - `buildSyntheticGatewayIdToken({planType})` builds a deterministic non-secret unsigned JWT
+    (`<base64url({alg:"none",typ:"JWT"})>.<base64url(payload)>.sig`) with `exp: 4102444800`,
+    `iat: 1700000000`, and `"https://api.openai.com/auth": {chatgpt_account_id: "acct_pdd_gateway", chatgpt_plan_type: normalizedPlanType || "pro", chatgpt_user_id: "user_pdd_gateway"}`.
+    `stopCodexAppServerDaemon(codexHome, {env, fs, spawnSync})` is a bounded fail-open helper that skips
+    subprocess execution when `fs !== nativeFs` and `spawnSync` is not a function (keeping virtual-fs
+    tests hermetic), and otherwise invokes `codex app-server daemon stop` with
+    `{env: {...env, CODEX_HOME: codexHome}, stdio: "ignore", timeout: 2500}` inside `try/catch`.
   - When `authOrLease` has delivery mode `"gateway_grant"`, `materializeLocalCodexAuth` validates
     `codex_gateway_url` (`https:` or loopback `http:`) and `codex_gateway_token` (or `gateway_bearer_token`,
-    requiring the `"pddg_"` prefix and throwing `code: "invalid_lease"` otherwise), writes `0600`
-    `managedCodexAuthPath(env)` with `{"auth_mode": "apikey", "OPENAI_API_KEY": "<pddg_grant>"}`,
+    requiring the `"pddg_"` prefix and throwing `code: "invalid_lease"` otherwise), normalizes `<gateway_url>`
+    by stripping any trailing `/lse_[^/]+` segment when `<pddg_grant>` starts with `"pddg_lse_"`, writes `0600`
+    `managedCodexAuthPath(env)` in native `chatgpt` shape (`{"auth_mode": "chatgpt", "OPENAI_API_KEY": null, "tokens": {"id_token": buildSyntheticGatewayIdToken({planType}), "access_token": "<pddg_grant>", "refresh_token": "", "account_id": "acct_pdd_gateway"}, "last_refresh": "<iso>"}`),
     and writes `0600` `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"`,
-    `model_provider = "pdd_codex_gateway"` and `[model_providers.pdd_codex_gateway]`:
-    when `<pddg_grant>` starts with `"pddg_lse_"`, strip any trailing `/lse_[^/]+` segment from
-    `<codex_gateway_url>` so `base_url = "<origin>/v1/codex-gateway"`, set
+    `openai_base_url = "<gateway_url>"`, `chatgpt_base_url = "<gateway_url>"`, no top-level
+    `model_provider` (recording any prior non-gateway user/managed `model_provider` in
+    `previousCodexModelProvider`), and backward-compatibility `[model_providers.pdd_codex_gateway]`:
+    when `<pddg_grant>` starts with `"pddg_lse_"`, set `base_url = "<origin>/v1/codex-gateway"`,
     `model_catalog_url = "<origin>/v1/codex-gateway/models"`, `wire_api = "responses"`,
     `requires_openai_auth = true`, `supports_websockets = false`, and omit `http_headers` so
     `config.toml` remains constant across account rotations; for legacy non-`"pddg_lse_"` grants,
@@ -104,10 +116,14 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   - For legacy `direct_stripped` bundles, `materializeLocalCodexAuth` writes `0600`
     `managedCodexAuthPath(env)` with `tokens.refresh_token: ""` and `0600`
     `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"` and user settings
-    without `pdd_codex_gateway`. `restoreLocalCodexGatewayConfig` strips any
-    `[model_providers.pdd_codex_gateway]` block from `managedCodexConfigPath(env)` and legacy
-    `~/.codex/config.toml` (restoring `previousModelProvider`), and when `removeAuthFile: true`
-    removes `managedCodexAuthPath(env)` without ever touching `~/.codex/auth.json`.
+    without PDD gateway `openai_base_url`, `chatgpt_base_url`, or `pdd_codex_gateway` (preserving
+    any non-PDD user `openai_base_url` / `chatgpt_base_url`). `restoreLocalCodexGatewayConfig` strips
+    PDD-managed `openai_base_url` and `chatgpt_base_url` (matching `/\/v1\/(?:accounts\/)?codex-gateway(?:\/|$)/i`),
+    `[model_providers.pdd_codex_gateway]`, and `model_provider = "pdd_codex_gateway"` from
+    `managedCodexConfigPath(env)` and legacy `~/.codex/config.toml` while preserving non-PDD URLs
+    and restoring `previousModelProvider`, removes `managedCodexAuthPath(env)` when
+    `removeAuthFile: true` without ever touching `~/.codex/auth.json`, and calls
+    `stopCodexAppServerDaemon` on `pddManagedCodexHome(env)` whenever `restoredConfig || removedAuth`.
 - `materializeLocalClaudeAuth` atomically merges `env.CLAUDE_CODE_OAUTH_TOKEN`
   into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`, mode `0600`),
   sets `env.ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`, removes a

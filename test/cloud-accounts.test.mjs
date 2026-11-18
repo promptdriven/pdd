@@ -25,6 +25,7 @@ import { parseCodexUsageWindows } from '../src/codex-limits.mjs';
 import {
   CloudAccountsError,
   DEFAULT_CLOUD_URL,
+  buildSyntheticGatewayIdToken,
   cloudAccountsRequest,
   createCodexStepOverlay,
   leaseCloudAccount,
@@ -44,6 +45,7 @@ import {
   resolveCloudAccountsEndpoint,
   restoreLocalCodexGatewayConfig,
   selectCloudPoolLogin,
+  stopCodexAppServerDaemon,
   sweepActiveCodexOverlays,
 } from '../src/login-pool.mjs';
 import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
@@ -1715,14 +1717,19 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
 
   const localAuthRaw = readFileSync(authPath, 'utf8');
   const localAuth = JSON.parse(localAuthRaw);
-  assert.equal(localAuth.auth_mode, 'apikey');
-  assert.match(localAuth.OPENAI_API_KEY, /^pddg_cx-shared-1_/);
-  assert.equal(localAuth.tokens, undefined, 'zero OpenAI access_token, id_token, or refresh_token on borrower disk');
-  assert.doesNotMatch(localAuthRaw, /access_token|refresh_token|id_token/);
+  assert.equal(localAuth.auth_mode, 'chatgpt');
+  assert.equal(localAuth.OPENAI_API_KEY, null);
+  assert.match(localAuth.tokens?.access_token ?? '', /^pddg_cx-shared-1_/);
+  assert.equal(localAuth.tokens?.refresh_token, '');
+  assert.equal(localAuth.tokens?.account_id, 'acct_pdd_gateway');
+  assert.equal(localAuth.tokens?.id_token, buildSyntheticGatewayIdToken({ planType: 'pro' }));
+  assert.doesNotMatch(localAuthRaw, /oa_shared_secret|rt_shared_secret|id_shared_secret/, 'zero real OpenAI OAuth tokens on borrower disk');
 
   const localCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(localCfg.model, 'gpt-5.4', 'preserved top-level model');
-  assert.equal(localCfg.model_provider, 'pdd_codex_gateway');
+  assert.equal(localCfg.model_provider, undefined, 'native openai provider retained (no top-level model_provider)');
+  assert.match(localCfg.openai_base_url ?? '', /\/v1\/codex-gateway\/lse_/);
+  assert.equal(localCfg.chatgpt_base_url, localCfg.openai_base_url);
   assert.deepEqual({ ...localCfg.mcp_servers?.pdd }, {
     command: 'node',
     args: ['bin/pdd.mjs', 'mcp'],
@@ -1732,7 +1739,7 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
   assert.equal(localCfg.model_providers?.pdd_codex_gateway?.wire_api, 'responses');
   assert.equal(localCfg.model_providers?.pdd_codex_gateway?.requires_openai_auth, false);
   assert.equal(localCfg.model_providers?.pdd_codex_gateway?.supports_websockets, false);
-  assert.equal(localCfg.model_providers?.pdd_codex_gateway?.http_headers?.['x-pdd-gateway-grant'], localAuth.OPENAI_API_KEY);
+  assert.equal(localCfg.model_providers?.pdd_codex_gateway?.http_headers?.['x-pdd-gateway-grant'], localAuth.tokens.access_token);
 
   const savedState = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
   assert.equal(savedState.active.codex.delivery_mode, 'gateway_grant');
@@ -1879,6 +1886,8 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
   assert.equal(ownerAuth.tokens.refresh_token, '');
   const ownerCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(ownerCfg.model_provider, 'custom_upstream', 'previous model_provider restored cleanly');
+  assert.equal(ownerCfg.openai_base_url, undefined, 'PDD-managed openai_base_url stripped cleanly');
+  assert.equal(ownerCfg.chatgpt_base_url, undefined, 'PDD-managed chatgpt_base_url stripped cleanly');
   assert.equal(ownerCfg.model_providers, undefined, '[model_providers.pdd_codex_gateway] stripped cleanly');
   assert.deepEqual(ownerCfg.mcp_servers?.pdd, localCfg.mcp_servers.pdd, '[mcp_servers.pdd] preserved');
   const ownerState = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
@@ -1895,6 +1904,8 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
   assert.equal(existsSync(authPath), false, 'pddg_* auth.json removed when leaving shared Codex account with no replacement');
   const leftCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(leftCfg.model_provider, 'custom_upstream', 'model_provider restored on leave');
+  assert.equal(leftCfg.openai_base_url, undefined, 'openai_base_url removed on leave');
+  assert.equal(leftCfg.chatgpt_base_url, undefined, 'chatgpt_base_url removed on leave');
   assert.equal(leftCfg.model_providers, undefined, 'pdd_codex_gateway removed on leave');
   assert.deepEqual(leftCfg.mcp_servers?.pdd, localCfg.mcp_servers.pdd, '[mcp_servers.pdd] still intact after leave');
 
@@ -2356,7 +2367,10 @@ test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ 
 
   // 3A. Server-side revoke/unshare + borrower `pdd accounts list` restores `~/.codex/config.toml` & removes `pddg_*` `auth.json`!
   assert.equal((await invokeCli(['accounts', 'use', 'cx-shared-rev1'], sb)).exit, 0);
-  assert.equal(parseToml(readFileSync(configPath, 'utf8')).model_provider, 'pdd_codex_gateway');
+  const preRevokeListCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(preRevokeListCfg.model_provider, undefined);
+  assert.match(preRevokeListCfg.openai_base_url ?? '', /\/v1\/codex-gateway/);
+  assert.equal(preRevokeListCfg.chatgpt_base_url, preRevokeListCfg.openai_base_url);
   assert.equal(existsSync(authPath), true);
 
   cloud.state.accounts[0].revoked = true;
@@ -2365,13 +2379,17 @@ test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ 
   assert.equal(existsSync(authPath), false, 'pddg_* auth.json removed when list prunes revoked shared Codex account');
   const healedListCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(healedListCfg.model_provider, 'custom_upstream', 'previous model_provider restored when list prunes revoked shared account');
+  assert.equal(healedListCfg.openai_base_url, undefined, 'openai_base_url stripped on list prune');
+  assert.equal(healedListCfg.chatgpt_base_url, undefined, 'chatgpt_base_url stripped on list prune');
   assert.equal(healedListCfg.model_providers, undefined, '[model_providers.pdd_codex_gateway] stripped on list prune');
   assert.equal(healedListCfg.mcp_servers?.pdd?.command, 'node');
 
   // 3B. Server-side revoke/unshare + `runStepAgentProcess` zero-accounts heal restores `~/.codex/config.toml` & removes `pddg_*` `auth.json`!
   cloud.state.accounts[0].revoked = false;
   assert.equal((await invokeCli(['accounts', 'use', 'cx-shared-rev1'], sb)).exit, 0);
-  assert.equal(parseToml(readFileSync(configPath, 'utf8')).model_provider, 'pdd_codex_gateway');
+  const preRevokeStepCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(preRevokeStepCfg.model_provider, undefined);
+  assert.match(preRevokeStepCfg.openai_base_url ?? '', /\/v1\/codex-gateway/);
   assert.equal(existsSync(authPath), true);
 
   cloud.state.accounts[0].revoked = true;
@@ -2394,6 +2412,8 @@ test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ 
   assert.equal(existsSync(authPath), false, 'pddg_* auth.json removed during runStepAgentProcess zero-accounts heal');
   const healedStepCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(healedStepCfg.model_provider, 'custom_upstream', 'previous model_provider restored during runStepAgentProcess zero-accounts heal');
+  assert.equal(healedStepCfg.openai_base_url, undefined);
+  assert.equal(healedStepCfg.chatgpt_base_url, undefined);
   assert.equal(healedStepCfg.model_providers, undefined);
 
   // 4. `Ctrl-C` / `SIGINT` on `--loop` iteration 0 exits 0 cleanly, while non-`--loop` `{ code: null }` exits 1!
@@ -3201,4 +3221,143 @@ test('3445 T5: sync guards paused/expiring/step-only leases, Cloud bearer 401 sa
     '2026-11-16T20:00:00.000Z',
     'unrelated Claude reauth marker survived Codex zero-account heal',
   );
+});
+
+test('#3516: native openai provider gateway materialization, synthetic unsigned id_token, non-PDD base URL preservation, and hermetic stopCodexAppServerDaemon', t => {
+  // 1. Deterministic synthetic unsigned metadata JWT (`alg: "none"`, `sig`, zero secrets)
+  const defaultJwt = buildSyntheticGatewayIdToken();
+  const [rawHeader, rawPayload, rawSig] = defaultJwt.split('.');
+  assert.equal(rawSig, 'sig');
+  assert.deepEqual(JSON.parse(Buffer.from(rawHeader, 'base64url').toString('utf8')), { alg: 'none', typ: 'JWT' });
+  assert.deepEqual(JSON.parse(Buffer.from(rawPayload, 'base64url').toString('utf8')), {
+    exp: 4102444800,
+    iat: 1700000000,
+    'https://api.openai.com/auth': {
+      chatgpt_account_id: 'acct_pdd_gateway',
+      chatgpt_plan_type: 'pro',
+      chatgpt_user_id: 'user_pdd_gateway',
+    },
+  });
+  const teamJwt = buildSyntheticGatewayIdToken({ planType: 'Team' });
+  assert.equal(
+    JSON.parse(Buffer.from(teamJwt.split('.')[1], 'base64url').toString('utf8'))['https://api.openai.com/auth'].chatgpt_plan_type,
+    'team',
+  );
+
+  // 2. Preserving non-PDD user `openai_base_url` and `chatgpt_base_url` while stripping PDD-managed gateway URLs
+  const sb = makeTempSandbox(t, 'https://cloud.example.com');
+  const userCodexDir = localCodexHome(sb.env);
+  mkdirSync(userCodexDir, { recursive: true, mode: 0o700 });
+  const userCfgPath = localCodexConfigPath(sb.env);
+  writeFileSync(userCfgPath, [
+    'model = "gpt-5.4"',
+    'openai_base_url = "https://corp-openai.example.com/v1"',
+    'chatgpt_base_url = "https://corp-chatgpt.example.com/backend-api"',
+    '',
+  ].join('\n'), { mode: 0o600 });
+
+  const daemonCalls = [];
+  const spySpawnSync = (cmd, args, opts) => {
+    daemonCalls.push({ cmd, args, codexHome: opts?.env?.CODEX_HOME, timeout: opts?.timeout });
+    return { status: 0 };
+  };
+
+  const mat = materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    plan_type: 'team',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_01020304',
+    codex_gateway_token: 'pddg_lse_01020304_grantTokenAbc',
+  }, { env: sb.env }, { now: () => Date.parse('2026-11-18T00:00:00.000Z') });
+
+  // User ~/.codex/config.toml keeps its custom non-PDD URLs untouched!
+  const untouchedUserCfg = parseToml(readFileSync(userCfgPath, 'utf8'));
+  assert.equal(untouchedUserCfg.openai_base_url, 'https://corp-openai.example.com/v1');
+  assert.equal(untouchedUserCfg.chatgpt_base_url, 'https://corp-chatgpt.example.com/backend-api');
+
+  // Managed config.toml routes native openai + chatgpt to normalized constant gateway URL with no top-level model_provider!
+  const managedCfg = parseToml(readFileSync(mat.configPath, 'utf8'));
+  assert.equal(managedCfg.model_provider, undefined);
+  assert.equal(managedCfg.openai_base_url, 'https://cloud.example.com/v1/codex-gateway');
+  assert.equal(managedCfg.chatgpt_base_url, 'https://cloud.example.com/v1/codex-gateway');
+  assert.equal(managedCfg.cli_auth_credentials_store, 'file');
+  assert.equal(managedCfg.model_providers?.pdd_codex_gateway?.base_url, 'https://cloud.example.com/v1/codex-gateway');
+  assert.equal(managedCfg.model_providers?.pdd_codex_gateway?.requires_openai_auth, true);
+
+  const managedAuth = JSON.parse(readFileSync(mat.authPath, 'utf8'));
+  assert.deepEqual(managedAuth, {
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: teamJwt,
+      access_token: 'pddg_lse_01020304_grantTokenAbc',
+      refresh_token: '',
+      account_id: 'acct_pdd_gateway',
+    },
+    last_refresh: '2026-11-18T00:00:00.000Z',
+  });
+
+  // Restoring gateway config removes PDD's /v1/codex-gateway URLs, restores user's non-PDD URLs, and stops stale daemon!
+  const restored = restoreLocalCodexGatewayConfig(
+    { env: sb.env, removeAuthFile: true },
+    { spawnSync: spySpawnSync },
+  );
+  assert.equal(restored.restoredConfig, true);
+  assert.equal(restored.removedAuth, true);
+  assert.equal(existsSync(mat.authPath), false);
+  const afterRestoreCfg = parseToml(readFileSync(mat.configPath, 'utf8'));
+  assert.equal(afterRestoreCfg.model_providers, undefined);
+  assert.equal(afterRestoreCfg.openai_base_url, 'https://corp-openai.example.com/v1');
+  assert.equal(afterRestoreCfg.chatgpt_base_url, 'https://corp-chatgpt.example.com/backend-api');
+  assert.equal(daemonCalls.length, 1);
+  assert.deepEqual(daemonCalls[0], {
+    cmd: 'codex',
+    args: ['app-server', 'daemon', 'stop'],
+    codexHome: pddManagedCodexHome(sb.env),
+    timeout: 2500,
+  });
+
+  // Calling restore again when nothing is gateway-managed does NOT touch non-PDD URLs or spawn daemon stop!
+  const noopRestore = restoreLocalCodexGatewayConfig(
+    { env: sb.env, removeAuthFile: true },
+    { spawnSync: spySpawnSync },
+  );
+  assert.equal(noopRestore.restoredConfig, false);
+  assert.equal(noopRestore.removedAuth, false);
+  assert.equal(daemonCalls.length, 1, 'no daemon stop spawned when neither config nor auth changed');
+
+  // Switching from gateway_grant to direct_stripped also strips PDD gateway URLs while preserving non-PDD user URLs!
+  materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_01020304',
+    codex_gateway_token: 'pddg_lse_01020304_grantTokenAbc',
+  }, { env: sb.env });
+  materializeLocalCodexAuth({
+    auth_mode: 'chatgpt',
+    tokens: {
+      access_token: 'direct_access',
+      refresh_token: 'direct_refresh_to_strip',
+      id_token: makeJwt({ email: 'owner@example.com' }),
+      account_id: 'acct_owner_direct',
+    },
+  }, { env: sb.env, previousManagedCodexGateway: true });
+  const directCfg = parseToml(readFileSync(mat.configPath, 'utf8'));
+  assert.equal(directCfg.model_providers, undefined);
+  assert.equal(directCfg.openai_base_url, 'https://corp-openai.example.com/v1');
+  assert.equal(directCfg.chatgpt_base_url, 'https://corp-chatgpt.example.com/backend-api');
+
+  // 3. Hermetic virtual-fs guard on stopCodexAppServerDaemon
+  const fakeVirtualFs = {};
+  assert.equal(stopCodexAppServerDaemon('/virtual/codex-home', { fs: fakeVirtualFs }), false);
+  let virtualSpyCalled = false;
+  assert.equal(
+    stopCodexAppServerDaemon('/virtual/codex-home', {
+      fs: fakeVirtualFs,
+      spawnSync: () => {
+        virtualSpyCalled = true;
+        throw new Error('simulated codex missing');
+      },
+    }),
+    false,
+  );
+  assert.equal(virtualSpyCalled, true, 'explicit spawnSync port is invoked and fail-open on error');
 });

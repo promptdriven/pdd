@@ -1,6 +1,7 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import http from 'node:http';
 import { PassThrough } from 'node:stream';
@@ -9,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -21,7 +23,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
+import { readCodexUsageWindows } from '../src/codex-limits.mjs';
 import {
+  buildSyntheticGatewayIdToken,
   createCodexStepOverlay,
   managedCodexAuthPath,
   managedCodexConfigPath,
@@ -739,15 +743,22 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
 
   // Pin `glt`, inspect `auth.json` + `config.toml`, then switch to `glt-oai2` via `next` and verify `config.toml` NEVER changes!
   assert.equal((await invokeCli(['accounts', 'use', 'glt'], sb)).exit, 0);
-  const auth1 = JSON.parse(readFileSync(authPath, 'utf8'));
-  assert.equal(auth1.auth_mode, 'apikey');
-  assert.match(auth1.OPENAI_API_KEY, /^pddg_lse_[0-9a-f]+_/);
-  assert.equal(auth1.tokens, undefined, 'zero raw OAuth tokens in auth.json');
+  const auth1Raw = readFileSync(authPath, 'utf8');
+  const auth1 = JSON.parse(auth1Raw);
+  assert.equal(auth1.auth_mode, 'chatgpt');
+  assert.equal(auth1.OPENAI_API_KEY, null);
+  assert.match(auth1.tokens?.access_token ?? '', /^pddg_lse_[0-9a-f]+_/);
+  assert.equal(auth1.tokens?.refresh_token, '');
+  assert.equal(auth1.tokens?.account_id, 'acct_pdd_gateway');
+  assert.equal(auth1.tokens?.id_token, buildSyntheticGatewayIdToken({ planType: 'pro' }));
+  assert.doesNotMatch(auth1Raw, /raw_access_|raw_refresh_|@promptdriven\.ai/, 'zero raw OAuth tokens in auth.json');
 
   const configTextBeforeSwitch = readFileSync(configPath, 'utf8');
   const configInodeBeforeSwitch = statSync(configPath).ino;
   const parsedCfg = parseToml(configTextBeforeSwitch);
-  assert.equal(parsedCfg.model_provider, 'pdd_codex_gateway');
+  assert.equal(parsedCfg.model_provider, undefined, 'native openai provider kept at top level');
+  assert.equal(parsedCfg.openai_base_url, `${cloud.serverUrl}/v1/codex-gateway`);
+  assert.equal(parsedCfg.chatgpt_base_url, `${cloud.serverUrl}/v1/codex-gateway`);
   assert.equal(parsedCfg.model_providers.pdd_codex_gateway.base_url, `${cloud.serverUrl}/v1/codex-gateway`);
   assert.equal(parsedCfg.model_providers.pdd_codex_gateway.model_catalog_url, `${cloud.serverUrl}/v1/codex-gateway/models`);
   assert.equal(parsedCfg.model_providers.pdd_codex_gateway.requires_openai_auth, true);
@@ -790,8 +801,10 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
   const nextRes = await invokeCli(['accounts', 'next', '--provider', 'codex'], sb);
   assert.equal(nextRes.exit, 0, nextRes.stderr);
   const auth2 = JSON.parse(readFileSync(authPath, 'utf8'));
-  assert.notEqual(auth2.OPENAI_API_KEY, auth1.OPENAI_API_KEY, 'auth.json rotated to new lease grant token');
-  assert.match(auth2.OPENAI_API_KEY, /^pddg_lse_[0-9a-f]+_/);
+  assert.equal(auth2.auth_mode, 'chatgpt');
+  assert.equal(auth2.OPENAI_API_KEY, null);
+  assert.notEqual(auth2.tokens?.access_token, auth1.tokens?.access_token, 'auth.json rotated to new lease grant token');
+  assert.match(auth2.tokens?.access_token ?? '', /^pddg_lse_[0-9a-f]+_/);
   assert.equal(readFileSync(configPath, 'utf8'), configTextBeforeSwitch, 'config.toml bytes remain 100% constant across switches');
   assert.equal(statSync(configPath).ino, configInodeBeforeSwitch, 'config.toml was not rewritten when unchanged');
 
@@ -833,6 +846,9 @@ test('#3497 Part 1: owner + shared gateway_grant zero-plaintext local Codex keys
   const legacyUse = await invokeCli(['accounts', 'use', 'glt'], sb);
   assert.equal(legacyUse.exit, 0, legacyUse.stderr);
   const legacyCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(legacyCfg.model_provider, undefined);
+  assert.match(legacyCfg.openai_base_url ?? '', /\/v1\/codex-gateway\/lse_[0-9a-f]+$/);
+  assert.equal(legacyCfg.chatgpt_base_url, legacyCfg.openai_base_url);
   assert.match(legacyCfg.model_providers.pdd_codex_gateway.base_url, /\/v1\/codex-gateway\/lse_[0-9a-f]+$/);
   assert.match(legacyCfg.model_providers.pdd_codex_gateway.model_catalog_url, /\/v1\/codex-gateway\/lse_[0-9a-f]+\/models$/);
   assert.equal(legacyCfg.model_providers.pdd_codex_gateway.requires_openai_auth, false);
@@ -906,7 +922,7 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured l
   const authPath = managedCodexAuthPath(sb.env);
   const configPath = managedCodexConfigPath(sb.env);
   const configSnapshot = readFileSync(configPath, 'utf8');
-  const firstGrant = JSON.parse(readFileSync(authPath, 'utf8')).OPENAI_API_KEY;
+  const firstGrant = JSON.parse(readFileSync(authPath, 'utf8')).tokens.access_token;
 
   // 2a. CRITICAL negative guard: raw PTY stdout/stderr & rollout tool outputs containing quota keywords MUST NEVER kill interactive codex or poison Cloud `/usage-report`!
   const safeSessionUuid = '019a5555-6666-7000-8000-112233445566';
@@ -963,7 +979,7 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured l
       quotaSettleMs: 0,
       rolloutPollIntervalMs: 15,
       async spawnCodexPty({ args, env, turn, signal, onOutput }) {
-        const activeGrantOnDisk = JSON.parse(readFileSync(join(env.CODEX_HOME, 'auth.json'), 'utf8')).OPENAI_API_KEY;
+        const activeGrantOnDisk = JSON.parse(readFileSync(join(env.CODEX_HOME, 'auth.json'), 'utf8')).tokens.access_token;
         seenTurns.push({ turn, args, codexHome: env.CODEX_HOME, grant: activeGrantOnDisk });
         const dayDir = join(env.CODEX_HOME, 'sessions', '2026', '11', '17');
         mkdirSync(dayDir, { recursive: true });
@@ -1736,4 +1752,454 @@ test('R2 Blockers 1–5: 32 KiB session_meta + subagent parent_thread_id/source.
     ['resume', '-m', 'gpt-5.4', bigMetaSessionUuid],
     'pinned 32 KiB session_meta UUID (ignoring subagent parent_thread_id/source.subagent), skipped 2.5 MiB line, and rotated on trailing quota error',
   );
+});
+
+test('#3516 Part 2: codex app-server daemon stop runs on import (managed + scrubbed source CODEX_HOME), use, next, remove/leave, and skips 0ms cached sync --quiet', async t => {
+  const cloud = await createPoolGatewayServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_daemon_shared',
+        label: 'shared-daemon',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: false,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 10,
+        five_hour_reset_at: '2026-11-18T02:00:00Z',
+        weekly_used_percent: 20,
+        weekly_reset_at: '2026-11-23T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+  const managedHome = pddManagedCodexHome(sb.env);
+  const userCodexHome = join(sb.home, '.codex');
+  mkdirSync(userCodexHome, { recursive: true, mode: 0o700 });
+  writeFileSync(join(userCodexHome, 'auth.json'), JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'oa_import_daemon_test',
+      refresh_token: 'rt_single_use_import_daemon_test',
+      id_token: makeJwt({ email: 'daemon-owner@example.com', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_import_daemon_1',
+    },
+  }), { mode: 0o600 });
+
+  const daemonStops = [];
+  const spyPorts = {
+    tmpRoot: sb.root,
+    readCodexUsageWindows: async () => null,
+    spawnSync(cmd, args, opts) {
+      daemonStops.push({ cmd, args, codexHome: opts?.env?.CODEX_HOME, stdio: opts?.stdio, timeout: opts?.timeout });
+      return { status: 0 };
+    },
+  };
+
+  // 1. `pdd accounts import`: stops daemon in BOTH `managedCodexHome` AND scrubbed `~/.codex`!
+  const impRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'imported-daemon'], sb, spyPorts);
+  assert.equal(impRes.exit, 0, impRes.stderr);
+  assert.equal(JSON.parse(readFileSync(join(userCodexHome, 'auth.json'), 'utf8')).tokens.refresh_token, '');
+  assert.deepEqual(
+    daemonStops.map(c => ({ cmd: c.cmd, args: c.args, codexHome: c.codexHome, stdio: c.stdio, timeout: c.timeout })),
+    [
+      { cmd: 'codex', args: ['app-server', 'daemon', 'stop'], codexHome: managedHome, stdio: 'ignore', timeout: 2500 },
+      { cmd: 'codex', args: ['app-server', 'daemon', 'stop'], codexHome: userCodexHome, stdio: 'ignore', timeout: 2500 },
+    ],
+    'import stops stale daemons in both managedCodexHome and scrubbed source CODEX_HOME',
+  );
+
+  // 2. Cached 0ms `sync --quiet` fast path MUST NOT spawn `codex app-server daemon stop`!
+  daemonStops.length = 0;
+  const cachedSync = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet'], sb, spyPorts);
+  assert.equal(cachedSync.exit, 0, cachedSync.stderr);
+  assert.equal(daemonStops.length, 0, 'cached 0ms sync --quiet fast path never spawns codex app-server daemon stop');
+
+  // 3. Expired/stale `sync --quiet` that re-leases DOES stop stale daemon in `managedCodexHome`!
+  const farFutureNow = Date.now() + 2 * 3600 * 1000;
+  const refreshSync = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet'], sb, {
+    ...spyPorts,
+    now: () => farFutureNow,
+  });
+  assert.equal(refreshSync.exit, 0, refreshSync.stderr);
+  assert.equal(daemonStops.length, 1, 're-materializing sync stops daemon in managedCodexHome');
+  assert.equal(daemonStops[0].codexHome, managedHome);
+
+  // 4. `use` and `next` each stop stale daemon in `managedCodexHome`!
+  daemonStops.length = 0;
+  assert.equal((await invokeCli(['accounts', 'use', 'shared-daemon'], sb, spyPorts)).exit, 0);
+  assert.equal(daemonStops.length, 1);
+  assert.equal(daemonStops[0].codexHome, managedHome);
+
+  daemonStops.length = 0;
+  assert.equal((await invokeCli(['accounts', 'next', '--provider', 'codex'], sb, spyPorts)).exit, 0);
+  assert.equal(daemonStops.length, 1);
+  assert.equal(daemonStops[0].codexHome, managedHome);
+
+  // 5. `remove` + `leave` leaving zero active Codex accounts removes auth/gateway config and stops stale daemon!
+  daemonStops.length = 0;
+  assert.equal((await invokeCli(['accounts', 'remove', 'imported-daemon'], sb, spyPorts)).exit, 0);
+  assert.equal(daemonStops.length, 1, 'removing active Codex account cleans managed home and stops daemon');
+  assert.equal(daemonStops[0].codexHome, managedHome);
+
+  assert.equal((await invokeCli(['accounts', 'use', 'shared-daemon'], sb, spyPorts)).exit, 0);
+  daemonStops.length = 0;
+  assert.equal((await invokeCli(['accounts', 'leave', 'shared-daemon'], sb, spyPorts)).exit, 0);
+  assert.equal(daemonStops.length, 1, 'leaving last shared Codex account cleans managed home and stops daemon');
+  assert.equal(daemonStops[0].codexHome, managedHome);
+});
+
+function findRolloutJsonlFiles(dir) {
+  const out = [];
+  if (!existsSync(dir)) return out;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...findRolloutJsonlFiles(full));
+    else if (entry.isFile() && entry.name.endsWith('.jsonl')) out.push(full);
+  }
+  return out;
+}
+
+function spawnAsync(cmd, args, { cwd, env, timeoutMs = 20_000 }) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      rejectPromise(new Error(`${cmd} ${args.join(' ')} timed out after ${timeoutMs}ms\nstdout: ${stdout}\nstderr: ${stderr}`));
+    }, timeoutMs);
+    child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+    child.on('error', err => {
+      clearTimeout(timer);
+      rejectPromise(err);
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      resolvePromise({ code, signal, stdout, stderr });
+    });
+  });
+}
+
+test('#3516 live codex-cli integration: app-server --strict-config rateLimits/read, codex exec on native openai provider, and codex exec resume across rotated grants with 0 external requests', async t => {
+  const codexVersion = spawnSync('codex', ['--version'], { encoding: 'utf8' });
+  if (codexVersion.status !== 0) {
+    t.skip('codex binary is not installed in PATH');
+    return;
+  }
+
+  const externalProxyTargets = [];
+  const blockedProxy = http.createServer((req, res) => {
+    externalProxyTargets.push(req.url);
+    res.writeHead(502);
+    res.end('External network blocked in test');
+  });
+  blockedProxy.on('connect', (req, clientSocket) => {
+    externalProxyTargets.push(req.url);
+    clientSocket.destroy();
+  });
+  await new Promise(resolveListen => blockedProxy.listen(0, '127.0.0.1', resolveListen));
+  t.after(() => blockedProxy.close());
+  const blockedProxyUrl = `http://127.0.0.1:${blockedProxy.address().port}`;
+
+  const issuedGrants = new Map();
+  const gatewayHits = [];
+  const accounts = [
+    {
+      account_id: 'acc_live_gw_1',
+      label: 'gw-first',
+      provider: 'codex',
+      plan: 'pro',
+      is_owner: true,
+      shared: false,
+      state: 'ready',
+      five_hour_used_percent: 20,
+      five_hour_reset_at: '2026-11-18T02:00:00Z',
+      weekly_used_percent: 35,
+      weekly_reset_at: '2026-11-23T00:00:00Z',
+    },
+    {
+      account_id: 'acc_live_gw_2',
+      label: 'gw-second',
+      provider: 'codex',
+      plan: 'team',
+      is_owner: true,
+      shared: false,
+      state: 'ready',
+      five_hour_used_percent: 5,
+      five_hour_reset_at: '2026-11-18T03:00:00Z',
+      weekly_used_percent: 10,
+      weekly_reset_at: '2026-11-24T00:00:00Z',
+    },
+  ];
+  let seq = 1;
+  let mockUrl = '';
+
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const rawBody = Buffer.concat(chunks).toString('utf8');
+    let body = null;
+    try { body = rawBody ? JSON.parse(rawBody) : null; } catch {}
+    const url = new URL(req.url, 'http://127.0.0.1');
+    const sendJson = (status, payload) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    };
+
+    if (url.pathname.startsWith('/v1/codex-gateway')) {
+      const authHeader = String(req.headers.authorization ?? '');
+      const bearerGrant = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      const headerGrant = String(req.headers['x-pdd-gateway-grant'] ?? '').trim();
+      const grant = bearerGrant || headerGrant;
+      gatewayHits.push({
+        method: req.method,
+        path: url.pathname,
+        grant,
+        accountLabel: issuedGrants.get(grant) ?? null,
+      });
+      if (!issuedGrants.has(grant)) {
+        return sendJson(401, { error: { message: 'Invalid or revoked gateway grant' } });
+      }
+      if (req.method === 'GET' && /\/models$/.test(url.pathname)) {
+        return sendJson(200, {
+          models: [
+            {
+              slug: 'gpt-5.4',
+              display_name: 'GPT-5.4',
+              description: 'Mock GPT-5.4 via PDD Gateway',
+              supported_reasoning_levels: [{ effort: 'medium', description: 'Medium' }],
+              default_reasoning_level: 'medium',
+              default_reasoning_summary: 'none',
+              supports_reasoning_summaries: false,
+              support_verbosity: false,
+              default_verbosity: null,
+              prefer_websockets: false,
+              shell_type: 'unified_exec',
+              visibility: 'list',
+              minimal_client_version: '0.1.0',
+              priority: 1,
+              supported_in_api: true,
+              availability_nux: null,
+              upgrade: null,
+              input_modalities: ['text'],
+              apply_patch_tool_type: 'freeform',
+              web_search_tool_type: 'text',
+              truncation_policy: { mode: 'tokens', limit: 10000 },
+              supports_parallel_tool_calls: true,
+              context_window: 272000,
+              effective_context_window_percent: 95,
+              experimental_supported_tools: [],
+              base_instructions: 'Reply directly without running tools.',
+            },
+          ],
+        });
+      }
+      if (req.method === 'GET' && /\/usage$/.test(url.pathname)) {
+        return sendJson(200, {
+          plan_type: 'pro',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 23,
+              limit_window_seconds: 18000,
+              reset_after_seconds: 3600,
+              reset_at: 1800003600,
+            },
+            secondary_window: {
+              used_percent: 41,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 86400,
+              reset_at: 1800086400,
+            },
+          },
+        });
+      }
+      if (req.method === 'POST' && /\/responses$/.test(url.pathname)) {
+        const label = issuedGrants.get(grant);
+        const replyText = `GATEWAY_OK_${label}`;
+        const model = body?.model || 'gpt-5.4';
+        const respId = `resp_mock_${seq++}`;
+        const msgId = `msg_mock_${seq++}`;
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        });
+        const events = [
+          ['response.created', { type: 'response.created', response: { id: respId, object: 'response', status: 'in_progress', model, output: [] } }],
+          ['response.output_item.added', { type: 'response.output_item.added', output_index: 0, item: { id: msgId, type: 'message', status: 'in_progress', role: 'assistant', content: [] } }],
+          ['response.content_part.added', { type: 'response.content_part.added', item_id: msgId, output_index: 0, content_index: 0, part: { type: 'output_text', text: '' } }],
+          ['response.output_text.delta', { type: 'response.output_text.delta', item_id: msgId, output_index: 0, content_index: 0, delta: replyText }],
+          ['response.output_text.done', { type: 'response.output_text.done', item_id: msgId, output_index: 0, content_index: 0, text: replyText }],
+          ['response.content_part.done', { type: 'response.content_part.done', item_id: msgId, output_index: 0, content_index: 0, part: { type: 'output_text', text: replyText } }],
+          ['response.output_item.done', { type: 'response.output_item.done', output_index: 0, item: { id: msgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: replyText }] } }],
+          ['response.completed', {
+            type: 'response.completed',
+            response: {
+              id: respId,
+              object: 'response',
+              status: 'completed',
+              model,
+              output: [{ id: msgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: replyText }] }],
+              usage: {
+                input_tokens: 12,
+                input_tokens_details: { cached_tokens: 0 },
+                output_tokens: 4,
+                output_tokens_details: { reasoning_tokens: 0 },
+                total_tokens: 16,
+              },
+            },
+          }],
+        ];
+        for (const [evt, data] of events) {
+          res.write(`event: ${evt}\ndata: ${JSON.stringify(data)}\n\n`);
+        }
+        res.end();
+        return;
+      }
+      return sendJson(404, { error: `Unhandled gateway route ${url.pathname}` });
+    }
+
+    if (req.headers.authorization !== 'Bearer ghu_testCloudBearer999999') {
+      return sendJson(401, { detail: 'Unauthorized' });
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/accounts') {
+      return sendJson(200, { accounts, pending_invites: [] });
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/accounts/lease') {
+      const skip = new Set(Array.isArray(body?.skip_account_ids) ? body.skip_account_ids : []);
+      const candidates = accounts.filter(a => !skip.has(a.account_id));
+      const chosen = (body?.preferred_label && candidates.find(a => a.label === body.preferred_label))
+        || (body?.current_account_id && candidates.find(a => a.account_id === body.current_account_id))
+        || candidates[0];
+      const leaseHex = (seq++).toString(16).padStart(8, '0');
+      const leaseId = `lse_${leaseHex}`;
+      const grantToken = `pddg_lse_${leaseHex}_liveGrantSecret${seq}`;
+      issuedGrants.set(grantToken, chosen.label);
+      return sendJson(200, {
+        state: 'leased',
+        switched: chosen.account_id !== body?.current_account_id,
+        account: chosen,
+        lease: {
+          lease_id: leaseId,
+          expires_at: new Date(Date.now() + 45 * 60 * 1000).toISOString(),
+          delivery_mode: 'gateway_grant',
+          codex_gateway_url: `${mockUrl}/v1/codex-gateway/${leaseId}`,
+          codex_gateway_token: grantToken,
+          gateway_bearer_token: grantToken,
+        },
+      });
+    }
+    return sendJson(404, { detail: 'Not found' });
+  });
+
+  await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
+  t.after(() => server.close());
+  mockUrl = `http://127.0.0.1:${server.address().port}`;
+
+  const sb = makeSandbox(t, mockUrl);
+  const managedHome = pddManagedCodexHome(sb.env);
+  t.after(() => {
+    try {
+      spawnSync('codex', ['app-server', 'daemon', 'stop'], {
+        env: { ...sb.env, CODEX_HOME: managedHome },
+        stdio: 'ignore',
+        timeout: 2500,
+      });
+    } catch {}
+  });
+
+  // Pin account 1 (`gw-first`)
+  const useFirst = await invokeCli(['accounts', 'use', 'gw-first'], sb);
+  assert.equal(useFirst.exit, 0, useFirst.stderr);
+  const grantFirst = JSON.parse(readFileSync(managedCodexAuthPath(sb.env), 'utf8')).tokens.access_token;
+
+  const codexEnv = {
+    ...sb.env,
+    CODEX_HOME: managedHome,
+    HTTP_PROXY: blockedProxyUrl,
+    HTTPS_PROXY: blockedProxyUrl,
+    ALL_PROXY: blockedProxyUrl,
+    NO_PROXY: '127.0.0.1,localhost',
+  };
+
+  // 1. `codex app-server --strict-config --listen stdio://` -> `account/rateLimits/read` succeeds via local mock gateway!
+  const rateLimitsRes = await readCodexUsageWindows(
+    { command: 'codex', cwd: sb.cwd, env: codexEnv, timeoutMs: 10_000 },
+    {
+      spawn(cmd, args, opts) {
+        return spawn(cmd, [args[0], '--strict-config', ...args.slice(1)], opts);
+      },
+    },
+  );
+  assert.equal(rateLimitsRes?.state, 'healthy', `app-server rateLimits/read returned: ${JSON.stringify(rateLimitsRes)}`);
+  assert.equal(rateLimitsRes?.five_hour_used_percent, 23);
+  assert.equal(rateLimitsRes?.weekly_used_percent, 41);
+  assert.ok(
+    gatewayHits.some(h => /\/usage$/.test(h.path) && h.grant === grantFirst),
+    'codex app-server account/rateLimits/read authenticated against local mock gateway with Bearer pddg_lse_*',
+  );
+
+  // 2. `codex exec` creates a session saved with `model_provider: "openai"` and completes via local mock gateway!
+  const execRes = await spawnAsync(
+    'codex',
+    ['exec', '--skip-git-repo-check', '-m', 'gpt-5.4', 'say hello'],
+    { cwd: sb.cwd, env: codexEnv, timeoutMs: 20_000 },
+  );
+  assert.equal(execRes.code, 0, `codex exec failed:\nstdout: ${execRes.stdout}\nstderr: ${execRes.stderr}`);
+  assert.match(execRes.stdout, /GATEWAY_OK_gw-first/);
+
+  const rolloutFiles = findRolloutJsonlFiles(join(managedHome, 'sessions'));
+  assert.equal(rolloutFiles.length, 1, 'codex exec wrote session rollout JSONL');
+  const rolloutLines = readFileSync(rolloutFiles[0], 'utf8').trim().split('\n');
+  const sessionMeta = JSON.parse(rolloutLines[0]);
+  assert.equal(sessionMeta.type, 'session_meta');
+  assert.equal(sessionMeta.payload.model_provider, 'openai', 'session saved under native "openai" model_provider');
+  const openaiThreadId = sessionMeta.payload.id;
+  assert.ok(openaiThreadId);
+
+  // 3. Rotate active account to `gw-second` and verify `codex exec resume <thread-id>` of the `"openai"` session succeeds on the rotated grant!
+  const nextRes = await invokeCli(['accounts', 'next', '--provider', 'codex'], sb);
+  assert.equal(nextRes.exit, 0, nextRes.stderr);
+  const grantSecond = JSON.parse(readFileSync(managedCodexAuthPath(sb.env), 'utf8')).tokens.access_token;
+  assert.notEqual(grantSecond, grantFirst);
+
+  const resumeRes = await spawnAsync(
+    'codex',
+    ['exec', 'resume', '--skip-git-repo-check', openaiThreadId, 'continue session'],
+    { cwd: sb.cwd, env: codexEnv, timeoutMs: 20_000 },
+  );
+  assert.equal(resumeRes.code, 0, `codex exec resume failed:\nstdout: ${resumeRes.stdout}\nstderr: ${resumeRes.stderr}`);
+  assert.match(resumeRes.stdout, /GATEWAY_OK_gw-second/);
+  assert.ok(
+    gatewayHits.some(h => h.method === 'POST' && /\/responses$/.test(h.path) && h.grant === grantSecond),
+    'resumed "openai" session sent rotated Bearer pddg_lse_* grant to local mock gateway',
+  );
+
+  // 4. Backward compatibility: an older session saved with `model_provider: "pdd_codex_gateway"` ALSO resumes cleanly!
+  const legacyThreadId = '019a9999-aaaa-7000-8000-deadbeef1234';
+  const legacyMeta = structuredClone(sessionMeta);
+  legacyMeta.payload.id = legacyThreadId;
+  legacyMeta.payload.model_provider = 'pdd_codex_gateway';
+  const legacyRolloutPath = rolloutFiles[0].replace(openaiThreadId, legacyThreadId);
+  writeFileSync(legacyRolloutPath, `${[JSON.stringify(legacyMeta), ...rolloutLines.slice(1)].join('\n')}\n`, { mode: 0o600 });
+
+  const legacyResumeRes = await spawnAsync(
+    'codex',
+    ['-c', 'model_provider="pdd_codex_gateway"', 'exec', 'resume', '--skip-git-repo-check', legacyThreadId, 'continue legacy session'],
+    { cwd: sb.cwd, env: codexEnv, timeoutMs: 20_000 },
+  );
+  assert.equal(
+    legacyResumeRes.code,
+    0,
+    `legacy pdd_codex_gateway session resume failed:\nstdout: ${legacyResumeRes.stdout}\nstderr: ${legacyResumeRes.stderr}`,
+  );
+  assert.match(legacyResumeRes.stdout, /GATEWAY_OK_gw-second/);
+
+  const openaiExternalHits = externalProxyTargets.filter(target => /^(?:https?:\/\/)?(?:api\.openai\.com|(?:www\.)?chatgpt\.com)(?::\d+)?(?:\/|$)/i.test(target));
+  assert.deepEqual(openaiExternalHits, [], `expected 0 requests to api.openai.com or chatgpt.com, saw: ${JSON.stringify(externalProxyTargets)}`);
 });

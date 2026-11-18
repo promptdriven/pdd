@@ -357,15 +357,16 @@ of `@openai/codex` (isolated in `$PDD_STATE_DIR/codex-home`, default `~/.local/s
   Cloud encrypts each account's refresh credential with envelope encryption bound
   to the account record. Codex and shared Claude `gateway_grant` leases
   (`delivery_mode: "gateway_grant"`) deliver only a short-lived revocable `pddg_…`
-  gateway grant routed through PDD Cloud (`[model_providers.pdd_codex_gateway]` with
-  the constant `<origin>/v1/codex-gateway` base URL and `<origin>/v1/codex-gateway/models`
-  model catalog URL for `pddg_lse_…` grants,
-  `ANTHROPIC_BASE_URL` for Claude), with zero OpenAI or Anthropic OAuth tokens
-  written to disk and dynamic `auth.json` reload across account rotations. Legacy
-  `direct_stripped` Codex passes write `refresh_token: ""` (`0600`) inside
-  `$PDD_STATE_DIR/codex-home` so only PDD Cloud refreshes single-use OAuth tokens.
-  Local state in `$PDD_STATE_DIR/accounts-state.json` (`0600`) stores metadata and
-  refresh timestamps only, with zero tokens.
+  gateway grant routed through PDD Cloud (`openai_base_url` and `chatgpt_base_url`
+  pointed at the constant `<origin>/v1/codex-gateway` base URL on Codex's native
+  `openai` provider with a `[model_providers.pdd_codex_gateway]` compatibility
+  alias for `pddg_lse_…` grants, `ANTHROPIC_BASE_URL` for Claude), with zero real
+  OpenAI or Anthropic OAuth tokens written to disk, seamless `codex resume` /
+  `codex fork` session compatibility, and automatic `codex app-server` daemon
+  refresh on credential switches. Legacy `direct_stripped` Codex passes write
+  `refresh_token: ""` (`0600`) inside `$PDD_STATE_DIR/codex-home` so only PDD Cloud
+  refreshes single-use OAuth tokens. Local state in `$PDD_STATE_DIR/accounts-state.json`
+  (`0600`) stores metadata and refresh timestamps only, with zero tokens.
 - **Stick-Until-100% and automatic `reauth_required` skip.** Inside `pdd` and
   `pdd autopilot`, steps stay on the active leased account with zero switches while
   both the 5-hour and weekly windows remain below 100%. Brief burst `429` responses
