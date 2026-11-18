@@ -2,20 +2,44 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { calculateMetrics } from '../src/metrics-model.mjs';
+import { applyMetricsToggle, calculateAutopilotMetrics } from '../src/metrics-model.mjs';
 
 const scenario = JSON.parse(readFileSync(new URL('./runtime/metrics-shared-report.json', import.meta.url), 'utf8'));
-const pointer = (value, path) => path === '' ? value : path.slice(1).split('/').reduce((v, segment) => v?.[segment.replaceAll('~1','/').replaceAll('~0','~')], value);
+const storyText = readFileSync(new URL('../user_stories/metrics-shared-report.md', import.meta.url), 'utf8');
+
+function pointerGet(root, pointer) {
+  if (!pointer || pointer === '/') return root;
+  const parts = pointer.slice(1).split('/').map(p => p.replaceAll('~1', '/').replaceAll('~0', '~'));
+  let cur = root;
+  for (const part of parts) {
+    assert.notEqual(cur, undefined, `Missing parent at ${pointer}`);
+    assert.notEqual(cur, null, `Null parent at ${pointer}`);
+    cur = Array.isArray(cur) ? cur[Number(part)] : cur[part];
+  }
+  return cur;
+}
+
+test('Story criteria in metrics-shared-report.json match user_stories/metrics-shared-report.md word for word', () => {
+  const numbered = [...storyText.matchAll(/^\d+\.\s+(.+)$/gm)].map(m => m[1].trim());
+  assert.equal(numbered.length, scenario.criteria.length);
+  for (let i = 0; i < numbered.length; i++) {
+    assert.equal(scenario.criteria[i].id, `AC${i + 1}`);
+    assert.equal(scenario.criteria[i].text, numbered[i]);
+  }
+});
+
 for (const step of scenario.steps) {
-  test(`scenario ${step.step_id}`, () => {
-    assert.equal(step.operation, 'calculateMetrics');
-    const result = calculateMetrics(step.input);
+  test(`metrics-shared-report.json: ${step.step_id}`, () => {
+    const fn = step.operation === 'applyMetricsToggle' ? applyMetricsToggle : calculateAutopilotMetrics;
+    const result = fn(structuredClone(step.input));
     for (const check of step.checks) {
-      assert.equal(check.target, 'result', `${step.step_id}: unsupported target`);
-      const actual = pointer(result, check.path);
-      if (check.op === 'count') assert.equal(actual?.length, check.value, check.criterion_id);
-      else if (check.op === 'equals') assert.deepEqual(actual, check.value, check.criterion_id);
-      else assert.fail(`Unsupported check ${check.op}`);
+      assert.equal(check.target, 'result');
+      assert.equal(check.op, 'equals');
+      assert.deepEqual(
+        pointerGet(result, check.path),
+        check.value,
+        `${step.step_id} ${check.criterion_id} ${check.path}`,
+      );
     }
   });
 }

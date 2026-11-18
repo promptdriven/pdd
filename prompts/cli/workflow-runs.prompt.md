@@ -108,8 +108,6 @@ For workflow session observations and cleanup only, updateRun accepts ports.pres
 
 - [Cost ledger](cost-ledger.prompt.md): required native generation and verification context for local cost capture and reports.
 
-- [Metrics hooks](metrics-hooks.prompt.md): required native generation/verification context for journal construction and retained delivery. [Metrics gaps](metrics-gap.prompt.md) owns fallback coverage events.
-
 - [Approval policy and journal](approval-policy.prompt.md): required authoring/generation/native-production/verification/testing context for the evidence value schema; no reverse dependency on runner.
 
 ## Selection
@@ -120,8 +118,4 @@ For workflow session observations and cleanup only, updateRun accepts ports.pres
 - `listRuns({cwd}, ports)` returns the runs of the current repository, or all indexed runs outside a repository.
 - `allRuns({cancelled}, ports)` returns every run on this machine. It finds the repositories only from the run index (`<stateDir>/runs.json`), never from a Herdr layout registry, then reads each `<commonDir>/pdd/runs/<N>/status.json`. With `cancelled` it also reads the renamed `<N>-cancelled-<id>` folders. Deduplicate by saved run directory, runId and startedAt together; an archived attempt can retain the same runDir as its replacement and must remain distinct. A repository or file that is gone or unreadable is skipped without an error.
 
-Before each atomic run publication, journal retained completion facts with stable installation identity and unique transition identity in the same status record. Initialize installation identity and capture-start time on first capture. On capture failure retain a visible incomplete-coverage warning and preserve ordinary progress. After publication retry delivery of the retained journal; a failure is visible and never gates execution.
-
-Capture journal construction consumes pending observations only on success; preserve them and a coverage gap for later retry on failure. Optional metrics syncing never gates the original atomic status publication.
-
-Retain the ordinary injected pathname-write and atomic-rename publication behavior. Capture, delivery, coverage-gap and warning callbacks are best effort; even a throwing warning must not stop ordinary progress or turn a committed rename into failure. Asynchronous drain rejection must be contained. Native status write and rename failures retain their ordinary errors. Optional identity and gap storage use injected filesystem ports for controlled failure verification.
+Retain the ordinary injected pathname-write and atomic-rename publication behavior. Native status write and rename failures retain their ordinary errors.

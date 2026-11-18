@@ -968,10 +968,14 @@ Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outsid
 
 ## Metrics
 
-- `pdd metrics [--json] [--date YYYY-MM-DD | --week [YYYY-MM-DD] | --snapshot ID] [--timezone IANA] [--at UTC] [--expected-source ID...]`
-- `pdd metrics export FILE [--timezone IANA]`
-- `pdd metrics import FILE`
-- `pdd metrics record FILE`
+- `pdd metrics [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]`
+- `pdd metrics stages [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]`
+- `pdd metrics skills [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]`
+- `pdd metrics full [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]`
+- `pdd metrics on [--repo OWNER/REPO] [--json]`
+- `pdd metrics off [--repo OWNER/REPO] [--json]`
+
+See [Metrics](metrics.md) for the three Autopilot views, local state layout, and recording switch.
 
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 

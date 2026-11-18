@@ -22,6 +22,7 @@ import { slotCount, GUARD } from './machine-guard.mjs';
 import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
 const isPoolRotatableService = text => Boolean(text && (isQuotaExhaustionMessage(text) || isAuthFailureMessage(text)));
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
+import { recordAutopilotMetric } from './autopilot-metrics.mjs';
 
 const { interfaceBlocks, proseSha256, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
 
@@ -817,7 +818,7 @@ function formatQuestion(question, options, recommended) {
   return [text, ...list.map((option, i) => `${letters[i]}) ${option}${i === chosen ? ' (recommended)' : ''}`), `Reply with one letter, for example: ${letters[Math.max(chosen, 0)]}`].join('\n');
 }
 const RESULT_RULES = (result, ctx = null, allowNotReproduced = false) => `Before you exit, write this JSON file: ${result}
-- Success: {"outcome":"pr","head":"<40-character SHA you pushed>","pr":<PR number if open, or omit so Autopilot opens it>,"title":"<concise PR title>","summary":"<short PR summary, including Choices Autopilot made when needed; Autopilot stamps Fixes/Closes, Path:, Runtime: and Evidence: in code>","promptChanged":true|false,"tests":{"state":"pass|fail","passed":<n>,"total":<m>},"adopt":[],"runtime":{"state":"pass|fail|not-run","cause":"<exact reason>","kind":"runtime","component":"<tool, for example pdd lint>","code":"<short-error-code>","detail":"<at most 20 lines of the tool's error output, with no code from this repository>"}}. Give kind, component, code and detail when Runtime could not check.${allowNotReproduced ? `
+- Success: {"outcome":"pr","head":"<40-character SHA you pushed>","pr":<PR number if open, or omit so Autopilot opens it>,"title":"<concise PR title>","summary":"<short PR summary, including Choices Autopilot made when needed; Autopilot stamps Fixes/Closes, Path:, Runtime: and Evidence: in code>","skill":"small-change|bug|feature","promptChanged":true|false,"tests":{"state":"pass|fail","passed":<n>,"total":<m>},"adopt":[],"runtime":{"state":"pass|fail|not-run","cause":"<exact reason>","kind":"runtime","component":"<tool, for example pdd lint>","code":"<short-error-code>","detail":"<at most 20 lines of the tool's error output, with no code from this repository>"}}. Give kind, component, code and detail when Runtime could not check.${allowNotReproduced ? `
 - Not reproduced (only when the red CI or full-suite failure did not reproduce and you changed no files): {"outcome":"not reproduced","command":"<exact reproduction command you ran>","detail":"<at most 20 lines of passing output>"}` : ''}
 - Failure: {"outcome":"failed","kind":"pdd|job","component":"<tool, for example pdd test>","code":"<short-error-code>","cause":"<one sentence>","detail":"<at most 20 lines of the failing tool's error output, with no code from this repository>"}
 - Needs a person: {"outcome":"needs-person","kind":"blocker|choice","question":"<one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"}, only when you cannot go on without a person's decision: "kind":"blocker" for a blocker or one of the two cases that always go to a person (rule 1)${ctx && !asking(ctx) ? ', and never for a choice: decide it and list it (rule 1)' : ', "kind":"choice" only for a choice that rule 1 lets you ask'}. Ask exactly one question with 2 or 3 options; Autopilot posts it on the issue and a later job gets the answer.
@@ -6038,13 +6039,42 @@ async function finishLocal(ctx, job, outcome, text) {
       await step('worktree', async () => { if (!await removeTree(ctx, path)) throw Error(`${path} stays`); });
     if (outcome === 'merged') await step('branch', () => ctx.git(['branch', '-D', job.branch]));
     for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log') && !/-evidence-[0-9a-f]+\.json$/.test(name))) await step('logs', () => ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true }));
-    await step('history', () => appendHistory(ctx, { at: ctx.now(), issue: job.issue, ...(jobIssues(job).length > 1 ? { issues: jobIssues(job) } : {}), outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: honestEvidence(job) ?? null,
-      ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
-      ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
-      ...(job.end?.cause?.ask ? { ask: job.end.cause.ask } : {}), ...(job.decided ? { decided: oneLine(job.decided.question, 300) } : {}),
-      ...(job.end?.cause?.poolExhausted ? { poolExhausted: true } : {}),
-      ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}), ...(job.end?.cause?.owner ? { owner: job.end.cause.owner } : {}),
-      ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}) }));
+    await step('history', () => {
+      const nowAt = ctx.now();
+      const ev = honestEvidence(job) ?? null;
+      appendHistory(ctx, { at: nowAt, issue: job.issue, ...(jobIssues(job).length > 1 ? { issues: jobIssues(job) } : {}), ...(job.skill ? { skill: job.skill } : {}), outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: ev,
+        ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
+        ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
+        ...(job.end?.cause?.ask ? { ask: job.end.cause.ask } : {}), ...(job.decided ? { decided: oneLine(job.decided.question, 300) } : {}),
+        ...(job.end?.cause?.poolExhausted ? { poolExhausted: true } : {}),
+        ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}), ...(job.end?.cause?.owner ? { owner: job.end.cause.owner } : {}),
+        ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}) });
+      const metricsStateDir = ctx.ports.metricsStateDir ?? (basename(dirname(ctx.root)) === 'autopilot' ? dirname(dirname(ctx.root)) : join(ctx.root, '.metrics-state'));
+      const letters = Array.isArray(job.paths?.letters) ? job.paths.letters : [];
+      const wallMin = job.telemetry?.phases?.wallClockMinutes ?? (Number.isFinite(job.started) && nowAt > job.started ? (nowAt - job.started) / 60000 : null);
+      recordAutopilotMetric({
+        repo: ctx.repo,
+        issue: job.issue,
+        issues: jobIssues(job),
+        skill: job.skill ?? null,
+        startedAt: job.started ?? nowAt,
+        at: nowAt,
+        status: outcome,
+        pr: job.pr ?? null,
+        gates: {
+          runtime: ev?.runtime?.state ?? job.runtime?.state ?? null,
+          vectors: ev?.vectors?.state ?? job.vectors?.result?.vectors?.state ?? null,
+          formal: ev?.formal?.state ?? job.vectors?.result?.formal?.state ?? null,
+          suite: outcome === 'merged' || outcome === 'would-merge' ? 'pass' : (/full test suite|suite runner failed/i.test(String(text ?? '')) ? 'fail' : null),
+          review: outcome === 'merged' || outcome === 'would-merge' ? 'pass' : (job.review?.verdict ?? (/Review FAIL|fresh reviewer ended/i.test(String(text ?? '')) ? 'fail' : null)),
+          ci: outcome === 'merged' || outcome === 'would-merge' ? 'pass' : (/CI check .* failed|checks-stuck/i.test(String(text ?? '')) ? 'fail' : null),
+        },
+        durationMinutes: wallMin,
+        promptChanged: typeof job.promptChanged === 'boolean' ? job.promptChanged : undefined,
+        pathsOnlyD: letters.length > 0 && letters.every(l => l === 'd'),
+        title: job.title,
+      }, { stateDir: metricsStateDir, fs: ctx.fs, now: ctx.now });
+    });
   } finally {
     if (confirmed) try { ctx.fs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); }
     catch (error) { nativeFs.rmSync(join(ctx.dirs.jobs, `${job.issue}.json`), { force: true }); ctx.warn(`Autopilot core job file of #${job.issue}: ${error.message}`); }
@@ -6157,6 +6187,7 @@ async function advance(ctx, job) {
       phase: 'pr', pr: prNumber, head, agentHead: head, lane: null, coverage: null, vectors: null, runtimeWait: null,
       runtime: normalRuntime(stamped ? stamped.runtime : r.runtime),
       promptChanged: stamped ? stamped.promptChanged : (typeof r.promptChanged === 'boolean' ? r.promptChanged : null),
+      ...(typeof r.skill === 'string' && /^(?:pdd-)?(?:small-change|bug|feature)$/i.test(r.skill.trim()) ? { skill: r.skill.trim().toLowerCase().replace(/^pdd-/, '') } : {}),
       evidence: stamped?.evidence ?? parseEvidence(r.evidence) ?? job.evidence ?? null,
       prAt: ctx.now(), progress: { sig: null, at: ctx.now(), running: false },
     });
