@@ -25,8 +25,14 @@ import { parseCodexUsageWindows } from '../src/codex-limits.mjs';
 import {
   CloudAccountsError,
   DEFAULT_CLOUD_URL,
+  buildClaudeStepEnv,
+  buildSyntheticGatewayIdToken,
+  localClaudePaths,
+  restoreLocalClaudeGatewayConfig,
   cloudAccountsRequest,
   createCodexStepOverlay,
+  isIsolatedCodexHomeEntry,
+  isSafeCodexSourceEntry,
   leaseCloudAccount,
   listCloudAccounts,
   localCodexAuthPath,
@@ -44,6 +50,7 @@ import {
   resolveCloudAccountsEndpoint,
   restoreLocalCodexGatewayConfig,
   selectCloudPoolLogin,
+  stopCodexAppServerDaemon,
   sweepActiveCodexOverlays,
 } from '../src/login-pool.mjs';
 import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
@@ -1688,6 +1695,8 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
   const extSessions = join(sb.root, 'ext-sessions');
   mkdirSync(extSessions, { recursive: true });
   symlinkSync(extSessions, join(codexDir, 'sessions'));
+  symlinkSync(join(sb.root, 'missing-dangling-memories'), join(codexDir, 'memories'));
+  symlinkSync(join(codexDir, 'config.toml'), join(codexDir, 'agents'));
   writeFileSync(join(codexDir, 'config.toml'), [
     'model = "gpt-5.4"',
     'model_provider = "custom_upstream"',
@@ -1715,14 +1724,19 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
 
   const localAuthRaw = readFileSync(authPath, 'utf8');
   const localAuth = JSON.parse(localAuthRaw);
-  assert.equal(localAuth.auth_mode, 'apikey');
-  assert.match(localAuth.OPENAI_API_KEY, /^pddg_cx-shared-1_/);
-  assert.equal(localAuth.tokens, undefined, 'zero OpenAI access_token, id_token, or refresh_token on borrower disk');
-  assert.doesNotMatch(localAuthRaw, /access_token|refresh_token|id_token/);
+  assert.equal(localAuth.auth_mode, 'chatgpt');
+  assert.equal(localAuth.OPENAI_API_KEY, null);
+  assert.match(localAuth.tokens?.access_token ?? '', /^pddg_cx-shared-1_/);
+  assert.equal(localAuth.tokens?.refresh_token, '');
+  assert.equal(localAuth.tokens?.account_id, 'acct_pdd_gateway');
+  assert.equal(localAuth.tokens?.id_token, buildSyntheticGatewayIdToken({ planType: 'pro' }));
+  assert.doesNotMatch(localAuthRaw, /oa_shared_secret|rt_shared_secret|id_shared_secret/, 'zero real OpenAI OAuth tokens on borrower disk');
 
   const localCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(localCfg.model, 'gpt-5.4', 'preserved top-level model');
-  assert.equal(localCfg.model_provider, 'pdd_codex_gateway');
+  assert.equal(localCfg.model_provider, undefined, 'native openai provider retained (no top-level model_provider)');
+  assert.match(localCfg.openai_base_url ?? '', /\/v1\/codex-gateway\/lse_/);
+  assert.equal(localCfg.chatgpt_base_url, localCfg.openai_base_url);
   assert.deepEqual({ ...localCfg.mcp_servers?.pdd }, {
     command: 'node',
     args: ['bin/pdd.mjs', 'mcp'],
@@ -1732,7 +1746,7 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
   assert.equal(localCfg.model_providers?.pdd_codex_gateway?.wire_api, 'responses');
   assert.equal(localCfg.model_providers?.pdd_codex_gateway?.requires_openai_auth, false);
   assert.equal(localCfg.model_providers?.pdd_codex_gateway?.supports_websockets, false);
-  assert.equal(localCfg.model_providers?.pdd_codex_gateway?.http_headers?.['x-pdd-gateway-grant'], localAuth.OPENAI_API_KEY);
+  assert.equal(localCfg.model_providers?.pdd_codex_gateway?.http_headers?.['x-pdd-gateway-grant'], localAuth.tokens.access_token);
 
   const savedState = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
   assert.equal(savedState.active.codex.delivery_mode, 'gateway_grant');
@@ -1814,7 +1828,10 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
       assert.equal(statSync(join(ovDir, 'config.toml')).mode & 0o777, 0o600);
       assert.equal(lstatSync(join(ovDir, 'skills')).isSymbolicLink(), true, 'skills dir symlinked');
       assert.equal(lstatSync(join(ovDir, 'rules')).isSymbolicLink(), true, 'rules dir symlinked');
-      assert.equal(existsSync(join(ovDir, 'sessions')), false, 'symlinked source sessions dir is NOT symlinked');
+      assert.equal(lstatSync(join(ovDir, 'sessions')).isSymbolicLink(), true, 'valid external symlinked sessions dir IS symlinked');
+      assert.equal(realpathSync(join(ovDir, 'sessions')), realpathSync(extSessions));
+      assert.equal(existsSync(join(ovDir, 'memories')), false, 'dangling symlinked memories dir is NOT symlinked');
+      assert.equal(existsSync(join(ovDir, 'agents')), false, 'symlink targeting config.toml is NOT symlinked');
 
       assert.match(opts.env.PDD_CODEX_GATEWAY_GRANT ?? '', /^pddg_/);
       assert.equal(opts.env.OPENAI_API_KEY, undefined);
@@ -1879,6 +1896,8 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
   assert.equal(ownerAuth.tokens.refresh_token, '');
   const ownerCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(ownerCfg.model_provider, 'custom_upstream', 'previous model_provider restored cleanly');
+  assert.equal(ownerCfg.openai_base_url, undefined, 'PDD-managed openai_base_url stripped cleanly');
+  assert.equal(ownerCfg.chatgpt_base_url, undefined, 'PDD-managed chatgpt_base_url stripped cleanly');
   assert.equal(ownerCfg.model_providers, undefined, '[model_providers.pdd_codex_gateway] stripped cleanly');
   assert.deepEqual(ownerCfg.mcp_servers?.pdd, localCfg.mcp_servers.pdd, '[mcp_servers.pdd] preserved');
   const ownerState = JSON.parse(readFileSync(join(sb.stateDir, 'accounts-state.json'), 'utf8'));
@@ -1895,6 +1914,8 @@ test('3426: shared Codex gateway_grant materializes tokenless step overlays & lo
   assert.equal(existsSync(authPath), false, 'pddg_* auth.json removed when leaving shared Codex account with no replacement');
   const leftCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(leftCfg.model_provider, 'custom_upstream', 'model_provider restored on leave');
+  assert.equal(leftCfg.openai_base_url, undefined, 'openai_base_url removed on leave');
+  assert.equal(leftCfg.chatgpt_base_url, undefined, 'chatgpt_base_url removed on leave');
   assert.equal(leftCfg.model_providers, undefined, 'pdd_codex_gateway removed on leave');
   assert.deepEqual(leftCfg.mcp_servers?.pdd, localCfg.mcp_servers.pdd, '[mcp_servers.pdd] still intact after leave');
 
@@ -2084,7 +2105,12 @@ test('3427: isolated temp CODEX_HOME on add, --device-auth, --loop auto-labels &
   assert.equal(impFrom.exit, 0, impFrom.stderr);
   assert.match(impFrom.stdout, /Enrolled Codex account "cx-imported"/);
   assert.match(impFrom.stdout, /Shared with promptdriven\/eng \(invite inv_\d+\), @promptdriven \(invite inv_\d+\)/);
-  assert.equal(readFileSync(extAuthPath, 'utf8'), extRawJson, 'external --from file left intact');
+  const scrubbedExtRaw = readFileSync(extAuthPath, 'utf8');
+  assert.equal(scrubbedExtRaw.includes('rt_ext_import_secret8888'), false, 'single-use refresh_token scrubbed from --from source file');
+  const scrubbedExtJson = JSON.parse(scrubbedExtRaw);
+  assert.equal(scrubbedExtJson.tokens.refresh_token, '');
+  assert.equal(scrubbedExtJson.tokens.account_id, 'acct_ext_import');
+  assert.equal(statSync(extAuthPath).mode & 0o777, 0o600);
 
   // 6. Upfront validation on `share` & `unshare` BEFORE network mutations!
   const reqCountBeforeInvalid = cloud.state.requests.length;
@@ -2159,7 +2185,7 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
     },
     readCodexUsageWindows: async ({ env: probeEnv }) => {
       const raw = JSON.parse(readFileSync(join(probeEnv.CODEX_HOME, 'auth.json'), 'utf8'));
-      addProbeSawFullTokens = raw.tokens?.refresh_token === 'rt_probe_add_secret2222';
+      addProbeSawFullTokens = raw.tokens?.access_token === 'at_probe_add_secret1111' && raw.tokens?.refresh_token === '';
       return {
         state: 'ok',
         five_hour_used_percent: 34,
@@ -2170,13 +2196,13 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
     },
   });
   assert.equal(addRes.exit, 0, addRes.stderr);
-  assert.equal(addProbeSawFullTokens, true, 'local usage probe ran against temp CODEX_HOME BEFORE temp dir was wiped');
+  assert.equal(addProbeSawFullTokens, true, 'local usage probe ran against disposable temp CODEX_HOME with refresh_token cleared');
   const addedAcc = cloud.state.accounts.find(a => a.label === 'probe-add');
   assert.equal(addedAcc.five_hour_used_percent, 34);
   assert.equal(addedAcc.weekly_used_percent, 61);
   assert.equal(addedAcc.weekly_reset_at, '2026-11-20T00:00:00Z');
 
-  // 2. Codex `import` when server returns 0%/0% & null resets: probes BEFORE stripping ~/.codex/auth.json, and fails open on probe error!
+  // 2. Codex `import` when server returns 0%/0% & null resets: probes with scrubbed refresh_token copy BEFORE scrubbing ~/.codex/auth.json, and fails open on probe error!
   mkdirSync(join(sb.home, '.codex'), { recursive: true });
   writeFileSync(join(sb.home, '.codex', 'auth.json'), JSON.stringify({
     auth_mode: 'chatgpt',
@@ -2191,8 +2217,11 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
   let impProbeSawUnstripped = false;
   const impRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'probe-imp'], sb, {
     readCodexUsageWindows: async ({ env: probeEnv }) => {
-      const raw = JSON.parse(readFileSync(join(probeEnv.CODEX_HOME, 'auth.json'), 'utf8'));
-      impProbeSawUnstripped = raw.tokens?.refresh_token === 'rt_probe_imp_secret4444';
+      const probeRaw = JSON.parse(readFileSync(join(probeEnv.CODEX_HOME, 'auth.json'), 'utf8'));
+      const homeRawDuringProbe = JSON.parse(readFileSync(join(sb.home, '.codex', 'auth.json'), 'utf8'));
+      impProbeSawUnstripped = probeRaw.tokens?.access_token === 'at_probe_imp_secret3333'
+        && probeRaw.tokens?.refresh_token === ''
+        && homeRawDuringProbe.tokens?.refresh_token === 'rt_probe_imp_secret4444';
       return {
         state: 'ok',
         five_hour_used_percent: 19,
@@ -2203,7 +2232,7 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
     },
   });
   assert.equal(impRes.exit, 0, impRes.stderr);
-  assert.equal(impProbeSawUnstripped, true, 'import usage probe ran BEFORE stripping local ~/.codex/auth.json');
+  assert.equal(impProbeSawUnstripped, true, 'import usage probe used scrubbed temp copy before scrubbing ~/.codex/auth.json');
   const impAcc = cloud.state.accounts.find(a => a.label === 'probe-imp');
   assert.equal(impAcc.five_hour_used_percent, 19);
   assert.equal(impAcc.weekly_used_percent, 48);
@@ -2231,7 +2260,7 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
   const idxBeforeList = cloud.state.requests.length;
   const listOut = await invokeCli(['accounts', 'list'], sb);
   assert.equal(listOut.exit, 0);
-  assert.match(listOut.stdout, /probe-add\s+codex\s+owner \(Serhan-Asad\)\s+34%/);
+  assert.match(listOut.stdout, /probe-add\s+codex\s+owner \(Serhan-Asad\)\s+66% left/);
   const rootListOut = await invokeCli(['accounts'], sb);
   assert.equal(rootListOut.exit, 0);
   const listReqs = cloud.state.requests.slice(idxBeforeList).filter(r => r.method === 'GET' && r.path === '/v1/accounts');
@@ -2348,7 +2377,10 @@ test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ 
 
   // 3A. Server-side revoke/unshare + borrower `pdd accounts list` restores `~/.codex/config.toml` & removes `pddg_*` `auth.json`!
   assert.equal((await invokeCli(['accounts', 'use', 'cx-shared-rev1'], sb)).exit, 0);
-  assert.equal(parseToml(readFileSync(configPath, 'utf8')).model_provider, 'pdd_codex_gateway');
+  const preRevokeListCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(preRevokeListCfg.model_provider, undefined);
+  assert.match(preRevokeListCfg.openai_base_url ?? '', /\/v1\/codex-gateway/);
+  assert.equal(preRevokeListCfg.chatgpt_base_url, preRevokeListCfg.openai_base_url);
   assert.equal(existsSync(authPath), true);
 
   cloud.state.accounts[0].revoked = true;
@@ -2357,13 +2389,17 @@ test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ 
   assert.equal(existsSync(authPath), false, 'pddg_* auth.json removed when list prunes revoked shared Codex account');
   const healedListCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(healedListCfg.model_provider, 'custom_upstream', 'previous model_provider restored when list prunes revoked shared account');
+  assert.equal(healedListCfg.openai_base_url, undefined, 'openai_base_url stripped on list prune');
+  assert.equal(healedListCfg.chatgpt_base_url, undefined, 'chatgpt_base_url stripped on list prune');
   assert.equal(healedListCfg.model_providers, undefined, '[model_providers.pdd_codex_gateway] stripped on list prune');
   assert.equal(healedListCfg.mcp_servers?.pdd?.command, 'node');
 
   // 3B. Server-side revoke/unshare + `runStepAgentProcess` zero-accounts heal restores `~/.codex/config.toml` & removes `pddg_*` `auth.json`!
   cloud.state.accounts[0].revoked = false;
   assert.equal((await invokeCli(['accounts', 'use', 'cx-shared-rev1'], sb)).exit, 0);
-  assert.equal(parseToml(readFileSync(configPath, 'utf8')).model_provider, 'pdd_codex_gateway');
+  const preRevokeStepCfg = parseToml(readFileSync(configPath, 'utf8'));
+  assert.equal(preRevokeStepCfg.model_provider, undefined);
+  assert.match(preRevokeStepCfg.openai_base_url ?? '', /\/v1\/codex-gateway/);
   assert.equal(existsSync(authPath), true);
 
   cloud.state.accounts[0].revoked = true;
@@ -2386,6 +2422,8 @@ test('3426 & 3427 review regressions: shell_environment_policy migration, pddg_ 
   assert.equal(existsSync(authPath), false, 'pddg_* auth.json removed during runStepAgentProcess zero-accounts heal');
   const healedStepCfg = parseToml(readFileSync(configPath, 'utf8'));
   assert.equal(healedStepCfg.model_provider, 'custom_upstream', 'previous model_provider restored during runStepAgentProcess zero-accounts heal');
+  assert.equal(healedStepCfg.openai_base_url, undefined);
+  assert.equal(healedStepCfg.chatgpt_base_url, undefined);
   assert.equal(healedStepCfg.model_providers, undefined);
 
   // 4. `Ctrl-C` / `SIGINT` on `--loop` iteration 0 exits 0 cleanly, while non-`--loop` `{ code: null }` exits 1!
@@ -3193,4 +3231,597 @@ test('3445 T5: sync guards paused/expiring/step-only leases, Cloud bearer 401 sa
     '2026-11-16T20:00:00.000Z',
     'unrelated Claude reauth marker survived Codex zero-account heal',
   );
+});
+
+test('#3516: native openai provider gateway materialization, synthetic unsigned id_token, non-PDD base URL preservation, and hermetic stopCodexAppServerDaemon', t => {
+  // 1. Deterministic synthetic unsigned metadata JWT (`alg: "none"`, `sig`, zero secrets)
+  const defaultJwt = buildSyntheticGatewayIdToken();
+  const [rawHeader, rawPayload, rawSig] = defaultJwt.split('.');
+  assert.equal(rawSig, 'sig');
+  assert.deepEqual(JSON.parse(Buffer.from(rawHeader, 'base64url').toString('utf8')), { alg: 'none', typ: 'JWT' });
+  assert.deepEqual(JSON.parse(Buffer.from(rawPayload, 'base64url').toString('utf8')), {
+    exp: 4102444800,
+    iat: 1700000000,
+    'https://api.openai.com/auth': {
+      chatgpt_account_id: 'acct_pdd_gateway',
+      chatgpt_plan_type: 'pro',
+      chatgpt_user_id: 'user_pdd_gateway',
+    },
+  });
+  const teamJwt = buildSyntheticGatewayIdToken({ planType: 'Team' });
+  assert.equal(
+    JSON.parse(Buffer.from(teamJwt.split('.')[1], 'base64url').toString('utf8'))['https://api.openai.com/auth'].chatgpt_plan_type,
+    'team',
+  );
+
+  // 2. Preserving non-PDD user `openai_base_url` and `chatgpt_base_url` while stripping PDD-managed gateway URLs
+  const sb = makeTempSandbox(t, 'https://cloud.example.com');
+  const userCodexDir = localCodexHome(sb.env);
+  mkdirSync(userCodexDir, { recursive: true, mode: 0o700 });
+  const userCfgPath = localCodexConfigPath(sb.env);
+  writeFileSync(userCfgPath, [
+    'model = "gpt-5.4"',
+    'openai_base_url = "https://corp-openai.example.com/v1"',
+    'chatgpt_base_url = "https://corp-chatgpt.example.com/backend-api"',
+    '',
+  ].join('\n'), { mode: 0o600 });
+
+  const daemonCalls = [];
+  const spySpawnSync = (cmd, args, opts) => {
+    daemonCalls.push({ cmd, args, codexHome: opts?.env?.CODEX_HOME, timeout: opts?.timeout });
+    return { status: 0 };
+  };
+
+  const mat = materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    plan_type: 'team',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_01020304',
+    codex_gateway_token: 'pddg_lse_01020304_grantTokenAbc',
+  }, { env: sb.env }, { now: () => Date.parse('2026-11-18T00:00:00.000Z') });
+
+  // User ~/.codex/config.toml keeps its custom non-PDD URLs untouched!
+  const untouchedUserCfg = parseToml(readFileSync(userCfgPath, 'utf8'));
+  assert.equal(untouchedUserCfg.openai_base_url, 'https://corp-openai.example.com/v1');
+  assert.equal(untouchedUserCfg.chatgpt_base_url, 'https://corp-chatgpt.example.com/backend-api');
+
+  // Managed config.toml routes native openai + chatgpt to normalized constant gateway URL with no top-level model_provider!
+  const managedCfg = parseToml(readFileSync(mat.configPath, 'utf8'));
+  assert.equal(managedCfg.model_provider, undefined);
+  assert.equal(managedCfg.openai_base_url, 'https://cloud.example.com/v1/codex-gateway');
+  assert.equal(managedCfg.chatgpt_base_url, 'https://cloud.example.com/v1/codex-gateway');
+  assert.equal(managedCfg.cli_auth_credentials_store, 'file');
+  assert.equal(managedCfg.model_providers?.pdd_codex_gateway?.base_url, 'https://cloud.example.com/v1/codex-gateway');
+  assert.equal(managedCfg.model_providers?.pdd_codex_gateway?.requires_openai_auth, true);
+
+  const managedAuth = JSON.parse(readFileSync(mat.authPath, 'utf8'));
+  assert.deepEqual(managedAuth, {
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: teamJwt,
+      access_token: 'pddg_lse_01020304_grantTokenAbc',
+      refresh_token: '',
+      account_id: 'acct_pdd_gateway',
+    },
+    last_refresh: '2026-11-18T00:00:00.000Z',
+  });
+
+  // Restoring gateway config removes PDD's /v1/codex-gateway URLs, restores user's non-PDD URLs, and stops stale daemon!
+  const restored = restoreLocalCodexGatewayConfig(
+    { env: sb.env, removeAuthFile: true },
+    { spawnSync: spySpawnSync },
+  );
+  assert.equal(restored.restoredConfig, true);
+  assert.equal(restored.removedAuth, true);
+  assert.equal(existsSync(mat.authPath), false);
+  const afterRestoreCfg = parseToml(readFileSync(mat.configPath, 'utf8'));
+  assert.equal(afterRestoreCfg.model_providers, undefined);
+  assert.equal(afterRestoreCfg.openai_base_url, 'https://corp-openai.example.com/v1');
+  assert.equal(afterRestoreCfg.chatgpt_base_url, 'https://corp-chatgpt.example.com/backend-api');
+  assert.equal(daemonCalls.length, 1);
+  assert.deepEqual(daemonCalls[0], {
+    cmd: 'codex',
+    args: ['app-server', 'daemon', 'stop'],
+    codexHome: pddManagedCodexHome(sb.env),
+    timeout: 2500,
+  });
+
+  // Calling restore again when nothing is gateway-managed does NOT touch non-PDD URLs or spawn daemon stop!
+  const noopRestore = restoreLocalCodexGatewayConfig(
+    { env: sb.env, removeAuthFile: true },
+    { spawnSync: spySpawnSync },
+  );
+  assert.equal(noopRestore.restoredConfig, false);
+  assert.equal(noopRestore.removedAuth, false);
+  assert.equal(daemonCalls.length, 1, 'no daemon stop spawned when neither config nor auth changed');
+
+  // Switching from gateway_grant to direct_stripped also strips PDD gateway URLs while preserving non-PDD user URLs!
+  materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_01020304',
+    codex_gateway_token: 'pddg_lse_01020304_grantTokenAbc',
+  }, { env: sb.env });
+  materializeLocalCodexAuth({
+    auth_mode: 'chatgpt',
+    tokens: {
+      access_token: 'direct_access',
+      refresh_token: 'direct_refresh_to_strip',
+      id_token: makeJwt({ email: 'owner@example.com' }),
+      account_id: 'acct_owner_direct',
+    },
+  }, { env: sb.env, previousManagedCodexGateway: true });
+  const directCfg = parseToml(readFileSync(mat.configPath, 'utf8'));
+  assert.equal(directCfg.model_providers, undefined);
+  assert.equal(directCfg.openai_base_url, 'https://corp-openai.example.com/v1');
+  assert.equal(directCfg.chatgpt_base_url, 'https://corp-chatgpt.example.com/backend-api');
+
+  // 3. Hermetic virtual-fs guard on stopCodexAppServerDaemon
+  const fakeVirtualFs = {};
+  assert.equal(stopCodexAppServerDaemon('/virtual/codex-home', { fs: fakeVirtualFs }), false);
+  let virtualSpyCalled = false;
+  assert.equal(
+    stopCodexAppServerDaemon('/virtual/codex-home', {
+      fs: fakeVirtualFs,
+      spawnSync: () => {
+        virtualSpyCalled = true;
+        throw new Error('simulated codex missing');
+      },
+    }),
+    false,
+  );
+  assert.equal(virtualSpyCalled, true, 'explicit spawnSync port is invoked and fail-open on error');
+});
+
+test('#3518: managed CODEX_HOME symlinks plugins, browser, chrome-native-hosts-v2.json, computer-use, and node_repl, and heals pre-existing partial non-symlink cache dirs without touching user sessions', t => {
+  const sb = makeTempSandbox(t, 'https://cloud.example.com');
+  const userCodexDir = localCodexHome(sb.env);
+  const managedHome = pddManagedCodexHome(sb.env);
+  mkdirSync(userCodexDir, { recursive: true, mode: 0o700 });
+
+  // Populate `~/.codex` with full bundled plugins/browser/native-host/computer-use/node_repl state.
+  mkdirSync(join(userCodexDir, 'plugins', 'cache', 'openai-bundled', 'browser'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'plugins', 'cache', 'openai-primary-runtime'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'plugins', 'cache', 'openai-bundled', 'browser', 'manifest.json'), '{"name":"browser"}');
+  mkdirSync(join(userCodexDir, 'browser'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'browser', 'state.json'), '{"ok":true}');
+  mkdirSync(join(userCodexDir, 'computer-use'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'computer-use', 'helper.json'), '{"ok":true}');
+  mkdirSync(join(userCodexDir, 'node_repl'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'node_repl', 'runtime.json'), '{"ok":true}');
+  writeFileSync(join(userCodexDir, 'chrome-native-hosts-v2.json'), '{"hosts":["com.openai.codex"]}\n');
+  mkdirSync(join(userCodexDir, 'sessions'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'memories'), { recursive: true });
+
+  // 1. Fresh materialization symlinks all 5 new plugin/browser entries into managedHome!
+  materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_3518a',
+    codex_gateway_token: 'pddg_lse_3518a_grantTokenFresh',
+  }, { env: sb.env }, { spawnSync: () => ({ status: 0 }) });
+
+  for (const name of ['plugins', 'browser', 'chrome-native-hosts-v2.json', 'computer-use', 'node_repl']) {
+    const linkPath = join(managedHome, name);
+    assert.equal(lstatSync(linkPath).isSymbolicLink(), true, `${name} symlinked on fresh materialization`);
+    assert.equal(realpathSync(linkPath), realpathSync(join(userCodexDir, name)));
+  }
+
+  // 2. Upgrade healing: simulate a machine from 0.1.35 where codex already created a real non-symlink
+  //    `managedHome/plugins` (with only `cache/openai-curated-remote`), non-symlink `browser`, and
+  //    non-symlink `chrome-native-hosts-v2.json`, PLUS a non-symlink `managedHome/sessions` containing
+  //    user session data that MUST NOT be deleted!
+  for (const name of ['plugins', 'browser', 'chrome-native-hosts-v2.json', 'computer-use', 'node_repl', 'sessions', 'memories']) {
+    rmSync(join(managedHome, name), { recursive: true, force: true });
+  }
+  mkdirSync(join(managedHome, 'plugins', 'cache', 'openai-curated-remote'), { recursive: true });
+  writeFileSync(join(managedHome, 'plugins', 'cache', 'openai-curated-remote', 'partial.json'), '{}');
+  mkdirSync(join(managedHome, 'browser'), { recursive: true });
+  writeFileSync(join(managedHome, 'chrome-native-hosts-v2.json'), '{"stale":true}\n');
+  mkdirSync(join(managedHome, 'sessions'), { recursive: true });
+  writeFileSync(join(managedHome, 'sessions', 'keep-user-rollout.jsonl'), '{"keep":true}\n');
+  mkdirSync(join(managedHome, 'memories'), { recursive: true });
+  writeFileSync(join(managedHome, 'memories', 'keep-memory.md'), 'important note\n');
+
+  materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_3518b',
+    codex_gateway_token: 'pddg_lse_3518b_grantTokenHeal',
+  }, { env: sb.env }, { spawnSync: () => ({ status: 0 }) });
+
+  // Incomplete auto-generated cache dirs + native-hosts file in managedHome were replaced with symlinks to ~/.codex!
+  for (const name of ['plugins', 'browser', 'chrome-native-hosts-v2.json', 'computer-use', 'node_repl']) {
+    const linkPath = join(managedHome, name);
+    assert.equal(lstatSync(linkPath).isSymbolicLink(), true, `stale non-symlink ${name} replaced with symlink`);
+    assert.equal(realpathSync(linkPath), realpathSync(join(userCodexDir, name)));
+  }
+  assert.equal(
+    existsSync(join(managedHome, 'plugins', 'cache', 'openai-bundled', 'browser', 'manifest.json')),
+    true,
+    'managed CODEX_HOME now exposes ~/.codex/plugins/cache/openai-bundled',
+  );
+  assert.equal(
+    existsSync(join(managedHome, 'plugins', 'cache', 'openai-primary-runtime')),
+    true,
+    'managed CODEX_HOME now exposes ~/.codex/plugins/cache/openai-primary-runtime',
+  );
+  assert.equal(
+    readFileSync(join(managedHome, 'chrome-native-hosts-v2.json'), 'utf8'),
+    '{"hosts":["com.openai.codex"]}\n',
+  );
+
+  // Non-symlink `sessions` and `memories` in managedHome were NOT deleted, and `~/.codex/plugins` is intact!
+  assert.equal(lstatSync(join(managedHome, 'sessions')).isSymbolicLink(), false);
+  assert.equal(readFileSync(join(managedHome, 'sessions', 'keep-user-rollout.jsonl'), 'utf8'), '{"keep":true}\n');
+  assert.equal(lstatSync(join(managedHome, 'memories')).isSymbolicLink(), false);
+  assert.equal(readFileSync(join(managedHome, 'memories', 'keep-memory.md'), 'utf8'), 'important note\n');
+  assert.equal(lstatSync(join(userCodexDir, 'plugins')).isSymbolicLink(), false);
+});
+
+test('dynamic ~/.codex mirror + denylist + safe symlink support + pruning in managedHome and createCodexStepOverlay', t => {
+  const sb = makeTempSandbox(t, 'https://cloud.example.com');
+  const userCodexDir = localCodexHome(sb.env);
+  const managedHome = pddManagedCodexHome(sb.env);
+  mkdirSync(userCodexDir, { recursive: true, mode: 0o700 });
+  mkdirSync(managedHome, { recursive: true, mode: 0o700 });
+
+  // Direct classifier unit checks
+  for (const denied of [
+    '.', '..', '.DS_Store', 'auth.json', 'auth.lock', 'auth.json.bak',
+    'auth.json~', 'auth.json-bak', 'auth.json_old',
+    'config.toml', 'config.toml.bak', 'config.toml~', '.config.toml.merge-lock', 'model-switch-backups',
+    '.codex-global-state.json', 'version.json', 'vendor_imports',
+    'app-server-daemon', 'app-server-control', 'ipc', 'tmp', '.tmp', '.tmp_upload', 'draft.tmp', 'log',
+    'logs_2.sqlite', 'logs_2.sqlite-wal', 'logs_2.sqlite-shm', 'logs_2.sqlite-journal',
+    'logs_app.sqlite', 'logs_2.sqlite.corrupt', 'state_5.sqlite-wal',
+    'state_5.sqlite-shm', 'state_5.sqlite-journal', 'models_cache.json', 'shell_snapshots', 'mcp-oauth-locks',
+    '.sqlite-maintenance.lock', 'installation_id', 'custom.lock', 'sync-lock',
+    'old.bak-20261115', 'partial.tmp.99',
+  ]) {
+    assert.equal(isIsolatedCodexHomeEntry(denied), true, `expected ${denied} to be denylisted`);
+  }
+  for (const allowed of [
+    'AGENTS.md', 'agents', 'skills', 'hooks.json', '.hook-trust', 'review-prompts',
+    'packages', 'herdr.config.toml', 'prompt.tmpl',
+    'herdr-agent-state.sh', 'prompts', 'generated_images', 'state_5.sqlite',
+    'thread_history_1.sqlite', 'future_codex_feature_2027',
+  ]) {
+    assert.equal(isIsolatedCodexHomeEntry(allowed), false, `expected ${allowed} to be allowed`);
+  }
+
+  // Seed external dotfiles targets (both relative and absolute symlinks in ~/.codex)
+  const codexManagedDir = join(sb.home, '.codex-managed');
+  mkdirSync(codexManagedDir, { recursive: true });
+  writeFileSync(join(codexManagedDir, 'AGENTS.md'), '# Shared AGENTS instructions\n');
+  const extSkillsDir = join(sb.home, '.agents', 'skills', 'demo-skill');
+  mkdirSync(extSkillsDir, { recursive: true });
+  writeFileSync(join(extSkillsDir, 'SKILL.md'), '# Demo skill\n');
+
+  // Relative symlink `AGENTS.md -> ../.codex-managed/AGENTS.md` + absolute symlink `skills -> ~/.agents/skills`
+  symlinkSync('../.codex-managed/AGENTS.md', join(userCodexDir, 'AGENTS.md'));
+  symlinkSync(join(sb.home, '.agents', 'skills'), join(userCodexDir, 'skills'));
+
+  // Seed future / custom / SQLite entries in ~/.codex
+  mkdirSync(join(userCodexDir, 'future_codex_feature_2027'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'future_codex_feature_2027', 'spec.json'), '{"future":true}\n');
+  mkdirSync(join(userCodexDir, 'agents'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'agents', 'fixer.toml'), 'name = "fixer"\n');
+  writeFileSync(join(userCodexDir, 'hooks.json'), '{"hooks":[]}\n');
+  mkdirSync(join(userCodexDir, '.hook-trust'), { recursive: true });
+  writeFileSync(join(userCodexDir, '.hook-trust', 'allow.json'), '{}');
+  mkdirSync(join(userCodexDir, 'packages'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'herdr.config.toml'), 'enabled = true\n');
+  writeFileSync(join(userCodexDir, 'prompt.tmpl'), 'template-ok\n');
+  writeFileSync(join(userCodexDir, 'state_5.sqlite'), 'sqlite-threads');
+  writeFileSync(join(userCodexDir, 'thread_history_1.sqlite'), 'sqlite-history');
+
+  // Seed denylisted entries in ~/.codex
+  writeFileSync(join(userCodexDir, 'auth.json'), '{"secret":"user_oauth_never_link"}\n', { mode: 0o600 });
+  writeFileSync(join(userCodexDir, 'auth.json~'), '{"secret":"editor_backup_never_link"}\n', { mode: 0o600 });
+  writeFileSync(join(userCodexDir, 'config.toml'), 'model = "gpt-5.4"\n', { mode: 0o600 });
+  writeFileSync(join(userCodexDir, 'config.toml~'), 'model = "gpt-5.4"\n', { mode: 0o600 });
+  writeFileSync(join(userCodexDir, '.codex-global-state.json'), '{"installation":"mac"}');
+  writeFileSync(join(userCodexDir, 'version.json'), '{"version":"0.169.1"}');
+  mkdirSync(join(userCodexDir, 'vendor_imports'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'auth.lock'), '');
+  writeFileSync(join(userCodexDir, '.config.toml.merge-lock'), '');
+  mkdirSync(join(userCodexDir, 'model-switch-backups'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'app-server-daemon'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'app-server-control'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'ipc'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'tmp'), { recursive: true });
+  mkdirSync(join(userCodexDir, '.tmp'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'log'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'shell_snapshots'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'mcp-oauth-locks'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'logs_2.sqlite'), 'logs-db');
+  writeFileSync(join(userCodexDir, 'logs_app.sqlite'), 'logs-app-db');
+  writeFileSync(join(userCodexDir, 'logs_2.sqlite.corrupt'), 'logs-corrupt');
+  writeFileSync(join(userCodexDir, 'logs_2.sqlite-wal'), 'logs-wal');
+  writeFileSync(join(userCodexDir, 'logs_2.sqlite-shm'), 'logs-shm');
+  writeFileSync(join(userCodexDir, 'state_5.sqlite-wal'), 'state-wal');
+  writeFileSync(join(userCodexDir, 'state_5.sqlite-shm'), 'state-shm');
+  writeFileSync(join(userCodexDir, 'state_5.sqlite-journal'), 'state-journal');
+  writeFileSync(join(userCodexDir, 'models_cache.json'), '{}');
+  writeFileSync(join(userCodexDir, '.sqlite-maintenance.lock'), '');
+  writeFileSync(join(userCodexDir, 'installation_id'), 'inst-user');
+  writeFileSync(join(userCodexDir, '.DS_Store'), '');
+
+  // Seed unsafe symlinks in ~/.codex: dangling, loop to managedHome, loop to subdir of managedHome, self/parent links, and symlink to auth.json~ / config.toml~
+  mkdirSync(join(managedHome, 'inside-managed'), { recursive: true });
+  symlinkSync(join(sb.root, 'does-not-exist'), join(userCodexDir, 'dangling_entry'));
+  symlinkSync(managedHome, join(userCodexDir, 'loop_to_root'));
+  symlinkSync(join(managedHome, 'inside-managed'), join(userCodexDir, 'loop_to_child'));
+  symlinkSync('.', join(userCodexDir, 'self_link'));
+  symlinkSync('..', join(userCodexDir, 'up_link'));
+  symlinkSync(join(userCodexDir, 'auth.json'), join(userCodexDir, 'sneaky_auth_link'));
+  symlinkSync(join(userCodexDir, 'auth.json~'), join(userCodexDir, 'sneaky_auth_tilde'));
+  symlinkSync(join(userCodexDir, 'config.toml'), join(userCodexDir, 'sneaky_cfg_link'));
+  symlinkSync(join(userCodexDir, 'config.toml~'), join(userCodexDir, 'sneaky_cfg_tilde'));
+
+  // Pre-seed a stale denylisted symlink and a bootstrap non-symlink `packages` dir inside managedHome
+  symlinkSync(join(userCodexDir, 'models_cache.json'), join(managedHome, 'models_cache.json'));
+  mkdirSync(join(managedHome, 'packages'), { recursive: true });
+  writeFileSync(join(managedHome, 'packages', 'stale.txt'), 'stale');
+
+  materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_dyn1',
+    codex_gateway_token: 'pddg_lse_dyn1_grantToken',
+  }, { env: sb.env }, { spawnSync: () => ({ status: 0 }) });
+
+  // 1. Allowed entries (including future folder + relative/absolute symlinks + .tmpl + SQLite thread DBs) ARE linked
+  for (const name of [
+    'AGENTS.md',
+    'skills',
+    'future_codex_feature_2027',
+    'agents',
+    'hooks.json',
+    '.hook-trust',
+    'packages',
+    'herdr.config.toml',
+    'prompt.tmpl',
+    'state_5.sqlite',
+    'thread_history_1.sqlite',
+  ]) {
+    const dst = join(managedHome, name);
+    assert.equal(lstatSync(dst).isSymbolicLink(), true, `${name} should be symlinked into managedHome`);
+  }
+  assert.equal(readFileSync(join(managedHome, 'AGENTS.md'), 'utf8'), '# Shared AGENTS instructions\n');
+  assert.equal(readFileSync(join(managedHome, 'skills', 'demo-skill', 'SKILL.md'), 'utf8'), '# Demo skill\n');
+  assert.equal(readFileSync(join(managedHome, 'future_codex_feature_2027', 'spec.json'), 'utf8'), '{"future":true}\n');
+  assert.equal(readFileSync(join(managedHome, 'prompt.tmpl'), 'utf8'), 'template-ok\n');
+  assert.equal(readFileSync(join(managedHome, 'state_5.sqlite'), 'utf8'), 'sqlite-threads');
+
+  // 2. Denylisted entries and unsafe symlinks are NOT symlinked into managedHome (and stale models_cache.json symlink was pruned!)
+  assert.equal(lstatSync(join(managedHome, 'auth.json')).isSymbolicLink(), false, 'managed auth.json is an isolated 0600 file');
+  assert.equal(lstatSync(join(managedHome, 'config.toml')).isSymbolicLink(), false, 'managed config.toml is an isolated 0600 file');
+  for (const excluded of [
+    'auth.lock', 'auth.json~', 'config.toml~', '.codex-global-state.json', 'version.json', 'vendor_imports',
+    '.config.toml.merge-lock', 'model-switch-backups', 'app-server-daemon',
+    'app-server-control', 'ipc', 'tmp', '.tmp', 'log', 'shell_snapshots', 'mcp-oauth-locks',
+    'logs_2.sqlite', 'logs_app.sqlite', 'logs_2.sqlite.corrupt', 'logs_2.sqlite-wal', 'logs_2.sqlite-shm',
+    'state_5.sqlite-wal', 'state_5.sqlite-shm', 'state_5.sqlite-journal', 'models_cache.json',
+    '.sqlite-maintenance.lock', 'installation_id', '.DS_Store', 'dangling_entry',
+    'loop_to_root', 'loop_to_child', 'self_link', 'up_link',
+    'sneaky_auth_link', 'sneaky_auth_tilde', 'sneaky_cfg_link', 'sneaky_cfg_tilde',
+  ]) {
+    let dstStat = null;
+    try { dstStat = lstatSync(join(managedHome, excluded)); } catch {}
+    assert.equal(dstStat, null, `${excluded} must NOT exist or be symlinked in managedHome`);
+  }
+
+  // 3. Step overlay (`createCodexStepOverlay`) also supports safe symlinks (`AGENTS.md`, `skills`) and rejects loops into managedHome / sourceHome / overlay
+  symlinkSync(join(userCodexDir, 'auth.json'), join(userCodexDir, 'browser'));
+  symlinkSync(join(sb.root, 'missing-plugin-target'), join(userCodexDir, 'plugins'));
+  const stepOverlay = createCodexStepOverlay({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_dyn1',
+    codex_gateway_token: 'pddg_lse_dyn1_grantToken',
+  }, { env: sb.env, tmpRoot: sb.root });
+  try {
+    assert.equal(lstatSync(join(stepOverlay.overlayDir, 'AGENTS.md')).isSymbolicLink(), true);
+    assert.equal(readFileSync(join(stepOverlay.overlayDir, 'AGENTS.md'), 'utf8'), '# Shared AGENTS instructions\n');
+    assert.equal(lstatSync(join(stepOverlay.overlayDir, 'skills')).isSymbolicLink(), true);
+    assert.equal(lstatSync(join(stepOverlay.overlayDir, 'agents')).isSymbolicLink(), true);
+    assert.equal(lstatSync(join(stepOverlay.overlayDir, 'hooks.json')).isSymbolicLink(), true);
+    assert.equal(lstatSync(join(stepOverlay.overlayDir, '.hook-trust')).isSymbolicLink(), true);
+    assert.equal(lstatSync(join(stepOverlay.overlayDir, 'prompt.tmpl')).isSymbolicLink(), true);
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'browser')), false, 'symlink targeting auth.json rejected in step overlay');
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'plugins')), false, 'dangling symlink rejected in step overlay');
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'loop_to_root')), false, 'symlink pointing to managedHome rejected in step overlay');
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'loop_to_child')), false, 'symlink pointing inside managedHome rejected in step overlay');
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'self_link')), false, 'self -> . symlink rejected in step overlay');
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'up_link')), false, 'up -> .. symlink rejected in step overlay');
+    assert.equal(isSafeCodexSourceEntry({ lstatSync, realpathSync }, stepOverlay.overlayDir, stepOverlay.overlayDir), true);
+    const loopInsideOverlay = join(userCodexDir, 'computer-use');
+    symlinkSync(stepOverlay.overlayDir, loopInsideOverlay);
+    assert.equal(isSafeCodexSourceEntry({ lstatSync, realpathSync }, loopInsideOverlay, stepOverlay.overlayDir), false);
+  } finally {
+    stepOverlay.cleanup();
+  }
+
+  // 4. Pruning removed and newly-dangling entries from managedHome on next sync
+  rmSync(join(userCodexDir, 'future_codex_feature_2027'), { recursive: true, force: true });
+  rmSync(join(codexManagedDir, 'AGENTS.md'), { force: true }); // makes userCodexDir/AGENTS.md dangling!
+  materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_dyn2',
+    codex_gateway_token: 'pddg_lse_dyn2_grantToken',
+  }, { env: sb.env }, { spawnSync: () => ({ status: 0 }) });
+
+  let removedStat = null;
+  try { removedStat = lstatSync(join(managedHome, 'future_codex_feature_2027')); } catch {}
+  assert.equal(removedStat, null, 'removed source folder symlink pruned from managedHome');
+  let danglingAgentsStat = null;
+  try { danglingAgentsStat = lstatSync(join(managedHome, 'AGENTS.md')); } catch {}
+  assert.equal(danglingAgentsStat, null, 'newly-dangling symlink pruned from managedHome');
+  assert.equal(lstatSync(join(managedHome, 'skills')).isSymbolicLink(), true, 'still-valid skills symlink retained');
+});
+
+
+test('P0 surface audit (#2, #3c, #4): unified createCodexStepOverlay native auth + responses_websockets=false, symlinked user ~/.codex/config.toml, empty dir replacement, buildClaudeStepEnv, and restoreLocalClaudeGatewayConfig', t => {
+  const sb = makeTempSandbox(t, 'https://api.promptdriven.ai');
+  const userCodexDir = join(sb.home, '.codex');
+  mkdirSync(userCodexDir, { recursive: true });
+
+  // 1. Dotfile-symlinked user ~/.codex/config.toml is read cleanly and preserved on restoreLocalCodexGatewayConfig
+  const dotfilesDir = join(sb.root, 'dotfiles-codex');
+  mkdirSync(dotfilesDir, { recursive: true });
+  const realUserConfig = join(dotfilesDir, 'config.toml');
+  writeFileSync(realUserConfig, [
+    'model = "gpt-5.4"',
+    'model_provider = "pdd_codex_gateway"',
+    'openai_base_url = "https://api.promptdriven.ai/v1/codex-gateway"',
+    '[model_providers.pdd_codex_gateway]',
+    'base_url = "https://api.promptdriven.ai/v1/codex-gateway"',
+    '[mcp_servers.demo]',
+    'command = "echo"',
+    '',
+  ].join('\n'), { mode: 0o600 });
+  symlinkSync(realUserConfig, join(userCodexDir, 'config.toml'));
+
+  mkdirSync(join(userCodexDir, 'packages'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'packages', 'pkg.json'), '{"ok":true}\n');
+  mkdirSync(join(userCodexDir, 'agents'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'agents', 'reviewer.md'), '# Reviewer\n');
+  mkdirSync(join(userCodexDir, 'skills'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'skills', 's.md'), '# Skill\n');
+  writeFileSync(join(userCodexDir, 'herdr.config.toml'), 'port = 7777\n');
+
+  // Pre-seed empty auto-created directories AND a non-empty sessions dir in managedHome
+  const managedHome = pddManagedCodexHome(sb.env);
+  mkdirSync(join(managedHome, 'packages'), { recursive: true });
+  mkdirSync(join(managedHome, 'agents'), { recursive: true });
+  mkdirSync(join(managedHome, 'skills'), { recursive: true });
+  mkdirSync(join(managedHome, 'sessions'), { recursive: true });
+  writeFileSync(join(managedHome, 'sessions', 'keep.jsonl'), '{"keep":true}\n');
+  mkdirSync(join(userCodexDir, 'sessions'), { recursive: true });
+
+  const mat = materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    plan_type: 'pro',
+    codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_uni1',
+    codex_gateway_token: 'pddg_lse_uni1_tok123',
+  }, { env: sb.env }, { spawnSync: () => ({ status: 0 }) });
+  assert.equal(mat.managedCodexGateway, true);
+
+  // Empty auto-created dirs were replaced with symlinks, while non-empty sessions dir was preserved!
+  for (const dirName of ['packages', 'agents', 'skills']) {
+    assert.equal(lstatSync(join(managedHome, dirName)).isSymbolicLink(), true, `empty ${dirName}/ replaced by symlink`);
+  }
+  assert.equal(lstatSync(join(managedHome, 'sessions')).isSymbolicLink(), false, 'non-empty sessions/ never deleted');
+  assert.equal(readFileSync(join(managedHome, 'sessions', 'keep.jsonl'), 'utf8'), '{"keep":true}\n');
+
+  const managedCfg = parseToml(readFileSync(managedCodexConfigPath(sb.env), 'utf8'));
+  assert.equal(managedCfg.model_provider, undefined);
+  assert.equal(managedCfg.openai_base_url, 'https://api.promptdriven.ai/v1/codex-gateway');
+  assert.equal(managedCfg.chatgpt_base_url, 'https://api.promptdriven.ai/v1/codex-gateway');
+  assert.equal(managedCfg.features?.responses_websockets, false, 'managed gateway config disables responses_websockets');
+  assert.equal(managedCfg.mcp_servers?.demo?.command, 'echo', 'read mcp_servers from dotfile-symlinked user ~/.codex/config.toml');
+
+  // Stale gateway keys in dotfile-symlinked user ~/.codex/config.toml were scrubbed through realpath while preserving symlink!
+  assert.equal(lstatSync(join(userCodexDir, 'config.toml')).isSymbolicLink(), true, 'user config.toml symlink preserved');
+  const cleanedUserCfg = parseToml(readFileSync(realUserConfig, 'utf8'));
+  assert.equal(cleanedUserCfg.model_provider, undefined);
+  assert.equal(cleanedUserCfg.openai_base_url, undefined);
+  assert.equal(cleanedUserCfg.mcp_servers?.demo?.command, 'echo');
+
+  // 2. Unified createCodexStepOverlay for embedded pddg_lse_ grant writes native openai_base_url + chatgpt_base_url + synthetic 0600 auth.json + dynamic mirror
+  const overlay = createCodexStepOverlay({
+    delivery_mode: 'gateway_grant',
+    plan_type: 'team',
+    codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_step_uni',
+    codex_gateway_token: 'pddg_lse_step_uni_grant999',
+  }, { env: sb.env, tmpRoot: sb.root });
+  try {
+    assert.ok(overlay.authPath, 'embedded pddg_lse_ step overlay writes synthetic 0600 auth.json');
+    assert.equal(statSync(overlay.authPath).mode & 0o777, 0o600);
+    const stepAuth = JSON.parse(readFileSync(overlay.authPath, 'utf8'));
+    assert.equal(stepAuth.auth_mode, 'chatgpt');
+    assert.equal(stepAuth.OPENAI_API_KEY, null);
+    assert.equal(stepAuth.tokens?.access_token, 'pddg_lse_step_uni_grant999');
+    assert.equal(stepAuth.tokens?.refresh_token, '');
+    assert.equal(stepAuth.tokens?.account_id, 'acct_pdd_gateway');
+    assert.equal(stepAuth.tokens?.id_token, buildSyntheticGatewayIdToken({ planType: 'team' }));
+
+    const stepCfg = parseToml(readFileSync(overlay.configPath, 'utf8'));
+    assert.equal(stepCfg.model_provider, undefined, 'step overlay uses native openai provider');
+    assert.equal(stepCfg.openai_base_url, 'https://api.promptdriven.ai/v1/codex-gateway');
+    assert.equal(stepCfg.chatgpt_base_url, 'https://api.promptdriven.ai/v1/codex-gateway');
+    assert.equal(stepCfg.features?.responses_websockets, false);
+    assert.equal(stepCfg.features?.shell_snapshot, false);
+    assert.equal(stepCfg.model_providers?.pdd_codex_gateway?.base_url, 'https://api.promptdriven.ai/v1/codex-gateway');
+    assert.equal(lstatSync(join(overlay.overlayDir, 'packages')).isSymbolicLink(), true);
+    assert.equal(lstatSync(join(overlay.overlayDir, 'herdr.config.toml')).isSymbolicLink(), true);
+  } finally {
+    overlay.cleanup();
+  }
+
+  // 2b. prepareCloudStepExecution forwards account.plan into createCodexStepOverlay synthetic id_token when lease.plan_type is omitted
+  const prepExec = prepareCloudStepExecution({
+    account: { provider: 'codex', plan: 'team' },
+    lease: {
+      delivery_mode: 'gateway_grant',
+      codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_prep_team',
+      codex_gateway_token: 'pddg_lse_prep_team_grant888',
+    },
+  }, sb.env, { tmpRoot: sb.root });
+  try {
+    const prepAuth = JSON.parse(readFileSync(join(prepExec.overlayDir, 'auth.json'), 'utf8'));
+    assert.equal(prepAuth.tokens?.id_token, buildSyntheticGatewayIdToken({ planType: 'team' }));
+  } finally {
+    prepExec.cleanup();
+  }
+
+  // 3. buildClaudeStepEnv strips ANTHROPIC_API_KEY and overrides stale gateway ANTHROPIC_BASE_URL in settings.json on direct_oauth
+  materializeLocalClaudeAuth({
+    delivery_mode: 'gateway_grant',
+    anthropic_base_url: 'https://api.promptdriven.ai/v1/accounts/claude-gateway/lse_cl1',
+    gateway_bearer_token: 'pddg_cl_grant_secret_111',
+  }, { env: sb.env });
+
+  const gwStepEnv = buildClaudeStepEnv(
+    { ...sb.env, ANTHROPIC_API_KEY: 'sk-ant-api03-SHOULD_BE_STRIPPED' },
+    {
+      delivery_mode: 'gateway_grant',
+      anthropic_base_url: 'https://api.promptdriven.ai/v1/accounts/claude-gateway/lse_cl2',
+      gateway_bearer_token: 'pddg_cl_grant_secret_222',
+    },
+  );
+  assert.equal(Object.hasOwn(gwStepEnv, 'ANTHROPIC_API_KEY'), false, 'gateway_grant strips ambient ANTHROPIC_API_KEY');
+  assert.equal(gwStepEnv.CLAUDE_CODE_OAUTH_TOKEN, 'pddg_cl_grant_secret_222');
+
+  const directStepEnv = buildClaudeStepEnv(
+    { ...sb.env, ANTHROPIC_API_KEY: 'sk-ant-api03-SHOULD_BE_STRIPPED' },
+    {
+      delivery_mode: 'direct_oauth',
+      claude_oauth_token: 'sk-ant-oat01-direct_secret_333',
+    },
+  );
+  assert.equal(Object.hasOwn(directStepEnv, 'ANTHROPIC_API_KEY'), false, 'direct_oauth strips ambient ANTHROPIC_API_KEY');
+  assert.equal(directStepEnv.ANTHROPIC_BASE_URL, 'https://api.anthropic.com', 'direct_oauth overrides managed gateway URL in ~/.claude/settings.json');
+
+  // 4. restoreLocalClaudeGatewayConfig strips pddg_* token and gateway ANTHROPIC_BASE_URL while preserving custom settings
+  const claudeSettingsPath = localClaudePaths(sb.env).settingsPath;
+  const beforeRestore = JSON.parse(readFileSync(claudeSettingsPath, 'utf8'));
+  writeFileSync(claudeSettingsPath, JSON.stringify({
+    ...beforeRestore,
+    model: 'claude-sonnet-4-6',
+    env: { ...beforeRestore.env, CUSTOM_FLAG: '1' },
+  }, null, 2));
+  const restored = restoreLocalClaudeGatewayConfig({ env: sb.env });
+  assert.equal(restored.restoredSettings, true);
+  const afterRestore = JSON.parse(readFileSync(claudeSettingsPath, 'utf8'));
+  assert.equal(afterRestore.model, 'claude-sonnet-4-6');
+  assert.equal(afterRestore.env?.CUSTOM_FLAG, '1');
+  assert.equal(afterRestore.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(afterRestore.env?.ANTHROPIC_BASE_URL, undefined);
+
+  // Non-pddg user OAuth token is never stripped by restoreLocalClaudeGatewayConfig
+  writeFileSync(claudeSettingsPath, JSON.stringify({
+    env: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-user_owned', ANTHROPIC_BASE_URL: 'https://custom-proxy.internal' },
+  }, null, 2));
+  assert.equal(restoreLocalClaudeGatewayConfig({ env: sb.env }).restoredSettings, false);
+  const untouched = JSON.parse(readFileSync(claudeSettingsPath, 'utf8'));
+  assert.equal(untouched.env.CLAUDE_CODE_OAUTH_TOKEN, 'sk-ant-oat01-user_owned');
+  assert.equal(untouched.env.ANTHROPIC_BASE_URL, 'https://custom-proxy.internal');
 });

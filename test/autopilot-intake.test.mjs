@@ -1,10 +1,11 @@
+import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, chmodSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { coreWorld } from './helpers/core-world.mjs';
-import { nativeFacts, issueVersion, personComments, readCard, parseCardText, cardCommand, cardEnvironment, readIntake, intakeText, intakeMode, intakeFolders, wouldPick, shadowIntake, activeIntake, stopCardJobs } from '../src/autopilot-intake.mjs';
+import { nativeFacts, issueVersion, personComments, readCard, parseCardText, cardCommand, improveCommand, cardEnvironment, readIntake, intakeText, intakeMode, intakeFolders, wouldPick, shadowIntake, activeIntake, stopCardJobs } from '../src/autopilot-intake.mjs';
 
 const intakeJobs = w => w.started.filter(job => job.role === 'intake');
 const workJobs = w => w.started.filter(job => job.role !== 'intake').map(job => `${job.issue}:${job.role}`);
@@ -657,5 +658,38 @@ test('autopilot-intake-cloud: shadowIntake and activeIntake materialize prepareS
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test('cardCommand, improveCommand, and startIntakeJob forward native openai_base_url, chatgpt_base_url, and features.responses_websockets=false from Codex Cloud step overlays', async t => {
+  const { createCodexStepOverlay } = await import('../src/login-pool.mjs');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const root = mkdtempSync(join(tmpdir(), 'pdd-intake-overlay-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const overlay = createCodexStepOverlay({
+    delivery_mode: 'gateway_grant',
+    plan_type: 'pro',
+    codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_intake_native',
+    codex_gateway_token: 'pddg_lse_intake_native_secret777',
+  }, { env: { HOME: root }, tmpRoot: root });
+
+  try {
+    const env = { HOME: root, CODEX_HOME: overlay.overlayDir };
+    const cCmd = cardCommand({ kind: 'codex', command: 'codex' }, { result: join(root, 'card.txt'), env });
+    const iCmd = improveCommand({ kind: 'codex', command: 'codex' }, { result: join(root, 'imp.txt'), env });
+    for (const cmd of [cCmd, iCmd]) {
+      assert.ok(cmd.args.includes('cli_auth_credentials_store="file"'));
+      assert.ok(cmd.args.includes('openai_base_url="https://api.promptdriven.ai/v1/codex-gateway"'));
+      assert.ok(cmd.args.includes('chatgpt_base_url="https://api.promptdriven.ai/v1/codex-gateway"'));
+      assert.ok(cmd.args.includes('features.responses_websockets=false'));
+      assert.ok(cmd.args.includes('features.shell_snapshot=false'));
+      assert.ok(cmd.args.includes('shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"'));
+      assert.equal(cmd.args.join(' ').includes('pddg_lse_intake_native_secret777'), false, 'grant token stays in 0600 auth.json, never on CLI args');
+    }
+  } finally {
+    overlay.cleanup();
   }
 });

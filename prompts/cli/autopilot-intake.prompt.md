@@ -43,18 +43,53 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   no-result, or issues whose blocker is named only in the text or in an END comment.
   A person who reads the would-pick list must keep that in mind.
 - Native facts first (`nativeFacts(row, {skipLabels})`), from the issue row only,
-  in this order: an external-repository label (`external`, `other-repo`,
-  `elsewhere`, `pdd:elsewhere`, matched case-insensitively via
-  [pre-run forensics](autopilot-forensics.prompt.md)) → `elsewhere`; a configured
+  in this order: an external-repository or wrong-repository skip label (`external`,
+  `other-repo`, `elsewhere`, `pdd:elsewhere`, `needs-other-repo`,
+  `pdd:needs-other-repo`, matched case-insensitively via `findOtherRepoSkipLabel`
+  building on [pre-run forensics](autopilot-forensics.prompt.md)) → `elsewhere`; a configured
   `autopilot.skipLabels` label (case-insensitive) → `held`; an assignee → `held`;
   `issue_dependencies_summary.blocked_by` > 0 → `waiting`;
   `sub_issues_summary.total` > `completed` → `tracking` (the sub-issues are the
   work); a label `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge` → `parked`;
   the label `pdd:working`, or a core job file of this machine for the issue (the row
   can be older than this tick's claim) → `working`. Each gives a short reason. An
-  issue with a native fact gets no AI card and zero AI or GitHub calls. Text or
-  missing-path heuristics never count as native facts or downgrade cards. A native
+  issue with a native fact gets no AI card and zero AI or GitHub calls. Missing
+  greenfield paths alone never count as native facts or wrong-repository skips. A native
   record keeps the last AI card as `previous`.
+- Pre-claim wrong-repository detection and routing (`#3500`): export
+  `NEEDS_OTHER_REPO_LABEL = "needs-other-repo"`, `OTHER_REPO_MARKER_PREFIX`
+  (the prefix of `<!-- pdd:autopilot-intake:other-repo:N -->`),
+  `findOtherRepoSkipLabel(input)`,
+  `detectWrongRepositoryIssue(row, {repo, cwd, fs, repoFiles})` and
+  `routeWrongRepositoryIssue(ctx, row, match)`. `detectWrongRepositoryIssue` returns
+  `null` unless the issue clearly targets another repository and zero specific
+  code, prompt or test paths referenced in the issue exist in `cwd` / `repoFiles`
+  (except when an explicit `Repo:` / `Repository:` / `Target repo:` /
+  `Target repository:` header names another repository and only generic root files
+  such as `README.md` or `package.json` appear incidentally). Missing specific paths
+  are partitioned into **local-root greenfield paths** (whose top-level directory
+  such as `src/`, `prompts/`, `test/`, `tests/`, `bin/`, `scripts/`, `docs/`, or
+  `user_stories/` exists as a directory in `cwd` / `repoFiles` and is not an absent
+  external sibling root) versus **foreign/unrooted missing paths**. Local-root
+  greenfield paths never count as foreign missing evidence in URL or sibling-prose
+  checks, and whenever local-root greenfield paths are present, only an explicit
+  `Repo:` header naming another repository can trigger a skip. High-confidence
+  signals are: (A) an explicit repository metadata header naming a repository
+  different from `repo`; (B) GitHub `blob` or `tree` URLs into another repository
+  with zero local files or local-root greenfield paths; (C) explicit root paths
+  belonging to sibling repositories (`pdd_cloud/...`,
+  `extensions/github_pdd_app/...`, `prompt-runtime/...`, `runtime-client/...`,
+  `packages/runtime-client/...`) absent from `cwd`; or (D) prose targeting a known
+  sibling service/repository (`prompt-runtime`, `runtime-client`, `pdd_cloud` /
+  `pdd-cloud`, `github_pdd_app`) absent from `cwd` with foreign missing paths or
+  explicit sibling framing and without local `pdd` modules, CLI settings, or
+  local-root greenfield paths. In `active` intake (when a card evaluates to
+  `elsewhere` or `detectWrongRepositoryIssue` matches) and pre-claim in the core
+  (never in read-only `shadow` mode), `routeWrongRepositoryIssue` adds label
+  `needs-other-repo` (creating it if missing) and posts at most one deduplicated
+  routing comment with hidden marker `<!-- pdd:autopilot-intake:other-repo:N -->`
+  naming the target repository/service and verified missing paths, recording the
+  routed body digest locally so later polls make zero duplicate comments.
 - Trust: a card job starts only for an issue whose author passes the core's own
   trust check (`ports.trusted`, the same check that the core uses before it gives an
   issue to an agent). An issue that fails it gets the native-style record
@@ -78,7 +113,10 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   The agent gets no tools and no write access (`cardCommand`): Codex runs
   `exec --ignore-user-config --sandbox read-only --skip-git-repo-check --ephemeral
   --color never --ignore-rules` (so no MCP server, profile or feature of the
-  person's `config.toml` loads; auth still loads) with approvals `never`, web search
+  person's `config.toml` loads; safe auth-store and provider routing keys from an
+  explicit `CODEX_HOME/config.toml` are forwarded via `codexProviderConfigArgs`
+  `-c` flags so Cloud Accounts gateway leases and managed credential stores still
+  load, #3503) with approvals `never`, web search
   disabled, `mcp_servers={}`, reasoning effort `low`, its tool features off (hooks,
   plugins, apps, browser and computer use, multi-agent, shell, unified exec, code
   mode) and `--output-last-message ANSWER`; Claude runs
@@ -90,9 +128,11 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   both `shadowIntake` and `activeIntake` call
   `ports.selectLogin({allowedKinds: ["codex", "claude"]})` so sandboxed card and
   auto-improve jobs run on the first healthy `codex` or `claude` login: each started
-  job invokes `selected.prepareStep(env, {detached: true})` when present so Cloud
-  Codex steps get a fresh disposable `0700` `pdd-cx-*` overlay (`cleanupDirs` passed
-  to `jobs.start` and wiped in `prune` once no longer running) and Cloud Claude steps
+  job invokes `selected.prepareStep(env, {detached: true})` before building
+  `cardCommand` / `improveCommand` arguments (#3503) so Cloud Codex steps get a fresh
+  disposable `0700` `pdd-cx-*` overlay (`cleanupDirs` passed to `jobs.start` and wiped
+  in `prune` once no longer running) with its `CODEX_HOME/config.toml` provider
+  overrides forwarded via `-c`, and Cloud Claude steps
   receive `CLAUDE_CODE_OAUTH_TOKEN` (and `ANTHROPIC_BASE_URL` for `gateway_grant`)
   through `cardEnvironment(prepared.env)`, recording `loginId` (`selected.login?.id ?? null`),
   `cloud`, and `accountWindows` on `jobs/N.json`; if a pooled card or auto-improve job
@@ -200,9 +240,12 @@ read-only pass inspect the repository checkout, still with no GitHub token.
 - `intakeTick(ctx, rows)` and `shadowIntake(ctx, rows)` take the core's tick context
   (`fs`, `now`, `root`, `repo`, `state`, `settings`, `budget`, `gh`, `jobs`,
   `ports`, `warn`); `shadowIntake` returns `{cards, started, pick}`.
-- `cardCommand(agent, {model, result})` returns `{command, args}` for Codex or
-  Claude and throws for any other agent; `cardEnvironment(env)` returns the card
-  environment.
+- `cardCommand(agent, {model, result, env, fs})` and
+  `improveCommand(agent, {model, result, env, fs})` return `{command, args}` for
+  Codex or Claude (forwarding non-secret `codexProviderConfigArgs` `-c` overrides
+  from regular `CODEX_HOME/config.toml` files into a cloned child step `env` without
+  serializing raw secrets onto `args`, #3503) and
+  throw for any other agent; `cardEnvironment(env)` returns the card environment.
 - `stopCardJobs({root, fs, jobs, warn})` stops the running card jobs under `root`
   and returns how many it stopped.
 - `readIntake({root, now, date}, fs)` returns `{day, cards, running, wouldPick,
@@ -216,7 +259,8 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   jobs and for the job environment.
 - [Areas](autopilot-areas.prompt.md): required to normalize card `areas` paths.
 - [Multi-harness login pool](login-pool.prompt.md): required for
-  `isQuotaExhaustionMessage` and `isAuthFailureMessage` when rotating pooled `codex` and `claude` logins.
+  `isQuotaExhaustionMessage`, `isAuthFailureMessage`, and `classifyRateLimitFailure`
+  when rotating or retrying pooled `codex` and `claude` logins.
 - [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
-  external-repository / configured skip-label matching and linear string-aware JSON
-  object scanning.
+  external-repository / configured skip-label matching, linear string-aware JSON
+  object scanning, and `codexProviderConfigArgs` non-secret Codex provider forwarding.

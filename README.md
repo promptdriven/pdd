@@ -30,10 +30,10 @@ pdd setup
 1. `npm install -g github:promptdriven/pdd` installs the `pdd` command.
 2. `npx skills add promptdriven/pdd -g --skill '*'` adds all the PDD skills for your agents. `--skill '*'` selects every PDD skill. Without it, the installer shows the list "Select skills to install" with no skill selected: select all of them, then press Enter. Then the installer asks which agents get the skills: select the agents that you use. It can say `Failed to install` for an agent that cannot have global skills. That agent still gets them.
 3. The installer also shows security ratings from outside scanners. Some PDD skills get a warning because they read GitHub issues and pull requests, and anyone can write those. The skills treat that text as data. Autopilot gives its agents only the text of trusted people: the owner, people with write access and the names in `trust`.
-4. `pdd --version` must print `0.1.35`. When your skills are older than pdd, it also prints the command that updates them.
+4. `pdd --version` must print `0.1.36`. When your skills are older than pdd, it also prints the command that updates them.
 5. `pdd setup` adds a short PDD block to `AGENTS.md`, or to `CLAUDE.md` when the repo has one. Then every agent chat in the repo knows that the project uses PDD. In a Git repo, it also adds the line `.pdd/` to `.gitignore`, because `pdd test` keeps its local cache there. Setup checks for a ready agent first, installs missing skills or updates eligible marked copies, and previews MCP configuration changes for your approval.
 
-To update a global installation and its `.pdd-skill.json`-marked user skills in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. Direct `npm install -g github:promptdriven/pdd` runs no lifecycle scripts; normal `pdd` commands sync existing `.pdd-skill.json`-marked user skill folders automatically, and `pdd upgrade` prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked or symlinked copies are older.
+To update a global installation and its `.pdd-skill.json`-marked user skills in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. Direct `npm install -g github:promptdriven/pdd` runs no lifecycle scripts; normal `pdd` commands sync existing `.pdd-skill.json`-marked user skill folders automatically, and `pdd upgrade` prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked or symlinked copies are older. When a global install prints `npm error code EEXIST` on `<prefix>/bin/pdd`, an unscoped `pdd` npm package still owns `bin/pdd`; run `npm uninstall -g pdd && npm install -g github:promptdriven/pdd` without `--force`.
 
 > [!IMPORTANT]
 > Do not run `npm install -g pdd` or `npm update -g`. The npm registry has a different package with the name `pdd`.
@@ -333,6 +333,7 @@ The skills and the other commands run on your computer; `pdd lint --local` is of
 | `Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.` (exit code 5) | PDD Cloud has not approved your GitHub account. See [Access](#access). |
 | `PDD Cloud could not confirm your access. Try again in a minute.` (exit code 5) | PDD Cloud could not check your account. Run the command again in a minute. |
 | `Please update pdd: …` | Your pdd is too old for the PDD interpreter. Run `pdd upgrade`, or do the install steps again. |
+| `npm error code EEXIST` on `<prefix>/bin/pdd` during global install | An unscoped `pdd` npm package still owns `bin/pdd` while `@promptdriven/pdd` installs under `@promptdriven/pdd`. Run `npm uninstall -g pdd && npm install -g github:promptdriven/pdd` (do not use `--force`). |
 | `REFUSED` / `no verdict` (exit code 3, 4 or 5) | A file rule or the AI service prevented a verdict. Read the reason and next step under the line. Run `pdd lint` before a check. [RUNBOOK §11](skills/pdd-prompting/runbook/testing-and-simulation.md#11-pdd-test) lists the usual refusals. |
 | `FAILED` (exit code 1) | Read the failed step and the report. A person decides expected values. The agent may propose a change, and never makes it. |
 | `UNKNOWN` or `Still running` (exit code 3) | The check can still run on the server. Run `pdd test --read` later. Do not send the same check again. |
@@ -341,7 +342,7 @@ The skills and the other commands run on your computer; `pdd lint --local` is of
 | `The runtime is busy. Try again later.` (exit code 5), or `Too many Try links are open.` | Wait a few minutes, then run the command again. To close a simulation that you do not use, run `pdd simulate --stop STORY`. |
 | `This Try has ended` | The simulation used all its AI calls or its 24 hours. Run `pdd simulate STORY --new`. |
 | `Autopilot did not start: it works only on the issues that you mark with an opt-in label.` | Mark issues with `pdd autopilot add N`, then run `pdd autopilot start --label pdd:autopilot`. |
-| `pdd --version` does not print `0.1.35` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
+| `pdd --version` does not print `0.1.36` | Another `pdd` comes first on your PATH. Run `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it shows the `export PATH=…` line that puts this pdd first. |
 
 The [usage guide](docs/USAGE.md#13-troubleshooting) has more.
 

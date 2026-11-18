@@ -1,6 +1,6 @@
 # CLI reference
 
-This page lists every command of pdd 0.1.35, as `pdd --help` shows it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help is on this page.
+This page lists every command of pdd 0.1.36, as `pdd --help` and `pdd <command> --help` show it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help catalog is on this page.
 
 You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve`. Install the skills with `npx skills add promptdriven/pdd` (add `-g` for all your projects), and set up a repo with the `pdd-setup` skill in your agent. For simulations that your agent drives, use the Try tools in `pdd mcp`. Then use a PDD skill: `pdd-feature`, `pdd-bug`, `pdd-small-change`, `pdd-product` or `pdd-prompting`. Call a skill with `$pdd-feature` in Codex or `/pdd-feature` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
@@ -188,6 +188,8 @@ Autopilot opens no chat and needs no Herdr.
 | `pdd autopilot audit RUN PR` | Audit a confirmed automatic merge once with a fresh configured agent. Save OK, CONCERN or BAD and the separate revert recommendation with the run. Post the evidence once on the issue. BAD opens a revert PR only when recommended; otherwise it keeps the merge and reopens the issue with the missing parts. One decision alert states the recommendation and choices. Unknown external outcomes require inspection before any retry. |
 | `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
 | `pdd autopilot status [--all] [--json]` | Show this machine's Autopilot for this repo: enabled or disabled, the timer, the next tick, the jobs, an [alert](#alerts) that was not delivered and the last tick. `--all` lists every repository with Autopilot on this machine, from any folder. `--json` prints the [local cost report](#local-issue-costs) |
+| `pdd autopilot logs [ISSUE] [--follow\|-f] [--lines N] [--json]` | List current headless Autopilot workers for this repository with stage, owned process state, suite queue position, blockers, last activity and saved log or evidence paths, or inspect and follow one worker live (`--follow` / `-f` detaches on Ctrl-C without stopping the worker or changing `observe` mode). Read-only; no GitHub call or approval effect |
+| `pdd autopilot logs --issue N [--follow\|-f] [--lines N] [--json]` | Select one worker explicitly with `--issue N` (issue number, `#N`, `owner/repo#N`, or GitHub issue URL) to inspect saved progress or stream live updates |
 | `pdd autopilot add N...` | Create the `pdd:autopilot` label when it is missing and add it to each named issue of this repository. Use it to choose the issues that Autopilot may take |
 | `pdd autopilot release ISSUE` | Release this machine's claim and remove `pdd:working` and `pdd:stuck`; keep the run folder, branch and PRs |
 | `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub CI, parent checks, revert, reopen and issue-link evidence. Classify each merge as ok, suspect or proven; count distinct proven PRs per UTC evidence day. Issue-body attribution uses issue creation time even if added in a later edit; these buckets require a consumer confirmation policy before use as daily scorecard counts. At most 100 GitHub requests per scan; rate exhaustion or Retry-After stops further reads, preserving collected evidence and marking missing evidence incomplete. --json prints structured results; --file exclusively creates a local report without overwriting existing files. No GitHub writes or reverts. Incomplete reads exit 1; complete scans exit 0 even when they detect regressions |
@@ -200,7 +202,7 @@ Autopilot opens no chat and needs no Herdr.
 | `pdd autopilot alerts clear [--destination autopilot\|infrastructure]` | Remove the alert destination from this machine |
 | `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | Record one alert and send it to this machine's destination. See [Alerts](#alerts) |
 
-Outside a Git repository, `start`, `stop`, `status`, `add`, `off`, `observe`,
+Outside a Git repository, `start`, `stop`, `status`, `logs`, `add`, `off`, `observe`,
 `auto`, `trust` and `untrust` stop with exit code 1 and say: `This folder is not a
 Git repository. cd into the repo you want Autopilot to work on, then run the
 command again.` `status --all` works from any folder.
@@ -273,6 +275,20 @@ unreadable`. One bad line changes no other line. Without saved state it prints
 `No Autopilot on this machine.` The local cost lines come last. It makes no GitHub
 call.
 
+`pdd autopilot logs` inspects headless Autopilot workers from local state files
+without knowing internal state folders or touching running jobs. With no issue
+argument, it prints the effective mode (`observe`, `auto` or `off`), active
+workers sorted by issue number (stage, owned process state, suite queue position,
+blockers, last activity, and saved log and evidence paths), recent finished
+workers, and the follow command. With `ISSUE` or `--issue N`, it prints the
+worker header and the last `--lines N` (default 40, maximum 5000) human-readable
+progress lines formatted from Codex, Claude, Gemini/agy or test-suite logs, with
+secrets redacted. It distinguishes waiting in the shared test-suite queue from a
+running full suite, a repair pass, and a stale suite receipt. Add `--follow` or
+`-f` to stream live worker and test-suite progress and stage changes; pressing
+Ctrl-C detaches the viewer without stopping the worker or changing `observe`
+mode. Add `--json` for structured snapshot output (`pdd.autopilot-logs.v1`).
+
 A machine state that ran the full engine moves to the core engine at its next
 tick. A start runs a tick, so a start moves it too. No new work starts before the
 move is complete. While old work is busy (a live run with a merged PR, or a working
@@ -335,32 +351,37 @@ of `@openai/codex` (isolated in `$PDD_STATE_DIR/codex-home`, default `~/.local/s
 | `pdd accounts [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling`, `paused`, or `reauth_required`), refresh status, and pending invites |
 | `pdd accounts list [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling`, `paused`, or `reauth_required`), refresh status, and pending invites |
 | `pdd accounts status [--json]` | Show Cloud account enrollment, isolated Codex home path, shell auto-switch status, active leases, and token refresh and expiry health |
-| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside a disposable folder (`--device-auth` for headless Codex), upload the credential bundle to PDD Cloud over TLS, materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json` without touching `~/.codex/auth.json`, and optionally enroll multiple accounts (`--loop`) or share (`--with`) |
-| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--with USER\|ORG/TEAM[,...]]` | Import an external (`--from PATH`) or local Codex `auth.json` or Claude token into PDD Cloud without modifying `~/.codex/auth.json` (prefer `pdd accounts add` so Cloud gets an independent OAuth session), materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json`, and optionally share (`--with`) |
-| `pdd accounts use LABEL` | Pin `LABEL` (matching `+` and `-` punctuation) and materialize its owner pass or shared gateway grant in `$PDD_STATE_DIR/codex-home` (`0600`) or `~/.claude/settings.json` (`0600`) |
+| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside a disposable folder (`--device-auth` for headless Codex, interactive TTY `claude setup-token` for Claude), upload the credential bundle to PDD Cloud over TLS, delete temporary login files immediately, materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json` without touching `~/.codex/auth.json`, and optionally enroll multiple accounts (`--loop`), replace an existing owned label (`--replace`), or share (`--with`) |
+| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--replace] [--with USER\|ORG/TEAM[,...]]` | Import an external (`--from PATH`) or local Codex `auth.json` or Claude token into PDD Cloud, scrub the single-use `refresh_token` from the imported local Codex `auth.json` after upload so local `codex` cannot collide with Cloud refresh (prefer `pdd accounts add` for a fresh OAuth session), materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json`, and optionally replace an existing owned label (`--replace`) or share (`--with`) |
+| `pdd accounts use LABEL [--provider codex\|claude]` | Pin `LABEL` (matching `+` and `-` punctuation, scoped by `--provider` when both Codex and Claude use `LABEL`) and materialize its leased pass in `$PDD_STATE_DIR/codex-home` (`0600`) or `~/.claude/settings.json` (`0600`) |
 | `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch to the next ready account sorted by soonest weekly reset |
+| `pdd accounts codex [ARGS...]` | Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session `codex resume` rotation |
 | `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Return in 0 ms when the cached lease is below 100% on both windows and more than 15 minutes from expiry; else lease a fresh pass within `--timeout-ms` (default 1200 ms) and fail open when offline |
 | `pdd accounts auto on\|off\|status` | Turn on, turn off or inspect the opt-in fail-open shell wrapper in `~/.zshrc`, `~/.bashrc`, and `~/.config/fish/config.fish` for plain terminal `codex` and `claude` commands (off by default) |
-| `pdd accounts pause LABEL` | Pause automatic leasing for `LABEL` |
-| `pdd accounts unpause LABEL` | Resume automatic leasing for `LABEL` |
-| `pdd accounts share LABEL --with USER\|ORG/TEAM[,...]` | Share `LABEL` with GitHub users, organization teams, or `@ORG` targets without exposing raw owner credentials |
+| `pdd accounts pause LABEL [--provider codex\|claude]` | Pause automatic leasing for `LABEL` |
+| `pdd accounts unpause LABEL [--provider codex\|claude]` | Resume automatic leasing for `LABEL` |
+| `pdd accounts share LABEL [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share `LABEL` with GitHub users, organization teams, or `@ORG` targets without exposing raw owner credentials |
 | `pdd accounts share --all [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or `@ORG` targets |
 | `pdd accounts accept INVITE` | Accept a pending Cloud account share invite and materialize the shared grant if no account is pinned for that provider |
-| `pdd accounts unshare LABEL --user USER` | Revoke shared access to `LABEL` for `USER` |
+| `pdd accounts unshare LABEL [--provider codex\|claude] --user USER` | Revoke shared access to `LABEL` for `USER` |
 | `pdd accounts unshare [LABEL] [--all] [--provider codex\|claude] [--user USER] [--with USER\|ORG/TEAM[,...]]` | Revoke shared access for users, organization teams, or `@ORG` targets across `LABEL` or all owned accounts |
-| `pdd accounts leave LABEL` | Leave a shared Cloud account and clean up its local gateway configuration |
-| `pdd accounts remove LABEL` | Delete `LABEL` from PDD Cloud and revoke active leases |
-| `pdd accounts log LABEL [--json]` | Show the lease and sharing audit log for `LABEL` |
+| `pdd accounts leave LABEL [--provider codex\|claude]` | Leave a shared Cloud account and clean up its local gateway configuration |
+| `pdd accounts remove LABEL [--provider codex\|claude]` | Delete `LABEL` from PDD Cloud and revoke active leases |
+| `pdd accounts log LABEL [--provider codex\|claude] [--json]` | Show the lease and sharing audit log for `LABEL` |
 
-- **Encrypted vault, stripped owner passes, and tokenless shared gateways.** PDD
+- **Encrypted vault, zero-plaintext gateway grants, and constant gateway URLs.** PDD
   Cloud encrypts each account's refresh credential with envelope encryption bound
-  to the account record. Owner Codex leases write a short-lived `access_token` and
-  `id_token` with `refresh_token: ""` (`0600`) inside `$PDD_STATE_DIR/codex-home`,
-  so only PDD Cloud refreshes single-use OAuth tokens. Shared Codex and Claude leases
+  to the account record. Codex and shared Claude `gateway_grant` leases
   (`delivery_mode: "gateway_grant"`) deliver only a short-lived revocable `pddg_…`
-  gateway grant routed through PDD Cloud (`[model_providers.pdd_codex_gateway]` for
-  Codex, `ANTHROPIC_BASE_URL` for Claude), with zero OpenAI or Anthropic OAuth tokens
-  written to borrower disk. Local state in `$PDD_STATE_DIR/accounts-state.json`
+  gateway grant routed through PDD Cloud (`openai_base_url` and `chatgpt_base_url`
+  pointed at the constant `<origin>/v1/codex-gateway` base URL on Codex's native
+  `openai` provider with a `[model_providers.pdd_codex_gateway]` compatibility
+  alias for `pddg_lse_…` grants, `ANTHROPIC_BASE_URL` for Claude), with zero real
+  OpenAI or Anthropic OAuth tokens written to disk, seamless `codex resume` /
+  `codex fork` session compatibility, and automatic `codex app-server` daemon
+  refresh on credential switches. Legacy `direct_stripped` Codex passes write
+  `refresh_token: ""` (`0600`) inside `$PDD_STATE_DIR/codex-home` so only PDD Cloud
+  refreshes single-use OAuth tokens. Local state in `$PDD_STATE_DIR/accounts-state.json`
   (`0600`) stores metadata and refresh timestamps only, with zero tokens.
 - **Stick-Until-100% and automatic `reauth_required` skip.** Inside `pdd` and
   `pdd autopilot`, steps stay on the active leased account with zero switches while
@@ -817,9 +838,9 @@ The agent runs these from the run's worktree. pdd finds the run from that folder
 
 | Command | What it does |
 |---|---|
-| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the commands and the full paths of the installed Prompting guide and RUNBOOK |
+| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the grouped command overview, quick-start examples, focused-help hint (`pdd <command> --help`), and the full paths of the installed Prompting guide and RUNBOOK |
 | `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
-| `pdd --version` | Print the version, `0.1.35`. When the PDD skills that your agent finds are older, also print the update command on stderr |
+| `pdd --version` | Print the version, `0.1.36`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
 | `pdd completion bash\|zsh` | Print a shell completion script. It does not change your shell files |

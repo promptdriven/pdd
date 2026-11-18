@@ -40,7 +40,7 @@ string `core`; any other value, or none, is `full`.
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
-When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics` (omitting unset optional keys so the default settings shape stays unchanged).
+When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics`; when `autopilot.ci` (or `autopilot.ciPolicy`) is supplied, `coreSettings` preserves `ci` as `"local"` or `"github"` (default `"github"` for any other value, omitting unset optional keys so the default settings shape stays unchanged).
 
 `detectTestCommand(cwd, fs, packageJson)` auto-detects standard external repository test commands when `autopilot.testCommand` is unset: `pnpm-lock.yaml` -> `pnpm test`, `yarn.lock` -> `yarn test`, `bun.lockb` or `bun.lock` -> `bun test`, `package.json` `scripts.test` -> `npm test`, `pyproject.toml` or `pytest.ini` -> `pytest`, `Cargo.toml` -> `cargo test`, `go.mod` -> `go test ./...`, `package.json` -> `npm test`, else zero-manifest `test/` or `tests/` discovery (`*.test.{js,mjs,cjs}` or `*.spec.{js,mjs,cjs}` -> `node --test`; `test_*.py` or `*_test.py` -> `pytest`), else `null`. `readCoreSettings(cwd, fs, machine = null)` applies `coreSettings` to `cwd/pdd.json` and `cwd/package.json` (an unreadable file counts as absent) and fills `testCommand` from `detectTestCommand(cwd, fs, packageJson)` whenever `autopilot.testCommand` is unset (when `main` is a greenfield or `product/` repository with no manifest yet, intake still claims ready issues and `suiteState`, `workRules`, `notCovered`, and suite failure/hang records resolve `detectTestCommand` against the checked-out PR head `N-suite`/`headTree` and `job.worktree` so a PR that introduces `package.json`, `pyproject.toml`, `Cargo.toml` or `go.mod` runs and reports its detected test command cleanly); the full-suite runner also installs lockfile dependencies for `pnpm-lock.yaml`, `yarn.lock` (Classic `--frozen-lockfile --ignore-scripts` vs Modern `--immutable --mode=skip-build`/`--skip-builds`), `bun.lockb`/`bun.lock` and `package-lock.json`.
 
@@ -249,8 +249,8 @@ flowchart TD
 
 `readyIssues({state, settings}, ports, rows)` returns the issue numbers in intake
 order. An issue is ready when all hold: it is an open issue (not a PR); it has no
-assignee; it carries no external-repository label (`external`, `other-repo`,
-`elsewhere`, `pdd:elsewhere`, matched case-insensitively with zero AI calls) or
+assignee; it carries no external-repository or wrong-repository skip label (`external`, `other-repo`,
+`elsewhere`, `pdd:elsewhere`, `needs-other-repo`, `pdd:needs-other-repo`, matched case-insensitively via `findOtherRepoSkipLabel` with zero AI calls) or
 configured `skipLabels` label; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; it has no active pre-run `fixed` disposition hold in `history.jsonl` (cleared when a trusted person comments after the forensics note or edits the issue title/body); it is not cooling down (no `noResult` history
 line of the last 24 hours on this machine after the issue's latest `reset` line); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
@@ -290,6 +290,14 @@ files (and `areas`, when set) are written into its claim record with a PATCH of 
 
 For each ready issue while slots are free, at most 3 claim attempts per tick:
 
+0. **Pre-claim wrong-repository detection (`#3500`):** before creating any worktree
+   or posting `pdd:working`, inspect the primary issue and any grouped companions
+   with `detectWrongRepositoryIssue` of [intake cards](autopilot-intake.prompt.md)
+   against `state.cwd`. Any issue that clearly targets another repository and has
+   zero matching specific code, prompt or test paths in `state.cwd` is routed via
+   `routeWrongRepositoryIssue` (adding `needs-other-repo` and posting at most one
+   deduplicated routing comment `<!-- pdd:autopilot-intake:other-repo:N -->`) and
+   skipped without claiming or counting a claim attempt.
 1. Make the job worktree first, so that a local failure touches no issue. Fetch
    `origin/BASE` once per tick; a fetch failure is not about one issue, so it stops
    intake for this tick. A leftover `worktrees/N` is ours: remove it with
@@ -561,6 +569,30 @@ until a CI run starts.` A check run in progress or completed (not a billing fail
 in any CI read clears `ciDown`; when no job read CI in a tick, intake reads the latest
 10 workflow runs at most every 10 minutes and clears it when one created after
 `since` is in progress or completed with success, neutral or skipped.
+**Local `testCommand` gate fallback (`#3471`):** when a local suite command exists
+(`resolveSuiteCommand(ctx, job)` or configured/detected `testCommand`) AND
+server-side branch protection and rulesets on `BASE` do not require status checks
+(`GET repos/REPO/branches/BASE/protection/required_status_checks` and
+`GET repos/REPO/rules/branches/BASE?per_page=100`, treating only `404` as
+unprotected and failing closed with `unknown: true` / retryable `{code: "github"}`
+on `403`, `5xx`, `status === 0`, or any non-`200`/non-`404` response), AND either
+the operator selected `autopilot.ci: "local"` (or `state.ci: "local"`) OR GitHub
+Actions is disabled on GitHub (`GET repos/REPO/actions/permissions` returns
+`enabled: false`, or `GET repos/REPO/actions/workflows` shows every PR-matching
+workflow via `workflowRunsOnPr` in `.github/workflows/` on `origin/BASE` —
+evaluated both for a job PR and for `ciHold` when `job === null` so non-PR
+workflows like tag-only `release.yml` never keep `ciDown` stuck — has a
+non-`active` disabled state): `ciHold` clears any saved `ciDown` immediately
+(also when zero PR workflows remain on `origin/BASE`, including legacy saved
+`ciDown` records without `hadWorkflows` when `.github/workflows` or
+`actions/workflows` confirms zero active PR workflows) so intake resumes without
+needing another Actions run, and `ciState` clears `ciDown`, skips billing/queued
+`notStarted` waiting even if `ciSeen` was set or billing/queued check runs exist
+on the head, and returns `{state: "local", note, sig}`. Likewise, a head whose
+only checks are billing startup failures does not set `job.ciSeen = true`, and
+when zero PR workflows remain on `origin/BASE` after PR workflows were removed,
+`job.ciSeen` clears so a later zero-check head resolves cleanly instead of staying
+pinned forever.
 
 **Single bounded shard-flake rerun** (#3484). In `ciState`, when a PR head is red and neither `job.flakeRerunHead` nor `job.reproduceRerun?.head` equals `head`, call `evaluateShardFlakeRerun`: on `wait-siblings` keep CI `pending` while sibling shards finish; on `rerun` invoke `gh run rerun <runId> --repo <repo> --failed` once per failed workflow run (falling back to REST `rerun-failed-jobs`, and per failed shard whose `runId` is absent or failed to rerun to `check-runs/<id>/rerequest`), record `job.flakeRerunHead = head` and `job.ciRerunPending` containing `staleTokens` only for actually-reran shards, and return `pending` when all failed shards were reran (otherwise report the remaining un-reran failed checks immediately). If the rerun fails again at `head`, proceed normally to repair.
 
@@ -959,14 +991,15 @@ the evidence record.
   watch modes end. Exit 0 is green; any other
   exit code of the repository's test command is a red suite, and repairs apply. Only a
   failure of the runner itself is not a test result: a run that died (no exit record)
-  or was killed by a signal, the wrapper's exit 127 (could not start), no output at
+  or was killed by a signal (including `130` / `143` queue-wait `SIGINT` / `SIGTERM` exits), the wrapper's exit 127 (could not start), no output at
   all, or a runner line in the log ("Shared test suite queue failed", "Test suite
   execution timeout", "Test suite could not start", "Test suite ended by SIG…",
-  "Test suite descendants could not be confirmed", "Supply a suite command"). It
+  "Test suite interrupted…", "Test suite runner ended…",
+  "Test suite descendants could not be confirmed", "Supply a suite command"). Both `cleanupPart` (for `suite`) and `suiteState` call `reconcileSuiteQueue` so dead or signaled queue waiters persist terminal `interrupted` receipts immediately (`#3473`). It
   starts again in the same checkout, at most twice. On the 3rd failure, a runner that
-  died on all 3 tries (the deaths count over every try of this suite run) is a
-  `no-result` end; any other runner failure ends the job with a
-  `pdd` cause `suite-broken`. It never uses a repair. A fresh checkout has no
+  died or was interrupted by a signal on all 3 tries (the deaths count over every try of this suite run) is a
+  `no-result` end (`owner: "machine"`); any other runner failure ends the job with a
+  `pdd` cause `suite-broken`. Before returning `end(...)` on a broken or interrupted suite, `mergeCheck` saves the updated head evidence record so `logs/N-evidence-HEAD.json` never remains stuck at `state: "running"`, recording `state: "waiting"` while queued and `state: "interrupted"` (with `signal` and not-run note) when interrupted before running tests. It never uses a repair. A fresh checkout has no
   installed dependencies: when it has `package-lock.json` and `package.json` lists
   dependencies (`dependencies`, `devDependencies` or `optionalDependencies`), the suite
   job is `/bin/sh -c 'npm ci --ignore-scripts --no-audit --no-fund || …exit 86; exec
@@ -1548,9 +1581,13 @@ runs until its end):
    `vectors` and `coverage`, so every check runs again, also at the same head), count it and start its quiet
    clock. The job saves the last 8 rounds (`rounds`).
 5. Wait while CI, review or suite is not green. CI is green when the head has at
-   least one check and none is pending. CI is `none` (the full suite and the fresh
+   least one check and none is pending. CI is `local` when optional GitHub Actions is
+   replaced by the local `testCommand` gate (`#3471` above: `autopilot.ci: "local"` or
+   disabled GitHub Actions / PR workflows, a local suite command exists, and base
+   branch protection / rulesets require no status checks; fresh review PASS and local
+   suite PASS are both required). CI is `none` (the full suite and the fresh
    review decide alone) only in a repository with no PR CI: no head of this job ever had a
-   check (`ciSeen`), no workflow file of the base tip can run on the PR head
+   non-billing check (`ciSeen`) or no active PR workflow exists on `origin/BASE` anymore, no workflow file of the base tip can run on the PR head
    (`workflowRunsOnPr`: its `on:` has `pull_request` or `pull_request_target` whose branch
    filter admits the base, whose `types` (when given) include opened, synchronize or
    reopened, and whose `paths` / `paths-ignore` admit one of the PR's changed files (`git
@@ -1627,8 +1664,8 @@ runs until its end):
    here; other steps (for example the #3227 line checks) read this result. A repair
    and a new agent result clear `runtimeWait`. The PR body is written back with a
    PATCH of the PR; a failed PATCH waits for the next tick.
-6. **Merge lane** (one final step per repository). A green PR (CI green or none,
-   review PASS, suite pass) enters the lane. The lane is the label `pdd:merge-lane` on
+6. **Merge lane** (one final step per repository). A green PR (CI green, local or none,
+   review PASS, suite pass) enters the lane. Before entering the lane across all green PR states (`green`, `local`, `none`), read server-side branch protection and rulesets on `BASE` (`GET repos/REPO/branches/BASE/protection/required_pull_request_reviews` and `rules/branches/BASE`, preserving an explicit `required_approving_review_count: 0`, treating only `404` as no review protection, and surfacing non-`200`/non-`404` responses as retryable `{code: "github"}` waits rather than merging). When `requiredApprovals > 0`, count distinct non-engine, non-bot (`user.type !== "Bot"` and no `[bot]` suffix) trusted (`author_association` in `OWNER`, `MEMBER`, `COLLABORATOR`, or `ports.trusted` when `author_association` is absent) `APPROVED` reviews whose `commit_id` matches `job.head` case-insensitively (surfacing transient review API errors as retryable `{code: "github"}` waits rather than swallowing them into `0` approvals). When approvals are still missing, `auto` mode stops checks and parks as `needs-person` (`keepPr: true`, `branchApproval: true`, posting a branch-protection PR review wait comment rather than the prompt-change approval comment, and asking a trusted person to approve on GitHub and remove `pdd:needs-decision`) before merging, while `observe` mode prepares full evidence, notes the required human approval on the `would-merge` comment, and leaves merging to the person. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
    PRs only). Because that label search index can lag behind both `POST` and `DELETE` or
    merge writes, every holder read (before `POST`, on the post-`POST` readback, and in
@@ -1712,7 +1749,8 @@ runs until its end):
    last error with step `base-check` (a quiet wait is a `pdd` step stop, as for #2892);
    another refusal ends `base-check`.
 8. Read the winning claim again: another live owner means hand-over and no merge; a
-   claim that is not confirmed as this job's waits (step `claim`). Post one merge comment on the PR for this head: `CI: green (N check(s))` or
+   claim that is not confirmed as this job's waits (step `claim`). Post one merge comment on the PR for this head: `CI: green (N check(s))`,
+   `CI: not required by local policy (…)` (when `ci.state` is `local`, never reporting `green`), or
    `CI: none (…)`, the suite, the lane (`Merge lane: final step`, with the queue
    minutes when it waited), the review (`Review: PASS from a fresh reviewer`,
    `Review: PASS (kept after a clean base refresh, same change)`, `Review: PASS (kept:
@@ -1890,7 +1928,7 @@ share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷ 2, 8 GiB �
 → 2 (automatic) · … · new work: held (memory pressure)`), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), the login-pool exhaustion line while `poolOut` is set (`Login pool exhausted since TIME: next reset at TIME.` or `Bounded retry window applies.`), the CI line
 while `ciDown` is set (`CI does not start: …`), the circuit-breaker line while `circuitBreaker` is active in `state` or `core.json` (`Circuit breaker: mode downgraded from auto to observe at TIME (REASON); fix the default branch and run pdd autopilot start --mode auto to resume merges.`), any active-intake login hold (`state.intakeNote`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
-suite …`, with `; merge lane: final step`, `; merge lane: waiting for PR #P since TIME`,
+suite …`, inspecting any saved `suite.agent.exit` file on disk so a signal-interrupted suite before the next tick shows `suite interrupted (SIGNAL, not run)` and a queued suite shows `suite waiting`, with `; merge lane: final step`, `; merge lane: waiting for PR #P since TIME`,
 `; Runtime: waits for the interpreter maintenance since HH:MM UTC (until HH:MM UTC); no
 slot` or `; Runtime: the check that was not sent runs again`, `#N ending: …`), one line per step wait
 (`#N waits: OWNER stop CODE: TEXT; next try after TIME (try K)`, with `; report REF` when one was filed), one line per
@@ -1947,6 +1985,7 @@ with the native defaults named above.
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.
 - [Serialized FIFO landing queue](autopilot-merge-queue.prompt.md): required for `enqueueMergeQueueItem`, `processMergeQueue`, `mergeQueueStatusLine`, and `buildConflictAgentInvocation`.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.
+- [Autopilot intake cards](autopilot-intake.prompt.md): required for active and shadow intake passes, pre-claim wrong-repository detection and routing, trusted person-comment filtering, and forensics fixed-card sync.
 - [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
   external-repository / configured skip-label matching and the fast read-only
   pre-run repository forensics check on `origin/BASE`.
@@ -1963,7 +2002,8 @@ with the native defaults named above.
 - [Report owner](autopilot-reports.prompt.md): required for `fileReport` and drafts.
 - [Autopilot regression detection](autopilot-regressions.prompt.md): loaded on demand for bounded post-merge reopen, revert and CI regression checks (`#3182`).
 - [Shared full-suite queue](test-suite-queue.prompt.md): required context for the
-  `pdd workflow suite` job.
+  `pdd workflow suite` job, `readSuiteProgress` interrupted/failed receipt reading,
+  and `reconcileSuiteQueue` dead-worker slot reclamation.
 - [Secret redaction](secret-redaction.prompt.md): required for suite log tails.
 - [Runtime seam](runtime-seam.prompt.md#public-contract): required for `savedStoryEvidence` (the
   saved checks of T01, with `comparisonRoot` and `withTests`; the merge base read also
