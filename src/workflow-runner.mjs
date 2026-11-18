@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 6acbefadd97333ab7e059d1acb718eb50a7695ac164f9b0b4eb4c7941f6e4a35).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a4bcd6d67af03e9765eb87cc1e38972339f9f3e6f33759645963989d5354018a).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -2017,7 +2017,7 @@ async function resolveLocalSuiteCi(run, p, { ci, headSha, files = null, branch =
 // CI and the checker verdict for the head of a published PR, and its base on GitHub. A read problem stays unknown.
 async function publishedChecks(run, pr, headSha, p) {
   const status = await prStatusOf(run, pr, p, run.root, true);
-  return { ci: status.ci, base: status.base ?? null, checker: await checkerOf(pr, headSha, p, run.root, status.view) };
+  return { ci: status.ci, state: status.state ?? null, base: status.base ?? null, checker: await checkerOf(pr, headSha, p, run.root, status.view) };
 }
 function reviewVerdict(run, area) {
   if (!area.steps.includes('review')) return null;
@@ -2146,9 +2146,13 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   let resolvedHead = commitSha(head) ? head : '';
   if (!resolvedHead) { try { resolvedHead = await git(p, run.root, 'rev-parse', '--verify', `${head}^{commit}`); } catch {} }
   const resolvedCi = published ? await resolveLocalSuiteCi(run, p, { ci: published.ci ?? null, headSha: resolvedHead, files: diff ? paths : null, branch: run.branch, baseBranch: base ?? run.baseBranch }) : { ci: null, localSuitePassed: false };
-  const boundary = layout === 'spec' && (storyPaths.length > 0 || prompts.length > 0)
-    ? buildHumanBoundaryCard({ root: run.root, promptPaths: prompts, storyPaths, changedPaths: files, since: Number.isFinite(run.startedAt) ? run.startedAt : 0, env: p.env })
-    : null;
+  const priorBoundary = layout === 'spec' && pr1?.readable?.facts?.boundary ? pr1.readable.facts.boundary : null;
+  const preservePriorBoundary = Boolean(priorBoundary) && (pr1Merged || published?.state === 'merged' || run.branch !== pr1.branch || (!storyPaths.length && !prompts.length));
+  const boundary = layout !== 'spec' ? null
+    : preservePriorBoundary ? structuredClone(priorBoundary)
+    : (storyPaths.length > 0 || prompts.length > 0)
+      ? buildHumanBoundaryCard({ root: run.root, promptPaths: prompts, storyPaths, changedPaths: files, since: Number.isFinite(run.startedAt) ? run.startedAt : 0, env: p.env })
+      : null;
   return { layout, single: label === 'the PR', workflow: run.workflow, number: run.number, baseBranch: run.baseBranch, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
     stories, storyPaths, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'no Story applies to this PR',
     ...(boundary ? { boundary } : {}),

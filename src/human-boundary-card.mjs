@@ -1,4 +1,4 @@
-// Generated from prompts/cli/human-boundary-card.prompt.md (sha256: 5b627d509ee6c5433a342fb16dddf94167fc43dfbe705671c85372e4ff6d8d58).
+// Generated from prompts/cli/human-boundary-card.prompt.md (sha256: 298d633397532c9d24801ff1c9a34153d62bf374707ff04c5bb43cd1a8f5d36f).
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -24,31 +24,32 @@ const BATCH_NAME = /^\d{8}-\d{6}-[a-z0-9]{4}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EFFECT_SEGMENT_RE = /(?:^|[_-])(effects?|side_effects?|actions?|commands?|calls?|dispatched|dispatch|emitted|emit|sent|notifications?|alerts?|events?|writes?|mutations?|invocations?|executed|outbound)(?:$|[_-])/i;
 const EFFECT_KEY_RE = /^(effect|side_effect|action|command|call|port|tool|dispatch|dispatched|emit|emitted|sent|alert|notification|event)$/i;
+const EXCLUDED_STORY_HEADING_RE = /^(?:Out\s+of\s+scope|What\s+must\s+not\s+change|Non-goals?|Not\s+in\s+scope)\b/i;
 
 const STOPWORDS = new Set([
   'about', 'above', 'across', 'after', 'again', 'against', 'allow', 'allows', 'allowed', 'already', 'also', 'always',
-  'among', 'another', 'array', 'assert', 'asserts', 'back', 'because', 'been', 'before', 'being', 'below', 'between',
-  'boolean', 'both', 'call', 'called', 'calls', 'cannot', 'case', 'cases', 'change', 'changed', 'changes', 'check',
-  'checked', 'checks', 'code', 'contain', 'contains', 'context', 'count', 'criteria', 'criterion', 'current', 'data',
-  'default', 'does', 'done', 'during', 'each', 'either', 'else', 'empty', 'entry', 'equal', 'equals', 'error', 'errors',
-  'even', 'every', 'exact', 'expect', 'expected', 'fail', 'failed', 'fails', 'false', 'field', 'fields', 'file', 'files',
-  'first', 'follow', 'follows', 'forbid', 'forbidden', 'from', 'full', 'give', 'given', 'gives', 'have', 'having', 'hold',
-  'holds', 'include', 'includes', 'initial', 'input', 'inputs', 'integer', 'into', 'item', 'items', 'json', 'keep',
-  'keeps', 'kept', 'kind', 'last', 'least', 'less', 'line', 'lines', 'list', 'lists', 'load', 'loaded', 'make', 'makes',
-  'match', 'matches', 'model', 'more', 'most', 'must', 'name', 'named', 'names', 'need', 'needs', 'never', 'next', 'none',
-  'null', 'number', 'object', 'objects', 'once', 'only', 'operation', 'operations', 'optional', 'other', 'otherwise',
-  'outcome', 'outcomes', 'output', 'outputs', 'over', 'pass', 'passed', 'passes', 'path', 'paths', 'person', 'plain',
-  'policy', 'port', 'ports', 'preserve', 'preserves', 'prompt', 'prompts', 'read', 'reads', 'reason', 'record', 'records',
-  'report', 'reported', 'reports', 'require', 'required', 'requires', 'resource', 'resources', 'response', 'result',
-  'results', 'retain', 'retains', 'return', 'returned', 'returns', 'route', 'rule', 'rules', 'same', 'save', 'saved',
-  'scenario', 'scenarios', 'schema', 'section', 'select', 'selected', 'send', 'sends', 'sent', 'shall', 'should', 'show',
-  'shown', 'shows', 'simulate', 'simulated', 'simulation', 'simulator', 'since', 'single', 'slice', 'some', 'source',
-  'sources', 'state', 'states', 'status', 'stay', 'stays', 'step', 'steps', 'still', 'stories', 'story', 'string',
-  'such', 'supplied', 'system', 'target', 'test', 'tested', 'tests', 'text', 'than', 'that', 'their', 'them', 'then',
-  'there', 'these', 'they', 'this', 'those', 'through', 'true', 'type', 'types', 'unchanged', 'under', 'until', 'update',
-  'updated', 'updates', 'used', 'user', 'users', 'using', 'valid', 'validate', 'value', 'values', 'verify', 'version',
-  'want', 'wants', 'when', 'where', 'whether', 'which', 'while', 'with', 'within', 'without', 'word', 'words', 'work',
-  'works', 'world', 'write', 'writes',
+  'among', 'another', 'applies', 'apply', 'array', 'assert', 'asserts', 'back', 'because', 'been', 'before', 'being',
+  'below', 'between', 'boolean', 'both', 'call', 'called', 'calls', 'cannot', 'case', 'cases', 'change', 'changed',
+  'changes', 'check', 'checked', 'checks', 'code', 'contain', 'contains', 'context', 'count', 'criteria', 'criterion',
+  'current', 'data', 'default', 'does', 'done', 'during', 'each', 'either', 'else', 'empty', 'entry', 'equal', 'equals',
+  'error', 'errors', 'even', 'every', 'exact', 'expect', 'expected', 'fail', 'failed', 'fails', 'false', 'field',
+  'fields', 'file', 'files', 'first', 'follow', 'follows', 'forbid', 'forbidden', 'from', 'full', 'give', 'given',
+  'gives', 'have', 'having', 'hold', 'holds', 'include', 'includes', 'initial', 'input', 'inputs', 'integer', 'into',
+  'item', 'items', 'json', 'keep', 'keeps', 'kept', 'kind', 'last', 'least', 'less', 'line', 'lines', 'list', 'lists',
+  'load', 'loaded', 'make', 'makes', 'match', 'matches', 'model', 'more', 'most', 'must', 'name', 'named', 'names',
+  'need', 'needs', 'never', 'next', 'none', 'null', 'number', 'object', 'objects', 'once', 'only', 'operation',
+  'operations', 'optional', 'other', 'otherwise', 'outcome', 'outcomes', 'output', 'outputs', 'over', 'pass', 'passed',
+  'passes', 'path', 'paths', 'person', 'plain', 'policy', 'port', 'ports', 'preserve', 'preserves', 'prompt', 'prompts',
+  'read', 'reads', 'reason', 'record', 'records', 'report', 'reported', 'reports', 'require', 'required', 'requires',
+  'resource', 'resources', 'response', 'result', 'results', 'retain', 'retains', 'return', 'returned', 'returns',
+  'route', 'rule', 'rules', 'same', 'save', 'saved', 'scenario', 'scenarios', 'schema', 'section', 'select', 'selected',
+  'send', 'sends', 'sent', 'shall', 'should', 'show', 'shown', 'shows', 'simulate', 'simulated', 'simulation',
+  'simulator', 'since', 'single', 'slice', 'some', 'source', 'sources', 'state', 'states', 'status', 'stay', 'stays',
+  'step', 'steps', 'still', 'stories', 'story', 'string', 'such', 'supplied', 'system', 'target', 'test', 'tested',
+  'tests', 'text', 'than', 'that', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'those', 'through',
+  'true', 'type', 'types', 'unchanged', 'under', 'until', 'update', 'updated', 'updates', 'used', 'user', 'users',
+  'using', 'valid', 'validate', 'value', 'values', 'verify', 'version', 'want', 'wants', 'when', 'where', 'whether',
+  'which', 'while', 'with', 'within', 'without', 'word', 'words', 'work', 'works', 'world', 'write', 'writes',
 ]);
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -71,10 +72,15 @@ function canonicalRoot(root) {
   try { return realpathSync(root); } catch { return resolve(root); }
 }
 
+function normalizeRelPromptPath(rawPath) {
+  if (typeof rawPath !== 'string') return '';
+  return posix.normalize(rawPath.trim().replace(/^\.\//, ''));
+}
+
 function readSafeText(rootReal, relPath) {
   if (typeof relPath !== 'string' || !relPath || relPath.startsWith('/') || relPath.includes('\\')) return null;
-  const normalized = posix.normalize(relPath);
-  if (normalized.startsWith('..') || normalized.split('/').includes('..')) return null;
+  const normalized = posix.normalize(relPath.replace(/^\.\//, ''));
+  if (!normalized || normalized === '.' || normalized.startsWith('..') || normalized.split('/').includes('..')) return null;
   const full = join(rootReal, normalized);
   try {
     const stat = lstatSync(full);
@@ -85,6 +91,89 @@ function readSafeText(rootReal, relPath) {
   } catch {
     return null;
   }
+}
+
+function stripHtmlComments(text) {
+  const raw = String(text ?? '');
+  let out = '', pos = 0;
+  while (pos < raw.length) {
+    const open = raw.indexOf('<!--', pos);
+    if (open < 0) { out += raw.slice(pos); break; }
+    out += raw.slice(pos, open);
+    const close = raw.indexOf('-->', open + 4);
+    const end = close < 0 ? raw.length : close + 3;
+    for (let i = open; i < end; i += 1) out += raw[i] === '\n' || raw[i] === '\r' ? raw[i] : ' ';
+    pos = end;
+  }
+  return out;
+}
+
+function maskFencedCodeBlocks(text) {
+  const lines = String(text ?? '').split('\n');
+  let fence = null;
+  const masked = lines.map(line => {
+    const trimmed = line.replace(/\r$/, '');
+    const closeMatch = fence ? /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(trimmed) : null;
+    if (fence) {
+      if (closeMatch && closeMatch[1][0] === fence[0] && closeMatch[1].length >= fence.length) fence = null;
+      return '';
+    }
+    const openMatch = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(trimmed);
+    if (openMatch) {
+      fence = openMatch[1] ?? openMatch[2];
+      return '';
+    }
+    return line;
+  });
+  return masked.join('\n');
+}
+
+function maskInlineCodeSpans(text) {
+  const raw = String(text ?? '');
+  const unclosedLengths = new Set();
+  let out = '', i = 0;
+  while (i < raw.length) {
+    if (raw[i] === '\\' && i + 1 < raw.length) {
+      out += raw.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+    if (raw[i] !== '`') {
+      out += raw[i];
+      i += 1;
+      continue;
+    }
+    let ticks = 1;
+    while (i + ticks < raw.length && raw[i + ticks] === '`') ticks += 1;
+    if (unclosedLengths.has(ticks)) {
+      out += raw.slice(i, i + ticks);
+      i += ticks;
+      continue;
+    }
+    let j = i + ticks, closeAt = -1;
+    while (j < raw.length) {
+      if (raw[j] !== '`') { j += 1; continue; }
+      let run = 1;
+      while (j + run < raw.length && raw[j + run] === '`') run += 1;
+      if (run === ticks) { closeAt = j + run; break; }
+      j += run;
+    }
+    if (closeAt < 0) {
+      unclosedLengths.add(ticks);
+      out += raw.slice(i, i + ticks);
+      i += ticks;
+    } else {
+      for (let k = i; k < closeAt; k += 1) out += raw[k] === '\n' || raw[k] === '\r' ? raw[k] : ' ';
+      i = closeAt;
+    }
+  }
+  return out;
+}
+
+function maskCodeAndComments(text) {
+  const withoutComments = stripHtmlComments(text);
+  const withoutFences = maskFencedCodeBlocks(withoutComments);
+  return maskInlineCodeSpans(withoutFences);
 }
 
 function proseWithoutInterface(text) {
@@ -104,28 +193,76 @@ function countProseLines(text) {
 }
 
 function headingSlug(rawHeading) {
-  return String(rawHeading ?? '')
+  let text = String(rawHeading ?? '')
     .replace(/`([^`]*)`/g, '$1')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/<[^>]+>/g, '')
+    .replace(/\[([^\][]*)\]\([^()]*\)/g, '$1');
+  while (/<[^<>]*>/.test(text)) text = text.replace(/<[^<>]*>/g, '');
+  return text
+    .replace(/[<>]/g, '')
     .toLowerCase()
     .trim()
     .replace(/[^\p{L}\p{N}\s_-]+/gu, '')
     .replace(/\s+/g, '-');
 }
 
-function promptHeadingSlugs(text) {
-  const slugs = new Set();
-  if (typeof text !== 'string') return slugs;
+function parsePromptHeadingsAndSections(text) {
+  const headings = new Set();
+  const sections = new Map();
+  if (typeof text !== 'string') return { headings, sections };
   const prose = proseWithoutInterface(text);
-  for (const match of prose.matchAll(/^#{1,6}[ \t]+(.+?)[ \t]*$/gm)) {
-    const slug = headingSlug(match[1]);
-    if (slug) slugs.add(slug);
+  const maskedForHeadings = maskFencedCodeBlocks(stripHtmlComments(prose));
+  const proseLines = prose.split('\n');
+  const maskedLines = maskedForHeadings.split('\n');
+
+  const lineStarts = [];
+  let offset = 0;
+  for (const l of proseLines) {
+    lineStarts.push(offset);
+    offset += l.length + 1;
   }
-  for (const match of prose.matchAll(/<a\s+[^>]*\bid=["']([^"']+)["']/gi)) {
-    if (match[1]) slugs.add(match[1].toLowerCase());
+
+  const found = [];
+  for (let i = 0; i < maskedLines.length; i += 1) {
+    const m = /^(#{1,6})[ \t]+(.+?)[ \t]*\r?$/.exec(maskedLines[i]);
+    if (!m) continue;
+    const rawTitle = proseLines[i].replace(/^#{1,6}[ \t]+/, '').replace(/[ \t]*\r?$/, '');
+    const slug = headingSlug(rawTitle);
+    if (!slug) continue;
+    headings.add(slug);
+    found.push({
+      level: m[1].length,
+      slug,
+      headingText: rawTitle,
+      startOffset: lineStarts[i],
+      bodyStartOffset: Math.min(prose.length, lineStarts[i] + proseLines[i].length + 1),
+    });
   }
-  return slugs;
+
+  for (let i = 0; i < found.length; i += 1) {
+    const cur = found[i];
+    let endOffset = prose.length;
+    for (let j = i + 1; j < found.length; j += 1) {
+      if (found[j].level <= cur.level) {
+        endOffset = found[j].startOffset;
+        break;
+      }
+    }
+    const rawBody = prose.slice(cur.bodyStartOffset, endOffset);
+    const cleanBody = stripHtmlComments(rawBody).trim();
+    const prev = sections.get(cur.slug);
+    sections.set(cur.slug, {
+      slug: cur.slug,
+      level: cur.level,
+      headingText: cur.headingText,
+      bodyText: prev?.bodyText ? `${prev.bodyText}\n${cleanBody}`.trim() : cleanBody,
+    });
+  }
+
+  for (const match of stripHtmlComments(prose).matchAll(/<a\s+[^<>]*?\bid=(?:"([^"<>]+)"|'([^'<>]+)')/gi)) {
+    const anchor = match[1] ?? match[2];
+    if (anchor) headings.add(anchor.toLowerCase());
+  }
+  return { headings, sections };
 }
 
 function dependenciesSection(text) {
@@ -142,30 +279,67 @@ function resolvePromptHref(rawHref, fromPath, visible) {
   const trimmed = rawHref.trim().replace(/^<|>$/g, '');
   if (!trimmed || /^[a-z]+:/i.test(trimmed) || trimmed.startsWith('#')) return null;
   const hashAt = trimmed.indexOf('#');
-  const rawPath = hashAt >= 0 ? trimmed.slice(0, hashAt) : trimmed;
+  const rawPath = (hashAt >= 0 ? trimmed.slice(0, hashAt) : trimmed).trim();
   const fragment = hashAt >= 0 ? trimmed.slice(hashAt + 1).trim().toLowerCase() : null;
   if (!rawPath.endsWith('.prompt.md')) return null;
   const baseDir = posix.dirname(fromPath);
-  const resolved = posix.normalize(baseDir === '.' ? rawPath : posix.join(baseDir, rawPath));
-  if (resolved.startsWith('..') || !visible.has(resolved)) return null;
-  return { target: resolved, fragment: fragment || null };
+  const relResolved = posix.normalize(baseDir === '.' ? rawPath : posix.join(baseDir, rawPath));
+  if (!relResolved.startsWith('..') && visible.has(relResolved)) {
+    return { target: relResolved, fragment: fragment || null };
+  }
+  const rootResolved = normalizeRelPromptPath(rawPath);
+  if (rootResolved && !rootResolved.startsWith('..') && visible.has(rootResolved)) {
+    return { target: rootResolved, fragment: fragment || null };
+  }
+  return null;
 }
 
 function extractFragmentLinks(sectionText, fromPath, visible) {
   const links = [];
   if (typeof sectionText !== 'string' || !sectionText) return links;
-  for (const match of sectionText.matchAll(/\[[^\]\n]*\]\(([^()\n]+)\)/g)) {
+  const masked = maskCodeAndComments(sectionText);
+  for (const match of masked.matchAll(/\[[^\]\n\[]*\]\(([^()\n]+)\)/g)) {
     const resolved = resolvePromptHref(match[1], fromPath, visible);
     if (resolved) links.push({ from: fromPath, ...resolved });
   }
   return links;
 }
 
+function stripExcludedStorySections(storyText) {
+  if (typeof storyText !== 'string' || !storyText) return '';
+  const lines = stripHtmlComments(storyText).split('\n');
+  let fence = null;
+  let skippingSection = false;
+  const kept = [];
+  for (const line of lines) {
+    const trimmed = line.replace(/\r$/, '');
+    const closeMatch = fence ? /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(trimmed) : null;
+    if (fence) {
+      if (closeMatch && closeMatch[1][0] === fence[0] && closeMatch[1].length >= fence.length) fence = null;
+      if (!skippingSection) kept.push(line);
+      continue;
+    }
+    const openMatch = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(trimmed);
+    if (openMatch) {
+      fence = openMatch[1] ?? openMatch[2];
+      if (!skippingSection) kept.push(line);
+      continue;
+    }
+    const h2 = /^(#{1,2})[ \t]+(.+?)[ \t]*$/.exec(trimmed);
+    if (h2) {
+      skippingSection = h2[1].length === 2 && EXCLUDED_STORY_HEADING_RE.test(h2[2]);
+    }
+    if (!skippingSection) kept.push(line);
+  }
+  return kept.join('\n');
+}
+
 function parseStorySectionLines(storyText, headingPattern) {
   if (typeof storyText !== 'string') return [];
-  const match = headingPattern.exec(storyText);
+  const cleanStory = stripHtmlComments(storyText);
+  const match = headingPattern.exec(cleanStory);
   if (!match) return [];
-  const rest = storyText.slice(match.index + match[0].length);
+  const rest = cleanStory.slice(match.index + match[0].length);
   const end = /^##[ \t]+/m.exec(rest);
   const body = (end ? rest.slice(0, end.index) : rest).trim();
   if (!body) return [];
@@ -173,7 +347,7 @@ function parseStorySectionLines(storyText, headingPattern) {
   let current = null;
   for (const raw of body.split(/\r?\n/)) {
     const trimmed = raw.trim();
-    if (!trimmed || trimmed.startsWith('<!--')) {
+    if (!trimmed) {
       if (current) { items.push(current.join(' ')); current = null; }
       continue;
     }
@@ -194,28 +368,39 @@ function parseStorySectionLines(storyText, headingPattern) {
 function parseStoryBoundaryPrompts(storyText, storyPath, visible) {
   if (typeof storyText !== 'string') return [];
   const found = new Set();
-  for (const match of storyText.matchAll(/```json[ \t]+pdd-boundary[ \t]*\r?\n([\s\S]*?)```/gi)) {
+  const addCandidate = candidate => {
+    if (typeof candidate !== 'string') return;
+    const norm = normalizeRelPromptPath(candidate);
+    if (norm.endsWith('.prompt.md') && visible.has(norm)) {
+      found.add(norm);
+      return;
+    }
+    const resolved = resolvePromptHref(candidate, storyPath, visible);
+    if (resolved) found.add(resolved.target);
+  };
+
+  for (const match of storyText.matchAll(/^[ \t]*`{3,}[ \t]*pdd-boundary\b[^\n]*\r?\n([\s\S]*?)\r?\n[ \t]*`{3,}[ \t]*(?=\r?\n|$)/gm)) {
+    for (const raw of match[1].split(/\r?\n/)) addCandidate(raw);
+  }
+  for (const match of storyText.matchAll(/`{3,}json[ \t]+pdd-boundary[ \t]*\r?\n([\s\S]*?)`{3,}/gi)) {
     try {
       const parsed = JSON.parse(match[1]);
-      for (const p of Array.isArray(parsed?.prompts) ? parsed.prompts : []) {
-        if (typeof p === 'string') {
-          const norm = posix.normalize(p);
-          if (visible.has(norm) && norm.endsWith('.prompt.md')) found.add(norm);
-        }
-      }
+      for (const p of Array.isArray(parsed?.prompts) ? parsed.prompts : []) addCandidate(p);
     } catch { /* advisory reader never fails on malformed blocks */ }
   }
-  for (const link of extractFragmentLinks(storyText, storyPath, visible)) found.add(link.target);
-  for (const match of storyText.matchAll(/(?:^|[\s`"'([])([A-Za-z0-9_./-]+\.prompt\.md)(?=$|[\s`"'),.:;\]])/gm)) {
-    const norm = posix.normalize(match[1]);
-    if (visible.has(norm)) found.add(norm);
+
+  const inScopeStory = stripExcludedStorySections(storyText);
+  for (const link of extractFragmentLinks(inScopeStory, storyPath, visible)) found.add(link.target);
+  const withoutFences = maskFencedCodeBlocks(inScopeStory);
+  for (const match of withoutFences.matchAll(/(?:^|[\s`"'([])([A-Za-z0-9_./-]+\.prompt\.md)(?=$|[\s`"'),.:;#\]])/gm)) {
+    addCandidate(match[1]);
   }
   return [...found].sort();
 }
 
 function stemToken(word) {
   let w = word.toLowerCase();
-  for (const suffix of ['ations', 'ation', 'ments', 'ment', 'ities', 'ity', 'iness', 'ning', 'ings', 'ing', 'edly', 'ed', 'ies', 'ves', 'ses', 'es', 's']) {
+  for (const suffix of ['ations', 'ation', 'ments', 'ment', 'ities', 'ity', 'iness', 'ning', 'ings', 'ing', 'edly', 'ed', 'ies', 'ves', 'ses', 'ers', 'er', 'es', 's']) {
     if (w.length - suffix.length >= 4 && w.endsWith(suffix)) {
       if (suffix === 'ies') w = `${w.slice(0, -3)}y`;
       else if (suffix === 'ves') w = `${w.slice(0, -3)}f`;
@@ -266,26 +451,57 @@ function proseStemsOf(proseText) {
   return new Set(words.map(stemToken));
 }
 
-function ruleConnectedToSources(ruleText, loadedPromptRecords) {
+function effectiveProseForRecord(rec, targetedFragmentsMap = null) {
+  const targeted = targetedFragmentsMap?.get(rec.path);
+  if (!targeted || !targeted.size) return rec.proseText;
+  const parts = [];
+  for (const slug of targeted) {
+    const sec = rec.sections?.get(slug);
+    if (sec) parts.push(`${sec.headingText}\n${sec.bodyText}`);
+    else parts.push(rec.proseText);
+  }
+  return parts.join('\n');
+}
+
+function ruleConnectedToSources(ruleText, loadedPromptRecords, targetedFragmentsMap = null) {
   if (!loadedPromptRecords.length) return { connected: false, reason: 'no prompt source loaded' };
-  const combinedProse = loadedPromptRecords.map(item => item.proseText).join('\n');
-  const combinedRaw = loadedPromptRecords.map(item => item.rawText).join('\n');
+  const combinedProse = loadedPromptRecords.map(item => effectiveProseForRecord(item, targetedFragmentsMap)).join('\n');
+  const combinedLower = combinedProse.toLowerCase();
   const identifiers = explicitIdentifiers(ruleText);
-  if (identifiers.length) {
-    const missingIds = identifiers.filter(id => !combinedRaw.toLowerCase().includes(id.toLowerCase()));
-    if (missingIds.length === identifiers.length) {
+  const matchedIds = identifiers.filter(id => combinedLower.includes(id.toLowerCase()));
+  const missingIds = identifiers.filter(id => !combinedLower.includes(id.toLowerCase()));
+  const stems = salientRuleTokens(ruleText, loadedPromptRecords.map(item => item.path));
+  const corpusStems = proseStemsOf(combinedProse);
+  const matchedStems = stems.filter(stem => corpusStems.has(stem));
+
+  const totalSignals = identifiers.length + stems.length;
+  if (totalSignals === 0) return { connected: true, reason: null };
+  const matchedSignals = matchedIds.length + matchedStems.length;
+  const requiredSignals = totalSignals >= 2 ? Math.max(2, Math.ceil(totalSignals * 0.5)) : 1;
+  if (matchedSignals < requiredSignals) {
+    if (missingIds.length) {
       return { connected: false, reason: `missing \`${missingIds[0]}\` in selected source` };
     }
-  }
-  const stems = salientRuleTokens(ruleText, loadedPromptRecords.map(item => item.path));
-  if (!stems.length) return { connected: true, reason: null };
-  const corpusStems = proseStemsOf(combinedProse);
-  const matched = stems.filter(stem => corpusStems.has(stem));
-  if (matched.length === 0) {
     return { connected: false, reason: 'owning rule absent from selected source prose' };
   }
   return { connected: true, reason: null };
 }
+
+function inspectFragmentLink(link, rootReal, visible, promptCache) {
+  if (!link?.fragment) return { broken: null, validFragment: null };
+  const targetRec = readPromptRecord(rootReal, visible, link.target, promptCache);
+  if (!targetRec) return { broken: null, validFragment: null };
+  if (!targetRec.headings.has(link.fragment)) {
+    return { broken: { from: link.from, target: link.target, fragment: link.fragment, empty: false }, validFragment: null };
+  }
+  const sec = targetRec.sections.get(link.fragment);
+  if (sec && !sec.bodyText) {
+    return { broken: { from: link.from, target: link.target, fragment: link.fragment, empty: true }, validFragment: null };
+  }
+  return { broken: null, validFragment: { from: link.from, target: link.target, fragment: link.fragment } };
+}
+
+const unescapePointer = token => token.replace(/~([01])/g, (_, d) => (d === '1' ? '/' : '~'));
 
 function pointerGet(rootValue, pointer) {
   if (typeof pointer !== 'string') return { found: false, value: undefined };
@@ -293,7 +509,7 @@ function pointerGet(rootValue, pointer) {
   if (!pointer.startsWith('/')) return { found: false, value: undefined };
   let cur = rootValue;
   for (const rawPart of pointer.slice(1).split('/')) {
-    const part = rawPart.replace(/~1/g, '/').replace(/~0/g, '~');
+    const part = unescapePointer(rawPart);
     if (Array.isArray(cur)) {
       const idx = Number(part);
       if (!Number.isInteger(idx) || idx < 0 || idx >= cur.length) return { found: false, value: undefined };
@@ -307,10 +523,73 @@ function pointerGet(rootValue, pointer) {
   return { found: true, value: cur };
 }
 
+function pointerSetClone(targetObj, pointer, val) {
+  if (!isObject(targetObj) || typeof pointer !== 'string' || !pointer.startsWith('/')) return;
+  const parts = pointer.slice(1).split('/').map(unescapePointer);
+  let cur = targetObj;
+  for (let i = 0; i < parts.length - 1; i += 1) {
+    const key = parts[i];
+    if (!isObject(cur[key])) cur[key] = {};
+    cur = cur[key];
+  }
+  if (parts.length) cur[parts.at(-1)] = val;
+}
+
+function resolveInitialWorld(doc, rootReal, visible, seedCache) {
+  const raw = doc?.initial_world;
+  if (!isObject(raw)) return {};
+  let merged = {};
+  if (typeof raw.$seed === 'string') {
+    const seedPath = normalizeRelPromptPath(raw.$seed);
+    if (!seedCache.has(seedPath)) {
+      const seedText = visible.has(seedPath) ? readSafeText(rootReal, seedPath) : null;
+      let parsed = null;
+      if (seedText) {
+        try { parsed = JSON.parse(seedText); } catch { parsed = null; }
+      }
+      seedCache.set(seedPath, isObject(parsed) ? parsed : null);
+    }
+    const baseSeed = seedCache.get(seedPath);
+    if (baseSeed) merged = structuredClone(baseSeed);
+  }
+  for (const [k, v] of Object.entries(raw)) {
+    if (k === '$seed' || k === 'set') continue;
+    merged[k] = structuredClone(v);
+  }
+  if (isObject(raw.set)) {
+    for (const [ptr, v] of Object.entries(raw.set)) {
+      pointerSetClone(merged, ptr, structuredClone(v));
+    }
+  }
+  return merged;
+}
+
+function nodeReferencesInput(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some(nodeReferencesInput);
+  if (node.ref_target === 'input') return true;
+  return Object.values(node).some(nodeReferencesInput);
+}
+
+function checkReferencesInput(check) {
+  if (!isObject(check)) return false;
+  if (check.ref_target === 'input') return true;
+  if (isObject(check.value) && check.value.ref_target === 'input') return true;
+  if (check.op === 'integer_relation' && isObject(check.value) && nodeReferencesInput(check.value)) return true;
+  return false;
+}
+
 function valueAppearsSupplied(expected, supplied, checkPath) {
   if (expected === undefined || expected === null || typeof expected === 'boolean') return false;
   if (typeof expected === 'number' && (expected === 0 || expected === 1)) return false;
   if (typeof expected === 'string' && expected.length === 0) return false;
+  if ((Array.isArray(expected) && expected.length === 0) || (isObject(expected) && Object.keys(expected).length === 0)) {
+    if (typeof checkPath === 'string' && checkPath.startsWith('/')) {
+      const direct = pointerGet(supplied, checkPath);
+      return direct.found && isDeepStrictEqual(direct.value, expected);
+    }
+    return false;
+  }
   if (typeof checkPath === 'string' && checkPath.startsWith('/')) {
     const direct = pointerGet(supplied, checkPath);
     if (direct.found && isDeepStrictEqual(direct.value, expected)) return true;
@@ -378,24 +657,28 @@ function instrumentedPortsForStep(doc, step, loadedPromptRecords) {
   return [...ports].sort();
 }
 
-function classifyStepCheck(check, doc, step, receiptCheck = null) {
+function classifyStepCheck(check, doc, step, effectiveWorld, receiptCheck = null) {
   if (!isObject(check)) return { kind: 'model-returned value', zeroCalls: false, needsPortOrNative: false, portPath: null };
   if (check.target === 'calls') {
     const zero = isZeroCallCheck(check) || receiptCheck?.actual === 0 || (Array.isArray(receiptCheck?.actual) && receiptCheck.actual.length === 0);
     const portLabel = typeof check.path === 'string' && check.path ? check.path.replace(/^\/(?:resources|internal)\//, '').replace(/^\//, '') : 'port';
     return { kind: 'observed simulated port call', zeroCalls: zero, needsPortOrNative: false, portPath: portLabel || 'port' };
   }
-  if (check.ref_target === 'input') {
+  if (checkReferencesInput(check)) {
     return { kind: 'supplied fact', zeroCalls: false, needsPortOrNative: false, portPath: null };
   }
-  if (check.target === 'world' && Object.hasOwn(check, 'value')) {
-    const initial = pointerGet(doc?.initial_world, check.path ?? '');
+  const worldSet = isObject(doc?.initial_world?.set) ? doc.initial_world.set : null;
+  if (check.target === 'world' && Object.hasOwn(check, 'value') && ['equals', 'equals_ignore_case', 'contains'].includes(check.op)) {
+    if (worldSet && typeof check.path === 'string' && Object.hasOwn(worldSet, check.path) && isDeepStrictEqual(worldSet[check.path], check.value)) {
+      return { kind: 'supplied fact', zeroCalls: false, needsPortOrNative: false, portPath: null };
+    }
+    const initial = pointerGet(effectiveWorld, check.path ?? '');
     if (initial.found && isDeepStrictEqual(initial.value, check.value)) {
       return { kind: 'supplied fact', zeroCalls: false, needsPortOrNative: false, portPath: null };
     }
   }
-  if (['result', 'world'].includes(check.target) && Object.hasOwn(check, 'value') && ['equals', 'contains'].includes(check.op)) {
-    if (valueAppearsSupplied(check.value, step?.input, check.path) || (check.target === 'result' && valueAppearsSupplied(check.value, doc?.initial_world, check.path))) {
+  if (['result', 'world'].includes(check.target) && Object.hasOwn(check, 'value') && ['equals', 'equals_ignore_case', 'contains'].includes(check.op)) {
+    if (valueAppearsSupplied(check.value, step?.input, check.path) || (check.target === 'result' && valueAppearsSupplied(check.value, effectiveWorld, check.path))) {
       return { kind: 'supplied fact', zeroCalls: false, needsPortOrNative: false, portPath: null };
     }
   }
@@ -435,15 +718,49 @@ function gitChangedPaths(rootReal, visible) {
   return [...paths].sort();
 }
 
-function readSavedBatchDiagnostics(rootReal, { since = 0, env = process.env } = {}) {
+function readSavedNativeValidatedStories(rootReal) {
+  const stories = new Set();
+  try {
+    const out = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: rootReal, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    if (out.status !== 0 || !out.stdout.trim()) return stories;
+    const commonDir = resolve(rootReal, out.stdout.trim());
+    const runsDir = join(commonDir, 'pdd', 'runs');
+    let entries = [];
+    try { entries = readdirSync(runsDir); } catch { return stories; }
+    for (const entry of entries) {
+      let run;
+      try { run = JSON.parse(readFileSync(join(runsDir, entry, 'status.json'), 'utf8')); } catch { continue; }
+      if (!isObject(run) || typeof run.root !== 'string' || canonicalRoot(run.root) !== rootReal) continue;
+      for (const ev of Array.isArray(run.evidence) ? run.evidence : []) {
+        if (ev?.native?.schema === 'pdd.native-evidence-record.v1' && typeof ev.native.storyPath === 'string') {
+          stories.add(normalizeRelPromptPath(ev.native.storyPath));
+        }
+      }
+    }
+  } catch { /* ignore unreadable git run state */ }
+  return stories;
+}
+
+function countStepCalls(callsObj) {
+  if (!isObject(callsObj)) return null;
+  let sum = 0, seenNumber = false;
+  const walk = obj => {
+    for (const val of Object.values(obj)) {
+      if (typeof val === 'number' && Number.isFinite(val)) { sum += val; seenNumber = true; }
+      else if (Array.isArray(val)) { sum += val.length; seenNumber = true; }
+      else if (isObject(val)) walk(val);
+    }
+  };
+  walk(callsObj);
+  return seenNumber || Object.keys(callsObj).length === 0 ? sum : null;
+}
+
+function readSavedBatchDiagnostics(rootReal, { since = 0, env = process.env, relevantTests = null } = {}) {
   const byTest = new Map();
-  const divergences = [];
-  let maxSamples = 0;
-  let agreedMultiSample = 0;
   const stateRoot = resolve(env?.PDD_STATE_DIR || join(env?.HOME || homedir(), '.pdd', 'runtime'));
   const batchesDir = join(stateRoot, 'batches');
   let names = [];
-  try { names = readdirSync(batchesDir).filter(name => BATCH_NAME.test(name)).sort(); } catch { return { byTest, divergences, sampleSummary: null }; }
+  try { names = readdirSync(batchesDir).filter(name => BATCH_NAME.test(name)).sort(); } catch { return { byTest, divergences: [], sampleSummary: null }; }
   for (const name of names) {
     const folder = join(batchesDir, name);
     let batch;
@@ -463,7 +780,8 @@ function readSavedBatchDiagnostics(rootReal, { since = 0, env = process.env } = 
       const report = answer?.result?.report;
       if (!isObject(report)) continue;
       const samples = Array.isArray(report.samples) ? report.samples.filter(isObject) : [];
-      if (samples.length > maxSamples) maxSamples = samples.length;
+      const rowDivergences = [];
+      let rowAgreedSamples = 0;
       if (samples.length > 1) {
         const baseSteps = Array.isArray(samples[0].steps) ? samples[0].steps : [];
         let differed = false;
@@ -484,50 +802,62 @@ function readSavedBatchDiagnostics(rootReal, { since = 0, env = process.env } = 
           }
           if (surfaces.size) {
             differed = true;
-            divergences.push(`${stepId} varied across ${samples.length} samples (${[...surfaces].join(', ')})`);
+            rowDivergences.push(`${stepId} varied across ${samples.length} samples (${[...surfaces].join(', ')})`);
           }
         }
-        if (!differed) agreedMultiSample = Math.max(agreedMultiSample, samples.length);
+        if (!differed) rowAgreedSamples = samples.length;
       }
       for (const rStep of Array.isArray(report?.rerun?.steps) ? report.rerun.steps : []) {
         if (!isObject(rStep)) continue;
         const stepId = cleanOneLine(rStep.step_id || 'step');
         if (Array.isArray(rStep.changed_paths) && rStep.changed_paths.length) {
-          divergences.push(`${stepId} rerun varied (${rStep.changed_paths.slice(0, 2).map(cleanOneLine).join(', ')})`);
+          rowDivergences.push(`${stepId} rerun varied (${rStep.changed_paths.slice(0, 2).map(cleanOneLine).join(', ')})`);
         } else if (Number.isInteger(rStep.runs) && rStep.runs > 1 && Number.isInteger(rStep.failed) && rStep.failed > 0 && rStep.failed < rStep.runs) {
-          divergences.push(`${stepId} split across ${rStep.runs} reruns (${rStep.failed} failed)`);
+          rowDivergences.push(`${stepId} split across ${rStep.runs} reruns (${rStep.failed} failed)`);
         }
       }
       for (const div of Array.isArray(report?.divergences) ? report.divergences : []) {
         const note = typeof div === 'string' ? cleanOneLine(div) : isObject(div) ? cleanOneLine(div.summary || div.step_id || div.path || '') : '';
-        if (note) divergences.push(note);
+        if (note) rowDivergences.push(note);
       }
+
       const stepObservations = new Map();
+      const stepObservationsByIndex = [];
+      const unkeyedChecks = [];
       const primarySteps = Array.isArray(samples[0]?.steps) ? samples[0].steps : [];
-      for (const s of primarySteps) {
-        if (!isObject(s) || typeof s.step_id !== 'string') continue;
-        let observedCallTotal = null;
-        if (isObject(s.calls)) {
-          let sum = 0, seenNumber = false;
-          const countCalls = obj => {
-            for (const val of Object.values(obj)) {
-              if (typeof val === 'number' && Number.isFinite(val)) { sum += val; seenNumber = true; }
-              else if (Array.isArray(val)) { sum += val.length; seenNumber = true; }
-              else if (isObject(val)) countCalls(val);
-            }
-          };
-          countCalls(s.calls);
-          if (seenNumber || Object.keys(s.calls).length === 0) observedCallTotal = sum;
+      for (let sIdx = 0; sIdx < primarySteps.length; sIdx += 1) {
+        const s = primarySteps[sIdx];
+        if (!isObject(s)) {
+          stepObservationsByIndex.push(null);
+          continue;
         }
-        stepObservations.set(s.step_id, {
-          observedCallTotal,
-          checks: Array.isArray(s.checks) ? s.checks : [],
-        });
+        const observedCallTotal = countStepCalls(s.calls);
+        const checks = Array.isArray(s.checks) ? s.checks : [];
+        const hasId = typeof s.step_id === 'string' && s.step_id.length > 0;
+        const obs = { stepId: hasId ? s.step_id : null, observedCallTotal, checks };
+        stepObservationsByIndex.push(obs);
+        if (hasId) stepObservations.set(s.step_id, obs);
+        else unkeyedChecks.push(...checks);
       }
-      byTest.set(row.test, { state: answer?.state ?? null, stepObservations });
+
+      byTest.set(normalizeRelPromptPath(row.test), {
+        state: answer?.state ?? null,
+        stepObservations,
+        stepObservationsByIndex,
+        unkeyedChecks,
+        sampleCount: samples.length,
+        agreedSamples: rowAgreedSamples,
+        divergences: [...new Set(rowDivergences)],
+      });
     }
   }
-  const uniqueDivergences = [...new Set(divergences)];
+
+  const activeRecords = Array.isArray(relevantTests) && relevantTests.length > 0
+    ? relevantTests.map(p => byTest.get(normalizeRelPromptPath(p))).filter(Boolean)
+    : [...byTest.values()];
+  const uniqueDivergences = [...new Set(activeRecords.flatMap(r => r.divergences))];
+  const agreedMultiSample = activeRecords.reduce((best, r) => Math.max(best, r.agreedSamples), 0);
+  const maxSamples = activeRecords.reduce((best, r) => Math.max(best, r.sampleCount), 0);
   const sampleSummary = uniqueDivergences.length
     ? `advisory divergence: ${uniqueDivergences.slice(0, 2).join('; ')}`
     : agreedMultiSample > 1
@@ -546,6 +876,7 @@ function readPromptRecord(rootReal, visible, path, cache) {
   try { parsed = readPrompt(rootReal, visible, path); } catch { parsed = null; }
   const iface = parsed?.interface ?? null;
   const proseText = proseWithoutInterface(rawText);
+  const { headings, sections } = parsePromptHeadingsAndSections(rawText);
   const rec = {
     path,
     rawText,
@@ -557,23 +888,30 @@ function readPromptRecord(rootReal, visible, path, cache) {
     operations: Array.isArray(iface?.entries)
       ? iface.entries.map(e => e?.operation).filter(op => typeof op === 'string' && op.trim())
       : [],
-    headings: promptHeadingSlugs(rawText),
+    headings,
+    sections,
   };
   cache.set(path, rec);
   return rec;
 }
 
 function resolveScenarioClosure(doc, storyBoundaryPrompts, rootReal, visible, promptCache) {
+  const normalizeVisiblePrompt = raw => {
+    const norm = normalizeRelPromptPath(raw);
+    return norm.endsWith('.prompt.md') && visible.has(norm) ? norm : null;
+  };
+
   const entryCandidates = new Set([
-    ...(typeof doc?.entry_path === 'string' ? [doc.entry_path] : []),
-    ...(Array.isArray(doc?.entry_paths) ? doc.entry_paths.filter(p => typeof p === 'string') : []),
+    ...(typeof doc?.entry_path === 'string' ? [normalizeVisiblePrompt(doc.entry_path)] : []),
+    ...(Array.isArray(doc?.entry_paths) ? doc.entry_paths.map(normalizeVisiblePrompt) : []),
     ...storyBoundaryPrompts,
-  ].filter(p => visible.has(p) && p.endsWith('.prompt.md')));
+  ].filter(Boolean));
 
   const seeds = new Set();
   for (const step of Array.isArray(doc?.steps) ? doc.steps : []) {
-    if (typeof step?.entry_path === 'string' && visible.has(step.entry_path) && step.entry_path.endsWith('.prompt.md')) {
-      seeds.add(step.entry_path);
+    const stepEntry = normalizeVisiblePrompt(step?.entry_path);
+    if (stepEntry) {
+      seeds.add(stepEntry);
       continue;
     }
     if (typeof step?.operation === 'string' && step.operation) {
@@ -586,15 +924,22 @@ function resolveScenarioClosure(doc, storyBoundaryPrompts, rootReal, visible, pr
       else if (entryCandidates.size === 1) seeds.add([...entryCandidates][0]);
     }
   }
+  const addContextSeed = raw => {
+    const p = normalizeVisiblePrompt(raw);
+    if (p) seeds.add(p);
+  };
   for (const ctx of Array.isArray(doc?.context) ? doc.context : []) {
-    if (typeof ctx === 'string' && ctx.endsWith('.prompt.md') && visible.has(ctx)) seeds.add(ctx);
-    else if (isObject(ctx) && Array.isArray(ctx.paths)) {
-      for (const p of ctx.paths) if (typeof p === 'string' && p.endsWith('.prompt.md') && visible.has(p)) seeds.add(p);
+    if (typeof ctx === 'string') addContextSeed(ctx);
+    else if (isObject(ctx)) {
+      addContextSeed(ctx.path);
+      addContextSeed(ctx.prompt_path);
+      if (Array.isArray(ctx.paths)) for (const p of ctx.paths) addContextSeed(p);
     }
   }
 
   const loaded = new Set();
   const brokenFragments = [];
+  const validFragments = [];
   const queue = [...seeds];
   while (queue.length) {
     const current = queue.shift();
@@ -607,17 +952,13 @@ function resolveScenarioClosure(doc, storyBoundaryPrompts, rootReal, visible, pr
     const depLinks = extractFragmentLinks(dependenciesSection(rec.rawText), current, visible);
     for (const link of depLinks) {
       if (!loaded.has(link.target)) queue.push(link.target);
-      if (link.fragment) {
-        const targetRec = readPromptRecord(rootReal, visible, link.target, promptCache);
-        if (targetRec && !targetRec.headings.has(link.fragment)) {
-          brokenFragments.push({ from: current, target: link.target, fragment: link.fragment });
-        }
-      }
+      const inspected = inspectFragmentLink(link, rootReal, visible, promptCache);
+      if (inspected.broken) brokenFragments.push(inspected.broken);
+      if (inspected.validFragment) validFragments.push(inspected.validFragment);
     }
     for (const call of Array.isArray(rec.interface?.calls) ? rec.interface.calls : []) {
-      if (typeof call?.target === 'string' && call.target.endsWith('.prompt.md') && visible.has(call.target) && !loaded.has(call.target)) {
-        queue.push(call.target);
-      }
+      const target = normalizeVisiblePrompt(call?.target);
+      if (target && !loaded.has(target)) queue.push(target);
     }
   }
   return {
@@ -625,6 +966,7 @@ function resolveScenarioClosure(doc, storyBoundaryPrompts, rootReal, visible, pr
     loadedPrompts: [...loaded].sort(),
     loadedRecords: [...loaded].sort().map(p => readPromptRecord(rootReal, visible, p, promptCache)).filter(Boolean),
     brokenFragments,
+    validFragments,
   };
 }
 
@@ -643,9 +985,12 @@ export function buildHumanBoundaryCard({
   try { visibleList = gitFiles(rootReal); } catch { return null; }
   const visible = new Set(visibleList.filter(path => !path.startsWith('test/fixtures/')));
   const promptCache = new Map();
+  const seedCache = new Map();
+
+  const normalizedFocus = typeof focusPrompt === 'string' && focusPrompt ? normalizeRelPromptPath(focusPrompt) : null;
 
   const sliceChanged = Array.isArray(changedPaths)
-    ? changedPaths.filter(p => typeof p === 'string' && visible.has(p))
+    ? changedPaths.map(normalizeRelPromptPath).filter(p => p && visible.has(p))
     : gitChangedPaths(rootReal, visible);
 
   let foundTests = { tests: [], stories: [], nativeSelections: [] };
@@ -682,7 +1027,8 @@ export function buildHumanBoundaryCard({
 
   const scenarioClosures = new Map();
   for (const testEntry of validTests) {
-    const sPath = typeof testEntry.doc?.story_path === 'string' ? testEntry.doc.story_path : testEntry.storyPath;
+    const rawStoryPath = typeof testEntry.doc?.story_path === 'string' ? testEntry.doc.story_path : testEntry.storyPath;
+    const sPath = rawStoryPath ? normalizeRelPromptPath(rawStoryPath) : '';
     const sText = sPath ? readStory(sPath) : null;
     const boundaryPrompts = sText ? parseStoryBoundaryPrompts(sText, sPath, visible) : [];
     scenarioClosures.set(testEntry.path, {
@@ -695,22 +1041,25 @@ export function buildHumanBoundaryCard({
 
   // Select relevant Stories for this slice (approve focusPrompt vs. PR 1 slice).
   const candidateStoryPaths = new Set();
-  for (const s of storyPaths ?? []) if (typeof s === 'string' && isStoryPath(s) && visible.has(s)) candidateStoryPaths.add(s);
+  for (const s of storyPaths ?? []) {
+    const norm = normalizeRelPromptPath(s);
+    if (norm && isStoryPath(norm) && visible.has(norm)) candidateStoryPaths.add(norm);
+  }
 
-  if (focusPrompt) {
+  if (normalizedFocus) {
     for (const info of scenarioClosures.values()) {
-      if (info.loadedPrompts.includes(focusPrompt) || info.boundaryPrompts.includes(focusPrompt)) {
+      if (info.loadedPrompts.includes(normalizedFocus) || info.boundaryPrompts.includes(normalizedFocus)) {
         if (info.storyPath) candidateStoryPaths.add(info.storyPath);
       }
     }
     for (const p of visible) {
       if (!isStoryPath(p)) continue;
       const text = readStory(p);
-      if (text && hasAcceptance(text) && parseStoryBoundaryPrompts(text, p, visible).includes(focusPrompt)) {
+      if (text && hasAcceptance(text) && parseStoryBoundaryPrompts(text, p, visible).includes(normalizedFocus)) {
         candidateStoryPaths.add(p);
       }
     }
-    const focusRec = readPromptRecord(rootReal, visible, focusPrompt, promptCache);
+    const focusRec = readPromptRecord(rootReal, visible, normalizedFocus, promptCache);
     if (focusRec?.kind !== 'native-only') {
       for (const p of sliceChanged) {
         if (isLintableStoryPath(p) && readStory(p) && hasAcceptance(readStory(p))) candidateStoryPaths.add(p);
@@ -731,17 +1080,18 @@ export function buildHumanBoundaryCard({
   const selectedStories = [...candidateStoryPaths].sort().filter(p => readStory(p) !== null);
   const selectedScenarios = [...scenarioClosures.values()].filter(info =>
     (info.storyPath && selectedStories.includes(info.storyPath))
-    || (!focusPrompt && sliceChanged.includes(info.testEntry.path))
-    || (focusPrompt && info.loadedPrompts.includes(focusPrompt)),
+    || (!normalizedFocus && sliceChanged.includes(info.testEntry.path))
+    || (normalizedFocus && info.loadedPrompts.includes(normalizedFocus)),
   );
 
   // Collect owning prompts in scope.
   const owningPromptSet = new Set();
-  if (focusPrompt && visible.has(focusPrompt)) owningPromptSet.add(focusPrompt);
-  for (const p of promptPaths ?? []) {
-    if (typeof p === 'string' && p.endsWith('.prompt.md') && visible.has(p) && !isTestPromptPath(p)) owningPromptSet.add(p);
+  if (normalizedFocus && visible.has(normalizedFocus)) owningPromptSet.add(normalizedFocus);
+  for (const rawPrompt of promptPaths ?? []) {
+    const p = normalizeRelPromptPath(rawPrompt);
+    if (p.endsWith('.prompt.md') && visible.has(p) && !isTestPromptPath(p)) owningPromptSet.add(p);
   }
-  if (!focusPrompt || selectedStories.length > 0 || selectedScenarios.length > 0) {
+  if (!normalizedFocus || selectedStories.length > 0 || selectedScenarios.length > 0) {
     for (const p of sliceChanged) {
       if (p.endsWith('.prompt.md') && visible.has(p) && !isTestPromptPath(p)) owningPromptSet.add(p);
     }
@@ -770,25 +1120,33 @@ export function buildHumanBoundaryCard({
     ? checkableOwners.map(r => r.path).filter(p => !allLoadedPaths.has(p))
     : [];
 
-  const batchDiag = readSavedBatchDiagnostics(rootReal, { since, env });
+  const relevantTestPaths = selectedScenarios.map(s => s.testEntry.path);
+  const batchDiag = readSavedBatchDiagnostics(rootReal, { since, env, relevantTests: relevantTestPaths });
 
   // Build policy items & per-rule/criterion provenance rows.
   const policyItems = [];
   const provenanceRows = [];
-  const nativeValidatedStories = new Set((foundTests.nativeSelections ?? []).map(item => item.storyPath));
+  const savedNativeStories = readSavedNativeValidatedStories(rootReal);
+  const nativeValidatedStories = new Set([
+    ...(foundTests.nativeSelections ?? []).map(item => normalizeRelPromptPath(item.storyPath)),
+    ...savedNativeStories,
+  ].filter(Boolean));
 
   for (const sPath of selectedStories) {
     const sText = readStory(sPath) ?? '';
     const title = cleanOneLine(sText.split(/\r?\n/).find(l => l.startsWith('# '))?.slice(2) || basename(sPath, '.md'));
     const criteriaTexts = storyCriteria(sText);
     const rulesTexts = parseStorySectionLines(sText, /^##[ \t]+Rules to check[ \t]*\r?$/im);
-    const hasNativeSection = nativeValidatedStories.has(sPath) || /^##[ \t]+Native validation[ \t]*\r?$/im.test(sText);
-    const storyLinks = extractFragmentLinks(sText, sPath, visible);
-    const brokenStoryFragments = storyLinks.filter(link => {
-      if (!link.fragment) return false;
-      const targetRec = readPromptRecord(rootReal, visible, link.target, promptCache);
-      return targetRec && !targetRec.headings.has(link.fragment);
-    });
+    const hasNativeSection = nativeValidatedStories.has(sPath) || /^##[ \t]+Native validation[ \t]*\r?$/im.test(stripHtmlComments(sText));
+    const inScopeStory = stripExcludedStorySections(sText);
+    const storyLinks = extractFragmentLinks(inScopeStory, sPath, visible);
+    const brokenStoryFragments = [];
+    const validStoryFragments = [];
+    for (const link of storyLinks) {
+      const inspected = inspectFragmentLink(link, rootReal, visible, promptCache);
+      if (inspected.broken) brokenStoryFragments.push(inspected.broken);
+      if (inspected.validFragment) validStoryFragments.push(inspected.validFragment);
+    }
 
     for (const rule of rulesTexts) policyItems.push({ kind: 'rule', story: title, text: clipText(rule, 88) });
     for (const [idx, crit] of criteriaTexts.entries()) {
@@ -837,28 +1195,42 @@ export function buildHumanBoundaryCard({
       const matchedChecks = [];
       const loadedForCrit = new Map();
       const brokenForCrit = [...brokenStoryFragments];
+      const targetedFragments = new Map();
+      const addTargetedFragment = item => {
+        if (!item?.target || !item?.fragment) return;
+        if (!targetedFragments.has(item.target)) targetedFragments.set(item.target, new Set());
+        targetedFragments.get(item.target).add(item.fragment);
+      };
+      for (const vf of validStoryFragments) addTargetedFragment(vf);
       let instrumentedZeroCalls = false;
 
       for (const scen of storyScenarios) {
         const doc = scen.testEntry.doc;
+        const effectiveWorld = resolveInitialWorld(doc, rootReal, visible, seedCache);
         const docCriteria = Array.isArray(doc?.criteria) ? doc.criteria : [];
         const docCrit = docCriteria.find(c => c?.text === critText) ?? docCriteria[idx];
         const critId = typeof docCrit?.id === 'string' && docCrit.id ? docCrit.id : fallbackId;
-        const savedTest = batchDiag.byTest.get(scen.testEntry.path);
+        const savedTest = batchDiag.byTest.get(normalizeRelPromptPath(scen.testEntry.path));
         brokenForCrit.push(...scen.brokenFragments);
+        for (const vf of scen.validFragments) addTargetedFragment(vf);
 
-        for (const step of Array.isArray(doc?.steps) ? doc.steps : []) {
+        for (const [stepIdx, step] of (Array.isArray(doc?.steps) ? doc.steps : []).entries()) {
           const stepChecks = (Array.isArray(step?.checks) ? step.checks : []).filter(c => c?.criterion_id === critId);
           if (!stepChecks.length) continue;
           for (const rec of scen.loadedRecords) loadedForCrit.set(rec.path, rec);
-          const savedStep = savedTest?.stepObservations?.get(step.step_id);
+          const byId = typeof step?.step_id === 'string' && step.step_id ? savedTest?.stepObservations?.get(step.step_id) : undefined;
+          const byIdxCandidate = savedTest?.stepObservationsByIndex?.[stepIdx];
+          const savedStep = byId ?? (byIdxCandidate && !byIdxCandidate.stepId ? byIdxCandidate : undefined);
           const instrumented = instrumentedPortsForStep(doc, step, scen.loadedRecords);
           const classified = stepChecks.map((chk, cIdx) => {
-            const receiptChk = savedStep?.checks?.find(rc => rc?.criterion_id === critId && rc?.target === chk?.target && rc?.path === chk?.path) ?? savedStep?.checks?.[cIdx] ?? null;
-            return classifyStepCheck(chk, doc, step, receiptChk);
+            const candidatePool = savedStep?.checks ?? savedTest?.unkeyedChecks ?? [];
+            const receiptChk = candidatePool.find(rc => rc?.criterion_id === critId && rc?.target === chk?.target && rc?.path === chk?.path)
+              ?? savedStep?.checks?.[cIdx]
+              ?? null;
+            return classifyStepCheck(chk, doc, step, effectiveWorld, receiptChk);
           });
           if (instrumented.length > 0 && !classified.some(c => c.kind === 'observed simulated port call')) {
-            if (savedStep?.observedCallTotal === 0 || savedStep === undefined) instrumentedZeroCalls = true;
+            if (savedStep?.observedCallTotal === 0) instrumentedZeroCalls = true;
           }
           matchedChecks.push(...classified);
         }
@@ -875,22 +1247,23 @@ export function buildHumanBoundaryCard({
       // Determine owner connection for this criterion!
       let missingConnection = false;
       let missingReason = null;
-      if (focusPrompt && focusRecIsCheckable(focusPrompt, owningRecords) && !loadedForCrit.has(focusPrompt)) {
+      if (normalizedFocus && focusRecIsCheckable(normalizedFocus, owningRecords) && !loadedForCrit.has(normalizedFocus)) {
         missingConnection = true;
         const selectedLabel = loadedRecords.map(r => r.path).join(', ') || 'none';
-        missingReason = `unloaded owning source ${focusPrompt}; scenario selects ${selectedLabel}`;
+        missingReason = `unloaded owning source ${normalizedFocus}; scenario selects ${selectedLabel}`;
       } else if (brokenForCrit.length > 0) {
         missingConnection = true;
         const b = brokenForCrit[0];
-        missingReason = `missing section #${b.fragment} in ${b.target}`;
+        missingReason = b.empty
+          ? `empty section #${b.fragment} in ${b.target}`
+          : `missing section #${b.fragment} in ${b.target}`;
       } else {
-        const ruleConn = ruleConnectedToSources(critText, loadedRecords);
+        const ruleConn = ruleConnectedToSources(critText, loadedRecords, targetedFragments);
         if (!ruleConn.connected) {
           missingConnection = true;
           const unloadedHint = unloadedOwners.length ? `; unloaded in slice: ${unloadedOwners.join(', ')}` : '';
           missingReason = `${ruleConn.reason}${unloadedHint}`;
         } else if (unloadedOwners.length > 0) {
-          // Check if an unloaded owner actually owns domain terms missing or more specific than a simulator stub.
           const unloadedRecords = unloadedOwners.map(p => readPromptRecord(rootReal, visible, p, promptCache)).filter(Boolean);
           const loadedPaths = loadedRecords.map(r => r.path);
           if (loadedPaths.length && loadedPaths.every(p => /simulat|mock|stub|fake|harness/i.test(basename(p)))) {
@@ -924,14 +1297,24 @@ export function buildHumanBoundaryCard({
 
     // Also check explicit `## Rules to check` invariants so removed owning rules are always caught!
     const allStoryLoadedRecords = [...new Map(storyScenarios.flatMap(s => s.loadedRecords.map(r => [r.path, r]))).values()];
+    const allStoryTargetedFragments = new Map();
+    for (const vf of [...validStoryFragments, ...storyScenarios.flatMap(s => s.validFragments)]) {
+      if (!allStoryTargetedFragments.has(vf.target)) allStoryTargetedFragments.set(vf.target, new Set());
+      allStoryTargetedFragments.get(vf.target).add(vf.fragment);
+    }
+    const allStoryBroken = [...brokenStoryFragments, ...storyScenarios.flatMap(s => s.brokenFragments)];
+
     for (const [rIdx, ruleText] of rulesTexts.entries()) {
-      const conn = ruleConnectedToSources(ruleText, allStoryLoadedRecords);
-      const focusUnloaded = focusPrompt && focusRecIsCheckable(focusPrompt, owningRecords) && !allStoryLoadedRecords.some(r => r.path === focusPrompt);
-      if (!conn.connected || focusUnloaded) {
+      const conn = ruleConnectedToSources(ruleText, allStoryLoadedRecords, allStoryTargetedFragments);
+      const focusUnloaded = normalizedFocus && focusRecIsCheckable(normalizedFocus, owningRecords) && !allStoryLoadedRecords.some(r => r.path === normalizedFocus);
+      const brokenFrag = allStoryBroken[0] ?? null;
+      if (!conn.connected || focusUnloaded || brokenFrag) {
         const selectedLabel = allStoryLoadedRecords.map(r => r.path).join(', ') || 'none';
         const reason = focusUnloaded
-          ? `unloaded owning source ${focusPrompt}; scenario selects ${selectedLabel}`
-          : `${conn.reason}${unloadedOwners.length ? `; unloaded: ${unloadedOwners.join(', ')}` : ''}`;
+          ? `unloaded owning source ${normalizedFocus}; scenario selects ${selectedLabel}`
+          : brokenFrag
+            ? `${brokenFrag.empty ? 'empty' : 'missing'} section #${brokenFrag.fragment} in ${brokenFrag.target}`
+            : `${conn.reason}${unloadedOwners.length ? `; unloaded: ${unloadedOwners.join(', ')}` : ''}`;
         provenanceRows.push({
           label: `Rule ${rIdx + 1}`,
           summary: clipText(ruleText, 50),
@@ -977,11 +1360,12 @@ export function buildHumanBoundaryCard({
     .map(r => r.operations.length ? `${r.path} (${r.operations.join(', ')})` : `${r.path} (plain)`);
   const nativeSplit = [
     ...nativeOnlyRecords.map(r => `${r.path} (native-only: ${clipText(r.reason || 'native tests', 60)})`),
-    ...selectedStories.filter(s => nativeValidatedStories.has(s)).map(s => `${s} (Native validation)`),
+    ...selectedStories.filter(s => nativeValidatedStories.has(s) || /^##[ \t]+Native validation[ \t]*\r?$/im.test(stripHtmlComments(readStory(s) ?? ''))).map(s => `${s} (Native validation)`),
   ];
 
   // Complexity budget & advisory sample divergences.
-  const budgetPrompts = (focusPrompt ? owningRecords.filter(r => r.path === focusPrompt) : owningRecords);
+  const scopedPrompts = normalizedFocus ? owningRecords.filter(r => r.path === normalizedFocus) : owningRecords;
+  const budgetPrompts = scopedPrompts.length ? scopedPrompts : allRelevantPromptRecords;
   const maxPrompt = budgetPrompts.reduce((best, r) => (!best || r.proseLoc > best.proseLoc ? r : best), null);
   const oversizes = budgetPrompts.filter(r => r.proseLoc > 500).map(r =>
     `${r.path} ${r.proseLoc} prose LOC (${r.proseLoc > 1000 ? 'elevated >1000' : 'over 500 budget'})`,

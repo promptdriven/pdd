@@ -744,3 +744,384 @@ test('3297 single-prompt rule-removal acceptance control and real workflow-runne
   assert.match(prBoundaryText, /model-returned value.*port spy or native observation still needed/);
 });
 
+test('3297 J1-coffee-pickup & step-index fallback: no false 0 observed port calls without saved step, loaded-prompt prose budget fallback, and step_id-less zero-call evidence', t => {
+  const repoRoot = realpathSync(new URL('..', import.meta.url));
+  const emptyStateDir = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-j1-empty-')));
+  t.after(() => rmSync(emptyStateDir, { recursive: true, force: true }));
+
+  // 1) Real J1-coffee-pickup Story + scenario with NO saved batch:
+  //    must NOT emit false "0 observed port calls on instrumented port", and must report loaded prompts' prose LOC (> 0).
+  const j1Card = buildHumanBoundaryCard({
+    root: repoRoot,
+    storyPaths: ['user_stories/journeys/J1-coffee-pickup.md'],
+    changedPaths: ['user_stories/journeys/J1-coffee-pickup.md', 'test/runtime/J1-coffee-pickup.json'],
+    env: { PDD_STATE_DIR: emptyStateDir },
+  });
+  assert.equal(j1Card.provenanceRows.length, 2);
+  for (const row of j1Card.provenanceRows) {
+    assert.equal(row.zeroPortCalls, false, `Unexpected zeroPortCalls on ${row.label}: ${row.observations.join(', ')}`);
+    assert.equal(row.missingConnection, false, `Expected J1 ${row.label} connected, got: ${row.owner}`);
+    assert.ok(row.observations.every(o => !o.includes('0 observed port calls')));
+  }
+  assert.notEqual(j1Card.complexity.proseSummary, 'prose 0 LOC', 'Story-only slice must fall back to loaded prompts for prose LOC.');
+  assert.match(j1Card.complexity.proseSummary, /3 prompts \(max \d+ prose LOC/);
+
+  // 2) Step-index fallback when saved check step omits step_id (as in runtime-fake) and explicitly records 0 calls on an instrumented port.
+  const storyText = [
+    '# Waiver port spy',
+    '',
+    'As a user, I want waived orders to skip gateway calls, so that free trials never hit the payment port.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. Return waived status true without calling the payment gateway on free trials.',
+    '',
+  ].join('\n');
+  const promptText = runtimePrompt({
+    title: 'Trial checkout',
+    prose: 'Return waived status true without calling the payment gateway on free trials.',
+    operation: 'run_trial',
+    inputProps: { trial: { type: 'boolean' } },
+    resultSchema: { type: 'object', properties: { waived: { type: 'boolean' } }, required: ['waived'], additionalProperties: false },
+    resources: [{
+      name: 'gateway',
+      kind: 'port',
+      access: 'write',
+      operations: [{
+        name: 'charge',
+        access: 'write',
+        arguments_schema: { type: 'object', properties: {}, additionalProperties: false },
+        result_schema: { type: 'object', properties: {}, additionalProperties: false },
+      }],
+    }],
+  });
+  const scenario = {
+    schema_version: 'prompt-runtime.program-scenario.v1',
+    story_path: 'user_stories/trial.md',
+    criteria: [{ id: 'AC1', text: 'Return waived status true without calling the payment gateway on free trials.' }],
+    initial_world: {},
+    steps: [{
+      step_id: 'step-one',
+      entry_path: 'prompts/trial.prompt.md',
+      operation: 'run_trial',
+      input: { trial: true },
+      checks: [{ criterion_id: 'AC1', target: 'result', path: '/waived', op: 'equals', value: true }],
+    }],
+  };
+  const { root, stateDir } = makeGitRepo(t, {
+    'user_stories/trial.md': storyText,
+    'prompts/trial.prompt.md': promptText,
+    'tests/trial.json': JSON.stringify(scenario, null, 2),
+  });
+
+  // Without saved batch -> model-returned value WITHOUT 0 observed port calls.
+  const beforeBatch = buildHumanBoundaryCard({ root, focusPrompt: 'prompts/trial.prompt.md', env: { PDD_STATE_DIR: stateDir } });
+  assert.equal(beforeBatch.provenanceRows[0].zeroPortCalls, false);
+
+  // With saved batch step omitting step_id and explicitly recording calls: { 'gateway.charge': 0 } -> reports 0 observed port calls!
+  const batchId = '20261118-070000-idx1';
+  const reqId = '22222222-2222-4222-8222-222222222222';
+  const folder = join(stateDir, 'batches', batchId);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'batch.json'), JSON.stringify({
+    version: 1,
+    batch: batchId,
+    intent: 'check',
+    root,
+    created_at: '2026-11-18T07:00:00Z',
+    rows: [{ test: 'tests/trial.json', story: 'user_stories/trial.md', request_ids: [reqId], ended_at: Date.UTC(2026, 10, 18, 7, 0) }],
+  }));
+  writeFileSync(join(folder, `${reqId}.json`), JSON.stringify({
+    id: reqId,
+    requestId: reqId,
+    command: 'check',
+    state: 'passed',
+    result: {
+      report: {
+        samples: [{
+          sample: 1,
+          steps: [{
+            calls: { 'gateway.charge': 0 },
+            checks: [{ criterion_id: 'AC1', target: 'result', path: '/waived', passed: true }],
+          }],
+        }],
+      },
+    },
+  }));
+  const afterBatch = buildHumanBoundaryCard({ root, focusPrompt: 'prompts/trial.prompt.md', env: { PDD_STATE_DIR: stateDir } });
+  assert.equal(afterBatch.provenanceRows[0].zeroPortCalls, true);
+  assert.match(afterBatch.provenanceRows[0].observations.join(', '), /0 observed port calls on instrumented port/);
+});
+
+test('3297 #fragment section acceptance control: keeping heading and generic domain nouns while deleting rule clause or stripping section flags missing owner connection', t => {
+  const storyText = [
+    '# Blackout fragment guard',
+    '',
+    'As an operator, I want [blackout policy](prompts/owner.prompt.md#maintenance-blackout) enforced, so that planned link work never pages staff.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. Suppress outbound pager alerts when a WAN link flaps during a scheduled maintenance blackout.',
+    '',
+  ].join('\n');
+
+  const makeOwnerWithSection = sectionBody => runtimePrompt({
+    title: 'Pager owner',
+    prose: [
+      '## Standard routing',
+      '',
+      'Send outbound pager alerts when an unplanned WAN link failure occurs.',
+      '',
+      '## Maintenance blackout <scr<script>ipt>',
+      '',
+      sectionBody,
+    ].join('\n'),
+    operation: 'evaluate_link',
+    inputProps: { flap: { type: 'boolean' } },
+    resultSchema: { type: 'object', properties: { status: { type: 'string' } }, required: ['status'], additionalProperties: false },
+  });
+
+  const scenario = {
+    schema_version: 'prompt-runtime.program-scenario.v1',
+    story_path: 'user_stories/fragment-guard.md',
+    criteria: [{ id: 'AC1', text: 'Suppress outbound pager alerts when a WAN link flaps during a scheduled maintenance blackout.' }],
+    initial_world: {},
+    steps: [{
+      step_id: 's1',
+      entry_path: 'prompts/owner.prompt.md',
+      operation: 'evaluate_link',
+      input: { flap: true },
+      checks: [{ criterion_id: 'AC1', target: 'result', path: '/status', op: 'equals', value: 'suppressed' }],
+    }],
+  };
+
+  const { root, stateDir } = makeGitRepo(t, {
+    'user_stories/fragment-guard.md': storyText,
+    'prompts/owner.prompt.md': makeOwnerWithSection('During a scheduled maintenance blackout, suppress outbound pager alerts when a WAN link flaps.'),
+    'tests/fragment-guard.json': JSON.stringify(scenario, null, 2),
+  });
+
+  // 1) Connected baseline (also verifying nested <scr<script>ipt> tag stripping in headingSlug converges cleanly to #maintenance-blackout).
+  const baseline = buildHumanBoundaryCard({ root, focusPrompt: 'prompts/owner.prompt.md', env: { PDD_STATE_DIR: stateDir } });
+  assert.equal(baseline.provenanceRows[0].missingConnection, false, baseline.provenanceRows[0].owner);
+
+  // 2) Keep the ## Maintenance blackout heading AND generic domain nouns ("pager", "alerts"), but delete the specific blackout suppression clause!
+  //    Even though ## Standard routing above still mentions WAN link and outbound pager alerts, narrowing to #maintenance-blackout + >=50% stem coverage flags missing connection!
+  writeFileSync(join(root, 'prompts/owner.prompt.md'), makeOwnerWithSection('Pager alerts use the standard alert channel.'));
+  const guttedClause = buildHumanBoundaryCard({ root, focusPrompt: 'prompts/owner.prompt.md', env: { PDD_STATE_DIR: stateDir } });
+  assert.equal(guttedClause.provenanceRows[0].missingConnection, true);
+  assert.match(guttedClause.provenanceRows[0].owner, /missing owner connection/);
+
+  // 3) Keep the ## Maintenance blackout heading, but strip its section body empty!
+  writeFileSync(join(root, 'prompts/owner.prompt.md'), makeOwnerWithSection('<!-- rule stripped -->'));
+  const emptySection = buildHumanBoundaryCard({ root, focusPrompt: 'prompts/owner.prompt.md', env: { PDD_STATE_DIR: stateDir } });
+  assert.equal(emptySection.provenanceRows[0].missingConnection, true);
+  assert.match(emptySection.provenanceRows[0].owner, /empty section #maintenance-blackout/);
+});
+
+test('3297 schema alignment: newline pdd-boundary, Out-of-scope exclusion, context objects, input refs, initial_world.set, latest-batch divergences, and native-evidence-record', t => {
+  const storyText = [
+    '# Enterprise tier quota',
+    '',
+    'As a tenant admin, I want [shared rules](prompts/helper.prompt.md#shared-rules) applied to enterprise tier requests, so that seeded tiers and request limits stay consistent.',
+    '',
+    '```pdd-boundary',
+    './prompts/core.prompt.md',
+    '```',
+    '',
+    'Inline example `[ignored](prompts/nonexistent.prompt.md#bad)` and fenced example:',
+    '',
+    '```markdown',
+    '[also ignored](prompts/core.prompt.md#nonexistent-heading)',
+    '```',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. Echo the enterprise request correlation identifier from input.',
+    '2. Keep the enterprise request limit aligned with the supplied input limit.',
+    '3. Preserve the seeded enterprise account tier in world state.',
+    '',
+    '## Out of scope',
+    '',
+    '- Do not modify `prompts/out-of-scope.prompt.md`.',
+    '',
+    '## What must not change',
+    '',
+    '- Keep [untouched owner](prompts/untouched.prompt.md) unchanged.',
+    '',
+  ].join('\n');
+
+  const corePrompt = runtimePrompt({
+    title: 'Core enterprise handler',
+    prose: [
+      'Echo the enterprise request correlation identifier, keep the enterprise request limit aligned with input, and preserve the seeded enterprise account tier.',
+      '',
+      '## Dependencies',
+      '',
+      '- [Shared rules](prompts/helper.prompt.md#shared-rules)',
+    ].join('\n'),
+    operation: 'apply_quota',
+    inputProps: { corrId: { type: 'string' }, limit: { type: 'integer' } },
+    resultSchema: {
+      type: 'object',
+      properties: { corrId: { type: 'string' }, appliedLimit: { type: 'integer' } },
+      required: ['corrId', 'appliedLimit'],
+      additionalProperties: false,
+    },
+  });
+  const helperPrompt = '# Helper\n\n## Shared rules\n\nEnterprise tier requests preserve seeded account tier and input request limits.\n';
+  const ctxPromptA = '# Context A\n\nShared context A.\n';
+  const ctxPromptB = '# Context B\n\nShared context B.\n';
+  const outOfScopePrompt = '# Out of scope owner\n\nUnrelated legacy flow.\n';
+  const untouchedPrompt = '# Untouched owner\n\nMust not change.\n';
+
+  const scenario = {
+    schema_version: 'prompt-runtime.program-scenario.v1',
+    story_path: 'user_stories/nested/enterprise.md',
+    criteria: [
+      { id: 'AC1', text: 'Echo the enterprise request correlation identifier from input.' },
+      { id: 'AC2', text: 'Keep the enterprise request limit aligned with the supplied input limit.' },
+      { id: 'AC3', text: 'Preserve the seeded enterprise account tier in world state.' },
+    ],
+    initial_world: {
+      set: {
+        '/account/tier': 'enterprise',
+      },
+    },
+    context: [
+      { prompt_path: 'prompts/ctx-a.prompt.md' },
+      { path: './prompts/ctx-b.prompt.md' },
+    ],
+    steps: [{
+      step_id: 'apply',
+      operation: 'apply_quota',
+      input: { corrId: 'req-42', limit: 500 },
+      checks: [
+        { criterion_id: 'AC1', target: 'result', path: '/corrId', op: 'equals', value: { ref_target: 'input', ref_path: '/corrId' } },
+        {
+          criterion_id: 'AC2',
+          target: 'result',
+          path: '',
+          op: 'integer_relation',
+          value: {
+            left: { field: '/appliedLimit' },
+            compare: 'eq',
+            right: { ref_target: 'input', ref_path: '/limit' },
+          },
+        },
+        { criterion_id: 'AC3', target: 'world', path: '/account/tier', op: 'equals', value: 'enterprise' },
+      ],
+    }],
+  };
+
+  const { root, stateDir } = makeGitRepo(t, {
+    'user_stories/nested/enterprise.md': storyText,
+    'prompts/core.prompt.md': corePrompt,
+    'prompts/helper.prompt.md': helperPrompt,
+    'prompts/ctx-a.prompt.md': ctxPromptA,
+    'prompts/ctx-b.prompt.md': ctxPromptB,
+    'prompts/out-of-scope.prompt.md': outOfScopePrompt,
+    'prompts/untouched.prompt.md': untouchedPrompt,
+    'tests/enterprise.json': JSON.stringify(scenario, null, 2),
+  });
+
+  // Older batch with a historical divergence, superseded by a newer batch where 3/3 samples agree.
+  const oldBatch = '20261118-010000-old1';
+  const oldReq = '33333333-3333-4333-8333-333333333333';
+  mkdirSync(join(stateDir, 'batches', oldBatch), { recursive: true });
+  writeFileSync(join(stateDir, 'batches', oldBatch, 'batch.json'), JSON.stringify({
+    version: 1,
+    batch: oldBatch,
+    intent: 'check',
+    root,
+    created_at: '2026-11-18T01:00:00Z',
+    rows: [{ test: 'tests/enterprise.json', story: 'user_stories/nested/enterprise.md', request_ids: [oldReq], ended_at: Date.UTC(2026, 10, 18, 1, 0) }],
+  }));
+  writeFileSync(join(stateDir, 'batches', oldBatch, `${oldReq}.json`), JSON.stringify({
+    id: oldReq,
+    requestId: oldReq,
+    command: 'check',
+    state: 'failed',
+    result: {
+      report: {
+        samples: [
+          { steps: [{ step_id: 'apply', result: { corrId: 'req-42', appliedLimit: 500 }, checks: [{ passed: true }] }] },
+          { steps: [{ step_id: 'apply', result: { corrId: 'req-42', appliedLimit: 100 }, checks: [{ passed: false }] }] },
+        ],
+      },
+    },
+  }));
+
+  const newBatch = '20261118-020000-new2';
+  const newReq = '44444444-4444-4444-8444-444444444444';
+  mkdirSync(join(stateDir, 'batches', newBatch), { recursive: true });
+  writeFileSync(join(stateDir, 'batches', newBatch, 'batch.json'), JSON.stringify({
+    version: 1,
+    batch: newBatch,
+    intent: 'check',
+    root,
+    created_at: '2026-11-18T02:00:00Z',
+    rows: [{ test: 'tests/enterprise.json', story: 'user_stories/nested/enterprise.md', request_ids: [newReq], ended_at: Date.UTC(2026, 10, 18, 2, 0) }],
+  }));
+  writeFileSync(join(stateDir, 'batches', newBatch, `${newReq}.json`), JSON.stringify({
+    id: newReq,
+    requestId: newReq,
+    command: 'check',
+    state: 'passed',
+    result: {
+      report: {
+        samples: [
+          { steps: [{ step_id: 'apply', result: { corrId: 'req-42', appliedLimit: 500 }, checks: [{ passed: true }] }] },
+          { steps: [{ step_id: 'apply', result: { corrId: 'req-42', appliedLimit: 500 }, checks: [{ passed: true }] }] },
+          { steps: [{ step_id: 'apply', result: { corrId: 'req-42', appliedLimit: 500 }, checks: [{ passed: true }] }] },
+        ],
+      },
+    },
+  }));
+
+  // Saved pdd.native-evidence-record.v1 in .git/pdd/runs/99/status.json for this Story.
+  const runDir = join(root, '.git', 'pdd', 'runs', '99');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'status.json'), JSON.stringify({
+    v: 1,
+    runId: 'native-ev-99',
+    root,
+    evidence: [{
+      native: {
+        schema: 'pdd.native-evidence-record.v1',
+        runId: 'native-ev-99',
+        profileId: 'node-test',
+        storyPath: 'user_stories/nested/enterprise.md',
+      },
+    }],
+  }));
+
+  const card = buildHumanBoundaryCard({
+    root,
+    storyPaths: ['user_stories/nested/enterprise.md'],
+    promptPaths: ['prompts/core.prompt.md', 'prompts/helper.prompt.md'],
+    changedPaths: ['user_stories/nested/enterprise.md', 'prompts/core.prompt.md', 'prompts/helper.prompt.md', 'tests/enterprise.json'],
+    since: 0,
+    env: { PDD_STATE_DIR: stateDir },
+  });
+
+  // Out-of-scope and What-must-not-change prompts are excluded from unloadedOwners!
+  assert.deepEqual(card.unloadedOwners, []);
+  // Context object prompt_path & path, newline pdd-boundary entry owner, and repo-root Story link are all in selectedSources!
+  assert.deepEqual(card.selectedSources, [
+    'prompts/core.prompt.md',
+    'prompts/ctx-a.prompt.md',
+    'prompts/ctx-b.prompt.md',
+    'prompts/helper.prompt.md',
+  ]);
+  for (const row of card.provenanceRows) {
+    assert.equal(row.missingConnection, false, `Unexpected missing connection on ${row.label}: ${row.owner}`);
+    assert.ok(row.observations.includes('supplied fact'), `Expected supplied fact on ${row.label}, got ${row.observations}`);
+    assert.ok(row.observations.includes('native test'), `Expected saved native-evidence-record to add native test on ${row.label}`);
+  }
+  // Superseded batch divergence is NOT reported; latest 3/3 agreement wins!
+  assert.deepEqual(card.divergences, []);
+  assert.equal(card.sampleSummary, '3/3 samples agreed');
+});
+
+
