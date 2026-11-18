@@ -83,12 +83,15 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   `materializeLocalCodexAuth` and `restoreLocalCodexGatewayConfig` refuse symlinks on
   `pddManagedCodexHome(env)`, its `auth.json` and `config.toml`, and `~/.codex/config.toml`:
   - `materializeLocalCodexAuth` creates `pddManagedCodexHome(env)` (`0700`), symlinks existing
-    non-symlink `~/.codex/{skills,memories,sessions,archived_sessions,history.jsonl,session_index.jsonl,rules}`
-    into `pddManagedCodexHome(env)`, merges user settings (such as `[mcp_servers.pdd]`) from
-    regular non-symlink `~/.codex/config.toml` while stripping any legacy PDD gateway keys
-    (`[model_providers.pdd_codex_gateway]`, `model_provider = "pdd_codex_gateway"`, and PDD-managed
-    `/v1/codex-gateway` `openai_base_url` / `chatgpt_base_url`) from `~/.codex/config.toml` without
-    ever reading or writing `~/.codex/auth.json`, and always sets `cli_auth_credentials_store = "file"`
+    non-symlink `~/.codex/{skills,memories,sessions,archived_sessions,history.jsonl,session_index.jsonl,rules,plugins,browser,chrome-native-hosts-v2.json,computer-use,node_repl}`
+    into `pddManagedCodexHome(env)` (replacing any pre-existing incomplete non-symlink `plugins`,
+    `browser`, `computer-use`, or `node_repl` cache directory or non-symlink `chrome-native-hosts-v2.json`
+    file inside `pddManagedCodexHome(env)` with the symlink when `~/.codex/<name>` is valid, while never
+    deleting non-symlink `sessions` or `memories` or modifying `~/.codex`), merges user settings (such as
+    `[mcp_servers.pdd]`) from regular non-symlink `~/.codex/config.toml` while stripping any legacy PDD
+    gateway keys (`[model_providers.pdd_codex_gateway]`, `model_provider = "pdd_codex_gateway"`, and
+    PDD-managed `/v1/codex-gateway` `openai_base_url` / `chatgpt_base_url`) from `~/.codex/config.toml`
+    without ever reading or writing `~/.codex/auth.json`, and always sets `cli_auth_credentials_store = "file"`
     in `managedCodexConfigPath(env)` (`0600`, round-trip verified with `./vendor/smol-toml/parse.js`).
   - `buildSyntheticGatewayIdToken({planType})` builds a deterministic non-secret unsigned JWT
     (`<base64url({alg:"none",typ:"JWT"})>.<base64url(payload)>.sig`) with `exp: 4102444800`,

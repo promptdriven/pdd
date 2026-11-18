@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: fd6d98bee7a2f50561ffeb373d5b8b7439ef8b651bdad5438c04574aca77b4a2).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 9d42169ca6bc553f9a3985abfcfe7244aa52e35c69aefdca89810e262d756bcc).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';

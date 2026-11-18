@@ -3361,3 +3361,87 @@ test('#3516: native openai provider gateway materialization, synthetic unsigned 
   );
   assert.equal(virtualSpyCalled, true, 'explicit spawnSync port is invoked and fail-open on error');
 });
+
+test('#3518: managed CODEX_HOME symlinks plugins, browser, chrome-native-hosts-v2.json, computer-use, and node_repl, and heals pre-existing partial non-symlink cache dirs without touching user sessions', t => {
+  const sb = makeTempSandbox(t, 'https://cloud.example.com');
+  const userCodexDir = localCodexHome(sb.env);
+  const managedHome = pddManagedCodexHome(sb.env);
+  mkdirSync(userCodexDir, { recursive: true, mode: 0o700 });
+
+  // Populate `~/.codex` with full bundled plugins/browser/native-host/computer-use/node_repl state.
+  mkdirSync(join(userCodexDir, 'plugins', 'cache', 'openai-bundled', 'browser'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'plugins', 'cache', 'openai-primary-runtime'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'plugins', 'cache', 'openai-bundled', 'browser', 'manifest.json'), '{"name":"browser"}');
+  mkdirSync(join(userCodexDir, 'browser'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'browser', 'state.json'), '{"ok":true}');
+  mkdirSync(join(userCodexDir, 'computer-use'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'computer-use', 'helper.json'), '{"ok":true}');
+  mkdirSync(join(userCodexDir, 'node_repl'), { recursive: true });
+  writeFileSync(join(userCodexDir, 'node_repl', 'runtime.json'), '{"ok":true}');
+  writeFileSync(join(userCodexDir, 'chrome-native-hosts-v2.json'), '{"hosts":["com.openai.codex"]}\n');
+  mkdirSync(join(userCodexDir, 'sessions'), { recursive: true });
+  mkdirSync(join(userCodexDir, 'memories'), { recursive: true });
+
+  // 1. Fresh materialization symlinks all 5 new plugin/browser entries into managedHome!
+  materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_3518a',
+    codex_gateway_token: 'pddg_lse_3518a_grantTokenFresh',
+  }, { env: sb.env }, { spawnSync: () => ({ status: 0 }) });
+
+  for (const name of ['plugins', 'browser', 'chrome-native-hosts-v2.json', 'computer-use', 'node_repl']) {
+    const linkPath = join(managedHome, name);
+    assert.equal(lstatSync(linkPath).isSymbolicLink(), true, `${name} symlinked on fresh materialization`);
+    assert.equal(realpathSync(linkPath), realpathSync(join(userCodexDir, name)));
+  }
+
+  // 2. Upgrade healing: simulate a machine from 0.1.35 where codex already created a real non-symlink
+  //    `managedHome/plugins` (with only `cache/openai-curated-remote`), non-symlink `browser`, and
+  //    non-symlink `chrome-native-hosts-v2.json`, PLUS a non-symlink `managedHome/sessions` containing
+  //    user session data that MUST NOT be deleted!
+  for (const name of ['plugins', 'browser', 'chrome-native-hosts-v2.json', 'computer-use', 'node_repl', 'sessions', 'memories']) {
+    rmSync(join(managedHome, name), { recursive: true, force: true });
+  }
+  mkdirSync(join(managedHome, 'plugins', 'cache', 'openai-curated-remote'), { recursive: true });
+  writeFileSync(join(managedHome, 'plugins', 'cache', 'openai-curated-remote', 'partial.json'), '{}');
+  mkdirSync(join(managedHome, 'browser'), { recursive: true });
+  writeFileSync(join(managedHome, 'chrome-native-hosts-v2.json'), '{"stale":true}\n');
+  mkdirSync(join(managedHome, 'sessions'), { recursive: true });
+  writeFileSync(join(managedHome, 'sessions', 'keep-user-rollout.jsonl'), '{"keep":true}\n');
+  mkdirSync(join(managedHome, 'memories'), { recursive: true });
+  writeFileSync(join(managedHome, 'memories', 'keep-memory.md'), 'important note\n');
+
+  materializeLocalCodexAuth({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_3518b',
+    codex_gateway_token: 'pddg_lse_3518b_grantTokenHeal',
+  }, { env: sb.env }, { spawnSync: () => ({ status: 0 }) });
+
+  // Incomplete auto-generated cache dirs + native-hosts file in managedHome were replaced with symlinks to ~/.codex!
+  for (const name of ['plugins', 'browser', 'chrome-native-hosts-v2.json', 'computer-use', 'node_repl']) {
+    const linkPath = join(managedHome, name);
+    assert.equal(lstatSync(linkPath).isSymbolicLink(), true, `stale non-symlink ${name} replaced with symlink`);
+    assert.equal(realpathSync(linkPath), realpathSync(join(userCodexDir, name)));
+  }
+  assert.equal(
+    existsSync(join(managedHome, 'plugins', 'cache', 'openai-bundled', 'browser', 'manifest.json')),
+    true,
+    'managed CODEX_HOME now exposes ~/.codex/plugins/cache/openai-bundled',
+  );
+  assert.equal(
+    existsSync(join(managedHome, 'plugins', 'cache', 'openai-primary-runtime')),
+    true,
+    'managed CODEX_HOME now exposes ~/.codex/plugins/cache/openai-primary-runtime',
+  );
+  assert.equal(
+    readFileSync(join(managedHome, 'chrome-native-hosts-v2.json'), 'utf8'),
+    '{"hosts":["com.openai.codex"]}\n',
+  );
+
+  // Non-symlink `sessions` and `memories` in managedHome were NOT deleted, and `~/.codex/plugins` is intact!
+  assert.equal(lstatSync(join(managedHome, 'sessions')).isSymbolicLink(), false);
+  assert.equal(readFileSync(join(managedHome, 'sessions', 'keep-user-rollout.jsonl'), 'utf8'), '{"keep":true}\n');
+  assert.equal(lstatSync(join(managedHome, 'memories')).isSymbolicLink(), false);
+  assert.equal(readFileSync(join(managedHome, 'memories', 'keep-memory.md'), 'utf8'), 'important note\n');
+  assert.equal(lstatSync(join(userCodexDir, 'plugins')).isSymbolicLink(), false);
+});

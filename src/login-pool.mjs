@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 43918b564c2652002b96a33c6802f4da6b6a0e8d11e72ae70e8bc92fbf542b3f).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 0dc4bba7db40f974e54b73369d8debc0b386409e3234e38804daa099cd6d4021).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
@@ -35,7 +35,22 @@ const CONTROLS = /[\u0000-\u001f\u007f-\u009f]/;
 const SECRET_ENV_KEY = /(?:_TOKEN|_SECRET|_API_KEY|_PASSWORD|_CREDENTIAL|^SECRET_|API_KEY$|^OPENAI_API_KEY$|^ANTHROPIC_API_KEY$|^GEMINI_API_KEY$|^GOOGLE_API_KEY$|^CLAUDE_CODE_OAUTH_TOKEN$|^CODEX_ACCESS_TOKEN$)/i;
 const CODEX_OVERLAY_LINKS = ['config.toml', 'skills', 'memories', 'sessions', 'rules'];
 const CODEX_GATEWAY_OVERLAY_LINKS = ['skills', 'memories', 'sessions', 'rules'];
-const MANAGED_CODEX_HOME_LINKS = ['skills', 'memories', 'sessions', 'archived_sessions', 'history.jsonl', 'session_index.jsonl', 'rules'];
+const MANAGED_CODEX_HOME_LINKS = [
+  'skills',
+  'memories',
+  'sessions',
+  'archived_sessions',
+  'history.jsonl',
+  'session_index.jsonl',
+  'rules',
+  'plugins',
+  'browser',
+  'chrome-native-hosts-v2.json',
+  'computer-use',
+  'node_repl',
+];
+const REPLACED_MANAGED_CACHE_DIRS = new Set(['plugins', 'browser', 'computer-use', 'node_repl']);
+const REPLACED_MANAGED_CACHE_FILES = new Set(['chrome-native-hosts-v2.json']);
 const CODEX_GATEWAY_PROVIDER_ID = 'pdd_codex_gateway';
 const INLINE_TOML_TABLE_KEYS = new Set(['http_headers', 'env_http_headers', 'filters', 'set']);
 const MANAGED_CODEX_GATEWAY_RE = /\/v1\/(?:accounts\/)?codex-gateway(?:\/|$)/i;
@@ -793,9 +808,16 @@ function syncManagedCodexHomeLinks(fs, sourceHome, managedHome) {
   fs.mkdirSync(managedHome, { recursive: true, mode: 0o700 });
   try { (fs.chmodSync ?? nativeFs.chmodSync)?.(managedHome, 0o700); } catch {}
   if (resolve(sourceHome) === resolve(managedHome)) return;
+  try {
+    const realFn = fs.realpathSync?.native ?? fs.realpathSync;
+    if (typeof realFn === 'function' && realFn.call(fs, sourceHome) === realFn.call(fs, managedHome)) return;
+  } catch {}
   const lstat = typeof fs?.lstatSync === 'function' ? fs.lstatSync.bind(fs) : (fs === nativeFs ? nativeFs.lstatSync : null);
   const symlink = typeof fs?.symlinkSync === 'function' ? fs.symlinkSync.bind(fs) : null;
   if (!lstat || !symlink) return;
+  try {
+    if (lstat(managedHome).isSymbolicLink()) return;
+  } catch {}
   const removeLink = dst => {
     try {
       if (typeof fs.unlinkSync === 'function') fs.unlinkSync(dst);
@@ -822,6 +844,14 @@ function syncManagedCodexHomeLinks(fs, sourceHome, managedHome) {
           removeLink(dst);
           try { symlink(src, dst); } catch {}
         }
+      } else if (REPLACED_MANAGED_CACHE_DIRS.has(name) && dstStat.isDirectory() && !dstStat.isSymbolicLink()) {
+        try {
+          (fs.rmSync ?? nativeFs.rmSync)?.(dst, { recursive: true, force: true });
+          symlink(src, dst);
+        } catch {}
+      } else if (REPLACED_MANAGED_CACHE_FILES.has(name) && dstStat.isFile() && !dstStat.isSymbolicLink()) {
+        removeLink(dst);
+        try { symlink(src, dst); } catch {}
       }
     } else {
       try {
