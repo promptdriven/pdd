@@ -1,4 +1,4 @@
-// Generated from prompts/cli/codex-lint.prompt.md (sha256: 8238d3006d2002724c1c58e9b7490dd43355b711ac5af923698882380ac42720).
+// Generated from prompts/cli/codex-lint.prompt.md (sha256: b4558883b54bfb2cede8897453a6a2a01d0249b801837b25fe0cfa636c3017de).
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -68,6 +68,7 @@ function readSafeUtf8(realRoot, relPath, maxBytes = MAX_FILE_BYTES) {
 function scenarioPromptRefs(doc) {
   if (!doc || typeof doc !== 'object') return [];
   const refs = [];
+  if (typeof doc.entry_path === 'string') refs.push(doc.entry_path.replace(/^\.\//, ''));
   if (Array.isArray(doc.entry_paths)) {
     for (const p of doc.entry_paths) if (typeof p === 'string') refs.push(p.replace(/^\.\//, ''));
   }
@@ -87,6 +88,23 @@ function scenarioPromptRefs(doc) {
 
 function storyStem(storyPath) {
   return basename(storyPath).replace(/\.md$/i, '');
+}
+
+function inferScenarioStoryPath(doc, scenarioFile, storiesByStem) {
+  if (typeof doc?.story_path === 'string' && doc.story_path.trim()) {
+    return doc.story_path.trim().replace(/^\.\//, '');
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
+  const base = basename(scenarioFile, '.json');
+  const owners = storiesByStem.has(base) ? [base] : [];
+  for (let at = base.lastIndexOf('.'); at > 0; at = base.lastIndexOf('.', at - 1)) {
+    if (storiesByStem.has(base.slice(0, at))) owners.push(base.slice(0, at));
+  }
+  if (owners.length === 1) {
+    const matches = storiesByStem.get(owners[0]) ?? [];
+    if (matches.length === 1) return matches[0];
+  }
+  return null;
 }
 
 function resolveTargets({ realRoot, cwdBase, allowedFiles, words }) {
@@ -111,7 +129,7 @@ function resolveTargets({ realRoot, cwdBase, allowedFiles, words }) {
     if (!raw) continue;
     try {
       const doc = JSON.parse(raw);
-      const sPath = typeof doc?.story_path === 'string' ? doc.story_path.replace(/^\.\//, '') : null;
+      const sPath = inferScenarioStoryPath(doc, scenarioFile, storiesByStem);
       if (!sPath) continue;
       const refs = scenarioPromptRefs(doc).filter(p => allowedSet.has(p) && p.endsWith('.prompt.md'));
       if (!promptsByStory.has(sPath)) promptsByStory.set(sPath, new Set());

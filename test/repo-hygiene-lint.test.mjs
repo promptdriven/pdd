@@ -1179,3 +1179,120 @@ test('3499 runCodexLint enforces --ignore-rules, -- end-of-options, global batch
   assert.deepEqual(batchTimeouts, [6000], 'timeoutMinutes < 0.1 clamps to 6000ms and batch 2 stops once overall deadline expires');
   assert.match(deadlineErr.text, /Codex lint timed out after 6s/);
 });
+
+test('3499 + 3522 Short JSON scenarios omitting story_path with singular entry_path scope Story and Prompt rules in lint --local and lint --codex while keeping --emit-v1 and --bind-criteria clean', async t => {
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-short-json-lint-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const repo = join(scratch, 'repo');
+  const home = join(scratch, 'home');
+  const state = join(scratch, 'state');
+  for (const dir of [home, state, join(repo, 'prompts'), join(repo, 'user_stories'), join(repo, 'tests')]) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const env = { HOME: home, PDD_STATE_DIR: state };
+
+  writeFileSync(
+    join(repo, 'prompts/calc.prompt.md'),
+    '# Calculator\n\nAdd two numbers.\n\n## Dependencies\n\nNone.\n',
+  );
+  writeFileSync(
+    join(repo, 'user_stories/calc.md'),
+    '# Calculator\n\nAs a shopper, I want totals added, so that I see my bill.\n\n## Acceptance criteria\n\n1. Adding 2 and 3 returns 5.\n',
+  );
+  writeFileSync(
+    join(repo, 'tests/calc.json'),
+    JSON.stringify({
+      schema_version: 'pdd.scenario.short.v1',
+      entry_path: 'prompts/calc.prompt.md',
+      steps: [{ op: 'add', input: { a: 2, b: 3 }, checks: [['1', 'result', '/sum', '=', 5]] }],
+    }, null, 2) + '\n',
+  );
+  writeFileSync(
+    join(repo, 'pdd.json'),
+    JSON.stringify({
+      lint: {
+        custom_rules: [
+          {
+            id: 'story-must-have-notes',
+            target: 'story',
+            severity: 'error',
+            require_heading: '## Notes',
+            message: 'Include a "## Notes" section on Stories.',
+          },
+        ],
+      },
+    }, null, 2) + '\n',
+  );
+
+  execFileSync('git', ['init'], { cwd: repo });
+  execFileSync('git', ['add', '.'], { cwd: repo });
+
+  // 1. Scoped `pdd lint --local calc --json` catches custom Story error rules via Short JSON stem pairing + singular entry_path.
+  const localOut = sink(), localErr = sink();
+  const localExit = await runPdd(['lint', '--local', 'calc', '--json'], {
+    cwd: repo,
+    env,
+    stdout: localOut,
+    stderr: localErr,
+  });
+  assert.equal(localExit, 1, localErr.text);
+  const localJson = JSON.parse(localOut.text);
+  assert.equal(localJson.ok, false);
+  assert.ok(localJson.problems.some(p => p.includes('user_stories/calc.md') && p.includes('[story-must-have-notes]')));
+
+  // 2. Scoped `pdd lint --codex calc --json` selects BOTH `prompts/calc.prompt.md` and `user_stories/calc.md`.
+  const codexRunner = async (_cmd, args) => {
+    const outFile = args[args.indexOf('--output-last-message') + 1];
+    writeFileSync(outFile, JSON.stringify({
+      files: [
+        { path: 'prompts/calc.prompt.md', verdict: 'pass', summary: 'Clear calculator prompt.', issues: [] },
+        { path: 'user_stories/calc.md', verdict: 'pass', summary: 'Clear shopper Story.', issues: [] },
+      ],
+    }));
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const codexOut = sink(), codexErr = sink();
+  const codexExit = await runCodexLint(
+    { cwd: repo, words: ['calc'], json: true, env },
+    { stdout: codexOut, stderr: codexErr, runAgentProcess: codexRunner },
+  );
+  assert.equal(codexExit, 1, 'deterministic story error rule fails calc.md');
+  const codexJson = JSON.parse(codexOut.text);
+  assert.deepEqual(
+    codexJson.files.map(f => f.path).sort(),
+    ['prompts/calc.prompt.md', 'user_stories/calc.md'],
+  );
+
+  // 3. Inspection/transform modes (`--emit-v1` and `--bind-criteria`) stay clean (exit 0) despite `pdd.json` error rules.
+  const emitOut = sink(), emitErr = sink();
+  const emitExit = await runPdd(['lint', '--emit-v1', 'calc', '--json'], {
+    cwd: repo,
+    env,
+    stdout: emitOut,
+    stderr: emitErr,
+  });
+  assert.equal(emitExit, 0, emitErr.text);
+  const emitted = JSON.parse(emitOut.text);
+  assert.equal(emitted.ok, true);
+  assert.equal(emitted.scenarios[0].scenario.story_path, 'user_stories/calc.md');
+
+  writeFileSync(
+    join(repo, 'tests/calc.json'),
+    JSON.stringify({
+      schema_version: 'pdd.scenario.short.v1',
+      story_path: 'user_stories/calc.md',
+      entry_path: 'prompts/calc.prompt.md',
+      steps: [{ op: 'add', input: { a: 2, b: 3 }, checks: [['1', 'result', '/sum', '=', 5]] }],
+    }, null, 2) + '\n',
+  );
+  const bindOut = sink(), bindErr = sink();
+  const bindExit = await runPdd(['lint', '--bind-criteria', 'calc', '--json'], {
+    cwd: repo,
+    env,
+    stdout: bindOut,
+    stderr: bindErr,
+  });
+  assert.equal(bindExit, 0, bindErr.text);
+  assert.equal(JSON.parse(bindOut.text).ok, true);
+});

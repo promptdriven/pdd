@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 87b8410efd8988e3f48059e5d4089cb242ad1e6ad80a4fc95499238183f16baf).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 1872912e4a631d53b9e3d97ab4ba42dbd6c0dbef0b54f04a072c5c78861ce0c0).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
@@ -1743,6 +1743,7 @@ function isEligibleProductionCodeFile(path) {
 function scenarioPromptRefs(doc) {
   if (!doc || typeof doc !== 'object') return [];
   const refs = [];
+  if (typeof doc.entry_path === 'string') refs.push(doc.entry_path.replace(/^\.\//, ''));
   if (Array.isArray(doc.entry_paths)) {
     for (const p of doc.entry_paths) if (typeof p === 'string') refs.push(p.replace(/^\.\//, ''));
   }
@@ -1758,6 +1759,34 @@ function scenarioPromptRefs(doc) {
     }
   }
   return refs;
+}
+
+function buildStoriesByStem(scopedFiles) {
+  const storiesByStem = new Map();
+  for (const file of scopedFiles) {
+    if (!isLintableStoryPath(file)) continue;
+    const stem = posix.basename(file).replace(/\.md$/i, '');
+    if (!storiesByStem.has(stem)) storiesByStem.set(stem, []);
+    storiesByStem.get(stem).push(file);
+  }
+  return storiesByStem;
+}
+
+function inferScenarioStoryPath(doc, scenarioPath, storiesByStem) {
+  if (typeof doc?.story_path === 'string' && doc.story_path.trim()) {
+    return doc.story_path.trim().replace(/^\.\//, '');
+  }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
+  const base = posix.basename(scenarioPath, '.json');
+  const owners = storiesByStem.has(base) ? [base] : [];
+  for (let at = base.lastIndexOf('.'); at > 0; at = base.lastIndexOf('.', at - 1)) {
+    if (storiesByStem.has(base.slice(0, at))) owners.push(base.slice(0, at));
+  }
+  if (owners.length === 1) {
+    const matches = storiesByStem.get(owners[0]) ?? [];
+    if (matches.length === 1) return matches[0];
+  }
+  return null;
 }
 
 export function lintRepoProject({ root, files, promptPaths, tests, config } = {}) {
@@ -1863,6 +1892,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
     targetStories = scopedFiles.filter(isLintableStoryPath);
   } else {
     const storyCandidates = new Set();
+    const storiesByStem = buildStoriesByStem(scopedFiles);
     if (Array.isArray(tests)) {
       for (const entry of tests) {
         if (entry && typeof entry === 'object' && typeof entry.storyPath === 'string') {
@@ -1876,7 +1906,8 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
             if (raw) {
               try {
                 const doc = JSON.parse(raw);
-                if (typeof doc?.story_path === 'string') storyCandidates.add(doc.story_path.replace(/^\.\//, ''));
+                const sPath = inferScenarioStoryPath(doc, tPath, storiesByStem);
+                if (sPath) storyCandidates.add(sPath);
               } catch {}
             }
           }
@@ -1889,8 +1920,9 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
         if (!raw) continue;
         try {
           const doc = JSON.parse(raw);
-          if (typeof doc?.story_path === 'string' && scenarioPromptRefs(doc).some(ref => promptSet.has(ref))) {
-            storyCandidates.add(doc.story_path.replace(/^\.\//, ''));
+          const sPath = inferScenarioStoryPath(doc, scenarioPath, storiesByStem);
+          if (sPath && scenarioPromptRefs(doc).some(ref => promptSet.has(ref))) {
+            storyCandidates.add(sPath);
           }
         } catch {}
       }

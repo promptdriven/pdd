@@ -4,7 +4,7 @@ Own `src/codex-lint.mjs`. Export `runCodexLint({cwd, words, timeoutMinutes, json
 
 ## Selection and workspace safety
 
-Require a Git repository root (`git rev-parse --show-toplevel` with a 10-second timeout, else exit 2). Apply `workspace.policy({root: realRoot})`, `workspace.allows(policy, path)`, `!isSecretPath(path)`, and regular in-root no-symlink file reads. Without `words`, select all non-fixture Git-visible `.prompt.md` and `isLintableStoryPath` files. With `words`, accept repository or `cwd`-relative prompt/Story file or directory paths and Story names (including prompts reached by matching scenario JSON files); refuse any unmatched word on `stderr` with exit 2 before invoking Codex.
+Require a Git repository root (`git rev-parse --show-toplevel` with a 10-second timeout, else exit 2). Apply `workspace.policy({root: realRoot})`, `workspace.allows(policy, path)`, `!isSecretPath(path)`, and regular in-root no-symlink file reads. Without `words`, select all non-fixture Git-visible `.prompt.md` and `isLintableStoryPath` files. With `words`, accept repository or `cwd`-relative prompt/Story file or directory paths and Story names (including prompts reached by matching scenario JSON files via `entry_path`, `entry_paths`, `steps[].entry_path` or `context`, resolving omitted Short JSON `story_path` by unique Story filename-stem pairing); refuse any unmatched word on `stderr` with exit 2 before invoking Codex.
 
 ## Evaluation and output
 
