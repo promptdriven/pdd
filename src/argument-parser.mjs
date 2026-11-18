@@ -1,4 +1,4 @@
-// Generated from prompts/cli/argument-parser.prompt.md (sha256: 1d7e541eb54a251c9b60553adb642d76e2d4ffaaf9fbf213e8f8e20c1de5cc38).
+// Generated from prompts/cli/argument-parser.prompt.md (sha256: 4a837dc76607532a46b38ca5cedacb06793321dcb21c5fc4703a99f744f422bc).
 import { PUBLIC_COMMAND_ROUTES } from './command-catalog.mjs';
 
 export class CommandInputError extends Error {
@@ -37,6 +37,11 @@ const optionValue = (option, value) => option.kind === 'integer'
   : option.kind === 'uuid' ? /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value ?? '')
   : option.kind === 'text' ? typeof value === 'string' && !!value.trim() : !!option.choices?.includes(value);
 function parseRoute(route, words, allowHelp = false) {
+  if (route.passthrough) {
+    const forwarded = words[0] === '--' ? words.slice(1) : words;
+    return Object.freeze({ commandId: route.id, local: route.local,
+      operands: Object.freeze([...forwarded]), options: Object.freeze({}) });
+  }
   const options = Object.create(null), operands = []; let literal = false, helpRequested = false;
   for (let index = 0; index < words.length; index++) {
     const word = words[index];
@@ -111,12 +116,17 @@ export function parseArgv(input) {
 function parseWords(argv) {
   if (!argv.length || argv.length === 1 && HELP_WORDS.includes(argv[0])) return help([]);
   if (argv[0] === 'help') return TOPICS.includes(argv[1]) ? topicHelp(argv.slice(1)) : helpFor(argv.slice(1));
-  if (HELP_WORDS.includes(argv.at(-1)) && !(findRoute(argv)?.operands.at(-1)?.type === 'text' && argv.includes('--'))) {
+  const matchedRoute = findRoute(argv);
+  if (matchedRoute?.passthrough) {
+    if (argv.length === matchedRoute.prefix.length + 1 && HELP_WORDS.includes(argv.at(-1))) return help(matchedRoute.prefix);
+    return parseRoute(matchedRoute, argv.slice(matchedRoute.prefix.length), false);
+  }
+  if (HELP_WORDS.includes(argv.at(-1)) && !(matchedRoute?.operands.at(-1)?.type === 'text' && argv.includes('--'))) {
     const words = argv.slice(0, -1), route = findRoute(words);
     if (!route || route.prefix.length === words.length) return helpFor(words);
     return parseRoute(route, argv.slice(route.prefix.length), true);
   }
-  const route = findRoute(argv);
+  const route = matchedRoute;
   if (!route && !argv[0].startsWith('-') && !routes.some(candidate => candidate.prefix[0] === argv[0])) {
     const word = argv[0].replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').slice(0, 64);
     throw new CommandInputError(`Unknown command "${word}". Run pdd --help to see the commands.`);

@@ -351,33 +351,37 @@ of `@openai/codex` (isolated in `$PDD_STATE_DIR/codex-home`, default `~/.local/s
 | `pdd accounts [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling`, `paused`, or `reauth_required`), refresh status, and pending invites |
 | `pdd accounts list [--json]` | Refresh and list enrolled and shared Cloud accounts, active selection (`*`), 5-hour and weekly usage windows, state (`ready`, `cooling`, `paused`, or `reauth_required`), refresh status, and pending invites |
 | `pdd accounts status [--json]` | Show Cloud account enrollment, isolated Codex home path, shell auto-switch status, active leases, and token refresh and expiry health |
-| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside a disposable folder (`--device-auth` for headless Codex), upload the credential bundle to PDD Cloud over TLS, materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json` without touching `~/.codex/auth.json`, and optionally enroll multiple accounts (`--loop`) or share (`--with`) |
-| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--with USER\|ORG/TEAM[,...]]` | Import an external (`--from PATH`) or local Codex `auth.json` or Claude token into PDD Cloud without modifying `~/.codex/auth.json` (prefer `pdd accounts add` so Cloud gets an independent OAuth session), materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json`, and optionally share (`--with`) |
-| `pdd accounts use LABEL` | Pin `LABEL` (matching `+` and `-` punctuation) and materialize its owner pass or shared gateway grant in `$PDD_STATE_DIR/codex-home` (`0600`) or `~/.claude/settings.json` (`0600`) |
+| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside a disposable folder (`--device-auth` for headless Codex, interactive TTY `claude setup-token` for Claude), upload the credential bundle to PDD Cloud over TLS, delete temporary login files immediately, materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json` without touching `~/.codex/auth.json`, and optionally enroll multiple accounts (`--loop`), replace an existing owned label (`--replace`), or share (`--with`) |
+| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--replace] [--with USER\|ORG/TEAM[,...]]` | Import an external (`--from PATH`) or local Codex `auth.json` or Claude token into PDD Cloud, scrub the single-use `refresh_token` from the imported local Codex `auth.json` after upload so local `codex` cannot collide with Cloud refresh (prefer `pdd accounts add` for a fresh OAuth session), materialize the leased pass in `$PDD_STATE_DIR/codex-home` or `~/.claude/settings.json`, and optionally replace an existing owned label (`--replace`) or share (`--with`) |
+| `pdd accounts use LABEL [--provider codex\|claude]` | Pin `LABEL` (matching `+` and `-` punctuation, scoped by `--provider` when both Codex and Claude use `LABEL`) and materialize its leased pass in `$PDD_STATE_DIR/codex-home` (`0600`) or `~/.claude/settings.json` (`0600`) |
 | `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch to the next ready account sorted by soonest weekly reset |
+| `pdd accounts codex [ARGS...]` | Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session `codex resume` rotation |
 | `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Return in 0 ms when the cached lease is below 100% on both windows and more than 15 minutes from expiry; else lease a fresh pass within `--timeout-ms` (default 1200 ms) and fail open when offline |
 | `pdd accounts auto on\|off\|status` | Turn on, turn off or inspect the opt-in fail-open shell wrapper in `~/.zshrc`, `~/.bashrc`, and `~/.config/fish/config.fish` for plain terminal `codex` and `claude` commands (off by default) |
-| `pdd accounts pause LABEL` | Pause automatic leasing for `LABEL` |
-| `pdd accounts unpause LABEL` | Resume automatic leasing for `LABEL` |
-| `pdd accounts share LABEL --with USER\|ORG/TEAM[,...]` | Share `LABEL` with GitHub users, organization teams, or `@ORG` targets without exposing raw owner credentials |
+| `pdd accounts pause LABEL [--provider codex\|claude]` | Pause automatic leasing for `LABEL` |
+| `pdd accounts unpause LABEL [--provider codex\|claude]` | Resume automatic leasing for `LABEL` |
+| `pdd accounts share LABEL [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share `LABEL` with GitHub users, organization teams, or `@ORG` targets without exposing raw owner credentials |
 | `pdd accounts share --all [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or `@ORG` targets |
 | `pdd accounts accept INVITE` | Accept a pending Cloud account share invite and materialize the shared grant if no account is pinned for that provider |
-| `pdd accounts unshare LABEL --user USER` | Revoke shared access to `LABEL` for `USER` |
+| `pdd accounts unshare LABEL [--provider codex\|claude] --user USER` | Revoke shared access to `LABEL` for `USER` |
 | `pdd accounts unshare [LABEL] [--all] [--provider codex\|claude] [--user USER] [--with USER\|ORG/TEAM[,...]]` | Revoke shared access for users, organization teams, or `@ORG` targets across `LABEL` or all owned accounts |
-| `pdd accounts leave LABEL` | Leave a shared Cloud account and clean up its local gateway configuration |
-| `pdd accounts remove LABEL` | Delete `LABEL` from PDD Cloud and revoke active leases |
-| `pdd accounts log LABEL [--json]` | Show the lease and sharing audit log for `LABEL` |
+| `pdd accounts leave LABEL [--provider codex\|claude]` | Leave a shared Cloud account and clean up its local gateway configuration |
+| `pdd accounts remove LABEL [--provider codex\|claude]` | Delete `LABEL` from PDD Cloud and revoke active leases |
+| `pdd accounts log LABEL [--provider codex\|claude] [--json]` | Show the lease and sharing audit log for `LABEL` |
 
-- **Encrypted vault, stripped owner passes, and tokenless shared gateways.** PDD
+- **Encrypted vault, zero-plaintext gateway grants, and constant gateway URLs.** PDD
   Cloud encrypts each account's refresh credential with envelope encryption bound
-  to the account record. Owner Codex leases write a short-lived `access_token` and
-  `id_token` with `refresh_token: ""` (`0600`) inside `$PDD_STATE_DIR/codex-home`,
-  so only PDD Cloud refreshes single-use OAuth tokens. Shared Codex and Claude leases
+  to the account record. Codex and shared Claude `gateway_grant` leases
   (`delivery_mode: "gateway_grant"`) deliver only a short-lived revocable `pddg_…`
-  gateway grant routed through PDD Cloud (`[model_providers.pdd_codex_gateway]` for
-  Codex, `ANTHROPIC_BASE_URL` for Claude), with zero OpenAI or Anthropic OAuth tokens
-  written to borrower disk. Local state in `$PDD_STATE_DIR/accounts-state.json`
-  (`0600`) stores metadata and refresh timestamps only, with zero tokens.
+  gateway grant routed through PDD Cloud (`[model_providers.pdd_codex_gateway]` with
+  the constant `<origin>/v1/codex-gateway` base URL and `<origin>/v1/codex-gateway/models`
+  model catalog URL for `pddg_lse_…` grants,
+  `ANTHROPIC_BASE_URL` for Claude), with zero OpenAI or Anthropic OAuth tokens
+  written to disk and dynamic `auth.json` reload across account rotations. Legacy
+  `direct_stripped` Codex passes write `refresh_token: ""` (`0600`) inside
+  `$PDD_STATE_DIR/codex-home` so only PDD Cloud refreshes single-use OAuth tokens.
+  Local state in `$PDD_STATE_DIR/accounts-state.json` (`0600`) stores metadata and
+  refresh timestamps only, with zero tokens.
 - **Stick-Until-100% and automatic `reauth_required` skip.** Inside `pdd` and
   `pdd autopilot`, steps stay on the active leased account with zero switches while
   both the 5-hour and weekly windows remain below 100%. Brief burst `429` responses

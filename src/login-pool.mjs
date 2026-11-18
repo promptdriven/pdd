@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: bf30fa34fabafa4c20edf0b286208194cb36df386538849510cce56a2239e46c).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: b7884ca79221cca835d3724b7625f770d56b592cf6b3b0a741210d44a2af88b8).
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -80,12 +80,13 @@ const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const bad = message => { throw new Error(`Invalid login pool: ${message}`); };
 
 export class CloudAccountsError extends Error {
-  constructor(message, { status = 0, code = 'cloud_accounts_error', payload = null } = {}) {
+  constructor(message, { status = 0, code = 'cloud_accounts_error', payload = null, exitCode = 1 } = {}) {
     super(redactSecrets(String(message ?? 'Cloud accounts request failed.')));
     this.name = 'CloudAccountsError';
     this.status = status;
     this.code = code;
     this.payload = payload;
+    this.exitCode = exitCode;
   }
 }
 
@@ -599,6 +600,18 @@ function resolveCodexGatewayGrant(lease) {
   return token;
 }
 
+function isEmbeddedLeaseGatewayGrant(grantToken) {
+  return typeof grantToken === 'string' && grantToken.startsWith('pddg_lse_');
+}
+
+function normalizeCodexGatewayBaseUrl(validatedUrl, grantToken) {
+  if (!validatedUrl) return null;
+  if (isEmbeddedLeaseGatewayGrant(grantToken)) {
+    return validatedUrl.replace(/(\/codex-gateway)\/lse_[^/]+$/i, '$1');
+  }
+  return validatedUrl;
+}
+
 const isTomlTable = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date) && typeof value.toISOString !== 'function';
 const formatTomlKey = key => (/^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key));
 
@@ -857,8 +870,10 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
   const userConfigPath = localCodexConfigPath(env);
 
   const isGateway = object(authOrLease) && authOrLease.delivery_mode === 'gateway_grant';
-  const gatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
+  const rawGatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
   const grantToken = isGateway ? resolveCodexGatewayGrant(authOrLease) : null;
+  const gatewayUrl = isGateway ? normalizeCodexGatewayBaseUrl(rawGatewayUrl, grantToken) : null;
+  const embeddedLeaseGrant = isGateway && isEmbeddedLeaseGatewayGrant(grantToken);
   const stripped = isGateway ? null : stripCodexAuthBundle(authOrLease);
 
   assertNoSymlinkCodexPath(fs, authPath);
@@ -890,20 +905,32 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
 
   if (isGateway) {
     const prevProviders = isTomlTable(cleanedUser.nextData.model_providers) ? { ...cleanedUser.nextData.model_providers } : {};
+    const modelCatalogUrl = `${gatewayUrl}/models`;
+    const gatewayProviderBlock = embeddedLeaseGrant
+      ? {
+          name: 'PDD Codex Gateway',
+          base_url: gatewayUrl,
+          model_catalog_url: modelCatalogUrl,
+          wire_api: 'responses',
+          requires_openai_auth: true,
+          supports_websockets: false,
+        }
+      : {
+          name: 'PDD Codex Gateway',
+          base_url: gatewayUrl,
+          model_catalog_url: modelCatalogUrl,
+          wire_api: 'responses',
+          requires_openai_auth: false,
+          supports_websockets: false,
+          http_headers: { 'x-pdd-gateway-grant': grantToken },
+        };
     const nextConfig = {
       ...cleanedUser.nextData,
       cli_auth_credentials_store: 'file',
       model_provider: CODEX_GATEWAY_PROVIDER_ID,
       model_providers: {
         ...prevProviders,
-        [CODEX_GATEWAY_PROVIDER_ID]: {
-          name: 'PDD Codex Gateway',
-          base_url: gatewayUrl,
-          wire_api: 'responses',
-          requires_openai_auth: false,
-          supports_websockets: false,
-          http_headers: { 'x-pdd-gateway-grant': grantToken },
-        },
+        [CODEX_GATEWAY_PROVIDER_ID]: gatewayProviderBlock,
       },
     };
     const serializedConfig = serializeTomlConfig(nextConfig, configPath);
@@ -911,7 +938,14 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
       auth_mode: 'apikey',
       OPENAI_API_KEY: grantToken,
     };
-    writeAtomicCodexPair(fs, authPath, `${JSON.stringify(gatewayAuth, null, 2)}\n`, configPath, serializedConfig);
+    const authText = `${JSON.stringify(gatewayAuth, null, 2)}\n`;
+    let existingConfigText = null;
+    try { existingConfigText = fs.readFileSync(configPath, 'utf8'); } catch {}
+    if (existingConfigText === serializedConfig) {
+      writeAtomicPrivate(fs, authPath, authText);
+    } else {
+      writeAtomicCodexPair(fs, authPath, authText, configPath, serializedConfig);
+    }
     return {
       codexHome: managedHome,
       authPath,
@@ -968,8 +1002,9 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
   const fs = ports.fs ?? nativeFs;
   const sourceCodexHome = localCodexHome(env);
   const isGateway = object(authOrLease) && authOrLease.delivery_mode === 'gateway_grant';
-  const gatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
+  const rawGatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
   const gatewayToken = isGateway ? resolveCodexGatewayGrant(authOrLease) : null;
+  const gatewayUrl = isGateway ? normalizeCodexGatewayBaseUrl(rawGatewayUrl, gatewayToken) : null;
   const rootDir = tmpRoot || (fs.existsSync?.('/tmp') !== false ? '/tmp' : tmpdir());
   let overlayDir;
   if (typeof fs.mkdtempSync === 'function') {
@@ -1068,6 +1103,7 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
           [CODEX_GATEWAY_PROVIDER_ID]: {
             name: 'PDD Codex Gateway',
             base_url: gatewayUrl,
+            model_catalog_url: `${gatewayUrl}/models`,
             wire_api: 'responses',
             requires_openai_auth: false,
             supports_websockets: false,

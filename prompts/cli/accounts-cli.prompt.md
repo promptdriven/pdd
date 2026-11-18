@@ -11,62 +11,71 @@ usage-reset credit commands, options or calls exist.
 
 ## Domain decisions
 
-- **Isolated PDD-managed Codex home (never touch `~/.codex/auth.json`):** `pdd accounts add` runs `codex login -c 'cli_auth_credentials_store="file"'` inside a disposable `0700` temporary `CODEX_HOME` wiped in `finally`, and post-enroll sync, `import`, `use`, `next`, `sync` and `accept` materialize leased Codex `auth.json` (`0600`) and `config.toml` (`0600`, `cli_auth_credentials_store = "file"`, symlinking `~/.codex/{skills,memories,sessions,archived_sessions,history.jsonl,session_index.jsonl,rules}` and merging `~/.codex/config.toml`) exclusively inside `pddManagedCodexHome(env)` (`${stateDir}/codex-home`), never writing to or deleting `~/.codex/auth.json`.
-- **Shell auto-switch across `zsh`, `bash`, and `fish` with logout guard and fail-safe fallback:** `pdd accounts auto on|off|status` manages `~/.zshrc`, `~/.bashrc`, and `${XDG_CONFIG_HOME || ~/.config}/fish/config.fish`. For `codex`, the wrapper runs `pdd accounts sync --provider codex --quiet --timeout-ms 1200` and sets `CODEX_HOME` to `pddManagedCodexHome(env)` only when a healthy active lease is materialized and the command is neither `codex logout` nor `codex login`. On `codex logout` or `codex login`, it leaves normal `~/.codex` untouched (or refuses with guidance to run `pdd accounts pause`, `remove` or `use` if `CODEX_HOME` was manually exported to `pddManagedCodexHome(env)`). When PDD Cloud is unreachable or no valid active lease exists, `CODEX_HOME` stays unset so `codex` falls back to `~/.codex/auth.json`.
-- **Symmetric `+`/`-` label lookup, `reauth_required` surfacing, and refresh visibility:** `resolveAccount` falls back to `sanitizeLabel(target, "")` (case-insensitive) when exact and lowercase matches miss so `glt+oai2` resolves `glt-oai2`. `pdd accounts list` and `pdd accounts status` surface `reauth_required` clearly (never as `ready`) alongside `last_refresh_at` and lease/token expiry status.
-- **Upfront target validation and initial usage probe:** `--with` accepts comma-separated `USER`, `ORG/TEAM` and `@ORG` targets validated before network mutations, and initial Codex `add`/`import` probes local usage fail-open when server windows are unpopulated.
-- **Claude `.credentials.json` fallback and expired short-lived token guard:** Standard `claude auth login` stores OAuth credentials in `<configDir>/.credentials.json` under `claudeAiOauth` (`accessToken`, `refreshToken`, `expiresAt`) without setting `env.CLAUDE_CODE_OAUTH_TOKEN` in `<configDir>/settings.json`. When `--from <dir>` or default local discovery (`CLAUDE_CONFIG_DIR` or `~/.claude`) finds no `CLAUDE_CODE_OAUTH_TOKEN` in `settings.json`, `readClaudeTokenFromPath`, `readLocalClaudeToken` and `detectImportProvider` inspect `<dir>/.credentials.json`. Whenever `claudeAiOauth` is present (including when `--from` targets a `.credentials.json` file directly, checked before regex token extraction), register its secret fields in `rememberSecrets` and check `expiresAt` (numeric epoch ms or ISO timestamp): if `expiresAt` is present and invalid or expired (`expiresAt <= now + 60_000`), throw `CloudAccountsError` (`code: "expired_local_login"`) naming `<target>` and instructing the user to run `pdd accounts add --provider claude` or `claude setup-token` before uploading to PDD Cloud or modifying `~/.claude/settings.json`; otherwise accept a non-empty `claudeAiOauth.accessToken`.
+- **Isolated PDD-managed Codex home, zero-plaintext temporary OAuth cleanup, and imported single-use refresh-token scrubbing:** `pdd accounts add` runs `codex login -c 'cli_auth_credentials_store="file"'` inside a disposable `0700` temporary `CODEX_HOME`, deletes the temporary plaintext `auth.json` immediately once uploaded to PDD Cloud and probed (and wipes the temp directory in `finally`), never reads or writes `~/.codex/auth.json`, and never falls back to writing raw OAuth tokens onto disk if post-enroll `/v1/accounts/lease` returns `all_cooling` or fails. Initial local Codex usage probing always runs inside a disposable `0700` temporary probe `CODEX_HOME` whose `auth.json` copy has `tokens.refresh_token` cleared to an empty string so `codex app-server` uses only `access_token` fail-open and never consumes the single-use `refresh_token` uploaded to PDD Cloud. `pdd accounts import` refuses symlinked `--from` paths, symlinked credential files, and symlinked parent directories (`lstatSync`), validates the Codex `auth.json` before network calls, uploads the bundle to PDD Cloud, runs the fail-open scrubbed-copy usage probe, leases and materializes into `pddManagedCodexHome(env)`, and atomically scrubs `tokens.refresh_token` to an empty string (`0600`) in the imported source file only when local lease materialization actually succeeded so a subsequent local `codex` run outside `CODEX_HOME` cannot refresh the same single-use OpenAI refresh-token family and trigger `refresh_token_invalidated` in PDD Cloud while failed or cooling leases never strand the user without local credentials. Post-enroll sync, `import`, `use`, `next`, `sync`, `codex` and `accept` materialize leased Codex `auth.json` (`0600`) and `config.toml` (`0600`, `cli_auth_credentials_store = "file"`, symlinking `~/.codex/{skills,memories,sessions,archived_sessions,history.jsonl,session_index.jsonl,rules}` and merging `~/.codex/config.toml`) exclusively inside `pddManagedCodexHome(env)` (`${stateDir}/codex-home`), leaving `~/.codex/auth.json` untouched on `add`, `use`, `next`, `sync`, `status`, `codex`, `accept`, `leave` and `remove`. Both owner and shared `gateway_grant` leases materialize zero OpenAI OAuth tokens on disk with constant `<origin>/v1/codex-gateway` and `<origin>/v1/codex-gateway/models` in `config.toml` when the grant token begins with `pddg_lse_`.
+- **Interactive Claude `setup-token` enrollment and isolated extraction:** `pdd accounts add --provider claude` runs `claude setup-token` inside an isolated `0700` temporary `CLAUDE_CONFIG_DIR` (cleaned up immediately after reading and in `finally`) with `COLUMNS=500` so terminal rendering does not wrap ~108-character `sk-ant-oat01-...` tokens. When no login runner port is injected, require both `stdin` and `stdout` to be interactive TTYs (unless a token was piped on `stdin` before spawning): spawn `claude setup-token` with inherited `stdin` and piped `stdout`/`stderr` streamed live to the terminal so the user can view the OAuth URL and paste the authorization code without closing `stdin`; when either `stdin` or `stdout` is non-interactive (including command-substitution captures such as `OUT=$(pdd accounts add --provider claude)`), fail fast with exit code `1` and an actionable message naming interactive `pdd accounts add --provider claude` or `pdd accounts import --provider claude`. Strip ANSI CSI/OSC sequences and unwrap soft-wrapped `sk-ant-oat...` token continuations before extracting the token, and in `add` mode extract strictly from `setup-token` output or files inside the isolated temporary `CLAUDE_CONFIG_DIR`, never falling back to pre-existing `~/.claude/settings.json`, `~/.claude/.credentials.json` or ambient `CLAUDE_CODE_OAUTH_TOKEN`.
+- **Shell auto-switch, PTY terminal hygiene, session pinning, and structured mid-session auto-rotation:** `pdd accounts auto on|off|status` manages `~/.zshrc`, `~/.bashrc`, and `${XDG_CONFIG_HOME || ~/.config}/fish/config.fish`. For `codex`, the wrapper runs `pdd accounts sync --provider codex --quiet --timeout-ms 1200` and sets `CODEX_HOME` to `pddManagedCodexHome(env)` only when a healthy active lease is materialized and the subcommand (scanning past all `codex-cli` top-level value options) is neither `logout` nor `login`; when both `stdin` and `stdout` are terminals and `codex` is launched in an interactive mode (default chat, `resume`, or `fork`), the wrapper delegates to `pdd accounts codex -- "$@"`. `pdd accounts codex [ARGS...]` accepts direct passthrough flags (such as `pdd accounts codex -m gpt-5.4` as well as `pdd accounts codex -- -- -prompt` with at most one leading `--` stripped by the parser), preserves top-level `codex-cli` value and boolean flags supported by `codex resume` across rotations, forwards terminal resizes (`stdout` `resize` events) over a dedicated control file descriptor to the Python PTY supervisor (`TIOCSWINSZ` ioctl plus `SIGWINCH` to the child process group), restores TTY raw mode on `SIGINT`, `SIGTERM`, `SIGHUP` and process `exit`, and terminates the `codex` process group (`os.killpg` `SIGTERM` then `SIGKILL`) if the parent exits or the stdin/control pipe closes. Before launching `codex`, snapshot existing `sessions/.../rollout-*.jsonl` files and `session_index.jsonl` IDs, skip historical rollout files whose modification time predates turn start before resolving canonical paths or reading headers, read line-one `session_meta` headers in chunks up to 4 MiB only once a newline is flushed, exclude subagent sessions (`thread_source`, `parent_thread_id`, or `source.subagent`), and pin for the supervisor's lifetime only the newly created rollout file matching the invocation working directory and turn start timestamp (or an explicit `resume <uuid>` operand). Never kill a live interactive `codex` TUI or report `limit_reached: true` from raw PTY `stdout`/`stderr` text (preventing false positives from `rg`, `git diff`, or reading source files); detect interactive quota exhaustion strictly from structured API/turn error records appended to the pinned rollout JSONL during the current turn (`429`, `usage_limit_exceeded`, `usage_limit_reached`, `insufficient_quota`, `quota_exceeded`, or `rate_limit_exceeded` with quota exhaustion, scanning past any oversized JSONL line above the 2 MiB slice cap so the byte offset never wedges) or structured Cloud account usage status (`limit_reached` or `100%` 5-hour/weekly usage), falling back to exit-output classification only when `codex` exits non-zero in non-interactive mode or during early startup before a session rollout file exists.
+- **Provider-scoped `+`/`-` label lookup, `reauth_required` surfacing, and remaining-quota visibility:** `resolveAccount` accepts an optional `provider` (`codex` or `claude`), matches exact `account_id`, exact `label`, case-insensitive `label`, then slug-normalized `label` (`glt+oai2` resolves `glt-oai2`), and throws an `exitCode: 2` disambiguation error naming `--provider codex` and `--provider claude` whenever `--provider` is omitted and `LABEL` matches accounts across both providers. Human-readable tables, status summaries, and switch/rotation banners display 5-hour and weekly quota as remaining percentage (`XX% left`, computed from `100 - used_percent` clamped to `0..100%`, or `-` when unpopulated `null`), never fabricating `0%` used (`100% left`) when post-enroll offline fallback lacks probed percentages. `pdd accounts list` and `pdd accounts status` surface `reauth_required` clearly alongside `last_refresh_at` and lease/token expiry status.
+- **Post-login email labels, safe `--replace` conflict handling, duplicate-share avoidance, and `github_user_id` share preservation:** When `--label` is omitted on `add` or `import` (including `--loop`), derive the base label from the authenticated `id_token` `email` local-part slug without a `codex-` prefix, disambiguating collisions within the same provider as `<base>-2`, `<base>-3`, ... unless `--replace` is set, and falling back to `<provider>-main` (single) or `<provider>-1`, `<provider>-2`, ... (`--loop`) only when no email claim is present; explicit `--label PREFIX` with `--loop` preserves `<prefix>-1`, `<prefix>-2`, ... numbering. Validate the local credential bundle and `--with` targets (`USER`, `ORG/TEAM`, `@ORG`) before any Cloud mutation; on a `409` duplicate-label conflict, delete an existing owned Cloud account only when `--replace` or interactive `[r]eplace` is confirmed right before re-uploading, preserve all prior shares including user-ID-only shares (`github_user_id` without `github_login`), and if the replacement upload fails after deletion, leave any local import source unscrubbed and surface a recovery message naming the removed label/account ID and preserved shares. Skip creating duplicate share invites when an account already has an active or pending share for the target, and probe initial Codex usage fail-open when server windows are unpopulated.
+- **Claude `.credentials.json` fallback and expired short-lived token guard:** Standard `claude auth login` stores OAuth credentials in `<configDir>/.credentials.json` under `claudeAiOauth` (`accessToken`, `refreshToken`, `expiresAt`) without setting `env.CLAUDE_CODE_OAUTH_TOKEN` in `<configDir>/settings.json`. When `--from <dir>` or default local discovery (`CLAUDE_CONFIG_DIR` or `~/.claude`) finds no `CLAUDE_CODE_OAUTH_TOKEN` in `settings.json`, `readClaudeTokenFromPath`, `readLocalClaudeToken` and `detectImportProvider` inspect `<dir>/.credentials.json`. Whenever `claudeAiOauth` is present (including when `--from` targets a `.credentials.json` file directly, checked before regex token extraction), register its secret fields in `rememberSecrets` and check `expiresAt` (numeric epoch ms or ISO timestamp): if `expiresAt` is present and invalid or within 60 seconds of expiry, throw `CloudAccountsError` (`code: "expired_local_login"`) naming `<target>` and instructing the user to run `pdd accounts add --provider claude` or `claude setup-token` before uploading to PDD Cloud or modifying `~/.claude/settings.json`; otherwise accept a non-empty `claudeAiOauth.accessToken`.
 
 ## Commands
 
 - `pdd accounts` / `pdd accounts list [--json]`: Call `listCloudAccounts({refresh: true})` (`GET /v1/accounts?refresh=true`), reconcile
-  `accounts-state.json` (`enrolled: accounts.length > 0` and `providers` from
-  accessible accounts, pruning removed/revoked `active` and `cooling` entries and calling
-  `restoreLocalCodexGatewayConfig` with `removeAuthFile: !nextActive.codex` when pruning an
-  active Codex account), mark the locally active account per provider with `*`, and render an
+  `accounts-state.json` (updating `enrolled` and `providers` from accessible accounts, pruning removed or revoked `active` and `cooling` entries, and calling
+  `restoreLocalCodexGatewayConfig` removing the managed `auth.json` when no active Codex account remains), mark the locally active account per provider with `*`, and render an
   aligned table (`*`, `LABEL`, `PROVIDER`, `ACCESS`, `5H`, `7D`, `STATE`:
   `ready | cooling | draining | paused | reauth_required`, `REFRESH`: last refresh and expiry summary)
-  followed by any `reauth_required` re-auth hints and `pending_invites`. `--json` prints structured JSON with zero secrets.
+  where `5H` and `7D` show remaining quota as `XX% left (RESET)` (or `-` when `null`),
+  followed by any `reauth_required` re-auth hints and `pending_invites`. `--json` prints structured JSON
+  with zero secrets, preserving `five_hour_used_percent` and `weekly_used_percent` alongside
+  `five_hour_left_percent` and `weekly_left_percent`.
 - `pdd accounts status [--json]`: Inspect live or cached Cloud accounts state (failing open to
   local `accounts-state.json` when offline), reporting enrollment count, `pddManagedCodexHome(env)`
   isolation status, `zsh`/`bash`/`fish` `auto` wrapper status, per-provider active account
-  (`label`, `delivery_mode`, `state`, `5h`/`7d` usage, `last_refresh_at`, token/lease
-  `expires_at` remaining time), and any `reauth_required` accounts.
-- `pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--device-auth] [--with USER|ORG/TEAM[,...]]`:
+  (`label`, `delivery_mode`, `state`, `5h`/`7d` remaining `XX% left` with reset time, `last_refresh_at`, token/lease
+  `expires_at` remaining time), and any `reauth_required` accounts (with `five_hour_left_percent` and `weekly_left_percent` in `--json`).
+- `pdd accounts add [--provider codex|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER|ORG/TEAM[,...]]`:
   Reject `--device-auth` for Claude with `exitCode: 2` before starting `claude`, and validate
   `--with` targets before sign-in. Run `codex login -c 'cli_auth_credentials_store="file"'`
-  (with `--device-auth` when passed) inside a disposable `0700` temporary `CODEX_HOME` wiped in
-  `finally` (never reading `~/.codex/auth.json`) or `claude setup-token`, validate all four Codex
-  OAuth token fields (`access_token`, `refresh_token`, `id_token`, `account_id`) locally before
-  uploading to `POST /v1/accounts`, probe local Codex usage fail-open before cleanup if server
-  windows are unpopulated, lease and materialize the active pass into `pddManagedCodexHome(env)`
-  or `~/.claude/settings.json` (`enrolled: true` even on `all_cooling`), and share with any
-  `--with` targets. With `--loop`, require an interactive TTY or injected prompt port (`exitCode: 2`
-  otherwise), auto-generate collision-free labels `<prefix>-1`, `<prefix>-2`, ..., detect
-  `already_enrolled === true` and session duplicate `account_id`s without advancing the counter,
-  treat `SIGINT` (`code === 130` or `signal === "SIGINT"`) as a clean loop exit (`exitCode: 0`),
-  and prompt `Enroll another <provider> account? [Y/n] `.
-- `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--with USER|ORG/TEAM[,...]]`:
-  Validate `--with` targets upfront, read `~/.codex/auth.json` (or `PATH` / `PATH/auth.json` when
-  `--from PATH` is given, refusing bundles with a stripped refresh token) or a validated Claude OAuth token from `settings.json`, `.credentials.json` or `PATH`,
-  validate all four Codex OAuth token fields, upload to `POST /v1/accounts`, probe local Codex usage
-  fail-open if server windows are unpopulated, materialize the leased pass into `pddManagedCodexHome(env)`
-  without writing to `~/.codex/auth.json`, and apply any `--with` shares.
-- `pdd accounts use LABEL`: Resolve `LABEL` (exact, case-insensitive, then `sanitizeLabel` `+`/`-`
-  fallback), refuse `reauth_required` accounts with a clear re-authentication command, and pin/materialize
-  `LABEL` in `pddManagedCodexHome(env)` or `~/.claude/settings.json` via `POST /v1/accounts/lease`.
-- `pdd accounts next [--provider codex|claude]`: Skip the current active account
-  and switch `pddManagedCodexHome(env)` or `~/.claude/settings.json` to the next ready account
-  (`soonest weekly_reset_at`) via `POST /v1/accounts/lease`.
+  (with `--device-auth` when passed) inside a disposable `0700` temporary `CODEX_HOME` (deleting
+  temporary files immediately after Cloud upload and probe, never touching `~/.codex/auth.json`)
+  or interactive TTY `claude setup-token` inside an isolated `0700` temporary
+  `CLAUDE_CONFIG_DIR`, validate all four Codex OAuth token fields (`access_token`, `refresh_token`,
+  `id_token`, `account_id`) locally before uploading to `POST /v1/accounts`, support `--replace` and interactive `409` conflict recovery (`[r]eplace` / disambiguated `<label>-2` / `[s]kip`) while preserving user, team, org and `github_user_id` shares, probe local Codex usage fail-open before cleanup if server windows are
+  unpopulated, lease and materialize the active pass into `pddManagedCodexHome(env)` or
+  `~/.claude/settings.json` (keeping unprobed offline fallback usage fields `null` rather than `0`, without writing raw fallback
+  OAuth tokens to disk), and share with any `--with` targets not already shared on that account.
+  With `--loop`, require an interactive TTY or injected prompt port (`exitCode: 2` otherwise), print
+  numbered iteration banners and `<email> -> "<label>"` confirmation, derive default labels from the
+  authenticated email local-part when `--label` is omitted (or `<prefix>-1`, `<prefix>-2`, ... when
+  `--label PREFIX` is supplied), offer `[R]etry` / `[s]kip` on transient `POST /v1/accounts` upload
+  errors without repeating OAuth login, detect server `already_enrolled` responses and session duplicate
+  `account_id`s without advancing the counter, treat `SIGINT` (exit code `130` or `SIGINT` signal)
+  as a clean loop exit (`exitCode: 0`), and prompt `Enroll another <provider> account? [Y/n] `.
+- `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--replace] [--with USER|ORG/TEAM[,...]]`:
+  Validate `--with` targets upfront, refuse symlinked `--from` paths, credential files, and parent directories (`lstatSync`), read `~/.codex/auth.json` (or `PATH` / `PATH/auth.json` when
+  `--from PATH` is given, refusing bundles with an already-scrubbed empty `refresh_token`) or a validated Claude OAuth token from `settings.json`, `.credentials.json` or `PATH`,
+  validate all four Codex OAuth token fields before network mutations, upload to `POST /v1/accounts` (supporting `--replace` and interactive `409` label conflict recovery with backup recovery notes on re-upload failure), probe local Codex usage
+  fail-open inside a disposable `0700` probe directory with `refresh_token` cleared if server windows are unpopulated, materialize the leased pass into `pddManagedCodexHome(env)`, atomically scrub `tokens.refresh_token` (`""`, mode `0600`) in the imported local Codex source file only when lease materialization succeeded so local `codex` cannot trigger `refresh_token_invalidated`, and apply any non-duplicate `--with` shares.
+- `pdd accounts use LABEL [--provider codex|claude]`: Resolve `LABEL` (scoped to `--provider` when passed, or exiting `2` when `LABEL` is ambiguous across providers), refuse `reauth_required` accounts with a clear re-authentication command, pin and materialize
+  `LABEL` in `pddManagedCodexHome(env)` or `~/.claude/settings.json` via `POST /v1/accounts/lease`, and show the remaining `5h`/`7d` `XX% left` summary.
+- `pdd accounts next [--provider codex|claude]`: Skip the current active account,
+  switch `pddManagedCodexHome(env)` or `~/.claude/settings.json` to the next ready account
+  (sorted by soonest `weekly_reset_at`) via `POST /v1/accounts/lease`, and show the remaining `5h`/`7d` `XX% left` summary.
+- `pdd accounts codex [ARGS...]`: Sync and lease a healthy Codex account into `pddManagedCodexHome(env)`
+  (failing open to plain `codex` when Cloud accounts are unenrolled or offline without an active lease),
+  pass non-interactive Codex subcommands straight through with `CODEX_HOME` set to `pddManagedCodexHome(env)`,
+  and launch interactive `codex` under the live PTY/session supervisor (with `SIGWINCH` resize forwarding, signal/exit TTY restoration, `os.killpg` process-group cleanup, `cwd`-verified rollout session pinning, and structured rollout JSONL / Cloud usage quota monitoring), reporting usage fail-open on quota exhaustion, rotating `pddManagedCodexHome(env)/auth.json` to the
+  next ready Codex lease (displaying the rotated account's `5h`/`7d` `XX% left` summary), and relaunching `codex resume` with preserved flags and the pinned session ID (or `--last` when no session rollout was created yet).
 - `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`:
-  When `--quiet` is passed and `isCloudAccountsActive({env, provider})` is false,
+  When `--quiet` is passed and Cloud accounts are inactive for the provider,
   return `exitCode: 0` immediately without making any network call. Check local
-  `accounts-state.json` first: return a `0ms` no-op when the cached active lease has
-  `materialized_local === true`, `state === "ready"` (never `paused`, `cooling`, or `reauth_required`),
-  `five_hour_used_percent < 100`, `weekly_used_percent < 100`, more than 15 minutes
-  until `expires_at` (and more than 5 minutes until `access_token_expires_at` when known),
-  and present materialized files in `pddManagedCodexHome(env)` or `~/.claude/settings.json`. Otherwise call `POST /v1/accounts/lease`
-  bounded by `--timeout-ms` (default `1200`, `maxRetries: 0` when `--quiet`). With
+  `accounts-state.json` first: return a `0ms` no-op when the cached active lease is
+  locally materialized, in `"ready"` state (never `paused`, `cooling`, or `reauth_required`),
+  below `100%` on both 5-hour and weekly windows, more than 15 minutes
+  from `expires_at` (and more than 5 minutes from `access_token_expires_at` when known),
+  and backed by present materialized files in `pddManagedCodexHome(env)` or `~/.claude/settings.json`. Otherwise call `POST /v1/accounts/lease`
+  bounded by `--timeout-ms` (default `1200`, zero retries when `--quiet`). With
   `--print-codex-home` or `PDD_PRINT_CODEX_HOME=1`, print `pddManagedCodexHome(env)` only when a
   healthy active Codex lease is confirmed and materialized, else print nothing so the shell wrapper
   falls back to `~/.codex`. Always fail-open (`exitCode: 0`).
@@ -75,16 +84,17 @@ usage-reset credit commands, options or calls exist.
   `# <<< pdd accounts auto <<<`) in `~/.zshrc`, `~/.bashrc`, and
   `${XDG_CONFIG_HOME || ~/.config}/fish/config.fish` (creating `~/.config/fish` when needed).
   `off` removes the marked block cleanly. `status` reports `on` or `off`.
-- `pdd accounts pause LABEL`, `unpause LABEL`,
+- `pdd accounts pause LABEL [--provider codex|claude]`, `unpause LABEL [--provider codex|claude]`,
   `share [LABEL] [--all] [--provider codex|claude] --with USER|ORG/TEAM[,...]`,
   `accept INVITE`,
   `unshare [LABEL] [--all] [--provider codex|claude] [--user USER] [--with USER|ORG/TEAM[,...]]`,
-  `leave LABEL`, `remove LABEL`, `log LABEL [--json]`:
-  Require `LABEL` XOR `--all` on `share`/`unshare` (`exitCode: 2` otherwise), filter `--all`
-  to owned accounts, verify `gh api users/USER` resolves `type === "User"` on `share`, materialize
-  into `pddManagedCodexHome(env)` or `~/.claude/settings.json` on `accept`, and reconcile
-  `accounts-state.json` plus clean up `pddManagedCodexHome(env)` and any legacy `~/.codex/config.toml`
-  gateway block on `remove` and `leave` without touching `~/.codex/auth.json`.
+  `leave LABEL [--provider codex|claude]`, `remove LABEL [--provider codex|claude]`, `log LABEL [--provider codex|claude] [--json]`:
+  Require either `LABEL` or `--all` (never both or neither, `exitCode: 2` otherwise) on `share`/`unshare`, allow `--provider` on both
+  single-`LABEL` and `--all` operations, filter `--all` to owned accounts, skip duplicate share invites when
+  a target already has an active or pending share on that account, verify `gh api users/USER` resolves
+  a GitHub `"User"` account (rejecting organizations without `/<team>`) on `share`, materialize into `pddManagedCodexHome(env)` or `~/.claude/settings.json` on
+  `accept`, and reconcile `accounts-state.json` plus clean up `pddManagedCodexHome(env)` and any legacy
+  `~/.codex/config.toml` gateway block on `remove` and `leave` without touching `~/.codex/auth.json`.
 
 ## Dependencies
 
