@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/workflow-pr-body.prompt.md
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: f722fda82b8e7c4b8c532689a97b7acee916f64ebc2b53874e7a20643e80b2ec).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
@@ -382,6 +382,85 @@ export function readableNextLines(facts) {
 
 // The readable part as Markdown, plus the notes that the runner puts into Details. It never holds IDs, batches,
 // request IDs, step notes or approval records; those stay in Details.
+const BOUNDARY_PR_MAX_LINES = 25;
+function safeBoundaryText(value, max = 180) {
+  const cleaned = String(value ?? '')
+    .replace(/Acceptance\s+criteria/gi, 'Criteria')
+    .replace(/Agent\s+note/gi, 'note')
+    .replace(/not\s+checked\s+by\s+pdd/gi, 'unchecked')
+    .replace(/OWNER-HANDOFF/gi, 'handoff')
+    .replace(/attributed\s+operator/gi, 'operator')
+    .replace(/\boverlay\b/gi, 'policy')
+    .replace(/\bbatch(?:es)?\b/gi, 'check-set')
+    .replace(/\brequests?(?:ed|ing)?\b/gi, 'call')
+    .replace(/CODEX_THREAD_ID/gi, 'thread')
+    .replace(/only\s+when\s+the\s+person\s+asks/gi, 'on person choice')
+    .replace(/\bgreen\b/gi, 'passing')
+    .replace(/\bPASS\b/g, 'pass');
+  return inertText(cleaned, max);
+}
+
+function boundaryCardSection(facts) {
+  if (facts?.layout !== 'spec' || !facts.boundary || typeof facts.boundary !== 'object' || Array.isArray(facts.boundary)) return [];
+  const card = facts.boundary;
+  const policies = Array.isArray(card.policyItems) ? card.policyItems : [];
+  const unloaded = Array.isArray(card.unloadedOwners) ? card.unloadedOwners : [];
+  const rawRows = Array.isArray(card.provenanceRows) ? card.provenanceRows : [];
+  const rt = Array.isArray(card.verificationSplit?.runtime) ? card.verificationSplit.runtime : [];
+  const nat = Array.isArray(card.verificationSplit?.native) ? card.verificationSplit.native : [];
+  if (!policies.length && !unloaded.length && !rawRows.length && !rt.length && !nat.length) return [];
+
+  const header = ['## Boundary', ''];
+  if (policies.length) {
+    const shown = policies.slice(0, 3).map(item => safeBoundaryText(`${item?.id ? `${item.id}: ` : ''}${item?.text ?? ''}`, 90)).filter(Boolean);
+    const more = policies.length > 3 ? ` (+${policies.length - 3} more)` : '';
+    if (shown.length) header.push(`- **Owned policy (advisory):** ${shown.join('; ')}${more}`);
+  }
+  if (unloaded.length) {
+    const selected = Array.isArray(card.selectedSources) && card.selectedSources.length
+      ? card.selectedSources.map(p => codeSpan(p)).join(', ')
+      : 'none';
+    header.push(`- **Owner gap:** missing owner connection for ${unloaded.map(p => codeSpan(p)).join(', ')} (unloaded; scenario selects ${selected})`);
+  }
+
+  const rtText = rt.length ? rt.slice(0, 2).map(x => safeBoundaryText(x, 80)).join(', ') + (rt.length > 2 ? ` (+${rt.length - 2} more)` : '') : 'none';
+  const natText = nat.length ? nat.slice(0, 2).map(x => safeBoundaryText(x, 80)).join(', ') + (nat.length > 2 ? ` (+${nat.length - 2} more)` : '') : 'code / unit tests';
+  const proseBudget = safeBoundaryText(card.complexity?.proseSummary ?? 'prose 0 LOC', 80);
+  const stepBudget = safeBoundaryText(card.complexity?.stepSummary ?? 'scenario steps 0', 100);
+  const samplePart = card.sampleSummary ? ` · ${safeBoundaryText(card.sampleSummary, 110)}` : '';
+  const footer = [
+    `- **Verification split:** runtime: ${rtText} · native: ${natText}`,
+    `- **Budget & samples:** ${proseBudget} · ${stepBudget}${samplePart}`,
+  ];
+
+  const sortedRows = [...rawRows].sort((a, b) => (a?.priority ?? 3) - (b?.priority ?? 3));
+  const body = sortedRows.length
+    ? [
+        '- **Provenance:**',
+        ...sortedRows.map(row => {
+          const label = safeBoundaryText(row?.label ?? 'rule', 24);
+          const summaryText = row?.summary ? ` (${safeBoundaryText(row.summary, 52)})` : '';
+          const owner = safeBoundaryText(row?.owner ?? 'unmapped', 110);
+          const obs = (Array.isArray(row?.observations) ? row.observations : ['unverified']).map(o => safeBoundaryText(o, 90)).join(', ');
+          return `  - **${label}**${summaryText}: owner=${owner} · obs=${obs}`;
+        }),
+      ]
+    : ['- **Provenance:** standalone / native-tested slice (no Story scenario checks).'];
+
+  const maxCardLines = BOUNDARY_PR_MAX_LINES;
+  const fixed = header.length + footer.length;
+  let fitted;
+  if (fixed + body.length <= maxCardLines) {
+    fitted = [...header, ...body, ...footer];
+  } else {
+    const room = Math.max(1, maxCardLines - fixed);
+    fitted = room === 1
+      ? [...header, `- **Provenance:** ${sortedRows.length} checks summarized in Details.`, ...footer]
+      : [...header, ...body.slice(0, room - 1), `  - … +${body.length - (room - 1)} more checks`, ...footer];
+  }
+  return [...fitted.slice(0, BOUNDARY_PR_MAX_LINES), ''];
+}
+
 export function readablePrTop(facts, { fileLimit = MAX_FILES, checklistLimit = Infinity } = {}) {
   const notes = [];
   const stories = (facts.stories ?? []).slice(0, MAX_STORIES);
@@ -391,7 +470,7 @@ export function readablePrTop(facts, { fileLimit = MAX_FILES, checklistLimit = I
   const header = facts.layout === 'spec' ? ['Check', 'Result'] : ['Check', 'New code', facts.workflow === 'feature' ? 'Planted mistake' : 'Old code'];
   const lines = [`${prStatus(facts)}${stamp(facts.updatedAt)}`, '', ...(facts.notFixed ? [NOT_FIXED_LINE, ''] : []),
     ...(stories.length ? ['## User story', '', ...stories.flatMap((story, index) => [...(index ? [''] : []), inertText(story, 600)]), ''] : []),
-    ...summary(facts), ...issueChecklist(facts, checklistLimit), ...casesTable(facts), ...changes(facts, fileLimit),
+    ...summary(facts), ...boundaryCardSection(facts), ...issueChecklist(facts, checklistLimit), ...casesTable(facts), ...changes(facts, fileLimit),
     `## ${facts.layout === 'spec' ? 'Checks' : 'Proof'}`, '', ...table(header, rows), '',
     ...(facts.layout === 'spec' ? [approvalLine(facts), ''] : []), ...readableNextLines(facts)];
   return { text: lines.join('\n'), notes };

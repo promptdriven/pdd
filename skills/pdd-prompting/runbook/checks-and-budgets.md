@@ -46,7 +46,7 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
   For the `error` target, pdd prints `got no error (a normal result)` when the step returned a result and no error.
   Then the path is right, and the prompt did not refuse this input. If pdd still prints `got {"missing": true}` on
   `error`, an error came back without that field: compare the path with the prompt's declared errors.
-  A declared operation that the step did not use counts `0`. pdd does not check paths before it sends, so work out
+  A resource or call bound to that step's operation that the step did not invoke counts `0`; on a read-only operation whose synthesized contract does not bind a write port (such as `list_open` never binding `storage.save`), that write counter path is absent (`{"missing": true}`)—assert unchanged state on `world` instead. pdd does not check paths before it sends, so work out
   each path with these rules before the first check.
 
 **Check operations (`op`).** Exact checks satisfy criterion coverage; `exists` (without `html`) and `contains` are partial checks and must be paired with an exact check on the criterion.
@@ -88,7 +88,7 @@ Terms use `{"field": "<pointer>"}` (relative to the check's `target`/`path`), `{
 
 - A step costs 1 AI call when the prompt only answers, 2 to 3 when it uses saved data or calls another prompt, and up
   to 4 when it calls a prompt that uses saved data. A 3-step Harbor test used 9. A 9-step test (`app` calls `store`) used 34.
-- `pdd test` gives each test 12 calls for each step, at least 18 and at most 1000. Override it with `--max-calls N` from 1 through 1000, the interpreter maximum.
+- When `--max-calls` is omitted, `pdd test` computes a graph-aware ceiling from reachable `.prompt.md` dependencies and simulated ports (up to 12 calls per step, at least 18 and at most 1000). Override it with `--max-calls N` from 1 through 1000, the interpreter maximum.
 - For a failed check, the runtime can automatically run each of at most 3 failed steps up to 2 more times to diagnose stability: at most 6 additional AI calls, within the original `--max-calls` ceiling.
 - **Choose a ceiling of at least 3 times your worst-case estimate** when setting `--max-calls` for a check or a simulation. Include child calls, saved-data operations, redraws, all the moves you plan to try and, for a check, the automatic rerun allowance above. The budget is a ceiling, not a charge: you are charged only for calls that run. If the estimate does not fit the server maximum, report that limit; do not silently reduce the margin or change expected values.
 - A new `pdd simulate` requests a session budget of 400 calls. `pdd simulate STORY --max-calls 600` chooses a different ceiling when starting a new simulation. The CLI cannot raise an existing simulation’s ceiling; `--new` starts fresh saved data. The output shows the interpreter-confirmed total and remaining calls. Reusing a simulation without this option keeps its current budget.
@@ -121,13 +121,12 @@ animation) goes in a story with no PDD test (pdd only warns "has no test"), prov
 Keep the prompt short (500 prose lines or fewer; `pdd lint` warns above 500 lines and gives elevated decomposition advice above 1,000 lines). Link called prompts under `## Dependencies` instead of copying their schemas. Put a big table or list in a
 repo file and link it under `## Dependencies`. Test data goes in the test (`input`, `initial_world`), not in the prompt. Keep each Story scenario JSON focused on policy and authority boundaries (15 steps or fewer and 1,000 lines or fewer), and prove multi-step state-machine or wire-protocol sequences with native tests (section 17).
 
-**A pure function:** one operation, input → result, no saved data, no `calls`. Each step costs 1 AI call.
-`initial_world` and `simulation` are `{}`. One step for the 2048 `board` prompt:
+**Independent steps (preferred default):** Give each step a self-contained starting state (`seeds` + `from` / `$use` + `patch`, with explicit inputs or `<port>.<op>` simulation overrides for randomness, clocks, and IDs). Independent pure steps cost 1 AI call each and execute **concurrently on the server**, finishing a multi-step check in the wall-clock time of one step while isolating failures. Reserve multi-step chains for criteria that explicitly test state persistence or cross-step handoff (`1` clear step per distinct Story rule/boundary/error in `pdd test`; exhaustive permutation matrices belong in native code tests).
+One Short JSON step (`entry_path: "prompts/cart.prompt.md"`):
 ```json
-{"step_id": "merge-row-left", "entry_path": "prompts/board.prompt.md", "operation": "move",
- "input": {"board": [[2,2,2,2],[0,0,0,0],[0,0,0,0],[0,0,0,0]], "dir": "left"},
- "checks": [{"criterion_id": "AC1", "target": "result", "path": "/board/0", "op": "equals", "value": [4,4,0,0]},
-            {"criterion_id": "AC1", "target": "result", "path": "/gained", "op": "equals", "value": 8}]}
+{"id": "apply-ten-percent", "op": "price",
+ "input": {"items": [{"sku": "mug", "qty": 2, "cents": 500}], "coupon": "SAVE10"},
+ "checks": {"1": [["result", "/total_cents", "=", 900], ["result", "/discount_cents", "=", 100]]}}
 ```
 
 **A state sequence** (N moves in a row): one test step for each move. Steps run in order. Use one of these ways:
@@ -135,8 +134,7 @@ repo file and link it under `## Dependencies`. Test data goes in the test (`inpu
   `{"kv": {"game": {"board": […], "score": 0}}}`. Each step makes one move. `world` checks read the state after it.
   Each step costs 2 to 3 AI calls.
 - The state goes in and comes out (`step(state, dir)` returns the new state): give each step the result of the step
-  before it. `"input": {"state": {"$step_result": {"step_id": "move-1", "path": ""}}, "dir": "up"}`. The path `""` is
-  the whole result. Put the reference inside `input`, not as all of `input`. It cannot name an error step. 1 AI call for each step.
+  before it with Short JSON `{"$step": "move-1"}` (or `"move-1#/board"` for a field, expanding to `{"$step_result": {"step_id": "move-1", "path": ""}}`). Put the reference inside `input`, not as all of `input`. It cannot name an error step. 1 AI call for each step.
 - If the app really accepts a list of moves, use short lists of about 10 per step. Check the expected state after
   each part and pass it to the next part; keep the same complete replay coverage. Link its rule prompt under
   `## Dependencies`. Do not invent a replay operation only for tests, or expand a short action into an unbounded

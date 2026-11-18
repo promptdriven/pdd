@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Prompt: prompts/cli/workflow-runner.prompt.md
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c560637c8455f43edd3da4f781d0154d2c3dba07cf0e2299de7ee33b597b30b1).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -52,6 +52,7 @@ import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
 import { PROMPT_TESTS_LABEL, PROMPT_TESTS_WORDS, allowsRuntimePath, causeText, format, isStoryPath, loadRuntimeWorkspace, parsePromptFrontmatter, promptRefusal, render, runtimeOutputSlice, runtimePreflightSlice } from './runtime-seam.mjs';
+import { isShortScenarioDoc } from './scenario-compile.mjs';
 import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
@@ -59,12 +60,13 @@ import { collectTestInventory } from './workflow-inventory.mjs';
 import {readSmallChangeChecklist} from './workflow-small-change.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
-const { captureSource, findTests, gitFiles, interfaceBlocks, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
+const { captureSource, findTests, gitFiles, interfaceBlocks, matchTests, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
 runtimeOutputSlice();
 const { proseSha256 } = format;
 import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
+import { buildHumanBoundaryCard } from './human-boundary-card.mjs';
 import { formatStoryLint, isLintableStoryPath, lintStories } from './story-lint.mjs';
 
 import { applyCostMeasurement, captureClosedCi, costReport } from './cost-ledger.mjs';
@@ -1171,11 +1173,24 @@ export function matchesSource(record, root, fingerprint, capture = captureSource
   return false;
 }
 // Same Story: every selected test at the historical commit is a current test of the run with the same story_path.
+function resolvedStoryPath(root, path, getFiles) {
+  let doc;
+  try { doc = JSON.parse(readFileSync(join(root, path), 'utf8')); } catch { return undefined; }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return undefined;
+  if (typeof doc.story_path === 'string' && doc.story_path) return doc.story_path;
+  if (!isShortScenarioDoc(doc)) return undefined;
+  let files;
+  try { files = getFiles(); } catch { return undefined; }
+  const matched = matchTests(files.filter(isStoryPath), files).tests.find(t => !t.problem && (t.path === path || (t.files ?? []).includes(path)));
+  return typeof matched?.storyPath === 'string' && matched.storyPath ? matched.storyPath : undefined;
+}
 function sameStoryTests(run,frozen,tests) {
-  const current=new Set(gitFiles(run.root));
+  const currentFiles = gitFiles(run.root), current = new Set(currentFiles);
+  let frozenFiles;
+  const getFrozenFiles = () => (frozenFiles ??= gitFiles(frozen));
   for (const path of tests) {
-    let then,now;
-    try { then=JSON.parse(readFileSync(join(frozen,path),'utf8')).story_path; now=current.has(path)?JSON.parse(readFileSync(join(run.root,path),'utf8')).story_path:undefined; } catch { then=undefined; }
+    const then = resolvedStoryPath(frozen, path, getFrozenFiles);
+    const now = current.has(path) ? resolvedStoryPath(run.root, path, () => currentFiles) : undefined;
     if (typeof then !== 'string' || then !== now) throw Error(`${path} is not a current test of the same Story at that commit.`);
   }
 }
@@ -2016,7 +2031,7 @@ async function resolveLocalSuiteCi(run, p, { ci, headSha, files = null, branch =
 // CI and the checker verdict for the head of a published PR, and its base on GitHub. A read problem stays unknown.
 async function publishedChecks(run, pr, headSha, p) {
   const status = await prStatusOf(run, pr, p, run.root, true);
-  return { ci: status.ci, base: status.base ?? null, checker: await checkerOf(pr, headSha, p, run.root, status.view) };
+  return { ci: status.ci, state: status.state ?? null, base: status.base ?? null, checker: await checkerOf(pr, headSha, p, run.root, status.view) };
 }
 function reviewVerdict(run, area) {
   if (!area.steps.includes('review')) return null;
@@ -2145,8 +2160,16 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
   let resolvedHead = commitSha(head) ? head : '';
   if (!resolvedHead) { try { resolvedHead = await git(p, run.root, 'rev-parse', '--verify', `${head}^{commit}`); } catch {} }
   const resolvedCi = published ? await resolveLocalSuiteCi(run, p, { ci: published.ci ?? null, headSha: resolvedHead, files: diff ? paths : null, branch: run.branch, baseBranch: base ?? run.baseBranch }) : { ci: null, localSuitePassed: false };
+  const priorBoundary = layout === 'spec' && pr1?.readable?.facts?.boundary ? pr1.readable.facts.boundary : null;
+  const preservePriorBoundary = Boolean(priorBoundary) && (pr1Merged || published?.state === 'merged' || run.branch !== pr1.branch || (!storyPaths.length && !prompts.length));
+  const boundary = layout !== 'spec' ? null
+    : preservePriorBoundary ? structuredClone(priorBoundary)
+    : (storyPaths.length > 0 || prompts.length > 0)
+      ? buildHumanBoundaryCard({ root: run.root, promptPaths: prompts, storyPaths, changedPaths: files, since: Number.isFinite(run.startedAt) ? run.startedAt : 0, env: p.env })
+      : null;
   return { layout, single: label === 'the PR', workflow: run.workflow, number: run.number, baseBranch: run.baseBranch, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
     stories, storyPaths, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'no Story applies to this PR',
+    ...(boundary ? { boundary } : {}),
     fields, thisPr: holds.length ? `${others.length ? '' : 'no code change. '}It holds ${listed(holds)}.` : 'no code change.', diff,
     area: prArea({ area: fields.area, files, workflow: run.workflow }), title: fields.title,
     records: {
@@ -2272,16 +2295,26 @@ function prBody(run, area, env, drafts = [], tests = true, evidence, readable = 
     if (characters(readablePrBody(readable.text, (readable.notes ?? []).join('\n'))) + 2 > BODY_BUDGET - minDetails)
       readable = readableTopText(readable.facts, run, roomForTop);
   }
-  const notes = readable?.notes ?? [], budget = BODY_BUDGET - (readable ? characters(readablePrBody(readable.text, notes.join('\n'))) + 2 : 0);
-  const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, budget - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], [], least))), env);
-  if(replayResult){
-    const room=Math.max(0,budget-200-(verify===null?0:1000)-characters(body(null,lifted,approvals,least)));
-    prefix[failing.length]=formatReplayEvidence(replayResult,{maxCharacters:characters(replay[0])+room,rules});
+  const fitWithReadable = activeReadable => {
+    const notes = activeReadable?.notes ?? [], budget = BODY_BUDGET - (activeReadable ? characters(readablePrBody(activeReadable.text, notes.join('\n'))) + 2 : 0);
+    const { lifted, approvals } = publicationFit(preparedLines, approvalLines, Math.max(0, budget - 200 - (verify === null ? 0 : 1000) - characters(body(null, [], [], least))), env);
+    if(replayResult){
+      const room=Math.max(0,budget-200-(verify===null?0:1000)-characters(body(null,lifted,approvals,least)));
+      prefix[failing.length]=formatReplayEvidence(replayResult,{maxCharacters:characters(replay[0])+room,rules});
+    }
+    // A stray </details> in verify.md never closes the Details section early (#3042).
+    const verifyText = verify === null ? null : balancedDetails(verifyFit(hideLocalPaths(verify, run), budget - 200 - characters(body('', lifted, approvals, least)), env, false, true));
+    const inner = withSummaries(steps, full, section => body(verifyText, lifted, approvals, section), budget - 200);
+    return activeReadable ? readablePrBody(activeReadable.text, [inner.trimEnd(), ...(notes.length ? ['', ...notes] : [])].join('\n')) : inner;
+  };
+  try {
+    return fitWithReadable(readable);
+  } catch (error) {
+    if (error?.code === 'workflow_pr_body_too_large' && readable?.facts?.boundary) {
+      return fitWithReadable(readableTopText({ ...readable.facts, boundary: null }, run));
+    }
+    throw error;
   }
-  // A stray </details> in verify.md never closes the Details section early (#3042).
-  const verifyText = verify === null ? null : balancedDetails(verifyFit(hideLocalPaths(verify, run), budget - 200 - characters(body('', lifted, approvals, least)), env, false, true));
-  const inner = withSummaries(steps, full, section => body(verifyText, lifted, approvals, section), budget - 200);
-  return readable ? readablePrBody(readable.text, [inner.trimEnd(), ...(notes.length ? ['', ...notes] : [])].join('\n')) : inner;
 }
 
 // GitHub refuses a PR title over 256 characters; the GitHub intent checks its UTF-16 length. The issue title stays whole
@@ -3705,11 +3738,8 @@ async function draftDescription(run, pr1, drafts, p, recoveryView = null) {
     let headSha = '';
     try { headSha = await git(p, run.root, 'rev-parse', '--verify', `${head}^{commit}`); } catch { /* The checker verdict stays unknown. */ }
     const facts = await readableFacts(run, area, p, evidence, { drafts, published: await publishedChecks(run, pr1, headSha, p), base: pr1.base, head });
-    const readable = readableTopText(facts, run);
-    // The facts are saved with PR 1's head, so that status can refresh its top later; a pending body is not saved.
-    const remember = () => { if (!run.publicationPending && commitSha(headSha)) commitRun({ ...run }, p, latest => { const pr = latest.pr.find(item => item.url === pr1.url && item.stage === pr1.stage); if (pr) pr.readable = savedReadable(facts, headSha); }); };
-    const opening = `${readable.text.trimEnd()}\n\n${DETAILS_OPEN}\n\n${TOP_NOTE}\n\n`;
-    const closing = `${readable.notes.length ? `\n\n${readable.notes.join('\n')}` : ''}\n\n</details>${inside?.after ? `\n\n${inside.after}` : ''}`;
+    let activeFacts = facts;
+    const remember = () => { if (!run.publicationPending && commitSha(headSha)) commitRun({ ...run }, p, latest => { const pr = latest.pr.find(item => item.url === pr1.url && item.stage === pr1.stage); if (pr) pr.readable = savedReadable(activeFacts, headSha); }); };
     const owned = /^(?:Check evidence: publication-pending|Agent note — not checked by pdd: (?:Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Review:|Verdict:|Before[ :])|Not fixed yet:|Not checked:|Defect:|Not caught because:|Proof \(defect fixed\):|Proof \(gap closed\):|Old-code proof:|Tests vs base:|Review:|Evidence omitted:)/;
     const reference = new RegExp(`^(?:Part of|Closes|Refs) #${run.number}$`);
     const rows = (inside ? inside.details : String(draftBody).replace(marker, '')).split('\n');
@@ -3749,15 +3779,31 @@ async function draftDescription(run, pr1, drafts, p, recoveryView = null) {
     const steps = from < 0 ? [] : prSteps(run, area), texts = Object.fromEntries(steps.map(step => [step, keepLines(cleanSummary(run, step))]));
     const reserved = from < 0 ? 0 : characters(fullSummaries(steps, texts, 0).join('\n')) + 2;
     const safeRemainder = hideLocalPaths(redactTry((from < 0 ? rest : [...rest.slice(0, from), SLOT, ...rest.slice(end + 1)]).join('\n')), run);
-    const footer = `${closing}\n\n${marker}\n`;
     const approvalLines = (evidence.approvalLines ?? []).map(line => hideLocalPaths(redactTry(line), run));
-    const room = BODY_BUDGET - characters(opening) - characters(footer) - characters(evidence.issueReference) - characters(ordinaryTop.join('\n')) - 8;
-    // Protected summaries are mandatory; only the ordinary remainder's reservation is capped.
-    const { lifted, approvals } = publicationFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), approvalLines, Math.max(0, room - reserved - Math.min(1000, characters(safeRemainder))), p.env);
-    const leading = opening + [...lifted, ...(lifted.length ? [''] : []), ...ordinaryTop, ...(ordinaryTop.length ? [''] : []), evidence.issueReference, '', ...approvals, ...(approvals.length ? [''] : []), ''].join('\n');
-    const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - reserved, p.env, true);
-    const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
-    const nextBody = from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
+    const buildRefreshedBody = candidateFacts => {
+      const activeReadable = readableTopText(candidateFacts, run);
+      const opening = `${activeReadable.text.trimEnd()}\n\n${DETAILS_OPEN}\n\n${TOP_NOTE}\n\n`;
+      const closing = `${activeReadable.notes.length ? `\n\n${activeReadable.notes.join('\n')}` : ''}\n\n</details>${inside?.after ? `\n\n${inside.after}` : ''}`;
+      const footer = `${closing}\n\n${marker}\n`;
+      const room = BODY_BUDGET - characters(opening) - characters(footer) - characters(evidence.issueReference) - characters(ordinaryTop.join('\n')) - 8;
+      // Protected summaries are mandatory; only the ordinary remainder's reservation is capped.
+      const { lifted, approvals } = publicationFit(evidence.lines.map(line => hideLocalPaths(redactTry(line), run)), approvalLines, Math.max(0, room - reserved - Math.min(1000, characters(safeRemainder))), p.env);
+      const leading = opening + [...lifted, ...(lifted.length ? [''] : []), ...ordinaryTop, ...(ordinaryTop.length ? [''] : []), evidence.issueReference, '', ...approvals, ...(approvals.length ? [''] : []), ''].join('\n');
+      const fitted = verifyFit(safeRemainder, BODY_BUDGET - characters(leading) - characters(footer) - reserved, p.env, true);
+      const placed = section => { const text = section.join('\n'); return fitted.includes(SLOT) ? fitted.replace(SLOT, () => text) : `${fitted}\n\n${text}`; };
+      return from < 0 ? `${leading}${fitted}${footer}` : withSummaries(steps, texts, section => `${leading}${placed(section)}${footer}`, BODY_BUDGET);
+    };
+    let nextBody;
+    try {
+      nextBody = buildRefreshedBody(facts);
+    } catch (error) {
+      if (error?.code === 'workflow_pr_body_too_large' && facts.boundary) {
+        activeFacts = { ...facts, boundary: null };
+        nextBody = buildRefreshedBody(activeFacts);
+      } else {
+        throw error;
+      }
+    }
     // Only the time of the status line changed: nothing to write.
     if (nextBody === body || sameReadableTop(nextBody, body)) {
       remember();
@@ -3765,7 +3811,7 @@ async function draftDescription(run, pr1, drafts, p, recoveryView = null) {
     }
     if (recoveryView && commitSha(view.headRefOid)) {
       recovery = { url: pr1.url, body, nextBody, head: view.headRefOid,
-        ...(!run.publicationPending && commitSha(headSha) ? { readable: savedReadable(facts, headSha) } : {}) };
+        ...(!run.publicationPending && commitSha(headSha) ? { readable: savedReadable(activeFacts, headSha) } : {}) };
       if (recoveryView.pr1Open !== false) await requireExistingDraft(run, pr1, p);
       const current = JSON.parse(String((await p.execFile('gh', ['pr', 'view', pr1.url, '--json', 'body,headRefOid'], {cwd:run.root})).stdout ?? ''));
       if (current.body !== body || current.headRefOid !== view.headRefOid) throw Error('PR 1 description or head changed; inspect it before recovery.');

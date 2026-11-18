@@ -1,7 +1,8 @@
-// Prompt: prompts/cli/svg-layout.prompt.md
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: f2368017279a97f20b6c19504b9b335157d2d90597dff895b9285c035eebc4f0).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';
+import { compileScenario, isShortScenarioDoc, needsScenarioCompile, SHORT_SCENARIO_SCHEMA, V1_SCENARIO_SCHEMA } from './scenario-compile.mjs';
 import { runtimeWorkspaceSlice, workspace } from './runtime-seam.mjs';
 
 const { requireRuntimePath } = runtimeWorkspaceSlice();
@@ -589,18 +590,59 @@ function readSchemaPointer(stateSchema, pointer) {
   if (!stateSchema || typeof stateSchema !== 'object' || typeof pointer !== 'string' || !pointer.startsWith('/')) {
     return { exists: false, required: false, schema: null };
   }
-  let cur = stateSchema;
-  let required = true;
-  for (const seg of pointer.slice(1).split('/')) {
-    if (!cur || typeof cur !== 'object' || cur.type !== 'object' || !cur.properties || typeof cur.properties !== 'object') {
+  const segments = pointer.slice(1).split('/');
+  const visit = (cur, idx, required) => {
+    if (!cur || typeof cur !== 'object' || Array.isArray(cur)) {
       return { exists: false, required: false, schema: null };
     }
-    const key = seg.replaceAll('~1', '/').replaceAll('~0', '~');
-    if (!Object.hasOwn(cur.properties, key)) return { exists: false, required: false, schema: null };
-    if (!Array.isArray(cur.required) || !cur.required.includes(key)) required = false;
-    cur = cur.properties[key];
-  }
-  return { exists: Boolean(cur && typeof cur === 'object'), required, schema: cur && typeof cur === 'object' ? cur : null };
+    if (typeof cur.$contract === 'string' || typeof cur.$ref === 'string') {
+      return { exists: true, required: false, schema: cur };
+    }
+    if (idx >= segments.length) {
+      return { exists: true, required, schema: cur };
+    }
+    const unions = [
+      ...(Array.isArray(cur.oneOf) ? cur.oneOf : []),
+      ...(Array.isArray(cur.anyOf) ? cur.anyOf : []),
+      ...(Array.isArray(cur.allOf) ? cur.allOf : []),
+    ];
+    for (const branch of unions) {
+      const branchHit = visit(branch, idx, false);
+      if (branchHit.exists) return branchHit;
+    }
+    const key = segments[idx].replaceAll('~1', '/').replaceAll('~0', '~');
+    const types = Array.isArray(cur.type) ? cur.type : typeof cur.type === 'string' ? [cur.type] : [];
+    if (types.includes('array') || cur.items !== undefined || Array.isArray(cur.prefixItems)) {
+      if (/^(?:0|[1-9][0-9]*|-)$/.test(key)) {
+        if (Array.isArray(cur.prefixItems) && key !== '-' && Number(key) < cur.prefixItems.length) {
+          return visit(cur.prefixItems[Number(key)], idx + 1, false);
+        }
+        if (cur.items && typeof cur.items === 'object' && !Array.isArray(cur.items)) {
+          return visit(cur.items, idx + 1, false);
+        }
+        if (cur.items !== false) {
+          return { exists: true, required: false, schema: null };
+        }
+      }
+    }
+    if (cur.properties && typeof cur.properties === 'object' && Object.hasOwn(cur.properties, key)) {
+      const nextReq = required && Array.isArray(cur.required) && cur.required.includes(key);
+      return visit(cur.properties[key], idx + 1, nextReq);
+    }
+    if (types.includes('object') || cur.additionalProperties !== undefined) {
+      if (cur.additionalProperties === true) {
+        return { exists: true, required: false, schema: null };
+      }
+      if (cur.additionalProperties && typeof cur.additionalProperties === 'object' && !Array.isArray(cur.additionalProperties)) {
+        return visit(cur.additionalProperties, idx + 1, false);
+      }
+      if (!cur.properties && cur.additionalProperties !== false && types.includes('object')) {
+        return { exists: true, required: false, schema: null };
+      }
+    }
+    return { exists: false, required: false, schema: null };
+  };
+  return visit(stateSchema, 0, true);
 }
 
 function hasPointer(obj, pointer) {
@@ -943,14 +985,79 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         }
       }
     }
+    if (mapDoc.state_schema && typeof mapDoc.state_schema === 'object' && !Array.isArray(mapDoc.state_schema)) {
+      const checkStateRefs = (node, label) => {
+        if (!node || typeof node !== 'object') return;
+        if (!Array.isArray(node) && Object.keys(node).length === 1 && typeof node.$ref === 'string') {
+          if (node.$ref.startsWith('/state/')) {
+            const statePtr = node.$ref.slice('/state'.length);
+            const hit = readSchemaPointer(mapDoc.state_schema, statePtr);
+            if (!hit.exists) {
+              const text = `Warning: ${mapPath} (${label}): $ref ${JSON.stringify(node.$ref)} does not resolve in state_schema; declare ${statePtr} in state_schema and initial_state or fix the $ref pointer.`;
+              warnings.push({ key: `${mapPath}\0stateref\0${label}\0${node.$ref}`, text });
+            }
+          }
+          return;
+        }
+        for (const child of Object.values(node)) checkStateRefs(child, label);
+      };
+      const checkStateTargets = (stateNode, label) => {
+        if (!stateNode || typeof stateNode !== 'object' || Array.isArray(stateNode)) return;
+        if (Object.keys(stateNode).length === 1 && typeof stateNode.$ref === 'string') return;
+        for (const key of Object.keys(stateNode)) {
+          const ptr = key.startsWith('/') ? key : `/${key.replaceAll('~', '~0').replaceAll('/', '~1')}`;
+          const hit = readSchemaPointer(mapDoc.state_schema, ptr);
+          if (!hit.exists) {
+            const text = `Warning: ${mapPath} (${label}): state target ${JSON.stringify(key)} does not resolve in state_schema; declare ${ptr} in state_schema and initial_state or update state.`;
+            warnings.push({ key: `${mapPath}\0statetarget\0${label}\0${key}`, text });
+          }
+        }
+      };
+      for (const [sIdx, screen] of screens.entries()) {
+        const sLabel = `screen "${typeof screen.id === 'string' && screen.id ? screen.id : `screens[${sIdx}]`}"`;
+        checkStateRefs(screen.input, sLabel);
+      }
+      const handlers = Array.isArray(mapDoc.handlers) ? mapDoc.handlers : [];
+      for (const [hIdx, handler] of handlers.entries()) {
+        if (!handler || typeof handler !== 'object' || Array.isArray(handler)) continue;
+        const hLabel = `handler "${typeof handler.id === 'string' && handler.id ? handler.id : `handlers[${hIdx}]`}"`;
+        checkStateRefs(handler.input, hLabel);
+        checkStateRefs(handler.state, hLabel);
+        checkStateTargets(handler.state, hLabel);
+        for (const [aIdx, afterStep] of (Array.isArray(handler.after) ? handler.after : []).entries()) {
+          if (!afterStep || typeof afterStep !== 'object' || Array.isArray(afterStep)) continue;
+          const aLabel = `${hLabel} after[${aIdx}]`;
+          checkStateRefs(afterStep.input, aLabel);
+          if (typeof afterStep.bind === 'string' && afterStep.bind.startsWith('/')) {
+            const hit = readSchemaPointer(mapDoc.state_schema, afterStep.bind);
+            if (!hit.exists) {
+              const text = `Warning: ${mapPath} (${aLabel}): bind ${JSON.stringify(afterStep.bind)} does not resolve in state_schema; declare ${afterStep.bind} in state_schema and initial_state or update bind.`;
+              warnings.push({ key: `${mapPath}\0afterbind\0${aLabel}\0${afterStep.bind}`, text });
+            }
+          }
+        }
+      }
+      for (const [tIdx, timer] of (Array.isArray(mapDoc.timers) ? mapDoc.timers : []).entries()) {
+        if (!timer || typeof timer !== 'object' || Array.isArray(timer)) continue;
+        const tLabel = `timer "${typeof timer.id === 'string' && timer.id ? timer.id : `timers[${tIdx}]`}"`;
+        checkStateRefs(timer.input, tLabel);
+        checkStateRefs(timer.state, tLabel);
+        checkStateTargets(timer.state, tLabel);
+      }
+    }
   }
-  const storyStems = new Set(
-    files
-      .filter(p => p.endsWith('.md') && p.split('/').slice(0, -1).includes('user_stories'))
-      .map(p => p.split('/').at(-1))
-      .filter(base => !['plan.md', 'readme.md'].includes(base.toLowerCase()))
-      .map(base => base.slice(0, -3)),
+  const storyFiles = files.filter(
+    p =>
+      p.endsWith('.md') &&
+      p.split('/').slice(0, -1).includes('user_stories') &&
+      !['plan.md', 'readme.md'].includes(p.split('/').at(-1).toLowerCase()),
   );
+  const storyPathByStem = new Map();
+  for (const sp of storyFiles) {
+    const stem = sp.split('/').at(-1).slice(0, -3);
+    if (!storyPathByStem.has(stem)) storyPathByStem.set(stem, sp);
+  }
+  const storyStems = new Set(storyPathByStem.keys());
   const checkableScenarioEntries = new Set();
   const PORT_OP_RE = /^[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*$/;
   for (const testFile of files.filter(path => /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && workspace.allows(policy, path))) {
@@ -958,7 +1065,10 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     const baseStem = testFile.split('/').at(-1).slice(0, -5);
     const primaryStem = baseStem.split('.')[0];
     const isCasesJson = baseStem === 'cases' || baseStem.endsWith('-cases');
-    const pairedWithStory = !isFixtureJson && !isCasesJson && (storyStems.has(baseStem) || storyStems.has(primaryStem));
+    const pairedStoryPath = !isFixtureJson && !isCasesJson
+      ? (storyPathByStem.get(baseStem) ?? storyPathByStem.get(primaryStem) ?? null)
+      : null;
+    const pairedWithStory = pairedStoryPath !== null;
     let doc;
     try { doc = JSON.parse(safeRead(root, testFile)); }
     catch {
@@ -969,12 +1079,32 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       continue;
     }
     const isNativeCaseDoc = isCasesJson || Array.isArray(doc?.cases) || /^pdd\.native-cases\./.test(String(doc?.schema_version ?? ''));
+    let shortCompileHandled = false;
+    if (
+      !isFixtureJson &&
+      !isNativeCaseDoc &&
+      doc &&
+      typeof doc === 'object' &&
+      !Array.isArray(doc) &&
+      needsScenarioCompile(doc)
+    ) {
+      shortCompileHandled = isShortScenarioDoc(doc);
+      const targetStoryPath = typeof doc.story_path === 'string' && doc.story_path ? doc.story_path : pairedStoryPath;
+      let storySource = null;
+      if (typeof targetStoryPath === 'string' && workspace.allows(policy, targetStoryPath)) {
+        try { storySource = safeRead(root, targetStoryPath); } catch { storySource = null; }
+      }
+      const compiled = compileScenario(doc, { path: testFile, storyPath: pairedStoryPath, storySource });
+      if (!compiled.refusal) {
+        doc = compiled.doc;
+      }
+    }
     const looksLikeScenario = !isFixtureJson && !isNativeCaseDoc && doc && typeof doc === 'object' && !Array.isArray(doc) && (
       pairedWithStory
       || typeof doc.story_path === 'string'
       || (Array.isArray(doc.steps) && doc.steps.some(s => s && typeof s === 'object' && (typeof s.entry_path === 'string' || typeof s.operation === 'string') && Array.isArray(s.checks)))
     );
-    if (looksLikeScenario && doc.schema_version !== 'prompt-runtime.program-scenario.v1') {
+    if (looksLikeScenario && !shortCompileHandled && doc.schema_version !== V1_SCENARIO_SCHEMA) {
       const candidateSteps = Array.isArray(doc.steps) ? doc.steps : [];
       const matchesFilter = !promptFilter || candidateSteps.some(s => typeof s?.entry_path === 'string' && promptFilter.has(s.entry_path));
       if (matchesFilter) {
@@ -982,7 +1112,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         warnings.push({ key: `${testFile}\0testschema`, text });
       }
     }
-    if (isFixtureJson || isNativeCaseDoc || !doc || typeof doc !== 'object' || doc.schema_version !== 'prompt-runtime.program-scenario.v1' || !Array.isArray(doc.steps)) continue;
+    if (isFixtureJson || isNativeCaseDoc || !doc || typeof doc !== 'object' || doc.schema_version !== V1_SCENARIO_SCHEMA || !Array.isArray(doc.steps)) continue;
     for (const mapCandidate of Array.isArray(doc.app_maps) ? doc.app_maps : []) {
       const mapDoc = typeof mapCandidate === 'string' ? parsedAppMaps.get(mapCandidate) : null;
       if (!mapDoc) continue;

@@ -8,4 +8,4 @@ The JSON report and `.pdd/code-test/latest.json` have `target: "code"`, `commit`
 
 ## Dependencies
 
-[Runtime seam](runtime-seam.prompt.md#public-contract) supplies Story selection, source boundaries, scenario shape, entry parsing, schema checks, exact integer scenario parsing and serialization, and workspace access rules from `@promptdriven/runtime-client`. These are required context for this checker.
+[Runtime seam](runtime-seam.prompt.md#public-contract) supplies Story selection, source boundaries, scenario shape, entry parsing, schema checks, exact integer scenario parsing and serialization, and workspace access rules from `@promptdriven/runtime-client`, and [Short scenario compiler](scenario-compile.prompt.md) compiles Short JSON and omitted-`criteria` scenarios to `program-scenario.v1` before execution. These are required context for this checker.

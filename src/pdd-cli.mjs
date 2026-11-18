@@ -1,5 +1,6 @@
-// Prompt: prompts/cli/pdd-cli.prompt.md
-import { existsSync, readFileSync } from 'node:fs';
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d73eb585116a4bff107ba5bcbf6d7b1f55d19f6ffffd1330d02bc0acb32ea269).
+import { execFileSync } from 'node:child_process';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +33,7 @@ const defaultReadPackageVersion = ({ packageRoot }) => {
   catch { return { ok: false, version: '' }; }
 };
 function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
-  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen'].some(flag => options[flag])) return null;
+  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--bind-criteria'].some(flag => options[flag])) return null;
   try {
     const found = runtime.findTests({ root: cwd });
     const { selected, unknown } = runtime.selectTests(found, words, options);
@@ -51,6 +52,60 @@ function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
     }
   } catch { /* delegate workspace/selection errors to runtime[action] */ }
   return null;
+}
+const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
+function hasProjectLintConfig(cwd) {
+  let root;
+  try {
+    const gitTop = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+    }).trim();
+    if (!gitTop) return null;
+    root = realpathSync(gitTop);
+  } catch { return null; }
+  const cfgPath = join(root, 'pdd.json');
+  let fd;
+  try {
+    const st = lstatSync(cfgPath);
+    if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_CONFIG_BYTES) return null;
+    fd = openSync(cfgPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    const fst = fstatSync(fd);
+    if (!fst.isFile() || fst.size > MAX_CONFIG_BYTES) return null;
+    const buf = Buffer.alloc(fst.size);
+    let offset = 0;
+    while (offset < buf.length) {
+      const n = readSync(fd, buf, offset, buf.length - offset, offset);
+      if (!n) break;
+      offset += n;
+    }
+    const parsed = JSON.parse(buf.subarray(0, offset).toString('utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'lint') ? root : null;
+  } catch (err) {
+    return err instanceof SyntaxError ? root : null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
+}
+async function collectProjectLintErrors(runtime, root, words, options) {
+  try {
+    const { lintRepoProject } = await import('./repo-hygiene-lint.mjs');
+    if (!words.length) return lintRepoProject({ root }).errors;
+    const found = runtime.findTests({ root });
+    const { selected, unknown } = runtime.selectTests(found, words, options);
+    if (unknown?.length || !selected?.length) return [];
+    const { rows } = runtime.preflight({ root, found, selected, allowMissingInterfaces: true });
+    const promptSet = new Set();
+    for (const row of rows) {
+      for (const step of row.steps ?? []) if (typeof step?.entry_path === 'string') promptSet.add(step.entry_path);
+      for (const p of row.prompts ?? []) if (typeof p === 'string') promptSet.add(p);
+    }
+    return lintRepoProject({ root, promptPaths: [...promptSet], tests: selected }).errors;
+  } catch { return []; }
 }
 const line = (stream, text) => stream.write(`${text}\n`);
 // The real reason of an unexpected error, after the fixed safe line.
@@ -126,7 +181,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
   setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {} } = {}) {
+  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -499,6 +554,25 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':
     case 'runtime-try':
+      if (plan.local === 'runtime-check' && plan.options['--codex'] === true) {
+        if (plan.options['--lint'] !== true) { line(stderr, `Use pdd ${NAMES.lint} --codex [STORY...] [--json] [--timeout MIN].`); return 2; }
+        if (Object.keys(plan.options).some(key => !['--lint', '--codex', '--json', '--timeout'].includes(key))) {
+          line(stderr, `pdd ${NAMES.lint} --codex accepts only Story or prompt paths, --json, and --timeout MIN.`); return 2;
+        }
+        try {
+          const module = codexLint ?? await import('./codex-lint.mjs');
+          return await module.runCodexLint({
+            cwd,
+            words: [...plan.operands],
+            ...(plan.options['--timeout'] !== undefined ? { timeoutMinutes: Number(plan.options['--timeout']) } : {}),
+            json: plan.options['--json'] === true,
+            env,
+          }, { stdout, stderr, ...codexLintPorts });
+        } catch (error) {
+          line(stderr, `Codex lint failed before completing.${reason(error)}`);
+          return 1;
+        }
+      }
       try {
         if (plan.local === 'runtime-check' && plan.options['--target'] === 'code') {
           if (Object.keys(plan.options).some(key => !['--target', '--json'].includes(key))) { line(stderr, 'pdd test --target code accepts only --json and Story selections.'); return 2; }
@@ -513,7 +587,37 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           }
         }
         const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
-        return await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
+        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--bind-criteria'].some(flag => plan.options[flag]);
+        const lintRoot = isLintCheckMode ? hasProjectLintConfig(cwd) : null;
+        if (lintRoot && plan.options['--json'] === true) {
+          let captured = '';
+          const bufferedStdout = { write: chunk => { captured += String(chunk); return true; } };
+          const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout: bufferedStdout, stderr, env });
+          if (runtimeCode === 0 || runtimeCode === 1) {
+            const projectErrors = await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
+            if (projectErrors.length > 0) {
+              try {
+                const parsed = JSON.parse(captured.trim());
+                parsed.problems = [...(Array.isArray(parsed.problems) ? parsed.problems : []), ...projectErrors];
+                parsed.ok = false;
+                parsed.exit_code = 1;
+                stdout.write(`${JSON.stringify(parsed)}\n`);
+                return 1;
+              } catch { /* fall through to write raw output */ }
+            }
+          }
+          if (captured) stdout.write(captured);
+          return runtimeCode;
+        }
+        const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
+        if (lintRoot && (runtimeCode === 0 || runtimeCode === 1)) {
+          const projectErrors = await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
+          if (projectErrors.length > 0) {
+            for (const errLine of projectErrors) line(stderr, errLine);
+            return 1;
+          }
+        }
+        return runtimeCode;
       } catch (error) {
         line(stderr, `pdd stopped with an internal error. If it sent checks, read them with pdd test --read. Do not send them again.${reason(error)}`);
         return 3;
