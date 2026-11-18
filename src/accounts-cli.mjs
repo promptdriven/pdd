@@ -1,9 +1,9 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 9d42169ca6bc553f9a3985abfcfe7244aa52e35c69aefdca89810e262d756bcc).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: f5675437125ad732d052dfe8e7f168a947f1c057bb39ac184bba670c69fea962).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { runAgentProcess } from './agent-adapters.mjs';
 import {
@@ -29,6 +29,7 @@ import {
   readCloudAccountsState,
   readCodexUsageWindows,
   reportCloudAccountUsage,
+  restoreLocalClaudeGatewayConfig,
   restoreLocalCodexGatewayConfig,
   saveActiveLeaseMetadata,
   stopCodexAppServerDaemon,
@@ -88,6 +89,8 @@ export function renderAutoSwitchBlock(shell = 'sh') {
       "        case agents exec e review mcp mcp-server plugin app-server remote-control app completion update doctor sandbox debug apply a resume queue archive delete migrate-rollouts migrate-nfs-db unarchive fork cloud exec-server features help",
       "          set _pdd_sub \"$_pdd_arg\"",
       "          break",
+      "        case '*'",
+      "          break",
       "      end",
       "    else if test -z \"$_pdd_next\"",
       "      switch \"$_pdd_arg\"",
@@ -103,10 +106,6 @@ export function renderAutoSwitchBlock(shell = 'sh') {
       "      echo \"pdd accounts: refusing to run 'codex $_pdd_sub' inside PDD-managed CODEX_HOME ($_pdd_mhome) so the Cloud token is not revoked. Use 'pdd accounts pause', 'pdd accounts remove', or 'pdd accounts use' instead (or set -e CODEX_HOME to manage ~/.codex).\" >&2",
       "      return 1",
       "    end",
-      "    command codex $argv",
-      "    return $status",
-      "  end",
-      "  if test \"$_pdd_sub\" = \"login\"",
       "    command codex $argv",
       "    return $status",
       "  end",
@@ -132,6 +131,14 @@ export function renderAutoSwitchBlock(shell = 'sh') {
       "end",
       "function claude --wraps claude",
       "  command -sq pdd; and pdd accounts sync --provider claude --quiet --timeout-ms 1200 2>/dev/null; or true",
+      "  set -l _pdd_cl_cfg \"$HOME/.claude/settings.json\"",
+      "  if set -q CLAUDE_CONFIG_DIR; and test -n \"$CLAUDE_CONFIG_DIR\"",
+      "    set _pdd_cl_cfg (string replace -r '/+$' '' -- \"$CLAUDE_CONFIG_DIR\")\"/settings.json\"",
+      "  end",
+      "  if test -f \"$_pdd_cl_cfg\"; and grep -q '\"CLAUDE_CODE_OAUTH_TOKEN\"' \"$_pdd_cl_cfg\" 2>/dev/null",
+      "    env -u ANTHROPIC_API_KEY claude $argv",
+      "    return $status",
+      "  end",
       "  command claude $argv",
       "end",
       AUTO_END,
@@ -183,6 +190,9 @@ export function renderAutoSwitchBlock(shell = 'sh') {
     "          _pdd_sub=\"$_pdd_arg\"",
     "          break",
     "          ;;",
+    "        *)",
+    "          break",
+    "          ;;",
     "      esac",
     "    elif [ -z \"$_pdd_next\" ]; then",
     "      case \"$_pdd_arg\" in",
@@ -197,10 +207,6 @@ export function renderAutoSwitchBlock(shell = 'sh') {
     "      printf '%s\\n' \"pdd accounts: refusing to run 'codex $_pdd_sub' inside PDD-managed CODEX_HOME ($_pdd_mhome) so the Cloud token is not revoked. Use 'pdd accounts pause', 'pdd accounts remove', or 'pdd accounts use' instead (or unset CODEX_HOME to manage ~/.codex).\" >&2",
     "      return 1",
     "    fi",
-    "    command codex \"$@\"",
-    "    return $?",
-    "  fi",
-    "  if [ \"$_pdd_sub\" = \"login\" ]; then",
     "    command codex \"$@\"",
     "    return $?",
     "  fi",
@@ -226,6 +232,12 @@ export function renderAutoSwitchBlock(shell = 'sh') {
     "}",
     "claude() {",
     "  command -v pdd >/dev/null 2>&1 && pdd accounts sync --provider claude --quiet --timeout-ms 1200 2>/dev/null || true",
+    "  local _pdd_cl_cfg=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"",
+    "  _pdd_cl_cfg=\"${_pdd_cl_cfg%/}/settings.json\"",
+    "  if [ -f \"$_pdd_cl_cfg\" ] && grep -q '\"CLAUDE_CODE_OAUTH_TOKEN\"' \"$_pdd_cl_cfg\" 2>/dev/null; then",
+    "    (unset ANTHROPIC_API_KEY; command claude \"$@\")",
+    "    return $?",
+    "  fi",
     "  command claude \"$@\"",
     "}",
     AUTO_END,
@@ -250,8 +262,10 @@ export function removeAutoSwitchBlock(existingText = '') {
   return cleaned;
 }
 
-function shellProfileEntries(env = process.env) {
-  const home = env?.HOME || homedir();
+function shellProfileEntries(env = process.env, { requireExplicitHome = false } = {}) {
+  const explicitHome = typeof env?.HOME === 'string' ? env.HOME.trim() : '';
+  if (requireExplicitHome && !explicitHome) return [];
+  const home = explicitHome || homedir();
   const xdgConfig = (typeof env?.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.trim())
     ? env.XDG_CONFIG_HOME.trim()
     : join(home, '.config');
@@ -260,6 +274,49 @@ function shellProfileEntries(env = process.env) {
     { path: join(home, '.bashrc'), shell: 'bash' },
     { path: join(xdgConfig, 'fish', 'config.fish'), shell: 'fish' },
   ];
+}
+
+export function refreshInstalledAutoSwitchBlocks({ env = process.env } = {}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  if (typeof fs?.readFileSync !== 'function' || typeof fs?.writeFileSync !== 'function') return [];
+  const entries = shellProfileEntries(env, { requireExplicitHome: true });
+  if (!entries.length) return [];
+  const upgraded = [];
+  for (const entry of entries) {
+    try {
+      const existingText = fs.readFileSync(entry.path, 'utf8');
+      if (
+        typeof existingText !== 'string'
+        || !existingText.includes(AUTO_BEGIN)
+        || !existingText.includes(AUTO_END)
+      ) {
+        continue;
+      }
+      const beginIdx = existingText.indexOf(AUTO_BEGIN);
+      const endIdx = existingText.indexOf(AUTO_END, beginIdx + AUTO_BEGIN.length);
+      if (beginIdx < 0 || endIdx < 0) continue;
+      const nextText = applyAutoSwitchBlock(existingText, entry.shell);
+      if (nextText === existingText) continue;
+      let writePath = entry.path;
+      let mode = 0o644;
+      try {
+        const lstat = typeof fs.lstatSync === 'function' ? fs.lstatSync(entry.path) : null;
+        if (lstat?.isSymbolicLink?.()) {
+          const realFn = fs.realpathSync?.native ?? fs.realpathSync;
+          if (typeof realFn === 'function') {
+            writePath = String(realFn.call(fs, entry.path));
+          }
+        }
+        const st = typeof fs.statSync === 'function' ? fs.statSync(writePath) : lstat;
+        if (typeof st?.mode === 'number' && (st.mode & 0o777) !== 0) {
+          mode = st.mode & 0o777;
+        }
+      } catch {}
+      fs.writeFileSync(writePath, nextText, { mode });
+      upgraded.push(entry.path);
+    } catch {}
+  }
+  return upgraded;
 }
 
 function formatShortReset(iso) {
@@ -805,8 +862,52 @@ function resolveCodexImportSource(fs, cwd, env, fromOption) {
   };
 }
 
-function assertNonSymlinkImportFile(fs, authPath) {
-  if (!authPath) return;
+function isPathInsideRoot(candidatePath, rootPath) {
+  const normCandidate = resolve(candidatePath);
+  const normRoot = resolve(rootPath);
+  return normCandidate === normRoot || normCandidate.startsWith(normRoot + sep) || normCandidate.startsWith(`${normRoot}/`);
+}
+
+function resolveAllowedImportAuthFile(fs, authPath, env = process.env, { action = 'import' } = {}) {
+  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  const statFn = fs.statSync ?? nativeFs.statSync;
+  const realFn = fs.realpathSync?.native ?? fs.realpathSync ?? nativeFs.realpathSync?.native ?? nativeFs.realpathSync;
+  const managedHome = pddManagedCodexHome(env);
+  const refuse = msg => { throw new CloudAccountsError(msg, { code: 'symlink_refused' }); };
+  if (typeof realFn !== 'function' || typeof statFn !== 'function') {
+    refuse(`Refusing to ${action} symlinked Codex credential file: ${authPath}`);
+  }
+  let realTarget;
+  try {
+    realTarget = String(realFn.call(fs, authPath));
+    const targetStat = statFn.call(fs, realTarget);
+    if (!targetStat?.isFile()) {
+      refuse(`Refusing to ${action} symlinked Codex credential file: ${authPath}`);
+    }
+    const targetDirStat = lstat(dirname(realTarget));
+    if (!targetDirStat || targetDirStat.isSymbolicLink() || !targetDirStat.isDirectory()) {
+      refuse(`Refusing to ${action} symlinked Codex credential file: ${authPath}`);
+    }
+  } catch (err) {
+    if (err instanceof CloudAccountsError) throw err;
+    refuse(`Refusing to ${action} symlinked Codex credential file: ${authPath}`);
+  }
+  if (isPathInsideRoot(realTarget, managedHome)) {
+    refuse(`Refusing to ${action} symlinked Codex credential file: ${authPath}`);
+  }
+  try {
+    const realManaged = String(realFn.call(fs, managedHome));
+    if (isPathInsideRoot(realTarget, realManaged)) {
+      refuse(`Refusing to ${action} symlinked Codex credential file: ${authPath}`);
+    }
+  } catch (err) {
+    if (err instanceof CloudAccountsError) throw err;
+  }
+  return realTarget;
+}
+
+function assertNonSymlinkImportFile(fs, authPath, env = process.env) {
+  if (!authPath) return authPath;
   const lstat = fs.lstatSync ?? nativeFs.lstatSync;
   const parentDir = dirname(authPath);
   let parentSt = null;
@@ -815,13 +916,14 @@ function assertNonSymlinkImportFile(fs, authPath) {
     throw new CloudAccountsError(`Refusing to import Codex credential file from symlinked directory: ${parentDir}`, { code: 'symlink_refused' });
   }
   let st = null;
-  try { st = lstat(authPath); } catch { return; }
+  try { st = lstat(authPath); } catch { return authPath; }
   if (st?.isSymbolicLink()) {
-    throw new CloudAccountsError(`Refusing to import symlinked Codex credential file: ${authPath}`, { code: 'symlink_refused' });
+    return resolveAllowedImportAuthFile(fs, authPath, env, { action: 'import' });
   }
+  return authPath;
 }
 
-function scrubImportedCodexSourceRefreshToken(fs, authPath) {
+function scrubImportedCodexSourceRefreshToken(fs, authPath, env = process.env) {
   if (!authPath) return false;
   const lstat = fs.lstatSync ?? nativeFs.lstatSync;
   const dir = dirname(authPath);
@@ -835,15 +937,16 @@ function scrubImportedCodexSourceRefreshToken(fs, authPath) {
   }
   let st = null;
   try { st = lstat(authPath); } catch { return false; }
-  if (!st || st.isSymbolicLink() || !st.isFile()) {
-    if (st?.isSymbolicLink()) {
-      throw new CloudAccountsError(`Refusing to rewrite symlinked Codex credential file: ${authPath}`, { code: 'symlink_refused' });
-    }
+  if (!st) return false;
+  let targetFilePath = authPath;
+  if (st.isSymbolicLink()) {
+    targetFilePath = resolveAllowedImportAuthFile(fs, authPath, env, { action: 'rewrite' });
+  } else if (!st.isFile()) {
     return false;
   }
   let parsed = null;
   try {
-    parsed = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+    parsed = JSON.parse(fs.readFileSync(targetFilePath, 'utf8'));
   } catch {
     return false;
   }
@@ -859,11 +962,12 @@ function scrubImportedCodexSourceRefreshToken(fs, authPath) {
       refresh_token: '',
     },
   };
-  const tmpPath = join(dir, `.pdd-scrub-${process.pid}-${randomBytes(6).toString('hex')}.tmp`);
+  const targetDir = dirname(targetFilePath);
+  const tmpPath = join(targetDir, `.pdd-scrub-${process.pid}-${randomBytes(6).toString('hex')}.tmp`);
   try {
     fs.writeFileSync(tmpPath, `${JSON.stringify(scrubbed, null, 2)}\n`, { mode: 0o600 });
     try { (fs.chmodSync ?? nativeFs.chmodSync)(tmpPath, 0o600); } catch {}
-    fs.renameSync(tmpPath, authPath);
+    fs.renameSync(tmpPath, targetFilePath);
     return true;
   } catch (err) {
     try { (fs.rmSync ?? nativeFs.rmSync)(tmpPath, { force: true }); } catch {}
@@ -1995,8 +2099,8 @@ async function enrollSingleIteration(mode, {
         probeCodexHome = tempLoginDir;
       } else {
         const importSource = resolveCodexImportSource(fs, cwd, env, fromOption);
-        assertNonSymlinkImportFile(fs, importSource.authPath);
-        ({ authJson, bundle } = readCodexFullAuthBundle(fs, env, importSource.authPath));
+        const resolvedImportAuth = assertNonSymlinkImportFile(fs, importSource.authPath, env);
+        ({ authJson, bundle } = readCodexFullAuthBundle(fs, env, resolvedImportAuth));
         probeCodexHome = importSource.probeCodexHome;
         importSourcePath = importSource.authPath;
       }
@@ -2101,7 +2205,7 @@ async function enrollSingleIteration(mode, {
       // P0 single-use OpenAI refresh_token collision guard: scrub tokens.refresh_token from
       // the imported local source file ONLY when local lease materialization succeeded.
       const scrubbedSource = mode === 'import' && importSourcePath && leaseMaterialized
-        ? scrubImportedCodexSourceRefreshToken(fs, importSourcePath)
+        ? scrubImportedCodexSourceRefreshToken(fs, importSourcePath, env)
         : false;
       if (scrubbedSource) {
         const sourceCodexHome = dirname(importSourcePath);
@@ -2540,6 +2644,7 @@ async function runSyncCommand({ provider: requestedProvider, quiet = false, prin
         }
       }
     } catch (error) {
+      let cachedMarkedReauth = false;
       if (isReauthRequiredFailure(error)) {
         const explicitId = error?.payload?.account_id
           ?? error?.payload?.detail?.account_id
@@ -2547,7 +2652,23 @@ async function runSyncCommand({ provider: requestedProvider, quiet = false, prin
           ?? null;
         if (typeof explicitId === 'string' && explicitId) {
           markLocalAccountReauthRequired(explicitId, { env }, ports);
+          if (explicitId === cached?.account_id) cachedMarkedReauth = true;
         }
+      }
+      if (
+        provider === 'codex'
+        && !codexHealthyHome
+        && cached?.account_id
+        && !isRevokedCached
+        && !cachedMarkedReauth
+        && Number.isFinite(expiresMs)
+        && expiresMs > now
+      ) {
+        try {
+          if (fs.statSync(managedCodexAuthPath(env))?.isFile()) {
+            codexHealthyHome = pddManagedCodexHome(env);
+          }
+        } catch {}
       }
       if (!quiet && !printCodexHome) messages.push(`Cloud sync skipped for ${provider}; keeping current local credentials.`);
     }
@@ -2653,6 +2774,9 @@ function reconcileListedState(accounts, current, { env }, ports = {}) {
       previousModelProvider: prevCodex.previous_codex_model_provider ?? null,
       removeAuthFile: !nextActive.codex,
     }, ports);
+  }
+  if (!nextProviders.includes('claude') || (current.active?.claude && !nextActive.claude)) {
+    restoreLocalClaudeGatewayConfig({ env }, ports);
   }
   const nextCooling = Object.fromEntries(
     Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
@@ -2828,6 +2952,9 @@ function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {
       removeAuthFile: !nextActive.codex,
     }, ports);
   }
+  if (!nextProviders.includes('claude') || (current.active?.claude && !nextActive.claude)) {
+    restoreLocalClaudeGatewayConfig({ env }, ports);
+  }
   const nextCooling = Object.fromEntries(
     Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
   );
@@ -2852,7 +2979,7 @@ const CODEX_VALUE_OPTIONS = new Set([
 
 const CODEX_PRESERVED_VALUE_OPTIONS = new Set([
   '-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env',
-  '-m', '--model', '--local-provider', '-p', '--profile',
+  '-i', '--image', '-m', '--model', '--local-provider', '-p', '--profile',
   '-s', '--sandbox', '-C', '--cd', '--add-dir', '-a', '--ask-for-approval',
 ]);
 
@@ -3086,7 +3213,7 @@ function inspectCodexInvocation(args, baseCwd = process.cwd()) {
       }
       break;
     }
-    if (subcommand === 'resume' && !explicitSessionId && UUID_TOKEN_RE.test(word)) {
+    if ((subcommand === 'resume' || subcommand === 'fork') && !explicitSessionId && UUID_TOKEN_RE.test(word)) {
       explicitSessionId = word;
       break;
     }
@@ -3098,6 +3225,8 @@ function inspectCodexInvocation(args, baseCwd = process.cwd()) {
 
   return {
     subcommand,
+    isResume: subcommand === 'resume',
+    isFork: subcommand === 'fork',
     interactive: !hasHelpOrVersion && (subcommand === '' || CODEX_INTERACTIVE_SUBCOMMANDS.has(subcommand)),
     explicitSessionId,
     effectiveCwd,
@@ -4134,17 +4263,34 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
     const prevLabel = exhaustedEntry?.label ?? exhaustedId ?? 'previous';
     const nextLabel = nextLease.reply.account?.label ?? nextLease.reply.account?.account_id ?? 'next';
     const quotaInfo = formatAccountQuotaSummary(nextLease.reply.account);
-    const resumeDesc = sessionState.sessionId ? `session ${sessionState.sessionId}` : '--last';
+    const keepInitialPromptArgs = !sessionState.sessionId && !invocation.isResume && !invocation.isFork;
+    const resumeDesc = sessionState.sessionId
+      ? `session ${sessionState.sessionId}`
+      : (keepInitialPromptArgs ? 'initial arguments' : '--last');
     try {
       activeStderr?.write?.(
         redactSecrets(`\n[pdd accounts] Quota reached on "${prevLabel}"; switched active Codex account to "${nextLabel}"${quotaInfo} and resuming (${resumeDesc}).\n`),
       );
     } catch {}
-    currentArgs = buildCodexResumeArgs(initialArgs, sessionState.sessionId);
+    currentArgs = keepInitialPromptArgs
+      ? [...initialArgs]
+      : buildCodexResumeArgs(initialArgs, sessionState.sessionId);
   }
 
   return { exitCode: 1, message: 'No additional ready Codex Cloud accounts are available.' };
 }
+
+const AUTO_REFRESH_SUBCOMMANDS = new Set([
+  'list',
+  'status',
+  'add',
+  'import',
+  'use',
+  'next',
+  'codex',
+  'sync',
+  'accept',
+]);
 
 export async function runAccountsCli({
   commandId = 'accounts',
@@ -4155,6 +4301,9 @@ export async function runAccountsCli({
   stdin = process.stdin,
 } = {}, ports = {}) {
   const sub = commandId === 'accounts' ? 'list' : commandId.slice('accounts.'.length);
+  if (AUTO_REFRESH_SUBCOMMANDS.has(sub)) {
+    refreshInstalledAutoSwitchBlocks({ env }, ports);
+  }
   try {
     switch (sub) {
       case 'list': {
@@ -4425,7 +4574,22 @@ export async function runAccountsCli({
           enrolled: true,
           providers: nextProviders,
         }, { env }, ports);
-        if (provider && !current.active?.[provider]?.account_id) {
+        const fs = ports.fs ?? nativeFs;
+        const nowMs = (ports.now ?? Date.now)();
+        const existingActive = provider ? current.active?.[provider] : null;
+        const existingExpMs = existingActive?.expires_at ? Date.parse(existingActive.expires_at) : NaN;
+        const needsActivation = Boolean(
+          provider && (
+            !existingActive?.account_id
+            || existingActive.state === 'reauth_required'
+            || Boolean(current.reauth?.[existingActive.account_id])
+            || !Number.isFinite(existingExpMs)
+            || existingExpMs <= nowMs
+            || !hasLocalMaterializedFile(fs, provider, env)
+          ),
+        );
+        let syncWarning = '';
+        if (needsActivation) {
           try {
             const leased = await leaseCloudAccount({
               provider,
@@ -4442,10 +4606,22 @@ export async function runAccountsCli({
                 enrolled: true,
                 providers: [...new Set([...refreshed.providers, ...nextProviders])],
               }, { env }, ports);
+            } else if (leased?.state === 'leased' && isReauthRequiredAccount(leased.account)) {
+              markLocalAccountReauthRequired(leased.account?.account_id, { env }, ports);
+              syncWarning = ' Warning: account requires re-authentication before local sync.';
+            } else if (leased?.state === 'all_cooling') {
+              syncWarning = ` Warning: all ${provider} accounts are currently cooling${leased.wake_at ? ` until ${leased.wake_at}` : ''}; run pdd accounts sync once quota resets.`;
             }
-          } catch {}
+          } catch (err) {
+            const reason = redactSecrets(String(err?.message ?? 'lease failed')).trim();
+            const useHint = acceptedAcc?.label ? `pdd accounts use ${acceptedAcc.label}` : 'pdd accounts sync';
+            syncWarning = ` Warning: initial local sync failed (${reason}) — run ${useHint}.`;
+          }
         }
-        return { exitCode: 0, message: `Accepted shared account${acceptedAcc?.label ? ` "${acceptedAcc.label}"` : ` invite ${inviteId}`}.` };
+        return {
+          exitCode: 0,
+          message: redactSecrets(`Accepted shared account${acceptedAcc?.label ? ` "${acceptedAcc.label}"` : ` invite ${inviteId}`}.${syncWarning}`),
+        };
       }
 
       case 'unshare': {

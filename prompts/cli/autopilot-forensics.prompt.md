@@ -44,16 +44,18 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
   configured and `config.toml` is a regular file (skipping symlinked `config.toml`
   overlays via `lstatSync` so personal `~/.codex/config.toml` settings never leak past
   `--ignore-user-config`). It forwards only non-secret auth-store and provider routing
-  overrides (`cli_auth_credentials_store`, `model_provider`, allowlisted non-secret
-  `[model_providers.<provider>]` metadata: `name`, `base_url`, `model_catalog_url`,
-  `wire_api`, `requires_openai_auth`, `supports_websockets`, `env_key`,
-  `env_key_instructions`, `env_http_headers` naming environment variables only,
-  `request_max_retries`, `stream_max_retries`, `stream_idle_timeout_ms`, plus
-  `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"` and
-  `features.shell_snapshot=false` when present) as `-c` flags (#3503). Raw secret
-  fields (`http_headers`, `experimental_bearer_token`, `query_params`) are never
-  serialized onto CLI `args` or `<id>.spec.json`; if a legacy managed `config.toml`
-  sets `http_headers["x-pdd-gateway-grant"]`, `codexProviderConfigArgs` registers the
+  overrides (`cli_auth_credentials_store`, `openai_base_url`, `chatgpt_base_url`,
+  `model_provider`, allowlisted non-secret `[model_providers.<provider>]` metadata:
+  `name`, `base_url`, `model_catalog_url`, `wire_api`, `requires_openai_auth`,
+  `supports_websockets`, `env_key`, `env_key_instructions`, `env_http_headers` naming
+  environment variables only, `request_max_retries`, `stream_max_retries`,
+  `stream_idle_timeout_ms`, plus
+  `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"`,
+  `features.shell_snapshot=false`, and `features.responses_websockets=false` when
+  present) as `-c` flags (#3503). Raw secret fields (`http_headers`,
+  `experimental_bearer_token`, `query_params`) are never serialized onto CLI `args`
+  or `<id>.spec.json`; if a legacy managed `config.toml` sets
+  `http_headers["x-pdd-gateway-grant"]`, `codexProviderConfigArgs` registers the
   grant with `rememberSecrets`, moves it into `env.PDD_CODEX_GATEWAY_GRANT`, and emits
   `env_http_headers={ x-pdd-gateway-grant = "PDD_CODEX_GATEWAY_GRANT" }` with
   `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"`.

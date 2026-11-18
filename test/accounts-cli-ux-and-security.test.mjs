@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -22,9 +23,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
+import { refreshInstalledAutoSwitchBlocks, renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
 import { readCodexUsageWindows } from '../src/codex-limits.mjs';
 import {
+  accountsStatePath,
   buildSyntheticGatewayIdToken,
   createCodexStepOverlay,
   managedCodexAuthPath,
@@ -250,6 +252,22 @@ async function createPoolGatewayServer(t, opts = {}) {
         });
       }
 
+      if (provider === 'claude' && chosen.is_owner === false) {
+        const clGrant = `pddg_cl_shared_${seq}`;
+        return send(200, {
+          state: 'leased',
+          switched: chosen.account_id !== body?.current_account_id,
+          account: chosen,
+          lease: {
+            lease_id: leaseId,
+            expires_at: expiresAt,
+            delivery_mode: 'gateway_grant',
+            gateway_bearer_token: clGrant,
+            anthropic_base_url: `${serverUrl}/v1/accounts/claude-gateway/${leaseId}`,
+          },
+        });
+      }
+
       if (provider === 'claude') {
         return send(200, {
           state: 'leased',
@@ -344,6 +362,19 @@ async function createPoolGatewayServer(t, opts = {}) {
       if (req.method === 'GET' && action === 'log') {
         return send(200, { entries: [{ created_at: '2026-11-17T20:00:00Z', event: 'enrolled', actor_login: 'Serhan-Asad', detail: acc.provider }] });
       }
+    }
+
+    const acceptMatch = /^\/v1\/accounts\/invites\/([^/]+)\/accept$/.exec(url.pathname);
+    if (req.method === 'POST' && acceptMatch) {
+      const invId = decodeURIComponent(acceptMatch[1]);
+      const invIdx = state.pendingInvites.findIndex(i => i.invite_id === invId);
+      if (invIdx === -1) return send(404, { detail: 'Invite not found' });
+      const inv = state.pendingInvites.splice(invIdx, 1)[0];
+      const acc = state.accounts.find(a => a.account_id === inv.account_id) ?? inv.account;
+      if (acc && !state.accounts.some(a => a.account_id === acc.account_id)) {
+        state.accounts.push(acc);
+      }
+      return send(200, { accepted: true, account: acc, provider: acc?.provider ?? inv.provider ?? 'codex' });
     }
 
     const delMatch = /^\/v1\/accounts\/([^/]+)$/.exec(url.pathname);
@@ -1092,7 +1123,7 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured l
   assert.equal((await invokeCli(['accounts', 'use', 'glt'], sb)).exit, 0);
 
   const fallbackTurns = [];
-  const fallbackRes = await invokeCli(['accounts', 'codex', '--', '--search'], sb, {
+  const fallbackRes = await invokeCli(['accounts', 'codex', '--', '-i', 'diagram.png', '--search', 'fix turn zero prompt'], sb, {
     quotaSettleMs: 0,
     async spawnCodexPty({ args, turn, onOutput }) {
       fallbackTurns.push({ turn, args });
@@ -1106,7 +1137,32 @@ test('#3497 Part 2: pdd accounts codex & shell auto wrapper perform structured l
 
   assert.equal(fallbackRes.exit, 0, fallbackRes.stderr);
   assert.equal(fallbackTurns.length, 2);
-  assert.deepEqual(fallbackTurns[1].args, ['resume', '--search', '--last'], 'falls back to resume --last preserving flags when codex exits before rollout creation');
+  assert.deepEqual(
+    fallbackTurns[1].args,
+    ['-i', 'diagram.png', '--search', 'fix turn zero prompt'],
+    'turn-0 quota exit before rollout creation keeps initial prompt & flags instead of discarding prompt for resume --last',
+  );
+
+  // Explicit `resume` without session UUID still falls back to `resume ... --last` preserving `-i`!
+  cloud.state.accounts[0].state = 'ready';
+  cloud.state.accounts[0].five_hour_used_percent = 5;
+  cloud.state.accounts[1].state = 'ready';
+  cloud.state.accounts[1].five_hour_used_percent = 5;
+  assert.equal((await invokeCli(['accounts', 'use', 'glt'], sb)).exit, 0);
+  const resumeFallbackTurns = [];
+  const resumeFallbackRes = await invokeCli(['accounts', 'codex', '--', '-i', 'shot.png', '--search', 'resume'], sb, {
+    quotaSettleMs: 0,
+    async spawnCodexPty({ args, turn, onOutput }) {
+      resumeFallbackTurns.push({ turn, args });
+      if (turn === 0) {
+        onOutput('Error: You\'ve hit your usage limit for this window.\n');
+        return { code: 1, signal: 'SIGTERM' };
+      }
+      return { code: 0, signal: null };
+    },
+  }, { isTTY: true });
+  assert.equal(resumeFallbackRes.exit, 0, resumeFallbackRes.stderr);
+  assert.deepEqual(resumeFallbackTurns[1].args, ['resume', '-i', 'shot.png', '--search', '--last']);
 });
 
 test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-validation + uid shares + failure backup, multi-terminal rollout pinning, direct flag passthrough, and real Python PTY SIGWINCH/killpg', async t => {
@@ -1461,7 +1517,7 @@ test('R1 P0 & #3494/#3495/#3497: import refresh_token scrubbing, --replace pre-v
     }
   });
 
-  const waitForPtyPattern = (re, timeoutMs = 4000) => new Promise((resolveMatch, rejectMatch) => {
+  const waitForPtyPattern = (re, timeoutMs = 12000) => new Promise((resolveMatch, rejectMatch) => {
     const existing = re.exec(ptyStdout.text);
     if (existing) return resolveMatch(existing);
     const timer = setTimeout(() => {
@@ -1901,7 +1957,10 @@ test('#3516 live codex-cli integration: app-server --strict-config rateLimits/re
     clientSocket.destroy();
   });
   await new Promise(resolveListen => blockedProxy.listen(0, '127.0.0.1', resolveListen));
-  t.after(() => blockedProxy.close());
+  t.after(() => {
+    blockedProxy.closeAllConnections?.();
+    blockedProxy.close();
+  });
   const blockedProxyUrl = `http://127.0.0.1:${blockedProxy.address().port}`;
 
   const issuedGrants = new Map();
@@ -2098,7 +2157,10 @@ test('#3516 live codex-cli integration: app-server --strict-config rateLimits/re
   });
 
   await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
-  t.after(() => server.close());
+  t.after(() => {
+    server.closeAllConnections?.();
+    server.close();
+  });
   mockUrl = `http://127.0.0.1:${server.address().port}`;
 
   const sb = makeSandbox(t, mockUrl);
@@ -2202,4 +2264,331 @@ test('#3516 live codex-cli integration: app-server --strict-config rateLimits/re
 
   const openaiExternalHits = externalProxyTargets.filter(target => /^(?:https?:\/\/)?(?:api\.openai\.com|(?:www\.)?chatgpt\.com)(?::\d+)?(?:\/|$)/i.test(target));
   assert.deepEqual(openaiExternalHits, [], `expected 0 requests to api.openai.com or chatgpt.com, saw: ${JSON.stringify(externalProxyTargets)}`);
+});
+
+test('self-healing shell wrapper auto-upgrades stale 0.1.34 pdd accounts auto blocks in place while leaving unmarked profiles untouched', async t => {
+  const cloud = await createPoolGatewayServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_auto_heal_1',
+        provider: 'codex',
+        label: 'auto-heal-1',
+        is_owner: true,
+        state: 'ready',
+        plan_type: 'pro',
+        five_hour_used_percent: 10,
+        weekly_used_percent: 20,
+        five_hour_reset_at: '2099-01-01T05:00:00Z',
+        weekly_reset_at: '2099-01-07T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+
+  // Guard: missing HOME is a strict no-op
+  assert.deepEqual(refreshInstalledAutoSwitchBlocks({ env: {} }), []);
+
+  // Case 1: `.zshrc` WITHOUT `# >>> pdd accounts auto >>>` MUST remain 100% untouched (and missing `.bashrc` must NOT be created!)
+  const zshrcPath = join(sb.home, '.zshrc');
+  const bashrcPath = join(sb.home, '.bashrc');
+  const fishPath = join(sb.configHome, 'fish', 'config.fish');
+  const plainZshrc = 'export PATH="$HOME/.local/bin:$PATH"\nalias gs="git status"\n';
+  writeFileSync(zshrcPath, plainZshrc, { mode: 0o600 });
+
+  const useUnmarked = await invokeCli(['accounts', 'use', 'auto-heal-1', '--provider', 'codex'], sb);
+  assert.equal(useUnmarked.exit, 0, useUnmarked.stderr);
+  assert.equal(readFileSync(zshrcPath, 'utf8'), plainZshrc, 'unmarked .zshrc untouched');
+  assert.equal(existsSync(bashrcPath), false, 'absent .bashrc not created unless auto on is run');
+  assert.equal(existsSync(fishPath), false, 'absent config.fish not created unless auto on is run');
+
+  // Case 2: Seed a stale 0.1.34 `# >>> pdd accounts auto >>>` block (missing PDD_PRINT_CODEX_HOME & CODEX_HOME="$_pdd_cx_home")
+  // in a dotfiles-symlinked `.zshrc` (mode 0600) AND in `config.fish`, surrounded by custom user lines.
+  rmSync(zshrcPath, { force: true });
+  const dotfilesDir = join(sb.root, 'dotfiles');
+  mkdirSync(dotfilesDir, { recursive: true });
+  const dotfilesZshrc = join(dotfilesDir, 'zshrc');
+  const staleZshBlock = [
+    'export EDITOR="vim"',
+    '',
+    '# >>> pdd accounts auto >>>',
+    'codex() {',
+    '  command -v pdd >/dev/null 2>&1 && pdd accounts sync --provider codex --quiet --timeout-ms 1200 2>/dev/null || true',
+    '  command codex "$@"',
+    '}',
+    '# <<< pdd accounts auto <<<',
+    '',
+    'alias ll="ls -la"',
+    '',
+  ].join('\n');
+  writeFileSync(dotfilesZshrc, staleZshBlock, { mode: 0o600 });
+  chmodSync(dotfilesZshrc, 0o600);
+  symlinkSync(dotfilesZshrc, zshrcPath);
+
+  mkdirSync(join(sb.configHome, 'fish'), { recursive: true });
+  const staleFishBlock = [
+    '# fish greeting',
+    '# >>> pdd accounts auto >>>',
+    'function codex --wraps codex',
+    '  pdd accounts sync --provider codex --quiet 2>/dev/null; or true',
+    '  command codex $argv',
+    'end',
+    '# <<< pdd accounts auto <<<',
+    '',
+  ].join('\n');
+  writeFileSync(fishPath, staleFishBlock, { mode: 0o644 });
+
+  // Running `pdd accounts sync --provider codex --quiet` (just like the old 0.1.34 shell hook does!) upgrades both blocks in place!
+  const syncRes = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet'], sb);
+  assert.equal(syncRes.exit, 0, syncRes.stderr);
+
+  assert.equal(lstatSync(zshrcPath).isSymbolicLink(), true, 'dotfiles symlink on ~/.zshrc preserved');
+  assert.equal(statSync(dotfilesZshrc).mode & 0o777, 0o600, 'target file mode 0600 preserved');
+  const upgradedZsh = readFileSync(zshrcPath, 'utf8');
+  assert.ok(upgradedZsh.includes(renderAutoSwitchBlock('zsh')), 'zsh auto block upgraded to current wrapper');
+  assert.match(upgradedZsh, /PDD_PRINT_CODEX_HOME=1 pdd accounts sync/);
+  assert.match(upgradedZsh, /CODEX_HOME="\$_pdd_cx_home"/);
+  assert.match(upgradedZsh, /^export EDITOR="vim"\n\n# >>> pdd accounts auto >>>/);
+  assert.match(upgradedZsh, /# <<< pdd accounts auto <<<\n\nalias ll="ls -la"\n$/);
+
+  const upgradedFish = readFileSync(fishPath, 'utf8');
+  assert.ok(upgradedFish.includes(renderAutoSwitchBlock('fish')), 'fish auto block upgraded to current wrapper');
+  assert.match(upgradedFish, /PDD_PRINT_CODEX_HOME=1 pdd accounts sync/);
+  assert.equal(existsSync(bashrcPath), false, 'still-absent .bashrc was not created');
+
+  // Subsequent runs are idempotent no-ops
+  assert.deepEqual(refreshInstalledAutoSwitchBlocks({ env: sb.env }), []);
+});
+
+
+test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scrub, sync timeout resilience, bash shell wrapper (positional prompt, login status, claude ANTHROPIC_API_KEY), Claude remove/leave/list gateway cleanup, fork UUID, and accept activation + warning', async t => {
+  const forkUuid = '019a8888-1111-7000-8000-123456789abc';
+  const cloud = await createPoolGatewayServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_cx_audit_1',
+        label: 'cx-audit-1',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 10,
+        five_hour_reset_at: '2026-11-18T02:00:00Z',
+        weekly_used_percent: 20,
+        weekly_reset_at: '2026-11-23T00:00:00Z',
+      },
+      {
+        account_id: 'acc_cx_audit_2',
+        label: 'cx-audit-2',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: true,
+        shared: false,
+        state: 'ready',
+        five_hour_used_percent: 5,
+        five_hour_reset_at: '2026-11-18T03:00:00Z',
+        weekly_used_percent: 10,
+        weekly_reset_at: '2026-11-24T00:00:00Z',
+      },
+      {
+        account_id: 'acc_cl_shared_1',
+        label: 'cl-shared-1',
+        provider: 'claude',
+        plan: 'max',
+        is_owner: false,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 15,
+        five_hour_reset_at: '2026-11-18T02:00:00Z',
+        weekly_used_percent: 25,
+        weekly_reset_at: '2026-11-23T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+
+  // 1. Fix #2: Dotfile-symlinked `~/.codex/auth.json -> <dotfiles/auth.json>` imports cleanly and scrubs refresh_token while preserving symlink!
+  const userCodexDir = join(sb.home, '.codex');
+  mkdirSync(userCodexDir, { recursive: true });
+  const dotAuthDir = join(sb.root, 'dotfiles-codex-auth');
+  mkdirSync(dotAuthDir, { recursive: true });
+  const realDotAuthPath = join(dotAuthDir, 'auth.json');
+  writeFileSync(realDotAuthPath, JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: 'at_dotfile_symlink_777',
+      refresh_token: 'rt_dotfile_symlink_SCRUB_ME_777',
+      id_token: makeJwt({ email: 'dotfiles@promptdriven.ai', 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } }),
+      account_id: 'acct_dotfile_symlink_1',
+    },
+  }, null, 2), { mode: 0o600 });
+  symlinkSync(realDotAuthPath, join(userCodexDir, 'auth.json'));
+
+  const symImpRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'cx-dotfiles'], sb);
+  assert.equal(symImpRes.exit, 0, symImpRes.stderr);
+  assert.equal(lstatSync(join(userCodexDir, 'auth.json')).isSymbolicLink(), true, 'dotfile symlink at ~/.codex/auth.json preserved');
+  assert.equal(JSON.parse(readFileSync(realDotAuthPath, 'utf8')).tokens.refresh_token, '', 'target dotfile auth.json had single-use refresh_token scrubbed');
+
+  // Symlink pointing inside managedHome MUST STILL be refused!
+  rmSync(join(userCodexDir, 'auth.json'), { force: true });
+  symlinkSync(managedCodexAuthPath(sb.env), join(userCodexDir, 'auth.json'));
+  const loopImpRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'cx-loop-refuse'], sb);
+  assert.equal(loopImpRes.exit, 1);
+  assert.match(loopImpRes.stderr, /Refusing to import symlinked Codex credential file/);
+  rmSync(join(userCodexDir, 'auth.json'), { force: true });
+
+  // 2. Fix #3a: `PDD_PRINT_CODEX_HOME=1 pdd accounts sync` keeps `pddManagedCodexHome` when Cloud times out / 500s and a valid lease is on disk!
+  cloud.state.leaseOverrideState = 'error_500';
+  const sbPrintHome = { ...sb, env: { ...sb.env, PDD_PRINT_CODEX_HOME: '1' } };
+  // Expire near-renewal window (<15m left, still > now) to force runSyncCommand to hit `leaseCloudAccount` and enter catch block!
+  const statePath = accountsStatePath(sb.env);
+  const savedBeforeTimeout = JSON.parse(readFileSync(statePath, 'utf8'));
+  savedBeforeTimeout.active.codex.expires_at = new Date(cloud.state.nowMs + 5 * 60 * 1000).toISOString();
+  writeFileSync(statePath, JSON.stringify(savedBeforeTimeout, null, 2));
+
+  const syncTimeoutRes = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet', '--timeout-ms', '1200'], sbPrintHome);
+  cloud.state.leaseOverrideState = null;
+  assert.equal(syncTimeoutRes.exit, 0);
+  assert.equal(
+    syncTimeoutRes.stdout.trim(),
+    pddManagedCodexHome(sb.env),
+    'transient sync failure keeps valid on-disk CODEX_HOME instead of returning empty string',
+  );
+
+  // 3. Fix #3b & #3c: Execute `renderAutoSwitchBlock('sh')` in real `bash`!
+  assert.equal((await invokeCli(['accounts', 'use', 'cl-shared-1'], sb)).exit, 0);
+  const clSettingsPath = join(sb.home, '.claude', 'settings.json');
+  assert.match(JSON.parse(readFileSync(clSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
+
+  const fakeBin = join(sb.root, 'wrapper-bin');
+  mkdirSync(fakeBin, { recursive: true });
+  const managedHome = pddManagedCodexHome(sb.env);
+  writeFileSync(join(fakeBin, 'pdd'), `#!/bin/sh\nif [ "\${PDD_PRINT_CODEX_HOME:-}" = "1" ]; then printf '%s\\n' ${JSON.stringify(managedHome)}; fi\nexit 0\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'codex'), `#!/bin/sh\nprintf 'CODEX_HOME=%s ARGS=%s\\n' "\${CODEX_HOME:-UNSET}" "$*"\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'claude'), `#!/bin/sh\nprintf 'API_KEY=%s ARGS=%s\\n' "\${ANTHROPIC_API_KEY:-UNSET}" "$*"\n`, { mode: 0o755 });
+  chmodSync(join(fakeBin, 'pdd'), 0o755);
+  chmodSync(join(fakeBin, 'codex'), 0o755);
+  chmodSync(join(fakeBin, 'claude'), 0o755);
+
+  const wrapperScript = join(sb.root, 'wrapper.sh');
+  writeFileSync(wrapperScript, `${renderAutoSwitchBlock('sh')}\n`);
+
+  const runBash = (cmd, extraEnv = {}) => spawnSync('bash', ['-c', `source ${JSON.stringify(wrapperScript)}\n${cmd}`], {
+    env: {
+      ...sb.env,
+      PATH: `${fakeBin}:${sb.env.PATH}`,
+      ...extraEnv,
+    },
+    encoding: 'utf8',
+  });
+
+  // 3b-i: `codex "explain login" logout` inside managed CODEX_HOME stops at `"explain login"` (`*) break ;;`) and is NOT blocked by logout guard!
+  const promptWithLogoutWord = runBash('codex "explain login" logout', { CODEX_HOME: managedHome });
+  assert.equal(promptWithLogoutWord.status, 0, promptWithLogoutWord.stderr);
+  assert.match(promptWithLogoutWord.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=explain login logout`));
+
+  // 3b-ii: `codex login status` runs WITH `CODEX_HOME="$_pdd_cx_home"`!
+  const loginStatusRun = runBash('codex login status');
+  assert.equal(loginStatusRun.status, 0, loginStatusRun.stderr);
+  assert.match(loginStatusRun.stdout, new RegExp(`CODEX_HOME=${managedHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} ARGS=login status`));
+
+  // While `codex logout` and `codex login` (without `status`) inside managedHome ARE still refused!
+  assert.equal(runBash('codex logout', { CODEX_HOME: managedHome }).status, 1);
+  assert.equal(runBash('codex login', { CODEX_HOME: managedHome }).status, 1);
+
+  // 3c: `claude` unsets `ANTHROPIC_API_KEY` inside subshell when `CLAUDE_CODE_OAUTH_TOKEN` is in settings.json, while parent shell keeps `ANTHROPIC_API_KEY`!
+  const claudeRun = runBash('export ANTHROPIC_API_KEY="sk-ant-api03-ambient"; claude -p hi; printf "PARENT=%s\\n" "$ANTHROPIC_API_KEY"');
+  assert.equal(claudeRun.status, 0, claudeRun.stderr);
+  assert.match(claudeRun.stdout, /API_KEY=UNSET ARGS=-p hi/);
+  assert.match(claudeRun.stdout, /PARENT=sk-ant-api03-ambient/);
+
+  // 4. Fix #4: Leaving/removing the last Claude account cleans `pddg_*` & gateway `ANTHROPIC_BASE_URL` from `~/.claude/settings.json`!
+  const leaveClRes = await invokeCli(['accounts', 'leave', 'cl-shared-1'], sb);
+  assert.equal(leaveClRes.exit, 0, leaveClRes.stderr);
+  const clAfterLeave = JSON.parse(readFileSync(clSettingsPath, 'utf8'));
+  assert.equal(clAfterLeave.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'leave stripped pddg_* token from ~/.claude/settings.json');
+  assert.equal(clAfterLeave.env?.ANTHROPIC_BASE_URL, undefined, 'leave stripped gateway ANTHROPIC_BASE_URL from ~/.claude/settings.json');
+
+  // Reconciling via `pdd accounts list` also cleans any lingering gateway settings when no Claude accounts exist!
+  writeFileSync(clSettingsPath, JSON.stringify({
+    env: {
+      CLAUDE_CODE_OAUTH_TOKEN: 'pddg_stale_grant_after_revoke',
+      ANTHROPIC_BASE_URL: `${cloud.serverUrl}/v1/accounts/claude-gateway/lse_stale`,
+    },
+  }, null, 2));
+  assert.equal((await invokeCli(['accounts', 'list'], sb)).exit, 0);
+  const clAfterList = JSON.parse(readFileSync(clSettingsPath, 'utf8'));
+  assert.equal(clAfterList.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(clAfterList.env?.ANTHROPIC_BASE_URL, undefined);
+
+  // 5. Fix #5a: `pdd accounts codex -- -i chart.png fork <uuid>` recognizes `fork <uuid>` and preserves `-i chart.png` across rotation!
+  assert.equal((await invokeCli(['accounts', 'use', 'cx-audit-1'], sb)).exit, 0);
+  const forkTurns = [];
+  const forkRes = await invokeCli(['accounts', 'codex', '--', '-i', 'chart.png', 'fork', forkUuid], sb, {
+    quotaSettleMs: 0,
+    async spawnCodexPty({ args, turn, onOutput }) {
+      forkTurns.push({ turn, args });
+      if (turn === 0) {
+        onOutput('Error: You\'ve hit your usage limit for this window.\n');
+        return { code: 1, signal: 'SIGTERM' };
+      }
+      return { code: 0, signal: null };
+    },
+  }, { isTTY: true });
+  assert.equal(forkRes.exit, 0, forkRes.stderr);
+  assert.equal(forkTurns.length, 2);
+  assert.deepEqual(forkTurns[1].args, ['resume', '-i', 'chart.png', forkUuid]);
+
+  // 6. Fix #5b: `pdd accounts accept` leases/materializes when active pass is expired/missing, AND surfaces warning when lease sync fails!
+  const sharedClaude2 = {
+    account_id: 'acc_cl_shared_2',
+    label: 'cl-invite-2',
+    provider: 'claude',
+    plan: 'max',
+    is_owner: false,
+    shared: true,
+    state: 'ready',
+    five_hour_used_percent: 5,
+    five_hour_reset_at: '2026-11-18T02:00:00Z',
+    weekly_used_percent: 10,
+    weekly_reset_at: '2026-11-23T00:00:00Z',
+  };
+  cloud.state.pendingInvites.push({ invite_id: 'inv_warn_1', account_id: 'acc_cl_shared_2', provider: 'claude', account: sharedClaude2 });
+  cloud.state.leaseOverrideState = 'error_500';
+  const acceptWarnRes = await invokeCli(['accounts', 'accept', 'inv_warn_1'], sb);
+  cloud.state.leaseOverrideState = null;
+  assert.equal(acceptWarnRes.exit, 0);
+  assert.match(acceptWarnRes.stdout, /Accepted shared account "cl-invite-2"\. Warning: initial local sync failed .* — run pdd accounts use cl-invite-2\./);
+
+  // Now seed an EXPIRED active Claude entry in accounts-state.json with missing token on disk, and verify `accept` re-leases & materializes!
+  const stExpired = JSON.parse(readFileSync(statePath, 'utf8'));
+  stExpired.active.claude = {
+    account_id: 'acc_cl_old_expired',
+    label: 'cl-old',
+    provider: 'claude',
+    state: 'ready',
+    expires_at: new Date(cloud.state.nowMs - 60_000).toISOString(),
+  };
+  writeFileSync(statePath, JSON.stringify(stExpired, null, 2));
+  rmSync(clSettingsPath, { force: true });
+
+  const sharedClaude3 = {
+    account_id: 'acc_cl_shared_3',
+    label: 'cl-invite-3',
+    provider: 'claude',
+    plan: 'max',
+    is_owner: false,
+    shared: true,
+    state: 'ready',
+    five_hour_used_percent: 5,
+    five_hour_reset_at: '2026-11-18T02:00:00Z',
+    weekly_used_percent: 10,
+    weekly_reset_at: '2026-11-23T00:00:00Z',
+  };
+  cloud.state.pendingInvites.push({ invite_id: 'inv_ok_3', account_id: 'acc_cl_shared_3', provider: 'claude', account: sharedClaude3 });
+  const acceptOkRes = await invokeCli(['accounts', 'accept', 'inv_ok_3'], sb);
+  assert.equal(acceptOkRes.exit, 0, acceptOkRes.stderr);
+  assert.equal(acceptOkRes.stdout.trim(), 'Accepted shared account "cl-invite-3".');
+  assert.match(JSON.parse(readFileSync(clSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
 });

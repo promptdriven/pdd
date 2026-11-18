@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-doctor.prompt.md
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 51833091a7cec309c86d19b859f821a1713585b55718251235dbd57872ddd76e).
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
 import {constants} from 'node:fs';
@@ -6,6 +6,7 @@ import {join, resolve, delimiter} from 'node:path';
 import {runAgentProcess, parseAgentAuthStatus} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
+import {isCloudAccountsActive, managedCodexAuthPath, pddManagedCodexHome} from './login-pool.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
 import {health as runtimeHealthCheck, runtimeClientSlice} from './runtime-seam.mjs';
@@ -31,6 +32,7 @@ export async function resolveAutopilotAgent(input, ports = {}) {
       if (name===variable && profile.configHome) definitionEnv[name]=profile.configHome; else delete definitionEnv[name];
     }
   }
+  const files = ports.files ?? nativeFiles;
   const invocation = def => {
     const env = {...caller, ...def?.env};
     if (profile) {
@@ -39,11 +41,17 @@ export async function resolveAutopilotAgent(input, ports = {}) {
       for (const name of ALL_PROVIDER_CONFIG_VARS) {
         if (name === variable && profile.configHome) env[name] = profile.configHome; else delete env[name];
       }
+    } else if (def?.kind === 'codex' && !(typeof env.CODEX_HOME === 'string' && env.CODEX_HOME.trim())) {
+      try {
+        if (isCloudAccountsActive({env, provider: 'codex'}, {fs: files}) && files.statSync?.(managedCodexAuthPath(env))?.isFile()) {
+          env.CODEX_HOME = pddManagedCodexHome(env);
+        }
+      } catch {}
     }
     return env;
   };
   let definitions = [], configurationError = null, agent = null;
-  const installed = [], cwd = input.cwd, files = ports.files ?? nativeFiles;
+  const installed = [], cwd = input.cwd;
   try { definitions = await (ports.agentDefinitions ?? loadAgentDefinitions)({cwd,env:definitionEnv}); }
   catch (error) { configurationError = error; }
   for (const def of Array.isArray(definitions)?definitions:[]) rememberSecrets(...knownSecretValues(def.env));
