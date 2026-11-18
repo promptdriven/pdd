@@ -454,3 +454,45 @@ test('doctor: private-repo HTTP 403 plan-gated branch rulesets and HTTP 404 bran
   assert.equal(rLimit.code,0,rLimit.text);
   check(rLimit,'merge-rules','WARN');
 });
+
+
+test('doctor: Cloud-only teammate without ~/.codex/auth.json passes codex login status via pddManagedCodexHome', async () => {
+  const { accountsStatePath, managedCodexAuthPath, pddManagedCodexHome } = await import('../src/login-pool.mjs');
+  const f = doctorFixture();
+  const statePath = accountsStatePath(f.input.env);
+  const managedAuth = managedCodexAuthPath(f.input.env);
+  const managedHome = pddManagedCodexHome(f.input.env);
+  f.paths.set(statePath, JSON.stringify({
+    version: 1,
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc_cloud_only', label: 'team-cx', provider: 'codex', state: 'ready' } },
+  }));
+  f.paths.set(managedAuth, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'pddg_lse_1_tok', refresh_token: '' } }));
+  f.ports.files.statSync = path => {
+    if (f.paths.has(path)) return { isFile: () => true };
+    throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  };
+  const origRun = f.ports.run;
+  f.ports.run = (file, args, opts) => {
+    if (file === 'codex' && args[0] === 'login' && args[1] === 'status') {
+      f.calls.push({ file, args, options: opts });
+      return opts?.env?.CODEX_HOME === managedHome
+        ? f.answer('Logged in using ChatGPT\n', 0)
+        : f.answer('Not logged in\n', 1);
+    }
+    return origRun(file, args, opts);
+  };
+
+  const docRes = await invoke(f, 'doctor');
+  assert.equal(docRes.code, 0, docRes.text);
+  check(docRes, 'agent', 'PASS');
+  const codexCall = f.calls.find(c => c.file === 'codex' && c.args[0] === 'login');
+  assert.equal(codexCall?.options?.env?.CODEX_HOME, managedHome);
+
+  // Without managed auth.json on disk, Cloud-only fallback does not bind a non-existent CODEX_HOME
+  f.paths.delete(managedAuth);
+  const missingRes = await invoke(f, 'doctor');
+  assert.equal(missingRes.code, 1);
+  check(missingRes, 'agent', 'FAIL');
+});

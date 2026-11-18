@@ -78,7 +78,10 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   The agent gets no tools and no write access (`cardCommand`): Codex runs
   `exec --ignore-user-config --sandbox read-only --skip-git-repo-check --ephemeral
   --color never --ignore-rules` (so no MCP server, profile or feature of the
-  person's `config.toml` loads; auth still loads) with approvals `never`, web search
+  person's `config.toml` loads; safe auth-store and provider routing keys from an
+  explicit `CODEX_HOME/config.toml` are forwarded via `codexProviderConfigArgs`
+  `-c` flags so Cloud Accounts gateway leases and managed credential stores still
+  load, #3503) with approvals `never`, web search
   disabled, `mcp_servers={}`, reasoning effort `low`, its tool features off (hooks,
   plugins, apps, browser and computer use, multi-agent, shell, unified exec, code
   mode) and `--output-last-message ANSWER`; Claude runs
@@ -90,9 +93,11 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   both `shadowIntake` and `activeIntake` call
   `ports.selectLogin({allowedKinds: ["codex", "claude"]})` so sandboxed card and
   auto-improve jobs run on the first healthy `codex` or `claude` login: each started
-  job invokes `selected.prepareStep(env, {detached: true})` when present so Cloud
-  Codex steps get a fresh disposable `0700` `pdd-cx-*` overlay (`cleanupDirs` passed
-  to `jobs.start` and wiped in `prune` once no longer running) and Cloud Claude steps
+  job invokes `selected.prepareStep(env, {detached: true})` before building
+  `cardCommand` / `improveCommand` arguments (#3503) so Cloud Codex steps get a fresh
+  disposable `0700` `pdd-cx-*` overlay (`cleanupDirs` passed to `jobs.start` and wiped
+  in `prune` once no longer running) with its `CODEX_HOME/config.toml` provider
+  overrides forwarded via `-c`, and Cloud Claude steps
   receive `CLAUDE_CODE_OAUTH_TOKEN` (and `ANTHROPIC_BASE_URL` for `gateway_grant`)
   through `cardEnvironment(prepared.env)`, recording `loginId` (`selected.login?.id ?? null`),
   `cloud`, and `accountWindows` on `jobs/N.json`; if a pooled card or auto-improve job
@@ -200,9 +205,12 @@ read-only pass inspect the repository checkout, still with no GitHub token.
 - `intakeTick(ctx, rows)` and `shadowIntake(ctx, rows)` take the core's tick context
   (`fs`, `now`, `root`, `repo`, `state`, `settings`, `budget`, `gh`, `jobs`,
   `ports`, `warn`); `shadowIntake` returns `{cards, started, pick}`.
-- `cardCommand(agent, {model, result})` returns `{command, args}` for Codex or
-  Claude and throws for any other agent; `cardEnvironment(env)` returns the card
-  environment.
+- `cardCommand(agent, {model, result, env, fs})` and
+  `improveCommand(agent, {model, result, env, fs})` return `{command, args}` for
+  Codex or Claude (forwarding non-secret `codexProviderConfigArgs` `-c` overrides
+  from regular `CODEX_HOME/config.toml` files into a cloned child step `env` without
+  serializing raw secrets onto `args`, #3503) and
+  throw for any other agent; `cardEnvironment(env)` returns the card environment.
 - `stopCardJobs({root, fs, jobs, warn})` stops the running card jobs under `root`
   and returns how many it stopped.
 - `readIntake({root, now, date}, fs)` returns `{day, cards, running, wouldPick,
@@ -218,5 +226,5 @@ read-only pass inspect the repository checkout, still with no GitHub token.
 - [Multi-harness login pool](login-pool.prompt.md): required for
   `isQuotaExhaustionMessage` and `isAuthFailureMessage` when rotating pooled `codex` and `claude` logins.
 - [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
-  external-repository / configured skip-label matching and linear string-aware JSON
+  external-repository / configured skip-label matching, `codexProviderConfigArgs`, and linear string-aware JSON
   object scanning.

@@ -38,11 +38,33 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
 - `forensicsEnvironment(env)` applies `jobEnvironment(env)` and strips every
   `GH_*TOKEN` and `GITHUB_*TOKEN` variable so the forensics subprocess has zero
   GitHub write credentials.
-- `forensicsCommand(agent, {model, reasoningEffort, resultFile})` builds a bounded
-  read-only headless CLI invocation for every supported Autopilot agent kind:
+- `codexProviderConfigArgs({env, agent, fs})` reads `CODEX_HOME/config.toml` with the
+  vendored `smol-toml` parser (`src/vendor/smol-toml/parse.js`) when an explicit
+  `CODEX_HOME` (`env.CODEX_HOME`, `agent.env.CODEX_HOME`, or `agent.codexHome`) is
+  configured and `config.toml` is a regular file (skipping symlinked `config.toml`
+  overlays via `lstatSync` so personal `~/.codex/config.toml` settings never leak past
+  `--ignore-user-config`). It forwards only non-secret auth-store and provider routing
+  overrides (`cli_auth_credentials_store`, `openai_base_url`, `chatgpt_base_url`,
+  `model_provider`, allowlisted non-secret `[model_providers.<provider>]` metadata:
+  `name`, `base_url`, `model_catalog_url`, `wire_api`, `requires_openai_auth`,
+  `supports_websockets`, `env_key`, `env_key_instructions`, `env_http_headers` naming
+  environment variables only, `request_max_retries`, `stream_max_retries`,
+  `stream_idle_timeout_ms`, plus
+  `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"`,
+  `features.shell_snapshot=false`, and `features.responses_websockets=false` when
+  present) as `-c` flags (#3503). Raw secret fields (`http_headers`,
+  `experimental_bearer_token`, `query_params`) are never serialized onto CLI `args`
+  or `<id>.spec.json`; if a legacy managed `config.toml` sets
+  `http_headers["x-pdd-gateway-grant"]`, `codexProviderConfigArgs` registers the
+  grant with `rememberSecrets`, moves it into `env.PDD_CODEX_GATEWAY_GRANT`, and emits
+  `env_http_headers={ x-pdd-gateway-grant = "PDD_CODEX_GATEWAY_GRANT" }` with
+  `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"`.
+- `forensicsCommand(agent, {model, reasoningEffort, resultFile, env, fs})` builds a
+  bounded read-only headless CLI invocation for every supported Autopilot agent kind:
   - `codex`: `exec --ignore-user-config --sandbox read-only --ephemeral --color never`
     with `approval_policy="never"`, `web_search="disabled"`, `mcp_servers={}`,
     `model_reasoning_effort` (`low` default), non-essential agent features disabled (preserving `code_mode_host` so read-only tool inspection works),
+    any `codexProviderConfigArgs({env, agent, fs})` `-c` overrides (#3503),
     optional `--output-last-message FILE`, optional `--model MODEL`, and `-` stdin.
   - `claude`: `-p --safe-mode --tools Read,Glob,Grep --permission-mode plan
     --permission-prompts none --strict-mcp-config --no-chrome
@@ -85,9 +107,9 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
 - Export `EXTERNAL_REPO_LABELS`, `FORENSICS_FIXED_MARKER_PREFIX`,
   `forensicsFixedMarker`, `findExternalRepoLabel`, `findConfiguredSkipLabel`,
   `extractJsonObjects`, `parseForensicsText`, `stripForbiddenIdentifiers`,
-  `forensicsEnvironment`, `forensicsCommand`, `forensicsPrompt`,
-  `evaluateForensicsResult`, `formatForensicsComment`, `formatForensicsBrief`, and
-  `runPreRunForensics`.
+  `forensicsEnvironment`, `codexProviderConfigArgs`, `forensicsCommand`,
+  `forensicsPrompt`, `evaluateForensicsResult`, `formatForensicsComment`,
+  `formatForensicsBrief`, and `runPreRunForensics`.
 
 ## Dependencies
 
@@ -100,5 +122,8 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
   `resolveStepModelTier` worker-tier model routing.
 - [Multi-harness login pool](login-pool.prompt.md): required for
   `isQuotaExhaustionMessage` and `isAuthFailureMessage` when rotating pooled logins.
-- [Secret redaction](secret-redaction.prompt.md): required for `redactSecrets` on
-  user-facing comment text and builder briefs.
+- [Secret redaction](secret-redaction.prompt.md): required for `redactSecrets` and
+  `rememberSecrets` on gateway grant tokens, user-facing comment text, and builder
+  briefs.
+- Vendored `smol-toml` (`src/vendor/smol-toml/parse.js`): required for parsing
+  `CODEX_HOME/config.toml` provider overrides.

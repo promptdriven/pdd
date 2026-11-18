@@ -1,11 +1,11 @@
-// Prompt: prompts/cli/autopilot-intake.prompt.md
+// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: d6d329359b2ed0eec9f312923dbaea05cbd1674345959b3b52d074003b94b1c3).
 import * as nativeFs from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { jobEnvironment, readAgentJob, stopAgentJob } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
 import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs';
-import { extractJsonObjects, findConfiguredSkipLabel, findExternalRepoLabel } from './autopilot-forensics.mjs';
+import { codexProviderConfigArgs, extractJsonObjects, findConfiguredSkipLabel, findExternalRepoLabel } from './autopilot-forensics.mjs';
 
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
 export const CARD_CLASSES = Object.freeze(['ready', 'improve', 'person', 'duplicate', 'blocked', 'held', 'fixed', 'elsewhere']);
@@ -154,11 +154,11 @@ export function cardMatchesRow(entry, row) {
 // The bypass flags of build jobs are never used for cards.
 const CODEX_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host'];
 const CODEX_IMPROVE_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'code_mode'];
-export function cardCommand(agent, { model, result } = {}) {
+export function cardCommand(agent, { model, result, env = null, fs = nativeFs } = {}) {
   const extra = model ? ['--model', model] : [];
-  // --ignore-user-config: no MCP servers, profiles or features from the person's config.toml (auth still loads).
+  // --ignore-user-config: no MCP servers, profiles or features from the person's config.toml; safe provider/auth-store keys from explicit CODEX_HOME/config.toml are forwarded via -c (#3503).
   if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--ignore-rules',
-    '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'model_reasoning_effort="low"', ...CODEX_OFF.flatMap(name => ['-c', `features.${name}=false`]), '--output-last-message', result, ...extra, '-'] };
+    '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'model_reasoning_effort="low"', ...CODEX_OFF.flatMap(name => ['-c', `features.${name}=false`]), ...codexProviderConfigArgs({ env, agent, fs }), '--output-last-message', result, ...extra, '-'] };
   if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--safe-mode', '--tools', '', '--permission-mode', 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome',
     '--no-session-persistence', '--output-format', 'json', ...extra] };
   throw Error('Intake cards need codex or claude');
@@ -166,11 +166,11 @@ export function cardCommand(agent, { model, result } = {}) {
 
 // Bounded read-only repository inspection command for auto-improving `improve` cards (#3190). Runs with cwd set to
 // the repository checkout inside a read-only sandbox and with zero GitHub write tokens in cardEnvironment.
-export function improveCommand(agent, { model, result } = {}) {
+export function improveCommand(agent, { model, result, env = null, fs = nativeFs } = {}) {
   const extra = model ? ['--model', model] : [];
   if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--ephemeral', '--color', 'never',
     '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'model_reasoning_effort="medium"',
-    ...CODEX_IMPROVE_OFF.flatMap(name => ['-c', `features.${name}=false`]), '--output-last-message', result, ...extra, '-'] };
+    ...CODEX_IMPROVE_OFF.flatMap(name => ['-c', `features.${name}=false`]), ...codexProviderConfigArgs({ env, agent, fs }), '--output-last-message', result, ...extra, '-'] };
   if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--safe-mode', '--tools', 'Read,Glob,Grep', '--permission-mode', 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome',
     '--no-session-persistence', '--output-format', 'json', ...extra] };
   throw Error('Intake auto-improve needs codex or claude');
@@ -405,13 +405,16 @@ function startIntakeJob(ctx, runner, spec) {
   const prepared = typeof runner?.prepareStep === 'function'
     ? runner.prepareStep(ctx.ports?.env ?? process.env, { detached: true })
     : null;
-  const env = prepared ? cardEnvironment(prepared.env) : runner.env;
+  const env = { ...(prepared ? cardEnvironment(prepared.env) : runner.env) };
   const cleanupDirs = Array.isArray(prepared?.cleanupDirs) && prepared.cleanupDirs.length
     ? prepared.cleanupDirs
     : (typeof prepared?.overlayDir === 'string' && prepared.overlayDir ? [prepared.overlayDir] : []);
   try {
+    const { buildCommand, ...rest } = spec;
+    const resolved = typeof buildCommand === 'function' ? buildCommand(env) : null;
     const job = ctx.jobs.start({
-      ...spec,
+      ...rest,
+      ...(resolved ? { command: resolved.command, args: resolved.args } : {}),
       env,
       ...(cleanupDirs.length ? { cleanupDirs } : {}),
     });
@@ -841,9 +844,12 @@ export async function shadowIntake(ctx, rows) {
       // Codex writes its last message here; the job runner's own result file stays unused, so it never reads a large answer.
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
       const jobAgent = runner.agent;
-      const run = cardCommand(runner.spec, { model: jobAgent.model, result: answer });
-      const job = startIntakeJob(ctx, runner, { id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args, input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'shadow' }),
-        issue: n, role: 'intake' });
+      const job = startIntakeJob(ctx, runner, {
+        id, dir: f.logs, cwd: f.empty,
+        buildCommand: env => cardCommand(runner.spec, { model: jobAgent.model, result: answer, env, fs: ctx.fs }),
+        input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'shadow' }),
+        issue: n, role: 'intake',
+      });
       try {
         writeJson(ctx.fs, join(f.jobs, `${n}.json`), {
           issue: n, stage: 'card', version, startedAt: ctx.now(), agent: jobAgent,
@@ -984,10 +990,10 @@ export async function activeIntake(ctx, rows) {
         }
         const id = `improve-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
         const jobAgent = runner.agent;
-        const run = improveCommand(runner.spec, { model: jobAgent.model, result: answer });
         const repoCwd = ctx.state?.cwd || f.empty;
         const job = startIntakeJob(ctx, runner, {
-          id, dir: f.logs, cwd: repoCwd, command: run.command, args: run.args,
+          id, dir: f.logs, cwd: repoCwd,
+          buildCommand: env => improveCommand(runner.spec, { model: jobAgent.model, result: answer, env, fs: ctx.fs }),
           input: improvePrompt({ repo: ctx.repo, row, comments: pComments, card: card.card, pool, decisionNote }),
           issue: n, role: 'intake-improve',
         });
@@ -1037,9 +1043,9 @@ export async function activeIntake(ctx, rows) {
       const { comments, specRefinement, decisionNote, pool } = await readTrustedCommentsAndPool(row, n);
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
       const jobAgent = runner.agent;
-      const run = cardCommand(runner.spec, { model: jobAgent.model, result: answer });
       const job = startIntakeJob(ctx, runner, {
-        id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args,
+        id, dir: f.logs, cwd: f.empty,
+        buildCommand: env => cardCommand(runner.spec, { model: jobAgent.model, result: answer, env, fs: ctx.fs }),
         input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'active', specRefinement, decisionNote }),
         issue: n, role: 'intake',
       });
