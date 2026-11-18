@@ -1,6 +1,6 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9b6980709d4d1085fc8e5d80ae7404a114ec099e5781291afecd0cbf333d413f).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 3ba4a461be8d33d957b15c898a3cdca2645eefb4339ca5b6cab41d75599f04e3).
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,17 +53,43 @@ function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
   } catch { /* delegate workspace/selection errors to runtime[action] */ }
   return null;
 }
+const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
 function hasProjectLintConfig(cwd) {
-  let root = cwd;
+  let root;
   try {
-    root = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || cwd;
+    const gitTop = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+    }).trim();
+    if (!gitTop) return null;
+    root = realpathSync(gitTop);
   } catch { return null; }
   const cfgPath = join(root, 'pdd.json');
-  if (!existsSync(cfgPath)) return null;
+  let fd;
   try {
-    const parsed = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    const st = lstatSync(cfgPath);
+    if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_CONFIG_BYTES) return null;
+    fd = openSync(cfgPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+    const fst = fstatSync(fd);
+    if (!fst.isFile() || fst.size > MAX_CONFIG_BYTES) return null;
+    const buf = Buffer.alloc(fst.size);
+    let offset = 0;
+    while (offset < buf.length) {
+      const n = readSync(fd, buf, offset, buf.length - offset, offset);
+      if (!n) break;
+      offset += n;
+    }
+    const parsed = JSON.parse(buf.subarray(0, offset).toString('utf8'));
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'lint') ? root : null;
-  } catch { return root; }
+  } catch (err) {
+    return err instanceof SyntaxError ? root : null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
 }
 async function collectProjectLintErrors(runtime, root, words, options) {
   try {

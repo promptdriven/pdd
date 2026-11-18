@@ -1,4 +1,4 @@
-// Generated from prompts/cli/codex-lint.prompt.md (sha256: db28351e15efb354856f6bc36ea6b12be95a9abb9ca64ecb0265e2922fd583d2).
+// Generated from prompts/cli/codex-lint.prompt.md (sha256: 8238d3006d2002724c1c58e9b7490dd43355b711ac5af923698882380ac42720).
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,12 +6,17 @@ import { basename, isAbsolute, join, posix, relative, resolve, sep } from 'node:
 import { runStepAgentProcess } from './agent-adapters.mjs';
 import { lintRepoProject, stripPromptMetadata } from './repo-hygiene-lint.mjs';
 import { causeText, gitFiles, isSecretPath, workspace } from './runtime-seam.mjs';
+import { knownSecretValues, redactSecrets } from './secret-redaction.mjs';
 import { isLintableStoryPath } from './story-lint.mjs';
 
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_PROMPT_CHARS_PER_FILE = 24000;
 const FILES_PER_BATCH = 6;
 const DEFAULT_TIMEOUT_MS = 120000;
+const MIN_TIMEOUT_MINUTES = 0.1;
+const MAX_TIMEOUT_MINUTES = 120;
+const MAX_TIMER_MS = 2_147_483_647;
+const STRIPPED_CODEX_ENV_RE = /^(?:(?:GH|GITHUB)_(?:.*TOKEN.*|PAT)|PDD_.*TOKEN.*|NPM_TOKEN|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|CODEX_THREAD_ID|CODEX_SANDBOX.*|CLAUDECODE|CLAUDE_CODE_.*|CLAUDE_PID|HERDR_.*|PDD_AGENT_SESSION|PDD_AUTOPILOT_CONTEXT)$/i;
 const FIXTURE_DIR = /(?:^|\/)fixtures(?:\/|$)/i;
 const SCENARIO_JSON_PATH = /^(?:tests?|__tests__)\/.*\.json$/i;
 const CODEX_DISABLED_FEATURES = [
@@ -163,10 +168,10 @@ function numberLines(text) {
   return lines.map((line, idx) => `${idx + 1}: ${line}`).join('\n');
 }
 
-export function buildCodexLintPrompt(files) {
+export function buildCodexLintPrompt(files, { secrets = [] } = {}) {
   const fileBlocks = files.map(item => [
     `=== FILE: ${item.path} (kind: ${item.kind}) ===`,
-    numberLines(item.text),
+    numberLines(redactSecrets(String(item.text ?? ''), secrets)),
     `=== END FILE: ${item.path} ===`,
   ].join('\n')).join('\n\n');
 
@@ -218,8 +223,16 @@ function parseCodexVerdictJson(rawText) {
 
 function sanitizeCodexEnv(env = {}) {
   return Object.fromEntries(
-    Object.entries(env).filter(([key, val]) => val !== undefined && !/^(?:GH|GITHUB)_\w*TOKEN$/i.test(key)),
+    Object.entries(env).filter(([key, val]) => val !== undefined && !STRIPPED_CODEX_ENV_RE.test(key)),
   );
+}
+
+function resolveTotalTimeoutMs(timeoutMinutes) {
+  if (timeoutMinutes === undefined || timeoutMinutes === null) return DEFAULT_TIMEOUT_MS;
+  const num = Number(timeoutMinutes);
+  if (!Number.isFinite(num) || num <= 0) return DEFAULT_TIMEOUT_MS;
+  const clampedMinutes = Math.min(MAX_TIMEOUT_MINUTES, Math.max(MIN_TIMEOUT_MINUTES, num));
+  return Math.min(MAX_TIMER_MS, Math.round(clampedMinutes * 60 * 1000));
 }
 
 export async function runCodexLint(
@@ -228,6 +241,10 @@ export async function runCodexLint(
 ) {
   const stdout = ports.stdout ?? process.stdout;
   const stderr = ports.stderr ?? process.stderr;
+  const now = typeof ports.now === 'function' ? ports.now : Date.now;
+  const secrets = knownSecretValues(env);
+  const redact = value => redactSecrets(String(value ?? ''), secrets);
+  const writeErr = msg => stderr.write(`${redact(msg)}\n`);
 
   let gitRoot;
   try {
@@ -235,9 +252,10 @@ export async function runCodexLint(
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
     }).trim();
   } catch {
-    stderr.write('pdd lint --codex works inside a Git repository.\n');
+    writeErr('pdd lint --codex works inside a Git repository.');
     return 2;
   }
 
@@ -249,7 +267,7 @@ export async function runCodexLint(
     rawFiles = Array.isArray(ports.files) ? ports.files : gitFiles(realRoot);
   } catch (error) {
     const clean = causeText(error?.message ?? error);
-    stderr.write(`Workspace could not be read${clean ? `: ${clean}` : ''}.\n`);
+    writeErr(`Workspace could not be read${clean ? `: ${clean}` : ''}.`);
     return 1;
   }
 
@@ -259,7 +277,7 @@ export async function runCodexLint(
 
   const resolved = resolveTargets({ realRoot, cwdBase, allowedFiles, words });
   if (!resolved.ok) {
-    stderr.write(`Unknown Story or prompt path: ${resolved.unknown}.\n`);
+    writeErr(`Unknown Story or prompt path: ${resolved.unknown}.`);
     return 2;
   }
 
@@ -273,17 +291,19 @@ export async function runCodexLint(
     promptPaths: words.length ? selectedPrompts : undefined,
     tests: words.length ? selectedStories : undefined,
   });
+  const redactedWarnings = deterministic.warnings.map(redact);
+  const redactedProblems = deterministic.errors.map(redact);
 
   const targetEntries = [];
   for (const filePath of selectedPaths) {
     const raw = readSafeUtf8(realRoot, filePath);
     if (typeof raw !== 'string') continue;
     const kind = filePath.endsWith('.prompt.md') ? 'prompt' : 'story';
-    const text = kind === 'prompt' ? stripPromptMetadata(raw).trim() : raw;
-    targetEntries.push({ path: filePath, kind, text });
+    const stripped = kind === 'prompt' ? stripPromptMetadata(raw).trim() : raw;
+    targetEntries.push({ path: filePath, kind, text: redact(stripped) });
   }
 
-  if (!targetEntries.length && deterministic.errors.length === 0) {
+  if (!targetEntries.length && redactedProblems.length === 0) {
     const summaryLine = 'Lint (Codex): PASS (0/0 files passed)';
     if (json) {
       stdout.write(`${JSON.stringify({
@@ -293,20 +313,19 @@ export async function runCodexLint(
         passed: 0,
         failed: 0,
         files: [],
-        warnings: deterministic.warnings,
+        warnings: redactedWarnings,
         problems: [],
         summary_line: summaryLine,
       })}\n`);
     } else {
-      for (const warning of deterministic.warnings) stderr.write(`${warning}\n`);
+      for (const warning of redactedWarnings) stderr.write(`${warning}\n`);
       stdout.write(`${summaryLine}\n`);
     }
     return 0;
   }
 
-  const timeoutMs = Number.isInteger(timeoutMinutes) && timeoutMinutes > 0
-    ? timeoutMinutes * 60 * 1000
-    : DEFAULT_TIMEOUT_MS;
+  const totalTimeoutMs = resolveTotalTimeoutMs(timeoutMinutes);
+  const deadline = now() + totalTimeoutMs;
   const childEnv = sanitizeCodexEnv(env);
   const verdictByPath = new Map();
 
@@ -314,20 +333,28 @@ export async function runCodexLint(
     const tempDir = mkdtempSync(join(tmpdir(), 'pdd-codex-lint-'));
     try {
       for (let offset = 0; offset < targetEntries.length; offset += FILES_PER_BATCH) {
+        const remainingMs = deadline - now();
+        if (remainingMs <= 0) {
+          writeErr(`Codex lint timed out after ${Math.max(1, Math.round(totalTimeoutMs / 1000))}s. Narrow the target selection, increase --timeout MIN, or run pdd lint --local.`);
+          return 1;
+        }
+        const batchTimeoutMs = Math.min(MAX_TIMER_MS, Math.max(1000, remainingMs));
         const batch = targetEntries.slice(offset, offset + FILES_PER_BATCH);
-        const outFile = join(tempDir, `last-message-${offset}.json`);
-        const prompt = buildCodexLintPrompt(batch);
+        const outFile = resolve(tempDir, `last-message-${offset}.json`);
+        const prompt = buildCodexLintPrompt(batch, { secrets });
         const args = [
           'exec',
           '--sandbox', 'read-only',
           '--skip-git-repo-check',
           '--ephemeral',
           '--color', 'never',
+          '--ignore-rules',
           '-c', 'approval_policy="never"',
           '-c', 'web_search="disabled"',
           '-c', 'mcp_servers={}',
           ...CODEX_DISABLED_FEATURES.flatMap(name => ['-c', `features.${name}=false`]),
           '--output-last-message', outFile,
+          '--',
           '-',
         ];
         let stepResult;
@@ -339,27 +366,27 @@ export async function runCodexLint(
             cwd: realRoot,
             env: childEnv,
             input: prompt,
-            timeoutMs,
+            timeoutMs: batchTimeoutMs,
             maxBytes: 262144,
             ...(ports.runAgentProcess ? { run: ports.runAgentProcess } : {}),
             ...(ports.accountsPorts ? { accountsPorts: ports.accountsPorts } : {}),
           });
         } catch (error) {
           const clean = causeText(error?.message ?? error);
-          stderr.write(`Codex lint could not run${clean ? `: ${clean}` : ''}. Check codex login status or run pdd lint --local.\n`);
+          writeErr(`Codex lint could not run${clean ? `: ${clean}` : ''}. Check codex login status or run pdd lint --local.`);
           return 1;
         }
 
         const fileReply = existsSync(outFile) ? readFileSync(outFile, 'utf8') : '';
         if (stepResult?.code !== 0 && !fileReply.trim()) {
           const errCause = causeText(stepResult?.stderr || stepResult?.stdout || `exit code ${stepResult?.code ?? 1}`);
-          stderr.write(`Codex lint failed${errCause ? `: ${errCause}` : ''}. Check codex login status or run pdd lint --local.\n`);
+          writeErr(`Codex lint failed${errCause ? `: ${errCause}` : ''}. Check codex login status or run pdd lint --local.`);
           return 1;
         }
 
         const parsed = parseCodexVerdictJson(fileReply) ?? parseCodexVerdictJson(stepResult?.stdout ?? '');
         if (!parsed) {
-          stderr.write('Codex lint returned an unreadable response. Re-run pdd lint --codex or run pdd lint --local.\n');
+          writeErr('Codex lint returned an unreadable response. Re-run pdd lint --codex or run pdd lint --local.');
           return 1;
         }
 
@@ -367,16 +394,17 @@ export async function runCodexLint(
           if (!row || typeof row.path !== 'string') continue;
           const cleanPath = row.path.replace(/^\.\//, '');
           const verdict = String(row.verdict ?? '').toLowerCase() === 'fail' ? 'fail' : 'pass';
-          const summary = typeof row.summary === 'string' && row.summary.trim()
+          const rawSummary = typeof row.summary === 'string' && row.summary.trim()
             ? row.summary.trim()
             : (verdict === 'pass' ? 'Readable and well-structured.' : 'Readability or quality issues found.');
+          const summary = redact(rawSummary);
           const issues = Array.isArray(row.issues)
             ? row.issues
               .filter(item => item && typeof item.message === 'string' && item.message.trim())
               .map(item => ({
                 line: Number.isInteger(item.line) && item.line >= 1 ? item.line : 1,
-                rule: typeof item.rule === 'string' && item.rule.trim() ? item.rule.trim() : 'codex-readability',
-                message: item.message.trim(),
+                rule: typeof item.rule === 'string' && item.rule.trim() ? redact(item.rule.trim()) : 'codex-readability',
+                message: redact(item.message.trim()),
               }))
             : [];
           verdictByPath.set(cleanPath, { verdict, summary, issues });
@@ -394,7 +422,7 @@ export async function runCodexLint(
     detErrorsByPath.get(finding.path).push({
       line: finding.line,
       rule: finding.code,
-      message: finding.message,
+      message: redact(finding.message),
     });
   }
 
@@ -402,7 +430,7 @@ export async function runCodexLint(
   for (const entry of targetEntries) {
     const codexRow = verdictByPath.get(entry.path);
     if (!codexRow) {
-      stderr.write(`Codex lint omitted verdict for ${entry.path}.\n`);
+      writeErr(`Codex lint omitted verdict for ${entry.path}.`);
       return 1;
     }
     const detIssues = detErrorsByPath.get(entry.path) ?? [];
@@ -422,11 +450,11 @@ export async function runCodexLint(
 
   const passed = fileRows.filter(f => f.status === 'pass').length;
   const failed = fileRows.length - passed;
-  const ok = failed === 0 && deterministic.errors.length === 0;
+  const ok = failed === 0 && redactedProblems.length === 0;
   const exitCode = ok ? 0 : 1;
-  const summaryLine = ok
+  const summaryLine = redact(ok
     ? `Lint (Codex): PASS (${passed}/${fileRows.length} files passed)`
-    : `Lint (Codex): FAIL (${passed}/${fileRows.length} files passed, ${failed} failed${deterministic.errors.length && !failed ? `, ${deterministic.errors.length} project rule error(s)` : ''})`;
+    : `Lint (Codex): FAIL (${passed}/${fileRows.length} files passed, ${failed} failed${redactedProblems.length && !failed ? `, ${redactedProblems.length} project rule error(s)` : ''})`);
 
   if (json) {
     stdout.write(`${JSON.stringify({
@@ -436,14 +464,14 @@ export async function runCodexLint(
       passed,
       failed,
       files: fileRows,
-      warnings: deterministic.warnings,
-      problems: deterministic.errors,
+      warnings: redactedWarnings,
+      problems: redactedProblems,
       summary_line: summaryLine,
     })}\n`);
     return exitCode;
   }
 
-  for (const warning of deterministic.warnings) stderr.write(`${warning}\n`);
+  for (const warning of redactedWarnings) stderr.write(`${warning}\n`);
   for (const row of fileRows) {
     const badge = row.status === 'pass' ? 'PASS' : 'FAIL';
     stdout.write(`${badge} ${row.path} — ${row.summary}\n`);
@@ -456,7 +484,7 @@ export async function runCodexLint(
   const trackedSet = new Set(fileRows.map(r => r.path));
   for (const finding of deterministic.findings) {
     if (finding.severity === 'error' && !trackedSet.has(finding.path)) {
-      stderr.write(`${finding.formatted}\n`);
+      writeErr(finding.formatted);
     }
   }
   stdout.write(`${summaryLine}\n`);

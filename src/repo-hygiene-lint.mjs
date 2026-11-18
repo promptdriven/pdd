@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: b15db98a9fc8bba045d9fecedc3ee4a6ed61635e700da1c2c0013728258f03f9).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 87b8410efd8988e3f48059e5d4089cb242ad1e6ad80a4fc95499238183f16baf).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
@@ -1209,34 +1209,222 @@ export function lintPublicInterfaceTests(text, { path = 'test/example.test.mjs' 
   return collectPublicInterfaceTestWarnings(text, { path }).map(item => item.warning);
 }
 
+const MAX_GLOB_WILDCARDS = 12;
+const MAX_REGEX_GROUP_DEPTH = 16;
+
+function encodeGlobSegment(segment) {
+  let out = '';
+  for (const ch of segment) {
+    if (ch === '*') out += '[^/]*';
+    else if (ch === '?') out += '[^/]';
+    else if ('+^$()[]{}|.\\'.includes(ch)) out += `\\${ch}`;
+    else out += ch;
+  }
+  return out;
+}
+
 function globToRegExp(glob) {
-  const clean = String(glob ?? '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  const clean = String(glob ?? '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+/g, '/').replace(/^\/+|\/+$/g, '');
   if (!clean || clean.length > 256) return null;
+  const rawSegments = clean.split('/');
+  const segments = [];
+  for (const rawSeg of rawSegments) {
+    const collapsed = /^\*+$/.test(rawSeg)
+      ? (rawSeg.length >= 2 ? '**' : '*')
+      : rawSeg.replace(/\*+/g, '*');
+    if (collapsed === '**' && segments.at(-1) === '**') continue;
+    segments.push(collapsed);
+  }
+  let wildcardCount = 0;
+  for (const seg of segments) {
+    if (seg === '**') wildcardCount += 1;
+    else wildcardCount += (seg.match(/[*?]/g) ?? []).length;
+  }
+  if (wildcardCount > MAX_GLOB_WILDCARDS) return null;
+
   let re = '^';
-  for (let i = 0; i < clean.length; i++) {
-    const ch = clean[i];
-    if (ch === '*') {
-      if (clean[i + 1] === '*') {
-        if (clean[i + 2] === '/') {
-          re += '(?:.*/)?';
-          i += 2;
-        } else {
-          re += '.*';
-          i += 1;
-        }
-      } else {
-        re += '[^/]*';
-      }
-    } else if (ch === '?') {
-      re += '[^/]';
-    } else if ('+^$()[]{}|.'.includes(ch)) {
-      re += `\\${ch}`;
-    } else {
-      re += ch;
+  for (let idx = 0; idx < segments.length; idx++) {
+    const seg = segments[idx];
+    if (seg === '**') {
+      if (segments.length === 1) re += '.*';
+      else if (idx === 0) re += '(?:.*/)?';
+      else if (idx === segments.length - 1) re += '/.*';
+      else re += '(?:/.*)?';
+      continue;
     }
+    if (idx > 0 && segments[idx - 1] !== '**') re += '/';
+    else if (idx > 0 && segments[idx - 1] === '**' && idx - 1 > 0) re += '/';
+    re += encodeGlobSegment(seg);
   }
   re += '$';
   return new RegExp(re);
+}
+
+function readRegexQuantifier(pattern, pos) {
+  if (pos >= pattern.length) return null;
+  const ch = pattern[pos];
+  if (ch === '*' || ch === '+') {
+    const lazy = pattern[pos + 1] === '?' ? 1 : 0;
+    return { len: 1 + lazy, unbounded: true, repeats: true };
+  }
+  if (ch === '?') {
+    const lazy = pattern[pos + 1] === '?' ? 1 : 0;
+    return { len: 1 + lazy, unbounded: false, repeats: false };
+  }
+  if (ch === '{') {
+    const m = /^\{(\d+)(?:,(\d*))?\}(\?)?/.exec(pattern.slice(pos));
+    if (!m) return null;
+    const min = Number(m[1]);
+    const hasComma = m[2] !== undefined;
+    const max = hasComma ? (m[2] === '' ? Infinity : Number(m[2])) : min;
+    if (max < min) return null;
+    return { len: m[0].length, unbounded: max === Infinity, repeats: max > 1 };
+  }
+  return null;
+}
+
+function isSafeRegexPattern(pattern, cleanFlags) {
+  const ignoreCase = cleanFlags.includes('i');
+  const normChar = ch => (ignoreCase ? ch.toLowerCase() : ch);
+  const stack = [];
+  const newBranch = () => ({ firstChar: null, pureLiteralPrefix: true, len: 0 });
+  const recordAtomOnTop = (literalChar = null) => {
+    if (!stack.length) return;
+    const branch = stack.at(-1).branches.at(-1);
+    if (branch.len === 0) {
+      if (literalChar !== null && branch.pureLiteralPrefix) branch.firstChar = normChar(literalChar);
+      else branch.pureLiteralPrefix = false;
+    }
+    branch.len += 1;
+  };
+  const markQuantifierOnTop = quant => {
+    if (!stack.length) return;
+    const top = stack.at(-1);
+    top.hasInnerQuantifier = true;
+    if (quant.unbounded) top.hasUnboundedQuantifier = true;
+  };
+
+  let inCharClass = false;
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (inCharClass) {
+      if (ch === '\\') { i += 2; continue; }
+      if (ch === ']') {
+        inCharClass = false;
+        i += 1;
+        const q = readRegexQuantifier(pattern, i);
+        if (q) { markQuantifierOnTop(q); i += q.len; }
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (ch === '\\') {
+      const esc = pattern[i + 1];
+      if (!esc) return false;
+      if (/^[1-9]$/.test(esc) || esc === 'k') return false;
+      let step = 2;
+      if ((esc === 'p' || esc === 'P' || esc === 'u') && pattern[i + 2] === '{') {
+        const close = pattern.indexOf('}', i + 3);
+        if (close < 0) return false;
+        step = close - i + 1;
+      }
+      if (esc === 'b' || esc === 'B') {
+        i += step;
+        continue;
+      }
+      const isClassEscape = /^[dDwWsSpP]$/.test(esc);
+      recordAtomOnTop(isClassEscape ? null : esc);
+      i += step;
+      const q = readRegexQuantifier(pattern, i);
+      if (q) { markQuantifierOnTop(q); i += q.len; }
+      continue;
+    }
+
+    if (ch === '[') {
+      inCharClass = true;
+      recordAtomOnTop(null);
+      i += 1;
+      continue;
+    }
+
+    if (ch === '(') {
+      if (stack.length >= MAX_REGEX_GROUP_DEPTH) return false;
+      let kind = 'normal';
+      let step = 1;
+      if (pattern[i + 1] === '?') {
+        const rest = pattern.slice(i + 2);
+        if (rest.startsWith(':')) { step = 3; }
+        else if (rest.startsWith('=') || rest.startsWith('!')) { kind = 'lookaround'; step = 3; }
+        else if (rest.startsWith('<=') || rest.startsWith('<!')) { kind = 'lookaround'; step = 4; }
+        else if (rest.startsWith('<')) {
+          const close = rest.indexOf('>');
+          if (close <= 1) return false;
+          step = 2 + close + 1;
+        } else {
+          return false;
+        }
+      }
+      if (kind === 'normal') recordAtomOnTop(null);
+      stack.push({ kind, hasInnerQuantifier: false, hasUnboundedQuantifier: false, branches: [newBranch()] });
+      i += step;
+      continue;
+    }
+
+    if (ch === '|') {
+      if (stack.length) stack.at(-1).branches.push(newBranch());
+      i += 1;
+      continue;
+    }
+
+    if (ch === ')') {
+      if (!stack.length) return false;
+      const frame = stack.pop();
+      if (frame.kind === 'lookaround' && frame.hasUnboundedQuantifier) return false;
+      i += 1;
+      const q = readRegexQuantifier(pattern, i);
+      if (q) {
+        if (frame.kind === 'lookaround') return false;
+        if (frame.hasInnerQuantifier) return false;
+        if (q.repeats && frame.branches.length > 1) {
+          const starts = [];
+          for (const br of frame.branches) {
+            if (br.len === 0 || !br.pureLiteralPrefix || br.firstChar === null) return false;
+            starts.push(br.firstChar);
+          }
+          if (new Set(starts).size !== frame.branches.length) return false;
+        }
+        markQuantifierOnTop(q);
+        i += q.len;
+      }
+      if (stack.length && frame.kind === 'normal') {
+        if (frame.hasInnerQuantifier) stack.at(-1).hasInnerQuantifier = true;
+        if (frame.hasUnboundedQuantifier) stack.at(-1).hasUnboundedQuantifier = true;
+      }
+      continue;
+    }
+
+    if (ch === '^' || ch === '$') {
+      i += 1;
+      continue;
+    }
+
+    const strayQuant = readRegexQuantifier(pattern, i);
+    if (strayQuant) {
+      markQuantifierOnTop(strayQuant);
+      i += strayQuant.len;
+      continue;
+    }
+
+    recordAtomOnTop(ch === '.' ? null : ch);
+    i += 1;
+    const q = readRegexQuantifier(pattern, i);
+    if (q) { markQuantifierOnTop(q); i += q.len; }
+  }
+
+  return !inCharClass && stack.length === 0;
 }
 
 function parseRegexSafe(pattern, flags = '') {
@@ -1244,6 +1432,7 @@ function parseRegexSafe(pattern, flags = '') {
   if (typeof flags !== 'string' || flags.length > 8) return null;
   const cleanFlags = [...new Set(flags.replace(/[gy]/g, '').split(''))].join('');
   if (!/^[imsu]*$/.test(cleanFlags)) return null;
+  if (!isSafeRegexPattern(pattern, cleanFlags)) return null;
   try {
     return new RegExp(pattern, cleanFlags);
   } catch {
@@ -1577,14 +1766,14 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
   let realRoot, policy;
   try {
     realRoot = realpathSync(root);
-    policy = workspace.policy({ root });
+    policy = workspace.policy({ root: realRoot });
   } catch {
     return empty;
   }
 
   let rawFiles;
   try {
-    rawFiles = Array.isArray(files) ? files : gitFiles(root);
+    rawFiles = Array.isArray(files) ? files : gitFiles(realRoot);
   } catch {
     return empty;
   }

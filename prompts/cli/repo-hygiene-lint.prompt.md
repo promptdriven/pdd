@@ -4,7 +4,7 @@ Own `src/repo-hygiene-lint.mjs`. Export `lintRepoAntiPatterns({root, files, prom
 
 ## Workspace scope and safety
 
-Default `files` to Git-visible repository-relative paths (`gitFiles(root)`), filter out secret paths (`isSecretPath`) and paths outside the workspace policy (`workspace.policy({root})`, `workspace.allows(policy, path)`), and skip nested `fixtures/` folders unless explicitly selected in `promptPaths` or `tests`. Open only regular in-root files without following symlinks and skip unreadable, escaping, symlinked or oversized candidates without throwing.
+Resolve `realRoot = realpathSync(root)`, default `files` to Git-visible repository-relative paths (`gitFiles(realRoot)`), filter out secret paths (`isSecretPath`) and paths outside the workspace policy (`workspace.policy({root: realRoot})`, `workspace.allows(policy, path)`), and skip nested `fixtures/` folders unless explicitly selected in `promptPaths` or `tests`. Open only regular in-root files without following symlinks and skip unreadable, escaping, symlinked or oversized candidates without throwing.
 
 - **Prompts:** With `promptPaths`, inspect only those allowed `.prompt.md` paths; without `promptPaths`, inspect every scoped `.prompt.md`.
 - **Stories:** When neither `promptPaths` nor `tests` scopes the run, inspect every scoped `isLintableStoryPath(path)` file. When `tests` or `promptPaths` scopes a Story run, inspect only lintable Stories matched by `tests` or referenced via `story_path` in scoped scenario JSON files whose `steps[].entry_path`, `entry_paths` or `context` intersect `promptPaths`.
@@ -26,7 +26,7 @@ Default `files` to Git-visible repository-relative paths (`gitFiles(root)`), fil
 Load root `pdd.json` `"lint"` settings via `loadProjectLintConfig`:
 - `disable`: array of rule IDs turned off.
 - `rules`: object mapping rule IDs to `"off" | "warn" | "error"` (or `{severity}`).
-- `custom_rules`: array of declarative project rules `{id, target, include, exclude, severity, forbid_pattern, require_pattern, require_heading, max_lines, flags, message}` scoped to `"prompt" | "story" | "test" | "code" | "all"`. Malformed `lint` entries or invalid regular expressions emit `[lint-config-invalid]` without throwing.
+- `custom_rules`: array of declarative project rules `{id, target, include, exclude, severity, forbid_pattern, require_pattern, require_heading, max_lines, flags, message}` scoped to `"prompt" | "story" | "test" | "code" | "all"`. Collapse redundant `*` / `**` glob segments, reject globs exceeding `12` wildcards, and reject unsafe regular expressions (backreferences, nested quantifiers, ambiguous repeated alternations, or lookarounds containing unbounded quantifiers) or malformed `lint` entries as `[lint-config-invalid]` without throwing.
 
 ## Dependencies
 

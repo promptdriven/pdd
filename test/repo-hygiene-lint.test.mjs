@@ -2,11 +2,11 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { buildCodexLintPrompt } from '../src/codex-lint.mjs';
+import { buildCodexLintPrompt, runCodexLint } from '../src/codex-lint.mjs';
 import {
   isInspectableTestCodePath,
   lintFakeTests,
@@ -972,4 +972,210 @@ test('3499 pdd lint --codex runs read-only Codex Prompt and Story readability/qu
   const badComboErr = sink();
   assert.equal(await runPdd(['lint', '--codex', '--local'], { cwd: repo, env, stdout: sink(), stderr: badComboErr }), 2);
   assert.match(badComboErr.text, /accepts only Story or prompt paths, --json, and --timeout MIN/);
+});
+
+test('3499 ReDoS regex/glob guards and no-symlink pdd.json checks reject unsafe custom_rules and symlinked configs', async t => {
+  // 1. Unsafe backreferences, nested quantifiers, overlapping repeated alternations, and unbounded lookarounds fail closed.
+  const unsafePatterns = [
+    '(a+)+',
+    '([a-z]+)*',
+    '((a+))+',
+    '(?:foo|foobar)+',
+    '(\\w+)\\1',
+    '(?<dup>\\w+)\\k<dup>',
+    '(?=.*secret)foo',
+    '(?<=a+)b',
+  ];
+  for (const unsafe of unsafePatterns) {
+    const cfg = loadProjectLintConfig({
+      lint: {
+        custom_rules: [{ id: 'unsafe-re', forbid_pattern: unsafe }],
+      },
+    });
+    assert.equal(cfg.customRules.length, 0, `expected unsafe regex to be rejected: ${unsafe}`);
+    assert.ok(cfg.configErrors.some(e => e.code === 'lint-config-invalid'), `expected lint-config-invalid for ${unsafe}`);
+  }
+
+  // Disjoint repeated literal alternation and bounded lookbehind remain accepted, and >12 glob wildcards are rejected.
+  const validAndBoundedGlob = loadProjectLintConfig({
+    lint: {
+      custom_rules: [
+        {
+          id: 'collapsed-glob-rule',
+          target: 'code',
+          include: '**/a/**/**/b/*.mjs',
+          forbid_pattern: '(?<!safe_)(?:GET|POST)+',
+        },
+        {
+          id: 'excessive-wildcards',
+          target: 'code',
+          include: 'a/*/*/*/*/*/*/*/*/*/*/*/*/*.mjs',
+          forbid_pattern: 'TODO',
+        },
+      ],
+    },
+  });
+  assert.equal(validAndBoundedGlob.customRules.length, 1);
+  assert.equal(validAndBoundedGlob.customRules[0].id, 'collapsed-glob-rule');
+  assert.ok(validAndBoundedGlob.customRules[0].includeMatchers[0].test('x/a/y/z/b/handler.mjs'));
+  assert.ok(validAndBoundedGlob.customRules[0].includeMatchers[0].test('a/b/handler.mjs'));
+  assert.ok(validAndBoundedGlob.configErrors.some(e => e.code === 'lint-config-invalid' && e.detail.includes('excessive-wildcards')));
+
+  // 2. Symlinked pdd.json is ignored safely by both loadProjectLintConfig and CLI hasProjectLintConfig.
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-symlink-cfg-3499-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const outsideConfig = join(scratch, 'outside-pdd.json');
+  writeFileSync(outsideConfig, JSON.stringify({
+    lint: {
+      custom_rules: [{ id: 'outside-error', target: 'prompt', severity: 'error', forbid_pattern: 'Order' }],
+    },
+  }));
+
+  const repo = join(scratch, 'repo');
+  const home = join(scratch, 'home');
+  const state = join(scratch, 'state');
+  for (const dir of [home, state, join(repo, 'prompts'), join(repo, 'src')]) mkdirSync(dir, { recursive: true });
+  writeFileSync(join(repo, 'prompts/order.prompt.md'), '# Order\n\nOwn `src/order.mjs`.\n\n## Dependencies\n\nNone.\n');
+  writeFileSync(join(repo, 'src/order.mjs'), Array.from({ length: 8 }, (_, i) => `export const o${i} = ${i};`).join('\n') + '\n');
+  symlinkSync(outsideConfig, join(repo, 'pdd.json'));
+
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  execFileSync('git', ['add', 'prompts/order.prompt.md', 'src/order.mjs'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
+
+  assert.equal(loadProjectLintConfig(repo).configured, false);
+  const out = sink(), err = sink();
+  const code = await runPdd(['lint', '--local'], {
+    cwd: repo,
+    env: { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' },
+    stdout: out,
+    stderr: err,
+  });
+  assert.equal(code, 0, err.text);
+  assert.ok(!err.text.includes('outside-error'));
+});
+
+test('3499 runCodexLint enforces --ignore-rules, -- end-of-options, global batch deadline, full credential/session scrubbing and output redaction', async t => {
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-codex-hardening-3499-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const repo = join(scratch, 'repo');
+  const home = join(scratch, 'home');
+  const state = join(scratch, 'state');
+  for (const dir of [home, state, join(repo, 'prompts'), join(repo, 'src')]) mkdirSync(dir, { recursive: true });
+
+  // Create 7 prompts (> 6 files per batch) with an embedded secret value to test redaction + 2-batch global deadline.
+  for (let idx = 0; idx < 7; idx++) {
+    writeFileSync(
+      join(repo, `prompts/mod-${idx}.prompt.md`),
+      `# Module ${idx}\n\nOwn \`src/mod-${idx}.mjs\`. Reference value: sec_live_verysecretvalue999.\n\n## Dependencies\n\nNone.\n`,
+    );
+    writeFileSync(
+      join(repo, `src/mod-${idx}.mjs`),
+      Array.from({ length: 8 }, (_, line) => `export const m${idx}_${line} = ${line};`).join('\n') + '\n',
+    );
+  }
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
+
+  const sensitiveEnv = {
+    HOME: home,
+    PDD_STATE_DIR: state,
+    PATH: process.env.PATH,
+    GH_TOKEN: 'ghs_tok1234567890abcdef',
+    GITHUB_TOKEN: 'ghp_tok1234567890abcdef',
+    GITHUB_PAT: 'github_pat_1234567890abcdef',
+    GH_PAT: 'ghp_pat1234567890abcdef',
+    PDD_CLOUD_TOKEN: 'pddg_cloudtoken1234567890',
+    NPM_TOKEN: 'npm_secret_token_12345',
+    AWS_SECRET_ACCESS_KEY: 'aws_secret_access_key_val',
+    AWS_SESSION_TOKEN: 'aws_session_token_val',
+    OPENAI_API_KEY: 'sk-proj-1234567890abcdef',
+    ANTHROPIC_API_KEY: 'sk-ant-1234567890abcdef',
+    CODEX_THREAD_ID: 'thread-parent-1',
+    CODEX_SANDBOX_NETWORK_DISABLED: '1',
+    CLAUDECODE: '1',
+    HERDR_SESSION: 'pdd',
+    PDD_AGENT_SESSION: 'sess-1',
+    PDD_AUTOPILOT_CONTEXT: 'auto-1',
+    CUSTOM_SERVICE_SECRET: 'sec_live_verysecretvalue999',
+  };
+
+  // 1. Single-file run checks clamped timeoutMinutes, --ignore-rules, resolved outFile, trailing ['--', '-'], env scrubbing, and input/output redaction.
+  const observedCalls = [];
+  const leakingFailRunner = async (command, args, opts) => {
+    observedCalls.push({ command, args, ...opts });
+    const outFile = args[args.indexOf('--output-last-message') + 1];
+    writeFileSync(outFile, JSON.stringify({
+      files: [{
+        path: 'prompts/mod-0.prompt.md',
+        verdict: 'fail',
+        summary: 'Leaked secret sec_live_verysecretvalue999 and ghp_tok1234567890abcdef in summary.',
+        issues: [{ line: 3, rule: 'prompt-readability', message: 'Remove sec_live_verysecretvalue999 from prose.' }],
+      }],
+    }));
+    return { code: 0, stdout: '', stderr: '' };
+  };
+
+  const jsonOut = sink(), jsonErr = sink();
+  const singleExit = await runCodexLint(
+    { cwd: repo, words: ['prompts/mod-0.prompt.md'], timeoutMinutes: 999, json: true, env: sensitiveEnv },
+    { stdout: jsonOut, stderr: jsonErr, now: () => 1_000_000, runAgentProcess: leakingFailRunner },
+  );
+  assert.equal(singleExit, 1);
+  assert.equal(observedCalls.length, 1);
+  const call = observedCalls[0];
+  assert.equal(call.timeoutMs, 120 * 60 * 1000, 'timeoutMinutes > 120 clamps to 120 minutes');
+  assert.ok(call.args.includes('--ignore-rules'));
+  const outFileArg = call.args[call.args.indexOf('--output-last-message') + 1];
+  assert.equal(isAbsolute(outFileArg), true);
+  assert.deepEqual(call.args.slice(-2), ['--', '-']);
+
+  for (const strippedKey of [
+    'GH_TOKEN', 'GITHUB_TOKEN', 'GITHUB_PAT', 'GH_PAT', 'PDD_CLOUD_TOKEN', 'NPM_TOKEN',
+    'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
+    'CODEX_THREAD_ID', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CLAUDECODE', 'HERDR_SESSION',
+    'PDD_AGENT_SESSION', 'PDD_AUTOPILOT_CONTEXT',
+  ]) {
+    assert.equal(call.env[strippedKey], undefined, `${strippedKey} must be scrubbed from Codex env`);
+  }
+  assert.ok(!call.input.includes('sec_live_verysecretvalue999'), 'known env secret must be redacted from prompt input');
+  assert.ok(call.input.includes('[redacted]'));
+
+  const parsedJson = JSON.parse(jsonOut.text);
+  assert.equal(parsedJson.ok, false);
+  assert.ok(!jsonOut.text.includes('sec_live_verysecretvalue999'));
+  assert.ok(!jsonOut.text.includes('ghp_tok1234567890abcdef'));
+  assert.match(parsedJson.files[0].summary, /\[redacted\]/);
+  assert.match(parsedJson.files[0].issues[0].message, /\[redacted\]/);
+
+  // 2. Multi-batch global deadline: 7 files (batch 1 = 6 files, batch 2 = 1 file) share one overall budget instead of multiplying.
+  let fakeNow = 1_000_000;
+  const batchTimeouts = [];
+  const clockAdvancingRunner = async (_cmd, args, opts) => {
+    batchTimeouts.push(opts.timeoutMs);
+    const outFile = args[args.indexOf('--output-last-message') + 1];
+    writeFileSync(outFile, JSON.stringify({
+      files: Array.from({ length: 6 }, (_, idx) => ({
+        path: `prompts/mod-${idx}.prompt.md`,
+        verdict: 'pass',
+        summary: 'Clean.',
+        issues: [],
+      })),
+    }));
+    // Advance clock past the clamped 0.1-minute (6000ms) overall deadline during batch 1.
+    fakeNow += 6_500;
+    return { code: 0, stdout: '', stderr: '' };
+  };
+
+  const deadlineOut = sink(), deadlineErr = sink();
+  const deadlineExit = await runCodexLint(
+    { cwd: repo, words: [], timeoutMinutes: 0.01, json: false, env: { HOME: home, PDD_STATE_DIR: state } },
+    { stdout: deadlineOut, stderr: deadlineErr, now: () => fakeNow, runAgentProcess: clockAdvancingRunner },
+  );
+  assert.equal(deadlineExit, 1);
+  assert.deepEqual(batchTimeouts, [6000], 'timeoutMinutes < 0.1 clamps to 6000ms and batch 2 stops once overall deadline expires');
+  assert.match(deadlineErr.text, /Codex lint timed out after 6s/);
 });
