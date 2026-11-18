@@ -26,13 +26,16 @@ const credentialNames = [
 function fixtureLock(resolved) {
   const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const runtimePackage = runtimeVersion().package;
-  const runtimeSpec = lock.packages[''].dependencies[runtimePackage];
   const packageKey = `node_modules/${runtimePackage}`;
+  const packageVersion = lock.packages[packageKey].version;
+  const resolvedUrl = resolved ?? `https://registry.npmjs.org/@promptdriven/runtime-client/-/runtime-client-${packageVersion}.tgz`;
+  const runtimeSpec = resolvedUrl.startsWith('https://registry.npmjs.org/')
+    ? packageVersion : lock.packages[''].dependencies[runtimePackage];
   return JSON.stringify({
     ...lock,
     packages: {
       '': { ...lock.packages[''], dependencies: { [runtimePackage]: runtimeSpec } },
-      [packageKey]: { ...lock.packages[packageKey], version: runtimeSpec, resolved },
+      [packageKey]: { ...lock.packages[packageKey], version: packageVersion, resolved: resolvedUrl },
     },
   });
 }
@@ -108,7 +111,7 @@ test('CI installer uses anonymous npm ci for a public registry runtime package',
   const bin = join(dir, 'bin');
   const log = join(dir, 'npm.json');
   const gitLog = join(dir, 'git.log');
-  writeFileSync(join(dir, 'package-lock.json'), fixtureLock('https://registry.npmjs.org/@promptdriven/runtime-client/-/runtime-client-1.0.0.tgz'));
+  writeFileSync(join(dir, 'package-lock.json'), fixtureLock());
   mkdirSync(bin);
   writeCommands(bin);
 

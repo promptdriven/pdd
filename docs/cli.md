@@ -715,7 +715,7 @@ Changed criterion text and other malformed test rules still refuse the test.
 
 | Command | What it does |
 |---|---|
-| `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared real CLI commands, with 0 AI calls. Compare arguments, optional stdin, exit code, stdout and stderr using the same cases. Save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
+| `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared CLI commands or native typed-call adapters, with 0 AI calls. Apply the same supported checks and save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
 | `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every Story affected by local changes against the unique saved-run base or HEAD, including all variants and criteria. Uncertain scope keeps complete coverage. Read omitted baseline obligations from local original Check history in a separate historical report. Status describes selected checks only. Required full-pass gates still apply. |
 | `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
 | `pdd test [PATH\|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]` | Cap logical interpreter calls across all selected Stories and any permitted `service-restarted` replacement (`--max-total-calls` 1..999999), or decline automatic `service-restarted` replacement (`--no-restart-replacement`, saved across `--read` and `--retry`). Also accepted with `--affected` and `--journeys` |
@@ -736,8 +736,15 @@ For `--target code`, each tested Runtime entry declares
 is split into words without a shell; quoted or shell-dependent command strings
 are unsupported. Cases supply string `argv` and optional UTF-8 `stdin`.
 The runner supports `equals` checks on `/exit_code`, `/stdout` and `/stderr`.
-Other checks, HTTP and call entries, and world or port simulations without a
-native bridge report `not run` with a reason. Results are saved in
+Typed `call` entries can instead declare a project-supplied
+[JSON-stdio adapter](code-call-adapters.md). That bounded route carries the
+original world and saved `fixture.lookup` replies for ports or read-only command
+resources to the real application, without launching a live resource command, and
+supports literal `equals` and `count` checks on result, error, world and calls.
+The adapter is trusted project code; shared interpreter source capture omits
+local `implementation` metadata automatically. Unsupported operators, other
+resource actions, references, step overrides and HTTP entries report `not run`
+with a reason. Results are saved in
 `.pdd/code-test/latest.json` with the commit and worktree dirty state; a failed
 or unrun Story makes the command nonzero.
 
@@ -1706,3 +1713,70 @@ association cannot support a fit claim. An interpreter without
 `lint-call-preflight` support refuses an explicitly selected lint cap before
 submission. Ordinary lint without a cap remains available. Local lint does not
 accept a call cap. Reading a saved standalone lint never starts a paid check.
+
+
+## Owner-local commands
+
+Owner-local commands run reviewed local command templates from a manifest file outside uploaded source.
+
+| Command | Purpose |
+| --- | --- |
+| `pdd test [STORY...] --live-local --command-manifest PATH [--allow-live-writes] [--max-calls N]` | Check Stories with fixed commands on this machine under the current login. |
+| `pdd simulate [STORY] --live-local --command-manifest PATH [--allow-live-writes] [--max-calls N]` | Keep the local command bridge running in the foreground. |
+
+Commands default to read access. Review each template and its access classification. Write calls require `--allow-live-writes` and a fresh real terminal confirmation for each call. Automatic approvals and piped input cannot confirm writes. Credentials stay on this machine. Command output is redacted before upload, and live reports are private.
+
+Live simulation accepts `--no-open` and refuses `--no-wait`. Keep its process running to serve later Simulator calls. Use `pdd simulate --stop [STORY]` to stop the session, or interrupt the foreground process. The AI cap `--max-calls` is separate from the local command cap.
+
+Live-local mode refuses target-code execution, read/retry, file or binding inspection, affected/journey/product selections, stop/save-last and standalone lint before source upload. Ordinary saved-result reads remain available without starting a local bridge.
+
+A concise command-map manifest maps `<resource>.<operation>` directly to a literal token array (or an entry with `cmd`, `env`, `access`, `cwd` and typed `params` for `{placeholder}` argument tokens):
+
+```json
+{
+  "commands": {
+    "github.read": {
+      "cmd": ["gh", "repo", "view", "promptdriven/pdd", "--json", "name"],
+      "env": ["GH_TOKEN"]
+    }
+  }
+}
+```
+
+Or use the expanded `pdd.live-local-manifest.v1` schema for explicit resource selection and byte/time limits:
+
+```json
+{
+  "schema_version": "pdd.live-local-manifest.v1",
+  "selection": {
+    "schema_version": "prompt-runtime.resource-selection.v2",
+    "resources": [
+      {"resource": "github", "mode": "real", "location": "local", "binding_id": "github"}
+    ]
+  },
+  "commands": [{
+    "binding_id": "github",
+    "resource": "github",
+    "operation": "read",
+    "executable": "gh",
+    "argv": [
+      {"literal": "repo"},
+      {"literal": "view"},
+      {"literal": "promptdriven/pdd"},
+      {"literal": "--json"},
+      {"literal": "name"}
+    ],
+    "parameters": [],
+    "stdin": {"literal": ""},
+    "cwd": ".",
+    "environment": ["GH_TOKEN"],
+    "timeout_ms": 10000,
+    "stdout_limit_bytes": 4096,
+    "stderr_limit_bytes": 4096
+  }]
+}
+```
+
+Keep the manifest in a private local file outside selected upload files and pass its path with `--command-manifest`. Environment entries contain variable names; their values and the local executable path stay on this machine. Existing home and command configuration references remain local. The resource selection must cover the Story's declared resources, and every real local resource needs a reviewed command for each selected operation. Omitted `access` means `read`.
+
+Typed parameters may fill declared argument slots. They cannot choose executable names, flags, stdin, working directories, environment names or process limits. String parameters require an enum, pattern or length bound (shorthand `{placeholder}` slots default to `maxLength: 512`). Shell and interpreter executables are refused.

@@ -34,7 +34,7 @@
     "version": "node scripts/sync-pypi-version.mjs && git add python/pyproject.toml python/pdd_cli/__init__.py"
   },
   "dependencies": {
-    "@promptdriven/runtime-client": "1.0.0"
+    "@promptdriven/runtime-client": "1.1.0"
   },
   "engines": {
     "node": ">=22.16.0"

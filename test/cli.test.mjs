@@ -51,10 +51,10 @@ test('ALPHA4: actual packed package runs every advertised local command without 
     'src/workflow-runner.mjs', 'skills/pdd-feature/workflow.json', 'skills/pdd-bug/workflow.json', 'skills/pdd-small-change/workflow.json']) assert.ok(names.includes(required), required);
   for (const file of readdirSync(join(root, 'skills'), { recursive: true }))
     if (file.startsWith('pdd-') && statSync(join(root, 'skills', file)).isFile()) assert.ok(names.includes(`skills/${file}`), file);
-  // RUNBOOK §21's installed examples require these six runnable scenarios; no native tests, fixtures or other test assets ship.
+  // RUNBOOK §21's installed examples and native replay require these runnable scenarios; no native tests, fixtures or other test assets ship.
   assert.deepEqual(names.filter(name => name.startsWith('test/')).sort(), [
     'test/runtime/fake-database.json', 'test/runtime/fake-decision.json', 'test/runtime/fake-factory.json',
-    'test/runtime/fake-files.json', 'test/runtime/fake-hash.json', 'test/runtime/fake-service.json'
+    'test/runtime/fake-files.json', 'test/runtime/fake-hash.json', 'test/runtime/fake-recorded-call.json', 'test/runtime/fake-service.json'
   ]);
   assert.equal(names.some(name => name.includes('host-adapter') || /^(?:ops|infra|ui|\.pdd)\//.test(name) || name.startsWith('skills/pdd/') || name === 'src/guidance.mjs'), false);
   bundleInstalledDependencies(root, archive, sandbox);
