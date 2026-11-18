@@ -1,6 +1,6 @@
 # PDD usage guide
 
-This guide is for people who install pdd 0.1.35 from `promptdriven/pdd`. Each section has commands that you can copy.
+This guide is for people who install pdd 0.1.36 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
 > **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`, Gemini CLI with `--yolo`, and Antigravity CLI with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
@@ -77,7 +77,7 @@ You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-wo
 ```sh
 npm install -g github:promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" --version  # reports PATH conflicts without changing files
-pdd --version   # prints 0.1.35
+pdd --version   # prints 0.1.36
 which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
 ```
 
@@ -88,6 +88,7 @@ Important:
 - Always install and update with the full `github:promptdriven/pdd` line.
 - Do not run `npm install -g pdd`. That installs a different, unrelated package from the npm registry.
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace your pdd with it. You can see this with `npm outdated -g`.
+- If npm says `EEXIST` on `<prefix>/bin/pdd`, an unscoped `pdd` npm package still owns `bin/pdd` while PDD installs as `@promptdriven/pdd`. Remove the unscoped package first instead of passing `--force`: `npm uninstall -g pdd && npm install -g github:promptdriven/pdd`.
 - If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
 
 ### 2.3 Start Autopilot on your repository
@@ -116,7 +117,7 @@ See all of them:
 
 ```sh
 which -a pdd
-pdd --version   # this pdd prints 0.1.35
+pdd --version   # this pdd prints 0.1.36
 ```
 
 If you choose to remove the Python installation, use the tool that installed it:
@@ -173,7 +174,7 @@ Where the skills go:
 
 Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It also removes a marked copy of `pdd-autopilot`, `pdd-check` or `pdd-merge`, because pdd does not ship these skills. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.35`.
+`npx skills add promptdriven/pdd --skill pdd-prompting` installs one skill. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.36`.
 
 Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
 
@@ -588,7 +589,7 @@ This is a pre-release. These limits are known today:
 
 | You see | What to do |
 |---|---|
-| `pdd --version` does not print `0.1.35` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
+| `pdd --version` does not print `0.1.36` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
 | pdd says an agent is not installed or signed in | Install the agent and sign in, or use the other one with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
@@ -617,6 +618,7 @@ This is a pre-release. These limits are known today:
 | `pdd test` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
 | `pdd approve is for a person at a terminal` | In strict mode, run the approval yourself in a normal terminal. In easy mode, your agent can record your actual chat approval with --said. |
 | PR 1 says `Draft prompts: …` | Approve the ready gate and its drafts together, or approve one prompt at a time in a terminal. See [approval commands](cli.md#record-a-chat-approval). |
+| `npm error code EEXIST` on `<prefix>/bin/pdd` | An unscoped `pdd` npm package owns `bin/pdd`. Run `npm uninstall -g pdd && npm install -g github:promptdriven/pdd` (do not use `--force`). |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
 
 ## 14. Report a problem

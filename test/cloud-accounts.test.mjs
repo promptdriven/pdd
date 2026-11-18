@@ -2084,7 +2084,12 @@ test('3427: isolated temp CODEX_HOME on add, --device-auth, --loop auto-labels &
   assert.equal(impFrom.exit, 0, impFrom.stderr);
   assert.match(impFrom.stdout, /Enrolled Codex account "cx-imported"/);
   assert.match(impFrom.stdout, /Shared with promptdriven\/eng \(invite inv_\d+\), @promptdriven \(invite inv_\d+\)/);
-  assert.equal(readFileSync(extAuthPath, 'utf8'), extRawJson, 'external --from file left intact');
+  const scrubbedExtRaw = readFileSync(extAuthPath, 'utf8');
+  assert.equal(scrubbedExtRaw.includes('rt_ext_import_secret8888'), false, 'single-use refresh_token scrubbed from --from source file');
+  const scrubbedExtJson = JSON.parse(scrubbedExtRaw);
+  assert.equal(scrubbedExtJson.tokens.refresh_token, '');
+  assert.equal(scrubbedExtJson.tokens.account_id, 'acct_ext_import');
+  assert.equal(statSync(extAuthPath).mode & 0o777, 0o600);
 
   // 6. Upfront validation on `share` & `unshare` BEFORE network mutations!
   const reqCountBeforeInvalid = cloud.state.requests.length;
@@ -2159,7 +2164,7 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
     },
     readCodexUsageWindows: async ({ env: probeEnv }) => {
       const raw = JSON.parse(readFileSync(join(probeEnv.CODEX_HOME, 'auth.json'), 'utf8'));
-      addProbeSawFullTokens = raw.tokens?.refresh_token === 'rt_probe_add_secret2222';
+      addProbeSawFullTokens = raw.tokens?.access_token === 'at_probe_add_secret1111' && raw.tokens?.refresh_token === '';
       return {
         state: 'ok',
         five_hour_used_percent: 34,
@@ -2170,13 +2175,13 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
     },
   });
   assert.equal(addRes.exit, 0, addRes.stderr);
-  assert.equal(addProbeSawFullTokens, true, 'local usage probe ran against temp CODEX_HOME BEFORE temp dir was wiped');
+  assert.equal(addProbeSawFullTokens, true, 'local usage probe ran against disposable temp CODEX_HOME with refresh_token cleared');
   const addedAcc = cloud.state.accounts.find(a => a.label === 'probe-add');
   assert.equal(addedAcc.five_hour_used_percent, 34);
   assert.equal(addedAcc.weekly_used_percent, 61);
   assert.equal(addedAcc.weekly_reset_at, '2026-11-20T00:00:00Z');
 
-  // 2. Codex `import` when server returns 0%/0% & null resets: probes BEFORE stripping ~/.codex/auth.json, and fails open on probe error!
+  // 2. Codex `import` when server returns 0%/0% & null resets: probes with scrubbed refresh_token copy BEFORE scrubbing ~/.codex/auth.json, and fails open on probe error!
   mkdirSync(join(sb.home, '.codex'), { recursive: true });
   writeFileSync(join(sb.home, '.codex', 'auth.json'), JSON.stringify({
     auth_mode: 'chatgpt',
@@ -2191,8 +2196,11 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
   let impProbeSawUnstripped = false;
   const impRes = await invokeCli(['accounts', 'import', '--provider', 'codex', '--label', 'probe-imp'], sb, {
     readCodexUsageWindows: async ({ env: probeEnv }) => {
-      const raw = JSON.parse(readFileSync(join(probeEnv.CODEX_HOME, 'auth.json'), 'utf8'));
-      impProbeSawUnstripped = raw.tokens?.refresh_token === 'rt_probe_imp_secret4444';
+      const probeRaw = JSON.parse(readFileSync(join(probeEnv.CODEX_HOME, 'auth.json'), 'utf8'));
+      const homeRawDuringProbe = JSON.parse(readFileSync(join(sb.home, '.codex', 'auth.json'), 'utf8'));
+      impProbeSawUnstripped = probeRaw.tokens?.access_token === 'at_probe_imp_secret3333'
+        && probeRaw.tokens?.refresh_token === ''
+        && homeRawDuringProbe.tokens?.refresh_token === 'rt_probe_imp_secret4444';
       return {
         state: 'ok',
         five_hour_used_percent: 19,
@@ -2203,7 +2211,7 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
     },
   });
   assert.equal(impRes.exit, 0, impRes.stderr);
-  assert.equal(impProbeSawUnstripped, true, 'import usage probe ran BEFORE stripping local ~/.codex/auth.json');
+  assert.equal(impProbeSawUnstripped, true, 'import usage probe used scrubbed temp copy before scrubbing ~/.codex/auth.json');
   const impAcc = cloud.state.accounts.find(a => a.label === 'probe-imp');
   assert.equal(impAcc.five_hour_used_percent, 19);
   assert.equal(impAcc.weekly_used_percent, 48);
@@ -2231,7 +2239,7 @@ test('3428: pdd accounts list requests refresh=true while internal checks stay f
   const idxBeforeList = cloud.state.requests.length;
   const listOut = await invokeCli(['accounts', 'list'], sb);
   assert.equal(listOut.exit, 0);
-  assert.match(listOut.stdout, /probe-add\s+codex\s+owner \(Serhan-Asad\)\s+34%/);
+  assert.match(listOut.stdout, /probe-add\s+codex\s+owner \(Serhan-Asad\)\s+66% left/);
   const rootListOut = await invokeCli(['accounts'], sb);
   assert.equal(rootListOut.exit, 0);
   const listReqs = cloud.state.requests.slice(idxBeforeList).filter(r => r.method === 'GET' && r.path === '/v1/accounts');

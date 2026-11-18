@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { jobEnvironment, readAgentJob, stopAgentJob } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
 import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs';
-import { extractJsonObjects, findConfiguredSkipLabel, findExternalRepoLabel } from './autopilot-forensics.mjs';
+import { codexProviderConfigArgs, extractJsonObjects, findConfiguredSkipLabel, findExternalRepoLabel } from './autopilot-forensics.mjs';
 
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
 export const CARD_CLASSES = Object.freeze(['ready', 'improve', 'person', 'duplicate', 'blocked', 'held', 'fixed', 'elsewhere']);
@@ -16,6 +16,12 @@ export const INTAKE_LIMITS = Object.freeze({ startsPerTick: 2, running: 2, timeo
 const PARK_LABELS = ['pdd:stuck', 'pdd:needs-decision', 'pdd:would-merge'];
 const REPORT_LABELS = ['pdd:runtime', 'pdd:autopilot-report'];
 const DECISION_LABEL = 'pdd:needs-decision';
+export const NEEDS_OTHER_REPO_LABEL = 'needs-other-repo';
+export const OTHER_REPO_MARKER_PREFIX = '<!-- pdd:autopilot-intake:other-repo:';
+const GENERIC_ROOT_FILES = new Set(['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'readme.md', 'agents.md', 'claude.md', 'tsconfig.json', 'pyproject.toml', 'cargo.toml', 'go.mod', '.gitignore', 'license']);
+const PATH_PREFIX_RE = /^(?:src|prompts|test|tests|scripts|bin|docs|skills|user_stories|packages|apps|services|extensions|pdd_cloud|prompt-runtime|runtime-client|github_pdd_app|server|worker|api|lib|\.github)\/[A-Za-z0-9_./-]+$/;
+const PATH_EXT_RE = /^(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|swift|sh|md|json|ya?ml|toml|sql|css|html)$/;
+const IGNORE_SLASH_RE = /^(?:origin|refs|application|text|image|audio|video|multipart|http|https|read|write|pass|fail|true|false|yes|no|auto|observe|before|after|stdout|stderr|input|output|client|server)\//i;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = value => typeof value === 'string' ? value : '';
 const labelsOf = row => (row?.labels ?? []).map(label => typeof label === 'string' ? label : label?.name).filter(name => typeof name === 'string' && name).sort();
@@ -56,10 +62,294 @@ export function intakeRows(rows, label) {
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
 }
 
+export function findOtherRepoSkipLabel(input) {
+  const external = findExternalRepoLabel(input);
+  if (external) return external;
+  const list = Array.isArray(input) ? input : input?.labels ?? [];
+  for (const item of list) {
+    const raw = typeof item === 'string' ? item : item?.name;
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (/^(?:pdd:)?needs-other-repo$/i.test(trimmed)) return trimmed;
+  }
+  return null;
+}
+
+function normalizeCandidatePath(raw) {
+  const cleaned = text(raw).trim().replace(/^`+|`+$/g, '').replace(/^[("'\[]+|[)"'\],.:;!?]+$/g, '').replace(/^\.\//, '').replace(/#L\d+(?:-L?\d+)?$/i, '').replace(/:\d+(?::\d+)?$/, '');
+  if (!cleaned || cleaned.startsWith('/') || cleaned.includes('..') || cleaned.includes('://') || cleaned.includes('*') || IGNORE_SLASH_RE.test(cleaned)) return null;
+  if (PATH_EXT_RE.test(cleaned) || PATH_PREFIX_RE.test(cleaned)) return cleaned;
+  return null;
+}
+
+function extractReferencedPaths(fullText) {
+  const stripped = text(fullText).replace(/https?:\/\/[^\s)`"'>]+/gi, ' ');
+  const found = new Set();
+  for (const match of stripped.matchAll(/`([^`\n]{2,180})`/g)) {
+    for (const part of match[1].split(/\s+/)) {
+      const norm = normalizeCandidatePath(part);
+      if (norm) found.add(norm);
+    }
+  }
+  for (const match of stripped.matchAll(/(?:^|[\s(["'])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)(?=$|[\s)\]"',.:;!?])/gm)) {
+    const norm = normalizeCandidatePath(match[1]);
+    if (norm) found.add(norm);
+  }
+  return [...found];
+}
+
+export function detectWrongRepositoryIssue(row, { repo = null, cwd = null, fs = nativeFs, repoFiles = null } = {}) {
+  if (!object(row)) return null;
+  const currentRepo = text(repo).trim().toLowerCase();
+  const currentShort = currentRepo.includes('/') ? currentRepo.split('/').at(-1) : currentRepo;
+  const title = text(row.title), body = text(row.body), fullText = `${title}\n${body}`;
+  if (!fullText.trim()) return null;
+
+  const fileSet = repoFiles ? new Set([...repoFiles].map(item => String(item).replace(/^\.\//, '').replace(/^\/+/, ''))) : null;
+  const canCheckDisk = Boolean(fileSet || (typeof cwd === 'string' && cwd));
+  const pathExists = rel => {
+    const clean = String(rel).replace(/^\.\//, '').replace(/^\/+/, '');
+    if (!clean || clean.includes('..')) return false;
+    if (fileSet) {
+      if (fileSet.has(clean)) return true;
+      const prefix = `${clean}/`;
+      for (const item of fileSet) if (item.startsWith(prefix)) return true;
+      return false;
+    }
+    if (typeof cwd === 'string' && cwd) {
+      try { return Boolean(fs.existsSync(join(cwd, clean))); } catch { return false; }
+    }
+    return false;
+  };
+
+  const dirExists = relDir => {
+    const clean = String(relDir).replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
+    if (!clean || clean.includes('..') || clean.includes('/')) return false;
+    if (fileSet) {
+      const prefix = `${clean}/`;
+      for (const item of fileSet) if (item.startsWith(prefix)) return true;
+      return false;
+    }
+    if (typeof cwd === 'string' && cwd) {
+      try {
+        if (typeof fs?.statSync === 'function') return Boolean(fs.statSync(join(cwd, clean))?.isDirectory?.());
+        return Boolean(fs.existsSync(join(cwd, clean)));
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
+
+  const externalRoots = [
+    { prefix: 'pdd_cloud/', root: 'pdd_cloud', target: 'pdd_cloud' },
+    { prefix: 'extensions/github_pdd_app/', root: 'extensions/github_pdd_app', target: 'extensions/github_pdd_app' },
+    { prefix: 'github_pdd_app/', root: 'github_pdd_app', target: 'extensions/github_pdd_app' },
+    { prefix: 'prompt-runtime/', root: 'prompt-runtime', target: 'prompt-runtime' },
+    { prefix: 'runtime-client/', root: 'runtime-client', target: 'runtime-client' },
+    { prefix: 'packages/runtime-client/', root: 'packages/runtime-client', target: 'runtime-client' },
+  ];
+  const isExternalRootPath = p => {
+    const lower = p.toLowerCase();
+    return externalRoots.some(
+      cand => currentShort !== cand.target.split('/').at(-1)?.toLowerCase() && !pathExists(cand.root) && lower.startsWith(cand.prefix),
+    );
+  };
+
+  const allPaths = extractReferencedPaths(fullText);
+  const specificPaths = allPaths.filter(p => !GENERIC_ROOT_FILES.has(p.toLowerCase()));
+  const existingSpecific = canCheckDisk ? specificPaths.filter(pathExists) : [];
+  const missingSpecific = canCheckDisk ? specificPaths.filter(p => !pathExists(p)) : specificPaths;
+
+  const localGreenfieldPaths = [];
+  const foreignMissingPaths = [];
+  for (const p of missingSpecific) {
+    const slash = p.indexOf('/');
+    const topDir = slash > 0 ? p.slice(0, slash) : '';
+    if (canCheckDisk && topDir && !isExternalRootPath(p) && dirExists(topDir)) {
+      localGreenfieldPaths.push(p);
+    } else {
+      foreignMissingPaths.push(p);
+    }
+  }
+
+  // Signal A: explicit repository metadata header ("Repo: owner/other", "Target repository: prompt-runtime", etc.)
+  for (const line of fullText.split('\n')) {
+    const m = line.match(/^\s*(?:[-*]\s*)?\*{0,2}(?:target\s+)?repo(?:sitory)?\*{0,2}\s*:\s*`?([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)`?\s*$/i);
+    if (!m) continue;
+    const declared = m[1].trim(), lower = declared.toLowerCase();
+    if (['none', 'current', 'this', 'local', 'same', 'n/a'].includes(lower)) continue;
+    const matchesCurrent = (currentRepo && lower === currentRepo) || (currentShort && (lower === currentShort || lower.endsWith(`/${currentShort}`)));
+    if (!matchesCurrent && existingSpecific.length === 0 && (!canCheckDisk || !pathExists(declared))) {
+      return {
+        targetRepo: declared,
+        signal: 'repo-header',
+        missingPaths: foreignMissingPaths.length ? foreignMissingPaths : missingSpecific,
+        reason: `Issue header targets repository ${declared}, and none of the referenced implementation paths exist in ${repo || 'this repository'}.`,
+      };
+    }
+  }
+
+  if (existingSpecific.length > 0 || localGreenfieldPaths.length > 0) return null;
+
+  // Guard: if the issue names a local src/<module>.mjs or pdd CLI command without external root paths, keep it local.
+  const namesLocalCliOrModule = (() => {
+    if (/\bpdd\s+(?:autopilot|workflow|test|approve|owner|setup|accounts|doctor|init)\b/i.test(fullText) || /\bpdd\.json\b/i.test(fullText)) return true;
+    if (!canCheckDisk) return false;
+    for (const token of fullText.matchAll(/\b([a-z][a-z0-9-]{2,40})\b/gi)) {
+      const mod = token[1].toLowerCase();
+      if (['prompt-runtime', 'runtime-client', 'pdd-cloud'].includes(mod)) continue;
+      if (pathExists(`src/${mod}.mjs`) || pathExists(`prompts/cli/${mod}.prompt.md`)) return true;
+    }
+    return false;
+  })();
+
+  // Signal B: GitHub blob/tree links pointing exclusively to another repository whose paths are absent locally.
+  const urlRepos = new Map();
+  for (const m of fullText.matchAll(/https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:blob|tree)\/[^/\s]+\/([^\s)`"'>#?]+)/gi)) {
+    const slug = m[1], lower = slug.toLowerCase(), sub = normalizeCandidatePath(m[2]);
+    if (currentRepo && lower === currentRepo) return null;
+    if (sub && canCheckDisk && pathExists(sub)) return null;
+    if (!urlRepos.has(lower)) urlRepos.set(lower, { slug, paths: [] });
+    if (sub) urlRepos.get(lower).paths.push(sub);
+  }
+  if (urlRepos.size > 0 && currentRepo && !namesLocalCliOrModule) {
+    const first = [...urlRepos.values()][0];
+    const missing = [...new Set([...foreignMissingPaths, ...first.paths])];
+    return {
+      targetRepo: first.slug,
+      signal: 'github-url',
+      missingPaths: missing,
+      reason: `Issue links code in ${first.slug}, and none of the referenced paths exist in ${repo}.`,
+    };
+  }
+
+  if (!canCheckDisk) return null;
+
+  // Signal C: explicit root paths belonging to sibling repositories absent from cwd.
+  for (const cand of externalRoots) {
+    if (currentShort === cand.target.split('/').at(-1)?.toLowerCase() || pathExists(cand.root)) continue;
+    const hits = foreignMissingPaths.filter(p => p.toLowerCase().startsWith(cand.prefix));
+    if (hits.length > 0) {
+      return {
+        targetRepo: cand.target,
+        signal: 'external-root-path',
+        missingPaths: foreignMissingPaths,
+        reason: `Issue targets ${cand.target} paths (${hits.slice(0, 3).join(', ')}) that do not exist in ${repo || 'this repository'}.`,
+      };
+    }
+  }
+
+  // Signal D: prose targets a known sibling repository/service absent from cwd and cites only foreign missing paths (or frames the issue explicitly for that sibling without local pdd modules).
+  if (!namesLocalCliOrModule) {
+    const siblings = [
+      {
+        target: 'prompt-runtime',
+        short: 'prompt-runtime',
+        roots: ['prompt-runtime'],
+        mentionRe: /\bprompt-runtime\b/i,
+        framedRe: /(?:^\s*\[?prompt-runtime\]?\s*[:\-]|\bin\s+`?prompt-runtime`?\b|\bfor\s+`?prompt-runtime`?\b|\bon\s+`?prompt-runtime`?\b|`prompt-runtime`\s+(?:service|server|worker|repo|repository|interpreter))/im,
+      },
+      {
+        target: 'runtime-client',
+        short: 'runtime-client',
+        roots: ['runtime-client', 'packages/runtime-client'],
+        mentionRe: /\bruntime-client\b/i,
+        framedRe: /(?:^\s*\[?runtime-client\]?\s*[:\-]|\bin\s+`?runtime-client`?\b|\bfor\s+`?runtime-client`?\b|\bon\s+`?runtime-client`?\b|`runtime-client`\s+(?:package|repo|repository|sdk|client))/im,
+      },
+      {
+        target: 'pdd_cloud',
+        short: 'pdd_cloud',
+        roots: ['pdd_cloud'],
+        mentionRe: /\bpdd[_-]cloud\b/i,
+        framedRe: /(?:^\s*\[?pdd[_-]cloud\]?\s*[:\-]|\bin\s+`?pdd[_-]cloud`?\b|\bfor\s+`?pdd[_-]cloud`?\b|\bon\s+`?pdd[_-]cloud`?\b|`pdd[_-]cloud`\s+(?:service|backend|server|repo|repository))/im,
+      },
+      {
+        target: 'extensions/github_pdd_app',
+        short: 'github_pdd_app',
+        roots: ['extensions/github_pdd_app', 'github_pdd_app'],
+        mentionRe: /\bgithub[_-]pdd[_-]app\b/i,
+        framedRe: /(?:^\s*\[?github[_-]pdd[_-]app\]?\s*[:\-]|\bin\s+`?github[_-]pdd[_-]app`?\b|\bfor\s+`?github[_-]pdd[_-]app`?\b)/im,
+      },
+    ];
+    for (const sib of siblings) {
+      if (currentShort === sib.short || sib.roots.some(pathExists)) continue;
+      if (!sib.mentionRe.test(fullText)) continue;
+      if (foreignMissingPaths.length > 0 || sib.framedRe.test(fullText)) {
+        return {
+          targetRepo: sib.target,
+          signal: 'sibling-service',
+          missingPaths: foreignMissingPaths,
+          reason: `Issue targets ${sib.target} implementation${foreignMissingPaths.length ? ` (${foreignMissingPaths.slice(0, 3).join(', ')})` : ''}, which is absent from ${repo || 'this repository'}.`,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+export async function routeWrongRepositoryIssue(ctx, row, match) {
+  if (!ctx?.gh || !ctx?.repo || !object(row) || !Number.isSafeInteger(row.number)) return { routed: false };
+  const n = row.number, bKey = bodyDigest(row);
+  const f = intakeFolders(ctx.root);
+  const routedFile = join(f.base, 'other-repo.json');
+  const routedMap = object(readJson(ctx.fs, routedFile)) ? readJson(ctx.fs, routedFile) : {};
+  const hasSkipLabel = Boolean(findOtherRepoSkipLabel(row));
+  if (hasSkipLabel && routedMap[String(n)] === bKey) return { routed: false, alreadyRouted: true };
+
+  const marker = `${OTHER_REPO_MARKER_PREFIX}${n} -->`;
+  const existing = Number(row.comments) > 0
+    ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`).catch(() => [])
+    : [];
+  const alreadyCommented = routedMap[String(n)] === bKey || existing.some(c => text(c?.body).includes(marker));
+
+  if (!labelsOf(row).some(l => l.toLowerCase() === NEEDS_OTHER_REPO_LABEL)) {
+    const labelRes = await ctx.gh.call('POST', `repos/${ctx.repo}/issues/${n}/labels`, { labels: [NEEDS_OTHER_REPO_LABEL] });
+    if (labelRes.status === 422) {
+      await ctx.gh.call('POST', `repos/${ctx.repo}/labels`, {
+        name: NEEDS_OTHER_REPO_LABEL,
+        color: 'd4c5f9',
+        description: 'Issue targets code in another repository',
+      }).catch(() => null);
+      await ctx.gh.ok('POST', `repos/${ctx.repo}/issues/${n}/labels`, { labels: [NEEDS_OTHER_REPO_LABEL] });
+    } else if (labelRes.status >= 400) {
+      throw new Error(`GitHub POST repos/${ctx.repo}/issues/${n}/labels: status ${labelRes.status}`);
+    }
+    row.labels = [...(row.labels ?? []), { name: NEEDS_OTHER_REPO_LABEL }];
+  }
+
+  if (!alreadyCommented) {
+    const targetWords = match?.targetRepo ? `\`${plain(match.targetRepo, 120)}\`` : 'another repository';
+    const missing = (match?.missingPaths ?? []).slice(0, 6);
+    const body = [
+      `Autopilot skipped claiming this issue on \`${ctx.repo}\` because it targets ${targetWords} rather than code in this repository.`,
+      '',
+      ...(match?.reason ? [`- Reason: ${plain(match.reason, 300)}`] : []),
+      ...(missing.length ? [`- Paths verified absent in \`${ctx.repo}\`: ${missing.map(p => `\`${plain(p, 120)}\``).join(', ')}`] : []),
+      `- Label applied: \`${NEEDS_OTHER_REPO_LABEL}\``,
+      '',
+      `Move this issue to the owning repository, or remove \`${NEEDS_OTHER_REPO_LABEL}\` after naming the local files to change in \`${ctx.repo}\`.`,
+      '',
+      marker,
+    ].join('\n');
+    const postComment = ctx.comment
+      ? textBody => ctx.comment(n, textBody)
+      : textBody => ctx.gh.ok('POST', `repos/${ctx.repo}/issues/${n}/comments`, { body: textBody });
+    await postComment(body);
+    row.comments = (Number(row.comments) || 0) + 1;
+  }
+
+  ctx.fs.mkdirSync(f.base, { recursive: true, mode: 0o700 });
+  routedMap[String(n)] = bKey;
+  writeJson(ctx.fs, routedFile, routedMap);
+  return { routed: true, commented: !alreadyCommented, label: NEEDS_OTHER_REPO_LABEL };
+}
+
 // Layer 1: native facts from the issue row only. No AI and no GitHub call.
 export function nativeFacts(row, options = {}) {
   const people = loginsOf(row), labels = labelsOf(row);
-  const external = findExternalRepoLabel(labels);
+  const external = findOtherRepoSkipLabel(labels);
   if (external) return { kind: 'elsewhere', reason: `label ${external}` };
   const skipped = findConfiguredSkipLabel(labels, options?.skipLabels);
   if (skipped) return { kind: 'held', reason: `skip label ${skipped}` };
@@ -154,11 +444,11 @@ export function cardMatchesRow(entry, row) {
 // The bypass flags of build jobs are never used for cards.
 const CODEX_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host'];
 const CODEX_IMPROVE_OFF = ['hooks', 'plugins', 'apps', 'browser_use', 'browser_use_external', 'browser_use_full_cdp_access', 'computer_use', 'multi_agent', 'multi_agent_v2', 'code_mode'];
-export function cardCommand(agent, { model, result } = {}) {
+export function cardCommand(agent, { model, result, env = null, fs = nativeFs } = {}) {
   const extra = model ? ['--model', model] : [];
-  // --ignore-user-config: no MCP servers, profiles or features from the person's config.toml (auth still loads).
+  // --ignore-user-config: no MCP servers, profiles or features from the person's config.toml; safe provider/auth-store keys from explicit CODEX_HOME/config.toml are forwarded via -c (#3503).
   if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--skip-git-repo-check', '--ephemeral', '--color', 'never', '--ignore-rules',
-    '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'model_reasoning_effort="low"', ...CODEX_OFF.flatMap(name => ['-c', `features.${name}=false`]), '--output-last-message', result, ...extra, '-'] };
+    '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'model_reasoning_effort="low"', ...CODEX_OFF.flatMap(name => ['-c', `features.${name}=false`]), ...codexProviderConfigArgs({ env, agent, fs }), '--output-last-message', result, ...extra, '-'] };
   if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--safe-mode', '--tools', '', '--permission-mode', 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome',
     '--no-session-persistence', '--output-format', 'json', ...extra] };
   throw Error('Intake cards need codex or claude');
@@ -166,11 +456,11 @@ export function cardCommand(agent, { model, result } = {}) {
 
 // Bounded read-only repository inspection command for auto-improving `improve` cards (#3190). Runs with cwd set to
 // the repository checkout inside a read-only sandbox and with zero GitHub write tokens in cardEnvironment.
-export function improveCommand(agent, { model, result } = {}) {
+export function improveCommand(agent, { model, result, env = null, fs = nativeFs } = {}) {
   const extra = model ? ['--model', model] : [];
   if (agent?.kind === 'codex') return { command: agent.command ?? 'codex', args: ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--ephemeral', '--color', 'never',
     '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}', '-c', 'model_reasoning_effort="medium"',
-    ...CODEX_IMPROVE_OFF.flatMap(name => ['-c', `features.${name}=false`]), '--output-last-message', result, ...extra, '-'] };
+    ...CODEX_IMPROVE_OFF.flatMap(name => ['-c', `features.${name}=false`]), ...codexProviderConfigArgs({ env, agent, fs }), '--output-last-message', result, ...extra, '-'] };
   if (agent?.kind === 'claude') return { command: agent.command ?? 'claude', args: ['-p', '--safe-mode', '--tools', 'Read,Glob,Grep', '--permission-mode', 'plan', '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome',
     '--no-session-persistence', '--output-format', 'json', ...extra] };
   throw Error('Intake auto-improve needs codex or claude');
@@ -405,13 +695,16 @@ function startIntakeJob(ctx, runner, spec) {
   const prepared = typeof runner?.prepareStep === 'function'
     ? runner.prepareStep(ctx.ports?.env ?? process.env, { detached: true })
     : null;
-  const env = prepared ? cardEnvironment(prepared.env) : runner.env;
+  const env = { ...(prepared ? cardEnvironment(prepared.env) : runner.env) };
   const cleanupDirs = Array.isArray(prepared?.cleanupDirs) && prepared.cleanupDirs.length
     ? prepared.cleanupDirs
     : (typeof prepared?.overlayDir === 'string' && prepared.overlayDir ? [prepared.overlayDir] : []);
   try {
+    const { buildCommand, ...rest } = spec;
+    const resolved = typeof buildCommand === 'function' ? buildCommand(env) : null;
     const job = ctx.jobs.start({
-      ...spec,
+      ...rest,
+      ...(resolved ? { command: resolved.command, args: resolved.args } : {}),
       env,
       ...(cleanupDirs.length ? { cleanupDirs } : {}),
     });
@@ -673,7 +966,12 @@ export async function collectActiveIntake(ctx, rows) {
       prune(ctx, saved.job, !card, saved.answer);
       if (card) {
         clearBurstRetry(ctx, f, saved);
-        saveCard(ctx, f, n, { issue: n, version: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), native: null, card });
+        if (card.class === 'elsewhere') {
+          await routeWrongRepositoryIssue(ctx, row, { targetRepo: null, reason: card.reason, missingPaths: [] });
+          saveCard(ctx, f, n, { issue: n, version: issueVersion(row), preCommentVersion: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), native: { kind: 'elsewhere', reason: `label ${NEEDS_OTHER_REPO_LABEL}: ${card.reason}` }, card: null, previous: card });
+        } else {
+          saveCard(ctx, f, n, { issue: n, version: saved.version, at: ctx.now(), agent: saved.agent, seconds: Math.round((ctx.now() - saved.startedAt) / 1000), native: null, card });
+        }
       } else if (!quota) {
         clearBurstRetry(ctx, f, saved);
         saveCard(ctx, f, n, failed(ctx, saved, errText));
@@ -841,9 +1139,12 @@ export async function shadowIntake(ctx, rows) {
       // Codex writes its last message here; the job runner's own result file stays unused, so it never reads a large answer.
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
       const jobAgent = runner.agent;
-      const run = cardCommand(runner.spec, { model: jobAgent.model, result: answer });
-      const job = startIntakeJob(ctx, runner, { id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args, input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'shadow' }),
-        issue: n, role: 'intake' });
+      const job = startIntakeJob(ctx, runner, {
+        id, dir: f.logs, cwd: f.empty,
+        buildCommand: env => cardCommand(runner.spec, { model: jobAgent.model, result: answer, env, fs: ctx.fs }),
+        input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'shadow' }),
+        issue: n, role: 'intake',
+      });
       try {
         writeJson(ctx.fs, join(f.jobs, `${n}.json`), {
           issue: n, stage: 'card', version, startedAt: ctx.now(), agent: jobAgent,
@@ -984,10 +1285,10 @@ export async function activeIntake(ctx, rows) {
         }
         const id = `improve-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
         const jobAgent = runner.agent;
-        const run = improveCommand(runner.spec, { model: jobAgent.model, result: answer });
         const repoCwd = ctx.state?.cwd || f.empty;
         const job = startIntakeJob(ctx, runner, {
-          id, dir: f.logs, cwd: repoCwd, command: run.command, args: run.args,
+          id, dir: f.logs, cwd: repoCwd,
+          buildCommand: env => improveCommand(runner.spec, { model: jobAgent.model, result: answer, env, fs: ctx.fs }),
           input: improvePrompt({ repo: ctx.repo, row, comments: pComments, card: card.card, pool, decisionNote }),
           issue: n, role: 'intake-improve',
         });
@@ -1015,6 +1316,12 @@ export async function activeIntake(ctx, rows) {
         const next = { issue: n, version, at: ctx.now(), agent: runner?.agent ?? defaultAgent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null };
         saveCard(ctx, f, n, next); cards.set(n, next); continue;
       }
+      const wrongRepo = detectWrongRepositoryIssue(row, { repo: ctx.repo, cwd: ctx.state?.cwd, fs: ctx.fs });
+      if (wrongRepo) {
+        await routeWrongRepositoryIssue(ctx, row, wrongRepo);
+        const next = { issue: n, version: issueVersion(row), at: ctx.now(), agent: runner?.agent ?? defaultAgent, native: { kind: 'elsewhere', reason: `label ${NEEDS_OTHER_REPO_LABEL}: ${plain(wrongRepo.reason, 240)}` }, card: null, previous: card?.card ?? card?.previous ?? null };
+        saveCard(ctx, f, n, next); cards.set(n, next); continue;
+      }
       const prevImproved = card?.card?.auto_improved && card.card.class === 'ready'
         ? card.card
         : card?.previous?.auto_improved && card.previous.class === 'ready' ? card.previous : null;
@@ -1037,9 +1344,9 @@ export async function activeIntake(ctx, rows) {
       const { comments, specRefinement, decisionNote, pool } = await readTrustedCommentsAndPool(row, n);
       const id = `intake-${n}-${ctx.now().toString(36)}-${randomUUID().slice(0, 6)}`, answer = join(f.logs, `${id}.answer.txt`);
       const jobAgent = runner.agent;
-      const run = cardCommand(runner.spec, { model: jobAgent.model, result: answer });
       const job = startIntakeJob(ctx, runner, {
-        id, dir: f.logs, cwd: f.empty, command: run.command, args: run.args,
+        id, dir: f.logs, cwd: f.empty,
+        buildCommand: env => cardCommand(runner.spec, { model: jobAgent.model, result: answer, env, fs: ctx.fs }),
         input: cardPrompt({ repo: ctx.repo, row, comments: personComments(comments), pool, mode: 'active', specRefinement, decisionNote }),
         issue: n, role: 'intake',
       });

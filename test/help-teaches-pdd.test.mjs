@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CommandInputError, parseArgv } from '../src/argument-parser.mjs';
-import { PUBLIC_COMMAND_MANIFEST } from '../src/command-catalog.mjs';
+import { PUBLIC_COMMAND_MANIFEST, PUBLIC_HELP_TEXT } from '../src/command-catalog.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 
 // Node checks of user_stories/help-teaches-pdd.md that the PDD interpreter cannot make: the two printed paths
@@ -110,29 +110,34 @@ test('prompting is a help topic, not a command, and takes no other word', async 
   }
 });
 
-test('root help keeps its first line, every form line and its closing lines; command help is unchanged', async () => {
+test('root help keeps its first line, grouped commands, learn paths and closing lines; command help shows full manifest forms', async () => {
   const outputs = await Promise.all(ROOT_HELP.map(argv => pdd(argv)));
   for (const output of outputs) assert.equal(output.stdout, outputs[0].stdout);
   const rootHelp = lines(outputs[0].stdout), scoped = lines((await pdd(['test', '--help'])).stdout);
   const testRows = PUBLIC_COMMAND_MANIFEST.filter(({ form }) => form.split(' ')[1] === 'test').map(formLine);
-  // Command help: first line, empty line, its own forms, empty line and the three closing lines; no learn or path lines.
+  // Command help: first line, empty line, its own forms, empty line and closingLines; no learn or path lines.
   assert.equal(scoped[1], ''); assert.deepEqual(scoped.slice(2, 2 + testRows.length), testRows); assert.equal(scoped[2 + testRows.length], '');
   const closing = scoped.slice(3 + testRows.length);
-  assert.equal(closing.length, 3);
+  assert.deepEqual(closing, PUBLIC_HELP_TEXT.closingLines);
   assert.doesNotMatch(scoped.join('\n'), /help prompting|prompting-guide\.md|RUNBOOK\.md/);
-  // Root help: the same first line, every catalog form in order, the learn line and two path lines, the same closing lines.
-  const all = PUBLIC_COMMAND_MANIFEST.flatMap(row => formLine(row).split('\n'));
-  assert.ok(all.some(line => line.startsWith('  pdd help prompting  ')));
+  // Root help: the same first line, usage, quick start, grouped summaries, focused help note, learn/path lines, and closing lines.
+  const expectedBody = [
+    PUBLIC_HELP_TEXT.usageLine, '',
+    'Quick start:', ...PUBLIC_HELP_TEXT.quickStartLines, '',
+    ...PUBLIC_HELP_TEXT.groups.flatMap((group, index) => [...(index ? [''] : []), `${group.title}:`, ...group.lines]), '',
+    ...PUBLIC_HELP_TEXT.focusedHelpLines,
+  ];
+  assert.ok(expectedBody.some(line => line.startsWith('  pdd help prompting ')));
   assert.equal(rootHelp[0], scoped[0]); assert.ok(rootHelp[0].startsWith('PDD'));
-  assert.equal(rootHelp[1], ''); assert.deepEqual(rootHelp.slice(2, 2 + all.length), all);
-  const rest = rootHelp.slice(2 + all.length);
-  assert.equal(rest[0], ''); assert.equal(rest[4], ''); assert.deepEqual(rest.slice(5), closing);
-  assert.ok(rest[1].includes('pdd help prompting'), rest[1]);
-  assert.ok(rest[2].endsWith(`/${FILES.guide}`) && rest[3].endsWith(`/${FILES.runbook}`), rest.join('\n'));
+  assert.equal(rootHelp[1], ''); assert.deepEqual(rootHelp.slice(2, 2 + expectedBody.length), expectedBody);
+  const rest = rootHelp.slice(2 + expectedBody.length);
+  assert.equal(rest[3], ''); assert.deepEqual(rest.slice(4), closing);
+  assert.ok(rest[0].includes('pdd help prompting'), rest[0]);
+  assert.ok(rest[1].endsWith(`/${FILES.guide}`) && rest[2].endsWith(`/${FILES.runbook}`), rest.join('\n'));
   // The topic: the same first line, the steps, then only the two path lines; no closing lines.
   const topic = lines((await pdd(TOPIC)).stdout);
   assert.equal(topic[0], rootHelp[0]); assert.equal(topic[1], ''); assert.equal(topic.at(-3), '');
-  assert.deepEqual(topic.slice(-2), rest.slice(2, 4));
+  assert.deepEqual(topic.slice(-2), rest.slice(1, 3));
   for (const line of closing) assert.ok(!topic.includes(line), line);
   const text = topic.join('\n');
   for (const name of ['prompts/NAME.prompt.md', '## Dependencies', 'user_stories/STORY.md', 'Acceptance criteria',

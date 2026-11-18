@@ -1,0 +1,127 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/fake-recorded-call.md",
+  "criteria": [
+    {
+      "id": "AC1",
+      "text": "The first lookup of book-7 calls the supplied service once and returns Available from the first saved reply."
+    },
+    {
+      "id": "AC2",
+      "text": "The second lookup of book-7 calls the supplied service once and returns Reserved from the second saved reply."
+    }
+  ],
+  "initial_world": {
+    "fixture_counters": {
+      "lookup": 0
+    },
+    "note": "keep"
+  },
+  "simulation": {
+    "service.lookup": {
+      "action": "fixture.lookup",
+      "world_pointer": "/fixture_counters/lookup",
+      "cases": [
+        {
+          "args": {
+            "id": "book-7"
+          },
+          "call_index": 1,
+          "result": {
+            "label": "Available"
+          }
+        },
+        {
+          "args": {
+            "id": "book-7"
+          },
+          "call_index": 2,
+          "result": {
+            "label": "Reserved"
+          }
+        }
+      ],
+      "result_template": null,
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "first-lookup",
+      "entry_path": "examples/fakes/service.prompt.md",
+      "operation": "lookup",
+      "input": {
+        "id": "book-7"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC1",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": "Available"
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "calls",
+          "path": "/resources/service-service-lookup",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/fixture_counters/lookup",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC1",
+          "target": "world",
+          "path": "/note",
+          "op": "equals",
+          "value": "keep"
+        }
+      ]
+    },
+    {
+      "step_id": "second-lookup",
+      "entry_path": "examples/fakes/service.prompt.md",
+      "operation": "lookup",
+      "input": {
+        "id": "book-7"
+      },
+      "checks": [
+        {
+          "criterion_id": "AC2",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": "Reserved"
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "calls",
+          "path": "/resources/service-service-lookup",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/fixture_counters/lookup",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "AC2",
+          "target": "world",
+          "path": "/note",
+          "op": "equals",
+          "value": "keep"
+        }
+      ]
+    }
+  ]
+}

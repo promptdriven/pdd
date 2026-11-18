@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot.prompt.md (sha256: edebaa98faf38f5cd25b91cce6d7522cbfe107dbaa03147a4b9492ef2453b3fb).
+// Generated from prompts/cli/autopilot.prompt.md (sha256: 305ab5f08edbc298f9ab0ca816fbb91dd70f3f7f8d7113543ab2093b793850c5).
 import * as nativeFs from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -180,4 +180,12 @@ export async function runAutopilot(input, ports = {}) {
   } catch (error) {
     return result(1, `Autopilot settings failed: ${error.message}`);
   }
+}
+
+export async function runAutopilotSubcommand(subcommand, input = {}, ports = {}) {
+  if (subcommand === 'logs') {
+    const { runAutopilotLogs } = await import('./autopilot-logs.mjs');
+    return runAutopilotLogs(input, ports);
+  }
+  return { exitCode: 2, message: 'Unsupported Autopilot subcommand. Use pdd autopilot --help.' };
 }

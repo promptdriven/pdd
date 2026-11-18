@@ -5,3 +5,9 @@ npm-debug.log*
 *.tgz
 .cache/runtime-issue-router/
 .cache-runtime-router-config.json
+__pycache__/
+*.py[cod]
+python/build/
+python/dist/
+python/*.egg-info/
+python/pdd_cli/_bundled/

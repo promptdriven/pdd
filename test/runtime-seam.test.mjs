@@ -841,7 +841,7 @@ registerHooks({
     'workflow-approve', 'workflow-resend', 'workflow-card', 'workflow-changes', 'workflow-open', 'workflow-view',
     'workflow-cost', 'workflow-prove', 'workflow-suite', 'workflow-evidence', 'workflow-evidence-associate',
     'workflow-park', 'workflow-yield', 'workflow-cancel', 'workflow-tidy',
-    'autopilot-status', 'autopilot-doctor', 'autopilot-regressions', 'autopilot-alerts', 'autopilot-alert',
+    'autopilot-status', 'autopilot-logs', 'autopilot-doctor', 'autopilot-regressions', 'autopilot-alerts', 'autopilot-alert',
     'autopilot-start', 'autopilot-stop', 'autopilot-add', 'autopilot-release', 'autopilot-report',
     'autopilot-intake', 'autopilot-audit', 'autopilot-check-base',
     'autopilot.off', 'autopilot.observe', 'autopilot.auto', 'autopilot-trust', 'autopilot-untrust', 'accounts', 'upgrade',
@@ -890,6 +890,7 @@ registerHooks({
     ['cli:workflow-cost', [bin, 'workflow', 'cost', '1'], nonGit],
     ['cli:workflow-prove', [bin, 'workflow', 'prove', '1', '--test', 'true', '--expect', 'ok'], nonGit],
     ['cli:autopilot-status', [bin, 'autopilot', 'status'], nonGit],
+    ['cli:autopilot-logs', [bin, 'autopilot', 'logs'], nonGit],
     ['cli:autopilot-doctor', [bin, 'autopilot', 'doctor'], repo],
     ['cli:autopilot-regressions', [bin, 'autopilot', 'regressions'], nonGit],
     ['cli:autopilot-alerts', [bin, 'autopilot', 'alerts', 'clear'], nonGit],
@@ -2732,10 +2733,10 @@ test('SEAM25: runtime client uses the exact public npm release', () => {
   const lockfile = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const name = '@promptdriven/runtime-client';
   const locked = lockfile.packages[`node_modules/${name}`];
-  assert.equal(manifest.dependencies[name], '1.0.0');
-  assert.equal(lockfile.packages[''].dependencies[name], '1.0.0');
-  assert.equal(locked.version, '1.0.0');
-  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.0\.0\.tgz$/);
+  assert.equal(manifest.dependencies[name], '1.1.0');
+  assert.equal(lockfile.packages[''].dependencies[name], '1.1.0');
+  assert.equal(locked.version, '1.1.0');
+  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.1\.0\.tgz$/);
   assert.match(locked.integrity, /^sha512-/);
   assert.doesNotMatch(locked.resolved, /^(?:github:|git\+)/);
 });

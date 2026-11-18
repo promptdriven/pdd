@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/runtime-seam.prompt.md
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 967f99e33c2112e36d802b5a808255459616a7cdb0f14508a86e4a1ca668f90d).
 import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -29,9 +29,11 @@ import {
   checkPlanResults,
   checkRuntimeHealth as runtimeCheckHealth,
   cleanText,
+  compileLocalManifest,
   composeProductTry as runtimeComposeProductTry,
   coverageText,
   createAgentBridge as runtimeCreateAgentBridge,
+  createLocalCommandBridge as runtimeCreateLocalCommandBridge,
   createSavedStoryEvidenceReader as rawCreateSavedStoryEvidenceReader,
   createStrictSourceAccess as rawCreateStrictSourceAccess,
   createTryGuide as runtimeCreateTryGuide,
@@ -46,6 +48,7 @@ import {
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
+  executeLocalCommand,
   fillHashes as rawFillHashes,
   findTests as rawFindTests,
   failedCheckCount,
@@ -137,6 +140,8 @@ import {
   tryUsageHeaders,
   tryUsageLine,
   validLink,
+  validateLocalManifest,
+  validateLocalRequest,
   version,
   withExactIntegers,
   workspace,
@@ -202,6 +207,22 @@ function seamRedaction(ports = {}) {
     redact: ports.redactSecrets ?? host.redact,
     known: host.known,
   });
+}
+
+async function withLiveLocalPorts(input, ports) {
+  if (input?.options?.['--live-local'] !== true) return ports;
+  const [{ createLiveLocalHost }] = await Promise.all([
+    import('./live-local-host.mjs'),
+    import('./secret-redaction.mjs'),
+  ]);
+  const defaults = createLiveLocalHost({
+    env: ports.env ?? process.env,
+    redaction: seamRedaction(ports),
+    root: input?.cwd ?? input?.root ?? process.cwd(),
+  });
+  const liveLocal = withPortDefaults(ports.liveLocal ?? {}, defaults);
+  liveLocal.journal = withPortDefaults(ports.liveLocal?.journal ?? {}, defaults.journal);
+  return { ...ports, liveLocal };
 }
 
 function withPortDefaults(ports = {}, defaults = {}) {
@@ -555,6 +576,7 @@ export async function loadRuntimeClient() {
 }
 
 export async function runCheck(input = {}, ports = {}) {
+  ports = await withLiveLocalPorts(input, ports);
   const [
     ,
     { headerPrompts, isTestOwnedPath, promptClaims, resolveOwners },
@@ -604,6 +626,13 @@ export async function runCheck(input = {}, ports = {}) {
   );
 }
 
+export async function createLocalCommandBridge(input, ports = {}) {
+  return runtimeCreateLocalCommandBridge(
+    input,
+    await withLiveLocalPorts({ ...input, options: { '--live-local': true } }, ports),
+  );
+}
+
 export async function askAgent(input = {}, ports = {}) {
   const explicitRun = input?.run ?? ports.run ?? ports.runAgentProcess ?? ports.agents?.run;
   const run = explicitRun ?? (await import('./agent-adapters.mjs')).runAgentProcess;
@@ -611,6 +640,7 @@ export async function askAgent(input = {}, ports = {}) {
 }
 
 export async function runTry(input = {}, ports = {}) {
+  ports = await withLiveLocalPorts(input, ports);
   const [
     ,
     { loadAgentDefinitions },
@@ -1047,6 +1077,7 @@ export {
   checkPlanResultLines,
   checkPlanResults,
   cleanText,
+  compileLocalManifest,
   coverageText,
   defaultLineReader,
   defaultMaxCalls,
@@ -1058,6 +1089,7 @@ export {
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
+  executeLocalCommand,
   failedCheckCount,
   format,
   formatSize,
@@ -1117,6 +1149,8 @@ export {
   tryUsageHeaders,
   tryUsageLine,
   validLink,
+  validateLocalManifest,
+  validateLocalRequest,
   version,
   withExactIntegers,
   workspace,
