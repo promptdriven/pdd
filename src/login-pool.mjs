@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: fdfdb92097f1d1719e7da42270c2f9bcd7285bceae91f50adb08d07db00577c4).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 0614653660d047404468ae276f814535a77ae4224ac05b0547a1c4e54b35c885).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
@@ -79,6 +79,9 @@ const ISOLATED_CODEX_HOME_EXACT = new Set([
   'mcp-oauth-locks',
   '.sqlite-maintenance.lock',
   'installation_id',
+  '.codex-global-state.json',
+  'version.json',
+  'vendor_imports',
 ]);
 const REPLACED_MANAGED_CACHE_DIRS = new Set([
   'plugins',
@@ -87,7 +90,6 @@ const REPLACED_MANAGED_CACHE_DIRS = new Set([
   'node_repl',
   'cache',
   'packages',
-  'vendor_imports',
 ]);
 const REPLACED_MANAGED_CACHE_FILES = new Set(['chrome-native-hosts-v2.json']);
 const CODEX_GATEWAY_PROVIDER_ID = 'pdd_codex_gateway';
@@ -920,15 +922,20 @@ export function isIsolatedCodexHomeEntry(name) {
   const lower = name.toLowerCase();
   if (ISOLATED_CODEX_HOME_EXACT.has(lower)) return true;
   if (
-    lower.startsWith('auth.json.')
-    || lower.startsWith('config.toml.')
+    lower.startsWith('auth.json')
+    || lower.startsWith('config.toml')
+    || lower === 'tmp'
+    || lower === '.tmp'
+    || lower.startsWith('.tmp')
+    || lower.endsWith('.tmp')
+    || /\.tmp[._~-]/i.test(lower)
     || lower.endsWith('.lock')
     || lower.endsWith('-lock')
     || lower.endsWith('-wal')
     || lower.endsWith('-shm')
+    || lower.endsWith('-journal')
     || /\.bak[^/]*$/i.test(lower)
-    || /\.tmp[^/]*$/i.test(lower)
-    || /^logs_\d+\.sqlite$/i.test(lower)
+    || /^logs_.*\.sqlite/i.test(lower)
   ) {
     return true;
   }
@@ -937,12 +944,7 @@ export function isIsolatedCodexHomeEntry(name) {
 
 function isDisallowedCodexSymlinkTargetName(name) {
   const lower = String(name ?? '').toLowerCase();
-  return (
-    lower === 'auth.json'
-    || lower === 'config.toml'
-    || lower.startsWith('auth.json.')
-    || lower.startsWith('config.toml.')
-  );
+  return lower.startsWith('auth.json') || lower.startsWith('config.toml');
 }
 
 function isPathAtOrInside(candidatePath, rootPath) {
@@ -955,10 +957,10 @@ function isPathAtOrInside(candidatePath, rootPath) {
   );
 }
 
-export function isSafeCodexSourceEntry(fs, src, targetRoot) {
+export function isSafeCodexSourceEntry(fs, src, targetRoot, { sourceHome = null } = {}) {
   if (typeof src !== 'string' || !src) return false;
   const srcBase = basename(src).toLowerCase();
-  if (srcBase === 'auth.json' || srcBase.startsWith('auth.json.')) return false;
+  if (isDisallowedCodexSymlinkTargetName(srcBase)) return false;
   const lstat = typeof fs?.lstatSync === 'function' ? fs.lstatSync.bind(fs) : (fs === nativeFs ? nativeFs.lstatSync : null);
   if (!lstat) return false;
   let srcStat;
@@ -985,17 +987,25 @@ export function isSafeCodexSourceEntry(fs, src, targetRoot) {
     return false;
   }
   if (isDisallowedCodexSymlinkTargetName(basename(realSrc))) return false;
-  if (typeof targetRoot === 'string' && targetRoot) {
-    if (isPathAtOrInside(realSrc, targetRoot)) return false;
+  const roots = (Array.isArray(targetRoot) ? targetRoot : [targetRoot]).filter(r => typeof r === 'string' && r);
+  for (const root of roots) {
+    if (isPathAtOrInside(realSrc, root)) return false;
     try {
-      const realTarget = String(realFn.call(fs, targetRoot));
+      const realTarget = String(realFn.call(fs, root));
       if (isPathAtOrInside(realSrc, realTarget)) return false;
+    } catch {}
+  }
+  if (typeof sourceHome === 'string' && sourceHome) {
+    if (isPathAtOrInside(sourceHome, realSrc)) return false;
+    try {
+      const realSource = String(realFn.call(fs, sourceHome));
+      if (isPathAtOrInside(realSource, realSrc)) return false;
     } catch {}
   }
   return true;
 }
 
-function syncManagedCodexHomeLinks(fs, sourceHome, managedHome) {
+function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRoots = []) {
   fs.mkdirSync(managedHome, { recursive: true, mode: 0o700 });
   try { (fs.chmodSync ?? nativeFs.chmodSync)?.(managedHome, 0o700); } catch {}
   const resolvedSourceHome = resolve(sourceHome);
@@ -1031,12 +1041,13 @@ function syncManagedCodexHomeLinks(fs, sourceHome, managedHome) {
   } else {
     candidateNames = MANAGED_CODEX_HOME_BASELINE_LINKS;
   }
+  const forbiddenRoots = [managedHome, ...extraForbiddenRoots, resolvedSourceHome];
   const activeValidLinks = new Set();
   for (const name of candidateNames) {
     if (isIsolatedCodexHomeEntry(name)) continue;
     const src = join(resolvedSourceHome, name);
     const dst = join(managedHome, name);
-    const srcValid = isSafeCodexSourceEntry(fs, src, managedHome);
+    const srcValid = isSafeCodexSourceEntry(fs, src, forbiddenRoots, { sourceHome: resolvedSourceHome });
     if (srcValid) {
       activeValidLinks.add(name);
       let dstStat = null;
@@ -1394,7 +1405,7 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
   }
   const resolvedSourceCodexHome = resolve(sourceCodexHome);
   try {
-    syncManagedCodexHomeLinks(fs, sourceCodexHome, overlayDir);
+    syncManagedCodexHomeLinks(fs, sourceCodexHome, overlayDir, [managedHome]);
     const srcConfigPath = join(resolvedSourceCodexHome, 'config.toml');
     const resolvedSrcCfg = resolveUserCodexConfigTarget(fs, srcConfigPath, [overlayDir, managedHome], { strict: false });
     if (isGateway) {
@@ -1559,7 +1570,10 @@ export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, por
   const cleanBase = loginEnvironment(baseEnv, { kind: provider || 'codex' });
   if (provider === 'codex') {
     if (lease?.delivery_mode === 'gateway_grant') {
-      const overlay = createCodexStepOverlay(lease, { env: baseEnv, tmpRoot: ports.tmpRoot, detached }, ports);
+      const overlay = createCodexStepOverlay({
+        ...lease,
+        plan_type: lease?.plan_type ?? leaseReply?.account?.plan_type ?? leaseReply?.account?.plan,
+      }, { env: baseEnv, tmpRoot: ports.tmpRoot, detached }, ports);
       const env = {
         ...cleanBase,
         CODEX_HOME: overlay.overlayDir,

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: f5675437125ad732d052dfe8e7f168a947f1c057bb39ac184bba670c69fea962).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 9738776adbae5cc9f22d83d94edbbf6145d88452622837db6da6fecec569141e).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -2661,6 +2661,7 @@ async function runSyncCommand({ provider: requestedProvider, quiet = false, prin
         && cached?.account_id
         && !isRevokedCached
         && !cachedMarkedReauth
+        && !isReauthRequiredFailure(error)
         && Number.isFinite(expiresMs)
         && expiresMs > now
       ) {
@@ -2775,7 +2776,7 @@ function reconcileListedState(accounts, current, { env }, ports = {}) {
       removeAuthFile: !nextActive.codex,
     }, ports);
   }
-  if (!nextProviders.includes('claude') || (current.active?.claude && !nextActive.claude)) {
+  if (!nextActive.claude) {
     restoreLocalClaudeGatewayConfig({ env }, ports);
   }
   const nextCooling = Object.fromEntries(
@@ -2952,7 +2953,7 @@ function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {
       removeAuthFile: !nextActive.codex,
     }, ports);
   }
-  if (!nextProviders.includes('claude') || (current.active?.claude && !nextActive.claude)) {
+  if (!nextActive.claude) {
     restoreLocalClaudeGatewayConfig({ env }, ports);
   }
   const nextCooling = Object.fromEntries(
@@ -3535,6 +3536,7 @@ function discoverPinnedCodexRollout(fs, codexHomes, {
   expectedCwd,
   turnStartedMs,
   explicitSessionId = null,
+  excludedSessionId = null,
 }) {
   if (explicitSessionId) {
     return {
@@ -3550,7 +3552,7 @@ function discoverPinnedCodexRollout(fs, codexHomes, {
     const meta = object(header.payload) ? header.payload : header;
     if (isSubagentSessionMeta(meta)) continue;
     const sid = [meta?.id, meta?.session_id, item.uuid].find(v => typeof v === 'string' && UUID_TOKEN_RE.test(v)) ?? null;
-    if (!sid || preSpawnSnapshot?.sessionIds?.has(sid)) continue;
+    if (!sid || preSpawnSnapshot?.sessionIds?.has(sid) || (excludedSessionId && sid.toLowerCase() === excludedSessionId.toLowerCase())) continue;
     const metaCwd = typeof meta?.cwd === 'string' && meta.cwd.trim() ? meta.cwd.trim() : null;
     if (!metaCwd || !pathsMatchCwd(fs, metaCwd, expectedCwd)) continue;
     const parsedTs = Date.parse(meta?.timestamp ?? header.timestamp ?? '');
@@ -3698,6 +3700,7 @@ async function runSingleSupervisedCodexTurn({
   preSpawnSnapshot,
   expectedCwd,
   sessionState,
+  excludedSessionId = null,
   initialRolloutOffset = 0,
 }, ports = {}) {
   let rollingPlain = '';
@@ -3742,6 +3745,7 @@ async function runSingleSupervisedCodexTurn({
           expectedCwd,
           turnStartedMs,
           explicitSessionId: null,
+          excludedSessionId,
         });
         if (discovered) {
           sessionState.sessionId = discovered.sessionId;
@@ -3820,7 +3824,7 @@ async function runSingleSupervisedCodexTurn({
       capturedSessionId = res.sessionId;
     }
     pollRolloutOnce();
-    if (!sessionState.sessionId && capturedSessionId) {
+    if (!sessionState.sessionId && capturedSessionId && (!excludedSessionId || capturedSessionId.toLowerCase() !== excludedSessionId.toLowerCase())) {
       sessionState.sessionId = capturedSessionId;
     }
     return {
@@ -3972,7 +3976,7 @@ async function runSingleSupervisedCodexTurn({
         return;
       }
       pollRolloutOnce();
-      if (!sessionState.sessionId && capturedSessionId) {
+      if (!sessionState.sessionId && capturedSessionId && (!excludedSessionId || capturedSessionId.toLowerCase() !== excludedSessionId.toLowerCase())) {
         sessionState.sessionId = capturedSessionId;
       }
       const effectiveSignal = abortedByParentSignal ?? signal ?? null;
@@ -4175,10 +4179,12 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
   const userCodexHome = localCodexHome({ ...env, CODEX_HOME: '' });
   const codexHomes = [managedHome, userCodexHome];
   const preSpawnSnapshot = snapshotPreSpawnCodexSessions(fs, codexHomes);
+  const initialResumeSessionId = invocation.isResume ? (invocation.explicitSessionId ?? null) : null;
+  const excludedForkSessionId = invocation.isFork ? (invocation.explicitSessionId ?? null) : null;
   const sessionState = {
-    sessionId: invocation.explicitSessionId ?? null,
-    rolloutPath: invocation.explicitSessionId
-      ? findRolloutPathBySessionId(fs, codexHomes, invocation.explicitSessionId)
+    sessionId: initialResumeSessionId,
+    rolloutPath: initialResumeSessionId
+      ? findRolloutPathBySessionId(fs, codexHomes, initialResumeSessionId)
       : null,
   };
 
@@ -4208,6 +4214,7 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
       preSpawnSnapshot,
       expectedCwd: invocation.effectiveCwd,
       sessionState,
+      excludedSessionId: excludedForkSessionId,
       initialRolloutOffset,
     }, ports);
 
@@ -4263,7 +4270,7 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
     const prevLabel = exhaustedEntry?.label ?? exhaustedId ?? 'previous';
     const nextLabel = nextLease.reply.account?.label ?? nextLease.reply.account?.account_id ?? 'next';
     const quotaInfo = formatAccountQuotaSummary(nextLease.reply.account);
-    const keepInitialPromptArgs = !sessionState.sessionId && !invocation.isResume && !invocation.isFork;
+    const keepInitialPromptArgs = !sessionState.sessionId && !invocation.isResume;
     const resumeDesc = sessionState.sessionId
       ? `session ${sessionState.sessionId}`
       : (keepInitialPromptArgs ? 'initial arguments' : '--last');

@@ -3466,10 +3466,13 @@ test('dynamic ~/.codex mirror + denylist + safe symlink support + pruning in man
   // Direct classifier unit checks
   for (const denied of [
     '.', '..', '.DS_Store', 'auth.json', 'auth.lock', 'auth.json.bak',
-    'config.toml', 'config.toml.bak', '.config.toml.merge-lock', 'model-switch-backups',
-    'app-server-daemon', 'app-server-control', 'ipc', 'tmp', '.tmp', 'log',
-    'logs_2.sqlite', 'logs_2.sqlite-wal', 'logs_2.sqlite-shm', 'state_5.sqlite-wal',
-    'state_5.sqlite-shm', 'models_cache.json', 'shell_snapshots', 'mcp-oauth-locks',
+    'auth.json~', 'auth.json-bak', 'auth.json_old',
+    'config.toml', 'config.toml.bak', 'config.toml~', '.config.toml.merge-lock', 'model-switch-backups',
+    '.codex-global-state.json', 'version.json', 'vendor_imports',
+    'app-server-daemon', 'app-server-control', 'ipc', 'tmp', '.tmp', '.tmp_upload', 'draft.tmp', 'log',
+    'logs_2.sqlite', 'logs_2.sqlite-wal', 'logs_2.sqlite-shm', 'logs_2.sqlite-journal',
+    'logs_app.sqlite', 'logs_2.sqlite.corrupt', 'state_5.sqlite-wal',
+    'state_5.sqlite-shm', 'state_5.sqlite-journal', 'models_cache.json', 'shell_snapshots', 'mcp-oauth-locks',
     '.sqlite-maintenance.lock', 'installation_id', 'custom.lock', 'sync-lock',
     'old.bak-20261115', 'partial.tmp.99',
   ]) {
@@ -3477,7 +3480,7 @@ test('dynamic ~/.codex mirror + denylist + safe symlink support + pruning in man
   }
   for (const allowed of [
     'AGENTS.md', 'agents', 'skills', 'hooks.json', '.hook-trust', 'review-prompts',
-    'vendor_imports', 'packages', '.codex-global-state.json', 'herdr.config.toml',
+    'packages', 'herdr.config.toml', 'prompt.tmpl',
     'herdr-agent-state.sh', 'prompts', 'generated_images', 'state_5.sqlite',
     'thread_history_1.sqlite', 'future_codex_feature_2027',
   ]) {
@@ -3504,15 +3507,20 @@ test('dynamic ~/.codex mirror + denylist + safe symlink support + pruning in man
   writeFileSync(join(userCodexDir, 'hooks.json'), '{"hooks":[]}\n');
   mkdirSync(join(userCodexDir, '.hook-trust'), { recursive: true });
   writeFileSync(join(userCodexDir, '.hook-trust', 'allow.json'), '{}');
-  mkdirSync(join(userCodexDir, 'vendor_imports'), { recursive: true });
   mkdirSync(join(userCodexDir, 'packages'), { recursive: true });
   writeFileSync(join(userCodexDir, 'herdr.config.toml'), 'enabled = true\n');
+  writeFileSync(join(userCodexDir, 'prompt.tmpl'), 'template-ok\n');
   writeFileSync(join(userCodexDir, 'state_5.sqlite'), 'sqlite-threads');
   writeFileSync(join(userCodexDir, 'thread_history_1.sqlite'), 'sqlite-history');
 
   // Seed denylisted entries in ~/.codex
   writeFileSync(join(userCodexDir, 'auth.json'), '{"secret":"user_oauth_never_link"}\n', { mode: 0o600 });
+  writeFileSync(join(userCodexDir, 'auth.json~'), '{"secret":"editor_backup_never_link"}\n', { mode: 0o600 });
   writeFileSync(join(userCodexDir, 'config.toml'), 'model = "gpt-5.4"\n', { mode: 0o600 });
+  writeFileSync(join(userCodexDir, 'config.toml~'), 'model = "gpt-5.4"\n', { mode: 0o600 });
+  writeFileSync(join(userCodexDir, '.codex-global-state.json'), '{"installation":"mac"}');
+  writeFileSync(join(userCodexDir, 'version.json'), '{"version":"0.169.1"}');
+  mkdirSync(join(userCodexDir, 'vendor_imports'), { recursive: true });
   writeFileSync(join(userCodexDir, 'auth.lock'), '');
   writeFileSync(join(userCodexDir, '.config.toml.merge-lock'), '');
   mkdirSync(join(userCodexDir, 'model-switch-backups'), { recursive: true });
@@ -3525,22 +3533,29 @@ test('dynamic ~/.codex mirror + denylist + safe symlink support + pruning in man
   mkdirSync(join(userCodexDir, 'shell_snapshots'), { recursive: true });
   mkdirSync(join(userCodexDir, 'mcp-oauth-locks'), { recursive: true });
   writeFileSync(join(userCodexDir, 'logs_2.sqlite'), 'logs-db');
+  writeFileSync(join(userCodexDir, 'logs_app.sqlite'), 'logs-app-db');
+  writeFileSync(join(userCodexDir, 'logs_2.sqlite.corrupt'), 'logs-corrupt');
   writeFileSync(join(userCodexDir, 'logs_2.sqlite-wal'), 'logs-wal');
   writeFileSync(join(userCodexDir, 'logs_2.sqlite-shm'), 'logs-shm');
   writeFileSync(join(userCodexDir, 'state_5.sqlite-wal'), 'state-wal');
   writeFileSync(join(userCodexDir, 'state_5.sqlite-shm'), 'state-shm');
+  writeFileSync(join(userCodexDir, 'state_5.sqlite-journal'), 'state-journal');
   writeFileSync(join(userCodexDir, 'models_cache.json'), '{}');
   writeFileSync(join(userCodexDir, '.sqlite-maintenance.lock'), '');
   writeFileSync(join(userCodexDir, 'installation_id'), 'inst-user');
   writeFileSync(join(userCodexDir, '.DS_Store'), '');
 
-  // Seed unsafe symlinks in ~/.codex: dangling, loop to managedHome, loop to subdir of managedHome, and symlink to auth.json / config.toml
+  // Seed unsafe symlinks in ~/.codex: dangling, loop to managedHome, loop to subdir of managedHome, self/parent links, and symlink to auth.json~ / config.toml~
   mkdirSync(join(managedHome, 'inside-managed'), { recursive: true });
   symlinkSync(join(sb.root, 'does-not-exist'), join(userCodexDir, 'dangling_entry'));
   symlinkSync(managedHome, join(userCodexDir, 'loop_to_root'));
   symlinkSync(join(managedHome, 'inside-managed'), join(userCodexDir, 'loop_to_child'));
+  symlinkSync('.', join(userCodexDir, 'self_link'));
+  symlinkSync('..', join(userCodexDir, 'up_link'));
   symlinkSync(join(userCodexDir, 'auth.json'), join(userCodexDir, 'sneaky_auth_link'));
+  symlinkSync(join(userCodexDir, 'auth.json~'), join(userCodexDir, 'sneaky_auth_tilde'));
   symlinkSync(join(userCodexDir, 'config.toml'), join(userCodexDir, 'sneaky_cfg_link'));
+  symlinkSync(join(userCodexDir, 'config.toml~'), join(userCodexDir, 'sneaky_cfg_tilde'));
 
   // Pre-seed a stale denylisted symlink and a bootstrap non-symlink `packages` dir inside managedHome
   symlinkSync(join(userCodexDir, 'models_cache.json'), join(managedHome, 'models_cache.json'));
@@ -3553,7 +3568,7 @@ test('dynamic ~/.codex mirror + denylist + safe symlink support + pruning in man
     codex_gateway_token: 'pddg_lse_dyn1_grantToken',
   }, { env: sb.env }, { spawnSync: () => ({ status: 0 }) });
 
-  // 1. Allowed entries (including future folder + relative/absolute symlinks + SQLite thread DBs) ARE linked
+  // 1. Allowed entries (including future folder + relative/absolute symlinks + .tmpl + SQLite thread DBs) ARE linked
   for (const name of [
     'AGENTS.md',
     'skills',
@@ -3561,9 +3576,9 @@ test('dynamic ~/.codex mirror + denylist + safe symlink support + pruning in man
     'agents',
     'hooks.json',
     '.hook-trust',
-    'vendor_imports',
     'packages',
     'herdr.config.toml',
+    'prompt.tmpl',
     'state_5.sqlite',
     'thread_history_1.sqlite',
   ]) {
@@ -3573,24 +3588,28 @@ test('dynamic ~/.codex mirror + denylist + safe symlink support + pruning in man
   assert.equal(readFileSync(join(managedHome, 'AGENTS.md'), 'utf8'), '# Shared AGENTS instructions\n');
   assert.equal(readFileSync(join(managedHome, 'skills', 'demo-skill', 'SKILL.md'), 'utf8'), '# Demo skill\n');
   assert.equal(readFileSync(join(managedHome, 'future_codex_feature_2027', 'spec.json'), 'utf8'), '{"future":true}\n');
+  assert.equal(readFileSync(join(managedHome, 'prompt.tmpl'), 'utf8'), 'template-ok\n');
   assert.equal(readFileSync(join(managedHome, 'state_5.sqlite'), 'utf8'), 'sqlite-threads');
 
   // 2. Denylisted entries and unsafe symlinks are NOT symlinked into managedHome (and stale models_cache.json symlink was pruned!)
   assert.equal(lstatSync(join(managedHome, 'auth.json')).isSymbolicLink(), false, 'managed auth.json is an isolated 0600 file');
   assert.equal(lstatSync(join(managedHome, 'config.toml')).isSymbolicLink(), false, 'managed config.toml is an isolated 0600 file');
   for (const excluded of [
-    'auth.lock', '.config.toml.merge-lock', 'model-switch-backups', 'app-server-daemon',
+    'auth.lock', 'auth.json~', 'config.toml~', '.codex-global-state.json', 'version.json', 'vendor_imports',
+    '.config.toml.merge-lock', 'model-switch-backups', 'app-server-daemon',
     'app-server-control', 'ipc', 'tmp', '.tmp', 'log', 'shell_snapshots', 'mcp-oauth-locks',
-    'logs_2.sqlite', 'logs_2.sqlite-wal', 'logs_2.sqlite-shm', 'state_5.sqlite-wal',
-    'state_5.sqlite-shm', 'models_cache.json', '.sqlite-maintenance.lock', 'installation_id',
-    '.DS_Store', 'dangling_entry', 'loop_to_root', 'loop_to_child', 'sneaky_auth_link', 'sneaky_cfg_link',
+    'logs_2.sqlite', 'logs_app.sqlite', 'logs_2.sqlite.corrupt', 'logs_2.sqlite-wal', 'logs_2.sqlite-shm',
+    'state_5.sqlite-wal', 'state_5.sqlite-shm', 'state_5.sqlite-journal', 'models_cache.json',
+    '.sqlite-maintenance.lock', 'installation_id', '.DS_Store', 'dangling_entry',
+    'loop_to_root', 'loop_to_child', 'self_link', 'up_link',
+    'sneaky_auth_link', 'sneaky_auth_tilde', 'sneaky_cfg_link', 'sneaky_cfg_tilde',
   ]) {
     let dstStat = null;
     try { dstStat = lstatSync(join(managedHome, excluded)); } catch {}
     assert.equal(dstStat, null, `${excluded} must NOT exist or be symlinked in managedHome`);
   }
 
-  // 3. Step overlay (`createCodexStepOverlay`) also supports safe symlinks (`AGENTS.md`, `skills`) and rejects unsafe symlinks
+  // 3. Step overlay (`createCodexStepOverlay`) also supports safe symlinks (`AGENTS.md`, `skills`) and rejects loops into managedHome / sourceHome / overlay
   symlinkSync(join(userCodexDir, 'auth.json'), join(userCodexDir, 'browser'));
   symlinkSync(join(sb.root, 'missing-plugin-target'), join(userCodexDir, 'plugins'));
   const stepOverlay = createCodexStepOverlay({
@@ -3605,8 +3624,13 @@ test('dynamic ~/.codex mirror + denylist + safe symlink support + pruning in man
     assert.equal(lstatSync(join(stepOverlay.overlayDir, 'agents')).isSymbolicLink(), true);
     assert.equal(lstatSync(join(stepOverlay.overlayDir, 'hooks.json')).isSymbolicLink(), true);
     assert.equal(lstatSync(join(stepOverlay.overlayDir, '.hook-trust')).isSymbolicLink(), true);
+    assert.equal(lstatSync(join(stepOverlay.overlayDir, 'prompt.tmpl')).isSymbolicLink(), true);
     assert.equal(existsSync(join(stepOverlay.overlayDir, 'browser')), false, 'symlink targeting auth.json rejected in step overlay');
     assert.equal(existsSync(join(stepOverlay.overlayDir, 'plugins')), false, 'dangling symlink rejected in step overlay');
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'loop_to_root')), false, 'symlink pointing to managedHome rejected in step overlay');
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'loop_to_child')), false, 'symlink pointing inside managedHome rejected in step overlay');
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'self_link')), false, 'self -> . symlink rejected in step overlay');
+    assert.equal(existsSync(join(stepOverlay.overlayDir, 'up_link')), false, 'up -> .. symlink rejected in step overlay');
     assert.equal(isSafeCodexSourceEntry({ lstatSync, realpathSync }, stepOverlay.overlayDir, stepOverlay.overlayDir), true);
     const loopInsideOverlay = join(userCodexDir, 'computer-use');
     symlinkSync(stepOverlay.overlayDir, loopInsideOverlay);
@@ -3730,6 +3754,22 @@ test('P0 surface audit (#2, #3c, #4): unified createCodexStepOverlay native auth
     assert.equal(lstatSync(join(overlay.overlayDir, 'herdr.config.toml')).isSymbolicLink(), true);
   } finally {
     overlay.cleanup();
+  }
+
+  // 2b. prepareCloudStepExecution forwards account.plan into createCodexStepOverlay synthetic id_token when lease.plan_type is omitted
+  const prepExec = prepareCloudStepExecution({
+    account: { provider: 'codex', plan: 'team' },
+    lease: {
+      delivery_mode: 'gateway_grant',
+      codex_gateway_url: 'https://api.promptdriven.ai/v1/codex-gateway/lse_prep_team',
+      codex_gateway_token: 'pddg_lse_prep_team_grant888',
+    },
+  }, sb.env, { tmpRoot: sb.root });
+  try {
+    const prepAuth = JSON.parse(readFileSync(join(prepExec.overlayDir, 'auth.json'), 'utf8'));
+    assert.equal(prepAuth.tokens?.id_token, buildSyntheticGatewayIdToken({ planType: 'team' }));
+  } finally {
+    prepExec.cleanup();
   }
 
   // 3. buildClaudeStepEnv strips ANTHROPIC_API_KEY and overrides stale gateway ANTHROPIC_BASE_URL in settings.json on direct_oauth

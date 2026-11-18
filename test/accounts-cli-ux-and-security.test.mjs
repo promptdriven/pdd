@@ -200,6 +200,9 @@ async function createPoolGatewayServer(t, opts = {}) {
       if (state.leaseOverrideState === 'error_500') {
         return send(500, { detail: 'Temporary lease outage' });
       }
+      if (state.leaseOverrideState === 'reauth_no_id') {
+        return send(401, { detail: { error: 'reauth_required', message: 'refresh_token_reused' } });
+      }
       const provider = body?.provider ?? 'codex';
       const skip = new Set(Array.isArray(body?.skip_account_ids) ? body.skip_account_ids : []);
       const candidates = state.accounts.filter(
@@ -2456,6 +2459,17 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
     'transient sync failure keeps valid on-disk CODEX_HOME instead of returning empty string',
   );
 
+  // Whereas an unattributed `reauth_required` lease failure MUST NOT keep `pddManagedCodexHome`!
+  cloud.state.leaseOverrideState = 'reauth_no_id';
+  const syncReauthRes = await invokeCli(['accounts', 'sync', '--provider', 'codex', '--quiet', '--timeout-ms', '1200'], sbPrintHome);
+  cloud.state.leaseOverrideState = null;
+  assert.equal(syncReauthRes.exit, 0);
+  assert.equal(
+    syncReauthRes.stdout.trim(),
+    '',
+    'reauth_required sync failure never keeps cached CODEX_HOME even without explicit account_id',
+  );
+
   // 3. Fix #3b & #3c: Execute `renderAutoSwitchBlock('sh')` in real `bash`!
   assert.equal((await invokeCli(['accounts', 'use', 'cl-shared-1'], sb)).exit, 0);
   const clSettingsPath = join(sb.home, '.claude', 'settings.json');
@@ -2510,7 +2524,21 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   assert.equal(clAfterLeave.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'leave stripped pddg_* token from ~/.claude/settings.json');
   assert.equal(clAfterLeave.env?.ANTHROPIC_BASE_URL, undefined, 'leave stripped gateway ANTHROPIC_BASE_URL from ~/.claude/settings.json');
 
-  // Reconciling via `pdd accounts list` also cleans any lingering gateway settings when no Claude accounts exist!
+  // Reconciling via `pdd accounts list` cleans lingering gateway settings whenever `!nextActive.claude`,
+  // EVEN when another paused/inactive Claude account remains enrolled (`nextProviders.includes('claude')`)!
+  cloud.state.accounts.push({
+    account_id: 'acc_cl_paused_enrolled',
+    label: 'cl-paused-other',
+    provider: 'claude',
+    plan: 'max',
+    is_owner: true,
+    shared: false,
+    state: 'paused',
+    five_hour_used_percent: 0,
+    five_hour_reset_at: null,
+    weekly_used_percent: 0,
+    weekly_reset_at: null,
+  });
   writeFileSync(clSettingsPath, JSON.stringify({
     env: {
       CLAUDE_CODE_OAUTH_TOKEN: 'pddg_stale_grant_after_revoke',
@@ -2521,24 +2549,84 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   const clAfterList = JSON.parse(readFileSync(clSettingsPath, 'utf8'));
   assert.equal(clAfterList.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined);
   assert.equal(clAfterList.env?.ANTHROPIC_BASE_URL, undefined);
+  cloud.state.accounts = cloud.state.accounts.filter(a => a.account_id !== 'acc_cl_paused_enrolled');
 
-  // 5. Fix #5a: `pdd accounts codex -- -i chart.png fork <uuid>` recognizes `fork <uuid>` and preserves `-i chart.png` across rotation!
+  // 5. Fix #5a: `pdd accounts codex -- -i chart.png fork <parentUuid>` never pins pre-existing `<parentUuid>` rollout!
+  // Seed a real pre-existing `<parentUuid>` rollout file on disk before launching `fork`:
+  const sessionsDayDir = join(managedHome, 'sessions', '2026', '11', '17');
+  mkdirSync(sessionsDayDir, { recursive: true });
+  const parentRolloutPath = join(sessionsDayDir, `rollout-2026-11-17T00-00-00-${forkUuid}.jsonl`);
+  writeFileSync(parentRolloutPath, `${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    type: 'session_meta',
+    payload: { id: forkUuid, cwd: sb.root, timestamp: new Date().toISOString() },
+  })}\n`);
+
+  // 5a-i: Turn-0 startup quota exit BEFORE child rollout creation re-runs `['-i', 'chart.png', 'fork', forkUuid]` (never mutating parent via `resume`)!
   assert.equal((await invokeCli(['accounts', 'use', 'cx-audit-1'], sb)).exit, 0);
-  const forkTurns = [];
-  const forkRes = await invokeCli(['accounts', 'codex', '--', '-i', 'chart.png', 'fork', forkUuid], sb, {
+  const forkTurn0Turns = [];
+  const forkTurn0Res = await invokeCli(['accounts', 'codex', '--', '-i', 'chart.png', 'fork', forkUuid], sb, {
     quotaSettleMs: 0,
     async spawnCodexPty({ args, turn, onOutput }) {
-      forkTurns.push({ turn, args });
+      forkTurn0Turns.push({ turn, args });
       if (turn === 0) {
-        onOutput('Error: You\'ve hit your usage limit for this window.\n');
+        onOutput(`Forking session ${forkUuid}...\nError: You've hit your usage limit for this window.\n`);
         return { code: 1, signal: 'SIGTERM' };
       }
       return { code: 0, signal: null };
     },
   }, { isTTY: true });
-  assert.equal(forkRes.exit, 0, forkRes.stderr);
-  assert.equal(forkTurns.length, 2);
-  assert.deepEqual(forkTurns[1].args, ['resume', '-i', 'chart.png', forkUuid]);
+  assert.equal(forkTurn0Res.exit, 0, forkTurn0Res.stderr);
+  assert.equal(forkTurn0Turns.length, 2);
+  assert.deepEqual(forkTurn0Turns[0].args, ['-i', 'chart.png', 'fork', forkUuid]);
+  assert.deepEqual(forkTurn0Turns[1].args, ['-i', 'chart.png', 'fork', forkUuid]);
+
+  // 5a-ii: Mid-session quota rotation AFTER newly forked `<childUuid>` rollout is created ignores `<parentUuid>` and resumes `<childUuid>`!
+  const cx1 = cloud.state.accounts.find(a => a.account_id === 'acc_cx_audit_1');
+  cx1.state = 'ready';
+  cx1.cooling_until = null;
+  cx1.five_hour_used_percent = 10;
+  assert.equal((await invokeCli(['accounts', 'use', 'cx-audit-1'], sb)).exit, 0);
+  const childUuid = '019a9999-2222-7000-8000-abcdef012345';
+  const forkMidTurns = [];
+  const forkMidRes = await invokeCli(['accounts', 'codex', '--', '-i', 'chart.png', 'fork', forkUuid], sb, {
+    rolloutPollIntervalMs: 15,
+    quotaSettleMs: 0,
+    async spawnCodexPty({ args, turn, cwd, signal }) {
+      forkMidTurns.push({ turn, args });
+      if (turn === 0) {
+        const nowIso = new Date().toISOString();
+        const childRolloutPath = join(sessionsDayDir, `rollout-2026-11-17T22-00-00-${childUuid}.jsonl`);
+        writeFileSync(childRolloutPath, [
+          JSON.stringify({
+            timestamp: nowIso,
+            type: 'session_meta',
+            payload: { id: childUuid, forked_from_id: forkUuid, cwd, timestamp: nowIso },
+          }),
+          JSON.stringify({
+            timestamp: nowIso,
+            type: 'event_msg',
+            payload: {
+              type: 'error',
+              codex_error_info: 'usage_limit_exceeded',
+              message: 'Usage limit reached for this window.',
+            },
+          }),
+          '',
+        ].join('\n'));
+        await new Promise(resolve => {
+          if (signal.aborted) return resolve();
+          signal.addEventListener('abort', resolve, { once: true });
+        });
+        return { code: 143, signal: 'SIGTERM' };
+      }
+      return { code: 0, signal: null };
+    },
+  }, { isTTY: true });
+  assert.equal(forkMidRes.exit, 0, forkMidRes.stderr);
+  assert.equal(forkMidTurns.length, 2);
+  assert.deepEqual(forkMidTurns[0].args, ['-i', 'chart.png', 'fork', forkUuid]);
+  assert.deepEqual(forkMidTurns[1].args, ['resume', '-i', 'chart.png', childUuid]);
 
   // 6. Fix #5b: `pdd accounts accept` leases/materializes when active pass is expired/missing, AND surfaces warning when lease sync fails!
   const sharedClaude2 = {
