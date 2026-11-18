@@ -1,6 +1,6 @@
 {
   "name": "@promptdriven/pdd",
-  "version": "0.1.36",
+  "version": "0.1.37",
   "description": "PDD: local Prompting guide, skills and recipes for your coding agent",
   "type": "module",
   "repository": {

@@ -2,7 +2,7 @@
 name: pdd-product
 description: Use when a person asks to plan a multi-part product roadmap with shared contracts and staged feature runs across independent parts.
 metadata:
-  pdd-skills: 0.1.36
+  pdd-skills: 0.1.37
 ---
 
 # PDD product
