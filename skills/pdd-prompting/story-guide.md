@@ -6,13 +6,14 @@ A Story states one cohesive standalone user loop—who acts, what they do, and w
 
 - **`0` Stories + `"No Story: <reason>"` PR line:** Use for internal refactors, `kind: native-only` plumbing, or changes whose user-observable slice is unchanged or already covered by an existing Story.
 - **Edit the existing Story:** When modifying or extending an existing user-facing slice, update its Story in `user_stories/` and its paired scenario instead of minting a parallel Story.
-- **`1` Story per cohesive standalone user loop:** Keep related steps of one user loop together (never split on `"and"` or into micro-Stories per sub-action). Create `2–3` Stories (indexed in `user_stories/PLAN.md`) only for genuinely independent user loops, and ask the person before `> 3`.
+- **`1` Story per cohesive standalone user loop:** Keep related steps of one user loop together (never split on `"and"` or into micro-Stories per sub-action). Create `2–3` Stories (indexed in `user_stories/PLAN.md`, which is an index, not a Story) only for genuinely independent user loops, and ask the person before `> 3`.
+- **Paired Short JSON scenario (`<story>.json`):** Place `<story>.json` in `tests/` or `test/` (RUNBOOK §2 names the folder when the repo already has `tests/`). Write Short JSON (RUNBOOK §2): omit `criteria` so PDD binds numbered `## Acceptance criteria` automatically from `user_stories/<story>.md` to current `ac-sha256-...` content IDs, set top-level `entry_path` (plus `"app_maps": ["app-map.json"]` when the Story exercises an app map), give steps independent starting states via `seeds` and `{"$use": "base", "patch": {...}}` so steps run concurrently on the server (chaining `$step` or shared `world` only for persistence criteria), and write compact criterion-keyed tuple `checks` (`"1": [["result", "/stdout", "=", "Done #4: Call mom\n"]]`). Standard `program-scenario.v1` JSON is also accepted (`pdd lint --emit-v1 <story>` prints the expanded `v1` JSON locally, and `pdd lint --bind-criteria <story>` binds legacy `AC1` IDs on disk for review at 0 AI calls).
 
 ## Structure
 
 1. `# Title`: the user loop in a few plain words.
 2. One role line: `As a <specific role>, I want <action>, so that <reason>.`
-3. `## Acceptance criteria`: `1` to `6` numbered items starting at `1.` (the only numbered list in the file). Copy each criterion word-for-word on one line with straight quotes (`"`) into `criteria` in `<story>.json` (`tests/` or `test/`, following RUNBOOK §2 when native tests already use `tests/`).
+3. `## Acceptance criteria`: `1` to `6` numbered items starting at `1.` (the only numbered list in the file), written one item per line with straight quotes (`"`). When `<story>.json` omits `criteria`, PDD binds these numbered items automatically (`1`, `2`, ...) to current `ac-sha256-...` content IDs (`tests/` or `test/`, following RUNBOOK §2 when native tests already use `tests/`).
 4. Optional bullet (`-`) sections: `## What must not change` (short user context) and `## Rules to check` (user-visible forbidden outcomes only). Route technical invariants and edge cases (symlinks, `.GIT` casing, V1/V2 schemas, numeric/buffer bounds) to `.prompt.md` `## Domain decisions`, never `user_stories/*.md`.
 
 ```markdown

@@ -33,7 +33,7 @@ const defaultReadPackageVersion = ({ packageRoot }) => {
   catch { return { ok: false, version: '' }; }
 };
 function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
-  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen'].some(flag => options[flag])) return null;
+  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--bind-criteria'].some(flag => options[flag])) return null;
   try {
     const found = runtime.findTests({ root: cwd });
     const { selected, unknown } = runtime.selectTests(found, words, options);
@@ -587,7 +587,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           }
         }
         const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
-        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen'].some(flag => plan.options[flag]);
+        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--bind-criteria'].some(flag => plan.options[flag]);
         const lintRoot = isLintCheckMode ? hasProjectLintConfig(cwd) : null;
         if (lintRoot && plan.options['--json'] === true) {
           let captured = '';

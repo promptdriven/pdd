@@ -49,7 +49,7 @@ Accept a replacement only while `pending`; otherwise raise `ValueError("correcti
 
 Use one explicit `## Dependencies` section as the loading declaration, linking canonical dependency prompts or shared contracts with relative Markdown links (plus `#fragment` when only one section applies). Navigation links outside `## Dependencies` are not loaded automatically. Required context must be transitively reachable without missing files, broken fragments or required-context cycles.
 
-Inject outside effects (databases, filesystem, HTTP/network, clocks, randomness, child processes) as named `<port>.<op>` operations in prose so `pdd test` fakes them deterministically (RUNBOOK §21):
+Inject outside effects (databases, filesystem, HTTP/network, clocks, randomness, generated IDs, child processes) via explicit operation inputs or named `<port>.<op>` operations in prose so `pdd test` fakes them deterministically rather than deriving randomness from ad-hoc state counters in prose (RUNBOOK §21):
 
 - **Dependency direction for `kind: native-only` boundary adapters:** Checkable domain, CLI flow and screen prompts must depend on shared contracts or checkable peers over injected `<port>.<op>` interfaces — **never** list a `kind: native-only` adapter prompt under `## Dependencies` of a checkable prompt (including Story `entry_path` prompts). Invert the dependency so the thin `kind: native-only` adapter depends on the checkable domain prompt.
 
@@ -80,7 +80,7 @@ Policy comes from authorized requirements and accepted consumer or shared contra
 Choose the proof boundary before touching `user_stories/` (see `story-guide.md` for Story structure and `<= 35`-line / `<= 6`-criteria bounds):
 
 - **`0` Stories + `"No Story: <reason>"` PR line:** Internal refactors, `kind: native-only` adapters, or changes already covered by an existing Story over an injected port.
-- **Edit existing Story vs `1` Story per cohesive standalone user loop:** Modify the existing Story when changing an existing user slice; write `1` Story per new standalone user loop (ask before `> 3`), and assert `1` observable check per material claim in its scenario JSON.
+- **Edit existing Story vs `1` Story per cohesive standalone user loop:** Modify the existing Story when changing an existing user slice; write `1` Story per new standalone user loop (ask before `> 3`), give steps self-contained starting states by default so `pdd test` runs them in parallel, and assert `1` observable check per material claim in its Short JSON scenario.
 - **Technical invariants stay in `.prompt.md`:** Put symlink, `.GIT` casing, V1/V2 schema, and boundary invariants in `.prompt.md` `## Domain decisions` (verified by PR 2 native/formal checks), never in `user_stories/*.md`. Test suites, fixtures, CI configs, manifests and docs never get `.prompt.md` owners.
 
 ## Prompt format and native-only declarations
