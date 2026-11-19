@@ -1,8 +1,12 @@
-// Generated from prompts/cli/metrics-model.prompt.md (sha256: 0dc903a7fd0fd752d4e3b45157187de03ec0bc7757aa1a509cddc9941b7f99f1).
+// Generated from prompts/cli/metrics-model.prompt.md.
 
 export const SKILLS = Object.freeze(['small-change', 'bug', 'feature']);
 export const GATES = Object.freeze(['runtime', 'vectors', 'formal', 'suite', 'review', 'ci']);
+export const PR_GATES = Object.freeze(['suite', 'review', 'ci', 'e2e']);
+export const PROMPT_CHECKS = Object.freeze(['runtime', 'vectors', 'formal']);
 
+const ALL_GATES = Object.freeze([...GATES, 'e2e']);
+const DEFAULT_TARGETS = Object.freeze({ convMinPct: 90, maxRegressionPct: 0, label: null });
 const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const VALID_VIEWS = new Set(['overview', 'stages', 'skills', 'full']);
 const DAY_MS = 86_400_000;
@@ -14,6 +18,10 @@ function modelError(code, message) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function positiveInt(value) {
+  return Number.isSafeInteger(value) && value > 0;
 }
 
 export function validateRepoName(repo) {
@@ -107,6 +115,61 @@ function formatShortDate(ms, timezone) {
   }).format(new Date(ms));
 }
 
+function formatShortMonth(ms, timezone) {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    month: 'short',
+  }).format(new Date(ms));
+}
+
+function normalizeTargets(raw) {
+  const obj = isPlainObject(raw) ? raw : {};
+  const convMinPct = typeof obj.convMinPct === 'number' && Number.isFinite(obj.convMinPct) && obj.convMinPct >= 0 && obj.convMinPct <= 100
+    ? obj.convMinPct
+    : DEFAULT_TARGETS.convMinPct;
+  const maxRegressionPct = typeof obj.maxRegressionPct === 'number' && Number.isFinite(obj.maxRegressionPct) && obj.maxRegressionPct >= 0 && obj.maxRegressionPct <= 100
+    ? obj.maxRegressionPct
+    : DEFAULT_TARGETS.maxRegressionPct;
+  const label = typeof obj.label === 'string' && obj.label.trim() ? obj.label.trim() : null;
+  return { convMinPct, maxRegressionPct, label };
+}
+
+function buildTargetRow(targets, referenceMs, timezone) {
+  const month = formatShortMonth(referenceMs, timezone);
+  const label = `Target (${targets.label ?? month})`;
+  const convDisplay = `>=${Number.isInteger(targets.convMinPct) ? targets.convMinPct : targets.convMinPct.toFixed(1)}%`;
+  const regressionDisplay = `${targets.maxRegressionPct.toFixed(1)}%`;
+  return {
+    label,
+    month,
+    convMinPct: targets.convMinPct,
+    maxRegressionPct: targets.maxRegressionPct,
+    convDisplay,
+    regressionDisplay,
+  };
+}
+
+/** Parse either a plain `{ [repo]: value }` map or an `Array<{ repo, [valueField] }>` entry list. */
+function entriesFromMapOrList(raw, valueField) {
+  const pairs = [];
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (isPlainObject(item) && typeof item.repo === 'string' && REPO_PATTERN.test(item.repo.trim())) {
+        pairs.push([item.repo.trim().toLowerCase(), item[valueField]]);
+      }
+    }
+    return pairs;
+  }
+  if (isPlainObject(raw)) {
+    for (const [key, val] of Object.entries(raw)) {
+      if (typeof key === 'string' && REPO_PATTERN.test(key.trim())) {
+        pairs.push([key.trim().toLowerCase(), val]);
+      }
+    }
+  }
+  return pairs;
+}
+
 export function normalizeSkill(value, hints = {}) {
   if (typeof value === 'string') {
     const clean = value.trim().toLowerCase().replace(/^pdd-/, '');
@@ -124,19 +187,13 @@ export function normalizeMetricsConfig(raw) {
   const cfg = isPlainObject(raw) ? raw : {};
   const enabled = cfg.enabled !== false;
   const repos = {};
-  if (isPlainObject(cfg.repos)) {
-    for (const [key, val] of Object.entries(cfg.repos)) {
-      if (typeof val === 'boolean' && REPO_PATTERN.test(key.trim())) {
-        repos[key.trim().toLowerCase()] = val;
-      }
-    }
+  for (const [lower, val] of entriesFromMapOrList(cfg.repos, 'enabled')) {
+    if (typeof val === 'boolean') repos[lower] = val;
   }
   const repoPausedSince = {};
-  if (isPlainObject(cfg.repoPausedSince)) {
-    for (const [key, val] of Object.entries(cfg.repoPausedSince)) {
-      if (typeof val === 'string' && Number.isFinite(Date.parse(val)) && REPO_PATTERN.test(key.trim())) {
-        repoPausedSince[key.trim().toLowerCase()] = new Date(Date.parse(val)).toISOString();
-      }
+  for (const [lower, val] of entriesFromMapOrList(cfg.repoPausedSince, 'pausedSince')) {
+    if (typeof val === 'string' && Number.isFinite(Date.parse(val))) {
+      repoPausedSince[lower] = new Date(Date.parse(val)).toISOString();
     }
   }
   const pausedIntervals = Array.isArray(cfg.pausedIntervals)
@@ -154,7 +211,8 @@ export function normalizeMetricsConfig(raw) {
   const updatedAt = typeof cfg.updatedAt === 'string' && Number.isFinite(Date.parse(cfg.updatedAt))
     ? new Date(Date.parse(cfg.updatedAt)).toISOString()
     : null;
-  return { enabled, repos, pausedSince, repoPausedSince, pausedIntervals, updatedAt };
+  const targets = normalizeTargets(cfg.targets);
+  return { enabled, repos, pausedSince, repoPausedSince, pausedIntervals, targets, updatedAt };
 }
 
 export function isMetricsEnabled(config, repo = null) {
@@ -183,6 +241,7 @@ export function applyMetricsToggle(first, second) {
   const repos = { ...cfg.repos };
   const repoPausedSince = { ...cfg.repoPausedSince };
   const intervals = cfg.pausedIntervals.map(item => ({ ...item }));
+  const targets = { ...cfg.targets };
 
   if (opts.repo !== undefined && opts.repo !== null && opts.repo !== '') {
     const valid = validateRepoName(opts.repo);
@@ -207,6 +266,7 @@ export function applyMetricsToggle(first, second) {
       pausedSince: cfg.pausedSince,
       repoPausedSince,
       pausedIntervals: intervals,
+      targets,
       updatedAt: atIso,
     };
   }
@@ -222,6 +282,7 @@ export function applyMetricsToggle(first, second) {
       pausedSince,
       repoPausedSince,
       pausedIntervals: intervals,
+      targets,
       updatedAt: atIso,
     };
   }
@@ -235,6 +296,7 @@ export function applyMetricsToggle(first, second) {
     pausedSince: null,
     repoPausedSince,
     pausedIntervals: intervals,
+    targets,
     updatedAt: atIso,
   };
 }
@@ -292,9 +354,29 @@ function normalizeGateState(gate, rawValue) {
       if (val === 'red' || val === 'fail') return 'fail';
       if (val === 'pending' || val === 'running') return 'running';
       return 'na';
+    case 'e2e':
+      if (val === 'green' || val === 'pass') return 'pass';
+      if (val === 'red' || val === 'fail' || val === 'broken' || val === 'hung') return 'fail';
+      if (val === 'pending' || val === 'running') return 'running';
+      return 'na';
     default:
       return 'na';
   }
+}
+
+function normalizeGateCounts(rawCounts) {
+  if (!isPlainObject(rawCounts)) return {};
+  const result = {};
+  for (const check of PROMPT_CHECKS) {
+    const pair = rawCounts[check];
+    if (!isPlainObject(pair)) continue;
+    const passed = pair.passed;
+    const total = pair.total;
+    if (Number.isSafeInteger(passed) && Number.isSafeInteger(total) && total > 0 && passed >= 0 && passed <= total) {
+      result[check] = { passed, total };
+    }
+  }
+  return result;
 }
 
 function normalizeStatus(rawStatus) {
@@ -304,18 +386,18 @@ function normalizeStatus(rawStatus) {
   return 'ended';
 }
 
-function statusRank(status) {
-  if (status === 'merged') return 5;
-  if (status === 'would-merge') return 4;
-  if (status === 'running') return 3;
-  if (status === 'needs-person') return 2;
+function itemRank(item) {
+  if (item.merged) return 6;
+  if (item.status === 'would-merge') return 4;
+  if (item.status === 'running') return 3;
+  if (item.status === 'needs-person') return 2;
   return 1;
 }
 
-function formatConvDisplay(mwm, taken) {
-  if (taken <= 0) return { convPct: null, mwmDisplay: '0 (n/a)' };
-  const convPct = Math.round((mwm / taken) * 1000) / 10;
-  return { convPct, mwmDisplay: `${mwm} (${convPct.toFixed(1)}%)` };
+function formatRatioDisplay(numerator, denominator) {
+  if (denominator <= 0) return { pct: null, display: '0 (n/a)' };
+  const pct = Math.round((numerator / denominator) * 1000) / 10;
+  return { pct, display: `${numerator} (${pct.toFixed(1)}%)` };
 }
 
 function computeMedianMinutes(durations) {
@@ -327,10 +409,87 @@ function computeMedianMinutes(durations) {
   return { medianMinutes: rounded, medianDisplay: `${rounded}m` };
 }
 
-function selectWindowIssues(normalizedRuns, windowDef, nowMs) {
+/** Build explicit human-readable repository scope label (e.g. `pdd + pocket`). */
+function formatRepoNamesLabel(reposList) {
+  if (reposList.length === 0) return '0 repos';
+  const shortCounts = new Map();
+  for (const repo of reposList) {
+    const shortLower = repo.split('/')[1].toLowerCase();
+    shortCounts.set(shortLower, (shortCounts.get(shortLower) ?? 0) + 1);
+  }
+  return reposList
+    .map(repo => {
+      const shortName = repo.split('/')[1];
+      return shortCounts.get(shortName.toLowerCase()) === 1 ? shortName : repo;
+    })
+    .join(' + ');
+}
+
+function indexPrStates(rawPrStates, excludedRepos) {
+  const map = new Map();
+  if (!Array.isArray(rawPrStates)) return map;
+  for (const entry of rawPrStates) {
+    if (!isPlainObject(entry) || typeof entry.repo !== 'string' || !REPO_PATTERN.test(entry.repo.trim())) continue;
+    if (!positiveInt(entry.pr)) continue;
+    const repoLower = entry.repo.trim().toLowerCase();
+    if (excludedRepos.has(repoLower)) continue;
+    map.set(`${repoLower}#${entry.pr}`, {
+      merged: typeof entry.merged === 'boolean' ? entry.merged : null,
+      mergedAtMs: parseTimestampMs(entry.mergedAt, null),
+      state: typeof entry.state === 'string' ? entry.state.trim().toUpperCase() : null,
+      isDraft: Boolean(entry.isDraft),
+    });
+  }
+  return map;
+}
+
+function indexRegressions(rawRegressions, excludedRepos) {
+  const byPr = new Map();
+  const byIssue = new Map();
+  if (!Array.isArray(rawRegressions)) return { byPr, byIssue };
+  const mergeSignal = (map, key, entry) => {
+    const prev = map.get(key) ?? { reopened: false, reverted: false, regressionIssues: new Set() };
+    if (entry.reopened === true) prev.reopened = true;
+    if (entry.reverted === true) prev.reverted = true;
+    if (Array.isArray(entry.regressionIssues)) {
+      for (const n of entry.regressionIssues) {
+        if (positiveInt(n)) prev.regressionIssues.add(n);
+      }
+    }
+    map.set(key, prev);
+  };
+  for (const entry of rawRegressions) {
+    if (!isPlainObject(entry) || typeof entry.repo !== 'string' || !REPO_PATTERN.test(entry.repo.trim())) continue;
+    const repoLower = entry.repo.trim().toLowerCase();
+    if (excludedRepos.has(repoLower)) continue;
+    if (positiveInt(entry.pr)) mergeSignal(byPr, `${repoLower}#${entry.pr}`, entry);
+    const issues = [
+      ...(positiveInt(entry.issue) ? [entry.issue] : []),
+      ...(Array.isArray(entry.issues) ? entry.issues.filter(positiveInt) : []),
+    ];
+    for (const issue of issues) mergeSignal(byIssue, `${repoLower}#${issue}`, entry);
+  }
+  return { byPr, byIssue };
+}
+
+function resolveItemRegression(item, regIndex) {
+  const prReg = item.pr ? regIndex.byPr.get(`${item.repoLower}#${item.pr}`) : null;
+  const issueReg = regIndex.byIssue.get(`${item.repoLower}#${item.issue}`) ?? null;
+  const hasReopened = item.reopened === true || prReg?.reopened === true || issueReg?.reopened === true;
+  const hasReverted = item.reverted === true || prReg?.reverted === true || issueReg?.reverted === true;
+  const issueSet = new Set(item.regressionIssues ?? []);
+  for (const n of prReg?.regressionIssues ?? []) issueSet.add(n);
+  for (const n of issueReg?.regressionIssues ?? []) issueSet.add(n);
+  const regressionIssueNumbers = [...issueSet].sort((a, b) => a - b);
+  const hasRegression = hasReopened || hasReverted || regressionIssueNumbers.length > 0;
+  return { hasReopened, hasReverted, regressionIssueNumbers, hasRegression };
+}
+
+function selectWindowIssues(normalizedRuns, windowDef, nowMs, regIndex) {
   const byIssue = new Map();
   for (const run of normalizedRuns) {
     const inRange = (run.atMs >= windowDef.startMs && run.atMs <= windowDef.endMs)
+      || (run.mergedAtMs !== null && run.mergedAtMs >= windowDef.startMs && run.mergedAtMs <= windowDef.endMs)
       || (run.status === 'running' && nowMs >= windowDef.startMs && nowMs <= windowDef.endMs && run.startMs <= windowDef.endMs);
     if (!inRange) continue;
     for (const issueNumber of run.issues) {
@@ -338,37 +497,213 @@ function selectWindowIssues(normalizedRuns, windowDef, nowMs) {
       const prev = byIssue.get(key);
       if (
         !prev
-        || statusRank(run.status) > statusRank(prev.status)
-        || (statusRank(run.status) === statusRank(prev.status) && run.atMs >= prev.atMs)
+        || itemRank(run) > itemRank(prev)
+        || (itemRank(run) === itemRank(prev) && run.atMs >= prev.atMs)
       ) {
-        byIssue.set(key, { ...run, issue: issueNumber });
+        const candidate = { ...run, issue: issueNumber };
+        const reg = resolveItemRegression(candidate, regIndex);
+        byIssue.set(key, { ...candidate, ...reg });
       }
     }
   }
   return [...byIssue.values()];
 }
 
-function resolveOpenCount(repoLowers, openMap) {
-  if (!openMap) return { open: null, openDisplay: '?' };
+function resolveOpenCount(repoLowers, openMap, openNumbersMap) {
+  const hasOpenData = openMap !== null || openNumbersMap.size > 0;
+  if (!hasOpenData) return { open: null, openDisplay: '?' };
   if (repoLowers.length === 0) return { open: 0, openDisplay: '0' };
   let sum = 0;
   for (const lower of repoLowers) {
-    const v = openMap.get(lower);
-    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
-      return { open: null, openDisplay: '?' };
+    const numeric = openMap?.get(lower);
+    if (typeof numeric === 'number' && Number.isInteger(numeric) && numeric >= 0) {
+      sum += numeric;
+      continue;
     }
-    sum += v;
+    if (openNumbersMap.has(lower)) {
+      sum += openNumbersMap.get(lower).size;
+      continue;
+    }
+    return { open: null, openDisplay: '?' };
   }
   return { open: sum, openDisplay: String(sum) };
 }
 
-function summarizeOverviewRow(key, label, items, repoLowers, openMap) {
-  const { open, openDisplay } = resolveOpenCount(repoLowers, openMap);
+function resolveWindowPool(repoLowers, windowDef, items, openMap, openNumbersMap, closedIssues) {
+  const hasOpenData = openMap !== null || openNumbersMap.size > 0;
+  if (!hasOpenData) return { pool: null, poolDisplay: '?' };
+  if (repoLowers.length === 0) return { pool: 0, poolDisplay: '0' };
+  let totalPool = 0;
+  for (const lower of repoLowers) {
+    const repoItems = items.filter(i => i.repoLower === lower);
+    const takenSet = new Set(repoItems.map(i => i.issue));
+    const closedSet = new Set();
+    for (const closed of closedIssues) {
+      if (closed.repoLower === lower && closed.closedAtMs >= windowDef.startMs && closed.closedAtMs <= windowDef.endMs) {
+        closedSet.add(closed.issue);
+      }
+    }
+    const openCount = openMap?.get(lower);
+    const hasCount = typeof openCount === 'number' && Number.isInteger(openCount) && openCount >= 0;
+    const openSet = openNumbersMap.get(lower) ?? null;
+    if (!hasCount && !openSet) return { pool: null, poolDisplay: '?' };
+    if (openSet) {
+      const effectiveOpenCount = hasCount ? openCount : openSet.size;
+      const unlistedOpen = Math.max(0, effectiveOpenCount - openSet.size);
+      const union = new Set([...openSet, ...closedSet, ...takenSet]);
+      totalPool += Math.max(takenSet.size, union.size + unlistedOpen);
+    } else {
+      const mergedSet = new Set(repoItems.filter(i => i.merged).map(i => i.issue));
+      const closedOrMerged = new Set([...closedSet, ...mergedSet]);
+      totalPool += Math.max(takenSet.size, openCount + closedOrMerged.size);
+    }
+  }
+  return { pool: totalPool, poolDisplay: String(totalPool) };
+}
+
+function summarizeOverviewRow(key, label, windowDef, items, repoLowers, openMap, openNumbersMap, closedIssues) {
+  const { open, openDisplay } = resolveOpenCount(repoLowers, openMap, openNumbersMap);
+  const { pool, poolDisplay } = resolveWindowPool(repoLowers, windowDef, items, openMap, openNumbersMap, closedIssues);
   const taken = items.length;
   const prCreated = items.filter(i => i.prCreated).length;
-  const mwm = items.filter(i => i.status === 'merged' || i.status === 'would-merge').length;
-  const { convPct, mwmDisplay } = formatConvDisplay(mwm, taken);
-  return { key, label, open, openDisplay, taken, prCreated, mwm, convPct, mwmDisplay };
+  const mergedItems = items.filter(i => i.merged);
+  const merged = mergedItems.length;
+  const { pct: convPct, display: mergedDisplay } = formatRatioDisplay(merged, taken);
+  const mwm = items.filter(i => i.mwmFlag).length;
+  const { display: mwmDisplay } = formatRatioDisplay(mwm, taken);
+  const regressions = mergedItems.filter(i => i.hasRegression).length;
+  const { pct: regressionsPct, display: regressionsDisplay } = formatRatioDisplay(regressions, merged);
+  return {
+    key,
+    label,
+    pool,
+    poolDisplay,
+    open,
+    openDisplay,
+    taken,
+    prCreated,
+    merged,
+    convPct,
+    mergedDisplay,
+    mwm,
+    mwmDisplay,
+    regressions,
+    regressionsPct,
+    regressionsDisplay,
+  };
+}
+
+function formatBreakdownSummary(prefix, total, breakdown) {
+  if (total === 0) return `${prefix} (0): none`;
+  return `${prefix} (${total}): ${breakdown.map(b => `${b.count} ${b.reason}`).join(' · ')}`;
+}
+
+function summarizeBeforePr(items) {
+  const order = ['running', 'needs-person', 'stopped'];
+  const counts = Object.fromEntries(order.map(k => [k, 0]));
+  let total = 0;
+  for (const item of items) {
+    if (item.prCreated) continue;
+    total++;
+    if (item.status === 'running') counts.running++;
+    else if (item.status === 'needs-person') counts['needs-person']++;
+    else counts.stopped++;
+  }
+  const breakdown = order.filter(k => counts[k] > 0).map(reason => ({ reason, count: counts[reason] }));
+  return { total, breakdown, summary: formatBreakdownSummary('Before PR', total, breakdown) };
+}
+
+function summarizeUnmergedPrs(items) {
+  const order = [
+    'failed runtime',
+    'failed vectors',
+    'failed formal',
+    'failed suite',
+    'failed review',
+    'failed ci',
+    'failed e2e',
+    'needs-person',
+    'open/draft',
+    'closed unmerged',
+  ];
+  const counts = Object.fromEntries(order.map(k => [k, 0]));
+  let total = 0;
+  for (const item of items) {
+    if (!item.prCreated || item.merged) continue;
+    total++;
+    const failedGate = ALL_GATES.find(g => item.gates[g] === 'fail');
+    if (failedGate) counts[`failed ${failedGate}`]++;
+    else if (item.status === 'needs-person') counts['needs-person']++;
+    else if (item.prStateCode === 'CLOSED') counts['closed unmerged']++;
+    else counts['open/draft']++;
+  }
+  const breakdown = order.filter(k => counts[k] > 0).map(reason => ({ reason, count: counts[reason] }));
+  return { total, breakdown, summary: formatBreakdownSummary('Unmerged PRs', total, breakdown) };
+}
+
+function summarizePrGates(prItems) {
+  const totalPrs = prItems.length;
+  const countPass = gate => {
+    const passed = prItems.filter(i => i.gates[gate] === 'pass').length;
+    return { passed, total: totalPrs, display: totalPrs === 0 ? '-' : `${passed}/${totalPrs}` };
+  };
+  const suite = countPass('suite');
+  const review = countPass('review');
+  const ci = countPass('ci');
+  const e2ePresent = prItems.some(i => i.gates.e2e !== 'na');
+  const e2eBase = countPass('e2e');
+  const e2e = { ...e2eBase, present: e2ePresent };
+  const summary = totalPrs === 0
+    ? 'PR Gates (of 0 PRs): none'
+    : `PR Gates (of ${totalPrs} ${totalPrs === 1 ? 'PR' : 'PRs'}): Suite ${suite.display} · Review ${review.display} · CI ${ci.display}${e2ePresent ? ` · E2E ${e2e.display}` : ''}`;
+  return { totalPrs, suite, review, ci, e2e, summary };
+}
+
+function summarizePromptChecks(prItems) {
+  const promptItems = prItems.filter(item =>
+    item.promptChanged === true
+    || PROMPT_CHECKS.some(g => item.gates[g] === 'pass' || item.gates[g] === 'fail' || (item.gateCounts?.[g]?.total ?? 0) > 0),
+  );
+  const promptPrs = promptItems.length;
+  const checks = {};
+  for (const g of PROMPT_CHECKS) {
+    const hasNumericCounts = promptItems.some(item => (item.gateCounts?.[g]?.total ?? 0) > 0);
+    let passed = 0;
+    let total = 0;
+    for (const item of promptItems) {
+      if (hasNumericCounts && item.gateCounts?.[g]?.total > 0) {
+        passed += item.gateCounts[g].passed;
+        total += item.gateCounts[g].total;
+      } else if (item.gates[g] === 'pass') {
+        passed += 1;
+        total += 1;
+      } else if (item.gates[g] === 'fail') {
+        total += 1;
+      }
+    }
+    checks[g] = { passed, total, display: total === 0 ? '-' : `${passed}/${total}` };
+  }
+  const summary = promptPrs === 0
+    ? 'Prompt Checks (of 0 prompt PRs): none'
+    : `Prompt Checks (of ${promptPrs} ${promptPrs === 1 ? 'prompt PR' : 'prompt PRs'}): Runtime ${checks.runtime.display} · Vectors ${checks.vectors.display} · Formal ${checks.formal.display}`;
+  return { promptPrs, runtime: checks.runtime, vectors: checks.vectors, formal: checks.formal, summary };
+}
+
+function summarizeRegressionsBreakdown(mergedItems) {
+  const regressed = mergedItems.filter(i => i.hasRegression);
+  const total = regressed.length;
+  const reopened = regressed.filter(i => i.hasReopened).length;
+  const reverted = regressed.filter(i => i.hasReverted).length;
+  const issueSet = new Set();
+  for (const item of regressed) {
+    for (const n of item.regressionIssueNumbers) issueSet.add(n);
+  }
+  const regressionIssues = [...issueSet].sort((a, b) => a - b);
+  const regressionIssueCount = regressionIssues.length;
+  const issueLabel = regressionIssueCount === 1 ? 'regression issue' : 'regression issues';
+  const issueList = regressionIssues.length > 0 ? ` (${regressionIssues.map(n => `#${n}`).join(', ')})` : '';
+  const summary = `Regressions (${total}): ${reopened} reopened · ${reverted} reverted · ${regressionIssueCount} ${issueLabel}${issueList}`;
+  return { total, reopened, reverted, regressionIssueCount, regressionIssues, summary };
 }
 
 function summarizeStages(windowDef, items) {
@@ -392,10 +727,19 @@ function summarizeStages(windowDef, items) {
     };
   }
   const taken = items.length;
-  const pr = items.filter(i => i.prCreated).length;
-  const mwmItems = items.filter(i => i.status === 'merged' || i.status === 'would-merge');
+  const prItems = items.filter(i => i.prCreated);
+  const pr = prItems.length;
+  const mergedItems = items.filter(i => i.merged);
+  const merged = mergedItems.length;
+  const mwmItems = items.filter(i => i.mwmFlag);
   const mwm = mwmItems.length;
-  const reopen = mwmItems.filter(i => i.reopened).length;
+  const reopen = mwmItems.filter(i => i.hasRegression).length;
+
+  const beforePr = summarizeBeforePr(items);
+  const unmergedPrs = summarizeUnmergedPrs(items);
+  const prGates = summarizePrGates(prItems);
+  const promptChecks = summarizePromptChecks(prItems);
+  const regressions = summarizeRegressionsBreakdown(mergedItems);
 
   const bucketOrder = [
     'running',
@@ -411,7 +755,7 @@ function summarizeStages(windowDef, items) {
   const counts = Object.fromEntries(bucketOrder.map(b => [b, 0]));
   let nonMergedTotal = 0;
   for (const item of items) {
-    if (item.status === 'merged' || item.status === 'would-merge') continue;
+    if (item.mwmFlag) continue;
     nonMergedTotal++;
     if (item.status === 'running') {
       counts.running++;
@@ -426,43 +770,46 @@ function summarizeStages(windowDef, items) {
     else counts.ended++;
   }
   const breakdown = bucketOrder.filter(b => counts[b] > 0).map(b => ({ reason: b, count: counts[b] }));
-  const nonMergedSummary = nonMergedTotal === 0
-    ? 'Non-merged (0): none'
-    : `Non-merged (${nonMergedTotal}): ${breakdown.map(b => `${b.count} ${b.reason}`).join(' · ')}`;
+  const nonMergedSummary = formatBreakdownSummary('Non-merged', nonMergedTotal, breakdown);
 
   return {
     window: { key: windowDef.key, label: windowDef.label },
     taken,
     pr,
-    gates,
+    merged,
     mwm,
+    beforePr,
+    unmergedPrs,
+    prGates,
+    promptChecks,
+    regressions,
+    gates,
     reopen,
     nonMerged: { total: nonMergedTotal, breakdown },
     nonMergedSummary,
   };
 }
 
-function summarizeSkills(windowDef, items) {
-  const rows = SKILLS.map(skill => {
-    const matching = items.filter(i => i.skill === skill);
-    const taken = matching.length;
-    const prCreated = matching.filter(i => i.prCreated).length;
-    const mwmItems = matching.filter(i => i.status === 'merged' || i.status === 'would-merge');
-    const mwm = mwmItems.length;
-    const { convPct, mwmDisplay } = formatConvDisplay(mwm, taken);
-    const { medianMinutes, medianDisplay } = computeMedianMinutes(mwmItems.map(i => i.durationMinutes));
-    return { skill, taken, prCreated, mwm, convPct, mwmDisplay, medianMinutes, medianDisplay };
-  });
-  const taken = items.length;
-  const prCreated = items.filter(i => i.prCreated).length;
-  const mwmItems = items.filter(i => i.status === 'merged' || i.status === 'would-merge');
+function summarizeSkillBucket(skill, matching) {
+  const taken = matching.length;
+  const prCreated = matching.filter(i => i.prCreated).length;
+  const merged = matching.filter(i => i.merged).length;
+  const { pct: convPct, display: mergedDisplay } = formatRatioDisplay(merged, taken);
+  const mwmItems = matching.filter(i => i.mwmFlag);
   const mwm = mwmItems.length;
-  const { convPct, mwmDisplay } = formatConvDisplay(mwm, taken);
-  const { medianMinutes, medianDisplay } = computeMedianMinutes(mwmItems.map(i => i.durationMinutes));
+  const { display: mwmDisplay } = formatRatioDisplay(mwm, taken);
+  const durationItems = matching.filter(i => i.merged || i.mwmFlag);
+  const { medianMinutes, medianDisplay } = computeMedianMinutes(durationItems.map(i => i.durationMinutes));
+  return { skill, taken, prCreated, merged, convPct, mergedDisplay, mwm, mwmDisplay, medianMinutes, medianDisplay };
+}
+
+function summarizeSkills(windowDef, items) {
+  const rows = SKILLS.map(skill => summarizeSkillBucket(skill, items.filter(i => i.skill === skill)));
+  const total = summarizeSkillBucket('Total', items);
   return {
     window: { key: windowDef.key, label: windowDef.label },
     rows,
-    total: { skill: 'Total', taken, prCreated, mwm, convPct, mwmDisplay, medianMinutes, medianDisplay },
+    total,
   };
 }
 
@@ -487,11 +834,20 @@ export function calculateAutopilotMetrics(input = {}) {
   const repoFilterLower = repoFilterCanonical ? repoFilterCanonical.toLowerCase() : null;
 
   const recordingCfg = normalizeMetricsConfig(opts.recording);
+  // In unified rollups, any repo explicitly turned off via `pdd metrics off --repo` is excluded completely.
+  const excludedRepos = new Set();
+  if (!repoFilterLower) {
+    for (const [lower, enabled] of Object.entries(recordingCfg.repos)) {
+      if (enabled === false) excludedRepos.add(lower);
+    }
+  }
+
   const canonicalRepos = new Map();
   const rememberRepo = raw => {
     if (typeof raw !== 'string' || !REPO_PATTERN.test(raw.trim())) return null;
     const trimmed = raw.trim();
     const lower = trimmed.toLowerCase();
+    if (excludedRepos.has(lower)) return null;
     if (repoFilterLower && lower !== repoFilterLower) return null;
     if (!canonicalRepos.has(lower)) canonicalRepos.set(lower, trimmed);
     return lower;
@@ -502,14 +858,40 @@ export function calculateAutopilotMetrics(input = {}) {
   }
 
   let openMap = null;
-  if (isPlainObject(opts.openIssues)) {
+  if (isPlainObject(opts.openIssues) || Array.isArray(opts.openIssues)) {
     openMap = new Map();
-    for (const [k, v] of Object.entries(opts.openIssues)) {
-      if (typeof k === 'string' && REPO_PATTERN.test(k.trim())) {
-        openMap.set(k.trim().toLowerCase(), typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null);
-      }
+    for (const [lower, v] of entriesFromMapOrList(opts.openIssues, 'count')) {
+      if (excludedRepos.has(lower)) continue;
+      openMap.set(lower, typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null);
     }
   }
+
+  const openNumbersMap = new Map();
+  if (Array.isArray(opts.openIssueNumbers)) {
+    for (const entry of opts.openIssueNumbers) {
+      if (!isPlainObject(entry) || typeof entry.repo !== 'string' || !REPO_PATTERN.test(entry.repo.trim())) continue;
+      const lower = entry.repo.trim().toLowerCase();
+      if (excludedRepos.has(lower)) continue;
+      const nums = Array.isArray(entry.issues) ? entry.issues.filter(positiveInt) : [];
+      openNumbersMap.set(lower, new Set(nums));
+    }
+  }
+
+  const closedIssues = [];
+  if (Array.isArray(opts.closedIssues)) {
+    for (const entry of opts.closedIssues) {
+      if (!isPlainObject(entry) || typeof entry.repo !== 'string' || !REPO_PATTERN.test(entry.repo.trim())) continue;
+      if (!positiveInt(entry.issue)) continue;
+      const closedAtMs = parseTimestampMs(entry.closedAt, null);
+      if (closedAtMs === null) continue;
+      const lower = entry.repo.trim().toLowerCase();
+      if (excludedRepos.has(lower)) continue;
+      closedIssues.push({ repoLower: lower, issue: entry.issue, closedAtMs });
+    }
+  }
+
+  const prStateMap = indexPrStates(opts.prStates, excludedRepos);
+  const regIndex = indexRegressions(opts.regressions, excludedRepos);
 
   const normalizedRuns = [];
   for (const raw of Array.isArray(opts.runs) ? opts.runs : []) {
@@ -517,27 +899,62 @@ export function calculateAutopilotMetrics(input = {}) {
     const repoLower = rememberRepo(raw.repo);
     if (!repoLower) continue;
     const issues = Array.isArray(raw.issues) && raw.issues.length > 0
-      ? [...new Set(raw.issues.filter(n => Number.isSafeInteger(n) && n > 0))]
-      : (Number.isSafeInteger(raw.issue) && raw.issue > 0 ? [raw.issue] : []);
+      ? [...new Set(raw.issues.filter(positiveInt))]
+      : (positiveInt(raw.issue) ? [raw.issue] : []);
     if (issues.length === 0) continue;
 
     const atMs = parseTimestampMs(raw.at ?? raw.endedAt ?? raw.updatedAt ?? raw.startedAt, null);
     if (atMs === null) continue;
     const startMs = parseTimestampMs(raw.startedAt, atMs);
-    const status = normalizeStatus(raw.status ?? raw.outcome);
-    if (isRunPaused(startMs, atMs, status, repoLower, recordingCfg)) continue;
+    const rawStatus = normalizeStatus(raw.status ?? raw.outcome);
+    if (isRunPaused(startMs, atMs, rawStatus, repoLower, recordingCfg)) continue;
 
-    const prNumber = Number.isSafeInteger(raw.pr) && raw.pr > 0 ? raw.pr : null;
-    const prCreated = prNumber !== null || raw.prCreated === true || status === 'merged' || status === 'would-merge';
+    const prNumber = positiveInt(raw.pr) ? raw.pr : null;
+    const prState = prNumber !== null ? prStateMap.get(`${repoLower}#${prNumber}`) ?? null : null;
+    const runMergedAtMs = parseTimestampMs(raw.mergedAt, null);
+
+    let merged = false;
+    let mwmFlag = false;
+    let status = rawStatus;
+    let mergedAtMs = null;
+    let prStateCode = null;
+    let prIsDraft = false;
+
+    if (prState) {
+      prStateCode = prState.state;
+      prIsDraft = prState.isDraft;
+      const reconciledMerged = prState.merged === true
+        || prState.state === 'MERGED'
+        || (prState.mergedAtMs !== null && prState.mergedAtMs <= nowMs);
+      if (reconciledMerged) {
+        merged = true;
+        mwmFlag = true;
+        status = 'merged';
+        mergedAtMs = prState.mergedAtMs ?? runMergedAtMs ?? atMs;
+      } else {
+        merged = false;
+        mwmFlag = false;
+      }
+    } else {
+      merged = rawStatus === 'merged' || raw.prMerged === true || (runMergedAtMs !== null && runMergedAtMs <= nowMs);
+      mwmFlag = merged || rawStatus === 'would-merge';
+      if (merged) {
+        status = 'merged';
+        mergedAtMs = runMergedAtMs ?? atMs;
+      }
+    }
+
+    const prCreated = prNumber !== null || raw.prCreated === true || merged || rawStatus === 'would-merge';
     const rawGates = isPlainObject(raw.gates) ? raw.gates : {};
     const gates = {};
-    for (const gate of GATES) {
+    for (const gate of ALL_GATES) {
       let state = normalizeGateState(gate, rawGates[gate]);
-      if ((status === 'merged' || status === 'would-merge') && state === 'na' && (gate === 'suite' || gate === 'review')) {
+      if ((merged || rawStatus === 'would-merge') && state === 'na' && (gate === 'suite' || gate === 'review')) {
         state = 'pass';
       }
       gates[gate] = state;
     }
+    const gateCounts = normalizeGateCounts(raw.gateCounts);
     const skill = normalizeSkill(raw.skill, {
       pathsOnlyD: raw.pathsOnlyD === true,
       promptChanged: raw.promptChanged,
@@ -546,6 +963,7 @@ export function calculateAutopilotMetrics(input = {}) {
     const durationMinutes = typeof raw.durationMinutes === 'number' && Number.isFinite(raw.durationMinutes) && raw.durationMinutes > 0
       ? raw.durationMinutes
       : null;
+    const regressionIssues = Array.isArray(raw.regressionIssues) ? raw.regressionIssues.filter(positiveInt) : [];
     normalizedRuns.push({
       repoLower,
       repo: canonicalRepos.get(repoLower),
@@ -553,11 +971,20 @@ export function calculateAutopilotMetrics(input = {}) {
       skill,
       startMs,
       atMs,
+      mergedAtMs,
       status,
+      merged,
+      mwmFlag,
       pr: prNumber,
       prCreated,
+      prStateCode,
+      prIsDraft,
       gates,
-      reopened: raw.reopened === true || raw.reverted === true,
+      gateCounts,
+      promptChanged: raw.promptChanged === true,
+      reopened: raw.reopened === true,
+      reverted: raw.reverted === true,
+      regressionIssues,
       durationMinutes,
     });
   }
@@ -571,13 +998,18 @@ export function calculateAutopilotMetrics(input = {}) {
 
   const sortedRepoLowers = [...canonicalRepos.keys()].sort();
   const reposList = sortedRepoLowers.map(lower => canonicalRepos.get(lower));
+  const byRepo = Boolean(opts.byRepo);
+  const repoNamesLabel = formatRepoNamesLabel(reposList);
+  const scopeLabel = resolvedRepoFilter ?? (byRepo ? `Per Repo · ${repoNamesLabel}` : repoNamesLabel);
 
   let windowDefs;
+  let targetRefMs = nowMs;
   if (parsedDate) {
     const startMs = localMidnightUtcMs(parsedDate.year, parsedDate.month, parsedDate.day, timezone);
     const nextDay = new Date(Date.UTC(parsedDate.year, parsedDate.month - 1, parsedDate.day + 1));
     const endMs = localMidnightUtcMs(nextDay.getUTCFullYear(), nextDay.getUTCMonth() + 1, nextDay.getUTCDate(), timezone) - 1;
     windowDefs = [{ key: 'date', label: parsedDate.text, startMs, endMs }];
+    targetRefMs = startMs + 12 * 3_600_000;
   } else {
     const nowLocal = localParts(nowMs, timezone);
     const mondayUtcDate = new Date(Date.UTC(nowLocal.year, nowLocal.month - 1, nowLocal.day - nowLocal.weekday));
@@ -595,12 +1027,14 @@ export function calculateAutopilotMetrics(input = {}) {
 
   const windowItemsMap = new Map();
   for (const w of windowDefs) {
-    windowItemsMap.set(w.key, selectWindowIssues(normalizedRuns, w, nowMs));
+    windowItemsMap.set(w.key, selectWindowIssues(normalizedRuns, w, nowMs, regIndex));
   }
 
+  const { open: openNow, openDisplay: openNowDisplay } = resolveOpenCount(sortedRepoLowers, openMap, openNumbersMap);
   const overviewWindows = windowDefs.map(w =>
-    summarizeOverviewRow(w.key, w.label, windowItemsMap.get(w.key), sortedRepoLowers, openMap),
+    summarizeOverviewRow(w.key, w.label, w, windowItemsMap.get(w.key), sortedRepoLowers, openMap, openNumbersMap, closedIssues),
   );
+  const target = buildTargetRow(recordingCfg.targets, targetRefMs, timezone);
 
   const perRepoDefs = parsedDate ? windowDefs : [windowDefs[1], windowDefs[0]];
   const perRepoWindows = perRepoDefs.map(w => {
@@ -609,12 +1043,15 @@ export function calculateAutopilotMetrics(input = {}) {
       summarizeOverviewRow(
         lower,
         canonicalRepos.get(lower),
+        w,
         items.filter(i => i.repoLower === lower),
         [lower],
         openMap,
+        openNumbersMap,
+        closedIssues,
       ),
     );
-    const total = summarizeOverviewRow('total', 'Total', items, sortedRepoLowers, openMap);
+    const total = summarizeOverviewRow('total', 'Total', w, items, sortedRepoLowers, openMap, openNumbersMap, closedIssues);
     return { key: w.key, label: w.label, rows, total };
   });
 
@@ -634,16 +1071,21 @@ export function calculateAutopilotMetrics(input = {}) {
     timezone,
     date: parsedDate ? parsedDate.text : null,
     view,
-    byRepo: Boolean(opts.byRepo),
+    byRepo,
     repoFilter: resolvedRepoFilter,
+    scopeLabel,
+    openNow,
+    openNowDisplay,
     recording: {
       enabled: effectiveEnabled,
       globalEnabled: recordingCfg.enabled,
       repoOverrides: recordingCfg.repos,
+      targets: recordingCfg.targets,
     },
     repos: reposList,
     overview: {
       windows: overviewWindows,
+      target,
       perRepoWindows,
     },
     stages,
@@ -670,68 +1112,65 @@ function renderOverviewSection(report) {
   if (report.byRepo) {
     return report.overview.perRepoWindows
       .map(win => {
-        const bodyRows = win.rows.length > 0
-          ? [...win.rows, win.total]
-          : [win.total];
+        const bodyRows = win.rows.length > 0 ? [...win.rows, win.total] : [win.total];
         const table = renderTable(
-          ['Repo', 'Open', 'Taken', 'PR Created', 'M/WM (Conv%)'],
-          ['left', 'right', 'right', 'right', 'right'],
-          bodyRows.map(r => [r.label, r.openDisplay, r.taken, r.prCreated, r.mwmDisplay]),
+          ['Repo', 'Pool', 'Taken', 'PRs', 'Merged (Conv%)', 'Regressions'],
+          ['left', 'right', 'right', 'right', 'right', 'right'],
+          bodyRows.map(r => [r.label, r.poolDisplay, r.taken, r.prCreated, r.mergedDisplay, r.regressionsDisplay]),
         );
         return `${win.label}\n${table}`;
       })
       .join('\n\n');
   }
+  const rows = report.overview.windows.map(w => [
+    w.label,
+    w.poolDisplay,
+    w.taken,
+    w.prCreated,
+    w.mergedDisplay,
+    w.regressionsDisplay,
+  ]);
+  if (report.overview.target) {
+    const t = report.overview.target;
+    rows.push([t.label, '-', '-', '-', t.convDisplay, t.regressionDisplay]);
+  }
   return renderTable(
-    ['Window', 'Open', 'Taken', 'PR Created', 'M/WM (Conv%)'],
-    ['left', 'right', 'right', 'right', 'right'],
-    report.overview.windows.map(w => [w.label, w.openDisplay, w.taken, w.prCreated, w.mwmDisplay]),
+    ['Window', 'Pool', 'Taken', 'PRs', 'Merged (Conv%)', 'Regressions'],
+    ['left', 'right', 'right', 'right', 'right', 'right'],
+    rows,
   );
 }
 
 function renderStagesSection(report) {
   const s = report.stages;
-  const g = s.gates;
-  const table = renderTable(
-    ['Window', 'Taken', 'PR', 'Runtime', 'Vectors', 'Formal', 'Suite', 'Review', 'CI', 'M/WM', 'Reopen'],
-    ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right', 'right'],
-    [[
-      s.window.label,
-      s.taken,
-      s.pr,
-      g.runtime.display,
-      g.vectors.display,
-      g.formal.display,
-      g.suite.display,
-      g.review.display,
-      g.ci.display,
-      s.mwm,
-      s.reopen,
-    ]],
-  );
-  return `${table}\n${s.nonMergedSummary}`;
+  return [
+    `Funnel & Gates · ${s.window.label} · ${s.taken} Taken -> ${s.pr} PRs -> ${s.merged} Merged`,
+    `- ${s.beforePr.summary}`,
+    `- ${s.unmergedPrs.summary}`,
+    `- ${s.prGates.summary}`,
+    `- ${s.promptChecks.summary}`,
+    `- ${s.regressions.summary}`,
+  ].join('\n');
 }
 
 function renderSkillsSection(report) {
   const sk = report.skills;
   const allRows = [...sk.rows, sk.total];
   const table = renderTable(
-    ['Skill', 'Taken', 'PR Created', 'M/WM (Conv%)', 'Median Time'],
+    ['Skill', 'Taken', 'PRs', 'Merged (Conv%)', 'Median Time'],
     ['left', 'right', 'right', 'right', 'right'],
-    allRows.map(r => [r.skill, r.taken, r.prCreated, r.mwmDisplay, r.medianDisplay]),
+    allRows.map(r => [r.skill, r.taken, r.prCreated, r.mergedDisplay, r.medianDisplay]),
   );
   return `Work Mix · ${sk.window.label}\n${table}`;
 }
 
 export function formatMetricsText(report, options = {}) {
   const view = options.view ?? report.view ?? 'overview';
-  const scopeLabel = report.repoFilter
-    ? report.repoFilter
-    : report.byRepo
-      ? `Per Repo (${report.repos.length} ${report.repos.length === 1 ? 'repo' : 'repos'})`
-      : `Unified (${report.repos.length} ${report.repos.length === 1 ? 'repo' : 'repos'})`;
+  const scopeLabel = report.scopeLabel
+    ?? (report.repoFilter ?? formatRepoNamesLabel(Array.isArray(report.repos) ? report.repos : []));
   const dateLabel = report.date ?? report.displayDate;
-  const lines = [`PDD Autopilot Metrics · ${scopeLabel} · ${dateLabel}`];
+  const openLabel = report.openNowDisplay ?? '?';
+  const lines = [`PDD Autopilot Metrics · ${scopeLabel} · ${dateLabel} · Open now: ${openLabel}`];
   if (!report.recording.enabled) {
     lines.push('Recording: OFF (existing history shown; run "pdd metrics on" to resume)');
   }
@@ -739,6 +1178,8 @@ export function formatMetricsText(report, options = {}) {
 
   if (view === 'overview') {
     lines.push(renderOverviewSection(report));
+    lines.push('');
+    lines.push(renderStagesSection(report));
   } else if (view === 'stages') {
     lines.push(renderStagesSection(report));
   } else if (view === 'skills') {
@@ -746,7 +1187,6 @@ export function formatMetricsText(report, options = {}) {
   } else {
     lines.push(renderOverviewSection(report));
     lines.push('');
-    lines.push('Autopilot Stages');
     lines.push(renderStagesSection(report));
     lines.push('');
     lines.push(renderSkillsSection(report));
@@ -764,55 +1204,68 @@ function escapeHtml(value) {
 }
 
 export function renderMetricsHtml(report) {
-  const scopeLabel = report.repoFilter
-    ? report.repoFilter
-    : `Unified (${report.repos.length} ${report.repos.length === 1 ? 'repo' : 'repos'})`;
+  const scopeLabel = report.scopeLabel
+    ?? (report.repoFilter ?? formatRepoNamesLabel(Array.isArray(report.repos) ? report.repos : []));
   const primaryOverview = report.overview.windows.at(-1) ?? report.overview.windows[0];
+  const target = report.overview.target;
   const s = report.stages;
   const sk = report.skills;
 
-  const unifiedRowsHtml = report.overview.windows
-    .map(w => `<tr>
+  const unifiedRowsHtml = [
+    ...report.overview.windows.map(w => `<tr>
       <td><strong>${escapeHtml(w.label)}</strong></td>
-      <td class="num">${escapeHtml(w.openDisplay)}</td>
+      <td class="num">${escapeHtml(w.poolDisplay)}</td>
       <td class="num">${w.taken}</td>
       <td class="num">${w.prCreated}</td>
-      <td class="num"><span class="pill pill-good">${escapeHtml(w.mwmDisplay)}</span></td>
-    </tr>`)
-    .join('\n');
+      <td class="num"><span class="pill pill-good">${escapeHtml(w.mergedDisplay)}</span></td>
+      <td class="num">${escapeHtml(w.regressionsDisplay)}</td>
+    </tr>`),
+    ...(target ? [`<tr class="target-row">
+      <td>${escapeHtml(target.label)}</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num">${escapeHtml(target.convDisplay)}</td>
+      <td class="num">${escapeHtml(target.regressionDisplay)}</td>
+    </tr>`] : []),
+  ].join('\n');
 
   const perRepoSectionHtml = report.overview.perRepoWindows
     .map(win => {
       const rows = [...win.rows, win.total]
         .map(r => `<tr class="${r.key === 'total' ? 'total-row' : ''}">
           <td>${escapeHtml(r.label)}</td>
-          <td class="num">${escapeHtml(r.openDisplay)}</td>
+          <td class="num">${escapeHtml(r.poolDisplay)}</td>
           <td class="num">${r.taken}</td>
           <td class="num">${r.prCreated}</td>
-          <td class="num">${escapeHtml(r.mwmDisplay)}</td>
+          <td class="num">${escapeHtml(r.mergedDisplay)}</td>
+          <td class="num">${escapeHtml(r.regressionsDisplay)}</td>
         </tr>`)
         .join('\n');
       return `<div class="subcard">
         <h3>Per Repository · ${escapeHtml(win.label)}</h3>
         <table>
-          <thead><tr><th>Repo</th><th class="num">Open</th><th class="num">Taken</th><th class="num">PR Created</th><th class="num">M/WM (Conv%)</th></tr></thead>
+          <thead><tr><th>Repo</th><th class="num">Pool</th><th class="num">Taken</th><th class="num">PRs</th><th class="num">Merged (Conv%)</th><th class="num">Regressions</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
     })
     .join('\n');
 
-  const gateCellsHtml = GATES.map(g => {
-    const cell = s.gates[g];
-    return `<td class="num">${escapeHtml(cell.display)}</td>`;
-  }).join('');
+  const funnelLinesHtml = [
+    s.beforePr.summary,
+    s.unmergedPrs.summary,
+    s.prGates.summary,
+    s.promptChecks.summary,
+    s.regressions.summary,
+  ].map(line => `<li>${escapeHtml(line)}</li>`).join('\n');
 
   const skillRowsHtml = [...sk.rows, sk.total]
     .map(r => `<tr class="${r.skill === 'Total' ? 'total-row' : ''}">
       <td><code>${escapeHtml(r.skill)}</code></td>
       <td class="num">${r.taken}</td>
       <td class="num">${r.prCreated}</td>
-      <td class="num">${escapeHtml(r.mwmDisplay)}</td>
+      <td class="num">${escapeHtml(r.mergedDisplay)}</td>
       <td class="num">${escapeHtml(r.medianDisplay)}</td>
     </tr>`)
     .join('\n');
@@ -844,10 +1297,12 @@ export function renderMetricsHtml(report) {
     th { color: var(--muted); font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
     .total-row td { font-weight: 700; border-top: 2px solid var(--border); border-bottom: none; }
+    .target-row td { color: var(--muted); font-style: italic; }
     .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.82rem; font-weight: 600; }
     .pill-good { background: rgba(52, 211, 153, 0.15); color: var(--good); }
     .pill-warn { background: rgba(251, 191, 36, 0.18); color: var(--warn); }
-    .summary-note { margin-top: 12px; color: var(--muted); font-size: 0.88rem; }
+    .funnel-list { margin: 8px 0 0; padding-left: 20px; color: var(--text); }
+    .funnel-list li { margin-bottom: 6px; }
     code { background: rgba(15, 23, 42, 0.6); padding: 2px 6px; border-radius: 4px; font-size: 0.86rem; }
   </style>
 </head>
@@ -856,7 +1311,7 @@ export function renderMetricsHtml(report) {
     <header>
       <div>
         <h1>PDD Autopilot Metrics</h1>
-        <div class="meta">${escapeHtml(scopeLabel)} · ${escapeHtml(report.date ?? report.displayDate)} · Timezone: ${escapeHtml(report.timezone)}</div>
+        <div class="meta">${escapeHtml(scopeLabel)} · ${escapeHtml(report.date ?? report.displayDate)} · Open now: ${escapeHtml(report.openNowDisplay ?? '?')} · Timezone: ${escapeHtml(report.timezone)}</div>
       </div>
       <div>
         <span class="pill ${report.recording.enabled ? 'pill-good' : 'pill-warn'}">Recording: ${report.recording.enabled ? 'ON' : 'OFF'}</span>
@@ -864,48 +1319,33 @@ export function renderMetricsHtml(report) {
     </header>
 
     <div class="kpis">
-      <div class="kpi"><div class="label">Open Issues</div><div class="val">${escapeHtml(primaryOverview?.openDisplay ?? '?')}</div></div>
-      <div class="kpi"><div class="label">Taken (${escapeHtml(primaryOverview?.label ?? '')})</div><div class="val">${primaryOverview?.taken ?? 0}</div></div>
-      <div class="kpi"><div class="label">PR Created</div><div class="val">${primaryOverview?.prCreated ?? 0}</div></div>
-      <div class="kpi"><div class="label">M/WM (Conv%)</div><div class="val">${escapeHtml(primaryOverview?.mwmDisplay ?? '0 (n/a)')}</div></div>
+      <div class="kpi"><div class="label">Open Now</div><div class="val">${escapeHtml(report.openNowDisplay ?? '?')}</div></div>
+      <div class="kpi"><div class="label">Pool (${escapeHtml(primaryOverview?.label ?? '')})</div><div class="val">${escapeHtml(primaryOverview?.poolDisplay ?? '?')}</div></div>
+      <div class="kpi"><div class="label">Taken / PRs</div><div class="val">${primaryOverview?.taken ?? 0} / ${primaryOverview?.prCreated ?? 0}</div></div>
+      <div class="kpi"><div class="label">Merged (Conv%)</div><div class="val">${escapeHtml(primaryOverview?.mergedDisplay ?? '0 (n/a)')}</div></div>
+      <div class="kpi"><div class="label">Regressions</div><div class="val">${escapeHtml(primaryOverview?.regressionsDisplay ?? '0 (n/a)')}</div></div>
     </div>
 
     <section class="card">
       <h2>1. Overview</h2>
       <table>
-        <thead><tr><th>Window</th><th class="num">Open</th><th class="num">Taken</th><th class="num">PR Created</th><th class="num">M/WM (Conv%)</th></tr></thead>
+        <thead><tr><th>Window</th><th class="num">Pool</th><th class="num">Taken</th><th class="num">PRs</th><th class="num">Merged (Conv%)</th><th class="num">Regressions</th></tr></thead>
         <tbody>${unifiedRowsHtml}</tbody>
       </table>
       ${report.repos.length > 0 ? perRepoSectionHtml : ''}
     </section>
 
     <section class="card">
-      <h2>2. Autopilot Stages · ${escapeHtml(s.window.label)}</h2>
-      <table>
-        <thead>
-          <tr>
-            <th class="num">Taken</th><th class="num">PR</th><th class="num">Runtime</th><th class="num">Vectors</th>
-            <th class="num">Formal</th><th class="num">Suite</th><th class="num">Review</th><th class="num">CI</th>
-            <th class="num">M/WM</th><th class="num">Reopen</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td class="num">${s.taken}</td>
-            <td class="num">${s.pr}</td>
-            ${gateCellsHtml}
-            <td class="num"><strong>${s.mwm}</strong></td>
-            <td class="num">${s.reopen}</td>
-          </tr>
-        </tbody>
-      </table>
-      <div class="summary-note">${escapeHtml(s.nonMergedSummary)}</div>
+      <h2>2. Funnel &amp; Gates · ${escapeHtml(s.window.label)} · ${s.taken} Taken -&gt; ${s.pr} PRs -&gt; ${s.merged} Merged</h2>
+      <ul class="funnel-list">
+        ${funnelLinesHtml}
+      </ul>
     </section>
 
     <section class="card">
       <h2>3. Work Mix by Skill · ${escapeHtml(sk.window.label)}</h2>
       <table>
-        <thead><tr><th>Skill</th><th class="num">Taken</th><th class="num">PR Created</th><th class="num">M/WM (Conv%)</th><th class="num">Median Time</th></tr></thead>
+        <thead><tr><th>Skill</th><th class="num">Taken</th><th class="num">PRs</th><th class="num">Merged (Conv%)</th><th class="num">Median Time</th></tr></thead>
         <tbody>${skillRowsHtml}</tbody>
       </table>
     </section>

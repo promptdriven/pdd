@@ -55,6 +55,7 @@ test('empty and missing history are complete and do not call GitHub', async t =>
 });
 test('only distinct core merged PRs are scanned, with SHA and first parent resolved', async t => {
   const f = fixture(t); f.rows.push(f.rows[0], { outcome: 'ended', pr: 88 }, { outcome: 'merged', pr: 88, repo: 'other/project' });
+  f.routes.set('pulls/88', { number: 88, title: 'Unmerged ended PR', state: 'open', merged_at: null, merge_commit_sha: null });
   const r = await f.scan(); assert.equal(r.complete, true); assert.equal(r.merges.length, 1);
   assert.deepEqual(r.counts, { ok: 1, suspect: 0, proven: 0 });
   assert.equal(r.merges[0].mergeCommit, M); assert.equal(r.merges[0].parent, P);
@@ -1082,4 +1083,106 @@ test('checkPostMergeRegressions rotates cursor across later merges when shared c
   const t4 = await checkPostMergeRegressions({ root, repo, fs, gh, now: () => now + 3000, maxMerges: 1, maxRequests: 40, minRecheckMs: 60_000 });
   assert.equal(t4.state.merges['1001'].status, 'ok');
   assert.ok(t4.state.merges['1001'].checkedAt);
+});
+
+test('regressionScan replays autopilot-regressions-scan.json covering auto, observe, stopped, revert, regression label, and human vs machine reopen (#3530)', async () => {
+  const scenario = JSON.parse(fs.readFileSync(new URL('./runtime/autopilot-regressions-scan.json', import.meta.url), 'utf8'));
+  const files = new Map(scenario.initial_world.files.map(f => [f.path, f.reply]));
+  const endpoints = new Map(scenario.initial_world.github_responses.map(r => [r.endpoint, r.reply]));
+  const fakeFs = {
+    readFileSync(p) {
+      const hit = files.get(p);
+      if (!hit || hit.code === 'ENOENT') {
+        const err = new Error(`ENOENT: ${p}`);
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return hit.text;
+    },
+  };
+  const fakeGh = async args => {
+    const endpoint = args[4];
+    return endpoints.get(endpoint) ?? { code: 1, stdout: 'HTTP/2.0 404 Not Found\r\n\r\n{}', stderr: 'not found' };
+  };
+  const step = scenario.steps[0];
+  const result = await regressionScan({
+    ...step.input,
+    now: () => step.input.now,
+    fs: fakeFs,
+    gh: fakeGh,
+  });
+
+  const getPointer = (obj, ptr) => ptr.split('/').slice(1).reduce((acc, k) => acc?.[k], obj);
+  for (const chk of step.checks) {
+    const actual = getPointer(result, chk.path);
+    if (chk.op === 'equals') assert.deepEqual(actual, chk.value, `check ${chk.path}`);
+    else if (chk.op === 'count') assert.equal(actual?.length, chk.value, `count ${chk.path}`);
+    else if (chk.op === 'contains') assert.ok(String(actual ?? '').includes(chk.value), `contains ${chk.path}`);
+    else assert.fail(`Unsupported check op: ${chk.op}`);
+  }
+});
+
+test('regressionScan proves explicit breaking-blame phrases and filters explicit prs (#3530)', async t => {
+  const since = encodeURIComponent(new Date(mergedAt).toISOString());
+  for (const phrase of ['Regressed by #12', 'Regression from #12', 'Regression in #12', 'Broken by #12', 'Caused by #12', 'Introduced by #12']) {
+    const f = fixture(t);
+    f.rows[0] = { at: Date.parse(mergedAt), outcome: 'would-merge', pr: 12, issue: 7, repo };
+    f.routes.set(`issues?state=all&since=${since}&per_page=100`, [
+      {
+        number: 901,
+        title: `Follow-up (${phrase})`,
+        body: phrase,
+        created_at: later,
+        labels: [],
+        html_url: url('issues', 901),
+        repository_url: `https://api.github.com/repos/${repo}`,
+      },
+    ]);
+    f.save();
+    const r = await regressionScan({ ...f.ports, prs: [12] });
+    assert.equal(r.complete, true, phrase);
+    assert.equal(r.merges.length, 1, phrase);
+    assert.equal(r.merges[0].classification, 'proven', phrase);
+    assert.ok(r.merges[0].signals.some(s => s.kind === 'reference' && s.level === 'proven' && s.detail.includes('#901')), phrase);
+  }
+});
+
+test('checkPostMergeRegressions scans GitHub-merged would-merge PRs and skips unmerged would-merge PRs cleanly (#3530)', async t => {
+  const root = fs.mkdtempSync(join(tmpdir(), 'pdd-post-merge-observe-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const localMergedAt = '2026-11-18T10:00:00.000Z';
+  const localLater = '2026-11-18T11:00:00.000Z';
+  const localNow = Date.parse('2026-11-18T12:00:00.000Z');
+  const m1 = 'a'.repeat(40), p1 = 'b'.repeat(40);
+  fs.writeFileSync(
+    join(root, 'history.jsonl'),
+    [
+      { at: Date.parse(localMergedAt), issue: 501, pr: 601, outcome: 'would-merge' },
+      { at: Date.parse(localMergedAt), issue: 502, pr: 602, outcome: 'would-merge' },
+    ].map(r => JSON.stringify(r)).join('\n') + '\n',
+  );
+  const okJson = body => ({ code: 0, stdout: `HTTP/2 200 OK\r\n\r\n${JSON.stringify(body)}`, stderr: '' });
+  const gh = async args => {
+    const key = args[4].slice(`repos/${repo}/`.length);
+    if (key === 'pulls/601') return okJson({ number: 601, title: 'Observe merged PR', merged: true, merged_at: localMergedAt, merge_commit_sha: m1 });
+    if (key === 'pulls/602') return okJson({ number: 602, title: 'Observe open PR', state: 'open', merged: false, merged_at: null, merge_commit_sha: null });
+    if (key === `commits/${m1}`) return okJson({ sha: m1, parents: [{ sha: p1 }] });
+    if (key === `commits/${m1}/check-runs?filter=all&per_page=100`) return okJson({ check_runs: [] });
+    if (key === `commits/${m1}/statuses?per_page=100`) return okJson([]);
+    if (key === `commits/${p1}/check-runs?filter=all&per_page=100`) return okJson({ check_runs: [] });
+    if (key === `commits/${p1}/statuses?per_page=100`) return okJson([]);
+    if (key === 'issues/501') return okJson({ number: 501, state: 'open', updated_at: localLater, html_url: url('issues', 501) });
+    if (key === 'issues/501/timeline?per_page=100') return okJson([{ id: 88, event: 'reopened', created_at: localLater, actor: { login: 'dev' } }]);
+    if (key.startsWith('commits?since=')) return okJson([]);
+    if (key === 'pulls?state=all&sort=updated&direction=desc&per_page=100') return okJson([]);
+    assert.fail(`Unexpected endpoint: ${key}`);
+  };
+  const res = await checkPostMergeRegressions({ root, repo, fs, gh, now: () => localNow, maxRequests: 40, minRecheckMs: 0 });
+  assert.equal(res.counts.tracked, 1);
+  assert.equal(res.counts.reopened, 1);
+  assert.equal(res.counts.suspect, 0);
+  assert.equal(res.state.merges['601'].reopened, true);
+  assert.equal(res.state.merges['602'].unmerged, true);
+  assert.equal(res.newlyDetected.length, 1);
+  assert.equal(res.newlyDetected[0].pr, 601);
 });

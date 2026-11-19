@@ -71,7 +71,7 @@ function seedTwoRepos(stateDir, nowMs) {
   }, { stateDir, now: () => nowMs });
 }
 
-test('CLI overview, --repos, --repo, stages, skills, full, --date, --json, and single batched GraphQL Open query', async t => {
+test('CLI overview, --repos, --repo, stages, skills, full, --date, --json, and single batched GraphQL query', async t => {
   const { dir, stateDir } = makeSandbox(t);
   const nowMs = Date.parse('2026-11-17T18:00:00Z');
   seedTwoRepos(stateDir, nowMs);
@@ -82,14 +82,24 @@ test('CLI overview, --repos, --repo, stages, skills, full, --date, --json, and s
     return {
       stdout: JSON.stringify({
         data: {
-          r0: { issues: { totalCount: 14 } },
-          r1: { issues: { totalCount: 8 } },
+          r0: {
+            issues: { totalCount: 14, nodes: [{ number: 302 }] },
+            closedIssues: { nodes: [{ number: 301, closedAt: '2026-11-17T17:45:00Z' }] },
+            pr_401: { number: 401, state: 'MERGED', isDraft: false, merged: true, mergedAt: '2026-11-17T17:45:00Z' },
+            pr_402: { number: 402, state: 'OPEN', isDraft: true, merged: false, mergedAt: null },
+          },
+          r1: {
+            issues: { totalCount: 8, nodes: [{ number: 13 }] },
+            closedIssues: { nodes: [{ number: 12, closedAt: '2026-11-17T17:45:00Z' }] },
+            pr_22: { number: 22, state: 'MERGED', isDraft: false, merged: true, mergedAt: '2026-11-17T17:45:00Z' },
+          },
         },
       }),
     };
   };
+  const emptyScanner = async () => ({ merges: [], counts: { ok: 0, suspect: 0, proven: 0 }, complete: true, errors: [] });
 
-  // 1. Unified overview
+  // 1. Unified overview (v2 scorecard: Overview + Target + Funnel & Gates)
   {
     const out = capture(), err = capture();
     const code = await runMetrics({
@@ -97,13 +107,21 @@ test('CLI overview, --repos, --repo, stages, skills, full, --date, --json, and s
       cwd: dir,
       stdout: out,
       stderr: err,
-      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile },
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile, regressionScan: emptyScanner },
     });
     assert.equal(code, 0, err.text);
-    assert.equal(ghCalls.length, 1, 'Open issue counts must use 1 batched GraphQL call');
-    assert.match(out.text, /Unified \(2 repos\)/);
-    assert.match(out.text, /Last 24h\s+22\s+3\s+3\s+2 \(66\.7%\)/);
-    assert.match(out.text, /Week \(Mon-Sun\)\s+22\s+3\s+3\s+2 \(66\.7%\)/);
+    assert.equal(ghCalls.length, 1, 'Open counts, closed issues, and PR merge states must use 1 batched GraphQL call');
+    assert.match(out.text, /PDD Autopilot Metrics · pdd \+ pocket · Tue, Nov 17 · Open now: 22/);
+    assert.match(out.text, /Window\s+Pool\s+Taken\s+PRs\s+Merged \(Conv%\)\s+Regressions/);
+    assert.match(out.text, /Last 24h\s+24\s+3\s+3\s+2 \(66\.7%\)\s+0 \(0\.0%\)/);
+    assert.match(out.text, /Week \(Mon-Sun\)\s+24\s+3\s+3\s+2 \(66\.7%\)\s+0 \(0\.0%\)/);
+    assert.match(out.text, /Target \(Nov\)\s+-\s+-\s+-\s+>=90%\s+0\.0%/);
+    assert.match(out.text, /Funnel & Gates · Week \(Mon-Sun\) · 3 Taken -> 3 PRs -> 2 Merged/);
+    assert.match(out.text, /- Before PR \(0\): none/);
+    assert.match(out.text, /- Unmerged PRs \(1\): 1 failed suite/);
+    assert.match(out.text, /- PR Gates \(of 3 PRs\): Suite 2\/3 · Review 3\/3 · CI 3\/3/);
+    assert.match(out.text, /- Prompt Checks \(of 2 prompt PRs\): Runtime 2\/2 · Vectors 2\/2 · Formal 1\/1/);
+    assert.match(out.text, /- Regressions \(0\): 0 reopened · 0 reverted · 0 regression issues/);
   }
 
   // 2. Per-repo breakdown (--repos)
@@ -114,12 +132,12 @@ test('CLI overview, --repos, --repo, stages, skills, full, --date, --json, and s
       cwd: dir,
       stdout: out,
       stderr: err,
-      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile },
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile, regressionScan: emptyScanner },
     });
     assert.equal(code, 0, err.text);
-    assert.match(out.text, /promptdriven\/pdd\s+14\s+2\s+2\s+1 \(50\.0%\)/);
-    assert.match(out.text, /promptdriven\/pocket\s+8\s+1\s+1\s+1 \(100\.0%\)/);
-    assert.match(out.text, /Total\s+22\s+3\s+3\s+2 \(66\.7%\)/);
+    assert.match(out.text, /promptdriven\/pdd\s+15\s+2\s+2\s+1 \(50\.0%\)\s+0 \(0\.0%\)/);
+    assert.match(out.text, /promptdriven\/pocket\s+9\s+1\s+1\s+1 \(100\.0%\)\s+0 \(0\.0%\)/);
+    assert.match(out.text, /Total\s+24\s+3\s+3\s+2 \(66\.7%\)\s+0 \(0\.0%\)/);
   }
 
   // 3. Stages view
@@ -130,11 +148,11 @@ test('CLI overview, --repos, --repo, stages, skills, full, --date, --json, and s
       cwd: dir,
       stdout: out,
       stderr: err,
-      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile },
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile, regressionScan: emptyScanner },
     });
     assert.equal(code, 0, err.text);
-    assert.match(out.text, /Week \(Mon-Sun\)\s+3\s+3\s+2\/2\s+2\/2\s+1\/1\s+2\/3\s+3\/3\s+3\/3\s+2\s+0/);
-    assert.match(out.text, /Non-merged \(1\): 1 failed suite/);
+    assert.match(out.text, /Funnel & Gates · Week \(Mon-Sun\) · 3 Taken -> 3 PRs -> 2 Merged/);
+    assert.match(out.text, /- Unmerged PRs \(1\): 1 failed suite/);
   }
 
   // 4. Skills view
@@ -145,7 +163,7 @@ test('CLI overview, --repos, --repo, stages, skills, full, --date, --json, and s
       cwd: dir,
       stdout: out,
       stderr: err,
-      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile },
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile, regressionScan: emptyScanner },
     });
     assert.equal(code, 0, err.text);
     assert.match(out.text, /small-change\s+1\s+1\s+1 \(100\.0%\)\s+10m/);
@@ -162,13 +180,14 @@ test('CLI overview, --repos, --repo, stages, skills, full, --date, --json, and s
       cwd: dir,
       stdout: out,
       stderr: err,
-      ports: { stateDir, now: () => nowMs, openIssues: { 'promptdriven/pocket': 8 } },
+      ports: { stateDir, now: () => nowMs, openIssues: { 'promptdriven/pocket': 8 }, regressions: [] },
     });
     assert.equal(code, 0, err.text);
     const parsed = JSON.parse(out.text);
     assert.equal(parsed.schema, 'pdd.autopilot.metrics.v1');
     assert.equal(parsed.repoFilter, 'promptdriven/pocket');
     assert.equal(parsed.overview.windows[0].taken, 1);
+    assert.equal(parsed.stages.merged, 1);
     assert.equal(parsed.stages.mwm, 1);
   }
 });
@@ -214,10 +233,12 @@ test('CLI HTML dashboard output, on/off switch via runPdd, offline Open fallback
   assert.equal(offRes.status, 0, offRes.stderr);
   assert.match(offRes.stdout, /Autopilot metrics recording is OFF/);
 
-  const jsonWhileOff = spawnSync(process.execPath, [pddBin, 'metrics', '--json'], { cwd: dir, env, encoding: 'utf8' });
+  const jsonWhileOff = spawnSync(process.execPath, [pddBin, 'metrics', '--date', '2026-11-17', '--timezone', 'UTC', '--json'], { cwd: dir, env, encoding: 'utf8' });
   assert.equal(jsonWhileOff.status, 0, jsonWhileOff.stderr);
   const parsedOff = JSON.parse(jsonWhileOff.stdout);
   assert.equal(parsedOff.recording.enabled, false);
+  assert.equal(parsedOff.openNowDisplay, '?');
+  assert.equal(parsedOff.overview.windows[0].poolDisplay, '?');
   assert.equal(parsedOff.overview.windows[0].taken, 3, 'Existing history stays readable when recording is OFF');
 
   const onRes = spawnSync(process.execPath, [pddBin, 'metrics', 'on', '--json'], { cwd: dir, env, encoding: 'utf8' });
@@ -237,5 +258,148 @@ test('CLI HTML dashboard output, on/off switch via runPdd, offline Open fallback
     const exitCode = await runPdd(badArgv, { cwd: dir, env, stdout: out, stderr: err });
     assert.equal(exitCode, 2, `Expected exit 2 for ${badArgv.join(' ')}`);
     assert.ok(err.text.trim().length > 0);
+  }
+});
+
+test('CLI reuses regressionScan across auto + observe-merged PRs and excludes turned-off sandbox repos (#3530)', async t => {
+  const { dir, stateDir } = makeSandbox(t);
+  const nowMs = Date.parse('2026-11-19T18:00:00Z');
+  seedTwoRepos(stateDir, nowMs);
+
+  // Seed a third sandbox repo and turn it off via `pdd metrics off --repo`
+  writeFileSync(join(stateDir, 'autopilot', 'c.json'), JSON.stringify({ repo: 'Serhan-Asad/pdd-autopilot-sandbox', enabled: true, mode: 'auto' }));
+  recordAutopilotMetric({
+    repo: 'Serhan-Asad/pdd-autopilot-sandbox',
+    issue: 99,
+    skill: 'small-change',
+    startedAt: nowMs - 4 * 3600_000,
+    at: nowMs - 3 * 3600_000,
+    status: 'merged',
+    pr: 990,
+  }, { stateDir, now: () => nowMs - 3 * 3600_000 });
+
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['off', '--repo', 'Serhan-Asad/pdd-autopilot-sandbox'],
+      cwd: dir,
+      stdout: out,
+      stderr: err,
+      ports: { stateDir, now: () => nowMs - 2 * 3600_000 },
+    });
+    assert.equal(code, 0, err.text);
+  }
+
+  const m401 = '1'.repeat(40), p401 = 'a'.repeat(40);
+  const m22 = '2'.repeat(40), p22 = 'b'.repeat(40);
+  const revSha = '9'.repeat(40);
+  const mergedAt = '2026-11-19T17:45:00.000Z';
+  const laterAt = '2026-11-19T17:55:00.000Z';
+  const httpOk = body => ({ stdout: `HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4999\r\n\r\n${JSON.stringify(body)}`, stderr: '' });
+
+  const graphqlQueries = [];
+  const fakeExecFile = async (cmd, args) => {
+    assert.equal(cmd, 'gh');
+    if (args[1] === 'graphql') {
+      const q = args[3];
+      graphqlQueries.push(q);
+      if (q.includes('pdd-autopilot-sandbox')) {
+        return {
+          stdout: JSON.stringify({
+            data: {
+              r0: {
+                issues: { totalCount: 5, nodes: [{ number: 100 }] },
+                closedIssues: { nodes: [] },
+                pr_990: { number: 990, state: 'MERGED', isDraft: false, merged: true, mergedAt: '2026-11-19T15:00:00Z' },
+              },
+            },
+          }),
+        };
+      }
+      return {
+        stdout: JSON.stringify({
+          data: {
+            r0: {
+              issues: { totalCount: 14, nodes: [{ number: 302 }] },
+              closedIssues: { nodes: [{ number: 301, closedAt: mergedAt }] },
+              pr_401: { number: 401, state: 'MERGED', isDraft: false, merged: true, mergedAt },
+              pr_402: { number: 402, state: 'OPEN', isDraft: false, merged: false, mergedAt: null },
+            },
+            r1: {
+              issues: { totalCount: 8, nodes: [{ number: 13 }] },
+              closedIssues: { nodes: [{ number: 12, closedAt: mergedAt }] },
+              pr_22: { number: 22, state: 'MERGED', isDraft: false, merged: true, mergedAt },
+            },
+          },
+        }),
+      };
+    }
+
+    // Real regressionScan REST calls
+    const endpoint = args[4];
+    if (endpoint === 'repos/promptdriven/pdd/pulls/401') return httpOk({ number: 401, title: 'Observe fix', state: 'closed', merged_at: mergedAt, merge_commit_sha: m401 });
+    if (endpoint === `repos/promptdriven/pdd/commits/${m401}`) return httpOk({ sha: m401, parents: [{ sha: p401 }] });
+    if (endpoint === `repos/promptdriven/pdd/commits/${m401}/check-runs?filter=all&per_page=100`) return httpOk({ check_runs: [] });
+    if (endpoint === `repos/promptdriven/pdd/commits/${m401}/statuses?per_page=100`) return httpOk([]);
+    if (endpoint === `repos/promptdriven/pdd/commits/${p401}/check-runs?filter=all&per_page=100`) return httpOk({ check_runs: [] });
+    if (endpoint === `repos/promptdriven/pdd/commits/${p401}/statuses?per_page=100`) return httpOk([]);
+    if (endpoint.startsWith('repos/promptdriven/pdd/issues?state=all')) return httpOk([]);
+    if (endpoint === 'repos/promptdriven/pdd/pulls?state=all&per_page=100') return httpOk([]);
+    if (endpoint.startsWith('repos/promptdriven/pdd/commits?since=')) {
+      return httpOk([
+        { sha: revSha, html_url: `https://github.com/promptdriven/pdd/commit/${revSha}`, commit: { message: `Revert "Observe fix"\n\nThis reverts commit ${m401}.`, committer: { date: laterAt } } },
+      ]);
+    }
+    if (endpoint.startsWith('repos/promptdriven/pdd/issues/')) return httpOk([]);
+
+    if (endpoint === 'repos/promptdriven/pocket/pulls/22') return httpOk({ number: 22, title: 'Pocket feature', state: 'closed', merged_at: mergedAt, merge_commit_sha: m22 });
+    if (endpoint === `repos/promptdriven/pocket/commits/${m22}`) return httpOk({ sha: m22, parents: [{ sha: p22 }] });
+    if (endpoint === `repos/promptdriven/pocket/commits/${m22}/check-runs?filter=all&per_page=100`) return httpOk({ check_runs: [] });
+    if (endpoint === `repos/promptdriven/pocket/commits/${m22}/statuses?per_page=100`) return httpOk([]);
+    if (endpoint === `repos/promptdriven/pocket/commits/${p22}/check-runs?filter=all&per_page=100`) return httpOk({ check_runs: [] });
+    if (endpoint === `repos/promptdriven/pocket/commits/${p22}/statuses?per_page=100`) return httpOk([]);
+    if (endpoint.startsWith('repos/promptdriven/pocket/issues?state=all')) {
+      return httpOk([
+        { number: 3528, title: 'Pocket regression', body: 'Follow-up for #22', created_at: laterAt, labels: [{ name: 'regression' }], html_url: 'https://github.com/promptdriven/pocket/issues/3528', repository_url: 'https://api.github.com/repos/promptdriven/pocket' },
+      ]);
+    }
+    if (endpoint === 'repos/promptdriven/pocket/pulls?state=all&per_page=100') return httpOk([]);
+    if (endpoint.startsWith('repos/promptdriven/pocket/commits?since=')) return httpOk([]);
+    if (endpoint.startsWith('repos/promptdriven/pocket/issues/')) return httpOk([]);
+    return httpOk([]);
+  };
+
+  // Unified metrics excludes sandbox from GraphQL AND detects both auto (#22) and observe (#401) regressions
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['--timezone', 'America/Los_Angeles'],
+      cwd: dir,
+      stdout: out,
+      stderr: err,
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile },
+    });
+    assert.equal(code, 0, err.text);
+    assert.equal(graphqlQueries.length, 1);
+    assert.doesNotMatch(graphqlQueries[0], /pdd-autopilot-sandbox/);
+    assert.match(out.text, /PDD Autopilot Metrics · pdd \+ pocket · Thu, Nov 19 · Open now: 22/);
+    assert.match(out.text, /Week \(Mon-Sun\)\s+24\s+3\s+3\s+2 \(66\.7%\)\s+2 \(100\.0%\)/);
+    assert.match(out.text, /- Regressions \(2\): 0 reopened · 1 reverted · 1 regression issue \(#3528\)/);
+  }
+
+  // Explicit --repo still shows turned-off sandbox repo's pre-pause history with Recording: OFF
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['--repo', 'Serhan-Asad/pdd-autopilot-sandbox', '--timezone', 'America/Los_Angeles'],
+      cwd: dir,
+      stdout: out,
+      stderr: err,
+      ports: { stateDir, now: () => nowMs, execFile: fakeExecFile, regressions: [] },
+    });
+    assert.equal(code, 0, err.text);
+    assert.match(out.text, /Serhan-Asad\/pdd-autopilot-sandbox/);
+    assert.match(out.text, /Recording: OFF/);
+    assert.match(out.text, /Week \(Mon-Sun\)\s+6\s+1\s+1\s+1 \(100\.0%\)/);
   }
 });

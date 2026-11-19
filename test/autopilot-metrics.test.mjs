@@ -207,9 +207,54 @@ test('supports post-merge merges object map, avoids misclassifying ended outcome
 
   const pr88 = filtered.runs.find(r => r.issue === 40);
   assert.equal(pr88.status, 'merged');
-  assert.equal(pr88.reopened, true);
+  assert.equal(pr88.reopened, false);
+  assert.equal(pr88.reverted, true);
+  assert.equal(filtered.coreDirs['promptdriven/pdd'], coreA);
 
   const issue50 = filtered.runs.find(r => r.issue === 50);
   assert.equal(issue50.skill, 'feature');
   assert.equal(issue50.gates.suite, 'fail');
+});
+
+test('extracts promptChanged, numeric gateCounts, optional e2e, and preserves targets across on/off toggles (#3530)', t => {
+  const stateDir = makeStateDir(t);
+  const autoDir = join(stateDir, 'autopilot');
+  mkdirSync(autoDir, { recursive: true });
+  writeFileSync(join(autoDir, 'metrics-config.json'), JSON.stringify({
+    enabled: true,
+    targets: { convMinPct: 95, maxRegressionPct: 2, label: 'Q4' },
+  }));
+  setAutopilotMetricsRecording({ stateDir, action: 'off', repo: 'promptdriven/sandbox', at: '2026-11-18T00:00:00Z' });
+  const cfg = readMetricsConfig({ stateDir });
+  assert.deepEqual(cfg.targets, { convMinPct: 95, maxRegressionPct: 2, label: 'Q4' });
+  assert.equal(cfg.repos['promptdriven/sandbox'], false);
+
+  writeFileSync(join(autoDir, 'pdd.json'), JSON.stringify({ repo: 'promptdriven/pdd', enabled: true, cwd: '/tmp/pdd' }));
+  const coreDir = join(autoDir, 'pdd-core');
+  mkdirSync(coreDir, { recursive: true });
+  const baseMs = Date.parse('2026-11-18T12:00:00Z');
+  writeFileSync(join(coreDir, 'history.jsonl'), `${JSON.stringify({ at: baseMs, issue: 77, pr: 277, outcome: 'merged', text: 'merged PR #277 abcdef1' })}\n`);
+  const logsDir = join(coreDir, 'logs');
+  mkdirSync(logsDir, { recursive: true });
+  writeFileSync(join(logsDir, '77-evidence-abcdef1.json'), JSON.stringify({
+    evidence: {
+      runtime: { state: 'pass', passed: 6, total: 6 },
+      vectors: { state: 'pass', passed: 14, total: 14 },
+      formal: { state: 'proved', passed: 3, total: 3 },
+      e2e: { state: 'pass' },
+    },
+    suite: { state: 'pass' },
+    review: { state: 'pass' },
+    ci: { state: 'green' },
+  }));
+
+  const state = readAutopilotMetricsState({ stateDir, now: () => baseMs + 60_000 });
+  const run = state.runs.find(r => r.issue === 77);
+  assert.equal(run.promptChanged, true);
+  assert.deepEqual(run.gateCounts, {
+    runtime: { passed: 6, total: 6 },
+    vectors: { passed: 14, total: 14 },
+    formal: { passed: 3, total: 3 },
+  });
+  assert.equal(run.gates.e2e, 'pass');
 });

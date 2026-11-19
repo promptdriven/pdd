@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-command.prompt.md (sha256: cd9d96c19c1dc3c9665b1dab0e27b3cbc36efcd9ffdb21794aad0bd06cb60c7d).
+// Generated from prompts/cli/metrics-command.prompt.md.
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -9,6 +9,7 @@ import {
   readAutopilotMetricsState,
   setAutopilotMetricsRecording,
 } from './autopilot-metrics.mjs';
+import { regressionScan } from './autopilot-regressions.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import {
   calculateAutopilotMetrics,
@@ -22,6 +23,8 @@ const defaultExecFile = nativeGithubCounter(promisify(execFileCb), { purpose: 'o
 const SUBCOMMANDS = new Set(['stages', 'skills', 'full', 'on', 'off']);
 const VALUE_FLAGS = new Set(['--repo', '--date', '--timezone', '--file']);
 const BOOL_FLAGS = new Set(['--repos', '--json', '--html']);
+const DAY_MS = 86_400_000;
+const PR_ALIAS_CHUNK = 40;
 
 function parseMetricsArgv(argv = []) {
   const words = Array.isArray(argv) ? argv.map(String) : [];
@@ -80,33 +83,258 @@ function parseMetricsArgv(argv = []) {
   return { subcommand, options };
 }
 
-async function queryOpenIssuesBatch(repos, execFile, env) {
-  if (!Array.isArray(repos) || repos.length === 0) return {};
+/** Conservative earliest UTC timestamp covering all active windows across any IANA timezone. */
+function computeWindowFetchSinceIso(nowMs, dateOption) {
+  if (typeof dateOption === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateOption)) {
+    const baseMs = Date.parse(`${dateOption}T00:00:00Z`);
+    if (Number.isFinite(baseMs)) return new Date(baseMs - DAY_MS).toISOString();
+  }
+  return new Date(nowMs - 8 * DAY_MS).toISOString();
+}
+
+/** Collect distinct PR numbers per target repo from active-window runs. */
+function collectActivePrsByRepo(runs, targetRepos, sinceMs) {
+  const allowed = new Set(targetRepos.map(r => r.toLowerCase()));
+  const byRepo = new Map(targetRepos.map(r => [r.toLowerCase(), new Set()]));
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (!run || typeof run.repo !== 'string') continue;
+    const lower = run.repo.toLowerCase();
+    if (!allowed.has(lower)) continue;
+    if (!Number.isSafeInteger(run.pr) || run.pr <= 0) continue;
+    const atMs = Date.parse(run.at ?? run.startedAt ?? '');
+    if (run.status === 'running' || (Number.isFinite(atMs) && atMs >= sinceMs - DAY_MS)) {
+      byRepo.get(lower).add(run.pr);
+    }
+  }
+  return byRepo;
+}
+
+/**
+ * Fetch live open issues, closed-in-window issues, and PR merge states for enabled repos
+ * in batched GitHub GraphQL requests. Returns offline fallbacks on any error.
+ */
+async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, env }) {
+  if (!Array.isArray(repos) || repos.length === 0) {
+    return { openIssues: {}, openIssueNumbers: [], closedIssues: [], prStates: [], online: true };
+  }
   const aliases = [];
   const fields = [];
+  const remainingPrChunks = [];
+
   for (let i = 0; i < repos.length; i++) {
-    const [owner, name] = repos[i].split('/');
+    const repo = repos[i];
+    const [owner, name] = repo.split('/');
     const alias = `r${i}`;
-    aliases.push([alias, repos[i].toLowerCase()]);
-    fields.push(`${alias}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { issues(states: OPEN) { totalCount } }`);
+    const lower = repo.toLowerCase();
+    const prs = [...(prsByRepo.get(lower) ?? [])].sort((a, b) => a - b);
+    const firstChunk = prs.slice(0, PR_ALIAS_CHUNK);
+    for (let offset = PR_ALIAS_CHUNK; offset < prs.length; offset += PR_ALIAS_CHUNK) {
+      remainingPrChunks.push({ repo, owner, name, prs: prs.slice(offset, offset + PR_ALIAS_CHUNK) });
+    }
+    const prFields = firstChunk
+      .map(n => `pr_${n}: pullRequest(number: ${n}) { number state isDraft merged mergedAt closedAt }`)
+      .join(' ');
+    aliases.push({ alias, repo, lower, prs: firstChunk });
+    fields.push(
+      `${alias}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {`
+      + ` issues(states: OPEN, first: 100) { totalCount nodes { number } }`
+      + ` closedIssues: issues(states: CLOSED, filterBy: { since: ${JSON.stringify(sinceIso)} }, first: 100) { nodes { number closedAt } }`
+      + (prFields ? ` ${prFields}` : '')
+      + ' }',
+    );
   }
-  const query = `query { ${fields.join(' ')} }`;
+
+  const openIssues = {};
+  const openIssueNumbers = [];
+  const closedIssues = [];
+  const prStates = [];
+
+  const collectPrNodes = (repo, prs, repoData) => {
+    if (!repoData || typeof repoData !== 'object') return;
+    for (const pr of prs) {
+      const node = repoData[`pr_${pr}`];
+      if (!node || typeof node !== 'object') continue;
+      const state = typeof node.state === 'string' ? node.state.toUpperCase() : null;
+      const mergedAt = typeof node.mergedAt === 'string' && Number.isFinite(Date.parse(node.mergedAt)) ? node.mergedAt : null;
+      const merged = node.merged === true || state === 'MERGED' || mergedAt !== null;
+      prStates.push({ repo, pr, merged, mergedAt, state, isDraft: Boolean(node.isDraft) });
+    }
+  };
+
   try {
-    const reply = await execFile('gh', ['api', 'graphql', '-f', `query=${query}`], {
+    const reply = await execFile('gh', ['api', 'graphql', '-f', `query=query { ${fields.join(' ')} }`], {
       env,
-      timeout: 8000,
+      timeout: 10_000,
     });
     const parsed = JSON.parse(String(reply?.stdout ?? ''));
-    if (!parsed?.data || typeof parsed.data !== 'object') return null;
-    const counts = {};
-    for (const [alias, lower] of aliases) {
-      const total = parsed.data[alias]?.issues?.totalCount;
-      counts[lower] = Number.isInteger(total) && total >= 0 ? total : null;
+    if (!parsed?.data || typeof parsed.data !== 'object') {
+      return { openIssues: null, openIssueNumbers: [], closedIssues: [], prStates: null, online: false };
     }
-    return counts;
+    for (const { alias, repo, lower, prs } of aliases) {
+      const repoData = parsed.data[alias];
+      const openBlock = repoData?.issues;
+      const total = openBlock?.totalCount;
+      openIssues[lower] = Number.isInteger(total) && total >= 0 ? total : null;
+      if (Array.isArray(openBlock?.nodes)) {
+        const nums = openBlock.nodes
+          .map(n => n?.number)
+          .filter(n => Number.isSafeInteger(n) && n > 0);
+        openIssueNumbers.push({ repo, issues: nums });
+      }
+      if (Array.isArray(repoData?.closedIssues?.nodes)) {
+        for (const node of repoData.closedIssues.nodes) {
+          if (Number.isSafeInteger(node?.number) && node.number > 0 && typeof node?.closedAt === 'string') {
+            closedIssues.push({ repo, issue: node.number, closedAt: node.closedAt });
+          }
+        }
+      }
+      collectPrNodes(repo, prs, repoData);
+    }
+
+    for (const chunk of remainingPrChunks) {
+      const prFields = chunk.prs
+        .map(n => `pr_${n}: pullRequest(number: ${n}) { number state isDraft merged mergedAt closedAt }`)
+        .join(' ');
+      const extraQuery = `query { repo: repository(owner: ${JSON.stringify(chunk.owner)}, name: ${JSON.stringify(chunk.name)}) { ${prFields} } }`;
+      try {
+        const extraReply = await execFile('gh', ['api', 'graphql', '-f', `query=${extraQuery}`], {
+          env,
+          timeout: 10_000,
+        });
+        const extraParsed = JSON.parse(String(extraReply?.stdout ?? ''));
+        collectPrNodes(chunk.repo, chunk.prs, extraParsed?.data?.repo);
+      } catch {
+        // Keep already-collected PR states if a supplemental chunk fails.
+      }
+    }
+
+    return {
+      openIssues,
+      openIssueNumbers,
+      closedIssues,
+      prStates: prStates.length > 0 ? prStates : null,
+      online: true,
+    };
   } catch {
-    return null;
+    return { openIssues: null, openIssueNumbers: [], closedIssues: [], prStates: null, online: false };
   }
+}
+
+function makeGhPort(execFile, env) {
+  return async args => {
+    try {
+      const res = await execFile('gh', args, { env, timeout: 10_000 });
+      return { code: 0, stdout: String(res?.stdout ?? ''), stderr: String(res?.stderr ?? '') };
+    } catch (err) {
+      return {
+        code: typeof err?.code === 'number' ? err.code : 1,
+        stdout: String(err?.stdout ?? ''),
+        stderr: String(err?.stderr ?? err?.message ?? ''),
+      };
+    }
+  };
+}
+
+function extractIssueNumberFromSignal(signal) {
+  const urlMatch = typeof signal?.url === 'string' ? /\/issues\/(\d+)(?:[?#]|$)/.exec(signal.url) : null;
+  if (urlMatch) return Number(urlMatch[1]);
+  const detailMatch = typeof signal?.detail === 'string' ? /\bIssue\s+#(\d+)\b/i.exec(signal.detail) : null;
+  if (detailMatch) return Number(detailMatch[1]);
+  return null;
+}
+
+/** Reuse the shared `regressionScan` engine across active merged PRs (auto, observe, and stopped). */
+async function scanMergedRegressions({
+  targetRepos,
+  runs,
+  prStates,
+  coreDirs,
+  fs,
+  gh,
+  scanner,
+  nowFn,
+  sinceMs,
+}) {
+  const prStateByKey = new Map();
+  for (const state of Array.isArray(prStates) ? prStates : []) {
+    if (state && typeof state.repo === 'string' && Number.isSafeInteger(state.pr) && state.pr > 0) {
+      prStateByKey.set(`${state.repo.toLowerCase()}#${state.pr}`, state);
+    }
+  }
+  const candidatesByRepo = new Map(targetRepos.map(r => [r.toLowerCase(), new Map()]));
+  for (const run of Array.isArray(runs) ? runs : []) {
+    if (!run || typeof run.repo !== 'string' || !Number.isSafeInteger(run.pr) || run.pr <= 0) continue;
+    const lower = run.repo.toLowerCase();
+    const bucket = candidatesByRepo.get(lower);
+    if (!bucket) continue;
+    const atMs = Date.parse(run.at ?? run.startedAt ?? '');
+    const state = prStateByKey.get(`${lower}#${run.pr}`);
+    const mergedAtMs = Date.parse(state?.mergedAt ?? run.mergedAt ?? '');
+    const inPeriod = (Number.isFinite(atMs) && atMs >= sinceMs - DAY_MS)
+      || (Number.isFinite(mergedAtMs) && mergedAtMs >= sinceMs - DAY_MS);
+    if (!inPeriod) continue;
+    const isMerged = state
+      ? state.merged === true
+      : (run.status === 'merged' || run.prMerged === true || Number.isFinite(mergedAtMs));
+    if (!isMerged) continue;
+    const issues = [
+      ...(Number.isSafeInteger(run.issue) && run.issue > 0 ? [run.issue] : []),
+      ...(Array.isArray(run.issues) ? run.issues.filter(n => Number.isSafeInteger(n) && n > 0) : []),
+    ];
+    const prev = bucket.get(run.pr);
+    if (!prev) {
+      bucket.set(run.pr, { pr: run.pr, issue: issues[0] ?? null, issues: [...new Set(issues)], outcome: run.status });
+    } else {
+      prev.issues = [...new Set([...prev.issues, ...issues])];
+      if (prev.issue === null && prev.issues.length > 0) prev.issue = prev.issues[0];
+    }
+  }
+
+  const regressions = [];
+  for (const repo of targetRepos) {
+    const lower = repo.toLowerCase();
+    const candidates = [...(candidatesByRepo.get(lower)?.values() ?? [])];
+    if (candidates.length === 0) continue;
+    try {
+      const scan = await scanner({
+        root: coreDirs?.[lower] ?? null,
+        repo,
+        candidates,
+        prs: candidates.map(c => c.pr),
+        maxRequests: 40,
+        fs,
+        gh,
+        now: nowFn,
+      });
+      for (const merge of Array.isArray(scan?.merges) ? scan.merges : []) {
+        const signals = Array.isArray(merge?.signals) ? merge.signals : [];
+        const reopened = signals.some(s => s?.kind === 'reopened');
+        const reverted = signals.some(s => s?.kind === 'revert' && s?.level === 'proven');
+        const regIssues = new Set();
+        for (const signal of signals) {
+          if (signal?.kind === 'reference' && signal?.level === 'proven') {
+            const num = extractIssueNumberFromSignal(signal);
+            if (Number.isSafeInteger(num) && num > 0) regIssues.add(num);
+          }
+        }
+        if (reopened || reverted || regIssues.size > 0) {
+          const candidateIssues = candidatesByRepo.get(lower)?.get(merge.pr)?.issues ?? [];
+          regressions.push({
+            repo,
+            pr: merge.pr,
+            issue: merge.issue ?? candidateIssues[0] ?? null,
+            issues: candidateIssues.length > 0 ? candidateIssues : (merge.issue ? [merge.issue] : []),
+            reopened,
+            reverted,
+            regressionIssues: [...regIssues].sort((a, b) => a - b),
+          });
+        }
+      }
+    } catch {
+      // Offline or unavailable regression scan degrades cleanly to local post-merge flags.
+    }
+  }
+  return regressions;
 }
 
 function defaultOpenBrowser(filePath, platform = process.platform) {
@@ -130,6 +358,7 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
   const effectiveEnv = ports.env ?? env ?? process.env;
   const fs = ports.fs ?? nativeFs;
   const nowFn = ports.now ?? Date.now;
+  const nowMs = nowFn();
 
   let validatedRepo = null;
   if (options['--repo']) {
@@ -191,13 +420,57 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
     now: nowFn,
   });
 
+  // In unified rollups, exclude repos explicitly turned off via `pdd metrics off --repo` from GitHub queries too.
   const targetRepos = validatedRepo
     ? (localState.repos.length > 0 ? localState.repos : [validatedRepo])
-    : localState.repos;
+    : localState.repos.filter(repo => localState.config.repos[repo.toLowerCase()] !== false);
 
-  const openIssues = ports.openIssues !== undefined
-    ? ports.openIssues
-    : await queryOpenIssuesBatch(targetRepos, ports.execFile ?? defaultExecFile, effectiveEnv);
+  const sinceIso = computeWindowFetchSinceIso(nowMs, options['--date'] ?? null);
+  const sinceMs = Date.parse(sinceIso);
+  const execFile = ports.execFile ?? defaultExecFile;
+
+  let openIssues = ports.openIssues;
+  let openIssueNumbers = ports.openIssueNumbers;
+  let closedIssues = ports.closedIssues;
+  let prStates = ports.prStates;
+  let githubOnline = ports.openIssues === undefined;
+
+  if (ports.openIssues === undefined) {
+    const prsByRepo = collectActivePrsByRepo(localState.runs, targetRepos, sinceMs);
+    const fetched = await queryGithubMetricsBatch({
+      repos: targetRepos,
+      prsByRepo,
+      sinceIso,
+      execFile,
+      env: effectiveEnv,
+    });
+    openIssues = fetched.openIssues;
+    openIssueNumbers = openIssueNumbers ?? fetched.openIssueNumbers;
+    closedIssues = closedIssues ?? fetched.closedIssues;
+    prStates = prStates ?? fetched.prStates;
+    githubOnline = fetched.online;
+  }
+
+  let regressions = ports.regressions;
+  if (regressions === undefined) {
+    const shouldScan = Boolean(ports.regressionScan || ports.gh || githubOnline);
+    if (shouldScan && targetRepos.length > 0) {
+      const gh = ports.gh ?? makeGhPort(execFile, effectiveEnv);
+      regressions = await scanMergedRegressions({
+        targetRepos,
+        runs: localState.runs,
+        prStates,
+        coreDirs: localState.coreDirs,
+        fs,
+        gh,
+        scanner: ports.regressionScan ?? regressionScan,
+        nowFn,
+        sinceMs,
+      });
+    } else {
+      regressions = [];
+    }
+  }
 
   const view = subcommand ?? 'overview';
   let report;
@@ -206,12 +479,16 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
       runs: localState.runs,
       repos: localState.repos,
       openIssues,
+      openIssueNumbers,
+      closedIssues,
+      prStates,
+      regressions,
       view,
       byRepo: Boolean(options['--repos']),
       repoFilter: validatedRepo,
       date: options['--date'] ?? null,
       timezone: resolvedTz,
-      now: new Date(nowFn()).toISOString(),
+      now: new Date(nowMs).toISOString(),
       recording: localState.config,
     });
   } catch (err) {

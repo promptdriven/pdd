@@ -98,6 +98,7 @@ export function recordAutopilotMetric(entry, options = {}) {
       status: String(entry.status ?? entry.outcome ?? 'ended'),
       pr: Number.isSafeInteger(entry.pr) && entry.pr > 0 ? entry.pr : null,
       gates: isPlainObject(entry.gates) ? entry.gates : {},
+      ...(isPlainObject(entry.gateCounts) ? { gateCounts: entry.gateCounts } : {}),
       reopened: entry.reopened === true,
       reverted: entry.reverted === true,
       durationMinutes: typeof entry.durationMinutes === 'number' && Number.isFinite(entry.durationMinutes) && entry.durationMinutes > 0
@@ -138,10 +139,21 @@ function inferSkillFromBuildLog(fs, logPath) {
   return null;
 }
 
+function addIssueAndPrKeys(targetSet, item) {
+  if (Number.isSafeInteger(item.issue) && item.issue > 0) targetSet.add(`issue:${item.issue}`);
+  if (Array.isArray(item.issues)) {
+    for (const n of item.issues) {
+      if (Number.isSafeInteger(n) && n > 0) targetSet.add(`issue:${n}`);
+    }
+  }
+  if (Number.isSafeInteger(item.pr) && item.pr > 0) targetSet.add(`pr:${item.pr}`);
+}
+
 function readRegressedIssues(fs, coreDir) {
-  const regressed = new Set();
+  const reopened = new Set();
+  const reverted = new Set();
   const postMerge = readJsonSafe(fs, join(coreDir, 'post-merge.json'), null);
-  if (!isPlainObject(postMerge)) return regressed;
+  if (!isPlainObject(postMerge)) return { reopened, reverted };
   const entries = Array.isArray(postMerge.items)
     ? postMerge.items
     : Array.isArray(postMerge.merges)
@@ -151,19 +163,17 @@ function readRegressedIssues(fs, coreDir) {
         : Object.values(postMerge);
   for (const item of entries) {
     if (!isPlainObject(item)) continue;
-    const hit = item.reopened === true || item.reverted === true
-      || item.regression === true
-      || (Array.isArray(item.regressions) && item.regressions.length > 0);
-    if (!hit) continue;
-    if (Number.isSafeInteger(item.issue) && item.issue > 0) regressed.add(`issue:${item.issue}`);
-    if (Array.isArray(item.issues)) {
-      for (const n of item.issues) {
-        if (Number.isSafeInteger(n) && n > 0) regressed.add(`issue:${n}`);
-      }
+    if (item.reopened === true) addIssueAndPrKeys(reopened, item);
+    if (item.reverted === true) addIssueAndPrKeys(reverted, item);
+    if (
+      item.reopened !== true
+      && item.reverted !== true
+      && (item.regression === true || (Array.isArray(item.regressions) && item.regressions.length > 0))
+    ) {
+      addIssueAndPrKeys(reopened, item);
     }
-    if (Number.isSafeInteger(item.pr) && item.pr > 0) regressed.add(`pr:${item.pr}`);
   }
-  return regressed;
+  return { reopened, reverted };
 }
 
 function indexLatestEvidenceByIssue(fs, logsDir) {
@@ -199,20 +209,40 @@ function indexLatestEvidenceByIssue(fs, logsDir) {
   return byIssue;
 }
 
+function extractPairCount(obj) {
+  if (!isPlainObject(obj)) return null;
+  const passed = Number(obj.passed ?? obj.pass);
+  const total = Number(obj.total ?? obj.applicable ?? obj.count);
+  if (Number.isSafeInteger(passed) && Number.isSafeInteger(total) && total > 0 && passed >= 0 && passed <= total) {
+    return { passed, total };
+  }
+  return null;
+}
+
 function deriveGates({ evidence, evDoc, outcome, text }) {
   const ev = isPlainObject(evidence) ? evidence : (isPlainObject(evDoc?.evidence) ? evDoc.evidence : {});
   let runtime = ev.runtime?.state ?? null;
-  if (!runtime && Array.isArray(evDoc?.runtime?.lines) && evDoc.runtime.lines.length > 0) {
+  let runtimeCount = extractPairCount(ev.runtime);
+  if (Array.isArray(evDoc?.runtime?.lines) && evDoc.runtime.lines.length > 0) {
     const verdicts = evDoc.runtime.lines.map(l => l?.verdict);
-    if (verdicts.includes('other') || verdicts.includes('fail')) runtime = 'fail';
-    else if (verdicts.every(v => v === 'pass')) runtime = 'pass';
-    else runtime = 'not-run';
+    if (!runtime) {
+      if (verdicts.includes('other') || verdicts.includes('fail')) runtime = 'fail';
+      else if (verdicts.every(v => v === 'pass')) runtime = 'pass';
+      else runtime = 'not-run';
+    }
+    if (!runtimeCount) {
+      const passed = verdicts.filter(v => v === 'pass').length;
+      runtimeCount = { passed, total: verdicts.length };
+    }
   }
   let vectors = ev.vectors?.state ?? evDoc?.vectors?.kinds?.vectors?.state ?? null;
   let formal = ev.formal?.state ?? evDoc?.vectors?.kinds?.formal?.state ?? null;
+  const vectorsCount = extractPairCount(ev.vectors) ?? extractPairCount(evDoc?.vectors?.kinds?.vectors);
+  const formalCount = extractPairCount(ev.formal) ?? extractPairCount(evDoc?.vectors?.kinds?.formal);
   let suite = evDoc?.suite?.state ?? null;
   let review = evDoc?.review?.state ?? evDoc?.review?.verdict ?? null;
   let ci = evDoc?.ci?.state ?? null;
+  let e2e = evDoc?.e2e?.state ?? ev.e2e?.state ?? null;
 
   const reason = String(text ?? '');
   if (outcome === 'merged' || outcome === 'would-merge') {
@@ -223,11 +253,19 @@ function deriveGates({ evidence, evDoc, outcome, text }) {
     if (!suite && /full test suite|suite runner failed/i.test(reason)) suite = 'fail';
     if (!ci && /\bCI check\b.*failed|\bchecks-stuck\b/i.test(reason)) ci = 'fail';
     if (!review && /\bReview FAIL\b|fresh reviewer ended/i.test(reason)) review = 'fail';
+    if (!e2e && /\be2e\b.*fail/i.test(reason)) e2e = 'fail';
     if ((!runtime || runtime === 'not-run') && /Runtime coverage went down|saved pdd test check.*failed|Runtime:\s*FAIL/i.test(reason)) {
       runtime = 'fail';
     }
   }
-  return { runtime, vectors, formal, suite, review, ci };
+  const gateCounts = {};
+  if (runtimeCount) gateCounts.runtime = runtimeCount;
+  if (vectorsCount) gateCounts.vectors = vectorsCount;
+  if (formalCount) gateCounts.formal = formalCount;
+  return {
+    gates: { runtime, vectors, formal, suite, review, ci, ...(e2e !== null ? { e2e } : {}) },
+    gateCounts: Object.keys(gateCounts).length > 0 ? gateCounts : null,
+  };
 }
 
 function outcomeRank(status) {
@@ -276,7 +314,7 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
     if (!Number.isSafeInteger(row.issue) || row.issue <= 0 || !Number.isFinite(row.at)) continue;
 
     const evDoc = pickEvidenceDoc(row.issue, row.text);
-    const gates = deriveGates({
+    const { gates, gateCounts } = deriveGates({
       evidence: row.evidence,
       evDoc,
       outcome: row.outcome,
@@ -289,9 +327,23 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
     const rowLetters = Array.isArray(row.paths?.letters) ? row.paths.letters : [];
     const rowPathsOnlyD = row.pathsOnlyD === true || (rowLetters.length > 0 && rowLetters.every(l => l === 'd'));
     const reopened = row.reopened === true
-      || row.reverted === true
-      || regressed.has(`issue:${row.issue}`)
-      || (Number.isSafeInteger(row.pr) && regressed.has(`pr:${row.pr}`));
+      || regressed.reopened.has(`issue:${row.issue}`)
+      || (Number.isSafeInteger(row.pr) && regressed.reopened.has(`pr:${row.pr}`));
+    const reverted = row.reverted === true
+      || regressed.reverted.has(`issue:${row.issue}`)
+      || (Number.isSafeInteger(row.pr) && regressed.reverted.has(`pr:${row.pr}`));
+    const hasPromptCheck = Boolean(gateCounts)
+      || ['runtime', 'vectors', 'formal'].some(k => {
+        const v = typeof gates[k] === 'string' ? gates[k].trim().toLowerCase() : '';
+        return v === 'pass' || v === 'fail' || v === 'proved' || v === 'bounded' || v === 'failed';
+      });
+    const promptChanged = typeof row.promptChanged === 'boolean'
+      ? row.promptChanged
+      : typeof evDoc?.promptChanged === 'boolean'
+        ? evDoc.promptChanged
+        : hasPromptCheck
+          ? true
+          : undefined;
 
     runs.push({
       id: `${repo.toLowerCase()}#${row.issue}@${row.at}`,
@@ -300,7 +352,7 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
       ...(Array.isArray(row.issues) && row.issues.length > 0 ? { issues: row.issues } : {}),
       skill: normalizeSkill(row.skill ?? logSkill, {
         pathsOnlyD: rowPathsOnlyD,
-        promptChanged: row.promptChanged,
+        promptChanged,
         title: typeof row.title === 'string' ? row.title : undefined,
       }),
       startedAt: new Date(startedMs).toISOString(),
@@ -308,7 +360,10 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
       status: row.outcome,
       pr: Number.isSafeInteger(row.pr) && row.pr > 0 ? row.pr : null,
       gates,
+      ...(gateCounts ? { gateCounts } : {}),
+      ...(typeof promptChanged === 'boolean' ? { promptChanged } : {}),
       reopened,
+      reverted,
       durationMinutes,
     });
   }
@@ -325,7 +380,7 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
     const startedMs = Number.isFinite(job.started) ? job.started : nowMs;
     const updatedMs = Number.isFinite(job.progress?.at) ? job.progress.at : (Number.isFinite(job.prAt) ? job.prAt : startedMs);
     const evDoc = pickEvidenceDoc(job.issue, job.head);
-    const gates = deriveGates({
+    const { gates, gateCounts } = deriveGates({
       evidence: job.evidence,
       evDoc,
       outcome: 'running',
@@ -334,6 +389,11 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
     const logSkill = inferSkillFromBuildLog(fs, job.agent?.log);
     const letters = Array.isArray(job.paths?.letters) ? job.paths.letters : [];
     const pathsOnlyD = letters.length > 0 && letters.every(l => l === 'd');
+    const promptChanged = typeof job.promptChanged === 'boolean'
+      ? job.promptChanged
+      : typeof evDoc?.promptChanged === 'boolean'
+        ? evDoc.promptChanged
+        : undefined;
     runs.push({
       id: `${repo.toLowerCase()}#${job.issue}@running`,
       repo,
@@ -341,7 +401,7 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
       ...(Array.isArray(job.issues) && job.issues.length > 0 ? { issues: job.issues } : {}),
       skill: normalizeSkill(job.skill ?? logSkill, {
         pathsOnlyD,
-        promptChanged: job.promptChanged,
+        promptChanged,
         title: job.title,
       }),
       startedAt: new Date(startedMs).toISOString(),
@@ -349,7 +409,10 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
       status: 'running',
       pr: Number.isSafeInteger(job.pr) && job.pr > 0 ? job.pr : null,
       gates,
+      ...(gateCounts ? { gateCounts } : {}),
+      ...(typeof promptChanged === 'boolean' ? { promptChanged } : {}),
       reopened: false,
+      reverted: false,
       durationMinutes: null,
     });
   }
@@ -373,6 +436,7 @@ export function readAutopilotMetricsState(options = {}) {
   }
 
   const activeRepos = new Map();
+  const coreDirs = {};
   const rememberRepo = (repo, isPreferred = false) => {
     if (typeof repo !== 'string') return;
     try {
@@ -424,6 +488,8 @@ export function readAutopilotMetricsState(options = {}) {
     const coreRuns = readCoreRuns(fs, cfg.repo, coreDir, nowMs);
     if (cfg.enabled === true || coreRuns.length > 0) {
       rememberRepo(cfg.repo, cfg.enabled === true);
+      const repoLower = cfg.repo.trim().toLowerCase();
+      if (!coreDirs[repoLower] || cfg.enabled === true) coreDirs[repoLower] = coreDir;
     }
     for (const r of coreRuns) addRun(r, false);
   }
@@ -452,5 +518,6 @@ export function readAutopilotMetricsState(options = {}) {
     config,
     repos: [...activeRepos.values()],
     runs: [...byRunKey.values()],
+    coreDirs,
   };
 }
