@@ -12,10 +12,14 @@ Export async `regressionScan(ports)`, a shared scanner reused by `pdd autopilot 
 Required ports are `root` (the repository's core state directory, or `null` when only `candidates` are supplied), `repo`
 (`owner/name`), and async `gh(args)` returning `{code, stdout, stderr}` like the core
 port. `fs.readFileSync(path, 'utf8')` and `now()` are injectable, with native fs and
-Date.now defaults. Optional ports: `candidates` (array of `{pr, issue?, issues?, outcome?}`
+Date.now defaults. Optional ports: `candidates` (array of `{pr, issue?, issues?, outcome?, mergeCommit?, mergedAt?, title?}`
 records from callers such as `pdd metrics`), `prs` (optional non-empty array of positive integer
-PR numbers restricting which PRs are scanned), and `maxRequests` (positive integer request budget,
-default `100`). All decisions use these ports.
+PR numbers restricting which PRs are scanned), `includeCi` (boolean, default `true`; when `false`,
+reuse valid pre-resolved `mergeCommit`, `mergedAt <= now`, and `title` on `candidates` and skip
+per-PR `pulls/{pr}`, `commits/{sha}`, `check-runs`, and `statuses` reads), `boundedPulls` (boolean,
+default `false`; when `true`, read `pulls?state=all&sort=updated&direction=desc&per_page=100` and
+stop pagination early once a descending-`updated_at` page reaches `updated_at <= since`), and
+`maxRequests` (positive integer request budget, default `100`). All decisions use these ports.
 
 Read `root/history.jsonl` when `root` is provided; an absent `ENOENT` file means no history rows.
 Skip invalid JSON/non-object lines, reporting incompleteness (`"Invalid core history line."`).
@@ -57,7 +61,9 @@ the earliest merge, repository PRs (all states), and commits on the default bran
 Validate check identity/app, status context, conclusion/state, PR/issue identity
 and event shapes; malformed observations make the affected merge incomplete.
 Keep already-read pages if a later page fails.
-Follow GitHub next links only within that repository's REST namespace; cycles,
+Follow GitHub next links only within that repository's REST namespace (matching
+`/repos/{repo}/` case-insensitively and rewriting matching same-endpoint canonical
+`/repositories/<id>/<subpath>` next links back onto `repos/{repo}/<subpath>`); cycles,
 invalid links and failed pages are errors rather than successful truncation.
 Use explicit GET for every GitHub call. Do not use search's limited result set.
 
@@ -88,7 +94,7 @@ is proven, otherwise suspect if any signal exists, otherwise ok.
 | Later default-branch commit says `This reverts commit FULL_SHA.` or the standard merge-revert form `This reverts commit FULL_SHA, reversing` followed by whitespace and `changes made to PARENT.` | proven when FULL_SHA matches the exact merge SHA, case insensitive; shorter, longer and different SHAs never match |
 | Later PR explicitly says `Reverts owner/repo#PR`, `Reverts #PR`, or `Reverts` followed by the exact PR URL | proven if merged, suspect if only proposed; closed unmerged PRs stay suspect |
 | A later PR title is exactly `Revert "ORIGINAL_TITLE"`, without an exact target | suspect |
-| New same-repo issue title/body explicitly blames this PR with `Regressed by`, `Regression from`, `Regression in`, `Broken by`, `Caused by`, or `Introduced by` followed by `#PR`, qualified `owner/repo#PR`, or exact PR URL | proven (`kind: "reference"`, `detail` naming `Issue #<number>`) |
+| New same-repo issue title/body explicitly blames this PR with `Regressed by`, `Regression from`, `Regression in`, `Broken by`, `Caused by`, or `Introduced by` followed by optional `PR ` and `#PR`, qualified `owner/repo#PR`, or exact PR URL | proven (`kind: "reference"`, `detail` naming `Issue #<number>`) |
 | New same-repo issue carrying label `regression` (case-insensitive match on label `name` or string label) that references this PR or any recorded issue of the merge (same-repo `#N`, qualified `owner/repo#N`, URL, or timeline `cross-referenced` event) | proven (`kind: "reference"`, `detail` naming `Issue #<number>`) |
 | Unlabeled new issue mentions this PR or recorded issue through a number, same-repo qualified reference or URL; or an unlabeled timeline cross-reference originates in a new same-repo issue | suspect (`kind: "reference"`) |
 | Any recorded issue of the merge has a later `reopened` event | suspect (`kind: "reopened"`) |
@@ -127,7 +133,8 @@ post-merge monitoring (`#3182`). Required ports are `root`, `repo` and GET-only
 Read distinct PR-bearing rows from `root/history.jsonl` — both `outcome === "merged"`
 and non-`merged` outcomes with a positive integer `pr` (`would-merge`, `stopped`,
 `ended`, `needs-person`, `released`, `abandoned`, skipping unmerged PRs once resolved
-on GitHub; recording both `issue` and any companion `issues` array) — and persist
+on GitHub and persisting `closedUnmerged: true` for closed-unmerged PRs so they are
+not re-polled on later ticks; recording both `issue` and any companion `issues` array) — and persist
 incremental state atomically at `root/post-merge.json` (`schema: "pdd.autopilot-post-merge.v1"`).
 When no qualifying PRs exist in history, return zero counts without calling GitHub
 or writing `post-merge.json`.
