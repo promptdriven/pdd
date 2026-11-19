@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: b961af0352e1c1035dae4f20a5362a74a02e213826429b9dc5148de7e1e7cb4a).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: e284ce98a1140b0a93c09bee2055d883e16948def4294504dca4136c09a9c82d).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -664,6 +664,55 @@ function wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, ports) {
   return wrapped;
 }
 
+const ADAPTIVE_POLL_CAP_MS = 1000;
+const ADAPTIVE_POLL_FAST_MS = 250;
+const ADAPTIVE_POLL_MID_MS = 500;
+const ADAPTIVE_POLL_FAST_TICKS = 8;
+const ADAPTIVE_POLL_MID_TICKS = 16;
+
+function sleepWithSignal(ms, signal) {
+  return new Promise(done => {
+    if (signal?.aborted || ms <= 0) {
+      done();
+      return;
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      done();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener('abort', finish, { once: true });
+  });
+}
+
+function attachAdaptivePolling(merged, rawPorts) {
+  // Preserve explicit caller/test timing controls untouched.
+  if (rawPorts?.pollMs !== undefined || rawPorts?.sleep !== undefined) return;
+  let pollTicks = 0;
+  merged.pollMs = ADAPTIVE_POLL_CAP_MS;
+  merged.sleep = (ms, signal) => {
+    if (typeof ms === 'number' && ms >= ADAPTIVE_POLL_MID_MS && ms <= ADAPTIVE_POLL_CAP_MS) {
+      pollTicks += 1;
+      const cap =
+        pollTicks <= ADAPTIVE_POLL_FAST_TICKS
+          ? ADAPTIVE_POLL_FAST_MS
+          : pollTicks <= ADAPTIVE_POLL_MID_TICKS
+            ? ADAPTIVE_POLL_MID_MS
+            : ADAPTIVE_POLL_CAP_MS;
+      return sleepWithSignal(Math.min(ms, cap), signal);
+    }
+    return sleepWithSignal(ms, signal);
+  };
+  if (typeof merged.fetch === 'function') {
+    const wrappedFetch = merged.fetch;
+    merged.fetch = (url, init) => {
+      if (String(init?.method ?? 'GET').toUpperCase() === 'POST') pollTicks = 0;
+      return wrappedFetch(url, init);
+    };
+  }
+}
+
 function seamRuntimePorts(ports = {}, { cwd = null } = {}) {
   const exit = hostExit();
   const baseFetch = ports.fetch ?? globalThis.fetch;
@@ -675,6 +724,7 @@ function seamRuntimePorts(ports = {}, { cwd = null } = {}) {
   if (typeof baseFetch === 'function') {
     merged.fetch = wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, merged);
   }
+  attachAdaptivePolling(merged, ports);
   if (merged.stdout) merged.stdout = normalizeHintStream(merged.stdout);
   if (merged.stderr) merged.stderr = normalizeHintStream(merged.stderr);
   return merged;
@@ -1283,9 +1333,10 @@ function runEmitV1(input = {}, ports = {}) {
   const stderr = ports.stderr ?? process.stderr;
   const options = input?.options ?? {};
   const jsonMode = options['--json'] === true;
-  const badKey = Object.keys(options).find(key => !['--lint', '--emit-v1', '--json'].includes(key));
+  const writeMode = options['--write'] === true;
+  const badKey = Object.keys(options).find(key => !['--lint', '--emit-v1', '--write', '--json'].includes(key));
   if (badKey) {
-    stderr.write('pdd lint --emit-v1 accepts only --json and Story selections.\n');
+    stderr.write('pdd lint --emit-v1 accepts only --write, --json and Story selections.\n');
     return 2;
   }
   const cwd = input?.cwd ?? process.cwd();
@@ -1293,6 +1344,15 @@ function runEmitV1(input = {}, ports = {}) {
   if (!root) {
     stderr.write('No Git project root is available.\n');
     return 2;
+  }
+  let realRoot = null;
+  if (writeMode) {
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      stderr.write('No Git project root is available.\n');
+      return 2;
+    }
   }
   const rawWords = commandWords(input);
   const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 }, ports);
@@ -1322,9 +1382,27 @@ function runEmitV1(input = {}, ports = {}) {
       });
       continue;
     }
+    let fullTestPath = null;
+    if (writeMode) {
+      try {
+        fullTestPath = realpathSync(join(realRoot, test.path));
+        if (fullTestPath !== realRoot && !fullTestPath.startsWith(realRoot + sep)) {
+          throw new Error('Test file resolves outside repository root.');
+        }
+      } catch (err) {
+        errors.push({
+          path: test.path,
+          story_path: test.storyPath ?? null,
+          code: 'unreadable-scenario',
+          section: 'document',
+          message: `${test.path}: ${err?.message ?? String(err)}`,
+        });
+        continue;
+      }
+    }
     let rawText;
     try {
-      rawText = sourcePort.read({ path: test.path }).content;
+      rawText = writeMode ? initialReadFileSync(fullTestPath, 'utf8') : sourcePort.read({ path: test.path }).content;
     } catch (err) {
       errors.push({
         path: test.path,
@@ -1360,21 +1438,59 @@ function runEmitV1(input = {}, ports = {}) {
       continue;
     }
     const finalExact = compiled.exactDoc;
+    const text = compiler.stringifyExactScenarioJson(finalExact, 2) + '\n';
     emitted.push({
       path: test.path,
+      fullPath: fullTestPath,
       story_path: test.storyPath ?? finalExact?.story_path ?? null,
       changed: compiled.changed,
-      text: compiler.stringifyExactScenarioJson(finalExact, 2) + '\n',
+      written: writeMode && compiled.changed && text !== rawText,
+      text,
       scenario: finalExact,
     });
   }
   if (errors.length > 0) {
     if (jsonMode) {
-      stdout.write(compiler.stringifyExactScenarioJson({ ok: false, errors }, 2) + '\n');
+      stdout.write(compiler.stringifyExactScenarioJson({ ok: false, ...(writeMode ? { exit_code: 4 } : {}), errors }, 2) + '\n');
     } else {
       for (const err of errors) stderr.write(`${err.message}\n`);
     }
     return 4;
+  }
+  if (writeMode) {
+    for (const item of emitted) {
+      if (!item.written) continue;
+      fs.writeFileSync(item.fullPath, item.text, 'utf8');
+    }
+    if (jsonMode) {
+      stdout.write(
+        compiler.stringifyExactScenarioJson(
+          {
+            ok: true,
+            exit_code: 0,
+            wrote: true,
+            updated: emitted.filter(item => item.written).map(item => item.path),
+            unchanged: emitted.filter(item => !item.written).map(item => item.path),
+            files: emitted.map(({ path, story_path, changed, written }) => ({
+              path,
+              story_path,
+              changed,
+              written,
+            })),
+          },
+          2,
+        ) + '\n',
+      );
+      return 0;
+    }
+    for (const item of emitted) {
+      if (item.written) {
+        stdout.write(`Wrote ${item.path} (prompt-runtime.program-scenario.v1).\n`);
+      } else {
+        stdout.write(`${item.path}: already canonical prompt-runtime.program-scenario.v1.\n`);
+      }
+    }
+    return 0;
   }
   if (jsonMode) {
     stdout.write(
@@ -1807,7 +1923,7 @@ export async function loadRuntimeClient() {
 
 const NON_EXEC_CHECK_FLAGS = [
   '--lint', '--local', '--files', '--explain-bindings',
-  '--read', '--retry', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--bind-criteria',
+  '--read', '--retry', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
 ];
 const PROMPT_DEP_LINK_RE = /\[[^\[\]\r\n]*\]\(([^()\s#\r\n]+\.prompt\.md)(?:#[^()\s\r\n]*)?\)/g;
 const PORT_CALL_TOKEN_RE = /\b[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*\b/;
@@ -2022,6 +2138,11 @@ export async function runCheck(input = {}, ports = {}) {
   if (input?.options?.['--emit-v1'] && input?.options?.['--bind-criteria']) {
     const stderr = ports.stderr ?? process.stderr;
     stderr.write('Use either --emit-v1 or --bind-criteria, not both.\n');
+    return 2;
+  }
+  if (input?.options?.['--write'] && !input?.options?.['--emit-v1']) {
+    const stderr = ports.stderr ?? process.stderr;
+    stderr.write('--write is only accepted with pdd lint --emit-v1.\n');
     return 2;
   }
   if (input?.options?.['--emit-v1']) {
@@ -2567,6 +2688,7 @@ export async function lint(input = {}, ports = {}) {
     '--lint': true,
     ...(input?.local === true && input?.options?.['--local'] === undefined ? { '--local': true } : {}),
     ...(input?.emitV1 === true && input?.options?.['--emit-v1'] === undefined ? { '--emit-v1': true } : {}),
+    ...(input?.write === true && input?.options?.['--write'] === undefined ? { '--write': true } : {}),
     ...(input?.bindCriteria === true && input?.options?.['--bind-criteria'] === undefined ? { '--bind-criteria': true } : {}),
   };
   return runCheck(buildCheckInput(input, { defaultCache: true, extraOptions }), ports);

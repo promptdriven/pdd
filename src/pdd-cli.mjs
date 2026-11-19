@@ -33,7 +33,7 @@ const defaultReadPackageVersion = ({ packageRoot }) => {
   catch { return { ok: false, version: '' }; }
 };
 function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
-  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--bind-criteria'].some(flag => options[flag])) return null;
+  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
   try {
     const found = runtime.findTests({ root: cwd });
     const { selected, unknown } = runtime.selectTests(found, words, options);
