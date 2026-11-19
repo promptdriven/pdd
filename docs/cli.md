@@ -113,6 +113,18 @@ with `status` and `prose_sha256` taken out and that JSON written without white
 space. `pdd approve` does not change it, so an approval keeps the headers of the
 prompt current.
 
+## Calculate exact arithmetic
+
+`pdd calc EXPR` evaluates one arithmetic expression offline with exact
+arbitrary-precision rational arithmetic, without network or interpreter calls.
+It supports `+`, `-`, `*`, `/`, truncation-toward-zero `div` and `mod`,
+`min`, `max`, `floor`, `ceil`, `trunc`, `round_half_up`, and `round_half_even`.
+Terminating values print as exact integers or decimals (`0.1 + 0.2` prints
+`0.3`); nonterminating quotients print as reduced fractions (`1 / 3` prints
+`1/3`). Leading-negative expressions such as `pdd calc "-7 div 2"` work
+directly without `--`. Valid expressions exit `0`; invalid, blank, or
+divide-by-zero inputs write one `pdd calc:` error line to stderr and exit `2`.
+
 | `state` | Meaning |
 |---|---|
 | `current` | The hash is the prompt's header hash. |

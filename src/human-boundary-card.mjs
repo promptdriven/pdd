@@ -1,4 +1,4 @@
-// Generated from prompts/cli/human-boundary-card.prompt.md (sha256: 298d633397532c9d24801ff1c9a34153d62bf374707ff04c5bb43cd1a8f5d36f).
+// Generated from prompts/cli/human-boundary-card.prompt.md (sha256: f5ac12ca80d2aaec4a1162f4bb2d608687834c91b462fcbbc779f98b97add748).
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -14,6 +14,7 @@ import {
   promptMarkdownTargets,
   readPrompt,
   storyCriteria,
+  stringifyScenarioJson,
 } from './runtime-seam.mjs';
 import { isLintableStoryPath } from './story-lint.mjs';
 import { hasAcceptance, isStoryPath } from './test-selection.mjs';
@@ -1389,6 +1390,8 @@ export function buildHumanBoundaryCard({
     ? `scenario steps ${totalSteps}${stepWarnings.length ? ` (advisory: ${stepWarnings.join('; ')})` : ' (<=15)'}`
     : 'scenario steps 0';
 
+  const derivationRows = collectDerivationRows(selectedScenarios);
+
   return {
     advisory: true,
     stories: selectedStories,
@@ -1396,6 +1399,7 @@ export function buildHumanBoundaryCard({
     unloadedOwners,
     selectedSources: [...allLoadedPaths].sort(),
     provenanceRows,
+    derivationRows,
     verificationSplit: {
       runtime: runtimeOps,
       native: nativeSplit,
@@ -1408,6 +1412,36 @@ export function buildHumanBoundaryCard({
     sampleSummary: batchDiag.sampleSummary,
     divergences: batchDiag.divergences,
   };
+}
+
+function collectDerivationRows(selectedScenarios) {
+  const rows = [];
+  const seen = new Set();
+  for (const scen of selectedScenarios ?? []) {
+    const doc = scen?.testEntry?.doc;
+    if (!isObject(doc)) continue;
+    const labels = new Map();
+    for (const [idx, crit] of (Array.isArray(doc.criteria) ? doc.criteria : []).entries()) {
+      if (typeof crit?.id === 'string' && crit.id) {
+        labels.set(crit.id, /^AC\d+$/i.test(crit.id) ? crit.id : `AC${idx + 1}`);
+      }
+    }
+    for (const [stepIdx, step] of (Array.isArray(doc.steps) ? doc.steps : []).entries()) {
+      for (const check of Array.isArray(step?.checks) ? step.checks : []) {
+        if (!isObject(check) || typeof check.derivation !== 'string' || !check.derivation.trim()) continue;
+        const cid = typeof check.criterion_id === 'string' && check.criterion_id ? check.criterion_id : `step-${stepIdx + 1}`;
+        const criterionLabel = labels.get(cid) ?? cid;
+        const path = typeof check.path === 'string' ? check.path : '';
+        const value = stringifyScenarioJson(check.value ?? null);
+        const derivation = cleanOneLine(check.derivation);
+        const key = `${criterionLabel}\0${path}\0${value}\0${derivation}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({ criterionLabel, path, value, derivation });
+      }
+    }
+  }
+  return rows;
 }
 
 function focusRecIsCheckable(focusPrompt, owningRecords) {
@@ -1469,6 +1503,7 @@ export function formatApproveBoundaryCard(card) {
 
   const rows = [...(Array.isArray(card.provenanceRows) ? card.provenanceRows : [])]
     .sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3));
+  const derivations = Array.isArray(card.derivationRows) ? card.derivationRows : [];
   const body = rows.length
     ? [
         '  Provenance:',
@@ -1477,6 +1512,12 @@ export function formatApproveBoundaryCard(card) {
         ),
       ]
     : ['  Provenance: no Story scenario checks in this slice (standalone / exploratory or native-tested).'];
+  if (derivations.length) {
+    body.push(
+      '  Derivations:',
+      ...derivations.map(row => `    - ${row.criterionLabel} ${row.path}: ${row.value} = ${row.derivation}`),
+    );
+  }
 
   const rt = card.verificationSplit?.runtime ?? [];
   const nat = card.verificationSplit?.native ?? [];

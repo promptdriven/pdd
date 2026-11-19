@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: e955654e7def090d876ab517805bc76636e24e95b09f90a37a51d55940ae6b2b).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: a51339351b726c83c4426589caa1e80ebe8ff1fb5cca9ae75f11bbd7ee97cf43).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -23,6 +23,7 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
       "  pdd approve PROMPT           Review prompt changes and record approval.",
       "  pdd files [--json]           List prompts, Stories, tests and refusals.",
       "  pdd owner PATH... [--json]   Show which prompt owns each file.",
+      "  pdd calc EXPR                Evaluate an exact arithmetic expression.",
       "  pdd contracts [sync]         Inspect or sync shared record schemas.",
       "  pdd jobs                     List active local interpreter jobs.",
       "  pdd mcp                      Serve repository simulator tools over MCP.",
@@ -133,6 +134,8 @@ const routes = [
     forms: [form('pdd files [--json]', 'List prompts, Stories, tests and refusal reasons; no network calls.')] },
   { id: 'owner', prefix: ['owner'], local: 'file-owner', operands: [{ name: 'path', type: 'text', repeat: true }], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd owner PATH... [--json]', 'Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only.')] },
+  { id: 'calc', prefix: ['calc'], local: 'calc', operands: [{ name: 'expr', type: 'text' }], options: [],
+    forms: [form('pdd calc EXPR', 'Evaluate one exact arithmetic expression locally with no network or interpreter calls.')] },
   { id: 'contracts', prefix: ['contracts'], local: 'contracts', operands: [], options: [],
     forms: [form('pdd contracts', 'List shared records, their users and Stories stale since their last check; local working files only.')] },
   { id: 'contracts.sync', prefix: ['contracts', 'sync'], local: 'contracts-sync', operands: [], options: [{name:'--write',kind:'flag'}],
