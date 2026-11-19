@@ -9,6 +9,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -440,7 +441,7 @@ test('review regressions: shell_environment_policy merge/filters, nested CODEX_H
   const filtersArgs = buildCodexGatewayCliArgs({
     backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
     userCodexHome: join(sb.home, '.codex'),
-    emptySubshellDir: emptySubshell,
+    emptySubshellCodexHome: emptySubshell,
     userConfigText: '[shell_environment_policy.filters]\nMY_CUSTOM = "exclude"\n',
   });
   assert.ok(filtersArgs.includes('shell_environment_policy.filters.CODEX_CONNECTORS_TOKEN="exclude"'));
@@ -449,7 +450,7 @@ test('review regressions: shell_environment_policy merge/filters, nested CODEX_H
   const legacyExcludeArgs = buildCodexGatewayCliArgs({
     backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
     userCodexHome: join(sb.home, '.codex'),
-    emptySubshellDir: emptySubshell,
+    emptySubshellCodexHome: emptySubshell,
     userConfigText: '[shell_environment_policy]\nexclude = ["AWS_*", "MY_SECRET"]\n',
   });
   const excludeEntry = legacyExcludeArgs.find(a => a.startsWith('shell_environment_policy.exclude='));
@@ -460,7 +461,7 @@ test('review regressions: shell_environment_policy merge/filters, nested CODEX_H
   const legacyServerArgs = buildCodexGatewayCliArgs({
     backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
     userCodexHome: join(sb.home, '.codex'),
-    emptySubshellDir: emptySubshell,
+    emptySubshellCodexHome: emptySubshell,
     nativeBackendApi: false,
   });
   assert.ok(legacyServerArgs.includes('features.responses_websockets=false'));
@@ -481,13 +482,17 @@ test('review regressions: shell_environment_policy merge/filters, nested CODEX_H
   assert.equal(mcpRes.exitCode, 0);
   assert.equal(leaseCalledForMcp, false);
 
-  // 5. Dead lock owner recovers rapidly, nested CODEX_HOME launches safely, and 401 heartbeat revokes cached lease+auth.
-  const lockDir = `${runtimeDir}.lock`;
+  // 5. Dead lock owner in `<runtimeDir>/lock` recovers rapidly, nested CODEX_HOME launches safely,
+  // and 401 heartbeat revokes cached lease+auth.
+  const lockDir = join(runtimeDir, 'lock');
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  const pastMs = Date.now() - 5_000;
   writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
     pid: 99_999,
-    acquired_at: Date.now() - 5_000,
+    acquired_at: pastMs,
   }), { mode: 0o600 });
+  const pastDate = new Date(pastMs);
+  utimesSync(lockDir, pastDate, pastDate);
 
   let observedConfigTarget = null;
   let observedLeaseAfter401 = true;
@@ -502,7 +507,7 @@ test('review regressions: shell_environment_policy merge/filters, nested CODEX_H
       isPidAlive: candidate => candidate === 70_001,
       heartbeatIntervalMs: 20,
       spawnSync: () => ({ status: 0 }),
-      leaseCloudAccount: async () => makeLeaseReply({ lease_id: 'lse_rev_401' }),
+      leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_rev_401' }),
       heartbeatCloudLease: async () => {
         const err = new Error('revoked');
         err.status = 401;

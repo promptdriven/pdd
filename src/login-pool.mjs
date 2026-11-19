@@ -777,7 +777,7 @@ function normalizeCodexGatewayBaseUrl(validatedUrl, grantToken) {
 /**
  * Resolve the canonical `/v1/codex-gateway/backend-api` URL for a Codex Cloud lease.
  */
-export function resolveCodexBackendApiUrl(authOrLease, fallbackGatewayUrl = null) {
+export function resolveCodexBackendApiUrl(authOrLease, fallbackGatewayUrl = null, { preserveLegacyBase = false } = {}) {
   const explicit = typeof authOrLease?.codex_backend_api_url === 'string' && authOrLease.codex_backend_api_url.trim()
     ? validateCodexGatewayUrl(authOrLease.codex_backend_api_url)
     : null;
@@ -787,6 +787,7 @@ export function resolveCodexBackendApiUrl(authOrLease, fallbackGatewayUrl = null
       ? normalizeCodexGatewayBaseUrl(validateCodexGatewayUrl(authOrLease.codex_gateway_url), resolveCodexGatewayGrant(authOrLease))
       : null);
   if (!base) return null;
+  if (preserveLegacyBase) return base;
   if (/\/backend-api$/i.test(base)) return base;
   if (/\/codex-gateway$/i.test(base)) return `${base}/backend-api`;
   return base;

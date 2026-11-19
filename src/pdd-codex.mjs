@@ -381,11 +381,7 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
   }
   rememberSecrets(grantToken);
   const hasExplicitBackendApi = typeof lease.codex_backend_api_url === 'string' && Boolean(lease.codex_backend_api_url.trim());
-  const backendApiUrl = hasExplicitBackendApi
-    ? resolveCodexBackendApiUrl(lease)
-    : (typeof lease.codex_gateway_url === 'string' && lease.codex_gateway_url.trim()
-      ? lease.codex_gateway_url.trim().replace(/\/+$/, '')
-      : null);
+  const backendApiUrl = resolveCodexBackendApiUrl(lease, null, { preserveLegacyBase: !hasExplicitBackendApi });
   if (!backendApiUrl) {
     throw new CloudAccountsError('PDD Cloud lease did not include a Codex gateway URL.', { code: 'invalid_lease' });
   }
