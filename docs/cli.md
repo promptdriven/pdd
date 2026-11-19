@@ -6,6 +6,163 @@ You need the pdd command only for runs with PRs, for `pdd test`, `pdd lint`, `pd
 
 Typing `pdd check` or `pdd try` runs nothing and prints the name of the command to use.
 
+## Command index
+
+<!-- pdd:generated:cli-commands:start -->
+<!-- Auto-generated from the command catalog; update via sync, not by hand. -->
+
+### Core PDD workflow
+
+| Command | What it does |
+| --- | --- |
+| `pdd setup [--yes]` | Install the PDD skills for Codex and Claude if they are missing, and add the short PDD block to CLAUDE.md, else AGENTS.md. Offer detected Codex, Claude Code and Gemini MCP registrations after showing exact config changes and one y/N question. Offer Autopilot settings in a Git repository with a terminal; keep an existing mode on repeat setup. Without a terminal or with --yes, use safe defaults without questions. |
+| `pdd test --target code [STORY...] [--json]` | Run Story cases against declared CLI code without AI calls. |
+| `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every affected Story with conservative full fallback and a separate historical baseline report; required full-pass gates still apply. |
+| `pdd test --journeys [JOURNEY] [--max-calls N]` | Check all root product journeys or one journey. |
+| `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check stories on the PDD interpreter with your gh login: reuses unchanged passing Stories from .pdd/cache/test/; --lf selects previous failures in scope or uses the normal selection when none match, --cache-clear clears the cache and sends the selected Stories again (the interpreter may reuse saved answers); sends selected PATH or STORY dependencies (every Story when you name none), waits for every check (no default limit in any shell; --timeout MIN sets the limit) with a progress line every 30 s, then prints one table with report links. Defaults to 12 calls per step, at least 18 and at most 1000; --max-calls accepts 1 to 1000. |
+| `pdd test [PATH\|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]` | Cap logical interpreter calls across all selected Stories and any permitted service-restarted replacement (--max-total-calls 1..999999), or decline automatic service-restarted replacement (--no-restart-replacement; saved across --read and --retry). Also accepted with --affected and --journeys. |
+| `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work. |
+| `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks from a saved batch, with the same source and call caps; preserve completed and uncertain runs. |
+| `pdd test --explain-bindings [STORY...] [--json]` | Explain local resource edges, fixture selection and repairs before any paid call. |
+| `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload files and byte sizes; no network. --app-map selects the Simulator's app map. |
+| `pdd test --screen URL --drawing PATH [--look] [--json]` | Compare a real page with its drawing at the drawing viewport in installed headless Chrome/Chromium (--look also checks main colors, painted boxes and spacing within tolerance); no AI or interpreter calls. |
+| `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout warnings, then the PDD interpreter lint (0 AI calls) on selected Stories and their dependencies; sends no checks. --max-calls selects 1 to 1000 calls for structural preflight; warnings do not change the cap or guarantee completion. |
+| `pdd lint --local [STORY...] [--json]` | Check linked SVG layout parts locally with warning diagnostics and 0 AI/network calls. |
+| `pdd lint --codex [STORY...] [--json] [--timeout MIN]` | Run local deterministic lint plus read-only Codex readability and quality checks on selected prompts and Stories with clear pass/fail output. |
+| `pdd lint --emit-v1 [STORY...] [--json]` | Print expanded full scenario JSON for selected Story tests with 0 AI/network calls. |
+| `pdd lint --bind-criteria [STORY...] [--json]` | Bind matching Story acceptance criteria in selected test files to current ac-sha256-... content IDs on disk for review; 0 AI/network calls. |
+| `pdd simulate --product [--parts PARTS] [--journey JOURNEY] [--max-calls N] [--no-open] [--no-wait]` | Compose declared product maps, data and planned operations into one Simulator. |
+| `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Open the Story automatically: a command-line program opens a shell, HTTP routes start on localhost with an example request, screens open the PDD Simulator page, and typed operations open its Form tab. With no Story, open the whole project. Make a session on the PDD interpreter with your gh login; it ends in 24 hours. Short form: pdd sim. A new simulation defaults to 400 calls; --max-calls accepts 1 to 1000. With terminal stdout or explicit --agent, it stays running to connect your own agent; otherwise it reads saved cases once and returns. --agent selects a configured name or a default Codex, Claude or Gemini; --no-wait skips the bridge. In a terminal it adds each test saved in the Simulator to the story's test file. |
+| `pdd simulate [STORY] --page [--new]` | Open the Simulator page explicitly. |
+| `pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]` | Run your program in your terminal through a Simulator session; prints a PATH line, or opens a shell with --shell. Use --shell alone to open the shell. |
+| `pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]` | Serve real HTTP requests through your Simulator session on localhost (default port 8080). |
+| `pdd simulate --save-last` | Save the last terminal command and its output in the original Story test file. |
+| `pdd simulate --stop [STORY]` | Stop the open Simulator link of a story. |
+| `pdd approve PROMPT [--said WORDS]` | Show one prompt's text changes since its last approval (plus any embedded runtime interface or native-only declaration). Approve only that prompt. Easy mode accepts the person's nonblank words without grading them. Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. Ask the person, then relay their words with --said. Without --said, use a separate person terminal. Chat alone never approves. Use this quoted heredoc by default: pdd approve PATH --said - <<'PDD_SAID' <the person's exact words> PDD_SAID Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal. |
+| `pdd files [--json]` | List prompts, Stories, tests and refusal reasons; no network calls. |
+| `pdd owner PATH... [--json]` | Show which prompt owns each file, from pdd-bindings.json, Generated from headers and prompt opening sentences; reads local files only. |
+| `pdd contracts` | List shared records, their users and Stories stale since their last check; local working files only. |
+| `pdd contracts sync [--write]` | Show proposed changes for moving schema copies to references; apply only with --write. No interpreter calls. |
+| `pdd jobs` | List active and waiting interpreter jobs on this machine without contacting the interpreter. |
+| `pdd mcp` | Serve the current repository’s Try tools over stdio MCP. |
+| `pdd upgrade [--main]` | Upgrade a user-owned global pdd installation from the latest GitHub release (or pinned main commit with --main) and refresh installed user PDD skills. |
+
+### Cloud accounts
+
+| Command | What it does |
+| --- | --- |
+| `pdd accounts [--json]` | List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites. |
+| `pdd accounts list [--json]` | List enrolled and shared Cloud accounts, active selection, 5-hour and weekly usage windows, refresh status, and pending invites. |
+| `pdd accounts status [--json]` | Show Cloud account enrollment, isolated Codex home, shell auto-switch status, active leases, and token refresh/expiry health. |
+| `pdd accounts add [--provider codex\|claude] [--label NAME] [--loop] [--replace] [--device-auth] [--with USER\|ORG/TEAM[,...]]` | Sign in inside an isolated folder, upload the encrypted bundle to PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally enroll in a loop, replace an existing label, or share immediately. |
+| `pdd accounts import [--provider codex\|claude] [--from PATH] [--label NAME] [--replace] [--with USER\|ORG/TEAM[,...]]` | Import a local or external Codex auth.json or Claude token into PDD Cloud, materialize in PDD's isolated Codex home or Claude settings, and optionally replace an existing label or share immediately. |
+| `pdd accounts use LABEL [--provider codex\|claude]` | Pin and materialize LABEL in PDD's isolated Codex home or ~/.claude/settings.json. |
+| `pdd accounts next [--provider codex\|claude]` | Skip the active login and switch to the next ready account sorted by soonest weekly reset. |
+| `pdd accounts codex [ARGS...]` | Launch an interactive Codex session with live Cloud account quota monitoring and automatic mid-session resume rotation. |
+| `pdd accounts sync [--provider codex\|claude] [--quiet] [--timeout-ms MS]` | Refresh the PDD-managed login from PDD Cloud when near expiry or at 100% usage; no-op when cached and healthy; fail-open when offline. |
+| `pdd accounts auto on\|off\|status` | Manage the opt-in fail-open shell wrapper in ~/.zshrc, ~/.bashrc, and ~/.config/fish/config.fish for plain terminal codex and claude launches (off by default). |
+| `pdd accounts pause LABEL [--provider codex\|claude]` | Pause automatic leasing for LABEL. |
+| `pdd accounts unpause LABEL [--provider codex\|claude]` | Resume automatic leasing for LABEL. |
+| `pdd accounts share LABEL [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share LABEL with GitHub users, organization teams, or @ORG targets without exposing raw credentials. |
+| `pdd accounts share --all [--provider codex\|claude] --with USER\|ORG/TEAM[,...]` | Share all owned Cloud accounts (optionally filtered by provider) with GitHub users, organization teams, or @ORG targets. |
+| `pdd accounts accept INVITE` | Accept a pending Cloud account share invite. |
+| `pdd accounts unshare LABEL [--provider codex\|claude] --user USER` | Revoke shared access to LABEL for USER. |
+| `pdd accounts unshare [LABEL] [--all] [--provider codex\|claude] [--user USER] [--with USER\|ORG/TEAM[,...]]` | Revoke shared access for users, organization teams, or @ORG targets across LABEL or all owned accounts. |
+| `pdd accounts leave LABEL [--provider codex\|claude]` | Leave a shared Cloud account. |
+| `pdd accounts remove LABEL [--provider codex\|claude]` | Delete LABEL from PDD Cloud and revoke active leases. |
+| `pdd accounts log LABEL [--provider codex\|claude] [--json]` | Show the lease and sharing audit log for LABEL. |
+
+### Workflows & product
+
+| Command | What it does |
+| --- | --- |
+| `pdd product status [--json]` | Count Stories by part and slice from the product plan; no interpreter calls. |
+| `pdd product next` | Show ready planned runs and their start commands; no interpreter calls. |
+| `pdd product start RUN [--no-run] [--agent codex\|claude\|gemini\|agy\|ENTRY]` | Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue; ENTRY is a name from ~/.config/pdd/agents.json. No interpreter calls. |
+| `pdd workflow list [--json]` | List the bundled workflows with their areas and gates. |
+| `pdd workflow run NAME ISSUE [--agent codex\|claude\|gemini\|agy\|ENTRY] [--base BRANCH] [--draft] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]` | Start the first area chat for a GitHub issue in Herdr and exit; ENTRY is a name from ~/.config/pdd/agents.json; --base selects an existing origin branch (default: repository default); --draft requests draft PRs for this run; --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; --origin, --decision-id and --outcome record optional metrics metadata; --through prompt-pr\|code saves where a normal run goes after PR 1 (stop, or go on to the code PR); pdd later pushes the issue branch and opens a real PR. |
+| `pdd workflow status [ISSUE] [--all] [--cancelled] [--json]` | Show this repo's runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first. |
+| `pdd workflow view ISSUE` | Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat. |
+| `pdd workflow card [ISSUE]` | Print the run's Story card from its real files: the request, the Story, the test cases, the prompts that change and the next step. Read-only; no GitHub, Herdr or interpreter call. |
+| `pdd workflow approve [ISSUE] [--said WORDS] [--draft]` | Approve the gate and all its selected draft prompts in one step; --draft requests draft PRs at the current unpublished gate; --through prompt-pr\|code records the person's code-or-stop choice from the Story card of a normal run. Use the person's words after showing the gate or prompt. Ask the person in any chat, then relay their nonblank words without grading. Ask the person, then relay their words with --said. Without --said, use a separate person terminal. Chat alone never approves. Use this quoted heredoc by default: pdd workflow approve N --said - <<'PDD_SAID' <the person's exact words> PDD_SAID Choose a delimiter absent as a whole line from the words. Keep the delimiter quoted. --said - reads all UTF-8 stdin, including trailing newlines. Simple words may use --said WORDS. Without --said, a person can use terminal y/N. Root pdd.json strict_approvals true requires a person terminal. |
+| `pdd workflow changes ISSUE TEXT` | Send a change request to the same area chat; the gate stays open. |
+| `pdd workflow open ISSUE [AREA] [--new] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]` | Focus or resume a saved area chat; --new replaces the current session while keeping the run and approvals. |
+| `pdd workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]` | Run committed changed tests on the fetched base branch merge-base and committed head with a limit per phase (default 10 minutes; --timeout sets 1 to 120); save a non-gating report that pull requests show as pdd's own result. |
+| `pdd workflow suite --command COMMAND [--timeout MIN]` | Run a full suite through the shared machine queue (machine-sized check slots, 30-minute execution timeout; --timeout 0 runs it with no time limit, for a caller that watches it). |
+| `pdd workflow done STEP [--summary TEXT] [--skipped REASON] [--no-publish]` | For the agent in a run worktree: record a step with pdd's own latest pdd test, pdd lint and prove results (the summary is an agent note) and print what to do next; --skipped records that the step was skipped, and why; --no-publish records code-area completion locally before publishing. |
+| `pdd workflow publish ISSUE` | Publish a finished code PR area without recording its steps again. |
+| `pdd workflow ask QUESTION` | For the agent in a run worktree: show the person that the chat waits for their answer. |
+| `pdd workflow ack REQUEST_ID --summary TEXT` | For the agent in a run worktree: acknowledge a delivered change request with a short note. |
+| `pdd workflow resend ISSUE... [--said WORDS]` | Record one person decision and resend each lost check once; --said - reads exact words from stdin; strict mode requires a person terminal. |
+| `pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` | Record and park a missing supported PDD route. |
+| `pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` | Wait for a named external blocker. |
+| `pdd workflow park --reason TEXT --step STEP` | Record an environment failure of a named validation step. |
+| `pdd workflow park --reason TEXT` | Record an automatic stop from its run worktree. |
+| `pdd workflow park --interpreter --reason TEXT` | Wait for the interpreter after an AI-service, busy or network result of its interpreter check: no question to a person, the worker slot can be yielded, and Autopilot wakes the run when the interpreter is back. |
+| `pdd workflow yield N` | Hand off automatic capacity after the worker has stopped. |
+| `pdd workflow tidy [--dry-run]` | Close safely finished chat tabs on this machine; dry-run reports without changes. |
+| `pdd workflow cancel ISSUE` | Cancel the run and close its Herdr tabs; keep the worktree and branch. |
+| `pdd workflow cost ISSUE [--input -]` | Read local issue costs or record measured suite/person minutes and outcome from JSON stdin. |
+| `pdd workflow evidence ISSUE --summary FILE` | Record source-verified saved check JSON without rerunning steps, gates or publication. |
+| `pdd workflow evidence-associate ISSUE --workspace PATH --stage current\|pr1\|before [--commit SHA] --test PATH...` | Register this run's evidence workspace, stage and selected tests; before needs the commit of an earlier checked source; no checks or workflow progress. |
+| `pdd graph` | Read native dependencies and saved reviews without AI. |
+| `pdd graph --open` | Open the local viewer. |
+| `pdd graph --issue N` | Select a root issue. |
+| `pdd graph --open --issue N --repo OWNER/REPO` | Open a selected issue in an explicit repository, including outside a checkout. |
+| `pdd dependencies prepare [--issue N]` | Read a scoped native coordinator packet without AI or GitHub writes. |
+| `pdd dependencies complete --input -` | Read a structured completion from stdin, save the review and reconcile its intended effects. |
+
+### Autopilot
+
+| Command | What it does |
+| --- | --- |
+| `pdd autopilot doctor` | Read-only first-start checks and fix commands; no AI call or GitHub write. |
+| `pdd autopilot start [--runs N] [--checks N] [--label NAME] [--mode auto\|observe\|off] [--report file\|draft\|off] [--decisions ask\|decide] [--intake off\|shadow\|active] [--share PERCENT] [--agent codex\|claude\|gemini\|agy] [--auto-update release\|main\|off]` | Start this repo with headless agent jobs (the core engine): check now and every 10 minutes, with no AI call on empty ticks. Autopilot works on issues with an opt-in label (--label NAME or autopilot.label in pdd.json) or on vetted ready cards when --intake active is enabled; without --intake active, a start with no label starts nothing. --runs and --checks override machine-sized run and heavy-check limits; --label, --mode and --report save this machine's opt-in label, mode and report mode for this repo, over pdd.json (--mode observe runs every check but never merges; --report draft, the default, keeps problem reports on this machine); --decisions saves this machine's decision mode (ask asks a person only for a big decision; decide, the default, never asks); --intake saves this machine's intake mode (shadow writes local intake cards that never change what starts; active selects ready cards, refines improve cards via read-only repo inspection and groups related small work; off is the default). --share saves the percent of this machine's CPU and memory that Autopilot may use (1-100, default 50; it sets the automatic slots, the room check and the timer's memory limit). --agent saves or replaces this machine's agent and sign-in profile. --auto-update saves this machine's between-tick self-update mode for a user-owned global pdd install and its skills when no job is publishing or merging (release is the default; main tracks promptdriven/pdd main; off disables self-update). |
+| `pdd autopilot status [--all] [--json]` | Show this machine's repo, folder, agent and next tick; --all lists every repository with Autopilot on this machine, from any folder. |
+| `pdd autopilot logs [ISSUE] [--follow\|-f] [--lines N] [--json]` | List current headless Autopilot workers with stage, owned process state, suite queue position, blockers and saved log or evidence paths, or inspect and follow one issue worker live (--follow / -f detaches cleanly on Ctrl-C without stopping the worker or changing observe mode). Read-only; no GitHub write or approval effect. |
+| `pdd autopilot logs --issue N [--follow\|-f] [--lines N] [--json]` | Select one worker explicitly with --issue N (number, #N, owner/repo#N or issue URL) to inspect saved progress or stream live updates. |
+| `pdd autopilot stop` | Stop this machine's timer; let the current agent step finish. |
+| `pdd autopilot observe` | Set the repository Autopilot mode to observe. |
+| `pdd autopilot auto` | Set the repository Autopilot mode to auto. |
+| `pdd autopilot off` | Set the repository Autopilot mode to off. |
+| `pdd autopilot trust NAME...` | Add explicitly trusted GitHub names. |
+| `pdd autopilot untrust NAME` | Remove an explicitly trusted GitHub name. |
+| `pdd autopilot add N...` | Mark named old issues with pdd:autopilot so Autopilot may take them. |
+| `pdd autopilot release ISSUE` | Release this machine's claim and remove pdd:working and pdd:stuck; keep the run folder, branch and PRs. |
+| `pdd autopilot intake [--json]` | Print this machine's local intake cards for this repo (shadow mode), the would-pick list and today's changes; no AI call or GitHub write. |
+| `pdd autopilot report` | List the local Autopilot report drafts of this machine; no GitHub call. |
+| `pdd autopilot report send FINGERPRINT` | File one local report draft to promptdriven/pdd, or count it on the matching open report. |
+| `pdd autopilot regressions [--json] [--file PATH]` | Read core merge history and GitHub regression evidence; optionally save a local report, without GitHub writes or reverts. |
+| `pdd autopilot alerts set [--destination autopilot\|infrastructure]` | Read a Discord or Slack incoming webhook URL from stdin and save it for this machine outside every repository, readable only by you; the URL is never printed. Post changed causes, decisions and recoveries; an unchanged stuck review sends nothing. Send one digest of open work per repository and machine at most every 6 hours. Use --destination infrastructure to separate machine incidents. |
+| `pdd autopilot alerts set --discord-channel ID [--token-command CMD] [--destination autopilot\|infrastructure]` | Use a Discord bot instead: read its token from stdin and save it readable only by you, or save CMD and run it at each send so the token is never written to disk. The token and the command output are never printed. |
+| `pdd autopilot alerts test [--destination autopilot\|infrastructure]` | Send one test message and confirm the posted message; for a bot, first show the bot name and channel name. |
+| `pdd autopilot alerts clear [--destination autopilot\|infrastructure]` | Remove the alert destination from this machine. |
+| `pdd autopilot alert --issue N --kind usage-limit\|resource\|interpreter\|interpreter-access\|access\|decision\|stuck\|test-suite\|long-running\|recovered --input - [--update]` | Record one alert for a real human need or incident and send it to this machine's destination. Reads {"cause","tried","need"} JSON from stdin. usage-limit, resource, interpreter and interpreter-access are one alert per repository and machine for all blocked issues; access, decision, stuck, test-suite and long-running are one alert per issue. A repeat sends nothing unless the last send failed; --update sends a changed cause, decision or issue list, never attempt notes alone; one digest of open work per repository and machine is sent at most every 6 hours; recovered sends one recovery and closes the matching alerts. |
+| `pdd autopilot audit RUN PR` | Audit an automatic merge once with a fresh agent and save its verdict. |
+| `pdd autopilot check-base RUN PR` | Check the saved automatic base, PR target, current default branch and newest release before a merge or after it. This command reads only. |
+
+### Metrics, shell & help
+
+| Command | What it does |
+| --- | --- |
+| `pdd metrics [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]` | Show Autopilot overview metrics (Last 24h and Week Mon-Sun) across active repositories on this machine, or per repository with --repos. |
+| `pdd metrics stages [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]` | Show Autopilot gate pass rates (Prompt tests, Vectors, Formal, Suite, Review, CI), merges, reopens, and non-merged status counts. |
+| `pdd metrics skills [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]` | Show Autopilot work mix (small-change, bug, feature, Total) with merge conversion and median completion time. |
+| `pdd metrics full [--repos] [--repo OWNER/REPO] [--date YYYY-MM-DD] [--timezone IANA] [--json] [--html] [--file PATH]` | Show all three Autopilot metrics views (Overview, Stages, and Skills) together. |
+| `pdd metrics on [--repo OWNER/REPO] [--json]` | Enable Autopilot metrics recording on this machine (or for one repository). |
+| `pdd metrics off [--repo OWNER/REPO] [--json]` | Pause Autopilot metrics recording on this machine (or for one repository) while keeping existing history. |
+| `pdd completion bash\|zsh` | Print local shell completion. |
+| `pdd` | Show local commands. |
+| `pdd --help` | Show local commands. |
+| `pdd -h` | Show local commands. |
+| `pdd help` | Show local commands. |
+| `pdd help prompting` | Show how to write prompts, Stories and tests, and where the guide is. |
+| `pdd --version` | Show this package version. |
+| `pdd -V` | Show this package version. |
+| `pdd -VV` | Show this package version and the interpreter build and supported formats; unknown when unavailable. Uses existing gh sign-in, with no AI call. |
+
+<!-- pdd:generated:cli-commands:end -->
+
 ## Set up a repo
 
 | Command | What it does |
