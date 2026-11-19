@@ -153,8 +153,8 @@ function resolveNextPage(nextUrl, prefix, endpoint) {
   if (u.origin !== 'https://api.github.com' || u.username || u.password || u.hash) {
     throw Error('GitHub pagination points outside this repository.');
   }
-  if (u.pathname.startsWith(`/${prefix}`)) {
-    return u.pathname.slice(1) + u.search;
+  if (u.pathname.toLowerCase().startsWith(`/${prefix.toLowerCase()}`)) {
+    return prefix + u.pathname.slice(prefix.length + 1) + u.search;
   }
   // GitHub Link headers commonly use canonical /repositories/<id>/<subpath> URLs;
   // rewrite matching same-endpoint paths back onto repos/<owner>/<repo>/ so requests never leave this repo.

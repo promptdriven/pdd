@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-model.prompt.md (sha256: 7c663d3744c9f82ba0a6fdffa9c3c04fc77f917ffe5e0567a4c354ddc1dc831b).
+// Generated from prompts/cli/metrics-model.prompt.md (sha256: da8d2032db65c3e281cbe20582f081ea29581835a4d70f7e989021924beac2a1).
 
 export const SKILLS = Object.freeze(['small-change', 'bug', 'feature']);
 export const GATES = Object.freeze(['runtime', 'vectors', 'formal', 'suite', 'review', 'ci']);

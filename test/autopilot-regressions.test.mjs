@@ -1274,6 +1274,15 @@ test('regressionScan follows GitHub /repositories/<id>/<same-endpoint> Link pagi
   assert.equal(r.merges[0].classification, 'proven');
   assert.ok(r.merges[0].signals.some(s => s.kind === 'reference' && s.level === 'proven'));
 
+  // Case-insensitive /repos/<OWNER>/<REPO>/ Link headers normalize cleanly back onto ports.repo casing.
+  const fCase = fixture(t);
+  const caseKey = [...fCase.routes.keys()].find(k => k.startsWith('issues?'));
+  fCase.links.set(caseKey, `<https://api.github.com/repos/${repo.toUpperCase()}/${caseKey}&page=2>; rel="next"`);
+  fCase.routes.set(`${caseKey}&page=2`, [newIssue('Broken by PR #12')]);
+  const rCase = await fCase.scan();
+  assert.equal(rCase.complete, true);
+  assert.equal(rCase.merges[0].classification, 'proven');
+
   // A /repositories/<id>/<different-endpoint> Link must still be rejected.
   const fBad = fixture(t);
   const badKey = [...fBad.routes.keys()].find(k => k.startsWith('issues?'));

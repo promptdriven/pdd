@@ -242,6 +242,11 @@ test('CLI HTML dashboard output, on/off switch via runPdd, offline Open fallback
   assert.equal(parsedOff.openNowDisplay, '?');
   assert.equal(parsedOff.overview.windows[0].poolDisplay, '?');
   assert.equal(parsedOff.overview.windows[0].taken, 3, 'Existing history stays readable when recording is OFF');
+  assert.equal(parsedOff.overview.windows[0].merged, 1);
+  assert.equal(parsedOff.regressionsComplete, false, 'Offline CLI run must not report regressions scan as complete');
+  assert.equal(parsedOff.overview.windows[0].regressionsDisplay, '?');
+  assert.equal(parsedOff.stages.regressions.complete, false);
+  assert.match(parsedOff.stages.regressions.summary, /\(scan incomplete\)$/);
 
   const onRes = spawnSync(process.execPath, [pddBin, 'metrics', 'on', '--json'], { cwd: dir, env, encoding: 'utf8' });
   assert.equal(onRes.status, 0, onRes.stderr);
@@ -497,4 +502,69 @@ test('CLI paginates GraphQL open/closed issues in UPDATED_AT DESC order, survive
   assert.match(out.text, /Open now: 2/);
   assert.match(out.text, /Week \(Mon-Sun\)\s+4\s+2\s+2\s+1 \(50\.0%\)\s+\?/);
   assert.match(out.text, /- Regressions \(0\): 0 reopened · 0 reverted · 0 regression issues \(scan incomplete\)/);
+});
+
+test('CLI offline GraphQL failure with 1 merged run marks regressions incomplete and shared-PR runs backfill mergedAt (#3530)', async t => {
+  const { dir, stateDir } = makeSandbox(t);
+  const nowMs = Date.parse('2026-11-19T18:00:00Z');
+  recordAutopilotMetric({
+    repo: 'promptdriven/pdd',
+    issue: 701,
+    pr: 801,
+    status: 'merged',
+    at: '2026-11-19T17:00:00Z',
+    mergedAt: '2026-11-19T17:00:00Z',
+    skill: 'bug',
+  }, { stateDir, now: () => nowMs });
+
+  // 1. Offline (gh api graphql throws) -> regressionsComplete: false and '?' instead of silent '0 (0.0%)'
+  {
+    const out = capture(), err = capture();
+    const code = await runMetrics({
+      argv: ['--json', '--timezone', 'UTC'],
+      cwd: dir,
+      stdout: out,
+      stderr: err,
+      ports: {
+        stateDir,
+        now: () => nowMs,
+        execFile: async () => { throw new Error('gh unavailable'); },
+      },
+    });
+    assert.equal(code, 0, err.text);
+    const parsed = JSON.parse(out.text);
+    assert.equal(parsed.regressionsComplete, false);
+    assert.equal(parsed.overview.windows[0].merged, 1);
+    assert.equal(parsed.overview.windows[0].regressionsDisplay, '?');
+    assert.equal(parsed.stages.regressions.complete, false);
+    assert.match(parsed.stages.regressions.summary, /\(scan incomplete\)$/);
+  }
+
+  // 2. Two runs sharing the same PR where only the second carries mergedAt still backfill mergedAt on the candidate
+  const runsPath = join(stateDir, 'autopilot', 'metrics', 'runs.jsonl');
+  writeFileSync(runsPath, [
+    JSON.stringify({ repo: 'promptdriven/pdd', issue: 702, pr: 802, status: 'merged', at: '2026-11-19T17:05:00Z', skill: 'bug' }),
+    JSON.stringify({ repo: 'promptdriven/pdd', issue: 703, pr: 802, status: 'merged', at: '2026-11-19T17:10:00Z', mergedAt: '2026-11-19T17:10:00Z', skill: 'bug' }),
+  ].join('\n') + '\n');
+  let seen802 = null;
+  const out = capture(), err = capture();
+  const code = await runMetrics({
+    argv: ['--json', '--timezone', 'UTC'],
+    cwd: dir,
+    stdout: out,
+    stderr: err,
+    ports: {
+      stateDir,
+      now: () => nowMs,
+      openIssues: { 'promptdriven/pdd': 5 },
+      regressionScan: async opts => {
+        seen802 = opts.candidates.find(c => c.pr === 802);
+        return { merges: [], counts: { ok: 0, suspect: 0, proven: 0 }, complete: true, errors: [] };
+      },
+    },
+  });
+  assert.equal(code, 0, err.text);
+  assert.ok(seen802);
+  assert.deepEqual(seen802.issues, [702, 703]);
+  assert.equal(seen802.mergedAt, '2026-11-19T17:10:00Z');
 });

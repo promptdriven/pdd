@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-command.prompt.md (sha256: 6ae953e2977fe643db4b2d07d7353f94388a3cd07b6b5d6cf17307c61d99106c).
+// Generated from prompts/cli/metrics-command.prompt.md (sha256: f8a604b23d4c79094cb2af84fb41d910b9aa22c67a1ac78f9f52a7508ddda83c).
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -388,6 +388,9 @@ async function scanMergedRegressions({
     } else {
       prev.issues = [...new Set([...prev.issues, ...issues])];
       if (prev.issue === null && prev.issues.length > 0) prev.issue = prev.issues[0];
+      if (!prev.mergedAt && mergedAtIso) prev.mergedAt = mergedAtIso;
+      if (!prev.mergeCommit && meta?.mergeCommit) prev.mergeCommit = meta.mergeCommit;
+      if (!prev.title && meta?.title) prev.title = meta.title;
     }
   }
 
@@ -581,6 +584,9 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
       regressionsComplete = scanned.complete;
     } else {
       regressions = [];
+      if (ports.regressionsComplete === undefined && ports.openIssues === undefined && !githubOnline && targetRepos.length > 0) {
+        regressionsComplete = false;
+      }
     }
   }
 
