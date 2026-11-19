@@ -3220,7 +3220,7 @@ async function savedRowReds(ctx, job, head, evidence, stories) {
       reds.push(`The saved pdd test check of ${story} at head ${short(head)} was refused before execution (${fix[0]}). pdd printed the fix: ${oneLine(fix[1], 800)} Apply the fix that pdd prints and run "$PDD_CLI" test again at this head.`);
     }
     if (!rows.length) lost.push([story, 'no saved pdd test check at this source']);
-    else if (!allStoryTestsCovered(scopes, evidence, story, row => row.pass === true || serviceRow(row) || hasRealBindingUnavailable(row))) {
+    else if (!allStoryTestsCovered(scopes, evidence, story, () => true)) {
       lost.push([story, 'unrun pdd test checks at this source']);
     } else if (!rows.every(row => row.pass === true || serviceRow(row))) {
       const codes = [...new Set(rows.flatMap(rowRefusals))];
@@ -4249,6 +4249,13 @@ async function parkHumanBoundary(ctx, job, pr, outcome) {
 
 async function detectSavedRealBindingBlocker(ctx, job) {
   const head = job.agentHead ?? job.head;
+  if (
+    job.coverage?.head === head
+    && job.coverage?.ok === true
+    && !(job.coverage.rows ?? []).some(row => row?.current !== false && row?.pass !== true && hasRealBindingUnavailable(row))
+  ) {
+    return null;
+  }
   const evidence = await readRuntimeEvidenceAtHead(ctx, job, head).catch(() => null);
   const rows = Array.isArray(evidence?.stories) ? evidence.stories : [];
   const scopes = decidingRows(evidence?.stories, true);
