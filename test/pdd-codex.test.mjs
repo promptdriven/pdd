@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -8,7 +9,12 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
+  renameSync,
   rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -21,9 +27,13 @@ import {
 } from '../src/pdd-codex.mjs';
 import {
   buildCodexGatewayCliArgs,
+  buildCodexHomeMirrorCliArgs,
   createCodexStepOverlay,
   localCodexHome,
   materializeLocalCodexAuth,
+  normalizeCodexConfigWriteback,
+  resolveEffectiveSqliteHome,
+  stopCodexAppServerDaemon,
 } from '../src/login-pool.mjs';
 import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
 
@@ -167,9 +177,14 @@ test('20 concurrent pdd-codex sessions share 1 runtime folder and 1 cloud lease,
           assert.ok(args.includes(`sqlite_home=${JSON.stringify(join(sb.home, '.codex'))}`));
           assert.ok(args.includes('features.daemon_auto_start=false'));
           assert.ok(args.includes('features.shell_snapshot=false'));
-          assert.ok(args.some(a => a.startsWith('shell_environment_policy.set.CODEX_HOME=')));
-          assert.ok(args.includes('shell_environment_policy.filters.CODEX_CONNECTORS_TOKEN="exclude"'));
-          assert.ok(args.includes('shell_environment_policy.filters.OPENAI_API_KEY="exclude"'));
+          assert.ok(args.includes('allow_symlinked_codex_home=true'));
+          assert.ok(!args.some(a => a.startsWith('shell_environment_policy.set.CODEX_HOME=')));
+          const filtersInline = args.find(a => a.startsWith('shell_environment_policy.filters={'));
+          assert.ok(filtersInline, 'filters must use a single TOML inline table so "PDD_*" is parsed cleanly');
+          assert.ok(filtersInline.includes('"PDD_*" = "exclude"'));
+          assert.ok(filtersInline.includes('CODEX_CONNECTORS_TOKEN = "exclude"'));
+          assert.ok(filtersInline.includes('OPENAI_API_KEY = "exclude"'));
+          assert.ok(filtersInline.includes('CODEX_HOME = "exclude"'));
           assert.ok(!args.includes('features.responses_websockets=false'));
 
           startedCount += 1;
@@ -341,7 +356,9 @@ test('pdd-codex logout, login, and mcp add never touch personal ~/.codex/auth.js
       uid: 504,
       leaseCloudAccount: async () => { leaseCalledForMcp = true; throw new Error('should not lease'); },
       spawnCodex: async (_bin, args, opts) => {
-        assert.deepEqual(args, ['mcp', 'add', 'demo', '--', 'echo', 'hi']);
+        assert.equal(args.includes(`sqlite_home=${JSON.stringify(userCodex)}`), true);
+        assert.equal(args.includes('allow_symlinked_codex_home=true'), true);
+        assert.deepEqual(args.slice(-6), ['mcp', 'add', 'demo', '--', 'echo', 'hi']);
         assert.equal(opts.env.CODEX_CONNECTORS_TOKEN, undefined);
         mcpSawSymlink = lstatSync(join(opts.env.CODEX_HOME, 'config.toml')).isSymbolicLink();
         return { code: 0 };
@@ -437,14 +454,15 @@ test('review regressions: shell_environment_policy merge/filters, nested CODEX_H
   assert.equal(localCodexHome(nestedEnv), join(sb.home, '.codex'));
   assert.equal(localCodexHome({ ...sb.env, CODEX_HOME: runtimeDir }), join(sb.home, '.codex'));
 
-  // 2. shell_environment_policy preserves user [filters] AND merges legacy exclude without clobbering.
+  // 2. shell_environment_policy preserves user [filters] via inline table AND merges legacy exclude without clobbering.
   const filtersArgs = buildCodexGatewayCliArgs({
     backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
     userCodexHome: join(sb.home, '.codex'),
     emptySubshellCodexHome: emptySubshell,
     userConfigText: '[shell_environment_policy.filters]\nMY_CUSTOM = "exclude"\n',
   });
-  assert.ok(filtersArgs.includes('shell_environment_policy.filters.CODEX_CONNECTORS_TOKEN="exclude"'));
+  const filtersInline = filtersArgs.find(a => a.startsWith('shell_environment_policy.filters={'));
+  assert.ok(filtersInline && filtersInline.includes('"PDD_*" = "exclude"') && filtersInline.includes('CODEX_CONNECTORS_TOKEN = "exclude"') && filtersInline.includes('CODEX_HOME = "exclude"'));
   assert.ok(!filtersArgs.some(a => a.startsWith('shell_environment_policy.exclude=')));
 
   const legacyExcludeArgs = buildCodexGatewayCliArgs({
@@ -528,5 +546,546 @@ test('review regressions: shell_environment_policy merge/filters, nested CODEX_H
   assert.equal(observedLeaseAfter401, false, '401 heartbeat should invalidate cached lease.json');
   assert.equal(observedAuthAfter401, false, '401 heartbeat should invalidate cached auth.json');
 });
+
+test('home parity: .tmp marketplaces mirror, unquoted openai-bundled source override, hooks.state remap, and local mcp list', async t => {
+  const sb = makeSandbox(t);
+  const userCodex = join(sb.home, '.codex');
+  const bundledDir = join(userCodex, '.tmp', 'bundled-marketplaces', 'openai-bundled');
+  const marketplacesDir = join(userCodex, '.tmp', 'marketplaces', 'claude-plugins-official');
+  const pluginsRepoDir = join(userCodex, '.tmp', 'plugins');
+  mkdirSync(bundledDir, { recursive: true });
+  mkdirSync(marketplacesDir, { recursive: true });
+  mkdirSync(pluginsRepoDir, { recursive: true });
+  writeFileSync(join(userCodex, '.tmp', 'plugins.sha'), 'abc123\n');
+  mkdirSync(join(userCodex, '.tmp', 'git-temp-clone'), { recursive: true });
+  writeFileSync(join(userCodex, '.tmp', 'plugins.sync.lock'), '');
+  writeFileSync(join(userCodex, 'hooks.json'), '{"hooks":{"SessionStart":[]}}\n');
+
+  const userConfigText = [
+    'model = "gpt-6.2-sol"',
+    '',
+    '[marketplaces.openai-bundled]',
+    'source_type = "local"',
+    `source = ${JSON.stringify(bundledDir)}`,
+    '',
+    '[marketplaces.external-cache]',
+    'source_type = "local"',
+    'source = "/opt/external/marketplace"',
+    '',
+    '[marketplaces.isolated-tmp-leak]',
+    'source_type = "local"',
+    `source = ${JSON.stringify(join(userCodex, '.tmp', 'git-temp-clone'))}`,
+    '',
+    `[hooks.state.${JSON.stringify(`${userCodex}/hooks.json:session_start:0:0`)}]`,
+    'trusted_hash = "sha256:aaa111"',
+    '',
+    '[hooks.state."gitkraken-hooks@gitkraken:hooks/hooks.json:session_start:0:0"]',
+    'trusted_hash = "sha256:bbb222"',
+    '',
+  ].join('\n');
+  writeFileSync(join(userCodex, 'config.toml'), userConfigText, { mode: 0o600 });
+
+  // Pre-seed a stale real directory at <runtime>/.tmp/marketplaces to verify auto-healing to symlink.
+  const runtimeDir = sharedRuntimeDirPath({ env: sb.env, tmpRoot: sb.tmpRoot, uid: 555 });
+  mkdirSync(join(runtimeDir, '.tmp', 'marketplaces', 'stale'), { recursive: true });
+
+  // 1. Main pdd-codex launch mirrors safe .tmp entries and emits canonical -c overrides.
+  let observedArgs = null;
+  let observedTmpState = null;
+  const runRes = await runPddCodexCli(
+    ['exec', 'check parity'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 555,
+      pid: 99100,
+      isPidAlive: () => true,
+      leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_parity_1' }),
+      releaseCloudLease: async () => ({ revoked: true }),
+      spawnCodex: async (_bin, args, opts) => {
+        observedArgs = args;
+        const rt = opts.env.CODEX_HOME;
+        observedTmpState = {
+          tmpIsDir: lstatSync(join(rt, '.tmp')).isDirectory() && !lstatSync(join(rt, '.tmp')).isSymbolicLink(),
+          bundledLink: lstatSync(join(rt, '.tmp', 'bundled-marketplaces')).isSymbolicLink(),
+          marketplacesLink: lstatSync(join(rt, '.tmp', 'marketplaces')).isSymbolicLink(),
+          pluginsLink: lstatSync(join(rt, '.tmp', 'plugins')).isSymbolicLink(),
+          pluginsShaLink: lstatSync(join(rt, '.tmp', 'plugins.sha')).isSymbolicLink(),
+          gitTempAbsent: !existsSync(join(rt, '.tmp', 'git-temp-clone')),
+          lockAbsent: !existsSync(join(rt, '.tmp', 'plugins.sync.lock')),
+        };
+        return { code: 0 };
+      },
+    },
+  );
+  assert.equal(runRes.exitCode, 0);
+  assert.deepEqual(observedTmpState, {
+    tmpIsDir: true,
+    bundledLink: true,
+    marketplacesLink: true,
+    pluginsLink: true,
+    pluginsShaLink: true,
+    gitTempAbsent: true,
+    lockAbsent: true,
+  });
+
+  const realRt = realpathSync(runtimeDir);
+  const expectedBundledOverride = `marketplaces.openai-bundled.source=${JSON.stringify(join(realRt, '.tmp', 'bundled-marketplaces', 'openai-bundled'))}`;
+  assert.equal(observedArgs.includes(expectedBundledOverride), true, 'bare marketplace key must be unquoted and canonical');
+  assert.equal(
+    observedArgs.some(a => a.includes('marketplaces.external-cache') || a.includes('marketplaces.isolated-tmp-leak')),
+    false,
+    'external and isolated .tmp paths must not be rewritten',
+  );
+  const hooksArg = observedArgs.find(a => a.startsWith('hooks.state={'));
+  assert.ok(hooksArg, 'hooks.state inline table override should be emitted');
+  assert.equal(hooksArg.includes(JSON.stringify(`${realRt}/hooks.json:session_start:0:0`)), true);
+  assert.equal(hooksArg.includes('trusted_hash = "sha256:aaa111"'), true);
+  assert.equal(hooksArg.includes('gitkraken-hooks'), false, 'plugin hook state must stay untouched in user config');
+
+  // 2. Local `pdd-codex mcp list` also mirrors .tmp and passes mirror -c overrides without leasing.
+  let mcpLeased = false;
+  let mcpObservedArgs = null;
+  let mcpBundledPresent = false;
+  const mcpRes = await runPddCodexCli(
+    ['mcp', 'list'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      leaseCloudAccount: async () => { mcpLeased = true; return makeLeaseReply(); },
+      spawnCodex: async (_bin, args, opts) => {
+        mcpObservedArgs = args;
+        mcpBundledPresent = lstatSync(join(opts.env.CODEX_HOME, '.tmp', 'bundled-marketplaces')).isSymbolicLink();
+        return { code: 0 };
+      },
+    },
+  );
+  assert.equal(mcpRes.exitCode, 0);
+  assert.equal(mcpLeased, false, 'mcp list must remain offline without cloud lease');
+  assert.equal(mcpBundledPresent, true, 'mcp list temp dir must mirror .tmp/bundled-marketplaces');
+  assert.equal(
+    mcpObservedArgs.some(a => a.startsWith('marketplaces.openai-bundled.source=')),
+    true,
+    'mcp list must pass marketplace override so plugin-contributed MCP servers (cua_repl, codex_app) appear',
+  );
+
+  // 3. Unsafe symlink inside ~/.codex/.tmp pointing to auth.json is rejected.
+  writeFileSync(join(userCodex, 'auth.json'), '{"secret":true}\n', { mode: 0o600 });
+  rmSync(join(userCodex, '.tmp', 'plugins.sha'), { force: true });
+  symlinkSync(join(userCodex, 'auth.json'), join(userCodex, '.tmp', 'plugins.sha'));
+  const directArgs = buildCodexHomeMirrorCliArgs({
+    userCodexHome: userCodex,
+    runtimeCodexHome: runtimeDir,
+    userConfigText,
+  });
+  assert.equal(directArgs.includes(expectedBundledOverride), true);
+  const res2 = await runPddCodexCli(
+    ['exec', 'check unsafe tmp symlink'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 555,
+      pid: 99101,
+      isPidAlive: () => true,
+      leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_parity_2' }),
+      releaseCloudLease: async () => ({ revoked: true }),
+      spawnCodex: async (_bin, _args, opts) => {
+        assert.equal(existsSync(join(opts.env.CODEX_HOME, '.tmp', 'plugins.sha')), false, 'unsafe auth.json symlink in .tmp must be pruned');
+        return { code: 0 };
+      },
+    },
+  );
+  assert.equal(res2.exitCode, 0);
+
+  // 4. Managed home (materializeLocalCodexAuth) and step overlays (createCodexStepOverlay)
+  // mirror .tmp/bundled-marketplaces and remap marketplace source + hooks.state in their
+  // materialized config.toml without altering ~/.codex/config.toml.
+  const leaseSpec = {
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'http://127.0.0.1:41999/v1/codex-gateway/lse_parity_mat',
+    codex_backend_api_url: 'http://127.0.0.1:41999/v1/codex-backend-api/lse_parity_mat',
+    codex_gateway_token: 'pddg_lse_parity_mat_tok',
+    plan_type: 'pro',
+  };
+  const materialized = materializeLocalCodexAuth(leaseSpec, { env: sb.env });
+  const realManaged = realpathSync(materialized.codexHome);
+  const managedCfgText = readFileSync(materialized.configPath, 'utf8');
+  assert.equal(lstatSync(join(materialized.codexHome, '.tmp', 'bundled-marketplaces')).isSymbolicLink(), true);
+  assert.equal(managedCfgText.includes(join(realManaged, '.tmp', 'bundled-marketplaces', 'openai-bundled')), true);
+  assert.equal(managedCfgText.includes(`${join(realManaged, 'hooks.json')}:session_start:0:0`), true);
+
+  const overlay = createCodexStepOverlay(leaseSpec, { env: sb.env, tmpRoot: sb.tmpRoot });
+  try {
+    const realOverlay = realpathSync(overlay.overlayDir);
+    const overlayCfgText = readFileSync(overlay.configPath, 'utf8');
+    assert.equal(lstatSync(join(overlay.overlayDir, '.tmp', 'bundled-marketplaces')).isSymbolicLink(), true);
+    assert.equal(overlayCfgText.includes(join(realOverlay, '.tmp', 'bundled-marketplaces', 'openai-bundled')), true);
+    assert.equal(overlayCfgText.includes(`${join(realOverlay, 'hooks.json')}:session_start:0:0`), true);
+  } finally {
+    overlay.cleanup();
+  }
+  assert.equal(readFileSync(join(userCodex, 'config.toml'), 'utf8'), userConfigText);
+});
+
+test('adversarial parity regressions: inline PDD_* filters, cross-layer exclude, sqlite_home preservation, writeback normalization, CLI guards, and daemon stop', async t => {
+  const sb = makeSandbox(t);
+  const userCodex = join(sb.home, '.codex');
+  const repoDir = join(sb.root, 'repo');
+  mkdirSync(join(repoDir, '.codex'), { recursive: true });
+
+  // 1. parsePddCodexArgs preserves leading `--` when no PDD flags precede it.
+  const leadingDashDash = parsePddCodexArgs(['--', '-prompt-like-flag']);
+  assert.deepEqual(leadingDashDash.codexArgs, ['--', '-prompt-like-flag']);
+
+  // 2. Leading global Codex flags cannot bypass `logout` or `login`, and `--help` / `features` need zero lease.
+  let leaseCalls = 0;
+  let spawnedCalls = [];
+  const noLeasePorts = {
+    tmpRoot: sb.tmpRoot,
+    uid: 777,
+    pid: 99201,
+    leaseCloudAccount: async () => {
+      leaseCalls += 1;
+      return makeLeaseReply({ leaseId: 'lse_should_not_run' });
+    },
+    spawnCodex: async (bin, args, opts) => {
+      spawnedCalls.push({ bin, args, env: opts.env });
+      return { code: 0 };
+    },
+  };
+  let loginOut = '';
+  const rLogin = await runPddCodexCli(
+    ['--no-daemon', 'login'],
+    { env: sb.env, stdout: { write(s) { loginOut += s; } }, stderr: { write() {} } },
+    noLeasePorts,
+  );
+  assert.equal(rLogin.exitCode, 0);
+  assert.match(loginOut, /never touches your personal/);
+  assert.equal(leaseCalls, 0);
+  assert.equal(spawnedCalls.length, 0);
+
+  let logoutOut = '';
+  const rLogout = await runPddCodexCli(
+    ['-c', 'model="gpt-6.2-sol"', 'logout'],
+    { env: sb.env, stdout: { write(s) { logoutOut += s; } }, stderr: { write() {} } },
+    noLeasePorts,
+  );
+  assert.equal(rLogout.exitCode, 0);
+  assert.match(logoutOut, /Cleared PDD Codex/);
+  assert.equal(leaseCalls, 0);
+  assert.equal(spawnedCalls.length, 0);
+
+  const rHelp = await runPddCodexCli(
+    ['exec', '--help'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    noLeasePorts,
+  );
+  assert.equal(rHelp.exitCode, 0);
+  assert.equal(leaseCalls, 0);
+  assert.equal(spawnedCalls.length, 1);
+
+  // `features list` runs locally (no lease, no daemon_auto_start=false distortion, passes sqlite_home + allow_symlinked_codex_home,
+  // and ensures fresh ~/.codex/.tmp/{bundled-marketplaces,marketplaces,plugins} baseline exists).
+  const rFeat = await runPddCodexCli(
+    ['features', 'list'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    noLeasePorts,
+  );
+  assert.equal(rFeat.exitCode, 0);
+  assert.equal(leaseCalls, 0);
+  const featArgs = spawnedCalls[1].args;
+  assert.ok(featArgs.includes(`sqlite_home=${JSON.stringify(userCodex)}`));
+  assert.ok(featArgs.includes('allow_symlinked_codex_home=true'));
+  assert.ok(!featArgs.includes('features.daemon_auto_start=false'));
+  assert.equal(existsSync(join(userCodex, '.tmp', 'bundled-marketplaces')), true);
+  assert.equal(existsSync(join(userCodex, '.tmp', 'marketplaces')), true);
+  assert.equal(existsSync(join(userCodex, '.tmp', 'plugins')), true);
+
+  // 3. resolveEffectiveSqliteHome preserves explicit user sqlite_home and CODEX_SQLITE_HOME.
+  assert.equal(resolveEffectiveSqliteHome({ userCodexHome: userCodex, userConfigText: 'sqlite_home = "/fast-ssd/codex"\n', env: sb.env }), null);
+  assert.equal(resolveEffectiveSqliteHome({ userCodexHome: userCodex, userConfigText: '', env: { ...sb.env, CODEX_SQLITE_HOME: '/fast-ssd/env' } }), null);
+  assert.equal(resolveEffectiveSqliteHome({ userCodexHome: userCodex, userConfigText: 'model = "gpt-6.2-sol"\n', env: sb.env }), userCodex);
+
+  // 4. Mirror mappings handle .tmp plugin hooks, `~/` marketplace sources, non-bare names, and non-existent macOS paths.
+  const futureRt = join(sb.tmpRoot, 'future-not-yet-created-rt');
+  const realFutureRt = join(realpathSync(sb.tmpRoot), 'future-not-yet-created-rt');
+  const complexCfg = [
+    'model_provider = "openrouter"',
+    'sqlite_home = "/custom/sqlite"',
+    '',
+    '[marketplaces."team.dotted"]',
+    'source_type = "local"',
+    'source = "~/.codex/.tmp/bundled-marketplaces/team-bundled"',
+    '',
+    `[hooks.state.${JSON.stringify(`${join(userCodex, '.tmp', 'bundled-marketplaces', 'p', 'hooks.json')}:session_start:0:0`)}]`,
+    'trusted_hash = "sha256:tmp_plugin_hook"',
+    'extra_tags = ["a", "b"]',
+    '',
+  ].join('\n');
+  const mirrorArgs = buildCodexHomeMirrorCliArgs({
+    userCodexHome: userCodex,
+    runtimeCodexHome: futureRt,
+    userConfigText: complexCfg,
+    env: sb.env,
+  });
+  assert.ok(mirrorArgs.includes('allow_symlinked_codex_home=true'));
+  assert.ok(mirrorArgs.some(a => a.startsWith('marketplaces={') && a.includes('"team.dotted"') && a.includes(join(realFutureRt, '.tmp', 'bundled-marketplaces', 'team-bundled'))));
+  assert.ok(mirrorArgs.some(a => a.startsWith('hooks.state={') && a.includes(`${join(realFutureRt, '.tmp', 'bundled-marketplaces', 'p', 'hooks.json')}:session_start:0:0`) && a.includes('extra_tags = ["a", "b"]')));
+
+  // 5. model_provider="openai" override respects --oss, and cross-layer repo `.codex/config.toml` legacy exclude avoids filters clash.
+  writeFileSync(join(repoDir, '.codex', 'config.toml'), '[shell_environment_policy]\nexclude = ["REPO_SECRET_*"]\n');
+  const gwArgs = buildCodexGatewayCliArgs({
+    backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+    userCodexHome: userCodex,
+    runtimeCodexHome: futureRt,
+    userConfigText: complexCfg,
+    cwd: repoDir,
+    env: sb.env,
+  });
+  assert.ok(gwArgs.includes('model_provider="openai"'), 'custom user model_provider must be overridden to native openai for PDD pool');
+  assert.ok(!gwArgs.some(a => a.startsWith('sqlite_home=')), 'explicit user sqlite_home must not be clobbered');
+  const repoExcludeArg = gwArgs.find(a => a.startsWith('shell_environment_policy.exclude='));
+  assert.ok(repoExcludeArg && repoExcludeArg.includes('"REPO_SECRET_*"') && repoExcludeArg.includes('"PDD_*"') && repoExcludeArg.includes('"CODEX_HOME"'));
+  assert.ok(!gwArgs.some(a => a.startsWith('shell_environment_policy.filters=')), 'must not mix filters with repo legacy exclude');
+
+  const ossArgs = buildCodexGatewayCliArgs({
+    backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+    userCodexHome: userCodex,
+    runtimeCodexHome: futureRt,
+    userConfigText: complexCfg,
+    codexArgs: ['--oss'],
+    env: sb.env,
+  });
+  assert.ok(!ossArgs.includes('model_provider="openai"'), '--oss should not be overridden with model_provider=openai');
+
+  // 6. normalizeCodexConfigWriteback rewrites runtime-dir hook/marketplace paths back to ~/.codex only when changed.
+  const cfgPath = join(userCodex, 'config.toml');
+  const beforeCfg = 'model = "gpt-6.2-sol"\n';
+  writeFileSync(cfgPath, beforeCfg, { mode: 0o600 });
+  assert.equal(normalizeCodexConfigWriteback(undefined, {}), false);
+  const rtDir = mkdtempSync(join(sb.tmpRoot, 'rt-writeback-'));
+  const realRtDir = realpathSync(rtDir);
+  assert.equal(
+    normalizeCodexConfigWriteback(await import('node:fs'), {
+      userCodexHome: userCodex,
+      runtimeCodexHome: rtDir,
+      userConfigPath: cfgPath,
+      beforeContent: beforeCfg,
+    }),
+    false,
+    'unchanged config must not be rewritten',
+  );
+  const pollutedCfg = [
+    'model = "gpt-6.2-sol"',
+    '',
+    '[marketplaces.openai-bundled]',
+    'source_type = "local"',
+    `source = ${JSON.stringify(join(realRtDir, '.tmp', 'bundled-marketplaces', 'openai-bundled'))}`,
+    '',
+    `[hooks.state.${JSON.stringify(`${join(realRtDir, 'hooks.json')}:session_start:0:0`)}]`,
+    'trusted_hash = "sha256:new_trust"',
+    '',
+  ].join('\n');
+  writeFileSync(cfgPath, pollutedCfg, { mode: 0o600 });
+  const normalized = normalizeCodexConfigWriteback(await import('node:fs'), {
+    userCodexHome: userCodex,
+    runtimeCodexHome: rtDir,
+    userConfigPath: cfgPath,
+    beforeContent: beforeCfg,
+  });
+  assert.equal(normalized, true);
+  const parsedAfter = parseToml(readFileSync(cfgPath, 'utf8'));
+  assert.equal(parsedAfter.marketplaces['openai-bundled'].source, join(userCodex, '.tmp', 'bundled-marketplaces', 'openai-bundled'));
+  assert.equal(parsedAfter.hooks.state[`${join(userCodex, 'hooks.json')}:session_start:0:0`]?.trusted_hash, 'sha256:new_trust');
+  assert.equal(parsedAfter.hooks.state[`${join(realRtDir, 'hooks.json')}:session_start:0:0`], undefined);
+
+  // 7. stopCodexAppServerDaemon honors PDD_CODEX_BIN.
+  let seenBin = null;
+  stopCodexAppServerDaemon(rtDir, {
+    env: { ...sb.env, PDD_CODEX_BIN: '/custom/bin/codex-alt' },
+    spawnSync: (bin) => { seenBin = bin; return { status: 0 }; },
+  });
+  assert.equal(seenBin, '/custom/bin/codex-alt');
+
+  // 8. createCodexStepOverlay preserves allowlist semantics (`inherit = "none"`) when migrating include_only without filters or explicit inherit.
+  writeFileSync(cfgPath, '[shell_environment_policy]\ninclude_only = ["PATH", "HOME"]\n', { mode: 0o600 });
+  const ov = createCodexStepOverlay({
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'http://127.0.0.1:41999/v1/codex-gateway/lse_inc_only',
+    codex_gateway_token: 'pddg_lse_inc_only_tok',
+  }, { env: sb.env, tmpRoot: sb.tmpRoot });
+  try {
+    const ovCfg = parseToml(readFileSync(ov.configPath, 'utf8'));
+    assert.equal(ovCfg.shell_environment_policy?.inherit, 'none');
+    assert.equal(ovCfg.shell_environment_policy?.include_only, undefined);
+    assert.equal(ovCfg.shell_environment_policy?.filters?.PATH, 'include');
+    assert.equal(ovCfg.sqlite_home, userCodex, 'even non-backend-api step overlays must set sqlite_home');
+    assert.equal(ovCfg.allow_symlinked_codex_home, true);
+  } finally {
+    ov.cleanup();
+  }
+
+  // 9. Heartbeat 404 invalidates stale shared auth.json + lease.json.
+  let authAfter404 = true;
+  let leaseAfter404 = true;
+  const r404 = await runPddCodexCli(
+    ['exec', 'check 404 heartbeat'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 778,
+      pid: 99202,
+      isPidAlive: () => true,
+      heartbeatIntervalMs: 25,
+      leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_hb_404' }),
+      releaseCloudLease: async () => ({ revoked: true }),
+      heartbeatCloudLease: async () => {
+        const err = new Error('not found');
+        err.status = 404;
+        throw err;
+      },
+      spawnCodex: async (_bin, _args, opts) => {
+        await new Promise(r => setTimeout(r, 90));
+        authAfter404 = existsSync(join(opts.env.CODEX_HOME, 'auth.json'));
+        leaseAfter404 = existsSync(join(opts.env.CODEX_HOME, 'lease.json'));
+        return { code: 0 };
+      },
+    },
+  );
+  assert.equal(r404.exitCode, 0);
+  assert.equal(authAfter404, false, '404 heartbeat must unlink stale auth.json');
+  assert.equal(leaseAfter404, false, '404 heartbeat must unlink stale lease.json');
+});
+
+test('re-review P1 & P2 regressions: symlink-safe writeback, logout --help safety, --account -- -prompt, ancestor .codex + CLI exclude merge, profile model_provider, and non-gateway sqlite_home', async t => {
+  const sb = makeSandbox(t);
+  const userCodex = join(sb.home, '.codex');
+  mkdirSync(userCodex, { recursive: true });
+
+  // 1. P1-1: dotfile-symlinked ~/.codex/config.toml is preserved (never replaced by regular file) on writeback normalization.
+  const dotfileDir = join(sb.root, 'dotfiles');
+  mkdirSync(dotfileDir, { recursive: true });
+  const dotfileCfg = join(dotfileDir, 'codex-config.toml');
+  writeFileSync(dotfileCfg, 'model = "gpt-5.4"\n', 'utf8');
+  const userCfgLink = join(userCodex, 'config.toml');
+  symlinkSync(dotfileCfg, userCfgLink);
+  const fakeRuntime = join(sb.tmpRoot, 'pdd-codex-dotfile');
+  mkdirSync(fakeRuntime, { recursive: true });
+  const beforeCfg = readFileSync(dotfileCfg, 'utf8');
+  writeFileSync(
+    dotfileCfg,
+    `model = "gpt-5.4"\n[marketplaces.openai-bundled]\nsource = ${JSON.stringify(join(fakeRuntime, '.tmp', 'bundled-marketplaces', 'openai-bundled'))}\n`,
+    'utf8',
+  );
+  const normalizedDotfile = normalizeCodexConfigWriteback(
+    { readFileSync, writeFileSync, renameSync, lstatSync, statSync, realpathSync, chmodSync, unlinkSync, mkdirSync },
+    { userCodexHome: userCodex, runtimeCodexHome: fakeRuntime, userConfigPath: userCfgLink, beforeContent: beforeCfg },
+  );
+  assert.equal(normalizedDotfile, true);
+  assert.equal(lstatSync(userCfgLink).isSymbolicLink(), true, 'dotfile symlink must stay a symlink');
+  assert.equal(readlinkSync(userCfgLink), dotfileCfg);
+  const normalizedTarget = readFileSync(dotfileCfg, 'utf8');
+  assert.equal(normalizedTarget.includes(fakeRuntime), false, 'runtime path normalized in symlink target');
+  assert.equal(normalizedTarget.includes(join(userCodex, '.tmp', 'bundled-marketplaces', 'openai-bundled')), true);
+
+  // 2. P1-2: `pdd-codex logout --help`, `-h logout`, and `login --help` pass through without revoking shared leases.
+  const sharedRt = sharedRuntimeDirPath({ tmpRoot: sb.tmpRoot, uid: 781 });
+  mkdirSync(sharedRt, { recursive: true, mode: 0o700 });
+  writeFileSync(join(sharedRt, 'auth.json'), '{"tokens":{"access_token":"keep-me"}}', { mode: 0o600 });
+  writeFileSync(join(sharedRt, 'lease.json'), JSON.stringify({ lease_id: 'lse_keep_me', auto_rotate: true }), { mode: 0o600 });
+  let helpRevoked = false;
+  for (const argv of [['logout', '--help'], ['-h', 'logout'], ['login', '--help']]) {
+    let sawSpawn = null;
+    const res = await runPddCodexCli(
+      argv,
+      { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+      {
+        tmpRoot: sb.tmpRoot,
+        uid: 781,
+        releaseCloudLease: async () => { helpRevoked = true; return { revoked: true }; },
+        spawnCodex: async (_bin, args) => { sawSpawn = args; return { code: 0 }; },
+      },
+    );
+    assert.equal(res.exitCode, 0);
+    assert.deepEqual(sawSpawn, argv);
+  }
+  assert.equal(helpRevoked, false, 'logout/login --help must never revoke shared lease');
+  assert.equal(existsSync(join(sharedRt, 'auth.json')), true, 'logout --help must keep auth.json');
+  assert.equal(existsSync(join(sharedRt, 'lease.json')), true, 'logout --help must keep lease.json');
+
+  // 3. P1-3: `pdd-codex --account acct1 -- -prompt` preserves `--` for positional dash prompt.
+  const dashPrompt = parsePddCodexArgs(['--account', 'acct1', '--', '-prompt']);
+  assert.equal(dashPrompt.preferredAccount, 'acct1');
+  assert.deepEqual(dashPrompt.codexArgs, ['--', '-prompt']);
+
+  // 4. P1-4a: ancestor `.codex/config.toml` discovery from nested subdir and via `-C <repo>` detects legacy exclude.
+  const repoRoot = join(sb.root, 'monorepo');
+  const nestedSubdir = join(repoRoot, 'packages', 'app');
+  mkdirSync(join(repoRoot, '.git'), { recursive: true });
+  mkdirSync(join(repoRoot, '.codex'), { recursive: true });
+  mkdirSync(nestedSubdir, { recursive: true });
+  writeFileSync(join(repoRoot, '.codex', 'config.toml'), '[shell_environment_policy]\nexclude = ["REPO_SECRET"]\n', 'utf8');
+  for (const [args, cwd] of [[[], nestedSubdir], [['-C', nestedSubdir], sb.root]]) {
+    const gwArgs = buildCodexGatewayCliArgs({
+      backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+      userCodexHome: userCodex,
+      runtimeCodexHome: fakeRuntime,
+      userConfigText: 'model = "gpt-5.4"\n',
+      codexArgs: args,
+      cwd,
+      env: sb.env,
+    });
+    const exFlag = gwArgs.find(a => a.startsWith('shell_environment_policy.exclude='));
+    assert.ok(exFlag, `ancestor .codex/config.toml must trigger merged exclude for cwd=${cwd}`);
+    assert.ok(exFlag.includes('"REPO_SECRET"') && exFlag.includes('"PDD_*"') && exFlag.includes('"CODEX_HOME"'));
+    assert.equal(gwArgs.some(a => a.startsWith('shell_environment_policy.filters')), false);
+  }
+
+  // 5. P1-4b: user `-c shell_environment_policy.exclude=["FOO"]` is merged into gateway exclude and stripped so it cannot wipe out PDD_* / CODEX_HOME.
+  let spawnedArgsForCliExclude = null;
+  const cliExRes = await runPddCodexCli(
+    ['-c', 'shell_environment_policy.exclude=["FOO"]', 'exec', 'test'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 782,
+      pid: 99301,
+      isPidAlive: () => true,
+      leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_cli_ex' }),
+      releaseCloudLease: async () => ({ revoked: true }),
+      spawnCodex: async (_bin, args) => { spawnedArgsForCliExclude = args; return { code: 0 }; },
+    },
+  );
+  assert.equal(cliExRes.exitCode, 0);
+  const excludeFlags = spawnedArgsForCliExclude.filter(a => a.startsWith('shell_environment_policy.exclude='));
+  assert.equal(excludeFlags.length, 1, 'raw user -c shell_environment_policy.exclude must be stripped after merge');
+  assert.ok(excludeFlags[0].includes('"FOO"') && excludeFlags[0].includes('"PDD_*"') && excludeFlags[0].includes('"CODEX_HOME"'));
+
+  // 6. P2: `pdd-codex mcp -c foo=1 list` still runs offline without leasing, profile `model_provider` overrides to openai, and non-gateway overlay sets sqlite_home.
+  let mcpFlagLeased = false;
+  const mcpFlagRes = await runPddCodexCli(
+    ['mcp', '-c', 'foo=1', 'list'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 783,
+      leaseCloudAccount: async () => { mcpFlagLeased = true; throw new Error('should not lease'); },
+      spawnCodex: async () => ({ code: 0 }),
+    },
+  );
+  assert.equal(mcpFlagRes.exitCode, 0);
+  assert.equal(mcpFlagLeased, false, 'mcp -c foo=1 list must run locally without leasing');
+
+  const profGw = buildCodexGatewayCliArgs({
+    backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+    userCodexHome: userCodex,
+    runtimeCodexHome: fakeRuntime,
+    userConfigText: 'profile = "alt"\n[profiles.alt]\nmodel_provider = "openrouter"\n',
+    env: sb.env,
+  });
+  assert.equal(profGw.includes('model_provider="openai"'), true, 'active profile custom model_provider must be overridden to openai');
+});
+
+
 
 
