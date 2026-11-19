@@ -817,31 +817,142 @@ const REQUIRED_CODEX_SUBSHELL_EXCLUDES = [
   'CODEX_CONNECTORS_TOKEN',
 ];
 
-/**
- * Build `-c` shell_environment_policy exclusions compatible with the user's `~/.codex/config.toml`
- * so legacy `exclude` rules are preserved and modern `[shell_environment_policy.filters]` never clashes.
- */
-function buildCodexSubshellExcludeCliArgs(userConfigText = null) {
-  let userPolicy = null;
-  if (typeof userConfigText === 'string' && userConfigText.trim()) {
-    try {
-      const parsed = parseToml(userConfigText);
-      if (isTomlTable(parsed?.shell_environment_policy)) {
-        userPolicy = parsed.shell_environment_policy;
+function parseCodexTomlQuiet(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  try {
+    const parsed = parseToml(text);
+    return isTomlTable(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readCodexTomlQuiet(fs, filePath) {
+  if (typeof filePath !== 'string' || !filePath) return null;
+  try {
+    return parseCodexTomlQuiet(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function extractCodexCliProfileAndFlags(codexArgs = []) {
+  const args = Array.isArray(codexArgs) ? codexArgs.map(String) : [];
+  let profile = null;
+  let hasOssFlag = false;
+  let hasLegacyCliEnvPolicy = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') break;
+    if (arg === '--oss' || arg === '--local-provider' || arg.startsWith('--local-provider=')) {
+      hasOssFlag = true;
+    }
+    if ((arg === '-p' || arg === '--profile') && typeof args[i + 1] === 'string') {
+      profile = args[i + 1].trim() || profile;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--profile=')) {
+      profile = arg.slice('--profile='.length).trim() || profile;
+      continue;
+    }
+    if ((arg === '-c' || arg === '--config') && typeof args[i + 1] === 'string') {
+      const expr = args[i + 1].trim();
+      if (/^shell_environment_policy\.(?:exclude|include_only)\s*=/.test(expr)) {
+        hasLegacyCliEnvPolicy = true;
       }
-    } catch {
-      userPolicy = null;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--config=')) {
+      const expr = arg.slice('--config='.length).trim();
+      if (/^shell_environment_policy\.(?:exclude|include_only)\s*=/.test(expr)) {
+        hasLegacyCliEnvPolicy = true;
+      }
     }
   }
-  const hasLegacyArray = Boolean(
-    userPolicy
-    && !isTomlTable(userPolicy.filters)
-    && (Array.isArray(userPolicy.exclude) || Array.isArray(userPolicy.include_only)),
+  return { profile, hasOssFlag, hasLegacyCliEnvPolicy };
+}
+
+/**
+ * Return the `sqlite_home` override path when neither the user's `config.toml` nor
+ * `CODEX_SQLITE_HOME` already specifies one, preventing split-WAL SQLite corruption
+ * without clobbering explicit user overrides.
+ */
+export function resolveEffectiveSqliteHome({
+  userCodexHome = null,
+  userConfigText = null,
+  parsedConfig = null,
+  env = process.env,
+} = {}) {
+  if (typeof env?.CODEX_SQLITE_HOME === 'string' && env.CODEX_SQLITE_HOME.trim()) {
+    return null;
+  }
+  const parsed = isTomlTable(parsedConfig) ? parsedConfig : parseCodexTomlQuiet(userConfigText);
+  if (typeof parsed?.sqlite_home === 'string' && parsed.sqlite_home.trim()) {
+    return null;
+  }
+  if (typeof userCodexHome === 'string' && userCodexHome.trim()) {
+    return userCodexHome.trim();
+  }
+  return null;
+}
+
+/**
+ * Build `-c` shell_environment_policy exclusions compatible with the user's config layers
+ * (user `config.toml`, active profile, repo `.codex/config.toml`, and CLI `-c` flags).
+ * Uses a single TOML inline table for `filters` so wildcard patterns like `"PDD_*"` are
+ * parsed as real TOML keys (Codex splits dotted `-c` paths on `.` without stripping quotes).
+ */
+function buildCodexSubshellExcludeCliArgs(
+  userConfigText = null,
+  {
+    includeCodexHome = false,
+    userCodexHome = null,
+    codexArgs = [],
+    cwd = null,
+    fs = nativeFs,
+  } = {},
+) {
+  const requiredExcludes = includeCodexHome
+    ? [...REQUIRED_CODEX_SUBSHELL_EXCLUDES, 'CODEX_HOME']
+    : REQUIRED_CODEX_SUBSHELL_EXCLUDES;
+  const parsedUser = parseCodexTomlQuiet(userConfigText);
+  const { profile: cliProfile, hasLegacyCliEnvPolicy } = extractCodexCliProfileAndFlags(codexArgs);
+  const activeProfile = cliProfile || (typeof parsedUser?.profile === 'string' ? parsedUser.profile.trim() : null);
+
+  const policyLayers = [];
+  if (isTomlTable(parsedUser?.shell_environment_policy)) {
+    policyLayers.push(parsedUser.shell_environment_policy);
+  }
+  if (activeProfile) {
+    if (isTomlTable(parsedUser?.profiles?.[activeProfile]?.shell_environment_policy)) {
+      policyLayers.push(parsedUser.profiles[activeProfile].shell_environment_policy);
+    }
+    if (typeof userCodexHome === 'string' && userCodexHome.trim()) {
+      const profileDoc = readCodexTomlQuiet(fs, join(resolve(userCodexHome.trim()), `${activeProfile}.config.toml`));
+      if (isTomlTable(profileDoc?.shell_environment_policy)) {
+        policyLayers.push(profileDoc.shell_environment_policy);
+      }
+    }
+  }
+  if (typeof cwd === 'string' && cwd.trim()) {
+    const repoDoc = readCodexTomlQuiet(fs, join(resolve(cwd.trim()), '.codex', 'config.toml'));
+    if (isTomlTable(repoDoc?.shell_environment_policy)) {
+      policyLayers.push(repoDoc.shell_environment_policy);
+    }
+  }
+
+  const hasFiltersLayer = policyLayers.some(p => isTomlTable(p.filters));
+  const hasLegacyArray = hasLegacyCliEnvPolicy || (
+    !hasFiltersLayer
+    && policyLayers.some(p => Array.isArray(p.exclude) || Array.isArray(p.include_only))
   );
   if (hasLegacyArray) {
     const merged = [];
     const seen = new Set();
-    for (const item of [...(Array.isArray(userPolicy.exclude) ? userPolicy.exclude : []), ...REQUIRED_CODEX_SUBSHELL_EXCLUDES]) {
+    const existingExcludes = policyLayers.flatMap(p => (Array.isArray(p.exclude) ? p.exclude : []));
+    for (const item of [...existingExcludes, ...requiredExcludes]) {
       const trimmed = typeof item === 'string' ? item.trim() : '';
       if (!trimmed) continue;
       const lower = trimmed.toLowerCase();
@@ -851,13 +962,11 @@ function buildCodexSubshellExcludeCliArgs(userConfigText = null) {
     }
     return ['-c', `shell_environment_policy.exclude=${JSON.stringify(merged)}`];
   }
-  // Use keyed `filters` by default and when user already uses `[shell_environment_policy.filters]`:
-  // keyed entries merge cleanly across config layers without clobbering user filter rules.
-  const args = [];
-  for (const pattern of REQUIRED_CODEX_SUBSHELL_EXCLUDES) {
-    args.push('-c', `shell_environment_policy.filters.${formatTomlKey(pattern)}="exclude"`);
-  }
-  return args;
+
+  // Emit a single TOML inline table so Codex parses quoted wildcard keys (`"PDD_*"`) properly
+  // and deep-merges them with any user `[shell_environment_policy.filters]` entries.
+  const entries = requiredExcludes.map(pattern => `${formatTomlKey(pattern)} = "exclude"`);
+  return ['-c', `shell_environment_policy.filters={ ${entries.join(', ')} }`];
 }
 
 function canonicalizeCodexPath(fs, targetPath) {
@@ -866,19 +975,39 @@ function canonicalizeCodexPath(fs, targetPath) {
     ?? fs?.realpathSync
     ?? (fs === nativeFs ? (nativeFs.realpathSync?.native ?? nativeFs.realpathSync) : null);
   if (typeof realFn !== 'function') return resolved;
-  try {
-    return String(realFn.call(fs, resolved));
-  } catch {
-    return resolved;
+  // Walk up to the nearest existing ancestor so paths like `/tmp/new-dir` still canonicalize
+  // to `/private/tmp/new-dir` on macOS even before the directory is created.
+  let cur = resolved;
+  const trailing = [];
+  while (true) {
+    try {
+      const realBase = String(realFn.call(fs, cur));
+      return trailing.length > 0 ? join(realBase, ...trailing.reverse()) : realBase;
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return resolved;
+      trailing.push(basename(cur));
+      cur = parent;
+    }
   }
 }
 
-function stripCodexHomePrefix(rawPath, prefixes) {
+function expandTildePath(rawPath, env = process.env) {
+  if (typeof rawPath !== 'string') return '';
+  if (rawPath.startsWith('~/') || rawPath.startsWith('~\\')) {
+    const home = (typeof env?.HOME === 'string' && env.HOME.trim()) ? env.HOME.trim() : homedir();
+    return join(home, rawPath.slice(2));
+  }
+  return rawPath;
+}
+
+function stripCodexHomePrefix(rawPath, prefixes, env = process.env) {
   if (typeof rawPath !== 'string' || !rawPath) return null;
+  const expanded = expandTildePath(rawPath, env);
   for (const prefix of prefixes) {
     if (!prefix) continue;
-    if (rawPath.startsWith(`${prefix}/`) || rawPath.startsWith(`${prefix}\\`)) {
-      return rawPath.slice(prefix.length + 1);
+    if (expanded.startsWith(`${prefix}/`) || expanded.startsWith(`${prefix}\\`)) {
+      return expanded.slice(prefix.length + 1);
     }
   }
   return null;
@@ -894,18 +1023,14 @@ function isMirroredCodexRelativePath(relPath) {
   return !isIsolatedCodexHomeEntry(segments[0]);
 }
 
-function formatTomlScalarLiteral(val) {
-  if (typeof val === 'string') return JSON.stringify(val);
-  if (typeof val === 'boolean') return val ? 'true' : 'false';
-  if (typeof val === 'number' && Number.isFinite(val)) return String(val);
-  return null;
-}
-
 /**
  * Collect `~/.codex`-anchored marketplace sources and hook-trust entries that should remap
  * onto the canonical active runtime `CODEX_HOME`.
  */
-function collectCodexHomeMirrorMappings(parsed, { userCodexHome = null, runtimeCodexHome = null, fs = nativeFs } = {}) {
+function collectCodexHomeMirrorMappings(
+  parsed,
+  { userCodexHome = null, runtimeCodexHome = null, env = process.env, fs = nativeFs } = {},
+) {
   if (
     !isTomlTable(parsed)
     || typeof userCodexHome !== 'string' || !userCodexHome.trim()
@@ -925,7 +1050,7 @@ function collectCodexHomeMirrorMappings(parsed, { userCodexHome = null, runtimeC
   if (isTomlTable(parsed.marketplaces)) {
     for (const [name, table] of Object.entries(parsed.marketplaces)) {
       if (!isTomlTable(table) || typeof table.source !== 'string') continue;
-      const rel = stripCodexHomePrefix(table.source.trim(), userPrefixes);
+      const rel = stripCodexHomePrefix(table.source.trim(), userPrefixes, env);
       if (!rel || !isMirroredCodexRelativePath(rel)) continue;
       const rewritten = join(realRuntimeHome, ...rel.split(/[\\/]+/).filter(Boolean));
       marketplaceSources.push({ name, rewritten });
@@ -935,10 +1060,10 @@ function collectCodexHomeMirrorMappings(parsed, { userCodexHome = null, runtimeC
   if (isTomlTable(parsed.hooks) && isTomlTable(parsed.hooks.state)) {
     for (const [key, entry] of Object.entries(parsed.hooks.state)) {
       if (!isTomlTable(entry)) continue;
-      const rest = stripCodexHomePrefix(key, userPrefixes);
+      const rest = stripCodexHomePrefix(key, userPrefixes, env);
       if (!rest) continue;
-      const firstSegment = rest.split(/[\\/:]/)[0];
-      if (!firstSegment || isIsolatedCodexHomeEntry(firstSegment)) continue;
+      const relFile = rest.split(':')[0];
+      if (!isMirroredCodexRelativePath(relFile)) continue;
       hookStates.push({ rewrittenKey: `${realRuntimeHome}${sep}${rest}`, entry });
     }
   }
@@ -949,14 +1074,26 @@ function collectCodexHomeMirrorMappings(parsed, { userCodexHome = null, runtimeC
  * Return a shallow copy of a materialized Codex config object with mirrored marketplace
  * sources and hook-trust keys remapped onto `runtimeCodexHome` (never mutating user config).
  */
-function remapCodexHomeConfigObject(configData, { userCodexHome = null, runtimeCodexHome = null, fs = nativeFs } = {}) {
+function remapCodexHomeConfigObject(
+  configData,
+  { userCodexHome = null, runtimeCodexHome = null, env = process.env, fs = nativeFs } = {},
+) {
+  if (!isTomlTable(configData)) return configData;
   const { marketplaceSources, hookStates } = collectCodexHomeMirrorMappings(configData, {
     userCodexHome,
     runtimeCodexHome,
+    env,
     fs,
   });
-  if (marketplaceSources.length === 0 && hookStates.length === 0) return configData;
+  const homesDiffer = typeof userCodexHome === 'string' && userCodexHome.trim()
+    && typeof runtimeCodexHome === 'string' && runtimeCodexHome.trim()
+    && canonicalizeCodexPath(fs, resolve(userCodexHome.trim())) !== canonicalizeCodexPath(fs, resolve(runtimeCodexHome.trim()));
+  const needsAllowSymlink = homesDiffer && configData.allow_symlinked_codex_home === undefined;
+  if (marketplaceSources.length === 0 && hookStates.length === 0 && !needsAllowSymlink) return configData;
   const next = { ...configData };
+  if (needsAllowSymlink) {
+    next.allow_symlinked_codex_home = true;
+  }
   if (marketplaceSources.length > 0 && isTomlTable(configData.marketplaces)) {
     const nextMarketplaces = { ...configData.marketplaces };
     for (const { name, rewritten } of marketplaceSources) {
@@ -978,28 +1115,32 @@ function remapCodexHomeConfigObject(configData, { userCodexHome = null, runtimeC
 
 /**
  * Build non-persisted `-c` overrides that remap `~/.codex`-anchored marketplace sources and
- * hook-trust keys onto the active canonical runtime `CODEX_HOME` so bundled plugins
- * (`openai-bundled`, `cua_repl`, `codex_app`) and user `hooks.json` work identically to stock `codex`.
+ * hook-trust keys onto the active canonical runtime `CODEX_HOME` and enable symlinked
+ * `CODEX_HOME` writable roots so bundled plugins, user `hooks.json`, and sandboxed skills
+ * work identically to stock `codex`.
  */
 export function buildCodexHomeMirrorCliArgs({
   userCodexHome = null,
   runtimeCodexHome = null,
   userConfigText = null,
+  env = process.env,
   fs = nativeFs,
 } = {}) {
-  if (typeof userConfigText !== 'string' || !userConfigText.trim()) return [];
-  let parsed;
-  try {
-    parsed = parseToml(userConfigText);
-  } catch {
-    return [];
+  const parsed = parseCodexTomlQuiet(userConfigText);
+  const args = [];
+  const homesDiffer = typeof userCodexHome === 'string' && userCodexHome.trim()
+    && typeof runtimeCodexHome === 'string' && runtimeCodexHome.trim()
+    && canonicalizeCodexPath(fs, resolve(userCodexHome.trim())) !== canonicalizeCodexPath(fs, resolve(runtimeCodexHome.trim()));
+  if (homesDiffer && parsed?.allow_symlinked_codex_home !== false) {
+    args.push('-c', 'allow_symlinked_codex_home=true');
   }
+  if (!parsed) return args;
   const { marketplaceSources, hookStates } = collectCodexHomeMirrorMappings(parsed, {
     userCodexHome,
     runtimeCodexHome,
+    env,
     fs,
   });
-  const args = [];
   const inlineMarketplaces = [];
   for (const { name, rewritten } of marketplaceSources) {
     if (/^[A-Za-z0-9_-]+$/.test(name)) {
@@ -1016,8 +1157,10 @@ export function buildCodexHomeMirrorCliArgs({
   for (const { rewrittenKey, entry } of hookStates) {
     const fields = [];
     for (const [field, value] of Object.entries(entry)) {
-      const formatted = formatTomlScalarLiteral(value);
-      if (formatted !== null) fields.push(`${formatTomlKey(field)} = ${formatted}`);
+      if (value === undefined) continue;
+      try {
+        fields.push(`${formatTomlKey(field)} = ${formatTomlValue(value)}`);
+      } catch {}
     }
     if (fields.length > 0) {
       hookStateEntries.push(`${JSON.stringify(rewrittenKey)} = { ${fields.join(', ')} }`);
@@ -1030,6 +1173,83 @@ export function buildCodexHomeMirrorCliArgs({
 }
 
 /**
+ * If Codex persisted new `<runtimeDir>`-anchored `hooks.state` or `marketplaces.*.source`
+ * entries through the `config.toml` symlink during a session, rewrite only those prefixes
+ * back to `userCodexHome`. Never touches `~/.codex/config.toml` when unchanged.
+ */
+export function normalizeCodexConfigWriteback(
+  fs,
+  { userCodexHome = null, runtimeCodexHome = null, userConfigPath = null, beforeContent = null } = {},
+) {
+  if (
+    typeof userCodexHome !== 'string' || !userCodexHome.trim()
+    || typeof runtimeCodexHome !== 'string' || !runtimeCodexHome.trim()
+    || typeof userConfigPath !== 'string' || !userConfigPath.trim()
+  ) {
+    return false;
+  }
+  let afterContent;
+  try {
+    afterContent = fs.readFileSync(userConfigPath, 'utf8');
+  } catch {
+    return false;
+  }
+  if (typeof beforeContent === 'string' && afterContent === beforeContent) return false;
+  const resolvedUserHome = resolve(userCodexHome.trim());
+  const resolvedRuntimeHome = resolve(runtimeCodexHome.trim());
+  const realRuntimeHome = canonicalizeCodexPath(fs, resolvedRuntimeHome);
+  const runtimePrefixes = [...new Set([realRuntimeHome, resolvedRuntimeHome])].sort((a, b) => b.length - a.length);
+  if (!runtimePrefixes.some(p => p && afterContent.includes(p))) return false;
+
+  const parsed = parseCodexTomlQuiet(afterContent);
+  if (!parsed) return false;
+  let changed = false;
+  const next = { ...parsed };
+
+  if (isTomlTable(parsed.marketplaces)) {
+    const nextMarketplaces = { ...parsed.marketplaces };
+    for (const [name, table] of Object.entries(parsed.marketplaces)) {
+      if (!isTomlTable(table) || typeof table.source !== 'string') continue;
+      const rel = stripCodexHomePrefix(table.source.trim(), runtimePrefixes);
+      if (!rel || !isMirroredCodexRelativePath(rel)) continue;
+      nextMarketplaces[name] = {
+        ...table,
+        source: join(resolvedUserHome, ...rel.split(/[\\/]+/).filter(Boolean)),
+      };
+      changed = true;
+    }
+    if (changed) next.marketplaces = nextMarketplaces;
+  }
+
+  if (isTomlTable(parsed.hooks) && isTomlTable(parsed.hooks.state)) {
+    const nextState = {};
+    let hooksChanged = false;
+    for (const [key, entry] of Object.entries(parsed.hooks.state)) {
+      const rest = stripCodexHomePrefix(key, runtimePrefixes);
+      if (rest && isTomlTable(entry) && isMirroredCodexRelativePath(rest.split(':')[0])) {
+        nextState[`${resolvedUserHome}${sep}${rest}`] = entry;
+        hooksChanged = true;
+      } else if (!Object.hasOwn(nextState, key)) {
+        nextState[key] = entry;
+      }
+    }
+    if (hooksChanged) {
+      next.hooks = { ...parsed.hooks, state: nextState };
+      changed = true;
+    }
+  }
+
+  if (!changed) return false;
+  try {
+    const serialized = serializeTomlConfig(next, userConfigPath);
+    writeAtomicPrivate(fs, userConfigPath, serialized);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Build the verified Codex CLI `-c` override flags for transparent gateway passthrough.
  */
 export function buildCodexGatewayCliArgs({
@@ -1039,16 +1259,34 @@ export function buildCodexGatewayCliArgs({
   emptySubshellCodexHome = null,
   userConfigText = null,
   nativeBackendApi = true,
+  codexArgs = [],
+  cwd = null,
+  env = process.env,
   fs = nativeFs,
 } = {}) {
   const codexApiUrl = nativeBackendApi ? resolveCodexResponsesBaseUrl(backendApiUrl) : backendApiUrl;
+  const parsedUser = parseCodexTomlQuiet(userConfigText);
+  const { hasOssFlag } = extractCodexCliProfileAndFlags(codexArgs);
   const args = [
     '-c', 'cli_auth_credentials_store="file"',
     '-c', `chatgpt_base_url=${JSON.stringify(backendApiUrl)}`,
     '-c', `openai_base_url=${JSON.stringify(codexApiUrl)}`,
   ];
-  if (typeof userCodexHome === 'string' && userCodexHome.trim()) {
-    args.push('-c', `sqlite_home=${JSON.stringify(userCodexHome.trim())}`);
+  if (
+    !hasOssFlag
+    && typeof parsedUser?.model_provider === 'string'
+    && parsedUser.model_provider.trim()
+    && parsedUser.model_provider.trim() !== 'openai'
+  ) {
+    args.push('-c', 'model_provider="openai"');
+  }
+  const effectiveSqliteHome = resolveEffectiveSqliteHome({
+    userCodexHome,
+    parsedConfig: parsedUser,
+    env,
+  });
+  if (effectiveSqliteHome) {
+    args.push('-c', `sqlite_home=${JSON.stringify(effectiveSqliteHome)}`);
   }
   args.push(
     '-c', 'features.daemon_auto_start=false',
@@ -1057,12 +1295,22 @@ export function buildCodexGatewayCliArgs({
   if (!nativeBackendApi) {
     args.push('-c', 'features.responses_websockets=false');
   }
-  if (typeof emptySubshellCodexHome === 'string' && emptySubshellCodexHome.trim()) {
-    args.push('-c', `shell_environment_policy.set.CODEX_HOME=${JSON.stringify(emptySubshellCodexHome.trim())}`);
-  }
+  // Exclude CODEX_HOME from model subshells instead of pointing it at `empty-subshell` so
+  // `$CODEX_HOME` stays unset (matching stock `codex` and preserving `$skill-installer` /
+  // `$skill-creator`) while keeping `<runtimeDir>/auth.json` hidden from child shell commands.
+  const hideCodexHomeInSubshell = Boolean(
+    (typeof runtimeCodexHome === 'string' && runtimeCodexHome.trim())
+    || (typeof emptySubshellCodexHome === 'string' && emptySubshellCodexHome.trim()),
+  );
   args.push(
-    ...buildCodexSubshellExcludeCliArgs(userConfigText),
-    ...buildCodexHomeMirrorCliArgs({ userCodexHome, runtimeCodexHome, userConfigText, fs }),
+    ...buildCodexSubshellExcludeCliArgs(userConfigText, {
+      includeCodexHome: hideCodexHomeInSubshell,
+      userCodexHome,
+      codexArgs,
+      cwd,
+      fs,
+    }),
+    ...buildCodexHomeMirrorCliArgs({ userCodexHome, runtimeCodexHome, userConfigText, env, fs }),
     '-c', 'model_providers.pdd_pool.name="PDD Pool"',
     '-c', `model_providers.pdd_pool.base_url=${JSON.stringify(codexApiUrl)}`,
     '-c', 'model_providers.pdd_pool.wire_api="responses"',
@@ -1107,10 +1355,15 @@ const USER_CODEX_BASELINE_DIRS = [
   'rules',
   'memories',
 ];
+const USER_CODEX_BASELINE_DOT_TMP_DIRS = [
+  'bundled-marketplaces',
+  'marketplaces',
+  'plugins',
+];
 
 /**
  * Ensure `~/.codex/` and its baseline folders + empty `config.toml` exist so brand-new VMs
- * persist chats, plugins, skills, and MCP servers directly into the user's real Codex home.
+ * persist chats, plugins, skills, marketplaces, and MCP servers directly into the user's real Codex home.
  */
 export function ensureUserCodexHomeBaseline(fs, userHome) {
   fs.mkdirSync(userHome, { recursive: true, mode: 0o700 });
@@ -1137,6 +1390,33 @@ export function ensureUserCodexHomeBaseline(fs, userHome) {
     } catch (err) {
       if (err?.code === 'ENOENT') {
         try { fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 }); } catch {}
+      }
+    }
+  }
+  // Pre-create shared `.tmp` marketplace caches so first-run bundled/added marketplace extractions
+  // land in `~/.codex/.tmp/...` via symlink instead of ephemeral runtime directories.
+  const dotTmpDir = join(userHome, '.tmp');
+  let dotTmpIsSafe = false;
+  try {
+    const st = (fs.lstatSync ?? fs.statSync)(dotTmpDir);
+    dotTmpIsSafe = st.isDirectory() && !st.isSymbolicLink();
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      try {
+        fs.mkdirSync(dotTmpDir, { recursive: true, mode: 0o700 });
+        dotTmpIsSafe = true;
+      } catch {}
+    }
+  }
+  if (dotTmpIsSafe) {
+    for (const subName of USER_CODEX_BASELINE_DOT_TMP_DIRS) {
+      const subPath = join(dotTmpDir, subName);
+      try {
+        (fs.lstatSync ?? fs.statSync)(subPath);
+      } catch (err) {
+        if (err?.code === 'ENOENT') {
+          try { fs.mkdirSync(subPath, { recursive: true, mode: 0o700 }); } catch {}
+        }
       }
     }
   }
@@ -1275,12 +1555,15 @@ export function buildSyntheticGatewayIdToken({ planType } = {}) {
   return `${header}.${payload}.sig`;
 }
 
-export function stopCodexAppServerDaemon(codexHome, { env = process.env, fs = nativeFs, spawnSync } = {}) {
+export function stopCodexAppServerDaemon(codexHome, { env = process.env, fs = nativeFs, spawnSync, codexBin = null } = {}) {
   if (typeof codexHome !== 'string' || !codexHome.trim()) return false;
   if (fs !== nativeFs && typeof spawnSync !== 'function') return false;
   const runner = typeof spawnSync === 'function' ? spawnSync : nativeSpawnSync;
+  const bin = (typeof codexBin === 'string' && codexBin.trim())
+    || (typeof env?.PDD_CODEX_BIN === 'string' && env.PDD_CODEX_BIN.trim())
+    || 'codex';
   try {
-    runner('codex', ['app-server', 'daemon', 'stop'], {
+    runner(bin, ['app-server', 'daemon', 'stop'], {
       env: { ...env, CODEX_HOME: codexHome },
       stdio: 'ignore',
       timeout: 2500,
@@ -1449,8 +1732,7 @@ export function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForb
         let currentTarget = null;
         try { currentTarget = fs.readlinkSync?.(dst) ?? null; } catch {}
         if (currentTarget !== src) {
-          removeLink(dst);
-          try { symlink(src, dst); } catch {}
+          replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink });
         }
       } else if (
         dstStat.isDirectory()
@@ -1465,8 +1747,7 @@ export function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForb
           symlink(src, dst);
         } catch {}
       } else if (REPLACED_MANAGED_CACHE_FILES.has(name) && dstStat.isFile() && !dstStat.isSymbolicLink()) {
-        removeLink(dst);
-        try { symlink(src, dst); } catch {}
+        replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink });
       }
     } else {
       try {
@@ -1498,6 +1779,22 @@ export function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForb
     symlink,
     removeLink,
   });
+}
+
+function replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink }) {
+  const rename = typeof fs?.renameSync === 'function' ? fs.renameSync.bind(fs) : (fs === nativeFs ? nativeFs.renameSync : null);
+  if (rename) {
+    const tmpLink = `${dst}.link-${process.pid}-${randomBytes(4).toString('hex')}`;
+    try {
+      symlink(src, tmpLink);
+      rename(tmpLink, dst);
+      return;
+    } catch {
+      removeLink(tmpLink);
+    }
+  }
+  removeLink(dst);
+  try { symlink(src, dst); } catch {}
 }
 
 /**
@@ -1562,10 +1859,11 @@ function syncManagedCodexDotTmpLinks(fs, resolvedSourceHome, resolvedManagedHome
         let currentTarget = null;
         try { currentTarget = fs.readlinkSync?.(dst) ?? null; } catch {}
         if (currentTarget !== src) {
-          removeLink(dst);
-          try { symlink(src, dst); } catch {}
+          replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink });
         }
-      } else if (dstStat.isDirectory() || dstStat.isFile()) {
+      } else if (dstStat.isFile()) {
+        replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink });
+      } else if (dstStat.isDirectory()) {
         try {
           (fs.rmSync ?? nativeFs.rmSync)?.(dst, { recursive: true, force: true });
           symlink(src, dst);
@@ -1742,12 +2040,17 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
     if (hasExplicitBackendApi) {
       delete prevFeatures.responses_websockets;
     }
+    const effectiveSqliteHome = resolveEffectiveSqliteHome({
+      userCodexHome: userHome,
+      parsedConfig: cleanedUser.nextData,
+      env,
+    });
     const nextConfig = remapCodexHomeConfigObject({
       ...cleanedUser.nextData,
       cli_auth_credentials_store: 'file',
       openai_base_url: codexApiUrl,
       chatgpt_base_url: backendApiUrl,
-      ...(hasExplicitBackendApi ? { sqlite_home: userHome } : {}),
+      ...(effectiveSqliteHome ? { sqlite_home: effectiveSqliteHome } : {}),
       features: {
         ...prevFeatures,
         ...(hasExplicitBackendApi ? { daemon_auto_start: false } : { responses_websockets: false }),
@@ -1756,7 +2059,7 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
         ...prevProviders,
         [CODEX_GATEWAY_PROVIDER_ID]: gatewayProviderBlock,
       },
-    }, { userCodexHome: userHome, runtimeCodexHome: managedHome, fs });
+    }, { userCodexHome: userHome, runtimeCodexHome: managedHome, env, fs });
     delete nextConfig.model_provider;
     const serializedConfig = serializeTomlConfig(nextConfig, configPath);
     const gatewayAuth = buildGatewayAuthJson({
@@ -1782,10 +2085,16 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
     };
   }
 
+  const effectiveOwnerSqliteHome = resolveEffectiveSqliteHome({
+    userCodexHome: userHome,
+    parsedConfig: cleanedUser.nextData,
+    env,
+  });
   const nextOwnerConfig = remapCodexHomeConfigObject({
     ...cleanedUser.nextData,
     cli_auth_credentials_store: 'file',
-  }, { userCodexHome: userHome, runtimeCodexHome: managedHome, fs });
+    ...(effectiveOwnerSqliteHome ? { sqlite_home: effectiveOwnerSqliteHome } : {}),
+  }, { userCodexHome: userHome, runtimeCodexHome: managedHome, env, fs });
   const serializedOwnerConfig = serializeTomlConfig(nextOwnerConfig, configPath);
   writeAtomicCodexPair(fs, authPath, `${JSON.stringify(stripped, null, 2)}\n`, configPath, serializedOwnerConfig);
   return {
@@ -1896,11 +2205,12 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
         : {};
       const baseConfig = remapCodexHomeConfigObject(
         stripGatewayFromTomlObject(rawBaseConfig).nextData,
-        { userCodexHome: resolvedSourceCodexHome, runtimeCodexHome: overlayDir, fs },
+        { userCodexHome: resolvedSourceCodexHome, runtimeCodexHome: overlayDir, env, fs },
       );
       const prevFeatures = isTomlTable(baseConfig.features) ? { ...baseConfig.features } : {};
       const prevPolicy = isTomlTable(baseConfig.shell_environment_policy) ? { ...baseConfig.shell_environment_policy } : {};
-      const prevFilters = isTomlTable(prevPolicy.filters) ? { ...prevPolicy.filters } : {};
+      const hadExistingFilters = isTomlTable(prevPolicy.filters);
+      const prevFilters = hadExistingFilters ? { ...prevPolicy.filters } : {};
       const hasFilterIgnoreCase = key => {
         const lower = key.toLowerCase();
         return Object.keys(prevFilters).some(k => k.toLowerCase() === lower);
@@ -1913,6 +2223,11 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
         }
       }
       if (Array.isArray(prevPolicy.include_only)) {
+        // Legacy `include_only` is an allowlist; when migrating without existing `filters`
+        // or explicit `inherit`, set `inherit = "none"` so we never silently widen to `all`.
+        if (!hadExistingFilters && !prevPolicy.inherit) {
+          prevPolicy.inherit = 'none';
+        }
         for (const item of prevPolicy.include_only) {
           if (typeof item === 'string' && item.trim() && !hasFilterIgnoreCase(item.trim())) {
             prevFilters[item.trim()] = 'include';
@@ -1941,6 +2256,11 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
       const prevProviders = isTomlTable(baseConfig.model_providers) ? { ...baseConfig.model_providers } : {};
       delete prevProviders[CODEX_GATEWAY_PROVIDER_ID];
       const configPath = join(overlayDir, 'config.toml');
+      const effectiveOverlaySqliteHome = resolveEffectiveSqliteHome({
+        userCodexHome: resolvedSourceCodexHome,
+        parsedConfig: baseConfig,
+        env,
+      });
       if (hasExplicitBackendApi) {
         delete prevFeatures.responses_websockets;
       }
@@ -1955,7 +2275,7 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
           cli_auth_credentials_store: 'file',
           openai_base_url: codexApiUrl,
           chatgpt_base_url: backendApiUrl,
-          ...(hasExplicitBackendApi ? { sqlite_home: resolvedSourceCodexHome } : {}),
+          ...(effectiveOverlaySqliteHome ? { sqlite_home: effectiveOverlaySqliteHome } : {}),
           features: {
             ...prevFeatures,
             shell_snapshot: false,
@@ -1988,6 +2308,7 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
       const overlayConfig = {
         ...baseConfig,
         model_provider: CODEX_GATEWAY_PROVIDER_ID,
+        ...(effectiveOverlaySqliteHome ? { sqlite_home: effectiveOverlaySqliteHome } : {}),
         features: {
           ...prevFeatures,
           shell_snapshot: false,
