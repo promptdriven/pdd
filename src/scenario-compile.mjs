@@ -1,4 +1,4 @@
-// Generated from prompts/cli/scenario-compile.prompt.md (sha256: 99405813468aa8e6cf4e8c744f049fef3a54dc23d716aeea8cc2f8a43114de21).
+// Generated from prompts/cli/scenario-compile.prompt.md (sha256: cf34033cda40388568c991df3ea4a8bcfe2263c064562e6595b6b72475cadef3).
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -793,8 +793,8 @@ function expandTupleChecks(tuple, criterionId, entryPath, section, extra, expand
       extra,
     );
   }
-  if (tuple.length < 3 || tuple.length > 4) {
-    fail('invalid-check', section, `Check tuple for "${head}" takes [${JSON.stringify(head)}, path, op, value].`, extra);
+  if (tuple.length < 3 || tuple.length > 5) {
+    fail('invalid-check', section, `Check tuple for "${head}" takes [${JSON.stringify(head)}, path, op, value, {derivation}?].`, extra);
   }
   const rawPath = tuple[1];
   const rawOp = tuple[2];
@@ -827,8 +827,26 @@ function expandTupleChecks(tuple, criterionId, entryPath, section, extra, expand
   if (op === 'exists' && tuple.length === 3) {
     return [{ criterion_id: criterionId, target: head, path, op: 'exists', value: true }];
   }
-  if (tuple.length !== 4) {
+  if (tuple.length !== 4 && tuple.length !== 5) {
     fail('invalid-check', section, `Operator "${op}" requires a 4th expected value in check tuple.`, extra);
+  }
+  let derivation;
+  if (tuple.length === 5) {
+    const meta = tuple[4];
+    if (!isPlainObject(meta)) {
+      fail('invalid-check', `${section}[4]`, 'Optional 5th check tuple element must be a metadata object like {"derivation": "<expr>"}.', extra);
+    }
+    const keys = Object.keys(meta);
+    const badKey = keys.find(key => key !== 'derivation');
+    if (badKey || !keys.length) {
+      fail('invalid-check', `${section}[4]`, badKey
+        ? `Unknown check metadata key "${badKey}". Only "derivation" is supported.`
+        : 'Check metadata object must include "derivation".', extra);
+    }
+    if (typeof meta.derivation !== 'string') {
+      fail('invalid-check', `${section}[4].derivation`, 'Check "derivation" must be a string expression.', extra);
+    }
+    derivation = meta.derivation;
   }
   const value = expandVal(tuple[3], `${section}[3]`);
   return [{
@@ -838,6 +856,7 @@ function expandTupleChecks(tuple, criterionId, entryPath, section, extra, expand
     op,
     ...(measure ? { measure } : {}),
     value,
+    ...(derivation !== undefined ? { derivation } : {}),
   }];
 }
 
@@ -1136,7 +1155,12 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
         }
         const normCid = resolveCriterionRef(rawCid, checkSection, at);
         const norm = Object.hasOwn(item, 'op') ? normalizeOp(item.op, checkSection, at) : { op: item.op };
-        const outCheck = { ...expandValue(item, checkSection, [], at), criterion_id: normCid, op: norm.op };
+        const outCheck = {
+          ...expandValue(item, checkSection, [], at),
+          criterion_id: normCid,
+          op: norm.op,
+          ...(Object.hasOwn(item, 'derivation') ? { derivation: item.derivation } : {}),
+        };
         if ((outCheck.op === 'at_least' || outCheck.op === 'at_most') && !Object.hasOwn(outCheck, 'measure')) {
           outCheck.measure = norm.measure ?? 'value';
         }

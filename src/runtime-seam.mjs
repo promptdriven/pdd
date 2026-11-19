@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: b961af0352e1c1035dae4f20a5362a74a02e213826429b9dc5148de7e1e7cb4a).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: a2a4553e541ab4f947da3a3d684735acd645c846ce3813c86b0fa04fb4781c3f).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -115,7 +115,7 @@ import {
   runtimeOutcomeSlice as rawRuntimeOutcomeSlice,
   runtimeOutputSlice as rawRuntimeOutputSlice,
   runtimePreflightSlice as rawRuntimePreflightSlice,
-  runtimeScenarioJsonSlice,
+  runtimeScenarioJsonSlice as rawRuntimeScenarioJsonSlice,
   runtimeWorkspaceMigrationStore as rawRuntimeWorkspaceMigrationStore,
   runtimeWorkspaceSlice,
   saveDoorCaseResult as rawSaveDoorCaseResult,
@@ -1577,6 +1577,422 @@ function runBindCriteria(input = {}, ports = {}) {
   return 0;
 }
 
+const DERIVATION_MAX_LENGTH = 10_000;
+const DERIVATION_MAX_DEPTH = 128;
+const DERIVATION_MAX_EXP = 10_000;
+const DERIVATION_MAX_DIGITS = 10_001;
+const DERIVATION_MAX_DEC_PLACES = 10_000;
+const DERIVATION_MAX_OUTPUT_LENGTH = 20_004;
+const NUMERIC_DERIVATION_OPS = new Set(['equals', 'not_equals', 'gt', 'lt', 'gte', 'lte', 'at_least', 'at_most']);
+const UNARY_DERIVATION_FNS = new Set(['floor', 'ceil', 'trunc', 'round_half_up', 'round_half_even']);
+const VARIADIC_DERIVATION_FNS = new Set(['min', 'max']);
+
+let cachedMaxComponent = null;
+const maxComponentLimit = () => (cachedMaxComponent ??= 10n ** BigInt(DERIVATION_MAX_DIGITS));
+
+function derivationSyntaxError(message) {
+  const err = new SyntaxError(message);
+  err.code = 'scenario-derivation-invalid';
+  return err;
+}
+
+const bigAbs = value => (value < 0n ? -value : value);
+
+function bigGcd(a, b) {
+  let x = bigAbs(a);
+  let y = bigAbs(b);
+  while (y !== 0n) {
+    const t = x % y;
+    x = y;
+    y = t;
+  }
+  return x;
+}
+
+function makeRational(n, d = 1n) {
+  if (d === 0n) throw derivationSyntaxError('Division by zero');
+  if (n === 0n) return { n: 0n, d: 1n };
+  let num = n;
+  let den = d;
+  if (den < 0n) {
+    num = -num;
+    den = -den;
+  }
+  const g = bigGcd(num, den);
+  num /= g;
+  den /= g;
+  const limit = maxComponentLimit();
+  if (bigAbs(num) >= limit || den >= limit) {
+    throw derivationSyntaxError(`Value exceeds ${DERIVATION_MAX_DIGITS}-digit rational limit`);
+  }
+  return { n: num, d: den };
+}
+
+const intRational = n => makeRational(n, 1n);
+const addRat = (a, b) => makeRational(a.n * b.d + b.n * a.d, a.d * b.d);
+const subRat = (a, b) => makeRational(a.n * b.d - b.n * a.d, a.d * b.d);
+const mulRat = (a, b) => makeRational(a.n * b.n, a.d * b.d);
+const divRat = (a, b) => {
+  if (b.n === 0n) throw derivationSyntaxError('Division by zero');
+  return makeRational(a.n * b.d, a.d * b.n);
+};
+const cmpRat = (a, b) => {
+  const diff = a.n * b.d - b.n * a.d;
+  return diff < 0n ? -1 : diff > 0n ? 1 : 0;
+};
+
+function truncQuotient(a, b) {
+  const q = divRat(a, b);
+  return q.n / q.d;
+}
+
+function floorRat(r) {
+  let q = r.n / r.d;
+  if (r.n % r.d < 0n) q -= 1n;
+  return intRational(q);
+}
+
+function ceilRat(r) {
+  let q = r.n / r.d;
+  if (r.n % r.d > 0n) q += 1n;
+  return intRational(q);
+}
+
+function roundHalfRat(r, toEven) {
+  const neg = r.n < 0n;
+  const absN = neg ? -r.n : r.n;
+  let q = absN / r.d;
+  const twice = (absN % r.d) * 2n;
+  if (twice > r.d || (twice === r.d && (!toEven || (q & 1n) === 1n))) q += 1n;
+  return intRational(neg ? -q : q);
+}
+
+function applyDerivationFn(name, args) {
+  if (VARIADIC_DERIVATION_FNS.has(name)) {
+    if (!args.length) throw derivationSyntaxError(`${name}() requires at least one argument`);
+    let best = args[0];
+    for (let i = 1; i < args.length; i++) {
+      const cmp = cmpRat(args[i], best);
+      if ((name === 'min' && cmp < 0) || (name === 'max' && cmp > 0)) best = args[i];
+    }
+    return best;
+  }
+  if (!UNARY_DERIVATION_FNS.has(name)) throw derivationSyntaxError(`Unknown function "${name}"`);
+  if (args.length !== 1) throw derivationSyntaxError(`${name}() expects exactly 1 argument`);
+  const value = args[0];
+  if (name === 'floor') return floorRat(value);
+  if (name === 'ceil') return ceilRat(value);
+  if (name === 'trunc') return intRational(value.n / value.d);
+  if (name === 'round_half_up') return roundHalfRat(value, false);
+  return roundHalfRat(value, true);
+}
+
+function parseDecimalLiteral(raw) {
+  const match = /^(?:(\d+)(?:\.(\d+))?|\.(\d+))(?:[eE]([+-]?\d+))?$/.exec(raw);
+  if (!match) throw derivationSyntaxError(`Invalid numeric literal "${raw}"`);
+  const intPart = match[1] ?? '';
+  const fracPart = match[2] ?? match[3] ?? '';
+  const expText = match[4] ?? '';
+  let exp = 0;
+  if (expText) {
+    if (expText.replace(/^[+-]/, '').length > 6) throw derivationSyntaxError(`Exponent exceeds limit of ${DERIVATION_MAX_EXP}`);
+    exp = Number.parseInt(expText, 10);
+    if (!Number.isFinite(exp) || Math.abs(exp) > DERIVATION_MAX_EXP) {
+      throw derivationSyntaxError(`Exponent exceeds limit of ${DERIVATION_MAX_EXP}`);
+    }
+  }
+  const combined = `${intPart}${fracPart}`.replace(/^0+/, '');
+  if (!combined) return { n: 0n, d: 1n };
+  const shift = exp - fracPart.length;
+  if (shift >= 0) {
+    if (combined.length + shift > DERIVATION_MAX_DIGITS) {
+      throw derivationSyntaxError(`Numeric literal exceeds ${DERIVATION_MAX_DIGITS}-digit limit`);
+    }
+    return makeRational(BigInt(combined) * (10n ** BigInt(shift)), 1n);
+  }
+  let trimZeros = 0;
+  while (trimZeros < combined.length && combined[combined.length - 1 - trimZeros] === '0') trimZeros += 1;
+  const trimmed = combined.slice(0, combined.length - trimZeros);
+  const netShift = shift + trimZeros;
+  if (netShift >= 0) {
+    if (trimmed.length + netShift > DERIVATION_MAX_DIGITS) {
+      throw derivationSyntaxError(`Numeric literal exceeds ${DERIVATION_MAX_DIGITS}-digit limit`);
+    }
+    return makeRational(BigInt(trimmed) * (10n ** BigInt(netShift)), 1n);
+  }
+  const negShift = -netShift;
+  if (negShift > DERIVATION_MAX_DIGITS) {
+    throw derivationSyntaxError(`Numeric literal exceeds ${DERIVATION_MAX_DIGITS}-digit limit`);
+  }
+  return makeRational(BigInt(trimmed), 10n ** BigInt(negShift));
+}
+
+function tokenizeDerivation(source) {
+  const tokens = [];
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') { i += 1; continue; }
+    if ((ch >= '0' && ch <= '9') || ch === '.') {
+      const start = i;
+      while (i < source.length && source[i] >= '0' && source[i] <= '9') i += 1;
+      if (i < source.length && source[i] === '.') {
+        i += 1;
+        const fracStart = i;
+        while (i < source.length && source[i] >= '0' && source[i] <= '9') i += 1;
+        if (i === fracStart) throw derivationSyntaxError(`Invalid numeric literal "${source.slice(start, i)}"`);
+      }
+      if (i < source.length && (source[i] === 'e' || source[i] === 'E')) {
+        i += 1;
+        if (i < source.length && (source[i] === '+' || source[i] === '-')) i += 1;
+        const expStart = i;
+        while (i < source.length && source[i] >= '0' && source[i] <= '9') i += 1;
+        if (i === expStart) throw derivationSyntaxError(`Invalid exponent in "${source.slice(start, i)}"`);
+      }
+      if (i < source.length && /[A-Za-z_.]/.test(source[i])) {
+        throw derivationSyntaxError(`Unexpected character "${source[i]}" after number`);
+      }
+      tokens.push({ type: 'num', value: parseDecimalLiteral(source.slice(start, i)) });
+      continue;
+    }
+    if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch === '_') {
+      const start = i;
+      while (i < source.length && /[A-Za-z0-9_]/.test(source[i])) i += 1;
+      const word = source.slice(start, i);
+      if (word === 'div' || word === 'mod') tokens.push({ type: 'op', value: word });
+      else tokens.push({ type: 'ident', value: word });
+      continue;
+    }
+    if ('+-*/(),'.includes(ch)) {
+      tokens.push({ type: ch === '(' || ch === ')' || ch === ',' ? ch : 'op', value: ch });
+      i += 1;
+      continue;
+    }
+    throw derivationSyntaxError(`Unexpected character "${ch}"`);
+  }
+  return tokens;
+}
+
+function formatRational(r) {
+  let out;
+  if (r.n === 0n) out = '0';
+  else if (r.d === 1n) out = r.n.toString();
+  else {
+    let rem = r.d;
+    let c2 = 0;
+    let c5 = 0;
+    while (rem % 2n === 0n) { rem /= 2n; c2 += 1; }
+    while (rem % 5n === 0n) { rem /= 5n; c5 += 1; }
+    const places = Math.max(c2, c5);
+    if (rem === 1n && places <= DERIVATION_MAX_DEC_PLACES) {
+      const scale = (2n ** BigInt(places - c2)) * (5n ** BigInt(places - c5));
+      const digits = (bigAbs(r.n) * scale).toString().padStart(places + 1, '0');
+      const intPart = digits.slice(0, digits.length - places);
+      const fracPart = digits.slice(digits.length - places).replace(/0+$/, '');
+      out = `${r.n < 0n ? '-' : ''}${fracPart ? `${intPart}.${fracPart}` : intPart}`;
+    } else {
+      out = `${r.n.toString()}/${r.d.toString()}`;
+    }
+  }
+  if (out.length > DERIVATION_MAX_OUTPUT_LENGTH) {
+    throw derivationSyntaxError(`Result exceeds ${DERIVATION_MAX_OUTPUT_LENGTH}-character output limit`);
+  }
+  return out;
+}
+
+function evaluateDerivationRational(expression) {
+  if (typeof expression !== 'string' || !expression.trim()) {
+    throw derivationSyntaxError('Derivation expression must be a nonblank string');
+  }
+  if (expression.length > DERIVATION_MAX_LENGTH) {
+    throw derivationSyntaxError(`Derivation expression exceeds ${DERIVATION_MAX_LENGTH}-character limit`);
+  }
+  const tokens = tokenizeDerivation(expression);
+  if (!tokens.length) throw derivationSyntaxError('Derivation expression is empty');
+  let pos = 0;
+  let depth = 0;
+  const peek = () => tokens[pos];
+  const enterDepth = () => {
+    depth += 1;
+    if (depth > DERIVATION_MAX_DEPTH) throw derivationSyntaxError(`Nesting depth exceeds limit of ${DERIVATION_MAX_DEPTH}`);
+  };
+  const leaveDepth = () => { depth -= 1; };
+
+  function parseAdd() {
+    let left = parseMul();
+    while (peek()?.type === 'op' && (peek().value === '+' || peek().value === '-')) {
+      const op = tokens[pos++].value;
+      const right = parseMul();
+      left = op === '+' ? addRat(left, right) : subRat(left, right);
+    }
+    return left;
+  }
+
+  function parseMul() {
+    let left = parseUnary();
+    while (peek()?.type === 'op' && (peek().value === '*' || peek().value === '/' || peek().value === 'div' || peek().value === 'mod')) {
+      const op = tokens[pos++].value;
+      const right = parseUnary();
+      if (op === '*') left = mulRat(left, right);
+      else if (op === '/') left = divRat(left, right);
+      else if (op === 'div') left = intRational(truncQuotient(left, right));
+      else left = subRat(left, mulRat(intRational(truncQuotient(left, right)), right));
+    }
+    return left;
+  }
+
+  function parseUnary() {
+    if (peek()?.type === 'op' && (peek().value === '+' || peek().value === '-')) {
+      const op = tokens[pos++].value;
+      enterDepth();
+      try {
+        const inner = parseUnary();
+        return op === '-' ? makeRational(-inner.n, inner.d) : inner;
+      } finally {
+        leaveDepth();
+      }
+    }
+    return parsePrimary();
+  }
+
+  function parsePrimary() {
+    const tok = peek();
+    if (!tok) throw derivationSyntaxError('Unexpected end of expression');
+    if (tok.type === 'num') { pos += 1; return tok.value; }
+    if (tok.type === '(') {
+      pos += 1;
+      enterDepth();
+      try {
+        const value = parseAdd();
+        if (peek()?.type !== ')') throw derivationSyntaxError('Missing closing parenthesis ")"');
+        pos += 1;
+        return value;
+      } finally {
+        leaveDepth();
+      }
+    }
+    if (tok.type === 'ident') {
+      pos += 1;
+      if (peek()?.type !== '(') throw derivationSyntaxError(`Unknown identifier "${tok.value}"`);
+      pos += 1;
+      enterDepth();
+      try {
+        const args = [];
+        if (peek()?.type !== ')') {
+          args.push(parseAdd());
+          while (peek()?.type === ',') {
+            pos += 1;
+            args.push(parseAdd());
+          }
+        }
+        if (peek()?.type !== ')') throw derivationSyntaxError(`Missing closing parenthesis in ${tok.value}()`);
+        pos += 1;
+        return applyDerivationFn(tok.value, args);
+      } finally {
+        leaveDepth();
+      }
+    }
+    throw derivationSyntaxError(`Unexpected token "${tok.value}"`);
+  }
+
+  const value = parseAdd();
+  if (pos < tokens.length) throw derivationSyntaxError(`Unexpected trailing token "${tokens[pos].value}"`);
+  return value;
+}
+
+function evaluateDerivationFallback(expression) {
+  return formatRational(evaluateDerivationRational(expression));
+}
+
+function expectedNumericRational(value) {
+  if (typeof value === 'bigint') {
+    const text = value.toString();
+    return { text, rat: intRational(value) };
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const spelling = exactNumberSpelling(value);
+    const text = typeof spelling === 'string' && spelling.length > 0 ? spelling : (Object.is(value, -0) ? '0' : String(value));
+    return { text, rat: evaluateDerivationRational(text) };
+  }
+  return null;
+}
+
+function checkDerivationFallback(check) {
+  if (!check || typeof check !== 'object' || !Object.hasOwn(check, 'derivation') || check.derivation === undefined) {
+    return null;
+  }
+  if (typeof check.derivation !== 'string' || !check.derivation.trim()) {
+    return { code: 'scenario-derivation-invalid', message: 'Check "derivation" must be a nonblank string.' };
+  }
+  if (!NUMERIC_DERIVATION_OPS.has(check.op)) {
+    return { code: 'scenario-derivation-invalid', message: `Check "derivation" is only allowed on numeric comparison checks, not "${String(check.op)}".` };
+  }
+  if (Object.hasOwn(check, 'ref_target') || Object.hasOwn(check, 'ref_path')) {
+    return { code: 'scenario-derivation-invalid', message: 'Check "derivation" requires a literal numeric "value", not a relational reference.' };
+  }
+  const expected = expectedNumericRational(check.value);
+  if (!expected) {
+    return { code: 'scenario-derivation-invalid', message: 'Check "derivation" requires a finite numeric "value".' };
+  }
+  let actualRat;
+  let actualText;
+  try {
+    actualRat = evaluateDerivationRational(check.derivation);
+    actualText = formatRational(actualRat);
+  } catch (error) {
+    return { code: 'scenario-derivation-invalid', message: error?.message || 'Invalid derivation expression.' };
+  }
+  if (cmpRat(actualRat, expected.rat) !== 0) {
+    return {
+      code: 'scenario-derivation-mismatch',
+      message: `Derivation "${check.derivation}" evaluated to ${actualText}, which does not match expected value ${expected.text}.`,
+    };
+  }
+  return null;
+}
+
+function scenarioDerivationRefusalFallback(doc) {
+  const steps = Array.isArray(doc?.steps) ? doc.steps : [];
+  for (let i = 0; i < steps.length; i++) {
+    const checks = Array.isArray(steps[i]?.checks) ? steps[i].checks : [];
+    for (let j = 0; j < checks.length; j++) {
+      const refusal = checkDerivation(checks[j]);
+      if (refusal) {
+        return {
+          code: refusal.code,
+          section: `steps[${i}].checks[${j}].derivation`,
+          message: refusal.message,
+          step: i + 1,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+export function evaluateDerivation(expression) {
+  const fn = rawRuntimeScenarioJsonSlice()?.evaluateDerivation;
+  return typeof fn === 'function' ? fn(expression) : evaluateDerivationFallback(expression);
+}
+
+export function checkDerivation(check) {
+  const fn = rawRuntimeScenarioJsonSlice()?.checkDerivation;
+  return typeof fn === 'function' ? fn(check) : checkDerivationFallback(check);
+}
+
+export function scenarioDerivationRefusal(doc) {
+  const fn = rawRuntimePreflightSlice()?.scenarioDerivationRefusal;
+  return typeof fn === 'function' ? fn(doc) : scenarioDerivationRefusalFallback(doc);
+}
+
+export function runtimeScenarioJsonSlice() {
+  return {
+    ...rawRuntimeScenarioJsonSlice(),
+    checkDerivation,
+    evaluateDerivation,
+  };
+}
+
 export function runtimePreflightSlice() {
   const mod = rawRuntimePreflightSlice();
   return {
@@ -1608,6 +2024,7 @@ export function runtimePreflightSlice() {
     orphanSummary,
     preflight,
     prepareHashSelection: (input, ports = {}) => mod.prepareHashSelection(input, seamSelectionPorts(ports)),
+    scenarioDerivationRefusal,
     selectTests,
     sharedSourceFiles,
     whyNoTests,
@@ -2790,7 +3207,6 @@ export {
   runtimeAgentPacketSlice,
   runtimeCheckPlanSlice,
   runtimeOrigin,
-  runtimeScenarioJsonSlice,
   runtimeWorkspaceSlice,
   scenarioShapeRefusal,
   schemaKeywordWarningLines,

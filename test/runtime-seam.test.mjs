@@ -535,7 +535,15 @@ test('SEAM2: src/runtime-seam.mjs imports only @promptdriven/runtime-client root
     'selectTests',
     'whyNoTests',
   ];
-  assert.deepEqual(Object.keys(seam).sort(), [...Object.keys(entry), ...seamOnlyHostExports].sort());
+  const pendingRuntimeClientExports = [
+    'checkDerivation',
+    'evaluateDerivation',
+    'scenarioDerivationRefusal',
+  ];
+  assert.deepEqual(
+    Object.keys(seam).sort(),
+    [...new Set([...Object.keys(entry), ...seamOnlyHostExports, ...pendingRuntimeClientExports])].sort(),
+  );
   for (const key of seamOnlyHostExports) {
     assert.equal(Object.hasOwn(entry, key), false, `cut host symbol ${key} must not remain on @promptdriven/runtime-client`);
   }
@@ -833,7 +841,7 @@ registerHooks({
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
-    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'prompt-approve',
+    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'calc', 'prompt-approve',
     'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
     'issue-dependency-graph', 'dependencies-prepare', 'dependencies-complete',
     'product-status', 'product-next', 'product-start',
@@ -866,6 +874,7 @@ registerHooks({
     ['cli:setup', [bin, 'setup', '--yes'], repo],
     ['cli:files', [bin, 'files', '--json'], repo],
     ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
+    ['cli:calc', [bin, 'calc', '-7 div 2'], repo],
     ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
@@ -910,7 +919,7 @@ registerHooks({
   ];
 
   const ACYCLIC_ENTRIES = new Set([
-    'cli:--help', 'cli:owner', 'cli:files', 'cli:approve',
+    'cli:--help', 'cli:owner', 'cli:calc', 'cli:files', 'cli:approve',
     'child:workflow-replay-selector', 'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
     'lib:file-owner.mjs', 'lib:agent-adapters.mjs',
   ]);
@@ -920,7 +929,7 @@ registerHooks({
   ]);
   const LIGHT_ENTRIES = new Set([
     'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion',
-    'cli:files', 'cli:owner', 'cli:approve', 'cli:workflow-list',
+    'cli:files', 'cli:owner', 'cli:calc', 'cli:approve', 'cli:workflow-list',
     'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:simulate', 'cli:mcp',
     'child:workflow-replay-selector', 'child:try-doors-launcher',
     'lib:svg-layout.mjs', 'lib:prompt-approve.mjs', 'lib:file-owner.mjs', 'lib:agent-adapters.mjs',

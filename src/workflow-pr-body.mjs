@@ -434,6 +434,7 @@ function boundaryCardSection(facts) {
   ];
 
   const sortedRows = [...rawRows].sort((a, b) => (a?.priority ?? 3) - (b?.priority ?? 3));
+  const derivations = Array.isArray(card.derivationRows) ? card.derivationRows : [];
   const body = sortedRows.length
     ? [
         '- **Provenance:**',
@@ -446,6 +447,18 @@ function boundaryCardSection(facts) {
         }),
       ]
     : ['- **Provenance:** standalone / native-tested slice (no Story scenario checks).'];
+  if (derivations.length) {
+    body.push(
+      '- **Derivations:**',
+      ...derivations.map(row => {
+        const label = safeBoundaryText(row?.criterionLabel ?? 'check', 24);
+        const path = safeBoundaryText(row?.path ?? '', 40);
+        const val = safeBoundaryText(row?.value ?? '', 30);
+        const expr = safeBoundaryText(row?.derivation ?? '', 80);
+        return `  - **${label}** ${path}: ${val} = ${expr}`;
+      }),
+    );
+  }
 
   const maxCardLines = BOUNDARY_PR_MAX_LINES;
   const fixed = header.length + footer.length;

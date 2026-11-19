@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 43b67da8bb3584265775ca370a61dcf98ab9b86b5c7ba90756074b120770a1fb).
+// Generated from prompts/cli/workflow-story-card.prompt.md (sha256: 8583ca636dc8e32706ec6e5cb49447d785bda5d21f7dd57122cd7a4a9e874d70).
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -82,8 +82,13 @@ function bounded(lines, path, word = 'lines') {
   return [...lines.slice(0, PART_LINES), `… ${lines.length - PART_LINES} more ${word} in ${path}`];
 }
 
+const derivationSuffix = check => typeof check?.derivation === 'string' && check.derivation.trim()
+  ? ` (from ${oneLine(check.derivation)})`
+  : '';
 function expectedText(step) {
-  const rhs = check => typeof check?.ref_target === 'string' && typeof check?.ref_path === 'string' ? `${check.ref_target} ${check.ref_path}` : compact(check?.value);
+  const rhs = check => typeof check?.ref_target === 'string' && typeof check?.ref_path === 'string'
+    ? `${check.ref_target} ${check.ref_path}`
+    : `${compact(check?.value)}${derivationSuffix(check)}`;
   return [step?.expected_error !== undefined && step?.expected_error !== null ? `error ${step.expected_error}` : null,
     ...(Array.isArray(step?.checks) ? step.checks : []).map(check => `${check?.criterion_id ?? '?'} ${check?.path ?? '?'} ${check?.op ?? '?'} ${rhs(check)}`)]
     .filter(Boolean).join('; ') || 'none';
@@ -179,8 +184,11 @@ export function storyCard({ run, root, changed = [], prompts = [], results = [],
 function expectedCases(doc) {
   return (Array.isArray(doc?.steps) ? doc.steps : []).map((step, index) => ({ case: caseName(step, index),
     error: step?.expected_error ?? null,
-    expected: (Array.isArray(step?.checks) ? step.checks : []).map(check => [check?.criterion_id ?? null, check?.target ?? null, check?.op ?? null, check?.value ?? null])
-      .map(row => stringifyScenario(canonical(row))).sort() }));
+    expected: (Array.isArray(step?.checks) ? step.checks : []).map(check => {
+      const tuple = [check?.criterion_id ?? null, check?.target ?? null, check?.op ?? null, check?.value ?? null];
+      if (typeof check?.derivation === 'string' && check.derivation.trim()) tuple.push(check.derivation);
+      return tuple;
+    }).map(row => stringifyScenario(canonical(row))).sort() }));
 }
 export function storyFingerprint({ root, changed = [] } = {}) {
   const paths = [...new Set(changed)].sort();
