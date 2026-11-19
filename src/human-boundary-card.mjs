@@ -1,10 +1,10 @@
-// Generated from prompts/cli/human-boundary-card.prompt.md (sha256: 298d633397532c9d24801ff1c9a34153d62bf374707ff04c5bb43cd1a8f5d36f).
+// Generated from prompts/cli/human-boundary-card.prompt.md (sha256: 40aaabceb5015fdd1fd1f75fa132aaf8e38bbaa6fda5a829d9911ff05aeabe9f).
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, posix, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { isTestPromptPath } from './file-owner.mjs';
+import { findOwners, isTestOwnedPath, isTestPromptPath } from './file-owner.mjs';
 import {
   TEST_SCHEMA,
   findTests,
@@ -66,6 +66,351 @@ function clipText(value, max = 96) {
   const cut = chars.slice(0, max - 2).join('');
   const word = cut.replace(/\s+\S*$/, '');
   return `${(word.length >= cut.length / 2 ? word : cut).trimEnd()} …`;
+}
+
+const NON_CODE_DIR_RE = /^(?:user_stories|docs?|\.github)\//i;
+const CONFIG_FILE_RE = /(?:^|\/)(?:package(?:-lock)?\.json|pdd(?:-bindings)?\.json|tsconfig[^/]*\.json|jsconfig\.json|Makefile|GNUmakefile|Dockerfile|Containerfile|Procfile|Justfile|Vagrantfile|Rakefile|Gemfile)$/i;
+const NON_CODE_EXT_RE = /\.(?:mdx?|rst|txt|json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
+
+const trimNonBlank = value => (typeof value === 'string' && value.trim() ? value.trim() : null);
+const trimStringList = values => (Array.isArray(values) ? values.map(trimNonBlank).filter(Boolean) : []);
+
+function uniqueInOrder(values) {
+  const seen = new Set();
+  const out = [];
+  for (const item of values) {
+    if (!seen.has(item)) {
+      seen.add(item);
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+function isProductionCodePath(filePath) {
+  if (typeof filePath !== 'string' || !filePath || filePath.endsWith('.prompt.md')) return false;
+  if (isStoryPath(filePath) || isTestOwnedPath(filePath)) return false;
+  if (NON_CODE_DIR_RE.test(filePath) || CONFIG_FILE_RE.test(filePath) || NON_CODE_EXT_RE.test(filePath)) return false;
+  if (/(?:^|\/)\.[^/]+$/.test(filePath)) return false;
+  return posix.extname(posix.basename(filePath)).length > 1;
+}
+
+function sanitizeBoundaryLine(text) {
+  const indent = /^ +/.exec(String(text ?? ''))?.[0] ?? '';
+  const scrubbed = cleanOneLine(text)
+    .replace(/Acceptance\s+criteria/gi, 'Criteria')
+    .replace(/Agent\s+note/gi, 'note')
+    .replace(/<\/?details\b[^>]*>|<details/gi, 'details')
+    .replace(/\bbatch(?:es)?\b/gi, 'check-set')
+    .replace(/\brequests?(?:ed|ing)?\b/gi, 'call');
+  const cleaned = `${indent}${scrubbed}`;
+  return /^(?:Text|Approve\s)/.test(cleaned) ? `  ${cleaned}` : cleaned;
+}
+
+function createEvidenceEntry({
+  kind,
+  label,
+  source,
+  scope,
+  exitCode = null,
+  ownerPrompt = null,
+  loadedPrompts = [],
+  passedAssertions = [],
+  receiptId = null,
+  creditsPromptRules = false,
+  creditsModeledAssertions = false,
+  creditsNativeBehavior = false,
+  note = '',
+}) {
+  return {
+    kind,
+    label,
+    source,
+    scope,
+    exitCode,
+    ownerPrompt,
+    loadedPrompts,
+    passedAssertions,
+    receiptId,
+    creditsPromptRules,
+    creditsModeledAssertions,
+    creditsNativeBehavior,
+    note,
+  };
+}
+
+function buildOwnerResolutionEntry(item) {
+  const targetPath = cleanOneLine(item?.targetPath ?? '');
+  const ownerPrompt = trimNonBlank(item?.ownerPrompt);
+  const rawSource = trimNonBlank(item?.source) ?? 'none';
+  const certain = Boolean(item?.certain);
+  return createEvidenceEntry({
+    kind: 'owner-resolution',
+    label: ownerPrompt ? 'resolved' : 'unmapped',
+    source: rawSource === 'none' ? 'pdd owner' : `pdd owner (${rawSource})`,
+    scope: ownerPrompt
+      ? `ownership lookup: ${targetPath} -> ${ownerPrompt}${certain ? ' (certain)' : ' (uncertain)'}`
+      : `ownership lookup: ${targetPath} -> no owner`,
+    ownerPrompt,
+    note: 'ownership lookup only; checks no prompt rules or behavior',
+  });
+}
+
+function buildLocalLintEntry(item) {
+  const localOnly = Boolean(item?.localOnly);
+  const exitCode = Number.isInteger(item?.exitCode) ? item.exitCode : null;
+  const rawState = trimNonBlank(item?.state) ?? 'unknown';
+  const cleanScope = trimNonBlank(item?.scope) ?? 'SVG layout only';
+  const incompleteSave = Boolean(item?.incompleteSave);
+  return createEvidenceEntry({
+    kind: 'local-lint',
+    label: localOnly ? 'partial' : rawState,
+    source: localOnly ? 'pdd lint --local' : 'pdd lint',
+    scope: localOnly
+      ? `${cleanScope}${incompleteSave ? '; incomplete local save' : ''}; prompt rules not checked`
+      : cleanScope,
+    exitCode,
+    note: localOnly ? 'partial local lint; no credit for checking prompt rules' : '',
+  });
+}
+
+function buildHostedStoryEntry(item) {
+  const storyPath = cleanOneLine(item?.storyPath ?? '');
+  const loadedPrompts = trimStringList(item?.loadedPrompts);
+  const passedAssertions = trimStringList(item?.passedAssertions);
+  const missingOwnerConnection = Boolean(item?.missingOwnerConnection);
+  const rawState = trimNonBlank(item?.state) ?? 'unknown';
+  const totalAssertions = Number.isInteger(item?.totalAssertions) ? item.totalAssertions : passedAssertions.length;
+  const connectedPass = !missingOwnerConnection
+    && rawState === 'passed'
+    && loadedPrompts.length >= 1
+    && passedAssertions.length >= 1;
+  return createEvidenceEntry({
+    kind: 'hosted-story',
+    label: missingOwnerConnection ? 'unconnected' : connectedPass ? 'passed' : rawState,
+    source: `pdd test (hosted): ${storyPath}`,
+    scope: `modeled policy assertions (${passedAssertions.length}/${totalAssertions}) via ${loadedPrompts.length ? loadedPrompts.join(', ') : 'none'}`,
+    loadedPrompts,
+    passedAssertions,
+    creditsPromptRules: connectedPass,
+    creditsModeledAssertions: connectedPass,
+    note: missingOwnerConnection
+      ? 'missing owner connection; no credit for unexercised owner'
+      : connectedPass
+        ? 'modeled assertions only; native host behavior requires a native receipt'
+        : 'hosted run did not pass modeled assertions',
+  });
+}
+
+function buildNativeCheckEntry(item) {
+  const trimmedBehavior = trimNonBlank(item?.behavior) ?? '';
+  const targetHost = trimNonBlank(item?.targetHost) ?? 'target-host';
+  const runner = trimNonBlank(item?.runner) ?? 'native-check';
+  const receipt = isObject(item?.receipt) ? item.receipt : null;
+  const receiptId = receipt ? trimNonBlank(receipt.receiptId) : null;
+  const receiptSource = receipt ? trimNonBlank(receipt.source) : null;
+  const receiptStatus = receipt ? (trimNonBlank(receipt.status) ?? 'unverified') : null;
+  const verifiedBehaviors = receipt ? trimStringList(receipt.verifiedBehaviors) : [];
+  const hasMeta = Boolean(receipt && receiptId && receiptSource);
+  const validReceipt = Boolean(
+    hasMeta && receiptStatus === 'passed' && trimmedBehavior && verifiedBehaviors.includes(trimmedBehavior),
+  );
+  let note;
+  if (validReceipt) note = 'credited via native receipt';
+  else if (!hasMeta) note = 'no native receipt; native behavior credit withheld';
+  else if (receiptStatus === 'failed') note = 'native receipt failed; native behavior credit withheld';
+  else if (receiptStatus !== 'passed') note = `native receipt status is ${receiptStatus}; native behavior credit withheld`;
+  else note = 'behavior not listed in native receipt; native behavior credit withheld';
+  return {
+    behavior: trimmedBehavior,
+    entry: createEvidenceEntry({
+      kind: 'native-check',
+      label: validReceipt ? 'verified' : receipt !== null && receiptStatus === 'failed' ? 'failed' : 'unverified',
+      source: hasMeta
+        ? `${runner} on ${targetHost} (receipt ${receiptId}, ${receiptSource})`
+        : `${runner} on ${targetHost} (no native receipt)`,
+      scope: `target-host native behavior: ${trimmedBehavior}`,
+      receiptId,
+      creditsNativeBehavior: validReceipt,
+      note,
+    }),
+  };
+}
+
+function formatEvidenceEntryPlain(entry) {
+  const kindLabel = entry.kind === 'local-lint' ? 'local lint' : entry.kind;
+  const exitPart = entry.kind === 'local-lint' && Number.isInteger(entry.exitCode) ? ` (exit ${entry.exitCode})` : '';
+  const parts = [`${kindLabel} [${entry.label}]${exitPart}: ${clipText(entry.scope, 96)}`];
+  if (entry.kind === 'hosted-story' && entry.creditsModeledAssertions && entry.passedAssertions.length) {
+    const shown = entry.passedAssertions.slice(0, 3).map(a => clipText(a, 54)).join('; ');
+    const more = entry.passedAssertions.length > 3 ? ` (+${entry.passedAssertions.length - 3} more)` : '';
+    parts.push(`passed=[${shown}${more}]`);
+  }
+  parts.push(`source=${clipText(entry.source, 120)}`);
+  if (entry.note) parts.push(clipText(entry.note, 84));
+  return `    - ${parts.join(' · ')}`;
+}
+
+/**
+ * Pure deterministic review-summary evidence provenance calculator.
+ * Keeps pdd owner, pdd lint --local, hosted Story checks, and native receipts
+ * separate with explicit scope, source, label, and credit limits.
+ */
+export function summarizeBoundaryEvidence({
+  ownerLookups = [],
+  localLint = null,
+  hostedStoryRuns = [],
+  nativeChecks = [],
+} = {}) {
+  const entries = [];
+  for (const item of Array.isArray(ownerLookups) ? ownerLookups : []) {
+    if (isObject(item)) entries.push(buildOwnerResolutionEntry(item));
+  }
+  if (isObject(localLint)) {
+    entries.push(buildLocalLintEntry(localLint));
+  }
+  for (const item of Array.isArray(hostedStoryRuns) ? hostedStoryRuns : []) {
+    if (isObject(item)) entries.push(buildHostedStoryEntry(item));
+  }
+  const nativePairs = [];
+  for (const item of Array.isArray(nativeChecks) ? nativeChecks : []) {
+    if (isObject(item)) {
+      const pair = buildNativeCheckEntry(item);
+      nativePairs.push(pair);
+      entries.push(pair.entry);
+    }
+  }
+
+  const credits = {
+    resolvedOwners: [...new Set(entries.filter(e => e.kind === 'owner-resolution' && e.ownerPrompt).map(e => e.ownerPrompt))].sort(),
+    localLintPartial: entries.some(e => e.kind === 'local-lint' && e.label === 'partial'),
+    localLintCreditsPromptRules: entries.some(e => e.kind === 'local-lint' && e.creditsPromptRules === true),
+    hostedPassedAssertions: uniqueInOrder(
+      entries.filter(e => e.kind === 'hosted-story' && e.creditsModeledAssertions === true).flatMap(e => e.passedAssertions),
+    ),
+    nativeVerifiedBehaviors: uniqueInOrder(
+      nativePairs.filter(p => p.entry.creditsNativeBehavior === true && p.behavior).map(p => p.behavior),
+    ),
+    nativeUnverifiedBehaviors: uniqueInOrder(
+      nativePairs.filter(p => p.entry.creditsNativeBehavior === false && p.behavior).map(p => p.behavior),
+    ),
+  };
+
+  let rawLines;
+  if (!entries.length) {
+    rawLines = ['Human boundary card (advisory):', '  Evidence: none'];
+  } else {
+    const header = ['Human boundary card (advisory):', '  Evidence:'];
+    const entryLines = entries.map(formatEvidenceEntryPlain);
+    const room = BOUNDARY_CARD_MAX_LINES - header.length;
+    rawLines = entryLines.length <= room
+      ? [...header, ...entryLines]
+      : [
+          ...header,
+          ...entryLines.slice(0, room - 1),
+          `  … +${entryLines.length - (room - 1)} more evidence entries omitted`,
+        ];
+  }
+
+  return {
+    advisory: true,
+    entries,
+    credits,
+    lines: rawLines.map(sanitizeBoundaryLine),
+  };
+}
+
+/**
+ * Compaction priority for evidence entries so gaps (unconnected hosted runs,
+ * partial local lint, unverified/failed native checks) stay above the fold.
+ */
+export function evidenceEntryPriority(entry) {
+  if (entry?.kind === 'hosted-story' && entry.label === 'unconnected') return 0;
+  if (entry?.kind === 'local-lint' && entry.label === 'partial') return 0;
+  if (entry?.kind === 'native-check' && entry.creditsNativeBehavior === false) return 0;
+  return 2;
+}
+
+function renderBoundedSection(heading, rows, budget, omitLine, emptyLine = null) {
+  if (budget <= 0) return [];
+  if (!rows.length) return emptyLine ? [emptyLine] : [];
+  if (budget === 1) return [omitLine(rows.length)];
+  if (1 + rows.length <= budget) return [heading, ...rows];
+  if (budget === 2) return [heading, omitLine(rows.length)];
+  const shown = budget - 2;
+  return [heading, ...rows.slice(0, shown), omitLine(rows.length - shown)];
+}
+
+/**
+ * Shared 1-screen (<= 25-line) fitter for cards with optional Evidence and
+ * Provenance sections. Preserves header/footer lines and prioritizes critical
+ * rows from both sections when compacting.
+ */
+export function fitSectionedBoundaryLines({
+  headerLines,
+  footerLines,
+  evidenceHeading,
+  evidenceItems = [],
+  evidenceOmit,
+  provenanceHeading,
+  provenanceItems = [],
+  provenanceEmpty,
+  provenanceOmit,
+  maxLines = BOUNDARY_CARD_MAX_LINES,
+}) {
+  const totalFixed = headerLines.length + footerLines.length;
+  if (totalFixed >= maxLines) return [...headerLines, ...footerLines].slice(0, maxLines);
+  const room = maxLines - totalFixed;
+  const provSorted = [...provenanceItems].sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3));
+
+  if (!evidenceItems.length) {
+    const provBody = renderBoundedSection(
+      provenanceHeading,
+      provSorted.map(item => item.line),
+      room,
+      provenanceOmit,
+      provenanceEmpty,
+    );
+    return [...headerLines, ...provBody, ...footerLines];
+  }
+
+  const evTotal = 1 + evidenceItems.length;
+  const provTotal = provSorted.length ? 1 + provSorted.length : 1;
+  if (evTotal + provTotal <= room) {
+    const evBody = [evidenceHeading, ...evidenceItems.map(item => item.line)];
+    const provBody = provSorted.length
+      ? [provenanceHeading, ...provSorted.map(item => item.line)]
+      : [provenanceEmpty];
+    return [...headerLines, ...evBody, ...provBody, ...footerLines];
+  }
+
+  if (room === 1) {
+    return [...headerLines, evidenceOmit(evidenceItems.length + provSorted.length), ...footerLines];
+  }
+
+  const evSorted = [...evidenceItems].sort((a, b) => (a.priority ?? 2) - (b.priority ?? 2));
+  const half = Math.floor(room / 2);
+  let evBudget;
+  if (evTotal <= half) {
+    evBudget = evTotal;
+  } else if (provTotal <= half) {
+    evBudget = Math.max(1, room - provTotal);
+  } else {
+    const evCritical = evSorted.filter(item => (item.priority ?? 2) <= 1).length;
+    const minProv = provSorted.length ? Math.min(provTotal, Math.max(2, provSorted.filter(item => (item.priority ?? 3) <= 1).length + 1)) : 1;
+    const maxEv = Math.max(1, room - minProv);
+    evBudget = Math.min(evTotal, maxEv, Math.max(2, Math.min(room - 1, Math.max(evCritical + 2, half))));
+  }
+  const provBudget = Math.max(1, room - evBudget);
+  const evBody = renderBoundedSection(evidenceHeading, evSorted.map(item => item.line), evBudget, evidenceOmit);
+  const provBody = renderBoundedSection(
+    provenanceHeading,
+    provSorted.map(item => item.line),
+    provBudget,
+    provenanceOmit,
+    provenanceEmpty,
+  );
+  return [...headerLines, ...evBody, ...provBody, ...footerLines].slice(0, maxLines);
 }
 
 function canonicalRoot(root) {
@@ -718,27 +1063,116 @@ function gitChangedPaths(rootReal, visible) {
   return [...paths].sort();
 }
 
-function readSavedNativeValidatedStories(rootReal) {
-  const stories = new Set();
+function resolveNativeRecordStatus(native, receiptId) {
+  const explicit = trimNonBlank(native.status);
+  if (explicit && ['passed', 'failed', 'skipped', 'unverified'].includes(explicit)) return explicit;
+  if (isObject(native.intake) && typeof native.intake.admission === 'string') {
+    return native.intake.admission === 'verified' ? 'passed' : 'unverified';
+  }
+  if (Array.isArray(native.checks) && native.checks.length > 0) {
+    const states = native.checks.map(c => trimNonBlank(c?.state));
+    if (states.some(s => s === 'failed')) return 'failed';
+    if (states.every(s => s === 'checked' || s === 'passed')) return 'passed';
+    return 'unverified';
+  }
+  return receiptId && trimNonBlank(native.profileId) && trimNonBlank(native.storyPath) ? 'passed' : 'unverified';
+}
+
+function readSavedNativeEvidenceRecords(rootReal) {
+  const receiptedPassingStories = new Set();
+  const records = [];
   try {
     const out = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: rootReal, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    if (out.status !== 0 || !out.stdout.trim()) return stories;
+    if (out.status !== 0 || !out.stdout.trim()) return { receiptedPassingStories, records };
     const commonDir = resolve(rootReal, out.stdout.trim());
     const runsDir = join(commonDir, 'pdd', 'runs');
     let entries = [];
-    try { entries = readdirSync(runsDir); } catch { return stories; }
+    try { entries = readdirSync(runsDir).sort(); } catch { return { receiptedPassingStories, records }; }
     for (const entry of entries) {
       let run;
       try { run = JSON.parse(readFileSync(join(runsDir, entry, 'status.json'), 'utf8')); } catch { continue; }
       if (!isObject(run) || typeof run.root !== 'string' || canonicalRoot(run.root) !== rootReal) continue;
       for (const ev of Array.isArray(run.evidence) ? run.evidence : []) {
-        if (ev?.native?.schema === 'pdd.native-evidence-record.v1' && typeof ev.native.storyPath === 'string') {
-          stories.add(normalizeRelPromptPath(ev.native.storyPath));
+        const native = ev?.native;
+        if (!isObject(native) || native.schema !== 'pdd.native-evidence-record.v1' || typeof native.storyPath !== 'string') continue;
+        const storyPath = normalizeRelPromptPath(native.storyPath);
+        if (!storyPath) continue;
+        const receiptId = trimNonBlank(native.receiptId) ?? trimNonBlank(native.runId) ?? trimNonBlank(run.runId);
+        const profileId = trimNonBlank(native.profileId) ?? 'native-profile';
+        const targetHost = trimNonBlank(native.targetHost) ?? 'target-host';
+        const runner = trimNonBlank(native.runner) ?? profileId;
+        const status = resolveNativeRecordStatus(native, receiptId);
+        const explicitVerified = Array.isArray(native.verifiedBehaviors) ? trimStringList(native.verifiedBehaviors) : null;
+        const explicitBehavior = trimNonBlank(native.behavior);
+        const defaultBehavior = `native validation for ${storyPath} (${profileId})`;
+        const behaviors = explicitBehavior
+          ? [explicitBehavior]
+          : explicitVerified && explicitVerified.length
+            ? explicitVerified
+            : [defaultBehavior];
+        if (receiptId && status === 'passed') receiptedPassingStories.add(storyPath);
+        for (const behavior of behaviors) {
+          records.push({
+            storyPath,
+            check: {
+              behavior,
+              targetHost,
+              runner,
+              receipt: receiptId
+                ? {
+                    receiptId,
+                    source: 'pdd.native-evidence-record.v1',
+                    status,
+                    verifiedBehaviors: explicitVerified ?? (status === 'passed' ? [behavior] : []),
+                  }
+                : null,
+            },
+          });
         }
       }
     }
   } catch { /* ignore unreadable git run state */ }
-  return stories;
+  return { receiptedPassingStories, records };
+}
+
+function parseSavedLocalLintRecord(folder, name, batch, since) {
+  if (batch.version !== 1 || batch.batch !== name || batch.intent !== 'lint-only' || batch.local_only !== true) return null;
+  if (!isObject(batch.local_scope) || !Array.isArray(batch.local_scope.tests) || !Array.isArray(batch.local_scope.prompts)) return null;
+  if (!isObject(batch.lint) || batch.lint.state !== 'partial' || batch.lint.reason?.code !== 'local-only') return null;
+  const createdAt = Date.parse(batch.created_at) || 0;
+  if (since > 0 && createdAt > 0 && createdAt < since) return null;
+  let summary = null;
+  try { summary = JSON.parse(readFileSync(join(folder, 'summary.json'), 'utf8')); } catch { summary = null; }
+  const expectedSummary = {
+    batch: batch.batch,
+    repo: batch.root,
+    exit_code: batch.exit_code,
+    state: 'partial',
+    lint_state: 'partial',
+    reason: batch.lint.reason,
+    local_only: true,
+    local_scope: batch.local_scope,
+    summary_line: batch.summary_line,
+    warnings: batch.warnings,
+    problems: batch.problems,
+    rows: [],
+    report_url: null,
+  };
+  const incompleteSave = !isDeepStrictEqual(summary, expectedSummary);
+  return {
+    at: createdAt,
+    record: {
+      exitCode: Number.isInteger(batch.exit_code) ? batch.exit_code : 2,
+      state: 'partial',
+      localOnly: true,
+      scope: 'SVG layout only',
+      warningCount: Array.isArray(batch.warnings) ? batch.warnings.length : 0,
+      problemCount: Array.isArray(batch.problems) ? batch.problems.length : 0,
+      incompleteSave,
+      inspectedPrompts: trimStringList(batch.local_scope.prompts),
+      inspectedTests: trimStringList(batch.local_scope.tests),
+    },
+  };
 }
 
 function countStepCalls(callsObj) {
@@ -757,17 +1191,23 @@ function countStepCalls(callsObj) {
 
 function readSavedBatchDiagnostics(rootReal, { since = 0, env = process.env, relevantTests = null } = {}) {
   const byTest = new Map();
+  let latestLocalLint = null;
   const stateRoot = resolve(env?.PDD_STATE_DIR || join(env?.HOME || homedir(), '.pdd', 'runtime'));
   const batchesDir = join(stateRoot, 'batches');
   let names = [];
-  try { names = readdirSync(batchesDir).filter(name => BATCH_NAME.test(name)).sort(); } catch { return { byTest, divergences: [], sampleSummary: null }; }
+  try { names = readdirSync(batchesDir).filter(name => BATCH_NAME.test(name)).sort(); } catch { return { byTest, divergences: [], sampleSummary: null, localLint: null }; }
   for (const name of names) {
     const folder = join(batchesDir, name);
     let batch;
     try { batch = JSON.parse(readFileSync(join(folder, 'batch.json'), 'utf8')); } catch { continue; }
     if (!isObject(batch) || typeof batch.root !== 'string' || !Array.isArray(batch.rows)) continue;
-    if (batch.intent && batch.intent !== 'check') continue;
     if (canonicalRoot(batch.root) !== rootReal) continue;
+    if (batch.intent === 'lint-only' && batch.local_only === true) {
+      const localParsed = parseSavedLocalLintRecord(folder, name, batch, since);
+      if (localParsed && (!latestLocalLint || localParsed.at >= latestLocalLint.at)) latestLocalLint = localParsed;
+      continue;
+    }
+    if (batch.intent && batch.intent !== 'check') continue;
     const createdAt = Date.parse(batch.created_at) || 0;
     const batchAt = Math.max(createdAt, ...batch.rows.map(r => Number.isFinite(r?.ended_at) ? r.ended_at : 0));
     if (since > 0 && batchAt > 0 && batchAt < since) continue;
@@ -841,7 +1281,9 @@ function readSavedBatchDiagnostics(rootReal, { since = 0, env = process.env, rel
       }
 
       byTest.set(normalizeRelPromptPath(row.test), {
-        state: answer?.state ?? null,
+        state: answer?.state ?? row.state ?? null,
+        storyPath: typeof row.story === 'string' ? normalizeRelPromptPath(row.story) : null,
+        reportCriteria: Array.isArray(report.criteria) ? report.criteria.filter(isObject) : [],
         stepObservations,
         stepObservationsByIndex,
         unkeyedChecks,
@@ -865,7 +1307,7 @@ function readSavedBatchDiagnostics(rootReal, { since = 0, env = process.env, rel
       : maxSamples === 1
         ? 'single-sample check'
         : null;
-  return { byTest, divergences: uniqueDivergences, sampleSummary };
+  return { byTest, divergences: uniqueDivergences, sampleSummary, localLint: latestLocalLint?.record ?? null };
 }
 
 function readPromptRecord(rootReal, visible, path, cache) {
@@ -970,6 +1412,77 @@ function resolveScenarioClosure(doc, storyBoundaryPrompts, rootReal, visible, pr
   };
 }
 
+function buildHostedRunSummary(scen, savedTest, storyText, missingOwnerConnection) {
+  const storyPath = scen.storyPath ?? savedTest.storyPath ?? normalizeRelPromptPath(scen.testEntry.path);
+  const docCriteria = Array.isArray(scen.testEntry.doc?.criteria)
+    ? scen.testEntry.doc.criteria.filter(isObject)
+    : [];
+  const fallbackCriteria = storyText
+    ? storyCriteria(storyText).map((text, idx) => ({ id: `AC${idx + 1}`, text }))
+    : [];
+  const criteriaList = docCriteria.length ? docCriteria : fallbackCriteria;
+  const savedChecks = (savedTest.stepObservationsByIndex ?? [])
+    .filter(Boolean)
+    .flatMap(obs => (Array.isArray(obs.checks) ? obs.checks : []));
+  const reportCritById = new Map(
+    (savedTest.reportCriteria ?? []).filter(c => typeof c?.id === 'string').map(c => [c.id, c]),
+  );
+  const hasKeyedChecks = savedChecks.some(c => typeof c?.criterion_id === 'string' && c.criterion_id);
+  const allSavedChecksPassed = savedChecks.length === 0 || savedChecks.every(c => c?.passed !== false);
+
+  const passedAssertions = [];
+  for (const [idx, crit] of criteriaList.entries()) {
+    const id = trimNonBlank(crit?.id) ?? `AC${idx + 1}`;
+    const text = cleanOneLine(crit?.text ?? '');
+    const display = text ? (text.startsWith(`${id}:`) ? clipText(text, 88) : `${id}: ${clipText(text, 84)}`) : id;
+    const matching = savedChecks.filter(c => c?.criterion_id === id);
+    let passed = false;
+    if (matching.length > 0) passed = matching.every(c => c?.passed === true);
+    else if (reportCritById.has(id) && typeof reportCritById.get(id).passed === 'boolean') passed = reportCritById.get(id).passed;
+    else if (savedTest.state === 'passed' && !hasKeyedChecks && allSavedChecksPassed) passed = true;
+    if (passed) passedAssertions.push(display);
+  }
+  return {
+    storyPath,
+    testPath: normalizeRelPromptPath(scen.testEntry.path),
+    loadedPrompts: [...scen.loadedPrompts],
+    missingOwnerConnection,
+    state: trimNonBlank(savedTest.state) ?? 'unknown',
+    passedAssertions,
+    totalAssertions: criteriaList.length || passedAssertions.length,
+  };
+}
+
+function mergeByKey(baseItems, extraItems, keyOf) {
+  const byKey = new Map();
+  for (const item of baseItems) byKey.set(keyOf(item), item);
+  for (const item of extraItems) byKey.set(keyOf(item), item);
+  return [...byKey.values()];
+}
+
+function mergeEvidenceInputs(auto, explicit) {
+  const exp = isObject(explicit) ? explicit : {};
+  const ownerLookups = mergeByKey(
+    auto.ownerLookups,
+    Array.isArray(exp.ownerLookups) ? exp.ownerLookups.filter(isObject) : [],
+    item => `${cleanOneLine(item?.targetPath ?? '')}\0${trimNonBlank(item?.ownerPrompt) ?? ''}\0${trimNonBlank(item?.source) ?? 'none'}`,
+  );
+  const localLint = Object.hasOwn(exp, 'localLint') && exp.localLint !== undefined
+    ? exp.localLint
+    : auto.localLint;
+  const hostedStoryRuns = mergeByKey(
+    auto.hostedStoryRuns,
+    Array.isArray(exp.hostedStoryRuns) ? exp.hostedStoryRuns.filter(isObject) : [],
+    item => `${cleanOneLine(item?.storyPath ?? '')}\0${cleanOneLine(item?.testPath ?? '')}`,
+  );
+  const nativeChecks = mergeByKey(
+    auto.nativeChecks,
+    Array.isArray(exp.nativeChecks) ? exp.nativeChecks.filter(isObject) : [],
+    item => `${trimNonBlank(item?.behavior) ?? ''}\0${trimNonBlank(item?.targetHost) ?? ''}\0${trimNonBlank(item?.runner) ?? ''}\0${trimNonBlank(item?.receipt?.receiptId) ?? ''}`,
+  );
+  return { ownerLookups, localLint, hostedStoryRuns, nativeChecks };
+}
+
 export function buildHumanBoundaryCard({
   root,
   focusPrompt = null,
@@ -978,6 +1491,7 @@ export function buildHumanBoundaryCard({
   changedPaths = null,
   since = 0,
   env = process.env,
+  evidence = null,
 } = {}) {
   if (!root || typeof root !== 'string') return null;
   const rootReal = canonicalRoot(root);
@@ -992,6 +1506,30 @@ export function buildHumanBoundaryCard({
   const sliceChanged = Array.isArray(changedPaths)
     ? changedPaths.map(normalizeRelPromptPath).filter(p => p && visible.has(p))
     : gitChangedPaths(rootReal, visible);
+
+  // Resolve owning prompts for changed production code files via `pdd owner` (`findOwners`).
+  const autoOwnerLookups = [];
+  const ownerResolvedPrompts = [];
+  const prodChangedPaths = sliceChanged.filter(isProductionCodePath);
+  if (prodChangedPaths.length > 0) {
+    try {
+      const resolved = findOwners({ root: rootReal, paths: prodChangedPaths }, { files: () => [...visible] });
+      for (const file of Array.isArray(resolved?.files) ? resolved.files : []) {
+        autoOwnerLookups.push({
+          targetPath: file.path,
+          ownerPrompt: file.owner ?? null,
+          source: file.source ?? 'none',
+          certain: Boolean(file.certain),
+        });
+        for (const owner of Array.isArray(file.owners) ? file.owners : []) {
+          const normOwner = normalizeRelPromptPath(owner);
+          if (normOwner.endsWith('.prompt.md') && visible.has(normOwner) && !isTestPromptPath(normOwner)) {
+            ownerResolvedPrompts.push(normOwner);
+          }
+        }
+      }
+    } catch { /* ignore owner lookup read errors */ }
+  }
 
   let foundTests = { tests: [], stories: [], nativeSelections: [] };
   try {
@@ -1095,6 +1633,7 @@ export function buildHumanBoundaryCard({
     for (const p of sliceChanged) {
       if (p.endsWith('.prompt.md') && visible.has(p) && !isTestPromptPath(p)) owningPromptSet.add(p);
     }
+    for (const p of ownerResolvedPrompts) owningPromptSet.add(p);
   }
   for (const sPath of selectedStories) {
     const sText = readStory(sPath);
@@ -1126,18 +1665,19 @@ export function buildHumanBoundaryCard({
   // Build policy items & per-rule/criterion provenance rows.
   const policyItems = [];
   const provenanceRows = [];
-  const savedNativeStories = readSavedNativeValidatedStories(rootReal);
-  const nativeValidatedStories = new Set([
-    ...(foundTests.nativeSelections ?? []).map(item => normalizeRelPromptPath(item.storyPath)),
-    ...savedNativeStories,
-  ].filter(Boolean));
+  const savedNativeEvidence = readSavedNativeEvidenceRecords(rootReal);
+  const nativeDeclaredStories = new Set(
+    (foundTests.nativeSelections ?? []).map(item => normalizeRelPromptPath(item.storyPath)).filter(Boolean),
+  );
+  const storyMissingConnection = new Map();
 
   for (const sPath of selectedStories) {
     const sText = readStory(sPath) ?? '';
     const title = cleanOneLine(sText.split(/\r?\n/).find(l => l.startsWith('# '))?.slice(2) || basename(sPath, '.md'));
     const criteriaTexts = storyCriteria(sText);
     const rulesTexts = parseStorySectionLines(sText, /^##[ \t]+Rules to check[ \t]*\r?$/im);
-    const hasNativeSection = nativeValidatedStories.has(sPath) || /^##[ \t]+Native validation[ \t]*\r?$/im.test(stripHtmlComments(sText));
+    const hasNativeReceipt = savedNativeEvidence.receiptedPassingStories.has(sPath);
+    const hasNativeDeclaration = nativeDeclaredStories.has(sPath) || /^##[ \t]+Native validation[ \t]*\r?$/im.test(stripHtmlComments(sText));
     const inScopeStory = stripExcludedStorySections(sText);
     const storyLinks = extractFragmentLinks(inScopeStory, sPath, visible);
     const brokenStoryFragments = [];
@@ -1153,10 +1693,11 @@ export function buildHumanBoundaryCard({
       policyItems.push({ kind: 'criterion', id: `AC${idx + 1}`, story: title, text: clipText(crit, 88) });
     }
 
+    const storyStartIndex = provenanceRows.length;
     const storyScenarios = selectedScenarios.filter(s => s.storyPath === sPath);
     if (!storyScenarios.length) {
-      if (hasNativeSection || (nativeOnlyRecords.length > 0 && checkableOwners.length === 0)) {
-        const ownerLabel = nativeOnlyRecords.map(r => r.path).join(', ') || `${sPath} (native validation)`;
+      if (hasNativeReceipt || (nativeOnlyRecords.length > 0 && checkableOwners.length === 0)) {
+        const ownerLabel = nativeOnlyRecords.map(r => r.path).join(', ') || `${sPath} (native receipt)`;
         for (const [idx, crit] of criteriaTexts.entries()) {
           provenanceRows.push({
             label: `AC${idx + 1}`,
@@ -1168,6 +1709,21 @@ export function buildHumanBoundaryCard({
             needsPortOrNative: false,
             zeroPortCalls: false,
             priority: 3,
+          });
+        }
+      } else if (hasNativeDeclaration) {
+        const ownerLabel = `${sPath} (Native validation)`;
+        for (const [idx, crit] of criteriaTexts.entries()) {
+          provenanceRows.push({
+            label: `AC${idx + 1}`,
+            summary: clipText(crit, 54),
+            owner: ownerLabel,
+            missingConnection: false,
+            missingReason: null,
+            observations: ['unverified (native receipt required)'],
+            needsPortOrNative: true,
+            zeroPortCalls: false,
+            priority: 1,
           });
         }
       } else {
@@ -1186,6 +1742,7 @@ export function buildHumanBoundaryCard({
           });
         }
       }
+      storyMissingConnection.set(sPath, provenanceRows.slice(storyStartIndex).some(r => r.missingConnection));
       continue;
     }
 
@@ -1238,7 +1795,7 @@ export function buildHumanBoundaryCard({
 
       const loadedRecords = [...loadedForCrit.values()];
       const obsSet = new Set(matchedChecks.map(c => c.kind));
-      if (hasNativeSection) obsSet.add('native test');
+      if (hasNativeReceipt) obsSet.add('native test');
       const hasPortOrNative = obsSet.has('observed simulated port call') || obsSet.has('native test');
       const needsPortOrNative = !hasPortOrNative && matchedChecks.some(c => c.needsPortOrNative);
       const explicitZeroCalls = matchedChecks.some(c => c.zeroCalls);
@@ -1321,13 +1878,14 @@ export function buildHumanBoundaryCard({
           owner: `missing owner connection (${reason})`,
           missingConnection: true,
           missingReason: reason,
-          observations: hasNativeSection ? ['native test'] : ['unverified rule owner'],
+          observations: hasNativeReceipt ? ['native test'] : ['unverified rule owner'],
           needsPortOrNative: false,
           zeroPortCalls: false,
           priority: 0,
         });
       }
     }
+    storyMissingConnection.set(sPath, provenanceRows.slice(storyStartIndex).some(r => r.missingConnection));
   }
 
   // Fallback policy summary when no Story exists in the slice (e.g. standalone prompt approval).
@@ -1360,8 +1918,44 @@ export function buildHumanBoundaryCard({
     .map(r => r.operations.length ? `${r.path} (${r.operations.join(', ')})` : `${r.path} (plain)`);
   const nativeSplit = [
     ...nativeOnlyRecords.map(r => `${r.path} (native-only: ${clipText(r.reason || 'native tests', 60)})`),
-    ...selectedStories.filter(s => nativeValidatedStories.has(s) || /^##[ \t]+Native validation[ \t]*\r?$/im.test(stripHtmlComments(readStory(s) ?? ''))).map(s => `${s} (Native validation)`),
+    ...selectedStories
+      .filter(s =>
+        savedNativeEvidence.receiptedPassingStories.has(s)
+        || nativeDeclaredStories.has(s)
+        || /^##[ \t]+Native validation[ \t]*\r?$/im.test(stripHtmlComments(readStory(s) ?? '')),
+      )
+      .map(s => `${s} (Native validation)`),
   ];
+
+  // Assemble review-summary evidence provenance across owner lookups, local lint, hosted runs, and native receipts.
+  const autoHostedStoryRuns = [];
+  for (const scen of selectedScenarios) {
+    const savedTest = batchDiag.byTest.get(normalizeRelPromptPath(scen.testEntry.path));
+    if (!savedTest) continue;
+    const sPath = scen.storyPath ?? savedTest.storyPath;
+    const storyText = sPath ? readStory(sPath) : null;
+    const missingOwnerConn = Boolean(
+      (sPath && storyMissingConnection.get(sPath))
+      || unloadedOwners.length > 0
+      || scen.brokenFragments.length > 0,
+    );
+    autoHostedStoryRuns.push(buildHostedRunSummary(scen, savedTest, storyText, missingOwnerConn));
+  }
+  const selectedStorySet = new Set(selectedStories);
+  const autoNativeChecks = savedNativeEvidence.records
+    .filter(item => selectedStorySet.size === 0 || selectedStorySet.has(item.storyPath))
+    .map(item => item.check);
+  const evidenceSummary = summarizeBoundaryEvidence(
+    mergeEvidenceInputs(
+      {
+        ownerLookups: autoOwnerLookups,
+        localLint: batchDiag.localLint,
+        hostedStoryRuns: autoHostedStoryRuns,
+        nativeChecks: autoNativeChecks,
+      },
+      evidence,
+    ),
+  );
 
   // Complexity budget & advisory sample divergences.
   const scopedPrompts = normalizedFocus ? owningRecords.filter(r => r.path === normalizedFocus) : owningRecords;
@@ -1396,6 +1990,7 @@ export function buildHumanBoundaryCard({
     unloadedOwners,
     selectedSources: [...allLoadedPaths].sort(),
     provenanceRows,
+    evidenceSummary,
     verificationSplit: {
       runtime: runtimeOps,
       native: nativeSplit,
@@ -1449,11 +2044,6 @@ export function fitBoundaryLines(headerLines, bodyLines, footerLines, maxLines =
 
 export function formatApproveBoundaryCard(card) {
   if (!isObject(card)) return [];
-  const safeApproveLine = text => {
-    const indent = /^ +/.exec(String(text ?? ''))?.[0] ?? '';
-    const cleaned = `${indent}${cleanOneLine(text)}`;
-    return /^(?:Text|Approve\s)/.test(cleaned) ? `  ${cleaned}` : cleaned;
-  };
 
   const header = ['Human boundary card (advisory):'];
   const policies = Array.isArray(card.policyItems) ? card.policyItems : [];
@@ -1467,16 +2057,15 @@ export function formatApproveBoundaryCard(card) {
     header.push(`  Owner gap: missing owner connection for ${card.unloadedOwners.join(', ')} (unloaded; scenario selects ${selected})`);
   }
 
-  const rows = [...(Array.isArray(card.provenanceRows) ? card.provenanceRows : [])]
-    .sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3));
-  const body = rows.length
-    ? [
-        '  Provenance:',
-        ...rows.map(row =>
-          `    - ${row.label} (${row.summary}): owner=${row.owner} · obs=${(row.observations ?? []).join(', ')}`,
-        ),
-      ]
-    : ['  Provenance: no Story scenario checks in this slice (standalone / exploratory or native-tested).'];
+  const evidenceEntries = Array.isArray(card.evidenceSummary?.entries) ? card.evidenceSummary.entries : [];
+  const evidenceItems = evidenceEntries.map(entry => ({
+    priority: evidenceEntryPriority(entry),
+    line: formatEvidenceEntryPlain(entry),
+  }));
+  const provenanceItems = (Array.isArray(card.provenanceRows) ? card.provenanceRows : []).map(row => ({
+    priority: row.priority ?? 3,
+    line: `    - ${row.label} (${row.summary}): owner=${row.owner} · obs=${(row.observations ?? []).join(', ')}`,
+  }));
 
   const rt = card.verificationSplit?.runtime ?? [];
   const nat = card.verificationSplit?.native ?? [];
@@ -1488,5 +2077,16 @@ export function formatApproveBoundaryCard(card) {
     `  Budget & samples: ${card.complexity?.proseSummary ?? 'prose 0 LOC'} · ${card.complexity?.stepSummary ?? 'scenario steps 0'}${samplePart}`,
   ];
 
-  return fitBoundaryLines(header, body, footer, BOUNDARY_CARD_MAX_LINES).map(safeApproveLine);
+  return fitSectionedBoundaryLines({
+    headerLines: header,
+    footerLines: footer,
+    evidenceHeading: '  Evidence:',
+    evidenceItems,
+    evidenceOmit: count => `  … +${count} more evidence entries omitted`,
+    provenanceHeading: '  Provenance:',
+    provenanceItems,
+    provenanceEmpty: '  Provenance: no Story scenario checks in this slice (standalone / exploratory or native-tested).',
+    provenanceOmit: count => `  … +${count} more checks omitted for 1-screen budget`,
+    maxLines: BOUNDARY_CARD_MAX_LINES,
+  }).map(sanitizeBoundaryLine);
 }

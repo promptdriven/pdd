@@ -11,6 +11,7 @@ import {
   BOUNDARY_CARD_MAX_LINES,
   buildHumanBoundaryCard,
   formatApproveBoundaryCard,
+  summarizeBoundaryEvidence,
 } from '../src/human-boundary-card.mjs';
 import { runApprove } from '../src/prompt-approve.mjs';
 import { DETAILS_OPEN, readablePrTop } from '../src/workflow-pr-body.mjs';
@@ -1123,5 +1124,634 @@ test('3297 schema alignment: newline pdd-boundary, Out-of-scope exclusion, conte
   assert.deepEqual(card.divergences, []);
   assert.equal(card.sampleSummary, '3/3 samples agreed');
 });
+
+function deepFreeze(value) {
+  if (value && typeof value === 'object') {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
+test('3297 summarizeBoundaryEvidence: keeps owner lookup, local SVG lint, hosted Story assertions, and receipted native checks separate without mutating inputs', () => {
+  const fourObsInput = deepFreeze({
+    ownerLookups: [{
+      targetPath: 'src/alert-router.mjs',
+      ownerPrompt: 'prompts/alert-router.prompt.md',
+      source: 'header',
+      certain: true,
+    }],
+    localLint: {
+      exitCode: 0,
+      state: 'partial',
+      localOnly: true,
+      scope: 'SVG layout only',
+      warningCount: 0,
+      problemCount: 0,
+      incompleteSave: false,
+      inspectedPrompts: ['prompts/alert-router.prompt.md'],
+      inspectedTests: ['tests/alert-router.json'],
+    },
+    hostedStoryRuns: [{
+      storyPath: 'user_stories/alert-router.md',
+      testPath: 'tests/alert-router.json',
+      loadedPrompts: ['prompts/alert-router.prompt.md'],
+      missingOwnerConnection: false,
+      state: 'passed',
+      passedAssertions: [
+        'AC1: suppress pager alert during blackout',
+        'AC2: record suppression reason',
+      ],
+      totalAssertions: 2,
+    }],
+    nativeChecks: [{
+      behavior: 'suppresses live pager webhook on staging host',
+      targetHost: 'staging-east-1',
+      runner: 'native-smoke',
+      receipt: {
+        receiptId: 'native-ev-3297-smoke-1',
+        source: 'pdd.native-evidence-record.v1',
+        status: 'passed',
+        verifiedBehaviors: ['suppresses live pager webhook on staging host'],
+      },
+    }],
+  });
+
+  const combined = summarizeBoundaryEvidence(fourObsInput);
+  assert.equal(combined.advisory, true);
+  assert.equal(combined.entries.length, 4);
+  assert.ok(combined.lines.length <= BOUNDARY_CARD_MAX_LINES);
+
+  // 1) pdd owner resolution
+  assert.deepEqual(combined.entries[0], {
+    kind: 'owner-resolution',
+    label: 'resolved',
+    source: 'pdd owner (header)',
+    scope: 'ownership lookup: src/alert-router.mjs -> prompts/alert-router.prompt.md (certain)',
+    exitCode: null,
+    ownerPrompt: 'prompts/alert-router.prompt.md',
+    loadedPrompts: [],
+    passedAssertions: [],
+    receiptId: null,
+    creditsPromptRules: false,
+    creditsModeledAssertions: false,
+    creditsNativeBehavior: false,
+    note: 'ownership lookup only; checks no prompt rules or behavior',
+  });
+  assert.deepEqual(combined.credits.resolvedOwners, ['prompts/alert-router.prompt.md']);
+
+  // 2) pdd lint --local exit 0 stays partial with zero prompt-rule credit
+  assert.equal(combined.entries[1].kind, 'local-lint');
+  assert.equal(combined.entries[1].label, 'partial');
+  assert.equal(combined.entries[1].exitCode, 0);
+  assert.equal(combined.entries[1].source, 'pdd lint --local');
+  assert.equal(combined.entries[1].scope, 'SVG layout only; prompt rules not checked');
+  assert.equal(combined.entries[1].creditsPromptRules, false);
+  assert.equal(combined.credits.localLintPartial, true);
+  assert.equal(combined.credits.localLintCreditsPromptRules, false);
+
+  // 3) hosted Story run credits modeled assertions and loaded prompt rules, never native behavior
+  assert.equal(combined.entries[2].kind, 'hosted-story');
+  assert.equal(combined.entries[2].label, 'passed');
+  assert.equal(combined.entries[2].source, 'pdd test (hosted): user_stories/alert-router.md');
+  assert.deepEqual(combined.entries[2].loadedPrompts, ['prompts/alert-router.prompt.md']);
+  assert.deepEqual(combined.entries[2].passedAssertions, [
+    'AC1: suppress pager alert during blackout',
+    'AC2: record suppression reason',
+  ]);
+  assert.equal(combined.entries[2].creditsPromptRules, true);
+  assert.equal(combined.entries[2].creditsModeledAssertions, true);
+  assert.equal(combined.entries[2].creditsNativeBehavior, false);
+  assert.deepEqual(combined.credits.hostedPassedAssertions, [
+    'AC1: suppress pager alert during blackout',
+    'AC2: record suppression reason',
+  ]);
+
+  // 4) receipted native smoke check gets native credit only via matching passing receipt
+  assert.equal(combined.entries[3].kind, 'native-check');
+  assert.equal(combined.entries[3].label, 'verified');
+  assert.equal(combined.entries[3].receiptId, 'native-ev-3297-smoke-1');
+  assert.equal(combined.entries[3].creditsNativeBehavior, true);
+  assert.deepEqual(combined.credits.nativeVerifiedBehaviors, ['suppresses live pager webhook on staging host']);
+  assert.deepEqual(combined.credits.nativeUnverifiedBehaviors, []);
+
+  // Control: mislabeled raw state="passed" with localOnly=true + incompleteSave=true still stays partial
+  const localOnlyControl = summarizeBoundaryEvidence({
+    ownerLookups: fourObsInput.ownerLookups,
+    localLint: { ...fourObsInput.localLint, state: 'passed', incompleteSave: true },
+  });
+  assert.equal(localOnlyControl.entries[1].label, 'partial');
+  assert.equal(localOnlyControl.entries[1].exitCode, 0);
+  assert.equal(localOnlyControl.entries[1].scope, 'SVG layout only; incomplete local save; prompt rules not checked');
+  assert.equal(localOnlyControl.entries[1].creditsPromptRules, false);
+  assert.equal(localOnlyControl.credits.localLintPartial, true);
+  assert.equal(localOnlyControl.credits.localLintCreditsPromptRules, false);
+  assert.deepEqual(localOnlyControl.credits.hostedPassedAssertions, []);
+
+  // Control: unconnected hosted Story run gets zero credit
+  const unconnected = summarizeBoundaryEvidence({
+    hostedStoryRuns: [{
+      storyPath: 'user_stories/alert-router.md',
+      testPath: 'tests/alert-router.json',
+      loadedPrompts: ['prompts/simulator.prompt.md'],
+      missingOwnerConnection: true,
+      state: 'passed',
+      passedAssertions: ['AC1: suppress pager alert during blackout'],
+      totalAssertions: 1,
+    }],
+  });
+  assert.equal(unconnected.entries[0].label, 'unconnected');
+  assert.equal(unconnected.entries[0].creditsModeledAssertions, false);
+  assert.equal(unconnected.entries[0].creditsPromptRules, false);
+  assert.equal(unconnected.entries[0].creditsNativeBehavior, false);
+  assert.deepEqual(unconnected.credits.hostedPassedAssertions, []);
+
+  // Control: native behavior requires valid passing receipt covering that exact behavior
+  const nativeControl = summarizeBoundaryEvidence({
+    nativeChecks: [
+      { behavior: 'drains active connections on staging host', targetHost: 'staging-east-1', runner: 'native-smoke', receipt: null },
+      {
+        behavior: 'rotates webhook signing key on staging host',
+        targetHost: 'staging-east-1',
+        runner: 'native-smoke',
+        receipt: { receiptId: 'native-ev-3297-smoke-other', source: 'pdd.native-evidence-record.v1', status: 'passed', verifiedBehaviors: ['health endpoint returns 200'] },
+      },
+      {
+        behavior: 'retries dead-letter delivery on staging host',
+        targetHost: 'staging-east-1',
+        runner: 'native-smoke',
+        receipt: { receiptId: 'native-ev-3297-smoke-fail', source: 'pdd.native-evidence-record.v1', status: 'failed', verifiedBehaviors: ['retries dead-letter delivery on staging host'] },
+      },
+      {
+        behavior: 'checks skipped smoke target',
+        targetHost: 'staging-east-1',
+        runner: 'native-smoke',
+        receipt: { receiptId: 'native-ev-3297-smoke-skip', source: 'pdd.native-evidence-record.v1', status: 'skipped', verifiedBehaviors: ['checks skipped smoke target'] },
+      },
+      {
+        behavior: 'rejects blank receipt metadata',
+        targetHost: 'staging-east-1',
+        runner: 'native-smoke',
+        receipt: { receiptId: '   ', source: 'pdd.native-evidence-record.v1', status: 'passed', verifiedBehaviors: ['rejects blank receipt metadata'] },
+      },
+      {
+        behavior: 'suppresses live pager webhook on staging host',
+        targetHost: 'staging-east-1',
+        runner: 'native-smoke',
+        receipt: { receiptId: 'native-ev-3297-smoke-2', source: 'pdd.native-evidence-record.v1', status: 'passed', verifiedBehaviors: ['suppresses live pager webhook on staging host'] },
+      },
+    ],
+  });
+  assert.deepEqual(nativeControl.entries.map(e => [e.label, e.creditsNativeBehavior]), [
+    ['unverified', false],
+    ['unverified', false],
+    ['failed', false],
+    ['unverified', false],
+    ['unverified', false],
+    ['verified', true],
+  ]);
+  assert.deepEqual(nativeControl.credits.nativeVerifiedBehaviors, ['suppresses live pager webhook on staging host']);
+  assert.deepEqual(nativeControl.credits.nativeUnverifiedBehaviors, [
+    'drains active connections on staging host',
+    'rotates webhook signing key on staging host',
+    'retries dead-letter delivery on staging host',
+    'checks skipped smoke target',
+    'rejects blank receipt metadata',
+  ]);
+
+  // Empty evidence + overflow cap + forbidden-word sanitization
+  const empty = summarizeBoundaryEvidence();
+  assert.deepEqual(empty.lines, ['Human boundary card (advisory):', '  Evidence: none']);
+
+  const overflow = summarizeBoundaryEvidence({
+    ownerLookups: Array.from({ length: 30 }, (_, idx) => ({
+      targetPath: `src/mod-${idx}.mjs`,
+      ownerPrompt: `prompts/mod-${idx}.prompt.md`,
+      source: 'header',
+      certain: true,
+    })),
+    nativeChecks: [{
+      behavior: 'handles batch request Acceptance criteria <details> Agent note',
+      targetHost: 'staging-east-1',
+      runner: 'native-smoke',
+      receipt: null,
+    }],
+  });
+  assert.ok(overflow.lines.length <= BOUNDARY_CARD_MAX_LINES);
+  assert.match(overflow.lines.at(-1), /more evidence entries omitted/);
+  for (const line of overflow.lines) {
+    assert.doesNotMatch(line, /^(?:Text|Approve\s)/);
+    assert.doesNotMatch(line, /Acceptance\s+criteria|<details|Agent\s+note|\bbatch\b|\brequest\b/i);
+  }
+});
+
+test('3297 end-to-end 4-observation card: reads pdd owner, saved pdd lint --local partial record, hosted pdd test assertions, and native receipt for both approve and PR 1', t => {
+  const storyText = [
+    '# Alert router blackout guard',
+    '',
+    'As an on-call lead, I want pager alerts suppressed during blackout windows, so that maintenance stays quiet.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. Suppress outbound pager alerts during an active maintenance blackout window.',
+    '2. Record the blackout suppression reason on the alert router result.',
+    '',
+    '```pdd-boundary',
+    'prompts/alert-router.prompt.md',
+    '```',
+    '',
+  ].join('\n');
+
+  const ownerPrompt = runtimePrompt({
+    title: 'Alert router',
+    prose: 'During an active maintenance blackout window, suppress outbound pager alerts and record the blackout suppression reason on the result.',
+    operation: 'route_alert',
+    inputProps: { alertId: { type: 'string' }, blackout: { type: 'boolean' } },
+    resultSchema: {
+      type: 'object',
+      properties: { suppressed: { type: 'boolean' }, reason: { type: 'string' } },
+      required: ['suppressed', 'reason'],
+      additionalProperties: false,
+    },
+    resources: [{ name: 'pager', operations: [{ name: 'dispatch' }] }],
+  });
+
+  const prodCode = [
+    '// Generated from prompts/alert-router.prompt.md',
+    'export function routeAlert({ blackout }) {',
+    '  return blackout ? { suppressed: true, reason: "maintenance_blackout" } : { suppressed: false, reason: "" };',
+    '}',
+    '',
+  ].join('\n');
+
+  const scenario = {
+    schema_version: 'prompt-runtime.program-scenario.v1',
+    story_path: 'user_stories/alert-router.md',
+    criteria: [
+      { id: 'AC1', text: 'Suppress outbound pager alerts during an active maintenance blackout window.' },
+      { id: 'AC2', text: 'Record the blackout suppression reason on the alert router result.' },
+    ],
+    initial_world: {},
+    steps: [{
+      step_id: 'blackout-suppress',
+      entry_path: 'prompts/alert-router.prompt.md',
+      operation: 'route_alert',
+      input: { alertId: 'a-1', blackout: true },
+      checks: [
+        { criterion_id: 'AC1', target: 'calls', path: '/resources/pager/dispatch', op: 'equals', value: 0 },
+        { criterion_id: 'AC2', target: 'result', path: '/reason', op: 'equals', value: 'maintenance_blackout' },
+      ],
+    }],
+  };
+
+  const { root, stateDir } = makeGitRepo(t, {
+    'user_stories/alert-router.md': storyText,
+    'prompts/alert-router.prompt.md': ownerPrompt,
+    'src/alert-router.mjs': prodCode,
+    'tests/alert-router.json': JSON.stringify(scenario, null, 2),
+  });
+
+  // 1) Saved pdd lint --local partial batch (exit 0, 0 warnings, 0 problems, complete summary.json)
+  const localBatchId = '20261118-100000-loc1';
+  const localDir = join(stateDir, 'batches', localBatchId);
+  mkdirSync(localDir, { recursive: true });
+  const localReason = { code: 'local-only', message: 'checked SVG layout only; prompts not checked' };
+  const localScope = { tests: ['tests/alert-router.json'], prompts: ['prompts/alert-router.prompt.md'] };
+  const localSummaryLine = 'partial: checked SVG layout only; prompts not checked (local-only). 0 warnings. 0 AI calls. No checks were sent.';
+  writeFileSync(join(localDir, 'batch.json'), JSON.stringify({
+    version: 1,
+    batch: localBatchId,
+    root,
+    created_at: '2026-11-18T10:00:00Z',
+    intent: 'lint-only',
+    local_only: true,
+    source_sha256: null,
+    local_scope: localScope,
+    summary_line: localSummaryLine,
+    exit_code: 0,
+    warnings: [],
+    problems: [],
+    rows: [],
+    lint: { state: 'partial', lint_state: 'partial', reason: localReason, request_ids: [] },
+  }));
+  writeFileSync(join(localDir, 'summary.json'), JSON.stringify({
+    batch: localBatchId,
+    repo: root,
+    exit_code: 0,
+    state: 'partial',
+    lint_state: 'partial',
+    reason: localReason,
+    local_only: true,
+    local_scope: localScope,
+    summary_line: localSummaryLine,
+    warnings: [],
+    problems: [],
+    rows: [],
+    report_url: null,
+  }));
+
+  // 2) Saved hosted pdd test batch passing both modeled assertions
+  const hostedBatchId = '20261118-100500-hst1';
+  const hostedReqId = '55555555-5555-4555-8555-555555555555';
+  const hostedDir = join(stateDir, 'batches', hostedBatchId);
+  mkdirSync(hostedDir, { recursive: true });
+  writeFileSync(join(hostedDir, 'batch.json'), JSON.stringify({
+    version: 1,
+    batch: hostedBatchId,
+    intent: 'check',
+    root,
+    created_at: '2026-11-18T10:05:00Z',
+    rows: [{ test: 'tests/alert-router.json', story: 'user_stories/alert-router.md', request_ids: [hostedReqId], ended_at: Date.UTC(2026, 10, 18, 10, 5) }],
+  }));
+  writeFileSync(join(hostedDir, `${hostedReqId}.json`), JSON.stringify({
+    id: hostedReqId,
+    requestId: hostedReqId,
+    command: 'check',
+    state: 'passed',
+    result: {
+      report: {
+        samples: [{
+          steps: [{
+            step_id: 'blackout-suppress',
+            result: { suppressed: true, reason: 'maintenance_blackout' },
+            calls: { pager: { dispatch: [] } },
+            checks: [
+              { criterion_id: 'AC1', target: 'calls', path: '/resources/pager/dispatch', passed: true, actual: 0 },
+              { criterion_id: 'AC2', target: 'result', path: '/reason', passed: true },
+            ],
+          }],
+        }],
+      },
+    },
+  }));
+
+  // 3) Saved native smoke receipt in .git/pdd/runs
+  const runDir = join(root, '.git', 'pdd', 'runs', '3297-smoke');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'status.json'), JSON.stringify({
+    v: 1,
+    runId: 'native-ev-3297-smoke-1',
+    root,
+    evidence: [{
+      native: {
+        schema: 'pdd.native-evidence-record.v1',
+        runId: 'native-ev-3297-smoke-1',
+        receiptId: 'native-ev-3297-smoke-1',
+        profileId: 'native-smoke',
+        runner: 'native-smoke',
+        targetHost: 'staging-east-1',
+        storyPath: 'user_stories/alert-router.md',
+        status: 'passed',
+        verifiedBehaviors: ['suppresses live pager webhook on staging host'],
+      },
+    }],
+  }));
+
+  const card = buildHumanBoundaryCard({
+    root,
+    promptPaths: ['prompts/alert-router.prompt.md'],
+    storyPaths: ['user_stories/alert-router.md'],
+    changedPaths: ['src/alert-router.mjs', 'prompts/alert-router.prompt.md', 'user_stories/alert-router.md', 'tests/alert-router.json'],
+    env: { PDD_STATE_DIR: stateDir },
+  });
+
+  const ev = card.evidenceSummary;
+  assert.equal(ev.entries.length, 4);
+  assert.deepEqual(ev.entries.map(e => [e.kind, e.label]), [
+    ['owner-resolution', 'resolved'],
+    ['local-lint', 'partial'],
+    ['hosted-story', 'passed'],
+    ['native-check', 'verified'],
+  ]);
+  assert.deepEqual(ev.credits.resolvedOwners, ['prompts/alert-router.prompt.md']);
+  assert.equal(ev.credits.localLintPartial, true);
+  assert.equal(ev.credits.localLintCreditsPromptRules, false);
+  assert.equal(ev.credits.hostedPassedAssertions.length, 2);
+  assert.deepEqual(ev.credits.nativeVerifiedBehaviors, ['suppresses live pager webhook on staging host']);
+  assert.deepEqual(ev.credits.nativeUnverifiedBehaviors, []);
+
+  // Verify approve card rendering (<= 25 lines, all 4 observations visible)
+  const approveLines = formatApproveBoundaryCard(card);
+  assert.ok(approveLines.length <= BOUNDARY_CARD_MAX_LINES, `Approve card exceeded 25 lines: ${approveLines.length}`);
+  const approveText = approveLines.join('\n');
+  assert.match(approveText, /Evidence:/);
+  assert.match(approveText, /owner-resolution \[resolved\].*prompts\/alert-router\.prompt\.md.*pdd owner \(header\)/);
+  assert.match(approveText, /local lint \[partial\] \(exit 0\).*SVG layout only; prompt rules not checked.*pdd lint --local/);
+  assert.match(approveText, /hosted-story \[passed\].*modeled policy assertions \(2\/2\).*AC1:.*pdd test \(hosted\): user_stories\/alert-router\.md/);
+  assert.match(approveText, /native-check \[verified\].*staging-east-1.*native-ev-3297-smoke-1.*pdd\.native-evidence-record\.v1/);
+
+  // Verify PR 1 readable top rendering (<= 25 lines, inert Markdown, all 4 observations visible)
+  const prTop = readablePrTop(specFactsWithBoundary(card));
+  const prBoundaryLines = extractPrBoundarySection(prTop.text);
+  assert.ok(prBoundaryLines.length <= BOUNDARY_CARD_MAX_LINES, `PR Boundary exceeded 25 lines: ${prBoundaryLines.length}`);
+  const prBoundaryText = prBoundaryLines.join('\n');
+  assert.match(prBoundaryText, /- \*\*Evidence:\*\*/);
+  assert.match(prBoundaryText, /owner-resolution \[resolved\u200b?\].*prompts\/alert-router\.prompt\.md/);
+  assert.match(prBoundaryText, /local lint \[partial\] \(exit 0\).*SVG layout only; prompt rules not checked/);
+  assert.match(prBoundaryText, /hosted-story \[passed\].*modeled policy assertions \(2\/2\)/);
+  assert.match(prBoundaryText, /native-check \[verified\].*native-ev-3297-smoke-1/);
+  assert.equal(prTop.text.match(/https:\/\//g)?.length ?? 0, 1);
+  assert.doesNotMatch(prTop.text, /Acceptance criteria|<details|Agent note|\bbatch\b|\brequest\b/i);
+
+  // Incomplete local save (mismatched summary.json) stays partial with explicit incomplete-save scope
+  writeFileSync(join(localDir, 'summary.json'), JSON.stringify({ corrupted: true }));
+  const incompleteCard = buildHumanBoundaryCard({
+    root,
+    promptPaths: ['prompts/alert-router.prompt.md'],
+    storyPaths: ['user_stories/alert-router.md'],
+    changedPaths: ['src/alert-router.mjs', 'prompts/alert-router.prompt.md', 'user_stories/alert-router.md', 'tests/alert-router.json'],
+    env: { PDD_STATE_DIR: stateDir },
+  });
+  const localEntry = incompleteCard.evidenceSummary.entries.find(e => e.kind === 'local-lint');
+  assert.equal(localEntry.label, 'partial');
+  assert.equal(localEntry.creditsPromptRules, false);
+  assert.match(localEntry.scope, /incomplete local save; prompt rules not checked/);
+});
+
+test('3297 negative controls: bare Native validation heading and unverified native receipts give zero native credit; unloaded pdd-owner prompt marks hosted run unconnected; compaction preserves critical gaps', t => {
+  const storyText = [
+    '# Unreceipted webhook guard',
+    '',
+    'As a security lead, I want webhook egress verified by a real native receipt, so that unverified headings cannot fake native proof.',
+    '',
+    '## Acceptance criteria',
+    '',
+    '1. Suppress outbound webhook dispatch during security lockdown.',
+    '',
+    '## Native validation',
+    '',
+    '- Target host smoke test (not yet executed).',
+    '',
+  ].join('\n');
+
+  const simPrompt = runtimePrompt({
+    title: 'Webhook simulator',
+    prose: 'Simulate security lockdown and return an effects array describing outbound webhook dispatch.',
+    operation: 'sim_webhook',
+    inputProps: { lockdown: { type: 'boolean' } },
+    resultSchema: {
+      type: 'object',
+      properties: { effects: { type: 'array', items: { type: 'string' } } },
+      required: ['effects'],
+      additionalProperties: false,
+    },
+  });
+
+  const realOwnerPrompt = runtimePrompt({
+    title: 'Webhook egress owner',
+    prose: 'During security lockdown, never dispatch outbound webhook notifications.',
+    operation: 'dispatch_webhook',
+    inputProps: { lockdown: { type: 'boolean' } },
+  });
+
+  const prodCode = '// Generated from prompts/webhook-owner.prompt.md\nexport const dispatchWebhook = () => [];\n';
+
+  const scenario = {
+    schema_version: 'prompt-runtime.program-scenario.v1',
+    story_path: 'user_stories/webhook-guard.md',
+    criteria: [{ id: 'AC1', text: 'Suppress outbound webhook dispatch during security lockdown.' }],
+    initial_world: {},
+    steps: [{
+      step_id: 'lockdown',
+      entry_path: 'prompts/webhook-sim.prompt.md',
+      operation: 'sim_webhook',
+      input: { lockdown: true },
+      checks: [{ criterion_id: 'AC1', target: 'result', path: '/effects', op: 'equals', value: [] }],
+    }],
+  };
+
+  const { root, stateDir } = makeGitRepo(t, {
+    'user_stories/webhook-guard.md': storyText,
+    'prompts/webhook-sim.prompt.md': simPrompt,
+    'prompts/webhook-owner.prompt.md': realOwnerPrompt,
+    'src/webhook-owner.mjs': prodCode,
+    'tests/webhook-guard.json': JSON.stringify(scenario, null, 2),
+  });
+
+  // Hosted run passed on webhook-sim while real pdd-owner prompt webhook-owner.prompt.md was never loaded!
+  const batchId = '20261118-110000-unc1';
+  const reqId = '66666666-6666-4666-8666-666666666666';
+  mkdirSync(join(stateDir, 'batches', batchId), { recursive: true });
+  writeFileSync(join(stateDir, 'batches', batchId, 'batch.json'), JSON.stringify({
+    version: 1,
+    batch: batchId,
+    intent: 'check',
+    root,
+    created_at: '2026-11-18T11:00:00Z',
+    rows: [{ test: 'tests/webhook-guard.json', story: 'user_stories/webhook-guard.md', request_ids: [reqId], ended_at: Date.UTC(2026, 10, 18, 11, 0) }],
+  }));
+  writeFileSync(join(stateDir, 'batches', batchId, `${reqId}.json`), JSON.stringify({
+    id: reqId,
+    requestId: reqId,
+    command: 'check',
+    state: 'passed',
+    result: {
+      report: {
+        samples: [{ steps: [{ step_id: 'lockdown', result: { effects: [] }, checks: [{ criterion_id: 'AC1', passed: true }] }] }],
+      },
+    },
+  }));
+
+  // Saved native record with intake.admission="unverified" must NOT grant native execution credit
+  const runDir = join(root, '.git', 'pdd', 'runs', '3297-unverified');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'status.json'), JSON.stringify({
+    v: 1,
+    runId: 'native-ev-unverified',
+    root,
+    evidence: [{
+      native: {
+        schema: 'pdd.native-evidence-record.v1',
+        runId: 'native-ev-unverified',
+        profileId: 'native-smoke',
+        storyPath: 'user_stories/webhook-guard.md',
+        intake: { admission: 'unverified' },
+      },
+    }],
+  }));
+
+  const card = buildHumanBoundaryCard({
+    root,
+    storyPaths: ['user_stories/webhook-guard.md'],
+    changedPaths: ['src/webhook-owner.mjs', 'user_stories/webhook-guard.md', 'tests/webhook-guard.json'],
+    env: { PDD_STATE_DIR: stateDir },
+  });
+
+  // Bare ## Native validation heading stays in verificationSplit.native, NEVER grants 'native test' credit
+  assert.ok(card.verificationSplit.native.some(entry => entry.includes('user_stories/webhook-guard.md (Native validation)')));
+  const ac1 = card.provenanceRows.find(r => r.label === 'AC1');
+  assert.ok(!ac1.observations.includes('native test'), `Bare Native validation heading or unverified receipt must not grant native test credit: ${ac1.observations}`);
+  assert.ok(
+    ac1.observations.some(o => o.includes('port spy or native observation still needed')),
+    `Bare Native validation heading must not suppress port/native warning: ${ac1.observations}`,
+  );
+
+  // pdd owner resolved prompts/webhook-owner.prompt.md from changed src/webhook-owner.mjs -> unloaded -> hosted run marked unconnected
+  assert.ok(card.unloadedOwners.includes('prompts/webhook-owner.prompt.md'));
+  const hostedEntry = card.evidenceSummary.entries.find(e => e.kind === 'hosted-story');
+  assert.equal(hostedEntry.label, 'unconnected');
+  assert.equal(hostedEntry.creditsModeledAssertions, false);
+  assert.equal(hostedEntry.creditsPromptRules, false);
+  assert.deepEqual(card.evidenceSummary.credits.hostedPassedAssertions, []);
+
+  // Unverified saved native record gets zero native credit
+  const nativeEntry = card.evidenceSummary.entries.find(e => e.kind === 'native-check');
+  assert.equal(nativeEntry.label, 'unverified');
+  assert.equal(nativeEntry.creditsNativeBehavior, false);
+  assert.deepEqual(card.evidenceSummary.credits.nativeVerifiedBehaviors, []);
+
+  // Compaction priority: critical evidence gaps + missing owner connection survive <= 25-line cap
+  const heavyCard = {
+    ...card,
+    provenanceRows: [
+      ...Array.from({ length: 18 }, (_, i) => ({
+        label: `AC${i + 2}`,
+        summary: `ordinary check ${i + 2}`,
+        owner: 'prompts/webhook-owner.prompt.md',
+        missingConnection: false,
+        observations: ['model-returned value'],
+        priority: 3,
+      })),
+      {
+        label: 'AC1',
+        summary: 'critical owner gap',
+        owner: 'missing owner connection (unloaded prompts/webhook-owner.prompt.md)',
+        missingConnection: true,
+        observations: ['model-returned value (port spy or native observation still needed)'],
+        priority: 0,
+      },
+    ],
+    evidenceSummary: summarizeBoundaryEvidence({
+      ownerLookups: Array.from({ length: 12 }, (_, i) => ({
+        targetPath: `src/extra-${i}.mjs`,
+        ownerPrompt: `prompts/extra-${i}.prompt.md`,
+        source: 'header',
+        certain: true,
+      })),
+      localLint: { exitCode: 0, state: 'passed', localOnly: true, scope: 'SVG layout only', warningCount: 0, problemCount: 0, incompleteSave: false, inspectedPrompts: [], inspectedTests: [] },
+      nativeChecks: [{ behavior: 'Fixes #999 @oncall https://evil.example.test/leak unverified smoke', targetHost: 'staging-east-1', runner: 'native-smoke', receipt: null }],
+    }),
+  };
+
+  const compactApprove = formatApproveBoundaryCard(heavyCard);
+  assert.ok(compactApprove.length <= BOUNDARY_CARD_MAX_LINES, `Compact approve card exceeded 25 lines: ${compactApprove.length}`);
+  const compactApproveText = compactApprove.join('\n');
+  assert.match(compactApproveText, /local lint \[partial\]/);
+  assert.match(compactApproveText, /native-check \[unverified\]/);
+  assert.match(compactApproveText, /missing owner connection/);
+  assert.match(compactApproveText, /Verification split:/);
+  assert.match(compactApproveText, /Budget & samples:/);
+
+  const compactPrTop = readablePrTop(specFactsWithBoundary(heavyCard));
+  const compactPrLines = extractPrBoundarySection(compactPrTop.text);
+  assert.ok(compactPrLines.length <= BOUNDARY_CARD_MAX_LINES, `Compact PR Boundary exceeded 25 lines: ${compactPrLines.length}`);
+  const compactPrText = compactPrLines.join('\n');
+  assert.match(compactPrText, /local lint \[partial\]/);
+  assert.match(compactPrText, /native-check \[unverified\]/);
+  assert.match(compactPrText, /missing owner connection/);
+  assert.doesNotMatch(compactPrTop.text, /Fixes #999|@oncall|<details|Acceptance criteria|\bbatch\b|\brequest\b/i);
+  assert.equal(compactPrTop.text.match(/https:\/\//g)?.length ?? 0, 1);
+});
+
 
 
