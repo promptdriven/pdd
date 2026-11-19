@@ -4,7 +4,7 @@
 
 ## 14. Bug workflow
 
-1. Find the owning prompt and reproduce the issue against the CURRENT prompt with `pdd test` (save as `"before"` evidence: `pdd workflow evidence-associate RUN --workspace . --stage before --commit SHA --test PATH`, then `pdd workflow evidence RUN --summary /tmp/before.json`).
+1. Find the owning prompt and reproduce the issue against the CURRENT prompt with `pdd test` (save as `"before"` evidence: `pdd workflow evidence-associate RUN --workspace . --stage before --commit SHA --test PATH`, then `pdd workflow evidence RUN --summary .pdd/before.json`).
 2. Put the verdict line first at the Story gate:
    - Prompt bug: `"Verdict: the bug is in the PROMPT (its check fails on the issue's case)."` → show `before ✗ → after ✓`.
    - Code-only bug: `"Verdict: the prompt is right; the bug is only in the CODE."` → unchanged prompt passes fresh `pdd test` on old & new snapshots; native regression fails on old code for the bug's reason and passes on new code (`before ✓ → after ✓`).
@@ -27,7 +27,10 @@ Pass labeled lines in your `done` summary (later lines replace earlier ones):
 - `Title:` what must be true (PR 1) / what is true after merge (PR 2)
 - `Problem:` wrong or missing behavior in one sentence
 - `Cause:`, `Fix:`, `Result:` (PR 2, one sentence each)
-- `Case:` one line per issue case (`input, today, expected` / `input, before, after, expected`)
+- `Case:` one line per issue case (`input | today | expected` / `input | before | after | expected`)
+- `File:` `File: PATH — NOTE`, at most one short note per file
+- One-PR runs (`small-change`) use `Problem:`, `Change:`, and `Result:`. Use `Area:` only when the owning prompt's name is not a good title area.
+- **Issue-closing rules:** a commit message can close an issue, so **never write `Fixes #N` in a commit message**. Outside a workflow run (including integration or release PRs into `main`), write one `Closes #N` line per completed issue in the PR body, and `Refs #N` for any partial issue. Never paste logs, warnings, or local computer paths (`/Users/…`). PR 1 cannot merge while a prompt in it is still draft.
 
 ## 22. Bounded handoffs and measurement
 

@@ -37,8 +37,9 @@ An app map with a follow-up `after` step (`app-map.json`):
      "bind": "/panel/reply"}]}]}
 ```
 
-- **Mockup screens (`"source": "mockup"`):** point `"screen"` to a prompt whose `## Appearance` links `.ui.svg` files and set `"operation": null`.
-- **Host timers (`timers`):** optional root array `[{"id": "tick", "screen": "board", "interval_ms": 500, "when": {"path": "/state/status", "equals": "playing"}, "handler": {"prompt_path": "...", "operation": "tick"}, "input": {...}, "state": {...}}]` drives timed behavior without page `<script>`.
+- **Mockup screens (`"source": "mockup"`):** set `"prompt_path"` to a prompt whose `## Appearance` links `.ui.svg` files, with `"operation": null`, `"format": "svg"`, and `"result_pointer": null`.
+- **Host timers (`timers`):** optional root array (at most `16` timers, at most one per non-wildcard screen; `interval_ms` is a strict integer `1000..3600000`) driving timed behavior without page `<script>`. Each timer has exact fields `id`, `screen`, `interval_ms`, `enabled_pointer` (required Boolean state field), `generation_pointer` (required integer `0..9007199254740991`), `handler`, `input` (may copy `/state/...` or proved `/event/<field>` from `{timer_id, generation, sequence, elapsed_ms}`), `state`, `next` (and optional `after`):
+  `{"id": "order-refresh", "screen": "cart", "interval_ms": 1000, "enabled_pointer": "/polling", "generation_pointer": "/generation", "handler": {"prompt_path": "prompts/cart.prompt.md", "operation": "refresh_status"}, "input": {"state": {"$ref": "/state"}, "generation": {"$ref": "/event/generation"}}, "state": {"$ref": "/result/state"}, "next": {"kind": "same", "screen": null, "route_pointer": null}}`
 
 ## 20. HTML checks and Simulator rendering
 

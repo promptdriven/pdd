@@ -1,7 +1,7 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: e284ce98a1140b0a93c09bee2055d883e16948def4294504dca4136c09a9c82d).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 768120db54dadf45bc1e225351c040ce48b0d7ec6b1f9bc2a58ea60548803854).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs, { realpathSync } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -686,13 +686,23 @@ function sleepWithSignal(ms, signal) {
   });
 }
 
-function attachAdaptivePolling(merged, rawPorts) {
+/** Attach runCheck-only adaptive polling without shortening Retry-After/429/5xx or non-poll sleeps. */
+function attachRunCheckAdaptivePolling(merged, rawPorts) {
   // Preserve explicit caller/test timing controls untouched.
   if (rawPorts?.pollMs !== undefined || rawPorts?.sleep !== undefined) return;
   let pollTicks = 0;
+  let lastPollable = false;
+  let throttled = false;
   merged.pollMs = ADAPTIVE_POLL_CAP_MS;
   merged.sleep = (ms, signal) => {
-    if (typeof ms === 'number' && ms >= ADAPTIVE_POLL_MID_MS && ms <= ADAPTIVE_POLL_CAP_MS) {
+    const canShorten =
+      lastPollable &&
+      !throttled &&
+      typeof ms === 'number' &&
+      ms >= ADAPTIVE_POLL_FAST_MS &&
+      ms <= ADAPTIVE_POLL_CAP_MS;
+    lastPollable = false;
+    if (canShorten) {
       pollTicks += 1;
       const cap =
         pollTicks <= ADAPTIVE_POLL_FAST_TICKS
@@ -706,10 +716,39 @@ function attachAdaptivePolling(merged, rawPorts) {
   };
   if (typeof merged.fetch === 'function') {
     const wrappedFetch = merged.fetch;
-    merged.fetch = (url, init) => {
-      if (String(init?.method ?? 'GET').toUpperCase() === 'POST') pollTicks = 0;
-      return wrappedFetch(url, init);
+    const observedFetch = async (url, init) => {
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      let res;
+      try {
+        res = await wrappedFetch(url, init);
+      } catch (err) {
+        throttled = true;
+        lastPollable = false;
+        pollTicks = Math.max(pollTicks, ADAPTIVE_POLL_MID_TICKS);
+        throw err;
+      }
+      const status = Number(res?.status ?? 0);
+      const hasRetryAfter = Boolean(res?.headers?.get?.('retry-after'));
+      if (status === 429 || status >= 500 || hasRetryAfter) {
+        throttled = true;
+        lastPollable = false;
+        pollTicks = Math.max(pollTicks, ADAPTIVE_POLL_MID_TICKS);
+      } else if (method === 'POST' && status >= 200 && status < 300) {
+        throttled = false;
+        pollTicks = 0;
+        lastPollable = true;
+      } else if (method === 'GET' && status === 200) {
+        throttled = false;
+        lastPollable = true;
+      } else {
+        lastPollable = false;
+      }
+      return res;
     };
+    if (wrappedFetch.__pddLegacyCriteriaWrapped) {
+      Object.defineProperty(observedFetch, '__pddLegacyCriteriaWrapped', { value: true });
+    }
+    merged.fetch = observedFetch;
   }
 }
 
@@ -724,7 +763,6 @@ function seamRuntimePorts(ports = {}, { cwd = null } = {}) {
   if (typeof baseFetch === 'function') {
     merged.fetch = wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, merged);
   }
-  attachAdaptivePolling(merged, ports);
   if (merged.stdout) merged.stdout = normalizeHintStream(merged.stdout);
   if (merged.stderr) merged.stderr = normalizeHintStream(merged.stderr);
   return merged;
@@ -1305,16 +1343,23 @@ function formatLocalCriteriaWarning(testPath, storyPath, classification) {
     return `${testPath}: story-criterion-mismatch: ${classification.difference}`;
   }
   if (classification.kind === 'duplicate-criterion') {
-    return `${testPath}: story-criterion-mismatch: duplicate criterion ${JSON.stringify(classification.criterionId)} in ${storyPath}.`;
+    return `${testPath}: story-criterion-mismatch: duplicate criterion ${JSON.stringify(classification.criterionId)} in ${testPath}.`;
   }
   return null;
 }
 
-function lintShortScenarioFiles(root, ports = {}, { checkCriteriaBindings = false } = {}) {
+function lintShortScenarioFiles(root, ports = {}, { checkCriteriaBindings = false, words = [], cwd = null } = {}) {
   if (typeof root !== 'string' || !root) return [];
   try {
-    const found = findTests({ root, excludeFixtureProjects: true }, ports);
-    const warnings = (found?.tests ?? [])
+    const rawWords = Array.isArray(words) ? words : [];
+    const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 }, ports);
+    let scopedTests = found?.tests ?? [];
+    if (rawWords.length > 0) {
+      const normalized = normalizeSelectionWords(rawWords, cwd ?? root, root, found);
+      const selection = selectTests(found, normalized);
+      scopedTests = selection?.selected ?? [];
+    }
+    const warnings = scopedTests
       .filter(test => test.shortRefusal && typeof test.error === 'string' && test.error.length > 0)
       .map(test => test.error);
     if (!checkCriteriaBindings) return warnings;
@@ -1327,7 +1372,7 @@ function lintShortScenarioFiles(root, ports = {}, { checkCriteriaBindings = fals
     }
     const compiler = hostScenarioCompiler();
     const seen = new Set();
-    for (const test of found?.tests ?? []) {
+    for (const test of scopedTests) {
       if (test.shortRefusal) continue;
       for (const testPath of Array.isArray(test.files) && test.files.length ? test.files : [test.path]) {
         if (!testPath || seen.has(testPath)) continue;
@@ -1356,6 +1401,7 @@ function lintShortScenarioFiles(root, ports = {}, { checkCriteriaBindings = fals
         const classification = compiler.classifyExplicitCriteriaBinding(parsed, {
           storyPath: effectiveStoryPath,
           storySource,
+          allowSubset: true,
         });
         const msg = formatLocalCriteriaWarning(testPath, effectiveStoryPath, classification);
         if (msg) warnings.push(msg);
@@ -1385,6 +1431,48 @@ function normalizeSelectionWords(rawWords, cwd, root, found) {
     } catch {}
     return word.includes('/') || found.visible?.has(rel) || isDir ? (rel || '.') : word;
   });
+}
+
+/** Resolve a repo-relative regular file path, refusing symlinks on any path segment or escapes outside realRoot. */
+function resolveWritableRepoFile(realRoot, relPath) {
+  if (typeof relPath !== 'string' || !relPath || relPath.startsWith('/') || relPath.includes('\0')) {
+    throw new Error('Test file path must be a safe repository-relative path.');
+  }
+  const parts = relPath.split(/[\\/]+/).filter(Boolean);
+  if (!parts.length || parts.some(part => part === '.' || part === '..')) {
+    throw new Error('Test file resolves outside repository root.');
+  }
+  let cur = realRoot;
+  for (const part of parts) {
+    cur = join(cur, part);
+    const st = fs.lstatSync(cur);
+    if (st.isSymbolicLink()) {
+      throw new Error('Symlink test file cannot be overwritten in place.');
+    }
+  }
+  const finalStat = fs.lstatSync(cur);
+  if (!finalStat.isFile()) {
+    throw new Error('Test file is not a regular file.');
+  }
+  const resolved = realpathSync(cur);
+  if (resolved !== cur || (resolved !== realRoot && !resolved.startsWith(realRoot + sep))) {
+    throw new Error('Test file resolves outside repository root.');
+  }
+  return resolved;
+}
+
+/** Write UTF-8 content atomically via a unique sibling temp file and rename. */
+function writeFileAtomically(fullPath, content) {
+  const tmpPath = join(dirname(fullPath), `.${basename(fullPath)}.pdd-tmp-${process.pid}-${randomUUID()}`);
+  try {
+    fs.writeFileSync(tmpPath, content, { encoding: 'utf8', flag: 'wx' });
+    fs.renameSync(tmpPath, fullPath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {}
+    throw err;
+  }
 }
 
 function runEmitV1(input = {}, ports = {}) {
@@ -1430,6 +1518,7 @@ function runEmitV1(input = {}, ports = {}) {
   const sourcePort = createStrictSourceAccess(root, found.workspace, ports).sourceFilePort(found.visible);
   const errors = [];
   const emitted = [];
+  const seenTestPaths = new Set();
   for (const test of selection.selected) {
     if (test.error) {
       errors.push({
@@ -1441,97 +1530,150 @@ function runEmitV1(input = {}, ports = {}) {
       });
       continue;
     }
-    let fullTestPath = null;
-    if (writeMode) {
-      try {
-        fullTestPath = realpathSync(join(realRoot, test.path));
-        if (fullTestPath !== realRoot && !fullTestPath.startsWith(realRoot + sep)) {
-          throw new Error('Test file resolves outside repository root.');
+    const filePaths = Array.isArray(test.files) && test.files.length ? test.files : [test.path];
+    for (const testPath of filePaths) {
+      if (!testPath || seenTestPaths.has(testPath)) continue;
+      seenTestPaths.add(testPath);
+      if (found.workspace && !allowsRuntimePath(found.workspace, testPath)) {
+        errors.push({
+          path: testPath,
+          story_path: test.storyPath ?? null,
+          code: 'workspace-excluded',
+          section: 'document',
+          message: `${testPath}: excluded by workspace policy.`,
+        });
+        continue;
+      }
+      let fullTestPath = null;
+      if (writeMode) {
+        try {
+          fullTestPath = resolveWritableRepoFile(realRoot, testPath);
+        } catch (err) {
+          errors.push({
+            path: testPath,
+            story_path: test.storyPath ?? null,
+            code: 'unreadable-scenario',
+            section: 'document',
+            message: `${testPath}: ${err?.message ?? String(err)}`,
+          });
+          continue;
         }
+      }
+      let rawText;
+      try {
+        // Validate strict source access (visibility, workspace policy, size) before reading raw authored bytes.
+        const strictEntry = sourcePort.read({ path: testPath });
+        rawText = writeMode ? initialReadFileSync(fullTestPath, 'utf8') : strictEntry.content;
       } catch (err) {
         errors.push({
-          path: test.path,
+          path: testPath,
           story_path: test.storyPath ?? null,
           code: 'unreadable-scenario',
           section: 'document',
-          message: `${test.path}: ${err?.message ?? String(err)}`,
+          message: `${testPath}: ${err?.message ?? String(err)}`,
         });
         continue;
       }
-    }
-    let rawText;
-    try {
-      rawText = writeMode ? initialReadFileSync(fullTestPath, 'utf8') : sourcePort.read({ path: test.path }).content;
-    } catch (err) {
-      errors.push({
-        path: test.path,
-        story_path: test.storyPath ?? null,
-        code: 'unreadable-scenario',
-        section: 'document',
-        message: `${test.path}: ${err?.message ?? String(err)}`,
-      });
-      continue;
-    }
-    let storySource = test.storySource ?? null;
-    if (storySource === null && typeof test.storyPath === 'string' && test.storyPath) {
+      let rawStoryPath = test.storyPath ?? null;
+      let explicitStoryPath = null;
       try {
-        storySource = sourcePort.read({ path: test.storyPath }).content;
-      } catch {
-        storySource = null;
+        const parsedRaw = compiler.parseExactScenarioJson(rawText);
+        if (typeof parsedRaw?.story_path === 'string' && parsedRaw.story_path) {
+          explicitStoryPath = parsedRaw.story_path;
+          rawStoryPath = parsedRaw.story_path;
+        }
+      } catch {}
+      let storySource =
+        explicitStoryPath && explicitStoryPath !== test.storyPath ? null : (test.storySource ?? null);
+      if (storySource === null && typeof rawStoryPath === 'string' && rawStoryPath) {
+        try {
+          storySource = sourcePort.read({ path: rawStoryPath }).content;
+        } catch {
+          storySource = null;
+        }
       }
-    }
-    const compiled = compiler.compileScenarioText(rawText, {
-      path: test.path,
-      storyPath: test.storyPath,
-      storySource,
-      space: 2,
-    });
-    if (compiled.refusal) {
-      errors.push({
-        path: test.path,
-        story_path: test.storyPath ?? null,
-        code: compiled.refusal.code,
-        section: compiled.refusal.section,
-        message: `${test.path}: ${compiled.refusal.section}: ${compiled.refusal.message}`,
-      });
-      continue;
-    }
-    let finalExact = compiled.exactDoc;
-    let text = compiler.stringifyExactScenarioJson(finalExact, 2) + '\n';
-    let changed = compiled.changed;
-    const effectiveStoryPath = test.storyPath ?? finalExact?.story_path ?? null;
-    if (writeMode && storySource !== null && effectiveStoryPath) {
-      const bound = compiler.bindScenarioCriteriaText(text, {
-        path: test.path,
-        storyPath: effectiveStoryPath,
+      const compiled = compiler.compileScenarioText(rawText, {
+        path: testPath,
+        storyPath: rawStoryPath,
         storySource,
         space: 2,
       });
-      if (bound.refusal) {
+      if (compiled.refusal) {
         errors.push({
-          path: test.path,
-          story_path: effectiveStoryPath,
-          code: bound.refusal.code,
-          section: bound.refusal.section,
-          message: `${test.path}: ${bound.refusal.section}: ${bound.refusal.message}`,
+          path: testPath,
+          story_path: rawStoryPath ?? null,
+          code: compiled.refusal.code,
+          section: compiled.refusal.section,
+          message: `${testPath}: ${compiled.refusal.section}: ${compiled.refusal.message}`,
         });
         continue;
       }
-      if (bound.changed) {
-        text = bound.text;
-        finalExact = compiler.parseExactScenarioJson(text);
-        changed = true;
+      let finalExact = compiled.exactDoc;
+      let text = compiler.stringifyExactScenarioJson(finalExact, 2) + '\n';
+      let changed = compiled.changed;
+      const effectiveStoryPath = rawStoryPath ?? (typeof finalExact?.story_path === 'string' ? finalExact.story_path : null);
+      if (storySource === null && typeof effectiveStoryPath === 'string' && effectiveStoryPath) {
+        try {
+          storySource = sourcePort.read({ path: effectiveStoryPath }).content;
+        } catch {
+          storySource = null;
+        }
       }
+      if (writeMode && effectiveStoryPath) {
+        if (storySource === null) {
+          errors.push({
+            path: testPath,
+            story_path: effectiveStoryPath,
+            code: 'story-missing',
+            section: 'story_path',
+            message: `${testPath}: story_path: ${effectiveStoryPath} is not a Git-visible file.`,
+          });
+          continue;
+        }
+        const hasNumberedCriteria = compiler.numberedStoryCriteria(storySource, { requireHeading: true }).length > 0;
+        if (hasNumberedCriteria) {
+          const bound = compiler.bindScenarioCriteriaText(text, {
+            path: testPath,
+            storyPath: effectiveStoryPath,
+            storySource,
+            space: 2,
+          });
+          if (bound.refusal) {
+            errors.push({
+              path: testPath,
+              story_path: effectiveStoryPath,
+              code: bound.refusal.code,
+              section: bound.refusal.section,
+              message: `${testPath}: ${bound.refusal.section}: ${bound.refusal.message}`,
+            });
+            continue;
+          }
+          if (bound.changed) {
+            text = bound.text;
+            finalExact = compiler.parseExactScenarioJson(text);
+            changed = true;
+          }
+        } else if (compiler.extractStoryCriteria(storySource).length === 0) {
+          errors.push({
+            path: testPath,
+            story_path: effectiveStoryPath,
+            code: 'story-criteria-missing',
+            section: 'story_path',
+            message: `${testPath}: story_path: ${effectiveStoryPath} has no numbered "## Acceptance criteria" list.`,
+          });
+          continue;
+        }
+      }
+      emitted.push({
+        path: testPath,
+        fullPath: fullTestPath,
+        story_path: effectiveStoryPath,
+        changed,
+        written: writeMode && changed && text !== rawText,
+        text,
+        scenario: finalExact,
+      });
     }
-    emitted.push({
-      path: test.path,
-      fullPath: fullTestPath,
-      story_path: effectiveStoryPath,
-      changed,
-      written: writeMode && changed && text !== rawText,
-      text,
-      scenario: finalExact,
-    });
   }
   if (errors.length > 0) {
     if (jsonMode) {
@@ -1544,7 +1686,7 @@ function runEmitV1(input = {}, ports = {}) {
   if (writeMode) {
     for (const item of emitted) {
       if (!item.written) continue;
-      fs.writeFileSync(item.fullPath, item.text, 'utf8');
+      writeFileAtomically(item.fullPath, item.text);
     }
     if (jsonMode) {
       stdout.write(
@@ -2247,34 +2389,37 @@ export async function runCheck(input = {}, ports = {}) {
   const cwd = effectiveInput?.cwd ?? process.cwd();
   const lazyOverlay = { cwd, ports, map: undefined };
 
-  return withScenarioOverlay(lazyOverlay, () =>
-    runtimeRunCheck(
-      effectiveInput,
-      seamRuntimePorts(
-        withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
-          headerPrompts,
-          isTestOwnedPath,
-          promptClaims,
-          resolveOwners,
-          allRuns,
-          workflowBaseSha: ({ root, env: runEnv }) =>
-            resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
-          assessNativeEvidence,
-          usableResult,
-          resultLines,
-          lintSvgLayouts: arg => [
-            ...lintSvgLayouts(arg),
-            ...lintRepoAntiPatterns(arg),
-            ...lintShortScenarioFiles(arg?.root, ports, { checkCriteriaBindings: input?.options?.['--local'] === true }),
-          ],
-          compareScreen,
-          formatScreenComparison,
-          redaction: seamRedaction(ports),
-        }),
-        { cwd },
-      ),
-    ),
-  );
+  return withScenarioOverlay(lazyOverlay, () => {
+    const checkPorts = seamRuntimePorts(
+      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+        headerPrompts,
+        isTestOwnedPath,
+        promptClaims,
+        resolveOwners,
+        allRuns,
+        workflowBaseSha: ({ root, env: runEnv }) =>
+          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
+        assessNativeEvidence,
+        usableResult,
+        resultLines,
+        lintSvgLayouts: arg => [
+          ...lintSvgLayouts(arg),
+          ...lintRepoAntiPatterns(arg),
+          ...lintShortScenarioFiles(arg?.root, ports, {
+            checkCriteriaBindings: input?.options?.['--local'] === true,
+            words: commandWords(input),
+            cwd,
+          }),
+        ],
+        compareScreen,
+        formatScreenComparison,
+        redaction: seamRedaction(ports),
+      }),
+      { cwd },
+    );
+    attachRunCheckAdaptivePolling(checkPorts, ports);
+    return runtimeRunCheck(effectiveInput, checkPorts);
+  });
 }
 
 export async function askAgent(input = {}, ports = {}) {

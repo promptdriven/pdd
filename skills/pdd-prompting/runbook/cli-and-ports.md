@@ -7,6 +7,7 @@
 Persist state through injected `<port>.<op>` ports—never hidden globals or prose counters. In scenarios, bind key-value ports under top-level `"simulation"`:
 - `key-value.get`: `{"action": "key-value.get", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": null, "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": null}, "result_value_pointer": "/value"}`
 - `key-value.put`: `{"action": "key-value.put", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": "/value", "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": []}, "result_value_pointer": "/value"}`
+- Other collection/port actions: `collection.get`, `collection.get-or-null`, `collection.merge` (when the world state is a list of records), `port.write`, `blob.read`, `blob.write`, `blob.stat`, `sql.execute`, `fixture.lookup`, and `compute`.
 
 ## 6. Command-line programs (`cli`)
 
@@ -26,9 +27,10 @@ Pass non-deterministic inputs (clock, RNG, IDs) as operation inputs or injected 
 | Outside resource | Simulation binding `action` | Key config fields |
 |---|---|---|
 | Key-value store | `key-value.get` / `key-value.put` | `world_pointer`, `key_argument_pointer`, `value_argument_pointer`, `result_template`, `result_value_pointer` |
-| SQL / table store | `sql.query` / `sql.exec` | `world_pointer`, `sql_argument_pointer`, `params_argument_pointer` |
-| Blob / files | `blob.get` / `blob.put` / `blob.delete` | `world_pointer`, `key_argument_pointer`, `value_argument_pointer` |
-| Deterministic hash | `compute.sha256` | `input_argument_pointer`, `result_template`, `result_value_pointer` |
+| Record list | `collection.get` / `collection.get-or-null` / `collection.merge` | `world_pointer`, `key_argument_pointer`, `value_argument_pointer`, `item_key_pointer`, `item_value_pointer`, `result_template`, `result_value_pointer` |
+| SQL / table store | `sql.execute` | `world_pointer`, `statement`, `result_mode` (`"rows"`), `result_template`, `result_value_pointer` |
+| Blob / UTF-8 files | `blob.read` / `blob.write` / `blob.stat` | `world_pointer`, `path_argument_pointer`, `content_argument_pointer`, `result_template`, `result_value_pointer` |
+| Deterministic SHA-256 | `compute` (ports `compute.hash_utf8`, `compute.hash_json`) | `result_template: {"value": null}`, `result_value_pointer: "/value"` |
 | Fixed / varying service | `fixture.lookup` | `world_pointer`, `cases: [{args, call_index, result}]`, `result_template: null`, `result_value_pointer: ""` |
 | Write-only / error fake | `port.write` | `world_pointer`, `result_template` |
 
@@ -90,8 +92,12 @@ I can look up the same item twice and see each supplied reply.
 
 ### Verify a record id
 
-Do not rely on opaque runtime-generated IDs in exact checks; pass deterministic IDs or use `compute.sha256` / `fixture.lookup` bindings and verify persisted records via `world` pointers.
+Do not rely on opaque runtime-generated IDs or ask the model to compute a digest; pass deterministic IDs or bind `compute.hash_json` / `compute.hash_utf8` (`{"action": "compute", "result_template": {"value": null}, "result_value_pointer": "/value"}`) or `fixture.lookup`, and verify persisted records via `world` pointers. Keep non-SHA-256 digests (such as HMAC) in native tests.
 
 ### Override an in-program peer for a failure step
 
 Set optional step `simulation_overrides` (never `simulation` on a step) to `[{"operation": "peer.op", "criterion_id": "AC1", "failure_quote": "<non-negated phrase from criterion>", "reason": "...", "binding": {"action": "port.write"|"fixture.lookup", ...}}]` to simulate a peer failure on one step while other steps call the real peer prompt.
+
+### Try tools over `pdd mcp`
+
+The person's own agent can use the stdio server `pdd mcp` in the current repository. On the person's intent, use `try_open` to open or reuse the Story's simulation, `try_state` to inspect it, `try_run` to run an input, `try_check` to check the run against the Story, and `try_save_case` to save a case (only when the person asks). Follow each tool's returned input schema and errors, and inspect remaining session calls before more work.

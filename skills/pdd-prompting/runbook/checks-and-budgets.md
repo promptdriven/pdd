@@ -13,7 +13,7 @@
 | `html` | Selector + `exists` / `text` / `attr` / `labels_include` | Selector MUST start with a tag name (`button#go`, `span#score`). |
 
 - **Operators:** exact (`equals`/`=`, `not_equals`/`!=`, `at_least`/`>=`, `at_most`/`<=`, `len>=`, `len<=`, `one_of`, `count`, `not_contains`, `all_in`, `equals_ignore_case`, `html_exists`) and supplemental (`contains`, `contains_all`—always pair with at least one exact check on the same criterion).
-- **Relational checks (`integer_relation`):** compare two JSON pointers when exact literals depend on input (`{"op": "integer_relation", "path": "/total", "right_path": "/subtotal", "relation": ">="}`).
+- **Exact integer conservation (`integer_relation`):** check exact integer equations or bounds (`"compare": "eq" | "le" | "ge"`) across `result`, `input`, and `world` using `{"criterion_id": "AC2", "target": "result", "path": "", "op": "integer_relation", "value": {"compare": "eq", "left": {"sum": [{"field": "/payout_cents"}, {"field": "/fee_cents"}]}, "right": {"ref_target": "input", "ref_path": "/gross_cents"}}}` (terms: `{"field": "<pointer>"}`, `{"ref_target": "result"|"input"|"world", "ref_path": "<pointer>"}`, `{"integer": "100"}`, `{"sum": [...]}`, `{"product": [...]}`).
 
 ## 9. Money and dates
 
