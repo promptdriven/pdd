@@ -1,0 +1,232 @@
+{
+  "entry_path": "prompts/cli/workflow-small-change.prompt.md",
+  "seeds": {
+    "done_item": {
+      "id": "R1",
+      "request": "Document the auto-stamp behavior",
+      "source": "https://github.com/example/project/issues/3358",
+      "quote": "Stamp run_id and source automatically on small-change-checklist.json",
+      "state": "done",
+      "evidence": "Updated workflow-small-change prompt and verified runtime cases"
+    }
+  },
+  "initial_world": {
+    "raw": {
+      "run-fresh": {
+        "$json": {
+          "items": [
+            { "$use": "done_item" }
+          ]
+        }
+      },
+      "run-stale": {
+        "$json": {
+          "schema_version": "pdd.small-change-checklist.v1",
+          "run_id": "run-stale",
+          "source": {
+            "kind": "git-content-v1",
+            "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "items": [
+            { "$use": "done_item" }
+          ]
+        }
+      },
+      "run-malformed": {
+        "$json": {
+          "items": [
+            { "$use": "done_item", "patch": { "quote": null } }
+          ]
+        }
+      },
+      "run-no-evidence": {
+        "$json": {
+          "items": [
+            { "$use": "done_item", "patch": { "evidence": null } }
+          ]
+        }
+      },
+      "run-valid": {
+        "$json": {
+          "schema_version": "pdd.small-change-checklist.v1",
+          "run_id": "run-valid",
+          "source": {
+            "kind": "git-content-v1",
+            "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "items": [
+            { "$use": "done_item" }
+          ]
+        }
+      },
+      "run-feature": {
+        "$json": {
+          "items": [
+            { "$use": "done_item" }
+          ]
+        }
+      }
+    },
+    "stamped": {},
+    "fingerprints": {
+      "work-fresh": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "work-stale": "2222222222222222222222222222222222222222222222222222222222222222",
+      "work-malformed": "3333333333333333333333333333333333333333333333333333333333333333",
+      "work-no-evidence": "4444444444444444444444444444444444444444444444444444444444444444",
+      "work-valid": "5555555555555555555555555555555555555555555555555555555555555555",
+      "work-feature": "6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  },
+  "simulation": {
+    "checklist.read": {
+      "action": "key-value.get",
+      "world_pointer": "/raw",
+      "key_argument_pointer": "/runDir",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": { "content": null },
+      "result_value_pointer": "/content"
+    },
+    "checklist.write": {
+      "action": "key-value.put",
+      "world_pointer": "/stamped",
+      "key_argument_pointer": "/runDir",
+      "value_argument_pointer": "/record",
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": {},
+      "result_value_pointer": null
+    },
+    "source.fingerprint": {
+      "action": "key-value.get",
+      "world_pointer": "/fingerprints",
+      "key_argument_pointer": "/root",
+      "value_argument_pointer": null,
+      "item_key_pointer": null,
+      "item_value_pointer": null,
+      "result_template": { "sha256": null },
+      "result_value_pointer": "/sha256"
+    }
+  },
+  "steps": [
+    {
+      "id": "stamp-fresh-missing-envelope",
+      "op": "stampSmallChangeChecklist",
+      "input": {
+        "workflow": "small-change",
+        "runId": "run-fresh",
+        "runDir": "run-fresh",
+        "root": "work-fresh"
+      },
+      "checks": {
+        "1: no schema version": [
+          ["result", "/status", "=", "recorded"],
+          ["result", "/stamped", "=", true],
+          ["result", "/mustFix", "count", 0],
+          ["calls", "checklist.write", "=", 1],
+          ["world", "/stamped/run-fresh/schema_version", "=", "pdd.small-change-checklist.v1"],
+          ["world", "/stamped/run-fresh/run_id", "=", "run-fresh"],
+          ["world", "/stamped/run-fresh/source/kind", "=", "git-content-v1"],
+          ["world", "/stamped/run-fresh/source/sha256", "=", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+          ["world", "/stamped/run-fresh/items/0/id", "=", "R1"]
+        ]
+      }
+    },
+    {
+      "id": "refresh-stale-fingerprint",
+      "op": "stampSmallChangeChecklist",
+      "input": {
+        "workflow": "small-change",
+        "runId": "run-stale",
+        "runDir": "run-stale",
+        "root": "work-stale"
+      },
+      "checks": {
+        "2: older than the worktree": [
+          ["result", "/status", "=", "recorded"],
+          ["result", "/stamped", "=", true],
+          ["result", "/mustFix", "count", 0],
+          ["calls", "checklist.write", "=", 1],
+          ["world", "/stamped/run-stale/source/sha256", "=", "2222222222222222222222222222222222222222222222222222222222222222"],
+          ["world", "/stamped/run-stale/items/0/id", "=", "R1"]
+        ]
+      }
+    },
+    {
+      "id": "refuse-invalid-item-missing-quote",
+      "op": "stampSmallChangeChecklist",
+      "input": {
+        "workflow": "small-change",
+        "runId": "run-malformed",
+        "runDir": "run-malformed",
+        "root": "work-malformed"
+      },
+      "checks": {
+        "3: missing its required quote": [
+          ["result", "/status", "=", "malformed"],
+          ["result", "/stamped", "=", false],
+          ["result", "/mustFix", "count", 1],
+          ["result", "/mustFix/0/code", "=", "malformed"],
+          ["calls", "checklist.write", "=", 0]
+        ]
+      }
+    },
+    {
+      "id": "fail-closed-missing-evidence",
+      "op": "stampSmallChangeChecklist",
+      "input": {
+        "workflow": "small-change",
+        "runId": "run-no-evidence",
+        "runDir": "run-no-evidence",
+        "root": "work-no-evidence"
+      },
+      "checks": {
+        "4: no completion evidence": [
+          ["result", "/status", "=", "recorded"],
+          ["result", "/mustFix", "count", 1],
+          ["result", "/mustFix/0/id", "=", "R1"],
+          ["result", "/mustFix/0/code", "=", "missing-evidence"]
+        ]
+      }
+    },
+    {
+      "id": "keep-already-valid-unchanged",
+      "op": "stampSmallChangeChecklist",
+      "input": {
+        "workflow": "small-change",
+        "runId": "run-valid",
+        "runDir": "run-valid",
+        "root": "work-valid"
+      },
+      "checks": {
+        "5: already carries version": [
+          ["result", "/status", "=", "recorded"],
+          ["result", "/stamped", "=", false],
+          ["result", "/mustFix", "count", 0],
+          ["calls", "checklist.write", "=", 0]
+        ]
+      }
+    },
+    {
+      "id": "skip-non-small-change-workflow",
+      "op": "stampSmallChangeChecklist",
+      "input": {
+        "workflow": "feature",
+        "runId": "run-feature",
+        "runDir": "run-feature",
+        "root": "work-feature"
+      },
+      "checks": {
+        "6: feature": [
+          ["result", "/status", "=", "skipped"],
+          ["result", "/stamped", "=", false],
+          ["result", "/mustFix", "count", 0],
+          ["calls", "checklist.read", "=", 0],
+          ["calls", "source.fingerprint", "=", 0],
+          ["calls", "checklist.write", "=", 0]
+        ]
+      }
+    }
+  ]
+}

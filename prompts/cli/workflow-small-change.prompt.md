@@ -1,44 +1,30 @@
 # Small-change request evidence
 
-Own `src/workflow-small-change.mjs`. Preserve every issue request through a
-small-change plan, publication and independent review. This module checks
-structured evidence, not the truth of agent claims or arbitrary English intent.
+Own `src/workflow-small-change.mjs`. Preserve every issue request through a small-change plan, step completion, publication and independent review. This module validates structured evidence and refreshes mechanical envelope metadata; it never verifies the truth of agent claims or arbitrary English intent.
 
-`readSmallChangeChecklist(run)` reads only `<runDir>/small-change-checklist.json`.
-Use a regular file, at most 1 MiB. The record is `{schema_version:
-"pdd.small-change-checklist.v1", run_id, source:{kind:"git-content-v1",sha256},
-items}`. `run_id` must match. The source fingerprint must match the current
-Git-visible content. Missing, malformed and stale evidence returns `{status,
-items:[],mustFix:[{id,code}]}` with the corresponding status and code. A valid
-record returns `{status:"recorded",items,mustFix}`. Keep every item in order.
-Each item has unique nonblank `id`, `request`, `source` (issue or trusted comment
-URL), `quote` (the exact request excerpt), `state` (`pending`, `done`, `excluded`).
-Done needs nonblank `evidence`. Excluded needs `exclusion:{reason,quote}`;
-that quote must support exclusion in the issue itself. No plan-only exemption.
-Missing completion evidence is a must-fix, not a schema error. Empty inventories
-are malformed. Do not truncate an inventory to make it pass.
+## Domain decisions
 
-`reviewSmallChangeChecklist(checklist, requests)` returns must-fix objects
-`{id,code}`. `requests` is an independent issue-derived inventory, with the same
-id/request/source/quote fields and optional `exclusion_quote`: the exact issue
-text the checker judged authorizes exclusion. Match by source, request and quote,
-not by the builder's id. Missing requests give `missing-request`; extra checklist
-items give no coverage of another request. Validate every checklist row by its
-own unique id, including extra rows and rows with identical request/source/quote.
-A completed row cannot supply another row's state, evidence or exclusion.
-Pending items give `pending-request`;
-done without evidence gives `missing-evidence`; exclusions without a reason and
-an exact match to a matching independent request's `exclusion_quote` give
-`unsupported-exclusion`. Report completion findings with the checklist row's id;
-report missing requests with the independent request's id.
-The reader uses the same completion checks without an independent inventory;
-it does not claim semantic completeness or authorize an exclusion. The checker
-must derive requests from the full issue and trusted follow-ups, never the plan.
+- **Canonical record and item contract.** `<runDir>/small-change-checklist.json` is a regular file (never follow symlinks, at most 1 MiB) holding `{ schema_version: "pdd.small-change-checklist.v1", run_id, source: { kind: "git-content-v1", sha256 }, items }` where `sha256` is a 64-character lowercase hex digest from `sourceFingerprint(run.root)`. `items` must be a non-empty array; each `ChecklistItem` object has required nonblank strings `id`, `request`, `source` (issue or trusted comment URL), `quote` (exact request excerpt) and `state` (`"pending"`, `"done"`, or `"excluded"`), plus optional string `evidence` and optional object `exclusion` (`{ reason?: string, quote?: string }`). Empty inventories, duplicate ids or missing/blank required item fields are malformed. Never truncate an inventory to make it pass.
+- **Completion and independent review rules.** Missing completion evidence is a must-fix, not a schema error. `pending` yields `pending-request`; `done` without nonblank `evidence` yields `missing-evidence`; `excluded` without nonblank `exclusion.reason` and `exclusion.quote` (and when an independent issue inventory `requests` is supplied, an exact match to a matching request's `exclusion_quote`) yields `unsupported-exclusion` (no plan-only exemption). Validate every row by its own unique `id`, including extra rows and rows with identical `request`/`source`/`quote`; a completed row never supplies another row's state, evidence or exclusion. Match `requests` by `(source, request, quote)`, not builder `id`; missing requests yield `missing-request` with the independent request's `id`. The checker derives `requests` from the full issue and trusted follow-ups, never the plan.
+- **Auto-stamping during `pdd workflow done` (no new CLI subcommand).** For one-PR `small-change` runs, `pdd workflow done` invokes `stampSmallChangeChecklist` before validating completion so workers never need ad-hoc fingerprint scripts after late test/lint edits. Auto-stamping refreshes only mechanical envelope metadata (`schema_version`, `run_id`, `source`); it preserves `items` verbatim in order, never writes when the envelope already matches, never creates a missing file, fails closed without writing on malformed files/items, unsupported non-null `schema_version` or unreadable fingerprints, and never clears or rubber-stamps `pending-request`, `missing-evidence` or `unsupported-exclusion` findings. Non-`small-change` runs stay untouched.
+- **Read-only status and PR views.** `readSmallChangeChecklist(run)` stays strictly read-only and refuses missing, malformed or stale envelopes without writing. Small-change checklist and Formal check facts remain in detailed text status and JSON run rows while compact list/all text rows preserve existing Runtime coverage lines without adding the detailed small-change evidence block.
+
+## Public operations and ports
+
+- `reviewSmallChangeChecklist(checklist, requests?)` returns `MustFix[]` (each `{ id: string, code: string }`) applying the completion and independent-request rules above (`requests` entries have `{ id, request, source, quote, exclusion_quote? }`).
+- `readSmallChangeChecklist(run)` reads `<runDir>/small-change-checklist.json` (requiring exact `schema_version`, matching `run.runId`, valid `source`, valid items and current `sourceFingerprint(run.root)`) and returns `{ status: "recorded" | "missing" | "malformed" | "stale", items: ChecklistItem[], mustFix: MustFix[] }`.
+- `stampSmallChangeChecklist(run, ports?)` takes `{ workflow: string, runId: string, runDir: string, root: string }` and returns `{ status: "recorded" | "missing" | "malformed" | "stale" | "skipped", stamped: boolean, items: ChecklistItem[], mustFix: MustFix[] }`.
+- Outside effects use three injected ports (defaulting in native Node to safe regular-file `node:fs` I/O on `<runDir>/small-change-checklist.json` and `sourceFingerprint(run.root)` from [Replay evidence](workflow-replay.prompt.md#original-identities)): `checklist.read({ runDir: string })` returning `{ content: string | null }` (`null` when absent, otherwise raw UTF-8 JSON text), `checklist.write({ runDir: string, record: { schema_version: string, run_id: string, source: { kind: string, sha256: string }, items: ChecklistItem[] } })` returning `{}`, and `source.fingerprint({ root: string })` returning `{ sha256: string | null }`.
+
+| Precedence (first match wins) | Port effects | Returned `{ status, stamped, items, mustFix }` |
+|---|---|---|
+| `workflow !== "small-change"` | 0 reads, 0 fingerprint calls, 0 writes | `{ status: "skipped", stamped: false, items: [], mustFix: [] }` |
+| `checklist.read` returns `content: null` | 1 read, 0 fingerprint calls, 0 writes | `{ status: "missing", stamped: false, items: [], mustFix: [{ id: "checklist", code: "missing" }] }` |
+| Unsafe file (symlink/non-file/>1 MiB), invalid JSON, non-object, blank `runId`, non-null `schema_version !== "pdd.small-change-checklist.v1"`, empty/invalid `items` or duplicate item `id` | 1 read, 0 fingerprint calls, 0 writes | `{ status: "malformed", stamped: false, items: [], mustFix: [{ id: "checklist", code: "malformed" }] }` |
+| `source.fingerprint` returns `null` or non-64-lowercase-hex string | 1 read, 1 fingerprint call, 0 writes | `{ status: "stale", stamped: false, items: [], mustFix: [{ id: "checklist", code: "stale" }] }` |
+| Envelope already exact (`schema_version === "pdd.small-change-checklist.v1"`, `run_id === runId`, `source.kind === "git-content-v1"`, `source.sha256 === sha256`) | 1 read, 1 fingerprint call, 0 writes | `{ status: "recorded", stamped: false, items: doc.items, mustFix: reviewSmallChangeChecklist(doc) }` |
+| Mechanical envelope (`schema_version`, `run_id`, or `source`) missing or stale | 1 read, 1 fingerprint call, 1 `checklist.write` with canonical `{ schema_version, run_id, source, items }` | `{ status: "recorded", stamped: true, items: doc.items, mustFix: reviewSmallChangeChecklist(stamped) }` |
 
 ## Dependencies
 
-- [Replay evidence](workflow-replay.prompt.md): required fingerprint contract
-  `sourceFingerprint` for current Git-visible content. File I/O uses Node fs;
-  callers supply the run folder and repository root. Tests use disposable files.
-
-Small-change checklist and Formal check facts remain in detailed text status and JSON run rows. Preserve compact list/all text rows; these views keep existing Runtime coverage lines but do not add the detailed small-change evidence block. The saved evidence remains available through the run detail and JSON.
+None at Runtime; file I/O and worktree fingerprinting use the injected `checklist.read`, `checklist.write` and `source.fingerprint` ports above (native defaults bind `node:fs` and `sourceFingerprint(root)` from `src/workflow-replay.mjs`).
