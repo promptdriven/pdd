@@ -60,6 +60,8 @@ node `<file>--op-<operation>--hex-<operation name in hex>`. `printf add | xxd -p
 | `not_contains`, `all_in`, `equals_ignore_case` | Substring/item exclusion, array subset check, or case-insensitive ASCII string match | `"op": "all_in", "value": ["read", "write"]` |
 | `exists`, `contains` | Presence or substring/item containment (add `"html"` on `exists` for exact HTML selector checks) | `"op": "contains", "value": "Order #"` |
 
+**Audited numeric derivations.** Any numeric comparison check (`equals`, `not_equals`, `gt`, `lt`, `gte`, `lte`, `at_least`, `at_most`) with a literal numeric `"value"` may include an optional `"derivation": "<expr>"` formula using the exact `pdd calc` arithmetic language (for example `"value": 3784, "derivation": "4000 - floor(4000 * 540 / 10000)"`). `pdd lint` (including `--local`) and `pdd test` verify that `"derivation"` evaluates to `"value"` at 0 AI calls and refuse mismatches without editing expected values; see [§4 Expected values](files-and-runtime-block.md#4-expected-values).
+
 **Cross-path relational checks.** For `equals`, `not_equals`, `at_least` / `gte`, `at_most` / `lte`, `lt`, and `gt` on `result`, `world`, or `calls`, compare against another live field from `"result"`, `"input"`, or `"world"` instead of a literal `value` (or pass `{"ref_target", "ref_path"}` as `"value"`):
 ```json
 {"criterion_id": "AC1", "target": "result", "path": "/fee_cents", "op": "at_most", "ref_target": "input", "ref_path": "/cap_cents"}

@@ -13,6 +13,7 @@ A person approving a prompt or reviewing PR 1 must see, on one screen above raw 
    - Whether `port spy or native observation still needed` applies because an effect, command or outbound action is reported only inside model-returned data (`result` or `world`) without an observed port call or native test.
 3. **Verification split:** Runtime-checked operations vs. `kind: "native-only"` declarations (with their `reason`) and `## Native validation` / native test responsibilities, preserving the `native-only` route.
 4. **Complexity budget and advisory divergences:** prompt prose line counts (`> 500` warning, `> 1000` elevated, falling back to the scenario's loaded prompts when the slice only edits Stories or tests), Story scenario step counts (`> 15` steps or `> 1000` lines warning), and any latest-batch multi-sample divergences across samples or reruns, shown strictly as advisory notes.
+5. **Expected-value derivations (when present):** numeric scenario checks carrying a nonblank `"derivation"` formula alongside their expected `"value"`, so a reviewer can audit how each expected number was derived.
 
 ## Source selection and missing owner connection
 
@@ -41,7 +42,7 @@ Inspect saved check records for `root` under `PDD_STATE_DIR` (or `HOME/.pdd/runt
 
 ## Compact rendering (`<= 25` lines)
 
-- `formatApproveBoundaryCard(card)` returns at most `25` plain-text lines starting with `Human boundary card (advisory):` and two-space-indented body lines (`Policy:`, `Owner gap:` when unloaded owning sources exist, `Provenance:`, `Verification split:`, `Budget & samples:`). Prioritize `missing owner connection`, `port spy or native observation still needed` and `0 observed port calls` rows before ordinary rows when compacting, and summarize overflow with `… +N more` while always retaining `Verification split:` and `Budget & samples:`. Never start any card line with `Text` or `Approve `.
+- `formatApproveBoundaryCard(card)` returns at most `25` plain-text lines starting with `Human boundary card (advisory):` and two-space-indented body lines (`Policy:`, `Owner gap:` when unloaded owning sources exist, `Provenance:`, `Derivations:` when any scenario check includes a nonblank `"derivation"`, formatted as `    - <criterionLabel> <path>: <value> = <derivation>`, `Verification split:`, `Budget & samples:`). Prioritize `missing owner connection`, `port spy or native observation still needed` and `0 observed port calls` rows before ordinary provenance and derivation rows when compacting, and summarize overflow with `… +N more` while always retaining `Verification split:` and `Budget & samples:`. Never start any card line with `Text` or `Approve `.
 - `readablePrTop` in [readable workflow PR descriptions](workflow-pr-body.prompt.md) renders `facts.boundary` on PR 1 (`layout: "spec"`) as a `## Boundary` section of at most `25` lines right after `## Summary`, sanitizing all dynamic text as inert Markdown with no forbidden jargon, extra URLs, HTML tags or closing keywords.
 
 ## Dependencies

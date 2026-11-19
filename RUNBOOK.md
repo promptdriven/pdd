@@ -30,11 +30,12 @@ Read this index first, then open the 1–2 topic files that match your task or s
               {"id": "no-coupon", "op": "price", "from": "cart", "checks": {"2": [["result", "/discount_cents", "=", 0]]}}]}
    ```
    Give each step a **self-contained starting state** (`from` / `$use` + `patch`) by default so the server executes steps **in parallel** and isolates failures; chain `$step` (`$step_result`) or shared-`world` step sequences only when a criterion tests multi-step persistence or handoff. Write `1` clear step per distinct Story rule/boundary/error (`<= 15` steps; exhaustive permutation matrices belong in native code tests), omit optional step `"model"`, check structured state fields and key controls on dense grids instead of huge HTML strings, and render `.ui.svg` to PNG only when asked.
-5. **Expected values (§4):** Expected values come from the person and Story—never edit a test to make it pass or copy observed code/simulation output without review.
+5. **Expected values (§4):** Expected values come from the person and Story—never write scratch vector-generator scripts or shadow implementations in prompt space, never edit a test to make it pass, and use `pdd calc` plus optional check `"derivation"` formulas for arithmetic.
 
 ## Core commands
 
 - Check local Story, `app-map.json`, Short JSON, scenario schema, and `.ui.svg` hygiene offline (0 AI calls): `pdd lint --local`
+- Evaluate exact arithmetic offline for expected values (0 AI calls): `pdd calc "<expr>"`
 - Inspect expanded `program-scenario.v1` JSON offline (0 AI calls): `pdd lint --emit-v1 place-order`
 - Bind legacy Story criterion IDs to current `ac-sha256-...` IDs on disk for review (0 AI calls): `pdd lint --bind-criteria place-order`
 - Run hosted admission lint only (0 AI calls): `pdd lint place-order`
