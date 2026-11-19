@@ -10,26 +10,29 @@ const REAL_E2E_KINDS = new Set([
   'real-execution',
 ]);
 
-const RUNTIME_CODE_EXT_RE = /\.(?:js|mjs|cjs|ts|mts|cts|py|go|rs|rb|java|kt|cs|php|swift|c|cpp)$/i;
+const RUNTIME_CODE_EXT_RE = /\.(?:js|mjs|cjs|ts|mts|cts|py|go|rs|rb|java|kt|cs|php|swift|c|cpp|h|hpp|m|mm|ex|exs|dart|zig|lua|graphql|gql|proto|scala|clj|erl|hs|r|jl|pl|groovy|wasm|tf|hcl)$/i;
 const NON_PRODUCTION_DIR_RE = /^(?:test|tests|__tests__|spec|fixtures|examples|prompts|user_stories|docs)\//i;
 const DOC_FILE_RE = /(?:^docs\/|\.(?:txt|rst)$|(?:^|\/)(?:license|changelog)[^/]*$)/i;
 const HUMAN_INTERACTION_RE = /\b(?:browser\s+oauth|oauth\s+click|2fa|mfa|captcha|live\s+payment|physical\s+hardware)\b/i;
 
+const tokenMatch = (pattern) => new RegExp(`(?:^|[^a-z0-9])(?:${pattern})(?:$|[^a-z0-9])`, 'i');
+const CLI_TOKEN_RE = tokenMatch('cli');
+const API_TOKEN_RE = tokenMatch('server|router|api|http|https|ws|websocket|graphql|grpc');
+const DB_TOKEN_RE = tokenMatch('postgres|postgresql|mysql|sqlite|mongo|mongodb|redis|db');
+const EXTERNAL_TOKEN_RE = tokenMatch('gcloud|gcp|aws|azure|stripe|docker|kubernetes|k8s|oauth|auth|webhook|terraform');
+
 const SURFACE_MATCHERS = [
   {
     surface: 'cli',
-    test: (norm, base) => /^(?:bin|cli|cmd|scripts)\//i.test(norm) || /\.sh$/i.test(norm) || base.includes('cli'),
+    test: (norm, base) => /^(?:bin|cli|cmd|scripts)\//i.test(norm) || /\.sh$/i.test(norm) || CLI_TOKEN_RE.test(base),
   },
   {
     surface: 'api-server',
-    test: (norm, base) => /^(?:api|server|routes|handlers|controllers)\//i.test(norm)
-      || /(?:server|router|api|http|websocket|graphql|grpc|\bws\b|[-_.]ws[-_.])/i.test(base),
+    test: (norm, base) => /^(?:api|server|routes|handlers|controllers)\//i.test(norm) || API_TOKEN_RE.test(base),
   },
   {
     surface: 'database',
-    test: (norm, base) => /^(?:db|database|migrations|prisma|sql)\//i.test(norm)
-      || /\.sql$/i.test(norm)
-      || /(?:postgres|mysql|sqlite|mongo|redis|\bdb\b|[-_.]db[-_.])/i.test(base),
+    test: (norm, base) => /^(?:db|database|migrations|prisma|sql)\//i.test(norm) || /\.sql$/i.test(norm) || DB_TOKEN_RE.test(base),
   },
   {
     surface: 'web-ui',
@@ -39,9 +42,9 @@ const SURFACE_MATCHERS = [
   },
   {
     surface: 'external-tool',
-    test: (norm, base) => base === 'dockerfile'
+    test: (norm, base) => /^dockerfile(?:\.|$)/i.test(base)
       || base.startsWith('docker-compose')
-      || /(?:gcloud|gcp|aws|azure|stripe|docker|kubernetes|k8s|oauth|auth|webhook|terraform)/i.test(norm),
+      || EXTERNAL_TOKEN_RE.test(norm),
   },
 ];
 
@@ -102,14 +105,24 @@ const BUCKET2_DIAGNOSTIC_RULES = [
   },
 ];
 
-const MOCK_USAGE_RE = /\b(?:mock\.|vi\.mock|jest\.mock|sinon\.stub|fakeClient|fakeServer|fakeTransport)\b|stub(?:bed)?Handler/i;
-const REAL_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|createServer|playwright)\b|listen\(|fetch\(|http\.request|chromium\.launch|page\.goto/i;
+export const MOCK_USAGE_RE = /\b(?:mock\.|vi\.mock|jest\.mock|sinon\.stub|fakeClient|fakeServer|fakeTransport)\b|stub(?:bed)?Handler/i;
+export const REAL_E2E_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync|createServer|playwright|puppeteer|supertest|DatabaseSync)\b|\.\s*listen\s*\(|\bfetch\s*\(|\bhttps?\.request\s*\(|\b(?:chromium|firefox|webkit)\.launch\s*\(|\bpage\.goto\s*\(/i;
+const BROWSER_EXEC_RE = /\b(?:playwright|puppeteer)\b|\b(?:chromium|firefox|webkit)\.launch\s*\(|\bpage\.goto\s*\(/i;
+const SERVER_OR_DB_EXEC_RE = /\b(?:createServer|supertest|DatabaseSync)\b|\.\s*listen\s*\(|\bfetch\s*\(|\bhttps?\.request\s*\(|\bnew\s+(?:Pool|Client)\s*\(/i;
+const DB_DRIVER_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:pg|mysql2?|better-sqlite3|node:sqlite|sqlite3?|mongodb|redis|ioredis|@prisma\/client)['"`]/i;
+const SUBPROCESS_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync)\s*\(/;
 const BOUNDARY_IMPORT_RE = /(?:from|require\s*\()\s*['"`]([^'"`]+)['"`]/g;
-const SILENT_SKIP_LINE_PATTERNS = [
-  {
-    re: /\blocalSkipRow\b|\bstoryLocalSkipOk\b|\blocalSkipOnly\b/i,
-    detail: 'silent validation local-skip helper bypasses real validation',
-  },
+const PROD_PATH_LITERAL_RE = /['"`]((?:\.\.\/|\.\/)?(?:bin|cli|cmd|scripts|api|server|routes|handlers|controllers|db|database|migrations|prisma|sql|web|ui|frontend|pages|components|views|app|src)\/[A-Za-z0-9._/-]+)['"`]/g;
+
+const SKIP_KEYWORD_RE = /(?:e2e|validation|validator|real-binding)/i;
+const LOCAL_SKIP_HELPER_RE = /\blocalSkipRow\b|\bstoryLocalSkipOk\b|\blocalSkipOnly\b/i;
+const FILTER_CODE_SHAPE_RE = /\.filter\s*\([^)]*!==\s*""/;
+const FILTER_REAL_BINDING_RE = /\.filter\s*\([^)]*!==\s*['"`]real-binding-unavailable['"`]/i;
+const CALL_DOT_SKIP_RE = /\b(?:test|it|t)\.skip\s*\(/;
+const CALL_DOT_SKIP_E2E_RE = /\b(?:test|it|t)\.skip\s*\([^)]*(?:e2e|validation|validator|real-binding)/i;
+const NODE_TEST_OPT_SKIP_RE = /\b(?:test|it|t)\s*\([^)]*,\s*\{[^}]*\bskip\s*:\s*(?:true|""|!)/;
+const RETURN_PASS_OR_SKIP_RE = /\breturn\b[^;\n]*(?:\bok\s*:\s*true|\bpass\s*:\s*true|\bskipped\s*:\s*true|\bskip\s*:\s*true)/i;
+const PROSE_EXCUSE_PATTERNS = [
   {
     re: /not a defect or needs-person blocker/i,
     detail: 'rewrites real-binding-unavailable as a non-blocker',
@@ -118,14 +131,6 @@ const SILENT_SKIP_LINE_PATTERNS = [
     re: /real-binding-unavailable.*local\s*skip|local\s*skip.*real-binding-unavailable/i,
     detail: 'treats missing live binding as an excused skip',
   },
-  {
-    re: /\.filter\([^)]*!==\s*['"`]real-binding-unavailable['"`]/i,
-    detail: 'filters real-binding-unavailable out of blocking refusals',
-  },
-  {
-    re: /\b(?:test|it|t)\.skip\s*\([^)]*(?:e2e|validation|validator|real-binding)/i,
-    detail: 'unconditionally skips an E2E or validation test',
-  },
 ];
 
 const cleanText = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -133,25 +138,278 @@ const cleanTool = (value) => cleanText(value).toLowerCase();
 const normalizePath = (value) => cleanText(value).replace(/\\/g, '/').replace(/^\.\//, '');
 const emptyProof = () => ({ surfaces: [], commands: [], exitCodes: [] });
 
+function isRegexStartContext(prevToken) {
+  if (!prevToken) return true;
+  if ('([{:;,=!?&|+-*%^~<>'.includes(prevToken)) return true;
+  return /^(?:return|case|throw|in|of|typeof|void|delete|new|else|do|yield|await)$/.test(prevToken);
+}
+
+/**
+ * Strip JS/TS comments and separately mask string literal contents while keeping exact line numbers.
+ */
+export function scanJsPreserveLines(source) {
+  const text = String(source ?? '');
+  const noComments = [];
+  const noStrings = [];
+  let i = 0;
+  let lastToken = '';
+
+  const readPrevWord = () => {
+    let j = noComments.length - 1;
+    while (j >= 0 && /\s/.test(noComments[j])) j -= 1;
+    if (j < 0) return '';
+    const ch = noComments[j];
+    if (!/[A-Za-z0-9_$]/.test(ch)) return ch;
+    let end = j;
+    while (j >= 0 && /[A-Za-z0-9_$]/.test(noComments[j])) j -= 1;
+    return noComments.slice(j + 1, end + 1).join('');
+  };
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    // Single-line comment
+    if (ch === '/' && next === '/') {
+      while (i < text.length && text[i] !== '\n') {
+        noComments.push(' ');
+        noStrings.push(' ');
+        i += 1;
+      }
+      continue;
+    }
+
+    // Block comment
+    if (ch === '/' && next === '*') {
+      noComments.push(' ', ' ');
+      noStrings.push(' ', ' ');
+      i += 2;
+      while (i < text.length) {
+        if (text[i] === '*' && text[i + 1] === '/') {
+          noComments.push(' ', ' ');
+          noStrings.push(' ', ' ');
+          i += 2;
+          break;
+        }
+        const keep = text[i] === '\n' ? '\n' : ' ';
+        noComments.push(keep);
+        noStrings.push(keep);
+        i += 1;
+      }
+      continue;
+    }
+
+    // String or template literal
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      const quote = ch;
+      noComments.push(ch);
+      noStrings.push('"');
+      i += 1;
+      while (i < text.length) {
+        const c = text[i];
+        if (c === '\\' && i + 1 < text.length) {
+          noComments.push(c, text[i + 1]);
+          if (text[i + 1] === '\n') noStrings.push('\n');
+          i += 2;
+          continue;
+        }
+        if (c === quote) {
+          noComments.push(c);
+          noStrings.push('"');
+          i += 1;
+          break;
+        }
+        if (c === '\n' && quote !== '`') {
+          noComments.push('\n');
+          noStrings.push('"', '\n');
+          i += 1;
+          break;
+        }
+        noComments.push(c);
+        if (c === '\n') noStrings.push('\n');
+        i += 1;
+      }
+      lastToken = '""';
+      continue;
+    }
+
+    // Regex literal (avoid mis-parsing quotes inside /.../)
+    if (ch === '/' && next !== '/' && next !== '*' && isRegexStartContext(lastToken || readPrevWord())) {
+      noComments.push(ch);
+      noStrings.push(ch);
+      i += 1;
+      let inClass = false;
+      while (i < text.length) {
+        const c = text[i];
+        if (c === '\\' && i + 1 < text.length) {
+          noComments.push(c, text[i + 1]);
+          noStrings.push(c, text[i + 1]);
+          i += 2;
+          continue;
+        }
+        if (c === '\n') {
+          noComments.push('\n');
+          noStrings.push('\n');
+          i += 1;
+          break;
+        }
+        if (c === '[') inClass = true;
+        else if (c === ']') inClass = false;
+        noComments.push(c);
+        noStrings.push(c);
+        i += 1;
+        if (c === '/' && !inClass) break;
+      }
+      lastToken = '/re/';
+      continue;
+    }
+
+    noComments.push(ch);
+    noStrings.push(ch);
+    if (!/\s/.test(ch)) lastToken = /[A-Za-z0-9_$]/.test(ch) ? '' : ch;
+    i += 1;
+  }
+
+  return {
+    codeNoComments: noComments.join(''),
+    codeNoStrings: noStrings.join(''),
+  };
+}
+
+export function stripCommentsPreserveLines(source) {
+  return scanJsPreserveLines(source).codeNoComments;
+}
+
+export function maskStringsPreserveLines(source) {
+  return scanJsPreserveLines(source).codeNoStrings;
+}
+
 function isDocPath(norm) {
-  if (/\.prompt\.md$/i.test(norm)) return false;
+  if (/\.prompt\.md$/i.test(norm) || /^user_stories\//i.test(norm)) return false;
   return /\.md$/i.test(norm) || DOC_FILE_RE.test(norm);
 }
 
-function classifyFileSurfaces(rawPath) {
+function classifyProductionPathSurfaces(rawPath) {
   const norm = normalizePath(rawPath);
   if (!norm) return [];
   const lower = norm.toLowerCase();
   if (isDocPath(lower)) return ['docs'];
+  if (NON_PRODUCTION_DIR_RE.test(lower)) return [];
   const base = lower.split('/').pop() || lower;
   const matched = [];
   for (const { surface, test } of SURFACE_MATCHERS) {
     if (test(lower, base)) matched.push(surface);
   }
-  if (!matched.length && RUNTIME_CODE_EXT_RE.test(lower) && !NON_PRODUCTION_DIR_RE.test(lower)) {
+  if (!matched.length && RUNTIME_CODE_EXT_RE.test(lower)) {
     matched.push('runtime-code');
   }
   return matched;
+}
+
+/**
+ * Canonical module stem for matching production targets across imports and tests (e.g., api/orders.mjs -> api/orders).
+ */
+export function canonicalTargetPath(rawPath) {
+  const norm = normalizePath(rawPath).toLowerCase();
+  if (!norm) return '';
+  return norm.replace(/\.(?:[cm]?[jt]sx?|py|go|rs|rb|java|kt|cs|php|swift|sh|sql|vue|svelte|html|css)$/i, '');
+}
+
+function resolveRelativeTarget(fromPath, spec) {
+  const cleanSpec = normalizePath(spec);
+  if (!cleanSpec) return '';
+  if (!spec.startsWith('.')) {
+    return cleanSpec;
+  }
+  const fromDir = normalizePath(fromPath).split('/').slice(0, -1);
+  const parts = spec.replace(/\\/g, '/').split('/');
+  const resolved = [...fromDir];
+  for (const part of parts) {
+    if (!part || part === '.') continue;
+    if (part === '..') resolved.pop();
+    else resolved.push(part);
+  }
+  return normalizePath(resolved.join('/'));
+}
+
+/**
+ * Extract production boundary targets and surfaces referenced by a test file (via imports or direct path references).
+ */
+export function inspectTestBoundaryTargets(testPath, text) {
+  const normTest = normalizePath(testPath);
+  const code = stripCommentsPreserveLines(text);
+  const targetSet = new Set();
+  const boundaryTargetSet = new Set();
+  const surfaceSet = new Set();
+
+  const consider = (rawTarget) => {
+    const resolved = resolveRelativeTarget(normTest, rawTarget);
+    if (!resolved || NON_PRODUCTION_DIR_RE.test(resolved.toLowerCase())) return;
+    const surfaces = classifyProductionPathSurfaces(resolved);
+    if (!surfaces.length) return;
+    const canonical = canonicalTargetPath(resolved);
+    if (!canonical) return;
+    targetSet.add(canonical);
+    const boundary = surfaces.filter((s) => s !== 'docs' && s !== 'runtime-code');
+    if (boundary.length) {
+      boundaryTargetSet.add(canonical);
+      for (const s of boundary) surfaceSet.add(s);
+    }
+  };
+
+  for (const match of code.matchAll(BOUNDARY_IMPORT_RE)) {
+    const spec = match[1];
+    if (spec.startsWith('.') || /^(?:bin|cli|cmd|scripts|api|server|routes|handlers|controllers|db|database|migrations|prisma|sql|web|ui|frontend|pages|components|views|app|src)\//i.test(spec)) {
+      consider(spec);
+    }
+  }
+  for (const match of code.matchAll(PROD_PATH_LITERAL_RE)) {
+    consider(match[1]);
+  }
+
+  // Fallback to the test file's own stripped stem when it has no direct boundary production imports
+  if (!boundaryTargetSet.size) {
+    const stripped = normTest
+      .replace(/^(?:test|tests|__tests__|spec)\//i, '')
+      .replace(/\.(?:test|spec|vectors\.test|e2e\.test)\.[a-z0-9]+$/i, '.mjs');
+    const ownSurfaces = classifyProductionPathSurfaces(stripped).filter((s) => s !== 'docs' && s !== 'runtime-code');
+    if (ownSurfaces.length) {
+      for (const s of ownSurfaces) surfaceSet.add(s);
+      boundaryTargetSet.add(`test-stem:${canonicalTargetPath(stripped)}`);
+    }
+  }
+
+  return {
+    allTargets: [...targetSet].sort(),
+    boundaryTargets: [...boundaryTargetSet].sort(),
+    boundarySurfaces: [...surfaceSet].sort(),
+  };
+}
+
+/**
+ * Detect which real E2E proof kinds a test file genuinely executes (comments/strings and skipped tests excluded).
+ */
+export function detectRealE2eKindsInTest(testPath, text) {
+  const lint = lintValidationCode({ path: testPath, kind: 'test', text, hasRealE2eCoverage: true });
+  if (lint.codes.includes('silent-validation-skip')) return [];
+
+  const { codeNoComments, codeNoStrings } = scanJsPreserveLines(text);
+  const kinds = new Set();
+
+  const hasBrowser = BROWSER_EXEC_RE.test(codeNoStrings)
+    || (/\b(?:playwright|puppeteer)\b/i.test(codeNoComments) && /\.(?:launch|goto|newPage)\s*\(/i.test(codeNoStrings));
+  const hasServerOrDb = SERVER_OR_DB_EXEC_RE.test(codeNoStrings)
+    || (DB_DRIVER_IMPORT_RE.test(codeNoComments) && !MOCK_USAGE_RE.test(codeNoStrings));
+  const hasSubprocess = SUBPROCESS_EXEC_RE.test(codeNoStrings);
+  const hasAnyRealExec = hasBrowser || hasServerOrDb || hasSubprocess || REAL_E2E_EXEC_RE.test(codeNoStrings);
+
+  if (hasBrowser) kinds.add('browser-playwright');
+  if (hasServerOrDb) kinds.add('local-server-or-db');
+  if (hasSubprocess) kinds.add('subprocess-cli');
+  if (hasAnyRealExec) kinds.add('live-binding');
+  if (hasAnyRealExec || !MOCK_USAGE_RE.test(codeNoStrings)) kinds.add('real-execution');
+
+  return [...kinds].sort();
 }
 
 /**
@@ -163,21 +421,22 @@ export function detectChangedSurfaces({ changedFiles = [] } = {}) {
   let allDocs = files.length > 0;
 
   for (const file of files) {
-    const fileSurfaces = classifyFileSurfaces(file);
+    const fileSurfaces = classifyProductionPathSurfaces(file);
     if (!fileSurfaces.length || fileSurfaces.some((s) => s !== 'docs')) allDocs = false;
     for (const s of fileSurfaces) surfaceSet.add(s);
   }
 
   const surfaces = [...surfaceSet].sort();
   const runtimeSurfaces = surfaces.filter((s) => s !== 'docs');
+  const emptyChangedFiles = files.length === 0;
   const docsOnly = allDocs && runtimeSurfaces.length === 0;
-  const requiresRealE2e = runtimeSurfaces.length > 0;
+  const requiresRealE2e = runtimeSurfaces.length > 0 || emptyChangedFiles;
 
   const proofKindSet = new Set();
   for (const surface of runtimeSurfaces) {
     if (SURFACE_TO_PROOF_KIND[surface]) proofKindSet.add(SURFACE_TO_PROOF_KIND[surface]);
   }
-  if (!proofKindSet.size && runtimeSurfaces.includes('runtime-code')) {
+  if (emptyChangedFiles || (!proofKindSet.size && runtimeSurfaces.includes('runtime-code'))) {
     proofKindSet.add('real-execution');
   }
 
@@ -325,7 +584,8 @@ export function evaluateValidationOutcome({
   const attempts = Number.isInteger(repairAttempts) && repairAttempts >= 0 ? repairAttempts : 0;
   const diagLines = Array.isArray(diagnostics) ? diagnostics.map((d) => String(d ?? '')) : [];
   const lintErrors = Array.isArray(lintBlockingCodes) ? lintBlockingCodes.map(cleanText).filter(Boolean) : [];
-  const surfaceInfo = detectChangedSurfaces({ changedFiles });
+  const normalizedFiles = Array.isArray(changedFiles) ? changedFiles.map(normalizePath).filter(Boolean) : [];
+  const surfaceInfo = detectChangedSurfaces({ changedFiles: normalizedFiles });
   const humanBlocker = needsHumanInteraction === true || diagLines.some((d) => HUMAN_INTERACTION_RE.test(d));
   const bucket2 = detectBucket2Blocker({ realBindingUnavailable, diagnostics: diagLines, toolHint, verifyCommand });
 
@@ -384,9 +644,20 @@ export function evaluateValidationOutcome({
     };
   }
 
+  const defaultVerifyCmd = cleanText(verifyCommand) || 'npm run test:e2e';
+  if (normalizedFiles.length === 0) {
+    return bucket3Outcome({
+      waitKind: 'missing-e2e',
+      repairAttempts: attempts,
+      offlineSummary,
+      unverifiedBoundary: cleanText(humanBoundaryDetail) || 'unknown changed files (diff unavailable)',
+      verifyCommand: defaultVerifyCmd,
+      message: 'Changed files list is empty or unavailable; cannot verify validation surfaces.',
+    });
+  }
+
   const checks = Array.isArray(e2eChecks) ? e2eChecks : [];
   const executedRealChecks = checks.filter((c) => c && typeof c === 'object' && c.executed === true && REAL_E2E_KINDS.has(c.kind));
-  const defaultVerifyCmd = cleanText(verifyCommand) || 'npm run test:e2e';
 
   if (surfaceInfo.requiresRealE2e && executedRealChecks.length === 0) {
     return bucket3Outcome({
@@ -399,7 +670,7 @@ export function evaluateValidationOutcome({
     });
   }
 
-  if (isBugFix === true && bugFixBaseControl === 'not-run') {
+  if (isBugFix === true && (bugFixBaseControl === 'not-run' || bugFixBaseControl === 'not-applicable')) {
     return bucket3Outcome({
       waitKind: 'missing-e2e',
       repairAttempts: attempts,
@@ -443,7 +714,9 @@ export function evaluateValidationOutcome({
       ? 'Bug-fix regression check passed on base; repair test or fix.'
       : lintErrors.length > 0
         ? `Blocking validation lint findings: ${lintErrors.join(', ')}.`
-        : 'Real end-to-end or offline validation check failed.',
+        : !coveredSurfaces
+          ? `Missing required real end-to-end proof kinds: ${surfaceInfo.requiredProofKinds.join(', ')}.`
+          : 'Real end-to-end or offline validation check failed.',
   });
 }
 
@@ -513,14 +786,29 @@ export function planValidationResume({
   };
 }
 
-function testTargetsBoundarySurface(path, text) {
-  const candidatePaths = [normalizePath(path)];
-  for (const match of text.matchAll(BOUNDARY_IMPORT_RE)) {
-    const spec = normalizePath(match[1].replace(/^(?:\.\.\/)+/, ''));
-    if (spec) candidatePaths.push(spec);
+function matchSilentSkipLine(codeLine, maskedLine, kind) {
+  if (/^\s*(?:re|pattern)\s*:\s*\//.test(codeLine)) return null;
+  if (LOCAL_SKIP_HELPER_RE.test(maskedLine)) {
+    return 'silent validation local-skip helper bypasses real validation';
   }
-  const detected = detectChangedSurfaces({ changedFiles: candidatePaths });
-  return detected.runtimeSurfaces.some((s) => s !== 'runtime-code');
+  if (FILTER_CODE_SHAPE_RE.test(maskedLine) && FILTER_REAL_BINDING_RE.test(codeLine)) {
+    return 'filters real-binding-unavailable out of blocking refusals';
+  }
+  if (CALL_DOT_SKIP_RE.test(maskedLine) && CALL_DOT_SKIP_E2E_RE.test(codeLine)) {
+    return 'unconditionally skips an E2E or validation test';
+  }
+  if (NODE_TEST_OPT_SKIP_RE.test(maskedLine) && SKIP_KEYWORD_RE.test(codeLine)) {
+    return 'unconditionally skips an E2E or validation test via test options';
+  }
+  if (kind === 'code') {
+    if (RETURN_PASS_OR_SKIP_RE.test(maskedLine) && /\breal-binding-unavailable\b/i.test(codeLine)) {
+      return 'treats real-binding-unavailable as an inline pass or silent skip';
+    }
+    for (const { re, detail } of PROSE_EXCUSE_PATTERNS) {
+      if (re.test(codeLine)) return detail;
+    }
+  }
+  return null;
 }
 
 /**
@@ -529,31 +817,32 @@ function testTargetsBoundarySurface(path, text) {
 export function lintValidationCode({ path = '', kind = 'test', text = '', hasRealE2eCoverage = false } = {}) {
   const filePath = normalizePath(path) || 'unknown';
   const source = String(text ?? '');
-  const lines = source.split(/\r?\n/);
+  const { codeNoComments, codeNoStrings } = scanJsPreserveLines(source);
+  const codeLines = codeNoComments.split(/\r?\n/);
+  const maskedLines = codeNoStrings.split(/\r?\n/);
   const codeSet = new Set();
   const warnings = [];
 
   if (kind === 'code' || kind === 'test') {
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i];
-      if (/^\s*(?:re|pattern)\s*:\s*\//.test(line)) continue;
-      for (const { re, detail } of SILENT_SKIP_LINE_PATTERNS) {
-        if (re.test(line)) {
-          codeSet.add('silent-validation-skip');
-          warnings.push(`Warning: validation lint: ${filePath}:${i + 1} [silent-validation-skip] ${detail}`);
-          break;
-        }
+    for (let i = 0; i < codeLines.length; i += 1) {
+      const detail = matchSilentSkipLine(codeLines[i], maskedLines[i] ?? '', kind);
+      if (detail) {
+        codeSet.add('silent-validation-skip');
+        warnings.push(`Warning: validation lint: ${filePath}:${i + 1} [silent-validation-skip] ${detail}`);
       }
     }
   }
 
-  if (kind === 'test' && hasRealE2eCoverage !== true && testTargetsBoundarySurface(filePath, source)) {
-    const mockLineIndex = lines.findIndex((line) => MOCK_USAGE_RE.test(line));
-    if (mockLineIndex >= 0 && !REAL_EXEC_RE.test(source)) {
-      codeSet.add('boundary-mock-only-test');
-      warnings.push(
-        `Warning: validation lint: ${filePath}:${mockLineIndex + 1} [boundary-mock-only-test] mock-only test covers a runtime boundary with no real E2E coverage`,
-      );
+  if (kind === 'test' && hasRealE2eCoverage !== true) {
+    const { boundarySurfaces } = inspectTestBoundaryTargets(filePath, source);
+    if (boundarySurfaces.length > 0) {
+      const mockLineIndex = maskedLines.findIndex((line) => MOCK_USAGE_RE.test(line));
+      if (mockLineIndex >= 0 && !REAL_E2E_EXEC_RE.test(codeNoStrings)) {
+        codeSet.add('boundary-mock-only-test');
+        warnings.push(
+          `Warning: validation lint: ${filePath}:${mockLineIndex + 1} [boundary-mock-only-test] mock-only test covers a runtime boundary with no real E2E coverage`,
+        );
+      }
     }
   }
 

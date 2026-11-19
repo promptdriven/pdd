@@ -1,17 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   MAX_VALIDATION_REPAIRS,
+  detectChangedSurfaces,
   evaluateValidationOutcome,
   lintValidationCode,
   planValidationResume,
   shouldClaimWithCooldowns,
 } from '../src/autopilot-validator.mjs';
-import { coreStatus } from '../src/autopilot-core.mjs';
+import { coreStatus, runDefaultPreflightCheck } from '../src/autopilot-core.mjs';
 import {
   lintBoundaryMockOnlyTests,
   lintRepoProject,
@@ -426,4 +427,464 @@ test('Planted Trap 7: backside deterministic lint (silent-validation-skip, bound
 
   // Verify lintValidationCode returns clean ok on a clean production module
   assert.equal(lintValidationCode({ path: 'src/ok.mjs', kind: 'code', text: 'export const ok = () => true;\n', hasRealE2eCoverage: true }).ok, true);
+});
+
+test('MF-1: production path WITHOUT ports.validateE2e fails closed when boundary code lacks real E2E, passes once real E2E exists, and enforces real bug-fix base control', async (t) => {
+  // 1a) Auto and observe modes WITHOUT validateE2e port: web/checkout.tsx with zero real E2E MUST NOT merge or would-merge!
+  for (const mode of ['auto', 'observe']) {
+    const w = await coreWorld(t, { settings: { mode, runs: 1 } });
+    w.issue(31, { title: `Add checkout widget (${mode})` });
+    await w.tick();
+    writeIn(w.job(31, 'build').cwd, 'web/checkout.tsx', 'export function Checkout() { return "pay"; }\n');
+    const { pr } = w.build(31, {
+      write: false,
+      body: 'Fixes #31\n\nRuntime: PASS\nPath: d — web/checkout.tsx — unowned — no contract change — Test: done check',
+    });
+    await w.tick();
+    w.review(31, 'PASS');
+    w.suite(31, 0);
+    // NO validateE2e port override -> exercises real collectRealValidationEvidence!
+    await w.tick();
+
+    assert.equal(pr.merged, false, `${mode}: zero-E2E web change MUST NOT merge without real E2E proof`);
+    assert.equal(pr.comments.some((c) => /would merge/i.test(c.body)), false, `${mode}: zero-E2E web change MUST NOT say would merge`);
+    assert.ok(
+      pr.comments.some((c) => /Passed offline:/.test(c.body) && /Unverified boundary:/.test(c.body) && /Verify command:/.test(c.body)),
+      `${mode}: zero-E2E web change posts 3-line Human Verification Card`,
+    );
+  }
+
+  // 1b) Real local-server E2E test targeting api/billing.mjs passes WITHOUT validateE2e port, and real bug-fix base control blocks passed-on-base then passes on ran-and-failed-on-base!
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w.baseCommit('api/billing.mjs', 'export function totalCents(a, b) { return a + b; }\n');
+  w.issue(32, { title: 'Fix billing tax rounding bug', labels: ['bug'] });
+  await w.tick();
+  const buildCwd = w.job(32, 'build').cwd;
+  writeIn(buildCwd, 'api/billing.mjs', 'export function totalCents(a, b) { return Math.round((a + b) * 1.1); }\n');
+  // First write a test that ALREADY passes on base (does not check the fixed tax rounding -> passed-on-base!)
+  writeIn(
+    buildCwd,
+    'test/billing-e2e.test.mjs',
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import http from 'node:http';",
+      "import { totalCents } from '../api/billing.mjs';",
+      "test('billing endpoint responds', async () => {",
+      "  const s = http.createServer((_req, res) => res.end(String(totalCents(0, 0))));",
+      "  await new Promise((resolve) => s.listen(0, '127.0.0.1', resolve));",
+      "  const port = s.address().port;",
+      "  try {",
+      "    const r = await fetch(`http://127.0.0.1:${port}`);",
+      "    assert.equal(await r.text(), '0');",
+      "  } finally { s.close(); }",
+      "});",
+      '',
+    ].join('\n'),
+  );
+  const { pr } = w.build(32, {
+    write: false,
+    body: 'Fixes #32\n\nRuntime: PASS\nPath: d — api/billing.mjs, test/billing-e2e.test.mjs — unowned — no contract change — Test: done check',
+  });
+  await w.tick();
+  w.review(32, 'PASS');
+  w.suite(32, 0);
+  // Real production gate runs controlTree against base -> test passes on base -> enters repair, MUST NOT merge!
+  await w.tick();
+  assert.equal(pr.merged, false, 'bug-fix PR whose test passes on base MUST NOT merge');
+  const repairJob = w.job(32, 'repair');
+  assert.ok(repairJob, 'bug-fix passed-on-base enters bounded repair');
+  assert.match(repairJob.input, /passed[- ]on[- ]base|bug-fix-passed-on-base/i);
+
+  // Now update the real E2E test so it asserts the fixed tax rounding (fails on base, passes on head)!
+  writeIn(
+    repairJob.cwd,
+    'test/billing-e2e.test.mjs',
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import http from 'node:http';",
+      "import { totalCents } from '../api/billing.mjs';",
+      "test('billing endpoint applies 10% tax rounding', async () => {",
+      "  const s = http.createServer((_req, res) => res.end(String(totalCents(50, 50))));",
+      "  await new Promise((resolve) => s.listen(0, '127.0.0.1', resolve));",
+      "  const port = s.address().port;",
+      "  try {",
+      "    const r = await fetch(`http://127.0.0.1:${port}`);",
+      "    assert.equal(await r.text(), '110');",
+      "  } finally { s.close(); }",
+      "});",
+      '',
+    ].join('\n'),
+  );
+  w.build(32, {
+    role: 'repair',
+    write: false,
+    body: 'Fixes #32\n\nRuntime: PASS\nPath: d — api/billing.mjs, test/billing-e2e.test.mjs — unowned — no contract change — Test: done check',
+  });
+  await w.tick();
+  w.review(32, 'PASS');
+  w.suite(32, 0);
+  await w.tick();
+  assert.equal(pr.merged, true, 'bug-fix PR with real E2E that fails on base and passes on head merges cleanly without validateE2e mock');
+});
+
+test('MF-2: boundary-mock-only-test enforces per-target real E2E coverage even in mature repos with unrelated E2E tests', (t) => {
+  const repo = makeTempGitRepo(t, 'pdd-mf2-per-target-');
+  // Unrelated API module that DOES have real E2E coverage
+  writeFile(repo, 'api/other.mjs', 'export const other = () => "ok";\n');
+  writeFile(
+    repo,
+    'test/other-e2e.test.mjs',
+    "import http from 'node:http';\nimport { other } from '../api/other.mjs';\nconst s = http.createServer((_q, r) => r.end(other())).listen(0);\nawait fetch(`http://127.0.0.1:${s.address().port}`);\n",
+  );
+  // New boundary module with ONLY a mock-only test
+  writeFile(repo, 'api/billing.mjs', 'export const charge = () => "charged";\n');
+  writeFile(
+    repo,
+    'test/billing-mock.test.mjs',
+    "import { mock } from 'node:test';\nimport { charge } from '../api/billing.mjs';\nconst fakeClient = mock.fn(() => charge());\nfakeClient();\n",
+  );
+  commitAll(repo, 'mature repo with one untested boundary module');
+
+  const before = lintRepoProject({ root: repo });
+  const mockFindings = before.findings.filter((f) => f.code === 'boundary-mock-only-test');
+  assert.equal(mockFindings.length, 1, 'unrelated api/other.mjs E2E must NOT hide mock-only test for api/billing.mjs');
+  assert.equal(mockFindings[0].path, 'test/billing-mock.test.mjs');
+
+  // Adding a real E2E test targeting api/billing.mjs clears the finding
+  writeFile(
+    repo,
+    'test/billing-e2e.test.mjs',
+    "import http from 'node:http';\nimport { charge } from '../api/billing.mjs';\nconst s = http.createServer((_q, r) => r.end(charge())).listen(0);\nawait fetch(`http://127.0.0.1:${s.address().port}`);\n",
+  );
+  commitAll(repo, 'add billing real e2e');
+  const after = lintRepoProject({ root: repo });
+  assert.equal(after.findings.some((f) => f.code === 'boundary-mock-only-test'), false, 'finding clears once api/billing.mjs has its own real E2E test');
+});
+
+test('MF-3: real-binding-unavailable closes RR6 stripped-row, PR-body-only, and stale-row bypasses', async (t) => {
+  // 3a) Saved check with reason/codes/object-refusal real-binding-unavailable MUST still park at Bucket 2 (never silently merge)
+  {
+    const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+    w.runtimeEvidence = async () => ({
+      stories: [{
+        story: 'user_stories/live.md',
+        pass: false,
+        current: true,
+        sent: true,
+        failed: 0,
+        reason: 'real-binding-unavailable',
+        refusals: [{ code: 'real-binding-unavailable', message: 'db unreachable' }],
+      }],
+      storyFiles: ['user_stories/live.md'],
+      footprints: { 'user_stories/live.md': ['prompts/live.prompt.md'] },
+    });
+    w.issue(33, { title: 'Update live binding story' });
+    await w.tick();
+    writeIn(w.job(33, 'build').cwd, 'user_stories/live.md', '# Live Story\n');
+    const { pr } = w.build(33, {
+      write: false,
+      body: 'Fixes #33\n\nRuntime: not run (real-binding-unavailable)\nPath: d — user_stories/live.md — unowned — no contract change — Test: done check',
+    });
+    await w.tick();
+    assert.equal(pr.merged, false, 'reason/object-refusal real-binding-unavailable MUST NOT merge');
+    assert.ok(w.labels(33).includes('pdd:needs-decision'), 'parks at Bucket 2 needs-decision');
+    assert.equal(w.started.filter((j) => j.issue === 33 && j.role === 'repair').length, 0, '0 repair rounds');
+  }
+
+  // 3b) PR body reporting Runtime: not run (real-binding-unavailable) with NO saved row still parks at Bucket 2
+  {
+    const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+    w.runtimeEvidence = async () => ({ stories: [], storyFiles: [], footprints: {} });
+    w.issue(34, { title: 'PR body real-binding-unavailable without saved row' });
+    await w.tick();
+    const { pr } = w.build(34, {
+      body: 'Fixes #34\n\nRuntime: not run (real-binding-unavailable)\nPath: d — change-34.txt — unowned — no contract change — Test: done check',
+    });
+    await w.tick();
+    assert.equal(pr.merged, false, 'PR body real-binding-unavailable without saved row MUST NOT merge');
+    assert.ok(w.labels(34).includes('pdd:needs-decision'), 'parks at Bucket 2');
+  }
+
+  // 3c) Newer passing saved check at the same head supersedes an earlier stale real-binding-unavailable row
+  {
+    const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+    w.runtimeEvidence = async () => ({
+      stories: [
+        { story: 'user_stories/live.md', pass: false, current: true, at: 1000, sent: true, failed: 0, refusals: ['real-binding-unavailable'] },
+        { story: 'user_stories/live.md', pass: true, current: true, at: 2000, sent: true, failed: 0, refusals: [] },
+      ],
+      storyFiles: ['user_stories/live.md'],
+      footprints: { 'user_stories/live.md': [] },
+    });
+    w.issue(35, { title: 'Stale real-binding-unavailable superseded by passing check' });
+    await w.tick();
+    const { pr } = w.build(35, {
+      body: 'Fixes #35\n\nRuntime: PASS\nPath: d — change-35.txt — unowned — no contract change — Test: done check',
+    });
+    await w.tick();
+    w.review(35, 'PASS');
+    w.suite(35, 0);
+    await w.tick();
+    assert.equal(pr.merged, true, 'newer passing saved row supersedes stale real-binding-unavailable row');
+  }
+});
+
+test('MF-4: Bucket 2 resume enforces review guard, keeps worktree, runs bindingRerun, resumes on human reply without rebuild, prunes orphan cooldowns, and validates runDefaultPreflightCheck', async (t) => {
+  // 4a) Park BEFORE review passes (on real-binding-unavailable) -> worktree kept, review MUST run on resume (no review bypass!), bindingRerun runs, and human reply resumes validate-only (0 rebuilds)
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  let bindingHealthy = false;
+  let rerunCalls = 0;
+  w.runtimeEvidence = async () => ({
+    stories: [{
+      story: 'user_stories/live.md',
+      pass: bindingHealthy,
+      current: true,
+      sent: true,
+      failed: 0,
+      refusals: bindingHealthy ? [] : ['real-binding-unavailable'],
+    }],
+    storyFiles: ['user_stories/live.md'],
+    footprints: { 'user_stories/live.md': [] },
+  });
+  w.issue(36, { title: 'Live runtime binding job' });
+  await w.tick();
+  const wt36 = join(w.root, 'worktrees', '36');
+  const { pr: pr36 } = w.build(36, {
+    body: 'Fixes #36\n\nRuntime: not run (real-binding-unavailable)\nPath: d — change-36.txt — unowned — no contract change — Test: done check',
+  });
+  await w.tick();
+  assert.equal(pr36.merged, false, 'parked before review');
+  assert.ok(w.labels(36).includes('pdd:needs-decision'));
+  assert.equal(existsSync(wt36), true, 'authWait retains worktree on disk for validate-only resume');
+  assert.equal(w.started.filter((j) => j.issue === 36 && j.role === 'review').length, 0, 'review had not passed before park');
+
+  // Human replies on the parked issue (keeping pdd:needs-decision label) -> must resume validate-only (0 rebuilds), NOT claim for full rebuild!
+  const buildsBefore = w.started.filter((j) => j.issue === 36 && j.role === 'build').length;
+  w.github.comment(36, 'Fixed the runtime binding, please re-validate.', 'acme');
+  await w.tick({
+    rerunRuntimeBinding: async () => { rerunCalls += 1; bindingHealthy = true; },
+  });
+  assert.equal(w.started.filter((j) => j.issue === 36 && j.role === 'build').length, buildsBefore, 'human reply on parked issue causes ZERO code rebuild');
+  assert.equal(rerunCalls, 1, 'real-binding-unavailable resume triggers bindingRerun');
+  assert.equal(w.started.filter((j) => j.issue === 36 && j.role === 'review').length, 1, 'review MUST run on resume because review had NOT passed before park');
+
+  w.review(36, 'PASS');
+  w.suite(36, 0);
+  await w.tick();
+  assert.equal(pr36.merged, true, 'PR merges cleanly once bindingRerun + fresh review + suite pass');
+
+  // 4b) Closing a parked PR prunes its orphan cooldown on the next tick
+  const w2 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w2.issue(37, { title: 'Fix gcloud auth deploy' });
+  await w2.tick();
+  const { pr: pr37 } = w2.build(37, { body: 'Fixes #37\n\nRuntime: PASS\nPath: d — change-37.txt — unowned — no contract change — Test: done check' });
+  await w2.tick();
+  w2.review(37, 'PASS');
+  w2.say(37, 'suite', 'ERROR: (gcloud.run.deploy) Reauthentication required. Run: gcloud auth login\n');
+  w2.suite(37, 1);
+  await w2.tick();
+  const beforeClose = JSON.parse(readFileSync(join(w2.root, 'core.json'), 'utf8'));
+  assert.equal(beforeClose.toolCooldowns?.gcloud?.active, true, 'gcloud cooldown active while PR #37 is parked');
+
+  pr37.state = 'closed';
+  await w2.tick();
+  const afterClose = JSON.parse(readFileSync(join(w2.root, 'core.json'), 'utf8'));
+  assert.equal(afterClose.toolCooldowns?.gcloud, undefined, 'closing parked PR prunes its orphan cooldown');
+
+  // 4c) runDefaultPreflightCheck returns { exitCode: null } safely for unknown tools and non-zero cleanly for missing binary
+  assert.deepEqual(await runDefaultPreflightCheck({ tool: 'unknown-tool-xyz' }), { exitCode: null });
+  const badEnvProbe = await runDefaultPreflightCheck({ tool: 'gcloud', env: { PATH: '/nonexistent-bin-dir' } });
+  assert.ok(badEnvProbe && badEnvProbe.exitCode !== 0 && badEnvProbe.exitCode !== null, 'missing binary returns non-zero cleanly');
+});
+
+test('MF-5: passing test titles mentioning 2FA/captcha/real-binding-unavailable do NOT trigger Bucket 2/3, while failed CI auth log triggers Bucket 2', async (t) => {
+  // 5a) Suite fails on an ordinary AssertionError after passing tests whose titles mention 2FA/captcha/real-binding-unavailable
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w.issue(38, { title: 'Fix local parser formatting' });
+  await w.tick();
+  const { pr } = w.build(38, { body: 'Fixes #38\n\nRuntime: PASS\nPath: d — change-38.txt — unowned — no contract change — Test: done check' });
+  await w.tick();
+  w.review(38, 'PASS');
+  w.say(38, 'suite', [
+    '✔ Planted Trap 1: real-binding-unavailable fails closed to Bucket 2 (12ms)',
+    '✔ Planted Trap 6: human-interaction boundary (OAuth/2FA/captcha/live Stripe payment) (15ms)',
+    '✖ formatter trims trailing space (2ms)',
+    '  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:',
+    '  + actual - expected',
+    "  + 'hello '",
+    "  - 'hello'",
+  ].join('\n'));
+  w.suite(38, 1);
+  await w.tick();
+  assert.equal(w.labels(38).includes('pdd:needs-decision'), false, 'passing test titles must NOT false-trigger Bucket 2 or Bucket 3');
+  assert.ok(w.job(38, 'repair'), 'ordinary AssertionError enters normal repair');
+  assert.equal(pr.merged, false);
+
+  // 5b) Failed CI check log containing AWS ExpiredToken triggers Bucket 2 auth-wait (0 repairs)
+  const w2 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w2.issue(39, { title: 'Deploy AWS S3 artifact' });
+  await w2.tick();
+  const { head: head39 } = w2.build(39, {
+    checks: null,
+    body: 'Fixes #39\n\nRuntime: PASS\nPath: d — change-39.txt — unowned — no contract change — Test: done check',
+  });
+  w2.github.setChecks(head39, 'failure', 'completed', {
+    runId: 7701,
+    name: 'deploy-e2e',
+    log: '2026-11-18T10:00:00Z An error occurred (ExpiredToken): The security token included in the request is expired\n',
+  });
+  await w2.tick();
+  assert.ok(w2.labels(39).includes('pdd:needs-decision'), 'CI ExpiredToken failure parks at Bucket 2');
+  assert.equal(w2.started.filter((j) => j.issue === 39 && j.role === 'repair').length, 0, '0 repair rounds on CI auth failure');
+});
+
+test('MF-6: silent-validation-skip catches node:test skip options, ignores comments/strings, has 0 false positives on this repo, and backside lint includes file:line', async (t) => {
+  // node:test { skip: true } and { skip: 'reason' } caught
+  assert.ok(lintValidationSkips("test('e2e login', { skip: true }, () => {});", { path: 'test/a.test.mjs', kind: 'test' }).length > 0);
+  assert.ok(lintValidationSkips("it('e2e checkout', { skip: 'no creds' }, () => {});", { path: 'test/b.test.mjs', kind: 'test' }).length > 0);
+
+  // Comments and string fixtures do NOT false-positive
+  const cleanCode = [
+    '// real-binding-unavailable is never skipped silently',
+    "const PAT = 'real-binding-unavailable';",
+    "const sample = `test.skip('x', () => {})`;",
+    'export function check(x) { return x === PAT ? "block" : sample; }',
+  ].join('\n');
+  assert.equal(lintValidationSkips(cleanCode, { path: 'src/checker.mjs', kind: 'code' }).length, 0, 'comments and strings do not trigger silent-validation-skip');
+
+  // 0 false positives on THIS worktree's own validator/core/lint/test files!
+  const selfReport = lintRepoProject({ root: process.cwd() });
+  const prFiles = new Set([
+    'src/autopilot-validator.mjs',
+    'src/autopilot-core.mjs',
+    'src/autopilot-launcher.mjs',
+    'src/repo-hygiene-lint.mjs',
+    'src/pdd-cli.mjs',
+    'test/autopilot-validator-v2.test.mjs',
+    'test/autopilot-validator.vectors.test.mjs',
+    'test/autopilot-hardening.test.mjs',
+  ]);
+  const selfHits = (selfReport.findings ?? []).filter(
+    (f) => prFiles.has(f.path) && (f.code === 'silent-validation-skip' || f.code === 'boundary-mock-only-test'),
+  );
+  assert.deepEqual(selfHits, [], `0 false positives expected on PR files, got: ${JSON.stringify(selfHits)}`);
+
+  // Backside lint repair feedback inside Autopilot core includes exact file:line
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w.issue(40, { title: 'Add helper test' });
+  await w.tick();
+  writeIn(w.job(40, 'build').cwd, 'test/planted-skip.test.mjs', "import test from 'node:test';\ntest('e2e', { skip: true }, () => {});\n");
+  w.build(40, {
+    write: false,
+    body: 'Fixes #40\n\nRuntime: PASS\nPath: d — test/planted-skip.test.mjs — unowned — no contract change — Test: done check',
+  });
+  await w.tick();
+  w.review(40, 'PASS');
+  w.suite(40, 0);
+  await w.tick();
+  const repair = w.job(40, 'repair');
+  assert.ok(repair, 'planted node:test skip triggers backside lint repair');
+  assert.match(repair.input, /test\/planted-skip\.test\.mjs:2/, 'repair feedback includes exact file:line');
+});
+
+test('MF-7: Bucket 1 validator failure runs all 3 bounded repair rounds and escalates at cap 3 with repair-exhausted PR comment', async (t) => {
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w.issue(41, { title: 'Fix stubborn backside skip' });
+  await w.tick();
+  writeIn(w.job(41, 'build').cwd, 'test/stubborn-skip.test.mjs', "import test from 'node:test';\ntest.skip('e2e', () => {});\n");
+  const { pr } = w.build(41, {
+    write: false,
+    body: 'Fixes #41\n\nRuntime: PASS\nPath: d — test/stubborn-skip.test.mjs — unowned — no contract change — Test: done check',
+  });
+  await w.tick();
+
+  // Drive through all MAX_VALIDATION_REPAIRS (3) rounds without fixing the skip -> must NOT stop early at round 1 or 2!
+  for (let round = 1; round <= MAX_VALIDATION_REPAIRS; round += 1) {
+    w.review(41, 'PASS');
+    w.suite(41, 0);
+    await w.tick();
+    const repairsSoFar = w.started.filter((j) => j.issue === 41 && j.role === 'repair').length;
+    assert.equal(repairsSoFar, round, `Bucket 1 validator failure starts repair round ${round} of ${MAX_VALIDATION_REPAIRS}`);
+    const rep = w.job(41, 'repair');
+    writeIn(rep.cwd, 'test/stubborn-skip.test.mjs', `import test from 'node:test';\n// round ${round}\ntest.skip('e2e', () => {});\n`);
+    w.build(41, {
+      role: 'repair',
+      write: false,
+      body: 'Fixes #41\n\nRuntime: PASS\nPath: d — test/stubborn-skip.test.mjs — unowned — no contract change — Test: done check',
+    });
+    await w.tick();
+  }
+
+  // After round 3 completes and STILL fails validation, escalate cleanly at cap 3 -> needs-person + repair-exhausted PR comment (NOT needs-approval)
+  w.review(41, 'PASS');
+  w.suite(41, 0);
+  await w.tick();
+  assert.equal(pr.merged, false, 'repair-exhausted PR never merges');
+  assert.equal(w.started.filter((j) => j.issue === 41 && j.role === 'repair').length, MAX_VALIDATION_REPAIRS, 'caps strictly at 3 repairs');
+  assert.ok(w.labels(41).includes('pdd:needs-decision'), 'escalates to pdd:needs-decision');
+  assert.ok(pr.comments.some((c) => c.body.includes(`<!-- pdd:autopilot-core:repair-exhausted:${pr.number} -->`)), 'posts repair-exhausted PR comment marker');
+  assert.equal(pr.comments.some((c) => c.body.includes('needs-approval')), false, 'does NOT post misleading needs-approval comment');
+});
+
+test('MF-8 & Minor Notes: empty changedFiles fail closed, word-boundary surfaces, user_stories not docsOnly, Dockerfile/extra extensions, isBugFix not-applicable, and CLI rules/lint/*.json detection', (t) => {
+  // Empty changedFiles -> NOT docsOnly, fails closed without proof
+  const emptySurf = detectChangedSurfaces({ changedFiles: [] });
+  assert.equal(emptySurf.docsOnly, false);
+  assert.ok(emptySurf.requiredProofKinds.includes('real-execution'));
+  const emptyEval = evaluateValidationOutcome({ mode: 'auto', changedFiles: [], offlinePassed: true, e2eChecks: [] });
+  assert.equal(emptyEval.eligible, false, 'empty changedFiles must fail closed when no proof exists');
+
+  // user_stories/ is NOT docsOnly
+  assert.equal(detectChangedSurfaces({ changedFiles: ['user_stories/checkout.md'] }).docsOnly, false);
+
+  // Word-boundary surface matchers + non-production directory exclusion: no false matches on cli/api/auth/payment
+  assert.deepEqual(detectChangedSurfaces({ changedFiles: ['src/client.mjs'] }).surfaces, ['runtime-code']);
+  assert.deepEqual(detectChangedSurfaces({ changedFiles: ['src/capital.mjs'] }).surfaces, ['runtime-code']);
+  assert.deepEqual(detectChangedSurfaces({ changedFiles: ['src/author.mjs'] }).surfaces, ['runtime-code']);
+  assert.deepEqual(detectChangedSurfaces({ changedFiles: ['prompts/cli/auth.prompt.md'] }).surfaces, []);
+  assert.deepEqual(detectChangedSurfaces({ changedFiles: ['docs/stripe-guide.md'] }).surfaces, ['docs']);
+  assert.equal(detectChangedSurfaces({ changedFiles: ['docs/stripe-guide.md'] }).docsOnly, true);
+
+  // Dockerfile.* and extra runtime extensions (.zig, .dart) are runtime code, not docsOnly
+  assert.equal(detectChangedSurfaces({ changedFiles: ['Dockerfile.prod'] }).docsOnly, false);
+  assert.equal(detectChangedSurfaces({ changedFiles: ['src/engine.zig'] }).docsOnly, false);
+  assert.equal(detectChangedSurfaces({ changedFiles: ['lib/main.dart'] }).docsOnly, false);
+
+  // isBugFix: true with bugFixBaseControl: 'not-applicable' fails closed at Bucket 3 (never treated as passing)
+  const missingCtrl = evaluateValidationOutcome({
+    mode: 'auto',
+    changedFiles: ['src/calc.mjs'],
+    isBugFix: true,
+    offlinePassed: true,
+    e2eChecks: [{ kind: 'real-execution', command: 'npm test', executed: true, exitCode: 0, passed: 1, failed: 0, skipped: 0 }],
+    bugFixBaseControl: 'not-applicable',
+  });
+  assert.equal(missingCtrl.eligible, false);
+  assert.equal(missingCtrl.bucket, 3);
+  assert.equal(missingCtrl.waitKind, 'missing-e2e');
+  assert.match(missingCtrl.message, /base regression control/i);
+
+  // Minor Note 1: `pdd lint --local` detects workspace-local rules/lint/*.json even without `"lint"` in pdd.json
+  const repo = makeTempGitRepo(t, 'pdd-mf8-cli-rules-');
+  writeFile(repo, 'pdd.json', JSON.stringify({ name: 'demo' }));
+  writeFile(repo, 'src/skip.mjs', "export function bad(err) { if (err === 'real-binding-unavailable') return { ok: true, skipped: true }; }\n");
+  writeFile(repo, 'rules/lint/10-strict.json', JSON.stringify({ rules: { 'silent-validation-skip': 'error' } }));
+  commitAll(repo, 'rules without pdd.json lint key');
+
+  let exitCode = 0;
+  let combined = '';
+  try {
+    combined = execFileSync(process.execPath, [join(process.cwd(), 'bin/pdd.mjs'), 'lint', '--local'], {
+      cwd: repo,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    exitCode = err.status ?? 1;
+    combined = `${err.stdout ?? ''}\n${err.stderr ?? ''}`;
+  }
+  assert.notEqual(exitCode, 0, 'pdd lint --local must enforce rules/lint/*.json error even without lint key in pdd.json');
+  assert.match(combined, /silent-validation-skip/);
 });

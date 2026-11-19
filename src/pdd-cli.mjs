@@ -1,6 +1,6 @@
 // Generated from prompts/cli/pdd-cli.prompt.md (sha256: d73eb585116a4bff107ba5bcbf6d7b1f55d19f6ffffd1330d02bc0acb32ea269).
 import { execFileSync } from 'node:child_process';
-import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +54,21 @@ function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
   return null;
 }
 const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
+function hasWorkspaceLintRuleFiles(root) {
+  const rulesDir = join(root, 'rules', 'lint');
+  try {
+    const dirStat = lstatSync(rulesDir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return false;
+    for (const name of readdirSync(rulesDir)) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const st = lstatSync(join(rulesDir, name));
+        if (!st.isSymbolicLink() && st.isFile() && st.size <= MAX_CONFIG_BYTES) return true;
+      } catch { /* skip unreadable rule entry */ }
+    }
+  } catch { /* no rules/lint directory */ }
+  return false;
+}
 function hasProjectLintConfig(cwd) {
   let root;
   try {
@@ -66,6 +81,7 @@ function hasProjectLintConfig(cwd) {
     if (!gitTop) return null;
     root = realpathSync(gitTop);
   } catch { return null; }
+  if (hasWorkspaceLintRuleFiles(root)) return root;
   const cfgPath = join(root, 'pdd.json');
   let fd;
   try {

@@ -1,7 +1,7 @@
 // Generated from prompts/cli/repo-hygiene-lint.prompt.md.
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
-import { detectChangedSurfaces, lintValidationCode } from './autopilot-validator.mjs';
+import { detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { isLintableStoryPath, lintStory } from './story-lint.mjs';
 import { gitFiles, isSecretPath, workspace } from './runtime-seam.mjs';
@@ -1211,8 +1211,6 @@ export function lintPublicInterfaceTests(text, { path = 'test/example.test.mjs' 
 }
 
 const VALIDATION_WARNING_RE = /^Warning: validation lint: (.+):(\d+) \[([^\]]+)\] (.+)$/;
-const REAL_E2E_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|createServer|playwright)\b|listen\(|fetch\(|http\.request|chromium\.launch|page\.goto/i;
-const TEST_IMPORT_SPEC_RE = /(?:from|require\s*\()\s*['"`]([^'"`]+)['"`]/g;
 
 function parseValidationWarnings(rawWarnings, fallbackPath) {
   return rawWarnings.map((warning, idx) => {
@@ -1243,15 +1241,6 @@ function parseValidationWarnings(rawWarnings, fallbackPath) {
 function collectValidationCodeFindings(text, { path = 'test/example.test.mjs', kind = 'test', hasRealE2eCoverage = false } = {}) {
   const { warnings } = lintValidationCode({ path, kind, text, hasRealE2eCoverage });
   return parseValidationWarnings(warnings, path);
-}
-
-function detectTestBoundarySurfaces(testPath, text) {
-  const candidates = [testPath];
-  for (const match of String(text ?? '').matchAll(TEST_IMPORT_SPEC_RE)) {
-    const spec = match[1].replace(/^(?:\.\.\/)+/, '').replace(/^\.\//, '');
-    if (spec) candidates.push(spec);
-  }
-  return detectChangedSurfaces({ changedFiles: candidates }).runtimeSurfaces.filter(s => s !== 'runtime-code');
 }
 
 /**
@@ -2082,18 +2071,21 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
 
   if (!promptFilterSet || promptFilterSet.size > 0) {
     const testEntries = [];
-    const realE2eSurfaces = new Set();
+    const realE2eTargets = new Set();
     for (const testPath of scopedFiles.filter(isInspectableTestCodePath)) {
       const content = readSafeUtf8(realRoot, testPath);
       if (typeof content !== 'string') continue;
-      const boundarySurfaces = detectTestBoundarySurfaces(testPath, content);
-      if (REAL_E2E_EXEC_RE.test(content)) {
-        for (const s of boundarySurfaces) realE2eSurfaces.add(s);
+      const { boundaryTargets } = inspectTestBoundaryTargets(testPath, content);
+      const realKinds = detectRealE2eKindsInTest(testPath, content);
+      if (realKinds.some(k => k !== 'real-execution')) {
+        for (const target of boundaryTargets) {
+          if (!target.startsWith('test-stem:')) realE2eTargets.add(target);
+        }
       }
-      testEntries.push({ testPath, content, boundarySurfaces });
+      testEntries.push({ testPath, content, boundaryTargets });
     }
 
-    for (const { testPath, content, boundarySurfaces } of testEntries) {
+    for (const { testPath, content, boundaryTargets } of testEntries) {
       for (const item of collectFakeTestWarnings(content, { path: testPath })) {
         if (!targetMatchesPromptFilter(item.target)) continue;
         rawFindings.push({ ...item, defaultSeverity: 'warn' });
@@ -2102,8 +2094,8 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
         if (!targetMatchesPromptFilter(item.target)) continue;
         rawFindings.push({ ...item, defaultSeverity: 'warn' });
       }
-      const hasRealE2eCoverage = boundarySurfaces.length > 0
-        && boundarySurfaces.every(surface => realE2eSurfaces.has(surface));
+      const hasRealE2eCoverage = boundaryTargets.length > 0
+        && boundaryTargets.every(target => !target.startsWith('test-stem:') && realE2eTargets.has(target));
       if (!promptFilterSet) {
         for (const item of collectValidationCodeFindings(content, { path: testPath, kind: 'test', hasRealE2eCoverage })) {
           rawFindings.push({ ...item, defaultSeverity: 'warn' });

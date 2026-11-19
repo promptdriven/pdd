@@ -23,7 +23,7 @@ import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubUsage } from './github-calls.mjs';
 import { captureCosts, costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
-import { readCoreSettings, tickCore, coreStatus, busySlots, claimTickLock, releaseCoreJob } from './autopilot-core.mjs';
+import { readCoreSettings, tickCore, coreStatus, busySlots, claimTickLock, releaseCoreJob, runDefaultPreflightCheck } from './autopilot-core.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
 import { listReportDrafts, sendReportDraft, summarizeConversionDrops } from './autopilot-reports.mjs';
 import { INTAKE_MODES, intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
@@ -675,6 +675,7 @@ async function runCoreTick(stateFile, state, p, ports) {
     alert: ({ issue, kind, text, tried, need, update }) => (p.sendAlert ?? runAutopilotAlerts)({ action: 'alert', cwd: state.cwd, env: p.env, issue: String(issue), kind, ...(update ? { update: true } : {}),
       text: JSON.stringify({ cause: text, tried: tried ?? 'The Autopilot core engine could not go on with this issue.', need: need ?? 'Check the issue and this machine.' }) },
       alertPorts),
+    preflightCheck: ({ tool, command }) => runDefaultPreflightCheck({ tool, command, cwd: state.cwd, env: p.env }),
     machine,
     ...p.corePorts,
   });

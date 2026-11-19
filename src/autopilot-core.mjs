@@ -1,10 +1,12 @@
 // Prompt: prompts/cli/autopilot-core.prompt.md
+import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
+import { promisify } from 'node:util';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
 import { githubFullLastPage } from './github-calls.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
@@ -24,8 +26,20 @@ import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessag
 const isPoolRotatableService = text => Boolean(text && (isQuotaExhaustionMessage(text) || isAuthFailureMessage(text)));
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 import { recordAutopilotMetric } from './autopilot-metrics.mjs';
-import { MAX_VALIDATION_REPAIRS, detectChangedSurfaces, evaluateValidationOutcome, formatHumanVerificationCard, planValidationResume, shouldClaimWithCooldowns } from './autopilot-validator.mjs';
+import {
+  MAX_VALIDATION_REPAIRS,
+  canonicalTargetPath,
+  detectChangedSurfaces,
+  detectRealE2eKindsInTest,
+  evaluateValidationOutcome,
+  formatHumanVerificationCard,
+  inspectTestBoundaryTargets,
+  planValidationResume,
+  shouldClaimWithCooldowns,
+} from './autopilot-validator.mjs';
 import { lintRepoProject } from './repo-hygiene-lint.mjs';
+
+const execFileAsync = promisify(cbExecFile);
 
 const { interfaceBlocks, proseSha256, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
 
@@ -459,6 +473,20 @@ function readMachine(fs, root, warn, now = Date.now()) {
           cooldownTool: p.cooldownTool.trim().toLowerCase(),
           checkCommand: named(p.checkCommand) ? p.checkCommand : '',
           parkedAt: Number.isFinite(p.parkedAt) ? p.parkedAt : now,
+          reviewPassed: p.reviewPassed === true,
+          reviewKept: p.reviewPassed === true && object(p.reviewKept) && p.reviewKept.head === p.headSha && p.reviewKept.verdict === 'PASS'
+            ? {
+                head: p.reviewKept.head,
+                verdict: 'PASS',
+                mustFix: [],
+                followUps: Array.isArray(p.reviewKept.followUps) ? p.reviewKept.followUps.slice(0, 10) : [],
+                decision: null,
+                reviewFamily: named(p.reviewKept.reviewFamily) ? p.reviewKept.reviewFamily : null,
+                reviewIndependence: named(p.reviewKept.reviewIndependence) ? p.reviewKept.reviewIndependence : null,
+              }
+            : null,
+          parkReason: p.parkReason === 'real-binding-unavailable' ? 'real-binding-unavailable' : 'suite-auth',
+          parkStories: Array.isArray(p.parkStories) ? p.parkStories.filter(named).slice(0, 20) : [],
         }))
         .slice(-50)
       : [] };
@@ -603,7 +631,8 @@ async function blocked(ctx, row) {
 // once per change (its updated_at, saved as decisionSeen in the machine state); with a trusted reply after the question,
 // the engine removes the label itself and the issue is ready in this tick.
 async function decisionReplies(ctx, rows) {
-  const ready = new Set(), waiting = rows.filter(row => !row.pull_request && row.state === 'open' && !skippedIssueLabel(row, ctx.settings) && labelsOf(row).includes(DECISION) && row.comments > 0
+  const parkedIssues = new Set((ctx.machineState().validationParks ?? []).map(p => p.issue));
+  const ready = new Set(), waiting = rows.filter(row => !row.pull_request && row.state === 'open' && !skippedIssueLabel(row, ctx.settings) && !parkedIssues.has(row.number) && labelsOf(row).includes(DECISION) && row.comments > 0
     && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label)));
   if (!waiting.length) return ready;
   const seen = { ...(object(ctx.machineState().decisionSeen) ? ctx.machineState().decisionSeen : {}) };
@@ -649,7 +678,7 @@ async function activeFixedHold(ctx, history, issue, row = null) {
   try { appendHistory(ctx, { at: ctx.now(), issue, unfixed: true, text: `the fixed hold ended: ${why}` }); } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
   return null;
 }
-const KNOWN_ISSUE_TOOLS = ['gcloud', 'aws', 'docker', 'stripe', 'postgres', 'kubernetes', 'terraform', 'runtime-binding'];
+const KNOWN_ISSUE_TOOLS = ['gcloud', 'aws', 'docker', 'stripe', 'postgres', 'kubernetes', 'terraform', 'auth', 'service', 'runtime-binding'];
 function issueRequiredTools(row) {
   const tools = new Set();
   for (const label of labelsOf(row)) {
@@ -661,12 +690,14 @@ function issueRequiredTools(row) {
     if (new RegExp(`\\b${tool.replace('-', '[-_ ]?')}\\b`, 'i').test(text)) tools.add(tool);
   }
   if (/\bgcp\b/i.test(text)) tools.add('gcloud');
+  if (/\b(?:real[-_ ]?binding|live[-_ ]?binding|runtime[-_ ]?binding|pdd\s+test)\b/i.test(text)) tools.add('runtime-binding');
   return [...tools];
 }
 async function* readyRows(ctx, rows) {
   const local = new Set(readJobs(ctx.fs, ctx.root).flatMap(jobIssues)), self = { coordinatorId: ctx.state.coordinatorId, machine: ctx.machineId };
   const replied = await decisionReplies(ctx, rows);
   const machine = ctx.machineState();
+  const parkedIssues = new Set((machine.validationParks ?? []).map(p => p.issue));
   // An issue with a counted no-result in the last 24 hours (since its latest reset) cools down.
   const history = chronological(ctx.fs, ctx.root);
   const cooling = new Set([...new Set(history.map(row => row.issue))].filter(issue => issueRows(history, issue).some(row => row.noResult && ctx.now() - row.at < DAY)));
@@ -675,6 +706,7 @@ async function* readyRows(ctx, rows) {
   const fixedHolding = new Set(history.filter(row => row.fixedHold === true).map(row => row.issue));
   const candidates = rows.filter(row => !row.pull_request && row.state === 'open' && !row.assignees?.length && !row.assignee
     && !skippedIssueLabel(row, ctx.settings)
+    && !parkedIssues.has(row.number)
     && !labelsOf(row).includes('pdd:stuck') && (!labelsOf(row).includes(DECISION) || replied.has(row.number)) && !labelsOf(row).includes(WOULD_MERGE) && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
     && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number)
     && shouldClaimWithCooldowns({ issueRequiredTools: issueRequiredTools(row), toolCooldowns: machine.toolCooldowns }).claimable)
@@ -2164,7 +2196,7 @@ async function intake(ctx, rows) {
         ...(activeMode && effectiveAreas.length ? { areas: effectiveAreas } : {}),
         ...(primaryEntry?.refinedSpec ? { refinedSpec: primaryEntry.refinedSpec } : {}),
         ...(forensicsBrief ? { forensicsBrief, baseBranch: state.baseBranch } : {}),
-        title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`), ...(note ? { note } : {}),
+        title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`), labels: labelsOf(row), ...(note ? { note } : {}),
         cuts: [...cutsOf('issue text', row.body, 20000), ...(answer?.comments ?? []).filter(c => c.cut > 0).map(c => ({ input: `the answer of ${c.author}`, more: c.cut }))],
         branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), progress: { sig: null, at: ctx.now(), running: false }, ...(answer ? { answer } : {}) };
       let openIssues = '', briefError = null;
@@ -3174,6 +3206,7 @@ function decidingRows(rows, unsent = false) {
 }
 const strings = value => Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
 const rowReasonCodes = row => [
+  ...(typeof row?.reason === 'string' ? [row.reason] : []),
   ...(typeof row?.reason?.code === 'string' ? [row.reason.code] : []),
   ...strings(row?.codes),
   ...(Array.isArray(row?.refusals) ? row.refusals.map(item => typeof item === 'string' ? item : item?.code).filter(named) : []),
@@ -3221,7 +3254,7 @@ async function savedRowReds(ctx, job, head, evidence, stories) {
     }
     if (!rows.length) lost.push([story, 'no saved pdd test check at this source']);
     else if (!allStoryTestsCovered(scopes, evidence, story, () => true)) {
-      lost.push([story, 'unrun pdd test checks at this source']);
+      lost.push([story, 'unrun pdd test checks at this source', rows.some(hasRealBindingUnavailable)]);
     } else if (!rows.every(row => row.pass === true || serviceRow(row))) {
       const codes = [...new Set(rows.flatMap(rowRefusals))];
       lost.push([story, rows.some(refusedRow) ? `a check that was refused before execution${codes.length ? ` (${codes.join(', ')})` : ''}` : 'a check that did not pass']);
@@ -3238,11 +3271,24 @@ async function savedRowReds(ctx, job, head, evidence, stories) {
     base = { commit: fork, passing: [...at].filter(([, of]) => [...of.values()].every(row => row.pass === true)).map(([story]) => story).sort().slice(0, 50) };
   } catch (error) {
     ctx.warn(`Autopilot core could not read the saved pdd test checks at the merge base of #${job.issue}: ${error.message}`);
+    for (const [story, why, hasBinding] of lost) {
+      if (hasBinding) reds.push(`Saved pdd test check of ${story} at head ${short(head)} has ${why} alongside real-binding-unavailable; run all Story tests with real bindings.`);
+    }
     return { reds, base: { commit: null, passing: [], error: oneLine(error.message, 300) } };
   }
-  for (const [story, why] of lost) if (base.passing.includes(story))
-    reds.push(`Runtime coverage went down: ${story} had a passing pdd test check at the merge base ${short(base.commit)}, but at head ${short(head)} it has ${why}. A PR must not lose a Runtime pass: make the check of ${story} pass again at this head.`);
+  for (const [story, why, hasBinding] of lost) {
+    if (base.passing.includes(story)) {
+      reds.push(`Runtime coverage went down: ${story} had a passing pdd test check at the merge base ${short(base.commit)}, but at head ${short(head)} it has ${why}. A PR must not lose a Runtime pass: make the check of ${story} pass again at this head.`);
+    } else if (hasBinding) {
+      reds.push(`Saved pdd test check of ${story} at head ${short(head)} has ${why} alongside real-binding-unavailable; run all Story tests with real bindings.`);
+    }
+  }
   return { reds, base };
+}
+function decidingRealBindingRows(evidence) {
+  const scopes = decidingRows(evidence?.stories, true);
+  const deciding = [...scopes.values()].flatMap(of => [...new Set(of.values())]);
+  return { scopes, deciding };
 }
 async function readRuntimeEvidenceAtHead(ctx, job, head = job.agentHead ?? job.head) {
   if (ctx.runtimeEvidenceCache?.issue === job.issue && ctx.runtimeEvidenceCache?.head === head) return ctx.runtimeEvidenceCache.value;
@@ -3257,8 +3303,8 @@ async function readRuntimeEvidenceAtHead(ctx, job, head = job.agentHead ?? job.h
 async function runtimeCoverage(ctx, job, claims, lines = []) {
   const head = job.agentHead ?? job.head, sig = JSON.stringify([claims, lines.map(l => [l.story, l.verdict])]);
   if (job.coverage?.head === head && (job.coverage.sig ?? sig) === sig) return job.coverage;
-  let rows = [];
-  const done = coverage => { job.coverage = { head, sig, rows, ...coverage }; ctx.saveJob(job); return job.coverage; };
+  let rows = [], realBindingBlocker = false;
+  const done = coverage => { job.coverage = { head, sig, rows, realBindingBlocker, ...coverage }; ctx.saveJob(job); return job.coverage; };
   const claim = upperFirst(claims.join(' and ') || "the PR body's Runtime lines");
   // The T01 cover and the line form rules apply to a positive claim or Story lines; the saved-row reds to every line.
   const checking = claims.length > 0 || lines.some(l => l.story);
@@ -3269,8 +3315,10 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
     if (!checking) { ctx.warn(`Autopilot core could not read the saved pdd test checks of #${job.issue} at head ${short(head)}: ${error.message}`); return done({ ok: true, error: oneLine(error.message, 300) }); }
     return done({ ok: false, text: `${claim}, but Autopilot could not read the Stories and the saved pdd test checks at head ${short(head)}: ${oneLine(error.message, 300)}. Fix the cause, or write "Runtime: not run (REASON)".` });
   }
+  const { deciding: allBindingRows } = decidingRealBindingRows(evidence);
+  realBindingBlocker = allBindingRows.some(row => row?.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row));
   rows = (evidence.stories ?? []).filter(object).slice(0, 50).map(row => ({ story: row.story, pass: row.pass === true, current: row.current === true, at: row.at ?? null, tests: Array.isArray(row.tests) ? row.tests.slice(0, 10) : null,
-    sent: row.sent !== false, failed: Number(row.failed) || 0, refusals: strings(row.refusals).slice(0, 5) }));
+    sent: row.sent !== false, failed: Number(row.failed) || 0, refusals: rowRefusals(row).slice(0, 10) }));
   const storyFiles = new Set(evidence.storyFiles ?? []);
   const changedTests = (evidence.tests ?? []).filter(test => [test.path, ...(test.files ?? [])].some(file => changed.includes(file)));
   const changedStories = [...new Set([...changed.filter(file => storyFiles.has(file)), ...changedTests.flatMap(test => test.stories ?? [])])];
@@ -3761,7 +3809,7 @@ async function writeEvidenceBlock(ctx, job) {
 
 async function stopChecks(ctx, job, recover = false) {
   const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
-    [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
+    [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime'], [job.bindingRerun?.agent, 'runtime']].filter(([part]) => Boolean(part));
   for (const [part, role] of parts) {
     const hasError = Boolean(recover || part.watch?.stopped || part.processesUncertain || (typeof part.token === 'string' && ctx.fs.existsSync?.(`${part.token}.processes.error`)));
     if (!await cleanupPart(ctx, job, part, role, hasError ? { recoverStopped: true } : null)) return false;
@@ -4195,11 +4243,65 @@ async function syncStampedReplayEvidence(ctx, job, pr) {
 }
 
 // ---- Universal Validator v2 (Bucket 1 / 2 / 3, cooldowns, validate-only resume) -------------------------
-async function parkValidationWait(ctx, job, pr, outcome) {
+const TOOL_COOLDOWN_TTL_MS = 60 * MIN;
+const DEFAULT_PREFLIGHT_SPECS = {
+  gcloud: {
+    command: 'gcloud',
+    args: ['auth', 'list', '--filter=status:ACTIVE', '--format=value(account)'],
+    requireNonEmptyStdout: true,
+  },
+  aws: { command: 'aws', args: ['sts', 'get-caller-identity'] },
+  docker: { command: 'docker', args: ['info'] },
+  postgres: { command: 'pg_isready', args: [] },
+};
+
+/**
+ * Safe read-only allowlisted preflight health check for external tools on Bucket 2 cooldown.
+ */
+export async function runDefaultPreflightCheck({ tool, cwd, env } = {}) {
+  const spec = DEFAULT_PREFLIGHT_SPECS[String(tool ?? '').trim().toLowerCase()];
+  if (!spec) return { exitCode: null };
+  try {
+    const { stdout } = await execFileAsync(spec.command, spec.args, { cwd, env, timeout: 15_000, maxBuffer: 64 * 1024 });
+    if (spec.requireNonEmptyStdout && !String(stdout ?? '').trim()) return { exitCode: 1 };
+    return { exitCode: 0 };
+  } catch (error) {
+    return { exitCode: Number.isInteger(error?.code) && error.code !== 0 ? error.code : 1 };
+  }
+}
+
+function pruneOrphanCooldowns(cooldowns, remainingParks, now) {
+  const activeParkTools = new Set(remainingParks.map(p => String(p.cooldownTool ?? '').toLowerCase()).filter(Boolean));
+  const out = {};
+  let changed = false;
+  for (const [tool, entry] of Object.entries(cooldowns ?? {})) {
+    if (!entry || entry.active !== true) { changed = true; continue; }
+    const norm = tool.toLowerCase();
+    const expired = Number.isFinite(entry.since) && (now - entry.since >= TOOL_COOLDOWN_TTL_MS);
+    if (!activeParkTools.has(norm) && expired) { changed = true; continue; }
+    out[tool] = entry;
+  }
+  return { cooldowns: out, changed };
+}
+
+function dropCooldownIfUnreferenced(cooldowns, tool, remainingParks) {
+  const norm = String(tool ?? '').toLowerCase();
+  if (!norm) return false;
+  const stillReferenced = remainingParks.some(p => String(p.cooldownTool ?? '').toLowerCase() === norm);
+  if (stillReferenced) return false;
+  if (Object.hasOwn(cooldowns, norm)) { delete cooldowns[norm]; return true; }
+  for (const key of Object.keys(cooldowns)) {
+    if (key.toLowerCase() === norm) { delete cooldowns[key]; return true; }
+  }
+  return false;
+}
+
+async function parkValidationWait(ctx, job, pr, outcome, { parkStories = [] } = {}) {
   await stopChecks(ctx, job);
   const machine = ctx.machineState();
   const tool = outcome.cooldownTool || 'runtime-binding';
   const checkCommand = outcome.checkCommand || 'pdd test --files';
+  const reviewPassed = Boolean(job.review?.head === job.head && job.review?.verdict === 'PASS');
   const nextCooldowns = {
     ...(machine.toolCooldowns ?? {}),
     [tool]: { active: true, since: ctx.now(), checkCommand },
@@ -4214,6 +4316,10 @@ async function parkValidationWait(ctx, job, pr, outcome) {
       cooldownTool: tool,
       checkCommand,
       parkedAt: ctx.now(),
+      reviewPassed,
+      reviewKept: reviewPassed ? job.review : null,
+      parkReason: tool === 'runtime-binding' ? 'real-binding-unavailable' : 'suite-auth',
+      parkStories: [...new Set(parkStories.filter(named))].slice(0, 20),
     },
   ].slice(-50);
   ctx.saveMachine({ ...machine, toolCooldowns: nextCooldowns, validationParks: nextParks });
@@ -4247,75 +4353,313 @@ async function parkHumanBoundary(ctx, job, pr, outcome) {
   });
 }
 
-async function detectSavedRealBindingBlocker(ctx, job) {
+async function parkRepairExhausted(ctx, job, pr, outcome) {
+  await stopChecks(ctx, job);
+  return end(ctx, job, {
+    kind: 'job',
+    component: 'autopilot-core',
+    code: 'needs-person',
+    text: outcome.message,
+    keepPr: true,
+    repairExhausted: true,
+    question: outcome.message,
+  });
+}
+
+function prBodyMentionsRealBindingUnavailable(pr, job) {
+  const lines = runtimeVerdicts(pr?.body ?? '');
+  if (lines.some(l => l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line))) return true;
+  if (job?.runtime?.state === 'not-run' && /real-binding-unavailable/i.test(String(job.runtime.cause ?? ''))) return true;
+  return false;
+}
+
+async function detectSavedRealBindingBlocker(ctx, job, pr) {
   const head = job.agentHead ?? job.head;
+  const bodyClaimsBindingUnavailable = prBodyMentionsRealBindingUnavailable(pr, job);
+  // RR6 #3247: skip re-reading saved runtime evidence when green coverage for this head already verified no blocker.
   if (
-    job.coverage?.head === head
+    !bodyClaimsBindingUnavailable
+    && job.coverage?.head === head
     && job.coverage?.ok === true
-    && !(job.coverage.rows ?? []).some(row => row?.current !== false && row?.pass !== true && hasRealBindingUnavailable(row))
+    && job.coverage?.realBindingBlocker === false
   ) {
     return null;
   }
   const evidence = await readRuntimeEvidenceAtHead(ctx, job, head).catch(() => null);
-  const rows = Array.isArray(evidence?.stories) ? evidence.stories : [];
-  const scopes = decidingRows(evidence?.stories, true);
-  const blockerRow = rows.find(row => row?.current !== false && row?.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row));
-  if (!blockerRow) return null;
-  // Never hide unrun sibling tests or real test failures behind a real-binding-unavailable row on one test.
-  if (rows.some(row => row?.current !== false && failedRow(row))) return null;
-  const story = blockerRow.story;
-  if (story && !allStoryTestsCovered(scopes, evidence, story, row => row.pass === true || hasRealBindingUnavailable(row))) return null;
-  const changed = await changedFiles(ctx, job, head).catch(() => []);
-  return evaluateValidationOutcome({
-    mode: ctx.settings.mode,
-    changedFiles: changed,
-    realBindingUnavailable: true,
-    diagnostics: ['real-binding-unavailable: live runtime binding unavailable'],
-    repairAttempts: job.validationRepairs ?? job.repairs ?? 0,
-  });
-}
-
-function collectBacksideLintBlockingCodes(ctx, job, changed) {
-  if (!job.worktree || !ctx.fs.existsSync(job.worktree)) return [];
-  const lintOut = lintRepoProject({ root: job.worktree });
-  const changedSet = new Set(changed);
-  const blocking = new Set();
-  for (const f of lintOut.findings ?? []) {
-    if (f.severity === 'error') { blocking.add(f.code); continue; }
-    if ((f.code === 'silent-validation-skip' || f.code === 'boundary-mock-only-test') && changedSet.has(f.path)) {
-      blocking.add(f.code);
-    }
+  const { scopes, deciding } = decidingRealBindingRows(evidence);
+  const blockerRows = deciding.filter(row => row?.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row));
+  if (blockerRows.length) {
+    // Never hide unrun sibling tests or real test failures behind a real-binding-unavailable row on one test.
+    if (deciding.some(row => failedRow(row))) return null;
+    const uncovered = blockerRows.some(row => row.story && !allStoryTestsCovered(scopes, evidence, row.story, r => r.pass === true || hasRealBindingUnavailable(r)));
+    if (uncovered) return null;
+    const changed = await changedFiles(ctx, job, head).catch(() => []);
+    const outcome = evaluateValidationOutcome({
+      mode: ctx.settings.mode,
+      changedFiles: changed,
+      realBindingUnavailable: true,
+      diagnostics: ['real-binding-unavailable: live runtime binding unavailable'],
+      repairAttempts: job.validationRepairs ?? 0,
+    });
+    return { outcome, stories: [...new Set(blockerRows.map(r => r.story).filter(named))] };
   }
-  return [...blocking].sort();
+  if (bodyClaimsBindingUnavailable && !deciding.some(row => row?.pass === true)) {
+    const changed = await changedFiles(ctx, job, head).catch(() => []);
+    const outcome = evaluateValidationOutcome({
+      mode: ctx.settings.mode,
+      changedFiles: changed,
+      realBindingUnavailable: true,
+      diagnostics: ['real-binding-unavailable: PR reported Runtime not run due to real-binding-unavailable'],
+      repairAttempts: job.validationRepairs ?? 0,
+    });
+    return { outcome, stories: [] };
+  }
+  return null;
 }
 
-function defaultValidationEvidence(ctx, job, { changed, suite, lintBlockingCodes }) {
-  const surfaces = detectChangedSurfaces({ changedFiles: changed });
-  if (surfaces.docsOnly) return { e2eChecks: [], offlinePassed: suite?.state === 'pass' };
-  if (lintBlockingCodes.includes('boundary-mock-only-test')) return { e2eChecks: [], offlinePassed: suite?.state === 'pass' };
-  const cmd = resolveSuiteCommand(ctx, job);
-  if (suite?.state === 'pass' && named(cmd)) {
-    const kinds = surfaces.requiredProofKinds.length ? surfaces.requiredProofKinds : ['real-execution'];
+function collectBacksideLint(headTree, changed) {
+  if (!headTree) {
     return {
-      offlinePassed: true,
-      offlineSummary: `${cmd} passed`,
-      e2eChecks: kinds.map(kind => ({ kind, command: cmd, executed: true, exitCode: 0, passed: 1, failed: 0, skipped: 0 })),
+      codes: ['lint-checkout-unavailable'],
+      details: ['clean checkout at PR head is unavailable for backside validation lint'],
     };
   }
-  return { e2eChecks: [], offlinePassed: suite?.state === 'pass' };
+  const lintOut = lintRepoProject({ root: headTree });
+  const changedSet = new Set(changed);
+  const codeSet = new Set();
+  const details = [];
+  for (const f of lintOut.findings ?? []) {
+    const isValRule = f.code === 'silent-validation-skip' || f.code === 'boundary-mock-only-test';
+    if (f.severity === 'error' || (isValRule && changedSet.has(f.path))) {
+      codeSet.add(f.code);
+      details.push(`${f.path}:${f.line ?? 1} [${f.code}] ${f.detail ?? f.warning ?? f.code}`);
+    }
+  }
+  return { codes: [...codeSet].sort(), details: details.slice(0, 10) };
+}
+
+const VALIDATOR_TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$)/i;
+const VALIDATOR_TEST_EXT_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i;
+const VALIDATOR_SKIP_SUBDIR_RE = /(?:^|\/)(?:fixtures|helpers)\//i;
+const MAX_INSPECT_TEST_BYTES = 512 * 1024;
+
+function isInspectableValidatorTest(filePath) {
+  return VALIDATOR_TEST_FILE_RE.test(filePath)
+    && VALIDATOR_TEST_EXT_RE.test(filePath)
+    && !VALIDATOR_SKIP_SUBDIR_RE.test(filePath);
+}
+
+function readCleanFileUtf8(fs, rootDir, relPath) {
+  try {
+    const full = join(rootDir, relPath);
+    const st = fs.lstatSync(full);
+    if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_INSPECT_TEST_BYTES) return null;
+    return fs.readFileSync(full, 'utf8');
+  } catch { return null; }
+}
+
+async function resolveBugFixBaseControl(ctx, job, { changed, changedProdFiles }) {
+  const vecControl = controlResult(job.vectors);
+  if (vecControl?.state === 'shows') return 'ran-and-failed-on-base';
+  if (vecControl?.state === 'same') return 'passed-on-base';
+  if (job.bugFixBaseControlCheck?.head === job.head && named(job.bugFixBaseControlCheck.state)) {
+    return job.bugFixBaseControlCheck.state;
+  }
+  const changedNodeTests = changed.filter(f => isInspectableValidatorTest(f) && /\.(?:mjs|cjs|js)$/i.test(f));
+  let state = 'not-run';
+  if (typeof ctx.ports.runBaseControl === 'function') {
+    try {
+      const res = await ctx.ports.runBaseControl({ job, head: job.head, changedFiles: changed, changedProdFiles, changedNodeTests });
+      state = ['ran-and-failed-on-base', 'passed-on-base', 'not-run'].includes(res?.state) ? res.state : 'not-run';
+    } catch { state = 'not-run'; }
+  } else if (changedProdFiles.length > 0 && changedNodeTests.length > 0) {
+    try {
+      const { cwd: baseDir } = await controlTree(ctx, job, changedProdFiles);
+      const baseEnv = { ...(ctx.ports.env ?? process.env), CI: 'true' };
+      delete baseEnv.NODE_TEST_CONTEXT;
+      delete baseEnv.NODE_OPTIONS;
+      try {
+        await execFileAsync(process.execPath, ['--test', ...changedNodeTests], {
+          cwd: baseDir,
+          env: baseEnv,
+          timeout: 60_000,
+          maxBuffer: 2 * 1024 * 1024,
+        });
+        state = 'passed-on-base';
+      } catch (err) {
+        state = err?.killed || err?.code === 'ENOENT' ? 'not-run' : 'ran-and-failed-on-base';
+      }
+    } catch { state = 'not-run'; }
+  }
+  job.bugFixBaseControlCheck = { head: job.head, state };
+  ctx.saveJob(job);
+  return state;
+}
+
+async function collectRealValidationEvidence(ctx, job, { headTree, changed, surfaces, suite, lintCodes }) {
+  const suiteCmd = resolveSuiteCommand(ctx, job) || 'npm test';
+  const offlinePassed = suite?.state === 'pass';
+  const isBugFix = job.skill === 'pdd-bug'
+    || (Array.isArray(job.labels) && job.labels.some(l => /^(?:bug|type:bug|pdd:bug)$/i.test(l)));
+
+  if (surfaces.docsOnly) {
+    return {
+      isBugFix: false,
+      bugFixBaseControl: 'not-applicable',
+      offlinePassed,
+      offlineSummary: offlinePassed ? `${suiteCmd} passed` : 'suite failed',
+      e2eChecks: [],
+    };
+  }
+
+  const changedProdFiles = [];
+  const changedBoundaryFiles = [];
+  const changedRuntimeCodeFiles = [];
+  for (const file of changed) {
+    const info = detectChangedSurfaces({ changedFiles: [file] });
+    if (!info.requiresRealE2e) continue;
+    changedProdFiles.push(file);
+    const target = canonicalTargetPath(file);
+    if (info.runtimeSurfaces.some(s => s !== 'runtime-code')) {
+      changedBoundaryFiles.push({ file, target, requiredProofKinds: info.requiredProofKinds });
+    } else {
+      changedRuntimeCodeFiles.push({ file, target });
+    }
+  }
+
+  const bugFixBaseControl = isBugFix
+    ? await resolveBugFixBaseControl(ctx, job, { changed, changedProdFiles })
+    : 'not-applicable';
+
+  if (!offlinePassed || !headTree || lintCodes.includes('boundary-mock-only-test')) {
+    return {
+      isBugFix,
+      bugFixBaseControl,
+      offlinePassed,
+      offlineSummary: offlinePassed ? `${suiteCmd} passed` : 'suite failed',
+      e2eChecks: [],
+    };
+  }
+
+  // Inspect committed test files in clean PR head checkout for real executed E2E coverage (never fabricate proof).
+  const targetProofs = new Map(); // canonicalTarget -> Map<kind, Set<testPath>>
+  const addTargetProof = (target, kind, testPath) => {
+    if (!target || !kind) return;
+    let byKind = targetProofs.get(target);
+    if (!byKind) { byKind = new Map(); targetProofs.set(target, byKind); }
+    let files = byKind.get(kind);
+    if (!files) { files = new Set(); byKind.set(kind, files); }
+    files.add(testPath);
+  };
+
+  let tracked = [];
+  try { tracked = gitFiles(headTree); } catch { tracked = []; }
+  for (const rel of tracked) {
+    if (!isInspectableValidatorTest(rel)) continue;
+    const content = readCleanFileUtf8(ctx.fs, headTree, rel);
+    if (typeof content !== 'string') continue;
+    const kinds = detectRealE2eKindsInTest(rel, content);
+    if (!kinds.length) continue;
+    const { allTargets, boundaryTargets } = inspectTestBoundaryTargets(rel, content);
+    for (const target of new Set([...allTargets, ...boundaryTargets])) {
+      for (const kind of kinds) addTargetProof(target, kind, rel);
+    }
+  }
+
+  // Saved passing pdd test at this head (with no real-binding-unavailable) counts as real live-binding / real-execution.
+  const head = job.agentHead ?? job.head;
+  const savedRuntimePass = Boolean(
+    job.coverage?.head === head
+    && job.coverage?.ok === true
+    && job.coverage?.realBindingBlocker === false
+    && (job.coverage.rows ?? []).some(r => r.pass === true && r.current !== false),
+  );
+  const vectorsPassFiles = job.vectors?.head === head && job.vectors?.state === 'done'
+    ? HEAD_KINDS.flatMap(k => (job.vectors.result?.[k]?.files ?? []).filter(f => f.state === 'pass' && f.pass > 0 && !f.fail && !f.skipped).map(f => f.file))
+    : [];
+
+  const e2eChecks = [];
+  for (const kind of surfaces.requiredProofKinds) {
+    if (kind === 'real-execution') {
+      const matched = new Set();
+      for (const { target } of changedRuntimeCodeFiles) {
+        const files = targetProofs.get(target)?.get('real-execution');
+        if (files) for (const f of files) matched.add(f);
+      }
+      if (matched.size > 0 || vectorsPassFiles.length > 0 || savedRuntimePass) {
+        const label = matched.size > 0 ? [...matched].slice(0, 3).join(', ')
+          : vectorsPassFiles.length > 0 ? vectorsPassFiles.slice(0, 3).join(', ')
+            : 'pdd test';
+        e2eChecks.push({
+          kind: 'real-execution',
+          command: `${suiteCmd} (${label})`,
+          executed: true,
+          exitCode: 0,
+          passed: Math.max(1, matched.size || vectorsPassFiles.length),
+          failed: 0,
+          skipped: 0,
+        });
+      }
+      continue;
+    }
+
+    const needingKind = changedBoundaryFiles.filter(entry => entry.requiredProofKinds.includes(kind));
+    if (!needingKind.length) continue;
+    const matchedTests = new Set();
+    let allCovered = true;
+    for (const entry of needingKind) {
+      const files = targetProofs.get(entry.target)?.get(kind);
+      if (files && files.size > 0) {
+        for (const f of files) matchedTests.add(f);
+      } else if (kind === 'live-binding' && savedRuntimePass) {
+        matchedTests.add('pdd test');
+      } else {
+        allCovered = false;
+        break;
+      }
+    }
+    if (allCovered && matchedTests.size > 0) {
+      e2eChecks.push({
+        kind,
+        command: `${suiteCmd} (${[...matchedTests].slice(0, 3).join(', ')})`,
+        executed: true,
+        exitCode: 0,
+        passed: matchedTests.size,
+        failed: 0,
+        skipped: 0,
+      });
+    }
+  }
+
+  return {
+    isBugFix,
+    bugFixBaseControl,
+    offlinePassed,
+    offlineSummary: `${suiteCmd} passed`,
+    e2eChecks,
+  };
 }
 
 async function runValidatorV2Gate(ctx, job, pr, { suite }) {
-  const changed = await changedFiles(ctx, job, job.head).catch(() => []);
+  let changed = [];
+  try { changed = await changedFiles(ctx, job, job.head); } catch { changed = []; }
   const surfaces = detectChangedSurfaces({ changedFiles: changed });
-  const lintBlockingCodes = collectBacksideLintBlockingCodes(ctx, job, changed);
+  let headTree = null;
+  try { headTree = await treeAt(ctx, job, 'agent', job.head); } catch { headTree = null; }
+  const lint = collectBacksideLint(headTree, changed);
   let supplied = null;
   if (typeof ctx.ports.validateE2e === 'function') {
     supplied = await ctx.ports.validateE2e({ job, pr, head: job.head, changedFiles: changed, surfaces, mode: ctx.settings.mode });
   } else if (object(job.validation)) {
     supplied = job.validation;
   }
-  const base = supplied ?? defaultValidationEvidence(ctx, job, { changed, suite, lintBlockingCodes });
+  const base = supplied ?? await collectRealValidationEvidence(ctx, job, {
+    headTree,
+    changed,
+    surfaces,
+    suite,
+    lintCodes: lint.codes,
+  });
   const outcome = evaluateValidationOutcome({
     mode: ctx.settings.mode,
     changedFiles: changed,
@@ -4330,8 +4674,8 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
     humanBoundaryDetail: base.humanBoundaryDetail ?? '',
     verifyCommand: base.verifyCommand ?? '',
     toolHint: base.toolHint ?? '',
-    lintBlockingCodes: [...new Set([...(Array.isArray(base.lintBlockingCodes) ? base.lintBlockingCodes : []), ...lintBlockingCodes])].sort(),
-    repairAttempts: job.validationRepairs ?? job.repairs ?? 0,
+    lintBlockingCodes: [...new Set([...(Array.isArray(base.lintBlockingCodes) ? base.lintBlockingCodes : []), ...lint.codes])].sort(),
+    repairAttempts: job.validationRepairs ?? 0,
   });
   if (outcome.eligible) {
     job.validatorProof = outcome.proof;
@@ -4347,46 +4691,57 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
     return { handled: true, outcome };
   }
   if (outcome.decision === 'needs-person') {
-    await stopChecks(ctx, job);
-    await end(ctx, job, {
-      kind: 'job',
-      component: 'autopilot-core',
-      code: 'needs-person',
-      text: outcome.message,
-      keepPr: true,
-      question: outcome.message,
-    });
+    await parkRepairExhausted(ctx, job, pr, outcome);
     return { handled: true, outcome };
   }
   job.validationRepairs = outcome.repairAttemptsNext;
   ctx.saveJob(job);
-  await repairOrEnd(ctx, job, [outcome.message], [outcome.message], null);
+  const detailText = lint.details.length
+    ? `${outcome.message} Details: ${lint.details.join('; ')}`
+    : outcome.message;
+  const red = `[Validator v2 attempt ${outcome.repairAttemptsNext}/${MAX_VALIDATION_REPAIRS}] ${detailText}`;
+  await repairOrEnd(ctx, job, [red], [red], null, { skipRepeatStop: true, maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS) });
   return { handled: true, outcome };
 }
 
 async function resumeValidationParks(ctx, open) {
   const machine = ctx.machineState();
   const parks = Array.isArray(machine.validationParks) ? machine.validationParks : [];
-  if (!parks.length) return;
+  let nextCooldowns = { ...(machine.toolCooldowns ?? {}) };
+  if (!parks.length) {
+    const pruned = pruneOrphanCooldowns(nextCooldowns, [], ctx.now());
+    if (pruned.changed) ctx.saveMachine({ ...machine, toolCooldowns: pruned.cooldowns });
+    return;
+  }
   const activeIssues = new Set(readJobs(ctx.fs, ctx.root).flatMap(jobIssues));
   const freeSlots = () => ctx.settings.runs - readJobs(ctx.fs, ctx.root).filter(holdsSlot).length;
-  let nextCooldowns = { ...(machine.toolCooldowns ?? {}) };
   const keptParks = [];
+  const droppedTools = new Set();
   let changed = false;
 
   for (const park of parks) {
     if (activeIssues.has(park.issue)) { keptParks.push(park); continue; }
     let prObj = null;
     try { prObj = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${park.pr}`); } catch { keptParks.push(park); continue; }
-    if (!prObj || prObj.state !== 'open' || prObj.merged) { changed = true; continue; }
+    if (!prObj || prObj.state !== 'open' || prObj.merged) {
+      droppedTools.add(park.cooldownTool);
+      changed = true;
+      continue;
+    }
 
     const issueRow = open?.get(park.issue);
-    const userResumed = Boolean(issueRow && !labelsOf(issueRow).includes(DECISION));
+    let userResumed = Boolean(issueRow && !labelsOf(issueRow).includes(DECISION));
+    if (!userResumed && issueRow && labelsOf(issueRow).includes(DECISION) && issueRow.comments > 0) {
+      try {
+        const answer = await personAnswer(ctx, park.issue);
+        if (answer?.comments?.length) userResumed = true;
+      } catch { /* ignore transient comment read error */ }
+    }
     let preflightExitCode = null;
     if (!userResumed && typeof ctx.ports.preflightCheck === 'function') {
       try {
         const probe = await ctx.ports.preflightCheck({ tool: park.cooldownTool, command: park.checkCommand, park });
-        preflightExitCode = Number.isInteger(probe?.exitCode) ? probe.exitCode : (probe?.ok === true ? 0 : 1);
+        preflightExitCode = Number.isInteger(probe?.exitCode) ? probe.exitCode : (probe?.ok === true ? 0 : null);
       } catch { preflightExitCode = 1; }
     }
     const plan = planValidationResume({
@@ -4397,12 +4752,19 @@ async function resumeValidationParks(ctx, open) {
       preflightExitCode,
       userResumed,
     });
-    if (plan.action === 'head-changed-abort') { changed = true; continue; }
+    if (plan.action === 'head-changed-abort') {
+      droppedTools.add(park.cooldownTool);
+      changed = true;
+      continue;
+    }
     if (plan.action !== 'resume-validate-only') { keptParks.push(park); continue; }
     if (freeSlots() <= 0) { keptParks.push(park); continue; }
 
     if (issueRow && labelsOf(issueRow).includes(DECISION)) {
       await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${park.issue}/labels/${encodeURIComponent(DECISION)}`).catch(() => {});
+      if (Array.isArray(issueRow.labels)) {
+        issueRow.labels = issueRow.labels.filter(l => (typeof l === 'string' ? l : l?.name) !== DECISION);
+      }
     }
     const claim = await claimIssue(ctx, park.issue).catch(() => null);
     if (!claim) { keptParks.push(park); continue; }
@@ -4413,12 +4775,18 @@ async function resumeValidationParks(ctx, open) {
       await ctx.git(['fetch', '-q', 'origin', park.branch || park.headSha]).catch(() => {});
       await ctx.git(['worktree', 'add', '--detach', worktree, park.headSha]).catch(() => {});
     }
+    const canKeepReview = Boolean(
+      park.reviewPassed === true
+      && park.reviewKept?.head === park.headSha
+      && park.reviewKept?.verdict === 'PASS',
+    );
     const resumedJob = {
       id: randomUUID().slice(0, 8),
       issue: park.issue,
       title: issueRow?.title ?? `PR #${park.pr}`,
       url: issueRow?.html_url ?? '',
       body: issueRow?.body ?? '',
+      labels: issueRow ? labelsOf(issueRow) : [],
       branch: park.branch || prObj.head?.ref || '',
       worktree,
       pr: park.pr,
@@ -4433,16 +4801,87 @@ async function resumeValidationParks(ctx, open) {
       validationRepairs: 0,
       started: ctx.now(),
       prAt: ctx.now(),
-      review: { head: park.headSha, verdict: 'PASS', kept: 'validate-only-resume' },
+      review: canKeepReview ? { ...park.reviewKept, kept: 'validate-only-resume' } : null,
       suite: null,
       validation: null,
+      ...(park.parkReason === 'real-binding-unavailable'
+        ? { bindingRerun: { head: park.headSha, stories: Array.isArray(park.parkStories) ? park.parkStories : [], state: 'pending', agent: null } }
+        : {}),
       claim,
       progress: { sig: null, at: ctx.now(), running: false },
     };
     ctx.saveJob(resumedJob);
     ctx.counts.started++;
   }
+  for (const droppedTool of droppedTools) {
+    if (dropCooldownIfUnreferenced(nextCooldowns, droppedTool, keptParks)) changed = true;
+  }
+  const pruned = pruneOrphanCooldowns(nextCooldowns, keptParks, ctx.now());
+  if (pruned.changed) { nextCooldowns = pruned.cooldowns; changed = true; }
   if (changed) ctx.saveMachine({ ...ctx.machineState(), toolCooldowns: nextCooldowns, validationParks: keptParks });
+}
+
+const PASSING_LOG_LINE_RE = /^\s*(?:✔|✓|ok\s+\d+|ℹ|PASS\b|TAP version|#\s*(?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms|Subtest))/i;
+const ASSERTION_DIFF_LINE_RE = /^\s*(?:AssertionError\b|ERR_ASSERTION\b|expected\s*:|actual\s*:|operator\s*:|diff\s*:|[+-]\s+)/i;
+const TEST_TITLE_FAIL_LINE_RE = /^\s*(?:✖|not ok\s+\d+)/i;
+
+function extractFailureDiagnosticLines(rawLog, reproduceChecks) {
+  const fromChecks = (reproduceChecks ?? []).flatMap(c => Array.isArray(c.lines) ? c.lines : []);
+  const rawLines = rawLog ? String(rawLog).split(/\r?\n/) : [];
+  const all = [...fromChecks, ...rawLines];
+  const hasAssertionFailure = all.some(line => /AssertionError|ERR_ASSERTION/i.test(line));
+  const out = [];
+  for (const line of all) {
+    const trimmed = String(line ?? '').trim();
+    if (!trimmed) continue;
+    if (PASSING_LOG_LINE_RE.test(trimmed)) continue;
+    if (TEST_TITLE_FAIL_LINE_RE.test(trimmed)) continue;
+    if (ASSERTION_DIFF_LINE_RE.test(trimmed)) continue;
+    // Never mistake an assertion failure message inside a unit test for an external auth/human outage.
+    if (hasAssertionFailure && /AssertionError|ERR_ASSERTION|strictEqual|deepEqual|match\(/i.test(trimmed)) continue;
+    out.push(trimmed);
+  }
+  return out;
+}
+
+async function runBindingRerunIfPending(ctx, job) {
+  const rerun = job.bindingRerun;
+  if (!rerun || rerun.head !== job.head || rerun.state === 'done') return false;
+  if (rerun.state === 'pending') {
+    if (typeof ctx.ports.rerunRuntimeBinding === 'function') {
+      await ctx.ports.rerunRuntimeBinding({ job, head: job.head, stories: rerun.stories ?? [] });
+      rerun.state = 'done';
+      ctx.runtimeEvidenceCache = null;
+      job.coverage = null;
+      ctx.saveJob(job);
+      return false;
+    }
+    const stories = Array.isArray(rerun.stories) && rerun.stories.length ? rerun.stories : [];
+    rerun.agent = startJob(ctx, job, 'runtime', job.worktree, '', {
+      command: process.execPath,
+      args: [ctx.pdd, 'test', '--json', ...stories],
+    });
+    rerun.state = 'running';
+    ctx.saveJob(job);
+    return true;
+  }
+  if (rerun.state === 'running' && rerun.agent) {
+    const seen = ctx.jobs.read(rerun.agent);
+    if (seen.state === 'running') {
+      const watch = await watchProcess(ctx, job, rerun.agent, 'runtime');
+      if (watch.state === 'running') {
+        noteProgress(ctx, job, `binding-rerun|${rerun.agent.id}`, true);
+        ctx.saveJob(job);
+        return true;
+      }
+    }
+    recordPartTelemetry(ctx, job, rerun.agent, 'runtime', seen);
+    rerun.state = 'done';
+    ctx.runtimeEvidenceCache = null;
+    job.coverage = null;
+    ctx.saveJob(job);
+  }
+  return false;
 }
 
 async function mergeCheck(ctx, job) {
@@ -4466,8 +4905,9 @@ async function mergeCheck(ctx, job) {
   // whose cause kind is runtime (END).
   job.runtime = normalRuntime(job.runtime);
   await syncVerifiedRuntimeLines(ctx, job, pr);
-  const bindingBlocker = await detectSavedRealBindingBlocker(ctx, job);
-  if (bindingBlocker?.bucket === 2) return parkValidationWait(ctx, job, pr, bindingBlocker);
+  if (await runBindingRerunIfPending(ctx, job)) return;
+  const bindingBlocker = await detectSavedRealBindingBlocker(ctx, job, pr);
+  if (bindingBlocker?.outcome?.bucket === 2) return parkValidationWait(ctx, job, pr, bindingBlocker.outcome, { parkStories: bindingBlocker.stories });
   await runtimeResendable(ctx, job, pr.body);
   await runtimeNotRunReport(ctx, job);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge. Git
@@ -4597,23 +5037,24 @@ async function mergeCheck(ctx, job) {
     checkIds: [...new Set(reproduceChecks.flatMap(c => c.checkIds ?? []))],
   } : null;
   if (reds.length) {
-    if (suite?.state === 'fail' && nonTestReds === 0) {
+    if ((suite?.state === 'fail' || ci?.state === 'red') && nonTestReds === 0) {
       const suiteTail = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
-      const diagLines = [
-        suite.text ?? '',
-        ...(suiteTail ? suiteTail.split(/\r?\n/) : []),
-        ...(reproduceChecks.flatMap(c => Array.isArray(c.lines) ? c.lines : [])),
-      ].filter(Boolean);
-      const changed = await changedFiles(ctx, job, job.head).catch(() => []);
-      const suiteOutcome = evaluateValidationOutcome({
-        mode: ctx.settings.mode,
-        changedFiles: changed,
-        offlinePassed: false,
-        diagnostics: diagLines,
-        repairAttempts: job.validationRepairs ?? job.repairs ?? 0,
-      });
-      if (suiteOutcome.bucket === 2) return parkValidationWait(ctx, job, pr, suiteOutcome);
-      if (suiteOutcome.bucket === 3 && suiteOutcome.waitKind === 'human-boundary') return parkHumanBoundary(ctx, job, pr, suiteOutcome);
+      const diagLines = extractFailureDiagnosticLines(suiteTail, reproduceChecks);
+      if (diagLines.length) {
+        const changed = await changedFiles(ctx, job, job.head).catch(() => []);
+        const suiteOutcome = evaluateValidationOutcome({
+          mode: ctx.settings.mode,
+          changedFiles: changed,
+          offlinePassed: false,
+          diagnostics: diagLines,
+          repairAttempts: job.validationRepairs ?? 0,
+        });
+        if (suiteOutcome.bucket === 2) return parkValidationWait(ctx, job, pr, suiteOutcome);
+        if (suiteOutcome.bucket === 3 && suiteOutcome.waitKind === 'human-boundary') return parkHumanBoundary(ctx, job, pr, suiteOutcome);
+        if (suiteOutcome.decision === 'needs-person' && suiteOutcome.waitKind === 'repair-exhausted') {
+          return parkRepairExhausted(ctx, job, pr, suiteOutcome);
+        }
+      }
     }
     return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds, findings, reproduce);
   }
@@ -5670,15 +6111,15 @@ function sameFinding(a, b) {
   if (a.places.length && b.places.length) return a.places.some(([file, line]) => b.places.some(([other, at]) => file === other && Math.abs(line - at) <= 3)) && (shared >= 2 && overlap >= 0.25 || overlap >= 0.4);
   return !a.places.length && !b.places.length && overlap >= 0.6;
 }
-function repairStop(ctx, job, findings) {
+function repairStop(ctx, job, findings, { skipRepeatStop = false, maxRepairs = ctx.settings.repairs } = {}) {
   const now = findings.map(finding), rounds = job.rounds ?? [], last = rounds.at(-1);
   let stop = null;
-  if (last) {
+  if (last && !skipRepeatStop) {
     const unfixed = now.find(f => last.findings.some(old => sameFinding(f, old)));
     const back = now.find(f => rounds.slice(0, -1).some(round => round.findings.some(old => sameFinding(f, old))));
     stop = unfixed ? `a finding of the last round is still there (${unfixed.text})` : back ? `a finding of an earlier round came back (${back.text})` : null;
   }
-  if (!stop && job.repairs >= ctx.settings.repairs) stop = `the safety cap of ${ctx.settings.repairs} repair(s) is reached (autopilot.maxRepairs)`;
+  if (!stop && job.repairs >= maxRepairs) stop = `the safety cap of ${maxRepairs} repair(s) is reached (autopilot.maxRepairs)`;
   job.rounds = [...rounds, { findings: now }].slice(-8);
   return stop;
 }
@@ -5698,12 +6139,12 @@ async function cleanRepairWorktree(ctx, job, targetRef) {
   await ctx.git(['clean', '-fdq'], job.worktree);
   return dirtyFiles;
 }
-async function repairOrEnd(ctx, job, reds, findings = reds, reproduce = null) {
+async function repairOrEnd(ctx, job, reds, findings = reds, reproduce = null, options = {}) {
   if (!await stopChecks(ctx, job)) return;
   await leaveLane(ctx, job);
   job.lane = null;
   const checkRounds = Array.isArray(job.rounds) ? [...job.rounds] : [];
-  const stop = repairStop(ctx, job, findings);
+  const stop = repairStop(ctx, job, findings, options);
   // #3239 item 7: the END text quotes what the path checks read for each path red, so a person sees a false red at once.
   const read = reds.map(red => job.paths?.head === job.head ? job.paths.quotes?.[red] : null).filter(Boolean);
   if (stop) return end(ctx, job, cause('job', 'checks-red', `the repairs stopped because ${stop}. The PR checks after ${job.repairs} repair(s): ${reds.join(' ')}${read.length ? ` What the path checks read: ${read.join(' | ')}.` : ''}`));
@@ -6468,8 +6909,15 @@ async function continueEnd(ctx, job) {
     if (!e.comment && e.commentTried) e.comment = String((await gh.all(`repos/${repo}/issues/${job.issue}/comments?per_page=100`)).find(c => String(c.body ?? '').includes(marker))?.id ?? '') || undefined;
     if (!e.comment) {
       e.commentTried = true; ctx.saveJob(job);
+      const followUp = why.authWait
+        ? `When the tool/login is healthy again, Autopilot auto-resumes validate-only on PR #${job.pr} without rebuilding (or reply / remove \`${DECISION}\` to trigger validate-only resume immediately).`
+        : why.humanBoundary
+          ? `Complete the human verification above on PR #${job.pr}, then reply or remove \`${DECISION}\` when ready.`
+          : why.repairExhausted
+            ? `Autopilot stopped after ${MAX_VALIDATION_REPAIRS} validation repair attempts on PR #${job.pr}. Inspect the PR and remove \`${DECISION}\` when ready to continue.`
+            : 'Please answer in a comment (one letter is enough). Autopilot reads your answer at its next check, removes the `' + DECISION + '` label itself and goes on.';
       e.comment = String((await ctx.comment(job.issue, [`Autopilot needs a decision from a person to go on with this issue:`, '', ...String(why.question).split('\n').map(line => `> ${line}`), '',
-        'Please answer in a comment (one letter is enough). Autopilot reads your answer at its next check, removes the `' + DECISION + '` label itself and goes on.', '', marker].join('\n'))).id); ctx.saveJob(job);
+        followUp, '', marker].join('\n'))).id); ctx.saveJob(job);
     }
     if (why.keepPr && job.pr && !e.prNoted) {
       let prBody;
@@ -6478,6 +6926,8 @@ async function continueEnd(ctx, job) {
       } else if (why.humanBoundary) {
         const cardText = Array.isArray(why.humanVerificationCard) ? why.humanVerificationCard.join('\n') : String(why.question ?? why.text);
         prBody = `Human verification required before merge:\n\n${cardText}\n\n<!-- pdd:autopilot-core:human-boundary:${job.pr} -->`;
+      } else if (why.repairExhausted) {
+        prBody = `Autopilot reached the maximum of ${MAX_VALIDATION_REPAIRS} validation repair attempts on PR #${job.pr} (issue #${job.issue}): ${why.text}\n\nThis PR stays open for a person to inspect; Autopilot does not merge it.\n\n<!-- pdd:autopilot-core:repair-exhausted:${job.pr} -->`;
       } else {
         const prNote = why.branchApproval
           ? `Autopilot waits for a person's pull-request review approval on GitHub required by branch protection on \`${ctx.state.baseBranch}\` (see issue #${job.issue}). It stays open; Autopilot does not merge it.`
@@ -6587,7 +7037,7 @@ async function finishLocal(ctx, job, outcome, text) {
     confirmed = true;
     const mine = name => name === String(job.issue) || name.startsWith(`${job.issue}-`) || name.startsWith(`${job.issue}.`);
     const list = dir => { try { return ctx.fs.readdirSync(dir).filter(mine); } catch { return []; } };
-    const keepAuthWaitWorktree = job.end?.cause?.code === 'auth-wait';
+    const keepAuthWaitWorktree = Boolean(job.end?.cause?.authWait || job.end?.cause?.code === 'auth-wait');
     if (!keepAuthWaitWorktree) {
       for (const path of new Set([job.worktree, ...list(ctx.dirs.worktrees).map(name => join(ctx.dirs.worktrees, name))]))
         await step('worktree', async () => { if (!await removeTree(ctx, path)) throw Error(`${path} stays`); });
@@ -7349,7 +7799,7 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
     if (!mainCheck.ok) return mainCheck.response;
 
     const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
-      [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
+      [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime'], [job.bindingRerun?.agent, 'runtime']].filter(([part]) => Boolean(part));
     const hadRunning = parts.some(([part]) => { try { return ctx.jobs.read(part)?.state === 'running'; } catch { return false; } });
     let stoppedOk = await stopChecks(ctx, job);
     for (let attempt = 1; !stoppedOk && attempt < 10; attempt++) {
