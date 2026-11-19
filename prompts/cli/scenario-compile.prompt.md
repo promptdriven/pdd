@@ -76,6 +76,6 @@ None.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "8d2279ffe883d0ed12dfdbef9bf9bb3267ac386c5a4cc68e04a01259f0075308","reason":"Pure synchronous BigInt-preserving JSON compiler leaf loaded directly by src/runtime-seam.mjs without external ports."}
+{"kind":"native-only","status":"draft","prose_sha256": "05cb9d76ca02b2ad64a9860ea6bd8bad6f2ae8e7443c87cf23220c37c5ed9b80","reason":"Pure synchronous BigInt-preserving JSON compiler leaf loaded directly by src/runtime-seam.mjs without external ports."}
 ```
 </details>
