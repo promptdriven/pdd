@@ -122,16 +122,20 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
   return version;
 }
 
-const STAGE_SCRUB_ENV_KEYS = [
-  'npm_config_dry_run',
-  'npm_config_tag',
-  'npm_config_npm_only',
-  'npm_config_pypi_only',
+const STAGE_SCRUB_EXACT_KEYS = new Set([
   'NPM_TOKEN',
   'NODE_AUTH_TOKEN',
   'PYPI_API_TOKEN',
   'TWINE_PASSWORD',
-];
+  'TWINE_USERNAME',
+]);
+const STAGE_SCRUB_CI_KEYS = new Set([
+  'npm_config_dry_run',
+  'npm_config_tag',
+  'npm_config_npm_only',
+  'npm_config_pypi_only',
+  'npm_config_cache',
+]);
 
 export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDir = null, env: sourceEnv = process.env } = {}) {
   const parity = checkVersionParity({ root });
@@ -147,7 +151,11 @@ export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDi
     const cacheDir = join(scratch, 'npm-cache');
     mkdirSync(cacheDir, { recursive: true });
     const baseEnv = { ...sourceEnv };
-    for (const key of STAGE_SCRUB_ENV_KEYS) delete baseEnv[key];
+    for (const key of Object.keys(baseEnv)) {
+      if (STAGE_SCRUB_EXACT_KEYS.has(key) || STAGE_SCRUB_CI_KEYS.has(key.toLowerCase())) {
+        delete baseEnv[key];
+      }
+    }
     const env = { ...baseEnv, npm_config_cache: cacheDir, COPYFILE_DISABLE: '1' };
     const packOut = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', scratch], {
       cwd: root,

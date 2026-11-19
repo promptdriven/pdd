@@ -28,7 +28,7 @@ import {
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const publishScript = join(root, 'scripts', 'publish-release.mjs');
-const SECRET_KEYS = ['NPM_TOKEN', 'NODE_AUTH_TOKEN', 'PYPI_API_TOKEN', 'TWINE_PASSWORD'];
+const PUBLISH_AUTH_KEYS = ['NPM_TOKEN', 'NODE_AUTH_TOKEN', 'PYPI_API_TOKEN', 'TWINE_PASSWORD', 'TWINE_USERNAME'];
 
 function createFixtureRepo(t, { version = '0.1.37', tag = `alpha-v${version}` } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-publish-fixture-'));
@@ -110,23 +110,31 @@ test('#3533 package.json wires release:publish, parsePublishArgs uses parseArgs 
     },
   );
 
-  // npm_config_dry_run treats any value other than false/0/undefined (including '' and '1') as dry-run.
+  // npm_config_dry_run treats any value other than false/0/undefined (including '' and '1') as dry-run (case-insensitively).
   for (const truthy of ['true', '1', '', 'yes']) {
     const parsed = parsePublishArgs([], { npm_config_dry_run: truthy });
     assert.equal(parsed.dryRun, true, `expected dryRun=true for npm_config_dry_run=${JSON.stringify(truthy)}`);
     assert.equal(parsed.dryRunFromNpmEnv, true);
+    const upper = parsePublishArgs([], { NPM_CONFIG_DRY_RUN: truthy });
+    assert.equal(upper.dryRun, true, `expected dryRun=true for NPM_CONFIG_DRY_RUN=${JSON.stringify(truthy)}`);
+    assert.equal(upper.dryRunFromNpmEnv, true);
   }
   for (const falsy of ['false', 'FALSE', '0', undefined]) {
     const parsed = parsePublishArgs([], { npm_config_dry_run: falsy });
     assert.equal(parsed.dryRun, false, `expected dryRun=false for npm_config_dry_run=${JSON.stringify(falsy)}`);
+    assert.equal(parsePublishArgs([], { NPM_CONFIG_DRY_RUN: falsy }).dryRun, false);
   }
 
-  // Swallowed npm flags fail closed with explicit `use -- before flags` guidance.
+  // Swallowed npm flags fail closed with explicit `use -- before flags` guidance (case-insensitively).
   assert.throws(() => parsePublishArgs([], { npm_config_npm_only: 'true' }), /Use `--` before flags[\s\S]*--npm-only/);
   assert.throws(() => parsePublishArgs([], { npm_config_npm_only: '' }), /Use `--` before flags[\s\S]*--npm-only/);
+  assert.throws(() => parsePublishArgs([], { NPM_CONFIG_NPM_ONLY: 'true' }), /Use `--` before flags[\s\S]*--npm-only/);
   assert.throws(() => parsePublishArgs([], { npm_config_pypi_only: '1' }), /Use `--` before flags[\s\S]*--pypi-only/);
+  assert.throws(() => parsePublishArgs([], { NPM_CONFIG_PYPI_ONLY: '1' }), /Use `--` before flags[\s\S]*--pypi-only/);
   assert.throws(() => parsePublishArgs([], { npm_config_tag: 'alpha-v0.1.37' }), /Use `--` before flags[\s\S]*--tag alpha-v0\.1\.37/);
+  assert.throws(() => parsePublishArgs([], { NPM_CONFIG_TAG: 'alpha-v0.1.37' }), /Use `--` before flags[\s\S]*--tag alpha-v0\.1\.37/);
   assert.equal(parsePublishArgs([], { npm_config_tag: 'latest' }).tag, null, 'default npm_config_tag=latest is allowed');
+  assert.equal(parsePublishArgs([], { NPM_CONFIG_TAG: 'latest' }).tag, null, 'default NPM_CONFIG_TAG=latest is allowed');
   assert.equal(parsePublishArgs(['--npm-only'], { npm_config_npm_only: 'true' }).npmOnly, true);
 
   assert.throws(() => parsePublishArgs(['--npm-only', '--pypi-only']), /Cannot combine --npm-only and --pypi-only/);
@@ -305,12 +313,14 @@ test('#3533 live publish enforces HEAD==tag, scrubs secrets across subprocesses,
     NPM_TOKEN: 'secret-npm-tok-9999',
     NODE_AUTH_TOKEN: 'secret-node-auth-8888',
     PYPI_API_TOKEN: 'secret-pypi-tok-7777',
+    TWINE_USERNAME: 'stray-twine-user',
     TWINE_REPOSITORY: 'wrong-repo',
     TWINE_REPOSITORY_URL: 'https://wrong.example/legacy/',
+    NPM_CONFIG_CACHE: '/tmp/stray-npm-cache',
   };
 
   const assertNoSecrets = (label, envObj) => {
-    for (const key of SECRET_KEYS) {
+    for (const key of PUBLISH_AUTH_KEYS) {
       assert.equal(envObj?.[key], undefined, `${label} must not inherit ${key}`);
     }
   };
@@ -420,8 +430,9 @@ test('#3533 live publish enforces HEAD==tag, scrubs secrets across subprocesses,
   assert.equal(result.published.pypi.published, true);
   assert.equal(result.verified.pypi.attempts, 2);
 
-  // npm publish checks: cwd, --access public, isolated mkdtemp .npmrc 0600, deleted afterward.
+  // npm publish checks: cwd, --access public, isolated mkdtemp .npmrc 0600, deleted afterward, uppercase NPM_CONFIG_* scrubbed.
   assert.equal(capturedNpmPublishOpts.cwd, fixtureDir);
+  assert.equal(capturedNpmPublishOpts.env.NPM_CONFIG_CACHE, undefined);
   assert.match(capturedUserconfigPath, /pdd-npm-auth-[^/\\]+[/\\]\.npmrc$/);
   assert.equal(capturedUserconfigMode, 0o600);
   assert.equal(capturedUserconfigContent, '//registry.npmjs.org/:_authToken=secret-npm-tok-9999\n');
@@ -465,6 +476,55 @@ test('#3533 live publish enforces HEAD==tag, scrubs secrets across subprocesses,
   assert.equal(customUploads[0].env.TWINE_REPOSITORY, undefined);
   assert.equal(customUploads[0].env.TWINE_REPOSITORY_URL, undefined);
 
+  // TWINE_PASSWORD + TWINE_USERNAME restores both; ~/.pypirc fallback leaves both unset (even with stray TWINE_USERNAME).
+  const notFoundFetch = async () => ({ status: 404, ok: false });
+  let capturedExplicitTwineEnv = null;
+  await publishPypi({
+    pypiName: 'pdd-cli', version: '0.1.37',
+    distFiles: ['/tmp/pdd_cli-0.1.37.tar.gz', '/tmp/pdd_cli-0.1.37-py3-none-any.whl'],
+    twineCmd: { cmd: 'twine', argsPrefix: [] },
+    env: { TWINE_USERNAME: '  custom-user  ', TWINE_PASSWORD: 'twine-pass-123', NPM_TOKEN: 'leaked-npm' },
+    fetchImpl: notFoundFetch,
+    runCommand: (_cmd, _args, opts) => { capturedExplicitTwineEnv = opts.env; return { status: 0, stdout: '', stderr: '' }; },
+    log: () => {},
+  });
+  assert.equal(capturedExplicitTwineEnv.TWINE_USERNAME, 'custom-user');
+  assert.equal(capturedExplicitTwineEnv.TWINE_PASSWORD, 'twine-pass-123');
+  assert.equal(capturedExplicitTwineEnv.NPM_TOKEN, undefined);
+
+  let capturedPypircEnv = null;
+  await publishPypi({
+    pypiName: 'pdd-cli', version: '0.1.37',
+    distFiles: ['/tmp/pdd_cli-0.1.37.tar.gz', '/tmp/pdd_cli-0.1.37-py3-none-any.whl'],
+    twineCmd: { cmd: 'twine', argsPrefix: [] },
+    env: { TWINE_USERNAME: 'stray-user-without-password' },
+    fetchImpl: notFoundFetch,
+    runCommand: (_cmd, _args, opts) => { capturedPypircEnv = opts.env; return { status: 0, stdout: '', stderr: '' }; },
+    log: () => {},
+  });
+  assert.equal(capturedPypircEnv.TWINE_USERNAME, undefined);
+  assert.equal(capturedPypircEnv.TWINE_PASSWORD, undefined);
+
+  // Empty distFiles fails closed.
+  await assert.rejects(
+    () => publishPypi({ pypiName: 'pdd-cli', version: '0.1.37', distFiles: [], twineCmd: { cmd: 'twine', argsPrefix: [] }, fetchImpl: notFoundFetch, log: () => {} }),
+    /No PyPI distribution files provided/,
+  );
+
+  // Whitespace-only NPM_TOKEN falls back to NODE_AUTH_TOKEN.
+  let fallbackAuthContent = null;
+  publishNpm({
+    packageName: '@promptdriven/pdd', version: '0.1.37', tarballPath: '/tmp/a.tgz', root: fixtureDir,
+    env: { NPM_TOKEN: '   ', NODE_AUTH_TOKEN: 'node-auth-fallback-tok' },
+    runCommand: (_cmd, args) => {
+      if (args[0] === 'view') return { status: 1, stdout: '', stderr: 'npm error code E404' };
+      fallbackAuthContent = readFileSync(args[args.indexOf('--userconfig') + 1], 'utf8');
+      return { status: 0, stdout: '', stderr: '' };
+    },
+    log: () => {},
+  });
+  assert.equal(fallbackAuthContent, '//registry.npmjs.org/:_authToken=node-auth-fallback-tok\n');
+
   // Full idempotency: when BOTH sdist and wheel are already live on PyPI + version is live on npm, both skip.
   const commandsSecondRun = [];
   const secondResult = await publishRelease(
@@ -498,17 +558,17 @@ test('#3533 secret redaction, control-char token rejection, strict 404 matching,
     );
   }
 
-  // Known secrets echoed in failing command stderr are redacted to [REDACTED].
+  // Known secrets echoed in failing command stderr are redacted to [REDACTED], while TWINE_USERNAME ('__token__') is not.
   assert.throws(
     () => publishNpm({
       packageName: '@promptdriven/pdd', version: '0.1.37', tarballPath: '/tmp/a.tgz',
-      env: { NPM_TOKEN: 'npm_secret_value_12345' },
+      env: { NPM_TOKEN: 'npm_secret_value_12345', TWINE_USERNAME: '__token__' },
       runCommand: (_cmd, args) => (args[0] === 'view'
         ? { status: 1, stdout: '', stderr: 'npm error code E404' }
-        : { status: 1, stdout: '', stderr: 'auth failed for npm_secret_value_12345' }),
+        : { status: 1, stdout: '', stderr: 'auth failed for __token__ and npm_secret_value_12345' }),
       log: () => {},
     }),
-    err => err.message.includes('[REDACTED]') && !err.message.includes('npm_secret_value_12345'),
+    err => err.message.includes('[REDACTED]') && err.message.includes('__token__') && !err.message.includes('npm_secret_value_12345'),
   );
 
   // Tightened isNpmNotFound regex must NOT swallow non-404 errors containing a stray "404".
@@ -630,16 +690,27 @@ test('#3533 subprocess --dry-run and npm_config_dry_run=true build & smoke-test 
   assert.equal(existsSync(join(fixtureDir, 'python', 'pdd_cli', '_bundled')), false);
   assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: fixtureDir, encoding: 'utf8' }).trim(), '');
 
-  // Finding 2: npm_config_dry_run=true without --dry-run runs BOTH npm + PyPI dry-run cleanly (stagePypiBundle does not crash!).
-  const npmEnvDry = spawnSync(
+  // Finding 2: npm_config_dry_run=true and uppercase NPM_CONFIG_DRY_RUN=true run BOTH npm + PyPI dry-run cleanly.
+  for (const dryEnv of [{ npm_config_dry_run: 'true' }, { NPM_CONFIG_DRY_RUN: 'true' }]) {
+    const npmEnvDry = spawnSync(
+      process.execPath,
+      [publishScript, '--root', fixtureDir, '--tag', 'alpha-v0.1.37'],
+      { cwd: fixtureDir, env: { ...subEnv, ...dryEnv }, encoding: 'utf8' },
+    );
+    assert.equal(npmEnvDry.status, 0, `stdout:\n${npmEnvDry.stdout}\nstderr:\n${npmEnvDry.stderr}`);
+    assert.match(npmEnvDry.stdout, /Mode: DRY RUN/);
+    assert.match(npmEnvDry.stdout, /Detected npm_config_dry_run/);
+    assert.match(npmEnvDry.stdout, /PyPI artifacts built and checked with twine:/);
+  }
+
+  // Uppercase NPM_CONFIG_NPM_ONLY=true fails closed at the CLI boundary.
+  const upperTrap = spawnSync(
     process.execPath,
     [publishScript, '--root', fixtureDir, '--tag', 'alpha-v0.1.37'],
-    { cwd: fixtureDir, env: { ...subEnv, npm_config_dry_run: 'true' }, encoding: 'utf8' },
+    { cwd: fixtureDir, env: { ...subEnv, NPM_CONFIG_NPM_ONLY: 'true' }, encoding: 'utf8' },
   );
-  assert.equal(npmEnvDry.status, 0, `stdout:\n${npmEnvDry.stdout}\nstderr:\n${npmEnvDry.stderr}`);
-  assert.match(npmEnvDry.stdout, /Mode: DRY RUN/);
-  assert.match(npmEnvDry.stdout, /Detected npm_config_dry_run/);
-  assert.match(npmEnvDry.stdout, /PyPI artifacts built and checked with twine:/);
+  assert.equal(upperTrap.status, 1);
+  assert.match(upperTrap.stderr, /Use `--` before flags[\s\S]*--npm-only/);
 
   assert.doesNotMatch(readFileSync(callLog, 'utf8'), /\bupload\b/);
 

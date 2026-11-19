@@ -20,13 +20,14 @@ const NPM_NOT_FOUND_RE = /E404|404 Not Found|is not in this registry/i;
 const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
 
 const SECRET_ENV_KEYS = ['NPM_TOKEN', 'NODE_AUTH_TOKEN', 'PYPI_API_TOKEN', 'TWINE_PASSWORD'];
+const PUBLISH_AUTH_ENV_KEYS = [...SECRET_ENV_KEYS, 'TWINE_USERNAME'];
 const ISOLATED_HOME_ENV_KEYS = [
   'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_RUNTIME_DIR',
   'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'AGY_HOME', 'GH_CONFIG_DIR',
 ];
 const NPM_SCRUB_ENV_KEYS = [
   'npm_config_dry_run', 'npm_config_tag', 'npm_config_npm_only', 'npm_config_pypi_only',
-  'npm_config_prefix', 'npm_config_userconfig', 'npm_config_globalconfig', 'npm_config_registry',
+  'npm_config_cache', 'npm_config_prefix', 'npm_config_userconfig', 'npm_config_globalconfig', 'npm_config_registry',
 ];
 const TWINE_REPO_ENV_KEYS = ['TWINE_REPOSITORY', 'TWINE_REPOSITORY_URL'];
 const PYTHON_COPY_SKIP = new Set(['_bundled', 'build', 'dist', '__pycache__']);
@@ -78,14 +79,31 @@ function runOrThrow(runCommand, label, cmd, args, opts, secrets) {
 
 function scrubEnv(baseEnv, ...keyLists) {
   const next = { ...baseEnv };
-  for (const keys of keyLists) for (const k of keys) delete next[k];
+  const exact = new Set();
+  const ci = new Set();
+  for (const keys of keyLists) {
+    for (const k of keys) {
+      if (/^npm_config_/i.test(k)) ci.add(k.toLowerCase());
+      else exact.add(k);
+    }
+  }
+  for (const key of Object.keys(next)) {
+    if (exact.has(key) || ci.has(key.toLowerCase())) delete next[key];
+  }
   return next;
 }
 
+function findEnvValuesCI(env, key) {
+  if (!env) return [];
+  const target = key.toLowerCase();
+  return Object.entries(env).filter(([k, v]) => k.toLowerCase() === target && v !== undefined).map(([, v]) => v);
+}
+
 function isTruthyNpmConfig(env, key) {
-  if (!env || !Object.prototype.hasOwnProperty.call(env, key) || env[key] === undefined) return false;
-  const normalized = String(env[key]).trim().toLowerCase();
-  return normalized !== 'false' && normalized !== '0';
+  return findEnvValuesCI(env, key).some(v => {
+    const normalized = String(v).trim().toLowerCase();
+    return normalized !== 'false' && normalized !== '0';
+  });
 }
 
 function parseJsonOrThrow(raw, label) {
@@ -133,8 +151,8 @@ export function parsePublishArgs(argv, env = {}) {
         throw new Error(`Detected ${key} without ${flag}. Use \`--\` before flags: npm run release:publish -- ${flag}`);
       }
     }
-    const envTag = env?.npm_config_tag === undefined ? '' : String(env.npm_config_tag).trim();
-    if (tag === null && envTag && envTag !== 'latest') {
+    const envTag = findEnvValuesCI(env, 'npm_config_tag').map(v => String(v).trim()).find(v => v && v !== 'latest') || '';
+    if (tag === null && envTag) {
       throw new Error(`Detected npm_config_tag="${envTag}" without --tag. Use \`--\` before flags: npm run release:publish -- --tag ${envTag}`);
     }
   }
@@ -212,7 +230,7 @@ function createIsolatedNodeBinDir(smokeDir) {
 
 /** Verify that the repository has a clean git working tree. */
 export function verifyCleanGitStatus({ root = DEFAULT_ROOT, env = process.env, runCommand = defaultRunCommand } = {}) {
-  const cleanEnv = scrubEnv(env, SECRET_ENV_KEYS);
+  const cleanEnv = scrubEnv(env, PUBLISH_AUTH_ENV_KEYS);
   const secrets = collectSecrets(env);
   const inside = runCommand('git', ['rev-parse', '--is-inside-work-tree'], { cwd: root, env: cleanEnv });
   if (inside.status !== 0 || inside.stdout.trim() !== 'true') throw new Error(`Not a git working tree: ${root}`);
@@ -226,7 +244,7 @@ export function verifyCleanGitStatus({ root = DEFAULT_ROOT, env = process.env, r
 /** Resolve the target release tag (if omitted) and verify a published (`draft === false`) GitHub Release. */
 export function resolveAndVerifyGitHubRelease({ repo, tag = null, env = process.env, runCommand = defaultRunCommand } = {}) {
   const endpoint = tag ? `repos/${repo}/releases/tags/${encodeURIComponent(tag)}` : `repos/${repo}/releases`;
-  const res = runCommand('gh', ['api', endpoint], { env: scrubEnv(env, SECRET_ENV_KEYS) });
+  const res = runCommand('gh', ['api', endpoint], { env: scrubEnv(env, PUBLISH_AUTH_ENV_KEYS) });
   if (res.status !== 0) {
     const hint = res.error?.code === 'ENOENT'
       ? 'GitHub CLI (`gh`) was not found on PATH. Install `gh` and run `gh auth login`.'
@@ -264,7 +282,7 @@ function resolveRemoteTagCommit({ repo, tag, env, runCommand, secrets }) {
 
 /** Verify HEAD matches local and dereferenced remote GitHub tag commits; fails closed in live mode. */
 export function verifyReleaseCommitParity({ root = DEFAULT_ROOT, repo, tag, dryRun = false, env = process.env, runCommand = defaultRunCommand, log = console.log } = {}) {
-  const cleanEnv = scrubEnv(env, SECRET_ENV_KEYS);
+  const cleanEnv = scrubEnv(env, PUBLISH_AUTH_ENV_KEYS);
   const secrets = collectSecrets(env);
   const headCommit = runOrThrow(runCommand, 'git rev-parse HEAD^{commit}', 'git', ['rev-parse', '--verify', 'HEAD^{commit}'], { cwd: root, env: cleanEnv }, secrets).stdout.trim().toLowerCase();
   const localRes = runCommand('git', ['rev-parse', '--verify', `refs/tags/${tag}^{commit}`], { cwd: root, env: cleanEnv });
@@ -297,7 +315,7 @@ function buildAndSmokeTestNpm({ root, scratchDir, version, packageName, npmRegis
   ];
   for (const dir of [dist, packCache, installHome, home, state, install, installCache]) mkdirSync(dir, { recursive: true });
 
-  const baseEnv = scrubEnv(env, ISOLATED_HOME_ENV_KEYS, NPM_SCRUB_ENV_KEYS, SECRET_ENV_KEYS);
+  const baseEnv = scrubEnv(env, ISOLATED_HOME_ENV_KEYS, NPM_SCRUB_ENV_KEYS, PUBLISH_AUTH_ENV_KEYS);
   const packRes = runOrThrow(runCommand, 'npm pack', 'npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', dist], {
     cwd: root, env: { ...baseEnv, COPYFILE_DISABLE: '1', npm_config_cache: packCache },
   }, secrets);
@@ -334,7 +352,7 @@ function buildAndSmokeTestNpm({ root, scratchDir, version, packageName, npmRegis
 export function resolvePythonTools({ pythonBin = null, env = process.env, runCommand = defaultRunCommand } = {}) {
   const probeScript = 'import importlib.util, json, sys; print(json.dumps({"executable": sys.executable, "major": sys.version_info[0], "minor": sys.version_info[1], "hasBuild": importlib.util.find_spec("build") is not None, "hasTwine": importlib.util.find_spec("twine") is not None}))';
   const explicit = pythonBin || String(env.PDD_RELEASE_PYTHON || '').trim() || null;
-  const probeEnv = { ...scrubEnv(env, SECRET_ENV_KEYS), PYTHONDONTWRITEBYTECODE: '1' };
+  const probeEnv = { ...scrubEnv(env, PUBLISH_AUTH_ENV_KEYS), PYTHONDONTWRITEBYTECODE: '1' };
   const found = [];
 
   for (const cmd of (explicit ? [explicit] : ['python3', 'python'])) {
@@ -376,7 +394,7 @@ function buildAndVerifyPypi({ root, scratchDir, version, pypiName, dryRun, pytho
     },
   });
 
-  const cleanEnv = scrubEnv(env, NPM_SCRUB_ENV_KEYS, SECRET_ENV_KEYS);
+  const cleanEnv = scrubEnv(env, NPM_SCRUB_ENV_KEYS, PUBLISH_AUTH_ENV_KEYS);
   stageBundle({ root, bundleDir: join(pySrcDir, 'pdd_cli', '_bundled'), env: cleanEnv });
 
   const pyEnv = { ...cleanEnv, PYTHONDONTWRITEBYTECODE: '1' };
@@ -389,22 +407,23 @@ function buildAndVerifyPypi({ root, scratchDir, version, pypiName, dryRun, pytho
   if (wheels.length === 0 || sdists.length === 0) {
     throw new Error(`Expected both wheel (.whl) and sdist (.tar.gz) for version ${pep440Version} in ${pypiDistDir}; found: ${builtFiles.join(', ') || '(none)'}`);
   }
-  const distFiles = [...sdists, ...wheels].map(name => join(pypiDistDir, name));
+  const selectedFiles = [...sdists, ...wheels];
+  const distFiles = selectedFiles.map(name => join(pypiDistDir, name));
 
   let twineChecked = false;
   if (twineCmd) {
     runOrThrow(runCommand, 'twine check', twineCmd.cmd, [...twineCmd.argsPrefix, 'check', ...distFiles], { cwd: scratchDir, env: pyEnv }, secrets);
     twineChecked = true;
-    log(`  PyPI artifacts built and checked with twine: ${builtFiles.join(', ')}`);
+    log(`  PyPI artifacts built and checked with twine: ${selectedFiles.join(', ')}`);
   } else {
-    log(`  PyPI artifacts built: ${builtFiles.join(', ')}\n  Warning: twine is not installed; skipped \`twine check\`. Install with: ${python.cmd} -m pip install --upgrade twine (required before live PyPI publish).`);
+    log(`  PyPI artifacts built: ${selectedFiles.join(', ')}\n  Warning: twine is not installed; skipped \`twine check\`. Install with: ${python.cmd} -m pip install --upgrade twine (required before live PyPI publish).`);
   }
-  return { pypiName, version, pep440Version, python: python.cmd, twineCmd, twineChecked, distFiles, filenames: builtFiles };
+  return { pypiName, version, pep440Version, python: python.cmd, twineCmd, twineChecked, distFiles, filenames: selectedFiles };
 }
 
 function queryNpmVersion({ packageName, version, npmRegistry, env, runCommand }) {
   const res = runCommand('npm', ['view', `${packageName}@${version}`, 'version', '--registry', npmRegistry], {
-    env: scrubEnv(env, ISOLATED_HOME_ENV_KEYS, NPM_SCRUB_ENV_KEYS, SECRET_ENV_KEYS),
+    env: scrubEnv(env, ISOLATED_HOME_ENV_KEYS, NPM_SCRUB_ENV_KEYS, PUBLISH_AUTH_ENV_KEYS),
   });
   if (res.status === 0) {
     const out = res.stdout.trim();
@@ -432,7 +451,7 @@ export function publishNpm({
       throw new Error(`Invalid ${key}: control or newline characters are not allowed.`);
     }
   }
-  const npmToken = String(env.NPM_TOKEN || env.NODE_AUTH_TOKEN || '').trim();
+  const npmToken = String(env.NPM_TOKEN || '').trim() || String(env.NODE_AUTH_TOKEN || '').trim();
   const args = ['publish', tarballPath, '--registry', npmRegistry, '--ignore-scripts', '--access', 'public', '--tag', distTag];
 
   let authDir = null;
@@ -448,7 +467,7 @@ export function publishNpm({
 
     const res = runCommand('npm', args, {
       cwd: root,
-      env: scrubEnv(env, NPM_SCRUB_ENV_KEYS, SECRET_ENV_KEYS),
+      env: scrubEnv(env, NPM_SCRUB_ENV_KEYS, PUBLISH_AUTH_ENV_KEYS),
       stdio: interactive ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     });
     if (res.status !== 0) {
@@ -504,6 +523,9 @@ export async function publishPypi({
   pypiName = 'pdd-cli', version, distFiles, twineCmd, pypiBaseUrl = DEFAULT_PYPI_BASE_URL,
   env = process.env, interactive = false, runCommand = defaultRunCommand, fetchImpl = globalThis.fetch, log = console.log,
 } = {}) {
+  if (!Array.isArray(distFiles) || distFiles.length === 0) {
+    throw new Error('No PyPI distribution files provided for upload.');
+  }
   const expectedFilenames = distFiles.map(file => basename(file));
   const existing = await queryPypiRelease({ pypiName, version, expectedFilenames, pypiBaseUrl, fetchImpl });
   if (existing.allPresent) {
@@ -513,11 +535,17 @@ export async function publishPypi({
   if (!twineCmd) throw new Error('twine is required to publish pdd-cli to PyPI. Install with: python3 -m pip install --upgrade twine');
 
   const secrets = collectSecrets(env);
-  const uploadEnv = { ...scrubEnv(env, SECRET_ENV_KEYS, TWINE_REPO_ENV_KEYS), PYTHONDONTWRITEBYTECODE: '1' };
+  const uploadEnv = { ...scrubEnv(env, PUBLISH_AUTH_ENV_KEYS, TWINE_REPO_ENV_KEYS), PYTHONDONTWRITEBYTECODE: '1' };
   const twinePassword = String(env.TWINE_PASSWORD || '').trim();
   const apiToken = String(env.PYPI_API_TOKEN || '').trim();
-  if (twinePassword) uploadEnv.TWINE_PASSWORD = twinePassword;
-  else if (apiToken) { uploadEnv.TWINE_USERNAME = '__token__'; uploadEnv.TWINE_PASSWORD = apiToken; }
+  if (twinePassword) {
+    uploadEnv.TWINE_PASSWORD = twinePassword;
+    const twineUsername = String(env.TWINE_USERNAME || '').trim();
+    if (twineUsername) uploadEnv.TWINE_USERNAME = twineUsername;
+  } else if (apiToken) {
+    uploadEnv.TWINE_USERNAME = '__token__';
+    uploadEnv.TWINE_PASSWORD = apiToken;
+  }
 
   const customUploadUrl = resolveCustomTwineUploadUrl(pypiBaseUrl);
   const uploadArgs = [...twineCmd.argsPrefix, 'upload', '--skip-existing'];
@@ -579,7 +607,7 @@ export async function publishRelease(options = {}, deps = {}) {
 
   log('[1/4] Verifying clean git status, published GitHub Release, and version parity...');
   verifyCleanGitStatus({ root, env, runCommand });
-  const repo = explicitRepo || deriveGitHubRepo(root, scrubEnv(env, SECRET_ENV_KEYS), runCommand);
+  const repo = explicitRepo || deriveGitHubRepo(root, scrubEnv(env, PUBLISH_AUTH_ENV_KEYS), runCommand);
   const release = resolveAndVerifyGitHubRelease({ repo, tag, env, runCommand });
   const parity = checkVersionParity({ root, tag: release.tag });
   if (!parity.ok) throw new Error(`Release version parity check failed:\n${parity.problems.join('\n')}`);
@@ -632,7 +660,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     if (parsed.help) { console.log(USAGE); process.exit(0); }
     await publishRelease({ ...parsed, interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY) });
   } catch (err) {
-    console.error(err?.message || String(err));
+    console.error(redactSecrets(err?.message || String(err), collectSecrets(process.env)));
     process.exit(1);
   }
 }
