@@ -190,3 +190,100 @@ test('seamRuntimePorts uses adaptive fast polling (250ms initial vs 2000ms legac
   assert.equal(code2, 0, io2.err + io2.out);
   assert.ok(recordedSleeps.includes(77), `expected explicit pollMs 77 to be preserved, saw ${JSON.stringify(recordedSleeps)}`);
 });
+
+test('pdd lint --emit-v1 --write binds matching legacy IDs and pdd lint --local flags stale/mismatched criteria offline', async t => {
+  const criterionText = 'Greeting "Sam" returns "Hello, Sam!".';
+  const root = makeRepo(t, {
+    'prompts/greeter.prompt.md': '# greeter\n\nExpose `greet({ name })` returning `{ message }`.\n\n## Domain decisions\n\nReturn `"Hello, " + name + "!"`.\n',
+    'user_stories/greet-user.md': [
+      '# Greet a visitor',
+      '',
+      'As a visitor, I want a greeting with my name, so that I feel welcomed.',
+      '',
+      '## Acceptance criteria',
+      '',
+      `1. ${criterionText}`,
+      '',
+    ].join('\n'),
+    'tests/greet-user.json': {
+      schema_version: 'prompt-runtime.program-scenario.v1',
+      story_path: 'user_stories/greet-user.md',
+      criteria: [{ id: 'AC1', text: criterionText }],
+      initial_world: {},
+      simulation: {},
+      steps: [
+        {
+          id: 'greet-sam',
+          entry_path: 'prompts/greeter.prompt.md',
+          operation: 'greet',
+          input: { name: 'Sam' },
+          checks: [{ criterion_id: 'AC1', target: 'result', path: '/message', op: 'equals', value: 'Hello, Sam!' }],
+        },
+      ],
+    },
+  });
+
+  // 1. pdd lint --local keeps matching legacy v1 criteria free of false-positive warnings.
+  const localBefore = captureStreams();
+  const localCodeBefore = await runPdd(['lint', '--local', '--json'], { cwd: root, ...localBefore });
+  assert.equal(localCodeBefore, 0, localBefore.err + localBefore.out);
+  assert.deepEqual(JSON.parse(localBefore.out).warnings, []);
+
+  // 2. pdd lint --emit-v1 --write binds legacy AC1 -> ac-sha256-... in place and stays idempotent.
+  const writeIo = captureStreams();
+  const writeCode = await runPdd(['lint', '--emit-v1', '--write', '--json'], { cwd: root, ...writeIo });
+  assert.equal(writeCode, 0, writeIo.err + writeIo.out);
+  const writeSummary = JSON.parse(writeIo.out);
+  assert.deepEqual(writeSummary.updated, ['tests/greet-user.json']);
+  const boundDoc = JSON.parse(readFileSync(join(root, 'tests/greet-user.json'), 'utf8'));
+  assert.match(boundDoc.criteria[0].id, /^ac-sha256-/);
+  assert.equal(boundDoc.steps[0].checks[0].criterion_id, boundDoc.criteria[0].id);
+
+  const secondWriteIo = captureStreams();
+  const secondWriteCode = await runPdd(['lint', '--emit-v1', '--write', '--json'], { cwd: root, ...secondWriteIo });
+  assert.equal(secondWriteCode, 0, secondWriteIo.err + secondWriteIo.out);
+  assert.deepEqual(JSON.parse(secondWriteIo.out).updated, []);
+
+  // 3. pdd lint --local reports 0 warnings once bound.
+  const localAfter = captureStreams();
+  const localCodeAfter = await runPdd(['lint', '--local', '--json'], { cwd: root, ...localAfter });
+  assert.equal(localCodeAfter, 0, localAfter.err + localAfter.out);
+  const afterJson = JSON.parse(localAfter.out);
+  assert.deepEqual(afterJson.warnings, []);
+
+  // 4. Stale ac-sha256-... after Story edit is warned locally WITHOUT suggesting --bind-criteria and refused (exit 4) by --emit-v1 --write.
+  const boundRaw = readFileSync(join(root, 'tests/greet-user.json'), 'utf8');
+  writeFileSync(
+    join(root, 'user_stories/greet-user.md'),
+    '# Greet a visitor\n\nAs a visitor, I want a greeting, so that I feel welcomed.\n\n## Acceptance criteria\n\n1. Greeting "Sam" returns "Hi, Sam!".\n',
+  );
+  const staleLocal = captureStreams();
+  await runPdd(['lint', '--local', '--json'], { cwd: root, ...staleLocal });
+  const staleJson = JSON.parse(staleLocal.out);
+  assert.ok(
+    staleJson.warnings.some(w => /story-criterion-mismatch/.test(w) && /stale content-bound ID/.test(w)),
+    `expected stale local warning, got ${JSON.stringify(staleJson.warnings)}`,
+  );
+  assert.equal(
+    staleJson.warnings.some(w => /--bind-criteria/.test(w)),
+    false,
+    `stale content-bound warning must not suggest --bind-criteria: ${JSON.stringify(staleJson.warnings)}`,
+  );
+  const staleWrite = captureStreams();
+  const staleWriteCode = await runPdd(['lint', '--emit-v1', '--write'], { cwd: root, ...staleWrite });
+  assert.equal(staleWriteCode, 4);
+  assert.equal(readFileSync(join(root, 'tests/greet-user.json'), 'utf8'), boundRaw, 'refused --emit-v1 --write must leave file untouched');
+
+  // 5. Explicit legacy AC1 with mismatched text is also caught offline by pdd lint --local.
+  writeFileSync(
+    join(root, 'tests/greet-user.json'),
+    JSON.stringify({ ...boundDoc, criteria: [{ id: 'AC1', text: criterionText }], steps: [{ ...boundDoc.steps[0], checks: [{ ...boundDoc.steps[0].checks[0], criterion_id: 'AC1' }] }] }, null, 2) + '\n',
+  );
+  const mismatchLocal = captureStreams();
+  await runPdd(['lint', '--local', '--json'], { cwd: root, ...mismatchLocal });
+  const mismatchJson = JSON.parse(mismatchLocal.out);
+  assert.ok(
+    mismatchJson.warnings.some(w => /story-criterion-mismatch/.test(w)),
+    `expected text-mismatch local warning, got ${JSON.stringify(mismatchJson.warnings)}`,
+  );
+});

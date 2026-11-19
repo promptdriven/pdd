@@ -1296,13 +1296,72 @@ export function renderText(input, ports = {}) {
   return normalizeRuntimeHints(rawRenderText(input, withPortDefaults(ports, { promptTestsLabel: PROMPT_TESTS_LABEL })));
 }
 
-function lintShortScenarioFiles(root, ports = {}) {
+/** Format a local-lint story-criterion-mismatch diagnostic for stale or mismatched explicit criteria. */
+function formatLocalCriteriaWarning(testPath, storyPath, classification) {
+  if (classification.kind === 'stale-content-id') {
+    return `${testPath}: story-criterion-mismatch: criterion ${JSON.stringify(classification.criterionId)} has a stale content-bound ID after ${storyPath} changed. Review ${storyPath} and update ${testPath} before rebinding.`;
+  }
+  if (classification.kind === 'text-mismatch') {
+    return `${testPath}: story-criterion-mismatch: ${classification.difference}`;
+  }
+  if (classification.kind === 'duplicate-criterion') {
+    return `${testPath}: story-criterion-mismatch: duplicate criterion ${JSON.stringify(classification.criterionId)} in ${storyPath}.`;
+  }
+  return null;
+}
+
+function lintShortScenarioFiles(root, ports = {}, { checkCriteriaBindings = false } = {}) {
   if (typeof root !== 'string' || !root) return [];
   try {
     const found = findTests({ root, excludeFixtureProjects: true }, ports);
-    return (found?.tests ?? [])
+    const warnings = (found?.tests ?? [])
       .filter(test => test.shortRefusal && typeof test.error === 'string' && test.error.length > 0)
       .map(test => test.error);
+    if (!checkCriteriaBindings) return warnings;
+
+    let realRoot;
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      return warnings;
+    }
+    const compiler = hostScenarioCompiler();
+    const seen = new Set();
+    for (const test of found?.tests ?? []) {
+      if (test.shortRefusal) continue;
+      for (const testPath of Array.isArray(test.files) && test.files.length ? test.files : [test.path]) {
+        if (!testPath || seen.has(testPath)) continue;
+        seen.add(testPath);
+        let rawText;
+        let parsed;
+        try {
+          const full = realpathSync(join(realRoot, testPath));
+          if (full !== realRoot && !full.startsWith(realRoot + sep)) continue;
+          rawText = initialReadFileSync(full, 'utf8');
+          parsed = compiler.parseExactScenarioJson(rawText);
+        } catch {
+          continue;
+        }
+        const effectiveStoryPath =
+          typeof parsed?.story_path === 'string' && parsed.story_path ? parsed.story_path : test.storyPath;
+        if (!effectiveStoryPath) continue;
+        let storySource;
+        try {
+          const fullStory = realpathSync(join(realRoot, effectiveStoryPath));
+          if (fullStory !== realRoot && !fullStory.startsWith(realRoot + sep)) continue;
+          storySource = initialReadFileSync(fullStory, 'utf8');
+        } catch {
+          continue;
+        }
+        const classification = compiler.classifyExplicitCriteriaBinding(parsed, {
+          storyPath: effectiveStoryPath,
+          storySource,
+        });
+        const msg = formatLocalCriteriaWarning(testPath, effectiveStoryPath, classification);
+        if (msg) warnings.push(msg);
+      }
+    }
+    return warnings;
   } catch {
     return [];
   }
@@ -1437,14 +1496,39 @@ function runEmitV1(input = {}, ports = {}) {
       });
       continue;
     }
-    const finalExact = compiled.exactDoc;
-    const text = compiler.stringifyExactScenarioJson(finalExact, 2) + '\n';
+    let finalExact = compiled.exactDoc;
+    let text = compiler.stringifyExactScenarioJson(finalExact, 2) + '\n';
+    let changed = compiled.changed;
+    const effectiveStoryPath = test.storyPath ?? finalExact?.story_path ?? null;
+    if (writeMode && storySource !== null && effectiveStoryPath) {
+      const bound = compiler.bindScenarioCriteriaText(text, {
+        path: test.path,
+        storyPath: effectiveStoryPath,
+        storySource,
+        space: 2,
+      });
+      if (bound.refusal) {
+        errors.push({
+          path: test.path,
+          story_path: effectiveStoryPath,
+          code: bound.refusal.code,
+          section: bound.refusal.section,
+          message: `${test.path}: ${bound.refusal.section}: ${bound.refusal.message}`,
+        });
+        continue;
+      }
+      if (bound.changed) {
+        text = bound.text;
+        finalExact = compiler.parseExactScenarioJson(text);
+        changed = true;
+      }
+    }
     emitted.push({
       path: test.path,
       fullPath: fullTestPath,
-      story_path: test.storyPath ?? finalExact?.story_path ?? null,
-      changed: compiled.changed,
-      written: writeMode && compiled.changed && text !== rawText,
+      story_path: effectiveStoryPath,
+      changed,
+      written: writeMode && changed && text !== rawText,
       text,
       scenario: finalExact,
     });
@@ -2181,7 +2265,7 @@ export async function runCheck(input = {}, ports = {}) {
           lintSvgLayouts: arg => [
             ...lintSvgLayouts(arg),
             ...lintRepoAntiPatterns(arg),
-            ...lintShortScenarioFiles(arg?.root, ports),
+            ...lintShortScenarioFiles(arg?.root, ports, { checkCriteriaBindings: input?.options?.['--local'] === true }),
           ],
           compareScreen,
           formatScreenComparison,

@@ -25,7 +25,7 @@ Everything needed to author prompts, Stories, Short JSON scenarios, CLI commands
       "steps": [{"id": "done-1", "op": "main", "input": {"argv": ["done", "1"]}, "checks": {"1": [["result", "/exit_code", "=", 0], ["world", "/kv/tasks/0/done", "=", true]]}},
                 {"id": "missing", "op": "main", "input": {"argv": ["done", "9"]}, "checks": {"2": [["result", "/exit_code", "=", 1], ["calls", "store.save", "=", 0]]}}]}
      ```
-   - **If `program-scenario.v1` JSON is required on disk:** write Short JSON first, then compile in place with `pdd lint --emit-v1 --write` (never `> file` or `node -e` scripts).
+   - **If `program-scenario.v1` JSON is required on disk:** write Short JSON first (omitting `"criteria"`), then run `pdd lint --emit-v1 --write` (never `> file` or `node -e` scripts)—it compiles to canonical `program-scenario.v1` and binds `ac-sha256-...` criterion IDs in place in one command.
 5. **Screen `app-map.json` (visual apps only):** Strict JSON Schema (`"type": "object"`, `properties`, `required`, `"additionalProperties": false`; nullable uses `{"oneOf": [{"type": "string"}, {"type": "null"}]}`, never `["string", "null"]`; no `$ref`/`$defs`/`anyOf`). Sanitizer-safe CSS (`background-color` not `background`, `aria-current="true"` not `aria-pressed`, `display:block` on `<li>` not `list-style`). Match all buttons on a screen by `"value"`:
    ```json
    {"schema_version": "prompt-runtime.app-map.v1", "name": "Game", "initial_screen": "board", "initial_route": null,
