@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-model.prompt.md.
+// Generated from prompts/cli/metrics-model.prompt.md (sha256: 7c663d3744c9f82ba0a6fdffa9c3c04fc77f917ffe5e0567a4c354ddc1dc831b).
 
 export const SKILLS = Object.freeze(['small-change', 'bug', 'feature']);
 export const GATES = Object.freeze(['runtime', 'vectors', 'formal', 'suite', 'review', 'ci']);
@@ -437,7 +437,6 @@ function indexPrStates(rawPrStates, excludedRepos) {
       merged: typeof entry.merged === 'boolean' ? entry.merged : null,
       mergedAtMs: parseTimestampMs(entry.mergedAt, null),
       state: typeof entry.state === 'string' ? entry.state.trim().toUpperCase() : null,
-      isDraft: Boolean(entry.isDraft),
     });
   }
   return map;
@@ -492,15 +491,20 @@ function selectWindowIssues(normalizedRuns, windowDef, nowMs, regIndex) {
       || (run.mergedAtMs !== null && run.mergedAtMs >= windowDef.startMs && run.mergedAtMs <= windowDef.endMs)
       || (run.status === 'running' && nowMs >= windowDef.startMs && nowMs <= windowDef.endMs && run.startMs <= windowDef.endMs);
     if (!inRange) continue;
-    for (const issueNumber of run.issues) {
-      const key = `${run.repoLower}#${issueNumber}`;
+    // Do not retroactively attribute a later merge to an earlier historical --date window.
+    const mergedAfterWindow = run.merged && run.mergedAtMs !== null && run.mergedAtMs > windowDef.endMs;
+    const effective = mergedAfterWindow
+      ? { ...run, merged: false, mwmFlag: false, status: run.rawStatus === 'merged' ? 'ended' : run.rawStatus }
+      : run;
+    for (const issueNumber of effective.issues) {
+      const key = `${effective.repoLower}#${issueNumber}`;
       const prev = byIssue.get(key);
       if (
         !prev
-        || itemRank(run) > itemRank(prev)
-        || (itemRank(run) === itemRank(prev) && run.atMs >= prev.atMs)
+        || itemRank(effective) > itemRank(prev)
+        || (itemRank(effective) === itemRank(prev) && effective.atMs >= prev.atMs)
       ) {
-        const candidate = { ...run, issue: issueNumber };
+        const candidate = { ...effective, issue: issueNumber };
         const reg = resolveItemRegression(candidate, regIndex);
         byIssue.set(key, { ...candidate, ...reg });
       }
@@ -561,7 +565,7 @@ function resolveWindowPool(repoLowers, windowDef, items, openMap, openNumbersMap
   return { pool: totalPool, poolDisplay: String(totalPool) };
 }
 
-function summarizeOverviewRow(key, label, windowDef, items, repoLowers, openMap, openNumbersMap, closedIssues) {
+function summarizeOverviewRow(key, label, windowDef, items, repoLowers, openMap, openNumbersMap, closedIssues, regressionsComplete = true) {
   const { open, openDisplay } = resolveOpenCount(repoLowers, openMap, openNumbersMap);
   const { pool, poolDisplay } = resolveWindowPool(repoLowers, windowDef, items, openMap, openNumbersMap, closedIssues);
   const taken = items.length;
@@ -572,7 +576,15 @@ function summarizeOverviewRow(key, label, windowDef, items, repoLowers, openMap,
   const mwm = items.filter(i => i.mwmFlag).length;
   const { display: mwmDisplay } = formatRatioDisplay(mwm, taken);
   const regressions = mergedItems.filter(i => i.hasRegression).length;
-  const { pct: regressionsPct, display: regressionsDisplay } = formatRatioDisplay(regressions, merged);
+  let { pct: regressionsPct, display: regressionsDisplay } = formatRatioDisplay(regressions, merged);
+  if (!regressionsComplete && merged > 0) {
+    if (regressions === 0) {
+      regressionsPct = null;
+      regressionsDisplay = '?';
+    } else {
+      regressionsDisplay = `${regressions}+ (${regressionsPct.toFixed(1)}%+)`;
+    }
+  }
   return {
     key,
     label,
@@ -667,11 +679,10 @@ function summarizePromptChecks(prItems) {
   const promptPrs = promptItems.length;
   const checks = {};
   for (const g of PROMPT_CHECKS) {
-    const hasNumericCounts = promptItems.some(item => (item.gateCounts?.[g]?.total ?? 0) > 0);
     let passed = 0;
     let total = 0;
     for (const item of promptItems) {
-      if (hasNumericCounts && item.gateCounts?.[g]?.total > 0) {
+      if (item.gateCounts?.[g]?.total > 0) {
         passed += item.gateCounts[g].passed;
         total += item.gateCounts[g].total;
       } else if (item.gates[g] === 'pass') {
@@ -689,7 +700,7 @@ function summarizePromptChecks(prItems) {
   return { promptPrs, runtime: checks.runtime, vectors: checks.vectors, formal: checks.formal, summary };
 }
 
-function summarizeRegressionsBreakdown(mergedItems) {
+function summarizeRegressionsBreakdown(mergedItems, regressionsComplete = true) {
   const regressed = mergedItems.filter(i => i.hasRegression);
   const total = regressed.length;
   const reopened = regressed.filter(i => i.hasReopened).length;
@@ -702,11 +713,12 @@ function summarizeRegressionsBreakdown(mergedItems) {
   const regressionIssueCount = regressionIssues.length;
   const issueLabel = regressionIssueCount === 1 ? 'regression issue' : 'regression issues';
   const issueList = regressionIssues.length > 0 ? ` (${regressionIssues.map(n => `#${n}`).join(', ')})` : '';
-  const summary = `Regressions (${total}): ${reopened} reopened · ${reverted} reverted · ${regressionIssueCount} ${issueLabel}${issueList}`;
-  return { total, reopened, reverted, regressionIssueCount, regressionIssues, summary };
+  const suffix = regressionsComplete ? '' : ' (scan incomplete)';
+  const summary = `Regressions (${total}): ${reopened} reopened · ${reverted} reverted · ${regressionIssueCount} ${issueLabel}${issueList}${suffix}`;
+  return { total, reopened, reverted, regressionIssueCount, regressionIssues, complete: regressionsComplete, summary };
 }
 
-function summarizeStages(windowDef, items) {
+function summarizeStages(windowDef, items, regressionsComplete = true) {
   const gates = {};
   for (const gate of GATES) {
     let passed = 0;
@@ -739,7 +751,7 @@ function summarizeStages(windowDef, items) {
   const unmergedPrs = summarizeUnmergedPrs(items);
   const prGates = summarizePrGates(prItems);
   const promptChecks = summarizePromptChecks(prItems);
-  const regressions = summarizeRegressionsBreakdown(mergedItems);
+  const regressions = summarizeRegressionsBreakdown(mergedItems, regressionsComplete);
 
   const bucketOrder = [
     'running',
@@ -918,14 +930,15 @@ export function calculateAutopilotMetrics(input = {}) {
     let status = rawStatus;
     let mergedAtMs = null;
     let prStateCode = null;
-    let prIsDraft = false;
 
     if (prState) {
       prStateCode = prState.state;
-      prIsDraft = prState.isDraft;
-      const reconciledMerged = prState.merged === true
+      const mergedNotInFuture = prState.mergedAtMs === null || prState.mergedAtMs <= nowMs;
+      const reconciledMerged = mergedNotInFuture && (
+        prState.merged === true
         || prState.state === 'MERGED'
-        || (prState.mergedAtMs !== null && prState.mergedAtMs <= nowMs);
+        || prState.mergedAtMs !== null
+      );
       if (reconciledMerged) {
         merged = true;
         mwmFlag = true;
@@ -972,13 +985,13 @@ export function calculateAutopilotMetrics(input = {}) {
       startMs,
       atMs,
       mergedAtMs,
+      rawStatus,
       status,
       merged,
       mwmFlag,
       pr: prNumber,
       prCreated,
       prStateCode,
-      prIsDraft,
       gates,
       gateCounts,
       promptChanged: raw.promptChanged === true,
@@ -1030,9 +1043,10 @@ export function calculateAutopilotMetrics(input = {}) {
     windowItemsMap.set(w.key, selectWindowIssues(normalizedRuns, w, nowMs, regIndex));
   }
 
+  const regressionsComplete = opts.regressionsComplete !== false;
   const { open: openNow, openDisplay: openNowDisplay } = resolveOpenCount(sortedRepoLowers, openMap, openNumbersMap);
   const overviewWindows = windowDefs.map(w =>
-    summarizeOverviewRow(w.key, w.label, w, windowItemsMap.get(w.key), sortedRepoLowers, openMap, openNumbersMap, closedIssues),
+    summarizeOverviewRow(w.key, w.label, w, windowItemsMap.get(w.key), sortedRepoLowers, openMap, openNumbersMap, closedIssues, regressionsComplete),
   );
   const target = buildTargetRow(recordingCfg.targets, targetRefMs, timezone);
 
@@ -1049,15 +1063,16 @@ export function calculateAutopilotMetrics(input = {}) {
         openMap,
         openNumbersMap,
         closedIssues,
+        regressionsComplete,
       ),
     );
-    const total = summarizeOverviewRow('total', 'Total', w, items, sortedRepoLowers, openMap, openNumbersMap, closedIssues);
+    const total = summarizeOverviewRow('total', 'Total', w, items, sortedRepoLowers, openMap, openNumbersMap, closedIssues, regressionsComplete);
     return { key: w.key, label: w.label, rows, total };
   });
 
   const primaryWindow = parsedDate ? windowDefs[0] : windowDefs[1];
   const primaryItems = windowItemsMap.get(primaryWindow.key);
-  const stages = summarizeStages(primaryWindow, primaryItems);
+  const stages = summarizeStages(primaryWindow, primaryItems, regressionsComplete);
   const skills = summarizeSkills(primaryWindow, primaryItems);
 
   const effectiveEnabled = repoFilterLower
@@ -1076,6 +1091,7 @@ export function calculateAutopilotMetrics(input = {}) {
     scopeLabel,
     openNow,
     openNowDisplay,
+    regressionsComplete,
     recording: {
       enabled: effectiveEnabled,
       globalEnabled: recordingCfg.enabled,
@@ -1211,13 +1227,20 @@ export function renderMetricsHtml(report) {
   const s = report.stages;
   const sk = report.skills;
 
+  const convMinPct = target?.convMinPct ?? 90;
+  const formatConvCell = w => {
+    const text = escapeHtml(w.mergedDisplay);
+    if (w.convPct === null) return text;
+    const cls = w.convPct >= convMinPct ? 'pill-good' : 'pill-warn';
+    return `<span class="pill ${cls}">${text}</span>`;
+  };
   const unifiedRowsHtml = [
     ...report.overview.windows.map(w => `<tr>
       <td><strong>${escapeHtml(w.label)}</strong></td>
       <td class="num">${escapeHtml(w.poolDisplay)}</td>
       <td class="num">${w.taken}</td>
       <td class="num">${w.prCreated}</td>
-      <td class="num"><span class="pill pill-good">${escapeHtml(w.mergedDisplay)}</span></td>
+      <td class="num">${formatConvCell(w)}</td>
       <td class="num">${escapeHtml(w.regressionsDisplay)}</td>
     </tr>`),
     ...(target ? [`<tr class="target-row">

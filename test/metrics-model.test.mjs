@@ -202,6 +202,72 @@ test('v2 scorecard reconciles Pool, E2E, Prompt Checks, Regressions, turned-off 
   assert.equal(colliding.scopeLabel, 'orgA/app + cli + orgB/app');
 });
 
+test('handles incomplete regression scans honestly, non-retroactive historical --date merges, and HTML conversion pill status (#3530)', () => {
+  // 1. Incomplete regression scan: 0 detected on merged > 0 displays "?" and "(scan incomplete)"; >0 displays "1+ (50.0%+)"
+  const incompleteZero = calculateAutopilotMetrics({
+    now: '2026-11-18T18:00:00Z',
+    repos: ['promptdriven/pdd'],
+    openIssues: { 'promptdriven/pdd': 2 },
+    regressionsComplete: false,
+    runs: [
+      { repo: 'promptdriven/pdd', issue: 1, at: '2026-11-18T12:00:00Z', status: 'merged', pr: 11 },
+    ],
+  });
+  assert.equal(incompleteZero.regressionsComplete, false);
+  assert.equal(incompleteZero.overview.windows[0].regressionsDisplay, '?');
+  assert.equal(incompleteZero.overview.windows[0].regressionsPct, null);
+  assert.match(incompleteZero.stages.regressions.summary, /\(scan incomplete\)$/);
+
+  const incompletePartial = calculateAutopilotMetrics({
+    now: '2026-11-18T18:00:00Z',
+    repos: ['promptdriven/pdd'],
+    openIssues: { 'promptdriven/pdd': 2 },
+    regressionsComplete: false,
+    regressions: [{ repo: 'promptdriven/pdd', pr: 11, issue: 1, reverted: true }],
+    runs: [
+      { repo: 'promptdriven/pdd', issue: 1, at: '2026-11-18T12:00:00Z', status: 'merged', pr: 11 },
+      { repo: 'promptdriven/pdd', issue: 2, at: '2026-11-18T13:00:00Z', status: 'merged', pr: 12 },
+    ],
+  });
+  assert.equal(incompletePartial.overview.windows[0].regressionsDisplay, '1+ (50.0%+)');
+
+  // 2. Historical --date does not retroactively count a merge from 2 days later, and future mergedAt > now is rejected
+  const runs = [
+    { repo: 'promptdriven/pdd', issue: 10, at: '2026-11-16T15:00:00Z', status: 'would-merge', pr: 110 },
+    { repo: 'promptdriven/pdd', issue: 11, at: '2026-11-18T10:00:00Z', status: 'would-merge', pr: 111 },
+  ];
+  const prStates = [
+    { repo: 'promptdriven/pdd', pr: 110, merged: true, mergedAt: '2026-11-18T12:00:00Z', state: 'MERGED' },
+    { repo: 'promptdriven/pdd', pr: 111, merged: true, mergedAt: '2026-11-20T12:00:00Z', state: 'MERGED' },
+  ];
+  const day16 = calculateAutopilotMetrics({
+    now: '2026-11-18T18:00:00Z',
+    date: '2026-11-16',
+    timezone: 'UTC',
+    repos: ['promptdriven/pdd'],
+    runs,
+    prStates,
+  });
+  assert.equal(day16.overview.windows[0].taken, 1);
+  assert.equal(day16.overview.windows[0].prCreated, 1);
+  assert.equal(day16.overview.windows[0].merged, 0, 'PR merged on Nov 18 must not count as merged on Nov 16');
+
+  const day18 = calculateAutopilotMetrics({
+    now: '2026-11-18T18:00:00Z',
+    date: '2026-11-18',
+    timezone: 'UTC',
+    repos: ['promptdriven/pdd'],
+    runs,
+    prStates,
+  });
+  assert.equal(day18.overview.windows[0].merged, 1, 'PR #110 merged on Nov 18 counts; future PR #111 (> now) does not');
+
+  // 3. HTML conversion pill uses pill-warn below target and no pill on 0 (n/a)
+  const lowConvHtml = renderMetricsHtml(day16);
+  assert.match(lowConvHtml, /pill-warn">0 \(0\.0%\)/);
+  assert.doesNotMatch(lowConvHtml, /pill-good">0 \(0\.0%\)/);
+});
+
 test('normalizeSkill, isMetricsEnabled, and input validation errors', () => {
   assert.equal(normalizeSkill('pdd-small-change'), 'small-change');
   assert.equal(normalizeSkill('BUG'), 'bug');

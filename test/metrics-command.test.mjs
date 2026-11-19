@@ -220,13 +220,15 @@ test('CLI HTML dashboard output, on/off switch via runPdd, offline Open fallback
     assert.match(readFileSync(htmlFile, 'utf8'), /PDD Autopilot Metrics/);
   }
 
-  // Real pdd CLI process: off -> check -> on, plus offline zero-gh safety
+  // Real pdd CLI process: off -> check -> on, plus offline zero-gh safety (strip tokens and /usr/bin so Linux CI gh never leaks)
   const env = {
     ...process.env,
     HOME: dir,
     PDD_STATE_DIR: stateDir,
     PDD_NO_OPEN: '1',
-    PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    GH_TOKEN: '',
+    GITHUB_TOKEN: '',
+    PATH: dirname(process.execPath),
   };
 
   const offRes = spawnSync(process.execPath, [pddBin, 'metrics', 'off'], { cwd: dir, env, encoding: 'utf8' });
@@ -322,29 +324,23 @@ test('CLI reuses regressionScan across auto + observe-merged PRs and excludes tu
             r0: {
               issues: { totalCount: 14, nodes: [{ number: 302 }] },
               closedIssues: { nodes: [{ number: 301, closedAt: mergedAt }] },
-              pr_401: { number: 401, state: 'MERGED', isDraft: false, merged: true, mergedAt },
-              pr_402: { number: 402, state: 'OPEN', isDraft: false, merged: false, mergedAt: null },
+              pr_401: { number: 401, state: 'MERGED', merged: true, mergedAt, title: 'Observe fix', mergeCommit: { oid: m401 } },
+              pr_402: { number: 402, state: 'OPEN', merged: false, mergedAt: null, title: 'Open PR', mergeCommit: null },
             },
             r1: {
               issues: { totalCount: 8, nodes: [{ number: 13 }] },
               closedIssues: { nodes: [{ number: 12, closedAt: mergedAt }] },
-              pr_22: { number: 22, state: 'MERGED', isDraft: false, merged: true, mergedAt },
+              pr_22: { number: 22, state: 'MERGED', merged: true, mergedAt, title: 'Pocket feature', mergeCommit: { oid: m22 } },
             },
           },
         }),
       };
     }
 
-    // Real regressionScan REST calls
+    // Real regressionScan REST calls (with includeCi: false + boundedPulls: true + pre-resolved GraphQL mergeCommit)
     const endpoint = args[4];
-    if (endpoint === 'repos/promptdriven/pdd/pulls/401') return httpOk({ number: 401, title: 'Observe fix', state: 'closed', merged_at: mergedAt, merge_commit_sha: m401 });
-    if (endpoint === `repos/promptdriven/pdd/commits/${m401}`) return httpOk({ sha: m401, parents: [{ sha: p401 }] });
-    if (endpoint === `repos/promptdriven/pdd/commits/${m401}/check-runs?filter=all&per_page=100`) return httpOk({ check_runs: [] });
-    if (endpoint === `repos/promptdriven/pdd/commits/${m401}/statuses?per_page=100`) return httpOk([]);
-    if (endpoint === `repos/promptdriven/pdd/commits/${p401}/check-runs?filter=all&per_page=100`) return httpOk({ check_runs: [] });
-    if (endpoint === `repos/promptdriven/pdd/commits/${p401}/statuses?per_page=100`) return httpOk([]);
     if (endpoint.startsWith('repos/promptdriven/pdd/issues?state=all')) return httpOk([]);
-    if (endpoint === 'repos/promptdriven/pdd/pulls?state=all&per_page=100') return httpOk([]);
+    if (endpoint.startsWith('repos/promptdriven/pdd/pulls?state=all&sort=updated&direction=desc')) return httpOk([]);
     if (endpoint.startsWith('repos/promptdriven/pdd/commits?since=')) {
       return httpOk([
         { sha: revSha, html_url: `https://github.com/promptdriven/pdd/commit/${revSha}`, commit: { message: `Revert "Observe fix"\n\nThis reverts commit ${m401}.`, committer: { date: laterAt } } },
@@ -352,21 +348,15 @@ test('CLI reuses regressionScan across auto + observe-merged PRs and excludes tu
     }
     if (endpoint.startsWith('repos/promptdriven/pdd/issues/')) return httpOk([]);
 
-    if (endpoint === 'repos/promptdriven/pocket/pulls/22') return httpOk({ number: 22, title: 'Pocket feature', state: 'closed', merged_at: mergedAt, merge_commit_sha: m22 });
-    if (endpoint === `repos/promptdriven/pocket/commits/${m22}`) return httpOk({ sha: m22, parents: [{ sha: p22 }] });
-    if (endpoint === `repos/promptdriven/pocket/commits/${m22}/check-runs?filter=all&per_page=100`) return httpOk({ check_runs: [] });
-    if (endpoint === `repos/promptdriven/pocket/commits/${m22}/statuses?per_page=100`) return httpOk([]);
-    if (endpoint === `repos/promptdriven/pocket/commits/${p22}/check-runs?filter=all&per_page=100`) return httpOk({ check_runs: [] });
-    if (endpoint === `repos/promptdriven/pocket/commits/${p22}/statuses?per_page=100`) return httpOk([]);
     if (endpoint.startsWith('repos/promptdriven/pocket/issues?state=all')) {
       return httpOk([
         { number: 3528, title: 'Pocket regression', body: 'Follow-up for #22', created_at: laterAt, labels: [{ name: 'regression' }], html_url: 'https://github.com/promptdriven/pocket/issues/3528', repository_url: 'https://api.github.com/repos/promptdriven/pocket' },
       ]);
     }
-    if (endpoint === 'repos/promptdriven/pocket/pulls?state=all&per_page=100') return httpOk([]);
+    if (endpoint.startsWith('repos/promptdriven/pocket/pulls?state=all&sort=updated&direction=desc')) return httpOk([]);
     if (endpoint.startsWith('repos/promptdriven/pocket/commits?since=')) return httpOk([]);
     if (endpoint.startsWith('repos/promptdriven/pocket/issues/')) return httpOk([]);
-    return httpOk([]);
+    assert.fail(`Unexpected REST call (GraphQL mergeCommit + includeCi:false should avoid pulls/{pr} & CI calls): ${endpoint}`);
   };
 
   // Unified metrics excludes sandbox from GraphQL AND detects both auto (#22) and observe (#401) regressions
@@ -402,4 +392,109 @@ test('CLI reuses regressionScan across auto + observe-merged PRs and excludes tu
     assert.match(out.text, /Recording: OFF/);
     assert.match(out.text, /Week \(Mon-Sun\)\s+6\s+1\s+1\s+1 \(100\.0%\)/);
   }
+});
+
+test('CLI paginates GraphQL open/closed issues in UPDATED_AT DESC order, survives partial GraphQL errors, and surfaces incomplete regression scans honestly (#3530)', async t => {
+  const { dir, stateDir } = makeSandbox(t);
+  const nowMs = Date.parse('2026-11-19T18:00:00Z');
+  writeFileSync(join(stateDir, 'autopilot', 'pdd.json'), JSON.stringify({ repo: 'promptdriven/pdd', enabled: true, mode: 'observe' }));
+  recordAutopilotMetric({
+    repo: 'promptdriven/pdd',
+    issue: 502,
+    skill: 'small-change',
+    startedAt: nowMs - 3600_000,
+    at: nowMs - 1800_000,
+    status: 'would-merge',
+    pr: 602,
+  }, { stateDir, now: () => nowMs });
+  recordAutopilotMetric({
+    repo: 'promptdriven/pdd',
+    issue: 503,
+    skill: 'bug',
+    startedAt: nowMs - 3000_000,
+    at: nowMs - 1200_000,
+    status: 'ended',
+    pr: 99999, // simulates a deleted/missing PR causing a partial GraphQL error
+  }, { stateDir, now: () => nowMs });
+
+  const queries = [];
+  const fakeExecFile = async (cmd, args) => {
+    assert.equal(cmd, 'gh');
+    assert.equal(args[1], 'graphql');
+    const q = args[3];
+    queries.push(q);
+    if (q.includes('after: "open_c1"')) {
+      return {
+        stdout: JSON.stringify({
+          data: {
+            repo: {
+              issues: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{ number: 503 }], // taken open issue lives on page 2 -> must NOT double count!
+              },
+            },
+          },
+        }),
+      };
+    }
+    if (q.includes('after: "closed_c1"')) {
+      return {
+        stdout: JSON.stringify({
+          data: {
+            repo: {
+              issues: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{ number: 504, closedAt: '2026-11-19T15:00:00Z' }],
+              },
+            },
+          },
+        }),
+      };
+    }
+    // Initial batched call returns valid partial data alongside a GraphQL error and non-zero exit code!
+    const err = new Error('gh api graphql partial error');
+    err.code = 1;
+    err.stdout = JSON.stringify({
+      data: {
+        r0: {
+          issues: {
+            totalCount: 2,
+            pageInfo: { hasNextPage: true, endCursor: 'open_c1' },
+            nodes: [{ number: 501 }],
+          },
+          closedIssues: {
+            pageInfo: { hasNextPage: true, endCursor: 'closed_c1' },
+            nodes: [{ number: 502, closedAt: '2026-11-19T17:40:00Z' }],
+          },
+          pr_602: { number: 602, state: 'MERGED', merged: true, mergedAt: '2026-11-19T17:40:00Z', title: 'Fix 502', mergeCommit: { oid: 'c'.repeat(40) } },
+          pr_99999: null,
+        },
+      },
+      errors: [{ type: 'NOT_FOUND', path: ['r0', 'pr_99999'], message: 'Could not resolve to a PullRequest' }],
+    });
+    throw err;
+  };
+
+  const incompleteScanner = async opts => {
+    assert.equal(opts.includeCi, false);
+    assert.equal(opts.boundedPulls, true);
+    assert.equal(opts.candidates[0].mergeCommit, 'c'.repeat(40));
+    return { merges: [], counts: { ok: 0, suspect: 0, proven: 0 }, complete: false, errors: ['Rate limited'] };
+  };
+
+  const out = capture(), err = capture();
+  const code = await runMetrics({
+    argv: ['--timezone', 'UTC'],
+    cwd: dir,
+    stdout: out,
+    stderr: err,
+    ports: { stateDir, now: () => nowMs, execFile: fakeExecFile, regressionScan: incompleteScanner },
+  });
+  assert.equal(code, 0, err.text);
+  assert.equal(queries.length, 3, 'Initial batched query + open page 2 + closed page 2');
+  assert.match(queries[0], /orderBy: \{ field: UPDATED_AT, direction: DESC \}/);
+  // Open now = 2 ({501, 503}), Closed in window = {502, 504}, Taken = {502, 503} => Pool union = {501, 502, 503, 504} = 4!
+  assert.match(out.text, /Open now: 2/);
+  assert.match(out.text, /Week \(Mon-Sun\)\s+4\s+2\s+2\s+1 \(50\.0%\)\s+\?/);
+  assert.match(out.text, /- Regressions \(0\): 0 reopened · 0 reverted · 0 regression issues \(scan incomplete\)/);
 });

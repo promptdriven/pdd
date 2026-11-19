@@ -1122,9 +1122,9 @@ test('regressionScan replays autopilot-regressions-scan.json covering auto, obse
   }
 });
 
-test('regressionScan proves explicit breaking-blame phrases and filters explicit prs (#3530)', async t => {
+test('regressionScan proves explicit breaking-blame phrases (including "PR #N") and filters explicit prs (#3530)', async t => {
   const since = encodeURIComponent(new Date(mergedAt).toISOString());
-  for (const phrase of ['Regressed by #12', 'Regression from #12', 'Regression in #12', 'Broken by #12', 'Caused by #12', 'Introduced by #12']) {
+  for (const phrase of ['Regressed by #12', 'Regressed by PR #12', 'Regression from #12', 'Regression in #12', 'Broken by #12', 'Broken by PR #12', 'Caused by #12', 'Introduced by #12']) {
     const f = fixture(t);
     f.rows[0] = { at: Date.parse(mergedAt), outcome: 'would-merge', pr: 12, issue: 7, repo };
     f.routes.set(`issues?state=all&since=${since}&per_page=100`, [
@@ -1185,4 +1185,99 @@ test('checkPostMergeRegressions scans GitHub-merged would-merge PRs and skips un
   assert.equal(res.state.merges['602'].unmerged, true);
   assert.equal(res.newlyDetected.length, 1);
   assert.equal(res.newlyDetected[0].pr, 601);
+});
+
+test('regressionScan with includeCi: false + boundedPulls: true uses pre-resolved metadata, skips CI/pull GETs, stops pull pagination at since, and flags invalid row.repo (#3530)', async t => {
+  const root = fs.mkdtempSync(join(tmpdir(), 'pdd-reg-bounded-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(join(root, 'history.jsonl'), `${JSON.stringify({ outcome: 'ended', pr: 99, repo: 'not a valid repo' })}\n`);
+  const candidates = Array.from({ length: 10 }, (_, idx) => ({
+    pr: 500 + idx,
+    issue: 200 + idx,
+    outcome: 'would-merge',
+    mergeCommit: `${String(idx).padStart(40, 'a')}`,
+    mergedAt: '2026-11-17T12:00:00.000Z',
+    title: `Merged PR ${500 + idx}`,
+  }));
+  const endpoints = [];
+  const okJson = (body, linkHeader = '') => ({
+    code: 0,
+    stdout: `HTTP/2 200 OK\r\n${linkHeader ? `Link: ${linkHeader}\r\n` : ''}\r\n${JSON.stringify(body)}`,
+    stderr: '',
+  });
+  const gh = async args => {
+    const key = args[4].slice(`repos/${repo}/`.length);
+    endpoints.push(key);
+    if (key.startsWith('issues?state=all')) return okJson([]);
+    if (key === 'pulls?state=all&sort=updated&direction=desc&per_page=100') {
+      // Descending page whose last updated_at <= since MUST stop pagination even when a next link exists!
+      return okJson([
+        { number: 600, title: 'Recent PR', created_at: '2026-11-18T10:00:00.000Z', updated_at: '2026-11-18T10:00:00.000Z', merged_at: null, body: '' },
+        { number: 499, title: 'Old PR', created_at: '2026-11-10T10:00:00.000Z', updated_at: '2026-11-10T10:00:00.000Z', merged_at: null, body: '' },
+      ], `<https://api.github.com/repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100&page=2>; rel="next"`);
+    }
+    if (key.startsWith('commits?since=')) return okJson([]);
+    if (key.includes('/timeline?')) return okJson([]);
+    assert.fail(`Unexpected endpoint (should not fetch pulls/{pr}, commits/{sha}, CI, or page 2): ${key}`);
+  };
+  const scan = await regressionScan({
+    root,
+    repo,
+    candidates,
+    includeCi: false,
+    boundedPulls: true,
+    maxRequests: 40,
+    fs,
+    gh,
+    now: () => Date.parse('2026-11-19T00:00:00.000Z'),
+  });
+  assert.equal(scan.merges.length, 10);
+  assert.equal(scan.errors.length, 1); // invalid row.repo on non-merged row reported
+  assert.match(scan.errors[0], /no valid repository/);
+  assert.ok(!endpoints.some(e => e.startsWith('pulls/5')));
+  assert.ok(!endpoints.some(e => e.includes('check-runs') || e.includes('statuses')));
+  assert.ok(!endpoints.some(e => e.includes('page=2')));
+});
+
+test('checkPostMergeRegressions does not re-poll closed-unmerged PRs on subsequent ticks (#3530)', async t => {
+  const root = fs.mkdtempSync(join(tmpdir(), 'pdd-post-merge-closed-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const localAt = '2026-11-18T10:00:00.000Z';
+  const localNow = Date.parse('2026-11-18T12:00:00.000Z');
+  fs.writeFileSync(join(root, 'history.jsonl'), `${JSON.stringify({ at: Date.parse(localAt), issue: 701, pr: 801, outcome: 'would-merge' })}\n`);
+  let pullReads = 0;
+  const gh = async args => {
+    const key = args[4].slice(`repos/${repo}/`.length);
+    if (key === 'pulls/801') {
+      pullReads += 1;
+      return { code: 0, stdout: `HTTP/2 200 OK\r\n\r\n${JSON.stringify({ number: 801, title: 'Abandoned PR', state: 'closed', merged: false, merged_at: null, merge_commit_sha: null })}`, stderr: '' };
+    }
+    assert.fail(`Unexpected endpoint: ${key}`);
+  };
+  const tick1 = await checkPostMergeRegressions({ root, repo, fs, gh, now: () => localNow, maxRequests: 40, minRecheckMs: 0 });
+  assert.equal(pullReads, 1);
+  assert.equal(tick1.state.merges['801'].closedUnmerged, true);
+
+  const tick2 = await checkPostMergeRegressions({ root, repo, fs, gh, now: () => localNow + 3600_000, maxRequests: 40, minRecheckMs: 0 });
+  assert.equal(pullReads, 1, 'Closed-unmerged PR must not be re-polled on later ticks');
+  assert.equal(tick2.requests, 0);
+});
+
+test('regressionScan follows GitHub /repositories/<id>/<same-endpoint> Link pagination and rejects mismatched subpaths (#3530)', async t => {
+  const f = fixture(t);
+  const issueKey = [...f.routes.keys()].find(k => k.startsWith('issues?'));
+  // Real GitHub REST responses return /repositories/<numeric-id>/issues?...&after=...&page=2 in Link headers.
+  f.links.set(issueKey, `<https://api.github.com/repositories/988545824/${issueKey}&after=cursor123&page=2>; rel="next"`);
+  f.routes.set(`${issueKey}&after=cursor123&page=2`, [newIssue('Regressed by PR #12')]);
+  const r = await f.scan();
+  assert.equal(r.complete, true);
+  assert.equal(r.merges[0].classification, 'proven');
+  assert.ok(r.merges[0].signals.some(s => s.kind === 'reference' && s.level === 'proven'));
+
+  // A /repositories/<id>/<different-endpoint> Link must still be rejected.
+  const fBad = fixture(t);
+  const badKey = [...fBad.routes.keys()].find(k => k.startsWith('issues?'));
+  fBad.links.set(badKey, '<https://api.github.com/repositories/988545824/secrets?page=2>; rel="next"');
+  const rBad = await fBad.scan();
+  assert.equal(rBad.complete, false);
 });

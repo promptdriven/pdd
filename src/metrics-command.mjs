@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-command.prompt.md.
+// Generated from prompts/cli/metrics-command.prompt.md (sha256: 6ae953e2977fe643db4b2d07d7353f94388a3cd07b6b5d6cf17307c61d99106c).
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -25,6 +25,7 @@ const VALUE_FLAGS = new Set(['--repo', '--date', '--timezone', '--file']);
 const BOOL_FLAGS = new Set(['--repos', '--json', '--html']);
 const DAY_MS = 86_400_000;
 const PR_ALIAS_CHUNK = 40;
+const MAX_ISSUE_PAGES = 10;
 
 function parseMetricsArgv(argv = []) {
   const words = Array.isArray(argv) ? argv.map(String) : [];
@@ -83,17 +84,33 @@ function parseMetricsArgv(argv = []) {
   return { subcommand, options };
 }
 
-/** Conservative earliest UTC timestamp covering all active windows across any IANA timezone. */
-function computeWindowFetchSinceIso(nowMs, dateOption) {
+/** Conservative UTC bounds covering active windows across any IANA timezone. */
+function computeWindowBounds(nowMs, dateOption) {
   if (typeof dateOption === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateOption)) {
     const baseMs = Date.parse(`${dateOption}T00:00:00Z`);
-    if (Number.isFinite(baseMs)) return new Date(baseMs - DAY_MS).toISOString();
+    if (Number.isFinite(baseMs)) {
+      const sinceMs = baseMs - DAY_MS;
+      return { sinceIso: new Date(sinceMs).toISOString(), sinceMs, untilMs: baseMs + 2 * DAY_MS };
+    }
   }
-  return new Date(nowMs - 8 * DAY_MS).toISOString();
+  const sinceMs = nowMs - 8 * DAY_MS;
+  return { sinceIso: new Date(sinceMs).toISOString(), sinceMs, untilMs: nowMs };
+}
+
+/** Return true when a run's activity, merge time, or running state overlaps `[sinceMs, untilMs]`. */
+function isRunInBounds(run, sinceMs, untilMs, mergedAtMs = NaN) {
+  const atMs = Date.parse(run.at ?? run.startedAt ?? '');
+  if (Number.isFinite(atMs) && atMs >= sinceMs - DAY_MS && atMs <= untilMs) return true;
+  if (Number.isFinite(mergedAtMs) && mergedAtMs >= sinceMs - DAY_MS && mergedAtMs <= untilMs) return true;
+  if (run.status === 'running') {
+    const startMs = Date.parse(run.startedAt ?? run.at ?? '');
+    if (Number.isFinite(startMs) && startMs <= untilMs) return true;
+  }
+  return false;
 }
 
 /** Collect distinct PR numbers per target repo from active-window runs. */
-function collectActivePrsByRepo(runs, targetRepos, sinceMs) {
+function collectActivePrsByRepo(runs, targetRepos, sinceMs, untilMs) {
   const allowed = new Set(targetRepos.map(r => r.toLowerCase()));
   const byRepo = new Map(targetRepos.map(r => [r.toLowerCase(), new Set()]));
   for (const run of Array.isArray(runs) ? runs : []) {
@@ -101,8 +118,8 @@ function collectActivePrsByRepo(runs, targetRepos, sinceMs) {
     const lower = run.repo.toLowerCase();
     if (!allowed.has(lower)) continue;
     if (!Number.isSafeInteger(run.pr) || run.pr <= 0) continue;
-    const atMs = Date.parse(run.at ?? run.startedAt ?? '');
-    if (run.status === 'running' || (Number.isFinite(atMs) && atMs >= sinceMs - DAY_MS)) {
+    const mergedAtMs = Date.parse(run.mergedAt ?? '');
+    if (isRunInBounds(run, sinceMs, untilMs, mergedAtMs)) {
       byRepo.get(lower).add(run.pr);
     }
   }
@@ -110,12 +127,59 @@ function collectActivePrsByRepo(runs, targetRepos, sinceMs) {
 }
 
 /**
+ * Execute a GitHub GraphQL query via `gh api graphql`.
+ * Preserves partial `data` when `gh` exits non-zero because of individual GraphQL field errors
+ * (e.g. a deleted PR alias) instead of knocking the entire metrics run offline.
+ */
+async function execGraphql(execFile, query, env) {
+  const parseData = rawStdout => {
+    try {
+      const parsed = JSON.parse(String(rawStdout ?? ''));
+      return parsed?.data && typeof parsed.data === 'object' ? parsed.data : null;
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const reply = await execFile('gh', ['api', 'graphql', '-f', `query=${query}`], {
+      env,
+      encoding: 'utf8',
+      timeout: 15_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return parseData(reply?.stdout);
+  } catch (err) {
+    return parseData(err?.stdout);
+  }
+}
+
+/** Follow bounded `UPDATED_AT DESC` cursor pagination for a repository's open or closed issues. */
+async function paginateRepoIssues({ execFile, env, owner, name, kind, sinceIso, startCursor }) {
+  const collected = [];
+  let cursor = startCursor;
+  for (let page = 0; page < MAX_ISSUE_PAGES && cursor; page++) {
+    const fieldExpr = kind === 'closed'
+      ? `issues(states: CLOSED, filterBy: { since: ${JSON.stringify(sinceIso)} }, first: 100, after: ${JSON.stringify(cursor)}, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number closedAt } }`
+      : `issues(states: OPEN, first: 100, after: ${JSON.stringify(cursor)}, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number } }`;
+    const query = `query { repo: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { ${fieldExpr} } }`;
+    const data = await execGraphql(execFile, query, env);
+    const block = data?.repo?.issues;
+    if (!Array.isArray(block?.nodes) || block.nodes.length === 0) break;
+    collected.push(...block.nodes);
+    cursor = block.pageInfo?.hasNextPage && typeof block.pageInfo?.endCursor === 'string'
+      ? block.pageInfo.endCursor
+      : null;
+  }
+  return collected;
+}
+
+/**
  * Fetch live open issues, closed-in-window issues, and PR merge states for enabled repos
- * in batched GitHub GraphQL requests. Returns offline fallbacks on any error.
+ * in batched GitHub GraphQL requests. Returns offline fallbacks only when GraphQL yields no data.
  */
 async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, env }) {
   if (!Array.isArray(repos) || repos.length === 0) {
-    return { openIssues: {}, openIssueNumbers: [], closedIssues: [], prStates: [], online: true };
+    return { openIssues: {}, openIssueNumbers: [], closedIssues: [], prStates: [], prMetaByKey: new Map(), online: true };
   }
   const aliases = [];
   const fields = [];
@@ -132,13 +196,13 @@ async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, e
       remainingPrChunks.push({ repo, owner, name, prs: prs.slice(offset, offset + PR_ALIAS_CHUNK) });
     }
     const prFields = firstChunk
-      .map(n => `pr_${n}: pullRequest(number: ${n}) { number state isDraft merged mergedAt closedAt }`)
+      .map(n => `pr_${n}: pullRequest(number: ${n}) { number state merged mergedAt title mergeCommit { oid } }`)
       .join(' ');
-    aliases.push({ alias, repo, lower, prs: firstChunk });
+    aliases.push({ alias, repo, owner, name, lower, prs: firstChunk });
     fields.push(
       `${alias}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {`
-      + ` issues(states: OPEN, first: 100) { totalCount nodes { number } }`
-      + ` closedIssues: issues(states: CLOSED, filterBy: { since: ${JSON.stringify(sinceIso)} }, first: 100) { nodes { number closedAt } }`
+      + ` issues(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { totalCount pageInfo { hasNextPage endCursor } nodes { number } }`
+      + ` closedIssues: issues(states: CLOSED, filterBy: { since: ${JSON.stringify(sinceIso)} }, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number closedAt } }`
       + (prFields ? ` ${prFields}` : '')
       + ' }',
     );
@@ -148,82 +212,108 @@ async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, e
   const openIssueNumbers = [];
   const closedIssues = [];
   const prStates = [];
+  const prMetaByKey = new Map();
 
   const collectPrNodes = (repo, prs, repoData) => {
     if (!repoData || typeof repoData !== 'object') return;
+    const lower = repo.toLowerCase();
     for (const pr of prs) {
       const node = repoData[`pr_${pr}`];
       if (!node || typeof node !== 'object') continue;
       const state = typeof node.state === 'string' ? node.state.toUpperCase() : null;
       const mergedAt = typeof node.mergedAt === 'string' && Number.isFinite(Date.parse(node.mergedAt)) ? node.mergedAt : null;
       const merged = node.merged === true || state === 'MERGED' || mergedAt !== null;
-      prStates.push({ repo, pr, merged, mergedAt, state, isDraft: Boolean(node.isDraft) });
+      const mergeCommit = typeof node.mergeCommit?.oid === 'string' && /^[a-f\d]{40}$/i.test(node.mergeCommit.oid)
+        ? node.mergeCommit.oid.toLowerCase()
+        : null;
+      const title = typeof node.title === 'string' ? node.title : null;
+      prStates.push({ repo, pr, merged, mergedAt, state });
+      prMetaByKey.set(`${lower}#${pr}`, { merged, mergedAt, mergeCommit, title });
     }
   };
 
-  try {
-    const reply = await execFile('gh', ['api', 'graphql', '-f', `query=query { ${fields.join(' ')} }`], {
-      env,
-      timeout: 10_000,
-    });
-    const parsed = JSON.parse(String(reply?.stdout ?? ''));
-    if (!parsed?.data || typeof parsed.data !== 'object') {
-      return { openIssues: null, openIssueNumbers: [], closedIssues: [], prStates: null, online: false };
-    }
-    for (const { alias, repo, lower, prs } of aliases) {
-      const repoData = parsed.data[alias];
-      const openBlock = repoData?.issues;
-      const total = openBlock?.totalCount;
-      openIssues[lower] = Number.isInteger(total) && total >= 0 ? total : null;
-      if (Array.isArray(openBlock?.nodes)) {
-        const nums = openBlock.nodes
-          .map(n => n?.number)
-          .filter(n => Number.isSafeInteger(n) && n > 0);
-        openIssueNumbers.push({ repo, issues: nums });
-      }
-      if (Array.isArray(repoData?.closedIssues?.nodes)) {
-        for (const node of repoData.closedIssues.nodes) {
-          if (Number.isSafeInteger(node?.number) && node.number > 0 && typeof node?.closedAt === 'string') {
-            closedIssues.push({ repo, issue: node.number, closedAt: node.closedAt });
-          }
+  const data = await execGraphql(execFile, `query { ${fields.join(' ')} }`, env);
+  if (!data) {
+    return { openIssues: null, openIssueNumbers: [], closedIssues: [], prStates: null, prMetaByKey, online: false };
+  }
+
+  for (const { alias, repo, owner, name, lower, prs } of aliases) {
+    const repoData = data[alias];
+    const openBlock = repoData?.issues;
+    const total = openBlock?.totalCount;
+    openIssues[lower] = Number.isInteger(total) && total >= 0 ? total : null;
+    if (Array.isArray(openBlock?.nodes)) {
+      const nums = openBlock.nodes
+        .map(n => n?.number)
+        .filter(n => Number.isSafeInteger(n) && n > 0);
+      if (openBlock.pageInfo?.hasNextPage && typeof openBlock.pageInfo?.endCursor === 'string') {
+        const extraOpen = await paginateRepoIssues({
+          execFile,
+          env,
+          owner,
+          name,
+          kind: 'open',
+          sinceIso,
+          startCursor: openBlock.pageInfo.endCursor,
+        });
+        for (const node of extraOpen) {
+          if (Number.isSafeInteger(node?.number) && node.number > 0) nums.push(node.number);
         }
       }
-      collectPrNodes(repo, prs, repoData);
+      openIssueNumbers.push({ repo, issues: nums });
     }
-
-    for (const chunk of remainingPrChunks) {
-      const prFields = chunk.prs
-        .map(n => `pr_${n}: pullRequest(number: ${n}) { number state isDraft merged mergedAt closedAt }`)
-        .join(' ');
-      const extraQuery = `query { repo: repository(owner: ${JSON.stringify(chunk.owner)}, name: ${JSON.stringify(chunk.name)}) { ${prFields} } }`;
-      try {
-        const extraReply = await execFile('gh', ['api', 'graphql', '-f', `query=${extraQuery}`], {
+    const closedBlock = repoData?.closedIssues;
+    if (Array.isArray(closedBlock?.nodes)) {
+      const allClosedNodes = [...closedBlock.nodes];
+      if (closedBlock.pageInfo?.hasNextPage && typeof closedBlock.pageInfo?.endCursor === 'string') {
+        const extraClosed = await paginateRepoIssues({
+          execFile,
           env,
-          timeout: 10_000,
+          owner,
+          name,
+          kind: 'closed',
+          sinceIso,
+          startCursor: closedBlock.pageInfo.endCursor,
         });
-        const extraParsed = JSON.parse(String(extraReply?.stdout ?? ''));
-        collectPrNodes(chunk.repo, chunk.prs, extraParsed?.data?.repo);
-      } catch {
-        // Keep already-collected PR states if a supplemental chunk fails.
+        allClosedNodes.push(...extraClosed);
+      }
+      for (const node of allClosedNodes) {
+        if (Number.isSafeInteger(node?.number) && node.number > 0 && typeof node?.closedAt === 'string') {
+          closedIssues.push({ repo, issue: node.number, closedAt: node.closedAt });
+        }
       }
     }
-
-    return {
-      openIssues,
-      openIssueNumbers,
-      closedIssues,
-      prStates: prStates.length > 0 ? prStates : null,
-      online: true,
-    };
-  } catch {
-    return { openIssues: null, openIssueNumbers: [], closedIssues: [], prStates: null, online: false };
+    collectPrNodes(repo, prs, repoData);
   }
+
+  for (const chunk of remainingPrChunks) {
+    const prFields = chunk.prs
+      .map(n => `pr_${n}: pullRequest(number: ${n}) { number state merged mergedAt title mergeCommit { oid } }`)
+      .join(' ');
+    const extraQuery = `query { repo: repository(owner: ${JSON.stringify(chunk.owner)}, name: ${JSON.stringify(chunk.name)}) { ${prFields} } }`;
+    const extraData = await execGraphql(execFile, extraQuery, env);
+    collectPrNodes(chunk.repo, chunk.prs, extraData?.repo);
+  }
+
+  return {
+    openIssues,
+    openIssueNumbers,
+    closedIssues,
+    prStates: prStates.length > 0 ? prStates : null,
+    prMetaByKey,
+    online: true,
+  };
 }
 
 function makeGhPort(execFile, env) {
   return async args => {
     try {
-      const res = await execFile('gh', args, { env, timeout: 10_000 });
+      const res = await execFile('gh', args, {
+        env,
+        encoding: 'utf8',
+        timeout: 30_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
       return { code: 0, stdout: String(res?.stdout ?? ''), stderr: String(res?.stderr ?? '') };
     } catch (err) {
       return {
@@ -248,12 +338,14 @@ async function scanMergedRegressions({
   targetRepos,
   runs,
   prStates,
+  prMetaByKey,
   coreDirs,
   fs,
   gh,
   scanner,
   nowFn,
   sinceMs,
+  untilMs,
 }) {
   const prStateByKey = new Map();
   for (const state of Array.isArray(prStates) ? prStates : []) {
@@ -267,23 +359,32 @@ async function scanMergedRegressions({
     const lower = run.repo.toLowerCase();
     const bucket = candidatesByRepo.get(lower);
     if (!bucket) continue;
-    const atMs = Date.parse(run.at ?? run.startedAt ?? '');
-    const state = prStateByKey.get(`${lower}#${run.pr}`);
-    const mergedAtMs = Date.parse(state?.mergedAt ?? run.mergedAt ?? '');
-    const inPeriod = (Number.isFinite(atMs) && atMs >= sinceMs - DAY_MS)
-      || (Number.isFinite(mergedAtMs) && mergedAtMs >= sinceMs - DAY_MS);
-    if (!inPeriod) continue;
+    const key = `${lower}#${run.pr}`;
+    const state = prStateByKey.get(key);
+    const meta = prMetaByKey?.get(key) ?? null;
+    const mergedAtIso = state?.mergedAt ?? meta?.mergedAt ?? run.mergedAt ?? null;
+    const mergedAtMs = Date.parse(mergedAtIso ?? '');
+    if (!isRunInBounds(run, sinceMs, untilMs, mergedAtMs)) continue;
     const isMerged = state
       ? state.merged === true
       : (run.status === 'merged' || run.prMerged === true || Number.isFinite(mergedAtMs));
     if (!isMerged) continue;
+    if (Number.isFinite(mergedAtMs) && mergedAtMs > untilMs) continue;
     const issues = [
       ...(Number.isSafeInteger(run.issue) && run.issue > 0 ? [run.issue] : []),
       ...(Array.isArray(run.issues) ? run.issues.filter(n => Number.isSafeInteger(n) && n > 0) : []),
     ];
     const prev = bucket.get(run.pr);
     if (!prev) {
-      bucket.set(run.pr, { pr: run.pr, issue: issues[0] ?? null, issues: [...new Set(issues)], outcome: run.status });
+      bucket.set(run.pr, {
+        pr: run.pr,
+        issue: issues[0] ?? null,
+        issues: [...new Set(issues)],
+        outcome: run.status,
+        ...(meta?.mergeCommit ? { mergeCommit: meta.mergeCommit } : {}),
+        ...(mergedAtIso ? { mergedAt: mergedAtIso } : {}),
+        ...(meta?.title ? { title: meta.title } : {}),
+      });
     } else {
       prev.issues = [...new Set([...prev.issues, ...issues])];
       if (prev.issue === null && prev.issues.length > 0) prev.issue = prev.issues[0];
@@ -291,6 +392,7 @@ async function scanMergedRegressions({
   }
 
   const regressions = [];
+  let complete = true;
   for (const repo of targetRepos) {
     const lower = repo.toLowerCase();
     const candidates = [...(candidatesByRepo.get(lower)?.values() ?? [])];
@@ -301,11 +403,14 @@ async function scanMergedRegressions({
         repo,
         candidates,
         prs: candidates.map(c => c.pr),
-        maxRequests: 40,
+        includeCi: false,
+        boundedPulls: true,
+        maxRequests: Math.max(100, candidates.length * 3 + 20),
         fs,
         gh,
         now: nowFn,
       });
+      if (scan?.complete === false) complete = false;
       for (const merge of Array.isArray(scan?.merges) ? scan.merges : []) {
         const signals = Array.isArray(merge?.signals) ? merge.signals : [];
         const reopened = signals.some(s => s?.kind === 'reopened');
@@ -331,10 +436,11 @@ async function scanMergedRegressions({
         }
       }
     } catch {
-      // Offline or unavailable regression scan degrades cleanly to local post-merge flags.
+      // Mark incomplete instead of silently reporting verified 0 (0.0%).
+      complete = false;
     }
   }
-  return regressions;
+  return { regressions, complete };
 }
 
 function defaultOpenBrowser(filePath, platform = process.platform) {
@@ -425,18 +531,18 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
     ? (localState.repos.length > 0 ? localState.repos : [validatedRepo])
     : localState.repos.filter(repo => localState.config.repos[repo.toLowerCase()] !== false);
 
-  const sinceIso = computeWindowFetchSinceIso(nowMs, options['--date'] ?? null);
-  const sinceMs = Date.parse(sinceIso);
+  const { sinceIso, sinceMs, untilMs } = computeWindowBounds(nowMs, options['--date'] ?? null);
   const execFile = ports.execFile ?? defaultExecFile;
 
   let openIssues = ports.openIssues;
   let openIssueNumbers = ports.openIssueNumbers;
   let closedIssues = ports.closedIssues;
   let prStates = ports.prStates;
+  let prMetaByKey = new Map();
   let githubOnline = ports.openIssues === undefined;
 
   if (ports.openIssues === undefined) {
-    const prsByRepo = collectActivePrsByRepo(localState.runs, targetRepos, sinceMs);
+    const prsByRepo = collectActivePrsByRepo(localState.runs, targetRepos, sinceMs, untilMs);
     const fetched = await queryGithubMetricsBatch({
       repos: targetRepos,
       prsByRepo,
@@ -448,25 +554,31 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
     openIssueNumbers = openIssueNumbers ?? fetched.openIssueNumbers;
     closedIssues = closedIssues ?? fetched.closedIssues;
     prStates = prStates ?? fetched.prStates;
+    prMetaByKey = fetched.prMetaByKey ?? new Map();
     githubOnline = fetched.online;
   }
 
   let regressions = ports.regressions;
+  let regressionsComplete = ports.regressionsComplete ?? true;
   if (regressions === undefined) {
     const shouldScan = Boolean(ports.regressionScan || ports.gh || githubOnline);
     if (shouldScan && targetRepos.length > 0) {
       const gh = ports.gh ?? makeGhPort(execFile, effectiveEnv);
-      regressions = await scanMergedRegressions({
+      const scanned = await scanMergedRegressions({
         targetRepos,
         runs: localState.runs,
         prStates,
+        prMetaByKey,
         coreDirs: localState.coreDirs,
         fs,
         gh,
         scanner: ports.regressionScan ?? regressionScan,
         nowFn,
         sinceMs,
+        untilMs,
       });
+      regressions = scanned.regressions;
+      regressionsComplete = scanned.complete;
     } else {
       regressions = [];
     }
@@ -483,6 +595,7 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
       closedIssues,
       prStates,
       regressions,
+      regressionsComplete,
       view,
       byRepo: Boolean(options['--repos']),
       repoFilter: validatedRepo,

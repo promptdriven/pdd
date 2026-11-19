@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-metrics.prompt.md (sha256: d378f46f857827af090d4ed83348135a2fd18168180d179fd5e2dafa2ae9135c).
+// Generated from prompts/cli/autopilot-metrics.prompt.md (sha256: 4bc40988b2947d13b0e95d05dd11c6c0b5c3ba7e4833b557cacd804ecc57b026).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -101,6 +101,12 @@ export function recordAutopilotMetric(entry, options = {}) {
       ...(isPlainObject(entry.gateCounts) ? { gateCounts: entry.gateCounts } : {}),
       reopened: entry.reopened === true,
       reverted: entry.reverted === true,
+      ...(Array.isArray(entry.regressionIssues)
+        ? (() => {
+            const nums = [...new Set(entry.regressionIssues.filter(n => Number.isSafeInteger(n) && n > 0))].sort((a, b) => a - b);
+            return nums.length > 0 ? { regressionIssues: nums } : {};
+          })()
+        : {}),
       durationMinutes: typeof entry.durationMinutes === 'number' && Number.isFinite(entry.durationMinutes) && entry.durationMinutes > 0
         ? Math.round(entry.durationMinutes * 100) / 100
         : null,
@@ -152,8 +158,9 @@ function addIssueAndPrKeys(targetSet, item) {
 function readRegressedIssues(fs, coreDir) {
   const reopened = new Set();
   const reverted = new Set();
+  const regressionIssues = new Map();
   const postMerge = readJsonSafe(fs, join(coreDir, 'post-merge.json'), null);
-  if (!isPlainObject(postMerge)) return { reopened, reverted };
+  if (!isPlainObject(postMerge)) return { reopened, reverted, regressionIssues };
   const entries = Array.isArray(postMerge.items)
     ? postMerge.items
     : Array.isArray(postMerge.merges)
@@ -161,19 +168,32 @@ function readRegressedIssues(fs, coreDir) {
       : isPlainObject(postMerge.merges)
         ? Object.values(postMerge.merges)
         : Object.values(postMerge);
+  const recordRegIssues = (key, nums) => {
+    let bucket = regressionIssues.get(key);
+    if (!bucket) {
+      bucket = new Set();
+      regressionIssues.set(key, bucket);
+    }
+    for (const n of nums) bucket.add(n);
+  };
   for (const item of entries) {
     if (!isPlainObject(item)) continue;
     if (item.reopened === true) addIssueAndPrKeys(reopened, item);
     if (item.reverted === true) addIssueAndPrKeys(reverted, item);
-    if (
-      item.reopened !== true
-      && item.reverted !== true
-      && (item.regression === true || (Array.isArray(item.regressions) && item.regressions.length > 0))
-    ) {
-      addIssueAndPrKeys(reopened, item);
+    if (Array.isArray(item.regressionIssues)) {
+      const nums = item.regressionIssues.filter(n => Number.isSafeInteger(n) && n > 0);
+      if (nums.length > 0) {
+        if (Number.isSafeInteger(item.issue) && item.issue > 0) recordRegIssues(`issue:${item.issue}`, nums);
+        if (Array.isArray(item.issues)) {
+          for (const n of item.issues) {
+            if (Number.isSafeInteger(n) && n > 0) recordRegIssues(`issue:${n}`, nums);
+          }
+        }
+        if (Number.isSafeInteger(item.pr) && item.pr > 0) recordRegIssues(`pr:${item.pr}`, nums);
+      }
     }
   }
-  return { reopened, reverted };
+  return { reopened, reverted, regressionIssues };
 }
 
 function indexLatestEvidenceByIssue(fs, logsDir) {
@@ -212,7 +232,7 @@ function indexLatestEvidenceByIssue(fs, logsDir) {
 function extractPairCount(obj) {
   if (!isPlainObject(obj)) return null;
   const passed = Number(obj.passed ?? obj.pass);
-  const total = Number(obj.total ?? obj.applicable ?? obj.count);
+  const total = Number(obj.total ?? obj.tests ?? obj.applicable ?? obj.count);
   if (Number.isSafeInteger(passed) && Number.isSafeInteger(total) && total > 0 && passed >= 0 && passed <= total) {
     return { passed, total };
   }
@@ -332,6 +352,12 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
     const reverted = row.reverted === true
       || regressed.reverted.has(`issue:${row.issue}`)
       || (Number.isSafeInteger(row.pr) && regressed.reverted.has(`pr:${row.pr}`));
+    const regIssueSet = new Set([
+      ...(Array.isArray(row.regressionIssues) ? row.regressionIssues.filter(n => Number.isSafeInteger(n) && n > 0) : []),
+      ...(regressed.regressionIssues.get(`issue:${row.issue}`) ?? []),
+      ...(Number.isSafeInteger(row.pr) ? (regressed.regressionIssues.get(`pr:${row.pr}`) ?? []) : []),
+    ]);
+    const regressionIssues = [...regIssueSet].sort((a, b) => a - b);
     const hasPromptCheck = Boolean(gateCounts)
       || ['runtime', 'vectors', 'formal'].some(k => {
         const v = typeof gates[k] === 'string' ? gates[k].trim().toLowerCase() : '';
@@ -364,6 +390,7 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
       ...(typeof promptChanged === 'boolean' ? { promptChanged } : {}),
       reopened,
       reverted,
+      ...(regressionIssues.length > 0 ? { regressionIssues } : {}),
       durationMinutes,
     });
   }
@@ -449,6 +476,62 @@ export function readAutopilotMetricsState(options = {}) {
     }
   };
 
+  const isInformativeGate = value => {
+    const v = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return v.length > 0 && v !== 'na' && v !== 'not-run';
+  };
+  const mergeRunFields = (primary, secondary) => {
+    const mergedIssues = [
+      ...new Set([
+        ...(Array.isArray(primary.issues) ? primary.issues : []),
+        ...(Array.isArray(secondary.issues) ? secondary.issues : []),
+        ...(Number.isSafeInteger(primary.issue) && primary.issue > 0 ? [primary.issue] : []),
+        ...(Number.isSafeInteger(secondary.issue) && secondary.issue > 0 ? [secondary.issue] : []),
+      ].filter(n => Number.isSafeInteger(n) && n > 0)),
+    ];
+    const pGates = isPlainObject(primary.gates) ? primary.gates : {};
+    const sGates = isPlainObject(secondary.gates) ? secondary.gates : {};
+    const mergedGates = {};
+    for (const k of new Set([...Object.keys(sGates), ...Object.keys(pGates)])) {
+      if (isInformativeGate(pGates[k])) mergedGates[k] = pGates[k];
+      else if (isInformativeGate(sGates[k])) mergedGates[k] = sGates[k];
+      else if (pGates[k] !== undefined) mergedGates[k] = pGates[k];
+      else if (sGates[k] !== undefined) mergedGates[k] = sGates[k];
+    }
+    const pCounts = isPlainObject(primary.gateCounts) ? primary.gateCounts : {};
+    const sCounts = isPlainObject(secondary.gateCounts) ? secondary.gateCounts : {};
+    const mergedCounts = { ...sCounts, ...pCounts };
+    const mergedRegIssues = [
+      ...new Set([
+        ...(Array.isArray(primary.regressionIssues) ? primary.regressionIssues : []),
+        ...(Array.isArray(secondary.regressionIssues) ? secondary.regressionIssues : []),
+      ].filter(n => Number.isSafeInteger(n) && n > 0)),
+    ].sort((a, b) => a - b);
+    const mergedPromptChanged = primary.promptChanged === true || secondary.promptChanged === true
+      ? true
+      : typeof primary.promptChanged === 'boolean'
+        ? primary.promptChanged
+        : typeof secondary.promptChanged === 'boolean'
+          ? secondary.promptChanged
+          : undefined;
+    const mergedSkill = primary.skill && primary.skill !== 'feature'
+      ? primary.skill
+      : (secondary.skill && secondary.skill !== 'feature' ? secondary.skill : (primary.skill ?? secondary.skill));
+    return {
+      ...secondary,
+      ...primary,
+      ...(mergedIssues.length > 1 ? { issues: mergedIssues } : {}),
+      skill: mergedSkill,
+      gates: mergedGates,
+      ...(Object.keys(mergedCounts).length > 0 ? { gateCounts: mergedCounts } : {}),
+      ...(typeof mergedPromptChanged === 'boolean' ? { promptChanged: mergedPromptChanged } : {}),
+      reopened: primary.reopened === true || secondary.reopened === true,
+      reverted: primary.reverted === true || secondary.reverted === true,
+      ...(mergedRegIssues.length > 0 ? { regressionIssues: mergedRegIssues } : {}),
+      durationMinutes: primary.durationMinutes ?? secondary.durationMinutes ?? null,
+    };
+  };
+
   const byRunKey = new Map();
   const addRun = (run, preferRecorded = false) => {
     const status = String(run.status ?? run.outcome ?? 'ended');
@@ -462,13 +545,10 @@ export function readAutopilotMetricsState(options = {}) {
     const prevRank = outcomeRank(existing.status ?? existing.outcome);
     const newAtMs = Date.parse(run.at) || 0;
     const prevAtMs = Date.parse(existing.at) || 0;
-    if (
-      newRank > prevRank
+    const newWins = newRank > prevRank
       || (newRank === prevRank && newAtMs > prevAtMs)
-      || (newRank === prevRank && newAtMs === prevAtMs && preferRecorded)
-    ) {
-      byRunKey.set(key, run);
-    }
+      || (newRank === prevRank && newAtMs === prevAtMs && preferRecorded);
+    byRunKey.set(key, newWins ? mergeRunFields(run, existing) : mergeRunFields(existing, run));
   };
 
   let entries = [];
