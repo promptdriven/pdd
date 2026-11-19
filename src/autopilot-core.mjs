@@ -24,6 +24,8 @@ import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessag
 const isPoolRotatableService = text => Boolean(text && (isQuotaExhaustionMessage(text) || isAuthFailureMessage(text)));
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 import { recordAutopilotMetric } from './autopilot-metrics.mjs';
+import { MAX_VALIDATION_REPAIRS, detectChangedSurfaces, evaluateValidationOutcome, formatHumanVerificationCard, planValidationResume, shouldClaimWithCooldowns } from './autopilot-validator.mjs';
+import { lintRepoProject } from './repo-hygiene-lint.mjs';
 
 const { interfaceBlocks, proseSha256, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
 
@@ -438,7 +440,28 @@ function readMachine(fs, root, warn, now = Date.now()) {
         }
       : null,
     // T10: the updated_at of each issue with pdd:needs-decision when the engine last read its answer.
-    decisionSeen: Object.fromEntries(Object.entries(object(m.decisionSeen) ? m.decisionSeen : {}).filter(([n, at]) => /^\d+$/.test(n) && typeof at === 'string').slice(-200)) };
+    decisionSeen: Object.fromEntries(Object.entries(object(m.decisionSeen) ? m.decisionSeen : {}).filter(([n, at]) => /^\d+$/.test(n) && typeof at === 'string').slice(-200)),
+    // Validator v2: active tool cooldowns (keyed by normalized tool name) and parked auth-wait PRs for validate-only resume.
+    toolCooldowns: Object.fromEntries(Object.entries(object(m.toolCooldowns) ? m.toolCooldowns : {})
+      .filter(([tool, entry]) => named(tool) && object(entry) && entry.active === true)
+      .map(([tool, entry]) => [tool.trim().toLowerCase(), {
+        active: true,
+        since: Number.isFinite(entry.since) ? entry.since : now,
+        checkCommand: named(entry.checkCommand) ? entry.checkCommand : '',
+      }])),
+    validationParks: Array.isArray(m.validationParks)
+      ? m.validationParks.filter(p => object(p) && Number.isSafeInteger(p.pr) && p.pr > 0 && Number.isSafeInteger(p.issue) && p.issue > 0 && named(p.headSha) && named(p.cooldownTool))
+        .map(p => ({
+          pr: p.pr,
+          issue: p.issue,
+          branch: named(p.branch) ? p.branch : '',
+          headSha: p.headSha,
+          cooldownTool: p.cooldownTool.trim().toLowerCase(),
+          checkCommand: named(p.checkCommand) ? p.checkCommand : '',
+          parkedAt: Number.isFinite(p.parkedAt) ? p.parkedAt : now,
+        }))
+        .slice(-50)
+      : [] };
 }
 // One history line. A cut last line (no newline) must not swallow this record.
 function appendHistory(ctx, row) {
@@ -626,9 +649,24 @@ async function activeFixedHold(ctx, history, issue, row = null) {
   try { appendHistory(ctx, { at: ctx.now(), issue, unfixed: true, text: `the fixed hold ended: ${why}` }); } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
   return null;
 }
+const KNOWN_ISSUE_TOOLS = ['gcloud', 'aws', 'docker', 'stripe', 'postgres', 'kubernetes', 'terraform', 'runtime-binding'];
+function issueRequiredTools(row) {
+  const tools = new Set();
+  for (const label of labelsOf(row)) {
+    const match = /^(?:tool|requires?):([a-z0-9._-]+)$/i.exec(label.trim());
+    if (match) tools.add(match[1].toLowerCase());
+  }
+  const text = `${row?.title ?? ''}\n${row?.body ?? ''}`.toLowerCase();
+  for (const tool of KNOWN_ISSUE_TOOLS) {
+    if (new RegExp(`\\b${tool.replace('-', '[-_ ]?')}\\b`, 'i').test(text)) tools.add(tool);
+  }
+  if (/\bgcp\b/i.test(text)) tools.add('gcloud');
+  return [...tools];
+}
 async function* readyRows(ctx, rows) {
   const local = new Set(readJobs(ctx.fs, ctx.root).flatMap(jobIssues)), self = { coordinatorId: ctx.state.coordinatorId, machine: ctx.machineId };
   const replied = await decisionReplies(ctx, rows);
+  const machine = ctx.machineState();
   // An issue with a counted no-result in the last 24 hours (since its latest reset) cools down.
   const history = chronological(ctx.fs, ctx.root);
   const cooling = new Set([...new Set(history.map(row => row.issue))].filter(issue => issueRows(history, issue).some(row => row.noResult && ctx.now() - row.at < DAY)));
@@ -638,7 +676,8 @@ async function* readyRows(ctx, rows) {
   const candidates = rows.filter(row => !row.pull_request && row.state === 'open' && !row.assignees?.length && !row.assignee
     && !skippedIssueLabel(row, ctx.settings)
     && !labelsOf(row).includes('pdd:stuck') && (!labelsOf(row).includes(DECISION) || replied.has(row.number)) && !labelsOf(row).includes(WOULD_MERGE) && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
-    && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number))
+    && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number)
+    && shouldClaimWithCooldowns({ issueRequiredTools: issueRequiredTools(row), toolCooldowns: machine.toolCooldowns }).claimable)
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
   for (const row of candidates) {
     try {
@@ -839,10 +878,10 @@ function workRules(ctx, job) {
    d. Any other file (config, CI, package metadata, lock files, docs, tests): change it directly. Never write a new prompt for it. If a prompt states the value that you change (search prompts/ for the path and the key), agree with that prompt: cite the line, or change the prompt first when the issue changes that fact. Docs take their facts from the owning prompt, not from running the code.
    e. Existing product or app code that no prompt owns: create its owning .prompt.md first, link the code file's \`Generated from\` header, and include regression tests in this single PR. A file that you add is never path e: a new code file takes path c, any other new file path d.
    Never add a prompt, binding or header for an existing non-code path d file, or add a header without its owning prompt, unless the issue asks to adopt PDD for it.
-3. Tests. When the change alters what a person or program gets through the repo's public surface (a return value, error, output, exit code, written file, export, command or script), add a test through that surface that fails on base. For any other change, add no test: run the issue's done check and record the command and its result.
+3. Tests. Write real end-to-end tests upfront for every changed runtime surface (real subprocess/CLI invocation, real local HTTP/WS server and DB round-trip, real browser flow via Playwright for Web UI, or live tool/auth binding where available) instead of mock-only unit tests alone. Never rewrite real end-to-end checks into mocks when an external tool or login is unavailable. For a bug fix, prove the regression test (including the real end-to-end check) fails on base and passes on head. Docs-only changes need only the issue's done check and its recorded command and result.
 4. Autopilot stamps \`Path:\`, \`Runtime:\` and \`Evidence:\` lines deterministically in code when you pass \`"title"\` and \`"summary"\` in the result JSON, so you do not have to hand-type machine metadata strings. The prompt and the code may be in one commit. Never rewrite history to change the commit order.
 5. Run focused tests for the changed behavior. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish (the full test command of this repository is \`${fullTestCommand ?? 'not set'}\`). When you run tests or builds, pass \`$PDD_CHECK_CPUS\` as the worker count (for example \`node --test --test-concurrency=$PDD_CHECK_CPUS\`, \`pytest -n $PDD_CHECK_CPUS\`, \`cargo test -j $PDD_CHECK_CPUS\`): it is this machine's share for Autopilot.
-6. Runtime (RUNBOOK §15 "Autopilot core jobs"). Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. A changed Story is a Story whose Story file or test file changed, or whose test reaches a changed prompt. Commit every change, then run \`pdd test\` for each changed Story in one batch where you can (\`pdd test STORY STORY …\`). Run pdd as "$PDD_CLI" (for example "$PDD_CLI" test STORY), never as a bare pdd: your shell can find an older pdd first on PATH. $PDD_CLI is the pdd of this Autopilot. Autopilot stamps verified \`Runtime:\` lines deterministically from saved \`pdd test\` checks at HEAD, so you do not have to hand-type \`Runtime:\` lines. A FAIL line blocks the merge: fix the code until it passes. Never treat a failed check as \`not run\`: \`not run\` is only for a cause that this PR cannot fix (a native-only prompt, \`real-binding-unavailable\` with 0 provider calls, maintenance, no verdict with no failed step, or a refusal that pdd gives no fix for). A refusal with a fix from pdd is this PR's work (for example, apply the Number spelling that pdd prints and check again). When pdd prints that the interpreter is in maintenance, stop pdd then and report \`maintenance until HH:MM UTC\` in \`runtime.cause\`; Autopilot sends the check when maintenance ends. When Runtime could not check, do not stop and do not invent an interface: cover the case with native tests, ship the PR, and put that reason and the tool's error in the result's \`runtime\` (kind "runtime"); Autopilot stamps the \`Runtime: not run\` line and files one report for it.
+6. Runtime (RUNBOOK §15 "Autopilot core jobs"). Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. A changed Story is a Story whose Story file or test file changed, or whose test reaches a changed prompt. Commit every change, then run \`pdd test\` for each changed Story in one batch where you can (\`pdd test STORY STORY …\`). Run pdd as "$PDD_CLI" (for example "$PDD_CLI" test STORY), never as a bare pdd: your shell can find an older pdd first on PATH. $PDD_CLI is the pdd of this Autopilot. Autopilot stamps verified \`Runtime:\` lines deterministically from saved \`pdd test\` checks at HEAD, so you do not have to hand-type \`Runtime:\` lines. A FAIL line blocks the merge: fix the code until it passes. Never treat a failed check or \`real-binding-unavailable\` as a silent skip or pass: \`not run\` is only for a cause that this PR cannot fix (a native-only prompt, maintenance, no verdict with no failed step, or a refusal that pdd gives no fix for). A refusal with a fix from pdd is this PR's work (for example, apply the Number spelling that pdd prints and check again). When pdd prints that the interpreter is in maintenance, stop pdd then and report \`maintenance until HH:MM UTC\` in \`runtime.cause\`; Autopilot sends the check when maintenance ends. When Runtime could not check, do not stop and do not invent an interface: cover the case with native tests, ship the PR, and put that reason and the tool's error in the result's \`runtime\` (kind "runtime"); Autopilot stamps the \`Runtime: not run\` line and files one report for it.
 7. Report your focused test counts in the result's \`"tests"\` field (and \`"runtime"\` when Runtime could not check); Autopilot stamps the deterministic \`Evidence:\` line in the PR body from those fields and its own replay runs.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix" or "Independent review: …") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
 ${approving(ctx) && !strictRepo(ctx, job) ? `9. Approval: in ${settings.mode} mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed that has a Runtime interface block, after its checks pass, record it with the native command and commit the result in the PR: printf '%s' ${quote(approvalWords(ctx))} | "$PDD_CLI" approve PROMPT --said -. A prompt with no Runtime interface block needs no approval: do not run pdd approve for it, and do not invent an interface.
@@ -896,14 +935,12 @@ function reproduceText(ctx, job) {
       : `3. Other non-test findings above also need fixes in this round, so fix them after checking the test failure; "not reproduced" applies only when CI or the full suite is the sole red check.`;
   return `\nFailure reproduction details (#3247):\n${blocks}\n\nReproduce before changing code:\n1. Before you edit any file, run those exact failing tests first in the matching environment (\`CI=true\`, worker count \`$PDD_CHECK_CPUS\`, clean state) and confirm that they fail for the same reason.\n2. If an untouched test fails, also check whether it fails on \`origin/${ctx.state.baseBranch}\` (\`git merge-base origin/${ctx.state.baseBranch} HEAD\` in a throwaway worktree, #3181). When the same test fails on \`origin/${ctx.state.baseBranch}\` too, make no guessed edits on this branch and report {"outcome":"failed","kind":"pdd","component":"base-suite","code":"base-test-red","cause":"<test> also fails on origin/${ctx.state.baseBranch}","detail":"<exact command and failing lines on base>"}.\n${notReproducedRule}\n4. After your fix, run those exact failing tests again in the same environment (\`CI=true\`, \`$PDD_CHECK_CPUS\`) and confirm that they pass before you commit and push.\n`;
 }
-const OPERATOR_RECONCILE_ADVICE = /reconcile possible external effects with the operator[^.]*\.?/gi;
-const sanitizeRepairFinding = red => String(red ?? '').replace(OPERATOR_RECONCILE_ADVICE, 'local skip (real-binding-unavailable: no live binding in this sandbox, 0 provider calls; not a defect or needs-person blocker).').replace(/\s+/g, ' ').trim();
 const repairHistoryText = job => Array.isArray(job.repairHistory) && job.repairHistory.length
   ? `\nPrior failed round summary (do not repeat a failed approach or undo an earlier fix):\n${job.repairHistory.map(item => `- ${oneLine(item?.line ?? item, 280)}`).join('\n')}\n`
   : '';
 const repairPrompt = (ctx, job, reds, result) => {
   const allowNotReproduced = Boolean(job.repairReproduce?.onlyTestOrCi && job.reproduceRerun?.head !== job.head);
-  const cleanedReds = reds.map(sanitizeRepairFinding).filter(Boolean);
+  const cleanedReds = reds.map(red => String(red ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean);
   return `You are an Autopilot core repair job for ${ctx.repo}, issue #${job.issue}, PR #${job.pr} on branch ${job.branch}.
 Work only in this folder: ${job.worktree}. The checks of head ${job.head} are red:
 ${cleanedReds.map(red => `- ${red}`).join('\n')}
@@ -3142,15 +3179,12 @@ const rowReasonCodes = row => [
   ...(Array.isArray(row?.refusals) ? row.refusals.map(item => typeof item === 'string' ? item : item?.code).filter(named) : []),
 ];
 const hasRealBindingUnavailable = row => rowReasonCodes(row).includes('real-binding-unavailable');
-const nonBindingRefusals = row => (Array.isArray(row?.refusals) ? row.refusals.map(item => typeof item === 'string' ? item : item?.code).filter(named) : [])
-  .filter(code => code !== 'real-binding-unavailable');
+const rowRefusals = row => (Array.isArray(row?.refusals) ? row.refusals.map(item => typeof item === 'string' ? item : item?.code).filter(named) : []);
 const failedRow = row => Number(row.failed) > 0 || strings(row.states).includes('failed');
-const refusedRow = row => nonBindingRefusals(row).length > 0 || (strings(row.states).includes('refused') && !hasRealBindingUnavailable(row));
-const localSkipRow = row => object(row) && row.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row) && !nonBindingRefusals(row).length;
+const refusedRow = row => rowRefusals(row).length > 0 || strings(row.states).includes('refused');
 // A row that did not pass only because of the service (no verdict, no failed check, no refusal): the engine sends it again.
-const serviceRow = row => row.pass !== true && !failedRow(row) && !refusedRow(row) && !localSkipRow(row);
-const actionableRowAdvice = row => [...strings(row?.advice), ...(typeof row?.client_advice === 'string' ? [row.client_advice] : [])]
-  .filter(text => !/reconcile possible external effects with the operator/i.test(text));
+const serviceRow = row => row.pass !== true && !failedRow(row) && !refusedRow(row) && !hasRealBindingUnavailable(row);
+const actionableRowAdvice = row => [...strings(row?.advice), ...(typeof row?.client_advice === 'string' ? [row.client_advice] : [])];
 function decidingRowForTest(scopes, story, test) {
   const of = scopes.get(story);
   return of?.get(test.path) ?? (test.files ?? []).map(file => of?.get(file)).find(Boolean) ?? of?.get('*');
@@ -3179,18 +3213,18 @@ async function savedRowReds(ctx, job, head, evidence, stories) {
     }
     const fix = rows.flatMap(row => {
       const advice = actionableRowAdvice(row);
-      return nonBindingRefusals(row).map(code => [code, advice.find(text => text.includes(code)) ?? advice[0]]);
+      return rowRefusals(row).map(code => [code, advice.find(text => text.includes(code)) ?? advice[0]]);
     }).find(([code, text]) => text && !once.has(`${story}|${code}`));
     if (fix && (job.repairs ?? 0) < ctx.settings.repairs) {
       once.add(`${story}|${fix[0]}`);
       reds.push(`The saved pdd test check of ${story} at head ${short(head)} was refused before execution (${fix[0]}). pdd printed the fix: ${oneLine(fix[1], 800)} Apply the fix that pdd prints and run "$PDD_CLI" test again at this head.`);
     }
     if (!rows.length) lost.push([story, 'no saved pdd test check at this source']);
-    else if (!rows.every(row => row.pass === true || serviceRow(row) || localSkipRow(row))) {
-      const codes = [...new Set(rows.flatMap(nonBindingRefusals))];
-      lost.push([story, rows.some(refusedRow) ? `a check that was refused before execution${codes.length ? ` (${codes.join(', ')})` : ''}` : 'a check that did not pass']);
-    } else if (!allStoryTestsCovered(scopes, evidence, story, row => row.pass === true || serviceRow(row) || localSkipRow(row))) {
+    else if (!allStoryTestsCovered(scopes, evidence, story, row => row.pass === true || serviceRow(row) || hasRealBindingUnavailable(row))) {
       lost.push([story, 'unrun pdd test checks at this source']);
+    } else if (!rows.every(row => row.pass === true || serviceRow(row))) {
+      const codes = [...new Set(rows.flatMap(rowRefusals))];
+      lost.push([story, rows.some(refusedRow) ? `a check that was refused before execution${codes.length ? ` (${codes.join(', ')})` : ''}` : 'a check that did not pass']);
     }
   }
   job.refusalReds = [...once].slice(-50);
@@ -3284,16 +3318,12 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   const passingNow = story => deciding.has(story) && [...deciding.get(story).values()].every(row => row.pass === true);
   const lineOf = story => storyLines.find(l => l.story === story) ?? (!perStory && lines.length === 1 && lines[0].verdict === 'not-run' ? lines[0] : null);
   const open = consumerOnly.filter(story => !passingNow(story) && !lineOf(story) && !stories.includes(story));
-  // Could not check: never sent (maintenance, interrupted) or sent with no verdict, and no failed check and no refusal;
-  // or skipped locally with real-binding-unavailable (no live binding in this sandbox, 0 provider calls).
+  // Could not check: never sent (maintenance, interrupted) or sent with no verdict, and no failed check and no refusal.
   const couldNotCheck = row => serviceRow(row) && (row.sent === false || strings(row.states).some(state => ['unknown', 'not_run', 'partial'].includes(state)));
   const serviceOnly = story => deciding.has(story) && [...deciding.get(story).values()].every(couldNotCheck);
-  const localSkipOnly = story => allDeciding.has(story) && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
-    && [...allDeciding.get(story).values()].some(localSkipRow)
-    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row));
-  const waiting = open.filter(story => serviceOnly(story) || localSkipOnly(story)), checkedCount = consumers.filter(passingNow).length;
+  const waiting = open.filter(serviceOnly), checkedCount = consumers.filter(passingNow).length;
   const consumerNote = consumers.length ? { total: consumers.length, checked: checkedCount, open: waiting.slice(0, 50), line: waiting.length ? `Runtime: not run (${consumers.length} Stories reach ${someFiles(prompts)}; checked ${checkedCount})` : null } : null;
-  const consumerReds = open.filter(story => !serviceOnly(story) && !localSkipOnly(story)).map(story => `${story} reaches a changed prompt (${someFiles(prompts)}; its tests upload it), but it has no passing pdd test check at this source${deciding.has(story) ? ' (the latest check of it at this source did not pass)' : ''} and no Runtime line. Run "$PDD_CLI" test for ${story} at this head, or write "Runtime: not run (${story}: REASON)".`);
+  const consumerReds = open.filter(story => !serviceOnly(story)).map(story => `${story} reaches a changed prompt (${someFiles(prompts)}; its tests upload it), but it has no passing pdd test check at this source${deciding.has(story) ? ' (the latest check of it at this source did not pass)' : ''} and no Runtime line. Run "$PDD_CLI" test for ${story} at this head, or write "Runtime: not run (${story}: REASON)".`);
   // #3227 fix 1: the changed Stories (and the consumers with a "not run" line) that the cover below does not check are
   // checked against their saved rows.
   const rowStories = [...changedStories, ...consumerOnly.filter(story => lineOf(story)?.verdict === 'not-run')].filter(story => !stories.includes(story));
@@ -3837,10 +3867,6 @@ async function deterministicRuntimeLines(ctx, job, head, changedPaths, headRoot,
   const storyPassOk = story => deciding.has(story)
     && [...deciding.get(story).values()].every(row => row.pass === true)
     && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => ranBy(story, test)?.pass === true);
-  const storyLocalSkipOk = story => allDeciding.has(story)
-    && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
-    && [...allDeciding.get(story).values()].some(localSkipRow)
-    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row));
   let totalPassed = 0, totalChecks = 0;
   if (targetStories.length) {
     const lines = targetStories.map(story => {
@@ -3850,7 +3876,6 @@ async function deterministicRuntimeLines(ctx, job, head, changedPaths, headRoot,
         totalChecks += rows.reduce((s, r) => s + (Number.isSafeInteger(r?.checks?.total) ? r.checks.total : Number.isSafeInteger(r?.total) ? r.total : 0), 0);
         return formatVerifiedStoryPassLine(story, rows);
       }
-      if (storyLocalSkipOk(story)) return `Runtime: not run (${story}: real-binding-unavailable)`;
       const rows = [...new Set(allDeciding.get(story)?.values() ?? [])];
       if (rows.some(failedRow)) return `Runtime: FAIL (${story}: saved pdd test check failed)`;
       if (allNativeOnly) return `Runtime: not run (${story}: native-only prompt)`;
@@ -4091,17 +4116,9 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
   const storyPassOk = story => deciding.has(story)
     && [...deciding.get(story).values()].every(row => row.pass === true)
     && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => ranBy(story, test)?.pass === true);
-  const storyLocalSkipOk = story => allDeciding.has(story)
-    && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
-    && [...allDeciding.get(story).values()].some(localSkipRow)
-    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row))
-    && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => {
-      const row = decidingRowForTest(allDeciding, story, test);
-      return Boolean(row && (row.pass === true || localSkipRow(row)));
-    });
   const existingNotRun = story => lines.find(l => l.story === story && l.verdict === 'not-run') ?? null;
 
-  if (!targetStories.every(story => storyPassOk(story) || storyLocalSkipOk(story) || Boolean(existingNotRun(story)))) return;
+  if (!targetStories.every(story => storyPassOk(story) || Boolean(existingNotRun(story)))) return;
 
   if (prompts.length) {
     const reached = new Set();
@@ -4112,7 +4129,7 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
       const print = evidence.footprint ? await evidence.footprint(story, row).catch(() => null) : { files: evidence.footprints?.[story] ?? [] };
       for (const file of Array.isArray(print?.files) ? print.files : []) reached.add(file);
     }
-    for (const story of targetStories.filter(s => !storyPassOk(s) && (storyLocalSkipOk(s) || Boolean(existingNotRun(s))))) {
+    for (const story of targetStories.filter(s => !storyPassOk(s) && Boolean(existingNotRun(s)))) {
       if (prompts.every(prompt => reached.has(prompt))) break;
       const own = (evidence.tests ?? []).filter(test => (test.stories ?? []).includes(story) && !test.error).map(test => test.path);
       const print = evidence.footprint ? await evidence.footprint(story, { tests: own }).catch(() => null) : { files: evidence.footprints?.[story] ?? [] };
@@ -4131,17 +4148,13 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
   const perStoryPresent = lines.some(l => Boolean(l.story));
   const needsSync = !lines.length
     || (singleUnnamedPass && (changedStories.length > 1 || targetStories.some(story => !storyPassOk(story))))
-    || (perStoryPresent && targetStories.some(story => {
-      const cur = lines.find(l => l.story === story);
-      return !cur || (cur.verdict === 'pass' && !storyPassOk(story) && storyLocalSkipOk(story));
-    }));
+    || (perStoryPresent && targetStories.some(story => !lines.find(l => l.story === story)));
   if (!needsSync) return;
 
   const lineFor = story => {
     const keepNotRun = existingNotRun(story);
     if (keepNotRun) return keepNotRun.line;
-    if (storyPassOk(story)) return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
-    return `Runtime: not run (${story}: real-binding-unavailable)`;
+    return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
   };
   await setRuntimeLines(ctx, job, pr, targetStories, lineFor, overall => overall === 'pass' ? { state: 'pass' }
     : job.runtime?.state === 'not-run' ? job.runtime : { state: 'not-run' });
@@ -4181,6 +4194,250 @@ async function syncStampedReplayEvidence(ctx, job, pr) {
   job.evidence = parseEvidence(pr.body) ?? next;
 }
 
+// ---- Universal Validator v2 (Bucket 1 / 2 / 3, cooldowns, validate-only resume) -------------------------
+async function parkValidationWait(ctx, job, pr, outcome) {
+  await stopChecks(ctx, job);
+  const machine = ctx.machineState();
+  const tool = outcome.cooldownTool || 'runtime-binding';
+  const checkCommand = outcome.checkCommand || 'pdd test --files';
+  const nextCooldowns = {
+    ...(machine.toolCooldowns ?? {}),
+    [tool]: { active: true, since: ctx.now(), checkCommand },
+  };
+  const nextParks = [
+    ...(machine.validationParks ?? []).filter(p => p.pr !== job.pr && p.issue !== job.issue),
+    {
+      pr: job.pr,
+      issue: job.issue,
+      branch: job.branch,
+      headSha: job.head,
+      cooldownTool: tool,
+      checkCommand,
+      parkedAt: ctx.now(),
+    },
+  ].slice(-50);
+  ctx.saveMachine({ ...machine, toolCooldowns: nextCooldowns, validationParks: nextParks });
+  return end(ctx, job, {
+    kind: 'job',
+    component: 'autopilot-core',
+    code: 'needs-person',
+    text: outcome.message,
+    keepPr: true,
+    authWait: true,
+    authWaitTool: tool,
+    authWaitCheckCommand: checkCommand,
+    question: outcome.message,
+  });
+}
+
+async function parkHumanBoundary(ctx, job, pr, outcome) {
+  await stopChecks(ctx, job);
+  const card = Array.isArray(outcome.humanVerificationCard) && outcome.humanVerificationCard.length === 3
+    ? outcome.humanVerificationCard
+    : formatHumanVerificationCard({ offlineSummary: 'checks passed', unverifiedBoundary: 'runtime boundary', verifyCommand: 'npm test' });
+  return end(ctx, job, {
+    kind: 'job',
+    component: 'autopilot-core',
+    code: 'needs-person',
+    text: outcome.message,
+    keepPr: true,
+    humanBoundary: true,
+    humanVerificationCard: card,
+    question: card.join('\n'),
+  });
+}
+
+async function detectSavedRealBindingBlocker(ctx, job) {
+  const head = job.agentHead ?? job.head;
+  const evidence = await readRuntimeEvidenceAtHead(ctx, job, head).catch(() => null);
+  const rows = Array.isArray(evidence?.stories) ? evidence.stories : [];
+  const scopes = decidingRows(evidence?.stories, true);
+  const blockerRow = rows.find(row => row?.current !== false && row?.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row));
+  if (!blockerRow) return null;
+  // Never hide unrun sibling tests or real test failures behind a real-binding-unavailable row on one test.
+  if (rows.some(row => row?.current !== false && failedRow(row))) return null;
+  const story = blockerRow.story;
+  if (story && !allStoryTestsCovered(scopes, evidence, story, row => row.pass === true || hasRealBindingUnavailable(row))) return null;
+  const changed = await changedFiles(ctx, job, head).catch(() => []);
+  return evaluateValidationOutcome({
+    mode: ctx.settings.mode,
+    changedFiles: changed,
+    realBindingUnavailable: true,
+    diagnostics: ['real-binding-unavailable: live runtime binding unavailable'],
+    repairAttempts: job.validationRepairs ?? job.repairs ?? 0,
+  });
+}
+
+function collectBacksideLintBlockingCodes(ctx, job, changed) {
+  if (!job.worktree || !ctx.fs.existsSync(job.worktree)) return [];
+  const lintOut = lintRepoProject({ root: job.worktree });
+  const changedSet = new Set(changed);
+  const blocking = new Set();
+  for (const f of lintOut.findings ?? []) {
+    if (f.severity === 'error') { blocking.add(f.code); continue; }
+    if ((f.code === 'silent-validation-skip' || f.code === 'boundary-mock-only-test') && changedSet.has(f.path)) {
+      blocking.add(f.code);
+    }
+  }
+  return [...blocking].sort();
+}
+
+function defaultValidationEvidence(ctx, job, { changed, suite, lintBlockingCodes }) {
+  const surfaces = detectChangedSurfaces({ changedFiles: changed });
+  if (surfaces.docsOnly) return { e2eChecks: [], offlinePassed: suite?.state === 'pass' };
+  if (lintBlockingCodes.includes('boundary-mock-only-test')) return { e2eChecks: [], offlinePassed: suite?.state === 'pass' };
+  const cmd = resolveSuiteCommand(ctx, job);
+  if (suite?.state === 'pass' && named(cmd)) {
+    const kinds = surfaces.requiredProofKinds.length ? surfaces.requiredProofKinds : ['real-execution'];
+    return {
+      offlinePassed: true,
+      offlineSummary: `${cmd} passed`,
+      e2eChecks: kinds.map(kind => ({ kind, command: cmd, executed: true, exitCode: 0, passed: 1, failed: 0, skipped: 0 })),
+    };
+  }
+  return { e2eChecks: [], offlinePassed: suite?.state === 'pass' };
+}
+
+async function runValidatorV2Gate(ctx, job, pr, { suite }) {
+  const changed = await changedFiles(ctx, job, job.head).catch(() => []);
+  const surfaces = detectChangedSurfaces({ changedFiles: changed });
+  const lintBlockingCodes = collectBacksideLintBlockingCodes(ctx, job, changed);
+  let supplied = null;
+  if (typeof ctx.ports.validateE2e === 'function') {
+    supplied = await ctx.ports.validateE2e({ job, pr, head: job.head, changedFiles: changed, surfaces, mode: ctx.settings.mode });
+  } else if (object(job.validation)) {
+    supplied = job.validation;
+  }
+  const base = supplied ?? defaultValidationEvidence(ctx, job, { changed, suite, lintBlockingCodes });
+  const outcome = evaluateValidationOutcome({
+    mode: ctx.settings.mode,
+    changedFiles: changed,
+    isBugFix: base.isBugFix === true,
+    offlinePassed: base.offlinePassed ?? (suite?.state === 'pass'),
+    offlineSummary: base.offlineSummary ?? (suite?.state === 'pass' ? `${resolveSuiteCommand(ctx, job) || 'suite'} passed` : 'failed'),
+    e2eChecks: Array.isArray(base.e2eChecks) ? base.e2eChecks : [],
+    bugFixBaseControl: base.bugFixBaseControl ?? 'not-applicable',
+    diagnostics: Array.isArray(base.diagnostics) ? base.diagnostics : [],
+    realBindingUnavailable: base.realBindingUnavailable === true,
+    needsHumanInteraction: base.needsHumanInteraction === true,
+    humanBoundaryDetail: base.humanBoundaryDetail ?? '',
+    verifyCommand: base.verifyCommand ?? '',
+    toolHint: base.toolHint ?? '',
+    lintBlockingCodes: [...new Set([...(Array.isArray(base.lintBlockingCodes) ? base.lintBlockingCodes : []), ...lintBlockingCodes])].sort(),
+    repairAttempts: job.validationRepairs ?? job.repairs ?? 0,
+  });
+  if (outcome.eligible) {
+    job.validatorProof = outcome.proof;
+    ctx.saveJob(job);
+    return { handled: false, outcome };
+  }
+  if (outcome.bucket === 2) {
+    await parkValidationWait(ctx, job, pr, outcome);
+    return { handled: true, outcome };
+  }
+  if (outcome.bucket === 3) {
+    await parkHumanBoundary(ctx, job, pr, outcome);
+    return { handled: true, outcome };
+  }
+  if (outcome.decision === 'needs-person') {
+    await stopChecks(ctx, job);
+    await end(ctx, job, {
+      kind: 'job',
+      component: 'autopilot-core',
+      code: 'needs-person',
+      text: outcome.message,
+      keepPr: true,
+      question: outcome.message,
+    });
+    return { handled: true, outcome };
+  }
+  job.validationRepairs = outcome.repairAttemptsNext;
+  ctx.saveJob(job);
+  await repairOrEnd(ctx, job, [outcome.message], [outcome.message], null);
+  return { handled: true, outcome };
+}
+
+async function resumeValidationParks(ctx, open) {
+  const machine = ctx.machineState();
+  const parks = Array.isArray(machine.validationParks) ? machine.validationParks : [];
+  if (!parks.length) return;
+  const activeIssues = new Set(readJobs(ctx.fs, ctx.root).flatMap(jobIssues));
+  const freeSlots = () => ctx.settings.runs - readJobs(ctx.fs, ctx.root).filter(holdsSlot).length;
+  let nextCooldowns = { ...(machine.toolCooldowns ?? {}) };
+  const keptParks = [];
+  let changed = false;
+
+  for (const park of parks) {
+    if (activeIssues.has(park.issue)) { keptParks.push(park); continue; }
+    let prObj = null;
+    try { prObj = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${park.pr}`); } catch { keptParks.push(park); continue; }
+    if (!prObj || prObj.state !== 'open' || prObj.merged) { changed = true; continue; }
+
+    const issueRow = open?.get(park.issue);
+    const userResumed = Boolean(issueRow && !labelsOf(issueRow).includes(DECISION));
+    let preflightExitCode = null;
+    if (!userResumed && typeof ctx.ports.preflightCheck === 'function') {
+      try {
+        const probe = await ctx.ports.preflightCheck({ tool: park.cooldownTool, command: park.checkCommand, park });
+        preflightExitCode = Number.isInteger(probe?.exitCode) ? probe.exitCode : (probe?.ok === true ? 0 : 1);
+      } catch { preflightExitCode = 1; }
+    }
+    const plan = planValidationResume({
+      pr: park.pr,
+      headSha: park.headSha,
+      currentPrHeadSha: prObj.head?.sha ?? '',
+      cooldownTool: park.cooldownTool,
+      preflightExitCode,
+      userResumed,
+    });
+    if (plan.action === 'head-changed-abort') { changed = true; continue; }
+    if (plan.action !== 'resume-validate-only') { keptParks.push(park); continue; }
+    if (freeSlots() <= 0) { keptParks.push(park); continue; }
+
+    if (issueRow && labelsOf(issueRow).includes(DECISION)) {
+      await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${park.issue}/labels/${encodeURIComponent(DECISION)}`).catch(() => {});
+    }
+    const claim = await claimIssue(ctx, park.issue).catch(() => null);
+    if (!claim) { keptParks.push(park); continue; }
+    if (plan.clearCooldown && plan.targetTool) delete nextCooldowns[plan.targetTool];
+    changed = true;
+    const worktree = join(ctx.dirs.worktrees, String(park.issue));
+    if (!ctx.fs.existsSync(worktree)) {
+      await ctx.git(['fetch', '-q', 'origin', park.branch || park.headSha]).catch(() => {});
+      await ctx.git(['worktree', 'add', '--detach', worktree, park.headSha]).catch(() => {});
+    }
+    const resumedJob = {
+      id: randomUUID().slice(0, 8),
+      issue: park.issue,
+      title: issueRow?.title ?? `PR #${park.pr}`,
+      url: issueRow?.html_url ?? '',
+      body: issueRow?.body ?? '',
+      branch: park.branch || prObj.head?.ref || '',
+      worktree,
+      pr: park.pr,
+      head: park.headSha,
+      agentHead: park.headSha,
+      phase: 'pr',
+      role: 'validate-only',
+      resumed: true,
+      validateOnlyResume: true,
+      rebuildCode: false,
+      repairs: 0,
+      validationRepairs: 0,
+      started: ctx.now(),
+      prAt: ctx.now(),
+      review: { head: park.headSha, verdict: 'PASS', kept: 'validate-only-resume' },
+      suite: null,
+      validation: null,
+      claim,
+      progress: { sig: null, at: ctx.now(), running: false },
+    };
+    ctx.saveJob(resumedJob);
+    ctx.counts.started++;
+  }
+  if (changed) ctx.saveMachine({ ...ctx.machineState(), toolCooldowns: nextCooldowns, validationParks: keptParks });
+}
+
 async function mergeCheck(ctx, job) {
   const { gh, repo, state, settings } = ctx;
   // A merged PR is a merge, also after a quiet period: END never runs on a merged issue. The checks end only when
@@ -4202,6 +4459,8 @@ async function mergeCheck(ctx, job) {
   // whose cause kind is runtime (END).
   job.runtime = normalRuntime(job.runtime);
   await syncVerifiedRuntimeLines(ctx, job, pr);
+  const bindingBlocker = await detectSavedRealBindingBlocker(ctx, job);
+  if (bindingBlocker?.bucket === 2) return parkValidationWait(ctx, job, pr, bindingBlocker);
   await runtimeResendable(ctx, job, pr.body);
   await runtimeNotRunReport(ctx, job);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge. Git
@@ -4330,7 +4589,27 @@ async function mergeCheck(ctx, job) {
     runIds: [...new Set(reproduceChecks.flatMap(c => c.runIds ?? []))],
     checkIds: [...new Set(reproduceChecks.flatMap(c => c.checkIds ?? []))],
   } : null;
-  if (reds.length) return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds, findings, reproduce);
+  if (reds.length) {
+    if (suite?.state === 'fail' && nonTestReds === 0) {
+      const suiteTail = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
+      const diagLines = [
+        suite.text ?? '',
+        ...(suiteTail ? suiteTail.split(/\r?\n/) : []),
+        ...(reproduceChecks.flatMap(c => Array.isArray(c.lines) ? c.lines : [])),
+      ].filter(Boolean);
+      const changed = await changedFiles(ctx, job, job.head).catch(() => []);
+      const suiteOutcome = evaluateValidationOutcome({
+        mode: ctx.settings.mode,
+        changedFiles: changed,
+        offlinePassed: false,
+        diagnostics: diagLines,
+        repairAttempts: job.validationRepairs ?? job.repairs ?? 0,
+      });
+      if (suiteOutcome.bucket === 2) return parkValidationWait(ctx, job, pr, suiteOutcome);
+      if (suiteOutcome.bucket === 3 && suiteOutcome.waitKind === 'human-boundary') return parkHumanBoundary(ctx, job, pr, suiteOutcome);
+    }
+    return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds, findings, reproduce);
+  }
   // Pending CI waits while its picture changes, and at most ciStuckMinutes with no change: then it is stuck (a no-result
   // end), so it never holds a slot for good.
   if (ci.sig !== job.ci?.sig || job.ci?.head !== job.head) job.ci = { head: job.head, sig: ci.sig, at: ctx.now() };
@@ -4366,6 +4645,8 @@ async function mergeCheck(ctx, job) {
   if (job.paths?.unchecked?.length) { Object.assign(job, { lastError: `the merge waits: ${job.paths.wait}`, lastErrorTool: false, lastErrorStep: job.paths.bindingsWait ? 'bindings' : 'owners' }); ctx.saveJob(job); return; }
   // #3241 (rule B5): a Runtime check that was never sent, or got no verdict with no failed check, is sent once more.
   if ((await runtimeResend(ctx, job, pr)).hold) return;
+  // Step 5b: Universal Validator v2 gate & backside lint (fail-closed in BOTH auto and observe modes).
+  if ((await runValidatorV2Gate(ctx, job, pr, { suite })).handled) return;
   if (ctx.settings.mergeQueue && ctx.settings.mode === 'auto') {
     const claim = await confirmClaim(ctx, job);
     if (ctx.lost(claim, job)) return handOver(ctx, job, 'another machine holds the claim now');
@@ -4430,6 +4711,7 @@ async function mergeCheck(ctx, job) {
       `- CI: ${ci.state === 'local' ? `not required by local policy (${ci.note})` : ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
       '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', ...(reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null) ? [reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null)] : []), `- ${runtimeLine}`, `- ${evidenceText(honestEvidence(job))}`, `- Base: ${oneLine(base.message)}`,
       `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
+      ...(job.validatorProof?.commands?.length ? [`- Validation proof: surfaces=${job.validatorProof.surfaces.join(', ') || 'none'}; commands=${job.validatorProof.commands.join(', ')}; exitCodes=${job.validatorProof.exitCodes.join(', ')}`] : []),
       ...(job.coverage?.consumers?.line ? [`- ${job.coverage.consumers.line}`] : []),
       ...engineEvidenceLines(job), `- Evidence record: ${basename(saveEvidence(ctx, job, { lines: runtimeVerdicts(pr.body), claims: runtimeClaims(pr.body, job), ci, review, suite }) ?? evidencePath(ctx, job))} on this machine`,
       ...(missingApprovals > 0 ? [`- Human pull-request approvals still needed on GitHub before merging: ${missingApprovals} of ${requiredApprovals}`] : []),
@@ -6111,7 +6393,7 @@ async function closeOtherPrs(ctx, n, branch) {
       // engine's own note counts.
       const me = await ctx.login();
       if ((await ctx.gh.all(`repos/${ctx.repo}/issues/${pr.number}/comments?per_page=100`)).some(c => String(c.user?.login ?? '').toLowerCase() === me
-        && /<!-- pdd:autopilot-core:(?:would-merge|needs-approval):/.test(String(c.body ?? '')))) continue;
+        && /<!-- pdd:autopilot-core:(?:would-merge|needs-approval|auth-wait|human-boundary):/.test(String(c.body ?? '')))) continue;
       await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${pr.number}`, { state: 'closed' });
       await ctx.comment(pr.number, `Autopilot closed this PR: a new job for issue #${n} starts on branch \`${branch}\`. The branch \`${ref}\` stays.\n\n<!-- pdd:autopilot-core:superseded:${n}:${branch} -->`);
     }
@@ -6183,10 +6465,19 @@ async function continueEnd(ctx, job) {
         'Please answer in a comment (one letter is enough). Autopilot reads your answer at its next check, removes the `' + DECISION + '` label itself and goes on.', '', marker].join('\n'))).id); ctx.saveJob(job);
     }
     if (why.keepPr && job.pr && !e.prNoted) {
-      const prNote = why.branchApproval
-        ? `Autopilot waits for a person's pull-request review approval on GitHub required by branch protection on \`${ctx.state.baseBranch}\` (see issue #${job.issue}). It stays open; Autopilot does not merge it.`
-        : `Autopilot waits for a person's approval of the prompt changes in this PR (see issue #${job.issue}). It stays open; Autopilot does not merge it.`;
-      await ctx.comment(job.pr, `${prNote}\n\n<!-- pdd:autopilot-core:needs-approval:${job.pr} -->`);
+      let prBody;
+      if (why.authWait) {
+        prBody = `${why.text}\n\n<!-- pdd:autopilot-core:auth-wait:${job.pr} -->`;
+      } else if (why.humanBoundary) {
+        const cardText = Array.isArray(why.humanVerificationCard) ? why.humanVerificationCard.join('\n') : String(why.question ?? why.text);
+        prBody = `Human verification required before merge:\n\n${cardText}\n\n<!-- pdd:autopilot-core:human-boundary:${job.pr} -->`;
+      } else {
+        const prNote = why.branchApproval
+          ? `Autopilot waits for a person's pull-request review approval on GitHub required by branch protection on \`${ctx.state.baseBranch}\` (see issue #${job.issue}). It stays open; Autopilot does not merge it.`
+          : `Autopilot waits for a person's approval of the prompt changes in this PR (see issue #${job.issue}). It stays open; Autopilot does not merge it.`;
+        prBody = `${prNote}\n\n<!-- pdd:autopilot-core:needs-approval:${job.pr} -->`;
+      }
+      await ctx.comment(job.pr, prBody);
       e.prNoted = true; ctx.saveJob(job);
     }
     if (why.decision && job.pr && !e.prNoted) {
@@ -6289,8 +6580,11 @@ async function finishLocal(ctx, job, outcome, text) {
     confirmed = true;
     const mine = name => name === String(job.issue) || name.startsWith(`${job.issue}-`) || name.startsWith(`${job.issue}.`);
     const list = dir => { try { return ctx.fs.readdirSync(dir).filter(mine); } catch { return []; } };
-    for (const path of new Set([job.worktree, ...list(ctx.dirs.worktrees).map(name => join(ctx.dirs.worktrees, name))]))
-      await step('worktree', async () => { if (!await removeTree(ctx, path)) throw Error(`${path} stays`); });
+    const keepAuthWaitWorktree = job.end?.cause?.code === 'auth-wait';
+    if (!keepAuthWaitWorktree) {
+      for (const path of new Set([job.worktree, ...list(ctx.dirs.worktrees).map(name => join(ctx.dirs.worktrees, name))]))
+        await step('worktree', async () => { if (!await removeTree(ctx, path)) throw Error(`${path} stays`); });
+    }
     if (outcome === 'merged') await step('branch', () => ctx.git(['branch', '-D', job.branch]));
     for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log') && !/-evidence-[0-9a-f]+\.json$/.test(name))) await step('logs', () => ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true }));
     await step('history', () => {
@@ -6678,6 +6972,7 @@ export async function tickCore(input, ports) {
     const rank = job => job.phase !== 'pr' ? 2 : job.lane?.state === 'final' ? 0 : 1;
     return rank(a) - rank(b) || (a.phase === 'pr' ? laneOrder(a, b) : a.issue - b.issue);
   };
+  await resumeValidationParks(ctx, open).catch(error => ctx.warn(`Autopilot core validation resume skipped: ${error.message}`));
   for (const job of readJobs(ctx.fs, ctx.root).sort(jobOrder)) await runJob(job);
   if (ctx.laneFreed) {
     const retried = new Set();
@@ -6730,9 +7025,10 @@ async function sweepFiles(ctx) {
   const latest = new Map();
   for (const row of chronological(ctx.fs, ctx.root)) if (typeof row.outcome === 'string' && Number.isSafeInteger(row.issue)) latest.set(String(row.issue), row);
   const list = dir => { try { return ctx.fs.readdirSync(dir); } catch { return []; } };
+  const parkedIssues = new Set((ctx.machineState().validationParks ?? []).map(p => String(p.issue)));
   for (const name of list(ctx.dirs.worktrees)) {
     const issue = /^(\d+)(?:-|$)/.exec(name)?.[1];
-    if (!issue || live.has(issue)) continue;
+    if (!issue || live.has(issue) || parkedIssues.has(issue)) continue;
     if (name === issue && latest.get(issue)?.personRelease === true) continue;
     await removeTree(ctx, join(ctx.dirs.worktrees, name)).catch(error => ctx.warn(`Autopilot core could not remove ${name}: ${error.message}`));
   }
@@ -6840,6 +7136,12 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);
   lines.push(...poolLines(machine));
   lines.push(...ciLines(machine));
+  for (const [tool, info] of Object.entries(machine.toolCooldowns ?? {})) {
+    if (info?.active) lines.push(`Tool cooldown: ${tool} (check: ${info.checkCommand || 'manual'})`);
+  }
+  for (const park of machine.validationParks ?? []) {
+    lines.push(`Validation wait: PR #${park.pr} at ${short(park.headSha)} waiting on ${park.cooldownTool}`);
+  }
   const breaker = (object(state?.circuitBreaker) && state.circuitBreaker.active !== false ? state.circuitBreaker : null) ?? machine.circuitBreaker;
   if (breaker) {
     lines.push(`Circuit breaker: mode downgraded from auto to observe at ${breaker.trippedAt} (${breaker.reason}); fix the default branch and run pdd autopilot start --mode auto to resume merges.`);

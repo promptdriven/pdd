@@ -1,6 +1,7 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 1872912e4a631d53b9e3d97ab4ba42dbd6c0dbef0b54f04a072c5c78861ce0c0).
-import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md.
+import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
+import { detectChangedSurfaces, lintValidationCode } from './autopilot-validator.mjs';
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { isLintableStoryPath, lintStory } from './story-lint.mjs';
 import { gitFiles, isSecretPath, workspace } from './runtime-seam.mjs';
@@ -1209,6 +1210,68 @@ export function lintPublicInterfaceTests(text, { path = 'test/example.test.mjs' 
   return collectPublicInterfaceTestWarnings(text, { path }).map(item => item.warning);
 }
 
+const VALIDATION_WARNING_RE = /^Warning: validation lint: (.+):(\d+) \[([^\]]+)\] (.+)$/;
+const REAL_E2E_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|createServer|playwright)\b|listen\(|fetch\(|http\.request|chromium\.launch|page\.goto/i;
+const TEST_IMPORT_SPEC_RE = /(?:from|require\s*\()\s*['"`]([^'"`]+)['"`]/g;
+
+function parseValidationWarnings(rawWarnings, fallbackPath) {
+  return rawWarnings.map((warning, idx) => {
+    const match = VALIDATION_WARNING_RE.exec(warning);
+    if (!match) {
+      return {
+        filePath: fallbackPath,
+        line: 1,
+        order: 30 + idx,
+        code: 'silent-validation-skip',
+        category: 'validation lint',
+        detail: warning,
+        warning,
+      };
+    }
+    return {
+      filePath: match[1],
+      line: Number(match[2]) || 1,
+      order: 30 + idx,
+      code: match[3],
+      category: 'validation lint',
+      detail: match[4],
+      warning,
+    };
+  });
+}
+
+function collectValidationCodeFindings(text, { path = 'test/example.test.mjs', kind = 'test', hasRealE2eCoverage = false } = {}) {
+  const { warnings } = lintValidationCode({ path, kind, text, hasRealE2eCoverage });
+  return parseValidationWarnings(warnings, path);
+}
+
+function detectTestBoundarySurfaces(testPath, text) {
+  const candidates = [testPath];
+  for (const match of String(text ?? '').matchAll(TEST_IMPORT_SPEC_RE)) {
+    const spec = match[1].replace(/^(?:\.\.\/)+/, '').replace(/^\.\//, '');
+    if (spec) candidates.push(spec);
+  }
+  return detectChangedSurfaces({ changedFiles: candidates }).runtimeSurfaces.filter(s => s !== 'runtime-code');
+}
+
+/**
+ * Flag silent validation bypasses (such as real-binding-unavailable local skips or unconditional E2E skips).
+ */
+export function lintValidationSkips(text, { path = 'src/module.mjs', kind = 'code' } = {}) {
+  return collectValidationCodeFindings(text, { path, kind, hasRealE2eCoverage: true })
+    .filter(item => item.code === 'silent-validation-skip')
+    .map(item => item.warning);
+}
+
+/**
+ * Flag mock-only tests targeting runtime boundaries when no real E2E coverage exists.
+ */
+export function lintBoundaryMockOnlyTests(text, { path = 'test/example.test.mjs', hasRealE2eCoverage = false } = {}) {
+  return collectValidationCodeFindings(text, { path, kind: 'test', hasRealE2eCoverage })
+    .filter(item => item.code === 'boundary-mock-only-test')
+    .map(item => item.warning);
+}
+
 const MAX_GLOB_WILDCARDS = 12;
 const MAX_REGEX_GROUP_DEPTH = 16;
 
@@ -1443,51 +1506,9 @@ function parseRegexSafe(pattern, flags = '') {
 const VALID_TARGETS = new Set(['prompt', 'story', 'test', 'code', 'all']);
 const VALID_SEVERITIES = new Set(['off', 'warn', 'error']);
 
-export function loadProjectLintConfig(rootOrObject) {
-  const empty = {
-    configured: false,
-    disabledRules: new Set(),
-    ruleSeverities: new Map(),
-    customRules: [],
-    configErrors: [],
-  };
-  if (!rootOrObject) return empty;
-
-  let rawLint = null;
-  if (typeof rootOrObject === 'string') {
-    let realRoot;
-    try { realRoot = realpathSync(rootOrObject); } catch { return empty; }
-    const rawText = readSafeUtf8(realRoot, 'pdd.json');
-    if (rawText === null) return empty;
-    let parsed;
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      return {
-        ...empty,
-        configured: true,
-        configErrors: [{
-          filePath: 'pdd.json',
-          line: 1,
-          order: 0,
-          code: 'lint-config-invalid',
-          category: 'lint config',
-          detail: 'pdd.json contains invalid JSON.',
-        }],
-      };
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Object.hasOwn(parsed, 'lint')) {
-      return empty;
-    }
-    rawLint = parsed.lint;
-  } else if (typeof rootOrObject === 'object' && !Array.isArray(rootOrObject)) {
-    rawLint = Object.hasOwn(rootOrObject, 'lint') ? rootOrObject.lint : rootOrObject;
-  }
-
-  if (rawLint === undefined || rawLint === null) return empty;
-  const configErrors = [];
+function mergeLintConfigSection(rawLint, { sourcePath, disabledRules, ruleSeverities, customRules, configErrors }) {
   const addConfigError = detail => configErrors.push({
-    filePath: 'pdd.json',
+    filePath: sourcePath,
     line: 1,
     order: 0,
     code: 'lint-config-invalid',
@@ -1495,18 +1516,14 @@ export function loadProjectLintConfig(rootOrObject) {
     detail,
   });
 
-  if (typeof rawLint !== 'object' || Array.isArray(rawLint)) {
-    addConfigError('"lint" in pdd.json must be a JSON object.');
-    return { ...empty, configured: true, configErrors };
+  if (typeof rawLint !== 'object' || rawLint === null || Array.isArray(rawLint)) {
+    addConfigError(`"lint" in ${sourcePath} must be a JSON object.`);
+    return;
   }
-
-  const disabledRules = new Set();
-  const ruleSeverities = new Map();
-  const customRules = [];
 
   if (rawLint.disable !== undefined) {
     if (!Array.isArray(rawLint.disable) || rawLint.disable.some(id => typeof id !== 'string' || !RULE_ID_RE.test(id))) {
-      addConfigError('"lint.disable" in pdd.json must be an array of valid rule IDs.');
+      addConfigError(`"lint.disable" in ${sourcePath} must be an array of valid rule IDs.`);
     } else {
       for (const id of rawLint.disable) disabledRules.add(id);
     }
@@ -1514,7 +1531,7 @@ export function loadProjectLintConfig(rootOrObject) {
 
   if (rawLint.rules !== undefined) {
     if (!rawLint.rules || typeof rawLint.rules !== 'object' || Array.isArray(rawLint.rules)) {
-      addConfigError('"lint.rules" in pdd.json must be an object mapping rule IDs to "off", "warn", or "error".');
+      addConfigError(`"lint.rules" in ${sourcePath} must be an object mapping rule IDs to "off", "warn", or "error".`);
     } else {
       for (const [id, spec] of Object.entries(rawLint.rules)) {
         if (!RULE_ID_RE.test(id)) {
@@ -1528,13 +1545,14 @@ export function loadProjectLintConfig(rootOrObject) {
         }
         ruleSeverities.set(id, sev);
         if (sev === 'off') disabledRules.add(id);
+        else disabledRules.delete(id);
       }
     }
   }
 
   if (rawLint.custom_rules !== undefined) {
     if (!Array.isArray(rawLint.custom_rules)) {
-      addConfigError('"lint.custom_rules" in pdd.json must be an array of rule objects.');
+      addConfigError(`"lint.custom_rules" in ${sourcePath} must be an array of rule objects.`);
     } else {
       for (let idx = 0; idx < rawLint.custom_rules.length; idx++) {
         const rawRule = rawLint.custom_rules[idx];
@@ -1638,14 +1656,112 @@ export function loadProjectLintConfig(rootOrObject) {
       }
     }
   }
+}
 
-  return {
-    configured: true,
-    disabledRules,
-    ruleSeverities,
-    customRules,
-    configErrors,
+function loadWorkspaceLintRuleFiles(realRoot, target) {
+  let loadedAny = false;
+  for (const relDir of ['rules', 'rules/lint']) {
+    try {
+      const st = lstatSync(join(realRoot, relDir));
+      if (st.isSymbolicLink() || !st.isDirectory()) return false;
+    } catch {
+      return false;
+    }
+  }
+
+  let entries;
+  try {
+    entries = readdirSync(join(realRoot, 'rules/lint')).filter(name => name.endsWith('.json')).sort();
+  } catch {
+    return false;
+  }
+
+  for (const name of entries) {
+    const relPath = `rules/lint/${name}`;
+    const rawText = readSafeUtf8(realRoot, relPath);
+    if (rawText === null) continue;
+    loadedAny = true;
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      target.configErrors.push({
+        filePath: relPath,
+        line: 1,
+        order: 0,
+        code: 'lint-config-invalid',
+        category: 'lint config',
+        detail: `${relPath} contains invalid JSON.`,
+      });
+      continue;
+    }
+    const section = Array.isArray(parsed)
+      ? { custom_rules: parsed }
+      : (parsed && typeof parsed === 'object' && typeof parsed.id === 'string'
+        && !Object.hasOwn(parsed, 'disable') && !Object.hasOwn(parsed, 'rules') && !Object.hasOwn(parsed, 'custom_rules')
+        ? { custom_rules: [parsed] }
+        : parsed);
+    mergeLintConfigSection(section, { sourcePath: relPath, ...target });
+  }
+  return loadedAny;
+}
+
+export function loadProjectLintConfig(rootOrObject) {
+  const empty = {
+    configured: false,
+    disabledRules: new Set(),
+    ruleSeverities: new Map(),
+    customRules: [],
+    configErrors: [],
   };
+  if (!rootOrObject) return empty;
+
+  const target = {
+    disabledRules: new Set(),
+    ruleSeverities: new Map(),
+    customRules: [],
+    configErrors: [],
+  };
+  let configured = false;
+
+  if (typeof rootOrObject === 'string') {
+    let realRoot;
+    try { realRoot = realpathSync(rootOrObject); } catch { return empty; }
+    // Workspace-local rules/lint/*.json load first; explicit pdd.json "lint" overrides below.
+    if (loadWorkspaceLintRuleFiles(realRoot, target)) configured = true;
+
+    const rawText = readSafeUtf8(realRoot, 'pdd.json');
+    if (rawText !== null) {
+      let parsed;
+      try {
+        parsed = JSON.parse(rawText);
+      } catch {
+        target.configErrors.push({
+          filePath: 'pdd.json',
+          line: 1,
+          order: 0,
+          code: 'lint-config-invalid',
+          category: 'lint config',
+          detail: 'pdd.json contains invalid JSON.',
+        });
+        return { configured: true, ...target };
+      }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'lint') && parsed.lint !== undefined && parsed.lint !== null) {
+        configured = true;
+        mergeLintConfigSection(parsed.lint, { sourcePath: 'pdd.json', ...target });
+      }
+    }
+    return configured ? { configured: true, ...target } : empty;
+  }
+
+  if (typeof rootOrObject === 'object' && !Array.isArray(rootOrObject)) {
+    const rawLint = Object.hasOwn(rootOrObject, 'lint') ? rootOrObject.lint : rootOrObject;
+    if (rawLint === undefined || rawLint === null) return empty;
+    mergeLintConfigSection(rawLint, { sourcePath: 'pdd.json', ...target });
+    return { configured: true, ...target };
+  }
+
+  return empty;
 }
 
 function headingMatches(contentText, requiredHeading) {
@@ -1965,9 +2081,19 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
   };
 
   if (!promptFilterSet || promptFilterSet.size > 0) {
+    const testEntries = [];
+    const realE2eSurfaces = new Set();
     for (const testPath of scopedFiles.filter(isInspectableTestCodePath)) {
       const content = readSafeUtf8(realRoot, testPath);
       if (typeof content !== 'string') continue;
+      const boundarySurfaces = detectTestBoundarySurfaces(testPath, content);
+      if (REAL_E2E_EXEC_RE.test(content)) {
+        for (const s of boundarySurfaces) realE2eSurfaces.add(s);
+      }
+      testEntries.push({ testPath, content, boundarySurfaces });
+    }
+
+    for (const { testPath, content, boundarySurfaces } of testEntries) {
       for (const item of collectFakeTestWarnings(content, { path: testPath })) {
         if (!targetMatchesPromptFilter(item.target)) continue;
         rawFindings.push({ ...item, defaultSeverity: 'warn' });
@@ -1975,6 +2101,13 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
       for (const item of collectPublicInterfaceTestWarnings(content, { path: testPath })) {
         if (!targetMatchesPromptFilter(item.target)) continue;
         rawFindings.push({ ...item, defaultSeverity: 'warn' });
+      }
+      const hasRealE2eCoverage = boundarySurfaces.length > 0
+        && boundarySurfaces.every(surface => realE2eSurfaces.has(surface));
+      if (!promptFilterSet) {
+        for (const item of collectValidationCodeFindings(content, { path: testPath, kind: 'test', hasRealE2eCoverage })) {
+          rawFindings.push({ ...item, defaultSeverity: 'warn' });
+        }
       }
       if (!promptFilterSet && lintConfig.customRules.length) {
         rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, {
@@ -1986,14 +2119,18 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
     }
   }
 
-  // 4. Custom rules targeting production code files
-  if (lintConfig.customRules.some(r => r.severity !== 'off' && (r.targets.has('code') || r.targets.has('all')))) {
-    const targetCodePaths = promptFilterSet
-      ? prodCodePaths.filter(codePath => (promptOwnersByCode.get(codePath) ?? []).some(owner => promptFilterSet.has(owner)))
-      : prodCodePaths;
-    for (const codePath of targetCodePaths) {
-      const content = readSafeUtf8(realRoot, codePath);
-      if (typeof content !== 'string') continue;
+  // 4. Production code: silent validation skip checks and custom code rules
+  const hasCustomCodeRules = lintConfig.customRules.some(r => r.severity !== 'off' && (r.targets.has('code') || r.targets.has('all')));
+  const targetCodePaths = promptFilterSet
+    ? prodCodePaths.filter(codePath => (promptOwnersByCode.get(codePath) ?? []).some(owner => promptFilterSet.has(owner)))
+    : prodCodePaths;
+  for (const codePath of targetCodePaths) {
+    const content = readSafeUtf8(realRoot, codePath);
+    if (typeof content !== 'string') continue;
+    for (const item of collectValidationCodeFindings(content, { path: codePath, kind: 'code', hasRealE2eCoverage: true })) {
+      rawFindings.push({ ...item, defaultSeverity: 'warn' });
+    }
+    if (hasCustomCodeRules) {
       rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, {
         filePath: codePath,
         kind: 'code',
