@@ -369,9 +369,9 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    `pdd/core-N-` and is not the new branch, and that is not merged, gets
    `state: closed` and one short note with the marker
    `<!-- pdd:autopilot-core:superseded:N:BRANCH -->`; its branch stays. A PR from
-   another branch prefix, or one with a `would-merge`, `needs-approval`, or `auth-wait` note by this
-   engine's own login (observe mode validated it, or it waits for a person or auth/tool resume), is never
-   touched. A failure only warns. Start the local build process after that cleanup. A
+   another branch prefix, or one with a `would-merge`, `needs-approval`, `auth-wait`, `human-boundary`, or
+   `repair-exhausted` note by this engine's own login (observe mode validated it, or it waits for a person
+   or auth/tool resume), is never touched. A failure only warns. Start the local build process after that cleanup. A
    start error, also one that the spawn reports later, ends the saved job as
    `no-result`; it never stops the tick.
 
