@@ -4,7 +4,6 @@
 import { spawn as nativeSpawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
   buildCodexGatewayCliArgs,
@@ -16,6 +15,7 @@ import {
   localCodexHome,
   releaseCloudLease,
   resolveCodexBackendApiUrl,
+  resolvePddStateBase,
   stopCodexAppServerDaemon,
   syncManagedCodexHomeLinks,
 } from './login-pool.mjs';
@@ -32,6 +32,7 @@ const STRIPPED_PROVIDER_ENV_VARS = [
   'CODEX_ACCESS_TOKEN',
   'OPENAI_BASE_URL',
   'PDD_CODEX_GATEWAY_GRANT',
+  'CODEX_CONNECTORS_TOKEN',
 ];
 
 const NO_LEASE_TOP_FLAGS = new Set(['--version', '-V', '--help', '-h']);
@@ -150,14 +151,22 @@ export function parsePddCodexArgs(argv = []) {
 }
 
 /**
- * Resolve the per-user shared machine runtime folder (`$TMPDIR/pdd-codex-<uid>`).
+ * Resolve the per-user runtime root (`~/.local/state/pdd/codex-runtime` by default,
+ * never `/tmp` so Linux stock Codex can create helper binaries cleanly).
+ */
+function resolveRuntimeRoot({ env = process.env, tmpRoot = null } = {}) {
+  if (typeof tmpRoot === 'string' && tmpRoot.trim()) return tmpRoot.trim();
+  if (typeof env?.PDD_CODEX_RUNTIME_ROOT === 'string' && env.PDD_CODEX_RUNTIME_ROOT.trim()) {
+    return env.PDD_CODEX_RUNTIME_ROOT.trim();
+  }
+  return join(resolvePddStateBase(env), 'codex-runtime');
+}
+
+/**
+ * Resolve the per-user shared machine runtime folder (`~/.local/state/pdd/codex-runtime/pdd-codex-<uid>`).
  */
 export function sharedRuntimeDirPath({ env = process.env, tmpRoot = null, uid = null } = {}) {
-  const root = (typeof tmpRoot === 'string' && tmpRoot.trim())
-    ? tmpRoot.trim()
-    : ((typeof env?.PDD_CODEX_RUNTIME_ROOT === 'string' && env.PDD_CODEX_RUNTIME_ROOT.trim())
-      ? env.PDD_CODEX_RUNTIME_ROOT.trim()
-      : tmpdir());
+  const root = resolveRuntimeRoot({ env, tmpRoot });
   const effectiveUid = uid !== null && uid !== undefined
     ? String(uid)
     : (typeof process.getuid === 'function' ? String(process.getuid()) : 'user');
@@ -463,11 +472,7 @@ export async function releaseSharedRuntimeSession(runtimeDir, { cwd = process.cw
 export async function acquirePinnedRuntimeSession(preferredLabel, { cwd = process.cwd(), env = process.env } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const nowFn = ports.now ?? Date.now;
-  const root = (typeof ports.tmpRoot === 'string' && ports.tmpRoot.trim())
-    ? ports.tmpRoot.trim()
-    : ((typeof env?.PDD_CODEX_RUNTIME_ROOT === 'string' && env.PDD_CODEX_RUNTIME_ROOT.trim())
-      ? env.PDD_CODEX_RUNTIME_ROOT.trim()
-      : tmpdir());
+  const root = resolveRuntimeRoot({ env, tmpRoot: ports.tmpRoot });
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const pinDir = fs.mkdtempSync(join(resolve(root), 'pdd-codex-pin-'));
   try { fs.chmodSync?.(pinDir, 0o700); } catch {}
@@ -517,7 +522,7 @@ async function releasePinnedRuntimeSession(session, { cwd = process.cwd(), env =
   }
 }
 
-function buildCleanChildEnv(baseEnv, runtimeDir) {
+function buildCleanChildEnv(baseEnv, runtimeDir, { grantToken = null } = {}) {
   const next = {};
   for (const [key, val] of Object.entries(baseEnv ?? {})) {
     if (typeof val === 'string') next[key] = val;
@@ -526,6 +531,12 @@ function buildCleanChildEnv(baseEnv, runtimeDir) {
     delete next[key];
   }
   next.CODEX_HOME = runtimeDir;
+  // Stock Codex's built-in `codex_apps` MCP client only attaches ChatGPT auth to chatgpt.com;
+  // setting CODEX_CONNECTORS_TOKEN passes our revocable `pddg_*` grant to `{chatgpt_base_url}/ps/mcp`
+  // while `shell_environment_policy.exclude` keeps it out of Codex subshells.
+  if (typeof grantToken === 'string' && grantToken.startsWith('pddg_')) {
+    next.CODEX_CONNECTORS_TOKEN = grantToken;
+  }
   return next;
 }
 
@@ -692,7 +703,7 @@ export async function runPddCodexCli(
 
   // Local `mcp add/remove/list/get` edits `~/.codex/config.toml` via symlink without needing a cloud lease.
   if (firstArg === 'mcp' && LOCAL_MCP_SUBCOMMANDS.has(codexArgs[1] ?? '')) {
-    const root = (typeof ports.tmpRoot === 'string' && ports.tmpRoot.trim()) ? ports.tmpRoot.trim() : tmpdir();
+    const root = resolveRuntimeRoot({ env, tmpRoot: ports.tmpRoot });
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     const mcpDir = fs.mkdtempSync(join(resolve(root), 'pdd-codex-mcp-'));
     try { fs.chmodSync?.(mcpDir, 0o700); } catch {}
@@ -726,7 +737,7 @@ export async function runPddCodexCli(
       userCodexHome: session.userCodexHome,
       emptySubshellCodexHome: session.emptySubshellDir,
     });
-    const childEnv = buildCleanChildEnv(env, session.runtimeDir);
+    const childEnv = buildCleanChildEnv(env, session.runtimeDir, { grantToken: session.grantToken });
     const res = await spawnCodexProcess(codexBin, [...cliFlags, ...codexArgs], { cwd, env: childEnv }, ports);
     if (res?.error) {
       stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);

@@ -83,6 +83,25 @@ test('parsePddCodexArgs parses leading --account and --pdd-help without mutating
   assert.throws(() => parsePddCodexArgs(['--account=']), /Missing account label/);
 });
 
+test('sharedRuntimeDirPath defaults under ~/.local/state/pdd/codex-runtime (never /tmp) and honors state/runtime env overrides', () => {
+  const defaultDir = sharedRuntimeDirPath({ env: { HOME: '/home/alice' }, uid: 1002 });
+  assert.equal(defaultDir, resolve('/home/alice/.local/state/pdd/codex-runtime/pdd-codex-1002'));
+  assert.ok(!defaultDir.startsWith(resolve(tmpdir())), 'default runtime dir must not live under /tmp');
+
+  assert.equal(
+    sharedRuntimeDirPath({ env: { HOME: '/home/alice', XDG_STATE_HOME: '/var/state/alice' }, uid: 1002 }),
+    resolve('/var/state/alice/pdd/codex-runtime/pdd-codex-1002'),
+  );
+  assert.equal(
+    sharedRuntimeDirPath({ env: { HOME: '/home/alice', PDD_STATE_DIR: '/srv/pdd-state' }, uid: 1002 }),
+    resolve('/srv/pdd-state/codex-runtime/pdd-codex-1002'),
+  );
+  assert.equal(
+    sharedRuntimeDirPath({ env: { HOME: '/home/alice', PDD_CODEX_RUNTIME_ROOT: '/custom/runtime' }, uid: 1002 }),
+    resolve('/custom/runtime/pdd-codex-1002'),
+  );
+});
+
 test('20 concurrent pdd-codex sessions share 1 runtime folder and 1 cloud lease, and clean up auth.json + revoke lease only on last exit', async t => {
   const sb = makeSandbox(t);
   const livePids = new Set();
@@ -100,6 +119,7 @@ test('20 concurrent pdd-codex sessions share 1 runtime folder and 1 cloud lease,
     CODEX_ACCESS_TOKEN: 'dirty-access-token',
     OPENAI_BASE_URL: 'https://dirty.example.test',
     PDD_CODEX_GATEWAY_GRANT: 'pddg_stale_env_grant',
+    CODEX_CONNECTORS_TOKEN: 'dirty-personal-connectors-token',
   };
 
   const promises = [];
@@ -130,12 +150,13 @@ test('20 concurrent pdd-codex sessions share 1 runtime folder and 1 cloud lease,
           return { lease_id: leaseId, revoked: true };
         },
         spawnCodex: async (_bin, args, opts) => {
-          // Verify dirty env vars stripped & CODEX_HOME points to shared runtime dir.
+          // Verify dirty env vars stripped, CODEX_CONNECTORS_TOKEN receives revocable pddg_* grant, and CODEX_HOME points to shared runtime dir.
           assert.equal(opts.env.OPENAI_API_KEY, undefined);
           assert.equal(opts.env.CODEX_API_KEY, undefined);
           assert.equal(opts.env.CODEX_ACCESS_TOKEN, undefined);
           assert.equal(opts.env.OPENAI_BASE_URL, undefined);
           assert.equal(opts.env.PDD_CODEX_GATEWAY_GRANT, undefined);
+          assert.equal(opts.env.CODEX_CONNECTORS_TOKEN, 'pddg_lse_shared_001_secretval');
           assert.equal(opts.env.CODEX_HOME, sharedRuntimeDirPath({ env: sb.env, tmpRoot: sb.tmpRoot, uid: 501 }));
           // Verify native /backend-api + /codex CLI flags & zero responses_websockets=false!
           assert.ok(args.includes('chatgpt_base_url="https://api.promptdriven.ai/v1/codex-gateway/backend-api"'));
@@ -144,6 +165,7 @@ test('20 concurrent pdd-codex sessions share 1 runtime folder and 1 cloud lease,
           assert.ok(args.includes('features.daemon_auto_start=false'));
           assert.ok(args.includes('features.shell_snapshot=false'));
           assert.ok(args.some(a => a.startsWith('shell_environment_policy.set.CODEX_HOME=')));
+          assert.ok(args.some(a => a.startsWith('shell_environment_policy.exclude=') && a.includes('"CODEX_CONNECTORS_TOKEN"')));
           assert.ok(!args.includes('features.responses_websockets=false'));
 
           startedCount += 1;
@@ -309,13 +331,14 @@ test('pdd-codex logout, login, and mcp add never touch personal ~/.codex/auth.js
   let mcpSawSymlink = false;
   const mcpRes = await runPddCodexCli(
     ['mcp', 'add', 'demo', '--', 'echo', 'hi'],
-    { cwd: sb.root, env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    { cwd: sb.root, env: { ...sb.env, CODEX_CONNECTORS_TOKEN: 'dirty-connectors-tok' }, stdout: { write() {} }, stderr: { write() {} } },
     {
       tmpRoot: sb.tmpRoot,
       uid: 504,
       leaseCloudAccount: async () => { leaseCalledForMcp = true; throw new Error('should not lease'); },
       spawnCodex: async (_bin, args, opts) => {
         assert.deepEqual(args, ['mcp', 'add', 'demo', '--', 'echo', 'hi']);
+        assert.equal(opts.env.CODEX_CONNECTORS_TOKEN, undefined);
         mcpSawSymlink = lstatSync(join(opts.env.CODEX_HOME, 'config.toml')).isSymbolicLink();
         return { code: 0 };
       },

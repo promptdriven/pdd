@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 0614653660d047404468ae276f814535a77ae4224ac05b0547a1c4e54b35c885).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 932e3fea9b62693004f5c2d012ad70a533054395a459a36a18771af5b0935516).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
@@ -403,7 +403,7 @@ export async function listCloudAccounts({ refresh = false, cwd = process.cwd(), 
   return cloudAccountsRequest('GET', path, { cwd, env, timeoutMs, maxRetries }, ports);
 }
 
-function resolvePddStateBase(env = process.env) {
+export function resolvePddStateBase(env = process.env) {
   const home = env?.HOME || homedir();
   return (typeof env?.PDD_STATE_DIR === 'string' && env.PDD_STATE_DIR.trim())
     ? env.PDD_STATE_DIR.trim()
@@ -798,7 +798,7 @@ export function buildCodexGatewayCliArgs({
     args.push('-c', `shell_environment_policy.set.CODEX_HOME=${JSON.stringify(emptySubshellCodexHome.trim())}`);
   }
   args.push(
-    '-c', 'shell_environment_policy.exclude=["PDD_*","OPENAI_API_KEY","CODEX_API_KEY","CODEX_ACCESS_TOKEN"]',
+    '-c', 'shell_environment_policy.exclude=["PDD_*","OPENAI_API_KEY","CODEX_API_KEY","CODEX_ACCESS_TOKEN","CODEX_CONNECTORS_TOKEN"]',
     '-c', 'model_providers.pdd_pool.name="PDD Pool"',
     '-c', `model_providers.pdd_pool.base_url=${JSON.stringify(codexApiUrl)}`,
     '-c', 'model_providers.pdd_pool.wire_api="responses"',

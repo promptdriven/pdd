@@ -125,7 +125,7 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     subprocess execution when `fs !== nativeFs` and `spawnSync` is not a function (keeping virtual-fs
     tests hermetic), and otherwise invokes `codex app-server daemon stop` with
     `{env: {...env, CODEX_HOME: codexHome}, stdio: "ignore", timeout: 2500}` inside `try/catch`.
-  - Export `resolveCodexBackendApiUrl`, `resolveCodexResponsesBaseUrl`, `buildCodexGatewayCliArgs`, `buildGatewayAuthJson`, `ensureUserCodexHomeBaseline`, `syncManagedCodexHomeLinks`, `releaseCloudLease`, and `heartbeatCloudLease`. Pass optional `auto_rotate` on `leaseCloudAccount` and persist `codex_backend_api_url` and `auto_rotate` in `accounts-state.json`.
+  - Export `resolvePddStateBase`, `resolveCodexBackendApiUrl`, `resolveCodexResponsesBaseUrl`, `buildCodexGatewayCliArgs`, `buildGatewayAuthJson`, `ensureUserCodexHomeBaseline`, `syncManagedCodexHomeLinks`, `releaseCloudLease`, and `heartbeatCloudLease`. Pass optional `auto_rotate` on `leaseCloudAccount` and persist `codex_backend_api_url` and `auto_rotate` in `accounts-state.json`. `buildCodexGatewayCliArgs` excludes `CODEX_CONNECTORS_TOKEN` alongside `PDD_*`, `OPENAI_API_KEY`, `CODEX_API_KEY`, and `CODEX_ACCESS_TOKEN` in `shell_environment_policy.exclude`.
   - When `authOrLease` has delivery mode `"gateway_grant"`, `materializeLocalCodexAuth` validates
     `codex_gateway_url` (`https:` or loopback `http:`) and `codex_gateway_token` (or `gateway_bearer_token`,
     requiring the `"pddg_"` prefix and throwing `code: "invalid_lease"` otherwise), normalizes `<gateway_url>`
