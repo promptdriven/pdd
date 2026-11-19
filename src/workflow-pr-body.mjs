@@ -3,6 +3,7 @@
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
 
+import { BOUNDARY_CARD_MAX_LINES, evidenceEntryPriority, fitSectionedBoundaryLines } from './human-boundary-card.mjs';
 import { formalStatusText } from './workflow-replay.mjs';
 
 export const DETAILS_OPEN = '<details><summary>Details for tools and audits</summary>';
@@ -382,7 +383,7 @@ export function readableNextLines(facts) {
 
 // The readable part as Markdown, plus the notes that the runner puts into Details. It never holds IDs, batches,
 // request IDs, step notes or approval records; those stay in Details.
-const BOUNDARY_PR_MAX_LINES = 25;
+const BOUNDARY_PR_MAX_LINES = BOUNDARY_CARD_MAX_LINES;
 function safeBoundaryText(value, max = 180) {
   const cleaned = String(value ?? '')
     .replace(/Acceptance\s+criteria/gi, 'Criteria')
@@ -400,15 +401,29 @@ function safeBoundaryText(value, max = 180) {
   return inertText(cleaned, max);
 }
 
+function formatPrBoundaryEvidenceEntry(entry) {
+  const kind = safeBoundaryText(entry?.kind === 'local-lint' ? 'local lint' : entry?.kind ?? 'evidence', 28);
+  const label = safeBoundaryText(entry?.label ?? 'unknown', 24);
+  const exitPart = entry?.kind === 'local-lint' && Number.isInteger(entry?.exitCode) ? ` (exit ${entry.exitCode})` : '';
+  const scope = safeBoundaryText(entry?.scope ?? '', 110);
+  const source = safeBoundaryText(entry?.source ?? '', 120);
+  const passed = entry?.kind === 'hosted-story' && entry?.creditsModeledAssertions && Array.isArray(entry?.passedAssertions) && entry.passedAssertions.length
+    ? ` · passed=${entry.passedAssertions.slice(0, 3).map(a => safeBoundaryText(a, 54)).join('; ')}${entry.passedAssertions.length > 3 ? ` (+${entry.passedAssertions.length - 3} more)` : ''}`
+    : '';
+  const note = entry?.note ? ` · ${safeBoundaryText(entry.note, 88)}` : '';
+  return `  - **${kind} [${label}]${exitPart}:** ${scope}${passed} · source=${source}${note}`;
+}
+
 function boundaryCardSection(facts) {
   if (facts?.layout !== 'spec' || !facts.boundary || typeof facts.boundary !== 'object' || Array.isArray(facts.boundary)) return [];
   const card = facts.boundary;
   const policies = Array.isArray(card.policyItems) ? card.policyItems : [];
   const unloaded = Array.isArray(card.unloadedOwners) ? card.unloadedOwners : [];
   const rawRows = Array.isArray(card.provenanceRows) ? card.provenanceRows : [];
+  const evidenceEntries = Array.isArray(card.evidenceSummary?.entries) ? card.evidenceSummary.entries : [];
   const rt = Array.isArray(card.verificationSplit?.runtime) ? card.verificationSplit.runtime : [];
   const nat = Array.isArray(card.verificationSplit?.native) ? card.verificationSplit.native : [];
-  if (!policies.length && !unloaded.length && !rawRows.length && !rt.length && !nat.length) return [];
+  if (!policies.length && !unloaded.length && !rawRows.length && !evidenceEntries.length && !rt.length && !nat.length) return [];
 
   const header = ['## Boundary', ''];
   if (policies.length) {
@@ -433,31 +448,33 @@ function boundaryCardSection(facts) {
     `- **Budget & samples:** ${proseBudget} · ${stepBudget}${samplePart}`,
   ];
 
-  const sortedRows = [...rawRows].sort((a, b) => (a?.priority ?? 3) - (b?.priority ?? 3));
-  const body = sortedRows.length
-    ? [
-        '- **Provenance:**',
-        ...sortedRows.map(row => {
-          const label = safeBoundaryText(row?.label ?? 'rule', 24);
-          const summaryText = row?.summary ? ` (${safeBoundaryText(row.summary, 52)})` : '';
-          const owner = safeBoundaryText(row?.owner ?? 'unmapped', 110);
-          const obs = (Array.isArray(row?.observations) ? row.observations : ['unverified']).map(o => safeBoundaryText(o, 90)).join(', ');
-          return `  - **${label}**${summaryText}: owner=${owner} · obs=${obs}`;
-        }),
-      ]
-    : ['- **Provenance:** standalone / native-tested slice (no Story scenario checks).'];
+  const evidenceItems = evidenceEntries.map(entry => ({
+    priority: evidenceEntryPriority(entry),
+    line: formatPrBoundaryEvidenceEntry(entry),
+  }));
+  const provenanceItems = rawRows.map(row => {
+    const label = safeBoundaryText(row?.label ?? 'rule', 24);
+    const summaryText = row?.summary ? ` (${safeBoundaryText(row.summary, 52)})` : '';
+    const owner = safeBoundaryText(row?.owner ?? 'unmapped', 110);
+    const obs = (Array.isArray(row?.observations) ? row.observations : ['unverified']).map(o => safeBoundaryText(o, 90)).join(', ');
+    return {
+      priority: row?.priority ?? 3,
+      line: `  - **${label}**${summaryText}: owner=${owner} · obs=${obs}`,
+    };
+  });
 
-  const maxCardLines = BOUNDARY_PR_MAX_LINES;
-  const fixed = header.length + footer.length;
-  let fitted;
-  if (fixed + body.length <= maxCardLines) {
-    fitted = [...header, ...body, ...footer];
-  } else {
-    const room = Math.max(1, maxCardLines - fixed);
-    fitted = room === 1
-      ? [...header, `- **Provenance:** ${sortedRows.length} checks summarized in Details.`, ...footer]
-      : [...header, ...body.slice(0, room - 1), `  - … +${body.length - (room - 1)} more checks`, ...footer];
-  }
+  const fitted = fitSectionedBoundaryLines({
+    headerLines: header,
+    footerLines: footer,
+    evidenceHeading: '- **Evidence:**',
+    evidenceItems,
+    evidenceOmit: count => `  - … +${count} more evidence entries`,
+    provenanceHeading: '- **Provenance:**',
+    provenanceItems,
+    provenanceEmpty: '- **Provenance:** standalone / native-tested slice (no Story scenario checks).',
+    provenanceOmit: count => `  - … +${count} more checks`,
+    maxLines: BOUNDARY_PR_MAX_LINES,
+  });
   return [...fitted.slice(0, BOUNDARY_PR_MAX_LINES), ''];
 }
 
