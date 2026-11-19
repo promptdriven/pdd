@@ -254,7 +254,7 @@ const META_FILTER_CLAUSE_RE = /\b(?:filter|reject|park|skip|detect|classify|flag
 const DEP_BUMP_CLAUSE_RE = /(?:\b(?:bump|pin|upgrade|package\.json|lockfile|npm\s+install)\b|@promptdriven\/[a-z0-9_.-]+|\b(?:have|already)\s+merged\s+to\b)/i;
 const MULTI_REPO_COORD_RE = /\b(?:coordinat(?:e|ed|ing)\s+(?:changes?|edits?|prs?|updates?|work|releases?|deploys?)|changes?\s+in\s+both\b|edits?\s+in\s+both\b|both\s+repos(?:itories)?\b|across\s+(?:both\s+)?repos(?:itories)?\b|paired\s+(?:pr|pull\s+request|deploy(?:ment)?|change)|ships?\s+together\s+in\s+both|in\s+tandem\s+with)\b/i;
 const ACROSS_PAIR_RE = /\bacross\s+`?([A-Za-z0-9_./-]+)`?\s+and\s+`?([A-Za-z0-9_./-]+)`?/gi;
-const ALONGSIDE_PAIR_RE = /\b(?:update|edit|change|modify|fix|deploy|ship)\s+`?([A-Za-z0-9_./-]+)`?(?:\s+[^.\n]{0,35})?\s+alongside\s+`?([A-Za-z0-9_./-]+)`?/gi;
+const ALONGSIDE_PAIR_RE = /\b(?:update|edit|change|modify|fix|deploy|ship)\s+(?:(?:the|an?)\s+)?`?([A-Za-z0-9_./-]+)`?(?:\s+[^.\n]{0,35})?\s+alongside\s+(?:(?:the|an?)\s+)?`?([A-Za-z0-9_./-]+)`?/gi;
 const STRONG_COORD_RE = /\b(?:coordinat(?:e|ed|ing)\s+(?:changes?|edits?|prs?|updates?|work|releases?|deploys?)|changes?\s+in\s+both\b|edits?\s+in\s+both\b|both\s+repos(?:itories)?\b|across\s+(?:both\s+)?(?:repos(?:itories)?|`?[A-Za-z0-9_./-]+`?\s+and\s+`?[A-Za-z0-9_./-]+`?)|paired\s+(?:pr|pull\s+request|deploy(?:ment)?|change)|ships?\s+together\s+in\s+both|in\s+tandem\s+with|(?:update|edit|change|modify|fix|deploy|ship)\s+[^.\n]{1,65}\balongside\b)/i;
 const CLAUSE_EDIT_VERB_RE = /\b(?:update|edit|modify|change|fix|add|create|implement|sync|ship|deploy|coordinate|touch|patch|refactor|remove|delete|expose)\b/i;
 const PASSIVE_PATH_RE = /\b(?:already\s+exist(?:s)?\s+in|building\s+blocks?|error\s+(?:from|calling)|returned\s+by|returns?\s+(?:http\s+)?(?:[45]\d\d|errors?)|handl(?:e|ing)\s+[^.\n]{0,40}\b(?:[45]\d\d|errors?|timeouts?)|calls?\s+`?[A-Za-z0-9_./-]+`?|mocks?|stubs?|documents?|for\s+reference|as\s+reference|for\s+context|as\s+context)\b/i;
@@ -314,26 +314,40 @@ function extractRepoHeader(title, body, currentOwner, currentRepo, currentShort,
   return null;
 }
 
-function extractForeignUrls(fullText, currentRepo, pathExists) {
+function updateSectionState(state, line, sectionRe) {
+  const m = line.match(/^\s*(#{1,6})\s+(.+)$/);
+  if (!m) return false;
+  const level = m[1].length;
+  if (sectionRe.test(m[2])) {
+    state.level = state.active ? Math.min(state.level, level) : level;
+    state.active = true;
+  } else if (state.active && level <= state.level) {
+    state.active = false;
+    state.level = 0;
+  }
+  return true;
+}
+
+function extractForeignUrls(segments, currentRepo, pathExists) {
   const urls = [];
   const re = /https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:blob|tree)\/[^/\s]+\/([^\s)`"'>#?]+)/gi;
-  let inReferenceSection = false;
-  for (const line of asText(fullText).split('\n')) {
-    const headingMatch = line.match(/^\s*#{1,6}\s+(.+)$/);
-    if (headingMatch) {
-      inReferenceSection = PASSIVE_HEADING_RE.test(headingMatch[1]);
-    }
-    const proseLine = line.replace(/https?:\/\/[^\s)`"'>]+/gi, ' ');
-    for (const m of line.matchAll(re)) {
-      const slug = m[1], lower = slug.toLowerCase();
-      const sub = normalizeCandidatePath(m[2]);
-      if (currentRepo && lower === currentRepo) continue;
-      if (sub && pathExists(sub)) continue;
-      const idx = m.index ?? 0;
-      const before = line.slice(0, idx);
-      const after = line.slice(idx + m[0].length, idx + m[0].length + 40);
-      const isReference = inReferenceSection || URL_REFERENCE_BEFORE_RE.test(before) || URL_REFERENCE_AFTER_RE.test(after);
-      urls.push({ targetRepo: lower, path: sub, isReference, line, proseLine });
+  const list = Array.isArray(segments) ? segments : [segments];
+  for (const segment of list) {
+    const refSection = { active: false, level: 0 };
+    for (const line of asText(segment).split('\n')) {
+      updateSectionState(refSection, line, PASSIVE_HEADING_RE);
+      const proseLine = line.replace(/https?:\/\/[^\s)`"'>]+/gi, ' ');
+      for (const m of line.matchAll(re)) {
+        const slug = m[1], lower = slug.toLowerCase();
+        const sub = normalizeCandidatePath(m[2]);
+        if (currentRepo && lower === currentRepo) continue;
+        if (sub && pathExists(sub)) continue;
+        const idx = m.index ?? 0;
+        const before = line.slice(0, idx);
+        const after = line.slice(idx + m[0].length, idx + m[0].length + 40);
+        const isReference = refSection.active || URL_REFERENCE_BEFORE_RE.test(before) || URL_REFERENCE_AFTER_RE.test(after);
+        urls.push({ targetRepo: lower, path: sub, isReference, line, proseLine });
+      }
     }
   }
   return urls;
@@ -352,12 +366,17 @@ function hasLocalCliOrModuleHint(fullText, hasInventory, pathExists) {
   return false;
 }
 
-function analyzeRepositoryTargets({ repository, title, body, trustedText = '', repoFiles = null }) {
+function analyzeRepositoryTargets({ repository, title, body, trustedSegments = [], trustedText = '', repoFiles = null }) {
   const currentRepo = asText(repository).trim().toLowerCase();
   const [currentOwner, currentShort] = currentRepo.includes('/')
     ? [currentRepo.split('/')[0], currentRepo.split('/').at(-1)]
     : ['', currentRepo];
-  const fullText = [title, body, trustedText].filter(Boolean).join('\n');
+  const commentSegments = Array.isArray(trustedSegments) && trustedSegments.length > 0
+    ? trustedSegments.filter(Boolean)
+    : (trustedText ? [trustedText] : []);
+  const joinedTrusted = commentSegments.join('\n');
+  const urlSegments = [title, body, ...commentSegments].filter(Boolean);
+  const fullText = urlSegments.join('\n');
   const { hasInventory, pathExists, dirExists } = createPathChecker(repoFiles);
   const allPaths = extractReferencedPaths(fullText);
   const specificPaths = allPaths.filter(p => !GENERIC_ROOT_FILES.has(p.toLowerCase()));
@@ -396,8 +415,8 @@ function analyzeRepositoryTargets({ repository, title, body, trustedText = '', r
     siblingHits,
     foreignMissing,
     missingSpecific,
-    header: extractRepoHeader(title, `${body}\n${trustedText}`, currentOwner, currentRepo, currentShort, pathExists, dirExists),
-    foreignUrls: extractForeignUrls(fullText, currentRepo, pathExists),
+    header: extractRepoHeader(title, `${body}\n${joinedTrusted}`, currentOwner, currentRepo, currentShort, pathExists, dirExists),
+    foreignUrls: extractForeignUrls(urlSegments, currentRepo, pathExists),
     namesLocalCli: hasLocalCliOrModuleHint(fullText, hasInventory, pathExists),
   };
 }
@@ -409,12 +428,11 @@ function analyzeRepositoryTargets({ repository, title, body, trustedText = '', r
 export function extractForeignMissingPaths({ repository = '', title = '', body = '', comments = [], repoFiles = null } = {}) {
   const cleanTitle = cleanSingleLine(title, 500);
   const cleanBody = sanitizeIssueText(asText(body));
-  const trustedText = (Array.isArray(comments) ? comments : [])
+  const trustedSegments = (Array.isArray(comments) ? comments : [])
     .filter(c => isObject(c) && c.trusted !== false)
     .map(c => sanitizeIssueText(asText(c.body)))
-    .filter(Boolean)
-    .join('\n');
-  const ctx = analyzeRepositoryTargets({ repository, title: cleanTitle, body: cleanBody, trustedText, repoFiles });
+    .filter(Boolean);
+  const ctx = analyzeRepositoryTargets({ repository, title: cleanTitle, body: cleanBody, trustedSegments, repoFiles });
   const urlPaths = ctx.foreignUrls.filter(u => !u.isReference && u.path).map(u => u.path);
   return [...new Set([...ctx.foreignMissing, ...urlPaths])];
 }
@@ -509,26 +527,32 @@ function findForeignHeadingTarget(clauses, currentOwner, currentRepo, currentSho
       .replace(/\b[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?#\d+\b/g, ' ')
       .replace(/(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|sh|md|json|ya?ml|toml|sql)(?::\d+(?:-\d+)?)?/gi, ' ');
     if (PASSIVE_HEADING_RE.test(rawHeading) || DEP_BUMP_CLAUSE_RE.test(rawHeading)) continue;
-    const isBareRepoSection = Boolean(numberedDeliverableMatch)
-      || /^(?:\d+\.\s*)?`?[A-Za-z0-9_./-]+`?(?:\s*\([^)]*\))?\s*:?\s*$/.test(rawHeading.trim());
-    if (!isBareRepoSection && !IMPL_HEADING_RE.test(rawHeading)) continue;
+    let targetRepo = null;
+    let headingWithoutTargets = rawHeading;
     if (ownerSlugRe) {
       for (const m of rawHeading.matchAll(ownerSlugRe)) {
         const slug = m[1].toLowerCase();
-        if (slug !== currentRepo) return canonicalTargetRepo(slug);
+        headingWithoutTargets = headingWithoutTargets.replaceAll(m[0], ' ');
+        if (slug !== currentRepo && !targetRepo) targetRepo = canonicalTargetRepo(slug);
       }
     }
     for (const sib of SIBLINGS) {
       if (isSiblingActive(sib, currentShort, pathExists) && sib.mentionRe.test(rawHeading)) {
-        return sib.canonical;
+        if (!targetRepo) targetRepo = sib.canonical;
+        headingWithoutTargets = headingWithoutTargets.replace(new RegExp(sib.mentionRe.source, 'gi'), ' ');
       }
     }
+    if (!targetRepo) continue;
+    const isBareRepoSection = Boolean(numberedDeliverableMatch)
+      || /^(?:\d+\.\s*)?`?[A-Za-z0-9_./-]+`?(?:\s*\([^)]*\))?\s*:?\s*$/.test(rawHeading.trim());
+    if (!isBareRepoSection && !IMPL_HEADING_RE.test(headingWithoutTargets)) continue;
+    return targetRepo;
   }
   return null;
 }
 
-function detectCrossRepo({ repository, title, body, trustedText, repoFiles }) {
-  const ctx = analyzeRepositoryTargets({ repository, title, body, trustedText, repoFiles });
+function detectCrossRepo({ repository, title, body, trustedSegments = [], trustedText = '', repoFiles }) {
+  const ctx = analyzeRepositoryTargets({ repository, title, body, trustedSegments, trustedText, repoFiles });
   const { currentRepo, currentOwner, currentShort, fullText, pathExists, existingLocal, localGreenfield, siblingHits, foreignMissing, header, foreignUrls, namesLocalCli } = ctx;
   if (!fullText.trim()) return null;
 
@@ -817,7 +841,7 @@ function resolveLocalBoundaryOverride(bodyText, trustedComments, caps) {
   let commentState = 'none';
   for (const comment of trustedComments) {
     const cText = comment.sanitized;
-    if (!cText) continue;
+    if (!cText || cText.trim().endsWith('?')) continue;
     const authorizesLocal = COMMENT_LOCAL_AUTH_RE.test(cText)
       || LOCAL_ALTERNATIVE_WAIVER_RE.test(cText)
       || (LOCAL_VERIFY_NOUN_RE.test(cText) && COMMENT_LOCAL_APPROVAL_WORD_RE.test(cText));
@@ -836,40 +860,37 @@ function detectUnverifiableBoundary({ title, body, trustedComments, workerCapabi
   if (typeof decisionNote === 'string' && decisionNote.trim().length > 0) return null;
   const caps = normalizeCapabilities(workerCapabilities);
   const bodyText = [title, body].filter(Boolean).join('\n');
-  const fullText = [bodyText, ...trustedComments.map(c => c.sanitized)].filter(Boolean).join('\n');
-  if (!fullText.trim()) return null;
+  const segments = [bodyText, ...trustedComments.map(c => c.sanitized)].filter(s => s && s.trim().length > 0);
+  if (segments.length === 0) return null;
 
   if (resolveLocalBoundaryOverride(bodyText, trustedComments, caps)) return null;
 
   const signals = [];
   const reasons = [];
-  const clauses = splitClauses(fullText);
 
   let hasProdCreds = false;
   let hasLiveExternal = false;
   let hasManualQa = false;
-  let inVerifySection = false;
   const missingRecipes = new Set();
 
-  for (const clause of clauses) {
-    const headingMatch = clause.match(/^#{1,6}\s+(.+)$/);
-    if (headingMatch) {
-      inVerifySection = VERIFY_SECTION_HEADING_RE.test(headingMatch[1]);
-      continue;
-    }
-    if (META_FILTER_CLAUSE_RE.test(clause) || REDACTION_DEFENSE_RE.test(clause)) continue;
-    const framed = inVerifySection || VERIFY_FRAME_RE.test(clause);
-    if (!caps.productionCredentials && framed && !LOCAL_TEST_OR_VALIDATION_GUARD_RE.test(clause) && PROD_CREDS_RE.test(clause)) {
-      hasProdCreds = true;
-    }
-    if (!caps.liveExternalServices && framed && LIVE_EXTERNAL_RE.test(clause)) hasLiveExternal = true;
-    if (!caps.humanManualQa && framed && MANUAL_QA_RE.test(clause)) {
-      hasManualQa = true;
-    }
-    for (const m of clause.matchAll(NAMED_RECIPE_RE)) {
-      const recipe = (m[1] || m[2] || '').trim().replace(/[.,;:!?]+$/, '');
-      if (recipe && !caps.availableRecipes.includes(recipe.toLowerCase())) {
-        missingRecipes.add(recipe);
+  for (const segment of segments) {
+    const verifySection = { active: false, level: 0 };
+    for (const clause of splitClauses(segment)) {
+      if (updateSectionState(verifySection, clause, VERIFY_SECTION_HEADING_RE)) continue;
+      if (META_FILTER_CLAUSE_RE.test(clause) || REDACTION_DEFENSE_RE.test(clause)) continue;
+      const framed = verifySection.active || VERIFY_FRAME_RE.test(clause);
+      if (!caps.productionCredentials && framed && !LOCAL_TEST_OR_VALIDATION_GUARD_RE.test(clause) && PROD_CREDS_RE.test(clause)) {
+        hasProdCreds = true;
+      }
+      if (!caps.liveExternalServices && framed && LIVE_EXTERNAL_RE.test(clause)) hasLiveExternal = true;
+      if (!caps.humanManualQa && framed && MANUAL_QA_RE.test(clause)) {
+        hasManualQa = true;
+      }
+      for (const m of clause.matchAll(NAMED_RECIPE_RE)) {
+        const recipe = (m[1] || m[2] || '').trim().replace(/[.,;:!?]+$/, '');
+        if (recipe && !caps.availableRecipes.includes(recipe.toLowerCase())) {
+          missingRecipes.add(recipe);
+        }
       }
     }
   }
@@ -944,9 +965,9 @@ export function classifyPreflightIssue({
   const title = cleanSingleLine(issue.title, 500);
   const body = sanitizeIssueText(asText(issue.body));
   const trustedComments = normalizeTrustedComments(issue.comments);
-  const trustedText = trustedComments.map(c => c.sanitized).join('\n');
+  const trustedSegments = trustedComments.map(c => c.sanitized);
 
-  const crossRepo = detectCrossRepo({ repository, title, body, trustedText, repoFiles });
+  const crossRepo = detectCrossRepo({ repository, title, body, trustedSegments, repoFiles });
   if (crossRepo) {
     const { missingPaths: _ignored, ...publicResult } = crossRepo;
     return publicResult;

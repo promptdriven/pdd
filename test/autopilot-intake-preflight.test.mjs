@@ -1211,3 +1211,195 @@ test('3534 R2 regressions (items 1-7 + minor): headings, reference URLs, title/S
   assert.equal(hTimelineErr.writes.length, 0, 'timeline read error propagates and warns instead of re-parking');
   assert.ok(hTimelineErr.warnings.some(w => w.includes('#818') && w.includes('timeline')));
 });
+
+test('3534 R3 regressions (section resets, heading self-match, polish)', () => {
+  const repoFiles = ['src/metrics-model.mjs', 'src/accounts-cli.mjs', 'src/login-pool.mjs', 'src/runtime-seam.mjs', 'package.json'];
+
+  // Item 1a: trailing ## Acceptance Criteria in body must not leak into later trusted comments.
+  const noVerifyLeak = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 901,
+      title: 'Fix status formatting',
+      body: 'Update `src/metrics-model.mjs`.\n\n## Acceptance Criteria\n- Local unit tests pass.',
+      comments: [
+        { author: 'maintainer', trusted: true, body: 'FYI I rotated our production API keys today unrelated to this.' },
+      ],
+    },
+    repoFiles,
+  });
+  assert.equal(noVerifyLeak.decision, 'allow', 'body ## Acceptance Criteria must not leak into unrelated comment');
+
+  const commentOwnVerifySection = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 902,
+      title: 'Fix status formatting',
+      body: 'Update `src/metrics-model.mjs`.\n\n## Acceptance Criteria\n- Local unit tests pass.',
+      comments: [
+        { author: 'maintainer', trusted: true, body: '## Verification\n- Must test with production API keys before merge.' },
+      ],
+    },
+    repoFiles,
+  });
+  assert.equal(commentOwnVerifySection.decision, 'park', 'explicit ## Verification section inside comment still parks');
+  assert.equal(commentOwnVerifySection.reasonCode, 'unverifiable_boundary');
+
+  // Item 1b: trailing ## References in body must not leak into later trusted comments,
+  // and nested ### subheadings under ## References stay inside reference mode until an equal-or-higher heading.
+  const commentAfterRefSection = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 903,
+      title: 'Sync local skill parser',
+      body: 'Update `src/runtime-seam.mjs`.\n\n## References\n- https://github.com/cursor/plugins/blob/main/skills/create-verification-skill/SKILL.md',
+      comments: [
+        { author: 'maintainer', trusted: true, body: 'Also edit https://github.com/promptdriven/pdd_cloud/blob/main/src/worker.ts to match.' },
+      ],
+    },
+    repoFiles,
+  });
+  assert.equal(commentAfterRefSection.decision, 'reject', 'body ## References must not suppress edit URL in later comment');
+  assert.equal(commentAfterRefSection.reasonCode, 'cross_repo');
+  assert.equal(commentAfterRefSection.targetRepo, 'promptdriven/pdd_cloud');
+
+  const nestedRefSubheading = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 904,
+      title: 'Add local verification skill helper',
+      body: [
+        'Update `src/runtime-seam.mjs`.',
+        '',
+        '## References',
+        '### Cursor plugin',
+        '- https://github.com/cursor/plugins/blob/main/pstack/skills/create-verification-skill/SKILL.md',
+      ].join('\n'),
+      comments: [],
+    },
+    repoFiles,
+  });
+  assert.equal(nestedRefSubheading.decision, 'allow', 'nested ### subheading under ## References stays in reference section');
+
+  const exitRefOnEqualHeading = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 905,
+      title: 'Add local verification skill helper',
+      body: [
+        'Update `src/runtime-seam.mjs`.',
+        '',
+        '## References',
+        '### Cursor plugin',
+        '- https://github.com/cursor/plugins/blob/main/pstack/skills/create-verification-skill/SKILL.md',
+        '',
+        '## Implementation',
+        '- Update https://github.com/promptdriven/pdd_cloud/blob/main/src/worker.ts',
+      ].join('\n'),
+      comments: [],
+    },
+    repoFiles,
+  });
+  assert.equal(exitRefOnEqualHeading.decision, 'reject', 'equal-level ## Implementation exits ## References');
+  assert.equal(exitRefOnEqualHeading.reasonCode, 'cross_repo');
+  assert.equal(exitRefOnEqualHeading.targetRepo, 'promptdriven/pdd_cloud');
+
+  // Item 2: IMPL_HEADING_RE must not self-match matched sibling/slug tokens (e.g. runtime-client -> client).
+  const runtimeClientHeading = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 906,
+      title: 'Tune retry backoff',
+      body: '## How pdd uses runtime-client\nAdjust retry delay in `src/runtime-seam.mjs`.',
+      comments: [],
+    },
+    repoFiles,
+  });
+  assert.equal(runtimeClientHeading.decision, 'allow', 'runtime-client in heading must not self-match IMPL_HEADING_RE "client"');
+
+  const slugSelfMatchHeading = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 907,
+      title: 'Tune request timeout',
+      body: '## How pdd calls promptdriven/api-gateway\nAdjust timeout in `src/runtime-seam.mjs`.',
+      comments: [],
+    },
+    repoFiles,
+  });
+  assert.equal(slugSelfMatchHeading.decision, 'allow', 'same-org slug token must not self-match IMPL_HEADING_RE "api"/"gateway"');
+
+  const runtimeClientUpdateHeading = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 908,
+      title: 'Add new retry header',
+      body: '## Update runtime-client\nExpose the new header alongside `src/runtime-seam.mjs`.',
+      comments: [],
+    },
+    repoFiles,
+  });
+  assert.equal(runtimeClientUpdateHeading.decision, 'reject', 'explicit Update heading for runtime-client still rejects');
+  assert.equal(runtimeClientUpdateHeading.reasonCode, 'cross_repo');
+  assert.equal(runtimeClientUpdateHeading.targetRepo, 'runtime-client');
+
+  // Item 3a: ALONGSIDE_PAIR_RE allows optional article (the/a/an) before either capture group.
+  const alongsideArticleRight = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 909,
+      title: 'Sync account quota response',
+      body: 'Update `src/accounts-cli.mjs` alongside the `pdd_cloud` server.',
+      comments: [],
+    },
+    repoFiles,
+  });
+  assert.equal(alongsideArticleRight.decision, 'reject', 'ALONGSIDE_PAIR_RE binds sibling after "the"');
+  assert.equal(alongsideArticleRight.reasonCode, 'cross_repo');
+  assert.equal(alongsideArticleRight.targetRepo, 'pdd_cloud');
+
+  const alongsideArticleLeft = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 910,
+      title: 'Sync account quota response',
+      body: 'Update the `pdd_cloud` server alongside `src/accounts-cli.mjs`.',
+      comments: [],
+    },
+    repoFiles,
+  });
+  assert.equal(alongsideArticleLeft.decision, 'reject', 'ALONGSIDE_PAIR_RE binds sibling after leading "the"');
+  assert.equal(alongsideArticleLeft.reasonCode, 'cross_repo');
+  assert.equal(alongsideArticleLeft.targetRepo, 'pdd_cloud');
+
+  // Item 3b: resolveLocalBoundaryOverride ignores question comments ending in "?".
+  const questionDoesNotOverride = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 911,
+      title: 'Add Stripe webhook validation',
+      body: 'Update `src/accounts-cli.mjs`. Verification requires testing against live Stripe checkout.',
+      comments: [
+        { author: 'maintainer', trusted: true, body: 'Are local mocks sufficient here?' },
+      ],
+    },
+    repoFiles,
+  });
+  assert.equal(questionDoesNotOverride.decision, 'park', 'question comment ending in ? must not authorize local override');
+  assert.equal(questionDoesNotOverride.reasonCode, 'unverifiable_boundary');
+
+  const affirmativeOverrides = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 912,
+      title: 'Add Stripe webhook validation',
+      body: 'Update `src/accounts-cli.mjs`. Verification requires testing against live Stripe checkout.',
+      comments: [
+        { author: 'maintainer', trusted: true, body: 'Are local mocks sufficient here?' },
+        { author: 'maintainer', trusted: true, body: 'Yes, local mocks are sufficient here.' },
+      ],
+    },
+    repoFiles,
+  });
+  assert.equal(affirmativeOverrides.decision, 'allow', 'affirmative local mock authorization still unlocks boundary');
+});
