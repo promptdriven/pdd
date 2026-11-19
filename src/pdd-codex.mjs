@@ -7,6 +7,7 @@ import * as nativeFs from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import {
   buildCodexGatewayCliArgs,
+  buildCodexHomeMirrorCliArgs,
   buildGatewayAuthJson,
   CloudAccountsError,
   ensureUserCodexHomeBaseline,
@@ -806,9 +807,19 @@ export async function runPddCodexCli(
     const mcpDir = fs.mkdtempSync(join(resolve(root), 'pdd-codex-mcp-'));
     try { fs.chmodSync?.(mcpDir, 0o700); } catch {}
     try {
-      prepareRuntimeCodexHome(fs, localCodexHome(env), mcpDir);
+      const homeInfo = prepareRuntimeCodexHome(fs, localCodexHome(env), mcpDir);
+      let userConfigText = '';
+      try {
+        userConfigText = fs.readFileSync(homeInfo.userConfigPath, 'utf8');
+      } catch {}
+      const mirrorFlags = buildCodexHomeMirrorCliArgs({
+        userCodexHome: homeInfo.userCodexHome,
+        runtimeCodexHome: mcpDir,
+        userConfigText,
+        fs,
+      });
       const childEnv = buildCleanChildEnv(env, mcpDir);
-      const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env: childEnv }, ports);
+      const res = await spawnCodexProcess(codexBin, [...mirrorFlags, ...codexArgs], { cwd, env: childEnv }, ports);
       if (res?.error) {
         stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
       }
@@ -837,9 +848,11 @@ export async function runPddCodexCli(
     const cliFlags = buildCodexGatewayCliArgs({
       backendApiUrl: session.backendApiUrl,
       userCodexHome: session.userCodexHome,
+      runtimeCodexHome: session.runtimeDir,
       emptySubshellCodexHome: session.emptySubshellDir,
       userConfigText,
       nativeBackendApi: session.nativeBackendApi !== false,
+      fs,
     });
     const childEnv = buildCleanChildEnv(env, session.runtimeDir, { grantToken: session.grantToken });
     const res = await spawnCodexProcess(codexBin, [...cliFlags, ...codexArgs], { cwd, env: childEnv }, ports);

@@ -8,7 +8,9 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -21,6 +23,7 @@ import {
 } from '../src/pdd-codex.mjs';
 import {
   buildCodexGatewayCliArgs,
+  buildCodexHomeMirrorCliArgs,
   createCodexStepOverlay,
   localCodexHome,
   materializeLocalCodexAuth,
@@ -528,5 +531,186 @@ test('review regressions: shell_environment_policy merge/filters, nested CODEX_H
   assert.equal(observedLeaseAfter401, false, '401 heartbeat should invalidate cached lease.json');
   assert.equal(observedAuthAfter401, false, '401 heartbeat should invalidate cached auth.json');
 });
+
+test('home parity: .tmp marketplaces mirror, unquoted openai-bundled source override, hooks.state remap, and local mcp list', async t => {
+  const sb = makeSandbox(t);
+  const userCodex = join(sb.home, '.codex');
+  const bundledDir = join(userCodex, '.tmp', 'bundled-marketplaces', 'openai-bundled');
+  const marketplacesDir = join(userCodex, '.tmp', 'marketplaces', 'claude-plugins-official');
+  const pluginsRepoDir = join(userCodex, '.tmp', 'plugins');
+  mkdirSync(bundledDir, { recursive: true });
+  mkdirSync(marketplacesDir, { recursive: true });
+  mkdirSync(pluginsRepoDir, { recursive: true });
+  writeFileSync(join(userCodex, '.tmp', 'plugins.sha'), 'abc123\n');
+  mkdirSync(join(userCodex, '.tmp', 'git-temp-clone'), { recursive: true });
+  writeFileSync(join(userCodex, '.tmp', 'plugins.sync.lock'), '');
+  writeFileSync(join(userCodex, 'hooks.json'), '{"hooks":{"SessionStart":[]}}\n');
+
+  const userConfigText = [
+    'model = "gpt-6.2-sol"',
+    '',
+    '[marketplaces.openai-bundled]',
+    'source_type = "local"',
+    `source = ${JSON.stringify(bundledDir)}`,
+    '',
+    '[marketplaces.external-cache]',
+    'source_type = "local"',
+    'source = "/opt/external/marketplace"',
+    '',
+    '[marketplaces.isolated-tmp-leak]',
+    'source_type = "local"',
+    `source = ${JSON.stringify(join(userCodex, '.tmp', 'git-temp-clone'))}`,
+    '',
+    `[hooks.state.${JSON.stringify(`${userCodex}/hooks.json:session_start:0:0`)}]`,
+    'trusted_hash = "sha256:aaa111"',
+    '',
+    '[hooks.state."gitkraken-hooks@gitkraken:hooks/hooks.json:session_start:0:0"]',
+    'trusted_hash = "sha256:bbb222"',
+    '',
+  ].join('\n');
+  writeFileSync(join(userCodex, 'config.toml'), userConfigText, { mode: 0o600 });
+
+  // Pre-seed a stale real directory at <runtime>/.tmp/marketplaces to verify auto-healing to symlink.
+  const runtimeDir = sharedRuntimeDirPath({ env: sb.env, tmpRoot: sb.tmpRoot, uid: 555 });
+  mkdirSync(join(runtimeDir, '.tmp', 'marketplaces', 'stale'), { recursive: true });
+
+  // 1. Main pdd-codex launch mirrors safe .tmp entries and emits canonical -c overrides.
+  let observedArgs = null;
+  let observedTmpState = null;
+  const runRes = await runPddCodexCli(
+    ['exec', 'check parity'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 555,
+      pid: 99100,
+      isPidAlive: () => true,
+      leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_parity_1' }),
+      releaseCloudLease: async () => ({ revoked: true }),
+      spawnCodex: async (_bin, args, opts) => {
+        observedArgs = args;
+        const rt = opts.env.CODEX_HOME;
+        observedTmpState = {
+          tmpIsDir: lstatSync(join(rt, '.tmp')).isDirectory() && !lstatSync(join(rt, '.tmp')).isSymbolicLink(),
+          bundledLink: lstatSync(join(rt, '.tmp', 'bundled-marketplaces')).isSymbolicLink(),
+          marketplacesLink: lstatSync(join(rt, '.tmp', 'marketplaces')).isSymbolicLink(),
+          pluginsLink: lstatSync(join(rt, '.tmp', 'plugins')).isSymbolicLink(),
+          pluginsShaLink: lstatSync(join(rt, '.tmp', 'plugins.sha')).isSymbolicLink(),
+          gitTempAbsent: !existsSync(join(rt, '.tmp', 'git-temp-clone')),
+          lockAbsent: !existsSync(join(rt, '.tmp', 'plugins.sync.lock')),
+        };
+        return { code: 0 };
+      },
+    },
+  );
+  assert.equal(runRes.exitCode, 0);
+  assert.deepEqual(observedTmpState, {
+    tmpIsDir: true,
+    bundledLink: true,
+    marketplacesLink: true,
+    pluginsLink: true,
+    pluginsShaLink: true,
+    gitTempAbsent: true,
+    lockAbsent: true,
+  });
+
+  const realRt = realpathSync(runtimeDir);
+  const expectedBundledOverride = `marketplaces.openai-bundled.source=${JSON.stringify(join(realRt, '.tmp', 'bundled-marketplaces', 'openai-bundled'))}`;
+  assert.equal(observedArgs.includes(expectedBundledOverride), true, 'bare marketplace key must be unquoted and canonical');
+  assert.equal(
+    observedArgs.some(a => a.includes('marketplaces.external-cache') || a.includes('marketplaces.isolated-tmp-leak')),
+    false,
+    'external and isolated .tmp paths must not be rewritten',
+  );
+  const hooksArg = observedArgs.find(a => a.startsWith('hooks.state={'));
+  assert.ok(hooksArg, 'hooks.state inline table override should be emitted');
+  assert.equal(hooksArg.includes(JSON.stringify(`${realRt}/hooks.json:session_start:0:0`)), true);
+  assert.equal(hooksArg.includes('trusted_hash = "sha256:aaa111"'), true);
+  assert.equal(hooksArg.includes('gitkraken-hooks'), false, 'plugin hook state must stay untouched in user config');
+
+  // 2. Local `pdd-codex mcp list` also mirrors .tmp and passes mirror -c overrides without leasing.
+  let mcpLeased = false;
+  let mcpObservedArgs = null;
+  let mcpBundledPresent = false;
+  const mcpRes = await runPddCodexCli(
+    ['mcp', 'list'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      leaseCloudAccount: async () => { mcpLeased = true; return makeLeaseReply(); },
+      spawnCodex: async (_bin, args, opts) => {
+        mcpObservedArgs = args;
+        mcpBundledPresent = lstatSync(join(opts.env.CODEX_HOME, '.tmp', 'bundled-marketplaces')).isSymbolicLink();
+        return { code: 0 };
+      },
+    },
+  );
+  assert.equal(mcpRes.exitCode, 0);
+  assert.equal(mcpLeased, false, 'mcp list must remain offline without cloud lease');
+  assert.equal(mcpBundledPresent, true, 'mcp list temp dir must mirror .tmp/bundled-marketplaces');
+  assert.equal(
+    mcpObservedArgs.some(a => a.startsWith('marketplaces.openai-bundled.source=')),
+    true,
+    'mcp list must pass marketplace override so plugin-contributed MCP servers (cua_repl, codex_app) appear',
+  );
+
+  // 3. Unsafe symlink inside ~/.codex/.tmp pointing to auth.json is rejected.
+  writeFileSync(join(userCodex, 'auth.json'), '{"secret":true}\n', { mode: 0o600 });
+  rmSync(join(userCodex, '.tmp', 'plugins.sha'), { force: true });
+  symlinkSync(join(userCodex, 'auth.json'), join(userCodex, '.tmp', 'plugins.sha'));
+  const directArgs = buildCodexHomeMirrorCliArgs({
+    userCodexHome: userCodex,
+    runtimeCodexHome: runtimeDir,
+    userConfigText,
+  });
+  assert.equal(directArgs.includes(expectedBundledOverride), true);
+  const res2 = await runPddCodexCli(
+    ['exec', 'check unsafe tmp symlink'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 555,
+      pid: 99101,
+      isPidAlive: () => true,
+      leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_parity_2' }),
+      releaseCloudLease: async () => ({ revoked: true }),
+      spawnCodex: async (_bin, _args, opts) => {
+        assert.equal(existsSync(join(opts.env.CODEX_HOME, '.tmp', 'plugins.sha')), false, 'unsafe auth.json symlink in .tmp must be pruned');
+        return { code: 0 };
+      },
+    },
+  );
+  assert.equal(res2.exitCode, 0);
+
+  // 4. Managed home (materializeLocalCodexAuth) and step overlays (createCodexStepOverlay)
+  // mirror .tmp/bundled-marketplaces and remap marketplace source + hooks.state in their
+  // materialized config.toml without altering ~/.codex/config.toml.
+  const leaseSpec = {
+    delivery_mode: 'gateway_grant',
+    codex_gateway_url: 'http://127.0.0.1:41999/v1/codex-gateway/lse_parity_mat',
+    codex_backend_api_url: 'http://127.0.0.1:41999/v1/codex-backend-api/lse_parity_mat',
+    codex_gateway_token: 'pddg_lse_parity_mat_tok',
+    plan_type: 'pro',
+  };
+  const materialized = materializeLocalCodexAuth(leaseSpec, { env: sb.env });
+  const realManaged = realpathSync(materialized.codexHome);
+  const managedCfgText = readFileSync(materialized.configPath, 'utf8');
+  assert.equal(lstatSync(join(materialized.codexHome, '.tmp', 'bundled-marketplaces')).isSymbolicLink(), true);
+  assert.equal(managedCfgText.includes(join(realManaged, '.tmp', 'bundled-marketplaces', 'openai-bundled')), true);
+  assert.equal(managedCfgText.includes(`${join(realManaged, 'hooks.json')}:session_start:0:0`), true);
+
+  const overlay = createCodexStepOverlay(leaseSpec, { env: sb.env, tmpRoot: sb.tmpRoot });
+  try {
+    const realOverlay = realpathSync(overlay.overlayDir);
+    const overlayCfgText = readFileSync(overlay.configPath, 'utf8');
+    assert.equal(lstatSync(join(overlay.overlayDir, '.tmp', 'bundled-marketplaces')).isSymbolicLink(), true);
+    assert.equal(overlayCfgText.includes(join(realOverlay, '.tmp', 'bundled-marketplaces', 'openai-bundled')), true);
+    assert.equal(overlayCfgText.includes(`${join(realOverlay, 'hooks.json')}:session_start:0:0`), true);
+  } finally {
+    overlay.cleanup();
+  }
+  assert.equal(readFileSync(join(userCodex, 'config.toml'), 'utf8'), userConfigText);
+});
+
 
 
