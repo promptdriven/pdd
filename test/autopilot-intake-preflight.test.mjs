@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { coreWorld } from './helpers/core-world.mjs';
 import {
   PREFLIGHT_REASON_CODES,
   sanitizeIssueText,
@@ -21,6 +22,7 @@ import {
   summarizeIntakeFilterPrecision as reexportedSummarize,
   detectWrongRepositoryIssue,
   applyPreflightDecision,
+  intakeFolders,
   shadowIntake,
   activeIntake,
   readIntake,
@@ -41,31 +43,44 @@ function pointer(root, path) {
   return cur;
 }
 
-function makeIntakeHarness(t, { mode = 'active', repo = 'promptdriven/pdd', failNextLabel = false } = {}) {
+function makeIntakeHarness(t, { mode = 'active', repo = 'promptdriven/pdd', failNextLabel = false, failNextCommentFetch = false, agentReady = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'pdd-preflight-wiring-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const root = join(dir, 'state');
   const cwd = join(dir, 'repo');
   mkdirSync(join(cwd, 'src'), { recursive: true });
+  mkdirSync(join(cwd, 'prompts', 'cli'), { recursive: true });
   mkdirSync(join(cwd, 'test'), { recursive: true });
   writeFileSync(join(cwd, 'src', 'accounts-cli.mjs'), 'export const accounts = true;\n');
   writeFileSync(join(cwd, 'src', 'metrics-model.mjs'), 'export const metrics = true;\n');
   writeFileSync(join(cwd, 'src', 'runtime-seam.mjs'), 'export const seam = true;\n');
+  writeFileSync(join(cwd, 'src', 'login-pool.mjs'), 'export const pool = true;\n');
+  writeFileSync(join(cwd, 'prompts', 'cli', 'login-pool.prompt.md'), '# login-pool\n');
 
   let now = Date.parse('2026-11-18T12:00:00Z');
   let pid = 100;
   let shouldFailLabel = failNextLabel;
+  let shouldFailCommentFetch = failNextCommentFetch;
   const writes = [];
   const commentsByIssue = new Map();
   const labelsByIssue = new Map();
+  const timelineByIssue = new Map();
   const alerts = [];
   const warnings = [];
   const startedJobs = [];
 
   const gh = {
     all: async endpoint => {
-      const m = endpoint.match(/issues\/(\d+)\/comments/);
-      if (m) return [...(commentsByIssue.get(Number(m[1])) ?? [])];
+      const cm = endpoint.match(/issues\/(\d+)\/comments/);
+      if (cm) {
+        if (shouldFailCommentFetch) {
+          shouldFailCommentFetch = false;
+          throw new Error('HTTP 502 Bad Gateway reading comments');
+        }
+        return [...(commentsByIssue.get(Number(cm[1])) ?? [])];
+      }
+      const tm = endpoint.match(/issues\/(\d+)\/timeline/);
+      if (tm) return [...(timelineByIssue.get(Number(tm[1])) ?? [])];
       return [];
     },
     call: async (method, endpoint, payload) => {
@@ -114,6 +129,7 @@ function makeIntakeHarness(t, { mode = 'active', repo = 'promptdriven/pdd', fail
     now: () => now,
     root,
     repo,
+    login: async () => 'autopilot-bot',
     state: { agent: { kind: 'codex', command: 'codex', model: 'gpt-test' }, cwd },
     settings: { intake: mode },
     budget: { state: 'normal' },
@@ -121,7 +137,7 @@ function makeIntakeHarness(t, { mode = 'active', repo = 'promptdriven/pdd', fail
     jobs,
     ports: {
       trusted: async ({ user }) => user?.login === 'maintainer' || user?.login === 'serhan',
-      agentReady: async () => true,
+      agentReady: async () => agentReady,
       alert: async payload => { alerts.push(payload); },
       env: {},
     },
@@ -135,6 +151,7 @@ function makeIntakeHarness(t, { mode = 'active', repo = 'promptdriven/pdd', fail
     writes,
     commentsByIssue,
     labelsByIssue,
+    timelineByIssue,
     alerts,
     warnings,
     startedJobs,
@@ -536,4 +553,381 @@ test('3534 activeIntake + applyPreflightDecision: routes cross-repo, parks human
   // Direct applyPreflightDecision on an allow verdict is a clean no-op.
   const noop = await applyPreflightDecision(hFail.ctx, retryRow, { decision: 'allow', reasonCode: null });
   assert.deepEqual(noop, { applied: false, commented: false, label: null, reasonCode: null });
+});
+
+test('3534 adversarial regressions (MF1-MF2): eliminates cross_repo false positives, handles CommonMark fences, and keeps true multi-repo catches', () => {
+  const repoFiles = ['src/metrics-model.mjs', 'src/command-catalog.mjs', 'src/runtime-seam.mjs', 'src/accounts-cli.mjs', 'src/login-pool.mjs', 'package.json'];
+
+  // MF1: everyday prose ("alongside", slash tokens, dependency bumps, meta-issues, companion tracking briefs) must stay allow.
+  const singleRepoSamples = [
+    {
+      name: 'slash tokens in prose + alongside English',
+      title: 'Fix local/state cleanup alongside existing npm cache',
+      body: 'Update `src/metrics-model.mjs` to remove/use sqlite/postgres or headless/process config in `.codex/skills` (3/4 installs/launches confirm y/N).',
+    },
+    {
+      name: 'dependency bump of @promptdriven/runtime-client',
+      title: 'Bump @promptdriven/runtime-client pin and enforce src/command-catalog.mjs flag parity',
+      body: 'Since PR #3418, 12 commits have merged to `@promptdriven/runtime-client` `main` closing issues across both repos. Changes in `runtime-client` that add CLI flags to `test/host-shims/command-catalog.mjs` do not update `src/command-catalog.mjs`. Bump `@promptdriven/runtime-client` in `package.json`.',
+    },
+    {
+      name: 'meta-issue describing cross-repo classifier',
+      title: 'Tighten Autopilot intake classifier',
+      body: 'Filter issues before spending tokens when they:\n- Require coordinated changes in another repository (`pdd_cloud`, `pdd-workflow`, external services).',
+    },
+    {
+      name: 'locked-in brief referencing companion tracking issue',
+      title: 'pdd metrics overhaul',
+      body: '# Locked-In Brief: `pdd metrics` Overhaul (`pdd#3530` & `pdd-workflow#3787`)\nUpdate `src/metrics-model.mjs` to add Regressions column.',
+    },
+    {
+      name: 'MF2 title prefixes and non-repo Service headers',
+      title: 'src/metrics-model.mjs: fix NaN under systemd',
+      body: 'Service: launchd\nFix NaN division in `src/metrics-model.mjs`.',
+    },
+    {
+      name: 'MF2 bracketed UI/CLI and feat/branch title prefixes',
+      title: '[CLI/UX] improve help output',
+      body: 'Service: systemd\nUpdate `src/command-catalog.mjs`.',
+    },
+    {
+      name: 'MF2 feat/metrics prefix',
+      title: 'feat/metrics: add regressions column',
+      body: 'Update `src/metrics-model.mjs`.',
+    },
+    {
+      name: 'MF2 reference-only foreign URL without local files named yet',
+      title: 'Improve retry backoff messaging',
+      body: 'See https://github.com/other-org/example/blob/main/retry.ts for reference on clearer retry messages.',
+    },
+  ];
+  for (const sample of singleRepoSamples) {
+    const res = classifyPreflightIssue({
+      repository: 'promptdriven/pdd',
+      issue: { number: 100, title: sample.title, body: sample.body, comments: [] },
+      repoFiles,
+    });
+    assert.equal(res.decision, 'allow', `${sample.name} must stay allow (got ${res.decision}/${res.reasonCode}: ${res.reason})`);
+  }
+
+  // MF2: other-org/pdd is NOT the same repository as promptdriven/pdd.
+  const otherOrgSameShort = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: { number: 101, title: 'Fix fork build', body: 'Repo: other-org/pdd\nFix `custom/fork.py`.' },
+    repoFiles,
+  });
+  assert.equal(otherOrgSameShort.decision, 'reject');
+  assert.equal(otherOrgSameShort.reasonCode, 'cross_repo');
+  assert.equal(otherOrgSameShort.targetRepo, 'other-org/pdd');
+
+  // MF2: CommonMark sanitization strips 4-space indented fences in lists and ignores inline triple backticks.
+  const indentedFence = sanitizeIssueText([
+    '- Observed log:',
+    '    ```',
+    '    Repo: promptdriven/pdd_cloud',
+    '    Update pdd_cloud/billing/stripe.py',
+    '    ```',
+    '```inline``` keep this real line about `src/metrics-model.mjs`.',
+  ].join('\n'));
+  assert.doesNotMatch(indentedFence, /pdd_cloud\/billing\/stripe\.py/, '4-space indented fence stripped');
+  assert.match(indentedFence, /keep this real line about `src\/metrics-model\.mjs`/, 'inline triple backticks do not swallow prose');
+
+  // True multi-repo heading (#3426 shape) still rejects as cross_repo.
+  const trueMultiRepo = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 3426,
+      title: 'pdd accounts: use tokenless gateway_grant for shared Codex logins',
+      body: '### 1. Server (`promptdriven/pdd_cloud`)\nAdd endpoint.\n### 2. Client (`promptdriven/pdd`)\nUpdate `src/accounts-cli.mjs`.',
+    },
+    repoFiles,
+  });
+  assert.equal(trueMultiRepo.decision, 'reject');
+  assert.equal(trueMultiRepo.reasonCode, 'cross_repo');
+  assert.equal(trueMultiRepo.targetRepo, 'promptdriven/pdd_cloud');
+});
+
+test('3534 adversarial regressions (MF3-MF4): engineering prose stays allow, natural answers resolve, npm test never bypasses mandatory live gates, and all recipes are checked', () => {
+  const repoFiles = ['src/metrics-model.mjs', 'src/login-pool.mjs', 'src/accounts-cli.mjs'];
+
+  // MF3: engineering questions mentioning plan/cost/quota/limit/default/copy/policy/publish/deprecate stay allow.
+  const engineeringBug = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 201,
+      title: 'Fix quota limit default copy on publish retry',
+      body: 'Should we retry when quota limit returns 429 or fall back to cached plan cost policy before we deprecate the old endpoint?',
+    },
+    repoFiles,
+  });
+  assert.equal(engineeringBug.decision, 'allow', 'pure engineering bug with policy-adjacent words stays allow');
+
+  // MF3: natural maintainer answers resolve human_decision without rigid Decision: prefix.
+  for (const reply of ["Let's default to overview.", '$19/seat and 1 free account.', 'A']) {
+    const resolved = classifyPreflightIssue({
+      repository: 'promptdriven/pdd',
+      issue: {
+        number: 202,
+        title: 'Choose Pro tier seat pricing',
+        body: 'Pricing decision: should Pro tier charge $19/seat or $29/seat?',
+        comments: [{ author: 'serhan', trusted: true, body: reply }],
+      },
+      repoFiles,
+    });
+    assert.equal(resolved.decision, 'allow', `natural reply ${JSON.stringify(reply)} resolves human_decision`);
+  }
+
+  // MF4: npm test / pdd test / node --test in the issue MUST NOT bypass mandatory prod/manual/recipe gates.
+  const liveWithNpmTest = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 203,
+      title: 'Verify live Stripe checkout in production',
+      body: 'Run `npm test` and `node --test`, and acceptance criteria also require triggering a real $1 live Stripe checkout charge in production with maintainer 2FA credentials.',
+    },
+    repoFiles,
+  });
+  assert.equal(liveWithNpmTest.decision, 'park', 'npm test must not bypass mandatory live production gate');
+  assert.equal(liveWithNpmTest.reasonCode, 'unverifiable_boundary');
+
+  // MF4: later trusted comment rejecting mocks overrides an earlier positive local-verify comment.
+  const laterRejectsMocks = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 204,
+      title: 'Verify live webhook',
+      body: 'Acceptance criteria: verify against live Stripe webhook with production credentials.',
+      comments: [
+        { author: 'serhan', trusted: true, at: '2026-11-18T10:00:00Z', body: 'Use local unit tests and fake HTTP server instead.' },
+        { author: 'serhan', trusted: true, at: '2026-11-18T11:00:00Z', body: 'Actually no mocks are accepted — must verify against live Stripe.' },
+      ],
+    },
+    repoFiles,
+  });
+  assert.equal(laterRejectsMocks.decision, 'park', 'later trusted rejection overrides earlier local authorization');
+  assert.equal(laterRejectsMocks.reasonCode, 'unverifiable_boundary');
+
+  // MF4: redaction/security bugs mentioning production credentials or live API keys stay allow.
+  const redactionBug = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 205,
+      title: 'Never log production credentials or live API keys',
+      body: 'Fix `src/login-pool.mjs` to redact production credentials, production API keys, and live Stripe keys from error logs so zero plaintext leaks.',
+    },
+    repoFiles,
+  });
+  assert.equal(redactionBug.decision, 'allow', 'defensive redaction bug mentioning production credentials stays allow');
+
+  // MF4: multiple named recipes are all checked via matchAll.
+  const multiRecipes = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 206,
+      title: 'Run both verification recipes',
+      body: 'Verification recipe: recipe-a\nVerification recipe: recipe-b',
+    },
+    repoFiles,
+    workerCapabilities: { localTests: true, availableRecipes: ['recipe-a'] },
+  });
+  assert.equal(multiRecipes.decision, 'park', 'missing second named recipe still parks');
+  assert.equal(multiRecipes.reasonCode, 'unverifiable_boundary');
+  assert.match(multiRecipes.reason, /recipe-b/);
+});
+
+test('3534 adversarial regressions (MF3/MF5/MF6 + minor): comment-before-label, no re-park loop on PREFLIGHT_MARKER_PREFIX, cwd module lookup, shadow ordering, stale improve card, and readIntake date scope', async t => {
+  // MF5: comment MUST be posted BEFORE label; comment-fetch error warns and posts nothing; stale comments:0 still deduplicates.
+  const hOrder = makeIntakeHarness(t, { mode: 'active' });
+  const parkRow = {
+    number: 601,
+    title: 'Choose Pro pricing',
+    body: 'Pricing decision: should Pro tier charge $19/seat or $29/seat?',
+    labels: [],
+    assignees: [],
+    comments: 0,
+    user: { login: 'maintainer' },
+    created_at: '2026-11-18T01:00:00Z',
+  };
+  await activeIntake(hOrder.ctx, [parkRow]);
+  const issue601Writes = hOrder.writes.filter(w => w.endpoint.includes('/issues/601/'));
+  assert.ok(issue601Writes.length >= 2);
+  assert.match(issue601Writes[0].endpoint, /\/comments$/, 'comment posted BEFORE label');
+  assert.match(issue601Writes[1].endpoint, /\/labels$/, 'label applied AFTER comment');
+
+  // MF3: removing pdd:needs-decision after a PREFLIGHT_MARKER_PREFIX comment breaks the infinite re-park loop even with NO comment!
+  parkRow.labels = [];
+  hOrder.labelsByIssue.get(601)?.delete('pdd:needs-decision');
+  parkRow.comments = 0; // Even if row.comments is stale!
+  hOrder.timelineByIssue.set(601, [
+    { event: 'unlabeled', label: { name: 'pdd:needs-decision' }, actor: { login: 'serhan' }, created_at: '2026-11-18T12:05:00Z' },
+  ]);
+  hOrder.advance(60_000);
+  await activeIntake(hOrder.ctx, [parkRow]);
+  assert.deepEqual(hOrder.startedJobs.map(j => j.issue), [601], 'trusted label removal after PREFLIGHT_MARKER_PREFIX resumes without re-parking');
+  assert.equal(hOrder.labelsByIssue.get(601)?.has('pdd:needs-decision') ?? false, false, 'does not re-apply pdd:needs-decision');
+
+  // MF5: comment-fetch error logs warning and does NOT post duplicate comment or label.
+  const hFetchErr = makeIntakeHarness(t, { mode: 'active', failNextCommentFetch: true });
+  const errRow = {
+    number: 602,
+    title: 'Choose Pro pricing',
+    body: 'Pricing decision: should Pro tier charge $19/seat or $29/seat?',
+    labels: [],
+    assignees: [],
+    comments: 0,
+    user: { login: 'maintainer' },
+    created_at: '2026-11-18T02:00:00Z',
+  };
+  const errRes = await applyPreflightDecision(hFetchErr.ctx, errRow, {
+    decision: 'park',
+    reasonCode: 'human_decision',
+    label: 'pdd:needs-decision',
+    reason: 'Needs pricing choice.',
+    question: 'Should Pro tier charge $19/seat or $29/seat?',
+  });
+  assert.equal(errRes.applied, false);
+  assert.equal(hFetchErr.writes.length, 0, 'zero GitHub writes when comment fetch fails');
+  assert.ok(hFetchErr.warnings.some(w => w.includes('#602')));
+
+  // MF6: bare local module name ("login-pool") in production cwd mode keeps issue local.
+  assert.equal(
+    detectWrongRepositoryIssue(
+      { title: 'Refresh login-pool backoff when prompt-runtime returns 503', body: 'In `login-pool`, add retry jitter when calling `prompt-runtime`.' },
+      { repo: 'promptdriven/pdd', cwd: hOrder.cwd },
+    ),
+    null,
+    'cwd inventory includes src/login-pool.mjs so bare module reference stays local',
+  );
+
+  // Minor: shadowIntake records pre-flight skips BEFORE canStart() even when agentReady is false (zero GitHub writes).
+  const hShadow = makeIntakeHarness(t, { mode: 'shadow', agentReady: false });
+  const shadowSkipRow = {
+    number: 603,
+    title: 'Choose pricing model',
+    body: 'Pricing decision: should we charge $19/seat or $29/seat?',
+    labels: [],
+    assignees: [],
+    comments: 0,
+    user: { login: 'maintainer' },
+    created_at: '2026-11-18T03:00:00Z',
+  };
+  await shadowIntake(hShadow.ctx, [shadowSkipRow]);
+  assert.equal(hShadow.writes.length, 0, 'shadow mode makes zero GitHub writes');
+  const shadowToday = readIntake({ root: hShadow.root, date: '2026-11-18' });
+  const shadowOtherDay = readIntake({ root: hShadow.root, date: '2026-11-19' });
+  assert.equal(shadowToday.preflightSkips.length, 1, 'shadowIntake recorded pre-flight skip even when canStart() was false');
+  assert.equal(shadowOtherDay.preflightSkips.length, 0, 'readIntake scopes preflightSkips to requested UTC date');
+
+  // Minor: activeIntake checks pre-flight on pre-existing improve cards before spawning auto-improve.
+  const hImprove = makeIntakeHarness(t, { mode: 'active' });
+  const fImp = intakeFolders(hImprove.root);
+  mkdirSync(fImp.cards, { recursive: true });
+  const staleImproveRow = {
+    number: 604,
+    title: 'Verify live Stripe checkout in production',
+    body: 'Acceptance criteria: trigger a real $1 live Stripe checkout charge in production with maintainer 2FA credentials.',
+    labels: [],
+    assignees: [],
+    comments: 0,
+    user: { login: 'maintainer' },
+    created_at: '2026-11-18T04:00:00Z',
+  };
+  // Seed a matching improve card from before the pre-flight classifier existed.
+  await shadowIntake(makeIntakeHarness(t, { mode: 'shadow' }).ctx, []);
+  const { issueVersion } = await import('../src/autopilot-intake.mjs');
+  writeFileSync(join(fImp.cards, '604.json'), JSON.stringify({
+    issue: 604,
+    version: issueVersion(staleImproveRow),
+    at: hImprove.ctx.now(),
+    agent: { kind: 'codex', model: 'gpt-test' },
+    native: null,
+    card: { class: 'improve', confidence: 0.7, reason: 'Needs detail', areas: [] },
+  }));
+  await activeIntake(hImprove.ctx, [staleImproveRow]);
+  assert.equal(hImprove.startedJobs.length, 0, 'stale improve card is parked at pre-flight instead of spawning auto-improve');
+  assert.equal(hImprove.labelsByIssue.get(604)?.has('pdd:needs-decision'), true);
+
+  // Minor: cross-repo routing comment excludes local-root greenfield paths from missingPaths.
+  const hGreenfield = makeIntakeHarness(t, { mode: 'active' });
+  const mixedGreenfieldRow = {
+    number: 605,
+    title: 'Coordinate pdd_cloud handler with new local helper',
+    body: 'Update `pdd_cloud/webhooks/github.py` alongside creating `src/new-local-helper.mjs`.',
+    labels: [],
+    assignees: [],
+    comments: 0,
+    user: { login: 'maintainer' },
+    created_at: '2026-11-18T05:00:00Z',
+  };
+  await activeIntake(hGreenfield.ctx, [mixedGreenfieldRow]);
+  const routeComment605 = (hGreenfield.commentsByIssue.get(605) ?? [])[0]?.body ?? '';
+  assert.match(routeComment605, /pdd_cloud\/webhooks\/github\.py/, 'foreign path reported in missingPaths');
+  assert.doesNotMatch(routeComment605, /src\/new-local-helper\.mjs/, 'local-root greenfield path excluded from missingPaths');
+});
+
+test('3534 adversarial regression (MF7): autopilot-core pre-claim enforces cross_repo, human_decision, and unverifiable_boundary with intake off and resumes after trusted resolution', async t => {
+  const w = await coreWorld(t, { repository: 'promptdriven/pdd', settings: { runs: 3, intake: 'off', label: 'pdd:autopilot' } });
+  mkdirSync(join(w.cwd, 'src'), { recursive: true });
+  writeFileSync(join(w.cwd, 'src', 'accounts-cli.mjs'), 'export const accounts = true;\n');
+  writeFileSync(join(w.cwd, 'src', 'metrics-model.mjs'), 'export const metrics = true;\n');
+
+  w.issue(701, {
+    user: 'promptdriven',
+    labels: ['pdd:autopilot'],
+    title: 'Coordinate pdd_cloud and pdd gateway change',
+    body: '### 1. Server (`promptdriven/pdd_cloud`)\nUpdate `pdd_cloud/gateway/codex.py`.\n### 2. Client (`promptdriven/pdd`)\nUpdate `src/accounts-cli.mjs`.',
+  });
+  w.issue(702, {
+    user: 'promptdriven',
+    labels: ['pdd:autopilot'],
+    title: 'Choose seat price for Pro tier',
+    body: 'Pricing decision: should Pro tier charge $19/seat or $29/seat?',
+  });
+  w.issue(703, {
+    user: 'promptdriven',
+    labels: ['pdd:autopilot'],
+    title: 'Verify live Stripe checkout in production',
+    body: 'Acceptance criteria: trigger a real $1 live Stripe checkout charge in production with maintainer 2FA credentials.',
+  });
+  w.issue(704, {
+    user: 'promptdriven',
+    labels: ['pdd:autopilot'],
+    title: 'Fix metrics NaN guard',
+    body: 'Update `src/metrics-model.mjs` so empty arrays return 0 instead of NaN.',
+  });
+
+  await w.tick();
+  assert.equal(w.job(701, 'build'), undefined, 'coordinated multi-repo #701 not claimed');
+  assert.equal(w.job(702, 'build'), undefined, 'unanswered pricing #702 not claimed');
+  assert.equal(w.job(703, 'build'), undefined, 'unverifiable live prod #703 not claimed');
+  assert.ok(w.job(704, 'build'), 'normal single-repo #704 claimed and started');
+
+  assert.equal(w.labels(701).includes(NEEDS_OTHER_REPO_LABEL), true, '#701 labeled needs-other-repo');
+  assert.equal(w.labels(702).includes('pdd:needs-decision'), true, '#702 labeled pdd:needs-decision');
+  assert.equal(w.labels(703).includes('pdd:needs-decision'), true, '#703 labeled pdd:needs-decision');
+  assert.equal(w.comments(702).filter(c => c.includes(`${PREFLIGHT_MARKER_PREFIX}702:`)).length, 1);
+  assert.equal(w.comments(703).filter(c => c.includes(`${PREFLIGHT_MARKER_PREFIX}703:`)).length, 1);
+
+  const skips = readIntake({ root: w.root, now: w.now() }).preflightSkips;
+  assert.deepEqual(
+    skips.map(s => [s.issue, s.reasonCode, s.mode]).sort((a, b) => a[0] - b[0]),
+    [
+      [701, 'cross_repo', 'core'],
+      [702, 'human_decision', 'core'],
+      [703, 'unverifiable_boundary', 'core'],
+    ],
+    'core pre-claim records all three pre-flight skip reasons in preflight-skips.jsonl',
+  );
+
+  // Trusted maintainer answers #702 and removes pdd:needs-decision -> next tick claims #702 without re-parking!
+  w.advance(5000);
+  w.github.comment(702, '$19/seat and 1 free account.', 'promptdriven');
+  w.github.unlabel(702, 'pdd:needs-decision', 'promptdriven');
+  // Trusted maintainer removes pdd:needs-decision on #703 without a comment -> next tick claims #703 too!
+  w.github.unlabel(703, 'pdd:needs-decision', 'promptdriven');
+  await w.tick();
+  assert.equal(w.labels(702).includes('pdd:needs-decision'), false, '#702 is not re-parked after trusted answer');
+  assert.ok(w.job(702, 'build'), '#702 is claimed and started by core after trusted answer');
+  assert.equal(w.labels(703).includes('pdd:needs-decision'), false, '#703 is not re-parked after trusted label removal');
+  assert.ok(w.job(703, 'build'), '#703 is claimed and started by core after trusted label removal');
 });

@@ -9,6 +9,9 @@ import { codexProviderConfigArgs, extractJsonObjects, findConfiguredSkipLabel, f
 import {
   PREFLIGHT_REASON_CODES,
   sanitizeIssueText,
+  extractReferencedPaths,
+  extractForeignMissingPaths,
+  detectForeignOnlyTarget,
   classifyPreflightIssue,
   summarizeIntakeFilterPrecision,
 } from './autopilot-intake-preflight.mjs';
@@ -32,12 +35,9 @@ const DECISION_LABEL = 'pdd:needs-decision';
 export const NEEDS_OTHER_REPO_LABEL = 'needs-other-repo';
 export const OTHER_REPO_MARKER_PREFIX = '<!-- pdd:autopilot-intake:other-repo:';
 export const PREFLIGHT_MARKER_PREFIX = '<!-- pdd:autopilot-intake:preflight:';
+const CORE_QUESTION_MARKER_PREFIX = '<!-- pdd:autopilot-core:question:';
 const PREFLIGHT_REASON_SET = new Set(PREFLIGHT_REASON_CODES);
 const normalizeReasonCode = value => (typeof value === 'string' && PREFLIGHT_REASON_SET.has(value.trim()) ? value.trim() : null);
-const GENERIC_ROOT_FILES = new Set(['package.json', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'readme.md', 'agents.md', 'claude.md', 'tsconfig.json', 'pyproject.toml', 'cargo.toml', 'go.mod', '.gitignore', 'license']);
-const PATH_PREFIX_RE = /^(?:src|prompts|test|tests|scripts|bin|docs|skills|user_stories|packages|apps|services|extensions|pdd_cloud|pdd-workflow|pdd_workflow|prompt-runtime|runtime-client|github_pdd_app|server|worker|api|lib|\.github)\/[A-Za-z0-9_./-]+$/;
-const PATH_EXT_RE = /^(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|swift|sh|md|json|ya?ml|toml|sql|css|html)$/;
-const IGNORE_SLASH_RE = /^(?:origin|refs|application|text|image|audio|video|multipart|http|https|read|write|pass|fail|true|false|yes|no|auto|observe|before|after|stdout|stderr|input|output|client|server)\//i;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const text = value => typeof value === 'string' ? value : '';
 const labelsOf = row => (row?.labels ?? []).map(label => typeof label === 'string' ? label : label?.name).filter(name => typeof name === 'string' && name).sort();
@@ -104,227 +104,15 @@ export function findOtherRepoSkipLabel(input) {
   return null;
 }
 
-function normalizeCandidatePath(raw) {
-  const cleaned = text(raw).trim().replace(/^`+|`+$/g, '').replace(/^[("'\[]+|[)"'\],.:;!?]+$/g, '').replace(/^\.\//, '').replace(/#L\d+(?:-L?\d+)?$/i, '').replace(/:\d+(?::\d+)?$/, '');
-  if (!cleaned || cleaned.startsWith('/') || cleaned.includes('..') || cleaned.includes('://') || cleaned.includes('*') || IGNORE_SLASH_RE.test(cleaned)) return null;
-  if (PATH_EXT_RE.test(cleaned) || PATH_PREFIX_RE.test(cleaned)) return cleaned;
-  return null;
-}
-
-function extractReferencedPaths(fullText) {
-  const stripped = text(fullText).replace(/https?:\/\/[^\s)`"'>]+/gi, ' ');
-  const found = new Set();
-  for (const match of stripped.matchAll(/`([^`\n]{2,180})`/g)) {
-    for (const part of match[1].split(/\s+/)) {
-      const norm = normalizeCandidatePath(part);
-      if (norm) found.add(norm);
-    }
-  }
-  for (const match of stripped.matchAll(/(?:^|[\s(["'])([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+)(?=$|[\s)\]"',.:;!?])/gm)) {
-    const norm = normalizeCandidatePath(match[1]);
-    if (norm) found.add(norm);
-  }
-  return [...found];
-}
-
 export function detectWrongRepositoryIssue(row, { repo = null, cwd = null, fs = nativeFs, repoFiles = null } = {}) {
   if (!object(row)) return null;
-  const currentRepo = text(repo).trim().toLowerCase();
-  const currentShort = currentRepo.includes('/') ? currentRepo.split('/').at(-1) : currentRepo;
-  const title = text(row.title), body = sanitizeIssueText(text(row.body)), fullText = `${title}\n${body}`;
-  if (!fullText.trim()) return null;
-
-  const fileSet = repoFiles ? new Set([...repoFiles].map(item => String(item).replace(/^\.\//, '').replace(/^\/+/, ''))) : null;
-  const canCheckDisk = Boolean(fileSet || (typeof cwd === 'string' && cwd));
-  const pathExists = rel => {
-    const clean = String(rel).replace(/^\.\//, '').replace(/^\/+/, '');
-    if (!clean || clean.includes('..')) return false;
-    if (fileSet) {
-      if (fileSet.has(clean)) return true;
-      const prefix = `${clean}/`;
-      for (const item of fileSet) if (item.startsWith(prefix)) return true;
-      return false;
-    }
-    if (typeof cwd === 'string' && cwd) {
-      try { return Boolean(fs.existsSync(join(cwd, clean))); } catch { return false; }
-    }
-    return false;
-  };
-
-  const dirExists = relDir => {
-    const clean = String(relDir).replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
-    if (!clean || clean.includes('..') || clean.includes('/')) return false;
-    if (fileSet) {
-      const prefix = `${clean}/`;
-      for (const item of fileSet) if (item.startsWith(prefix)) return true;
-      return false;
-    }
-    if (typeof cwd === 'string' && cwd) {
-      try {
-        if (typeof fs?.statSync === 'function') return Boolean(fs.statSync(join(cwd, clean))?.isDirectory?.());
-        return Boolean(fs.existsSync(join(cwd, clean)));
-      } catch {
-        return false;
-      }
-    }
-    return false;
-  };
-
-  const externalRoots = [
-    { prefix: 'pdd_cloud/', root: 'pdd_cloud', target: 'pdd_cloud' },
-    { prefix: 'pdd-workflow/', root: 'pdd-workflow', target: 'pdd-workflow' },
-    { prefix: 'pdd_workflow/', root: 'pdd_workflow', target: 'pdd-workflow' },
-    { prefix: 'extensions/github_pdd_app/', root: 'extensions/github_pdd_app', target: 'extensions/github_pdd_app' },
-    { prefix: 'github_pdd_app/', root: 'github_pdd_app', target: 'extensions/github_pdd_app' },
-    { prefix: 'prompt-runtime/', root: 'prompt-runtime', target: 'prompt-runtime' },
-    { prefix: 'runtime-client/', root: 'runtime-client', target: 'runtime-client' },
-    { prefix: 'packages/runtime-client/', root: 'packages/runtime-client', target: 'runtime-client' },
-  ];
-  const isExternalRootPath = p => {
-    const lower = p.toLowerCase();
-    return externalRoots.some(
-      cand => currentShort !== cand.target.split('/').at(-1)?.toLowerCase() && !pathExists(cand.root) && lower.startsWith(cand.prefix),
-    );
-  };
-
-  const allPaths = extractReferencedPaths(fullText);
-  const specificPaths = allPaths.filter(p => !GENERIC_ROOT_FILES.has(p.toLowerCase()));
-  const existingSpecific = canCheckDisk ? specificPaths.filter(pathExists) : [];
-  const missingSpecific = canCheckDisk ? specificPaths.filter(p => !pathExists(p)) : specificPaths;
-
-  const localGreenfieldPaths = [];
-  const foreignMissingPaths = [];
-  for (const p of missingSpecific) {
-    const slash = p.indexOf('/');
-    const topDir = slash > 0 ? p.slice(0, slash) : '';
-    if (canCheckDisk && topDir && !isExternalRootPath(p) && dirExists(topDir)) {
-      localGreenfieldPaths.push(p);
-    } else {
-      foreignMissingPaths.push(p);
-    }
-  }
-
-  // Signal A: explicit repository metadata header ("Repo: owner/other", "Target repository: prompt-runtime", etc.)
-  for (const line of fullText.split('\n')) {
-    const m = line.match(/^\s*(?:[-*]\s*)?\*{0,2}(?:target\s+)?repo(?:sitory)?\*{0,2}\s*:\s*`?([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)`?\s*$/i);
-    if (!m) continue;
-    const declared = m[1].trim(), lower = declared.toLowerCase();
-    if (['none', 'current', 'this', 'local', 'same', 'n/a'].includes(lower)) continue;
-    const matchesCurrent = (currentRepo && lower === currentRepo) || (currentShort && (lower === currentShort || lower.endsWith(`/${currentShort}`)));
-    if (!matchesCurrent && existingSpecific.length === 0 && (!canCheckDisk || !pathExists(declared))) {
-      return {
-        targetRepo: declared,
-        signal: 'repo-header',
-        missingPaths: foreignMissingPaths.length ? foreignMissingPaths : missingSpecific,
-        reason: `Issue header targets repository ${declared}, and none of the referenced implementation paths exist in ${repo || 'this repository'}.`,
-      };
-    }
-  }
-
-  if (existingSpecific.length > 0 || localGreenfieldPaths.length > 0) return null;
-
-  // Guard: if the issue names a local src/<module>.mjs or pdd CLI command without external root paths, keep it local.
-  const namesLocalCliOrModule = (() => {
-    if (/\bpdd\s+(?:autopilot|workflow|test|approve|owner|setup|accounts|doctor|init)\b/i.test(fullText) || /\bpdd\.json\b/i.test(fullText)) return true;
-    if (!canCheckDisk) return false;
-    for (const token of fullText.matchAll(/\b([a-z][a-z0-9-]{2,40})\b/gi)) {
-      const mod = token[1].toLowerCase();
-      if (['prompt-runtime', 'runtime-client', 'pdd-cloud', 'pdd-workflow'].includes(mod)) continue;
-      if (pathExists(`src/${mod}.mjs`) || pathExists(`prompts/cli/${mod}.prompt.md`)) return true;
-    }
-    return false;
-  })();
-
-  // Signal B: GitHub blob/tree links pointing exclusively to another repository whose paths are absent locally.
-  const urlRepos = new Map();
-  for (const m of fullText.matchAll(/https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:blob|tree)\/[^/\s]+\/([^\s)`"'>#?]+)/gi)) {
-    const slug = m[1], lower = slug.toLowerCase(), sub = normalizeCandidatePath(m[2]);
-    if (currentRepo && lower === currentRepo) return null;
-    if (sub && canCheckDisk && pathExists(sub)) return null;
-    if (!urlRepos.has(lower)) urlRepos.set(lower, { slug, paths: [] });
-    if (sub) urlRepos.get(lower).paths.push(sub);
-  }
-  if (urlRepos.size > 0 && currentRepo && !namesLocalCliOrModule) {
-    const first = [...urlRepos.values()][0];
-    const missing = [...new Set([...foreignMissingPaths, ...first.paths])];
-    return {
-      targetRepo: first.slug,
-      signal: 'github-url',
-      missingPaths: missing,
-      reason: `Issue links code in ${first.slug}, and none of the referenced paths exist in ${repo}.`,
-    };
-  }
-
-  if (!canCheckDisk) return null;
-
-  // Signal C: explicit root paths belonging to sibling repositories absent from cwd.
-  for (const cand of externalRoots) {
-    if (currentShort === cand.target.split('/').at(-1)?.toLowerCase() || pathExists(cand.root)) continue;
-    const hits = foreignMissingPaths.filter(p => p.toLowerCase().startsWith(cand.prefix));
-    if (hits.length > 0) {
-      return {
-        targetRepo: cand.target,
-        signal: 'external-root-path',
-        missingPaths: foreignMissingPaths,
-        reason: `Issue targets ${cand.target} paths (${hits.slice(0, 3).join(', ')}) that do not exist in ${repo || 'this repository'}.`,
-      };
-    }
-  }
-
-  // Signal D: prose targets a known sibling repository/service absent from cwd and cites only foreign missing paths (or frames the issue explicitly for that sibling without local pdd modules).
-  if (!namesLocalCliOrModule) {
-    const siblings = [
-      {
-        target: 'prompt-runtime',
-        short: 'prompt-runtime',
-        roots: ['prompt-runtime'],
-        mentionRe: /\bprompt-runtime\b/i,
-        framedRe: /(?:^\s*\[?prompt-runtime\]?\s*[:\-]|\bin\s+`?prompt-runtime`?\b|\bfor\s+`?prompt-runtime`?\b|\bon\s+`?prompt-runtime`?\b|`prompt-runtime`\s+(?:service|server|worker|repo|repository|interpreter))/im,
-      },
-      {
-        target: 'runtime-client',
-        short: 'runtime-client',
-        roots: ['runtime-client', 'packages/runtime-client'],
-        mentionRe: /\bruntime-client\b/i,
-        framedRe: /(?:^\s*\[?runtime-client\]?\s*[:\-]|\bin\s+`?runtime-client`?\b|\bfor\s+`?runtime-client`?\b|\bon\s+`?runtime-client`?\b|`runtime-client`\s+(?:package|repo|repository|sdk|client))/im,
-      },
-      {
-        target: 'pdd_cloud',
-        short: 'pdd_cloud',
-        roots: ['pdd_cloud'],
-        mentionRe: /\bpdd[_-]cloud\b/i,
-        framedRe: /(?:^\s*\[?pdd[_-]cloud\]?\s*[:\-]|\bin\s+`?pdd[_-]cloud`?\b|\bfor\s+`?pdd[_-]cloud`?\b|\bon\s+`?pdd[_-]cloud`?\b|`pdd[_-]cloud`\s+(?:service|backend|server|repo|repository))/im,
-      },
-      {
-        target: 'pdd-workflow',
-        short: 'pdd-workflow',
-        roots: ['pdd-workflow', 'pdd_workflow'],
-        mentionRe: /\bpdd[_-]workflow\b/i,
-        framedRe: /(?:^\s*\[?pdd[_-]workflow\]?\s*[:\-]|\bin\s+`?pdd[_-]workflow`?\b|\bfor\s+`?pdd[_-]workflow`?\b|\bon\s+`?pdd[_-]workflow`?\b|`pdd[_-]workflow`\s+(?:service|repo|repository|scripts?|pipeline|workflow))/im,
-      },
-      {
-        target: 'extensions/github_pdd_app',
-        short: 'github_pdd_app',
-        roots: ['extensions/github_pdd_app', 'github_pdd_app'],
-        mentionRe: /\bgithub[_-]pdd[_-]app\b/i,
-        framedRe: /(?:^\s*\[?github[_-]pdd[_-]app\]?\s*[:\-]|\bin\s+`?github[_-]pdd[_-]app`?\b|\bfor\s+`?github[_-]pdd[_-]app`?\b)/im,
-      },
-    ];
-    for (const sib of siblings) {
-      if (currentShort === sib.short || sib.roots.some(pathExists)) continue;
-      if (!sib.mentionRe.test(fullText)) continue;
-      if (foreignMissingPaths.length > 0 || sib.framedRe.test(fullText)) {
-        return {
-          targetRepo: sib.target,
-          signal: 'sibling-service',
-          missingPaths: foreignMissingPaths,
-          reason: `Issue targets ${sib.target} implementation${foreignMissingPaths.length ? ` (${foreignMissingPaths.slice(0, 3).join(', ')})` : ''}, which is absent from ${repo || 'this repository'}.`,
-        };
-      }
-    }
-  }
-
-  return null;
+  const inventory = repoInventoryForIssue(row, [], { cwd, fs, repoFiles });
+  return detectForeignOnlyTarget({
+    repository: repo ?? '',
+    title: text(row.title),
+    body: text(row.body),
+    repoFiles: inventory,
+  });
 }
 
 async function ensureIssueLabel(ctx, n, row, labelName, { color, description }) {
@@ -354,15 +142,8 @@ export async function routeWrongRepositoryIssue(ctx, row, match) {
   if (hasSkipLabel && routedMap[String(n)] === bKey) return { routed: false, alreadyRouted: true };
 
   const marker = `${OTHER_REPO_MARKER_PREFIX}${n} -->`;
-  const existing = Number(row.comments) > 0
-    ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`).catch(() => [])
-    : [];
+  const existing = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`);
   const alreadyCommented = routedMap[String(n)] === bKey || existing.some(c => text(c?.body).includes(marker));
-
-  await ensureIssueLabel(ctx, n, row, NEEDS_OTHER_REPO_LABEL, {
-    color: 'd4c5f9',
-    description: 'Issue targets code in another repository',
-  });
 
   if (!alreadyCommented) {
     const targetWords = match?.targetRepo ? `\`${plain(match.targetRepo, 120)}\`` : 'another repository';
@@ -385,10 +166,24 @@ export async function routeWrongRepositoryIssue(ctx, row, match) {
     row.comments = (Number(row.comments) || 0) + 1;
   }
 
+  await ensureIssueLabel(ctx, n, row, NEEDS_OTHER_REPO_LABEL, {
+    color: 'd4c5f9',
+    description: 'Issue targets code in another repository',
+  });
+
   ctx.fs.mkdirSync(f.base, { recursive: true, mode: 0o700 });
   routedMap[String(n)] = bKey;
   writeJson(ctx.fs, routedFile, routedMap);
   return { routed: true, commented: !alreadyCommented, label: NEEDS_OTHER_REPO_LABEL };
+}
+
+function addLocalModuleEntries(fs, cwd, relDir, extRe, inventory) {
+  let entries = [];
+  try { entries = fs.readdirSync(join(cwd, relDir)); } catch { return; }
+  for (const entry of entries) {
+    const name = typeof entry === 'string' ? entry : entry?.name;
+    if (typeof name === 'string' && extRe.test(name)) inventory.add(`${relDir}/${name}`);
+  }
 }
 
 function repoInventoryForIssue(row, comments, { cwd = null, fs = nativeFs, repoFiles = null } = {}) {
@@ -408,6 +203,9 @@ function repoInventoryForIssue(row, comments, { cwd = null, fs = nativeFs, repoF
       if (isDir) inventory.add(`${name}/.`);
     }
   } catch { /* Directory unreadable: fall back to direct existsSync checks below. */ }
+  // Include local CLI/module filenames so bare module references resolve in production cwd mode.
+  addLocalModuleEntries(fs, cwd, 'src', /\.(?:mjs|cjs|js)$/, inventory);
+  addLocalModuleEntries(fs, cwd, 'prompts/cli', /\.prompt\.md$/, inventory);
   for (const nestedRoot of ['extensions/github_pdd_app', 'packages/runtime-client']) {
     try { if (fs.existsSync(join(cwd, nestedRoot))) inventory.add(`${nestedRoot}/.`); } catch { /* ignore */ }
   }
@@ -445,11 +243,13 @@ function evaluatePreflight(ctx, row, { comments = [], decisionNote = null, repoF
     decisionNote,
     workerCapabilities: ctx?.settings?.workerCapabilities ?? null,
   });
-  if (result.reasonCode === 'cross_repo' && cwd && fs) {
-    const combined = `${text(row.title)}\n${sanitizeIssueText(text(row.body))}`;
-    const missingPaths = extractReferencedPaths(combined).filter(p => {
-      if (GENERIC_ROOT_FILES.has(p.toLowerCase())) return false;
-      try { return !fs.existsSync(join(cwd, p)); } catch { return true; }
+  if (result.reasonCode === 'cross_repo') {
+    const missingPaths = extractForeignMissingPaths({
+      repository: ctx?.repo ?? '',
+      title: text(row.title),
+      body: text(row.body),
+      comments: normalizedComments,
+      repoFiles: inventory,
     });
     return { ...result, missingPaths };
   }
@@ -490,9 +290,30 @@ function recordPreflightSkip(ctx, f, row, decision, { mode = 'shadow', version =
   return true;
 }
 
+function extractAskedQuestion(body) {
+  const quoted = text(body).split('\n').filter(line => line.startsWith('> ')).map(line => line.slice(2)).join('\n').trim();
+  if (quoted) return quoted;
+  const match = text(body).match(/^\s*-\s*Question:\s*(.+)$/m);
+  return match ? match[1].trim() : '';
+}
+
+async function resolveTrustedDecisionRemoval(ctx, row, n, latestQuestion, trustOf) {
+  if (!latestQuestion || labelsOf(row).includes(DECISION_LABEL) || !ctx?.gh?.all) {
+    return { trustedUnlabeledAt: 0, decisionNote: null };
+  }
+  const since = Date.parse(latestQuestion.created_at) || 0;
+  const timeline = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/timeline?per_page=100`).catch(() => []);
+  const rem = timeline.filter(e => e.event === 'unlabeled' && e.label?.name === DECISION_LABEL && (Date.parse(e.created_at) || 0) >= since).at(-1);
+  if (!rem?.actor?.login || !await trustOf(rem.actor)) return { trustedUnlabeledAt: 0, decisionNote: null };
+  const trustedUnlabeledAt = Math.max(Date.parse(rem.created_at) || 0, since + 1);
+  const askedText = extractAskedQuestion(latestQuestion.body);
+  const decisionNote = `A trusted person removed ${DECISION_LABEL} after Autopilot asked:\n${askedText}\nTreat the recommended option or maintainer resolution as approved.`;
+  return { trustedUnlabeledAt, decisionNote };
+}
+
 /**
- * Persist a pre-flight skip locally and (outside shadow mode) apply the GitHub label,
- * deduplicated explanation comment, and optional decision alert.
+ * Persist a pre-flight skip locally and (outside shadow mode) post a deduplicated
+ * explanation comment before applying the GitHub label and emitting any decision alert.
  */
 export async function applyPreflightDecision(ctx, row, decision, { mode = null, version = null } = {}) {
   if (!ctx?.fs || !ctx?.root || !object(row) || !Number.isSafeInteger(row.number)
@@ -532,15 +353,8 @@ export async function applyPreflightDecision(ctx, row, decision, { mode = null, 
   let commented = false;
   let appliedLabel = null;
   try {
-    const existing = Number(row.comments) > 0
-      ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`).catch(() => [])
-      : [];
+    const existing = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`);
     const alreadyCommented = routedMap[String(n)] === bKey || existing.some(c => text(c?.body).includes(marker));
-    const newlyLabeled = await ensureIssueLabel(ctx, n, row, DECISION_LABEL, {
-      color: 'fbca04',
-      description: 'Issue requires a human decision or verification boundary before Autopilot starts',
-    });
-    appliedLabel = DECISION_LABEL;
 
     if (!alreadyCommented) {
       const reasonText = plain(decision.reason, 300);
@@ -564,6 +378,12 @@ export async function applyPreflightDecision(ctx, row, decision, { mode = null, 
       commented = true;
     }
 
+    const newlyLabeled = await ensureIssueLabel(ctx, n, row, DECISION_LABEL, {
+      color: 'fbca04',
+      description: 'Issue requires a human decision or verification boundary before Autopilot starts',
+    });
+    appliedLabel = DECISION_LABEL;
+
     ctx.fs.mkdirSync(f.base, { recursive: true, mode: 0o700 });
     routedMap[String(n)] = bKey;
     writeJson(ctx.fs, f.preflightRouted, routedMap);
@@ -586,6 +406,50 @@ export async function applyPreflightDecision(ctx, row, decision, { mode = null, 
     ctx.warn?.(`Autopilot pre-flight park #${n}: ${error.message}`);
     return { applied: false, commented, label: appliedLabel, reasonCode: decision.reasonCode };
   }
+}
+
+/**
+ * Core pre-claim pre-flight gate invoked by autopilot-core before claiming an issue,
+ * so cross_repo, human_decision, and unverifiable_boundary enforcement runs even when intake is off.
+ */
+export async function preflightCoreIssue(ctx, row, { cwd = null } = {}) {
+  if (!ctx || !object(row) || !Number.isSafeInteger(row.number)) return null;
+  const evalCtx = { ...ctx, state: { ...(ctx.state ?? {}), cwd: cwd ?? ctx.state?.cwd ?? null } };
+  let pre = evaluatePreflight(evalCtx, row);
+
+  const shouldCheckComments = Boolean(
+    ctx.gh?.all && ctx.repo && (
+      (pre.decision !== 'allow' && pre.reasonCode !== 'cross_repo')
+      || (pre.decision === 'allow' && Number(row.comments) > 0)
+    ),
+  );
+  if (shouldCheckComments) {
+    const n = row.number;
+    const all = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`);
+    const trustOf = async user => Boolean(user?.login && ctx.ports?.trusted && await ctx.ports.trusted({ user }));
+    let selfLogin;
+    const ownLogin = async () => selfLogin ??= (ctx.login ? String(await ctx.login().catch(() => '')).toLowerCase() : '');
+    const trustedMarkerAuthor = async user => Boolean(await trustOf(user)) || (Boolean(user?.login) && (await ownLogin()) === String(user.login).toLowerCase());
+    const qMark = intakeQuestionPrefix(n), pfMark = `${PREFLIGHT_MARKER_PREFIX}${n}:`, coreQMark = `${CORE_QUESTION_MARKER_PREFIX}${n}:`;
+    const comments = [];
+    let latestQuestion = null;
+    for (const c of [...all].reverse()) {
+      const body = text(c?.body);
+      if (isPersonComment(c)) {
+        if (await trustOf(c.user) && comments.length < INTAKE_LIMITS.comments) comments.unshift(c);
+        continue;
+      }
+      if (!latestQuestion && (body.includes(pfMark) || body.includes(qMark) || body.includes(coreQMark)) && await trustedMarkerAuthor(c.user)) {
+        latestQuestion = c;
+      }
+    }
+    const { decisionNote } = await resolveTrustedDecisionRemoval(evalCtx, row, n, latestQuestion, trustOf);
+    pre = evaluatePreflight(evalCtx, row, { comments, decisionNote });
+  }
+
+  if (pre.decision === 'allow') return null;
+  const applied = await applyPreflightDecision(evalCtx, row, pre, { mode: 'core' });
+  return { decision: pre, applied };
 }
 
 // Layer 1: native facts from the issue row only. No AI and no GitHub call.
@@ -1360,24 +1224,6 @@ export function activeReadyCards(root, rows, fs = nativeFs) {
   return out;
 }
 
-function evaluatePreflightWithFallback(ctx, row, opts = {}) {
-  const pre = evaluatePreflight(ctx, row, opts);
-  if (pre.decision !== 'allow') return pre;
-  const wrongRepo = detectWrongRepositoryIssue(row, { repo: ctx.repo, cwd: ctx.state?.cwd, fs: ctx.fs, repoFiles: opts.repoFiles ?? null });
-  if (!wrongRepo) return pre;
-  return {
-    decision: 'reject',
-    reasonCode: 'cross_repo',
-    intakeClass: 'elsewhere',
-    label: NEEDS_OTHER_REPO_LABEL,
-    targetRepo: wrongRepo.targetRepo ?? null,
-    reason: plain(wrongRepo.reason, 300),
-    question: null,
-    signals: [wrongRepo.signal || 'foreign_root_path'],
-    missingPaths: wrongRepo.missingPaths ?? [],
-  };
-}
-
 function savePreflightNativeCard(ctx, f, cards, row, pre, { version, agent, card }) {
   const n = row.number;
   const kind = pre.reasonCode === 'cross_repo' ? 'elsewhere' : 'parked';
@@ -1445,27 +1291,27 @@ export async function shadowIntake(ctx, rows) {
         continue;
       }
       if (running.has(n) || (card?.version === version && (card.card || ['untrusted', 'elsewhere', 'parked'].includes(card.native?.kind) || ctx.now() - (card.failedAt ?? 0) < INTAKE_LIMITS.retryAfter))) continue;
-      if (started >= INTAKE_LIMITS.startsPerTick || running.size >= INTAKE_LIMITS.running || !await canStart()) continue;
       // Only issues that the core itself would give to an agent: the core's trust check, once per version.
       const author = await trustOf(row.user);
       if (author === undefined) continue;
       if (!author) { const next = { issue: n, version, at: ctx.now(), agent: runner?.agent ?? defaultAgent, native: { kind: 'untrusted', reason: 'the author is not trusted; the core never gives this issue to an agent' }, card: null, previous: card?.card ?? card?.previous ?? null }; saveCard(ctx, f, n, next); cards.set(n, next); continue; }
       let loadedComments = null;
-      let pre = evaluatePreflightWithFallback(ctx, row);
+      let pre = evaluatePreflight(ctx, row);
       if (pre.decision !== 'allow' && pre.reasonCode !== 'cross_repo' && Number(row.comments) > 0) {
         loadedComments = await loadShadowComments(row, n);
-        pre = evaluatePreflightWithFallback(ctx, row, { comments: loadedComments });
+        pre = evaluatePreflight(ctx, row, { comments: loadedComments });
       }
       if (pre.decision !== 'allow') {
         await applyPreflightDecision(ctx, row, pre, { mode: 'shadow', version });
         savePreflightNativeCard(ctx, f, cards, row, pre, { version, agent: runner?.agent ?? defaultAgent, card });
         continue;
       }
+      if (started >= INTAKE_LIMITS.startsPerTick || running.size >= INTAKE_LIMITS.running || !await canStart()) continue;
       // The attempt counts before any read or write, so a failure can never start more than the limit.
       started++; running.add(n);
       const comments = loadedComments ?? await loadShadowComments(row, n);
       if (!loadedComments && comments.length > 0) {
-        const commentPre = evaluatePreflightWithFallback(ctx, row, { comments });
+        const commentPre = evaluatePreflight(ctx, row, { comments });
         if (commentPre.decision !== 'allow') {
           started--; running.delete(n);
           await applyPreflightDecision(ctx, row, commentPre, { mode: 'shadow', version });
@@ -1548,11 +1394,11 @@ export async function activeIntake(ctx, rows) {
   let selfLogin;
   const ownLogin = async () => selfLogin ??= (ctx.login ? String(await ctx.login().catch(() => '')).toLowerCase() : '');
   const trustedMarkerAuthor = async user => Boolean(await trustOf(user)) || (Boolean(user?.login) && (await ownLogin()) === String(user.login).toLowerCase());
-  const readTrustedCommentsAndPool = async (row, n) => {
-    const all = Number(row.comments) > 0 ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`) : [];
+  const readTrustedCommentsAndPool = async (row, n, { forceFetch = false } = {}) => {
+    const all = (forceFetch || Number(row.comments) > 0) ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`) : [];
     const comments = [], trustedSet = new Set();
     let specRefinement = null, latestQuestion = null;
-    const impMark = improveMarkerPrefix(n), qMark = intakeQuestionPrefix(n);
+    const impMark = improveMarkerPrefix(n), qMark = intakeQuestionPrefix(n), pfMark = `${PREFLIGHT_MARKER_PREFIX}${n}:`;
     for (const c of [...all].reverse()) {
       const body = text(c?.body);
       if (isPersonComment(c)) {
@@ -1565,21 +1411,11 @@ export async function activeIntake(ctx, rows) {
       if (!specRefinement && body.includes(impMark) && await trustedMarkerAuthor(c.user)) {
         specRefinement = body.replace(/\s*<!--\s*pdd:autopilot-intake:improve:[\s\S]*?-->\s*$/, '').trim() || null;
       }
-      if (!latestQuestion && body.includes(qMark) && await trustedMarkerAuthor(c.user)) {
+      if (!latestQuestion && (body.includes(qMark) || body.includes(pfMark)) && await trustedMarkerAuthor(c.user)) {
         latestQuestion = c;
       }
     }
-    let trustedUnlabeledAt = 0, decisionNote = null;
-    if (latestQuestion && !labelsOf(row).includes(DECISION_LABEL)) {
-      const since = Date.parse(latestQuestion.created_at) || 0;
-      const timeline = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/timeline?per_page=100`).catch(() => []);
-      const rem = timeline.filter(e => e.event === 'unlabeled' && e.label?.name === DECISION_LABEL && (Date.parse(e.created_at) || 0) >= since).at(-1);
-      if (rem?.actor?.login && await trustOf(rem.actor)) {
-        trustedUnlabeledAt = Math.max(Date.parse(rem.created_at) || 0, since + 1);
-        const quoted = text(latestQuestion.body).split('\n').filter(line => line.startsWith('> ')).map(line => line.slice(2)).join('\n');
-        decisionNote = `A trusted person removed ${DECISION_LABEL} without a comment after Autopilot asked:\n${quoted}\nTreat the recommended option as approved.`;
-      }
-    }
+    const { trustedUnlabeledAt, decisionNote } = await resolveTrustedDecisionRemoval(ctx, row, n, latestQuestion, trustOf);
     const pool = [];
     for (const other of scoped) {
       if (other.number === n || pool.length >= INTAKE_LIMITS.pool) continue;
@@ -1613,11 +1449,35 @@ export async function activeIntake(ctx, rows) {
       if (card && cardMatchesRow(card, row)) {
         if (card.card.class !== 'improve') continue;
         if (card.autoImproveTried === version || ctx.now() - (card.failedAt ?? 0) < INTAKE_LIMITS.retryAfter) continue;
-        if (started >= INTAKE_LIMITS.startsPerTick || running.size >= INTAKE_LIMITS.running || !await canStart()) continue;
         const author = await trustOf(row.user);
         if (author === undefined || !author) continue;
+        let improveLoaded = null;
+        let improvePre = evaluatePreflight(ctx, row);
+        if (improvePre.decision !== 'allow' && improvePre.reasonCode !== 'cross_repo') {
+          improveLoaded = await readTrustedCommentsAndPool(row, n, { forceFetch: true });
+          improvePre = evaluatePreflight(ctx, row, { comments: improveLoaded.comments, decisionNote: improveLoaded.decisionNote });
+        }
+        if (improvePre.decision !== 'allow') {
+          const applied = await applyPreflightDecision(ctx, row, improvePre, { mode: 'active', version });
+          if (applied.applied) {
+            savePreflightNativeCard(ctx, f, cards, row, improvePre, { version: issueVersion(row), agent: runner?.agent ?? defaultAgent, card });
+          }
+          continue;
+        }
+        if (started >= INTAKE_LIMITS.startsPerTick || running.size >= INTAKE_LIMITS.running || !await canStart()) continue;
         started++; running.add(n);
-        const { all, comments, trustedSet, trustedUnlabeledAt, decisionNote, pool } = await readTrustedCommentsAndPool(row, n);
+        const { all, comments, trustedSet, trustedUnlabeledAt, decisionNote, pool } = improveLoaded ?? await readTrustedCommentsAndPool(row, n);
+        if (!improveLoaded && comments.length > 0) {
+          const commentPre = evaluatePreflight(ctx, row, { comments, decisionNote });
+          if (commentPre.decision !== 'allow') {
+            started--; running.delete(n);
+            const applied = await applyPreflightDecision(ctx, row, commentPre, { mode: 'active', version });
+            if (applied.applied) {
+              savePreflightNativeCard(ctx, f, cards, row, commentPre, { version: issueVersion(row), agent: runner?.agent ?? defaultAgent, card });
+            }
+            continue;
+          }
+        }
         const pComments = personComments(comments), hKey = humanDigest(row, pComments), bKey = bodyDigest(row);
         if (hasAutoImproveSinceHuman(all, n, { trustedIds: trustedSet, row, card, trustedUnlabeledAt })
           || (!trustedUnlabeledAt && card.improvedHumanKey && card.improvedHumanKey === hKey && (!card.improvedBodyKey || card.improvedBodyKey === bKey))) {
@@ -1660,10 +1520,10 @@ export async function activeIntake(ctx, rows) {
         saveCard(ctx, f, n, next); cards.set(n, next); continue;
       }
       let loaded = null;
-      let pre = evaluatePreflightWithFallback(ctx, row);
-      if (pre.decision !== 'allow' && pre.reasonCode !== 'cross_repo' && Number(row.comments) > 0) {
-        loaded = await readTrustedCommentsAndPool(row, n);
-        pre = evaluatePreflightWithFallback(ctx, row, { comments: loaded.comments, decisionNote: loaded.decisionNote });
+      let pre = evaluatePreflight(ctx, row);
+      if (pre.decision !== 'allow' && pre.reasonCode !== 'cross_repo') {
+        loaded = await readTrustedCommentsAndPool(row, n, { forceFetch: true });
+        pre = evaluatePreflight(ctx, row, { comments: loaded.comments, decisionNote: loaded.decisionNote });
       }
       if (pre.decision !== 'allow') {
         const applied = await applyPreflightDecision(ctx, row, pre, { mode: 'active', version });
@@ -1693,7 +1553,7 @@ export async function activeIntake(ctx, rows) {
       started++; running.add(n);
       const { comments, specRefinement, decisionNote, pool } = loaded ?? await readTrustedCommentsAndPool(row, n);
       if (!loaded && comments.length > 0) {
-        const commentPre = evaluatePreflightWithFallback(ctx, row, { comments, decisionNote });
+        const commentPre = evaluatePreflight(ctx, row, { comments, decisionNote });
         if (commentPre.decision !== 'allow') {
           started--; running.delete(n);
           const applied = await applyPreflightDecision(ctx, row, commentPre, { mode: 'active', version });
@@ -1759,13 +1619,15 @@ export async function intakeTick(ctx, rows) {
   return null;
 }
 
-// The read command: the saved cards, pre-flight skips, and one day's diff lines. Local files only.
+// The read command: the saved cards, one day's pre-flight skips, and one day's diff lines. Local files only.
 export function readIntake({ root, now = Date.now(), date = null }, fs = nativeFs) {
   const f = intakeFolders(root), at = date ? Date.parse(`${date}T00:00:00Z`) : now;
+  const targetDay = day(at);
   const cards = listJson(fs, f.cards).filter(c => Number.isSafeInteger(c.issue)).sort((a, b) => a.issue - b.issue);
   const diff = readJsonl(fs, f.diff(at));
-  const preflightSkips = readJsonl(fs, f.preflightSkips);
-  return { day: day(at), cards, running: listJson(fs, f.jobs).map(j => j.issue), wouldPick: readJson(fs, f.pick)?.issues ?? [], diff, preflightSkips };
+  const preflightSkips = readJsonl(fs, f.preflightSkips)
+    .filter(entry => typeof entry?.at === 'string' && entry.at.slice(0, 10) === targetDay);
+  return { day: targetDay, cards, running: listJson(fs, f.jobs).map(j => j.issue), wouldPick: readJson(fs, f.pick)?.issues ?? [], diff, preflightSkips };
 }
 
 export function intakeText(report, { mode = 'shadow' } = {}) {
