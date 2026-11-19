@@ -836,16 +836,99 @@ function readCodexTomlQuiet(fs, filePath) {
   }
 }
 
+function parseCliConfigExcludeValue(expr) {
+  const excludeMatch = /^shell_environment_policy\.exclude\s*=(.+)$/s.exec(expr);
+  if (excludeMatch) {
+    const parsed = parseCodexTomlQuiet(`v = ${excludeMatch[1].trim()}`);
+    return { matched: true, patterns: Array.isArray(parsed?.v) ? parsed.v : [] };
+  }
+  const tableMatch = /^shell_environment_policy\s*=(.+)$/s.exec(expr);
+  if (tableMatch) {
+    const parsed = parseCodexTomlQuiet(`v = ${tableMatch[1].trim()}`);
+    if (isTomlTable(parsed?.v) && Array.isArray(parsed.v.exclude)) {
+      return { matched: true, patterns: parsed.v.exclude };
+    }
+  }
+  return { matched: false, patterns: [] };
+}
+
+function stripExcludeFromCliEnvPolicyExpr(expr) {
+  const trimmed = String(expr ?? '').trim();
+  if (/^shell_environment_policy\.exclude\s*=/.test(trimmed)) {
+    return { stripped: true, replacement: null };
+  }
+  const tableMatch = /^shell_environment_policy\s*=(.+)$/s.exec(trimmed);
+  if (tableMatch) {
+    const parsed = parseCodexTomlQuiet(`v = ${tableMatch[1].trim()}`);
+    if (isTomlTable(parsed?.v) && Array.isArray(parsed.v.exclude)) {
+      const rest = Object.entries(parsed.v).filter(([k]) => k !== 'exclude');
+      if (rest.length === 0) return { stripped: true, replacement: null };
+      const fields = rest.map(([k, v]) => `${formatTomlKey(k)} = ${formatTomlValue(v)}`);
+      return { stripped: true, replacement: `shell_environment_policy={ ${fields.join(', ')} }` };
+    }
+  }
+  return { stripped: false, replacement: null };
+}
+
+/**
+ * Strip raw `-c shell_environment_policy.exclude=...` flags before `--` once their
+ * patterns have been merged into the gateway's required exclusions so a later CLI
+ * array override cannot replace and wipe out `PDD_*` / `CODEX_HOME` exclusions.
+ */
+export function stripCodexCliEnvExcludeArgs(codexArgs = []) {
+  const args = Array.isArray(codexArgs) ? codexArgs.map(String) : [];
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') {
+      out.push(...args.slice(i));
+      break;
+    }
+    if ((arg === '-c' || arg === '--config') && typeof args[i + 1] === 'string') {
+      const rewritten = stripExcludeFromCliEnvPolicyExpr(args[i + 1]);
+      if (rewritten.stripped) {
+        if (rewritten.replacement) out.push(arg, rewritten.replacement);
+        i += 1;
+        continue;
+      }
+      out.push(arg, args[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--config=')) {
+      const expr = arg.slice('--config='.length);
+      const rewritten = stripExcludeFromCliEnvPolicyExpr(expr);
+      if (rewritten.stripped) {
+        if (rewritten.replacement) out.push(`--config=${rewritten.replacement}`);
+        continue;
+      }
+    }
+    out.push(arg);
+  }
+  return out;
+}
+
 function extractCodexCliProfileAndFlags(codexArgs = []) {
   const args = Array.isArray(codexArgs) ? codexArgs.map(String) : [];
   let profile = null;
+  let cdDir = null;
   let hasOssFlag = false;
   let hasLegacyCliEnvPolicy = false;
+  let cliExcludePatterns = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--') break;
     if (arg === '--oss' || arg === '--local-provider' || arg.startsWith('--local-provider=')) {
       hasOssFlag = true;
+    }
+    if ((arg === '-C' || arg === '--cd') && typeof args[i + 1] === 'string') {
+      cdDir = args[i + 1].trim() || cdDir;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--cd=')) {
+      cdDir = arg.slice('--cd='.length).trim() || cdDir;
+      continue;
     }
     if ((arg === '-p' || arg === '--profile') && typeof args[i + 1] === 'string') {
       profile = args[i + 1].trim() || profile;
@@ -858,7 +941,11 @@ function extractCodexCliProfileAndFlags(codexArgs = []) {
     }
     if ((arg === '-c' || arg === '--config') && typeof args[i + 1] === 'string') {
       const expr = args[i + 1].trim();
-      if (/^shell_environment_policy\.(?:exclude|include_only)\s*=/.test(expr)) {
+      const parsedExclude = parseCliConfigExcludeValue(expr);
+      if (parsedExclude.matched) {
+        hasLegacyCliEnvPolicy = true;
+        cliExcludePatterns = parsedExclude.patterns;
+      } else if (/^shell_environment_policy\.include_only\s*=/.test(expr)) {
         hasLegacyCliEnvPolicy = true;
       }
       i += 1;
@@ -866,12 +953,48 @@ function extractCodexCliProfileAndFlags(codexArgs = []) {
     }
     if (arg.startsWith('--config=')) {
       const expr = arg.slice('--config='.length).trim();
-      if (/^shell_environment_policy\.(?:exclude|include_only)\s*=/.test(expr)) {
+      const parsedExclude = parseCliConfigExcludeValue(expr);
+      if (parsedExclude.matched) {
+        hasLegacyCliEnvPolicy = true;
+        cliExcludePatterns = parsedExclude.patterns;
+      } else if (/^shell_environment_policy\.include_only\s*=/.test(expr)) {
         hasLegacyCliEnvPolicy = true;
       }
     }
   }
-  return { profile, hasOssFlag, hasLegacyCliEnvPolicy };
+  return { profile, cdDir, hasOssFlag, hasLegacyCliEnvPolicy, cliExcludePatterns };
+}
+
+function collectProjectCodexConfigDocs(fs, startDir, userCodexHome = null) {
+  if (typeof startDir !== 'string' || !startDir.trim()) return [];
+  const canonicalUserHome = typeof userCodexHome === 'string' && userCodexHome.trim()
+    ? canonicalizeCodexPath(fs, resolve(userCodexHome.trim()))
+    : null;
+  const chain = [];
+  let dir = resolve(startDir.trim());
+  for (let depth = 0; depth < 64; depth += 1) {
+    chain.push(dir);
+    let hasGitMarker = false;
+    try {
+      const statFn = fs?.lstatSync ?? nativeFs.lstatSync;
+      statFn.call(fs, join(dir, '.git'));
+      hasGitMarker = true;
+    } catch {}
+    if (hasGitMarker) break;
+    const parent = dirname(dir);
+    if (!parent || parent === dir) break;
+    dir = parent;
+  }
+  const docs = [];
+  for (const candidateDir of chain.reverse()) {
+    const dotCodexDir = join(candidateDir, '.codex');
+    if (canonicalUserHome && canonicalizeCodexPath(fs, dotCodexDir) === canonicalUserHome) {
+      continue;
+    }
+    const doc = readCodexTomlQuiet(fs, join(dotCodexDir, 'config.toml'));
+    if (doc) docs.push(doc);
+  }
+  return docs;
 }
 
 /**
@@ -918,7 +1041,12 @@ function buildCodexSubshellExcludeCliArgs(
     ? [...REQUIRED_CODEX_SUBSHELL_EXCLUDES, 'CODEX_HOME']
     : REQUIRED_CODEX_SUBSHELL_EXCLUDES;
   const parsedUser = parseCodexTomlQuiet(userConfigText);
-  const { profile: cliProfile, hasLegacyCliEnvPolicy } = extractCodexCliProfileAndFlags(codexArgs);
+  const {
+    profile: cliProfile,
+    cdDir,
+    hasLegacyCliEnvPolicy,
+    cliExcludePatterns,
+  } = extractCodexCliProfileAndFlags(codexArgs);
   const activeProfile = cliProfile || (typeof parsedUser?.profile === 'string' ? parsedUser.profile.trim() : null);
 
   const policyLayers = [];
@@ -936,10 +1064,14 @@ function buildCodexSubshellExcludeCliArgs(
       }
     }
   }
-  if (typeof cwd === 'string' && cwd.trim()) {
-    const repoDoc = readCodexTomlQuiet(fs, join(resolve(cwd.trim()), '.codex', 'config.toml'));
-    if (isTomlTable(repoDoc?.shell_environment_policy)) {
-      policyLayers.push(repoDoc.shell_environment_policy);
+  const effectiveStartDir = cdDir
+    ? resolve(typeof cwd === 'string' && cwd.trim() ? cwd.trim() : process.cwd(), cdDir)
+    : (typeof cwd === 'string' && cwd.trim() ? resolve(cwd.trim()) : null);
+  if (effectiveStartDir) {
+    for (const repoDoc of collectProjectCodexConfigDocs(fs, effectiveStartDir, userCodexHome)) {
+      if (isTomlTable(repoDoc?.shell_environment_policy)) {
+        policyLayers.push(repoDoc.shell_environment_policy);
+      }
     }
   }
 
@@ -951,7 +1083,10 @@ function buildCodexSubshellExcludeCliArgs(
   if (hasLegacyArray) {
     const merged = [];
     const seen = new Set();
-    const existingExcludes = policyLayers.flatMap(p => (Array.isArray(p.exclude) ? p.exclude : []));
+    const existingExcludes = [
+      ...policyLayers.flatMap(p => (Array.isArray(p.exclude) ? p.exclude : [])),
+      ...cliExcludePatterns,
+    ];
     for (const item of [...existingExcludes, ...requiredExcludes]) {
       const trimmed = typeof item === 'string' ? item.trim() : '';
       if (!trimmed) continue;
@@ -1132,6 +1267,8 @@ export function buildCodexHomeMirrorCliArgs({
     && typeof runtimeCodexHome === 'string' && runtimeCodexHome.trim()
     && canonicalizeCodexPath(fs, resolve(userCodexHome.trim())) !== canonicalizeCodexPath(fs, resolve(runtimeCodexHome.trim()));
   if (homesDiffer && parsed?.allow_symlinked_codex_home !== false) {
+    // Forward for forward-compatibility; note that Codex 0.170.0 only checks the User-layer
+    // config.toml (set in materialized overlays/managed homes).
     args.push('-c', 'allow_symlinked_codex_home=true');
   }
   if (!parsed) return args;
@@ -1172,10 +1309,46 @@ export function buildCodexHomeMirrorCliArgs({
   return args;
 }
 
+function collectRuntimeWritebackNeedles(fs, runtimeCodexHome) {
+  const resolvedRuntimeHome = resolve(runtimeCodexHome.trim());
+  const realRuntimeHome = canonicalizeCodexPath(fs, resolvedRuntimeHome);
+  const runtimePrefixes = [...new Set([realRuntimeHome, resolvedRuntimeHome])].sort((a, b) => b.length - a.length);
+  const needles = runtimePrefixes.flatMap(p => (sep === '\\' ? [p, JSON.stringify(p).slice(1, -1)] : [p]));
+  return { resolvedRuntimeHome, realRuntimeHome, runtimePrefixes, needles };
+}
+
+/**
+ * Fast read-only check for whether `userConfigPath` contains any `<runtimeDir>` prefix
+ * that needs locked writeback normalization.
+ */
+export function needsCodexConfigWritebackNormalization(
+  fs,
+  { runtimeCodexHome = null, userConfigPath = null, beforeContent = null } = {},
+) {
+  if (
+    typeof runtimeCodexHome !== 'string' || !runtimeCodexHome.trim()
+    || typeof userConfigPath !== 'string' || !userConfigPath.trim()
+  ) {
+    return false;
+  }
+  const { resolvedRuntimeHome, realRuntimeHome, needles } = collectRuntimeWritebackNeedles(fs, runtimeCodexHome);
+  const target = resolveUserCodexConfigTarget(fs, userConfigPath, [resolvedRuntimeHome, realRuntimeHome], { strict: false });
+  if (!target.exists || !target.readPath) return false;
+  let afterContent;
+  try {
+    afterContent = fs.readFileSync(target.readPath, 'utf8');
+  } catch {
+    return false;
+  }
+  if (typeof beforeContent === 'string' && afterContent === beforeContent) return false;
+  return needles.some(n => n && afterContent.includes(n));
+}
+
 /**
  * If Codex persisted new `<runtimeDir>`-anchored `hooks.state` or `marketplaces.*.source`
  * entries through the `config.toml` symlink during a session, rewrite only those prefixes
- * back to `userCodexHome`. Never touches `~/.codex/config.toml` when unchanged.
+ * back to `userCodexHome`. Preserves symlinked `~/.codex/config.toml` targets (Stow/chezmoi)
+ * by resolving the write path before atomic rename, and never touches the file when unchanged.
  */
 export function normalizeCodexConfigWriteback(
   fs,
@@ -1188,18 +1361,18 @@ export function normalizeCodexConfigWriteback(
   ) {
     return false;
   }
+  const resolvedUserHome = resolve(userCodexHome.trim());
+  const { resolvedRuntimeHome, realRuntimeHome, runtimePrefixes, needles } = collectRuntimeWritebackNeedles(fs, runtimeCodexHome);
+  const target = resolveUserCodexConfigTarget(fs, userConfigPath, [resolvedRuntimeHome, realRuntimeHome], { strict: false });
+  if (!target.exists || !target.readPath || !target.writePath) return false;
   let afterContent;
   try {
-    afterContent = fs.readFileSync(userConfigPath, 'utf8');
+    afterContent = fs.readFileSync(target.readPath, 'utf8');
   } catch {
     return false;
   }
   if (typeof beforeContent === 'string' && afterContent === beforeContent) return false;
-  const resolvedUserHome = resolve(userCodexHome.trim());
-  const resolvedRuntimeHome = resolve(runtimeCodexHome.trim());
-  const realRuntimeHome = canonicalizeCodexPath(fs, resolvedRuntimeHome);
-  const runtimePrefixes = [...new Set([realRuntimeHome, resolvedRuntimeHome])].sort((a, b) => b.length - a.length);
-  if (!runtimePrefixes.some(p => p && afterContent.includes(p))) return false;
+  if (!needles.some(n => n && afterContent.includes(n))) return false;
 
   const parsed = parseCodexTomlQuiet(afterContent);
   if (!parsed) return false;
@@ -1241,8 +1414,8 @@ export function normalizeCodexConfigWriteback(
 
   if (!changed) return false;
   try {
-    const serialized = serializeTomlConfig(next, userConfigPath);
-    writeAtomicPrivate(fs, userConfigPath, serialized);
+    const serialized = serializeTomlConfig(next, target.writePath);
+    writeAtomicPrivate(fs, target.writePath, serialized);
     return true;
   } catch {
     return false;
@@ -1266,18 +1439,26 @@ export function buildCodexGatewayCliArgs({
 } = {}) {
   const codexApiUrl = nativeBackendApi ? resolveCodexResponsesBaseUrl(backendApiUrl) : backendApiUrl;
   const parsedUser = parseCodexTomlQuiet(userConfigText);
-  const { hasOssFlag } = extractCodexCliProfileAndFlags(codexArgs);
+  const { profile: cliProfile, hasOssFlag } = extractCodexCliProfileAndFlags(codexArgs);
+  const activeProfile = cliProfile || (typeof parsedUser?.profile === 'string' ? parsedUser.profile.trim() : null);
+  let effectiveConfiguredProvider = typeof parsedUser?.model_provider === 'string' ? parsedUser.model_provider.trim() : '';
+  if (activeProfile) {
+    const inlineProfProvider = parsedUser?.profiles?.[activeProfile]?.model_provider;
+    if (typeof inlineProfProvider === 'string' && inlineProfProvider.trim()) {
+      effectiveConfiguredProvider = inlineProfProvider.trim();
+    } else if (typeof userCodexHome === 'string' && userCodexHome.trim()) {
+      const profileDoc = readCodexTomlQuiet(fs, join(resolve(userCodexHome.trim()), `${activeProfile}.config.toml`));
+      if (typeof profileDoc?.model_provider === 'string' && profileDoc.model_provider.trim()) {
+        effectiveConfiguredProvider = profileDoc.model_provider.trim();
+      }
+    }
+  }
   const args = [
     '-c', 'cli_auth_credentials_store="file"',
     '-c', `chatgpt_base_url=${JSON.stringify(backendApiUrl)}`,
     '-c', `openai_base_url=${JSON.stringify(codexApiUrl)}`,
   ];
-  if (
-    !hasOssFlag
-    && typeof parsedUser?.model_provider === 'string'
-    && parsedUser.model_provider.trim()
-    && parsedUser.model_provider.trim() !== 'openai'
-  ) {
+  if (!hasOssFlag && effectiveConfiguredProvider && effectiveConfiguredProvider !== 'openai') {
     args.push('-c', 'model_provider="openai"');
   }
   const effectiveSqliteHome = resolveEffectiveSqliteHome({

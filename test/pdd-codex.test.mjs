@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -9,8 +10,11 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
+  statSync,
   symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -952,6 +956,136 @@ test('adversarial parity regressions: inline PDD_* filters, cross-layer exclude,
   assert.equal(authAfter404, false, '404 heartbeat must unlink stale auth.json');
   assert.equal(leaseAfter404, false, '404 heartbeat must unlink stale lease.json');
 });
+
+test('re-review P1 & P2 regressions: symlink-safe writeback, logout --help safety, --account -- -prompt, ancestor .codex + CLI exclude merge, profile model_provider, and non-gateway sqlite_home', async t => {
+  const sb = makeSandbox(t);
+  const userCodex = join(sb.home, '.codex');
+  mkdirSync(userCodex, { recursive: true });
+
+  // 1. P1-1: dotfile-symlinked ~/.codex/config.toml is preserved (never replaced by regular file) on writeback normalization.
+  const dotfileDir = join(sb.root, 'dotfiles');
+  mkdirSync(dotfileDir, { recursive: true });
+  const dotfileCfg = join(dotfileDir, 'codex-config.toml');
+  writeFileSync(dotfileCfg, 'model = "gpt-5.4"\n', 'utf8');
+  const userCfgLink = join(userCodex, 'config.toml');
+  symlinkSync(dotfileCfg, userCfgLink);
+  const fakeRuntime = join(sb.tmpRoot, 'pdd-codex-dotfile');
+  mkdirSync(fakeRuntime, { recursive: true });
+  const beforeCfg = readFileSync(dotfileCfg, 'utf8');
+  writeFileSync(
+    dotfileCfg,
+    `model = "gpt-5.4"\n[marketplaces.openai-bundled]\nsource = ${JSON.stringify(join(fakeRuntime, '.tmp', 'bundled-marketplaces', 'openai-bundled'))}\n`,
+    'utf8',
+  );
+  const normalizedDotfile = normalizeCodexConfigWriteback(
+    { readFileSync, writeFileSync, renameSync, lstatSync, statSync, realpathSync, chmodSync, unlinkSync, mkdirSync },
+    { userCodexHome: userCodex, runtimeCodexHome: fakeRuntime, userConfigPath: userCfgLink, beforeContent: beforeCfg },
+  );
+  assert.equal(normalizedDotfile, true);
+  assert.equal(lstatSync(userCfgLink).isSymbolicLink(), true, 'dotfile symlink must stay a symlink');
+  assert.equal(readlinkSync(userCfgLink), dotfileCfg);
+  const normalizedTarget = readFileSync(dotfileCfg, 'utf8');
+  assert.equal(normalizedTarget.includes(fakeRuntime), false, 'runtime path normalized in symlink target');
+  assert.equal(normalizedTarget.includes(join(userCodex, '.tmp', 'bundled-marketplaces', 'openai-bundled')), true);
+
+  // 2. P1-2: `pdd-codex logout --help`, `-h logout`, and `login --help` pass through without revoking shared leases.
+  const sharedRt = sharedRuntimeDirPath({ tmpRoot: sb.tmpRoot, uid: 781 });
+  mkdirSync(sharedRt, { recursive: true, mode: 0o700 });
+  writeFileSync(join(sharedRt, 'auth.json'), '{"tokens":{"access_token":"keep-me"}}', { mode: 0o600 });
+  writeFileSync(join(sharedRt, 'lease.json'), JSON.stringify({ lease_id: 'lse_keep_me', auto_rotate: true }), { mode: 0o600 });
+  let helpRevoked = false;
+  for (const argv of [['logout', '--help'], ['-h', 'logout'], ['login', '--help']]) {
+    let sawSpawn = null;
+    const res = await runPddCodexCli(
+      argv,
+      { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+      {
+        tmpRoot: sb.tmpRoot,
+        uid: 781,
+        releaseCloudLease: async () => { helpRevoked = true; return { revoked: true }; },
+        spawnCodex: async (_bin, args) => { sawSpawn = args; return { code: 0 }; },
+      },
+    );
+    assert.equal(res.exitCode, 0);
+    assert.deepEqual(sawSpawn, argv);
+  }
+  assert.equal(helpRevoked, false, 'logout/login --help must never revoke shared lease');
+  assert.equal(existsSync(join(sharedRt, 'auth.json')), true, 'logout --help must keep auth.json');
+  assert.equal(existsSync(join(sharedRt, 'lease.json')), true, 'logout --help must keep lease.json');
+
+  // 3. P1-3: `pdd-codex --account acct1 -- -prompt` preserves `--` for positional dash prompt.
+  const dashPrompt = parsePddCodexArgs(['--account', 'acct1', '--', '-prompt']);
+  assert.equal(dashPrompt.preferredAccount, 'acct1');
+  assert.deepEqual(dashPrompt.codexArgs, ['--', '-prompt']);
+
+  // 4. P1-4a: ancestor `.codex/config.toml` discovery from nested subdir and via `-C <repo>` detects legacy exclude.
+  const repoRoot = join(sb.root, 'monorepo');
+  const nestedSubdir = join(repoRoot, 'packages', 'app');
+  mkdirSync(join(repoRoot, '.git'), { recursive: true });
+  mkdirSync(join(repoRoot, '.codex'), { recursive: true });
+  mkdirSync(nestedSubdir, { recursive: true });
+  writeFileSync(join(repoRoot, '.codex', 'config.toml'), '[shell_environment_policy]\nexclude = ["REPO_SECRET"]\n', 'utf8');
+  for (const [args, cwd] of [[[], nestedSubdir], [['-C', nestedSubdir], sb.root]]) {
+    const gwArgs = buildCodexGatewayCliArgs({
+      backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+      userCodexHome: userCodex,
+      runtimeCodexHome: fakeRuntime,
+      userConfigText: 'model = "gpt-5.4"\n',
+      codexArgs: args,
+      cwd,
+      env: sb.env,
+    });
+    const exFlag = gwArgs.find(a => a.startsWith('shell_environment_policy.exclude='));
+    assert.ok(exFlag, `ancestor .codex/config.toml must trigger merged exclude for cwd=${cwd}`);
+    assert.ok(exFlag.includes('"REPO_SECRET"') && exFlag.includes('"PDD_*"') && exFlag.includes('"CODEX_HOME"'));
+    assert.equal(gwArgs.some(a => a.startsWith('shell_environment_policy.filters')), false);
+  }
+
+  // 5. P1-4b: user `-c shell_environment_policy.exclude=["FOO"]` is merged into gateway exclude and stripped so it cannot wipe out PDD_* / CODEX_HOME.
+  let spawnedArgsForCliExclude = null;
+  const cliExRes = await runPddCodexCli(
+    ['-c', 'shell_environment_policy.exclude=["FOO"]', 'exec', 'test'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 782,
+      pid: 99301,
+      isPidAlive: () => true,
+      leaseCloudAccount: async () => makeLeaseReply({ leaseId: 'lse_cli_ex' }),
+      releaseCloudLease: async () => ({ revoked: true }),
+      spawnCodex: async (_bin, args) => { spawnedArgsForCliExclude = args; return { code: 0 }; },
+    },
+  );
+  assert.equal(cliExRes.exitCode, 0);
+  const excludeFlags = spawnedArgsForCliExclude.filter(a => a.startsWith('shell_environment_policy.exclude='));
+  assert.equal(excludeFlags.length, 1, 'raw user -c shell_environment_policy.exclude must be stripped after merge');
+  assert.ok(excludeFlags[0].includes('"FOO"') && excludeFlags[0].includes('"PDD_*"') && excludeFlags[0].includes('"CODEX_HOME"'));
+
+  // 6. P2: `pdd-codex mcp -c foo=1 list` still runs offline without leasing, profile `model_provider` overrides to openai, and non-gateway overlay sets sqlite_home.
+  let mcpFlagLeased = false;
+  const mcpFlagRes = await runPddCodexCli(
+    ['mcp', '-c', 'foo=1', 'list'],
+    { env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 783,
+      leaseCloudAccount: async () => { mcpFlagLeased = true; throw new Error('should not lease'); },
+      spawnCodex: async () => ({ code: 0 }),
+    },
+  );
+  assert.equal(mcpFlagRes.exitCode, 0);
+  assert.equal(mcpFlagLeased, false, 'mcp -c foo=1 list must run locally without leasing');
+
+  const profGw = buildCodexGatewayCliArgs({
+    backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+    userCodexHome: userCodex,
+    runtimeCodexHome: fakeRuntime,
+    userConfigText: 'profile = "alt"\n[profiles.alt]\nmodel_provider = "openrouter"\n',
+    env: sb.env,
+  });
+  assert.equal(profGw.includes('model_provider="openai"'), true, 'active profile custom model_provider must be overridden to openai');
+});
+
 
 
 

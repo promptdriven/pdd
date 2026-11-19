@@ -14,12 +14,14 @@ import {
   heartbeatCloudLease,
   leaseCloudAccount,
   localCodexHome,
+  needsCodexConfigWritebackNormalization,
   normalizeCodexConfigWriteback,
   releaseCloudLease,
   resolveCodexBackendApiUrl,
   resolveEffectiveSqliteHome,
   resolvePddStateBase,
   stopCodexAppServerDaemon,
+  stripCodexCliEnvExcludeArgs,
   syncManagedCodexHomeLinks,
 } from './login-pool.mjs';
 import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
@@ -141,6 +143,19 @@ function unlinkQuiet(fs, targetPath) {
   } catch {}
 }
 
+function isKnownCodexOrWrapperOption(token) {
+  if (typeof token !== 'string' || !token) return false;
+  if (token === '--' || token === '--account' || token.startsWith('--account=') || token === '--pdd-help') {
+    return true;
+  }
+  const flagName = token.startsWith('--') && token.includes('=')
+    ? token.slice(0, token.indexOf('='))
+    : token;
+  return NO_LEASE_TOP_FLAGS.has(flagName)
+    || CODEX_GLOBAL_VALUE_FLAGS.has(flagName)
+    || CODEX_GLOBAL_BOOL_FLAGS.has(flagName);
+}
+
 /**
  * Parse optional leading `pdd-codex` flags (`--account`, `--pdd-help`) without disturbing
  * stock Codex flags or user prompt arguments.
@@ -154,9 +169,17 @@ export function parsePddCodexArgs(argv = []) {
   while (idx < args.length) {
     const token = args[idx];
     if (token === '--') {
-      // Consume `--` only when it separates leading pdd-codex flags from Codex flags;
-      // otherwise keep `--` intact so `pdd-codex -- -prompt` forwards `--` to Codex.
-      if (idx > 0) idx += 1;
+      // Consume `--` only when it separates leading pdd-codex flags from non-dash args or
+      // known Codex/wrapper options; preserve `--` when the next token is an unknown dash
+      // token (e.g. `pdd-codex -- -prompt` or `pdd-codex --account a -- -prompt`) so Codex
+      // treats it as a positional prompt instead of a flag.
+      const nextToken = args[idx + 1];
+      const nextIsPositionalDashPrompt = typeof nextToken === 'string'
+        && nextToken.startsWith('-')
+        && !isKnownCodexOrWrapperOption(nextToken);
+      if (idx > 0 && !nextIsPositionalDashPrompt) {
+        idx += 1;
+      }
       break;
     }
     if (token === '--pdd-help') {
@@ -316,6 +339,7 @@ async function withRuntimeLock(fs, runtimeDir, fn, ports = {}) {
   const ownerPath = join(lockDir, 'owner.json');
   const lockToken = randomBytes(8).toString('hex');
   const deadline = nowFn() + lockTimeoutMs;
+  let wroteOwner = false;
 
   while (true) {
     try {
@@ -326,6 +350,7 @@ async function withRuntimeLock(fs, runtimeDir, fn, ports = {}) {
           JSON.stringify({ pid: ownerPid, token: lockToken, acquired_at: nowFn() }),
           { encoding: 'utf8', mode: 0o600 },
         );
+        wroteOwner = true;
       } catch {}
       break;
     } catch (err) {
@@ -354,9 +379,12 @@ async function withRuntimeLock(fs, runtimeDir, fn, ports = {}) {
   } finally {
     try {
       // Only remove lockDir if it still belongs to this acquisition (prevents deleting a
-      // newer holder's lock after stale-lock recovery).
+      // newer holder's lock after stale-lock recovery, including before it writes owner.json).
       const currentOwner = readJsonFileQuiet(fs, ownerPath);
-      if (!currentOwner || !currentOwner.token || currentOwner.token === lockToken) {
+      const ownsLock = wroteOwner
+        ? currentOwner?.token === lockToken
+        : !currentOwner;
+      if (ownsLock) {
         fs.rmSync(lockDir, { recursive: true, force: true });
       }
     } catch {}
@@ -897,6 +925,18 @@ export async function runPddCodexCli(
   const codexArgs = parsed.codexArgs;
   const invocation = inspectCodexInvocation(codexArgs);
   const { subcommand, subArgs, hasHelpOrVersion } = invocation;
+  const mcpSubcommand = subcommand === 'mcp' ? inspectCodexInvocation(subArgs).subcommand : '';
+
+  // Instant passthrough for purely local help/version/completion commands (no cloud lease
+  // and never mutating shared state on e.g. `pdd-codex logout --help` or `pdd-codex -h logout`).
+  const isMcpHelp = subcommand === 'mcp' && (!mcpSubcommand || mcpSubcommand === 'help');
+  if (hasHelpOrVersion || NO_LEASE_SUBCOMMANDS.has(subcommand) || isMcpHelp) {
+    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env }, ports);
+    if (res?.error) {
+      stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
+    }
+    return { exitCode: res?.code ?? 1 };
+  }
 
   // Never let `pdd-codex logout` or `pdd-codex login` (even after leading global flags)
   // touch the user's personal ~/.codex/auth.json.
@@ -911,20 +951,28 @@ export async function runPddCodexCli(
     return { exitCode: 0 };
   }
 
-  // Instant passthrough for purely local help/version/completion commands (no cloud lease needed).
-  const isMcpHelp = subcommand === 'mcp' && (!subArgs[0] || subArgs[0] === 'help');
-  if (hasHelpOrVersion || NO_LEASE_SUBCOMMANDS.has(subcommand) || isMcpHelp) {
-    const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env }, ports);
-    if (res?.error) {
-      stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
+  const normalizeWritebackUnderLock = async (writebackOpts) => {
+    if (!needsCodexConfigWritebackNormalization(fs, writebackOpts)) return false;
+    const lockRuntimeDir = sharedRuntimeDirPath({ env, tmpRoot: ports.tmpRoot, uid: ports.uid });
+    try {
+      ensureSecureDirectory(fs, lockRuntimeDir, {
+        expectedUid: ports.uid ?? (typeof process.getuid === 'function' ? process.getuid() : null),
+      });
+      return await withRuntimeLock(
+        fs,
+        lockRuntimeDir,
+        () => normalizeCodexConfigWriteback(fs, writebackOpts),
+        ports,
+      );
+    } catch {
+      return normalizeCodexConfigWriteback(fs, writebackOpts);
     }
-    return { exitCode: res?.code ?? 1 };
-  }
+  };
 
   // Offline-safe local config/state subcommands (`mcp add|remove|list|get`, `features`,
   // `apply`, `archive`, `unarchive`, `delete`, `migrate-*`) run in a mirrored temp CODEX_HOME
   // with marketplace/hook overrides and user sqlite_home without needing a cloud lease.
-  const isLocalMcp = subcommand === 'mcp' && LOCAL_MCP_SUBCOMMANDS.has(subArgs[0] ?? '');
+  const isLocalMcp = subcommand === 'mcp' && LOCAL_MCP_SUBCOMMANDS.has(mcpSubcommand);
   if (isLocalMcp || LOCAL_OFFLINE_SUBCOMMANDS.has(subcommand)) {
     const root = resolveRuntimeRoot({ env, tmpRoot: ports.tmpRoot });
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -954,7 +1002,7 @@ export async function runPddCodexCli(
       }));
       const childEnv = buildCleanChildEnv(env, localDir);
       const res = await spawnCodexProcess(codexBin, [...localFlags, ...codexArgs], { cwd, env: childEnv }, ports);
-      normalizeCodexConfigWriteback(fs, {
+      await normalizeWritebackUnderLock({
         userCodexHome: homeInfo.userCodexHome,
         runtimeCodexHome: localDir,
         userConfigPath: homeInfo.userConfigPath,
@@ -997,9 +1045,10 @@ export async function runPddCodexCli(
       env,
       fs,
     });
+    const forwardedCodexArgs = stripCodexCliEnvExcludeArgs(codexArgs);
     const childEnv = buildCleanChildEnv(env, session.runtimeDir, { grantToken: session.grantToken });
-    const res = await spawnCodexProcess(codexBin, [...cliFlags, ...codexArgs], { cwd, env: childEnv }, ports);
-    normalizeCodexConfigWriteback(fs, {
+    const res = await spawnCodexProcess(codexBin, [...cliFlags, ...forwardedCodexArgs], { cwd, env: childEnv }, ports);
+    await normalizeWritebackUnderLock({
       userCodexHome: session.userCodexHome,
       runtimeCodexHome: session.runtimeDir,
       userConfigPath: session.userConfigPath,
