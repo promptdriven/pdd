@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d73eb585116a4bff107ba5bcbf6d7b1f55d19f6ffffd1330d02bc0acb32ea269).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 46d2005b620682ce2fdb81cc2b62a44ee1eebd0bd60ccc924c2ee9f5f617f580).
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -55,8 +55,11 @@ function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
 }
 const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
 function hasWorkspaceLintRuleFiles(root) {
-  const rulesDir = join(root, 'rules', 'lint');
+  const rulesRoot = join(root, 'rules');
+  const rulesDir = join(rulesRoot, 'lint');
   try {
+    const parentStat = lstatSync(rulesRoot);
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) return false;
     const dirStat = lstatSync(rulesDir);
     if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return false;
     for (const name of readdirSync(rulesDir)) {

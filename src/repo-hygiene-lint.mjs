@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md.
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 47449741228a2c5dc65e7187ed67a77b55e87240b896f5cd737036592a73893b).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';

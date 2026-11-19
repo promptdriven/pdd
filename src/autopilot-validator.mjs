@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: a0e3d5ba335ffbf3eac7ce2d7b54cc22b18eef7822ba9d7b5be13b007732e6ef).
 
 export const MAX_VALIDATION_REPAIRS = 3;
 
@@ -10,7 +10,6 @@ const REAL_E2E_KINDS = new Set([
   'real-execution',
 ]);
 
-const RUNTIME_CODE_EXT_RE = /\.(?:js|mjs|cjs|ts|mts|cts|py|go|rs|rb|java|kt|cs|php|swift|c|cpp|h|hpp|m|mm|ex|exs|dart|zig|lua|graphql|gql|proto|scala|clj|erl|hs|r|jl|pl|groovy|wasm|tf|hcl)$/i;
 const NON_PRODUCTION_DIR_RE = /^(?:test|tests|__tests__|spec|fixtures|examples|prompts|user_stories|docs)\//i;
 const DOC_FILE_RE = /(?:^docs\/|\.(?:txt|rst)$|(?:^|\/)(?:license|changelog)[^/]*$)/i;
 const HUMAN_INTERACTION_RE = /\b(?:browser\s+oauth|oauth\s+click|2fa|mfa|captcha|live\s+payment|physical\s+hardware)\b/i;
@@ -108,9 +107,14 @@ const BUCKET2_DIAGNOSTIC_RULES = [
 export const MOCK_USAGE_RE = /\b(?:mock\.|vi\.mock|jest\.mock|sinon\.stub|fakeClient|fakeServer|fakeTransport)\b|stub(?:bed)?Handler/i;
 export const REAL_E2E_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync|createServer|playwright|puppeteer|supertest|DatabaseSync)\b|\.\s*listen\s*\(|\bfetch\s*\(|\bhttps?\.request\s*\(|\b(?:chromium|firefox|webkit)\.launch\s*\(|\bpage\.goto\s*\(/i;
 const BROWSER_EXEC_RE = /\b(?:playwright|puppeteer)\b|\b(?:chromium|firefox|webkit)\.launch\s*\(|\bpage\.goto\s*\(/i;
+const BROWSER_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:@playwright\/test|playwright(?:-core|-chromium|-firefox|-webkit)?|puppeteer(?:-core)?)['"`]/i;
 const SERVER_OR_DB_EXEC_RE = /\b(?:createServer|supertest|DatabaseSync)\b|\.\s*listen\s*\(|\bfetch\s*\(|\bhttps?\.request\s*\(|\bnew\s+(?:Pool|Client)\s*\(/i;
 const DB_DRIVER_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:pg|mysql2?|better-sqlite3|node:sqlite|sqlite3?|mongodb|redis|ioredis|@prisma\/client)['"`]/i;
+const EXTERNAL_SDK_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:@google-cloud\/[^'"`]+|@aws-sdk\/[^'"`]+|aws-sdk|stripe|dockerode|@kubernetes\/client-node|@octokit\/[^'"`]+|googleapis)['"`]/i;
 const SUBPROCESS_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync)\s*\(/;
+const SUBPROCESS_CALL_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync)\s*\(\s*([^;\n]{1,240})/g;
+const TRIVIAL_SUBPROCESS_BIN_RE = /^(?:echo|printf|true|false|pwd|uname|whoami|id|date|sleep|cat|ls|test|\[|:)(?:\s|$)/i;
+const EXTERNAL_TOOL_EXEC_RE = /\b(?:gcloud|gsutil|bq|aws|az|stripe|docker|docker-compose|kubectl|helm|terraform|gh|pdd|curl|wget|psql|mysql|redis-cli|mongosh|ssh|scp|vault|npm|npx|git)\b/i;
 const BOUNDARY_IMPORT_RE = /(?:from|require\s*\()\s*['"`]([^'"`]+)['"`]/g;
 const PROD_PATH_LITERAL_RE = /['"`]((?:\.\.\/|\.\/)?(?:bin|cli|cmd|scripts|api|server|routes|handlers|controllers|db|database|migrations|prisma|sql|web|ui|frontend|pages|components|views|app|src)\/[A-Za-z0-9._/-]+)['"`]/g;
 
@@ -120,7 +124,9 @@ const FILTER_CODE_SHAPE_RE = /\.filter\s*\([^)]*!==\s*""/;
 const FILTER_REAL_BINDING_RE = /\.filter\s*\([^)]*!==\s*['"`]real-binding-unavailable['"`]/i;
 const CALL_DOT_SKIP_RE = /\b(?:test|it|t)\.skip\s*\(/;
 const CALL_DOT_SKIP_E2E_RE = /\b(?:test|it|t)\.skip\s*\([^)]*(?:e2e|validation|validator|real-binding)/i;
+const MULTILINE_CALL_DOT_SKIP_RE = /\b(?:test|it|t)\.skip\s*\(\s*[^,()]{1,200}/gs;
 const NODE_TEST_OPT_SKIP_RE = /\b(?:test|it|t)\s*\([^)]*,\s*\{[^}]*\bskip\s*:\s*(?:true|""|!)/;
+const MULTILINE_NODE_TEST_OPT_SKIP_RE = /\b(?:test|it|t)\s*\(\s*[^,()]{1,200},\s*\{[^}]{0,400}\bskip\s*:\s*(?:true|""|!)/gs;
 const RETURN_PASS_OR_SKIP_RE = /\breturn\b[^;\n]*(?:\bok\s*:\s*true|\bpass\s*:\s*true|\bskipped\s*:\s*true|\bskip\s*:\s*true)/i;
 const PROSE_EXCUSE_PATTERNS = [
   {
@@ -151,8 +157,40 @@ export function scanJsPreserveLines(source) {
   const text = String(source ?? '');
   const noComments = [];
   const noStrings = [];
+  const templateBraceDepths = [];
   let i = 0;
   let lastToken = '';
+
+  const scanTemplatePart = () => {
+    while (i < text.length) {
+      const c = text[i];
+      if (c === '\\' && i + 1 < text.length) {
+        noComments.push(c, text[i + 1]);
+        if (text[i + 1] === '\n') noStrings.push('\n');
+        i += 2;
+        continue;
+      }
+      if (c === '$' && text[i + 1] === '{') {
+        noComments.push('$', '{');
+        noStrings.push('"+(');
+        i += 2;
+        templateBraceDepths.push(1);
+        lastToken = '(';
+        return;
+      }
+      if (c === '`') {
+        noComments.push(c);
+        noStrings.push('"');
+        i += 1;
+        lastToken = '""';
+        return;
+      }
+      noComments.push(c);
+      if (c === '\n') noStrings.push('\n');
+      i += 1;
+    }
+    lastToken = '""';
+  };
 
   const readPrevWord = () => {
     let j = noComments.length - 1;
@@ -199,8 +237,34 @@ export function scanJsPreserveLines(source) {
       continue;
     }
 
-    // String or template literal
-    if (ch === '\'' || ch === '"' || ch === '`') {
+    // Template literal (scan ${...} expressions as code while masking static text)
+    if (ch === '`') {
+      noComments.push(ch);
+      noStrings.push('"');
+      i += 1;
+      scanTemplatePart();
+      continue;
+    }
+
+    // Track braces inside active template ${...} expressions
+    if (templateBraceDepths.length > 0) {
+      if (ch === '{') {
+        templateBraceDepths[templateBraceDepths.length - 1] += 1;
+      } else if (ch === '}') {
+        templateBraceDepths[templateBraceDepths.length - 1] -= 1;
+        if (templateBraceDepths[templateBraceDepths.length - 1] === 0) {
+          templateBraceDepths.pop();
+          noComments.push('}');
+          noStrings.push(')+"');
+          i += 1;
+          scanTemplatePart();
+          continue;
+        }
+      }
+    }
+
+    // Single- or double-quoted string literal
+    if (ch === '\'' || ch === '"') {
       const quote = ch;
       noComments.push(ch);
       noStrings.push('"');
@@ -219,31 +283,29 @@ export function scanJsPreserveLines(source) {
           i += 1;
           break;
         }
-        if (c === '\n' && quote !== '`') {
+        if (c === '\n') {
           noComments.push('\n');
           noStrings.push('"', '\n');
           i += 1;
           break;
         }
         noComments.push(c);
-        if (c === '\n') noStrings.push('\n');
         i += 1;
       }
       lastToken = '""';
       continue;
     }
 
-    // Regex literal (avoid mis-parsing quotes inside /.../)
+    // Regex literal (mask body in codeNoStrings so /playwright/ or /localSkipRow/ never false-match)
     if (ch === '/' && next !== '/' && next !== '*' && isRegexStartContext(lastToken || readPrevWord())) {
       noComments.push(ch);
-      noStrings.push(ch);
+      noStrings.push('/');
       i += 1;
       let inClass = false;
       while (i < text.length) {
         const c = text[i];
         if (c === '\\' && i + 1 < text.length) {
           noComments.push(c, text[i + 1]);
-          noStrings.push(c, text[i + 1]);
           i += 2;
           continue;
         }
@@ -256,9 +318,11 @@ export function scanJsPreserveLines(source) {
         if (c === '[') inClass = true;
         else if (c === ']') inClass = false;
         noComments.push(c);
-        noStrings.push(c);
         i += 1;
-        if (c === '/' && !inClass) break;
+        if (c === '/' && !inClass) {
+          noStrings.push(' /');
+          break;
+        }
       }
       lastToken = '/re/';
       continue;
@@ -300,7 +364,7 @@ function classifyProductionPathSurfaces(rawPath) {
   for (const { surface, test } of SURFACE_MATCHERS) {
     if (test(lower, base)) matched.push(surface);
   }
-  if (!matched.length && RUNTIME_CODE_EXT_RE.test(lower)) {
+  if (!matched.length) {
     matched.push('runtime-code');
   }
   return matched;
@@ -386,6 +450,48 @@ export function inspectTestBoundaryTargets(testPath, text) {
   };
 }
 
+function analyzeSubprocessCalls(codeNoComments, codeNoStrings) {
+  let hasRealSubprocess = false;
+  let hasExternalToolSubprocess = false;
+  if (!SUBPROCESS_EXEC_RE.test(codeNoStrings)) {
+    return { hasRealSubprocess, hasExternalToolSubprocess };
+  }
+  const codeLines = codeNoComments.split(/\r?\n/);
+  const maskedLines = codeNoStrings.split(/\r?\n/);
+  for (let i = 0; i < maskedLines.length; i += 1) {
+    if (!SUBPROCESS_EXEC_RE.test(maskedLines[i])) continue;
+    const lineLen = (codeLines[i] ?? '').length;
+    const windowText = codeLines.slice(i, i + 4).join(' ');
+    for (const match of windowText.matchAll(SUBPROCESS_CALL_RE)) {
+      if ((match.index ?? 0) > lineLen) break;
+      const argText = (match[1] ?? '').trim();
+      if (!argText) continue;
+      const literalFirst = /^(['"`])([^'"`]*)\1/.exec(argText);
+      if (literalFirst) {
+        const bin = literalFirst[2].trim();
+        if (!bin || TRIVIAL_SUBPROCESS_BIN_RE.test(bin)) continue;
+      }
+      hasRealSubprocess = true;
+      if (EXTERNAL_TOOL_EXEC_RE.test(argText)) {
+        hasExternalToolSubprocess = true;
+      }
+    }
+  }
+  return { hasRealSubprocess, hasExternalToolSubprocess };
+}
+
+function detectRealExecutionSignals(codeNoComments, codeNoStrings) {
+  const { hasRealSubprocess, hasExternalToolSubprocess } = analyzeSubprocessCalls(codeNoComments, codeNoStrings);
+  const hasBrowser = BROWSER_EXEC_RE.test(codeNoStrings)
+    || (BROWSER_IMPORT_RE.test(codeNoComments) && /\.(?:launch|goto|newPage)\s*\(/i.test(codeNoStrings));
+  const hasServerOrDb = SERVER_OR_DB_EXEC_RE.test(codeNoStrings)
+    || (DB_DRIVER_IMPORT_RE.test(codeNoComments) && !MOCK_USAGE_RE.test(codeNoStrings));
+  const hasExternalSdk = EXTERNAL_SDK_IMPORT_RE.test(codeNoComments) && !MOCK_USAGE_RE.test(codeNoStrings);
+  const hasLiveBinding = hasBrowser || hasServerOrDb || hasExternalToolSubprocess || hasExternalSdk;
+  const hasAnyRealExec = hasLiveBinding || hasRealSubprocess;
+  return { hasBrowser, hasServerOrDb, hasRealSubprocess, hasLiveBinding, hasAnyRealExec };
+}
+
 /**
  * Detect which real E2E proof kinds a test file genuinely executes (comments/strings and skipped tests excluded).
  */
@@ -395,18 +501,18 @@ export function detectRealE2eKindsInTest(testPath, text) {
 
   const { codeNoComments, codeNoStrings } = scanJsPreserveLines(text);
   const kinds = new Set();
-
-  const hasBrowser = BROWSER_EXEC_RE.test(codeNoStrings)
-    || (/\b(?:playwright|puppeteer)\b/i.test(codeNoComments) && /\.(?:launch|goto|newPage)\s*\(/i.test(codeNoStrings));
-  const hasServerOrDb = SERVER_OR_DB_EXEC_RE.test(codeNoStrings)
-    || (DB_DRIVER_IMPORT_RE.test(codeNoComments) && !MOCK_USAGE_RE.test(codeNoStrings));
-  const hasSubprocess = SUBPROCESS_EXEC_RE.test(codeNoStrings);
-  const hasAnyRealExec = hasBrowser || hasServerOrDb || hasSubprocess || REAL_E2E_EXEC_RE.test(codeNoStrings);
+  const {
+    hasBrowser,
+    hasServerOrDb,
+    hasRealSubprocess,
+    hasLiveBinding,
+    hasAnyRealExec,
+  } = detectRealExecutionSignals(codeNoComments, codeNoStrings);
 
   if (hasBrowser) kinds.add('browser-playwright');
   if (hasServerOrDb) kinds.add('local-server-or-db');
-  if (hasSubprocess) kinds.add('subprocess-cli');
-  if (hasAnyRealExec) kinds.add('live-binding');
+  if (hasRealSubprocess) kinds.add('subprocess-cli');
+  if (hasLiveBinding) kinds.add('live-binding');
   if (hasAnyRealExec || !MOCK_USAGE_RE.test(codeNoStrings)) kinds.add('real-execution');
 
   return [...kinds].sort();
@@ -823,12 +929,34 @@ export function lintValidationCode({ path = '', kind = 'test', text = '', hasRea
   const codeSet = new Set();
   const warnings = [];
 
+  const reportedSkipLines = new Set();
   if (kind === 'code' || kind === 'test') {
     for (let i = 0; i < codeLines.length; i += 1) {
       const detail = matchSilentSkipLine(codeLines[i], maskedLines[i] ?? '', kind);
       if (detail) {
+        reportedSkipLines.add(i + 1);
         codeSet.add('silent-validation-skip');
         warnings.push(`Warning: validation lint: ${filePath}:${i + 1} [silent-validation-skip] ${detail}`);
+      }
+    }
+    const multilineRules = [
+      { re: MULTILINE_NODE_TEST_OPT_SKIP_RE, detail: 'unconditionally skips an E2E or validation test via test options' },
+      { re: MULTILINE_CALL_DOT_SKIP_RE, detail: 'unconditionally skips an E2E or validation test' },
+    ];
+    for (const { re, detail } of multilineRules) {
+      for (const match of codeNoStrings.matchAll(re)) {
+        const startLine = codeNoStrings.slice(0, match.index ?? 0).split(/\r?\n/).length;
+        const endLine = startLine + match[0].split(/\r?\n/).length - 1;
+        let alreadyReported = false;
+        for (let ln = startLine; ln <= endLine; ln += 1) {
+          if (reportedSkipLines.has(ln)) { alreadyReported = true; break; }
+        }
+        if (alreadyReported) continue;
+        const rawSpan = codeLines.slice(startLine - 1, endLine).join('\n');
+        if (!SKIP_KEYWORD_RE.test(rawSpan)) continue;
+        reportedSkipLines.add(startLine);
+        codeSet.add('silent-validation-skip');
+        warnings.push(`Warning: validation lint: ${filePath}:${startLine} [silent-validation-skip] ${detail}`);
       }
     }
   }
@@ -837,7 +965,8 @@ export function lintValidationCode({ path = '', kind = 'test', text = '', hasRea
     const { boundarySurfaces } = inspectTestBoundaryTargets(filePath, source);
     if (boundarySurfaces.length > 0) {
       const mockLineIndex = maskedLines.findIndex((line) => MOCK_USAGE_RE.test(line));
-      if (mockLineIndex >= 0 && !REAL_E2E_EXEC_RE.test(codeNoStrings)) {
+      const { hasAnyRealExec } = detectRealExecutionSignals(codeNoComments, codeNoStrings);
+      if (mockLineIndex >= 0 && !hasAnyRealExec) {
         codeSet.add('boundary-mock-only-test');
         warnings.push(
           `Warning: validation lint: ${filePath}:${mockLineIndex + 1} [boundary-mock-only-test] mock-only test covers a runtime boundary with no real E2E coverage`,

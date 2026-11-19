@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-launcher.prompt.md
+// Prompt: prompts/cli/autopilot-launcher.prompt.md (sha256: f524d922da6a551887ba2d0adc3aae4b6f32e9a43bd386769be3e717b11322fd)
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';

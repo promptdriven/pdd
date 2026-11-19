@@ -7,9 +7,11 @@ import { dirname, join } from 'node:path';
 import {
   MAX_VALIDATION_REPAIRS,
   detectChangedSurfaces,
+  detectRealE2eKindsInTest,
   evaluateValidationOutcome,
   lintValidationCode,
   planValidationResume,
+  scanJsPreserveLines,
   shouldClaimWithCooldowns,
 } from '../src/autopilot-validator.mjs';
 import { coreStatus, runDefaultPreflightCheck } from '../src/autopilot-core.mjs';
@@ -887,4 +889,496 @@ test('MF-8 & Minor Notes: empty changedFiles fail closed, word-boundary surfaces
   }
   assert.notEqual(exitCode, 0, 'pdd lint --local must enforce rules/lint/*.json error even without lint key in pdd.json');
   assert.match(combined, /silent-validation-skip/);
+});
+
+test('R2-1a (MF-1 base control): links node_modules into controlTree and treats missing non-changed package as not-run', async (t) => {
+  // Part 1: bug-fix test depends on an installed node_modules package -> controlTree symlinks node_modules so base control runs and reproduces the bug.
+  const wOk = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  const fakePkgDir = join(wOk.state.cwd, 'node_modules', 'fake-base-dep');
+  mkdirSync(fakePkgDir, { recursive: true });
+  writeFileSync(join(fakePkgDir, 'package.json'), JSON.stringify({ name: 'fake-base-dep', type: 'module', main: 'index.mjs' }));
+  writeFileSync(join(fakePkgDir, 'index.mjs'), 'export const bump = (n) => n + 1;\n');
+  wOk.baseCommit('src/dep-bug.mjs', "import { bump } from 'fake-base-dep';\nexport const compute = (n) => bump(n) - 1;\n");
+
+  wOk.issue(41, { title: 'Fix off-by-one using fake-base-dep', labels: ['pdd:bug'] });
+  await wOk.tick();
+  const cwd41 = wOk.job(41, 'build').cwd;
+  writeIn(cwd41, 'src/dep-bug.mjs', "import { bump } from 'fake-base-dep';\nexport const compute = (n) => bump(n);\n");
+  writeIn(
+    cwd41,
+    'test/dep-bug.test.mjs',
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import { compute } from '../src/dep-bug.mjs';",
+      "test('compute returns n+1', () => { assert.equal(compute(4), 5); });",
+      '',
+    ].join('\n'),
+  );
+  wOk.build(41, {
+    write: false,
+    body: 'Fixes #41\n\nRuntime: not run (no prompt changed)\nPath: d — src/dep-bug.mjs, test/dep-bug.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wOk.tick();
+  wOk.review(41, 'PASS');
+  wOk.suite(41, 0);
+  await wOk.tick();
+  assert.equal(wOk.github.merges.length, 1, 'linking node_modules lets bug-fix base control genuinely fail on base and merge');
+
+  // Part 2: missing non-changed npm package on base (ERR_MODULE_NOT_FOUND) MUST be classified as not-run (never falsely credited as ran-and-failed-on-base).
+  const wMiss = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wMiss.baseCommit('src/calc-miss.mjs', 'export const add = (a, b) => a - b;\n');
+  wMiss.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wMiss.issue(42, { title: 'Fix add with missing pkg in test', labels: ['pdd:bug'] });
+  await wMiss.tick();
+  const cwd42 = wMiss.job(42, 'build').cwd;
+  writeIn(cwd42, 'src/calc-miss.mjs', 'export const add = (a, b) => a + b;\n');
+  writeIn(
+    cwd42,
+    'test/calc-miss.test.mjs',
+    [
+      "import test from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import 'never-installed-pkg-r2-test';",
+      "import { add } from '../src/calc-miss.mjs';",
+      "test('add', () => { assert.equal(add(2, 3), 5); });",
+      '',
+    ].join('\n'),
+  );
+  wMiss.build(42, {
+    write: false,
+    body: 'Fixes #42\n\nRuntime: not run (no prompt changed)\nPath: d — src/calc-miss.mjs, test/calc-miss.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wMiss.tick();
+  wMiss.review(42, 'PASS');
+  wMiss.suite(42, 0);
+  await wMiss.tick();
+  assert.equal(wMiss.github.merges.length, 0, 'ERR_MODULE_NOT_FOUND for missing non-changed package must be not-run and fail closed');
+  const pr42 = [...wMiss.github.prs.values()].find((p) => p.head?.ref?.includes('core-42')) ?? [...wMiss.github.prs.values()][0];
+  assert.ok(
+    pr42.comments.some((c) => /<!-- pdd:autopilot-core:human-boundary:/.test(c.body) && /base regression control/i.test(c.body)),
+    'not-run base control blocks merge at Bucket 3 with base regression control reason',
+  );
+});
+
+test('R2-1b (MF-1 suite scope, runtime-code per-file coverage, scanner regex/template, trivial subprocess)', async (t) => {
+  // 1. Regex literals masked in codeNoStrings: /playwright/ does not grant browser-playwright, /localSkipRow/ does not trigger silent-validation-skip
+  const regexBrowser = [
+    "import test from 'node:test';",
+    "test('mentions regex only', () => { const re = /playwright/; const ok = re.test('x'); return ok; });",
+  ].join('\n');
+  assert.ok(!detectRealE2eKindsInTest('test/regex-browser.test.mjs', regexBrowser).includes('browser-playwright'));
+
+  const regexSkipLint = lintValidationCode({
+    path: 'src/detector.mjs',
+    kind: 'code',
+    text: 'export function check(s) { return /\\blocalSkipRow\\b/i.test(s); }\n',
+  });
+  assert.equal(regexSkipLint.ok, true, 'regex literal /localSkipRow/ must not trigger silent-validation-skip');
+
+  // 2. Template ${...} expressions are scanned as real code
+  const tmplScanned = scanJsPreserveLines('const out = `val=${localSkipRow(row)}`;\n');
+  assert.match(tmplScanned.codeNoStrings, /\blocalSkipRow\b/, 'template ${...} expression must remain visible in codeNoStrings');
+  const tmplSkipLint = lintValidationCode({
+    path: 'src/tmpl-skip.mjs',
+    kind: 'code',
+    text: 'export const run = (row) => `ok:${localSkipRow(row)}`;\n',
+  });
+  assert.ok(tmplSkipLint.codes.includes('silent-validation-skip'), 'localSkipRow inside template ${...} must be caught');
+
+  // 3. Trivial spawnSync('echo', ...) must NOT grant subprocess-cli or live-binding; real gcloud invocation DOES
+  const echoTest = [
+    "import { spawnSync } from 'node:child_process';",
+    "import { deploy } from '../src/gcloud-deploy.mjs';",
+    "spawnSync('echo', ['hi']);",
+    "spawnSync('echo', ['gcloud']);",
+    'deploy();',
+  ].join('\n');
+  const echoKinds = detectRealE2eKindsInTest('test/gcloud-fake.test.mjs', echoTest);
+  assert.ok(!echoKinds.includes('live-binding'), 'spawnSync(echo) must NOT grant live-binding');
+  assert.ok(!echoKinds.includes('subprocess-cli'), 'spawnSync(echo) must NOT grant subprocess-cli');
+
+  const realGcloudTest = [
+    "import { execFileSync } from 'node:child_process';",
+    "execFileSync('gcloud', ['auth', 'list']);",
+  ].join('\n');
+  const realKinds = detectRealE2eKindsInTest('test/gcloud-real.test.mjs', realGcloudTest);
+  assert.ok(realKinds.includes('live-binding'), 'real gcloud subprocess grants live-binding');
+  assert.ok(realKinds.includes('subprocess-cli'), 'real gcloud subprocess grants subprocess-cli');
+
+  // 4. Unexecuted E2E file MUST NOT be credited when testCommand runs only test/unit.test.mjs
+  const wScope = await coreWorld(t, { settings: { mode: 'auto', runs: 1, testCommand: 'node --test test/unit.test.mjs' } });
+  wScope.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wScope.issue(43, { title: 'Add orders endpoint' });
+  await wScope.tick();
+  const cwd43 = wScope.job(43, 'build').cwd;
+  writeIn(cwd43, 'api/orders.mjs', 'export const handleOrders = () => ({ ok: true });\n');
+  writeIn(cwd43, 'test/unit.test.mjs', "import test from 'node:test';\ntest('unit only', () => {});\n");
+  writeIn(
+    cwd43,
+    'test/orders-e2e.test.mjs',
+    [
+      "import http from 'node:http';",
+      "import { handleOrders } from '../api/orders.mjs';",
+      'const s = http.createServer((req, res) => res.end(JSON.stringify(handleOrders())));',
+      's.listen(0);',
+      '',
+    ].join('\n'),
+  );
+  const { pr: pr43 } = wScope.build(43, {
+    write: false,
+    body: 'Fixes #43\n\nRuntime: not run (no prompt changed)\nPath: d — api/orders.mjs, test/unit.test.mjs, test/orders-e2e.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wScope.tick();
+  wScope.review(43, 'PASS');
+  wScope.suite(43, 0);
+  await wScope.tick();
+  assert.equal(wScope.github.merges.length, 0, 'unexecuted test/orders-e2e.test.mjs must NOT be credited when testCommand only runs test/unit.test.mjs');
+  assert.ok(
+    pr43.comments.some((c) => /<!-- pdd:autopilot-core:human-boundary:/.test(c.body)),
+    'unexecuted E2E fails closed at Bucket 3 instead of merging',
+  );
+
+  // 5. Changing 2 runtime-code files (src/a.mjs + src/b.mjs) with tests covering only src/a.mjs MUST fail closed
+  const wPartial = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wPartial.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wPartial.issue(44, { title: 'Update two runtime modules' });
+  await wPartial.tick();
+  const cwd44 = wPartial.job(44, 'build').cwd;
+  writeIn(cwd44, 'src/a.mjs', 'export const a = () => 1;\n');
+  writeIn(cwd44, 'src/b.mjs', 'export const b = () => 2;\n');
+  writeIn(cwd44, 'test/a.test.mjs', "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { a } from '../src/a.mjs';\ntest('a', () => assert.equal(a(), 1));\n");
+  const { pr: pr44 } = wPartial.build(44, {
+    write: false,
+    body: 'Fixes #44\n\nRuntime: not run (no prompt changed)\nPath: d — src/a.mjs, src/b.mjs, test/a.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wPartial.tick();
+  wPartial.review(44, 'PASS');
+  wPartial.suite(44, 0);
+  await wPartial.tick();
+  assert.equal(wPartial.github.merges.length, 0, '1 of 2 changed src/*.mjs files untested must fail closed');
+  assert.ok(
+    pr44.comments.some((c) => /<!-- pdd:autopilot-core:human-boundary:/.test(c.body)),
+    'untested second runtime-code file fails closed instead of merging',
+  );
+});
+
+test('R2-2 (MF-3): multi-Story pr.body real-binding-unavailable parks when Story A passes and Story B is unverified, and coverage rows preserve reason/codes', async (t) => {
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w.runtimeEvidence = () => ({
+    stories: [
+      { story: 'user_stories/a.md', pass: true, current: true, at: '2026-11-18T10:00:00Z', tests: ['test/a.json'], reason: null, codes: [] },
+    ],
+    storyFiles: ['user_stories/a.md', 'user_stories/b.md'],
+    tests: [],
+  });
+  w.issue(45, { title: 'Multi-story change with binding unavailable on B' });
+  await w.tick();
+  const cwd45 = w.job(45, 'build').cwd;
+  writeIn(cwd45, 'user_stories/a.md', '# Story A\n');
+  writeIn(cwd45, 'user_stories/b.md', '# Story B\n');
+  writeIn(cwd45, 'src/multi.mjs', 'export const m = 1;\n');
+  writeIn(cwd45, 'test/multi.test.mjs', "import test from 'node:test';\nimport { m } from '../src/multi.mjs';\ntest('m', () => { if (m !== 1) throw new Error(); });\n");
+  w.build(45, {
+    write: false,
+    body: [
+      'Fixes #45',
+      '',
+      'Runtime: PASS (user_stories/a.md, 4/4 checks)',
+      'Runtime: not run (user_stories/b.md: real-binding-unavailable)',
+      'Path: d — user_stories/a.md, user_stories/b.md, src/multi.mjs, test/multi.test.mjs — unowned — no contract change — Test: done check',
+    ].join('\n'),
+    result: { promptChanged: true },
+  });
+  await w.tick();
+  assert.equal(w.github.merges.length, 0, 'Story A passing must NOT let Story B real-binding-unavailable merge');
+  const machine = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8'));
+  assert.equal(machine.validationParks?.length, 1, 'PR parked at Bucket 2 for unverified Story B');
+  assert.deepEqual(machine.validationParks[0].parkStories, ['user_stories/b.md']);
+  assert.equal(machine.toolCooldowns?.['runtime-binding']?.active, true);
+
+  // Verify job.coverage.rows preserves reason & codes (when runtimeCoverage records rows)
+  const wCov = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wCov.runtimeEvidence = () => ({
+    stories: [
+      { story: 'user_stories/a.md', pass: true, current: true, at: '2026-11-18T10:00:00Z', reason: 'verified-live', codes: ['ok-live'] },
+    ],
+    storyFiles: ['user_stories/a.md'],
+    tests: [],
+  });
+  wCov.issue(46, { title: 'Check coverage row fields' });
+  await wCov.tick();
+  const cwd46 = wCov.job(46, 'build').cwd;
+  writeIn(cwd46, 'user_stories/a.md', '# Story A\n');
+  wCov.build(46, {
+    write: false,
+    body: 'Fixes #46\n\nRuntime: PASS (user_stories/a.md, 1/1 checks)\nPath: d — user_stories/a.md — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wCov.tick();
+  const job46 = JSON.parse(readFileSync(join(wCov.root, 'jobs', '46.json'), 'utf8'));
+  assert.equal(job46.coverage?.rows?.[0]?.reason, 'verified-live', 'job.coverage.rows preserves reason');
+  assert.deepEqual(job46.coverage?.rows?.[0]?.codes, ['ok-live'], 'job.coverage.rows preserves codes');
+});
+
+test('R2-3 (MF-4): resume cleans stale not-run line after bindingRerun, preserves needs-decision on claim failure, undoes claim on worktree failure, and never spawns zero-arg pdd test', async (t) => {
+  // Part 1: Resuming real-binding-unavailable runs bindingRerun BEFORE syncVerifiedRuntimeLines and replaces stale not-run line with PASS
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  let bindingRestored = false;
+  w.runtimeEvidence = () => ({
+    stories: bindingRestored
+      ? [{ story: 'user_stories/live.md', pass: true, current: true, at: '2026-11-18T11:00:00Z', passed: 3, total: 3 }]
+      : [{ story: 'user_stories/live.md', pass: false, current: true, at: '2026-11-18T10:00:00Z', reason: 'real-binding-unavailable', codes: ['real-binding-unavailable'] }],
+    storyFiles: ['user_stories/live.md'],
+    tests: [],
+  });
+  w.issue(47, { title: 'Clean stale not-run line on resume' });
+  await w.tick();
+  const cwd47 = w.job(47, 'build').cwd;
+  writeIn(cwd47, 'user_stories/live.md', '# Live\n');
+  writeIn(cwd47, 'src/live-op.mjs', 'export const liveOp = () => 1;\n');
+  writeIn(cwd47, 'test/live-op.test.mjs', "import test from 'node:test';\nimport { liveOp } from '../src/live-op.mjs';\ntest('live', () => { if (liveOp() !== 1) throw new Error(); });\n");
+  const built47 = w.build(47, {
+    write: false,
+    body: 'Fixes #47\n\nRuntime: not run (user_stories/live.md: real-binding-unavailable)\nPath: d — user_stories/live.md, src/live-op.mjs, test/live-op.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w.tick();
+  const parkedMachine = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8'));
+  assert.equal(parkedMachine.validationParks?.length, 1);
+
+  // Resume via healthy preflight; rerunRuntimeBinding restores binding before syncVerifiedRuntimeLines runs
+  await w.tick({
+    preflightCheck: async () => ({ exitCode: 0 }),
+    rerunRuntimeBinding: async () => { bindingRestored = true; },
+  });
+  assert.doesNotMatch(built47.pr.body, /real-binding-unavailable/i, 'stale Runtime: not run line must be replaced after bindingRerun passes');
+  assert.match(built47.pr.body, /Runtime: PASS \(user_stories\/live\.md/, 'PR body must be updated to verified Runtime: PASS');
+  w.review(47, 'PASS');
+  w.suite(47, 0);
+  await w.tick();
+  assert.equal(w.github.merges.length, 1, 'cleaned PR merges without looping back to Bucket 2');
+
+  // Part 2: Failed claimIssue leaves pdd:needs-decision and validationPark intact
+  const wClaimFail = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wClaimFail.issue(48, { title: 'Keep needs-decision if claim fails' });
+  await wClaimFail.tick();
+  writeIn(wClaimFail.job(48, 'build').cwd, 'docs/c.md', '# C\n');
+  wClaimFail.build(48, {
+    write: false,
+    body: 'Fixes #48\n\nRuntime: not run (no prompt changed)',
+    result: { promptChanged: false },
+  });
+  await wClaimFail.tick();
+  wClaimFail.say(48, 'suite', 'ERROR: (gcloud.run.deploy) Reauthentication required. Run: gcloud auth login\n');
+  wClaimFail.suite(48, 1);
+  await wClaimFail.tick();
+  assert.ok(wClaimFail.labels(48).includes('pdd:needs-decision'));
+  // Simulate another coordinator claiming #48 before our resume attempt
+  wClaimFail.github.claim(48, { coordinatorId: 'other-coord', machine: 'other-host' });
+  await wClaimFail.tick({ preflightCheck: async () => ({ exitCode: 0 }) });
+  assert.ok(wClaimFail.labels(48).includes('pdd:needs-decision'), 'pdd:needs-decision must stay intact when claimIssue fails');
+  const mClaimFail = JSON.parse(readFileSync(join(wClaimFail.root, 'core.json'), 'utf8'));
+  assert.equal(mClaimFail.validationParks?.length, 1, 'park must stay intact when claimIssue fails');
+
+  // Part 3: Failed git worktree add undoes claim, keeps park and pdd:needs-decision intact
+  const wWtFail = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wWtFail.issue(49, { title: 'Undo claim if worktree add fails' });
+  await wWtFail.tick();
+  writeIn(wWtFail.job(49, 'build').cwd, 'docs/w.md', '# W\n');
+  wWtFail.build(49, {
+    write: false,
+    body: 'Fixes #49\n\nRuntime: not run (no prompt changed)',
+    result: { promptChanged: false },
+  });
+  await wWtFail.tick();
+  wWtFail.say(49, 'suite', 'ERROR: (gcloud.run.deploy) Reauthentication required. Run: gcloud auth login\n');
+  wWtFail.suite(49, 1);
+  await wWtFail.tick();
+  rmSync(join(wWtFail.root, 'worktrees', '49'), { recursive: true, force: true });
+  await wWtFail.tick({
+    preflightCheck: async () => ({ exitCode: 0 }),
+    git: async (args, opts) => {
+      if (args[0] === 'worktree' && args[1] === 'add') {
+        throw new Error('fatal: simulated worktree add failure');
+      }
+      return wWtFail.git(args, opts);
+    },
+  });
+  assert.equal(existsSync(join(wWtFail.root, 'jobs', '49.json')), false, 'no broken resumed job saved when worktree add fails');
+  assert.ok(wWtFail.labels(49).includes('pdd:needs-decision'), 'pdd:needs-decision stays intact on worktree add failure');
+  assert.ok(!wWtFail.labels(49).includes('pdd:working'), 'claim is undone when worktree add fails');
+  const mWtFail = JSON.parse(readFileSync(join(wWtFail.root, 'core.json'), 'utf8'));
+  assert.equal(mWtFail.validationParks?.length, 1, 'park stays intact when worktree add fails');
+
+  // Part 4: Empty parkStories never spawns repo-wide zero-arg `pdd test --json`
+  const wNoZeroArg = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wNoZeroArg.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wNoZeroArg.issue(50, { title: 'Never spawn empty-args pdd test' });
+  await wNoZeroArg.tick();
+  writeIn(wNoZeroArg.job(50, 'build').cwd, 'docs/no-args.md', '# Docs\n');
+  const built50 = wNoZeroArg.build(50, {
+    write: false,
+    body: 'Fixes #50\n\nRuntime: not run (no prompt changed)',
+    result: { promptChanged: false },
+  });
+  const jobPath50 = join(wNoZeroArg.root, 'jobs', '50.json');
+  const job50 = JSON.parse(readFileSync(jobPath50, 'utf8'));
+  job50.bindingRerun = { head: built50.head, stories: [], state: 'pending', agent: null };
+  writeFileSync(jobPath50, JSON.stringify(job50, null, 2));
+  const startedBefore = wNoZeroArg.started.length;
+  await wNoZeroArg.tick();
+  const runtimeStarts = wNoZeroArg.started.slice(startedBefore).filter((j) => j.role === 'runtime');
+  assert.equal(runtimeStarts.length, 0, 'empty parkStories with no story targets must NEVER spawn zero-arg repo-wide pdd test --json');
+});
+
+test('R2-4 (MF-5): node:test describe headers (▶), multiline assertion diffs, and test at/stack frames do NOT misclassify as Bucket 2/3', async (t) => {
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w.issue(51, { title: 'Unit test failure mentioning Bucket 2/3 keywords in header and diff' });
+  await w.tick();
+  const cwd51 = w.job(51, 'build').cwd;
+  writeIn(cwd51, 'src/parser.mjs', 'export const parse = () => "ok";\n');
+  writeIn(cwd51, 'test/parser.test.mjs', "import test from 'node:test';\nimport { parse } from '../src/parser.mjs';\ntest('parse', () => parse());\n");
+  const { pr } = w.build(51, {
+    write: false,
+    body: 'Fixes #51\n\nRuntime: not run (no prompt changed)\nPath: d — src/parser.mjs, test/parser.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w.tick();
+  w.say(51, 'suite', [
+    '▶ Bucket 3: 2FA and captcha handling',
+    '  ✖ maps real-binding-unavailable correctly (1.2ms)',
+    '    AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:',
+    '',
+    "    'real-binding-unavailable' !== 'ok'",
+    '        at TestContext.<anonymous> (file:///repo/test/parser.test.mjs:42:10)',
+    '  test at test/parser.test.mjs:40:1',
+    "  location: 'test/parser.test.mjs:40:1'",
+    "  failureType: 'testCodeFailure'",
+    "  code: 'ERR_ASSERTION'",
+    '  stack: |-',
+    '    TestContext.<anonymous> (file:///repo/test/parser.test.mjs:42:10)',
+  ].join('\n'));
+  w.review(51, 'PASS');
+  w.suite(51, 1);
+  await w.tick();
+  assert.ok(w.job(51, 'repair'), 'unit test failure enters Bucket 1 repair instead of Bucket 2/3');
+  assert.ok(!pr.comments.some((c) => /<!-- pdd:autopilot-core:(?:auth-wait|human-boundary):/.test(c.body)), 'must not post auth-wait or human-boundary comment');
+  const machine = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8'));
+  assert.equal(machine.validationParks?.length ?? 0, 0, 'must not park in validationParks');
+});
+
+test('R2-5 (MF-6): multiline node:test { skip: true } caught by lintValidationCode and collectBacksideLint surfaces human-readable message', async (t) => {
+  const multiSkipSrc = [
+    "import test from 'node:test';",
+    "test('e2e login flow', {",
+    '  skip: true,',
+    '}, () => {});',
+    '',
+  ].join('\n');
+  const lint = lintValidationCode({ path: 'test/login-e2e.test.mjs', kind: 'test', text: multiSkipSrc });
+  assert.equal(lint.ok, false, 'multiline { skip: true } must fail lint');
+  assert.ok(lint.codes.includes('silent-validation-skip'));
+  assert.match(lint.warnings[0], /test\/login-e2e\.test\.mjs:2 \[silent-validation-skip\]/);
+
+  // Live coreWorld check: collectBacksideLint reads f.message (not bare code)
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w.issue(52, { title: 'Check backside lint detail message' });
+  await w.tick();
+  const cwd52 = w.job(52, 'build').cwd;
+  writeIn(cwd52, 'src/auth-helper.mjs', 'export const ok = () => true;\n');
+  writeIn(cwd52, 'test/login-e2e.test.mjs', multiSkipSrc);
+  w.build(52, {
+    write: false,
+    body: 'Fixes #52\n\nRuntime: not run (no prompt changed)\nPath: d — src/auth-helper.mjs, test/login-e2e.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w.tick();
+  w.review(52, 'PASS');
+  w.suite(52, 0);
+  await w.tick();
+  const repair52 = w.job(52, 'repair');
+  assert.ok(repair52, 'multiline silent skip triggers backside lint repair');
+  assert.match(repair52.input, /\[silent-validation-skip\]\s+.*unconditionally skips/i, 'collectBacksideLint must surface f.message detail, not bare code');
+});
+
+test('R2-6 (MF-7 & MF-8 & Minor): suite repair cap 3 escalates to repair-exhausted preserved by closeOtherPrs, unknown/extensionless files fail closed, and symlinked rules/ parent is ignored', async (t) => {
+  // 1. Unknown extensions & extensionless production files fail closed as runtime-code
+  for (const filePath of ['foo.unknown', 'config.yaml', 'Makefile', 'src/worker.nim']) {
+    const surf = detectChangedSurfaces({ changedFiles: [filePath] });
+    assert.deepEqual(surf.surfaces, ['runtime-code'], `${filePath} must classify as runtime-code`);
+    assert.equal(surf.docsOnly, false, `${filePath} must NOT be docsOnly`);
+    assert.equal(surf.requiresRealE2e, true, `${filePath} must require real execution proof`);
+    const verdict = evaluateValidationOutcome({ mode: 'auto', changedFiles: [filePath], offlinePassed: true, e2eChecks: [] });
+    assert.equal(verdict.eligible, false, `${filePath} must fail closed without execution proof`);
+  }
+
+  // 2. Suite failure reaches Bucket 1 cap 3 -> needs-person (repair-exhausted) and closeOtherPrs preserves that PR
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1, repairs: 2 } });
+  w.issue(53, { title: 'Persistent suite failure hits cap 3 repair-exhausted' });
+  await w.tick();
+  const cwd53 = w.job(53, 'build').cwd;
+  writeIn(cwd53, 'src/flaky.mjs', 'export const v = () => 1;\n');
+  writeIn(cwd53, 'test/flaky.test.mjs', "import test from 'node:test';\nimport { v } from '../src/flaky.mjs';\ntest('v', () => { if (v() !== 2) throw new Error('still broken'); });\n");
+  const built53 = w.build(53, {
+    write: false,
+    body: 'Fixes #53\n\nRuntime: not run (no prompt changed)\nPath: d — src/flaky.mjs, test/flaky.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  for (let round = 1; round <= MAX_VALIDATION_REPAIRS; round += 1) {
+    await w.tick();
+    w.say(53, 'suite', 'Error: still broken\n');
+    w.review(53, 'PASS');
+    w.suite(53, 1);
+    await w.tick();
+    const rep = w.job(53, 'repair');
+    assert.ok(rep, `suite failure round ${round} enters repair instead of pdd:stuck`);
+    writeIn(rep.cwd, 'src/flaky.mjs', `export const v = () => ${round + 10};\n`);
+    w.build(53, {
+      role: 'repair',
+      write: false,
+      body: 'Fixes #53\n\nRuntime: not run (no prompt changed)\nPath: d — src/flaky.mjs, test/flaky.test.mjs — unowned — no contract change — Test: done check',
+      result: { promptChanged: false },
+    });
+  }
+  await w.tick();
+  w.say(53, 'suite', 'Error: still broken\n');
+  w.review(53, 'PASS');
+  w.suite(53, 1);
+  await w.tick();
+  assert.equal(w.started.filter((j) => j.issue === 53 && j.role === 'repair').length, MAX_VALIDATION_REPAIRS, 'exactly 3 repair attempts run');
+  assert.equal(built53.pr.state, 'open', 'repair-exhausted PR stays open');
+  assert.ok(built53.pr.comments.some((c) => /<!-- pdd:autopilot-core:repair-exhausted:/.test(c.body)), 'PR gets repair-exhausted marker comment');
+  assert.ok(w.labels(53).includes('pdd:needs-decision'), 'issue gets pdd:needs-decision');
+  assert.ok(!w.labels(53).includes('pdd:stuck'), 'issue is escalated as needs-decision, not pdd:stuck');
+
+  // Remove pdd:needs-decision so Autopilot starts a new branch for #53; closeOtherPrs MUST keep the repair-exhausted PR open!
+  w.github.unlabel(53, 'pdd:needs-decision');
+  await w.tick();
+  assert.equal(built53.pr.state, 'open', 'closeOtherPrs must preserve PRs with repair-exhausted marker');
+
+  // 3. CLI hasWorkspaceLintRuleFiles ignores symlinked rules/ parent directory
+  const repo = makeTempGitRepo(t, 'pdd-r2-rules-symlink-');
+  const outside = mkdtempSync(join(tmpdir(), 'pdd-r2-outside-rules-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  writeFile(outside, 'lint/10-strict.json', JSON.stringify({ rules: { 'silent-validation-skip': 'error' } }));
+  writeFile(repo, 'pdd.json', JSON.stringify({ name: 'demo' }));
+  writeFile(repo, 'src/skip.mjs', "export function bad(err) { if (err === 'real-binding-unavailable') return { ok: true, skipped: true }; }\n");
+  symlinkSync(outside, join(repo, 'rules'), 'dir');
+  commitAll(repo, 'repo with symlinked rules parent');
+  let symExit = 0;
+  try {
+    execFileSync(process.execPath, [join(process.cwd(), 'bin/pdd.mjs'), 'lint', '--local'], {
+      cwd: repo,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    symExit = err.status ?? 1;
+  }
+  assert.equal(symExit, 0, 'symlinked rules/ parent directory must NOT load workspace lint rules');
 });

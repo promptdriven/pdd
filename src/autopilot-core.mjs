@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-core.prompt.md
+// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 6881bfd2ab326cec32c1fcaf85fe53859a5077f985221c898ec89ada0fab4583)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
@@ -3318,7 +3318,9 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   const { deciding: allBindingRows } = decidingRealBindingRows(evidence);
   realBindingBlocker = allBindingRows.some(row => row?.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row));
   rows = (evidence.stories ?? []).filter(object).slice(0, 50).map(row => ({ story: row.story, pass: row.pass === true, current: row.current === true, at: row.at ?? null, tests: Array.isArray(row.tests) ? row.tests.slice(0, 10) : null,
-    sent: row.sent !== false, failed: Number(row.failed) || 0, refusals: rowRefusals(row).slice(0, 10) }));
+    sent: row.sent !== false, failed: Number(row.failed) || 0, refusals: rowRefusals(row).slice(0, 10),
+    reason: typeof row.reason === 'string' ? row.reason : null,
+    codes: Array.isArray(row.codes) ? row.codes.slice(0, 10) : null }));
   const storyFiles = new Set(evidence.storyFiles ?? []);
   const changedTests = (evidence.tests ?? []).filter(test => [test.path, ...(test.files ?? [])].some(file => changed.includes(file)));
   const changedStories = [...new Set([...changed.filter(file => storyFiles.has(file)), ...changedTests.flatMap(test => test.stories ?? [])])];
@@ -4108,17 +4110,18 @@ function formatVerifiedStoryPassLine(story, rows) {
 async function syncVerifiedRuntimeLines(ctx, job, pr) {
   const head = job.agentHead ?? job.head;
   const lines = runtimeVerdicts(pr.body);
+  const hasBindingNotRunLine = lines.some(l => l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line));
   if (lines.some(l => l.verdict === 'other')) return;
   if (lines.length > 1 && lines.some(l => !l.story)) return;
   if (lines.some((l, i) => l.story && lines.findIndex(o => o.story === l.story) !== i)) return;
   if (job.runtime?.state && !['pass', 'not-run'].includes(job.runtime.state)) return;
-  if (job.runtime?.state === 'pass' && lines.some(l => l.verdict === 'not-run')) return;
+  if (job.runtime?.state === 'pass' && lines.some(l => l.verdict === 'not-run' && !/real-binding-unavailable/i.test(l.line))) return;
   if (parseEvidence(pr.body)?.runtime?.state === 'fail') return;
-  if (lines.length === 1 && !lines[0].story && lines[0].verdict === 'not-run') return;
+  if (lines.length === 1 && !lines[0].story && lines[0].verdict === 'not-run' && !hasBindingNotRunLine) return;
 
   const changed = await changedFiles(ctx, job, head);
   const prompts = changed.filter(file => file.endsWith('.prompt.md'));
-  if (!prompts.length && !changed.some(file => file.endsWith('.md') || file.endsWith('.json'))) return;
+  if (!prompts.length && !changed.some(file => file.endsWith('.md') || file.endsWith('.json')) && !hasBindingNotRunLine) return;
 
   let evidence;
   try { evidence = await readRuntimeEvidenceAtHead(ctx, job, head); }
@@ -4151,8 +4154,11 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
     if (!await reachesPrompt(l.story)) return;
   }
 
-  const targetStories = [...new Set([...changedStories, ...consumers])];
-  if (!targetStories.length && !prompts.length) return;
+  const bindingNotRunStories = lines
+    .filter(l => l.story && l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line))
+    .map(l => l.story);
+  const targetStories = [...new Set([...changedStories, ...consumers, ...bindingNotRunStories])];
+  if (!targetStories.length && !prompts.length && !hasBindingNotRunLine) return;
 
   const deciding = decidingRows(evidence.stories), allDeciding = decidingRows(evidence.stories, true);
   const storyTests = (evidence.tests ?? []).filter(test => (test.stories ?? []).some(story => changed.includes(story)));
@@ -4187,19 +4193,28 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
   }
 
   if (!targetStories.length) {
-    if (lines.length > 0) return;
+    const allDecidingPass = deciding.size > 0 && [...deciding.values()].every(of => [...of.values()].every(row => row.pass === true));
+    if (lines.length > 0 && !(hasBindingNotRunLine && allDecidingPass)) return;
+    if (!allDecidingPass && !prompts.length) return;
     await setRuntimeLines(ctx, job, pr, ['__prompt_pass__'], () => 'Runtime: PASS', () => ({ state: 'pass' }));
     return;
   }
 
   const singleUnnamedPass = lines.length === 1 && !lines[0].story && lines[0].verdict === 'pass';
+  const singleUnnamedBindingNotRun = lines.length === 1 && !lines[0].story && lines[0].verdict === 'not-run' && /real-binding-unavailable/i.test(lines[0].line);
   const perStoryPresent = lines.some(l => Boolean(l.story));
+  const hasStaleStoryNotRun = targetStories.some(story => Boolean(existingNotRun(story)) && storyPassOk(story));
   const needsSync = !lines.length
     || (singleUnnamedPass && (changedStories.length > 1 || targetStories.some(story => !storyPassOk(story))))
+    || (singleUnnamedBindingNotRun && targetStories.every(story => storyPassOk(story)))
+    || hasStaleStoryNotRun
     || (perStoryPresent && targetStories.some(story => !lines.find(l => l.story === story)));
   if (!needsSync) return;
 
   const lineFor = story => {
+    if (storyPassOk(story)) {
+      return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
+    }
     const keepNotRun = existingNotRun(story);
     if (keepNotRun) return keepNotRun.line;
     return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
@@ -4366,19 +4381,25 @@ async function parkRepairExhausted(ctx, job, pr, outcome) {
   });
 }
 
-function prBodyMentionsRealBindingUnavailable(pr, job) {
+function prBodyRealBindingUnavailableClaims(pr, job) {
   const lines = runtimeVerdicts(pr?.body ?? '');
-  if (lines.some(l => l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line))) return true;
-  if (job?.runtime?.state === 'not-run' && /real-binding-unavailable/i.test(String(job.runtime.cause ?? ''))) return true;
-  return false;
+  const matchingLines = lines.filter(l => l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line));
+  const namedStories = [...new Set(matchingLines.map(l => l.story).filter(named))];
+  const hasUnnamed = matchingLines.some(l => !l.story)
+    || (job?.runtime?.state === 'not-run' && /real-binding-unavailable/i.test(String(job.runtime.cause ?? '')));
+  return {
+    claimed: matchingLines.length > 0 || hasUnnamed,
+    namedStories,
+    hasUnnamed,
+  };
 }
 
 async function detectSavedRealBindingBlocker(ctx, job, pr) {
   const head = job.agentHead ?? job.head;
-  const bodyClaimsBindingUnavailable = prBodyMentionsRealBindingUnavailable(pr, job);
+  const bodyClaims = prBodyRealBindingUnavailableClaims(pr, job);
   // RR6 #3247: skip re-reading saved runtime evidence when green coverage for this head already verified no blocker.
   if (
-    !bodyClaimsBindingUnavailable
+    !bodyClaims.claimed
     && job.coverage?.head === head
     && job.coverage?.ok === true
     && job.coverage?.realBindingBlocker === false
@@ -4403,16 +4424,43 @@ async function detectSavedRealBindingBlocker(ctx, job, pr) {
     });
     return { outcome, stories: [...new Set(blockerRows.map(r => r.story).filter(named))] };
   }
-  if (bodyClaimsBindingUnavailable && !deciding.some(row => row?.pass === true)) {
+  if (bodyClaims.claimed) {
+    const storyPassVerified = story => {
+      const of = scopes.get(story);
+      if (!of || !of.size) return false;
+      const rowsForStory = [...new Set(of.values())];
+      if (!rowsForStory.every(r => r?.pass === true)) return false;
+      return allStoryTestsCovered(scopes, evidence, story, r => r?.pass === true);
+    };
     const changed = await changedFiles(ctx, job, head).catch(() => []);
-    const outcome = evaluateValidationOutcome({
-      mode: ctx.settings.mode,
-      changedFiles: changed,
-      realBindingUnavailable: true,
-      diagnostics: ['real-binding-unavailable: PR reported Runtime not run due to real-binding-unavailable'],
-      repairAttempts: job.validationRepairs ?? 0,
-    });
-    return { outcome, stories: [] };
+    const unverifiedStories = new Set(bodyClaims.namedStories.filter(story => !storyPassVerified(story)));
+    let unnamedBlocked = false;
+    if (bodyClaims.hasUnnamed) {
+      const storyFiles = new Set(evidence?.storyFiles ?? []);
+      const changedTests = (evidence?.tests ?? []).filter(test => [test.path, ...(test.files ?? [])].some(file => changed.includes(file)));
+      const targetStories = [...new Set([
+        ...changed.filter(file => storyFiles.has(file) || /^user_stories\/.*\.md$/i.test(file)),
+        ...changedTests.flatMap(test => test.stories ?? []),
+        ...runtimeVerdicts(pr?.body ?? '').map(l => l.story).filter(named),
+      ])];
+      if (targetStories.length) {
+        for (const story of targetStories) {
+          if (!storyPassVerified(story)) unverifiedStories.add(story);
+        }
+      } else if (!deciding.length || !deciding.every(row => row?.pass === true)) {
+        unnamedBlocked = true;
+      }
+    }
+    if (unverifiedStories.size > 0 || unnamedBlocked) {
+      const outcome = evaluateValidationOutcome({
+        mode: ctx.settings.mode,
+        changedFiles: changed,
+        realBindingUnavailable: true,
+        diagnostics: ['real-binding-unavailable: PR reported Runtime not run due to real-binding-unavailable'],
+        repairAttempts: job.validationRepairs ?? 0,
+      });
+      return { outcome, stories: [...unverifiedStories] };
+    }
   }
   return null;
 }
@@ -4432,7 +4480,7 @@ function collectBacksideLint(headTree, changed) {
     const isValRule = f.code === 'silent-validation-skip' || f.code === 'boundary-mock-only-test';
     if (f.severity === 'error' || (isValRule && changedSet.has(f.path))) {
       codeSet.add(f.code);
-      details.push(`${f.path}:${f.line ?? 1} [${f.code}] ${f.detail ?? f.warning ?? f.code}`);
+      details.push(`${f.path}:${f.line ?? 1} [${f.code}] ${f.message ?? f.detail ?? f.warning ?? f.code}`);
     }
   }
   return { codes: [...codeSet].sort(), details: details.slice(0, 10) };
@@ -4458,6 +4506,25 @@ function readCleanFileUtf8(fs, rootDir, relPath) {
   } catch { return null; }
 }
 
+function isBaseControlEnvLoadError(output, changedProdFiles = []) {
+  const text = String(output ?? '');
+  if (!/(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find package|Cannot find module|ERR_DLOPEN_FAILED)/i.test(text)) {
+    return false;
+  }
+  if (/AssertionError|ERR_ASSERTION/i.test(text)) return false;
+  const changedSet = new Set(
+    (changedProdFiles ?? []).map(p => String(p).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()),
+  );
+  const missingRefs = [...text.matchAll(/Cannot find (?:package|module)\s+['"`]([^'"`]+)['"`]/gi)].map(m => m[1]);
+  if (!missingRefs.length) return true;
+  for (const ref of missingRefs) {
+    const normRef = ref.replace(/\\/g, '/').toLowerCase();
+    const matchesChanged = [...changedSet].some(ch => normRef === ch || normRef.endsWith(`/${ch}`));
+    if (!matchesChanged) return true;
+  }
+  return false;
+}
+
 async function resolveBugFixBaseControl(ctx, job, { changed, changedProdFiles }) {
   const vecControl = controlResult(job.vectors);
   if (vecControl?.state === 'shows') return 'ran-and-failed-on-base';
@@ -4475,6 +4542,16 @@ async function resolveBugFixBaseControl(ctx, job, { changed, changedProdFiles })
   } else if (changedProdFiles.length > 0 && changedNodeTests.length > 0) {
     try {
       const { cwd: baseDir } = await controlTree(ctx, job, changedProdFiles);
+      const nodeModulesTarget = join(baseDir, 'node_modules');
+      if (!ctx.fs.existsSync(nodeModulesTarget)) {
+        const sourceNm = [job.suite?.cwd, job.worktree, ctx.state.cwd]
+          .filter(Boolean)
+          .map(dir => join(dir, 'node_modules'))
+          .find(dir => ctx.fs.existsSync(dir));
+        if (sourceNm) {
+          try { ctx.fs.symlinkSync(sourceNm, nodeModulesTarget, 'dir'); } catch { /* ignore concurrent symlink */ }
+        }
+      }
       const baseEnv = { ...(ctx.ports.env ?? process.env), CI: 'true' };
       delete baseEnv.NODE_TEST_CONTEXT;
       delete baseEnv.NODE_OPTIONS;
@@ -4487,13 +4564,170 @@ async function resolveBugFixBaseControl(ctx, job, { changed, changedProdFiles })
         });
         state = 'passed-on-base';
       } catch (err) {
-        state = err?.killed || err?.code === 'ENOENT' ? 'not-run' : 'ran-and-failed-on-base';
+        const errOut = `${err?.stderr ?? ''}\n${err?.stdout ?? ''}\n${err?.message ?? ''}`;
+        state = (err?.killed || err?.code === 'ENOENT' || isBaseControlEnvLoadError(errOut, changedProdFiles))
+          ? 'not-run'
+          : 'ran-and-failed-on-base';
       }
     } catch { state = 'not-run'; }
   }
   job.bugFixBaseControlCheck = { head: job.head, state };
   ctx.saveJob(job);
   return state;
+}
+
+const NOOP_SUITE_CMDS = new Set(['true', ':', 'exit', 'echo', 'printf', 'pwd', 'ls', 'cat', 'date', 'sleep']);
+const NODE_VALUE_FLAGS = new Set([
+  '--import', '-r', '--require', '--loader', '--experimental-loader', '--test-reporter', '--test-reporter-destination',
+  '--test-name-pattern', '--test-concurrency', '--test-shard', '--test-timeout', '--conditions', '-C', '--env-file',
+  '--title', '--max-old-space-size', '-e', '--eval', '-p', '--print',
+]);
+const RUNNER_VALUE_FLAGS = new Set([
+  '--config', '-c', '--reporter', '-r', '-t', '-k', '-m', '--project', '--grep', '-g', '--filter', '--shard', '--workers', '--timeout',
+]);
+const BARE_TEST_RUNNERS = new Set(['vitest', 'jest', 'mocha', 'ava', 'tap', 'playwright', 'cypress', 'pytest', 'py.test', 'rspec', 'phpunit']);
+const SUBCMD_TEST_RUNNERS = new Set(['bun', 'deno', 'go', 'cargo', 'dotnet', 'mvn', 'gradle']);
+
+function tokenizeShellCommand(cmd) {
+  const tokens = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < cmd.length; i += 1) {
+    const ch = cmd[i];
+    if (quote) {
+      if (ch === '\\' && quote === '"' && i + 1 < cmd.length) { cur += cmd[i + 1]; i += 1; continue; }
+      if (ch === quote) { quote = null; continue; }
+      cur += ch;
+      continue;
+    }
+    if (ch === '\'' || ch === '"') { quote = ch; continue; }
+    if (ch === '\\' && i + 1 < cmd.length) { cur += cmd[i + 1]; i += 1; continue; }
+    if (/\s/.test(ch)) { if (cur) { tokens.push(cur); cur = ''; } continue; }
+    cur += ch;
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+function matchesSuiteTarget(relPath, rawTarget) {
+  const normRel = String(relPath).replace(/\\/g, '/').replace(/^\.\//, '');
+  const normTarget = String(rawTarget).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (!normTarget) return false;
+  if (normRel === normTarget || normRel.startsWith(`${normTarget}/`)) return true;
+  if (!/[*?]/.test(normTarget)) return false;
+  const regexStr = normTarget
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '::DOUBLE_STAR::')
+    .replace(/\*/g, '[^/]*')
+    .replace(/\?/g, '[^/]')
+    .replace(/::DOUBLE_STAR::/g, '.*');
+  return new RegExp(`^${regexStr}$`).test(normRel);
+}
+
+function analyzeSuiteSegment(segment, headTree, fs, depth = 0) {
+  if (depth > 3) return { mode: 'none', targets: [] };
+  let tokens = tokenizeShellCommand(segment);
+  while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
+  while (tokens.length && ['env', 'cross-env', 'time', 'npx'].includes(basename(tokens[0]).toLowerCase())) {
+    const wrapper = basename(tokens.shift()).toLowerCase();
+    if (wrapper === 'env' || wrapper === 'cross-env') {
+      while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
+    } else if (wrapper === 'npx') {
+      while (tokens.length && tokens[0].startsWith('-')) tokens.shift();
+    }
+  }
+  if (!tokens.length) return { mode: 'none', targets: [] };
+  const bin = basename(tokens[0]).toLowerCase();
+  if (NOOP_SUITE_CMDS.has(bin)) return { mode: 'none', targets: [] };
+
+  if (bin === 'npm' || bin === 'pnpm' || bin === 'yarn') {
+    const ddIdx = tokens.indexOf('--');
+    const main = ddIdx >= 0 ? tokens.slice(1, ddIdx) : tokens.slice(1);
+    const passthrough = ddIdx >= 0 ? tokens.slice(ddIdx + 1) : [];
+    const sub = (main[0] ?? '').toLowerCase();
+    let scriptName = null;
+    if (sub === 'test' || sub === 't') scriptName = 'test';
+    else if (sub === 'run' && main[1]) scriptName = main[1];
+    else if (bin === 'yarn' && sub && !sub.startsWith('-')) scriptName = sub;
+    if (!scriptName) return { mode: 'none', targets: [] };
+    const pkgText = headTree ? readCleanFileUtf8(fs, headTree, 'package.json') : null;
+    if (pkgText) {
+      let pkg = null;
+      try { pkg = JSON.parse(pkgText); } catch { pkg = null; }
+      const script = typeof pkg?.scripts?.[scriptName] === 'string' ? pkg.scripts[scriptName] : '';
+      if (!script) return { mode: 'none', targets: [] };
+      const combined = passthrough.length ? `${script} ${passthrough.map(quoteArg).join(' ')}` : script;
+      return analyzeSuiteCommand(combined, headTree, fs, depth + 1);
+    }
+    const extraTargets = passthrough.filter(t => !t.startsWith('-'));
+    if (extraTargets.length) return { mode: 'targets', targets: extraTargets };
+    return /^test(?:[:_-]|$)/i.test(scriptName) ? { mode: 'all', targets: [] } : { mode: 'none', targets: [] };
+  }
+
+  if (bin === 'node' || bin === 'nodejs') {
+    let hasTest = false;
+    let hasEval = false;
+    const positionals = [];
+    for (let i = 1; i < tokens.length; i += 1) {
+      const tok = tokens[i];
+      if (tok === '--') { positionals.push(...tokens.slice(i + 1)); break; }
+      if (tok === '--test') { hasTest = true; continue; }
+      if (tok === '-e' || tok === '--eval' || tok === '-p' || tok === '--print') { hasEval = true; i += 1; continue; }
+      if (NODE_VALUE_FLAGS.has(tok)) { i += 1; continue; }
+      if (tok.startsWith('-')) continue;
+      positionals.push(tok);
+    }
+    if (hasEval) return { mode: 'none', targets: [] };
+    if (hasTest) return positionals.length ? { mode: 'targets', targets: positionals } : { mode: 'all', targets: [] };
+    return positionals.length ? { mode: 'targets', targets: [positionals[0]] } : { mode: 'none', targets: [] };
+  }
+
+  if (BARE_TEST_RUNNERS.has(bin) || SUBCMD_TEST_RUNNERS.has(bin)) {
+    let startIdx = 1;
+    if (SUBCMD_TEST_RUNNERS.has(bin)) {
+      if ((tokens[1] ?? '').toLowerCase() !== 'test') return { mode: 'none', targets: [] };
+      startIdx = 2;
+    } else if ((bin === 'vitest' || bin === 'playwright' || bin === 'cypress') && ['run', 'test'].includes((tokens[1] ?? '').toLowerCase())) {
+      startIdx = 2;
+    }
+    const positionals = [];
+    for (let i = startIdx; i < tokens.length; i += 1) {
+      const tok = tokens[i];
+      if (tok === '--') { positionals.push(...tokens.slice(i + 1)); break; }
+      if (RUNNER_VALUE_FLAGS.has(tok)) { i += 1; continue; }
+      if (tok.startsWith('-')) continue;
+      positionals.push(tok);
+    }
+    return positionals.length ? { mode: 'targets', targets: positionals } : { mode: 'all', targets: [] };
+  }
+
+  return { mode: 'none', targets: [] };
+}
+
+function analyzeSuiteCommand(command, headTree, fs, depth = 0) {
+  const segments = String(command ?? '').split(/\s*(?:&&|\|\||;|\n)\s*/).map(s => s.trim()).filter(Boolean);
+  const targets = [];
+  for (const seg of segments) {
+    const res = analyzeSuiteSegment(seg, headTree, fs, depth);
+    if (res.mode === 'all') return { mode: 'all', targets: [] };
+    if (res.mode === 'targets') targets.push(...res.targets);
+  }
+  return targets.length ? { mode: 'targets', targets: [...new Set(targets)] } : { mode: 'none', targets: [] };
+}
+
+function selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, fs) {
+  const log = String(suiteLog ?? '');
+  const zeroTestsRan = /^#\s*tests\s+0\b/m.test(log)
+    || (/\b0\s+passing\b/i.test(log) && !/\b[1-9]\d*\s+passing\b/i.test(log))
+    || /\bcollected\s+0\s+items\b/i.test(log);
+  if (zeroTestsRan) return { mode: 'none', files: [] };
+
+  const inspectable = tracked.filter(isInspectableValidatorTest);
+  const parsed = analyzeSuiteCommand(suiteCmd, headTree, fs);
+  if (parsed.mode === 'none') return { mode: 'none', files: [] };
+  if (parsed.mode === 'all') return { mode: 'all', files: inspectable };
+  const matched = inspectable.filter(rel => parsed.targets.some(target => matchesSuiteTarget(rel, target)));
+  return { mode: 'targets', files: matched };
 }
 
 async function collectRealValidationEvidence(ctx, job, { headTree, changed, surfaces, suite, lintCodes }) {
@@ -4554,8 +4788,9 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
 
   let tracked = [];
   try { tracked = gitFiles(headTree); } catch { tracked = []; }
-  for (const rel of tracked) {
-    if (!isInspectableValidatorTest(rel)) continue;
+  const suiteLog = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
+  const executedSuite = selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, ctx.fs);
+  for (const rel of executedSuite.files) {
     const content = readCleanFileUtf8(ctx.fs, headTree, rel);
     if (typeof content !== 'string') continue;
     const kinds = detectRealE2eKindsInTest(rel, content);
@@ -4582,12 +4817,19 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
   for (const kind of surfaces.requiredProofKinds) {
     if (kind === 'real-execution') {
       const matched = new Set();
+      let allRuntimeCovered = changedRuntimeCodeFiles.length > 0;
       for (const { target } of changedRuntimeCodeFiles) {
         const files = targetProofs.get(target)?.get('real-execution');
-        if (files) for (const f of files) matched.add(f);
+        if (files && files.size > 0) {
+          for (const f of files) matched.add(f);
+        } else {
+          allRuntimeCovered = false;
+        }
       }
-      if (matched.size > 0 || vectorsPassFiles.length > 0 || savedRuntimePass) {
-        const label = matched.size > 0 ? [...matched].slice(0, 3).join(', ')
+      const hasPartialUncoveredRuntime = changedRuntimeCodeFiles.length > 0 && matched.size > 0 && !allRuntimeCovered;
+      const runtimeCoveredBySaved = savedRuntimePass && executedSuite.mode !== 'none' && !hasPartialUncoveredRuntime;
+      if ((allRuntimeCovered && matched.size > 0) || vectorsPassFiles.length > 0 || runtimeCoveredBySaved) {
+        const label = (allRuntimeCovered && matched.size > 0) ? [...matched].slice(0, 3).join(', ')
           : vectorsPassFiles.length > 0 ? vectorsPassFiles.slice(0, 3).join(', ')
             : 'pdd test';
         e2eChecks.push({
@@ -4595,7 +4837,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
           command: `${suiteCmd} (${label})`,
           executed: true,
           exitCode: 0,
-          passed: Math.max(1, matched.size || vectorsPassFiles.length),
+          passed: Math.max(1, (allRuntimeCovered ? matched.size : 0) || vectorsPassFiles.length),
           failed: 0,
           skipped: 0,
         });
@@ -4760,21 +5002,32 @@ async function resumeValidationParks(ctx, open) {
     if (plan.action !== 'resume-validate-only') { keptParks.push(park); continue; }
     if (freeSlots() <= 0) { keptParks.push(park); continue; }
 
+    const claim = await claimIssue(ctx, park.issue).catch(() => null);
+    if (!claim) { keptParks.push(park); continue; }
+    const worktree = join(ctx.dirs.worktrees, String(park.issue));
+    if (!ctx.fs.existsSync(worktree)) {
+      await ctx.git(['fetch', '-q', 'origin', park.branch || park.headSha]).catch(() => {});
+      let worktreeOk = false;
+      try {
+        await ctx.git(['worktree', 'add', '-q', '--detach', worktree, park.headSha]);
+        worktreeOk = ctx.fs.existsSync(worktree);
+      } catch {
+        worktreeOk = false;
+      }
+      if (!worktreeOk) {
+        await undoClaim(ctx, park.issue, claim).catch(() => {});
+        keptParks.push(park);
+        continue;
+      }
+    }
     if (issueRow && labelsOf(issueRow).includes(DECISION)) {
       await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${park.issue}/labels/${encodeURIComponent(DECISION)}`).catch(() => {});
       if (Array.isArray(issueRow.labels)) {
         issueRow.labels = issueRow.labels.filter(l => (typeof l === 'string' ? l : l?.name) !== DECISION);
       }
     }
-    const claim = await claimIssue(ctx, park.issue).catch(() => null);
-    if (!claim) { keptParks.push(park); continue; }
     if (plan.clearCooldown && plan.targetTool) delete nextCooldowns[plan.targetTool];
     changed = true;
-    const worktree = join(ctx.dirs.worktrees, String(park.issue));
-    if (!ctx.fs.existsSync(worktree)) {
-      await ctx.git(['fetch', '-q', 'origin', park.branch || park.headSha]).catch(() => {});
-      await ctx.git(['worktree', 'add', '--detach', worktree, park.headSha]).catch(() => {});
-    }
     const canKeepReview = Boolean(
       park.reviewPassed === true
       && park.reviewKept?.head === park.headSha
@@ -4822,8 +5075,11 @@ async function resumeValidationParks(ctx, open) {
 }
 
 const PASSING_LOG_LINE_RE = /^\s*(?:✔|✓|ok\s+\d+|ℹ|PASS\b|TAP version|#\s*(?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms|Subtest))/i;
-const ASSERTION_DIFF_LINE_RE = /^\s*(?:AssertionError\b|ERR_ASSERTION\b|expected\s*:|actual\s*:|operator\s*:|diff\s*:|[+-]\s+)/i;
-const TEST_TITLE_FAIL_LINE_RE = /^\s*(?:✖|not ok\s+\d+)/i;
+const ASSERTION_DIFF_LINE_RE = /^\s*(?:AssertionError\b|ERR_ASSERTION\b|Expected values to be\b|Input A expected\b|\+ actual - expected\b|[+-]\s+|['"`][^'"`\n]*['"`]\s*(?:!==|===|!=|==)\s*['"`][^'"`\n]*['"`])/i;
+const TEST_TITLE_FAIL_LINE_RE = /^\s*(?:▶|▸|✖|not ok\s+\d+|test at\s+)/i;
+const TAP_META_LINE_RE = /^\s*(?:location|failureType|code|name|stack|generatedMessage|duration_ms|expected|actual|operator|diff)\s*:/i;
+const STACK_FRAME_LINE_RE = /^\s*(?:at\s+(?:async\s+)?(?:\S+\s+\([^)]+:\d+:\d+\)|(?:file:\/\/|node:|\/|[A-Za-z]:\\)[^\s)]+:\d+:\d+)|[\w.<>$]+\s+\((?:file:\/\/|node:|\/|[A-Za-z]:\\)[^)]+:\d+:\d+\))\s*$/;
+const QUOTED_LITERAL_ONLY_LINE_RE = /^\s*['"`][^'"`\n]*['"`]\s*,?\s*$/;
 
 function extractFailureDiagnosticLines(rawLog, reproduceChecks) {
   const fromChecks = (reproduceChecks ?? []).flatMap(c => Array.isArray(c.lines) ? c.lines : []);
@@ -4836,27 +5092,46 @@ function extractFailureDiagnosticLines(rawLog, reproduceChecks) {
     if (!trimmed) continue;
     if (PASSING_LOG_LINE_RE.test(trimmed)) continue;
     if (TEST_TITLE_FAIL_LINE_RE.test(trimmed)) continue;
+    if (TAP_META_LINE_RE.test(trimmed)) continue;
+    if (STACK_FRAME_LINE_RE.test(trimmed)) continue;
     if (ASSERTION_DIFF_LINE_RE.test(trimmed)) continue;
-    // Never mistake an assertion failure message inside a unit test for an external auth/human outage.
-    if (hasAssertionFailure && /AssertionError|ERR_ASSERTION|strictEqual|deepEqual|match\(/i.test(trimmed)) continue;
+    if (/^\s*error\s*:\s*['"`]?.*(?:AssertionError|ERR_ASSERTION|!==|===|Expected values)/i.test(trimmed)) continue;
+    // Never mistake an assertion failure message or quoted diff line inside a unit test for an external auth/human outage.
+    if (hasAssertionFailure && (/AssertionError|ERR_ASSERTION|strictEqual|deepEqual|match\(/i.test(trimmed) || QUOTED_LITERAL_ONLY_LINE_RE.test(trimmed))) continue;
     out.push(trimmed);
   }
   return out;
 }
 
-async function runBindingRerunIfPending(ctx, job) {
+async function runBindingRerunIfPending(ctx, job, pr = null) {
   const rerun = job.bindingRerun;
   if (!rerun || rerun.head !== job.head || rerun.state === 'done') return false;
   if (rerun.state === 'pending') {
+    let stories = Array.isArray(rerun.stories) ? rerun.stories.filter(named) : [];
+    if (!stories.length) {
+      const fromBody = runtimeVerdicts(pr?.body ?? '')
+        .filter(l => l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line) && named(l.story))
+        .map(l => l.story);
+      const fromChanged = (await changedFiles(ctx, job, job.head).catch(() => []))
+        .filter(f => /^user_stories\/.*\.md$/i.test(f));
+      stories = [...new Set([...fromBody, ...fromChanged])];
+      rerun.stories = stories;
+    }
     if (typeof ctx.ports.rerunRuntimeBinding === 'function') {
-      await ctx.ports.rerunRuntimeBinding({ job, head: job.head, stories: rerun.stories ?? [] });
+      await ctx.ports.rerunRuntimeBinding({ job, head: job.head, stories });
       rerun.state = 'done';
       ctx.runtimeEvidenceCache = null;
       job.coverage = null;
       ctx.saveJob(job);
       return false;
     }
-    const stories = Array.isArray(rerun.stories) && rerun.stories.length ? rerun.stories : [];
+    if (!stories.length) {
+      rerun.state = 'done';
+      ctx.runtimeEvidenceCache = null;
+      job.coverage = null;
+      ctx.saveJob(job);
+      return false;
+    }
     rerun.agent = startJob(ctx, job, 'runtime', job.worktree, '', {
       command: process.execPath,
       args: [ctx.pdd, 'test', '--json', ...stories],
@@ -4904,8 +5179,8 @@ async function mergeCheck(ctx, job) {
   // "Runtime: not run" is allowed and files no report by itself; a Runtime report comes only from a failed job
   // whose cause kind is runtime (END).
   job.runtime = normalRuntime(job.runtime);
+  if (await runBindingRerunIfPending(ctx, job, pr)) return;
   await syncVerifiedRuntimeLines(ctx, job, pr);
-  if (await runBindingRerunIfPending(ctx, job)) return;
   const bindingBlocker = await detectSavedRealBindingBlocker(ctx, job, pr);
   if (bindingBlocker?.outcome?.bucket === 2) return parkValidationWait(ctx, job, pr, bindingBlocker.outcome, { parkStories: bindingBlocker.stories });
   await runtimeResendable(ctx, job, pr.body);
@@ -5040,20 +5315,30 @@ async function mergeCheck(ctx, job) {
     if ((suite?.state === 'fail' || ci?.state === 'red') && nonTestReds === 0) {
       const suiteTail = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
       const diagLines = extractFailureDiagnosticLines(suiteTail, reproduceChecks);
-      if (diagLines.length) {
-        const changed = await changedFiles(ctx, job, job.head).catch(() => []);
-        const suiteOutcome = evaluateValidationOutcome({
-          mode: ctx.settings.mode,
-          changedFiles: changed,
-          offlinePassed: false,
-          diagnostics: diagLines,
-          repairAttempts: job.validationRepairs ?? 0,
+      const changed = await changedFiles(ctx, job, job.head).catch(() => []);
+      const suiteCmd = resolveSuiteCommand(ctx, job) || 'npm test';
+      const suiteOutcome = evaluateValidationOutcome({
+        mode: ctx.settings.mode,
+        changedFiles: changed,
+        offlinePassed: false,
+        e2eChecks: suite?.state === 'fail'
+          ? [{ kind: 'real-execution', command: suiteCmd, executed: true, exitCode: 1, passed: 0, failed: 1, skipped: 0 }]
+          : [],
+        diagnostics: diagLines,
+        repairAttempts: job.validationRepairs ?? 0,
+      });
+      if (suiteOutcome.bucket === 2) return parkValidationWait(ctx, job, pr, suiteOutcome);
+      if (suiteOutcome.bucket === 3 && suiteOutcome.waitKind === 'human-boundary') return parkHumanBoundary(ctx, job, pr, suiteOutcome);
+      if (suiteOutcome.decision === 'needs-person' && suiteOutcome.waitKind === 'repair-exhausted') {
+        return parkRepairExhausted(ctx, job, pr, suiteOutcome);
+      }
+      if (suite?.state === 'fail' && suiteOutcome.bucket === 1 && suiteOutcome.decision === 'repair' && job.mechanical?.head !== job.head) {
+        job.validationRepairs = suiteOutcome.repairAttemptsNext;
+        ctx.saveJob(job);
+        return repairOrEnd(ctx, job, reds, findings, reproduce, {
+          skipRepeatStop: true,
+          maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS),
         });
-        if (suiteOutcome.bucket === 2) return parkValidationWait(ctx, job, pr, suiteOutcome);
-        if (suiteOutcome.bucket === 3 && suiteOutcome.waitKind === 'human-boundary') return parkHumanBoundary(ctx, job, pr, suiteOutcome);
-        if (suiteOutcome.decision === 'needs-person' && suiteOutcome.waitKind === 'repair-exhausted') {
-          return parkRepairExhausted(ctx, job, pr, suiteOutcome);
-        }
       }
     }
     return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds, findings, reproduce);
@@ -6841,7 +7126,7 @@ async function closeOtherPrs(ctx, n, branch) {
       // engine's own note counts.
       const me = await ctx.login();
       if ((await ctx.gh.all(`repos/${ctx.repo}/issues/${pr.number}/comments?per_page=100`)).some(c => String(c.user?.login ?? '').toLowerCase() === me
-        && /<!-- pdd:autopilot-core:(?:would-merge|needs-approval|auth-wait|human-boundary):/.test(String(c.body ?? '')))) continue;
+        && /<!-- pdd:autopilot-core:(?:would-merge|needs-approval|auth-wait|human-boundary|repair-exhausted):/.test(String(c.body ?? '')))) continue;
       await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${pr.number}`, { state: 'closed' });
       await ctx.comment(pr.number, `Autopilot closed this PR: a new job for issue #${n} starts on branch \`${branch}\`. The branch \`${ref}\` stays.\n\n<!-- pdd:autopilot-core:superseded:${n}:${branch} -->`);
     }
