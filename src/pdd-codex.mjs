@@ -4,7 +4,7 @@
 import { spawn as nativeSpawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import {
   buildCodexGatewayCliArgs,
   buildGatewayAuthJson,
@@ -21,8 +21,9 @@ import {
 } from './login-pool.mjs';
 import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
 
-const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_LOCK_TIMEOUT_MS = 25_000;
 const DEFAULT_STALE_LOCK_MS = 30_000;
+const DEAD_LOCK_GRACE_MS = 1_500;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 10 * 60 * 1000;
 const MIN_REUSABLE_LEASE_REMAINING_MS = 5 * 60 * 1000;
 
@@ -68,8 +69,9 @@ function defaultIsPidAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (err) {
-    return err?.code === 'EPERM';
+  } catch {
+    // Runtime directory is 0700 per-UID, so EPERM means a recycled PID owned by another OS user.
+    return false;
   }
 }
 
@@ -194,34 +196,56 @@ function ensureSecureDirectory(fs, dirPath, { expectedUid = null } = {}) {
   try { fs.chmodSync?.(dirPath, 0o700); } catch {}
 }
 
+function tryBreakLockAtomically(fs, runtimeDir, lockDir) {
+  const staleDir = join(runtimeDir, `.lock-stale-${process.pid}-${randomBytes(4).toString('hex')}`);
+  try {
+    fs.renameSync(lockDir, staleDir);
+  } catch {
+    return false;
+  }
+  try { fs.rmSync(staleDir, { recursive: true, force: true }); } catch {}
+  return true;
+}
+
 /**
- * Acquire an atomic cross-process directory lock inside `runtimeDir` with stale-lock recovery.
+ * Acquire an atomic cross-process directory lock inside `runtimeDir` with dead-owner and stale-lock recovery.
  */
 async function withRuntimeLock(fs, runtimeDir, fn, ports = {}) {
   const nowFn = ports.now ?? Date.now;
   const sleep = ports.sleep ?? sleepMs;
+  const isPidAlive = ports.isPidAlive ?? defaultIsPidAlive;
+  const ownerPid = ports.pid ?? process.pid;
   const lockTimeoutMs = ports.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
   const staleLockMs = ports.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
   const lockDir = join(runtimeDir, 'lock');
+  const ownerPath = join(lockDir, 'owner.json');
   const deadline = nowFn() + lockTimeoutMs;
 
   while (true) {
     try {
       fs.mkdirSync(lockDir, { mode: 0o700 });
+      try {
+        fs.writeFileSync(ownerPath, JSON.stringify({ pid: ownerPid, acquired_at: nowFn() }), { encoding: 'utf8', mode: 0o600 });
+      } catch {}
       break;
     } catch (err) {
       if (err?.code !== 'EEXIST') throw err;
       try {
         const st = fs.statSync(lockDir);
-        if (typeof st?.mtimeMs === 'number' && (nowFn() - st.mtimeMs) > staleLockMs) {
-          fs.rmSync(lockDir, { recursive: true, force: true });
-          continue;
+        const ageMs = typeof st?.mtimeMs === 'number' ? (nowFn() - st.mtimeMs) : 0;
+        const owner = readJsonFileQuiet(fs, ownerPath);
+        const ownerDead = Number.isInteger(owner?.pid)
+          && owner.pid > 0
+          && !isPidAlive(owner.pid)
+          && ageMs >= DEAD_LOCK_GRACE_MS;
+        if (ownerDead || ageMs > staleLockMs) {
+          if (tryBreakLockAtomically(fs, runtimeDir, lockDir)) continue;
         }
       } catch {}
       if (nowFn() >= deadline) {
         throw new CloudAccountsError('Timed out waiting for PDD Codex runtime lock.', { code: 'lock_timeout' });
       }
-      await sleep(15);
+      await sleep(15 + Math.floor(Math.random() * 25));
     }
   }
 
@@ -232,32 +256,55 @@ async function withRuntimeLock(fs, runtimeDir, fn, ports = {}) {
   }
 }
 
+function ensureConfigSymlinkAtomic(fs, userConfigPath, runtimeConfigPath) {
+  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+  let existingCfg = null;
+  try { existingCfg = lstat.call(fs, runtimeConfigPath); } catch {}
+  if (existingCfg) {
+    let matches = existingCfg.isSymbolicLink();
+    if (matches && typeof fs.readlinkSync === 'function') {
+      try { matches = fs.readlinkSync(runtimeConfigPath) === userConfigPath; } catch { matches = false; }
+    }
+    if (matches) return;
+    if (existingCfg.isDirectory() && !existingCfg.isSymbolicLink()) {
+      fs.rmSync(runtimeConfigPath, { recursive: true, force: true });
+      fs.symlinkSync(userConfigPath, runtimeConfigPath);
+      return;
+    }
+    // Atomic rename avoids an ENOENT window for concurrent Codex processes reading config.toml.
+    const tmpLink = `${runtimeConfigPath}.link-${process.pid}-${randomBytes(4).toString('hex')}`;
+    try {
+      fs.symlinkSync(userConfigPath, tmpLink);
+      fs.renameSync(tmpLink, runtimeConfigPath);
+    } catch {
+      unlinkQuiet(fs, tmpLink);
+      fs.rmSync(runtimeConfigPath, { recursive: true, force: true });
+      fs.symlinkSync(userConfigPath, runtimeConfigPath);
+    }
+    return;
+  }
+  fs.symlinkSync(userConfigPath, runtimeConfigPath);
+}
+
 /**
  * Ensure `~/.codex/` baseline exists and symlink all user entries + `config.toml` into `runtimeDir`.
  */
 export function prepareRuntimeCodexHome(fs, userCodexHome, runtimeDir) {
   const resolvedUserHome = resolve(userCodexHome);
   const resolvedRuntimeDir = resolve(runtimeDir);
+  if (resolvedUserHome === resolvedRuntimeDir || resolvedUserHome.startsWith(`${resolvedRuntimeDir}${sep}`)) {
+    throw new CloudAccountsError(
+      `Refusing to mirror Codex home inside runtime folder (${resolvedRuntimeDir}).`,
+      { code: 'unsafe_runtime_dir' },
+    );
+  }
   const userConfigPath = ensureUserCodexHomeBaseline(fs, resolvedUserHome);
 
-  syncManagedCodexHomeLinks(fs, resolvedUserHome, resolvedRuntimeDir);
+  syncManagedCodexHomeLinks(fs, resolvedUserHome, resolvedRuntimeDir, [], {
+    preserveLinks: new Set(['config.toml']),
+  });
 
-  const runtimeConfigPath = join(resolvedRuntimeDir, 'config.toml');
-  const lstat = fs.lstatSync ?? nativeFs.lstatSync;
-  let existingCfg = null;
-  try { existingCfg = lstat.call(fs, runtimeConfigPath); } catch {}
-  if (existingCfg) {
-    let needsReplace = !existingCfg.isSymbolicLink();
-    if (!needsReplace && typeof fs.readlinkSync === 'function') {
-      try { needsReplace = fs.readlinkSync(runtimeConfigPath) !== userConfigPath; } catch { needsReplace = true; }
-    }
-    if (needsReplace) {
-      fs.rmSync(runtimeConfigPath, { recursive: true, force: true });
-      fs.symlinkSync(userConfigPath, runtimeConfigPath);
-    }
-  } else {
-    fs.symlinkSync(userConfigPath, runtimeConfigPath);
-  }
+  ensureConfigSymlinkAtomic(fs, userConfigPath, join(resolvedRuntimeDir, 'config.toml'));
 
   const emptySubshellDir = join(resolvedRuntimeDir, 'empty-subshell');
   fs.mkdirSync(emptySubshellDir, { recursive: true, mode: 0o700 });
@@ -313,6 +360,7 @@ function readReusableRuntimeLease(fs, runtimeDir, { now }) {
     accountId: meta.account_id ?? null,
     label: meta.label ?? null,
     backendApiUrl: meta.backend_api_url.trim(),
+    nativeBackendApi: meta.native_backend_api !== false,
     expiresAt: meta.expires_at,
     grantToken,
   };
@@ -332,10 +380,16 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
     throw new CloudAccountsError('PDD Cloud returned an invalid Codex gateway grant token.', { code: 'invalid_lease' });
   }
   rememberSecrets(grantToken);
-  const backendApiUrl = resolveCodexBackendApiUrl(lease);
+  const hasExplicitBackendApi = typeof lease.codex_backend_api_url === 'string' && Boolean(lease.codex_backend_api_url.trim());
+  const backendApiUrl = hasExplicitBackendApi
+    ? resolveCodexBackendApiUrl(lease)
+    : (typeof lease.codex_gateway_url === 'string' && lease.codex_gateway_url.trim()
+      ? lease.codex_gateway_url.trim().replace(/\/+$/, '')
+      : null);
   if (!backendApiUrl) {
     throw new CloudAccountsError('PDD Cloud lease did not include a Codex gateway URL.', { code: 'invalid_lease' });
   }
+  const nowIso = new Date(now()).toISOString();
   const planType = lease.plan_type ?? account.plan_type ?? account.plan ?? null;
   const authPayload = buildGatewayAuthJson({ grantToken, planType, now });
   const metaPayload = {
@@ -343,11 +397,13 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
     account_id: account.account_id ?? null,
     label: account.label ?? null,
     backend_api_url: backendApiUrl,
+    native_backend_api: hasExplicitBackendApi,
     expires_at: lease.expires_at ?? null,
     delivery_mode: lease.delivery_mode,
     plan_type: planType,
     auto_rotate: Boolean(autoRotate),
-    obtained_at: new Date(now()).toISOString(),
+    obtained_at: nowIso,
+    last_heartbeat_at: nowIso,
   };
   writePrivateAtomic(fs, join(runtimeDir, 'auth.json'), `${JSON.stringify(authPayload, null, 2)}\n`);
   writePrivateAtomic(fs, join(runtimeDir, 'lease.json'), `${JSON.stringify(metaPayload, null, 2)}\n`);
@@ -356,6 +412,7 @@ function writeLeaseFiles(fs, runtimeDir, leaseReply, { autoRotate, now }) {
     accountId: metaPayload.account_id,
     label: metaPayload.label,
     backendApiUrl,
+    nativeBackendApi: hasExplicitBackendApi,
     expiresAt: metaPayload.expires_at,
     grantToken,
   };
@@ -453,6 +510,7 @@ export async function releaseSharedRuntimeSession(runtimeDir, { cwd = process.cw
       return { isLastSession: true, leaseId, remainingPids: 0 };
     }, ports);
   } catch {
+    unlinkQuiet(fs, join(runtimeDir, 'pids', String(myPid)));
     return cleanupOutcome;
   }
 
@@ -574,6 +632,7 @@ function spawnCodexProcess(command, args, { cwd, env }, ports = {}) {
       detach();
       if (signal === 'SIGINT') return resolveExit({ code: 130 });
       if (signal === 'SIGTERM') return resolveExit({ code: 143 });
+      if (signal === 'SIGHUP') return resolveExit({ code: 129 });
       resolveExit({ code: typeof code === 'number' ? code : 1 });
     });
   });
@@ -584,43 +643,85 @@ function startBackgroundHeartbeat(session, { cwd, env }, ports = {}) {
   const intervalMs = ports.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) return () => {};
   const fs = ports.fs ?? nativeFs;
+  const nowFn = ports.now ?? Date.now;
   let stopped = false;
   let inFlight = false;
+  let timer = null;
+
+  const stop = () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+  };
+
+  const scheduleNext = () => {
+    if (stopped) return;
+    const jitterMs = intervalMs >= 1000 ? Math.floor(Math.random() * Math.min(30_000, intervalMs * 0.2)) : 0;
+    timer = setTimeout(() => { void tick(); }, intervalMs + jitterMs);
+    timer.unref?.();
+  };
 
   const tick = async () => {
     if (stopped || inFlight) return;
     inFlight = true;
+    let targetLeaseId = session.leaseId;
     try {
+      if (!session.pinned) {
+        const meta = readJsonFileQuiet(fs, join(session.runtimeDir, 'lease.json'));
+        if (!meta || typeof meta.lease_id !== 'string' || !meta.lease_id.trim()) {
+          stop();
+          return;
+        }
+        targetLeaseId = meta.lease_id.trim();
+        // Deduplicate heartbeats across concurrent sessions sharing one runtime lease.
+        const lastHbMs = Date.parse(String(meta.last_heartbeat_at ?? ''));
+        if (Number.isFinite(lastHbMs) && (nowFn() - lastHbMs) < Math.floor(intervalMs * 0.75)) {
+          return;
+        }
+      }
+
       const reply = await (ports.heartbeatCloudLease ?? heartbeatCloudLease)(
-        session.leaseId,
+        targetLeaseId,
         { cwd, env, timeoutMs: ports.heartbeatTimeoutMs ?? 5000 },
         ports,
       );
+      if (stopped) return;
       if (reply?.expires_at && !session.pinned) {
-        const metaPath = join(session.runtimeDir, 'lease.json');
-        const currentMeta = readJsonFileQuiet(fs, metaPath);
-        if (currentMeta && currentMeta.lease_id === session.leaseId) {
-          currentMeta.expires_at = reply.expires_at;
-          writePrivateAtomic(fs, metaPath, `${JSON.stringify(currentMeta, null, 2)}\n`);
-        }
+        await withRuntimeLock(fs, session.runtimeDir, async () => {
+          if (stopped) return;
+          const metaPath = join(session.runtimeDir, 'lease.json');
+          const currentMeta = readJsonFileQuiet(fs, metaPath);
+          if (currentMeta && currentMeta.lease_id === targetLeaseId) {
+            currentMeta.expires_at = reply.expires_at;
+            currentMeta.last_heartbeat_at = new Date(nowFn()).toISOString();
+            writePrivateAtomic(fs, metaPath, `${JSON.stringify(currentMeta, null, 2)}\n`);
+          }
+        }, ports).catch(() => {});
       }
     } catch (err) {
-      if (err?.status === 403 || err?.status === 404 || err?.status === 401) {
-        stopped = true;
-        clearInterval(timer);
+      if (err?.status === 401 || err?.status === 403) {
+        if (!session.pinned) {
+          await withRuntimeLock(fs, session.runtimeDir, async () => {
+            const metaPath = join(session.runtimeDir, 'lease.json');
+            const currentMeta = readJsonFileQuiet(fs, metaPath);
+            if (currentMeta && currentMeta.lease_id === targetLeaseId) {
+              unlinkQuiet(fs, join(session.runtimeDir, 'auth.json'));
+              unlinkQuiet(fs, metaPath);
+            }
+          }, ports).catch(() => {});
+        }
+        stop();
+      } else if (err?.status === 404) {
+        stop();
       }
     } finally {
       inFlight = false;
+      scheduleNext();
     }
   };
 
-  const timer = setInterval(() => { void tick(); }, intervalMs);
-  timer.unref?.();
-
-  return () => {
-    stopped = true;
-    clearInterval(timer);
-  };
+  scheduleNext();
+  return stop;
 }
 
 /**
@@ -693,7 +794,8 @@ export async function runPddCodexCli(
   }
 
   // Instant passthrough for purely local help/version/completion commands (no cloud lease needed).
-  if (NO_LEASE_TOP_FLAGS.has(firstArg) || NO_LEASE_SUBCOMMANDS.has(firstArg)) {
+  const isMcpHelp = firstArg === 'mcp' && (!codexArgs[1] || NO_LEASE_TOP_FLAGS.has(codexArgs[1]) || codexArgs[1] === 'help');
+  if (NO_LEASE_TOP_FLAGS.has(firstArg) || NO_LEASE_SUBCOMMANDS.has(firstArg) || isMcpHelp) {
     const res = await spawnCodexProcess(codexBin, codexArgs, { cwd, env }, ports);
     if (res?.error) {
       stderr?.write?.(`Failed to start "${codexBin}": ${redactSecrets(res.error.message)}\n`);
@@ -732,10 +834,16 @@ export async function runPddCodexCli(
 
   const stopHeartbeat = startBackgroundHeartbeat(session, { cwd, env }, ports);
   try {
+    let userConfigText = '';
+    try {
+      userConfigText = fs.readFileSync(session.userConfigPath, 'utf8');
+    } catch {}
     const cliFlags = buildCodexGatewayCliArgs({
       backendApiUrl: session.backendApiUrl,
       userCodexHome: session.userCodexHome,
       emptySubshellCodexHome: session.emptySubshellDir,
+      userConfigText,
+      nativeBackendApi: session.nativeBackendApi !== false,
     });
     const childEnv = buildCleanChildEnv(env, session.runtimeDir, { grantToken: session.grantToken });
     const res = await spawnCodexProcess(codexBin, [...cliFlags, ...codexArgs], { cwd, env: childEnv }, ports);

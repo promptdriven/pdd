@@ -19,7 +19,9 @@ import {
   sharedRuntimeDirPath,
 } from '../src/pdd-codex.mjs';
 import {
+  buildCodexGatewayCliArgs,
   createCodexStepOverlay,
+  localCodexHome,
   materializeLocalCodexAuth,
 } from '../src/login-pool.mjs';
 import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
@@ -165,7 +167,8 @@ test('20 concurrent pdd-codex sessions share 1 runtime folder and 1 cloud lease,
           assert.ok(args.includes('features.daemon_auto_start=false'));
           assert.ok(args.includes('features.shell_snapshot=false'));
           assert.ok(args.some(a => a.startsWith('shell_environment_policy.set.CODEX_HOME=')));
-          assert.ok(args.some(a => a.startsWith('shell_environment_policy.exclude=') && a.includes('"CODEX_CONNECTORS_TOKEN"')));
+          assert.ok(args.includes('shell_environment_policy.filters.CODEX_CONNECTORS_TOKEN="exclude"'));
+          assert.ok(args.includes('shell_environment_policy.filters.OPENAI_API_KEY="exclude"'));
           assert.ok(!args.includes('features.responses_websockets=false'));
 
           startedCount += 1;
@@ -422,4 +425,103 @@ test('materializeLocalCodexAuth and createCodexStepOverlay enable native /backen
     overlay.cleanup();
   }
 });
+
+test('review regressions: shell_environment_policy merge/filters, nested CODEX_HOME guard, atomic config symlink, dead-lock recovery, heartbeat dedupe & revocation, and rolling-deploy fallback', async t => {
+  const sb = makeSandbox(t);
+  const runtimeDir = sharedRuntimeDirPath({ env: sb.env, tmpRoot: sb.tmpRoot, uid: 707 });
+  const emptySubshell = join(runtimeDir, 'empty-subshell');
+
+  // 1. Nested CODEX_HOME inside runtime dir (or empty-subshell) falls back to ~/.codex.
+  const nestedEnv = { ...sb.env, CODEX_HOME: emptySubshell };
+  assert.equal(localCodexHome(nestedEnv), join(sb.home, '.codex'));
+  assert.equal(localCodexHome({ ...sb.env, CODEX_HOME: runtimeDir }), join(sb.home, '.codex'));
+
+  // 2. shell_environment_policy preserves user [filters] AND merges legacy exclude without clobbering.
+  const filtersArgs = buildCodexGatewayCliArgs({
+    backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+    userCodexHome: join(sb.home, '.codex'),
+    emptySubshellDir: emptySubshell,
+    userConfigText: '[shell_environment_policy.filters]\nMY_CUSTOM = "exclude"\n',
+  });
+  assert.ok(filtersArgs.includes('shell_environment_policy.filters.CODEX_CONNECTORS_TOKEN="exclude"'));
+  assert.ok(!filtersArgs.some(a => a.startsWith('shell_environment_policy.exclude=')));
+
+  const legacyExcludeArgs = buildCodexGatewayCliArgs({
+    backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+    userCodexHome: join(sb.home, '.codex'),
+    emptySubshellDir: emptySubshell,
+    userConfigText: '[shell_environment_policy]\nexclude = ["AWS_*", "MY_SECRET"]\n',
+  });
+  const excludeEntry = legacyExcludeArgs.find(a => a.startsWith('shell_environment_policy.exclude='));
+  assert.ok(excludeEntry, 'legacy exclude should merge instead of switching to filters');
+  assert.ok(excludeEntry.includes('"AWS_*"') && excludeEntry.includes('"MY_SECRET"') && excludeEntry.includes('"CODEX_CONNECTORS_TOKEN"'));
+
+  // 3. Rolling-deploy fallback disables responses_websockets when server omits codex_backend_api_url.
+  const legacyServerArgs = buildCodexGatewayCliArgs({
+    backendApiUrl: 'https://api.promptdriven.ai/v1/codex-gateway/backend-api',
+    userCodexHome: join(sb.home, '.codex'),
+    emptySubshellDir: emptySubshell,
+    nativeBackendApi: false,
+  });
+  assert.ok(legacyServerArgs.includes('features.responses_websockets=false'));
+
+  // 4. Bare `pdd-codex mcp` passes through without taking a cloud lease.
+  let leaseCalledForMcp = false;
+  const mcpRes = await runPddCodexCli(
+    ['mcp'],
+    { cwd: sb.root, env: sb.env, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      leaseCloudAccount: async () => { leaseCalledForMcp = true; return makeLeaseReply(); },
+      spawnCodex: async (_bin, args) => {
+        assert.deepEqual(args, ['mcp']);
+        return { code: 0 };
+      },
+    },
+  );
+  assert.equal(mcpRes.exitCode, 0);
+  assert.equal(leaseCalledForMcp, false);
+
+  // 5. Dead lock owner recovers rapidly, nested CODEX_HOME launches safely, and 401 heartbeat revokes cached lease+auth.
+  const lockDir = `${runtimeDir}.lock`;
+  mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
+    pid: 99_999,
+    acquired_at: Date.now() - 5_000,
+  }), { mode: 0o600 });
+
+  let observedConfigTarget = null;
+  let observedLeaseAfter401 = true;
+  let observedAuthAfter401 = true;
+  const res = await runPddCodexCli(
+    ['exec', 'nested-check'],
+    { cwd: sb.root, env: nestedEnv, stdout: { write() {} }, stderr: { write() {} } },
+    {
+      tmpRoot: sb.tmpRoot,
+      uid: 707,
+      pid: 70_001,
+      isPidAlive: candidate => candidate === 70_001,
+      heartbeatIntervalMs: 20,
+      spawnSync: () => ({ status: 0 }),
+      leaseCloudAccount: async () => makeLeaseReply({ lease_id: 'lse_rev_401' }),
+      heartbeatCloudLease: async () => {
+        const err = new Error('revoked');
+        err.status = 401;
+        throw err;
+      },
+      releaseCloudLease: async () => ({ revoked: true }),
+      spawnCodex: async (_bin, _args, opts) => {
+        observedConfigTarget = readlinkSync(join(opts.env.CODEX_HOME, 'config.toml'));
+        await new Promise(r => setTimeout(r, 90));
+        observedLeaseAfter401 = existsSync(join(opts.env.CODEX_HOME, 'lease.json'));
+        observedAuthAfter401 = existsSync(join(opts.env.CODEX_HOME, 'auth.json'));
+        return { code: 0 };
+      },
+    },
+  );
+  assert.equal(res.exitCode, 0);
+  assert.equal(resolve(observedConfigTarget), resolve(join(sb.home, '.codex', 'config.toml')));
+  assert.equal(observedLeaseAfter401, false, '401 heartbeat should invalidate cached lease.json');
+  assert.equal(observedAuthAfter401, false, '401 heartbeat should invalidate cached auth.json');
+});
+
 

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 932e3fea9b62693004f5c2d012ad70a533054395a459a36a18771af5b0935516).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 98d2a48fce6e863d8dc3f1c4af737b5304d77a77f38ae945317c8a56cc545b29).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
@@ -592,16 +592,44 @@ export function stripCodexAuthBundle(authJson) {
   };
 }
 
+function isPathAtOrInside(candidatePath, rootPath) {
+  const resolvedCandidate = resolve(candidatePath);
+  const resolvedRoot = resolve(rootPath);
+  if (
+    resolvedCandidate === resolvedRoot
+    || resolvedCandidate.startsWith(`${resolvedRoot}${sep}`)
+    || resolvedCandidate.startsWith(`${resolvedRoot}/`)
+  ) {
+    return true;
+  }
+  try {
+    const realCandidate = nativeFs.realpathSync(resolvedCandidate);
+    const realRoot = nativeFs.realpathSync(resolvedRoot);
+    return (
+      realCandidate === realRoot
+      || realCandidate.startsWith(`${realRoot}${sep}`)
+      || realCandidate.startsWith(`${realRoot}/`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function localCodexHome(env = process.env) {
   const home = env?.HOME || homedir();
   const defaultHome = join(home, '.codex');
   const explicit = typeof env?.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
   if (!explicit) return defaultHome;
-  const managed = pddManagedCodexHome(env);
-  if (resolve(explicit) === resolve(managed)) return defaultHome;
-  try {
-    if (nativeFs.realpathSync(explicit) === nativeFs.realpathSync(managed)) return defaultHome;
-  } catch {}
+  const managedRoots = [
+    pddManagedCodexHome(env),
+    join(resolvePddStateBase(env), 'codex-runtime'),
+  ];
+  if (typeof env?.PDD_CODEX_RUNTIME_ROOT === 'string' && env.PDD_CODEX_RUNTIME_ROOT.trim()) {
+    managedRoots.push(env.PDD_CODEX_RUNTIME_ROOT.trim());
+  }
+  if (managedRoots.some(root => isPathAtOrInside(explicit, root))) {
+    return defaultHome;
+  }
   return explicit;
 }
 
@@ -773,6 +801,57 @@ export function resolveCodexResponsesBaseUrl(backendApiUrl) {
   return backendApiUrl;
 }
 
+const REQUIRED_CODEX_SUBSHELL_EXCLUDES = [
+  'PDD_*',
+  'OPENAI_API_KEY',
+  'CODEX_API_KEY',
+  'CODEX_ACCESS_TOKEN',
+  'CODEX_CONNECTORS_TOKEN',
+];
+
+/**
+ * Build `-c` shell_environment_policy exclusions compatible with the user's `~/.codex/config.toml`
+ * so legacy `exclude` rules are preserved and modern `[shell_environment_policy.filters]` never clashes.
+ */
+function buildCodexSubshellExcludeCliArgs(userConfigText = null) {
+  let userPolicy = null;
+  if (typeof userConfigText === 'string' && userConfigText.trim()) {
+    try {
+      const parsed = parseToml(userConfigText);
+      if (isTomlTable(parsed?.shell_environment_policy)) {
+        userPolicy = parsed.shell_environment_policy;
+      }
+    } catch {
+      userPolicy = null;
+    }
+  }
+  const hasLegacyArray = Boolean(
+    userPolicy
+    && !isTomlTable(userPolicy.filters)
+    && (Array.isArray(userPolicy.exclude) || Array.isArray(userPolicy.include_only)),
+  );
+  if (hasLegacyArray) {
+    const merged = [];
+    const seen = new Set();
+    for (const item of [...(Array.isArray(userPolicy.exclude) ? userPolicy.exclude : []), ...REQUIRED_CODEX_SUBSHELL_EXCLUDES]) {
+      const trimmed = typeof item === 'string' ? item.trim() : '';
+      if (!trimmed) continue;
+      const lower = trimmed.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      merged.push(trimmed);
+    }
+    return ['-c', `shell_environment_policy.exclude=${JSON.stringify(merged)}`];
+  }
+  // Use keyed `filters` by default and when user already uses `[shell_environment_policy.filters]`:
+  // keyed entries merge cleanly across config layers without clobbering user filter rules.
+  const args = [];
+  for (const pattern of REQUIRED_CODEX_SUBSHELL_EXCLUDES) {
+    args.push('-c', `shell_environment_policy.filters.${formatTomlKey(pattern)}="exclude"`);
+  }
+  return args;
+}
+
 /**
  * Build the verified Codex CLI `-c` override flags for transparent gateway passthrough.
  */
@@ -780,8 +859,10 @@ export function buildCodexGatewayCliArgs({
   backendApiUrl,
   userCodexHome = null,
   emptySubshellCodexHome = null,
+  userConfigText = null,
+  nativeBackendApi = true,
 } = {}) {
-  const codexApiUrl = resolveCodexResponsesBaseUrl(backendApiUrl);
+  const codexApiUrl = nativeBackendApi ? resolveCodexResponsesBaseUrl(backendApiUrl) : backendApiUrl;
   const args = [
     '-c', 'cli_auth_credentials_store="file"',
     '-c', `chatgpt_base_url=${JSON.stringify(backendApiUrl)}`,
@@ -794,11 +875,14 @@ export function buildCodexGatewayCliArgs({
     '-c', 'features.daemon_auto_start=false',
     '-c', 'features.shell_snapshot=false',
   );
+  if (!nativeBackendApi) {
+    args.push('-c', 'features.responses_websockets=false');
+  }
   if (typeof emptySubshellCodexHome === 'string' && emptySubshellCodexHome.trim()) {
     args.push('-c', `shell_environment_policy.set.CODEX_HOME=${JSON.stringify(emptySubshellCodexHome.trim())}`);
   }
   args.push(
-    '-c', 'shell_environment_policy.exclude=["PDD_*","OPENAI_API_KEY","CODEX_API_KEY","CODEX_ACCESS_TOKEN","CODEX_CONNECTORS_TOKEN"]',
+    ...buildCodexSubshellExcludeCliArgs(userConfigText),
     '-c', 'model_providers.pdd_pool.name="PDD Pool"',
     '-c', `model_providers.pdd_pool.base_url=${JSON.stringify(codexApiUrl)}`,
     '-c', 'model_providers.pdd_pool.wire_api="responses"',
@@ -808,6 +892,12 @@ export function buildCodexGatewayCliArgs({
     '-c', 'model_providers.pdd_codex_gateway.wire_api="responses"',
     '-c', 'model_providers.pdd_codex_gateway.requires_openai_auth=true',
   );
+  if (!nativeBackendApi) {
+    args.push(
+      '-c', 'model_providers.pdd_pool.supports_websockets=false',
+      '-c', 'model_providers.pdd_codex_gateway.supports_websockets=false',
+    );
+  }
   return args;
 }
 
@@ -853,7 +943,12 @@ export function ensureUserCodexHomeBaseline(fs, userHome) {
     if (err?.code !== 'ENOENT') throw err;
   }
   if (!cfgExists) {
-    writeAtomicPrivate(fs, cfgPath, '');
+    try {
+      fs.writeFileSync(cfgPath, '', { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      try { fs.chmodSync?.(cfgPath, 0o600); } catch {}
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+    }
   }
   for (const dirName of USER_CODEX_BASELINE_DIRS) {
     const dirPath = join(userHome, dirName);
@@ -1073,16 +1168,6 @@ function isDisallowedCodexSymlinkTargetName(name) {
   return lower.startsWith('auth.json') || lower.startsWith('config.toml');
 }
 
-function isPathAtOrInside(candidatePath, rootPath) {
-  const normCandidate = resolve(candidatePath);
-  const normRoot = resolve(rootPath);
-  return (
-    normCandidate === normRoot
-    || normCandidate.startsWith(normRoot + sep)
-    || normCandidate.startsWith(`${normRoot}/`)
-  );
-}
-
 export function isSafeCodexSourceEntry(fs, src, targetRoot, { sourceHome = null } = {}) {
   if (typeof src !== 'string' || !src) return false;
   const srcBase = basename(src).toLowerCase();
@@ -1131,7 +1216,7 @@ export function isSafeCodexSourceEntry(fs, src, targetRoot, { sourceHome = null 
   return true;
 }
 
-export function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRoots = []) {
+export function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRoots = [], { preserveLinks = null } = {}) {
   fs.mkdirSync(managedHome, { recursive: true, mode: 0o700 });
   try { (fs.chmodSync ?? nativeFs.chmodSync)?.(managedHome, 0o700); } catch {}
   const resolvedSourceHome = resolve(sourceHome);
@@ -1219,6 +1304,7 @@ export function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForb
         .filter(Boolean);
     } catch {}
     for (const name of managedEntries) {
+      if (preserveLinks?.has(name)) continue;
       if (activeValidLinks.has(name) && !isIsolatedCodexHomeEntry(name)) continue;
       const dst = join(managedHome, name);
       try {
