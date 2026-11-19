@@ -205,7 +205,11 @@ For an optional input field, leave it out of `required`. Do not use `oneOf` with
 ## 4. Expected values
 
 - Expected values come from the story and the person. Never take them from a run, a simulation or the code.
-- Derive numeric expected values directly from the Story's requirements and constants, not by running the implementation under test or writing throwaway vector-generator scripts that duplicate module logic.
+- Derive numeric expected values directly from the Story's requirements and constants, not by running the implementation under test. Never write multi-function shadow implementations or throwaway scratch vector-generator scripts (for example, temporary Python or Node scripts in the workspace or `/tmp`) in prompt space before PR 1 approval: shadow scripts duplicate module logic into expected values and hide mistakes behind unreviewed code.
+- Avoid shell `bc` for expected values: default `scale=0` silently truncates divisions and negative modulo semantics vary by tool.
+- Use `pdd calc "<expr>"` for exact arbitrary-precision arithmetic offline (0 AI calls): `+`, `-`, `*`, `/`, truncation-toward-zero `div` and `mod`, `min`, `max`, `floor`, `ceil`, `trunc`, `round_half_up`, and `round_half_even`. Nonterminating quotients print as exact reduced fractions (`1/3`, `-2/3`).
+- When a numeric scenario check (`equals`, `not_equals`, `gt`, `lt`, `gte`, `lte`, `at_least`, `at_most`) comes from a formula, attach an optional `"derivation": "<expr>"` field alongside `"value"`. `pdd lint` (including `--local`) and `pdd test` deterministically evaluate `"derivation"` against `"value"` at 0 AI calls and refuse any mismatch without rewriting expected values. `pdd approve` and workflow Story cards surface the `"derivation"` formula alongside the expected value for human review.
+- Keep scenario step inputs small and human-auditable (§18) rather than generating large opaque numeric tables.
 - If the story allows two answers, ask the person. Example: "every 10th coffee free" gives $4.95 off, but
   "the price of its cheapest drink" gives $2.75 off. Do not choose yourself.
 - A person decides expected values. If you think one is wrong, propose a change to the person; never make it yourself.

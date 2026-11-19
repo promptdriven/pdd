@@ -100,6 +100,12 @@ file owner module, with the PATH operands and json from --json. Return its exit
 code. This local route imports no Runtime client, reads no token and installs no
 skills.
 
+Dispatch `calc` to `runCalc({expression})` from the exact calculator module
+with the single EXPR operand, write its non-empty `stdout` or `stderr` to
+`stdout`/`stderr`, and return its `exit_code`. This local route runs offline
+with zero network or interpreter calls, reads no token, skips skill sync and
+skips the release notice.
+
 ## Finished chat maintenance route
 
 Dispatch `workflow-tidy` to runner `tidyRuns({dryRun,cwd}, ports)`, forwarding
@@ -147,6 +153,8 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 - [Files view](files.prompt.md): required generation/verification/testing context for read-only file inspection and exits.
 
 - [File owner lookup](file-owner.prompt.md): required generation/verification/testing context for the read-only owner command and its exits.
+
+- [Exact calculator command](calc.prompt.md): required generation/verification/testing context for local exact arithmetic evaluation and its exits.
 
 - [Metrics command](metrics-command.prompt.md): required native generation/verification context for local metrics dispatch.
 
@@ -313,7 +321,7 @@ reply.
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "3177daefbf6f1a945a2e605b7eb137c3c9197c93467da38785b58679c6e8530c",
+  "prose_sha256": "bafabc6f868123cfc9a3556842fb07ddc67f2d86ab9960609d421bbad7223114",
   "entries": [
     {
       "operation": "runPdd",

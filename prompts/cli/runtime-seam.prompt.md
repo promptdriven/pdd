@@ -46,13 +46,13 @@ Expose every public binding and scoped slice loader of `@promptdriven/runtime-cl
 - `check`, `lint`, `read`, `retry`, `local`, `simulate`, `jobs`, `health`, `mcp`, `contracts`, `exactValue`, `format`, `source`, `saved`, `workspace`, `render`, `version`
 - `acquireCaseWriteOwnership`, `acquireRuntimeBatchLock`, `applyPendingCase`, `applyPendingCaseWithHandoff`, `checkRuntimeHealth`, `createSavedStoryEvidenceReader`, `defaultLineReader`, `loadRuntimeClient`, `readContractHistory`, `readTryOwner`, `resendableStoryChecks`, `runCheck`, `runDoorCall`, `runTry`, `runtimeOrigin`, `runtimeWorkspaceMigrationStore`, `saveDoorCase`, `saveDoorCaseResult`, `savedStoryEvidence`
 - `runtimeAgentPacketSlice`, `runtimeCheckPlanSlice`, `runtimeClientSlice`, `runtimeOutcomeSlice`, `runtimeOutputSlice`, `runtimePreflightSlice`, `runtimeScenarioJsonSlice`, `runtimeWorkspaceSlice`
-- `DRAFT_SERVER_TEXT`, `LIMITS`, `NO_TESTS`, `PreflightError`, `STALE_HINT`, `TEST_SCHEMA`, `captureSource`, `checkInput`, `createStrictSourceAccess`, `defaultMaxCalls`, `discoveryRefusal`, `discoveryVisibleFiles`, `exactNumberSpelling`, `executableInterfaceText`, `expectedTestPath`, `fillHashes`, `findTests`, `formatSize`, `formatWarningLines`, `gitFiles`, `hasAcceptance`, `hasPromptInterface`, `interfaceBlocks`, `interfaceFormatWarnings`, `interfaceKindProblems`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `matchTests`, `numberWarnings`, `orphanSummary`, `otherFiles`, `parsePromptFrontmatter`, `preflight`, `promptMarkdownTargets`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `scenarioShapeRefusal`, `schemaKeywordWarningLines`, `selectTests`, `sha256`, `sharedSourceFiles`, `sourceFilePort`, `staleHint`, `storyCriteria`, `tarFiles`, `whyNoTests`
+- `DRAFT_SERVER_TEXT`, `LIMITS`, `NO_TESTS`, `PreflightError`, `STALE_HINT`, `TEST_SCHEMA`, `captureSource`, `checkInput`, `createStrictSourceAccess`, `defaultMaxCalls`, `discoveryRefusal`, `discoveryVisibleFiles`, `exactNumberSpelling`, `executableInterfaceText`, `expectedTestPath`, `fillHashes`, `findTests`, `formatSize`, `formatWarningLines`, `gitFiles`, `hasAcceptance`, `hasPromptInterface`, `interfaceBlocks`, `interfaceFormatWarnings`, `interfaceKindProblems`, `interfaceSchemaProblems`, `isSecretPath`, `isStoryPath`, `matchTests`, `numberWarnings`, `orphanSummary`, `otherFiles`, `parsePromptFrontmatter`, `preflight`, `promptMarkdownTargets`, `promptRefusal`, `promptSchemaRefusals`, `proseSha256`, `readPrompt`, `scenarioDerivationRefusal`, `scenarioShapeRefusal`, `schemaKeywordWarningLines`, `selectTests`, `sha256`, `sharedSourceFiles`, `sourceFilePort`, `staleHint`, `storyCriteria`, `tarFiles`, `whyNoTests`
 - `OPEN_STATES`, `PROMPT_TESTS_LABEL`, `PROMPT_TESTS_WORDS`, `PROVIDER_TEXT`, `causeText`, `cleanText`, `coverageText`, `exitCodeFor`, `jsonRow`, `progressTicker`, `projectAnswer`, `refusalView`, `renderJson`, `renderText`, `sinceText`, `stepTimeLimit`, `storyLines`, `summaryLine`, `tryUsage`, `tryUsageHeaders`, `tryUsageLine`, `validLink`
 - `CHECK_STATES`, `COMMAND_EXIT_CODE`, `STATE_EXIT_CODES`, `exitFor`, `hasProgress`, `outcomeDone`, `outcomeExitCode`, `outcomeFor`, `outcomeOverall`, `outcomeText`, `progressText`, `resultOutcome`, `resultOverall`
 - `baselineReport`, `buildCheckPlan`, `checkPlanResultLines`, `checkPlanResults`, `estimateCheckCalls`, `selectCheckTests`
 - `composeProductTry`, `productTapCallBound`, `selectJourneys`
 - `allowsRuntimePath`, `loadRuntimeWorkspace`, `requireRuntimePath`
-- `exactIntegerLeaves`, `jsonSafe`, `parseScenarioJson`, `roundedNumberTokens`, `stringifyScenarioJson`, `withExactIntegers`
+- `checkDerivation`, `evaluateDerivation`, `exactIntegerLeaves`, `jsonSafe`, `parseScenarioJson`, `roundedNumberTokens`, `stringifyScenarioJson`, `withExactIntegers`
 - `askAgent`, `buildProjectCard`, `createAgentBridge`, `createTryGuide`, `readAgentScenarios`
 - `migrateRuntimeWorkspace`
 - `runContracts`
@@ -79,6 +79,6 @@ The seam holds no mutable request state and loads zero additional pdd or Runtime
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "0faa00cc5a20f6eadb51baaec0d526e709818a748af2d7889544150e6f556ecb","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"approved","prose_sha256": "eca71cb374f23834b891d834efae5a38015efb763d8b8d651b09c104ef325207","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>

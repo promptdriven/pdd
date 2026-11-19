@@ -54,6 +54,8 @@ Option kind `optional-text` consumes the following word when present and not sta
 
 Accept the catalog's `pdd mcp` route without operands or options; normal local help forms apply. Parsing never starts the server or registers it.
 
+On the catalog's `pdd calc` route, `--` ends options as usual; outside literal mode, treat any token starting with a single `-` that is not `--`, does not start with `--`, and is not `-h` or `-help` as the `EXPR` operand so leading-negative expressions such as `pdd calc "-7 div 2"` parse without `--`. Unknown `--*` options, missing `EXPR`, or extra operands still fail as usage errors.
+
 ## Scope command syntax
 
 For the [scope routes](command-catalog.prompt.md#durable-scope-routes), parse exactly one selector: `--batch NAME` or `--runs RUN_ID[,RUN_ID...]`. Set with batch requires `--issues ISSUE[,ISSUE...]`; set with runs excludes issues. Set requires `--through prompt-pr`; extend requires `--through code`; show and revoke exclude through and issues. Mutations accept optional `--said WORDS`; show excludes it. Reject empty list members, duplicate members, duplicate or incompatible options and missing values before effects. Preserve IDs, name and said text exactly; do not resolve identity or interpret person words. Owner validation remains authoritative.

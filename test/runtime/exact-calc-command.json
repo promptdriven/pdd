@@ -1,0 +1,213 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/exact-calc-command.md",
+  "criteria": [
+    {
+      "id": "ac-sha256-587c589baa0dac258ee9543952c39f884e95d09ffbcfcbc7",
+      "text": "Running `pdd calc \"4000 - floor(4000 * 540 / 10000)\"` prints \"3784\" and running `pdd calc \"0.1 + 0.2\"` prints \"0.3\", each to stdout with empty stderr and exit code 0."
+    },
+    {
+      "id": "ac-sha256-34f407b3ae07b90cc1a3831e216d019b78d35a6f62af958f",
+      "text": "Running `pdd calc \"-7 div 2\"` prints \"-3\" and running `pdd calc \"-7 mod 2\"` prints \"-1\", using truncation toward zero with empty stderr and exit code 0."
+    },
+    {
+      "id": "ac-sha256-c64094f7c5dc4344d8499af955aaf69e54971f67b2c41e4d",
+      "text": "Running `pdd calc \"1 / 3\"` prints \"1/3\" and running `pdd calc \"-4 / 6\"` prints \"-2/3\", printing nonterminating quotients as reduced fractions with a positive denominator, empty stderr and exit code 0."
+    },
+    {
+      "id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62",
+      "text": "Running `pdd calc` on \"round_half_up(2.5)\", \"round_half_up(-2.5)\", \"round_half_even(2.5)\", \"round_half_even(3.5)\", and \"max(ceil(1.2), trunc(-2.9), min(10, 5))\" prints \"3\", \"-3\", \"2\", \"4\", and \"5\" respectively, with empty stderr and exit code 0."
+    },
+    {
+      "id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3",
+      "text": "Running `pdd calc` on a blank expression, division by zero (\"1 / 0\"), or an unknown function (\"foo(1)\") prints nothing to stdout, writes one \"pdd calc:\" error line to stderr, and exits with code 2."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "pricing-floor-formula",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "4000 - floor(4000 * 540 / 10000)"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-587c589baa0dac258ee9543952c39f884e95d09ffbcfcbc7", "target": "result", "path": "/stdout", "op": "equals", "value": "3784\n"},
+        {"criterion_id": "ac-sha256-587c589baa0dac258ee9543952c39f884e95d09ffbcfcbc7", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-587c589baa0dac258ee9543952c39f884e95d09ffbcfcbc7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "exact-decimal-addition",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "0.1 + 0.2"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-587c589baa0dac258ee9543952c39f884e95d09ffbcfcbc7", "target": "result", "path": "/stdout", "op": "equals", "value": "0.3\n"},
+        {"criterion_id": "ac-sha256-587c589baa0dac258ee9543952c39f884e95d09ffbcfcbc7", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-587c589baa0dac258ee9543952c39f884e95d09ffbcfcbc7", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "negative-div-truncates-toward-zero",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "-7 div 2"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-34f407b3ae07b90cc1a3831e216d019b78d35a6f62af958f", "target": "result", "path": "/stdout", "op": "equals", "value": "-3\n"},
+        {"criterion_id": "ac-sha256-34f407b3ae07b90cc1a3831e216d019b78d35a6f62af958f", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-34f407b3ae07b90cc1a3831e216d019b78d35a6f62af958f", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "negative-mod-matches-div",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "-7 mod 2"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-34f407b3ae07b90cc1a3831e216d019b78d35a6f62af958f", "target": "result", "path": "/stdout", "op": "equals", "value": "-1\n"},
+        {"criterion_id": "ac-sha256-34f407b3ae07b90cc1a3831e216d019b78d35a6f62af958f", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-34f407b3ae07b90cc1a3831e216d019b78d35a6f62af958f", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "nonterminating-fraction",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "1 / 3"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-c64094f7c5dc4344d8499af955aaf69e54971f67b2c41e4d", "target": "result", "path": "/stdout", "op": "equals", "value": "1/3\n"},
+        {"criterion_id": "ac-sha256-c64094f7c5dc4344d8499af955aaf69e54971f67b2c41e4d", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-c64094f7c5dc4344d8499af955aaf69e54971f67b2c41e4d", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "reduced-negative-fraction",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "-4 / 6"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-c64094f7c5dc4344d8499af955aaf69e54971f67b2c41e4d", "target": "result", "path": "/stdout", "op": "equals", "value": "-2/3\n"},
+        {"criterion_id": "ac-sha256-c64094f7c5dc4344d8499af955aaf69e54971f67b2c41e4d", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-c64094f7c5dc4344d8499af955aaf69e54971f67b2c41e4d", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "round-half-up-positive-tie",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "round_half_up(2.5)"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stdout", "op": "equals", "value": "3\n"},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "round-half-up-negative-tie",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "round_half_up(-2.5)"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stdout", "op": "equals", "value": "-3\n"},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "round-half-even-even-tie",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "round_half_even(2.5)"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stdout", "op": "equals", "value": "2\n"},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "round-half-even-odd-tie",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "round_half_even(3.5)"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stdout", "op": "equals", "value": "4\n"},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "min-max-ceil-trunc",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "max(ceil(1.2), trunc(-2.9), min(10, 5))"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stdout", "op": "equals", "value": "5\n"},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/stderr", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-5ab2fc22fc1dfd6dbd25e02ab87ae9e6a35720197a480c62", "target": "result", "path": "/exit_code", "op": "equals", "value": 0}
+      ]
+    },
+    {
+      "step_id": "blank-expression-error",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "   "
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3", "target": "result", "path": "/stderr", "op": "equals", "value": "pdd calc: missing expression\n"},
+        {"criterion_id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "divide-by-zero-error",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "1 / 0"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd calc:"},
+        {"criterion_id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    },
+    {
+      "step_id": "unknown-function-error",
+      "entry_path": "prompts/cli/calc.prompt.md",
+      "operation": "runCalc",
+      "input": {
+        "expression": "foo(1)"
+      },
+      "checks": [
+        {"criterion_id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3", "target": "result", "path": "/stdout", "op": "equals", "value": ""},
+        {"criterion_id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3", "target": "result", "path": "/stderr", "op": "contains", "value": "pdd calc:"},
+        {"criterion_id": "ac-sha256-59ef45227a6fa4aea6ec9ba9d9d07277c540c8ccefd477e3", "target": "result", "path": "/exit_code", "op": "equals", "value": 2}
+      ]
+    }
+  ]
+}
