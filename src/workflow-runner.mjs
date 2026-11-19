@@ -57,7 +57,7 @@ import { approvalRecords, preparePrEvidence } from './workflow-pr-evidence.mjs';
 import { validateProofRecord } from './workflow-prove.mjs';
 import { readRunResults, resultLines, usableResult, noResultLine, NO_VERDICT, prepareNativeEvidence, savedCheckCause, savedLostCheck } from './workflow-results.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
-import {readSmallChangeChecklist} from './workflow-small-change.mjs';
+import {readSmallChangeChecklist, stampSmallChangeChecklist} from './workflow-small-change.mjs';
 import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinReplayVectors,pinRunAnchor,readReplayEvidence,readFormalEvidence,formatFormalEvidence,formatReplayEvidence} from './workflow-replay.mjs';
 
 const { captureSource, findTests, gitFiles, interfaceBlocks, matchTests, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
@@ -3398,8 +3398,10 @@ async function stepDoneCommand({ step, summary, skipped, noPublish = false, cwd,
   if(hasRuntime)record.source={kind:'git-content-v1',sha256:gitFingerprint(run.root)};
   const replay=area.replay_evidence===REPLAY_POLICY && (noPublish || run.localPublication?.area === area.name || area.steps.some(item=>item!==step&&!run.done[item]) || area.gate!=='pr' || area.before==='approve'&&!prOf(run,area.name))?await currentReplayEvidence(run,p):null;
   if(replay){record.replayEvidence=replay;lines.push(formatReplayEvidence(replay,{rules:await rulesToCheck(run,p,record.summary),terminal:true}));}
-  if (run.workflow === 'small-change' && !askArea(run) && ['scope','change','verify','formal'].includes(step))
-    record.smallChange = {checklist: readSmallChangeChecklist(run), formal: readFormalEvidence(run)};
+  if (run.workflow === 'small-change' && !askArea(run) && ['scope','change','verify','formal'].includes(step)) {
+    const {status, items, mustFix} = stampSmallChangeChecklist(run);
+    record.smallChange = {checklist: {status, items, mustFix}, formal: readFormalEvidence(run)};
+  }
   const applyDone=latest=>{
     if (integration || accounted) {
       if (gitFingerprint(run.root) !== worktree || accountedIntegration(latest, area, source) !== accounted
