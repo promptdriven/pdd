@@ -833,7 +833,6 @@ test('3534 adversarial regressions (MF3/MF5/MF6 + minor): comment-before-label, 
     created_at: '2026-11-18T04:00:00Z',
   };
   // Seed a matching improve card from before the pre-flight classifier existed.
-  await shadowIntake(makeIntakeHarness(t, { mode: 'shadow' }).ctx, []);
   const { issueVersion } = await import('../src/autopilot-intake.mjs');
   writeFileSync(join(fImp.cards, '604.json'), JSON.stringify({
     issue: 604,
@@ -930,4 +929,285 @@ test('3534 adversarial regression (MF7): autopilot-core pre-claim enforces cross
   assert.ok(w.job(702, 'build'), '#702 is claimed and started by core after trusted answer');
   assert.equal(w.labels(703).includes('pdd:needs-decision'), false, '#703 is not re-parked after trusted label removal');
   assert.ok(w.job(703, 'build'), '#703 is claimed and started by core after trusted label removal');
+});
+
+test('3534 R2 regressions (items 1-7 + minor): headings, reference URLs, title/Service slugs, clause-bound coord, unverifiable/recipe/comment guards, deferrals, nested dirs, and timeline errors', async t => {
+  const repoFiles = ['src/metrics-model.mjs', 'src/accounts-cli.mjs', 'src/login-pool.mjs', 'src/runtime-seam.mjs', 'package.json'];
+
+  // Item 1: passive/contrast/error/mock headings stay allow; deliverable repo headings still reject.
+  const headingAllows = [
+    {
+      name: '#3274-style comment contrast heading',
+      title: 'Add scope triage to pdd-feature',
+      body: 'Update `src/runtime-seam.mjs` for native-only guidance.',
+      comments: [{ author: 'maintainer', trusted: true, body: '### Concrete contrast in `promptdriven/agent-link`\nObservational data point only.' }],
+    },
+    {
+      name: 'error handling heading for sibling',
+      title: 'Retry transient runtime 502s',
+      body: '## Handling 502 errors from prompt-runtime\nAdd backoff in `src/runtime-seam.mjs`.',
+      comments: [],
+    },
+    {
+      name: 'mocking heading for sibling',
+      title: 'Improve local account tests',
+      body: '### Mock pdd_cloud in local tests\nUse fake HTTP responses in `src/accounts-cli.mjs`.',
+      comments: [],
+    },
+  ];
+  for (const sample of headingAllows) {
+    const res = classifyPreflightIssue({
+      repository: 'promptdriven/pdd',
+      issue: { number: 801, title: sample.title, body: sample.body, comments: sample.comments },
+      repoFiles,
+    });
+    assert.equal(res.decision, 'allow', `Item 1 (${sample.name}) must stay allow (got ${res.decision}/${res.reasonCode}: ${res.reason})`);
+  }
+  const deliverableListReject = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 3428,
+      title: 'pdd accounts: enrolled Codex logins stay at 0% usage',
+      body: '1. **`promptdriven/pdd` CLI (`src/accounts-cli.mjs`):**\nRefresh usage.\n2. **`promptdriven/pdd_cloud` (`cloud_accounts_usage.py`):**\nFix parser.',
+    },
+    repoFiles,
+  });
+  assert.equal(deliverableListReject.decision, 'reject');
+  assert.equal(deliverableListReject.reasonCode, 'cross_repo');
+
+  // Item 2: #3012-style URL with "create" in path under References heading, plus comparison phrasing.
+  const urlAllows = [
+    {
+      name: '#3012-style URL under References and related work',
+      title: 'Give each PDD repository a reusable way to verify its app',
+      body: 'Update `src/runtime-seam.mjs`.\n\n## References and related work\n- https://github.com/cursor/plugins/blob/main/pstack/skills/create-verification-skill/SKILL.md',
+    },
+    {
+      name: 'comparison phrasing (match / align with / mirror)',
+      title: 'Align retry jitter with upstream pattern',
+      body: 'Update `src/runtime-seam.mjs` to match https://github.com/other/repo/blob/main/create-retry.ts and align with https://github.com/other/repo/blob/main/update-backoff.ts (mirror https://github.com/other/repo/blob/main/edit.ts).',
+    },
+    {
+      name: 'URL path contains edit verb but surrounding prose has none',
+      title: 'Improve verification skill docs',
+      body: 'Update `src/metrics-model.mjs`.\nBackground link: https://github.com/cursor/plugins/blob/main/skills/create-verification-skill/SKILL.md',
+    },
+  ];
+  for (const sample of urlAllows) {
+    const res = classifyPreflightIssue({
+      repository: 'promptdriven/pdd',
+      issue: { number: 802, title: sample.title, body: sample.body, comments: [] },
+      repoFiles,
+    });
+    assert.equal(res.decision, 'allow', `Item 2 (${sample.name}) must stay allow (got ${res.decision}/${res.reasonCode}: ${res.reason})`);
+  }
+
+  // Item 3: non-repo title prefixes and Service: a/b stay allow; sibling / same-org prefixes and Repo: other-org/pdd still reject.
+  for (const sample of [
+    { title: '[autopilot/intake] improve status line', body: 'Update `src/metrics-model.mjs`.' },
+    { title: 'codex/claude: rotate logins cleanly', body: 'Update `src/login-pool.mjs`.' },
+    { title: '[macOS/Linux] normalize cache paths', body: 'Update `src/runtime-seam.mjs`.' },
+    { title: 'Fix daemon restart behavior', body: 'Service: systemd/launchd\nUpdate `src/runtime-seam.mjs`.' },
+  ]) {
+    const res = classifyPreflightIssue({
+      repository: 'promptdriven/pdd',
+      issue: { number: 803, title: sample.title, body: sample.body, comments: [] },
+      repoFiles,
+    });
+    assert.equal(res.decision, 'allow', `Item 3 (${sample.title}) must stay allow (got ${res.decision}/${res.reasonCode})`);
+  }
+  const sameOrgTitleReject = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: { number: 804, title: '[promptdriven/pdd_cloud] fix billing retry', body: 'Retry webhook handler.' },
+    repoFiles,
+  });
+  assert.equal(sameOrgTitleReject.decision, 'reject');
+  assert.equal(sameOrgTitleReject.reasonCode, 'cross_repo');
+  const serviceSameOrgReject = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: { number: 805, title: 'Fix gateway timeout', body: 'Service: promptdriven/pdd_cloud\nFix gateway.' },
+    repoFiles,
+  });
+  assert.equal(serviceSameOrgReject.decision, 'reject');
+  assert.equal(serviceSameOrgReject.reasonCode, 'cross_repo');
+
+  // Item 4: local pairs mentioning a sibling passively stay allow; foreign-bound pairs still reject.
+  for (const body of [
+    'Rotate accounts across codex and claude when prompt-runtime returns 502.',
+    'Update accounts-cli alongside login-pool to handle pdd_cloud 503 responses.',
+  ]) {
+    const res = classifyPreflightIssue({
+      repository: 'promptdriven/pdd',
+      issue: { number: 806, title: 'Improve retry rotation', body, comments: [] },
+      repoFiles,
+    });
+    assert.equal(res.decision, 'allow', `Item 4 passive pair must stay allow: ${body}`);
+  }
+  const boundAlongsideReject = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: { number: 807, title: 'Ship paired gateway update', body: 'Update `src/accounts-cli.mjs` alongside `pdd_cloud`.', comments: [] },
+    repoFiles,
+  });
+  assert.equal(boundAlongsideReject.decision, 'reject');
+  assert.equal(boundAlongsideReject.reasonCode, 'cross_repo');
+  assert.equal(boundAlongsideReject.targetRepo, 'pdd_cloud');
+
+  // Item 5: unit-test/validation/rejection guards, NAMED_RECIPE_RE punctuation/backticks, COMMENT_LOCAL_AUTH_RE, and Acceptance Criteria heading.
+  for (const body of [
+    'Add a unit test verifying production credentials parsing.',
+    'Test that auth rejects expired production tokens with exit code 4.',
+    'Validate config returns an error when production API keys are missing.',
+    'Verify package.json metadata before live npm publish.',
+  ]) {
+    const res = classifyPreflightIssue({
+      repository: 'promptdriven/pdd',
+      issue: { number: 808, title: 'Harden token validation', body, comments: [] },
+      repoFiles,
+    });
+    assert.equal(res.decision, 'allow', `Item 5 guard must stay allow: ${body}`);
+  }
+  const recipePeriodAllow = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: { number: 809, title: 'Run recipe with trailing period', body: 'Verification recipe: stripe-staging-e2e.', comments: [] },
+    repoFiles,
+    workerCapabilities: { localTests: true, availableRecipes: ['stripe-staging-e2e'] },
+  });
+  assert.equal(recipePeriodAllow.decision, 'allow', 'trailing period stripped so available recipe matches');
+  const recipeBacktickPark = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: { number: 810, title: 'Run backticked recipe', body: 'Verification recipe: `stripe-staging-e2e`', comments: [] },
+    repoFiles,
+    workerCapabilities: { localTests: true, availableRecipes: [] },
+  });
+  assert.equal(recipeBacktickPark.decision, 'park', 'backticked missing recipe after colon+space still parks');
+  assert.equal(recipeBacktickPark.reasonCode, 'unverifiable_boundary');
+  assert.match(recipeBacktickPark.reason, /stripe-staging-e2e/);
+
+  const androidInsteadPark = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 811,
+      title: 'Verify mobile UI',
+      body: 'Acceptance criteria: manual human QA sign-off on a physical iPhone device.',
+      comments: [{ author: 'serhan', trusted: true, body: 'Test on Android instead of iPhone.' }],
+    },
+    repoFiles,
+  });
+  assert.equal(androidInsteadPark.decision, 'park', '"instead of iPhone" must not authorize local verification');
+  const notAcceptablePark = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 812,
+      title: 'Verify live checkout',
+      body: 'Acceptance criteria: trigger a real $1 live Stripe checkout charge in production with maintainer 2FA credentials.',
+      comments: [{ author: 'serhan', trusted: true, body: 'Skipping real charge is not acceptable.' }],
+    },
+    repoFiles,
+  });
+  assert.equal(notAcceptablePark.decision, 'park', '"not acceptable" must not authorize local verification');
+  const sectionHeadingPark = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 813,
+      title: 'Live Stripe verification',
+      body: '## Acceptance Criteria\n- Real $1 live Stripe checkout charge in production with maintainer 2FA credentials.',
+      comments: [],
+    },
+    repoFiles,
+  });
+  assert.equal(sectionHeadingPark.decision, 'park', 'bullets under ## Acceptance Criteria inherit verification framing');
+  assert.equal(sectionHeadingPark.reasonCode, 'unverifiable_boundary');
+
+  // Item 6: deferrals and bare full/overview/use comments stay parked; explicit choice answers resolve.
+  for (const reply of [
+    'Not decided yet — sharing the full overview so we can use it in the meeting.',
+    'Still undecided on pricing tiers.',
+    'Here is the full overview for context.',
+  ]) {
+    const res = classifyPreflightIssue({
+      repository: 'promptdriven/pdd',
+      issue: {
+        number: 814,
+        title: 'Choose Pro pricing',
+        body: 'Pricing decision: should Pro tier charge $19/seat or $29/seat?',
+        comments: [{ author: 'serhan', trusted: true, body: reply }],
+      },
+      repoFiles,
+    });
+    assert.equal(res.decision, 'park', `Item 6 non-decision comment must keep park: ${reply}`);
+  }
+  const explicitByDefault = classifyPreflightIssue({
+    repository: 'promptdriven/pdd',
+    issue: {
+      number: 815,
+      title: 'Choose default metrics view',
+      body: 'Open question: should `pdd metrics` default to overview or full?',
+      comments: [{ author: 'serhan', trusted: true, body: 'Overview by default.' }],
+    },
+    repoFiles,
+  });
+  assert.equal(explicitByDefault.decision, 'allow', '"Overview by default." resolves human_decision');
+
+  // Item 7: nested directory sentinels ("extensions/github_pdd_app/.") are recognized as owned locally.
+  const nestedSentinel = classifyPreflightIssue({
+    repository: 'promptdriven/pdd_cloud',
+    issue: {
+      number: 816,
+      title: 'Fix webhook signature check',
+      body: 'Update `extensions/github_pdd_app/webhook.ts` to validate signatures.',
+      comments: [],
+    },
+    repoFiles: ['extensions/github_pdd_app/.', 'packages/runtime-client/.'],
+  });
+  assert.equal(nestedSentinel.decision, 'allow', 'nested sentinel dir marks extensions/github_pdd_app as local');
+
+  // Item 8 minor: activeIntake recognizes CORE_QUESTION_MARKER_PREFIX and does not re-park on timeline fetch error.
+  const hCoreMarker = makeIntakeHarness(t, { mode: 'active' });
+  const rowCoreQ = {
+    number: 817,
+    title: 'Choose Pro pricing',
+    body: 'Pricing decision: should Pro tier charge $19/seat or $29/seat?',
+    labels: [],
+    assignees: [],
+    comments: 1,
+    user: { login: 'maintainer' },
+    created_at: '2026-11-18T01:00:00Z',
+  };
+  hCoreMarker.commentsByIssue.set(817, [{
+    id: 1,
+    body: 'Autopilot needs a decision:\n\n> Should Pro tier charge $19/seat or $29/seat?\n\n<!-- pdd:autopilot-core:question:817:job-1 -->',
+    user: { login: 'autopilot-bot' },
+    created_at: '2026-11-18T11:00:00Z',
+  }]);
+  hCoreMarker.timelineByIssue.set(817, [
+    { event: 'unlabeled', label: { name: 'pdd:needs-decision' }, actor: { login: 'serhan' }, created_at: '2026-11-18T11:30:00Z' },
+  ]);
+  await activeIntake(hCoreMarker.ctx, [rowCoreQ]);
+  assert.deepEqual(hCoreMarker.startedJobs.map(j => j.issue), [817], 'activeIntake honors trusted label removal after CORE_QUESTION_MARKER_PREFIX');
+
+  const hTimelineErr = makeIntakeHarness(t, { mode: 'active' });
+  const origAll = hTimelineErr.ctx.gh.all;
+  hTimelineErr.ctx.gh.all = async endpoint => {
+    if (endpoint.includes('/timeline')) throw new Error('HTTP 502 reading timeline');
+    return origAll(endpoint);
+  };
+  const rowTimelineErr = {
+    number: 818,
+    title: 'Choose Pro pricing',
+    body: 'Pricing decision: should Pro tier charge $19/seat or $29/seat?',
+    labels: [],
+    assignees: [],
+    comments: 1,
+    user: { login: 'maintainer' },
+    created_at: '2026-11-18T01:00:00Z',
+  };
+  hTimelineErr.commentsByIssue.set(818, [{
+    id: 1,
+    body: `Autopilot parked:\n- Question: Should Pro tier charge $19/seat or $29/seat?\n${PREFLIGHT_MARKER_PREFIX}818:abc -->`,
+    user: { login: 'autopilot-bot' },
+    created_at: '2026-11-18T11:00:00Z',
+  }]);
+  await activeIntake(hTimelineErr.ctx, [rowTimelineErr]);
+  assert.equal(hTimelineErr.writes.length, 0, 'timeline read error propagates and warns instead of re-parking');
+  assert.ok(hTimelineErr.warnings.some(w => w.includes('#818') && w.includes('timeline')));
 });

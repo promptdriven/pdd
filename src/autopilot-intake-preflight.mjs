@@ -208,21 +208,28 @@ function createPathChecker(repoFiles) {
   }
   const fileSet = new Set();
   const topDirs = new Set();
+  const knownDirs = new Set();
   for (const entry of repoFiles) {
     if (typeof entry !== 'string') continue;
     const clean = entry.replace(/^\.\//, '').replace(/^\/+/, '');
     if (!clean || clean.includes('..')) continue;
     const slash = clean.indexOf('/');
     if (slash > 0) topDirs.add(clean.slice(0, slash));
-    if (!clean.endsWith('/.')) fileSet.add(clean);
+    if (clean.endsWith('/.')) {
+      const dir = clean.slice(0, -2).replace(/\/+$/, '');
+      if (dir) knownDirs.add(dir);
+    } else {
+      fileSet.add(clean);
+    }
   }
   const pathExists = rel => {
-    const clean = asText(rel).replace(/^\.\//, '').replace(/^\/+/, '');
+    const clean = asText(rel).replace(/^\.\//, '').replace(/^\/+/, '').replace(/\/+$/, '');
     if (!clean || clean.includes('..')) return false;
-    if (fileSet.has(clean)) return true;
+    if (fileSet.has(clean) || knownDirs.has(clean) || topDirs.has(clean)) return true;
     const prefix = `${clean}/`;
     for (const item of fileSet) if (item.startsWith(prefix)) return true;
-    return topDirs.has(clean);
+    for (const dir of knownDirs) if (dir.startsWith(prefix)) return true;
+    return false;
   };
   const dirExists = topDir => {
     const clean = asText(topDir).replace(/^\.\//, '').replace(/^\/+|\/+$/g, '');
@@ -245,12 +252,16 @@ const TITLE_NON_REPO_SEG0_RE = /^(?:feat|fix|bug|chore|docs|test|tests|ci|cli|ui
 const TITLE_NON_REPO_SEG1_RE = /^(?:cli|ui|ux|cd|ci|qa|pr|os|io)$/i;
 const META_FILTER_CLAUSE_RE = /\b(?:filter|reject|park|skip|detect|classify|flag|route|ignore)\b[^.\n]{0,75}\b(?:issues?|tickets?|prs?|runs?)\b|\b(?:when\s+they|when\s+an\s+issue|issues?\s+(?:that|which|meant\s+for|belonging\s+to))\b|\b(?:another|other)\s+repo(?:sitory|sitories)?\s*\([^)]*,[^)]*\)/i;
 const DEP_BUMP_CLAUSE_RE = /(?:\b(?:bump|pin|upgrade|package\.json|lockfile|npm\s+install)\b|@promptdriven\/[a-z0-9_.-]+|\b(?:have|already)\s+merged\s+to\b)/i;
+const MULTI_REPO_COORD_RE = /\b(?:coordinat(?:e|ed|ing)\s+(?:changes?|edits?|prs?|updates?|work|releases?|deploys?)|changes?\s+in\s+both\b|edits?\s+in\s+both\b|both\s+repos(?:itories)?\b|across\s+(?:both\s+)?repos(?:itories)?\b|paired\s+(?:pr|pull\s+request|deploy(?:ment)?|change)|ships?\s+together\s+in\s+both|in\s+tandem\s+with)\b/i;
+const ACROSS_PAIR_RE = /\bacross\s+`?([A-Za-z0-9_./-]+)`?\s+and\s+`?([A-Za-z0-9_./-]+)`?/gi;
+const ALONGSIDE_PAIR_RE = /\b(?:update|edit|change|modify|fix|deploy|ship)\s+`?([A-Za-z0-9_./-]+)`?(?:\s+[^.\n]{0,35})?\s+alongside\s+`?([A-Za-z0-9_./-]+)`?/gi;
 const STRONG_COORD_RE = /\b(?:coordinat(?:e|ed|ing)\s+(?:changes?|edits?|prs?|updates?|work|releases?|deploys?)|changes?\s+in\s+both\b|edits?\s+in\s+both\b|both\s+repos(?:itories)?\b|across\s+(?:both\s+)?(?:repos(?:itories)?|`?[A-Za-z0-9_./-]+`?\s+and\s+`?[A-Za-z0-9_./-]+`?)|paired\s+(?:pr|pull\s+request|deploy(?:ment)?|change)|ships?\s+together\s+in\s+both|in\s+tandem\s+with|(?:update|edit|change|modify|fix|deploy|ship)\s+[^.\n]{1,65}\balongside\b)/i;
 const CLAUSE_EDIT_VERB_RE = /\b(?:update|edit|modify|change|fix|add|create|implement|sync|ship|deploy|coordinate|touch|patch|refactor|remove|delete|expose)\b/i;
-const PASSIVE_PATH_RE = /\b(?:already\s+exist(?:s)?\s+in|building\s+blocks?|error\s+(?:from|calling)|returned\s+by|returns?\s+http|calls?\s+`?[A-Za-z0-9_./-]+`?|mocks?|stubs?|documents?|for\s+reference|as\s+reference|for\s+context|as\s+context)\b/i;
-const URL_REFERENCE_BEFORE_RE = /\b(?:see|ref(?:erence)?|cf\.?|compare|example|for\s+example|from|per|similar\s+to|inspired\s+by|documented\s+in|ported\s+from|upstream|like)\b/i;
-const URL_REFERENCE_AFTER_RE = /^\s*\)?\s*(?:for\s+reference|as\s+reference|for\s+context|as\s+context)\b/i;
-const PASSIVE_HEADING_RE = /\b(?:problem|background|context|motivation|overview|summary|notes?|references?|history|observed|already\s+exist)\b/i;
+const PASSIVE_PATH_RE = /\b(?:already\s+exist(?:s)?\s+in|building\s+blocks?|error\s+(?:from|calling)|returned\s+by|returns?\s+(?:http\s+)?(?:[45]\d\d|errors?)|handl(?:e|ing)\s+[^.\n]{0,40}\b(?:[45]\d\d|errors?|timeouts?)|calls?\s+`?[A-Za-z0-9_./-]+`?|mocks?|stubs?|documents?|for\s+reference|as\s+reference|for\s+context|as\s+context)\b/i;
+const URL_REFERENCE_BEFORE_RE = /\b(?:see|ref(?:erence)?|cf\.?|compare|example|for\s+example|from|per|similar\s+to|inspired\s+by|documented\s+in|ported\s+from|upstream|like|match(?:es|ing)?|align(?:ed|ing)?\s+with|mirror(?:s|ed|ing)?|related)\b/i;
+const URL_REFERENCE_AFTER_RE = /^\s*\)?\s*(?:for\s+reference|as\s+reference|for\s+context|as\s+context|for\s+comparison|as\s+an?\s+example)\b/i;
+const PASSIVE_HEADING_RE = /\b(?:problem|background|context|motivation|overview|summary|notes?|references?|related(?:\s+work)?|history|observed|already\s+exist|contrast|comparison|case\s+study|audit|empirical|examples?|prior\s+art|inspiration|resources?|links?|further\s+reading|see\s+also|mocks?|mocking|stubs?|stubbing|handl(?:e|ing)\s+[^.\n]{0,35}\b(?:errors?|failures?|timeouts?|[45]\d\d)|errors?\s+from)\b/i;
+const IMPL_HEADING_RE = /\b(?:server|backend|api|worker|client|service|gateway|frontend|changes?|edits?|updates?|fix(?:es)?|implement(?:ation)?|work|tasks?|deliverables?|deploy(?:ment)?|migration|pipeline|part\s+\d+)\b/i;
 const EXTERNAL_SERVICE_EDIT_RE = /\b(?:requires?\s+(?:a\s+)?(?:paired\s+)?(?:pr|change|edit|update|deploy(?:ment)?)\s+(?:in|to)\s+(?:an?\s+)?(?:external\s+service|another\s+repo(?:sitory)?|other\s+repo(?:sitory)?)|(?:paired\s+(?:pr|deploy(?:ment)?)|coordinated\s+(?:changes?|edits?))\s+(?:in|with|to)\s+(?:an?\s+)?(?:external\s+service|another\s+repo(?:sitory)?))\b/i;
 
 function isValidExplicitSlug(raw, pathExists, dirExists) {
@@ -262,7 +273,15 @@ function isValidExplicitSlug(raw, pathExists, dirExists) {
   return true;
 }
 
-function extractRepoHeader(title, body, currentRepo, currentShort, pathExists, dirExists) {
+function isSameOrgForeignSlug(raw, currentOwner, currentRepo) {
+  if (!currentOwner || !raw.includes('/')) return false;
+  const lower = raw.toLowerCase();
+  if (lower === currentRepo) return false;
+  const parts = lower.split('/');
+  return parts.length === 2 && parts[0] === currentOwner && /^[a-z0-9_.-]+$/.test(parts[1]);
+}
+
+function extractRepoHeader(title, body, currentOwner, currentRepo, currentShort, pathExists, dirExists) {
   const titlePrefix = title.match(/^\s*(?:\[([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)\]\s*|([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)\s*:\s+)/);
   if (titlePrefix) {
     const raw = (titlePrefix[1] || titlePrefix[2] || '').trim();
@@ -270,7 +289,7 @@ function extractRepoHeader(title, body, currentRepo, currentShort, pathExists, d
     if (sib && isSiblingActive(sib, currentShort, pathExists)) {
       return { targetRepo: sib.canonical, declared: raw };
     }
-    if (raw.includes('/') && isValidExplicitSlug(raw, pathExists, dirExists) && !sameRepository(raw, currentRepo, currentShort)) {
+    if (raw.includes('/') && isValidExplicitSlug(raw, pathExists, dirExists) && isSameOrgForeignSlug(raw, currentOwner, currentRepo)) {
       return { targetRepo: canonicalTargetRepo(raw), declared: raw };
     }
   }
@@ -284,7 +303,9 @@ function extractRepoHeader(title, body, currentRepo, currentShort, pathExists, d
     const sib = matchSiblingAlias(declared);
     if (fieldKind === 'service') {
       if (sib && isSiblingActive(sib, currentShort, pathExists)) return { targetRepo: sib.canonical, declared };
-      if (declared.includes('/') && isValidExplicitSlug(declared, pathExists, dirExists)) return { targetRepo: canonicalTargetRepo(declared), declared };
+      if (declared.includes('/') && isValidExplicitSlug(declared, pathExists, dirExists) && isSameOrgForeignSlug(declared, currentOwner, currentRepo)) {
+        return { targetRepo: canonicalTargetRepo(declared), declared };
+      }
       continue;
     }
     if (declared.includes('/') && !isValidExplicitSlug(declared, pathExists, dirExists) && !sib) continue;
@@ -296,7 +317,13 @@ function extractRepoHeader(title, body, currentRepo, currentShort, pathExists, d
 function extractForeignUrls(fullText, currentRepo, pathExists) {
   const urls = [];
   const re = /https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:blob|tree)\/[^/\s]+\/([^\s)`"'>#?]+)/gi;
+  let inReferenceSection = false;
   for (const line of asText(fullText).split('\n')) {
+    const headingMatch = line.match(/^\s*#{1,6}\s+(.+)$/);
+    if (headingMatch) {
+      inReferenceSection = PASSIVE_HEADING_RE.test(headingMatch[1]);
+    }
+    const proseLine = line.replace(/https?:\/\/[^\s)`"'>]+/gi, ' ');
     for (const m of line.matchAll(re)) {
       const slug = m[1], lower = slug.toLowerCase();
       const sub = normalizeCandidatePath(m[2]);
@@ -304,9 +331,9 @@ function extractForeignUrls(fullText, currentRepo, pathExists) {
       if (sub && pathExists(sub)) continue;
       const idx = m.index ?? 0;
       const before = line.slice(0, idx);
-      const after = line.slice(idx + m[0].length, idx + m[0].length + 36);
-      const isReference = URL_REFERENCE_BEFORE_RE.test(before) || URL_REFERENCE_AFTER_RE.test(after);
-      urls.push({ targetRepo: lower, path: sub, isReference, line });
+      const after = line.slice(idx + m[0].length, idx + m[0].length + 40);
+      const isReference = inReferenceSection || URL_REFERENCE_BEFORE_RE.test(before) || URL_REFERENCE_AFTER_RE.test(after);
+      urls.push({ targetRepo: lower, path: sub, isReference, line, proseLine });
     }
   }
   return urls;
@@ -369,7 +396,7 @@ function analyzeRepositoryTargets({ repository, title, body, trustedText = '', r
     siblingHits,
     foreignMissing,
     missingSpecific,
-    header: extractRepoHeader(title, `${body}\n${trustedText}`, currentRepo, currentShort, pathExists, dirExists),
+    header: extractRepoHeader(title, `${body}\n${trustedText}`, currentOwner, currentRepo, currentShort, pathExists, dirExists),
     foreignUrls: extractForeignUrls(fullText, currentRepo, pathExists),
     namesLocalCli: hasLocalCliOrModuleHint(fullText, hasInventory, pathExists),
   };
@@ -455,25 +482,44 @@ export function detectForeignOnlyTarget({ repository = '', title = '', body = ''
   return null;
 }
 
+function matchForeignTargetToken(token, currentOwner, currentRepo, currentShort, pathExists) {
+  const clean = asText(token).trim().replace(/^`+|`+$/g, '').replace(/[.,;:!?)]+$/, '');
+  if (!clean) return null;
+  const sib = matchSiblingAlias(clean);
+  if (sib && isSiblingActive(sib, currentShort, pathExists)) return { targetRepo: sib.canonical, isSibling: true };
+  const sibPath = findSiblingForPath(clean, currentShort, pathExists);
+  if (sibPath) return { targetRepo: sibPath.canonical, isSibling: true };
+  if (isSameOrgForeignSlug(clean, currentOwner, currentRepo)) {
+    return { targetRepo: canonicalTargetRepo(clean), isSibling: false };
+  }
+  return null;
+}
+
 function findForeignHeadingTarget(clauses, currentOwner, currentRepo, currentShort, pathExists) {
   const ownerSlugRe = currentOwner
     ? new RegExp(`\\b(${escapeRegex(currentOwner)}\\/[A-Za-z0-9_.-]+)(?!#\\d)`, 'gi')
     : null;
   for (const clause of clauses) {
     const headingMatch = clause.match(/^#{1,6}\s+(.+)$/);
-    if (!headingMatch) continue;
-    const heading = headingMatch[1]
+    const numberedDeliverableMatch = !headingMatch
+      ? clause.match(/^\d+\.\s+\*{2}([^*\n]+?)(?::\*{2}|\*{2}\s*:)\s*$/i)
+      : null;
+    if (!headingMatch && !numberedDeliverableMatch) continue;
+    const rawHeading = (headingMatch ? headingMatch[1] : numberedDeliverableMatch[1])
       .replace(/\b[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?#\d+\b/g, ' ')
       .replace(/(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|sh|md|json|ya?ml|toml|sql)(?::\d+(?:-\d+)?)?/gi, ' ');
-    if (PASSIVE_HEADING_RE.test(heading) || DEP_BUMP_CLAUSE_RE.test(heading)) continue;
+    if (PASSIVE_HEADING_RE.test(rawHeading) || DEP_BUMP_CLAUSE_RE.test(rawHeading)) continue;
+    const isBareRepoSection = Boolean(numberedDeliverableMatch)
+      || /^(?:\d+\.\s*)?`?[A-Za-z0-9_./-]+`?(?:\s*\([^)]*\))?\s*:?\s*$/.test(rawHeading.trim());
+    if (!isBareRepoSection && !IMPL_HEADING_RE.test(rawHeading)) continue;
     if (ownerSlugRe) {
-      for (const m of heading.matchAll(ownerSlugRe)) {
+      for (const m of rawHeading.matchAll(ownerSlugRe)) {
         const slug = m[1].toLowerCase();
         if (slug !== currentRepo) return canonicalTargetRepo(slug);
       }
     }
     for (const sib of SIBLINGS) {
-      if (isSiblingActive(sib, currentShort, pathExists) && sib.mentionRe.test(heading)) {
+      if (isSiblingActive(sib, currentShort, pathExists) && sib.mentionRe.test(rawHeading)) {
         return sib.canonical;
       }
     }
@@ -556,7 +602,7 @@ function detectCrossRepo({ repository, title, body, trustedText, repoFiles }) {
         [...new Set([...foreignMissing, ...(first.path ? [first.path] : [])])],
       );
     }
-    const editedUrl = editUrls.find(u => !META_FILTER_CLAUSE_RE.test(u.line) && (STRONG_COORD_RE.test(u.line) || CLAUSE_EDIT_VERB_RE.test(u.line)));
+    const editedUrl = editUrls.find(u => !META_FILTER_CLAUSE_RE.test(u.proseLine) && !PASSIVE_PATH_RE.test(u.proseLine) && (STRONG_COORD_RE.test(u.proseLine) || CLAUSE_EDIT_VERB_RE.test(u.proseLine)));
     if (editedUrl) {
       return reject(
         editedUrl.targetRepo,
@@ -572,8 +618,8 @@ function detectCrossRepo({ repository, title, body, trustedText, repoFiles }) {
     ? new RegExp(`\\b(${escapeRegex(currentOwner)}\\/[A-Za-z0-9_.-]+)(?!#\\d)`, 'gi')
     : null;
   for (const clause of clauses) {
-    if (META_FILTER_CLAUSE_RE.test(clause) || DEP_BUMP_CLAUSE_RE.test(clause)) continue;
-    if (STRONG_COORD_RE.test(clause)) {
+    if (META_FILTER_CLAUSE_RE.test(clause) || DEP_BUMP_CLAUSE_RE.test(clause) || PASSIVE_PATH_RE.test(clause)) continue;
+    if (MULTI_REPO_COORD_RE.test(clause)) {
       for (const sib of SIBLINGS) {
         if (isSiblingActive(sib, currentShort, pathExists) && sib.mentionRe.test(clause)) {
           return reject(
@@ -593,6 +639,19 @@ function detectCrossRepo({ repository, title, body, trustedText, repoFiles }) {
               `Requires coordinated changes across ${repository || 'this repository'} and ${canonicalTargetRepo(slug)}.`,
             );
           }
+        }
+      }
+    }
+    for (const pairRe of [ACROSS_PAIR_RE, ALONGSIDE_PAIR_RE]) {
+      for (const m of clause.matchAll(pairRe)) {
+        const hit = matchForeignTargetToken(m[1], currentOwner, currentRepo, currentShort, pathExists)
+          ?? matchForeignTargetToken(m[2], currentOwner, currentRepo, currentShort, pathExists);
+        if (hit) {
+          return reject(
+            hit.targetRepo,
+            [...(hit.isSibling ? ['sibling_service'] : []), 'coordinated_multi_repo'],
+            `Requires coordinated edits in ${hit.targetRepo} alongside ${repository || 'this repository'}.`,
+          );
         }
       }
     }
@@ -628,7 +687,7 @@ const POLICY_DOMAIN_RE = /\b(?:pric(?:e|ing)|billing\s+(?:tier|model|plan)|subsc
 const CHOICE_PROMPT_RE = /\bshould\s+(?:we|pdd|autopilot|[a-z0-9_`' -]{2,40})\b[^?\n]{2,140}\bor\b[^?\n]{1,100}\?|\boptions?\s*:\s*(?:\(?A\)?|1\))[\s\S]{1,200}(?:\(?B\)?|2\))/i;
 const SETTLED_DECISION_RE = /(?:^\s*(?:[-*]\s*)?\*{0,2}(?:decision|resolved|approved|confirmed|locked[- ]?in|final\s+decision|answer)\*{0,2}\s*:|\b(?:go\s+with|let'?s\s+(?:go\s+with|use|do|ship|default\s+to|pick|choose|keep|make\s+it|set\s+it\s+to|charge)|use\s+option\s+[a-c]|pick\s+option\s+[a-c]|choose\s+option\s+[a-c]|option\s+[a-c]\s+(?:is\s+)?(?:approved|fine|good|works)|we\s+(?:decided|chose|picked|agreed)\b|will\s+default\s+to\b|proceed\s+with\b|yes,?\s+(?:use|do|go\s+with|default|charge|set)\b|sounds\s+good\b|lgtm\b)\b|^\s*default\s+to\b)/im;
 const DIRECT_OPTION_REPLY_RE = /^\s*(?:option\s+)?[a-c]\s*[).]?\s*$/i;
-const DEFERRAL_RE = /\b(?:still\s+thinking|not\s+sure|let\s+me\s+check|waiting\s+on|need\s+to\s+think|tbd|hold\s+on|can\s+someone\s+else)\b/i;
+const DEFERRAL_RE = /\b(?:still\s+thinking|not\s+sure|let\s+me\s+check|waiting\s+on|need\s+to\s+think|tbd|hold\s+on|can\s+someone\s+else|not\s+decided(?:\s+yet)?|undecided|haven'?t\s+decided|have\s+not\s+decided)\b/i;
 const PRICING_SIGNAL_RE = /\b(?:pric(?:e|ing)|billing|tier|seat|paid\s+tier|free\s+tier|pro\s+tier)\b|\$\d+/i;
 const UX_SIGNAL_RE = /\b(?:ux|ui|default\s+(?:output\s+)?view|layout|onboarding|user[- ]facing)\b/i;
 
@@ -678,8 +737,8 @@ function findDecisionTrigger(sanitizedText) {
 function isNaturalResolutionComment(cText) {
   if (!cText || DEFERRAL_RE.test(cText) || cText.trim().endsWith('?')) return false;
   if (SETTLED_DECISION_RE.test(cText) || DIRECT_OPTION_REPLY_RE.test(cText)) return true;
-  // Short direct maintainer choice answer (e.g. "$19/seat and 1 free account." or "Overview by default.")
-  if (!cText.includes('?') && cText.length <= 220 && /(?:^\s*\$\d+|\$\d+\s*\/\s*(?:seat|month|mo|user|year)|\b(?:overview|full|charge|set\s+to|make\s+it|keep\s+it|ship\s+with|use\s+|allow\s+\d+))/i.test(cText)) {
+  // Short explicit maintainer choice answer (e.g. "$19/seat and 1 free account." or "Overview by default.")
+  if (!cText.includes('?') && cText.length <= 220 && /(?:^\s*\$\d+|\$\d+\s*\/\s*(?:seat|month|mo|user|year)|\b(?:charge\s+\$\d+|set\s+(?:it\s+)?to\b|make\s+it\b|keep\s+it\b|ship\s+with\b|allow\s+\d+\s+free|by\s+default\b|as\s+(?:the\s+)?default\b))/i.test(cText)) {
     return true;
   }
   return false;
@@ -728,13 +787,17 @@ function detectHumanDecision({ title, body, trustedComments, decisionNote }) {
 
 const NEGATED_LOCAL_VERIFY_RE = /\b(?:no|not|never|cannot|can't|without|don't|do\s+not)\s+(?:accept(?:ed)?\s+|use\s+|rely\s+on\s+|allow\s+)?(?:a\s+|any\s+)?(?:local\s+)?(?:unit\s+tests?|mocks?|fakes?|stubs?|dry[- ]?run|fixtures?)\b|\b(?:mocks?|fakes?|stubs?|local\s+tests?)\s+(?:are|is)\s+(?:not\s+accepted|disallowed|rejected|unacceptable|insufficient)\b/i;
 const LOCAL_ALTERNATIVE_WAIVER_RE = /\b(?:or\s+(?:verify|test|prove|check)\s+(?:with|using|via)\s+(?:local\s+)?(?:unit|integration|fake|mock(?:ed)?|stub(?:bed)?|dry[- ]?run|fixture)|instead\s+of\s+(?:live|production|manual)|(?:local\s+(?:unit|integration)\s+tests?|fake\s+(?:http|api|service|server|port)|mock(?:ed)?\s+(?:http|api|service|server|port)|dry[- ]?run\s+fixtures?)\s+(?:are|is)\s+(?:enough|sufficient|acceptable|fine))\b/i;
-const COMMENT_LOCAL_AUTH_RE = /\b(?:verify|test|check|prove|use)\s+(?:with|using|via)?\s*(?:local\s+)?(?:unit|integration|automated|fake|mock(?:ed)?|stub(?:bed)?|dry[- ]?run|fixture)\b|\b(?:instead|sufficient|acceptable|fine\s+to\s+(?:mock|stub|use\s+local))\b/i;
+const LOCAL_VERIFY_NOUN_RE = /\b(?:local\s+(?:tests?|unit|integration|verif(?:y|ication))|unit\s+tests?|integration\s+tests?|automated\s+tests?|mocks?|mocked|fakes?|stubs?|stubbed|dry[- ]?run|fixtures?)\b/i;
+const COMMENT_LOCAL_AUTH_RE = /\b(?:verify|test|check|prove|use|run)\s+(?:with\s+|using\s+|via\s+)?(?:local\s+)?(?:unit|integration|automated|fake|mock(?:ed)?|stub(?:bed)?|dry[- ]?run|fixture)\b|\bfine\s+to\s+(?:mock|stub|fake|use\s+local)\b/i;
+const COMMENT_LOCAL_APPROVAL_WORD_RE = /(?<!\b(?:not|no|never)\s+)\b(?:instead|sufficient|acceptable|enough|fine|ok|okay)\b/i;
+const VERIFY_SECTION_HEADING_RE = /\b(?:acceptance\s+criteria|verification|how\s+to\s+(?:test|verify)|done\s+when|test\s+plan|testing|qa)\b/i;
 const VERIFY_FRAME_RE = /\b(?:acceptance\s+criteria|done\s+when|verif(?:y|ied|ication)|prove|confirm|validate|test(?:ing|ed)?|check|trigger|run|execute|sign[- ]?off|must\s+(?:pass|run|trigger|verify|confirm|publish|be\s+(?:tested|verified|reviewed|signed))|require[ds]?\s+(?:a\s+)?(?:human|manual|physical|live|production|real|to\s+(?:verify|test|run|trigger|confirm|prove|sign[- ]?off|publish)))\b/i;
 const REDACTION_DEFENSE_RE = /\b(?:never\s+(?:log|print|leak|expose|write|store|save|commit)|redact|strip|scrub|remove\s+plaintext|avoid\s+leaking|mask|sanitize|without\s+(?:leaving|writing|storing)|zero\s+(?:plaintext|residual))\b/i;
+const LOCAL_TEST_OR_VALIDATION_GUARD_RE = /\b(?:unit\s+tests?|contract\s+tests?|regression\s+tests?|rejects?\s+(?:expired|invalid|missing|malformed|stale|bad)|when\s+[^.\n]{0,45}\b(?:missing|absent|expired|unset|invalid)|before\s+(?:a\s+)?live\s+(?:npm\s+|registry\s+)?publish|dry[- ]?run\s+before\s+live\s+publish)\b/i;
 const PROD_CREDS_RE = /\b(?:production\s+credentials?|prod(?:uction)?\s+(?:secrets?|api\s+keys?|tokens?|account)|maintainer\s+2fa|2fa\s+credentials?|live\s+(?:api\s+keys?|stripe\s+keys?|registry\s+publish|npm\s+publish))\b/i;
 const LIVE_EXTERNAL_RE = /\b(?:live\s+(?:stripe|payment|checkout|webhook|production|dashboard\s+receipt|third[- ]party|external\s+service)|real\s+\$\d+[^.\n]*(?:charge|checkout|payment)|in\s+production\s+with\b|against\s+(?:live|production)\s+(?:stripe|api|service|environment|server))\b/i;
 const MANUAL_QA_RE = /\b(?:manual\s+(?:human\s+)?(?:qa|visual)\s+(?:sign[- ]?off|review|check|verification)|manual\s+human\s+qa|physical\s+(?:hardware|device|iphone|android)|real\s+(?:iphone|android|mobile)\s+device|requires?\s+a\s+human\s+to\s+(?:visually|manually)\s+(?:verify|inspect|test))\b/i;
-const NAMED_RECIPE_RE = /\b(?:external\s+e2e|verification|e2e)\s+recipe\s*[:`"]+\s*([A-Za-z0-9_.:/-]+)/gi;
+const NAMED_RECIPE_RE = /\b(?:external\s+e2e|verification|e2e)\s+recipe\s*:\s*[`"']?([A-Za-z0-9_.:/-]+)[`"']?|\b(?:external\s+e2e|verification|e2e)\s+recipe\s+[`"']([A-Za-z0-9_.:/-]+)[`"']/gi;
 
 function normalizeCapabilities(raw) {
   if (!isObject(raw)) return DEFAULT_CAPABILITIES;
@@ -755,9 +818,12 @@ function resolveLocalBoundaryOverride(bodyText, trustedComments, caps) {
   for (const comment of trustedComments) {
     const cText = comment.sanitized;
     if (!cText) continue;
+    const authorizesLocal = COMMENT_LOCAL_AUTH_RE.test(cText)
+      || LOCAL_ALTERNATIVE_WAIVER_RE.test(cText)
+      || (LOCAL_VERIFY_NOUN_RE.test(cText) && COMMENT_LOCAL_APPROVAL_WORD_RE.test(cText));
     if (NEGATED_LOCAL_VERIFY_RE.test(cText)) {
       commentState = 'local_rejected';
-    } else if (COMMENT_LOCAL_AUTH_RE.test(cText) || LOCAL_ALTERNATIVE_WAIVER_RE.test(cText)) {
+    } else if (authorizesLocal) {
       commentState = 'local_authorized';
     }
   }
@@ -782,18 +848,26 @@ function detectUnverifiableBoundary({ title, body, trustedComments, workerCapabi
   let hasProdCreds = false;
   let hasLiveExternal = false;
   let hasManualQa = false;
+  let inVerifySection = false;
   const missingRecipes = new Set();
 
   for (const clause of clauses) {
+    const headingMatch = clause.match(/^#{1,6}\s+(.+)$/);
+    if (headingMatch) {
+      inVerifySection = VERIFY_SECTION_HEADING_RE.test(headingMatch[1]);
+      continue;
+    }
     if (META_FILTER_CLAUSE_RE.test(clause) || REDACTION_DEFENSE_RE.test(clause)) continue;
-    const framed = VERIFY_FRAME_RE.test(clause);
-    if (!caps.productionCredentials && framed && PROD_CREDS_RE.test(clause)) hasProdCreds = true;
+    const framed = inVerifySection || VERIFY_FRAME_RE.test(clause);
+    if (!caps.productionCredentials && framed && !LOCAL_TEST_OR_VALIDATION_GUARD_RE.test(clause) && PROD_CREDS_RE.test(clause)) {
+      hasProdCreds = true;
+    }
     if (!caps.liveExternalServices && framed && LIVE_EXTERNAL_RE.test(clause)) hasLiveExternal = true;
     if (!caps.humanManualQa && framed && MANUAL_QA_RE.test(clause)) {
       hasManualQa = true;
     }
     for (const m of clause.matchAll(NAMED_RECIPE_RE)) {
-      const recipe = m[1].trim();
+      const recipe = (m[1] || m[2] || '').trim().replace(/[.,;:!?]+$/, '');
       if (recipe && !caps.availableRecipes.includes(recipe.toLowerCase())) {
         missingRecipes.add(recipe);
       }

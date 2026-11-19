@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: bbad4b50299e74f4fd05b41b29c692958f7b5237fd37736792296dc940e96fc7).
+// Generated from prompts/cli/autopilot-intake.prompt.md (sha256: 5bd20a80f3daf1666f3c514213afc1469bf2be11e965cffe493dfb27137750d9).
 import * as nativeFs from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -302,7 +302,7 @@ async function resolveTrustedDecisionRemoval(ctx, row, n, latestQuestion, trustO
     return { trustedUnlabeledAt: 0, decisionNote: null };
   }
   const since = Date.parse(latestQuestion.created_at) || 0;
-  const timeline = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/timeline?per_page=100`).catch(() => []);
+  const timeline = await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/timeline?per_page=100`);
   const rem = timeline.filter(e => e.event === 'unlabeled' && e.label?.name === DECISION_LABEL && (Date.parse(e.created_at) || 0) >= since).at(-1);
   if (!rem?.actor?.login || !await trustOf(rem.actor)) return { trustedUnlabeledAt: 0, decisionNote: null };
   const trustedUnlabeledAt = Math.max(Date.parse(rem.created_at) || 0, since + 1);
@@ -1398,7 +1398,7 @@ export async function activeIntake(ctx, rows) {
     const all = (forceFetch || Number(row.comments) > 0) ? await ctx.gh.all(`repos/${ctx.repo}/issues/${n}/comments?per_page=100`) : [];
     const comments = [], trustedSet = new Set();
     let specRefinement = null, latestQuestion = null;
-    const impMark = improveMarkerPrefix(n), qMark = intakeQuestionPrefix(n), pfMark = `${PREFLIGHT_MARKER_PREFIX}${n}:`;
+    const impMark = improveMarkerPrefix(n), qMark = intakeQuestionPrefix(n), pfMark = `${PREFLIGHT_MARKER_PREFIX}${n}:`, coreQMark = `${CORE_QUESTION_MARKER_PREFIX}${n}:`;
     for (const c of [...all].reverse()) {
       const body = text(c?.body);
       if (isPersonComment(c)) {
@@ -1411,7 +1411,7 @@ export async function activeIntake(ctx, rows) {
       if (!specRefinement && body.includes(impMark) && await trustedMarkerAuthor(c.user)) {
         specRefinement = body.replace(/\s*<!--\s*pdd:autopilot-intake:improve:[\s\S]*?-->\s*$/, '').trim() || null;
       }
-      if (!latestQuestion && (body.includes(qMark) || body.includes(pfMark)) && await trustedMarkerAuthor(c.user)) {
+      if (!latestQuestion && (body.includes(qMark) || body.includes(pfMark) || body.includes(coreQMark)) && await trustedMarkerAuthor(c.user)) {
         latestQuestion = c;
       }
     }
