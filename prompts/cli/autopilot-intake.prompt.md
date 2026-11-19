@@ -25,7 +25,7 @@ read-only pass inspect the repository checkout, still with no GitHub token.
 - **Pre-flight intake enforcement (`#3534`, building on `#3500`):** Before claiming an issue, spawning an AI intake card, or starting a build, run `classifyPreflightIssue` from [Pre-flight intake classifier](autopilot-intake-preflight.prompt.md) (passing the issue row, trusted comments, local `repoFiles` / `cwd` inventory, optional `decisionNote`, and optional `workerCapabilities`). Re-export `PREFLIGHT_REASON_CODES`, `sanitizeIssueText`, `classifyPreflightIssue`, and `summarizeIntakeFilterPrecision` from `src/autopilot-intake.mjs` so callers have one intake entry point without duplicating pure classifier rules.
 - **Consequential operations and failure edges (`applyPreflightDecision`):**
   - In `shadow` mode, record pre-flight skips only in local `ROOT/intake/` state (`cards/N.json`, `diff-YYYY-MM-DD.jsonl`, `preflight-skips.jsonl`, deduplicated per `(issue, version, decision, reasonCode)`) with zero GitHub writes.
-  - In `active` mode and core pre-claim, `cross_repo` routes through `routeWrongRepositoryIssue` (`needs-other-repo` + deduplicated `<!-- pdd:autopilot-intake:other-repo:N -->` comment); `human_decision` and `unverifiable_boundary` ensure `pdd:needs-decision`, post at most one deduplicated comment ending with `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->` naming the crisp skip reason and question, apply `pdd:needs-decision`, and emit one `decision` alert via `ports.alert`.
+  - In `active` mode and core pre-claim, `cross_repo` routes through `routeWrongRepositoryIssue` (posting at most one deduplicated `<!-- pdd:autopilot-intake:other-repo:N -->` comment before applying `needs-other-repo`); `human_decision` and `unverifiable_boundary` post at most one deduplicated comment ending with `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->` naming the crisp skip reason and question before applying `pdd:needs-decision`, and emit one `decision` alert via `ports.alert`. Both `activeIntake` and `preflightCoreIssue` recognize `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->`, `<!-- pdd:autopilot-core:question:N:intake-... -->`, and `<!-- pdd:autopilot-core:question:N:... -->` when checking trusted `pdd:needs-decision` removals so a resolved issue never re-parks.
   - If a GitHub write fails during `applyPreflightDecision`, warn via `ctx.warn`, do not claim the issue, and do not mark its body digest as routed so the next tick retries unfinished annotations without duplicating an already-posted comment.
 
 ## Rules
@@ -71,7 +71,8 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->`), `findOtherRepoSkipLabel(input)`,
   `detectWrongRepositoryIssue(row, {repo, cwd, fs, repoFiles})`,
   `routeWrongRepositoryIssue(ctx, row, match)`, `classifyPreflightIssue(input)`,
-  `applyPreflightDecision(ctx, row, decision)`, and
+  `applyPreflightDecision(ctx, row, decision)`,
+  `preflightCoreIssue(ctx, row, {cwd})`, and
   `summarizeIntakeFilterPrecision(input)`. `detectWrongRepositoryIssue` applies the
   same HTML-comment, fenced-code-block, and blockquote sanitization as
   `classifyPreflightIssue` and returns `null` unless the issue clearly targets
@@ -265,9 +266,16 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   to `ROOT/intake/preflight-skips.jsonl` (deduplicated per `(issue, version,
   decision, reasonCode)`), appends `{at, kind: "preflight-skip", issue, decision,
   reasonCode, label, targetRepo, reason, version}` to `diff-YYYY-MM-DD.jsonl`,
-  and in `active` mode or core pre-claim (never `shadow`) applies the GitHub label,
-  deduplicated comment, and optional `decision` alert; returns
+  and in `active` mode or core pre-claim (never `shadow`) always reads existing
+  comments first, posts the deduplicated comment before applying the GitHub label,
+  records the routed digest only after both succeed, and emits one `decision` alert
+  on parked issues; returns
   `{ applied: boolean, commented: boolean, label: string | null, reasonCode: string | null }`.
+- `preflightCoreIssue(ctx, row, {cwd})` runs deterministic pre-flight evaluation for
+  [Autopilot core](autopilot-core.prompt.md) before claiming an issue (checking
+  trusted comments and trusted `pdd:needs-decision` removals against pre-flight and
+  question markers when needed), applies `applyPreflightDecision(..., {mode: "core"})`
+  on skips, and returns `{ decision, applied }` or `null` when allowed.
 - Files under `ROOT/intake/` (ROOT is the core state folder): `cards/N.json` per
   issue (`issue`, `version`, `at`, `agent`, then `native` (with `previous`), `card`
   (with `seconds`) or `error`); `jobs/N.json` for running card jobs; `logs/` for the
