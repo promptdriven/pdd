@@ -1382,3 +1382,341 @@ test('R2-6 (MF-7 & MF-8 & Minor): suite repair cap 3 escalates to repair-exhaust
   }
   assert.equal(symExit, 0, 'symlinked rules/ parent directory must NOT load workspace lint rules');
 });
+
+test('R3-1: skipped or zero-pass suite logs fail closed and filePath-based silent skip lint catches untitled e2e skips', async (t) => {
+  const realOrdersApi = 'export async function handleOrders(req, res) { res.end(JSON.stringify({ ok: true })); }\n';
+  const realOrdersE2e = [
+    "import test from 'node:test';",
+    "import http from 'node:http';",
+    "import { handleOrders } from '../api/orders.mjs';",
+    "test('orders real http', async () => {",
+    '  const srv = http.createServer(handleOrders);',
+    '  await new Promise((r) => srv.listen(0, r));',
+    '  const res = await fetch(`http://127.0.0.1:${srv.address().port}/orders`);',
+    '  if (res.status !== 200) throw new Error("bad");',
+    '  srv.close();',
+    '});',
+  ].join('\n');
+
+  // (a) Skipped / zero-pass suite logs MUST fail closed (never merge)
+  const badLogs = [
+    { issue: 60, label: 'node TAP # pass 0 / # skipped 1', log: 'ok 1 - orders # SKIP\n# tests 1\n# pass 0\n# fail 0\n# skipped 1\n' },
+    { issue: 61, label: 'TAP # SKIP line only', log: 'TAP version 13\nok 1 - orders real http # SKIP missing env\n' },
+    { issue: 62, label: 'Vitest/Playwright 0 passed, 2 skipped', log: 'Tests: 0 passed, 2 skipped, 2 total\n' },
+    { issue: 63, label: 'partial skip (1 passed, 1 skipped)', log: '# tests 2\n# pass 1\n# fail 0\n# skipped 1\n' },
+  ];
+  for (const { issue, label, log } of badLogs) {
+    const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1, testCommand: 'node --test' } });
+    w.issue(issue, { title: `R3-1 fail closed: ${label}` });
+    await w.tick();
+    const cwd = w.job(issue, 'build').cwd;
+    writeIn(cwd, 'api/orders.mjs', realOrdersApi);
+    writeIn(cwd, 'test/orders-e2e.test.mjs', realOrdersE2e);
+    w.build(issue, {
+      write: false,
+      body: `Fixes #${issue}\n\nRuntime: not run (no prompt changed)\nPath: d — api/orders.mjs, test/orders-e2e.test.mjs — unowned — no contract change — Test: done check`,
+      result: { promptChanged: false },
+    });
+    await w.tick();
+    w.say(issue, 'suite', log);
+    w.review(issue, 'PASS');
+    w.suite(issue, 0);
+    await w.tick();
+    assert.equal(w.github.merges.length, 0, `${label}: skipped/zero-pass suite run must NOT merge`);
+    assert.ok(w.job(issue, 'repair'), `${label}: skipped/zero-pass suite run must enter Bucket 1 repair`);
+  }
+
+  // (b) Passing test whose TITLE mentions "0 passed" / "2 skipped" must NOT false-positive
+  const wPassTitle = await coreWorld(t, { settings: { mode: 'auto', runs: 1, testCommand: 'node --test' } });
+  wPassTitle.issue(64, { title: 'R3-1 passing title containing skip words' });
+  await wPassTitle.tick();
+  const cwd64 = wPassTitle.job(64, 'build').cwd;
+  writeIn(cwd64, 'api/orders.mjs', realOrdersApi);
+  writeIn(cwd64, 'test/orders-e2e.test.mjs', realOrdersE2e);
+  wPassTitle.build(64, {
+    write: false,
+    body: 'Fixes #64\n\nRuntime: not run (no prompt changed)\nPath: d — api/orders.mjs, test/orders-e2e.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wPassTitle.tick();
+  wPassTitle.say(64, 'suite', 'ok 1 - rejects 0 passed and 2 skipped runs\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n');
+  wPassTitle.review(64, 'PASS');
+  wPassTitle.suite(64, 0);
+  await wPassTitle.tick();
+  assert.equal(wPassTitle.github.merges.length, 1, 'clean pass with skip words only inside test title must still merge');
+
+  // (c) lintValidationCode checks SKIP_KEYWORD_RE against filePath as well as test(...) call snippet
+  const e2eSkipSingle = lintValidationCode({
+    path: 'test/orders-e2e.test.mjs',
+    kind: 'test',
+    text: "import test from 'node:test';\ntest.skip('runs login', () => {});\n",
+  });
+  assert.ok(e2eSkipSingle.codes.includes('silent-validation-skip'), 'test.skip inside *-e2e* file must be flagged even when title omits e2e');
+
+  const e2eSkipMulti = lintValidationCode({
+    path: 'test/checkout-validation.test.mjs',
+    kind: 'test',
+    text: "import test from 'node:test';\ntest('runs login', {\n  skip: true,\n}, () => {});\n",
+  });
+  assert.ok(e2eSkipMulti.codes.includes('silent-validation-skip'), 'multiline { skip: true } inside *validation* file must be flagged even when title omits validation');
+
+  const unitSkip = lintValidationCode({
+    path: 'test/math.test.mjs',
+    kind: 'test',
+    text: "import test from 'node:test';\ntest.skip('legacy rounding edge case', () => {});\n",
+  });
+  assert.ok(!unitSkip.codes.includes('silent-validation-skip'), 'plain non-e2e unit test skip without validation keywords must not false-positive');
+});
+
+test('R3-2: name/grep-filtered suite commands never credit unexecuted E2E files', async (t) => {
+  const realOrdersApi = 'export async function handleOrders(req, res) { res.end(JSON.stringify({ ok: true })); }\n';
+  const realOrdersE2e = [
+    "import test from 'node:test';",
+    "import http from 'node:http';",
+    "import { handleOrders } from '../api/orders.mjs';",
+    "test('orders real http', async () => {",
+    '  const srv = http.createServer(handleOrders);',
+    '  await new Promise((r) => srv.listen(0, r));',
+    '  const res = await fetch(`http://127.0.0.1:${srv.address().port}/orders`);',
+    '  if (res.status !== 200) throw new Error("bad");',
+    '  srv.close();',
+    '});',
+  ].join('\n');
+
+  const filteredCmds = [
+    { issue: 65, cmd: 'node --test --test-name-pattern=unit' },
+    { issue: 66, cmd: 'node --test --test-skip-pattern e2e' },
+    { issue: 67, cmd: 'vitest run --grep=unit' },
+    { issue: 68, cmd: 'npm test -- --test-name-pattern=unit' },
+  ];
+  for (const { issue, cmd } of filteredCmds) {
+    const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1, testCommand: cmd } });
+    w.issue(issue, { title: `R3-2 filtered suite: ${cmd}` });
+    await w.tick();
+    const cwd = w.job(issue, 'build').cwd;
+    writeIn(cwd, 'api/orders.mjs', realOrdersApi);
+    writeIn(cwd, 'test/orders-e2e.test.mjs', realOrdersE2e);
+    const { pr } = w.build(issue, {
+      write: false,
+      body: `Fixes #${issue}\n\nRuntime: not run (no prompt changed)\nPath: d — api/orders.mjs, test/orders-e2e.test.mjs — unowned — no contract change — Test: done check`,
+      result: { promptChanged: false },
+    });
+    await w.tick();
+    w.say(issue, 'suite', 'ok 1 - unit\n# tests 1\n# pass 1\n# fail 0\n# skipped 0\n');
+    w.review(issue, 'PASS');
+    w.suite(issue, 0);
+    await w.tick();
+    assert.equal(w.github.merges.length, 0, `${cmd}: filtered run must NOT credit unexecuted test/orders-e2e.test.mjs`);
+    assert.ok(
+      pr.comments.some((c) => /<!-- pdd:autopilot-core:human-boundary:/.test(c.body)),
+      `${cmd}: filtered run without real E2E coverage must fail closed at Bucket 3`,
+    );
+  }
+});
+
+test('R3-3 & R3-4: absolute-path trivial binaries do not grant subprocess/live-binding and regex literals after } are masked', () => {
+  // R3-3: absolute-path trivial binaries and non-tool binary with tool keyword in args
+  const absEcho = detectRealE2eKindsInTest(
+    'test/deploy.test.mjs',
+    "import { spawnSync } from 'node:child_process';\nspawnSync('/bin/echo', ['gcloud']);\n",
+  );
+  assert.ok(!absEcho.includes('subprocess-cli'), '/bin/echo must NOT grant subprocess-cli');
+  assert.ok(!absEcho.includes('live-binding'), "/bin/echo ['gcloud'] must NOT grant live-binding");
+
+  const absPrintf = detectRealE2eKindsInTest(
+    'test/deploy.test.mjs',
+    "import { execSync } from 'node:child_process';\nexecSync('/usr/bin/printf gcloud');\n",
+  );
+  assert.ok(!absPrintf.includes('subprocess-cli'), '/usr/bin/printf must NOT grant subprocess-cli');
+  assert.ok(!absPrintf.includes('live-binding'), '/usr/bin/printf gcloud must NOT grant live-binding');
+
+  const unrelatedToolArg = detectRealE2eKindsInTest(
+    'test/deploy.test.mjs',
+    "import { spawnSync } from 'node:child_process';\nspawnSync('/usr/local/bin/mytool', ['--tag=gcloud']);\n",
+  );
+  assert.ok(unrelatedToolArg.includes('subprocess-cli'), 'real non-trivial binary still grants subprocess-cli');
+  assert.ok(!unrelatedToolArg.includes('live-binding'), 'non-external-tool binary with gcloud only in args must NOT grant live-binding');
+
+  const realAbsGcloud = detectRealE2eKindsInTest(
+    'test/deploy.test.mjs',
+    "import { execFileSync } from 'node:child_process';\nexecFileSync('/usr/local/bin/gcloud', ['auth', 'list']);\n",
+  );
+  assert.ok(realAbsGcloud.includes('subprocess-cli'), '/usr/local/bin/gcloud grants subprocess-cli');
+  assert.ok(realAbsGcloud.includes('live-binding'), '/usr/local/bin/gcloud grants live-binding');
+
+  const shellWrappedGcloud = detectRealE2eKindsInTest(
+    'test/deploy.test.mjs',
+    "import { execSync } from 'node:child_process';\nexecSync('/bin/sh -c \"gcloud auth list\"');\n",
+  );
+  assert.ok(shellWrappedGcloud.includes('live-binding'), 'shell wrapper invoking gcloud still grants live-binding');
+
+  // R3-4: regex literal immediately after closing brace `}` is masked as regex, not code
+  const afterBraceSkip = 'if (ok) { run(); }\n/localSkipRow/.test(s);\n';
+  assert.ok(!scanJsPreserveLines(afterBraceSkip).codeNoStrings.includes('localSkipRow'), 'regex after } must be masked by scanJsPreserveLines');
+  assert.deepEqual(lintValidationCode({ path: 'src/helper.mjs', kind: 'code', text: afterBraceSkip }).codes, [], 'regex /localSkipRow/ after } must produce 0 findings');
+
+  const afterBracePlaywright = 'if (ok) { run(); }\n/playwright/.test(s);\n';
+  assert.ok(!detectRealE2eKindsInTest('test/ui.test.mjs', afterBracePlaywright).includes('browser-playwright'), 'regex /playwright/ after } must NOT grant browser-playwright');
+});
+
+test('R3-5: assertion diff context lines and Jest bullet titles do not misclassify as Bucket 2/3, while real gcloud errors still park Bucket 2', async (t) => {
+  // (a) Jest ● title + assert.deepEqual unchanged object context line `reason: 'real-binding-unavailable',` -> Bucket 1 repair
+  const w1 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w1.issue(69, { title: 'R3-5 assertion diff context stays Bucket 1' });
+  await w1.tick();
+  const cwd69 = w1.job(69, 'build').cwd;
+  writeIn(cwd69, 'src/widget.mjs', 'export const f = () => 1;\n');
+  writeIn(cwd69, 'test/widget.test.mjs', "import test from 'node:test';\nimport { f } from '../src/widget.mjs';\ntest('f', () => { if (f() !== 2) throw new Error('mismatch'); });\n");
+  const built69 = w1.build(69, {
+    write: false,
+    body: 'Fixes #69\n\nRuntime: not run (no prompt changed)\nPath: d — src/widget.mjs, test/widget.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w1.tick();
+  w1.say(69, 'suite', [
+    '  ● Bucket 3 › 2FA and captcha handling',
+    '',
+    '  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:',
+    '  + actual - expected',
+    '',
+    '    {',
+    '      pass: false,',
+    "      reason: 'real-binding-unavailable',",
+    '  +   count: 2',
+    '  -   count: 1',
+    '    }',
+    '      at TestContext.<anonymous> (file:///repo/test/widget.test.mjs:10:5)',
+    '',
+  ].join('\n'));
+  w1.review(69, 'PASS');
+  w1.suite(69, 1);
+  await w1.tick();
+  assert.ok(w1.job(69, 'repair'), 'assertion diff context + Jest ● title must stay in Bucket 1 repair');
+  const core1 = JSON.parse(readFileSync(join(w1.root, 'core.json'), 'utf8'));
+  assert.equal((core1.validationParks ?? []).length, 0, 'no Bucket 2/3 park on assertion diff context');
+  assert.ok(!built69.pr.comments.some((c) => /<!-- pdd:autopilot-core:(?:auth-wait|human-boundary):/.test(c.body)), 'no auth-wait or human-boundary comment');
+
+  // (b) Earlier assertion diff followed by a REAL gcloud auth error -> still triggers Bucket 2
+  const w2 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w2.issue(70, { title: 'R3-5 real gcloud error after assertion diff still parks Bucket 2' });
+  await w2.tick();
+  const cwd70 = w2.job(70, 'build').cwd;
+  writeIn(cwd70, 'src/deploy.mjs', 'export const deploy = () => true;\n');
+  writeIn(cwd70, 'test/deploy.test.mjs', "import test from 'node:test';\nimport { deploy } from '../src/deploy.mjs';\ntest('deploy', () => { deploy(); });\n");
+  const built70 = w2.build(70, {
+    write: false,
+    body: 'Fixes #70\n\nRuntime: not run (no prompt changed)\nPath: d — src/deploy.mjs, test/deploy.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w2.tick();
+  w2.say(70, 'suite', [
+    '✖ unit check (1.0ms)',
+    '  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:',
+    '  + actual - expected',
+    '    {',
+    "      reason: 'real-binding-unavailable',",
+    '  +   ok: false',
+    '  -   ok: true',
+    '    }',
+    '      at TestContext.<anonymous> (file:///repo/test/unit.test.mjs:10:5)',
+    '',
+    '✖ deploy e2e (50.0ms)',
+    '  Error: ERROR: (gcloud.run.deploy) Reauthentication required. Please run `gcloud auth login`',
+    '      at deploy (file:///repo/src/deploy.mjs:20:7)',
+    '',
+  ].join('\n'));
+  w2.review(70, 'PASS');
+  w2.suite(70, 1);
+  await w2.tick();
+  const core2 = JSON.parse(readFileSync(join(w2.root, 'core.json'), 'utf8'));
+  assert.equal((core2.validationParks ?? []).length, 1, 'real gcloud auth error after assertion block must still park Bucket 2');
+  assert.ok(built70.pr.comments.some((c) => /<!-- pdd:autopilot-core:auth-wait:/.test(c.body)), 'PR gets auth-wait comment');
+});
+
+test('R3-6 & polish: prior review repairs do not cut off Bucket 1 cap 3 into pdd:stuck, and coverage rows preserve object row.reason.code', async (t) => {
+  // Part 1: 2 prior review-FAIL repairs (job.repairs = 2) with settings.repairs = 3, then 3 Bucket 1 suite repairs -> escalates to needs-decision (repair-exhausted), NEVER pdd:stuck
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1, repairs: 3 } });
+  w.issue(71, { title: 'R3-6 prior review repairs do not starve Bucket 1 cap 3' });
+  await w.tick();
+  const cwd71 = w.job(71, 'build').cwd;
+  writeIn(cwd71, 'src/service.mjs', 'export const svc = () => 1;\n');
+  writeIn(cwd71, 'test/service.test.mjs', "import test from 'node:test';\nimport { svc } from '../src/service.mjs';\ntest('svc', () => { if (svc() !== 99) throw new Error('boom'); });\n");
+  const built71 = w.build(71, {
+    write: false,
+    body: 'Fixes #71\n\nRuntime: not run (no prompt changed)\nPath: d — src/service.mjs, test/service.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+
+  // Two prior review-FAIL repairs consume 2 of settings.repairs=3
+  const reviewFindings = [
+    'P1 src/service.mjs: rename alpha helper to match caller contract',
+    'P1 src/service.mjs: guard against empty payload before parsing',
+  ];
+  for (let r = 0; r < reviewFindings.length; r += 1) {
+    await w.tick();
+    w.review(71, 'FAIL', [reviewFindings[r]]);
+    w.suite(71, 0);
+    await w.tick();
+    const rep = w.job(71, 'repair');
+    assert.ok(rep, `review-FAIL round ${r + 1} enters repair`);
+    writeIn(rep.cwd, 'src/service.mjs', `export const svc = () => ${r + 2};\n`);
+    w.build(71, {
+      role: 'repair',
+      write: false,
+      body: 'Fixes #71\n\nRuntime: not run (no prompt changed)\nPath: d — src/service.mjs, test/service.test.mjs — unowned — no contract change — Test: done check',
+      result: { promptChanged: false },
+    });
+  }
+
+  // Now review PASSes and suite fails: all 3 Bucket 1 validation repair attempts must run (job.repairs goes 2 -> 5) before repair-exhausted escalation
+  for (let round = 1; round <= MAX_VALIDATION_REPAIRS; round += 1) {
+    await w.tick();
+    w.say(71, 'suite', 'Error: boom\n');
+    w.review(71, 'PASS');
+    w.suite(71, 1);
+    await w.tick();
+    const rep = w.job(71, 'repair');
+    assert.ok(rep, `validation failure round ${round} enters repair instead of cutting off into pdd:stuck`);
+    assert.ok(!w.labels(71).includes('pdd:stuck'), `round ${round} must NOT mark pdd:stuck`);
+    writeIn(rep.cwd, 'src/service.mjs', `export const svc = () => ${round + 20};\n`);
+    w.build(71, {
+      role: 'repair',
+      write: false,
+      body: 'Fixes #71\n\nRuntime: not run (no prompt changed)\nPath: d — src/service.mjs, test/service.test.mjs — unowned — no contract change — Test: done check',
+      result: { promptChanged: false },
+    });
+  }
+
+  // 4th suite failure exceeds cap 3 -> repair-exhausted (pdd:needs-decision, NOT pdd:stuck)
+  await w.tick();
+  w.say(71, 'suite', 'Error: boom\n');
+  w.review(71, 'PASS');
+  w.suite(71, 1);
+  await w.tick();
+  assert.equal(w.started.filter((j) => j.issue === 71 && j.role === 'repair').length, 2 + MAX_VALIDATION_REPAIRS, '2 review repairs + 3 validation repairs ran');
+  assert.ok(w.labels(71).includes('pdd:needs-decision'), 'cap 3 escalates to pdd:needs-decision');
+  assert.ok(!w.labels(71).includes('pdd:stuck'), 'cap 3 must NEVER label pdd:stuck');
+  assert.ok(built71.pr.comments.some((c) => /<!-- pdd:autopilot-core:repair-exhausted:/.test(c.body)), 'PR gets repair-exhausted comment');
+
+  // Part 2: job.coverage.rows preserves object row.reason.code (for both passing rows and real-binding-unavailable blockers)
+  const wCov = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wCov.runtimeEvidence = () => ({
+    stories: [
+      { story: 'user_stories/obj-reason.md', pass: true, current: true, at: '2026-11-18T10:00:00Z', reason: { code: 'verified-live-obj', message: 'ok' } },
+    ],
+    storyFiles: ['user_stories/obj-reason.md'],
+    tests: [],
+  });
+  wCov.issue(72, { title: 'Preserve object row.reason.code' });
+  await wCov.tick();
+  const cwd72 = wCov.job(72, 'build').cwd;
+  writeIn(cwd72, 'user_stories/obj-reason.md', '# Story\n');
+  wCov.build(72, {
+    write: false,
+    body: 'Fixes #72\n\nRuntime: PASS (user_stories/obj-reason.md, 1/1 checks)\nPath: d — user_stories/obj-reason.md — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wCov.tick();
+  const job72 = JSON.parse(readFileSync(join(wCov.root, 'jobs', '72.json'), 'utf8'));
+  assert.equal(job72.coverage?.rows?.[0]?.reason, 'verified-live-obj', 'job.coverage.rows preserves object row.reason.code');
+});

@@ -146,7 +146,7 @@ const emptyProof = () => ({ surfaces: [], commands: [], exitCodes: [] });
 
 function isRegexStartContext(prevToken) {
   if (!prevToken) return true;
-  if ('([{:;,=!?&|+-*%^~<>'.includes(prevToken)) return true;
+  if ('([{:;,=!?&|+-*%^~<>}'.includes(prevToken)) return true;
   return /^(?:return|case|throw|in|of|typeof|void|delete|new|else|do|yield|await)$/.test(prevToken);
 }
 
@@ -468,8 +468,17 @@ function analyzeSubprocessCalls(codeNoComments, codeNoStrings) {
       if (!argText) continue;
       const literalFirst = /^(['"`])([^'"`]*)\1/.exec(argText);
       if (literalFirst) {
-        const bin = literalFirst[2].trim();
-        if (!bin || TRIVIAL_SUBPROCESS_BIN_RE.test(bin)) continue;
+        const rawCmd = literalFirst[2].trim();
+        if (!rawCmd) continue;
+        const firstWord = rawCmd.split(/\s+/)[0] ?? '';
+        const baseBin = firstWord.split(/[\\/]/).pop() ?? '';
+        if (!baseBin || TRIVIAL_SUBPROCESS_BIN_RE.test(baseBin)) continue;
+        hasRealSubprocess = true;
+        const isShellOrRuntime = /^(?:sh|bash|zsh|dash|fish|cmd|cmd\.exe|powershell|pwsh|node|nodejs|python|python3|ruby|deno|bun|tsx|ts-node)$/i.test(baseBin);
+        if (EXTERNAL_TOOL_EXEC_RE.test(rawCmd) || (isShellOrRuntime && EXTERNAL_TOOL_EXEC_RE.test(argText))) {
+          hasExternalToolSubprocess = true;
+        }
+        continue;
       }
       hasRealSubprocess = true;
       if (EXTERNAL_TOOL_EXEC_RE.test(argText)) {
@@ -892,7 +901,7 @@ export function planValidationResume({
   };
 }
 
-function matchSilentSkipLine(codeLine, maskedLine, kind) {
+function matchSilentSkipLine(codeLine, maskedLine, kind, isValFile = false) {
   if (/^\s*(?:re|pattern)\s*:\s*\//.test(codeLine)) return null;
   if (LOCAL_SKIP_HELPER_RE.test(maskedLine)) {
     return 'silent validation local-skip helper bypasses real validation';
@@ -900,10 +909,10 @@ function matchSilentSkipLine(codeLine, maskedLine, kind) {
   if (FILTER_CODE_SHAPE_RE.test(maskedLine) && FILTER_REAL_BINDING_RE.test(codeLine)) {
     return 'filters real-binding-unavailable out of blocking refusals';
   }
-  if (CALL_DOT_SKIP_RE.test(maskedLine) && CALL_DOT_SKIP_E2E_RE.test(codeLine)) {
+  if (CALL_DOT_SKIP_RE.test(maskedLine) && (isValFile || CALL_DOT_SKIP_E2E_RE.test(codeLine))) {
     return 'unconditionally skips an E2E or validation test';
   }
-  if (NODE_TEST_OPT_SKIP_RE.test(maskedLine) && SKIP_KEYWORD_RE.test(codeLine)) {
+  if (NODE_TEST_OPT_SKIP_RE.test(maskedLine) && (isValFile || SKIP_KEYWORD_RE.test(codeLine))) {
     return 'unconditionally skips an E2E or validation test via test options';
   }
   if (kind === 'code') {
@@ -929,10 +938,11 @@ export function lintValidationCode({ path = '', kind = 'test', text = '', hasRea
   const codeSet = new Set();
   const warnings = [];
 
+  const isValFile = SKIP_KEYWORD_RE.test(filePath);
   const reportedSkipLines = new Set();
   if (kind === 'code' || kind === 'test') {
     for (let i = 0; i < codeLines.length; i += 1) {
-      const detail = matchSilentSkipLine(codeLines[i], maskedLines[i] ?? '', kind);
+      const detail = matchSilentSkipLine(codeLines[i], maskedLines[i] ?? '', kind, isValFile);
       if (detail) {
         reportedSkipLines.add(i + 1);
         codeSet.add('silent-validation-skip');
@@ -953,7 +963,7 @@ export function lintValidationCode({ path = '', kind = 'test', text = '', hasRea
         }
         if (alreadyReported) continue;
         const rawSpan = codeLines.slice(startLine - 1, endLine).join('\n');
-        if (!SKIP_KEYWORD_RE.test(rawSpan)) continue;
+        if (!isValFile && !SKIP_KEYWORD_RE.test(rawSpan)) continue;
         reportedSkipLines.add(startLine);
         codeSet.add('silent-validation-skip');
         warnings.push(`Warning: validation lint: ${filePath}:${startLine} [silent-validation-skip] ${detail}`);

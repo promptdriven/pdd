@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 6881bfd2ab326cec32c1fcaf85fe53859a5077f985221c898ec89ada0fab4583)
+// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: e0c8c992be68def0d460f93929afb4b0fa6818ac753c3537179348ce573d9889)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
@@ -3319,7 +3319,7 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   realBindingBlocker = allBindingRows.some(row => row?.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row));
   rows = (evidence.stories ?? []).filter(object).slice(0, 50).map(row => ({ story: row.story, pass: row.pass === true, current: row.current === true, at: row.at ?? null, tests: Array.isArray(row.tests) ? row.tests.slice(0, 10) : null,
     sent: row.sent !== false, failed: Number(row.failed) || 0, refusals: rowRefusals(row).slice(0, 10),
-    reason: typeof row.reason === 'string' ? row.reason : null,
+    reason: typeof row.reason === 'string' ? row.reason : (typeof row.reason?.code === 'string' ? row.reason.code : null),
     codes: Array.isArray(row.codes) ? row.codes.slice(0, 10) : null }));
   const storyFiles = new Set(evidence.storyFiles ?? []);
   const changedTests = (evidence.tests ?? []).filter(test => [test.path, ...(test.files ?? [])].some(file => changed.includes(file)));
@@ -4579,14 +4579,29 @@ async function resolveBugFixBaseControl(ctx, job, { changed, changedProdFiles })
 const NOOP_SUITE_CMDS = new Set(['true', ':', 'exit', 'echo', 'printf', 'pwd', 'ls', 'cat', 'date', 'sleep']);
 const NODE_VALUE_FLAGS = new Set([
   '--import', '-r', '--require', '--loader', '--experimental-loader', '--test-reporter', '--test-reporter-destination',
-  '--test-name-pattern', '--test-concurrency', '--test-shard', '--test-timeout', '--conditions', '-C', '--env-file',
+  '--test-name-pattern', '--test-skip-pattern', '--test-concurrency', '--test-shard', '--test-timeout', '--conditions', '-C', '--env-file',
   '--title', '--max-old-space-size', '-e', '--eval', '-p', '--print',
 ]);
+const NODE_FILTER_FLAGS = new Set(['--test-name-pattern', '--test-skip-pattern', '--test-only']);
 const RUNNER_VALUE_FLAGS = new Set([
   '--config', '-c', '--reporter', '-r', '-t', '-k', '-m', '--project', '--grep', '-g', '--filter', '--shard', '--workers', '--timeout',
+  '--testNamePattern', '--test-name-pattern', '--test-skip-pattern', '-run', '--testPathIgnorePatterns',
+]);
+const RUNNER_FILTER_FLAGS = new Set([
+  '--test-name-pattern', '--test-skip-pattern', '--test-only', '--grep', '-g', '-t', '-k', '--filter', '--project',
+  '--testNamePattern', '-run', '--testPathIgnorePatterns',
 ]);
 const BARE_TEST_RUNNERS = new Set(['vitest', 'jest', 'mocha', 'ava', 'tap', 'playwright', 'cypress', 'pytest', 'py.test', 'rspec', 'phpunit']);
 const SUBCMD_TEST_RUNNERS = new Set(['bun', 'deno', 'go', 'cargo', 'dotnet', 'mvn', 'gradle']);
+
+function flagNameOf(tok) {
+  const eq = tok.indexOf('=');
+  return eq === -1 ? tok : tok.slice(0, eq);
+}
+
+function hasFilterFlag(tokens, filterSet) {
+  return tokens.some(tok => filterSet.has(flagNameOf(tok)));
+}
 
 function tokenizeShellCommand(cmd) {
   const tokens = [];
@@ -4650,6 +4665,11 @@ function analyzeSuiteSegment(segment, headTree, fs, depth = 0) {
     else if (sub === 'run' && main[1]) scriptName = main[1];
     else if (bin === 'yarn' && sub && !sub.startsWith('-')) scriptName = sub;
     if (!scriptName) return { mode: 'none', targets: [] };
+    const scriptArgs = sub === 'run' ? main.slice(2) : main.slice(1);
+    const forwardedArgs = [...scriptArgs, ...passthrough];
+    if (hasFilterFlag(forwardedArgs, NODE_FILTER_FLAGS) || hasFilterFlag(forwardedArgs, RUNNER_FILTER_FLAGS)) {
+      return { mode: 'none', targets: [] };
+    }
     const pkgText = headTree ? readCleanFileUtf8(fs, headTree, 'package.json') : null;
     if (pkgText) {
       let pkg = null;
@@ -4667,17 +4687,20 @@ function analyzeSuiteSegment(segment, headTree, fs, depth = 0) {
   if (bin === 'node' || bin === 'nodejs') {
     let hasTest = false;
     let hasEval = false;
+    let hasFilter = false;
     const positionals = [];
     for (let i = 1; i < tokens.length; i += 1) {
       const tok = tokens[i];
       if (tok === '--') { positionals.push(...tokens.slice(i + 1)); break; }
+      const flag = flagNameOf(tok);
+      if (NODE_FILTER_FLAGS.has(flag)) hasFilter = true;
       if (tok === '--test') { hasTest = true; continue; }
       if (tok === '-e' || tok === '--eval' || tok === '-p' || tok === '--print') { hasEval = true; i += 1; continue; }
       if (NODE_VALUE_FLAGS.has(tok)) { i += 1; continue; }
       if (tok.startsWith('-')) continue;
       positionals.push(tok);
     }
-    if (hasEval) return { mode: 'none', targets: [] };
+    if (hasEval || hasFilter) return { mode: 'none', targets: [] };
     if (hasTest) return positionals.length ? { mode: 'targets', targets: positionals } : { mode: 'all', targets: [] };
     return positionals.length ? { mode: 'targets', targets: [positionals[0]] } : { mode: 'none', targets: [] };
   }
@@ -4690,14 +4713,18 @@ function analyzeSuiteSegment(segment, headTree, fs, depth = 0) {
     } else if ((bin === 'vitest' || bin === 'playwright' || bin === 'cypress') && ['run', 'test'].includes((tokens[1] ?? '').toLowerCase())) {
       startIdx = 2;
     }
+    let hasFilter = false;
     const positionals = [];
     for (let i = startIdx; i < tokens.length; i += 1) {
       const tok = tokens[i];
       if (tok === '--') { positionals.push(...tokens.slice(i + 1)); break; }
+      const flag = flagNameOf(tok);
+      if (RUNNER_FILTER_FLAGS.has(flag)) hasFilter = true;
       if (RUNNER_VALUE_FLAGS.has(tok)) { i += 1; continue; }
       if (tok.startsWith('-')) continue;
       positionals.push(tok);
     }
+    if (hasFilter) return { mode: 'none', targets: [] };
     return positionals.length ? { mode: 'targets', targets: positionals } : { mode: 'all', targets: [] };
   }
 
@@ -4715,19 +4742,40 @@ function analyzeSuiteCommand(command, headTree, fs, depth = 0) {
   return targets.length ? { mode: 'targets', targets: [...new Set(targets)] } : { mode: 'none', targets: [] };
 }
 
-function selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, fs) {
+const SUITE_PASS_TITLE_LINE_RE = /^\s*(?:✔|✓|▶|▸|ok\s+\d+(?!.*#\s*SKIP\b))/i;
+
+function parseSuiteLogSummary(suiteLog) {
   const log = String(suiteLog ?? '');
-  const zeroTestsRan = /^#\s*tests\s+0\b/m.test(log)
-    || (/\b0\s+passing\b/i.test(log) && !/\b[1-9]\d*\s+passing\b/i.test(log))
+  const zeroTestsRan = /^(?:#|ℹ)\s*tests\s+0\b/m.test(log)
     || /\bcollected\s+0\s+items\b/i.test(log);
-  if (zeroTestsRan) return { mode: 'none', files: [] };
+  const summaryText = log.split(/\r?\n/).filter(line => !SUITE_PASS_TITLE_LINE_RE.test(line)).join('\n');
+
+  const zeroPassing = /\b0\s+passing\b/i.test(summaryText) && !/\b[1-9]\d*\s+passing\b/i.test(summaryText);
+  const zeroPassedHeader = /^(?:#|ℹ)\s*pass\s+0\b/m.test(log) && !/^(?:#|ℹ)\s*pass\s+[1-9]\d*\b/m.test(log);
+  const zeroPassedText = /\b0\s+passed\b/i.test(summaryText) && !/\b[1-9]\d*\s+passed\b/i.test(summaryText);
+  const zeroPassed = zeroTestsRan || zeroPassing || zeroPassedHeader || zeroPassedText;
+
+  let headerSkipped = 0;
+  for (const m of log.matchAll(/^(?:#|ℹ)\s*skipped\s+([1-9]\d*)\b/gm)) headerSkipped += Number(m[1]) || 0;
+  let textSkipped = 0;
+  for (const m of summaryText.matchAll(/\b([1-9]\d*)\s+skipped\b/gi)) textSkipped += Number(m[1]) || 0;
+  let tapSkipped = 0;
+  for (const m of log.matchAll(/^\s*ok\s+\d+[^\n]*#\s*SKIP\b/gmi)) tapSkipped += 1;
+  const skippedCount = Math.max(headerSkipped, textSkipped, tapSkipped);
+
+  return { zeroTestsRan: zeroTestsRan || zeroPassing, zeroPassed, skippedCount };
+}
+
+function selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, fs) {
+  const { zeroTestsRan, zeroPassed, skippedCount } = parseSuiteLogSummary(suiteLog);
+  if (zeroTestsRan) return { mode: 'none', files: [], zeroPassed: true, skippedCount };
 
   const inspectable = tracked.filter(isInspectableValidatorTest);
   const parsed = analyzeSuiteCommand(suiteCmd, headTree, fs);
-  if (parsed.mode === 'none') return { mode: 'none', files: [] };
-  if (parsed.mode === 'all') return { mode: 'all', files: inspectable };
+  if (parsed.mode === 'none') return { mode: 'none', files: [], zeroPassed, skippedCount };
+  if (parsed.mode === 'all') return { mode: 'all', files: inspectable, zeroPassed, skippedCount };
   const matched = inspectable.filter(rel => parsed.targets.some(target => matchesSuiteTarget(rel, target)));
-  return { mode: 'targets', files: matched };
+  return { mode: 'targets', files: matched, zeroPassed, skippedCount };
 }
 
 async function collectRealValidationEvidence(ctx, job, { headTree, changed, surfaces, suite, lintCodes }) {
@@ -4827,17 +4875,36 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
         }
       }
       const hasPartialUncoveredRuntime = changedRuntimeCodeFiles.length > 0 && matched.size > 0 && !allRuntimeCovered;
-      const runtimeCoveredBySaved = savedRuntimePass && executedSuite.mode !== 'none' && !hasPartialUncoveredRuntime;
-      if ((allRuntimeCovered && matched.size > 0) || vectorsPassFiles.length > 0 || runtimeCoveredBySaved) {
-        const label = (allRuntimeCovered && matched.size > 0) ? [...matched].slice(0, 3).join(', ')
-          : vectorsPassFiles.length > 0 ? vectorsPassFiles.slice(0, 3).join(', ')
-            : 'pdd test';
+      const suiteClean = !executedSuite.zeroPassed && executedSuite.skippedCount === 0;
+      const runtimeCoveredBySaved = suiteClean && savedRuntimePass && executedSuite.mode !== 'none' && !hasPartialUncoveredRuntime;
+      if (allRuntimeCovered && matched.size > 0) {
+        e2eChecks.push({
+          kind: 'real-execution',
+          command: `${suiteCmd} (${[...matched].slice(0, 3).join(', ')})`,
+          executed: true,
+          exitCode: 0,
+          passed: executedSuite.zeroPassed ? 0 : Math.max(1, matched.size),
+          failed: 0,
+          skipped: executedSuite.skippedCount,
+        });
+      } else if (!suiteClean) {
+        e2eChecks.push({
+          kind: 'real-execution',
+          command: suiteCmd,
+          executed: true,
+          exitCode: 0,
+          passed: executedSuite.zeroPassed ? 0 : 1,
+          failed: 0,
+          skipped: executedSuite.skippedCount,
+        });
+      } else if (vectorsPassFiles.length > 0 || runtimeCoveredBySaved) {
+        const label = vectorsPassFiles.length > 0 ? vectorsPassFiles.slice(0, 3).join(', ') : 'pdd test';
         e2eChecks.push({
           kind: 'real-execution',
           command: `${suiteCmd} (${label})`,
           executed: true,
           exitCode: 0,
-          passed: Math.max(1, (allRuntimeCovered ? matched.size : 0) || vectorsPassFiles.length),
+          passed: Math.max(1, vectorsPassFiles.length),
           failed: 0,
           skipped: 0,
         });
@@ -4845,6 +4912,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
       continue;
     }
 
+    const suiteClean = !executedSuite.zeroPassed && executedSuite.skippedCount === 0;
     const needingKind = changedBoundaryFiles.filter(entry => entry.requiredProofKinds.includes(kind));
     if (!needingKind.length) continue;
     const matchedTests = new Set();
@@ -4853,7 +4921,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
       const files = targetProofs.get(entry.target)?.get(kind);
       if (files && files.size > 0) {
         for (const f of files) matchedTests.add(f);
-      } else if (kind === 'live-binding' && savedRuntimePass) {
+      } else if (kind === 'live-binding' && suiteClean && savedRuntimePass) {
         matchedTests.add('pdd test');
       } else {
         allCovered = false;
@@ -4866,9 +4934,19 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
         command: `${suiteCmd} (${[...matchedTests].slice(0, 3).join(', ')})`,
         executed: true,
         exitCode: 0,
-        passed: matchedTests.size,
+        passed: executedSuite.zeroPassed ? 0 : matchedTests.size,
         failed: 0,
-        skipped: 0,
+        skipped: executedSuite.skippedCount,
+      });
+    } else if (!suiteClean) {
+      e2eChecks.push({
+        kind,
+        command: suiteCmd,
+        executed: true,
+        exitCode: 0,
+        passed: executedSuite.zeroPassed ? 0 : 1,
+        failed: 0,
+        skipped: executedSuite.skippedCount,
       });
     }
   }
@@ -4942,7 +5020,10 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
     ? `${outcome.message} Details: ${lint.details.join('; ')}`
     : outcome.message;
   const red = `[Validator v2 attempt ${outcome.repairAttemptsNext}/${MAX_VALIDATION_REPAIRS}] ${detailText}`;
-  await repairOrEnd(ctx, job, [red], [red], null, { skipRepeatStop: true, maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS) });
+  await repairOrEnd(ctx, job, [red], [red], null, {
+    skipRepeatStop: true,
+    maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS, (job.repairs ?? 0) + 1),
+  });
   return { handled: true, outcome };
 }
 
@@ -5074,31 +5155,49 @@ async function resumeValidationParks(ctx, open) {
   if (changed) ctx.saveMachine({ ...ctx.machineState(), toolCooldowns: nextCooldowns, validationParks: keptParks });
 }
 
-const PASSING_LOG_LINE_RE = /^\s*(?:✔|✓|ok\s+\d+|ℹ|PASS\b|TAP version|#\s*(?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms|Subtest))/i;
-const ASSERTION_DIFF_LINE_RE = /^\s*(?:AssertionError\b|ERR_ASSERTION\b|Expected values to be\b|Input A expected\b|\+ actual - expected\b|[+-]\s+|['"`][^'"`\n]*['"`]\s*(?:!==|===|!=|==)\s*['"`][^'"`\n]*['"`])/i;
-const TEST_TITLE_FAIL_LINE_RE = /^\s*(?:▶|▸|✖|not ok\s+\d+|test at\s+)/i;
+const PASSING_LOG_LINE_RE = /^\s*(?:✔|✓|ok\s+\d+|ℹ|TAP version|#\s*(?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms|Subtest))/i;
+const PASS_BANNER_LINE_RE = /^\s*PASS\s+\S/;
+const ASSERTION_BLOCK_START_RE = /(?:AssertionError\b|ERR_ASSERTION\b|Expected values to be\b|Values have same structure\b|Input A expected\b|\+ actual - expected\b|expect\([^)]*\)\.|^\s*-\s*Expected\b|^\s*\+\s*Received\b)/i;
+const ASSERTION_DIFF_LINE_RE = /^\s*(?:AssertionError\b|ERR_ASSERTION\b|Expected values to be\b|Values have same structure\b|Input A expected\b|\+ actual - expected\b|[+-]\s+|['"`][^'"`\n]*['"`]\s*(?:!==|===|!=|==)\s*['"`][^'"`\n]*['"`])/i;
+const OBJECT_DIFF_CONTEXT_LINE_RE = /^\s*(?:(?:Object|Array|Map|Set)\s*[{\[]|[{\}\[\]],?$|['"`]?[A-Za-z_$][A-Za-z0-9_$-]*['"`]?\s*:\s*(?:['"`\d\[{\-+]|true\b|false\b|null\b|undefined\b|NaN\b|Infinity\b|\[Function|\[Circular|\.\.\.)|(?:(?:\d+(?:\.\d+)?|true|false|null|undefined),?$)|\.\.\.,?$)/;
+const TEST_TITLE_FAIL_LINE_RE = /^\s*(?:▶|▸|✖|●|not ok\s+\d+|test at\s+)/i;
 const TAP_META_LINE_RE = /^\s*(?:location|failureType|code|name|stack|generatedMessage|duration_ms|expected|actual|operator|diff)\s*:/i;
 const STACK_FRAME_LINE_RE = /^\s*(?:at\s+(?:async\s+)?(?:\S+\s+\([^)]+:\d+:\d+\)|(?:file:\/\/|node:|\/|[A-Za-z]:\\)[^\s)]+:\d+:\d+)|[\w.<>$]+\s+\((?:file:\/\/|node:|\/|[A-Za-z]:\\)[^)]+:\d+:\d+\))\s*$/;
 const QUOTED_LITERAL_ONLY_LINE_RE = /^\s*['"`][^'"`\n]*['"`]\s*,?\s*$/;
 
 function extractFailureDiagnosticLines(rawLog, reproduceChecks) {
-  const fromChecks = (reproduceChecks ?? []).flatMap(c => Array.isArray(c.lines) ? c.lines : []);
-  const rawLines = rawLog ? String(rawLog).split(/\r?\n/) : [];
-  const all = [...fromChecks, ...rawLines];
-  const hasAssertionFailure = all.some(line => /AssertionError|ERR_ASSERTION/i.test(line));
+  const streams = [
+    ...(reproduceChecks ?? []).map(c => (Array.isArray(c.lines) ? c.lines : [])),
+    ...(rawLog ? [String(rawLog).split(/\r?\n/)] : []),
+  ];
+  const hasAssertionFailure = streams.some(lines => lines.some(line => ASSERTION_BLOCK_START_RE.test(String(line ?? ''))));
   const out = [];
-  for (const line of all) {
-    const trimmed = String(line ?? '').trim();
-    if (!trimmed) continue;
-    if (PASSING_LOG_LINE_RE.test(trimmed)) continue;
-    if (TEST_TITLE_FAIL_LINE_RE.test(trimmed)) continue;
-    if (TAP_META_LINE_RE.test(trimmed)) continue;
-    if (STACK_FRAME_LINE_RE.test(trimmed)) continue;
-    if (ASSERTION_DIFF_LINE_RE.test(trimmed)) continue;
-    if (/^\s*error\s*:\s*['"`]?.*(?:AssertionError|ERR_ASSERTION|!==|===|Expected values)/i.test(trimmed)) continue;
-    // Never mistake an assertion failure message or quoted diff line inside a unit test for an external auth/human outage.
-    if (hasAssertionFailure && (/AssertionError|ERR_ASSERTION|strictEqual|deepEqual|match\(/i.test(trimmed) || QUOTED_LITERAL_ONLY_LINE_RE.test(trimmed))) continue;
-    out.push(trimmed);
+  for (const lines of streams) {
+    let inAssertionBlock = false;
+    for (const line of lines) {
+      const trimmed = String(line ?? '').trim();
+      if (!trimmed) continue;
+      if (PASSING_LOG_LINE_RE.test(trimmed) || PASS_BANNER_LINE_RE.test(trimmed)) { inAssertionBlock = false; continue; }
+      if (TEST_TITLE_FAIL_LINE_RE.test(trimmed)) { inAssertionBlock = false; continue; }
+      if (STACK_FRAME_LINE_RE.test(trimmed)) { inAssertionBlock = false; continue; }
+      if (TAP_META_LINE_RE.test(trimmed)) {
+        if (/ERR_ASSERTION|AssertionError/i.test(trimmed)) inAssertionBlock = true;
+        continue;
+      }
+      if (ASSERTION_BLOCK_START_RE.test(trimmed)) { inAssertionBlock = true; continue; }
+      if (ASSERTION_DIFF_LINE_RE.test(trimmed)) continue;
+      if (/^\s*error\s*:\s*['"`]?.*(?:AssertionError|ERR_ASSERTION|!==|===|Expected values)/i.test(trimmed)) {
+        inAssertionBlock = true;
+        continue;
+      }
+      if (inAssertionBlock) {
+        if (OBJECT_DIFF_CONTEXT_LINE_RE.test(trimmed) || QUOTED_LITERAL_ONLY_LINE_RE.test(trimmed)) continue;
+        inAssertionBlock = false;
+      }
+      // Never mistake an assertion failure message or quoted diff line inside a unit test for an external auth/human outage.
+      if (hasAssertionFailure && (/AssertionError|ERR_ASSERTION|strictEqual|deepEqual|match\(/i.test(trimmed) || QUOTED_LITERAL_ONLY_LINE_RE.test(trimmed))) continue;
+      out.push(trimmed);
+    }
   }
   return out;
 }
@@ -5337,7 +5436,7 @@ async function mergeCheck(ctx, job) {
         ctx.saveJob(job);
         return repairOrEnd(ctx, job, reds, findings, reproduce, {
           skipRepeatStop: true,
-          maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS),
+          maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS, (job.repairs ?? 0) + 1),
         });
       }
     }
