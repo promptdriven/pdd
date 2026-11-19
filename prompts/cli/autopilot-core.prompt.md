@@ -290,14 +290,21 @@ files (and `areas`, when set) are written into its claim record with a PATCH of 
 
 For each ready issue while slots are free, at most 3 claim attempts per tick:
 
-0. **Pre-claim wrong-repository detection (`#3500`):** before creating any worktree
-   or posting `pdd:working`, inspect the primary issue and any grouped companions
-   with `detectWrongRepositoryIssue` of [intake cards](autopilot-intake.prompt.md)
-   against `state.cwd`. Any issue that clearly targets another repository and has
-   zero matching specific code, prompt or test paths in `state.cwd` is routed via
-   `routeWrongRepositoryIssue` (adding `needs-other-repo` and posting at most one
-   deduplicated routing comment `<!-- pdd:autopilot-intake:other-repo:N -->`) and
-   skipped without claiming or counting a claim attempt.
+0. **Pre-claim pre-flight intake enforcement (`#3500`, `#3534`):** before creating any
+   worktree or posting `pdd:working`, inspect the primary issue and any grouped
+   companions with `preflightCoreIssue(ctx, member, {cwd: state.cwd})` of
+   [intake cards](autopilot-intake.prompt.md), even when `intake` is `off` or
+   `shadow`. `preflightCoreIssue` runs deterministic pre-flight classification
+   (`cross_repo`, `human_decision`, `unverifiable_boundary`) against `state.cwd`,
+   re-checking trusted comments and trusted `pdd:needs-decision` removals when
+   present. Any skipped issue is recorded in `ROOT/intake/preflight-skips.jsonl`,
+   routed/parked via `applyPreflightDecision(..., {mode: "core"})` (routing
+   `cross_repo` with `needs-other-repo` and `<!-- pdd:autopilot-intake:other-repo:N -->`,
+   or parking `human_decision` / `unverifiable_boundary` with one deduplicated
+   `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->` comment posted before
+   `pdd:needs-decision` plus a `decision` alert), and skipped without claiming or
+   counting a claim attempt. A transient read error warns and skips only that
+   member for this tick.
 1. Make the job worktree first, so that a local failure touches no issue. Fetch
    `origin/BASE` once per tick; a fetch failure is not about one issue, so it stops
    intake for this tick. A leftover `worktrees/N` is ours: remove it with
@@ -1079,7 +1086,10 @@ ready in the same tick. A strict repository's prompt approval question (its text
 `(strict_approvals)`) is not ended by a reply: it waits for the approval and the label
 removal. A trusted person's removal of the label still works. When the core claims an issue with comments, it reads
 the latest question comment that this engine posted (author = the engine's own login,
-`GET user`, and a marker that names this issue; a marker comment by anyone else is
+`GET user`, and a marker that names this issue—either
+`<!-- pdd:autopilot-core:question:N:JOB-ID -->` or
+`<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->`, extracting `> ...` quoted lines
+or `- Question: ...` lines; a marker comment by anyone else is
 not a question) and the comments after it by trusted people (`ports.trusted`), leaving
 out comments with a `<!-- pdd:` marker and claim comments. A trusted reply, or a
 removal of `pdd:needs-decision` after the question by a trusted person (the timeline
@@ -1985,7 +1995,7 @@ with the native defaults named above.
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.
 - [Serialized FIFO landing queue](autopilot-merge-queue.prompt.md): required for `enqueueMergeQueueItem`, `processMergeQueue`, `mergeQueueStatusLine`, and `buildConflictAgentInvocation`.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.
-- [Autopilot intake cards](autopilot-intake.prompt.md): required for active and shadow intake passes, pre-claim wrong-repository detection and routing, trusted person-comment filtering, and forensics fixed-card sync.
+- [Autopilot intake cards](autopilot-intake.prompt.md): required for active and shadow intake passes, pre-claim pre-flight enforcement (`preflightCoreIssue`) and wrong-repository routing, trusted person-comment filtering, and forensics fixed-card sync.
 - [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
   external-repository / configured skip-label matching and the fast read-only
   pre-run repository forensics check on `origin/BASE`.
