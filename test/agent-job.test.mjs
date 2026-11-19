@@ -406,10 +406,11 @@ test('the wrapper saves a detached helper before its direct agent exits with a m
 
 const LATE_DETACHED_HELPER = `
 const { spawn } = require('child_process'), fs = require('fs');
+// Spawn safely after the wrapper's 100ms early snapshot and well before its 2000ms poll interval.
 setTimeout(() => {
   const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
   helper.unref(); fs.writeFileSync(process.env.HELPER_PID, String(helper.pid)); process.exit(0);
-}, 80);`;
+}, 400);`;
 test('a late unsampled detached helper retains a /tmp worktree without a cwd-based signal', { skip: !['darwin', 'linux'].includes(process.platform) }, async t => {
   const dir = folderAt(t, '/tmp/pdd-agent-job-late-'), mark = join(dir, 'late-helper.pid');
   const job = startAgentJob({ id: 'late-detached-helper', dir, cwd: dir, custodyRoot: dir, command: process.execPath, args: ['-e', LATE_DETACHED_HELPER], input: '', env: { PATH: process.env.PATH, HELPER_PID: mark } });

@@ -1780,7 +1780,7 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
           state: accountDisplayState(acc),
           lease_id: null,
           leased_at: new Date(nowMs).toISOString(),
-          expires_at: new Date(nowMs + 45 * 60 * 1000).toISOString(),
+          expires_at: new Date(nowMs + 5 * 60 * 1000).toISOString(),
           last_refresh_at: acc.last_refresh_at ?? new Date(nowMs).toISOString(),
           materialized_local: claudeFallbackMaterialized,
           delivery_mode: provider === 'codex' ? 'gateway_grant' : 'direct_oauth',

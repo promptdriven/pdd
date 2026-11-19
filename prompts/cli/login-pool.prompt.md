@@ -125,23 +125,15 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     subprocess execution when `fs !== nativeFs` and `spawnSync` is not a function (keeping virtual-fs
     tests hermetic), and otherwise invokes `codex app-server daemon stop` with
     `{env: {...env, CODEX_HOME: codexHome}, stdio: "ignore", timeout: 2500}` inside `try/catch`.
+  - Export `resolvePddStateBase`, `resolveCodexBackendApiUrl`, `resolveCodexResponsesBaseUrl`, `buildCodexGatewayCliArgs`, `buildGatewayAuthJson`, `ensureUserCodexHomeBaseline`, `syncManagedCodexHomeLinks`, `releaseCloudLease`, and `heartbeatCloudLease`. Pass optional `auto_rotate` on `leaseCloudAccount` and persist `codex_backend_api_url` and `auto_rotate` in `accounts-state.json`. `localCodexHome(env)` treats `CODEX_HOME` paths at or inside `pddManagedCodexHome(env)`, `~/.local/state/pdd/codex-runtime`, or `env.PDD_CODEX_RUNTIME_ROOT` (including `empty-subshell`) as managed runtime homes and falls back to `~/.codex`. `syncManagedCodexHomeLinks` accepts an optional `preserveLinks` set so shared runtime directories can preserve `<runtime>/config.toml` across concurrent launches without unlinking it, and `ensureUserCodexHomeBaseline` creates missing `~/.codex/config.toml` atomically (`wx`). `buildCodexGatewayCliArgs` accepts `userConfigText` and `nativeBackendApi`: when the user config defines legacy `shell_environment_policy.exclude` without `filters`, it merges user exclusions with `PDD_*`, `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, and `CODEX_CONNECTORS_TOKEN`; otherwise it emits per-key `shell_environment_policy.filters.<KEY>="exclude"` overrides so user `[shell_environment_policy.filters]` entries are preserved. When `nativeBackendApi` is `false`, `buildCodexGatewayCliArgs` emits `features.responses_websockets=false` and `supports_websockets=false` for older gateways.
   - When `authOrLease` has delivery mode `"gateway_grant"`, `materializeLocalCodexAuth` validates
     `codex_gateway_url` (`https:` or loopback `http:`) and `codex_gateway_token` (or `gateway_bearer_token`,
     requiring the `"pddg_"` prefix and throwing `code: "invalid_lease"` otherwise), normalizes `<gateway_url>`
     by stripping any trailing `/lse_[^/]+` segment when `<pddg_grant>` starts with `"pddg_lse_"`, writes `0600`
     `managedCodexAuthPath(env)` in native `chatgpt` shape (`{"auth_mode": "chatgpt", "OPENAI_API_KEY": null, "tokens": {"id_token": buildSyntheticGatewayIdToken({planType}), "access_token": "<pddg_grant>", "refresh_token": "", "account_id": "acct_pdd_gateway"}, "last_refresh": "<iso>"}`),
-    and writes `0600` `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"`,
-    `openai_base_url = "<gateway_url>"`, `chatgpt_base_url = "<gateway_url>"`,
-    `[features]` merged with `responses_websockets = false`, no top-level
+    and writes `0600` `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"`, no top-level
     `model_provider` (recording any prior non-gateway user/managed `model_provider` in
-    `previousCodexModelProvider`), and backward-compatibility `[model_providers.pdd_codex_gateway]`:
-    when `<pddg_grant>` starts with `"pddg_lse_"`, set `base_url = "<origin>/v1/codex-gateway"`,
-    `model_catalog_url = "<origin>/v1/codex-gateway/models"`, `wire_api = "responses"`,
-    `requires_openai_auth = true`, `supports_websockets = false`, and omit `http_headers` so
-    `config.toml` remains constant across account rotations; for legacy non-`"pddg_lse_"` grants,
-    preserve `base_url = "<codex_gateway_url>"`, set `model_catalog_url = "<codex_gateway_url>/models"`,
-    `requires_openai_auth = false`, `supports_websockets = false`, and
-    `http_headers = {"x-pdd-gateway-grant": "<pddg_grant>"}`.
+    `previousCodexModelProvider`), and `[model_providers.pdd_codex_gateway]` compatibility alias. When `authOrLease.codex_backend_api_url` is present, route `chatgpt_base_url` to `<backend_api_url>`, `openai_base_url` and `model_providers.pdd_codex_gateway.base_url` to `<backend_api_url>/codex`, set `sqlite_home = userHome` and `features.daemon_auto_start = false`, and keep native WebSockets enabled (omitting `responses_websockets = false` and `supports_websockets = false`). When `codex_backend_api_url` is absent, route `openai_base_url` and `chatgpt_base_url` to `<gateway_url>` and keep `responses_websockets = false` and `supports_websockets = false`. In `createCodexStepOverlay`, follow the same `codex_backend_api_url` capability switch and also create `0700` `<overlay>/empty-subshell` assigned to `shell_environment_policy.set.CODEX_HOME` for `pddg_lse_*` overlays.
   - For legacy `direct_stripped` bundles, `materializeLocalCodexAuth` writes `0600`
     `managedCodexAuthPath(env)` with `tokens.refresh_token: ""` and `0600`
     `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"` and user settings

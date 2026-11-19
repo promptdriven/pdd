@@ -12,7 +12,8 @@
     "url": "https://github.com/promptdriven/pdd/issues"
   },
   "bin": {
-    "pdd": "bin/pdd.mjs"
+    "pdd": "bin/pdd.mjs",
+    "pdd-codex": "bin/pdd-codex.mjs"
   },
   "files": [
     "README.md",
