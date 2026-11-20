@@ -1273,7 +1273,7 @@ test('E65 (#3227 fix 2, case 2) a replay file that imports a changed module runs
   assert.match(mergeNote(pr), /- Replay tests that import a changed module \(Autopilot's run at [0-9a-f]{7}\): pass \(1\/1\): test\/duration\.vectors\.test\.mjs pass \(1\/1\)/);
 });
 
-test('E66 (#3227 fix 2, case 3) the control runs the changed tests on the merge-base code: a failure there shows the change; a pass there is asked once', async t => {
+test('E66 (#3227 fix 2, #3556) the control runs the changed tests on the merge-base code: a failure there shows the change; a repeated pass stays red per head (no latch bypass); non-bug path b stays exempt', async t => {
   const base = { [MODULE]: 'export const seconds = n => n / 30;\n' };
   const change = { [MODULE]: 'export const seconds = n => n / 60;\n', [REPLAY]: replayOf('60 s is 1 min'), 'src/new-helper.mjs': 'export const x = 1;\n' };
   const claim = 'vectors=pass (1/1); formal=not-applicable';
@@ -1288,14 +1288,15 @@ test('E66 (#3227 fix 2, case 3) the control runs the changed tests on the merge-
   w.vectorsRun(17, { tests: 1, control: { 'control-vectors': { tests: 1, fail: 1, failed: [{ name: '60 s is 1 min', file: REPLAY }] } } }); await w.tick(); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
   assert.match(mergeNote(pr), /- Control \(the same tests on the merge-base code of src\/duration\.mjs, src\/new-helper\.mjs, merge base [0-9a-f]{7}\): 1 of 1 failed \(the tests show the change\)/);
-  // 2. The control passes too: asked once; the repair keeps it; then the PR merges and the note says so.
+  // 2. The control passes too: red on head 1, and STILL red on a repair whose control still passes (no one-shot latch bypass).
   ({ w, pr } = await fix2World(t, { base, change, evidence: claim }));
   w.vectorsRun(17, { tests: 1 }); await w.tick();
   assert.match(w.job(17, 'repair')?.input ?? '', /Autopilot ran the replay and formal tests of this change \(test\/duration\.vectors\.test\.mjs\) on the merge-base code of the changed code files \(src\/duration\.mjs, src\/new-helper\.mjs, merge base [0-9a-f]{7}\): all 1 pass there too, so they do not show the change\. Add a test that fails on the merge-base code and passes at this head\./);
-  w.build(17, { role: 'repair', write: false }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); w.vectorsRun(17, { tests: 1 }); await w.tick(); await w.tick();
-  assert.deepEqual(w.github.merges, [pr.number]);
-  assert.match(mergeNote(pr), /- Control \(.*\): all 1 passed \(the tests do not show the change\)/);
-  // 3. Path b (the contract stays): a pass on the base is expected, so no question.
+  w.build(17, { role: 'repair', write: false }); await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  w.vectorsRun(17, { tests: 1 }); await w.tick();
+  assert.deepEqual(w.github.merges, [], 'repair commit still passing on merge-base must not merge');
+  assert.match(endComments(w, 17)[0] ?? '', /all 1 pass there too, so they do not show the change/);
+  // 3. Non-bug Path b (the contract stays and no bug signal): a pass on the base is expected, so no red.
   ({ w, pr } = await fix2World(t, { base, change, path: 'b', evidence: claim }));
   w.vectorsRun(17, { tests: 1 }); await w.tick(); await w.tick();
   assert.equal(w.job(17, 'repair'), undefined, w.job(17, 'repair')?.input);
@@ -1482,10 +1483,10 @@ test('E76 (battle plans, Nov 11) the reviewer reads the diff in parts, knows the
   const { w } = await t10World(t, {});
   const review = w.job(17, 'review').input;
   assert.match(review, /A tool output over about 10,000 tokens loses its middle, so never read the whole PR's diff in one call\./);
-  assert.match(review, /First run git fetch origin main && git diff --stat origin\/main\.\.\.HEAD\. Then read one changed file per command: git diff origin\/main\.\.\.HEAD -- FILE\./);
+  assert.match(review, /First run git diff --stat origin\/main\.\.\.HEAD\. Then read one changed file per command: git diff origin\/main\.\.\.HEAD -- FILE\./);
   assert.match(review, /Read a file whose diff is larger than about 30 KB in hunks/);
   assert.match(review, /"summary":"<one paragraph, then one line: Read: FILE, FILE, \.\.\. \(every changed file that you read in full\)>"/);
-  assert.doesNotMatch(review, /Read the change with: git fetch origin main && git diff origin\/main\.\.\.HEAD\./, 'no whole-PR diff in one call');
+  assert.doesNotMatch(review, /Read the change with: git (?:fetch origin main && )?git diff origin\/main\.\.\.HEAD\./, 'no whole-PR diff in one call');
 });
 
 // ---- Final battle plan B1-B3: every consumer of a changed prompt, no silent cut, one Not covered list ------------

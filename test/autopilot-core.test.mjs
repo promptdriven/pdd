@@ -2509,16 +2509,19 @@ test('O1 the build brief has the owner table (binding, header line in the first 
 
 test('O2 #42: a package.json field on path d passes the native checks and merges; the reviewer gets the owner table and does not judge commit order', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.baseCommit('package.json', JSON.stringify({ name: 'x', private: true }));
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', private: true, scripts: { test: 'node --test' } }));
   w.baseCommit('prompts/readme.prompt.md', '# Readme\n\nOwn `README.md`: the project page.\n\nThe package.json repository field is https://github.com/acme/widgets.\n');
   w.issue(17); await w.tick();
-  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', private: true, repository: 'https://github.com/acme/widgets' }));
+  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', private: true, scripts: { test: 'node --test' }, repository: 'https://github.com/acme/widgets' }));
   const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (no prompt changed)\nPath: d — package.json — unowned — no contract change — Test: done check', result: { promptChanged: false } });
   await w.tick();
   const review = w.job(17, 'review').input;
   assert.match(review, /- package\.json: unowned/); assert.match(review, /Do not judge commit order/); assert.match(review, /Do not ask for a new prompt for an unowned file/);
   assert.match(review, /prompts\/readme\.prompt\.md mentions package\.json/, 'R5 is a hint for the reviewer');
-  w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  assert.equal(w.job(17, 'suite'), undefined, 'package.json edit holds suite until independent review passes');
+  w.review(17, 'PASS'); await w.tick();
+  assert.ok(w.job(17, 'suite'), 'suite starts after review passes');
+  w.suite(17, 0); await w.tick();
   assert.deepEqual(w.github.merges, [pr.number]);
 });
 
@@ -2567,7 +2570,7 @@ test('O4 path e: the job result proposes adopting PDD; the tick files one dedupe
 });
 
 // ---- Debate B (B-VERDICT.md section 5): collisions between parallel jobs and a moving main ----------------------
-const greenLane = async (w, n) => { await w.tick(); w.review(n, 'PASS'); w.suite(n, 0); };
+const greenLane = async (w, n) => { await w.tick(); w.review(n, 'PASS'); if (!w.job(n, 'suite')) await w.tick(); w.suite(n, 0); };
 const roles = (w, n) => w.started.filter(j => j.issue === n).map(j => j.role);
 const claimOf = (w, n) => w.comments(n).map(body => { try { return JSON.parse(/```json\n(.*)\n```/.exec(body)?.[1] ?? 'null'); } catch { return null; } }).filter(Boolean).at(-1);
 
@@ -2585,13 +2588,13 @@ test('Q1 P1/S2/S3: a job writes its changed files into its claim; the next brief
 
 test('Q2 mechanical conflicts are fixed in the lane with no agent and no repair: JSON keys (M-d), identical inserts (M-b), derived headers (M-a)', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
-  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0' }, null, 2) + '\n');
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' } }, null, 2) + '\n');
   w.baseCommit('CHANGELOG.md', '# Changes\n\n## 1.0.0\n\n- First.\n');
   w.issue(17); await w.tick();
-  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', version: '1.0.0', repository: 'acme/widgets' }, null, 2) + '\n');
+  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' }, repository: 'acme/widgets' }, null, 2) + '\n');
   editIn(w, 17, 'CHANGELOG.md', '# Changes\n\n## Unreleased\n\n## 1.0.0\n\n- First.\n');
   const { pr } = w.build(17); await greenLane(w, 17);
-  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0', keywords: ['money'] }, null, 2) + '\n');
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' }, keywords: ['money'] }, null, 2) + '\n');
   w.baseCommit('CHANGELOG.md', '# Changes\n\n## Unreleased\n\n## 1.0.0\n\n- First.\n');
   await w.tick();                                    // the lane: merge-tree conflict, all hunks mechanical
   const job = jobFile(w, 17);
@@ -4075,12 +4078,19 @@ test('3154 & 3782 opt-in model tiering routes worker vs reviewer launches and re
   assert.equal(activeJob.telemetry.phases.byPhase['code/pr2'].durationMs, 3 * MIN);
   assert.equal(activeJob.telemetry.tokens.byTier.worker.inputTokens, 15_000);
 
-  // Review launch uses reviewer model + high reasoning effort, before trailing '-'
+  // Review launch uses read-only sandboxed flags + reviewer model + high reasoning effort, before trailing '-'
   const review = w.job(21, 'review');
-  assert.deepEqual(review.args, [
-    'exec', '--json', '--dangerously-bypass-approvals-and-sandbox', '-c', 'features.multi_agent=false',
-    '--model', 'gpt-5.4', '-c', 'model_reasoning_effort="high"', '-',
-  ]);
+  assert.equal(review.args.includes('--dangerously-bypass-approvals-and-sandbox'), false);
+  assert.equal(review.args[0], 'exec');
+  assert.ok(review.args.includes('--json'));
+  assert.ok(review.args.includes('--ignore-user-config'));
+  assert.ok(review.args.includes('--ignore-rules'));
+  assert.equal(review.args[review.args.indexOf('--sandbox') + 1], 'read-only');
+  assert.ok(review.args.includes('mcp_servers={}'));
+  assert.ok(review.args.includes('model_reasoning_effort="high"'));
+  assert.equal(review.args[review.args.indexOf('--model') + 1], 'gpt-5.4');
+  assert.equal(review.args[review.args.indexOf('--output-last-message') + 1], review.result);
+  assert.equal(review.args.at(-1), '-');
 
   // Simulate 2 minutes of review + suite execution and Reviewer token usage
   w.advance(2 * MIN);

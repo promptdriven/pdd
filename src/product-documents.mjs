@@ -1,7 +1,17 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 2dc2faa2532283575a88580d4debb6de60768f2505ae6524750ac46aec86c891).
+// Generated from prompts/cli/product.prompt.md (sha256: 2b73b546be1287b4b74b4807603c42ce263b339e3a5d2efa146f1631347b1cda).
 export const invalid = message => { throw Object.assign(Error(message), { code: 'invalid-product' }); };
 const clean = value => String(value ?? '').trim().replace(/^`(.*)`$/, '$1');
 const csv = value => !value || value === '-' ? [] : value.split(',').map(clean).filter(Boolean);
+const THROUGH = ['prompt-pr', 'code'];
+function parsePlanThrough(plan) {
+  const preamble = plan.split(/^##\s+/m, 1)[0];
+  const matches = [...preamble.matchAll(/^Through:[ \t]*(.*)$/gim)];
+  if (!matches.length) return undefined;
+  if (matches.length > 1) invalid('product/plan.md: duplicate Through declaration.');
+  const token = clean(matches[0][1].trim().split(/\s+/)[0] ?? '').toLowerCase();
+  if (!THROUGH.includes(token)) invalid(`product/plan.md: invalid Through value ${token || '(empty)'}; use prompt-pr or code.`);
+  return token;
+}
 const columns = {
   Parts: ['Part', 'Folder', 'What it is'], Stories: ['Id', 'Part', 'Story', 'Tag'],
   Journeys: ['Id', 'Journey', 'Stories'], Questions: ['Id', 'Question', 'Recommendation', 'Example', 'Answer'],
@@ -33,6 +43,7 @@ export function parseProductDocuments({mapText, planText = ''}) {
   const map = String(mapText), plan = String(planText);
   const name = /^#\s+(.+?)(?::\s*map)?\s*$/m.exec(map)?.[1], size = /^Size:\s*(small|medium|large)\b/im.exec(map)?.[1].toLowerCase();
   if (!name || !size) invalid('product/map.md: name or Size is missing.');
+  const through = parsePlanThrough(plan);
   const mapRows = section => rows(map, section, 'product/map.md'), planRows = section => rows(plan, section, 'product/plan.md');
   const parts = mapRows('Parts').map(row => ({ part: row.Part, folder: row.Folder, description: row['What it is'] }));
   const stories = mapRows('Stories').map(row => ({ id: row.Id, part: row.Part, story: row.Story, tag: row.Tag }));
@@ -49,7 +60,7 @@ export function parseProductDocuments({mapText, planText = ''}) {
     for (const id of run.stories) if (!(run.part === 'all' ? journeys : stories.filter(story => story.part === run.part)).some(story => story.id === id)) invalid(`product/plan.md: unknown Story ${id}.`);
     for (const need of run.needs) if (need !== 'plan PR' && !runs.some(other => other.run === need)) invalid(`product/plan.md: unknown need ${need}.`);
   }
-  return { product: { name, size, parts, stories, journeys, runs, questions: mapRows('Questions').filter(row => !row.Answer || row.Answer === '-').map(row => row.Id) }, boundaries: planRows('Boundaries') };
+  return { product: { name, size, ...(through ? { through } : {}), parts, stories, journeys, runs, questions: mapRows('Questions').filter(row => !row.Answer || row.Answer === '-').map(row => row.Id) }, boundaries: planRows('Boundaries') };
 }
 
 export function parseProductWorldWriters({worldText}) {

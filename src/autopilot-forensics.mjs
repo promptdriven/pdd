@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: d739bc39496c6bb19b1e9760fa4fb5cb360b82bd4bff392f5824357f3533b818).
+// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: 9e818d08e473e5ad628bcf680ad11e6374b6bb05adfcd9bf3e6c35f09999c0df).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -310,18 +310,45 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
   return out;
 }
 
-export function forensicsCommand(agent, { model = null, reasoningEffort = null, resultFile = null, env = null, fs = nativeFs } = {}) {
+export function readOnlyAgentCommand(
+  agent,
+  {
+    model = null,
+    reasoningEffort = null,
+    defaultEffort = null,
+    resultFile = null,
+    env = null,
+    fs = nativeFs,
+    json = false,
+    stream = false,
+    ignoreRules = true,
+    addDirs = null,
+    geminiAdminPolicy = null,
+    geminiSandbox = false,
+  } = {},
+) {
   const cleanModel = cleanModelName(model ?? agent?.model);
   const effort = cleanEffort(reasoningEffort);
+  const codexEffort = effort ?? cleanEffort(defaultEffort);
   const cmdName = fallback => (typeof agent?.command === 'string' && agent.command.trim() ? agent.command.trim() : fallback);
+  const cleanDirs = Array.isArray(addDirs)
+    ? [...new Set(addDirs.filter(d => typeof d === 'string' && d.trim() && !SAFE_CONTROL_RE.test(d)).map(d => d.trim()))]
+    : [];
+  const cleanPolicy = typeof geminiAdminPolicy === 'string' && geminiAdminPolicy.trim() && !SAFE_CONTROL_RE.test(geminiAdminPolicy)
+    ? geminiAdminPolicy.trim()
+    : null;
   if (agent?.kind === 'codex') {
     const providerArgs = codexProviderConfigArgs({ env, agent, fs });
     return {
       command: cmdName('codex'),
       args: [
-        'exec', '--ignore-user-config', '--sandbox', 'read-only', '--ephemeral', '--color', 'never',
+        'exec',
+        ...(json || stream ? ['--json'] : []),
+        '--ignore-user-config',
+        ...(ignoreRules ? ['--ignore-rules'] : []),
+        '--sandbox', 'read-only', '--ephemeral', '--color', 'never',
         '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}',
-        '-c', `model_reasoning_effort="${effort ?? 'low'}"`,
+        ...(codexEffort ? ['-c', `model_reasoning_effort="${codexEffort}"`] : []),
         ...CODEX_FORENSICS_OFF.flatMap(name => ['-c', `features.${name}=false`]),
         ...providerArgs,
         ...(typeof resultFile === 'string' && resultFile ? ['--output-last-message', resultFile] : []),
@@ -336,7 +363,9 @@ export function forensicsCommand(agent, { model = null, reasoningEffort = null, 
       args: [
         '-p', '--safe-mode', '--tools', 'Read,Glob,Grep', '--permission-mode', 'plan',
         '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome', '--no-session-persistence',
-        '--output-format', 'json',
+        ...cleanDirs.flatMap(dir => ['--add-dir', dir]),
+        '--output-format', stream ? 'stream-json' : 'json',
+        ...(stream ? ['--verbose'] : []),
         ...(effort ? ['--effort', effort] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),
       ],
@@ -346,8 +375,12 @@ export function forensicsCommand(agent, { model = null, reasoningEffort = null, 
     return {
       command: cmdName('gemini'),
       args: [
-        '-p', '', '--output-format', 'json', '--approval-mode', 'plan',
+        '-p', '', '--output-format', stream ? 'stream-json' : 'json',
+        ...(geminiSandbox ? ['--sandbox'] : []),
+        '--approval-mode', 'plan',
         '--extensions', 'none', '--allowed-mcp-server-names', 'pdd-disabled-none',
+        ...cleanDirs.flatMap(dir => ['--include-directories', dir]),
+        ...(cleanPolicy ? ['--admin-policy', cleanPolicy] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),
       ],
     };
@@ -356,14 +389,18 @@ export function forensicsCommand(agent, { model = null, reasoningEffort = null, 
     return {
       command: cmdName('agy'),
       args: [
-        '--input-format', 'text', '--output-format', 'json', '--mode', 'plan',
+        '--input-format', 'text', '--output-format', stream ? 'stream-json' : 'json', '--mode', 'plan',
         '--sandbox', '--disable-slash-commands',
         ...(effort ? ['--effort', effort] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),
       ],
     };
   }
-  throw Error('Pre-run forensics needs codex, claude, gemini or agy');
+  throw Error('Read-only agent jobs need codex, claude, gemini or agy');
+}
+
+export function forensicsCommand(agent, options = {}) {
+  return readOnlyAgentCommand(agent, { defaultEffort: 'low', ...options });
 }
 
 export function forensicsPrompt({ repo, baseBranch = 'main', issue, comments = [] }) {

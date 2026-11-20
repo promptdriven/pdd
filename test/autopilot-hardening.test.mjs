@@ -144,7 +144,7 @@ test('Fix 1b: mergeCheck mechanically formats verified Runtime: lines from saved
   assert.equal(wMissing.github.merges.length, 0);
 });
 
-test('Fix 2: real-binding-unavailable saved rows are treated as local sandbox skips and never inject operator-reconciliation stop prompts', async t => {
+test('Fix 2: real-binding-unavailable saved rows fail closed to Bucket 2 auth-wait with 0 repair rounds, cooldown, and freed slot', async t => {
   const story = 'user_stories/cloud-webhook.md';
   const w = await coreWorld(t, { settings: { runs: 1 } });
   w.baseCommit(story, '# Webhook\n\nDeliver webhook.\n');
@@ -152,9 +152,8 @@ test('Fix 2: real-binding-unavailable saved rows are treated as local sandbox sk
   await w.tick();
   writeIn(w.job(17, 'build').cwd, story, '# Webhook\n\nDeliver signed webhook.\n');
 
-  // Even when the merge base passed in another environment, a local sandbox skip with 0 provider calls
-  // (reason.code === 'real-binding-unavailable') must NOT emit a refusal red or a coverage-regression red,
-  // and must NEVER pass "Reconcile possible external effects with the operator" into a repair prompt.
+  // real-binding-unavailable is NEVER silently skipped or merged: it routes to Bucket 2 (park-auth-wait)
+  // with 0 repair rounds, keeps the PR open, frees the worker slot, and records runtime-binding cooldown.
   w.runtimeEvidence = async ({ base }) => base
     ? { stories: [{ story, pass: true, current: true, at: 500 }], storyFiles: [story], tests: [] }
     : {
@@ -176,23 +175,20 @@ test('Fix 2: real-binding-unavailable saved rows are treated as local sandbox sk
         footprints: { [story]: [] },
       };
 
-  // Trigger a repair via a suite failure so we also inspect the exact generated repairPrompt!
   const { pr } = w.build(17, {
     body: `Fixes #17\n\nPath: d — ${story}, change-17.txt — unowned — no contract change — Test: done check`,
     runtime: { state: 'not-run' },
   });
   await w.tick();
-  assert.equal(w.job(17, 'repair'), undefined, 'real-binding-unavailable alone causes zero Runtime reds');
-  assert.match(pr.body, /Runtime: not run \(user_stories\/cloud-webhook\.md: real-binding-unavailable\)/);
-
-  w.review(17, 'PASS');
-  w.suite(17, 1, 'not ok 1 - test/webhook.test.mjs\n');
-  await w.tick();
-  const repair = w.job(17, 'repair');
-  assert.ok(repair, 'real suite failure triggers repair');
-  assert.doesNotMatch(repair.input, /Reconcile possible external effects with the operator/i);
-  assert.doesNotMatch(repair.input, /Runtime coverage went down/i);
-  assert.doesNotMatch(repair.input, /was refused before execution/i);
+  assert.equal(w.job(17, 'repair'), undefined, 'real-binding-unavailable spends 0 repair rounds');
+  assert.equal(pr.state, 'open', 'finished PR stays open while parked');
+  assert.equal(pr.merged, false, 'real-binding-unavailable never merges');
+  assert.ok(w.labels(17).includes('pdd:needs-decision'), 'parks as needs-person wait');
+  assert.ok(!w.labels(17).includes('pdd:working'), 'worker slot freed immediately');
+  assert.ok(pr.comments.some(c => /<!-- pdd:autopilot-core:auth-wait:/.test(c.body)), 'PR carries auth-wait marker');
+  const machine = JSON.parse(readFileSync(join(w.root, 'core.json'), 'utf8'));
+  assert.equal(machine.toolCooldowns?.['runtime-binding']?.active, true, 'runtime-binding placed on cooldown');
+  assert.equal(machine.validationParks?.some(p => p.pr === pr.number && p.issue === 17), true, 'PR recorded for validate-only resume');
 });
 
 test('Fix 3a: snapshot interval is 2000 ms and captured process manifests deduplicate and bound to 512 entries', t => {

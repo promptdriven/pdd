@@ -601,14 +601,18 @@ test('3460-7: greenfield pdd-product plan-only repo with no package.json on main
   await w.tick();
 
   const rev1 = w.job(17, 'review');
-  const suite1 = w.job(17, 'suite');
   assert.ok(rev1, 'review started on greenfield PR');
-  assert.doesNotMatch(rev1.input, /no test command/, 'reviewer evidence summary sees PR-added package.json test command');
-  assert.ok(suite1, 'suite started using PR-added package.json instead of failing with no-test-command');
+  assert.doesNotMatch(rev1.input, /no test command/, 'reviewer evidence summary does not falsely report no test command while suite waits for review');
+  assert.equal(w.job(17, 'suite'), undefined, 'greenfield PR holds suite until independent review passes');
+
+  // Once review passes, suite starts using PR-added package.json instead of failing with no-test-command.
+  w.review(17, 'PASS');
+  await w.tick();
+  const suite1 = w.job(17, 'suite');
+  assert.ok(suite1, 'suite started after review PASS using PR-added package.json instead of failing with no-test-command');
   assert.match(suite1.args.join(' '), /npm test/);
 
   // Suite failure reports real detected command ("npm test", never null) in repair instructions.
-  w.review(17, 'PASS');
   w.say(17, 'suite', 'not ok 1 - hub\n  ---\n  location: test/hub.test.mjs:1:1\n  ...\n# tests 1\n# fail 1\n');
   w.finish(17, 'suite', { code: 1 });
   await w.tick();
@@ -641,7 +645,10 @@ test('3460-7: greenfield pdd-product plan-only repo with no package.json on main
     },
   });
   await w.tick();
+  assert.equal(w.job(17, 'suite')?.head, head1, 'repaired greenfield head also waits for review PASS before running suite');
   w.review(17, 'PASS');
+  await w.tick();
+  assert.equal(w.job(17, 'suite')?.head, head2, 'suite starts on repaired head2 after review PASS');
   w.suite(17, 0);
   await w.tick();
   assert.equal(pr.merged, true, 'greenfield PR merged cleanly after running PR-added npm test');
