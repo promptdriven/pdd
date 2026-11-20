@@ -79,6 +79,6 @@ The seam holds no mutable request state and loads zero additional pdd or Runtime
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "530c153d8142a44ce488fe3f319e2e928c09efc2ef5f956ab82d9c69aeb33246","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
+{"kind":"native-only","status":"draft","prose_sha256": "c0a0e9ff3b13806a724b3ed67113a35268bea37a190ea4f61b46bc51095d4cb3","reason":"Re-exports live JavaScript ESM module bindings from @promptdriven/runtime-client as pdd's sole import seam, which bound Runtime ports cannot fake."}
 ```
 </details>
