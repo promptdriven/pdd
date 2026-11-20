@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: eb52db4b72d8e3b975493f6c02a9bfe0e76210f91a00cfc97b28e436873fb422).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 5b29096fac68a1a326aab77a54a8374a39fd78961006f72642e1a3c8840288a9).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
@@ -96,7 +96,7 @@ const CALL_PORT_OP_RE = /^([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)\s*\(/;
 const BRACE_PORT_OP_RE = /^([a-z][a-zA-Z0-9_-]*)\.\{\s*([a-z][a-zA-Z0-9_-]*(?:\s*,\s*[a-z][a-zA-Z0-9_-]*)+)\s*\}$/;
 const INLINE_BRACE_PORT_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.\{\s*([a-z][a-zA-Z0-9_-]*(?:\s*,\s*[a-z][a-zA-Z0-9_-]*)+)\s*\}/g;
 const NETWORK_PORT_HEADING_RE = /\b(?:tcp|udp|http|https|grpc|listen(?:ing)?|network|socket|server|tls|ssl|firewall|docker|container|kubernetes|k8s|ingress|expos(?:e|ed))\b/i;
-const DOMAIN_PORT_HEADING_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?|adapters?)\b/i;
+const DOMAIN_PORT_HEADING_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?)\b/i;
 const DEP_PORTS_HEADING_RE = /\b(?:injected\s+ports?|external\s+ports?|domain\s+ports?|port\s+interface|port\s+contract|ports?|resources?)\b/i;
 const PORT_TABLE_COL_PORT_RE = /\b(?:port|ports|bound\s+port|wired\s+port|injected\s+port|port\s+op(?:eration)?)\b/i;
 const PORT_TABLE_COL_IN_SECTION_RE = /\b(?:operation|operations|binding|bindings)\b/i;
@@ -104,13 +104,23 @@ const PORT_TABLE_COL_EXCLUDE_RE = /\b(?:tcp|udp|http|https|listen|network|socket
 const DEP_TABLE_PORT_NAME_COL_RE = /\b(?:port|resource|service|adapter|interface|namespace)\b/i;
 const DEP_TABLE_OP_COL_RE = /\b(?:operation|operations|op|ops|method|methods|action|actions)\b/i;
 const DOMAIN_PORT_CUE_RE = /\b(?:wire|wires|wired|wiring|port|ports|bind|binds|bound|binding|bindings)\b/i;
-const NETWORK_PORT_PHRASE_PATTERNS = [
+const DOMAIN_PORT_DIRECT_CUE_RE = /\b(?:wire|wires|wired|wiring|ports?)\b/i;
+const DOMAIN_PORT_BIND_WORD_RE = /\b(?:bind|binds|bound|binding|bindings)\b/i;
+const DOMAIN_PORT_BIND_CONTEXT_RE = /\b(?:ports?|adapters?|domain)\b/i;
+const DIRECT_BIND_PORT_OP_RE = /\bbind(?:s|ing)?\s+`?[a-z][a-zA-Z0-9_-]*\.[a-z][a-zA-Z0-9_-]*`?/i;
+const NON_PORT_IDIOM_PATTERNS = [
   /\b(?:tcp|udp|http|https|grpc|ws|wss|listen(?:ing)?|server|socket|host|local|remote|network|container|service)\s+ports?\b/gi,
   /\b(?:on|to|at|from)\s+port(?:\s+\d+|\s+`?[A-Z0-9_]+`?)?\b/gi,
   /\bports?\s+\d+\b/gi,
   /\bports?\s+(?:number|numbers|env|variable|variables|range)\b/gi,
-  /\bbind(?:s|ing)?\s+(?:the\s+)?(?:http|https|tcp|udp|server|listener|socket|address|host|interface)\b/gi,
-  /\bport\s+binding\s+(?:on|to|for)\s+(?:tcp|udp|http|https|server|socket|localhost)\b/gi,
+  /\bbind(?:s|ing)?\s+(?:the\s+)?(?:http|https|tcp|udp|server|listener|socket|address|host|interface|localhost|(?:\d{1,3}\.){3}\d{1,3}|\[?::1?\]?)\b/gi,
+  /\bport\s+binding\s+(?:on|to|for)\s+(?:tcp|udp|http|https|server|socket|localhost|(?:\d{1,3}\.){3}\d{1,3})\b/gi,
+  /\b(?:upper|lower|time|size|memory|cpu|io|rate|retry|retries|error|timeout|latency|cost|call|step|depth|length|line|byte|buffer|queue|batch|window|hard|soft|strict)\s+bounds?\b/gi,
+  /\bbounds?\s+(?:on|of|for)\b/gi,
+  /\bwire\s+(?:format|formats|protocol|protocols|encoding|encodings|type|types|frame|frames|bytes|payload|payloads|schema|schemas|representation|level|compatible|compatibility)\b/gi,
+  /\b(?:on|over)\s+the\s+wire\b/gi,
+  /\bbind(?:s|ing)?\s+(?:(?:sql|query|statement|prepared|positional|named|input|output|request|response|form|body|route|path|header|env|template|data|event|key|signal)\s+)*(?:param|params|parameter|parameters|value|values|column|columns|variable|variables|arg|args|argument|arguments|placeholder|placeholders|field|fields|handler|handlers|listener|listeners|event|events|key|keys)\b/gi,
+  /\b(?:sql|query|statement|param|parameter|value|column|variable|data|event|key)\s+bindings?\b/gi,
 ];
 const BULLET_LINE_RE = /^([ \t]*)(?:[-*+]|\d+[.)])\s+(.+)$/;
 const EMPTY_STRING_SET = new Set();
@@ -186,7 +196,7 @@ function findRuntimeInterfaceSpans(raw) {
   const text = String(raw ?? '');
   if (!text) return [];
   const lower = text.toLowerCase();
-  const spans = [];
+  const detailsSpans = [];
 
   // 1. Linear indexOf scan for <details ...><summary ...>...runtime interface...</summary>...</details>.
   let pos = 0;
@@ -219,13 +229,14 @@ function findRuntimeInterfaceSpans(raw) {
     }
     const detClose = lower.indexOf('</details>', sumClose + 10);
     if (detClose < 0) break;
-    spans.push({ start: detOpen, end: detClose + 10, bodyStart: sumClose + 10, bodyEnd: detClose });
+    detailsSpans.push({ start: detOpen, end: detClose + 10, bodyStart: sumClose + 10, bodyEnd: detClose });
     pos = detClose + 10;
   }
 
-  const insideDetailsSpan = offset => spans.some(s => offset >= s.start && offset < s.end);
-
-  // 2. Linear line-based scan for `## Runtime interface` headings through next heading or EOF.
+  // 2. Linear line-based scan for `## Runtime interface` headings through next heading or EOF,
+  // tracking sorted detailsSpans with a monotonic pointer for strict O(N) runtime.
+  const headingSpans = [];
+  let detIdx = 0;
   let lineStart = 0;
   let activeFence = null;
   let openHeading = null;
@@ -235,9 +246,10 @@ function findRuntimeInterfaceSpans(raw) {
     const nextStart = nl < 0 ? text.length + 1 : nl + 1;
     const line = text.slice(lineStart, lineEnd).replace(/\r$/, '');
 
-    if (insideDetailsSpan(lineStart)) {
+    while (detIdx < detailsSpans.length && detailsSpans[detIdx].end <= lineStart) detIdx++;
+    if (detIdx < detailsSpans.length && lineStart >= detailsSpans[detIdx].start) {
       if (openHeading) {
-        spans.push({ ...openHeading, end: lineStart, bodyEnd: lineStart });
+        headingSpans.push({ ...openHeading, end: lineStart, bodyEnd: lineStart });
         openHeading = null;
       }
       activeFence = null;
@@ -263,7 +275,7 @@ function findRuntimeInterfaceSpans(raw) {
 
     if (openHeading) {
       if (/^#{1,6}[ \t]+\S/.test(line)) {
-        spans.push({ ...openHeading, end: lineStart, bodyEnd: lineStart });
+        headingSpans.push({ ...openHeading, end: lineStart, bodyEnd: lineStart });
         openHeading = null;
         if (/^#{2,6}[ \t]+runtime[ \t]+interface[ \t]*$/i.test(line)) {
           openHeading = { start: lineStart, bodyStart: nl < 0 ? text.length : nl + 1 };
@@ -276,10 +288,10 @@ function findRuntimeInterfaceSpans(raw) {
     lineStart = nextStart;
   }
   if (openHeading) {
-    spans.push({ ...openHeading, end: text.length, bodyEnd: text.length });
+    headingSpans.push({ ...openHeading, end: text.length, bodyEnd: text.length });
   }
 
-  spans.sort((a, b) => a.start - b.start || a.end - b.end);
+  const spans = [...detailsSpans, ...headingSpans].sort((a, b) => a.start - b.start || a.end - b.end);
   const merged = [];
   for (const span of spans) {
     if (!merged.length || span.start >= merged.at(-1).end) merged.push(span);
@@ -648,13 +660,11 @@ function isMarkdownTableSeparator(line) {
   return /^\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?$/.test(line.trim());
 }
 
-function scanSqlParenSegments(sql, openParenIdx) {
-  if (openParenIdx < 0 || sql[openParenIdx] !== '(') return [];
-  const segments = [];
-  let depth = 0;
+function buildSqlParenMap(sql) {
+  const parenMap = new Map();
+  const stack = [];
   let quote = null;
-  let segStart = openParenIdx + 1;
-  for (let i = openParenIdx; i < sql.length; i++) {
+  for (let i = 0; i < sql.length; i++) {
     const ch = sql[i];
     const next = sql[i + 1];
     if (quote) {
@@ -677,19 +687,19 @@ function scanSqlParenSegments(sql, openParenIdx) {
       continue;
     }
     if (ch === '(') {
-      depth++;
+      stack.push({ openIdx: i, commas: [] });
+    } else if (ch === ',') {
+      if (stack.length > 0) stack.at(-1).commas.push(i);
     } else if (ch === ')') {
-      depth--;
-      if (depth === 0) {
-        segments.push(sql.slice(segStart, i));
-        return segments;
+      if (stack.length > 0) {
+        const frame = stack.pop();
+        parenMap.set(frame.openIdx, { closeIdx: i, commas: frame.commas });
       }
-    } else if (ch === ',' && depth === 1) {
-      segments.push(sql.slice(segStart, i));
-      segStart = i + 1;
+    } else if (ch === ';') {
+      stack.length = 0;
     }
   }
-  return [];
+  return parenMap;
 }
 
 function extractSqlSchemaColumns(fences) {
@@ -700,20 +710,30 @@ function extractSqlSchemaColumns(fences) {
   for (const fence of fences) {
     if (!SQL_FENCE_LANGS.has(fence.lang)) continue;
     const rawSql = fence.bodyLines.map(item => item.text).join('\n');
+    const parenMap = rawSql.includes('(') && rawSql.includes(')') ? buildSqlParenMap(rawSql) : null;
     let m;
-    createRe.lastIndex = 0;
-    while ((m = createRe.exec(rawSql)) !== null) {
-      const table = m[1].toLowerCase();
-      const segments = scanSqlParenSegments(rawSql, createRe.lastIndex - 1);
-      for (const seg of segments) {
-        const cleanedSeg = seg
-          .replace(/--[^\r\n]*/g, ' ')
-          .replace(/\/\*[\s\S]*?\*\//g, ' ')
-          .trim();
-        const colMatch = /^["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?(?:\s+|$)/.exec(cleanedSeg);
-        if (!colMatch) continue;
-        const col = colMatch[1].toLowerCase();
-        if (!SQL_TABLE_CONSTRAINT_KEYWORDS.has(col)) cols.add(`${table}.${col}`);
+    if (parenMap && parenMap.size > 0) {
+      createRe.lastIndex = 0;
+      while ((m = createRe.exec(rawSql)) !== null) {
+        const table = m[1].toLowerCase();
+        const openIdx = createRe.lastIndex - 1;
+        const entry = parenMap.get(openIdx);
+        if (!entry) continue;
+        let segStart = openIdx + 1;
+        const boundaries = [...entry.commas, entry.closeIdx];
+        for (const boundary of boundaries) {
+          const cleanedSeg = rawSql
+            .slice(segStart, boundary)
+            .replace(/--[^\r\n]*/g, ' ')
+            .replace(/\/\*[\s\S]*?\*\//g, ' ')
+            .trim();
+          segStart = boundary + 1;
+          const colMatch = /^["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?(?:\s+|$)/.exec(cleanedSeg);
+          if (!colMatch) continue;
+          const col = colMatch[1].toLowerCase();
+          if (!SQL_TABLE_CONSTRAINT_KEYWORDS.has(col)) cols.add(`${table}.${col}`);
+        }
+        createRe.lastIndex = entry.closeIdx + 1;
       }
     }
     alterAddRe.lastIndex = 0;
@@ -878,12 +898,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
       tableSpec = null;
       bulletPort = null;
       bulletIndent = -1;
-      if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title)) {
-        inPortsSection = true;
-        portsSectionDepth = depth;
-        subheadingPort = null;
-        subheadingDepth = 0;
-      } else if (inPortsSection && depth > portsSectionDepth) {
+      if (inPortsSection && depth > portsSectionDepth) {
         const cleanedTitle = title.replace(/\b(?:port|resource|adapter|interface)\b/gi, '').trim();
         const ident = cleanSingleIdentifier(cleanedTitle, { allowCallArgs: false });
         if (ident) {
@@ -893,6 +908,11 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
           subheadingPort = null;
           subheadingDepth = 0;
         }
+      } else if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title)) {
+        inPortsSection = true;
+        portsSectionDepth = depth;
+        subheadingPort = null;
+        subheadingDepth = 0;
       } else if (depth <= portsSectionDepth) {
         inPortsSection = false;
         portsSectionDepth = 0;
@@ -988,15 +1008,16 @@ function isDomainPortWiringHeading(title) {
   return !NETWORK_PORT_HEADING_RE.test(title) && DOMAIN_PORT_HEADING_RE.test(title);
 }
 
-function hasDomainPortWiringCue(text) {
-  const raw = String(text ?? '');
+function hasDomainPortWiringCue(outsideText, fullLine = outsideText) {
+  const raw = String(outsideText ?? '');
   if (!DOMAIN_PORT_CUE_RE.test(raw)) return false;
-  if (!/(?:port|bind)/i.test(raw)) return true;
   let scrubbed = raw;
-  for (const re of NETWORK_PORT_PHRASE_PATTERNS) {
+  for (const re of NON_PORT_IDIOM_PATTERNS) {
     scrubbed = scrubbed.replace(re, ' ');
   }
-  return DOMAIN_PORT_CUE_RE.test(scrubbed);
+  if (DOMAIN_PORT_DIRECT_CUE_RE.test(scrubbed)) return true;
+  if (!DOMAIN_PORT_BIND_WORD_RE.test(scrubbed)) return false;
+  return DOMAIN_PORT_BIND_CONTEXT_RE.test(scrubbed) || DIRECT_BIND_PORT_OP_RE.test(String(fullLine ?? ''));
 }
 
 function classifyNativeTable(headers, inPortSection) {
@@ -1085,6 +1106,7 @@ function extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns, { mention
   let inMarkdownTable = false;
   let activeTableSpec = null;
   let inCueBulletList = false;
+  let cueAwaitingList = false;
   let pendingBulletGroup = [];
 
   const flushBulletGroup = () => {
@@ -1117,6 +1139,7 @@ function extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns, { mention
       inMarkdownTable = false;
       activeTableSpec = null;
       inCueBulletList = false;
+      cueAwaitingList = false;
       continue;
     }
 
@@ -1126,6 +1149,7 @@ function extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns, { mention
       inMarkdownTable = true;
       activeTableSpec = classifyNativeTable(headers, inPortSection);
       inCueBulletList = false;
+      cueAwaitingList = false;
       continue;
     }
     if (inMarkdownTable) {
@@ -1158,19 +1182,25 @@ function extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns, { mention
     const trimmed = line.trim();
     if (!trimmed) {
       flushBulletGroup();
+      if (cueAwaitingList) {
+        cueAwaitingList = false;
+      } else {
+        inCueBulletList = false;
+      }
       continue;
     }
 
     const bulletMatch = BULLET_LINE_RE.exec(line);
     const { spans, outside } = extractInlineBacktickSpans(line);
-    const lineHasCue = hasDomainPortWiringCue(outside);
+    const lineHasCue = hasDomainPortWiringCue(outside, line);
 
     if (bulletMatch) {
+      cueAwaitingList = false;
       const lead = extractLeadingBulletPort(bulletMatch[2]);
       if (inPortSection || inCueBulletList || lineHasCue) {
         flushBulletGroup();
         if (lead) {
-          // On a leading-port bullet (`- \`port.op\`: description`), scan the LHS fully and only high-signal declared prefixes on the RHS.
+          // On a leading-port bullet (`- \`port.op\`: description` or `- \`port.op\` - description`), scan the LHS fully and only high-signal declared prefixes on the RHS.
           const body = bulletMatch[2];
           const sepIdx = (() => {
             let inTicks = false;
@@ -1179,6 +1209,7 @@ function extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns, { mention
               if (inTicks) continue;
               if (body[i] === ':' || body[i] === '—' || body[i] === '–') return i;
               if ((body[i] === '-' || body[i] === '=') && body[i + 1] === '>') return i;
+              if (body[i] === '-' && i > 0 && body[i - 1] === ' ' && body[i + 1] === ' ') return i;
             }
             return -1;
           })();
@@ -1204,9 +1235,11 @@ function extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns, { mention
     if (inPortSection || lineHasCue) {
       scanBacktickSpans(spans, lineNo);
       scanUnbacktickedText(outside, lineNo);
-      inCueBulletList = lineHasCue || inPortSection;
+      inCueBulletList = lineHasCue;
+      cueAwaitingList = lineHasCue && trimmed.endsWith(':');
     } else {
       inCueBulletList = false;
+      cueAwaitingList = false;
       // Outside port-wiring sections/tables/cues: only flag high-signal <declaredPrefix>.<unknownOp> in backticks.
       scanBacktickSpans(spans, lineNo, { onlyDeclaredPrefixes: true });
     }

@@ -1846,3 +1846,200 @@ test('3574 adversarial review fixes: linear ReDoS safety, scoped table/prose ext
   assert.ok(collected[0].errors[0].includes('prompts/broken-adapter.prompt.md') && collected[0].errors[0].includes('"store.missing"'));
   assert.ok(!collected[0].errors.some(e => e.includes('only-native-dep.prompt.md')), 'heading-style native-only peer must be recognized as native-only');
 });
+
+test('3574 + 3578 Round 2 regressions: Story-scoped sibling isolation (P1-A), ## Ports subheadings (P1-B), adapter/idiom/separator false-positive guards (P1-C), and O(N) SQL/heading scans (P1-D)', async t => {
+  // P1-A: Two sibling Stories sharing one prompt — lint --local user_stories/good.md must exit 0 even when sibling bad.md fails an error rule.
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-r2-p1a-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const repo = join(scratch, 'repo');
+  const home = join(scratch, 'home');
+  const state = join(scratch, 'state');
+  for (const dir of [home, state, join(repo, 'prompts'), join(repo, 'user_stories'), join(repo, 'tests')]) {
+    mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(
+    join(repo, 'prompts/shared.prompt.md'),
+    '# Shared pricing\n\nOwn `src/shared.mjs`. Compute totals in cents.\n\n## Dependencies\n\nNone.\n',
+  );
+  writeFileSync(
+    join(repo, 'user_stories/good.md'),
+    '# Good story\n\nAs a shopper, I want my subtotal shown in cents, so that I know the price.\n\n## Acceptance criteria\n\n1. One item costs 100 cents.\n',
+  );
+  writeFileSync(
+    join(repo, 'tests/good.json'),
+    JSON.stringify({
+      schema_version: 'prompt-runtime.program-scenario.v1',
+      story_path: 'user_stories/good.md',
+      criteria: [{ id: 'AC1', text: 'One item costs 100 cents.' }],
+      initial_world: {},
+      steps: [{ step_id: 's1', entry_path: 'prompts/shared.prompt.md', operation: 'price', input: {}, checks: [{ criterion_id: 'AC1', target: 'result', path: '', op: 'equals', value: 100 }] }],
+    }, null, 2) + '\n',
+  );
+  writeFileSync(
+    join(repo, 'user_stories/bad.md'),
+    [
+      '# Bad story',
+      '',
+      'As a shopper, I want seven things at once, so that it is bloated.',
+      '',
+      '## Acceptance criteria',
+      '',
+      ...Array.from({ length: 7 }, (_, i) => `${i + 1}. Check ${i + 1} returns ${i + 1}.`),
+    ].join('\n') + '\n',
+  );
+  writeFileSync(
+    join(repo, 'tests/bad.json'),
+    JSON.stringify({
+      schema_version: 'prompt-runtime.program-scenario.v1',
+      story_path: 'user_stories/bad.md',
+      criteria: [{ id: 'AC1', text: 'Check 1 returns 1.' }],
+      initial_world: {},
+      steps: [{ step_id: 's1', entry_path: 'prompts/shared.prompt.md', operation: 'price', input: {}, checks: [{ criterion_id: 'AC1', target: 'result', path: '', op: 'equals', value: 1 }] }],
+    }, null, 2) + '\n',
+  );
+  writeFileSync(
+    join(repo, 'pdd.json'),
+    JSON.stringify({ lint: { rules: { 'story-bloated-criteria': 'error' } } }, null, 2) + '\n',
+  );
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
+
+  const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
+  const goodOut = sink(), goodErr = sink();
+  const goodCode = await runPdd(['lint', '--local', 'user_stories/good.md'], { cwd: repo, env, stdout: goodOut, stderr: goodErr });
+  assert.equal(goodCode, 0, `expected good.md to ignore sibling bad.md, stderr: ${goodErr.text}`);
+
+  const goodJsonOut = sink(), goodJsonErr = sink();
+  const goodJsonCode = await runPdd(['lint', '--local', 'user_stories/good.md', '--json'], { cwd: repo, env, stdout: goodJsonOut, stderr: goodJsonErr });
+  assert.equal(goodJsonCode, 0, goodJsonErr.text);
+  assert.deepEqual(JSON.parse(goodJsonOut.text).problems, []);
+
+  const badOut = sink(), badErr = sink();
+  const badCode = await runPdd(['lint', '--local', 'user_stories/bad.md'], { cwd: repo, env, stdout: badOut, stderr: badErr });
+  assert.equal(badCode, 1);
+  assert.match(badErr.text, /user_stories\/bad\.md.*\[story-bloated-criteria\]/);
+
+  const repoOut = sink(), repoErr = sink();
+  const repoCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: repoOut, stderr: repoErr });
+  assert.equal(repoCode, 1);
+  assert.match(repoErr.text, /user_stories\/bad\.md.*\[story-bloated-criteria\]/);
+
+  // P1-B: Subheadings like `### \`store\` port`, `### \`vault\` resource`, `### \`notice\`` under `## Ports` preserve portsSectionDepth and extract all 4 ports.
+  const subheadingDep = [
+    '# Domain ports via subheadings',
+    '',
+    '## Ports',
+    '',
+    '### `store` port',
+    '- `load(id)`',
+    '- `save(id, row)`',
+    '',
+    '### `vault` resource',
+    '- `fetch(key)`',
+    '',
+    '### `notice`',
+    '- `deliver(msg)`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const subheadingAdapter = [
+    '---',
+    'kind: native-only',
+    'reason: Real DB, HSM, and webhook transport.',
+    '---',
+    '',
+    '# Adapter',
+    '',
+    '## Port wiring',
+    '- `store.load`: read row',
+    '- `store.save`: write row',
+    '- `vault.fetch`: read secret',
+    '- `notice.deliver`: post webhook',
+    '',
+    '## Dependencies',
+    '- [domain](domain.prompt.md)',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(subheadingAdapter, [{ path: 'prompts/domain.prompt.md', text: subheadingDep }]),
+    [],
+  );
+  const subheadingDead = lintNativeOnlyPortParity(
+    `${subheadingAdapter}\n## Bound ports\n- \`vault.delete\`\n`,
+    [{ path: 'prompts/domain.prompt.md', text: subheadingDep }],
+  );
+  assert.equal(subheadingDead.length, 1);
+  assert.ok(subheadingDead[0].includes('"vault.delete"'));
+
+  // P1-C: Zero false positives on generic `## SQLite Adapter` / `## Storage Adapter`, `Upper bound on retries`,
+  // blank-line reset after cue lines, `Bind SQL parameters`, `wire format`, `Bind 0.0.0.0 on port 8080`, and ASCII ` - ` bullet separators.
+  const realisticNativeAdapter = [
+    '---',
+    'kind: native-only',
+    'reason: SQLite storage, protobuf wire serialization, and hypercorn HTTP server.',
+    '---',
+    '',
+    '# Storage and transport service',
+    '',
+    '## SQLite Adapter',
+    '',
+    'Read `settings.db_path`, open a connection, run `cursor.execute`, and finalize with `session.commit`.',
+    'Bind SQL parameters using `cursor.execute` and `statement.bind_values`.',
+    '',
+    '## Storage Adapter',
+    '',
+    'Encode the wire format using `protobuf.encode` and decode via `protobuf.decode`.',
+    'Bind 0.0.0.0 on port 8080 using `hypercorn.serve`.',
+    'Upper bound on retries is 3.',
+    '',
+    '- `cursor.execute` runs retryable queries.',
+    '',
+    'Wire `store.load` for [domain](domain.prompt.md).',
+    '',
+    '- `session.commit` flushes pending local state after a blank line.',
+    '',
+    '## Port wiring',
+    '',
+    '- `store.load` - reads rows via `cursor.execute` and `session.commit`.',
+    '- `store.save` - writes rows via `cursor.execute`.',
+    '- `vault.fetch` - fetches key material.',
+    '- `notice.deliver` - sends HTTP notification.',
+    '',
+    '## Dependencies',
+    '- [domain](domain.prompt.md)',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(realisticNativeAdapter, [{ path: 'prompts/domain.prompt.md', text: subheadingDep }], {
+      path: 'prompts/service.prompt.md',
+    }),
+    [],
+  );
+
+  // ASCII ` - ` separator still catches declared-prefix undeclared op on RHS while ignoring `cursor.execute`.
+  const asciiDashDead = lintNativeOnlyPortParity(
+    realisticNativeAdapter.replace(
+      '- `store.load` - reads rows via `cursor.execute` and `session.commit`.',
+      '- `store.load` - reads rows via `cursor.execute` and calls `store.purge`.',
+    ),
+    [{ path: 'prompts/domain.prompt.md', text: subheadingDep }],
+  );
+  assert.equal(asciiDashDead.length, 1, asciiDashDead.join('\n'));
+  assert.ok(asciiDashDead[0].includes('"store.purge"'));
+
+  // P1-D: Both newly identified O(N^2) patterns run in strictly linear time.
+  const unclosedSql = `---\nkind: native-only\nreason: Perf.\n---\n\n# SQL\n\n\`\`\`sql\n${'CREATE TABLE t (\n'.repeat(5000)}\`\`\`\n\n## Ports\n- \`store.load\`\n`;
+  const tSql = performance.now();
+  const sqlRes = lintNativeOnlyPortParity(unclosedSql, [{ path: 'prompts/domain.prompt.md', text: subheadingDep }]);
+  const msSql = performance.now() - tSql;
+  assert.deepEqual(sqlRes, []);
+  assert.ok(msSql < 200, `expected linear SQL paren scan on 5000 unclosed CREATE TABLE statements, got ${msSql.toFixed(1)}ms`);
+
+  const manyHeadings = '## Runtime interface\n```json\n{}\n```\n## Other\nline\n'.repeat(2500);
+  const tHead = performance.now();
+  const strippedHeadings = stripPromptMetadata(manyHeadings);
+  const msHead = performance.now() - tHead;
+  assert.ok(!strippedHeadings.includes('Runtime interface'));
+  assert.ok(msHead < 200, `expected linear heading scan on 15k lines, got ${msHead.toFixed(1)}ms`);
+});

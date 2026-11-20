@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: c5d0900b989ff46208a0a4f474520107bc7afb6bbd8bdb89cc5227a4ef35bf84).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: ba4438f5c251f74f86504dcf3b06f94a685cbec73d4ca5be7ad03ba9e01c39c8).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -563,7 +563,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
         const lintRoot = isLintCheckMode ? resolveProjectLintRoot(cwd) : null;
         let seamProjectErrors = null;
-        const onProjectLintResult = lintRoot
+        const onProjectLintResult = lintRoot && !plan.operands.length
           ? result => {
               if (!result || !Array.isArray(result.errors)) return;
               if (!seamProjectErrors) seamProjectErrors = [];
@@ -575,7 +575,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (lintRoot && plan.options['--json'] === true) {
           let captured = '';
           const bufferedStdout = { write: chunk => { captured += String(chunk); return true; } };
-          const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout: bufferedStdout, stderr, env, onProjectLintResult });
+          const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout: bufferedStdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
           if (runtimeCode === 0 || runtimeCode === 1) {
             const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
             if (projectErrors.length > 0) {
