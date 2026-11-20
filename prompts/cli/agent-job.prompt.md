@@ -61,7 +61,7 @@ is uncertain; those records let a later tick retry without a live controller.
   `custodyRoot` is optional. Only a caller that will remove a known disposable
   worktree passes its root; the runner records its absolute path. `cwd` alone is
   never a custody root: a job may run in a person's persistent source tree.
-  `cleanupDirs` is optional: an array of disposable step overlay paths (`pdd-cx-*`)
+  `cleanupDirs` is optional: an array of disposable step overlay paths (`pdd-cx-*` or `pdd-cl-*`)
   saved in the spec and removed best-effort when the wrapper finishes (after any
   group `SIGKILL`) and in `cleanupAgentJob` whenever the wrapper is no longer live
   (including when `!processManifest(saved)`) or when process termination is confirmed.
