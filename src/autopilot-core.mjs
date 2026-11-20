@@ -4077,6 +4077,8 @@ function isDigitChar(ch) {
 }
 
 function readSingleLineRangeAtomEnd(text, pos) {
+  // Returns >= pos on a valid line/range atom, -1 when pos does not start a line atom at all
+  // (e.g. `,lib/foo.mjs:1`, `,LICENSE:1`), and -2 on a malformed atom (e.g. `22foo`, `22-`, `22.mjs`) to fail closed.
   let cur = pos;
   if (cur < text.length && (text[cur] === 'L' || text[cur] === 'l')) cur++;
   const d1 = cur;
@@ -4087,22 +4089,28 @@ function readSingleLineRangeAtomEnd(text, pos) {
     cur++;
     while (cur < text.length && isDigitChar(text[cur])) cur++;
   }
-  // Optional `-end` / `–end` range
+  // Optional `-end` / `–end` range (a dangling `-` without digits like `22-` is malformed -> -2).
   if (cur < text.length && (text[cur] === '-' || text[cur] === '–')) {
     let next = cur + 1;
     if (next < text.length && (text[next] === 'L' || text[next] === 'l')) next++;
     const d2 = next;
     while (next < text.length && isDigitChar(text[next])) next++;
-    if (next > d2) {
-      cur = next;
-      if (cur + 1 < text.length && text[cur] === ':' && isDigitChar(text[cur + 1])) {
-        cur++;
-        while (cur < text.length && isDigitChar(text[cur])) cur++;
-      }
+    if (next === d2) return -2;
+    cur = next;
+    if (cur + 1 < text.length && text[cur] === ':' && isDigitChar(text[cur + 1])) {
+      cur++;
+      while (cur < text.length && isDigitChar(text[cur])) cur++;
     }
   }
   const after = cur < text.length ? text[cur] : '';
-  if (after && (isPathWordChar(after) || after === '/')) return -1;
+  if (after) {
+    const afterNext = cur + 1 < text.length ? text[cur + 1] : '';
+    const isSentenceDot = after === '.' && !isPathWordChar(afterNext) && afterNext !== '/';
+    const isClosingUnderscore = after === '_' && isUnderscoreWrapperAfter(text, cur);
+    if ((isPathWordChar(after) || after === '/') && !isSentenceDot && !isClosingUnderscore) {
+      return -2;
+    }
+  }
   return cur;
 }
 
@@ -4110,10 +4118,12 @@ function readLineRangeSuffixAt(text, startPos) {
   const firstEnd = readSingleLineRangeAtomEnd(text, startPos);
   if (firstEnd < 0) return null;
   let endPos = firstEnd;
-  // Consume additional comma-separated line atoms (e.g. `,22`, `,L25-L28`) without swallowing a comma-chained filename (e.g. `,lib/foo.mjs:1`).
+  // Consume additional comma-separated line atoms (e.g. `,22`, `,L25-L28`) without swallowing a comma-chained filename
+  // (e.g. `,lib/foo.mjs:1`), while failing closed on malformed trailing line atoms (e.g. `,22foo`, `,22-`).
   while (endPos < text.length && text[endPos] === ',') {
     const nextEnd = readSingleLineRangeAtomEnd(text, endPos + 1);
-    if (nextEnd < 0) break;
+    if (nextEnd === -1) break;
+    if (nextEnd < 0) return null;
     endPos = nextEnd;
   }
   const ranges = parseLineRangeSuffix(stripTokenWrappers(text.slice(startPos, endPos)));

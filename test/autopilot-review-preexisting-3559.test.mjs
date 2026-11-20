@@ -832,3 +832,61 @@ test('#3559 (11): Round-4 adversarial regressions (__bold__/_a/_b wrappers, %20/
   assert.equal(deepRes.promoted.length, 1, '40k a/../ traversal still resolves to changed hunk');
   assert.ok(elapsedMs < 500, `resolveInteriorParentSegments must stay linear O(N), took ${elapsedMs.toFixed(1)}ms`);
 });
+
+test('#3559 (12): Round-5 adversarial regressions (comma-chained malformed/punctuated line atoms fail closed; sentence-ending periods and closing _-wrappers outside diff stay non-blocking)', () => {
+  const diff = [
+    'diff --git a/src/auth.mjs b/src/auth.mjs',
+    '--- a/src/auth.mjs',
+    '+++ b/src/auth.mjs',
+    '@@ -20,5 +20,5 @@',
+    '+change();',
+    'diff --git a/src/my file.mjs b/src/my file.mjs',
+    '--- a/src/my file.mjs',
+    '+++ b/src/my file.mjs',
+    '@@ -20,5 +20,5 @@',
+    '+spaceChange();',
+  ].join('\n');
+  const baseScope = parseUnifiedDiffHunks(diff);
+  const scopeWithRepo = {
+    ...baseScope,
+    repoFiles: new Set(['src/auth.mjs', 'src/my file.mjs', 'lib/untouched.mjs', 'LICENSE']),
+  };
+
+  // All comma-chained bypasses & malformed second atoms MUST promote BOTH with and without repoFiles
+  const r5Bypasses = [
+    'P1 src/my file.mjs:5,22.',
+    'P1 [bug](https://github.com/org/repo/blob/main/src/auth.mjs#L5,L22.)',
+    'P1 src/auth.mjs:5,22foo',
+    'P1 src/auth.mjs:5,L22foo',
+    'P1 src/auth.mjs:5,22-',
+    'P1 src/auth.mjs:5,22-24foo',
+    'P1 ./src/auth.mjs:5,22_',
+    'P1 src/auth.mjs:5,22_',
+    'P1 _src/auth.mjs:5,22_',
+    'P1 src/auth.mjs:5.mjs',
+    'P1 src/auth.mjs:5.0',
+  ];
+  for (const [label, sc] of [['with repoFiles', scopeWithRepo], ['without repoFiles', baseScope]]) {
+    const res = guardPreExistingFindings(r5Bypasses, sc);
+    assert.equal(res.promoted.length, r5Bypasses.length, `all ${r5Bypasses.length} R5 bypasses must promote (${label}); kept=${JSON.stringify(res.preExisting)}`);
+    assert.deepEqual(res.preExisting, []);
+  }
+
+  // Legitimate outside-diff prose with sentence-ending periods and closing _-wrappers MUST stay non-blocking
+  const validProse = [
+    'P2 Pre-existing null check in src/auth.mjs:5.',
+    'P2 Pre-existing null check in src/auth.mjs:5-10.',
+    'P2 Pre-existing null check in src/auth.mjs:5:1.',
+    'P2 Pre-existing null check in src/auth.mjs#L5.',
+    'P2 Pre-existing null check in src/auth.mjs:5. See other note.',
+    'P2 Pre-existing null check in _src/auth.mjs:5_',
+    'P2 Pre-existing null check in __src/auth.mjs:5__',
+    'P2 src/auth.mjs:5,lib/untouched.mjs:1 two outside-diff bugs',
+    'P2 src/auth.mjs:5,LICENSE:1 two outside-diff bugs',
+  ];
+  for (const [label, sc] of [['with repoFiles', scopeWithRepo], ['without repoFiles', baseScope]]) {
+    const res = guardPreExistingFindings(validProse, sc);
+    assert.deepEqual(res.promoted, [], `valid outside-diff prose must stay non-blocking (${label}): ${JSON.stringify(res.promoted)}`);
+    assert.equal(res.preExisting.length, validProse.length);
+  }
+});
