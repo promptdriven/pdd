@@ -1,0 +1,251 @@
+{
+  "entry_path": "prompts/cli/human-boundary-card.prompt.md",
+  "seeds": {
+    "empty": {
+      "ownerLookups": [],
+      "localLint": null,
+      "hostedStoryRuns": [],
+      "nativeChecks": []
+    },
+    "owner_resolved": [
+      {
+        "targetPath": "src/alert-router.mjs",
+        "ownerPrompt": "prompts/alert-router.prompt.md",
+        "source": "header",
+        "certain": true
+      }
+    ],
+    "local_svg_lint_zero": {
+      "exitCode": 0,
+      "state": "partial",
+      "localOnly": true,
+      "scope": "SVG layout only",
+      "warningCount": 0,
+      "problemCount": 0,
+      "incompleteSave": false,
+      "inspectedPrompts": [
+        "prompts/alert-router.prompt.md"
+      ],
+      "inspectedTests": [
+        "tests/alert-router.json"
+      ]
+    },
+    "hosted_passed": [
+      {
+        "storyPath": "user_stories/alert-router.md",
+        "testPath": "tests/alert-router.json",
+        "loadedPrompts": [
+          "prompts/alert-router.prompt.md"
+        ],
+        "missingOwnerConnection": false,
+        "state": "passed",
+        "passedAssertions": [
+          "AC1: suppress pager alert during blackout",
+          "AC2: record suppression reason"
+        ],
+        "totalAssertions": 2
+      }
+    ],
+    "native_smoke_receipted": [
+      {
+        "behavior": "suppresses live pager webhook on staging host",
+        "targetHost": "staging-east-1",
+        "runner": "native-smoke",
+        "receipt": {
+          "receiptId": "native-ev-3297-smoke-1",
+          "source": "pdd.native-evidence-record.v1",
+          "status": "passed",
+          "verifiedBehaviors": [
+            "suppresses live pager webhook on staging host"
+          ]
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "four-observations-together",
+      "op": "summarizeBoundaryEvidence",
+      "from": "empty",
+      "patch": {
+        "ownerLookups": {
+          "$use": "owner_resolved"
+        },
+        "localLint": {
+          "$use": "local_svg_lint_zero"
+        },
+        "hostedStoryRuns": {
+          "$use": "hosted_passed"
+        },
+        "nativeChecks": {
+          "$use": "native_smoke_receipted"
+        }
+      },
+      "checks": {
+        "1": [
+          ["result", "/advisory", "=", true],
+          ["result", "/entries", "count", 4],
+          ["result", "/entries/0/kind", "=", "owner-resolution"],
+          ["result", "/entries/0/label", "=", "resolved"],
+          ["result", "/entries/0/ownerPrompt", "=", "prompts/alert-router.prompt.md"],
+          ["result", "/entries/0/source", "=", "pdd owner (header)"],
+          ["result", "/credits/resolvedOwners", "=", ["prompts/alert-router.prompt.md"]],
+          ["result", "/lines", "len<=", 25]
+        ],
+        "2": [
+          ["result", "/entries/1/kind", "=", "local-lint"],
+          ["result", "/entries/1/label", "=", "partial"],
+          ["result", "/entries/1/exitCode", "=", 0],
+          ["result", "/entries/1/source", "=", "pdd lint --local"],
+          ["result", "/entries/1/scope", "=", "SVG layout only; prompt rules not checked"],
+          ["result", "/entries/1/creditsPromptRules", "=", false],
+          ["result", "/credits/localLintPartial", "=", true],
+          ["result", "/credits/localLintCreditsPromptRules", "=", false]
+        ],
+        "3": [
+          ["result", "/entries/2/kind", "=", "hosted-story"],
+          ["result", "/entries/2/label", "=", "passed"],
+          ["result", "/entries/2/source", "=", "pdd test (hosted): user_stories/alert-router.md"],
+          ["result", "/entries/2/loadedPrompts", "=", ["prompts/alert-router.prompt.md"]],
+          ["result", "/entries/2/passedAssertions", "=", ["AC1: suppress pager alert during blackout", "AC2: record suppression reason"]],
+          ["result", "/entries/2/creditsModeledAssertions", "=", true],
+          ["result", "/entries/2/creditsNativeBehavior", "=", false],
+          ["result", "/credits/hostedPassedAssertions", "=", ["AC1: suppress pager alert during blackout", "AC2: record suppression reason"]]
+        ],
+        "4": [
+          ["result", "/entries/3/kind", "=", "native-check"],
+          ["result", "/entries/3/label", "=", "verified"],
+          ["result", "/entries/3/receiptId", "=", "native-ev-3297-smoke-1"],
+          ["result", "/entries/3/creditsNativeBehavior", "=", true],
+          ["result", "/credits/nativeVerifiedBehaviors", "=", ["suppresses live pager webhook on staging host"]],
+          ["result", "/credits/nativeUnverifiedBehaviors", "=", []]
+        ]
+      }
+    },
+    {
+      "id": "local-lint-zero-exit-only",
+      "op": "summarizeBoundaryEvidence",
+      "from": "empty",
+      "patch": {
+        "ownerLookups": {
+          "$use": "owner_resolved"
+        },
+        "localLint": {
+          "$use": "local_svg_lint_zero",
+          "patch": {
+            "state": "passed"
+          }
+        }
+      },
+      "checks": {
+        "2": [
+          ["result", "/entries/1/label", "=", "partial"],
+          ["result", "/entries/1/exitCode", "=", 0],
+          ["result", "/entries/1/creditsPromptRules", "=", false],
+          ["result", "/credits/localLintPartial", "=", true],
+          ["result", "/credits/localLintCreditsPromptRules", "=", false],
+          ["result", "/credits/hostedPassedAssertions", "=", []]
+        ]
+      }
+    },
+    {
+      "id": "hosted-unconnected-owner",
+      "op": "summarizeBoundaryEvidence",
+      "from": "empty",
+      "patch": {
+        "hostedStoryRuns": [
+          {
+            "storyPath": "user_stories/alert-router.md",
+            "testPath": "tests/alert-router.json",
+            "loadedPrompts": [
+              "prompts/simulator.prompt.md"
+            ],
+            "missingOwnerConnection": true,
+            "state": "passed",
+            "passedAssertions": [
+              "AC1: suppress pager alert during blackout"
+            ],
+            "totalAssertions": 1
+          }
+        ]
+      },
+      "checks": {
+        "3": [
+          ["result", "/entries/0/label", "=", "unconnected"],
+          ["result", "/entries/0/creditsModeledAssertions", "=", false],
+          ["result", "/entries/0/creditsPromptRules", "=", false],
+          ["result", "/entries/0/creditsNativeBehavior", "=", false],
+          ["result", "/credits/hostedPassedAssertions", "=", []]
+        ]
+      }
+    },
+    {
+      "id": "native-receipt-required",
+      "op": "summarizeBoundaryEvidence",
+      "from": "empty",
+      "patch": {
+        "nativeChecks": [
+          {
+            "behavior": "drains active connections on staging host",
+            "targetHost": "staging-east-1",
+            "runner": "native-smoke",
+            "receipt": null
+          },
+          {
+            "behavior": "rotates webhook signing key on staging host",
+            "targetHost": "staging-east-1",
+            "runner": "native-smoke",
+            "receipt": {
+              "receiptId": "native-ev-3297-smoke-other",
+              "source": "pdd.native-evidence-record.v1",
+              "status": "passed",
+              "verifiedBehaviors": [
+                "health endpoint returns 200"
+              ]
+            }
+          },
+          {
+            "behavior": "retries dead-letter delivery on staging host",
+            "targetHost": "staging-east-1",
+            "runner": "native-smoke",
+            "receipt": {
+              "receiptId": "native-ev-3297-smoke-fail",
+              "source": "pdd.native-evidence-record.v1",
+              "status": "failed",
+              "verifiedBehaviors": [
+                "retries dead-letter delivery on staging host"
+              ]
+            }
+          },
+          {
+            "behavior": "suppresses live pager webhook on staging host",
+            "targetHost": "staging-east-1",
+            "runner": "native-smoke",
+            "receipt": {
+              "receiptId": "native-ev-3297-smoke-2",
+              "source": "pdd.native-evidence-record.v1",
+              "status": "passed",
+              "verifiedBehaviors": [
+                "suppresses live pager webhook on staging host"
+              ]
+            }
+          }
+        ]
+      },
+      "checks": {
+        "4": [
+          ["result", "/entries/0/label", "=", "unverified"],
+          ["result", "/entries/0/creditsNativeBehavior", "=", false],
+          ["result", "/entries/1/label", "=", "unverified"],
+          ["result", "/entries/1/creditsNativeBehavior", "=", false],
+          ["result", "/entries/2/label", "=", "failed"],
+          ["result", "/entries/2/creditsNativeBehavior", "=", false],
+          ["result", "/entries/3/label", "=", "verified"],
+          ["result", "/entries/3/creditsNativeBehavior", "=", true],
+          ["result", "/credits/nativeVerifiedBehaviors", "=", ["suppresses live pager webhook on staging host"]],
+          ["result", "/credits/nativeUnverifiedBehaviors", "=", ["drains active connections on staging host", "rotates webhook signing key on staging host", "retries dead-letter delivery on staging host"]]
+        ]
+      }
+    }
+  ]
+}
