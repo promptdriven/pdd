@@ -28,6 +28,153 @@ export const NORTH_STAR_TARGETS = Object.freeze({
   }),
 });
 
+export const REVIEW_EVAL_TARGETS = Object.freeze({
+  bug_recall_min_pct: 80.0,
+  clean_fp_rate_max_pct: 10.0,
+});
+
+function summarizeReviewEvalGroup(cases = [], targets = REVIEW_EVAL_TARGETS) {
+  let badTotal = 0;
+  let badCaught = 0;
+  let badFailedWithoutSignal = 0;
+  let badMissedPass = 0;
+  let badErrors = 0;
+  let cleanTotal = 0;
+  let cleanFalsePositives = 0;
+  let cleanTrueNegatives = 0;
+  let cleanErrors = 0;
+  let expectedSignalsTotal = 0;
+  let matchedSignalsTotal = 0;
+  let errorCount = 0;
+  let durationSum = 0;
+  let durationCount = 0;
+
+  for (const row of Array.isArray(cases) ? cases : []) {
+    if (!row || typeof row !== 'object') continue;
+    const label = String(row.label || '').toLowerCase();
+    const verdict = String(row.verdict || '').toUpperCase();
+    const isKnownVerdict = verdict === 'PASS' || verdict === 'FAIL';
+    const isError = verdict === 'ERROR'
+      || row.outcome === 'error'
+      || ((label === 'bad' || label === 'clean') && !isKnownVerdict);
+    if (isError) errorCount += 1;
+    if (typeof row.duration_ms === 'number' && Number.isFinite(row.duration_ms) && row.duration_ms >= 0) {
+      durationSum += row.duration_ms;
+      durationCount += 1;
+    }
+
+    if (label === 'bad') {
+      badTotal += 1;
+      const expectedCount = Number.isInteger(row.expected_signals_count) && row.expected_signals_count >= 0
+        ? row.expected_signals_count
+        : (Array.isArray(row.expected_signals) ? row.expected_signals.length : 0);
+      expectedSignalsTotal += expectedCount;
+      const matchedCount = Array.isArray(row.matched_signals) ? row.matched_signals.length : 0;
+      if (!isError && verdict === 'FAIL' && expectedCount > 0) {
+        matchedSignalsTotal += Math.min(expectedCount, matchedCount);
+      }
+
+      if (isError) {
+        badErrors += 1;
+      } else if (row.caught === true && verdict === 'FAIL') {
+        badCaught += 1;
+      } else if (verdict === 'FAIL') {
+        badFailedWithoutSignal += 1;
+      } else {
+        badMissedPass += 1;
+      }
+    } else if (label === 'clean') {
+      cleanTotal += 1;
+      if (isError) {
+        cleanErrors += 1;
+      } else if (verdict === 'FAIL' || row.false_positive === true) {
+        cleanFalsePositives += 1;
+      } else if (verdict === 'PASS') {
+        cleanTrueNegatives += 1;
+      }
+    }
+  }
+
+  const rawBugRecall = badTotal > 0 ? (badCaught / badTotal) * 100 : null;
+  const rawCleanFpRate = cleanTotal > 0 ? (cleanFalsePositives / cleanTotal) * 100 : null;
+  const rawSignalRecall = expectedSignalsTotal > 0 ? (matchedSignalsTotal / expectedSignalsTotal) * 100 : null;
+
+  const minRecall = Number.isFinite(targets?.bug_recall_min_pct)
+    ? targets.bug_recall_min_pct
+    : REVIEW_EVAL_TARGETS.bug_recall_min_pct;
+  const maxFp = Number.isFinite(targets?.clean_fp_rate_max_pct)
+    ? targets.clean_fp_rate_max_pct
+    : REVIEW_EVAL_TARGETS.clean_fp_rate_max_pct;
+
+  const meetsTarget = badTotal > 0
+    && cleanTotal > 0
+    && errorCount === 0
+    && rawBugRecall !== null
+    && rawCleanFpRate !== null
+    && rawBugRecall >= minRecall
+    && rawCleanFpRate <= maxFp;
+
+  return {
+    total_cases: badTotal + cleanTotal,
+    bad_total: badTotal,
+    bad_caught: badCaught,
+    bad_failed_without_signal: badFailedWithoutSignal,
+    bad_missed_pass: badMissedPass,
+    bad_errors: badErrors,
+    bug_recall: roundNum(rawBugRecall, 1),
+    clean_total: cleanTotal,
+    clean_false_positives: cleanFalsePositives,
+    clean_true_negatives: cleanTrueNegatives,
+    clean_errors: cleanErrors,
+    clean_fp_rate: roundNum(rawCleanFpRate, 1),
+    expected_signals_total: expectedSignalsTotal,
+    matched_signals_total: matchedSignalsTotal,
+    signal_recall: roundNum(rawSignalRecall, 1),
+    error_count: errorCount,
+    avg_duration_ms: durationCount > 0 ? roundNum(durationSum / durationCount, 1) : null,
+    meets_target: meetsTarget,
+  };
+}
+
+export function computeReviewEvalScorecard(cases = [], { targets = REVIEW_EVAL_TARGETS } = {}) {
+  const list = Array.isArray(cases)
+    ? cases
+    : (Array.isArray(cases?.cases) ? cases.cases : []);
+  const effectiveTargets = {
+    bug_recall_min_pct: Number.isFinite(targets?.bug_recall_min_pct)
+      ? targets.bug_recall_min_pct
+      : REVIEW_EVAL_TARGETS.bug_recall_min_pct,
+    clean_fp_rate_max_pct: Number.isFinite(targets?.clean_fp_rate_max_pct)
+      ? targets.clean_fp_rate_max_pct
+      : REVIEW_EVAL_TARGETS.clean_fp_rate_max_pct,
+  };
+
+  const overall = summarizeReviewEvalGroup(list, effectiveTargets);
+  const groups = new Map();
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue;
+    const model = String(row.model || 'default');
+    const promptVersion = String(row.prompt_version || 'autopilot-v1');
+    const key = `${model}\u0000${promptVersion}`;
+    if (!groups.has(key)) {
+      groups.set(key, { model, prompt_version: promptVersion, rows: [] });
+    }
+    groups.get(key).rows.push(row);
+  }
+
+  const comparison = [...groups.values()].map(g => ({
+    model: g.model,
+    prompt_version: g.prompt_version,
+    ...summarizeReviewEvalGroup(g.rows, effectiveTargets),
+  }));
+
+  return {
+    targets: effectiveTargets,
+    ...overall,
+    comparison,
+  };
+}
+
 export const BENCHMARK_WORKLOADS = Object.freeze({
   snake: Object.freeze({
     id: 'snake',
@@ -197,7 +344,7 @@ export function assertCleanPublicText(value, label = 'output') {
   return text;
 }
 
-export function computeNorthStarScorecard({ releaseRun = null, observeRuns = [] } = {}) {
+export function computeNorthStarScorecard({ releaseRun = null, observeRuns = [], reviewEval = null } = {}) {
   const workloads = Array.isArray(releaseRun?.workloads) ? releaseRun.workloads : [];
   const smallRows = [];
   const brownfieldRows = [];
@@ -488,5 +635,8 @@ export function computeNorthStarScorecard({ releaseRun = null, observeRuns = [] 
       meets_target: apMeets,
       repos: byRepo,
     },
+    ...(reviewEval !== null && reviewEval !== undefined
+      ? { review_eval: computeReviewEvalScorecard(reviewEval) }
+      : {}),
   };
 }

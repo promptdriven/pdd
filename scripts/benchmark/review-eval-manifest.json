@@ -1,0 +1,75 @@
+{
+  "schema_version": "pdd.review-eval-manifest.v1",
+  "description": "Curated labeled bad and clean-control PR fixtures for automated Autopilot reviewer/verifier recall and false-positive evaluation.",
+  "fixtures": [
+    {
+      "id": "pr-2559-symlink-pr-body",
+      "label": "bad",
+      "repo": "promptdriven/pdd",
+      "pr": 2559,
+      "issue": 2444,
+      "base": "a1b09cb9641d021d391a87ffd9f4d3ba90340b85",
+      "head": "0db39638250f8fd11bc08bffa78ef8c4a6b03be8",
+      "issue_title": "Alpha: a run from a repo under a symlinked folder fails when it opens the PR",
+      "issue_body": "Problem: when the repo (or the home folder) is reached through a symlink, the open-pr step refuses with workflow_github_body_unsafe. The check assertBodyPath (src/workflow-github.mjs) compares the PR-body file's parent with a non-canonical path. Wanted: resolve the worktree root to its physical path (realpath) once, at run start, and use that path for every later check. The check stays strict: a body file whose physical parent is outside the worktree is still refused. Add a test with a symlinked repo.",
+      "pr_title": "Alpha: a run from a repo under a symlinked folder fails when it opens the PR (code)",
+      "pr_body": "PR 2 of this run: code and tests for issue #2444.",
+      "expected_signals": [
+        {
+          "id": "deleted-safety-tests",
+          "description": "Deleted 19 existing safety tests in test/workflow-github.test.mjs without sound justification",
+          "any_all_of": [
+            [
+              ["deleted", "deletes", "deleting", "removed", "removes", "removing", "dropped", "drops", "gutted", "stripped", "wiped"],
+              ["safety", "existing", "security", "workflow-github.test.mjs", "19", "coverage"],
+              ["test", "tests", "cases", "assertions"]
+            ],
+            [
+              ["deleted", "removed", "dropped", "missing"],
+              ["19 tests", "19 safety", "safety tests", "workflow-github.test.mjs"]
+            ]
+          ]
+        },
+        {
+          "id": "missing-real-symlink-test",
+          "description": "Missing a real symlinked repository test exercising the changed path",
+          "any_all_of": [
+            [
+              ["missing", "no", "lacks", "lacking", "without", "absent", "never", "fake", "mock", "mocked", "stub", "stubbed"],
+              ["symlink", "symlinked"],
+              ["test", "tests", "tested", "repo", "repository", "coverage", "exercise", "exercises"]
+            ]
+          ]
+        },
+        {
+          "id": "wrong-reason-pass",
+          "description": "Test passes for the wrong reason instead of proving the symlink defect fix",
+          "any_all_of": [
+            [
+              ["wrong reason", "wrong-reason"]
+            ],
+            [
+              ["pass", "passes", "passing", "passed", "green"],
+              ["wrong", "vacuous", "unrelated", "never fails", "does not fail", "doesn't fail", "different reason"]
+            ]
+          ]
+        }
+      ],
+      "min_signals_required": 1
+    },
+    {
+      "id": "pr-2560-workflow-name-guidance",
+      "label": "clean",
+      "repo": "promptdriven/pdd",
+      "pr": 2560,
+      "issue": 2438,
+      "base": "515dae711345f93b622ed19d4a3f825eb4e339d4",
+      "head": "1a4b37803022b604f2ab576c9683a79e47943135",
+      "issue_title": "Alpha: 'pdd workflow run 81' says only 'Unsupported command'",
+      "issue_body": "Problem: a user typed `pdd workflow run 81` (no workflow name). PDD answered \"Unsupported command or options in PDD Alpha. Run pdd --help for local authoring tools.\" It does not say that a workflow name is missing. Wanted: when the first operand is a number, say: \"Name the workflow: pdd workflow run small-change 81 (or bug, feature). See pdd workflow list.\" Exit code as for other usage errors.",
+      "pr_title": "fix: explain a missing workflow name before starting work (#2438)",
+      "pr_body": "Explains the missing workflow name when the first operand to pdd workflow run is a numeric issue number, exiting 2 with guidance and regression, vector, and bounded formal tests.",
+      "expected_signals": []
+    }
+  ]
+}
