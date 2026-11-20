@@ -1,6 +1,6 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 27d3a0d9be7adac633d2bf3151fad6fc5df6eedfeb7f0907dff8702c049f9172).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 14df52963df930e219de705a984254ca8065332e9c0a8caa7fc75c1229e51c85).
 import { execFileSync } from 'node:child_process';
-import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,9 +53,7 @@ function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
   } catch { /* delegate workspace/selection errors to runtime[action] */ }
   return null;
 }
-const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
-function hasProjectLintConfig(cwd) {
-  let root;
+function resolveProjectLintRoot(cwd) {
   try {
     const gitTop = execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd,
@@ -63,33 +61,8 @@ function hasProjectLintConfig(cwd) {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000,
     }).trim();
-    if (!gitTop) return null;
-    root = realpathSync(gitTop);
+    return gitTop ? realpathSync(gitTop) : null;
   } catch { return null; }
-  const cfgPath = join(root, 'pdd.json');
-  let fd;
-  try {
-    const st = lstatSync(cfgPath);
-    if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_CONFIG_BYTES) return null;
-    fd = openSync(cfgPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-    const fst = fstatSync(fd);
-    if (!fst.isFile() || fst.size > MAX_CONFIG_BYTES) return null;
-    const buf = Buffer.alloc(fst.size);
-    let offset = 0;
-    while (offset < buf.length) {
-      const n = readSync(fd, buf, offset, buf.length - offset, offset);
-      if (!n) break;
-      offset += n;
-    }
-    const parsed = JSON.parse(buf.subarray(0, offset).toString('utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'lint') ? root : null;
-  } catch (err) {
-    return err instanceof SyntaxError ? root : null;
-  } finally {
-    if (fd !== undefined) {
-      try { closeSync(fd); } catch {}
-    }
-  }
 }
 async function collectProjectLintErrors(runtime, root, words, options) {
   try {
@@ -391,6 +364,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (typeof module.runProduct !== 'function') throw Error('Missing product export');
         const result = await module.runProduct({ command: plan.local.slice(8), run: plan.operands[0],
           noRun: plan.options['--no-run'] === true, agent: plan.options['--agent'] ?? 'codex',
+          ...(plan.options['--through'] !== undefined ? { through: plan.options['--through'] } : {}),
+          ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}),
           json: plan.options['--json'] === true, cwd: context.toplevel, packageRoot }, productPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid product reply');
@@ -588,13 +563,23 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         }
         const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
         const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
-        const lintRoot = isLintCheckMode ? hasProjectLintConfig(cwd) : null;
+        const lintRoot = isLintCheckMode ? resolveProjectLintRoot(cwd) : null;
+        let seamProjectErrors = null;
+        const onProjectLintResult = lintRoot && !plan.operands.length && plan.options['--local'] === true
+          ? result => {
+              if (!result || !Array.isArray(result.errors)) return;
+              if (!seamProjectErrors) seamProjectErrors = [];
+              for (const err of result.errors) {
+                if (!seamProjectErrors.includes(err)) seamProjectErrors.push(err);
+              }
+            }
+          : undefined;
         if (lintRoot && plan.options['--json'] === true) {
           let captured = '';
           const bufferedStdout = { write: chunk => { captured += String(chunk); return true; } };
-          const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout: bufferedStdout, stderr, env });
+          const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout: bufferedStdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
           if (runtimeCode === 0 || runtimeCode === 1) {
-            const projectErrors = await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
+            const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
             if (projectErrors.length > 0) {
               try {
                 const parsed = JSON.parse(captured.trim());
@@ -609,9 +594,9 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           if (captured) stdout.write(captured);
           return runtimeCode;
         }
-        const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env });
+        const runtimeCode = await runtime[action]({ words: [...plan.operands], options: { ...plan.options }, cwd }, { stdout, stderr, env, ...(onProjectLintResult ? { onProjectLintResult } : {}) });
         if (lintRoot && (runtimeCode === 0 || runtimeCode === 1)) {
-          const projectErrors = await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
+          const projectErrors = seamProjectErrors ?? await collectProjectLintErrors(runtime, lintRoot, [...plan.operands], { ...plan.options });
           if (projectErrors.length > 0) {
             for (const errLine of projectErrors) line(stderr, errLine);
             return 1;

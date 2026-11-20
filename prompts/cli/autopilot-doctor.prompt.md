@@ -31,11 +31,11 @@ Resolve the selected definition before prerequisite probes. Load definitions fro
 saved definitionHome when a profile is supplied, restrict selection to its agent
 id/kind, and preserve saved HOME and provider config home after definition overrides.
 Otherwise merge the selected definition's env over the caller environment; for a
-Codex definition without a saved profile or explicit `CODEX_HOME`, bind
+Codex definition without an explicit saved `profile.configHome`, explicit `CODEX_HOME`, or explicit `poolPath` (`input.pool`), bind
 `CODEX_HOME` to `pddManagedCodexHome(env)` whenever
-`isCloudAccountsActive({env, provider: "codex"}, {fs: files})` is true and
-`managedCodexAuthPath(env)` exists as a regular file on disk so Cloud-only
-teammates pass `codex login status`, `readCodexLimits`, and launcher startup. Use
+`isCloudAccountsActive({env, poolPath: input.pool, provider: "codex"}, {fs: files})` is true and
+`managedCodexAuthPath(env)` exists as a regular non-symlink file on disk (inside a non-symlink directory) so Cloud-only
+teammates (including `pdd autopilot start --agent codex`) pass `codex login status`, `readCodexLimits`, and launcher startup without emitting a `CODEX_HOME=<managed>` login fix command when sign-in fails. Likewise, for a Claude definition without an explicit saved `profile.configHome`, explicit `CLAUDE_CONFIG_DIR`, or explicit `poolPath`, when `isCloudAccountsActive({env, poolPath: input.pool, provider: "claude"}, {fs: files})` is true and `managedClaudeSettingsPath(env)` exists as a regular non-symlink file on disk (inside a non-symlink directory), probe `claude --settings <managedClaudeSettingsPath(env)> auth status --json` (falling back to plain `claude auth status --json` if not ready, and including `--settings <managedClaudeSettingsPath(env)>` in the passing diagnostic command when managed settings succeeded) so isolated Cloud Claude accounts pass `doctor` and `autopilot start` without touching `~/.claude/settings.json`. Use
 this invocation environment for every prerequisite, including PATH, GitHub,
 provider sign-in, usage, skills, interpreter and scheduling. Claude user skills
 live under CLAUDE_CONFIG_DIR/skills when set; HOME overrides select user roots.
@@ -162,7 +162,7 @@ Check these boundaries in order and continue after failures:
 - [Workflow worktree](workflow-worktree.prompt.md): canonical GitHub origin normalization.
 - [Workflow agents](workflow-agents.prompt.md): read-only agy readiness.
 - [Codex limits](codex-limits.prompt.md): read-only account usage states.
-- [Multi-harness login pool](login-pool.prompt.md): `isCloudAccountsActive`, `pddManagedCodexHome` and `managedCodexAuthPath` for isolated Cloud Codex sign-in detection.
+- [Multi-harness login pool](login-pool.prompt.md): `isCloudAccountsActive`, `pddManagedCodexHome`, `managedCodexAuthPath` and `managedClaudeSettingsPath` for isolated Cloud Codex and Cloud Claude sign-in detection.
 - [PDD to Runtime seam](runtime-seam.prompt.md#public-contract): required `health` (`checkRuntimeHealth`) classification and `runtimeOrigin` address rules.
 - [Autopilot settings on GitHub](autopilot-github.prompt.md): owns when two
   Autopilot settings differ, the `MODE, trust NAMES` form and the publish commands.
