@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-core.prompt.md
+// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 5b9f146d9ddec9779982ad4474d7d99144f29851f28846768236d761ed112ac2)
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -14,7 +14,7 @@ import { redactSecrets } from './secret-redaction.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
-import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard, detectWrongRepositoryIssue, findOtherRepoSkipLabel, routeWrongRepositoryIssue } from './autopilot-intake.mjs';
+import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard, findOtherRepoSkipLabel, preflightCoreIssue } from './autopilot-intake.mjs';
 import { evaluateForensicsResult, findConfiguredSkipLabel, formatForensicsBrief, formatForensicsComment, runPreRunForensics } from './autopilot-forensics.mjs';
 import { readSuiteProgress, reconcileSuiteQueue } from './test-suite-queue.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, orderGroupsSpreadFirst, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
@@ -37,7 +37,7 @@ const JOB_RULES = '"$PDD_SKILLS/pdd-prompting/autopilot-job-rules.md"';
 const RULES_LINE = `Read ${JOB_RULES} in full before you write the PR body.`;
 // A job that needs a person's decision posts one question and adds this label; the person answers in a comment and
 // removes the label, and then the issue is ready again.
-const LANE = 'pdd:merge-lane', WOULD_MERGE = 'pdd:would-merge', DECISION = 'pdd:needs-decision', QUESTION_MARKER = /<!-- pdd:autopilot-core:question:(\d+):[^ ]+ -->/;
+const LANE = 'pdd:merge-lane', WOULD_MERGE = 'pdd:would-merge', DECISION = 'pdd:needs-decision', QUESTION_MARKER = /<!-- pdd:(?:autopilot-core:question|autopilot-intake:preflight):(\d+):[^ ]+ -->/;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 // The machine id in claim records: a short hash of the host name, so no public text names the host.
 export const machineIdOf = state => named(state?.machineId) ? state.machineId : `m-${createHash('sha256').update(String(state?.machine ?? '')).digest('hex').slice(0, 12)}`;
@@ -1708,7 +1708,7 @@ async function personAnswer(ctx, n) {
   const own = c => String(c.user?.login ?? '').toLowerCase() === me && Number(QUESTION_MARKER.exec(String(c.body ?? ''))?.[1]) === n;
   const at = comments.map(own).lastIndexOf(true);
   if (at < 0) return null;
-  const asked = comments[at], question = /^> (.*)$/m.exec(String(asked.body))?.[1] ?? '';
+  const asked = comments[at], question = /^> (.*)$/m.exec(String(asked.body))?.[1] ?? /^\s*-\s*Question:\s*(.*)$/m.exec(String(asked.body))?.[1] ?? '';
   const trusted = user => ctx.ports.trusted({ user, author_association: undefined });
   const answers = [];
   for (const c of comments.slice(at + 1)) {
@@ -1939,10 +1939,14 @@ async function intake(ctx, rows) {
       const keptMembers = [];
       for (const member of [group.primary, ...(group.companions ?? [])]) {
         if (!member || ctx.skip.has(member.number)) continue;
-        const wrongRepo = detectWrongRepositoryIssue(member, { repo: ctx.repo, cwd: state.cwd, fs: ctx.fs });
-        if (wrongRepo) {
-          try { await routeWrongRepositoryIssue(ctx, member, wrongRepo); }
-          catch (error) { ctx.warn(`Autopilot core wrong-repository routing of #${member.number} failed: ${oneLine(error.message)}`); }
+        try {
+          const skipped = await preflightCoreIssue(ctx, member, { cwd: state.cwd });
+          if (skipped) {
+            ctx.skip.add(member.number);
+            continue;
+          }
+        } catch (error) {
+          ctx.warn(`Autopilot core pre-flight check of #${member.number} failed: ${oneLine(error.message)}`);
           ctx.skip.add(member.number);
           continue;
         }
