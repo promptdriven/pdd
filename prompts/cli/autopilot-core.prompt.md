@@ -1493,18 +1493,25 @@ runs until its end):
    changed module (Autopilot's run at H): …`. A code file is a changed file with a code
    extension (`.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.jsx`, `.tsx`, `.py`) that is
    not in a `test`, `tests`, `__tests__`, `spec` or `fixtures` folder and not named
-   `*.test.*` or `*.spec.*`. **Bug-fix classification (authoritative precedence):** a job
-   persists any non-empty GitHub issue `labels` (and companion `labels`) at intake; `isBugFixPr`
+   `*.test.*` or `*.spec.*`. **Bug-fix classification (authoritative precedence & monotonic bug skill):** a job
+   persists any non-empty GitHub issue `labels` (and companion `labels`) at intake, and once
+   `job.skill` is `bug` (`pdd-bug`), subsequent agent or repair results may never downgrade
+   `job.skill` to `feature` or `small-change` (monotonic `bug` skill). `isBugFixPr`
    evaluates in strict order: (1) authoritative metadata first — if `job.skill` is `bug` or
    `pdd-bug`, or any issue/companion label is a bug/defect/regression/hotfix label (excluding
    non-bug/wontfix/invalid/duplicate), return `true` immediately (PR body prose can never exempt
-   a `bug`-labeled issue or `pdd-bug` run); (2) PR body declarations (outside code blocks/comments,
-   excluding standard GitHub `Fixes #N`/`Closes #N`/`Resolves #N` closing refs) — if the PR body
-   states a bug fix/root cause or a `Path: b` restored prompt line, return `true`; else if the
-   PR body explicitly declares a non-negated whole-PR behavior-preserving pure structural refactor
-   (`pure refactor`, `pure structural refactor`, `structural refactor`, `behavior-preserving
-   refactor`, `refactor-only`, `internal refactor`, `log-line only`, or unscoped `no behavior
-   change` — never scoped phrases like `no behavior change for/to/outside/in/on/when ...`),
+   a `bug`-labeled issue or `pdd-bug` run); (2) active PR bug declarations & explicit bug issue
+   titles — strip code blocks/comments and standard GitHub `Fixes #N`/`Closes #N`/`Resolves #N`
+   closing refs from PR prose; if a `Path: b` line restores a prompt line, OR stripped PR prose
+   (`stripNonBugContext`) states a bug fix (`pdd-bug`, `bug fix`, `regression test/fix`,
+   `root cause`, `reproduces the bug/crash/failure/issue`, or `fix(es/ed/ing) ... bug/defect/regression/crash/hang/broken/incorrect/wrong`),
+   OR any issue/companion carries an explicit bug title or bug issue body (not a
+   conventional/leading refactor title and not carrying a non-bug refactor/chore label, with bug
+   words remaining after `stripNonBugContext`), return `true`; else if the PR body explicitly
+   declares a non-negated whole-PR behavior-preserving pure structural refactor (`pure refactor`,
+   `pure structural refactor`, `structural refactor`, `behavior-preserving refactor`,
+   `refactor-only`, `internal refactor`, `log-line only` — never scoped trailing `for/to/outside/of ...`,
+   or unscoped `no behavior change` — never scoped phrases like `no behavior change for/to/outside/in/on/when/unless/except/elsewhere/otherwise/aside from/other than/apart from/beyond ...`),
    return `false`; (3) issue context fallback — strip preventive/negated/cleanup phrases
    (`avoid/prevent [a/future] bug/regression`, `clean up [the/old] fix`, `no/without regression`),
    honor non-bug refactor/chore labels (`refactor`, `cleanup`, `chore`, `tech-debt`,

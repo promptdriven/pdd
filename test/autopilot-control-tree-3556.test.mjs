@@ -298,12 +298,24 @@ test('3556-4: Path b pure structural refactors stay exempt while negated refacto
     assert.deepEqual(skilled.w.github.merges, []);
   }
 
-  // 4f. Unlabeled bug issue CANNOT be bypassed by scoped "no behavior change for/to/outside ..." prose or PR bug declaration + refactor prose.
+  // 4f. Unlabeled bug issue & mixed bug+refactor PR prose CANNOT self-exempt via refactor/scoped-no-change prose.
   for (const [issue, prose] of [
     [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change for other callers.'],
     [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change to existing callers.'],
     [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change outside error paths.'],
+    [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Fixed seconds(); no behavior change elsewhere.'],
+    [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Fixed seconds(); no behavior change otherwise.'],
+    [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change aside from 60s handling.'],
+    [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change other than 60s handling.'],
+    [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change apart from 60s handling.'],
+    [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change beyond 60s handling.'],
+    [{ title: 'Fix off-by-two bug in seconds()', body: 'seconds(60) returns 2 instead of 1.' }, 'Behavior-preserving pure structural refactor; no behavior change.'],
+    [{ title: 'Duration helper', body: 'Steps to reproduce: seconds(60) returns wrong result 2; actual behavior is 2, expected behavior is 1.' }, 'Behavior-preserving pure structural refactor; no behavior change.'],
+    [{ title: 'Duration helper', body: 'Steps to reproduce: seconds(60) fails when input is 60.' }, 'Internal refactor of helper while adjusting seconds().'],
     [{ title: 'Duration helper', body: 'See src/duration.mjs.' }, 'Bug fix for seconds(). Pure structural refactor.'],
+    [{ title: 'Duration helper', body: 'See src/duration.mjs.' }, 'Internal refactor of helper and fixed the seconds() bug.'],
+    [{ title: 'Duration helper', body: 'See src/duration.mjs.' }, 'Fix crash in seconds(); pure refactor of helper.'],
+    [{ title: 'Duration helper', body: 'See src/duration.mjs.' }, 'Reproduces the crash in seconds(); internal refactor.'],
   ]) {
     const scoped = await startPathBWorld(t, {
       issue,
@@ -311,7 +323,7 @@ test('3556-4: Path b pure structural refactors stay exempt while negated refacto
       bodyExtra: prose,
     });
     await runRealVectors(scoped.w);
-    assert.ok(scoped.w.job(17, 'repair'), `must not exempt: ${prose}`);
+    assert.ok(scoped.w.job(17, 'repair'), `must not exempt: ${issue.title} | ${prose}`);
     assert.deepEqual(scoped.w.github.merges, []);
   }
 });
@@ -542,4 +554,43 @@ test('3556-10: test titles or bare stdout mentioning ERR_MODULE_NOT_FOUND are NO
   assert.equal(bRecord.vectors.control.state, 'shows');
   assert.equal(bRecord.vectors.control.importErrors, undefined);
   assert.equal(bRecord.vectors.kinds['control-tests'].files[0].state, 'fail');
+});
+
+test('3556-11 (REPAIR-SKILL-DOWNGRADE): monotonic job.skill prevents a repair agent from downgrading bug -> feature/small-change to bypass controlTree', async t => {
+  const vacuous1 = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('vacuous v1', () => { assert.ok(seconds(60) > 0); });\n`;
+  const vacuous2 = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('vacuous v2', () => { assert.ok(seconds(120) > 0); });\n`;
+
+  for (const downgradedSkill of ['feature', 'small-change']) {
+    // Neutral unlabeled issue where ONLY job.skill='bug' from build established bug-fix status.
+    const { w } = await startPathBWorld(t, {
+      issue: { title: 'Duration helper update', body: 'Update src/duration.mjs.' },
+      change: { [CODE_PATH]: HEAD_CODE_FIXED, 'test/regression.test.mjs': vacuous1 },
+      result: { skill: 'bug' },
+    });
+    await runRealVectors(w);
+    const repair = w.job(17, 'repair');
+    assert.ok(repair, `commit #1 triggers repair before ${downgradedSkill} downgrade attempt`);
+
+    // Repair tries to downgrade job.skill to 'feature'/'small-change' AND rewrite PR body to claim pure refactor.
+    writeIn(repair.cwd, 'test/regression.test.mjs', vacuous2);
+    const bypassBody = [
+      'Fixes #17.',
+      'Behavior-preserving refactor.',
+      'Runtime: not run (no prompt changed)',
+      EVIDENCE_LINE,
+      PATH_B_LINE,
+      'Path: d — test/regression.test.mjs, change-17.txt — unowned — no contract change — Test: done check',
+    ].join('\n\n');
+    w.build(17, { role: 'repair', body: bypassBody, result: { promptChanged: false, skill: downgradedSkill, evidence: EVIDENCE_LINE } });
+    await w.tick();
+    assert.equal(JSON.parse(readFileSync(join(w.root, 'jobs', '17.json'), 'utf8')).skill, 'bug', `job.skill remains bug despite repair returning ${downgradedSkill}`);
+    w.review(17, 'PASS');
+    w.suite(17, 0);
+    await w.tick();
+    await runRealVectors(w);
+
+    assert.deepEqual(w.github.merges, [], `downgrading skill to ${downgradedSkill} + pure refactor prose must NOT bypass controlTree`);
+    assert.equal(endComments(w, 17).length, 1, 'job stops with END checks-red');
+    assert.match(endComments(w, 17)[0], /all 1 pass there too, so they do not show the change/);
+  }
 });

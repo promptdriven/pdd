@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: e64bc9c0e1b71bee4f1899303401732f71e8281215101cb533d35ea8d4a12d2c).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 1ebb87b1680ddb03ff1f5a157e1d0d60e0b8b17c8d59299c2a00a27e961572eb).
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -3368,8 +3368,8 @@ const CLOSING_REF = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?::[ \t]*|[ \t]
 const WHOLE_PR_REFACTOR = /\b(?:pure\s+(?:structural\s+)?refactor(?:ing)?|structural\s+refactor(?:ing)?(?:\s+only)?|behaviou?r[- ]preserving(?:\s+\w+){0,2}\s+refactor(?:ing)?|refactor(?:ing)?[- ]only|internal\s+refactor(?:ing)?(?:\s+only)?|log[- ]line\s+only|logging[- ]only)\b/gi;
 const NO_BEHAVIOR_CHANGE = /\bno\s+behaviou?r(?:al)?\s+change\b/gi;
 const NEGATED_BEFORE = /\b(?:not|isn't|is\s+not|aren't|are\s+not|never|no\s+longer)\s+(?:a\s+|an\s+)?$/i;
-const SCOPED_REFACTOR_AFTER = /^\s+(?:for|to|outside)\b/i;
-const SCOPED_NO_CHANGE_AFTER = /^\s+(?:for|to|outside|in|on|when|unless|except)\b/i;
+const SCOPED_REFACTOR_AFTER = /^\s+(?:for|to|outside|of)\b/i;
+const SCOPED_NO_CHANGE_AFTER = /^\s+(?:for|to|outside|in|on|when|unless|except|elsewhere|otherwise|aside\s+from|other\s+than|apart\s+from|beyond)\b/i;
 const BUG_LABEL = /(?:^|[:/_\s-])(?:bug|bugfix|bug-fix|defect|regression|hotfix)(?:$|[:/_\s-])/i;
 const NOT_BUG_LABEL = /\b(?:not[-_\s]*a[-_\s]*bug|non[-_\s]*bug|wontfix|invalid|duplicate)\b/i;
 const NON_BUG_REFACTOR_LABEL = /(?:^|[:/_\s-])(?:refactor(?:ing)?|cleanup|clean-up|chore|tech[-_\s]?debt|documentation|docs|enhancement)(?:$|[:/_\s-])/i;
@@ -3382,7 +3382,7 @@ const NON_BUG_CONTEXT_PATTERNS = [
 ];
 const BUG_TITLE = /\b(?:bug|bugfix|bug-fix|defect|regression|hotfix|fix(?:es|ed|ing)?|broken|crash(?:es|ing|ed)?|hang(?:s|ing)?|incorrect(?:ly)?|wrong(?:ly)?|unexpected(?:ly)?|fails?\s+(?:to|when)|failing\s+(?:to|when)|does\s+not\s+work|doesn't\s+work|stopped\s+working|misclassif(?:y|ies|ied))\b/i;
 const BUG_ISSUE_BODY = /\b(?:bug|bugfix|bug-fix|defect|regression|hotfix|steps\s+to\s+reproduce|repro(?:duction)?|actual\s+(?:behaviou?r|result)|expected\s+(?:behaviou?r|result)[^.\n]{0,80}\b(?:actual|got|but|instead|fails?|broken|wrong|mismatch|differs?)|broken|crash(?:es|ing|ed)?|root\s+cause|incorrectly\s+\w+|fails?\s+(?:to|when)|wrong\s+(?:result|value|output|behaviou?r|exit|status))\b/i;
-const BUG_PR_PROSE = /\b(?:pdd-bug|bug\s+fix|regression\s+(?:test|fix)|root\s+cause|reproduces?\s+the\s+bug)\b/i;
+const BUG_PR_PROSE = /\b(?:pdd-bug|bug\s+fix|regression\s+(?:test|fix)|root\s+cause|reproduces?\s+the\s+(?:bug|crash|failure|issue)|fix(?:e[sd]|ing)?\b[^\n.]{0,60}\b(?:bug|defect|regression|crash(?:es|ing|ed)?|hang(?:s|ing)?|broken|incorrect(?:ly)?|wrong(?:ly)?))\b/i;
 const PATH_B_RESTORE = /^[\s>*-]*Path:\s*b\b[^\n]*(?:\brestor(?:e[sd]?|ing)\b|\.prompt\.md:\d+)/im;
 function stripNonBugContext(text) {
   let out = String(text ?? '');
@@ -3412,14 +3412,20 @@ function hasNonBugRefactorLabel(labels) {
     return typeof name === 'string' && NON_BUG_REFACTOR_LABEL.test(name);
   });
 }
+function hasExplicitBugIssue(member) {
+  const title = String(member?.title ?? ''), issueBody = String(member?.body ?? '');
+  if (CONVENTIONAL_REFACTOR_TITLE.test(title) || LEADING_REFACTOR_TITLE.test(title) || hasNonBugRefactorLabel(member?.labels)) return false;
+  return BUG_TITLE.test(stripNonBugContext(title)) || BUG_ISSUE_BODY.test(stripNonBugContext(issueBody));
+}
 function isBugFixPr(job, body = '') {
   // Authoritative metadata first: pdd-bug skill or bug labels on issue/companions can never be exempted by PR prose.
   if (/^(?:pdd-)?bug$/i.test(String(job?.skill ?? '').trim())) return true;
   const members = [job, ...(Array.isArray(job?.companions) ? job.companions : [])].filter(Boolean);
   if (members.some(m => hasBugLabel(m.labels))) return true;
-  // PR body declarations vs explicit whole-PR behavior-preserving refactor (only for unlabeled / non-bug-skill issues).
+  // Active PR bug declarations & explicit bug issue titles/bodies cannot be overridden by PR refactor prose.
   const prPlain = plainPrText(body).replace(CLOSING_REF, ' ');
-  if (PATH_B_RESTORE.test(prPlain) || BUG_PR_PROSE.test(prPlain)) return true;
+  if (PATH_B_RESTORE.test(prPlain) || BUG_PR_PROSE.test(stripNonBugContext(prPlain))) return true;
+  if (members.some(hasExplicitBugIssue)) return true;
   if (hasExplicitPureRefactor(body)) return false;
   // Issue context fallback with preventive/cleanup phrase stripping and refactor label/title guards.
   return members.some(m => {
@@ -6593,11 +6599,15 @@ async function advance(ctx, job) {
     }
     if (!(prNumber > 0)) return agentStop(ctx, job, seen, false);
     // A new agent result reads the saved checks and runs the replays again (coverage and vectors).
+    // Monotonic bug skill (#3556): once job.skill is 'bug', a subsequent repair/agent result cannot downgrade it.
+    const nextSkill = typeof r.skill === 'string' && /^(?:pdd-)?(?:small-change|bug|feature)$/i.test(r.skill.trim())
+      ? r.skill.trim().toLowerCase().replace(/^pdd-/, '') : null;
+    const isCurrentBugSkill = /^(?:pdd-)?bug$/i.test(String(job.skill ?? '').trim());
     Object.assign(job, {
       phase: 'pr', pr: prNumber, head, agentHead: head, lane: null, coverage: null, vectors: null, runtimeWait: null,
       runtime: normalRuntime(stamped ? stamped.runtime : r.runtime),
       promptChanged: stamped ? stamped.promptChanged : (typeof r.promptChanged === 'boolean' ? r.promptChanged : null),
-      ...(typeof r.skill === 'string' && /^(?:pdd-)?(?:small-change|bug|feature)$/i.test(r.skill.trim()) ? { skill: r.skill.trim().toLowerCase().replace(/^pdd-/, '') } : {}),
+      ...(nextSkill && (!isCurrentBugSkill || nextSkill === 'bug') ? { skill: nextSkill } : isCurrentBugSkill ? { skill: 'bug' } : {}),
       evidence: stamped?.evidence ?? parseEvidence(r.evidence) ?? job.evidence ?? null,
       prAt: ctx.now(), progress: { sig: null, at: ctx.now(), running: false },
     });
