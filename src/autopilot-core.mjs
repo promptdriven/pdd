@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 0d5f28f96d6ab5c9fbb93ab1adf37238232f4101293e0d0facd9b135e2254ba9)
+// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 463529606e80b7f88e91b7f8a1f2a1c5a797e622264ee67a3b9f6517fb6b7310)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
@@ -1307,7 +1307,7 @@ ${reviewContextLines(reviewContext)}Check: (1) the change does what ${jobIssues(
 Read ${JOB_RULES} in full before you check the PR body. Read any PDD skill or rules file from "$PDD_SKILLS". When you run pdd, run it as "$PDD_CLI", never as a bare pdd.
 Read the change in parts. A tool output over about 10,000 tokens loses its middle, so never read the whole PR's diff in one call. First run git diff --stat origin/${ctx.state.baseBranch}...HEAD. Then read one changed file per command: git diff origin/${ctx.state.baseBranch}...HEAD -- FILE. Read a file whose diff is larger than about 30 KB in hunks (for example git diff origin/${ctx.state.baseBranch}...HEAD -- FILE | sed -n '1,400p', then the next lines). You are running in a read-only sandbox (origin/${ctx.state.baseBranch} is already fetched locally): do not run git fetch, do not run repository test scripts, and do not edit files, write files to disk, commit, push, comment, approve or merge.
 Answer with only this JSON object in your final response (and no other text; do not write a file to disk):
-{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph, then one line: Read: FILE, FILE, ... (every changed file that you read in full)>","mustFix":["<each required fix>"],"preExisting":["<unrelated defect strictly outside this PR's diff, formatted P1/P2/P3 file:line ...>"]${asking(ctx) ? ',"question":"<only with a P2 decision item: one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"' : ''}}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items in "mustFix": any other item in "mustFix" blocks the merge. Optional "preExisting" lists only unrelated defects strictly outside this PR's diff (formatted "P1/P2/P3 file:line ..."): verified outside-diff items are logged as non-blocking, and any "preExisting" item whose file:line touches a changed hunk or added file (or lacks a verifiable file:line) is automatically promoted back to "mustFix".
+{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph, then one line: Read: FILE, FILE, ... (every changed file that you read in full)>","mustFix":["<each required fix>"],"preExisting":["<optional: unrelated defect strictly outside this PR's diff, formatted P1/P2/P3 file:line ...; omit or use [] when none>"]${asking(ctx) ? ',"question":"<only with a P2 decision item: one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"' : ''}}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items in "mustFix": any other item in "mustFix" blocks the merge. Optional "preExisting" (omit or use [] when none) lists only unrelated defects strictly outside this PR's diff (formatted "P1/P2/P3 file:line ..."): verified outside-diff items are logged as non-blocking, and any "preExisting" item whose file:line touches a changed hunk or added file (or lacks a verifiable file:line) is automatically promoted back to "mustFix".
 `;
 
 const scopedPrompt = (ctx, job, scoped, result, prBody = '', reviewContext = null) => `You are a short scoped check for an Autopilot core job in ${ctx.repo}. You did not write this change.
@@ -3250,18 +3250,119 @@ const KNOWN_EXTENSIONLESS_FILES = new Set([
   'LICENSE', 'README', 'CODEOWNERS', 'NOTICE', 'Vagrantfile', 'Justfile',
 ]);
 
-function normalizeDiffPath(raw) {
+const FORBIDDEN_FINDING_PATH_CHARS = new Set(['`', '*', '[', ']', '(', ')', '<', '>', '"', "'"]);
+
+function stripAnsiAndControl(raw) {
+  if (typeof raw !== 'string' || !raw) return '';
+  let out = '';
+  for (let i = 0; i < raw.length; i++) {
+    const code = raw.charCodeAt(i);
+    // Strip ANSI CSI (`\x1b[...m`) and OSC (`\x1b]...\x07` or `\x1b\\`) escape sequences linearly.
+    if (code === 0x1b && i + 1 < raw.length) {
+      const next = raw.charCodeAt(i + 1);
+      if (next === 0x5b) { // '[' CSI
+        let j = i + 2;
+        while (j < raw.length) {
+          const c = raw.charCodeAt(j);
+          if (c >= 0x40 && c <= 0x7e) { j++; break; }
+          j++;
+        }
+        i = j - 1;
+        continue;
+      }
+      if (next === 0x5d) { // ']' OSC
+        let j = i + 2;
+        while (j < raw.length) {
+          const c = raw.charCodeAt(j);
+          if (c === 0x07) { j++; break; }
+          if (c === 0x1b && j + 1 < raw.length && raw.charCodeAt(j + 1) === 0x5c) { j += 2; break; }
+          j++;
+        }
+        i = j - 1;
+        continue;
+      }
+      continue;
+    }
+    if (code < 0x20 || code === 0x7f) {
+      out += ' ';
+      continue;
+    }
+    out += raw[i];
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+function unescapeGitQuotedPath(raw) {
+  if (typeof raw !== 'string') return '';
+  if (raw.length < 2 || raw[0] !== '"' || raw[raw.length - 1] !== '"') return raw;
+  const inner = raw.slice(1, -1);
+  const bytes = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === '\\' && i + 1 < inner.length) {
+      const next = inner[i + 1];
+      if (next === '\\') { bytes.push(0x5c); i++; continue; }
+      if (next === '"') { bytes.push(0x22); i++; continue; }
+      if (next === 't') { bytes.push(0x09); i++; continue; }
+      if (next === 'n') { bytes.push(0x0a); i++; continue; }
+      if (next === 'r') { bytes.push(0x0d); i++; continue; }
+      if (next === 'b') { bytes.push(0x08); i++; continue; }
+      if (next === 'f') { bytes.push(0x0c); i++; continue; }
+      if (next === 'v') { bytes.push(0x0b); i++; continue; }
+      if (next === 'a') { bytes.push(0x07); i++; continue; }
+      if (i + 3 < inner.length) {
+        const oct = inner.slice(i + 1, i + 4);
+        if (/^[0-7]{3}$/.test(oct)) {
+          bytes.push(parseInt(oct, 8) & 0xff);
+          i += 3;
+          continue;
+        }
+      }
+    }
+    const buf = Buffer.from(ch, 'utf8');
+    for (const b of buf) bytes.push(b);
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+function stripLeadingPointer(s, prefix) {
+  let start = 0;
+  while (s.startsWith(prefix, start)) start += prefix.length;
+  return start > 0 ? s.slice(start) : s;
+}
+
+function stripPathWrappers(raw) {
+  let start = 0;
+  let end = raw.length;
+  while (start < end && '`"\'*'.includes(raw[start])) start++;
+  while (end > start && '`"\'*'.includes(raw[end - 1])) end--;
+  return raw.slice(start, end);
+}
+
+function normalizeDiffPath(raw, { fromFinding = false } = {}) {
   if (typeof raw !== 'string') return null;
   let s = raw.trim();
   if (!s) return null;
-  if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
-    s = s.slice(1, -1);
+  if (fromFinding) {
+    s = stripPathWrappers(s).trim();
+    if (!s || s.includes('://')) return null;
+    for (let i = 0; i < s.length; i++) {
+      const code = s.charCodeAt(i);
+      if (code < 0x20 || code === 0x7f || FORBIDDEN_FINDING_PATH_CHARS.has(s[i])) return null;
+    }
+    s = s.replaceAll('\\', '/');
+    // Reject absolute POSIX and Windows drive paths so they fail closed instead of looking repo-relative.
+    if (s.startsWith('/') || (s.length >= 3 && s[1] === ':' && s[2] === '/' && ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z')))) {
+      return null;
+    }
+    s = stripLeadingPointer(s, './');
+  } else {
+    s = unescapeGitQuotedPath(s);
+    if (!s || s.includes('\0') || s.includes('\r') || s.includes('\n')) return null;
+    s = stripLeadingPointer(s, './');
+    s = stripLeadingPointer(s, '/');
   }
-  s = s.replaceAll('\\', '/');
-  while (s.startsWith('./')) s = s.slice(2);
-  while (s.startsWith('/')) s = s.slice(1);
-  if (!s || /[\u0000-\u001f\u007f]/.test(s)) return null;
-  if (s.includes('://')) return null;
+  if (!s) return null;
   const parts = [];
   for (const seg of s.split('/')) {
     if (!seg || seg === '.') continue;
@@ -3279,17 +3380,115 @@ function isPlausibleRepoPath(normPath) {
   return dot > 0 && dot < normPath.length - 1;
 }
 
-function parseHunkNewRange(line) {
-  // Parse unified diff header: @@ -a[,b] +c[,d] @@
-  if (!line.startsWith('@@ ')) return null;
-  const closeIdx = line.indexOf(' @@', 3);
-  if (closeIdx < 0) return null;
-  const header = line.slice(3, closeIdx);
-  const plusIdx = header.indexOf('+');
-  if (plusIdx < 0) return null;
-  let token = header.slice(plusIdx + 1).trim();
-  const spaceIdx = token.indexOf(' ');
-  if (spaceIdx >= 0) token = token.slice(0, spaceIdx);
+function stripGitSidePrefix(rawToken, sidePrefix) {
+  const unquoted = unescapeGitQuotedPath(rawToken.trim());
+  if (!unquoted || unquoted === '/dev/null') return null;
+  const stripped = unquoted.startsWith(sidePrefix) ? unquoted.slice(sidePrefix.length) : unquoted;
+  return normalizeDiffPath(stripped);
+}
+
+function findClosingGitQuote(str, startIdx) {
+  for (let i = startIdx + 1; i < str.length; i++) {
+    if (str[i] === '\\') { i++; continue; }
+    if (str[i] === '"') return i;
+  }
+  return -1;
+}
+
+function parseDiffGitHeaderPaths(rest) {
+  if (!rest) return { oldPath: null, newPath: null };
+  // Quoted first path: "a/..." <second>
+  if (rest.startsWith('"')) {
+    const end1 = findClosingGitQuote(rest, 0);
+    if (end1 > 1 && end1 + 2 < rest.length && rest[end1 + 1] === ' ') {
+      const tok1 = rest.slice(0, end1 + 1);
+      const tok2 = rest.slice(end1 + 2);
+      return {
+        oldPath: stripGitSidePrefix(tok1, 'a/'),
+        newPath: stripGitSidePrefix(tok2, 'b/'),
+      };
+    }
+    return { oldPath: null, newPath: null };
+  }
+  // Unquoted first path, quoted second path: a/... "b/..."
+  if (rest.endsWith('"')) {
+    const qStart = rest.indexOf(' "b/');
+    if (qStart > 2 && rest.startsWith('a/')) {
+      return {
+        oldPath: stripGitSidePrefix(rest.slice(0, qStart), 'a/'),
+        newPath: stripGitSidePrefix(rest.slice(qStart + 1), 'b/'),
+      };
+    }
+  }
+  // Common symmetric case (identical old/new paths — works even for spaces or ` b/` inside filenames).
+  if (rest.length >= 5 && (rest.length - 1) % 2 === 0) {
+    const mid = (rest.length - 1) / 2;
+    if (rest[mid] === ' ' && rest.startsWith('a/') && rest.startsWith('b/', mid + 1) && rest.slice(2, mid) === rest.slice(mid + 3)) {
+      const p = normalizeDiffPath(rest.slice(2, mid));
+      return { oldPath: p, newPath: p };
+    }
+  }
+  // Fallback unquoted rename (later `rename from`/`rename to` and `---`/`+++` headers override with exact paths).
+  const splitIdx = rest.indexOf(' b/');
+  if (rest.startsWith('a/') && splitIdx > 2) {
+    return {
+      oldPath: normalizeDiffPath(rest.slice(2, splitIdx)),
+      newPath: normalizeDiffPath(rest.slice(splitIdx + 3)),
+    };
+  }
+  return { oldPath: null, newPath: null };
+}
+
+function parseBinaryFilesLine(rawLine) {
+  const body = rawLine.slice('Binary files '.length, rawLine.length - ' differ'.length);
+  if (!body) return { oldPath: null, newPath: null, oldDevNull: false, newDevNull: false };
+  if (body.startsWith('/dev/null and ')) {
+    return {
+      oldPath: null,
+      newPath: stripGitSidePrefix(body.slice('/dev/null and '.length), 'b/'),
+      oldDevNull: true,
+      newDevNull: false,
+    };
+  }
+  if (body.endsWith(' and /dev/null')) {
+    return {
+      oldPath: stripGitSidePrefix(body.slice(0, body.length - ' and /dev/null'.length), 'a/'),
+      newPath: null,
+      oldDevNull: false,
+      newDevNull: true,
+    };
+  }
+  if (body.startsWith('"')) {
+    const end1 = findClosingGitQuote(body, 0);
+    if (end1 > 1 && body.startsWith(' and ', end1 + 1)) {
+      return {
+        oldPath: stripGitSidePrefix(body.slice(0, end1 + 1), 'a/'),
+        newPath: stripGitSidePrefix(body.slice(end1 + 6), 'b/'),
+        oldDevNull: false,
+        newDevNull: false,
+      };
+    }
+  }
+  if (body.length >= 9 && (body.length - 5) % 2 === 0) {
+    const mid = (body.length - 5) / 2;
+    if (body.startsWith(' and ', mid) && body.startsWith('a/') && body.startsWith('b/', mid + 5) && body.slice(2, mid) === body.slice(mid + 7)) {
+      const p = normalizeDiffPath(body.slice(2, mid));
+      return { oldPath: p, newPath: p, oldDevNull: false, newDevNull: false };
+    }
+  }
+  const splitIdx = body.indexOf(' and b/');
+  if (body.startsWith('a/') && splitIdx > 2) {
+    return {
+      oldPath: stripGitSidePrefix(body.slice(0, splitIdx), 'a/'),
+      newPath: stripGitSidePrefix(body.slice(splitIdx + 5), 'b/'),
+      oldDevNull: false,
+      newDevNull: false,
+    };
+  }
+  return { oldPath: null, newPath: null, oldDevNull: false, newDevNull: false };
+}
+
+function parseHunkPair(token) {
   const commaIdx = token.indexOf(',');
   const startStr = commaIdx >= 0 ? token.slice(0, commaIdx) : token;
   const countStr = commaIdx >= 0 ? token.slice(commaIdx + 1) : '1';
@@ -3297,10 +3496,29 @@ function parseHunkNewRange(line) {
   const start = Number(startStr);
   const count = Number(countStr);
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count)) return null;
-  if (count > 0) return [start, start + count - 1];
-  // Pure deletion at line `start` in the new file: if start === 0 the entire file was emptied.
-  if (start === 0) return [1, Number.MAX_SAFE_INTEGER];
-  return [start, start + 1];
+  return { start, count };
+}
+
+function parseHunkHeader(line) {
+  // Parse unified diff header: @@ -oldStart[,oldCount] +newStart[,newCount] @@
+  if (!line.startsWith('@@ ')) return null;
+  const closeIdx = line.indexOf(' @@', 3);
+  if (closeIdx < 0) return null;
+  const parts = line.slice(3, closeIdx).trim().split(/\s+/);
+  if (parts.length < 2 || !parts[0].startsWith('-') || !parts[1].startsWith('+')) return null;
+  const oldPair = parseHunkPair(parts[0].slice(1));
+  const newPair = parseHunkPair(parts[1].slice(1));
+  if (!oldPair || !newPair) return null;
+  let range;
+  if (newPair.count > 0) {
+    range = [newPair.start, newPair.start + newPair.count - 1];
+  } else if (newPair.start === 0) {
+    // Top-of-file deletion or emptied file: covers deleted lines plus line 1 seam without flagging distant untouched lines.
+    range = [1, Math.max(1, oldPair.start + oldPair.count)];
+  } else {
+    range = [newPair.start, newPair.start + 1];
+  }
+  return { range, oldCount: oldPair.count, newCount: newPair.count };
 }
 
 export function parseUnifiedDiffHunks(diffText) {
@@ -3312,7 +3530,7 @@ export function parseUnifiedDiffHunks(diffText) {
   const ensureFile = path => {
     let entry = files.get(path);
     if (!entry) {
-      entry = { added: false, deleted: false, binary: false, ranges: [] };
+      entry = { added: false, deleted: false, binary: false, modeChanged: false, ranges: [] };
       files.set(path, entry);
     }
     return entry;
@@ -3321,34 +3539,65 @@ export function parseUnifiedDiffHunks(diffText) {
   let curNew = null;
   let curEntry = null;
   let pendingRenameFrom = null;
-  let pendingFlags = { added: false, deleted: false, binary: false };
+  let pendingCopyFrom = null;
+  let pendingFlags = { added: false, deleted: false, binary: false, modeChanged: false };
+  let hasDiffGit = false;
+  let seenHunkInFile = false;
+  let oldRemaining = 0;
+  let newRemaining = 0;
 
   const applyPendingTo = path => {
     const entry = ensureFile(path);
     if (pendingFlags.added) entry.added = true;
     if (pendingFlags.deleted) entry.deleted = true;
     if (pendingFlags.binary) entry.binary = true;
+    if (pendingFlags.modeChanged) entry.modeChanged = true;
     return entry;
   };
 
   for (const rawLine of diffText.split(/\r?\n/)) {
     if (rawLine.startsWith('diff --git ')) {
+      hasDiffGit = true;
+      seenHunkInFile = false;
+      oldRemaining = 0;
+      newRemaining = 0;
       curOld = null;
       curNew = null;
       curEntry = null;
       pendingRenameFrom = null;
-      pendingFlags = { added: false, deleted: false, binary: false };
-      const rest = rawLine.slice('diff --git '.length);
-      const splitIdx = rest.indexOf(' b/');
-      if (rest.startsWith('a/') && splitIdx > 2) {
-        const oldPath = normalizeDiffPath(rest.slice(2, splitIdx));
-        const newPath = normalizeDiffPath(rest.slice(splitIdx + 3));
-        curOld = oldPath;
-        curNew = newPath;
-        if (newPath) curEntry = ensureFile(newPath);
+      pendingCopyFrom = null;
+      pendingFlags = { added: false, deleted: false, binary: false, modeChanged: false };
+      const { oldPath, newPath } = parseDiffGitHeaderPaths(rawLine.slice('diff --git '.length));
+      curOld = oldPath;
+      curNew = newPath;
+      if (newPath) curEntry = ensureFile(newPath);
+      continue;
+    }
+    if (rawLine.startsWith('@@ ')) {
+      const hunk = parseHunkHeader(rawLine);
+      if (hunk) {
+        seenHunkInFile = true;
+        oldRemaining = hunk.oldCount;
+        newRemaining = hunk.newCount;
+        if (curEntry) curEntry.ranges.push(hunk.range);
       }
       continue;
     }
+    // Consume hunk body lines first so added `++ b/...` (`+++ b/...`) or deleted `-- a/...` (`--- a/...`)
+    // lines inside a hunk can never spoof file headers.
+    if (oldRemaining > 0 || newRemaining > 0) {
+      if (rawLine.startsWith('+') && newRemaining > 0) { newRemaining--; continue; }
+      if (rawLine.startsWith('-') && oldRemaining > 0) { oldRemaining--; continue; }
+      if (rawLine.startsWith(' ')) {
+        if (oldRemaining > 0) oldRemaining--;
+        if (newRemaining > 0) newRemaining--;
+        continue;
+      }
+      if (rawLine.startsWith('\\')) continue;
+    }
+    // In a standard `diff --git` patch, no file headers appear after the first `@@ ` of that file.
+    if (hasDiffGit && seenHunkInFile) continue;
+
     if (rawLine.startsWith('new file mode ')) {
       pendingFlags.added = true;
       if (curEntry) curEntry.added = true;
@@ -3360,16 +3609,21 @@ export function parseUnifiedDiffHunks(diffText) {
       if (curOld) ensureFile(curOld).deleted = true;
       continue;
     }
-    if (rawLine.startsWith('rename from ') || rawLine.startsWith('copy from ')) {
-      const fromPath = normalizeDiffPath(rawLine.slice(rawLine.indexOf(' from ') + 6));
+    if (rawLine.startsWith('old mode ') || rawLine.startsWith('new mode ')) {
+      pendingFlags.modeChanged = true;
+      if (curEntry) curEntry.modeChanged = true;
+      continue;
+    }
+    if (rawLine.startsWith('rename from ')) {
+      const fromPath = normalizeDiffPath(rawLine.slice('rename from '.length));
       if (fromPath) {
         pendingRenameFrom = fromPath;
         curOld = fromPath;
       }
       continue;
     }
-    if (rawLine.startsWith('rename to ') || rawLine.startsWith('copy to ')) {
-      const toPath = normalizeDiffPath(rawLine.slice(rawLine.indexOf(' to ') + 4));
+    if (rawLine.startsWith('rename to ')) {
+      const toPath = normalizeDiffPath(rawLine.slice('rename to '.length));
       if (toPath) {
         curNew = toPath;
         curEntry = applyPendingTo(toPath);
@@ -3379,19 +3633,37 @@ export function parseUnifiedDiffHunks(diffText) {
       }
       continue;
     }
+    if (rawLine.startsWith('copy from ')) {
+      const fromPath = normalizeDiffPath(rawLine.slice('copy from '.length));
+      if (fromPath) pendingCopyFrom = fromPath;
+      continue;
+    }
+    if (rawLine.startsWith('copy to ')) {
+      const toPath = normalizeDiffPath(rawLine.slice('copy to '.length));
+      if (toPath) {
+        pendingFlags.added = true;
+        curNew = toPath;
+        curEntry = applyPendingTo(toPath);
+        curEntry.added = true;
+      }
+      continue;
+    }
     if (rawLine.startsWith('--- ')) {
-      const val = rawLine.slice(4).trim();
+      // Strip optional timestamp after tab when synthetic unified diffs include one.
+      const tabIdx = rawLine.indexOf('\t', 4);
+      const val = (tabIdx >= 0 ? rawLine.slice(4, tabIdx) : rawLine.slice(4)).trim();
       if (val === '/dev/null') {
         pendingFlags.added = true;
         if (curEntry) curEntry.added = true;
-      } else if (val.startsWith('a/')) {
-        const oldPath = normalizeDiffPath(val.slice(2));
+      } else {
+        const oldPath = stripGitSidePrefix(val, 'a/');
         if (oldPath) curOld = oldPath;
       }
       continue;
     }
     if (rawLine.startsWith('+++ ')) {
-      const val = rawLine.slice(4).trim();
+      const tabIdx = rawLine.indexOf('\t', 4);
+      const val = (tabIdx >= 0 ? rawLine.slice(4, tabIdx) : rawLine.slice(4)).trim();
       if (val === '/dev/null') {
         pendingFlags.deleted = true;
         if (curEntry) curEntry.deleted = true;
@@ -3399,12 +3671,12 @@ export function parseUnifiedDiffHunks(diffText) {
           curEntry = applyPendingTo(curOld);
           curEntry.deleted = true;
         }
-      } else if (val.startsWith('b/')) {
-        const newPath = normalizeDiffPath(val.slice(2));
+      } else {
+        const newPath = stripGitSidePrefix(val, 'b/');
         if (newPath) {
           curNew = newPath;
           curEntry = applyPendingTo(newPath);
-          if (curOld && curOld !== newPath) {
+          if (!pendingCopyFrom && curOld && curOld !== newPath) {
             renamedFrom.set(curOld, newPath);
           }
         }
@@ -3413,108 +3685,194 @@ export function parseUnifiedDiffHunks(diffText) {
     }
     if (rawLine.startsWith('Binary files ') && rawLine.endsWith(' differ')) {
       pendingFlags.binary = true;
+      const bin = parseBinaryFilesLine(rawLine);
+      if (bin.oldDevNull) pendingFlags.added = true;
+      if (bin.newDevNull) pendingFlags.deleted = true;
+      if (bin.newPath) {
+        curNew = bin.newPath;
+        curEntry = applyPendingTo(bin.newPath);
+        curEntry.binary = true;
+      }
+      if (bin.oldPath) {
+        const oldEntry = ensureFile(bin.oldPath);
+        oldEntry.binary = true;
+        if (bin.newDevNull) oldEntry.deleted = true;
+      }
       if (curEntry) curEntry.binary = true;
       if (curOld) ensureFile(curOld).binary = true;
-      continue;
-    }
-    if (rawLine.startsWith('@@ ')) {
-      const range = parseHunkNewRange(rawLine);
-      if (range && curEntry) {
-        curEntry.ranges.push(range);
-      }
     }
   }
   return { files, renamedFrom };
 }
 
-function parseLineRangeSuffix(suffix) {
-  if (!suffix) return null;
-  let clean = suffix.replaceAll('–', '-');
-  // Support :line, :line:col, :line-end, :line:col-end:col
-  const dashIdx = clean.indexOf('-');
-  if (dashIdx >= 0) {
-    const left = clean.slice(0, dashIdx);
-    const right = clean.slice(dashIdx + 1);
-    const leftColon = left.indexOf(':');
-    const rightColon = right.indexOf(':');
-    const startStr = (leftColon >= 0 ? left.slice(0, leftColon) : left).replace(/^L/i, '');
-    const endStr = (rightColon >= 0 ? right.slice(0, rightColon) : right).replace(/^L/i, '');
-    if (!/^\d+$/.test(startStr) || !/^\d+$/.test(endStr)) return null;
-    const a = Number(startStr), b = Number(endStr);
-    if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || a < 1 || b < 1) return null;
-    return [Math.min(a, b), Math.max(a, b)];
+function parseLineNumberAtom(atom) {
+  if (!atom) return null;
+  const colIdx = atom.indexOf(':');
+  const lineRaw = colIdx >= 0 ? atom.slice(0, colIdx) : atom;
+  if (colIdx >= 0) {
+    const colRaw = atom.slice(colIdx + 1);
+    if (!/^\d+$/.test(colRaw)) return null;
   }
-  const colIdx = clean.indexOf(':');
-  const numStr = (colIdx >= 0 ? clean.slice(0, colIdx) : clean).replace(/^L/i, '');
+  const numStr = lineRaw.startsWith('L') || lineRaw.startsWith('l') ? lineRaw.slice(1) : lineRaw;
   if (!/^\d+$/.test(numStr)) return null;
   const n = Number(numStr);
-  if (!Number.isSafeInteger(n) || n < 1) return null;
-  return [n, n];
+  return Number.isSafeInteger(n) && n >= 1 ? n : null;
+}
+
+function parseLineRangeSuffix(suffix) {
+  if (!suffix) return null;
+  const clean = suffix.replaceAll('–', '-');
+  const ranges = [];
+  for (const part of clean.split(',')) {
+    if (!part) return null;
+    const dashIdx = part.indexOf('-');
+    if (dashIdx >= 0) {
+      if (part.indexOf('-', dashIdx + 1) >= 0) return null;
+      const a = parseLineNumberAtom(part.slice(0, dashIdx));
+      const b = parseLineNumberAtom(part.slice(dashIdx + 1));
+      if (a === null || b === null) return null;
+      ranges.push([Math.min(a, b), Math.max(a, b)]);
+    } else {
+      const n = parseLineNumberAtom(part);
+      if (n === null) return null;
+      ranges.push([n, n]);
+    }
+  }
+  return ranges.length ? ranges : null;
 }
 
 function stripTokenWrappers(token) {
-  let s = token.trim();
-  while (s.length > 0 && '`"\'([<{'.includes(s[0])) s = s.slice(1);
-  while (s.length > 0 && '`"\')]}>.,;:!?'.includes(s[s.length - 1])) s = s.slice(0, -1);
-  return s;
+  const s = token.trim();
+  let start = 0;
+  let end = s.length;
+  while (start < end && '`"\'([<{*'.includes(s[start])) start++;
+  while (end > start && '`"\')]}>.,;:!?*'.includes(s[end - 1])) end--;
+  return s.slice(start, end);
+}
+
+function parseDirectLocationCandidate(rawCandidate) {
+  const cleaned = stripTokenWrappers(rawCandidate);
+  if (!cleaned || cleaned.includes('://')) return [];
+  const results = [];
+  // Check `#L123` / `#L123-L145` / `#L123,L145` form.
+  const hashIdx = cleaned.indexOf('#L');
+  const hashLowerIdx = hashIdx >= 0 ? hashIdx : cleaned.indexOf('#l');
+  if (hashLowerIdx > 0) {
+    const rawPath = cleaned.slice(0, hashLowerIdx);
+    const ranges = parseLineRangeSuffix(cleaned.slice(hashLowerIdx + 1));
+    const normPath = normalizeDiffPath(rawPath, { fromFinding: true });
+    if (ranges && normPath && isPlausibleRepoPath(normPath)) {
+      for (const range of ranges) {
+        results.push({ path: normPath, startLine: range[0], endLine: range[1], range });
+      }
+      return results;
+    }
+  }
+  // Check `path:123` / `path:123-145` / `path:123:4` / `path:123,124` form.
+  const colonIdx = cleaned.indexOf(':');
+  if (colonIdx > 0) {
+    const rawPath = cleaned.slice(0, colonIdx);
+    const ranges = parseLineRangeSuffix(cleaned.slice(colonIdx + 1));
+    const normPath = normalizeDiffPath(rawPath, { fromFinding: true });
+    if (ranges && normPath && isPlausibleRepoPath(normPath)) {
+      for (const range of ranges) {
+        results.push({ path: normPath, startLine: range[0], endLine: range[1], range });
+      }
+      return results;
+    }
+  }
+  return results;
 }
 
 function parseLocationToken(rawToken) {
-  const candidates = [];
-  // Unwrap markdown link `[label](target)` so both label and target are inspected.
-  const mdSplit = rawToken.indexOf('](');
-  if (rawToken.startsWith('[') && mdSplit > 1 && rawToken.includes(')', mdSplit + 2)) {
-    candidates.push(rawToken.slice(1, mdSplit));
-    candidates.push(rawToken.slice(mdSplit + 2, rawToken.indexOf(')', mdSplit + 2)));
-  } else {
-    candidates.push(rawToken);
-  }
-  for (const cand of candidates) {
-    const cleaned = stripTokenWrappers(cand);
-    if (!cleaned || cleaned.includes('://')) continue;
-    // Check `#L123` / `#L123-L145` form first.
-    const hashIdx = cleaned.indexOf('#L');
-    const hashLowerIdx = hashIdx >= 0 ? hashIdx : cleaned.indexOf('#l');
-    if (hashLowerIdx > 0) {
-      const rawPath = cleaned.slice(0, hashLowerIdx);
-      const range = parseLineRangeSuffix(cleaned.slice(hashLowerIdx + 1));
-      const normPath = normalizeDiffPath(rawPath);
-      if (range && normPath && isPlausibleRepoPath(normPath)) {
-        return { path: normPath, startLine: range[0], endLine: range[1], range };
+  const direct = parseDirectLocationCandidate(rawToken);
+  if (direct.length) return direct;
+  const cleaned = stripTokenWrappers(rawToken);
+  if (!cleaned || cleaned.includes('://')) return [];
+  const results = [];
+  // Support attached prefixes or chained tokens like `(see:src/auth.mjs:22)`, `file=src/auth.mjs:22`,
+  // `a.mjs:1;b.mjs:2`, or `src/untouched.mjs:1:src/auth.mjs:22`.
+  const subParts = cleaned.split(/[;=()[\]<>]+/).filter(Boolean);
+  for (const part of subParts) {
+    const partLocs = parseDirectLocationCandidate(part);
+    if (partLocs.length) {
+      results.push(...partLocs);
+      continue;
+    }
+    if (!part.includes(':')) continue;
+    const segs = part.split(':');
+    for (let i = 0; i + 1 < segs.length; i++) {
+      const normPath = normalizeDiffPath(segs[i], { fromFinding: true });
+      if (!normPath || !isPlausibleRepoPath(normPath)) continue;
+      // Try `path:line:col` first when segs[i+2] is pure digits, else `path:line`.
+      let suffix = segs[i + 1];
+      let step = 1;
+      if (i + 2 < segs.length && /^\d+$/.test(segs[i + 2])) {
+        const withCol = parseLineRangeSuffix(`${segs[i + 1]}:${segs[i + 2]}`);
+        if (withCol) {
+          for (const range of withCol) results.push({ path: normPath, startLine: range[0], endLine: range[1], range });
+          i += 2;
+          continue;
+        }
+      }
+      const ranges = parseLineRangeSuffix(suffix);
+      if (ranges) {
+        for (const range of ranges) results.push({ path: normPath, startLine: range[0], endLine: range[1], range });
+        i += step;
       }
     }
-    // Check `path:123` / `path:123-145` / `path:123:4` form.
-    const colonIdx = cleaned.indexOf(':');
-    if (colonIdx > 0) {
-      const rawPath = cleaned.slice(0, colonIdx);
-      const range = parseLineRangeSuffix(cleaned.slice(colonIdx + 1));
-      const normPath = normalizeDiffPath(rawPath);
-      if (range && normPath && isPlausibleRepoPath(normPath)) {
-        return { path: normPath, startLine: range[0], endLine: range[1], range };
+  }
+  return results;
+}
+
+function extractMarkdownLinkTargets(cleanText) {
+  // Linearly extract every `[label](target)` target (supporting multi-word labels and spaces in targets)
+  // while leaving the label text intact for normal token scanning.
+  const targets = [];
+  let out = '';
+  let i = 0;
+  while (i < cleanText.length) {
+    if (cleanText[i] === ']' && i + 1 < cleanText.length && cleanText[i + 1] === '(') {
+      const closeParen = cleanText.indexOf(')', i + 2);
+      if (closeParen > i + 2) {
+        targets.push(cleanText.slice(i + 2, closeParen));
+        out += ' ';
+        i = closeParen + 1;
+        continue;
       }
     }
+    out += cleanText[i];
+    i++;
   }
-  return null;
+  return { textWithoutTargets: out, targets };
 }
 
 function extractAllFindingLocations(item) {
-  if (typeof item !== 'string' || !item.trim()) return [];
+  if (typeof item !== 'string') return [];
+  const clean = stripAnsiAndControl(item);
+  if (!clean) return [];
   const locations = [];
-  const tokens = item.trim().split(/\s+/);
+  const { textWithoutTargets, targets } = extractMarkdownLinkTargets(clean);
+  for (const target of targets) {
+    locations.push(...parseLocationToken(target));
+  }
+  const tokens = textWithoutTargets.trim().split(/\s+/).filter(Boolean);
   for (let i = 0; i < tokens.length; i++) {
-    const loc = parseLocationToken(tokens[i]);
-    if (loc) {
-      locations.push(loc);
+    const locs = parseLocationToken(tokens[i]);
+    if (locs.length) {
+      locations.push(...locs);
       continue;
     }
     // Also support `path (line 42)` / `path (lines 42-48)` / `path line 42`
-    const maybePath = normalizeDiffPath(stripTokenWrappers(tokens[i]));
+    const maybePath = normalizeDiffPath(stripTokenWrappers(tokens[i]), { fromFinding: true });
     if (maybePath && isPlausibleRepoPath(maybePath) && i + 2 < tokens.length) {
       const kw = stripTokenWrappers(tokens[i + 1]).toLowerCase();
       if (kw === 'line' || kw === 'lines') {
-        const range = parseLineRangeSuffix(stripTokenWrappers(tokens[i + 2]));
-        if (range) {
-          locations.push({ path: maybePath, startLine: range[0], endLine: range[1], range });
+        const ranges = parseLineRangeSuffix(stripTokenWrappers(tokens[i + 2]));
+        if (ranges) {
+          for (const range of ranges) {
+            locations.push({ path: maybePath, startLine: range[0], endLine: range[1], range });
+          }
           i += 2;
         }
       }
@@ -3527,41 +3885,167 @@ export function extractFindingLocation(item) {
   return extractAllFindingLocations(item)[0] ?? null;
 }
 
-function normalizeReviewItems(rawItems) {
+function isPathWordChar(ch) {
+  if (!ch) return false;
+  const c = ch.charCodeAt(0);
+  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || ch === '_' || ch === '-' || ch === '.';
+}
+
+function scanDiffPathMentions(cleanText, diffPaths) {
+  // Detect direct occurrences of any diff/renamed path (including paths with spaces, `a/`/`b/` prefixes,
+  // absolute paths, or bare path mentions without line numbers).
+  const textSlash = cleanText.replaceAll('\\', '/');
+  const matchedLocations = [];
+  const matchedSpans = [];
+  let bareDiffMention = false;
+  for (const diffPath of diffPaths) {
+    if (!diffPath) continue;
+    let from = 0;
+    while (from <= textSlash.length - diffPath.length) {
+      const idx = textSlash.indexOf(diffPath, from);
+      if (idx < 0) break;
+      from = idx + diffPath.length;
+      const before = idx > 0 ? textSlash[idx - 1] : '';
+      const after = from < textSlash.length ? textSlash[from] : '';
+      // Avoid substring matches like `src/auth.mjs.bak` or `my_src/auth.mjs`.
+      if (isPathWordChar(before)) continue;
+      if (after && (isPathWordChar(after) || after === '/')) continue;
+      // If preceded by `/`, verify this is either `./`, `a/`, `b/`, or an absolute path (`/Users/...`, `C:/...`),
+      // not a distinct repo-relative path like `other/src/auth.mjs`.
+      if (before === '/') {
+        let tokStart = idx - 1;
+        while (tokStart > 0 && !' \t`"\'([<{,;='.includes(textSlash[tokStart - 1])) tokStart--;
+        const prefix = textSlash.slice(tokStart, idx);
+        const isKnownPrefix = prefix === '/' || prefix === './' || prefix === 'a/' || prefix === 'b/'
+          || prefix.startsWith('/') || (prefix.length >= 3 && prefix[1] === ':' && prefix[2] === '/');
+        if (!isKnownPrefix) continue;
+      }
+      // Inspect immediately following text (skipping optional closing wrappers) for an attached line range.
+      let pos = from;
+      while (pos < textSlash.length && '`"\'*'.includes(textSlash[pos])) pos++;
+      let ranges = null;
+      let spanEnd = from;
+      if (pos < textSlash.length && (textSlash[pos] === ':' || (textSlash[pos] === '#' && (textSlash[pos + 1] === 'L' || textSlash[pos + 1] === 'l')))) {
+        const startPos = pos + 1;
+        let endPos = startPos;
+        while (endPos < textSlash.length && '0123456789Ll:,-–'.includes(textSlash[endPos])) endPos++;
+        const rawSuffix = stripTokenWrappers(textSlash.slice(startPos, endPos));
+        ranges = parseLineRangeSuffix(rawSuffix);
+        if (ranges) spanEnd = endPos;
+      } else {
+        // Support `diffPath line 42` / `diffPath (lines 42-48)`
+        let tailPos = pos;
+        while (tailPos < textSlash.length && ' \t'.includes(textSlash[tailPos])) tailPos++;
+        const tail = textSlash.slice(tailPos);
+        const tailToks = tail.split(/\s+/, 2);
+        if (tailToks.length >= 2) {
+          const kw = stripTokenWrappers(tailToks[0]).toLowerCase();
+          if (kw === 'line' || kw === 'lines') {
+            ranges = parseLineRangeSuffix(stripTokenWrappers(tailToks[1]));
+            if (ranges) {
+              const secondIdx = tail.indexOf(tailToks[1], tailToks[0].length);
+              spanEnd = secondIdx >= 0 ? tailPos + secondIdx + tailToks[1].length : from;
+            }
+          }
+        }
+      }
+      if (ranges) {
+        for (const range of ranges) {
+          matchedLocations.push({ path: diffPath, startLine: range[0], endLine: range[1], range });
+        }
+        if (diffPath.includes(' ')) matchedSpans.push([idx, spanEnd]);
+      } else {
+        bareDiffMention = true;
+      }
+    }
+  }
+  return { matchedLocations, matchedSpans, bareDiffMention };
+}
+
+function maskMatchedSpans(text, spans) {
+  if (!spans.length) return text;
+  const chars = [...text];
+  for (const [start, end] of spans) {
+    for (let i = Math.max(0, start); i < Math.min(chars.length, end); i++) {
+      chars[i] = ' ';
+    }
+  }
+  return chars.join('');
+}
+
+function normalizeReviewItems(rawItems, { maxLen = 500 } = {}) {
   const arr = Array.isArray(rawItems) ? rawItems : rawItems === undefined || rawItems === null ? [] : [rawItems];
-  return arr.map(item => oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500)).filter(Boolean);
+  return arr.map(item => {
+    const clean = stripAnsiAndControl(typeof item === 'string' ? item : JSON.stringify(item));
+    return Number.isFinite(maxLen) ? oneLine(clean, maxLen) : clean;
+  }).filter(Boolean);
 }
 
 export function guardPreExistingFindings(preExistingItems, diffScope) {
-  const items = normalizeReviewItems(preExistingItems);
-  if (!items.length) return { promoted: [], preExisting: [] };
+  const rawCleanItems = normalizeReviewItems(preExistingItems, { maxLen: Infinity });
+  if (!rawCleanItems.length) return { promoted: [], preExisting: [] };
   if (!diffScope || !(diffScope.files instanceof Map)) {
-    return { promoted: items, preExisting: [] };
+    return { promoted: rawCleanItems.map(item => oneLine(item, 500)), preExisting: [] };
   }
+  const touchedPaths = new Set(diffScope.files.keys());
+  if (diffScope.renamedFrom instanceof Map) {
+    for (const oldPath of diffScope.renamedFrom.keys()) touchedPaths.add(oldPath);
+  }
+  const hasRepoFiles = diffScope.repoFiles instanceof Set;
   const promoted = [];
   const kept = [];
-  for (const item of items) {
-    const locs = extractAllFindingLocations(item);
-    if (!locs.length) {
-      promoted.push(item);
+  for (const cleanItem of rawCleanItems) {
+    const displayItem = oneLine(cleanItem, 500);
+    const mentionScan = scanDiffPathMentions(cleanItem, touchedPaths);
+    if (mentionScan.bareDiffMention) {
+      promoted.push(displayItem);
+      continue;
+    }
+    const locs = extractAllFindingLocations(maskMatchedSpans(cleanItem, mentionScan.matchedSpans));
+    const allLocs = [...locs, ...mentionScan.matchedLocations];
+    if (!allLocs.length) {
+      promoted.push(displayItem);
       continue;
     }
     let touchesDiff = false;
-    for (const loc of locs) {
-      const mappedPath = diffScope.renamedFrom instanceof Map ? (diffScope.renamedFrom.get(loc.path) ?? loc.path) : loc.path;
-      const entry = diffScope.files.get(mappedPath) ?? diffScope.files.get(loc.path);
-      if (!entry) continue;
-      if (entry.added || entry.deleted || entry.binary) {
-        touchesDiff = true;
-        break;
+    for (const loc of allLocs) {
+      const pathsToCheck = [loc.path];
+      if ((loc.path.startsWith('a/') || loc.path.startsWith('b/')) && loc.path.length > 2) {
+        pathsToCheck.push(loc.path.slice(2));
       }
-      if (Array.isArray(entry.ranges) && entry.ranges.some(([start, end]) => loc.startLine <= end && loc.endLine >= start)) {
-        touchesDiff = true;
-        break;
+      for (const p of [...pathsToCheck]) {
+        if (diffScope.renamedFrom instanceof Map) {
+          const mapped = diffScope.renamedFrom.get(p);
+          if (mapped && !pathsToCheck.includes(mapped)) pathsToCheck.push(mapped);
+        }
       }
+      // When repoFiles is provided, fail closed if the cited path does not exist at job.head (or in diffScope).
+      if (hasRepoFiles) {
+        const existsAtHead = diffScope.repoFiles.has(loc.path)
+          || diffScope.files.has(loc.path)
+          || (diffScope.renamedFrom instanceof Map && diffScope.renamedFrom.has(loc.path));
+        if (!existsAtHead) {
+          touchesDiff = true;
+          break;
+        }
+      }
+      // Check EVERY candidate path (including both old path and renamed-to path for rename+re-add).
+      for (const p of pathsToCheck) {
+        const entry = diffScope.files.get(p);
+        if (!entry) continue;
+        if (entry.added || entry.deleted || entry.binary || entry.modeChanged) {
+          touchesDiff = true;
+          break;
+        }
+        if (Array.isArray(entry.ranges) && entry.ranges.some(([start, end]) => loc.startLine <= end && loc.endLine >= start)) {
+          touchesDiff = true;
+          break;
+        }
+      }
+      if (touchesDiff) break;
     }
-    if (touchesDiff) promoted.push(item);
-    else kept.push(item);
+    if (touchesDiff) promoted.push(displayItem);
+    else kept.push(displayItem);
   }
   return { promoted, preExisting: kept.slice(0, 20) };
 }
@@ -3572,11 +4056,13 @@ export function applyPreExistingDiffGuard(review, diffScopeOrText) {
     ? parseUnifiedDiffHunks(diffScopeOrText)
     : diffScopeOrText;
   const rawMustFix = normalizeReviewItems(review.mustFix);
+  const rawFollowUps = rawMustFix.filter(isFollowUp);
   const { promoted, preExisting } = guardPreExistingFindings(review.preExisting, diffScope);
   const combined = [...rawMustFix, ...promoted];
   const followUps = combined.filter(isFollowUp).slice(0, 20);
   const mustFix = combined.filter(item => !isFollowUp(item)).slice(0, 20);
-  const verdict = !mustFix.length && (review.verdict === 'PASS' || followUps.length) ? 'PASS' : 'FAIL';
+  // Fail closed: promoted preExisting items (including P3 or diffScope=null) must NEVER flip an explicit FAIL to PASS.
+  const verdict = !mustFix.length && (review.verdict === 'PASS' || rawFollowUps.length > 0) ? 'PASS' : 'FAIL';
   return {
     ...review,
     verdict,
@@ -3592,7 +4078,7 @@ export function parseReviewOutput(raw, { fromResultFile = false, diffScope, diff
     if (!object(parsed)) return parsed;
     const normalized = {
       ...parsed,
-      ...(parsed.preExisting !== undefined ? { preExisting: normalizeReviewItems(parsed.preExisting) } : {}),
+      ...(parsed.preExisting !== undefined ? { preExisting: normalizeReviewItems(parsed.preExisting, { maxLen: Infinity }) } : {}),
     };
     if (diffScope !== undefined || diffText !== undefined) {
       return applyPreExistingDiffGuard(normalized, diffScope !== undefined ? diffScope : diffText);
@@ -3889,19 +4375,31 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
   // split comes before the cut to 20, so no blocking item is lost. Any `preExisting` item whose cited file:line
   // overlaps a changed diff hunk (or added/deleted/binary file, or lacks a verifiable file:line, or when the diff
   // cannot be read) is deterministically promoted back to `mustFix` before splitting follow-ups and verdict.
-  const rawPreExisting = normalizeReviewItems(r.preExisting);
+  const rawPreExisting = normalizeReviewItems(r.preExisting, { maxLen: Infinity });
   let diffScope = { files: new Map(), renamedFrom: new Map() };
   if (rawPreExisting.length) {
     diffScope = null;
     try {
-      const diffCwd = job.worktree || ctx.dirs?.source;
-      const diffText = diffCwd ? await gitRaw(
-        ctx,
-        ['-c', 'core.quotePath=false', 'diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '-M', `origin/${ctx.state.baseBranch}...${job.head}`],
-        diffCwd,
-      ) : null;
-      if (typeof diffText === 'string') {
-        diffScope = parseUnifiedDiffHunks(diffText);
+      const diffCwd = job.worktree && ctx.fs?.existsSync?.(job.worktree) ? job.worktree : ctx.state?.cwd;
+      if (diffCwd) {
+        await ctx.git(['fetch', '-q', 'origin', ctx.state.baseBranch], diffCwd).catch(() => {});
+        const diffText = await gitRaw(
+          ctx,
+          [
+            '-c', 'core.quotePath=false',
+            '-c', 'diff.noprefix=false',
+            '-c', 'diff.mnemonicPrefix=false',
+            '-c', 'diff.relative=false',
+            'diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv',
+            '--src-prefix=a/', '--dst-prefix=b/', '-M',
+            `origin/${ctx.state.baseBranch}...${job.head}`, '--',
+          ],
+          diffCwd,
+        );
+        if (typeof diffText === 'string') {
+          const repoFiles = await gitNames(ctx, ['ls-tree', '-r', '--name-only', '-z', job.head], diffCwd);
+          diffScope = { ...parseUnifiedDiffHunks(diffText), repoFiles: new Set(repoFiles) };
+        }
       }
     } catch {
       diffScope = null;
@@ -6700,7 +7198,7 @@ async function mergeCheck(ctx, job) {
     if (review.state === 'fail') { reds.push(`Review FAIL from a fresh reviewer: ${(review.mustFix ?? []).join('; ') || 'see the review comment on the PR'}`); nonTestReds++; }
     if (suite.state === 'fail') { reds.push(suite.text); if (suite.failure) reproduceChecks.push(suite.failure); }
   } else if (job.review?.head === job.head && job.review.verdict === 'FAIL') {
-    review = { state: 'fail', mustFix: job.review.mustFix, decision: job.review.decision ?? null, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
+    review = { state: 'fail', mustFix: job.review.mustFix, preExisting: job.review.preExisting ?? [], decision: job.review.decision ?? null, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
     if (review.decision && asking(ctx) && !job.answer) {
       const item = review.decision.items[0].replace(DECISION_ITEM, '').replace(/^\W+/, '');
       await stopChecks(ctx, job);
