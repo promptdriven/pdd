@@ -41,6 +41,13 @@ An app map with a follow-up `after` step (`app-map.json`):
 - **Host timers (`timers`):** optional root array (at most `16` timers, at most one per non-wildcard screen; `interval_ms` is a strict integer `1000..3600000`) driving timed behavior without page `<script>`. Each timer has exact fields `id`, `screen`, `interval_ms`, `enabled_pointer` (required Boolean state field), `generation_pointer` (required integer `0..9007199254740991`), `handler`, `input` (may copy `/state/...` or proved `/event/<field>` from `{timer_id, generation, sequence, elapsed_ms}`), `state`, `next` (and optional `after`):
   `{"id": "order-refresh", "screen": "cart", "interval_ms": 1000, "enabled_pointer": "/polling", "generation_pointer": "/generation", "handler": {"prompt_path": "prompts/cart.prompt.md", "operation": "refresh_status"}, "input": {"state": {"$ref": "/state"}, "generation": {"$ref": "/event/generation"}}, "state": {"$ref": "/result/state"}, "next": {"kind": "same", "screen": null, "route_pointer": null}}`
 
+### .ui.svg local lint contract
+
+- **Image syntax outside `## Dependencies`:** link `.ui.svg` files as `![label](views/...)`—plain `[label](...)` links outside `## Dependencies` are skipped by scoped uploads (`link syntax` / `dependency-file-unreadable`).
+- **Visible `id="<name>"` (`region #<name>`):** every non-hidden `id` (outside `<defs>` and without `data-context-only="true"` / class `context-only`) must appear in `## Appearance` in backticks (`` `<name>` ``) or in prose as `<name> region|box|bar|container|button|grid|heading|label`; omit decorative `id`s on background rects/dividers.
+- **Visible non-numeric `<text>` labels:** every non-numeric `<text>` (outside `[\d\s.,+%-]+`) must appear in `.prompt.md` prose (`drawing label absent from prompt`).
+- **Interactive controls:** every button/control named in `.prompt.md` (scoped per view when multiple `.ui.svg` drawings are linked) must match a visible `<text>` or `id` in `.ui.svg` (`prompt control absent from drawing`).
+
 ## 20. HTML checks and Simulator rendering
 
 - **HTML sanitizer rules:** `<script>`, `<iframe>`, `on*=` handlers, and `javascript:` URLs are stripped (this does not disable host `timers`). Use `background-color` (not `background`), `aria-current="true"` (not `aria-pressed`), and `display: block` on `<li>` (not `list-style`).
