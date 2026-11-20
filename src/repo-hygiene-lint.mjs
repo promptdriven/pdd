@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 1872912e4a631d53b9e3d97ab4ba42dbd6c0dbef0b54f04a072c5c78861ce0c0).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 8457e1b2100ee7759b9406cd45019efe6b149c96e9a947f7dfdf944ea047537a).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
@@ -38,6 +38,61 @@ const TEST_FRAMEWORK_PACKAGES = new Set([
   'vitest', 'jest', '@jest/globals', 'mocha', 'chai', 'sinon', 'ava', 'tap', 'uvu',
   'playwright', '@playwright/test', 'pytest', 'unittest',
 ]);
+
+const DECLARATIVE_SCHEMA_FENCE_LANGS = new Set([
+  'sql', 'ddl', 'sqlite', 'postgres', 'postgresql', 'mysql',
+  'openapi', 'yaml', 'yml', 'json', 'jsonc', 'jsonschema', 'json-schema',
+  'protobuf', 'proto', 'graphql', 'gql', 'http', 'idl', 'schema',
+  'avro', 'avsc', 'thrift', 'toml', 'xml', 'xsd', 'prisma',
+]);
+const SQL_FENCE_LANGS = new Set(['sql', 'ddl', 'sqlite', 'postgres', 'postgresql', 'mysql']);
+const SQL_TABLE_CONSTRAINT_KEYWORDS = new Set([
+  'primary', 'foreign', 'unique', 'check', 'constraint', 'index', 'key',
+  'create', 'alter', 'insert', 'select', 'references', 'exclude', 'like',
+]);
+const NON_PORT_FILE_EXTENSIONS = new Set([
+  'mjs', 'cjs', 'js', 'jsx', 'ts', 'tsx', 'mts', 'cts', 'py', 'pyi',
+  'go', 'rs', 'rb', 'java', 'kt', 'cs', 'cc', 'cpp', 'hpp', 'swift', 'php', 'lua',
+  'sh', 'bash', 'zsh', 'ps1', 'bat',
+  'json', 'jsonc', 'jsonl', 'ndjson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf',
+  'xml', 'xsd', 'html', 'htm', 'css', 'scss', 'less', 'svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico',
+  'pdf', 'csv', 'tsv', 'txt', 'md', 'mdx', 'rst',
+  'sql', 'ddl', 'db', 'sqlite', 'sqlite3', 'proto', 'graphql', 'gql', 'prisma', 'avsc', 'avro', 'thrift',
+  'wasm', 'gz', 'tar', 'zip', 'pem', 'crt', 'pid', 'sock', 'tmp', 'bak', 'git', 'lockb', 'map',
+]);
+const NON_PORT_EXACT_FILENAMES = new Set([
+  'yarn.lock', 'bun.lock', 'cargo.lock', 'poetry.lock', 'gemfile.lock',
+  'composer.lock', 'uv.lock', 'flake.lock', 'podfile.lock', 'packages.lock',
+]);
+const NON_PORT_TLDS = new Set([
+  'com', 'org', 'net', 'io', 'dev', 'app', 'ai', 'gov', 'edu', 'localhost', 'arpa', 'local',
+]);
+const NON_PORT_PREFIXES = new Set([
+  'env', 'process', 'console', 'window', 'document', 'global', 'globalthis',
+  'module', 'exports', 'import', 'this', 'self', 'super', 'args', 'argv',
+  'stdin', 'stdout', 'stderr', 'ports', 'options', 'opts', 'req', 'res',
+  'request', 'response', 'err', 'error', 'headers', 'params', 'query', 'body', 'cookies',
+  'node', 'bun', 'deno', 'sys', 'os', 'path', 'posix', 'fs', 'url', 'util',
+  'crypto', 'stream', 'events', 'timers', 'zlib', 'net', 'tls', 'dns',
+  'http', 'https', 'http2', 'child_process', 'worker_threads', 'readline', 'std', 'fmt',
+]);
+const NON_PORT_JS_MEMBERS = new Set([
+  'length', 'prototype', 'constructor', 'toString', 'valueOf', 'hasOwnProperty',
+  'startsWith', 'endsWith', 'forEach', 'flatMap', 'indexOf', 'lastIndexOf',
+  'toLowerCase', 'toUpperCase', 'charAt', 'substring', 'substr',
+]);
+const VERSION_TOKEN_RE = /^v?\d+$/i;
+const BARE_PORT_OP_RE = /^([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)$/;
+const CALL_PORT_OP_RE = /^([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)\s*\(/;
+const BRACE_PORT_OP_RE = /^([a-z][a-zA-Z0-9_-]*)\.\{\s*([a-z][a-zA-Z0-9_-]*(?:\s*,\s*[a-z][a-zA-Z0-9_-]*)+)\s*\}$/;
+const INLINE_PORT_OP_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9_-])/g;
+const INLINE_BRACE_PORT_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.\{\s*([a-z][a-zA-Z0-9_-]*(?:\s*,\s*[a-z][a-zA-Z0-9_-]*)+)\s*\}/g;
+const PORT_WIRING_HEADING_RE = /\b(?:port|ports|wiring|binding|bindings)\b/i;
+const PORT_TABLE_COL_INCLUDE_RE = /\b(?:port|ports|operation|operations|binding|bindings)\b/i;
+const PORT_TABLE_COL_EXCLUDE_RE = /\b(?:file|path|table|column|route|endpoint|url|http|sql|env|variable)\b/i;
+const PORT_WIRING_CUE_RE = /\b(?:port|ports|wire|wires|wired|wiring|bind|binds|bound|binding|bindings)\b/i;
+const PORT_BULLET_LEAD_RE = /^\s*(?:[-*+]|\d+[.)])\s*(?:[a-z][a-zA-Z0-9_-]*\.[a-z][a-zA-Z0-9_-]*)\s*(?::|—|–|->|=>|\(|-\s)/;
+const EMPTY_STRING_SET = new Set();
 
 const canonicalRepoPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
@@ -85,6 +140,39 @@ function hasRuntimeInterfaceMetadata(raw) {
   const text = String(raw ?? '');
   return /<details\b[^>]*>\s*<summary\b[^>]*>[^\r\n]*runtime\s+interface[^\r\n]*<\/summary>[\s\S]*?<\/details>/i.test(text)
     || /^#{2,6}[ \t]+runtime[ \t]+interface[ \t]*\r?\n/im.test(text);
+}
+
+function hasNativeOnlyFrontmatter(raw) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(String(raw ?? ''));
+  if (!match) return false;
+  return /^\s*kind\s*:\s*(?:['"])?native-only(?:['"])?\s*(?:#.*)?$/im.test(match[1]);
+}
+
+function extractRuntimeInterfaceObjects(raw) {
+  const text = String(raw ?? '');
+  const regions = [];
+  const detailsRe = /<details\b[^>]*>\s*<summary\b[^>]*>[^\r\n]*runtime\s+interface[^\r\n]*<\/summary>([\s\S]*?)<\/details>/gi;
+  let m;
+  while ((m = detailsRe.exec(text)) !== null) regions.push(m[1]);
+  const headingRe = /^#{2,6}[ \t]+runtime[ \t]+interface[ \t]*\r?\n([\s\S]*?)(?=^#{1,6}[ \t]+\S|\s*$)/gim;
+  while ((m = headingRe.exec(text)) !== null) regions.push(m[1]);
+  const objects = [];
+  for (const region of regions) {
+    const fenceRe = /```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```/gi;
+    let fm;
+    while ((fm = fenceRe.exec(region)) !== null) {
+      try {
+        const parsed = JSON.parse(fm[1]);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) objects.push(parsed);
+      } catch {}
+    }
+  }
+  return objects;
+}
+
+function isNativeOnlyPrompt(raw) {
+  if (hasNativeOnlyFrontmatter(raw)) return true;
+  return extractRuntimeInterfaceObjects(raw).some(obj => obj.kind === 'native-only');
 }
 
 function stripPromptMetadataPreservingLines(raw) {
@@ -207,15 +295,19 @@ function scanMarkdownLinesAndFences(cleanedText) {
 }
 
 function collectPromptCodeBlockFindings(text, { path = 'prompts/module.prompt.md' } = {}) {
+  const isNativeOnly = hasNativeOnlyFrontmatter(text);
   const cleaned = stripPromptMetadataPreservingLines(text);
   const { fences } = scanMarkdownLinesAndFences(cleaned);
   const nonMermaid = fences.filter(f => f.lang !== 'mermaid' && f.lang !== 'pdd-boundary');
   if (!nonMermaid.length) return [];
 
   const records = [];
+  const countedFences = [];
   let totalBodyLines = 0;
 
   for (const fence of nonMermaid) {
+    if (isNativeOnly && DECLARATIVE_SCHEMA_FENCE_LANGS.has(fence.lang)) continue;
+    countedFences.push(fence);
     const count = fence.bodyLines.length;
     totalBodyLines += count;
     if (count > PROMPT_FENCE_LINE_LIMIT) {
@@ -245,14 +337,14 @@ function collectPromptCodeBlockFindings(text, { path = 'prompts/module.prompt.md
     }
   }
 
-  if (totalBodyLines > PROMPT_FENCE_TOTAL_LIMIT) {
-    const firstLine = nonMermaid[0].openLine;
+  if (totalBodyLines > PROMPT_FENCE_TOTAL_LIMIT && countedFences.length > 0) {
+    const firstLine = countedFences[0].openLine;
     records.push({
       line: firstLine,
       order: 0,
       code: 'prompt-code-fence-total',
       category: 'prompt code block',
-      detail: `Prompt contains ${totalBodyLines} non-mermaid fenced lines across ${nonMermaid.length} blocks (recommended <= ${PROMPT_FENCE_TOTAL_LIMIT} total). Move implementation details to tests or summarize contracts in prose and tables.`,
+      detail: `Prompt contains ${totalBodyLines} non-mermaid fenced lines across ${countedFences.length} blocks (recommended <= ${PROMPT_FENCE_TOTAL_LIMIT} total). Move implementation details to tests or summarize contracts in prose and tables.`,
     });
   }
 
@@ -266,6 +358,412 @@ function collectPromptCodeBlockFindings(text, { path = 'prompts/module.prompt.md
 
 export function lintPromptCodeBlocks(text, { path = 'prompts/module.prompt.md' } = {}) {
   return collectPromptCodeBlockFindings(text, { path }).map(r => r.warning);
+}
+
+function isSingleCallSpan(span, openIdx) {
+  if (openIdx < 0 || !span.endsWith(')')) return false;
+  let depth = 0;
+  let quote = null;
+  for (let i = openIdx; i < span.length; i++) {
+    const ch = span[i];
+    if (quote) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i === span.length - 1;
+      if (depth < 0) return false;
+    }
+  }
+  return false;
+}
+
+function isValidPortCandidate(port, op, sqlSchemaColumns = EMPTY_STRING_SET) {
+  if (port.length < 2 || op.length < 2) return false;
+  if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) return false;
+  const portLower = port.toLowerCase();
+  const opLower = op.toLowerCase();
+  const fullLower = `${portLower}.${opLower}`;
+  if (NON_PORT_FILE_EXTENSIONS.has(opLower)) return false;
+  if (NON_PORT_EXACT_FILENAMES.has(fullLower)) return false;
+  if (NON_PORT_TLDS.has(opLower)) return false;
+  if (NON_PORT_PREFIXES.has(portLower)) return false;
+  if (NON_PORT_JS_MEMBERS.has(op)) return false;
+  if (sqlSchemaColumns.has(fullLower)) return false;
+  return true;
+}
+
+function stripUrlsAndMarkdownLinks(line) {
+  let out = String(line ?? '').replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ');
+  out = out.replace(/\[([^\[\]\r\n]*)\]\(([^()\r\n]*)\)/g, (_m, label) => ` ${label} `);
+  return out;
+}
+
+function extractInlineBacktickSpans(line) {
+  const spans = [];
+  let outside = '';
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] !== '`') {
+      outside += line[i++];
+      continue;
+    }
+    let ticks = 0;
+    while (i + ticks < line.length && line[i + ticks] === '`') ticks++;
+    const delim = '`'.repeat(ticks);
+    const closeIdx = line.indexOf(delim, i + ticks);
+    if (closeIdx < 0) {
+      outside += line.slice(i);
+      break;
+    }
+    spans.push(line.slice(i + ticks, closeIdx));
+    outside += ' ';
+    i = closeIdx + ticks;
+  }
+  return { spans, outside };
+}
+
+function splitMarkdownTableRow(line) {
+  let trimmed = line.trim();
+  if (!trimmed.includes('|')) return null;
+  if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith('|')) trimmed = trimmed.slice(0, -1);
+  return trimmed.split('|').map(cell => cell.trim());
+}
+
+function isMarkdownTableSeparator(line) {
+  return /^\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?$/.test(line.trim());
+}
+
+function extractSqlSchemaColumns(fences) {
+  const cols = new Set();
+  for (const fence of fences) {
+    if (!SQL_FENCE_LANGS.has(fence.lang)) continue;
+    const rawSql = fence.bodyLines.map(item => item.text).join('\n');
+    const createRe = /\bCREATE\s+(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`\[]?[A-Za-z_][A-Za-z0-9_]*["`\]]?\.)?["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?\s*\(/gi;
+    let m;
+    while ((m = createRe.exec(rawSql)) !== null) {
+      const table = m[1].toLowerCase();
+      const openParen = createRe.lastIndex - 1;
+      let depth = 0;
+      let quote = null;
+      let bodyStart = openParen + 1;
+      let bodyEnd = -1;
+      for (let i = openParen; i < rawSql.length; i++) {
+        const ch = rawSql[i];
+        const next = rawSql[i + 1];
+        if (quote) {
+          if (ch === quote && next === quote) { i++; continue; }
+          if (ch === quote) quote = null;
+          continue;
+        }
+        if (ch === '-' && next === '-') {
+          const nl = rawSql.indexOf('\n', i + 2);
+          i = nl < 0 ? rawSql.length : nl;
+          continue;
+        }
+        if (ch === '/' && next === '*') {
+          const end = rawSql.indexOf('*/', i + 2);
+          i = end < 0 ? rawSql.length : end + 1;
+          continue;
+        }
+        if (ch === '\'' || ch === '"') {
+          quote = ch;
+          continue;
+        }
+        if (ch === '(') depth++;
+        else if (ch === ')') {
+          depth--;
+          if (depth === 0) {
+            bodyEnd = i;
+            break;
+          }
+        }
+      }
+      if (bodyEnd <= bodyStart) continue;
+      const body = rawSql.slice(bodyStart, bodyEnd);
+      const segments = [];
+      let segStart = 0;
+      depth = 0;
+      quote = null;
+      for (let i = 0; i < body.length; i++) {
+        const ch = body[i];
+        const next = body[i + 1];
+        if (quote) {
+          if (ch === quote && next === quote) { i++; continue; }
+          if (ch === quote) quote = null;
+          continue;
+        }
+        if (ch === '-' && next === '-') {
+          const nl = body.indexOf('\n', i + 2);
+          i = nl < 0 ? body.length : nl;
+          continue;
+        }
+        if (ch === '/' && next === '*') {
+          const end = body.indexOf('*/', i + 2);
+          i = end < 0 ? body.length : end + 1;
+          continue;
+        }
+        if (ch === '\'' || ch === '"') {
+          quote = ch;
+          continue;
+        }
+        if (ch === '(') depth++;
+        else if (ch === ')') depth = Math.max(0, depth - 1);
+        else if (ch === ',' && depth === 0) {
+          segments.push(body.slice(segStart, i));
+          segStart = i + 1;
+        }
+      }
+      segments.push(body.slice(segStart));
+      for (const seg of segments) {
+        const cleanedSeg = seg
+          .replace(/--[^\r\n]*/g, ' ')
+          .replace(/\/\*[\s\S]*?\*\//g, ' ')
+          .trim();
+        const colMatch = /^["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?(?:\s+|$)/.exec(cleanedSeg);
+        if (!colMatch) continue;
+        const col = colMatch[1].toLowerCase();
+        if (!SQL_TABLE_CONSTRAINT_KEYWORDS.has(col)) cols.add(`${table}.${col}`);
+      }
+    }
+  }
+  return cols;
+}
+
+function extractDependencyLinkTargets(raw, promptPath) {
+  const cleaned = stripPromptMetadataPreservingLines(raw);
+  const { proseLines } = scanMarkdownLinesAndFences(cleaned);
+  let inDeps = false;
+  const targets = new Set();
+  const baseDir = posix.dirname(promptPath);
+  const linkRe = /\[[^\[\]\r\n]*\]\(\s*<?([^()\s<>#\r\n]+)(?:#[^()\s<>#\r\n]*)?>?\s*\)/g;
+
+  for (const { text: line } of proseLines) {
+    const h2 = /^ {0,3}##\s+(.+)$/.exec(line);
+    if (h2) {
+      inDeps = /^dependencies\b/i.test(h2[1].trim());
+      continue;
+    }
+    if (!inDeps) continue;
+    let m;
+    while ((m = linkRe.exec(line)) !== null) {
+      const rawTarget = m[1].trim();
+      if (!rawTarget || /^[a-z][a-z0-9+.-]*:/i.test(rawTarget)) continue;
+      const resolved = posix.normalize(baseDir === '.' ? rawTarget : posix.join(baseDir, rawTarget));
+      if (canonicalRepoPath(resolved) && resolved !== promptPath) targets.add(resolved);
+    }
+  }
+  return [...targets].sort();
+}
+
+function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
+  const mentioned = new Set();
+  const display = new Set();
+  if (isPrompt) {
+    for (const iface of extractRuntimeInterfaceObjects(raw)) {
+      if (!Array.isArray(iface.resources)) continue;
+      for (const res of iface.resources) {
+        if (typeof res?.name !== 'string' || !res.name.trim()) continue;
+        for (const op of (Array.isArray(res.operations) ? res.operations : [])) {
+          if (typeof op?.name === 'string' && op.name.trim()) {
+            const pair = `${res.name.trim()}.${op.name.trim()}`;
+            mentioned.add(pair);
+            display.add(pair);
+          }
+        }
+      }
+    }
+  }
+
+  const cleaned = stripPromptMetadata(raw);
+  const { proseLines, fences } = scanMarkdownLinesAndFences(cleaned);
+  const scanLines = proseLines.map(item => item.text);
+  for (const fence of fences) {
+    if (!isPrompt || DECLARATIVE_SCHEMA_FENCE_LANGS.has(fence.lang)) {
+      for (const item of fence.bodyLines) scanLines.push(item.text);
+    }
+  }
+
+  for (const line of scanLines) {
+    const stripped = stripUrlsAndMarkdownLinks(line);
+    for (const m of stripped.matchAll(INLINE_BRACE_PORT_SCAN_RE)) {
+      const port = m[1];
+      for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) {
+        if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) continue;
+        const full = `${port}.${op}`;
+        mentioned.add(full);
+        if (isValidPortCandidate(port, op)) display.add(full);
+      }
+    }
+    for (const m of stripped.matchAll(INLINE_PORT_OP_SCAN_RE)) {
+      const port = m[1];
+      const op = m[2];
+      if (port.length < 2 || op.length < 2) continue;
+      if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) continue;
+      const opLower = op.toLowerCase();
+      const fullLower = `${port.toLowerCase()}.${opLower}`;
+      if (NON_PORT_FILE_EXTENSIONS.has(opLower) || NON_PORT_EXACT_FILENAMES.has(fullLower) || NON_PORT_TLDS.has(opLower)) continue;
+      const full = `${port}.${op}`;
+      mentioned.add(full);
+      if (isValidPortCandidate(port, op)) display.add(full);
+    }
+  }
+  return { mentioned, display };
+}
+
+function extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns) {
+  const firstLineByPort = new Map();
+  const recordPort = (port, op, lineNo) => {
+    if (!isValidPortCandidate(port, op, sqlSchemaColumns)) return;
+    const key = `${port}.${op}`;
+    if (!firstLineByPort.has(key)) firstLineByPort.set(key, lineNo);
+  };
+
+  let inPortSection = false;
+  let portSectionDepth = 0;
+  let activePortColIndexes = null;
+
+  for (let idx = 0; idx < proseLines.length; idx++) {
+    const { lineNo, text: line } = proseLines[idx];
+    const headingMatch = /^ {0,3}(#{2,6})\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      const depth = headingMatch[1].length;
+      const title = headingMatch[2].trim();
+      if (PORT_WIRING_HEADING_RE.test(title)) {
+        inPortSection = true;
+        portSectionDepth = depth;
+      } else if (depth <= portSectionDepth) {
+        inPortSection = false;
+        portSectionDepth = 0;
+      }
+      activePortColIndexes = null;
+      continue;
+    }
+
+    if (line.includes('|') && idx + 1 < proseLines.length && isMarkdownTableSeparator(proseLines[idx + 1].text)) {
+      const headers = splitMarkdownTableRow(line) ?? [];
+      const portCols = [];
+      for (let c = 0; c < headers.length; c++) {
+        if (PORT_TABLE_COL_INCLUDE_RE.test(headers[c]) && !PORT_TABLE_COL_EXCLUDE_RE.test(headers[c])) {
+          portCols.push(c);
+        }
+      }
+      activePortColIndexes = portCols.length ? portCols : null;
+      continue;
+    }
+    if (activePortColIndexes && isMarkdownTableSeparator(line)) continue;
+    if (activePortColIndexes && !line.includes('|')) activePortColIndexes = null;
+
+    // Channel 1: explicit inline backticked `<port>.<op>`, `<port>.<op>(...)`, or `<port>.{op1, op2}`
+    const { spans, outside } = extractInlineBacktickSpans(line);
+    for (const rawSpan of spans) {
+      const span = rawSpan.trim();
+      if (!span) continue;
+      let m = BARE_PORT_OP_RE.exec(span);
+      if (m) {
+        recordPort(m[1], m[2], lineNo);
+        continue;
+      }
+      m = CALL_PORT_OP_RE.exec(span);
+      if (m && isSingleCallSpan(span, m[0].length - 1)) {
+        recordPort(m[1], m[2], lineNo);
+        continue;
+      }
+      m = BRACE_PORT_OP_RE.exec(span);
+      if (m) {
+        for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) {
+          recordPort(m[1], op, lineNo);
+        }
+      }
+    }
+
+    // Channel 2: unbackticked port references in explicit port-wiring positions
+    const scanUnbacktickedText = chunk => {
+      const cleanedChunk = stripUrlsAndMarkdownLinks(chunk);
+      for (const m of cleanedChunk.matchAll(INLINE_BRACE_PORT_SCAN_RE)) {
+        for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) {
+          recordPort(m[1], op, lineNo);
+        }
+      }
+      for (const m of cleanedChunk.matchAll(INLINE_PORT_OP_SCAN_RE)) {
+        recordPort(m[1], m[2], lineNo);
+      }
+    };
+
+    if (activePortColIndexes) {
+      const cells = splitMarkdownTableRow(outside);
+      if (cells) {
+        for (const colIdx of activePortColIndexes) {
+          if (colIdx < cells.length) scanUnbacktickedText(cells[colIdx]);
+        }
+      }
+    } else if (inPortSection || PORT_BULLET_LEAD_RE.test(outside) || PORT_WIRING_CUE_RE.test(outside)) {
+      scanUnbacktickedText(outside);
+    }
+  }
+
+  return [...firstLineByPort.entries()]
+    .map(([port, line]) => ({ port, line }))
+    .sort((a, b) => a.line - b.line || a.port.localeCompare(b.port));
+}
+
+function collectNativeOnlyPortParityFindings(text, dependencySources, { path = 'prompts/service.prompt.md', dependencyPaths = [] } = {}) {
+  if (!hasNativeOnlyFrontmatter(text)) return [];
+  const rawDeps = Array.isArray(dependencySources) ? dependencySources : (dependencySources ? [dependencySources] : []);
+  const deps = rawDeps
+    .map(item => (typeof item === 'string' ? { path: '', text: item, isPrompt: true } : item))
+    .filter(item => item && typeof item.text === 'string');
+  if (!deps.length) return [];
+
+  const mentionedInDeps = new Set();
+  const displayPorts = new Set();
+  for (const dep of deps) {
+    const { mentioned, display } = extractDeclaredPortsFromDependency(dep.text, { isPrompt: dep.isPrompt !== false });
+    for (const p of mentioned) mentionedInDeps.add(p);
+    for (const p of display) displayPorts.add(p);
+  }
+
+  const cleaned = stripPromptMetadataPreservingLines(text);
+  const { fences, proseLines } = scanMarkdownLinesAndFences(cleaned);
+  const sqlSchemaColumns = extractSqlSchemaColumns(fences);
+  const refs = extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns);
+  if (!refs.length) return [];
+
+  const linkedLabels = (dependencyPaths.length ? dependencyPaths : deps.map(d => d.path).filter(Boolean)).sort();
+  const depSummary = linkedLabels.length ? linkedLabels.join(', ') : 'linked checkable dependencies';
+  const sortedDisplay = [...displayPorts].sort();
+  const declaredHint = sortedDisplay.length
+    ? `; declared ports: ${sortedDisplay.slice(0, 12).join(', ')}${sortedDisplay.length > 12 ? ', …' : ''}`
+    : '';
+
+  const findings = [];
+  for (const { port, line } of refs) {
+    if (mentionedInDeps.has(port)) continue;
+    const detail = `Port "${port}" wired in native-only prompt is not declared by linked checkable dependencies (${depSummary}${declaredHint}).`;
+    findings.push({
+      filePath: path,
+      line,
+      order: 4,
+      code: 'native-only-unknown-port',
+      category: 'native-only port parity',
+      defaultSeverity: 'error',
+      detail,
+      error: `Error: native-only port parity: ${path}:${line} [native-only-unknown-port] ${detail}`,
+    });
+  }
+  return findings;
+}
+
+export function lintNativeOnlyPortParity(text, dependencySources, { path = 'prompts/service.prompt.md', dependencyPaths = [] } = {}) {
+  return collectNativeOnlyPortParityFindings(text, dependencySources, { path, dependencyPaths }).map(r => r.error);
 }
 
 function collectPromptSizeFindings(promptText, codeFiles, { path = 'prompts/module.prompt.md' } = {}) {
@@ -1876,6 +2374,49 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
     }
     for (const f of collectPromptSizeFindings(content, ownedCode, { path: promptPath })) {
       rawFindings.push({ ...f, defaultSeverity: 'warn' });
+    }
+    if (hasNativeOnlyFrontmatter(content)) {
+      const directTargets = extractDependencyLinkTargets(content, promptPath).filter(p => scopedSet.has(p));
+      const directCheckablePrompts = [];
+      const directContracts = [];
+      for (const target of directTargets) {
+        if (target.endsWith('.prompt.md')) {
+          const depText = getPromptText(target);
+          if (typeof depText === 'string' && !isNativeOnlyPrompt(depText)) {
+            directCheckablePrompts.push(target);
+          }
+        } else if (target.endsWith('.md')) {
+          directContracts.push(target);
+        }
+      }
+      if (directCheckablePrompts.length > 0) {
+        const visited = new Set([promptPath]);
+        const queue = [
+          ...directCheckablePrompts.map(p => ({ path: p, isPrompt: true })),
+          ...directContracts.map(p => ({ path: p, isPrompt: false })),
+        ];
+        const depSources = [];
+        while (queue.length > 0) {
+          const cur = queue.shift();
+          if (visited.has(cur.path)) continue;
+          visited.add(cur.path);
+          const depText = cur.isPrompt ? getPromptText(cur.path) : readSafeUtf8(realRoot, cur.path);
+          if (typeof depText !== 'string') continue;
+          if (cur.isPrompt && isNativeOnlyPrompt(depText)) continue;
+          depSources.push({ path: cur.path, text: depText, isPrompt: cur.isPrompt });
+          for (const nextTarget of extractDependencyLinkTargets(depText, cur.path)) {
+            if (visited.has(nextTarget) || !scopedSet.has(nextTarget)) continue;
+            if (nextTarget.endsWith('.prompt.md')) queue.push({ path: nextTarget, isPrompt: true });
+            else if (nextTarget.endsWith('.md')) queue.push({ path: nextTarget, isPrompt: false });
+          }
+        }
+        for (const f of collectNativeOnlyPortParityFindings(content, depSources, {
+          path: promptPath,
+          dependencyPaths: directCheckablePrompts,
+        })) {
+          rawFindings.push(f);
+        }
+      }
     }
     if (lintConfig.customRules.length) {
       rawFindings.push(...evaluateCustomRulesOnFile(lintConfig.customRules, {

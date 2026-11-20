@@ -10,6 +10,7 @@ import { buildCodexLintPrompt, runCodexLint } from '../src/codex-lint.mjs';
 import {
   isInspectableTestCodePath,
   lintFakeTests,
+  lintNativeOnlyPortParity,
   lintPromptCodeBlocks,
   lintPromptSize,
   lintPromptStructure,
@@ -1295,4 +1296,312 @@ test('3499 + 3522 Short JSON scenarios omitting story_path with singular entry_p
   });
   assert.equal(bindExit, 0, bindErr.text);
   assert.equal(JSON.parse(bindOut.text).ok, true);
+});
+
+test('3574 Part A: kind: native-only exempts declarative schema fences while still flagging procedural fences and keeping checkable prompts unchanged', () => {
+  // 1. kind: native-only with 35-line sql DDL + 20-line openapi yaml + 20-line protobuf -> 0 fence warnings.
+  const nativeOnlySchemas = [
+    '---',
+    'kind: native-only',
+    'reason: Owns SQLite schema, OpenAPI HTTP contract, and protobuf wire types.',
+    '---',
+    '',
+    '# Storage & transport schema',
+    '',
+    '```sql',
+    'CREATE TABLE access_records (',
+    ...Array.from({ length: 33 }, (_, i) => `  col_${i + 1} TEXT NOT NULL, -- return value ${i + 1}`),
+    '  id TEXT PRIMARY KEY',
+    ');',
+    '```',
+    '',
+    '```openapi',
+    'openapi: 3.1.0',
+    ...Array.from({ length: 19 }, (_, i) => `  description_${i + 1}: return payload ${i + 1}`),
+    '```',
+    '',
+    '```protobuf',
+    'syntax = "proto3";',
+    ...Array.from({ length: 18 }, (_, i) => `  string field_${i + 1} = ${i + 1};`),
+    '```',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(lintPromptCodeBlocks(nativeOnlySchemas, { path: 'prompts/trust/service.prompt.md' }), []);
+
+  // 2. kind: native-only still flags oversized/imperative procedural fences and excludes exempted SQL lines from total count.
+  const nativeOnlyMixed = [
+    '---',
+    'kind: native-only',
+    'reason: Owns SQLite transactions.',
+    '---',
+    '',
+    '# Mixed adapter',
+    '',
+    '```sql',
+    ...Array.from({ length: 35 }, (_, i) => `CREATE INDEX idx_${i} ON items(col_${i});`),
+    '```',
+    '',
+    '```js',
+    ...Array.from({ length: 18 }, (_, i) => `const v${i} = ${i};`),
+    '```',
+    '',
+    '```python',
+    ...Array.from({ length: 16 }, (_, i) => `def helper_${i}(x):\n    return x`),
+    '```',
+  ].join('\n');
+  const mixedWarnings = lintPromptCodeBlocks(nativeOnlyMixed, { path: 'prompts/trust/mixed.prompt.md' });
+  assert.ok(mixedWarnings.some(w => w.includes('prompts/trust/mixed.prompt.md:46') && w.includes('[prompt-code-fence-length]')));
+  assert.ok(mixedWarnings.some(w => w.includes('prompts/trust/mixed.prompt.md:47') && w.includes('[prompt-imperative-code]')));
+  assert.ok(mixedWarnings.some(w => w.includes('prompts/trust/mixed.prompt.md:67') && w.includes('[prompt-code-fence-length]')));
+  assert.ok(mixedWarnings.some(w => w.includes('prompts/trust/mixed.prompt.md:68') && w.includes('[prompt-imperative-code]')));
+  assert.ok(mixedWarnings.some(w => w.includes('prompts/trust/mixed.prompt.md:46') && w.includes('[prompt-code-fence-total]') && w.includes('across 2 blocks')));
+  assert.ok(!mixedWarnings.some(w => w.includes(':8 ')), 'exempted sql fence line must not be reported');
+
+  // 3. Non-native-only prompts keep existing fence limits on sql/yaml/jsonschema unchanged.
+  const checkableWithLongSql = [
+    '# Access rules',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '```sql',
+    ...Array.from({ length: 18 }, (_, i) => `SELECT ${i} AS n;`),
+    '```',
+    '',
+    '```yaml',
+    ...Array.from({ length: 16 }, (_, i) => `field_${i}: string`),
+    '```',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const checkableWarnings = lintPromptCodeBlocks(checkableWithLongSql, { path: 'prompts/trust/access.prompt.md' });
+  assert.ok(checkableWarnings.some(w => w.includes('prompts/trust/access.prompt.md:5') && w.includes('[prompt-code-fence-length]')));
+  assert.ok(checkableWarnings.some(w => w.includes('prompts/trust/access.prompt.md:26') && w.includes('[prompt-code-fence-length]')));
+  assert.ok(checkableWarnings.some(w => w.includes('prompts/trust/access.prompt.md:5') && w.includes('[prompt-code-fence-total]')));
+});
+
+test('3574 Part B: lintNativeOnlyPortParity flags undeclared ports while ignoring filenames, versions, URLs, host builtins and SQL columns', () => {
+  const accessPrompt = [
+    '# Trust access control',
+    '',
+    'Own `src/trust/access.mjs`.',
+    '- Read via `store.load({ tenantId })` and save via `store.save({ tenantId, grant })`.',
+    '- Log events with audit.append.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const servicePrompt = [
+    '---',
+    'kind: native-only',
+    'reason: Runs SQLite and outbound webhooks.',
+    '---',
+    '',
+    '# Trust service',
+    '',
+    'Own `src/trust/service.mjs`. Config lives in `package.json`, `pdd.json`, `yarn.lock`, `schema.sql`, `v1.0`, and `spec.v2`.',
+    'Call `https://hooks.example.com/v1` using `env.WEBHOOK_TOKEN`, `process.env`, `ports.fs`, `req.body`, `res.status`, `JSON.stringify(x)`, `Intl.DateTimeFormat`, and `items.length`.',
+    '',
+    '```sql',
+    'CREATE TABLE access_records (',
+    '  id TEXT PRIMARY KEY,',
+    '  tenant_id TEXT NOT NULL,',
+    '  status TEXT NOT NULL',
+    ');',
+    'SELECT a.id, access_records.status FROM access_records a;',
+    '```',
+    '',
+    '## Port wiring',
+    '',
+    'Index `access_records.tenant_id` for lookups.',
+    '- `store.load`: valid declared port.',
+    '- `access_state.read`: missing read port.',
+    '- `access.commit(tx)`: missing commit port.',
+    '- notice.deliver: missing unbackticked port.',
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+  ].join('\n');
+
+  const errors = lintNativeOnlyPortParity(servicePrompt, [{ path: 'prompts/trust/access.prompt.md', text: accessPrompt }], {
+    path: 'prompts/trust/service.prompt.md',
+    dependencyPaths: ['prompts/trust/access.prompt.md'],
+  });
+  assert.equal(errors.length, 3, errors.join('\n'));
+  assert.ok(errors[0].includes('prompts/trust/service.prompt.md:24 [native-only-unknown-port]') && errors[0].includes('"access_state.read"'));
+  assert.ok(errors[1].includes('prompts/trust/service.prompt.md:25 [native-only-unknown-port]') && errors[1].includes('"access.commit"'));
+  assert.ok(errors[2].includes('prompts/trust/service.prompt.md:26 [native-only-unknown-port]') && errors[2].includes('"notice.deliver"'));
+  assert.ok(errors[0].includes('declared ports: audit.append, store.load, store.save'));
+
+  // Embedded Runtime interface resources on dependency prompt also satisfy parity cleanly.
+  const embeddedDep = [
+    '# Embedded port owner',
+    'Reads via KEY.load.',
+    '<details><summary>Runtime interface</summary>',
+    '```json',
+    JSON.stringify({
+      resources: [
+        { name: 'access_state', operations: [{ name: 'read' }] },
+        { name: 'access', operations: [{ name: 'commit' }] },
+        { name: 'notice', operations: [{ name: 'deliver' }] },
+        { name: 'store', operations: [{ name: 'load' }] },
+      ],
+    }),
+    '```',
+    '</details>',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(servicePrompt, [{ path: 'prompts/trust/access.prompt.md', text: embeddedDep }], {
+      path: 'prompts/trust/service.prompt.md',
+    }),
+    [],
+  );
+
+  // Non-native-only prompt is skipped by native-only parity lint.
+  assert.deepEqual(
+    lintNativeOnlyPortParity('# Regular\n\nUses `missing.port`.\n', [{ path: 'prompts/trust/access.prompt.md', text: accessPrompt }]),
+    [],
+  );
+});
+
+test('3574 + 3578: default-on native-only-unknown-port fails closed without pdd.json, honors transitive deps/contracts and pdd.json overrides, and keeps warnings advisory', async t => {
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-3574-3578-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const repo = join(scratch, 'repo');
+  const home = join(scratch, 'home');
+  const state = join(scratch, 'state');
+  for (const dir of [home, state, join(repo, 'prompts/trust'), join(repo, 'contracts'), join(repo, 'test')]) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
+
+  writeFileSync(
+    join(repo, 'contracts/ports.md'),
+    '# Shared ports\n\nExternal contract port: `telemetry.emit`.\n',
+  );
+  writeFileSync(
+    join(repo, 'prompts/trust/audit.prompt.md'),
+    '# Audit log\n\nOwn `src/trust/audit.mjs`. Append records via `audit.append`.\n\n## Dependencies\n\n- [Shared ports](../../contracts/ports.md)\n',
+  );
+  writeFileSync(
+    join(repo, 'prompts/trust/access.prompt.md'),
+    '# Trust access\n\nOwn `src/trust/access.mjs`. Use `store.load` and `store.save`.\n\n## Dependencies\n\n- [audit](audit.prompt.md)\n',
+  );
+  // Standalone native-only prompt with no checkable dependencies should never trigger native-only-unknown-port.
+  writeFileSync(
+    join(repo, 'prompts/trust/standalone.prompt.md'),
+    '---\nkind: native-only\nreason: Standalone OS socket helper.\n---\n\n# Standalone\n\nUses `socket.bind`.\n\n## Dependencies\n\nNone.\n',
+  );
+  // Advisory fake test warning in the repo must stay warn-only and never cause exit 1 by itself.
+  writeFileSync(
+    join(repo, 'test/advisory.test.mjs'),
+    "import { readFileSync } from 'node:fs';\nreadFileSync('prompts/trust/access.prompt.md', 'utf8');\n",
+  );
+
+  const sqlDdl = [
+    '```sql',
+    'CREATE TABLE access_records (',
+    ...Array.from({ length: 34 }, (_, i) => `  field_${i + 1} TEXT NOT NULL,`),
+    '  id TEXT PRIMARY KEY',
+    ');',
+    '```',
+  ].join('\n');
+
+  const brokenService = [
+    '---',
+    'kind: native-only',
+    'reason: SQLite and webhook adapter for trust access.',
+    '---',
+    '',
+    '# Trust service',
+    '',
+    sqlDdl,
+    '',
+    '## Port wiring',
+    '',
+    '- `store.load`: valid direct port.',
+    '- `audit.append`: valid transitive checkable prompt port.',
+    '- `telemetry.emit`: valid transitive shared contract port.',
+    '- `access_state.read`: dead port 1.',
+    '- `access.commit`: dead port 2.',
+    '- `notice.deliver`: dead port 3.',
+    '',
+    '## Dependencies',
+    '',
+    '- [access](access.prompt.md)',
+  ].join('\n') + '\n';
+
+  writeFileSync(join(repo, 'prompts/trust/service.prompt.md'), brokenService);
+
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
+
+  // 1. With NO pdd.json at all, pdd lint --local (plain & --json) fails closed with exit 1 on the 3 dead ports and emits 0 SQL fence warnings.
+  const brokenOut = sink(), brokenErr = sink();
+  const brokenCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: brokenOut, stderr: brokenErr });
+  assert.equal(brokenCode, 1);
+  assert.match(brokenErr.text, /\[native-only-unknown-port\].*"access_state\.read"/);
+  assert.match(brokenErr.text, /\[native-only-unknown-port\].*"access\.commit"/);
+  assert.match(brokenErr.text, /\[native-only-unknown-port\].*"notice\.deliver"/);
+  assert.ok(!brokenErr.text.includes('"store.load"'));
+  assert.ok(!brokenErr.text.includes('"audit.append"'));
+  assert.ok(!brokenErr.text.includes('"telemetry.emit"'));
+  assert.ok(!brokenErr.text.includes('socket.bind'));
+  assert.ok(!brokenOut.text.includes('prompt-code-fence-length'));
+  assert.ok(!brokenOut.text.includes('prompt-code-fence-total'));
+
+  const brokenJsonOut = sink(), brokenJsonErr = sink();
+  const brokenJsonCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: brokenJsonOut, stderr: brokenJsonErr });
+  assert.equal(brokenJsonCode, 1, brokenJsonErr.text);
+  const brokenParsed = JSON.parse(brokenJsonOut.text);
+  assert.equal(brokenParsed.ok, false);
+  assert.equal(brokenParsed.exit_code, 1);
+  assert.equal(brokenParsed.problems.length, 3);
+  assert.ok(brokenParsed.warnings.some(w => w.includes('[fake-test-prompt-read]')), 'advisory warnings remain visible');
+  assert.ok(!brokenParsed.warnings.some(w => w.includes('prompt-code-fence-')));
+
+  // 2. pdd.json without a "lint" key still fails closed by default.
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'off' } }, null, 2) + '\n');
+  execFileSync('git', ['add', 'pdd.json'], { cwd: repo });
+  const noLintKeyCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: sink(), stderr: sink() });
+  assert.equal(noLintKeyCode, 1);
+
+  // 3. pdd.json "lint" override ("warn") downgrades native-only-unknown-port to advisory warning (exit 0).
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'warn' } } }, null, 2) + '\n');
+  const warnOverrideOut = sink(), warnOverrideErr = sink();
+  const warnOverrideCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: warnOverrideOut, stderr: warnOverrideErr });
+  assert.equal(warnOverrideCode, 0, warnOverrideErr.text);
+  const warnParsed = JSON.parse(warnOverrideOut.text);
+  assert.deepEqual(warnParsed.problems, []);
+  assert.ok(warnParsed.warnings.some(w => w.includes('[native-only-unknown-port]') && w.includes('"access_state.read"')));
+
+  // 4. pdd.json "lint" disable ("off") suppresses native-only-unknown-port completely (exit 0).
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { disable: ['native-only-unknown-port'] } }, null, 2) + '\n');
+  const offOverrideOut = sink(), offOverrideErr = sink();
+  const offOverrideCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: offOverrideOut, stderr: offOverrideErr });
+  assert.equal(offOverrideCode, 0, offOverrideErr.text);
+  const offParsed = JSON.parse(offOverrideOut.text);
+  assert.deepEqual(offParsed.problems, []);
+  assert.ok(!offParsed.warnings.some(w => w.includes('[native-only-unknown-port]')));
+
+  // 5. Removing pdd.json and replacing the 3 dead ports with valid ones makes pdd lint --local exit 0 even with advisory fake-test warnings present.
+  rmSync(join(repo, 'pdd.json'));
+  const fixedService = brokenService
+    .replace('- `access_state.read`: dead port 1.', '- `store.save`: valid direct save port.')
+    .replace('- `access.commit`: dead port 2.\n', '')
+    .replace('- `notice.deliver`: dead port 3.\n', '');
+  writeFileSync(join(repo, 'prompts/trust/service.prompt.md'), fixedService);
+
+  const fixedOut = sink(), fixedErr = sink();
+  const fixedCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: fixedOut, stderr: fixedErr });
+  assert.equal(fixedCode, 0, fixedErr.text);
+  const fixedParsed = JSON.parse(fixedOut.text);
+  assert.equal(fixedParsed.exit_code, 0);
+  assert.deepEqual(fixedParsed.problems, []);
+  assert.ok(fixedParsed.warnings.some(w => w.includes('[fake-test-prompt-read]')), 'warn-only rule still never fails exit code');
 });
