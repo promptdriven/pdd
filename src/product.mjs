@@ -1,7 +1,7 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 2b73b546be1287b4b74b4807603c42ce263b339e3a5d2efa146f1631347b1cda).
+// Generated from prompts/cli/product.prompt.md (sha256: 39c64632cfee9dd0b53ebbe34a676fdb84023e94c6423207497ef136beadd282).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -12,11 +12,102 @@ import { recordedRuntimeLines, storyEvidence, startRun } from './workflow-runner
 import { resolveWorkflowRepository, sameRepo, canonicalGithubUrl } from './workflow-github.mjs';
 import { runtimeClientSlice, runtimeOutputSlice } from './runtime-seam.mjs';
 import { nativeGithubCounter, githubReply } from './github-calls.mjs';
-import { invalid, parseProductDocuments, parseProductWorldWriters } from './product-documents.mjs';
-export { parseProductDocuments, parseProductWorldWriters };
+import { auditProductPlan, invalid, parseProductDocuments, parseProductWorldWriters } from './product-documents.mjs';
+export { auditProductPlan, parseProductDocuments, parseProductWorldWriters };
 
 const { causeText } = runtimeOutputSlice();
 const { createSavedStoryEvidenceReader } = runtimeClientSlice();
+
+const MAX_PRODUCT_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_SCAN_ENTRIES = 20000;
+const SKIP_SCAN_DIRS = new Set(['.git', 'node_modules', 'fixtures', '.pdd', 'dist', 'build', 'coverage']);
+const EXAMPLE_DIR_RE = /(?:^|\/)examples(?:\/|$)/i;
+
+function readSafeInRoot(rootDir, relPath, maxBytes = MAX_PRODUCT_FILE_BYTES) {
+  const realRoot = realpathSync(rootDir);
+  let rel = String(relPath ?? '').replace(/\\/g, '/');
+  while (rel.startsWith('./')) rel = rel.slice(2);
+  if (!rel || rel === '.' || isAbsolute(rel) || rel.split('/').some(seg => !seg || seg === '.' || seg === '..' || seg.toLowerCase() === '.git')) {
+    throw Object.assign(Error(`Refused unsafe path: ${relPath}`), { code: 'EACCES' });
+  }
+  const segments = rel.split('/');
+  let cur = realRoot;
+  let leafStat = null;
+  for (let i = 0; i < segments.length; i++) {
+    cur = join(cur, segments[i]);
+    const st = lstatSync(cur);
+    if (st.isSymbolicLink()) throw Object.assign(Error(`Refused symlink: ${rel}`), { code: 'ELOOP' });
+    if (i < segments.length - 1 && !st.isDirectory()) throw Object.assign(Error(`Not a directory: ${rel}`), { code: 'ENOTDIR' });
+    if (i === segments.length - 1) {
+      if (!st.isFile()) throw Object.assign(Error(`Not a regular file: ${rel}`), { code: 'EINVAL' });
+      if (st.size > maxBytes) throw Object.assign(Error(`File exceeds ${maxBytes} bytes: ${rel}`), { code: 'EFBIG' });
+      leafStat = st;
+    }
+  }
+  const fd = openSync(cur, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const fst = fstatSync(fd);
+    if (!fst.isFile()) throw Object.assign(Error(`Not a regular file: ${rel}`), { code: 'EINVAL' });
+    if (leafStat && (fst.dev !== leafStat.dev || fst.ino !== leafStat.ino)) {
+      throw Object.assign(Error(`Path changed during open: ${rel}`), { code: 'EACCES' });
+    }
+    if (fst.size > maxBytes) throw Object.assign(Error(`File exceeds ${maxBytes} bytes: ${rel}`), { code: 'EFBIG' });
+    const buf = Buffer.alloc(fst.size);
+    let offset = 0;
+    while (offset < buf.length) {
+      const n = readSync(fd, buf, offset, buf.length - offset, offset);
+      if (!n) break;
+      offset += n;
+    }
+    return buf.subarray(0, offset).toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function collectSafePromptFiles(cwd, trackedFolders = []) {
+  let realRoot;
+  try {
+    realRoot = realpathSync(cwd);
+    if (!lstatSync(realRoot).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const allowExamples = trackedFolders.some(folder => EXAMPLE_DIR_RE.test(folder));
+  const files = [];
+  let visited = 0;
+  const walk = (absDir, relPrefix, depth) => {
+    if (depth > 8 || files.length >= 2000 || visited >= MAX_SCAN_ENTRIES) return;
+    let entries;
+    try { entries = readdirSync(absDir, { withFileTypes: true }); }
+    catch { return; }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (files.length >= 2000 || visited >= MAX_SCAN_ENTRIES) return;
+      visited++;
+      if (entry.isSymbolicLink()) continue;
+      const lowerName = entry.name.toLowerCase();
+      if (SKIP_SCAN_DIRS.has(entry.name) || lowerName === '.git' || lowerName === 'fixtures') continue;
+      if (!allowExamples && lowerName === 'examples') continue;
+      if (entry.isFile() && !entry.name.endsWith('.prompt.md')) continue;
+      const absChild = join(absDir, entry.name);
+      const relChild = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+      let st;
+      try { st = lstatSync(absChild); } catch { continue; }
+      if (st.isSymbolicLink()) continue;
+      if (st.isDirectory()) {
+        walk(absChild, relChild, depth + 1);
+      } else if (st.isFile() && entry.name.endsWith('.prompt.md')) {
+        try {
+          const content = readSafeInRoot(realRoot, relChild);
+          files.push({ path: relChild, content });
+        } catch { /* Skip unreadable or oversized prompt files safely. */ }
+      }
+    }
+  };
+  walk(realRoot, '', 0);
+  return files;
+}
 
 const ordinary = promisify(execute);
 const comparisonBases = Symbol('comparisonBases');
@@ -26,9 +117,10 @@ const marker = run => `<!-- pdd-product: run=${run} -->`;
 const portsFor = given => {
   // The native runner records each gh call in the GitHub call ledger of its repository.
   const execFile = given.execFile ?? nativeGithubCounter((file, args, options) => ordinary(file, args, { ...options, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }));
+  const hasCustomReadFile = typeof given.readFile === 'function';
   const p = { readFile: path => readFile(path, 'utf8'), listRuns: input => listRuns(input, { execFile }),
     storyEvidence, savedStoryEvidence: createSavedStoryEvidenceReader(), startRun, resolveRepository: input => resolveWorkflowRepository(input, { execFile }),
-    ...given, execFile };
+    ...given, execFile, _customReadFile: hasCustomReadFile };
   p.issuePage ??= async ({ cwd, repository, marker, page, perPage }) => {
     const quoted = marker.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const query = new URLSearchParams({ q: `repo:${repository} is:issue in:body "${quoted}"`, sort: 'created', order: 'asc', page, per_page: perPage });
@@ -194,11 +286,18 @@ async function basePlan(p, { cwd, baseBranch }) {
 }
 async function documents({ cwd }, p) {
   let map, plan = '';
-  try { map = await p.readFile(join(cwd, 'product/map.md')); }
-  catch { invalid('product/map.md: cannot read the product map.'); }
-  try { plan = await p.readFile(join(cwd, 'product/plan.md')); }
-  catch (error) { if (error.code !== 'ENOENT') invalid('product/plan.md: cannot read the plan.'); }
-  return parseProductDocuments({ mapText: map, planText: plan });
+  const readDoc = async relPath => p._customReadFile ? p.readFile(join(cwd, relPath)) : readSafeInRoot(cwd, relPath);
+  try { map = await readDoc('product/map.md'); }
+  catch (error) {
+    if (error?.code === 'ELOOP') invalid('product/map.md: cannot read the product map (symlinks are not allowed).');
+    invalid('product/map.md: cannot read the product map.');
+  }
+  try { plan = await readDoc('product/plan.md'); }
+  catch (error) {
+    if (error?.code === 'ELOOP') invalid('product/plan.md: cannot read the plan (symlinks are not allowed).');
+    if (error?.code !== 'ENOENT') invalid('product/plan.md: cannot read the plan.');
+  }
+  return { ...parseProductDocuments({ mapText: map, planText: plan }), mapText: map, planText: plan };
 }
 export async function readProduct(input, given = {}) { return (await documents(input, portsFor(given))).product; }
 const parse = text => { try { return JSON.parse(text); } catch { invalid('GitHub returned unreadable JSON.'); } };
@@ -459,7 +558,8 @@ async function collectLocalMarkdownFiles(dir, depth = 0, out = []) {
 async function plannedStoryFilesPresent(p, { cwd, baseBranch, product, run }) {
   if (!Array.isArray(run.stories) || !run.stories.length) return false;
   const partFolder = product.parts.find(part => part.part === run.part)?.folder ?? 'user_stories/journeys';
-  const folders = [...new Set([partFolder, 'user_stories'].filter(f => typeof f === 'string' && f.trim()))];
+  const sharedFolders = (run.sharedSurfaces ?? []).map(surface => product.parts.find(part => part.part === surface)?.folder).filter(Boolean);
+  const folders = [...new Set([partFolder, ...sharedFolders, 'user_stories'].filter(f => typeof f === 'string' && f.trim()))];
   const found = [];
   if (typeof p.storyFiles === 'function') {
     const custom = await p.storyFiles({ cwd, baseBranch, run: run.run, folder: partFolder });
@@ -504,7 +604,7 @@ function cycles(product) {
 }
 async function progress(input, given, target) {
   const explicitThrough = validThrough(input.through), explicitBase = validBase(input.base);
-  const p = portsFor(given), { product } = await documents(input, p), cwd = input.cwd;
+  const p = portsFor(given), docs = await documents(input, p), { product } = docs, cwd = input.cwd;
   const completionTarget = explicitThrough ?? product.through ?? 'code';
   const localRuns = await p.listRuns({ cwd }), repo = await p.resolveRepository({ cwd });
   const parent = localRuns.find(run => run.workflow === 'product'), warning = cycles(product), views = new Map();
@@ -579,7 +679,30 @@ async function progress(input, given, target) {
   const canStart = detail => !detail.unverified && (!detail.issue || detail.closedUnbuilt);
   const needsFor = run => run.needs.filter(need => need === 'plan PR' ? !planReady : targetBound ? false : !details.find(detail => detail.run.run === need)?.done);
   const ready = details.filter(detail => canStart(detail) && !needsFor(detail.run).length).map(detail => detail.run.run);
-  return { p, product, details, ready, needsFor, localRuns, repo, lookup, bases: [...views.keys()], warning: [...new Set(warning)] };
+  return { p, docs, product, details, ready, needsFor, localRuns, repo, lookup, bases: [...views.keys()], warning: [...new Set(warning)] };
+}
+
+function cleanToken(value) {
+  return String(value ?? '').trim().replace(/^`([^`]*)`$/, '$1').trim();
+}
+
+function trimFolderSlashes(value) {
+  let f = String(value ?? '').trim();
+  while (f.startsWith('./')) f = f.slice(2);
+  while (f.endsWith('/')) f = f.slice(0, -1);
+  return f;
+}
+
+function rulesForRun(product, planned) {
+  if (!Array.isArray(product.rulesToCheck) || !product.rulesToCheck.length) return [];
+  const runParts = new Set([planned.part, ...(planned.sharedSurfaces ?? [])].map(part => cleanToken(part).toLowerCase()).filter(Boolean));
+  return product.rulesToCheck.filter(entry => {
+    const owners = cleanToken(entry.owner).split(',').map(cleanToken).filter(Boolean);
+    return owners.some(owner => {
+      const lower = owner.toLowerCase();
+      return lower === '*' || lower === 'all' || lower === 'shared' || runParts.has(lower);
+    });
+  });
 }
 
 function counts(ids, details) {
@@ -595,10 +718,25 @@ function counts(ids, details) {
   return { total: uniqueIds.size, pass, stale, notRun: uniqueIds.size - pass - stale };
 }
 export async function productStatus(input, given = {}) {
-  const { product, details, ready, warning, bases } = await progress(input, given);
+  const { p, docs, product, details, ready, warning, bases } = await progress(input, given);
+  const allWarnings = [...warning];
+  if (!p._customReadFile && docs.planText && (docs.prompts.length > 0 || docs.boundaryOperations.length > 0)) {
+    const trackedFolders = [
+      ...product.parts.map(part => trimFolderSlashes(part.folder)),
+      ...docs.prompts.map(item => item.path.includes('/') ? item.path.slice(0, item.path.lastIndexOf('/')) : ''),
+    ].filter(Boolean);
+    const promptFiles = collectSafePromptFiles(input.cwd, trackedFolders);
+    if (promptFiles !== null) {
+      const audit = auditProductPlan({ mapText: docs.mapText, planText: docs.planText, promptFiles });
+      for (const msg of audit.warnings) if (!allWarnings.includes(msg)) allWarnings.push(msg);
+    }
+  }
   const core = product.stories.filter(story => story.tag === 'CORE' && product.runs.some(run => run.stories.includes(story.id)));
   const parts = product.parts.map(part => ({ part: part.part, ...counts(core.filter(story => story.part === part.part).map(story => story.id), details) }));
-  const journeyIds = product.runs.filter(run => run.part === 'all').flatMap(run => run.stories);
+  const journeyIds = product.runs
+    .filter(run => run.part === 'all')
+    .flatMap(run => run.stories)
+    .filter(id => product.journeys.some(j => j.id === id));
   if (journeyIds.length) parts.push({ part: 'journeys', ...counts(journeyIds, details) });
   const result = { name: product.name, size: product.size, parts,
     slices: [...new Set(product.runs.map(run => run.slice))].map(slice => ({ slice, ...counts(product.runs.filter(run => run.slice === slice).flatMap(run => run.stories).filter(id => journeyIds.includes(id) || core.some(story => story.id === id)), details) })),
@@ -607,13 +745,17 @@ export async function productStatus(input, given = {}) {
       const hasMergedDisplayPr = detail.prs.some(pr => pr.state === 'MERGED');
       return { run: detail.run.run, issue: detail.issue?.number ?? null,
         state: detail.unverified ? 'unverified' : detail.done ? 'merged' : detail.closedUnbuilt ? `issue closed (${detail.storyCounts.pass} of ${detail.storyCounts.total} pass)` : detail.local ? `${detail.local.state}${detail.local.stage?.id ? ` (step: ${detail.local.stage.id})` : ''}` : hasMergedDisplayPr ? prSummary : detail.prs.length ? prSummary : detail.issue ? 'issue ready' : 'planned',
-        prs: detail.prs.map(pr => pr.number), fromPr: detail.fromPr };
-    }), ready, questions: product.questions, ...(warning.length ? { warnings: warning } : {}) };
+        prs: detail.prs.map(pr => pr.number), fromPr: detail.fromPr,
+        ...(detail.run.sharedSurfaces?.length ? { sharedSurfaces: detail.run.sharedSurfaces } : {}) };
+    }), ready, questions: product.questions, ...(allWarnings.length ? { warnings: allWarnings } : {}) };
   Object.defineProperty(result, comparisonBases, { value: bases }); return result;
 }
 export async function productNext(input, given = {}) {
   const { product, details, ready, needsFor, warning } = await progress(input, given);
-  return { ready, waiting: details.filter(detail => !detail.unverified && (!detail.issue || detail.closedUnbuilt) && needsFor(detail.run).length).map(detail => ({ run: detail.run.run, needs: needsFor(detail.run) })),
+  return { ready, waiting: details.filter(detail => !detail.unverified && (!detail.issue || detail.closedUnbuilt) && needsFor(detail.run).length).map(detail => ({
+    run: detail.run.run, needs: needsFor(detail.run),
+    ...(detail.run.sharedSurfaces?.length ? { sharedSurfaces: detail.run.sharedSurfaces } : {}),
+  })),
     guidance: product.size === 'small' ? 'run one feature run' : ready.length >= 2 ? 'These can run in parallel, or one person can start them in order.' : '', ...(warning.length ? { warnings: warning } : {}) };
 }
 function issueTitle(product, run, warning) {
@@ -640,11 +782,28 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', t
     if (selected.unverified) throw Error(`Saved issue #${issue.number} for ${run} is unverified: ${selected.reason}. Run pdd product start ${run} to link it again.`);
     const parent = localRuns.find(record => record.workflow === 'product');
     if (!issue) {
-      const contractFiles = product.size === 'small' ? [] : [...new Set([...boundaries.filter(row => planned.part === 'all' || [row.From, row.To].includes(planned.part)).map(row => row.Contract), 'contracts/world.md'])];
+      const activeParts = [planned.part, ...(planned.sharedSurfaces ?? [])];
+      const contractFiles = product.size === 'small' ? [] : [...new Set([...boundaries.filter(row => planned.part === 'all' || activeParts.includes(row.From) || activeParts.includes(row.To)).map(row => row.Contract), 'contracts/world.md'])];
+      const sharedSurfaceDescriptions = (planned.sharedSurfaces ?? []).map(surface => {
+        const partInfo = product.parts.find(part => part.part === surface);
+        const surfacePrompts = (product.prompts ?? []).filter(item => item.part === surface).map(item => item.path);
+        const label = partInfo?.folder ? `${surface} (${partInfo.folder})` : surface;
+        return surfacePrompts.length ? `${label} [${surfacePrompts.join(', ')}]` : label;
+      });
+      const matchingRules = rulesForRun(product, planned);
+      const rulesBlock = matchingRules.length
+        ? ['', '## Rules to check', ...matchingRules.map(entry => {
+          const verified = entry.verifiedBy ? ` (Verified by: ${entry.verifiedBy})` : '';
+          return entry.id ? `- ${entry.id} (${entry.owner}): ${entry.rule}${verified}` : `- ${entry.rule}${verified}`;
+        })]
+        : [];
       const body = [parent ? `Part of #${parent.number} (product).` : '', `Plan: product/${product.size === 'small' ? 'map' : 'plan'}.md, run ${run}, slice ${planned.slice}.`,
         `Stories: ${planned.stories.join(', ')}.`, `Name each Story file with its map id first${planned.stories[0] ? `, for example ${planned.stories[0]}-story.md` : ''}.`, ...planned.stories.map(id => `${id}: ${(product.stories.find(story => story.id === id)?.story ?? product.journeys.find(story => story.id === id)?.journey)}`),
         `Folder: ${product.parts.find(part => part.part === planned.part)?.folder ?? 'user_stories/journeys'}.${contractFiles.length ? ` Contracts: ${contractFiles.join(', ')}.` : ''}`,
-        contractFiles.length ? 'Other parts are fakes from their contracts. Do not change contracts/ in this run.' : '', marker(run)].filter(Boolean).join('\n');
+        sharedSurfaceDescriptions.length ? `Shared surfaces to update: ${sharedSurfaceDescriptions.join(', ')}.` : '',
+        contractFiles.length ? 'Other parts are fakes from their contracts. Do not change contracts/ in this run.' : '',
+        ...rulesBlock,
+        marker(run)].filter((line, idx, arr) => line !== '' || (idx > 0 && arr[idx + 1] === '## Rules to check')).join('\n');
       const payload = { repository: repo.repository, title: issueTitle(product, planned, state.warning), body };
       const response = p.createIssue ? await p.createIssue(payload) : { url: await command(p, cwd, 'gh',
         ['issue', 'create', '--repo', payload.repository, '--title', payload.title, '--body', payload.body]) };
@@ -672,16 +831,22 @@ export async function runProduct(input, given = {}) {
     const product = await readProduct(input, given), warning = warnings(product);
     if (input.command === 'next') {
       const next = await productNext(input, given);
+      const readySharedLines = next.ready.flatMap(runName => {
+        const planned = product.runs.find(row => row.run === runName);
+        return planned?.sharedSurfaces?.length ? [`${runName}: shared surfaces: ${planned.sharedSurfaces.join(', ')}.`] : [];
+      });
       return { exitCode: 0, message: [...warning, ...(next.warnings ?? []), next.guidance,
         next.ready.length ? `Can start now: ${next.ready.join(', ')}.` : 'Can start now: none.',
-        ...next.ready.map(run => `pdd product start ${run}${input.through ? ` --through ${input.through}` : ''}`), ...next.waiting.map(row => `${row.run}: waits for ${row.needs.join(', ')}.`)].filter(Boolean).join('\n') };
+        ...next.ready.map(run => `pdd product start ${run}${input.through ? ` --through ${input.through}` : ''}`),
+        ...readySharedLines,
+        ...next.waiting.map(row => `${row.run}: waits for ${row.needs.join(', ')}${row.sharedSurfaces?.length ? ` (shared surfaces: ${row.sharedSurfaces.join(', ')})` : ''}.`)].filter(Boolean).join('\n') };
     }
     if (input.command !== 'status') invalid('Unknown product command.');
     const status = await productStatus(input, given);
     return { exitCode: 0, message: input.json ? JSON.stringify(status) : [
       `${status.name} (${status.size}, ${product.parts.length} parts). Plan: product/${product.size === 'small' ? 'map' : 'plan'}.md`, ...warning, ...(status.warnings ?? []),
       'Part  Stories pass  Stale  Not run', ...status.parts.map(part => `${part.part}  ${part.pass} of ${part.total}  ${part.stale}  ${part.notRun}`),
-      ...status.runs.map(run => `${run.run}: ${run.state}${run.issue ? ` · issue #${run.issue}` : ''}${run.fromPr ? ` · from PR #${run.fromPr}` : ''}`),
+      ...status.runs.map(run => `${run.run}: ${run.state}${run.sharedSurfaces?.length ? ` · shared surfaces: ${run.sharedSurfaces.join(', ')}` : ''}${run.issue ? ` · issue #${run.issue}` : ''}${run.fromPr ? ` · from PR #${run.fromPr}` : ''}`),
       ...status.slices.map(slice => `Slice ${slice.slice}: ${slice.pass} of ${slice.total} pass.`),
       `Can start now: ${status.ready.join(', ') || 'none'}. Questions open: ${status.questions.join(', ') || 'none'}.`,
       ...(status[comparisonBases] ?? []).map(base => `Compared with your local ${base}. Run git pull to see changes merged on GitHub.`),

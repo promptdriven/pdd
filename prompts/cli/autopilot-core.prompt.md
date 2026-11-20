@@ -970,8 +970,76 @@ the evidence record.
   that the issue title, the issue body or the PR body names by number (`#N`, `REPO#N` or
   its URL), or whose title or body names a file that the PR changes by its full path, at
   most 5, each body cut to 2,000 characters; or "(none)". A Runtime FAIL line in the PR body means a FAIL verdict. **It reads the diff in parts** (battle plans, Nov 11: a tool output over about 10,000 tokens loses its middle; 70 of 146 review diff reads were cut): first `git diff --stat origin/BASE...HEAD`, then one changed file per command (`git diff origin/BASE...HEAD -- FILE`), and a file whose diff is larger than about 30 KB in hunks (for example with `git diff -U3 origin/BASE...HEAD -- FILE | sed -n 'A,Bp'`); never the whole PR's diff in one call. The brief says the limit in these words: "A tool output over about 10,000 tokens loses its middle." The verdict's summary ends with one line `Read: FILE, FILE, …` that names every changed file that it read in full (the engine check that blocks a PASS without it comes in 0.1.30). Both full and scoped review briefs tell the reviewer that it runs in a read-only sandbox, must not write files to disk or run `git fetch` or repository test scripts, and must output only its JSON verdict directly in its final response (zero filesystem writes inside `job.head`). `reviewState` fails closed (treats as no verdict) whenever the reviewer did not exit cleanly (`seen.state !== "exited"`, `seen.exit.code !== 0`, non-null `seen.exit.signal`, or stopped by T1 quiet timeout). On a clean exit 0, it reads the verdict from `seen.result` (pure JSON in `logs/<id>.result.json` from Codex `--output-last-message` or test ports — checking `isReviewTerminalError` before accepting any `verdict` field), else from non-empty raw `result` file text via exported `parseReviewOutput(raw, {fromResultFile: true})`, else strictly from recognized assistant/final-result envelopes in `logs/<id>.log` via `parseReviewOutput(raw, {fromResultFile: false})`. When `fromResultFile` is `false`, `parseReviewOutput` parses NDJSON line-by-line first (each trimmed `{...}` line independently, falling back to single-document `JSON.parse` only if zero NDJSON lines parsed, so stray stderr `{` characters or `readTail` mid-line truncation never swallow or desynchronize later frames), accepts only recognized envelopes (final `result` envelopes: Claude `type === "result"` with string `result` or untyped `{response}` with no `type`/`event`/`role`; `assistant` envelopes: Codex `item.completed` with `item.type === "agent_message"`, Claude `type === "assistant"` text parts, Gemini/Agy `role === "assistant"` — reassembling contiguous `delta: true` stream chunks into one message — or non-tool Agy `step_update`), rejects `role === "user"` / `type === "user"` / `tool_use` / `tool_result` / `command_execution` / Agy `step_update` `tool` / typed `response` frames, fails closed (`null`) if ANY terminal error frame (`is_error: true`, `type: "error"`, `turn.failed`, `type === "result"` with `status === "error"`, or non-empty `error` field) appears anywhere in the stream, and evaluates ONLY the last `result` envelope (if any exists) or else ONLY the last `assistant` turn — never walking backwards into earlier turns if the final turn fails to parse. Inside final assistant text, `parseReviewOutput` tries `JSON.parse` on the full trimmed text (with at most one optional surrounding markdown code fence stripped) first; when falling back to scanning prose with multiple verdict objects, it computes all fenced blocks first and recognizes a standalone trailing fenced verdict only from the last fence when nothing follows it, failing closed (`null`) on conflicting verdict values (`PASS` vs `FAIL`) unless that standalone trailing fenced block returns `FAIL` (never flipping a `FAIL` into a `PASS`). It writes no files and makes no GitHub write. Its
-  result is `{verdict: PASS|FAIL, head, summary, mustFix[], question?, options?,
-  recommended?}`. **A decision is a question, not a repair (only with `decisions`
+  result is `{verdict: PASS|FAIL, head, summary, mustFix[], preExisting[]?, question?, options?,
+  recommended?}`. The full review brief documents optional `"preExisting"` alongside
+  `"mustFix"` for unrelated defects strictly outside the PR's diff (formatted
+  `P1/P2/P3 file:line ...`, omit or use `[]` when none), stating clearly that any `preExisting` item whose `file:line`
+  touches a changed hunk or added file (or lacks a verifiable `file:line`) is automatically
+  promoted back to `mustFix`. **Diff-guarded `preExisting` (anti-sycophancy, fail closed):**
+  exported `parseUnifiedDiffHunks(diffText)` parses a `-U0` unified diff using linear line
+  scanning into `{files: Map<path, {added: boolean, deleted: boolean, binary: boolean,
+  modeChanged: boolean, ranges: Array<[start, end]>}>, renamedFrom: Map<oldPath, newPath>}`,
+  tracking hunk line counters and file-header state so hunk-body `+++ ` or `--- ` lines can
+  never hijack file headers, unquoting Git C-quoted paths (including UTF-8 octal escapes and
+  surrogate pairs), handling symmetric `diff --git a/... b/...` headers (even when paths contain
+  spaces or ` b/`, deferring ambiguous non-symmetric splits until exact headers arrive),
+  `--- /dev/null` and `new file mode` (`added: true`), `+++ /dev/null` and
+  `deleted file mode` (`deleted: true`), `old mode` / `new mode` (`modeChanged: true`),
+  `Binary files ... differ` (`binary: true`, registering both paths including quoted/unquoted
+  pairs), `rename from` / `rename to` (mapping old path to new path), `copy from` / `copy to`
+  (marking the copied destination `added: true` without aliasing the untouched source),
+  synthetic non-git multi-file header resets, and `@@ -a,b +c,d @@`
+  headers (`[c, c + d - 1]` when `d > 0`; `[c, c + 1]` for a mid-file pure deletion when
+  `d === 0` and `c > 0`; `[1, Math.max(1, a + b)]` for a top-of-file deletion or emptied file
+  when `d === 0` and `c === 0`). Exported `extractFindingLocation(item)` strips terminated ANSI
+  escapes in linear O(N) time (leaving trailing text intact on unterminated escapes), C0/C1
+  control characters, and invisible Unicode format/variation-selector characters
+  (`\p{Cf}` plus `U+034F`, `U+115F`, `U+1160`, `U+180E`, `U+3164`, `U+FE00-U+FE0F`), scans body
+  tokens (preserving leading primary location order and splitting comma-chained file locations
+  before colon fallback) and markdown-link (`%20`/`%2F`/`%2E`/`%5C`-decoded, optional title
+  stripped, whole-target and whitespace-split) candidates without pre-truncating at 500
+  characters, and extracts the primary normalized repo-relative `path` (stripping `./` and
+  surrounding markdown/quote/bracket wrappers, converting `\` to `/`, normalizing redundant
+  segments, and rejecting absolute paths, markdown/colon syntax chars inside paths, path
+  traversal `..`, and URLs) and `[startLine, endLine]` from standard finding prefixes
+  (`P1 file:42 ...`, `P2 file:42-48 ...`, `file:42:5`, `file:42,43`, `file#L42-L48`,
+  `P2 [label](file#L42)`), returning `{path, startLine, endLine, range}` or `null`. Exported
+  `guardPreExistingFindings(preExistingItems, diffScope)` coerces non-array items
+  (`null`/`undefined` to `[]`, scalar to one item), strips terminated ANSI escapes, C0/C1
+  control chars, and invisible Unicode format chars before scanning the full un-truncated text
+  (truncating output items to 500 chars only after scanning), checks ALL items before any
+  20-item output cap (so padding cannot hide a changed-hunk bug past item 20), extracts ALL
+  `file:line` references (including multi-word markdown links with optional titles or
+  `%20`/`%2F`/`%2E`/`%5C` escapes, attached prefixes like `(see:file#L22)`, comma-chained file
+  locations, `a/`/`b/` git prefixes, and direct raw + canonicalized
+  `/./`/`//`/`seg/../`/`\ `/markdown-wrapped/URL/absolute/`../`/`~/` path mentions for diff
+  files including paths with spaces using UTF-16 code-unit span masking and `repoFiles`-aware
+  prefix validation), fails closed into `promoted` whenever `diffScope` is `null`/unavailable, the item has no verifiable
+  `file:line` location, the item mentions a diff/renamed file without a verified outside-diff
+  line number, `diffScope.repoFiles` is provided and any cited path does not exist at `job.head`
+  (or in `diffScope`), or ANY cited location hits an added, deleted, binary-modified, or
+  mode-changed file or overlaps any changed hunk range (checking BOTH `loc.path` and its
+  `renamedFrom` target so rename+re-add cannot evade promotion); verified outside-diff items
+  stay in `preExisting` (capped at 20). Exported
+  `applyPreExistingDiffGuard(review, diffScopeOrText)` applies the guard to
+  a review object, merging `promoted` items into `mustFix` before splitting P3 follow-ups
+  and computing `verdict`, while ensuring promoted `preExisting` P3 items never convert an
+  explicit `FAIL` with empty raw `mustFix` (or any non-`PASS`/`FAIL` verdict) into `PASS`;
+  `parseReviewOutput(raw, {fromResultFile, diffScope, diffText})` normalizes `preExisting`
+  without pre-truncating at 500 chars when no guard has run yet and applies
+  `applyPreExistingDiffGuard` when `diffScope` or `diffText` is provided. In `reviewState`,
+  when `r.preExisting` has items, the engine resolves `diffCwd` from `job.worktree` (when it
+  exists) else `ctx.state.cwd`, fetches `origin/BASE` best-effort, reads the PR's `-U0`
+  unified diff via `gitRaw` (`-c core.quotePath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.relative=false diff -U0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ -M origin/BASE...HEAD --`)
+  plus `git ls-tree -r --name-only -z HEAD` (`repoFiles`), passing `diffScope = null` on
+  failure so all `preExisting` items are promoted fail-closed;
+  promoted items merge into the `mustFix` list before the P3 follow-up split and `verdict`
+  computation (so any blocking promoted item forces `verdict = "FAIL"`). Remaining verified
+  outside-diff `preExisting` items are stored on `job.review.preExisting`, surfaced as
+  `preExisting` on the `reviewState` return object and cached `FAIL` review objects, and
+  included under `Pre-existing (outside diff, non-blocking):` in the PR review comment when
+  non-empty; verified outside-diff `preExisting` items never block `verdict = "PASS"` when
+  `mustFix` is empty. **A decision is a question, not a repair (only with `decisions`
   `ask`):** when a blocking item of a FAIL is a decision item (P1 or P2, then the word
   `decision:` within its first 200 characters), the merge check ends the job as **needs
   a person** (below), in auto and in observe mode (a question is not a merge; observe
