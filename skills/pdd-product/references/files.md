@@ -14,6 +14,7 @@ Start with `# Product name: map`, `Sentence: "the person's sentence"` and
 | Stories | Id, Part, Story, Tag |
 | Journeys | Id, Journey, Stories |
 | Questions | Id, Question, Recommendation, Example, Answer |
+| Rules to check (optional) | Id, Owner, Rule, Verified By |
 
 A part names its prompt folder, such as `phone` and `prompts/phone`, and states
 whether it faces a person or runs headless (only user-facing parts get `.ui.svg`
@@ -22,7 +23,12 @@ screens). Stories use stable IDs such as P01, plain customer words (`As a <perso
 I want <goal>, so that <reason>`), and CORE or LATER. Never write component-actor Stories
 (`"I want the router/connector to..."`), cross-part plumbing duplicates (`1` user
 goal = `1` Story), or standalone Stories for edge cases and internal safety rules
-(those belong in module prompts and `## Rules to check`). A journey names its
+(put those in module prompts and `## Rules to check`). Under `## Rules to check`,
+use the structured table (`Id`, `Owner`, `Rule`, `Verified By`) where `Owner`
+names one or more map parts or `all` / `*` / `shared` (plain bullet lists also
+parse as cross-cutting rules). `pdd product start` copies every rule owned by a
+run's primary part, declared secondary shared surfaces, or `all` / `*` / `shared`
+into the generated feature issue. A journey names its
 constituent Story IDs. Leave unanswered questions blank; never supply the person's
 answer. Give each question a recommended choice and concrete example.
 
@@ -35,18 +41,31 @@ omitted). A small map with exactly one part needs no separate plan.
 | Heading | Columns |
 |---|---|
 | Boundaries | From, To, What crosses, Contract |
-| Runs | Run, Part, Slice, Stories, Needs |
+| Runs | Run, Part, Slice, Stories, Needs, Shared surfaces (optional) |
 
-State what never crosses a boundary. Under a separate `## Prompts` heading (not
-inside `## Boundaries` or `## Runs`), state how each part starts and connects in
+State what never crosses a boundary. Name cross-part boundary operations in
+`What crosses` (or an optional `Operations` column) using dotted `<part>/<prompt>.<op>`
+or `<prompt>.<op>` tokens so `pdd lint --local` and `pdd product status` can
+warn when a declared operation has no consumer prompt outside its defining prompt.
+Under a separate `## Prompts` heading (not
+inside `## Boundaries` or `## Runs`), list each part's `.prompt.md` files (in a
+table or bullet list) and state how each part starts and connects in
 real execution, naming both its checkable domain/screen prompt(s) (faked over
 injected `<port>.<op>` ports in `pdd test`, never linking `kind: native-only`
 adapters under their `## Dependencies`) and any thin `kind: native-only` boundary
 adapter prompt(s) that depend on those domain prompts for real HTTP/HTTPS routes,
 auth/cookies, SQLite or external databases, CLI/OS processes and browser DOM/network
 clients (RUNBOOK §21; `0` Runtime AI calls in `pdd test`, verified by native tests
-in `code` PR 2) so Story checks run cleanly and finished runs form a runnable product. A Run is a stable name such
-as phone-1; Part names one map part, or `all` for journeys. Slice is a label such
+in `code` PR 2) so Story checks run cleanly and finished runs form a runnable product.
+When `## Prompts` lists `.prompt.md` paths, `pdd lint --local` and `pdd product status`
+warn on declared prompts missing on disk or extra `.prompt.md` files under tracked
+part folders. A Run is a stable name such
+as phone-1; Part names one primary map part (or `all` for journeys). When a run
+must also update shared entrypoints such as `cli`, list secondary parts in the
+optional `Shared surfaces` (or `Updates` / `Also updates`) column, after a comma
+in `Part` (`ledger, cli`), or on a `Shared surfaces (RUN): cli` line inside
+`## Runs`; `pdd product start` includes those shared-surface folders, contracts,
+prompts and owned rules in the feature issue. Slice is a label such
 as 1. Stories and Needs are comma lists. Needs names `plan PR` or earlier runs;
 empty means no needs. `plan PR` is satisfied when the plan file is on the base
 branch; a planned run is done when its implementation PR is merged, or when its
