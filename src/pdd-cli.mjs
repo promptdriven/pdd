@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 748e47ccecc7354e44717bb54be570a0f55f74481a6335f08dfb98e3e703af9c).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 16c3f07e9e04a1519ed2a764259f973bec90447d9dd8b89fab45bd6240b2d9ab).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -529,16 +529,21 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch (error) { line(stderr, `Local contracts could not be read.${reason(error)}`); return 5; }
     case 'runtime-check':
     case 'runtime-try':
+      if (plan.local === 'runtime-check' && plan.options['--issue'] !== undefined && plan.options['--codex'] !== true) {
+        line(stderr, `Use --issue only with pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`);
+        return 2;
+      }
       if (plan.local === 'runtime-check' && plan.options['--codex'] === true) {
-        if (plan.options['--lint'] !== true) { line(stderr, `Use pdd ${NAMES.lint} --codex [STORY...] [--json] [--timeout MIN].`); return 2; }
-        if (Object.keys(plan.options).some(key => !['--lint', '--codex', '--json', '--timeout'].includes(key))) {
-          line(stderr, `pdd ${NAMES.lint} --codex accepts only Story or prompt paths, --json, and --timeout MIN.`); return 2;
+        if (plan.options['--lint'] !== true) { line(stderr, `Use pdd ${NAMES.lint} --codex [STORY...] [--issue N|FILE] [--json] [--timeout MIN].`); return 2; }
+        if (Object.keys(plan.options).some(key => !['--lint', '--codex', '--issue', '--json', '--timeout'].includes(key))) {
+          line(stderr, `pdd ${NAMES.lint} --codex accepts only Story or prompt paths, --json, and --timeout MIN, plus optional --issue N|FILE.`); return 2;
         }
         try {
           const module = codexLint ?? await import('./codex-lint.mjs');
           return await module.runCodexLint({
             cwd,
             words: [...plan.operands],
+            ...(plan.options['--issue'] !== undefined ? { issue: plan.options['--issue'] } : {}),
             ...(plan.options['--timeout'] !== undefined ? { timeoutMinutes: Number(plan.options['--timeout']) } : {}),
             json: plan.options['--json'] === true,
             env,
