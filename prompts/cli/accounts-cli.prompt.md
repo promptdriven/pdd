@@ -45,18 +45,18 @@ or calls exist.
   `id_token`, `account_id`) locally before uploading to `POST /v1/accounts`, support `--replace` and interactive `409` conflict recovery (`[r]eplace` / disambiguated `<label>-2` / `[s]kip`) while preserving user, team, org and `github_user_id` shares, probe local Codex usage fail-open before cleanup if server windows are
   unpopulated, lease and materialize the active pass into `pddManagedCodexHome(env)` or
   `pddManagedClaudeHome(env)` (never writing to `~/.claude/settings.json` or `~/.codex/auth.json`, keeping unprobed offline fallback usage fields `null` rather than `0`, without writing raw fallback
-  OAuth tokens into personal config files), and share with any `--with` targets not already shared on that account.
+  OAuth tokens into personal config files), note on in-place credential refresh (`already_enrolled`) that existing shares remain active, and share with any `--with` targets not already shared on that account.
   With `--loop`, require an interactive TTY or injected prompt port (`exitCode: 2` otherwise), print
   numbered iteration banners and `<email> -> "<label>"` confirmation, derive default labels from the
   authenticated email local-part when `--label` is omitted (or `<prefix>-1`, `<prefix>-2`, ... when
   `--label PREFIX` is supplied), offer `[R]etry` / `[s]kip` on transient `POST /v1/accounts` upload
   errors without repeating OAuth login, detect server `already_enrolled` responses and session duplicate
-  `account_id`s without advancing the counter (noting on in-place credential refresh that existing shares remain active), treat `SIGINT` (exit code `130` or `SIGINT` signal)
+  `account_id`s without advancing the counter, treat `SIGINT` (exit code `130` or `SIGINT` signal)
   as a clean loop exit (`exitCode: 0`), and prompt `Enroll another <provider> account? [Y/n] `.
 - `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--replace] [--with USER|ORG/TEAM[,...]]`:
   Validate `--with` targets upfront, refuse symlinked `--from` paths and symlinked parent directories (`lstatSync`), allow a dotfile-symlinked `auth.json` only when `realpathSync` resolves to a regular file outside `pddManagedCodexHome(env)`, read `~/.codex/auth.json` (or `PATH` / `PATH/auth.json` when
   `--from PATH` is given, refusing bundles with an already-scrubbed empty `refresh_token`) or a validated Claude OAuth token from `settings.json`, `.credentials.json` or `PATH`,
-  validate all four Codex OAuth token fields before network mutations, upload to `POST /v1/accounts` (supporting `--replace` and interactive `409` label conflict recovery with backup recovery notes on re-upload failure), probe local Codex usage
+  validate all four Codex OAuth token fields before network mutations, upload to `POST /v1/accounts` (supporting `--replace` and interactive `409` label conflict recovery with backup recovery notes on re-upload failure, and noting on in-place `already_enrolled` refresh that existing shares remain active), probe local Codex usage
   fail-open inside a disposable `0700` probe directory with `refresh_token` cleared if server windows are unpopulated, materialize the leased pass into `pddManagedCodexHome(env)`, atomically scrub `tokens.refresh_token` (`""`, mode `0600`) in the imported local Codex source file (preserving dotfiles symlinks by writing through the resolved target file) only when lease materialization succeeded so local `codex` cannot trigger `refresh_token_invalidated`, and apply any non-duplicate `--with` shares.
 - `pdd accounts use LABEL [--provider codex|claude]`: Resolve `LABEL` (scoped to `--provider` when passed, or exiting `2` when `LABEL` is ambiguous across providers), refuse `reauth_required` accounts with a clear re-authentication command, pin and materialize
   `LABEL` in `pddManagedCodexHome(env)` or `pddManagedClaudeHome(env)` via `POST /v1/accounts/lease`, and show the remaining `5h`/`7d` `XX% left` summary.
@@ -65,7 +65,7 @@ or calls exist.
   (sorted by soonest `weekly_reset_at`) via `POST /v1/accounts/lease`, and show the remaining `5h`/`7d` `XX% left` summary.
 - `pdd accounts codex [ARGS...]`: Sync and lease a healthy Codex account into `pddManagedCodexHome(env)`
   (failing open to plain `codex` when Cloud accounts are unenrolled or offline without an active lease),
-  pass non-interactive Codex subcommands straight through with `CODEX_HOME` set to `pddManagedCodexHome(env)` (forwarding child stdout and stderr cleanly in non-TTY runs),
+  pass non-interactive Codex subcommands straight through with `CODEX_HOME` set to `pddManagedCodexHome(env)` (streaming child stdin, stdout, and stderr directly via `spawn` with no buffer or timeout kill and mapping signal exits to non-zero exit codes),
   and launch interactive `codex` under the live PTY/session supervisor (with `SIGWINCH` resize forwarding, signal/exit TTY restoration, `os.killpg` process-group cleanup, `cwd`-verified rollout session pinning, and structured rollout JSONL / Cloud usage quota monitoring), reporting usage fail-open on quota exhaustion, rotating `pddManagedCodexHome(env)/auth.json` to the
   next ready Codex lease (displaying the rotated account's `5h`/`7d` `XX% left` summary), and relaunching `codex` with `initialArgs` when a turn-0 rotation occurs before session rollout creation on a non-`resume` launch (including `fork`) or `codex resume` with preserved flags (including `-i` / `--image`) and the pinned session ID once created (or `--last` for `resume` without a session ID).
 - `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`:

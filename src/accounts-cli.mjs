@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: c28d86de64b0de9aecdb9b3d431bce86f89918728ca329d9aa5b52526813510a).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 4fa550fc7999638b5c598ca92272136d4727ea82b388f8086d06fa44ff31a2d3).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -1551,7 +1551,12 @@ async function applySharePayloadsToAccounts(accounts, sharePayloads, { cwd, env,
       if (uidKey) existingKeys.add(uidKey);
       const serverAlreadyShared = Boolean(
         res?.already_shared === true
-        || (item?.body?.github_login && !res?.invite && !res?.invite_id),
+        || (
+          (item?.body?.github_login || item?.body?.github_user_id)
+          && res?.already_shared !== false
+          && !res?.invite
+          && !res?.invite_id
+        ),
       );
       const inviteId = serverAlreadyShared ? null : (res?.invite?.invite_id ?? res?.invite_id ?? null);
       notes.push({
@@ -4067,6 +4072,22 @@ async function runSingleSupervisedCodexTurn({
   return runWithChild(false);
 }
 
+function exitCodeFromSignalOrStatus(code, signal) {
+  if (signal === 'SIGINT') return 130;
+  if (signal === 'SIGTERM') return 143;
+  if (signal === 'SIGHUP') return 129;
+  return typeof code === 'number' ? code : 1;
+}
+
+function writeStreamChunk(stream, chunk) {
+  if (chunk == null) return;
+  if (typeof chunk === 'string' && chunk.length === 0) return;
+  if (chunk instanceof Uint8Array && chunk.byteLength === 0) return;
+  try {
+    stream?.write?.(chunk);
+  } catch {}
+}
+
 async function runPlainCodexOnce(args, { cwd, env, stdin, stdout, stderr }, ports = {}) {
   if (typeof ports.spawnCodexPty === 'function') {
     const res = await ports.spawnCodexPty({
@@ -4077,33 +4098,75 @@ async function runPlainCodexOnce(args, { cwd, env, stdin, stdout, stderr }, port
       turn: 0,
       signal: new AbortController().signal,
       onOutput(chunk) {
-        try { stdout?.write?.(chunk); } catch {}
+        writeStreamChunk(stdout, chunk);
       },
     });
-    return { exitCode: res?.code ?? 0, message: '' };
+    const exitCode = res?.signal
+      ? exitCodeFromSignalOrStatus(null, res.signal)
+      : (res?.code ?? 0);
+    return { exitCode, message: '' };
   }
   if (typeof ports.run === 'function') {
     const res = await ports.run('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
-    if (typeof res?.stdout === 'string' && res.stdout) {
-      try { stdout?.write?.(res.stdout); } catch {}
+    writeStreamChunk(stdout, res?.stdout);
+    writeStreamChunk(stderr, res?.stderr);
+    return { exitCode: exitCodeFromSignalOrStatus(res?.code, res?.signal), message: '' };
+  }
+  const inheritStdin = !stdin || stdin === process.stdin;
+  const inheritStdout = !stdout || stdout === process.stdout;
+  const inheritStderr = !stderr || stderr === process.stderr;
+  const stdio = inheritStdin && inheritStdout && inheritStderr
+    ? 'inherit'
+    : [
+      inheritStdin ? 'inherit' : 'pipe',
+      inheritStdout ? 'inherit' : 'pipe',
+      inheritStderr ? 'inherit' : 'pipe',
+    ];
+  return new Promise(resolveExit => {
+    const child = (ports.spawn ?? spawn)('codex', args, { cwd, env, stdio });
+    const forward = sig => {
+      try { child.kill(sig); } catch {}
+    };
+    const onSigInt = () => forward('SIGINT');
+    const onSigTerm = () => forward('SIGTERM');
+    const onSigHup = () => forward('SIGHUP');
+    process.on('SIGINT', onSigInt);
+    process.on('SIGTERM', onSigTerm);
+    process.on('SIGHUP', onSigHup);
+
+    const detach = () => {
+      process.off('SIGINT', onSigInt);
+      process.off('SIGTERM', onSigTerm);
+      process.off('SIGHUP', onSigHup);
+      if (child.stdin && stdin && typeof stdin.unpipe === 'function') {
+        try { stdin.unpipe(child.stdin); } catch {}
+      }
+    };
+
+    if (child.stdin) {
+      child.stdin.on('error', () => {});
+      if (stdin && typeof stdin.pipe === 'function') {
+        stdin.pipe(child.stdin);
+      } else {
+        try { child.stdin.end(); } catch {}
+      }
     }
-    if (typeof res?.stderr === 'string' && res.stderr) {
-      try { stderr?.write?.(res.stderr); } catch {}
+    if (child.stdout) {
+      child.stdout.on('data', chunk => writeStreamChunk(stdout, chunk));
     }
-    return { exitCode: res?.code ?? 0, message: '' };
-  }
-  if (stdin?.isTTY && stdout?.isTTY) {
-    const res = spawnSync('codex', args, { cwd, env, stdio: 'inherit' });
-    return { exitCode: res.signal === 'SIGINT' ? 130 : (res.status ?? 1), message: '' };
-  }
-  const res = await runAgentProcess('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
-  if (typeof res?.stdout === 'string' && res.stdout) {
-    try { stdout?.write?.(res.stdout); } catch {}
-  }
-  if (typeof res?.stderr === 'string' && res.stderr) {
-    try { stderr?.write?.(res.stderr); } catch {}
-  }
-  return { exitCode: res?.code ?? 0, message: '' };
+    if (child.stderr) {
+      child.stderr.on('data', chunk => writeStreamChunk(stderr, chunk));
+    }
+
+    child.on('error', () => {
+      detach();
+      resolveExit({ exitCode: 1, message: '' });
+    });
+    child.on('close', (code, signal) => {
+      detach();
+      resolveExit({ exitCode: exitCodeFromSignalOrStatus(code, signal), message: '' });
+    });
+  });
 }
 
 async function leaseNextHealthyCodexForRotation(skipAccountIds, { cwd, env }, ports = {}) {

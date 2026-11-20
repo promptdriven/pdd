@@ -2778,11 +2778,75 @@ test('#3567 & #3539: in-place refresh preserves shares message, idempotent alrea
   assert.equal(parsedJson.pending_invites.some(i => i.invite_id === 'inv_redundant_1'), true);
   assert.equal(parsedJson.pending_invites.some(i => i.invite_id === 'inv_fresh_2'), true);
 
-  // 4. Non-TTY `pdd accounts codex` (runPlainCodexOnce) forwards child stdout and stderr cleanly!
+  // 4. Non-TTY `pdd accounts codex` (runPlainCodexOnce) forwards Buffer stdout/stderr and maps signal exits to non-zero.
   const codexRes = await invokeCli(['accounts', 'codex', '--version'], sb, {
-    run: async (_cmd, _args) => ({ code: 0, stdout: 'codex-cli 0.170.0\n', stderr: 'warn-line\n' }),
+    run: async (_cmd, _args) => ({
+      code: 0,
+      stdout: Buffer.from('codex-cli 0.170.0\n'),
+      stderr: Buffer.from('warn-line\n'),
+    }),
   });
   assert.equal(codexRes.exit, 0, codexRes.stderr);
   assert.equal(codexRes.stdout, 'codex-cli 0.170.0\n');
   assert.equal(codexRes.stderr, 'warn-line\n');
+
+  const sigRes = await invokeCli(['accounts', 'codex', '--version'], sb, {
+    run: async () => ({ code: null, signal: 'SIGTERM', stdout: '', stderr: '' }),
+  });
+  assert.equal(sigRes.exit, 143, 'signal exit must never map to 0');
+
+  // 5. Real subprocess non-TTY path (managed `exec` passthrough + unenrolled fallback) streams piped stdin, stdout, stderr, non-zero exit codes, and SIGTERM -> 143.
+  const { chmodSync } = await import('node:fs');
+  const { Readable } = await import('node:stream');
+  const fakeBinDir = join(sb.root, 'fake-codex-bin');
+  mkdirSync(fakeBinDir, { recursive: true });
+  const fakeCodexPath = join(fakeBinDir, 'codex');
+  writeFileSync(fakeCodexPath, `#!/bin/sh
+if [ "$1" = "exec" ]; then shift; fi
+case "$1" in
+  --pipe-test)
+    read line
+    printf 'OUT:%s|%s\\n' "$line" "$CODEX_HOME"
+    printf 'ERR:%s\\n' "$line" >&2
+    exit 0
+    ;;
+  --exit-42)
+    printf 'bad-out\\n'
+    printf 'bad-err\\n' >&2
+    exit 42
+    ;;
+  --sigterm)
+    kill -TERM $$
+    sleep 1
+    ;;
+esac
+`);
+  chmodSync(fakeCodexPath, 0o755);
+  const shimSb = { ...sb, env: { ...sb.env, PATH: `${fakeBinDir}:${sb.env.PATH ?? process.env.PATH ?? ''}` } };
+
+  const pipeRes = await invokeCli(['accounts', 'codex', 'exec', '--pipe-test'], shimSb, {
+    stdin: Readable.from(['hello-from-stdin\n']),
+  });
+  assert.equal(pipeRes.exit, 0, pipeRes.stderr);
+  assert.equal(pipeRes.stdout, `OUT:hello-from-stdin|${pddManagedCodexHome(sb.env)}\n`);
+  assert.equal(pipeRes.stderr, 'ERR:hello-from-stdin\n');
+
+  const exit42Res = await invokeCli(['accounts', 'codex', 'exec', '--exit-42'], shimSb);
+  assert.equal(exit42Res.exit, 42);
+  assert.equal(exit42Res.stdout, 'bad-out\n');
+  assert.equal(exit42Res.stderr, 'bad-err\n');
+
+  const realSigRes = await invokeCli(['accounts', 'codex', 'exec', '--sigterm'], shimSb);
+  assert.equal(realSigRes.exit, 143);
+
+  // Unenrolled fallback path (`!managedHome`) also uses streaming runPlainCodexOnce.
+  const unenrolledSb = makeSandbox(t, cloud.serverUrl);
+  const unenrolledShimSb = {
+    ...unenrolledSb,
+    env: { ...unenrolledSb.env, PATH: `${fakeBinDir}:${unenrolledSb.env.PATH ?? process.env.PATH ?? ''}` },
+  };
+  const fallbackRes = await invokeCli(['accounts', 'codex', '--exit-42'], unenrolledShimSb);
+  assert.equal(fallbackRes.exit, 42);
+  assert.equal(fallbackRes.stdout, 'bad-out\n');
+  assert.equal(fallbackRes.stderr, 'bad-err\n');
 });
