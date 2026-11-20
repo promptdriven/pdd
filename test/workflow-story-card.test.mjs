@@ -861,3 +861,99 @@ test('#2874: automatic PR 1 publication refuses cleanly when approval evidence p
   assert.equal(f.prs.length, 0);
   assert.equal(f.pushes.length, 0);
 });
+
+test('#3572: automatic (Autopilot) and strict runs accept --through prompt-pr, stop after PR 1, and still refuse --through code', async t => {
+  // 1. Automatic run with --through prompt-pr admits cleanly, saves through:'prompt-pr', stops after PR 1 in advanceAutomaticPr1, and reports stopped in status.
+  const f = await fixture(t, { name: 'feature', agent: 'codex' });
+  const root = realpathSync(f.source), stateRoot = join(f.state, 'autopilot');
+  mkdirSync(stateRoot, { recursive: true });
+  writeFileSync(join(stateRoot, `${createHash('sha256').update(root).digest('hex').slice(0, 20)}.json`), JSON.stringify({
+    enabled: true, repo: 'example/project', cwd: root, coordinatorId: origin.coordinatorId, machine: origin.machine,
+    startAction: { command: 'pdd autopilot start', repository: 'example/project', mode: 'auto' },
+  }));
+  writeFileSync(join(f.source, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'auto', trust: [] } }));
+  const fixturePath = join(f.base, 'reader.json'), exec = promisify(callbackExec), original = f.ports.execFile;
+  writeFileSync(fixturePath, JSON.stringify({
+    labels: ['pdd:working'],
+    events: [{ id: 12, event: 'labeled', label: { name: 'pdd:working' }, actor: { login: 'example' } }],
+    comments: [{ id: 11, user: { login: 'example' }, body: JSON.stringify({ repository: origin.repository, coordinatorId: origin.coordinatorId, machine: origin.machine, labelEventId: '12' }) }],
+  }));
+  const execFile = (file, args, opts) => file === 'gh' && args[0] === 'api' && args[1] === '--include'
+    ? exec(process.execPath, [join(packageRoot, 'test/helpers/continuation-fake-gh.mjs'), ...args], { ...opts, env: { ...process.env, READER_FIXTURE_FILE: fixturePath, READER_GH_LOG: join(f.base, 'gh.log') } })
+    : original(file, args, opts);
+  const autoPorts = () => ({ ...f.ports, env: { ...f.ports.env, PDD_STATE_DIR: join(f.state, 'runtime') }, execFile, autopilotStateRoot: stateRoot, checkDependencyStart: async () => ({ allowed: true, reason: 'ok' }) });
+
+  // Automatic run still refuses --through code.
+  const refusedAutoCode = await startRun({ name: 'feature', issue: '17', agent: 'codex', through: 'code', coordinator: { ...origin, activation: 'start-a' }, cwd: f.source, packageRoot }, autoPorts());
+  assert.equal(refusedAutoCode.exitCode, 1);
+
+  // Automatic run accepts --through prompt-pr and persists it.
+  const started = await startRun({ name: 'feature', issue: '17', agent: 'codex', through: 'prompt-pr', coordinator: { ...origin, activation: 'start-a' }, cwd: f.source, packageRoot }, autoPorts());
+  assert.equal(started.exitCode, 0, started.message);
+  let run = f.record();
+  assert.equal(run.through, 'prompt-pr');
+  assert.deepEqual(run.automaticOrigin, origin);
+  const skill = join(f.base, 'skill');
+  mkdirSync(join(skill, 'steps'), { recursive: true });
+  writeFileSync(join(skill, 'steps', 'autopilot.md'), 'Synthetic scoped delegation fixture.\n');
+  run.skillDir = skill;
+  writeRun(run);
+
+  const agentPorts = () => ({ ...f.agentPorts(), env: { ...f.agentPorts().env, PDD_STATE_DIR: join(f.state, 'runtime') }, execFile, autopilotStateRoot: stateRoot });
+  f.tick(); assert.equal((await stepDone({ step: 'understand', summary: 'understand', cwd: run.root }, agentPorts())).exitCode, 0);
+  f.tick(); assert.equal((await stepDone({ step: 'visual', skipped: 'no screen', cwd: run.root }, agentPorts())).exitCode, 0);
+  for (const dir of ['prompts', 'user_stories', 'tests']) mkdirSync(join(run.root, dir), { recursive: true });
+  for (const path of [PROMPT, STORY, TEST]) cpSync(join(harbor, path), join(run.root, path));
+  f.git(run.root, 'add', '.'); f.git(run.root, 'commit', '-qm', 'Story and prompt');
+  f.tick(); assert.equal((await stepDone({ step: 'prompt-story', summary: 'story', cwd: run.root }, agentPorts())).exitCode, 0);
+  f.tick(); assert.equal((await approveRun({ ref: '17', cwd: run.root, said: 'Operator auto start approves Story.' }, agentPorts())).exitCode, 0);
+  f.run = f.record();
+  f.ports.env.PDD_STATE_DIR = join(f.state, 'runtime');
+  saveCheck(f);
+  f.tick(); assert.equal((await stepDone({ step: 'check', summary: 'Prompt tests (place-order): ✓ 3 of 3 criteria', cwd: run.root }, agentPorts())).exitCode, 0);
+  f.tick(); assert.equal((await stepDone({ step: 'try', skipped: 'automatic prompt-only run', cwd: run.root }, agentPorts())).exitCode, 0);
+
+  // advanceAutomaticPr1 opens PR 1 and stops after PR 1 instead of continuing to the automatic code gate.
+  f.tick();
+  const advanced = await runner.advanceAutomaticPr1({ ref: '17', cwd: f.source, coordinatorId: origin.coordinatorId, machine: origin.machine, packageRoot }, agentPorts());
+  assert.equal(advanced.exitCode, 0, advanced.message);
+  assert.equal(f.prs.length, 1, advanced.message);
+  assert.match(advanced.message, /Stopped after PR 1 \(--through prompt-pr\)\. Do not start the code PR\./);
+  assert.doesNotMatch(advanced.message, /Continue through the scoped automatic code gate/);
+  assert.equal(f.record().areas[f.record().area].name, 'prompt-pr');
+  assert.equal(f.record().gate?.kind, 'ask-code');
+  const pane = f.herdr.paneOf(f.record().chats.at(-1));
+  if (pane?.agent) pane.agent.agent_status = 'idle';
+  const status = await runStatus({ ref: '17', cwd: f.source }, autoPorts());
+  assert.equal(status.exitCode, 0);
+  assert.match(status.message, /State: stopped after PR 1/);
+  const statusJson = JSON.parse((await runStatus({ ref: '17', json: true, cwd: f.source }, autoPorts())).message);
+  assert.equal(statusJson.runs[0].words, 'stopped after PR 1; code can start when requested');
+
+  // 2. Strict mode refuses --through code, accepts --through prompt-pr, and stops after terminal PR 1 approval without asking the code question.
+  const sf = await fixture(t, { name: 'feature', agent: 'codex' });
+  sf.ports.env.PDD_STATE_DIR = join(sf.state, 'runtime');
+  writeFileSync(join(sf.source, 'pdd.json'), JSON.stringify({ strict_approvals: true }));
+  assert.equal((await startRun({ name: 'feature', issue: '17', agent: 'codex', through: 'code', cwd: sf.source, packageRoot }, sf.ports)).exitCode, 1);
+  const strictStarted = await startRun({ name: 'feature', issue: '17', agent: 'codex', through: 'prompt-pr', cwd: sf.source, packageRoot }, sf.ports);
+  assert.equal(strictStarted.exitCode, 0, strictStarted.message);
+  assert.equal(sf.record().through, 'prompt-pr');
+  const sRun = sf.record();
+  for (const [step, extra] of [['understand', {}], ['visual', { skipped: 'no screen' }]]) {
+    sf.tick(); assert.equal((await stepDone({ step, summary: step, cwd: sRun.root, ...extra }, sf.agentPorts())).exitCode, 0);
+  }
+  for (const dir of ['prompts', 'user_stories', 'tests']) mkdirSync(join(sRun.root, dir), { recursive: true });
+  for (const path of [PROMPT, STORY, TEST]) cpSync(join(harbor, path), join(sRun.root, path));
+  sf.git(sRun.root, 'add', '.'); sf.git(sRun.root, 'commit', '-qm', 'Strict story');
+  sf.tick(); assert.equal((await stepDone({ step: 'prompt-story', summary: 'story', cwd: sRun.root }, sf.agentPorts())).exitCode, 0);
+  sf.tick(); assert.equal((await approveRun({ ref: '17', cwd: sf.source }, sf.ports)).exitCode, 0);
+  sf.run = sf.record(); saveCheck(sf);
+  sf.tick(); assert.equal((await stepDone({ step: 'check', summary: 'check', cwd: sRun.root }, sf.agentPorts())).exitCode, 0);
+  sf.tick(); assert.equal((await stepDone({ step: 'try', skipped: 'no sim', cwd: sRun.root }, sf.agentPorts())).exitCode, 0);
+  sf.prompts.length = 0; sf.ports.confirm = async question => { sf.prompts.push(question); return true; }; sf.tick();
+  const strictPr1 = await approveRun({ ref: '17', cwd: sf.source }, sf.ports);
+  assert.equal(strictPr1.exitCode, 0, strictPr1.message);
+  assert.equal(sf.prs.length, 1);
+  assert.equal(sf.prompts.length, 1, 'terminal confirms PR 1 only and does not ask the code question under --through prompt-pr');
+  assert.match(strictPr1.message, /Stopped after PR 1 \(--through prompt-pr\)/);
+});

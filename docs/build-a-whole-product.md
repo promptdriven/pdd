@@ -31,8 +31,10 @@ and questions. `product/plan.md` lists boundaries and runs. `contracts/` holds
 shared record schemas, the world key ownership table and the shared seed.
 
 `plan PR` means `product/plan.md` is present on the base branch. Planned-run
-needs wait for the implementation PR to merge. Explicit starts show unmet needs
-as advice and keep the normal feature gates.
+needs wait for the implementation PR to merge by default, or for the prompt PR
+(or implementation PR) to merge when `product/plan.md` sets `Through: prompt-pr`
+or when `--through prompt-pr` is passed. Explicit starts show unmet needs as
+advice and keep the normal feature gates.
 
 Review the plan PR's parts and contracts. The coffee plan has `server-1`,
 `phone-1`, `barista-1`, then `journeys`. The phone never talks directly to the
@@ -92,7 +94,10 @@ No result files are committed, and these commands make no interpreter calls.
 
 Only the run's own same-repository PRs count. Status takes check results from the
 latest PR with named results, so a code PR without them does not hide the prompt
-PR's checks. An implementation merge satisfies a need; a prompt merge does not.
+PR's checks. An implementation merge satisfies a need under the default `code`
+target; under `Through: prompt-pr` (in `product/plan.md`) or `--through prompt-pr`,
+a merged prompt PR (or implementation PR) satisfies a need. Use `--base BRANCH`
+on `pdd product start` to target a non-default origin branch.
 For merged work, current and stale compare with the base branch's files. If
 that base is unavailable, status warns and leaves those results unverified.
 Needs cycles show their path in status and next. They do not prevent an explicit
