@@ -60,12 +60,16 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
   grant with `rememberSecrets`, moves it into `env.PDD_CODEX_GATEWAY_GRANT`, and emits
   `env_http_headers={ x-pdd-gateway-grant = "PDD_CODEX_GATEWAY_GRANT" }` with
   `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"`.
-- `forensicsCommand(agent, {model, reasoningEffort, resultFile, env, fs})` builds a
-  bounded read-only headless CLI invocation for every supported Autopilot agent kind:
-  - `codex`: `exec --ignore-user-config --sandbox read-only --ephemeral --color never`
-    with `approval_policy="never"`, `web_search="disabled"`, `mcp_servers={}`,
-    `model_reasoning_effort` (`low` default), non-essential agent features disabled (preserving `code_mode_host` so read-only tool inspection works),
-    any `codexProviderConfigArgs({env, agent, fs})` `-c` overrides (#3503),
+- `readOnlyAgentCommand(agent, {model, reasoningEffort, defaultEffort, resultFile, env, fs, json, ignoreRules})` builds a
+  bounded read-only headless CLI invocation for every supported Autopilot agent kind
+  (shared by pre-run forensics and [Autopilot core](autopilot-core.prompt.md)'s independent
+  reviewer, never passing bypass/yolo flags):
+  - `codex`: `exec`, optional `--json` (when `json` is `true`), `--ignore-user-config`,
+    `--ignore-rules` (unless `ignoreRules` is `false`), `--sandbox read-only`, `--ephemeral`,
+    `--color never`, `approval_policy="never"`, `web_search="disabled"`, `mcp_servers={}`,
+    optional `model_reasoning_effort` (when `reasoningEffort ?? defaultEffort` is valid),
+    non-essential agent features disabled (preserving `code_mode_host` so read-only tool
+    inspection works), any `codexProviderConfigArgs({env, agent, fs})` `-c` overrides (#3503),
     optional `--output-last-message FILE`, optional `--model MODEL`, and `-` stdin.
   - `claude`: `-p --safe-mode --tools Read,Glob,Grep --permission-mode plan
     --permission-prompts none --strict-mcp-config --no-chrome
@@ -76,6 +80,8 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
   - `agy`: `--input-format text --output-format json --mode plan --sandbox
     --disable-slash-commands` with optional `--effort` and `--model`.
   Unknown agent kinds throw an Error.
+- `forensicsCommand(agent, {model, reasoningEffort, resultFile, env, fs})` delegates to
+  `readOnlyAgentCommand` with `defaultEffort: "low"` and `json: false`.
 - `runPreRunForensics(input, ports)` runs in `cwd: worktree` with a bounded timeout
   (default 90 seconds, 128 KiB output cap), honors optional worker-tier model
   routing via `resolveStepModelTier` (`step: "intake"`) and pooled/Cloud step
@@ -108,9 +114,9 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
 - Export `EXTERNAL_REPO_LABELS`, `FORENSICS_FIXED_MARKER_PREFIX`,
   `forensicsFixedMarker`, `findExternalRepoLabel`, `findConfiguredSkipLabel`,
   `extractJsonObjects`, `parseForensicsText`, `stripForbiddenIdentifiers`,
-  `forensicsEnvironment`, `codexProviderConfigArgs`, `forensicsCommand`,
-  `forensicsPrompt`, `evaluateForensicsResult`, `formatForensicsComment`,
-  `formatForensicsBrief`, and `runPreRunForensics`.
+  `forensicsEnvironment`, `codexProviderConfigArgs`, `readOnlyAgentCommand`,
+  `forensicsCommand`, `forensicsPrompt`, `evaluateForensicsResult`,
+  `formatForensicsComment`, `formatForensicsBrief`, and `runPreRunForensics`.
 
 ## Dependencies
 

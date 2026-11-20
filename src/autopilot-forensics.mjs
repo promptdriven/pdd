@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: d739bc39496c6bb19b1e9760fa4fb5cb360b82bd4bff392f5824357f3533b818).
+// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: 9a1e37faa6594081c1c9aae7d0ee84a15de78b64e779c9d800b382122226cd98).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -309,18 +309,35 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
   return out;
 }
 
-export function forensicsCommand(agent, { model = null, reasoningEffort = null, resultFile = null, env = null, fs = nativeFs } = {}) {
+export function readOnlyAgentCommand(
+  agent,
+  {
+    model = null,
+    reasoningEffort = null,
+    defaultEffort = null,
+    resultFile = null,
+    env = null,
+    fs = nativeFs,
+    json = false,
+    ignoreRules = true,
+  } = {},
+) {
   const cleanModel = cleanModelName(model ?? agent?.model);
   const effort = cleanEffort(reasoningEffort);
+  const codexEffort = effort ?? cleanEffort(defaultEffort);
   const cmdName = fallback => (typeof agent?.command === 'string' && agent.command.trim() ? agent.command.trim() : fallback);
   if (agent?.kind === 'codex') {
     const providerArgs = codexProviderConfigArgs({ env, agent, fs });
     return {
       command: cmdName('codex'),
       args: [
-        'exec', '--ignore-user-config', '--sandbox', 'read-only', '--ephemeral', '--color', 'never',
+        'exec',
+        ...(json ? ['--json'] : []),
+        '--ignore-user-config',
+        ...(ignoreRules ? ['--ignore-rules'] : []),
+        '--sandbox', 'read-only', '--ephemeral', '--color', 'never',
         '-c', 'approval_policy="never"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}',
-        '-c', `model_reasoning_effort="${effort ?? 'low'}"`,
+        ...(codexEffort ? ['-c', `model_reasoning_effort="${codexEffort}"`] : []),
         ...CODEX_FORENSICS_OFF.flatMap(name => ['-c', `features.${name}=false`]),
         ...providerArgs,
         ...(typeof resultFile === 'string' && resultFile ? ['--output-last-message', resultFile] : []),
@@ -362,7 +379,11 @@ export function forensicsCommand(agent, { model = null, reasoningEffort = null, 
       ],
     };
   }
-  throw Error('Pre-run forensics needs codex, claude, gemini or agy');
+  throw Error('Read-only agent jobs need codex, claude, gemini or agy');
+}
+
+export function forensicsCommand(agent, options = {}) {
+  return readOnlyAgentCommand(agent, { defaultEffort: 'low', ...options });
 }
 
 export function forensicsPrompt({ repo, baseBranch = 'main', issue, comments = [] }) {
