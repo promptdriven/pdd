@@ -580,3 +580,179 @@ test('3571 PR 1 skill steps reference review.md and advisory pdd lint --codex --
     assert.match(content, /pdd lint --codex <story> --issue <N>/, `${rel} should reference pdd lint --codex <story> --issue <N>`);
   }
 });
+
+test('3571 Round-1 adversarial regressions: workspace.allows, fail-closed malformed missed, strict --issue validation, binary refusal, JSON-before-redact scenario summaries, and linear fence scan', async t => {
+  const rootTmp = mkdtempSync(join(tmpdir(), 'pdd-3571-r1-'));
+  t.after(() => rmSync(rootTmp, { recursive: true, force: true }));
+  const repo = join(rootTmp, 'repo');
+  const home = join(rootTmp, 'home');
+  const state = join(rootTmp, 'state');
+  mkdirSync(repo, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  const env = { HOME: home, PDD_STATE_DIR: state, SECRET_DEMO_TOKEN: 's3cr3t-tok-999' };
+  const writeRepoFile = (base, rel, content) => {
+    const full = join(base, rel);
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, content);
+  };
+
+  // Configure bounded pdd-workspace.json excluding `private/`
+  writeRepoFile(repo, 'pdd-workspace.json', JSON.stringify({
+    allowed_paths: ['prompts/', 'user_stories/', 'tests/', 'docs/'],
+  }, null, 2) + '\n');
+  writeRepoFile(repo, 'private/secret-notes.md', '# Private notes\nShould not be readable via --issue.\n');
+  writeRepoFile(repo, 'docs/issue-valid.md', '# Issue\nMust authenticate demo password.\n');
+  writeRepoFile(repo, 'docs/empty.md', '   \n\t\n');
+  writeRepoFile(repo, 'docs/sub/child-note.md', '# Child issue\nCheck auth flow.\n');
+  mkdirSync(join(repo, 'prompts'), { recursive: true });
+  writeFileSync(join(repo, 'prompts/binary.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]));
+  writeRepoFile(repo, 'prompts/login.prompt.md', '# Login\n\n## Purpose\nAuthenticate users cleanly.\n\n## Rules\n- Validate password.\n');
+  writeRepoFile(repo, 'user_stories/login.md', '# User Story: Login\n\nAs a user, I want to log in so that I can access my workspace.\n\n## Acceptance criteria\n- Valid credentials sign in.\n');
+  // Large world block + password key in scenario JSON: compact summary MUST parse BEFORE redact so criteria & steps survive!
+  writeRepoFile(repo, 'tests/login.json', JSON.stringify({
+    story_path: 'user_stories/login.md',
+    entry_path: 'prompts/login.prompt.md',
+    world: { blob: 'w'.repeat(6000), password: 'demo-password-secret' },
+    criteria: ['Valid credentials sign in cleanly'],
+    steps: [{ entry_path: 'prompts/login.prompt.md', input: { password: 'demo-password-secret' } }],
+  }, null, 2) + '\n');
+  initGitRepo(repo);
+
+  // P1-1, P2-1, P2-2: workspace.allows refusal, strict positive integer / leading-dash / binary / whitespace-only / backslash refusal
+  let calls = 0;
+  const neverCalled = async () => { calls += 1; return { code: 0, stdout: '', stderr: '' }; };
+  for (const [badIssue, expectedMsg] of [
+    ['private/secret-notes.md', /outside allowed workspace paths/],
+    ['0042', /positive integer without leading zeros/],
+    ['-1', /positive integer without leading zeros/],
+    ['+42', /positive integer without leading zeros/],
+    ['--json', /Invalid --issue value/],
+    ['prompts/binary.png', /binary files are refused/],
+    ['docs/empty.md', /Issue file is empty/],
+    ['docs\\issue-valid.md', /regular non-symlink file inside the repository/],
+  ]) {
+    const err = sink();
+    const code = await runCodexLint(
+      { cwd: repo, words: ['login'], issue: badIssue, env },
+      { stdout: sink(), stderr: err, runAgentProcess: neverCalled },
+    );
+    assert.equal(code, 2, `expected exit 2 for --issue ${badIssue}, got ${code}: ${err.text}`);
+    assert.match(err.text, expectedMsg, `unexpected stderr for --issue ${badIssue}: ${err.text}`);
+  }
+  assert.equal(calls, 0);
+
+  // P2-1 #4: Subdirectory `cwd` with `../nonexistent.md` reports "file not found" (not "path must stay inside the repository")
+  const subErr = sink();
+  const subMissingCode = await runCodexLint(
+    { cwd: join(repo, 'docs/sub'), words: ['login'], issue: '../nonexistent.md', env },
+    { stdout: sink(), stderr: subErr, runAgentProcess: neverCalled },
+  );
+  assert.equal(subMissingCode, 2);
+  assert.match(subErr.text, /file not found/);
+  assert.doesNotMatch(subErr.text, /must stay inside the repository/);
+
+  // Subdirectory cwd-relative valid `--issue ../issue-valid.md` succeeds AND P2-3 compact scenario summary preserves criteria/steps while redacting password!
+  const capturedInputs = [];
+  const okRunner = async (_cmd, args, opts) => {
+    capturedInputs.push(opts.input);
+    const outFile = args[args.indexOf('--output-last-message') + 1];
+    writeFileSync(outFile, JSON.stringify({
+      files: [
+        { path: 'prompts/login.prompt.md', verdict: 'pass', summary: 'Clear.', issues: [] },
+        { path: 'user_stories/login.md', verdict: 'pass', summary: 'Clear.', issues: [] },
+      ],
+      issue_coverage: { status: 'pass', summary: 'All covered.', missed: [] },
+    }));
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const subOkOut = sink(), subOkErr = sink();
+  const subOkCode = await runCodexLint(
+    { cwd: join(repo, 'docs/sub'), words: ['login'], issue: '../issue-valid.md', env },
+    { stdout: subOkOut, stderr: subOkErr, runAgentProcess: okRunner },
+  );
+  assert.equal(subOkCode, 0, subOkErr.text);
+  assert.match(capturedInputs[0], /Valid credentials sign in cleanly/, 'compact scenario criteria must survive when scenario contains password keys and large world block');
+  assert.ok(!capturedInputs[0].includes('demo-password-secret'), 'scenario password value must be redacted');
+  assert.ok(!capturedInputs[0].includes('w'.repeat(500)), 'compact scenario extraction must drop oversized world blob');
+
+  // P1-2: Fail-closed `parseIssueCoverage` on malformed `missed` (plain strings, empty objects, missing `missed`, invalid `status`, or `pass` + non-empty `missed`)
+  for (const [label, badCoverage] of [
+    ['string missed entry', { status: 'pass', summary: 'Mostly ok', missed: ['Missing rate limit'] }],
+    ['empty object missed entry', { status: 'pass', summary: 'Mostly ok', missed: [{}] }],
+    ['missing missed array', { status: 'pass', summary: 'All ok' }],
+    ['invalid status maybe', { status: 'maybe', summary: 'Unsure', missed: [] }],
+  ]) {
+    const runner = async (_cmd, args) => {
+      const outFile = args[args.indexOf('--output-last-message') + 1];
+      writeFileSync(outFile, JSON.stringify({
+        files: [
+          { path: 'prompts/login.prompt.md', verdict: 'pass', summary: 'Clear.', issues: [] },
+          { path: 'user_stories/login.md', verdict: 'pass', summary: 'Clear.', issues: [] },
+        ],
+        issue_coverage: badCoverage,
+      }));
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const err = sink();
+    const code = await runCodexLint(
+      { cwd: repo, words: ['login'], issue: '42', env },
+      { stdout: sink(), stderr: err, runAgentProcess: runner, readIssue: async () => ({ number: 42, title: 'Login', body: 'Check login.' }) },
+    );
+    assert.equal(code, 1, `expected fail-closed exit 1 for ${label}, got ${code}`);
+    assert.match(err.text, /omitted or returned invalid issue_coverage/);
+  }
+
+  // `status: "pass"` with valid non-empty `missed` MUST fail closed to status "fail" and exit 1
+  const passWithMissedRunner = async (_cmd, args) => {
+    const outFile = args[args.indexOf('--output-last-message') + 1];
+    writeFileSync(outFile, JSON.stringify({
+      files: [
+        { path: 'prompts/login.prompt.md', verdict: 'pass', summary: 'Clear.', issues: [] },
+        { path: 'user_stories/login.md', verdict: 'pass', summary: 'Clear.', issues: [] },
+      ],
+      issue_coverage: {
+        status: 'pass',
+        summary: 'Looks fine.',
+        missed: [{ requirement: 'Lockout rule', rule: 'issue-requirement-missed', message: 'Add lockout rule.' }],
+      },
+    }));
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const pwmOut = sink();
+  const pwmCode = await runCodexLint(
+    { cwd: repo, words: ['login'], issue: '42', json: true, env },
+    { stdout: pwmOut, stderr: sink(), runAgentProcess: passWithMissedRunner, readIssue: async () => ({ number: 42, title: 'Login', body: 'Check login + lockout.' }) },
+  );
+  assert.equal(pwmCode, 1);
+  assert.equal(JSON.parse(pwmOut.text).issue_coverage.status, 'fail');
+
+  // 0 selected files with `--issue` fails closed (exit 1)
+  const emptyRepoDir = join(rootTmp, 'empty-repo');
+  mkdirSync(emptyRepoDir, { recursive: true });
+  writeRepoFile(emptyRepoDir, 'docs/issue.md', '# Ask\nNeed feature.\n');
+  initGitRepo(emptyRepoDir);
+  const zeroOut = sink(), zeroErr = sink();
+  const zeroCode = await runCodexLint(
+    { cwd: emptyRepoDir, words: [], issue: 'docs/issue.md', env },
+    { stdout: zeroOut, stderr: zeroErr, runAgentProcess: neverCalled },
+  );
+  assert.equal(zeroCode, 1);
+  assert.match(zeroOut.text, /No Stories or prompts were evaluated/);
+
+  // P3-2: Linear fence parsing on unclosed ``` + 40,000 spaces stays fast (zero quadratic backtracking)
+  const slowReply = `\`\`\`json${' '.repeat(40000)}not valid json`;
+  const fastFenceRunner = async (_cmd, args) => {
+    const outFile = args[args.indexOf('--output-last-message') + 1];
+    writeFileSync(outFile, slowReply);
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const t0 = performance.now();
+  const fenceCode = await runCodexLint(
+    { cwd: repo, words: ['login'], env },
+    { stdout: sink(), stderr: sink(), runAgentProcess: fastFenceRunner },
+  );
+  const elapsedMs = performance.now() - t0;
+  assert.equal(fenceCode, 1);
+  assert.ok(elapsedMs < 1000, `unclosed fenced reply must stay strictly linear O(N), took ${elapsedMs.toFixed(1)}ms`);
+});

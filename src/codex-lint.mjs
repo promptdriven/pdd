@@ -1,4 +1,4 @@
-// Generated from prompts/cli/codex-lint.prompt.md (sha256: 5aa94bbb1992092cb2fc088c27903439a6820e3ac7ae175b04edb5fb26ac6ed8).
+// Generated from prompts/cli/codex-lint.prompt.md (sha256: 1ed2152f269526ebfe6b4c44eb13c324706fdf8b37b4711dd95c18019237db5a).
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -35,8 +35,9 @@ const CODEX_DISABLED_FEATURES = [
 const canonicalRepoPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
 
-function inspectAndReadSafeUtf8(realRoot, relPath, maxBytes = MAX_FILE_BYTES, { refuseSecret = false } = {}) {
+function inspectAndReadSafeUtf8(realRoot, relPath, maxBytes = MAX_FILE_BYTES, { refuseSecret = false, refuseBinary = false, policy = null } = {}) {
   if (!canonicalRepoPath(relPath)) return { status: 'unsafe', reason: 'path must stay inside the repository' };
+  if (policy && !workspace.allows(policy, relPath)) return { status: 'unsafe', reason: 'path is outside allowed workspace paths' };
   if (refuseSecret && isSecretPath(relPath)) return { status: 'unsafe', reason: 'secret file paths are refused' };
   const parts = relPath.split('/');
   let cur = realRoot;
@@ -72,7 +73,11 @@ function inspectAndReadSafeUtf8(realRoot, relPath, maxBytes = MAX_FILE_BYTES, { 
       if (!n) break;
       offset += n;
     }
-    return { status: 'ok', text: buf.subarray(0, offset).toString('utf8') };
+    const slice = buf.subarray(0, offset);
+    if (refuseBinary && slice.includes(0)) {
+      return { status: 'unsafe', reason: 'binary files are refused' };
+    }
+    return { status: 'ok', text: slice.toString('utf8') };
   } catch {
     return { status: 'unsafe', reason: 'file could not be read safely' };
   } finally {
@@ -307,10 +312,12 @@ export function groupCodexLintBatches(targetEntries, promptsByStory = new Map(),
 }
 
 function summarizeScenarioJson(scenarioPath, rawText, secrets) {
-  const redactedRaw = redactSecrets(String(rawText ?? ''), secrets);
-  let formatted = redactedRaw;
+  // Parse compact JSON structure BEFORE redacting secrets so auth/password/token keys in scenario JSON
+  // do not break JSON.parse and fall back to truncating large world/seed blocks.
+  const raw = String(rawText ?? '');
+  let formatted = raw;
   try {
-    const doc = JSON.parse(redactedRaw);
+    const doc = JSON.parse(raw);
     if (doc && typeof doc === 'object' && !Array.isArray(doc)) {
       const compact = {};
       if (typeof doc.story_path === 'string') compact.story_path = doc.story_path;
@@ -321,20 +328,33 @@ function summarizeScenarioJson(scenarioPath, rawText, secrets) {
       formatted = JSON.stringify(Object.keys(compact).length ? compact : doc, null, 2);
     }
   } catch {}
-  const bounded = formatted.length > MAX_SCENARIO_CHARS_PER_FILE
-    ? `${formatted.slice(0, MAX_SCENARIO_CHARS_PER_FILE)}\n... [truncated]`
-    : formatted;
+  const redacted = redactSecrets(formatted, secrets);
+  const bounded = redacted.length > MAX_SCENARIO_CHARS_PER_FILE
+    ? `${redacted.slice(0, MAX_SCENARIO_CHARS_PER_FILE)}\n... [truncated]`
+    : redacted;
   return { path: scenarioPath, summary: redactSecrets(bounded, secrets) };
 }
 
-function collectScenarioSummaries(storyPaths, scenariosByStory, realRoot, secrets) {
-  const scenarioPaths = new Set();
-  for (const storyPath of storyPaths) {
-    for (const sFile of scenariosByStory.get(storyPath) ?? []) scenarioPaths.add(sFile);
-  }
+function collectScenarioSummaries(storyPaths, scenariosByStory, realRoot, secrets, priorityStories = []) {
+  const orderedPaths = [];
+  const seen = new Set();
+  const addFor = stories => {
+    const bucket = new Set();
+    for (const storyPath of stories) {
+      for (const sFile of scenariosByStory.get(storyPath) ?? []) bucket.add(sFile);
+    }
+    for (const sFile of [...bucket].sort()) {
+      if (seen.has(sFile)) continue;
+      seen.add(sFile);
+      orderedPaths.push(sFile);
+    }
+  };
+  addFor(priorityStories);
+  addFor(storyPaths);
+
   const results = [];
   let totalChars = 0;
-  for (const scenarioPath of [...scenarioPaths].sort()) {
+  for (const scenarioPath of orderedPaths) {
     if (totalChars >= MAX_SCENARIO_TOTAL_CHARS) break;
     const raw = readSafeUtf8(realRoot, scenarioPath);
     if (typeof raw !== 'string') continue;
@@ -380,17 +400,16 @@ function collectOtherFilesOutline(allEntries, batchEntries, secrets) {
   return outlines;
 }
 
-async function resolveIssueContext({ issue, realRoot, cwdBase, env, secrets }, ports) {
+async function resolveIssueContext({ issue, realRoot, cwdBase, policy, env, secrets }, ports) {
   if (issue === undefined || issue === null) return { ok: true, issueContext: null };
   const raw = String(issue).trim();
   if (!raw || /[\x00-\x1f\x7f]/.test(raw)) {
     return { ok: false, exitCode: 2, error: 'Invalid --issue value. Use a positive issue number or an in-repo file path.' };
   }
 
-  if (/^\d+$/.test(raw)) {
-    const issueNum = Number(raw);
-    if (!Number.isSafeInteger(issueNum) || issueNum <= 0) {
-      return { ok: false, exitCode: 2, error: `Invalid --issue number: ${raw}. Use a positive integer or an in-repo file path.` };
+  if (/^[+-]?\d+$/.test(raw)) {
+    if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+      return { ok: false, exitCode: 2, error: `Invalid --issue number: ${raw}. Use a positive integer without leading zeros or an in-repo file path.` };
     }
     let payload;
     if (typeof ports.readIssue === 'function') {
@@ -442,6 +461,14 @@ async function resolveIssueContext({ issue, realRoot, cwdBase, env, secrets }, p
     };
   }
 
+  if (raw.startsWith('-')) {
+    return {
+      ok: false,
+      exitCode: 2,
+      error: `Invalid --issue value: ${raw}. Use a positive issue number or an in-repo file path (prefix leading-dash filenames with ./).`,
+    };
+  }
+
   if (raw.includes('\\')) {
     return { ok: false, exitCode: 2, error: `Issue file must be a regular non-symlink file inside the repository: ${raw}.` };
   }
@@ -450,11 +477,19 @@ async function resolveIssueContext({ issue, realRoot, cwdBase, env, secrets }, p
   const relFromRoot = isAbsolute(raw) ? '' : raw.replace(/^\.\//, '');
   const candidates = [];
   if (relFromCwd) candidates.push(relFromCwd);
-  if (relFromRoot && relFromRoot !== relFromCwd) candidates.push(relFromRoot);
+  // Only fall back to repo-root-relative path when it differs and is itself canonical (so `../missing.md` from a
+  // subdirectory reports "file not found" from relFromCwd instead of failing as non-canonical on relFromRoot).
+  if (relFromRoot && relFromRoot !== relFromCwd && (!canonicalRepoPath(relFromCwd) || canonicalRepoPath(relFromRoot))) {
+    candidates.push(relFromRoot);
+  }
 
   let lastReason = 'not found inside the repository';
   for (const candidate of candidates) {
-    const readRes = inspectAndReadSafeUtf8(realRoot, candidate, MAX_ISSUE_FILE_BYTES, { refuseSecret: true });
+    const readRes = inspectAndReadSafeUtf8(realRoot, candidate, MAX_ISSUE_FILE_BYTES, {
+      refuseSecret: true,
+      refuseBinary: true,
+      policy,
+    });
     if (readRes.status === 'ok') {
       const trimmed = readRes.text.trim();
       if (!trimmed) {
@@ -607,12 +642,26 @@ export function buildCodexLintPrompt(
   return lines.join('\n');
 }
 
+function extractFirstFencedBlockLinear(text) {
+  const open = text.indexOf('```');
+  if (open < 0) return null;
+  let bodyStart = open + 3;
+  // Skip optional `json` info-string tag and whitespace linearly.
+  if (text.slice(bodyStart, bodyStart + 4).toLowerCase() === 'json') bodyStart += 4;
+  while (bodyStart < text.length && (text[bodyStart] === ' ' || text[bodyStart] === '\t' || text[bodyStart] === '\r' || text[bodyStart] === '\n')) {
+    bodyStart++;
+  }
+  const close = text.indexOf('```', bodyStart);
+  if (close < 0) return null;
+  return text.slice(bodyStart, close).trim();
+}
+
 function parseCodexVerdictJson(rawText) {
   const text = String(rawText ?? '').trim();
   if (!text) return null;
   const candidates = [text];
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
-  if (fenced) candidates.unshift(fenced[1].trim());
+  const fenced = extractFirstFencedBlockLinear(text);
+  if (fenced) candidates.unshift(fenced);
   const firstBrace = text.indexOf('{');
   const lastBrace = text.lastIndexOf('}');
   if (firstBrace >= 0 && lastBrace > firstBrace) {
@@ -634,31 +683,25 @@ function parseIssueCoverage(parsed, redact) {
   if (!ic || typeof ic !== 'object' || Array.isArray(ic)) return null;
   const rawStatus = typeof ic.status === 'string' ? ic.status.trim().toLowerCase() : '';
   if (rawStatus !== 'pass' && rawStatus !== 'fail') return null;
-  if (ic.missed !== undefined && !Array.isArray(ic.missed)) return null;
+  if (!Array.isArray(ic.missed)) return null;
 
-  const missed = Array.isArray(ic.missed)
-    ? ic.missed
-      .filter(item => item && typeof item === 'object' && (
-        (typeof item.requirement === 'string' && item.requirement.trim())
-        || (typeof item.message === 'string' && item.message.trim())
-      ))
-      .map(item => {
-        const req = typeof item.requirement === 'string' && item.requirement.trim()
-          ? item.requirement.trim()
-          : item.message.trim();
-        const msg = typeof item.message === 'string' && item.message.trim()
-          ? item.message.trim()
-          : `Add coverage for: ${req}`;
-        const rule = typeof item.rule === 'string' && item.rule.trim()
-          ? item.rule.trim()
-          : 'issue-requirement-missed';
-        return {
-          requirement: redact(req),
-          rule: redact(rule),
-          message: redact(msg),
-        };
-      })
-    : [];
+  const missed = [];
+  for (const item of ic.missed) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const rawReq = typeof item.requirement === 'string' ? item.requirement.trim() : '';
+    const rawMsg = typeof item.message === 'string' ? item.message.trim() : '';
+    if (!rawReq && !rawMsg) return null;
+    const req = rawReq || rawMsg;
+    const msg = rawMsg || `Add coverage for: ${req}`;
+    const rule = typeof item.rule === 'string' && item.rule.trim()
+      ? item.rule.trim()
+      : 'issue-requirement-missed';
+    missed.push({
+      requirement: redact(req),
+      rule: redact(rule),
+      message: redact(msg),
+    });
+  }
 
   const status = rawStatus === 'fail' || missed.length > 0 ? 'fail' : 'pass';
   const rawSummary = typeof ic.summary === 'string' && ic.summary.trim()
@@ -757,7 +800,7 @@ export async function runCodexLint(
     return 2;
   }
 
-  const issueResolution = await resolveIssueContext({ issue, realRoot, cwdBase, env, secrets }, ports);
+  const issueResolution = await resolveIssueContext({ issue, realRoot, cwdBase, policy, env, secrets }, ports);
   if (!issueResolution.ok) {
     writeErr(issueResolution.error);
     return issueResolution.exitCode;
@@ -794,9 +837,6 @@ export async function runCodexLint(
 
   if (targetEntries.length > 0) {
     const batches = groupCodexLintBatches(targetEntries, resolved.promptsByStory, FILES_PER_BATCH);
-    const allScenarios = issueContext
-      ? collectScenarioSummaries(selectedStories, resolved.scenariosByStory, realRoot, secrets)
-      : [];
     const tempDir = mkdtempSync(join(tmpdir(), 'pdd-codex-lint-'));
     try {
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
@@ -808,6 +848,10 @@ export async function runCodexLint(
         const batchTimeoutMs = Math.min(MAX_TIMER_MS, Math.max(1000, remainingMs));
         const batch = batches[batchIndex];
         const outFile = resolve(tempDir, `last-message-${batchIndex}.json`);
+        const batchStories = batch.entries.filter(e => e.kind === 'story').map(e => e.path);
+        const batchScenarios = issueContext
+          ? collectScenarioSummaries(selectedStories, resolved.scenariosByStory, realRoot, secrets, batchStories)
+          : [];
         const otherFilesOutline = issueContext && batches.length > 1
           ? collectOtherFilesOutline(targetEntries, batch.entries, secrets)
           : [];
@@ -815,7 +859,7 @@ export async function runCodexLint(
           secrets,
           pairs: batch.pairs,
           issueContext,
-          scenarios: allScenarios,
+          scenarios: batchScenarios,
           otherFilesOutline,
         });
         const args = [
