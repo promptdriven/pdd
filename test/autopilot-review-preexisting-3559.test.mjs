@@ -776,3 +776,59 @@ test('#3559 (10): Round-3 adversarial regressions (markdown/punct prefix wrapper
   assert.equal(oscRes.promoted.length, 1, 'unterminated OSC flood still catches trailing diff location');
   assert.ok(elapsedMs < 500, `unterminated OSC stripping must stay linear O(N), took ${elapsedMs.toFixed(1)}ms`);
 });
+
+test('#3559 (11): Round-4 adversarial regressions (__bold__/_a/_b wrappers, %20/escaped-space + /../, linear 40k a/../, comma-chained lib/LICENSE outside diff)', () => {
+  const diff = [
+    'diff --git a/src/auth.mjs b/src/auth.mjs',
+    '--- a/src/auth.mjs',
+    '+++ b/src/auth.mjs',
+    '@@ -20,5 +20,5 @@',
+    '+change();',
+  ].join('\n');
+  const baseScope = parseUnifiedDiffHunks(diff);
+  const scopeWithRepo = {
+    ...baseScope,
+    repoFiles: new Set(['src/auth.mjs', 'src/untouched.mjs', 'lib/untouched.mjs', 'LICENSE', '_other/src/auth.mjs']),
+  };
+
+  // All Round-4 bypasses must promote BOTH with and without repoFiles
+  const r4Bypasses = [
+    'P1 src/untouched.mjs:1 and __src/auth.mjs__ breaks login',
+    'P1 src/untouched.mjs:1 and __./src/auth.mjs__ breaks login',
+    'P1 src/untouched.mjs:1 and ___src/auth.mjs___ breaks login',
+    'P1 src/untouched.mjs:1 and [__src/auth.mjs__](https://example.com) breaks login',
+    'P1 src/untouched.mjs:1 and __src/auth.mjs__:22',
+    'P1 src/untouched.mjs:1 and _a/src/auth.mjs_ breaks login',
+    'P1 src/untouched.mjs:1 and _b/src/auth.mjs_ breaks login',
+    'P1 src/untouched.mjs:1 and _b/src/auth.mjs_:22',
+    'P1 src/untouched.mjs:1 and [bug](src/my%20dir/../auth.mjs#L22)',
+    'P1 src/untouched.mjs:1 and [bug](src/my%20dir/../auth.mjs:22)',
+    'P1 src/untouched.mjs:1 and src/my\\ dir/../auth.mjs:22',
+    'P1 src/untouched.mjs:1 and src/auth.mjs:22foo malformed suffix fails closed',
+  ];
+  for (const [label, sc] of [['with repoFiles', scopeWithRepo], ['without repoFiles', baseScope]]) {
+    const res = guardPreExistingFindings(r4Bypasses, sc);
+    assert.equal(res.promoted.length, r4Bypasses.length, `all ${r4Bypasses.length} R4 bypasses must promote (${label}); kept=${JSON.stringify(res.preExisting)}`);
+    assert.deepEqual(res.preExisting, []);
+  }
+
+  // Legitimate comma-chained outside-diff findings starting with l/L and `_other/` must NOT false-positive
+  const validOutside = [
+    'P2 src/auth.mjs:5,lib/untouched.mjs:1 two outside-diff bugs',
+    'P2 src/auth.mjs:5,LICENSE:1 outside-diff plus extensionless L-file',
+    'P2 _other/src/auth.mjs:5 underscore-prefixed unrelated folder',
+  ];
+  for (const [label, sc] of [['with repoFiles', scopeWithRepo], ['without repoFiles', baseScope]]) {
+    const res = guardPreExistingFindings(validOutside, sc);
+    assert.deepEqual(res.promoted, [], `valid outside-diff findings must stay non-blocking (${label}): ${JSON.stringify(res.promoted)}`);
+    assert.equal(res.preExisting.length, validOutside.length);
+  }
+
+  // Strictly linear O(N) runtime on 40,000 repeated `a/../` segments
+  const t0 = performance.now();
+  const deepParent = `P1 src/untouched.mjs:1 src/${'a/../'.repeat(40000)}auth.mjs:22`;
+  const deepRes = guardPreExistingFindings([deepParent], scopeWithRepo);
+  const elapsedMs = performance.now() - t0;
+  assert.equal(deepRes.promoted.length, 1, '40k a/../ traversal still resolves to changed hunk');
+  assert.ok(elapsedMs < 500, `resolveInteriorParentSegments must stay linear O(N), took ${elapsedMs.toFixed(1)}ms`);
+});

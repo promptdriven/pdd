@@ -3995,46 +3995,145 @@ function isPathWordChar(ch) {
 
 function isPlainUnrelatedRelativePrefix(prefix) {
   // Returns true ONLY for a plain unrelated repo-relative directory prefix like `other/` or `packages/web/`.
-  // Rejects `/`, `./`, `../`, `~/`, `a/`, `b/`, markdown/punctuation wrappers (`*`, `|`, leading `-`, `_./`),
+  // Rejects `/`, `./`, `../`, `~/`, `a/`, `b/`, markdown/punctuation wrappers (`*`, `|`, leading `-`, `_./`, `_a/`, `_b/`),
   // URLs (`https://`, `file://`), Windows drives (`C:/`), attached prefixes (`see:/...`), `//`, or `.`/`..`.
   if (!prefix || !prefix.endsWith('/')) return false;
   if (prefix === 'a/' || prefix === 'b/') return false;
+  // Reject underscore-wrapped git/relative prefixes like `_a/`, `__b/`, `_./`, `__./`.
+  let strippedLead = prefix;
+  let u = 0;
+  while (u < strippedLead.length && strippedLead[u] === '_') u++;
+  if (u > 0) {
+    const rest = strippedLead.slice(u);
+    if (rest === 'a/' || rest === 'b/' || rest.startsWith('./') || rest.startsWith('../') || rest.startsWith('/') || rest.startsWith('~/')) {
+      return false;
+    }
+  }
   const segs = prefix.slice(0, -1).split('/');
   if (!segs.length) return false;
   return segs.every(seg => /^[A-Za-z0-9][A-Za-z0-9._-]*$|^_[A-Za-z0-9][A-Za-z0-9._-]*$/.test(seg) && seg !== '.' && seg !== '..');
 }
 
 function resolveInteriorParentSegments(text) {
-  // Linearly resolve interior `seg/../` path traversal segments (e.g. `src/foo/../auth.mjs` -> `src/auth.mjs`)
-  // while leaving leading `../` intact so prefix checks still catch parent-relative references.
-  let s = text;
-  let searchFrom = 0;
-  while (searchFrom < s.length) {
-    const idx = s.indexOf('/../', searchFrom);
-    if (idx < 0) break;
-    let segStart = idx;
-    while (segStart > 0 && !' \t`"\'([<{,;=*|:/'.includes(s[segStart - 1])) segStart--;
-    const seg = s.slice(segStart, idx);
-    if (seg && seg !== '.' && seg !== '..') {
-      s = s.slice(0, segStart) + s.slice(idx + 4);
-      searchFrom = Math.max(0, segStart - 4);
-    } else {
-      searchFrom = idx + 4;
+  // Strictly linear O(N) single-pass resolution of interior `/./` and `seg/../` segments within slash-separated path runs
+  // (e.g. `src/foo/../auth.mjs` -> `src/auth.mjs`) while leaving leading `./` and `../` intact for prefix checks.
+  if (!text.includes('/.') && !text.includes('/..')) return text;
+  const delims = ' \t`"\'([<{,;=*|:';
+  const out = [];
+  let i = 0;
+  while (i < text.length) {
+    let start = i;
+    while (i < text.length && delims.includes(text[i])) i++;
+    if (i > start) out.push(text.slice(start, i));
+    start = i;
+    while (i < text.length && !delims.includes(text[i])) i++;
+    if (i > start) {
+      const run = text.slice(start, i);
+      if (!run.includes('/.') && !run.includes('/..')) {
+        out.push(run);
+      } else {
+        const stack = [];
+        for (const seg of run.split('/')) {
+          if (seg === '.' && stack.length > 0) {
+            continue;
+          }
+          if (seg === '..' && stack.length > 0 && stack[stack.length - 1] !== '' && stack[stack.length - 1] !== '.' && stack[stack.length - 1] !== '..') {
+            stack.pop();
+          } else {
+            stack.push(seg);
+          }
+        }
+        out.push(stack.join('/'));
+      }
     }
   }
-  return s;
+  return out.join('');
 }
 
 function canonicalizeTextForDiffScan(cleanText) {
-  // Canonicalize `%20`/`%2F`/`%2E`/`%5C`, shell-escaped `\ `, Windows `\`, repeated `//`, `/./`, and interior `seg/../` linearly.
-  let s = decodeCommonPathPercentEscapes(cleanText).replaceAll('\\ ', ' ').replaceAll('\\', '/');
-  let collapsed = '';
+  // Keep escaped spaces (`\ ` and `%20`) intact as `%20` during `/../` resolution so `src/my%20dir/../auth.mjs`
+  // and `src/my\ dir/../auth.mjs` resolve cleanly, then expand `%20` -> `' '` at the end. All passes are O(N).
+  const s = cleanText
+    .replaceAll('\\ ', '%20')
+    .replaceAll('%2F', '/').replaceAll('%2f', '/')
+    .replaceAll('%2E', '.').replaceAll('%2e', '.')
+    .replaceAll('%5C', '/').replaceAll('%5c', '/')
+    .replaceAll('\\', '/');
+  const collapsedParts = [];
+  let prevSlash = false;
   for (let i = 0; i < s.length; i++) {
-    if (s[i] === '/' && collapsed.endsWith('/')) continue;
-    collapsed += s[i];
+    const ch = s[i];
+    if (ch === '/' && prevSlash) continue;
+    prevSlash = ch === '/';
+    collapsedParts.push(ch);
   }
-  while (collapsed.includes('/./')) collapsed = collapsed.replaceAll('/./', '/');
-  return resolveInteriorParentSegments(collapsed);
+  return resolveInteriorParentSegments(collapsedParts.join('')).replaceAll('%20', ' ');
+}
+
+function isDigitChar(ch) {
+  if (!ch) return false;
+  const c = ch.charCodeAt(0);
+  return c >= 48 && c <= 57;
+}
+
+function readSingleLineRangeAtomEnd(text, pos) {
+  let cur = pos;
+  if (cur < text.length && (text[cur] === 'L' || text[cur] === 'l')) cur++;
+  const d1 = cur;
+  while (cur < text.length && isDigitChar(text[cur])) cur++;
+  if (cur === d1) return -1;
+  // Optional `:col` (only if followed by digits)
+  if (cur + 1 < text.length && text[cur] === ':' && isDigitChar(text[cur + 1])) {
+    cur++;
+    while (cur < text.length && isDigitChar(text[cur])) cur++;
+  }
+  // Optional `-end` / `–end` range
+  if (cur < text.length && (text[cur] === '-' || text[cur] === '–')) {
+    let next = cur + 1;
+    if (next < text.length && (text[next] === 'L' || text[next] === 'l')) next++;
+    const d2 = next;
+    while (next < text.length && isDigitChar(text[next])) next++;
+    if (next > d2) {
+      cur = next;
+      if (cur + 1 < text.length && text[cur] === ':' && isDigitChar(text[cur + 1])) {
+        cur++;
+        while (cur < text.length && isDigitChar(text[cur])) cur++;
+      }
+    }
+  }
+  const after = cur < text.length ? text[cur] : '';
+  if (after && (isPathWordChar(after) || after === '/')) return -1;
+  return cur;
+}
+
+function readLineRangeSuffixAt(text, startPos) {
+  const firstEnd = readSingleLineRangeAtomEnd(text, startPos);
+  if (firstEnd < 0) return null;
+  let endPos = firstEnd;
+  // Consume additional comma-separated line atoms (e.g. `,22`, `,L25-L28`) without swallowing a comma-chained filename (e.g. `,lib/foo.mjs:1`).
+  while (endPos < text.length && text[endPos] === ',') {
+    const nextEnd = readSingleLineRangeAtomEnd(text, endPos + 1);
+    if (nextEnd < 0) break;
+    endPos = nextEnd;
+  }
+  const ranges = parseLineRangeSuffix(stripTokenWrappers(text.slice(startPos, endPos)));
+  return ranges ? { ranges, endPos } : null;
+}
+
+function isUnderscoreWrapperBefore(text, idx) {
+  if (idx <= 0 || text[idx - 1] !== '_') return false;
+  let u = idx - 1;
+  while (u >= 0 && text[u] === '_') u--;
+  if (u < 0) return true;
+  return !isPathWordChar(text[u]) && text[u] !== '/';
+}
+
+function isUnderscoreWrapperAfter(text, from) {
+  if (from >= text.length || text[from] !== '_') return false;
+  let u = from;
+  while (u < text.length && text[u] === '_') u++;
+  if (u >= text.length) return true;
+  return !isPathWordChar(text[u]) && text[u] !== '/';
 }
 
 function scanDiffPathMentions(textSlash, diffPaths, { recordSpaceSpans = false, repoFiles = null } = {}) {
@@ -4051,12 +4150,10 @@ function scanDiffPathMentions(textSlash, diffPaths, { recordSpaceSpans = false, 
       if (idx < 0) break;
       from = idx + diffPath.length;
       const before = idx > 0 ? textSlash[idx - 1] : '';
-      const before2 = idx > 1 ? textSlash[idx - 2] : '';
       const after = from < textSlash.length ? textSlash[from] : '';
-      const after2 = from + 1 < textSlash.length ? textSlash[from + 1] : '';
-      // Avoid substring matches like `src/auth.mjs.bak` or `my_src/auth.mjs`, while allowing Markdown italic `_..._` wrappers.
-      if (isPathWordChar(before) && !(before === '_' && !isPathWordChar(before2) && before2 !== '/')) continue;
-      if (after && (isPathWordChar(after) || after === '/') && !(after === '_' && !isPathWordChar(after2) && after2 !== '/')) continue;
+      // Avoid substring matches like `src/auth.mjs.bak` or `my_src/auth.mjs`, while allowing Markdown `_..._`, `__...__`, `___...___` wrappers.
+      if (isPathWordChar(before) && !isUnderscoreWrapperBefore(textSlash, idx)) continue;
+      if (after && (isPathWordChar(after) || after === '/') && !isUnderscoreWrapperAfter(textSlash, from)) continue;
       // If preceded by `/`, skip ONLY a plain unrelated repo-relative directory prefix (and when repoFiles is known,
       // only when `prefix + diffPath` actually exists in repoFiles).
       if (before === '/') {
@@ -4073,11 +4170,11 @@ function scanDiffPathMentions(textSlash, diffPaths, { recordSpaceSpans = false, 
       if (pos < textSlash.length && (textSlash[pos] === ':' || (textSlash[pos] === '#' && (textSlash[pos + 1] === 'L' || textSlash[pos + 1] === 'l')))) {
         let startPos = pos + 1;
         while (startPos < textSlash.length && '`"\'*'.includes(textSlash[startPos])) startPos++;
-        let endPos = startPos;
-        while (endPos < textSlash.length && '0123456789Ll:,-–'.includes(textSlash[endPos])) endPos++;
-        const rawSuffix = stripTokenWrappers(textSlash.slice(startPos, endPos));
-        ranges = parseLineRangeSuffix(rawSuffix);
-        if (ranges) spanEnd = endPos;
+        const parsed = readLineRangeSuffixAt(textSlash, startPos);
+        if (parsed) {
+          ranges = parsed.ranges;
+          spanEnd = parsed.endPos;
+        }
       } else {
         // Support `diffPath line 42` / `diffPath (lines 42-48)` with a bounded slice.
         let tailPos = pos;
