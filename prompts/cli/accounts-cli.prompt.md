@@ -27,7 +27,7 @@ or calls exist.
   aligned table (`*`, `LABEL`, `PROVIDER`, `ACCESS`, `5H`, `7D`, `STATE`:
   `ready | cooling | draining | paused | reauth_required`, `REFRESH`: last refresh and expiry summary)
   where `5H` and `7D` show remaining quota as `XX% left (RESET)` (or `-` when `null`),
-  followed by any `reauth_required` re-auth hints and `pending_invites`. `--json` prints structured JSON
+  followed by any `reauth_required` re-auth hints and non-redundant `pending_invites` (omitting any pending invite in human-readable output whose `account_id` is already present in `accounts`). `--json` prints structured JSON
   with zero secrets, preserving `five_hour_used_percent` and `weekly_used_percent` alongside
   `five_hour_left_percent` and `weekly_left_percent`.
 - `pdd accounts status [--json]`: Inspect live or cached Cloud accounts state (failing open to
@@ -51,7 +51,7 @@ or calls exist.
   authenticated email local-part when `--label` is omitted (or `<prefix>-1`, `<prefix>-2`, ... when
   `--label PREFIX` is supplied), offer `[R]etry` / `[s]kip` on transient `POST /v1/accounts` upload
   errors without repeating OAuth login, detect server `already_enrolled` responses and session duplicate
-  `account_id`s without advancing the counter, treat `SIGINT` (exit code `130` or `SIGINT` signal)
+  `account_id`s without advancing the counter (noting on in-place credential refresh that existing shares remain active), treat `SIGINT` (exit code `130` or `SIGINT` signal)
   as a clean loop exit (`exitCode: 0`), and prompt `Enroll another <provider> account? [Y/n] `.
 - `pdd accounts import [--provider codex|claude] [--from PATH] [--label NAME] [--replace] [--with USER|ORG/TEAM[,...]]`:
   Validate `--with` targets upfront, refuse symlinked `--from` paths and symlinked parent directories (`lstatSync`), allow a dotfile-symlinked `auth.json` only when `realpathSync` resolves to a regular file outside `pddManagedCodexHome(env)`, read `~/.codex/auth.json` (or `PATH` / `PATH/auth.json` when
@@ -65,7 +65,7 @@ or calls exist.
   (sorted by soonest `weekly_reset_at`) via `POST /v1/accounts/lease`, and show the remaining `5h`/`7d` `XX% left` summary.
 - `pdd accounts codex [ARGS...]`: Sync and lease a healthy Codex account into `pddManagedCodexHome(env)`
   (failing open to plain `codex` when Cloud accounts are unenrolled or offline without an active lease),
-  pass non-interactive Codex subcommands straight through with `CODEX_HOME` set to `pddManagedCodexHome(env)`,
+  pass non-interactive Codex subcommands straight through with `CODEX_HOME` set to `pddManagedCodexHome(env)` (forwarding child stdout and stderr cleanly in non-TTY runs),
   and launch interactive `codex` under the live PTY/session supervisor (with `SIGWINCH` resize forwarding, signal/exit TTY restoration, `os.killpg` process-group cleanup, `cwd`-verified rollout session pinning, and structured rollout JSONL / Cloud usage quota monitoring), reporting usage fail-open on quota exhaustion, rotating `pddManagedCodexHome(env)/auth.json` to the
   next ready Codex lease (displaying the rotated account's `5h`/`7d` `XX% left` summary), and relaunching `codex` with `initialArgs` when a turn-0 rotation occurs before session rollout creation on a non-`resume` launch (including `fork`) or `codex resume` with preserved flags (including `-i` / `--image`) and the pinned session ID once created (or `--last` for `resume` without a session ID).
 - `pdd accounts sync [--provider codex|claude] [--quiet] [--timeout-ms MS]`:

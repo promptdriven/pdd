@@ -2695,3 +2695,94 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   assert.equal(existsSync(clSettingsPath), false, 'accept must never mutate ~/.claude/settings.json');
   assert.match(JSON.parse(readFileSync(managedClSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
 });
+
+test('#3567 & #3539: in-place refresh preserves shares message, idempotent already_shared share, human list hides redundant pending invites, and non-TTY codex forwards stdout/stderr', async t => {
+  const cloud = await createPoolGatewayServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_cx_refresh_1',
+        label: 'cx-refresh',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: true,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 10,
+        five_hour_reset_at: '2026-11-18T02:00:00Z',
+        weekly_used_percent: 20,
+        weekly_reset_at: '2026-11-23T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+  const origEnroll = cloud.state.accounts[0];
+
+  // 1. In-place credential refresh clarifies that existing shares remain active.
+  const cxDir = join(sb.root, 'cx-src');
+  mkdirSync(cxDir, { recursive: true });
+  writeFileSync(join(cxDir, 'auth.json'), JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+      refresh_token: 'rt_refresh_01',
+      id_token: makeJwt({ email: 'owner-refresh@example.com' }),
+      account_id: 'acc-refresh-1',
+    },
+  }));
+  const reCx = await invokeCli(['accounts', 'import', '--provider', 'codex', '--from', cxDir, '--label', 'cx-refresh'], sb, {
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/v1/accounts') && (init?.method || 'GET') === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ account: origEnroll, already_enrolled: true }),
+        };
+      }
+      return fetch(url, init);
+    },
+  });
+  assert.equal(reCx.exit, 0, reCx.stderr);
+  assert.match(reCx.stdout, /Already enrolled as cx-refresh — refreshed credentials\. Existing shares remain active\./);
+
+  // 2. Idempotent server already_shared=true response on `pdd accounts share` reports clearly without expecting an invite ID.
+  const shareRes = await invokeCli(['accounts', 'share', 'cx-refresh', '--with', 'teammate'], sb, {
+    resolveGithubUser: async login => ({ login, id: 4242, type: 'User' }),
+    fetch: async (url, init) => {
+      if (String(url).includes('/share') && (init?.method || 'GET') === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ account: origEnroll, invite: null, invite_id: null, already_shared: true }),
+        };
+      }
+      return fetch(url, init);
+    },
+  });
+  assert.equal(shareRes.exit, 0, shareRes.stderr);
+  assert.match(shareRes.stdout, /already shared with teammate/i);
+
+  // 3. `pdd accounts list` human-readable output hides redundant pending invites for accounts already in `accounts`,
+  //    while `--json` preserves the raw API `pending_invites` array.
+  cloud.state.pendingInvites.push(
+    { invite_id: 'inv_redundant_1', account_id: origEnroll.account_id, label: 'cx-refresh', provider: 'codex', owner_login: 'owner' },
+    { invite_id: 'inv_fresh_2', account_id: 'acc_brand_new_99', label: 'cx-new', provider: 'codex', owner_login: 'other-owner' },
+  );
+  const listHuman = await invokeCli(['accounts', 'list'], sb);
+  assert.equal(listHuman.exit, 0, listHuman.stderr);
+  assert.doesNotMatch(listHuman.stdout, /inv_redundant_1/, 'redundant invite must be hidden in human output');
+  assert.match(listHuman.stdout, /inv_fresh_2/, 'non-redundant pending invite must still be shown');
+  const listJson = await invokeCli(['accounts', 'list', '--json'], sb);
+  assert.equal(listJson.exit, 0, listJson.stderr);
+  const parsedJson = JSON.parse(listJson.stdout);
+  assert.equal(parsedJson.pending_invites.some(i => i.invite_id === 'inv_redundant_1'), true);
+  assert.equal(parsedJson.pending_invites.some(i => i.invite_id === 'inv_fresh_2'), true);
+
+  // 4. Non-TTY `pdd accounts codex` (runPlainCodexOnce) forwards child stdout and stderr cleanly!
+  const codexRes = await invokeCli(['accounts', 'codex', '--version'], sb, {
+    run: async (_cmd, _args) => ({ code: 0, stdout: 'codex-cli 0.170.0\n', stderr: 'warn-line\n' }),
+  });
+  assert.equal(codexRes.exit, 0, codexRes.stderr);
+  assert.equal(codexRes.stdout, 'codex-cli 0.170.0\n');
+  assert.equal(codexRes.stderr, 'warn-line\n');
+});

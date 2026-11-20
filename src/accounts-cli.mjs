@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 9738776adbae5cc9f22d83d94edbbf6145d88452622837db6da6fecec569141e).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: c28d86de64b0de9aecdb9b3d431bce86f89918728ca329d9aa5b52526813510a).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -465,10 +465,14 @@ function renderAccountsTable(accounts, pendingInvites, activeByProvider, nowMs =
       }
     }
   }
-  if (Array.isArray(pendingInvites) && pendingInvites.length > 0) {
+  const listedIds = new Set(accounts.map(acc => acc?.account_id).filter(Boolean));
+  const visiblePendingInvites = Array.isArray(pendingInvites)
+    ? pendingInvites.filter(inv => !(inv?.account_id && listedIds.has(inv.account_id)))
+    : [];
+  if (visiblePendingInvites.length > 0) {
     lines.push('');
     lines.push('Pending share invites:');
-    for (const inv of pendingInvites) {
+    for (const inv of visiblePendingInvites) {
       lines.push(`  ${inv.invite_id}  ${inv.label ?? '-'}  ${inv.provider ?? '-'}  from ${inv.owner_login ?? 'unknown'}  (accept: pdd accounts accept ${inv.invite_id})`);
     }
   }
@@ -1545,12 +1549,16 @@ async function applySharePayloadsToAccounts(accounts, sharePayloads, { cwd, env,
         }
       }
       if (uidKey) existingKeys.add(uidKey);
-      const inviteId = res?.already_shared === true ? null : (res?.invite?.invite_id ?? res?.invite_id ?? null);
+      const serverAlreadyShared = Boolean(
+        res?.already_shared === true
+        || (item?.body?.github_login && !res?.invite && !res?.invite_id),
+      );
+      const inviteId = serverAlreadyShared ? null : (res?.invite?.invite_id ?? res?.invite_id ?? null);
       notes.push({
         label: account.label ?? account.account_id,
         display: item.display,
         inviteId,
-        alreadyShared: Boolean(res?.already_shared === true),
+        alreadyShared: serverAlreadyShared,
       });
     }
   }
@@ -2253,7 +2261,7 @@ async function enrollSingleIteration(mode, {
           label: finalLabel,
           email,
           shareNotes,
-          message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
+          message: `Already enrolled as ${finalLabel} — refreshed credentials. Existing shares remain active.${shareSuffix}`,
         };
       }
       const identityNote = email ? `${email} -> "${finalLabel}", ` : '';
@@ -2382,7 +2390,7 @@ async function enrollSingleIteration(mode, {
       account: acc,
       label: finalLabel,
       shareNotes,
-      message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
+      message: `Already enrolled as ${finalLabel} — refreshed credentials. Existing shares remain active.${shareSuffix}`,
     };
   }
   return {
@@ -4059,7 +4067,7 @@ async function runSingleSupervisedCodexTurn({
   return runWithChild(false);
 }
 
-async function runPlainCodexOnce(args, { cwd, env, stdin, stdout }, ports = {}) {
+async function runPlainCodexOnce(args, { cwd, env, stdin, stdout, stderr }, ports = {}) {
   if (typeof ports.spawnCodexPty === 'function') {
     const res = await ports.spawnCodexPty({
       command: 'codex',
@@ -4076,6 +4084,12 @@ async function runPlainCodexOnce(args, { cwd, env, stdin, stdout }, ports = {}) 
   }
   if (typeof ports.run === 'function') {
     const res = await ports.run('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
+    if (typeof res?.stdout === 'string' && res.stdout) {
+      try { stdout?.write?.(res.stdout); } catch {}
+    }
+    if (typeof res?.stderr === 'string' && res.stderr) {
+      try { stderr?.write?.(res.stderr); } catch {}
+    }
     return { exitCode: res?.code ?? 0, message: '' };
   }
   if (stdin?.isTTY && stdout?.isTTY) {
@@ -4083,6 +4097,12 @@ async function runPlainCodexOnce(args, { cwd, env, stdin, stdout }, ports = {}) 
     return { exitCode: res.signal === 'SIGINT' ? 130 : (res.status ?? 1), message: '' };
   }
   const res = await runAgentProcess('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
+  if (typeof res?.stdout === 'string' && res.stdout) {
+    try { stdout?.write?.(res.stdout); } catch {}
+  }
+  if (typeof res?.stderr === 'string' && res.stderr) {
+    try { stderr?.write?.(res.stderr); } catch {}
+  }
   return { exitCode: res?.code ?? 0, message: '' };
 }
 
@@ -4174,12 +4194,12 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
     if (fallbackEnv.CODEX_HOME && resolve(fallbackEnv.CODEX_HOME) === resolve(expectedManagedHome)) {
       delete fallbackEnv.CODEX_HOME;
     }
-    return runPlainCodexOnce(initialArgs, { cwd, env: fallbackEnv, stdin: activeStdin, stdout: activeStdout }, ports);
+    return runPlainCodexOnce(initialArgs, { cwd, env: fallbackEnv, stdin: activeStdin, stdout: activeStdout, stderr: activeStderr }, ports);
   }
 
   if (!invocation.interactive) {
     const execEnv = buildCodexExecutionEnv(env, managedHome);
-    return runPlainCodexOnce(initialArgs, { cwd, env: execEnv, stdin: activeStdin, stdout: activeStdout }, ports);
+    return runPlainCodexOnce(initialArgs, { cwd, env: execEnv, stdin: activeStdin, stdout: activeStdout, stderr: activeStderr }, ports);
   }
 
   const userCodexHome = localCodexHome({ ...env, CODEX_HOME: '' });
