@@ -2796,7 +2796,6 @@ test('#3567 & #3539: in-place refresh preserves shares message, idempotent alrea
   assert.equal(sigRes.exit, 143, 'signal exit must never map to 0');
 
   // 5. Real subprocess non-TTY path (managed `exec` passthrough + unenrolled fallback) streams piped stdin, stdout, stderr, non-zero exit codes, and SIGTERM -> 143.
-  const { chmodSync } = await import('node:fs');
   const { Readable } = await import('node:stream');
   const fakeBinDir = join(sb.root, 'fake-codex-bin');
   mkdirSync(fakeBinDir, { recursive: true });
@@ -2805,7 +2804,7 @@ test('#3567 & #3539: in-place refresh preserves shares message, idempotent alrea
 if [ "$1" = "exec" ]; then shift; fi
 case "$1" in
   --pipe-test)
-    read line
+    read line || line="EOF"
     printf 'OUT:%s|%s\\n' "$line" "$CODEX_HOME"
     printf 'ERR:%s\\n' "$line" >&2
     exit 0
@@ -2831,6 +2830,18 @@ esac
   assert.equal(pipeRes.stdout, `OUT:hello-from-stdin|${pddManagedCodexHome(sb.env)}\n`);
   assert.equal(pipeRes.stderr, 'ERR:hello-from-stdin\n');
 
+  const strStdinRes = await invokeCli(['accounts', 'codex', 'exec', '--pipe-test'], shimSb, {
+    stdin: 'hello-from-string\n',
+  });
+  assert.equal(strStdinRes.exit, 0, strStdinRes.stderr);
+  assert.equal(strStdinRes.stdout, `OUT:hello-from-string|${pddManagedCodexHome(sb.env)}\n`);
+
+  const eofStdinRes = await invokeCli(['accounts', 'codex', 'exec', '--pipe-test'], shimSb, {
+    stdin: '',
+  });
+  assert.equal(eofStdinRes.exit, 0, eofStdinRes.stderr);
+  assert.equal(eofStdinRes.stdout, `OUT:EOF|${pddManagedCodexHome(sb.env)}\n`);
+
   const exit42Res = await invokeCli(['accounts', 'codex', 'exec', '--exit-42'], shimSb);
   assert.equal(exit42Res.exit, 42);
   assert.equal(exit42Res.stdout, 'bad-out\n');
@@ -2838,6 +2849,14 @@ esac
 
   const realSigRes = await invokeCli(['accounts', 'codex', 'exec', '--sigterm'], shimSb);
   assert.equal(realSigRes.exit, 143);
+
+  // Missing `codex` binary on PATH reports clear error instead of silent empty stderr.
+  const emptyBinDir = join(sb.root, 'empty-bin');
+  mkdirSync(emptyBinDir, { recursive: true });
+  const missingBinSb = { ...sb, env: { ...sb.env, PATH: emptyBinDir } };
+  const enoentRes = await invokeCli(['accounts', 'codex', 'exec', '--pipe-test'], missingBinSb);
+  assert.equal(enoentRes.exit, 1);
+  assert.match(enoentRes.stderr, /codex CLI not found on PATH/i);
 
   // Unenrolled fallback path (`!managedHome`) also uses streaming runPlainCodexOnce.
   const unenrolledSb = makeSandbox(t, cloud.serverUrl);

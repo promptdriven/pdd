@@ -4076,6 +4076,7 @@ function exitCodeFromSignalOrStatus(code, signal) {
   if (signal === 'SIGINT') return 130;
   if (signal === 'SIGTERM') return 143;
   if (signal === 'SIGHUP') return 129;
+  if (signal) return 1;
   return typeof code === 'number' ? code : 1;
 }
 
@@ -4112,7 +4113,7 @@ async function runPlainCodexOnce(args, { cwd, env, stdin, stdout, stderr }, port
     writeStreamChunk(stderr, res?.stderr);
     return { exitCode: exitCodeFromSignalOrStatus(res?.code, res?.signal), message: '' };
   }
-  const inheritStdin = !stdin || stdin === process.stdin;
+  const inheritStdin = stdin == null || stdin === process.stdin;
   const inheritStdout = !stdout || stdout === process.stdout;
   const inheritStderr = !stderr || stderr === process.stderr;
   const stdio = inheritStdin && inheritStdout && inheritStderr
@@ -4123,6 +4124,7 @@ async function runPlainCodexOnce(args, { cwd, env, stdin, stdout, stderr }, port
       inheritStderr ? 'inherit' : 'pipe',
     ];
   return new Promise(resolveExit => {
+    let settled = false;
     const child = (ports.spawn ?? spawn)('codex', args, { cwd, env, stdio });
     const forward = sig => {
       try { child.kill(sig); } catch {}
@@ -4134,18 +4136,23 @@ async function runPlainCodexOnce(args, { cwd, env, stdin, stdout, stderr }, port
     process.on('SIGTERM', onSigTerm);
     process.on('SIGHUP', onSigHup);
 
-    const detach = () => {
+    const finish = result => {
+      if (settled) return;
+      settled = true;
       process.off('SIGINT', onSigInt);
       process.off('SIGTERM', onSigTerm);
       process.off('SIGHUP', onSigHup);
       if (child.stdin && stdin && typeof stdin.unpipe === 'function') {
         try { stdin.unpipe(child.stdin); } catch {}
       }
+      resolveExit(result);
     };
 
     if (child.stdin) {
       child.stdin.on('error', () => {});
-      if (stdin && typeof stdin.pipe === 'function') {
+      if (typeof stdin === 'string' || stdin instanceof Uint8Array) {
+        try { child.stdin.end(stdin); } catch {}
+      } else if (stdin && typeof stdin.pipe === 'function') {
         stdin.pipe(child.stdin);
       } else {
         try { child.stdin.end(); } catch {}
@@ -4158,13 +4165,14 @@ async function runPlainCodexOnce(args, { cwd, env, stdin, stdout, stderr }, port
       child.stderr.on('data', chunk => writeStreamChunk(stderr, chunk));
     }
 
-    child.on('error', () => {
-      detach();
-      resolveExit({ exitCode: 1, message: '' });
+    child.on('error', err => {
+      const message = err?.code === 'ENOENT'
+        ? 'codex CLI not found on PATH.'
+        : redactSecrets(`Failed to run codex: ${err?.message ?? 'spawn error'}`);
+      finish({ exitCode: 1, message });
     });
     child.on('close', (code, signal) => {
-      detach();
-      resolveExit({ exitCode: exitCodeFromSignalOrStatus(code, signal), message: '' });
+      finish({ exitCode: exitCodeFromSignalOrStatus(code, signal), message: '' });
     });
   });
 }
