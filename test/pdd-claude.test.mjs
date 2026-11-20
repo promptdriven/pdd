@@ -537,21 +537,24 @@ test('adversarial P0/P1 regressions: auto fail-open, gateway URL & proxy isolati
       return child;
     };
     const autoEnv = { ...sb.env, PDD_CLAUDE_AUTO_FAIL_OPEN: '1' };
-    // Unenrolled user with PDD_CLAUDE_AUTO_FAIL_OPEN=1 fails open cleanly to stock claude!
+    // Unenrolled user with PDD_CLAUDE_AUTO_FAIL_OPEN=1 fails open cleanly to stock claude (and strips env flag)!
     const rUnenrolled = await runPddClaudeCli(['-p', 'hello'], { cwd: sb.root, env: autoEnv, stdout: makeBufStream(), stderr: makeBufStream() }, { spawn: fakeSpawn });
     assert.equal(rUnenrolled.exitCode, 0);
     assert.deepEqual(failOpenCalls.at(-1).args, ['-p', 'hello']);
+    assert.equal(failOpenCalls.at(-1).env.PDD_CLAUDE_AUTO_FAIL_OPEN, undefined);
     // Auth commands under auto-wrapper pass straight to stock claude without printing hint or revoking PDD lease!
     const rAutoAuth = await runPddClaudeCli(['--debug', 'auth', 'login'], { cwd: sb.root, env: autoEnv, stdout: makeBufStream(), stderr: makeBufStream() }, { spawn: fakeSpawn });
     assert.equal(rAutoAuth.exitCode, 0);
     assert.deepEqual(failOpenCalls.at(-1).args, ['--debug', 'auth', 'login']);
-    // Lease failure under auto-wrapper fails open cleanly!
+    assert.equal(failOpenCalls.at(-1).env.PDD_CLAUDE_AUTO_FAIL_OPEN, undefined);
+    // Lease failure (network error or expired 401 gh token) under auto-wrapper fails open cleanly!
     const rLeaseErr = await runPddClaudeCli(['-p', 'hi'], { cwd: sb.root, env: autoEnv, stdout: makeBufStream(), stderr: makeBufStream() }, {
       spawn: fakeSpawn,
-      leaseCloudAccount: async () => { throw new CloudAccountsError('offline', { code: 'network_error', status: 0 }); },
+      leaseCloudAccount: async () => { throw new CloudAccountsError('expired gh auth', { code: 'unauthorized', status: 401 }); },
     });
     assert.equal(rLeaseErr.exitCode, 0);
     assert.deepEqual(failOpenCalls.at(-1).args, ['-p', 'hi']);
+    assert.equal(failOpenCalls.at(-1).env.PDD_CLAUDE_AUTO_FAIL_OPEN, undefined);
 
     // P0-2: gateway_grant validates anthropic_base_url; direct_oauth blocks third-party proxy leakage!
     assert.throws(
@@ -611,6 +614,12 @@ test('adversarial P0/P1 regressions: auto fail-open, gateway URL & proxy isolati
       assert.equal(insp.mode, 'leased', `expected leased for ${JSON.stringify(argv)}, got ${insp.mode}`);
       assert.equal(insp.hasBareFlag, false, `expected hasBareFlag=false for ${JSON.stringify(argv)}`);
     }
+    // P1-R2-1: subcommands with overlapping flags or leading --model/--settings stay pass_through / login_hint!
+    assert.equal(inspectClaudeInvocation(['--model', 'opus', 'mcp', 'list']).mode, 'pass_through');
+    assert.equal(inspectClaudeInvocation(['--settings', 'my.json', 'doctor']).mode, 'pass_through');
+    assert.equal(inspectClaudeInvocation(['logs', '-n', '50', 'my-agent']).mode, 'pass_through');
+    assert.equal(inspectClaudeInvocation(['mcp', 'add', '-n', 'foo']).mode, 'pass_through');
+    assert.equal(inspectClaudeInvocation(['auth', 'login', '--model', 'opus']).mode, 'login_hint');
     assert.deepEqual(
       parsePddClaudeArgs(['--account', 'team-a', '--', '--safe-mode', '-p', 'hi']),
       { preferredAccount: 'team-a', showPddHelp: false, claudeArgs: ['--safe-mode', '-p', 'hi'] },

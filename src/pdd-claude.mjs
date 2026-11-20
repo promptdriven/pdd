@@ -156,7 +156,6 @@ const CLAUDE_BOOL_FLAGS = new Set([
 ]);
 
 const CLAUDE_SESSION_ONLY_FLAGS = new Set([
-  '--add-dir',
   '--agent',
   '--agents',
   '--allow-dangerously-skip-permissions',
@@ -175,7 +174,6 @@ const CLAUDE_SESSION_ONLY_FLAGS = new Set([
   '--dangerously-skip-permissions',
   '--disallowedTools',
   '--disallowed-tools',
-  '--effort',
   '--fallback-model',
   '--file',
   '--fork-session',
@@ -183,7 +181,6 @@ const CLAUDE_SESSION_ONLY_FLAGS = new Set([
   '--json-schema',
   '--max-budget-usd',
   '--mcp-config',
-  '--model',
   '-n',
   '--name',
   '--no-session-persistence',
@@ -198,8 +195,6 @@ const CLAUDE_SESSION_ONLY_FLAGS = new Set([
   '--restricted',
   '--safe-mode',
   '--session-id',
-  '--settings',
-  '--setting-sources',
   '--strict-mcp-config',
   '--system-prompt',
   '--system-prompt-file',
@@ -359,6 +354,14 @@ export function inspectClaudeInvocation(claudeArgs = []) {
   let hasBackgroundFlag = false;
   let hasSessionOnlyFlag = false;
 
+  const isReservedSubcommand = name => (
+    name === 'logout'
+    || name === 'login'
+    || name === 'setup-token'
+    || name === 'auth'
+    || (Boolean(name) && PASS_THROUGH_SUBCOMMANDS.has(name))
+  );
+
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
     if (token === '--') break;
@@ -367,23 +370,23 @@ export function inspectClaudeInvocation(claudeArgs = []) {
       continue;
     }
     if (token === '--bare') {
-      hasBareFlag = true;
-      hasSessionOnlyFlag = true;
+      if (subcommand === null) hasSessionOnlyFlag = true;
+      if (!isReservedSubcommand(subcommand)) hasBareFlag = true;
       continue;
     }
     if (token === '--bg' || token === '--background') {
-      hasBackgroundFlag = true;
-      hasSessionOnlyFlag = true;
+      if (subcommand === null) hasSessionOnlyFlag = true;
+      if (!isReservedSubcommand(subcommand)) hasBackgroundFlag = true;
       continue;
     }
     if (token.startsWith('--') && token.includes('=')) {
       const flagName = token.slice(0, token.indexOf('='));
-      if (CLAUDE_SESSION_ONLY_FLAGS.has(flagName)) {
+      if (subcommand === null && CLAUDE_SESSION_ONLY_FLAGS.has(flagName)) {
         hasSessionOnlyFlag = true;
       }
       continue;
     }
-    if (CLAUDE_SESSION_ONLY_FLAGS.has(token)) {
+    if (subcommand === null && CLAUDE_SESSION_ONLY_FLAGS.has(token)) {
       hasSessionOnlyFlag = true;
     }
     if (CLAUDE_VARIADIC_VALUE_FLAGS.has(token)) {
@@ -1178,13 +1181,20 @@ function spawnClaudePassthrough(claudeBin, args, { cwd, env, onChild } = {}, por
   });
 }
 
+function stripAutoFailOpenEnv(env) {
+  if (!env || typeof env !== 'object' || !('PDD_CLAUDE_AUTO_FAIL_OPEN' in env)) return env;
+  const next = { ...env };
+  delete next.PDD_CLAUDE_AUTO_FAIL_OPEN;
+  return next;
+}
+
 function isAutoFailOpenLeaseError(err) {
   const code = String(err?.code ?? '');
   if (['timeout', 'network_error', 'missing_auth_token', 'no_ready_account', 'all_cooling'].includes(code)) {
     return true;
   }
   const status = Number(err?.status ?? 0);
-  if (status === 0 || status >= 500) return true;
+  if (status === 0 || status === 401 || status === 403 || status >= 500) return true;
   return false;
 }
 
@@ -1211,10 +1221,11 @@ export async function runPddClaudeCli(argv = [], {
   }
 
   const autoFailOpen = env?.PDD_CLAUDE_AUTO_FAIL_OPEN === '1' && !parsed.preferredAccount;
+  const passthroughEnv = autoFailOpen ? stripAutoFailOpenEnv(env) : env;
   const inspection = inspectClaudeInvocation(parsed.claudeArgs);
 
   if (autoFailOpen && (inspection.mode === 'logout' || inspection.mode === 'login_hint')) {
-    const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env }, ports);
+    const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env: passthroughEnv }, ports);
     if (res.error) {
       stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
     }
@@ -1247,7 +1258,7 @@ export async function runPddClaudeCli(argv = [], {
   }
 
   if (inspection.mode === 'pass_through') {
-    const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env }, ports);
+    const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env: passthroughEnv }, ports);
     if (res.error) {
       stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
     }
@@ -1255,7 +1266,7 @@ export async function runPddClaudeCli(argv = [], {
   }
 
   if (autoFailOpen && !ports.leaseCloudAccount && !isCloudAccountsActive({ env, provider: 'claude' }, ports)) {
-    const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env }, ports);
+    const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env: passthroughEnv }, ports);
     if (res.error) {
       stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
     }
@@ -1264,7 +1275,7 @@ export async function runPddClaudeCli(argv = [], {
 
   if (inspection.hasBackgroundFlag) {
     if (autoFailOpen) {
-      const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env }, ports);
+      const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env: passthroughEnv }, ports);
       if (res.error) {
         stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
       }
@@ -1339,10 +1350,13 @@ export async function runPddClaudeCli(argv = [], {
             userSettings: extracted.userSettings,
           }, ports);
     } catch (err) {
+      if (receivedSignal) {
+        return { exitCode: signalToExitCode(receivedSignal) };
+      }
       if (autoFailOpen && isAutoFailOpenLeaseError(err)) {
         const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, {
           cwd,
-          env,
+          env: passthroughEnv,
           onChild: child => { activeChild = child; },
         }, ports);
         if (res.error) {

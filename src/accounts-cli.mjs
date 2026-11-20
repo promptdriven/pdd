@@ -131,7 +131,7 @@ export function renderAutoSwitchBlock(shell = 'sh') {
       "  command codex $argv",
       "end",
       "function claude --wraps claude",
-      "  if set -q CLAUDE_CONFIG_DIR",
+      "  if set -q CLAUDE_CONFIG_DIR; and test -n \"$CLAUDE_CONFIG_DIR\"",
       "    command claude $argv",
       "    return $status",
       "  end",
