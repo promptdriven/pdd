@@ -2,7 +2,7 @@
 name: pdd-prompting
 description: The PDD Prompting guide. Use when you write, change or review a module prompt (*.prompt.md), a Story or test cases, when the person asks how to write prompts in PDD, or asks to set up real behavior verification for a repository. In PDD, prompts are the source and code follows them.
 metadata:
-  pdd-skills: 0.1.37
+  pdd-skills: 0.1.39
 ---
 
 # PDD prompting
@@ -11,7 +11,7 @@ Each module's `.prompt.md` is the source; code implements it.
 
 ## Core rules
 
-- Read `RUNBOOK.md` first, `guide.md` in full before prompts/cases, and `story-guide.md` before a Story; open routed `runbook/*.md` topics as needed.
+- Read `RUNBOOK.md` first, `guide.md` in full, and `story-guide.md`; skip `runbook/*.md` chapters unless a workflow step or lint error points to one.
 - Finish Prompt Space (`pdd lint --local` -> passing `pdd test`) before code; change no code and start no interactive `pdd simulate` unless asked.
 - One prompt per module: purpose, `## Domain decisions` and failure edges. Give each rule one owner prompt. Link shared rules. For a CLI, say if a rule belongs to the whole-CLI prompt or to one module's prompt.
 - Inject outside effects (DB, files, net, clock, RNG, IDs) via inputs or `<port>.<op>` ports; never use prose counters or link `kind: native-only` adapters under `## Dependencies` ([RUNBOOK §21](runbook/cli-and-ports.md#21-fake-the-outside-world)).

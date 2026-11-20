@@ -12,6 +12,9 @@ internal multi-harness fallback helpers:
 `pddManagedCodexHome(env)`,
 `managedCodexAuthPath(env)`,
 `managedCodexConfigPath(env)`,
+`pddManagedClaudeHome(env)`,
+`managedClaudeSettingsPath(env)`,
+`claudeTokenFingerprint(token)`,
 `readCloudAccountsState({env}, ports)`,
 `writeCloudAccountsState(state, {env}, ports)`,
 `isCloudAccountsActive({env, poolPath, provider}, ports)`,
@@ -29,7 +32,9 @@ internal multi-harness fallback helpers:
 `materializeLocalCodexAuth(authOrLease, {env, previousManagedCodexGateway, previousCodexModelProvider}, ports)`,
 `restoreLocalCodexGatewayConfig({env, previousModelProvider, removeAuthFile}, ports)`,
 `materializeLocalClaudeAuth(lease, {env, previousManagedBaseUrl}, ports)`,
-`restoreLocalClaudeGatewayConfig({env}, ports)`,
+`restoreLocalClaudeGatewayConfig({env, managedTokenHashes}, ports)`,
+`buildClaudeGatewaySettingsOverlay(lease, {env, userSettings}, ports)`,
+`createClaudeStepSettingsOverlay(lease, {env, tmpRoot, userSettings}, ports)`,
 `createCodexStepOverlay(authOrLease, {env, tmpRoot}, ports)`,
 `buildClaudeStepEnv(baseEnv, lease, ports)`,
 `prepareCloudStepExecution(lease, baseEnv, ports)`,
@@ -111,7 +116,11 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     non-symlink `chrome-native-hosts-v2.json` with symlinks when `~/.codex/<name>` is valid (never
     deleting non-empty non-symlink `sessions` or `memories` and never modifying `~/.codex`), and
     prunes any symlink in `pddManagedCodexHome(env)` that is denylisted or whose `~/.codex` source
-    was removed or became dangling. It merges user settings (such as `[mcp_servers.pdd]`) from
+    was removed or became dangling. Keeping top-level `.tmp` isolated (never symlinking `~/.codex/.tmp`
+    itself so temp clones and lock files stay isolated), when `~/.codex/.tmp` contains valid shared
+    marketplace/plugin cache entries (`bundled-marketplaces`, `marketplaces`, `plugins`, `plugins.sha`),
+    `syncManagedCodexHomeLinks` creates a real `0700` `<managedHome>/.tmp` directory and symlinks those
+    safe entries (replacing stale non-symlink cache copies and pruning removed/dangling symlinks). It merges user settings (such as `[mcp_servers.pdd]`) from
     `~/.codex/config.toml` (reading via `realpathSync` + `statSync().isFile()` outside
     `pddManagedCodexHome(env)` when dotfile-symlinked) while stripping any legacy PDD
     gateway keys (`[model_providers.pdd_codex_gateway]`, `model_provider = "pdd_codex_gateway"`, and
@@ -121,27 +130,19 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   - `buildSyntheticGatewayIdToken({planType})` builds a deterministic non-secret unsigned JWT
     (`<base64url({alg:"none",typ:"JWT"})>.<base64url(payload)>.sig`) with `exp: 4102444800`,
     `iat: 1700000000`, and `"https://api.openai.com/auth": {chatgpt_account_id: "acct_pdd_gateway", chatgpt_plan_type: normalizedPlanType || "pro", chatgpt_user_id: "user_pdd_gateway"}`.
-    `stopCodexAppServerDaemon(codexHome, {env, fs, spawnSync})` is a bounded fail-open helper that skips
+  - `stopCodexAppServerDaemon(codexHome, {env, fs, spawnSync, codexBin})` is a bounded fail-open helper that skips
     subprocess execution when `fs !== nativeFs` and `spawnSync` is not a function (keeping virtual-fs
-    tests hermetic), and otherwise invokes `codex app-server daemon stop` with
+    tests hermetic), and otherwise invokes `codexBin || env.PDD_CODEX_BIN || 'codex'` with `['app-server', 'daemon', 'stop']` and
     `{env: {...env, CODEX_HOME: codexHome}, stdio: "ignore", timeout: 2500}` inside `try/catch`.
+  - Export `resolvePddStateBase`, `resolveCodexBackendApiUrl`, `resolveCodexResponsesBaseUrl`, `resolveEffectiveSqliteHome`, `buildCodexHomeMirrorCliArgs`, `needsCodexConfigWritebackNormalization`, `normalizeCodexConfigWriteback`, `stripCodexCliEnvExcludeArgs`, `buildCodexGatewayCliArgs`, `buildGatewayAuthJson`, `ensureUserCodexHomeBaseline`, `syncManagedCodexHomeLinks`, `releaseCloudLease`, and `heartbeatCloudLease`. Pass optional `auto_rotate` on `leaseCloudAccount` and persist `codex_backend_api_url` and `auto_rotate` in `accounts-state.json`. `localCodexHome(env)` treats `CODEX_HOME` paths at or inside `pddManagedCodexHome(env)`, `~/.local/state/pdd/codex-runtime`, or `env.PDD_CODEX_RUNTIME_ROOT` (including `empty-subshell`) as managed runtime homes and falls back to `~/.codex`. `syncManagedCodexHomeLinks` accepts an optional `preserveLinks` set so shared runtime directories can preserve `<runtime>/config.toml` across concurrent launches without unlinking it, replaces existing symlinks atomically via temp-symlink + `renameSync` to prevent transient `ENOENT` windows, and `ensureUserCodexHomeBaseline` creates missing `~/.codex/config.toml` atomically (`wx`) plus baseline folders including `.tmp/{bundled-marketplaces,marketplaces,plugins}`. `resolveEffectiveSqliteHome` returns `userCodexHome` only when neither `CODEX_SQLITE_HOME` nor `sqlite_home` in user `config.toml` is already set. `buildCodexHomeMirrorCliArgs({userCodexHome, runtimeCodexHome, userConfigText, env, fs})` emits forward-compatible `-c allow_symlinked_codex_home=true` (unless explicitly `false`; User-layer `allow_symlinked_codex_home = true` is also set in materialized managed/overlay `config.toml`) plus non-persisted `-c` overrides mapping local `[marketplaces.<name>].source` (including `~/` paths) and `[hooks.state."<userCodexHome>/..."]` trust entries (including `.tmp/{bundled-marketplaces,marketplaces,plugins}` hooks and full TOML values via `formatTomlValue`) onto canonicalized `runtimeCodexHome` paths (using unquoted bare keys for bare marketplace names and inline table merge for non-bare marketplaces and `hooks.state`). `normalizeCodexConfigWriteback` resolves dotfile-symlinked `~/.codex/config.toml` targets before atomic rename and rewrites any newly persisted `<runtimeDir>` prefixes in `hooks.state` or `marketplaces.*.source` back to `userCodexHome` only when `config.toml` actually changed. `buildCodexGatewayCliArgs` accepts `runtimeCodexHome`, `userConfigText`, `codexArgs`, `cwd`, `env`, and `nativeBackendApi`, sets `model_provider="openai"` when user or active-profile config specifies a non-`"openai"` provider and `--oss`/`--local-provider` is absent, sets `sqlite_home` via `resolveEffectiveSqliteHome`, appends `buildCodexHomeMirrorCliArgs(...)`, and for `shell_environment_policy`: checks legacy `exclude`/`include_only` across user config, active profile, ancestor project `.codex/config.toml` files up to `.git` (honoring `-C`/`--cd`), and CLI `-c` flags (merging user and CLI exclusions with `PDD_*`/token/`CODEX_HOME` exclusions while `stripCodexCliEnvExcludeArgs` prevents user `-c shell_environment_policy.exclude` from overwriting them); otherwise emits a single TOML inline table `-c shell_environment_policy.filters={ "PDD_*" = "exclude", ..., CODEX_HOME = "exclude" }` so Codex parses wildcard keys properly, merges cleanly with user `[shell_environment_policy.filters]`, and keeps `$CODEX_HOME` unset in subshells like stock `codex`. When `nativeBackendApi` is `false`, `buildCodexGatewayCliArgs` emits `features.responses_websockets=false` and `supports_websockets=false` for older gateways.
   - When `authOrLease` has delivery mode `"gateway_grant"`, `materializeLocalCodexAuth` validates
     `codex_gateway_url` (`https:` or loopback `http:`) and `codex_gateway_token` (or `gateway_bearer_token`,
     requiring the `"pddg_"` prefix and throwing `code: "invalid_lease"` otherwise), normalizes `<gateway_url>`
     by stripping any trailing `/lse_[^/]+` segment when `<pddg_grant>` starts with `"pddg_lse_"`, writes `0600`
     `managedCodexAuthPath(env)` in native `chatgpt` shape (`{"auth_mode": "chatgpt", "OPENAI_API_KEY": null, "tokens": {"id_token": buildSyntheticGatewayIdToken({planType}), "access_token": "<pddg_grant>", "refresh_token": "", "account_id": "acct_pdd_gateway"}, "last_refresh": "<iso>"}`),
-    and writes `0600` `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"`,
-    `openai_base_url = "<gateway_url>"`, `chatgpt_base_url = "<gateway_url>"`,
-    `[features]` merged with `responses_websockets = false`, no top-level
+    and writes `0600` `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"`, no top-level
     `model_provider` (recording any prior non-gateway user/managed `model_provider` in
-    `previousCodexModelProvider`), and backward-compatibility `[model_providers.pdd_codex_gateway]`:
-    when `<pddg_grant>` starts with `"pddg_lse_"`, set `base_url = "<origin>/v1/codex-gateway"`,
-    `model_catalog_url = "<origin>/v1/codex-gateway/models"`, `wire_api = "responses"`,
-    `requires_openai_auth = true`, `supports_websockets = false`, and omit `http_headers` so
-    `config.toml` remains constant across account rotations; for legacy non-`"pddg_lse_"` grants,
-    preserve `base_url = "<codex_gateway_url>"`, set `model_catalog_url = "<codex_gateway_url>/models"`,
-    `requires_openai_auth = false`, `supports_websockets = false`, and
-    `http_headers = {"x-pdd-gateway-grant": "<pddg_grant>"}`.
+    `previousCodexModelProvider`), remapped local `[marketplaces.*].source` and `[hooks.state]` paths pointing at `managedHome` (for both gateway and direct-stripped materialized configs), and `[model_providers.pdd_codex_gateway]` compatibility alias. When `authOrLease.codex_backend_api_url` is present, route `chatgpt_base_url` to `<backend_api_url>`, `openai_base_url` and `model_providers.pdd_codex_gateway.base_url` to `<backend_api_url>/codex`, set `sqlite_home = userHome` and `features.daemon_auto_start = false`, and keep native WebSockets enabled (omitting `responses_websockets = false` and `supports_websockets = false`). When `codex_backend_api_url` is absent, route `openai_base_url` and `chatgpt_base_url` to `<gateway_url>` and keep `responses_websockets = false` and `supports_websockets = false`. In `createCodexStepOverlay`, follow the same `codex_backend_api_url` capability switch and marketplace/hook-state remapping onto `overlayDir`, and also create `0700` `<overlay>/empty-subshell` assigned to `shell_environment_policy.set.CODEX_HOME` for `pddg_lse_*` overlays.
   - For legacy `direct_stripped` bundles, `materializeLocalCodexAuth` writes `0600`
     `managedCodexAuthPath(env)` with `tokens.refresh_token: ""` and `0600`
     `managedCodexConfigPath(env)` with `cli_auth_credentials_store = "file"` and user settings
@@ -153,16 +154,8 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     and restoring `previousModelProvider`, removes `managedCodexAuthPath(env)` when
     `removeAuthFile: true` without ever touching `~/.codex/auth.json`, and calls
     `stopCodexAppServerDaemon` on `pddManagedCodexHome(env)` whenever `restoredConfig || removedAuth`.
-- `materializeLocalClaudeAuth` atomically merges `env.CLAUDE_CODE_OAUTH_TOKEN`
-  into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`, mode `0600`),
-  sets `env.ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`, removes a
-  previously managed `/v1/accounts/claude-gateway` (or `/v1/claude-gateway`)
-  `ANTHROPIC_BASE_URL` when switching back to `direct_oauth`, and writes
-  `hasCompletedOnboarding: true` in `~/.claude.json` (mode `0600`).
-  `restoreLocalClaudeGatewayConfig({env}, ports)` atomically strips a PDD-managed
-  `pddg_*` `env.CLAUDE_CODE_OAUTH_TOKEN` and managed `/v1/(?:accounts/)?claude-gateway`
-  `env.ANTHROPIC_BASE_URL` from `~/.claude/settings.json` (`0600`) while preserving
-  all other user settings and non-`pddg_` tokens.
+- **Isolated PDD-managed Claude settings (`pddManagedClaudeHome`, `materializeLocalClaudeAuth`, `restoreLocalClaudeGatewayConfig`):**
+  `pddManagedClaudeHome(env)` resolves to `${PDD_STATE_DIR || join(XDG_STATE_HOME, "pdd") || ~/.local/state/pdd}/claude-home` (mode `0700`), and `managedClaudeSettingsPath(env)` resolves to `<pddManagedClaudeHome>/settings.json` (`0600`). `buildClaudeGatewaySettingsOverlay` validates `anthropic_base_url` (`https://` or loopback `http://`, no embedded credentials; `code: "invalid_lease"`) when `delivery_mode === "gateway_grant"`, and in `direct_oauth` mode deletes `ANTHROPIC_BASE_URL` from `userSettings` and forces `ANTHROPIC_BASE_URL = "https://api.anthropic.com"` whenever `~/.claude/settings.json` has any non-empty `env.ANTHROPIC_BASE_URL` so leased OAuth tokens are never sent to third-party proxies. `materializeLocalClaudeAuth` writes the PDD Cloud Claude `env` overlay exclusively inside `managedClaudeSettingsPath(env)` (setting `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and clearing `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, and `apiKeyHelper: ""`) and **never writes to `~/.claude/settings.json` or `~/.claude.json`**. `restoreLocalClaudeGatewayConfig({env, managedTokenHashes, removeManagedFile = true}, ports)` removes `managedClaudeSettingsPath(env)` when `removeManagedFile` is true (including dangling symlinks), and also cleans any legacy PDD-written entries from `~/.claude/settings.json` (`0600`, failing soft on `EACCES`/`EROFS`/`EPERM` read-only stores): `pddg_*` `env.CLAUDE_CODE_OAUTH_TOKEN`, managed `/v1/(?:accounts/)?claude-gateway` `env.ANTHROPIC_BASE_URL`, and any `sk-ant-oat*` `env.CLAUDE_CODE_OAUTH_TOKEN` whose `scryptSync` fingerprint (`claudeTokenFingerprint`) matches `managedTokenHashes` or `accounts-state.json` `managed_claude_token_hashes` (pruning an empty `"env": {}` object when all keys were removed, while preserving all other user settings and genuinely user-managed tokens).
 
 ## Disposable step isolation, `reauth_required` rotation and Stick-Until-100%
 
@@ -200,15 +193,21 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     `env_http_headers = {"x-pdd-gateway-grant": "PDD_CODEX_GATEWAY_GRANT"}`. Sets `CODEX_HOME=<overlay>`
     and `PDD_CODEX_GATEWAY_GRANT=<grant>` in `step.env`, and deletes `OPENAI_API_KEY`,
     `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN` and `OPENAI_BASE_URL`.
-- **Claude step env (`buildClaudeStepEnv` & `loginEnvironment`):** `loginEnvironment`
+- **Claude step isolation (`buildClaudeStepEnv`, `createClaudeStepSettingsOverlay`, `prepareCloudStepExecution`, & `loginEnvironment`):** `loginEnvironment`
   strips ambient `CLAUDE_CODE_OAUTH_TOKEN`, `PDD_CODEX_GATEWAY_GRANT` and managed
-  `/v1/accounts/claude-gateway` `ANTHROPIC_BASE_URL` before applying profile settings so
+  `/v1/(?:accounts/)?claude-gateway` `ANTHROPIC_BASE_URL` before applying profile settings so
   other profiles never inherit ambient grants; `buildClaudeStepEnv` deletes ambient
-  `ANTHROPIC_API_KEY` whenever a Cloud Claude lease is active, injects leased
-  `CLAUDE_CODE_OAUTH_TOKEN`, sets `ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`,
-  and in `direct_oauth` mode sets `ANTHROPIC_BASE_URL = "https://api.anthropic.com"` if
-  `~/.claude/settings.json` has a PDD-managed gateway `ANTHROPIC_BASE_URL` so user settings
-  cannot hijack `direct_oauth` steps.
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, and `CLAUDE_CODE_USE_FOUNDRY` whenever a Cloud Claude lease is active, injects leased
+  `CLAUDE_CODE_OAUTH_TOKEN`, validates and sets `ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`,
+  and in `direct_oauth` mode deletes ambient `ANTHROPIC_BASE_URL` and sets `ANTHROPIC_BASE_URL = "https://api.anthropic.com"` if
+  `~/.claude/settings.json` has any non-empty `env.ANTHROPIC_BASE_URL`. Because Claude Code's
+  `~/.claude/settings.json` `env` block overrides process environment variables, `prepareCloudStepExecution`
+  for `provider === "claude"` also allocates a disposable `0700` overlay directory via
+  `createClaudeStepSettingsOverlay(lease, { env, tmpRoot, userSettings }, ports)` writing a `0600`
+  `settings.json` overlay (from `buildClaudeGatewaySettingsOverlay`) and returns
+  `extraArgs: ["--settings", overlay.settingsPath]`, `settingsPath: overlay.settingsPath`,
+  `cleanupDirs: [overlay.overlayDir]`, and `cleanup: overlay.cleanup` so stale tokens in `~/.claude/settings.json`
+  never hijack PDD or Autopilot steps.
 - **Stick-Until-100% and `reauth_required` skip (`selectCloudPoolLogin`, `leaseCloudAccount`, `exhaustCloudPoolLogin`, `reportCloudAccountUsage`):**
   Cloud accounts never stop at `97%`. They stay on `current_account_id` (`0` switches)
   until `five_hour_used_percent >= 100` or `weekly_used_percent >= 100` (or a quota
@@ -217,9 +216,9 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   (`v >= 100 ? 100 : Math.max(0, Math.floor(v))`), POST `/v1/accounts/{account_id}/usage-report`
   with `limit_reached: true`, and lease the next ready account (`soonest weekly_reset_at`)
   with `0` issue strikes. Accounts or account-attributed lease/refresh failures matching `reauth_required`
-  (`token_revoked`, `invalid_grant`, `refresh_token_reused`, `state === "reauth_required"`, or account-attributed `401`, while unattributed Cloud bearer `401` errors never taint provider accounts)
-  are classified as `"reauth_required"`, persisted in `accounts-state.json` `reauth` across state reconciliations until a newer `last_refresh_at` succeeds or the account is re-enrolled/removed, added to `skip_account_ids`,
-  and skipped automatically during pool rotation without masking `reauth_required` as `ready`. `active[provider]` also tracks `materialized_local` so step-only overlay leases never masquerade as locally materialized `codex-home` / `.claude` credentials, and `cloudAccountsRequest` / `leaseCloudAccount` share a single wall-clock `deadlineMs` across token resolution, cold-start transport retry, and reauth skips.
+  (`token_revoked`, `invalid_grant`, `refresh_token_reused`, `oauth_not_allowed_for_organization`, `oauth_org_not_allowed`, `disabled Claude subscription access for Claude Code`, `state === "reauth_required"`, or account-attributed `401`, while unattributed Cloud bearer `401` errors never taint provider accounts)
+  are classified as `"reauth_required"` (and `isAuthFailureMessage` also matches `oauth_not_allowed_for_organization`, `oauth_org_not_allowed`, and `disabled Claude subscription access for Claude Code`), persisted in `accounts-state.json` `reauth` across state reconciliations until a newer `last_refresh_at` succeeds or the account is re-enrolled/removed, added to `skip_account_ids`,
+  and skipped automatically during pool rotation without masking `reauth_required` as `ready`. `active[provider]` also tracks `materialized_local` so step-only overlay leases never masquerade as locally materialized `codex-home` / `claude-home` credentials, and `cloudAccountsRequest` / `leaseCloudAccount` share a single wall-clock `deadlineMs` across token resolution, cold-start transport retry, and reauth skips.
 - **Burst `429` vs quota exhaustion (`classifyRateLimitFailure`):** A transient
   burst rate limit (`429 Too Many Requests`, `rate_limit_exceeded`, RPM/TPM) with no
   hard quota-exhaustion marker while known `5h < 100%` and `7d < 100%` returns
