@@ -33,7 +33,8 @@
   ],
   "scripts": {
     "test": "node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test test/*.test.mjs",
-    "version": "node scripts/sync-pypi-version.mjs && git add python/pyproject.toml python/pdd_cli/__init__.py"
+    "version": "node scripts/sync-pypi-version.mjs && git add python/pyproject.toml python/pdd_cli/__init__.py",
+    "release:publish": "node scripts/publish-release.mjs"
   },
   "dependencies": {
     "@promptdriven/runtime-client": "1.0.0"

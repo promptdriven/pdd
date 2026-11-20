@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 9738776adbae5cc9f22d83d94edbbf6145d88452622837db6da6fecec569141e).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 4fa550fc7999638b5c598ca92272136d4727ea82b388f8086d06fa44ff31a2d3).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -465,10 +465,14 @@ function renderAccountsTable(accounts, pendingInvites, activeByProvider, nowMs =
       }
     }
   }
-  if (Array.isArray(pendingInvites) && pendingInvites.length > 0) {
+  const listedIds = new Set(accounts.map(acc => acc?.account_id).filter(Boolean));
+  const visiblePendingInvites = Array.isArray(pendingInvites)
+    ? pendingInvites.filter(inv => !(inv?.account_id && listedIds.has(inv.account_id)))
+    : [];
+  if (visiblePendingInvites.length > 0) {
     lines.push('');
     lines.push('Pending share invites:');
-    for (const inv of pendingInvites) {
+    for (const inv of visiblePendingInvites) {
       lines.push(`  ${inv.invite_id}  ${inv.label ?? '-'}  ${inv.provider ?? '-'}  from ${inv.owner_login ?? 'unknown'}  (accept: pdd accounts accept ${inv.invite_id})`);
     }
   }
@@ -1545,12 +1549,21 @@ async function applySharePayloadsToAccounts(accounts, sharePayloads, { cwd, env,
         }
       }
       if (uidKey) existingKeys.add(uidKey);
-      const inviteId = res?.already_shared === true ? null : (res?.invite?.invite_id ?? res?.invite_id ?? null);
+      const serverAlreadyShared = Boolean(
+        res?.already_shared === true
+        || (
+          (item?.body?.github_login || item?.body?.github_user_id)
+          && res?.already_shared !== false
+          && !res?.invite
+          && !res?.invite_id
+        ),
+      );
+      const inviteId = serverAlreadyShared ? null : (res?.invite?.invite_id ?? res?.invite_id ?? null);
       notes.push({
         label: account.label ?? account.account_id,
         display: item.display,
         inviteId,
-        alreadyShared: Boolean(res?.already_shared === true),
+        alreadyShared: serverAlreadyShared,
       });
     }
   }
@@ -2253,7 +2266,7 @@ async function enrollSingleIteration(mode, {
           label: finalLabel,
           email,
           shareNotes,
-          message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
+          message: `Already enrolled as ${finalLabel} — refreshed credentials. Existing shares remain active.${shareSuffix}`,
         };
       }
       const identityNote = email ? `${email} -> "${finalLabel}", ` : '';
@@ -2382,7 +2395,7 @@ async function enrollSingleIteration(mode, {
       account: acc,
       label: finalLabel,
       shareNotes,
-      message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
+      message: `Already enrolled as ${finalLabel} — refreshed credentials. Existing shares remain active.${shareSuffix}`,
     };
   }
   return {
@@ -4059,7 +4072,24 @@ async function runSingleSupervisedCodexTurn({
   return runWithChild(false);
 }
 
-async function runPlainCodexOnce(args, { cwd, env, stdin, stdout }, ports = {}) {
+function exitCodeFromSignalOrStatus(code, signal) {
+  if (signal === 'SIGINT') return 130;
+  if (signal === 'SIGTERM') return 143;
+  if (signal === 'SIGHUP') return 129;
+  if (signal) return 1;
+  return typeof code === 'number' ? code : 1;
+}
+
+function writeStreamChunk(stream, chunk) {
+  if (chunk == null) return;
+  if (typeof chunk === 'string' && chunk.length === 0) return;
+  if (chunk instanceof Uint8Array && chunk.byteLength === 0) return;
+  try {
+    stream?.write?.(chunk);
+  } catch {}
+}
+
+async function runPlainCodexOnce(args, { cwd, env, stdin, stdout, stderr }, ports = {}) {
   if (typeof ports.spawnCodexPty === 'function') {
     const res = await ports.spawnCodexPty({
       command: 'codex',
@@ -4069,21 +4099,82 @@ async function runPlainCodexOnce(args, { cwd, env, stdin, stdout }, ports = {}) 
       turn: 0,
       signal: new AbortController().signal,
       onOutput(chunk) {
-        try { stdout?.write?.(chunk); } catch {}
+        writeStreamChunk(stdout, chunk);
       },
     });
-    return { exitCode: res?.code ?? 0, message: '' };
+    const exitCode = res?.signal
+      ? exitCodeFromSignalOrStatus(null, res.signal)
+      : (res?.code ?? 0);
+    return { exitCode, message: '' };
   }
   if (typeof ports.run === 'function') {
     const res = await ports.run('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
-    return { exitCode: res?.code ?? 0, message: '' };
+    writeStreamChunk(stdout, res?.stdout);
+    writeStreamChunk(stderr, res?.stderr);
+    return { exitCode: exitCodeFromSignalOrStatus(res?.code, res?.signal), message: '' };
   }
-  if (stdin?.isTTY && stdout?.isTTY) {
-    const res = spawnSync('codex', args, { cwd, env, stdio: 'inherit' });
-    return { exitCode: res.signal === 'SIGINT' ? 130 : (res.status ?? 1), message: '' };
-  }
-  const res = await runAgentProcess('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
-  return { exitCode: res?.code ?? 0, message: '' };
+  const inheritStdin = stdin == null || stdin === process.stdin;
+  const inheritStdout = !stdout || stdout === process.stdout;
+  const inheritStderr = !stderr || stderr === process.stderr;
+  const stdio = inheritStdin && inheritStdout && inheritStderr
+    ? 'inherit'
+    : [
+      inheritStdin ? 'inherit' : 'pipe',
+      inheritStdout ? 'inherit' : 'pipe',
+      inheritStderr ? 'inherit' : 'pipe',
+    ];
+  return new Promise(resolveExit => {
+    let settled = false;
+    const child = (ports.spawn ?? spawn)('codex', args, { cwd, env, stdio });
+    const forward = sig => {
+      try { child.kill(sig); } catch {}
+    };
+    const onSigInt = () => forward('SIGINT');
+    const onSigTerm = () => forward('SIGTERM');
+    const onSigHup = () => forward('SIGHUP');
+    process.on('SIGINT', onSigInt);
+    process.on('SIGTERM', onSigTerm);
+    process.on('SIGHUP', onSigHup);
+
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      process.off('SIGINT', onSigInt);
+      process.off('SIGTERM', onSigTerm);
+      process.off('SIGHUP', onSigHup);
+      if (child.stdin && stdin && typeof stdin.unpipe === 'function') {
+        try { stdin.unpipe(child.stdin); } catch {}
+      }
+      resolveExit(result);
+    };
+
+    if (child.stdin) {
+      child.stdin.on('error', () => {});
+      if (typeof stdin === 'string' || stdin instanceof Uint8Array) {
+        try { child.stdin.end(stdin); } catch {}
+      } else if (stdin && typeof stdin.pipe === 'function') {
+        stdin.pipe(child.stdin);
+      } else {
+        try { child.stdin.end(); } catch {}
+      }
+    }
+    if (child.stdout) {
+      child.stdout.on('data', chunk => writeStreamChunk(stdout, chunk));
+    }
+    if (child.stderr) {
+      child.stderr.on('data', chunk => writeStreamChunk(stderr, chunk));
+    }
+
+    child.on('error', err => {
+      const message = err?.code === 'ENOENT'
+        ? 'codex CLI not found on PATH.'
+        : redactSecrets(`Failed to run codex: ${err?.message ?? 'spawn error'}`);
+      finish({ exitCode: 1, message });
+    });
+    child.on('close', (code, signal) => {
+      finish({ exitCode: exitCodeFromSignalOrStatus(code, signal), message: '' });
+    });
+  });
 }
 
 async function leaseNextHealthyCodexForRotation(skipAccountIds, { cwd, env }, ports = {}) {
@@ -4174,12 +4265,12 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
     if (fallbackEnv.CODEX_HOME && resolve(fallbackEnv.CODEX_HOME) === resolve(expectedManagedHome)) {
       delete fallbackEnv.CODEX_HOME;
     }
-    return runPlainCodexOnce(initialArgs, { cwd, env: fallbackEnv, stdin: activeStdin, stdout: activeStdout }, ports);
+    return runPlainCodexOnce(initialArgs, { cwd, env: fallbackEnv, stdin: activeStdin, stdout: activeStdout, stderr: activeStderr }, ports);
   }
 
   if (!invocation.interactive) {
     const execEnv = buildCodexExecutionEnv(env, managedHome);
-    return runPlainCodexOnce(initialArgs, { cwd, env: execEnv, stdin: activeStdin, stdout: activeStdout }, ports);
+    return runPlainCodexOnce(initialArgs, { cwd, env: execEnv, stdin: activeStdin, stdout: activeStdout, stderr: activeStderr }, ports);
   }
 
   const userCodexHome = localCodexHome({ ...env, CODEX_HOME: '' });
