@@ -1,9 +1,9 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 0614653660d047404468ae276f814535a77ae4224ac05b0547a1c4e54b35c885).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 98d2a48fce6e863d8dc3f1c4af737b5304d77a77f38ae945317c8a56cc545b29).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { parseAgentAuthStatus, runAgentProcess } from './agent-adapters.mjs';
 import * as codexLimitsModule from './codex-limits.mjs';
 import { knownSecretValues, redactSecrets, rememberSecrets } from './secret-redaction.mjs';
@@ -92,12 +92,19 @@ const REPLACED_MANAGED_CACHE_DIRS = new Set([
   'packages',
 ]);
 const REPLACED_MANAGED_CACHE_FILES = new Set(['chrome-native-hosts-v2.json']);
+const MIRRORED_CODEX_DOT_TMP_ENTRIES = [
+  'bundled-marketplaces',
+  'marketplaces',
+  'plugins',
+  'plugins.sha',
+];
+const MIRRORED_CODEX_DOT_TMP_SET = new Set(MIRRORED_CODEX_DOT_TMP_ENTRIES);
 const CODEX_GATEWAY_PROVIDER_ID = 'pdd_codex_gateway';
 const INLINE_TOML_TABLE_KEYS = new Set(['http_headers', 'env_http_headers', 'filters', 'set']);
 const MANAGED_CODEX_GATEWAY_RE = /\/v1\/(?:accounts\/)?codex-gateway(?:\/|$)/i;
-const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/;
-const REAUTH_CODE_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked)\b/i;
-const REAUTH_TEXT_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked)\b|(?:status|http|error)[:=\s]+401\b|\b401\s+unauthorized\b/i;
+const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/i;
+const REAUTH_CODE_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked|oauth_not_allowed_for_organization|oauth_org_not_allowed)\b|disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code/i;
+const REAUTH_TEXT_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked|oauth_not_allowed_for_organization|oauth_org_not_allowed)\b|disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code|(?:status|http|error)[:=\s]+401\b|\b401\s+unauthorized\b/i;
 export const DEFAULT_CLOUD_URL = 'https://pdd-byok-api-c437voydwa-uc.a.run.app';
 export const POOL_FALLBACK_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -151,10 +158,15 @@ export class CloudAccountsError extends Error {
 function writeAtomicPrivate(fs, target, text, dirMode = 0o700) {
   fs.mkdirSync(dirname(target), { recursive: true, mode: dirMode });
   const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(tmp, text, { mode: 0o600 });
-  try { fs.chmodSync?.(tmp, 0o600); } catch {}
-  fs.renameSync(tmp, target);
-  try { fs.chmodSync?.(target, 0o600); } catch {}
+  try {
+    fs.writeFileSync(tmp, text, { mode: 0o600 });
+    try { fs.chmodSync?.(tmp, 0o600); } catch {}
+    fs.renameSync(tmp, target);
+    try { fs.chmodSync?.(target, 0o600); } catch {}
+  } catch (error) {
+    try { fs.unlinkSync?.(tmp); } catch {}
+    throw error;
+  }
 }
 
 function readJsonObject(fs, file) {
@@ -403,7 +415,7 @@ export async function listCloudAccounts({ refresh = false, cwd = process.cwd(), 
   return cloudAccountsRequest('GET', path, { cwd, env, timeoutMs, maxRetries }, ports);
 }
 
-function resolvePddStateBase(env = process.env) {
+export function resolvePddStateBase(env = process.env) {
   const home = env?.HOME || homedir();
   return (typeof env?.PDD_STATE_DIR === 'string' && env.PDD_STATE_DIR.trim())
     ? env.PDD_STATE_DIR.trim()
@@ -426,6 +438,31 @@ export function managedCodexAuthPath(env = process.env) {
 
 export function managedCodexConfigPath(env = process.env) {
   return join(pddManagedCodexHome(env), 'config.toml');
+}
+
+export function pddManagedClaudeHome(env = process.env) {
+  return join(resolvePddStateBase(env), 'claude-home');
+}
+
+export function managedClaudeSettingsPath(env = process.env) {
+  return join(pddManagedClaudeHome(env), 'settings.json');
+}
+
+export function claudeTokenFingerprint(token) {
+  const clean = typeof token === 'string' ? token.trim() : '';
+  if (!clean) return '';
+  return scryptSync(clean, 'pdd-managed-claude-token-v1', 32).toString('hex');
+}
+
+function normalizeTokenHashes(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  for (const item of list) {
+    if (typeof item === 'string' && /^[a-f0-9]{64}$/i.test(item.trim())) {
+      seen.add(item.trim().toLowerCase());
+    }
+  }
+  return [...seen];
 }
 
 export function readCloudAccountsState({ env = process.env } = {}, ports = {}) {
@@ -452,6 +489,8 @@ export function readCloudAccountsState({ env = process.env } = {}, ports = {}) {
           anthropic_base_url: typeof entry.anthropic_base_url === 'string' ? entry.anthropic_base_url : null,
           managed_anthropic_base_url: entry.managed_anthropic_base_url === true,
           codex_gateway_url: typeof entry.codex_gateway_url === 'string' ? entry.codex_gateway_url : null,
+          codex_backend_api_url: typeof entry.codex_backend_api_url === 'string' ? entry.codex_backend_api_url : null,
+          auto_rotate: typeof entry.auto_rotate === 'boolean' ? entry.auto_rotate : null,
           managed_codex_gateway: entry.managed_codex_gateway === true,
           previous_codex_model_provider: typeof entry.previous_codex_model_provider === 'string' && entry.previous_codex_model_provider ? entry.previous_codex_model_provider : null,
           five_hour_used_percent: typeof entry.five_hour_used_percent === 'number' && Number.isFinite(entry.five_hour_used_percent) ? entry.five_hour_used_percent : null,
@@ -472,12 +511,14 @@ export function readCloudAccountsState({ env = process.env } = {}, ports = {}) {
       }
     }
   }
+  const managedClaudeTokenHashes = normalizeTokenHashes(raw.managed_claude_token_hashes);
   return {
     enrolled: raw.enrolled === true,
     providers: [...new Set([...providers, ...Object.keys(active)])],
     active,
     cooling,
     reauth,
+    ...(managedClaudeTokenHashes.length > 0 ? { managed_claude_token_hashes: managedClaudeTokenHashes } : {}),
   };
 }
 
@@ -502,6 +543,8 @@ export function writeCloudAccountsState(state, { env = process.env } = {}, ports
         anthropic_base_url: typeof entry.anthropic_base_url === 'string' ? entry.anthropic_base_url : null,
         managed_anthropic_base_url: entry.managed_anthropic_base_url === true,
         codex_gateway_url: typeof entry.codex_gateway_url === 'string' ? entry.codex_gateway_url : null,
+        codex_backend_api_url: typeof entry.codex_backend_api_url === 'string' ? entry.codex_backend_api_url : null,
+        auto_rotate: typeof entry.auto_rotate === 'boolean' ? entry.auto_rotate : null,
         managed_codex_gateway: entry.managed_codex_gateway === true,
         previous_codex_model_provider: typeof entry.previous_codex_model_provider === 'string' && entry.previous_codex_model_provider ? entry.previous_codex_model_provider : null,
         five_hour_used_percent: typeof entry.five_hour_used_percent === 'number' && Number.isFinite(entry.five_hour_used_percent) ? entry.five_hour_used_percent : null,
@@ -513,9 +556,12 @@ export function writeCloudAccountsState(state, { env = process.env } = {}, ports
   }
   const providers = [...new Set([...(Array.isArray(state?.providers) ? state.providers.filter(p => CLOUD_PROVIDERS.includes(p)) : []), ...Object.keys(active)])];
   const enrolled = state?.enrolled === true;
+  const existingState = (state?.reauth === undefined || state?.managed_claude_token_hashes === undefined)
+    ? readCloudAccountsState({ env }, ports)
+    : null;
   const sourceReauth = state?.reauth !== undefined
     ? state.reauth
-    : (enrolled || providers.length > 0 ? readCloudAccountsState({ env }, ports).reauth : {});
+    : (enrolled || providers.length > 0 ? existingState?.reauth : {});
   const reauth = {};
   if (object(sourceReauth)) {
     for (const [accId, meta] of Object.entries(sourceReauth)) {
@@ -524,6 +570,10 @@ export function writeCloudAccountsState(state, { env = process.env } = {}, ports
       }
     }
   }
+  const sourceManagedClaudeHashes = state?.managed_claude_token_hashes !== undefined
+    ? state.managed_claude_token_hashes
+    : existingState?.managed_claude_token_hashes;
+  const managedClaudeTokenHashes = normalizeTokenHashes(sourceManagedClaudeHashes);
   const payload = {
     enrolled: state?.enrolled === true,
     updated_at: new Date((ports.now ?? Date.now)()).toISOString(),
@@ -531,6 +581,7 @@ export function writeCloudAccountsState(state, { env = process.env } = {}, ports
     active,
     cooling: object(state?.cooling) ? state.cooling : {},
     ...(Object.keys(reauth).length > 0 ? { reauth } : {}),
+    ...(managedClaudeTokenHashes.length > 0 ? { managed_claude_token_hashes: managedClaudeTokenHashes } : {}),
   };
   writeAtomicPrivate(fs, accountsStatePath(env), `${JSON.stringify(payload, null, 2)}\n`);
   return payload;
@@ -588,16 +639,44 @@ export function stripCodexAuthBundle(authJson) {
   };
 }
 
+function isPathAtOrInside(candidatePath, rootPath) {
+  const resolvedCandidate = resolve(candidatePath);
+  const resolvedRoot = resolve(rootPath);
+  if (
+    resolvedCandidate === resolvedRoot
+    || resolvedCandidate.startsWith(`${resolvedRoot}${sep}`)
+    || resolvedCandidate.startsWith(`${resolvedRoot}/`)
+  ) {
+    return true;
+  }
+  try {
+    const realCandidate = nativeFs.realpathSync(resolvedCandidate);
+    const realRoot = nativeFs.realpathSync(resolvedRoot);
+    return (
+      realCandidate === realRoot
+      || realCandidate.startsWith(`${realRoot}${sep}`)
+      || realCandidate.startsWith(`${realRoot}/`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function localCodexHome(env = process.env) {
   const home = env?.HOME || homedir();
   const defaultHome = join(home, '.codex');
   const explicit = typeof env?.CODEX_HOME === 'string' ? env.CODEX_HOME.trim() : '';
   if (!explicit) return defaultHome;
-  const managed = pddManagedCodexHome(env);
-  if (resolve(explicit) === resolve(managed)) return defaultHome;
-  try {
-    if (nativeFs.realpathSync(explicit) === nativeFs.realpathSync(managed)) return defaultHome;
-  } catch {}
+  const managedRoots = [
+    pddManagedCodexHome(env),
+    join(resolvePddStateBase(env), 'codex-runtime'),
+  ];
+  if (typeof env?.PDD_CODEX_RUNTIME_ROOT === 'string' && env.PDD_CODEX_RUNTIME_ROOT.trim()) {
+    managedRoots.push(env.PDD_CODEX_RUNTIME_ROOT.trim());
+  }
+  if (managedRoots.some(root => isPathAtOrInside(explicit, root))) {
+    return defaultHome;
+  }
   return explicit;
 }
 
@@ -742,6 +821,829 @@ function normalizeCodexGatewayBaseUrl(validatedUrl, grantToken) {
   return validatedUrl;
 }
 
+/**
+ * Resolve the canonical `/v1/codex-gateway/backend-api` URL for a Codex Cloud lease.
+ */
+export function resolveCodexBackendApiUrl(authOrLease, fallbackGatewayUrl = null, { preserveLegacyBase = false } = {}) {
+  const explicit = typeof authOrLease?.codex_backend_api_url === 'string' && authOrLease.codex_backend_api_url.trim()
+    ? validateCodexGatewayUrl(authOrLease.codex_backend_api_url)
+    : null;
+  if (explicit) return explicit;
+  const base = fallbackGatewayUrl
+    || (typeof authOrLease?.codex_gateway_url === 'string' && authOrLease.codex_gateway_url.trim()
+      ? normalizeCodexGatewayBaseUrl(validateCodexGatewayUrl(authOrLease.codex_gateway_url), resolveCodexGatewayGrant(authOrLease))
+      : null);
+  if (!base) return null;
+  if (preserveLegacyBase) return base;
+  if (/\/backend-api$/i.test(base)) return base;
+  if (/\/codex-gateway$/i.test(base)) return `${base}/backend-api`;
+  return base;
+}
+
+/**
+ * Resolve the Codex responses/models base URL (`.../backend-api/codex`) from the backend-api root.
+ */
+export function resolveCodexResponsesBaseUrl(backendApiUrl) {
+  if (!backendApiUrl) return null;
+  if (/\/backend-api$/i.test(backendApiUrl)) return `${backendApiUrl}/codex`;
+  return backendApiUrl;
+}
+
+const REQUIRED_CODEX_SUBSHELL_EXCLUDES = [
+  'PDD_*',
+  'OPENAI_API_KEY',
+  'CODEX_API_KEY',
+  'CODEX_ACCESS_TOKEN',
+  'CODEX_CONNECTORS_TOKEN',
+];
+
+function parseCodexTomlQuiet(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  try {
+    const parsed = parseToml(text);
+    return isTomlTable(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readCodexTomlQuiet(fs, filePath) {
+  if (typeof filePath !== 'string' || !filePath) return null;
+  try {
+    return parseCodexTomlQuiet(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function parseCliConfigExcludeValue(expr) {
+  const excludeMatch = /^shell_environment_policy\.exclude\s*=(.+)$/s.exec(expr);
+  if (excludeMatch) {
+    const parsed = parseCodexTomlQuiet(`v = ${excludeMatch[1].trim()}`);
+    return { matched: true, patterns: Array.isArray(parsed?.v) ? parsed.v : [] };
+  }
+  const tableMatch = /^shell_environment_policy\s*=(.+)$/s.exec(expr);
+  if (tableMatch) {
+    const parsed = parseCodexTomlQuiet(`v = ${tableMatch[1].trim()}`);
+    if (isTomlTable(parsed?.v) && Array.isArray(parsed.v.exclude)) {
+      return { matched: true, patterns: parsed.v.exclude };
+    }
+  }
+  return { matched: false, patterns: [] };
+}
+
+function stripExcludeFromCliEnvPolicyExpr(expr) {
+  const trimmed = String(expr ?? '').trim();
+  if (/^shell_environment_policy\.exclude\s*=/.test(trimmed)) {
+    return { stripped: true, replacement: null };
+  }
+  const tableMatch = /^shell_environment_policy\s*=(.+)$/s.exec(trimmed);
+  if (tableMatch) {
+    const parsed = parseCodexTomlQuiet(`v = ${tableMatch[1].trim()}`);
+    if (isTomlTable(parsed?.v) && Array.isArray(parsed.v.exclude)) {
+      const rest = Object.entries(parsed.v).filter(([k]) => k !== 'exclude');
+      if (rest.length === 0) return { stripped: true, replacement: null };
+      const fields = rest.map(([k, v]) => `${formatTomlKey(k)} = ${formatTomlValue(v)}`);
+      return { stripped: true, replacement: `shell_environment_policy={ ${fields.join(', ')} }` };
+    }
+  }
+  return { stripped: false, replacement: null };
+}
+
+/**
+ * Strip raw `-c shell_environment_policy.exclude=...` flags before `--` once their
+ * patterns have been merged into the gateway's required exclusions so a later CLI
+ * array override cannot replace and wipe out `PDD_*` / `CODEX_HOME` exclusions.
+ */
+export function stripCodexCliEnvExcludeArgs(codexArgs = []) {
+  const args = Array.isArray(codexArgs) ? codexArgs.map(String) : [];
+  const out = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') {
+      out.push(...args.slice(i));
+      break;
+    }
+    if ((arg === '-c' || arg === '--config') && typeof args[i + 1] === 'string') {
+      const rewritten = stripExcludeFromCliEnvPolicyExpr(args[i + 1]);
+      if (rewritten.stripped) {
+        if (rewritten.replacement) out.push(arg, rewritten.replacement);
+        i += 1;
+        continue;
+      }
+      out.push(arg, args[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--config=')) {
+      const expr = arg.slice('--config='.length);
+      const rewritten = stripExcludeFromCliEnvPolicyExpr(expr);
+      if (rewritten.stripped) {
+        if (rewritten.replacement) out.push(`--config=${rewritten.replacement}`);
+        continue;
+      }
+    }
+    out.push(arg);
+  }
+  return out;
+}
+
+function extractCodexCliProfileAndFlags(codexArgs = []) {
+  const args = Array.isArray(codexArgs) ? codexArgs.map(String) : [];
+  let profile = null;
+  let cdDir = null;
+  let hasOssFlag = false;
+  let hasLegacyCliEnvPolicy = false;
+  let cliExcludePatterns = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') break;
+    if (arg === '--oss' || arg === '--local-provider' || arg.startsWith('--local-provider=')) {
+      hasOssFlag = true;
+    }
+    if ((arg === '-C' || arg === '--cd') && typeof args[i + 1] === 'string') {
+      cdDir = args[i + 1].trim() || cdDir;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--cd=')) {
+      cdDir = arg.slice('--cd='.length).trim() || cdDir;
+      continue;
+    }
+    if ((arg === '-p' || arg === '--profile') && typeof args[i + 1] === 'string') {
+      profile = args[i + 1].trim() || profile;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--profile=')) {
+      profile = arg.slice('--profile='.length).trim() || profile;
+      continue;
+    }
+    if ((arg === '-c' || arg === '--config') && typeof args[i + 1] === 'string') {
+      const expr = args[i + 1].trim();
+      const parsedExclude = parseCliConfigExcludeValue(expr);
+      if (parsedExclude.matched) {
+        hasLegacyCliEnvPolicy = true;
+        cliExcludePatterns = parsedExclude.patterns;
+      } else if (/^shell_environment_policy\.include_only\s*=/.test(expr)) {
+        hasLegacyCliEnvPolicy = true;
+      }
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--config=')) {
+      const expr = arg.slice('--config='.length).trim();
+      const parsedExclude = parseCliConfigExcludeValue(expr);
+      if (parsedExclude.matched) {
+        hasLegacyCliEnvPolicy = true;
+        cliExcludePatterns = parsedExclude.patterns;
+      } else if (/^shell_environment_policy\.include_only\s*=/.test(expr)) {
+        hasLegacyCliEnvPolicy = true;
+      }
+    }
+  }
+  return { profile, cdDir, hasOssFlag, hasLegacyCliEnvPolicy, cliExcludePatterns };
+}
+
+function collectProjectCodexConfigDocs(fs, startDir, userCodexHome = null) {
+  if (typeof startDir !== 'string' || !startDir.trim()) return [];
+  const canonicalUserHome = typeof userCodexHome === 'string' && userCodexHome.trim()
+    ? canonicalizeCodexPath(fs, resolve(userCodexHome.trim()))
+    : null;
+  const chain = [];
+  let dir = resolve(startDir.trim());
+  for (let depth = 0; depth < 64; depth += 1) {
+    chain.push(dir);
+    let hasGitMarker = false;
+    try {
+      const statFn = fs?.lstatSync ?? nativeFs.lstatSync;
+      statFn.call(fs, join(dir, '.git'));
+      hasGitMarker = true;
+    } catch {}
+    if (hasGitMarker) break;
+    const parent = dirname(dir);
+    if (!parent || parent === dir) break;
+    dir = parent;
+  }
+  const docs = [];
+  for (const candidateDir of chain.reverse()) {
+    const dotCodexDir = join(candidateDir, '.codex');
+    if (canonicalUserHome && canonicalizeCodexPath(fs, dotCodexDir) === canonicalUserHome) {
+      continue;
+    }
+    const doc = readCodexTomlQuiet(fs, join(dotCodexDir, 'config.toml'));
+    if (doc) docs.push(doc);
+  }
+  return docs;
+}
+
+/**
+ * Return the `sqlite_home` override path when neither the user's `config.toml` nor
+ * `CODEX_SQLITE_HOME` already specifies one, preventing split-WAL SQLite corruption
+ * without clobbering explicit user overrides.
+ */
+export function resolveEffectiveSqliteHome({
+  userCodexHome = null,
+  userConfigText = null,
+  parsedConfig = null,
+  env = process.env,
+} = {}) {
+  if (typeof env?.CODEX_SQLITE_HOME === 'string' && env.CODEX_SQLITE_HOME.trim()) {
+    return null;
+  }
+  const parsed = isTomlTable(parsedConfig) ? parsedConfig : parseCodexTomlQuiet(userConfigText);
+  if (typeof parsed?.sqlite_home === 'string' && parsed.sqlite_home.trim()) {
+    return null;
+  }
+  if (typeof userCodexHome === 'string' && userCodexHome.trim()) {
+    return userCodexHome.trim();
+  }
+  return null;
+}
+
+/**
+ * Build `-c` shell_environment_policy exclusions compatible with the user's config layers
+ * (user `config.toml`, active profile, repo `.codex/config.toml`, and CLI `-c` flags).
+ * Uses a single TOML inline table for `filters` so wildcard patterns like `"PDD_*"` are
+ * parsed as real TOML keys (Codex splits dotted `-c` paths on `.` without stripping quotes).
+ */
+function buildCodexSubshellExcludeCliArgs(
+  userConfigText = null,
+  {
+    includeCodexHome = false,
+    userCodexHome = null,
+    codexArgs = [],
+    cwd = null,
+    fs = nativeFs,
+  } = {},
+) {
+  const requiredExcludes = includeCodexHome
+    ? [...REQUIRED_CODEX_SUBSHELL_EXCLUDES, 'CODEX_HOME']
+    : REQUIRED_CODEX_SUBSHELL_EXCLUDES;
+  const parsedUser = parseCodexTomlQuiet(userConfigText);
+  const {
+    profile: cliProfile,
+    cdDir,
+    hasLegacyCliEnvPolicy,
+    cliExcludePatterns,
+  } = extractCodexCliProfileAndFlags(codexArgs);
+  const activeProfile = cliProfile || (typeof parsedUser?.profile === 'string' ? parsedUser.profile.trim() : null);
+
+  const policyLayers = [];
+  if (isTomlTable(parsedUser?.shell_environment_policy)) {
+    policyLayers.push(parsedUser.shell_environment_policy);
+  }
+  if (activeProfile) {
+    if (isTomlTable(parsedUser?.profiles?.[activeProfile]?.shell_environment_policy)) {
+      policyLayers.push(parsedUser.profiles[activeProfile].shell_environment_policy);
+    }
+    if (typeof userCodexHome === 'string' && userCodexHome.trim()) {
+      const profileDoc = readCodexTomlQuiet(fs, join(resolve(userCodexHome.trim()), `${activeProfile}.config.toml`));
+      if (isTomlTable(profileDoc?.shell_environment_policy)) {
+        policyLayers.push(profileDoc.shell_environment_policy);
+      }
+    }
+  }
+  const effectiveStartDir = cdDir
+    ? resolve(typeof cwd === 'string' && cwd.trim() ? cwd.trim() : process.cwd(), cdDir)
+    : (typeof cwd === 'string' && cwd.trim() ? resolve(cwd.trim()) : null);
+  if (effectiveStartDir) {
+    for (const repoDoc of collectProjectCodexConfigDocs(fs, effectiveStartDir, userCodexHome)) {
+      if (isTomlTable(repoDoc?.shell_environment_policy)) {
+        policyLayers.push(repoDoc.shell_environment_policy);
+      }
+    }
+  }
+
+  const hasFiltersLayer = policyLayers.some(p => isTomlTable(p.filters));
+  const hasLegacyArray = hasLegacyCliEnvPolicy || (
+    !hasFiltersLayer
+    && policyLayers.some(p => Array.isArray(p.exclude) || Array.isArray(p.include_only))
+  );
+  if (hasLegacyArray) {
+    const merged = [];
+    const seen = new Set();
+    const existingExcludes = [
+      ...policyLayers.flatMap(p => (Array.isArray(p.exclude) ? p.exclude : [])),
+      ...cliExcludePatterns,
+    ];
+    for (const item of [...existingExcludes, ...requiredExcludes]) {
+      const trimmed = typeof item === 'string' ? item.trim() : '';
+      if (!trimmed) continue;
+      const lower = trimmed.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      merged.push(trimmed);
+    }
+    return ['-c', `shell_environment_policy.exclude=${JSON.stringify(merged)}`];
+  }
+
+  // Emit a single TOML inline table so Codex parses quoted wildcard keys (`"PDD_*"`) properly
+  // and deep-merges them with any user `[shell_environment_policy.filters]` entries.
+  const entries = requiredExcludes.map(pattern => `${formatTomlKey(pattern)} = "exclude"`);
+  return ['-c', `shell_environment_policy.filters={ ${entries.join(', ')} }`];
+}
+
+function canonicalizeCodexPath(fs, targetPath) {
+  const resolved = resolve(targetPath);
+  const realFn = fs?.realpathSync?.native
+    ?? fs?.realpathSync
+    ?? (fs === nativeFs ? (nativeFs.realpathSync?.native ?? nativeFs.realpathSync) : null);
+  if (typeof realFn !== 'function') return resolved;
+  // Walk up to the nearest existing ancestor so paths like `/tmp/new-dir` still canonicalize
+  // to `/private/tmp/new-dir` on macOS even before the directory is created.
+  let cur = resolved;
+  const trailing = [];
+  while (true) {
+    try {
+      const realBase = String(realFn.call(fs, cur));
+      return trailing.length > 0 ? join(realBase, ...trailing.reverse()) : realBase;
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return resolved;
+      trailing.push(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+function expandTildePath(rawPath, env = process.env) {
+  if (typeof rawPath !== 'string') return '';
+  if (rawPath.startsWith('~/') || rawPath.startsWith('~\\')) {
+    const home = (typeof env?.HOME === 'string' && env.HOME.trim()) ? env.HOME.trim() : homedir();
+    return join(home, rawPath.slice(2));
+  }
+  return rawPath;
+}
+
+function stripCodexHomePrefix(rawPath, prefixes, env = process.env) {
+  if (typeof rawPath !== 'string' || !rawPath) return null;
+  const expanded = expandTildePath(rawPath, env);
+  for (const prefix of prefixes) {
+    if (!prefix) continue;
+    if (expanded.startsWith(`${prefix}/`) || expanded.startsWith(`${prefix}\\`)) {
+      return expanded.slice(prefix.length + 1);
+    }
+  }
+  return null;
+}
+
+function isMirroredCodexRelativePath(relPath) {
+  if (typeof relPath !== 'string' || !relPath) return false;
+  const segments = relPath.split(/[\\/]+/).filter(Boolean);
+  if (segments.length === 0) return false;
+  if (segments[0].toLowerCase() === '.tmp') {
+    return segments.length >= 2 && MIRRORED_CODEX_DOT_TMP_SET.has(segments[1]);
+  }
+  return !isIsolatedCodexHomeEntry(segments[0]);
+}
+
+/**
+ * Collect `~/.codex`-anchored marketplace sources and hook-trust entries that should remap
+ * onto the canonical active runtime `CODEX_HOME`.
+ */
+function collectCodexHomeMirrorMappings(
+  parsed,
+  { userCodexHome = null, runtimeCodexHome = null, env = process.env, fs = nativeFs } = {},
+) {
+  if (
+    !isTomlTable(parsed)
+    || typeof userCodexHome !== 'string' || !userCodexHome.trim()
+    || typeof runtimeCodexHome !== 'string' || !runtimeCodexHome.trim()
+  ) {
+    return { marketplaceSources: [], hookStates: [] };
+  }
+  const resolvedUserHome = resolve(userCodexHome.trim());
+  const realUserHome = canonicalizeCodexPath(fs, resolvedUserHome);
+  const resolvedRuntimeHome = resolve(runtimeCodexHome.trim());
+  const realRuntimeHome = canonicalizeCodexPath(fs, resolvedRuntimeHome);
+  if (realUserHome === realRuntimeHome || resolvedUserHome === resolvedRuntimeHome) {
+    return { marketplaceSources: [], hookStates: [] };
+  }
+  const userPrefixes = [...new Set([realUserHome, resolvedUserHome])].sort((a, b) => b.length - a.length);
+  const marketplaceSources = [];
+  if (isTomlTable(parsed.marketplaces)) {
+    for (const [name, table] of Object.entries(parsed.marketplaces)) {
+      if (!isTomlTable(table) || typeof table.source !== 'string') continue;
+      const rel = stripCodexHomePrefix(table.source.trim(), userPrefixes, env);
+      if (!rel || !isMirroredCodexRelativePath(rel)) continue;
+      const rewritten = join(realRuntimeHome, ...rel.split(/[\\/]+/).filter(Boolean));
+      marketplaceSources.push({ name, rewritten });
+    }
+  }
+  const hookStates = [];
+  if (isTomlTable(parsed.hooks) && isTomlTable(parsed.hooks.state)) {
+    for (const [key, entry] of Object.entries(parsed.hooks.state)) {
+      if (!isTomlTable(entry)) continue;
+      const rest = stripCodexHomePrefix(key, userPrefixes, env);
+      if (!rest) continue;
+      const relFile = rest.split(':')[0];
+      if (!isMirroredCodexRelativePath(relFile)) continue;
+      hookStates.push({ rewrittenKey: `${realRuntimeHome}${sep}${rest}`, entry });
+    }
+  }
+  return { marketplaceSources, hookStates };
+}
+
+/**
+ * Return a shallow copy of a materialized Codex config object with mirrored marketplace
+ * sources and hook-trust keys remapped onto `runtimeCodexHome` (never mutating user config).
+ */
+function remapCodexHomeConfigObject(
+  configData,
+  { userCodexHome = null, runtimeCodexHome = null, env = process.env, fs = nativeFs } = {},
+) {
+  if (!isTomlTable(configData)) return configData;
+  const { marketplaceSources, hookStates } = collectCodexHomeMirrorMappings(configData, {
+    userCodexHome,
+    runtimeCodexHome,
+    env,
+    fs,
+  });
+  const homesDiffer = typeof userCodexHome === 'string' && userCodexHome.trim()
+    && typeof runtimeCodexHome === 'string' && runtimeCodexHome.trim()
+    && canonicalizeCodexPath(fs, resolve(userCodexHome.trim())) !== canonicalizeCodexPath(fs, resolve(runtimeCodexHome.trim()));
+  const needsAllowSymlink = homesDiffer && configData.allow_symlinked_codex_home === undefined;
+  if (marketplaceSources.length === 0 && hookStates.length === 0 && !needsAllowSymlink) return configData;
+  const next = { ...configData };
+  if (needsAllowSymlink) {
+    next.allow_symlinked_codex_home = true;
+  }
+  if (marketplaceSources.length > 0 && isTomlTable(configData.marketplaces)) {
+    const nextMarketplaces = { ...configData.marketplaces };
+    for (const { name, rewritten } of marketplaceSources) {
+      if (isTomlTable(nextMarketplaces[name])) {
+        nextMarketplaces[name] = { ...nextMarketplaces[name], source: rewritten };
+      }
+    }
+    next.marketplaces = nextMarketplaces;
+  }
+  if (hookStates.length > 0 && isTomlTable(configData.hooks) && isTomlTable(configData.hooks.state)) {
+    const nextState = { ...configData.hooks.state };
+    for (const { rewrittenKey, entry } of hookStates) {
+      nextState[rewrittenKey] = { ...entry };
+    }
+    next.hooks = { ...configData.hooks, state: nextState };
+  }
+  return next;
+}
+
+/**
+ * Build non-persisted `-c` overrides that remap `~/.codex`-anchored marketplace sources and
+ * hook-trust keys onto the active canonical runtime `CODEX_HOME` and enable symlinked
+ * `CODEX_HOME` writable roots so bundled plugins, user `hooks.json`, and sandboxed skills
+ * work identically to stock `codex`.
+ */
+export function buildCodexHomeMirrorCliArgs({
+  userCodexHome = null,
+  runtimeCodexHome = null,
+  userConfigText = null,
+  env = process.env,
+  fs = nativeFs,
+} = {}) {
+  const parsed = parseCodexTomlQuiet(userConfigText);
+  const args = [];
+  const homesDiffer = typeof userCodexHome === 'string' && userCodexHome.trim()
+    && typeof runtimeCodexHome === 'string' && runtimeCodexHome.trim()
+    && canonicalizeCodexPath(fs, resolve(userCodexHome.trim())) !== canonicalizeCodexPath(fs, resolve(runtimeCodexHome.trim()));
+  if (homesDiffer && parsed?.allow_symlinked_codex_home !== false) {
+    // Forward for forward-compatibility; note that Codex 0.170.0 only checks the User-layer
+    // config.toml (set in materialized overlays/managed homes).
+    args.push('-c', 'allow_symlinked_codex_home=true');
+  }
+  if (!parsed) return args;
+  const { marketplaceSources, hookStates } = collectCodexHomeMirrorMappings(parsed, {
+    userCodexHome,
+    runtimeCodexHome,
+    env,
+    fs,
+  });
+  const inlineMarketplaces = [];
+  for (const { name, rewritten } of marketplaceSources) {
+    if (/^[A-Za-z0-9_-]+$/.test(name)) {
+      // Bare keys must stay unquoted for Codex `-c` dotted path resolution.
+      args.push('-c', `marketplaces.${name}.source=${JSON.stringify(rewritten)}`);
+    } else {
+      inlineMarketplaces.push(`${JSON.stringify(name)} = { source = ${JSON.stringify(rewritten)} }`);
+    }
+  }
+  if (inlineMarketplaces.length > 0) {
+    args.push('-c', `marketplaces={ ${inlineMarketplaces.join(', ')} }`);
+  }
+  const hookStateEntries = [];
+  for (const { rewrittenKey, entry } of hookStates) {
+    const fields = [];
+    for (const [field, value] of Object.entries(entry)) {
+      if (value === undefined) continue;
+      try {
+        fields.push(`${formatTomlKey(field)} = ${formatTomlValue(value)}`);
+      } catch {}
+    }
+    if (fields.length > 0) {
+      hookStateEntries.push(`${JSON.stringify(rewrittenKey)} = { ${fields.join(', ')} }`);
+    }
+  }
+  if (hookStateEntries.length > 0) {
+    args.push('-c', `hooks.state={ ${hookStateEntries.join(', ')} }`);
+  }
+  return args;
+}
+
+function collectRuntimeWritebackNeedles(fs, runtimeCodexHome) {
+  const resolvedRuntimeHome = resolve(runtimeCodexHome.trim());
+  const realRuntimeHome = canonicalizeCodexPath(fs, resolvedRuntimeHome);
+  const runtimePrefixes = [...new Set([realRuntimeHome, resolvedRuntimeHome])].sort((a, b) => b.length - a.length);
+  const needles = runtimePrefixes.flatMap(p => (sep === '\\' ? [p, JSON.stringify(p).slice(1, -1)] : [p]));
+  return { resolvedRuntimeHome, realRuntimeHome, runtimePrefixes, needles };
+}
+
+/**
+ * Fast read-only check for whether `userConfigPath` contains any `<runtimeDir>` prefix
+ * that needs locked writeback normalization.
+ */
+export function needsCodexConfigWritebackNormalization(
+  fs,
+  { runtimeCodexHome = null, userConfigPath = null, beforeContent = null } = {},
+) {
+  if (
+    typeof runtimeCodexHome !== 'string' || !runtimeCodexHome.trim()
+    || typeof userConfigPath !== 'string' || !userConfigPath.trim()
+  ) {
+    return false;
+  }
+  const { resolvedRuntimeHome, realRuntimeHome, needles } = collectRuntimeWritebackNeedles(fs, runtimeCodexHome);
+  const target = resolveUserCodexConfigTarget(fs, userConfigPath, [resolvedRuntimeHome, realRuntimeHome], { strict: false });
+  if (!target.exists || !target.readPath) return false;
+  let afterContent;
+  try {
+    afterContent = fs.readFileSync(target.readPath, 'utf8');
+  } catch {
+    return false;
+  }
+  if (typeof beforeContent === 'string' && afterContent === beforeContent) return false;
+  return needles.some(n => n && afterContent.includes(n));
+}
+
+/**
+ * If Codex persisted new `<runtimeDir>`-anchored `hooks.state` or `marketplaces.*.source`
+ * entries through the `config.toml` symlink during a session, rewrite only those prefixes
+ * back to `userCodexHome`. Preserves symlinked `~/.codex/config.toml` targets (Stow/chezmoi)
+ * by resolving the write path before atomic rename, and never touches the file when unchanged.
+ */
+export function normalizeCodexConfigWriteback(
+  fs,
+  { userCodexHome = null, runtimeCodexHome = null, userConfigPath = null, beforeContent = null } = {},
+) {
+  if (
+    typeof userCodexHome !== 'string' || !userCodexHome.trim()
+    || typeof runtimeCodexHome !== 'string' || !runtimeCodexHome.trim()
+    || typeof userConfigPath !== 'string' || !userConfigPath.trim()
+  ) {
+    return false;
+  }
+  const resolvedUserHome = resolve(userCodexHome.trim());
+  const { resolvedRuntimeHome, realRuntimeHome, runtimePrefixes, needles } = collectRuntimeWritebackNeedles(fs, runtimeCodexHome);
+  const target = resolveUserCodexConfigTarget(fs, userConfigPath, [resolvedRuntimeHome, realRuntimeHome], { strict: false });
+  if (!target.exists || !target.readPath || !target.writePath) return false;
+  let afterContent;
+  try {
+    afterContent = fs.readFileSync(target.readPath, 'utf8');
+  } catch {
+    return false;
+  }
+  if (typeof beforeContent === 'string' && afterContent === beforeContent) return false;
+  if (!needles.some(n => n && afterContent.includes(n))) return false;
+
+  const parsed = parseCodexTomlQuiet(afterContent);
+  if (!parsed) return false;
+  let changed = false;
+  const next = { ...parsed };
+
+  if (isTomlTable(parsed.marketplaces)) {
+    const nextMarketplaces = { ...parsed.marketplaces };
+    for (const [name, table] of Object.entries(parsed.marketplaces)) {
+      if (!isTomlTable(table) || typeof table.source !== 'string') continue;
+      const rel = stripCodexHomePrefix(table.source.trim(), runtimePrefixes);
+      if (!rel || !isMirroredCodexRelativePath(rel)) continue;
+      nextMarketplaces[name] = {
+        ...table,
+        source: join(resolvedUserHome, ...rel.split(/[\\/]+/).filter(Boolean)),
+      };
+      changed = true;
+    }
+    if (changed) next.marketplaces = nextMarketplaces;
+  }
+
+  if (isTomlTable(parsed.hooks) && isTomlTable(parsed.hooks.state)) {
+    const nextState = {};
+    let hooksChanged = false;
+    for (const [key, entry] of Object.entries(parsed.hooks.state)) {
+      const rest = stripCodexHomePrefix(key, runtimePrefixes);
+      if (rest && isTomlTable(entry) && isMirroredCodexRelativePath(rest.split(':')[0])) {
+        nextState[`${resolvedUserHome}${sep}${rest}`] = entry;
+        hooksChanged = true;
+      } else if (!Object.hasOwn(nextState, key)) {
+        nextState[key] = entry;
+      }
+    }
+    if (hooksChanged) {
+      next.hooks = { ...parsed.hooks, state: nextState };
+      changed = true;
+    }
+  }
+
+  if (!changed) return false;
+  try {
+    const serialized = serializeTomlConfig(next, target.writePath);
+    writeAtomicPrivate(fs, target.writePath, serialized);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Build the verified Codex CLI `-c` override flags for transparent gateway passthrough.
+ */
+export function buildCodexGatewayCliArgs({
+  backendApiUrl,
+  userCodexHome = null,
+  runtimeCodexHome = null,
+  emptySubshellCodexHome = null,
+  userConfigText = null,
+  nativeBackendApi = true,
+  codexArgs = [],
+  cwd = null,
+  env = process.env,
+  fs = nativeFs,
+} = {}) {
+  const codexApiUrl = nativeBackendApi ? resolveCodexResponsesBaseUrl(backendApiUrl) : backendApiUrl;
+  const parsedUser = parseCodexTomlQuiet(userConfigText);
+  const { profile: cliProfile, hasOssFlag } = extractCodexCliProfileAndFlags(codexArgs);
+  const activeProfile = cliProfile || (typeof parsedUser?.profile === 'string' ? parsedUser.profile.trim() : null);
+  let effectiveConfiguredProvider = typeof parsedUser?.model_provider === 'string' ? parsedUser.model_provider.trim() : '';
+  if (activeProfile) {
+    const inlineProfProvider = parsedUser?.profiles?.[activeProfile]?.model_provider;
+    if (typeof inlineProfProvider === 'string' && inlineProfProvider.trim()) {
+      effectiveConfiguredProvider = inlineProfProvider.trim();
+    } else if (typeof userCodexHome === 'string' && userCodexHome.trim()) {
+      const profileDoc = readCodexTomlQuiet(fs, join(resolve(userCodexHome.trim()), `${activeProfile}.config.toml`));
+      if (typeof profileDoc?.model_provider === 'string' && profileDoc.model_provider.trim()) {
+        effectiveConfiguredProvider = profileDoc.model_provider.trim();
+      }
+    }
+  }
+  const args = [
+    '-c', 'cli_auth_credentials_store="file"',
+    '-c', `chatgpt_base_url=${JSON.stringify(backendApiUrl)}`,
+    '-c', `openai_base_url=${JSON.stringify(codexApiUrl)}`,
+  ];
+  if (!hasOssFlag && effectiveConfiguredProvider && effectiveConfiguredProvider !== 'openai') {
+    args.push('-c', 'model_provider="openai"');
+  }
+  const effectiveSqliteHome = resolveEffectiveSqliteHome({
+    userCodexHome,
+    parsedConfig: parsedUser,
+    env,
+  });
+  if (effectiveSqliteHome) {
+    args.push('-c', `sqlite_home=${JSON.stringify(effectiveSqliteHome)}`);
+  }
+  args.push(
+    '-c', 'features.daemon_auto_start=false',
+    '-c', 'features.shell_snapshot=false',
+  );
+  if (!nativeBackendApi) {
+    args.push('-c', 'features.responses_websockets=false');
+  }
+  // Exclude CODEX_HOME from model subshells instead of pointing it at `empty-subshell` so
+  // `$CODEX_HOME` stays unset (matching stock `codex` and preserving `$skill-installer` /
+  // `$skill-creator`) while keeping `<runtimeDir>/auth.json` hidden from child shell commands.
+  const hideCodexHomeInSubshell = Boolean(
+    (typeof runtimeCodexHome === 'string' && runtimeCodexHome.trim())
+    || (typeof emptySubshellCodexHome === 'string' && emptySubshellCodexHome.trim()),
+  );
+  args.push(
+    ...buildCodexSubshellExcludeCliArgs(userConfigText, {
+      includeCodexHome: hideCodexHomeInSubshell,
+      userCodexHome,
+      codexArgs,
+      cwd,
+      fs,
+    }),
+    ...buildCodexHomeMirrorCliArgs({ userCodexHome, runtimeCodexHome, userConfigText, env, fs }),
+    '-c', 'model_providers.pdd_pool.name="PDD Pool"',
+    '-c', `model_providers.pdd_pool.base_url=${JSON.stringify(codexApiUrl)}`,
+    '-c', 'model_providers.pdd_pool.wire_api="responses"',
+    '-c', 'model_providers.pdd_pool.requires_openai_auth=true',
+    '-c', 'model_providers.pdd_codex_gateway.name="PDD Codex Gateway"',
+    '-c', `model_providers.pdd_codex_gateway.base_url=${JSON.stringify(codexApiUrl)}`,
+    '-c', 'model_providers.pdd_codex_gateway.wire_api="responses"',
+    '-c', 'model_providers.pdd_codex_gateway.requires_openai_auth=true',
+  );
+  if (!nativeBackendApi) {
+    args.push(
+      '-c', 'model_providers.pdd_pool.supports_websockets=false',
+      '-c', 'model_providers.pdd_codex_gateway.supports_websockets=false',
+    );
+  }
+  return args;
+}
+
+/**
+ * Build the native `chatgpt`-mode `auth.json` payload containing only a revocable `pddg_` grant.
+ */
+export function buildGatewayAuthJson({ grantToken, planType = null, now = Date.now } = {}) {
+  const nowFn = typeof now === 'function' ? now : Date.now;
+  return {
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      id_token: buildSyntheticGatewayIdToken({ planType }),
+      access_token: grantToken,
+      refresh_token: '',
+      account_id: 'acct_pdd_gateway',
+    },
+    last_refresh: new Date(nowFn()).toISOString(),
+  };
+}
+
+const USER_CODEX_BASELINE_DIRS = [
+  'sessions',
+  'archived_sessions',
+  'plugins',
+  'skills',
+  'rules',
+  'memories',
+];
+const USER_CODEX_BASELINE_DOT_TMP_DIRS = [
+  'bundled-marketplaces',
+  'marketplaces',
+  'plugins',
+];
+
+/**
+ * Ensure `~/.codex/` and its baseline folders + empty `config.toml` exist so brand-new VMs
+ * persist chats, plugins, skills, marketplaces, and MCP servers directly into the user's real Codex home.
+ */
+export function ensureUserCodexHomeBaseline(fs, userHome) {
+  fs.mkdirSync(userHome, { recursive: true, mode: 0o700 });
+  const cfgPath = join(userHome, 'config.toml');
+  let cfgExists = false;
+  try {
+    (fs.lstatSync ?? fs.statSync)(cfgPath);
+    cfgExists = true;
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  if (!cfgExists) {
+    try {
+      fs.writeFileSync(cfgPath, '', { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      try { fs.chmodSync?.(cfgPath, 0o600); } catch {}
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+    }
+  }
+  for (const dirName of USER_CODEX_BASELINE_DIRS) {
+    const dirPath = join(userHome, dirName);
+    try {
+      (fs.lstatSync ?? fs.statSync)(dirPath);
+    } catch (err) {
+      if (err?.code === 'ENOENT') {
+        try { fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 }); } catch {}
+      }
+    }
+  }
+  // Pre-create shared `.tmp` marketplace caches so first-run bundled/added marketplace extractions
+  // land in `~/.codex/.tmp/...` via symlink instead of ephemeral runtime directories.
+  const dotTmpDir = join(userHome, '.tmp');
+  let dotTmpIsSafe = false;
+  try {
+    const st = (fs.lstatSync ?? fs.statSync)(dotTmpDir);
+    dotTmpIsSafe = st.isDirectory() && !st.isSymbolicLink();
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      try {
+        fs.mkdirSync(dotTmpDir, { recursive: true, mode: 0o700 });
+        dotTmpIsSafe = true;
+      } catch {}
+    }
+  }
+  if (dotTmpIsSafe) {
+    for (const subName of USER_CODEX_BASELINE_DOT_TMP_DIRS) {
+      const subPath = join(dotTmpDir, subName);
+      try {
+        (fs.lstatSync ?? fs.statSync)(subPath);
+      } catch (err) {
+        if (err?.code === 'ENOENT') {
+          try { fs.mkdirSync(subPath, { recursive: true, mode: 0o700 }); } catch {}
+        }
+      }
+    }
+  }
+  return cfgPath;
+}
+
 const isTomlTable = value => value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date) && typeof value.toISOString !== 'function';
 const formatTomlKey = key => (/^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key));
 
@@ -874,12 +1776,15 @@ export function buildSyntheticGatewayIdToken({ planType } = {}) {
   return `${header}.${payload}.sig`;
 }
 
-export function stopCodexAppServerDaemon(codexHome, { env = process.env, fs = nativeFs, spawnSync } = {}) {
+export function stopCodexAppServerDaemon(codexHome, { env = process.env, fs = nativeFs, spawnSync, codexBin = null } = {}) {
   if (typeof codexHome !== 'string' || !codexHome.trim()) return false;
   if (fs !== nativeFs && typeof spawnSync !== 'function') return false;
   const runner = typeof spawnSync === 'function' ? spawnSync : nativeSpawnSync;
+  const bin = (typeof codexBin === 'string' && codexBin.trim())
+    || (typeof env?.PDD_CODEX_BIN === 'string' && env.PDD_CODEX_BIN.trim())
+    || 'codex';
   try {
-    runner('codex', ['app-server', 'daemon', 'stop'], {
+    runner(bin, ['app-server', 'daemon', 'stop'], {
       env: { ...env, CODEX_HOME: codexHome },
       stdio: 'ignore',
       timeout: 2500,
@@ -947,16 +1852,6 @@ function isDisallowedCodexSymlinkTargetName(name) {
   return lower.startsWith('auth.json') || lower.startsWith('config.toml');
 }
 
-function isPathAtOrInside(candidatePath, rootPath) {
-  const normCandidate = resolve(candidatePath);
-  const normRoot = resolve(rootPath);
-  return (
-    normCandidate === normRoot
-    || normCandidate.startsWith(normRoot + sep)
-    || normCandidate.startsWith(`${normRoot}/`)
-  );
-}
-
 export function isSafeCodexSourceEntry(fs, src, targetRoot, { sourceHome = null } = {}) {
   if (typeof src !== 'string' || !src) return false;
   const srcBase = basename(src).toLowerCase();
@@ -1005,7 +1900,7 @@ export function isSafeCodexSourceEntry(fs, src, targetRoot, { sourceHome = null 
   return true;
 }
 
-function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRoots = []) {
+export function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRoots = [], { preserveLinks = null } = {}) {
   fs.mkdirSync(managedHome, { recursive: true, mode: 0o700 });
   try { (fs.chmodSync ?? nativeFs.chmodSync)?.(managedHome, 0o700); } catch {}
   const resolvedSourceHome = resolve(sourceHome);
@@ -1058,8 +1953,7 @@ function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRo
         let currentTarget = null;
         try { currentTarget = fs.readlinkSync?.(dst) ?? null; } catch {}
         if (currentTarget !== src) {
-          removeLink(dst);
-          try { symlink(src, dst); } catch {}
+          replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink });
         }
       } else if (
         dstStat.isDirectory()
@@ -1074,8 +1968,7 @@ function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRo
           symlink(src, dst);
         } catch {}
       } else if (REPLACED_MANAGED_CACHE_FILES.has(name) && dstStat.isFile() && !dstStat.isSymbolicLink()) {
-        removeLink(dst);
-        try { symlink(src, dst); } catch {}
+        replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink });
       }
     } else {
       try {
@@ -1093,12 +1986,112 @@ function syncManagedCodexHomeLinks(fs, sourceHome, managedHome, extraForbiddenRo
         .filter(Boolean);
     } catch {}
     for (const name of managedEntries) {
+      if (preserveLinks?.has(name)) continue;
       if (activeValidLinks.has(name) && !isIsolatedCodexHomeEntry(name)) continue;
       const dst = join(managedHome, name);
       try {
         const dstStat = lstat(dst);
         if (dstStat.isSymbolicLink()) removeLink(dst);
       } catch {}
+    }
+  }
+  syncManagedCodexDotTmpLinks(fs, resolvedSourceHome, resolvedManagedHome, forbiddenRoots, {
+    lstat,
+    symlink,
+    removeLink,
+  });
+}
+
+function replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink }) {
+  const rename = typeof fs?.renameSync === 'function' ? fs.renameSync.bind(fs) : (fs === nativeFs ? nativeFs.renameSync : null);
+  if (rename) {
+    const tmpLink = `${dst}.link-${process.pid}-${randomBytes(4).toString('hex')}`;
+    try {
+      symlink(src, tmpLink);
+      rename(tmpLink, dst);
+      return;
+    } catch {
+      removeLink(tmpLink);
+    }
+  }
+  removeLink(dst);
+  try { symlink(src, dst); } catch {}
+}
+
+/**
+ * Mirror only safe shared marketplace/plugin cache entries from `~/.codex/.tmp` into a real
+ * `0700` `<managedHome>/.tmp` directory so temp git clones and lock files stay isolated.
+ */
+function syncManagedCodexDotTmpLinks(fs, resolvedSourceHome, resolvedManagedHome, forbiddenRoots, { lstat, symlink, removeLink }) {
+  const sourceTmp = join(resolvedSourceHome, '.tmp');
+  const managedTmp = join(resolvedManagedHome, '.tmp');
+
+  // Never allow `<managedHome>/.tmp` itself to be a symlink to `~/.codex/.tmp`.
+  let managedTmpStat = null;
+  try { managedTmpStat = lstat(managedTmp); } catch {}
+  if (managedTmpStat?.isSymbolicLink()) {
+    removeLink(managedTmp);
+    managedTmpStat = null;
+  }
+
+  let sourceTmpOk = false;
+  if (isSafeCodexSourceEntry(fs, sourceTmp, forbiddenRoots, { sourceHome: resolvedSourceHome })) {
+    try {
+      const st = (fs.statSync ?? nativeFs.statSync).call(fs, sourceTmp);
+      sourceTmpOk = Boolean(st?.isDirectory());
+    } catch {}
+  }
+
+  const validEntries = new Set();
+  if (sourceTmpOk) {
+    for (const name of MIRRORED_CODEX_DOT_TMP_ENTRIES) {
+      const src = join(sourceTmp, name);
+      if (isSafeCodexSourceEntry(fs, src, forbiddenRoots, { sourceHome: resolvedSourceHome })) {
+        validEntries.add(name);
+      }
+    }
+  }
+
+  if (validEntries.size === 0) {
+    if (managedTmpStat?.isDirectory()) {
+      for (const name of MIRRORED_CODEX_DOT_TMP_ENTRIES) {
+        const dst = join(managedTmp, name);
+        try {
+          if (lstat(dst).isSymbolicLink()) removeLink(dst);
+        } catch {}
+      }
+    }
+    return;
+  }
+
+  if (managedTmpStat && !managedTmpStat.isDirectory()) return;
+  fs.mkdirSync(managedTmp, { recursive: true, mode: 0o700 });
+  try { (fs.chmodSync ?? nativeFs.chmodSync)?.(managedTmp, 0o700); } catch {}
+
+  for (const name of MIRRORED_CODEX_DOT_TMP_ENTRIES) {
+    const src = join(sourceTmp, name);
+    const dst = join(managedTmp, name);
+    let dstStat = null;
+    try { dstStat = lstat(dst); } catch {}
+    if (validEntries.has(name)) {
+      if (!dstStat) {
+        try { symlink(src, dst); } catch {}
+      } else if (dstStat.isSymbolicLink()) {
+        let currentTarget = null;
+        try { currentTarget = fs.readlinkSync?.(dst) ?? null; } catch {}
+        if (currentTarget !== src) {
+          replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink });
+        }
+      } else if (dstStat.isFile()) {
+        replaceSymlinkAtomic(fs, src, dst, { symlink, removeLink });
+      } else if (dstStat.isDirectory()) {
+        try {
+          (fs.rmSync ?? nativeFs.rmSync)?.(dst, { recursive: true, force: true });
+          symlink(src, dst);
+        } catch {}
+      }
+    } else if (dstStat?.isSymbolicLink()) {
+      removeLink(dst);
     }
   }
 }
@@ -1206,6 +2199,11 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
   const rawGatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
   const grantToken = isGateway ? resolveCodexGatewayGrant(authOrLease) : null;
   const gatewayUrl = isGateway ? normalizeCodexGatewayBaseUrl(rawGatewayUrl, grantToken) : null;
+  const hasExplicitBackendApi = isGateway
+    && typeof authOrLease.codex_backend_api_url === 'string'
+    && authOrLease.codex_backend_api_url.trim().length > 0;
+  const backendApiUrl = hasExplicitBackendApi ? resolveCodexBackendApiUrl(authOrLease, gatewayUrl) : gatewayUrl;
+  const codexApiUrl = hasExplicitBackendApi ? resolveCodexResponsesBaseUrl(backendApiUrl) : gatewayUrl;
   const embeddedLeaseGrant = isGateway && isEmbeddedLeaseGatewayGrant(grantToken);
   const stripped = isGateway ? null : stripCodexAuthBundle(authOrLease);
 
@@ -1240,53 +2238,56 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
 
   if (isGateway) {
     const prevProviders = isTomlTable(cleanedUser.nextData.model_providers) ? { ...cleanedUser.nextData.model_providers } : {};
-    const modelCatalogUrl = `${gatewayUrl}/models`;
+    const modelCatalogUrl = `${codexApiUrl}/models`;
     const gatewayProviderBlock = embeddedLeaseGrant
       ? {
           name: 'PDD Codex Gateway',
-          base_url: gatewayUrl,
+          base_url: codexApiUrl,
           model_catalog_url: modelCatalogUrl,
           wire_api: 'responses',
           requires_openai_auth: true,
-          supports_websockets: false,
+          ...(hasExplicitBackendApi ? {} : { supports_websockets: false }),
         }
       : {
           name: 'PDD Codex Gateway',
-          base_url: gatewayUrl,
+          base_url: codexApiUrl,
           model_catalog_url: modelCatalogUrl,
           wire_api: 'responses',
           requires_openai_auth: false,
-          supports_websockets: false,
+          ...(hasExplicitBackendApi ? {} : { supports_websockets: false }),
           http_headers: { 'x-pdd-gateway-grant': grantToken },
         };
     const prevFeatures = isTomlTable(cleanedUser.nextData.features) ? { ...cleanedUser.nextData.features } : {};
-    const nextConfig = {
+    if (hasExplicitBackendApi) {
+      delete prevFeatures.responses_websockets;
+    }
+    const effectiveSqliteHome = resolveEffectiveSqliteHome({
+      userCodexHome: userHome,
+      parsedConfig: cleanedUser.nextData,
+      env,
+    });
+    const nextConfig = remapCodexHomeConfigObject({
       ...cleanedUser.nextData,
       cli_auth_credentials_store: 'file',
-      openai_base_url: gatewayUrl,
-      chatgpt_base_url: gatewayUrl,
+      openai_base_url: codexApiUrl,
+      chatgpt_base_url: backendApiUrl,
+      ...(effectiveSqliteHome ? { sqlite_home: effectiveSqliteHome } : {}),
       features: {
         ...prevFeatures,
-        responses_websockets: false,
+        ...(hasExplicitBackendApi ? { daemon_auto_start: false } : { responses_websockets: false }),
       },
       model_providers: {
         ...prevProviders,
         [CODEX_GATEWAY_PROVIDER_ID]: gatewayProviderBlock,
       },
-    };
+    }, { userCodexHome: userHome, runtimeCodexHome: managedHome, env, fs });
     delete nextConfig.model_provider;
     const serializedConfig = serializeTomlConfig(nextConfig, configPath);
-    const gatewayAuth = {
-      auth_mode: 'chatgpt',
-      OPENAI_API_KEY: null,
-      tokens: {
-        id_token: buildSyntheticGatewayIdToken({ planType: authOrLease?.plan_type ?? authOrLease?.plan }),
-        access_token: grantToken,
-        refresh_token: '',
-        account_id: 'acct_pdd_gateway',
-      },
-      last_refresh: new Date((ports.now ?? Date.now)()).toISOString(),
-    };
+    const gatewayAuth = buildGatewayAuthJson({
+      grantToken,
+      planType: authOrLease?.plan_type ?? authOrLease?.plan,
+      now: ports.now ?? Date.now,
+    });
     const authText = `${JSON.stringify(gatewayAuth, null, 2)}\n`;
     let existingConfigText = null;
     try { existingConfigText = fs.readFileSync(configPath, 'utf8'); } catch {}
@@ -1305,10 +2306,16 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
     };
   }
 
-  const nextOwnerConfig = {
+  const effectiveOwnerSqliteHome = resolveEffectiveSqliteHome({
+    userCodexHome: userHome,
+    parsedConfig: cleanedUser.nextData,
+    env,
+  });
+  const nextOwnerConfig = remapCodexHomeConfigObject({
     ...cleanedUser.nextData,
     cli_auth_credentials_store: 'file',
-  };
+    ...(effectiveOwnerSqliteHome ? { sqlite_home: effectiveOwnerSqliteHome } : {}),
+  }, { userCodexHome: userHome, runtimeCodexHome: managedHome, env, fs });
   const serializedOwnerConfig = serializeTomlConfig(nextOwnerConfig, configPath);
   writeAtomicCodexPair(fs, authPath, `${JSON.stringify(stripped, null, 2)}\n`, configPath, serializedOwnerConfig);
   return {
@@ -1322,54 +2329,173 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
   };
 }
 
-export function materializeLocalClaudeAuth(lease, { env = process.env, previousManagedBaseUrl = false } = {}, ports = {}) {
+function validateClaudeGatewayUrl(rawUrl) {
+  const raw = String(rawUrl ?? '').trim().replace(/\/+$/, '');
+  if (!raw) throw new CloudAccountsError('Cloud lease returned no Claude gateway URL.', { code: 'invalid_lease' });
+  let parsed;
+  try { parsed = new URL(raw); } catch { throw new CloudAccountsError('Invalid Claude gateway URL in Cloud lease.', { code: 'invalid_lease' }); }
+  if (parsed.username || parsed.password) {
+    throw new CloudAccountsError('Claude gateway URL must not include embedded credentials.', { code: 'invalid_lease' });
+  }
+  const loopback = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(parsed.hostname.toLowerCase());
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    throw new CloudAccountsError('Claude gateway URL requires https://.', { code: 'invalid_lease' });
+  }
+  return raw;
+}
+
+export function buildClaudeGatewaySettingsOverlay(lease, { env = process.env, userSettings = null } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const token = String(lease?.claude_oauth_token || lease?.gateway_bearer_token || '').trim();
   if (!token) throw new CloudAccountsError('Cloud lease returned no Claude OAuth token.', { code: 'invalid_lease' });
   rememberSecrets(token);
-  const { settingsPath, onboardingPath } = localClaudePaths(env);
-  const settings = readJsonObject(fs, settingsPath) ?? {};
-  const settingsEnv = object(settings.env) ? { ...settings.env } : {};
-  settingsEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
-  let managedBaseUrl = false;
-  if (lease?.delivery_mode === 'gateway_grant' && typeof lease.anthropic_base_url === 'string' && lease.anthropic_base_url.trim()) {
-    settingsEnv.ANTHROPIC_BASE_URL = lease.anthropic_base_url.trim();
-    managedBaseUrl = true;
-  } else if (previousManagedBaseUrl || MANAGED_CLAUDE_GATEWAY_RE.test(String(settingsEnv.ANTHROPIC_BASE_URL ?? ''))) {
-    delete settingsEnv.ANTHROPIC_BASE_URL;
-  }
-  settings.env = settingsEnv;
-  writeAtomicPrivate(fs, settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 
-  const onboarding = readJsonObject(fs, onboardingPath) ?? {};
-  onboarding.hasCompletedOnboarding = true;
-  writeAtomicPrivate(fs, onboardingPath, `${JSON.stringify(onboarding, null, 2)}\n`);
-  return { settingsPath, onboardingPath, managedBaseUrl };
+  const base = object(userSettings) ? { ...userSettings } : {};
+  const mergedEnv = object(base.env) ? { ...base.env } : {};
+  mergedEnv.CLAUDE_CODE_OAUTH_TOKEN = token;
+  mergedEnv.ANTHROPIC_API_KEY = '';
+  mergedEnv.ANTHROPIC_AUTH_TOKEN = '';
+  mergedEnv.CLAUDE_CODE_USE_BEDROCK = '0';
+  mergedEnv.CLAUDE_CODE_USE_VERTEX = '0';
+  mergedEnv.CLAUDE_CODE_USE_FOUNDRY = '0';
+
+  let managedBaseUrl = false;
+  if (lease?.delivery_mode === 'gateway_grant') {
+    mergedEnv.ANTHROPIC_BASE_URL = validateClaudeGatewayUrl(lease.anthropic_base_url);
+    managedBaseUrl = true;
+  } else {
+    delete mergedEnv.ANTHROPIC_BASE_URL;
+    const userGlobal = readJsonObject(fs, localClaudePaths(env).settingsPath);
+    if (String(userGlobal?.env?.ANTHROPIC_BASE_URL ?? '').trim()) {
+      mergedEnv.ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
+    }
+  }
+
+  return {
+    settings: {
+      ...base,
+      apiKeyHelper: '',
+      env: mergedEnv,
+    },
+    managedBaseUrl,
+  };
 }
 
-export function restoreLocalClaudeGatewayConfig({ env = process.env } = {}, ports = {}) {
+export function createClaudeStepSettingsOverlay(lease, { env = process.env, tmpRoot, userSettings = null, detached = false } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
+  const { settings, managedBaseUrl } = buildClaudeGatewaySettingsOverlay(lease, { env, userSettings }, ports);
+  const rootDir = tmpRoot ?? tmpdir();
+  fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
+  let overlayDir;
+  if (typeof fs.mkdtempSync === 'function') {
+    overlayDir = fs.mkdtempSync(join(rootDir, 'pdd-cl-'));
+  } else if (fs === nativeFs) {
+    overlayDir = nativeFs.mkdtempSync(join(rootDir, 'pdd-cl-'));
+  } else {
+    overlayDir = join(rootDir, `pdd-cl-${randomBytes(8).toString('hex')}`);
+    fs.mkdirSync(overlayDir, { recursive: true, mode: 0o700 });
+  }
+  try { fs.chmodSync?.(overlayDir, 0o700); } catch {}
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    activeOverlayCleanups.delete(cleanup);
+    syncOverlayHooks();
+    try { fs.rmSync(overlayDir, { recursive: true, force: true }); } catch {}
+  };
+  if (!detached) {
+    activeOverlayCleanups.add(cleanup);
+    syncOverlayHooks();
+  }
+
+  try {
+    const settingsPath = join(overlayDir, 'settings.json');
+    writeAtomicPrivate(fs, settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    return { overlayDir, settingsPath, managedBaseUrl, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+}
+
+export function materializeLocalClaudeAuth(lease, { env = process.env } = {}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const { settings, managedBaseUrl } = buildClaudeGatewaySettingsOverlay(lease, { env }, ports);
+  const claudeHome = pddManagedClaudeHome(env);
+  const settingsPath = managedClaudeSettingsPath(env);
+  fs.mkdirSync(claudeHome, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync?.(claudeHome, 0o700); } catch {}
+  writeAtomicPrivate(fs, settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  return { claudeHome, settingsPath, onboardingPath: null, managedBaseUrl };
+}
+
+export function restoreLocalClaudeGatewayConfig({ env = process.env, managedTokenHashes = null, removeManagedFile = true } = {}, ports = {}) {
+  const fs = ports.fs ?? nativeFs;
+  const managedPath = managedClaudeSettingsPath(env);
+  let removedManagedSettings = false;
+  if (removeManagedFile) {
+    try {
+      fs.unlinkSync(managedPath);
+      removedManagedSettings = true;
+    } catch {}
+  }
+
   const { settingsPath } = localClaudePaths(env);
   const settings = readJsonObject(fs, settingsPath);
   if (!object(settings) || !object(settings.env)) {
-    return { settingsPath, restoredSettings: false };
+    return { settingsPath, managedPath, removedManagedSettings, restoredSettings: false };
   }
+
+  const hashSet = new Set(normalizeTokenHashes(managedTokenHashes));
+  try {
+    const saved = readCloudAccountsState({ env }, ports);
+    for (const h of normalizeTokenHashes(saved.managed_claude_token_hashes)) {
+      hashSet.add(h);
+    }
+  } catch {}
+
   const settingsEnv = { ...settings.env };
   let changed = false;
-  if (typeof settingsEnv.CLAUDE_CODE_OAUTH_TOKEN === 'string' && settingsEnv.CLAUDE_CODE_OAUTH_TOKEN.trim().startsWith('pddg_')) {
-    rememberSecrets(settingsEnv.CLAUDE_CODE_OAUTH_TOKEN.trim());
-    delete settingsEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    changed = true;
+  if (typeof settingsEnv.CLAUDE_CODE_OAUTH_TOKEN === 'string') {
+    const tok = settingsEnv.CLAUDE_CODE_OAUTH_TOKEN.trim();
+    const isGatewayToken = tok.startsWith('pddg_');
+    const isManagedDirectToken = Boolean(tok && hashSet.size > 0 && hashSet.has(claudeTokenFingerprint(tok)));
+    if (isGatewayToken || isManagedDirectToken) {
+      rememberSecrets(tok);
+      delete settingsEnv.CLAUDE_CODE_OAUTH_TOKEN;
+      changed = true;
+    }
   }
-  if (MANAGED_CLAUDE_GATEWAY_RE.test(String(settingsEnv.ANTHROPIC_BASE_URL ?? ''))) {
+  if (MANAGED_CLAUDE_GATEWAY_RE.test(String(settingsEnv.ANTHROPIC_BASE_URL ?? '').trim())) {
     delete settingsEnv.ANTHROPIC_BASE_URL;
     changed = true;
   }
+  let restoredSettings = false;
   if (changed) {
-    const nextSettings = { ...settings, env: settingsEnv };
-    writeAtomicPrivate(fs, settingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`);
+    const nextSettings = { ...settings };
+    if (Object.keys(settingsEnv).length === 0) {
+      delete nextSettings.env;
+    } else {
+      nextSettings.env = settingsEnv;
+    }
+    let writeTarget = settingsPath;
+    try {
+      if (fs.lstatSync?.(settingsPath)?.isSymbolicLink?.() && typeof fs.realpathSync === 'function') {
+        writeTarget = fs.realpathSync(settingsPath);
+      }
+    } catch {}
+    try {
+      writeAtomicPrivate(fs, writeTarget, `${JSON.stringify(nextSettings, null, 2)}\n`);
+      restoredSettings = true;
+    } catch (err) {
+      if (err?.code !== 'EACCES' && err?.code !== 'EROFS' && err?.code !== 'EPERM') {
+        throw err;
+      }
+    }
   }
-  return { settingsPath, restoredSettings: changed };
+  return { settingsPath, managedPath, removedManagedSettings, restoredSettings };
 }
 
 export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot, detached = false } = {}, ports = {}) {
@@ -1380,6 +2506,11 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
   const rawGatewayUrl = isGateway ? validateCodexGatewayUrl(authOrLease.codex_gateway_url) : null;
   const gatewayToken = isGateway ? resolveCodexGatewayGrant(authOrLease) : null;
   const gatewayUrl = isGateway ? normalizeCodexGatewayBaseUrl(rawGatewayUrl, gatewayToken) : null;
+  const hasExplicitBackendApi = isGateway
+    && typeof authOrLease.codex_backend_api_url === 'string'
+    && authOrLease.codex_backend_api_url.trim().length > 0;
+  const backendApiUrl = hasExplicitBackendApi ? resolveCodexBackendApiUrl(authOrLease, gatewayUrl) : gatewayUrl;
+  const codexApiUrl = hasExplicitBackendApi ? resolveCodexResponsesBaseUrl(backendApiUrl) : gatewayUrl;
   const embeddedLeaseGrant = isGateway && isEmbeddedLeaseGatewayGrant(gatewayToken);
   const rootDir = tmpRoot || (fs.existsSync?.('/tmp') !== false ? '/tmp' : tmpdir());
   let overlayDir;
@@ -1412,10 +2543,14 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
       const rawBaseConfig = resolvedSrcCfg.exists && resolvedSrcCfg.readPath
         ? readCodexTomlObject(fs, resolvedSrcCfg.readPath, { strict: false }).data
         : {};
-      const baseConfig = stripGatewayFromTomlObject(rawBaseConfig).nextData;
+      const baseConfig = remapCodexHomeConfigObject(
+        stripGatewayFromTomlObject(rawBaseConfig).nextData,
+        { userCodexHome: resolvedSourceCodexHome, runtimeCodexHome: overlayDir, env, fs },
+      );
       const prevFeatures = isTomlTable(baseConfig.features) ? { ...baseConfig.features } : {};
       const prevPolicy = isTomlTable(baseConfig.shell_environment_policy) ? { ...baseConfig.shell_environment_policy } : {};
-      const prevFilters = isTomlTable(prevPolicy.filters) ? { ...prevPolicy.filters } : {};
+      const hadExistingFilters = isTomlTable(prevPolicy.filters);
+      const prevFilters = hadExistingFilters ? { ...prevPolicy.filters } : {};
       const hasFilterIgnoreCase = key => {
         const lower = key.toLowerCase();
         return Object.keys(prevFilters).some(k => k.toLowerCase() === lower);
@@ -1428,6 +2563,11 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
         }
       }
       if (Array.isArray(prevPolicy.include_only)) {
+        // Legacy `include_only` is an allowlist; when migrating without existing `filters`
+        // or explicit `inherit`, set `inherit = "none"` so we never silently widen to `all`.
+        if (!hadExistingFilters && !prevPolicy.inherit) {
+          prevPolicy.inherit = 'none';
+        }
         for (const item of prevPolicy.include_only) {
           if (typeof item === 'string' && item.trim() && !hasFilterIgnoreCase(item.trim())) {
             prevFilters[item.trim()] = 'include';
@@ -1456,71 +2596,80 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
       const prevProviders = isTomlTable(baseConfig.model_providers) ? { ...baseConfig.model_providers } : {};
       delete prevProviders[CODEX_GATEWAY_PROVIDER_ID];
       const configPath = join(overlayDir, 'config.toml');
+      const effectiveOverlaySqliteHome = resolveEffectiveSqliteHome({
+        userCodexHome: resolvedSourceCodexHome,
+        parsedConfig: baseConfig,
+        env,
+      });
+      if (hasExplicitBackendApi) {
+        delete prevFeatures.responses_websockets;
+      }
       if (embeddedLeaseGrant) {
+        if (hasExplicitBackendApi) {
+          const emptySubshellDir = join(overlayDir, 'empty-subshell');
+          try { fs.mkdirSync(emptySubshellDir, { recursive: true, mode: 0o700 }); } catch {}
+          prevPolicy.set = { ...(isTomlTable(prevPolicy.set) ? prevPolicy.set : {}), CODEX_HOME: emptySubshellDir };
+        }
         const overlayConfig = {
           ...baseConfig,
           cli_auth_credentials_store: 'file',
-          openai_base_url: gatewayUrl,
-          chatgpt_base_url: gatewayUrl,
+          openai_base_url: codexApiUrl,
+          chatgpt_base_url: backendApiUrl,
+          ...(effectiveOverlaySqliteHome ? { sqlite_home: effectiveOverlaySqliteHome } : {}),
           features: {
             ...prevFeatures,
             shell_snapshot: false,
-            responses_websockets: false,
+            ...(hasExplicitBackendApi ? { daemon_auto_start: false } : { responses_websockets: false }),
           },
           shell_environment_policy: prevPolicy,
           model_providers: {
             ...prevProviders,
             [CODEX_GATEWAY_PROVIDER_ID]: {
               name: 'PDD Codex Gateway',
-              base_url: gatewayUrl,
-              model_catalog_url: `${gatewayUrl}/models`,
+              base_url: codexApiUrl,
+              model_catalog_url: `${codexApiUrl}/models`,
               wire_api: 'responses',
               requires_openai_auth: true,
-              supports_websockets: false,
+              ...(hasExplicitBackendApi ? {} : { supports_websockets: false }),
             },
           },
         };
         delete overlayConfig.model_provider;
-        const gatewayAuth = {
-          auth_mode: 'chatgpt',
-          OPENAI_API_KEY: null,
-          tokens: {
-            id_token: buildSyntheticGatewayIdToken({ planType: authOrLease?.plan_type ?? authOrLease?.plan }),
-            access_token: gatewayToken,
-            refresh_token: '',
-            account_id: 'acct_pdd_gateway',
-          },
-          last_refresh: new Date((ports.now ?? Date.now)()).toISOString(),
-        };
+        const gatewayAuth = buildGatewayAuthJson({
+          grantToken: gatewayToken,
+          planType: authOrLease?.plan_type ?? authOrLease?.plan,
+          now: ports.now ?? Date.now,
+        });
         const authPath = join(overlayDir, 'auth.json');
         writeAtomicPrivate(fs, configPath, serializeTomlConfig(overlayConfig, configPath));
         writeAtomicPrivate(fs, authPath, `${JSON.stringify(gatewayAuth, null, 2)}\n`);
-        return { overlayDir, authPath, configPath, gatewayToken, gatewayUrl, cleanup };
+        return { overlayDir, authPath, configPath, gatewayToken, gatewayUrl, backendApiUrl, cleanup };
       }
       const overlayConfig = {
         ...baseConfig,
         model_provider: CODEX_GATEWAY_PROVIDER_ID,
+        ...(effectiveOverlaySqliteHome ? { sqlite_home: effectiveOverlaySqliteHome } : {}),
         features: {
           ...prevFeatures,
           shell_snapshot: false,
-          responses_websockets: false,
+          ...(hasExplicitBackendApi ? { daemon_auto_start: false } : { responses_websockets: false }),
         },
         shell_environment_policy: prevPolicy,
         model_providers: {
           ...prevProviders,
           [CODEX_GATEWAY_PROVIDER_ID]: {
             name: 'PDD Codex Gateway',
-            base_url: gatewayUrl,
-            model_catalog_url: `${gatewayUrl}/models`,
+            base_url: codexApiUrl,
+            model_catalog_url: `${codexApiUrl}/models`,
             wire_api: 'responses',
             requires_openai_auth: false,
-            supports_websockets: false,
+            ...(hasExplicitBackendApi ? {} : { supports_websockets: false }),
             env_http_headers: { 'x-pdd-gateway-grant': 'PDD_CODEX_GATEWAY_GRANT' },
           },
         },
       };
       writeAtomicPrivate(fs, configPath, serializeTomlConfig(overlayConfig, configPath));
-      return { overlayDir, authPath: null, configPath, gatewayToken, gatewayUrl, cleanup };
+      return { overlayDir, authPath: null, configPath, gatewayToken, gatewayUrl, backendApiUrl, cleanup };
     }
     if (resolvedSrcCfg.exists) {
       try { fs.symlinkSync(srcConfigPath, join(overlayDir, 'config.toml')); } catch {}
@@ -1543,28 +2692,28 @@ export function buildClaudeStepEnv(baseEnv = process.env, lease, ports = {}) {
   }
   delete out.CLAUDE_CODE_OAUTH_TOKEN;
   delete out.ANTHROPIC_API_KEY;
+  delete out.ANTHROPIC_AUTH_TOKEN;
+  delete out.CLAUDE_CODE_USE_BEDROCK;
+  delete out.CLAUDE_CODE_USE_VERTEX;
+  delete out.CLAUDE_CODE_USE_FOUNDRY;
   const token = String(lease?.claude_oauth_token || lease?.gateway_bearer_token || '').trim();
   if (token) {
     rememberSecrets(token);
     out.CLAUDE_CODE_OAUTH_TOKEN = token;
   }
-  if (lease?.delivery_mode === 'gateway_grant' && typeof lease.anthropic_base_url === 'string' && lease.anthropic_base_url.trim()) {
-    out.ANTHROPIC_BASE_URL = lease.anthropic_base_url.trim();
+  if (lease?.delivery_mode === 'gateway_grant') {
+    out.ANTHROPIC_BASE_URL = validateClaudeGatewayUrl(lease.anthropic_base_url);
   } else {
-    if (MANAGED_CLAUDE_GATEWAY_RE.test(String(out.ANTHROPIC_BASE_URL ?? ''))) {
-      delete out.ANTHROPIC_BASE_URL;
-    }
-    if (!out.ANTHROPIC_BASE_URL) {
-      const settings = readJsonObject(fs, localClaudePaths(baseEnv).settingsPath);
-      if (MANAGED_CLAUDE_GATEWAY_RE.test(String(settings?.env?.ANTHROPIC_BASE_URL ?? ''))) {
-        out.ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
-      }
+    delete out.ANTHROPIC_BASE_URL;
+    const settings = readJsonObject(fs, localClaudePaths(baseEnv).settingsPath);
+    if (String(settings?.env?.ANTHROPIC_BASE_URL ?? '').trim()) {
+      out.ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
     }
   }
   return out;
 }
 
-export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, ports = {}, { detached = false } = {}) {
+export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, ports = {}, { detached = false, userSettings = null } = {}) {
   const provider = leaseReply?.account?.provider;
   const lease = leaseReply?.lease;
   const cleanBase = loginEnvironment(baseEnv, { kind: provider || 'codex' });
@@ -1595,9 +2744,25 @@ export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, por
   }
   if (provider === 'claude') {
     const env = { ...buildClaudeStepEnv(cleanBase, lease, ports), PDD_CLOUD_STEP_ISOLATED: '1' };
-    return { env, cleanupDirs: [], cleanup: () => {}, overlayDir: null };
+    const hasToken = Boolean(String(lease?.claude_oauth_token || lease?.gateway_bearer_token || '').trim());
+    if (hasToken) {
+      const overlay = createClaudeStepSettingsOverlay(
+        lease,
+        { env: baseEnv, tmpRoot: ports.tmpRoot, userSettings, detached },
+        ports,
+      );
+      return {
+        env,
+        extraArgs: ['--settings', overlay.settingsPath],
+        settingsPath: overlay.settingsPath,
+        cleanupDirs: [overlay.overlayDir],
+        cleanup: overlay.cleanup,
+        overlayDir: overlay.overlayDir,
+      };
+    }
+    return { env, extraArgs: [], settingsPath: null, cleanupDirs: [], cleanup: () => {}, overlayDir: null };
   }
-  return { env: cleanBase, cleanupDirs: [], cleanup: () => {}, overlayDir: null };
+  return { env: cleanBase, extraArgs: [], settingsPath: null, cleanupDirs: [], cleanup: () => {}, overlayDir: null };
 }
 
 const HARD_QUOTA_RE = /out of credits|credit balance is too low|insufficient[_ ]quota|exceeded your current quota|quota (?:exceeded|has been exhausted|exhausted)|hit your usage limit|usage[_ ]limit(?:_reached)?|weekly limit|daily limit|monthly limit|5-?hour limit|five[ _-]hour|spend[_ ]control|spending limit/i;
@@ -1661,6 +2826,32 @@ export async function reportCloudAccountUsage(accountId, report, { cwd = process
   return cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(accountId)}/usage-report`, { body, cwd, env, timeoutMs }, ports);
 }
 
+/**
+ * Revoke a gateway lease immediately on PDD Cloud when the last session using it exits.
+ */
+export async function releaseCloudLease(leaseId, { cwd = process.cwd(), env = process.env, timeoutMs = 2500 } = {}, ports = {}) {
+  if (typeof leaseId !== 'string' || !leaseId.trim()) return null;
+  return cloudAccountsRequest('POST', `/v1/accounts/leases/${encodeURIComponent(leaseId.trim())}/release`, {
+    cwd,
+    env,
+    timeoutMs,
+    maxRetries: 0,
+  }, ports);
+}
+
+/**
+ * Refresh a lease's sliding TTL and re-verify GitHub org membership for long-lived sessions.
+ */
+export async function heartbeatCloudLease(leaseId, { cwd = process.cwd(), env = process.env, timeoutMs = 5000 } = {}, ports = {}) {
+  if (typeof leaseId !== 'string' || !leaseId.trim()) return null;
+  return cloudAccountsRequest('POST', `/v1/accounts/leases/${encodeURIComponent(leaseId.trim())}/heartbeat`, {
+    cwd,
+    env,
+    timeoutMs,
+    maxRetries: 0,
+  }, ports);
+}
+
 export function saveActiveLeaseMetadata(leaseReply, {
   env = process.env,
   materializedLocal,
@@ -1711,6 +2902,8 @@ export function saveActiveLeaseMetadata(leaseReply, {
       anthropic_base_url: lease.anthropic_base_url ?? null,
       managed_anthropic_base_url: managedBaseUrl !== undefined ? Boolean(managedBaseUrl) : Boolean(prev?.managed_anthropic_base_url),
       codex_gateway_url: codexGatewayUrl !== undefined ? codexGatewayUrl : (lease.codex_gateway_url ?? prev?.codex_gateway_url ?? null),
+      codex_backend_api_url: lease.codex_backend_api_url ?? prev?.codex_backend_api_url ?? null,
+      auto_rotate: typeof lease.auto_rotate === 'boolean' ? lease.auto_rotate : (prev?.auto_rotate ?? null),
       managed_codex_gateway: managedCodexGateway !== undefined ? Boolean(managedCodexGateway) : Boolean(prev?.managed_codex_gateway),
       previous_codex_model_provider: previousCodexModelProvider !== undefined ? previousCodexModelProvider : (prev?.previous_codex_model_provider ?? null),
       five_hour_used_percent: typeof acc.five_hour_used_percent === 'number' ? acc.five_hour_used_percent : null,
@@ -1741,6 +2934,7 @@ export async function leaseCloudAccount({
   skipAccountIds = [],
   holderId = 'pdd-step',
   updateState = true,
+  autoRotate = undefined,
 } = {}, { cwd = process.cwd(), env = process.env, timeoutMs = 15_000, maxRetries, now } = {}, ports = {}) {
   const nowFn = now ?? ports.now ?? Date.now;
   const effectivePorts = ports.now ? ports : { ...ports, now: nowFn };
@@ -1779,6 +2973,7 @@ export async function leaseCloudAccount({
           skip_account_ids: [...skip],
           machine_label: machineLabel,
           holder_id: holderId,
+          ...(typeof autoRotate === 'boolean' ? { auto_rotate: autoRotate } : {}),
         },
         cwd,
         env,
@@ -2257,7 +3452,7 @@ export function isAuthFailureMessage(text) {
   if (typeof text !== 'string') return false;
   const s = text.trim();
   if (!s || looksLikeTestDiagnostic(s)) return false;
-  return /\b(?:failed to authenticate|oauth access token is invalid|failed to refresh token|authentication_error|invalid[_ ]api[_ ]key|not logged in|please (?:run \/login|log ?in|sign ?in))\b|\b(?:api error|http|status(?: code)?)\W{0,3}401\b|\b401\s+unauthorized\b/i.test(s)
+  return /\b(?:failed to authenticate|oauth access token is invalid|failed to refresh token|authentication_error|invalid[_ ]api[_ ]key|not logged in|please (?:run \/login|log ?in|sign ?in)|oauth_not_allowed_for_organization|oauth_org_not_allowed)\b|disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code|\b(?:api error|http|status(?: code)?)\W{0,3}401\b|\b401\s+unauthorized\b/i.test(s)
     || REAUTH_TEXT_RE.test(s);
 }
 
