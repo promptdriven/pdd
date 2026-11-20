@@ -309,16 +309,21 @@ export async function coreWorld(t, { repository = 'acme/widgets', settings = {},
   // The whole run: `tests`, `fail` and `failed` go to the first file of the kind (other files pass 1 test each, so the
   // kind's total is `tests`); `formal` gives the formal part; `code` sets the first file's exit. `linked` (replay files
   // that import a changed module) and `control` (each control kind) pass 1 test per file unless given.
-  w.vectorsRun = (issue, { formal, linked, control, ...vectors } = {}) => {
+  w.vectorsRun = (issue, { formal, linked, regression, control, ...vectors } = {}) => {
     const job = w.job(issue, 'vectors'), files = w.replayFiles(job), parts = [], used = [];
     const hasVectors = files.some(f => f.kind === 'vectors'), formalPart = formal ?? (hasVectors ? { tests: 1 } : vectors);
-    for (const kind of ['vectors', 'formal', 'linked', 'control-vectors', 'control-formal']) {
+    for (const kind of ['vectors', 'formal', 'linked', 'tests', 'control-vectors', 'control-formal', 'control-tests']) {
       const mine = files.filter(f => f.kind === kind);
-      const whole = kind === 'vectors' ? vectors : kind === 'formal' ? formalPart : kind === 'linked' ? linked ?? { tests: mine.length } : control?.[kind] ?? { tests: mine.length };
+      const whole = kind === 'vectors' ? vectors
+        : kind === 'formal' ? formalPart
+        : kind === 'linked' ? linked ?? { tests: mine.length }
+        : kind === 'tests' ? regression ?? { tests: mine.length }
+        : control?.[kind] ?? { tests: mine.length };
       if (!mine.length) continue;
-      used.push(whole);
+      const perFile = Array.isArray(whole) ? whole : null;
+      used.push(...(perFile ?? [whole]));
       const total = whole.tests ?? 3, rest = mine.length - 1;
-      mine.forEach((f, i) => parts.push(w.tapFile(job, kind, f.index, i === 0 ? { ...whole, tests: Math.max(1, total - rest) } : { tests: 1 })));
+      mine.forEach((f, i) => parts.push(w.tapFile(job, kind, f.index, perFile ? (perFile[i] ?? { tests: 1 }) : i === 0 ? { ...whole, tests: Math.max(1, total - rest) } : { tests: 1 })));
     }
     appendFileSync(job.log, parts.join(''));
     return w.finish(issue, 'vectors', { code: used.some(k => k.fail || k.code) ? 1 : 0 });
