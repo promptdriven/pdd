@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 55813a860255771f30b781915be159c957e2b37ce9a44723751012ac67173984).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: e64bc9c0e1b71bee4f1899303401732f71e8281215101cb533d35ea8d4a12d2c).
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -3082,15 +3082,6 @@ async function changedFiles(ctx, job, head = job.agentHead ?? job.head) {
   job.changes = [...saved.filter(entry => entry.head !== head).slice(-1), { head, files }]; ctx.saveJob(job);
   return files;
 }
-// Files newly added (status A) against origin/BASE at `head`, cached on the matching `job.changes` entry when present.
-async function addedFiles(ctx, job, head = job.head) {
-  const saved = Array.isArray(job.changes) ? job.changes : [], known = saved.find(entry => entry.head === head);
-  if (known && Array.isArray(known.added)) return known.added;
-  await ctx.git(['fetch', '-q', 'origin', ctx.state.baseBranch], job.worktree).catch(() => {});
-  const added = await gitNames(ctx, ['diff', '--name-only', '-z', '--diff-filter=A', `origin/${ctx.state.baseBranch}...${head}`], job.worktree);
-  if (known) { known.added = added; ctx.saveJob(job); }
-  return added;
-}
 // The saved Runtime checks of the job worktree (root), read against a clean checkout of the agent head (tree): the
 // Stories and tests of findTests at the head (fixture projects excluded, as a full pdd test does), the strict per-Story
 // rows of savedStoryEvidence (`current` = the batch source is exactly the clean checkout's source, so an uncommitted or
@@ -3371,23 +3362,41 @@ const KIND_TOUCH = { linked: 'that import a changed module' };
 const CODE_FILE = /\.(?:[cm]?js|[cm]?ts|jsx|tsx|py)$/, TEST_PLACE = /(?:^|\/)(?:tests?|__tests__|spec|fixtures)\/|\.(?:test|spec)\.[^/]+$/;
 const codeFiles = changed => changed.filter(file => CODE_FILE.test(file) && !TEST_PLACE.test(file));
 const MAX_REPLAY_FILES = 400, MAX_REPLAY_COMMAND = 100_000, REPLAY_OUTPUT = 4 * 1024 * 1024, VECTORS_SCHEMA = 5;
-const IMPORT_ERROR = /\b(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)\b|Cannot find (?:module|package)\s+['"]|SyntaxError:\s+The requested module\s+['"][^'"]+['"]\s+does not provide an export named\b/;
+const IMPORT_ERROR_LINE = /^(?:Error \[ERR_MODULE_NOT_FOUND\]: Cannot find (?:module|package)\s+['"]|Error: Cannot find (?:module|package)\s+['"]|SyntaxError:\s+The requested module\s+['"][^'"]+['"]\s+does not provide an export named\s+['"]|code:\s*['"](?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)['"],?$)/;
 // #3556: distinguish Path b code-only bug fixes from behavior-preserving pure structural refactors.
 const CLOSING_REF = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?::[ \t]*|[ \t]+)(?:[\w.-]+\/[\w.-]+#\d+|https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+|#\d+)\b/gi;
-const PURE_REFACTOR = /\b(?:pure\s+(?:structural\s+)?refactor(?:ing)?|structural\s+refactor(?:ing)?(?:\s+only)?|behaviou?r[- ]preserving(?:\s+\w+){0,2}\s+refactor(?:ing)?|refactor(?:ing)?[- ]only|internal\s+refactor(?:ing)?(?:\s+only)?|no\s+behaviou?r(?:al)?\s+change|log[- ]line\s+only|logging[- ]only)\b/gi;
+const WHOLE_PR_REFACTOR = /\b(?:pure\s+(?:structural\s+)?refactor(?:ing)?|structural\s+refactor(?:ing)?(?:\s+only)?|behaviou?r[- ]preserving(?:\s+\w+){0,2}\s+refactor(?:ing)?|refactor(?:ing)?[- ]only|internal\s+refactor(?:ing)?(?:\s+only)?|log[- ]line\s+only|logging[- ]only)\b/gi;
+const NO_BEHAVIOR_CHANGE = /\bno\s+behaviou?r(?:al)?\s+change\b/gi;
 const NEGATED_BEFORE = /\b(?:not|isn't|is\s+not|aren't|are\s+not|never|no\s+longer)\s+(?:a\s+|an\s+)?$/i;
+const SCOPED_REFACTOR_AFTER = /^\s+(?:for|to|outside)\b/i;
+const SCOPED_NO_CHANGE_AFTER = /^\s+(?:for|to|outside|in|on|when|unless|except)\b/i;
 const BUG_LABEL = /(?:^|[:/_\s-])(?:bug|bugfix|bug-fix|defect|regression|hotfix)(?:$|[:/_\s-])/i;
 const NOT_BUG_LABEL = /\b(?:not[-_\s]*a[-_\s]*bug|non[-_\s]*bug|wontfix|invalid|duplicate)\b/i;
-const REFACTOR_TITLE = /^\s*(?:refactor|chore|style|cleanup|docs)(?:\([^)]*\))?\s*:/i;
-const BUG_TITLE = /\b(?:bug|bugfix|bug-fix|defect|regression|hotfix|fix(?:es|ed|ing)?|broken|crash(?:es|ing|ed)?|hang(?:s|ing)?|incorrect(?:ly)?|wrong(?:ly)?|unexpected(?:ly)?|fails?\s+to|failing\s+to|does\s+not\s+work|doesn't\s+work|stopped\s+working|misclassif(?:y|ies|ied)|exempt(?:s|ing)?|bypass(?:es|ing)?|loopholes?)\b/i;
-const BUG_ISSUE_BODY = /\b(?:bug|bugfix|bug-fix|defect|regression|hotfix|steps\s+to\s+reproduce|repro(?:duction)?|actual\s+(?:behaviou?r|result)|expected\s+(?:behaviou?r|result)|broken|crash(?:es|ing|ed)?|root\s+cause|incorrectly\s+\w+|fails?\s+when|wrong\s+(?:result|value|output|behaviou?r|exit|status))\b/i;
+const NON_BUG_REFACTOR_LABEL = /(?:^|[:/_\s-])(?:refactor(?:ing)?|cleanup|clean-up|chore|tech[-_\s]?debt|documentation|docs|enhancement)(?:$|[:/_\s-])/i;
+const CONVENTIONAL_REFACTOR_TITLE = /^\s*(?:refactor|chore|style|cleanup|docs)(?:\([^)]*\))?\s*:/i;
+const LEADING_REFACTOR_TITLE = /^\s*(?:refactor|clean\s*up|simplify|extract|reorganize)\b/i;
+const NON_BUG_CONTEXT_PATTERNS = [
+  /\b(?:avoid|prevent)(?:s|ed|ing)?(?:\s+(?:a|an|the|any|future|potential|possible)){0,2}\s+(?:bugs?|defects?|regressions?|crashes?|errors?|failures?|issues?)\b/gi,
+  /\b(?:clean\s*up|cleanup|tidy(?:\s+up)?|simplify|reorganize|refactor)(?:\s+(?:the|a|an|old|previous|prior|recent)){0,2}\s+(?:fix(?:es)?|bugfix(?:es)?|hotfix(?:es)?)\b/gi,
+  /\b(?:no|without|zero)\s+(?:behaviou?r(?:al)?\s+)?regressions?\b/gi,
+];
+const BUG_TITLE = /\b(?:bug|bugfix|bug-fix|defect|regression|hotfix|fix(?:es|ed|ing)?|broken|crash(?:es|ing|ed)?|hang(?:s|ing)?|incorrect(?:ly)?|wrong(?:ly)?|unexpected(?:ly)?|fails?\s+(?:to|when)|failing\s+(?:to|when)|does\s+not\s+work|doesn't\s+work|stopped\s+working|misclassif(?:y|ies|ied))\b/i;
+const BUG_ISSUE_BODY = /\b(?:bug|bugfix|bug-fix|defect|regression|hotfix|steps\s+to\s+reproduce|repro(?:duction)?|actual\s+(?:behaviou?r|result)|expected\s+(?:behaviou?r|result)[^.\n]{0,80}\b(?:actual|got|but|instead|fails?|broken|wrong|mismatch|differs?)|broken|crash(?:es|ing|ed)?|root\s+cause|incorrectly\s+\w+|fails?\s+(?:to|when)|wrong\s+(?:result|value|output|behaviou?r|exit|status))\b/i;
 const BUG_PR_PROSE = /\b(?:pdd-bug|bug\s+fix|regression\s+(?:test|fix)|root\s+cause|reproduces?\s+the\s+bug)\b/i;
 const PATH_B_RESTORE = /^[\s>*-]*Path:\s*b\b[^\n]*(?:\brestor(?:e[sd]?|ing)\b|\.prompt\.md:\d+)/im;
+function stripNonBugContext(text) {
+  let out = String(text ?? '');
+  for (const re of NON_BUG_CONTEXT_PATTERNS) out = out.replace(re, ' ');
+  return out;
+}
 function hasExplicitPureRefactor(text) {
   const plain = plainPrText(text);
-  for (const m of plain.matchAll(PURE_REFACTOR)) {
-    const before = plain.slice(Math.max(0, m.index - 24), m.index);
-    if (!NEGATED_BEFORE.test(before)) return true;
+  for (const [re, scopedAfter] of [[WHOLE_PR_REFACTOR, SCOPED_REFACTOR_AFTER], [NO_BEHAVIOR_CHANGE, SCOPED_NO_CHANGE_AFTER]]) {
+    for (const m of plain.matchAll(re)) {
+      const before = plain.slice(Math.max(0, m.index - 24), m.index);
+      const after = plain.slice(m.index + m[0].length, m.index + m[0].length + 40);
+      if (!NEGATED_BEFORE.test(before) && !scopedAfter.test(after)) return true;
+    }
   }
   return false;
 }
@@ -3397,19 +3406,30 @@ function hasBugLabel(labels) {
     return typeof name === 'string' && BUG_LABEL.test(name) && !NOT_BUG_LABEL.test(name);
   });
 }
+function hasNonBugRefactorLabel(labels) {
+  return (Array.isArray(labels) ? labels : []).some(label => {
+    const name = typeof label === 'string' ? label : label?.name;
+    return typeof name === 'string' && NON_BUG_REFACTOR_LABEL.test(name);
+  });
+}
 function isBugFixPr(job, body = '') {
-  if (hasExplicitPureRefactor(body)) return false;
+  // Authoritative metadata first: pdd-bug skill or bug labels on issue/companions can never be exempted by PR prose.
   if (/^(?:pdd-)?bug$/i.test(String(job?.skill ?? '').trim())) return true;
   const members = [job, ...(Array.isArray(job?.companions) ? job.companions : [])].filter(Boolean);
   if (members.some(m => hasBugLabel(m.labels))) return true;
-  const issueHasBug = members.some(m => {
-    const title = String(m.title ?? ''), issueBody = String(m.body ?? '');
-    if (REFACTOR_TITLE.test(title) && !BUG_TITLE.test(title)) return false;
-    return BUG_TITLE.test(title) || BUG_ISSUE_BODY.test(issueBody);
-  });
-  if (issueHasBug) return true;
+  // PR body declarations vs explicit whole-PR behavior-preserving refactor (only for unlabeled / non-bug-skill issues).
   const prPlain = plainPrText(body).replace(CLOSING_REF, ' ');
-  return PATH_B_RESTORE.test(prPlain) || BUG_PR_PROSE.test(prPlain);
+  if (PATH_B_RESTORE.test(prPlain) || BUG_PR_PROSE.test(prPlain)) return true;
+  if (hasExplicitPureRefactor(body)) return false;
+  // Issue context fallback with preventive/cleanup phrase stripping and refactor label/title guards.
+  return members.some(m => {
+    const title = String(m.title ?? ''), issueBody = String(m.body ?? '');
+    const cleanTitle = stripNonBugContext(title), cleanBody = stripNonBugContext(issueBody);
+    if (CONVENTIONAL_REFACTOR_TITLE.test(title) && !BUG_TITLE.test(cleanTitle)) return false;
+    if (hasNonBugRefactorLabel(m.labels) && !BUG_TITLE.test(cleanTitle)) return false;
+    if (LEADING_REFACTOR_TITLE.test(title) && !BUG_TITLE.test(cleanTitle) && !BUG_ISSUE_BODY.test(cleanBody)) return false;
+    return BUG_TITLE.test(cleanTitle) || BUG_ISSUE_BODY.test(cleanBody);
+  });
 }
 async function evidenceFiles(ctx, job, body = '') {
   const changed = await changedFiles(ctx, job, job.head);
@@ -3487,7 +3507,7 @@ const quoteArg = file => `'${String(file).replaceAll("'", `'\\''`)}'`;
 // REPLAY_OUTPUT bytes it passes the marker lines, TAP result, location and module-load import-error lines cut to 300
 // characters for 1 MB more, and nothing else; it keeps only the last top-level summary line of each key and the last
 // plan line of the current file and prints them just before that file's marker, so each file's counts stay true.
-const REPLAY_FILTER = `BEGIN { split("tests suites pass fail cancelled skipped todo duration_ms", k, " ") } index($0, mark) == 1 { if (cut) { if (plan != "") print plan; for (i = 1; i <= 8; i++) if (k[i] in last) print last[k[i]] } split("", last); plan = ""; print; fflush(); next } { n += length($0) + 1 } n <= cap { print; fflush(); next } !cut { cut = 1; print "# pdd-autopilot: output cut after " cap " bytes"; fflush() } /^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+$/ { split($0, f, " "); last[f[2]] = $0; next } /^1\\.\\.[0-9]/ { plan = $0; next } (/^[ \\t]*(not ok|ok) [0-9]/ || /^[ \\t]*location: / || /ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find (module|package)|does not provide an export named/) && m < extra { t = substr($0, 1, 300); m += length(t) + 1; print t; fflush(); next }`;
+const REPLAY_FILTER = `BEGIN { split("tests suites pass fail cancelled skipped todo duration_ms", k, " ") } index($0, mark) == 1 { if (cut) { if (plan != "") print plan; for (i = 1; i <= 8; i++) if (k[i] in last) print last[k[i]] } split("", last); plan = ""; print; fflush(); next } { n += length($0) + 1 } n <= cap { print; fflush(); next } !cut { cut = 1; print "# pdd-autopilot: output cut after " cap " bytes"; fflush() } /^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) [0-9.]+$/ { split($0, f, " "); last[f[2]] = $0; next } /^1\\.\\.[0-9]/ { plan = $0; next } (/^[ \\t]*(not ok|ok) [0-9]/ || /^[ \\t]*location: / || /^[ \\t]*(Error \\[ERR_MODULE_NOT_FOUND\\]: Cannot find (module|package)|Error: Cannot find (module|package)|SyntaxError: The requested module |code: .(ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND).)/) && m < extra { t = substr($0, 1, 300); m += length(t) + 1; print t; fflush(); next }`;
 const replayMark = nonce => `# pdd-autopilot-${nonce}: `;
 function replayCommand(run, cwd, nonce, control = null) {
   const step = (kind, root) => (run[kind] ?? []).map((file, i) => `node --test-reporter=tap -- ${quoteArg(join(root, file))} 2>&1; echo "${replayMark(nonce)}${kind} ${i} exit $?"`);
@@ -3498,22 +3518,28 @@ function replayCommand(run, cwd, nonce, control = null) {
   return `{ ${steps.join('; ')}; } | LC_ALL=C awk -v cap=${REPLAY_OUTPUT} -v extra=1048576 -v mark=${quoteArg(replayMark(nonce))} '${REPLAY_FILTER}'`;
 }
 // The log of a replay run, read in 1 MB parts line by line (bounded memory): for each file its last TAP summary before its
-// marker, its exit code, whether top-level module loading hit an import error, and for each kind at most 20 failing tests.
+// marker, its exit code, whether a file-level load failure hit an anchored module/export import error (with 0 subtests
+// executed — never matching test titles or arbitrary stdout), and for each kind at most 20 failing tests.
 function replayLog(fs, file, nonce) {
   const found = { files: Object.fromEntries(RUN_KINDS.map(kind => [kind, {}])), failed: Object.fromEntries(RUN_KINDS.map(kind => [kind, []])), runner: false, cut: false }, decoder = new StringDecoder('utf8');
   const marker = new RegExp(`^${escape(replayMark(nonce))}(${RUN_KINDS.join('|')}) (\\d+) exit (\\d+)$`);
-  let counts = {}, failed = [], look = 0, importError = false, carry = '', skipping = false, fd;
+  let counts = {}, failed = [], look = 0, importError = false, sawTap = false, inYaml = false, subtests = 0, carry = '', skipping = false, fd;
   const line = text => {
     let m;
     if ((m = marker.exec(text))) {
-      found.files[m[1]][Number(m[2])] = { code: Number(m[3]), tests: counts.tests ?? null, pass: counts.pass ?? null, fail: counts.fail ?? null, skipped: (counts.skipped ?? 0) + (counts.todo ?? 0), ...(importError ? { importError: true } : {}) };
+      const fileLoadImportError = importError && subtests === 0 && !counts.tests;
+      found.files[m[1]][Number(m[2])] = { code: Number(m[3]), tests: counts.tests ?? null, pass: counts.pass ?? null, fail: counts.fail ?? null, skipped: (counts.skipped ?? 0) + (counts.todo ?? 0), ...(fileLoadImportError ? { importError: true } : {}) };
       for (const f of failed) if (found.failed[m[1]].length < 20) found.failed[m[1]].push(f);
-      counts = {}; failed = []; look = 0; importError = false; return;
+      counts = {}; failed = []; look = 0; importError = false; sawTap = false; inYaml = false; subtests = 0; return;
     }
-    if ((m = /^# (tests|pass|fail|skipped|todo) (\d+)$/.exec(text))) { counts[m[1]] = Number(m[2]); return; }
-    if ((m = /^not ok \d+ - (.*)$/.exec(text))) { if (failed.length < 21) failed.push({ name: oneLine(m[1], 200), file: null }); look = 12; return; }
+    if ((m = /^# (tests|pass|fail|skipped|todo) (\d+)$/.exec(text))) { counts[m[1]] = Number(m[2]); sawTap = true; inYaml = false; return; }
+    if (/^TAP version \d+/.test(text)) { sawTap = true; inYaml = false; return; }
+    if (/^[ \t]*---$/.test(text)) { sawTap = true; inYaml = true; return; }
+    if (/^[ \t]*\.\.\.$/.test(text)) { inYaml = false; return; }
+    if (/^[ \t]*# Subtest:/.test(text) || /^[ \t]*ok \d+\b/.test(text) || /^[ \t]+not ok \d+\b/.test(text)) { sawTap = true; inYaml = false; subtests++; return; }
+    if ((m = /^not ok \d+ - (.*)$/.exec(text))) { sawTap = true; inYaml = false; if (failed.length < 21) failed.push({ name: oneLine(m[1], 200), file: null }); look = 12; return; }
     if (look > 0) { look--; const at = /location: '([^']+?):\d+:\d+'/.exec(text); if (at && failed.length && !failed.at(-1).file) { failed.at(-1).file = at[1]; look = 0; } }
-    if (IMPORT_ERROR.test(text)) importError = true;
+    if ((!sawTap || (inYaml && subtests === 0)) && IMPORT_ERROR_LINE.test(text.trimStart())) importError = true;
     if (/^# pdd-autopilot: output cut after/.test(text)) found.cut = true;
     if (SUITE_RUNNER.test(text)) found.runner = true;
   };
@@ -3551,15 +3577,15 @@ async function vectorsState(ctx, job, body = '') {
     // The whole set or nothing: a part of the set is never shown as the evidence of the change.
     if (count > MAX_REPLAY_FILES) return save({ ...base, state: 'not-run', reason: `too many replay and formal files: ${count}; the limit is ${MAX_REPLAY_FILES}` });
     // #3227 fix 2 + #3556: the control runs vectors, formal and ordinary bug-fix regression tests on merge-base code,
-    // and records which control test files are newly added (status A vs origin/BASE) for per-file evaluation.
+    // and checks directly against `fork` (immune to Git rename/copy detection) which control test files are newly added.
     const code = codeFiles(await changedFiles(ctx, job, job.head));
     if (code.length && run.vectors.length + run.formal.length + run.tests.length) {
       try {
         const { cwd: tree, fork } = await controlTree(ctx, job, code);
         Object.assign(run, { 'control-vectors': run.vectors, 'control-formal': run.formal, 'control-tests': run.tests });
         const allControl = [...new Set([...run.vectors, ...run.formal, ...run.tests])];
-        const addedSet = new Set(await addedFiles(ctx, job, job.head).catch(() => []));
-        const added = allControl.filter(file => addedSet.has(file)).sort();
+        const testsAtFork = new Set(await gitNames(ctx, ['ls-tree', '-r', '-z', '--name-only', fork, '--', ...allControl], tree));
+        const added = allControl.filter(file => !testsAtFork.has(file)).sort();
         base.control = { code: code.slice(0, 50), fork, cwd: tree, added };
       } catch (error) { base.control = { code: code.slice(0, 50), fork: null, cwd: null, error: oneLine(error.message, 300) }; }
     }
@@ -3603,9 +3629,10 @@ const someFiles = files => `${files.slice(0, 20).map(file => oneLine(file, 200))
 // The merge note's lines for the engine's own replay and formal run.
 const claimOf = (e, kind) => `${kind}=${e[kind].state}${e[kind].total !== undefined ? ` (${e[kind].passed}/${e[kind].total})` : ''}`;
 // #3227 fix 2 + #3556: per-file control evaluation. `same`: every control file passed on merge-base; `partial`: at least
-// one newly added control file passed on merge-base even though another file failed or hit an import error; `shows`: at
-// least one file failed and no newly added file passed; `import-error`: no failure and no vacuous newly added file, but
-// a file could not load a brand-new module/export; `unclear`: no failure and a file gave no result; `not-run`: no result.
+// one newly added control file passed or exited 0 with 0 tests on merge-base even though another file failed or hit an
+// import error; `shows`: at least one file failed and no newly added file passed or ran 0 tests; `import-error`: no
+// failure and no vacuous/empty newly added file, but a file could not load a brand-new module/export; `unclear`: no
+// failure and a file gave no result; `not-run`: no result.
 function controlResult(v) {
   if (!v?.control || v.state === 'running' || v.state === 'none') return null;
   const files = Object.entries(CONTROL_KINDS).flatMap(([controlKind, kind]) => (v.result?.[controlKind]?.files ?? []).map(f => ({ ...f, kind })));
@@ -3614,12 +3641,13 @@ function controlResult(v) {
   const failed = files.filter(f => f.state === 'fail').length;
   const importErrors = files.filter(f => f.state === 'import-error').map(f => f.file);
   const addedPassed = [...new Set(files.filter(f => addedSet.has(f.file) && f.state === 'pass').map(f => f.file))];
+  const addedEmpty = [...new Set(files.filter(f => addedSet.has(f.file) && f.state === 'empty').map(f => f.file))];
   const state = files.every(f => f.state === 'pass') ? 'same'
-    : addedPassed.length ? 'partial'
+    : (addedPassed.length || addedEmpty.length) ? 'partial'
     : failed ? 'shows'
     : importErrors.length ? 'import-error'
     : 'unclear';
-  return { ...v.control, state, failed, importErrors, addedPassed, total: files.length, files,
+  return { ...v.control, state, failed, importErrors, addedPassed, addedEmpty, total: files.length, files,
     kinds: Object.entries(CONTROL_KINDS).filter(([kind]) => v.result?.[kind]?.files?.length).map(([, kind]) => kind) };
 }
 const KIND_LABEL = { vectors: 'Replay tests', formal: 'Formal tests', linked: 'Replay tests that import a changed module', tests: 'Regression tests' };
@@ -3636,9 +3664,13 @@ function engineEvidenceLines(job) {
   const c = controlResult(v);
   if (c) {
     const what = `- Control (the same tests on the merge-base code of ${someFiles(c.code)}${c.fork ? `, merge base ${short(c.fork)}` : ''})`;
+    const partialParts = [
+      c.addedPassed?.length ? `newly added ${someFiles(c.addedPassed)} passed on merge-base` : null,
+      c.addedEmpty?.length ? `newly added ${someFiles(c.addedEmpty)} ran 0 tests on merge-base` : null,
+    ].filter(Boolean);
     lines.push(c.state === 'not-run' ? `${what}: not run (${c.reason})`
       : c.state === 'shows' ? `${what}: ${c.failed} of ${c.total} failed (the tests show the change)`
-      : c.state === 'partial' ? `${what}: ${c.failed ? `${c.failed} of ${c.total} failed, but ` : ''}newly added ${someFiles(c.addedPassed)} passed on merge-base`
+      : c.state === 'partial' ? `${what}: ${c.failed ? `${c.failed} of ${c.total} failed, but ` : ''}${partialParts.join('; ')}`
       : c.state === 'import-error' ? `${what}: ${c.importErrors.length} of ${c.total} could not load on merge-base (missing new module or export)`
       : c.state === 'same' ? `${what}: all ${c.total} passed (the tests do not show the change)`
       : `${what}: no file failed, but ${c.files.filter(f => f.state !== 'pass').length} of ${c.total} gave no result`);
@@ -3713,8 +3745,19 @@ function engineEvidenceReds(ctx, job, body = '') {
       }
     } else if (c.state === 'partial') {
       const vacuousAdded = [...new Set(c.files.filter(f => activeKinds.has(f.kind) && c.addedPassed.includes(f.file)).map(f => f.file))];
-      if (vacuousAdded.length > 0) {
-        reds.push(`Autopilot ran the ${label} of this change on the merge-base code of the changed code files (${someFiles(c.code)}, merge base ${short(c.fork)}): newly added test file(s) ${someFiles(vacuousAdded)} passed on the merge-base code${c.failed ? ' (even though another test file failed there)' : ''}, so ${vacuousAdded.length === 1 ? 'it does' : 'they do'} not prove old-code failure. Make ${someFiles(vacuousAdded)} fail on the merge-base code and pass at this head.`);
+      const emptyAdded = [...new Set(c.files.filter(f => activeKinds.has(f.kind) && (c.addedEmpty ?? []).includes(f.file)).map(f => f.file))];
+      const reasons = [
+        vacuousAdded.length ? `newly added test file(s) ${someFiles(vacuousAdded)} passed on the merge-base code` : null,
+        emptyAdded.length ? `newly added test file(s) ${someFiles(emptyAdded)} ran 0 tests (exited 0 with no test result) on the merge-base code` : null,
+      ].filter(Boolean);
+      const nonProving = [...new Set([...vacuousAdded, ...emptyAdded])];
+      if (nonProving.length > 0) {
+        reds.push(`Autopilot ran the ${label} of this change on the merge-base code of the changed code files (${someFiles(c.code)}, merge base ${short(c.fork)}): ${reasons.join(' and ')}${c.failed ? ' (even though another test file failed there)' : ''}, so ${nonProving.length === 1 ? 'it does' : 'they do'} not prove old-code failure. Make ${someFiles(nonProving)} fail on the merge-base code and pass at this head.`);
+      }
+    } else if (c.state === 'unclear') {
+      const emptyFiles = [...new Set(c.files.filter(f => activeKinds.has(f.kind) && f.state === 'empty').map(f => f.file))];
+      if (emptyFiles.length > 0) {
+        reds.push(`Autopilot ran the ${label} of this change on the merge-base code of the changed code files (${someFiles(c.code)}, merge base ${short(c.fork)}): ${someFiles(emptyFiles)} ran 0 tests (exited 0 with no test result) on the merge-base code, so ${emptyFiles.length === 1 ? 'it does' : 'they do'} not prove old-code failure. Make ${someFiles(emptyFiles)} fail on the merge-base code and pass at this head.`);
       }
     }
   }
@@ -3735,7 +3778,7 @@ function evidenceRecord(ctx, job, { lines = [], claims = [], ci = null, review =
   return { schema: 'pdd.core-evidence.v1', issue: job.issue, pr: job.pr ?? null, head: job.head, agentHead: job.agentHead ?? job.head,
     runtime: { lines: lines.map(l => ({ line: l.line, story: l.story, verdict: l.verdict })), claims, coverage: job.coverage ? { head: job.coverage.head, ok: job.coverage.ok === true, text: job.coverage.text ?? null, stories: job.coverage.stories ?? [], rows: job.coverage.rows ?? [], base: job.coverage.base ?? null, consumers: job.coverage.consumers ?? null } : null },
     vectors: v ? { head: v.head, state: v.state, reason: v.reason ?? null, cut: v.cut ?? false, skipped: v.skipped ?? [],
-      control: v.control ? { code: v.control.code ?? [], fork: v.control.fork ?? null, ...(Array.isArray(v.control.added) ? { added: v.control.added } : {}), error: v.control.error ?? null, state: ctrl?.state ?? null, ...(ctrl?.addedPassed?.length ? { addedPassed: ctrl.addedPassed } : {}), ...(ctrl?.importErrors?.length ? { importErrors: ctrl.importErrors } : {}) } : null,
+      control: v.control ? { code: v.control.code ?? [], fork: v.control.fork ?? null, ...(Array.isArray(v.control.added) ? { added: v.control.added } : {}), error: v.control.error ?? null, state: ctrl?.state ?? null, ...(ctrl?.addedPassed?.length ? { addedPassed: ctrl.addedPassed } : {}), ...(ctrl?.addedEmpty?.length ? { addedEmpty: ctrl.addedEmpty } : {}), ...(ctrl?.importErrors?.length ? { importErrors: ctrl.importErrors } : {}) } : null,
       kinds: Object.fromEntries(RUN_KINDS.filter(kind => (v.files?.[kind] ?? []).length).map(kind => [kind, v.result?.[kind] ? { state: v.result[kind].state, tests: v.result[kind].tests, pass: v.result[kind].pass, fail: v.result[kind].fail, skipped: v.result[kind].skipped, files: (v.result[kind].files ?? []).map(f => ({ file: f.file, state: f.state, code: f.code, tests: f.tests, pass: f.pass, fail: f.fail, skipped: f.skipped })), failed: v.result[kind].failed ?? [] } : { state: v.state, files: v.files[kind].map(file => ({ file })) }])) } : null,
     suite: suite ? {
       state: suite.interrupted ? 'interrupted' : suite.state,

@@ -236,11 +236,11 @@ test('3556-4: Path b pure structural refactors stay exempt while negated refacto
   assert.equal(pure.w.job(17, 'repair'), undefined, pure.w.job(17, 'repair')?.input);
   assert.deepEqual(pure.w.github.merges, [pure.pr.number]);
 
-  // 4b. Even with a *.vectors.test.mjs, explicit pure structural refactor on Path b is exempt from control-same red.
+  // 4b. Even with a *.vectors.test.mjs, explicit pure structural refactor on Path b (non-bug-labeled issue) is exempt from control-same red.
   const vecClaim = 'Evidence: runtime=not-run; vectors=pass (1/1); formal=not-applicable; tests=pass (1/1)';
   const pureVec = await coreWorld(t, { settings: { runs: 1 } });
   seed(pureVec, { [PROMPT_PATH]: BASE_PROMPT, [CODE_PATH]: BASE_CODE_BUGGY });
-  pureVec.issue(17, { title: 'Clean up duration helper', labels: ['bug'] });
+  pureVec.issue(17, { title: 'Clean up duration helper', body: 'Simplify internal layout.' });
   await pureVec.tick();
   writeIn(pureVec.job(17, 'build').cwd, CODE_PATH, refactoredSameBehavior);
   writeIn(pureVec.job(17, 'build').cwd, 'test/duration.vectors.test.mjs', passOnBoth);
@@ -258,15 +258,62 @@ test('3556-4: Path b pure structural refactors stay exempt while negated refacto
   assert.deepEqual(pureVec.github.merges, [pureVecPr.number]);
 
   // 4c. Negated refactor prose ("not a pure structural refactor") on a bug fix stays enforced -> RED.
+  const vacuousTest = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('vacuous', () => { assert.ok(seconds(60) > 0); });\n`;
   const negated = await startPathBWorld(t, {
     issue: { title: 'Fix seconds bug', labels: ['bug'] },
-    change: { [CODE_PATH]: HEAD_CODE_FIXED, 'test/regression.test.mjs': `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('vacuous', () => { assert.ok(seconds(60) > 0); });\n` },
+    change: { [CODE_PATH]: HEAD_CODE_FIXED, 'test/regression.test.mjs': vacuousTest },
     bodyExtra: 'This is not a pure structural refactor; it fixes a real bug.',
     result: { skill: 'bug' },
   });
   await runRealVectors(negated.w);
   assert.ok(negated.w.job(17, 'repair'), 'negated refactor statement must NOT exempt bug fix');
   assert.deepEqual(negated.w.github.merges, []);
+
+  // 4d. Authoritative precedence: bug-labeled issue CANNOT be bypassed by PR prose claiming pure refactor or scoped no-behavior-change.
+  for (const bypassProse of [
+    'Behavior-preserving pure structural refactor; no behavior change.',
+    'Behavior-preserving refactor.',
+    'no behavior change for other callers.',
+  ]) {
+    const labeled = await startPathBWorld(t, {
+      issue: { title: 'Adjust duration helper', body: 'See src/duration.mjs.', labels: ['bug'] },
+      change: { [CODE_PATH]: HEAD_CODE_FIXED, 'test/regression.test.mjs': vacuousTest },
+      bodyExtra: bypassProse,
+    });
+    await runRealVectors(labeled.w);
+    assert.ok(labeled.w.job(17, 'repair'), `bug label must override PR prose: ${bypassProse}`);
+    assert.deepEqual(labeled.w.github.merges, []);
+  }
+
+  // 4e. Authoritative precedence: pdd-bug / bug skill CANNOT be bypassed by PR prose claiming pure refactor.
+  for (const skill of ['bug', 'pdd-bug']) {
+    const skilled = await startPathBWorld(t, {
+      issue: { title: 'Adjust duration helper', body: 'See src/duration.mjs.' },
+      change: { [CODE_PATH]: HEAD_CODE_FIXED, 'test/regression.test.mjs': vacuousTest },
+      bodyExtra: 'Behavior-preserving pure structural refactor; no behavior change.',
+      result: { skill },
+    });
+    await runRealVectors(skilled.w);
+    assert.ok(skilled.w.job(17, 'repair'), `skill=${skill} must override PR prose`);
+    assert.deepEqual(skilled.w.github.merges, []);
+  }
+
+  // 4f. Unlabeled bug issue CANNOT be bypassed by scoped "no behavior change for/to/outside ..." prose or PR bug declaration + refactor prose.
+  for (const [issue, prose] of [
+    [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change for other callers.'],
+    [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change to existing callers.'],
+    [{ title: 'Fix off-by-two in seconds()', body: 'seconds(60) returns wrong result 2.' }, 'Updated seconds(); no behavior change outside error paths.'],
+    [{ title: 'Duration helper', body: 'See src/duration.mjs.' }, 'Bug fix for seconds(). Pure structural refactor.'],
+  ]) {
+    const scoped = await startPathBWorld(t, {
+      issue,
+      change: { [CODE_PATH]: HEAD_CODE_FIXED, 'test/regression.test.mjs': vacuousTest },
+      bodyExtra: prose,
+    });
+    await runRealVectors(scoped.w);
+    assert.ok(scoped.w.job(17, 'repair'), `must not exempt: ${prose}`);
+    assert.deepEqual(scoped.w.github.merges, []);
+  }
 });
 
 test('3556-5: controlTree distinguishes missing-module/export import errors (no noisy false positives) while still catching separate vacuous newly added tests', async t => {
@@ -356,4 +403,143 @@ test('3556-6: non-node:test ordinary test files are skipped silently without not
   await runRealVectors(brokenHead.w);
   assert.match(brokenHead.w.job(17, 'repair')?.input ?? '', /Autopilot ran the regression tests that this change touches \(test\/broken\.test\.mjs\) at head [0-9a-f]{7}: 1 of 1 failed: broken on head/);
   assert.deepEqual(brokenHead.w.github.merges, []);
+});
+
+test('3556-7: legitimate Path b pure refactors with incidental cleanup/preventive/exempt wording stay exempt (no false positives)', async t => {
+  const refactoredSameBehavior = `// Prompt: ${PROMPT_PATH}\nconst DIVISOR = 30;\nexport const seconds = n => n / DIVISOR;\n`;
+  const passOnBoth = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('same behavior', () => { assert.equal(seconds(60), 2); });\n`;
+
+  const healthyRefactors = [
+    { title: 'refactor: clean up fix from #123', body: 'Tidy helper left over from earlier fix.' },
+    { title: 'Refactor duration helper to avoid a bug', body: 'Extract helper function to avoid future bugs.' },
+    { title: 'Extract constant; expected behavior stays identical with no regression', body: 'Expected behavior stays identical with no regression.' },
+    { title: 'chore: simplify exempt list', body: 'Simplify exempt and bypass lists.' },
+    { title: 'Split duration module', body: 'Reorganize code after previous bug.', labels: ['refactor'] },
+  ];
+  for (const issue of healthyRefactors) {
+    const { w, pr } = await startPathBWorld(t, {
+      issue,
+      change: { [CODE_PATH]: refactoredSameBehavior, 'test/refactor.test.mjs': passOnBoth },
+    });
+    assert.equal(w.job(17, 'vectors'), undefined, `healthy refactor must not trigger bug-fix control run: ${issue.title}`);
+    await w.tick();
+    assert.equal(w.job(17, 'repair'), undefined, `${issue.title}: ${w.job(17, 'repair')?.input}`);
+    assert.deepEqual(w.github.merges, [pr.number], `healthy refactor merges cleanly: ${issue.title}`);
+  }
+});
+
+test('3556-8: Git rename detection (-M50%) cannot mask a newly added vacuous test file sharing boilerplate with a deleted test', async t => {
+  const sharedBoilerplate = [
+    "import test from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "import { seconds } from '../src/duration.mjs';",
+    'const FIXTURE_A = 60;',
+    'const FIXTURE_B = 120;',
+    'const FIXTURE_C = 180;',
+    'const FIXTURE_D = 240;',
+    'const FIXTURE_E = 300;',
+    'const helperCheck = value => typeof value === "number" && Number.isFinite(value);',
+    'const positiveCheck = value => helperCheck(value) && value > 0;',
+  ].join('\n');
+  const oldDeletedTest = `${sharedBoilerplate}\ntest('old test', () => { assert.ok(positiveCheck(seconds(FIXTURE_A))); });\n`;
+  const newVacuousTest = `${sharedBoilerplate}\ntest('new vacuous test', () => { assert.ok(positiveCheck(seconds(FIXTURE_B))); });\n`;
+  const baseExisting = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('existing', () => { assert.equal(seconds(60), 2); });\n`;
+  const modifiedExisting = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('existing updated', () => { assert.equal(seconds(60), 1); });\n`;
+
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  seed(w, {
+    [PROMPT_PATH]: BASE_PROMPT,
+    [CODE_PATH]: BASE_CODE_BUGGY,
+    'test/existing.test.mjs': baseExisting,
+    'test/old-removed.test.mjs': oldDeletedTest,
+  });
+  w.issue(17, { title: 'Fix seconds calculation bug', labels: ['bug'] });
+  await w.tick();
+  const cwd = w.job(17, 'build').cwd;
+  writeIn(cwd, CODE_PATH, HEAD_CODE_FIXED);
+  writeIn(cwd, 'test/existing.test.mjs', modifiedExisting);
+  w.git(cwd, 'rm', '-q', 'test/old-removed.test.mjs');
+  writeIn(cwd, 'test/new-vacuous.test.mjs', newVacuousTest);
+  const body = `Fixes #17.\n\nRuntime: not run (no prompt changed)\n${EVIDENCE_LINE}\n${PATH_B_LINE}\nPath: d — test/existing.test.mjs, test/old-removed.test.mjs, test/new-vacuous.test.mjs, change-17.txt — unowned — no contract change — Test: done check`;
+  const { head } = w.build(17, { body, result: { promptChanged: false, skill: 'bug', evidence: EVIDENCE_LINE } });
+
+  // Prove Git's default diff actually classifies test/new-vacuous.test.mjs as a rename (R..), NOT status A!
+  const diffStatus = w.git(cwd, 'diff', '--name-status', 'origin/main...HEAD');
+  assert.match(diffStatus, /^R\d+\ttest\/old-removed\.test\.mjs\ttest\/new-vacuous\.test\.mjs$/m, `expected git rename detection in fixture:\n${diffStatus}`);
+
+  await w.tick();
+  w.review(17, 'PASS');
+  w.suite(17, 0);
+  await w.tick();
+  await runRealVectors(w);
+
+  const repair = w.job(17, 'repair');
+  assert.ok(repair, 'rename-masked newly added vacuous test file must still trigger repair');
+  assert.match(repair.input, /newly added test file\(s\) test\/new-vacuous\.test\.mjs passed on the merge-base code/);
+  assert.deepEqual(w.github.merges, []);
+  const record = JSON.parse(readFileSync(join(w.root, 'logs', `17-evidence-${head}.json`), 'utf8'));
+  assert.equal(record.vectors.control.state, 'partial');
+  assert.deepEqual(record.vectors.control.added, ['test/new-vacuous.test.mjs']);
+  assert.deepEqual(record.vectors.control.addedPassed, ['test/new-vacuous.test.mjs']);
+});
+
+test('3556-9: conditionally empty test (exits 0 with 0 tests on merge-base while passing on head) is flagged RED', async t => {
+  const headWithFlag = `// Prompt: ${PROMPT_PATH}\nexport const FIXED_V2 = true;\nexport const seconds = n => n / 60;\n`;
+  const condEmptyTest = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport * as duration from '../src/duration.mjs';\nif (duration.FIXED_V2) {\n  test('only runs on head', () => { assert.equal(duration.seconds(60), 1); });\n}\n`;
+  const baseExisting = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('existing', () => { assert.equal(seconds(60), 2); });\n`;
+  const modifiedExisting = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('existing updated', () => { assert.equal(seconds(60), 1); });\n`;
+
+  // 9a. Single newly added conditionally-empty test file -> RED (never silently passes as unclear).
+  const solo = await startPathBWorld(t, {
+    issue: { title: 'Fix seconds bug', labels: ['bug'] },
+    change: { [CODE_PATH]: headWithFlag, 'test/cond-empty.test.mjs': condEmptyTest },
+    result: { skill: 'bug' },
+  });
+  await runRealVectors(solo.w);
+  assert.match(solo.w.job(17, 'repair')?.input ?? '', /newly added test file\(s\) test\/cond-empty\.test\.mjs ran 0 tests \(exited 0 with no test result\) on the merge-base code/);
+  assert.deepEqual(solo.w.github.merges, []);
+  const soloRecord = JSON.parse(readFileSync(join(solo.w.root, 'logs', `17-evidence-${solo.head}.json`), 'utf8'));
+  assert.equal(soloRecord.vectors.control.state, 'partial');
+  assert.deepEqual(soloRecord.vectors.control.addedEmpty, ['test/cond-empty.test.mjs']);
+
+  // 9b. Paired with a modified failing test -> STILL RED naming test/cond-empty.test.mjs.
+  const paired = await startPathBWorld(t, {
+    issue: { title: 'Fix seconds bug', labels: ['bug'] },
+    base: { 'test/existing.test.mjs': baseExisting },
+    change: { [CODE_PATH]: headWithFlag, 'test/existing.test.mjs': modifiedExisting, 'test/cond-empty.test.mjs': condEmptyTest },
+    result: { skill: 'bug' },
+  });
+  await runRealVectors(paired.w);
+  assert.match(paired.w.job(17, 'repair')?.input ?? '', /newly added test file\(s\) test\/cond-empty\.test\.mjs ran 0 tests \(exited 0 with no test result\) on the merge-base code \(even though another test file failed there\)/);
+  assert.deepEqual(paired.w.github.merges, []);
+});
+
+test('3556-10: test titles or bare stdout mentioning ERR_MODULE_NOT_FOUND are NOT misclassified as import-error', async t => {
+  // 10a. Real failing test whose title mentions ERR_MODULE_NOT_FOUND -> control.state is 'shows' (actual test failure, not import-error).
+  const titleTest = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\ntest('returns ERR_MODULE_NOT_FOUND on bad input', () => { assert.equal(seconds(60), 1); });\n`;
+  const a = await startPathBWorld(t, {
+    issue: { title: 'Fix seconds bug', labels: ['bug'] },
+    change: { [CODE_PATH]: HEAD_CODE_FIXED, 'test/title-err.test.mjs': titleTest },
+    result: { skill: 'bug' },
+  });
+  await runRealVectors(a.w);
+  await a.w.tick();
+  const aRecord = JSON.parse(readFileSync(join(a.w.root, 'logs', `17-evidence-${a.head}.json`), 'utf8'));
+  assert.equal(aRecord.vectors.control.state, 'shows');
+  assert.equal(aRecord.vectors.control.importErrors, undefined);
+  assert.equal(aRecord.vectors.kinds['control-tests'].files[0].state, 'fail');
+
+  // 10b. File that logs bare 'ERR_MODULE_NOT_FOUND' and exits 1 before TAP summary -> NOT misclassified as import-error.
+  const bareStdout = `import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { seconds } from '../src/duration.mjs';\nif (seconds(60) !== 1) { console.log('ERR_MODULE_NOT_FOUND'); process.exit(1); }\ntest('ok on head', () => { assert.equal(seconds(60), 1); });\n`;
+  const b = await startPathBWorld(t, {
+    issue: { title: 'Fix seconds bug', labels: ['bug'] },
+    change: { [CODE_PATH]: HEAD_CODE_FIXED, 'test/bare-stdout.test.mjs': bareStdout },
+    result: { skill: 'bug' },
+  });
+  await runRealVectors(b.w);
+  await b.w.tick();
+  const bRecord = JSON.parse(readFileSync(join(b.w.root, 'logs', `17-evidence-${b.head}.json`), 'utf8'));
+  assert.equal(bRecord.vectors.control.state, 'shows');
+  assert.equal(bRecord.vectors.control.importErrors, undefined);
+  assert.equal(bRecord.vectors.kinds['control-tests'].files[0].state, 'fail');
 });

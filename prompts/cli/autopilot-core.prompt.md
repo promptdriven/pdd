@@ -1427,18 +1427,22 @@ runs until its end):
    `linked`, `tests`, `control-vectors`, `control-formal` or `control-tests` (below), I the file's index in its
    kind). All files of the run go through one awk filter, so the
    bound is for the whole log: after 4 MB of output it passes the marker lines, TAP
-   result, location and module-load import-error lines cut to 300 characters for 1 MB more, and once `# pdd-
+   result, location and anchored top-level module-load import-error lines cut to 300 characters for 1 MB more, and once `# pdd-
    autopilot: output cut after 4194304 bytes`; it prints no other line, and keeps only
    the last top-level TAP summary line of each key and the last plan line of the current
    file, which it prints just before that file's marker. So the log stays near 5 MB, also
    with many summary-shaped lines, and each file's counts stay true. The engine reads the
    log in 1 MB parts, line by line (bounded memory), and keeps for each file the last TAP
    summary before its marker (`tests`, `pass`, `fail`, `skipped`, `todo`), the exit code,
-   whether top-level module loading hit an import/missing-export error (`ERR_MODULE_NOT_FOUND`,
-   `MODULE_NOT_FOUND`, `Cannot find module`/`package`, or `SyntaxError: The requested module ... does not provide an export named`),
+   whether a file-level load failure (with 0 subtests executed and 0 TAP summary tests,
+   either before TAP begins or inside a file-level TAP YAML diagnostic block — never from a
+   test title or arbitrary stdout line) matched an anchored missing module/export error
+   (`Error [ERR_MODULE_NOT_FOUND]: Cannot find module/package`, `Error: Cannot find module/package`,
+   `SyntaxError: The requested module '...' does not provide an export named '...'`, or
+   `code: 'ERR_MODULE_NOT_FOUND'|'MODULE_NOT_FOUND'`),
    and at most 20 failing tests of its kind with their files. A file passes with exit 0,
    at least one test and 0 failures; on a control kind (`control-*`), a non-zero exit with
-   no test failure summary (`fail` absent or 0 and `tests` absent or 0) and a top-level
+   no test failure summary (`fail` absent or 0 and `tests` absent or 0) and a file-level
    module/export import error records `import-error` (distinguished from actual test failures
    so tests importing brand-new helper modules or exports absent on the merge base do not
    cause noisy false positives); otherwise it fails with a non-zero exit or a failure (also a
@@ -1489,17 +1493,26 @@ runs until its end):
    changed module (Autopilot's run at H): …`. A code file is a changed file with a code
    extension (`.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.jsx`, `.tsx`, `.py`) that is
    not in a `test`, `tests`, `__tests__`, `spec` or `fixtures` folder and not named
-   `*.test.*` or `*.spec.*`. **Bug-fix classification:** a job persists any non-empty GitHub
-   issue `labels` (and companion `labels`) at intake; a PR is classified as a bug fix when its
-   PR body (outside code blocks and comments) does **not** explicitly declare a non-negated
-   behavior-preserving pure structural refactor (`pure refactor`, `pure structural refactor`,
-   `structural refactor`, `behavior-preserving refactor`, `refactor-only`, `internal refactor`,
-   `no behavior change`, `log-line only`) AND at least one bug signal holds: `job.skill` is
-   `bug` or `pdd-bug`, any issue or companion label is a bug/defect/regression/hotfix label
-   (excluding non-bug/wontfix/invalid/duplicate), any issue or companion title/body describes a
-   bug/defect/regression (not a `refactor:`/`chore:`/`style:`/`cleanup:`/`docs:` title without
-   bug words), or the PR body prose (excluding standard GitHub `Fixes #N`/`Closes #N`/`Resolves #N`
-   closing refs) states a bug fix/root cause or a `Path: b` restored prompt line. When a PR is a
+   `*.test.*` or `*.spec.*`. **Bug-fix classification (authoritative precedence):** a job
+   persists any non-empty GitHub issue `labels` (and companion `labels`) at intake; `isBugFixPr`
+   evaluates in strict order: (1) authoritative metadata first — if `job.skill` is `bug` or
+   `pdd-bug`, or any issue/companion label is a bug/defect/regression/hotfix label (excluding
+   non-bug/wontfix/invalid/duplicate), return `true` immediately (PR body prose can never exempt
+   a `bug`-labeled issue or `pdd-bug` run); (2) PR body declarations (outside code blocks/comments,
+   excluding standard GitHub `Fixes #N`/`Closes #N`/`Resolves #N` closing refs) — if the PR body
+   states a bug fix/root cause or a `Path: b` restored prompt line, return `true`; else if the
+   PR body explicitly declares a non-negated whole-PR behavior-preserving pure structural refactor
+   (`pure refactor`, `pure structural refactor`, `structural refactor`, `behavior-preserving
+   refactor`, `refactor-only`, `internal refactor`, `log-line only`, or unscoped `no behavior
+   change` — never scoped phrases like `no behavior change for/to/outside/in/on/when ...`),
+   return `false`; (3) issue context fallback — strip preventive/negated/cleanup phrases
+   (`avoid/prevent [a/future] bug/regression`, `clean up [the/old] fix`, `no/without regression`),
+   honor non-bug refactor/chore labels (`refactor`, `cleanup`, `chore`, `tech-debt`,
+   `documentation`, `enhancement`) and conventional/leading refactor titles (`refactor:`, `chore:`,
+   `style:`, `cleanup:`, `docs:`, or leading `refactor`/`clean up`/`simplify`/`extract`/`reorganize`)
+   when the stripped title has no bug words, and match bug words in the stripped title or issue
+   body (requiring `expected behavior` to appear with failure/actual-behavior context, never on
+   `"expected behavior stays identical"`). When a PR is a
    bug fix that changes code files (on path `a`, `b`, `c` or `e`, or with no `Path:` line) and
    changes ordinary JS `*.test.{js,mjs,cjs}` / `*.spec.{js,mjs,cjs}` `node:test` files outside
    `fixtures/` (excluding `*.vectors.test.*` and `*.formal.test.*`), those files also run under
@@ -1511,17 +1524,19 @@ runs until its end):
    file has its content at the merge base (`git merge-base origin/BASE HEAD`; a file that
    the merge base does not have is removed). The control KINDS are `control-vectors`,
    `control-formal` and `control-tests`, with their own markers; a lost control file is a
-   runner failure like any other. Control also records which control test files are newly added
-   against the base (`git diff --name-only -z --diff-filter=A origin/BASE...HEAD`, saved as
+   runner failure like any other. Control records which control test files are newly added by
+   checking which control paths are absent from the merge-base commit tree
+   (`git ls-tree -r -z --name-only FORK -- FILES`, immune to Git rename/copy detection, saved as
    `control.added`). A base merge makes a new head, so the control runs again against the
    new merge base. Per-file control evaluation (`controlResult`): `same` when every control file
-   passed; `partial` when any newly added control file passed (`addedPassed`) even if another
-   modified file failed or hit an import error; `shows` when at least one file failed and no
-   newly added file passed; `import-error` when no file failed, no newly added file passed, and
-   at least one file hit a top-level missing module/export import error; `unclear` when no file
-   failed and a file gave no result; `not-run` on control error or non-run. The note has
+   passed; `partial` when any newly added control file passed (`addedPassed`) or exited 0 with
+   0 tests (`addedEmpty`, e.g. conditionally skipped on merge-base) even if another modified file
+   failed or hit an import error; `shows` when at least one file failed and no newly added file
+   passed or ran 0 tests; `import-error` when no file failed, no newly added file passed or ran
+   0 tests, and at least one file hit a file-level missing module/export import error; `unclear`
+   when no file failed and a file gave no result; `not-run` on control error or non-run. The note has
    `- Control (the same tests on the merge-base code of CODE, merge base B): F of N failed (the tests show the change)`,
-   `… F of N failed, but newly added FILES passed on merge-base` (or `… newly added FILES passed on merge-base` when `F` is 0),
+   `… F of N failed, but newly added FILES passed on merge-base` / `newly added FILES ran 0 tests on merge-base`,
    `… K of N could not load on merge-base (missing new module or export)`,
    `… all N passed (the tests do not show the change)`,
    `… no file failed, but N of M gave no result`, or
@@ -1537,12 +1552,11 @@ runs until its end):
    merge base B): all N pass there too, so they do not show the change. Add a test that fails on
    the merge-base code and passes at this head. When the base already has the fix (for example
    after a base merge), keep the base's code, keep only what the base does not have, and say so
-   in the PR body." When `state` is `partial`, push red naming each newly added vacuous file
-   (`addedPassed`): "Autopilot ran the KIND_LABEL of this change on the merge-base code of the
-   changed code files (CODE, merge base B): newly added test file(s) FILES passed on the
-   merge-base code (even though another test file failed there), so it does / they do not prove
-   old-code failure. Make FILES fail on the merge-base code and pass at this head." The record
-   keeps the linked and control results (including `added`, `addedPassed` and `importErrors` when
+   in the PR body." When `state` is `partial`, or when `state` is `unclear` with active control
+   files that exited 0 with 0 tests (`empty`) on merge-base, push red naming each non-proving file
+   (`addedPassed`, `addedEmpty`, or empty active control files) so conditionally empty or vacuous
+   tests cannot silently pass. The record
+   keeps the linked and control results (including `added`, `addedPassed`, `addedEmpty` and `importErrors` when
    present).
    **The evidence record (#3227 fix 3):** each merge check writes one engine record per
    head, `logs/N-evidence-HEAD.json` (`pdd.core-evidence.v1`, written only when it
