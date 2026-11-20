@@ -1057,7 +1057,7 @@ test('discovery, help, version, and shell completion commands work end-to-end', 
     extraEnv: { PDD_RUNTIME_URL: stub.baseUrl, PDD_E2E_FAKE_GH: 'ok' },
   });
   assert.equal(onlineVV.code, 0, onlineVV.stderr);
-  assert.match(onlineVV.stdout, new RegExp(`PDD CLI: ${PKG_VERSION.replace(/\./g, '\\.')}`));
+  assert.ok(onlineVV.stdout.includes(`PDD CLI: ${PKG_VERSION}\n`), onlineVV.stdout);
   assert.match(onlineVV.stdout, /PDD interpreter: 0123456789abcdef0123456789abcdef01234567/);
   assert.match(onlineVV.stdout, /PDD service: fedcba9876543210fedcba9876543210fedcba98/);
   assert.match(onlineVV.stdout, /Interface formats: prompt-runtime\.interface\.v1/);
@@ -1261,6 +1261,14 @@ test('test, lint, and simulate commands exercise local modes and flag combinatio
   const bindRes = await fx.cli(['lint', '--bind-criteria', 'short-demo', '--json']);
   assert.equal(bindRes.code, 0, bindRes.stderr);
   assert.match(readFileSync(join(fx.repo, 'tests', 'short-demo.json'), 'utf8'), /ac-sha256-/);
+
+  // pdd lint --emit-v1 --write [--json] (0 network, writes expanded v1 JSON to disk)
+  const emitWriteRes = await fx.cli(['lint', '--emit-v1', '--write', 'short-demo', '--json']);
+  assert.equal(emitWriteRes.code, 0, emitWriteRes.stderr);
+  assert.match(
+    readFileSync(join(fx.repo, 'tests', 'short-demo.json'), 'utf8'),
+    /"schema_version":\s*"prompt-runtime\.program-scenario\.v1"/,
+  );
 
   // pdd lint --codex --json --timeout 1 (runs through codex-lint with safe codex shim)
   const codexLint = await fx.cli(['lint', '--codex', 'demo', '--json', '--timeout', '1']);
