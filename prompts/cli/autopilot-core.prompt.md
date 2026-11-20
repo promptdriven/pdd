@@ -1424,18 +1424,24 @@ runs until its end):
    brackets, braces such as `{a,b}`, stars, a leading `-` and such characters in the
    checkout path all work, checked on Node 22.23.2), then the marker line `# pdd-autopilot-
    NONCE: KIND I exit CODE` (NONCE a random hex per run, KIND `vectors`, `formal`,
-   `linked`, `control-vectors` or `control-formal` (below), I the file's index in its
+   `linked`, `tests`, `control-vectors`, `control-formal` or `control-tests` (below), I the file's index in its
    kind). All files of the run go through one awk filter, so the
    bound is for the whole log: after 4 MB of output it passes the marker lines, TAP
-   result and location lines cut to 300 characters for 1 MB more, and once `# pdd-
+   result, location and module-load import-error lines cut to 300 characters for 1 MB more, and once `# pdd-
    autopilot: output cut after 4194304 bytes`; it prints no other line, and keeps only
    the last top-level TAP summary line of each key and the last plan line of the current
    file, which it prints just before that file's marker. So the log stays near 5 MB, also
    with many summary-shaped lines, and each file's counts stay true. The engine reads the
    log in 1 MB parts, line by line (bounded memory), and keeps for each file the last TAP
    summary before its marker (`tests`, `pass`, `fail`, `skipped`, `todo`), the exit code,
+   whether top-level module loading hit an import/missing-export error (`ERR_MODULE_NOT_FOUND`,
+   `MODULE_NOT_FOUND`, `Cannot find module`/`package`, or `SyntaxError: The requested module ... does not provide an export named`),
    and at most 20 failing tests of its kind with their files. A file passes with exit 0,
-   at least one test and 0 failures; it fails with a non-zero exit or a failure (also a
+   at least one test and 0 failures; on a control kind (`control-*`), a non-zero exit with
+   no test failure summary (`fail` absent or 0 and `tests` absent or 0) and a top-level
+   module/export import error records `import-error` (distinguished from actual test failures
+   so tests importing brand-new helper modules or exports absent on the merge base do not
+   cause noisy false positives); otherwise it fails with a non-zero exit or a failure (also a
    non-zero exit with no summary: the file did not load); a file with exit 0 and no test
    has no result. A kind is the sum of its files; a kind with a failed file fails, and a
    kind with a file with no result cannot substantiate a positive claim. A positive
@@ -1471,7 +1477,7 @@ runs until its end):
    20, then "and N more") and `- Formal tests (…)`, `- Not run by Autopilot
    (REASON): FILES` for other runners, or `- Replay and formal tests (Autopilot's run):
    none changed`.
-   **Replay files that import a changed module, and the control (#3227 fix 2):** the run
+   **Replay files that import a changed module, ordinary bug-fix regression tests, and the control (#3227 fix 2, #3556):** the run
    also has each `*.vectors.test.*` file of the head that imports a changed code module
    by a relative path (a `from`, `import(` or `require(` string that resolves to the
    changed file; the candidates come from `git grep -z -l -F` of the module's file name;
@@ -1483,27 +1489,61 @@ runs until its end):
    changed module (Autopilot's run at H): …`. A code file is a changed file with a code
    extension (`.js`, `.mjs`, `.cjs`, `.ts`, `.mts`, `.cts`, `.jsx`, `.tsx`, `.py`) that is
    not in a `test`, `tests`, `__tests__`, `spec` or `fixtures` folder and not named
-   `*.test.*` or `*.spec.*`. When the PR changes code files and the run has `vectors` or
-   `formal` files, the same command runs those files a second time, as the control: in a
+   `*.test.*` or `*.spec.*`. **Bug-fix classification:** a job persists any non-empty GitHub
+   issue `labels` (and companion `labels`) at intake; a PR is classified as a bug fix when its
+   PR body (outside code blocks and comments) does **not** explicitly declare a non-negated
+   behavior-preserving pure structural refactor (`pure refactor`, `pure structural refactor`,
+   `structural refactor`, `behavior-preserving refactor`, `refactor-only`, `internal refactor`,
+   `no behavior change`, `log-line only`) AND at least one bug signal holds: `job.skill` is
+   `bug` or `pdd-bug`, any issue or companion label is a bug/defect/regression/hotfix label
+   (excluding non-bug/wontfix/invalid/duplicate), any issue or companion title/body describes a
+   bug/defect/regression (not a `refactor:`/`chore:`/`style:`/`cleanup:`/`docs:` title without
+   bug words), or the PR body prose (excluding standard GitHub `Fixes #N`/`Closes #N`/`Resolves #N`
+   closing refs) states a bug fix/root cause or a `Path: b` restored prompt line. When a PR is a
+   bug fix that changes code files (on path `a`, `b`, `c` or `e`, or with no `Path:` line) and
+   changes ordinary JS `*.test.{js,mjs,cjs}` / `*.spec.{js,mjs,cjs}` `node:test` files outside
+   `fixtures/` (excluding `*.vectors.test.*` and `*.formal.test.*`), those files also run under
+   KIND `tests` (a failure on head is red; non-`node:test` ordinary files are omitted without
+   `notRunReds` or `unchecked`, and `Evidence: tests=` full-suite counts are not compared against
+   the changed-file subset). When the PR changes code files and the run has `vectors`, `formal`
+   or `tests` files, the same command runs those files a second time, as the control: in a
    second clean checkout of the head (`worktrees/N-control`) in which each changed code
    file has its content at the merge base (`git merge-base origin/BASE HEAD`; a file that
-   the merge base does not have is removed). The control KINDS are `control-vectors` and
-   `control-formal`, with their own markers; a lost control file is a runner failure
-   like any other. A base merge makes a new head, so the control runs again against the
-   new merge base. The note has `- Control (the same tests on the merge-base code of
-   CODE, merge base B): F of N failed (the tests show the change)`, or `… all N passed
-   (the tests do not show the change)`, `… no file failed, but N of M gave no result`, or
-   `… not run (REASON)`. A control failure is
-   never red. When every control file passed, the Evidence line has a positive claim of
-   the kind (`vectors=pass`, `formal=proved` or `bounded`), and a Path line uses path a,
-   c or e (a behavior change; with path b the contract stays, so a pass on the base is
-   expected), the engine asks once per job, and only while a repair is left: "Autopilot
-   ran the replay and formal tests of this change (FILES) on the merge-base code of the
-   changed code files (CODE, merge base B): all N pass there too, so they do not show
-   the change. Add a test that fails on the merge-base code and passes at this head.
-   When the base already has the fix (for example after a base merge), keep the base's
-   code, keep only what the base does not have, and say so in the PR body." The record
-   keeps the linked and control results.
+   the merge base does not have is removed). The control KINDS are `control-vectors`,
+   `control-formal` and `control-tests`, with their own markers; a lost control file is a
+   runner failure like any other. Control also records which control test files are newly added
+   against the base (`git diff --name-only -z --diff-filter=A origin/BASE...HEAD`, saved as
+   `control.added`). A base merge makes a new head, so the control runs again against the
+   new merge base. Per-file control evaluation (`controlResult`): `same` when every control file
+   passed; `partial` when any newly added control file passed (`addedPassed`) even if another
+   modified file failed or hit an import error; `shows` when at least one file failed and no
+   newly added file passed; `import-error` when no file failed, no newly added file passed, and
+   at least one file hit a top-level missing module/export import error; `unclear` when no file
+   failed and a file gave no result; `not-run` on control error or non-run. The note has
+   `- Control (the same tests on the merge-base code of CODE, merge base B): F of N failed (the tests show the change)`,
+   `… F of N failed, but newly added FILES passed on merge-base` (or `… newly added FILES passed on merge-base` when `F` is 0),
+   `… K of N could not load on merge-base (missing new module or export)`,
+   `… all N passed (the tests do not show the change)`,
+   `… no file failed, but N of M gave no result`, or
+   `… not run (REASON)`. A control failure or `import-error` is never red. **Per-head old-code
+   failure proof (no one-shot latch bypass):** enforcement applies on **every** head (never
+   latched once per job and never suppressed when repairs are exhausted; repeated vacuous repair
+   heads stay red and end cleanly via the repair budget / `ctx.settings.repairs`) whenever a
+   `Path:` line uses path `a`, `c` or `e` OR uses path `b` on a bug-fix PR (keeping pure
+   structural refactors and non-bug path `b` PRs exempt), and at least one control kind is active
+   (`vectors=pass`, `formal=proved` or `bounded`, omitted `Evidence:` with passing head
+   `vectors`/`formal`, or head `tests` pass). When `state` is `same`, push red: "Autopilot ran
+   the KIND_LABEL of this change (FILES) on the merge-base code of the changed code files (CODE,
+   merge base B): all N pass there too, so they do not show the change. Add a test that fails on
+   the merge-base code and passes at this head. When the base already has the fix (for example
+   after a base merge), keep the base's code, keep only what the base does not have, and say so
+   in the PR body." When `state` is `partial`, push red naming each newly added vacuous file
+   (`addedPassed`): "Autopilot ran the KIND_LABEL of this change on the merge-base code of the
+   changed code files (CODE, merge base B): newly added test file(s) FILES passed on the
+   merge-base code (even though another test file failed there), so it does / they do not prove
+   old-code failure. Make FILES fail on the merge-base code and pass at this head." The record
+   keeps the linked and control results (including `added`, `addedPassed` and `importErrors` when
+   present).
    **The evidence record (#3227 fix 3):** each merge check writes one engine record per
    head, `logs/N-evidence-HEAD.json` (`pdd.core-evidence.v1`, written only when it
    changes): the PR's Runtime lines and claims, the T01 result with the saved rows that
