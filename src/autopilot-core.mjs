@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 51342ad8061808040d596211765422ca0117cc4e8b4aac65c457b69607afa2a2).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: c721bad04945f1a8c004ee1c27c8c0a5dba8ba04810b0be16449375514165325).
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -21,6 +21,7 @@ import { issueAreas, areasOverlap, groupReadyIssues, orderGroupsSpreadFirst, nor
 import { enqueueMergeQueueItem, mergeQueueStatusLine, processMergeQueue, readMergeQueue } from './autopilot-merge-queue.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
 import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
+import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 const isPoolRotatableService = text => Boolean(text && (isQuotaExhaustionMessage(text) || isAuthFailureMessage(text)));
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 import { recordAutopilotMetric } from './autopilot-metrics.mjs';
@@ -1934,41 +1935,37 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
   const prepared = (!command && typeof selected?.prepareStep === 'function') ? selected.prepareStep(ctx.ports.env ?? process.env, { detached: true }) : null;
   const baseEnv = prepared?.env ?? ((!command && selected?.env) ? selected.env : (ctx.ports.env ?? process.env));
   const cleanupDirs = prepared?.cleanupDirs ?? selected?.cleanupDirs ?? null;
-  // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
-  // as PDD_CHECK_CPUS for every role.
-  const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
-  const stripGithubTokens = role === 'review';
-  const reviewTokenKeyRe = /^(?:GH|GITHUB)_\w*TOKEN$/i;
-  if (stripGithubTokens && !command && activeAgent?.kind === 'gemini' && (!named(reviewContext?.dir) || !named(reviewContext?.geminiPolicyFile) || !named(reviewContext?.geminiSettingsFile))) {
-    prepared?.cleanup?.();
-    throw Object.assign(Error('Gemini read-only review requires pre-materialized review context and read-only policy'), { code: 'gemini_review_context_required' });
-  }
-  const useGeminiCleanCwd = stripGithubTokens && !command && activeAgent?.kind === 'gemini' && named(reviewContext?.dir);
-  const launchCwd = useGeminiCleanCwd ? reviewContext.dir : cwd;
-  const cleanedBaseEnv = stripGithubTokens
-    ? Object.fromEntries(Object.entries(jobEnvironment(baseEnv, { stripGithubTokens: true })).filter(([key]) => !reviewTokenKeyRe.test(key) && key !== 'GEMINI_CLI_TRUST_WORKSPACE'))
-    : jobEnvironment(baseEnv, { stripGithubTokens: false });
-  const filteredExtraEnv = stripGithubTokens
-    ? Object.fromEntries(Object.entries(extraEnv).filter(([key]) => !reviewTokenKeyRe.test(key) && key !== 'GH_CONFIG_DIR' && key !== 'GEMINI_CLI_TRUST_WORKSPACE'))
-    : extraEnv;
-  const childEnv = {
-    ...pddOnPath(ctx, cleanedBaseEnv),
-    ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}),
-    ...filteredExtraEnv,
-    ...(stripGithubTokens ? { GH_CONFIG_DIR: join(ctx.dirs.logs, `${id}.no-gh-config`) } : {}),
-    ...(useGeminiCleanCwd ? { GEMINI_CLI_TRUST_WORKSPACE: 'true' } : {}),
-    ...(stripGithubTokens && activeAgent?.kind === 'gemini' && named(reviewContext?.geminiSettingsFile) ? { GEMINI_CLI_SYSTEM_SETTINGS_PATH: reviewContext.geminiSettingsFile } : {}),
-  };
-  let run;
-  try {
-    run = command ?? resolveCoreAgentCommand(ctx, role, activeAgent, childEnv, { resultFile: result, reviewContext, cwd });
-  } catch (err) {
-    prepared?.cleanup?.();
-    throw err;
-  }
   let started;
   try {
-    started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd: launchCwd, custodyRoot: launchCwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
+    // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
+    // as PDD_CHECK_CPUS for every role.
+    const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
+    const stripGithubTokens = role === 'review';
+    const reviewTokenKeyRe = /^(?:GH|GITHUB)_\w*TOKEN$/i;
+    if (stripGithubTokens && !command && activeAgent?.kind === 'gemini' && (!named(reviewContext?.dir) || !named(reviewContext?.geminiPolicyFile) || !named(reviewContext?.geminiSettingsFile))) {
+      throw Object.assign(Error('Gemini read-only review requires pre-materialized review context and read-only policy'), { code: 'gemini_review_context_required' });
+    }
+    const useGeminiCleanCwd = stripGithubTokens && !command && activeAgent?.kind === 'gemini' && named(reviewContext?.dir);
+    const launchCwd = useGeminiCleanCwd ? reviewContext.dir : cwd;
+    const cleanedBaseEnv = stripGithubTokens
+      ? Object.fromEntries(Object.entries(jobEnvironment(baseEnv, { stripGithubTokens: true })).filter(([key]) => !reviewTokenKeyRe.test(key) && key !== 'GEMINI_CLI_TRUST_WORKSPACE'))
+      : jobEnvironment(baseEnv, { stripGithubTokens: false });
+    const filteredExtraEnv = stripGithubTokens
+      ? Object.fromEntries(Object.entries(extraEnv).filter(([key]) => !reviewTokenKeyRe.test(key) && key !== 'GH_CONFIG_DIR' && key !== 'GEMINI_CLI_TRUST_WORKSPACE'))
+      : extraEnv;
+    const childEnv = {
+      ...pddOnPath(ctx, cleanedBaseEnv),
+      ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}),
+      ...filteredExtraEnv,
+      ...(stripGithubTokens ? { GH_CONFIG_DIR: join(ctx.dirs.logs, `${id}.no-gh-config`) } : {}),
+      ...(useGeminiCleanCwd ? { GEMINI_CLI_TRUST_WORKSPACE: 'true' } : {}),
+      ...(stripGithubTokens && activeAgent?.kind === 'gemini' && named(reviewContext?.geminiSettingsFile) ? { GEMINI_CLI_SYSTEM_SETTINGS_PATH: reviewContext.geminiSettingsFile } : {}),
+    };
+    const run = command ?? resolveCoreAgentCommand(ctx, role, activeAgent, childEnv, { resultFile: result, reviewContext, cwd });
+    const runArgs = (!command && Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length)
+      ? spliceClaudeExtraArgs(run.args, prepared.extraArgs)
+      : run.args;
+    started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd: launchCwd, custodyRoot: launchCwd, command: run.command, args: runArgs, input: typeof prompt === 'function' ? prompt(result) : prompt,
       env: childEnv,
       ...(Array.isArray(cleanupDirs) && cleanupDirs.length ? { cleanupDirs } : {}),
       ...(ctx.ports.wake ? { wake: ctx.ports.wake } : {}),
@@ -3084,7 +3081,7 @@ function reviewEnvelopeEntries(obj) {
   }
   // Claude --output-format json / stream-json: final result envelope or assistant text blocks.
   if (obj.type === 'result') {
-    if (typeof obj.result === 'string' && obj.result.trim()) out.push({ kind: 'result', text: obj.result });
+    if (typeof obj.result === 'string') out.push({ kind: 'result', text: obj.result });
     return out;
   }
   if (obj.type === 'assistant') {

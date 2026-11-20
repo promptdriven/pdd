@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: 16be5fc1b30f900e48ca04e1c279b517cddbc7147938c589f50fd2de91cb7675).
+// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: 9e818d08e473e5ad628bcf680ad11e6374b6bb05adfcd9bf3e6c35f09999c0df).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { jobEnvironment } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
 import { resolveStepModelTier } from './autopilot-telemetry.mjs';
 import { isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs';
+import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 const isRotatablePoolFailure = text => isQuotaExhaustionMessage(text) || isAuthFailureMessage(text);
 import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
 import { parse as parseToml } from './vendor/smol-toml/parse.js';
@@ -580,8 +581,11 @@ export async function runPreRunForensics(
     : null;
   try {
     const cmd = forensicsCommand(activeAgent, { model, reasoningEffort, resultFile, env: childEnv, fs });
+    const cmdArgs = (Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length)
+      ? spliceClaudeExtraArgs(cmd.args, prepared.extraArgs)
+      : cmd.args;
     const prompt = forensicsPrompt({ repo, baseBranch, issue, comments });
-    const execResult = await run(cmd.command, cmd.args, {
+    const execResult = await run(cmd.command, cmdArgs, {
       cwd: worktree,
       env: childEnv,
       input: prompt,

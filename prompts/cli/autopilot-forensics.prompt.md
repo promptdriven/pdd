@@ -91,7 +91,7 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
 - `runPreRunForensics(input, ports)` runs in `cwd: worktree` with a bounded timeout
   (default 90 seconds, 128 KiB output cap), honors optional worker-tier model
   routing via `resolveStepModelTier` (`step: "intake"`) and pooled/Cloud step
-  overlays (`selected.prepareStep`, always cleaned up in `finally`), reports quota
+  overlays (`selected.prepareStep`, forwarding `prepared.extraArgs` such as Claude `--settings <path>` before `--` and always cleaning up in `finally`), reports quota
   exhaustion to `ports.exhaustLogin` when applicable, and fails open to
   `already_fixed: false` (`disposition: "still_needed"`) on any error, timeout,
   non-zero exit without valid proof, or uncertainty so real bugs are never skipped.
