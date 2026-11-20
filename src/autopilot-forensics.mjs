@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: 9a1e37faa6594081c1c9aae7d0ee84a15de78b64e779c9d800b382122226cd98).
+// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: 16be5fc1b30f900e48ca04e1c279b517cddbc7147938c589f50fd2de91cb7675).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -319,20 +319,30 @@ export function readOnlyAgentCommand(
     env = null,
     fs = nativeFs,
     json = false,
+    stream = false,
     ignoreRules = true,
+    addDirs = null,
+    geminiAdminPolicy = null,
+    geminiSandbox = false,
   } = {},
 ) {
   const cleanModel = cleanModelName(model ?? agent?.model);
   const effort = cleanEffort(reasoningEffort);
   const codexEffort = effort ?? cleanEffort(defaultEffort);
   const cmdName = fallback => (typeof agent?.command === 'string' && agent.command.trim() ? agent.command.trim() : fallback);
+  const cleanDirs = Array.isArray(addDirs)
+    ? [...new Set(addDirs.filter(d => typeof d === 'string' && d.trim() && !SAFE_CONTROL_RE.test(d)).map(d => d.trim()))]
+    : [];
+  const cleanPolicy = typeof geminiAdminPolicy === 'string' && geminiAdminPolicy.trim() && !SAFE_CONTROL_RE.test(geminiAdminPolicy)
+    ? geminiAdminPolicy.trim()
+    : null;
   if (agent?.kind === 'codex') {
     const providerArgs = codexProviderConfigArgs({ env, agent, fs });
     return {
       command: cmdName('codex'),
       args: [
         'exec',
-        ...(json ? ['--json'] : []),
+        ...(json || stream ? ['--json'] : []),
         '--ignore-user-config',
         ...(ignoreRules ? ['--ignore-rules'] : []),
         '--sandbox', 'read-only', '--ephemeral', '--color', 'never',
@@ -352,7 +362,9 @@ export function readOnlyAgentCommand(
       args: [
         '-p', '--safe-mode', '--tools', 'Read,Glob,Grep', '--permission-mode', 'plan',
         '--permission-prompts', 'none', '--strict-mcp-config', '--no-chrome', '--no-session-persistence',
-        '--output-format', 'json',
+        ...cleanDirs.flatMap(dir => ['--add-dir', dir]),
+        '--output-format', stream ? 'stream-json' : 'json',
+        ...(stream ? ['--verbose'] : []),
         ...(effort ? ['--effort', effort] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),
       ],
@@ -362,8 +374,12 @@ export function readOnlyAgentCommand(
     return {
       command: cmdName('gemini'),
       args: [
-        '-p', '', '--output-format', 'json', '--approval-mode', 'plan',
+        '-p', '', '--output-format', stream ? 'stream-json' : 'json',
+        ...(geminiSandbox ? ['--sandbox'] : []),
+        '--approval-mode', 'plan',
         '--extensions', 'none', '--allowed-mcp-server-names', 'pdd-disabled-none',
+        ...cleanDirs.flatMap(dir => ['--include-directories', dir]),
+        ...(cleanPolicy ? ['--admin-policy', cleanPolicy] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),
       ],
     };
@@ -372,7 +388,7 @@ export function readOnlyAgentCommand(
     return {
       command: cmdName('agy'),
       args: [
-        '--input-format', 'text', '--output-format', 'json', '--mode', 'plan',
+        '--input-format', 'text', '--output-format', stream ? 'stream-json' : 'json', '--mode', 'plan',
         '--sandbox', '--disable-slash-commands',
         ...(effort ? ['--effort', effort] : []),
         ...(cleanModel ? ['--model', cleanModel] : []),

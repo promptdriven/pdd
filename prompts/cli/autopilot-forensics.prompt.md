@@ -60,11 +60,11 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
   grant with `rememberSecrets`, moves it into `env.PDD_CODEX_GATEWAY_GRANT`, and emits
   `env_http_headers={ x-pdd-gateway-grant = "PDD_CODEX_GATEWAY_GRANT" }` with
   `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"`.
-- `readOnlyAgentCommand(agent, {model, reasoningEffort, defaultEffort, resultFile, env, fs, json, ignoreRules})` builds a
+- `readOnlyAgentCommand(agent, {model, reasoningEffort, defaultEffort, resultFile, env, fs, json, stream, ignoreRules, addDirs, geminiAdminPolicy, geminiSandbox})` builds a
   bounded read-only headless CLI invocation for every supported Autopilot agent kind
   (shared by pre-run forensics and [Autopilot core](autopilot-core.prompt.md)'s independent
   reviewer, never passing bypass/yolo flags):
-  - `codex`: `exec`, optional `--json` (when `json` is `true`), `--ignore-user-config`,
+  - `codex`: `exec`, optional `--json` (when `json` or `stream` is `true`), `--ignore-user-config`,
     `--ignore-rules` (unless `ignoreRules` is `false`), `--sandbox read-only`, `--ephemeral`,
     `--color never`, `approval_policy="never"`, `web_search="disabled"`, `mcp_servers={}`,
     optional `model_reasoning_effort` (when `reasoningEffort ?? defaultEffort` is valid),
@@ -73,15 +73,21 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
     optional `--output-last-message FILE`, optional `--model MODEL`, and `-` stdin.
   - `claude`: `-p --safe-mode --tools Read,Glob,Grep --permission-mode plan
     --permission-prompts none --strict-mcp-config --no-chrome
-    --no-session-persistence --output-format json` with optional `--effort` and
-    `--model`.
-  - `gemini`: `-p "" --output-format json --approval-mode plan --extensions none
-    --allowed-mcp-server-names pdd-disabled-none` with optional `--model`.
-  - `agy`: `--input-format text --output-format json --mode plan --sandbox
-    --disable-slash-commands` with optional `--effort` and `--model`.
+    --no-session-persistence`, any `--add-dir DIR` entries from `addDirs`,
+    `--output-format stream-json --verbose` when `stream` is `true` else
+    `--output-format json`, with optional `--effort` and `--model`.
+  - `gemini`: `-p "" --output-format <stream-json|json>` (streaming when `stream`
+    is `true`), optional `--sandbox` (when `geminiSandbox` is `true`),
+    `--approval-mode plan --extensions none --allowed-mcp-server-names
+    pdd-disabled-none`, any `--include-directories DIR` entries from `addDirs`,
+    optional `--admin-policy FILE` (when `geminiAdminPolicy`
+    is set), with optional `--model`.
+  - `agy`: `--input-format text --output-format <stream-json|json>` (streaming
+    when `stream` is `true`) `--mode plan --sandbox --disable-slash-commands`
+    with optional `--effort` and `--model`.
   Unknown agent kinds throw an Error.
 - `forensicsCommand(agent, {model, reasoningEffort, resultFile, env, fs})` delegates to
-  `readOnlyAgentCommand` with `defaultEffort: "low"` and `json: false`.
+  `readOnlyAgentCommand` with `defaultEffort: "low"`, `json: false`, and `stream: false`.
 - `runPreRunForensics(input, ports)` runs in `cwd: worktree` with a bounded timeout
   (default 90 seconds, 128 KiB output cap), honors optional worker-tier model
   routing via `resolveStepModelTier` (`step: "intake"`) and pooled/Cloud step
