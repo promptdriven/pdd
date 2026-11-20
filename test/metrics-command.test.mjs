@@ -235,7 +235,7 @@ test('CLI HTML dashboard output, on/off switch via runPdd, offline Open fallback
   assert.equal(offRes.status, 0, offRes.stderr);
   assert.match(offRes.stdout, /Autopilot metrics recording is OFF/);
 
-  const jsonWhileOff = spawnSync(process.execPath, [pddBin, 'metrics', '--date', '2026-11-17', '--timezone', 'UTC', '--json'], { cwd: dir, env, encoding: 'utf8' });
+  const jsonWhileOff = spawnSync(process.execPath, [pddBin, 'metrics', '--json', '--date', '2026-11-17', '--timezone', 'UTC'], { cwd: dir, env, encoding: 'utf8' });
   assert.equal(jsonWhileOff.status, 0, jsonWhileOff.stderr);
   const parsedOff = JSON.parse(jsonWhileOff.stdout);
   assert.equal(parsedOff.recording.enabled, false);
