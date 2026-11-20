@@ -1,8 +1,9 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 1708992dec75dee871f061efa23944062c2fa05fba7f29c6c6173ec7deff76a7).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: d6e9c7701ccd7c1c521f6d8c209caa47e383a906cb50ea2e6f3e579e06151f90).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
+import { auditProductPlan } from './product-documents.mjs';
 import { isLintableStoryPath, lintStory } from './story-lint.mjs';
 import { gitFiles, isSecretPath, workspace } from './runtime-seam.mjs';
 
@@ -3211,6 +3212,24 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
         kind: 'code',
         rawText: content,
       }));
+    }
+  }
+
+  // 5. Product plan audits: prompt inventory drift and unwired boundary operations
+  if (tests === undefined && scopedSet.has('product/plan.md')) {
+    const planText = readSafeUtf8(realRoot, 'product/plan.md');
+    if (typeof planText === 'string' && planText.trim()) {
+      const mapText = scopedSet.has('product/map.md') ? (readSafeUtf8(realRoot, 'product/map.md') ?? '') : '';
+      const promptFiles = [];
+      for (const p of allPrompts) {
+        const content = getPromptText(p);
+        if (typeof content === 'string') promptFiles.push({ path: p, content });
+      }
+      const audit = auditProductPlan({ mapText, planText, promptFiles });
+      for (const item of audit.findings) {
+        if (promptFilterSet && !(Array.isArray(item.relatedPrompts) && item.relatedPrompts.some(p => promptFilterSet.has(p)))) continue;
+        rawFindings.push({ ...item, defaultSeverity: 'warn' });
+      }
     }
   }
 

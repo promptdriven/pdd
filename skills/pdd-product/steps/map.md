@@ -8,7 +8,9 @@ router/server/connector/daemon to..."`), and never split one user action into
 duplicate plumbing Stories across parts (`1` user goal = `1` Story, assigned to
 the part where the person acts or sees the result, or whose contract proves a
 background rule). Keep edge cases (stale taps, blank input, retries), internal
-safety rules and wire shapes out of Stories; put them in prompts and `## Rules to check`.
-Say in `Parts` which parts face a person and which run headless (`0` UI screens).
-Give each question a recommendation and concrete example. Count `CORE` Stories and
-parts, propose the size path, show the map and questions, and wait for approval.
+safety rules and wire shapes out of Stories; put them in prompts and a structured
+`## Rules to check` table (`Id`, `Owner`, `Rule`, `Verified By`) so `pdd product start`
+carries owned rules into each run's issue. Say in `Parts` which parts face a person and
+which run headless (`0` UI screens). Give each question a recommendation and concrete
+example. Count `CORE` Stories and parts, propose the size path, show the map and
+questions, and wait for approval.

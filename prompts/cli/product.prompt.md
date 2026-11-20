@@ -18,8 +18,11 @@ formats the same structured results. It never retries a mutation automatically.
 For these module functions, cwd is the explicit product repository root (or the
 logical root supplied by an injected filesystem). The CLI resolves an invoking
 subdirectory to that root before calling this module. Read `product/map.md` and
-optional `product/plan.md` beneath cwd through the injected readFile callback.
-Missing plan is allowed for the small path. Parse
+optional `product/plan.md` beneath cwd through the injected readFile callback
+(the default native reader opens only regular in-root files without following
+symlinks and enforces a bounded size, refusing symlinked map/plan files with
+`invalid-product` instead of following them or treating a symlinked plan as
+missing). Missing plan is allowed for the small path. Parse
 Markdown tables by heading and column name, trimming cells, ignoring separator
 rows and preserving row order. Backtick-wrapped cell values are plain values.
 Split comma lists; empty or `-` is an empty list. Ignore unrelated headings.
@@ -34,7 +37,17 @@ duplicate or invalid `Through:` values with `invalid-product` naming
 
 Parts, Stories, Journeys and Questions use the columns in the required file
 format. Keep CORE and LATER Stories distinct. Return only unanswered question
-IDs. Runs come from the plan; their slice is a string. Missing map, unreadable
+IDs. Runs come from the plan; their slice is a string. Optional plan and map
+extensions keep existing files backwards-compatible (omit empty optional fields):
+
+| Section / Field | Accepted forms & validation |
+|---|---|
+| `product/map.md` `## Rules to check` | Structured table (`Id`, `Owner`, `Rule`, `Verified By`, case-insensitive; reject missing columns, empty/duplicate `Id`, or empty `Owner`/`Rule`) or legacy bullet/prose fallback (`{id:"",owner:"all",rule,verifiedBy:""}`); exposed as `product.rulesToCheck`. |
+| `product/plan.md` `## Runs` shared surfaces | Optional `Shared surfaces` / `Shared surface` / `Updates` / `Also updates` column, comma-separated secondary parts in `Part` (`ledger, cli`), or per-run `Shared surfaces (RUN): ...` / `Also updates (RUN): ...` / `RUN: Shared surfaces: ...` lines; deduplicate, drop primary part, validate against `## Parts`, allow Stories from primary or shared surfaces, expose as `run.sharedSurfaces`. |
+| `product/plan.md` `## Prompts` | Table, bullets, or `### <part>` subheadings naming `.prompt.md` files (resolving bare names against part folder); exposed as `product.prompts`. |
+| `product/plan.md` `## Boundaries` operations | Dotted `<part>/<prompt>.<op>` or `<prompt>.<op>` tokens in `What crosses` / `Operations` (skipping file extensions, versions and `Never crosses:` lines) used for consumer wiring audits. |
+
+Missing map, unreadable
 required input, duplicate part/Story/run IDs or references to unknown parts,
 Stories or needs give `invalid-product` with the file and offending ID. Do not
 reject an oversized run. An `all` run may name journey IDs. A small map without
@@ -256,7 +269,13 @@ advice, not a new hard gate on an explicit start.
 </details>
 
 Optional `warnings` arrays in status/next carry these diagnostics only when
-nonempty; omit the field otherwise to preserve existing result shapes. CLI text
+nonempty; omit the field otherwise to preserve existing result shapes. When
+`cwd` is a real local directory and `product/plan.md` declares `## Prompts` or
+dotted `## Boundaries` operations, `productStatus` runs the shared
+`auditProductPlan` check across safe non-symlink bounded in-root `.prompt.md`
+files and appends concise drift/unwired-boundary warnings to `warnings`. Status
+and next include optional `sharedSurfaces` on runs/waiting rows when declared
+and display them in CLI text. CLI text
 shows each warning. Start includes its relevant warnings in its message.
 
 ## Next and start
@@ -295,8 +314,14 @@ label as needed rather than send an invalid title; the full run and every Story
 ID/text remain in the body. This compaction is not a refusal or a new Story
 limit.
 The body names the product issue when a product workflow record supplies it,
-plan path, run, slice, full Story IDs/texts, prompt folder, boundary contracts and
-world contract. Include actionable filename guidance: name every Story file with
+plan path, run, slice, full Story IDs/texts, prompt folder, boundary contracts
+(covering the primary part and any declared secondary shared surfaces) and
+world contract. When the run declares secondary `sharedSurfaces`, list each
+shared surface with its folder and any declared `## Prompts` paths to update.
+When `product.rulesToCheck` has rules owned by the run's primary part, any
+declared secondary shared surface, or `*` / `all` / `shared`, include them under
+a concise `## Rules to check` section in the body (excluding rules owned solely
+by other parts). Include actionable filename guidance: name every Story file with
 its map ID first, such as `P01-menu.md` (use the first planned ID for its example). When a product workflow record supplies the parent issue, include the body line `Part of #N (product).`, replacing N with that issue number. Say that other parts are
 fakes from contracts and `contracts/` must not change. Include exactly one run
 marker. Pass multiline text as data (a body argument or body file), never shell
@@ -442,7 +467,7 @@ The native gh runner records each `gh` call in the GitHub call ledger of the rep
 
 ## Product composition readers and journey progress (#808)
 
-Export synchronous `parseProductDocuments({mapText,planText = ""})`, using the same existing table/parser policy as readProduct; readProduct delegates after its ordinary safe reads. This is a public extraction of the existing document parser, not a second parser. Preserve all existing document semantics and diagnostics.
+Export synchronous `parseProductDocuments({mapText,planText = ""})` and `auditProductPlan({mapText = "",planText = "",promptFiles = []})`, using the same existing table/parser policy as readProduct; readProduct delegates after its ordinary safe reads. `auditProductPlan` deterministically checks `## Prompts` inventory drift (`product-prompt-inventory-drift`) against supplied regular in-root prompt files under tracked part directories and checks `## Boundaries` dotted operations (`product-boundary-unwired`) for consumer references outside each operation's defining prompt using strictly linear string scans. This is a public extraction of the existing document parser, not a second parser. Preserve all existing document semantics and diagnostics.
 
 Export synchronous `parseProductWorldWriters({worldText})` returning ordered `{key,writer}` records. Select the single table whose heading columns include Key and Writer, outside fenced code; unrelated tables elsewhere are not writer declarations. No matching table returns an empty list. Multiple candidate writer tables refuse as ambiguous instead of silently combining ownership. Trim and unwrap cells by existing product-table policy. Reject empty Key/Writer declarations and two distinct writers for one key with a finite diagnostic. Never infer ownership from Notes or records/schema sections.
 
@@ -452,11 +477,11 @@ In product status, report journeys as a separate `parts` row with `part: "journe
 
 ```json
 {
-  "status": "approved", "prose_sha256": "29c6d0ea6f38279d2883061f322dd624b68ffb464c6669ba0dba1a5f0d7a4ebd",
+  "status": "approved", "prose_sha256": "029746a3f533f7fb23cf59b9fe3b631e229ff6dd960250fec8d7e2d297c343c1",
   "entries": [
-    {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
-    {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
-    {"operation":"productNext","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ready":{"type":"array","items":{"type":"string"}},"waiting":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","needs"],"additionalProperties":false}},"guidance":{"type":"string"},"warnings":{"type":"array","items":{"type":"string"}}},"required":["ready","waiting","guidance"],"additionalProperties":false},"errors":["invalid-product"]},
+    {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}},"sharedSurfaces":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}},"rulesToCheck":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"owner":{"type":"string"},"rule":{"type":"string"},"verifiedBy":{"type":"string"}},"required":["id","owner","rule","verifiedBy"],"additionalProperties":false}},"prompts":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"part":{"type":"string"}},"required":["path","part"],"additionalProperties":false}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
+    {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]},"sharedSurfaces":{"type":"array","items":{"type":"string"}}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
+    {"operation":"productNext","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ready":{"type":"array","items":{"type":"string"}},"waiting":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"needs":{"type":"array","items":{"type":"string"}},"sharedSurfaces":{"type":"array","items":{"type":"string"}}},"required":["run","needs"],"additionalProperties":false}},"guidance":{"type":"string"},"warnings":{"type":"array","items":{"type":"string"}}},"required":["ready","waiting","guidance"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStart","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"run":{"type":"string"},"noRun":{"type":"boolean"},"agent":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"base":{"type":"string"},"packageRoot":{"type":"string"}},"required":["cwd","run"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"created":{"type":"boolean"},"started":{"type":"boolean"}},"required":["exitCode","message","issue","created","started"],"additionalProperties":false},"errors":[]}
   ],
   "calls": [],
