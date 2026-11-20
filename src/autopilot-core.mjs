@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: d573c12f0bcad4870dd1333269679c59ec5654704608f4103cefc1825f12e33f)
+// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 0d5f28f96d6ab5c9fbb93ab1adf37238232f4101293e0d0facd9b135e2254ba9)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
@@ -1307,7 +1307,7 @@ ${reviewContextLines(reviewContext)}Check: (1) the change does what ${jobIssues(
 Read ${JOB_RULES} in full before you check the PR body. Read any PDD skill or rules file from "$PDD_SKILLS". When you run pdd, run it as "$PDD_CLI", never as a bare pdd.
 Read the change in parts. A tool output over about 10,000 tokens loses its middle, so never read the whole PR's diff in one call. First run git diff --stat origin/${ctx.state.baseBranch}...HEAD. Then read one changed file per command: git diff origin/${ctx.state.baseBranch}...HEAD -- FILE. Read a file whose diff is larger than about 30 KB in hunks (for example git diff origin/${ctx.state.baseBranch}...HEAD -- FILE | sed -n '1,400p', then the next lines). You are running in a read-only sandbox (origin/${ctx.state.baseBranch} is already fetched locally): do not run git fetch, do not run repository test scripts, and do not edit files, write files to disk, commit, push, comment, approve or merge.
 Answer with only this JSON object in your final response (and no other text; do not write a file to disk):
-{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph, then one line: Read: FILE, FILE, ... (every changed file that you read in full)>","mustFix":["<each required fix>"]${asking(ctx) ? ',"question":"<only with a P2 decision item: one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"' : ''}}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items: any other item blocks the merge.
+{"verdict":"PASS" or "FAIL","head":"${job.head}","summary":"<one paragraph, then one line: Read: FILE, FILE, ... (every changed file that you read in full)>","mustFix":["<each required fix>"],"preExisting":["<unrelated defect strictly outside this PR's diff, formatted P1/P2/P3 file:line ...>"]${asking(ctx) ? ',"question":"<only with a P2 decision item: one plain question>","options":["<answer A>","<answer B>"],"recommended":"<the letter you recommend>"' : ''}}. A FAIL names at least one required fix. Start each item with its severity and its place: "P1 file:line ..." (wrong behavior or unsafe), "P2 file:line ..." (must be fixed before the merge) or "P3 file:line ..." (a follow-up that does not block the merge). One item per finding. A PASS lists only P3 items in "mustFix": any other item in "mustFix" blocks the merge. Optional "preExisting" lists only unrelated defects strictly outside this PR's diff (formatted "P1/P2/P3 file:line ..."): verified outside-diff items are logged as non-blocking, and any "preExisting" item whose file:line touches a changed hunk or added file (or lacks a verifiable file:line) is automatically promoted back to "mustFix".
 `;
 
 const scopedPrompt = (ctx, job, scoped, result, prBody = '', reviewContext = null) => `You are a short scoped check for an Autopilot core job in ${ctx.repo}. You did not write this change.
@@ -3245,9 +3245,362 @@ function parseReviewLogObjects(raw) {
   }
   return [];
 }
-export function parseReviewOutput(raw, { fromResultFile = false } = {}) {
+const KNOWN_EXTENSIONLESS_FILES = new Set([
+  'Makefile', 'Dockerfile', 'Containerfile', 'Rakefile', 'Gemfile', 'Procfile',
+  'LICENSE', 'README', 'CODEOWNERS', 'NOTICE', 'Vagrantfile', 'Justfile',
+]);
+
+function normalizeDiffPath(raw) {
+  if (typeof raw !== 'string') return null;
+  let s = raw.trim();
+  if (!s) return null;
+  if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
+    s = s.slice(1, -1);
+  }
+  s = s.replaceAll('\\', '/');
+  while (s.startsWith('./')) s = s.slice(2);
+  while (s.startsWith('/')) s = s.slice(1);
+  if (!s || /[\u0000-\u001f\u007f]/.test(s)) return null;
+  if (s.includes('://')) return null;
+  const parts = [];
+  for (const seg of s.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') return null;
+    parts.push(seg);
+  }
+  return parts.length ? parts.join('/') : null;
+}
+
+function isPlausibleRepoPath(normPath) {
+  if (!normPath) return false;
+  if (normPath.includes('/')) return true;
+  if (KNOWN_EXTENSIONLESS_FILES.has(normPath)) return true;
+  const dot = normPath.lastIndexOf('.');
+  return dot > 0 && dot < normPath.length - 1;
+}
+
+function parseHunkNewRange(line) {
+  // Parse unified diff header: @@ -a[,b] +c[,d] @@
+  if (!line.startsWith('@@ ')) return null;
+  const closeIdx = line.indexOf(' @@', 3);
+  if (closeIdx < 0) return null;
+  const header = line.slice(3, closeIdx);
+  const plusIdx = header.indexOf('+');
+  if (plusIdx < 0) return null;
+  let token = header.slice(plusIdx + 1).trim();
+  const spaceIdx = token.indexOf(' ');
+  if (spaceIdx >= 0) token = token.slice(0, spaceIdx);
+  const commaIdx = token.indexOf(',');
+  const startStr = commaIdx >= 0 ? token.slice(0, commaIdx) : token;
+  const countStr = commaIdx >= 0 ? token.slice(commaIdx + 1) : '1';
+  if (!/^\d+$/.test(startStr) || !/^\d+$/.test(countStr)) return null;
+  const start = Number(startStr);
+  const count = Number(countStr);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(count)) return null;
+  if (count > 0) return [start, start + count - 1];
+  // Pure deletion at line `start` in the new file: if start === 0 the entire file was emptied.
+  if (start === 0) return [1, Number.MAX_SAFE_INTEGER];
+  return [start, start + 1];
+}
+
+export function parseUnifiedDiffHunks(diffText) {
+  const files = new Map();
+  const renamedFrom = new Map();
+  if (typeof diffText !== 'string' || !diffText) {
+    return { files, renamedFrom };
+  }
+  const ensureFile = path => {
+    let entry = files.get(path);
+    if (!entry) {
+      entry = { added: false, deleted: false, binary: false, ranges: [] };
+      files.set(path, entry);
+    }
+    return entry;
+  };
+  let curOld = null;
+  let curNew = null;
+  let curEntry = null;
+  let pendingRenameFrom = null;
+  let pendingFlags = { added: false, deleted: false, binary: false };
+
+  const applyPendingTo = path => {
+    const entry = ensureFile(path);
+    if (pendingFlags.added) entry.added = true;
+    if (pendingFlags.deleted) entry.deleted = true;
+    if (pendingFlags.binary) entry.binary = true;
+    return entry;
+  };
+
+  for (const rawLine of diffText.split(/\r?\n/)) {
+    if (rawLine.startsWith('diff --git ')) {
+      curOld = null;
+      curNew = null;
+      curEntry = null;
+      pendingRenameFrom = null;
+      pendingFlags = { added: false, deleted: false, binary: false };
+      const rest = rawLine.slice('diff --git '.length);
+      const splitIdx = rest.indexOf(' b/');
+      if (rest.startsWith('a/') && splitIdx > 2) {
+        const oldPath = normalizeDiffPath(rest.slice(2, splitIdx));
+        const newPath = normalizeDiffPath(rest.slice(splitIdx + 3));
+        curOld = oldPath;
+        curNew = newPath;
+        if (newPath) curEntry = ensureFile(newPath);
+      }
+      continue;
+    }
+    if (rawLine.startsWith('new file mode ')) {
+      pendingFlags.added = true;
+      if (curEntry) curEntry.added = true;
+      continue;
+    }
+    if (rawLine.startsWith('deleted file mode ')) {
+      pendingFlags.deleted = true;
+      if (curEntry) curEntry.deleted = true;
+      if (curOld) ensureFile(curOld).deleted = true;
+      continue;
+    }
+    if (rawLine.startsWith('rename from ') || rawLine.startsWith('copy from ')) {
+      const fromPath = normalizeDiffPath(rawLine.slice(rawLine.indexOf(' from ') + 6));
+      if (fromPath) {
+        pendingRenameFrom = fromPath;
+        curOld = fromPath;
+      }
+      continue;
+    }
+    if (rawLine.startsWith('rename to ') || rawLine.startsWith('copy to ')) {
+      const toPath = normalizeDiffPath(rawLine.slice(rawLine.indexOf(' to ') + 4));
+      if (toPath) {
+        curNew = toPath;
+        curEntry = applyPendingTo(toPath);
+        if (pendingRenameFrom && pendingRenameFrom !== toPath) {
+          renamedFrom.set(pendingRenameFrom, toPath);
+        }
+      }
+      continue;
+    }
+    if (rawLine.startsWith('--- ')) {
+      const val = rawLine.slice(4).trim();
+      if (val === '/dev/null') {
+        pendingFlags.added = true;
+        if (curEntry) curEntry.added = true;
+      } else if (val.startsWith('a/')) {
+        const oldPath = normalizeDiffPath(val.slice(2));
+        if (oldPath) curOld = oldPath;
+      }
+      continue;
+    }
+    if (rawLine.startsWith('+++ ')) {
+      const val = rawLine.slice(4).trim();
+      if (val === '/dev/null') {
+        pendingFlags.deleted = true;
+        if (curEntry) curEntry.deleted = true;
+        if (curOld) {
+          curEntry = applyPendingTo(curOld);
+          curEntry.deleted = true;
+        }
+      } else if (val.startsWith('b/')) {
+        const newPath = normalizeDiffPath(val.slice(2));
+        if (newPath) {
+          curNew = newPath;
+          curEntry = applyPendingTo(newPath);
+          if (curOld && curOld !== newPath) {
+            renamedFrom.set(curOld, newPath);
+          }
+        }
+      }
+      continue;
+    }
+    if (rawLine.startsWith('Binary files ') && rawLine.endsWith(' differ')) {
+      pendingFlags.binary = true;
+      if (curEntry) curEntry.binary = true;
+      if (curOld) ensureFile(curOld).binary = true;
+      continue;
+    }
+    if (rawLine.startsWith('@@ ')) {
+      const range = parseHunkNewRange(rawLine);
+      if (range && curEntry) {
+        curEntry.ranges.push(range);
+      }
+    }
+  }
+  return { files, renamedFrom };
+}
+
+function parseLineRangeSuffix(suffix) {
+  if (!suffix) return null;
+  let clean = suffix.replaceAll('–', '-');
+  // Support :line, :line:col, :line-end, :line:col-end:col
+  const dashIdx = clean.indexOf('-');
+  if (dashIdx >= 0) {
+    const left = clean.slice(0, dashIdx);
+    const right = clean.slice(dashIdx + 1);
+    const leftColon = left.indexOf(':');
+    const rightColon = right.indexOf(':');
+    const startStr = (leftColon >= 0 ? left.slice(0, leftColon) : left).replace(/^L/i, '');
+    const endStr = (rightColon >= 0 ? right.slice(0, rightColon) : right).replace(/^L/i, '');
+    if (!/^\d+$/.test(startStr) || !/^\d+$/.test(endStr)) return null;
+    const a = Number(startStr), b = Number(endStr);
+    if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b) || a < 1 || b < 1) return null;
+    return [Math.min(a, b), Math.max(a, b)];
+  }
+  const colIdx = clean.indexOf(':');
+  const numStr = (colIdx >= 0 ? clean.slice(0, colIdx) : clean).replace(/^L/i, '');
+  if (!/^\d+$/.test(numStr)) return null;
+  const n = Number(numStr);
+  if (!Number.isSafeInteger(n) || n < 1) return null;
+  return [n, n];
+}
+
+function stripTokenWrappers(token) {
+  let s = token.trim();
+  while (s.length > 0 && '`"\'([<{'.includes(s[0])) s = s.slice(1);
+  while (s.length > 0 && '`"\')]}>.,;:!?'.includes(s[s.length - 1])) s = s.slice(0, -1);
+  return s;
+}
+
+function parseLocationToken(rawToken) {
+  const candidates = [];
+  // Unwrap markdown link `[label](target)` so both label and target are inspected.
+  const mdSplit = rawToken.indexOf('](');
+  if (rawToken.startsWith('[') && mdSplit > 1 && rawToken.includes(')', mdSplit + 2)) {
+    candidates.push(rawToken.slice(1, mdSplit));
+    candidates.push(rawToken.slice(mdSplit + 2, rawToken.indexOf(')', mdSplit + 2)));
+  } else {
+    candidates.push(rawToken);
+  }
+  for (const cand of candidates) {
+    const cleaned = stripTokenWrappers(cand);
+    if (!cleaned || cleaned.includes('://')) continue;
+    // Check `#L123` / `#L123-L145` form first.
+    const hashIdx = cleaned.indexOf('#L');
+    const hashLowerIdx = hashIdx >= 0 ? hashIdx : cleaned.indexOf('#l');
+    if (hashLowerIdx > 0) {
+      const rawPath = cleaned.slice(0, hashLowerIdx);
+      const range = parseLineRangeSuffix(cleaned.slice(hashLowerIdx + 1));
+      const normPath = normalizeDiffPath(rawPath);
+      if (range && normPath && isPlausibleRepoPath(normPath)) {
+        return { path: normPath, startLine: range[0], endLine: range[1], range };
+      }
+    }
+    // Check `path:123` / `path:123-145` / `path:123:4` form.
+    const colonIdx = cleaned.indexOf(':');
+    if (colonIdx > 0) {
+      const rawPath = cleaned.slice(0, colonIdx);
+      const range = parseLineRangeSuffix(cleaned.slice(colonIdx + 1));
+      const normPath = normalizeDiffPath(rawPath);
+      if (range && normPath && isPlausibleRepoPath(normPath)) {
+        return { path: normPath, startLine: range[0], endLine: range[1], range };
+      }
+    }
+  }
+  return null;
+}
+
+function extractAllFindingLocations(item) {
+  if (typeof item !== 'string' || !item.trim()) return [];
+  const locations = [];
+  const tokens = item.trim().split(/\s+/);
+  for (let i = 0; i < tokens.length; i++) {
+    const loc = parseLocationToken(tokens[i]);
+    if (loc) {
+      locations.push(loc);
+      continue;
+    }
+    // Also support `path (line 42)` / `path (lines 42-48)` / `path line 42`
+    const maybePath = normalizeDiffPath(stripTokenWrappers(tokens[i]));
+    if (maybePath && isPlausibleRepoPath(maybePath) && i + 2 < tokens.length) {
+      const kw = stripTokenWrappers(tokens[i + 1]).toLowerCase();
+      if (kw === 'line' || kw === 'lines') {
+        const range = parseLineRangeSuffix(stripTokenWrappers(tokens[i + 2]));
+        if (range) {
+          locations.push({ path: maybePath, startLine: range[0], endLine: range[1], range });
+          i += 2;
+        }
+      }
+    }
+  }
+  return locations;
+}
+
+export function extractFindingLocation(item) {
+  return extractAllFindingLocations(item)[0] ?? null;
+}
+
+function normalizeReviewItems(rawItems) {
+  const arr = Array.isArray(rawItems) ? rawItems : rawItems === undefined || rawItems === null ? [] : [rawItems];
+  return arr.map(item => oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500)).filter(Boolean);
+}
+
+export function guardPreExistingFindings(preExistingItems, diffScope) {
+  const items = normalizeReviewItems(preExistingItems);
+  if (!items.length) return { promoted: [], preExisting: [] };
+  if (!diffScope || !(diffScope.files instanceof Map)) {
+    return { promoted: items, preExisting: [] };
+  }
+  const promoted = [];
+  const kept = [];
+  for (const item of items) {
+    const locs = extractAllFindingLocations(item);
+    if (!locs.length) {
+      promoted.push(item);
+      continue;
+    }
+    let touchesDiff = false;
+    for (const loc of locs) {
+      const mappedPath = diffScope.renamedFrom instanceof Map ? (diffScope.renamedFrom.get(loc.path) ?? loc.path) : loc.path;
+      const entry = diffScope.files.get(mappedPath) ?? diffScope.files.get(loc.path);
+      if (!entry) continue;
+      if (entry.added || entry.deleted || entry.binary) {
+        touchesDiff = true;
+        break;
+      }
+      if (Array.isArray(entry.ranges) && entry.ranges.some(([start, end]) => loc.startLine <= end && loc.endLine >= start)) {
+        touchesDiff = true;
+        break;
+      }
+    }
+    if (touchesDiff) promoted.push(item);
+    else kept.push(item);
+  }
+  return { promoted, preExisting: kept.slice(0, 20) };
+}
+
+export function applyPreExistingDiffGuard(review, diffScopeOrText) {
+  if (!object(review)) return review;
+  const diffScope = typeof diffScopeOrText === 'string'
+    ? parseUnifiedDiffHunks(diffScopeOrText)
+    : diffScopeOrText;
+  const rawMustFix = normalizeReviewItems(review.mustFix);
+  const { promoted, preExisting } = guardPreExistingFindings(review.preExisting, diffScope);
+  const combined = [...rawMustFix, ...promoted];
+  const followUps = combined.filter(isFollowUp).slice(0, 20);
+  const mustFix = combined.filter(item => !isFollowUp(item)).slice(0, 20);
+  const verdict = !mustFix.length && (review.verdict === 'PASS' || followUps.length) ? 'PASS' : 'FAIL';
+  return {
+    ...review,
+    verdict,
+    mustFix,
+    followUps,
+    preExisting,
+    promotedPreExisting: promoted,
+  };
+}
+
+export function parseReviewOutput(raw, { fromResultFile = false, diffScope, diffText } = {}) {
+  const finalize = parsed => {
+    if (!object(parsed)) return parsed;
+    const normalized = {
+      ...parsed,
+      ...(parsed.preExisting !== undefined ? { preExisting: normalizeReviewItems(parsed.preExisting) } : {}),
+    };
+    if (diffScope !== undefined || diffText !== undefined) {
+      return applyPreExistingDiffGuard(normalized, diffScope !== undefined ? diffScope : diffText);
+    }
+    return normalized;
+  };
   if (fromResultFile) {
-    return parseFinalAssistantText(raw);
+    return finalize(parseFinalAssistantText(raw));
   }
   // When reading captured stdout logs (fromResultFile === false), NEVER scrape arbitrary raw prose/stderr lines:
   // parse NDJSON line-by-line, accept only recognized assistant/final-result envelopes (reassembling contiguous
@@ -3280,11 +3633,11 @@ export function parseReviewOutput(raw, { fromResultFile = false } = {}) {
   if (entries.some(entry => entry.kind === 'error')) return null;
   const resultEntries = entries.filter(entry => entry.kind === 'result');
   if (resultEntries.length > 0) {
-    return parseFinalAssistantText(resultEntries.at(-1).text);
+    return finalize(parseFinalAssistantText(resultEntries.at(-1).text));
   }
   const assistantEntries = entries.filter(entry => entry.kind === 'assistant');
   if (assistantEntries.length > 0) {
-    return parseFinalAssistantText(assistantEntries.at(-1).text);
+    return finalize(parseFinalAssistantText(assistantEntries.at(-1).text));
   }
   return null;
 }
@@ -3403,7 +3756,7 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
     }
     ctx.saveJob(job); return { state: 'running', reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence };
   }
-  if (job.review.verdict) return { state: job.review.verdict === 'PASS' ? 'pass' : 'fail', mustFix: job.review.mustFix, decision: job.review.decision ?? null, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
+  if (job.review.verdict) return { state: job.review.verdict === 'PASS' ? 'pass' : 'fail', mustFix: job.review.mustFix, preExisting: job.review.preExisting ?? [], decision: job.review.decision ?? null, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
   let seen;
   try { seen = ctx.jobs.read(job.review.agent); } catch { seen = { state: 'exited', exit: null, result: 'invalid', log: null }; }
   let quietStopped = false;
@@ -3533,22 +3886,41 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
   // one item; a missing or empty list is none) stays a FAIL. A PASS that lists a P1 or P2 item is a FAIL.
   recordSuccess(ctx, job, job.review.agent, 'review', seen);
   // An item is a follow-up only when it is P3 and names no P1 or P2; every other item blocks, also in a PASS. The
-  // split comes before the cut to 20, so no blocking item is lost.
-  const raw = Array.isArray(r.mustFix) ? r.mustFix : r.mustFix === undefined || r.mustFix === null ? [] : [r.mustFix];
-  const all = raw.map(item => oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500)).filter(Boolean);
-  const followUps = all.filter(isFollowUp).slice(0, 20), mustFix = all.filter(item => !isFollowUp(item)).slice(0, 20);
-  const verdict = !mustFix.length && (r.verdict === 'PASS' || followUps.length) ? 'PASS' : 'FAIL';
+  // split comes before the cut to 20, so no blocking item is lost. Any `preExisting` item whose cited file:line
+  // overlaps a changed diff hunk (or added/deleted/binary file, or lacks a verifiable file:line, or when the diff
+  // cannot be read) is deterministically promoted back to `mustFix` before splitting follow-ups and verdict.
+  const rawPreExisting = normalizeReviewItems(r.preExisting);
+  let diffScope = { files: new Map(), renamedFrom: new Map() };
+  if (rawPreExisting.length) {
+    diffScope = null;
+    try {
+      const diffCwd = job.worktree || ctx.dirs?.source;
+      const diffText = diffCwd ? await gitRaw(
+        ctx,
+        ['-c', 'core.quotePath=false', 'diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '-M', `origin/${ctx.state.baseBranch}...${job.head}`],
+        diffCwd,
+      ) : null;
+      if (typeof diffText === 'string') {
+        diffScope = parseUnifiedDiffHunks(diffText);
+      }
+    } catch {
+      diffScope = null;
+    }
+  }
+  const guarded = applyPreExistingDiffGuard({ ...r, preExisting: rawPreExisting }, diffScope);
+  const { followUps, mustFix, preExisting, verdict } = guarded;
   const independenceNote = named(job.review.reviewIndependence) ? `; ${job.review.reviewIndependence}${named(job.review.reviewFamily) ? `, ${job.review.reviewFamily}` : ''}` : '';
   await ctx.comment(job.pr, [`Review: ${verdict} for head ${job.head} (a fresh Autopilot reviewer that did not write the change${independenceNote}).`, '',
     oneLine(r.summary, 2000), ...(mustFix.length ? ['', 'Must fix:', ...mustFix.map(item => `- ${item}`)] : []),
-    ...(followUps.length ? ['', 'Follow-ups (P3, they do not block the merge):', ...followUps.map(item => `- ${item}`)] : []), '', `<!-- pdd:autopilot-core:review:${job.head} -->`].join('\n'));
+    ...(followUps.length ? ['', 'Follow-ups (P3, they do not block the merge):', ...followUps.map(item => `- ${item}`)] : []),
+    ...(preExisting.length ? ['', 'Pre-existing (outside diff, non-blocking):', ...preExisting.map(item => `- ${item}`)] : []), '', `<!-- pdd:autopilot-core:review:${job.head} -->`].join('\n'));
   // T10: a P2 decision item is a choice that the issue did not make: one question for a person, not a repair.
   const decisions = verdict === 'FAIL' && asking(ctx) ? mustFix.filter(item => DECISION_ITEM.test(item)) : [];
   const decision = decisions.length ? { items: decisions, question: named(r.question) ? formatQuestion(r.question, r.options, r.recommended) : null } : null;
   delete job.poolRotations; clearPoolExhausted(ctx);
-  Object.assign(job.review, { verdict, mustFix, followUps, decision }); ctx.saveJob(job); ctx.produced();
+  Object.assign(job.review, { verdict, mustFix, followUps, preExisting, decision }); ctx.saveJob(job); ctx.produced();
   if (followUps.length) await recordFollowUps(ctx, job, followUps).catch(error => ctx.warn(`Autopilot core could not record the follow-ups of #${job.issue}: ${error.message}`));
-  return { state: verdict === 'PASS' ? 'pass' : 'fail', mustFix, decision, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
+  return { state: verdict === 'PASS' ? 'pass' : 'fail', mustFix, preExisting, decision, reviewFamily: job.review.reviewFamily ?? null, reviewIndependence: job.review.reviewIndependence ?? null };
 }
 // A test command through the machine's suite queue, in a clean checkout. No fixed time limit (--timeout 0): the process
 // rule watches it. A fresh checkout has no node_modules: with a lockfile and dependencies, install them first (no
