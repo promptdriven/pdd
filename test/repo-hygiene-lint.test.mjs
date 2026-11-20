@@ -22,7 +22,7 @@ import {
 } from '../src/repo-hygiene-lint.mjs';
 import { lint as seamLint, runCheck, runtimePreflightSlice } from '../src/runtime-seam.mjs';
 import { lintStories, lintStory } from '../src/story-lint.mjs';
-import { portsFor, sink } from './helpers/runtime-fake.mjs';
+import { fakeRuntime, harbor, portsFor, sink, TOKEN } from './helpers/runtime-fake.mjs';
 
 test('3453 lintFakeTests warns on prompt reads, repo existence checks and source text matching with path:line', () => {
   assert.equal(isInspectableTestCodePath('test/order.test.mjs'), true);
@@ -2042,4 +2042,93 @@ test('3574 + 3578 Round 2 regressions: Story-scoped sibling isolation (P1-A), ##
   const msHead = performance.now() - tHead;
   assert.ok(!strippedHeadings.includes('Runtime interface'));
   assert.ok(msHead < 200, `expected linear heading scan on 15k lines, got ${msHead.toFixed(1)}ms`);
+});
+
+test('3574 + 3578 Round 3 regressions: hosted repo-wide pdd lint catches native-only adapter dead ports, seam suppresses onProjectLintResult on filtered scans, and backticked IPv4/IPv6 binds produce zero false positives', async t => {
+  // P2: Backticked IPv4/IPv6/localhost binds alongside "adapter" produce 0 errors.
+  const dep = '# Order domain\n\nOwn `src/order.mjs`. Uses `store.load`.\n\n## Dependencies\n\nNone.\n';
+  const ipBindingPrompt = [
+    '---',
+    'kind: native-only',
+    'reason: Runs live HTTP listener.',
+    '---',
+    '',
+    '# HTTP server',
+    '',
+    'The HTTP adapter binds `0.0.0.0` on port 8080 using `hypercorn.serve`.',
+    'The HTTP adapter binds `[::1]` on port `8080` using `hypercorn.serve`.',
+    'The HTTP adapter binds `::` on port 8080 using `hypercorn.serve`.',
+    'The HTTP adapter binds `localhost` on port 8080 using `hypercorn.serve`.',
+    '',
+    '## Dependencies',
+    '- [order](order.prompt.md)',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(ipBindingPrompt, [{ path: 'prompts/order.prompt.md', text: dep }], {
+      path: 'prompts/http-server.prompt.md',
+    }),
+    [],
+  );
+
+  // P1: Hosted repo-wide `pdd lint` & `pdd lint --json` (without `--local`) must NOT mask native-only adapter errors behind Story-filtered lintSvgLayouts.
+  const h = harbor(t, repo => {
+    writeFileSync(
+      join(repo, 'prompts/adapter.prompt.md'),
+      [
+        '---',
+        'kind: native-only',
+        'reason: Live persistence adapter for Harbor place_order.',
+        '---',
+        '',
+        '# Harbor adapter',
+        '',
+        '## Port wiring',
+        '- `store.missing`: dead port not declared in place_order.',
+        '',
+        '## Dependencies',
+        '- [place_order](place_order.prompt.md)',
+      ].join('\n') + '\n',
+    );
+  });
+
+  const fake = await fakeRuntime(t, entry => fake.normal(entry));
+  const fakeBin = join(h.sandbox, 'bin');
+  mkdirSync(fakeBin, { recursive: true });
+  const fakeGh = join(fakeBin, 'gh');
+  writeFileSync(
+    fakeGh,
+    `#!/bin/sh\nif [ "$1" = "auth" ]; then echo "${TOKEN}"; else echo "octo 4242"; fi\n`,
+    { mode: 0o755 },
+  );
+  const env = {
+    HOME: h.home,
+    PDD_STATE_DIR: h.state,
+    PDD_RUNTIME_URL: fake.origin,
+    PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+  };
+
+  // Defense-in-depth: seam.lint (hosted, which passes filtered promptPaths: capture.files) never invokes onProjectLintResult.
+  const filteredResults = [];
+  const seamHostedPorts = portsFor(env, { onProjectLintResult: r => filteredResults.push(r) }).ports;
+  const seamHostedCode = await seamLint({ cwd: h.repo }, seamHostedPorts);
+  assert.equal(seamHostedCode, 0, seamHostedPorts.stderr.text);
+  assert.equal(filteredResults.length, 0, 'filtered hosted lintSvgLayouts scan must not invoke onProjectLintResult');
+
+  // Hosted repo-wide `pdd lint` (plain text) fails closed with exit 1 naming prompts/adapter.prompt.md and store.missing.
+  const hostedOut = sink(), hostedErr = sink();
+  const hostedCode = await runPdd(['lint'], { cwd: h.repo, env, stdout: hostedOut, stderr: hostedErr });
+  assert.equal(hostedCode, 1, `expected hosted pdd lint to fail closed on native-only adapter, stdout: ${hostedOut.text}\nstderr: ${hostedErr.text}`);
+  assert.match(hostedErr.text, /Error:.*prompts\/adapter\.prompt\.md.*\[native-only-unknown-port\].*"store\.missing"/);
+
+  // Hosted repo-wide `pdd lint --json` fails closed with exit 1, ok: false, exit_code: 1, and exact error in problems.
+  const hostedJsonOut = sink(), hostedJsonErr = sink();
+  const hostedJsonCode = await runPdd(['lint', '--json'], { cwd: h.repo, env, stdout: hostedJsonOut, stderr: hostedJsonErr });
+  assert.equal(hostedJsonCode, 1, hostedJsonErr.text);
+  const hostedParsed = JSON.parse(hostedJsonOut.text);
+  assert.equal(hostedParsed.ok, false);
+  assert.equal(hostedParsed.exit_code, 1);
+  assert.ok(
+    hostedParsed.problems.some(p => p.includes('prompts/adapter.prompt.md') && p.includes('[native-only-unknown-port]') && p.includes('"store.missing"')),
+    `expected [native-only-unknown-port] in hosted JSON problems, got: ${JSON.stringify(hostedParsed.problems)}`,
+  );
 });

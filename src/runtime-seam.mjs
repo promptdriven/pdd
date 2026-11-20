@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 1a0fe2e349954b445b4bf87919decc1a8827521067c3e5c778f3766231b4b66c).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: fc8c0e149984af77d601312845f89546fd8b3dc78ca2f12741a110be36b50cb4).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -2405,7 +2405,9 @@ export async function runCheck(input = {}, ports = {}) {
         resultLines,
         lintSvgLayouts: arg => {
           const project = lintRepoProject(arg);
-          if (typeof onProjectLintResult === 'function') onProjectLintResult(project);
+          if (typeof onProjectLintResult === 'function' && arg?.promptPaths === undefined && arg?.tests === undefined) {
+            onProjectLintResult(project);
+          }
           return [
             ...lintSvgLayouts(arg),
             ...project.warnings,

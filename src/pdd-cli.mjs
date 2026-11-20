@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: ba4438f5c251f74f86504dcf3b06f94a685cbec73d4ca5be7ad03ba9e01c39c8).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: b9f5d07e6b49f71fab7fc061bc42844da6462d280d415422fec10e0ca2b1fe0a).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -563,7 +563,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
         const lintRoot = isLintCheckMode ? resolveProjectLintRoot(cwd) : null;
         let seamProjectErrors = null;
-        const onProjectLintResult = lintRoot && !plan.operands.length
+        const onProjectLintResult = lintRoot && !plan.operands.length && plan.options['--local'] === true
           ? result => {
               if (!result || !Array.isArray(result.errors)) return;
               if (!seamProjectErrors) seamProjectErrors = [];

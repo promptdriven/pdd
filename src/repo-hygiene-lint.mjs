@@ -110,11 +110,11 @@ const DOMAIN_PORT_BIND_CONTEXT_RE = /\b(?:ports?|adapters?|domain)\b/i;
 const DIRECT_BIND_PORT_OP_RE = /\bbind(?:s|ing)?\s+`?[a-z][a-zA-Z0-9_-]*\.[a-z][a-zA-Z0-9_-]*`?/i;
 const NON_PORT_IDIOM_PATTERNS = [
   /\b(?:tcp|udp|http|https|grpc|ws|wss|listen(?:ing)?|server|socket|host|local|remote|network|container|service)\s+ports?\b/gi,
-  /\b(?:on|to|at|from)\s+port(?:\s+\d+|\s+`?[A-Z0-9_]+`?)?\b/gi,
-  /\bports?\s+\d+\b/gi,
+  /\b(?:on|to|at|from)\s+port(?:\s+`?\d+`?|\s+`?[A-Z0-9_]+`?)?\b/gi,
+  /\bports?\s+`?\d+`?\b/gi,
   /\bports?\s+(?:number|numbers|env|variable|variables|range)\b/gi,
-  /\bbind(?:s|ing)?\s+(?:the\s+)?(?:http|https|tcp|udp|server|listener|socket|address|host|interface|localhost|(?:\d{1,3}\.){3}\d{1,3}|\[?::1?\]?)\b/gi,
-  /\bport\s+binding\s+(?:on|to|for)\s+(?:tcp|udp|http|https|server|socket|localhost|(?:\d{1,3}\.){3}\d{1,3})\b/gi,
+  /\bbind(?:s|ing)?\s+(?:the\s+)?(?:(?:http|https|tcp|udp|server|listener|socket|address|host|interface|localhost)\b|`localhost`|`?(?:\d{1,3}\.){3}\d{1,3}`?(?![A-Za-z0-9_.-])|`?\[?::(?:1)?\]?`?(?![A-Za-z0-9_.-]))/gi,
+  /\bport\s+binding\s+(?:on|to|for)\s+(?:(?:tcp|udp|http|https|server|socket|localhost)\b|`localhost`|`?(?:\d{1,3}\.){3}\d{1,3}`?(?![A-Za-z0-9_.-])|`?\[?::(?:1)?\]?`?(?![A-Za-z0-9_.-]))/gi,
   /\b(?:upper|lower|time|size|memory|cpu|io|rate|retry|retries|error|timeout|latency|cost|call|step|depth|length|line|byte|buffer|queue|batch|window|hard|soft|strict)\s+bounds?\b/gi,
   /\bbounds?\s+(?:on|of|for)\b/gi,
   /\bwire\s+(?:format|formats|protocol|protocols|encoding|encodings|type|types|frame|frames|bytes|payload|payloads|schema|schemas|representation|level|compatible|compatibility)\b/gi,
@@ -1011,10 +1011,11 @@ function isDomainPortWiringHeading(title) {
 function hasDomainPortWiringCue(outsideText, fullLine = outsideText) {
   const raw = String(outsideText ?? '');
   if (!DOMAIN_PORT_CUE_RE.test(raw)) return false;
-  let scrubbed = raw;
+  let scrubbed = String(fullLine ?? raw);
   for (const re of NON_PORT_IDIOM_PATTERNS) {
     scrubbed = scrubbed.replace(re, ' ');
   }
+  scrubbed = extractInlineBacktickSpans(scrubbed).outside;
   if (DOMAIN_PORT_DIRECT_CUE_RE.test(scrubbed)) return true;
   if (!DOMAIN_PORT_BIND_WORD_RE.test(scrubbed)) return false;
   return DOMAIN_PORT_BIND_CONTEXT_RE.test(scrubbed) || DIRECT_BIND_PORT_OP_RE.test(String(fullLine ?? ''));
