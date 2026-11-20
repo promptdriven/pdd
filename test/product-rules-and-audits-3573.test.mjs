@@ -947,3 +947,93 @@ test('3573 regression: examples/ filtering parity between lintRepoProject and pr
   auditProductPlan({ mapText: redosMap, planText: redosPlan, promptFiles: [] });
   assert.ok(Date.now() - startMs < 1000, 'path normalization must remain linear on long # and / runs');
 });
+
+test('#3573 (13): Round-2 adversarial regressions — linear brace/details scans, nested-brace precision, and bullet-list part resolution', () => {
+  const mapText = [
+    '# Product: Two-Part CLI',
+    '',
+    'Size: small',
+    '',
+    '## Parts',
+    '| Part | Folder | What it is |',
+    '|---|---|---|',
+    '| app | prompts/app | Core logic. |',
+    '| cli | prompts/cli | Command wrapper. |',
+    '',
+    '## Stories',
+    '| Id | Part | Story | Tag |',
+    '|---|---|---|---|',
+    '| A01 | app | Core. | CORE |',
+    '| C01 | cli | Command. | CORE |',
+    '',
+    '## Journeys',
+    '| Id | Journey | Stories |',
+    '|---|---|---|',
+    '',
+    '## Questions',
+    '| Id | Question | Recommendation | Example | Answer |',
+    '|---|---|---|---|---|',
+  ].join('\n') + '\n';
+
+  // 1. Bullet lines referencing another part's prompt path or bare folder must not hijack the current/leading part
+  const bulletPlan = [
+    '# Plan: Two-Part CLI',
+    '',
+    '## Prompts',
+    '### cli',
+    '- `command.prompt.md` — wraps `prompts/app/core.prompt.md`',
+    '- `helper.prompt.md` — calls `prompts/app`',
+    '- **cli**: `extra.prompt.md` — delegates to `prompts/app/core.prompt.md`',
+    '',
+    '## Boundaries',
+    '| From | To | What crosses | Contract |',
+    '|---|---|---|---|',
+    '| cli | app | `foo.consume` | `contracts/foo.md` |',
+    '',
+    '## Runs',
+    '| Run | Part | Slice | Stories | Needs |',
+    '|---|---|---|---|---|',
+    '| app-1 | app | 1 | A01 | plan PR |',
+    '| cli-1 | cli | 1 | C01 | app-1 |',
+  ].join('\n') + '\n';
+
+  const parsed = parseProductDocuments({ mapText, planText: bulletPlan });
+  const declared = new Map(parsed.product.prompts.map(p => [p.path, p.part]));
+  assert.equal(declared.get('prompts/cli/command.prompt.md'), 'cli');
+  assert.equal(declared.get('prompts/cli/helper.prompt.md'), 'cli');
+  assert.equal(declared.get('prompts/cli/extra.prompt.md'), 'cli');
+  assert.equal(declared.get('prompts/app/core.prompt.md'), 'app');
+  assert.equal(declared.has('prompts/app/command.prompt.md'), false, 'cross-part reference must not hijack cli bullet');
+  assert.equal(declared.has('prompts/app/helper.prompt.md'), false, 'trailing bare folder mention must not hijack cli bullet');
+  assert.equal(declared.has('prompts/app/extra.prompt.md'), false, 'explicit **cli** label must not be hijacked');
+
+  // 2. Nested brace text must not false-match foo.consume, and repeated foo.{ + <details></details> must stay strictly O(N)
+  const nestedBracePrompt = '# Command\n\nMentions foo.{a { , consume} without calling foo.consume.\n';
+  const nestedAudit = auditProductPlan({
+    mapText,
+    planText: bulletPlan,
+    promptFiles: [
+      { path: 'prompts/app/core.prompt.md', text: '# Core\n' },
+      { path: 'prompts/cli/command.prompt.md', text: nestedBracePrompt },
+      { path: 'prompts/cli/helper.prompt.md', text: '# Helper\n' },
+      { path: 'prompts/cli/extra.prompt.md', text: '# Extra\n' },
+    ],
+  });
+  assert.ok(nestedAudit.findings.some(f => f.code === 'product-boundary-unwired' && f.detail.includes('foo.consume')),
+    'unclosed/nested brace must not satisfy foo.consume wiring');
+
+  const perfStart = performance.now();
+  const stressText = `${',foo.{'.repeat(8000)}}\n${'<details></details>'.repeat(20000)}\n`;
+  auditProductPlan({
+    mapText,
+    planText: bulletPlan,
+    promptFiles: [
+      { path: 'prompts/app/core.prompt.md', text: '# Core\n' },
+      { path: 'prompts/cli/command.prompt.md', text: stressText },
+      { path: 'prompts/cli/helper.prompt.md', text: '# Helper\n' },
+      { path: 'prompts/cli/extra.prompt.md', text: '# Extra\n' },
+    ],
+  });
+  const elapsedMs = performance.now() - perfStart;
+  assert.ok(elapsedMs < 500, `brace + details scanning must remain strictly linear O(N), took ${elapsedMs.toFixed(1)}ms`);
+});

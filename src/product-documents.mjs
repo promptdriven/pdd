@@ -354,6 +354,8 @@ function containsFolderPath(text, folder) {
     from = idx + 1;
     const after = text[idx + folder.length] ?? '';
     if (isPathWordChar(after)) continue;
+    // Do not treat child file paths (e.g. `prompts/app/core.prompt.md`) as standalone folder labels (`prompts/app` or `prompts/app/`).
+    if (after === '/' && isPathWordChar(text[idx + folder.length + 1] ?? '')) continue;
     const before = idx > 0 ? text[idx - 1] : '';
     if (isPathWordChar(before)) continue;
     if (before === '/') {
@@ -381,14 +383,14 @@ function unwrapHeadingToken(raw) {
 
 function matchPartMentionInHeading(text, partsByFolderDesc, folderByPart) {
   const cleaned = clean(text);
-  for (const item of partsByFolderDesc) {
-    if (containsFolderPath(cleaned, item.folder)) return item;
-  }
   const rawFirst = cleaned.split(/\s+/)[0] ?? '';
   const unwrapped = unwrapHeadingToken(rawFirst);
   const firstWord = unwrapHeadingToken(unwrapped.split(/[:(—–,]/)[0] ?? '');
   if (firstWord && folderByPart.has(firstWord)) {
     return { part: firstWord, folder: folderByPart.get(firstWord) };
+  }
+  for (const item of partsByFolderDesc) {
+    if (containsFolderPath(cleaned, item.folder)) return item;
   }
   return null;
 }
@@ -447,7 +449,14 @@ function parsePlanPrompts(planText, parts = []) {
     let linePart = currentPart;
     let lineFolder = currentFolder;
     const leadText = trimmed.replace(/^(?:[-*+]|\d+[.)])\s+/, '').replace(/^\*\*([^*\r\n]+)\*\*/, '$1');
-    const leadMatch = matchPartMentionInHeading(leadText, partsByFolderDesc, folderByPart);
+    const promptExtIdx = leadText.indexOf('.prompt.md');
+    let leadPrefix = leadText;
+    if (promptExtIdx >= 0) {
+      let cut = promptExtIdx;
+      while (cut > 0 && !/\s/.test(leadText[cut - 1])) cut--;
+      leadPrefix = leadText.slice(0, cut).trim();
+    }
+    const leadMatch = leadPrefix ? matchPartMentionInHeading(leadPrefix, partsByFolderDesc, folderByPart) : null;
     if (leadMatch) { linePart = leadMatch.part; lineFolder = leadMatch.folder; }
     for (const path of extractPromptRefsFromLine(trimmed, lineFolder)) {
       record(path, linePart, item.lineNo);
@@ -801,19 +810,24 @@ function extractRuntimeInterfacesLinear(raw) {
     if (det < 0) break;
     const detClose = lower.indexOf('</details>', det + 8);
     if (detClose < 0) break;
-    const sum = lower.indexOf('<summary', det + 8);
-    const sumClose = sum >= 0 && sum < detClose ? lower.indexOf('</summary>', sum + 8) : -1;
-    if (sum >= 0 && sumClose > sum && sumClose < detClose && /runtime\s+interface/i.test(text.slice(sum, sumClose))) {
-      const inner = text.slice(sumClose + 10, detClose);
-      const fenceStart = inner.indexOf('```');
-      if (fenceStart >= 0) {
-        const nl = inner.indexOf('\n', fenceStart + 3);
-        const fenceEnd = nl >= 0 ? inner.indexOf('```', nl + 1) : -1;
-        if (nl >= 0 && fenceEnd > nl) {
-          try {
-            const parsed = JSON.parse(inner.slice(nl + 1, fenceEnd));
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) out.push(parsed);
-          } catch {}
+    const innerLower = lower.slice(det + 8, detClose);
+    const relSum = innerLower.indexOf('<summary');
+    const relSumClose = relSum >= 0 ? innerLower.indexOf('</summary>', relSum + 8) : -1;
+    if (relSum >= 0 && relSumClose > relSum) {
+      const sum = det + 8 + relSum;
+      const sumClose = det + 8 + relSumClose;
+      if (/runtime\s+interface/i.test(text.slice(sum, sumClose))) {
+        const inner = text.slice(sumClose + 10, detClose);
+        const fenceStart = inner.indexOf('```');
+        if (fenceStart >= 0) {
+          const nl = inner.indexOf('\n', fenceStart + 3);
+          const fenceEnd = nl >= 0 ? inner.indexOf('```', nl + 1) : -1;
+          if (nl >= 0 && fenceEnd > nl) {
+            try {
+              const parsed = JSON.parse(inner.slice(nl + 1, fenceEnd));
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) out.push(parsed);
+            } catch {}
+          }
         }
       }
     }
@@ -865,17 +879,27 @@ function containsBraceBoundaryOp(text, target, op, requiredPartPrefix = '') {
   while (from < text.length) {
     const idx = text.indexOf(prefix, from);
     if (idx < 0) return false;
-    from = idx + 1;
+    const bodyStart = idx + prefix.length;
     const before = idx > 0 ? text[idx - 1] : '';
-    if (isIdentChar(before) || before === '.') continue;
-    if (before === '/' && requiredPartPrefix) {
-      if (precedingSegmentBeforeSlash(text, idx - 1) !== requiredPartPrefix) continue;
+    if (isIdentChar(before) || before === '.'
+      || (before === '/' && requiredPartPrefix && precedingSegmentBeforeSlash(text, idx - 1) !== requiredPartPrefix)) {
+      from = bodyStart;
+      continue;
     }
-    const close = text.indexOf('}', idx + prefix.length);
-    const nl = text.indexOf('\n', idx + prefix.length);
-    if (close < 0 || (nl >= 0 && nl < close)) continue;
-    const members = text.slice(idx + prefix.length, close).split(',').map(s => s.trim());
+    let stop = bodyStart;
+    while (stop < text.length) {
+      const ch = text[stop];
+      if (ch === '}' || ch === '{' || ch === '\n') break;
+      stop++;
+    }
+    if (stop >= text.length) return false;
+    if (text[stop] !== '}') {
+      from = text[stop] === '\n' ? stop + 1 : Math.max(bodyStart, stop - prefix.length + 1);
+      continue;
+    }
+    const members = text.slice(bodyStart, stop).split(',').map(s => s.trim());
     if (members.includes(op)) return true;
+    from = stop + 1;
   }
   return false;
 }
