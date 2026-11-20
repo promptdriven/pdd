@@ -152,7 +152,8 @@ read-only pass inspect the repository checkout, still with no GitHub token.
   disposable `0700` `pdd-cx-*` overlay (`cleanupDirs` passed to `jobs.start` and wiped
   in `prune` once no longer running) with its `CODEX_HOME/config.toml` provider
   overrides forwarded via `-c`, and Cloud Claude steps
-  receive `CLAUDE_CODE_OAUTH_TOKEN` (and `ANTHROPIC_BASE_URL` for `gateway_grant`)
+  receive a disposable `0600` `pdd-cl-*` `--settings` overlay via `prepared.extraArgs` and `cleanupDirs`
+  (also wiped in `prune` once no longer running) alongside `CLAUDE_CODE_OAUTH_TOKEN` (and `ANTHROPIC_BASE_URL` for `gateway_grant`)
   through `cardEnvironment(prepared.env)`, recording `loginId` (`selected.login?.id ?? null`),
   `cloud`, and `accountWindows` on `jobs/N.json`; if a pooled card or auto-improve job
   fails with a quota, rate-limit, or auth failure message (`isQuotaExhaustionMessage` or `isAuthFailureMessage`), a first Cloud

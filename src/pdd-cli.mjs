@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: d73eb585116a4bff107ba5bcbf6d7b1f55d19f6ffffd1330d02bc0acb32ea269).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 27d3a0d9be7adac633d2bf3151fad6fc5df6eedfeb7f0907dff8702c049f9172).
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -33,7 +33,7 @@ const defaultReadPackageVersion = ({ packageRoot }) => {
   catch { return { ok: false, version: '' }; }
 };
 function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
-  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--bind-criteria'].some(flag => options[flag])) return null;
+  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
   try {
     const found = runtime.findTests({ root: cwd });
     const { selected, unknown } = runtime.selectTests(found, words, options);
@@ -587,7 +587,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           }
         }
         const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
-        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--bind-criteria'].some(flag => plan.options[flag]);
+        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
         const lintRoot = isLintCheckMode ? hasProjectLintConfig(cwd) : null;
         if (lintRoot && plan.options['--json'] === true) {
           let captured = '';

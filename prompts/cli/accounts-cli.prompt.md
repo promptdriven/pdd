@@ -44,8 +44,8 @@ or calls exist.
   `CLAUDE_CONFIG_DIR`, validate all four Codex OAuth token fields (`access_token`, `refresh_token`,
   `id_token`, `account_id`) locally before uploading to `POST /v1/accounts`, support `--replace` and interactive `409` conflict recovery (`[r]eplace` / disambiguated `<label>-2` / `[s]kip`) while preserving user, team, org and `github_user_id` shares, probe local Codex usage fail-open before cleanup if server windows are
   unpopulated, lease and materialize the active pass into `pddManagedCodexHome(env)` or
-  `~/.claude/settings.json` (keeping unprobed offline fallback usage fields `null` rather than `0`, without writing raw fallback
-  OAuth tokens to disk), and share with any `--with` targets not already shared on that account.
+  `pddManagedClaudeHome(env)` (never writing to `~/.claude/settings.json` or `~/.codex/auth.json`, keeping unprobed offline fallback usage fields `null` rather than `0`, without writing raw fallback
+  OAuth tokens into personal config files), and share with any `--with` targets not already shared on that account.
   With `--loop`, require an interactive TTY or injected prompt port (`exitCode: 2` otherwise), print
   numbered iteration banners and `<email> -> "<label>"` confirmation, derive default labels from the
   authenticated email local-part when `--label` is omitted (or `<prefix>-1`, `<prefix>-2`, ... when
@@ -59,9 +59,9 @@ or calls exist.
   validate all four Codex OAuth token fields before network mutations, upload to `POST /v1/accounts` (supporting `--replace` and interactive `409` label conflict recovery with backup recovery notes on re-upload failure), probe local Codex usage
   fail-open inside a disposable `0700` probe directory with `refresh_token` cleared if server windows are unpopulated, materialize the leased pass into `pddManagedCodexHome(env)`, atomically scrub `tokens.refresh_token` (`""`, mode `0600`) in the imported local Codex source file (preserving dotfiles symlinks by writing through the resolved target file) only when lease materialization succeeded so local `codex` cannot trigger `refresh_token_invalidated`, and apply any non-duplicate `--with` shares.
 - `pdd accounts use LABEL [--provider codex|claude]`: Resolve `LABEL` (scoped to `--provider` when passed, or exiting `2` when `LABEL` is ambiguous across providers), refuse `reauth_required` accounts with a clear re-authentication command, pin and materialize
-  `LABEL` in `pddManagedCodexHome(env)` or `~/.claude/settings.json` via `POST /v1/accounts/lease`, and show the remaining `5h`/`7d` `XX% left` summary.
+  `LABEL` in `pddManagedCodexHome(env)` or `pddManagedClaudeHome(env)` via `POST /v1/accounts/lease`, and show the remaining `5h`/`7d` `XX% left` summary.
 - `pdd accounts next [--provider codex|claude]`: Skip the current active account,
-  switch `pddManagedCodexHome(env)` or `~/.claude/settings.json` to the next ready account
+  switch `pddManagedCodexHome(env)` or `pddManagedClaudeHome(env)` to the next ready account
   (sorted by soonest `weekly_reset_at`) via `POST /v1/accounts/lease`, and show the remaining `5h`/`7d` `XX% left` summary.
 - `pdd accounts codex [ARGS...]`: Sync and lease a healthy Codex account into `pddManagedCodexHome(env)`
   (failing open to plain `codex` when Cloud accounts are unenrolled or offline without an active lease),
@@ -75,7 +75,7 @@ or calls exist.
   locally materialized, in `"ready"` state (never `paused`, `cooling`, or `reauth_required`),
   below `100%` on both 5-hour and weekly windows, more than 15 minutes
   from `expires_at` (and more than 5 minutes from `access_token_expires_at` when known),
-  and backed by present materialized files in `pddManagedCodexHome(env)` or `~/.claude/settings.json`. Otherwise call `POST /v1/accounts/lease`
+  and backed by present materialized files in `pddManagedCodexHome(env)` or `pddManagedClaudeHome(env)`. Otherwise call `POST /v1/accounts/lease`
   bounded by `--timeout-ms` (default `1200`, zero retries when `--quiet`); if the lease request times out or fails transiently on a non-`reauth_required` error while `saved.active.codex` is not revoked and still has `Date.parse(expires_at) > now` with `managedCodexAuthPath(env)` present on disk, keep `codexHealthyHome = pddManagedCodexHome(env)` so `PDD_PRINT_CODEX_HOME=1` continues using the valid 7-day lease instead of unsetting `CODEX_HOME`. With
   `--print-codex-home` or `PDD_PRINT_CODEX_HOME=1`, print `pddManagedCodexHome(env)` only when a
   healthy active Codex lease is confirmed and materialized, else print nothing so the shell wrapper
@@ -93,9 +93,9 @@ or calls exist.
   Require either `LABEL` or `--all` (never both or neither, `exitCode: 2` otherwise) on `share`/`unshare`, allow `--provider` on both
   single-`LABEL` and `--all` operations, filter `--all` to owned accounts, skip duplicate share invites when
   a target already has an active or pending share on that account, verify `gh api users/USER` resolves
-  a GitHub `"User"` account (rejecting organizations without `/<team>`) on `share`, lease and materialize into `pddManagedCodexHome(env)` or `~/.claude/settings.json` on
-  `accept` whenever no active account is set for that provider or the active lease is expired or missing on disk (surfacing a clear warning note if post-accept lease sync fails), and reconcile `accounts-state.json` plus clean up `pddManagedCodexHome(env)`, `~/.claude/settings.json` gateway credentials (`restoreLocalClaudeGatewayConfig`), and any legacy
-  `~/.codex/config.toml` gateway block on `remove` and `leave` without touching `~/.codex/auth.json`.
+  a GitHub `"User"` account (rejecting organizations without `/<team>`) on `share`, lease and materialize into `pddManagedCodexHome(env)` or `pddManagedClaudeHome(env)` on
+  `accept` whenever no active account is set for that provider or the active lease is expired or missing on disk (surfacing a clear warning note if post-accept lease sync fails), and reconcile `accounts-state.json` plus clean up `pddManagedCodexHome(env)`, `pddManagedClaudeHome(env)`, legacy `~/.claude/settings.json` PDD entries (`restoreLocalClaudeGatewayConfig`), and any legacy
+  `~/.codex/config.toml` gateway block on `pause` (when pausing the active account), `remove`, `leave`, and `auto off` without touching `~/.codex/auth.json` or genuinely user-managed `~/.claude/settings.json` tokens.
 
 ## Dependencies
 

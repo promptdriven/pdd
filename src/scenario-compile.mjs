@@ -1,4 +1,4 @@
-// Generated from prompts/cli/scenario-compile.prompt.md (sha256: 99405813468aa8e6cf4e8c744f049fef3a54dc23d716aeea8cc2f8a43114de21).
+// Generated from prompts/cli/scenario-compile.prompt.md (sha256: c7a2a327893dd780df0e162a14c9a898e28e8a0944e8d864ed37e564ca1b77c9).
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -1325,7 +1325,7 @@ function firstCriterionDifference(testTexts, storyTexts) {
   return `The Story has this criterion, but the test does not: ${JSON.stringify(remaining[0] ?? '')}`;
 }
 
-export function classifyExplicitCriteriaBinding(doc, { storyPath = null, storySource = null } = {}) {
+export function classifyExplicitCriteriaBinding(doc, { storyPath = null, storySource = null, allowSubset = false } = {}) {
   if (!isPlainObject(doc) || !Array.isArray(doc.criteria) || !doc.criteria.length) {
     return { kind: 'not-explicit' };
   }
@@ -1365,17 +1365,35 @@ export function classifyExplicitCriteriaBinding(doc, { storyPath = null, storySo
     }
   }
 
-  const testTextsSorted = doc.criteria.map(item => item.text).sort();
-  const storyTextsSorted = [...storyItems].sort();
-  if (!isDeepStrictEqual(testTextsSorted, storyTextsSorted)) {
-    return {
-      kind: 'text-mismatch',
-      storyPath: effectiveStoryPath,
-      difference: firstCriterionDifference(
-        doc.criteria.map(item => item.text),
-        storyItems,
-      ),
-    };
+  if (allowSubset) {
+    const remaining = [...storyItems];
+    for (const item of doc.criteria) {
+      const idx = remaining.indexOf(item.text);
+      if (idx < 0) {
+        return {
+          kind: 'text-mismatch',
+          storyPath: effectiveStoryPath,
+          difference: firstCriterionDifference(
+            doc.criteria.map(entry => entry.text),
+            storyItems,
+          ),
+        };
+      }
+      remaining.splice(idx, 1);
+    }
+  } else {
+    const testTextsSorted = doc.criteria.map(item => item.text).sort();
+    const storyTextsSorted = [...storyItems].sort();
+    if (!isDeepStrictEqual(testTextsSorted, storyTextsSorted)) {
+      return {
+        kind: 'text-mismatch',
+        storyPath: effectiveStoryPath,
+        difference: firstCriterionDifference(
+          doc.criteria.map(item => item.text),
+          storyItems,
+        ),
+      };
+    }
   }
 
   const bindings = new Map();

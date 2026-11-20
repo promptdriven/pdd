@@ -483,7 +483,9 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    `ports.exhaustLogin` are supplied by [Cloud accounts and login pool](login-pool.prompt.md) (and `ports.selectLogin()` does not return `null`, which indicates `selectLogin` is wired only for intake `allowedKinds`), each AI
    process (`build`, `repair`, `conflict`, `review`) selects the active ready login,
    materializes any per-step isolation (`prepareStep`: disposable `0700` `/tmp/pdd-cx-<random>`
-   overlay passed via `cleanupDirs` for Codex, or `CLAUDE_CODE_OAUTH_TOKEN` and optional
+   overlay passed via `cleanupDirs` for Codex, or disposable `0600` `<tmpdir>/pdd-cl-<random>/settings.json`
+   overlay passed via `extraArgs` (`--settings <path>`) and `cleanupDirs`, with `prepareStep`
+   cleanup guaranteed on any error before job launch, alongside `CLAUDE_CODE_OAUTH_TOKEN` and optional
    `ANTHROPIC_BASE_URL` for Claude), and runs with `loginId` saved on the part. Cloud
    accounts stick on the active account (`0` switches) until `5h >= 100%` or `7d >= 100%`
    (or a quota-exhaustion refusal): a brief burst `429` while `< 100%` retries once on the
