@@ -2937,7 +2937,9 @@ export function saveActiveLeaseMetadata(leaseReply, {
       account_id: acc.account_id,
       label: acc.label ?? acc.account_id,
       provider: acc.provider,
-      is_owner: typeof acc.is_owner === 'boolean' ? acc.is_owner : (prev?.account_id === acc.account_id ? (prev?.is_owner ?? null) : null),
+      is_owner: typeof acc.is_owner === 'boolean'
+        ? acc.is_owner
+        : (acc.shared === true ? false : (prev?.account_id === acc.account_id ? (prev?.is_owner ?? null) : null)),
       state: accountState,
       lease_id: lease.lease_id ?? null,
       leased_at: lease.leased_at ?? nowIso,
@@ -3293,7 +3295,7 @@ export async function exhaustCloudPoolLogin({
       const cachedActive = Object.values(savedForCheck.active ?? {}).find(row => row?.account_id === loginId);
       const isBorrowed = typeof accountWindows?.is_owner === 'boolean'
         ? !accountWindows.is_owner
-        : cachedActive?.is_owner === false;
+        : (accountWindows?.shared === true ? true : cachedActive?.is_owner === false);
       if (!isBorrowed) {
         markLocalAccountReauthRequired(loginId, { env }, ports);
       }

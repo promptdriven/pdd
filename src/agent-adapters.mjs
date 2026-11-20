@@ -293,7 +293,7 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
       burstRetried=false;
       continue;
      }
-     if(cloudMod.isGatewayGrantRevokedFailure?.(combined)){
+     if(cloudMod.isGatewayGrantRevokedFailure?.(combined)&&!cloudMod.isQuotaExhaustionMessage?.(combined)){
       triedIds.push(acc.account_id);
       burstRetried=false;
       continue;

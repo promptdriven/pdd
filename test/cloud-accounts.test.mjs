@@ -3980,4 +3980,25 @@ test('#3426 borrower revocation: gateway_grant_revoked and borrowed generic 401 
   assert.equal(exRes.login.id, 'acc_shared_2');
   assert.equal(usageReports.length, 0);
   assert.equal(readCloudAccountsState({ env: sb.env }).reauth?.acc_shared_1, undefined, 'persisted is_owner: false must prevent generic 401 from poisoning reauth');
+
+  // 4. Real quota exhaustion in stderr must still report usage even if stdout mentions gateway_grant_revoked.
+  let quotaRunIdx = 0;
+  const quotaRes = await runStepAgentProcess({
+    agent: 'codex',
+    step: 'build',
+    args: ['exec', '-'],
+    cwd: sb.root,
+    env: { ...sb.env, PDD_TOKEN: 'ghp_test_tok' },
+    run: async () => {
+      quotaRunIdx++;
+      if (quotaRunIdx === 1) {
+        return { code: 1, stdout: 'inspecting gateway_grant_revoked handler', stderr: 'You have hit your usage limit for today.' };
+      }
+      return { code: 0, stdout: 'QUOTA_OK', stderr: '' };
+    },
+    accountsPorts: { fetch: mockFetch },
+  });
+  assert.equal(quotaRes.code, 0);
+  assert.equal(quotaRes.stdout, 'QUOTA_OK');
+  assert.equal(usageReports.length, 1, 'quota exhaustion must still report usage when stdout mentions gateway_grant_revoked');
 });
