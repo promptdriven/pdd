@@ -1,0 +1,553 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-intake-preflight.md",
+  "criteria": [
+    {
+      "id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+      "text": "Before claiming an issue that requires coordinated edits in another repository such as `pdd_cloud` or `pdd-workflow`, Autopilot rejects it as cross-repo, marks it `needs-other-repo`, and records a crisp skip reason."
+    },
+    {
+      "id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+      "text": "Before claiming an issue that asks an unanswered product, pricing, or UX policy decision, Autopilot parks it for a person with `pdd:needs-decision`, asks one concise question, and records a crisp skip reason; once a trusted person answers the decision in a comment, Autopilot allows it."
+    },
+    {
+      "id": "ac-sha256-191fc0f4985a0d40e86e73370167ffef6dbbe86b2f76055a",
+      "text": "Before claiming an issue whose required verification depends on an external service, live production credentials, or manual human QA unavailable to the worker without authorizing a local test boundary, Autopilot parks it for a person with `pdd:needs-decision` and records a crisp skip reason."
+    },
+    {
+      "id": "ac-sha256-1cf0e3d02c585741b7ea814e0c562580645edb9745d4192f",
+      "text": "A valid single-repo bug or feature that mentions another service only for context, cites a pasted error log in a code fence, or can be verified with local tests passes pre-flight without being skipped."
+    },
+    {
+      "id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+      "text": "Recorded pre-flight skip reasons roll up into exact counts per reason category alongside Classifier Conversion (\"3/4 (75.0%)\" when 3 of 4 taken issues merged or reached would-merge, or \"0/0 (n/a)\" when 0 issues were taken) so metrics can report intake filter precision."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "cross-repo-coordinated-pdd-cloud",
+      "entry_path": "prompts/cli/autopilot-intake-preflight.prompt.md",
+      "operation": "classifyPreflightIssue",
+      "input": {
+        "repository": "promptdriven/pdd",
+        "issue": {
+          "number": 3540,
+          "title": "Sync gateway billing between pdd CLI and pdd_cloud",
+          "body": "Requires coordinated changes in both `src/accounts-cli.mjs` and `pdd_cloud/api/billing.py` so the new token field ships together in both repositories.",
+          "labels": [],
+          "comments": []
+        },
+        "repoFiles": [
+          "src/accounts-cli.mjs",
+          "prompts/cli/accounts-cli.prompt.md"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": "reject"
+        },
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/reasonCode",
+          "op": "equals",
+          "value": "cross_repo"
+        },
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": "needs-other-repo"
+        },
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/intakeClass",
+          "op": "equals",
+          "value": "elsewhere"
+        },
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/targetRepo",
+          "op": "equals",
+          "value": "pdd_cloud"
+        },
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/reason",
+          "op": "at_least",
+          "measure": "length",
+          "value": 10
+        }
+      ]
+    },
+    {
+      "step_id": "cross-repo-coordinated-pdd-workflow",
+      "entry_path": "prompts/cli/autopilot-intake-preflight.prompt.md",
+      "operation": "classifyPreflightIssue",
+      "input": {
+        "repository": "promptdriven/pdd",
+        "issue": {
+          "number": 3541,
+          "title": "Update daily scorecard in pdd-workflow and pdd",
+          "body": "Coordinate changes across promptdriven/pdd and pdd-workflow: update `pdd-workflow/scripts/scorecard.py` alongside `src/metrics-model.mjs`.",
+          "labels": [],
+          "comments": []
+        },
+        "repoFiles": [
+          "src/metrics-model.mjs"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": "reject"
+        },
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/reasonCode",
+          "op": "equals",
+          "value": "cross_repo"
+        },
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": "needs-other-repo"
+        },
+        {
+          "criterion_id": "ac-sha256-7ecfcac2b1cccdca8890ff3929ad60e45802d46bfed53c46",
+          "target": "result",
+          "path": "/targetRepo",
+          "op": "equals",
+          "value": "pdd-workflow"
+        }
+      ]
+    },
+    {
+      "step_id": "human-decision-unanswered-pricing",
+      "entry_path": "prompts/cli/autopilot-intake-preflight.prompt.md",
+      "operation": "classifyPreflightIssue",
+      "input": {
+        "repository": "promptdriven/pdd",
+        "issue": {
+          "number": 3542,
+          "title": "Set Pro tier seat pricing for shared login pools",
+          "body": "Open question: should shared team login pools cost $19/seat or $29/seat, and should the free tier allow 1 or 2 accounts? Needs a product and pricing decision before implementation.",
+          "labels": [],
+          "comments": []
+        },
+        "repoFiles": [
+          "src/accounts-cli.mjs"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": "park"
+        },
+        {
+          "criterion_id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+          "target": "result",
+          "path": "/reasonCode",
+          "op": "equals",
+          "value": "human_decision"
+        },
+        {
+          "criterion_id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": "pdd:needs-decision"
+        },
+        {
+          "criterion_id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+          "target": "result",
+          "path": "/intakeClass",
+          "op": "equals",
+          "value": "person"
+        },
+        {
+          "criterion_id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+          "target": "result",
+          "path": "/question",
+          "op": "at_least",
+          "measure": "length",
+          "value": 10
+        },
+        {
+          "criterion_id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+          "target": "result",
+          "path": "/reason",
+          "op": "at_least",
+          "measure": "length",
+          "value": 10
+        }
+      ]
+    },
+    {
+      "step_id": "human-decision-answered-by-trusted-comment",
+      "entry_path": "prompts/cli/autopilot-intake-preflight.prompt.md",
+      "operation": "classifyPreflightIssue",
+      "input": {
+        "repository": "promptdriven/pdd",
+        "issue": {
+          "number": 3543,
+          "title": "Choose default output view for pdd metrics",
+          "body": "Open question: should `pdd metrics` default to overview or full?",
+          "labels": [],
+          "comments": [
+            {
+              "author": "maintainer",
+              "trusted": true,
+              "at": "2026-11-18T10:00:00Z",
+              "body": "Decision: default to overview and keep full under `pdd metrics full`."
+            }
+          ]
+        },
+        "repoFiles": [
+          "src/metrics-model.mjs"
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": "allow"
+        },
+        {
+          "criterion_id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+          "target": "result",
+          "path": "/reasonCode",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "ac-sha256-5106f2785f342675aeb0c20056de95d2086db12bcaf21cfc",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": null
+        }
+      ]
+    },
+    {
+      "step_id": "unverifiable-external-production-boundary",
+      "entry_path": "prompts/cli/autopilot-intake-preflight.prompt.md",
+      "operation": "classifyPreflightIssue",
+      "input": {
+        "repository": "promptdriven/pdd",
+        "issue": {
+          "number": 3544,
+          "title": "Verify live Stripe checkout webhook in production",
+          "body": "Acceptance criteria: trigger a real $1 live Stripe checkout charge in production with maintainer 2FA credentials and confirm the live dashboard receipt. No local mock or fake test is accepted.",
+          "labels": [],
+          "comments": []
+        },
+        "repoFiles": [
+          "src/accounts-cli.mjs"
+        ],
+        "workerCapabilities": {
+          "localTests": true,
+          "liveExternalServices": false,
+          "productionCredentials": false,
+          "humanManualQa": false,
+          "availableRecipes": [
+            "npm test",
+            "pdd test"
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-sha256-191fc0f4985a0d40e86e73370167ffef6dbbe86b2f76055a",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": "park"
+        },
+        {
+          "criterion_id": "ac-sha256-191fc0f4985a0d40e86e73370167ffef6dbbe86b2f76055a",
+          "target": "result",
+          "path": "/reasonCode",
+          "op": "equals",
+          "value": "unverifiable_boundary"
+        },
+        {
+          "criterion_id": "ac-sha256-191fc0f4985a0d40e86e73370167ffef6dbbe86b2f76055a",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": "pdd:needs-decision"
+        },
+        {
+          "criterion_id": "ac-sha256-191fc0f4985a0d40e86e73370167ffef6dbbe86b2f76055a",
+          "target": "result",
+          "path": "/intakeClass",
+          "op": "equals",
+          "value": "person"
+        },
+        {
+          "criterion_id": "ac-sha256-191fc0f4985a0d40e86e73370167ffef6dbbe86b2f76055a",
+          "target": "result",
+          "path": "/reason",
+          "op": "at_least",
+          "measure": "length",
+          "value": 10
+        }
+      ]
+    },
+    {
+      "step_id": "valid-single-repo-contextual-and-fenced-log",
+      "entry_path": "prompts/cli/autopilot-intake-preflight.prompt.md",
+      "operation": "classifyPreflightIssue",
+      "input": {
+        "repository": "promptdriven/pdd",
+        "issue": {
+          "number": 3545,
+          "title": "Handle 502 error from prompt-runtime cleanly in CLI",
+          "body": "Why does `pdd test` print a raw stack trace when `promptdriven/prompt-runtime` returns HTTP 502? Fix `src/runtime-seam.mjs` to print a clear retry hint and verify with local unit tests using a fake HTTP server.\n\n```text\nError calling pdd_cloud/api/check.py: Open question: retry?\n```\n\n> Repository: promptdriven/pdd_cloud",
+          "labels": [],
+          "comments": []
+        },
+        "repoFiles": [
+          "src/runtime-seam.mjs",
+          "test/runtime-seam.test.mjs"
+        ],
+        "workerCapabilities": {
+          "localTests": true,
+          "liveExternalServices": false,
+          "productionCredentials": false,
+          "humanManualQa": false,
+          "availableRecipes": [
+            "npm test",
+            "pdd test"
+          ]
+        }
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-sha256-1cf0e3d02c585741b7ea814e0c562580645edb9745d4192f",
+          "target": "result",
+          "path": "/decision",
+          "op": "equals",
+          "value": "allow"
+        },
+        {
+          "criterion_id": "ac-sha256-1cf0e3d02c585741b7ea814e0c562580645edb9745d4192f",
+          "target": "result",
+          "path": "/reasonCode",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "ac-sha256-1cf0e3d02c585741b7ea814e0c562580645edb9745d4192f",
+          "target": "result",
+          "path": "/label",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "ac-sha256-1cf0e3d02c585741b7ea814e0c562580645edb9745d4192f",
+          "target": "result",
+          "path": "/signals",
+          "op": "count",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "step_id": "metrics-precision-rollup",
+      "entry_path": "prompts/cli/autopilot-intake-preflight.prompt.md",
+      "operation": "summarizeIntakeFilterPrecision",
+      "input": {
+        "skips": [
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 3540,
+            "decision": "reject",
+            "reasonCode": "cross_repo",
+            "reason": "Requires coordinated edits in pdd_cloud."
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 3541,
+            "decision": "reject",
+            "reasonCode": "cross_repo",
+            "reason": "Requires coordinated edits in pdd-workflow."
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 3542,
+            "decision": "park",
+            "reasonCode": "human_decision",
+            "reason": "Unanswered Pro tier pricing choice."
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 3544,
+            "decision": "park",
+            "reasonCode": "unverifiable_boundary",
+            "reason": "Requires live production Stripe verification."
+          }
+        ],
+        "runs": [
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 3501,
+            "status": "failed"
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 3501,
+            "status": "merged"
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issues": [
+              3502,
+              3503
+            ],
+            "status": "would-merge"
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 3504,
+            "status": "ended"
+          }
+        ]
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/skipped",
+          "op": "equals",
+          "value": 4
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/byReasonCode/cross_repo",
+          "op": "equals",
+          "value": 2
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/byReasonCode/human_decision",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/byReasonCode/unverifiable_boundary",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/taken",
+          "op": "equals",
+          "value": 4
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/merged",
+          "op": "equals",
+          "value": 3
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/unmerged",
+          "op": "equals",
+          "value": 1
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/classifierConversionDisplay",
+          "op": "equals",
+          "value": "3/4 (75.0%)"
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/skipSummary",
+          "op": "equals",
+          "value": "Pre-flight skipped (4): 2 cross_repo · 1 human_decision · 1 unverifiable_boundary"
+        }
+      ]
+    },
+    {
+      "step_id": "metrics-precision-empty",
+      "entry_path": "prompts/cli/autopilot-intake-preflight.prompt.md",
+      "operation": "summarizeIntakeFilterPrecision",
+      "input": {
+        "skips": [],
+        "runs": []
+      },
+      "checks": [
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/skipped",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/taken",
+          "op": "equals",
+          "value": 0
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/classifierConversionPct",
+          "op": "equals",
+          "value": null
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/classifierConversionDisplay",
+          "op": "equals",
+          "value": "0/0 (n/a)"
+        },
+        {
+          "criterion_id": "ac-sha256-29adaa40e7c26db82e612ad421af949b6a48b1d8c39be920",
+          "target": "result",
+          "path": "/skipSummary",
+          "op": "equals",
+          "value": "Pre-flight skipped (0): none"
+        }
+      ]
+    }
+  ]
+}
