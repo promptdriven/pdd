@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.1.39"
+version = "0.1.40"
 description = "PDD: local Prompting guide, skills and recipes for your coding agent"
 readme = "README.md"
 license = "MIT"
