@@ -651,8 +651,8 @@ test('#3554 (3): base-trusted testCommand, fail-closed diff/base gating, referen
 
   // Trap E: PR modifies pdd.json autopilot.testCommand -> base origin/main testCommand wins even after review PASS!
   const wPdd = await coreWorld(t, { settings: { runs: 1, testCommand: null } });
-  wPdd.baseCommit('pdd.json', JSON.stringify({ autopilot: { mode: 'auto', engine: 'core', testCommand: 'make check' } }, null, 2) + '\n');
-  wPdd.baseCommit('test/check.test.mjs', "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('ok', () => assert.equal(1, 1));\n");
+  wPdd.baseCommit('pdd.json', JSON.stringify({ autopilot: { mode: 'auto', engine: 'core', testCommand: 'node --test test/check.test.mjs' } }, null, 2) + '\n');
+  wPdd.baseCommit('test/check.test.mjs', "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport cfg from '../pdd.json' with { type: 'json' };\ntest('ok', () => assert.ok(cfg.autopilot));\n");
   wPdd.issue(18);
   await wPdd.tick();
   editInBuild(
@@ -673,7 +673,9 @@ test('#3554 (3): base-trusted testCommand, fail-closed diff/base gating, referen
   await wPdd.tick();
   const pddSuite = wPdd.job(18, 'suite');
   assert.ok(pddSuite);
-  assert.equal(pddSuite.args[pddSuite.args.indexOf('--command') + 1], 'make check', 'origin/main testCommand wins over PR pdd.json');
+  const pddSuiteCmd = pddSuite.args[pddSuite.args.indexOf('--command') + 1];
+  assert.match(pddSuiteCmd, /^node --test\b.*test\/check\.test\.mjs$/, 'origin/main testCommand wins over PR pdd.json');
+  assert.ok(!pddSuiteCmd.includes('evil.example'), 'PR pdd.json testCommand must never run');
   wPdd.suite(18, 0);
   await wPdd.tick();
   assert.deepEqual(wPdd.github.merges, [pddPr.number]);
