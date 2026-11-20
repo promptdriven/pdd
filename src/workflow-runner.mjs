@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: c560637c8455f43edd3da4f781d0154d2c3dba07cf0e2299de7ee33b597b30b1).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e4bae25d9d40dfeffa96ba81c966c47e0a0c259aa4e706b4147fd740092a40d7).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -554,6 +554,8 @@ async function areaMessage(run, index, p, packageRoot) {
       ? automatic ? 'Gate: show the result and follow the scoped automatic overlay and owner handoff; preserve required human decisions.' : normal && index === storyGateIndex(run) ? `Gate: after the last step, pdd prints the Story card. Show it to the person as it is, then ask; never ask a bare "approve?". Never approve for them: ${approvalGuide(run, pdd)}` : `Gate: after the last step, show the person the result, ask them to approve or ask for changes, and stop. Never approve for them: ${approvalGuide(run, pdd)}`
       : area.then === 'ask-code' && normal && area.before === 'approve'
       ? 'After the last step, pdd reads its own saved check results. A full check pass opens PR 1 (prompt, Story and tests) with no question; then pdd follows the code-or-stop choice from the Story card. Never push, open a PR or merge yourself.'
+      : area.then === 'ask-code' && run.through === 'prompt-pr'
+      ? 'After the last step, pdd pushes the branch and opens PR 1 (prompt, Story and tests), then stops after PR 1 (--through prompt-pr). Never push, open a PR or merge yourself.'
       : area.then === 'ask-code'
       ? 'After the last step, pdd pushes the branch and opens PR 1 (prompt, Story and tests). Then show it and ask whether to make the code PR now. Never push, open a PR or merge yourself.'
       : `After the last step, pdd pushes the branch and opens ${prLabel(run, area)}. Never push, open a PR or merge yourself.`,
@@ -718,6 +720,7 @@ function describe(run, chat = null, { drafts = [], nothing = false, health = nul
   if (normal && run.storyApproval && run.gate?.kind === 'ask-code' && !drafts.length) return run.through === 'code'
     ? `code PR requested; code entry waits. Fix the reported problem, then run pdd workflow done check.`
     : `stopped after PR 1 (${pr1?.url}). ${codeLater(run)}`;
+  if (run.through === 'prompt-pr' && run.gate?.kind === 'ask-code' && !drafts.length) return `stopped after PR 1 (${pr1?.url}). ${codeLater(run)}`;
   if (run.gate?.kind === 'approve-pr') return `waiting for you: ${nothing ? '' : 'try it, then '}approve to open ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)} (or ask for changes)`;
   if (run.gate?.kind === 'ask-code' && drafts.length) return `PR 1 open (${pr1?.url}); waiting for you: approve the draft prompt${drafts.length > 1 ? 's' : ''} first, then make the code PR.`;
   if (run.gate?.kind === 'ask-code') return `PR 1 open (${pr1?.url}); waiting for you: code PR now, or stop and merge PR 1. ${codeLater(run)}`;
@@ -899,8 +902,8 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   const context = await gitContext(cwd, p);
   if (!context) return fail('Run this inside a Git checkout of the repository that has the issue.');
   if (through !== undefined) {
-    if (automatic) return fail('--through applies only to a normal run. Nothing changed.');
-    try { if (readApprovalPolicy({ root: context.toplevel }, p).strictApprovals) return fail('--through is not available in strict mode. Nothing changed.'); }
+    if (automatic && through !== 'prompt-pr') return fail('--through code applies only to a normal run; automatic runs support --through prompt-pr. Nothing changed.');
+    try { if (readApprovalPolicy({ root: context.toplevel }, p).strictApprovals && through !== 'prompt-pr') return fail('--through code is not available in strict mode. Nothing changed.'); }
     catch (error) { return fail(error.message); }
   }
   if (explicitBase) {
@@ -2731,6 +2734,8 @@ async function askCodeLines(run, area, p) {
   // Normal runs (#2962): the person chose code or stop at the Story card, so pdd asks no separate question.
   if (run.storyApproval && normalRun(run, p)) return [`PR 1: ${url}`, ...summaries,
     `Gate: show the person PR 1 and the Prompt tests line. Do not ask about the code PR: the person chose at the Story card. Tell the person exactly: "PR 1 is open: ${url}. ${codeLater(run)}" Stop there.`, `When the person later asks for the code PR, record their words: ${approvalGuide(run, p.pdd)}`];
+  if (run.through === 'prompt-pr') return [`PR 1: ${url}`, ...summaries,
+    `Stopped after PR 1 (--through prompt-pr). Do not start the code PR. ${codeLater(run)}`];
   return [`PR 1: ${url}`, ...summaries,
     `Gate: show the person PR 1, the Prompt tests line and the Try link, then ask exactly: "Do you want the code PR now, or stop here and merge PR 1 first? ${codeLater(run)}" Stop there.`,
     approvalGuide(run, p.pdd),
@@ -3124,7 +3129,10 @@ async function automaticPr1(run, area, step, p, lines, check, packageRoot, progr
     `pdd recorded ${step}. The prompt check passed in full on the current prompts (${check.tests.length} test${check.tests.length === 1 ? '' : 's'}), so pdd opened ${label === 'the PR' ? 'the PR' : label} with no approval question (route automatic-check-pass).`, ...published];
   if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
   const shownGate = run.gate ? await showGate(run, p) : [];
-  if (Object.hasOwn(run, 'automaticOrigin') && !automaticPromptReturn(run, p)) return done([...head, ...shownGate, `PR 1: ${url}`, automaticHandoff(run, p, packageRoot), 'PR 1 is open. Continue through the scoped automatic code gate.'].filter(Boolean).join('\n'));
+  if (Object.hasOwn(run, 'automaticOrigin') && !automaticPromptReturn(run, p)) {
+    if (run.through === 'prompt-pr') return done([...head, `PR 1: ${url}`, `Stopped after PR 1 (--through prompt-pr). Do not start the code PR. ${codeLater(run)}`].join('\n'));
+    return done([...head, ...shownGate, `PR 1: ${url}`, automaticHandoff(run, p, packageRoot), 'PR 1 is open. Continue through the scoped automatic code gate.'].filter(Boolean).join('\n'));
+  }
   return afterPr1(run, area, p, [...head, ...shownGate], packageRoot);
 }
 // After PR 1 opens in a normal run: follow the code-or-stop choice saved with the Story approval; ask nothing.
@@ -4105,7 +4113,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
   // Normal runs (#2962): the Story approval saves the Story fingerprint and the code-or-stop choice of the card.
   const normal = !policy.strictApprovals && !Object.hasOwn(run, 'automaticOrigin');
   const storyGate = run.gate?.kind === 'approve' && run.area >= 0 && run.area === storyGateIndex(run);
-  if (through !== undefined && (!normal || !(storyGate || beforePr))) return fail('--through applies only at the Story gate or the prompt PR gate of a normal run, not in strict mode or an automatic run. Nothing changed.');
+  if (through !== undefined && (!(storyGate || beforePr) || !normal && through !== 'prompt-pr')) return fail('--through code applies only at the Story gate or the prompt PR gate of a normal run; automatic and strict runs support --through prompt-pr there. Nothing changed.');
   if (approvalWords === undefined && viaChat) return fail(approvalGuide(run, p.pdd));
   try { if (approvalWords !== undefined) approvalWords = await readSaidWords(approvalWords, p); p.inspectProgress(); } catch (error) { return fail(error.message); }
   if (approvalWords !== undefined && (!run.gate || area.steps.some(step => !run.done[step]))) return fail('The gate is not ready. Finish its steps and run done first.');
@@ -4279,7 +4287,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     const at = invocationAt, url = prOf(run, area.name).url;
     const observedQuestion=selectedQuestion;
     commitRun(run,p,latest=>{
-      if(through!==undefined&&normal)latest.through=through;
+      if(through!==undefined&&(normal||through==='prompt-pr'))latest.through=through;
       if(latest.area===selectedArea&&sameGate(latest.gate,selectedGate)){latest.state='waiting';latest.gate=askCode?{id:p.randomUUID(),area:area.name,at,kind:'ask-code'}:null;}
       if(equalFact(latest.question,observedQuestion))latest.question=null;
     });
@@ -4288,6 +4296,7 @@ async function approveRunCommand({ ref, cwd, said: approvalWords, draft = false,
     const head = [...carried, ...shownGate, `Approved the ${area.name} area of ${label}.${said} pdd opened ${prLabel(run, area) === 'the PR' ? 'the PR' : prLabel(run, area)}.`, ...lines];
     if (!askCode) return done([...head, `PR: ${url}`, 'pdd never merges.'].join('\n'));
     if (normal && (run.storyApproval || through !== undefined || run.through !== undefined)) return afterPr1(run, area, p, head, packageRoot);
+    if (run.through === 'prompt-pr') return done([...head, `PR 1: ${url}`, `Stopped after PR 1 (--through prompt-pr). Do not start the code PR. ${codeLater(run)}`].join('\n'));
     if (approvalWords !== undefined) return done([...head, `PR 1: ${url}`, `Stopped at PR 1. ${codeLater(run)}`].join('\n'));
     if (viaChat) return done([...head, ...await askCodeLines(run, area, p)].join('\n'));
     // A draft prompt in PR 1: pdd does not offer the code PR, and says how to approve the prompt first.
@@ -4354,6 +4363,7 @@ ${approvalGuide(run)}`, p, true);
   const branch=run.branch,prBase=run.prBase,observedQuestion=selectedQuestion,areaIndex=selectedArea;
   commitRun(run,p,latest=>{
     if(storyRecord&&latest.area===areaIndex){latest.storyApproval=storyRecord;if(through!==undefined)latest.through=through;}
+    else if(storyGate&&latest.area===areaIndex&&through==='prompt-pr'){latest.through=through;}
     if(askCode){latest.branch=branch;latest.prBase=prBase;}
     if(equalFact(latest.question,observedQuestion))latest.question=null;
     if(latest.area===areaIndex){if(askCode)latest.metricsOrigin={...(latest.metricsOrigin ?? {origin:'unknown'}),requiredOutcome:'code'};if(sameGate(latest.gate,selectedGate))latest.gate=null;for (const chat of latest.chats ?? []) if (chat.area === latest.areas[areaIndex].name) chat.endedAt ??= p.now();latest.area=areaIndex+1;latest.state=latest.question?'waiting':'running';latest.doneAt=null;}
@@ -5464,7 +5474,7 @@ function detail(run, chat = null, facts = {}) {
       ? 'Environment retries are exhausted. Inspect the environment alert in pdd autopilot status before resuming the failed validation.'
       : 'Autopilot retries only this validation when the host is healthy; inspect pdd autopilot status for any environment alert.')
     : facts.normal && run.storyApproval && run.gate?.kind === 'approve-pr' && !atStoryGate(run) && !run.gate.nativeOnly?.length ? `pdd workflow done check --summary \"Prompt tests line\"`
-    : facts.normal && run.storyApproval && run.gate?.kind === 'ask-code' ? run.through === 'code' ? 'Fix the reported code entry problem, then run pdd workflow done check.' : codeLater(run)
+    : (facts.normal && run.storyApproval || run.through === 'prompt-pr') && run.gate?.kind === 'ask-code' ? run.through === 'code' ? 'Fix the reported code entry problem, then run pdd workflow done check.' : codeLater(run)
     : run.gate ? approvalGuide(run)
     : runtimeWaiting(run) ? `nothing for a person unless an Autopilot alert asks (pdd autopilot status). Autopilot wakes this run when the interpreter is back; the worker then reads pdd test --read${run.runtimeWait.batch ? ` ${run.runtimeWait.batch}` : ''} first.`
     : ended(run) ? null : run.localPublication?.area === area?.name && area.steps.every(step => run.done[step]) ? `pdd workflow publish ${run.number}` : run.promptReturn && area?.steps.some(step=>!run.done[step]) ? `pdd workflow open ${run.number}` : prOf(run, area?.name) ? (run.pr.length > 1 && run.prBase && run.prBase !== run.baseBranch && run.pr[0]?.state === 'open' && run.pr[0]?.ci === 'failing'
@@ -5540,7 +5550,7 @@ function summary(run, timeZone, chat = null, { drafts = [], nothing = false, hea
     : run.gate?.automaticHold ? `PR 1 waits: ${run.gate.automaticHold}`
     : writing ? (revising(run) ? 'agent working on your changes' : 'agent writing the gate message')
     : run.gate?.kind === 'ask-code' && drafts.length ? `waiting for you: approve the draft prompt${drafts.length > 1 ? 's' : ''}, then the code PR (PR 1 open)`
-    : run.gate?.kind === 'ask-code' && cardRun ? run.through === 'code' ? 'code PR requested; code entry waits' : 'stopped after PR 1; code can start when requested'
+    : run.gate?.kind === 'ask-code' && (cardRun || run.through === 'prompt-pr') ? run.through === 'code' ? 'code PR requested; code entry waits' : 'stopped after PR 1; code can start when requested'
     : run.gate?.kind === 'ask-code' ? 'waiting for you: code PR now or stop (PR 1 open)'
     : run.gate?.kind === 'approve-pr' && cardRun && !atStoryGate(run) && !run.gate.nativeOnly?.length ? 'agent must finish the prompt check before PR 1'
     : run.gate?.kind === 'approve-pr' ? `waiting for you: ${nothing ? '' : 'try it, then '}approve to open ${area.then === 'ask-code' ? 'PR 1' : 'the PR'}`
