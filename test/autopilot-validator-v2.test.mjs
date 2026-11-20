@@ -1720,3 +1720,66 @@ test('R3-6 & polish: prior review repairs do not cut off Bucket 1 cap 3 into pdd
   const job72 = JSON.parse(readFileSync(join(wCov.root, 'jobs', '72.json'), 'utf8'));
   assert.equal(job72.coverage?.rows?.[0]?.reason, 'verified-live-obj', 'job.coverage.rows preserves object row.reason.code');
 });
+
+test('R4 sync regression: package.json manifest is covered by executed real tests without excusing uncovered src modules or zero-test repos', async (t) => {
+  // 1. package.json + covered src/a.mjs + real test passes Validator v2
+  const wOk = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wOk.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wOk.issue(73, { title: 'Add package.json and tested module' });
+  await wOk.tick();
+  const cwd73 = wOk.job(73, 'build').cwd;
+  writeIn(cwd73, 'package.json', JSON.stringify({ name: 'demo', type: 'module', scripts: { test: 'node --test' } }, null, 2) + '\n');
+  writeIn(cwd73, 'src/a.mjs', 'export const a = () => 1;\n');
+  writeIn(cwd73, 'test/a.test.mjs', "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { a } from '../src/a.mjs';\ntest('a', () => assert.equal(a(), 1));\n");
+  wOk.build(73, {
+    write: false,
+    body: 'Fixes #73\n\nRuntime: not run (no prompt changed)\nPath: d — package.json, src/a.mjs, test/a.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wOk.tick();
+  wOk.review(73, 'PASS');
+  wOk.suite(73, 0);
+  await wOk.tick();
+  assert.equal(wOk.github.merges.length, 1, 'package.json + covered src/a.mjs + real test merges cleanly');
+
+  // 2. package.json + covered src/a.mjs + UNCOVERED src/b.mjs MUST still fail closed
+  const wPartial = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wPartial.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wPartial.issue(74, { title: 'Manifest with one uncovered module' });
+  await wPartial.tick();
+  const cwd74 = wPartial.job(74, 'build').cwd;
+  writeIn(cwd74, 'package.json', JSON.stringify({ name: 'demo', type: 'module', scripts: { test: 'node --test' } }, null, 2) + '\n');
+  writeIn(cwd74, 'src/a.mjs', 'export const a = () => 1;\n');
+  writeIn(cwd74, 'src/b.mjs', 'export const b = () => 2;\n');
+  writeIn(cwd74, 'test/a.test.mjs', "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { a } from '../src/a.mjs';\ntest('a', () => assert.equal(a(), 1));\n");
+  const { pr: pr74 } = wPartial.build(74, {
+    write: false,
+    body: 'Fixes #74\n\nRuntime: not run (no prompt changed)\nPath: d — package.json, src/a.mjs, src/b.mjs, test/a.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wPartial.tick();
+  wPartial.review(74, 'PASS');
+  wPartial.suite(74, 0);
+  await wPartial.tick();
+  assert.equal(wPartial.github.merges.length, 0, 'manifest coverage must NOT excuse uncovered src/b.mjs');
+  assert.ok(pr74.comments.some((c) => /<!-- pdd:autopilot-core:human-boundary:/.test(c.body)));
+
+  // 3. package.json alone with ZERO real tests MUST still fail closed
+  const wEmpty = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wEmpty.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wEmpty.issue(75, { title: 'Manifest edit with zero tests' });
+  await wEmpty.tick();
+  const cwd75 = wEmpty.job(75, 'build').cwd;
+  writeIn(cwd75, 'package.json', JSON.stringify({ name: 'demo', type: 'module', scripts: { test: 'node --test' } }, null, 2) + '\n');
+  const { pr: pr75 } = wEmpty.build(75, {
+    write: false,
+    body: 'Fixes #75\n\nRuntime: not run (no prompt changed)\nPath: d — package.json — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wEmpty.tick();
+  wEmpty.review(75, 'PASS');
+  wEmpty.suite(75, 0);
+  await wEmpty.tick();
+  assert.equal(wEmpty.github.merges.length, 0, 'manifest-only change with zero real tests fails closed');
+  assert.ok(pr75.comments.some((c) => /<!-- pdd:autopilot-core:human-boundary:/.test(c.body)));
+});

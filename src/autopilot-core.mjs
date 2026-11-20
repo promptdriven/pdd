@@ -4207,7 +4207,8 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
   const singleUnnamedPass = lines.length === 1 && !lines[0].story && lines[0].verdict === 'pass';
   const singleUnnamedBindingNotRun = lines.length === 1 && !lines[0].story && lines[0].verdict === 'not-run' && /real-binding-unavailable/i.test(lines[0].line);
   const perStoryPresent = lines.some(l => Boolean(l.story));
-  const hasStaleStoryNotRun = targetStories.some(story => Boolean(existingNotRun(story)) && storyPassOk(story));
+  const isBindingNotRun = line => Boolean(line && /real-binding-unavailable/i.test(line.line));
+  const hasStaleStoryNotRun = targetStories.some(story => isBindingNotRun(existingNotRun(story)) && storyPassOk(story));
   const needsSync = !lines.length
     || (singleUnnamedPass && (changedStories.length > 1 || targetStories.some(story => !storyPassOk(story))))
     || (singleUnnamedBindingNotRun && targetStories.every(story => storyPassOk(story)))
@@ -4216,10 +4217,11 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
   if (!needsSync) return;
 
   const lineFor = story => {
+    const keepNotRun = existingNotRun(story);
+    if (keepNotRun && !isBindingNotRun(keepNotRun)) return keepNotRun.line;
     if (storyPassOk(story)) {
       return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
     }
-    const keepNotRun = existingNotRun(story);
     if (keepNotRun) return keepNotRun.line;
     return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
   };
@@ -4842,11 +4844,13 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
   try { tracked = gitFiles(headTree); } catch { tracked = []; }
   const suiteLog = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
   const executedSuite = selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, ctx.fs);
+  const executedRealTestFiles = [];
   for (const rel of executedSuite.files) {
     const content = readCleanFileUtf8(ctx.fs, headTree, rel);
     if (typeof content !== 'string') continue;
     const kinds = detectRealE2eKindsInTest(rel, content);
     if (!kinds.length) continue;
+    if (kinds.includes('real-execution')) executedRealTestFiles.push(rel);
     const { allTargets, boundaryTargets } = inspectTestBoundaryTargets(rel, content);
     for (const target of new Set([...allTargets, ...boundaryTargets])) {
       for (const kind of kinds) addTargetProof(target, kind, rel);
@@ -4865,15 +4869,19 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
     ? HEAD_KINDS.flatMap(k => (job.vectors.result?.[k]?.files ?? []).filter(f => f.state === 'pass' && f.pass > 0 && !f.fail && !f.skipped).map(f => f.file))
     : [];
 
+  // Package/build manifest files are exercised by the test runner itself rather than imported directly by test files.
+  const PACKAGE_MANIFEST_FILE_RE = /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pyproject\.toml|Cargo\.(?:toml|lock)|go\.(?:mod|sum)|(?:ts|js)config(?:\.[^/]+)?\.json)$/i;
   const e2eChecks = [];
   for (const kind of surfaces.requiredProofKinds) {
     if (kind === 'real-execution') {
       const matched = new Set();
       let allRuntimeCovered = changedRuntimeCodeFiles.length > 0;
-      for (const { target } of changedRuntimeCodeFiles) {
+      for (const { file, target } of changedRuntimeCodeFiles) {
         const files = targetProofs.get(target)?.get('real-execution');
         if (files && files.size > 0) {
           for (const f of files) matched.add(f);
+        } else if (PACKAGE_MANIFEST_FILE_RE.test(file) && executedRealTestFiles.length > 0) {
+          for (const f of executedRealTestFiles) matched.add(f);
         } else {
           allRuntimeCovered = false;
         }
