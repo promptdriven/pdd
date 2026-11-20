@@ -53,7 +53,10 @@ function summarizeReviewEvalGroup(cases = [], targets = REVIEW_EVAL_TARGETS) {
     if (!row || typeof row !== 'object') continue;
     const label = String(row.label || '').toLowerCase();
     const verdict = String(row.verdict || '').toUpperCase();
-    const isError = verdict === 'ERROR' || row.outcome === 'error';
+    const isKnownVerdict = verdict === 'PASS' || verdict === 'FAIL';
+    const isError = verdict === 'ERROR'
+      || row.outcome === 'error'
+      || ((label === 'bad' || label === 'clean') && !isKnownVerdict);
     if (isError) errorCount += 1;
     if (typeof row.duration_ms === 'number' && Number.isFinite(row.duration_ms) && row.duration_ms >= 0) {
       durationSum += row.duration_ms;

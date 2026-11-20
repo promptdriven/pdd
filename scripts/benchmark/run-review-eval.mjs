@@ -59,8 +59,19 @@ const STRIPPED_GIT_REPO_VARS = Object.freeze([
   'GIT_COMMON_DIR',
   'GIT_OBJECT_DIRECTORY',
   'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_CONFIG',
+  'GIT_CONFIG_PARAMETERS',
+  'GIT_CONFIG_COUNT',
+  'GIT_TEMPLATE_DIR',
+  'GIT_EXTERNAL_DIFF',
+  'GIT_ASKPASS',
+  'SSH_ASKPASS',
 ]);
 const NULL_GIT_CONFIG = process.platform === 'win32' ? 'NUL' : '/dev/null';
+const SAFE_GIT_CONFIG_ARGS = Object.freeze([
+  '-c', 'core.fsmonitor=false',
+  '-c', 'core.autocrlf=false',
+]);
 const SIGNAL_EXIT_CODES = Object.freeze({
   SIGHUP: 129,
   SIGINT: 130,
@@ -631,16 +642,26 @@ export function buildReviewerPrompt({
   return prompt;
 }
 
-function buildIsolatedGitEnv(baseEnv = process.env) {
-  const clean = { ...baseEnv };
+function stripGitIsolationVars(envObj) {
   for (const key of STRIPPED_GIT_REPO_VARS) {
-    delete clean[key];
+    delete envObj[key];
   }
-  clean.GIT_CONFIG_NOSYSTEM = '1';
-  clean.GIT_CONFIG_GLOBAL = NULL_GIT_CONFIG;
-  clean.GIT_TERMINAL_PROMPT = '0';
-  clean.GIT_SSH_COMMAND = 'false';
-  return clean;
+  for (const key of Object.keys(envObj)) {
+    if (key.startsWith('GIT_CONFIG_KEY_') || key.startsWith('GIT_CONFIG_VALUE_')) {
+      delete envObj[key];
+    }
+  }
+  envObj.GIT_CONFIG_NOSYSTEM = '1';
+  envObj.GIT_CONFIG_GLOBAL = NULL_GIT_CONFIG;
+  envObj.GIT_ATTR_NOSYSTEM = '1';
+  envObj.GIT_LFS_SKIP_SMUDGE = '1';
+  envObj.GIT_TERMINAL_PROMPT = '0';
+  envObj.GIT_SSH_COMMAND = 'false';
+  return envObj;
+}
+
+function buildIsolatedGitEnv(baseEnv = process.env) {
+  return stripGitIsolationVars({ ...baseEnv });
 }
 
 function computeExecExitCode(res) {
@@ -718,7 +739,7 @@ function assertSafeTreeSymlinks(repoRoot, entries, exec, env) {
       ['-C', repoRoot, 'cat-file', '-p', entry.oid],
       { env },
       'git cat-file symlink',
-    ).trim();
+    );
     if (isAbsoluteSymlinkTarget(target)) {
       throw new Error(`Refusing absolute symlink in fixture tree: ${entry.path} -> ${target}`);
     }
@@ -804,10 +825,20 @@ export function assertSafeCheckedOutSymlink(scratchDir, relPath, fs = nativeFs, 
       stat = fs.lstatSync(next);
     } catch (err) {
       if (err && err.code === 'ENOENT') {
-        const ancestorReal = fs.realpathSync(cur);
-        const remaining = [seg, ...queue].filter(s => s && s !== '.');
-        const resolvedDangling = resolve(ancestorReal, ...remaining);
-        return assertInside(resolvedDangling);
+        let virtualCur = fs.realpathSync(cur);
+        assertInside(virtualCur);
+        for (const remSeg of [seg, ...queue]) {
+          if (!remSeg || remSeg === '.') continue;
+          if (remSeg === '..') {
+            if (virtualCur === realScratch || !virtualCur.startsWith(`${realScratch}${sep}`)) {
+              throw new Error(`Refusing symlink escaping scratch checkout: ${relPath}`);
+            }
+            virtualCur = dirname(virtualCur);
+            continue;
+          }
+          virtualCur = join(virtualCur, remSeg);
+        }
+        return assertInside(virtualCur);
       }
       throw err;
     }
@@ -882,11 +913,16 @@ function materializeCommitIntoScratch({
   const indexEnv = { ...env, GIT_INDEX_FILE: indexFile };
   try { fs.rmSync(indexFile, { force: true }); } catch {}
 
-  runGitOrThrow(exec, ['-C', repoRoot, 'read-tree', commitSha], { env: indexEnv }, 'git read-tree');
+  runGitOrThrow(
+    exec,
+    ['-C', repoRoot, ...SAFE_GIT_CONFIG_ARGS, 'read-tree', commitSha],
+    { env: indexEnv },
+    'git read-tree',
+  );
   if (forbiddenMatches.length > 0) {
     runGitOrThrow(
       exec,
-      ['-C', repoRoot, 'update-index', '--force-remove', '--', ...forbiddenMatches],
+      ['-C', repoRoot, ...SAFE_GIT_CONFIG_ARGS, 'update-index', '--force-remove', '--', ...forbiddenMatches],
       { env: indexEnv },
       'git update-index strip forbidden paths',
     );
@@ -894,7 +930,7 @@ function materializeCommitIntoScratch({
   const prefix = `${scratchDir.replace(/[\\/]+$/, '')}/`;
   runGitOrThrow(
     exec,
-    ['-C', repoRoot, 'checkout-index', '-a', '-f', `--prefix=${prefix}`],
+    ['-C', repoRoot, ...SAFE_GIT_CONFIG_ARGS, 'checkout-index', '-a', '-f', `--prefix=${prefix}`],
     { env: indexEnv },
     'git checkout-index',
   );
@@ -931,7 +967,7 @@ export function inspectFixtureDiffReadOnly({
 
   const nameStatusRaw = runGitOrThrow(
     exec,
-    ['-C', root, 'diff', '--name-status', baseSha, headSha],
+    ['-C', root, 'diff', '--no-ext-diff', '--no-textconv', '--name-status', baseSha, headSha],
     { env: isolatedGitEnv },
     `diff name-status for ${fixture.id}`,
   );
@@ -943,7 +979,7 @@ export function inspectFixtureDiffReadOnly({
 
   const statRaw = runGitOrThrow(
     exec,
-    ['-C', root, 'diff', '--stat', baseSha, headSha],
+    ['-C', root, 'diff', '--no-ext-diff', '--no-textconv', '--stat', baseSha, headSha],
     { env: isolatedGitEnv },
     `diff stat for ${fixture.id}`,
   );
@@ -1007,10 +1043,10 @@ export function prepareScratchCheckout({
     const resultPath = join(resultDir, 'review-result.json');
 
     const commitArgs = [
+      ...SAFE_GIT_CONFIG_ARGS,
       '-c', 'user.name=pdd-review-eval',
       '-c', 'user.email=eval@example.invalid',
       '-c', 'commit.gpgsign=false',
-      '-c', 'core.autocrlf=false',
       '-c', `core.hooksPath=${emptyHooksDir}`,
     ];
 
@@ -1025,8 +1061,18 @@ export function prepareScratchCheckout({
       env: isolatedGitEnv,
     });
 
-    runGitOrThrow(exec, ['init', '-q', '-b', 'eval-head'], { cwd: scratchDir, env: isolatedGitEnv }, 'scratch git init');
-    runGitOrThrow(exec, ['add', '-A', '-f'], { cwd: scratchDir, env: isolatedGitEnv }, 'scratch git add base');
+    runGitOrThrow(
+      exec,
+      ['init', '-q', `--template=${emptyHooksDir}`, '-b', 'eval-head'],
+      { cwd: scratchDir, env: isolatedGitEnv },
+      'scratch git init',
+    );
+    runGitOrThrow(
+      exec,
+      [...SAFE_GIT_CONFIG_ARGS, 'add', '-A', '-f'],
+      { cwd: scratchDir, env: isolatedGitEnv },
+      'scratch git add base',
+    );
     runGitOrThrow(
       exec,
       [...commitArgs, 'commit', '--allow-empty', '-qm', 'eval-base'],
@@ -1048,7 +1094,12 @@ export function prepareScratchCheckout({
     });
     try { fs.rmSync(tempIndex, { force: true }); } catch {}
 
-    runGitOrThrow(exec, ['add', '-A', '-f'], { cwd: scratchDir, env: isolatedGitEnv }, 'scratch git add head');
+    runGitOrThrow(
+      exec,
+      [...SAFE_GIT_CONFIG_ARGS, 'add', '-A', '-f'],
+      { cwd: scratchDir, env: isolatedGitEnv },
+      'scratch git add head',
+    );
     runGitOrThrow(
       exec,
       [...commitArgs, 'commit', '--allow-empty', '-qm', 'eval-head'],
@@ -1077,21 +1128,21 @@ export function prepareScratchCheckout({
 
     const changedFiles = runGitOrThrow(
       exec,
-      ['diff', '--name-status', 'eval-base...HEAD'],
+      ['diff', '--no-ext-diff', '--no-textconv', '--name-status', 'eval-base...HEAD'],
       { cwd: scratchDir, env: isolatedGitEnv },
       'scratch diff name-status',
     ).split('\n').map(l => l.trim()).filter(Boolean);
 
     const diffStat = runGitOrThrow(
       exec,
-      ['diff', '--stat', 'eval-base...HEAD'],
+      ['diff', '--no-ext-diff', '--no-textconv', '--stat', 'eval-base...HEAD'],
       { cwd: scratchDir, env: isolatedGitEnv },
       'scratch diff stat',
     ).trim();
 
     const fullDiff = runGitOrThrow(
       exec,
-      ['diff', 'eval-base...HEAD'],
+      ['diff', '--no-ext-diff', '--no-textconv', 'eval-base...HEAD'],
       { cwd: scratchDir, env: isolatedGitEnv },
       'scratch diff',
     );
@@ -1497,17 +1548,12 @@ export function createCliReviewerRunner({
     for (const key of STRIPPED_AGENT_AUTH_VARS) {
       delete childEnv[key];
     }
-    for (const key of STRIPPED_GIT_REPO_VARS) {
-      delete childEnv[key];
-    }
+    stripGitIsolationVars(childEnv);
     childEnv.SSH_AUTH_SOCK = '';
-    childEnv.GIT_CONFIG_NOSYSTEM = '1';
-    childEnv.GIT_CONFIG_GLOBAL = NULL_GIT_CONFIG;
-    childEnv.GIT_SSH_COMMAND = 'false';
-    childEnv.GIT_TERMINAL_PROMPT = '0';
     childEnv.GH_PROMPT_DISABLED = '1';
     childEnv.PDD_REVIEW_RESULT_PATH = resultPath ?? '';
     childEnv.PDD_REVIEW_MODEL = model;
+    delete childEnv.GH_CONFIG_DIR;
 
     let ownedGhConfigDir = null;
     if (typeof fs.mkdtempSync === 'function') {
@@ -1568,12 +1614,15 @@ export function createCliReviewerRunner({
     }
     let resultFileText = null;
     if (resultPath) {
-      assertNotSymlink(resultPath, 'reviewer result file', fs, {
+      if (metaDir) {
+        assertNotSymlink(metaDir, 'reviewer metadata directory', fs, { checkAncestors: false });
+      }
+      const safeResultPath = assertNotSymlink(resultPath, 'reviewer result file', fs, {
         checkAncestors: true,
-        stopRoots: metaDir ? [metaDir] : [],
+        stopRoots: metaDir ? [dirname(resolve(metaDir))] : [],
       });
-      if (fs.existsSync(resultPath)) {
-        resultFileText = fs.readFileSync(resultPath, 'utf8');
+      if (fs.existsSync(safeResultPath)) {
+        resultFileText = fs.readFileSync(safeResultPath, 'utf8');
       }
     }
     if (!resultFileText && res.code !== 0 && !String(res.stdout || '').trim()) {
@@ -1759,12 +1808,15 @@ export async function runReviewEval(options = {}, ports = {}) {
             if (rawResult && typeof rawResult === 'object' && typeof rawResult.resultFileText === 'string') {
               resultFileText = rawResult.resultFileText;
             } else if (scratch.resultPath) {
-              assertNotSymlink(scratch.resultPath, 'reviewer result file', fs, {
+              if (scratch.metaDir) {
+                assertNotSymlink(scratch.metaDir, 'reviewer metadata directory', fs, { checkAncestors: false });
+              }
+              const safeResultPath = assertNotSymlink(scratch.resultPath, 'reviewer result file', fs, {
                 checkAncestors: true,
-                stopRoots: scratch.metaDir ? [scratch.metaDir] : [],
+                stopRoots: scratch.metaDir ? [dirname(resolve(scratch.metaDir))] : [],
               });
-              if (fs.existsSync(scratch.resultPath)) {
-                resultFileText = fs.readFileSync(scratch.resultPath, 'utf8');
+              if (fs.existsSync(safeResultPath)) {
+                resultFileText = fs.readFileSync(safeResultPath, 'utf8');
               }
             }
 

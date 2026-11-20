@@ -15,6 +15,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const RUN_REVIEW_EVAL_SCRIPT = fileURLToPath(new URL('../scripts/benchmark/run-review-eval.mjs', import.meta.url));
 
 import {
   CliUsageError,
@@ -897,7 +900,7 @@ test('CLI flag parsing, dry-run against real repo manifest, and isolated live --
   assert.throws(() => parseReviewEvalCliArgs(['--unknown-flag']), /Unknown argument/);
   assert.throws(() => createCliReviewerRunner({}), /requires --agent-cmd/);
 
-  const scriptPath = resolve('scripts/benchmark/run-review-eval.mjs');
+  const scriptPath = RUN_REVIEW_EVAL_SCRIPT;
 
   // Exit code 2 for CLI usage error
   const badFlag = spawnSync(process.execPath, [scriptPath, '--timeout-ms', '-10'], { encoding: 'utf8' });
@@ -1418,7 +1421,7 @@ test('regression: --prompt-version rejects prototype keys and typos, non-P3 foll
       err => err instanceof CliUsageError && err.exitCode === 2,
     );
   }
-  const scriptPath = resolve('scripts/benchmark/run-review-eval.mjs');
+  const scriptPath = RUN_REVIEW_EVAL_SCRIPT;
   const cliProto = spawnSync(process.execPath, [scriptPath, '--prompt-version', 'constructor', '--dry-run'], { encoding: 'utf8' });
   assert.equal(cliProto.status, 2);
 
@@ -1532,4 +1535,174 @@ test('regression: --prompt-version rejects prototype keys and typos, non-P3 foll
     }),
     /Unsafe or invalid/,
   );
+});
+
+test('R2 adversarial regressions: metaDir symlink swap, full Git config/template/ext-diff isolation, dangling escape-reenter, and unknown scorecard verdicts', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-eval-r2-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  // 1. Swapping metaDir itself for a symlink to a target directory with result/review-result.json must be refused
+  const decoyTarget = join(root, 'decoy-target');
+  mkdirSync(join(decoyTarget, 'result'), { recursive: true });
+  writeFileSync(
+    join(decoyTarget, 'result', 'review-result.json'),
+    JSON.stringify({ verdict: 'PASS', summary: 'Spoofed via metaDir symlink.', mustFix: [] }),
+    'utf8',
+  );
+
+  const metaDir = join(root, 'meta-real');
+  const resultDir = join(metaDir, 'result');
+  mkdirSync(resultDir, { recursive: true });
+  const resultPath = join(resultDir, 'review-result.json');
+
+  const runnerSwapMeta = createCliReviewerRunner({
+    agentCmd: process.execPath,
+    agentArgs: [
+      '-e',
+      `const fs = require('node:fs');
+       fs.rmSync(${JSON.stringify(metaDir)}, { recursive: true, force: true });
+       fs.symlinkSync(${JSON.stringify(decoyTarget)}, ${JSON.stringify(metaDir)});
+       process.stdout.write('ok');`,
+    ],
+  });
+  await assert.rejects(
+    () => runnerSwapMeta({ prompt: 'test', scratchDir: root, metaDir, resultPath, model: 'test-model' }),
+    /Refusing symlink/,
+  );
+
+  // Also test runReviewEval fallback path when custom runReviewer omits resultFileText and swaps metaDir
+  const repo = join(root, 'repo-r2');
+  mkdirSync(repo, { recursive: true });
+  gitIn(repo, ['init', '-q']);
+  gitIn(repo, ['config', 'user.name', 'Test User']);
+  gitIn(repo, ['config', 'user.email', 'test@example.invalid']);
+  gitIn(repo, ['config', 'commit.gpgsign', 'false']);
+  writeFileSync(join(repo, 'app.mjs'), 'export const v = 1;\n', 'utf8');
+  gitIn(repo, ['add', '-A']);
+  gitIn(repo, ['commit', '-qm', 'base']);
+  const baseSha = gitIn(repo, ['rev-parse', 'HEAD']);
+  writeFileSync(join(repo, 'app.mjs'), 'export const v = 2;\n', 'utf8');
+  gitIn(repo, ['add', '-A']);
+  gitIn(repo, ['commit', '-qm', 'head']);
+  const headSha = gitIn(repo, ['rev-parse', 'HEAD']);
+
+  const manifestPath = join(root, 'manifest-r2.json');
+  writeFileSync(manifestPath, JSON.stringify({
+    schema_version: 'pdd.review-eval-manifest.v1',
+    fixtures: [
+      {
+        id: 'r2-bad',
+        repo: 'example/repo',
+        pr: 1,
+        base: baseSha,
+        head: headSha,
+        label: 'bad',
+        expected_signals: [{ id: 'sig', description: 'desc', any_terms: ['v = 2'] }],
+        min_signals_required: 1,
+      },
+    ],
+  }), 'utf8');
+
+  const metaSwapReport = await runReviewEval(
+    { manifest: manifestPath, repoRoot: repo, models: ['test-model'], promptVersions: ['autopilot-v1'] },
+    {
+      runReviewer: ({ metaDir: mDir }) => {
+        rmSync(mDir, { recursive: true, force: true });
+        symlinkSync(decoyTarget, mDir);
+        return { stdout: '' };
+      },
+    },
+  );
+  assert.equal(metaSwapReport.cases[0].verdict, 'ERROR');
+  assert.match(metaSwapReport.cases[0].parse_error, /Refusing symlink/);
+
+  // 2. Full Git config/env/template/ext-diff isolation in prepareScratchCheckout AND createCliReviewerRunner
+  const evilTemplate = join(root, 'evil-template');
+  mkdirSync(join(evilTemplate, 'hooks'), { recursive: true });
+  writeFileSync(join(evilTemplate, 'hooks', 'post-commit'), '#!/bin/sh\necho PWNED\n', { mode: 0o755 });
+
+  const poisonedEnv = {
+    ...process.env,
+    GIT_CONFIG_PARAMETERS: "'http.extraHeader=Authorization: Bearer secret' 'diff.external=/bin/false'",
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'core.hooksPath',
+    GIT_CONFIG_VALUE_0: evilTemplate,
+    GIT_CONFIG_KEY_1: 'credential.helper',
+    GIT_CONFIG_VALUE_1: 'store',
+    GIT_EXTERNAL_DIFF: '/bin/false',
+    GIT_TEMPLATE_DIR: evilTemplate,
+    GIT_CONFIG: join(root, 'evil.gitconfig'),
+    GIT_ASKPASS: '/bin/false',
+    SSH_ASKPASS: '/bin/false',
+    GH_CONFIG_DIR: join(root, 'host-gh-config'),
+  };
+
+  const scratch = prepareScratchCheckout({
+    repoRoot: repo,
+    fixture: { id: 'r2-iso', base: baseSha, head: headSha },
+    env: poisonedEnv,
+  });
+  t.after(() => scratch.cleanup());
+  assert.match(scratch.diffExcerpt, /\+export const v = 2;/);
+  assert.equal(existsSync(join(scratch.scratchDir, '.git', 'hooks', 'post-commit')), false);
+
+  const inspectOut = inspectFixtureDiffReadOnly({
+    repoRoot: repo,
+    fixture: { id: 'r2-iso', base: baseSha, head: headSha },
+    env: poisonedEnv,
+  });
+  assert.deepEqual(inspectOut.changedFiles, ['M\tapp.mjs']);
+
+  const envCheckRunner = createCliReviewerRunner({
+    agentCmd: process.execPath,
+    agentArgs: [
+      '-e',
+      `const keys = [
+         'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0',
+         'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1', 'GIT_EXTERNAL_DIFF', 'GIT_TEMPLATE_DIR',
+         'GIT_CONFIG', 'GIT_ASKPASS', 'SSH_ASKPASS'
+       ];
+       const leaked = keys.filter(k => Object.hasOwn(process.env, k));
+       process.stdout.write(JSON.stringify({
+         leaked,
+         attrNoSys: process.env.GIT_ATTR_NOSYSTEM,
+         lfsSkip: process.env.GIT_LFS_SKIP_SMUDGE,
+         ghConfig: process.env.GH_CONFIG_DIR,
+       }));`,
+    ],
+    env: poisonedEnv,
+  });
+  const envCheckRes = await envCheckRunner({
+    prompt: 'check',
+    scratchDir: scratch.scratchDir,
+    metaDir: scratch.metaDir,
+    resultPath: null,
+    model: 'test-model',
+  });
+  const envObserved = JSON.parse(envCheckRes.stdout);
+  assert.deepEqual(envObserved.leaked, []);
+  assert.equal(envObserved.attrNoSys, '1');
+  assert.equal(envObserved.lfsSkip, '1');
+  assert.notEqual(envObserved.ghConfig, poisonedEnv.GH_CONFIG_DIR);
+  assert.ok(envObserved.ghConfig && envObserved.ghConfig.startsWith(scratch.metaDir));
+
+  // 3. Dangling symlink temporary escape-and-reenter must be refused by assertSafeCheckedOutSymlink
+  const scratchSub = join(root, 'dangling-scratch');
+  mkdirSync(scratchSub, { recursive: true });
+  const baseName = scratchSub.split('/').at(-1);
+  symlinkSync(`missing/../../${baseName}/inside.txt`, join(scratchSub, 'bounce-link'));
+  assert.throws(
+    () => assertSafeCheckedOutSymlink(scratchSub, 'bounce-link'),
+    /Refusing symlink escaping scratch checkout/,
+  );
+
+  // 4. Malformed external --compare row with unknown verdict increments clean_errors & error_count
+  const malformedCard = computeReviewEvalScorecard([
+    { label: 'bad', verdict: 'FAIL', caught: true, expected_signals_count: 1, matched_signals: ['s1'] },
+    { label: 'clean', verdict: 'MAYBE', false_positive: false },
+  ]);
+  assert.equal(malformedCard.clean_total, 1);
+  assert.equal(malformedCard.clean_errors, 1);
+  assert.equal(malformedCard.error_count, 1);
+  assert.equal(malformedCard.meets_target, false);
 });
