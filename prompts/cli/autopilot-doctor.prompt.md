@@ -31,11 +31,11 @@ Resolve the selected definition before prerequisite probes. Load definitions fro
 saved definitionHome when a profile is supplied, restrict selection to its agent
 id/kind, and preserve saved HOME and provider config home after definition overrides.
 Otherwise merge the selected definition's env over the caller environment; for a
-Codex definition without a saved profile or explicit `CODEX_HOME`, bind
+Codex definition without an explicit saved `profile.configHome` or explicit `CODEX_HOME`, bind
 `CODEX_HOME` to `pddManagedCodexHome(env)` whenever
 `isCloudAccountsActive({env, provider: "codex"}, {fs: files})` is true and
-`managedCodexAuthPath(env)` exists as a regular file on disk so Cloud-only
-teammates pass `codex login status`, `readCodexLimits`, and launcher startup. Use
+`managedCodexAuthPath(env)` exists as a regular non-symlink file on disk so Cloud-only
+teammates (including `pdd autopilot start --agent codex`) pass `codex login status`, `readCodexLimits`, and launcher startup. Likewise, for a Claude definition without an explicit saved `profile.configHome` or explicit `CLAUDE_CONFIG_DIR`, when `isCloudAccountsActive({env, provider: "claude"}, {fs: files})` is true and `managedClaudeSettingsPath(env)` exists as a regular non-symlink file on disk, probe `claude --settings <managedClaudeSettingsPath(env)> auth status --json` (falling back to plain `claude auth status --json` if not ready) so isolated Cloud Claude accounts pass `doctor` and `autopilot start` without touching `~/.claude/settings.json`. Use
 this invocation environment for every prerequisite, including PATH, GitHub,
 provider sign-in, usage, skills, interpreter and scheduling. Claude user skills
 live under CLAUDE_CONFIG_DIR/skills when set; HOME overrides select user roots.

@@ -20,6 +20,8 @@ internal multi-harness fallback helpers:
 `isCloudAccountsActive({env, poolPath, provider}, ports)`,
 `isReauthRequiredAccount(entry)`,
 `isReauthRequiredFailure(errorOrText)`,
+`isExplicitReauthCodeFailure(errorOrText)`,
+`isGatewayGrantRevokedFailure(errorOrText)`,
 `markLocalAccountReauthRequired(accountId, {env}, ports)`,
 `stripCodexAuthBundle(authJson)`,
 `localCodexHome(env)`,
@@ -216,8 +218,8 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   (`v >= 100 ? 100 : Math.max(0, Math.floor(v))`), POST `/v1/accounts/{account_id}/usage-report`
   with `limit_reached: true`, and lease the next ready account (`soonest weekly_reset_at`)
   with `0` issue strikes. Accounts or account-attributed lease/refresh failures matching `reauth_required`
-  (`token_revoked`, `invalid_grant`, `refresh_token_reused`, `oauth_not_allowed_for_organization`, `oauth_org_not_allowed`, `disabled Claude subscription access for Claude Code`, `state === "reauth_required"`, or account-attributed `401`, while unattributed Cloud bearer `401` errors never taint provider accounts)
-  are classified as `"reauth_required"` (and `isAuthFailureMessage` also matches `oauth_not_allowed_for_organization`, `oauth_org_not_allowed`, and `disabled Claude subscription access for Claude Code`), persisted in `accounts-state.json` `reauth` across state reconciliations until a newer `last_refresh_at` succeeds or the account is re-enrolled/removed, added to `skip_account_ids`,
+  (`token_revoked`, `invalid_grant`, `refresh_token_reused`, `oauth_not_allowed_for_organization`, `oauth_org_not_allowed`, `disabled Claude subscription access for Claude Code`, `state === "reauth_required"`, or account-attributed `401`, while unattributed Cloud bearer `401` errors and borrower gateway-grant revocations matching `isGatewayGrantRevokedFailure` such as `gateway_grant_revoked`, `share_revoked`, `Gateway grant was revoked`/`expired`, or `Shared account is not active`/`authorization epoch changed` never taint provider accounts)
+  are classified as `"reauth_required"` (and `isAuthFailureMessage` also matches `oauth_not_allowed_for_organization`, `oauth_org_not_allowed`, `disabled Claude subscription access for Claude Code`, and `isGatewayGrantRevokedFailure` so revoked borrower shares rotate cleanly with zero issue strikes, while `exhaustCloudPoolLogin` rotates past revoked borrower grants or borrowed-account generic `401` failures without calling `markLocalAccountReauthRequired` or reporting fake quota exhaustion when no explicit upstream reauth code is present), persisted in `accounts-state.json` `reauth` across state reconciliations until a newer `last_refresh_at` succeeds or the account is re-enrolled/removed, added to `skip_account_ids`,
   and skipped automatically during pool rotation without masking `reauth_required` as `ready`. `active[provider]` also tracks `materialized_local` so step-only overlay leases never masquerade as locally materialized `codex-home` / `claude-home` credentials, and `cloudAccountsRequest` / `leaseCloudAccount` share a single wall-clock `deadlineMs` across token resolution, cold-start transport retry, and reauth skips.
 - **Burst `429` vs quota exhaustion (`classifyRateLimitFailure`):** A transient
   burst rate limit (`429 Too Many Requests`, `rate_limit_exceeded`, RPM/TPM) with no

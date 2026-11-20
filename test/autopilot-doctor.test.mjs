@@ -496,3 +496,92 @@ test('doctor: Cloud-only teammate without ~/.codex/auth.json passes codex login 
   assert.equal(missingRes.code, 1);
   check(missingRes, 'agent', 'FAIL');
 });
+
+test('#3426 doctor: Cloud-only --agent codex profile and isolated Cloud Claude settings pass doctor', async () => {
+  const {
+    accountsStatePath,
+    managedClaudeSettingsPath,
+    managedCodexAuthPath,
+    pddManagedCodexHome,
+  } = await import('../src/login-pool.mjs');
+
+  // 1. `--agent codex` creates a profile with configHome: null; Cloud-only teammate must still bind pddManagedCodexHome.
+  const fCx = doctorFixture();
+  const cxState = accountsStatePath(fCx.input.env);
+  const cxAuth = managedCodexAuthPath(fCx.input.env);
+  const cxHome = pddManagedCodexHome(fCx.input.env);
+  fCx.paths.set(cxState, JSON.stringify({
+    version: 1,
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc_cx_borrow', label: 'team-cx', provider: 'codex', state: 'ready' } },
+  }));
+  fCx.paths.set(cxAuth, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'pddg_lse_2_tok', refresh_token: '' } }));
+  fCx.ports.files.statSync = p => {
+    if (fCx.paths.has(p)) return { isFile: () => true };
+    throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  };
+  const origCxRun = fCx.ports.run;
+  fCx.ports.run = (file, args, opts) => {
+    if (file === 'codex' && args[0] === 'login' && args[1] === 'status') {
+      fCx.calls.push({ file, args, options: opts });
+      return opts?.env?.CODEX_HOME === cxHome
+        ? fCx.answer('Logged in using ChatGPT\n', 0)
+        : fCx.answer('Not logged in\n', 1);
+    }
+    return origCxRun(file, args, opts);
+  };
+  const cxProfileReport = await runAutopilotDoctor({
+    ...fCx.input,
+    profile: {
+      agent: { id: 'codex', kind: 'codex' },
+      home: fCx.input.env.HOME,
+      definitionHome: fCx.input.env.HOME,
+      configHome: null,
+    },
+  }, fCx.ports);
+  assert.equal(cxProfileReport.exitCode, 0, cxProfileReport.message);
+  assert.equal(cxProfileReport.checks.find(c => c.id === 'agent')?.status, 'pass');
+  assert.equal(fCx.calls.find(c => c.file === 'codex' && c.args[0] === 'login')?.options?.env?.CODEX_HOME, cxHome);
+
+  // 2. Isolated Cloud Claude settings ($PDD_STATE_DIR/claude-home/settings.json) pass doctor via --settings without ~/.claude/settings.json.
+  const fCl = doctorFixture();
+  const clState = accountsStatePath(fCl.input.env);
+  const clSettings = managedClaudeSettingsPath(fCl.input.env);
+  fCl.paths.set(clState, JSON.stringify({
+    version: 1,
+    enrolled: true,
+    providers: ['claude'],
+    active: { claude: { account_id: 'acc_cl_borrow', label: 'team-cl', provider: 'claude', state: 'ready' } },
+  }));
+  fCl.paths.set(clSettings, JSON.stringify({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'pddg_cl_tok' } }));
+  fCl.ports.files.statSync = p => {
+    if (fCl.paths.has(p)) return { isFile: () => true };
+    throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  };
+  fCl.ports.agentDefinitions = async () => [{ id: 'claude', kind: 'claude', command: 'claude', env: {} }];
+  const origClRun = fCl.ports.run;
+  fCl.ports.run = (file, args, opts) => {
+    if (file === 'claude') {
+      fCl.calls.push({ file, args, options: opts });
+      if (args[0] === '--settings' && args[1] === clSettings && args[2] === 'auth') {
+        return fCl.answer(JSON.stringify({ loggedIn: true }), 0);
+      }
+      return fCl.answer(JSON.stringify({ loggedIn: false }), 1);
+    }
+    return origClRun(file, args, opts);
+  };
+  const clReport = await runAutopilotDoctor(fCl.input, fCl.ports);
+  assert.equal(clReport.exitCode, 0, clReport.message);
+  assert.equal(clReport.checks.find(c => c.id === 'agent')?.status, 'pass');
+  assert.deepEqual(
+    fCl.calls.find(c => c.file === 'claude')?.args,
+    ['--settings', clSettings, 'auth', 'status', '--json'],
+  );
+
+  // Without managed Claude settings on disk, Cloud-only Claude fails cleanly.
+  fCl.paths.delete(clSettings);
+  const clMissing = await runAutopilotDoctor(fCl.input, fCl.ports);
+  assert.equal(clMissing.exitCode, 1);
+  assert.equal(clMissing.checks.find(c => c.id === 'agent')?.status, 'fail');
+});

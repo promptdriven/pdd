@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 98d2a48fce6e863d8dc3f1c4af737b5304d77a77f38ae945317c8a56cc545b29).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 859252979c16e770a4f758b4cab78f33a8f7a8417a844dd9a87d1ad2c4cc91af).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
@@ -105,6 +105,7 @@ const MANAGED_CODEX_GATEWAY_RE = /\/v1\/(?:accounts\/)?codex-gateway(?:\/|$)/i;
 const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/i;
 const REAUTH_CODE_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked|oauth_not_allowed_for_organization|oauth_org_not_allowed)\b|disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code/i;
 const REAUTH_TEXT_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked|oauth_not_allowed_for_organization|oauth_org_not_allowed)\b|disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code|(?:status|http|error)[:=\s]+401\b|\b401\s+unauthorized\b/i;
+const GATEWAY_GRANT_REVOKED_RE = /\b(?:gateway_grant_revoked|share_revoked)\b|gateway\s+grant\s+(?:was\s+revoked|expired|request\s+limit\s+reached|principal\s+mismatch)|shared\s+account\s+(?:is\s+not\s+active|no\s+longer\s+exists|authorization\s+epoch\s+changed)/i;
 export const DEFAULT_CLOUD_URL = 'https://pdd-byok-api-c437voydwa-uc.a.run.app';
 export const POOL_FALLBACK_COOLDOWN_MS = 30 * 60 * 1000;
 
@@ -209,22 +210,59 @@ export function isLocalReauthUnresolved(accountId, refreshedAtIso, reauthMap) {
   return !Number.isFinite(markedMs) || !Number.isFinite(refreshedMs) || refreshedMs <= markedMs;
 }
 
+export function isGatewayGrantRevokedFailure(errorOrText) {
+  if (!errorOrText) return false;
+  if (typeof errorOrText === 'string') {
+    return GATEWAY_GRANT_REVOKED_RE.test(errorOrText);
+  }
+  if (typeof errorOrText === 'object') {
+    const fields = [
+      errorOrText.code,
+      errorOrText.reason,
+      errorOrText.message,
+      errorOrText.payload?.reason,
+      errorOrText.payload?.state,
+      errorOrText.payload?.error,
+    ].filter(v => typeof v === 'string' && v);
+    if (fields.some(v => GATEWAY_GRANT_REVOKED_RE.test(v))) return true;
+    if (object(errorOrText.payload) && GATEWAY_GRANT_REVOKED_RE.test(JSON.stringify(errorOrText.payload))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isExplicitReauthCodeFailure(errorOrText) {
+  if (!errorOrText) return false;
+  if (typeof errorOrText === 'string') {
+    return REAUTH_CODE_RE.test(errorOrText);
+  }
+  if (typeof errorOrText === 'object') {
+    if (errorOrText.code === 'missing_auth_token') return false;
+    const fields = [
+      errorOrText.code,
+      errorOrText.reason,
+      errorOrText.message,
+      errorOrText.payload?.reason,
+      errorOrText.payload?.state,
+    ].filter(v => typeof v === 'string' && v);
+    if (fields.some(v => REAUTH_CODE_RE.test(v))) return true;
+    if (object(errorOrText.payload) && REAUTH_CODE_RE.test(JSON.stringify(errorOrText.payload))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isReauthRequiredFailure(errorOrText) {
   if (!errorOrText) return false;
+  if (isGatewayGrantRevokedFailure(errorOrText)) return false;
   if (typeof errorOrText === 'string') {
     return REAUTH_TEXT_RE.test(errorOrText);
   }
   if (typeof errorOrText === 'object') {
     if (errorOrText.code === 'missing_auth_token') return false;
-    const code = String(errorOrText.code ?? '');
-    if (REAUTH_CODE_RE.test(code)) return true;
-    const reason = String(errorOrText.payload?.reason ?? errorOrText.payload?.state ?? errorOrText.reason ?? '');
-    if (REAUTH_CODE_RE.test(reason)) return true;
-    const msg = String(errorOrText.message ?? '');
-    if (REAUTH_CODE_RE.test(msg)) return true;
-    if (object(errorOrText.payload) && REAUTH_CODE_RE.test(JSON.stringify(errorOrText.payload))) {
-      return true;
-    }
+    if (isExplicitReauthCodeFailure(errorOrText)) return true;
     const hasAccountContext = Boolean(
       errorOrText.payload?.account_id
       || errorOrText.payload?.detail?.account_id
@@ -2891,6 +2929,7 @@ export function saveActiveLeaseMetadata(leaseReply, {
       account_id: acc.account_id,
       label: acc.label ?? acc.account_id,
       provider: acc.provider,
+      is_owner: typeof acc.is_owner === 'boolean' ? acc.is_owner : (prev?.account_id === acc.account_id ? (prev?.is_owner ?? null) : null),
       state: accountState,
       lease_id: lease.lease_id ?? null,
       leased_at: lease.leased_at ?? nowIso,
@@ -3234,8 +3273,15 @@ export async function exhaustCloudPoolLogin({
 } = {}, ports = {}) {
   const now = (ports.now ?? Date.now)();
   if (loginId) {
-    if (isAuthFailureMessage(reason) && !isQuotaExhaustionMessage(reason)) {
-      markLocalAccountReauthRequired(loginId, { env }, ports);
+    if (isGatewayGrantRevokedFailure(reason)) {
+      // Revoked borrower lease/share rotates cleanly without tainting the account as reauth_required or reporting fake quota.
+    } else if (isAuthFailureMessage(reason) && !isQuotaExhaustionMessage(reason)) {
+      const savedForCheck = readCloudAccountsState({ env }, ports);
+      const cachedActive = Object.values(savedForCheck.active ?? {}).find(row => row?.account_id === loginId);
+      const isBorrowed = accountWindows?.is_owner === false || cachedActive?.is_owner === false;
+      if (!isBorrowed || isExplicitReauthCodeFailure(reason)) {
+        markLocalAccountReauthRequired(loginId, { env }, ports);
+      }
     } else {
       const report = extractRateLimitReport(reason, accountWindows, now);
       await reportCloudAccountUsage(loginId, report, { cwd, env }, ports).catch(() => {});
@@ -3453,7 +3499,8 @@ export function isAuthFailureMessage(text) {
   const s = text.trim();
   if (!s || looksLikeTestDiagnostic(s)) return false;
   return /\b(?:failed to authenticate|oauth access token is invalid|failed to refresh token|authentication_error|invalid[_ ]api[_ ]key|not logged in|please (?:run \/login|log ?in|sign ?in)|oauth_not_allowed_for_organization|oauth_org_not_allowed)\b|disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code|\b(?:api error|http|status(?: code)?)\W{0,3}401\b|\b401\s+unauthorized\b/i.test(s)
-    || REAUTH_TEXT_RE.test(s);
+    || REAUTH_TEXT_RE.test(s)
+    || GATEWAY_GRANT_REVOKED_RE.test(s);
 }
 
 export function isQuotaExhaustionMessage(text) {

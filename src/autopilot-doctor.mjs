@@ -1,12 +1,12 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 51833091a7cec309c86d19b859f821a1713585b55718251235dbd57872ddd76e).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 32464e639d9276cbc797df0248981289de27b5025ce104ad56c67942e1bf0179).
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
 import {constants} from 'node:fs';
-import {join, resolve, delimiter} from 'node:path';
+import {dirname, join, resolve, delimiter} from 'node:path';
 import {runAgentProcess, parseAgentAuthStatus} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
-import {isCloudAccountsActive, managedCodexAuthPath, pddManagedCodexHome} from './login-pool.mjs';
+import {isCloudAccountsActive, managedClaudeSettingsPath, managedCodexAuthPath, pddManagedCodexHome} from './login-pool.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
 import {health as runtimeHealthCheck, runtimeClientSlice} from './runtime-seam.mjs';
@@ -33,6 +33,22 @@ export async function resolveAutopilotAgent(input, ports = {}) {
     }
   }
   const files = ports.files ?? nativeFiles;
+  const isRegularManagedFile = filePath => {
+    try {
+      const useLstat = files === nativeFiles
+        || (typeof files.lstatSync === 'function' && files.lstatSync !== nativeFiles.lstatSync);
+      if (useLstat) {
+        const dirStat = files.lstatSync(dirname(filePath));
+        if (!dirStat || dirStat.isSymbolicLink() || !dirStat.isDirectory()) return false;
+      }
+      const st = useLstat ? files.lstatSync(filePath) : files.statSync?.(filePath);
+      if (!st) return false;
+      if (typeof st.isSymbolicLink === 'function' && st.isSymbolicLink()) return false;
+      return Boolean(st.isFile?.());
+    } catch {
+      return false;
+    }
+  };
   const invocation = def => {
     const env = {...caller, ...def?.env};
     if (profile) {
@@ -41,9 +57,10 @@ export async function resolveAutopilotAgent(input, ports = {}) {
       for (const name of ALL_PROVIDER_CONFIG_VARS) {
         if (name === variable && profile.configHome) env[name] = profile.configHome; else delete env[name];
       }
-    } else if (def?.kind === 'codex' && !(typeof env.CODEX_HOME === 'string' && env.CODEX_HOME.trim())) {
+    }
+    if (!profile?.configHome && def?.kind === 'codex' && !(typeof env.CODEX_HOME === 'string' && env.CODEX_HOME.trim())) {
       try {
-        if (isCloudAccountsActive({env, provider: 'codex'}, {fs: files}) && files.statSync?.(managedCodexAuthPath(env))?.isFile()) {
+        if (isCloudAccountsActive({env, provider: 'codex'}, {fs: files}) && isRegularManagedFile(managedCodexAuthPath(env))) {
           env.CODEX_HOME = pddManagedCodexHome(env);
         }
       } catch {}
@@ -86,9 +103,22 @@ export async function resolveAutopilotAgent(input, ports = {}) {
           if (agent) break;
         }
       } else if (['codex','claude'].includes(def.kind)) {
-        const status=await run(def.kind==='codex'?['login','status']:['auth','status','--json']);
+        const useManagedClaude = def.kind === 'claude'
+          && !profile?.configHome
+          && !(typeof env.CLAUDE_CONFIG_DIR === 'string' && env.CLAUDE_CONFIG_DIR.trim())
+          && isCloudAccountsActive({env, provider: 'claude'}, {fs: files})
+          && isRegularManagedFile(managedClaudeSettingsPath(env));
+        let status = await run(
+          def.kind === 'codex'
+            ? ['login','status']
+            : (useManagedClaude ? ['--settings', managedClaudeSettingsPath(env), 'auth', 'status', '--json'] : ['auth','status','--json']),
+        );
         installed.push(def);
         if (parseAgentAuthStatus({agent:def.kind,result:status})==='ready') { agent=def; break; }
+        if (useManagedClaude) {
+          status = await run(['auth','status','--json']);
+          if (parseAgentAuthStatus({agent:def.kind,result:status})==='ready') { agent=def; break; }
+        }
       }
     } catch { /* Another provider may be ready. Never echo provider output. */ }
   }
