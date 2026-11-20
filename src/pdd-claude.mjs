@@ -10,6 +10,8 @@ import {
   buildClaudeGatewaySettingsOverlay,
   CloudAccountsError,
   heartbeatCloudLease,
+  isCloudAccountsActive,
+  isReauthRequiredAccount,
   leaseCloudAccount,
   releaseCloudLease,
   resolvePddStateBase,
@@ -81,14 +83,29 @@ const CLAUDE_VALUE_FLAGS = new Set([
   '--name',
   '--output-format',
   '--permission-mode',
+  '--permission-prompts',
+  '--permission-prompt-tool',
   '--plugin-dir',
   '--plugin-url',
+  '--remote-control-session-name-prefix',
   '--session-id',
   '--setting-sources',
   '--settings',
   '--system-prompt',
   '--system-prompt-file',
   '--system-prompt-snapshot',
+  '--tools',
+]);
+
+const CLAUDE_VARIADIC_VALUE_FLAGS = new Set([
+  '--add-dir',
+  '--allowedTools',
+  '--allowed-tools',
+  '--disallowedTools',
+  '--disallowed-tools',
+  '--betas',
+  '--file',
+  '--mcp-config',
   '--tools',
 ]);
 
@@ -99,6 +116,7 @@ const CLAUDE_OPTIONAL_VALUE_FLAGS = new Set([
   '--from-pr',
   '--prompt-suggestions',
   '-r',
+  '--remote-control',
   '--resume',
   '--teleport',
   '-w',
@@ -117,18 +135,77 @@ const CLAUDE_BOOL_FLAGS = new Set([
   '--chrome',
   '--no-chrome',
   '--dangerously-skip-permissions',
+  '--desktop',
+  '--disable-slash-commands',
   '--exclude-dynamic-system-prompt-sections',
   '--fork-session',
+  '--forward-subagent-text',
   '--ide',
   '--no-ide',
+  '--include-hook-events',
   '--include-partial-messages',
   '--no-session-persistence',
   '-p',
   '--print',
   '--replay-user-messages',
+  '--restricted',
+  '--safe-mode',
   '--strict-mcp-config',
   '--tmux',
   '--verbose',
+]);
+
+const CLAUDE_SESSION_ONLY_FLAGS = new Set([
+  '--add-dir',
+  '--agent',
+  '--agents',
+  '--allow-dangerously-skip-permissions',
+  '--allowedTools',
+  '--allowed-tools',
+  '--append-system-prompt',
+  '--append-system-prompt-file',
+  '--bare',
+  '--betas',
+  '--bg',
+  '--background',
+  '-c',
+  '--continue',
+  '--chrome',
+  '--no-chrome',
+  '--dangerously-skip-permissions',
+  '--disallowedTools',
+  '--disallowed-tools',
+  '--effort',
+  '--fallback-model',
+  '--file',
+  '--fork-session',
+  '--input-format',
+  '--json-schema',
+  '--max-budget-usd',
+  '--mcp-config',
+  '--model',
+  '-n',
+  '--name',
+  '--no-session-persistence',
+  '--output-format',
+  '-p',
+  '--print',
+  '--permission-mode',
+  '--permission-prompts',
+  '--permission-prompt-tool',
+  '-r',
+  '--resume',
+  '--restricted',
+  '--safe-mode',
+  '--session-id',
+  '--settings',
+  '--setting-sources',
+  '--strict-mcp-config',
+  '--system-prompt',
+  '--system-prompt-file',
+  '--tools',
+  '-w',
+  '--worktree',
 ]);
 
 const PDD_CLAUDE_HELP_TEXT = [
@@ -235,20 +312,21 @@ export function parsePddClaudeArgs(argv = []) {
       continue;
     }
     if (token === '--account') {
-      const next = args[idx + 1];
+      const nextRaw = args[idx + 1];
+      const next = typeof nextRaw === 'string' ? nextRaw.trim() : '';
       if (!next || next === '--' || next.startsWith('-')) {
         throw new CloudAccountsError('Missing value for --account. Usage: pdd-claude --account <label> [CLAUDE_ARGS...]', {
           code: 'invalid_args',
           exitCode: 2,
         });
       }
-      preferredAccount = next.trim();
+      preferredAccount = next;
       idx += 2;
       continue;
     }
     if (token.startsWith('--account=')) {
       const val = token.slice('--account='.length).trim();
-      if (!val) {
+      if (!val || val === '--' || val.startsWith('-')) {
         throw new CloudAccountsError('Missing value for --account. Usage: pdd-claude --account <label> [CLAUDE_ARGS...]', {
           code: 'invalid_args',
           exitCode: 2,
@@ -278,6 +356,8 @@ export function inspectClaudeInvocation(claudeArgs = []) {
   let subcommandArg = null;
   let hasHelpOrVersion = false;
   let hasBareFlag = false;
+  let hasBackgroundFlag = false;
+  let hasSessionOnlyFlag = false;
 
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
@@ -288,54 +368,102 @@ export function inspectClaudeInvocation(claudeArgs = []) {
     }
     if (token === '--bare') {
       hasBareFlag = true;
+      hasSessionOnlyFlag = true;
+      continue;
+    }
+    if (token === '--bg' || token === '--background') {
+      hasBackgroundFlag = true;
+      hasSessionOnlyFlag = true;
+      continue;
+    }
+    if (token.startsWith('--') && token.includes('=')) {
+      const flagName = token.slice(0, token.indexOf('='));
+      if (CLAUDE_SESSION_ONLY_FLAGS.has(flagName)) {
+        hasSessionOnlyFlag = true;
+      }
+      continue;
+    }
+    if (CLAUDE_SESSION_ONLY_FLAGS.has(token)) {
+      hasSessionOnlyFlag = true;
+    }
+    if (CLAUDE_VARIADIC_VALUE_FLAGS.has(token)) {
+      if (i + 1 < args.length) {
+        i += 1;
+        while (i + 1 < args.length && args[i + 1] !== '--' && !args[i + 1].startsWith('-')) {
+          i += 1;
+        }
+      }
+      continue;
+    }
+    if (CLAUDE_VALUE_FLAGS.has(token)) {
+      i += 1;
+      continue;
+    }
+    if (CLAUDE_OPTIONAL_VALUE_FLAGS.has(token)) {
+      const next = args[i + 1];
+      if (next && next !== '--' && !next.startsWith('-')) {
+        i += 1;
+      }
+      continue;
+    }
+    if (CLAUDE_BOOL_FLAGS.has(token) || token.startsWith('-')) {
       continue;
     }
     if (subcommand === null) {
-      if (token.startsWith('--') && token.includes('=')) {
-        continue;
-      }
-      if (CLAUDE_VALUE_FLAGS.has(token)) {
-        i += 1;
-        continue;
-      }
-      if (CLAUDE_OPTIONAL_VALUE_FLAGS.has(token)) {
-        const next = args[i + 1];
-        if (next && next !== '--' && !next.startsWith('-')) {
-          i += 1;
-        }
-        continue;
-      }
-      if (CLAUDE_BOOL_FLAGS.has(token)) {
-        continue;
-      }
-      if (token.startsWith('-')) {
-        continue;
-      }
       subcommand = token;
       continue;
     }
-    if (subcommandArg === null && !token.startsWith('-')) {
+    if (subcommandArg === null) {
       subcommandArg = token;
     }
   }
 
   if (hasHelpOrVersion) {
-    return { mode: 'pass_through', subcommand, subcommandArg, hasBareFlag };
+    return { mode: 'pass_through', subcommand, subcommandArg, hasBareFlag, hasBackgroundFlag };
   }
-  if (subcommand === 'logout') {
-    return { mode: 'logout', subcommand, subcommandArg, hasBareFlag };
+  if (!hasSessionOnlyFlag && subcommand === 'logout') {
+    return { mode: 'logout', subcommand, subcommandArg, hasBareFlag, hasBackgroundFlag };
   }
   if (
-    subcommand === 'login'
-    || subcommand === 'setup-token'
-    || (subcommand === 'auth' && (subcommandArg === 'login' || subcommandArg === 'logout'))
+    !hasSessionOnlyFlag
+    && (
+      subcommand === 'login'
+      || subcommand === 'setup-token'
+      || (subcommand === 'auth' && (subcommandArg === 'login' || subcommandArg === 'logout'))
+    )
   ) {
-    return { mode: 'login_hint', subcommand, subcommandArg, hasBareFlag };
+    return { mode: 'login_hint', subcommand, subcommandArg, hasBareFlag, hasBackgroundFlag };
   }
-  if (subcommand === 'auth' || (subcommand && PASS_THROUGH_SUBCOMMANDS.has(subcommand))) {
-    return { mode: 'pass_through', subcommand, subcommandArg, hasBareFlag };
+  if (!hasSessionOnlyFlag && (subcommand === 'auth' || (subcommand && PASS_THROUGH_SUBCOMMANDS.has(subcommand)))) {
+    return { mode: 'pass_through', subcommand, subcommandArg, hasBareFlag, hasBackgroundFlag };
   }
-  return { mode: 'leased', subcommand, subcommandArg, hasBareFlag };
+  return { mode: 'leased', subcommand, subcommandArg, hasBareFlag, hasBackgroundFlag };
+}
+
+/**
+ * Find the index of a true `--` end-of-options separator in Claude CLI args,
+ * skipping values consumed by Claude value flags so a flag value of `"--"` is not mistaken.
+ */
+export function findClaudeDoubleDashIndex(claudeArgs = []) {
+  const args = Array.isArray(claudeArgs) ? claudeArgs.map(String) : [];
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === '--') return i;
+    if (token.startsWith('--') && token.includes('=')) continue;
+    if (CLAUDE_VALUE_FLAGS.has(token)) {
+      i += 1;
+      continue;
+    }
+  }
+  return -1;
+}
+
+export function spliceClaudeExtraArgs(args = [], extraArgs = []) {
+  const base = Array.isArray(args) ? [...args] : [];
+  if (!Array.isArray(extraArgs) || extraArgs.length === 0) return base;
+  const dd = findClaudeDoubleDashIndex(base);
+  if (dd === -1) return [...base, ...extraArgs];
+  return [...base.slice(0, dd), ...extraArgs, ...base.slice(dd)];
 }
 
 /**
@@ -374,6 +502,14 @@ export function extractAndParseUserClaudeSettings(claudeArgs = [], { cwd = proce
     }
     if (token.startsWith('--settings=')) {
       lastRawSettings = token.slice('--settings='.length);
+      continue;
+    }
+    if (!token.includes('=') && CLAUDE_VALUE_FLAGS.has(token)) {
+      strippedArgs.push(token);
+      if (i + 1 < args.length) {
+        strippedArgs.push(args[i + 1]);
+        i += 1;
+      }
       continue;
     }
     strippedArgs.push(token);
@@ -433,11 +569,7 @@ export function extractAndParseUserClaudeSettings(claudeArgs = [], { cwd = proce
 
 export function injectClaudeSettingsArg(strippedArgs = [], settingsPath) {
   const args = Array.isArray(strippedArgs) ? [...strippedArgs] : [];
-  const ddIndex = args.indexOf('--');
-  if (ddIndex === -1) {
-    return ['--settings', settingsPath, ...args];
-  }
-  return ['--settings', settingsPath, ...args.slice(0, ddIndex), ...args.slice(ddIndex)];
+  return ['--settings', settingsPath, ...args];
 }
 
 export function buildPddClaudeChildEnv(baseEnv = process.env) {
@@ -461,20 +593,71 @@ export function sharedClaudeRuntimeDir(env = process.env, uid = typeof process.g
   return join(resolveClaudeRuntimeRoot(env), `pdd-claude-${uid}`);
 }
 
-function assertSafePrivateDir(fs, dirPath) {
-  fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
-  const stat = fs.lstatSync(dirPath);
+function assertSafePrivateDir(fs, dirPath, { checkAncestors = true } = {}) {
+  const currentUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const target = resolve(dirPath);
+
+  if (checkAncestors) {
+    // Walk up ancestors before mkdirSync so an attacker-owned symlink ancestor cannot redirect
+    // directory creation into an untrusted directory (while allowing root-owned OS symlinks
+    // like macOS /var -> /private/var and /tmp -> /private/tmp).
+    const chain = [];
+    let cursor = dirname(target);
+    while (cursor && cursor !== dirname(cursor)) {
+      chain.push(cursor);
+      cursor = dirname(cursor);
+    }
+    for (const ancestor of chain) {
+      let aStat;
+      try {
+        aStat = fs.lstatSync(ancestor);
+      } catch (err) {
+        if (err?.code === 'ENOENT') continue;
+        throw err;
+      }
+      if (aStat.isSymbolicLink()) {
+        if (currentUid !== null && typeof aStat.uid === 'number' && aStat.uid !== 0 && aStat.uid !== currentUid) {
+          throw new CloudAccountsError(`Refusing unsafe pdd-claude runtime path "${dirPath}" via untrusted symlink ancestor.`, {
+            code: 'unsafe_runtime_dir',
+          });
+        }
+      }
+    }
+  }
+
+  let preStat = null;
+  try {
+    preStat = fs.lstatSync(target);
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  if (preStat) {
+    if (preStat.isSymbolicLink() || !preStat.isDirectory()) {
+      throw new CloudAccountsError(`Refusing unsafe pdd-claude runtime path "${dirPath}".`, {
+        code: 'unsafe_runtime_dir',
+      });
+    }
+    if (currentUid !== null && typeof preStat.uid === 'number' && preStat.uid !== currentUid) {
+      throw new CloudAccountsError(`Refusing pdd-claude runtime path "${dirPath}" owned by another user.`, {
+        code: 'unsafe_runtime_dir',
+      });
+    }
+  } else {
+    fs.mkdirSync(target, { recursive: true, mode: 0o700 });
+  }
+
+  const stat = fs.lstatSync(target);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new CloudAccountsError(`Refusing unsafe pdd-claude runtime path "${dirPath}".`, {
       code: 'unsafe_runtime_dir',
     });
   }
-  if (typeof process.getuid === 'function' && typeof stat.uid === 'number' && stat.uid !== process.getuid()) {
+  if (currentUid !== null && typeof stat.uid === 'number' && stat.uid !== currentUid) {
     throw new CloudAccountsError(`Refusing pdd-claude runtime path "${dirPath}" owned by another user.`, {
       code: 'unsafe_runtime_dir',
     });
   }
-  try { fs.chmodSync?.(dirPath, 0o700); } catch {}
+  try { fs.chmodSync?.(target, 0o700); } catch {}
 }
 
 export async function withClaudeRuntimeLock(runtimeDir, fn, ports = {}) {
@@ -484,6 +667,7 @@ export async function withClaudeRuntimeLock(runtimeDir, fn, ports = {}) {
   const isPidAlive = ports.isPidAlive ?? defaultIsPidAlive;
   const timeoutMs = ports.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
   const staleMs = ports.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
+  const ownerPid = ports.pid ?? process.pid;
 
   assertSafePrivateDir(fs, runtimeDir);
   const lockDir = join(runtimeDir, '.lock');
@@ -499,7 +683,7 @@ export async function withClaudeRuntimeLock(runtimeDir, fn, ports = {}) {
       acquired = true;
       try {
         fs.writeFileSync(ownerFile, JSON.stringify({
-          pid: process.pid,
+          pid: ownerPid,
           lockToken,
           acquiredAt: now(),
         }), { mode: 0o600 });
@@ -514,7 +698,7 @@ export async function withClaudeRuntimeLock(runtimeDir, fn, ports = {}) {
         const ageMs = now() - (typeof owner?.acquiredAt === 'number' ? owner.acquiredAt : stat.mtimeMs);
         const deadOwner = owner && Number.isInteger(owner.pid) && !isPidAlive(owner.pid) && ageMs >= DEAD_LOCK_GRACE_MS;
         if (deadOwner || ageMs >= staleMs) {
-          const reclaimDir = `${lockDir}.stale-${process.pid}-${randomBytes(4).toString('hex')}`;
+          const reclaimDir = `${lockDir}.stale-${ownerPid}-${randomBytes(4).toString('hex')}`;
           try {
             fs.renameSync(lockDir, reclaimDir);
             fs.rmSync(reclaimDir, { recursive: true, force: true });
@@ -552,9 +736,10 @@ function sweepDeadPids(fs, pidsDir, isPidAlive) {
   let entries = [];
   try { entries = fs.readdirSync(pidsDir); } catch { return live; }
   for (const name of entries) {
-    const pid = Number(name);
+    const validPidName = /^\d+$/.test(name);
+    const pid = validPidName ? Number(name) : NaN;
     const full = join(pidsDir, name);
-    if (!Number.isInteger(pid) || pid <= 0 || !isPidAlive(pid)) {
+    if (!validPidName || !Number.isSafeInteger(pid) || pid <= 0 || !isPidAlive(pid)) {
       unlinkQuiet(fs, full);
     } else {
       live.push(pid);
@@ -587,8 +772,7 @@ function isReusableClaudeLease(meta, nowMs) {
 }
 
 function writeSessionSettingsFile(fs, sessionsDir, pid, lease, { env, userSettings }, ports) {
-  fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync?.(sessionsDir, 0o700); } catch {}
+  assertSafePrivateDir(fs, sessionsDir, { checkAncestors: false });
   const { settings } = buildClaudeGatewaySettingsOverlay(lease, { env, userSettings }, ports);
   const fileName = `settings-${pid}-${randomBytes(6).toString('hex')}.json`;
   const settingsPath = join(sessionsDir, fileName);
@@ -620,6 +804,15 @@ function normalizeLeaseRecord(reply, nowMs) {
   };
 }
 
+function assertAccountNotReauthRequired(account, fallbackLabel = null) {
+  if (!account || !isReauthRequiredAccount(account)) return;
+  const label = account.label || fallbackLabel || 'your Claude account';
+  throw new CloudAccountsError(
+    `PDD Cloud Claude account "${label}" requires re-authentication. Run \`pdd accounts add --provider claude --label ${label}\` or pick another account.`,
+    { code: 'reauth_required', exitCode: 1 },
+  );
+}
+
 export async function acquireSharedClaudeRuntimeSession({
   cwd = process.cwd(),
   env = process.env,
@@ -643,8 +836,8 @@ export async function acquireSharedClaudeRuntimeSession({
   } catch {}
 
   return await withClaudeRuntimeLock(runtimeDir, async () => {
-    fs.mkdirSync(pidsDir, { recursive: true, mode: 0o700 });
-    fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+    assertSafePrivateDir(fs, pidsDir, { checkAncestors: false });
+    assertSafePrivateDir(fs, sessionsDir, { checkAncestors: false });
     const livePids = sweepDeadPids(fs, pidsDir, isPidAlive);
     sweepStaleSessionFiles(fs, sessionsDir, livePids);
 
@@ -665,7 +858,10 @@ export async function acquireSharedClaudeRuntimeSession({
           { code: 'no_ready_account', exitCode: 1 },
         );
       }
+      assertAccountNotReauthRequired(reply.account);
       leaseMeta = normalizeLeaseRecord(reply, now());
+      // Validate gateway URL and overlay before persisting lease.json.
+      buildClaudeGatewaySettingsOverlay(leaseMeta, { env, userSettings }, ports);
       writePrivateAtomic(fs, leasePath, `${JSON.stringify(leaseMeta, null, 2)}\n`);
     } else {
       rememberSecrets(leaseMeta.claude_oauth_token, leaseMeta.gateway_bearer_token);
@@ -683,7 +879,7 @@ export async function acquireSharedClaudeRuntimeSession({
       reused,
       lease: leaseMeta,
     };
-  }, ports);
+  }, { ...ports, pid });
 }
 
 export async function releaseSharedClaudeRuntimeSession(session, { cwd = process.cwd(), env = process.env } = {}, ports = {}) {
@@ -695,21 +891,26 @@ export async function releaseSharedClaudeRuntimeSession(session, { cwd = process
   const sessionsDir = join(session.runtimeDir, 'sessions');
   const leasePath = join(session.runtimeDir, 'lease.json');
 
+  assertSafePrivateDir(fs, dirname(session.runtimeDir));
   unlinkQuiet(fs, session.settingsPath);
 
   let leaseIdToRevoke = null;
-  await withClaudeRuntimeLock(session.runtimeDir, async () => {
-    unlinkQuiet(fs, join(pidsDir, String(session.pid)));
-    const remaining = sweepDeadPids(fs, pidsDir, isPidAlive);
-    sweepStaleSessionFiles(fs, sessionsDir, remaining);
-    if (remaining.length === 0) {
-      const meta = readJsonFileQuiet(fs, leasePath);
-      if (typeof meta?.lease_id === 'string' && meta.lease_id.trim()) {
-        leaseIdToRevoke = meta.lease_id.trim();
+  try {
+    await withClaudeRuntimeLock(session.runtimeDir, async () => {
+      unlinkQuiet(fs, join(pidsDir, String(session.pid)));
+      const remaining = sweepDeadPids(fs, pidsDir, isPidAlive);
+      sweepStaleSessionFiles(fs, sessionsDir, remaining);
+      if (remaining.length === 0) {
+        const meta = readJsonFileQuiet(fs, leasePath);
+        if (typeof meta?.lease_id === 'string' && meta.lease_id.trim()) {
+          leaseIdToRevoke = meta.lease_id.trim();
+        }
+        unlinkQuiet(fs, leasePath);
       }
-      unlinkQuiet(fs, leasePath);
-    }
-  }, ports);
+    }, { ...ports, pid: session.pid });
+  } catch {
+    unlinkQuiet(fs, join(pidsDir, String(session.pid)));
+  }
 
   if (leaseIdToRevoke) {
     try {
@@ -743,6 +944,7 @@ export async function acquirePinnedClaudeRuntimeSession({
     const reply = await leaseFn({
       provider: 'claude',
       preferredLabel: preferredAccount,
+      currentAccountId: null,
       holderId: `pdd-claude-pin-${pid}`,
       autoRotate: false,
       updateState: false,
@@ -754,10 +956,11 @@ export async function acquirePinnedClaudeRuntimeSession({
         { code: 'no_ready_account', exitCode: 1 },
       );
     }
+    assertAccountNotReauthRequired(reply.account, preferredAccount);
     const leaseMeta = { ...normalizeLeaseRecord(reply, now()), auto_rotate: false };
+    const settingsPath = writeSessionSettingsFile(fs, join(runtimeDir, 'sessions'), pid, leaseMeta, { env, userSettings }, ports);
     const leasePath = join(runtimeDir, 'lease.json');
     writePrivateAtomic(fs, leasePath, `${JSON.stringify(leaseMeta, null, 2)}\n`);
-    const settingsPath = writeSessionSettingsFile(fs, join(runtimeDir, 'sessions'), pid, leaseMeta, { env, userSettings }, ports);
     return {
       mode: 'pinned',
       runtimeDir,
@@ -795,6 +998,7 @@ export function startClaudeLeaseHeartbeat(session, { cwd = process.cwd(), env = 
   const now = ports.now ?? Date.now;
   const heartbeatFn = ports.heartbeatCloudLease ?? heartbeatCloudLease;
   const intervalMs = ports.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) return () => {};
   const minSpacingMs = Math.max(1_000, Math.floor(intervalMs * 0.6));
 
   let stopped = false;
@@ -809,9 +1013,10 @@ export function startClaudeLeaseHeartbeat(session, { cwd = process.cwd(), env = 
 
   const tick = async () => {
     if (stopped) return;
+    let leaseId = null;
     try {
       const meta = readJsonFileQuiet(fs, session.leasePath);
-      const leaseId = typeof meta?.lease_id === 'string' && meta.lease_id.trim()
+      leaseId = typeof meta?.lease_id === 'string' && meta.lease_id.trim()
         ? meta.lease_id.trim()
         : null;
       if (!leaseId) {
@@ -826,6 +1031,7 @@ export function startClaudeLeaseHeartbeat(session, { cwd = process.cwd(), env = 
       const beat = await heartbeatFn(leaseId, { cwd, env }, ports);
       if (stopped) return;
       const persistUpdate = async () => {
+        if (stopped) return;
         const latest = readJsonFileQuiet(fs, session.leasePath);
         if (!latest || latest.lease_id !== leaseId) return;
         const updated = {
@@ -837,19 +1043,24 @@ export function startClaudeLeaseHeartbeat(session, { cwd = process.cwd(), env = 
         writePrivateAtomic(fs, session.leasePath, `${JSON.stringify(updated, null, 2)}\n`);
       };
       if (session.mode === 'shared') {
-        await withClaudeRuntimeLock(session.runtimeDir, persistUpdate, ports);
+        await withClaudeRuntimeLock(session.runtimeDir, persistUpdate, { ...ports, pid: session.pid });
       } else {
         await persistUpdate();
       }
     } catch (err) {
       const status = err?.status ?? 0;
       if (status === 401 || status === 403 || status === 404) {
+        const failedLeaseId = leaseId;
         const clearDeadLease = async () => {
-          unlinkQuiet(fs, session.leasePath);
+          if (stopped) return;
+          const latest = readJsonFileQuiet(fs, session.leasePath);
+          if (latest && failedLeaseId && latest.lease_id === failedLeaseId) {
+            unlinkQuiet(fs, session.leasePath);
+          }
         };
         try {
           if (session.mode === 'shared') {
-            await withClaudeRuntimeLock(session.runtimeDir, clearDeadLease, ports);
+            await withClaudeRuntimeLock(session.runtimeDir, clearDeadLease, { ...ports, pid: session.pid });
           } else {
             await clearDeadLease();
           }
@@ -874,24 +1085,35 @@ export function startClaudeLeaseHeartbeat(session, { cwd = process.cwd(), env = 
 export async function logoutSharedClaudeRuntime({ cwd = process.cwd(), env = process.env } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const releaseFn = ports.releaseCloudLease ?? releaseCloudLease;
+  const runtimeRoot = resolveClaudeRuntimeRoot(env);
   const runtimeDir = sharedClaudeRuntimeDir(env, ports.uid);
   const leasePath = join(runtimeDir, 'lease.json');
   const sessionsDir = join(runtimeDir, 'sessions');
 
   let revokedLeaseId = null;
-  if (fs.existsSync?.(runtimeDir)) {
-    await withClaudeRuntimeLock(runtimeDir, async () => {
-      const meta = readJsonFileQuiet(fs, leasePath);
-      if (typeof meta?.lease_id === 'string' && meta.lease_id.trim()) {
-        revokedLeaseId = meta.lease_id.trim();
-      }
-      unlinkQuiet(fs, leasePath);
-      try {
-        for (const name of fs.readdirSync(sessionsDir)) {
-          unlinkQuiet(fs, join(sessionsDir, name));
+  let rootExists = false;
+  try {
+    fs.lstatSync(runtimeRoot);
+    rootExists = true;
+  } catch (err) {
+    if (err?.code !== 'ENOENT') throw err;
+  }
+  if (rootExists) {
+    assertSafePrivateDir(fs, runtimeRoot);
+    if (fs.existsSync?.(runtimeDir)) {
+      await withClaudeRuntimeLock(runtimeDir, async () => {
+        const meta = readJsonFileQuiet(fs, leasePath);
+        if (typeof meta?.lease_id === 'string' && meta.lease_id.trim()) {
+          revokedLeaseId = meta.lease_id.trim();
         }
-      } catch {}
-    }, ports);
+        unlinkQuiet(fs, leasePath);
+        try {
+          for (const name of fs.readdirSync(sessionsDir)) {
+            unlinkQuiet(fs, join(sessionsDir, name));
+          }
+        } catch {}
+      }, ports);
+    }
   }
 
   if (revokedLeaseId) {
@@ -904,7 +1126,14 @@ export async function logoutSharedClaudeRuntime({ cwd = process.cwd(), env = pro
   return { revokedLeaseId, restored };
 }
 
-function spawnClaudePassthrough(claudeBin, args, { cwd, env }, ports = {}) {
+function signalToExitCode(signal) {
+  if (signal === 'SIGINT') return 130;
+  if (signal === 'SIGTERM') return 143;
+  if (signal === 'SIGHUP') return 129;
+  return 1;
+}
+
+function spawnClaudePassthrough(claudeBin, args, { cwd, env, onChild } = {}, ports = {}) {
   const spawnImpl = ports.spawn ?? nativeSpawn;
   return new Promise(resolveExit => {
     let child;
@@ -914,20 +1143,26 @@ function spawnClaudePassthrough(claudeBin, args, { cwd, env }, ports = {}) {
       resolveExit({ exitCode: err?.code === 'ENOENT' ? 127 : 1, error: err });
       return;
     }
+    onChild?.(child);
     const forward = sig => {
       try { child.kill?.(sig); } catch {}
     };
     const onSigInt = () => forward('SIGINT');
     const onSigTerm = () => forward('SIGTERM');
     const onSigHup = () => forward('SIGHUP');
-    process.on('SIGINT', onSigInt);
-    process.on('SIGTERM', onSigTerm);
-    process.on('SIGHUP', onSigHup);
+    if (!onChild) {
+      process.on('SIGINT', onSigInt);
+      process.on('SIGTERM', onSigTerm);
+      process.on('SIGHUP', onSigHup);
+    }
 
     const detach = () => {
-      process.off('SIGINT', onSigInt);
-      process.off('SIGTERM', onSigTerm);
-      process.off('SIGHUP', onSigHup);
+      onChild?.(null);
+      if (!onChild) {
+        process.off('SIGINT', onSigInt);
+        process.off('SIGTERM', onSigTerm);
+        process.off('SIGHUP', onSigHup);
+      }
     };
 
     child.on('error', err => {
@@ -937,12 +1172,20 @@ function spawnClaudePassthrough(claudeBin, args, { cwd, env }, ports = {}) {
     child.on('close', (code, signal) => {
       detach();
       if (typeof code === 'number') resolveExit({ exitCode: code });
-      else if (signal === 'SIGINT') resolveExit({ exitCode: 130 });
-      else if (signal === 'SIGTERM') resolveExit({ exitCode: 143 });
-      else if (signal === 'SIGHUP') resolveExit({ exitCode: 129 });
+      else if (signal) resolveExit({ exitCode: signalToExitCode(signal) });
       else resolveExit({ exitCode: 1 });
     });
   });
+}
+
+function isAutoFailOpenLeaseError(err) {
+  const code = String(err?.code ?? '');
+  if (['timeout', 'network_error', 'missing_auth_token', 'no_ready_account', 'all_cooling'].includes(code)) {
+    return true;
+  }
+  const status = Number(err?.status ?? 0);
+  if (status === 0 || status >= 500) return true;
+  return false;
 }
 
 export async function runPddClaudeCli(argv = [], {
@@ -967,7 +1210,16 @@ export async function runPddClaudeCli(argv = [], {
     return { exitCode: 0 };
   }
 
+  const autoFailOpen = env?.PDD_CLAUDE_AUTO_FAIL_OPEN === '1' && !parsed.preferredAccount;
   const inspection = inspectClaudeInvocation(parsed.claudeArgs);
+
+  if (autoFailOpen && (inspection.mode === 'logout' || inspection.mode === 'login_hint')) {
+    const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env }, ports);
+    if (res.error) {
+      stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
+    }
+    return { exitCode: res.exitCode };
+  }
 
   if (inspection.mode === 'logout') {
     try {
@@ -989,7 +1241,7 @@ export async function runPddClaudeCli(argv = [], {
       'pdd-claude uses your PDD Cloud shared account pool and never modifies your personal Claude login.\n'
       + '  - Enroll a Claude account into PDD Cloud: pdd accounts add --provider claude\n'
       + '  - End the shared pdd-claude session:      pdd-claude logout\n'
-      + '  - Manage your personal Claude login:      claude auth login / claude auth logout\n',
+      + '  - Manage your personal Claude login:      command claude auth login / command claude auth logout\n',
     );
     return { exitCode: 0 };
   }
@@ -1000,6 +1252,26 @@ export async function runPddClaudeCli(argv = [], {
       stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
     }
     return { exitCode: res.exitCode };
+  }
+
+  if (autoFailOpen && !ports.leaseCloudAccount && !isCloudAccountsActive({ env, provider: 'claude' }, ports)) {
+    const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env }, ports);
+    if (res.error) {
+      stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
+    }
+    return { exitCode: res.exitCode };
+  }
+
+  if (inspection.hasBackgroundFlag) {
+    if (autoFailOpen) {
+      const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, { cwd, env }, ports);
+      if (res.error) {
+        stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
+      }
+      return { exitCode: res.exitCode };
+    }
+    stderr.write('pdd-claude does not support `--bg` / `--background` because detached Claude exits immediately and revokes its leased session. Run without `--bg` or use `command claude`.\n');
+    return { exitCode: 2 };
   }
 
   if (inspection.hasBareFlag) {
@@ -1016,27 +1288,84 @@ export async function runPddClaudeCli(argv = [], {
 
   let session = null;
   let stopHeartbeat = () => {};
+  let activeChild = null;
+  let receivedSignal = null;
+  let cleanedUp = false;
+
+  const syncEmergencyCleanup = () => {
+    if (cleanedUp || !session) return;
+    cleanedUp = true;
+    try {
+      if (session.mode === 'pinned' && session.runtimeDir) {
+        fs.rmSync(session.runtimeDir, { recursive: true, force: true });
+      } else {
+        unlinkQuiet(fs, session.settingsPath);
+        if (session.runtimeDir && session.pid) {
+          unlinkQuiet(fs, join(session.runtimeDir, 'pids', String(session.pid)));
+        }
+      }
+    } catch {}
+  };
+
+  const onLifecycleSignal = sig => {
+    receivedSignal = sig;
+    if (activeChild) {
+      try { activeChild.kill?.(sig); } catch {}
+    }
+  };
+  const onSigInt = () => onLifecycleSignal('SIGINT');
+  const onSigTerm = () => onLifecycleSignal('SIGTERM');
+  const onSigHup = () => onLifecycleSignal('SIGHUP');
+
+  process.on('exit', syncEmergencyCleanup);
+  process.on('SIGINT', onSigInt);
+  process.on('SIGTERM', onSigTerm);
+  process.on('SIGHUP', onSigHup);
+
   try {
-    session = parsed.preferredAccount
-      ? await acquirePinnedClaudeRuntimeSession({
-          preferredAccount: parsed.preferredAccount,
+    try {
+      session = parsed.preferredAccount
+        ? await acquirePinnedClaudeRuntimeSession({
+            preferredAccount: parsed.preferredAccount,
+            cwd,
+            env,
+            pid: ports.pid ?? process.pid,
+            userSettings: extracted.userSettings,
+          }, ports)
+        : await acquireSharedClaudeRuntimeSession({
+            cwd,
+            env,
+            pid: ports.pid ?? process.pid,
+            userSettings: extracted.userSettings,
+          }, ports);
+    } catch (err) {
+      if (autoFailOpen && isAutoFailOpenLeaseError(err)) {
+        const res = await spawnClaudePassthrough(claudeBin, parsed.claudeArgs, {
           cwd,
           env,
-          pid: ports.pid ?? process.pid,
-          userSettings: extracted.userSettings,
-        }, ports)
-      : await acquireSharedClaudeRuntimeSession({
-          cwd,
-          env,
-          pid: ports.pid ?? process.pid,
-          userSettings: extracted.userSettings,
+          onChild: child => { activeChild = child; },
         }, ports);
+        if (res.error) {
+          stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
+        }
+        return { exitCode: res.exitCode };
+      }
+      throw err;
+    }
+
+    if (receivedSignal) {
+      return { exitCode: signalToExitCode(receivedSignal) };
+    }
 
     stopHeartbeat = startClaudeLeaseHeartbeat(session, { cwd, env }, ports);
 
     const finalArgs = injectClaudeSettingsArg(extracted.strippedArgs, session.settingsPath);
     const childEnv = buildPddClaudeChildEnv(env);
-    const res = await spawnClaudePassthrough(claudeBin, finalArgs, { cwd, env: childEnv }, ports);
+    const res = await spawnClaudePassthrough(claudeBin, finalArgs, {
+      cwd,
+      env: childEnv,
+      onChild: child => { activeChild = child; },
+    }, ports);
     if (res.error) {
       stderr.write(`Failed to launch "${claudeBin}": ${redactSecrets(res.error.message || String(res.error))}\n`);
     }
@@ -1053,7 +1382,14 @@ export async function runPddClaudeCli(argv = [], {
         } else {
           await releaseSharedClaudeRuntimeSession(session, { cwd, env }, ports);
         }
-      } catch {}
+        cleanedUp = true;
+      } catch {
+        syncEmergencyCleanup();
+      }
     }
+    process.off('exit', syncEmergencyCleanup);
+    process.off('SIGINT', onSigInt);
+    process.off('SIGTERM', onSigTerm);
+    process.off('SIGHUP', onSigHup);
   }
 }

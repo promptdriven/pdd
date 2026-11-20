@@ -3,7 +3,7 @@ import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { parseAgentAuthStatus, runAgentProcess } from './agent-adapters.mjs';
 import * as codexLimitsModule from './codex-limits.mjs';
 import { knownSecretValues, redactSecrets, rememberSecrets } from './secret-redaction.mjs';
@@ -102,8 +102,8 @@ const MIRRORED_CODEX_DOT_TMP_SET = new Set(MIRRORED_CODEX_DOT_TMP_ENTRIES);
 const CODEX_GATEWAY_PROVIDER_ID = 'pdd_codex_gateway';
 const INLINE_TOML_TABLE_KEYS = new Set(['http_headers', 'env_http_headers', 'filters', 'set']);
 const MANAGED_CODEX_GATEWAY_RE = /\/v1\/(?:accounts\/)?codex-gateway(?:\/|$)/i;
-const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/;
-const REAUTH_CODE_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked|oauth_not_allowed_for_organization|oauth_org_not_allowed)\b/i;
+const MANAGED_CLAUDE_GATEWAY_RE = /\/v1\/(?:accounts\/)?claude-gateway(?:\/|$)/i;
+const REAUTH_CODE_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked|oauth_not_allowed_for_organization|oauth_org_not_allowed)\b|disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code/i;
 const REAUTH_TEXT_RE = /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_reused|refresh_token_expired|oauth_token_revoked|oauth_not_allowed_for_organization|oauth_org_not_allowed)\b|disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code|(?:status|http|error)[:=\s]+401\b|\b401\s+unauthorized\b/i;
 export const DEFAULT_CLOUD_URL = 'https://pdd-byok-api-c437voydwa-uc.a.run.app';
 export const POOL_FALLBACK_COOLDOWN_MS = 30 * 60 * 1000;
@@ -158,10 +158,15 @@ export class CloudAccountsError extends Error {
 function writeAtomicPrivate(fs, target, text, dirMode = 0o700) {
   fs.mkdirSync(dirname(target), { recursive: true, mode: dirMode });
   const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(tmp, text, { mode: 0o600 });
-  try { fs.chmodSync?.(tmp, 0o600); } catch {}
-  fs.renameSync(tmp, target);
-  try { fs.chmodSync?.(target, 0o600); } catch {}
+  try {
+    fs.writeFileSync(tmp, text, { mode: 0o600 });
+    try { fs.chmodSync?.(tmp, 0o600); } catch {}
+    fs.renameSync(tmp, target);
+    try { fs.chmodSync?.(target, 0o600); } catch {}
+  } catch (error) {
+    try { fs.unlinkSync?.(tmp); } catch {}
+    throw error;
+  }
 }
 
 function readJsonObject(fs, file) {
@@ -446,7 +451,7 @@ export function managedClaudeSettingsPath(env = process.env) {
 export function claudeTokenFingerprint(token) {
   const clean = typeof token === 'string' ? token.trim() : '';
   if (!clean) return '';
-  return createHash('sha256').update(clean, 'utf8').digest('hex');
+  return scryptSync(clean, 'pdd-managed-claude-token-v1', 32).toString('hex');
 }
 
 function normalizeTokenHashes(list) {
@@ -2324,6 +2329,21 @@ export function materializeLocalCodexAuth(authOrLease, { env = process.env, prev
   };
 }
 
+function validateClaudeGatewayUrl(rawUrl) {
+  const raw = String(rawUrl ?? '').trim().replace(/\/+$/, '');
+  if (!raw) throw new CloudAccountsError('Cloud lease returned no Claude gateway URL.', { code: 'invalid_lease' });
+  let parsed;
+  try { parsed = new URL(raw); } catch { throw new CloudAccountsError('Invalid Claude gateway URL in Cloud lease.', { code: 'invalid_lease' }); }
+  if (parsed.username || parsed.password) {
+    throw new CloudAccountsError('Claude gateway URL must not include embedded credentials.', { code: 'invalid_lease' });
+  }
+  const loopback = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(parsed.hostname.toLowerCase());
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    throw new CloudAccountsError('Claude gateway URL requires https://.', { code: 'invalid_lease' });
+  }
+  return raw;
+}
+
 export function buildClaudeGatewaySettingsOverlay(lease, { env = process.env, userSettings = null } = {}, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const token = String(lease?.claude_oauth_token || lease?.gateway_bearer_token || '').trim();
@@ -2340,18 +2360,14 @@ export function buildClaudeGatewaySettingsOverlay(lease, { env = process.env, us
   mergedEnv.CLAUDE_CODE_USE_FOUNDRY = '0';
 
   let managedBaseUrl = false;
-  if (lease?.delivery_mode === 'gateway_grant' && typeof lease.anthropic_base_url === 'string' && lease.anthropic_base_url.trim()) {
-    mergedEnv.ANTHROPIC_BASE_URL = lease.anthropic_base_url.trim();
+  if (lease?.delivery_mode === 'gateway_grant') {
+    mergedEnv.ANTHROPIC_BASE_URL = validateClaudeGatewayUrl(lease.anthropic_base_url);
     managedBaseUrl = true;
   } else {
-    if (MANAGED_CLAUDE_GATEWAY_RE.test(String(mergedEnv.ANTHROPIC_BASE_URL ?? ''))) {
-      delete mergedEnv.ANTHROPIC_BASE_URL;
-    }
-    if (!mergedEnv.ANTHROPIC_BASE_URL) {
-      const userGlobal = readJsonObject(fs, localClaudePaths(env).settingsPath);
-      if (MANAGED_CLAUDE_GATEWAY_RE.test(String(userGlobal?.env?.ANTHROPIC_BASE_URL ?? ''))) {
-        mergedEnv.ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
-      }
+    delete mergedEnv.ANTHROPIC_BASE_URL;
+    const userGlobal = readJsonObject(fs, localClaudePaths(env).settingsPath);
+    if (String(userGlobal?.env?.ANTHROPIC_BASE_URL ?? '').trim()) {
+      mergedEnv.ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
     }
   }
 
@@ -2370,7 +2386,15 @@ export function createClaudeStepSettingsOverlay(lease, { env = process.env, tmpR
   const { settings, managedBaseUrl } = buildClaudeGatewaySettingsOverlay(lease, { env, userSettings }, ports);
   const rootDir = tmpRoot ?? tmpdir();
   fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
-  const overlayDir = fs.mkdtempSync(join(rootDir, 'pdd-cl-'));
+  let overlayDir;
+  if (typeof fs.mkdtempSync === 'function') {
+    overlayDir = fs.mkdtempSync(join(rootDir, 'pdd-cl-'));
+  } else if (fs === nativeFs) {
+    overlayDir = nativeFs.mkdtempSync(join(rootDir, 'pdd-cl-'));
+  } else {
+    overlayDir = join(rootDir, `pdd-cl-${randomBytes(8).toString('hex')}`);
+    fs.mkdirSync(overlayDir, { recursive: true, mode: 0o700 });
+  }
   try { fs.chmodSync?.(overlayDir, 0o700); } catch {}
 
   let cleaned = false;
@@ -2413,10 +2437,8 @@ export function restoreLocalClaudeGatewayConfig({ env = process.env, managedToke
   let removedManagedSettings = false;
   if (removeManagedFile) {
     try {
-      if (fs.existsSync?.(managedPath)) {
-        fs.unlinkSync(managedPath);
-        removedManagedSettings = true;
-      }
+      fs.unlinkSync(managedPath);
+      removedManagedSettings = true;
     } catch {}
   }
 
@@ -2446,10 +2468,11 @@ export function restoreLocalClaudeGatewayConfig({ env = process.env, managedToke
       changed = true;
     }
   }
-  if (MANAGED_CLAUDE_GATEWAY_RE.test(String(settingsEnv.ANTHROPIC_BASE_URL ?? ''))) {
+  if (MANAGED_CLAUDE_GATEWAY_RE.test(String(settingsEnv.ANTHROPIC_BASE_URL ?? '').trim())) {
     delete settingsEnv.ANTHROPIC_BASE_URL;
     changed = true;
   }
+  let restoredSettings = false;
   if (changed) {
     const nextSettings = { ...settings };
     if (Object.keys(settingsEnv).length === 0) {
@@ -2463,9 +2486,16 @@ export function restoreLocalClaudeGatewayConfig({ env = process.env, managedToke
         writeTarget = fs.realpathSync(settingsPath);
       }
     } catch {}
-    writeAtomicPrivate(fs, writeTarget, `${JSON.stringify(nextSettings, null, 2)}\n`);
+    try {
+      writeAtomicPrivate(fs, writeTarget, `${JSON.stringify(nextSettings, null, 2)}\n`);
+      restoredSettings = true;
+    } catch (err) {
+      if (err?.code !== 'EACCES' && err?.code !== 'EROFS' && err?.code !== 'EPERM') {
+        throw err;
+      }
+    }
   }
-  return { settingsPath, managedPath, removedManagedSettings, restoredSettings: changed };
+  return { settingsPath, managedPath, removedManagedSettings, restoredSettings };
 }
 
 export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot, detached = false } = {}, ports = {}) {
@@ -2671,17 +2701,13 @@ export function buildClaudeStepEnv(baseEnv = process.env, lease, ports = {}) {
     rememberSecrets(token);
     out.CLAUDE_CODE_OAUTH_TOKEN = token;
   }
-  if (lease?.delivery_mode === 'gateway_grant' && typeof lease.anthropic_base_url === 'string' && lease.anthropic_base_url.trim()) {
-    out.ANTHROPIC_BASE_URL = lease.anthropic_base_url.trim();
+  if (lease?.delivery_mode === 'gateway_grant') {
+    out.ANTHROPIC_BASE_URL = validateClaudeGatewayUrl(lease.anthropic_base_url);
   } else {
-    if (MANAGED_CLAUDE_GATEWAY_RE.test(String(out.ANTHROPIC_BASE_URL ?? ''))) {
-      delete out.ANTHROPIC_BASE_URL;
-    }
-    if (!out.ANTHROPIC_BASE_URL) {
-      const settings = readJsonObject(fs, localClaudePaths(baseEnv).settingsPath);
-      if (MANAGED_CLAUDE_GATEWAY_RE.test(String(settings?.env?.ANTHROPIC_BASE_URL ?? ''))) {
-        out.ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
-      }
+    delete out.ANTHROPIC_BASE_URL;
+    const settings = readJsonObject(fs, localClaudePaths(baseEnv).settingsPath);
+    if (String(settings?.env?.ANTHROPIC_BASE_URL ?? '').trim()) {
+      out.ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
     }
   }
   return out;

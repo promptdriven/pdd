@@ -26,7 +26,6 @@ import {
   markLocalAccountReauthRequired,
   materializeLocalClaudeAuth,
   materializeLocalCodexAuth,
-  pddManagedClaudeHome,
   pddManagedCodexHome,
   readCloudAccountsState,
   readCodexUsageWindows,
@@ -132,8 +131,19 @@ export function renderAutoSwitchBlock(shell = 'sh') {
       "  command codex $argv",
       "end",
       "function claude --wraps claude",
+      "  if set -q CLAUDE_CONFIG_DIR",
+      "    command claude $argv",
+      "    return $status",
+      "  end",
+      "  if test (count $argv) -gt 0",
+      "    switch $argv[1]",
+      "      case auth login logout setup-token -v --version -h --help",
+      "        command claude $argv",
+      "        return $status",
+      "    end",
+      "  end",
       "  if command -sq pdd-claude",
-      "    command pdd-claude $argv",
+      "    PDD_CLAUDE_AUTO_FAIL_OPEN=1 command pdd-claude $argv",
       "    return $status",
       "  end",
       "  command claude $argv",
@@ -228,8 +238,18 @@ export function renderAutoSwitchBlock(shell = 'sh') {
     "  command codex \"$@\"",
     "}",
     "claude() {",
+    "  if [ -n \"${CLAUDE_CONFIG_DIR:-}\" ]; then",
+    "    command claude \"$@\"",
+    "    return $?",
+    "  fi",
+    "  case \"${1:-}\" in",
+    "    auth|login|logout|setup-token|-v|--version|-h|--help)",
+    "      command claude \"$@\"",
+    "      return $?",
+    "      ;;",
+    "  esac",
     "  if command -v pdd-claude >/dev/null 2>&1; then",
-    "    command pdd-claude \"$@\"",
+    "    PDD_CLAUDE_AUTO_FAIL_OPEN=1 command pdd-claude \"$@\"",
     "    return $?",
     "  fi",
     "  command claude \"$@\"",
@@ -1232,8 +1252,7 @@ function applyMaterializedLease(leaseReply, { env }, ports = {}) {
     }
   }
   if (provider === 'claude') {
-    const prevManaged = Boolean(saved.active?.claude?.managed_anthropic_base_url);
-    const { managedBaseUrl } = materializeLocalClaudeAuth(lease, { env, previousManagedBaseUrl: prevManaged }, ports);
+    const { managedBaseUrl } = materializeLocalClaudeAuth(lease, { env }, ports);
     saveActiveLeaseMetadata(leaseReply, { env, materializedLocal: true, managedBaseUrl }, ports);
   }
 }
@@ -1720,7 +1739,7 @@ async function resolveAccount(labelOrId, { cwd, env, provider = null }, ports = 
   throw new CloudAccountsError(`Account "${target}"${suffix} was not found. Run pdd accounts list.`, { code: 'not_found' });
 }
 
-async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAuthJson, fallbackOauthToken, { cwd, env }, ports = {}) {
+async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAuthJson, _fallbackOauthToken, { cwd, env }, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const nowMs = (ports.now ?? Date.now)();
   if (acc?.account_id) {

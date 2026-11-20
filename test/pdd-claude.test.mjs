@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -29,12 +30,18 @@ import {
   releaseSharedClaudeRuntimeSession,
   runPddClaudeCli,
   sharedClaudeRuntimeDir,
+  spliceClaudeExtraArgs,
   startClaudeLeaseHeartbeat,
   withClaudeRuntimeLock,
 } from '../src/pdd-claude.mjs';
+import { renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
 import {
+  buildClaudeGatewaySettingsOverlay,
+  buildClaudeStepEnv,
+  CloudAccountsError,
   claudeTokenFingerprint,
   isAuthFailureMessage,
+  isReauthRequiredAccount,
   isReauthRequiredFailure,
   managedClaudeSettingsPath,
   materializeLocalClaudeAuth,
@@ -494,6 +501,205 @@ test('#3570 invariants: fingerprinted direct_oauth cleanup, isolated Claude step
     assert.equal(isAuthFailureMessage('Your organization has disabled Claude subscription access for Claude Code'), true);
     assert.equal(isReauthRequiredFailure('oauth_not_allowed_for_organization'), true);
     assert.equal(isReauthRequiredFailure('Your organization has disabled Claude subscription access for Claude Code'), true);
+    assert.equal(
+      isReauthRequiredAccount({ last_refresh_error: 'Your organization has disabled Claude subscription access for Claude Code' }),
+      true,
+    );
+    assert.equal(
+      isReauthRequiredFailure(new CloudAccountsError('Your organization has disabled Claude subscription access for Claude Code', { status: 403 })),
+      true,
+    );
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test('adversarial P0/P1 regressions: auto fail-open, gateway URL & proxy isolation, symlink guards, CLI flag parsing, heartbeat 404 race, and read-only cleanup', async () => {
+  const sb = makeSandbox();
+  const makeBufStream = () => {
+    const chunks = [];
+    return { write: s => { chunks.push(String(s)); }, text: () => chunks.join('') };
+  };
+  try {
+    // P0-1: auto shell wrapper bypasses auth/version/help/CLAUDE_CONFIG_DIR and passes PDD_CLAUDE_AUTO_FAIL_OPEN=1.
+    const shBlock = renderAutoSwitchBlock('sh');
+    const fishBlock = renderAutoSwitchBlock('fish');
+    assert.match(shBlock, /CLAUDE_CONFIG_DIR/);
+    assert.match(shBlock, /auth\|login\|logout\|setup-token/);
+    assert.match(shBlock, /PDD_CLAUDE_AUTO_FAIL_OPEN=1 command pdd-claude/);
+    assert.match(fishBlock, /PDD_CLAUDE_AUTO_FAIL_OPEN=1 command pdd-claude/);
+
+    const failOpenCalls = [];
+    const fakeSpawn = (bin, args, opts) => {
+      failOpenCalls.push({ bin, args, env: opts.env });
+      const child = new EventEmitter();
+      process.nextTick(() => child.emit('close', 0, null));
+      return child;
+    };
+    const autoEnv = { ...sb.env, PDD_CLAUDE_AUTO_FAIL_OPEN: '1' };
+    // Unenrolled user with PDD_CLAUDE_AUTO_FAIL_OPEN=1 fails open cleanly to stock claude!
+    const rUnenrolled = await runPddClaudeCli(['-p', 'hello'], { cwd: sb.root, env: autoEnv, stdout: makeBufStream(), stderr: makeBufStream() }, { spawn: fakeSpawn });
+    assert.equal(rUnenrolled.exitCode, 0);
+    assert.deepEqual(failOpenCalls.at(-1).args, ['-p', 'hello']);
+    // Auth commands under auto-wrapper pass straight to stock claude without printing hint or revoking PDD lease!
+    const rAutoAuth = await runPddClaudeCli(['--debug', 'auth', 'login'], { cwd: sb.root, env: autoEnv, stdout: makeBufStream(), stderr: makeBufStream() }, { spawn: fakeSpawn });
+    assert.equal(rAutoAuth.exitCode, 0);
+    assert.deepEqual(failOpenCalls.at(-1).args, ['--debug', 'auth', 'login']);
+    // Lease failure under auto-wrapper fails open cleanly!
+    const rLeaseErr = await runPddClaudeCli(['-p', 'hi'], { cwd: sb.root, env: autoEnv, stdout: makeBufStream(), stderr: makeBufStream() }, {
+      spawn: fakeSpawn,
+      leaseCloudAccount: async () => { throw new CloudAccountsError('offline', { code: 'network_error', status: 0 }); },
+    });
+    assert.equal(rLeaseErr.exitCode, 0);
+    assert.deepEqual(failOpenCalls.at(-1).args, ['-p', 'hi']);
+
+    // P0-2: gateway_grant validates anthropic_base_url; direct_oauth blocks third-party proxy leakage!
+    assert.throws(
+      () => buildClaudeGatewaySettingsOverlay({ delivery_mode: 'gateway_grant', gateway_bearer_token: 'pddg_tok', anthropic_base_url: '' }, { env: sb.env }),
+      { code: 'invalid_lease' },
+    );
+    assert.throws(
+      () => buildClaudeGatewaySettingsOverlay({ delivery_mode: 'gateway_grant', gateway_bearer_token: 'pddg_tok', anthropic_base_url: 'http://evil.example/v1' }, { env: sb.env }),
+      { code: 'invalid_lease' },
+    );
+    assert.throws(
+      () => buildClaudeGatewaySettingsOverlay({ delivery_mode: 'gateway_grant', gateway_bearer_token: 'pddg_tok', anthropic_base_url: 'https://user:pass@proxy.example/v1' }, { env: sb.env }),
+      { code: 'invalid_lease' },
+    );
+    mkdirSync(join(sb.home, '.claude'), { recursive: true });
+    writeFileSync(join(sb.home, '.claude', 'settings.json'), JSON.stringify({
+      env: { ANTHROPIC_BASE_URL: 'https://third-party-proxy.example/anthropic' },
+    }, null, 2));
+    const directOverlay = buildClaudeGatewaySettingsOverlay(
+      { delivery_mode: 'direct_oauth', claude_oauth_token: 'sk-ant-oat01-direct-lease-tok' },
+      { env: sb.env, userSettings: { env: { ANTHROPIC_BASE_URL: 'https://other-proxy.example' } } },
+    );
+    assert.equal(directOverlay.settings.env.ANTHROPIC_BASE_URL, 'https://api.anthropic.com');
+    const directStepEnv = buildClaudeStepEnv(
+      { ...sb.env, ANTHROPIC_BASE_URL: 'https://ambient-proxy.example' },
+      { delivery_mode: 'direct_oauth', claude_oauth_token: 'sk-ant-oat01-direct-lease-tok' },
+    );
+    assert.equal(directStepEnv.ANTHROPIC_BASE_URL, 'https://api.anthropic.com');
+
+    // P0-3: logoutSharedClaudeRuntime rejects symlinked runtime root without modifying target!
+    const victimDir = join(sb.root, 'victim');
+    mkdirSync(join(victimDir, 'pdd-claude-1000'), { recursive: true });
+    const victimFile = join(victimDir, 'pdd-claude-1000', 'lease.json');
+    writeFileSync(victimFile, JSON.stringify({ lease_id: 'lse_keep' }));
+    const linkRoot = join(sb.root, 'symlink-rt');
+    symlinkSync(victimDir, linkRoot);
+    await assert.rejects(
+      () => logoutSharedClaudeRuntime({ cwd: sb.root, env: { ...sb.env, PDD_CLAUDE_RUNTIME_ROOT: linkRoot } }, { uid: 1000 }),
+      { code: 'unsafe_runtime_dir' },
+    );
+    assert.equal(existsSync(victimFile), true, 'symlink target must remain untouched');
+
+    // P1-1: prompt words after session flags, variadic flags, flag values after prompts, missing flags, whitespace --account, --bg!
+    for (const argv of [
+      ['-p', 'logout'],
+      ['-p', 'doctor'],
+      ['-p', 'login'],
+      ['-r', 'sess-123', 'update'],
+      ['-w', 'branch', 'doctor'],
+      ['--add-dir', 'src', 'logs', '-p', 'check logs'],
+      ['-p', 'hello', '--system-prompt', '-v'],
+      ['hi', '--name', '-h'],
+      ['-p', 'hello', '--system-prompt', '--bare'],
+      ['--remote-control', 'doctor'],
+    ]) {
+      const insp = inspectClaudeInvocation(argv);
+      assert.equal(insp.mode, 'leased', `expected leased for ${JSON.stringify(argv)}, got ${insp.mode}`);
+      assert.equal(insp.hasBareFlag, false, `expected hasBareFlag=false for ${JSON.stringify(argv)}`);
+    }
+    assert.deepEqual(
+      parsePddClaudeArgs(['--account', 'team-a', '--', '--safe-mode', '-p', 'hi']),
+      { preferredAccount: 'team-a', showPddHelp: false, claudeArgs: ['--safe-mode', '-p', 'hi'] },
+    );
+    assert.throws(() => parsePddClaudeArgs(['--account', '   ', '-p', 'hi']), { code: 'invalid_args' });
+    assert.throws(() => parsePddClaudeArgs(['--account=-bad', '-p', 'hi']), { code: 'invalid_args' });
+    const bgErr = makeBufStream();
+    const bgRes = await runPddClaudeCli(['--bg', '-p', 'hi'], { cwd: sb.root, env: sb.env, stdout: makeBufStream(), stderr: bgErr });
+    assert.equal(bgRes.exitCode, 2);
+    assert.match(bgErr.text(), /--bg/);
+
+    // P1-2: --settings as value of another flag is NOT stripped; flag-aware -- scan!
+    const extOther = extractAndParseUserClaudeSettings(['--system-prompt', '--settings', '-p', 'hi'], { cwd: sb.root });
+    assert.equal(extOther.userSettings, null);
+    assert.deepEqual(extOther.strippedArgs, ['--system-prompt', '--settings', '-p', 'hi']);
+    assert.deepEqual(
+      spliceClaudeExtraArgs(['--append-system-prompt', '--', '-p', 'hi'], ['--settings', '/tmp/ov.json']),
+      ['--append-system-prompt', '--', '-p', 'hi', '--settings', '/tmp/ov.json'],
+    );
+    assert.deepEqual(
+      spliceClaudeExtraArgs(['-p', '--', 'literal'], ['--settings', '/tmp/ov.json']),
+      ['-p', '--settings', '/tmp/ov.json', '--', 'literal'],
+    );
+
+    // P1-3: heartbeat 404 on lse_OLD must NOT delete newer concurrent lse_NEW in lease.json!
+    const hbRt = join(sb.root, 'hb-race');
+    mkdirSync(hbRt, { recursive: true });
+    const hbLeasePath = join(hbRt, 'lease.json');
+    writeFileSync(hbLeasePath, JSON.stringify({ lease_id: 'lse_OLD', last_heartbeat_at: '2020-01-01T00:00:00Z' }));
+    let beatStarted;
+    const beatStartedP = new Promise(r => { beatStarted = r; });
+    let failBeat;
+    const stopRaceHb = startClaudeLeaseHeartbeat(
+      { mode: 'shared', runtimeDir: hbRt, leasePath: hbLeasePath, pid: 7001, lease: { lease_id: 'lse_OLD' } },
+      { cwd: sb.root, env: sb.env },
+      {
+        heartbeatIntervalMs: 10,
+        heartbeatCloudLease: async id => {
+          assert.equal(id, 'lse_OLD');
+          beatStarted();
+          await new Promise((_, rej) => { failBeat = rej; });
+        },
+      },
+    );
+    const keepAlive = setTimeout(() => {}, 5000);
+    try {
+      await beatStartedP;
+    } finally {
+      clearTimeout(keepAlive);
+    }
+    // Newer window replaces lease.json with lse_NEW while lse_OLD heartbeat is in flight!
+    writeFileSync(hbLeasePath, JSON.stringify({ lease_id: 'lse_NEW', last_heartbeat_at: new Date().toISOString() }));
+    failBeat(new CloudAccountsError('gone', { status: 404 }));
+    await new Promise(r => setTimeout(r, 40));
+    stopRaceHb();
+    assert.equal(JSON.parse(readFileSync(hbLeasePath, 'utf8')).lease_id, 'lse_NEW', '404 for lse_OLD must never delete lse_NEW');
+
+    // P1-4: read-only ~/.claude/settings.json fails soft on EROFS & dangling managed symlink is removed!
+    const managedPath = managedClaudeSettingsPath(sb.env);
+    mkdirSync(join(sb.state, 'claude-home'), { recursive: true });
+    symlinkSync(join(sb.root, 'does-not-exist-target'), managedPath);
+    assert.equal(lstatSync(managedPath).isSymbolicLink(), true);
+    writeFileSync(join(sb.home, '.claude', 'settings.json'), JSON.stringify({
+      env: { CLAUDE_CODE_OAUTH_TOKEN: 'pddg_ro_legacy' },
+    }));
+    const roFs = {
+      ...await import('node:fs'),
+      writeFileSync: () => { const e = new Error('EROFS'); e.code = 'EROFS'; throw e; },
+    };
+    const roRes = restoreLocalClaudeGatewayConfig({ env: sb.env }, { fs: roFs });
+    assert.equal(roRes.removedManagedSettings, true, 'dangling managed symlink removed');
+    assert.equal(roRes.restoredSettings, false, 'EROFS fails soft without throwing');
+
+    // P1-6: pinned mode passes currentAccountId: null and fails fast on reauth_required!
+    await assert.rejects(
+      () => acquirePinnedClaudeRuntimeSession(
+        { preferredAccount: 'broken-seat', cwd: sb.root, env: sb.env, pid: 7002 },
+        {
+          leaseCloudAccount: async req => {
+            assert.equal(req.currentAccountId, null);
+            return {
+              ...makeFakeLeaseReply({ leaseId: 'lse_reauth', autoRotate: false }),
+              account: { account_id: 'acc_bad', label: 'broken-seat', provider: 'claude', state: 'reauth_required' },
+            };
+          },
+        },
+      ),
+      { code: 'reauth_required' },
+    );
   } finally {
     sb.cleanup();
   }

@@ -8,6 +8,7 @@ import { jobEnvironment } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
 import { resolveStepModelTier } from './autopilot-telemetry.mjs';
 import { isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs';
+import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 const isRotatablePoolFailure = text => isQuotaExhaustionMessage(text) || isAuthFailureMessage(text);
 import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
 import { parse as parseToml } from './vendor/smol-toml/parse.js';
@@ -544,10 +545,7 @@ export async function runPreRunForensics(
   try {
     const cmd = forensicsCommand(activeAgent, { model, reasoningEffort, resultFile, env: childEnv, fs });
     const cmdArgs = (Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length)
-      ? (() => {
-          const dd = cmd.args.indexOf('--');
-          return dd === -1 ? [...cmd.args, ...prepared.extraArgs] : [...cmd.args.slice(0, dd), ...prepared.extraArgs, ...cmd.args.slice(dd)];
-        })()
+      ? spliceClaudeExtraArgs(cmd.args, prepared.extraArgs)
       : cmd.args;
     const prompt = forensicsPrompt({ repo, baseBranch, issue, comments });
     const execResult = await run(cmd.command, cmdArgs, {

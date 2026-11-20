@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { jobEnvironment, readAgentJob, stopAgentJob } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
 import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs';
+import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 import { codexProviderConfigArgs, extractJsonObjects, findConfiguredSkipLabel, findExternalRepoLabel } from './autopilot-forensics.mjs';
 
 export const INTAKE_MODES = Object.freeze(['off', 'shadow', 'active']);
@@ -703,11 +704,9 @@ function startIntakeJob(ctx, runner, spec) {
     const { buildCommand, ...rest } = spec;
     const resolved = typeof buildCommand === 'function' ? buildCommand(env) : null;
     const baseArgs = Array.isArray(resolved?.args) ? resolved.args : (Array.isArray(rest.args) ? rest.args : null);
-    const mergedArgs = (baseArgs && Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length)
-      ? (() => {
-          const dd = baseArgs.indexOf('--');
-          return dd === -1 ? [...baseArgs, ...prepared.extraArgs] : [...baseArgs.slice(0, dd), ...prepared.extraArgs, ...baseArgs.slice(dd)];
-        })()
+    const hasExtra = Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length > 0;
+    const mergedArgs = hasExtra
+      ? spliceClaudeExtraArgs(baseArgs ?? [], prepared.extraArgs)
       : baseArgs;
     const job = ctx.jobs.start({
       ...rest,

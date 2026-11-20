@@ -257,14 +257,29 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
      if(triedIds.length<12)continue;
     }
     activeAccount=acc?{account_id:acc.account_id,label:acc.label,provider:acc.provider}:null;
-    const stepExec=cloudMod.prepareCloudStepExecution(leaseReply,childEnv,accountsPorts);
+    let stepBaseArgs=childArgs;
+    let stepUserSettings=null;
+    let spliceExtra=null;
+    if(launch.agent==='claude'){
+     const claudeHelper=await import('./pdd-claude.mjs');
+     spliceExtra=claudeHelper.spliceClaudeExtraArgs;
+     const extracted=claudeHelper.extractAndParseUserClaudeSettings(childArgs,{cwd,fs:accountsPorts?.fs});
+     stepBaseArgs=extracted.strippedArgs;
+     stepUserSettings=extracted.userSettings;
+    }
+    const stepExec=cloudMod.prepareCloudStepExecution(
+     leaseReply,
+     childEnv,
+     accountsPorts,
+     stepUserSettings?{userSettings:stepUserSettings}:{},
+    );
     const stepArgs=Array.isArray(stepExec.extraArgs)&&stepExec.extraArgs.length
-     ?(()=>{
-       const dd=childArgs.indexOf('--');
-       if(dd===-1)return [...childArgs,...stepExec.extraArgs];
-       return [...childArgs.slice(0,dd),...stepExec.extraArgs,...childArgs.slice(dd)];
-      })()
-     :childArgs;
+     ?(spliceExtra?spliceExtra(stepBaseArgs,stepExec.extraArgs):(()=>{
+       const dd=stepBaseArgs.indexOf('--');
+       if(dd===-1)return [...stepBaseArgs,...stepExec.extraArgs];
+       return [...stepBaseArgs.slice(0,dd),...stepExec.extraArgs,...stepBaseArgs.slice(dd)];
+      })())
+     :stepBaseArgs;
     try{
      result=await run(launch.command,stepArgs,{cwd,env:stepExec.env,input,signal,timeoutMs,maxBytes});
     }finally{
