@@ -697,3 +697,82 @@ test('#3559 (9): Round-2 adversarial regressions (redundant segments, URLs/tilde
   assert.equal(orderedLoc?.path, 'src/primary.mjs');
   assert.equal(orderedLoc?.startLine, 10);
 });
+
+test('#3559 (10): Round-3 adversarial regressions (markdown/punct prefix wrappers, interior seg/../, comma-chained locations, linear unterminated OSC, extended Unicode format chars, %2F targets)', () => {
+  const diff = [
+    'diff --git a/src/auth.mjs b/src/auth.mjs',
+    '--- a/src/auth.mjs',
+    '+++ b/src/auth.mjs',
+    '@@ -20,5 +20,5 @@',
+    '+change();',
+    'diff --git a/src/added.mjs b/src/added.mjs',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/src/added.mjs',
+    '@@ -0,0 +1,5 @@',
+    '+export const a = 1;',
+  ].join('\n');
+  const baseScope = parseUnifiedDiffHunks(diff);
+  const scopeWithRepo = {
+    ...baseScope,
+    repoFiles: new Set(['src/auth.mjs', 'src/added.mjs', 'src/untouched.mjs', 'other/src/auth.mjs']),
+  };
+
+  // All Round-3 bypasses must promote BOTH with and without repoFiles
+  const r3Bypasses = [
+    'P1 src/untouched.mjs:1 and **/Users/dev/repo/src/auth.mjs:22**',
+    'P1 src/untouched.mjs:1 and **/Users/dev/repo/src/auth.mjs**:22',
+    'P1 src/untouched.mjs:1 and **./src/auth.mjs** breaks login',
+    'P1 src/untouched.mjs:1 and **b/src/auth.mjs** breaks login',
+    'P1 src/untouched.mjs:1 and *./src/added.mjs* has SQLi',
+    'P1 src/untouched.mjs:1 and _./src/auth.mjs_ breaks login',
+    'P1 src/untouched.mjs:1 and _src/auth.mjs_ breaks login',
+    'P1 src/untouched.mjs:1 and _src/auth.mjs_:22',
+    'P1 src/untouched.mjs:1 and |./src/auth.mjs| breaks login',
+    'P1 src/untouched.mjs:1 and |/Users/dev/repo/src/auth.mjs:22|',
+    'P1 src/untouched.mjs:1 and -./src/auth.mjs breaks login',
+    'P1 src/untouched.mjs:1 and src/foo/../auth.mjs:22',
+    'P1 src/untouched.mjs:1 and src/foo/../auth.mjs breaks login',
+    'P1 src/untouched.mjs:1 and src/sub/../added.mjs has SQLi',
+    'P1 src/untouched.mjs:1 and src/\u061cauth.mjs breaks login',
+    'P1 src/untouched.mjs:1 and src/\u034fauth.mjs breaks login',
+    'P1 src/untouched.mjs:1 and src/\u180eauth.mjs breaks login',
+    'P1 src/untouched.mjs:1 and src/\ufe0fauth.mjs breaks login',
+    'P1 src/untouched.mjs:1 and src/\u{e0001}auth.mjs breaks login',
+    'P1 src/untouched.mjs:1 [bug](src%2Fauth.mjs)',
+    'P1 src/untouched.mjs:1 [bug](src%2Fauth.mjs#L22)',
+  ];
+  for (const [label, sc] of [['with repoFiles', scopeWithRepo], ['without repoFiles', baseScope]]) {
+    const res = guardPreExistingFindings(r3Bypasses, sc);
+    assert.equal(res.promoted.length, r3Bypasses.length, `all ${r3Bypasses.length} R3 bypasses must promote (${label}); kept=${JSON.stringify(res.preExisting)}`);
+    assert.deepEqual(res.preExisting, []);
+  }
+
+  // Non-existent repo prefix is also caught when repoFiles is set
+  const fakeHost = guardPreExistingFindings(['P1 src/untouched.mjs:1 and github.com/org/repo/blob/HEAD/src/auth.mjs:22'], scopeWithRepo);
+  assert.equal(fakeHost.promoted.length, 1);
+
+  // Legitimate comma-chained untouched locations & markdown-wrapped sibling paths MUST NOT false-positive with repoFiles
+  const validComma = [
+    'P2 src/untouched.mjs:1,src/untouched.mjs:5 two bugs',
+    'P2 src/untouched.mjs:1,other/src/auth.mjs:5 two files',
+    'P2 (see:src/untouched.mjs:1,src/untouched.mjs:5) prefixed comma pair',
+    'P2 **other/src/auth.mjs**:5 bold unrelated sibling path',
+  ];
+  const validRes = guardPreExistingFindings(validComma, scopeWithRepo);
+  assert.deepEqual(validRes.promoted, [], `valid comma-chained / bold sibling findings must not promote: ${JSON.stringify(validRes.promoted)}`);
+  assert.equal(validRes.preExisting.length, validComma.length);
+
+  // extractFindingLocation on comma-chained locations must return the clean first location (no comma corruption)
+  assert.deepEqual(extractFindingLocation('P1 src/untouched.mjs:1,src/./auth.mjs:22'), {
+    path: 'src/untouched.mjs', startLine: 1, endLine: 1, range: [1, 1],
+  });
+
+  // Linear O(N) runtime on 30,000 repeated unterminated OSC `\x1b]` sequences
+  const t0 = performance.now();
+  const oscPayload = 'P1 src/untouched.mjs:1 ' + '\x1b]'.repeat(30000) + ' src/auth.mjs:22';
+  const oscRes = guardPreExistingFindings([oscPayload], scopeWithRepo);
+  const elapsedMs = performance.now() - t0;
+  assert.equal(oscRes.promoted.length, 1, 'unterminated OSC flood still catches trailing diff location');
+  assert.ok(elapsedMs < 500, `unterminated OSC stripping must stay linear O(N), took ${elapsedMs.toFixed(1)}ms`);
+});

@@ -992,25 +992,29 @@ the evidence record.
   headers (`[c, c + d - 1]` when `d > 0`; `[c, c + 1]` for a mid-file pure deletion when
   `d === 0` and `c > 0`; `[1, Math.max(1, a + b)]` for a top-of-file deletion or emptied file
   when `d === 0` and `c === 0`). Exported `extractFindingLocation(item)` strips terminated ANSI
-  escapes (leaving trailing text intact on unterminated escapes), C0/C1 control characters, and
-  invisible zero-width/bidi Unicode format characters, scans body tokens (preserving leading
-  primary location order) and markdown-link (`%20`-decoded, optional title stripped, whole-target
-  and whitespace-split) candidates without pre-truncating at 500 characters, and extracts the
-  primary normalized repo-relative `path` (stripping `./` and surrounding markdown/quote/bracket
-  wrappers, converting `\` to `/`, normalizing redundant segments, and rejecting absolute paths,
-  markdown/colon syntax chars inside paths, path traversal `..`, and URLs) and `[startLine, endLine]`
-  from standard finding prefixes (`P1 file:42 ...`, `P2 file:42-48 ...`, `file:42:5`,
-  `file:42,43`, `file#L42-L48`, `P2 [label](file#L42)`), returning `{path, startLine, endLine, range}`
-  or `null`. Exported `guardPreExistingFindings(preExistingItems, diffScope)` coerces non-array
-  items (`null`/`undefined` to `[]`, scalar to one item), strips terminated ANSI escapes, C0/C1
-  control chars, and invisible zero-width/bidi format chars before scanning the full un-truncated
-  text (truncating output items to 500 chars only after scanning), checks ALL items before any
+  escapes in linear O(N) time (leaving trailing text intact on unterminated escapes), C0/C1
+  control characters, and invisible Unicode format/variation-selector characters
+  (`\p{Cf}` plus `U+034F`, `U+115F`, `U+1160`, `U+180E`, `U+3164`, `U+FE00-U+FE0F`), scans body
+  tokens (preserving leading primary location order and splitting comma-chained file locations
+  before colon fallback) and markdown-link (`%20`/`%2F`/`%2E`/`%5C`-decoded, optional title
+  stripped, whole-target and whitespace-split) candidates without pre-truncating at 500
+  characters, and extracts the primary normalized repo-relative `path` (stripping `./` and
+  surrounding markdown/quote/bracket wrappers, converting `\` to `/`, normalizing redundant
+  segments, and rejecting absolute paths, markdown/colon syntax chars inside paths, path
+  traversal `..`, and URLs) and `[startLine, endLine]` from standard finding prefixes
+  (`P1 file:42 ...`, `P2 file:42-48 ...`, `file:42:5`, `file:42,43`, `file#L42-L48`,
+  `P2 [label](file#L42)`), returning `{path, startLine, endLine, range}` or `null`. Exported
+  `guardPreExistingFindings(preExistingItems, diffScope)` coerces non-array items
+  (`null`/`undefined` to `[]`, scalar to one item), strips terminated ANSI escapes, C0/C1
+  control chars, and invisible Unicode format chars before scanning the full un-truncated text
+  (truncating output items to 500 chars only after scanning), checks ALL items before any
   20-item output cap (so padding cannot hide a changed-hunk bug past item 20), extracts ALL
-  `file:line` references (including multi-word markdown links with optional titles or `%20`
-  spaces, attached prefixes like `(see:file#L22)`, comma-chained file locations, `a/`/`b/` git
-  prefixes, and direct raw + canonicalized `/./`/`//`/`\ `/URL/absolute/`../`/`~/` path mentions
-  for diff files including paths with spaces using UTF-16 code-unit span masking), fails closed
-  into `promoted` whenever `diffScope` is `null`/unavailable, the item has no verifiable
+  `file:line` references (including multi-word markdown links with optional titles or
+  `%20`/`%2F`/`%2E`/`%5C` escapes, attached prefixes like `(see:file#L22)`, comma-chained file
+  locations, `a/`/`b/` git prefixes, and direct raw + canonicalized
+  `/./`/`//`/`seg/../`/`\ `/markdown-wrapped/URL/absolute/`../`/`~/` path mentions for diff
+  files including paths with spaces using UTF-16 code-unit span masking and `repoFiles`-aware
+  prefix validation), fails closed into `promoted` whenever `diffScope` is `null`/unavailable, the item has no verifiable
   `file:line` location, the item mentions a diff/renamed file without a verified outside-diff
   line number, `diffScope.repoFiles` is provided and any cited path does not exist at `job.head`
   (or in `diffScope`), or ANY cited location hits an added, deleted, binary-modified, or
