@@ -306,10 +306,15 @@ run is outside this promise.
 
 After saving the issue binding, `--no-run` returns it. Otherwise invoke
 `startRun({name:'feature', issue:N, agent, cwd, ...})` once, forwarding
-`packageRoot` when supplied, `through` when supplied or declared by
-`product/plan.md` (explicit `through` overrides `product.through`), and `base`
-when supplied (validated before any GitHub read or write as a nonempty branch
-name without whitespace, not `HEAD`, not starting with `-` or `refs/`). Omit
+`packageRoot` when supplied, `through` when supplied explicitly on the CLI or
+when `product/plan.md` declares `Through: prompt-pr` (so `Through: code` in
+`product/plan.md` matches omitting `Through:` instead of implicitly pre-authorizing
+auto-code or blocking strict/automatic starts), and `base` when supplied
+(validated before any GitHub read or write against Git branch ref-format rules:
+nonempty string without control characters, whitespace, `~`, `^`, `:`, `?`, `*`,
+`[`, `\`, `..`, `@{`, `//`, leading/trailing `/`, trailing `.`, single `@`,
+`HEAD`, leading `-`, leading `refs/`, or any `/`-segment starting with `.` or
+ending with `.lock`). Omit
 absent optional fields so existing runner call shapes stay unchanged. Keep the
 runner's reply and failure visible; a startup failure must not delete the issue.
 Default agent is codex; claude, gemini, agy and an agents.json entry name are supported. Check the agent with [workflow agents](workflow-agents.prompt.md#named-agentsjson-entries) `workflowAgentEntry(agent,{cwd,env})` (env from `ports.env`, default the process environment) before any GitHub read or write, so an unknown name refuses with its message before an issue exists. More than 12 Stories in a planned
@@ -447,7 +452,7 @@ In product status, report journeys as a separate `parts` row with `part: "journe
 
 ```json
 {
-  "status": "approved", "prose_sha256": "2446c198336e8d72d5247cbc89e0465d06dfcaa1e4a06f7d8f163adf645cdea3",
+  "status": "approved", "prose_sha256": "29c6d0ea6f38279d2883061f322dd624b68ffb464c6669ba0dba1a5f0d7a4ebd",
   "entries": [
     {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
     {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},

@@ -436,7 +436,8 @@ test('#3572: pdd product start forwards --through and --base through catalog, CL
 
   // Plan-level Through: prompt-pr is forwarded automatically when CLI omits --through, and overridden by explicit --through code.
   const planPath = join(f.cwd, 'product/plan.md');
-  writeFileSync(planPath, readFileSync(planPath, 'utf8').replace('# Coffee pickup: plan', '# Coffee pickup: plan\nThrough: prompt-pr'));
+  const origPlanText = readFileSync(planPath, 'utf8');
+  writeFileSync(planPath, origPlanText.replace('# Coffee pickup: plan', '# Coffee pickup: plan\nThrough: prompt-pr'));
   f.state.starts.length = 0;
   assert.equal((await productStart({ cwd: f.cwd, run: 'server-1' }, f.ports)).exitCode, 0);
   assert.equal(f.state.starts[0].through, 'prompt-pr');
@@ -444,12 +445,42 @@ test('#3572: pdd product start forwards --through and --base through catalog, CL
   assert.equal((await productStart({ cwd: f.cwd, run: 'barista-1', through: 'code' }, f.ports)).exitCode, 0);
   assert.equal(f.state.starts[0].through, 'code');
 
-  // Invalid --through or --base refuses before any GitHub call.
+  // Plan-level Through: code matches omitting Through: (does not implicitly forward through: 'code' to startRun).
+  writeFileSync(planPath, origPlanText.replace('# Coffee pickup: plan', '# Coffee pickup: plan\nThrough: code'));
+  f.state.starts.length = 0;
+  assert.equal((await productStart({ cwd: f.cwd, run: 'server-1' }, f.ports)).exitCode, 0);
+  assert.equal(Object.hasOwn(f.state.starts[0], 'through'), false);
+
+  // Invalid --through or Git-invalid --base refuses before any GitHub call.
   const f2 = fixture(t);
-  for (const bad of [{ through: 'bogus' }, { base: '' }, { base: 'HEAD' }, { base: '--evil' }, { base: 'refs/heads/main' }, { base: 'bad branch' }]) {
+  for (const bad of [
+    { through: 'bogus' },
+    { base: '' },
+    { base: 'HEAD' },
+    { base: '@' },
+    { base: '--evil' },
+    { base: 'refs/heads/main' },
+    { base: 'bad branch' },
+    { base: 'main~1' },
+    { base: 'main^0' },
+    { base: 'main..HEAD' },
+    { base: '../heads/x' },
+    { base: 'a//b' },
+    { base: 'foo.lock' },
+    { base: 'foo@{0}' },
+    { base: 'foo:bar' },
+    { base: 'foo?bar' },
+    { base: 'foo*bar' },
+    { base: 'foo[0]' },
+    { base: 'foo\\bar' },
+    { base: '.hidden' },
+    { base: 'foo.' },
+    { base: 'foo/' },
+    { base: 'bad\x01name' },
+  ]) {
     const refused = await productStart({ cwd: f2.cwd, run: 'phone-1', ...bad }, f2.ports);
     assert.equal(refused.exitCode, 1, JSON.stringify(bad));
-    assert.equal(f2.state.commands.length, 0);
-    assert.equal(f2.state.starts.length, 0);
+    assert.equal(f2.state.commands.length, 0, JSON.stringify(bad));
+    assert.equal(f2.state.starts.length, 0, JSON.stringify(bad));
   }
 });

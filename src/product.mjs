@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 29dbbfa66baf837586b1e7de7f343fa71abcc4a1f3579df03a5f82f9a23d8227).
+// Generated from prompts/cli/product.prompt.md (sha256: 2b73b546be1287b4b74b4807603c42ce263b339e3a5d2efa146f1631347b1cda).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -413,8 +413,22 @@ const validThrough = value => {
 };
 const validBase = value => {
   if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !value || /\s/.test(value) || value === 'HEAD' || value.startsWith('-') || value.startsWith('refs/'))
-    invalid('Use --base with a branch name, for example feature/checkout.');
+  if (
+    typeof value !== 'string'
+    || !value
+    || /[\x00-\x1f\x7f\s~^:?*[\\]/.test(value)
+    || value === 'HEAD'
+    || value === '@'
+    || value.startsWith('-')
+    || value.startsWith('refs/')
+    || value.startsWith('/')
+    || value.endsWith('/')
+    || value.endsWith('.')
+    || value.includes('..')
+    || value.includes('@{')
+    || value.includes('//')
+    || value.split('/').some(seg => !seg || seg.startsWith('.') || seg.endsWith('.lock'))
+  ) invalid('Use --base with a branch name, for example feature/checkout.');
   return value;
 };
 const stagePr = (pr, local, stages) => local?.pr?.some(saved => saved.number === pr.number && stages.includes(saved.stage)
@@ -619,7 +633,7 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', t
     if (!planned) invalid(`Unknown planned run ${run}.`);
     const chosen = workflowAgentEntry(agent, { cwd, env: given.env ?? process.env });
     if (!chosen.ok) invalid(chosen.message);
-    const effectiveThrough = explicitThrough ?? product.through;
+    const effectiveThrough = explicitThrough ?? (product.through === 'prompt-pr' ? 'prompt-pr' : undefined);
     const state = await progress({ cwd, ...(explicitThrough !== undefined ? { through: explicitThrough } : {}), ...(explicitBase !== undefined ? { base: explicitBase } : {}) }, given, run), { repo, localRuns } = state;
     const selected = state.details.find(detail => detail.run.run === run);
     issue = selected.issue;
