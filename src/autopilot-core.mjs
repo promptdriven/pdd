@@ -1,10 +1,12 @@
-// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 5b9f146d9ddec9779982ad4474d7d99144f29851f28846768236d761ed112ac2)
+// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 9b2a92ad4ba0edd9ec0faac885964b2f3036b649b86372e9c34480c03f785970)
+import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
+import { promisify } from 'node:util';
 import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
 import { githubFullLastPage } from './github-calls.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
@@ -24,6 +26,20 @@ import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 const isPoolRotatableService = text => Boolean(text && (isQuotaExhaustionMessage(text) || isAuthFailureMessage(text)));
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 import { recordAutopilotMetric } from './autopilot-metrics.mjs';
+import {
+  MAX_VALIDATION_REPAIRS,
+  canonicalTargetPath,
+  detectChangedSurfaces,
+  detectRealE2eKindsInTest,
+  evaluateValidationOutcome,
+  formatHumanVerificationCard,
+  inspectTestBoundaryTargets,
+  planValidationResume,
+  shouldClaimWithCooldowns,
+} from './autopilot-validator.mjs';
+import { lintRepoProject } from './repo-hygiene-lint.mjs';
+
+const execFileAsync = promisify(cbExecFile);
 
 const { interfaceBlocks, proseSha256, readPrompt, promptRefusal, gitFiles } = runtimePreflightSlice();
 
@@ -437,7 +453,42 @@ function readMachine(fs, root, warn, now = Date.now()) {
         }
       : null,
     // T10: the updated_at of each issue with pdd:needs-decision when the engine last read its answer.
-    decisionSeen: Object.fromEntries(Object.entries(object(m.decisionSeen) ? m.decisionSeen : {}).filter(([n, at]) => /^\d+$/.test(n) && typeof at === 'string').slice(-200)) };
+    decisionSeen: Object.fromEntries(Object.entries(object(m.decisionSeen) ? m.decisionSeen : {}).filter(([n, at]) => /^\d+$/.test(n) && typeof at === 'string').slice(-200)),
+    // Validator v2: active tool cooldowns (keyed by normalized tool name) and parked auth-wait PRs for validate-only resume.
+    toolCooldowns: Object.fromEntries(Object.entries(object(m.toolCooldowns) ? m.toolCooldowns : {})
+      .filter(([tool, entry]) => named(tool) && object(entry) && entry.active === true)
+      .map(([tool, entry]) => [tool.trim().toLowerCase(), {
+        active: true,
+        since: Number.isFinite(entry.since) ? entry.since : now,
+        checkCommand: named(entry.checkCommand) ? entry.checkCommand : '',
+      }])),
+    validationParks: Array.isArray(m.validationParks)
+      ? m.validationParks.filter(p => object(p) && Number.isSafeInteger(p.pr) && p.pr > 0 && Number.isSafeInteger(p.issue) && p.issue > 0 && named(p.headSha) && named(p.cooldownTool))
+        .map(p => ({
+          pr: p.pr,
+          issue: p.issue,
+          branch: named(p.branch) ? p.branch : '',
+          headSha: p.headSha,
+          cooldownTool: p.cooldownTool.trim().toLowerCase(),
+          checkCommand: named(p.checkCommand) ? p.checkCommand : '',
+          parkedAt: Number.isFinite(p.parkedAt) ? p.parkedAt : now,
+          reviewPassed: p.reviewPassed === true,
+          reviewKept: p.reviewPassed === true && object(p.reviewKept) && p.reviewKept.head === p.headSha && p.reviewKept.verdict === 'PASS'
+            ? {
+                head: p.reviewKept.head,
+                verdict: 'PASS',
+                mustFix: [],
+                followUps: Array.isArray(p.reviewKept.followUps) ? p.reviewKept.followUps.slice(0, 10) : [],
+                decision: null,
+                reviewFamily: named(p.reviewKept.reviewFamily) ? p.reviewKept.reviewFamily : null,
+                reviewIndependence: named(p.reviewKept.reviewIndependence) ? p.reviewKept.reviewIndependence : null,
+              }
+            : null,
+          parkReason: p.parkReason === 'real-binding-unavailable' ? 'real-binding-unavailable' : 'suite-auth',
+          parkStories: Array.isArray(p.parkStories) ? p.parkStories.filter(named).slice(0, 20) : [],
+        }))
+        .slice(-50)
+      : [] };
 }
 // One history line. A cut last line (no newline) must not swallow this record.
 function appendHistory(ctx, row) {
@@ -579,7 +630,8 @@ async function blocked(ctx, row) {
 // once per change (its updated_at, saved as decisionSeen in the machine state); with a trusted reply after the question,
 // the engine removes the label itself and the issue is ready in this tick.
 async function decisionReplies(ctx, rows) {
-  const ready = new Set(), waiting = rows.filter(row => !row.pull_request && row.state === 'open' && !skippedIssueLabel(row, ctx.settings) && labelsOf(row).includes(DECISION) && row.comments > 0
+  const parkedIssues = new Set((ctx.machineState().validationParks ?? []).map(p => p.issue));
+  const ready = new Set(), waiting = rows.filter(row => !row.pull_request && row.state === 'open' && !skippedIssueLabel(row, ctx.settings) && !parkedIssues.has(row.number) && labelsOf(row).includes(DECISION) && row.comments > 0
     && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label)));
   if (!waiting.length) return ready;
   const seen = { ...(object(ctx.machineState().decisionSeen) ? ctx.machineState().decisionSeen : {}) };
@@ -625,9 +677,26 @@ async function activeFixedHold(ctx, history, issue, row = null) {
   try { appendHistory(ctx, { at: ctx.now(), issue, unfixed: true, text: `the fixed hold ended: ${why}` }); } catch (error) { ctx.warn(`Autopilot core history: ${error.message}`); }
   return null;
 }
+const KNOWN_ISSUE_TOOLS = ['gcloud', 'aws', 'docker', 'stripe', 'postgres', 'kubernetes', 'terraform', 'auth', 'service', 'runtime-binding'];
+function issueRequiredTools(row) {
+  const tools = new Set();
+  for (const label of labelsOf(row)) {
+    const match = /^(?:tool|requires?):([a-z0-9._-]+)$/i.exec(label.trim());
+    if (match) tools.add(match[1].toLowerCase());
+  }
+  const text = `${row?.title ?? ''}\n${row?.body ?? ''}`.toLowerCase();
+  for (const tool of KNOWN_ISSUE_TOOLS) {
+    if (new RegExp(`\\b${tool.replace('-', '[-_ ]?')}\\b`, 'i').test(text)) tools.add(tool);
+  }
+  if (/\bgcp\b/i.test(text)) tools.add('gcloud');
+  if (/\b(?:real[-_ ]?binding|live[-_ ]?binding|runtime[-_ ]?binding|pdd\s+test)\b/i.test(text)) tools.add('runtime-binding');
+  return [...tools];
+}
 async function* readyRows(ctx, rows) {
   const local = new Set(readJobs(ctx.fs, ctx.root).flatMap(jobIssues)), self = { coordinatorId: ctx.state.coordinatorId, machine: ctx.machineId };
   const replied = await decisionReplies(ctx, rows);
+  const machine = ctx.machineState();
+  const parkedIssues = new Set((machine.validationParks ?? []).map(p => p.issue));
   // An issue with a counted no-result in the last 24 hours (since its latest reset) cools down.
   const history = chronological(ctx.fs, ctx.root);
   const cooling = new Set([...new Set(history.map(row => row.issue))].filter(issue => issueRows(history, issue).some(row => row.noResult && ctx.now() - row.at < DAY)));
@@ -636,8 +705,10 @@ async function* readyRows(ctx, rows) {
   const fixedHolding = new Set(history.filter(row => row.fixedHold === true).map(row => row.issue));
   const candidates = rows.filter(row => !row.pull_request && row.state === 'open' && !row.assignees?.length && !row.assignee
     && !skippedIssueLabel(row, ctx.settings)
+    && !parkedIssues.has(row.number)
     && !labelsOf(row).includes('pdd:stuck') && (!labelsOf(row).includes(DECISION) || replied.has(row.number)) && !labelsOf(row).includes(WOULD_MERGE) && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
-    && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number))
+    && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number)
+    && shouldClaimWithCooldowns({ issueRequiredTools: issueRequiredTools(row), toolCooldowns: machine.toolCooldowns }).claimable)
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
   for (const row of candidates) {
     try {
@@ -838,10 +909,10 @@ function workRules(ctx, job) {
    d. Any other file (config, CI, package metadata, lock files, docs, tests): change it directly. Never write a new prompt for it. If a prompt states the value that you change (search prompts/ for the path and the key), agree with that prompt: cite the line, or change the prompt first when the issue changes that fact. Docs take their facts from the owning prompt, not from running the code.
    e. Existing product or app code that no prompt owns: create its owning .prompt.md first, link the code file's \`Generated from\` header, and include regression tests in this single PR. A file that you add is never path e: a new code file takes path c, any other new file path d.
    Never add a prompt, binding or header for an existing non-code path d file, or add a header without its owning prompt, unless the issue asks to adopt PDD for it.
-3. Tests. When the change alters what a person or program gets through the repo's public surface (a return value, error, output, exit code, written file, export, command or script), add a test through that surface that fails on base. For any other change, add no test: run the issue's done check and record the command and its result.
+3. Tests. Write real end-to-end tests upfront for every changed runtime surface (real subprocess/CLI invocation, real local HTTP/WS server and DB round-trip, real browser flow via Playwright for Web UI, or live tool/auth binding where available) instead of mock-only unit tests alone. Never rewrite real end-to-end checks into mocks when an external tool or login is unavailable. For a bug fix, prove the regression test (including the real end-to-end check) fails on base and passes on head. Docs-only changes need only the issue's done check and its recorded command and result.
 4. Autopilot stamps \`Path:\`, \`Runtime:\` and \`Evidence:\` lines deterministically in code when you pass \`"title"\` and \`"summary"\` in the result JSON, so you do not have to hand-type machine metadata strings. The prompt and the code may be in one commit. Never rewrite history to change the commit order.
 5. Run focused tests for the changed behavior. Do not wait for CI and do not run the full test suite. Autopilot runs both after you finish (the full test command of this repository is \`${fullTestCommand ?? 'not set'}\`). When you run tests or builds, pass \`$PDD_CHECK_CPUS\` as the worker count (for example \`node --test --test-concurrency=$PDD_CHECK_CPUS\`, \`pytest -n $PDD_CHECK_CPUS\`, \`cargo test -j $PDD_CHECK_CPUS\`): it is this machine's share for Autopilot.
-6. Runtime (RUNBOOK §15 "Autopilot core jobs"). Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. A changed Story is a Story whose Story file or test file changed, or whose test reaches a changed prompt. Commit every change, then run \`pdd test\` for each changed Story in one batch where you can (\`pdd test STORY STORY …\`). Run pdd as "$PDD_CLI" (for example "$PDD_CLI" test STORY), never as a bare pdd: your shell can find an older pdd first on PATH. $PDD_CLI is the pdd of this Autopilot. Autopilot stamps verified \`Runtime:\` lines deterministically from saved \`pdd test\` checks at HEAD, so you do not have to hand-type \`Runtime:\` lines. A FAIL line blocks the merge: fix the code until it passes. Never treat a failed check as \`not run\`: \`not run\` is only for a cause that this PR cannot fix (a native-only prompt, \`real-binding-unavailable\` with 0 provider calls, maintenance, no verdict with no failed step, or a refusal that pdd gives no fix for). A refusal with a fix from pdd is this PR's work (for example, apply the Number spelling that pdd prints and check again). When pdd prints that the interpreter is in maintenance, stop pdd then and report \`maintenance until HH:MM UTC\` in \`runtime.cause\`; Autopilot sends the check when maintenance ends. When Runtime could not check, do not stop and do not invent an interface: cover the case with native tests, ship the PR, and put that reason and the tool's error in the result's \`runtime\` (kind "runtime"); Autopilot stamps the \`Runtime: not run\` line and files one report for it.
+6. Runtime (RUNBOOK §15 "Autopilot core jobs"). Changed means changed against the base: \`git diff --name-only origin/${state.baseBranch}...HEAD\`, never since the previous PR head. A changed Story is a Story whose Story file or test file changed, or whose test reaches a changed prompt. Commit every change, then run \`pdd test\` for each changed Story in one batch where you can (\`pdd test STORY STORY …\`). Run pdd as "$PDD_CLI" (for example "$PDD_CLI" test STORY), never as a bare pdd: your shell can find an older pdd first on PATH. $PDD_CLI is the pdd of this Autopilot. Autopilot stamps verified \`Runtime:\` lines deterministically from saved \`pdd test\` checks at HEAD, so you do not have to hand-type \`Runtime:\` lines. A FAIL line blocks the merge: fix the code until it passes. Never treat a failed check or \`real-binding-unavailable\` as a silent skip or pass: \`not run\` is only for a cause that this PR cannot fix (a native-only prompt, maintenance, no verdict with no failed step, or a refusal that pdd gives no fix for). A refusal with a fix from pdd is this PR's work (for example, apply the Number spelling that pdd prints and check again). When pdd prints that the interpreter is in maintenance, stop pdd then and report \`maintenance until HH:MM UTC\` in \`runtime.cause\`; Autopilot sends the check when maintenance ends. When Runtime could not check, do not stop and do not invent an interface: cover the case with native tests, ship the PR, and put that reason and the tool's error in the result's \`runtime\` (kind "runtime"); Autopilot stamps the \`Runtime: not run\` line and files one report for it.
 7. Report your focused test counts in the result's \`"tests"\` field (and \`"runtime"\` when Runtime could not check); Autopilot stamps the deterministic \`Evidence:\` line in the PR body from those fields and its own replay runs.
 8. Do not write a review verdict or any review claim (for example "Review: no must-fix" or "Independent review: …") in the PR body or a comment. Only Autopilot's fresh reviewer gives a review verdict.
 ${approving(ctx) && !strictRepo(ctx, job) ? `9. Approval: in ${settings.mode} mode the operator's start is the approval of your prompt changes. For each *.prompt.md you changed that has a Runtime interface block, after its checks pass, record it with the native command and commit the result in the PR: printf '%s' ${quote(approvalWords(ctx))} | "$PDD_CLI" approve PROMPT --said -. A prompt with no Runtime interface block needs no approval: do not run pdd approve for it, and do not invent an interface.
@@ -895,14 +966,12 @@ function reproduceText(ctx, job) {
       : `3. Other non-test findings above also need fixes in this round, so fix them after checking the test failure; "not reproduced" applies only when CI or the full suite is the sole red check.`;
   return `\nFailure reproduction details (#3247):\n${blocks}\n\nReproduce before changing code:\n1. Before you edit any file, run those exact failing tests first in the matching environment (\`CI=true\`, worker count \`$PDD_CHECK_CPUS\`, clean state) and confirm that they fail for the same reason.\n2. If an untouched test fails, also check whether it fails on \`origin/${ctx.state.baseBranch}\` (\`git merge-base origin/${ctx.state.baseBranch} HEAD\` in a throwaway worktree, #3181). When the same test fails on \`origin/${ctx.state.baseBranch}\` too, make no guessed edits on this branch and report {"outcome":"failed","kind":"pdd","component":"base-suite","code":"base-test-red","cause":"<test> also fails on origin/${ctx.state.baseBranch}","detail":"<exact command and failing lines on base>"}.\n${notReproducedRule}\n4. After your fix, run those exact failing tests again in the same environment (\`CI=true\`, \`$PDD_CHECK_CPUS\`) and confirm that they pass before you commit and push.\n`;
 }
-const OPERATOR_RECONCILE_ADVICE = /reconcile possible external effects with the operator[^.]*\.?/gi;
-const sanitizeRepairFinding = red => String(red ?? '').replace(OPERATOR_RECONCILE_ADVICE, 'local skip (real-binding-unavailable: no live binding in this sandbox, 0 provider calls; not a defect or needs-person blocker).').replace(/\s+/g, ' ').trim();
 const repairHistoryText = job => Array.isArray(job.repairHistory) && job.repairHistory.length
   ? `\nPrior failed round summary (do not repeat a failed approach or undo an earlier fix):\n${job.repairHistory.map(item => `- ${oneLine(item?.line ?? item, 280)}`).join('\n')}\n`
   : '';
 const repairPrompt = (ctx, job, reds, result) => {
   const allowNotReproduced = Boolean(job.repairReproduce?.onlyTestOrCi && job.reproduceRerun?.head !== job.head);
-  const cleanedReds = reds.map(sanitizeRepairFinding).filter(Boolean);
+  const cleanedReds = reds.map(red => String(red ?? '').replace(/\s+/g, ' ').trim()).filter(Boolean);
   return `You are an Autopilot core repair job for ${ctx.repo}, issue #${job.issue}, PR #${job.pr} on branch ${job.branch}.
 Work only in this folder: ${job.worktree}. The checks of head ${job.head} are red:
 ${cleanedReds.map(red => `- ${red}`).join('\n')}
@@ -2133,7 +2202,7 @@ async function intake(ctx, rows) {
         ...(activeMode && effectiveAreas.length ? { areas: effectiveAreas } : {}),
         ...(primaryEntry?.refinedSpec ? { refinedSpec: primaryEntry.refinedSpec } : {}),
         ...(forensicsBrief ? { forensicsBrief, baseBranch: state.baseBranch } : {}),
-        title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`), ...(note ? { note } : {}),
+        title: oneLine(row.title, 200), url: row.html_url ?? issueKey(ctx.repo, n), body: cutText(row.body, 20000, `read the issue for the rest: ${row.html_url ?? issueKey(ctx.repo, n)}`), labels: labelsOf(row), ...(note ? { note } : {}),
         cuts: [...cutsOf('issue text', row.body, 20000), ...(answer?.comments ?? []).filter(c => c.cut > 0).map(c => ({ input: `the answer of ${c.author}`, more: c.cut }))],
         branch, worktree, claim, phase: 'running', role: 'build', repairs: 0, started: ctx.now(), progress: { sig: null, at: ctx.now(), running: false }, ...(answer ? { answer } : {}) };
       let openIssues = '', briefError = null;
@@ -3143,20 +3212,18 @@ function decidingRows(rows, unsent = false) {
 }
 const strings = value => Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
 const rowReasonCodes = row => [
+  ...(typeof row?.reason === 'string' ? [row.reason] : []),
   ...(typeof row?.reason?.code === 'string' ? [row.reason.code] : []),
   ...strings(row?.codes),
   ...(Array.isArray(row?.refusals) ? row.refusals.map(item => typeof item === 'string' ? item : item?.code).filter(named) : []),
 ];
 const hasRealBindingUnavailable = row => rowReasonCodes(row).includes('real-binding-unavailable');
-const nonBindingRefusals = row => (Array.isArray(row?.refusals) ? row.refusals.map(item => typeof item === 'string' ? item : item?.code).filter(named) : [])
-  .filter(code => code !== 'real-binding-unavailable');
+const rowRefusals = row => (Array.isArray(row?.refusals) ? row.refusals.map(item => typeof item === 'string' ? item : item?.code).filter(named) : []);
 const failedRow = row => Number(row.failed) > 0 || strings(row.states).includes('failed');
-const refusedRow = row => nonBindingRefusals(row).length > 0 || (strings(row.states).includes('refused') && !hasRealBindingUnavailable(row));
-const localSkipRow = row => object(row) && row.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row) && !nonBindingRefusals(row).length;
+const refusedRow = row => rowRefusals(row).length > 0 || strings(row.states).includes('refused');
 // A row that did not pass only because of the service (no verdict, no failed check, no refusal): the engine sends it again.
-const serviceRow = row => row.pass !== true && !failedRow(row) && !refusedRow(row) && !localSkipRow(row);
-const actionableRowAdvice = row => [...strings(row?.advice), ...(typeof row?.client_advice === 'string' ? [row.client_advice] : [])]
-  .filter(text => !/reconcile possible external effects with the operator/i.test(text));
+const serviceRow = row => row.pass !== true && !failedRow(row) && !refusedRow(row) && !hasRealBindingUnavailable(row);
+const actionableRowAdvice = row => [...strings(row?.advice), ...(typeof row?.client_advice === 'string' ? [row.client_advice] : [])];
 function decidingRowForTest(scopes, story, test) {
   const of = scopes.get(story);
   return of?.get(test.path) ?? (test.files ?? []).map(file => of?.get(file)).find(Boolean) ?? of?.get('*');
@@ -3185,18 +3252,18 @@ async function savedRowReds(ctx, job, head, evidence, stories) {
     }
     const fix = rows.flatMap(row => {
       const advice = actionableRowAdvice(row);
-      return nonBindingRefusals(row).map(code => [code, advice.find(text => text.includes(code)) ?? advice[0]]);
+      return rowRefusals(row).map(code => [code, advice.find(text => text.includes(code)) ?? advice[0]]);
     }).find(([code, text]) => text && !once.has(`${story}|${code}`));
     if (fix && (job.repairs ?? 0) < ctx.settings.repairs) {
       once.add(`${story}|${fix[0]}`);
       reds.push(`The saved pdd test check of ${story} at head ${short(head)} was refused before execution (${fix[0]}). pdd printed the fix: ${oneLine(fix[1], 800)} Apply the fix that pdd prints and run "$PDD_CLI" test again at this head.`);
     }
     if (!rows.length) lost.push([story, 'no saved pdd test check at this source']);
-    else if (!rows.every(row => row.pass === true || serviceRow(row) || localSkipRow(row))) {
-      const codes = [...new Set(rows.flatMap(nonBindingRefusals))];
+    else if (!allStoryTestsCovered(scopes, evidence, story, () => true)) {
+      lost.push([story, 'unrun pdd test checks at this source', rows.some(hasRealBindingUnavailable)]);
+    } else if (!rows.every(row => row.pass === true || serviceRow(row))) {
+      const codes = [...new Set(rows.flatMap(rowRefusals))];
       lost.push([story, rows.some(refusedRow) ? `a check that was refused before execution${codes.length ? ` (${codes.join(', ')})` : ''}` : 'a check that did not pass']);
-    } else if (!allStoryTestsCovered(scopes, evidence, story, row => row.pass === true || serviceRow(row) || localSkipRow(row))) {
-      lost.push([story, 'unrun pdd test checks at this source']);
     }
   }
   job.refusalReds = [...once].slice(-50);
@@ -3210,11 +3277,24 @@ async function savedRowReds(ctx, job, head, evidence, stories) {
     base = { commit: fork, passing: [...at].filter(([, of]) => [...of.values()].every(row => row.pass === true)).map(([story]) => story).sort().slice(0, 50) };
   } catch (error) {
     ctx.warn(`Autopilot core could not read the saved pdd test checks at the merge base of #${job.issue}: ${error.message}`);
+    for (const [story, why, hasBinding] of lost) {
+      if (hasBinding) reds.push(`Saved pdd test check of ${story} at head ${short(head)} has ${why} alongside real-binding-unavailable; run all Story tests with real bindings.`);
+    }
     return { reds, base: { commit: null, passing: [], error: oneLine(error.message, 300) } };
   }
-  for (const [story, why] of lost) if (base.passing.includes(story))
-    reds.push(`Runtime coverage went down: ${story} had a passing pdd test check at the merge base ${short(base.commit)}, but at head ${short(head)} it has ${why}. A PR must not lose a Runtime pass: make the check of ${story} pass again at this head.`);
+  for (const [story, why, hasBinding] of lost) {
+    if (base.passing.includes(story)) {
+      reds.push(`Runtime coverage went down: ${story} had a passing pdd test check at the merge base ${short(base.commit)}, but at head ${short(head)} it has ${why}. A PR must not lose a Runtime pass: make the check of ${story} pass again at this head.`);
+    } else if (hasBinding) {
+      reds.push(`Saved pdd test check of ${story} at head ${short(head)} has ${why} alongside real-binding-unavailable; run all Story tests with real bindings.`);
+    }
+  }
   return { reds, base };
+}
+function decidingRealBindingRows(evidence) {
+  const scopes = decidingRows(evidence?.stories, true);
+  const deciding = [...scopes.values()].flatMap(of => [...new Set(of.values())]);
+  return { scopes, deciding };
 }
 async function readRuntimeEvidenceAtHead(ctx, job, head = job.agentHead ?? job.head) {
   if (ctx.runtimeEvidenceCache?.issue === job.issue && ctx.runtimeEvidenceCache?.head === head) return ctx.runtimeEvidenceCache.value;
@@ -3229,8 +3309,8 @@ async function readRuntimeEvidenceAtHead(ctx, job, head = job.agentHead ?? job.h
 async function runtimeCoverage(ctx, job, claims, lines = []) {
   const head = job.agentHead ?? job.head, sig = JSON.stringify([claims, lines.map(l => [l.story, l.verdict])]);
   if (job.coverage?.head === head && (job.coverage.sig ?? sig) === sig) return job.coverage;
-  let rows = [];
-  const done = coverage => { job.coverage = { head, sig, rows, ...coverage }; ctx.saveJob(job); return job.coverage; };
+  let rows = [], realBindingBlocker = false;
+  const done = coverage => { job.coverage = { head, sig, rows, realBindingBlocker, ...coverage }; ctx.saveJob(job); return job.coverage; };
   const claim = upperFirst(claims.join(' and ') || "the PR body's Runtime lines");
   // The T01 cover and the line form rules apply to a positive claim or Story lines; the saved-row reds to every line.
   const checking = claims.length > 0 || lines.some(l => l.story);
@@ -3241,8 +3321,12 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
     if (!checking) { ctx.warn(`Autopilot core could not read the saved pdd test checks of #${job.issue} at head ${short(head)}: ${error.message}`); return done({ ok: true, error: oneLine(error.message, 300) }); }
     return done({ ok: false, text: `${claim}, but Autopilot could not read the Stories and the saved pdd test checks at head ${short(head)}: ${oneLine(error.message, 300)}. Fix the cause, or write "Runtime: not run (REASON)".` });
   }
+  const { deciding: allBindingRows } = decidingRealBindingRows(evidence);
+  realBindingBlocker = allBindingRows.some(row => row?.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row));
   rows = (evidence.stories ?? []).filter(object).slice(0, 50).map(row => ({ story: row.story, pass: row.pass === true, current: row.current === true, at: row.at ?? null, tests: Array.isArray(row.tests) ? row.tests.slice(0, 10) : null,
-    sent: row.sent !== false, failed: Number(row.failed) || 0, refusals: strings(row.refusals).slice(0, 5) }));
+    sent: row.sent !== false, failed: Number(row.failed) || 0, refusals: rowRefusals(row).slice(0, 10),
+    reason: typeof row.reason === 'string' ? row.reason : (typeof row.reason?.code === 'string' ? row.reason.code : null),
+    codes: Array.isArray(row.codes) ? row.codes.slice(0, 10) : null }));
   const storyFiles = new Set(evidence.storyFiles ?? []);
   const changedTests = (evidence.tests ?? []).filter(test => [test.path, ...(test.files ?? [])].some(file => changed.includes(file)));
   const changedStories = [...new Set([...changed.filter(file => storyFiles.has(file)), ...changedTests.flatMap(test => test.stories ?? [])])];
@@ -3290,16 +3374,12 @@ async function runtimeCoverage(ctx, job, claims, lines = []) {
   const passingNow = story => deciding.has(story) && [...deciding.get(story).values()].every(row => row.pass === true);
   const lineOf = story => storyLines.find(l => l.story === story) ?? (!perStory && lines.length === 1 && lines[0].verdict === 'not-run' ? lines[0] : null);
   const open = consumerOnly.filter(story => !passingNow(story) && !lineOf(story) && !stories.includes(story));
-  // Could not check: never sent (maintenance, interrupted) or sent with no verdict, and no failed check and no refusal;
-  // or skipped locally with real-binding-unavailable (no live binding in this sandbox, 0 provider calls).
+  // Could not check: never sent (maintenance, interrupted) or sent with no verdict, and no failed check and no refusal.
   const couldNotCheck = row => serviceRow(row) && (row.sent === false || strings(row.states).some(state => ['unknown', 'not_run', 'partial'].includes(state)));
   const serviceOnly = story => deciding.has(story) && [...deciding.get(story).values()].every(couldNotCheck);
-  const localSkipOnly = story => allDeciding.has(story) && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
-    && [...allDeciding.get(story).values()].some(localSkipRow)
-    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row));
-  const waiting = open.filter(story => serviceOnly(story) || localSkipOnly(story)), checkedCount = consumers.filter(passingNow).length;
+  const waiting = open.filter(serviceOnly), checkedCount = consumers.filter(passingNow).length;
   const consumerNote = consumers.length ? { total: consumers.length, checked: checkedCount, open: waiting.slice(0, 50), line: waiting.length ? `Runtime: not run (${consumers.length} Stories reach ${someFiles(prompts)}; checked ${checkedCount})` : null } : null;
-  const consumerReds = open.filter(story => !serviceOnly(story) && !localSkipOnly(story)).map(story => `${story} reaches a changed prompt (${someFiles(prompts)}; its tests upload it), but it has no passing pdd test check at this source${deciding.has(story) ? ' (the latest check of it at this source did not pass)' : ''} and no Runtime line. Run "$PDD_CLI" test for ${story} at this head, or write "Runtime: not run (${story}: REASON)".`);
+  const consumerReds = open.filter(story => !serviceOnly(story)).map(story => `${story} reaches a changed prompt (${someFiles(prompts)}; its tests upload it), but it has no passing pdd test check at this source${deciding.has(story) ? ' (the latest check of it at this source did not pass)' : ''} and no Runtime line. Run "$PDD_CLI" test for ${story} at this head, or write "Runtime: not run (${story}: REASON)".`);
   // #3227 fix 1: the changed Stories (and the consumers with a "not run" line) that the cover below does not check are
   // checked against their saved rows.
   const rowStories = [...changedStories, ...consumerOnly.filter(story => lineOf(story)?.verdict === 'not-run')].filter(story => !stories.includes(story));
@@ -3737,7 +3817,7 @@ async function writeEvidenceBlock(ctx, job) {
 
 async function stopChecks(ctx, job, recover = false) {
   const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
-    [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
+    [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime'], [job.bindingRerun?.agent, 'runtime']].filter(([part]) => Boolean(part));
   for (const [part, role] of parts) {
     const hasError = Boolean(recover || part.watch?.stopped || part.processesUncertain || (typeof part.token === 'string' && ctx.fs.existsSync?.(`${part.token}.processes.error`)));
     if (!await cleanupPart(ctx, job, part, role, hasError ? { recoverStopped: true } : null)) return false;
@@ -3843,10 +3923,6 @@ async function deterministicRuntimeLines(ctx, job, head, changedPaths, headRoot,
   const storyPassOk = story => deciding.has(story)
     && [...deciding.get(story).values()].every(row => row.pass === true)
     && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => ranBy(story, test)?.pass === true);
-  const storyLocalSkipOk = story => allDeciding.has(story)
-    && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
-    && [...allDeciding.get(story).values()].some(localSkipRow)
-    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row));
   let totalPassed = 0, totalChecks = 0;
   if (targetStories.length) {
     const lines = targetStories.map(story => {
@@ -3856,7 +3932,6 @@ async function deterministicRuntimeLines(ctx, job, head, changedPaths, headRoot,
         totalChecks += rows.reduce((s, r) => s + (Number.isSafeInteger(r?.checks?.total) ? r.checks.total : Number.isSafeInteger(r?.total) ? r.total : 0), 0);
         return formatVerifiedStoryPassLine(story, rows);
       }
-      if (storyLocalSkipOk(story)) return `Runtime: not run (${story}: real-binding-unavailable)`;
       const rows = [...new Set(allDeciding.get(story)?.values() ?? [])];
       if (rows.some(failedRow)) return `Runtime: FAIL (${story}: saved pdd test check failed)`;
       if (allNativeOnly) return `Runtime: not run (${story}: native-only prompt)`;
@@ -4041,17 +4116,18 @@ function formatVerifiedStoryPassLine(story, rows) {
 async function syncVerifiedRuntimeLines(ctx, job, pr) {
   const head = job.agentHead ?? job.head;
   const lines = runtimeVerdicts(pr.body);
+  const hasBindingNotRunLine = lines.some(l => l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line));
   if (lines.some(l => l.verdict === 'other')) return;
   if (lines.length > 1 && lines.some(l => !l.story)) return;
   if (lines.some((l, i) => l.story && lines.findIndex(o => o.story === l.story) !== i)) return;
   if (job.runtime?.state && !['pass', 'not-run'].includes(job.runtime.state)) return;
-  if (job.runtime?.state === 'pass' && lines.some(l => l.verdict === 'not-run')) return;
+  if (job.runtime?.state === 'pass' && lines.some(l => l.verdict === 'not-run' && !/real-binding-unavailable/i.test(l.line))) return;
   if (parseEvidence(pr.body)?.runtime?.state === 'fail') return;
-  if (lines.length === 1 && !lines[0].story && lines[0].verdict === 'not-run') return;
+  if (lines.length === 1 && !lines[0].story && lines[0].verdict === 'not-run' && !hasBindingNotRunLine) return;
 
   const changed = await changedFiles(ctx, job, head);
   const prompts = changed.filter(file => file.endsWith('.prompt.md'));
-  if (!prompts.length && !changed.some(file => file.endsWith('.md') || file.endsWith('.json'))) return;
+  if (!prompts.length && !changed.some(file => file.endsWith('.md') || file.endsWith('.json')) && !hasBindingNotRunLine) return;
 
   let evidence;
   try { evidence = await readRuntimeEvidenceAtHead(ctx, job, head); }
@@ -4084,8 +4160,11 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
     if (!await reachesPrompt(l.story)) return;
   }
 
-  const targetStories = [...new Set([...changedStories, ...consumers])];
-  if (!targetStories.length && !prompts.length) return;
+  const bindingNotRunStories = lines
+    .filter(l => l.story && l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line))
+    .map(l => l.story);
+  const targetStories = [...new Set([...changedStories, ...consumers, ...bindingNotRunStories])];
+  if (!targetStories.length && !prompts.length && !hasBindingNotRunLine) return;
 
   const deciding = decidingRows(evidence.stories), allDeciding = decidingRows(evidence.stories, true);
   const storyTests = (evidence.tests ?? []).filter(test => (test.stories ?? []).some(story => changed.includes(story)));
@@ -4097,17 +4176,9 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
   const storyPassOk = story => deciding.has(story)
     && [...deciding.get(story).values()].every(row => row.pass === true)
     && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => ranBy(story, test)?.pass === true);
-  const storyLocalSkipOk = story => allDeciding.has(story)
-    && [...allDeciding.get(story).values()].every(row => row.pass === true || localSkipRow(row))
-    && [...allDeciding.get(story).values()].some(localSkipRow)
-    && allStoryTestsCovered(allDeciding, evidence, story, row => row.pass === true || localSkipRow(row))
-    && mustRunTests.filter(test => (test.stories ?? []).includes(story)).every(test => {
-      const row = decidingRowForTest(allDeciding, story, test);
-      return Boolean(row && (row.pass === true || localSkipRow(row)));
-    });
   const existingNotRun = story => lines.find(l => l.story === story && l.verdict === 'not-run') ?? null;
 
-  if (!targetStories.every(story => storyPassOk(story) || storyLocalSkipOk(story) || Boolean(existingNotRun(story)))) return;
+  if (!targetStories.every(story => storyPassOk(story) || Boolean(existingNotRun(story)))) return;
 
   if (prompts.length) {
     const reached = new Set();
@@ -4118,7 +4189,7 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
       const print = evidence.footprint ? await evidence.footprint(story, row).catch(() => null) : { files: evidence.footprints?.[story] ?? [] };
       for (const file of Array.isArray(print?.files) ? print.files : []) reached.add(file);
     }
-    for (const story of targetStories.filter(s => !storyPassOk(s) && (storyLocalSkipOk(s) || Boolean(existingNotRun(s))))) {
+    for (const story of targetStories.filter(s => !storyPassOk(s) && Boolean(existingNotRun(s)))) {
       if (prompts.every(prompt => reached.has(prompt))) break;
       const own = (evidence.tests ?? []).filter(test => (test.stories ?? []).includes(story) && !test.error).map(test => test.path);
       const print = evidence.footprint ? await evidence.footprint(story, { tests: own }).catch(() => null) : { files: evidence.footprints?.[story] ?? [] };
@@ -4128,26 +4199,33 @@ async function syncVerifiedRuntimeLines(ctx, job, pr) {
   }
 
   if (!targetStories.length) {
-    if (lines.length > 0) return;
+    const allDecidingPass = deciding.size > 0 && [...deciding.values()].every(of => [...of.values()].every(row => row.pass === true));
+    if (lines.length > 0 && !(hasBindingNotRunLine && allDecidingPass)) return;
+    if (!allDecidingPass && !prompts.length) return;
     await setRuntimeLines(ctx, job, pr, ['__prompt_pass__'], () => 'Runtime: PASS', () => ({ state: 'pass' }));
     return;
   }
 
   const singleUnnamedPass = lines.length === 1 && !lines[0].story && lines[0].verdict === 'pass';
+  const singleUnnamedBindingNotRun = lines.length === 1 && !lines[0].story && lines[0].verdict === 'not-run' && /real-binding-unavailable/i.test(lines[0].line);
   const perStoryPresent = lines.some(l => Boolean(l.story));
+  const isBindingNotRun = line => Boolean(line && /real-binding-unavailable/i.test(line.line));
+  const hasStaleStoryNotRun = targetStories.some(story => isBindingNotRun(existingNotRun(story)) && storyPassOk(story));
   const needsSync = !lines.length
     || (singleUnnamedPass && (changedStories.length > 1 || targetStories.some(story => !storyPassOk(story))))
-    || (perStoryPresent && targetStories.some(story => {
-      const cur = lines.find(l => l.story === story);
-      return !cur || (cur.verdict === 'pass' && !storyPassOk(story) && storyLocalSkipOk(story));
-    }));
+    || (singleUnnamedBindingNotRun && targetStories.every(story => storyPassOk(story)))
+    || hasStaleStoryNotRun
+    || (perStoryPresent && targetStories.some(story => !lines.find(l => l.story === story)));
   if (!needsSync) return;
 
   const lineFor = story => {
     const keepNotRun = existingNotRun(story);
+    if (keepNotRun && !isBindingNotRun(keepNotRun)) return keepNotRun.line;
+    if (storyPassOk(story)) {
+      return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
+    }
     if (keepNotRun) return keepNotRun.line;
-    if (storyPassOk(story)) return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
-    return `Runtime: not run (${story}: real-binding-unavailable)`;
+    return formatVerifiedStoryPassLine(story, [...new Set(deciding.get(story).values())]);
   };
   await setRuntimeLines(ctx, job, pr, targetStories, lineFor, overall => overall === 'pass' ? { state: 'pass' }
     : job.runtime?.state === 'not-run' ? job.runtime : { state: 'not-run' });
@@ -4187,6 +4265,1056 @@ async function syncStampedReplayEvidence(ctx, job, pr) {
   job.evidence = parseEvidence(pr.body) ?? next;
 }
 
+// ---- Universal Validator v2 (Bucket 1 / 2 / 3, cooldowns, validate-only resume) -------------------------
+const TOOL_COOLDOWN_TTL_MS = 60 * MIN;
+const DEFAULT_PREFLIGHT_SPECS = {
+  gcloud: {
+    command: 'gcloud',
+    args: ['auth', 'list', '--filter=status:ACTIVE', '--format=value(account)'],
+    requireNonEmptyStdout: true,
+  },
+  aws: { command: 'aws', args: ['sts', 'get-caller-identity'] },
+  docker: { command: 'docker', args: ['info'] },
+  postgres: { command: 'pg_isready', args: [] },
+};
+
+/**
+ * Safe read-only allowlisted preflight health check for external tools on Bucket 2 cooldown.
+ */
+export async function runDefaultPreflightCheck({ tool, cwd, env } = {}) {
+  const spec = DEFAULT_PREFLIGHT_SPECS[String(tool ?? '').trim().toLowerCase()];
+  if (!spec) return { exitCode: null };
+  try {
+    const { stdout } = await execFileAsync(spec.command, spec.args, { cwd, env, timeout: 15_000, maxBuffer: 64 * 1024 });
+    if (spec.requireNonEmptyStdout && !String(stdout ?? '').trim()) return { exitCode: 1 };
+    return { exitCode: 0 };
+  } catch (error) {
+    return { exitCode: Number.isInteger(error?.code) && error.code !== 0 ? error.code : 1 };
+  }
+}
+
+function pruneOrphanCooldowns(cooldowns, remainingParks, now) {
+  const activeParkTools = new Set(remainingParks.map(p => String(p.cooldownTool ?? '').toLowerCase()).filter(Boolean));
+  const out = {};
+  let changed = false;
+  for (const [tool, entry] of Object.entries(cooldowns ?? {})) {
+    if (!entry || entry.active !== true) { changed = true; continue; }
+    const norm = tool.toLowerCase();
+    const expired = Number.isFinite(entry.since) && (now - entry.since >= TOOL_COOLDOWN_TTL_MS);
+    if (!activeParkTools.has(norm) && expired) { changed = true; continue; }
+    out[tool] = entry;
+  }
+  return { cooldowns: out, changed };
+}
+
+function dropCooldownIfUnreferenced(cooldowns, tool, remainingParks) {
+  const norm = String(tool ?? '').toLowerCase();
+  if (!norm) return false;
+  const stillReferenced = remainingParks.some(p => String(p.cooldownTool ?? '').toLowerCase() === norm);
+  if (stillReferenced) return false;
+  if (Object.hasOwn(cooldowns, norm)) { delete cooldowns[norm]; return true; }
+  for (const key of Object.keys(cooldowns)) {
+    if (key.toLowerCase() === norm) { delete cooldowns[key]; return true; }
+  }
+  return false;
+}
+
+async function parkValidationWait(ctx, job, pr, outcome, { parkStories = [] } = {}) {
+  await stopChecks(ctx, job);
+  const machine = ctx.machineState();
+  const tool = outcome.cooldownTool || 'runtime-binding';
+  const checkCommand = outcome.checkCommand || 'pdd test --files';
+  const reviewPassed = Boolean(job.review?.head === job.head && job.review?.verdict === 'PASS');
+  const nextCooldowns = {
+    ...(machine.toolCooldowns ?? {}),
+    [tool]: { active: true, since: ctx.now(), checkCommand },
+  };
+  const nextParks = [
+    ...(machine.validationParks ?? []).filter(p => p.pr !== job.pr && p.issue !== job.issue),
+    {
+      pr: job.pr,
+      issue: job.issue,
+      branch: job.branch,
+      headSha: job.head,
+      cooldownTool: tool,
+      checkCommand,
+      parkedAt: ctx.now(),
+      reviewPassed,
+      reviewKept: reviewPassed ? job.review : null,
+      parkReason: tool === 'runtime-binding' ? 'real-binding-unavailable' : 'suite-auth',
+      parkStories: [...new Set(parkStories.filter(named))].slice(0, 20),
+    },
+  ].slice(-50);
+  ctx.saveMachine({ ...machine, toolCooldowns: nextCooldowns, validationParks: nextParks });
+  return end(ctx, job, {
+    kind: 'job',
+    component: 'autopilot-core',
+    code: 'needs-person',
+    text: outcome.message,
+    keepPr: true,
+    authWait: true,
+    authWaitTool: tool,
+    authWaitCheckCommand: checkCommand,
+    question: outcome.message,
+  });
+}
+
+async function parkHumanBoundary(ctx, job, pr, outcome) {
+  await stopChecks(ctx, job);
+  const card = Array.isArray(outcome.humanVerificationCard) && outcome.humanVerificationCard.length === 3
+    ? outcome.humanVerificationCard
+    : formatHumanVerificationCard({ offlineSummary: 'checks passed', unverifiedBoundary: 'runtime boundary', verifyCommand: 'npm test' });
+  return end(ctx, job, {
+    kind: 'job',
+    component: 'autopilot-core',
+    code: 'needs-person',
+    text: outcome.message,
+    keepPr: true,
+    humanBoundary: true,
+    humanVerificationCard: card,
+    question: card.join('\n'),
+  });
+}
+
+async function parkRepairExhausted(ctx, job, pr, outcome) {
+  await stopChecks(ctx, job);
+  return end(ctx, job, {
+    kind: 'job',
+    component: 'autopilot-core',
+    code: 'needs-person',
+    text: outcome.message,
+    keepPr: true,
+    repairExhausted: true,
+    question: outcome.message,
+  });
+}
+
+function prBodyRealBindingUnavailableClaims(pr, job) {
+  const lines = runtimeVerdicts(pr?.body ?? '');
+  const matchingLines = lines.filter(l => l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line));
+  const namedStories = [...new Set(matchingLines.map(l => l.story).filter(named))];
+  const hasUnnamed = matchingLines.some(l => !l.story)
+    || (job?.runtime?.state === 'not-run' && /real-binding-unavailable/i.test(String(job.runtime.cause ?? '')));
+  return {
+    claimed: matchingLines.length > 0 || hasUnnamed,
+    namedStories,
+    hasUnnamed,
+  };
+}
+
+async function detectSavedRealBindingBlocker(ctx, job, pr) {
+  const head = job.agentHead ?? job.head;
+  const bodyClaims = prBodyRealBindingUnavailableClaims(pr, job);
+  // RR6 #3247: skip re-reading saved runtime evidence when green coverage for this head already verified no blocker.
+  if (
+    !bodyClaims.claimed
+    && job.coverage?.head === head
+    && job.coverage?.ok === true
+    && job.coverage?.realBindingBlocker === false
+  ) {
+    return null;
+  }
+  const evidence = await readRuntimeEvidenceAtHead(ctx, job, head).catch(() => null);
+  const { scopes, deciding } = decidingRealBindingRows(evidence);
+  const blockerRows = deciding.filter(row => row?.pass !== true && !failedRow(row) && hasRealBindingUnavailable(row));
+  if (blockerRows.length) {
+    // Never hide unrun sibling tests or real test failures behind a real-binding-unavailable row on one test.
+    if (deciding.some(row => failedRow(row))) return null;
+    const uncovered = blockerRows.some(row => row.story && !allStoryTestsCovered(scopes, evidence, row.story, r => r.pass === true || hasRealBindingUnavailable(r)));
+    if (uncovered) return null;
+    const changed = await changedFiles(ctx, job, head).catch(() => []);
+    const outcome = evaluateValidationOutcome({
+      mode: ctx.settings.mode,
+      changedFiles: changed,
+      realBindingUnavailable: true,
+      diagnostics: ['real-binding-unavailable: live runtime binding unavailable'],
+      repairAttempts: job.validationRepairs ?? 0,
+    });
+    return { outcome, stories: [...new Set(blockerRows.map(r => r.story).filter(named))] };
+  }
+  if (bodyClaims.claimed) {
+    const storyPassVerified = story => {
+      const of = scopes.get(story);
+      if (!of || !of.size) return false;
+      const rowsForStory = [...new Set(of.values())];
+      if (!rowsForStory.every(r => r?.pass === true)) return false;
+      return allStoryTestsCovered(scopes, evidence, story, r => r?.pass === true);
+    };
+    const changed = await changedFiles(ctx, job, head).catch(() => []);
+    const unverifiedStories = new Set(bodyClaims.namedStories.filter(story => !storyPassVerified(story)));
+    let unnamedBlocked = false;
+    if (bodyClaims.hasUnnamed) {
+      const storyFiles = new Set(evidence?.storyFiles ?? []);
+      const changedTests = (evidence?.tests ?? []).filter(test => [test.path, ...(test.files ?? [])].some(file => changed.includes(file)));
+      const targetStories = [...new Set([
+        ...changed.filter(file => storyFiles.has(file) || /^user_stories\/.*\.md$/i.test(file)),
+        ...changedTests.flatMap(test => test.stories ?? []),
+        ...runtimeVerdicts(pr?.body ?? '').map(l => l.story).filter(named),
+      ])];
+      if (targetStories.length) {
+        for (const story of targetStories) {
+          if (!storyPassVerified(story)) unverifiedStories.add(story);
+        }
+      } else if (!deciding.length || !deciding.every(row => row?.pass === true)) {
+        unnamedBlocked = true;
+      }
+    }
+    if (unverifiedStories.size > 0 || unnamedBlocked) {
+      const outcome = evaluateValidationOutcome({
+        mode: ctx.settings.mode,
+        changedFiles: changed,
+        realBindingUnavailable: true,
+        diagnostics: ['real-binding-unavailable: PR reported Runtime not run due to real-binding-unavailable'],
+        repairAttempts: job.validationRepairs ?? 0,
+      });
+      return { outcome, stories: [...unverifiedStories] };
+    }
+  }
+  return null;
+}
+
+function collectBacksideLint(headTree, changed) {
+  if (!headTree) {
+    return {
+      codes: ['lint-checkout-unavailable'],
+      details: ['clean checkout at PR head is unavailable for backside validation lint'],
+    };
+  }
+  const lintOut = lintRepoProject({ root: headTree });
+  const changedSet = new Set(changed);
+  const codeSet = new Set();
+  const details = [];
+  for (const f of lintOut.findings ?? []) {
+    const isValRule = f.code === 'silent-validation-skip' || f.code === 'boundary-mock-only-test';
+    if (f.severity === 'error' || (isValRule && changedSet.has(f.path))) {
+      codeSet.add(f.code);
+      details.push(`${f.path}:${f.line ?? 1} [${f.code}] ${f.message ?? f.detail ?? f.warning ?? f.code}`);
+    }
+  }
+  return { codes: [...codeSet].sort(), details: details.slice(0, 10) };
+}
+
+const VALIDATOR_TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$)/i;
+const VALIDATOR_TEST_EXT_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i;
+const VALIDATOR_SKIP_SUBDIR_RE = /(?:^|\/)(?:fixtures|helpers)\//i;
+const MAX_INSPECT_TEST_BYTES = 512 * 1024;
+
+function isInspectableValidatorTest(filePath) {
+  return VALIDATOR_TEST_FILE_RE.test(filePath)
+    && VALIDATOR_TEST_EXT_RE.test(filePath)
+    && !VALIDATOR_SKIP_SUBDIR_RE.test(filePath);
+}
+
+function readCleanFileUtf8(fs, rootDir, relPath) {
+  try {
+    const full = join(rootDir, relPath);
+    const st = fs.lstatSync(full);
+    if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_INSPECT_TEST_BYTES) return null;
+    return fs.readFileSync(full, 'utf8');
+  } catch { return null; }
+}
+
+function isBaseControlEnvLoadError(output, changedProdFiles = []) {
+  const text = String(output ?? '');
+  if (!/(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find package|Cannot find module|ERR_DLOPEN_FAILED)/i.test(text)) {
+    return false;
+  }
+  if (/AssertionError|ERR_ASSERTION/i.test(text)) return false;
+  const changedSet = new Set(
+    (changedProdFiles ?? []).map(p => String(p).replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()),
+  );
+  const missingRefs = [...text.matchAll(/Cannot find (?:package|module)\s+['"`]([^'"`]+)['"`]/gi)].map(m => m[1]);
+  if (!missingRefs.length) return true;
+  for (const ref of missingRefs) {
+    const normRef = ref.replace(/\\/g, '/').toLowerCase();
+    const matchesChanged = [...changedSet].some(ch => normRef === ch || normRef.endsWith(`/${ch}`));
+    if (!matchesChanged) return true;
+  }
+  return false;
+}
+
+async function resolveBugFixBaseControl(ctx, job, { changed, changedProdFiles }) {
+  const vecControl = controlResult(job.vectors);
+  if (vecControl?.state === 'shows') return 'ran-and-failed-on-base';
+  if (vecControl?.state === 'same') return 'passed-on-base';
+  if (job.bugFixBaseControlCheck?.head === job.head && named(job.bugFixBaseControlCheck.state)) {
+    return job.bugFixBaseControlCheck.state;
+  }
+  const changedNodeTests = changed.filter(f => isInspectableValidatorTest(f) && /\.(?:mjs|cjs|js)$/i.test(f));
+  let state = 'not-run';
+  if (typeof ctx.ports.runBaseControl === 'function') {
+    try {
+      const res = await ctx.ports.runBaseControl({ job, head: job.head, changedFiles: changed, changedProdFiles, changedNodeTests });
+      state = ['ran-and-failed-on-base', 'passed-on-base', 'not-run'].includes(res?.state) ? res.state : 'not-run';
+    } catch { state = 'not-run'; }
+  } else if (changedProdFiles.length > 0 && changedNodeTests.length > 0) {
+    try {
+      const { cwd: baseDir } = await controlTree(ctx, job, changedProdFiles);
+      const nodeModulesTarget = join(baseDir, 'node_modules');
+      if (!ctx.fs.existsSync(nodeModulesTarget)) {
+        const sourceNm = [job.suite?.cwd, job.worktree, ctx.state.cwd]
+          .filter(Boolean)
+          .map(dir => join(dir, 'node_modules'))
+          .find(dir => ctx.fs.existsSync(dir));
+        if (sourceNm) {
+          try { ctx.fs.symlinkSync(sourceNm, nodeModulesTarget, 'dir'); } catch { /* ignore concurrent symlink */ }
+        }
+      }
+      const baseEnv = { ...(ctx.ports.env ?? process.env), CI: 'true' };
+      delete baseEnv.NODE_TEST_CONTEXT;
+      delete baseEnv.NODE_OPTIONS;
+      try {
+        await execFileAsync(process.execPath, ['--test', ...changedNodeTests], {
+          cwd: baseDir,
+          env: baseEnv,
+          timeout: 60_000,
+          maxBuffer: 2 * 1024 * 1024,
+        });
+        state = 'passed-on-base';
+      } catch (err) {
+        const errOut = `${err?.stderr ?? ''}\n${err?.stdout ?? ''}\n${err?.message ?? ''}`;
+        state = (err?.killed || err?.code === 'ENOENT' || isBaseControlEnvLoadError(errOut, changedProdFiles))
+          ? 'not-run'
+          : 'ran-and-failed-on-base';
+      }
+    } catch { state = 'not-run'; }
+  }
+  job.bugFixBaseControlCheck = { head: job.head, state };
+  ctx.saveJob(job);
+  return state;
+}
+
+const NOOP_SUITE_CMDS = new Set(['true', ':', 'exit', 'echo', 'printf', 'pwd', 'ls', 'cat', 'date', 'sleep']);
+const NODE_VALUE_FLAGS = new Set([
+  '--import', '-r', '--require', '--loader', '--experimental-loader', '--test-reporter', '--test-reporter-destination',
+  '--test-name-pattern', '--test-skip-pattern', '--test-concurrency', '--test-shard', '--test-timeout', '--conditions', '-C', '--env-file',
+  '--title', '--max-old-space-size', '-e', '--eval', '-p', '--print',
+]);
+const NODE_FILTER_FLAGS = new Set(['--test-name-pattern', '--test-skip-pattern', '--test-only']);
+const RUNNER_VALUE_FLAGS = new Set([
+  '--config', '-c', '--reporter', '-r', '-t', '-k', '-m', '--project', '--grep', '-g', '--filter', '--shard', '--workers', '--timeout',
+  '--testNamePattern', '--test-name-pattern', '--test-skip-pattern', '-run', '--testPathIgnorePatterns',
+]);
+const RUNNER_FILTER_FLAGS = new Set([
+  '--test-name-pattern', '--test-skip-pattern', '--test-only', '--grep', '-g', '-t', '-k', '--filter', '--project',
+  '--testNamePattern', '-run', '--testPathIgnorePatterns',
+]);
+const BARE_TEST_RUNNERS = new Set(['vitest', 'jest', 'mocha', 'ava', 'tap', 'playwright', 'cypress', 'pytest', 'py.test', 'rspec', 'phpunit']);
+const SUBCMD_TEST_RUNNERS = new Set(['bun', 'deno', 'go', 'cargo', 'dotnet', 'mvn', 'gradle']);
+
+function flagNameOf(tok) {
+  const eq = tok.indexOf('=');
+  return eq === -1 ? tok : tok.slice(0, eq);
+}
+
+function hasFilterFlag(tokens, filterSet) {
+  return tokens.some(tok => filterSet.has(flagNameOf(tok)));
+}
+
+function tokenizeShellCommand(cmd) {
+  const tokens = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < cmd.length; i += 1) {
+    const ch = cmd[i];
+    if (quote) {
+      if (ch === '\\' && quote === '"' && i + 1 < cmd.length) { cur += cmd[i + 1]; i += 1; continue; }
+      if (ch === quote) { quote = null; continue; }
+      cur += ch;
+      continue;
+    }
+    if (ch === '\'' || ch === '"') { quote = ch; continue; }
+    if (ch === '\\' && i + 1 < cmd.length) { cur += cmd[i + 1]; i += 1; continue; }
+    if (/\s/.test(ch)) { if (cur) { tokens.push(cur); cur = ''; } continue; }
+    cur += ch;
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+function globSegmentMatch(seg, pat) {
+  let si = 0, pi = 0, starPi = -1, starSi = 0;
+  while (si < seg.length) {
+    if (pi < pat.length && (pat[pi] === '?' || pat[pi] === seg[si])) {
+      si += 1; pi += 1;
+    } else if (pi < pat.length && pat[pi] === '*') {
+      starPi = pi; starSi = si; pi += 1;
+    } else if (starPi !== -1) {
+      pi = starPi + 1; starSi += 1; si = starSi;
+    } else {
+      return false;
+    }
+  }
+  while (pi < pat.length && pat[pi] === '*') pi += 1;
+  return pi === pat.length;
+}
+
+function matchesSuiteTarget(relPath, rawTarget) {
+  const normRel = String(relPath).replace(/\\/g, '/').replace(/^\.\//, '');
+  const normTarget = String(rawTarget).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (!normTarget) return false;
+  if (normRel === normTarget || normRel.startsWith(`${normTarget}/`)) return true;
+  if (!normTarget.includes('*') && !normTarget.includes('?')) return false;
+  const relSegs = normRel.split('/');
+  const patSegs = normTarget.split('/');
+  if (patSegs.some(s => s !== '**' && s.includes('**'))) {
+    let ri = 0, pi = 0, starPi = -1, starRi = 0;
+    const flatPat = normTarget.replace(/\*{2,}/g, '*');
+    while (ri < normRel.length) {
+      if (pi < flatPat.length && (flatPat[pi] === '?' ? normRel[ri] !== '/' : flatPat[pi] === normRel[ri])) {
+        ri += 1; pi += 1;
+      } else if (pi < flatPat.length && flatPat[pi] === '*') {
+        starPi = pi; starRi = ri; pi += 1;
+      } else if (starPi !== -1) {
+        pi = starPi + 1; starRi += 1; ri = starRi;
+      } else {
+        return false;
+      }
+    }
+    while (pi < flatPat.length && flatPat[pi] === '*') pi += 1;
+    return pi === flatPat.length;
+  }
+  let ri = 0, pi = 0, dstarPi = -1, dstarRi = 0;
+  while (ri < relSegs.length) {
+    if (pi < patSegs.length && patSegs[pi] === '**') {
+      dstarPi = pi; dstarRi = ri; pi += 1;
+    } else if (pi < patSegs.length && globSegmentMatch(relSegs[ri], patSegs[pi])) {
+      ri += 1; pi += 1;
+    } else if (dstarPi !== -1) {
+      pi = dstarPi + 1; dstarRi += 1; ri = dstarRi;
+    } else {
+      return false;
+    }
+  }
+  while (pi < patSegs.length && patSegs[pi] === '**') pi += 1;
+  return pi === patSegs.length;
+}
+
+function analyzeSuiteSegment(segment, headTree, fs, depth = 0) {
+  if (depth > 3) return { mode: 'none', targets: [] };
+  let tokens = tokenizeShellCommand(segment);
+  while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
+  while (tokens.length && ['env', 'cross-env', 'time', 'npx'].includes(basename(tokens[0]).toLowerCase())) {
+    const wrapper = basename(tokens.shift()).toLowerCase();
+    if (wrapper === 'env' || wrapper === 'cross-env') {
+      while (tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0])) tokens.shift();
+    } else if (wrapper === 'npx') {
+      while (tokens.length && tokens[0].startsWith('-')) tokens.shift();
+    }
+  }
+  if (!tokens.length) return { mode: 'none', targets: [] };
+  const bin = basename(tokens[0]).toLowerCase();
+  if (NOOP_SUITE_CMDS.has(bin)) return { mode: 'none', targets: [] };
+
+  if (bin === 'npm' || bin === 'pnpm' || bin === 'yarn') {
+    const ddIdx = tokens.indexOf('--');
+    const main = ddIdx >= 0 ? tokens.slice(1, ddIdx) : tokens.slice(1);
+    const passthrough = ddIdx >= 0 ? tokens.slice(ddIdx + 1) : [];
+    const sub = (main[0] ?? '').toLowerCase();
+    let scriptName = null;
+    if (sub === 'test' || sub === 't') scriptName = 'test';
+    else if (sub === 'run' && main[1]) scriptName = main[1];
+    else if (bin === 'yarn' && sub && !sub.startsWith('-')) scriptName = sub;
+    if (!scriptName) return { mode: 'none', targets: [] };
+    const scriptArgs = sub === 'run' ? main.slice(2) : main.slice(1);
+    const forwardedArgs = [...scriptArgs, ...passthrough];
+    if (hasFilterFlag(forwardedArgs, NODE_FILTER_FLAGS) || hasFilterFlag(forwardedArgs, RUNNER_FILTER_FLAGS)) {
+      return { mode: 'none', targets: [] };
+    }
+    const pkgText = headTree ? readCleanFileUtf8(fs, headTree, 'package.json') : null;
+    if (pkgText) {
+      let pkg = null;
+      try { pkg = JSON.parse(pkgText); } catch { pkg = null; }
+      const script = typeof pkg?.scripts?.[scriptName] === 'string' ? pkg.scripts[scriptName] : '';
+      if (!script) return { mode: 'none', targets: [] };
+      const combined = passthrough.length ? `${script} ${passthrough.map(quoteArg).join(' ')}` : script;
+      return analyzeSuiteCommand(combined, headTree, fs, depth + 1);
+    }
+    const extraTargets = passthrough.filter(t => !t.startsWith('-'));
+    if (extraTargets.length) return { mode: 'targets', targets: extraTargets };
+    return /^test(?:[:_-]|$)/i.test(scriptName) ? { mode: 'all', targets: [] } : { mode: 'none', targets: [] };
+  }
+
+  if (bin === 'node' || bin === 'nodejs') {
+    let hasTest = false;
+    let hasEval = false;
+    let hasFilter = false;
+    const positionals = [];
+    for (let i = 1; i < tokens.length; i += 1) {
+      const tok = tokens[i];
+      if (tok === '--') { positionals.push(...tokens.slice(i + 1)); break; }
+      const flag = flagNameOf(tok);
+      if (NODE_FILTER_FLAGS.has(flag)) hasFilter = true;
+      if (tok === '--test') { hasTest = true; continue; }
+      if (tok === '-e' || tok === '--eval' || tok === '-p' || tok === '--print') { hasEval = true; i += 1; continue; }
+      if (NODE_VALUE_FLAGS.has(tok)) { i += 1; continue; }
+      if (tok.startsWith('-')) continue;
+      positionals.push(tok);
+    }
+    if (hasEval || hasFilter) return { mode: 'none', targets: [] };
+    if (hasTest) return positionals.length ? { mode: 'targets', targets: positionals } : { mode: 'all', targets: [] };
+    return positionals.length ? { mode: 'targets', targets: [positionals[0]] } : { mode: 'none', targets: [] };
+  }
+
+  if (BARE_TEST_RUNNERS.has(bin) || SUBCMD_TEST_RUNNERS.has(bin)) {
+    let startIdx = 1;
+    if (SUBCMD_TEST_RUNNERS.has(bin)) {
+      if ((tokens[1] ?? '').toLowerCase() !== 'test') return { mode: 'none', targets: [] };
+      startIdx = 2;
+    } else if ((bin === 'vitest' || bin === 'playwright' || bin === 'cypress') && ['run', 'test'].includes((tokens[1] ?? '').toLowerCase())) {
+      startIdx = 2;
+    }
+    let hasFilter = false;
+    const positionals = [];
+    for (let i = startIdx; i < tokens.length; i += 1) {
+      const tok = tokens[i];
+      if (tok === '--') { positionals.push(...tokens.slice(i + 1)); break; }
+      const flag = flagNameOf(tok);
+      if (RUNNER_FILTER_FLAGS.has(flag)) hasFilter = true;
+      if (RUNNER_VALUE_FLAGS.has(tok)) { i += 1; continue; }
+      if (tok.startsWith('-')) continue;
+      positionals.push(tok);
+    }
+    if (hasFilter) return { mode: 'none', targets: [] };
+    return positionals.length ? { mode: 'targets', targets: positionals } : { mode: 'all', targets: [] };
+  }
+
+  return { mode: 'none', targets: [] };
+}
+
+function analyzeSuiteCommand(command, headTree, fs, depth = 0) {
+  const segments = String(command ?? '').split(/\s*(?:&&|\|\||;|\n)\s*/).map(s => s.trim()).filter(Boolean);
+  const targets = [];
+  for (const seg of segments) {
+    const res = analyzeSuiteSegment(seg, headTree, fs, depth);
+    if (res.mode === 'all') return { mode: 'all', targets: [] };
+    if (res.mode === 'targets') targets.push(...res.targets);
+  }
+  return targets.length ? { mode: 'targets', targets: [...new Set(targets)] } : { mode: 'none', targets: [] };
+}
+
+const SUITE_PASS_TITLE_LINE_RE = /^\s*(?:✔|✓|▶|▸|ok\s+\d+(?!.*#\s*SKIP\b))/i;
+
+function parseSuiteLogSummary(suiteLog) {
+  const log = String(suiteLog ?? '');
+  const zeroTestsRan = /^(?:#|ℹ)\s*tests\s+0\b/m.test(log)
+    || /\bcollected\s+0\s+items\b/i.test(log);
+  const summaryText = log.split(/\r?\n/).filter(line => !SUITE_PASS_TITLE_LINE_RE.test(line)).join('\n');
+
+  const zeroPassing = /\b0\s+passing\b/i.test(summaryText) && !/\b[1-9]\d*\s+passing\b/i.test(summaryText);
+  const zeroPassedHeader = /^(?:#|ℹ)\s*pass\s+0\b/m.test(log) && !/^(?:#|ℹ)\s*pass\s+[1-9]\d*\b/m.test(log);
+  const zeroPassedText = /\b0\s+passed\b/i.test(summaryText) && !/\b[1-9]\d*\s+passed\b/i.test(summaryText);
+  const zeroPassed = zeroTestsRan || zeroPassing || zeroPassedHeader || zeroPassedText;
+
+  let headerSkipped = 0;
+  for (const m of log.matchAll(/^(?:#|ℹ)\s*skipped\s+([1-9]\d*)\b/gm)) headerSkipped += Number(m[1]) || 0;
+  let textSkipped = 0;
+  for (const m of summaryText.matchAll(/\b([1-9]\d*)\s+skipped\b/gi)) textSkipped += Number(m[1]) || 0;
+  let tapSkipped = 0;
+  for (const m of log.matchAll(/^\s*ok\s+\d+[^\n]*#\s*SKIP\b/gmi)) tapSkipped += 1;
+  const skippedCount = Math.max(headerSkipped, textSkipped, tapSkipped);
+
+  return { zeroTestsRan: zeroTestsRan || zeroPassing, zeroPassed, skippedCount };
+}
+
+function selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, fs) {
+  const { zeroTestsRan, zeroPassed, skippedCount } = parseSuiteLogSummary(suiteLog);
+  if (zeroTestsRan) return { mode: 'none', files: [], zeroPassed: true, skippedCount };
+
+  const inspectable = tracked.filter(isInspectableValidatorTest);
+  const parsed = analyzeSuiteCommand(suiteCmd, headTree, fs);
+  if (parsed.mode === 'none') return { mode: 'none', files: [], zeroPassed, skippedCount };
+  if (parsed.mode === 'all') return { mode: 'all', files: inspectable, zeroPassed, skippedCount };
+  const matched = inspectable.filter(rel => parsed.targets.some(target => matchesSuiteTarget(rel, target)));
+  return { mode: 'targets', files: matched, zeroPassed, skippedCount };
+}
+
+async function collectRealValidationEvidence(ctx, job, { headTree, changed, surfaces, suite, lintCodes }) {
+  const suiteCmd = resolveSuiteCommand(ctx, job) || 'npm test';
+  const offlinePassed = suite?.state === 'pass';
+  const isBugFix = job.skill === 'pdd-bug'
+    || (Array.isArray(job.labels) && job.labels.some(l => /^(?:bug|type:bug|pdd:bug)$/i.test(l)));
+
+  if (surfaces.docsOnly) {
+    return {
+      isBugFix: false,
+      bugFixBaseControl: 'not-applicable',
+      offlinePassed,
+      offlineSummary: offlinePassed ? `${suiteCmd} passed` : 'suite failed',
+      e2eChecks: [],
+    };
+  }
+
+  const changedProdFiles = [];
+  const changedBoundaryFiles = [];
+  const changedRuntimeCodeFiles = [];
+  for (const file of changed) {
+    const info = detectChangedSurfaces({ changedFiles: [file] });
+    if (!info.requiresRealE2e) continue;
+    changedProdFiles.push(file);
+    const target = canonicalTargetPath(file);
+    if (info.runtimeSurfaces.some(s => s !== 'runtime-code')) {
+      changedBoundaryFiles.push({ file, target, requiredProofKinds: info.requiredProofKinds });
+    } else {
+      changedRuntimeCodeFiles.push({ file, target });
+    }
+  }
+
+  const bugFixBaseControl = isBugFix
+    ? await resolveBugFixBaseControl(ctx, job, { changed, changedProdFiles })
+    : 'not-applicable';
+
+  if (!offlinePassed || !headTree || lintCodes.includes('boundary-mock-only-test')) {
+    return {
+      isBugFix,
+      bugFixBaseControl,
+      offlinePassed,
+      offlineSummary: offlinePassed ? `${suiteCmd} passed` : 'suite failed',
+      e2eChecks: [],
+    };
+  }
+
+  // Inspect committed test files in clean PR head checkout for real executed E2E coverage (never fabricate proof).
+  const targetProofs = new Map(); // canonicalTarget -> Map<kind, Set<testPath>>
+  const addTargetProof = (target, kind, testPath) => {
+    if (!target || !kind) return;
+    let byKind = targetProofs.get(target);
+    if (!byKind) { byKind = new Map(); targetProofs.set(target, byKind); }
+    let files = byKind.get(kind);
+    if (!files) { files = new Set(); byKind.set(kind, files); }
+    files.add(testPath);
+  };
+
+  let tracked = [];
+  try { tracked = gitFiles(headTree); } catch { tracked = []; }
+  const suiteLog = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
+  const executedSuite = selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, ctx.fs);
+  const executedRealTestFiles = [];
+  for (const rel of executedSuite.files) {
+    const content = readCleanFileUtf8(ctx.fs, headTree, rel);
+    if (typeof content !== 'string') continue;
+    const kinds = detectRealE2eKindsInTest(rel, content);
+    if (!kinds.length) continue;
+    if (kinds.includes('real-execution')) executedRealTestFiles.push(rel);
+    const { allTargets, boundaryTargets } = inspectTestBoundaryTargets(rel, content);
+    for (const target of new Set([...allTargets, ...boundaryTargets])) {
+      for (const kind of kinds) addTargetProof(target, kind, rel);
+    }
+  }
+
+  // Saved passing pdd test at this head (with no real-binding-unavailable) counts as real live-binding / real-execution.
+  const head = job.agentHead ?? job.head;
+  const savedRuntimePass = Boolean(
+    job.coverage?.head === head
+    && job.coverage?.ok === true
+    && job.coverage?.realBindingBlocker === false
+    && (job.coverage.rows ?? []).some(r => r.pass === true && r.current !== false),
+  );
+  const vectorsPassFiles = job.vectors?.head === head && job.vectors?.state === 'done'
+    ? HEAD_KINDS.flatMap(k => (job.vectors.result?.[k]?.files ?? []).filter(f => f.state === 'pass' && f.pass > 0 && !f.fail && !f.skipped).map(f => f.file))
+    : [];
+
+  // Package/build manifest files are exercised by the test runner itself rather than imported directly by test files.
+  const PACKAGE_MANIFEST_FILE_RE = /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pyproject\.toml|Cargo\.(?:toml|lock)|go\.(?:mod|sum)|(?:ts|js)config(?:\.[^/]+)?\.json)$/i;
+  const e2eChecks = [];
+  for (const kind of surfaces.requiredProofKinds) {
+    if (kind === 'real-execution') {
+      const matched = new Set();
+      let allRuntimeCovered = changedRuntimeCodeFiles.length > 0;
+      for (const { file, target } of changedRuntimeCodeFiles) {
+        const files = targetProofs.get(target)?.get('real-execution');
+        if (files && files.size > 0) {
+          for (const f of files) matched.add(f);
+        } else if (PACKAGE_MANIFEST_FILE_RE.test(file) && executedRealTestFiles.length > 0) {
+          for (const f of executedRealTestFiles) matched.add(f);
+        } else {
+          allRuntimeCovered = false;
+        }
+      }
+      const hasPartialUncoveredRuntime = changedRuntimeCodeFiles.length > 0 && matched.size > 0 && !allRuntimeCovered;
+      const suiteClean = !executedSuite.zeroPassed && executedSuite.skippedCount === 0;
+      const runtimeCoveredBySaved = suiteClean && savedRuntimePass && executedSuite.mode !== 'none' && !hasPartialUncoveredRuntime;
+      if (allRuntimeCovered && matched.size > 0) {
+        e2eChecks.push({
+          kind: 'real-execution',
+          command: `${suiteCmd} (${[...matched].slice(0, 3).join(', ')})`,
+          executed: true,
+          exitCode: 0,
+          passed: executedSuite.zeroPassed ? 0 : Math.max(1, matched.size),
+          failed: 0,
+          skipped: executedSuite.skippedCount,
+        });
+      } else if (!suiteClean) {
+        e2eChecks.push({
+          kind: 'real-execution',
+          command: suiteCmd,
+          executed: true,
+          exitCode: 0,
+          passed: executedSuite.zeroPassed ? 0 : 1,
+          failed: 0,
+          skipped: executedSuite.skippedCount,
+        });
+      } else if (vectorsPassFiles.length > 0 || runtimeCoveredBySaved) {
+        const label = vectorsPassFiles.length > 0 ? vectorsPassFiles.slice(0, 3).join(', ') : 'pdd test';
+        e2eChecks.push({
+          kind: 'real-execution',
+          command: `${suiteCmd} (${label})`,
+          executed: true,
+          exitCode: 0,
+          passed: Math.max(1, vectorsPassFiles.length),
+          failed: 0,
+          skipped: 0,
+        });
+      }
+      continue;
+    }
+
+    const suiteClean = !executedSuite.zeroPassed && executedSuite.skippedCount === 0;
+    const needingKind = changedBoundaryFiles.filter(entry => entry.requiredProofKinds.includes(kind));
+    if (!needingKind.length) continue;
+    const matchedTests = new Set();
+    let allCovered = true;
+    for (const entry of needingKind) {
+      const files = targetProofs.get(entry.target)?.get(kind);
+      if (files && files.size > 0) {
+        for (const f of files) matchedTests.add(f);
+      } else if (kind === 'live-binding' && suiteClean && savedRuntimePass) {
+        matchedTests.add('pdd test');
+      } else {
+        allCovered = false;
+        break;
+      }
+    }
+    if (allCovered && matchedTests.size > 0) {
+      e2eChecks.push({
+        kind,
+        command: `${suiteCmd} (${[...matchedTests].slice(0, 3).join(', ')})`,
+        executed: true,
+        exitCode: 0,
+        passed: executedSuite.zeroPassed ? 0 : matchedTests.size,
+        failed: 0,
+        skipped: executedSuite.skippedCount,
+      });
+    } else if (!suiteClean) {
+      e2eChecks.push({
+        kind,
+        command: suiteCmd,
+        executed: true,
+        exitCode: 0,
+        passed: executedSuite.zeroPassed ? 0 : 1,
+        failed: 0,
+        skipped: executedSuite.skippedCount,
+      });
+    }
+  }
+
+  return {
+    isBugFix,
+    bugFixBaseControl,
+    offlinePassed,
+    offlineSummary: `${suiteCmd} passed`,
+    e2eChecks,
+  };
+}
+
+async function runValidatorV2Gate(ctx, job, pr, { suite }) {
+  let changed = [];
+  try { changed = await changedFiles(ctx, job, job.head); } catch { changed = []; }
+  const surfaces = detectChangedSurfaces({ changedFiles: changed });
+  let headTree = null;
+  try { headTree = await treeAt(ctx, job, 'agent', job.head); } catch { headTree = null; }
+  const lint = collectBacksideLint(headTree, changed);
+  let supplied = null;
+  if (typeof ctx.ports.validateE2e === 'function') {
+    supplied = await ctx.ports.validateE2e({ job, pr, head: job.head, changedFiles: changed, surfaces, mode: ctx.settings.mode });
+  } else if (object(job.validation)) {
+    supplied = job.validation;
+  }
+  const base = supplied ?? await collectRealValidationEvidence(ctx, job, {
+    headTree,
+    changed,
+    surfaces,
+    suite,
+    lintCodes: lint.codes,
+  });
+  const outcome = evaluateValidationOutcome({
+    mode: ctx.settings.mode,
+    changedFiles: changed,
+    isBugFix: base.isBugFix === true,
+    offlinePassed: base.offlinePassed ?? (suite?.state === 'pass'),
+    offlineSummary: base.offlineSummary ?? (suite?.state === 'pass' ? `${resolveSuiteCommand(ctx, job) || 'suite'} passed` : 'failed'),
+    e2eChecks: Array.isArray(base.e2eChecks) ? base.e2eChecks : [],
+    bugFixBaseControl: base.bugFixBaseControl ?? 'not-applicable',
+    diagnostics: Array.isArray(base.diagnostics) ? base.diagnostics : [],
+    realBindingUnavailable: base.realBindingUnavailable === true,
+    needsHumanInteraction: base.needsHumanInteraction === true,
+    humanBoundaryDetail: base.humanBoundaryDetail ?? '',
+    verifyCommand: base.verifyCommand ?? '',
+    toolHint: base.toolHint ?? '',
+    lintBlockingCodes: [...new Set([...(Array.isArray(base.lintBlockingCodes) ? base.lintBlockingCodes : []), ...lint.codes])].sort(),
+    repairAttempts: job.validationRepairs ?? 0,
+  });
+  if (outcome.eligible) {
+    job.validatorProof = outcome.proof;
+    ctx.saveJob(job);
+    return { handled: false, outcome };
+  }
+  if (outcome.bucket === 2) {
+    await parkValidationWait(ctx, job, pr, outcome);
+    return { handled: true, outcome };
+  }
+  if (outcome.bucket === 3) {
+    await parkHumanBoundary(ctx, job, pr, outcome);
+    return { handled: true, outcome };
+  }
+  if (outcome.decision === 'needs-person') {
+    await parkRepairExhausted(ctx, job, pr, outcome);
+    return { handled: true, outcome };
+  }
+  job.validationRepairs = outcome.repairAttemptsNext;
+  ctx.saveJob(job);
+  const detailText = lint.details.length
+    ? `${outcome.message} Details: ${lint.details.join('; ')}`
+    : outcome.message;
+  const red = `[Validator v2 attempt ${outcome.repairAttemptsNext}/${MAX_VALIDATION_REPAIRS}] ${detailText}`;
+  await repairOrEnd(ctx, job, [red], [red], null, {
+    skipRepeatStop: true,
+    maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS, (job.repairs ?? 0) + 1),
+  });
+  return { handled: true, outcome };
+}
+
+async function resumeValidationParks(ctx, open) {
+  const machine = ctx.machineState();
+  const parks = Array.isArray(machine.validationParks) ? machine.validationParks : [];
+  let nextCooldowns = { ...(machine.toolCooldowns ?? {}) };
+  if (!parks.length) {
+    const pruned = pruneOrphanCooldowns(nextCooldowns, [], ctx.now());
+    if (pruned.changed) ctx.saveMachine({ ...machine, toolCooldowns: pruned.cooldowns });
+    return;
+  }
+  const activeIssues = new Set(readJobs(ctx.fs, ctx.root).flatMap(jobIssues));
+  const freeSlots = () => ctx.settings.runs - readJobs(ctx.fs, ctx.root).filter(holdsSlot).length;
+  const keptParks = [];
+  const droppedTools = new Set();
+  let changed = false;
+
+  for (const park of parks) {
+    if (activeIssues.has(park.issue)) { keptParks.push(park); continue; }
+    let prObj = null;
+    try { prObj = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${park.pr}`); } catch { keptParks.push(park); continue; }
+    if (!prObj || prObj.state !== 'open' || prObj.merged) {
+      droppedTools.add(park.cooldownTool);
+      changed = true;
+      continue;
+    }
+
+    const issueRow = open?.get(park.issue);
+    let userResumed = Boolean(issueRow && !labelsOf(issueRow).includes(DECISION));
+    if (!userResumed && issueRow && labelsOf(issueRow).includes(DECISION) && issueRow.comments > 0) {
+      try {
+        const answer = await personAnswer(ctx, park.issue);
+        if (answer?.comments?.length) userResumed = true;
+      } catch { /* ignore transient comment read error */ }
+    }
+    let preflightExitCode = null;
+    if (!userResumed && typeof ctx.ports.preflightCheck === 'function') {
+      try {
+        const probe = await ctx.ports.preflightCheck({ tool: park.cooldownTool, command: park.checkCommand, park });
+        preflightExitCode = Number.isInteger(probe?.exitCode) ? probe.exitCode : (probe?.ok === true ? 0 : null);
+      } catch { preflightExitCode = 1; }
+    }
+    const plan = planValidationResume({
+      pr: park.pr,
+      headSha: park.headSha,
+      currentPrHeadSha: prObj.head?.sha ?? '',
+      cooldownTool: park.cooldownTool,
+      preflightExitCode,
+      userResumed,
+    });
+    if (plan.action === 'head-changed-abort') {
+      droppedTools.add(park.cooldownTool);
+      changed = true;
+      continue;
+    }
+    if (plan.action !== 'resume-validate-only') { keptParks.push(park); continue; }
+    if (freeSlots() <= 0) { keptParks.push(park); continue; }
+
+    const claim = await claimIssue(ctx, park.issue).catch(() => null);
+    if (!claim) { keptParks.push(park); continue; }
+    const worktree = join(ctx.dirs.worktrees, String(park.issue));
+    if (!ctx.fs.existsSync(worktree)) {
+      await ctx.git(['fetch', '-q', 'origin', park.branch || park.headSha]).catch(() => {});
+      let worktreeOk = false;
+      try {
+        await ctx.git(['worktree', 'add', '-q', '--detach', worktree, park.headSha]);
+        worktreeOk = ctx.fs.existsSync(worktree);
+      } catch {
+        worktreeOk = false;
+      }
+      if (!worktreeOk) {
+        await undoClaim(ctx, park.issue, claim).catch(() => {});
+        keptParks.push(park);
+        continue;
+      }
+    }
+    if (issueRow && labelsOf(issueRow).includes(DECISION)) {
+      await ctx.gh.call('DELETE', `repos/${ctx.repo}/issues/${park.issue}/labels/${encodeURIComponent(DECISION)}`).catch(() => {});
+      if (Array.isArray(issueRow.labels)) {
+        issueRow.labels = issueRow.labels.filter(l => (typeof l === 'string' ? l : l?.name) !== DECISION);
+      }
+    }
+    if (plan.clearCooldown && plan.targetTool) delete nextCooldowns[plan.targetTool];
+    changed = true;
+    const canKeepReview = Boolean(
+      park.reviewPassed === true
+      && park.reviewKept?.head === park.headSha
+      && park.reviewKept?.verdict === 'PASS',
+    );
+    const resumedJob = {
+      id: randomUUID().slice(0, 8),
+      issue: park.issue,
+      title: issueRow?.title ?? `PR #${park.pr}`,
+      url: issueRow?.html_url ?? '',
+      body: issueRow?.body ?? '',
+      labels: issueRow ? labelsOf(issueRow) : [],
+      branch: park.branch || prObj.head?.ref || '',
+      worktree,
+      pr: park.pr,
+      head: park.headSha,
+      agentHead: park.headSha,
+      phase: 'pr',
+      role: 'validate-only',
+      resumed: true,
+      validateOnlyResume: true,
+      rebuildCode: false,
+      repairs: 0,
+      validationRepairs: 0,
+      started: ctx.now(),
+      prAt: ctx.now(),
+      review: canKeepReview ? { ...park.reviewKept, kept: 'validate-only-resume' } : null,
+      suite: null,
+      validation: null,
+      ...(park.parkReason === 'real-binding-unavailable'
+        ? { bindingRerun: { head: park.headSha, stories: Array.isArray(park.parkStories) ? park.parkStories : [], state: 'pending', agent: null } }
+        : {}),
+      claim,
+      progress: { sig: null, at: ctx.now(), running: false },
+    };
+    ctx.saveJob(resumedJob);
+    ctx.counts.started++;
+  }
+  for (const droppedTool of droppedTools) {
+    if (dropCooldownIfUnreferenced(nextCooldowns, droppedTool, keptParks)) changed = true;
+  }
+  const pruned = pruneOrphanCooldowns(nextCooldowns, keptParks, ctx.now());
+  if (pruned.changed) { nextCooldowns = pruned.cooldowns; changed = true; }
+  if (changed) ctx.saveMachine({ ...ctx.machineState(), toolCooldowns: nextCooldowns, validationParks: keptParks });
+}
+
+const PASSING_LOG_LINE_RE = /^\s*(?:✔|✓|ok\s+\d+|ℹ|TAP version|#\s*(?:tests|suites|pass|fail|cancelled|skipped|todo|duration_ms|Subtest))/i;
+const PASS_BANNER_LINE_RE = /^\s*PASS\s+\S/;
+const ASSERTION_BLOCK_START_RE = /(?:AssertionError\b|ERR_ASSERTION\b|Expected values to be\b|Values have same structure\b|Input A expected\b|\+ actual - expected\b|expect\([^)]*\)\.|^\s*-\s*Expected\b|^\s*\+\s*Received\b)/i;
+const ASSERTION_DIFF_LINE_RE = /^\s*(?:AssertionError\b|ERR_ASSERTION\b|Expected values to be\b|Values have same structure\b|Input A expected\b|\+ actual - expected\b|[+-]\s+|['"`][^'"`\n]*['"`]\s*(?:!==|===|!=|==)\s*['"`][^'"`\n]*['"`])/i;
+const OBJECT_DIFF_CONTEXT_LINE_RE = /^\s*(?:(?:Object|Array|Map|Set)\s*[{\[]|[{\}\[\]],?$|['"`]?[A-Za-z_$][A-Za-z0-9_$-]*['"`]?\s*:\s*(?:['"`\d\[{\-+]|true\b|false\b|null\b|undefined\b|NaN\b|Infinity\b|\[Function|\[Circular|\.\.\.)|(?:(?:\d+(?:\.\d+)?|true|false|null|undefined),?$)|\.\.\.,?$)/;
+const TEST_TITLE_FAIL_LINE_RE = /^\s*(?:▶|▸|✖|●|not ok\s+\d+|test at\s+)/i;
+const TAP_META_LINE_RE = /^\s*(?:location|failureType|code|name|stack|generatedMessage|duration_ms|expected|actual|operator|diff)\s*:/i;
+const STACK_FRAME_LINE_RE = /^\s*(?:at\s+(?:async\s+)?(?:\S+\s+\([^)]+:\d+:\d+\)|(?:file:\/\/|node:|\/|[A-Za-z]:\\)[^\s)]+:\d+:\d+)|[\w.<>$]+\s+\((?:file:\/\/|node:|\/|[A-Za-z]:\\)[^)]+:\d+:\d+\))\s*$/;
+const QUOTED_LITERAL_ONLY_LINE_RE = /^\s*['"`][^'"`\n]*['"`]\s*,?\s*$/;
+
+function extractFailureDiagnosticLines(rawLog, reproduceChecks) {
+  const streams = [
+    ...(reproduceChecks ?? []).map(c => (Array.isArray(c.lines) ? c.lines : [])),
+    ...(rawLog ? [String(rawLog).split(/\r?\n/)] : []),
+  ];
+  const hasAssertionFailure = streams.some(lines => lines.some(line => ASSERTION_BLOCK_START_RE.test(String(line ?? ''))));
+  const out = [];
+  for (const lines of streams) {
+    let inAssertionBlock = false;
+    for (const line of lines) {
+      const trimmed = String(line ?? '').trim();
+      if (!trimmed) continue;
+      if (PASSING_LOG_LINE_RE.test(trimmed) || PASS_BANNER_LINE_RE.test(trimmed)) { inAssertionBlock = false; continue; }
+      if (TEST_TITLE_FAIL_LINE_RE.test(trimmed)) { inAssertionBlock = false; continue; }
+      if (STACK_FRAME_LINE_RE.test(trimmed)) { inAssertionBlock = false; continue; }
+      if (TAP_META_LINE_RE.test(trimmed)) {
+        if (/ERR_ASSERTION|AssertionError/i.test(trimmed)) inAssertionBlock = true;
+        continue;
+      }
+      if (ASSERTION_BLOCK_START_RE.test(trimmed)) { inAssertionBlock = true; continue; }
+      if (ASSERTION_DIFF_LINE_RE.test(trimmed)) continue;
+      if (/^\s*error\s*:\s*['"`]?.*(?:AssertionError|ERR_ASSERTION|!==|===|Expected values)/i.test(trimmed)) {
+        inAssertionBlock = true;
+        continue;
+      }
+      if (inAssertionBlock) {
+        if (OBJECT_DIFF_CONTEXT_LINE_RE.test(trimmed) || QUOTED_LITERAL_ONLY_LINE_RE.test(trimmed)) continue;
+        inAssertionBlock = false;
+      }
+      // Never mistake an assertion failure message or quoted diff line inside a unit test for an external auth/human outage.
+      if (hasAssertionFailure && (/AssertionError|ERR_ASSERTION|strictEqual|deepEqual|match\(/i.test(trimmed) || QUOTED_LITERAL_ONLY_LINE_RE.test(trimmed))) continue;
+      out.push(trimmed);
+    }
+  }
+  return out;
+}
+
+async function runBindingRerunIfPending(ctx, job, pr = null) {
+  const rerun = job.bindingRerun;
+  if (!rerun || rerun.head !== job.head || rerun.state === 'done') return false;
+  if (rerun.state === 'pending') {
+    let stories = Array.isArray(rerun.stories) ? rerun.stories.filter(named) : [];
+    if (!stories.length) {
+      const fromBody = runtimeVerdicts(pr?.body ?? '')
+        .filter(l => l.verdict === 'not-run' && /real-binding-unavailable/i.test(l.line) && named(l.story))
+        .map(l => l.story);
+      const fromChanged = (await changedFiles(ctx, job, job.head).catch(() => []))
+        .filter(f => /^user_stories\/.*\.md$/i.test(f));
+      stories = [...new Set([...fromBody, ...fromChanged])];
+      rerun.stories = stories;
+    }
+    if (typeof ctx.ports.rerunRuntimeBinding === 'function') {
+      await ctx.ports.rerunRuntimeBinding({ job, head: job.head, stories });
+      rerun.state = 'done';
+      ctx.runtimeEvidenceCache = null;
+      job.coverage = null;
+      ctx.saveJob(job);
+      return false;
+    }
+    if (!stories.length) {
+      rerun.state = 'done';
+      ctx.runtimeEvidenceCache = null;
+      job.coverage = null;
+      ctx.saveJob(job);
+      return false;
+    }
+    rerun.agent = startJob(ctx, job, 'runtime', job.worktree, '', {
+      command: process.execPath,
+      args: [ctx.pdd, 'test', '--json', ...stories],
+    });
+    rerun.state = 'running';
+    ctx.saveJob(job);
+    return true;
+  }
+  if (rerun.state === 'running' && rerun.agent) {
+    const seen = ctx.jobs.read(rerun.agent);
+    if (seen.state === 'running') {
+      const watch = await watchProcess(ctx, job, rerun.agent, 'runtime');
+      if (watch.state === 'running') {
+        noteProgress(ctx, job, `binding-rerun|${rerun.agent.id}`, true);
+        ctx.saveJob(job);
+        return true;
+      }
+    }
+    recordPartTelemetry(ctx, job, rerun.agent, 'runtime', seen);
+    rerun.state = 'done';
+    ctx.runtimeEvidenceCache = null;
+    job.coverage = null;
+    ctx.saveJob(job);
+  }
+  return false;
+}
+
 async function mergeCheck(ctx, job) {
   const { gh, repo, state, settings } = ctx;
   // A merged PR is a merge, also after a quiet period: END never runs on a merged issue. The checks end only when
@@ -4207,7 +5335,10 @@ async function mergeCheck(ctx, job) {
   // "Runtime: not run" is allowed and files no report by itself; a Runtime report comes only from a failed job
   // whose cause kind is runtime (END).
   job.runtime = normalRuntime(job.runtime);
+  if (await runBindingRerunIfPending(ctx, job, pr)) return;
   await syncVerifiedRuntimeLines(ctx, job, pr);
+  const bindingBlocker = await detectSavedRealBindingBlocker(ctx, job, pr);
+  if (bindingBlocker?.outcome?.bucket === 2) return parkValidationWait(ctx, job, pr, bindingBlocker.outcome, { parkStories: bindingBlocker.stories });
   await runtimeResendable(ctx, job, pr.body);
   await runtimeNotRunReport(ctx, job);
   // The Runtime gate is an allowlist: only PASS or "not run" lines, and only a pass or not-run result, can merge. Git
@@ -4336,7 +5467,38 @@ async function mergeCheck(ctx, job) {
     runIds: [...new Set(reproduceChecks.flatMap(c => c.runIds ?? []))],
     checkIds: [...new Set(reproduceChecks.flatMap(c => c.checkIds ?? []))],
   } : null;
-  if (reds.length) return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds, findings, reproduce);
+  if (reds.length) {
+    if ((suite?.state === 'fail' || ci?.state === 'red') && nonTestReds === 0) {
+      const suiteTail = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
+      const diagLines = extractFailureDiagnosticLines(suiteTail, reproduceChecks);
+      const changed = await changedFiles(ctx, job, job.head).catch(() => []);
+      const suiteCmd = resolveSuiteCommand(ctx, job) || 'npm test';
+      const suiteOutcome = evaluateValidationOutcome({
+        mode: ctx.settings.mode,
+        changedFiles: changed,
+        offlinePassed: false,
+        e2eChecks: suite?.state === 'fail'
+          ? [{ kind: 'real-execution', command: suiteCmd, executed: true, exitCode: 1, passed: 0, failed: 1, skipped: 0 }]
+          : [],
+        diagnostics: diagLines,
+        repairAttempts: job.validationRepairs ?? 0,
+      });
+      if (suiteOutcome.bucket === 2) return parkValidationWait(ctx, job, pr, suiteOutcome);
+      if (suiteOutcome.bucket === 3 && suiteOutcome.waitKind === 'human-boundary') return parkHumanBoundary(ctx, job, pr, suiteOutcome);
+      if (suiteOutcome.decision === 'needs-person' && suiteOutcome.waitKind === 'repair-exhausted') {
+        return parkRepairExhausted(ctx, job, pr, suiteOutcome);
+      }
+      if (suite?.state === 'fail' && suiteOutcome.bucket === 1 && suiteOutcome.decision === 'repair' && job.mechanical?.head !== job.head) {
+        job.validationRepairs = suiteOutcome.repairAttemptsNext;
+        ctx.saveJob(job);
+        return repairOrEnd(ctx, job, reds, findings, reproduce, {
+          skipRepeatStop: true,
+          maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS, (job.repairs ?? 0) + 1),
+        });
+      }
+    }
+    return job.mechanical?.head === job.head ? conflictFix(ctx, job, { files: job.mechanical.files, reds }) : repairOrEnd(ctx, job, reds, findings, reproduce);
+  }
   // Pending CI waits while its picture changes, and at most ciStuckMinutes with no change: then it is stuck (a no-result
   // end), so it never holds a slot for good.
   if (ci.sig !== job.ci?.sig || job.ci?.head !== job.head) job.ci = { head: job.head, sig: ci.sig, at: ctx.now() };
@@ -4372,6 +5534,8 @@ async function mergeCheck(ctx, job) {
   if (job.paths?.unchecked?.length) { Object.assign(job, { lastError: `the merge waits: ${job.paths.wait}`, lastErrorTool: false, lastErrorStep: job.paths.bindingsWait ? 'bindings' : 'owners' }); ctx.saveJob(job); return; }
   // #3241 (rule B5): a Runtime check that was never sent, or got no verdict with no failed check, is sent once more.
   if ((await runtimeResend(ctx, job, pr)).hold) return;
+  // Step 5b: Universal Validator v2 gate & backside lint (fail-closed in BOTH auto and observe modes).
+  if ((await runValidatorV2Gate(ctx, job, pr, { suite })).handled) return;
   // The merge lane: one PR per repository in the final step. Other green PRs wait in claim order with their reviews.
   if (await enterLane(ctx, job) !== 'final') return;
   // L2: the exact conflict check. A conflict never goes to repairOrEnd: mechanical hunks are fixed in the lane, other
@@ -4420,6 +5584,7 @@ async function mergeCheck(ctx, job) {
       `- CI: ${ci.state === 'local' ? `not required by local policy (${ci.note})` : ci.state === 'none' ? `none (no check run or status ${NO_CI_AFTER / MIN} minutes after the PR)` : `green (${ci.count} check(s))`}`,
       '- Full test suite: pass', job.review?.kept === 'mechanical' ? '- Review: PASS (kept: the lane fixed only mechanical conflict hunks)' : job.review?.kept ? '- Review: PASS (kept after a clean base refresh, same change)' : job.review?.scoped ? `- Review: PASS (a scoped check after ${job.review.scoped.reason}, on top of the earlier full review)` : '- Review: PASS from a fresh reviewer', ...(reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null) ? [reviewerIndependenceLine(job.builderFamily ?? null, job.review?.reviewFamily ?? null, job.review?.reviewIndependence ?? null)] : []), `- ${runtimeLine}`, `- ${evidenceText(honestEvidence(job))}`, `- Base: ${oneLine(base.message)}`,
       `- Merge lane: final step${job.lane?.waited ? ` after ${Math.round(job.lane.waited / MIN)} minutes in the queue` : ''}`,
+      ...(job.validatorProof?.commands?.length ? [`- Validation proof: surfaces=${job.validatorProof.surfaces.join(', ') || 'none'}; commands=${job.validatorProof.commands.join(', ')}; exitCodes=${job.validatorProof.exitCodes.join(', ')}`] : []),
       ...(job.coverage?.consumers?.line ? [`- ${job.coverage.consumers.line}`] : []),
       ...engineEvidenceLines(job), `- Evidence record: ${basename(saveEvidence(ctx, job, { lines: runtimeVerdicts(pr.body), claims: runtimeClaims(pr.body, job), ci, review, suite }) ?? evidencePath(ctx, job))} on this machine`,
       ...(missingApprovals > 0 ? [`- Human pull-request approvals still needed on GitHub before merging: ${missingApprovals} of ${requiredApprovals}`] : []),
@@ -5359,15 +6524,15 @@ function sameFinding(a, b) {
   if (a.places.length && b.places.length) return a.places.some(([file, line]) => b.places.some(([other, at]) => file === other && Math.abs(line - at) <= 3)) && (shared >= 2 && overlap >= 0.25 || overlap >= 0.4);
   return !a.places.length && !b.places.length && overlap >= 0.6;
 }
-function repairStop(ctx, job, findings) {
+function repairStop(ctx, job, findings, { skipRepeatStop = false, maxRepairs = ctx.settings.repairs } = {}) {
   const now = findings.map(finding), rounds = job.rounds ?? [], last = rounds.at(-1);
   let stop = null;
-  if (last) {
+  if (last && !skipRepeatStop) {
     const unfixed = now.find(f => last.findings.some(old => sameFinding(f, old)));
     const back = now.find(f => rounds.slice(0, -1).some(round => round.findings.some(old => sameFinding(f, old))));
     stop = unfixed ? `a finding of the last round is still there (${unfixed.text})` : back ? `a finding of an earlier round came back (${back.text})` : null;
   }
-  if (!stop && job.repairs >= ctx.settings.repairs) stop = `the safety cap of ${ctx.settings.repairs} repair(s) is reached (autopilot.maxRepairs)`;
+  if (!stop && job.repairs >= maxRepairs) stop = `the safety cap of ${maxRepairs} repair(s) is reached (autopilot.maxRepairs)`;
   job.rounds = [...rounds, { findings: now }].slice(-8);
   return stop;
 }
@@ -5387,12 +6552,12 @@ async function cleanRepairWorktree(ctx, job, targetRef) {
   await ctx.git(['clean', '-fdq'], job.worktree);
   return dirtyFiles;
 }
-async function repairOrEnd(ctx, job, reds, findings = reds, reproduce = null) {
+async function repairOrEnd(ctx, job, reds, findings = reds, reproduce = null, options = {}) {
   if (!await stopChecks(ctx, job)) return;
   await leaveLane(ctx, job);
   job.lane = null;
   const checkRounds = Array.isArray(job.rounds) ? [...job.rounds] : [];
-  const stop = repairStop(ctx, job, findings);
+  const stop = repairStop(ctx, job, findings, options);
   // #3239 item 7: the END text quotes what the path checks read for each path red, so a person sees a false red at once.
   const read = reds.map(red => job.paths?.head === job.head ? job.paths.quotes?.[red] : null).filter(Boolean);
   if (stop) return end(ctx, job, cause('job', 'checks-red', `the repairs stopped because ${stop}. The PR checks after ${job.repairs} repair(s): ${reds.join(' ')}${read.length ? ` What the path checks read: ${read.join(' | ')}.` : ''}`));
@@ -6066,7 +7231,7 @@ async function closeOtherPrs(ctx, n, branch) {
       // engine's own note counts.
       const me = await ctx.login();
       if ((await ctx.gh.all(`repos/${ctx.repo}/issues/${pr.number}/comments?per_page=100`)).some(c => String(c.user?.login ?? '').toLowerCase() === me
-        && /<!-- pdd:autopilot-core:(?:would-merge|needs-approval):/.test(String(c.body ?? '')))) continue;
+        && /<!-- pdd:autopilot-core:(?:would-merge|needs-approval|auth-wait|human-boundary|repair-exhausted):/.test(String(c.body ?? '')))) continue;
       await ctx.gh.ok('PATCH', `repos/${ctx.repo}/pulls/${pr.number}`, { state: 'closed' });
       await ctx.comment(pr.number, `Autopilot closed this PR: a new job for issue #${n} starts on branch \`${branch}\`. The branch \`${ref}\` stays.\n\n<!-- pdd:autopilot-core:superseded:${n}:${branch} -->`);
     }
@@ -6134,14 +7299,32 @@ async function continueEnd(ctx, job) {
     if (!e.comment && e.commentTried) e.comment = String((await gh.all(`repos/${repo}/issues/${job.issue}/comments?per_page=100`)).find(c => String(c.body ?? '').includes(marker))?.id ?? '') || undefined;
     if (!e.comment) {
       e.commentTried = true; ctx.saveJob(job);
+      const followUp = why.authWait
+        ? `When the tool/login is healthy again, Autopilot auto-resumes validate-only on PR #${job.pr} without rebuilding (or reply / remove \`${DECISION}\` to trigger validate-only resume immediately).`
+        : why.humanBoundary
+          ? `Complete the human verification above on PR #${job.pr}, then reply or remove \`${DECISION}\` when ready.`
+          : why.repairExhausted
+            ? `Autopilot stopped after ${MAX_VALIDATION_REPAIRS} validation repair attempts on PR #${job.pr}. Inspect the PR and remove \`${DECISION}\` when ready to continue.`
+            : 'Please answer in a comment (one letter is enough). Autopilot reads your answer at its next check, removes the `' + DECISION + '` label itself and goes on.';
       e.comment = String((await ctx.comment(job.issue, [`Autopilot needs a decision from a person to go on with this issue:`, '', ...String(why.question).split('\n').map(line => `> ${line}`), '',
-        'Please answer in a comment (one letter is enough). Autopilot reads your answer at its next check, removes the `' + DECISION + '` label itself and goes on.', '', marker].join('\n'))).id); ctx.saveJob(job);
+        followUp, '', marker].join('\n'))).id); ctx.saveJob(job);
     }
     if (why.keepPr && job.pr && !e.prNoted) {
-      const prNote = why.branchApproval
-        ? `Autopilot waits for a person's pull-request review approval on GitHub required by branch protection on \`${ctx.state.baseBranch}\` (see issue #${job.issue}). It stays open; Autopilot does not merge it.`
-        : `Autopilot waits for a person's approval of the prompt changes in this PR (see issue #${job.issue}). It stays open; Autopilot does not merge it.`;
-      await ctx.comment(job.pr, `${prNote}\n\n<!-- pdd:autopilot-core:needs-approval:${job.pr} -->`);
+      let prBody;
+      if (why.authWait) {
+        prBody = `${why.text}\n\n<!-- pdd:autopilot-core:auth-wait:${job.pr} -->`;
+      } else if (why.humanBoundary) {
+        const cardText = Array.isArray(why.humanVerificationCard) ? why.humanVerificationCard.join('\n') : String(why.question ?? why.text);
+        prBody = `Human verification required before merge:\n\n${cardText}\n\n<!-- pdd:autopilot-core:human-boundary:${job.pr} -->`;
+      } else if (why.repairExhausted) {
+        prBody = `Autopilot reached the maximum of ${MAX_VALIDATION_REPAIRS} validation repair attempts on PR #${job.pr} (issue #${job.issue}): ${why.text}\n\nThis PR stays open for a person to inspect; Autopilot does not merge it.\n\n<!-- pdd:autopilot-core:repair-exhausted:${job.pr} -->`;
+      } else {
+        const prNote = why.branchApproval
+          ? `Autopilot waits for a person's pull-request review approval on GitHub required by branch protection on \`${ctx.state.baseBranch}\` (see issue #${job.issue}). It stays open; Autopilot does not merge it.`
+          : `Autopilot waits for a person's approval of the prompt changes in this PR (see issue #${job.issue}). It stays open; Autopilot does not merge it.`;
+        prBody = `${prNote}\n\n<!-- pdd:autopilot-core:needs-approval:${job.pr} -->`;
+      }
+      await ctx.comment(job.pr, prBody);
       e.prNoted = true; ctx.saveJob(job);
     }
     if (why.decision && job.pr && !e.prNoted) {
@@ -6244,8 +7427,11 @@ async function finishLocal(ctx, job, outcome, text) {
     confirmed = true;
     const mine = name => name === String(job.issue) || name.startsWith(`${job.issue}-`) || name.startsWith(`${job.issue}.`);
     const list = dir => { try { return ctx.fs.readdirSync(dir).filter(mine); } catch { return []; } };
-    for (const path of new Set([job.worktree, ...list(ctx.dirs.worktrees).map(name => join(ctx.dirs.worktrees, name))]))
-      await step('worktree', async () => { if (!await removeTree(ctx, path)) throw Error(`${path} stays`); });
+    const keepAuthWaitWorktree = Boolean(job.end?.cause?.authWait || job.end?.cause?.code === 'auth-wait');
+    if (!keepAuthWaitWorktree) {
+      for (const path of new Set([job.worktree, ...list(ctx.dirs.worktrees).map(name => join(ctx.dirs.worktrees, name))]))
+        await step('worktree', async () => { if (!await removeTree(ctx, path)) throw Error(`${path} stays`); });
+    }
     if (outcome === 'merged') await step('branch', () => ctx.git(['branch', '-D', job.branch]));
     for (const name of list(ctx.dirs.logs).filter(name => !name.endsWith('.log') && !/-evidence-[0-9a-f]+\.json$/.test(name))) await step('logs', () => ctx.fs.rmSync(join(ctx.dirs.logs, name), { force: true }));
     await step('history', () => {
@@ -6630,6 +7816,7 @@ export async function tickCore(input, ports) {
     const rank = job => job.phase !== 'pr' ? 2 : job.lane?.state === 'final' ? 0 : 1;
     return rank(a) - rank(b) || (a.phase === 'pr' ? laneOrder(a, b) : a.issue - b.issue);
   };
+  await resumeValidationParks(ctx, open).catch(error => ctx.warn(`Autopilot core validation resume skipped: ${error.message}`));
   for (const job of readJobs(ctx.fs, ctx.root).sort(jobOrder)) await runJob(job);
   if (ctx.laneFreed) {
     const retried = new Set();
@@ -6682,9 +7869,10 @@ async function sweepFiles(ctx) {
   const latest = new Map();
   for (const row of chronological(ctx.fs, ctx.root)) if (typeof row.outcome === 'string' && Number.isSafeInteger(row.issue)) latest.set(String(row.issue), row);
   const list = dir => { try { return ctx.fs.readdirSync(dir); } catch { return []; } };
+  const parkedIssues = new Set((ctx.machineState().validationParks ?? []).map(p => String(p.issue)));
   for (const name of list(ctx.dirs.worktrees)) {
     const issue = /^(\d+)(?:-|$)/.exec(name)?.[1];
-    if (!issue || live.has(issue)) continue;
+    if (!issue || live.has(issue) || parkedIssues.has(issue)) continue;
     if (name === issue && latest.get(issue)?.personRelease === true) continue;
     await removeTree(ctx, join(ctx.dirs.worktrees, name)).catch(error => ctx.warn(`Autopilot core could not remove ${name}: ${error.message}`));
   }
@@ -6792,6 +7980,12 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);
   lines.push(...poolLines(machine));
   lines.push(...ciLines(machine));
+  for (const [tool, info] of Object.entries(machine.toolCooldowns ?? {})) {
+    if (info?.active) lines.push(`Tool cooldown: ${tool} (check: ${info.checkCommand || 'manual'})`);
+  }
+  for (const park of machine.validationParks ?? []) {
+    lines.push(`Validation wait: PR #${park.pr} at ${short(park.headSha)} waiting on ${park.cooldownTool}`);
+  }
   const breaker = (object(state?.circuitBreaker) && state.circuitBreaker.active !== false ? state.circuitBreaker : null) ?? machine.circuitBreaker;
   if (breaker) {
     lines.push(`Circuit breaker: mode downgraded from auto to observe at ${breaker.trippedAt} (${breaker.reason}); fix the default branch and run pdd autopilot start --mode auto to resume merges.`);
@@ -6990,7 +8184,7 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
     if (!mainCheck.ok) return mainCheck.response;
 
     const parts = [[job.agent, job.role], [job.review?.agent, 'review'], [job.suite?.agent, 'suite'],
-      [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime']].filter(([part]) => Boolean(part));
+      [job.vectors?.agent, 'vectors'], [job.runtimeWait?.agent, 'runtime'], [job.bindingRerun?.agent, 'runtime']].filter(([part]) => Boolean(part));
     const hadRunning = parts.some(([part]) => { try { return ctx.jobs.read(part)?.state === 'running'; } catch { return false; } });
     let stoppedOk = await stopChecks(ctx, job);
     for (let attempt = 1; !stoppedOk && attempt < 10; attempt++) {

@@ -58,6 +58,9 @@ line against its own records. A line that the records do not support is red.
 
 - `not run` is only for a cause that this PR cannot fix: a native-only prompt, no verdict with no failed step,
   maintenance (below), or a refusal that pdd gives no fix for.
+- `real-binding-unavailable`, expired external logins, stopped daemons, or missing real end-to-end tests are never a
+  silent skip or pass in either `auto` or `observe` mode. Autopilot parks auth/tool outages without burning repair
+  rounds and resumes validation on the same commit head once healthy.
 - A changed Story with no Runtime test is no such cause. Write its Runtime test (one step for each criterion) and run
   `pdd test`, or mark the owning prompt native-only with frontmatter kind and reason.
 - A refusal with a fix from pdd is this PR's work. Apply the fix and check again. For `impossible-result-value-pointer`,
@@ -65,6 +68,19 @@ line against its own records. A line that the records do not support is red.
   port returns the value directly, or state the exact returned JSON object keys in the prompt's Ports section so
   `result_schema` includes that pointer (fix it in the prompt/scenario rather than shipping `not run`).
 - Write the exact cause in the line: `Runtime: not run (STORY: CAUSE)`.
+
+## Real end-to-end tests
+
+- For every non-doc runtime change, write real end-to-end tests upfront for the changed surface instead of mock-only
+  unit tests alone:
+  - CLI or scripts: run the real subprocess/CLI binary and assert stdout, stderr, files, and exit code.
+  - API, server, or database: start a real local HTTP/WS server or real DB round-trip and assert real responses.
+  - Web UI: exercise the real rendered flow in a browser (for example Playwright).
+  - External tool, auth, or cloud integration: exercise the real live binding where healthy; never rewrite a real E2E
+    check into mocks when a login or external service is down.
+- For a bug fix, prove the regression test (including the real E2E check) fails on the merge base and passes on HEAD.
+- Never add silent validation skips (`test.skip` on validation/E2E tests or `real-binding-unavailable` local-skip
+  bypasses). Docs-only changes need no E2E run.
 
 ## Large whole numbers
 
