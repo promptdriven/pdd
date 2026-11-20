@@ -29,6 +29,7 @@ import {
   accountsStatePath,
   buildSyntheticGatewayIdToken,
   createCodexStepOverlay,
+  managedClaudeSettingsPath,
   managedCodexAuthPath,
   managedCodexConfigPath,
   pddManagedCodexHome,
@@ -2473,16 +2474,20 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   // 3. Fix #3b & #3c: Execute `renderAutoSwitchBlock('sh')` in real `bash`!
   assert.equal((await invokeCli(['accounts', 'use', 'cl-shared-1'], sb)).exit, 0);
   const clSettingsPath = join(sb.home, '.claude', 'settings.json');
-  assert.match(JSON.parse(readFileSync(clSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
+  assert.equal(existsSync(clSettingsPath), false, 'use must never create or mutate ~/.claude/settings.json');
+  const managedClSettingsPath = managedClaudeSettingsPath(sb.env);
+  assert.match(JSON.parse(readFileSync(managedClSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
 
   const fakeBin = join(sb.root, 'wrapper-bin');
   mkdirSync(fakeBin, { recursive: true });
   const managedHome = pddManagedCodexHome(sb.env);
   writeFileSync(join(fakeBin, 'pdd'), `#!/bin/sh\nif [ "\${PDD_PRINT_CODEX_HOME:-}" = "1" ]; then printf '%s\\n' ${JSON.stringify(managedHome)}; fi\nexit 0\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, 'codex'), `#!/bin/sh\nprintf 'CODEX_HOME=%s ARGS=%s\\n' "\${CODEX_HOME:-UNSET}" "$*"\n`, { mode: 0o755 });
-  writeFileSync(join(fakeBin, 'claude'), `#!/bin/sh\nprintf 'API_KEY=%s ARGS=%s\\n' "\${ANTHROPIC_API_KEY:-UNSET}" "$*"\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'pdd-claude'), `#!/bin/sh\nprintf 'VIA=pdd-claude ARGS=%s\\n' "$*"\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'claude'), `#!/bin/sh\nprintf 'VIA=stock-claude ARGS=%s\\n' "$*"\n`, { mode: 0o755 });
   chmodSync(join(fakeBin, 'pdd'), 0o755);
   chmodSync(join(fakeBin, 'codex'), 0o755);
+  chmodSync(join(fakeBin, 'pdd-claude'), 0o755);
   chmodSync(join(fakeBin, 'claude'), 0o755);
 
   const wrapperScript = join(sb.root, 'wrapper.sh');
@@ -2511,18 +2516,27 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   assert.equal(runBash('codex logout', { CODEX_HOME: managedHome }).status, 1);
   assert.equal(runBash('codex login', { CODEX_HOME: managedHome }).status, 1);
 
-  // 3c: `claude` unsets `ANTHROPIC_API_KEY` inside subshell when `CLAUDE_CODE_OAUTH_TOKEN` is in settings.json, while parent shell keeps `ANTHROPIC_API_KEY`!
+  // 3c: `claude` delegates to `pdd-claude` when installed while parent shell keeps `ANTHROPIC_API_KEY`!
   const claudeRun = runBash('export ANTHROPIC_API_KEY="sk-ant-api03-ambient"; claude -p hi; printf "PARENT=%s\\n" "$ANTHROPIC_API_KEY"');
   assert.equal(claudeRun.status, 0, claudeRun.stderr);
-  assert.match(claudeRun.stdout, /API_KEY=UNSET ARGS=-p hi/);
+  assert.match(claudeRun.stdout, /VIA=pdd-claude ARGS=-p hi/);
   assert.match(claudeRun.stdout, /PARENT=sk-ant-api03-ambient/);
 
-  // 4. Fix #4: Leaving/removing the last Claude account cleans `pddg_*` & gateway `ANTHROPIC_BASE_URL` from `~/.claude/settings.json`!
+  // 4. Fix #4: Leaving/removing the last Claude account cleans isolated managedClaudeSettingsPath AND legacy `pddg_*` & gateway `ANTHROPIC_BASE_URL` from `~/.claude/settings.json`!
+  mkdirSync(join(sb.home, '.claude'), { recursive: true });
+  writeFileSync(clSettingsPath, JSON.stringify({
+    theme: 'dark',
+    env: {
+      CLAUDE_CODE_OAUTH_TOKEN: 'pddg_legacy_from_older_pdd',
+      ANTHROPIC_BASE_URL: `${cloud.serverUrl}/v1/accounts/claude-gateway/lse_legacy`,
+    },
+  }, null, 2));
   const leaveClRes = await invokeCli(['accounts', 'leave', 'cl-shared-1'], sb);
   assert.equal(leaveClRes.exit, 0, leaveClRes.stderr);
+  assert.equal(existsSync(managedClSettingsPath), false, 'leave removed isolated managed Claude settings file');
   const clAfterLeave = JSON.parse(readFileSync(clSettingsPath, 'utf8'));
-  assert.equal(clAfterLeave.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'leave stripped pddg_* token from ~/.claude/settings.json');
-  assert.equal(clAfterLeave.env?.ANTHROPIC_BASE_URL, undefined, 'leave stripped gateway ANTHROPIC_BASE_URL from ~/.claude/settings.json');
+  assert.equal(clAfterLeave.theme, 'dark');
+  assert.equal(clAfterLeave.env, undefined, 'leave pruned empty env object after stripping legacy PDD entries');
 
   // Reconciling via `pdd accounts list` cleans lingering gateway settings whenever `!nextActive.claude`,
   // EVEN when another paused/inactive Claude account remains enrolled (`nextProviders.includes('claude')`)!
@@ -2678,5 +2692,180 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   const acceptOkRes = await invokeCli(['accounts', 'accept', 'inv_ok_3'], sb);
   assert.equal(acceptOkRes.exit, 0, acceptOkRes.stderr);
   assert.equal(acceptOkRes.stdout.trim(), 'Accepted shared account "cl-invite-3".');
-  assert.match(JSON.parse(readFileSync(clSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
+  assert.equal(existsSync(clSettingsPath), false, 'accept must never mutate ~/.claude/settings.json');
+  assert.match(JSON.parse(readFileSync(managedClSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
+});
+
+test('#3567 & #3539: in-place refresh preserves shares message, idempotent already_shared share, human list hides redundant pending invites, and non-TTY codex forwards stdout/stderr', async t => {
+  const cloud = await createPoolGatewayServer(t, {
+    accounts: [
+      {
+        account_id: 'acc_cx_refresh_1',
+        label: 'cx-refresh',
+        provider: 'codex',
+        plan: 'pro',
+        is_owner: true,
+        shared: true,
+        state: 'ready',
+        five_hour_used_percent: 10,
+        five_hour_reset_at: '2026-11-18T02:00:00Z',
+        weekly_used_percent: 20,
+        weekly_reset_at: '2026-11-23T00:00:00Z',
+      },
+    ],
+  });
+  const sb = makeSandbox(t, cloud.serverUrl);
+  const origEnroll = cloud.state.accounts[0];
+
+  // 1. In-place credential refresh clarifies that existing shares remain active.
+  const cxDir = join(sb.root, 'cx-src');
+  mkdirSync(cxDir, { recursive: true });
+  writeFileSync(join(cxDir, 'auth.json'), JSON.stringify({
+    auth_mode: 'chatgpt',
+    OPENAI_API_KEY: null,
+    tokens: {
+      access_token: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+      refresh_token: 'rt_refresh_01',
+      id_token: makeJwt({ email: 'owner-refresh@example.com' }),
+      account_id: 'acc-refresh-1',
+    },
+  }));
+  const reCx = await invokeCli(['accounts', 'import', '--provider', 'codex', '--from', cxDir, '--label', 'cx-refresh'], sb, {
+    fetch: async (url, init) => {
+      if (String(url).endsWith('/v1/accounts') && (init?.method || 'GET') === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ account: origEnroll, already_enrolled: true }),
+        };
+      }
+      return fetch(url, init);
+    },
+  });
+  assert.equal(reCx.exit, 0, reCx.stderr);
+  assert.match(reCx.stdout, /Already enrolled as cx-refresh — refreshed credentials\. Existing shares remain active\./);
+
+  // 2. Idempotent server already_shared=true response on `pdd accounts share` reports clearly without expecting an invite ID.
+  const shareRes = await invokeCli(['accounts', 'share', 'cx-refresh', '--with', 'teammate'], sb, {
+    resolveGithubUser: async login => ({ login, id: 4242, type: 'User' }),
+    fetch: async (url, init) => {
+      if (String(url).includes('/share') && (init?.method || 'GET') === 'POST') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ account: origEnroll, invite: null, invite_id: null, already_shared: true }),
+        };
+      }
+      return fetch(url, init);
+    },
+  });
+  assert.equal(shareRes.exit, 0, shareRes.stderr);
+  assert.match(shareRes.stdout, /already shared with teammate/i);
+
+  // 3. `pdd accounts list` human-readable output hides redundant pending invites for accounts already in `accounts`,
+  //    while `--json` preserves the raw API `pending_invites` array.
+  cloud.state.pendingInvites.push(
+    { invite_id: 'inv_redundant_1', account_id: origEnroll.account_id, label: 'cx-refresh', provider: 'codex', owner_login: 'owner' },
+    { invite_id: 'inv_fresh_2', account_id: 'acc_brand_new_99', label: 'cx-new', provider: 'codex', owner_login: 'other-owner' },
+  );
+  const listHuman = await invokeCli(['accounts', 'list'], sb);
+  assert.equal(listHuman.exit, 0, listHuman.stderr);
+  assert.doesNotMatch(listHuman.stdout, /inv_redundant_1/, 'redundant invite must be hidden in human output');
+  assert.match(listHuman.stdout, /inv_fresh_2/, 'non-redundant pending invite must still be shown');
+  const listJson = await invokeCli(['accounts', 'list', '--json'], sb);
+  assert.equal(listJson.exit, 0, listJson.stderr);
+  const parsedJson = JSON.parse(listJson.stdout);
+  assert.equal(parsedJson.pending_invites.some(i => i.invite_id === 'inv_redundant_1'), true);
+  assert.equal(parsedJson.pending_invites.some(i => i.invite_id === 'inv_fresh_2'), true);
+
+  // 4. Non-TTY `pdd accounts codex` (runPlainCodexOnce) forwards Buffer stdout/stderr and maps signal exits to non-zero.
+  const codexRes = await invokeCli(['accounts', 'codex', '--version'], sb, {
+    run: async (_cmd, _args) => ({
+      code: 0,
+      stdout: Buffer.from('codex-cli 0.170.0\n'),
+      stderr: Buffer.from('warn-line\n'),
+    }),
+  });
+  assert.equal(codexRes.exit, 0, codexRes.stderr);
+  assert.equal(codexRes.stdout, 'codex-cli 0.170.0\n');
+  assert.equal(codexRes.stderr, 'warn-line\n');
+
+  const sigRes = await invokeCli(['accounts', 'codex', '--version'], sb, {
+    run: async () => ({ code: null, signal: 'SIGTERM', stdout: '', stderr: '' }),
+  });
+  assert.equal(sigRes.exit, 143, 'signal exit must never map to 0');
+
+  // 5. Real subprocess non-TTY path (managed `exec` passthrough + unenrolled fallback) streams piped stdin, stdout, stderr, non-zero exit codes, and SIGTERM -> 143.
+  const { Readable } = await import('node:stream');
+  const fakeBinDir = join(sb.root, 'fake-codex-bin');
+  mkdirSync(fakeBinDir, { recursive: true });
+  const fakeCodexPath = join(fakeBinDir, 'codex');
+  writeFileSync(fakeCodexPath, `#!/bin/sh
+if [ "$1" = "exec" ]; then shift; fi
+case "$1" in
+  --pipe-test)
+    read line || line="EOF"
+    printf 'OUT:%s|%s\\n' "$line" "$CODEX_HOME"
+    printf 'ERR:%s\\n' "$line" >&2
+    exit 0
+    ;;
+  --exit-42)
+    printf 'bad-out\\n'
+    printf 'bad-err\\n' >&2
+    exit 42
+    ;;
+  --sigterm)
+    kill -TERM $$
+    sleep 1
+    ;;
+esac
+`);
+  chmodSync(fakeCodexPath, 0o755);
+  const shimSb = { ...sb, env: { ...sb.env, PATH: `${fakeBinDir}:${sb.env.PATH ?? process.env.PATH ?? ''}` } };
+
+  const pipeRes = await invokeCli(['accounts', 'codex', 'exec', '--pipe-test'], shimSb, {
+    stdin: Readable.from(['hello-from-stdin\n']),
+  });
+  assert.equal(pipeRes.exit, 0, pipeRes.stderr);
+  assert.equal(pipeRes.stdout, `OUT:hello-from-stdin|${pddManagedCodexHome(sb.env)}\n`);
+  assert.equal(pipeRes.stderr, 'ERR:hello-from-stdin\n');
+
+  const strStdinRes = await invokeCli(['accounts', 'codex', 'exec', '--pipe-test'], shimSb, {
+    stdin: 'hello-from-string\n',
+  });
+  assert.equal(strStdinRes.exit, 0, strStdinRes.stderr);
+  assert.equal(strStdinRes.stdout, `OUT:hello-from-string|${pddManagedCodexHome(sb.env)}\n`);
+
+  const eofStdinRes = await invokeCli(['accounts', 'codex', 'exec', '--pipe-test'], shimSb, {
+    stdin: '',
+  });
+  assert.equal(eofStdinRes.exit, 0, eofStdinRes.stderr);
+  assert.equal(eofStdinRes.stdout, `OUT:EOF|${pddManagedCodexHome(sb.env)}\n`);
+
+  const exit42Res = await invokeCli(['accounts', 'codex', 'exec', '--exit-42'], shimSb);
+  assert.equal(exit42Res.exit, 42);
+  assert.equal(exit42Res.stdout, 'bad-out\n');
+  assert.equal(exit42Res.stderr, 'bad-err\n');
+
+  const realSigRes = await invokeCli(['accounts', 'codex', 'exec', '--sigterm'], shimSb);
+  assert.equal(realSigRes.exit, 143);
+
+  // Missing `codex` binary on PATH reports clear error instead of silent empty stderr.
+  const emptyBinDir = join(sb.root, 'empty-bin');
+  mkdirSync(emptyBinDir, { recursive: true });
+  const missingBinSb = { ...sb, env: { ...sb.env, PATH: emptyBinDir } };
+  const enoentRes = await invokeCli(['accounts', 'codex', 'exec', '--pipe-test'], missingBinSb);
+  assert.equal(enoentRes.exit, 1);
+  assert.match(enoentRes.stderr, /codex CLI not found on PATH/i);
+
+  // Unenrolled fallback path (`!managedHome`) also uses streaming runPlainCodexOnce.
+  const unenrolledSb = makeSandbox(t, cloud.serverUrl);
+  const unenrolledShimSb = {
+    ...unenrolledSb,
+    env: { ...unenrolledSb.env, PATH: `${fakeBinDir}:${unenrolledSb.env.PATH ?? process.env.PATH ?? ''}` },
+  };
+  const fallbackRes = await invokeCli(['accounts', 'codex', '--exit-42'], unenrolledShimSb);
+  assert.equal(fallbackRes.exit, 42);
+  assert.equal(fallbackRes.stdout, 'bad-out\n');
+  assert.equal(fallbackRes.stderr, 'bad-err\n');
 });
