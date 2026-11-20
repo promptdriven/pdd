@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 648b977804532f54099b659baa9781588317ee777a2ace27dd076189a595180b)
+// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 6ec5080b3a72b04242357945d503b33ce8b05132665473714c6074f022e9a98f)
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
