@@ -1,6 +1,6 @@
 ---
 kind: native-only
-reason: Invokes gh api graphql for live GitHub open issue counts, writes HTML reports to disk, and launches the local browser
+reason: Invokes gh api graphql and GET-only regression scans for live GitHub open/closed issues, PR merge state, and post-merge regressions, writes HTML reports to disk, and launches the local browser
 ---
 
 # Metrics command
@@ -24,9 +24,18 @@ Reject unknown subcommands, unknown or duplicate options, incompatible combinati
 - **Report views (`overview`, `stages`, `skills`, `full`):**
   1. Resolve `timezone` (`--timezone`, else `Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"`).
   2. Read local state via `readAutopilotMetricsState` from [Autopilot metrics local store](autopilot-metrics.prompt.md). Keep scope strictly Autopilot: when `0` Autopilot repositories exist on this machine and `--repo` is unset, report `0` repos cleanly (with `0` counts and exit `0`).
-  3. Query live `Open` GitHub issue counts across the included repositories in **one batched `gh api graphql` call** (`repository(owner, name) { issues(states: OPEN) { totalCount } }`), wrapped with `nativeGithubCounter` from [GitHub calls](github-calls.prompt.md). Skip the network call when `0` repositories are selected. If `gh` is missing, offline, or unauthenticated, return `null` for `openIssues` so `Open` renders `?` (`null` in JSON) without failing the command.
-  4. Compute the report with `calculateAutopilotMetrics` from [Autopilot metrics calculator](metrics-model.prompt.md).
-  5. Output:
+     - When `--repo` is unset (unified or `--repos` rollup), exclude any repository explicitly turned off via `pdd metrics off --repo OWNER/REPO` (`localState.config.repos[repoLower] === false`) from `targetRepos` so turned-off sandbox repositories are neither shown nor queried on GitHub. When `--repo` explicitly names a turned-off repository, keep it in `targetRepos` so its pre-pause history stays inspectable with the `Recording: OFF` notice.
+  3. Query live GitHub issue and PR state across `targetRepos` using batched `gh api graphql` call(s) wrapped with `nativeGithubCounter` from [GitHub calls](github-calls.prompt.md) (skipping all network calls when `0` repositories are selected; injectable via `ports.openIssues`, `ports.openIssueNumbers`, `ports.closedIssues`, `ports.prStates`):
+     - Live open issues: `issues(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { totalCount pageInfo { hasNextPage endCursor } nodes { number } }` (following bounded cursor pagination) -> `openIssues` counts (for `Open now`) and `openIssueNumbers` lists (for exact per-window `Pool` deduplication).
+     - Closed issues since the earliest active window start (`min(last24hStart, weekStart)` or `dateStart`): `issues(states: CLOSED, filterBy: { since }, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number closedAt } }` (following bounded cursor pagination within window bounds) -> `closedIssues` for per-window `Pool`.
+     - Actual PR merge state and metadata for every distinct positive integer `pr` created in the active windows' runs: `pullRequest(number: N) { number state merged mergedAt title mergeCommit { oid } }` (batched in GraphQL aliases; preserve partial `data` when an individual alias errors instead of dropping the whole report offline) -> `prStates` so PRs merged on GitHub after `observe` (`would-merge`), stopped, or assisted runs reconcile accurately as `Merged` and unmerged `would-merge` PRs stay under `Unmerged PRs`.
+     - If `gh` is missing, offline, or unauthenticated, gracefully return `null` for `openIssues` / `openIssueNumbers` / `prStates` and `[]` for `closedIssues` so `Open now` and `Pool` render `?` (`null` in JSON) without failing the command.
+  4. Auto-detect post-merge regressions by reusing `regressionScan` from [Autopilot regression detection](autopilot-regressions.prompt.md) (injectable via `ports.regressions`, `ports.regressionsComplete`, or `ports.regressionScan`; never invent a second regression scanner):
+     - For each repository in `targetRepos` that has merged PRs in the active windows (after step 3 merge reconciliation), run `regressionScan({ root: coreDir, repo, candidates, prs, includeCi: false, boundedPulls: true, maxRequests, fs, gh, now })` scoped to those merged PRs, passing pre-resolved `{ mergeCommit, mergedAt, title }` from step 3 and a GET-only `gh` adapter wrapped with `nativeGithubCounter`.
+     - Map each scanned merge's signals (`reopened` signal -> `reopened: true`, proven `revert` signal -> `reverted: true`, proven `reference` signal -> follow-up issue number extracted from `signal.url` / `signal.detail` into `regressionIssues`) into normalized `regressions` entries passed to `calculateAutopilotMetrics`, and propagate `regressionsComplete` (`false` if any scan returns `complete === false`, or if `gh` is offline/unavailable with active `targetRepos` and no injected `ports.openIssues`/`ports.regressionsComplete`).
+     - When `gh` is offline or a scan is unavailable, degrade cleanly to local `post-merge.json` / run regression flags with `regressionsComplete: false` so unverified counts render honestly as `?` / `N+ (X.X%+)` / `(scan incomplete)` without failing the command.
+  5. Compute the report with `calculateAutopilotMetrics` from [Autopilot metrics calculator](metrics-model.prompt.md), passing `runs`, `repos`, `openIssues`, `openIssueNumbers`, `closedIssues`, `prStates`, `regressions`, `regressionsComplete`, `view`, `byRepo`, `repoFilter`, `date`, `timezone`, `now`, and `recording`.
+  6. Output:
      - `--json`: write `JSON.stringify(report, null, 2) + "\n"` to `stdout`.
      - `--html`: write `renderMetricsHtml(report)` to `--file PATH` (resolved from `cwd`) or `<stateDir>/autopilot/metrics/pdd-metrics.html`, write `Wrote Autopilot metrics HTML report to <PATH>\n` to `stdout`, and open `<PATH>` in the browser when interactive (skipping browser launch when `ports.openBrowser === false`, `env.PDD_NO_OPEN === "1"`, `env.CI === "true"`, or `env.NODE_TEST_CONTEXT` is set).
      - Default text: write `formatMetricsText(report) + "\n"` to `stdout`.
@@ -34,5 +43,6 @@ Reject unknown subcommands, unknown or duplicate options, incompatible combinati
 ## Dependencies
 
 - [Autopilot metrics calculator](metrics-model.prompt.md): required for calculation and text/HTML rendering.
-- [Autopilot metrics local store](autopilot-metrics.prompt.md): required for local Autopilot metrics state and `on`/`off` persistence.
-- [GitHub calls](github-calls.prompt.md): required for counting the batched `gh api graphql` open-issue query.
+- [Autopilot metrics local store](autopilot-metrics.prompt.md): required for local Autopilot metrics state, `<stem>-core` directory lookup, and `on`/`off` persistence.
+- [Autopilot regression detection](autopilot-regressions.prompt.md): required for auto-detecting post-merge regressions across `auto`-merged, `observe`-merged, and stopped-then-merged PRs.
+- [GitHub calls](github-calls.prompt.md): required for counting the batched `gh api graphql` and GET-only regression scan calls.
