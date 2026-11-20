@@ -21,6 +21,8 @@ The PDD interpreter runs `*.prompt.md` files directly as programs (requires `gh 
 
 ## 3. Schema rules
 
+**Lazy-interface prose (`## Input` / `## Output` / `## Ports`):** never write bare untyped `object` fields (e.g. `value is null or object`, `"returns the snapshot object"`)—lazy synthesis generates strict closed schemas that fail at runtime with `result-schema-incompatible`. Enumerate concrete properties + types for every object (or explicitly state `"open object"` when arbitrary keys are intended), and avoid polymorphic write-port payloads (split distinct payload shapes into separate `<port>.<op>` operations or a tagged envelope).
+
 Applies to explicit `$contract` schemas and `app-map.json` `state_schema`:
 1. Top level is `"type": "object"` with `properties`, `required` (subset of `properties`, unique), and `"additionalProperties": false`.
 2. `type` is one string (`object`, `array`, `string`, `integer`, `number`, `boolean`, `null`), never a list like `["string", "null"]`. Nullable uses `{"oneOf": [{"type": "string"}, {"type": "null"}]}` (omit optional fields from `required` instead of `oneOf` where possible).

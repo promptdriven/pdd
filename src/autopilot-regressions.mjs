@@ -24,7 +24,7 @@ function references(text, repo) {
   return [...String(text ?? '').matchAll(refPattern)].map(m => ({ repo: (m[1] ?? m[4] ?? repo).toLowerCase(), number: Number(m[3] ?? m[5] ?? m[6]), type: m[2] ?? null }));
 }
 function exactTargets(text, phrase, repo) {
-  const expression = new RegExp(`\\b${phrase}\\s*:?\\s*(https:\\/\\/github\\.com\\/[\\w.-]+\\/[\\w.-]+\\/pull\\/\\d+\\b|[\\w.-]+\\/[\\w.-]+#\\d+\\b|#\\d+\\b)`, 'gi');
+  const expression = new RegExp(`\\b${phrase}\\s*:?\\s*(?:PR\\s+)?(https:\\/\\/github\\.com\\/[\\w.-]+\\/[\\w.-]+\\/pull\\/\\d+\\b|[\\w.-]+\\/[\\w.-]+#\\d+\\b|#\\d+\\b)`, 'gi');
   const lower = repo.toLowerCase();
   const nums = new Set();
   for (const m of String(text ?? '').matchAll(expression)) {
@@ -34,8 +34,93 @@ function exactTargets(text, phrase, repo) {
   }
   return [...nums];
 }
+const BLAME_PHRASES = ['Regressed by', 'Regression from', 'Regression in', 'Broken by', 'Caused by', 'Introduced by'];
+
 function exactReference(text, phrase, repo, pr) {
   return exactTargets(text, phrase, repo).includes(pr);
+}
+
+/** Return true if a GitHub issue carries the case-insensitive `regression` label. */
+function hasRegressionLabel(issue) {
+  if (!Array.isArray(issue?.labels)) return false;
+  return issue.labels.some(label => {
+    const name = typeof label === 'string' ? label : label?.name;
+    return typeof name === 'string' && name.trim().toLowerCase() === 'regression';
+  });
+}
+
+/** Return true if text explicitly attributes a regression to the merged PR. */
+function blamesMergePr(text, repo, pr) {
+  return BLAME_PHRASES.some(phrase => exactReference(text, phrase, repo, pr));
+}
+
+/** Extract unique positive issue numbers from a history or candidate row. */
+function rowIssues(row) {
+  return [...new Set([row?.issue, ...(Array.isArray(row?.issues) ? row.issues : [])].filter(positive))];
+}
+
+/**
+ * Collect deduplicated PR candidates from core history JSONL and optional caller candidates.
+ * Includes both auto-merged rows (`outcome === 'merged'`) and non-merged PR-bearing rows
+ * (`would-merge`, `stopped`, `ended`, `needs-person`, `released`, `abandoned`).
+ */
+function collectCandidateRows({ history = '', candidates = null, repo, prs = null, errors = null }) {
+  const repoLower = repo.toLowerCase();
+  const byPr = new Map();
+  const ordered = [];
+  const acceptRow = (row, fromHistory) => {
+    if (!object(row)) {
+      if (fromHistory && errors) errors.push('Invalid core history line.');
+      return;
+    }
+    const claimedMerged = row.outcome === 'merged';
+    if (row.repo !== undefined && !repository(row.repo)) {
+      if (errors) errors.push(claimedMerged ? 'Merged history row has no valid repository.' : 'History row has no valid repository.');
+      return;
+    }
+    if (row.repo && row.repo.toLowerCase() !== repoLower) return;
+    if (!positive(row.pr)) {
+      if (claimedMerged && errors) errors.push('Merged history row has no valid PR.');
+      return;
+    }
+    const issues = rowIssues(row);
+    const primaryIssue = positive(row.issue) ? row.issue : (issues[0] ?? null);
+    const historyAt = Number.isFinite(row.at) ? row.at : null;
+    const mergeCommit = sha(row.mergeCommit) ? row.mergeCommit.toLowerCase() : null;
+    const mergedAt = iso(row.mergedAt) ?? null;
+    const title = typeof row.title === 'string' ? row.title : null;
+    const existing = byPr.get(row.pr);
+    if (existing) {
+      if (claimedMerged) existing.claimedMerged = true;
+      if (existing.issue === null && primaryIssue !== null) existing.issue = primaryIssue;
+      existing.issues = [...new Set([...existing.issues, ...issues])];
+      if (existing.historyAt === null && historyAt !== null) existing.historyAt = historyAt;
+      if (existing.mergeCommit === null && mergeCommit !== null) existing.mergeCommit = mergeCommit;
+      if (existing.mergedAt === null && mergedAt !== null) existing.mergedAt = mergedAt;
+      if (existing.title === null && title !== null) existing.title = title;
+      return;
+    }
+    const entry = { pr: row.pr, issue: primaryIssue, issues, claimedMerged, historyAt, mergeCommit, mergedAt, title };
+    byPr.set(row.pr, entry);
+    ordered.push(entry);
+  };
+  for (const line of String(history).split('\n').filter(item => item.trim())) {
+    let row;
+    try { row = JSON.parse(line); }
+    catch {
+      if (errors) errors.push('Invalid core history line.');
+      continue;
+    }
+    acceptRow(row, true);
+  }
+  if (Array.isArray(candidates)) {
+    for (const candidate of candidates) acceptRow(candidate, false);
+  }
+  if (Array.isArray(prs) && prs.length > 0) {
+    const allowed = new Set(prs.filter(positive));
+    return ordered.filter(item => allowed.has(item.pr));
+  }
+  return ordered;
 }
 const checkStates = ['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending'];
 const conclusions = ['success', 'failure', 'neutral', 'cancelled', 'skipped', 'timed_out', 'action_required', 'startup_failure', 'stale'];
@@ -54,14 +139,42 @@ function latest(rows, key) {
   return result;
 }
 
+/** Return true when a page is monotonically descending in `updated_at` and reaches `<= sinceIso`. */
+function isDescendingPastSince(rows, sinceIso) {
+  if (rows.length === 0 || rows.some(r => time(r.updated_at) === null)) return false;
+  for (let i = 1; i < rows.length; i += 1) {
+    if (time(rows[i].updated_at) > time(rows[i - 1].updated_at)) return false;
+  }
+  return time(rows[rows.length - 1].updated_at) <= time(sinceIso);
+}
+
+function resolveNextPage(nextUrl, prefix, endpoint) {
+  const u = new URL(nextUrl);
+  if (u.origin !== 'https://api.github.com' || u.username || u.password || u.hash) {
+    throw Error('GitHub pagination points outside this repository.');
+  }
+  if (u.pathname.toLowerCase().startsWith(`/${prefix.toLowerCase()}`)) {
+    return prefix + u.pathname.slice(prefix.length + 1) + u.search;
+  }
+  // GitHub Link headers commonly use canonical /repositories/<id>/<subpath> URLs;
+  // rewrite matching same-endpoint paths back onto repos/<owner>/<repo>/ so requests never leave this repo.
+  const endpointPath = endpoint.split('?')[0];
+  const numericRepoMatch = /^\/repositories\/[1-9]\d*\/(.+)$/.exec(u.pathname);
+  if (numericRepoMatch && numericRepoMatch[1] === endpointPath) {
+    return prefix + endpointPath + u.search;
+  }
+  throw Error('GitHub pagination points outside this repository.');
+}
+
 // All network traffic passes through a single GET-only boundary. A failed page
 // remains incomplete instead of silently looking like the end of pagination.
-function reader(ports, errors) {
+function reader(ports, errors, maxRequests = 100) {
   const prefix = `repos/${ports.repo}/`;
+  const limit = positive(maxRequests) ? maxRequests : 100;
   let requests = 0, stopped = null;
   const request = async endpoint => {
     const unavailable = () => Object.assign(Error(`GitHub read unavailable: ${endpoint.split('?')[0]}`), { scanStop: stopped });
-    if (requests >= 100 && !stopped) stopped = 'request budget exhausted (100 reads)';
+    if (requests >= limit && !stopped) stopped = `request budget exhausted (${limit} reads)`;
     if (stopped) throw unavailable();
     requests++;
     // execFile rejects nonzero exits but retains HTTP headers on error.stdout.
@@ -77,7 +190,7 @@ function reader(ports, errors) {
     catch { throw unavailable(); }
   };
   const one = async endpoint => (await request(prefix + endpoint)).value;
-  const all = async (endpoint, field, valid = () => true) => {
+  const all = async (endpoint, field, valid = () => true, { stopAfterPage } = {}) => {
     let next = prefix + endpoint; const seen = new Set(), rows = [];
     try {
       while (next) {
@@ -86,10 +199,9 @@ function reader(ports, errors) {
         const page = await request(next), values = field ? page.value?.[field] : page.value;
         if (!Array.isArray(values) || values.some(row => !object(row) || !valid(row))) throw Error(`Malformed GitHub list: ${endpoint.split('?')[0]}`);
         rows.push(...values); next = null;
+        if (stopAfterPage?.(values)) break;
         if (page.next) {
-          const u = new URL(page.next);
-          if (u.origin !== 'https://api.github.com' || u.username || u.password || u.hash || !u.pathname.startsWith(`/${prefix}`)) throw Error('GitHub pagination points outside this repository.');
-          next = u.pathname.slice(1) + u.search;
+          next = resolveNextPage(page.next, prefix, endpoint);
         }
       }
     } catch (error) { error.partial = rows; throw error; }
@@ -107,30 +219,88 @@ function reader(ports, errors) {
 }
 
 export async function regressionScan(ports) {
-  if (!ports?.root || !repository(ports.repo) || typeof ports.gh !== 'function') throw Error('Regression scan requires root, repo and gh ports.');
-  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), errors = [], merges = [], seen = new Set();
-  let history = '';
-  try { history = fs.readFileSync(join(ports.root, 'history.jsonl'), 'utf8'); }
-  catch (error) { if (error.code !== 'ENOENT') errors.push('Core merge history is unreadable.'); }
-  for (const line of history.split('\n').filter(line => line.trim())) {
-    let row; try { row = JSON.parse(line); if (!object(row)) throw Error(); }
-    catch { errors.push('Invalid core history line.'); continue; }
-    if (row.outcome !== 'merged') continue;
-    if (row.repo !== undefined && !repository(row.repo)) { errors.push('Merged history row has no valid repository.'); continue; }
-    if (row.repo && row.repo.toLowerCase() !== ports.repo.toLowerCase()) continue;
-    if (!positive(row.pr)) { errors.push('Merged history row has no valid PR.'); continue; }
-    if (seen.has(row.pr)) continue; seen.add(row.pr);
-    merges.push({ repo: ports.repo, pr: row.pr, issue: positive(row.issue) ? row.issue : null, mergeCommit: null, parent: null, mergedAt: null, classification: 'ok', provenAt: null, signals: [] });
+  if (!ports || (!ports.root && !Array.isArray(ports.candidates)) || !repository(ports.repo) || typeof ports.gh !== 'function') {
+    throw Error('Regression scan requires root, repo and gh ports.');
   }
-  const api = reader(ports, errors), titles = new Map();
-  for (const merge of merges) {
-    const pull = await api.attempt(`PR #${merge.pr}`, async () => {
-      const value = await api.one(`pulls/${merge.pr}`);
-      if (!object(value) || value.number !== merge.pr || !sha(value.merge_commit_sha) || time(value.merged_at) === null || time(value.merged_at) > now) throw Error();
-      return value;
-    }, null, merge);
-    if (!pull) continue;
+  const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), errors = [], merges = [];
+  let history = '';
+  if (ports.root) {
+    try { history = fs.readFileSync(join(ports.root, 'history.jsonl'), 'utf8'); }
+    catch (error) { if (error.code !== 'ENOENT') errors.push('Core merge history is unreadable.'); }
+  }
+  const candidates = collectCandidateRows({
+    history,
+    candidates: ports.candidates,
+    repo: ports.repo,
+    prs: ports.prs,
+    errors,
+  });
+  const includeCi = ports.includeCi !== false;
+  const boundedPulls = ports.boundedPulls === true;
+  const api = reader(ports, errors, ports.maxRequests), titles = new Map(), mergeIssuesByPr = new Map();
+  for (const candidate of candidates) {
+    const preResolved = !includeCi
+      && sha(candidate.mergeCommit)
+      && time(candidate.mergedAt) !== null
+      && time(candidate.mergedAt) <= now;
+    let rawPull = null;
+    let pullReadOk = false;
+    if (preResolved) {
+      rawPull = {
+        number: candidate.pr,
+        merge_commit_sha: candidate.mergeCommit,
+        merged_at: candidate.mergedAt,
+        title: candidate.title,
+      };
+      pullReadOk = true;
+    } else {
+      try {
+        rawPull = await api.one(`pulls/${candidate.pr}`);
+        pullReadOk = object(rawPull) && rawPull.number === candidate.pr;
+      } catch (error) {
+        const detail = safe(`Unavailable PR #${candidate.pr}${error.scanStop ? `: ${error.scanStop}` : ''}`);
+        errors.push(detail);
+        merges.push({
+          repo: ports.repo,
+          pr: candidate.pr,
+          issue: candidate.issue,
+          mergeCommit: null,
+          parent: null,
+          mergedAt: null,
+          classification: 'ok',
+          provenAt: null,
+          signals: [{ kind: 'unavailable', level: 'suspect', at: null, url: null, detail, parentUrl: null }],
+        });
+        mergeIssuesByPr.set(candidate.pr, candidate.issues);
+        continue;
+      }
+      if (!candidate.claimedMerged && pullReadOk && rawPull.merged_at == null) {
+        // Unmerged observe/stopped candidate: skip cleanly with no error.
+        continue;
+      }
+    }
+    const merge = {
+      repo: ports.repo,
+      pr: candidate.pr,
+      issue: candidate.issue,
+      mergeCommit: null,
+      parent: null,
+      mergedAt: null,
+      classification: 'ok',
+      provenAt: null,
+      signals: [],
+    };
+    merges.push(merge);
+    mergeIssuesByPr.set(candidate.pr, candidate.issues);
+    if (!pullReadOk || !sha(rawPull.merge_commit_sha) || time(rawPull.merged_at) === null || time(rawPull.merged_at) > now) {
+      const detail = safe(`Unavailable PR #${merge.pr}`);
+      errors.push(detail);
+      merge.signals.push({ kind: 'unavailable', level: 'suspect', at: null, url: null, detail, parentUrl: null });
+      continue;
+    }
+    const pull = rawPull;
     merge.mergeCommit = pull.merge_commit_sha.toLowerCase(); merge.mergedAt = iso(pull.merged_at); titles.set(merge.pr, pull.title);
+    if (!includeCi) continue;
     const commit = await api.attempt(`merge parent for PR #${merge.pr}`, async () => {
       const value = await api.one(`commits/${merge.mergeCommit}`);
       if (!object(value) || value.sha?.toLowerCase() !== merge.mergeCommit || !sha(value.parents?.[0]?.sha)) throw Error();
@@ -158,11 +328,22 @@ export async function regressionScan(ports) {
   if (since) {
     const before = errors.length;
     const issues = await api.attempt('repository issues', () => api.all(`issues?state=all&since=${encodeURIComponent(since)}&per_page=100`, null, validIssue), []);
-    const pulls = await api.attempt('repository PRs', () => api.all('pulls?state=all&per_page=100', null, row => positive(row.number) && time(row.created_at) !== null && (row.merged_at == null || time(row.merged_at) !== null)), []);
+    const pullsEndpoint = boundedPulls ? 'pulls?state=all&sort=updated&direction=desc&per_page=100' : 'pulls?state=all&per_page=100';
+    const pulls = await api.attempt(
+      'repository PRs',
+      () => api.all(
+        pullsEndpoint,
+        null,
+        row => positive(row.number) && time(row.created_at) !== null && (row.merged_at == null || time(row.merged_at) !== null),
+        boundedPulls ? { stopAfterPage: rows => isDescendingPastSince(rows, since) } : undefined,
+      ),
+      [],
+    );
     const commits = await api.attempt('default branch commits', () => api.all(`commits?since=${encodeURIComponent(since)}&per_page=100`, null, row => sha(row.sha) && typeof row.commit?.message === 'string' && time(row.commit?.committer?.date) !== null), []);
     const sharedErrors = errors.slice(before);
     for (const merge of valid) {
       const later = at => time(at) !== null && time(at) > time(merge.mergedAt) && time(at) <= now;
+      const allIssues = mergeIssuesByPr.get(merge.pr) ?? (merge.issue ? [merge.issue] : []);
       const add = (kind, level, at, url, detail) => merge.signals.push({ kind, level, at: iso(at), url: link(url), detail: safe(detail), parentUrl: null });
       for (const detail of sharedErrors) add('unavailable', 'suspect', null, null, detail);
       for (const commit of commits) {
@@ -176,28 +357,33 @@ export async function regressionScan(ports) {
         const exact = exactReference(pull.body, 'Reverts', ports.repo, merge.pr);
         if (exact || titles.get(merge.pr) && pull.title === `Revert "${titles.get(merge.pr)}"`) add('revert', exact && pull.merged_at ? 'proven' : 'suspect', at, pull.html_url, `PR #${pull.number} ${pull.merged_at ? 'merged' : 'proposed'} revert of #${merge.pr}`);
       }
-      const inspectIssue = issue => {
+      const inspectIssue = (issue, viaCrossRef = false, refTarget = null) => {
         if (!object(issue) || issue.pull_request || !positive(issue.number) || !later(issue.created_at)) return;
         const ownUrl = `https://github.com/${ports.repo.toLowerCase()}/issues/`;
         if (issue.html_url && !issue.html_url.toLowerCase().startsWith(ownUrl) || issue.repository_url && issue.repository_url.toLowerCase() !== `https://api.github.com/repos/${ports.repo.toLowerCase()}`) return;
         const text = `${issue.title ?? ''}\n${issue.body ?? ''}`;
-        if (exactReference(text, 'Regressed by', ports.repo, merge.pr)) add('reference', 'proven', issue.created_at, issue.html_url, `Issue #${issue.number}: Regressed by #${merge.pr}`);
-        else if (references(text, ports.repo).some(r => r.repo === ports.repo.toLowerCase() && (r.number === merge.pr || r.number === merge.issue))) add('reference', 'suspect', issue.created_at, issue.html_url, `Issue #${issue.number} links to the merged PR or issue`);
+        const linksMerge = viaCrossRef || references(text, ports.repo).some(r => r.repo === ports.repo.toLowerCase() && (r.number === merge.pr || allIssues.includes(r.number)));
+        if (blamesMergePr(text, ports.repo, merge.pr)) {
+          add('reference', 'proven', issue.created_at, issue.html_url, `Issue #${issue.number}: Regressed by #${merge.pr}`);
+        } else if (hasRegressionLabel(issue) && linksMerge) {
+          add('reference', 'proven', issue.created_at, issue.html_url, `Issue #${issue.number} (regression) links to #${merge.pr}`);
+        } else if (linksMerge) {
+          add('reference', 'suspect', issue.created_at, issue.html_url, viaCrossRef && refTarget ? `Issue #${issue.number} cross-references #${refTarget}` : `Issue #${issue.number} links to the merged PR or issue`);
+        }
       };
-      issues.forEach(inspectIssue);
-      for (const number of new Set([merge.pr, merge.issue].filter(Boolean))) {
+      issues.forEach(issue => inspectIssue(issue, false));
+      for (const number of new Set([merge.pr, ...allIssues].filter(Boolean))) {
         const events = await api.attempt(`timeline #${number}`, () => api.all(`issues/${number}/timeline?per_page=100`, null, validEvent), [], merge);
         for (const event of events) {
           if (!later(event.created_at)) continue;
-          if (event.event === 'reopened' && number === merge.issue) {
+          if (event.event === 'reopened' && allIssues.includes(number)) {
             const marked = machineMarker(event.body) || events.some(comment => comment.event === 'commented' && machineMarker(comment.body) && comment.user?.login && comment.user.login === event.actor?.login && Math.abs(time(comment.created_at) - time(event.created_at)) <= 5 * 60 * 1000);
             if (!marked) add('reopened', 'suspect', event.created_at, `https://github.com/${ports.repo}/issues/${number}#event-${event.id ?? ''}`, `Issue #${number} reopened after merge`);
           }
           if (event.event === 'cross-referenced') {
             const source = event.source?.issue;
             if (!source || source.pull_request || !later(source.created_at) || !source.html_url?.toLowerCase().startsWith(`https://github.com/${ports.repo.toLowerCase()}/issues/`)) continue;
-            const count = merge.signals.length; inspectIssue(source);
-            if (merge.signals.length === count) add('reference', 'suspect', event.created_at, source.html_url, `Issue #${source.number} cross-references #${number}`);
+            inspectIssue(source, true, number);
           }
         }
       }
@@ -329,11 +515,7 @@ function incrementalReader(ports, maxRequests, initialStreams = {}) {
       if (onPage) onPage(values, items);
       let resolvedNext = null;
       if (page.next && !(stopAfterPage && stopAfterPage(values))) {
-        const u = new URL(page.next);
-        if (u.origin !== 'https://api.github.com' || u.username || u.password || u.hash || !u.pathname.startsWith(`/${prefix}`)) {
-          throw Error('GitHub pagination points outside this repository.');
-        }
-        resolvedNext = u.pathname.slice(1) + u.search;
+        resolvedNext = resolveNextPage(page.next, prefix, endpoint);
       }
       next = resolvedNext;
       streams[streamKey] = { next, done: next === null, items, seen: [...seen] };
@@ -406,8 +588,9 @@ function recordProvenSignals(entry, signals, newlyDetected) {
 }
 
 function computePostMergeCounts(mergeRows, entries) {
-  const counts = emptyPostMergeCounts(mergeRows.length, 0);
-  for (const row of mergeRows) {
+  const activeRows = mergeRows.filter(row => !entries.get(row.pr)?.unmerged);
+  const counts = emptyPostMergeCounts(activeRows.length, 0);
+  for (const row of activeRows) {
     const entry = entries.get(row.pr);
     if (!entry || entry.status === 'pending') { counts.pending += 1; continue; }
     if (entry.reopened) counts.reopened += 1;
@@ -592,22 +775,7 @@ export async function checkPostMergeRegressions(ports) {
   catch (error) {
     if (error.code !== 'ENOENT') throw Error('Core merge history is unreadable.');
   }
-  const mergeRows = [], seenPrs = new Set();
-  for (const line of history.split('\n').filter(item => item.trim())) {
-    let row;
-    try { row = JSON.parse(line); if (!object(row)) continue; } catch { continue; }
-    if (row.outcome !== 'merged') continue;
-    if (row.repo !== undefined && (!repository(row.repo) || row.repo.toLowerCase() !== ports.repo.toLowerCase())) continue;
-    if (!positive(row.pr) || seenPrs.has(row.pr)) continue;
-    seenPrs.add(row.pr);
-    const issues = [...new Set([row.issue, ...(Array.isArray(row.issues) ? row.issues : [])].filter(positive))];
-    mergeRows.push({
-      pr: row.pr,
-      issue: positive(row.issue) ? row.issue : (issues[0] ?? null),
-      issues,
-      historyAt: Number.isFinite(row.at) ? row.at : null,
-    });
-  }
+  const mergeRows = collectCandidateRows({ history, repo: ports.repo });
 
   if (mergeRows.length === 0) {
     const counts = emptyPostMergeCounts(0, 0);
@@ -642,6 +810,8 @@ export async function checkPostMergeRegressions(ports) {
       reopened: Boolean(prev?.reopened),
       reverted: Boolean(prev?.reverted),
       ciRegression: Boolean(prev?.ciRegression),
+      unmerged: Boolean(prev?.unmerged && !row.claimedMerged),
+      closedUnmerged: Boolean(prev?.closedUnmerged && !row.claimedMerged),
       checkedAt: iso(prev?.checkedAt) ?? null,
       signals: Array.isArray(prev?.signals) ? prev.signals : [],
       reportedKeys: Array.isArray(prev?.reportedKeys) ? [...new Set(prev.reportedKeys.filter(k => typeof k === 'string'))] : [],
@@ -729,6 +899,10 @@ export async function checkPostMergeRegressions(ports) {
     const idx = (startCursor + offset) % total;
     const row = mergeRows[idx];
     const entry = entries.get(row.pr);
+    if (entry.closedUnmerged) {
+      if (drafts.length === 0) nextCursor = (idx + 1) % total;
+      continue;
+    }
     if (row.historyAt !== null && row.historyAt >= now) {
       if (drafts.length === 0) nextCursor = (idx + 1) % total;
       continue;
@@ -756,10 +930,19 @@ export async function checkPostMergeRegressions(ports) {
       let title = entry.title;
       if (!mergeCommit || !mergedAt) {
         const pull = await api.get(`pulls/${entry.pr}`);
+        if (!row.claimedMerged && object(pull) && pull.number === entry.pr && pull.merged_at == null) {
+          entry.unmerged = true;
+          entry.closedUnmerged = pull.state === 'closed';
+          entry.checkedAt = new Date(now).toISOString();
+          nextCursor = (idx + 1) % total;
+          continue;
+        }
         const resolvedMergedAt = iso(pull?.merged_at);
         if (!object(pull) || pull.number !== entry.pr || !sha(pull.merge_commit_sha) || !resolvedMergedAt || time(resolvedMergedAt) > now) {
           throw Error(`Incomplete merged PR #${entry.pr}`);
         }
+        entry.unmerged = false;
+        entry.closedUnmerged = false;
         mergeCommit = pull.merge_commit_sha.toLowerCase();
         mergedAt = resolvedMergedAt;
         title = typeof pull.title === 'string' ? pull.title : null;
@@ -1049,13 +1232,7 @@ export async function checkPostMergeRegressions(ports) {
         pulls = await api.readStream(`shared:pulls:${since}`, 'pulls?state=all&sort=updated&direction=desc&per_page=100', {
           valid: row => positive(row.number) && (row.created_at == null || time(row.created_at) !== null) && (row.merged_at == null || time(row.merged_at) !== null),
           mergePage: (acc, rows) => [...acc, ...compactPullRows(rows)],
-          stopAfterPage: rows => {
-            if (rows.length === 0 || rows.some(r => time(r.updated_at) === null)) return false;
-            for (let i = 1; i < rows.length; i += 1) {
-              if (time(rows[i].updated_at) > time(rows[i - 1].updated_at)) return false;
-            }
-            return time(rows[rows.length - 1].updated_at) <= time(since);
-          },
+          stopAfterPage: rows => isDescendingPastSince(rows, since),
           onPage: rows => applyPullPage(compactPullRows(rows)),
         });
       });

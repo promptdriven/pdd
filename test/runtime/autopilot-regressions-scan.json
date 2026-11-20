@@ -1,0 +1,321 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/autopilot-regressions-scan.md",
+  "criteria": [
+    {
+      "id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663",
+      "text": "Scanning core history and supplied candidates includes pull requests merged after auto, observe, and stopped runs, and skips unmerged observe or stopped pull requests with no error."
+    },
+    {
+      "id": "ac-sha256-089a04f78bdaba8e56054b50cf1dd6930d144079ca369b7c",
+      "text": "A later default-branch revert commit naming the exact merge commit hash marks that pull request as a proven revert regression."
+    },
+    {
+      "id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75",
+      "text": "A later follow-up issue labeled regression or explicitly blaming the merged pull request marks it as a proven regression reference, while an unlabeled mention stays suspect."
+    },
+    {
+      "id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a",
+      "text": "A human reopen event on the merged issue after merge is recorded as a reopened signal, while a machine-marked reopen is ignored."
+    }
+  ],
+  "initial_world": {
+    "files": [
+      {
+        "path": "/state/core/history.jsonl",
+        "reply": {
+          "text": "{\"repo\":\"promptdriven/pdd\",\"outcome\":\"merged\",\"pr\":301,\"issue\":101}\n{\"repo\":\"promptdriven/pdd\",\"outcome\":\"would-merge\",\"pr\":302,\"issue\":102}\n{\"repo\":\"promptdriven/pdd\",\"outcome\":\"would-merge\",\"pr\":304,\"issue\":104}\n",
+          "code": ""
+        }
+      }
+    ],
+    "github_responses": [
+      {
+        "endpoint": "repos/promptdriven/pdd/pulls/301",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4999\r\n\r\n{\"number\":301,\"title\":\"Add metrics v2\",\"state\":\"closed\",\"merged_at\":\"2026-11-17T12:00:00.000Z\",\"merge_commit_sha\":\"1111111111111111111111111111111111111111\"}",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/pulls/302",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4998\r\n\r\n{\"number\":302,\"title\":\"Fix observe merge\",\"state\":\"closed\",\"merged_at\":\"2026-11-18T22:00:00.000Z\",\"merge_commit_sha\":\"2222222222222222222222222222222222222222\"}",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/pulls/303",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4997\r\n\r\n{\"number\":303,\"title\":\"Cleanup after stop\",\"state\":\"closed\",\"merged_at\":\"2026-11-19T00:00:00.000Z\",\"merge_commit_sha\":\"3333333333333333333333333333333333333333\"}",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/pulls/304",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4996\r\n\r\n{\"number\":304,\"title\":\"Still open observe PR\",\"state\":\"open\",\"merged_at\":null,\"merge_commit_sha\":null}",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/pulls/305",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4995\r\n\r\n{\"number\":305,\"title\":\"Stopped PR with mention\",\"state\":\"closed\",\"merged_at\":\"2026-11-19T01:00:00.000Z\",\"merge_commit_sha\":\"5555555555555555555555555555555555555555\"}",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/1111111111111111111111111111111111111111",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4994\r\n\r\n{\"sha\":\"1111111111111111111111111111111111111111\",\"parents\":[{\"sha\":\"0000000000000000000000000000000000000001\"}]}",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/2222222222222222222222222222222222222222",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4993\r\n\r\n{\"sha\":\"2222222222222222222222222222222222222222\",\"parents\":[{\"sha\":\"0000000000000000000000000000000000000002\"}]}",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/3333333333333333333333333333333333333333",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4992\r\n\r\n{\"sha\":\"3333333333333333333333333333333333333333\",\"parents\":[{\"sha\":\"0000000000000000000000000000000000000003\"}]}",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/5555555555555555555555555555555555555555",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4991\r\n\r\n{\"sha\":\"5555555555555555555555555555555555555555\",\"parents\":[{\"sha\":\"0000000000000000000000000000000000000005\"}]}",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/1111111111111111111111111111111111111111/check-runs?filter=all&per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4990\r\n\r\n{\"check_runs\":[]}", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/1111111111111111111111111111111111111111/statuses?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4989\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/0000000000000000000000000000000000000001/check-runs?filter=all&per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4988\r\n\r\n{\"check_runs\":[]}", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/0000000000000000000000000000000000000001/statuses?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4987\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/2222222222222222222222222222222222222222/check-runs?filter=all&per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4986\r\n\r\n{\"check_runs\":[]}", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/2222222222222222222222222222222222222222/statuses?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4985\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/0000000000000000000000000000000000000002/check-runs?filter=all&per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4984\r\n\r\n{\"check_runs\":[]}", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/0000000000000000000000000000000000000002/statuses?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4983\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/3333333333333333333333333333333333333333/check-runs?filter=all&per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4982\r\n\r\n{\"check_runs\":[]}", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/3333333333333333333333333333333333333333/statuses?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4981\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/0000000000000000000000000000000000000003/check-runs?filter=all&per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4980\r\n\r\n{\"check_runs\":[]}", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/0000000000000000000000000000000000000003/statuses?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4979\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/5555555555555555555555555555555555555555/check-runs?filter=all&per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4978\r\n\r\n{\"check_runs\":[]}", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/5555555555555555555555555555555555555555/statuses?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4977\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/0000000000000000000000000000000000000005/check-runs?filter=all&per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4976\r\n\r\n{\"check_runs\":[]}", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits/0000000000000000000000000000000000000005/statuses?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4975\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues?state=all&since=2026-11-17T12%3A00%3A00.000Z&per_page=100",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4974\r\n\r\n[{\"number\":3528,\"title\":\"Metrics regression after merge\",\"body\":\"Follow-up for #301\",\"created_at\":\"2026-11-18T10:00:00.000Z\",\"labels\":[{\"name\":\"regression\"}],\"html_url\":\"https://github.com/promptdriven/pdd/issues/3528\",\"repository_url\":\"https://api.github.com/repos/promptdriven/pdd\"},{\"number\":3531,\"title\":\"Question about #305\",\"body\":\"See #305 for context\",\"created_at\":\"2026-11-19T06:00:00.000Z\",\"labels\":[],\"html_url\":\"https://github.com/promptdriven/pdd/issues/3531\",\"repository_url\":\"https://api.github.com/repos/promptdriven/pdd\"}]",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues?state=all&since=2026-11-17T12:00:00.000Z&per_page=100",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4974\r\n\r\n[{\"number\":3528,\"title\":\"Metrics regression after merge\",\"body\":\"Follow-up for #301\",\"created_at\":\"2026-11-18T10:00:00.000Z\",\"labels\":[{\"name\":\"regression\"}],\"html_url\":\"https://github.com/promptdriven/pdd/issues/3528\",\"repository_url\":\"https://api.github.com/repos/promptdriven/pdd\"},{\"number\":3531,\"title\":\"Question about #305\",\"body\":\"See #305 for context\",\"created_at\":\"2026-11-19T06:00:00.000Z\",\"labels\":[],\"html_url\":\"https://github.com/promptdriven/pdd/issues/3531\",\"repository_url\":\"https://api.github.com/repos/promptdriven/pdd\"}]",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/pulls?state=all&per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4973\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits?since=2026-11-17T12%3A00%3A00.000Z&per_page=100",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4972\r\n\r\n[{\"sha\":\"9999999999999999999999999999999999999999\",\"html_url\":\"https://github.com/promptdriven/pdd/commit/9999999999999999999999999999999999999999\",\"commit\":{\"message\":\"Revert \\\"Fix observe merge\\\"\\n\\nThis reverts commit 2222222222222222222222222222222222222222.\",\"committer\":{\"date\":\"2026-11-19T02:00:00.000Z\"}}}]",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/commits?since=2026-11-17T12:00:00.000Z&per_page=100",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4972\r\n\r\n[{\"sha\":\"9999999999999999999999999999999999999999\",\"html_url\":\"https://github.com/promptdriven/pdd/commit/9999999999999999999999999999999999999999\",\"commit\":{\"message\":\"Revert \\\"Fix observe merge\\\"\\n\\nThis reverts commit 2222222222222222222222222222222222222222.\",\"committer\":{\"date\":\"2026-11-19T02:00:00.000Z\"}}}]",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues/301/timeline?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4971\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues/101/timeline?per_page=100",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4970\r\n\r\n[{\"id\":701,\"event\":\"reopened\",\"created_at\":\"2026-11-18T01:00:00.000Z\",\"actor\":{\"login\":\"pdd-bot\"},\"body\":\"<!-- pdd:autopilot:reopen -->\\nRetrying automatically\"}]",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues/302/timeline?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4969\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues/102/timeline?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4968\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues/303/timeline?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4967\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues/103/timeline?per_page=100",
+        "reply": {
+          "code": 0,
+          "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4966\r\n\r\n[{\"id\":703,\"event\":\"reopened\",\"created_at\":\"2026-11-19T05:00:00.000Z\",\"actor\":{\"login\":\"serhan\"},\"body\":\"\"}]",
+          "stderr": ""
+        }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues/305/timeline?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4965\r\n\r\n[]", "stderr": "" }
+      },
+      {
+        "endpoint": "repos/promptdriven/pdd/issues/105/timeline?per_page=100",
+        "reply": { "code": 0, "stdout": "HTTP/2.0 200 OK\r\nx-ratelimit-remaining: 4964\r\n\r\n[]", "stderr": "" }
+      }
+    ]
+  },
+  "simulation": {
+    "fs.readFileSync": {
+      "action": "collection.get",
+      "world_pointer": "/files",
+      "key_argument_pointer": "/path",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/path",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "text": "",
+        "code": "ENOENT"
+      },
+      "result_value_pointer": ""
+    },
+    "github.get": {
+      "action": "collection.get",
+      "world_pointer": "/github_responses",
+      "key_argument_pointer": "/endpoint",
+      "value_argument_pointer": null,
+      "item_key_pointer": "/endpoint",
+      "item_value_pointer": "/reply",
+      "result_template": {
+        "code": 1,
+        "stdout": "HTTP/2.0 404 Not Found\r\n\r\n{}",
+        "stderr": "not found"
+      },
+      "result_value_pointer": ""
+    }
+  },
+  "context": [],
+  "steps": [
+    {
+      "step_id": "scan-auto-observe-and-stopped-merges",
+      "entry_path": "prompts/cli/autopilot-regressions.prompt.md",
+      "operation": "regressionScan",
+      "input": {
+        "root": "/state/core",
+        "repo": "promptdriven/pdd",
+        "now": 1795111200000,
+        "candidates": [
+          { "pr": 303, "issue": 103, "outcome": "stopped" },
+          { "pr": 305, "issue": 105, "outcome": "stopped" }
+        ]
+      },
+      "checks": [
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/schema", "op": "equals", "value": "pdd.autopilot-regressions.v1" },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/complete", "op": "equals", "value": true },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/errors", "op": "equals", "value": [] },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/merges", "op": "count", "value": 4 },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/counts/ok", "op": "equals", "value": 0 },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/counts/suspect", "op": "equals", "value": 2 },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/counts/proven", "op": "equals", "value": 2 },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/merges/0/pr", "op": "equals", "value": 301 },
+        { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/0/classification", "op": "equals", "value": "proven" },
+        { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/0/signals/0/kind", "op": "equals", "value": "reference" },
+        { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/0/signals/0/level", "op": "equals", "value": "proven" },
+        { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/0/signals/0/detail", "op": "contains", "value": "#3528" },
+        { "criterion_id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a", "target": "result", "path": "/merges/0/signals", "op": "count", "value": 1 },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/merges/1/pr", "op": "equals", "value": 302 },
+        { "criterion_id": "ac-sha256-089a04f78bdaba8e56054b50cf1dd6930d144079ca369b7c", "target": "result", "path": "/merges/1/classification", "op": "equals", "value": "proven" },
+        { "criterion_id": "ac-sha256-089a04f78bdaba8e56054b50cf1dd6930d144079ca369b7c", "target": "result", "path": "/merges/1/signals/0/kind", "op": "equals", "value": "revert" },
+        { "criterion_id": "ac-sha256-089a04f78bdaba8e56054b50cf1dd6930d144079ca369b7c", "target": "result", "path": "/merges/1/signals/0/level", "op": "equals", "value": "proven" },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/merges/2/pr", "op": "equals", "value": 303 },
+        { "criterion_id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a", "target": "result", "path": "/merges/2/classification", "op": "equals", "value": "suspect" },
+        { "criterion_id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a", "target": "result", "path": "/merges/2/signals/0/kind", "op": "equals", "value": "reopened" },
+        { "criterion_id": "ac-sha256-4d7ef376f9dd0463713acdcb1669fc4c7313fb8976a76c7a", "target": "result", "path": "/merges/2/signals/0/level", "op": "equals", "value": "suspect" },
+        { "criterion_id": "ac-sha256-2ce187b863e021dd10e565f4b3c2bc732dc265a902d55663", "target": "result", "path": "/merges/3/pr", "op": "equals", "value": 305 },
+        { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/3/classification", "op": "equals", "value": "suspect" },
+        { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/3/signals/0/kind", "op": "equals", "value": "reference" },
+        { "criterion_id": "ac-sha256-7f11a2ba3dca4b0a19371d526671c9e16ff6475c02a2ed75", "target": "result", "path": "/merges/3/signals/0/level", "op": "equals", "value": "suspect" },
+        { "criterion_id": "ac-sha256-089a04f78bdaba8e56054b50cf1dd6930d144079ca369b7c", "target": "result", "path": "/days", "op": "equals", "value": [{ "date": "2026-11-18", "proven": 1 }, { "date": "2026-11-19", "proven": 1 }] }
+      ]
+    }
+  ]
+}

@@ -71,24 +71,39 @@ test('formal invariants: funnel bounds, cross-view reconciliation, skill partiti
     for (const w of report.overview.windows) {
       assert.ok(w.taken >= 0);
       assert.ok(w.prCreated >= 0 && w.prCreated <= w.taken, `prCreated <= taken in trial ${trial}`);
+      assert.ok(w.merged >= 0 && w.merged <= w.prCreated, `merged <= prCreated in trial ${trial}`);
       assert.ok(w.mwm >= 0 && w.mwm <= w.taken, `mwm <= taken in trial ${trial}`);
+      assert.ok(w.regressions >= 0 && w.regressions <= w.merged, `regressions <= merged in trial ${trial}`);
+      if (w.pool !== null) {
+        assert.ok(w.pool >= w.taken, `pool >= taken in trial ${trial}`);
+      }
     }
 
     for (const pw of report.overview.perRepoWindows) {
       const sumTaken = pw.rows.reduce((acc, r) => acc + r.taken, 0);
       const sumPr = pw.rows.reduce((acc, r) => acc + r.prCreated, 0);
+      const sumMerged = pw.rows.reduce((acc, r) => acc + r.merged, 0);
       const sumMwm = pw.rows.reduce((acc, r) => acc + r.mwm, 0);
+      const sumReg = pw.rows.reduce((acc, r) => acc + r.regressions, 0);
       assert.equal(sumTaken, pw.total.taken);
       assert.equal(sumPr, pw.total.prCreated);
+      assert.equal(sumMerged, pw.total.merged);
       assert.equal(sumMwm, pw.total.mwm);
+      assert.equal(sumReg, pw.total.regressions);
+      if (pw.total.pool !== null) {
+        assert.equal(pw.rows.reduce((acc, r) => acc + r.pool, 0), pw.total.pool);
+      }
     }
 
     const primaryOverview = report.overview.windows.at(-1);
     assert.equal(report.stages.taken, primaryOverview.taken);
     assert.equal(report.stages.pr, primaryOverview.prCreated);
+    assert.equal(report.stages.merged, primaryOverview.merged);
     assert.equal(report.stages.mwm, primaryOverview.mwm);
+    assert.equal(report.stages.regressions.total, primaryOverview.regressions);
     assert.equal(report.skills.total.taken, primaryOverview.taken);
     assert.equal(report.skills.total.prCreated, primaryOverview.prCreated);
+    assert.equal(report.skills.total.merged, primaryOverview.merged);
     assert.equal(report.skills.total.mwm, primaryOverview.mwm);
 
     assert.equal(
@@ -96,9 +111,33 @@ test('formal invariants: funnel bounds, cross-view reconciliation, skill partiti
       report.skills.total.taken,
     );
     assert.equal(
+      report.skills.rows.reduce((acc, r) => acc + r.merged, 0),
+      report.skills.total.merged,
+    );
+    assert.equal(
       report.skills.rows.reduce((acc, r) => acc + r.mwm, 0),
       report.skills.total.mwm,
     );
+
+    assert.equal(report.stages.beforePr.total + report.stages.pr, report.stages.taken);
+    assert.equal(report.stages.merged + report.stages.unmergedPrs.total, report.stages.pr);
+    assert.equal(
+      report.stages.beforePr.total + report.stages.unmergedPrs.total + report.stages.merged,
+      report.stages.taken,
+    );
+    assert.equal(
+      report.stages.beforePr.breakdown.reduce((acc, b) => acc + b.count, 0),
+      report.stages.beforePr.total,
+    );
+    assert.equal(
+      report.stages.unmergedPrs.breakdown.reduce((acc, b) => acc + b.count, 0),
+      report.stages.unmergedPrs.total,
+    );
+    for (const key of ['suite', 'review', 'ci', 'e2e']) {
+      const cell = report.stages.prGates[key];
+      assert.equal(cell.total, report.stages.pr);
+      assert.ok(cell.passed >= 0 && cell.passed <= cell.total);
+    }
 
     for (const g of GATES) {
       const cell = report.stages.gates[g];
@@ -116,7 +155,7 @@ test('formal invariants: funnel bounds, cross-view reconciliation, skill partiti
   }
 });
 
-test('formal invariants: on/off toggle intervals preserve prior and resumed runs while excluding paused runs', () => {
+test('formal invariants: on/off toggle excludes turned-off repos in unified rollups while preserving pre-pause history under explicit --repo', () => {
   let cfg = applyMetricsToggle(null, { action: 'off', at: '2026-11-17T10:00:00Z' });
   cfg = applyMetricsToggle(cfg, { action: 'on', at: '2026-11-17T12:00:00Z' });
   cfg = applyMetricsToggle(cfg, { action: 'off', repo: 'acme/web', at: '2026-11-17T13:00:00Z' });
@@ -129,7 +168,8 @@ test('formal invariants: on/off toggle intervals preserve prior and resumed runs
     { repo: 'acme/web', issue: 5, startedAt: '2026-11-17T13:30:00Z', at: '2026-11-17T13:50:00Z', status: 'merged', pr: 15 },
   ];
 
-  const report = calculateAutopilotMetrics({
+  // Unified rollup excludes explicitly turned-off acme/web completely; acme/api #1 and #3 survive (#2 excluded by global pause).
+  const unified = calculateAutopilotMetrics({
     runs,
     repos: ['acme/api', 'acme/web'],
     openIssues: { 'acme/api': 1, 'acme/web': 1 },
@@ -137,10 +177,26 @@ test('formal invariants: on/off toggle intervals preserve prior and resumed runs
     timezone: 'UTC',
     recording: cfg,
   });
+  assert.deepEqual(unified.repos, ['acme/api']);
+  assert.equal(unified.scopeLabel, 'api');
+  assert.equal(unified.openNow, 1);
+  assert.equal(unified.overview.windows[0].taken, 2);
+  assert.equal(unified.overview.windows[0].merged, 2);
 
-  // Issues #1, #3, #4 survive; #2 (global pause) and #5 (acme/web pause) are excluded.
-  assert.equal(report.overview.windows[0].taken, 3);
-  assert.equal(report.overview.windows[0].mwm, 3);
+  // Explicit --repo acme/web still shows pre-pause #4 while excluding paused #5.
+  const webOnly = calculateAutopilotMetrics({
+    runs,
+    repos: ['acme/api', 'acme/web'],
+    openIssues: { 'acme/api': 1, 'acme/web': 1 },
+    repoFilter: 'acme/web',
+    now: '2026-11-17T15:00:00Z',
+    timezone: 'UTC',
+    recording: cfg,
+  });
+  assert.deepEqual(webOnly.repos, ['acme/web']);
+  assert.equal(webOnly.recording.enabled, false);
+  assert.equal(webOnly.overview.windows[0].taken, 1);
+  assert.equal(webOnly.overview.windows[0].merged, 1);
 });
 
 test('formal HTML escaping prevents unescaped markup in rendered HTML', () => {

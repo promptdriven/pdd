@@ -207,9 +207,125 @@ test('supports post-merge merges object map, avoids misclassifying ended outcome
 
   const pr88 = filtered.runs.find(r => r.issue === 40);
   assert.equal(pr88.status, 'merged');
-  assert.equal(pr88.reopened, true);
+  assert.equal(pr88.reopened, false);
+  assert.equal(pr88.reverted, true);
+  assert.equal(filtered.coreDirs['promptdriven/pdd'], coreA);
 
   const issue50 = filtered.runs.find(r => r.issue === 50);
   assert.equal(issue50.skill, 'feature');
   assert.equal(issue50.gates.suite, 'fail');
+});
+
+test('extracts promptChanged, numeric gateCounts, optional e2e, and preserves targets across on/off toggles (#3530)', t => {
+  const stateDir = makeStateDir(t);
+  const autoDir = join(stateDir, 'autopilot');
+  mkdirSync(autoDir, { recursive: true });
+  writeFileSync(join(autoDir, 'metrics-config.json'), JSON.stringify({
+    enabled: true,
+    targets: { convMinPct: 95, maxRegressionPct: 2, label: 'Q4' },
+  }));
+  setAutopilotMetricsRecording({ stateDir, action: 'off', repo: 'promptdriven/sandbox', at: '2026-11-18T00:00:00Z' });
+  const cfg = readMetricsConfig({ stateDir });
+  assert.deepEqual(cfg.targets, { convMinPct: 95, maxRegressionPct: 2, label: 'Q4' });
+  assert.equal(cfg.repos['promptdriven/sandbox'], false);
+
+  writeFileSync(join(autoDir, 'pdd.json'), JSON.stringify({ repo: 'promptdriven/pdd', enabled: true, cwd: '/tmp/pdd' }));
+  const coreDir = join(autoDir, 'pdd-core');
+  mkdirSync(coreDir, { recursive: true });
+  const baseMs = Date.parse('2026-11-18T12:00:00Z');
+  writeFileSync(join(coreDir, 'history.jsonl'), `${JSON.stringify({ at: baseMs, issue: 77, pr: 277, outcome: 'merged', text: 'merged PR #277 abcdef1' })}\n`);
+  const logsDir = join(coreDir, 'logs');
+  mkdirSync(logsDir, { recursive: true });
+  writeFileSync(join(logsDir, '77-evidence-abcdef1.json'), JSON.stringify({
+    evidence: {
+      runtime: { state: 'pass', passed: 6, total: 6 },
+      vectors: { state: 'pass', passed: 14, total: 14 },
+      formal: { state: 'proved', passed: 3, total: 3 },
+      e2e: { state: 'pass' },
+    },
+    suite: { state: 'pass' },
+    review: { state: 'pass' },
+    ci: { state: 'green' },
+  }));
+
+  const state = readAutopilotMetricsState({ stateDir, now: () => baseMs + 60_000 });
+  const run = state.runs.find(r => r.issue === 77);
+  assert.equal(run.promptChanged, true);
+  assert.deepEqual(run.gateCounts, {
+    runtime: { passed: 6, total: 6 },
+    vectors: { passed: 14, total: 14 },
+    formal: { passed: 3, total: 3 },
+  });
+  assert.equal(run.gates.e2e, 'pass');
+});
+
+test('merges runs.jsonl with enriched core history on equal timestamps, extracts vectors/formal tests counts, persists regressionIssues, and avoids mislabeling generic regression as reopened (#3530)', t => {
+  const stateDir = makeStateDir(t);
+  const autoDir = join(stateDir, 'autopilot');
+  mkdirSync(autoDir, { recursive: true });
+  writeFileSync(join(autoDir, 'pdd.json'), JSON.stringify({ repo: 'promptdriven/pdd', enabled: true, cwd: '/tmp/pdd' }));
+  const coreDir = join(autoDir, 'pdd-core');
+  const logsDir = join(coreDir, 'logs');
+  mkdirSync(logsDir, { recursive: true });
+
+  const nowAt = Date.parse('2026-11-18T14:00:00Z');
+  const buildLog = join(logsDir, '88-build.log');
+  writeFileSync(buildLog, 'Read /skills/pdd-small-change/SKILL.md for this fix.\n');
+  writeFileSync(join(coreDir, 'history.jsonl'), [
+    JSON.stringify({ at: nowAt, issue: 88, pr: 288, outcome: 'ended', text: 'stopped abc1234', log: buildLog }),
+    JSON.stringify({ at: nowAt + 1000, issue: 89, pr: 289, outcome: 'merged', text: 'merged PR #289' }),
+  ].join('\n') + '\n');
+  // Real autopilot-core.mjs evidence schema: `vectors.kinds.{vectors,formal}` uses `tests` + `pass`
+  writeFileSync(join(logsDir, '88-evidence-abc1234.json'), JSON.stringify({
+    vectors: {
+      kinds: {
+        vectors: { state: 'pass', tests: 18, pass: 18, fail: 0, skipped: 0 },
+        formal: { state: 'proved', tests: 5, pass: 5, fail: 0, skipped: 0 },
+      },
+    },
+    suite: { state: 'pass' },
+    review: { state: 'pass' },
+    ci: { state: 'green' },
+    e2e: { state: 'pass' },
+  }));
+  writeFileSync(join(coreDir, 'post-merge.json'), JSON.stringify({
+    schema: 1,
+    merges: {
+      '288': { pr: 288, issue: 88, reopened: false, reverted: true, regressionIssues: [3528] },
+      '289': { pr: 289, issue: 89, regression: true },
+    },
+  }));
+
+  // Bare runs.jsonl row written at exact same timestamp by autopilot-core.mjs (null suite/ci, no e2e/gateCounts/reverted)
+  const recorded = recordAutopilotMetric({
+    repo: 'promptdriven/pdd',
+    issue: 88,
+    skill: null,
+    startedAt: nowAt - 600_000,
+    at: nowAt,
+    status: 'ended',
+    pr: 288,
+    gates: { runtime: null, vectors: null, formal: null, suite: null, review: null, ci: null },
+    regressionIssues: [3529],
+    title: 'Add metrics v2',
+  }, { stateDir, now: () => nowAt });
+  assert.deepEqual(recorded.record.regressionIssues, [3529]);
+
+  const state = readAutopilotMetricsState({ stateDir, now: () => nowAt + 60_000 });
+  const run88 = state.runs.find(r => r.issue === 88);
+  assert.equal(run88.reverted, true, 'post-merge reverted flag preserved across runs.jsonl collision');
+  assert.equal(run88.reopened, false);
+  assert.deepEqual(run88.regressionIssues, [3528, 3529], 'regressionIssues unioned across post-merge and runs.jsonl');
+  assert.equal(run88.gates.suite, 'pass', 'evidence suite preserved over bare null');
+  assert.equal(run88.gates.ci, 'green', 'evidence ci preserved over bare null');
+  assert.equal(run88.gates.e2e, 'pass', 'evidence e2e preserved');
+  assert.deepEqual(run88.gateCounts, {
+    vectors: { passed: 18, total: 18 },
+    formal: { passed: 5, total: 5 },
+  }, 'extracts tests/pass counts from real autopilot-core evidence schema');
+  assert.equal(run88.promptChanged, true);
+  assert.equal(run88.skill, 'small-change', 'build-log skill preserved over generic feature fallback');
+
+  const run89 = state.runs.find(r => r.issue === 89);
+  assert.equal(run89.reopened, false, 'generic regression: true must not be mislabeled as reopened');
 });

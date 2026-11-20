@@ -13,8 +13,9 @@ export function normalizeReleaseTag(tag) {
   return match ? match[1] : null;
 }
 
-export function readPyprojectVersion(pyprojectText) {
+export function readPyprojectField(pyprojectText, fieldName) {
   const lines = String(pyprojectText).split(/\r?\n/);
+  const pattern = new RegExp(`^${fieldName}\\s*=\\s*"([^"]+)"\\s*(?:#.*)?$`);
   let inProject = false;
   for (const raw of lines) {
     const line = raw.trim();
@@ -24,11 +25,15 @@ export function readPyprojectVersion(pyprojectText) {
       continue;
     }
     if (inProject) {
-      const match = /^version\s*=\s*"([^"]+)"\s*(?:#.*)?$/.exec(line);
+      const match = pattern.exec(line);
       if (match) return match[1];
     }
   }
   return null;
+}
+
+export function readPyprojectVersion(pyprojectText) {
+  return readPyprojectField(pyprojectText, 'version');
 }
 
 export function readPythonInitVersion(initText) {
@@ -117,7 +122,22 @@ export function syncPypiVersion({ root = DEFAULT_ROOT } = {}) {
   return version;
 }
 
-export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDir = null } = {}) {
+const STAGE_SCRUB_EXACT_KEYS = new Set([
+  'NPM_TOKEN',
+  'NODE_AUTH_TOKEN',
+  'PYPI_API_TOKEN',
+  'TWINE_PASSWORD',
+  'TWINE_USERNAME',
+]);
+const STAGE_SCRUB_CI_KEYS = new Set([
+  'npm_config_dry_run',
+  'npm_config_tag',
+  'npm_config_npm_only',
+  'npm_config_pypi_only',
+  'npm_config_cache',
+]);
+
+export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDir = null, env: sourceEnv = process.env } = {}) {
   const parity = checkVersionParity({ root });
   if (!parity.ok) {
     throw new Error(`Cannot stage PyPI bundle:\n${parity.problems.join('\n')}`);
@@ -130,7 +150,13 @@ export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDi
   try {
     const cacheDir = join(scratch, 'npm-cache');
     mkdirSync(cacheDir, { recursive: true });
-    const env = { ...process.env, npm_config_cache: cacheDir, COPYFILE_DISABLE: '1' };
+    const baseEnv = { ...sourceEnv };
+    for (const key of Object.keys(baseEnv)) {
+      if (STAGE_SCRUB_EXACT_KEYS.has(key) || STAGE_SCRUB_CI_KEYS.has(key.toLowerCase())) {
+        delete baseEnv[key];
+      }
+    }
+    const env = { ...baseEnv, npm_config_cache: cacheDir, COPYFILE_DISABLE: '1' };
     const packOut = execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', scratch], {
       cwd: root,
       env,
@@ -160,7 +186,7 @@ export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDi
     chmodSync(entryMjs, 0o755);
 
     const verifyEnv = {
-      ...process.env,
+      ...baseEnv,
       HOME: scratch,
       PDD_STATE_DIR: join(scratch, 'state'),
       PDD_NO_UPDATE_CHECK: '1',

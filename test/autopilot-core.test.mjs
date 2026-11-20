@@ -2509,10 +2509,10 @@ test('O1 the build brief has the owner table (binding, header line in the first 
 
 test('O2 #42: a package.json field on path d passes the native checks and merges; the reviewer gets the owner table and does not judge commit order', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } });
-  w.baseCommit('package.json', JSON.stringify({ name: 'x', private: true }));
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', private: true, scripts: { test: 'node --test' } }));
   w.baseCommit('prompts/readme.prompt.md', '# Readme\n\nOwn `README.md`: the project page.\n\nThe package.json repository field is https://github.com/acme/widgets.\n');
   w.issue(17); await w.tick();
-  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', private: true, repository: 'https://github.com/acme/widgets' }));
+  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', private: true, scripts: { test: 'node --test' }, repository: 'https://github.com/acme/widgets' }));
   const { pr } = w.build(17, { body: 'Fixes #17\n\nRuntime: not run (no prompt changed)\nPath: d — package.json — unowned — no contract change — Test: done check', result: { promptChanged: false } });
   await w.tick();
   const review = w.job(17, 'review').input;
@@ -2588,13 +2588,13 @@ test('Q1 P1/S2/S3: a job writes its changed files into its claim; the next brief
 
 test('Q2 mechanical conflicts are fixed in the lane with no agent and no repair: JSON keys (M-d), identical inserts (M-b), derived headers (M-a)', async t => {
   const w = await coreWorld(t, { settings: { runs: 1 } }); w.github.mergeMovesBase = true;
-  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0' }, null, 2) + '\n');
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' } }, null, 2) + '\n');
   w.baseCommit('CHANGELOG.md', '# Changes\n\n## 1.0.0\n\n- First.\n');
   w.issue(17); await w.tick();
-  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', version: '1.0.0', repository: 'acme/widgets' }, null, 2) + '\n');
+  editIn(w, 17, 'package.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' }, repository: 'acme/widgets' }, null, 2) + '\n');
   editIn(w, 17, 'CHANGELOG.md', '# Changes\n\n## Unreleased\n\n## 1.0.0\n\n- First.\n');
   const { pr } = w.build(17); await greenLane(w, 17);
-  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0', keywords: ['money'] }, null, 2) + '\n');
+  w.baseCommit('package.json', JSON.stringify({ name: 'x', version: '1.0.0', scripts: { test: 'node --test' }, keywords: ['money'] }, null, 2) + '\n');
   w.baseCommit('CHANGELOG.md', '# Changes\n\n## Unreleased\n\n## 1.0.0\n\n- First.\n');
   await w.tick();                                    // the lane: merge-tree conflict, all hunks mechanical
   const job = jobFile(w, 17);
