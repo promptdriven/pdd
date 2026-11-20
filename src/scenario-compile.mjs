@@ -1,4 +1,4 @@
-// Generated from prompts/cli/scenario-compile.prompt.md (sha256: c7a2a327893dd780df0e162a14c9a898e28e8a0944e8d864ed37e564ca1b77c9).
+// Generated from prompts/cli/scenario-compile.prompt.md (sha256: 0f4a903a5f3f1f84c34cdca704cacb5ff2edaf0d71a5cbff97eedb0a70746aac).
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -517,6 +517,61 @@ function mergePatch(target, patch) {
   return result;
 }
 
+function encodePointerToken(key) {
+  return String(key).replaceAll('~', '~0').replaceAll('/', '~1');
+}
+
+function formatJsonPointer(keys) {
+  return keys.map(key => `/${encodePointerToken(key)}`).join('');
+}
+
+function formatPatchWarningLocation(section, stepId) {
+  if (typeof stepId === 'string' && stepId) {
+    if (/^steps\[\d+\]\.patch$/.test(section)) {
+      return `step ${JSON.stringify(stepId)}`;
+    }
+    const sub = section.replace(/^steps\[\d+\]\./, '').replace(/\.patch$/, '');
+    return sub ? `step ${JSON.stringify(stepId)} (${sub})` : `step ${JSON.stringify(stepId)}`;
+  }
+  return section.replace(/\.patch$/, '') || section;
+}
+
+function collectPatchNullWarnings(target, patch, ctx, warnings) {
+  if (!isPlainObject(patch)) return;
+  const walk = (curTarget, curPatch, keyPath) => {
+    for (const key of Object.keys(curPatch)) {
+      const val = curPatch[key];
+      const nextPath = [...keyPath, key];
+      const hasTargetKey = isPlainObject(curTarget) && Object.hasOwn(curTarget, key);
+      if (val === null) {
+        const fieldPath = nextPath.join('.');
+        const pointer = formatJsonPointer(nextPath);
+        const location = formatPatchWarningLocation(ctx.section, ctx.stepId);
+        const effectText = hasTargetKey
+          ? 'deletes the existing key (RFC 7396 Merge Patch)'
+          : 'omits/deletes the key instead of setting it to null (RFC 7396 Merge Patch; key is not on base)';
+        const message =
+          `Warning: ${ctx.path} ${location}: "patch" sets ${JSON.stringify(fieldPath)} to null, which ${effectText}. ` +
+          `Use "set": { ${JSON.stringify(pointer)}: null } to set a nullable field to null.`;
+        warnings.push({
+          code: 'patch-null-deletes-key',
+          path: ctx.path,
+          section: ctx.section,
+          step_id: ctx.stepId ?? null,
+          step: ctx.step ?? null,
+          field_path: fieldPath,
+          pointer,
+          exists_on_target: hasTargetKey,
+          message,
+        });
+      } else if (isPlainObject(val)) {
+        walk(hasTargetKey ? curTarget[key] : undefined, val, nextPath);
+      }
+    }
+  };
+  walk(target, patch, []);
+}
+
 function decodePointerTokens(pointer, section, extra) {
   if (typeof pointer !== 'string' || (pointer !== '' && !pointer.startsWith('/'))) {
     fail('invalid-seed', section, `Invalid JSON Pointer "${String(pointer)}"; pointers must be "" or start with "/".`, extra);
@@ -843,15 +898,16 @@ function expandTupleChecks(tuple, criterionId, entryPath, section, extra, expand
 
 export function compileScenario(doc, { path = 'tests/story.json', storyPath = null, storySource = null } = {}) {
   if (!isPlainObject(doc)) {
-    return { doc, changed: false, refusal: null };
+    return { doc, changed: false, refusal: null, warnings: [] };
   }
   if (!isShortScenarioDoc(doc)) {
     if (doc.schema_version === V1_SCENARIO_SCHEMA && Array.isArray(doc.steps) && needsScenarioCompile(doc)) {
-      return bindOmittedV1Criteria(doc, { storySource });
+      return { ...bindOmittedV1Criteria(doc, { storySource }), warnings: [] };
     }
-    return { doc, changed: false, refusal: null };
+    return { doc, changed: false, refusal: null, warnings: [] };
   }
   try {
+    const warnings = [];
     const unknownTop = Object.keys(doc).filter(key => !ALLOWED_TOP_KEYS.has(key));
     if (unknownTop.length) {
       fail('invalid-document', 'scenario', `${path} has unknown top-level keys: ${unknownTop.map(k => `"${k}"`).join(', ')}.`);
@@ -890,7 +946,8 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
       if (chain.includes(cleanName)) {
         fail('seed-cycle', section, `Seed reference cycle: ${[...chain, cleanName].join(' -> ')}.`, extra);
       }
-      const expanded = expandValue(rawSeeds[cleanName], `seeds.${cleanName}`, [...chain, cleanName], extra);
+      const seedExtra = extra?.step !== undefined ? { step: extra.step } : {};
+      const expanded = expandValue(rawSeeds[cleanName], `seeds.${cleanName}`, [...chain, cleanName], seedExtra);
       resolvedSeeds.set(cleanName, expanded);
       return cloneExact(expanded);
     }
@@ -970,7 +1027,20 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
         }
         let current = resolveBaseRef(value[macroKey], chain, section, extra);
         if (Object.hasOwn(value, 'patch')) {
-          const expandedPatch = expandValue(value.patch, `${section}.patch`, chain, extra);
+          const patchSection = `${section}.patch`;
+          const expandedPatch = expandValue(value.patch, patchSection, chain, extra);
+          const inSeed = patchSection.startsWith('seeds.');
+          collectPatchNullWarnings(
+            current,
+            expandedPatch,
+            {
+              path,
+              section: patchSection,
+              stepId: inSeed ? null : (extra.stepId ?? null),
+              step: inSeed ? null : (extra.step ?? null),
+            },
+            warnings,
+          );
           current = mergePatch(current, expandedPatch);
         }
         if (Object.hasOwn(value, 'set')) {
@@ -1105,27 +1175,40 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
         fail('invalid-step', `${section}.operation`, 'Step has no "operation" (or "op").', at);
       }
 
+      const stepAt = { step: index + 1, stepId };
       let stepInput;
       if (Object.hasOwn(step, 'from')) {
-        stepInput = resolveBaseRef(step.from, [], `${section}.from`, at);
+        stepInput = resolveBaseRef(step.from, [], `${section}.from`, stepAt);
       } else if (Object.hasOwn(step, 'input')) {
-        stepInput = expandValue(step.input, `${section}.input`, [], at);
+        stepInput = expandValue(step.input, `${section}.input`, [], stepAt);
       } else {
         stepInput = {};
       }
       if (Object.hasOwn(step, 'patch')) {
-        const expandedPatch = expandValue(step.patch, `${section}.patch`, [], at);
+        const patchSection = `${section}.patch`;
+        const expandedPatch = expandValue(step.patch, patchSection, [], stepAt);
+        collectPatchNullWarnings(
+          stepInput,
+          expandedPatch,
+          {
+            path,
+            section: patchSection,
+            stepId,
+            step: index + 1,
+          },
+          warnings,
+        );
         stepInput = mergePatch(stepInput, expandedPatch);
       }
       if (Object.hasOwn(step, 'set')) {
-        const expandedSet = expandValue(step.set, `${section}.set`, [], at);
-        stepInput = applyPointerSet(stepInput, expandedSet, `${section}.set`, at);
+        const expandedSet = expandValue(step.set, `${section}.set`, [], stepAt);
+        stepInput = applyPointerSet(stepInput, expandedSet, `${section}.set`, stepAt);
       }
       stepInputs.set(stepId, cloneExact(stepInput));
 
       const expandCheckItem = (item, criterionId, checkSection) => {
         if (Array.isArray(item)) {
-          return expandTupleChecks(item, criterionId, entryPath, checkSection, at, (val, subSec) => expandValue(val, subSec, [], at));
+          return expandTupleChecks(item, criterionId, entryPath, checkSection, at, (val, subSec) => expandValue(val, subSec, [], stepAt));
         }
         if (!isPlainObject(item)) {
           fail('invalid-check', checkSection, 'Each check must be an object or tuple array.', at);
@@ -1136,7 +1219,7 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
         }
         const normCid = resolveCriterionRef(rawCid, checkSection, at);
         const norm = Object.hasOwn(item, 'op') ? normalizeOp(item.op, checkSection, at) : { op: item.op };
-        const outCheck = { ...expandValue(item, checkSection, [], at), criterion_id: normCid, op: norm.op };
+        const outCheck = { ...expandValue(item, checkSection, [], stepAt), criterion_id: normCid, op: norm.op };
         if ((outCheck.op === 'at_least' || outCheck.op === 'at_most') && !Object.hasOwn(outCheck, 'measure')) {
           outCheck.measure = norm.measure ?? 'value';
         }
@@ -1164,7 +1247,7 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
               fail('invalid-check', checkSec, 'A tuple inside array "checks" must start with criterion ID: [criterion, target, ...].', at);
             }
             const critId = resolveCriterionRef(item[0], `${checkSec}[0]`, at);
-            compiledChecks.push(...expandTupleChecks(item.slice(1), critId, entryPath, checkSec, at, (val, subSec) => expandValue(val, subSec, [], at)));
+            compiledChecks.push(...expandTupleChecks(item.slice(1), critId, entryPath, checkSec, at, (val, subSec) => expandValue(val, subSec, [], stepAt)));
           } else {
             compiledChecks.push(...expandCheckItem(item, undefined, checkSec));
           }
@@ -1199,7 +1282,7 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
 
       let compiledSimOverrides;
       if (Object.hasOwn(step, 'simulation_overrides')) {
-        const expandedOverrides = expandValue(step.simulation_overrides, `${section}.simulation_overrides`, [], at);
+        const expandedOverrides = expandValue(step.simulation_overrides, `${section}.simulation_overrides`, [], stepAt);
         compiledSimOverrides = Array.isArray(expandedOverrides)
           ? expandedOverrides.map((ov, ovIdx) =>
               isPlainObject(ov) && Object.hasOwn(ov, 'criterion_id') && ov.criterion_id !== null && ov.criterion_id !== undefined
@@ -1272,10 +1355,10 @@ export function compileScenario(doc, { path = 'tests/story.json', storyPath = nu
     }
     outDoc.steps = compiledSteps;
 
-    return { doc: outDoc, changed: true, refusal: null };
+    return { doc: outDoc, changed: true, refusal: null, warnings };
   } catch (error) {
     if (error instanceof CompileAbort) {
-      return { doc, changed: false, refusal: error.issue };
+      return { doc, changed: false, refusal: error.issue, warnings: [] };
     }
     throw error;
   }
@@ -1294,6 +1377,7 @@ export function compileScenarioText(
       exactDoc: exactParsed,
       changed: false,
       refusal: compiled.refusal,
+      warnings: compiled.warnings,
     };
   }
   if (!compiled.changed) {
@@ -1303,6 +1387,7 @@ export function compileScenarioText(
       exactDoc: exactParsed,
       changed: false,
       refusal: null,
+      warnings: compiled.warnings,
     };
   }
   const outText = `${stringifyExactScenarioJson(compiled.doc, space)}\n`;
@@ -1312,6 +1397,7 @@ export function compileScenarioText(
     exactDoc: compiled.doc,
     changed: true,
     refusal: null,
+    warnings: compiled.warnings,
   };
 }
 

@@ -222,3 +222,36 @@ test('3157 autopilot release routes issue reference to runAutopilotLauncher', as
   assert.equal(stdout.text, 'Released the Autopilot claim for owner/repo#17.\n');
   assert.throws(() => parseArgv(['autopilot', 'release']), CommandInputError);
 });
+
+test('3578 pdd lint --local enforces default-on structural errors without pdd.json and exits 0 once fixed', async t => {
+  const repo = temp(t);
+  const home = temp(t);
+  const state = temp(t);
+  mkdirSync(join(repo, 'prompts/trust'), { recursive: true });
+  writeFileSync(
+    join(repo, 'prompts/trust/access.prompt.md'),
+    '# Access\n\nOwn `src/access.mjs`. Use `store.load` and `store.save`.\n\n## Dependencies\n\nNone.\n',
+  );
+  writeFileSync(
+    join(repo, 'prompts/trust/service.prompt.md'),
+    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\nWire `store.load` and `access.commit`.\n\n## Dependencies\n\n- [access](access.prompt.md)\n',
+  );
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
+
+  const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
+  const errOut = capture(), errErr = capture();
+  const failCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: errOut, stderr: errErr });
+  assert.equal(failCode, 1);
+  assert.match(errErr.text, /Error:.*\[native-only-unknown-port\].*"access\.commit"/);
+
+  writeFileSync(
+    join(repo, 'prompts/trust/service.prompt.md'),
+    '---\nkind: native-only\nreason: Native SQLite adapter.\n---\n\n# Service\n\nWire `store.load` and `store.save`.\n\n## Dependencies\n\n- [access](access.prompt.md)\n',
+  );
+  const okOut = capture(), okErr = capture();
+  const okCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: okOut, stderr: okErr });
+  assert.equal(okCode, 0, okErr.text);
+  assert.equal(okErr.text, '');
+});

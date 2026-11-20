@@ -90,7 +90,7 @@ For `workflow.run`, accept optional `--adopt-corpus FILE`, a nonempty text path 
 - workflow.approve `workflow approve [ISSUE] [--said WORDS] [--draft]`, workflow.status `workflow status [ISSUE] [--all] [--cancelled] [--json]` (flags).
 `workflow.approve` also accepts Boolean flag `--draft` to strengthen publication policy at the current unpublished gate; the runner owns eligibility and persistence. Expose both draft flags in help and completion, including the quiet workflow-start alias. Preserve generic duplicate/unknown-option validation.
 
-For `workflow.run` and `workflow.approve`, also accept the value option `--through` with the choices `prompt-pr` and `code`. Keep both existing help forms unchanged and name the option in their help descriptions: it saves where a normal run goes after PR 1 (stop, or go on to the code PR). The runner owns where it applies and refuses it elsewhere.
+For `workflow.run` and `workflow.approve`, also accept the value option `--through` with the choices `prompt-pr` and `code`. Keep both existing help forms unchanged and name the option in their help descriptions: `--through prompt-pr` stops after PR 1 (in normal, automatic or strict runs) and `--through code` goes on to the code PR in a normal run. The runner owns where it applies and refuses `--through code` in automatic or strict runs.
 - workflow.card `workflow card [ISSUE]` (local `workflow-card`): one optional issue operand, no options. Help says it prints the run's Story card from its real files, read-only, with no GitHub, Herdr or interpreter call.
 - workflow.changes `workflow changes ISSUE TEXT…`: the text words join into one request; `--` ends options.
 - workflow.cancel `workflow cancel ISSUE`.
@@ -188,13 +188,19 @@ in root help and completion; do not import the runtime client for parsing/help.
 ## Product routes
 
 Catalog `product.status` (`product status`, local `product-status`, optional flag
-`--json`), `product.next` (`product next`, local `product-next`, no operands or
-options), and `product.start` (`product start`, local `product-start`, required
-text operand RUN, flags `--no-run` and text `--agent` with the same codex|claude|gemini|agy completion choices and agents.json ENTRY name as workflow.run). Forms:
-`pdd product status [--json]`, `pdd product next`, and
-`pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy|ENTRY]`. Help says status counts
-Stories by part and slice, next shows ready runs, and start creates or reuses one
-issue then starts a normal feature run unless `--no-run`. All three make zero
+`--json` and value `--through` with choices `prompt-pr` and `code`),
+`product.next` (`product next`, local `product-next`, value `--through` with
+choices `prompt-pr` and `code`), and `product.start` (`product start`, local
+`product-start`, required text operand RUN, flag `--no-run`, text `--agent` with
+the same codex|claude|gemini|agy completion choices and agents.json ENTRY name
+as workflow.run, value `--through` with choices `prompt-pr` and `code`, and text
+`--base`). Forms:
+`pdd product status [--json] [--through prompt-pr|code]`,
+`pdd product next [--through prompt-pr|code]`, and
+`pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy|ENTRY] [--through prompt-pr|code] [--base BRANCH]`.
+Help says status counts Stories by part and slice, next shows ready runs, and
+start creates or reuses one issue then starts a normal feature run unless
+`--no-run`, forwarding `--through` and `--base`. All three make zero
 interpreter calls, and their help says "no interpreter calls". [Product](product.prompt.md) owns their behavior.
 
 ## Cloud accounts routes

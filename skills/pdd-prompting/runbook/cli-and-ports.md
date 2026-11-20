@@ -8,6 +8,7 @@ Persist state through injected `<port>.<op>` ports—never hidden globals or pro
 - `key-value.get`: `{"action": "key-value.get", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": null, "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": null}, "result_value_pointer": "/value"}`
 - `key-value.put`: `{"action": "key-value.put", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": "/value", "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": []}, "result_value_pointer": "/value"}`
 - Other collection/port actions: `collection.get`, `collection.get-or-null`, `collection.merge` (when the world state is a list of records), `port.write`, `blob.read`, `blob.write`, `blob.stat`, `sql.execute`, `fixture.lookup`, and `compute`.
+- **One resource kind per `<port>.*` prefix:** all operations sharing a prefix in `simulation` must stay in one family (`key-value.*`, `collection.*`, `blob.*`, `sql.*`, `port.*`, or `compute`)—mixing e.g. `archive.read` (`key-value.get`) with `archive.write` (`port.write`) fails with `port-operation-kind-or-access`. Stay in one family (`key-value.get` + `key-value.put`) or split prefixes (`archive_store.read` + `archive_sink.write`).
 
 ## 6. Command-line programs (`cli`)
 
@@ -33,6 +34,8 @@ Pass non-deterministic inputs (clock, RNG, IDs) as operation inputs or injected 
 | Deterministic SHA-256 | `compute` (ports `compute.hash_utf8`, `compute.hash_json`) | `result_template: {"value": null}`, `result_value_pointer: "/value"` |
 | Fixed / varying service | `fixture.lookup` | `world_pointer`, `cases: [{args, call_index, result}]`, `result_template: null`, `result_value_pointer: ""` |
 | Write-only / error fake | `port.write` | `world_pointer`, `result_template` |
+
+- **Prefix & entry scope:** keep one resource family per `<port>.*` prefix (§5: never mix e.g. `key-value.*` and `port.*` under one prefix), and ensure every `<port>.<op>` key in `simulation` is declared for the entry invoked by that test (unused sibling-entry bindings fail with `unknown-simulation-operation`).
 
 ### Return a different port reply on each call
 

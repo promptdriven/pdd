@@ -1,4 +1,4 @@
-// Generated from prompts/cli/agent-adapters.prompt.md (sha256: a02fa618d59810943f8cb1bb8c8c4ad972f99ac50bc55dc1f93aa1dfdad19407).
+// Generated from prompts/cli/agent-adapters.prompt.md (sha256: d33174a4c41938e26dd655e332a8d6d0621f65ebbd4ef8a6316df2e2203d6add).
 import { spawn } from 'node:child_process';
 import { lstatSync, statSync } from 'node:fs';
 import { delimiter, resolve, isAbsolute } from 'node:path';
@@ -286,11 +286,27 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
      stepExec.cleanup();
     }
     const combined=`${result?.stderr??''}\n${result?.stdout??''}`;
-    if(result?.code!==0&&cloudMod.isReauthRequiredFailure?.(combined)&&acc?.account_id&&triedIds.length<12){
-     cloudMod.markLocalAccountReauthRequired?.(acc.account_id,{env:childEnv},accountsPorts);
-     triedIds.push(acc.account_id);
-     burstRetried=false;
-     continue;
+    if(result?.code!==0&&acc?.account_id&&triedIds.length<12&&!triedIds.includes(acc.account_id)){
+     if(cloudMod.isExplicitReauthCodeFailure?.(combined)){
+      cloudMod.markLocalAccountReauthRequired?.(acc.account_id,{env:childEnv},accountsPorts);
+      triedIds.push(acc.account_id);
+      burstRetried=false;
+      continue;
+     }
+     if(cloudMod.isGatewayGrantRevokedFailure?.(combined)&&!cloudMod.isQuotaExhaustionMessage?.(combined)){
+      triedIds.push(acc.account_id);
+      burstRetried=false;
+      continue;
+     }
+     if(cloudMod.isReauthRequiredFailure?.(combined)){
+      const isBorrowed=acc.is_owner===false||(acc.is_owner==null&&acc.shared===true);
+      if(!isBorrowed){
+       cloudMod.markLocalAccountReauthRequired?.(acc.account_id,{env:childEnv},accountsPorts);
+      }
+      triedIds.push(acc.account_id);
+      burstRetried=false;
+      continue;
+     }
     }
     const rateClass=result?.code!==0?cloudMod.classifyRateLimitFailure(combined,acc):null;
     if(rateClass==='burst_rate_limit'&&!burstRetried){

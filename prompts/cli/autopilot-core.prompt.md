@@ -40,7 +40,7 @@ string `core`; any other value, or none, is `full`.
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
-When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics`; when `autopilot.ci` (or `autopilot.ciPolicy`) is supplied, `coreSettings` preserves `ci` as `"local"` or `"github"` (default `"github"` for any other value, omitting unset optional keys so the default settings shape stays unchanged).
+When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics`; when `autopilot.ci` (or `autopilot.ciPolicy`) is supplied, `coreSettings` preserves `ci` as `"local"` or `"github"` (default `"github"` for any other value, omitting unset optional keys so the default settings shape stays unchanged). Legacy `autopilot.mergeQueue` (including `mergeQueue: true`) in `pdd.json` is safely ignored without failing configuration reads or ticks; all Autopilot `auto` merges route through `pdd:merge-lane`.
 
 `detectTestCommand(cwd, fs, packageJson)` auto-detects standard external repository test commands when `autopilot.testCommand` is unset: `pnpm-lock.yaml` -> `pnpm test`, `yarn.lock` -> `yarn test`, `bun.lockb` or `bun.lock` -> `bun test`, `package.json` `scripts.test` -> `npm test`, `pyproject.toml` or `pytest.ini` -> `pytest`, `Cargo.toml` -> `cargo test`, `go.mod` -> `go test ./...`, `package.json` -> `npm test`, else zero-manifest `test/` or `tests/` discovery (`*.test.{js,mjs,cjs}` or `*.spec.{js,mjs,cjs}` -> `node --test`; `test_*.py` or `*_test.py` -> `pytest`), else `null`. `readCoreSettings(cwd, fs, machine = null)` applies `coreSettings` to `cwd/pdd.json` and `cwd/package.json` (an unreadable file counts as absent) and fills `testCommand` from `detectTestCommand(cwd, fs, packageJson)` whenever `autopilot.testCommand` is unset (when `main` is a greenfield or `product/` repository with no manifest yet, intake still claims ready issues and `suiteState`, `workRules`, `notCovered`, and suite failure/hang records resolve `detectTestCommand` against the checked-out PR head `N-suite`/`headTree` and `job.worktree` so a PR that introduces `package.json`, `pyproject.toml`, `Cargo.toml` or `go.mod` runs and reports its detected test command cleanly); the full-suite runner also installs lockfile dependencies for `pnpm-lock.yaml`, `yarn.lock` (Classic `--frozen-lockfile --ignore-scripts` vs Modern `--immutable --mode=skip-build`/`--skip-builds`), `bun.lockb`/`bun.lock` and `package-lock.json`.
 
@@ -160,7 +160,7 @@ ended or moved to the merge check before free slots are counted.
    latest repository PR (head branch `pdd/core-N-*`) is merged into `baseBranch`, read its
    timeline, remove `pdd:would-merge` and (unless the issue was reopened after that
    `pdd:would-merge` label or that PR body marks the work partial with `Refs`, `Part of` or
-   `Not fixed yet:`) close the issue (`state_reason: completed`); a failure only warns. Validated `observe` `would-merge` PRs (and `auto` PRs when `autopilot.mergeQueue` is `true`) also enqueue into the [serialized FIFO landing queue](autopilot-merge-queue.prompt.md) (`ROOT/merge-queue.json`), which processes one head PR at a time per tick to rebase onto `origin/BASE`, refresh stale PDD headers with `promptHeaderHash`, run bounded conflict resolution and fast post-rebase verification, and either keep `would-merge` PRs synced or land `auto` PRs in FIFO order (ejecting after 2 failures on the same base tip without blocking later PRs).
+   `Not fixed yet:`) close the issue (`state_reason: completed`); a failure only warns.
 3. A person stops a job by closing the issue, removing `pdd:working`, adding
    `pdd:stuck`, adding an external-repository label (`external`, `other-repo`,
    `elsewhere`, `pdd:elsewhere`, case-insensitive) or configured `skipLabels` label,
@@ -206,7 +206,7 @@ ended or moved to the merge check before free slots are counted.
 changes nothing on the issue (no comment, no label), marks this machine's own open
 PR of that job as draft with one note (one try; a failure only warns) and cleans up
 locally with outcome `handed-over`. It never merges.
-6. Post-merge check (`#3182`, `#3484`): before the merge queue and active job loop, when
+6. Post-merge check (`#3182`, `#3484`): before the active job loop, when
    `history.jsonl` has at least one `merged` PR and `budget.state` is neither `low` nor
    `reserve`, run one bounded incremental post-merge check (`ports.checkPostMerge`,
    default `checkPostMergeRegressions` loaded on demand) inside a try/catch without
@@ -1666,7 +1666,7 @@ runs until its end):
    here; other steps (for example the #3227 line checks) read this result. A repair
    and a new agent result clear `runtimeWait`. The PR body is written back with a
    PATCH of the PR; a failed PATCH waits for the next tick.
-6. **Merge lane** (one final step per repository). A green PR (CI green, local or none,
+6. **Merge lane** (one final step per repository). All Autopilot `auto` merges and `observe` validations route through `pdd:merge-lane` (never a separate landing queue; legacy `autopilot.mergeQueue` in `pdd.json` is ignored). A green PR (CI green, local or none,
    review PASS, suite pass) enters the lane. Before entering the lane across all green PR states (`green`, `local`, `none`), read server-side branch protection and rulesets on `BASE` (`GET repos/REPO/branches/BASE/protection/required_pull_request_reviews` and `rules/branches/BASE`, preserving an explicit `required_approving_review_count: 0`, treating only `404` as no review protection, and surfacing non-`200`/non-`404` responses as retryable `{code: "github"}` waits rather than merging). When `requiredApprovals > 0`, count distinct non-engine, non-bot (`user.type !== "Bot"` and no `[bot]` suffix) trusted (`author_association` in `OWNER`, `MEMBER`, `COLLABORATOR`, or `ports.trusted` when `author_association` is absent) `APPROVED` reviews whose `commit_id` matches `job.head` case-insensitively (surfacing transient review API errors as retryable `{code: "github"}` waits rather than swallowing them into `0` approvals). When approvals are still missing, `auto` mode stops checks and parks as `needs-person` (`keepPr: true`, `branchApproval: true`, posting a branch-protection PR review wait comment rather than the prompt-change approval comment, and asking a trusted person to approve on GitHub and remove `pdd:needs-decision`) before merging, while `observe` mode prepares full evidence, notes the required human approval on the `would-merge` comment, and leaves merging to the person. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
    PRs only). Because that label search index can lag behind both `POST` and `DELETE` or
@@ -1985,7 +1985,6 @@ with the native defaults named above.
 ## Dependencies
 
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.
-- [Serialized FIFO landing queue](autopilot-merge-queue.prompt.md): required for `enqueueMergeQueueItem`, `processMergeQueue`, `mergeQueueStatusLine`, and `buildConflictAgentInvocation`.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.
 - [Autopilot intake cards](autopilot-intake.prompt.md): required for active and shadow intake passes, pre-claim wrong-repository detection and routing, trusted person-comment filtering, and forensics fixed-card sync.
 - [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
