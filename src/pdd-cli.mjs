@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 27d3a0d9be7adac633d2bf3151fad6fc5df6eedfeb7f0907dff8702c049f9172).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 99ed0b05fc47130a5b280f42aac866dc3589366fddf90bd0be0e9ef89f62225c).
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -391,6 +391,8 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
         if (typeof module.runProduct !== 'function') throw Error('Missing product export');
         const result = await module.runProduct({ command: plan.local.slice(8), run: plan.operands[0],
           noRun: plan.options['--no-run'] === true, agent: plan.options['--agent'] ?? 'codex',
+          ...(plan.options['--through'] !== undefined ? { through: plan.options['--through'] } : {}),
+          ...(plan.options['--base'] !== undefined ? { base: plan.options['--base'] } : {}),
           json: plan.options['--json'] === true, cwd: context.toplevel, packageRoot }, productPorts);
         if (!result || !Number.isInteger(result.exitCode) || result.exitCode < 0 || result.exitCode > 255
           || typeof result.message !== 'string' || !result.message.trim()) throw Error('Invalid product reply');

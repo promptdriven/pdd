@@ -952,9 +952,9 @@ approved interface set it to draft; review the preview and approve it as usual.
 
 | Command | What it does |
 |---|---|
-| `pdd product status [--json]` | Count Stories by part and slice from current saved checks; identify stale results and remote evidence from PRs. Makes no interpreter calls |
-| `pdd product next` | Show ready planned runs and their start commands; parallel starts are optional |
-| `pdd product start RUN [--no-run] [--agent codex\|claude\|gemini\|agy\|ENTRY]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue. ENTRY is an entry name from `~/.config/pdd/agents.json` |
+| `pdd product status [--json] [--through prompt-pr\|code]` | Count Stories by part and slice from current saved checks; identify stale results and remote evidence from PRs; `--through prompt-pr\|code` sets the completion target. Makes no interpreter calls |
+| `pdd product next [--through prompt-pr\|code]` | Show ready planned runs and their start commands; `--through prompt-pr\|code` sets the completion target; parallel starts are optional |
+| `pdd product start RUN [--no-run] [--agent codex\|claude\|gemini\|agy\|ENTRY] [--through prompt-pr\|code] [--base BRANCH]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue; `--through` sets and forwards the completion target; `--base` selects an existing origin branch. ENTRY is an entry name from `~/.config/pdd/agents.json` |
 
 See [Build a whole product](build-a-whole-product.md).
 

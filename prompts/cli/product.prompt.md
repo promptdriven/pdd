@@ -6,9 +6,9 @@ control child runs, approve gates, merge, or commit evidence. Preserve existing
 feature workflow behavior by delegating startup to its public runner.
 
 Export module functions `readProduct({cwd}, ports)`,
-`productStatus({cwd}, ports)`, `productNext({cwd}, ports)`,
-`productStart({cwd, run, noRun=false, agent='codex', packageRoot}, ports)` and
-`runProduct({command, run, noRun, agent, json, cwd, packageRoot}, ports)`.
+`productStatus({cwd, through}, ports)`, `productNext({cwd, through}, ports)`,
+`productStart({cwd, run, noRun=false, agent='codex', through, base, packageRoot}, ports)` and
+`runProduct({command, run, noRun, agent, through, base, json, cwd, packageRoot}, ports)`.
 The result structures of the first four are declared below. `runProduct` returns
 `{exitCode,message}` for the CLI, catches finite input/dependency failures, and
 formats the same structured results. It never retries a mutation automatically.
@@ -25,6 +25,12 @@ rows and preserving row order. Backtick-wrapped cell values are plain values.
 Split comma lists; empty or `-` is an empty list. Ignore unrelated headings.
 The map heading supplies name without its `: map` suffix; its Size line supplies
 the chosen small, medium or large path. Do not override the person's chosen size.
+An optional `Through: prompt-pr|code` line in `product/plan.md` before its first
+`## ` heading (case-insensitive key/value, optional backticks or trailing note)
+declares the rollout's default completion target (`prompt-pr` or `code`). Reject
+duplicate or invalid `Through:` values with `invalid-product` naming
+`product/plan.md`. Include `through` on the returned `product` object only when
+`product/plan.md` declares it; omitting it keeps the default `code` target.
 
 Parts, Stories, Journeys and Questions use the columns in the required file
 format. Keep CORE and LATER Stories distinct. Return only unanswered question
@@ -179,10 +185,18 @@ A later code PR without check lines cannot hide prompt-PR results. Parse the
 chosen body through the runner's `recordedRuntimeLines`, never an independent parser: it reads only the `pdd result:` lines and plain Prompt tests lines of the body's top block, never the Steps overview, full step summaries, Verify or any `Agent note — not checked by pdd` text, both for choosing the PR and for its evidence (#2921). Its `fromPr:N`
 and the text "from PR #N" name that evidence provider, not a later PR with no
 results. Remote passes are reported progress, not proof against local files.
-Retain missing evidence as notRun. Only an eligible merged implementation PR
-completes a planned run: implementation stage is established by the saved run's
-code-stage assignment or its canonical workflow marker's code stage, never by
-stage prose alone.
+Retain missing evidence as notRun. Resolve the effective completion target as
+the explicit `through` input when supplied, otherwise `product.through`,
+otherwise `code`. Validate any supplied `through` as `prompt-pr` or `code`
+before any GitHub read or write; reject other values with `invalid-product`.
+When targeting `code`, only an eligible merged implementation PR completes a
+planned run: implementation stage is established by the saved run's `code`-stage
+assignment (`saved.stage === 'code'` with matching `headRefName`) or its
+canonical workflow marker's `code` stage, never by stage prose alone. When
+targeting `prompt-pr`, an eligible merged prompt PR (saved `prompt-pr` or
+`prompt` stage with matching `headRefName`, or canonical single workflow marker
+with stage `prompt-pr` or `prompt`, never stage prose alone) or an eligible
+merged implementation PR (`code`) completes the planned run.
 
 </details>
 
@@ -198,12 +212,14 @@ before stale evidence, and the newest named row within each category.
 <summary>Compare merged work against the base, and report waiting needs</summary>
 
 For an unmerged local run, keep its existing own-worktree evidence comparison.
-For a run whose eligible implementation PR is merged, call the shared
-`storyEvidence(run, {comparisonRoot})` against the current base source instead.
-Prefer an actual checkout of the local base branch, including its current edits.
-Otherwise use its current local base ref; use the origin-tracking base ref only
-when that local ref is absent. Never fetch or change the person's refs. The
-base is the run's saved baseBranch, otherwise the resolved repository default.
+For a run whose completion target is merged (an eligible implementation PR for
+`code`, or an eligible prompt or implementation PR for `prompt-pr`), call the
+shared `storyEvidence(run, {comparisonRoot})` against the current base source
+instead. Prefer an actual checkout of the local base branch, including its
+current edits. Otherwise use its current local base ref; use the origin-tracking
+base ref only when that local ref is absent. Never fetch or change the person's
+refs. The base is the run's saved baseBranch, otherwise any explicit `base`
+input, otherwise the resolved repository default.
 One read-only view may serve several runs with the same base within a command.
 The base-view lifecycle ports below supply files, not precomputed Story answers.
 Always close owned views in finally, including on errors, and never remove a
@@ -216,12 +232,16 @@ is removed. Status text names each actual local comparison base, for example
 Use the actual branch name, including alpha when appropriate; never imply a fetch
 was performed. Remote-only counts retain their separate from-PR attribution.
 
-A dependency is done only when its eligible final implementation PR is merged.
-A completed workflow, a merged prompt-only PR, a closed issue or a passing check
-alone is not completion. `plan PR` retains its separate existing lookup:
-product/plan.md must be on the saved product workflow's baseBranch, otherwise the
-resolved defaultBranch, using the local origin-tracking ref first and local base
-only when that ref is absent. A missing plan on an existing tracking ref is not
+A dependency is done only when its eligible target PR is merged: an
+implementation PR when targeting `code` (the default), or a prompt PR (or
+implementation PR) when targeting `prompt-pr` (via `Through: prompt-pr` in
+`product/plan.md` or explicit `--through prompt-pr`). A completed workflow, an
+unmerged PR, a merged prompt-only PR under the default `code` target, a closed
+issue or a passing check alone is not completion. `plan PR` retains its separate
+existing lookup: product/plan.md must be on any explicit `base` input, otherwise
+the saved product workflow's baseBranch, otherwise the resolved defaultBranch,
+using the local origin-tracking ref first and local base only when that ref is
+absent. A missing plan on an existing tracking ref is not
 replaced by a local-only plan. Local refs may be stale and do not prove approval.
 A missing ref/plan leaves the need unresolved; a transport failure is finite.
 An existing trusted issue/workflow is tracked rather than offered as a new run.
@@ -263,7 +283,8 @@ When a planned run's trusted issue is `CLOSED` on GitHub while the run is not `m
 `productNext` lists unstarted runs (including closed-unbuilt runs above) whose Needs are satisfied and lists unresolved
 needs for waiting runs. Preserve plan order. When at least two runs are ready,
 its guidance says "These can run in parallel, or one person can start them in order."
-`runProduct` prints that guidance and the exact `pdd product start RUN` for each ready run.
+`runProduct` prints that guidance and the exact `pdd product start RUN` for each
+ready run (adding `--through VALUE` when `next` received an explicit `through`).
 For small products print their one-run guidance. It never starts anything.
 
 `productStart` rejects an unknown run before any mutation. For a new issue,
@@ -284,7 +305,12 @@ create another. When the reused issue is closed-unbuilt as above, `productStart`
 run is outside this promise.
 
 After saving the issue binding, `--no-run` returns it. Otherwise invoke
-`startRun({name:'feature', issue:N, agent, cwd, packageRoot})` once. Keep the
+`startRun({name:'feature', issue:N, agent, cwd, ...})` once, forwarding
+`packageRoot` when supplied, `through` when supplied or declared by
+`product/plan.md` (explicit `through` overrides `product.through`), and `base`
+when supplied (validated before any GitHub read or write as a nonempty branch
+name without whitespace, not `HEAD`, not starting with `-` or `refs/`). Omit
+absent optional fields so existing runner call shapes stay unchanged. Keep the
 runner's reply and failure visible; a startup failure must not delete the issue.
 Default agent is codex; claude, gemini, agy and an agents.json entry name are supported. Check the agent with [workflow agents](workflow-agents.prompt.md#named-agentsjson-entries) `workflowAgentEntry(agent,{cwd,env})` (env from `ports.env`, default the process environment) before any GitHub read or write, so an unknown name refuses with its message before an issue exists. More than 12 Stories in a planned
 run produces a warning in status/next/start, never a refusal. No prerequisite is
@@ -423,10 +449,10 @@ In product status, report journeys as a separate `parts` row with `part: "journe
 {
   "status": "approved", "prose_sha256": "2446c198336e8d72d5247cbc89e0465d06dfcaa1e4a06f7d8f163adf645cdea3",
   "entries": [
-    {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
-    {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
-    {"operation":"productNext","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ready":{"type":"array","items":{"type":"string"}},"waiting":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","needs"],"additionalProperties":false}},"guidance":{"type":"string"},"warnings":{"type":"array","items":{"type":"string"}}},"required":["ready","waiting","guidance"],"additionalProperties":false},"errors":["invalid-product"]},
-    {"operation":"productStart","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"run":{"type":"string"},"noRun":{"type":"boolean"},"agent":{"type":"string"},"packageRoot":{"type":"string"}},"required":["cwd","run"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"created":{"type":"boolean"},"started":{"type":"boolean"}},"required":["exitCode","message","issue","created","started"],"additionalProperties":false},"errors":[]}
+    {"operation":"readProduct","input_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"folder":{"type":"string"},"description":{"type":"string"}},"required":["part","folder","description"],"additionalProperties":false}},"stories":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"part":{"type":"string"},"story":{"type":"string"},"tag":{"type":"string"}},"required":["id","part","story","tag"],"additionalProperties":false}},"journeys":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"journey":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}}},"required":["id","journey","stories"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"part":{"type":"string"},"slice":{"type":"string"},"stories":{"type":"array","items":{"type":"string"}},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","part","slice","stories","needs"],"additionalProperties":false}},"questions":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","stories","journeys","runs","questions"],"additionalProperties":false},"errors":["invalid-product"]},
+    {"operation":"productStatus","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"name":{"type":"string"},"size":{"type":"string"},"parts":{"type":"array","items":{"type":"object","properties":{"part":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["part","total","pass","stale","notRun"],"additionalProperties":false}},"slices":{"type":"array","items":{"type":"object","properties":{"slice":{"type":"string"},"total":{"type":"integer"},"pass":{"type":"integer"},"stale":{"type":"integer"},"notRun":{"type":"integer"}},"required":["slice","total","pass","stale","notRun"],"additionalProperties":false}},"runs":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"state":{"type":"string"},"prs":{"type":"array","items":{"type":"integer"}},"fromPr":{"oneOf":[{"type":"integer"},{"type":"null"}]}},"required":["run","issue","state","prs","fromPr"],"additionalProperties":false}},"ready":{"type":"array","items":{"type":"string"}},"questions":{"type":"array","items":{"type":"string"}},"warnings":{"type":"array","items":{"type":"string"}}},"required":["name","size","parts","slices","runs","ready","questions"],"additionalProperties":false},"errors":["invalid-product"]},
+    {"operation":"productNext","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ready":{"type":"array","items":{"type":"string"}},"waiting":{"type":"array","items":{"type":"object","properties":{"run":{"type":"string"},"needs":{"type":"array","items":{"type":"string"}}},"required":["run","needs"],"additionalProperties":false}},"guidance":{"type":"string"},"warnings":{"type":"array","items":{"type":"string"}}},"required":["ready","waiting","guidance"],"additionalProperties":false},"errors":["invalid-product"]},
+    {"operation":"productStart","input_schema":{"type":"object","properties":{"cwd":{"type":"string"},"run":{"type":"string"},"noRun":{"type":"boolean"},"agent":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"base":{"type":"string"},"packageRoot":{"type":"string"}},"required":["cwd","run"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"created":{"type":"boolean"},"started":{"type":"boolean"}},"required":["exitCode","message","issue","created","started"],"additionalProperties":false},"errors":[]}
   ],
   "calls": [],
   "resources": [
@@ -434,7 +460,7 @@ In product status, report journeys as a separate `parts` row with `part: "journe
     {"name":"runs","kind":"port","access":"read","operations":[{"name":"list","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"evidence","access":"read","arguments_schema":{"type":"object","properties":{"run_json":{"type":"string"},"comparison_root":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["run_json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},
     {"name":"github","kind":"port","access":"write","operations":[{"name":"run","access":"write","arguments_schema":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"}},"cwd":{"type":"string"}},"required":["args","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"stdout":{"type":"string"}},"required":["stdout"],"additionalProperties":false}},{"name":"repository","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"repository":{"type":"string"},"defaultBranch":{"type":"string"}},"required":["repository","defaultBranch"],"additionalProperties":false}},{"name":"createIssue","access":"write","arguments_schema":{"type":"object","properties":{"repository":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}},"required":["repository","title","body"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}},{"name":"issuePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"marker":{"type":"string"}},"required":["cwd","repository","page","perPage","marker"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"timelinePage","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"page":{"type":"integer","minimum":1},"perPage":{"type":"integer","minimum":1,"maximum":10},"issue":{"type":"integer","minimum":1}},"required":["cwd","repository","page","perPage","issue"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"pullRequest","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"number":{"type":"integer","minimum":1}},"required":["cwd","repository","number"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"currentActor","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"}},"required":["cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}},{"name":"issueByNumber","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"number":{"type":"integer","minimum":1}},"required":["cwd","repository","number"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]},
     {"name":"repository","kind":"port","access":"read","operations":[{"name":"planOnBase","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"present":{"type":"boolean"}},"required":["present"],"additionalProperties":false}},{"name":"openBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"baseBranch":{"type":"string"}},"required":["cwd","baseBranch"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"root":{"oneOf":[{"type":"string"},{"type":"null"}]},"handle":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root","handle"],"additionalProperties":false}},{"name":"closeBaseSource","access":"read","arguments_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
-    {"name":"workflow","kind":"port","access":"write","operations":[{"name":"start","access":"write","arguments_schema":{"type":"object","properties":{"name":{"type":"string"},"issue":{"type":"integer"},"agent":{"type":"string"},"cwd":{"type":"string"},"packageRoot":{"type":"string"}},"required":["name","issue","agent","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}}]},
+    {"name":"workflow","kind":"port","access":"write","operations":[{"name":"start","access":"write","arguments_schema":{"type":"object","properties":{"name":{"type":"string"},"issue":{"type":"integer"},"agent":{"type":"string"},"through":{"type":"string","enum":["prompt-pr","code"]},"base":{"type":"string"},"cwd":{"type":"string"},"packageRoot":{"type":"string"}},"required":["name","issue","agent","cwd"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"exitCode":{"type":"integer"},"message":{"type":"string"}},"required":["exitCode","message"],"additionalProperties":false}}]},
     {"name":"productState","kind":"port","access":"write","operations":[{"name":"read","access":"read","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["json"],"additionalProperties":false}},{"name":"write","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"},"json":{"type":"string"}},"required":["cwd","repository","json"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}},{"name":"lock","access":"write","arguments_schema":{"type":"object","properties":{"cwd":{"type":"string"},"repository":{"type":"string"}},"required":["cwd","repository"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false}},{"name":"unlock","access":"write","arguments_schema":{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},"result_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false}}]},
     {"name":"clock","kind":"port","access":"read","operations":[{"name":"now","access":"read","arguments_schema":{"type":"object","properties":{},"required":[],"additionalProperties":false},"result_schema":{"type":"object","properties":{"milliseconds":{"type":"number"}},"required":["milliseconds"],"additionalProperties":false}}]},
     {"name":"savedChecks","kind":"port","access":"read","operations":[{"name":"evidence","access":"read","arguments_schema":{"type":"object","properties":{"root":{"type":"string"},"comparison_root":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["root"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"json":{"type":"string"}},"required":["json"],"additionalProperties":false}}]}

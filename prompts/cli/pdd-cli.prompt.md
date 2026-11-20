@@ -212,8 +212,10 @@ For product-status, product-next and product-start dynamically import
 [Product](product.prompt.md). Resolve the invoking cwd with the shared
 `gitContext(cwd, ports)` from [run records](workflow-runs.prompt.md); tests may
 inject this callback as `dependencies.gitContext`. Pass its `toplevel` as cwd to
-`runProduct({command, run, noRun, agent, json, cwd, packageRoot}, ports)` with the
-parsed command and options. A missing repository context or resolution error is
+`runProduct({command, run, noRun, agent, json, cwd, packageRoot, ...}, ports)`
+with the parsed command and options, forwarding `through` only when `--through`
+is supplied and `base` only when `--base` is supplied. A missing repository
+context or resolution error is
 one finite stderr diagnostic and exit 1, before any GitHub or runtime mutation.
 Tests may inject the product module and its ports. Print its returned message once to stdout on
 exitCode 0, stderr otherwise; return that exitCode. A missing export, malformed

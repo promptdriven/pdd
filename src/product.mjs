@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/product.prompt.md
+// Generated from prompts/cli/product.prompt.md (sha256: 29dbbfa66baf837586b1e7de7f343fa71abcc4a1f3579df03a5f82f9a23d8227).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -405,11 +405,29 @@ async function pullRequests(p, cwd, repository, issue, local, run, warning) {
   }
   return { prs, hasMergedSameRepoPr };
 }
-const codePr = (pr, local) => local?.pr?.some(saved => saved.number === pr.number && saved.stage === 'code'
+const THROUGH = ['prompt-pr', 'code'];
+const validThrough = value => {
+  if (value === undefined) return undefined;
+  if (!THROUGH.includes(value)) invalid('Use --through prompt-pr or --through code.');
+  return value;
+};
+const validBase = value => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value || /\s/.test(value) || value === 'HEAD' || value.startsWith('-') || value.startsWith('refs/'))
+    invalid('Use --base with a branch name, for example feature/checkout.');
+  return value;
+};
+const stagePr = (pr, local, stages) => local?.pr?.some(saved => saved.number === pr.number && stages.includes(saved.stage)
     && typeof saved.branch === 'string' && saved.branch === pr.headRefName)
   || (pr.body.match(/pdd-workflow:/g) ?? []).length === 1
     && (pr.body.match(/pdd-workflow:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+/g) ?? []).length === 1
-    && pr.body.split(/\r?\n/).filter(line => /^<!-- pdd-workflow:[A-Za-z0-9_.-]+:code -->$/.test(line)).length === 1;
+    && pr.body.split(/\r?\n/).filter(line => {
+      const match = /^<!-- pdd-workflow:[A-Za-z0-9_.-]+:([A-Za-z0-9_.-]+) -->$/.exec(line);
+      return Boolean(match && stages.includes(match[1]));
+    }).length === 1;
+const codePr = (pr, local) => stagePr(pr, local, ['code']);
+const promptPr = (pr, local) => stagePr(pr, local, ['prompt-pr', 'prompt']);
+const completedPr = (pr, local, target) => target === 'prompt-pr' ? promptPr(pr, local) || codePr(pr, local) : codePr(pr, local);
 const storyMatches = (name, id) => { const token = basename(name).replace(/\.md$/, ''); return token === id || token.startsWith(`${id}-`) || token.startsWith(`${id}.`); };
 const isStoryMarkdown = path => typeof path === 'string' && path.endsWith('.md') && !path.endsWith('.prompt.md');
 async function collectLocalMarkdownFiles(dir, depth = 0, out = []) {
@@ -471,10 +489,12 @@ function cycles(product) {
   return [...new Set(warnings)];
 }
 async function progress(input, given, target) {
+  const explicitThrough = validThrough(input.through), explicitBase = validBase(input.base);
   const p = portsFor(given), { product } = await documents(input, p), cwd = input.cwd;
+  const completionTarget = explicitThrough ?? product.through ?? 'code';
   const localRuns = await p.listRuns({ cwd }), repo = await p.resolveRepository({ cwd });
   const parent = localRuns.find(run => run.workflow === 'product'), warning = cycles(product), views = new Map();
-  const planReady = product.runs.some(run => run.needs.includes('plan PR')) ? await basePlan(p, { cwd, baseBranch: parent?.baseBranch ?? repo.defaultBranch }) : true;
+  const planReady = product.runs.some(run => run.needs.includes('plan PR')) ? await basePlan(p, { cwd, baseBranch: explicitBase ?? parent?.baseBranch ?? repo.defaultBranch }) : true;
   const lookup = await issueLookup(p, cwd, repo.repository, localRuns, warning);
   const targetBound = target ? await lookup.bound(target, true) : null;
   const plannedRuns = targetBound ? product.runs.filter(run => run.run === target) : product.runs;
@@ -498,11 +518,11 @@ async function progress(input, given, target) {
       const { prs, hasMergedSameRepoPr } = issue
         ? await pullRequests(p, cwd, repo.repository, issue, local, run.run, warning)
         : { prs: [], hasMergedSameRepoPr: false };
-      const done = prs.some(pr => pr.state === 'MERGED' && codePr(pr, local));
+      const done = prs.some(pr => pr.state === 'MERGED' && completedPr(pr, local, completionTarget));
       const latest = [...prs].filter(pr => recordedRuntimeLines(pr.body).some(row => row.story)).sort((a, b) => String(a.updatedAt ?? '').localeCompare(String(b.updatedAt ?? '')) || a.number - b.number).at(-1);
       let evidence, comparisonRoot = local?.root ?? cwd;
       if (done) {
-        const baseBranch = local?.baseBranch ?? repo.defaultBranch;
+        const baseBranch = local?.baseBranch ?? explicitBase ?? repo.defaultBranch;
         if (!views.has(baseBranch)) {
           const view = await p.openBaseSource({ cwd, baseBranch });
           if (!view || !(view.root === null || typeof view.root === 'string') || !(view.handle === null || typeof view.handle === 'string')) throw Error('Invalid base-source view.');
@@ -535,7 +555,7 @@ async function progress(input, given, target) {
     if (!detail.unverified && !detail.done && !activeLocal && !hasOpenPr && !hasMergedPr && isClosed && storiesIncomplete) {
       hasPlannedStories = await plannedStoryFilesPresent(p, {
         cwd,
-        baseBranch: detail.local?.baseBranch ?? parent?.baseBranch ?? repo.defaultBranch,
+        baseBranch: detail.local?.baseBranch ?? explicitBase ?? parent?.baseBranch ?? repo.defaultBranch,
         product,
         run: detail.run,
       });
@@ -591,14 +611,16 @@ function issueTitle(product, run, warning) {
   const room = 256 - [...suffix].length;
   return `${label.length > room ? label.slice(0, room - 1).join('') + '…' : label.join('')}${suffix}`;
 }
-export async function productStart({ cwd, run, noRun = false, agent = 'codex', packageRoot }, given = {}) {
+export async function productStart({ cwd, run, noRun = false, agent = 'codex', through, base, packageRoot }, given = {}) {
   let issue = null, created = false;
   try {
+    const explicitThrough = validThrough(through), explicitBase = validBase(base);
     const p = portsFor(given), { product, boundaries } = await documents({ cwd }, p), planned = product.runs.find(row => row.run === run);
     if (!planned) invalid(`Unknown planned run ${run}.`);
     const chosen = workflowAgentEntry(agent, { cwd, env: given.env ?? process.env });
     if (!chosen.ok) invalid(chosen.message);
-    const state = await progress({ cwd }, given, run), { repo, localRuns } = state;
+    const effectiveThrough = explicitThrough ?? product.through;
+    const state = await progress({ cwd, ...(explicitThrough !== undefined ? { through: explicitThrough } : {}), ...(explicitBase !== undefined ? { base: explicitBase } : {}) }, given, run), { repo, localRuns } = state;
     const selected = state.details.find(detail => detail.run.run === run);
     issue = selected.issue;
     if (selected.unverified) throw Error(`Saved issue #${issue.number} for ${run} is unverified: ${selected.reason}. Run pdd product start ${run} to link it again.`);
@@ -622,7 +644,10 @@ export async function productStart({ cwd, run, noRun = false, agent = 'codex', p
     }
     const warning = [...state.warning, ...warnings(product).filter(text => text.startsWith(`Warning: ${run} `)), ...(state.needsFor(planned).length ? [`Advice: ${run} still needs ${state.needsFor(planned).join(', ')}.`] : [])].join('\n');
     if (noRun) return { exitCode: 0, message: [warning, `Issue #${issue.number} ready for ${run}.`].filter(Boolean).join('\n'), issue: issue.number, created, started: false };
-    const reply = await p.startRun({ name: 'feature', issue: issue.number, agent, cwd, ...(packageRoot === undefined ? {} : { packageRoot }) });
+    const reply = await p.startRun({ name: 'feature', issue: issue.number, agent, cwd,
+      ...(effectiveThrough !== undefined ? { through: effectiveThrough } : {}),
+      ...(explicitBase !== undefined ? { base: explicitBase } : {}),
+      ...(packageRoot === undefined ? {} : { packageRoot }) });
     if (!reply || !Number.isInteger(reply.exitCode) || typeof reply.message !== 'string') throw Error('Invalid feature workflow reply.');
     return { ...reply, message: [warning, reply.message].filter(Boolean).join('\n'), issue: issue.number, created, started: reply.exitCode === 0 };
   } catch (error) { return { exitCode: 1, message: causeText(error.message) || 'The planned run could not start.', issue: issue?.number ?? null, created, started: false }; }
@@ -635,7 +660,7 @@ export async function runProduct(input, given = {}) {
       const next = await productNext(input, given);
       return { exitCode: 0, message: [...warning, ...(next.warnings ?? []), next.guidance,
         next.ready.length ? `Can start now: ${next.ready.join(', ')}.` : 'Can start now: none.',
-        ...next.ready.map(run => `pdd product start ${run}`), ...next.waiting.map(row => `${row.run}: waits for ${row.needs.join(', ')}.`)].filter(Boolean).join('\n') };
+        ...next.ready.map(run => `pdd product start ${run}${input.through ? ` --through ${input.through}` : ''}`), ...next.waiting.map(row => `${row.run}: waits for ${row.needs.join(', ')}.`)].filter(Boolean).join('\n') };
     }
     if (input.command !== 'status') invalid('Unknown product command.');
     const status = await productStatus(input, given);

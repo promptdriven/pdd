@@ -352,3 +352,104 @@ test('remote progress uses PR receipt time across runs and keeps each PR source 
   assert.equal(status.runs.find(row => row.run === 'phone-1').fromPr, 61);
   assert.equal(status.runs.find(row => row.run === 'barista-1').fromPr, 62);
 });
+
+test('#3572: Through: prompt-pr in plan.md and --through prompt-pr unlock Needs on merged prompt PRs without weakening code default', async t => {
+  const f = fixture(t);
+  const planPath = join(f.cwd, 'product/plan.md');
+  const basePlan = readFileSync(planPath, 'utf8');
+  // 1. Remote merged prompt PRs (both :prompt-pr and :prompt canonical markers) plus a local stage:prompt-pr PR.
+  f.state.issues = ['server-1', 'phone-1', 'barista-1'].map((name, i) => issue(name, 81 + i));
+  f.state.runs = [{ number: 81, state: 'completed', doneAt: 'PR 1', pr: [{ number: 20, stage: 'prompt-pr', branch: 'branch-20' }], rows: [] }];
+  f.state.prs = [
+    pr(20, 'MERGED', { isDraft: false, body: 'PR 1 of this run: the prompt, Story and test cases.' }),
+    pr(21, 'MERGED', { isDraft: false, body: '<!-- pdd-product: run=phone-1 -->\n<!-- pdd-workflow:run-21:prompt-pr -->' }),
+    pr(22, 'MERGED', { isDraft: false, body: '<!-- pdd-product: run=barista-1 -->\n<!-- pdd-workflow:run-22:prompt -->' }),
+  ];
+  const gh = f.ports.execFile;
+  f.ports.execFile = async (file, args) => {
+    const num = /\/issues\/(81|82|83)\/timeline\?/.exec(args[1])?.[1];
+    if (num) return { stdout: JSON.stringify([{ event: 'cross-referenced', source: { issue: { pull_request: { html_url: `https://github.com/example/coffee/pull/${Number(num) - 61}` } } } }]) };
+    return gh(file, args);
+  };
+
+  // Default (no Through: in plan, no --through flag) still requires merged code PRs.
+  assert.deepEqual((await productNext({ cwd: f.cwd }, f.ports)).ready, []);
+  assert.equal((await productStatus({ cwd: f.cwd }, f.ports)).runs.find(row => row.run === 'phone-1').state, 'PR #21 (merged)');
+
+  // Explicit --through prompt-pr unlocks journeys and prints --through prompt-pr in next commands.
+  const nextExplicit = await productNext({ cwd: f.cwd, through: 'prompt-pr' }, f.ports);
+  assert.deepEqual(nextExplicit.ready, ['journeys']);
+  assert.deepEqual(nextExplicit.waiting, []);
+  const statusExplicit = await productStatus({ cwd: f.cwd, through: 'prompt-pr' }, f.ports);
+  assert.deepEqual(statusExplicit.ready, ['journeys']);
+  assert.deepEqual(statusExplicit.runs.slice(0, 3).map(row => row.state), ['merged', 'merged', 'merged']);
+  const cliNext = await runProduct({ cwd: f.cwd, command: 'next', through: 'prompt-pr' }, f.ports);
+  assert.equal(cliNext.exitCode, 0);
+  assert.match(cliNext.message, /pdd product start journeys --through prompt-pr/);
+
+  // OPEN prompt PR or prose-only PR (no local stage+branch match, no canonical workflow marker) must NOT satisfy Needs.
+  f.state.prs[1] = pr(21, 'OPEN', { body: '<!-- pdd-product: run=phone-1 -->\n<!-- pdd-workflow:run-21:prompt-pr -->' });
+  assert.deepEqual((await productNext({ cwd: f.cwd, through: 'prompt-pr' }, f.ports)).ready, []);
+  f.state.prs[1] = pr(21, 'MERGED', { body: '<!-- pdd-product: run=phone-1 -->\nPR 1 of this run: the prompt, Story and test cases.' });
+  assert.deepEqual((await productNext({ cwd: f.cwd, through: 'prompt-pr' }, f.ports)).ready, []);
+  // A merged code PR also satisfies prompt-pr target.
+  f.state.prs[1] = pr(21, 'MERGED', { body: '<!-- pdd-product: run=phone-1 -->\n<!-- pdd-workflow:run-21:code -->' });
+  assert.deepEqual((await productNext({ cwd: f.cwd, through: 'prompt-pr' }, f.ports)).ready, ['journeys']);
+
+  // Plan-level Through: prompt-pr unlocks journeys by default; CLI --through code overrides back to code-PR requirement.
+  writeFileSync(planPath, basePlan.replace('# Coffee pickup: plan', '# Coffee pickup: plan\nThrough: `prompt-pr` (Prompt Space rollout)'));
+  assert.equal((await readProduct({ cwd: f.cwd }, f.ports)).through, 'prompt-pr');
+  assert.deepEqual((await productNext({ cwd: f.cwd }, f.ports)).ready, ['journeys']);
+  assert.deepEqual((await productNext({ cwd: f.cwd, through: 'code' }, f.ports)).ready, []);
+
+  // Through: outside preamble is ignored; invalid or duplicate Through: fails with invalid-product.
+  writeFileSync(planPath, `${basePlan}\n## Notes\nThrough: prompt-pr\n`);
+  assert.equal((await readProduct({ cwd: f.cwd }, f.ports)).through, undefined);
+  for (const bad of ['# Coffee pickup: plan\nThrough: bogus\n', '# Coffee pickup: plan\nThrough:\n', '# Coffee pickup: plan\nThrough: prompt-pr\nThrough: code\n']) {
+    writeFileSync(planPath, basePlan.replace('# Coffee pickup: plan', bad.trimEnd()));
+    await assert.rejects(readProduct({ cwd: f.cwd }, f.ports), error => error.code === 'invalid-product' && error.message.includes('product/plan.md'));
+  }
+});
+
+test('#3572: pdd product start forwards --through and --base through catalog, CLI dispatch and startRun, and validates inputs before GitHub calls', async t => {
+  assert.equal(parseArgv(['product', 'status', '--through', 'prompt-pr']).options['--through'], 'prompt-pr');
+  assert.equal(parseArgv(['product', 'next', '--through', 'prompt-pr']).options['--through'], 'prompt-pr');
+  const parsed = parseArgv(['product', 'start', 'phone-1', '--through', 'prompt-pr', '--base', 'release/v1']);
+  assert.equal(parsed.local, 'product-start');
+  assert.equal(parsed.options['--through'], 'prompt-pr');
+  assert.equal(parsed.options['--base'], 'release/v1');
+
+  // CLI dispatch forwards --through and --base only when supplied.
+  const stdout = stream(), stderr = stream(), calls = [];
+  const deps = { stdout, stderr, cwd: '/repo/sub', packageRoot: '/bundle',
+    gitContext: async () => ({ toplevel: '/repo' }),
+    product: { runProduct: async args => { calls.push(args); return { exitCode: 0, message: 'OK.' }; } } };
+  assert.equal(await runPdd(['product', 'start', 'phone-1', '--through', 'prompt-pr', '--base', 'release/v1'], deps), 0);
+  assert.deepEqual(calls, [{ command: 'start', run: 'phone-1', noRun: false, agent: 'codex', through: 'prompt-pr', base: 'release/v1', json: false, cwd: '/repo', packageRoot: '/bundle' }]);
+
+  // productStart forwards explicit --through and --base to startRun and passes --base to planOnBase.
+  const f = fixture(t);
+  const started = await productStart({ cwd: f.cwd, run: 'phone-1', through: 'prompt-pr', base: 'release/v1' }, f.ports);
+  assert.equal(started.exitCode, 0, started.message);
+  assert.equal(f.state.baseArgs.baseBranch, 'release/v1');
+  assert.deepEqual(f.state.starts, [{ name: 'feature', issue: 81, agent: 'codex', cwd: f.cwd, through: 'prompt-pr', base: 'release/v1' }]);
+
+  // Plan-level Through: prompt-pr is forwarded automatically when CLI omits --through, and overridden by explicit --through code.
+  const planPath = join(f.cwd, 'product/plan.md');
+  writeFileSync(planPath, readFileSync(planPath, 'utf8').replace('# Coffee pickup: plan', '# Coffee pickup: plan\nThrough: prompt-pr'));
+  f.state.starts.length = 0;
+  assert.equal((await productStart({ cwd: f.cwd, run: 'server-1' }, f.ports)).exitCode, 0);
+  assert.equal(f.state.starts[0].through, 'prompt-pr');
+  f.state.starts.length = 0;
+  assert.equal((await productStart({ cwd: f.cwd, run: 'barista-1', through: 'code' }, f.ports)).exitCode, 0);
+  assert.equal(f.state.starts[0].through, 'code');
+
+  // Invalid --through or --base refuses before any GitHub call.
+  const f2 = fixture(t);
+  for (const bad of [{ through: 'bogus' }, { base: '' }, { base: 'HEAD' }, { base: '--evil' }, { base: 'refs/heads/main' }, { base: 'bad branch' }]) {
+    const refused = await productStart({ cwd: f2.cwd, run: 'phone-1', ...bad }, f2.ports);
+    assert.equal(refused.exitCode, 1, JSON.stringify(bad));
+    assert.equal(f2.state.commands.length, 0);
+    assert.equal(f2.state.starts.length, 0);
+  }
+});
