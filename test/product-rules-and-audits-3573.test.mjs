@@ -1007,33 +1007,49 @@ test('#3573 (13): Round-2 adversarial regressions — linear brace/details scans
   assert.equal(declared.has('prompts/app/helper.prompt.md'), false, 'trailing bare folder mention must not hijack cli bullet');
   assert.equal(declared.has('prompts/app/extra.prompt.md'), false, 'explicit **cli** label must not be hijacked');
 
-  // 2. Nested brace text must not false-match foo.consume, and repeated foo.{ + <details></details> must stay strictly O(N)
-  const nestedBracePrompt = '# Command\n\nMentions foo.{a { , consume} without calling foo.consume.\n';
+  // 2. Nested brace text must not false-match foo.consume, inner brace foo.{a, foo.{consume}} MUST match, and repeated foo.{ + <details></details> must stay strictly O(N)
+  const nestedBracePrompt = '# Command\n\nMentions foo.{a { , consume} without calling the op.\n';
   const nestedAudit = auditProductPlan({
     mapText,
     planText: bulletPlan,
     promptFiles: [
-      { path: 'prompts/app/core.prompt.md', text: '# Core\n' },
-      { path: 'prompts/cli/command.prompt.md', text: nestedBracePrompt },
-      { path: 'prompts/cli/helper.prompt.md', text: '# Helper\n' },
-      { path: 'prompts/cli/extra.prompt.md', text: '# Extra\n' },
+      { path: 'prompts/app/core.prompt.md', content: '# Core\n' },
+      { path: 'prompts/cli/command.prompt.md', content: nestedBracePrompt },
+      { path: 'prompts/cli/helper.prompt.md', content: '# Helper\n' },
+      { path: 'prompts/cli/extra.prompt.md', content: '# Extra\n' },
     ],
   });
+  assert.deepEqual(nestedAudit.drift, [], 'all 4 fixture prompts must be scanned without drift');
   assert.ok(nestedAudit.findings.some(f => f.code === 'product-boundary-unwired' && f.detail.includes('foo.consume')),
     'unclosed/nested brace must not satisfy foo.consume wiring');
 
-  const perfStart = performance.now();
-  const stressText = `${',foo.{'.repeat(8000)}}\n${'<details></details>'.repeat(20000)}\n`;
-  auditProductPlan({
+  const innerBraceAudit = auditProductPlan({
     mapText,
     planText: bulletPlan,
     promptFiles: [
-      { path: 'prompts/app/core.prompt.md', text: '# Core\n' },
-      { path: 'prompts/cli/command.prompt.md', text: stressText },
-      { path: 'prompts/cli/helper.prompt.md', text: '# Helper\n' },
-      { path: 'prompts/cli/extra.prompt.md', text: '# Extra\n' },
+      { path: 'prompts/app/core.prompt.md', content: '# Core\n' },
+      { path: 'prompts/cli/command.prompt.md', content: '# Command\n\nCalls foo.{a, foo.{consume}}.\n' },
+      { path: 'prompts/cli/helper.prompt.md', content: '# Helper\n' },
+      { path: 'prompts/cli/extra.prompt.md', content: '# Extra\n' },
+    ],
+  });
+  assert.deepEqual(innerBraceAudit.drift, []);
+  assert.deepEqual(innerBraceAudit.unwiredBoundaries, [], 'inner valid foo.{consume} must still satisfy boundary wiring');
+
+  const perfStart = performance.now();
+  const stressText = `${',foo.{'.repeat(8000)}}\n${'<details></details>'.repeat(20000)}\n`;
+  const stressAudit = auditProductPlan({
+    mapText,
+    planText: bulletPlan,
+    promptFiles: [
+      { path: 'prompts/app/core.prompt.md', content: '# Core\n' },
+      { path: 'prompts/cli/command.prompt.md', content: stressText },
+      { path: 'prompts/cli/helper.prompt.md', content: '# Helper\n' },
+      { path: 'prompts/cli/extra.prompt.md', content: '# Extra\n' },
     ],
   });
   const elapsedMs = performance.now() - perfStart;
+  assert.deepEqual(stressAudit.drift, [], 'stress audit must scan all 4 prompts with zero drift');
+  assert.equal(stressAudit.unwiredBoundaries.length, 1);
   assert.ok(elapsedMs < 500, `brace + details scanning must remain strictly linear O(N), took ${elapsedMs.toFixed(1)}ms`);
 });
