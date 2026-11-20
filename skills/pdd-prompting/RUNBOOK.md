@@ -2,46 +2,53 @@
 
 Fix both: the brakes (the real defect) and the warning light (a test or check that would catch it next time). Brakes first. If the agent cannot find the defect yet, it fixes the warning light first: it adds what makes the defect visible (a failing reproducer test, a precise error, logging), so the cause becomes easy to find, and then it fixes the brakes. A warning-light-only change must say 'Not fixed yet: this helps find the cause' on the PR, and the issue stays open; it never closes the bug.
 
-## How to use this runbook
+## Fast authoring guide (self-contained — stop here for ordinary authoring)
 
-Read this index first, then open the 1–2 topic files that match your task or section `§N`.
-- From the `pdd-prompting` skill folder (`.../skills/pdd-prompting/RUNBOOK.md`): open `runbook/<file>.md` in the same folder.
-- From the `pdd` package root (`.../RUNBOOK.md`, printed by `pdd --help`): open `skills/pdd-prompting/runbook/<file>.md`.
+Everything needed to author prompts, Stories, Short JSON scenarios, CLI commands, and Screen `app-map.json` is right below. **Do NOT bulk-read `runbook/*.md` chapters or run `pdd * --help` upfront**—open a chapter in the footer only if a workflow step or a specific lint/test error calls for it.
 
-| Topic file | Sections | Open this file when… |
-|---|---|---|
-| `runbook/files-and-runtime-block.md` | §1–§4 | Writing or editing `prompts/<job>.prompt.md`, `user_stories/<story>.md`, `tests/<story>.json`, strict JSON Schemas, `$contract` / `$seed` references, expected values, or recording chat approvals / requested merges |
-| `runbook/checks-and-budgets.md` | §8–§10, §18 | Writing scenario `checks` paths and operators (`result`, `world`, `calls`, `error`), money/date rules, `--max-calls` ceilings, pure functions, or multi-step state sequences (`$step_result`) |
-| `runbook/screens-and-svg.md` | §13, §20 | Building a browser page, UI screen, or interactive visual app: `render` returning `{html}`, `app-map.json` (buttons, keys, `after`, `timers`), `.ui.svg` layout comparison (`pdd test --screen URL --drawing SVG`), and HTML sanitizer rules |
-| `runbook/cli-and-ports.md` | §5–§7, §21 | Building a `cli` command (`argv`/`stdout`/`stderr`, `pdd test --target code place-order`), prompt-to-prompt `calls`, `initial_world` saved data, or faking outside ports (SQL, files, SHA-256 `compute`, callbacks, varying replies, factories, MCP Try tools) |
-| `runbook/testing-and-simulation.md` | §11, §12, §16, §19 | Running `pdd test` or `pdd lint`, diagnosing a `✗` failure or refusal code, running `pdd simulate` (`--new`, `--cli`, `--serve`), Save as test, curl against Try, or checking known interpreter limits |
-| `runbook/replays-and-formal.md` | §17 | Working in code space (PR 2): native vector replay tests (`BigInt` whole numbers, planted-mistake control), `pdd workflow prove <run> --test CMD --expect TEXT`, formal checks from `.prompt.md` and `## Rules to check`, `replay-evidence.json`, and `agent thread limit reached` recovery |
-| `runbook/autopilot-and-checklists.md` | §14, §15, §22 | Running the bug reproduction or code-only checker flow, formatting PR 1 / PR 2 `done` summary fields, maintaining `small-change-checklist.json`, running Autopilot core jobs, or coordinating bounded subagent handoffs |
-
-## Core workflow and fast-fail essentials
-
-1. **Order of work and coupling (§1, §2, §22):** Story (`user_stories/<story>.md`) → prompt (`prompts/<job>.prompt.md`) → scenario (`tests/<story>.json`, or `tests/runtime/<story>.json` / `test/runtime/<story>.json` when `tests/` or `test/` holds native tests) → `pdd files` + `pdd lint --local` → `pdd test` → person approval → code and native replay tests. Finish green `pdd test` before writing native application code, stop at passing `pdd test` when native code was not requested, and mention `pdd simulate <story>` in text instead of launching an interactive Simulator session unless asked. Use `0` Stories + one `"No Story: <reason>"` PR line for internal changes, edit the existing Story when changing an existing slice, or write `1` Story per cohesive standalone user loop. Author a single coupled slice (`1–2` prompts) in `1` session (`0` authoring subagents); for `3+` independent modules, lock shared contracts (`app-map.json` / interfaces) first, then parallelize prompt workers; keep code verification and review on fresh independent subagents.
-2. **One rule, one prompt, explicit non-determinism (§2, §21):** Keep each `.prompt.md` prose body `<= 500` lines and focused on WHAT, WHY (`## Domain decisions`, including technical invariants and edge bounds), and failure edges (never implementation HOW, and never link `kind: native-only` adapters under `## Dependencies` of checkable prompts). Pass non-deterministic values (randomness, clocks, generated IDs) via explicit operation inputs or `<port>.<op>` simulation overrides rather than ad-hoc state counters in prose. Prompts never own repository test suites.
-3. **Strict JSON Schema and shared contracts (§2, §3):** Every object schema requires `"type": "object"`, `properties`, `required`, and `"additionalProperties": false`. Nullable fields use `{"oneOf": [{"type": "string"}, {"type": "null"}]}`, never `["string", "null"]`. `$ref`, `$defs`, and `anyOf` are refused inside schemas; use `$contract` for shared schemas and `$seed` for shared `initial_world` seeds.
-4. **Short JSON, parallel independent steps, and tight budgets (§2, §8, §10, §13, §18, §20):** Author scenarios in Short JSON (omit `criteria` so PDD binds numbered Story criteria automatically to current `ac-sha256-...` content IDs; set top-level `entry_path`; add `"app_maps": ["app-map.json"]` when the Story exercises a Screen `app-map.json`; reuse fixtures via `seeds` + `$use`/`patch`/`$json`; and write 1-line tuple `checks`—standard `program-scenario.v1` JSON also works, and `pdd lint --bind-criteria <story>` binds legacy `AC1` IDs on disk for review):
+1. **Order & scope:** Story (`user_stories/<slug>.md`) → prompt (`prompts/<name>.prompt.md`) → test (`tests/<slug>.json`, or `tests/runtime/<slug>.json` when `tests/` holds native tests) → `pdd files --json` + `pdd lint --local` → `pdd test` → person approval → code. Author a single coupled slice (`1–2` prompts) in `1` session (`0` authoring subagents); for `3+` independent modules, lock shared contracts first, then parallelize; keep code verification/review on fresh independent subagents. Stop at passing `pdd test` unless code was asked; mention `pdd simulate <story>` in text instead of starting it unless asked.
+2. **Prompts (`prompts/<name>.prompt.md`):** Plain Markdown only—**no `<details><summary>Runtime interface</summary>` block** (the interpreter synthesizes schemas from prose). Keep crisp (`40–120` lines typical, `<= 500` cap, `<= 15` lines per fence / `<= 30` total). Include `# <name>`, purpose, `## Domain decisions` (invariants, deterministic rules, bounds), explicit op input/output/error fields, failure edges, and `## Dependencies`.
+   - **Multi-branch / state-transition rules:** include a short Markdown decision table or ` ```mermaid ` diagram so `pdd lint --local` stays clean (`prompt-missing-diagram`).
+   - **Screen render prompts:** take structured state, return `{"html": string}` (semantic HTML + CSS classes only; no `<script>`, no inline `onclick=`/`style=`; unique `id` and `value` on every `<button>`). Draw `.ui.svg` **only** when explicitly requested.
+   - **CLI apps:** one program prompt (`# <cmd>`), operation `main` taking `{"argv": string[]}` returning `{"exit_code": integer, "stdout": string, "stderr": string}` (never exit `125`; every output line ends with `\n`), persisting via `store.load({ key }) -> { value }` and `store.save({ key, value }) -> { value }`.
+3. **Stories (`user_stories/<slug>.md`):** `<= 35` lines; one `"As a …, I want …, so that …"` line; `1..6` numbered criteria starting at `1.` under `## Acceptance criteria`; straight quotes (`"`); plain words (zero file paths, function names, or schema keys).
+4. **Short JSON tests (`tests/<slug>.json`):** Match the Story basename (`user_stories/<slug>.md`). Omit `schema_version`, `story_path`, and `criteria` so PDD binds `1..N` to `ac-sha256-...` IDs automatically. Set top-level `"entry_path"` (override per step for a second prompt like `prompts/screen.prompt.md`); add `"app_maps": ["app-map.json"]` for visual apps.
+   - **Keep scenarios lean and parallel:** aim for **1 focused step per Story criterion** (`5–8` steps typical, `2–4` checks per step, hard cap `15`; omit step `"model"`). Give each step self-contained state (`seeds` + `from`/`patch`) so steps run in parallel; chain `{"$step": "id#/field"}` or shared `world` only for persistence criteria.
+   - **Check tuples (`"1": [[target, path, op, value], ...]`):** `=` (`equals`), `!=`, `>=`, `<=`, `len>=`, `len<=`, `one_of`, `count`, `not_contains`, `all_in`, `equals_ignore_case`, `contains` (pair with an exact check), `contains_all`. Shorthands: `["error", "=", "bad-input"]`, `["calls", "store.save", "=", 0]` (mutating ops only), `["html_exists", "button#start"]`, `["html_text", "span#score", "=", "0"]`, `["html_attr", "button#start", "value", "=", "start"]`, `["html", "button", "labels_include", ["Start"]]`. **HTML selectors MUST include a tag name** (`span#score`, `button#left`, never bare `#score`).
+   - **Compact Short JSON example (CLI with `store`):**
+     ```json
+     {"entry_path": "prompts/todo.prompt.md", "initial_world": {"kv": {"tasks": [{"id": 1, "title": "Buy milk", "done": false}]}},
+      "simulation": {
+        "store.load": {"action": "key-value.get", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": null, "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": null}, "result_value_pointer": "/value"},
+        "store.save": {"action": "key-value.put", "world_pointer": "/kv", "key_argument_pointer": "/key", "value_argument_pointer": "/value", "item_key_pointer": null, "item_value_pointer": null, "result_template": {"value": []}, "result_value_pointer": "/value"}
+      },
+      "steps": [{"id": "done-1", "op": "main", "input": {"argv": ["done", "1"]}, "checks": {"1": [["result", "/exit_code", "=", 0], ["world", "/kv/tasks/0/done", "=", true]]}},
+                {"id": "missing", "op": "main", "input": {"argv": ["done", "9"]}, "checks": {"2": [["result", "/exit_code", "=", 1], ["calls", "store.save", "=", 0]]}}]}
+     ```
+   - **If `program-scenario.v1` JSON is required on disk:** write Short JSON first (omitting `"criteria"`), then run `pdd lint --emit-v1 --write` (never `> file` or `node -e` scripts)—it compiles to canonical `program-scenario.v1` and binds `ac-sha256-...` criterion IDs in place in one command.
+5. **Screen `app-map.json` (visual apps only):** Strict JSON Schema (`"type": "object"`, `properties`, `required`, `"additionalProperties": false`; nullable uses `{"oneOf": [{"type": "string"}, {"type": "null"}]}`, never `["string", "null"]`; no `$ref`/`$defs`/`anyOf`). Sanitizer-safe CSS (`background-color` not `background`, `aria-current="true"` not `aria-pressed`, `display:block` on `<li>` not `list-style`). Match all buttons on a screen by `"value"`:
    ```json
-   {"entry_path": "prompts/cart.prompt.md", "seeds": {"cart": {"items": [{"sku": "mug", "qty": 2, "cents": 500}], "coupon": "NONE"}},
-    "steps": [{"id": "apply-ten", "op": "price", "from": "cart", "patch": {"coupon": "SAVE10"}, "checks": {"1": [["result", "/total_cents", "=", 900], ["result", "/discount_cents", "=", 100]]}},
-              {"id": "no-coupon", "op": "price", "from": "cart", "checks": {"2": [["result", "/discount_cents", "=", 0]]}}]}
+   {"schema_version": "prompt-runtime.app-map.v1", "name": "Game", "initial_screen": "board", "initial_route": null,
+    "initial_state": {"score": 0, "status": "ready"},
+    "state_schema": {"type": "object", "properties": {"score": {"type": "integer"}, "status": {"type": "string", "enum": ["ready", "playing"]}}, "required": ["score", "status"], "additionalProperties": false},
+    "synthetic": true, "router": null, "routes": [], "stylesheets": ["prompts/screen.css"],
+    "screens": [{"id": "board", "prompt_path": "prompts/screen.prompt.md", "operation": "render", "source": "operation", "format": "html", "input": {"score": {"$ref": "/state/score"}, "status": {"$ref": "/state/status"}}, "result_pointer": "/html"}],
+    "handlers": [{"screen": "board", "kind": "button", "match": {"value": "start"}, "handler": {"prompt_path": "prompts/game.prompt.md", "operation": "start"}, "input": {"status": {"$ref": "/state/status"}}, "next": {"kind": "same", "screen": null, "route_pointer": null}, "state": {"score": {"$ref": "/result/score"}, "status": {"$ref": "/result/status"}}}]}
    ```
-   Give each step a **self-contained starting state** (`from` / `$use` + `patch`) by default so the server executes steps **in parallel** and isolates failures; chain `$step` (`$step_result`) or shared-`world` step sequences only when a criterion tests multi-step persistence or handoff. Write `1` clear step per distinct Story rule/boundary/error (`<= 15` steps; exhaustive permutation matrices belong in native code tests), omit optional step `"model"`, check structured state fields and key controls on dense grids instead of huge HTML strings, and render `.ui.svg` to PNG only when asked.
-5. **Expected values (§4):** Expected values come from the person and Story—never edit a test to make it pass or copy observed code/simulation output without review.
+6. **Expected values (§4):** Expected values come from the person and Story—never edit a test to make it pass or copy observed code/simulation output without review.
 
 ## Core commands
 
-- Check local Story, `app-map.json`, Short JSON, scenario schema, and `.ui.svg` hygiene offline (0 AI calls): `pdd lint --local`
-- Inspect expanded `program-scenario.v1` JSON offline (0 AI calls): `pdd lint --emit-v1 place-order`
-- Bind legacy Story criterion IDs to current `ac-sha256-...` IDs on disk for review (0 AI calls): `pdd lint --bind-criteria place-order`
-- Run hosted admission lint only (0 AI calls): `pdd lint place-order`
-- List selected upload files and byte sizes offline: `pdd test --files place-order`
-- Run full prompt checks (`pdd test` already includes lint; avoid standalone `pdd lint` right before `pdd test`): `pdd test place-order`
-- Resume waiting on a saved check batch without resending: `pdd test --read batch-1`
-- Open an interactive Simulator session (`--new` reloads changed prompts or `app-map.json`): `pdd simulate place-order --new`
-- Execute CLI Story scenarios directly against real code (0 AI calls): `pdd test --target code place-order`
+- Offline verify (0 AI calls): `pdd files --json && pdd lint --local`
+- Compile Short JSON to `program-scenario.v1` in place + verify (0 AI calls): `pdd lint --emit-v1 --write && pdd files --json && pdd lint --local`
+- Bind legacy Story criterion IDs on disk (0 AI calls): `pdd lint --bind-criteria <story>`
+- Hosted admission lint only (0 AI calls): `pdd lint <story>` · List upload files: `pdd test --files <story>`
+- Run prompt checks (`pdd test` includes lint; do not run `pdd lint` right before `pdd test`): `pdd test <story>` · Resume batch: `pdd test --read batch-1`
+- Interactive Simulator: `pdd simulate <story> --new` · CLI code replay (0 AI calls): `pdd test --target code <story>`
 
-Report pages may show `pdd replay …`. That command does not exist yet. Use native vector replay tests (`runbook/replays-and-formal.md`) or `pdd test --target code place-order` for CLI entries. For structural cleanup and refactoring passes without behavior drift, follow [docs/refactor-runbook.md](https://github.com/promptdriven/pdd/blob/main/docs/refactor-runbook.md). When reporting a problem with `pdd` itself, follow [docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md).
+## On-demand deep references (open only when a workflow step or lint/test error points to one)
+
+From the skill folder open `runbook/<file>.md`; from the package root open `skills/pdd-prompting/runbook/<file>.md`:
+`runbook/files-and-runtime-block.md` (§1–§4: `$contract`/`$seed`, `pdd-source.json`, approvals `--said`, merges) · `runbook/checks-and-budgets.md` (§8–§10, §18: advanced check paths, money/dates, `--max-calls`) · `runbook/screens-and-svg.md` (§13, §20: `after`, `timers`, `.ui.svg` layout comparison) · `runbook/cli-and-ports.md` (§5–§7, §21: SQL/blob/hash/varying fakes, `simulation_overrides`, `--target code`) · `runbook/testing-and-simulation.md` (§11–§12, §16, §19: failure diagnosis, curl, limits) · `runbook/replays-and-formal.md` (§17: PR 2 replays, formal checks, recovery) · `runbook/autopilot-and-checklists.md` (§14–§15, §22: bug workflow, PR fields, checklists).
+
+Report pages may show `pdd replay …` (not implemented yet; use §17 native vector replays or `pdd test --target code`). Refactoring: [docs/refactor-runbook.md](https://github.com/promptdriven/pdd/blob/main/docs/refactor-runbook.md). Reporting `pdd` issues: [docs/ISSUES.md](https://github.com/promptdriven/pdd/blob/main/docs/ISSUES.md).
