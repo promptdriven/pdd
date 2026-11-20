@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 0efb30d41c47f158f40a41c97edb77376a019860727f33b336e533a5cd1ef271).
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 51342ad8061808040d596211765422ca0117cc4e8b4aac65c457b69607afa2a2).
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
 import { join, dirname, basename, resolve } from 'node:path';
@@ -1939,7 +1939,11 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
   const stripGithubTokens = role === 'review';
   const reviewTokenKeyRe = /^(?:GH|GITHUB)_\w*TOKEN$/i;
-  const useGeminiCleanCwd = stripGithubTokens && activeAgent?.kind === 'gemini' && named(reviewContext?.dir);
+  if (stripGithubTokens && !command && activeAgent?.kind === 'gemini' && (!named(reviewContext?.dir) || !named(reviewContext?.geminiPolicyFile) || !named(reviewContext?.geminiSettingsFile))) {
+    prepared?.cleanup?.();
+    throw Object.assign(Error('Gemini read-only review requires pre-materialized review context and read-only policy'), { code: 'gemini_review_context_required' });
+  }
+  const useGeminiCleanCwd = stripGithubTokens && !command && activeAgent?.kind === 'gemini' && named(reviewContext?.dir);
   const launchCwd = useGeminiCleanCwd ? reviewContext.dir : cwd;
   const cleanedBaseEnv = stripGithubTokens
     ? Object.fromEntries(Object.entries(jobEnvironment(baseEnv, { stripGithubTokens: true })).filter(([key]) => !reviewTokenKeyRe.test(key) && key !== 'GEMINI_CLI_TRUST_WORKSPACE'))
@@ -3021,17 +3025,17 @@ function parseFinalAssistantText(rawText) {
     } catch { /* Fall through to bounded structured scan. */ }
   }
   // 2. Fallback scan: collect all verdict objects from fenced blocks and prose, failing closed on conflicting verdicts.
-  const trailingFenceMatch = /```(?:json)?[ \t]*\r?\n([\s\S]*?)```\s*$/i.exec(trimmed);
+  const fenceMatches = [...trimmed.matchAll(/```(?:json)?[ \t]*\r?\n([\s\S]*?)```/gi)];
   let trailingFenceVerdict = null;
-  if (trailingFenceMatch) {
-    const fencedObjs = scanJsonObjectsBounded(trailingFenceMatch[1]).filter(o => typeof o.verdict === 'string');
+  const lastFence = fenceMatches.at(-1);
+  if (lastFence && trimmed.slice(lastFence.index + lastFence[0].length).trim() === '') {
+    const fencedObjs = scanJsonObjectsBounded(lastFence[1]).filter(o => typeof o.verdict === 'string');
     const fencedKinds = new Set(fencedObjs.map(o => o.verdict));
     if (fencedObjs.length > 0 && fencedKinds.size === 1) {
       trailingFenceVerdict = fencedObjs.at(-1);
     }
   }
   const allVerdicts = [];
-  const fenceMatches = [...trimmed.matchAll(/```(?:json)?[ \t]*\r?\n([\s\S]*?)```/gi)];
   for (const m of fenceMatches) {
     for (const o of scanJsonObjectsBounded(m[1])) {
       if (typeof o.verdict === 'string') allVerdicts.push(o);
@@ -3054,7 +3058,7 @@ function parseFinalAssistantText(rawText) {
   return trailingFenceVerdict ?? allVerdicts.at(-1);
 }
 
-function reviewEnvelopeStrings(obj) {
+function reviewEnvelopeEntries(obj) {
   const out = [];
   if (!object(obj)) return out;
   // Explicitly reject user prompts/echoes, tool calls, and tool outputs across all harnesses.
@@ -3071,16 +3075,16 @@ function reviewEnvelopeStrings(obj) {
   if (obj.type === 'item.completed') {
     const item = obj.item;
     if (!object(item) || item.type !== 'agent_message') return out;
-    if (typeof item.text === 'string' && item.text.trim()) out.push(item.text);
-    if (Array.isArray(item.content)) {
+    if (typeof item.text === 'string' && item.text.trim()) out.push({ kind: 'assistant', text: item.text });
+    else if (Array.isArray(item.content)) {
       const joined = item.content.map(part => (typeof part?.text === 'string' ? part.text : '')).filter(Boolean).join('\n');
-      if (joined) out.push(joined);
+      if (joined) out.push({ kind: 'assistant', text: joined });
     }
     return out;
   }
   // Claude --output-format json / stream-json: final result envelope or assistant text blocks.
   if (obj.type === 'result') {
-    if (typeof obj.result === 'string' && obj.result.trim()) out.push(obj.result);
+    if (typeof obj.result === 'string' && obj.result.trim()) out.push({ kind: 'result', text: obj.result });
     return out;
   }
   if (obj.type === 'assistant') {
@@ -3090,31 +3094,35 @@ function reviewEnvelopeStrings(obj) {
         .map(part => part.text)
         .filter(Boolean)
         .join('\n');
-      if (joined) out.push(joined);
+      if (joined) out.push({ kind: 'assistant', text: joined });
     }
     return out;
   }
-  // Gemini / Agy stream-json assistant message or final json response envelope.
+  // Gemini / Agy stream-json assistant message.
   if (obj.role === 'assistant') {
-    if (typeof obj.content === 'string' && obj.content.trim()) out.push(obj.content);
+    if (typeof obj.content === 'string' && obj.content.trim()) out.push({ kind: 'assistant', text: obj.content });
     else if (Array.isArray(obj.content)) {
       const joined = obj.content
         .filter(part => part?.type !== 'tool_use' && part?.type !== 'tool_result' && typeof part?.text === 'string')
         .map(part => part.text)
         .filter(Boolean)
         .join('\n');
-      if (joined) out.push(joined);
+      if (joined) out.push({ kind: 'assistant', text: joined });
     }
     return out;
   }
-  if (typeof obj.response === 'string' && obj.response.trim()) {
-    out.push(obj.response);
+  // Untyped final JSON response envelope only (never typed frames such as tool_response).
+  if (!obj.type && !obj.event && !obj.role && typeof obj.response === 'string' && obj.response.trim()) {
+    out.push({ kind: 'result', text: obj.response });
     return out;
   }
   // Agy stream-json non-tool step_update assistant output.
   if (obj.event === 'step_update' && object(obj.step_update) && obj.step_update.step_type !== 'tool') {
     for (const key of ['response', 'output', 'text', 'content', 'message']) {
-      if (typeof obj.step_update[key] === 'string' && obj.step_update[key].trim()) out.push(obj.step_update[key]);
+      if (typeof obj.step_update[key] === 'string' && obj.step_update[key].trim()) {
+        out.push({ kind: 'assistant', text: obj.step_update[key] });
+        break;
+      }
     }
   }
   return out;
@@ -3132,24 +3140,50 @@ function extractReviewFromObject(obj, { allowDirect = false } = {}) {
   if (!object(obj)) return null;
   if (isReviewTerminalError(obj)) return { terminalError: true, verdict: null };
   if (allowDirect && typeof obj.verdict === 'string') return { terminalError: false, verdict: obj };
-  for (const innerText of reviewEnvelopeStrings(obj)) {
-    const verdict = parseFinalAssistantText(innerText);
+  for (const entry of reviewEnvelopeEntries(obj)) {
+    const verdict = parseFinalAssistantText(entry.text);
     if (verdict) return { terminalError: false, verdict };
   }
   return { terminalError: false, verdict: null };
+}
+function parseReviewLogObjects(raw) {
+  const text = typeof raw === 'string' ? raw : '';
+  if (!text.trim()) return [];
+  // Parse NDJSON line-by-line first so an unmatched `{`, stray quote, or readTail mid-line slice on one line
+  // can never corrupt or swallow subsequent NDJSON envelopes or terminal error frames.
+  const objects = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (object(parsed)) objects.push(parsed);
+    } catch { /* Ignore non-JSON or truncated line. */ }
+  }
+  if (objects.length > 0) return objects;
+  // Fall back to a single pretty-printed JSON document (e.g., `--output-format json`) only when zero NDJSON lines parsed.
+  const whole = text.trim();
+  if (whole.startsWith('{') && whole.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(whole);
+      if (object(parsed)) return [parsed];
+    } catch { /* Invalid document. */ }
+  }
+  return [];
 }
 export function parseReviewOutput(raw, { fromResultFile = false } = {}) {
   if (fromResultFile) {
     return parseFinalAssistantText(raw);
   }
   // When reading captured stdout logs (fromResultFile === false), NEVER scrape arbitrary raw prose/stderr lines:
-  // only accept recognized assistant/final-result envelopes, reassembling contiguous Gemini stream-json
-  // `delta: true` assistant chunks, and fail closed on terminal error frames.
-  const objects = extractJsonObjects(raw);
+  // parse NDJSON line-by-line, accept only recognized assistant/final-result envelopes (reassembling contiguous
+  // Gemini stream-json `delta: true` assistant chunks), fail closed on ANY terminal error frame, and evaluate
+  // ONLY the final result envelope (else ONLY the final assistant turn) without walking backwards across turns.
+  const objects = parseReviewLogObjects(raw);
   const entries = [];
   let deltaBuf = '';
   const flushDelta = () => {
-    if (deltaBuf.trim()) entries.push({ kind: 'text', text: deltaBuf });
+    if (deltaBuf.trim()) entries.push({ kind: 'assistant', text: deltaBuf });
     deltaBuf = '';
   };
   for (const obj of objects) {
@@ -3164,20 +3198,25 @@ export function parseReviewOutput(raw, { fromResultFile = false } = {}) {
       continue;
     }
     flushDelta();
-    for (const text of reviewEnvelopeStrings(obj)) {
-      entries.push({ kind: 'text', text });
+    for (const entry of reviewEnvelopeEntries(obj)) {
+      entries.push(entry);
     }
   }
   flushDelta();
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].kind === 'error') return null;
-    const verdict = parseFinalAssistantText(entries[i].text);
-    if (verdict) return verdict;
+  if (entries.some(entry => entry.kind === 'error')) return null;
+  const resultEntries = entries.filter(entry => entry.kind === 'result');
+  if (resultEntries.length > 0) {
+    return parseFinalAssistantText(resultEntries.at(-1).text);
+  }
+  const assistantEntries = entries.filter(entry => entry.kind === 'assistant');
+  if (assistantEntries.length > 0) {
+    return parseFinalAssistantText(assistantEntries.at(-1).text);
   }
   return null;
 }
 function readReviewResult(ctx, part, seen) {
   if (object(seen?.result)) {
+    if (isReviewTerminalError(seen.result)) return null;
     if (typeof seen.result.verdict === 'string') return seen.result;
     const extracted = extractReviewFromObject(seen.result, { allowDirect: true });
     if (extracted?.terminalError) return null;
@@ -3256,6 +3295,21 @@ async function reviewState(ctx, job, prBody = '', preselected = null) {
         };
         ctx.saveJob(job);
         return reviewState(ctx, job, prBody);
+      }
+      if (error?.code === 'gemini_review_context_required') {
+        ctx.warn?.(`Autopilot core refused unsandboxed Gemini review launch for #${job.issue}: ${error.message}`);
+        job.review = {
+          head: job.head,
+          attempts: priorAttempts + 1,
+          ...(scoped ? { scoped } : {}),
+          ...(crossFamilyFallback ? { crossFamilyFallback: true } : {}),
+          ...(failedReviewLoginIds.length ? { failedReviewLoginIds } : {}),
+          ...(initialFamily ? { reviewFamily: initialFamily } : {}),
+          reviewIndependence: initialIndependence,
+          agent: null,
+        };
+        ctx.saveJob(job);
+        return { state: 'missing' };
       }
       throw error;
     }
@@ -3726,10 +3780,10 @@ async function changedFiles(ctx, job, head = job.agentHead ?? job.head) {
   job.changes = [...saved.filter(entry => entry.head !== head).slice(-1), { head, files }]; ctx.saveJob(job);
   return files;
 }
-// Every path touched by the PR against origin/BASE (including deleted files) for review-first security gating.
+// Every path touched by the PR against origin/BASE (including deleted and renamed-from files) for review-first security gating.
 async function prDiffAllPaths(ctx, job, head = job.head) {
   await ctx.git(['fetch', '-q', 'origin', ctx.state.baseBranch], job.worktree).catch(() => {});
-  return gitNames(ctx, ['diff', '--name-only', '-z', `origin/${ctx.state.baseBranch}...${head}`], job.worktree);
+  return gitNames(ctx, ['diff', '--no-renames', '--name-only', '-z', `origin/${ctx.state.baseBranch}...${head}`], job.worktree);
 }
 // The saved Runtime checks of the job worktree (root), read against a clean checkout of the agent head (tree): the
 // Stories and tests of findTests at the head (fixture projects excluded, as a full pdd test does), the strict per-Story
@@ -4220,7 +4274,7 @@ function engineEvidenceLines(job) {
 // so, and one report goes out.
 function engineEvidenceReds(ctx, job, body = '') {
   const v = job.vectors, e = job.evidence ?? {}, reds = [];
-  if (!v || v.state === 'running') return reds;
+  if (!v || v.state === 'running' || (named(v.head) && named(job.head) && v.head !== job.head)) return reds;
   const positive = { vectors: e.vectors?.state === 'pass', formal: ['proved', 'bounded'].includes(e.formal?.state) };
   for (const kind of HEAD_KINDS) {
     const files = v.files?.[kind] ?? [], skipped = (v.skipped ?? []).filter(row => row.kind === kind), where = someFiles(files), r = v.result?.[kind];
@@ -4271,7 +4325,8 @@ function reviewerIndependenceLine(builderFamily, reviewFamily, reviewIndependenc
   return `- Reviewer independence: ${reviewIndependence}${detail ? ` (${detail})` : ''}`;
 }
 function evidenceRecord(ctx, job, { lines = [], claims = [], ci = null, review = null, suite = null } = {}) {
-  const v = job.vectors, currentReview = job.review?.head === job.head ? job.review : null;
+  const v = job.vectors && (!named(job.vectors.head) || job.vectors.head === job.head) ? job.vectors : null;
+  const currentReview = job.review?.head === job.head ? job.review : null;
   const revFamily = review?.reviewFamily ?? currentReview?.reviewFamily ?? null;
   const revIndependence = review?.reviewIndependence ?? currentReview?.reviewIndependence ?? null;
   return { schema: 'pdd.core-evidence.v1', issue: job.issue, pr: job.pr ?? null, head: job.head, agentHead: job.agentHead ?? job.head,
@@ -4935,6 +4990,7 @@ async function mergeCheck(ctx, job) {
       if (job.vectors?.agent && job.vectors.head !== job.head && !await cleanupPart(ctx, job, job.vectors.agent, 'vectors')) {
         vectors = job.vectors;
       } else {
+        if (job.vectors && job.vectors.head !== job.head) job.vectors = null;
         vectors = { state: 'waiting-review', note: deferredSuiteNote };
       }
     } else {
@@ -4946,14 +5002,16 @@ async function mergeCheck(ctx, job) {
       if (vectors.state === 'ceiling') { await stopChecks(ctx, job); return end(ctx, job, vectors.cause); }
       await syncStampedReplayEvidence(ctx, job, pr);
     }
-    const evReds = engineEvidenceReds(ctx, job, pr.body);
-    reds.push(...evReds); nonTestReds += evReds.length;
-    if (Object.keys(uncheckedOf(job)).length && !job.vectorsReport) {
-      const filed = await report(ctx, job, { kind: 'pdd', component: 'autopilot-core', code: 'replay-not-run', shipped: true,
-        text: `Autopilot could not run the replay or formal tests of PR #${job.pr}: ${oneLine(Object.values(uncheckedOf(job)).join('; '), 600)}`,
-        detail: someFiles([...(job.vectors?.files?.vectors ?? []), ...(job.vectors?.files?.formal ?? []), ...(job.vectors?.skipped ?? []).map(row => row.file)]) }, 'vectors')
-        .catch(error => { ctx.warn(`Autopilot core replay report failed: ${error.message}`); return null; });
-      job.vectorsReport = { state: filed?.state ?? null, ref: filed?.ref ?? null };
+    if (vectors?.state !== 'waiting-review') {
+      const evReds = engineEvidenceReds(ctx, job, pr.body);
+      reds.push(...evReds); nonTestReds += evReds.length;
+      if (Object.keys(uncheckedOf(job)).length && !job.vectorsReport) {
+        const filed = await report(ctx, job, { kind: 'pdd', component: 'autopilot-core', code: 'replay-not-run', shipped: true,
+          text: `Autopilot could not run the replay or formal tests of PR #${job.pr}: ${oneLine(Object.values(uncheckedOf(job)).join('; '), 600)}`,
+          detail: someFiles([...(job.vectors?.files?.vectors ?? []), ...(job.vectors?.files?.formal ?? []), ...(job.vectors?.skipped ?? []).map(row => row.file)]) }, 'vectors')
+          .catch(error => { ctx.warn(`Autopilot core replay report failed: ${error.message}`); return null; });
+        job.vectorsReport = { state: filed?.state ?? null, ref: filed?.ref ?? null };
+      }
     }
     ctx.saveJob(job);
     if (review.state === 'missing') {
@@ -6168,7 +6226,7 @@ async function refreshBase(ctx, job) {
     const scoped = await nearChange(ctx, job, cwd, mergeBase, tip, before).catch(() => ({ reason: 'a base change that could not be read', detail: before.files.join(', '), files: before.files }));
     review = scoped ? { head, scoped } : { ...job.review, head, kept: true, keptFrom: old };
   }
-  Object.assign(job, { head, prAt: ctx.now(), suite: null, mechanical: null, progress: { sig: null, at: ctx.now(), running: false }, review,
+  Object.assign(job, { head, prAt: ctx.now(), suite: null, vectors: null, mechanical: null, progress: { sig: null, at: ctx.now(), running: false }, review,
     refreshes: (job.refreshes ?? 0) + 1, cleanRefreshes: (job.cleanRefreshes ?? 0) + (review?.kept ? 1 : 0) });
   delete job.lastError; delete job.lastErrorTool; ctx.saveJob(job);
 }
@@ -7428,9 +7486,9 @@ async function sweepFiles(ctx) {
     const issue = /^(\d+)-/.exec(name)?.[1];
     if (issue && live.has(issue)) continue;
     try {
-      const full = join(ctx.dirs.logs, name), stat = ctx.fs.statSync(full);
+      const full = join(ctx.dirs.logs, name), stat = (ctx.fs.lstatSync ?? ctx.fs.statSync)(full);
       if (stat.isFile()) files.push({ name, at: stat.mtimeMs, size: stat.size });
-      else if (stat.isDirectory() && /^\d+-review-ctx-/.test(name) && ctx.now() - stat.mtimeMs > GUARD.logDays * DAY) {
+      else if (stat.isDirectory() && !stat.isSymbolicLink?.() && /^\d+-review-ctx-/.test(name) && ctx.now() - stat.mtimeMs > GUARD.logDays * DAY) {
         ctx.fs.rmSync(full, { recursive: true, force: true });
       }
     } catch { /* Gone. */ }
