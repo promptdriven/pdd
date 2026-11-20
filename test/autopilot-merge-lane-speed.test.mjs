@@ -1,8 +1,9 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { coreSettings, coreStatus, readCoreSettings } from '../src/autopilot-core.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 
 const MIN = 60 * 1000;
@@ -333,4 +334,101 @@ test('ML5: same-tick handoff succeeds when issues?labels=pdd:merge-lane lags wit
   assert.equal(jobFile(v, 18)?.lane?.state, 'final', 'higher PR #101 took the lane in the same tick despite lagging list [#100]');
   assert.ok(vb.pr.labels.includes('pdd:merge-lane'), 'PR #101 kept pdd:merge-lane');
   assert.notEqual(jobFile(v, 18)?.head, vHead18Before, 'PR #101 refreshed onto main in the same tick');
+});
+
+test('ML6: legacy autopilot.mergeQueue: true routes auto merges through pdd:merge-lane with base check, pending-CI wait, and evidence block (#3555)', async t => {
+  const parsed = coreSettings({ autopilot: { engine: 'core', mode: 'auto', mergeQueue: true, runs: 1, testCommand: 'npm test', report: 'draft' } });
+  assert.equal(parsed.engine, 'core');
+  assert.equal(parsed.mode, 'auto');
+  assert.equal(Object.hasOwn(parsed, 'mergeQueue'), false, 'coreSettings cleanly ignores legacy mergeQueue');
+
+  const w = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  writeFileSync(join(w.cwd, 'pdd.json'), JSON.stringify({
+    autopilot: { engine: 'core', mode: 'auto', mergeQueue: true, runs: 1, testCommand: 'npm test', report: 'draft' },
+  }, null, 2) + '\n');
+  const fromDisk = readCoreSettings(w.cwd);
+  assert.equal(fromDisk.mode, 'auto');
+  assert.equal(Object.hasOwn(fromDisk, 'mergeQueue'), false, 'readCoreSettings ignores legacy mergeQueue in pdd.json');
+
+  // Even if a caller injects mergeQueue: true directly on settings or a legacy merge-queue.json remains on disk,
+  // tickCore, mergeCheck, and coreStatus must route exclusively through pdd:merge-lane.
+  w.settings = { ...fromDisk, mergeQueue: true };
+  mkdirSync(w.root, { recursive: true });
+  writeFileSync(join(w.root, 'merge-queue.json'), JSON.stringify({
+    schema: 'pdd.merge-queue.v1',
+    updatedAt: w.now(),
+    items: [{ pr: 999, issue: 999, branch: 'pdd/core-999-stale', baseBranch: 'main', headSha: 'a'.repeat(40), state: 'queued', readyAt: w.now() }],
+  }));
+
+  w.issue(17, { title: 'Legacy mergeQueue auto routing', body: 'Ensure mergeCheck uses pdd:merge-lane.' });
+  await w.tick();
+  const { pr, head: initialHead } = w.build(17, {
+    body: 'Fixes #17\n\nRuntime: PASS\nEvidence: runtime=pass (1/1); tests=pass (1/1)',
+  });
+  await w.tick();
+  w.review(17, 'PASS');
+  w.suite(17, 0);
+
+  // Move main forward so the PR must enter pdd:merge-lane and refresh onto origin/main before merging.
+  w.baseCommit('upstream.txt', 'main advanced\n');
+  const baseChecks = [];
+  const checkBase = async input => {
+    baseChecks.push(input);
+    return { exitCode: 0, message: 'Base check ok.' };
+  };
+
+  await w.tick({ checkBase });
+  const afterRefresh = jobFile(w, 17);
+  assert.equal(afterRefresh?.lane?.state, 'final', 'PR enters pdd:merge-lane instead of bypassing it');
+  assert.ok(pr.labels.includes('pdd:merge-lane'), 'PR holds pdd:merge-lane label on GitHub');
+  assert.notEqual(afterRefresh.head, initialHead, 'merge lane refreshed PR onto new origin/main');
+  assert.deepEqual(w.github.merges, [], 'must not merge freshly refreshed head before CI and full suite pass');
+  assert.equal(baseChecks.length, 0, 'checkAutopilotBase waits until refreshed head CI and suite are green');
+
+  // Start the refreshed head's suite and hold GitHub CI in_progress across 3 ticks: must wait, never falsely eject!
+  const refreshedHead = afterRefresh.head;
+  w.github.setChecks(refreshedHead, null, 'in_progress');
+  await w.tick({ checkBase });
+  w.suite(17, 0);
+  for (let i = 0; i < 3; i++) {
+    w.advance(10 * MIN);
+    await w.tick({ checkBase });
+    assert.equal(jobFile(w, 17)?.phase, 'pr', `tick ${i + 1}: PR stays active while CI is pending`);
+    assert.equal(jobFile(w, 17)?.lane?.state, 'final', `tick ${i + 1}: PR keeps pdd:merge-lane while CI is pending`);
+    assert.ok(!w.labels(17).includes('pdd:stuck'), `tick ${i + 1}: pending CI never falsely ejects PR`);
+    assert.deepEqual(w.github.merges, [], `tick ${i + 1}: never merges while CI is pending`);
+  }
+
+  // Once CI turns green, mergeCheck runs checkAutopilotBase, posts the merge audit comment, writes the evidence block, and merges.
+  w.github.setChecks(refreshedHead, 'success', 'completed');
+  const landed = await w.tick({ checkBase });
+  assert.match(landed.message, /1 merged/);
+  assert.deepEqual(w.github.merges, [pr.number]);
+  assert.equal(pr.merged, true);
+  assert.equal(baseChecks.length, 1, 'checkAutopilotBase ran before merge');
+  assert.equal(baseChecks[0].pr, pr.number);
+  const mergeComment = pr.comments.map(c => c.body).find(body => body.includes(`<!-- pdd:autopilot-core:merge:${refreshedHead} -->`));
+  assert.ok(mergeComment, 'merge audit comment posted for refreshed head');
+  assert.match(mergeComment, /- Merge lane: final step/);
+  assert.match(mergeComment, /- Base: Base check ok\./);
+  assert.match(pr.body, /<!-- pdd:autopilot-core:evidence:start -->[\s\S]*<!-- pdd:autopilot-core:evidence:end -->/, 'writeEvidenceBlock updated PR body');
+  assert.doesNotMatch(coreStatus({ state: w.state, settings: w.settings }, { root: w.root, now: w.now }), /Merge queue:/, 'coreStatus ignores legacy merge-queue.json');
+
+  // Observe mode with legacy mergeQueue: true also routes through pdd:merge-lane and creates no merge-queue.json.
+  const obs = await coreWorld(t, { settings: { mode: 'observe', runs: 1 } });
+  obs.settings = { ...coreSettings({ autopilot: { engine: 'core', mode: 'observe', mergeQueue: true, runs: 1, testCommand: 'npm test', report: 'draft' } }), mergeQueue: true };
+  obs.issue(18, { title: 'Observe without merge queue', body: 'Small fix.' });
+  await obs.tick();
+  const { pr: obsPr, head: obsHead } = obs.build(18, {
+    body: 'Fixes #18\n\nRuntime: PASS\nEvidence: runtime=pass (1/1); tests=pass (1/1)',
+  });
+  await obs.tick();
+  obs.review(18, 'PASS');
+  obs.suite(18, 0);
+  await obs.tick();
+  assert.equal(obsPr.merged, false, 'observe mode never merges');
+  assert.ok(obsPr.comments.some(c => c.body.includes(`<!-- pdd:autopilot-core:would-merge:${obsHead} -->`)), 'observe mode posts would-merge audit comment');
+  assert.match(obsPr.body, /<!-- pdd:autopilot-core:evidence:start -->[\s\S]*<!-- pdd:autopilot-core:evidence:end -->/, 'observe mode writes evidence block');
+  assert.equal(existsSync(join(obs.root, 'merge-queue.json')), false, 'observe mode does not create merge-queue.json');
+  assert.doesNotMatch(coreStatus({ state: obs.state, settings: obs.settings }, { root: obs.root, now: obs.now }), /Merge queue:/);
 });
