@@ -1648,6 +1648,12 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
   const baseEnv = prepared?.env ?? ((!command && selected?.env) ? selected.env : (ctx.ports.env ?? process.env));
   const cleanupDirs = prepared?.cleanupDirs ?? selected?.cleanupDirs ?? null;
   const run = command ?? resolveCoreAgentCommand(ctx, role, activeAgent, baseEnv);
+  const runArgs = (!command && Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length)
+    ? (() => {
+        const dd = run.args.indexOf('--');
+        return dd === -1 ? [...run.args, ...prepared.extraArgs] : [...run.args.slice(0, dd), ...prepared.extraArgs, ...run.args.slice(dd)];
+      })()
+    : run.args;
   // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
   // as PDD_CHECK_CPUS for every role.
   const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
@@ -1657,7 +1663,7 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
     : extraEnv;
   let started;
   try {
-    started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
+    started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: runArgs, input: typeof prompt === 'function' ? prompt(result) : prompt,
       env: { ...pddOnPath(ctx, jobEnvironment(baseEnv, { stripGithubTokens })), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...filteredExtraEnv },
       ...(Array.isArray(cleanupDirs) && cleanupDirs.length ? { cleanupDirs } : {}),
       ...(ctx.ports.wake ? { wake: ctx.ports.wake } : {}),

@@ -211,6 +211,10 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
         if(prevCodex&&(!nextActive.codex||(prevCodex.managed_codex_gateway===true&&!nextActive.codex?.managed_codex_gateway))){
          try{cloudMod.restoreLocalCodexGatewayConfig({env:childEnv,previousModelProvider:prevCodex.previous_codex_model_provider??null,removeAuthFile:!nextActive.codex},accountsPorts);}catch{}
         }
+        const prevClaude=saved.active?.claude;
+        if(prevClaude&&!nextActive.claude){
+         try{cloudMod.restoreLocalClaudeGatewayConfig?.({env:childEnv},accountsPorts);}catch{}
+        }
         const nextCooling=Object.fromEntries(Object.entries(saved.cooling??{}).filter(([p])=>nextProviders.includes(p)));
         cloudMod.writeCloudAccountsState({enrolled:accessible.length>0,providers:nextProviders,active:nextActive,cooling:nextCooling},{env:childEnv},accountsPorts);
         fallBackLocal=true;
@@ -254,8 +258,15 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
     }
     activeAccount=acc?{account_id:acc.account_id,label:acc.label,provider:acc.provider}:null;
     const stepExec=cloudMod.prepareCloudStepExecution(leaseReply,childEnv,accountsPorts);
+    const stepArgs=Array.isArray(stepExec.extraArgs)&&stepExec.extraArgs.length
+     ?(()=>{
+       const dd=childArgs.indexOf('--');
+       if(dd===-1)return [...childArgs,...stepExec.extraArgs];
+       return [...childArgs.slice(0,dd),...stepExec.extraArgs,...childArgs.slice(dd)];
+      })()
+     :childArgs;
     try{
-     result=await run(launch.command,childArgs,{cwd,env:stepExec.env,input,signal,timeoutMs,maxBytes});
+     result=await run(launch.command,stepArgs,{cwd,env:stepExec.env,input,signal,timeoutMs,maxBytes});
     }finally{
      stepExec.cleanup();
     }

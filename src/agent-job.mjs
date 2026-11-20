@@ -13,7 +13,7 @@ const SESSION_KEYS = /^(?:ANTIGRAVITY_(?!APP_DATA_DIR$)|CLAUDECODE$|CLAUDE_CODE_
 const GITHUB_TOKEN_KEYS = /^(?:GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|GITHUB_PERSONAL_ACCESS_TOKEN)$/i;
 const readJson = file => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return undefined; return 'invalid'; } };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const cleanOverlayDirs = value => Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string' && item.trim()).map(item => resolve(item)).filter(item => basename(item).startsWith('pdd-cx-')))] : [];
+const cleanOverlayDirs = value => Array.isArray(value) ? [...new Set(value.filter(item => typeof item === 'string' && item.trim()).map(item => resolve(item)).filter(item => /^pdd-(?:cx|cl)-/.test(basename(item))))] : [];
 function removeCleanupDirs(dirs) {
   for (const dir of cleanOverlayDirs(dirs)) try { rmSync(dir, { recursive: true, force: true }); } catch { /* Best effort disposable overlay wipe. */ }
 }

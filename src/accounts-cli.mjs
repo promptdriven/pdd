@@ -20,11 +20,13 @@ import {
   localClaudePaths,
   localCodexAuthPath,
   localCodexHome,
+  managedClaudeSettingsPath,
   managedCodexAuthPath,
   managedCodexConfigPath,
   markLocalAccountReauthRequired,
   materializeLocalClaudeAuth,
   materializeLocalCodexAuth,
+  pddManagedClaudeHome,
   pddManagedCodexHome,
   readCloudAccountsState,
   readCodexUsageWindows,
@@ -130,13 +132,8 @@ export function renderAutoSwitchBlock(shell = 'sh') {
       "  command codex $argv",
       "end",
       "function claude --wraps claude",
-      "  command -sq pdd; and pdd accounts sync --provider claude --quiet --timeout-ms 1200 2>/dev/null; or true",
-      "  set -l _pdd_cl_cfg \"$HOME/.claude/settings.json\"",
-      "  if set -q CLAUDE_CONFIG_DIR; and test -n \"$CLAUDE_CONFIG_DIR\"",
-      "    set _pdd_cl_cfg (string replace -r '/+$' '' -- \"$CLAUDE_CONFIG_DIR\")\"/settings.json\"",
-      "  end",
-      "  if test -f \"$_pdd_cl_cfg\"; and grep -q '\"CLAUDE_CODE_OAUTH_TOKEN\"' \"$_pdd_cl_cfg\" 2>/dev/null",
-      "    env -u ANTHROPIC_API_KEY claude $argv",
+      "  if command -sq pdd-claude",
+      "    command pdd-claude $argv",
       "    return $status",
       "  end",
       "  command claude $argv",
@@ -231,11 +228,8 @@ export function renderAutoSwitchBlock(shell = 'sh') {
     "  command codex \"$@\"",
     "}",
     "claude() {",
-    "  command -v pdd >/dev/null 2>&1 && pdd accounts sync --provider claude --quiet --timeout-ms 1200 2>/dev/null || true",
-    "  local _pdd_cl_cfg=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"",
-    "  _pdd_cl_cfg=\"${_pdd_cl_cfg%/}/settings.json\"",
-    "  if [ -f \"$_pdd_cl_cfg\" ] && grep -q '\"CLAUDE_CODE_OAUTH_TOKEN\"' \"$_pdd_cl_cfg\" 2>/dev/null; then",
-    "    (unset ANTHROPIC_API_KEY; command claude \"$@\")",
+    "  if command -v pdd-claude >/dev/null 2>&1; then",
+    "    command pdd-claude \"$@\"",
     "    return $?",
     "  fi",
     "  command claude \"$@\"",
@@ -1747,9 +1741,6 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
       markLocalAccountReauthRequired(leased.account?.account_id ?? acc.account_id, { env }, ports);
       return { materialized: false };
     }
-    if (provider === 'claude' && fallbackOauthToken) {
-      materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
-    }
     const current = readCloudAccountsState({ env }, ports);
     writeCloudAccountsState({
       enrolled: true,
@@ -1759,14 +1750,8 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
         ? { ...current.cooling, [provider]: { wake_at: leased.wake_at ?? null } }
         : current.cooling,
     }, { env }, ports);
-    return {
-      materialized: provider === 'claude' && Boolean(fallbackOauthToken) && Boolean(hasLocalMaterializedFile(fs, 'claude', env)),
-    };
+    return { materialized: false };
   } catch {
-    const claudeFallbackMaterialized = provider === 'claude' && Boolean(fallbackOauthToken);
-    if (claudeFallbackMaterialized) {
-      materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
-    }
     const current = readCloudAccountsState({ env }, ports);
     writeCloudAccountsState({
       enrolled: true,
@@ -1782,8 +1767,8 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
           leased_at: new Date(nowMs).toISOString(),
           expires_at: new Date(nowMs + 5 * 60 * 1000).toISOString(),
           last_refresh_at: acc.last_refresh_at ?? new Date(nowMs).toISOString(),
-          materialized_local: claudeFallbackMaterialized,
-          delivery_mode: provider === 'codex' ? 'gateway_grant' : 'direct_oauth',
+          materialized_local: false,
+          delivery_mode: 'gateway_grant',
           five_hour_used_percent: acc.five_hour_used_percent ?? null,
           five_hour_reset_at: acc.five_hour_reset_at ?? null,
           weekly_used_percent: acc.weekly_used_percent ?? null,
@@ -1792,9 +1777,7 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
       },
       cooling: current.cooling,
     }, { env }, ports);
-    return {
-      materialized: claudeFallbackMaterialized && Boolean(hasLocalMaterializedFile(fs, 'claude', env)),
-    };
+    return { materialized: false };
   }
 }
 
@@ -2355,8 +2338,7 @@ async function enrollSingleIteration(mode, {
     || (loopState && acc.account_id && loopState.seenAccountIds.has(acc.account_id)),
   );
 
-  materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: oauthToken }, { env }, ports);
-  await leaseAndSyncAfterEnroll('claude', acc, candidateLabel, null, oauthToken, { cwd, env }, ports);
+  await leaseAndSyncAfterEnroll('claude', acc, candidateLabel, null, null, { cwd, env }, ports);
 
   const finalLabel = acc.label ?? candidateLabel;
   if (loopState) {
@@ -2557,7 +2539,7 @@ async function enrollOrImportAccount(mode, {
 function hasLocalMaterializedFile(fs, provider, env) {
   try {
     if (provider === 'claude') {
-      return Boolean(fs.statSync(localClaudePaths(env).settingsPath)?.isFile());
+      return Boolean(fs.statSync(managedClaudeSettingsPath(env))?.isFile());
     }
     const hasAuth = Boolean(fs.statSync(managedCodexAuthPath(env))?.isFile());
     if (!hasAuth) return false;
@@ -2718,6 +2700,7 @@ function runAutoCommand(mode, { env }, ports = {}) {
       const updated = removeAutoSwitchBlock(current);
       if (updated !== current) fs.writeFileSync(entry.path, updated, { mode: 0o644 });
     }
+    restoreLocalClaudeGatewayConfig({ env }, ports);
     return {
       exitCode: 0,
       message: 'Removed terminal auto-switch wrapper from ~/.zshrc, ~/.bashrc, and ~/.config/fish/config.fish.',
@@ -2778,6 +2761,8 @@ function reconcileListedState(accounts, current, { env }, ports = {}) {
   }
   if (!nextActive.claude) {
     restoreLocalClaudeGatewayConfig({ env }, ports);
+  } else {
+    restoreLocalClaudeGatewayConfig({ env, removeManagedFile: false }, ports);
   }
   const nextCooling = Object.fromEntries(
     Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
@@ -2955,6 +2940,8 @@ function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {
   }
   if (!nextActive.claude) {
     restoreLocalClaudeGatewayConfig({ env }, ports);
+  } else {
+    restoreLocalClaudeGatewayConfig({ env, removeManagedFile: false }, ports);
   }
   const nextCooling = Object.fromEntries(
     Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
@@ -4491,6 +4478,28 @@ export async function runAccountsCli({
       case 'pause': {
         const { account } = await resolveAccount(operands[0], { cwd, env, provider: options['--provider'] || null }, ports);
         await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/pause`, { body: {}, cwd, env }, ports);
+        const saved = readCloudAccountsState({ env }, ports);
+        const prov = account.provider;
+        if (prov && saved.active?.[prov]?.account_id === account.account_id) {
+          const prevEntry = saved.active[prov];
+          const nextActive = { ...saved.active };
+          delete nextActive[prov];
+          writeCloudAccountsState({
+            ...saved,
+            active: nextActive,
+          }, { env }, ports);
+          if (prov === 'claude') {
+            restoreLocalClaudeGatewayConfig({ env }, ports);
+          } else if (prov === 'codex') {
+            restoreLocalCodexGatewayConfig({
+              env,
+              previousModelProvider: prevEntry.previous_codex_model_provider ?? null,
+              removeAuthFile: true,
+            }, ports);
+          }
+        } else if (prov === 'claude') {
+          restoreLocalClaudeGatewayConfig({ env, removeManagedFile: false }, ports);
+        }
         return { exitCode: 0, message: `Paused account "${account.label}".` };
       }
 

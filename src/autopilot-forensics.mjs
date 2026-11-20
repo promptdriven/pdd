@@ -543,8 +543,14 @@ export async function runPreRunForensics(
     : null;
   try {
     const cmd = forensicsCommand(activeAgent, { model, reasoningEffort, resultFile, env: childEnv, fs });
+    const cmdArgs = (Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length)
+      ? (() => {
+          const dd = cmd.args.indexOf('--');
+          return dd === -1 ? [...cmd.args, ...prepared.extraArgs] : [...cmd.args.slice(0, dd), ...prepared.extraArgs, ...cmd.args.slice(dd)];
+        })()
+      : cmd.args;
     const prompt = forensicsPrompt({ repo, baseBranch, issue, comments });
-    const execResult = await run(cmd.command, cmd.args, {
+    const execResult = await run(cmd.command, cmdArgs, {
       cwd: worktree,
       env: childEnv,
       input: prompt,

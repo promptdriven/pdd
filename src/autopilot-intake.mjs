@@ -626,7 +626,7 @@ function prune(ctx, job, keepLog, answer = null) {
     for (const rawDir of job.cleanupDirs) {
       if (typeof rawDir !== 'string' || !rawDir.trim()) continue;
       const dir = resolve(rawDir);
-      if (basename(dir).startsWith('pdd-cx-')) try { ctx.fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Best effort overlay wipe. */ }
+      if (/^pdd-(?:cx|cl)-/.test(basename(dir))) try { ctx.fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Best effort overlay wipe. */ }
     }
   }
 }
@@ -702,9 +702,16 @@ function startIntakeJob(ctx, runner, spec) {
   try {
     const { buildCommand, ...rest } = spec;
     const resolved = typeof buildCommand === 'function' ? buildCommand(env) : null;
+    const baseArgs = Array.isArray(resolved?.args) ? resolved.args : (Array.isArray(rest.args) ? rest.args : null);
+    const mergedArgs = (baseArgs && Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length)
+      ? (() => {
+          const dd = baseArgs.indexOf('--');
+          return dd === -1 ? [...baseArgs, ...prepared.extraArgs] : [...baseArgs.slice(0, dd), ...prepared.extraArgs, ...baseArgs.slice(dd)];
+        })()
+      : baseArgs;
     const job = ctx.jobs.start({
       ...rest,
-      ...(resolved ? { command: resolved.command, args: resolved.args } : {}),
+      ...(resolved ? { command: resolved.command, args: mergedArgs } : (mergedArgs ? { args: mergedArgs } : {})),
       env,
       ...(cleanupDirs.length ? { cleanupDirs } : {}),
     });
