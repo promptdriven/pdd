@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 8457e1b2100ee7759b9406cd45019efe6b149c96e9a947f7dfdf944ea047537a).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: eb52db4b72d8e3b975493f6c02a9bfe0e76210f91a00cfc97b28e436873fb422).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
@@ -54,15 +54,17 @@ const NON_PORT_FILE_EXTENSIONS = new Set([
   'mjs', 'cjs', 'js', 'jsx', 'ts', 'tsx', 'mts', 'cts', 'py', 'pyi',
   'go', 'rs', 'rb', 'java', 'kt', 'cs', 'cc', 'cpp', 'hpp', 'swift', 'php', 'lua',
   'sh', 'bash', 'zsh', 'ps1', 'bat',
-  'json', 'jsonc', 'jsonl', 'ndjson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf',
+  'json', 'jsonc', 'jsonl', 'ndjson', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env',
   'xml', 'xsd', 'html', 'htm', 'css', 'scss', 'less', 'svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico',
-  'pdf', 'csv', 'tsv', 'txt', 'md', 'mdx', 'rst',
-  'sql', 'ddl', 'db', 'sqlite', 'sqlite3', 'proto', 'graphql', 'gql', 'prisma', 'avsc', 'avro', 'thrift',
-  'wasm', 'gz', 'tar', 'zip', 'pem', 'crt', 'pid', 'sock', 'tmp', 'bak', 'git', 'lockb', 'map',
+  'pdf', 'csv', 'tsv', 'txt', 'md', 'mdx', 'rst', 'log',
+  'sql', 'ddl', 'db', 'sqlite', 'sqlite3', 'wal', 'shm', 'proto', 'graphql', 'gql', 'prisma', 'avsc', 'avro', 'thrift',
+  'wasm', 'gz', 'tar', 'zip', 'pem', 'crt', 'cert', 'key', 'pid', 'sock', 'socket',
+  'service', 'timer', 'example', 'sample', 'tmp', 'bak', 'orig', 'git', 'lockb', 'map',
 ]);
 const NON_PORT_EXACT_FILENAMES = new Set([
   'yarn.lock', 'bun.lock', 'cargo.lock', 'poetry.lock', 'gemfile.lock',
   'composer.lock', 'uv.lock', 'flake.lock', 'podfile.lock', 'packages.lock',
+  'merge-queue.lock',
 ]);
 const NON_PORT_TLDS = new Set([
   'com', 'org', 'net', 'io', 'dev', 'app', 'ai', 'gov', 'edu', 'localhost', 'arpa', 'local',
@@ -72,6 +74,12 @@ const NON_PORT_PREFIXES = new Set([
   'module', 'exports', 'import', 'this', 'self', 'super', 'args', 'argv',
   'stdin', 'stdout', 'stderr', 'ports', 'options', 'opts', 'req', 'res',
   'request', 'response', 'err', 'error', 'headers', 'params', 'query', 'body', 'cookies',
+  'ctx', 'app', 'router', 'server', 'db', 'pool', 'conn', 'tx', 'config', 'excluded',
+  'sqlite3', 'uvicorn', 'asyncio', 'json', 'sqlalchemy', 'httpx', 'requests',
+  'fastapi', 'flask', 'express', 'fastify', 'koa', 'django', 'pydantic', 'aiohttp',
+  'psycopg', 'psycopg2', 'pg', 'prisma', 'drizzle', 'knex', 'redis', 'ioredis', 'boto3',
+  'logging', 'logger', 'pathlib', 'subprocess', 'threading', 'multiprocessing',
+  'datetime', 'time', 'math', 'random', 'hashlib', 'base64', 'urllib', 'socket', 'ssl',
   'node', 'bun', 'deno', 'sys', 'os', 'path', 'posix', 'fs', 'url', 'util',
   'crypto', 'stream', 'events', 'timers', 'zlib', 'net', 'tls', 'dns',
   'http', 'https', 'http2', 'child_process', 'worker_threads', 'readline', 'std', 'fmt',
@@ -82,16 +90,29 @@ const NON_PORT_JS_MEMBERS = new Set([
   'toLowerCase', 'toUpperCase', 'charAt', 'substring', 'substr',
 ]);
 const VERSION_TOKEN_RE = /^v?\d+$/i;
+const SIMPLE_IDENT_RE = /^[a-z][a-zA-Z0-9_-]*$/;
 const BARE_PORT_OP_RE = /^([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)$/;
 const CALL_PORT_OP_RE = /^([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)\s*\(/;
 const BRACE_PORT_OP_RE = /^([a-z][a-zA-Z0-9_-]*)\.\{\s*([a-z][a-zA-Z0-9_-]*(?:\s*,\s*[a-z][a-zA-Z0-9_-]*)+)\s*\}$/;
-const INLINE_PORT_OP_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9_-])/g;
 const INLINE_BRACE_PORT_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.\{\s*([a-z][a-zA-Z0-9_-]*(?:\s*,\s*[a-z][a-zA-Z0-9_-]*)+)\s*\}/g;
-const PORT_WIRING_HEADING_RE = /\b(?:port|ports|wiring|binding|bindings)\b/i;
-const PORT_TABLE_COL_INCLUDE_RE = /\b(?:port|ports|operation|operations|binding|bindings)\b/i;
-const PORT_TABLE_COL_EXCLUDE_RE = /\b(?:file|path|table|column|route|endpoint|url|http|sql|env|variable)\b/i;
-const PORT_WIRING_CUE_RE = /\b(?:port|ports|wire|wires|wired|wiring|bind|binds|bound|binding|bindings)\b/i;
-const PORT_BULLET_LEAD_RE = /^\s*(?:[-*+]|\d+[.)])\s*(?:[a-z][a-zA-Z0-9_-]*\.[a-z][a-zA-Z0-9_-]*)\s*(?::|—|–|->|=>|\(|-\s)/;
+const NETWORK_PORT_HEADING_RE = /\b(?:tcp|udp|http|https|grpc|listen(?:ing)?|network|socket|server|tls|ssl|firewall|docker|container|kubernetes|k8s|ingress|expos(?:e|ed))\b/i;
+const DOMAIN_PORT_HEADING_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?|adapters?)\b/i;
+const DEP_PORTS_HEADING_RE = /\b(?:injected\s+ports?|external\s+ports?|domain\s+ports?|port\s+interface|port\s+contract|ports?|resources?)\b/i;
+const PORT_TABLE_COL_PORT_RE = /\b(?:port|ports|bound\s+port|wired\s+port|injected\s+port|port\s+op(?:eration)?)\b/i;
+const PORT_TABLE_COL_IN_SECTION_RE = /\b(?:operation|operations|binding|bindings)\b/i;
+const PORT_TABLE_COL_EXCLUDE_RE = /\b(?:tcp|udp|http|https|listen|network|socket|file|path|table|column|field|type|route|endpoint|url|sql|env|variable|header|status|code|metric|flag|option|description|notes?)\b/i;
+const DEP_TABLE_PORT_NAME_COL_RE = /\b(?:port|resource|service|adapter|interface|namespace)\b/i;
+const DEP_TABLE_OP_COL_RE = /\b(?:operation|operations|op|ops|method|methods|action|actions)\b/i;
+const DOMAIN_PORT_CUE_RE = /\b(?:wire|wires|wired|wiring|port|ports|bind|binds|bound|binding|bindings)\b/i;
+const NETWORK_PORT_PHRASE_PATTERNS = [
+  /\b(?:tcp|udp|http|https|grpc|ws|wss|listen(?:ing)?|server|socket|host|local|remote|network|container|service)\s+ports?\b/gi,
+  /\b(?:on|to|at|from)\s+port(?:\s+\d+|\s+`?[A-Z0-9_]+`?)?\b/gi,
+  /\bports?\s+\d+\b/gi,
+  /\bports?\s+(?:number|numbers|env|variable|variables|range)\b/gi,
+  /\bbind(?:s|ing)?\s+(?:the\s+)?(?:http|https|tcp|udp|server|listener|socket|address|host|interface)\b/gi,
+  /\bport\s+binding\s+(?:on|to|for)\s+(?:tcp|udp|http|https|server|socket|localhost)\b/gi,
+];
+const BULLET_LINE_RE = /^([ \t]*)(?:[-*+]|\d+[.)])\s+(.+)$/;
 const EMPTY_STRING_SET = new Set();
 
 const canonicalRepoPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
@@ -136,33 +157,158 @@ function readSafeUtf8(realRoot, relPath, maxBytes = MAX_FILE_BYTES) {
 
 const blankPreservingLines = segment => segment.replace(/[^\r\n]/g, ' ');
 
-function hasRuntimeInterfaceMetadata(raw) {
+function findFrontmatterRange(raw) {
   const text = String(raw ?? '');
-  return /<details\b[^>]*>\s*<summary\b[^>]*>[^\r\n]*runtime\s+interface[^\r\n]*<\/summary>[\s\S]*?<\/details>/i.test(text)
-    || /^#{2,6}[ \t]+runtime[ \t]+interface[ \t]*\r?\n/im.test(text);
+  let bodyStart;
+  if (text.startsWith('---\n')) bodyStart = 4;
+  else if (text.startsWith('---\r\n')) bodyStart = 5;
+  else return null;
+  let pos = bodyStart;
+  while (pos <= text.length) {
+    const nl = text.indexOf('\n', pos);
+    const lineEnd = nl < 0 ? text.length : nl;
+    const line = text.slice(pos, lineEnd).replace(/\r$/, '');
+    if (line === '---') {
+      const end = nl < 0 ? text.length : nl + 1;
+      return { start: 0, end, bodyStart, bodyEnd: pos };
+    }
+    if (nl < 0) break;
+    pos = nl + 1;
+  }
+  return null;
+}
+
+function isTagNameBoundary(ch) {
+  return ch === '>' || ch === '/' || ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r';
+}
+
+function findRuntimeInterfaceSpans(raw) {
+  const text = String(raw ?? '');
+  if (!text) return [];
+  const lower = text.toLowerCase();
+  const spans = [];
+
+  // 1. Linear indexOf scan for <details ...><summary ...>...runtime interface...</summary>...</details>.
+  let pos = 0;
+  while (pos < lower.length) {
+    const detOpen = lower.indexOf('<details', pos);
+    if (detOpen < 0) break;
+    const afterDet = detOpen + 8;
+    if (afterDet >= lower.length || !isTagNameBoundary(lower[afterDet])) {
+      pos = afterDet;
+      continue;
+    }
+    const detTagEnd = lower.indexOf('>', afterDet);
+    if (detTagEnd < 0) break;
+    let sumStart = detTagEnd + 1;
+    while (sumStart < lower.length && (lower[sumStart] === ' ' || lower[sumStart] === '\t' || lower[sumStart] === '\n' || lower[sumStart] === '\r')) {
+      sumStart++;
+    }
+    if (!lower.startsWith('<summary', sumStart) || sumStart + 8 >= lower.length || !isTagNameBoundary(lower[sumStart + 8])) {
+      pos = detTagEnd + 1;
+      continue;
+    }
+    const sumTagEnd = lower.indexOf('>', sumStart + 8);
+    if (sumTagEnd < 0) break;
+    const sumClose = lower.indexOf('</summary>', sumTagEnd + 1);
+    if (sumClose < 0) break;
+    const sumInner = text.slice(sumTagEnd + 1, sumClose);
+    if (/[\r\n]/.test(sumInner) || !/runtime\s+interface/i.test(sumInner)) {
+      pos = sumClose + 10;
+      continue;
+    }
+    const detClose = lower.indexOf('</details>', sumClose + 10);
+    if (detClose < 0) break;
+    spans.push({ start: detOpen, end: detClose + 10, bodyStart: sumClose + 10, bodyEnd: detClose });
+    pos = detClose + 10;
+  }
+
+  const insideDetailsSpan = offset => spans.some(s => offset >= s.start && offset < s.end);
+
+  // 2. Linear line-based scan for `## Runtime interface` headings through next heading or EOF.
+  let lineStart = 0;
+  let activeFence = null;
+  let openHeading = null;
+  while (lineStart <= text.length) {
+    const nl = text.indexOf('\n', lineStart);
+    const lineEnd = nl < 0 ? text.length : nl;
+    const nextStart = nl < 0 ? text.length + 1 : nl + 1;
+    const line = text.slice(lineStart, lineEnd).replace(/\r$/, '');
+
+    if (insideDetailsSpan(lineStart)) {
+      if (openHeading) {
+        spans.push({ ...openHeading, end: lineStart, bodyEnd: lineStart });
+        openHeading = null;
+      }
+      activeFence = null;
+      lineStart = nextStart;
+      continue;
+    }
+
+    if (activeFence) {
+      const closeMatch = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      if (closeMatch && closeMatch[1][0] === activeFence.char && closeMatch[1].length >= activeFence.len) {
+        activeFence = null;
+      }
+      lineStart = nextStart;
+      continue;
+    }
+
+    const fenceOpen = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fenceOpen && !(fenceOpen[1][0] === '`' && fenceOpen[2].includes('`'))) {
+      activeFence = { char: fenceOpen[1][0], len: fenceOpen[1].length };
+      lineStart = nextStart;
+      continue;
+    }
+
+    if (openHeading) {
+      if (/^#{1,6}[ \t]+\S/.test(line)) {
+        spans.push({ ...openHeading, end: lineStart, bodyEnd: lineStart });
+        openHeading = null;
+        if (/^#{2,6}[ \t]+runtime[ \t]+interface[ \t]*$/i.test(line)) {
+          openHeading = { start: lineStart, bodyStart: nl < 0 ? text.length : nl + 1 };
+        }
+      }
+    } else if (/^#{2,6}[ \t]+runtime[ \t]+interface[ \t]*$/i.test(line)) {
+      openHeading = { start: lineStart, bodyStart: nl < 0 ? text.length : nl + 1 };
+    }
+
+    lineStart = nextStart;
+  }
+  if (openHeading) {
+    spans.push({ ...openHeading, end: text.length, bodyEnd: text.length });
+  }
+
+  spans.sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged = [];
+  for (const span of spans) {
+    if (!merged.length || span.start >= merged.at(-1).end) merged.push(span);
+  }
+  return merged;
+}
+
+function hasRuntimeInterfaceMetadata(raw) {
+  return findRuntimeInterfaceSpans(raw).length > 0;
 }
 
 function hasNativeOnlyFrontmatter(raw) {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(String(raw ?? ''));
-  if (!match) return false;
-  return /^\s*kind\s*:\s*(?:['"])?native-only(?:['"])?\s*(?:#.*)?$/im.test(match[1]);
+  const fm = findFrontmatterRange(raw);
+  if (!fm) return false;
+  const body = String(raw ?? '').slice(fm.bodyStart, fm.bodyEnd);
+  return /^\s*kind\s*:\s*(?:['"])?native-only(?:['"])?\s*(?:#.*)?$/im.test(body);
 }
 
 function extractRuntimeInterfaceObjects(raw) {
   const text = String(raw ?? '');
-  const regions = [];
-  const detailsRe = /<details\b[^>]*>\s*<summary\b[^>]*>[^\r\n]*runtime\s+interface[^\r\n]*<\/summary>([\s\S]*?)<\/details>/gi;
-  let m;
-  while ((m = detailsRe.exec(text)) !== null) regions.push(m[1]);
-  const headingRe = /^#{2,6}[ \t]+runtime[ \t]+interface[ \t]*\r?\n([\s\S]*?)(?=^#{1,6}[ \t]+\S|\s*$)/gim;
-  while ((m = headingRe.exec(text)) !== null) regions.push(m[1]);
+  const spans = findRuntimeInterfaceSpans(text);
+  if (!spans.length) return [];
   const objects = [];
-  for (const region of regions) {
-    const fenceRe = /```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```/gi;
-    let fm;
-    while ((fm = fenceRe.exec(region)) !== null) {
+  for (const span of spans) {
+    const { fences } = scanMarkdownLinesAndFences(text.slice(span.bodyStart, span.bodyEnd));
+    for (const fence of fences) {
+      if (fence.lang !== 'json' && fence.lang !== '') continue;
       try {
-        const parsed = JSON.parse(fm[1]);
+        const parsed = JSON.parse(fence.bodyLines.map(item => item.text).join('\n'));
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) objects.push(parsed);
       } catch {}
     }
@@ -175,32 +321,35 @@ function isNativeOnlyPrompt(raw) {
   return extractRuntimeInterfaceObjects(raw).some(obj => obj.kind === 'native-only');
 }
 
+function stripMetadataSpans(raw, preserveLines) {
+  const text = String(raw ?? '');
+  const ranges = [];
+  const fm = findFrontmatterRange(text);
+  if (fm) ranges.push({ start: fm.start, end: fm.end });
+  for (const span of findRuntimeInterfaceSpans(text)) {
+    ranges.push({ start: span.start, end: span.end });
+  }
+  if (!ranges.length) return text;
+  ranges.sort((a, b) => a.start - b.start || a.end - b.end);
+  let out = '';
+  let cursor = 0;
+  for (const range of ranges) {
+    const start = Math.max(range.start, cursor);
+    if (range.end <= start) continue;
+    out += text.slice(cursor, start);
+    if (preserveLines) out += blankPreservingLines(text.slice(start, range.end));
+    cursor = range.end;
+  }
+  out += text.slice(cursor);
+  return out;
+}
+
 function stripPromptMetadataPreservingLines(raw) {
-  let text = String(raw ?? '');
-  text = text.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, blankPreservingLines);
-  text = text.replace(
-    /<details\b[^>]*>\s*<summary\b[^>]*>[^\r\n]*runtime\s+interface[^\r\n]*<\/summary>[\s\S]*?<\/details>/gi,
-    blankPreservingLines,
-  );
-  text = text.replace(
-    /^#{2,6}[ \t]+runtime[ \t]+interface[ \t]*\r?\n[\s\S]*?(?=^#{1,6}[ \t]+\S|\s*$)/gim,
-    blankPreservingLines,
-  );
-  return text;
+  return stripMetadataSpans(raw, true);
 }
 
 export function stripPromptMetadata(raw) {
-  let text = String(raw ?? '');
-  text = text.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
-  text = text.replace(
-    /<details\b[^>]*>\s*<summary\b[^>]*>[^\r\n]*runtime\s+interface[^\r\n]*<\/summary>[\s\S]*?<\/details>/gi,
-    '',
-  );
-  text = text.replace(
-    /^#{2,6}[ \t]+runtime[ \t]+interface[ \t]*\r?\n[\s\S]*?(?=^#{1,6}[ \t]+\S|\s*$)/gim,
-    '',
-  );
-  return text;
+  return stripMetadataSpans(raw, false);
 }
 
 function countPromptProseLines(raw) {
@@ -385,7 +534,7 @@ function isSingleCallSpan(span, openIdx) {
   return false;
 }
 
-function isValidPortCandidate(port, op, sqlSchemaColumns = EMPTY_STRING_SET) {
+function isValidPortCandidate(port, op, sqlSchemaColumns = EMPTY_STRING_SET, declaredPortPrefixes = EMPTY_STRING_SET) {
   if (port.length < 2 || op.length < 2) return false;
   if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) return false;
   const portLower = port.toLowerCase();
@@ -394,40 +543,96 @@ function isValidPortCandidate(port, op, sqlSchemaColumns = EMPTY_STRING_SET) {
   if (NON_PORT_FILE_EXTENSIONS.has(opLower)) return false;
   if (NON_PORT_EXACT_FILENAMES.has(fullLower)) return false;
   if (NON_PORT_TLDS.has(opLower)) return false;
-  if (NON_PORT_PREFIXES.has(portLower)) return false;
+  if (NON_PORT_PREFIXES.has(portLower) && !declaredPortPrefixes.has(port)) return false;
   if (NON_PORT_JS_MEMBERS.has(op)) return false;
   if (sqlSchemaColumns.has(fullLower)) return false;
   return true;
 }
 
 function stripUrlsAndMarkdownLinks(line) {
-  let out = String(line ?? '').replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ');
-  out = out.replace(/\[([^\[\]\r\n]*)\]\(([^()\r\n]*)\)/g, (_m, label) => ` ${label} `);
+  let out = String(line ?? '');
+  if (out.includes('://')) {
+    const parts = [];
+    let pos = 0;
+    while (pos < out.length) {
+      const idx = out.indexOf('://', pos);
+      if (idx < 0) {
+        parts.push(out.slice(pos));
+        break;
+      }
+      let schemeStart = idx;
+      const minStart = Math.max(pos, idx - 33);
+      while (schemeStart > minStart && /[A-Za-z0-9+.-]/.test(out[schemeStart - 1])) schemeStart--;
+      const hasPriorSchemeChar = schemeStart > pos && /[A-Za-z0-9+.-]/.test(out[schemeStart - 1]);
+      const scheme = out.slice(schemeStart, idx);
+      if (!hasPriorSchemeChar && /^[a-z][a-z0-9+.-]{0,31}$/i.test(scheme)) {
+        parts.push(out.slice(pos, schemeStart), ' ');
+        let urlEnd = idx + 3;
+        while (urlEnd < out.length && !/\s/.test(out[urlEnd])) urlEnd++;
+        pos = urlEnd;
+      } else {
+        parts.push(out.slice(pos, idx + 3));
+        pos = idx + 3;
+      }
+    }
+    out = parts.join('');
+  }
+  if (out.includes('](')) {
+    out = out.replace(/\[([^\[\]\r\n]*)\]\(([^()\r\n]*)\)/g, (_m, label) => ` ${label} `);
+  }
   return out;
 }
 
 function extractInlineBacktickSpans(line) {
+  if (!line.includes('`')) return { spans: [], outside: line };
   const spans = [];
-  let outside = '';
+  const outsideParts = [];
   let i = 0;
   while (i < line.length) {
-    if (line[i] !== '`') {
-      outside += line[i++];
-      continue;
-    }
-    let ticks = 0;
-    while (i + ticks < line.length && line[i + ticks] === '`') ticks++;
-    const delim = '`'.repeat(ticks);
-    const closeIdx = line.indexOf(delim, i + ticks);
-    if (closeIdx < 0) {
-      outside += line.slice(i);
+    const tickPos = line.indexOf('`', i);
+    if (tickPos < 0) {
+      outsideParts.push(line.slice(i));
       break;
     }
-    spans.push(line.slice(i + ticks, closeIdx));
-    outside += ' ';
+    if (tickPos > i) outsideParts.push(line.slice(i, tickPos));
+    let ticks = 0;
+    while (tickPos + ticks < line.length && line[tickPos + ticks] === '`') ticks++;
+    const delim = '`'.repeat(ticks);
+    const closeIdx = line.indexOf(delim, tickPos + ticks);
+    if (closeIdx < 0) {
+      outsideParts.push(line.slice(tickPos));
+      break;
+    }
+    spans.push(line.slice(tickPos + ticks, closeIdx));
+    outsideParts.push(' ');
     i = closeIdx + ticks;
   }
-  return { spans, outside };
+  return { spans, outside: outsideParts.join('') };
+}
+
+function scanDottedPortTokens(text, onPair) {
+  if (!text.includes('.')) return;
+  if (text.includes('.{')) {
+    for (const m of text.matchAll(INLINE_BRACE_PORT_SCAN_RE)) {
+      for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) {
+        onPair(m[1], op);
+      }
+    }
+  }
+  const tokenRe = /[A-Za-z0-9_./:@-]+/g;
+  let m;
+  while ((m = tokenRe.exec(text)) !== null) {
+    let tok = m[0];
+    while (tok.endsWith('.')) tok = tok.slice(0, -1);
+    const dot = tok.indexOf('.');
+    if (dot <= 0 || dot !== tok.lastIndexOf('.')) continue;
+    if (tok.includes('/') || tok.includes(':') || tok.includes('@')) continue;
+    const port = tok.slice(0, dot);
+    const op = tok.slice(dot + 1);
+    if (SIMPLE_IDENT_RE.test(port) && SIMPLE_IDENT_RE.test(op)) {
+      onPair(port, op);
+    }
+  }
 }
 
 function splitMarkdownTableRow(line) {
@@ -439,90 +644,67 @@ function splitMarkdownTableRow(line) {
 }
 
 function isMarkdownTableSeparator(line) {
+  if (!line.includes('|') || !line.includes('--')) return false;
   return /^\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?$/.test(line.trim());
+}
+
+function scanSqlParenSegments(sql, openParenIdx) {
+  if (openParenIdx < 0 || sql[openParenIdx] !== '(') return [];
+  const segments = [];
+  let depth = 0;
+  let quote = null;
+  let segStart = openParenIdx + 1;
+  for (let i = openParenIdx; i < sql.length; i++) {
+    const ch = sql[i];
+    const next = sql[i + 1];
+    if (quote) {
+      if (ch === quote && next === quote) { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '-' && next === '-') {
+      const nl = sql.indexOf('\n', i + 2);
+      i = nl < 0 ? sql.length : nl;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      const end = sql.indexOf('*/', i + 2);
+      i = end < 0 ? sql.length : end + 1;
+      continue;
+    }
+    if (ch === '\'' || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+      if (depth === 0) {
+        segments.push(sql.slice(segStart, i));
+        return segments;
+      }
+    } else if (ch === ',' && depth === 1) {
+      segments.push(sql.slice(segStart, i));
+      segStart = i + 1;
+    }
+  }
+  return [];
 }
 
 function extractSqlSchemaColumns(fences) {
   const cols = new Set();
+  const createRe = /\bCREATE\s+(?:(?:TEMP(?:ORARY)?|UNLOGGED|VIRTUAL)\s+)*(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`\[]?[A-Za-z_][A-Za-z0-9_]*["`\]]?\.)?["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?(?:\s+USING\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\(/gi;
+  const alterAddRe = /\bALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:["`\[]?[A-Za-z_][A-Za-z0-9_]*["`\]]?\.)?["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?\s+ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?/gi;
+
   for (const fence of fences) {
     if (!SQL_FENCE_LANGS.has(fence.lang)) continue;
     const rawSql = fence.bodyLines.map(item => item.text).join('\n');
-    const createRe = /\bCREATE\s+(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:["`\[]?[A-Za-z_][A-Za-z0-9_]*["`\]]?\.)?["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?\s*\(/gi;
     let m;
+    createRe.lastIndex = 0;
     while ((m = createRe.exec(rawSql)) !== null) {
       const table = m[1].toLowerCase();
-      const openParen = createRe.lastIndex - 1;
-      let depth = 0;
-      let quote = null;
-      let bodyStart = openParen + 1;
-      let bodyEnd = -1;
-      for (let i = openParen; i < rawSql.length; i++) {
-        const ch = rawSql[i];
-        const next = rawSql[i + 1];
-        if (quote) {
-          if (ch === quote && next === quote) { i++; continue; }
-          if (ch === quote) quote = null;
-          continue;
-        }
-        if (ch === '-' && next === '-') {
-          const nl = rawSql.indexOf('\n', i + 2);
-          i = nl < 0 ? rawSql.length : nl;
-          continue;
-        }
-        if (ch === '/' && next === '*') {
-          const end = rawSql.indexOf('*/', i + 2);
-          i = end < 0 ? rawSql.length : end + 1;
-          continue;
-        }
-        if (ch === '\'' || ch === '"') {
-          quote = ch;
-          continue;
-        }
-        if (ch === '(') depth++;
-        else if (ch === ')') {
-          depth--;
-          if (depth === 0) {
-            bodyEnd = i;
-            break;
-          }
-        }
-      }
-      if (bodyEnd <= bodyStart) continue;
-      const body = rawSql.slice(bodyStart, bodyEnd);
-      const segments = [];
-      let segStart = 0;
-      depth = 0;
-      quote = null;
-      for (let i = 0; i < body.length; i++) {
-        const ch = body[i];
-        const next = body[i + 1];
-        if (quote) {
-          if (ch === quote && next === quote) { i++; continue; }
-          if (ch === quote) quote = null;
-          continue;
-        }
-        if (ch === '-' && next === '-') {
-          const nl = body.indexOf('\n', i + 2);
-          i = nl < 0 ? body.length : nl;
-          continue;
-        }
-        if (ch === '/' && next === '*') {
-          const end = body.indexOf('*/', i + 2);
-          i = end < 0 ? body.length : end + 1;
-          continue;
-        }
-        if (ch === '\'' || ch === '"') {
-          quote = ch;
-          continue;
-        }
-        if (ch === '(') depth++;
-        else if (ch === ')') depth = Math.max(0, depth - 1);
-        else if (ch === ',' && depth === 0) {
-          segments.push(body.slice(segStart, i));
-          segStart = i + 1;
-        }
-      }
-      segments.push(body.slice(segStart));
+      const segments = scanSqlParenSegments(rawSql, createRe.lastIndex - 1);
       for (const seg of segments) {
         const cleanedSeg = seg
           .replace(/--[^\r\n]*/g, ' ')
@@ -533,6 +715,12 @@ function extractSqlSchemaColumns(fences) {
         const col = colMatch[1].toLowerCase();
         if (!SQL_TABLE_CONSTRAINT_KEYWORDS.has(col)) cols.add(`${table}.${col}`);
       }
+    }
+    alterAddRe.lastIndex = 0;
+    while ((m = alterAddRe.exec(rawSql)) !== null) {
+      const table = m[1].toLowerCase();
+      const col = m[2].toLowerCase();
+      if (!SQL_TABLE_CONSTRAINT_KEYWORDS.has(col)) cols.add(`${table}.${col}`);
     }
   }
   return cols;
@@ -564,9 +752,93 @@ function extractDependencyLinkTargets(raw, promptPath) {
   return [...targets].sort();
 }
 
+function cleanSingleIdentifier(raw, { allowCallArgs = false } = {}) {
+  let s = String(raw ?? '').trim();
+  s = s.replace(/^\*\*|\*\*$/g, '').replace(/^`|`$/g, '').trim();
+  if (allowCallArgs) {
+    const paren = s.indexOf('(');
+    if (paren > 0 && isSingleCallSpan(s, paren)) s = s.slice(0, paren).trim();
+  }
+  if (s.length < 2 || VERSION_TOKEN_RE.test(s) || !SIMPLE_IDENT_RE.test(s)) return null;
+  return s;
+}
+
+function extractLeadingSimpleIdentifier(rest, { allowCallArgs = false } = {}) {
+  const trimmed = String(rest ?? '').trim();
+  if (!trimmed) return null;
+  const backtick = /^`([^`\r\n]+)`/.exec(trimmed);
+  if (backtick) {
+    const inner = backtick[1].trim();
+    if (inner.includes('.')) return null;
+    return cleanSingleIdentifier(inner, { allowCallArgs });
+  }
+  const bold = /^\*\*([^*\r\n]+)\*\*/.exec(trimmed);
+  if (bold) {
+    const inner = bold[1].trim();
+    if (inner.includes('.')) return null;
+    return cleanSingleIdentifier(inner, { allowCallArgs });
+  }
+  const bare = /^([a-z][a-zA-Z0-9_-]*)(?:\s*(\([^()\r\n]*\)))?(?=\s*(?::|—|–|->|=>|-\s|$))/.exec(trimmed);
+  if (!bare) return null;
+  if (bare[2] && !allowCallArgs) return null;
+  return cleanSingleIdentifier(bare[1], { allowCallArgs: false });
+}
+
+function extractOpsFromTableCell(cell) {
+  const ops = [];
+  const trimmed = String(cell ?? '').trim();
+  if (!trimmed) return ops;
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (ch === ',' || ch === '/' || ch === ';')) {
+      parts.push(trimmed.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(trimmed.slice(start));
+  for (const part of parts) {
+    const ident = cleanSingleIdentifier(part, { allowCallArgs: true });
+    if (ident) ops.push(ident);
+  }
+  return ops;
+}
+
+function classifyDependencyTable(headers, subheadingPort = null) {
+  let portNameCol = -1;
+  let opCol = -1;
+  for (let c = 0; c < headers.length; c++) {
+    const h = headers[c];
+    if (PORT_TABLE_COL_EXCLUDE_RE.test(h) && !DEP_TABLE_PORT_NAME_COL_RE.test(h) && !DEP_TABLE_OP_COL_RE.test(h)) continue;
+    if (opCol < 0 && DEP_TABLE_OP_COL_RE.test(h) && !DEP_TABLE_PORT_NAME_COL_RE.test(h)) {
+      opCol = c;
+    } else if (portNameCol < 0 && DEP_TABLE_PORT_NAME_COL_RE.test(h) && !DEP_TABLE_OP_COL_RE.test(h) && !PORT_TABLE_COL_EXCLUDE_RE.test(h)) {
+      portNameCol = c;
+    }
+  }
+  if (portNameCol >= 0 && opCol >= 0) return { portNameCol, opCol, subheadingPort: null };
+  if (subheadingPort && opCol >= 0) return { portNameCol: -1, opCol, subheadingPort };
+  return null;
+}
+
 function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
   const mentioned = new Set();
   const display = new Set();
+  const addDeclaredPair = (port, op) => {
+    if (port.length < 2 || op.length < 2) return;
+    if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) return;
+    const opLower = op.toLowerCase();
+    const fullLower = `${port.toLowerCase()}.${opLower}`;
+    if (NON_PORT_FILE_EXTENSIONS.has(opLower) || NON_PORT_EXACT_FILENAMES.has(fullLower) || NON_PORT_TLDS.has(opLower)) return;
+    const full = `${port}.${op}`;
+    mentioned.add(full);
+    display.add(full);
+  };
+
   if (isPrompt) {
     for (const iface of extractRuntimeInterfaceObjects(raw)) {
       if (!Array.isArray(iface.resources)) continue;
@@ -585,6 +857,109 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
 
   const cleaned = stripPromptMetadata(raw);
   const { proseLines, fences } = scanMarkdownLinesAndFences(cleaned);
+
+  // 1. Structural declarations in proseLines: split-column tables, nested bullets under ## Ports, and subheadings under ## Ports.
+  let inPortsSection = false;
+  let portsSectionDepth = 0;
+  let subheadingPort = null;
+  let subheadingDepth = 0;
+  let bulletPort = null;
+  let bulletIndent = -1;
+  let inTable = false;
+  let tableSpec = null;
+
+  for (let idx = 0; idx < proseLines.length; idx++) {
+    const line = proseLines[idx].text;
+    const headingMatch = /^ {0,3}(#{2,6})\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      const depth = headingMatch[1].length;
+      const title = headingMatch[2].trim();
+      inTable = false;
+      tableSpec = null;
+      bulletPort = null;
+      bulletIndent = -1;
+      if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title)) {
+        inPortsSection = true;
+        portsSectionDepth = depth;
+        subheadingPort = null;
+        subheadingDepth = 0;
+      } else if (inPortsSection && depth > portsSectionDepth) {
+        const cleanedTitle = title.replace(/\b(?:port|resource|adapter|interface)\b/gi, '').trim();
+        const ident = cleanSingleIdentifier(cleanedTitle, { allowCallArgs: false });
+        if (ident) {
+          subheadingPort = ident;
+          subheadingDepth = depth;
+        } else if (depth <= subheadingDepth) {
+          subheadingPort = null;
+          subheadingDepth = 0;
+        }
+      } else if (depth <= portsSectionDepth) {
+        inPortsSection = false;
+        portsSectionDepth = 0;
+        subheadingPort = null;
+        subheadingDepth = 0;
+      }
+      continue;
+    }
+
+    if (line.includes('|') && idx + 1 < proseLines.length && isMarkdownTableSeparator(proseLines[idx + 1].text)) {
+      const headers = splitMarkdownTableRow(line) ?? [];
+      inTable = true;
+      tableSpec = classifyDependencyTable(headers, subheadingPort);
+      bulletPort = null;
+      bulletIndent = -1;
+      continue;
+    }
+    if (inTable) {
+      if (isMarkdownTableSeparator(line)) continue;
+      if (!line.includes('|')) {
+        inTable = false;
+        tableSpec = null;
+      } else {
+        if (tableSpec) {
+          const cells = splitMarkdownTableRow(line) ?? [];
+          const portName = tableSpec.portNameCol >= 0
+            ? cleanSingleIdentifier(cells[tableSpec.portNameCol], { allowCallArgs: false })
+            : tableSpec.subheadingPort;
+          if (portName && tableSpec.opCol < cells.length) {
+            for (const op of extractOpsFromTableCell(cells[tableSpec.opCol])) {
+              addDeclaredPair(portName, op);
+            }
+          }
+        }
+        continue;
+      }
+    }
+
+    if (inPortsSection) {
+      const bm = BULLET_LINE_RE.exec(line);
+      if (bm) {
+        const indent = bm[1].replace(/\t/g, '  ').length;
+        const rest = bm[2].trim();
+        if (subheadingPort) {
+          const op = extractLeadingSimpleIdentifier(rest, { allowCallArgs: true });
+          if (op) addDeclaredPair(subheadingPort, op);
+        } else if (bulletPort && indent > bulletIndent) {
+          const op = extractLeadingSimpleIdentifier(rest, { allowCallArgs: true });
+          if (op) addDeclaredPair(bulletPort, op);
+        } else {
+          const parentIdent = extractLeadingSimpleIdentifier(rest, { allowCallArgs: false });
+          if (parentIdent) {
+            bulletPort = parentIdent;
+            bulletIndent = indent;
+          } else {
+            bulletPort = null;
+            bulletIndent = -1;
+          }
+        }
+      } else if (line.trim()) {
+        bulletPort = null;
+        bulletIndent = -1;
+      }
+    }
+  }
+
+  // 2. Inline dotted `<port>.<op>` and `<port>.{op1, op2}` declarations across prose and schema fences.
   const scanLines = proseLines.map(item => item.text);
   for (const fence of fences) {
     if (!isPrompt || DECLARATIVE_SCHEMA_FENCE_LANGS.has(fence.lang)) {
@@ -593,122 +968,250 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
   }
 
   for (const line of scanLines) {
+    if (!line.includes('.')) continue;
     const stripped = stripUrlsAndMarkdownLinks(line);
-    for (const m of stripped.matchAll(INLINE_BRACE_PORT_SCAN_RE)) {
-      const port = m[1];
-      for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) {
-        if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) continue;
-        const full = `${port}.${op}`;
-        mentioned.add(full);
-        if (isValidPortCandidate(port, op)) display.add(full);
-      }
-    }
-    for (const m of stripped.matchAll(INLINE_PORT_OP_SCAN_RE)) {
-      const port = m[1];
-      const op = m[2];
-      if (port.length < 2 || op.length < 2) continue;
-      if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) continue;
+    scanDottedPortTokens(stripped, (port, op) => {
+      if (port.length < 2 || op.length < 2) return;
+      if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) return;
       const opLower = op.toLowerCase();
       const fullLower = `${port.toLowerCase()}.${opLower}`;
-      if (NON_PORT_FILE_EXTENSIONS.has(opLower) || NON_PORT_EXACT_FILENAMES.has(fullLower) || NON_PORT_TLDS.has(opLower)) continue;
+      if (NON_PORT_FILE_EXTENSIONS.has(opLower) || NON_PORT_EXACT_FILENAMES.has(fullLower) || NON_PORT_TLDS.has(opLower)) return;
       const full = `${port}.${op}`;
       mentioned.add(full);
       if (isValidPortCandidate(port, op)) display.add(full);
-    }
+    });
   }
   return { mentioned, display };
 }
 
-function extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns) {
+function isDomainPortWiringHeading(title) {
+  return !NETWORK_PORT_HEADING_RE.test(title) && DOMAIN_PORT_HEADING_RE.test(title);
+}
+
+function hasDomainPortWiringCue(text) {
+  const raw = String(text ?? '');
+  if (!DOMAIN_PORT_CUE_RE.test(raw)) return false;
+  if (!/(?:port|bind)/i.test(raw)) return true;
+  let scrubbed = raw;
+  for (const re of NETWORK_PORT_PHRASE_PATTERNS) {
+    scrubbed = scrubbed.replace(re, ' ');
+  }
+  return DOMAIN_PORT_CUE_RE.test(scrubbed);
+}
+
+function classifyNativeTable(headers, inPortSection) {
+  const portCols = [];
+  let portNameCol = -1;
+  let opCol = -1;
+  for (let c = 0; c < headers.length; c++) {
+    const h = headers[c];
+    if (PORT_TABLE_COL_EXCLUDE_RE.test(h)) continue;
+    const isPortCol = PORT_TABLE_COL_PORT_RE.test(h) || (inPortSection && PORT_TABLE_COL_IN_SECTION_RE.test(h));
+    if (isPortCol) portCols.push(c);
+    if (opCol < 0 && DEP_TABLE_OP_COL_RE.test(h) && !DEP_TABLE_PORT_NAME_COL_RE.test(h)) {
+      opCol = c;
+    } else if (portNameCol < 0 && DEP_TABLE_PORT_NAME_COL_RE.test(h) && !DEP_TABLE_OP_COL_RE.test(h)) {
+      portNameCol = c;
+    }
+  }
+  const splitPair = portNameCol >= 0 && opCol >= 0 ? { portNameCol, opCol } : null;
+  if (!portCols.length && !splitPair) return null;
+  return { portCols, splitPair };
+}
+
+function extractLeadingBulletPort(rest) {
+  const trimmed = String(rest ?? '').trim();
+  if (!trimmed) return null;
+  const backtick = /^`([^`\r\n]+)`/.exec(trimmed);
+  if (backtick) {
+    const span = backtick[1].trim();
+    let m = BARE_PORT_OP_RE.exec(span);
+    if (m) return [m[1], m[2]];
+    m = CALL_PORT_OP_RE.exec(span);
+    if (m && isSingleCallSpan(span, m[0].length - 1)) return [m[1], m[2]];
+    return null;
+  }
+  const bare = /^([a-z][a-zA-Z0-9_-]*)\.([a-z][a-zA-Z0-9_-]*)(?:\s*\([^()\r\n]*\))?(?=\s*(?::|—|–|->|=>|-\s|$))/.exec(trimmed);
+  return bare ? [bare[1], bare[2]] : null;
+}
+
+function extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns, { mentionedInDeps = EMPTY_STRING_SET, declaredPortPrefixes = EMPTY_STRING_SET } = {}) {
   const firstLineByPort = new Map();
   const recordPort = (port, op, lineNo) => {
-    if (!isValidPortCandidate(port, op, sqlSchemaColumns)) return;
+    if (!isValidPortCandidate(port, op, sqlSchemaColumns, declaredPortPrefixes)) return;
     const key = `${port}.${op}`;
     if (!firstLineByPort.has(key)) firstLineByPort.set(key, lineNo);
   };
 
+  const scanBacktickSpans = (spans, lineNo, { onlyDeclaredPrefixes = false } = {}) => {
+    for (const rawSpan of spans) {
+      const span = rawSpan.trim();
+      if (!span) continue;
+      let m = BARE_PORT_OP_RE.exec(span);
+      if (m) {
+        if (!onlyDeclaredPrefixes || declaredPortPrefixes.has(m[1])) recordPort(m[1], m[2], lineNo);
+        continue;
+      }
+      m = CALL_PORT_OP_RE.exec(span);
+      if (m && isSingleCallSpan(span, m[0].length - 1)) {
+        if (!onlyDeclaredPrefixes || declaredPortPrefixes.has(m[1])) recordPort(m[1], m[2], lineNo);
+        continue;
+      }
+      m = BRACE_PORT_OP_RE.exec(span);
+      if (m) {
+        if (!onlyDeclaredPrefixes || declaredPortPrefixes.has(m[1])) {
+          for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) {
+            recordPort(m[1], op, lineNo);
+          }
+        }
+      }
+    }
+  };
+
+  const scanUnbacktickedText = (chunk, lineNo) => {
+    if (!chunk.includes('.')) return;
+    const cleanedChunk = stripUrlsAndMarkdownLinks(chunk);
+    scanDottedPortTokens(cleanedChunk, (port, op) => recordPort(port, op, lineNo));
+  };
+
+  const scanScopedChunk = (chunk, lineNo) => {
+    const { spans, outside } = extractInlineBacktickSpans(chunk);
+    scanBacktickSpans(spans, lineNo);
+    scanUnbacktickedText(outside, lineNo);
+  };
+
   let inPortSection = false;
   let portSectionDepth = 0;
-  let activePortColIndexes = null;
+  let inMarkdownTable = false;
+  let activeTableSpec = null;
+  let inCueBulletList = false;
+  let pendingBulletGroup = [];
+
+  const flushBulletGroup = () => {
+    if (!pendingBulletGroup.length) return;
+    const hasKnownSibling = pendingBulletGroup.some(item => item.lead && mentionedInDeps.has(`${item.lead[0]}.${item.lead[1]}`));
+    for (const item of pendingBulletGroup) {
+      if (hasKnownSibling && item.lead) {
+        recordPort(item.lead[0], item.lead[1], item.lineNo);
+      } else {
+        scanBacktickSpans(item.spans, item.lineNo, { onlyDeclaredPrefixes: true });
+      }
+    }
+    pendingBulletGroup = [];
+  };
 
   for (let idx = 0; idx < proseLines.length; idx++) {
     const { lineNo, text: line } = proseLines[idx];
     const headingMatch = /^ {0,3}(#{2,6})\s+(.+)$/.exec(line);
     if (headingMatch) {
+      flushBulletGroup();
       const depth = headingMatch[1].length;
       const title = headingMatch[2].trim();
-      if (PORT_WIRING_HEADING_RE.test(title)) {
+      if (isDomainPortWiringHeading(title)) {
         inPortSection = true;
         portSectionDepth = depth;
       } else if (depth <= portSectionDepth) {
         inPortSection = false;
         portSectionDepth = 0;
       }
-      activePortColIndexes = null;
+      inMarkdownTable = false;
+      activeTableSpec = null;
+      inCueBulletList = false;
       continue;
     }
 
     if (line.includes('|') && idx + 1 < proseLines.length && isMarkdownTableSeparator(proseLines[idx + 1].text)) {
+      flushBulletGroup();
       const headers = splitMarkdownTableRow(line) ?? [];
-      const portCols = [];
-      for (let c = 0; c < headers.length; c++) {
-        if (PORT_TABLE_COL_INCLUDE_RE.test(headers[c]) && !PORT_TABLE_COL_EXCLUDE_RE.test(headers[c])) {
-          portCols.push(c);
-        }
-      }
-      activePortColIndexes = portCols.length ? portCols : null;
+      inMarkdownTable = true;
+      activeTableSpec = classifyNativeTable(headers, inPortSection);
+      inCueBulletList = false;
       continue;
     }
-    if (activePortColIndexes && isMarkdownTableSeparator(line)) continue;
-    if (activePortColIndexes && !line.includes('|')) activePortColIndexes = null;
-
-    // Channel 1: explicit inline backticked `<port>.<op>`, `<port>.<op>(...)`, or `<port>.{op1, op2}`
-    const { spans, outside } = extractInlineBacktickSpans(line);
-    for (const rawSpan of spans) {
-      const span = rawSpan.trim();
-      if (!span) continue;
-      let m = BARE_PORT_OP_RE.exec(span);
-      if (m) {
-        recordPort(m[1], m[2], lineNo);
-        continue;
-      }
-      m = CALL_PORT_OP_RE.exec(span);
-      if (m && isSingleCallSpan(span, m[0].length - 1)) {
-        recordPort(m[1], m[2], lineNo);
-        continue;
-      }
-      m = BRACE_PORT_OP_RE.exec(span);
-      if (m) {
-        for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) {
-          recordPort(m[1], op, lineNo);
+    if (inMarkdownTable) {
+      if (isMarkdownTableSeparator(line)) continue;
+      if (!line.includes('|')) {
+        inMarkdownTable = false;
+        activeTableSpec = null;
+      } else {
+        if (activeTableSpec) {
+          const cells = splitMarkdownTableRow(line) ?? [];
+          for (const colIdx of activeTableSpec.portCols) {
+            if (colIdx < cells.length) scanScopedChunk(cells[colIdx], lineNo);
+          }
+          if (activeTableSpec.splitPair) {
+            const { portNameCol, opCol } = activeTableSpec.splitPair;
+            if (portNameCol < cells.length && opCol < cells.length) {
+              const portName = cleanSingleIdentifier(cells[portNameCol], { allowCallArgs: false });
+              if (portName) {
+                for (const op of extractOpsFromTableCell(cells[opCol])) {
+                  recordPort(portName, op, lineNo);
+                }
+              }
+            }
+          }
         }
+        continue;
       }
     }
 
-    // Channel 2: unbackticked port references in explicit port-wiring positions
-    const scanUnbacktickedText = chunk => {
-      const cleanedChunk = stripUrlsAndMarkdownLinks(chunk);
-      for (const m of cleanedChunk.matchAll(INLINE_BRACE_PORT_SCAN_RE)) {
-        for (const op of m[2].split(',').map(s => s.trim()).filter(Boolean)) {
-          recordPort(m[1], op, lineNo);
-        }
-      }
-      for (const m of cleanedChunk.matchAll(INLINE_PORT_OP_SCAN_RE)) {
-        recordPort(m[1], m[2], lineNo);
-      }
-    };
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushBulletGroup();
+      continue;
+    }
 
-    if (activePortColIndexes) {
-      const cells = splitMarkdownTableRow(outside);
-      if (cells) {
-        for (const colIdx of activePortColIndexes) {
-          if (colIdx < cells.length) scanUnbacktickedText(cells[colIdx]);
+    const bulletMatch = BULLET_LINE_RE.exec(line);
+    const { spans, outside } = extractInlineBacktickSpans(line);
+    const lineHasCue = hasDomainPortWiringCue(outside);
+
+    if (bulletMatch) {
+      const lead = extractLeadingBulletPort(bulletMatch[2]);
+      if (inPortSection || inCueBulletList || lineHasCue) {
+        flushBulletGroup();
+        if (lead) {
+          // On a leading-port bullet (`- \`port.op\`: description`), scan the LHS fully and only high-signal declared prefixes on the RHS.
+          const body = bulletMatch[2];
+          const sepIdx = (() => {
+            let inTicks = false;
+            for (let i = 0; i < body.length; i++) {
+              if (body[i] === '`') { inTicks = !inTicks; continue; }
+              if (inTicks) continue;
+              if (body[i] === ':' || body[i] === '—' || body[i] === '–') return i;
+              if ((body[i] === '-' || body[i] === '=') && body[i + 1] === '>') return i;
+            }
+            return -1;
+          })();
+          if (sepIdx > 0) {
+            scanScopedChunk(body.slice(0, sepIdx), lineNo);
+            const rhs = extractInlineBacktickSpans(body.slice(sepIdx + 1));
+            scanBacktickSpans(rhs.spans, lineNo, { onlyDeclaredPrefixes: true });
+          } else {
+            scanBacktickSpans(spans, lineNo);
+            scanUnbacktickedText(outside, lineNo);
+          }
+        } else {
+          scanBacktickSpans(spans, lineNo);
+          scanUnbacktickedText(outside, lineNo);
         }
+      } else {
+        pendingBulletGroup.push({ lineNo, lead, spans });
       }
-    } else if (inPortSection || PORT_BULLET_LEAD_RE.test(outside) || PORT_WIRING_CUE_RE.test(outside)) {
-      scanUnbacktickedText(outside);
+      continue;
+    }
+
+    flushBulletGroup();
+    if (inPortSection || lineHasCue) {
+      scanBacktickSpans(spans, lineNo);
+      scanUnbacktickedText(outside, lineNo);
+      inCueBulletList = lineHasCue || inPortSection;
+    } else {
+      inCueBulletList = false;
+      // Outside port-wiring sections/tables/cues: only flag high-signal <declaredPrefix>.<unknownOp> in backticks.
+      scanBacktickSpans(spans, lineNo, { onlyDeclaredPrefixes: true });
     }
   }
+  flushBulletGroup();
 
   return [...firstLineByPort.entries()]
     .map(([port, line]) => ({ port, line }))
@@ -725,16 +1228,21 @@ function collectNativeOnlyPortParityFindings(text, dependencySources, { path = '
 
   const mentionedInDeps = new Set();
   const displayPorts = new Set();
+  const declaredPortPrefixes = new Set();
   for (const dep of deps) {
     const { mentioned, display } = extractDeclaredPortsFromDependency(dep.text, { isPrompt: dep.isPrompt !== false });
     for (const p of mentioned) mentionedInDeps.add(p);
-    for (const p of display) displayPorts.add(p);
+    for (const p of display) {
+      displayPorts.add(p);
+      const dot = p.indexOf('.');
+      if (dot > 0) declaredPortPrefixes.add(p.slice(0, dot));
+    }
   }
 
   const cleaned = stripPromptMetadataPreservingLines(text);
   const { fences, proseLines } = scanMarkdownLinesAndFences(cleaned);
   const sqlSchemaColumns = extractSqlSchemaColumns(fences);
-  const refs = extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns);
+  const refs = extractNativeOnlyPortReferences(proseLines, sqlSchemaColumns, { mentionedInDeps, declaredPortPrefixes });
   if (!refs.length) return [];
 
   const linkedLabels = (dependencyPaths.length ? dependencyPaths : deps.map(d => d.path).filter(Boolean)).sort();

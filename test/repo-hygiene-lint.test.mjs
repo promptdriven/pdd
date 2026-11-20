@@ -20,7 +20,7 @@ import {
   loadProjectLintConfig,
   stripPromptMetadata,
 } from '../src/repo-hygiene-lint.mjs';
-import { runCheck, runtimePreflightSlice } from '../src/runtime-seam.mjs';
+import { lint as seamLint, runCheck, runtimePreflightSlice } from '../src/runtime-seam.mjs';
 import { lintStories, lintStory } from '../src/story-lint.mjs';
 import { portsFor, sink } from './helpers/runtime-fake.mjs';
 
@@ -1604,4 +1604,245 @@ test('3574 + 3578: default-on native-only-unknown-port fails closed without pdd.
   assert.equal(fixedParsed.exit_code, 0);
   assert.deepEqual(fixedParsed.problems, []);
   assert.ok(fixedParsed.warnings.some(w => w.includes('[fake-test-prompt-read]')), 'warn-only rule still never fails exit code');
+});
+
+test('3574 adversarial review fixes: linear ReDoS safety, scoped table/prose extraction, split/nested/subheading port declarations, Runtime interface headings, SQL DDL extensions and single-scan seam collector', async t => {
+  // P0-1: No O(N^2) URL/token backtracking and no O(N^3) unclosed <details> backtracking.
+  const bigWire = `---\nkind: native-only\nreason: Perf check.\n---\n\n# Perf\n\nwire ${'a.b.'.repeat(25000)} https://example.com\n`;
+  const t0 = performance.now();
+  const bigRes = lintNativeOnlyPortParity(bigWire, ['# Dep\nUses `store.load`.\n']);
+  const bigMs = performance.now() - t0;
+  assert.deepEqual(bigRes, []);
+  assert.ok(bigMs < 500, `expected linear scan on 100KB a.b. input, got ${bigMs.toFixed(1)}ms`);
+
+  const unclosedDetails = '<details><summary>Runtime interface</summary>'.repeat(400);
+  const t1 = performance.now();
+  assert.equal(stripPromptMetadata(unclosedDetails), unclosedDetails);
+  assert.deepEqual(lintPromptCodeBlocks(unclosedDetails, { path: 'prompts/evil.prompt.md' }), []);
+  const detailParity = lintNativeOnlyPortParity(
+    '---\nkind: native-only\nreason: Perf check.\n---\n\n# Service\n\n## Ports\n- `store.load`\n',
+    [unclosedDetails],
+  );
+  const detailMs = performance.now() - t1;
+  assert.equal(detailParity.length, 1);
+  assert.ok(detailMs < 500, `expected linear scan on 400 unclosed details tags, got ${detailMs.toFixed(1)}ms`);
+
+  // P1-1: Zero false positives on non-port tables, excluded columns, TCP/HTTP network port prose, expanded extensions & framework prefixes;
+  // high-signal <declaredPrefix>.<unknownOp> still caught in general prose; split/nested/subheading port declarations recognized.
+  const structuredDep = [
+    '# Ledger domain',
+    '',
+    'Own `src/ledger.mjs`. Uses `store.load` and `store.save`.',
+    '',
+    '| Port | Operation | Description |',
+    '| --- | --- | --- |',
+    '| `ledger_state` | `read(id)` | Read state |',
+    '| `ledger_state` | `write(id, row)` | Write state |',
+    '',
+    '| Resource | Operation |',
+    '| --- | --- |',
+    '| `notifier` | `send, flush` |',
+    '',
+    '## Ports',
+    '',
+    '- `quota`',
+    '  - `check(tenant)`',
+    '  - `consume(tenant, n)`',
+    '',
+    '### `metrics_sink`',
+    '',
+    '- `record(name, value)`: record counter',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const cleanAdapter = [
+    '---',
+    'kind: native-only',
+    'reason: Runs FastAPI/uvicorn HTTP server and SQLite WAL storage.',
+    '---',
+    '',
+    '# Ledger HTTP & SQLite adapter',
+    '',
+    '## HTTP Port Binding',
+    '',
+    'Bind the server to port 8080 using `uvicorn.run`, `app.get`, `router.post`, `server.listen`, and `asyncio.run`.',
+    'Listen on TCP port 8080 and read `config.port`, `ctx.user`, `db.execute`, `pool.query`, `conn.commit`, `tx.rollback`, `sqlite3.connect`, `sqlalchemy.create_engine`, `httpx.post`, `requests.post`, `json.loads`, and `excluded.flag`.',
+    'Runtime files: `app.log`, `tls.key`, `server.cert`, `prod.env`, `app.wal`, `app.shm`, `api.service`, `sync.timer`, `app.socket`, `nginx.conf`, `env.example`.',
+    '',
+    '| Field | Type |',
+    '| --- | --- |',
+    '| `user.email` | string |',
+    '| `order.total_cents` | integer |',
+    '',
+    '| Table Column | Type |',
+    '| --- | --- |',
+    '| `audit_events.actor_id` | text |',
+    '',
+    '```sql',
+    'CREATE UNLOGGED TABLE ledger_cache (',
+    '  cache_key TEXT PRIMARY KEY,',
+    '  payload TEXT NOT NULL',
+    ');',
+    'CREATE VIRTUAL TABLE search_idx USING fts5(doc_id, body);',
+    'ALTER TABLE ledger_cache ADD COLUMN expires_at TEXT;',
+    '```',
+    '',
+    '## Port wiring',
+    '',
+    '| Port | SQL Column |',
+    '| --- | --- |',
+    '| `store.load` | `ledger_cache.cache_key` |',
+    '| `ledger_state.read` | `ledger_cache.expires_at` |',
+    '| `ledger_state.write` | `search_idx.body` |',
+    '| `notifier.send` | `unlisted.column` |',
+    '',
+    '- `notifier.flush`: flushes queued `payload.items` without failing on RHS field names.',
+    '- `quota.check`: validates quota using `ledger_cache.expires_at`.',
+    '- `quota.consume`: decrements quota.',
+    '- `metrics_sink.record`: writes to `search_idx.doc_id`.',
+    '',
+    '## Dependencies',
+    '- [ledger](ledger.prompt.md)',
+  ].join('\n');
+
+  assert.deepEqual(
+    lintNativeOnlyPortParity(cleanAdapter, [{ path: 'prompts/ledger.prompt.md', text: structuredDep }], {
+      path: 'prompts/ledger-adapter.prompt.md',
+    }),
+    [],
+  );
+
+  // High-signal <declaredPrefix>.<unknownOp> in general prose + dead port on SQL table name are still caught!
+  const adapterWithDeadOps = [
+    cleanAdapter,
+    '',
+    '## Background maintenance',
+    '',
+    'Nightly cleanup calls `store.purge(cutoff)` in general prose.',
+    '',
+    '## Bound ports',
+    '',
+    '- `search_idx.query`: undeclared port sharing a SQL virtual table name.',
+  ].join('\n');
+  const deadOpErrors = lintNativeOnlyPortParity(adapterWithDeadOps, [{ path: 'prompts/ledger.prompt.md', text: structuredDep }], {
+    path: 'prompts/ledger-adapter.prompt.md',
+  });
+  assert.equal(deadOpErrors.length, 2, deadOpErrors.join('\n'));
+  assert.ok(deadOpErrors.some(e => e.includes('"store.purge"')));
+  assert.ok(deadOpErrors.some(e => e.includes('"search_idx.query"')));
+
+  // P1-2: `## Runtime interface` heading extraction (both mid-file and EOF) works for stripPromptMetadata, dependency resources, and native-only classification.
+  const headingResourceDep = [
+    '# Heading interface checkable dep',
+    '',
+    'Own `src/dep.mjs`.',
+    '',
+    '## Runtime interface',
+    '',
+    '```json',
+    JSON.stringify({
+      resources: [
+        { name: 'vault', operations: [{ name: 'fetch' }, { name: 'rotate' }] },
+      ],
+    }, null, 2),
+    '```',
+    '',
+    '## Dependencies',
+    '',
+    'None.',
+  ].join('\n');
+
+  const strippedHeading = stripPromptMetadata(headingResourceDep);
+  assert.ok(strippedHeading.includes('# Heading interface checkable dep'));
+  assert.ok(strippedHeading.includes('## Dependencies'));
+  assert.ok(!strippedHeading.includes('vault'), '## Runtime interface JSON block must be stripped completely');
+
+  const vaultAdapter = [
+    '---',
+    'kind: native-only',
+    'reason: Calls live HSM.',
+    '---',
+    '',
+    '# Vault adapter',
+    '',
+    '## Ports',
+    '- `vault.fetch`: valid heading-interface resource op.',
+    '- `vault.destroy`: undeclared op.',
+    '',
+    '## Dependencies',
+    '- [dep](dep.prompt.md)',
+  ].join('\n');
+  const headingErrors = lintNativeOnlyPortParity(vaultAdapter, [{ path: 'prompts/dep.prompt.md', text: headingResourceDep }], {
+    path: 'prompts/vault-adapter.prompt.md',
+  });
+  assert.equal(headingErrors.length, 1, headingErrors.join('\n'));
+  assert.ok(headingErrors[0].includes('"vault.destroy"'));
+  assert.ok(!headingErrors[0].includes('"vault.fetch"'));
+
+  // P1-2 + P1-3: Repo test verifying heading-style native-only dep is skipped as non-checkable AND seam.lint invokes onProjectLintResult exactly once.
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-3574-adv-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const repo = join(scratch, 'repo');
+  const home = join(scratch, 'home');
+  const state = join(scratch, 'state');
+  for (const dir of [home, state, join(repo, 'prompts')]) mkdirSync(dir, { recursive: true });
+
+  writeFileSync(
+    join(repo, 'prompts/native-peer.prompt.md'),
+    [
+      '# Native peer with heading Runtime interface',
+      '',
+      'Own `src/native-peer.mjs`.',
+      '',
+      '## Runtime interface',
+      '',
+      '```json',
+      '{"kind":"native-only","reason":"Heading-style native-only peer."}',
+      '```',
+    ].join('\n') + '\n',
+  );
+  writeFileSync(
+    join(repo, 'prompts/only-native-dep.prompt.md'),
+    [
+      '---',
+      'kind: native-only',
+      'reason: Links only a heading-style native-only peer.',
+      '---',
+      '',
+      '# Wrapper',
+      '',
+      '## Ports',
+      '- `internal.call`: should not fail because linked peer is native-only.',
+      '',
+      '## Dependencies',
+      '- [native peer](native-peer.prompt.md)',
+    ].join('\n') + '\n',
+  );
+  writeFileSync(
+    join(repo, 'prompts/checkable.prompt.md'),
+    '# Checkable\n\nOwn `src/checkable.mjs`. Uses `store.load`.\n\n## Dependencies\n\nNone.\n',
+  );
+  writeFileSync(
+    join(repo, 'prompts/broken-adapter.prompt.md'),
+    '---\nkind: native-only\nreason: Native DB.\n---\n\n# Broken\n\n## Ports\n- `store.load`\n- `store.missing`\n\n## Dependencies\n- [checkable](checkable.prompt.md)\n',
+  );
+
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
+
+  const env = { HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: 'invalid' };
+  const collected = [];
+  const seamCode = await seamLint(
+    { cwd: repo, local: true },
+    { stdout: sink(), stderr: sink(), env, onProjectLintResult: res => collected.push(res) },
+  );
+  assert.equal(seamCode, 0);
+  assert.equal(collected.length, 1, 'seam.lint must run lintRepoProject exactly once');
+  assert.equal(collected[0].ok, false);
+  assert.equal(collected[0].errors.length, 1);
+  assert.ok(collected[0].errors[0].includes('prompts/broken-adapter.prompt.md') && collected[0].errors[0].includes('"store.missing"'));
+  assert.ok(!collected[0].errors.some(e => e.includes('only-native-dep.prompt.md')), 'heading-style native-only peer must be recognized as native-only');
 });

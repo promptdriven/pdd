@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 768120db54dadf45bc1e225351c040ce48b0d7ec6b1f9bc2a58ea60548803854).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 1a0fe2e349954b445b4bf87919decc1a8827521067c3e5c778f3766231b4b66c).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -2349,7 +2349,7 @@ export async function runCheck(input = {}, ports = {}) {
     { allRuns },
     { assessNativeEvidence, resultLines, usableResult },
     { lintSvgLayouts },
-    { lintRepoAntiPatterns },
+    { lintRepoProject },
     { compareScreen, formatScreenComparison },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
@@ -2389,35 +2389,40 @@ export async function runCheck(input = {}, ports = {}) {
   const cwd = effectiveInput?.cwd ?? process.cwd();
   const lazyOverlay = { cwd, ports, map: undefined };
 
+  const { onProjectLintResult, ...forwardPorts } = ports;
   return withScenarioOverlay(lazyOverlay, () => {
     const checkPorts = seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+      withPortDefaults(withEligibilityDefault(forwardPorts, readEvidenceEligibility), {
         headerPrompts,
         isTestOwnedPath,
         promptClaims,
         resolveOwners,
         allRuns,
         workflowBaseSha: ({ root, env: runEnv }) =>
-          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
+          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: forwardPorts.allRuns ?? allRuns }),
         assessNativeEvidence,
         usableResult,
         resultLines,
-        lintSvgLayouts: arg => [
-          ...lintSvgLayouts(arg),
-          ...lintRepoAntiPatterns(arg),
-          ...lintShortScenarioFiles(arg?.root, ports, {
-            checkCriteriaBindings: input?.options?.['--local'] === true,
-            words: commandWords(input),
-            cwd,
-          }),
-        ],
+        lintSvgLayouts: arg => {
+          const project = lintRepoProject(arg);
+          if (typeof onProjectLintResult === 'function') onProjectLintResult(project);
+          return [
+            ...lintSvgLayouts(arg),
+            ...project.warnings,
+            ...lintShortScenarioFiles(arg?.root, forwardPorts, {
+              checkCriteriaBindings: input?.options?.['--local'] === true,
+              words: commandWords(input),
+              cwd,
+            }),
+          ];
+        },
         compareScreen,
         formatScreenComparison,
-        redaction: seamRedaction(ports),
+        redaction: seamRedaction(forwardPorts),
       }),
       { cwd },
     );
-    attachRunCheckAdaptivePolling(checkPorts, ports);
+    attachRunCheckAdaptivePolling(checkPorts, forwardPorts);
     return runtimeRunCheck(effectiveInput, checkPorts);
   });
 }
