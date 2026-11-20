@@ -1,0 +1,377 @@
+{
+  "schema_version": "prompt-runtime.program-scenario.v1",
+  "story_path": "user_stories/metrics-v2-scorecard.md",
+  "criteria": [
+    {
+      "id": "ac-sha256-d2d31a99e3023205859592a936914fce8855422347de8f97",
+      "text": "A unified report names enabled repositories explicitly in the header, excludes turned-off repositories from unified counts and scope labels, and shows the live open issue count."
+    },
+    {
+      "id": "ac-sha256-43e666e225afe7a092303ba40ad14937f0df3fb27148fccf",
+      "text": "Each window computes its accumulated pool as the union of currently open issues, issues closed in the window, and issues taken in the window, so Pool is at least Taken, Taken is at least PRs, and PRs is at least Merged, with distinct pools for Last 24h and Week (Mon-Sun)."
+    },
+    {
+      "id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba",
+      "text": "Pull requests merged on GitHub after observe or stopped runs count as Merged, while unmerged pull requests stay under Unmerged PRs alongside the Before PR breakdown so Taken equals Before PR plus PRs and PRs equals Merged plus Unmerged PRs."
+    },
+    {
+      "id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89",
+      "text": "Funnel and Gates separates PR Gates over all pull requests (including E2E when recorded) from Prompt Checks over prompt-changing pull requests, and reports auto-detected regressions both in the overview table and in the regressions breakdown."
+    },
+    {
+      "id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e",
+      "text": "The overview includes a monthly Target row below Week (Mon-Sun) defaulting to >=90% conversion and 0.0% regressions, honors custom configured targets, and shows question marks for open and pool counts when live GitHub counts are unavailable."
+    },
+    {
+      "id": "ac-sha256-2c76f714087f67c6ef1f01c69bb1c6ef62249799af9ca15b",
+      "text": "Filtering explicitly by a turned-off repository still renders that repository's scorecard while keeping pre-pause runs and excluding runs recorded after it was paused."
+    }
+  ],
+  "initial_world": {},
+  "simulation": {},
+  "context": [],
+  "steps": [
+    {
+      "step_id": "unified-v2-overview-funnel-and-sandbox-exclusion",
+      "entry_path": "prompts/cli/metrics-model.prompt.md",
+      "operation": "calculateAutopilotMetrics",
+      "input": {
+        "now": "2026-11-19T18:00:00Z",
+        "timezone": "America/Los_Angeles",
+        "view": "overview",
+        "repos": [
+          "promptdriven/pdd",
+          "promptdriven/pocket",
+          "Serhan-Asad/pdd-autopilot-sandbox"
+        ],
+        "recording": {
+          "enabled": true,
+          "repos": [
+            { "repo": "serhan-asad/pdd-autopilot-sandbox", "enabled": false }
+          ],
+          "repoPausedSince": [
+            { "repo": "serhan-asad/pdd-autopilot-sandbox", "pausedSince": "2026-11-18T12:00:00Z" }
+          ],
+          "pausedIntervals": [
+            {
+              "repo": "serhan-asad/pdd-autopilot-sandbox",
+              "from": "2026-11-18T12:00:00Z",
+              "to": null
+            }
+          ]
+        },
+        "openIssues": [
+          { "repo": "promptdriven/pdd", "count": 4 },
+          { "repo": "promptdriven/pocket", "count": 2 },
+          { "repo": "Serhan-Asad/pdd-autopilot-sandbox", "count": 9 }
+        ],
+        "openIssueNumbers": [
+          { "repo": "promptdriven/pdd", "issues": [105, 106, 107, 108] },
+          { "repo": "promptdriven/pocket", "issues": [202, 203] },
+          { "repo": "Serhan-Asad/pdd-autopilot-sandbox", "issues": [1, 2, 3, 4, 5, 6, 7, 8, 9] }
+        ],
+        "closedIssues": [
+          { "repo": "promptdriven/pdd", "issue": 101, "closedAt": "2026-11-17T12:00:00Z" },
+          { "repo": "promptdriven/pdd", "issue": 102, "closedAt": "2026-11-18T22:00:00Z" },
+          { "repo": "promptdriven/pdd", "issue": 109, "closedAt": "2026-11-19T05:00:00Z" },
+          { "repo": "promptdriven/pdd", "issue": 110, "closedAt": "2026-11-17T09:00:00Z" },
+          { "repo": "promptdriven/pocket", "issue": 201, "closedAt": "2026-11-19T01:00:00Z" },
+          { "repo": "Serhan-Asad/pdd-autopilot-sandbox", "issue": 99, "closedAt": "2026-11-19T02:00:00Z" }
+        ],
+        "prStates": [
+          { "repo": "promptdriven/pdd", "pr": 301, "merged": true, "mergedAt": "2026-11-17T12:00:00Z", "state": "MERGED", "isDraft": false },
+          { "repo": "promptdriven/pdd", "pr": 302, "merged": true, "mergedAt": "2026-11-18T22:00:00Z", "state": "MERGED", "isDraft": false },
+          { "repo": "promptdriven/pdd", "pr": 303, "merged": true, "mergedAt": "2026-11-19T00:00:00Z", "state": "MERGED", "isDraft": false },
+          { "repo": "promptdriven/pdd", "pr": 304, "merged": false, "mergedAt": null, "state": "OPEN", "isDraft": false },
+          { "repo": "promptdriven/pocket", "pr": 401, "merged": true, "mergedAt": "2026-11-19T01:00:00Z", "state": "MERGED", "isDraft": false },
+          { "repo": "promptdriven/pocket", "pr": 402, "merged": false, "mergedAt": null, "state": "OPEN", "isDraft": false }
+        ],
+        "regressions": [
+          {
+            "repo": "promptdriven/pdd",
+            "pr": 301,
+            "issue": 101,
+            "reopened": false,
+            "reverted": false,
+            "regressionIssues": [3528]
+          }
+        ],
+        "runs": [
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 101,
+            "skill": "feature",
+            "startedAt": "2026-11-17T11:00:00Z",
+            "at": "2026-11-17T12:00:00Z",
+            "status": "merged",
+            "pr": 301,
+            "durationMinutes": 60,
+            "promptChanged": true,
+            "gates": { "runtime": "pass", "vectors": "pass", "formal": "pass", "suite": "pass", "review": "pass", "ci": "pass" },
+            "gateCounts": {
+              "runtime": { "passed": 1, "total": 1 },
+              "vectors": { "passed": 5, "total": 5 },
+              "formal": { "passed": 2, "total": 2 }
+            }
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 102,
+            "skill": "bug",
+            "startedAt": "2026-11-18T21:00:00Z",
+            "at": "2026-11-18T21:30:00Z",
+            "status": "would-merge",
+            "pr": 302,
+            "durationMinutes": 30,
+            "promptChanged": true,
+            "gates": { "runtime": "pass", "vectors": "pass", "formal": "pass", "suite": "pass", "review": "pass", "ci": "pass" },
+            "gateCounts": {
+              "runtime": { "passed": 1, "total": 1 },
+              "vectors": { "passed": 3, "total": 3 },
+              "formal": { "passed": 2, "total": 2 }
+            }
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 103,
+            "skill": "small-change",
+            "startedAt": "2026-11-18T23:00:00Z",
+            "at": "2026-11-18T23:20:00Z",
+            "status": "stopped",
+            "pr": 303,
+            "durationMinutes": 20,
+            "promptChanged": false,
+            "gates": { "runtime": "na", "vectors": "na", "formal": "na", "suite": "pass", "review": "pass", "ci": "pass" }
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 104,
+            "skill": "small-change",
+            "startedAt": "2026-11-19T02:00:00Z",
+            "at": "2026-11-19T02:15:00Z",
+            "status": "would-merge",
+            "pr": 304,
+            "durationMinutes": 15,
+            "promptChanged": false,
+            "gates": { "runtime": "na", "vectors": "na", "formal": "na", "suite": "pass", "review": "pass", "ci": "pass" }
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 105,
+            "skill": "feature",
+            "startedAt": "2026-11-19T17:30:00Z",
+            "at": "2026-11-19T17:30:00Z",
+            "status": "running"
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 106,
+            "skill": "bug",
+            "startedAt": "2026-11-17T15:00:00Z",
+            "at": "2026-11-17T15:20:00Z",
+            "status": "needs-person"
+          },
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 107,
+            "skill": "small-change",
+            "startedAt": "2026-11-17T16:00:00Z",
+            "at": "2026-11-17T16:10:00Z",
+            "status": "stopped"
+          },
+          {
+            "repo": "promptdriven/pocket",
+            "issue": 201,
+            "skill": "small-change",
+            "startedAt": "2026-11-19T00:30:00Z",
+            "at": "2026-11-19T01:00:00Z",
+            "status": "merged",
+            "pr": 401,
+            "durationMinutes": 30,
+            "promptChanged": false,
+            "gates": { "runtime": "na", "vectors": "na", "formal": "na", "suite": "pass", "review": "pass", "ci": "pass" }
+          },
+          {
+            "repo": "promptdriven/pocket",
+            "issue": 202,
+            "skill": "bug",
+            "startedAt": "2026-11-17T17:00:00Z",
+            "at": "2026-11-17T17:30:00Z",
+            "status": "ended",
+            "pr": 402,
+            "durationMinutes": 30,
+            "promptChanged": false,
+            "gates": { "runtime": "na", "vectors": "na", "formal": "na", "suite": "fail", "review": "pass", "ci": "fail" }
+          },
+          {
+            "repo": "Serhan-Asad/pdd-autopilot-sandbox",
+            "issue": 9,
+            "skill": "small-change",
+            "startedAt": "2026-11-17T10:00:00Z",
+            "at": "2026-11-17T10:30:00Z",
+            "status": "merged",
+            "pr": 19,
+            "durationMinutes": 30
+          }
+        ]
+      },
+      "checks": [
+        { "criterion_id": "ac-sha256-d2d31a99e3023205859592a936914fce8855422347de8f97", "target": "result", "path": "/scopeLabel", "op": "equals", "value": "pdd + pocket" },
+        { "criterion_id": "ac-sha256-d2d31a99e3023205859592a936914fce8855422347de8f97", "target": "result", "path": "/displayDate", "op": "equals", "value": "Thu, Nov 19" },
+        { "criterion_id": "ac-sha256-d2d31a99e3023205859592a936914fce8855422347de8f97", "target": "result", "path": "/repos", "op": "equals", "value": ["promptdriven/pdd", "promptdriven/pocket"] },
+        { "criterion_id": "ac-sha256-d2d31a99e3023205859592a936914fce8855422347de8f97", "target": "result", "path": "/openNow", "op": "equals", "value": 6 },
+        { "criterion_id": "ac-sha256-d2d31a99e3023205859592a936914fce8855422347de8f97", "target": "result", "path": "/openNowDisplay", "op": "equals", "value": "6" },
+        { "criterion_id": "ac-sha256-43e666e225afe7a092303ba40ad14937f0df3fb27148fccf", "target": "result", "path": "/overview/windows/0/label", "op": "equals", "value": "Last 24h" },
+        { "criterion_id": "ac-sha256-43e666e225afe7a092303ba40ad14937f0df3fb27148fccf", "target": "result", "path": "/overview/windows/0/pool", "op": "equals", "value": 11 },
+        { "criterion_id": "ac-sha256-43e666e225afe7a092303ba40ad14937f0df3fb27148fccf", "target": "result", "path": "/overview/windows/0/taken", "op": "equals", "value": 5 },
+        { "criterion_id": "ac-sha256-43e666e225afe7a092303ba40ad14937f0df3fb27148fccf", "target": "result", "path": "/overview/windows/0/prCreated", "op": "equals", "value": 4 },
+        { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/overview/windows/0/merged", "op": "equals", "value": 3 },
+        { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/overview/windows/0/mergedDisplay", "op": "equals", "value": "3 (60.0%)" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/overview/windows/0/regressionsDisplay", "op": "equals", "value": "0 (0.0%)" },
+        { "criterion_id": "ac-sha256-43e666e225afe7a092303ba40ad14937f0df3fb27148fccf", "target": "result", "path": "/overview/windows/1/label", "op": "equals", "value": "Week (Mon-Sun)" },
+        { "criterion_id": "ac-sha256-43e666e225afe7a092303ba40ad14937f0df3fb27148fccf", "target": "result", "path": "/overview/windows/1/pool", "op": "equals", "value": 13 },
+        { "criterion_id": "ac-sha256-43e666e225afe7a092303ba40ad14937f0df3fb27148fccf", "target": "result", "path": "/overview/windows/1/taken", "op": "equals", "value": 9 },
+        { "criterion_id": "ac-sha256-43e666e225afe7a092303ba40ad14937f0df3fb27148fccf", "target": "result", "path": "/overview/windows/1/prCreated", "op": "equals", "value": 6 },
+        { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/overview/windows/1/merged", "op": "equals", "value": 4 },
+        { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/overview/windows/1/mergedDisplay", "op": "equals", "value": "4 (44.4%)" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/overview/windows/1/regressions", "op": "equals", "value": 1 },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/overview/windows/1/regressionsDisplay", "op": "equals", "value": "1 (25.0%)" },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/overview/target/label", "op": "equals", "value": "Target (Nov)" },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/overview/target/convDisplay", "op": "equals", "value": ">=90%" },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/overview/target/regressionDisplay", "op": "equals", "value": "0.0%" },
+        { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/stages/beforePr/total", "op": "equals", "value": 3 },
+        { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/stages/beforePr/summary", "op": "equals", "value": "Before PR (3): 1 running · 1 needs-person · 1 stopped" },
+        { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/stages/unmergedPrs/total", "op": "equals", "value": 2 },
+        { "criterion_id": "ac-sha256-94a1539f930d42948b3c3375ca281efcad962c3e3362e3ba", "target": "result", "path": "/stages/unmergedPrs/summary", "op": "equals", "value": "Unmerged PRs (2): 1 failed suite · 1 open/draft" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/prGates/summary", "op": "equals", "value": "PR Gates (of 6 PRs): Suite 5/6 · Review 6/6 · CI 5/6" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/promptChecks/summary", "op": "equals", "value": "Prompt Checks (of 2 prompt PRs): Runtime 2/2 · Vectors 8/8 · Formal 4/4" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/regressions/summary", "op": "equals", "value": "Regressions (1): 0 reopened · 0 reverted · 1 regression issue (#3528)" }
+      ]
+    },
+    {
+      "step_id": "custom-target-offline-e2e-and-multi-signal-regression",
+      "entry_path": "prompts/cli/metrics-model.prompt.md",
+      "operation": "calculateAutopilotMetrics",
+      "input": {
+        "now": "2026-11-19T18:00:00Z",
+        "timezone": "America/Los_Angeles",
+        "repos": ["promptdriven/pdd"],
+        "openIssues": null,
+        "recording": {
+          "enabled": true,
+          "targets": {
+            "convMinPct": 85,
+            "maxRegressionPct": 2,
+            "label": "Q4"
+          }
+        },
+        "regressions": [
+          {
+            "repo": "promptdriven/pdd",
+            "pr": 601,
+            "issue": 501,
+            "reopened": true,
+            "reverted": true,
+            "regressionIssues": [3601]
+          }
+        ],
+        "runs": [
+          {
+            "repo": "promptdriven/pdd",
+            "issue": 501,
+            "skill": "bug",
+            "startedAt": "2026-11-19T10:00:00Z",
+            "at": "2026-11-19T10:25:00Z",
+            "status": "merged",
+            "pr": 601,
+            "durationMinutes": 25,
+            "promptChanged": false,
+            "gates": { "runtime": "na", "vectors": "na", "formal": "na", "suite": "pass", "review": "pass", "ci": "pass", "e2e": "pass" }
+          }
+        ]
+      },
+      "checks": [
+        { "criterion_id": "ac-sha256-d2d31a99e3023205859592a936914fce8855422347de8f97", "target": "result", "path": "/scopeLabel", "op": "equals", "value": "pdd" },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/openNow", "op": "equals", "value": null },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/openNowDisplay", "op": "equals", "value": "?" },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/overview/windows/0/pool", "op": "equals", "value": null },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/overview/windows/0/poolDisplay", "op": "equals", "value": "?" },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/overview/target/label", "op": "equals", "value": "Target (Q4)" },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/overview/target/convDisplay", "op": "equals", "value": ">=85%" },
+        { "criterion_id": "ac-sha256-8f620c6c3fbde687e4db272a00d0c5a4bb750701d5c9562e", "target": "result", "path": "/overview/target/regressionDisplay", "op": "equals", "value": "2.0%" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/overview/windows/0/regressions", "op": "equals", "value": 1 },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/overview/windows/0/regressionsDisplay", "op": "equals", "value": "1 (100.0%)" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/prGates/e2e/present", "op": "equals", "value": true },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/prGates/summary", "op": "equals", "value": "PR Gates (of 1 PR): Suite 1/1 · Review 1/1 · CI 1/1 · E2E 1/1" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/promptChecks/summary", "op": "equals", "value": "Prompt Checks (of 0 prompt PRs): none" },
+        { "criterion_id": "ac-sha256-e6b122db8f73dff0b4cc0b5692b858a21aa909b5594bec89", "target": "result", "path": "/stages/regressions/summary", "op": "equals", "value": "Regressions (1): 1 reopened · 1 reverted · 1 regression issue (#3601)" }
+      ]
+    },
+    {
+      "step_id": "explicit-repo-filter-on-turned-off-sandbox",
+      "entry_path": "prompts/cli/metrics-model.prompt.md",
+      "operation": "calculateAutopilotMetrics",
+      "input": {
+        "now": "2026-11-19T18:00:00Z",
+        "timezone": "America/Los_Angeles",
+        "repoFilter": "Serhan-Asad/pdd-autopilot-sandbox",
+        "repos": ["promptdriven/pdd", "Serhan-Asad/pdd-autopilot-sandbox"],
+        "openIssues": [
+          { "repo": "promptdriven/pdd", "count": 4 },
+          { "repo": "Serhan-Asad/pdd-autopilot-sandbox", "count": 3 }
+        ],
+        "openIssueNumbers": [
+          { "repo": "Serhan-Asad/pdd-autopilot-sandbox", "issues": [11, 12, 13] }
+        ],
+        "recording": {
+          "enabled": true,
+          "repos": [
+            { "repo": "serhan-asad/pdd-autopilot-sandbox", "enabled": false }
+          ],
+          "repoPausedSince": [
+            { "repo": "serhan-asad/pdd-autopilot-sandbox", "pausedSince": "2026-11-18T12:00:00Z" }
+          ],
+          "pausedIntervals": [
+            {
+              "repo": "serhan-asad/pdd-autopilot-sandbox",
+              "from": "2026-11-18T12:00:00Z",
+              "to": null
+            }
+          ]
+        },
+        "runs": [
+          {
+            "repo": "Serhan-Asad/pdd-autopilot-sandbox",
+            "issue": 9,
+            "skill": "small-change",
+            "startedAt": "2026-11-17T10:00:00Z",
+            "at": "2026-11-17T10:30:00Z",
+            "status": "merged",
+            "pr": 19,
+            "durationMinutes": 30
+          },
+          {
+            "repo": "Serhan-Asad/pdd-autopilot-sandbox",
+            "issue": 10,
+            "skill": "small-change",
+            "startedAt": "2026-11-19T09:00:00Z",
+            "at": "2026-11-19T09:30:00Z",
+            "status": "merged",
+            "pr": 20,
+            "durationMinutes": 30
+          }
+        ]
+      },
+      "checks": [
+        { "criterion_id": "ac-sha256-2c76f714087f67c6ef1f01c69bb1c6ef62249799af9ca15b", "target": "result", "path": "/scopeLabel", "op": "equals", "value": "Serhan-Asad/pdd-autopilot-sandbox" },
+        { "criterion_id": "ac-sha256-2c76f714087f67c6ef1f01c69bb1c6ef62249799af9ca15b", "target": "result", "path": "/repos", "op": "equals", "value": ["Serhan-Asad/pdd-autopilot-sandbox"] },
+        { "criterion_id": "ac-sha256-2c76f714087f67c6ef1f01c69bb1c6ef62249799af9ca15b", "target": "result", "path": "/recording/enabled", "op": "equals", "value": false },
+        { "criterion_id": "ac-sha256-2c76f714087f67c6ef1f01c69bb1c6ef62249799af9ca15b", "target": "result", "path": "/openNow", "op": "equals", "value": 3 },
+        { "criterion_id": "ac-sha256-2c76f714087f67c6ef1f01c69bb1c6ef62249799af9ca15b", "target": "result", "path": "/overview/windows/0/taken", "op": "equals", "value": 0 },
+        { "criterion_id": "ac-sha256-2c76f714087f67c6ef1f01c69bb1c6ef62249799af9ca15b", "target": "result", "path": "/overview/windows/1/taken", "op": "equals", "value": 1 },
+        { "criterion_id": "ac-sha256-2c76f714087f67c6ef1f01c69bb1c6ef62249799af9ca15b", "target": "result", "path": "/overview/windows/1/merged", "op": "equals", "value": 1 },
+        { "criterion_id": "ac-sha256-2c76f714087f67c6ef1f01c69bb1c6ef62249799af9ca15b", "target": "result", "path": "/overview/windows/1/pool", "op": "equals", "value": 4 }
+      ]
+    }
+  ]
+}
