@@ -1034,6 +1034,7 @@ test('R2-1b (MF-1 suite scope, runtime-code per-file coverage, scanner regex/tem
   });
   await wScope.tick();
   wScope.review(43, 'PASS');
+  await wScope.tick(); // #3554 defers suiteState until review PASS because PR edits test/unit.test.mjs referenced by testCommand.
   wScope.suite(43, 0);
   await wScope.tick();
   assert.equal(wScope.github.merges.length, 0, 'unexecuted test/orders-e2e.test.mjs must NOT be credited when testCommand only runs test/unit.test.mjs');
@@ -1738,6 +1739,7 @@ test('R4 sync regression: package.json manifest is covered by executed real test
   });
   await wOk.tick();
   wOk.review(73, 'PASS');
+  await wOk.tick(); // #3554 defers suiteState until review PASS because PR modifies package.json.
   wOk.suite(73, 0);
   await wOk.tick();
   assert.equal(wOk.github.merges.length, 1, 'package.json + covered src/a.mjs + real test merges cleanly');
@@ -1759,6 +1761,7 @@ test('R4 sync regression: package.json manifest is covered by executed real test
   });
   await wPartial.tick();
   wPartial.review(74, 'PASS');
+  await wPartial.tick(); // #3554 defers suiteState until review PASS because PR modifies package.json.
   wPartial.suite(74, 0);
   await wPartial.tick();
   assert.equal(wPartial.github.merges.length, 0, 'manifest coverage must NOT excuse uncovered src/b.mjs');
@@ -1778,6 +1781,7 @@ test('R4 sync regression: package.json manifest is covered by executed real test
   });
   await wEmpty.tick();
   wEmpty.review(75, 'PASS');
+  await wEmpty.tick(); // #3554 defers suiteState until review PASS because PR modifies package.json.
   wEmpty.suite(75, 0);
   await wEmpty.tick();
   assert.equal(wEmpty.github.merges.length, 0, 'manifest-only change with zero real tests fails closed');
