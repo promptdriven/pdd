@@ -21,6 +21,7 @@ import { issueAreas, areasOverlap, groupReadyIssues, orderGroupsSpreadFirst, nor
 import { enqueueMergeQueueItem, mergeQueueStatusLine, processMergeQueue, readMergeQueue } from './autopilot-merge-queue.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
 import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
+import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 const isPoolRotatableService = text => Boolean(text && (isQuotaExhaustionMessage(text) || isAuthFailureMessage(text)));
 import { buildTieredAgentArgs, createPhaseTracker, extractHarnessTokens, recordPhaseSpan, resolveStepModelTier, summarizeIssuePhases, summarizeIssueTelemetry } from './autopilot-telemetry.mjs';
 import { recordAutopilotMetric } from './autopilot-metrics.mjs';
@@ -1647,17 +1648,20 @@ function startJob(ctx, job, role, cwd, prompt, command = null, extraEnv = {}, se
   const prepared = (!command && typeof selected?.prepareStep === 'function') ? selected.prepareStep(ctx.ports.env ?? process.env, { detached: true }) : null;
   const baseEnv = prepared?.env ?? ((!command && selected?.env) ? selected.env : (ctx.ports.env ?? process.env));
   const cleanupDirs = prepared?.cleanupDirs ?? selected?.cleanupDirs ?? null;
-  const run = command ?? resolveCoreAgentCommand(ctx, role, activeAgent, baseEnv);
-  // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
-  // as PDD_CHECK_CPUS for every role.
-  const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
-  const stripGithubTokens = role === 'review';
-  const filteredExtraEnv = stripGithubTokens
-    ? Object.fromEntries(Object.entries(extraEnv).filter(([key]) => !/^(?:GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|GITHUB_PERSONAL_ACCESS_TOKEN)$/i.test(key)))
-    : extraEnv;
   let started;
   try {
-    started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: run.args, input: typeof prompt === 'function' ? prompt(result) : prompt,
+    const run = command ?? resolveCoreAgentCommand(ctx, role, activeAgent, baseEnv);
+    const runArgs = (!command && Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length)
+      ? spliceClaudeExtraArgs(run.args, prepared.extraArgs)
+      : run.args;
+    // #3231: the machine guard's priority (nice, macOS QoS, a Linux CPU list for agent roles) and Autopilot's CPU share
+    // as PDD_CHECK_CPUS for every role.
+    const { checkCpus, ...priority } = ctx.ports.machine?.priority?.(role) ?? {};
+    const stripGithubTokens = role === 'review';
+    const filteredExtraEnv = stripGithubTokens
+      ? Object.fromEntries(Object.entries(extraEnv).filter(([key]) => !/^(?:GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|GITHUB_PERSONAL_ACCESS_TOKEN)$/i.test(key)))
+      : extraEnv;
+    started = ctx.jobs.start({ id, dir: ctx.dirs.logs, cwd, custodyRoot: cwd, command: run.command, args: runArgs, input: typeof prompt === 'function' ? prompt(result) : prompt,
       env: { ...pddOnPath(ctx, jobEnvironment(baseEnv, { stripGithubTokens })), ...(Number.isSafeInteger(checkCpus) ? { PDD_CHECK_CPUS: String(checkCpus) } : {}), ...filteredExtraEnv },
       ...(Array.isArray(cleanupDirs) && cleanupDirs.length ? { cleanupDirs } : {}),
       ...(ctx.ports.wake ? { wake: ctx.ports.wake } : {}),

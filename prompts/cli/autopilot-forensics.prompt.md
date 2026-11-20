@@ -44,13 +44,14 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
   configured and `config.toml` is a regular file (skipping symlinked `config.toml`
   overlays via `lstatSync` so personal `~/.codex/config.toml` settings never leak past
   `--ignore-user-config`). It forwards only non-secret auth-store and provider routing
-  overrides (`cli_auth_credentials_store`, `openai_base_url`, `chatgpt_base_url`,
+  overrides (`cli_auth_credentials_store`, `openai_base_url`, `chatgpt_base_url`, `sqlite_home`,
   `model_provider`, allowlisted non-secret `[model_providers.<provider>]` metadata:
   `name`, `base_url`, `model_catalog_url`, `wire_api`, `requires_openai_auth`,
   `supports_websockets`, `env_key`, `env_key_instructions`, `env_http_headers` naming
   environment variables only, `request_max_retries`, `stream_max_retries`,
   `stream_idle_timeout_ms`, plus
   `shell_environment_policy.filters.PDD_CODEX_GATEWAY_GRANT="exclude"`,
+  `shell_environment_policy.set.CODEX_HOME`, `features.daemon_auto_start=false`,
   `features.shell_snapshot=false`, and `features.responses_websockets=false` when
   present) as `-c` flags (#3503). Raw secret fields (`http_headers`,
   `experimental_bearer_token`, `query_params`) are never serialized onto CLI `args`
@@ -78,7 +79,7 @@ worktree right before [Autopilot core](autopilot-core.prompt.md) starts a build
 - `runPreRunForensics(input, ports)` runs in `cwd: worktree` with a bounded timeout
   (default 90 seconds, 128 KiB output cap), honors optional worker-tier model
   routing via `resolveStepModelTier` (`step: "intake"`) and pooled/Cloud step
-  overlays (`selected.prepareStep`, always cleaned up in `finally`), reports quota
+  overlays (`selected.prepareStep`, forwarding `prepared.extraArgs` such as Claude `--settings <path>` before `--` and always cleaning up in `finally`), reports quota
   exhaustion to `ports.exhaustLogin` when applicable, and fails open to
   `already_fixed: false` (`disposition: "still_needed"`) on any error, timeout,
   non-zero exit without valid proof, or uncertainty so real bugs are never skipped.

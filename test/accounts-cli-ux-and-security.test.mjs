@@ -29,6 +29,7 @@ import {
   accountsStatePath,
   buildSyntheticGatewayIdToken,
   createCodexStepOverlay,
+  managedClaudeSettingsPath,
   managedCodexAuthPath,
   managedCodexConfigPath,
   pddManagedCodexHome,
@@ -2473,16 +2474,20 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   // 3. Fix #3b & #3c: Execute `renderAutoSwitchBlock('sh')` in real `bash`!
   assert.equal((await invokeCli(['accounts', 'use', 'cl-shared-1'], sb)).exit, 0);
   const clSettingsPath = join(sb.home, '.claude', 'settings.json');
-  assert.match(JSON.parse(readFileSync(clSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
+  assert.equal(existsSync(clSettingsPath), false, 'use must never create or mutate ~/.claude/settings.json');
+  const managedClSettingsPath = managedClaudeSettingsPath(sb.env);
+  assert.match(JSON.parse(readFileSync(managedClSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
 
   const fakeBin = join(sb.root, 'wrapper-bin');
   mkdirSync(fakeBin, { recursive: true });
   const managedHome = pddManagedCodexHome(sb.env);
   writeFileSync(join(fakeBin, 'pdd'), `#!/bin/sh\nif [ "\${PDD_PRINT_CODEX_HOME:-}" = "1" ]; then printf '%s\\n' ${JSON.stringify(managedHome)}; fi\nexit 0\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, 'codex'), `#!/bin/sh\nprintf 'CODEX_HOME=%s ARGS=%s\\n' "\${CODEX_HOME:-UNSET}" "$*"\n`, { mode: 0o755 });
-  writeFileSync(join(fakeBin, 'claude'), `#!/bin/sh\nprintf 'API_KEY=%s ARGS=%s\\n' "\${ANTHROPIC_API_KEY:-UNSET}" "$*"\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'pdd-claude'), `#!/bin/sh\nprintf 'VIA=pdd-claude ARGS=%s\\n' "$*"\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, 'claude'), `#!/bin/sh\nprintf 'VIA=stock-claude ARGS=%s\\n' "$*"\n`, { mode: 0o755 });
   chmodSync(join(fakeBin, 'pdd'), 0o755);
   chmodSync(join(fakeBin, 'codex'), 0o755);
+  chmodSync(join(fakeBin, 'pdd-claude'), 0o755);
   chmodSync(join(fakeBin, 'claude'), 0o755);
 
   const wrapperScript = join(sb.root, 'wrapper.sh');
@@ -2511,18 +2516,27 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   assert.equal(runBash('codex logout', { CODEX_HOME: managedHome }).status, 1);
   assert.equal(runBash('codex login', { CODEX_HOME: managedHome }).status, 1);
 
-  // 3c: `claude` unsets `ANTHROPIC_API_KEY` inside subshell when `CLAUDE_CODE_OAUTH_TOKEN` is in settings.json, while parent shell keeps `ANTHROPIC_API_KEY`!
+  // 3c: `claude` delegates to `pdd-claude` when installed while parent shell keeps `ANTHROPIC_API_KEY`!
   const claudeRun = runBash('export ANTHROPIC_API_KEY="sk-ant-api03-ambient"; claude -p hi; printf "PARENT=%s\\n" "$ANTHROPIC_API_KEY"');
   assert.equal(claudeRun.status, 0, claudeRun.stderr);
-  assert.match(claudeRun.stdout, /API_KEY=UNSET ARGS=-p hi/);
+  assert.match(claudeRun.stdout, /VIA=pdd-claude ARGS=-p hi/);
   assert.match(claudeRun.stdout, /PARENT=sk-ant-api03-ambient/);
 
-  // 4. Fix #4: Leaving/removing the last Claude account cleans `pddg_*` & gateway `ANTHROPIC_BASE_URL` from `~/.claude/settings.json`!
+  // 4. Fix #4: Leaving/removing the last Claude account cleans isolated managedClaudeSettingsPath AND legacy `pddg_*` & gateway `ANTHROPIC_BASE_URL` from `~/.claude/settings.json`!
+  mkdirSync(join(sb.home, '.claude'), { recursive: true });
+  writeFileSync(clSettingsPath, JSON.stringify({
+    theme: 'dark',
+    env: {
+      CLAUDE_CODE_OAUTH_TOKEN: 'pddg_legacy_from_older_pdd',
+      ANTHROPIC_BASE_URL: `${cloud.serverUrl}/v1/accounts/claude-gateway/lse_legacy`,
+    },
+  }, null, 2));
   const leaveClRes = await invokeCli(['accounts', 'leave', 'cl-shared-1'], sb);
   assert.equal(leaveClRes.exit, 0, leaveClRes.stderr);
+  assert.equal(existsSync(managedClSettingsPath), false, 'leave removed isolated managed Claude settings file');
   const clAfterLeave = JSON.parse(readFileSync(clSettingsPath, 'utf8'));
-  assert.equal(clAfterLeave.env?.CLAUDE_CODE_OAUTH_TOKEN, undefined, 'leave stripped pddg_* token from ~/.claude/settings.json');
-  assert.equal(clAfterLeave.env?.ANTHROPIC_BASE_URL, undefined, 'leave stripped gateway ANTHROPIC_BASE_URL from ~/.claude/settings.json');
+  assert.equal(clAfterLeave.theme, 'dark');
+  assert.equal(clAfterLeave.env, undefined, 'leave pruned empty env object after stripping legacy PDD entries');
 
   // Reconciling via `pdd accounts list` cleans lingering gateway settings whenever `!nextActive.claude`,
   // EVEN when another paused/inactive Claude account remains enrolled (`nextProviders.includes('claude')`)!
@@ -2678,5 +2692,6 @@ test('P0 surface audit (#2, #3, #4, #5): symlinked ~/.codex/auth.json import+scr
   const acceptOkRes = await invokeCli(['accounts', 'accept', 'inv_ok_3'], sb);
   assert.equal(acceptOkRes.exit, 0, acceptOkRes.stderr);
   assert.equal(acceptOkRes.stdout.trim(), 'Accepted shared account "cl-invite-3".');
-  assert.match(JSON.parse(readFileSync(clSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
+  assert.equal(existsSync(clSettingsPath), false, 'accept must never mutate ~/.claude/settings.json');
+  assert.match(JSON.parse(readFileSync(managedClSettingsPath, 'utf8')).env.CLAUDE_CODE_OAUTH_TOKEN, /^pddg_cl_shared_/);
 });

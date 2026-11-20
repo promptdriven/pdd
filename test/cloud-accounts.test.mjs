@@ -39,6 +39,7 @@ import {
   localCodexConfigPath,
   localCodexHome,
   loginEnvironment,
+  managedClaudeSettingsPath,
   managedCodexAuthPath,
   managedCodexConfigPath,
   materializeLocalClaudeAuth,
@@ -576,12 +577,15 @@ test('3252 T1: pdd accounts add, import, and list enroll Codex & Claude bundles,
 
   const claudeSettingsPath = join(sb.home, '.claude', 'settings.json');
   const claudeJsonPath = join(sb.home, '.claude.json');
-  assert.equal(statSync(claudeSettingsPath).mode & 0o777, 0o600);
-  const claudeSettings = JSON.parse(readFileSync(claudeSettingsPath, 'utf8'));
-  assert.equal(claudeSettings.theme, 'dark');
-  assert.equal(claudeSettings.env.CUSTOM_USER_FLAG, 'keep-me');
-  assert.match(claudeSettings.env.CLAUDE_CODE_OAUTH_TOKEN, /^sk-ant-oat01-max-1-/);
-  assert.equal(JSON.parse(readFileSync(claudeJsonPath, 'utf8')).hasCompletedOnboarding, true);
+  const managedClPath = managedClaudeSettingsPath(sb.env);
+  assert.equal(statSync(managedClPath).mode & 0o777, 0o600);
+  const managedClSettings = JSON.parse(readFileSync(managedClPath, 'utf8'));
+  assert.match(managedClSettings.env.CLAUDE_CODE_OAUTH_TOKEN, /^sk-ant-oat01-max-1-/);
+  const personalSettings = JSON.parse(readFileSync(claudeSettingsPath, 'utf8'));
+  assert.equal(personalSettings.theme, 'dark');
+  assert.equal(personalSettings.env.CUSTOM_USER_FLAG, 'keep-me');
+  assert.equal(personalSettings.env.CLAUDE_CODE_OAUTH_TOKEN, rawClaudeOauth, '~/.claude/settings.json must stay untouched on import');
+  assert.equal(existsSync(claudeJsonPath), false, '~/.claude.json must stay untouched on import');
 
   // 3. pdd accounts list & --json
   const listTable = await invokeCli(['accounts', 'list'], sb);
@@ -681,13 +685,15 @@ test('3252 T2: use, next, shared Claude gateway_grant, share/accept/unshare/leav
   assert.match(acceptRes.stdout, /Accepted shared account "cl-shared"/);
 
   assert.equal((await invokeCli(['accounts', 'use', 'cl-shared'], sb)).exit, 0);
-  const sharedSettings = JSON.parse(readFileSync(join(sb.home, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(existsSync(join(sb.home, '.claude', 'settings.json')), false, '~/.claude/settings.json untouched on use');
+  const sharedSettings = JSON.parse(readFileSync(managedClaudeSettingsPath(sb.env), 'utf8'));
   assert.equal(sharedSettings.env.CLAUDE_CODE_OAUTH_TOKEN, 'pddg_cl-shared_shortlived9999');
   assert.match(sharedSettings.env.ANTHROPIC_BASE_URL, new RegExp(`^${cloud.serverUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/v1/accounts/claude-gateway/lse_`));
 
-  // Switching back to personal `cl-own` (`direct_oauth`) clears managed ANTHROPIC_BASE_URL cleanly!
+  // Switching back to personal `cl-own` (`direct_oauth`) clears managed ANTHROPIC_BASE_URL cleanly in isolated file!
   assert.equal((await invokeCli(['accounts', 'use', 'cl-own'], sb)).exit, 0);
-  const ownSettings = JSON.parse(readFileSync(join(sb.home, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(existsSync(join(sb.home, '.claude', 'settings.json')), false, '~/.claude/settings.json untouched on use cl-own');
+  const ownSettings = JSON.parse(readFileSync(managedClaudeSettingsPath(sb.env), 'utf8'));
   assert.equal(ownSettings.env.CLAUDE_CODE_OAUTH_TOKEN, 'sk-ant-oat01-cl-own-personalSecretToken888');
   assert.equal(ownSettings.env.ANTHROPIC_BASE_URL, undefined);
 
@@ -1273,14 +1279,16 @@ test('3252 T7: Round 1 security, FastAPI contract, overlay cleanup, env isolatio
     codexStep.cleanup();
   }
 
-  // Switching Claude settings.json from /v1/accounts/claude-gateway/<lease> to direct_oauth removes ANTHROPIC_BASE_URL even if previousManagedBaseUrl is false!
+  // Switching isolated Claude settings to direct_oauth overrides legacy managed gateway URL in ~/.claude/settings.json WITHOUT mutating ~/.claude/settings.json!
   mkdirSync(join(sb.home, '.claude'), { recursive: true });
-  writeFileSync(join(sb.home, '.claude', 'settings.json'), JSON.stringify({
+  const personalBefore = JSON.stringify({
     env: { ANTHROPIC_BASE_URL: 'https://api.promptdriven.ai/v1/accounts/claude-gateway/lse_old' },
-  }));
+  });
+  writeFileSync(join(sb.home, '.claude', 'settings.json'), personalBefore);
   materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: 'sk-ant-oat01-directToken123456' }, { env: sb.env, previousManagedBaseUrl: false });
-  const afterDirect = JSON.parse(readFileSync(join(sb.home, '.claude', 'settings.json'), 'utf8'));
-  assert.equal(afterDirect.env.ANTHROPIC_BASE_URL, undefined);
+  assert.equal(readFileSync(join(sb.home, '.claude', 'settings.json'), 'utf8'), personalBefore, '~/.claude/settings.json stays untouched');
+  const afterDirect = JSON.parse(readFileSync(managedClaudeSettingsPath(sb.env), 'utf8'));
+  assert.equal(afterDirect.env.ANTHROPIC_BASE_URL, 'https://api.anthropic.com');
 
   // 4. Production URL defaults to https://pdd-byok-api-c437voydwa-uc.a.run.app and ignores PDD_RUNTIME_URL!
   assert.equal(DEFAULT_CLOUD_URL, 'https://pdd-byok-api-c437voydwa-uc.a.run.app');
@@ -3779,6 +3787,18 @@ test('P0 surface audit (#2, #3c, #4): unified createCodexStepOverlay native auth
     gateway_bearer_token: 'pddg_cl_grant_secret_111',
   }, { env: sb.env });
 
+  // Seed legacy gateway settings in ~/.claude/settings.json to verify buildClaudeStepEnv override & restoreLocalClaudeGatewayConfig cleanup
+  const claudeSettingsPath = localClaudePaths(sb.env).settingsPath;
+  mkdirSync(join(sb.home, '.claude'), { recursive: true });
+  writeFileSync(claudeSettingsPath, JSON.stringify({
+    model: 'claude-sonnet-4-6',
+    env: {
+      CUSTOM_FLAG: '1',
+      CLAUDE_CODE_OAUTH_TOKEN: 'pddg_cl_grant_secret_111',
+      ANTHROPIC_BASE_URL: 'https://api.promptdriven.ai/v1/accounts/claude-gateway/lse_cl1',
+    },
+  }, null, 2));
+
   const gwStepEnv = buildClaudeStepEnv(
     { ...sb.env, ANTHROPIC_API_KEY: 'sk-ant-api03-SHOULD_BE_STRIPPED' },
     {
@@ -3801,15 +3821,10 @@ test('P0 surface audit (#2, #3c, #4): unified createCodexStepOverlay native auth
   assert.equal(directStepEnv.ANTHROPIC_BASE_URL, 'https://api.anthropic.com', 'direct_oauth overrides managed gateway URL in ~/.claude/settings.json');
 
   // 4. restoreLocalClaudeGatewayConfig strips pddg_* token and gateway ANTHROPIC_BASE_URL while preserving custom settings
-  const claudeSettingsPath = localClaudePaths(sb.env).settingsPath;
-  const beforeRestore = JSON.parse(readFileSync(claudeSettingsPath, 'utf8'));
-  writeFileSync(claudeSettingsPath, JSON.stringify({
-    ...beforeRestore,
-    model: 'claude-sonnet-4-6',
-    env: { ...beforeRestore.env, CUSTOM_FLAG: '1' },
-  }, null, 2));
   const restored = restoreLocalClaudeGatewayConfig({ env: sb.env });
   assert.equal(restored.restoredSettings, true);
+  assert.equal(restored.removedManagedSettings, true);
+  assert.equal(existsSync(managedClaudeSettingsPath(sb.env)), false);
   const afterRestore = JSON.parse(readFileSync(claudeSettingsPath, 'utf8'));
   assert.equal(afterRestore.model, 'claude-sonnet-4-6');
   assert.equal(afterRestore.env?.CUSTOM_FLAG, '1');
