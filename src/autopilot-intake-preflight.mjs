@@ -92,13 +92,39 @@ function cleanSingleLine(value, max = 300) {
     .slice(0, max);
 }
 
+function stripHtmlComments(input) {
+  let current = input;
+  while (true) {
+    let out = '';
+    let cursor = 0;
+    let removed = false;
+    while (cursor < current.length) {
+      const open = current.indexOf('<!--', cursor);
+      if (open < 0) {
+        out += current.slice(cursor);
+        break;
+      }
+      const close = current.indexOf('-->', open + 4);
+      if (close < 0) {
+        out += current.slice(cursor);
+        break;
+      }
+      out += current.slice(cursor, open);
+      cursor = close + 3;
+      removed = true;
+    }
+    if (!removed) return out;
+    current = out;
+  }
+}
+
 /**
  * Strip HTML comments, CommonMark fenced code blocks (including indented list fences),
  * and Markdown blockquote lines so pasted logs and quoted examples never trigger skips.
  */
 export function sanitizeIssueText(text) {
   if (typeof text !== 'string' || !text) return '';
-  const withoutComments = text.replace(/\r\n?/g, '\n').replace(/<!--[\s\S]*?-->/g, '');
+  const withoutComments = stripHtmlComments(text.replace(/\r\n?/g, '\n'));
   const kept = [];
   let fence = null;
   for (const line of withoutComments.split('\n')) {
