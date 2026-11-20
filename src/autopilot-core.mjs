@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: f18741dd6542fb63c5f29b90bb71801f140eb465e3e54f2c0572563e8af8d0aa)
+// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 9b2a92ad4ba0edd9ec0faac885964b2f3036b649b86372e9c34480c03f785970)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
@@ -16,11 +16,10 @@ import { redactSecrets } from './secret-redaction.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
-import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard, detectWrongRepositoryIssue, findOtherRepoSkipLabel, routeWrongRepositoryIssue } from './autopilot-intake.mjs';
+import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard, findOtherRepoSkipLabel, preflightCoreIssue } from './autopilot-intake.mjs';
 import { evaluateForensicsResult, findConfiguredSkipLabel, formatForensicsBrief, formatForensicsComment, runPreRunForensics } from './autopilot-forensics.mjs';
 import { readSuiteProgress, reconcileSuiteQueue } from './test-suite-queue.mjs';
 import { issueAreas, areasOverlap, groupReadyIssues, orderGroupsSpreadFirst, normalizeAreaList, parseGitHubIssueUrl } from './autopilot-areas.mjs';
-import { enqueueMergeQueueItem, mergeQueueStatusLine, processMergeQueue, readMergeQueue } from './autopilot-merge-queue.mjs';
 import { slotCount, GUARD } from './machine-guard.mjs';
 import { classifyRateLimitFailure, isAuthFailureMessage, isQuotaExhaustionMessage, loadLoginPool, loginEnvironment, POOL_FALLBACK_COOLDOWN_MS, selectPoolLogin } from './login-pool.mjs';
 import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
@@ -54,7 +53,7 @@ const JOB_RULES = '"$PDD_SKILLS/pdd-prompting/autopilot-job-rules.md"';
 const RULES_LINE = `Read ${JOB_RULES} in full before you write the PR body.`;
 // A job that needs a person's decision posts one question and adds this label; the person answers in a comment and
 // removes the label, and then the issue is ready again.
-const LANE = 'pdd:merge-lane', WOULD_MERGE = 'pdd:would-merge', DECISION = 'pdd:needs-decision', QUESTION_MARKER = /<!-- pdd:autopilot-core:question:(\d+):[^ ]+ -->/;
+const LANE = 'pdd:merge-lane', WOULD_MERGE = 'pdd:would-merge', DECISION = 'pdd:needs-decision', QUESTION_MARKER = /<!-- pdd:(?:autopilot-core:question|autopilot-intake:preflight):(\d+):[^ ]+ -->/;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 // The machine id in claim records: a short hash of the host name, so no public text names the host.
 export const machineIdOf = state => named(state?.machineId) ? state.machineId : `m-${createHash('sha256').update(String(state?.machine ?? '')).digest('hex').slice(0, 12)}`;
@@ -297,7 +296,6 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
   return { engine: autopilotEngine(config), mode: ['off', 'observe', 'auto'].includes(a.mode) ? a.mode : 'off',
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: machine ? slotCount({ ...machine, repoRuns: a.runs }).slots : count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
     ...(a.intake !== undefined ? { intake: intakeMode(a.intake) } : {}),
-    ...(a.mergeQueue !== undefined ? { mergeQueue: a.mergeQueue === true } : {}),
     ...(ci !== undefined ? { ci } : {}),
     quietMinutes: count(a.quietMinutes, 45), ciStuckMinutes: count(a.ciStuckMinutes, 360), maxJobHours: count(a.maxJobHours, 24), report: ['file', 'draft', 'off'].includes(a.report) ? a.report : 'draft',
     decisions: ['ask', 'decide'].includes(a.decisions) ? a.decisions : 'decide',
@@ -1779,7 +1777,7 @@ async function personAnswer(ctx, n) {
   const own = c => String(c.user?.login ?? '').toLowerCase() === me && Number(QUESTION_MARKER.exec(String(c.body ?? ''))?.[1]) === n;
   const at = comments.map(own).lastIndexOf(true);
   if (at < 0) return null;
-  const asked = comments[at], question = /^> (.*)$/m.exec(String(asked.body))?.[1] ?? '';
+  const asked = comments[at], question = /^> (.*)$/m.exec(String(asked.body))?.[1] ?? /^\s*-\s*Question:\s*(.*)$/m.exec(String(asked.body))?.[1] ?? '';
   const trusted = user => ctx.ports.trusted({ user, author_association: undefined });
   const answers = [];
   for (const c of comments.slice(at + 1)) {
@@ -2010,10 +2008,14 @@ async function intake(ctx, rows) {
       const keptMembers = [];
       for (const member of [group.primary, ...(group.companions ?? [])]) {
         if (!member || ctx.skip.has(member.number)) continue;
-        const wrongRepo = detectWrongRepositoryIssue(member, { repo: ctx.repo, cwd: state.cwd, fs: ctx.fs });
-        if (wrongRepo) {
-          try { await routeWrongRepositoryIssue(ctx, member, wrongRepo); }
-          catch (error) { ctx.warn(`Autopilot core wrong-repository routing of #${member.number} failed: ${oneLine(error.message)}`); }
+        try {
+          const skipped = await preflightCoreIssue(ctx, member, { cwd: state.cwd });
+          if (skipped) {
+            ctx.skip.add(member.number);
+            continue;
+          }
+        } catch (error) {
+          ctx.warn(`Autopilot core pre-flight check of #${member.number} failed: ${oneLine(error.message)}`);
           ctx.skip.add(member.number);
           continue;
         }
@@ -4630,19 +4632,62 @@ function tokenizeShellCommand(cmd) {
   return tokens;
 }
 
+function globSegmentMatch(seg, pat) {
+  let si = 0, pi = 0, starPi = -1, starSi = 0;
+  while (si < seg.length) {
+    if (pi < pat.length && (pat[pi] === '?' || pat[pi] === seg[si])) {
+      si += 1; pi += 1;
+    } else if (pi < pat.length && pat[pi] === '*') {
+      starPi = pi; starSi = si; pi += 1;
+    } else if (starPi !== -1) {
+      pi = starPi + 1; starSi += 1; si = starSi;
+    } else {
+      return false;
+    }
+  }
+  while (pi < pat.length && pat[pi] === '*') pi += 1;
+  return pi === pat.length;
+}
+
 function matchesSuiteTarget(relPath, rawTarget) {
   const normRel = String(relPath).replace(/\\/g, '/').replace(/^\.\//, '');
   const normTarget = String(rawTarget).replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
   if (!normTarget) return false;
   if (normRel === normTarget || normRel.startsWith(`${normTarget}/`)) return true;
-  if (!/[*?]/.test(normTarget)) return false;
-  const regexStr = normTarget
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, '::DOUBLE_STAR::')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\?/g, '[^/]')
-    .replace(/::DOUBLE_STAR::/g, '.*');
-  return new RegExp(`^${regexStr}$`).test(normRel);
+  if (!normTarget.includes('*') && !normTarget.includes('?')) return false;
+  const relSegs = normRel.split('/');
+  const patSegs = normTarget.split('/');
+  if (patSegs.some(s => s !== '**' && s.includes('**'))) {
+    let ri = 0, pi = 0, starPi = -1, starRi = 0;
+    const flatPat = normTarget.replace(/\*{2,}/g, '*');
+    while (ri < normRel.length) {
+      if (pi < flatPat.length && (flatPat[pi] === '?' ? normRel[ri] !== '/' : flatPat[pi] === normRel[ri])) {
+        ri += 1; pi += 1;
+      } else if (pi < flatPat.length && flatPat[pi] === '*') {
+        starPi = pi; starRi = ri; pi += 1;
+      } else if (starPi !== -1) {
+        pi = starPi + 1; starRi += 1; ri = starRi;
+      } else {
+        return false;
+      }
+    }
+    while (pi < flatPat.length && flatPat[pi] === '*') pi += 1;
+    return pi === flatPat.length;
+  }
+  let ri = 0, pi = 0, dstarPi = -1, dstarRi = 0;
+  while (ri < relSegs.length) {
+    if (pi < patSegs.length && patSegs[pi] === '**') {
+      dstarPi = pi; dstarRi = ri; pi += 1;
+    } else if (pi < patSegs.length && globSegmentMatch(relSegs[ri], patSegs[pi])) {
+      ri += 1; pi += 1;
+    } else if (dstarPi !== -1) {
+      pi = dstarPi + 1; dstarRi += 1; ri = dstarRi;
+    } else {
+      return false;
+    }
+  }
+  while (pi < patSegs.length && patSegs[pi] === '**') pi += 1;
+  return pi === patSegs.length;
 }
 
 function analyzeSuiteSegment(segment, headTree, fs, depth = 0) {
@@ -5491,22 +5536,6 @@ async function mergeCheck(ctx, job) {
   if ((await runtimeResend(ctx, job, pr)).hold) return;
   // Step 5b: Universal Validator v2 gate & backside lint (fail-closed in BOTH auto and observe modes).
   if ((await runValidatorV2Gate(ctx, job, pr, { suite })).handled) return;
-  if (ctx.settings.mergeQueue && ctx.settings.mode === 'auto') {
-    const claim = await confirmClaim(ctx, job);
-    if (ctx.lost(claim, job)) return handOver(ctx, job, 'another machine holds the claim now');
-    if (!ctx.owns(claim, job) || !claim.active) { Object.assign(job, { lastError: 'the claim of this machine is not confirmed', lastErrorTool: false, lastErrorStep: 'claim' }); ctx.saveJob(job); return; }
-    await enqueueMergeQueueItem({
-      stateDir: ctx.root, pr: job.pr, issue: job.issue, issues: jobIssues(job),
-      branch: job.branch, baseBranch: state.baseBranch, headSha: job.head, readyAt: job.prAt ?? ctx.now(),
-    }, { fs: ctx.fs, now: ctx.now });
-    const mqOut = await runCoreMergeQueue(ctx, 'auto');
-    const item = mqOut?.queue?.items?.find(i => i.pr === job.pr);
-    if (item?.state === 'merged') return finishMerge(ctx, job);
-    if (item?.state === 'ejected') return end(ctx, job, cause('job', 'checks-red', `merge queue ejected PR #${job.pr}: ${item.ejectReason || 'rebase verification failed'}`));
-    if (item?.headSha && item.headSha !== job.head) job.head = item.headSha;
-    ctx.saveJob(job);
-    return;
-  }
   // The merge lane: one PR per repository in the final step. Other green PRs wait in claim order with their reviews.
   if (await enterLane(ctx, job) !== 'final') return;
   // L2: the exact conflict check. A conflict never goes to repairOrEnd: mechanical hunks are fixed in the lane, other
@@ -6470,18 +6499,6 @@ async function wouldMerge(ctx, job, pr) {
     await gh.call('DELETE', `repos/${repo}/issues/${comp.issue}/labels/${encodeURIComponent('pdd:working')}`).catch(() => {});
   }
   if (keptCompanions.length !== jobCompanions(job).length) setJobCompanions(job, keptCompanions);
-  const syncedBaseSha = (await ctx.git(['rev-parse', `origin/${ctx.state.baseBranch}`], job.worktree).catch(() => '')) || null;
-  await enqueueMergeQueueItem({
-    stateDir: ctx.root,
-    pr: job.pr,
-    issue: job.issue,
-    issues: [job.issue, ...keptCompanions.map(c => c.issue)],
-    branch: job.branch,
-    baseBranch: ctx.state.baseBranch,
-    headSha: job.head,
-    readyAt: ctx.now(),
-    syncedBaseSha,
-  }, { fs: ctx.fs, now: ctx.now }).catch(err => ctx.warn(`Autopilot core could not enqueue PR #${job.pr} into merge queue: ${err.message}`));
   ctx.counts.wouldMerge++; ctx.produced();
   return finishLocal(ctx, job, 'would-merge', `observe mode: PR #${job.pr} passed every check at ${short(job.head)}; not merged`);
 }
@@ -6644,29 +6661,6 @@ async function finishMerge(ctx, job, read = null) {
   applyTelemetrySpan(ctx, job, mergeTracker.finishPhase('merge'), null, `merge:${job.head ?? job.pr}`);
   ctx.counts.merged++; ctx.produced();
   await finishLocal(ctx, job, 'merged', `merged PR #${job.pr}`);
-}
-function runCoreMergeQueue(ctx, mode) {
-  return processMergeQueue({
-    stateDir: ctx.root,
-    repoRoot: ctx.state.cwd,
-    baseBranch: ctx.state.baseBranch,
-    mode,
-    agent: ctx.state.agent,
-  }, {
-    fs: ctx.fs,
-    now: ctx.now,
-    warn: ctx.warn,
-    git: ctx.ports.git,
-    getPullRequest: async prNum => {
-      const p = await ctx.gh.ok('GET', `repos/${ctx.repo}/pulls/${prNum}`);
-      return p ? { number: p.number, state: p.state, merged: Boolean(p.merged || p.merged_at), headSha: p.head?.sha ?? '', branch: p.head?.ref ?? '', baseBranch: p.base?.ref ?? '', mergeable: p.mergeable, mergeStateStatus: p.mergeable_state } : null;
-    },
-    mergePullRequest: async ({ pr: prNum, headSha }) => {
-      const res = await ctx.ports.gh(['pr', 'merge', String(prNum), '--repo', ctx.repo, '--merge', '--match-head-commit', headSha]);
-      return res.code === 0 ? { merged: true } : { merged: false, error: res.stderr || res.stdout || 'gh pr merge failed' };
-    },
-    commentOnPr: (prNum, body) => ctx.comment(prNum, body),
-  });
 }
 async function sweepWouldMerge(ctx, open, rows) {
   if (!open) return;
@@ -7730,9 +7724,6 @@ export async function tickCore(input, ports) {
   const open = rows && new Map(rows.filter(row => !row.pull_request).map(row => [row.number, row]));
   if (open) await sweepWouldMerge(ctx, open, rows).catch(error => ctx.warn(`Autopilot core could not sweep would-merge issues: ${error.message}`));
   await runPostMergeCheck(ctx);
-  if (ctx.state.cwd && readMergeQueue(ctx.root, { fs: ctx.fs }).items.some(i => ['queued', 'processing', 'synced'].includes(i.state))) {
-    await runCoreMergeQueue(ctx, settings.mode === 'auto' ? 'auto' : 'observe').catch(error => ctx.warn(`Autopilot core merge queue skipped: ${error.message}`));
-  }
   // Only open issues by trusted authors reach a prompt (the same rule as intake).
   ctx.trustedOpen = async () => ctx.openRows ??= Array.isArray(rows) ? (await Promise.all(rows.filter(row => !row.pull_request).map(async row => await ctx.trust(row) ? row : null))).filter(Boolean) : null;
   if (open) for (const job of readJobs(ctx.fs, ctx.root)) {
@@ -7900,8 +7891,8 @@ async function sweepFiles(ctx) {
 
 async function runPostMergeCheck(ctx) {
   if (!ctx.repo || ctx.budget?.state === 'low' || ctx.budget?.state === 'reserve') return;
-  const hasMerged = chronological(ctx.fs, ctx.root).some(row => row.outcome === 'merged' && Number.isSafeInteger(row.pr) && row.pr > 0);
-  if (!hasMerged && typeof ctx.ports.checkPostMerge !== 'function') return;
+  const hasCandidatePr = chronological(ctx.fs, ctx.root).some(row => row.postMerge !== true && Number.isSafeInteger(row.pr) && row.pr > 0);
+  if (!hasCandidatePr && typeof ctx.ports.checkPostMerge !== 'function') return;
   try {
     const regressionsMod = await import('./autopilot-regressions.mjs');
     const checker = ctx.ports.checkPostMerge ?? regressionsMod.checkPostMergeRegressions;
@@ -8000,8 +7991,6 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
     lines.push(`Circuit breaker: mode downgraded from auto to observe at ${breaker.trippedAt} (${breaker.reason}); fix the default branch and run pdd autopilot start --mode auto to resume merges.`);
   }
   if (intakeMode(settings.intake) === 'active' && named(state.intakeNote)) lines.push(oneLine(state.intakeNote, 300));
-  const mqLine = mergeQueueStatusLine(ports.root, { fs });
-  if (mqLine) lines.push(mqLine);
   const words = { now: (ports.now ?? Date.now)(), settings, longest: readLongest(fs, ports.root, (ports.now ?? Date.now)()) };
   const running = (job, part, role) => part && !part.watch?.stopped && !part.recorded ? `; ${processWords(job, part, role, words)}${pddWords(fs, part)}` : '';
   const suiteStatusOf = job => {

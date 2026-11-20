@@ -29,5 +29,6 @@
 ## 18. Patterns: a pure function and a state sequence
 
 - **Pure / independent steps (default — runs in parallel):** declare shared fixtures under top-level `"seeds"` and give each step `"from": "seed_name"` + `"patch": {...}` so steps execute concurrently and isolate failures.
+- **`"patch"` vs `"set"` for `null` values:** `"patch"` applies RFC 7396 JSON Merge Patch, so explicit `null` deletes that key from the cloned seed (breaking required nullable fields). Use step-level or `$use`-level `"set": {"/a/b": null}` (RFC 6901 JSON Pointers, applied after `"patch"`) to assign literal `null` or replace array elements.
 - **State sequence (persistence criteria only):** chain prior step outputs via `{"$step": "step-id#/field"}` or mutate shared `initial_world` across sequential steps (`<= 10` moves/rows/calls per step; split long replays across steps).
 - Never label interactive UI/screen behavior `"browser-only"`—give screens a `render` operation returning `{"html": string}` and an `app-map.json` (§13) with exact checks.

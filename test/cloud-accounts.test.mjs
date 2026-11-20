@@ -3840,3 +3840,165 @@ test('P0 surface audit (#2, #3c, #4): unified createCodexStepOverlay native auth
   assert.equal(untouched.env.CLAUDE_CODE_OAUTH_TOKEN, 'sk-ant-oat01-user_owned');
   assert.equal(untouched.env.ANTHROPIC_BASE_URL, 'https://custom-proxy.internal');
 });
+
+test('#3426 borrower revocation: gateway_grant_revoked and borrowed generic 401 rotate without tainting reauth_required', async t => {
+  const {
+    exhaustCloudPoolLogin,
+    isAuthFailureMessage,
+    isExplicitReauthCodeFailure,
+    isGatewayGrantRevokedFailure,
+    isReauthRequiredFailure,
+    readCloudAccountsState,
+    writeCloudAccountsState,
+  } = await import('../src/login-pool.mjs');
+
+  // 1. Classifiers separate borrower share/grant revocations from upstream owner reauth_required,
+  //    ignore test-assertion diagnostics, and never let grant-revoked text mask explicit upstream reauth codes.
+  const revokedMsg = 'HTTP 403 {"error":{"code":"gateway_grant_revoked","message":"Shared account authorization epoch changed"}}';
+  const revokedWith401 = 'HTTP 401 gateway_grant_revoked: Gateway grant was revoked';
+  const noisyExplicitReauth = 'note: gateway_grant_revoked seen in source, real error: oauth_not_allowed_for_organization';
+  const testAssertionNoise = 'AssertionError: expected "gateway_grant_revoked" in test/cloud-accounts.test.mjs to fail';
+  assert.equal(isGatewayGrantRevokedFailure(revokedMsg), true);
+  assert.equal(isGatewayGrantRevokedFailure(revokedWith401), true);
+  assert.equal(isGatewayGrantRevokedFailure(testAssertionNoise), false, 'test diagnostics must never trigger revocation retries');
+  assert.equal(isReauthRequiredFailure(revokedMsg), false, 'revoked borrower grant must never classify as reauth_required');
+  assert.equal(isReauthRequiredFailure(revokedWith401), false, 'revoked borrower grant with 401 must never classify as reauth_required');
+  assert.equal(isReauthRequiredFailure(noisyExplicitReauth), true, 'explicit upstream reauth code must never be masked by gateway_grant_revoked text');
+  assert.equal(isAuthFailureMessage(revokedMsg), true, 'revoked borrower grant must still rotate cleanly with 0 issue strikes');
+  assert.equal(isExplicitReauthCodeFailure('HTTP 401 Unauthorized'), false);
+  assert.equal(isExplicitReauthCodeFailure('403 oauth_not_allowed_for_organization'), true);
+
+  // 2. runStepAgentProcess rotates past borrowed gateway_grant_revoked and borrowed generic 401 without marking reauth_required.
+  const sb = makeTempSandbox(t, 'https://cloud.example.com');
+  writeCloudAccountsState({
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc_shared_1', label: 'shared-1', provider: 'codex', is_owner: false, state: 'ready' } },
+  }, { env: sb.env });
+  assert.equal(readCloudAccountsState({ env: sb.env }).active?.codex?.is_owner, false, 'is_owner must persist in accounts-state.json');
+  const leaseCalls = [];
+  const usageReports = [];
+  const mockFetch = async (url, init) => {
+    const u = String(url);
+    const body = init?.body ? JSON.parse(init.body) : {};
+    if (u.endsWith('/v1/accounts/lease')) {
+      leaseCalls.push(body);
+      const skip = new Set(body.skip_account_ids ?? []);
+      if (!skip.has('acc_shared_1')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            state: 'leased',
+            account: { account_id: 'acc_shared_1', label: 'shared-1', provider: 'codex', is_owner: false, state: 'ready' },
+            lease: {
+              lease_id: 'lse_shared_1',
+              delivery_mode: 'gateway_grant',
+              codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_shared_1',
+              codex_gateway_token: 'pddg_lse_shared_1_tok',
+            },
+          }),
+        };
+      }
+      if (!skip.has('acc_shared_2')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            state: 'leased',
+            account: { account_id: 'acc_shared_2', label: 'shared-2', provider: 'codex', is_owner: false, state: 'ready' },
+            lease: {
+              lease_id: 'lse_shared_2',
+              delivery_mode: 'gateway_grant',
+              codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_shared_2',
+              codex_gateway_token: 'pddg_lse_shared_2_tok',
+            },
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          state: 'leased',
+          account: { account_id: 'acc_backup_3', label: 'backup-3', provider: 'codex', is_owner: true, state: 'ready' },
+          lease: {
+            lease_id: 'lse_backup_3',
+            delivery_mode: 'gateway_grant',
+            codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_backup_3',
+            codex_gateway_token: 'pddg_lse_backup_3_tok',
+          },
+        }),
+      };
+    }
+    if (u.includes('/usage-report')) {
+      usageReports.push(body);
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+    }
+    return { ok: false, status: 404, text: async () => '{}' };
+  };
+
+  let runIdx = 0;
+  const stepRes = await runStepAgentProcess({
+    agent: 'codex',
+    step: 'build',
+    args: ['exec', '-'],
+    cwd: sb.root,
+    env: { ...sb.env, PDD_TOKEN: 'ghp_test_tok' },
+    run: async () => {
+      runIdx++;
+      if (runIdx === 1) return { code: 1, stdout: '', stderr: revokedMsg };
+      if (runIdx === 2) return { code: 1, stdout: '', stderr: 'HTTP 401 Unauthorized' };
+      return { code: 0, stdout: 'DONE', stderr: '' };
+    },
+    accountsPorts: { fetch: mockFetch },
+  });
+  assert.equal(stepRes.code, 0);
+  assert.equal(stepRes.stdout, 'DONE');
+  assert.equal(runIdx, 3);
+  assert.equal(usageReports.length, 0, 'revoked grants must not report fake quota exhaustion');
+  const stateAfterStep = readCloudAccountsState({ env: sb.env });
+  assert.equal(stateAfterStep.reauth?.acc_shared_1, undefined, 'gateway_grant_revoked must not mark account reauth_required');
+  assert.equal(stateAfterStep.reauth?.acc_shared_2, undefined, 'borrowed generic 401 must not mark account reauth_required');
+
+  // 3. exhaustCloudPoolLogin rotates past gateway_grant_revoked AND persisted borrowed generic 401 (accountWindows: null)
+  //    without poisoning reauth or posting usage-report.
+  writeCloudAccountsState({
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc_shared_1', label: 'shared-1', provider: 'codex', is_owner: false, state: 'ready' } },
+  }, { env: sb.env });
+  const exRes = await exhaustCloudPoolLogin({
+    cwd: sb.root,
+    env: { ...sb.env, PDD_TOKEN: 'ghp_test_tok' },
+    loginId: 'acc_shared_1',
+    accountWindows: null,
+    reason: 'HTTP 401 Unauthorized',
+    allowedKinds: ['codex'],
+  }, { fetch: mockFetch });
+  assert.equal(exRes.state, 'ready');
+  assert.equal(exRes.login.id, 'acc_shared_2');
+  assert.equal(usageReports.length, 0);
+  assert.equal(readCloudAccountsState({ env: sb.env }).reauth?.acc_shared_1, undefined, 'persisted is_owner: false must prevent generic 401 from poisoning reauth');
+
+  // 4. Real quota exhaustion in stderr must still report usage even if stdout mentions gateway_grant_revoked.
+  let quotaRunIdx = 0;
+  const quotaRes = await runStepAgentProcess({
+    agent: 'codex',
+    step: 'build',
+    args: ['exec', '-'],
+    cwd: sb.root,
+    env: { ...sb.env, PDD_TOKEN: 'ghp_test_tok' },
+    run: async () => {
+      quotaRunIdx++;
+      if (quotaRunIdx === 1) {
+        return { code: 1, stdout: 'inspecting gateway_grant_revoked handler', stderr: 'You have hit your usage limit for today.' };
+      }
+      return { code: 0, stdout: 'QUOTA_OK', stderr: '' };
+    },
+    accountsPorts: { fetch: mockFetch },
+  });
+  assert.equal(quotaRes.code, 0);
+  assert.equal(quotaRes.stdout, 'QUOTA_OK');
+  assert.equal(usageReports.length, 1, 'quota exhaustion must still report usage when stdout mentions gateway_grant_revoked');
+});

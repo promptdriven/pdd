@@ -4,40 +4,71 @@ Own `src/autopilot-regressions.mjs`. Inspect core merge history and GitHub
 evidence without changing GitHub, running agents, rerunning tests, or reverting.
 Provide both the stateless full-scan API (`regressionScan` and CLI command
 `runAutopilotRegressions`) and the bounded incremental post-merge check
-(`checkPostMergeRegressions`) used by [Autopilot core](autopilot-core.prompt.md)
-(`#3182`).
+(`checkPostMergeRegressions`) called by Autopilot core (`#3182`).
 
 ## Scan contract
 
-Export async `regressionScan(ports)`, a small hook for a later core caller.
-Required ports are `root` (the repository's core state directory), `repo`
-(owner/name), and async `gh(args)` returning `{code,stdout,stderr}` like the core
-port. `fs.readFileSync(path,'utf8')` and `now()` are injectable, with native fs and
-Date.now defaults. All decisions use these ports. Read only root/history.jsonl;
-an absent file means no merges. Skip invalid JSON/non-object lines, reporting
-incompleteness, and ignore outcomes other than `merged`. Deduplicate by repository
-(case insensitive) and positive integer PR. Core rows have `at` (epoch ms),
-`issue`, `pr`; optional row `repo` must match the supplied repository. Missing PR
-identity is reported as incomplete, never silently counted as ok.
+Export async `regressionScan(ports)`, a shared scanner reused by `pdd autopilot regressions` and `pdd metrics`.
+Required ports are `root` (the repository's core state directory, or `null` when only `candidates` are supplied), `repo`
+(`owner/name`), and async `gh(args)` returning `{code, stdout, stderr}` like the core
+port. `fs.readFileSync(path, 'utf8')` and `now()` are injectable, with native fs and
+Date.now defaults. Optional ports: `candidates` (array of `{pr, issue?, issues?, outcome?, mergeCommit?, mergedAt?, title?}`
+records from callers such as `pdd metrics`), `prs` (optional non-empty array of positive integer
+PR numbers restricting which PRs are scanned), `includeCi` (boolean, default `true`; when `false`,
+reuse valid pre-resolved `mergeCommit`, `mergedAt <= now`, and `title` on `candidates` and skip
+per-PR `pulls/{pr}`, `commits/{sha}`, `check-runs`, and `statuses` reads), `boundedPulls` (boolean,
+default `false`; when `true`, read `pulls?state=all&sort=updated&direction=desc&per_page=100` and
+stop pagination early once a descending-`updated_at` page reaches `updated_at <= since`), and
+`maxRequests` (positive integer request budget, default `100`). All decisions use these ports.
 
-Resolve each PR through REST, requiring merged_at and merge_commit_sha; read the
-commit and its first parent. Core history has no SHA, so the PR supplies it.
-Missing required identity, a failed read or malformed response adds an error;
-continue other merges and signals. A missing parent is incomplete. No error
-includes raw process output. Never turn unavailable evidence into an ok verdict.
+Read `root/history.jsonl` when `root` is provided; an absent `ENOENT` file means no history rows.
+Skip invalid JSON/non-object lines, reporting incompleteness (`"Invalid core history line."`).
+Include PRs from **both** `auto`-merged runs (`outcome === "merged"`) **and** non-`merged` runs
+that created a PR (`outcome` such as `"would-merge"` in `observe` mode, `"stopped"`, `"ended"`,
+`"needs-person"`, `"released"`, or `"abandoned"` with a positive integer `pr`) so PRs merged on
+GitHub after `observe`, stopped, or assisted runs are scanned identically to `auto`-merged PRs:
+- Optional row `repo` must be valid `owner/name` (else report error and skip) and match `ports.repo`
+  case-insensitively (different repo is skipped).
+- For `outcome === "merged"`, require a positive integer `pr`; missing/invalid `pr` is reported as
+  incomplete (`"Merged history row has no valid PR."`), never silently counted as ok. Mark these
+  rows `claimedMerged = true`.
+- For non-`merged` rows (including `"would-merge"`, `"stopped"`, `"ended"`, `"needs-person"`,
+  `"released"`, `"abandoned"`, or metadata rows without an outcome), if `pr` is absent/null/non-positive,
+  skip quietly with no error; if `pr` is a positive integer, record it as a candidate PR with
+  `claimedMerged = false`.
+- Merge optional `ports.candidates` using the same rules, deduplicating by repository
+  (case-insensitive) and positive integer `pr` in first appearance order. If the same `pr` appears
+  multiple times across outcomes, keep one entry, upgrade `claimedMerged` to `true` if any row has
+  `outcome === "merged"`, keep the first positive `issue`, and union all positive companion `issues`
+  (`row.issue` and `row.issues`). When `ports.prs` is provided, keep only entries whose `pr` is in `ports.prs`.
+
+Resolve each candidate PR through `GET repos/{repo}/pulls/{pr}`:
+- For `claimedMerged === false` (observe/stopped/assisted candidates): when the PR read succeeds
+  (HTTP 200, valid object with `number === pr`) and `merged_at == null` (open or closed unmerged on
+  GitHub), exclude that PR cleanly from `merges` with no error. When it has a valid `merged_at <= now`
+  and valid 40-hex `merge_commit_sha`, include it in `merges` and scan it identically to an
+  `auto`-merged PR.
+- For `claimedMerged === true`, require `merged_at <= now` and 40-hex `merge_commit_sha`.
+- For any candidate, a failed read, malformed response, future `merged_at > now`, or missing
+  `merge_commit_sha` on a merged PR adds an error and keeps the entry in `merges` with an
+  `unavailable` suspect signal; continue other merges and signals. Read the merge commit and its
+  first parent; a missing parent is incomplete. No error includes raw process output. Never turn
+  unavailable evidence into an ok verdict.
 
 Read all pages of check runs (filter all), commit statuses, timelines on the PR
-and recorded issue, repository issues updated since the earliest merge, repository
-PRs (all states), and commits on the default branch since the earliest merge.
+and all recorded `issues` (primary `issue` plus companion `issues`), repository issues updated since
+the earliest merge, repository PRs (all states), and commits on the default branch since the earliest merge.
 Validate check identity/app, status context, conclusion/state, PR/issue identity
 and event shapes; malformed observations make the affected merge incomplete.
 Keep already-read pages if a later page fails.
-Follow GitHub next links only within that repository's REST namespace; cycles,
+Follow GitHub next links only within that repository's REST namespace (matching
+`/repos/{repo}/` case-insensitively and rewriting matching same-endpoint canonical
+`/repositories/<id>/<subpath>` next links back onto `repos/{repo}/<subpath>`); cycles,
 invalid links and failed pages are errors rather than successful truncation.
 Use explicit GET for every GitHub call. Do not use search's limited result set.
 
-One scan may issue at most 100 GitHub requests in total, including failed reads
-and every page, across all merges and shared evidence. Before request 101, stop
+One scan may issue at most `maxRequests` (default `100`) GitHub requests in total, including failed reads
+and every page, across all merges and shared evidence. Before exceeding the budget, stop
 all further GitHub reads. Also stop further reads immediately after HTTP 429,
 any Retry-After response header, or x-ratelimit-remaining at or below zero
 (regardless of reset time). Observe headers even when gh throws with stdout.
@@ -63,12 +94,15 @@ is proven, otherwise suspect if any signal exists, otherwise ok.
 | Later default-branch commit says `This reverts commit FULL_SHA.` or the standard merge-revert form `This reverts commit FULL_SHA, reversing` followed by whitespace and `changes made to PARENT.` | proven when FULL_SHA matches the exact merge SHA, case insensitive; shorter, longer and different SHAs never match |
 | Later PR explicitly says `Reverts owner/repo#PR`, `Reverts #PR`, or `Reverts` followed by the exact PR URL | proven if merged, suspect if only proposed; closed unmerged PRs stay suspect |
 | A later PR title is exactly `Revert "ORIGINAL_TITLE"`, without an exact target | suspect |
-| New issue title/body explicitly says `Regressed by #PR`, qualified repository reference, or exact PR URL | proven |
-| New issue mentions this PR or recorded issue through a number, same-repo qualified reference or URL; or a timeline cross-reference originates in a new same-repo issue | suspect |
-| Recorded issue has a later `reopened` event | suspect |
+| New same-repo issue title/body explicitly blames this PR with `Regressed by`, `Regression from`, `Regression in`, `Broken by`, `Caused by`, or `Introduced by` followed by optional `PR ` and `#PR`, qualified `owner/repo#PR`, or exact PR URL | proven (`kind: "reference"`, `detail` naming `Issue #<number>`) |
+| New same-repo issue carrying label `regression` (case-insensitive match on label `name` or string label) that references this PR or any recorded issue of the merge (same-repo `#N`, qualified `owner/repo#N`, URL, or timeline `cross-referenced` event) | proven (`kind: "reference"`, `detail` naming `Issue #<number>`) |
+| Unlabeled new issue mentions this PR or recorded issue through a number, same-repo qualified reference or URL; or an unlabeled timeline cross-reference originates in a new same-repo issue | suspect (`kind: "reference"`) |
+| Any recorded issue of the merge has a later `reopened` event | suspect (`kind: "reopened"`) |
 
 Match complete reference identities, never number prefixes or references to
-another repository. Cross-references and reopens alone do not establish cause.
+another repository. Cross-references and reopens alone do not establish cause in
+the standalone `regressionScan` `proven` verdict (consumers such as `pdd metrics`
+count `reopened` signals explicitly in their reopened breakdown).
 Ignore a reopen carrying a `<!-- pdd:... -->` marker or with a same-actor marked
 comment within five minutes: machine actions cannot establish a human reopen.
 Do not suppress other people's events on the basis of the account name alone.
@@ -79,27 +113,30 @@ names occupy separate namespaces. A later successful rerun clears an earlier red
 Return exactly `{schema, scannedAt, complete, merges, counts, days, errors}`:
 `schema` is `pdd.autopilot-regressions.v1`, `scannedAt` is now as ISO UTC;
 `complete` is true only if `errors` is empty. `merges` follows first history
-appearance, with exactly `{repo, pr, issue, mergeCommit, parent, mergedAt,
-classification, provenAt, signals}`. `issue` is the recorded positive issue or
-null; SHA/time values unavailable after a read failure are null. `provenAt` is
-the earliest dated proven signal or null. `counts` has integer `ok`, `suspect`,
-`proven`; `days` is an ascending array of `{date, proven}` (UTC YYYY-MM-DD,
-distinct PRs first proven that day). Multiple signals count a merge only once,
-including duplicate history lines. Never count suspects or undated proof in a
-daily total. `errors` is an array of safe diagnostic strings. A repeated scan
-recomputes from evidence, with no saved ledger or metric write. Reporting days
-are UTC; a future scorecard consumer owns its timezone/window conversion.
+appearance (excluding unmerged non-`merged` candidates), with `{repo, pr, issue,
+mergeCommit, parent, mergedAt, classification, provenAt, signals}`. `issue` is the
+recorded positive issue or null; SHA/time values unavailable after a read failure
+are null. `provenAt` is the earliest dated proven signal or null. `counts` has
+integer `ok`, `suspect`, `proven`; `days` is an ascending array of `{date, proven}`
+(UTC YYYY-MM-DD, distinct PRs first proven that day). Multiple signals count a merge
+only once, including duplicate history lines. Never count suspects or undated proof
+in a daily total. `errors` is an array of safe diagnostic strings. A repeated scan
+recomputes from evidence, with no saved ledger or metric write. Reporting days are
+UTC; scorecard consumers (`metrics-model`) own timezone/window conversion.
 
 ## Incremental post-merge check
 
-Export async `checkPostMergeRegressions(ports)` for [Autopilot core](autopilot-core.prompt.md)
+Export async `checkPostMergeRegressions(ports)` for Autopilot core
 post-merge monitoring (`#3182`). Required ports are `root`, `repo` and GET-only
 `gh(args)`; optional ports are `fs`, `now`, `maxRequests` (default `40`),
 `maxMerges` (default `10`) and `minRecheckMs` (default `900000`, 15 minutes).
-Read distinct `outcome === "merged"` rows from `root/history.jsonl` (recording
-both `issue` and any companion `issues` array) and persist incremental state
-atomically at `root/post-merge.json` (`schema: "pdd.autopilot-post-merge.v1"`).
-When no merged PRs exist in history, return zero counts without calling GitHub
+Read distinct PR-bearing rows from `root/history.jsonl` — both `outcome === "merged"`
+and non-`merged` outcomes with a positive integer `pr` (`would-merge`, `stopped`,
+`ended`, `needs-person`, `released`, `abandoned`, skipping unmerged PRs once resolved
+on GitHub and persisting `closedUnmerged: true` for closed-unmerged PRs so they are
+not re-polled on later ticks; recording both `issue` and any companion `issues` array) — and persist
+incremental state atomically at `root/post-merge.json` (`schema: "pdd.autopilot-post-merge.v1"`).
+When no qualifying PRs exist in history, return zero counts without calling GitHub
 or writing `post-merge.json`.
 
 Each call starts at the saved `cursor`, skips merges merged in the current tick
@@ -202,30 +239,28 @@ File errors give exit 1. Successful file output still prints the report.
 
 ## Dependencies
 
-- [Core engine](autopilot-core.prompt.md), State: required generation/verification
-  context for history records and root layout; the scanner does not invoke ticks.
-- [GitHub calls](github-calls.prompt.md): required native context only for
-  parsing `githubReply`; this command does not use its write-capable counter.
-- [Workflow worktree](workflow-worktree.prompt.md): required native context for
-  `githubOriginRepository` parsing of origin in CLI discovery.
 - [Secret redaction](secret-redaction.prompt.md): required for diagnostic and
-  displayed external names. Node fs/path/crypto and the native process adapter
-  supply local I/O, path resolution and deterministic SHA256 identity.
+  displayed external names.
+- Native runtime adapters only (not invoked by `regressionScan` runtime checks):
+  `githubReply` (from `src/github-calls.mjs`) parses HTTP status line,
+  `x-ratelimit-remaining`, `retry-after`, and `link` headers plus JSON body
+  after the blank header/body separator; `githubOriginRepository` (from
+  `src/workflow-worktree.mjs`) parses Git origin in CLI discovery; Node
+  fs/path/crypto and the native process adapter supply local I/O, path
+  resolution, and deterministic SHA256 identity.
 
-The partial Runtime entry covers `regressionScan`; command discovery/output are
-native-test coverage. Transport root/repo bind the same ports; numeric now binds
-`now()`. Resource `fs.readFileSync` binds the actual UTF-8 read: `{text,code}`
-wraps returned text with code empty, or a failed read with code ENOENT/other and
-empty text, which the adapter raises as that filesystem error. Resource
-`github.gh` binds the actual gh port arguments and process reply. These are
-adapter shapes, not additional production exports. No live Runtime check is
-claimed by this draft.
+## Ports for `regressionScan`
 
-<details>
-<summary>Runtime interface</summary>
+For runtime checks, `regressionScan` takes `{ root: string | null, repo: string, now: number, candidates?: Array<{ pr: integer, issue?: integer | null, issues?: integer[], outcome?: string }>, prs?: integer[], maxRequests?: integer }` and reads outside state exclusively through two injected read ports:
+- `fs.readFileSync({ path: string })` returning `{ text: string, code: string }` (`code: ""` on success, or `"ENOENT"` / error code with empty `text` on failure).
+- `github.get({ endpoint: string })` returning `{ code: integer, stdout: string, stderr: string }` (the runtime counterpart of `gh(["api", "--include", "--method", "GET", endpoint])`, where `stdout` contains HTTP status line and headers separated from the JSON body by `\r\n\r\n` or `\n\n`), using exact REST endpoints under `repos/${repo}/`:
+  - `repos/${repo}/pulls/${pr}`
+  - `repos/${repo}/commits/${mergeCommit}`
+  - `repos/${repo}/commits/${ref}/check-runs?filter=all&per_page=100`
+  - `repos/${repo}/commits/${ref}/statuses?per_page=100`
+  - `repos/${repo}/issues?state=all&since=${encodeURIComponent(since)}&per_page=100` (where `since` is the earliest merged PR's UTC ISO timestamp `YYYY-MM-DDTHH:MM:SS.000Z`)
+  - `repos/${repo}/pulls?state=all&per_page=100`
+  - `repos/${repo}/commits?since=${encodeURIComponent(since)}&per_page=100`
+  - `repos/${repo}/issues/${number}/timeline?per_page=100`
 
-```json
-{"kind":"partial","status":"draft","prose_sha256":"","entries":[{"operation":"regressionScan","input_schema":{"type":"object","properties":{"root":{"type":"string"},"repo":{"type":"string"},"now":{"type":"number"}},"required":["root","repo","now"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"schema":{"type":"string","const":"pdd.autopilot-regressions.v1"},"scannedAt":{"type":"string"},"complete":{"type":"boolean"},"merges":{"type":"array","items":{"type":"object","properties":{"repo":{"type":"string"},"pr":{"type":"integer"},"issue":{"oneOf":[{"type":"integer"},{"type":"null"}]},"mergeCommit":{"oneOf":[{"type":"string"},{"type":"null"}]},"parent":{"oneOf":[{"type":"string"},{"type":"null"}]},"mergedAt":{"oneOf":[{"type":"string"},{"type":"null"}]},"classification":{"type":"string","enum":["ok","suspect","proven"]},"provenAt":{"oneOf":[{"type":"string"},{"type":"null"}]},"signals":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["ci","revert","reopened","reference","unavailable"]},"level":{"type":"string","enum":["suspect","proven"]},"at":{"oneOf":[{"type":"string"},{"type":"null"}]},"url":{"oneOf":[{"type":"string"},{"type":"null"}]},"detail":{"type":"string"},"parentUrl":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["kind","level","at","url","detail","parentUrl"],"additionalProperties":false}}},"required":["repo","pr","issue","mergeCommit","parent","mergedAt","classification","provenAt","signals"],"additionalProperties":false}},"counts":{"type":"object","properties":{"ok":{"type":"integer"},"suspect":{"type":"integer"},"proven":{"type":"integer"}},"required":["ok","suspect","proven"],"additionalProperties":false},"days":{"type":"array","items":{"type":"object","properties":{"date":{"type":"string"},"proven":{"type":"integer"}},"required":["date","proven"],"additionalProperties":false}},"errors":{"type":"array","items":{"type":"string"}}},"required":["schema","scannedAt","complete","merges","counts","days","errors"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[{"name":"fs","kind":"port","access":"read","operations":[{"name":"readFileSync","access":"read","arguments_schema":{"type":"object","properties":{"path":{"type":"string"},"encoding":{"type":"string","const":"utf8"}},"required":["path","encoding"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"text":{"type":"string"},"code":{"type":"string"}},"required":["text","code"],"additionalProperties":false}}]},{"name":"github","kind":"port","access":"read","operations":[{"name":"gh","access":"read","arguments_schema":{"type":"object","properties":{"args":{"type":"array","items":{"type":"string"}}},"required":["args"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"}},"required":["code","stdout","stderr"],"additionalProperties":false}}]}],"limits":{"max_steps":10,"max_model_calls":12},"conventions":[]}
-```
-
-</details>
+Command discovery and `--file` output in `runAutopilotRegressions` are covered by native tests.
