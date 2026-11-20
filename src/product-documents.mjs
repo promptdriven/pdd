@@ -1,9 +1,15 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 9a97189358eda6c427d47028bc1a61604d4d512e3bddfa225eef9626d070ff21).
+// Generated from prompts/cli/product.prompt.md (sha256: 39c64632cfee9dd0b53ebbe34a676fdb84023e94c6423207497ef136beadd282).
+import { posix } from 'node:path';
 export const invalid = message => { throw Object.assign(Error(message), { code: 'invalid-product' }); };
-const clean = value => String(value ?? '').trim().replace(/^`(.*)`$/, '$1');
-const csv = value => !value || value === '-' ? [] : value.split(',').map(clean).filter(Boolean);
+const clean = value => String(value ?? '').trim().replace(/^`([^`]*)`$/, '$1').trim();
+const csv = value => {
+  const s = clean(value);
+  return !s || s === '-' ? [] : s.split(',').map(clean).filter(Boolean);
+};
 const THROUGH = ['prompt-pr', 'code'];
 const SHARED_SURFACE_COLS = new Set(['shared surfaces', 'shared surface', 'updates', 'also updates']);
+const PROMPT_PATH_COLS = new Set(['prompt', 'prompts', 'file', 'path', 'prompt file', 'prompt path']);
+const EXAMPLE_DIR_RE = /(?:^|\/)examples(?:\/|$)/i;
 const SIMPLE_ID_RE = /^[a-z][a-zA-Z0-9_-]*$/;
 const VERSION_RE = /^v?\d+$/i;
 const NON_OP_EXTENSIONS = new Set([
@@ -31,12 +37,18 @@ const columns = {
   Runs: ['Run', 'Part', 'Slice', 'Stories', 'Needs'], Boundaries: ['From', 'To', 'What crosses', 'Contract'],
 };
 
+function countTrailingBackslashes(str) {
+  let count = 0;
+  for (let i = str.length - 1; i >= 0 && str[i] === '\\'; i--) count++;
+  return count;
+}
+
 function tableCells(line) {
   const text = line.trim(), cells = [''];
   for (const character of text) {
     const last = cells.length - 1;
     if (character !== '|') cells[last] += character;
-    else if (/\\*$/.exec(cells[last])[0].length % 2) cells[last] = cells[last].slice(0, -1) + '|';
+    else if (countTrailingBackslashes(cells[last]) % 2) cells[last] = cells[last].slice(0, -1) + '|';
     else cells.push('');
   }
   if (text.startsWith('|')) cells.shift();
@@ -102,7 +114,10 @@ const rows = (text, section, file) => rowsWithMeta(text, section, file).rows.map
 const duplicate = (items, key, file) => { const seen = new Set(); for (const item of items) { if (!item[key] || seen.has(item[key])) invalid(`${file}: duplicate or empty ${key} ${item[key]}.`); seen.add(item[key]); } };
 
 function normalizeRepoPath(raw) {
-  let s = clean(raw).replace(/#.*$/, '').trim();
+  let s = clean(raw);
+  const hash = s.indexOf('#');
+  if (hash >= 0) s = s.slice(0, hash);
+  s = s.trim();
   while (s.startsWith('./')) s = s.slice(2);
   while (s.endsWith('/')) s = s.slice(0, -1);
   if (!s || s.length > 1000 || s.startsWith('/') || /[\\\x00-\x1f\x7f]/.test(s)) return null;
@@ -113,32 +128,57 @@ function normalizeRepoPath(raw) {
 function parseRulesToCheck(mapText) {
   const sec = findSectionLines(mapText, 'Rules to check', { caseInsensitive: true });
   if (!sec) return { hasSection: false, rules: [] };
-  const tableLines = sec.lines.filter(item => /^\s*\|/.test(item.text));
-  if (tableLines.length > 0) {
-    const table = tableLines.map(item => ({ lineNo: item.lineNo, cells: tableCells(item.text) }));
-    const heading = table.shift().cells;
-    const findCol = names => heading.findIndex(col => names.includes(col.toLowerCase()));
-    const idIdx = findCol(['id']);
-    const ownerIdx = findCol(['owner']);
-    const ruleIdx = findCol(['rule']);
-    const verifiedIdx = findCol(['verified by', 'verified_by', 'verified']);
-    if (idIdx < 0) invalid('product/map.md: Rules to check is missing column Id.');
-    if (ownerIdx < 0) invalid('product/map.md: Rules to check is missing column Owner.');
-    if (ruleIdx < 0) invalid('product/map.md: Rules to check is missing column Rule.');
-    if (verifiedIdx < 0) invalid('product/map.md: Rules to check is missing column Verified By.');
+
+  const tables = [];
+  let current = [];
+  for (const item of sec.lines) {
+    if (/^\s*\|/.test(item.text)) {
+      current.push({ lineNo: item.lineNo, cells: tableCells(item.text) });
+    } else if (current.length) {
+      tables.push(current);
+      current = [];
+    }
+  }
+  if (current.length) tables.push(current);
+
+  if (tables.length > 0) {
+    const findCol = (heading, names) => heading.findIndex(col => names.includes(col.toLowerCase()));
+    const parseCols = heading => ({
+      idIdx: findCol(heading, ['id']),
+      ownerIdx: findCol(heading, ['owner']),
+      ruleIdx: findCol(heading, ['rule']),
+      verifiedIdx: findCol(heading, ['verified by', 'verified_by', 'verified']),
+    });
     const rules = [];
-    for (const item of table) {
-      if (isSeparatorRow(item.cells)) continue;
-      const id = item.cells[idIdx] ?? '';
-      const owner = item.cells[ownerIdx] ?? '';
-      const rule = item.cells[ruleIdx] ?? '';
-      const rawVerified = item.cells[verifiedIdx] ?? '';
-      const verifiedBy = rawVerified === '-' ? '' : rawVerified;
-      rules.push({ id, owner, rule, verifiedBy });
+    for (const block of tables) {
+      let cols = parseCols(block[0].cells);
+      if (cols.idIdx < 0) invalid('product/map.md: Rules to check is missing column Id.');
+      if (cols.ownerIdx < 0) invalid('product/map.md: Rules to check is missing column Owner.');
+      if (cols.ruleIdx < 0) invalid('product/map.md: Rules to check is missing column Rule.');
+      if (cols.verifiedIdx < 0) invalid('product/map.md: Rules to check is missing column Verified By.');
+      for (let i = 1; i < block.length; i++) {
+        const cells = block[i].cells;
+        if (isSeparatorRow(cells)) continue;
+        if (i + 1 < block.length && isSeparatorRow(block[i + 1].cells)) {
+          const nextCols = parseCols(cells);
+          if (nextCols.idIdx >= 0 && nextCols.ownerIdx >= 0 && nextCols.ruleIdx >= 0 && nextCols.verifiedIdx >= 0) {
+            cols = nextCols;
+            continue;
+          }
+        }
+        const id = cells[cols.idIdx] ?? '';
+        const owner = cells[cols.ownerIdx] ?? '';
+        const rule = cells[cols.ruleIdx] ?? '';
+        const rawVerified = cells[cols.verifiedIdx] ?? '';
+        const verifiedBy = rawVerified === '-' ? '' : rawVerified;
+        rules.push({ id, owner, rule, verifiedBy });
+      }
     }
     duplicate(rules, 'id', 'product/map.md');
     for (const entry of rules) {
-      if (!entry.owner || entry.owner === '-') invalid(`product/map.md: Rules to check row ${entry.id} is missing Owner.`);
+      if (entry.id === '-') invalid('product/map.md: Rules to check row has invalid Id -.');
+      const owners = csv(entry.owner).filter(o => o !== '-');
+      if (!entry.owner || entry.owner === '-' || owners.length === 0) invalid(`product/map.md: Rules to check row ${entry.id} is missing Owner.`);
       if (!entry.rule || entry.rule === '-') invalid(`product/map.md: Rules to check row ${entry.id} is missing Rule.`);
     }
     return { hasSection: true, rules };
@@ -219,21 +259,28 @@ function stripMarkdownLinkTargetsLinear(text) {
 }
 
 function extractPromptRefsFromLine(line, fallbackFolder) {
-  const text = stripUrlsLinear(line);
+  const source = String(line ?? '');
   const rawRefs = [];
+  const nonLinkChunks = [];
+  let cursor = 0;
 
-  // 1. Markdown links: [label](target) via linear indexOf('](') scan
-  scanMarkdownLinksLinear(text, (_start, _end, _label, rawTarget) => {
+  // 1. Markdown links: [label](target) via linear indexOf('](') scan; strip entire link span before Pass-2 so link labels are never re-parsed as separate prompts.
+  scanMarkdownLinksLinear(source, (start, end, _label, rawTarget) => {
+    nonLinkChunks.push(source.slice(cursor, start), ' ');
+    cursor = end;
     let target = rawTarget.trim();
     if (target.startsWith('<') && target.endsWith('>')) target = target.slice(1, -1).trim();
     const space = target.search(/\s/);
     if (space >= 0) target = target.slice(0, space);
+    if (target.includes('://') || /^mailto:/i.test(target)) return;
     const hash = target.indexOf('#');
     if (hash >= 0) target = target.slice(0, hash);
     if (target.endsWith('.prompt.md')) rawRefs.push(target);
   });
+  nonLinkChunks.push(source.slice(cursor));
 
-  // 2. Linear token scan across backticks and prose
+  // 2. Linear token scan across backticks and prose outside Markdown links
+  const text = stripUrlsLinear(nonLinkChunks.join(''));
   let tokenStart = -1;
   const isDelim = ch => ch === ' ' || ch === '\t' || ch === ',' || ch === ';' || ch === '(' || ch === ')'
     || ch === '[' || ch === ']' || ch === '{' || ch === '}' || ch === '"' || ch === '\''
@@ -261,7 +308,11 @@ function extractPromptRefsFromLine(line, fallbackFolder) {
   for (const ref of rawRefs) {
     let candidate = ref.trim();
     while (candidate.startsWith('./')) candidate = candidate.slice(2);
-    if (!candidate.includes('/') && fallbackFolder) candidate = `${fallbackFolder}/${candidate}`;
+    if (candidate.startsWith('../') && !/[\\\x00-\x1f\x7f]/.test(candidate)) {
+      candidate = posix.normalize(posix.join('product', candidate));
+    } else if (!candidate.includes('/') && fallbackFolder) {
+      candidate = `${fallbackFolder}/${candidate}`;
+    }
     const norm = normalizeRepoPath(candidate);
     if (norm && norm.endsWith('.prompt.md')) normalized.push(norm);
   }
@@ -281,22 +332,61 @@ function buildPartLookups(parts) {
   }
   partsByFolderDesc.sort((a, b) => b.folder.length - a.folder.length || a.part.localeCompare(b.part));
   const inferPart = (path, hintPart = '') => {
-    if (hintPart && folderByPart.has(hintPart)) return hintPart;
     for (const item of partsByFolderDesc) {
       if (path === item.folder || path.startsWith(`${item.folder}/`)) return item.part;
     }
+    if (hintPart && folderByPart.has(hintPart)) return hintPart;
     return hintPart;
   };
   return { folderByPart, partsByFolderDesc, inferPart };
 }
 
-function matchPartMentionInHeading(text, parts, folderByPart) {
-  const cleaned = clean(text);
-  for (const p of parts) {
-    const folder = folderByPart.get(p.part);
-    if (folder && cleaned.includes(folder)) return { part: p.part, folder };
+function isPathWordChar(ch) {
+  return Boolean(ch) && (isIdentChar(ch) || ch === '.');
+}
+
+function containsFolderPath(text, folder) {
+  if (!folder) return false;
+  let from = 0;
+  while (from <= text.length - folder.length) {
+    const idx = text.indexOf(folder, from);
+    if (idx < 0) return false;
+    from = idx + 1;
+    const after = text[idx + folder.length] ?? '';
+    if (isPathWordChar(after)) continue;
+    const before = idx > 0 ? text[idx - 1] : '';
+    if (isPathWordChar(before)) continue;
+    if (before === '/') {
+      const prefix = text.slice(0, idx);
+      const isDotSlash = prefix.endsWith('./') && (idx === 2 || (!isPathWordChar(text[idx - 3]) && text[idx - 3] !== '/'));
+      const isDotDotSlash = prefix.endsWith('../') && (idx === 3 || (!isPathWordChar(text[idx - 4]) && text[idx - 4] !== '/'));
+      if (!isDotSlash && !isDotDotSlash) continue;
+    }
+    return true;
   }
-  const firstWord = clean(cleaned.split(/[\s(:—–-]+/)[0] ?? '');
+  return false;
+}
+
+function unwrapHeadingToken(raw) {
+  let s = String(raw ?? '').trim();
+  for (let i = 0; i < 3; i++) {
+    const prev = s;
+    s = s.replace(/^\*\*([^*]+)\*\*$/, '$1').trim();
+    s = s.replace(/^`([^`]*)`$/, '$1').trim();
+    while (s.endsWith(':') || s.endsWith('—') || s.endsWith('–') || s.endsWith(',')) s = s.slice(0, -1).trim();
+    if (s === prev) break;
+  }
+  return s;
+}
+
+function matchPartMentionInHeading(text, partsByFolderDesc, folderByPart) {
+  const cleaned = clean(text);
+  for (const item of partsByFolderDesc) {
+    if (containsFolderPath(cleaned, item.folder)) return item;
+  }
+  const rawFirst = cleaned.split(/\s+/)[0] ?? '';
+  const unwrapped = unwrapHeadingToken(rawFirst);
+  const firstWord = unwrapHeadingToken(unwrapped.split(/[:(—–,]/)[0] ?? '');
   if (firstWord && folderByPart.has(firstWord)) {
     return { part: firstWord, folder: folderByPart.get(firstWord) };
   }
@@ -306,12 +396,13 @@ function matchPartMentionInHeading(text, parts, folderByPart) {
 function parsePlanPrompts(planText, parts = []) {
   const sec = findSectionLines(planText, 'Prompts', { caseInsensitive: true });
   if (!sec) return { hasSection: false, prompts: [] };
-  const { folderByPart, inferPart } = buildPartLookups(parts);
+  const { folderByPart, partsByFolderDesc, inferPart } = buildPartLookups(parts);
   const seen = new Map();
   let currentPart = '';
   let currentFolder = '';
   let tableHeader = null;
   let partCol = -1;
+  let promptCols = [];
 
   const record = (path, hintPart, line) => {
     if (seen.has(path)) return;
@@ -320,11 +411,11 @@ function parsePlanPrompts(planText, parts = []) {
 
   for (const item of sec.lines) {
     const trimmed = item.text.trim();
-    if (!trimmed) { tableHeader = null; partCol = -1; continue; }
+    if (!trimmed) { tableHeader = null; partCol = -1; promptCols = []; continue; }
     const sub = /^#{3,6}[ \t]+(.+)$/.exec(trimmed);
     if (sub) {
-      tableHeader = null; partCol = -1;
-      const matched = matchPartMentionInHeading(sub[1], parts, folderByPart);
+      tableHeader = null; partCol = -1; promptCols = [];
+      const matched = matchPartMentionInHeading(sub[1], partsByFolderDesc, folderByPart);
       if (matched) { currentPart = matched.part; currentFolder = matched.folder; }
       else { currentPart = ''; currentFolder = ''; }
       continue;
@@ -334,23 +425,29 @@ function parsePlanPrompts(planText, parts = []) {
       if (!tableHeader) {
         tableHeader = cells;
         partCol = cells.findIndex(c => ['part', 'owner'].includes(c.toLowerCase()));
+        promptCols = cells
+          .map((c, idx) => (PROMPT_PATH_COLS.has(c.toLowerCase()) ? idx : -1))
+          .filter(idx => idx >= 0);
         continue;
       }
       if (isSeparatorRow(cells)) continue;
       const rowPart = partCol >= 0 ? clean(cells[partCol] ?? '') : '';
       const rowFolder = (rowPart && folderByPart.get(rowPart)) || currentFolder;
-      for (const cell of cells) {
+      const cellsToScan = promptCols.length > 0
+        ? promptCols.map(idx => cells[idx] ?? '')
+        : cells;
+      for (const cell of cellsToScan) {
         for (const path of extractPromptRefsFromLine(cell, rowFolder)) {
           record(path, rowPart || currentPart, item.lineNo);
         }
       }
       continue;
     }
-    tableHeader = null; partCol = -1;
+    tableHeader = null; partCol = -1; promptCols = [];
     let linePart = currentPart;
     let lineFolder = currentFolder;
     const leadText = trimmed.replace(/^(?:[-*+]|\d+[.)])\s+/, '').replace(/^\*\*([^*\r\n]+)\*\*/, '$1');
-    const leadMatch = matchPartMentionInHeading(leadText, parts, folderByPart);
+    const leadMatch = matchPartMentionInHeading(leadText, partsByFolderDesc, folderByPart);
     if (leadMatch) { linePart = leadMatch.part; lineFolder = leadMatch.folder; }
     for (const path of extractPromptRefsFromLine(trimmed, lineFolder)) {
       record(path, linePart, item.lineNo);
@@ -416,14 +513,33 @@ function parsePlanBoundaryOperations(planText, parts = []) {
     const key = `${item.part}\0${item.shortName}`;
     const existing = seen.get(key);
     if (!existing) { seen.set(key, item); return; }
-    if (!existing.explicitPart && item.explicitPart) seen.set(key, item);
+    if ((!existing.explicitPart && item.explicitPart) || (!existing.from && item.from)) {
+      seen.set(key, {
+        ...existing,
+        ...item,
+        explicitPart: existing.explicitPart || item.explicitPart,
+        from: existing.from || item.from,
+        to: existing.to || item.to,
+      });
+    }
   };
 
   let heading = null;
+  let inNeverCrosses = false;
+  let neverCrossesSawBody = false;
   for (const item of sec.lines) {
     const trimmed = item.text.trim();
-    if (!trimmed) { heading = null; continue; }
+    if (!trimmed) {
+      heading = null;
+      if (inNeverCrosses && neverCrossesSawBody) {
+        inNeverCrosses = false;
+        neverCrossesSawBody = false;
+      }
+      continue;
+    }
     if (/^\s*\|/.test(item.text)) {
+      inNeverCrosses = false;
+      neverCrossesSawBody = false;
       const cells = tableCells(item.text);
       if (!heading) { heading = cells; continue; }
       if (isSeparatorRow(cells)) continue;
@@ -442,7 +558,29 @@ function parsePlanBoundaryOperations(planText, parts = []) {
       continue;
     }
     heading = null;
-    if (/^(?:[-*+]\s+)?(?:\*\*)?never\s+crosses\b/i.test(trimmed)) continue;
+    const isSubheading = /^#{3,6}[ \t]+/.test(trimmed);
+    const neverMatch = /^(?:#{3,6}[ \t]+|(?:[-*+]|\d+[.)])[ \t]+)?(?:\*\*)?never[ \t]+crosses\b/i.exec(trimmed);
+    if (neverMatch) {
+      const rest = trimmed
+        .slice(neverMatch[0].length)
+        .replace(/^\*\*/, '')
+        .trim()
+        .replace(/^:/, '')
+        .trim()
+        .replace(/^\*\*/, '')
+        .trim();
+      inNeverCrosses = true;
+      neverCrossesSawBody = rest.length > 0;
+      continue;
+    }
+    if (isSubheading) {
+      inNeverCrosses = false;
+      neverCrossesSawBody = false;
+    }
+    if (inNeverCrosses) {
+      neverCrossesSawBody = true;
+      continue;
+    }
     for (const op of extractBoundaryOpsFromText(trimmed, { requirePartPrefix: true, line: item.lineNo, knownParts })) {
       addOp(op);
     }
@@ -451,10 +589,9 @@ function parsePlanBoundaryOperations(planText, parts = []) {
 }
 
 function parseSharedSurfaceRunLines(runSection, runs) {
-  if (!runSection) return { perRun: new Map(), sectionDefaults: [] };
+  if (!runSection) return new Map();
   const byRun = new Map(runs.map(r => [r.run, r]));
   const perRun = new Map();
-  const sectionDefaults = [];
   let currentRun = null;
 
   const addFor = (runName, list) => {
@@ -463,34 +600,36 @@ function parseSharedSurfaceRunLines(runSection, runs) {
     perRun.get(runName).push(...list);
   };
 
+  const stripLeadingBold = s => String(s ?? '').replace(/^\*\*[ \t]*/, '');
+
   for (const item of runSection.lines) {
     const trimmed = item.text.trim();
     if (!trimmed || /^\s*\|/.test(item.text)) continue;
     const sub = /^#{3,6}[ \t]+(.+)$/.exec(trimmed);
     if (sub) {
-      const candidate = clean(sub[1].split(/\s+/)[0] ?? '');
+      const rawFirst = sub[1].trim().split(/\s+/)[0] ?? '';
+      const unwrapped = unwrapHeadingToken(rawFirst);
+      const candidate = unwrapHeadingToken(unwrapped.split(/[:(—–,]/)[0] ?? '');
       currentRun = byRun.has(candidate) ? candidate : null;
       continue;
     }
-    const line = trimmed.replace(/^(?:[-*+]|\d+[.)])\s+/, '');
-    const paren = /^(?:Shared\s+surfaces?|Also\s+updates)\s*\(([^()\r\n]+)\)\s*:\s*(.*)$/i.exec(line);
+    const line = trimmed.replace(/^(?:[-*+]|\d+[.)])[ \t]+/, '');
+    const paren = /^(?:\*\*)?(?:Shared[ \t]+surfaces?|Also[ \t]+updates)[ \t]*\(([^()\r\n]+)\)(?:\*\*)?[ \t]*:[ \t]*(.*)$/i.exec(line);
     if (paren) {
-      addFor(clean(paren[1]), csv(paren[2]));
+      addFor(unwrapHeadingToken(paren[1]), csv(stripLeadingBold(paren[2])));
       continue;
     }
-    const prefixed = /^([A-Za-z0-9._-]+)\s*:\s*(?:Shared\s+surfaces?|Also\s+updates)\s*:\s*(.*)$/i.exec(line);
+    const prefixed = /^([*`]{0,3}[A-Za-z0-9._-]+[*`]{0,3})[ \t]*:[ \t]*(?:\*\*)?(?:Shared[ \t]+surfaces?|Also[ \t]+updates)(?:\*\*)?[ \t]*:[ \t]*(.*)$/i.exec(line);
     if (prefixed) {
-      addFor(clean(prefixed[1]), csv(prefixed[2]));
+      addFor(unwrapHeadingToken(prefixed[1]), csv(stripLeadingBold(prefixed[2])));
       continue;
     }
-    const plain = /^(?:Shared\s+surfaces?|Also\s+updates)\s*:\s*(.*)$/i.exec(line);
-    if (plain) {
-      const list = csv(plain[1]);
-      if (currentRun) addFor(currentRun, list);
-      else sectionDefaults.push(...list);
+    const plain = /^(?:\*\*)?(?:Shared[ \t]+surfaces?|Also[ \t]+updates)(?:\*\*)?[ \t]*:[ \t]*(.*)$/i.exec(line);
+    if (plain && currentRun) {
+      addFor(currentRun, csv(stripLeadingBold(plain[1])));
     }
   }
-  return { perRun, sectionDefaults };
+  return perRun;
 }
 
 export function parseProductDocuments({mapText, planText = ''}) {
@@ -513,8 +652,6 @@ export function parseProductDocuments({mapText, planText = ''}) {
     const partTokens = csv(row.Part);
     const primaryPart = partTokens[0] ?? '';
     const inlineSecondary = partTokens.slice(1);
-    const colRaw = sharedCol ? String(row[sharedCol] ?? '').trim() : '';
-    const colExplicitNone = Boolean(sharedCol && (colRaw === '-' || colRaw === ''));
     const colSecondary = sharedCol ? csv(row[sharedCol]) : [];
     return {
       run: row.Run,
@@ -523,25 +660,20 @@ export function parseProductDocuments({mapText, planText = ''}) {
       stories: csv(row.Stories),
       needs: csv(row.Needs),
       _rawShared: [...inlineSecondary, ...colSecondary],
-      _explicitNone: colExplicitNone && inlineSecondary.length === 0,
     };
   });
   if (!plan.trim() && size === 'small' && parts.length === 1) {
-    runs = [{ run: parts[0].part, part: parts[0].part, slice: '1', stories: stories.filter(story => story.tag === 'CORE').map(story => story.id), needs: [], _rawShared: [], _explicitNone: false }];
+    runs = [{ run: parts[0].part, part: parts[0].part, slice: '1', stories: stories.filter(story => story.tag === 'CORE').map(story => story.id), needs: [], _rawShared: [] }];
   }
   if (!runs.length) invalid('product/plan.md: no planned runs.');
   duplicate(runs, 'run', 'product/plan.md');
 
-  const { perRun, sectionDefaults } = parseSharedSurfaceRunLines(runsMeta.section, runs);
-  for (const surface of sectionDefaults) {
-    if (surface === 'all' || !parts.some(part => part.part === surface)) invalid(`product/plan.md: unknown shared surface ${surface}.`);
-  }
+  const perRunShared = parseSharedSurfaceRunLines(runsMeta.section, runs);
 
   runs = runs.map(entry => {
     const combined = [
       ...entry._rawShared,
-      ...(perRun.get(entry.run) ?? []),
-      ...(!entry._explicitNone && entry.part !== 'all' ? sectionDefaults : []),
+      ...(perRunShared.get(entry.run) ?? []),
     ];
     const sharedSurfaces = [];
     for (const surface of combined) {
@@ -655,21 +787,23 @@ function stripFrontmatterAndComments(raw) {
   return out.join('');
 }
 
+function asciiLower(str) {
+  return str.replace(/[A-Z]+/g, s => s.toLowerCase());
+}
+
 function extractRuntimeInterfacesLinear(raw) {
   const text = String(raw ?? '');
-  const lower = text.toLowerCase();
+  const lower = asciiLower(text);
   const out = [];
   let pos = 0;
   while (pos < lower.length) {
     const det = lower.indexOf('<details', pos);
     if (det < 0) break;
-    const sum = lower.indexOf('<summary', det + 8);
-    if (sum < 0) break;
-    const sumClose = lower.indexOf('</summary>', sum + 8);
-    if (sumClose < 0) break;
-    const detClose = lower.indexOf('</details>', sumClose + 10);
+    const detClose = lower.indexOf('</details>', det + 8);
     if (detClose < 0) break;
-    if (/runtime\s+interface/i.test(text.slice(sum, sumClose))) {
+    const sum = lower.indexOf('<summary', det + 8);
+    const sumClose = sum >= 0 && sum < detClose ? lower.indexOf('</summary>', sum + 8) : -1;
+    if (sum >= 0 && sumClose > sum && sumClose < detClose && /runtime\s+interface/i.test(text.slice(sum, sumClose))) {
       const inner = text.slice(sumClose + 10, detClose);
       const fenceStart = inner.indexOf('```');
       if (fenceStart >= 0) {
@@ -780,15 +914,20 @@ export function auditProductPlan({ mapText = '', planText = '', promptFiles = []
   const plan = String(planText ?? '');
   if (!plan.trim()) return { drift: [], unwiredBoundaries: [], findings: [], warnings: [] };
   const parts = parseLenientMapParts(mapText);
-  const { folderByPart } = buildPartLookups(parts);
+  const { folderByPart, inferPart } = buildPartLookups(parts);
+  const knownParts = new Set(parts.map(p => p.part).filter(Boolean));
   const promptsInfo = parsePlanPrompts(plan, parts);
   const boundariesInfo = parsePlanBoundaryOperations(plan, parts);
+
+  const allowExamples = [...folderByPart.values()].some(folder => EXAMPLE_DIR_RE.test(folder))
+    || promptsInfo.prompts.some(item => EXAMPLE_DIR_RE.test(item.path));
 
   const normalizedPrompts = [];
   const seenPromptPaths = new Set();
   for (const item of Array.isArray(promptFiles) ? promptFiles : []) {
     const path = normalizeRepoPath(item?.path ?? '');
     if (!path || !path.endsWith('.prompt.md') || typeof item?.content !== 'string' || seenPromptPaths.has(path)) continue;
+    if (!allowExamples && EXAMPLE_DIR_RE.test(path)) continue;
     seenPromptPaths.add(path);
     normalizedPrompts.push({ path, content: item.content });
   }
@@ -850,26 +989,56 @@ export function auditProductPlan({ mapText = '', planText = '', promptFiles = []
       const ownerPart = b.explicitPart || b.part;
       const ownerFolder = ownerPart ? (folderByPart.get(ownerPart) ?? `prompts/${ownerPart}`) : '';
       const normTarget = b.target.toLowerCase().replace(/_/g, '-');
-      const inOwner = p => !ownerPart || p.path.startsWith(`${ownerFolder}/`) || p.path.split('/').includes(ownerPart);
+      const isInOwnerPart = p => {
+        if (!ownerPart) return false;
+        const pPart = inferPart(p.path);
+        if (pPart) return pPart === ownerPart;
+        return p.path.startsWith(`${ownerFolder}/`) || p.path.split('/').includes(ownerPart);
+      };
       const definingPaths = new Set();
+      let matchedByStem = false;
 
       for (const p of indexedPrompts) {
-        if (p.normStem === normTarget && inOwner(p)) {
+        if (p.normStem === normTarget && (!ownerPart || isInOwnerPart(p))) {
           definingPaths.add(p.path);
-          continue;
+          matchedByStem = true;
         }
-        const declaresEntry = p.ifaces.some(iface => Array.isArray(iface.entries)
-          && iface.entries.some(e => e?.operation === b.op || e?.operation === b.shortName));
-        if (declaresEntry && (inOwner(p) || p.normStem === normTarget)) {
+        const declaresShort = p.ifaces.some(iface => Array.isArray(iface.entries)
+          && iface.entries.some(e => e?.operation === b.shortName));
+        if (declaresShort) {
           definingPaths.add(p.path);
+        }
+        const declaresBare = p.ifaces.some(iface => Array.isArray(iface.entries)
+          && iface.entries.some(e => e?.operation === b.op));
+        if (declaresBare && p.normStem === normTarget && (!ownerPart || isInOwnerPart(p))) {
+          definingPaths.add(p.path);
+          matchedByStem = true;
+        }
+      }
+      if (!matchedByStem && ownerPart) {
+        for (const p of indexedPrompts) {
+          if (!isInOwnerPart(p)) continue;
+          const declaresBare = p.ifaces.some(iface => Array.isArray(iface.entries)
+            && iface.entries.some(e => e?.operation === b.op));
+          if (declaresBare) definingPaths.add(p.path);
         }
       }
       if (!definingPaths.size && !b.explicitPart) {
         for (const p of indexedPrompts) if (p.normStem === normTarget) definingPaths.add(p.path);
       }
 
+      const fromParts = csv(b.from);
+      const isCrossPartBoundary = Boolean(
+        ownerPart
+        && knownParts.has(ownerPart)
+        && fromParts.length > 0
+        && fromParts.some(fp => knownParts.has(fp))
+        && !fromParts.includes(ownerPart)
+      );
+
       const wired = indexedPrompts.some(p => {
         if (definingPaths.has(p.path)) return false;
+        if (isCrossPartBoundary && isInOwnerPart(p)) return false;
         if (b.raw.includes('/') && containsBoundaryOpToken(p.cleaned, b.raw, '')) return true;
         if (containsBoundaryOpToken(p.cleaned, b.shortName, ownerPart)) return true;
         if (containsBraceBoundaryOp(p.cleaned, b.target, b.op, ownerPart)) return true;

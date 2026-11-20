@@ -1,4 +1,4 @@
-// Generated from prompts/cli/product.prompt.md (sha256: 9a97189358eda6c427d47028bc1a61604d4d512e3bddfa225eef9626d070ff21).
+// Generated from prompts/cli/product.prompt.md (sha256: 39c64632cfee9dd0b53ebbe34a676fdb84023e94c6423207497ef136beadd282).
 import { execFile as execute } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -19,16 +19,20 @@ const { causeText } = runtimeOutputSlice();
 const { createSavedStoryEvidenceReader } = runtimeClientSlice();
 
 const MAX_PRODUCT_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_SCAN_ENTRIES = 20000;
 const SKIP_SCAN_DIRS = new Set(['.git', 'node_modules', 'fixtures', '.pdd', 'dist', 'build', 'coverage']);
+const EXAMPLE_DIR_RE = /(?:^|\/)examples(?:\/|$)/i;
 
 function readSafeInRoot(rootDir, relPath, maxBytes = MAX_PRODUCT_FILE_BYTES) {
   const realRoot = realpathSync(rootDir);
-  const rel = String(relPath ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
+  let rel = String(relPath ?? '').replace(/\\/g, '/');
+  while (rel.startsWith('./')) rel = rel.slice(2);
   if (!rel || rel === '.' || isAbsolute(rel) || rel.split('/').some(seg => !seg || seg === '.' || seg === '..' || seg.toLowerCase() === '.git')) {
     throw Object.assign(Error(`Refused unsafe path: ${relPath}`), { code: 'EACCES' });
   }
   const segments = rel.split('/');
   let cur = realRoot;
+  let leafStat = null;
   for (let i = 0; i < segments.length; i++) {
     cur = join(cur, segments[i]);
     const st = lstatSync(cur);
@@ -37,12 +41,16 @@ function readSafeInRoot(rootDir, relPath, maxBytes = MAX_PRODUCT_FILE_BYTES) {
     if (i === segments.length - 1) {
       if (!st.isFile()) throw Object.assign(Error(`Not a regular file: ${rel}`), { code: 'EINVAL' });
       if (st.size > maxBytes) throw Object.assign(Error(`File exceeds ${maxBytes} bytes: ${rel}`), { code: 'EFBIG' });
+      leafStat = st;
     }
   }
   const fd = openSync(cur, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const fst = fstatSync(fd);
     if (!fst.isFile()) throw Object.assign(Error(`Not a regular file: ${rel}`), { code: 'EINVAL' });
+    if (leafStat && (fst.dev !== leafStat.dev || fst.ino !== leafStat.ino)) {
+      throw Object.assign(Error(`Path changed during open: ${rel}`), { code: 'EACCES' });
+    }
     if (fst.size > maxBytes) throw Object.assign(Error(`File exceeds ${maxBytes} bytes: ${rel}`), { code: 'EFBIG' });
     const buf = Buffer.alloc(fst.size);
     let offset = 0;
@@ -65,25 +73,29 @@ function collectSafePromptFiles(cwd, trackedFolders = []) {
   } catch {
     return null;
   }
-  const allowExamples = trackedFolders.some(folder => folder === 'examples' || folder.startsWith('examples/'));
+  const allowExamples = trackedFolders.some(folder => EXAMPLE_DIR_RE.test(folder));
   const files = [];
+  let visited = 0;
   const walk = (absDir, relPrefix, depth) => {
-    if (depth > 8 || files.length >= 2000) return;
+    if (depth > 8 || files.length >= 2000 || visited >= MAX_SCAN_ENTRIES) return;
     let entries;
     try { entries = readdirSync(absDir, { withFileTypes: true }); }
     catch { return; }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      if (files.length >= 2000) return;
+      if (files.length >= 2000 || visited >= MAX_SCAN_ENTRIES) return;
+      visited++;
       if (entry.isSymbolicLink()) continue;
+      const lowerName = entry.name.toLowerCase();
+      if (SKIP_SCAN_DIRS.has(entry.name) || lowerName === '.git' || lowerName === 'fixtures') continue;
+      if (!allowExamples && lowerName === 'examples') continue;
+      if (entry.isFile() && !entry.name.endsWith('.prompt.md')) continue;
       const absChild = join(absDir, entry.name);
       const relChild = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
       let st;
       try { st = lstatSync(absChild); } catch { continue; }
       if (st.isSymbolicLink()) continue;
       if (st.isDirectory()) {
-        if (SKIP_SCAN_DIRS.has(entry.name)) continue;
-        if (!allowExamples && entry.name === 'examples') continue;
         walk(absChild, relChild, depth + 1);
       } else if (st.isFile() && entry.name.endsWith('.prompt.md')) {
         try {
@@ -670,14 +682,25 @@ async function progress(input, given, target) {
   return { p, docs, product, details, ready, needsFor, localRuns, repo, lookup, bases: [...views.keys()], warning: [...new Set(warning)] };
 }
 
+function cleanToken(value) {
+  return String(value ?? '').trim().replace(/^`([^`]*)`$/, '$1').trim();
+}
+
+function trimFolderSlashes(value) {
+  let f = String(value ?? '').trim();
+  while (f.startsWith('./')) f = f.slice(2);
+  while (f.endsWith('/')) f = f.slice(0, -1);
+  return f;
+}
+
 function rulesForRun(product, planned) {
   if (!Array.isArray(product.rulesToCheck) || !product.rulesToCheck.length) return [];
-  const runParts = new Set([planned.part, ...(planned.sharedSurfaces ?? [])]);
+  const runParts = new Set([planned.part, ...(planned.sharedSurfaces ?? [])].map(part => cleanToken(part).toLowerCase()).filter(Boolean));
   return product.rulesToCheck.filter(entry => {
-    const owners = String(entry.owner ?? '').split(',').map(s => s.trim().replace(/^`(.*)`$/, '$1')).filter(Boolean);
+    const owners = cleanToken(entry.owner).split(',').map(cleanToken).filter(Boolean);
     return owners.some(owner => {
       const lower = owner.toLowerCase();
-      return lower === '*' || lower === 'all' || lower === 'shared' || runParts.has(owner);
+      return lower === '*' || lower === 'all' || lower === 'shared' || runParts.has(lower);
     });
   });
 }
@@ -695,11 +718,11 @@ function counts(ids, details) {
   return { total: uniqueIds.size, pass, stale, notRun: uniqueIds.size - pass - stale };
 }
 export async function productStatus(input, given = {}) {
-  const { docs, product, details, ready, warning, bases } = await progress(input, given);
+  const { p, docs, product, details, ready, warning, bases } = await progress(input, given);
   const allWarnings = [...warning];
-  if (docs.planText && (docs.prompts.length > 0 || docs.boundaryOperations.length > 0)) {
+  if (!p._customReadFile && docs.planText && (docs.prompts.length > 0 || docs.boundaryOperations.length > 0)) {
     const trackedFolders = [
-      ...product.parts.map(part => String(part.folder ?? '').trim().replace(/^\.\//, '').replace(/\/+$/, '')),
+      ...product.parts.map(part => trimFolderSlashes(part.folder)),
       ...docs.prompts.map(item => item.path.includes('/') ? item.path.slice(0, item.path.lastIndexOf('/')) : ''),
     ].filter(Boolean);
     const promptFiles = collectSafePromptFiles(input.cwd, trackedFolders);
@@ -710,7 +733,10 @@ export async function productStatus(input, given = {}) {
   }
   const core = product.stories.filter(story => story.tag === 'CORE' && product.runs.some(run => run.stories.includes(story.id)));
   const parts = product.parts.map(part => ({ part: part.part, ...counts(core.filter(story => story.part === part.part).map(story => story.id), details) }));
-  const journeyIds = product.runs.filter(run => run.part === 'all').flatMap(run => run.stories);
+  const journeyIds = product.runs
+    .filter(run => run.part === 'all')
+    .flatMap(run => run.stories)
+    .filter(id => product.journeys.some(j => j.id === id));
   if (journeyIds.length) parts.push({ part: 'journeys', ...counts(journeyIds, details) });
   const result = { name: product.name, size: product.size, parts,
     slices: [...new Set(product.runs.map(run => run.slice))].map(slice => ({ slice, ...counts(product.runs.filter(run => run.slice === slice).flatMap(run => run.stories).filter(id => journeyIds.includes(id) || core.some(story => story.id === id)), details) })),

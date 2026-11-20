@@ -568,3 +568,382 @@ test('3573: bare boundary ops, Runtime interface calls/resources wiring, shared 
   assert.equal(started.exitCode, 0, started.message);
   assert.match(f.state.createdPayloads[0].body, /- R05 \(shared\): Keep money and share quantities as exact integers\./);
 });
+
+test('3573 regression: multi-backtick cells, case-insensitive owners, multiple Rules to check tables, and invalid rule rejection', async t => {
+  const baseMap = SAMPLE_MAP.slice(0, SAMPLE_MAP.indexOf('## Rules to check'));
+  const multiTableMap = baseMap + [
+    '## Rules to check',
+    '',
+    '### Core rules',
+    '| Id | Owner | Rule | Verified By |',
+    '|---|---|---|---|',
+    '| R01 | `Ledger` | `--from` must match `--to` in every command. | unit tests |',
+    '| R02 | `Ledger`, `CLI` | Keep `--json` and `--quiet` compatible. | cli tests |',
+    '',
+    '### Contiguous security rules',
+    '| Id | Owner | Rule | Verified By |',
+    '|---|---|---|---|',
+    '| R03 | Trust | Reject unsigned tokens. | security tests |',
+    '| Id | Owner | Rule | Verified By |',
+    '|---|---|---|---|',
+    '| R04 | ALL | Never print `--secret` or `--token` values. | audit tests |',
+  ].join('\n') + '\n';
+
+  const multiBacktickPlan = [
+    '# Equity Ledger: plan',
+    '',
+    '## Boundaries',
+    '| From | To | What crosses | Contract |',
+    '|---|---|---|---|',
+    '| cli | ledger | `ledger/cap-table.issue` | contracts/ledger.md |',
+    '',
+    '## Runs',
+    '| Run | Part | Slice | Stories | Needs | Shared surfaces |',
+    '|---|---|---|---|---|---|',
+    '| ledger-1 | `ledger`, `cli` | 1 | `L01`, `L02`, `C01` | plan PR | - |',
+    '| trust-1 | trust | 1 | T01, T02 | plan PR | - |',
+  ].join('\n') + '\n';
+
+  const parsed = parseProductDocuments({ mapText: multiTableMap, planText: multiBacktickPlan });
+  assert.deepEqual(parsed.product.rulesToCheck, [
+    { id: 'R01', owner: 'Ledger', rule: '`--from` must match `--to` in every command.', verifiedBy: 'unit tests' },
+    { id: 'R02', owner: '`Ledger`, `CLI`', rule: 'Keep `--json` and `--quiet` compatible.', verifiedBy: 'cli tests' },
+    { id: 'R03', owner: 'Trust', rule: 'Reject unsigned tokens.', verifiedBy: 'security tests' },
+    { id: 'R04', owner: 'ALL', rule: 'Never print `--secret` or `--token` values.', verifiedBy: 'audit tests' },
+  ]);
+  assert.equal(parsed.product.runs.find(r => r.run === 'ledger-1').part, 'ledger');
+  assert.deepEqual(parsed.product.runs.find(r => r.run === 'ledger-1').sharedSurfaces, ['cli']);
+  assert.deepEqual(parsed.product.runs.find(r => r.run === 'ledger-1').stories, ['L01', 'L02', 'C01']);
+
+  // Case-insensitive owner propagation into pdd product start issue body
+  const f = makeProductRepo(t, { 'product/map.md': multiTableMap, 'product/plan.md': multiBacktickPlan });
+  const startedLedger = await productStart({ cwd: f.cwd, run: 'ledger-1', noRun: true }, f.ports);
+  assert.equal(startedLedger.exitCode, 0, startedLedger.message);
+  const ledgerBody = f.state.createdPayloads[0].body;
+  assert.match(ledgerBody, /- R01 \(Ledger\): `--from` must match `--to` in every command\./);
+  assert.match(ledgerBody, /- R02 \(`Ledger`, `CLI`\): Keep `--json` and `--quiet` compatible\./);
+  assert.match(ledgerBody, /- R04 \(ALL\): Never print `--secret` or `--token` values\./);
+  assert.doesNotMatch(ledgerBody, /\bR03\b/);
+
+  // Invalid Id `-` and empty / comma-only / dash-only Owner cells are rejected
+  for (const badSection of [
+    '## Rules to check\n| Id | Owner | Rule | Verified By |\n|---|---|---|---|\n| - | ledger | Bad id | t |\n',
+    '## Rules to check\n| Id | Owner | Rule | Verified By |\n|---|---|---|---|\n| R1 | , , | Empty csv owner | t |\n',
+    '## Rules to check\n| Id | Owner | Rule | Verified By |\n|---|---|---|---|\n| R1 | ``, `` | Empty backticks | t |\n',
+    '## Rules to check\n| Id | Owner | Rule | Verified By |\n|---|---|---|---|\n| R1 | -, - | Dash csv owner | t |\n',
+  ]) {
+    assert.throws(
+      () => parseProductDocuments({ mapText: baseMap + badSection, planText: multiBacktickPlan }),
+      err => err.code === 'invalid-product' && err.message.includes('product/map.md'),
+      badSection,
+    );
+  }
+});
+
+test('3573 regression: parsePlanPrompts handles hyphenated parts, overlapping folder prefixes, prompt-only table columns, relative ../ links, and link labels', () => {
+  const mapText = [
+    '# App Suite: map',
+    'Size: medium',
+    '',
+    '## Parts',
+    '| Part | Folder | What it is |',
+    '|---|---|---|',
+    '| cap | prompts/cap | Short prefix part. |',
+    '| cap-table | prompts/cap-table | Hyphenated part. |',
+    '| app | prompts/app | Core app. |',
+    '| app-cli | prompts/app-cli | CLI overlapping folder prefix. |',
+    '',
+    '## Stories',
+    '| Id | Part | Story | Tag |',
+    '|---|---|---|---|',
+    '| S01 | cap-table | Manage cap table. | CORE |',
+    '| S02 | app-cli | Run CLI. | CORE |',
+    '',
+    '## Journeys',
+    '| Id | Journey | Stories |',
+    '|---|---|---|',
+    '',
+    '## Questions',
+    '| Id | Question | Recommendation | Example | Answer |',
+    '|---|---|---|---|---|',
+  ].join('\n') + '\n';
+
+  const planText = [
+    '# App Suite: plan',
+    '',
+    '## Boundaries',
+    '| From | To | What crosses | Contract |',
+    '|---|---|---|---|',
+    '',
+    '## Prompts',
+    '### cap-table',
+    '- [`core.prompt.md`](../prompts/cap-table/sub/core.prompt.md)',
+    '- [escape](../../outside/evil.prompt.md)',
+    '### CLI (`prompts/app-cli`)',
+    '- `main.prompt.md`',
+    '- `prompts/app/engine.prompt.md`',
+    '',
+    '| Part | Prompt | Depends on | Wiring | Notes |',
+    '|---|---|---|---|---|',
+    '| cap-table | ledger.prompt.md | `engine.prompt.md` | `main.prompt.md` | Calls `other.prompt.md` |',
+    '',
+    '## Runs',
+    '| Run | Part | Slice | Stories | Needs |',
+    '|---|---|---|---|---|',
+    '| cap-1 | cap-table | 1 | S01 | plan PR |',
+    '| cli-1 | app-cli | 1 | S02 | plan PR |',
+  ].join('\n') + '\n';
+
+  const parsed = parseProductDocuments({ mapText, planText });
+  assert.deepEqual(parsed.product.prompts, [
+    { path: 'prompts/cap-table/sub/core.prompt.md', part: 'cap-table' },
+    { path: 'prompts/app-cli/main.prompt.md', part: 'app-cli' },
+    { path: 'prompts/app/engine.prompt.md', part: 'app' },
+    { path: 'prompts/cap-table/ledger.prompt.md', part: 'cap-table' },
+  ]);
+
+  const audit = auditProductPlan({
+    mapText,
+    planText,
+    promptFiles: [
+      { path: 'prompts/cap-table/sub/core.prompt.md', content: '# Core\n' },
+      { path: 'prompts/cap-table/ledger.prompt.md', content: '# Ledger\n' },
+      { path: 'prompts/app-cli/main.prompt.md', content: '# Main\n' },
+      { path: 'prompts/app/engine.prompt.md', content: '# Engine\n' },
+    ],
+  });
+  assert.deepEqual(audit.drift, []);
+});
+
+test('3573 regression: boundary audit handles same-verb consumer exports, multi-line Never crosses blocks, cross-part same-owner adapters, and Unicode İ Runtime interfaces', () => {
+  const runtimeIface = obj => `<details><summary>Runtime interface</summary>\n\n\`\`\`json\n${JSON.stringify(obj)}\n\`\`\`\n</details>\n`;
+
+  const plan = [
+    '# Equity Ledger: plan',
+    '',
+    '## Boundaries',
+    '| From | To | What crosses | Contract |',
+    '|---|---|---|---|',
+    '| ledger | trust | `trust/approval.consume`, `trust/audit.record` | contracts/trust.md |',
+    '| cli | all | `approval.check` | contracts/trust.md |',
+    '',
+    '### Never crosses',
+    '',
+    '- `cli/direct.bypass` must never bypass `ledger`.',
+    '- `ledger/raw.write` must never touch `trust` storage.',
+    '',
+    '**Never crosses:**',
+    '- `trust/debug.dump` stays internal.',
+    '',
+    'After blank line: `ledger/post-blank.notify` crosses to ledger.',
+    '',
+    '## Runs',
+    '| Run | Part | Slice | Stories | Needs |',
+    '|---|---|---|---|---|',
+    '| trust-1 | trust | 1 | T01 | plan PR |',
+    '| ledger-1 | ledger | 1 | L01 | trust-1 |',
+    '| cli-1 | cli | 1 | C01 | plan PR |',
+  ].join('\n') + '\n';
+
+  // 1. Consumer exports the same bare verb (`consume` / `check`) AND wires the boundary op (including after Turkish 'İ' before <details>).
+  // 2. Same-part native-only adapter in `trust` mentions `trust/audit.record`, which must NOT satisfy cross-part `ledger -> trust` wiring!
+  const audit = auditProductPlan({
+    mapText: SAMPLE_MAP,
+    planText: plan,
+    promptFiles: [
+      {
+        path: 'prompts/trust/approval.prompt.md',
+        content: '# Approval\n\n' + runtimeIface({ entries: [{ operation: 'consume' }, { operation: 'check' }], calls: [], resources: [] }),
+      },
+      {
+        path: 'prompts/trust/audit.prompt.md',
+        content: '# Audit\n\nDefines `audit.record`.\n',
+      },
+      {
+        path: 'prompts/trust/audit-adapter.prompt.md',
+        content: '---\nkind: native-only\nreason: sqlite\n---\n# Audit adapter\n\nWraps `trust/audit.record` inside trust.\n',
+      },
+      {
+        path: 'prompts/ledger/cap-table.prompt.md',
+        content: '# Cap table (İstanbul)\n\n' + runtimeIface({
+          entries: [{ operation: 'consume' }],
+          calls: [{ target: 'prompts/trust/approval.prompt.md', target_operation: 'consume', max_calls: 1 }],
+          resources: [],
+        }),
+      },
+      {
+        path: 'prompts/cli/command.prompt.md',
+        content: '# CLI\n\nCalls `approval.check`.\n' + runtimeIface({ entries: [{ operation: 'check' }], calls: [], resources: [] }),
+      },
+    ],
+  });
+
+  // trust/approval.consume (wired via Runtime interface after 'İ' despite consumer exporting bare 'consume') -> wired!
+  // approval.check (To: all, consumer also exports bare 'check') -> wired!
+  // Never crosses multi-line bullets (cli/direct.bypass, ledger/raw.write, trust/debug.dump) -> ignored!
+  // trust/audit.record (only referenced by same-part trust/audit-adapter.prompt.md, NOT outside trust) -> UNWIRED!
+  // ledger/post-blank.notify (declared after blank line ending Never crosses block) -> UNWIRED!
+  assert.equal(audit.unwiredBoundaries.length, 2, JSON.stringify(audit.unwiredBoundaries));
+  assert.ok(audit.unwiredBoundaries.some(f => f.detail.includes('trust/audit.record')));
+  assert.ok(audit.unwiredBoundaries.some(f => f.detail.includes('ledger/post-blank.notify')));
+  assert.ok(!audit.unwiredBoundaries.some(f => f.detail.includes('cli/direct.bypass') || f.detail.includes('ledger/raw.write') || f.detail.includes('trust/debug.dump')));
+
+  // When no prompt matches the boundary target stem, a prompt inside ownerPart exporting the bare verb is treated as defining (not self-wiring).
+  const stemlessAudit = auditProductPlan({
+    mapText: SAMPLE_MAP,
+    planText: [
+      '# Equity Ledger: plan',
+      '## Boundaries',
+      '| From | To | What crosses | Contract |',
+      '|---|---|---|---|',
+      '| trust | trust | `trust/gate.consume` | contracts/trust.md |',
+    ].join('\n'),
+    promptFiles: [
+      {
+        path: 'prompts/trust/service.prompt.md',
+        content: '# Service\n\nImplements `trust/gate.consume`.\n' + runtimeIface({ entries: [{ operation: 'consume' }], calls: [], resources: [] }),
+      },
+    ],
+  });
+  assert.equal(stemlessAudit.unwiredBoundaries.length, 1);
+  assert.match(stemlessAudit.unwiredBoundaries[0].detail, /trust\/gate\.consume/);
+});
+
+test('3573 regression: shared-surface heading/prefix punctuation, no silent sectionDefaults leak, Part: all story counts, and virtual readFile isolation', async t => {
+  const planWithPunctuationAndUnattached = [
+    '# Equity Ledger: plan',
+    '',
+    '## Boundaries',
+    '| From | To | What crosses | Contract |',
+    '|---|---|---|---|',
+    '| cli | ledger | `ledger/cap-table.issue` | contracts/ledger.md |',
+    '',
+    '## Prompts',
+    '| Part | Prompt |',
+    '|---|---|',
+    '| ledger | prompts/ledger/cap-table.prompt.md |',
+    '',
+    '## Runs',
+    '| Run | Part | Slice | Stories | Needs |',
+    '|---|---|---|---|---|',
+    '| trust-1 | trust | 1 | T01, T02 | plan PR |',
+    '| ledger-1 | ledger | 1 | L01, L02 | trust-1 |',
+    '| cli-1 | cli | 1 | C01 | plan PR |',
+    '| journeys | all, cli | 1 | J1, C01 | trust-1, ledger-1, cli-1 |',
+    '',
+    'Shared surfaces: trust',
+    '### ledger-1: Cap table work',
+    'Shared surfaces: cli',
+    '### **ledger-1** — Extra note',
+    'Also updates: trust',
+    '`trust-1`: Shared surfaces: ledger',
+    '### General notes',
+    'Shared surfaces: see table above',
+  ].join('\n') + '\n';
+
+  const parsed = parseProductDocuments({ mapText: SAMPLE_MAP, planText: planWithPunctuationAndUnattached });
+  assert.deepEqual(parsed.product.runs.find(r => r.run === 'ledger-1').sharedSurfaces, ['cli', 'trust']);
+  assert.deepEqual(parsed.product.runs.find(r => r.run === 'trust-1').sharedSurfaces, ['ledger']);
+  assert.equal(Object.hasOwn(parsed.product.runs.find(r => r.run === 'cli-1'), 'sharedSurfaces'), false, 'unattached Shared surfaces line must not leak to cli-1');
+  assert.deepEqual(parsed.product.runs.find(r => r.run === 'journeys').sharedSurfaces, ['cli']);
+
+  // Part: all + Shared surfaces: cli must count J1 ONLY under journeys and C01 ONLY under cli (no double-counting!)
+  // Virtual given.readFile must NOT scan real disk at cwd (even when cwd is a real directory with missing prompts on disk!)
+  const realDiskDir = makeProductRepo(t, {
+    'prompts/ledger/extra-on-disk.prompt.md': '# Disk file\n',
+  });
+  const virtualStatus = await productStatus(
+    { cwd: realDiskDir.cwd },
+    {
+      ...realDiskDir.ports,
+      readFile: async path => {
+        if (path.endsWith('product/map.md')) return SAMPLE_MAP;
+        if (path.endsWith('product/plan.md')) return planWithPunctuationAndUnattached;
+        throw Object.assign(Error('ENOENT'), { code: 'ENOENT' });
+      },
+    },
+  );
+  assert.deepEqual(virtualStatus.parts.find(p => p.part === 'journeys'), { part: 'journeys', total: 1, pass: 0, stale: 0, notRun: 1 });
+  assert.deepEqual(virtualStatus.parts.find(p => p.part === 'cli'), { part: 'cli', total: 1, pass: 0, stale: 0, notRun: 1 });
+  assert.equal(virtualStatus.warnings, undefined, 'virtual readFile must not emit local disk audit warnings');
+});
+
+test('3573 regression: examples/ filtering parity between lintRepoProject and productStatus, and linear-time path normalization', async t => {
+  // 1. Untracked examples/ prompt mentioning an unwired boundary op must NOT satisfy wiring in EITHER lintRepoProject or productStatus!
+  const repoUntrackedExamples = makeProductRepo(t, {
+    'product/map.md': SAMPLE_MAP,
+    'product/plan.md': SAMPLE_PLAN + '\n<!-- examples mentioned in prose must not enable untracked examples/ prompts -->\n',
+    'prompts/ledger/cap-table.prompt.md': '# Cap table\n\nCalls `trust/audit.record`.\n\n## Dependencies\nNone.\n',
+    'prompts/trust/audit.prompt.md': '# Audit\n\nDefines `audit.record`.\n\n## Dependencies\nNone.\n',
+    'prompts/trust/approval.prompt.md': '# Approval\n\nDefines `approval.consume`.\n\n## Dependencies\nNone.\n',
+    'prompts/cli/command.prompt.md': '# CLI\n\nCalls `ledger/cap-table.issue`.\n\n## Dependencies\nNone.\n',
+    'examples/demo/prompts/example-consumer.prompt.md': '# Example\n\nCalls `trust/approval.consume`.\n\n## Dependencies\nNone.\n',
+  }, { gitInit: true });
+
+  const lintUntracked = lintRepoProject({ root: repoUntrackedExamples.cwd });
+  const statusUntracked = await productStatus({ cwd: repoUntrackedExamples.cwd }, repoUntrackedExamples.ports);
+  assert.ok(lintUntracked.findings.some(f => f.code === 'product-boundary-unwired' && f.message.includes('trust/approval.consume')));
+  assert.ok(statusUntracked.warnings?.some(w => w.includes('trust/approval.consume')));
+
+  // 2. When examples/ IS a tracked part folder, BOTH lintRepoProject and productStatus include it identically.
+  const examplesMap = [
+    '# Demo App: map',
+    'Size: small',
+    '',
+    '## Parts',
+    '| Part | Folder | What it is |',
+    '|---|---|---|',
+    '| demo | examples/demo/prompts | Tracked example part. |',
+    '',
+    '## Stories',
+    '| Id | Part | Story | Tag |',
+    '|---|---|---|---|',
+    '| D01 | demo | Run demo. | CORE |',
+    '',
+    '## Journeys',
+    '| Id | Journey | Stories |',
+    '|---|---|---|',
+    '',
+    '## Questions',
+    '| Id | Question | Recommendation | Example | Answer |',
+    '|---|---|---|---|---|',
+  ].join('\n') + '\n';
+  const examplesPlan = [
+    '# Demo App: plan',
+    '',
+    '## Boundaries',
+    '| From | To | What crosses | Contract |',
+    '|---|---|---|---|',
+    '',
+    '## Prompts',
+    '| Part | Prompt |',
+    '|---|---|',
+    '| demo | examples/demo/prompts/app.prompt.md |',
+    '',
+    '## Runs',
+    '| Run | Part | Slice | Stories | Needs |',
+    '|---|---|---|---|---|',
+    '| demo-1 | demo | 1 | D01 | plan PR |',
+  ].join('\n') + '\n';
+  const repoTrackedExamples = makeProductRepo(t, {
+    'product/map.md': examplesMap,
+    'product/plan.md': examplesPlan,
+    'examples/demo/prompts/app.prompt.md': '# App\n\n## Dependencies\nNone.\n',
+    'examples/demo/prompts/extra.prompt.md': '# Extra\n\n## Dependencies\nNone.\n',
+  }, { gitInit: true });
+
+  const lintTracked = lintRepoProject({ root: repoTrackedExamples.cwd });
+  const statusTracked = await productStatus({ cwd: repoTrackedExamples.cwd }, repoTrackedExamples.ports);
+  assert.ok(lintTracked.findings.some(f => f.code === 'product-prompt-inventory-drift' && f.path === 'examples/demo/prompts/extra.prompt.md'));
+  assert.ok(statusTracked.warnings?.some(w => w.includes('examples/demo/prompts/extra.prompt.md')));
+
+  // 3. Linear-time guard against polynomial ReDoS inputs (long # fragments and trailing slashes)
+  const startMs = Date.now();
+  const longHash = 'prompts/demo/app.prompt.md' + '#'.repeat(40000);
+  const longSlashes = 'examples/demo/prompts' + '/'.repeat(40000);
+  const redosMap = examplesMap.replace('examples/demo/prompts', longSlashes);
+  const redosPlan = examplesPlan.replace('examples/demo/prompts/app.prompt.md', longHash);
+  parseProductDocuments({ mapText: redosMap, planText: redosPlan });
+  auditProductPlan({ mapText: redosMap, planText: redosPlan, promptFiles: [] });
+  assert.ok(Date.now() - startMs < 1000, 'path normalization must remain linear on long # and / runs');
+});
