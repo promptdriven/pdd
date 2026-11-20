@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 9738776adbae5cc9f22d83d94edbbf6145d88452622837db6da6fecec569141e).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 4fa550fc7999638b5c598ca92272136d4727ea82b388f8086d06fa44ff31a2d3).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -20,6 +20,7 @@ import {
   localClaudePaths,
   localCodexAuthPath,
   localCodexHome,
+  managedClaudeSettingsPath,
   managedCodexAuthPath,
   managedCodexConfigPath,
   markLocalAccountReauthRequired,
@@ -130,13 +131,19 @@ export function renderAutoSwitchBlock(shell = 'sh') {
       "  command codex $argv",
       "end",
       "function claude --wraps claude",
-      "  command -sq pdd; and pdd accounts sync --provider claude --quiet --timeout-ms 1200 2>/dev/null; or true",
-      "  set -l _pdd_cl_cfg \"$HOME/.claude/settings.json\"",
       "  if set -q CLAUDE_CONFIG_DIR; and test -n \"$CLAUDE_CONFIG_DIR\"",
-      "    set _pdd_cl_cfg (string replace -r '/+$' '' -- \"$CLAUDE_CONFIG_DIR\")\"/settings.json\"",
+      "    command claude $argv",
+      "    return $status",
       "  end",
-      "  if test -f \"$_pdd_cl_cfg\"; and grep -q '\"CLAUDE_CODE_OAUTH_TOKEN\"' \"$_pdd_cl_cfg\" 2>/dev/null",
-      "    env -u ANTHROPIC_API_KEY claude $argv",
+      "  if test (count $argv) -gt 0",
+      "    switch $argv[1]",
+      "      case auth login logout setup-token -v --version -h --help",
+      "        command claude $argv",
+      "        return $status",
+      "    end",
+      "  end",
+      "  if command -sq pdd-claude",
+      "    PDD_CLAUDE_AUTO_FAIL_OPEN=1 command pdd-claude $argv",
       "    return $status",
       "  end",
       "  command claude $argv",
@@ -231,11 +238,18 @@ export function renderAutoSwitchBlock(shell = 'sh') {
     "  command codex \"$@\"",
     "}",
     "claude() {",
-    "  command -v pdd >/dev/null 2>&1 && pdd accounts sync --provider claude --quiet --timeout-ms 1200 2>/dev/null || true",
-    "  local _pdd_cl_cfg=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"",
-    "  _pdd_cl_cfg=\"${_pdd_cl_cfg%/}/settings.json\"",
-    "  if [ -f \"$_pdd_cl_cfg\" ] && grep -q '\"CLAUDE_CODE_OAUTH_TOKEN\"' \"$_pdd_cl_cfg\" 2>/dev/null; then",
-    "    (unset ANTHROPIC_API_KEY; command claude \"$@\")",
+    "  if [ -n \"${CLAUDE_CONFIG_DIR:-}\" ]; then",
+    "    command claude \"$@\"",
+    "    return $?",
+    "  fi",
+    "  case \"${1:-}\" in",
+    "    auth|login|logout|setup-token|-v|--version|-h|--help)",
+    "      command claude \"$@\"",
+    "      return $?",
+    "      ;;",
+    "  esac",
+    "  if command -v pdd-claude >/dev/null 2>&1; then",
+    "    PDD_CLAUDE_AUTO_FAIL_OPEN=1 command pdd-claude \"$@\"",
     "    return $?",
     "  fi",
     "  command claude \"$@\"",
@@ -451,10 +465,14 @@ function renderAccountsTable(accounts, pendingInvites, activeByProvider, nowMs =
       }
     }
   }
-  if (Array.isArray(pendingInvites) && pendingInvites.length > 0) {
+  const listedIds = new Set(accounts.map(acc => acc?.account_id).filter(Boolean));
+  const visiblePendingInvites = Array.isArray(pendingInvites)
+    ? pendingInvites.filter(inv => !(inv?.account_id && listedIds.has(inv.account_id)))
+    : [];
+  if (visiblePendingInvites.length > 0) {
     lines.push('');
     lines.push('Pending share invites:');
-    for (const inv of pendingInvites) {
+    for (const inv of visiblePendingInvites) {
       lines.push(`  ${inv.invite_id}  ${inv.label ?? '-'}  ${inv.provider ?? '-'}  from ${inv.owner_login ?? 'unknown'}  (accept: pdd accounts accept ${inv.invite_id})`);
     }
   }
@@ -1238,8 +1256,7 @@ function applyMaterializedLease(leaseReply, { env }, ports = {}) {
     }
   }
   if (provider === 'claude') {
-    const prevManaged = Boolean(saved.active?.claude?.managed_anthropic_base_url);
-    const { managedBaseUrl } = materializeLocalClaudeAuth(lease, { env, previousManagedBaseUrl: prevManaged }, ports);
+    const { managedBaseUrl } = materializeLocalClaudeAuth(lease, { env }, ports);
     saveActiveLeaseMetadata(leaseReply, { env, materializedLocal: true, managedBaseUrl }, ports);
   }
 }
@@ -1532,12 +1549,21 @@ async function applySharePayloadsToAccounts(accounts, sharePayloads, { cwd, env,
         }
       }
       if (uidKey) existingKeys.add(uidKey);
-      const inviteId = res?.already_shared === true ? null : (res?.invite?.invite_id ?? res?.invite_id ?? null);
+      const serverAlreadyShared = Boolean(
+        res?.already_shared === true
+        || (
+          (item?.body?.github_login || item?.body?.github_user_id)
+          && res?.already_shared !== false
+          && !res?.invite
+          && !res?.invite_id
+        ),
+      );
+      const inviteId = serverAlreadyShared ? null : (res?.invite?.invite_id ?? res?.invite_id ?? null);
       notes.push({
         label: account.label ?? account.account_id,
         display: item.display,
         inviteId,
-        alreadyShared: Boolean(res?.already_shared === true),
+        alreadyShared: serverAlreadyShared,
       });
     }
   }
@@ -1726,7 +1752,7 @@ async function resolveAccount(labelOrId, { cwd, env, provider = null }, ports = 
   throw new CloudAccountsError(`Account "${target}"${suffix} was not found. Run pdd accounts list.`, { code: 'not_found' });
 }
 
-async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAuthJson, fallbackOauthToken, { cwd, env }, ports = {}) {
+async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAuthJson, _fallbackOauthToken, { cwd, env }, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const nowMs = (ports.now ?? Date.now)();
   if (acc?.account_id) {
@@ -1747,9 +1773,6 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
       markLocalAccountReauthRequired(leased.account?.account_id ?? acc.account_id, { env }, ports);
       return { materialized: false };
     }
-    if (provider === 'claude' && fallbackOauthToken) {
-      materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
-    }
     const current = readCloudAccountsState({ env }, ports);
     writeCloudAccountsState({
       enrolled: true,
@@ -1759,14 +1782,8 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
         ? { ...current.cooling, [provider]: { wake_at: leased.wake_at ?? null } }
         : current.cooling,
     }, { env }, ports);
-    return {
-      materialized: provider === 'claude' && Boolean(fallbackOauthToken) && Boolean(hasLocalMaterializedFile(fs, 'claude', env)),
-    };
+    return { materialized: false };
   } catch {
-    const claudeFallbackMaterialized = provider === 'claude' && Boolean(fallbackOauthToken);
-    if (claudeFallbackMaterialized) {
-      materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: fallbackOauthToken }, { env }, ports);
-    }
     const current = readCloudAccountsState({ env }, ports);
     writeCloudAccountsState({
       enrolled: true,
@@ -1782,8 +1799,8 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
           leased_at: new Date(nowMs).toISOString(),
           expires_at: new Date(nowMs + 5 * 60 * 1000).toISOString(),
           last_refresh_at: acc.last_refresh_at ?? new Date(nowMs).toISOString(),
-          materialized_local: claudeFallbackMaterialized,
-          delivery_mode: provider === 'codex' ? 'gateway_grant' : 'direct_oauth',
+          materialized_local: false,
+          delivery_mode: 'gateway_grant',
           five_hour_used_percent: acc.five_hour_used_percent ?? null,
           five_hour_reset_at: acc.five_hour_reset_at ?? null,
           weekly_used_percent: acc.weekly_used_percent ?? null,
@@ -1792,9 +1809,7 @@ async function leaseAndSyncAfterEnroll(provider, acc, fallbackLabel, _fallbackAu
       },
       cooling: current.cooling,
     }, { env }, ports);
-    return {
-      materialized: claudeFallbackMaterialized && Boolean(hasLocalMaterializedFile(fs, 'claude', env)),
-    };
+    return { materialized: false };
   }
 }
 
@@ -2251,7 +2266,7 @@ async function enrollSingleIteration(mode, {
           label: finalLabel,
           email,
           shareNotes,
-          message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
+          message: `Already enrolled as ${finalLabel} — refreshed credentials. Existing shares remain active.${shareSuffix}`,
         };
       }
       const identityNote = email ? `${email} -> "${finalLabel}", ` : '';
@@ -2355,8 +2370,7 @@ async function enrollSingleIteration(mode, {
     || (loopState && acc.account_id && loopState.seenAccountIds.has(acc.account_id)),
   );
 
-  materializeLocalClaudeAuth({ delivery_mode: 'direct_oauth', claude_oauth_token: oauthToken }, { env }, ports);
-  await leaseAndSyncAfterEnroll('claude', acc, candidateLabel, null, oauthToken, { cwd, env }, ports);
+  await leaseAndSyncAfterEnroll('claude', acc, candidateLabel, null, null, { cwd, env }, ports);
 
   const finalLabel = acc.label ?? candidateLabel;
   if (loopState) {
@@ -2381,7 +2395,7 @@ async function enrollSingleIteration(mode, {
       account: acc,
       label: finalLabel,
       shareNotes,
-      message: `Already enrolled as ${finalLabel} — refreshed credentials.${shareSuffix}`,
+      message: `Already enrolled as ${finalLabel} — refreshed credentials. Existing shares remain active.${shareSuffix}`,
     };
   }
   return {
@@ -2557,7 +2571,7 @@ async function enrollOrImportAccount(mode, {
 function hasLocalMaterializedFile(fs, provider, env) {
   try {
     if (provider === 'claude') {
-      return Boolean(fs.statSync(localClaudePaths(env).settingsPath)?.isFile());
+      return Boolean(fs.statSync(managedClaudeSettingsPath(env))?.isFile());
     }
     const hasAuth = Boolean(fs.statSync(managedCodexAuthPath(env))?.isFile());
     if (!hasAuth) return false;
@@ -2718,6 +2732,7 @@ function runAutoCommand(mode, { env }, ports = {}) {
       const updated = removeAutoSwitchBlock(current);
       if (updated !== current) fs.writeFileSync(entry.path, updated, { mode: 0o644 });
     }
+    restoreLocalClaudeGatewayConfig({ env }, ports);
     return {
       exitCode: 0,
       message: 'Removed terminal auto-switch wrapper from ~/.zshrc, ~/.bashrc, and ~/.config/fish/config.fish.',
@@ -2778,6 +2793,8 @@ function reconcileListedState(accounts, current, { env }, ports = {}) {
   }
   if (!nextActive.claude) {
     restoreLocalClaudeGatewayConfig({ env }, ports);
+  } else {
+    restoreLocalClaudeGatewayConfig({ env, removeManagedFile: false }, ports);
   }
   const nextCooling = Object.fromEntries(
     Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
@@ -2955,6 +2972,8 @@ function syncStateAfterAccountRemoval(account, accounts, { env }, ports = {}) {
   }
   if (!nextActive.claude) {
     restoreLocalClaudeGatewayConfig({ env }, ports);
+  } else {
+    restoreLocalClaudeGatewayConfig({ env, removeManagedFile: false }, ports);
   }
   const nextCooling = Object.fromEntries(
     Object.entries(current.cooling ?? {}).filter(([prov]) => nextProviders.includes(prov)),
@@ -4053,7 +4072,24 @@ async function runSingleSupervisedCodexTurn({
   return runWithChild(false);
 }
 
-async function runPlainCodexOnce(args, { cwd, env, stdin, stdout }, ports = {}) {
+function exitCodeFromSignalOrStatus(code, signal) {
+  if (signal === 'SIGINT') return 130;
+  if (signal === 'SIGTERM') return 143;
+  if (signal === 'SIGHUP') return 129;
+  if (signal) return 1;
+  return typeof code === 'number' ? code : 1;
+}
+
+function writeStreamChunk(stream, chunk) {
+  if (chunk == null) return;
+  if (typeof chunk === 'string' && chunk.length === 0) return;
+  if (chunk instanceof Uint8Array && chunk.byteLength === 0) return;
+  try {
+    stream?.write?.(chunk);
+  } catch {}
+}
+
+async function runPlainCodexOnce(args, { cwd, env, stdin, stdout, stderr }, ports = {}) {
   if (typeof ports.spawnCodexPty === 'function') {
     const res = await ports.spawnCodexPty({
       command: 'codex',
@@ -4063,21 +4099,82 @@ async function runPlainCodexOnce(args, { cwd, env, stdin, stdout }, ports = {}) 
       turn: 0,
       signal: new AbortController().signal,
       onOutput(chunk) {
-        try { stdout?.write?.(chunk); } catch {}
+        writeStreamChunk(stdout, chunk);
       },
     });
-    return { exitCode: res?.code ?? 0, message: '' };
+    const exitCode = res?.signal
+      ? exitCodeFromSignalOrStatus(null, res.signal)
+      : (res?.code ?? 0);
+    return { exitCode, message: '' };
   }
   if (typeof ports.run === 'function') {
     const res = await ports.run('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
-    return { exitCode: res?.code ?? 0, message: '' };
+    writeStreamChunk(stdout, res?.stdout);
+    writeStreamChunk(stderr, res?.stderr);
+    return { exitCode: exitCodeFromSignalOrStatus(res?.code, res?.signal), message: '' };
   }
-  if (stdin?.isTTY && stdout?.isTTY) {
-    const res = spawnSync('codex', args, { cwd, env, stdio: 'inherit' });
-    return { exitCode: res.signal === 'SIGINT' ? 130 : (res.status ?? 1), message: '' };
-  }
-  const res = await runAgentProcess('codex', args, { cwd, env, input: '', timeoutMs: 300_000, maxBytes: 1_048_576 });
-  return { exitCode: res?.code ?? 0, message: '' };
+  const inheritStdin = stdin == null || stdin === process.stdin;
+  const inheritStdout = !stdout || stdout === process.stdout;
+  const inheritStderr = !stderr || stderr === process.stderr;
+  const stdio = inheritStdin && inheritStdout && inheritStderr
+    ? 'inherit'
+    : [
+      inheritStdin ? 'inherit' : 'pipe',
+      inheritStdout ? 'inherit' : 'pipe',
+      inheritStderr ? 'inherit' : 'pipe',
+    ];
+  return new Promise(resolveExit => {
+    let settled = false;
+    const child = (ports.spawn ?? spawn)('codex', args, { cwd, env, stdio });
+    const forward = sig => {
+      try { child.kill(sig); } catch {}
+    };
+    const onSigInt = () => forward('SIGINT');
+    const onSigTerm = () => forward('SIGTERM');
+    const onSigHup = () => forward('SIGHUP');
+    process.on('SIGINT', onSigInt);
+    process.on('SIGTERM', onSigTerm);
+    process.on('SIGHUP', onSigHup);
+
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      process.off('SIGINT', onSigInt);
+      process.off('SIGTERM', onSigTerm);
+      process.off('SIGHUP', onSigHup);
+      if (child.stdin && stdin && typeof stdin.unpipe === 'function') {
+        try { stdin.unpipe(child.stdin); } catch {}
+      }
+      resolveExit(result);
+    };
+
+    if (child.stdin) {
+      child.stdin.on('error', () => {});
+      if (typeof stdin === 'string' || stdin instanceof Uint8Array) {
+        try { child.stdin.end(stdin); } catch {}
+      } else if (stdin && typeof stdin.pipe === 'function') {
+        stdin.pipe(child.stdin);
+      } else {
+        try { child.stdin.end(); } catch {}
+      }
+    }
+    if (child.stdout) {
+      child.stdout.on('data', chunk => writeStreamChunk(stdout, chunk));
+    }
+    if (child.stderr) {
+      child.stderr.on('data', chunk => writeStreamChunk(stderr, chunk));
+    }
+
+    child.on('error', err => {
+      const message = err?.code === 'ENOENT'
+        ? 'codex CLI not found on PATH.'
+        : redactSecrets(`Failed to run codex: ${err?.message ?? 'spawn error'}`);
+      finish({ exitCode: 1, message });
+    });
+    child.on('close', (code, signal) => {
+      finish({ exitCode: exitCodeFromSignalOrStatus(code, signal), message: '' });
+    });
+  });
 }
 
 async function leaseNextHealthyCodexForRotation(skipAccountIds, { cwd, env }, ports = {}) {
@@ -4168,12 +4265,12 @@ async function runInteractiveCodexWithAutoRotate({ args = [], cwd, env, stdin },
     if (fallbackEnv.CODEX_HOME && resolve(fallbackEnv.CODEX_HOME) === resolve(expectedManagedHome)) {
       delete fallbackEnv.CODEX_HOME;
     }
-    return runPlainCodexOnce(initialArgs, { cwd, env: fallbackEnv, stdin: activeStdin, stdout: activeStdout }, ports);
+    return runPlainCodexOnce(initialArgs, { cwd, env: fallbackEnv, stdin: activeStdin, stdout: activeStdout, stderr: activeStderr }, ports);
   }
 
   if (!invocation.interactive) {
     const execEnv = buildCodexExecutionEnv(env, managedHome);
-    return runPlainCodexOnce(initialArgs, { cwd, env: execEnv, stdin: activeStdin, stdout: activeStdout }, ports);
+    return runPlainCodexOnce(initialArgs, { cwd, env: execEnv, stdin: activeStdin, stdout: activeStdout, stderr: activeStderr }, ports);
   }
 
   const userCodexHome = localCodexHome({ ...env, CODEX_HOME: '' });
@@ -4491,6 +4588,28 @@ export async function runAccountsCli({
       case 'pause': {
         const { account } = await resolveAccount(operands[0], { cwd, env, provider: options['--provider'] || null }, ports);
         await cloudAccountsRequest('POST', `/v1/accounts/${encodeURIComponent(account.account_id)}/pause`, { body: {}, cwd, env }, ports);
+        const saved = readCloudAccountsState({ env }, ports);
+        const prov = account.provider;
+        if (prov && saved.active?.[prov]?.account_id === account.account_id) {
+          const prevEntry = saved.active[prov];
+          const nextActive = { ...saved.active };
+          delete nextActive[prov];
+          writeCloudAccountsState({
+            ...saved,
+            active: nextActive,
+          }, { env }, ports);
+          if (prov === 'claude') {
+            restoreLocalClaudeGatewayConfig({ env }, ports);
+          } else if (prov === 'codex') {
+            restoreLocalCodexGatewayConfig({
+              env,
+              previousModelProvider: prevEntry.previous_codex_model_provider ?? null,
+              removeAuthFile: true,
+            }, ports);
+          }
+        } else if (prov === 'claude') {
+          restoreLocalClaudeGatewayConfig({ env, removeManagedFile: false }, ports);
+        }
         return { exitCode: 0, message: `Paused account "${account.label}".` };
       }
 

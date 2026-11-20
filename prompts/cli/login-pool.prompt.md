@@ -12,11 +12,16 @@ internal multi-harness fallback helpers:
 `pddManagedCodexHome(env)`,
 `managedCodexAuthPath(env)`,
 `managedCodexConfigPath(env)`,
+`pddManagedClaudeHome(env)`,
+`managedClaudeSettingsPath(env)`,
+`claudeTokenFingerprint(token)`,
 `readCloudAccountsState({env}, ports)`,
 `writeCloudAccountsState(state, {env}, ports)`,
 `isCloudAccountsActive({env, poolPath, provider}, ports)`,
 `isReauthRequiredAccount(entry)`,
 `isReauthRequiredFailure(errorOrText)`,
+`isExplicitReauthCodeFailure(errorOrText)`,
+`isGatewayGrantRevokedFailure(errorOrText)`,
 `markLocalAccountReauthRequired(accountId, {env}, ports)`,
 `stripCodexAuthBundle(authJson)`,
 `localCodexHome(env)`,
@@ -29,7 +34,9 @@ internal multi-harness fallback helpers:
 `materializeLocalCodexAuth(authOrLease, {env, previousManagedCodexGateway, previousCodexModelProvider}, ports)`,
 `restoreLocalCodexGatewayConfig({env, previousModelProvider, removeAuthFile}, ports)`,
 `materializeLocalClaudeAuth(lease, {env, previousManagedBaseUrl}, ports)`,
-`restoreLocalClaudeGatewayConfig({env}, ports)`,
+`restoreLocalClaudeGatewayConfig({env, managedTokenHashes}, ports)`,
+`buildClaudeGatewaySettingsOverlay(lease, {env, userSettings}, ports)`,
+`createClaudeStepSettingsOverlay(lease, {env, tmpRoot, userSettings}, ports)`,
 `createCodexStepOverlay(authOrLease, {env, tmpRoot}, ports)`,
 `buildClaudeStepEnv(baseEnv, lease, ports)`,
 `prepareCloudStepExecution(lease, baseEnv, ports)`,
@@ -69,7 +76,7 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
 
 - Local cache (`${PDD_STATE_DIR || join(XDG_STATE_HOME, "pdd") || ~/.local/state/pdd}/accounts-state.json`,
   mode `0600`, atomic rename) stores only non-secret active lease metadata
-  (`enrolled`, `providers`, per-provider `account_id`, `label`, `state`, `lease_id`,
+  (`enrolled`, `providers`, per-provider `account_id`, `label`, `is_owner`, `state`, `lease_id`,
   `leased_at`, `expires_at`, `last_refresh_at`, `access_token_expires_at`,
   `delivery_mode`, `anthropic_base_url`, `managed_anthropic_base_url`,
   `codex_gateway_url`, `managed_codex_gateway`, `previous_codex_model_provider`,
@@ -149,16 +156,8 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     and restoring `previousModelProvider`, removes `managedCodexAuthPath(env)` when
     `removeAuthFile: true` without ever touching `~/.codex/auth.json`, and calls
     `stopCodexAppServerDaemon` on `pddManagedCodexHome(env)` whenever `restoredConfig || removedAuth`.
-- `materializeLocalClaudeAuth` atomically merges `env.CLAUDE_CODE_OAUTH_TOKEN`
-  into `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`, mode `0600`),
-  sets `env.ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`, removes a
-  previously managed `/v1/accounts/claude-gateway` (or `/v1/claude-gateway`)
-  `ANTHROPIC_BASE_URL` when switching back to `direct_oauth`, and writes
-  `hasCompletedOnboarding: true` in `~/.claude.json` (mode `0600`).
-  `restoreLocalClaudeGatewayConfig({env}, ports)` atomically strips a PDD-managed
-  `pddg_*` `env.CLAUDE_CODE_OAUTH_TOKEN` and managed `/v1/(?:accounts/)?claude-gateway`
-  `env.ANTHROPIC_BASE_URL` from `~/.claude/settings.json` (`0600`) while preserving
-  all other user settings and non-`pddg_` tokens.
+- **Isolated PDD-managed Claude settings (`pddManagedClaudeHome`, `materializeLocalClaudeAuth`, `restoreLocalClaudeGatewayConfig`):**
+  `pddManagedClaudeHome(env)` resolves to `${PDD_STATE_DIR || join(XDG_STATE_HOME, "pdd") || ~/.local/state/pdd}/claude-home` (mode `0700`), and `managedClaudeSettingsPath(env)` resolves to `<pddManagedClaudeHome>/settings.json` (`0600`). `buildClaudeGatewaySettingsOverlay` validates `anthropic_base_url` (`https://` or loopback `http://`, no embedded credentials; `code: "invalid_lease"`) when `delivery_mode === "gateway_grant"`, and in `direct_oauth` mode deletes `ANTHROPIC_BASE_URL` from `userSettings` and forces `ANTHROPIC_BASE_URL = "https://api.anthropic.com"` whenever `~/.claude/settings.json` has any non-empty `env.ANTHROPIC_BASE_URL` so leased OAuth tokens are never sent to third-party proxies. `materializeLocalClaudeAuth` writes the PDD Cloud Claude `env` overlay exclusively inside `managedClaudeSettingsPath(env)` (setting `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and clearing `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, and `apiKeyHelper: ""`) and **never writes to `~/.claude/settings.json` or `~/.claude.json`**. `restoreLocalClaudeGatewayConfig({env, managedTokenHashes, removeManagedFile = true}, ports)` removes `managedClaudeSettingsPath(env)` when `removeManagedFile` is true (including dangling symlinks), and also cleans any legacy PDD-written entries from `~/.claude/settings.json` (`0600`, failing soft on `EACCES`/`EROFS`/`EPERM` read-only stores): `pddg_*` `env.CLAUDE_CODE_OAUTH_TOKEN`, managed `/v1/(?:accounts/)?claude-gateway` `env.ANTHROPIC_BASE_URL`, and any `sk-ant-oat*` `env.CLAUDE_CODE_OAUTH_TOKEN` whose `scryptSync` fingerprint (`claudeTokenFingerprint`) matches `managedTokenHashes` or `accounts-state.json` `managed_claude_token_hashes` (pruning an empty `"env": {}` object when all keys were removed, while preserving all other user settings and genuinely user-managed tokens).
 
 ## Disposable step isolation, `reauth_required` rotation and Stick-Until-100%
 
@@ -196,15 +195,21 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     `env_http_headers = {"x-pdd-gateway-grant": "PDD_CODEX_GATEWAY_GRANT"}`. Sets `CODEX_HOME=<overlay>`
     and `PDD_CODEX_GATEWAY_GRANT=<grant>` in `step.env`, and deletes `OPENAI_API_KEY`,
     `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN` and `OPENAI_BASE_URL`.
-- **Claude step env (`buildClaudeStepEnv` & `loginEnvironment`):** `loginEnvironment`
+- **Claude step isolation (`buildClaudeStepEnv`, `createClaudeStepSettingsOverlay`, `prepareCloudStepExecution`, & `loginEnvironment`):** `loginEnvironment`
   strips ambient `CLAUDE_CODE_OAUTH_TOKEN`, `PDD_CODEX_GATEWAY_GRANT` and managed
-  `/v1/accounts/claude-gateway` `ANTHROPIC_BASE_URL` before applying profile settings so
+  `/v1/(?:accounts/)?claude-gateway` `ANTHROPIC_BASE_URL` before applying profile settings so
   other profiles never inherit ambient grants; `buildClaudeStepEnv` deletes ambient
-  `ANTHROPIC_API_KEY` whenever a Cloud Claude lease is active, injects leased
-  `CLAUDE_CODE_OAUTH_TOKEN`, sets `ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`,
-  and in `direct_oauth` mode sets `ANTHROPIC_BASE_URL = "https://api.anthropic.com"` if
-  `~/.claude/settings.json` has a PDD-managed gateway `ANTHROPIC_BASE_URL` so user settings
-  cannot hijack `direct_oauth` steps.
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, and `CLAUDE_CODE_USE_FOUNDRY` whenever a Cloud Claude lease is active, injects leased
+  `CLAUDE_CODE_OAUTH_TOKEN`, validates and sets `ANTHROPIC_BASE_URL` when `delivery_mode === "gateway_grant"`,
+  and in `direct_oauth` mode deletes ambient `ANTHROPIC_BASE_URL` and sets `ANTHROPIC_BASE_URL = "https://api.anthropic.com"` if
+  `~/.claude/settings.json` has any non-empty `env.ANTHROPIC_BASE_URL`. Because Claude Code's
+  `~/.claude/settings.json` `env` block overrides process environment variables, `prepareCloudStepExecution`
+  for `provider === "claude"` also allocates a disposable `0700` overlay directory via
+  `createClaudeStepSettingsOverlay(lease, { env, tmpRoot, userSettings }, ports)` writing a `0600`
+  `settings.json` overlay (from `buildClaudeGatewaySettingsOverlay`) and returns
+  `extraArgs: ["--settings", overlay.settingsPath]`, `settingsPath: overlay.settingsPath`,
+  `cleanupDirs: [overlay.overlayDir]`, and `cleanup: overlay.cleanup` so stale tokens in `~/.claude/settings.json`
+  never hijack PDD or Autopilot steps.
 - **Stick-Until-100% and `reauth_required` skip (`selectCloudPoolLogin`, `leaseCloudAccount`, `exhaustCloudPoolLogin`, `reportCloudAccountUsage`):**
   Cloud accounts never stop at `97%`. They stay on `current_account_id` (`0` switches)
   until `five_hour_used_percent >= 100` or `weekly_used_percent >= 100` (or a quota
@@ -213,9 +218,9 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
   (`v >= 100 ? 100 : Math.max(0, Math.floor(v))`), POST `/v1/accounts/{account_id}/usage-report`
   with `limit_reached: true`, and lease the next ready account (`soonest weekly_reset_at`)
   with `0` issue strikes. Accounts or account-attributed lease/refresh failures matching `reauth_required`
-  (`token_revoked`, `invalid_grant`, `refresh_token_reused`, `state === "reauth_required"`, or account-attributed `401`, while unattributed Cloud bearer `401` errors never taint provider accounts)
-  are classified as `"reauth_required"`, persisted in `accounts-state.json` `reauth` across state reconciliations until a newer `last_refresh_at` succeeds or the account is re-enrolled/removed, added to `skip_account_ids`,
-  and skipped automatically during pool rotation without masking `reauth_required` as `ready`. `active[provider]` also tracks `materialized_local` so step-only overlay leases never masquerade as locally materialized `codex-home` / `.claude` credentials, and `cloudAccountsRequest` / `leaseCloudAccount` share a single wall-clock `deadlineMs` across token resolution, cold-start transport retry, and reauth skips.
+  (`token_revoked`, `invalid_grant`, `refresh_token_reused`, `oauth_not_allowed_for_organization`, `oauth_org_not_allowed`, `disabled Claude subscription access for Claude Code`, `state === "reauth_required"`, or account-attributed `401`, while unattributed Cloud bearer `401` errors and borrower gateway-grant revocations matching `isGatewayGrantRevokedFailure` such as `gateway_grant_revoked`, `share_revoked`, `Gateway grant was revoked`/`expired`, or `Shared account is not active`/`authorization epoch changed` — guarded against test-assertion diagnostics and never overriding explicit upstream `isExplicitReauthCodeFailure` or quota exhaustion — never taint provider accounts)
+  are classified as `"reauth_required"` (and `isAuthFailureMessage` also matches `oauth_not_allowed_for_organization`, `oauth_org_not_allowed`, `disabled Claude subscription access for Claude Code`, and `isGatewayGrantRevokedFailure` so revoked borrower shares rotate cleanly with zero issue strikes, while `exhaustCloudPoolLogin` prioritizes quota exhaustion and explicit upstream reauth codes before rotating past revoked borrower grants or borrowed-account generic `401` failures without calling `markLocalAccountReauthRequired` or reporting fake quota exhaustion), persisted in `accounts-state.json` `reauth` across state reconciliations until a newer `last_refresh_at` succeeds or the account is re-enrolled/removed, added to `skip_account_ids`,
+  and skipped automatically during pool rotation without masking `reauth_required` as `ready`. `active[provider]` also tracks `materialized_local` so step-only overlay leases never masquerade as locally materialized `codex-home` / `claude-home` credentials, and `cloudAccountsRequest` / `leaseCloudAccount` share a single wall-clock `deadlineMs` across token resolution, cold-start transport retry, and reauth skips.
 - **Burst `429` vs quota exhaustion (`classifyRateLimitFailure`):** A transient
   burst rate limit (`429 Too Many Requests`, `rate_limit_exceeded`, RPM/TPM) with no
   hard quota-exhaustion marker while known `5h < 100%` and `7d < 100%` returns
