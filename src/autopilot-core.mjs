@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: 463529606e80b7f88e91b7f8a1f2a1c5a797e622264ee67a3b9f6517fb6b7310)
+// Prompt: prompts/cli/autopilot-core.prompt.md (sha256: a14ea771b84c973ce538c75858e9be50f636bf0d29345d7e8380c0f7f6590f7a)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
@@ -3250,40 +3250,52 @@ const KNOWN_EXTENSIONLESS_FILES = new Set([
   'LICENSE', 'README', 'CODEOWNERS', 'NOTICE', 'Vagrantfile', 'Justfile',
 ]);
 
-const FORBIDDEN_FINDING_PATH_CHARS = new Set(['`', '*', '[', ']', '(', ')', '<', '>', '"', "'"]);
+const FORBIDDEN_FINDING_PATH_CHARS = new Set(['`', '*', '[', ']', '(', ')', '<', '>', '"', "'", ':']);
+
+function isInvisibleFormatChar(code) {
+  return code === 0x00ad
+    || (code >= 0x200b && code <= 0x200f)
+    || (code >= 0x202a && code <= 0x202e)
+    || (code >= 0x2060 && code <= 0x206f)
+    || code === 0xfeff;
+}
 
 function stripAnsiAndControl(raw) {
   if (typeof raw !== 'string' || !raw) return '';
   let out = '';
   for (let i = 0; i < raw.length; i++) {
     const code = raw.charCodeAt(i);
-    // Strip ANSI CSI (`\x1b[...m`) and OSC (`\x1b]...\x07` or `\x1b\\`) escape sequences linearly.
-    if (code === 0x1b && i + 1 < raw.length) {
-      const next = raw.charCodeAt(i + 1);
-      if (next === 0x5b) { // '[' CSI
-        let j = i + 2;
-        while (j < raw.length) {
-          const c = raw.charCodeAt(j);
-          if (c >= 0x40 && c <= 0x7e) { j++; break; }
-          j++;
+    // Strip ONLY terminated ANSI CSI (`\x1b[...m`) and OSC (`\x1b]...\x07` or `\x1b\\`) escape sequences linearly;
+    // on unterminated sequences strip only `\x1b` so trailing text remains visible to the guard.
+    if (code === 0x1b) {
+      if (i + 1 < raw.length) {
+        const next = raw.charCodeAt(i + 1);
+        if (next === 0x5b) { // '[' CSI
+          let j = i + 2;
+          let terminated = false;
+          while (j < raw.length) {
+            const c = raw.charCodeAt(j);
+            if (c >= 0x40 && c <= 0x7e) { j++; terminated = true; break; }
+            if (c < 0x20 || c > 0x7e) break;
+            j++;
+          }
+          if (terminated) { i = j - 1; continue; }
+        } else if (next === 0x5d) { // ']' OSC
+          let j = i + 2;
+          let terminated = false;
+          while (j < raw.length) {
+            const c = raw.charCodeAt(j);
+            if (c === 0x07) { j++; terminated = true; break; }
+            if (c === 0x1b && j + 1 < raw.length && raw.charCodeAt(j + 1) === 0x5c) { j += 2; terminated = true; break; }
+            j++;
+          }
+          if (terminated) { i = j - 1; continue; }
         }
-        i = j - 1;
-        continue;
-      }
-      if (next === 0x5d) { // ']' OSC
-        let j = i + 2;
-        while (j < raw.length) {
-          const c = raw.charCodeAt(j);
-          if (c === 0x07) { j++; break; }
-          if (c === 0x1b && j + 1 < raw.length && raw.charCodeAt(j + 1) === 0x5c) { j += 2; break; }
-          j++;
-        }
-        i = j - 1;
-        continue;
       }
       continue;
     }
-    if (code < 0x20 || code === 0x7f) {
+    if (isInvisibleFormatChar(code)) continue;
+    if (code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f)) {
       out += ' ';
       continue;
     }
@@ -3319,7 +3331,11 @@ function unescapeGitQuotedPath(raw) {
         }
       }
     }
-    const buf = Buffer.from(ch, 'utf8');
+    // Preserve non-BMP UTF-16 surrogate pairs before UTF-8 encoding.
+    const cp = inner.codePointAt(i);
+    const slice = cp !== undefined && cp > 0xffff ? inner.slice(i, i + 2) : ch;
+    if (cp !== undefined && cp > 0xffff) i++;
+    const buf = Buffer.from(slice, 'utf8');
     for (const b of buf) bytes.push(b);
   }
   return Buffer.from(bytes).toString('utf8');
@@ -3396,7 +3412,7 @@ function findClosingGitQuote(str, startIdx) {
 }
 
 function parseDiffGitHeaderPaths(rest) {
-  if (!rest) return { oldPath: null, newPath: null };
+  if (!rest) return { oldPath: null, newPath: null, ambiguous: false };
   // Quoted first path: "a/..." <second>
   if (rest.startsWith('"')) {
     const end1 = findClosingGitQuote(rest, 0);
@@ -3406,9 +3422,10 @@ function parseDiffGitHeaderPaths(rest) {
       return {
         oldPath: stripGitSidePrefix(tok1, 'a/'),
         newPath: stripGitSidePrefix(tok2, 'b/'),
+        ambiguous: false,
       };
     }
-    return { oldPath: null, newPath: null };
+    return { oldPath: null, newPath: null, ambiguous: false };
   }
   // Unquoted first path, quoted second path: a/... "b/..."
   if (rest.endsWith('"')) {
@@ -3417,6 +3434,7 @@ function parseDiffGitHeaderPaths(rest) {
       return {
         oldPath: stripGitSidePrefix(rest.slice(0, qStart), 'a/'),
         newPath: stripGitSidePrefix(rest.slice(qStart + 1), 'b/'),
+        ambiguous: false,
       };
     }
   }
@@ -3425,18 +3443,21 @@ function parseDiffGitHeaderPaths(rest) {
     const mid = (rest.length - 1) / 2;
     if (rest[mid] === ' ' && rest.startsWith('a/') && rest.startsWith('b/', mid + 1) && rest.slice(2, mid) === rest.slice(mid + 3)) {
       const p = normalizeDiffPath(rest.slice(2, mid));
-      return { oldPath: p, newPath: p };
+      return { oldPath: p, newPath: p, ambiguous: false };
     }
   }
-  // Fallback unquoted rename (later `rename from`/`rename to` and `---`/`+++` headers override with exact paths).
+  // Fallback unquoted non-symmetric split: mark ambiguous if multiple ` b/` occurrences exist so later
+  // `rename from`/`rename to`/`+++` headers populate the exact path without inserting a bogus key.
   const splitIdx = rest.indexOf(' b/');
   if (rest.startsWith('a/') && splitIdx > 2) {
+    const hasSecondSplit = rest.indexOf(' b/', splitIdx + 3) >= 0;
     return {
       oldPath: normalizeDiffPath(rest.slice(2, splitIdx)),
       newPath: normalizeDiffPath(rest.slice(splitIdx + 3)),
+      ambiguous: hasSecondSplit,
     };
   }
-  return { oldPath: null, newPath: null };
+  return { oldPath: null, newPath: null, ambiguous: false };
 }
 
 function parseBinaryFilesLine(rawLine) {
@@ -3464,6 +3485,17 @@ function parseBinaryFilesLine(rawLine) {
       return {
         oldPath: stripGitSidePrefix(body.slice(0, end1 + 1), 'a/'),
         newPath: stripGitSidePrefix(body.slice(end1 + 6), 'b/'),
+        oldDevNull: false,
+        newDevNull: false,
+      };
+    }
+  }
+  if (body.endsWith('"') && body.startsWith('a/')) {
+    const qStart = body.indexOf(' and "b/');
+    if (qStart > 2) {
+      return {
+        oldPath: stripGitSidePrefix(body.slice(0, qStart), 'a/'),
+        newPath: stripGitSidePrefix(body.slice(qStart + 5), 'b/'),
         oldDevNull: false,
         newDevNull: false,
       };
@@ -3567,10 +3599,10 @@ export function parseUnifiedDiffHunks(diffText) {
       pendingRenameFrom = null;
       pendingCopyFrom = null;
       pendingFlags = { added: false, deleted: false, binary: false, modeChanged: false };
-      const { oldPath, newPath } = parseDiffGitHeaderPaths(rawLine.slice('diff --git '.length));
-      curOld = oldPath;
-      curNew = newPath;
-      if (newPath) curEntry = ensureFile(newPath);
+      const { oldPath, newPath, ambiguous } = parseDiffGitHeaderPaths(rawLine.slice('diff --git '.length));
+      curOld = ambiguous ? null : oldPath;
+      curNew = ambiguous ? null : newPath;
+      if (!ambiguous && newPath) curEntry = ensureFile(newPath);
       continue;
     }
     if (rawLine.startsWith('@@ ')) {
@@ -3649,6 +3681,17 @@ export function parseUnifiedDiffHunks(diffText) {
       continue;
     }
     if (rawLine.startsWith('--- ')) {
+      if (!hasDiffGit) {
+        seenHunkInFile = false;
+        oldRemaining = 0;
+        newRemaining = 0;
+        curOld = null;
+        curNew = null;
+        curEntry = null;
+        pendingRenameFrom = null;
+        pendingCopyFrom = null;
+        pendingFlags = { added: false, deleted: false, binary: false, modeChanged: false };
+      }
       // Strip optional timestamp after tab when synthetic unified diffs include one.
       const tabIdx = rawLine.indexOf('\t', 4);
       const val = (tabIdx >= 0 ? rawLine.slice(4, tabIdx) : rawLine.slice(4)).trim();
@@ -3759,7 +3802,7 @@ function parseDirectLocationCandidate(rawCandidate) {
   const hashLowerIdx = hashIdx >= 0 ? hashIdx : cleaned.indexOf('#l');
   if (hashLowerIdx > 0) {
     const rawPath = cleaned.slice(0, hashLowerIdx);
-    const ranges = parseLineRangeSuffix(cleaned.slice(hashLowerIdx + 1));
+    const ranges = parseLineRangeSuffix(stripPathWrappers(cleaned.slice(hashLowerIdx + 1)));
     const normPath = normalizeDiffPath(rawPath, { fromFinding: true });
     if (ranges && normPath && isPlausibleRepoPath(normPath)) {
       for (const range of ranges) {
@@ -3768,17 +3811,54 @@ function parseDirectLocationCandidate(rawCandidate) {
       return results;
     }
   }
-  // Check `path:123` / `path:123-145` / `path:123:4` / `path:123,124` form.
+  // Check `path:123` / `path:123-145` / `path:123:4` / `path:123,124` form (including `` `path`:`22` ``).
   const colonIdx = cleaned.indexOf(':');
   if (colonIdx > 0) {
     const rawPath = cleaned.slice(0, colonIdx);
-    const ranges = parseLineRangeSuffix(cleaned.slice(colonIdx + 1));
+    const ranges = parseLineRangeSuffix(stripPathWrappers(cleaned.slice(colonIdx + 1)));
     const normPath = normalizeDiffPath(rawPath, { fromFinding: true });
     if (ranges && normPath && isPlausibleRepoPath(normPath)) {
       for (const range of ranges) {
         results.push({ path: normPath, startLine: range[0], endLine: range[1], range });
       }
       return results;
+    }
+  }
+  return results;
+}
+
+function parseLocationPart(part) {
+  const partLocs = parseDirectLocationCandidate(part);
+  if (partLocs.length) return partLocs;
+  const results = [];
+  // Support attached prefixes before `#L`, e.g. `(see:src/./auth.mjs#L22)` or `(see:src/untouched.mjs#L5)`.
+  const hashIdx = part.indexOf('#L') >= 0 ? part.indexOf('#L') : part.indexOf('#l');
+  if (hashIdx > 0) {
+    const beforeHash = part.slice(0, hashIdx);
+    const lastColon = beforeHash.lastIndexOf(':');
+    if (lastColon >= 0 && lastColon + 1 < beforeHash.length) {
+      const stripped = parseDirectLocationCandidate(beforeHash.slice(lastColon + 1) + part.slice(hashIdx));
+      if (stripped.length) return stripped;
+    }
+  }
+  if (!part.includes(':')) return results;
+  const segs = part.split(':');
+  for (let i = 0; i + 1 < segs.length; i++) {
+    const normPath = normalizeDiffPath(segs[i], { fromFinding: true });
+    if (!normPath || !isPlausibleRepoPath(normPath)) continue;
+    // Try `path:line:col` first when segs[i+2] is pure digits, else `path:line`.
+    if (i + 2 < segs.length && /^\d+$/.test(stripPathWrappers(segs[i + 2]))) {
+      const withCol = parseLineRangeSuffix(`${stripPathWrappers(segs[i + 1])}:${stripPathWrappers(segs[i + 2])}`);
+      if (withCol) {
+        for (const range of withCol) results.push({ path: normPath, startLine: range[0], endLine: range[1], range });
+        i += 2;
+        continue;
+      }
+    }
+    const ranges = parseLineRangeSuffix(stripPathWrappers(segs[i + 1]));
+    if (ranges) {
+      for (const range of ranges) results.push({ path: normPath, startLine: range[0], endLine: range[1], range });
+      i += 1;
     }
   }
   return results;
@@ -3790,44 +3870,41 @@ function parseLocationToken(rawToken) {
   const cleaned = stripTokenWrappers(rawToken);
   if (!cleaned || cleaned.includes('://')) return [];
   const results = [];
-  // Support attached prefixes or chained tokens like `(see:src/auth.mjs:22)`, `file=src/auth.mjs:22`,
-  // `a.mjs:1;b.mjs:2`, or `src/untouched.mjs:1:src/auth.mjs:22`.
+  // Support attached prefixes or chained tokens like `(see:src/auth.mjs:22)`, `(see:src/auth.mjs#L22)`,
+  // `file=src/auth.mjs:22`, `a.mjs:1;b.mjs:2`, `a.mjs:1,b.mjs:2`, or `src/untouched.mjs:1:src/auth.mjs:22`.
   const subParts = cleaned.split(/[;=()[\]<>]+/).filter(Boolean);
   for (const part of subParts) {
-    const partLocs = parseDirectLocationCandidate(part);
+    const partLocs = parseLocationPart(part);
     if (partLocs.length) {
       results.push(...partLocs);
       continue;
     }
-    if (!part.includes(':')) continue;
-    const segs = part.split(':');
-    for (let i = 0; i + 1 < segs.length; i++) {
-      const normPath = normalizeDiffPath(segs[i], { fromFinding: true });
-      if (!normPath || !isPlausibleRepoPath(normPath)) continue;
-      // Try `path:line:col` first when segs[i+2] is pure digits, else `path:line`.
-      let suffix = segs[i + 1];
-      let step = 1;
-      if (i + 2 < segs.length && /^\d+$/.test(segs[i + 2])) {
-        const withCol = parseLineRangeSuffix(`${segs[i + 1]}:${segs[i + 2]}`);
-        if (withCol) {
-          for (const range of withCol) results.push({ path: normPath, startLine: range[0], endLine: range[1], range });
-          i += 2;
-          continue;
-        }
-      }
-      const ranges = parseLineRangeSuffix(suffix);
-      if (ranges) {
-        for (const range of ranges) results.push({ path: normPath, startLine: range[0], endLine: range[1], range });
-        i += step;
+    if (part.includes(',')) {
+      for (const commaPart of part.split(',').filter(Boolean)) {
+        results.push(...parseLocationPart(commaPart));
       }
     }
   }
   return results;
 }
 
+function stripMarkdownLinkTitle(rawTarget) {
+  const trimmed = rawTarget.trim();
+  if (!trimmed) return '';
+  // Strip optional trailing markdown title `"title"` or `'title'` preceded by whitespace.
+  const last = trimmed[trimmed.length - 1];
+  if (last === '"' || last === "'") {
+    const openQuote = trimmed.lastIndexOf(last, trimmed.length - 2);
+    if (openQuote > 1 && /\s/.test(trimmed[openQuote - 1])) {
+      return trimmed.slice(0, openQuote).trim();
+    }
+  }
+  return trimmed;
+}
+
 function extractMarkdownLinkTargets(cleanText) {
-  // Linearly extract every `[label](target)` target (supporting multi-word labels and spaces in targets)
-  // while leaving the label text intact for normal token scanning.
+  // Linearly extract every `[label](target)` target (supporting multi-word labels, `%20` spaces,
+  // and optional markdown link titles) while leaving the label text intact for normal token scanning.
   const targets = [];
   let out = '';
   let i = 0;
@@ -3853,9 +3930,7 @@ function extractAllFindingLocations(item) {
   if (!clean) return [];
   const locations = [];
   const { textWithoutTargets, targets } = extractMarkdownLinkTargets(clean);
-  for (const target of targets) {
-    locations.push(...parseLocationToken(target));
-  }
+  // Scan body tokens first so `extractFindingLocation` preserves the leading primary location order.
   const tokens = textWithoutTargets.trim().split(/\s+/).filter(Boolean);
   for (let i = 0; i < tokens.length; i++) {
     const locs = parseLocationToken(tokens[i]);
@@ -3878,6 +3953,19 @@ function extractAllFindingLocations(item) {
       }
     }
   }
+  // Then parse markdown link targets (whole decoded target first for paths with spaces, else whitespace-split).
+  for (const rawTarget of targets) {
+    const decoded = stripMarkdownLinkTitle(rawTarget).replaceAll('%20', ' ');
+    if (!decoded) continue;
+    const whole = parseDirectLocationCandidate(decoded);
+    if (whole.length) {
+      locations.push(...whole);
+      continue;
+    }
+    for (const tTok of decoded.split(/\s+/).filter(Boolean)) {
+      locations.push(...parseLocationToken(tTok));
+    }
+  }
   return locations;
 }
 
@@ -3891,13 +3979,35 @@ function isPathWordChar(ch) {
   return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || ch === '_' || ch === '-' || ch === '.';
 }
 
-function scanDiffPathMentions(cleanText, diffPaths) {
+function isPlainUnrelatedRelativePrefix(prefix) {
+  // Returns true ONLY for a plain unrelated repo-relative directory prefix like `other/` or `packages/web/`.
+  // Returns false for `/`, `./`, `../`, `~/`, `a/`, `b/`, URLs (`https://`, `file://`), Windows drives (`C:/`),
+  // attached prefixes (`see:/...`), `//`, or any `..` / `.` segment so all of those are inspected against diffScope.
+  if (!prefix || !prefix.endsWith('/')) return false;
+  if (prefix.startsWith('/') || prefix.startsWith('./') || prefix.startsWith('../') || prefix.startsWith('~/')
+    || prefix === 'a/' || prefix === 'b/') return false;
+  if (prefix.includes(':') || prefix.includes('..') || prefix.includes('~') || prefix.includes('//')) return false;
+  const segs = prefix.slice(0, -1).split('/');
+  return segs.length > 0 && segs.every(seg => seg.length > 0 && seg !== '.' && seg !== '..');
+}
+
+function canonicalizeTextForDiffScan(cleanText) {
+  // Canonicalize `%20`, shell-escaped `\ `, Windows `\`, repeated `//`, and redundant `/./` segments linearly.
+  let s = cleanText.replaceAll('%20', ' ').replaceAll('\\ ', ' ').replaceAll('\\', '/');
+  let collapsed = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '/' && collapsed.endsWith('/')) continue;
+    collapsed += s[i];
+  }
+  while (collapsed.includes('/./')) collapsed = collapsed.replaceAll('/./', '/');
+  return collapsed;
+}
+
+function scanDiffPathMentions(textSlash, diffPaths, { recordSpaceSpans = false } = {}) {
   // Detect direct occurrences of any diff/renamed path (including paths with spaces, `a/`/`b/` prefixes,
-  // absolute paths, or bare path mentions without line numbers).
-  const textSlash = cleanText.replaceAll('\\', '/');
+  // absolute paths, URLs, `../`/`~/` prefixes, or bare path mentions without line numbers).
   const matchedLocations = [];
   const matchedSpans = [];
-  let bareDiffMention = false;
   for (const diffPath of diffPaths) {
     if (!diffPath) continue;
     let from = 0;
@@ -3910,15 +4020,12 @@ function scanDiffPathMentions(cleanText, diffPaths) {
       // Avoid substring matches like `src/auth.mjs.bak` or `my_src/auth.mjs`.
       if (isPathWordChar(before)) continue;
       if (after && (isPathWordChar(after) || after === '/')) continue;
-      // If preceded by `/`, verify this is either `./`, `a/`, `b/`, or an absolute path (`/Users/...`, `C:/...`),
-      // not a distinct repo-relative path like `other/src/auth.mjs`.
+      // If preceded by `/`, skip ONLY plain unrelated repo-relative directory prefixes (e.g. `other/src/auth.mjs`).
       if (before === '/') {
         let tokStart = idx - 1;
         while (tokStart > 0 && !' \t`"\'([<{,;='.includes(textSlash[tokStart - 1])) tokStart--;
         const prefix = textSlash.slice(tokStart, idx);
-        const isKnownPrefix = prefix === '/' || prefix === './' || prefix === 'a/' || prefix === 'b/'
-          || prefix.startsWith('/') || (prefix.length >= 3 && prefix[1] === ':' && prefix[2] === '/');
-        if (!isKnownPrefix) continue;
+        if (isPlainUnrelatedRelativePrefix(prefix)) continue;
       }
       // Inspect immediately following text (skipping optional closing wrappers) for an attached line range.
       let pos = from;
@@ -3926,17 +4033,18 @@ function scanDiffPathMentions(cleanText, diffPaths) {
       let ranges = null;
       let spanEnd = from;
       if (pos < textSlash.length && (textSlash[pos] === ':' || (textSlash[pos] === '#' && (textSlash[pos + 1] === 'L' || textSlash[pos + 1] === 'l')))) {
-        const startPos = pos + 1;
+        let startPos = pos + 1;
+        while (startPos < textSlash.length && '`"\'*'.includes(textSlash[startPos])) startPos++;
         let endPos = startPos;
         while (endPos < textSlash.length && '0123456789Ll:,-–'.includes(textSlash[endPos])) endPos++;
         const rawSuffix = stripTokenWrappers(textSlash.slice(startPos, endPos));
         ranges = parseLineRangeSuffix(rawSuffix);
         if (ranges) spanEnd = endPos;
       } else {
-        // Support `diffPath line 42` / `diffPath (lines 42-48)`
+        // Support `diffPath line 42` / `diffPath (lines 42-48)` with a bounded slice.
         let tailPos = pos;
         while (tailPos < textSlash.length && ' \t'.includes(textSlash[tailPos])) tailPos++;
-        const tail = textSlash.slice(tailPos);
+        const tail = textSlash.slice(tailPos, tailPos + 128);
         const tailToks = tail.split(/\s+/, 2);
         if (tailToks.length >= 2) {
           const kw = stripTokenWrappers(tailToks[0]).toLowerCase();
@@ -3953,18 +4061,19 @@ function scanDiffPathMentions(cleanText, diffPaths) {
         for (const range of ranges) {
           matchedLocations.push({ path: diffPath, startLine: range[0], endLine: range[1], range });
         }
-        if (diffPath.includes(' ')) matchedSpans.push([idx, spanEnd]);
+        if (recordSpaceSpans && diffPath.includes(' ')) matchedSpans.push([idx, spanEnd]);
       } else {
-        bareDiffMention = true;
+        return { matchedLocations, matchedSpans, bareDiffMention: true };
       }
     }
   }
-  return { matchedLocations, matchedSpans, bareDiffMention };
+  return { matchedLocations, matchedSpans, bareDiffMention: false };
 }
 
 function maskMatchedSpans(text, spans) {
   if (!spans.length) return text;
-  const chars = [...text];
+  // Index UTF-16 code units (matching String.prototype.indexOf offsets 1:1 even with non-BMP emoji).
+  const chars = text.split('');
   for (const [start, end] of spans) {
     for (let i = Math.max(0, start); i < Math.min(chars.length, end); i++) {
       chars[i] = ' ';
@@ -3996,13 +4105,22 @@ export function guardPreExistingFindings(preExistingItems, diffScope) {
   const kept = [];
   for (const cleanItem of rawCleanItems) {
     const displayItem = oneLine(cleanItem, 500);
-    const mentionScan = scanDiffPathMentions(cleanItem, touchedPaths);
-    if (mentionScan.bareDiffMention) {
+    const rawSlash = cleanItem.replaceAll('\\', '/');
+    const rawScan = scanDiffPathMentions(rawSlash, touchedPaths, { recordSpaceSpans: true });
+    if (rawScan.bareDiffMention) {
       promoted.push(displayItem);
       continue;
     }
-    const locs = extractAllFindingLocations(maskMatchedSpans(cleanItem, mentionScan.matchedSpans));
-    const allLocs = [...locs, ...mentionScan.matchedLocations];
+    const canonText = canonicalizeTextForDiffScan(cleanItem);
+    const canonScan = canonText !== rawSlash
+      ? scanDiffPathMentions(canonText, touchedPaths, { recordSpaceSpans: false })
+      : { matchedLocations: [], matchedSpans: [], bareDiffMention: false };
+    if (canonScan.bareDiffMention) {
+      promoted.push(displayItem);
+      continue;
+    }
+    const locs = extractAllFindingLocations(maskMatchedSpans(cleanItem, rawScan.matchedSpans));
+    const allLocs = [...locs, ...rawScan.matchedLocations, ...canonScan.matchedLocations];
     if (!allLocs.length) {
       promoted.push(displayItem);
       continue;
@@ -4061,8 +4179,9 @@ export function applyPreExistingDiffGuard(review, diffScopeOrText) {
   const combined = [...rawMustFix, ...promoted];
   const followUps = combined.filter(isFollowUp).slice(0, 20);
   const mustFix = combined.filter(item => !isFollowUp(item)).slice(0, 20);
-  // Fail closed: promoted preExisting items (including P3 or diffScope=null) must NEVER flip an explicit FAIL to PASS.
-  const verdict = !mustFix.length && (review.verdict === 'PASS' || rawFollowUps.length > 0) ? 'PASS' : 'FAIL';
+  // Fail closed: promoted preExisting items (including P3 or diffScope=null) must NEVER flip an explicit FAIL
+  // or invalid verdict into PASS.
+  const verdict = !mustFix.length && (review.verdict === 'PASS' || (review.verdict === 'FAIL' && rawFollowUps.length > 0)) ? 'PASS' : 'FAIL';
   return {
     ...review,
     verdict,

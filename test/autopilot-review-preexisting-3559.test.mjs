@@ -573,3 +573,127 @@ test('#3559 (8): end-to-end reviewState resists diff.noprefix=true and rejects h
   assert.match(comments, /P2 src\/does-not-exist\.mjs:4 hallucinated path not in git ls-tree/);
   assert.match(comments, /Pre-existing \(outside diff, non-blocking\):\n- P2 src\/unrelated\.mjs:1 real outside-diff bug/);
 });
+
+test('#3559 (9): Round-2 adversarial regressions (redundant segments, URLs/tilde/parent/colon prefixes, emoji UTF-16 mask alignment, zero-width/unterminated OSC, %20/comma/#L, C-quoted surrogate pairs, non-git reset, verdict guard)', () => {
+  const diff = [
+    'diff --git a/src/auth.mjs b/src/auth.mjs',
+    '--- a/src/auth.mjs',
+    '+++ b/src/auth.mjs',
+    '@@ -20,5 +20,5 @@',
+    '+change();',
+    'diff --git a/src/added.mjs b/src/added.mjs',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/src/added.mjs',
+    '@@ -0,0 +1,5 @@',
+    '+export const a = 1;',
+    'diff --git a/src/my file.mjs b/src/my file.mjs',
+    '--- a/src/my file.mjs',
+    '+++ b/src/my file.mjs',
+    '@@ -10,1 +10,2 @@',
+    '+changedSpace();',
+  ].join('\n');
+  const baseScope = parseUnifiedDiffHunks(diff);
+  const scopeWithRepo = {
+    ...baseScope,
+    repoFiles: new Set(['src/auth.mjs', 'src/added.mjs', 'src/my file.mjs', 'src/untouched.mjs', 'other/src/auth.mjs']),
+  };
+
+  // P1-1, P1-2, P2-1, P2-2: ALL bypasses must be promoted BOTH with and without repoFiles
+  const r2Bypasses = [
+    'P1 src/./auth.mjs breaks login (see src/untouched.mjs:1)',
+    'P1 src//added.mjs has SQLi (see src/untouched.mjs:1)',
+    'P1 ././src/auth.mjs breaks login (see src/untouched.mjs:1)',
+    'P1 src/untouched.mjs:1 and src/./auth.mjs at line 22',
+    'P1 src/untouched.mjs:1 and `src/./auth.mjs`:`22`',
+    'P1 src/untouched.mjs:1 and /Users/dev/repo/src/./auth.mjs:22',
+    'P1 src/untouched.mjs:1 and C:\\repo\\src\\.\\auth.mjs:22',
+    'P1 src/untouched.mjs:1 and src/my\\ file.mjs breaks auth',
+    'P1 src/untouched.mjs:1 and https://github.com/org/repo/blob/HEAD/src/auth.mjs#L22',
+    'P1 src/untouched.mjs:1 and file:///Users/dev/repo/src/auth.mjs:22',
+    'P1 src/untouched.mjs:1 (see:/Users/dev/repo/src/auth.mjs:22)',
+    'P1 src/untouched.mjs:1 and ../repo/src/auth.mjs:22',
+    'P1 src/untouched.mjs:1 and ~/repo/src/auth.mjs breaks login',
+    'P1 src/untouched.mjs:1 [regression](src/./auth.mjs:22 "broken")',
+    'P1 src/untouched.mjs:1 [x](note src/./auth.mjs:22 tail)',
+    `P1 ${'🐛'.repeat(20)} src/my file.mjs:2 src/./auth.mjs:22`,
+    'P1 src/untouched.mjs:1 and src/\u200bauth.mjs breaks login',
+    'P1 src/untouched.mjs:1 \x1b]0;hidden src/auth.mjs:22',
+    'P1 [bug](src/my%20file.mjs#L10)',
+    'P1 (see:src/./auth.mjs#L22) and src/untouched.mjs:1',
+    'P1 src/untouched.mjs:1,src/./auth.mjs:22',
+  ];
+  for (const [label, sc] of [['with repoFiles', scopeWithRepo], ['without repoFiles', baseScope]]) {
+    const res = guardPreExistingFindings(r2Bypasses, sc);
+    assert.equal(res.promoted.length, r2Bypasses.length, `all ${r2Bypasses.length} R2 bypasses must promote (${label}); kept=${JSON.stringify(res.preExisting)}`);
+    assert.deepEqual(res.preExisting, []);
+  }
+
+  // Legitimate outside-diff findings with emojis, %20 markdown links, and (see:file#L) MUST stay non-blocking with repoFiles
+  const r2Valid = [
+    `P2 ${'🐛'.repeat(20)} src/my file.mjs:2 unrelated outside-diff bug`,
+    'P2 [bug](src/my%20file.mjs#L2) outside diff in space-path markdown link',
+    'P2 (see:src/untouched.mjs#L5) attached prefix on untouched file',
+    'P2 other/src/auth.mjs:5 unrelated repo-relative sibling path',
+  ];
+  const validRes = guardPreExistingFindings(r2Valid, scopeWithRepo);
+  assert.deepEqual(validRes.promoted, [], `valid outside-diff findings must not promote: ${JSON.stringify(validRes.promoted)}`);
+  assert.equal(validRes.preExisting.length, r2Valid.length);
+
+  // P2-3: Surrogate pairs in C-quoted paths, non-git multi-file pendingFlags reset, unquoted+quoted binary, ambiguous ` b/` rename
+  const r2Diff = [
+    'diff --git "a/src/🚀\\tfile.mjs" "b/src/🚀\\tfile.mjs"',
+    '--- "a/src/🚀\\tfile.mjs"',
+    '+++ "b/src/🚀\\tfile.mjs"',
+    '@@ -3,1 +3,2 @@',
+    '+ok();',
+    'diff --git a/plain.png "b/f\\303\\251.png"',
+    'Binary files a/plain.png and "b/f\\303\\251.png" differ',
+    'diff --git a/dir b/old.mjs b/dir b/new.mjs',
+    'similarity index 90%',
+    'rename from dir b/old.mjs',
+    'rename to dir b/new.mjs',
+    '--- a/dir b/old.mjs',
+    '+++ b/dir b/new.mjs',
+    '@@ -4,1 +4,1 @@',
+    '+patched();',
+  ].join('\n');
+  const r2Scope = parseUnifiedDiffHunks(r2Diff);
+  assert.deepEqual(r2Scope.files.get('src/🚀\tfile.mjs')?.ranges, [[3, 4]]);
+  assert.equal(r2Scope.files.get('plain.png')?.binary, true);
+  assert.equal(r2Scope.files.get('fé.png')?.binary, true);
+  assert.equal(r2Scope.files.has('old.mjs b/dir b/new.mjs'), false, 'ambiguous ` b/` rename must not leave bogus key');
+  assert.equal(r2Scope.renamedFrom.get('dir b/old.mjs'), 'dir b/new.mjs');
+  assert.deepEqual(r2Scope.files.get('dir b/new.mjs')?.ranges, [[4, 4]]);
+
+  // Non-git multi-file unified diff must reset pendingFlags between files
+  const nonGitDiff = [
+    '--- /dev/null',
+    '+++ b/src/first-new.mjs',
+    '@@ -0,0 +1,2 @@',
+    '+const a = 1;',
+    '+const b = 2;',
+    '--- a/src/second-mod.mjs',
+    '+++ b/src/second-mod.mjs',
+    '@@ -10,1 +10,1 @@',
+    '-old();',
+    '+new();',
+  ].join('\n');
+  const nonGitScope = parseUnifiedDiffHunks(nonGitDiff);
+  assert.equal(nonGitScope.files.get('src/first-new.mjs')?.added, true);
+  assert.equal(nonGitScope.files.get('src/second-mod.mjs')?.added, false, 'non-git diff must not leak added flag to file 2');
+
+  // P3-1 & P3-2: Invalid verdict fails closed even with P3 mustFix, and extractFindingLocation preserves primary location order
+  const maybeVerdict = applyPreExistingDiffGuard({
+    verdict: 'MAYBE',
+    head: 'abc123',
+    summary: 'Invalid verdict.',
+    mustFix: ['P3 src/untouched.mjs:1 minor nit'],
+    preExisting: [],
+  }, baseScope);
+  assert.equal(maybeVerdict.verdict, 'FAIL');
+
+  const orderedLoc = extractFindingLocation('P1 src/primary.mjs:10 (see [doc](src/secondary.mjs#L5))');
+  assert.equal(orderedLoc?.path, 'src/primary.mjs');
+  assert.equal(orderedLoc?.startLine, 10);
+});

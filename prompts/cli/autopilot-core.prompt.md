@@ -980,31 +980,37 @@ the evidence record.
   scanning into `{files: Map<path, {added: boolean, deleted: boolean, binary: boolean,
   modeChanged: boolean, ranges: Array<[start, end]>}>, renamedFrom: Map<oldPath, newPath>}`,
   tracking hunk line counters and file-header state so hunk-body `+++ ` or `--- ` lines can
-  never hijack file headers, unquoting Git C-quoted paths (including octal UTF-8 escapes),
-  handling symmetric `diff --git a/... b/...` headers (even when paths contain spaces or
-  ` b/`), `--- /dev/null` and `new file mode` (`added: true`), `+++ /dev/null` and
+  never hijack file headers, unquoting Git C-quoted paths (including UTF-8 octal escapes and
+  surrogate pairs), handling symmetric `diff --git a/... b/...` headers (even when paths contain
+  spaces or ` b/`, deferring ambiguous non-symmetric splits until exact headers arrive),
+  `--- /dev/null` and `new file mode` (`added: true`), `+++ /dev/null` and
   `deleted file mode` (`deleted: true`), `old mode` / `new mode` (`modeChanged: true`),
-  `Binary files ... differ` (`binary: true`, registering both paths), `rename from` /
-  `rename to` (mapping old path to new path), `copy from` / `copy to` (marking the copied
-  destination `added: true` without aliasing the untouched source), and `@@ -a,b +c,d @@`
+  `Binary files ... differ` (`binary: true`, registering both paths including quoted/unquoted
+  pairs), `rename from` / `rename to` (mapping old path to new path), `copy from` / `copy to`
+  (marking the copied destination `added: true` without aliasing the untouched source),
+  synthetic non-git multi-file header resets, and `@@ -a,b +c,d @@`
   headers (`[c, c + d - 1]` when `d > 0`; `[c, c + 1]` for a mid-file pure deletion when
   `d === 0` and `c > 0`; `[1, Math.max(1, a + b)]` for a top-of-file deletion or emptied file
-  when `d === 0` and `c === 0`). Exported `extractFindingLocation(item)` strips ANSI escapes
-  and ASCII control characters, scans all token and markdown-link (`[label](target)`)
-  candidates without pre-truncating at 500 characters, and extracts the primary normalized
-  repo-relative `path` (stripping `./` and surrounding markdown/quote/bracket wrappers,
-  converting `\` to `/`, normalizing redundant segments, and rejecting absolute paths,
-  markdown syntax chars inside paths, path traversal `..`, and URLs) and `[startLine, endLine]`
+  when `d === 0` and `c === 0`). Exported `extractFindingLocation(item)` strips terminated ANSI
+  escapes (leaving trailing text intact on unterminated escapes), C0/C1 control characters, and
+  invisible zero-width/bidi Unicode format characters, scans body tokens (preserving leading
+  primary location order) and markdown-link (`%20`-decoded, optional title stripped, whole-target
+  and whitespace-split) candidates without pre-truncating at 500 characters, and extracts the
+  primary normalized repo-relative `path` (stripping `./` and surrounding markdown/quote/bracket
+  wrappers, converting `\` to `/`, normalizing redundant segments, and rejecting absolute paths,
+  markdown/colon syntax chars inside paths, path traversal `..`, and URLs) and `[startLine, endLine]`
   from standard finding prefixes (`P1 file:42 ...`, `P2 file:42-48 ...`, `file:42:5`,
   `file:42,43`, `file#L42-L48`, `P2 [label](file#L42)`), returning `{path, startLine, endLine, range}`
   or `null`. Exported `guardPreExistingFindings(preExistingItems, diffScope)` coerces non-array
-  items (`null`/`undefined` to `[]`, scalar to one item), strips ANSI escapes and ASCII control
-  characters before scanning the full un-truncated text (truncating output items to 500 chars
-  only after scanning), checks ALL items before any 20-item output cap (so padding cannot hide
-  a changed-hunk bug past item 20), extracts ALL `file:line` references (including multi-word
-  markdown links, attached prefixes, comma-separated line lists, `a/`/`b/` git prefixes, and
-  direct path mentions for diff files including paths with spaces), fails closed into
-  `promoted` whenever `diffScope` is `null`/unavailable, the item has no verifiable
+  items (`null`/`undefined` to `[]`, scalar to one item), strips terminated ANSI escapes, C0/C1
+  control chars, and invisible zero-width/bidi format chars before scanning the full un-truncated
+  text (truncating output items to 500 chars only after scanning), checks ALL items before any
+  20-item output cap (so padding cannot hide a changed-hunk bug past item 20), extracts ALL
+  `file:line` references (including multi-word markdown links with optional titles or `%20`
+  spaces, attached prefixes like `(see:file#L22)`, comma-chained file locations, `a/`/`b/` git
+  prefixes, and direct raw + canonicalized `/./`/`//`/`\ `/URL/absolute/`../`/`~/` path mentions
+  for diff files including paths with spaces using UTF-16 code-unit span masking), fails closed
+  into `promoted` whenever `diffScope` is `null`/unavailable, the item has no verifiable
   `file:line` location, the item mentions a diff/renamed file without a verified outside-diff
   line number, `diffScope.repoFiles` is provided and any cited path does not exist at `job.head`
   (or in `diffScope`), or ANY cited location hits an added, deleted, binary-modified, or
@@ -1014,7 +1020,7 @@ the evidence record.
   `applyPreExistingDiffGuard(review, diffScopeOrText)` applies the guard to
   a review object, merging `promoted` items into `mustFix` before splitting P3 follow-ups
   and computing `verdict`, while ensuring promoted `preExisting` P3 items never convert an
-  explicit `FAIL` with empty raw `mustFix` into `PASS`;
+  explicit `FAIL` with empty raw `mustFix` (or any non-`PASS`/`FAIL` verdict) into `PASS`;
   `parseReviewOutput(raw, {fromResultFile, diffScope, diffText})` normalizes `preExisting`
   without pre-truncating at 500 chars when no guard has run yet and applies
   `applyPreExistingDiffGuard` when `diffScope` or `diffText` is provided. In `reviewState`,
