@@ -286,15 +286,21 @@ export async function runStepAgentProcess({agent='codex',definition=null,step=nu
      stepExec.cleanup();
     }
     const combined=`${result?.stderr??''}\n${result?.stdout??''}`;
-    if(result?.code!==0&&acc?.account_id&&triedIds.length<12){
+    if(result?.code!==0&&acc?.account_id&&triedIds.length<12&&!triedIds.includes(acc.account_id)){
+     if(cloudMod.isExplicitReauthCodeFailure?.(combined)){
+      cloudMod.markLocalAccountReauthRequired?.(acc.account_id,{env:childEnv},accountsPorts);
+      triedIds.push(acc.account_id);
+      burstRetried=false;
+      continue;
+     }
      if(cloudMod.isGatewayGrantRevokedFailure?.(combined)){
       triedIds.push(acc.account_id);
       burstRetried=false;
       continue;
      }
      if(cloudMod.isReauthRequiredFailure?.(combined)){
-      const isBorrowed=acc.is_owner===false;
-      if(!isBorrowed||cloudMod.isExplicitReauthCodeFailure?.(combined)){
+      const isBorrowed=acc.is_owner===false||(acc.is_owner==null&&acc.shared===true);
+      if(!isBorrowed){
        cloudMod.markLocalAccountReauthRequired?.(acc.account_id,{env:childEnv},accountsPorts);
       }
       triedIds.push(acc.account_id);

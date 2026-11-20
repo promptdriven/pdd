@@ -3852,13 +3852,18 @@ test('#3426 borrower revocation: gateway_grant_revoked and borrowed generic 401 
     writeCloudAccountsState,
   } = await import('../src/login-pool.mjs');
 
-  // 1. Classifiers separate borrower share/grant revocations from upstream owner reauth_required.
+  // 1. Classifiers separate borrower share/grant revocations from upstream owner reauth_required,
+  //    ignore test-assertion diagnostics, and never let grant-revoked text mask explicit upstream reauth codes.
   const revokedMsg = 'HTTP 403 {"error":{"code":"gateway_grant_revoked","message":"Shared account authorization epoch changed"}}';
   const revokedWith401 = 'HTTP 401 gateway_grant_revoked: Gateway grant was revoked';
+  const noisyExplicitReauth = 'note: gateway_grant_revoked seen in source, real error: oauth_not_allowed_for_organization';
+  const testAssertionNoise = 'AssertionError: expected "gateway_grant_revoked" in test/cloud-accounts.test.mjs to fail';
   assert.equal(isGatewayGrantRevokedFailure(revokedMsg), true);
   assert.equal(isGatewayGrantRevokedFailure(revokedWith401), true);
+  assert.equal(isGatewayGrantRevokedFailure(testAssertionNoise), false, 'test diagnostics must never trigger revocation retries');
   assert.equal(isReauthRequiredFailure(revokedMsg), false, 'revoked borrower grant must never classify as reauth_required');
   assert.equal(isReauthRequiredFailure(revokedWith401), false, 'revoked borrower grant with 401 must never classify as reauth_required');
+  assert.equal(isReauthRequiredFailure(noisyExplicitReauth), true, 'explicit upstream reauth code must never be masked by gateway_grant_revoked text');
   assert.equal(isAuthFailureMessage(revokedMsg), true, 'revoked borrower grant must still rotate cleanly with 0 issue strikes');
   assert.equal(isExplicitReauthCodeFailure('HTTP 401 Unauthorized'), false);
   assert.equal(isExplicitReauthCodeFailure('403 oauth_not_allowed_for_organization'), true);
@@ -3870,6 +3875,7 @@ test('#3426 borrower revocation: gateway_grant_revoked and borrowed generic 401 
     providers: ['codex'],
     active: { codex: { account_id: 'acc_shared_1', label: 'shared-1', provider: 'codex', is_owner: false, state: 'ready' } },
   }, { env: sb.env });
+  assert.equal(readCloudAccountsState({ env: sb.env }).active?.codex?.is_owner, false, 'is_owner must persist in accounts-state.json');
   const leaseCalls = [];
   const usageReports = [];
   const mockFetch = async (url, init) => {
@@ -3888,7 +3894,7 @@ test('#3426 borrower revocation: gateway_grant_revoked and borrowed generic 401 
             lease: {
               lease_id: 'lse_shared_1',
               delivery_mode: 'gateway_grant',
-              codex_gateway_url: 'https://pdd-byok-api-c437voydwa-uc.a.run.app/v1/codex-gateway/lse_shared_1',
+              codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_shared_1',
               codex_gateway_token: 'pddg_lse_shared_1_tok',
             },
           }),
@@ -3904,7 +3910,7 @@ test('#3426 borrower revocation: gateway_grant_revoked and borrowed generic 401 
             lease: {
               lease_id: 'lse_shared_2',
               delivery_mode: 'gateway_grant',
-              codex_gateway_url: 'https://pdd-byok-api-c437voydwa-uc.a.run.app/v1/codex-gateway/lse_shared_2',
+              codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_shared_2',
               codex_gateway_token: 'pddg_lse_shared_2_tok',
             },
           }),
@@ -3919,7 +3925,7 @@ test('#3426 borrower revocation: gateway_grant_revoked and borrowed generic 401 
           lease: {
             lease_id: 'lse_backup_3',
             delivery_mode: 'gateway_grant',
-            codex_gateway_url: 'https://pdd-byok-api-c437voydwa-uc.a.run.app/v1/codex-gateway/lse_backup_3',
+            codex_gateway_url: 'https://cloud.example.com/v1/codex-gateway/lse_backup_3',
             codex_gateway_token: 'pddg_lse_backup_3_tok',
           },
         }),
@@ -3955,17 +3961,23 @@ test('#3426 borrower revocation: gateway_grant_revoked and borrowed generic 401 
   assert.equal(stateAfterStep.reauth?.acc_shared_1, undefined, 'gateway_grant_revoked must not mark account reauth_required');
   assert.equal(stateAfterStep.reauth?.acc_shared_2, undefined, 'borrowed generic 401 must not mark account reauth_required');
 
-  // 3. exhaustCloudPoolLogin rotates past gateway_grant_revoked without poisoning reauth or posting usage-report.
+  // 3. exhaustCloudPoolLogin rotates past gateway_grant_revoked AND persisted borrowed generic 401 (accountWindows: null)
+  //    without poisoning reauth or posting usage-report.
+  writeCloudAccountsState({
+    enrolled: true,
+    providers: ['codex'],
+    active: { codex: { account_id: 'acc_shared_1', label: 'shared-1', provider: 'codex', is_owner: false, state: 'ready' } },
+  }, { env: sb.env });
   const exRes = await exhaustCloudPoolLogin({
     cwd: sb.root,
     env: { ...sb.env, PDD_TOKEN: 'ghp_test_tok' },
     loginId: 'acc_shared_1',
-    accountWindows: { is_owner: false },
-    reason: revokedMsg,
+    accountWindows: null,
+    reason: 'HTTP 401 Unauthorized',
     allowedKinds: ['codex'],
   }, { fetch: mockFetch });
   assert.equal(exRes.state, 'ready');
   assert.equal(exRes.login.id, 'acc_shared_2');
   assert.equal(usageReports.length, 0);
-  assert.equal(readCloudAccountsState({ env: sb.env }).reauth?.acc_shared_1, undefined);
+  assert.equal(readCloudAccountsState({ env: sb.env }).reauth?.acc_shared_1, undefined, 'persisted is_owner: false must prevent generic 401 from poisoning reauth');
 });

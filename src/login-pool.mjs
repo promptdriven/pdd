@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 859252979c16e770a4f758b4cab78f33a8f7a8417a844dd9a87d1ad2c4cc91af).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: 084c7a1039a50d6b46132dad8b1a89905624d79d9b3e84a9ae89a54d0879a0e1).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
@@ -213,7 +213,9 @@ export function isLocalReauthUnresolved(accountId, refreshedAtIso, reauthMap) {
 export function isGatewayGrantRevokedFailure(errorOrText) {
   if (!errorOrText) return false;
   if (typeof errorOrText === 'string') {
-    return GATEWAY_GRANT_REVOKED_RE.test(errorOrText);
+    const s = errorOrText.trim();
+    if (!s || looksLikeTestDiagnostic(s)) return false;
+    return GATEWAY_GRANT_REVOKED_RE.test(s);
   }
   if (typeof errorOrText === 'object') {
     const fields = [
@@ -235,7 +237,9 @@ export function isGatewayGrantRevokedFailure(errorOrText) {
 export function isExplicitReauthCodeFailure(errorOrText) {
   if (!errorOrText) return false;
   if (typeof errorOrText === 'string') {
-    return REAUTH_CODE_RE.test(errorOrText);
+    const s = errorOrText.trim();
+    if (!s || looksLikeTestDiagnostic(s)) return false;
+    return REAUTH_CODE_RE.test(s);
   }
   if (typeof errorOrText === 'object') {
     if (errorOrText.code === 'missing_auth_token') return false;
@@ -256,13 +260,15 @@ export function isExplicitReauthCodeFailure(errorOrText) {
 
 export function isReauthRequiredFailure(errorOrText) {
   if (!errorOrText) return false;
+  if (isExplicitReauthCodeFailure(errorOrText)) return true;
   if (isGatewayGrantRevokedFailure(errorOrText)) return false;
   if (typeof errorOrText === 'string') {
-    return REAUTH_TEXT_RE.test(errorOrText);
+    const s = errorOrText.trim();
+    if (!s || looksLikeTestDiagnostic(s)) return false;
+    return REAUTH_TEXT_RE.test(s);
   }
   if (typeof errorOrText === 'object') {
     if (errorOrText.code === 'missing_auth_token') return false;
-    if (isExplicitReauthCodeFailure(errorOrText)) return true;
     const hasAccountContext = Boolean(
       errorOrText.payload?.account_id
       || errorOrText.payload?.detail?.account_id
@@ -516,6 +522,7 @@ export function readCloudAccountsState({ env = process.env } = {}, ports = {}) {
           account_id: entry.account_id,
           label: typeof entry.label === 'string' ? entry.label : entry.account_id,
           provider,
+          is_owner: typeof entry.is_owner === 'boolean' ? entry.is_owner : null,
           state: typeof entry.state === 'string' && entry.state ? entry.state : 'ready',
           lease_id: typeof entry.lease_id === 'string' ? entry.lease_id : null,
           leased_at: typeof entry.leased_at === 'string' ? entry.leased_at : null,
@@ -570,6 +577,7 @@ export function writeCloudAccountsState(state, { env = process.env } = {}, ports
         account_id: entry.account_id,
         label: String(entry.label ?? entry.account_id),
         provider,
+        is_owner: typeof entry.is_owner === 'boolean' ? entry.is_owner : null,
         state: typeof entry.state === 'string' && entry.state ? entry.state : 'ready',
         lease_id: typeof entry.lease_id === 'string' ? entry.lease_id : null,
         leased_at: typeof entry.leased_at === 'string' ? entry.leased_at : null,
@@ -3273,13 +3281,20 @@ export async function exhaustCloudPoolLogin({
 } = {}, ports = {}) {
   const now = (ports.now ?? Date.now)();
   if (loginId) {
-    if (isGatewayGrantRevokedFailure(reason)) {
+    if (isQuotaExhaustionMessage(reason)) {
+      const report = extractRateLimitReport(reason, accountWindows, now);
+      await reportCloudAccountUsage(loginId, report, { cwd, env }, ports).catch(() => {});
+    } else if (isExplicitReauthCodeFailure(reason)) {
+      markLocalAccountReauthRequired(loginId, { env }, ports);
+    } else if (isGatewayGrantRevokedFailure(reason)) {
       // Revoked borrower lease/share rotates cleanly without tainting the account as reauth_required or reporting fake quota.
-    } else if (isAuthFailureMessage(reason) && !isQuotaExhaustionMessage(reason)) {
+    } else if (isAuthFailureMessage(reason)) {
       const savedForCheck = readCloudAccountsState({ env }, ports);
       const cachedActive = Object.values(savedForCheck.active ?? {}).find(row => row?.account_id === loginId);
-      const isBorrowed = accountWindows?.is_owner === false || cachedActive?.is_owner === false;
-      if (!isBorrowed || isExplicitReauthCodeFailure(reason)) {
+      const isBorrowed = typeof accountWindows?.is_owner === 'boolean'
+        ? !accountWindows.is_owner
+        : cachedActive?.is_owner === false;
+      if (!isBorrowed) {
         markLocalAccountReauthRequired(loginId, { env }, ports);
       }
     } else {

@@ -574,10 +574,41 @@ test('#3426 doctor: Cloud-only --agent codex profile and isolated Cloud Claude s
   const clReport = await runAutopilotDoctor(fCl.input, fCl.ports);
   assert.equal(clReport.exitCode, 0, clReport.message);
   assert.equal(clReport.checks.find(c => c.id === 'agent')?.status, 'pass');
+  assert.match(clReport.checks.find(c => c.id === 'agent')?.fix ?? '', /--settings '.*settings\.json' auth status --json/);
   assert.deepEqual(
     fCl.calls.find(c => c.file === 'claude')?.args,
     ['--settings', clSettings, 'auth', 'status', '--json'],
   );
+
+  // Symlinked managed Claude settings file or parent directory must be rejected.
+  const { dirname } = await import('node:path');
+  fCl.ports.files.lstatSync = p => {
+    if (p === clSettings) return { isSymbolicLink: () => true, isFile: () => true, isDirectory: () => false };
+    if (p === dirname(clSettings)) return { isSymbolicLink: () => false, isFile: () => false, isDirectory: () => true };
+    throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  };
+  const clSymlinkLeaf = await runAutopilotDoctor(fCl.input, fCl.ports);
+  assert.equal(clSymlinkLeaf.exitCode, 1, 'symlinked managed settings.json must be rejected');
+
+  fCl.ports.files.lstatSync = p => {
+    if (p === dirname(clSettings)) return { isSymbolicLink: () => true, isFile: () => false, isDirectory: () => true };
+    if (p === clSettings) return { isSymbolicLink: () => false, isFile: () => true, isDirectory: () => false };
+    throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  };
+  const clSymlinkDir = await runAutopilotDoctor(fCl.input, fCl.ports);
+  assert.equal(clSymlinkDir.exitCode, 1, 'symlinked managed claude-home directory must be rejected');
+  delete fCl.ports.files.lstatSync;
+
+  // Failing Cloud-only Codex sign-in must NOT emit CODEX_HOME=<pddManagedCodexHome> in its login fix command.
+  fCx.ports.run = (file, args, opts) => {
+    if (file === 'codex' && args[0] === 'login' && args[1] === 'status') {
+      return fCx.answer('Not logged in\n', 1);
+    }
+    return origCxRun(file, args, opts);
+  };
+  const cxFailReport = await runAutopilotDoctor(fCx.input, fCx.ports);
+  assert.equal(cxFailReport.exitCode, 1);
+  assert.doesNotMatch(cxFailReport.checks.find(c => c.id === 'agent')?.fix ?? '', /codex-home/);
 
   // Without managed Claude settings on disk, Cloud-only Claude fails cleanly.
   fCl.paths.delete(clSettings);
