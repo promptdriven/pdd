@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: 0800dcf915bbc35d17d4f252038b628bbedafa8e467f2b848b74053817ebf283).
+// Generated from prompts/cli/autopilot-forensics.prompt.md (sha256: d739bc39496c6bb19b1e9760fa4fb5cb360b82bd4bff392f5824357f3533b818).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { jobEnvironment } from './agent-job.mjs';
 import { normalizeAreaList } from './autopilot-areas.mjs';
 import { resolveStepModelTier } from './autopilot-telemetry.mjs';
 import { isAuthFailureMessage, isQuotaExhaustionMessage } from './login-pool.mjs';
+import { spliceClaudeExtraArgs } from './pdd-claude.mjs';
 const isRotatablePoolFailure = text => isQuotaExhaustionMessage(text) || isAuthFailureMessage(text);
 import { redactSecrets, rememberSecrets } from './secret-redaction.mjs';
 import { parse as parseToml } from './vendor/smol-toml/parse.js';
@@ -231,6 +232,9 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
   if (typeof parsed.chatgpt_base_url === 'string' && parsed.chatgpt_base_url.trim() && !SAFE_CONTROL_RE.test(parsed.chatgpt_base_url)) {
     out.push('-c', `chatgpt_base_url=${JSON.stringify(parsed.chatgpt_base_url.trim())}`);
   }
+  if (typeof parsed.sqlite_home === 'string' && parsed.sqlite_home.trim() && !SAFE_CONTROL_RE.test(parsed.sqlite_home)) {
+    out.push('-c', `sqlite_home=${JSON.stringify(parsed.sqlite_home.trim())}`);
+  }
   if (typeof parsed.model_provider === 'string' && parsed.model_provider.trim() && !SAFE_CONTROL_RE.test(parsed.model_provider)) {
     const provider = parsed.model_provider.trim();
     out.push('-c', `model_provider=${JSON.stringify(provider)}`);
@@ -287,6 +291,15 @@ export function codexProviderConfigArgs({ env = null, agent = null, fs = nativeF
   }
   if (needGrantExcludeFilter) {
     out.push('-c', `shell_environment_policy.filters.${formatTomlKey(filterKey)}="exclude"`);
+  }
+  const subshellCodexHome = isTomlTable(parsed.shell_environment_policy) && isTomlTable(parsed.shell_environment_policy.set)
+    ? parsed.shell_environment_policy.set.CODEX_HOME
+    : null;
+  if (typeof subshellCodexHome === 'string' && subshellCodexHome.trim() && !SAFE_CONTROL_RE.test(subshellCodexHome)) {
+    out.push('-c', `shell_environment_policy.set.CODEX_HOME=${JSON.stringify(subshellCodexHome.trim())}`);
+  }
+  if (isTomlTable(parsed.features) && parsed.features.daemon_auto_start === false) {
+    out.push('-c', 'features.daemon_auto_start=false');
   }
   if (isTomlTable(parsed.features) && parsed.features.shell_snapshot === false) {
     out.push('-c', 'features.shell_snapshot=false');
@@ -531,8 +544,11 @@ export async function runPreRunForensics(
     : null;
   try {
     const cmd = forensicsCommand(activeAgent, { model, reasoningEffort, resultFile, env: childEnv, fs });
+    const cmdArgs = (Array.isArray(prepared?.extraArgs) && prepared.extraArgs.length)
+      ? spliceClaudeExtraArgs(cmd.args, prepared.extraArgs)
+      : cmd.args;
     const prompt = forensicsPrompt({ repo, baseBranch, issue, comments });
-    const execResult = await run(cmd.command, cmd.args, {
+    const execResult = await run(cmd.command, cmdArgs, {
       cwd: worktree,
       env: childEnv,
       input: prompt,

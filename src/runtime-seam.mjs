@@ -1,7 +1,7 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: b961af0352e1c1035dae4f20a5362a74a02e213826429b9dc5148de7e1e7cb4a).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 768120db54dadf45bc1e225351c040ce48b0d7ec6b1f9bc2a58ea60548803854).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs, { realpathSync } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -664,6 +664,94 @@ function wrapFetchForLegacyCriteriaDiagnostic(baseFetch, cwd, ports) {
   return wrapped;
 }
 
+const ADAPTIVE_POLL_CAP_MS = 1000;
+const ADAPTIVE_POLL_FAST_MS = 250;
+const ADAPTIVE_POLL_MID_MS = 500;
+const ADAPTIVE_POLL_FAST_TICKS = 8;
+const ADAPTIVE_POLL_MID_TICKS = 16;
+
+function sleepWithSignal(ms, signal) {
+  return new Promise(done => {
+    if (signal?.aborted || ms <= 0) {
+      done();
+      return;
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      done();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener('abort', finish, { once: true });
+  });
+}
+
+/** Attach runCheck-only adaptive polling without shortening Retry-After/429/5xx or non-poll sleeps. */
+function attachRunCheckAdaptivePolling(merged, rawPorts) {
+  // Preserve explicit caller/test timing controls untouched.
+  if (rawPorts?.pollMs !== undefined || rawPorts?.sleep !== undefined) return;
+  let pollTicks = 0;
+  let lastPollable = false;
+  let throttled = false;
+  merged.pollMs = ADAPTIVE_POLL_CAP_MS;
+  merged.sleep = (ms, signal) => {
+    const canShorten =
+      lastPollable &&
+      !throttled &&
+      typeof ms === 'number' &&
+      ms >= ADAPTIVE_POLL_FAST_MS &&
+      ms <= ADAPTIVE_POLL_CAP_MS;
+    lastPollable = false;
+    if (canShorten) {
+      pollTicks += 1;
+      const cap =
+        pollTicks <= ADAPTIVE_POLL_FAST_TICKS
+          ? ADAPTIVE_POLL_FAST_MS
+          : pollTicks <= ADAPTIVE_POLL_MID_TICKS
+            ? ADAPTIVE_POLL_MID_MS
+            : ADAPTIVE_POLL_CAP_MS;
+      return sleepWithSignal(Math.min(ms, cap), signal);
+    }
+    return sleepWithSignal(ms, signal);
+  };
+  if (typeof merged.fetch === 'function') {
+    const wrappedFetch = merged.fetch;
+    const observedFetch = async (url, init) => {
+      const method = String(init?.method ?? 'GET').toUpperCase();
+      let res;
+      try {
+        res = await wrappedFetch(url, init);
+      } catch (err) {
+        throttled = true;
+        lastPollable = false;
+        pollTicks = Math.max(pollTicks, ADAPTIVE_POLL_MID_TICKS);
+        throw err;
+      }
+      const status = Number(res?.status ?? 0);
+      const hasRetryAfter = Boolean(res?.headers?.get?.('retry-after'));
+      if (status === 429 || status >= 500 || hasRetryAfter) {
+        throttled = true;
+        lastPollable = false;
+        pollTicks = Math.max(pollTicks, ADAPTIVE_POLL_MID_TICKS);
+      } else if (method === 'POST' && status >= 200 && status < 300) {
+        throttled = false;
+        pollTicks = 0;
+        lastPollable = true;
+      } else if (method === 'GET' && status === 200) {
+        throttled = false;
+        lastPollable = true;
+      } else {
+        lastPollable = false;
+      }
+      return res;
+    };
+    if (wrappedFetch.__pddLegacyCriteriaWrapped) {
+      Object.defineProperty(observedFetch, '__pddLegacyCriteriaWrapped', { value: true });
+    }
+    merged.fetch = observedFetch;
+  }
+}
+
 function seamRuntimePorts(ports = {}, { cwd = null } = {}) {
   const exit = hostExit();
   const baseFetch = ports.fetch ?? globalThis.fetch;
@@ -1246,13 +1334,80 @@ export function renderText(input, ports = {}) {
   return normalizeRuntimeHints(rawRenderText(input, withPortDefaults(ports, { promptTestsLabel: PROMPT_TESTS_LABEL })));
 }
 
-function lintShortScenarioFiles(root, ports = {}) {
+/** Format a local-lint story-criterion-mismatch diagnostic for stale or mismatched explicit criteria. */
+function formatLocalCriteriaWarning(testPath, storyPath, classification) {
+  if (classification.kind === 'stale-content-id') {
+    return `${testPath}: story-criterion-mismatch: criterion ${JSON.stringify(classification.criterionId)} has a stale content-bound ID after ${storyPath} changed. Review ${storyPath} and update ${testPath} before rebinding.`;
+  }
+  if (classification.kind === 'text-mismatch') {
+    return `${testPath}: story-criterion-mismatch: ${classification.difference}`;
+  }
+  if (classification.kind === 'duplicate-criterion') {
+    return `${testPath}: story-criterion-mismatch: duplicate criterion ${JSON.stringify(classification.criterionId)} in ${testPath}.`;
+  }
+  return null;
+}
+
+function lintShortScenarioFiles(root, ports = {}, { checkCriteriaBindings = false, words = [], cwd = null } = {}) {
   if (typeof root !== 'string' || !root) return [];
   try {
-    const found = findTests({ root, excludeFixtureProjects: true }, ports);
-    return (found?.tests ?? [])
+    const rawWords = Array.isArray(words) ? words : [];
+    const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 }, ports);
+    let scopedTests = found?.tests ?? [];
+    if (rawWords.length > 0) {
+      const normalized = normalizeSelectionWords(rawWords, cwd ?? root, root, found);
+      const selection = selectTests(found, normalized);
+      scopedTests = selection?.selected ?? [];
+    }
+    const warnings = scopedTests
       .filter(test => test.shortRefusal && typeof test.error === 'string' && test.error.length > 0)
       .map(test => test.error);
+    if (!checkCriteriaBindings) return warnings;
+
+    let realRoot;
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      return warnings;
+    }
+    const compiler = hostScenarioCompiler();
+    const seen = new Set();
+    for (const test of scopedTests) {
+      if (test.shortRefusal) continue;
+      for (const testPath of Array.isArray(test.files) && test.files.length ? test.files : [test.path]) {
+        if (!testPath || seen.has(testPath)) continue;
+        seen.add(testPath);
+        let rawText;
+        let parsed;
+        try {
+          const full = realpathSync(join(realRoot, testPath));
+          if (full !== realRoot && !full.startsWith(realRoot + sep)) continue;
+          rawText = initialReadFileSync(full, 'utf8');
+          parsed = compiler.parseExactScenarioJson(rawText);
+        } catch {
+          continue;
+        }
+        const effectiveStoryPath =
+          typeof parsed?.story_path === 'string' && parsed.story_path ? parsed.story_path : test.storyPath;
+        if (!effectiveStoryPath) continue;
+        let storySource;
+        try {
+          const fullStory = realpathSync(join(realRoot, effectiveStoryPath));
+          if (fullStory !== realRoot && !fullStory.startsWith(realRoot + sep)) continue;
+          storySource = initialReadFileSync(fullStory, 'utf8');
+        } catch {
+          continue;
+        }
+        const classification = compiler.classifyExplicitCriteriaBinding(parsed, {
+          storyPath: effectiveStoryPath,
+          storySource,
+          allowSubset: true,
+        });
+        const msg = formatLocalCriteriaWarning(testPath, effectiveStoryPath, classification);
+        if (msg) warnings.push(msg);
+      }
+    }
+    return warnings;
   } catch {
     return [];
   }
@@ -1278,14 +1433,57 @@ function normalizeSelectionWords(rawWords, cwd, root, found) {
   });
 }
 
+/** Resolve a repo-relative regular file path, refusing symlinks on any path segment or escapes outside realRoot. */
+function resolveWritableRepoFile(realRoot, relPath) {
+  if (typeof relPath !== 'string' || !relPath || relPath.startsWith('/') || relPath.includes('\0')) {
+    throw new Error('Test file path must be a safe repository-relative path.');
+  }
+  const parts = relPath.split(/[\\/]+/).filter(Boolean);
+  if (!parts.length || parts.some(part => part === '.' || part === '..')) {
+    throw new Error('Test file resolves outside repository root.');
+  }
+  let cur = realRoot;
+  for (const part of parts) {
+    cur = join(cur, part);
+    const st = fs.lstatSync(cur);
+    if (st.isSymbolicLink()) {
+      throw new Error('Symlink test file cannot be overwritten in place.');
+    }
+  }
+  const finalStat = fs.lstatSync(cur);
+  if (!finalStat.isFile()) {
+    throw new Error('Test file is not a regular file.');
+  }
+  const resolved = realpathSync(cur);
+  if (resolved !== cur || (resolved !== realRoot && !resolved.startsWith(realRoot + sep))) {
+    throw new Error('Test file resolves outside repository root.');
+  }
+  return resolved;
+}
+
+/** Write UTF-8 content atomically via a unique sibling temp file and rename. */
+function writeFileAtomically(fullPath, content) {
+  const tmpPath = join(dirname(fullPath), `.${basename(fullPath)}.pdd-tmp-${process.pid}-${randomUUID()}`);
+  try {
+    fs.writeFileSync(tmpPath, content, { encoding: 'utf8', flag: 'wx' });
+    fs.renameSync(tmpPath, fullPath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {}
+    throw err;
+  }
+}
+
 function runEmitV1(input = {}, ports = {}) {
   const stdout = ports.stdout ?? process.stdout;
   const stderr = ports.stderr ?? process.stderr;
   const options = input?.options ?? {};
   const jsonMode = options['--json'] === true;
-  const badKey = Object.keys(options).find(key => !['--lint', '--emit-v1', '--json'].includes(key));
+  const writeMode = options['--write'] === true;
+  const badKey = Object.keys(options).find(key => !['--lint', '--emit-v1', '--write', '--json'].includes(key));
   if (badKey) {
-    stderr.write('pdd lint --emit-v1 accepts only --json and Story selections.\n');
+    stderr.write('pdd lint --emit-v1 accepts only --write, --json and Story selections.\n');
     return 2;
   }
   const cwd = input?.cwd ?? process.cwd();
@@ -1293,6 +1491,15 @@ function runEmitV1(input = {}, ports = {}) {
   if (!root) {
     stderr.write('No Git project root is available.\n');
     return 2;
+  }
+  let realRoot = null;
+  if (writeMode) {
+    try {
+      realRoot = realpathSync(root);
+    } catch {
+      stderr.write('No Git project root is available.\n');
+      return 2;
+    }
   }
   const rawWords = commandWords(input);
   const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 }, ports);
@@ -1311,6 +1518,7 @@ function runEmitV1(input = {}, ports = {}) {
   const sourcePort = createStrictSourceAccess(root, found.workspace, ports).sourceFilePort(found.visible);
   const errors = [];
   const emitted = [];
+  const seenTestPaths = new Set();
   for (const test of selection.selected) {
     if (test.error) {
       errors.push({
@@ -1322,59 +1530,193 @@ function runEmitV1(input = {}, ports = {}) {
       });
       continue;
     }
-    let rawText;
-    try {
-      rawText = sourcePort.read({ path: test.path }).content;
-    } catch (err) {
-      errors.push({
-        path: test.path,
-        story_path: test.storyPath ?? null,
-        code: 'unreadable-scenario',
-        section: 'document',
-        message: `${test.path}: ${err?.message ?? String(err)}`,
-      });
-      continue;
-    }
-    let storySource = test.storySource ?? null;
-    if (storySource === null && typeof test.storyPath === 'string' && test.storyPath) {
-      try {
-        storySource = sourcePort.read({ path: test.storyPath }).content;
-      } catch {
-        storySource = null;
+    const filePaths = Array.isArray(test.files) && test.files.length ? test.files : [test.path];
+    for (const testPath of filePaths) {
+      if (!testPath || seenTestPaths.has(testPath)) continue;
+      seenTestPaths.add(testPath);
+      if (found.workspace && !allowsRuntimePath(found.workspace, testPath)) {
+        errors.push({
+          path: testPath,
+          story_path: test.storyPath ?? null,
+          code: 'workspace-excluded',
+          section: 'document',
+          message: `${testPath}: excluded by workspace policy.`,
+        });
+        continue;
       }
-    }
-    const compiled = compiler.compileScenarioText(rawText, {
-      path: test.path,
-      storyPath: test.storyPath,
-      storySource,
-      space: 2,
-    });
-    if (compiled.refusal) {
-      errors.push({
-        path: test.path,
-        story_path: test.storyPath ?? null,
-        code: compiled.refusal.code,
-        section: compiled.refusal.section,
-        message: `${test.path}: ${compiled.refusal.section}: ${compiled.refusal.message}`,
+      let fullTestPath = null;
+      if (writeMode) {
+        try {
+          fullTestPath = resolveWritableRepoFile(realRoot, testPath);
+        } catch (err) {
+          errors.push({
+            path: testPath,
+            story_path: test.storyPath ?? null,
+            code: 'unreadable-scenario',
+            section: 'document',
+            message: `${testPath}: ${err?.message ?? String(err)}`,
+          });
+          continue;
+        }
+      }
+      let rawText;
+      try {
+        // Validate strict source access (visibility, workspace policy, size) before reading raw authored bytes.
+        const strictEntry = sourcePort.read({ path: testPath });
+        rawText = writeMode ? initialReadFileSync(fullTestPath, 'utf8') : strictEntry.content;
+      } catch (err) {
+        errors.push({
+          path: testPath,
+          story_path: test.storyPath ?? null,
+          code: 'unreadable-scenario',
+          section: 'document',
+          message: `${testPath}: ${err?.message ?? String(err)}`,
+        });
+        continue;
+      }
+      let rawStoryPath = test.storyPath ?? null;
+      let explicitStoryPath = null;
+      try {
+        const parsedRaw = compiler.parseExactScenarioJson(rawText);
+        if (typeof parsedRaw?.story_path === 'string' && parsedRaw.story_path) {
+          explicitStoryPath = parsedRaw.story_path;
+          rawStoryPath = parsedRaw.story_path;
+        }
+      } catch {}
+      let storySource =
+        explicitStoryPath && explicitStoryPath !== test.storyPath ? null : (test.storySource ?? null);
+      if (storySource === null && typeof rawStoryPath === 'string' && rawStoryPath) {
+        try {
+          storySource = sourcePort.read({ path: rawStoryPath }).content;
+        } catch {
+          storySource = null;
+        }
+      }
+      const compiled = compiler.compileScenarioText(rawText, {
+        path: testPath,
+        storyPath: rawStoryPath,
+        storySource,
+        space: 2,
       });
-      continue;
+      if (compiled.refusal) {
+        errors.push({
+          path: testPath,
+          story_path: rawStoryPath ?? null,
+          code: compiled.refusal.code,
+          section: compiled.refusal.section,
+          message: `${testPath}: ${compiled.refusal.section}: ${compiled.refusal.message}`,
+        });
+        continue;
+      }
+      let finalExact = compiled.exactDoc;
+      let text = compiler.stringifyExactScenarioJson(finalExact, 2) + '\n';
+      let changed = compiled.changed;
+      const effectiveStoryPath = rawStoryPath ?? (typeof finalExact?.story_path === 'string' ? finalExact.story_path : null);
+      if (storySource === null && typeof effectiveStoryPath === 'string' && effectiveStoryPath) {
+        try {
+          storySource = sourcePort.read({ path: effectiveStoryPath }).content;
+        } catch {
+          storySource = null;
+        }
+      }
+      if (writeMode && effectiveStoryPath) {
+        if (storySource === null) {
+          errors.push({
+            path: testPath,
+            story_path: effectiveStoryPath,
+            code: 'story-missing',
+            section: 'story_path',
+            message: `${testPath}: story_path: ${effectiveStoryPath} is not a Git-visible file.`,
+          });
+          continue;
+        }
+        const hasNumberedCriteria = compiler.numberedStoryCriteria(storySource, { requireHeading: true }).length > 0;
+        if (hasNumberedCriteria) {
+          const bound = compiler.bindScenarioCriteriaText(text, {
+            path: testPath,
+            storyPath: effectiveStoryPath,
+            storySource,
+            space: 2,
+          });
+          if (bound.refusal) {
+            errors.push({
+              path: testPath,
+              story_path: effectiveStoryPath,
+              code: bound.refusal.code,
+              section: bound.refusal.section,
+              message: `${testPath}: ${bound.refusal.section}: ${bound.refusal.message}`,
+            });
+            continue;
+          }
+          if (bound.changed) {
+            text = bound.text;
+            finalExact = compiler.parseExactScenarioJson(text);
+            changed = true;
+          }
+        } else if (compiler.extractStoryCriteria(storySource).length === 0) {
+          errors.push({
+            path: testPath,
+            story_path: effectiveStoryPath,
+            code: 'story-criteria-missing',
+            section: 'story_path',
+            message: `${testPath}: story_path: ${effectiveStoryPath} has no numbered "## Acceptance criteria" list.`,
+          });
+          continue;
+        }
+      }
+      emitted.push({
+        path: testPath,
+        fullPath: fullTestPath,
+        story_path: effectiveStoryPath,
+        changed,
+        written: writeMode && changed && text !== rawText,
+        text,
+        scenario: finalExact,
+      });
     }
-    const finalExact = compiled.exactDoc;
-    emitted.push({
-      path: test.path,
-      story_path: test.storyPath ?? finalExact?.story_path ?? null,
-      changed: compiled.changed,
-      text: compiler.stringifyExactScenarioJson(finalExact, 2) + '\n',
-      scenario: finalExact,
-    });
   }
   if (errors.length > 0) {
     if (jsonMode) {
-      stdout.write(compiler.stringifyExactScenarioJson({ ok: false, errors }, 2) + '\n');
+      stdout.write(compiler.stringifyExactScenarioJson({ ok: false, ...(writeMode ? { exit_code: 4 } : {}), errors }, 2) + '\n');
     } else {
       for (const err of errors) stderr.write(`${err.message}\n`);
     }
     return 4;
+  }
+  if (writeMode) {
+    for (const item of emitted) {
+      if (!item.written) continue;
+      writeFileAtomically(item.fullPath, item.text);
+    }
+    if (jsonMode) {
+      stdout.write(
+        compiler.stringifyExactScenarioJson(
+          {
+            ok: true,
+            exit_code: 0,
+            wrote: true,
+            updated: emitted.filter(item => item.written).map(item => item.path),
+            unchanged: emitted.filter(item => !item.written).map(item => item.path),
+            files: emitted.map(({ path, story_path, changed, written }) => ({
+              path,
+              story_path,
+              changed,
+              written,
+            })),
+          },
+          2,
+        ) + '\n',
+      );
+      return 0;
+    }
+    for (const item of emitted) {
+      if (item.written) {
+        stdout.write(`Wrote ${item.path} (prompt-runtime.program-scenario.v1).\n`);
+      } else {
+        stdout.write(`${item.path}: already canonical prompt-runtime.program-scenario.v1.\n`);
+      }
+    }
+    return 0;
   }
   if (jsonMode) {
     stdout.write(
@@ -1807,7 +2149,7 @@ export async function loadRuntimeClient() {
 
 const NON_EXEC_CHECK_FLAGS = [
   '--lint', '--local', '--files', '--explain-bindings',
-  '--read', '--retry', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--bind-criteria',
+  '--read', '--retry', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
 ];
 const PROMPT_DEP_LINK_RE = /\[[^\[\]\r\n]*\]\(([^()\s#\r\n]+\.prompt\.md)(?:#[^()\s\r\n]*)?\)/g;
 const PORT_CALL_TOKEN_RE = /\b[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*\b/;
@@ -2024,6 +2366,11 @@ export async function runCheck(input = {}, ports = {}) {
     stderr.write('Use either --emit-v1 or --bind-criteria, not both.\n');
     return 2;
   }
+  if (input?.options?.['--write'] && !input?.options?.['--emit-v1']) {
+    const stderr = ports.stderr ?? process.stderr;
+    stderr.write('--write is only accepted with pdd lint --emit-v1.\n');
+    return 2;
+  }
   if (input?.options?.['--emit-v1']) {
     return runEmitV1(input, ports);
   }
@@ -2042,34 +2389,37 @@ export async function runCheck(input = {}, ports = {}) {
   const cwd = effectiveInput?.cwd ?? process.cwd();
   const lazyOverlay = { cwd, ports, map: undefined };
 
-  return withScenarioOverlay(lazyOverlay, () =>
-    runtimeRunCheck(
-      effectiveInput,
-      seamRuntimePorts(
-        withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
-          headerPrompts,
-          isTestOwnedPath,
-          promptClaims,
-          resolveOwners,
-          allRuns,
-          workflowBaseSha: ({ root, env: runEnv }) =>
-            resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
-          assessNativeEvidence,
-          usableResult,
-          resultLines,
-          lintSvgLayouts: arg => [
-            ...lintSvgLayouts(arg),
-            ...lintRepoAntiPatterns(arg),
-            ...lintShortScenarioFiles(arg?.root, ports),
-          ],
-          compareScreen,
-          formatScreenComparison,
-          redaction: seamRedaction(ports),
-        }),
-        { cwd },
-      ),
-    ),
-  );
+  return withScenarioOverlay(lazyOverlay, () => {
+    const checkPorts = seamRuntimePorts(
+      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+        headerPrompts,
+        isTestOwnedPath,
+        promptClaims,
+        resolveOwners,
+        allRuns,
+        workflowBaseSha: ({ root, env: runEnv }) =>
+          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
+        assessNativeEvidence,
+        usableResult,
+        resultLines,
+        lintSvgLayouts: arg => [
+          ...lintSvgLayouts(arg),
+          ...lintRepoAntiPatterns(arg),
+          ...lintShortScenarioFiles(arg?.root, ports, {
+            checkCriteriaBindings: input?.options?.['--local'] === true,
+            words: commandWords(input),
+            cwd,
+          }),
+        ],
+        compareScreen,
+        formatScreenComparison,
+        redaction: seamRedaction(ports),
+      }),
+      { cwd },
+    );
+    attachRunCheckAdaptivePolling(checkPorts, ports);
+    return runtimeRunCheck(effectiveInput, checkPorts);
+  });
 }
 
 export async function askAgent(input = {}, ports = {}) {
@@ -2567,6 +2917,7 @@ export async function lint(input = {}, ports = {}) {
     '--lint': true,
     ...(input?.local === true && input?.options?.['--local'] === undefined ? { '--local': true } : {}),
     ...(input?.emitV1 === true && input?.options?.['--emit-v1'] === undefined ? { '--emit-v1': true } : {}),
+    ...(input?.write === true && input?.options?.['--write'] === undefined ? { '--write': true } : {}),
     ...(input?.bindCriteria === true && input?.options?.['--bind-criteria'] === undefined ? { '--bind-criteria': true } : {}),
   };
   return runCheck(buildCheckInput(input, { defaultCache: true, extraOptions }), ports);
