@@ -6,7 +6,7 @@ Own `src/scenario-compile.mjs`. Compile authored PDD Short JSON scenario documen
 | :--- | :--- | :--- |
 | `parseExactScenarioJson` / `stringifyExactScenarioJson` | UTF-8 JSON text or value | `BigInt`-preserving exact integer parse and `JSON.rawJSON` serialization |
 | `isShortScenarioDoc` / `needsScenarioCompile` | Parsed scenario object | Detect Short JSON constructs or omitted-`criteria` `program-scenario.v1` documents |
-| `compileScenario` / `compileScenarioText` | Scenario object or JSON text + Story context | Canonical `program-scenario.v1` document/text with `ac-sha256-...` criteria or compile refusal |
+| `compileScenario` / `compileScenarioText` | Scenario object or JSON text + Story context | Canonical `program-scenario.v1` document/text with `ac-sha256-...` criteria, non-breaking `warnings`, or compile refusal |
 | `classifyExplicitCriteriaBinding` / `bindScenarioCriteriaText` | Scenario object or JSON text + Story context | Classify explicit IDs (`already-bound`, `legacy-unbound`, `stale-content-id`, `text-mismatch`) and bind matching legacy IDs on disk |
 
 ## Exact JSON codec and classification
@@ -33,7 +33,7 @@ Preserve exact whole numbers outside IEEE-754 `Number.MAX_SAFE_INTEGER` using `B
 
 ## Compilation rules
 
-`compileScenario(doc, { path = 'tests/story.json', storyPath = null, storySource = null } = {})` returns `{ doc: compiledDoc, changed: boolean, refusal }` and never mutates its input:
+`compileScenario(doc, { path = 'tests/story.json', storyPath = null, storySource = null } = {})` returns `{ doc: compiledDoc, changed: boolean, refusal, warnings }` (where `warnings` is an array of structured non-breaking diagnostics, empty when none) and never mutates its input:
 
 1. **Omitted-`criteria` `V1_SCENARIO_SCHEMA` binding:**
    - When `!isShortScenarioDoc(doc)` and `doc.schema_version === V1_SCENARIO_SCHEMA`, `!Object.hasOwn(doc, 'criteria')`, and `Array.isArray(doc.steps)`, extract numbered Story acceptance criteria under `## Acceptance criteria` (`numberedStoryCriteria(storySource, { requireHeading: true })`). When `effectiveStoryPath` and numbered Story criteria are available, synthesize `criteria: [{ id: criterionContentId(text, effectiveStoryPath), text }, ...]` and map positional `criterion_id` references (`"AC1"`, `"ac-1"`, `"1"`, `1`, or omitted `criterion_id` on a single-criterion Story) across `steps[*].checks`, `steps[*].simulation_overrides`, `check_exemptions`, and `criteria_scope` to those `ac-sha256-...` IDs, leaving out-of-range or unknown IDs unmapped for normal preflight validation. When numbered Story criteria are absent, return `{ doc, changed: false, refusal: null }` so normal preflight reports `story-criteria-missing`.
@@ -53,7 +53,8 @@ Preserve exact whole numbers outside IEEE-754 `Number.MAX_SAFE_INTEGER` using `B
 4. **Named `seeds` and recursive value macros:**
    - Resolve `doc.seeds` entries lazily with cycle detection (`seed-cycle`).
    - Expand value macros recursively inside `initial_world`, `steps[*].input`, `simulation`, and `steps[*].simulation_overrides`:
-     - `{"$use": ref, "patch"?: mergePatch, "set"?: pointerMap}` (also `$from`, or `$seed` when `ref` is an own key of `doc.seeds`; external file `{"$seed": "path.json"}` stays untouched): clone the named seed (`ref` or `$seed.<name>`) or earlier compiled step input (`step:<step_id>`), apply RFC 7386 JSON Merge Patch `patch` (recursively merging plain objects and deleting `null` keys), then apply RFC 6901 JSON Pointer overrides in `set`. Refuse unknown seed/step names, invalid pointers, or extra keys (`invalid-seed`).
+     - `{"$use": ref, "patch"?: mergePatch, "set"?: pointerMap}` (also `$from`, or `$seed` when `ref` is an own key of `doc.seeds`; external file `{"$seed": "path.json"}` stays untouched): clone the named seed (`ref` or `$seed.<name>`) or earlier compiled step input (`step:<step_id>`), apply RFC 7396 JSON Merge Patch `patch` (recursively merging plain objects and deleting `null` keys), then apply RFC 6901 JSON Pointer overrides in `set`. Refuse unknown seed/step names, invalid pointers, or extra keys (`invalid-seed`).
+     - **Explicit `null` in `"patch"` warnings (`patch-null-deletes-key`):** Whenever any applied Short JSON `"patch"` plain object (step-level `step.patch`, `initial_world` / world patch, or nested `$use`/`$from`/`$seed` `patch` inside `initial_world`, `seeds`, `steps`, `simulation`, or `check_exemptions`) contains an explicit `null` property value after macro expansion, preserve RFC 7396 `mergePatch` behavior unchanged (non-breaking, no refusal) and append a structured warning `{ code: 'patch-null-deletes-key', path, section, step_id, step, field_path, pointer, exists_on_target, message }` to `warnings` for each `null` leaf found by walking nested plain objects in `patch` (never recursing into arrays, which RFC 7396 replaces wholesale). Compute `field_path` as the dotted key path, `pointer` as the RFC 6901 JSON Pointer (`~` -> `~0`, `/` -> `~1`), and `exists_on_target` from whether the key exists as an own property on the target object at that path. Format `message` as `Warning: <path> <location>: "patch" sets "<field_path>" to null, which <effect> (RFC 7396 Merge Patch...). Use "set": { "<pointer>": null } to set a nullable field to null.`, where `<location>` is `step "<step_id>"` for step-level `patch`, `step "<step_id>" (<subpath>)` for nested macros inside a step, or `<section without trailing .patch>` outside steps (including `initial_world`, `initial_world.<key>`, and `seeds.<name>`, with `step_id: null` and `step: null` for `seeds.*` regardless of which step resolved the seed), and `<effect>` distinguishes deleting an existing key (`exists_on_target: true`) from omitting/deleting a key absent on the base (`exists_on_target: false`). Explicit `null` assignments in `"set"` preserve the property with value `null` and emit zero warnings.
      - `{"$json": inner}`: recursively expand `inner` and return `stringifyExactScenarioJson(expandedInner)`.
      - `{"$step": spec}`: accept `"<step_id>"`, `"<step_id>#<pointer>"`, or `["<step_id>", "<pointer>"]` and emit `{"$step_result": {"step_id": stepId, "path": pointer}}`. Refuse malformed specs (`invalid-step-ref`).
 
@@ -62,7 +63,7 @@ Preserve exact whole numbers outside IEEE-754 `Number.MAX_SAFE_INTEGER` using `B
    - Map `id` -> `step_id` (defaulting to `"step-" + (index + 1)`), `op` -> `operation`, `error` -> `expected_error` (normalizing `{"code": "<code>"}` to `"<code>"`, and when both `error` and `expected_error` are omitted, auto-inferring `expected_error` when step `checks` assert a single distinct `target: "error", path: "/code", op: "equals"` nonblank string code), and default `entry_path` from top-level `entry_path` (or single `entry_paths[0]`). Refuse conflicting duplicate aliases or unknown step keys (`invalid-step`), and refuse specifying both `from` and `input` (`invalid-step`).
    - Accept `step.checks` as an array of check items or a plain object mapping criterion keys to check items (or a single tuple when its first item is a string). Normalize operator aliases (`=`, `==`, `!=`, `>=`, `<=`, `len>=`, `length_at_least`, `len<=`, `length_at_most`, `>`, `<`, `contains_all`, `includes_all`), `calls` path shorthands (`internal:<node>`, `<node>.<resource>.<op>`, `<resource>.<op>`), `["error", op, code]`, and HTML tuples (`html_exists`, `html_text`, `html_attr`, `["html", selector, "labels_include", [...]]`).
 
-`compileScenarioText(text, { path, storyPath, storySource, space = 2 } = {})` parses `text` with `parseExactScenarioJson`, runs `compileScenario`, and returns `{ text: outText, doc: jsonSafeDoc, exactDoc, changed, refusal }`.
+`compileScenarioText(text, { path, storyPath, storySource, space = 2 } = {})` parses `text` with `parseExactScenarioJson`, runs `compileScenario`, and returns `{ text: outText, doc: jsonSafeDoc, exactDoc, changed, refusal, warnings }`.
 
 ## Explicit criterion binding inspection and `--bind-criteria` rewrite
 
@@ -76,6 +77,6 @@ None.
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"draft","prose_sha256": "05cb9d76ca02b2ad64a9860ea6bd8bad6f2ae8e7443c87cf23220c37c5ed9b80","reason":"Pure synchronous BigInt-preserving JSON compiler leaf loaded directly by src/runtime-seam.mjs without external ports."}
+{"kind":"native-only","status":"draft","prose_sha256": "0d998fdeba447cd1d89738a8eec5737cb3d50fa9b91414d79d215ad678a5b302","reason":"Pure synchronous BigInt-preserving JSON compiler leaf loaded directly by src/runtime-seam.mjs without external ports."}
 ```
 </details>

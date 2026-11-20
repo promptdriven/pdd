@@ -58,7 +58,7 @@ test('autopilot-intake-shadow: a card answer outside the allowed shape is a fail
   assert.equal(readCard('invalid'), null);
   const c = readCard({ class: 'duplicate', reason: 'Same bug as #4.\u001b]52;c;aGk=\u0007\u001b[8m', confidence: 3, canonical: 4, suggested_links: [{ to: 4, type: 'duplicate-of', reason: 'same' }, { to: -1, type: 'blocked-by' }, { to: 5, type: 'related' }],
     question: 'ignored', area_hint: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], model: 'm1\u0000' });
-  assert.deepEqual({ ...c, areas: c.areas.length, area_hint: c.area_hint.length }, { class: 'duplicate', start: false, reason: 'Same bug as #4.]52;c;aGk=[8m', confidence: null, canonical: 4,
+  assert.deepEqual({ ...c, areas: c.areas.length, area_hint: c.area_hint.length }, { class: 'duplicate', start: false, reason: 'Same bug as #4.]52;c;aGk=[8m', reasonCode: null, confidence: null, canonical: 4,
     suggested_links: [{ to: 4, type: 'duplicate-of', reason: 'same' }], question: null, areas: 6, area_hint: 6, group_with: [], size: null, reported_model: 'm1' });
   assert.equal(readCard({ class: 'improve', reason: 'Needs criteria.' }).start, true);
   assert.deepEqual(parseCardText('Here:\n```json\n{"class":"ready","reason":"ok"}\n```'), { class: 'ready', reason: 'ok' });

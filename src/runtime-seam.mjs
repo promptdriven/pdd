@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 768120db54dadf45bc1e225351c040ce48b0d7ec6b1f9bc2a58ea60548803854).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 34f89314320d77322baea0af15e0a8fbe7ae17208b083a9fa3e5d843b4278621).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -867,6 +867,9 @@ function enrichFoundWithCompiledScenarios(found, readText) {
     const item = { ...test, doc: compiled.doc };
     Object.defineProperty(item, 'rawDoc', { value: compiled.doc });
     Object.defineProperty(item, 'compiledText', { value: compiled.text });
+    if (Array.isArray(compiled.warnings) && compiled.warnings.length > 0) {
+      Object.defineProperty(item, 'shortWarnings', { value: compiled.warnings });
+    }
     if (storySource !== null && storySource !== undefined) {
       Object.defineProperty(item, 'storySource', { value: storySource });
     }
@@ -1359,9 +1362,19 @@ function lintShortScenarioFiles(root, ports = {}, { checkCriteriaBindings = fals
       const selection = selectTests(found, normalized);
       scopedTests = selection?.selected ?? [];
     }
-    const warnings = scopedTests
-      .filter(test => test.shortRefusal && typeof test.error === 'string' && test.error.length > 0)
-      .map(test => test.error);
+    const warnings = [];
+    for (const test of scopedTests) {
+      if (test.shortRefusal && typeof test.error === 'string' && test.error.length > 0) {
+        warnings.push(test.error);
+      }
+      if (Array.isArray(test.shortWarnings)) {
+        for (const warning of test.shortWarnings) {
+          if (typeof warning?.message === 'string' && warning.message.length > 0) {
+            warnings.push(warning.message);
+          }
+        }
+      }
+    }
     if (!checkCriteriaBindings) return warnings;
 
     let realRoot;
@@ -1515,7 +1528,7 @@ function runEmitV1(input = {}, ports = {}) {
     return 2;
   }
   const compiler = hostScenarioCompiler();
-  const sourcePort = createStrictSourceAccess(root, found.workspace, ports).sourceFilePort(found.visible);
+  const sourcePort = rawCreateStrictSourceAccess(root, found.workspace, seamSelectionPorts(ports)).sourceFilePort(found.visible);
   const errors = [];
   const emitted = [];
   const seenTestPaths = new Set();
@@ -1672,6 +1685,7 @@ function runEmitV1(input = {}, ports = {}) {
         written: writeMode && changed && text !== rawText,
         text,
         scenario: finalExact,
+        warnings: Array.isArray(compiled.warnings) ? compiled.warnings : [],
       });
     }
   }
@@ -1683,6 +1697,7 @@ function runEmitV1(input = {}, ports = {}) {
     }
     return 4;
   }
+  const allWarnings = emitted.flatMap(item => item.warnings.map(w => w.message));
   if (writeMode) {
     for (const item of emitted) {
       if (!item.written) continue;
@@ -1697,11 +1712,13 @@ function runEmitV1(input = {}, ports = {}) {
             wrote: true,
             updated: emitted.filter(item => item.written).map(item => item.path),
             unchanged: emitted.filter(item => !item.written).map(item => item.path),
-            files: emitted.map(({ path, story_path, changed, written }) => ({
+            warnings: allWarnings,
+            files: emitted.map(({ path, story_path, changed, written, warnings }) => ({
               path,
               story_path,
               changed,
               written,
+              warnings: warnings.map(w => w.message),
             })),
           },
           2,
@@ -1709,6 +1726,7 @@ function runEmitV1(input = {}, ports = {}) {
       );
       return 0;
     }
+    for (const msg of allWarnings) stderr.write(`${msg}\n`);
     for (const item of emitted) {
       if (item.written) {
         stdout.write(`Wrote ${item.path} (prompt-runtime.program-scenario.v1).\n`);
@@ -1723,10 +1741,12 @@ function runEmitV1(input = {}, ports = {}) {
       compiler.stringifyExactScenarioJson(
         {
           ok: true,
-          scenarios: emitted.map(({ path, story_path, changed, scenario }) => ({
+          warnings: allWarnings,
+          scenarios: emitted.map(({ path, story_path, changed, warnings, scenario }) => ({
             path,
             story_path,
             changed,
+            warnings: warnings.map(w => w.message),
             scenario,
           })),
         },
@@ -1735,6 +1755,7 @@ function runEmitV1(input = {}, ports = {}) {
     );
     return 0;
   }
+  for (const msg of allWarnings) stderr.write(`${msg}\n`);
   if (emitted.length === 1) {
     stdout.write(emitted[0].text);
     return 0;
@@ -2349,7 +2370,7 @@ export async function runCheck(input = {}, ports = {}) {
     { allRuns },
     { assessNativeEvidence, resultLines, usableResult },
     { lintSvgLayouts },
-    { lintRepoAntiPatterns },
+    { lintRepoProject },
     { compareScreen, formatScreenComparison },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
@@ -2389,35 +2410,42 @@ export async function runCheck(input = {}, ports = {}) {
   const cwd = effectiveInput?.cwd ?? process.cwd();
   const lazyOverlay = { cwd, ports, map: undefined };
 
+  const { onProjectLintResult, ...forwardPorts } = ports;
   return withScenarioOverlay(lazyOverlay, () => {
     const checkPorts = seamRuntimePorts(
-      withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+      withPortDefaults(withEligibilityDefault(forwardPorts, readEvidenceEligibility), {
         headerPrompts,
         isTestOwnedPath,
         promptClaims,
         resolveOwners,
         allRuns,
         workflowBaseSha: ({ root, env: runEnv }) =>
-          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: ports.allRuns ?? allRuns }),
+          resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: forwardPorts.allRuns ?? allRuns }),
         assessNativeEvidence,
         usableResult,
         resultLines,
-        lintSvgLayouts: arg => [
-          ...lintSvgLayouts(arg),
-          ...lintRepoAntiPatterns(arg),
-          ...lintShortScenarioFiles(arg?.root, ports, {
-            checkCriteriaBindings: input?.options?.['--local'] === true,
-            words: commandWords(input),
-            cwd,
-          }),
-        ],
+        lintSvgLayouts: arg => {
+          const project = lintRepoProject(arg);
+          if (typeof onProjectLintResult === 'function' && arg?.promptPaths === undefined && arg?.tests === undefined) {
+            onProjectLintResult(project);
+          }
+          return [
+            ...lintSvgLayouts(arg),
+            ...project.warnings,
+            ...lintShortScenarioFiles(arg?.root, forwardPorts, {
+              checkCriteriaBindings: input?.options?.['--local'] === true,
+              words: commandWords(input),
+              cwd,
+            }),
+          ];
+        },
         compareScreen,
         formatScreenComparison,
-        redaction: seamRedaction(ports),
+        redaction: seamRedaction(forwardPorts),
       }),
       { cwd },
     );
-    attachRunCheckAdaptivePolling(checkPorts, ports);
+    attachRunCheckAdaptivePolling(checkPorts, forwardPorts);
     return runtimeRunCheck(effectiveInput, checkPorts);
   });
 }

@@ -28,7 +28,9 @@ answer. Give each question a recommended choice and concrete example.
 
 ## Plan: product/plan.md
 
-Use `# Product name: plan`. A small map with exactly one part needs no separate plan.
+Use `# Product name: plan`. An optional `Through: prompt-pr|code` line before the
+first `## ` heading sets the rollout's default completion target (`code` when
+omitted). A small map with exactly one part needs no separate plan.
 
 | Heading | Columns |
 |---|---|
@@ -47,7 +49,9 @@ in `code` PR 2) so Story checks run cleanly and finished runs form a runnable pr
 as phone-1; Part names one map part, or `all` for journeys. Slice is a label such
 as 1. Stories and Needs are comma lists. Needs names `plan PR` or earlier runs;
 empty means no needs. `plan PR` is satisfied when the plan file is on the base
-branch; a planned run is done when its implementation PR is merged. Commands read
+branch; a planned run is done when its implementation PR is merged, or when its
+prompt PR (or implementation PR) is merged for a Prompt-Space rollout (`Through:
+prompt-pr` in `product/plan.md` or `--through prompt-pr`). Commands read
 local base refs, which may be stale, and do not prove a person's approval. Large
 plans describe the journey of each slice.
 

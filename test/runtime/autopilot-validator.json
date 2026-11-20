@@ -1,0 +1,393 @@
+{
+  "entry_path": "prompts/cli/autopilot-validator.prompt.md",
+  "seeds": {
+    "base_eval": {
+      "mode": "auto",
+      "changedFiles": ["bin/mytool.mjs", "src/cli.mjs"],
+      "isBugFix": false,
+      "offlinePassed": true,
+      "offlineSummary": "unit tests 14/14 passed",
+      "e2eChecks": [
+        {
+          "kind": "subprocess-cli",
+          "command": "node test/e2e/cli.test.mjs",
+          "executed": true,
+          "exitCode": 0,
+          "passed": 4,
+          "failed": 0,
+          "skipped": 0
+        }
+      ],
+      "bugFixBaseControl": "not-applicable",
+      "diagnostics": [],
+      "realBindingUnavailable": false,
+      "needsHumanInteraction": false,
+      "lintBlockingCodes": [],
+      "repairAttempts": 0
+    }
+  },
+  "steps": [
+    {
+      "id": "b1-auto-real-e2e-pass",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "checks": {
+        "1": [
+          ["result", "/bucket", "=", 1],
+          ["result", "/decision", "=", "allow-merge"],
+          ["result", "/waitKind", "=", "none"],
+          ["result", "/eligible", "=", true],
+          ["result", "/freeSlot", "=", false],
+          ["result", "/repairRoundsToSpend", "=", 0],
+          ["result", "/proof/surfaces", "=", ["cli"]],
+          ["result", "/proof/commands", "=", ["node test/e2e/cli.test.mjs"]],
+          ["result", "/proof/exitCodes", "=", [0]],
+          ["result", "/humanVerificationCard", "count", 0]
+        ]
+      }
+    },
+    {
+      "id": "b1-observe-real-e2e-pass",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "patch": {
+        "mode": "observe",
+        "changedFiles": ["api/orders.mjs", "db/orders.sql"],
+        "e2eChecks": [
+          {
+            "kind": "local-server-or-db",
+            "command": "npm run test:e2e:api",
+            "executed": true,
+            "exitCode": 0,
+            "passed": 3,
+            "failed": 0,
+            "skipped": 0
+          }
+        ]
+      },
+      "checks": {
+        "1": [
+          ["result", "/bucket", "=", 1],
+          ["result", "/decision", "=", "allow-would-merge"],
+          ["result", "/eligible", "=", true],
+          ["result", "/proof/surfaces", "=", ["api-server", "database"]],
+          ["result", "/proof/commands", "=", ["npm run test:e2e:api"]],
+          ["result", "/proof/exitCodes", "=", [0]]
+        ]
+      }
+    },
+    {
+      "id": "b1-docs-only-pass",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "patch": {
+        "changedFiles": ["README.md", "docs/usage.md"],
+        "e2eChecks": []
+      },
+      "checks": {
+        "1": [
+          ["result", "/bucket", "=", 1],
+          ["result", "/decision", "=", "allow-merge"],
+          ["result", "/eligible", "=", true],
+          ["result", "/repairRoundsToSpend", "=", 0]
+        ]
+      }
+    },
+    {
+      "id": "b1-e2e-fail-repair",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "patch": {
+        "e2eChecks": [
+          {
+            "kind": "subprocess-cli",
+            "command": "node test/e2e/cli.test.mjs",
+            "executed": true,
+            "exitCode": 1,
+            "passed": 3,
+            "failed": 1,
+            "skipped": 0
+          }
+        ],
+        "repairAttempts": 1
+      },
+      "checks": {
+        "2": [
+          ["result", "/bucket", "=", 1],
+          ["result", "/decision", "=", "repair"],
+          ["result", "/eligible", "=", false],
+          ["result", "/freeSlot", "=", false],
+          ["result", "/keepPr", "=", true],
+          ["result", "/repairRoundsToSpend", "=", 1],
+          ["result", "/repairAttemptsNext", "=", 2]
+        ]
+      }
+    },
+    {
+      "id": "b1-bugfix-passed-on-base-repair",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "patch": {
+        "mode": "observe",
+        "isBugFix": true,
+        "bugFixBaseControl": "passed-on-base",
+        "repairAttempts": 0
+      },
+      "checks": {
+        "2": [
+          ["result", "/bucket", "=", 1],
+          ["result", "/decision", "=", "repair"],
+          ["result", "/eligible", "=", false],
+          ["result", "/repairRoundsToSpend", "=", 1],
+          ["result", "/repairAttemptsNext", "=", 1]
+        ]
+      }
+    },
+    {
+      "id": "b1-repair-cap-exhausted",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "patch": {
+        "e2eChecks": [
+          {
+            "kind": "subprocess-cli",
+            "command": "node test/e2e/cli.test.mjs",
+            "executed": true,
+            "exitCode": 1,
+            "passed": 2,
+            "failed": 2,
+            "skipped": 0
+          }
+        ],
+        "repairAttempts": 3
+      },
+      "checks": {
+        "2": [
+          ["result", "/bucket", "=", 1],
+          ["result", "/decision", "=", "needs-person"],
+          ["result", "/waitKind", "=", "repair-exhausted"],
+          ["result", "/eligible", "=", false],
+          ["result", "/freeSlot", "=", true],
+          ["result", "/keepPr", "=", true],
+          ["result", "/repairRoundsToSpend", "=", 0],
+          ["result", "/repairAttemptsNext", "=", 3]
+        ]
+      }
+    },
+    {
+      "id": "b2-gcloud-expired-login",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "patch": {
+        "changedFiles": ["src/gcp/deploy.mjs"],
+        "e2eChecks": [],
+        "diagnostics": [
+          "ERROR: (gcloud.run.deploy) Reauthentication required. Run: gcloud auth login"
+        ]
+      },
+      "checks": {
+        "3": [
+          ["result", "/bucket", "=", 2],
+          ["result", "/decision", "=", "park-auth-wait"],
+          ["result", "/waitKind", "=", "auth-environment"],
+          ["result", "/eligible", "=", false],
+          ["result", "/freeSlot", "=", true],
+          ["result", "/keepPr", "=", true],
+          ["result", "/repairRoundsToSpend", "=", 0],
+          ["result", "/repairAttemptsNext", "=", 0],
+          ["result", "/cooldownTool", "=", "gcloud"],
+          ["result", "/resumeMode", "=", "validate-only-same-head"],
+          ["result", "/checkCommand", "=", "gcloud auth list --filter=status:ACTIVE --format='value(account)'"],
+          ["result", "/message", "contains_all", ["gcloud", "gcloud auth list"]]
+        ]
+      }
+    },
+    {
+      "id": "b2-real-binding-unavailable-observe",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "patch": {
+        "mode": "observe",
+        "e2eChecks": [],
+        "realBindingUnavailable": true,
+        "diagnostics": [
+          "real-binding-unavailable: live runtime binding not reachable"
+        ]
+      },
+      "checks": {
+        "3": [
+          ["result", "/bucket", "=", 2],
+          ["result", "/decision", "=", "park-auth-wait"],
+          ["result", "/waitKind", "=", "auth-environment"],
+          ["result", "/eligible", "=", false],
+          ["result", "/freeSlot", "=", true],
+          ["result", "/keepPr", "=", true],
+          ["result", "/repairRoundsToSpend", "=", 0],
+          ["result", "/cooldownTool", "=", "runtime-binding"],
+          ["result", "/resumeMode", "=", "validate-only-same-head"]
+        ]
+      }
+    },
+    {
+      "id": "cooldown-skips-blocked-tool",
+      "op": "shouldClaimWithCooldowns",
+      "input": {
+        "issueRequiredTools": ["GCloud", "docker"],
+        "toolCooldowns": {
+          "gcloud": {
+            "active": true,
+            "checkCommand": "gcloud auth list --filter=status:ACTIVE --format='value(account)'"
+          }
+        }
+      },
+      "checks": {
+        "4": [
+          ["result", "/claimable", "=", false],
+          ["result", "/blockedByTool", "=", "gcloud"],
+          ["result", "/reason", "=", "tool-cooldown"]
+        ]
+      }
+    },
+    {
+      "id": "cooldown-claims-unrelated-issue",
+      "op": "shouldClaimWithCooldowns",
+      "input": {
+        "issueRequiredTools": ["postgres"],
+        "toolCooldowns": {
+          "gcloud": {
+            "active": true,
+            "checkCommand": "gcloud auth list --filter=status:ACTIVE --format='value(account)'"
+          }
+        }
+      },
+      "checks": {
+        "4": [
+          ["result", "/claimable", "=", true],
+          ["result", "/blockedByTool", "=", null],
+          ["result", "/reason", "=", null]
+        ]
+      }
+    },
+    {
+      "id": "resume-validate-only-same-head",
+      "op": "planValidationResume",
+      "input": {
+        "pr": 412,
+        "headSha": "abc123def456",
+        "currentPrHeadSha": "abc123def456",
+        "cooldownTool": "gcloud",
+        "preflightExitCode": 0,
+        "userResumed": false
+      },
+      "checks": {
+        "4": [
+          ["result", "/action", "=", "resume-validate-only"],
+          ["result", "/pr", "=", 412],
+          ["result", "/headSha", "=", "abc123def456"],
+          ["result", "/rebuildCode", "=", false],
+          ["result", "/runValidationOnly", "=", true],
+          ["result", "/clearCooldown", "=", true],
+          ["result", "/targetTool", "=", "gcloud"]
+        ]
+      }
+    },
+    {
+      "id": "b3-human-interaction-observe",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "patch": {
+        "mode": "observe",
+        "changedFiles": ["web/checkout.tsx", "src/stripe-pay.mjs"],
+        "e2eChecks": [],
+        "needsHumanInteraction": true,
+        "humanBoundaryDetail": "live Stripe 3DS payment confirmation in browser",
+        "verifyCommand": "npm run verify:checkout:live"
+      },
+      "checks": {
+        "5": [
+          ["result", "/bucket", "=", 3],
+          ["result", "/decision", "=", "needs-person"],
+          ["result", "/waitKind", "=", "human-boundary"],
+          ["result", "/eligible", "=", false],
+          ["result", "/freeSlot", "=", true],
+          ["result", "/keepPr", "=", true],
+          ["result", "/repairRoundsToSpend", "=", 0],
+          ["result", "/humanVerificationCard", "count", 3],
+          ["result", "/humanVerificationCard/0", "=", "Passed offline: unit tests 14/14 passed"],
+          ["result", "/humanVerificationCard/1", "=", "Unverified boundary: live Stripe 3DS payment confirmation in browser"],
+          ["result", "/humanVerificationCard/2", "=", "Verify command: npm run verify:checkout:live"]
+        ]
+      }
+    },
+    {
+      "id": "b3-mock-only-zero-e2e-auto",
+      "op": "evaluateValidationOutcome",
+      "from": "base_eval",
+      "patch": {
+        "mode": "auto",
+        "changedFiles": ["web/login.tsx"],
+        "e2eChecks": [
+          {
+            "kind": "unit-mock",
+            "command": "node --test test/login-unit.test.mjs",
+            "executed": true,
+            "exitCode": 0,
+            "passed": 5,
+            "failed": 0,
+            "skipped": 0
+          }
+        ],
+        "verifyCommand": "npx playwright test tests/login.spec.ts"
+      },
+      "checks": {
+        "5": [
+          ["result", "/bucket", "=", 3],
+          ["result", "/decision", "=", "needs-person"],
+          ["result", "/waitKind", "=", "missing-e2e"],
+          ["result", "/eligible", "=", false],
+          ["result", "/freeSlot", "=", true],
+          ["result", "/keepPr", "=", true],
+          ["result", "/repairRoundsToSpend", "=", 0],
+          ["result", "/humanVerificationCard", "count", 3],
+          ["result", "/humanVerificationCard/0", "=", "Passed offline: unit tests 14/14 passed"],
+          ["result", "/humanVerificationCard/1", "contains", "Unverified boundary:"],
+          ["result", "/humanVerificationCard/2", "=", "Verify command: npx playwright test tests/login.spec.ts"]
+        ]
+      }
+    },
+    {
+      "id": "lint-flags-silent-skip-and-mock-only",
+      "op": "lintValidationCode",
+      "input": {
+        "path": "test/api-orders.test.mjs",
+        "kind": "test",
+        "text": "import { mock } from 'node:test';\nimport { createOrder } from '../api/orders.mjs';\nconst fakeClient = mock.fn(() => ({ ok: true }));\nif (err === 'real-binding-unavailable') return { localSkipRow: true }; // local skip",
+        "hasRealE2eCoverage": false
+      },
+      "checks": {
+        "6": [
+          ["result", "/ok", "=", false],
+          ["result", "/codes", "=", ["boundary-mock-only-test", "silent-validation-skip"]],
+          ["result", "/warnings", "len>=", 2]
+        ]
+      }
+    },
+    {
+      "id": "lint-passes-boundary-with-real-e2e",
+      "op": "lintValidationCode",
+      "input": {
+        "path": "test/api-orders.test.mjs",
+        "kind": "test",
+        "text": "import http from 'node:http';\nimport { createOrder } from '../api/orders.mjs';\nconst srv = http.createServer(createOrder).listen(0);\nawait fetch('http://127.0.0.1:' + srv.address().port + '/orders');",
+        "hasRealE2eCoverage": true
+      },
+      "checks": {
+        "6": [
+          ["result", "/ok", "=", true],
+          ["result", "/codes", "=", []],
+          ["result", "/warnings", "count", 0]
+        ]
+      }
+    }
+  ]
+}

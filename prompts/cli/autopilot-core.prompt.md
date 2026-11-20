@@ -40,7 +40,7 @@ string `core`; any other value, or none, is `full`.
 | `repairs` | `autopilot.maxRepairs` (the old key `autopilot.repairs` is an alias): safe integer of at least 0, default 6, the safety cap of repairs for one job |
 | `testCommand` | nonblank `autopilot.testCommand`; else `npm test` when `packageJson.scripts.test` exists; else `null` |
 
-When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics`; when `autopilot.ci` (or `autopilot.ciPolicy`) is supplied, `coreSettings` preserves `ci` as `"local"` or `"github"` (default `"github"` for any other value, omitting unset optional keys so the default settings shape stays unchanged).
+When `autopilot.modelTiering` is a Boolean or plain object, `coreSettings` also preserves `modelTiering`; when `autopilot.skipLabels` is an array, `coreSettings` preserves its deduplicated trimmed nonblank strings as `skipLabels`; when `autopilot.forensics` is a Boolean, `coreSettings` preserves `forensics`; when `autopilot.ci` (or `autopilot.ciPolicy`) is supplied, `coreSettings` preserves `ci` as `"local"` or `"github"` (default `"github"` for any other value, omitting unset optional keys so the default settings shape stays unchanged). Legacy `autopilot.mergeQueue` (including `mergeQueue: true`) in `pdd.json` is safely ignored without failing configuration reads or ticks; all Autopilot `auto` merges route through `pdd:merge-lane`.
 
 `detectTestCommand(cwd, fs, packageJson)` auto-detects standard external repository test commands when `autopilot.testCommand` is unset: `pnpm-lock.yaml` -> `pnpm test`, `yarn.lock` -> `yarn test`, `bun.lockb` or `bun.lock` -> `bun test`, `package.json` `scripts.test` -> `npm test`, `pyproject.toml` or `pytest.ini` -> `pytest`, `Cargo.toml` -> `cargo test`, `go.mod` -> `go test ./...`, `package.json` -> `npm test`, else zero-manifest `test/` or `tests/` discovery (`*.test.{js,mjs,cjs}` or `*.spec.{js,mjs,cjs}` -> `node --test`; `test_*.py` or `*_test.py` -> `pytest`), else `null`. `readCoreSettings(cwd, fs, machine = null)` applies `coreSettings` to `cwd/pdd.json` and `cwd/package.json` (an unreadable file counts as absent) and fills `testCommand` from `detectTestCommand(cwd, fs, packageJson)` whenever `autopilot.testCommand` is unset (when `main` is a greenfield or `product/` repository with no manifest yet, intake still claims ready issues and `suiteState`, `workRules`, `notCovered`, and suite failure/hang records resolve `detectTestCommand` against the checked-out PR head `N-suite`/`headTree` and `job.worktree` so a PR that introduces `package.json`, `pyproject.toml`, `Cargo.toml` or `go.mod` runs and reports its detected test command cleanly); the full-suite runner also installs lockfile dependencies for `pnpm-lock.yaml`, `yarn.lock` (Classic `--frozen-lockfile --ignore-scripts` vs Modern `--immutable --mode=skip-build`/`--skip-builds`), `bun.lockb`/`bun.lock` and `package-lock.json`.
 
@@ -51,7 +51,7 @@ It holds `jobs/N.json` (one file per issue in progress), `logs/` (job inputs,
 logs, exit records and result files), `worktrees/` (`N` for the job branch,
 `N-review` and `N-suite` for clean checkouts of the PR head), `history.jsonl`
 (one line per finished job: time, issue, outcome, text, PR, log; and strike lines,
-below) and `core.json` (the machine pause and the pending no-result), plus `post-merge.json` once [post-merge regression checks](autopilot-regressions.prompt.md) track merged PRs. The job file and the GitHub labels are the whole state; a
+below) and `core.json` (the machine pause, pending no-result, external-tool cooldowns `toolCooldowns`, and parked validate-only PR heads `validationParks`), plus `post-merge.json` once [post-merge regression checks](autopilot-regressions.prompt.md) track merged PRs. The job file and the GitHub labels are the whole state; a
 restart reads them again. A job file has `issue`, `title`, `url`, `body`,
 `branch`, `worktree`, `claim {commentId, labelEventId, lastSeen}`, `phase`
 (`running`, `pr` or `ending`), `role` (`build`, `repair` or `conflict`), `repairs`, `started`,
@@ -160,7 +160,7 @@ ended or moved to the merge check before free slots are counted.
    latest repository PR (head branch `pdd/core-N-*`) is merged into `baseBranch`, read its
    timeline, remove `pdd:would-merge` and (unless the issue was reopened after that
    `pdd:would-merge` label or that PR body marks the work partial with `Refs`, `Part of` or
-   `Not fixed yet:`) close the issue (`state_reason: completed`); a failure only warns. Validated `observe` `would-merge` PRs (and `auto` PRs when `autopilot.mergeQueue` is `true`) also enqueue into the [serialized FIFO landing queue](autopilot-merge-queue.prompt.md) (`ROOT/merge-queue.json`), which processes one head PR at a time per tick to rebase onto `origin/BASE`, refresh stale PDD headers with `promptHeaderHash`, run bounded conflict resolution and fast post-rebase verification, and either keep `would-merge` PRs synced or land `auto` PRs in FIFO order (ejecting after 2 failures on the same base tip without blocking later PRs).
+   `Not fixed yet:`) close the issue (`state_reason: completed`); a failure only warns.
 3. A person stops a job by closing the issue, removing `pdd:working`, adding
    `pdd:stuck`, adding an external-repository label (`external`, `other-repo`,
    `elsewhere`, `pdd:elsewhere`, case-insensitive) or configured `skipLabels` label,
@@ -206,7 +206,7 @@ ended or moved to the merge check before free slots are counted.
 changes nothing on the issue (no comment, no label), marks this machine's own open
 PR of that job as draft with one note (one try; a failure only warns) and cleans up
 locally with outcome `handed-over`. It never merges.
-6. Post-merge check (`#3182`, `#3484`): before the merge queue and active job loop, when
+6. Post-merge check (`#3182`, `#3484`): before the active job loop, when
    `history.jsonl` has at least one `merged` PR and `budget.state` is neither `low` nor
    `reserve`, run one bounded incremental post-merge check (`ports.checkPostMerge`,
    default `checkPostMergeRegressions` loaded on demand) inside a try/catch without
@@ -251,7 +251,7 @@ flowchart TD
 order. An issue is ready when all hold: it is an open issue (not a PR); it has no
 assignee; it carries no external-repository or wrong-repository skip label (`external`, `other-repo`,
 `elsewhere`, `pdd:elsewhere`, `needs-other-repo`, `pdd:needs-other-repo`, matched case-insensitively via `findOtherRepoSkipLabel` with zero AI calls) or
-configured `skipLabels` label; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; it has no active pre-run `fixed` disposition hold in `history.jsonl` (cleared when a trusted person comments after the forensics note or edits the issue title/body); it is not cooling down (no `noResult` history
+configured `skipLabels` label; it has no `pdd:stuck`, `pdd:needs-decision` or `pdd:would-merge`; its required external tools are not blocked by an active `core.json` `toolCooldowns` entry (`shouldClaimWithCooldowns` of [Autopilot universal validator](autopilot-validator.prompt.md), so a freed worker skips issues needing an unavailable login/tool and immediately takes the next unrelated issue); it has no active pre-run `fixed` disposition hold in `history.jsonl` (cleared when a trusted person comments after the forensics note or edits the issue title/body); it is not cooling down (no `noResult` history
 line of the last 24 hours on this machine after the issue's latest `reset` line); it has neither report label (`pdd:runtime`,
 `pdd:autopilot-report`: report issues wait for a later self-fix lane); it has the
 opt-in label when `label` is set; it is not held (the loop guard of
@@ -290,14 +290,21 @@ files (and `areas`, when set) are written into its claim record with a PATCH of 
 
 For each ready issue while slots are free, at most 3 claim attempts per tick:
 
-0. **Pre-claim wrong-repository detection (`#3500`):** before creating any worktree
-   or posting `pdd:working`, inspect the primary issue and any grouped companions
-   with `detectWrongRepositoryIssue` of [intake cards](autopilot-intake.prompt.md)
-   against `state.cwd`. Any issue that clearly targets another repository and has
-   zero matching specific code, prompt or test paths in `state.cwd` is routed via
-   `routeWrongRepositoryIssue` (adding `needs-other-repo` and posting at most one
-   deduplicated routing comment `<!-- pdd:autopilot-intake:other-repo:N -->`) and
-   skipped without claiming or counting a claim attempt.
+0. **Pre-claim pre-flight intake enforcement (`#3500`, `#3534`):** before creating any
+   worktree or posting `pdd:working`, inspect the primary issue and any grouped
+   companions with `preflightCoreIssue(ctx, member, {cwd: state.cwd})` of
+   [intake cards](autopilot-intake.prompt.md), even when `intake` is `off` or
+   `shadow`. `preflightCoreIssue` runs deterministic pre-flight classification
+   (`cross_repo`, `human_decision`, `unverifiable_boundary`) against `state.cwd`,
+   re-checking trusted comments and trusted `pdd:needs-decision` removals when
+   present. Any skipped issue is recorded in `ROOT/intake/preflight-skips.jsonl`,
+   routed/parked via `applyPreflightDecision(..., {mode: "core"})` (routing
+   `cross_repo` with `needs-other-repo` and `<!-- pdd:autopilot-intake:other-repo:N -->`,
+   or parking `human_decision` / `unverifiable_boundary` with one deduplicated
+   `<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->` comment posted before
+   `pdd:needs-decision` plus a `decision` alert), and skipped without claiming or
+   counting a claim attempt. A transient read error warns and skips only that
+   member for this tick.
 1. Make the job worktree first, so that a local failure touches no issue. Fetch
    `origin/BASE` once per tick; a fetch failure is not about one issue, so it stops
    intake for this tick. A leftover `worktrees/N` is ours: remove it with
@@ -369,9 +376,9 @@ For each ready issue while slots are free, at most 3 claim attempts per tick:
    `pdd/core-N-` and is not the new branch, and that is not merged, gets
    `state: closed` and one short note with the marker
    `<!-- pdd:autopilot-core:superseded:N:BRANCH -->`; its branch stays. A PR from
-   another branch prefix, or one with a `would-merge` or `needs-approval` note by this
-   engine's own login (observe mode validated it, or it waits for a person), is never
-   touched. A failure only warns. Start the local build process after that cleanup. A
+   another branch prefix, or one with a `would-merge`, `needs-approval`, `auth-wait`, `human-boundary`, or
+   `repair-exhausted` note by this engine's own login (observe mode validated it, or it waits for a person
+   or auth/tool resume), is never touched. A failure only warns. Start the local build process after that cleanup. A
    start error, also one that the spawn reports later, ends the saved job as
    `no-result`; it never stops the tick.
 
@@ -476,7 +483,9 @@ end as `no-result`. Every job kind follows the same rules, in every machine stat
    `ports.exhaustLogin` are supplied by [Cloud accounts and login pool](login-pool.prompt.md) (and `ports.selectLogin()` does not return `null`, which indicates `selectLogin` is wired only for intake `allowedKinds`), each AI
    process (`build`, `repair`, `conflict`, `review`) selects the active ready login,
    materializes any per-step isolation (`prepareStep`: disposable `0700` `/tmp/pdd-cx-<random>`
-   overlay passed via `cleanupDirs` for Codex, or `CLAUDE_CODE_OAUTH_TOKEN` and optional
+   overlay passed via `cleanupDirs` for Codex, or disposable `0600` `<tmpdir>/pdd-cl-<random>/settings.json`
+   overlay passed via `extraArgs` (`--settings <path>`) and `cleanupDirs`, with `prepareStep`
+   cleanup guaranteed on any error before job launch, alongside `CLAUDE_CODE_OAUTH_TOKEN` and optional
    `ANTHROPIC_BASE_URL` for Claude), and runs with `loginId` saved on the part. Cloud
    accounts stick on the active account (`0` switches) until `5h >= 100%` or `7d >= 100%`
    (or a quota-exhaustion refusal): a brief burst `429` while `< 100%` retries once on the
@@ -797,9 +806,13 @@ the evidence record.
   `.prompt.md` first, link the code file's `Generated from` header, and include
   regression tests in this single PR); never add a prompt, binding or header for an
   existing non-code path `d` file, or add a header without its owning prompt, unless the
-  issue asks to adopt PDD; tests
-  only for a change of the public surface (a test that fails on base), else the done
-  check; one `Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote
+  issue asks to adopt PDD; write real end-to-end tests upfront for every changed runtime
+  surface (real subprocess/CLI invocation, real local HTTP/WS server and DB round-trip,
+  real browser flow via Playwright for Web UI, or live tool/auth binding where available)
+  instead of mock-only unit tests alone, never rewriting real end-to-end checks into
+  mocks when an external tool or login is down; for a bug fix, prove the regression test
+  (including the real end-to-end check) fails on base and passes on head; docs-only
+  changes need only the done check; one `Path: <a|b|c|d|e> — <files> — <owner or unowned> — <prompt changed | quote
   file:line | no contract change | new prompt> — Test: <file | done check>` line per
   path in the PR body; prompt and code may share a commit; never rewrite history;
   focused tests, with the full test command named; the Runtime rule (#3227 fix 5, the
@@ -1079,7 +1092,10 @@ ready in the same tick. A strict repository's prompt approval question (its text
 `(strict_approvals)`) is not ended by a reply: it waits for the approval and the label
 removal. A trusted person's removal of the label still works. When the core claims an issue with comments, it reads
 the latest question comment that this engine posted (author = the engine's own login,
-`GET user`, and a marker that names this issue; a marker comment by anyone else is
+`GET user`, and a marker that names this issue—either
+`<!-- pdd:autopilot-core:question:N:JOB-ID -->` or
+`<!-- pdd:autopilot-intake:preflight:N:BODYKEY -->`, extracting `> ...` quoted lines
+or `- Question: ...` lines; a marker comment by anyone else is
 not a question) and the comments after it by trusted people (`ports.trusted`), leaving
 out comments with a `<!-- pdd:` marker and claim comments. A trusted reply, or a
 removal of `pdd:needs-decision` after the question by a trusted person (the timeline
@@ -1147,11 +1163,10 @@ runs until its end):
    table row or `; Runtime:` clause; ordinary prose lines starting with `"Runtime ..."`
    without a colon are never parsed as Runtime verdict lines). When the saved Runtime
    checks at `agentHead` already cover every changed Story, consumer Story and changed
-   prompt (or a Story has only a local `real-binding-unavailable` sandbox skip with zero
-   provider calls), the merge check mechanically writes or syncs missing/per-Story
+   prompt, the merge check mechanically writes or syncs missing/per-Story
    `Runtime:` verdict lines (and the `Evidence:` `runtime=` state) onto the PR body from
    that verified saved state before running `runtimeReds`, never inventing a pass when
-   saved checks are missing, stale or failed. Its value, after leading signs such as
+   saved checks are missing, stale, skipped, or failed. Its value, after leading signs such as
    an emoji, names its Story in the parentheses after the verdict (`Runtime: PASS (STORY,
    …)`, the form of the briefs and the RUNBOOK); a Story path first (`Runtime: STORY
    PASS (…)`) is read too. Then the verdict must start with PASS (or PASSED) or "not run", in any
@@ -1268,13 +1283,13 @@ runs until its end):
    at head H it has REASON. A PR must not lose a Runtime pass: make the check of S pass
    again at this head." A row with no verdict, no failed check and no refusal (an AI
    provider failure, maintenance, a busy or interrupted check) is never red here: the
-   engine sends such a check again (B5). Likewise, a saved row skipped locally with
-   `real-binding-unavailable` (no live binding available in this sandbox, zero provider
-   calls) is treated as a local skip rather than an author refusal or coverage loss
-   (provided every test of that Story at the head has a passing or skipped/service
-   deciding check, never excusing unrun sibling tests of the same Story), and its generic
-   operator-reconciliation `client_advice` is never fed into the repair prompt as a defect
-   or `needs-person` trigger. When Autopilot queues the repository
+   engine sends such a check again (B5). A saved row with `real-binding-unavailable` is
+   NEVER silently treated as a local skip, pass, or excused coverage gap in either `auto`
+   or `observe` mode; instead it routes to Bucket 2 of [Autopilot universal validator](autopilot-validator.prompt.md)
+   so validation stops with 0 repair rounds, keeps the PR open, parks as `needs-person`
+   (`auth-environment`), frees the worker slot, places the unavailable binding on
+   cooldown, and auto-resumes validate-only on the exact saved head once healthy. When
+   Autopilot queues the repository
    full test suite (`boundSuiteCommand`, exported), it bounds `node --test` worker
    concurrency (`--test-concurrency`) to `Math.max(1, Math.min(6, shareCpus))` when
    `shareCpus` is configured (`ports.machine` or `ports.env.PDD_CHECK_CPUS`, or directly on a
@@ -1725,8 +1740,41 @@ runs until its end):
    here; other steps (for example the #3227 line checks) read this result. A repair
    and a new agent result clear `runtimeWait`. The PR body is written back with a
    PATCH of the PR; a failed PATCH waits for the next tick.
-6. **Merge lane** (one final step per repository). A green PR (CI green, local or none,
-   review PASS, suite pass) enters the lane. Before entering the lane across all green PR states (`green`, `local`, `none`), read server-side branch protection and rulesets on `BASE` (`GET repos/REPO/branches/BASE/protection/required_pull_request_reviews` and `rules/branches/BASE`, preserving an explicit `required_approving_review_count: 0`, treating only `404` as no review protection, and surfacing non-`200`/non-`404` responses as retryable `{code: "github"}` waits rather than merging). When `requiredApprovals > 0`, count distinct non-engine, non-bot (`user.type !== "Bot"` and no `[bot]` suffix) trusted (`author_association` in `OWNER`, `MEMBER`, `COLLABORATOR`, or `ports.trusted` when `author_association` is absent) `APPROVED` reviews whose `commit_id` matches `job.head` case-insensitively (surfacing transient review API errors as retryable `{code: "github"}` waits rather than swallowing them into `0` approvals). When approvals are still missing, `auto` mode stops checks and parks as `needs-person` (`keepPr: true`, `branchApproval: true`, posting a branch-protection PR review wait comment rather than the prompt-change approval comment, and asking a trusted person to approve on GitHub and remove `pdd:needs-decision`) before merging, while `observe` mode prepares full evidence, notes the required human approval on the `would-merge` comment, and leaves merging to the person. The lane is the label `pdd:merge-lane` on
+5b. **Universal Validator v2 gate, backside lint & validate-only resume** (strictly
+   fail-closed in BOTH `auto` and `observe` modes; never loads rules from `origin/main`).
+   Before claiming new issues on a tick, check parked `validationParks` entries with
+   `planValidationResume` of [Autopilot universal validator](autopilot-validator.prompt.md)
+   using a lightweight pre-flight check (or an explicit person resume): when
+   `action === "resume-validate-only"` on the exact saved PR head, clear the tool's
+   cooldown in `toolCooldowns` and run ONLY the missing real validation against that
+   exact saved commit (`rebuildCode: false`, zero code rebuilds), then continue to the
+   merge lane on pass; when `action === "head-changed-abort"`, clear the stale park and
+   evaluate normally. On every candidate PR head, detect changed surfaces via
+   `detectChangedSurfaces`, run backside validation lint (`silent-validation-skip`,
+   `boundary-mock-only-test`, and workspace-local `rules/lint/*.json`) via
+   `lintRepoProject` of [Repo hygiene and extensible project lint](repo-hygiene-lint.prompt.md),
+   and classify with `evaluateValidationOutcome` of [Autopilot universal validator](autopilot-validator.prompt.md):
+   - **Bucket 1 (tool/login healthy & real E2E ran):** Only `eligible: true` (100% real
+     E2E pass, offline green, 0 blocking lint findings, bug-fix base-fail/head-pass; or
+     docs-only with offline green) enters step 6 (`allow-merge` in `auto`,
+     `allow-would-merge` in `observe`) carrying recorded proof (commands, exit codes,
+     surfaces). Real failures spend 1 repair attempt up to `MAX_VALIDATION_REPAIRS` (3),
+     then park as `needs-person` (`repair-exhausted`), keep the PR open, and free the
+     worker slot.
+   - **Bucket 2 (expired login / unavailable tool / `real-binding-unavailable`):**
+     Environment/auth blocker — spend **0 repair rounds**, never merge or mark
+     `would-merge`, keep the finished PR open, post one concise comment with marker
+     `<!-- pdd:autopilot-core:auth-wait:P -->` naming the login/tool and exact check
+     command, park as `needs-person` (`auth-environment`), record `toolCooldowns` and
+     `validationParks` in `core.json`, and immediately free the worker slot so intake
+     skips other issues needing that tool and claims unrelated issues.
+   - **Bucket 3 (needs live human interaction — browser OAuth click, 2FA, captcha, live
+     payment, physical hardware — OR zero runnable E2E for runtime surfaces):** Hard-stop
+     as `needs-person` in BOTH `auto` and `observe` modes, keep the PR open, free the
+     worker slot, and post the exact 3-line Human Verification Card (`Passed offline:`,
+     `Unverified boundary:`, `Verify command:`).
+6. **Merge lane** (one final step per repository). All Autopilot `auto` merges and `observe` validations route through `pdd:merge-lane` (never a separate landing queue; legacy `autopilot.mergeQueue` in `pdd.json` is ignored). A green PR (CI green, local or none,
+   review PASS, suite pass, and Validator v2 `eligible: true`) enters the lane. Before entering the lane across all green PR states (`green`, `local`, `none`), read server-side branch protection and rulesets on `BASE` (`GET repos/REPO/branches/BASE/protection/required_pull_request_reviews` and `rules/branches/BASE`, preserving an explicit `required_approving_review_count: 0`, treating only `404` as no review protection, and surfacing non-`200`/non-`404` responses as retryable `{code: "github"}` waits rather than merging). When `requiredApprovals > 0`, count distinct non-engine, non-bot (`user.type !== "Bot"` and no `[bot]` suffix) trusted (`author_association` in `OWNER`, `MEMBER`, `COLLABORATOR`, or `ports.trusted` when `author_association` is absent) `APPROVED` reviews whose `commit_id` matches `job.head` case-insensitively (surfacing transient review API errors as retryable `{code: "github"}` waits rather than swallowing them into `0` approvals). When approvals are still missing, `auto` mode stops checks and parks as `needs-person` (`keepPr: true`, `branchApproval: true`, posting a branch-protection PR review wait comment rather than the prompt-change approval comment, and asking a trusted person to approve on GitHub and remove `pdd:needs-decision`) before merging, while `observe` mode prepares full evidence, notes the required human approval on the `would-merge` comment, and leaves merging to the person. The lane is the label `pdd:merge-lane` on
    one open PR, shared by every machine through GitHub (`issues?state=open&labels=…`,
    PRs only). Because that label search index can lag behind both `POST` and `DELETE` or
    merge writes, every holder read (before `POST`, on the post-`POST` readback, and in
@@ -1829,7 +1877,10 @@ runs until its end):
    In mode `observe`, the same comment starts `Autopilot would merge this PR (observe
    mode): every check passed for head HEAD. It stays open and ready for review;
    Autopilot does not merge it.` with the marker
-   `<!-- pdd:autopilot-core:would-merge:HEAD -->`. Then a draft PR is marked ready
+   `<!-- pdd:autopilot-core:would-merge:HEAD -->`, includes the Validator v2 proof
+   (commands, exit codes, verified surfaces), and NEVER runs when Validator v2 failed
+   closed (Bucket 1 failure, Bucket 2 auth/tool wait, or Bucket 3 human/missing-E2E
+   hard-stop). Then a draft PR is marked ready
    (`gh pr ready`; a refusal only warns), this machine's claim comment and
    `pdd:working` go, the issue gets the label `pdd:would-merge` (visible to every
    machine), the result counts (`produced`), and local cleanup records `would-merge`
@@ -1988,7 +2039,7 @@ guard's machine line when the launcher gives one (`guard`, for example `Machine:
 share 50% (default) of 10 cores and 16 GiB · slots min(4, 5 cores ÷ 2, 8 GiB ÷ 3 GiB) = 2
 → 2 (automatic) · … · new work: held (memory pressure)`), the pause
 line (`New jobs paused until TIME (H h): …` or `No pause: N no-result end(s) in a row …`), the login-pool exhaustion line while `poolOut` is set (`Login pool exhausted since TIME: next reset at TIME.` or `Bounded retry window applies.`), the CI line
-while `ciDown` is set (`CI does not start: …`), the circuit-breaker line while `circuitBreaker` is active in `state` or `core.json` (`Circuit breaker: mode downgraded from auto to observe at TIME (REASON); fix the default branch and run pdd autopilot start --mode auto to resume merges.`), any active-intake login hold (`state.intakeNote`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
+while `ciDown` is set (`CI does not start: …`), active tool cooldown lines while `toolCooldowns` has active entries (`Tool cooldown: TOOL (check: CMD)`), parked validation wait lines while `validationParks` is non-empty (`Validation wait: PR #P at SHA waiting on TOOL`), the circuit-breaker line while `circuitBreaker` is active in `state` or `core.json` (`Circuit breaker: mode downgraded from auto to observe at TIME (REASON); fix the default branch and run pdd autopilot start --mode auto to resume merges.`), any active-intake login hold (`state.intakeNote`), one line per job (`#N build running 12m (log …)`, `#N PR #P at SHA: review …,
 suite …`, inspecting any saved `suite.agent.exit` file on disk so a signal-interrupted suite before the next tick shows `suite interrupted (SIGNAL, not run)` and a queued suite shows `suite waiting`, with `; merge lane: final step`, `; merge lane: waiting for PR #P since TIME`,
 `; Runtime: waits for the interpreter maintenance since HH:MM UTC (until HH:MM UTC); no
 slot` or `; Runtime: the check that was not sent runs again`, `#N ending: …`), one line per step wait
@@ -2043,10 +2094,11 @@ with the native defaults named above.
 
 ## Dependencies
 
+- [Autopilot universal validator](autopilot-validator.prompt.md): required for `MAX_VALIDATION_REPAIRS`, `detectChangedSurfaces`, `evaluateValidationOutcome`, `formatHumanVerificationCard`, `shouldClaimWithCooldowns`, and `planValidationResume`.
+- [Repo hygiene and extensible project lint](repo-hygiene-lint.prompt.md): required for `lintRepoProject` (`silent-validation-skip`, `boundary-mock-only-test`, and workspace-local `rules/lint/*.json` loading).
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.
-- [Serialized FIFO landing queue](autopilot-merge-queue.prompt.md): required for `enqueueMergeQueueItem`, `processMergeQueue`, `mergeQueueStatusLine`, and `buildConflictAgentInvocation`.
 - [File owner lookup](file-owner.prompt.md): required for `findOwners`, `headerEntries`, `isTestOwnedPath` and `resolveOwners`.
-- [Autopilot intake cards](autopilot-intake.prompt.md): required for active and shadow intake passes, pre-claim wrong-repository detection and routing, trusted person-comment filtering, and forensics fixed-card sync.
+- [Autopilot intake cards](autopilot-intake.prompt.md): required for active and shadow intake passes, pre-claim pre-flight enforcement (`preflightCoreIssue`) and wrong-repository routing, trusted person-comment filtering, and forensics fixed-card sync.
 - [Pre-run forensics](autopilot-forensics.prompt.md): required for deterministic
   external-repository / configured skip-label matching and the fast read-only
   pre-run repository forensics check on `origin/BASE`.
