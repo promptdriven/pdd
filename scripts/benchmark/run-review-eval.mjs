@@ -46,10 +46,27 @@ const SAFE_GIT_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/^~:-]{0,127}$/;
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/;
 const MAX_DIFF_EXCERPT_BYTES = 24_000;
 const MAX_PATTERN_LENGTH = 200;
+const MAX_SYMLINK_HOPS = 40;
 const SIGNAL_STOP_WORDS = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'without', 'instead',
   'are', 'was', 'were', 'has', 'have', 'had', 'not', 'but', 'its', 'their', 'about',
 ]);
+
+const STRIPPED_GIT_REPO_VARS = Object.freeze([
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_COMMON_DIR',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+]);
+const NULL_GIT_CONFIG = process.platform === 'win32' ? 'NUL' : '/dev/null';
+const SIGNAL_EXIT_CODES = Object.freeze({
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+});
+const DISALLOWED_PATTERN_CHARS_RE = /[()[\]{}+?^$\\]/;
 
 const FOLLOW_UP_RE = /^\W*P3\b/i;
 const BLOCKING_SEVERITY_RE = /\bP[12]\b/i;
@@ -57,10 +74,6 @@ const BLOCKING_SEVERITY_RE = /\bP[12]\b/i;
 export function isFollowUpItem(item) {
   const text = String(item ?? '').trim();
   return FOLLOW_UP_RE.test(text) && !BLOCKING_SEVERITY_RE.test(text);
-}
-
-function escapeRegExp(str) {
-  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function toPosixPath(p) {
@@ -74,7 +87,12 @@ function oneLine(text, maxLen = 500) {
 
 const SYSTEM_SYMLINK_ANCESTORS = new Set(['/', '/tmp', '/var', '/etc']);
 
-export function assertNotSymlink(targetPath, label = 'path', fs = nativeFs, { checkFirstExistingParent = false } = {}) {
+export function assertNotSymlink(
+  targetPath,
+  label = 'path',
+  fs = nativeFs,
+  { checkAncestors = true, checkFirstExistingParent, stopRoots = [] } = {},
+) {
   const resolved = resolve(String(targetPath));
   const checkSingle = p => {
     try {
@@ -89,12 +107,23 @@ export function assertNotSymlink(targetPath, label = 'path', fs = nativeFs, { ch
     }
   };
   checkSingle(resolved);
-  if (checkFirstExistingParent) {
-    const safeRoots = new Set([...SYSTEM_SYMLINK_ANCESTORS, resolve(tmpdir())]);
-    try { safeRoots.add(fs.realpathSync(tmpdir())); } catch {}
+  const shouldCheckAncestors = checkFirstExistingParent !== undefined
+    ? Boolean(checkFirstExistingParent)
+    : Boolean(checkAncestors);
+  if (shouldCheckAncestors) {
+    const safeRoots = new Set(
+      [...SYSTEM_SYMLINK_ANCESTORS, tmpdir(), ...stopRoots]
+        .filter(Boolean)
+        .map(p => resolve(String(p))),
+    );
+    try { safeRoots.add(resolve(fs.realpathSync(tmpdir()))); } catch {}
+    for (const stopRoot of stopRoots) {
+      if (!stopRoot) continue;
+      try { safeRoots.add(resolve(fs.realpathSync(String(stopRoot)))); } catch {}
+    }
     let cur = dirname(resolved);
     while (cur && !safeRoots.has(cur)) {
-      if (checkSingle(cur)) break;
+      checkSingle(cur);
       const parent = dirname(cur);
       if (parent === cur) break;
       cur = parent;
@@ -119,16 +148,39 @@ export function validateGitRef(ref, label = 'git ref') {
   return value;
 }
 
-function assertSafeRegexPattern(pattern, label) {
-  const src = String(pattern ?? '');
+function matchWildcardBranch(haystackLower, segments) {
+  let pos = 0;
+  for (const seg of segments) {
+    if (!seg) continue;
+    const idx = haystackLower.indexOf(seg, pos);
+    if (idx === -1) return false;
+    pos = idx + seg.length;
+  }
+  return true;
+}
+
+function compileSafeSignalPattern(pattern, label) {
+  const src = String(pattern ?? '').trim();
   if (!src || src.length > MAX_PATTERN_LENGTH) {
-    throw new Error(`Invalid regex pattern for ${label}: length must be 1..${MAX_PATTERN_LENGTH}`);
+    throw new Error(`Invalid pattern for ${label}: length must be 1..${MAX_PATTERN_LENGTH}`);
   }
-  // Reject obvious nested quantifiers to prevent ReDoS from custom manifests.
-  if (/\([^)]*[+*][^)]*\)[+*?]|\{\d+,\d*\}\s*[+*?]/.test(src)) {
-    throw new Error(`Refusing potentially exponential regex pattern for ${label}`);
+  if (DISALLOWED_PATTERN_CHARS_RE.test(src)) {
+    throw new Error(
+      `Refusing regex syntax in pattern for ${label}: use literal phrases, "*" wildcards, or "|" alternatives instead`,
+    );
   }
-  return new RegExp(src, 'i');
+  const rawBranches = src.split('|').map(part => part.trim());
+  if (rawBranches.some(part => !part)) {
+    throw new Error(`Invalid empty alternative in pattern for ${label}`);
+  }
+  const branches = rawBranches.map(part => part.toLowerCase().split('*').map(s => s.trim()).filter(Boolean));
+  if (branches.some(segs => segs.length === 0)) {
+    throw new Error(`Invalid wildcard-only pattern for ${label}`);
+  }
+  return text => {
+    const lower = String(text ?? '').toLowerCase();
+    return branches.some(segs => matchWildcardBranch(lower, segs));
+  };
 }
 
 function slugify(text, fallback = 'signal') {
@@ -196,7 +248,7 @@ export function normalizeExpectedSignal(raw, index = 0) {
   const patterns = Array.isArray(raw.patterns)
     ? raw.patterns.map(x => String(x ?? '').trim()).filter(Boolean)
     : [];
-  const compiledPatterns = patterns.map((p, pIdx) => assertSafeRegexPattern(p, `${id}.patterns[${pIdx}]`));
+  const compiledPatterns = patterns.map((p, pIdx) => compileSafeSignalPattern(p, `${id}.patterns[${pIdx}]`));
 
   return {
     id,
@@ -258,8 +310,15 @@ export function validateFixtureSpec(raw, index = 0) {
 
   let minSignalsRequired = expectedSignals.length > 0 ? 1 : 0;
   if (raw.min_signals_required !== undefined && raw.min_signals_required !== null) {
+    const isEmptyOrBool = typeof raw.min_signals_required === 'boolean'
+      || String(raw.min_signals_required).trim() === '';
     const minNum = Number(raw.min_signals_required);
-    if (!Number.isSafeInteger(minNum) || minNum < 0 || (expectedSignals.length > 0 && minNum > expectedSignals.length)) {
+    const invalidMin = isEmptyOrBool
+      || !Number.isSafeInteger(minNum)
+      || (expectedSignals.length > 0
+        ? (minNum < 1 || minNum > expectedSignals.length)
+        : minNum !== 0);
+    if (invalidMin) {
       throw new Error(
         `Fixture "${id}" has invalid min_signals_required (${raw.min_signals_required}) for ${expectedSignals.length} expected_signals`,
       );
@@ -288,7 +347,7 @@ export function loadReviewEvalManifest(manifestInput = DEFAULT_MANIFEST_PATH, { 
   let raw;
   let manifestRelPath = null;
   if (typeof manifestInput === 'string') {
-    const manifestPath = assertNotSymlink(manifestInput, 'manifest file', fs);
+    const manifestPath = assertNotSymlink(manifestInput, 'manifest file', fs, { checkAncestors: true });
     if (!fs.existsSync(manifestPath)) {
       throw new Error(`Manifest file does not exist: ${manifestPath}`);
     }
@@ -516,6 +575,22 @@ export function isForbiddenScratchPath(relPath, extraForbiddenPaths = []) {
   return forbidden.some(f => f && (norm === f || norm.endsWith(`/${f}`)));
 }
 
+function isAllowedChangedFileLine(line, extraForbiddenPaths = []) {
+  const rawLine = String(line ?? '');
+  const parts = rawLine.split('\t');
+  const pathColumns = parts.length > 1 ? parts.slice(1) : [rawLine];
+  return !pathColumns.some(p => isForbiddenScratchPath(p.trim(), extraForbiddenPaths));
+}
+
+function assertKnownBuiltInPromptVersion(promptVersion) {
+  if (!Object.hasOwn(REVIEW_PROMPT_VERSIONS, promptVersion)) {
+    const known = Object.keys(REVIEW_PROMPT_VERSIONS).join(', ');
+    throw new CliUsageError(
+      `Unknown --prompt-version "${promptVersion}" (supported built-ins: ${known}; or provide --prompt-template FILE)`,
+    );
+  }
+}
+
 export function buildReviewerPrompt({
   fixture,
   changedFiles = [],
@@ -528,11 +603,7 @@ export function buildReviewerPrompt({
 } = {}) {
   const allowedEvidence = projectAllowedFixtureEvidence(fixture);
   const safeChangedFiles = (Array.isArray(changedFiles) ? changedFiles : [])
-    .filter(line => {
-      const parts = String(line).split(/\t+|\s+/);
-      const pathPart = parts[parts.length - 1] || line;
-      return !isForbiddenScratchPath(pathPart, extraForbiddenPaths);
-    });
+    .filter(line => isAllowedChangedFileLine(line, extraForbiddenPaths));
 
   let prompt;
   if (typeof customTemplate === 'string' && customTemplate.trim()) {
@@ -545,7 +616,8 @@ export function buildReviewerPrompt({
       .replaceAll('{{EVIDENCE}}', evidence)
       .replaceAll('{{RESULT_PATH}}', resultPath || '');
   } else {
-    const builder = REVIEW_PROMPT_VERSIONS[promptVersion] || REVIEW_PROMPT_VERSIONS[DEFAULT_PROMPT_VERSION];
+    assertKnownBuiltInPromptVersion(promptVersion);
+    const builder = REVIEW_PROMPT_VERSIONS[promptVersion];
     prompt = builder({
       allowedEvidence,
       changedFiles: safeChangedFiles,
@@ -559,6 +631,35 @@ export function buildReviewerPrompt({
   return prompt;
 }
 
+function buildIsolatedGitEnv(baseEnv = process.env) {
+  const clean = { ...baseEnv };
+  for (const key of STRIPPED_GIT_REPO_VARS) {
+    delete clean[key];
+  }
+  clean.GIT_CONFIG_NOSYSTEM = '1';
+  clean.GIT_CONFIG_GLOBAL = NULL_GIT_CONFIG;
+  clean.GIT_TERMINAL_PROMPT = '0';
+  clean.GIT_SSH_COMMAND = 'false';
+  return clean;
+}
+
+function computeExecExitCode(res) {
+  if (typeof res.status === 'number') return res.status;
+  if (res.signal) {
+    return Object.hasOwn(SIGNAL_EXIT_CODES, res.signal) ? SIGNAL_EXIT_CODES[res.signal] : 1;
+  }
+  return res.error ? 1 : 0;
+}
+
+function formatExecFailure(res) {
+  const parts = [];
+  if (res.signal) parts.push(`signal ${res.signal}`);
+  if (res.error?.message) parts.push(res.error.message);
+  const output = (res.stderr || res.stdout || '').trim();
+  if (output) parts.push(output);
+  return parts.join('; ') || `exit ${res.code}`;
+}
+
 function nativeExec(cmd, args, options = {}) {
   const res = spawnSync(cmd, args, {
     encoding: 'utf8',
@@ -569,7 +670,8 @@ function nativeExec(cmd, args, options = {}) {
     input: options.input,
   });
   return {
-    code: res.status ?? (res.error ? 1 : 0),
+    code: computeExecExitCode(res),
+    signal: res.signal || null,
     stdout: res.stdout ?? '',
     stderr: res.stderr ?? '',
     error: res.error || null,
@@ -578,9 +680,8 @@ function nativeExec(cmd, args, options = {}) {
 
 function runGitOrThrow(exec, args, options = {}, context = 'git') {
   const res = exec('git', args, options);
-  if (res.code !== 0) {
-    const detail = (res.stderr || res.stdout || res.error?.message || `exit ${res.code}`).trim();
-    throw new Error(`${context} failed: ${detail}`);
+  if (res.code !== 0 || res.signal || res.error) {
+    throw new Error(`${context} failed: ${formatExecFailure(res)}`);
   }
   return res.stdout;
 }
@@ -600,19 +701,131 @@ function parseLsTreeNullOutput(stdout = '') {
   return entries;
 }
 
-function assertSafeTreeSymlinks(repoRoot, entries, exec) {
-  const virtualRoot = resolve('/eval-scratch-root');
+function isAbsoluteSymlinkTarget(target) {
+  return !target
+    || isAbsolute(target)
+    || target.startsWith('/')
+    || target.startsWith('\\')
+    || /^[A-Za-z]:/.test(target);
+}
+
+function assertSafeTreeSymlinks(repoRoot, entries, exec, env) {
+  const symlinkTargets = new Map();
   for (const entry of entries) {
     if (entry.mode !== '120000') continue;
-    const target = runGitOrThrow(exec, ['-C', repoRoot, 'cat-file', '-p', entry.oid], {}, 'git cat-file symlink').trim();
-    if (!target || isAbsolute(target)) {
+    const target = runGitOrThrow(
+      exec,
+      ['-C', repoRoot, 'cat-file', '-p', entry.oid],
+      { env },
+      'git cat-file symlink',
+    ).trim();
+    if (isAbsoluteSymlinkTarget(target)) {
       throw new Error(`Refusing absolute symlink in fixture tree: ${entry.path} -> ${target}`);
     }
-    const resolvedTarget = resolve(virtualRoot, dirname(entry.path), target);
+    symlinkTargets.set(entry.path, target.replaceAll('\\', '/'));
+  }
+
+  // Iteratively resolve symlink chains component-by-component across tree entries.
+  const virtualRoot = resolve('/eval-scratch-root');
+  for (const [linkPath, initialTarget] of symlinkTargets.entries()) {
+    const currentParts = linkPath.split('/').slice(0, -1).filter(Boolean);
+    const remaining = initialTarget.split('/');
+    let hops = 0;
+
+    while (remaining.length > 0) {
+      const seg = remaining.shift();
+      if (!seg || seg === '.') continue;
+      if (seg === '..') {
+        if (currentParts.length === 0) {
+          throw new Error(`Refusing escaping symlink in fixture tree: ${linkPath} -> ${initialTarget}`);
+        }
+        currentParts.pop();
+        continue;
+      }
+      currentParts.push(seg);
+      const candidateRel = currentParts.join('/');
+      if (symlinkTargets.has(candidateRel)) {
+        hops += 1;
+        if (hops > MAX_SYMLINK_HOPS || remaining.length > 1024) {
+          throw new Error(`Refusing symlink loop or excessive symlink chain in fixture tree: ${linkPath}`);
+        }
+        const nextTarget = symlinkTargets.get(candidateRel);
+        currentParts.pop();
+        remaining.unshift(...nextTarget.split('/'));
+      }
+    }
+
+    const resolvedTarget = resolve(virtualRoot, ...currentParts);
     if (resolvedTarget !== virtualRoot && !resolvedTarget.startsWith(`${virtualRoot}${sep}`)) {
-      throw new Error(`Refusing escaping symlink in fixture tree: ${entry.path} -> ${target}`);
+      throw new Error(`Refusing escaping symlink in fixture tree: ${linkPath} -> ${initialTarget}`);
     }
   }
+}
+
+export function assertSafeCheckedOutSymlink(scratchDir, relPath, fs = nativeFs, maxHops = MAX_SYMLINK_HOPS) {
+  const realScratch = fs.realpathSync ? fs.realpathSync(scratchDir) : resolve(scratchDir);
+  const full = join(realScratch, relPath);
+  const assertInside = resolvedTarget => {
+    if (resolvedTarget !== realScratch && !resolvedTarget.startsWith(`${realScratch}${sep}`)) {
+      throw new Error(`Refusing symlink escaping scratch checkout: ${relPath}`);
+    }
+    return resolvedTarget;
+  };
+  try {
+    return assertInside(fs.realpathSync(full));
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+  }
+
+  // Dangling symlink: resolve symlink chain component-by-component up to the deepest existing ancestor.
+  const dirReal = fs.realpathSync(dirname(full));
+  const initialTarget = fs.readlinkSync(full);
+  if (isAbsoluteSymlinkTarget(initialTarget)) {
+    throw new Error(`Refusing symlink escaping scratch checkout: ${relPath}`);
+  }
+
+  let cur = dirReal;
+  const queue = initialTarget.split(/[\\/]+/);
+  let hops = 1;
+
+  while (queue.length > 0) {
+    const seg = queue.shift();
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (cur === realScratch || !cur.startsWith(`${realScratch}${sep}`)) {
+        throw new Error(`Refusing symlink escaping scratch checkout: ${relPath}`);
+      }
+      cur = dirname(cur);
+      continue;
+    }
+    const next = join(cur, seg);
+    let stat;
+    try {
+      stat = fs.lstatSync(next);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        const ancestorReal = fs.realpathSync(cur);
+        const remaining = [seg, ...queue].filter(s => s && s !== '.');
+        const resolvedDangling = resolve(ancestorReal, ...remaining);
+        return assertInside(resolvedDangling);
+      }
+      throw err;
+    }
+    if (stat.isSymbolicLink()) {
+      hops += 1;
+      if (hops > maxHops || queue.length > 1024) {
+        throw new Error(`Refusing symlink loop in scratch checkout: ${relPath}`);
+      }
+      const nextTarget = fs.readlinkSync(next);
+      if (isAbsoluteSymlinkTarget(nextTarget)) {
+        throw new Error(`Refusing symlink escaping scratch checkout: ${relPath}`);
+      }
+      queue.unshift(...nextTarget.split(/[\\/]+/));
+    } else {
+      cur = next;
+    }
+  }
+  return assertInside(fs.realpathSync(cur));
 }
 
 function setTreePermissions(dir, { readOnly, skipDotGit = true, fs = nativeFs }) {
@@ -660,7 +873,7 @@ function materializeCommitIntoScratch({
 }) {
   const treeOut = runGitOrThrow(exec, ['-C', repoRoot, 'ls-tree', '-r', '-z', commitSha], { env }, 'git ls-tree');
   const entries = parseLsTreeNullOutput(treeOut);
-  assertSafeTreeSymlinks(repoRoot, entries, exec);
+  assertSafeTreeSymlinks(repoRoot, entries, exec, env);
 
   const forbiddenMatches = entries
     .map(e => e.path)
@@ -685,32 +898,23 @@ function materializeCommitIntoScratch({
     { env: indexEnv },
     'git checkout-index',
   );
-  // Defense in depth: verify any checked-out symlink resolves within scratchDir.
-  const realScratch = fs.realpathSync ? fs.realpathSync(scratchDir) : resolve(scratchDir);
+  // Defense in depth: verify every checked-out symlink (including dangling symlinks) stays within scratchDir.
   for (const entry of entries) {
     if (entry.mode !== '120000' || forbiddenMatches.includes(entry.path)) continue;
-    const full = join(scratchDir, entry.path);
-    try {
-      const targetReal = fs.realpathSync(full);
-      if (targetReal !== realScratch && !targetReal.startsWith(`${realScratch}${sep}`)) {
-        throw new Error(`Refusing symlink escaping scratch checkout: ${entry.path}`);
-      }
-    } catch (err) {
-      if (err && err.code !== 'ENOENT') throw err;
-    }
+    assertSafeCheckedOutSymlink(scratchDir, entry.path, fs);
   }
   return forbiddenMatches;
 }
 
 function resolveCommitOrThrow(exec, repoRoot, ref, label, env) {
-  const res = exec('git', ['-C', repoRoot, 'rev-parse', '--verify', `${ref}^{commit}`], { env });
-  if (res.code === 0) return res.stdout.trim();
+  const safeRef = validateGitRef(ref, label);
+  const res = exec('git', ['-C', repoRoot, 'rev-parse', '--verify', `${safeRef}^{commit}`], { env });
+  if (res.code === 0 && !res.signal && !res.error) return res.stdout.trim();
   const shallowRes = exec('git', ['-C', repoRoot, 'rev-parse', '--is-shallow-repository'], { env });
   const shallowHint = shallowRes.code === 0 && shallowRes.stdout.trim() === 'true'
     ? ' (repository is a shallow clone; run "git fetch --unshallow" or pass --repo-root to a full clone)'
     : '';
-  const detail = (res.stderr || res.stdout || res.error?.message || `exit ${res.code}`).trim();
-  throw new Error(`${label} failed${shallowHint}: ${detail}`);
+  throw new Error(`${label} failed${shallowHint}: ${formatExecFailure(res)}`);
 }
 
 export function inspectFixtureDiffReadOnly({
@@ -721,28 +925,26 @@ export function inspectFixtureDiffReadOnly({
   env = process.env,
 } = {}) {
   const root = resolve(repoRoot);
-  const baseSha = resolveCommitOrThrow(exec, root, fixture.base, `resolve base commit for ${fixture.id}`, env);
-  const headSha = resolveCommitOrThrow(exec, root, fixture.head, `resolve head commit for ${fixture.id}`, env);
+  const isolatedGitEnv = buildIsolatedGitEnv(env);
+  const baseSha = resolveCommitOrThrow(exec, root, fixture.base, `resolve base commit for ${fixture.id}`, isolatedGitEnv);
+  const headSha = resolveCommitOrThrow(exec, root, fixture.head, `resolve head commit for ${fixture.id}`, isolatedGitEnv);
 
   const nameStatusRaw = runGitOrThrow(
     exec,
     ['-C', root, 'diff', '--name-status', baseSha, headSha],
-    { env },
+    { env: isolatedGitEnv },
     `diff name-status for ${fixture.id}`,
   );
   const changedFiles = nameStatusRaw
     .split('\n')
     .map(l => l.trim())
     .filter(Boolean)
-    .filter(line => {
-      const parts = line.split('\t');
-      return !parts.slice(1).some(p => isForbiddenScratchPath(p, extraForbiddenPaths));
-    });
+    .filter(line => isAllowedChangedFileLine(line, extraForbiddenPaths));
 
   const statRaw = runGitOrThrow(
     exec,
     ['-C', root, 'diff', '--stat', baseSha, headSha],
-    { env },
+    { env: isolatedGitEnv },
     `diff stat for ${fixture.id}`,
   );
   const diffStat = statRaw
@@ -768,11 +970,12 @@ export function prepareScratchCheckout({
   env = process.env,
 } = {}) {
   const root = resolve(repoRoot);
-  const baseTemp = workDirRoot ? assertNotSymlink(workDirRoot, 'work-dir', fs, { checkFirstExistingParent: true }) : tmpdir();
+  const baseTemp = workDirRoot ? assertNotSymlink(workDirRoot, 'work-dir', fs, { checkAncestors: true }) : tmpdir();
   if (workDirRoot) fs.mkdirSync(baseTemp, { recursive: true });
 
-  const baseSha = resolveCommitOrThrow(exec, root, fixture.base, `resolve base commit for ${fixture.id}`, env);
-  const headSha = resolveCommitOrThrow(exec, root, fixture.head, `resolve head commit for ${fixture.id}`, env);
+  const isolatedGitEnv = buildIsolatedGitEnv(env);
+  const baseSha = resolveCommitOrThrow(exec, root, fixture.base, `resolve base commit for ${fixture.id}`, isolatedGitEnv);
+  const headSha = resolveCommitOrThrow(exec, root, fixture.head, `resolve head commit for ${fixture.id}`, isolatedGitEnv);
 
   // Use opaque temp dir names so neither scratchDir nor resultPath can leak fixture.id or fixture.label.
   const metaDir = fs.mkdtempSync(join(baseTemp, 'pdd-review-eval-meta-'));
@@ -803,12 +1006,6 @@ export function prepareScratchCheckout({
     fs.mkdirSync(resultDir, { recursive: true, mode: 0o700 });
     const resultPath = join(resultDir, 'review-result.json');
 
-    const isolatedGitEnv = {
-      ...env,
-      GIT_CONFIG_NOSYSTEM: '1',
-      GIT_TERMINAL_PROMPT: '0',
-      GIT_SSH_COMMAND: 'false',
-    };
     const commitArgs = [
       '-c', 'user.name=pdd-review-eval',
       '-c', 'user.email=eval@example.invalid',
@@ -828,8 +1025,8 @@ export function prepareScratchCheckout({
       env: isolatedGitEnv,
     });
 
-    runGitOrThrow(exec, ['init', '-q'], { cwd: scratchDir, env: isolatedGitEnv }, 'scratch git init');
-    runGitOrThrow(exec, ['add', '-A'], { cwd: scratchDir, env: isolatedGitEnv }, 'scratch git add base');
+    runGitOrThrow(exec, ['init', '-q', '-b', 'eval-head'], { cwd: scratchDir, env: isolatedGitEnv }, 'scratch git init');
+    runGitOrThrow(exec, ['add', '-A', '-f'], { cwd: scratchDir, env: isolatedGitEnv }, 'scratch git add base');
     runGitOrThrow(
       exec,
       [...commitArgs, 'commit', '--allow-empty', '-qm', 'eval-base'],
@@ -851,7 +1048,7 @@ export function prepareScratchCheckout({
     });
     try { fs.rmSync(tempIndex, { force: true }); } catch {}
 
-    runGitOrThrow(exec, ['add', '-A'], { cwd: scratchDir, env: isolatedGitEnv }, 'scratch git add head');
+    runGitOrThrow(exec, ['add', '-A', '-f'], { cwd: scratchDir, env: isolatedGitEnv }, 'scratch git add head');
     runGitOrThrow(
       exec,
       [...commitArgs, 'commit', '--allow-empty', '-qm', 'eval-head'],
@@ -923,6 +1120,40 @@ export function prepareScratchCheckout({
   }
 }
 
+function extractFencedBlocks(text) {
+  const blocks = [];
+  let pos = 0;
+  while (pos < text.length) {
+    const openIdx = text.indexOf('```', pos);
+    if (openIdx === -1) break;
+    const afterOpen = openIdx + 3;
+    const closeIdx = text.indexOf('```', afterOpen);
+    if (closeIdx === -1) break;
+    let body = text.slice(afterOpen, closeIdx);
+    const newlineIdx = body.indexOf('\n');
+    if (newlineIdx !== -1) {
+      const header = body.slice(0, newlineIdx).trim().toLowerCase();
+      if (header !== '' && header !== 'json') {
+        pos = closeIdx + 3;
+        continue;
+      }
+      body = body.slice(newlineIdx + 1);
+    } else {
+      const trimmedBody = body.trim();
+      const lowerBody = trimmedBody.toLowerCase();
+      if (lowerBody === 'json') {
+        body = '';
+      } else if (lowerBody.startsWith('json') && ' \t\r'.includes(trimmedBody[4])) {
+        body = trimmedBody.slice(4);
+      }
+    }
+    const candidate = body.trim();
+    if (candidate) blocks.push(candidate);
+    pos = closeIdx + 3;
+  }
+  return blocks;
+}
+
 function tryExtractJsonObject(text) {
   const trimmed = String(text ?? '').trim();
   if (!trimmed) return null;
@@ -934,10 +1165,10 @@ function tryExtractJsonObject(text) {
     // Fall through to fenced or embedded JSON extraction.
   }
 
-  const fenced = [...trimmed.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/gi)];
+  const fenced = extractFencedBlocks(trimmed);
   for (let i = fenced.length - 1; i >= 0; i--) {
     try {
-      const parsed = JSON.parse(fenced[i][1].trim());
+      const parsed = JSON.parse(fenced[i]);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
     } catch {
       // Keep scanning earlier fences.
@@ -1040,16 +1271,23 @@ export function parseReviewerOutput(rawOutput, { resultFileText = null } = {}) {
   const rawMustFix = Array.isArray(obj.mustFix)
     ? obj.mustFix
     : (obj.mustFix === undefined || obj.mustFix === null ? [] : [obj.mustFix]);
-  const allItems = rawMustFix
-    .map(item => oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500))
-    .filter(Boolean);
+  const rawFollowUps = Array.isArray(obj.followUps)
+    ? obj.followUps
+    : (obj.followUps === undefined || obj.followUps === null ? [] : [obj.followUps]);
 
-  const followUps = allItems.filter(isFollowUpItem).slice(0, 20);
-  const mustFix = allItems.filter(item => !isFollowUpItem(item)).slice(0, 20);
-  if (Array.isArray(obj.followUps)) {
-    for (const item of obj.followUps) {
-      const norm = oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500);
-      if (norm && followUps.length < 20 && !followUps.includes(norm)) followUps.push(norm);
+  const mustFix = [];
+  const followUps = [];
+  const pushUnique = (target, value) => {
+    if (value && target.length < 20 && !target.includes(value)) target.push(value);
+  };
+
+  for (const item of [...rawMustFix, ...rawFollowUps]) {
+    const norm = oneLine(typeof item === 'string' ? item : JSON.stringify(item), 500);
+    if (!norm) continue;
+    if (isFollowUpItem(norm)) {
+      pushUnique(followUps, norm);
+    } else {
+      pushUnique(mustFix, norm);
     }
   }
 
@@ -1068,11 +1306,28 @@ export function parseReviewerOutput(rawOutput, { resultFileText = null } = {}) {
   };
 }
 
+function isWordCharCode(code) {
+  return (code >= 48 && code <= 57)
+    || (code >= 65 && code <= 90)
+    || (code >= 97 && code <= 122)
+    || code === 95;
+}
+
 function containsTerm(haystack, term) {
-  const needle = String(term ?? '').trim();
+  const needle = String(term ?? '').trim().toLowerCase();
   if (!needle) return false;
-  const re = new RegExp(`(?:^|[^a-z0-9_])${escapeRegExp(needle)}(?=$|[^a-z0-9_])`, 'i');
-  return re.test(haystack);
+  const lower = String(haystack ?? '').toLowerCase();
+  let pos = 0;
+  while (pos <= lower.length - needle.length) {
+    const idx = lower.indexOf(needle, pos);
+    if (idx === -1) return false;
+    const beforeOk = idx === 0 || !isWordCharCode(lower.charCodeAt(idx - 1));
+    const afterIdx = idx + needle.length;
+    const afterOk = afterIdx === lower.length || !isWordCharCode(lower.charCodeAt(afterIdx));
+    if (beforeOk && afterOk) return true;
+    pos = idx + 1;
+  }
+  return false;
 }
 
 function matchesSignalClause(haystack, clause) {
@@ -1096,7 +1351,7 @@ function signalMatchesText(signal, text) {
     if (signal.keywords.some(term => containsTerm(haystack, term))) return true;
   }
   if (signal._compiledPatterns?.length > 0) {
-    if (signal._compiledPatterns.some(re => re.test(haystack))) return true;
+    if (signal._compiledPatterns.some(matcher => matcher(haystack))) return true;
   }
 
   const hasExplicitMatchers = (signal.any_all_of?.length || 0) > 0
@@ -1237,17 +1492,39 @@ export function createCliReviewerRunner({
   const bin = agentCmd.trim();
   const baseArgs = Array.isArray(agentArgs) ? agentArgs.map(String) : [];
 
-  return async function runCliReviewer({ prompt, scratchDir, resultPath, model }) {
+  return async function runCliReviewer({ prompt, scratchDir, metaDir = null, resultPath, model }) {
     const childEnv = { ...env };
     for (const key of STRIPPED_AGENT_AUTH_VARS) {
       delete childEnv[key];
     }
+    for (const key of STRIPPED_GIT_REPO_VARS) {
+      delete childEnv[key];
+    }
     childEnv.SSH_AUTH_SOCK = '';
+    childEnv.GIT_CONFIG_NOSYSTEM = '1';
+    childEnv.GIT_CONFIG_GLOBAL = NULL_GIT_CONFIG;
     childEnv.GIT_SSH_COMMAND = 'false';
     childEnv.GIT_TERMINAL_PROMPT = '0';
     childEnv.GH_PROMPT_DISABLED = '1';
-    childEnv.PDD_REVIEW_RESULT_PATH = resultPath;
+    childEnv.PDD_REVIEW_RESULT_PATH = resultPath ?? '';
     childEnv.PDD_REVIEW_MODEL = model;
+
+    let ownedGhConfigDir = null;
+    if (typeof fs.mkdtempSync === 'function') {
+      if (metaDir) {
+        const ghDir = fs.mkdtempSync(join(metaDir, 'gh-config-'));
+        fs.chmodSync?.(ghDir, 0o700);
+        childEnv.GH_CONFIG_DIR = ghDir;
+      } else {
+        ownedGhConfigDir = fs.mkdtempSync(join(tmpdir(), 'pdd-review-eval-gh-'));
+        fs.chmodSync?.(ownedGhConfigDir, 0o700);
+        childEnv.GH_CONFIG_DIR = ownedGhConfigDir;
+      }
+    } else if (metaDir) {
+      const ghDir = join(metaDir, 'gh-config');
+      fs.mkdirSync?.(ghDir, { recursive: true, mode: 0o700 });
+      childEnv.GH_CONFIG_DIR = ghDir;
+    }
 
     const binName = basename(bin).toLowerCase();
     if (binName === 'codex' || binName === 'codex.exe') {
@@ -1262,28 +1539,54 @@ export function createCliReviewerRunner({
 
     const resolvedArgs = baseArgs.map(arg => arg
       .replaceAll('{model}', model)
-      .replaceAll('{result_path}', resultPath)
+      .replaceAll('{result_path}', resultPath ?? '')
       .replaceAll('{scratch_dir}', scratchDir));
 
-    const res = exec(bin, resolvedArgs, {
-      cwd: scratchDir,
-      env: childEnv,
-      input: prompt,
-      timeoutMs,
-    });
+    let res;
+    try {
+      res = exec(bin, resolvedArgs, {
+        cwd: scratchDir,
+        env: childEnv,
+        input: prompt,
+        timeoutMs,
+      });
+    } finally {
+      if (ownedGhConfigDir) {
+        try { fs.rmSync(ownedGhConfigDir, { recursive: true, force: true }); } catch {}
+      }
+    }
 
     if (res.error?.code === 'ETIMEDOUT') {
       throw new Error(`Reviewer agent timed out after ${timeoutMs}ms`);
     }
+    if (res.signal) {
+      const detail = oneLine(res.stderr || res.error?.message || 'no stderr', 300);
+      throw new Error(`Reviewer command terminated by signal ${res.signal} (exit code ${res.code}): ${detail}`);
+    }
+    if (res.error) {
+      throw new Error(`Reviewer command failed (${res.error.code || 'ERROR'}): ${oneLine(res.error.message, 300)}`);
+    }
     let resultFileText = null;
-    if (resultPath && fs.existsSync(resultPath)) {
-      assertNotSymlink(resultPath, 'reviewer result file', fs);
-      resultFileText = fs.readFileSync(resultPath, 'utf8');
+    if (resultPath) {
+      assertNotSymlink(resultPath, 'reviewer result file', fs, {
+        checkAncestors: true,
+        stopRoots: metaDir ? [metaDir] : [],
+      });
+      if (fs.existsSync(resultPath)) {
+        resultFileText = fs.readFileSync(resultPath, 'utf8');
+      }
     }
     if (!resultFileText && res.code !== 0 && !String(res.stdout || '').trim()) {
-      throw new Error(`Reviewer command exited with code ${res.code}: ${oneLine(res.stderr || 'no stderr', 300)}`);
+      const detail = oneLine(res.stderr || res.error?.message || 'no stderr', 300);
+      throw new Error(`Reviewer command exited with code ${res.code}: ${detail}`);
     }
-    return { stdout: res.stdout, stderr: res.stderr, exitCode: res.code, resultFileText };
+    return {
+      stdout: res.stdout,
+      stderr: res.stderr,
+      exitCode: res.code,
+      signal: res.signal || null,
+      resultFileText,
+    };
   };
 }
 
@@ -1300,7 +1603,7 @@ export async function runReviewEval(options = {}, ports = {}) {
   let customTemplate = null;
   const extraForbiddenPaths = [];
   if (options.promptTemplate) {
-    const tplPath = assertNotSymlink(options.promptTemplate, 'prompt template', fs);
+    const tplPath = assertNotSymlink(options.promptTemplate, 'prompt template', fs, { checkAncestors: true });
     if (!fs.existsSync(tplPath)) {
       throw new Error(`Prompt template file does not exist: ${tplPath}`);
     }
@@ -1315,7 +1618,7 @@ export async function runReviewEval(options = {}, ports = {}) {
   const compareCases = [];
   if (Array.isArray(options.compareFiles) && options.compareFiles.length > 0) {
     for (const file of options.compareFiles) {
-      const cmpPath = assertNotSymlink(file, 'compare report', fs);
+      const cmpPath = assertNotSymlink(file, 'compare report', fs, { checkAncestors: true });
       if (!fs.existsSync(cmpPath)) {
         throw new Error(`Compare report file does not exist: ${cmpPath}`);
       }
@@ -1351,6 +1654,12 @@ export async function runReviewEval(options = {}, ports = {}) {
   const promptVersions = Array.isArray(options.promptVersions) && options.promptVersions.length > 0
     ? [...new Set(options.promptVersions.map(v => String(v).trim()).filter(Boolean))]
     : [DEFAULT_PROMPT_VERSION];
+
+  if (shouldRunManifest && !customTemplate) {
+    for (const pv of promptVersions) {
+      assertKnownBuiltInPromptVersion(pv);
+    }
+  }
 
   const cases = [...compareCases];
   const dryRunPlan = [];
@@ -1439,6 +1748,7 @@ export async function runReviewEval(options = {}, ports = {}) {
               fixture: allowedEvidence,
               prompt,
               scratchDir: scratch.scratchDir,
+              metaDir: scratch.metaDir || null,
               resultPath: scratch.resultPath || null,
               model,
               promptVersion,
@@ -1448,9 +1758,14 @@ export async function runReviewEval(options = {}, ports = {}) {
             let resultFileText = null;
             if (rawResult && typeof rawResult === 'object' && typeof rawResult.resultFileText === 'string') {
               resultFileText = rawResult.resultFileText;
-            } else if (scratch.resultPath && fs.existsSync(scratch.resultPath)) {
-              assertNotSymlink(scratch.resultPath, 'reviewer result file', fs);
-              resultFileText = fs.readFileSync(scratch.resultPath, 'utf8');
+            } else if (scratch.resultPath) {
+              assertNotSymlink(scratch.resultPath, 'reviewer result file', fs, {
+                checkAncestors: true,
+                stopRoots: scratch.metaDir ? [scratch.metaDir] : [],
+              });
+              if (fs.existsSync(scratch.resultPath)) {
+                resultFileText = fs.readFileSync(scratch.resultPath, 'utf8');
+              }
             }
 
             const payload = rawResult && typeof rawResult === 'object' && 'stdout' in rawResult && !('verdict' in rawResult)
@@ -1470,7 +1785,7 @@ export async function runReviewEval(options = {}, ports = {}) {
               durationMs,
             }));
           } catch (err) {
-            if (err?.code === 'EVAL_ISOLATION_VIOLATION') throw err;
+            if (err?.code === 'EVAL_ISOLATION_VIOLATION' || err instanceof CliUsageError) throw err;
             cases.push(scoreReviewCase({
               fixture,
               parsedReview: {
@@ -1522,7 +1837,7 @@ export async function runReviewEval(options = {}, ports = {}) {
   const markdownText = renderReviewEvalMarkdown(report);
 
   if (options.outFile) {
-    const outPath = assertNotSymlink(options.outFile, '--out file', fs, { checkFirstExistingParent: true });
+    const outPath = assertNotSymlink(options.outFile, '--out file', fs, { checkAncestors: true });
     fs.mkdirSync(dirname(outPath), { recursive: true });
     if (outPath.toLowerCase().endsWith('.md')) {
       fs.writeFileSync(outPath, markdownText, 'utf8');
@@ -1532,7 +1847,7 @@ export async function runReviewEval(options = {}, ports = {}) {
   }
 
   if (options.markdownOutFile) {
-    const mdPath = assertNotSymlink(options.markdownOutFile, '--markdown-out file', fs, { checkFirstExistingParent: true });
+    const mdPath = assertNotSymlink(options.markdownOutFile, '--markdown-out file', fs, { checkAncestors: true });
     fs.mkdirSync(dirname(mdPath), { recursive: true });
     fs.writeFileSync(mdPath, markdownText, 'utf8');
   }

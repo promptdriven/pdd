@@ -67,8 +67,8 @@ function summarizeReviewEvalGroup(cases = [], targets = REVIEW_EVAL_TARGETS) {
         : (Array.isArray(row.expected_signals) ? row.expected_signals.length : 0);
       expectedSignalsTotal += expectedCount;
       const matchedCount = Array.isArray(row.matched_signals) ? row.matched_signals.length : 0;
-      if (verdict === 'FAIL') {
-        matchedSignalsTotal += Math.min(expectedCount || matchedCount, matchedCount);
+      if (!isError && verdict === 'FAIL' && expectedCount > 0) {
+        matchedSignalsTotal += Math.min(expectedCount, matchedCount);
       }
 
       if (isError) {

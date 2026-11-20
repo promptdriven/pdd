@@ -17,6 +17,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import {
+  CliUsageError,
   REVIEW_EVAL_TARGETS,
   assertCleanPublicText,
   computeNorthStarScorecard,
@@ -27,8 +28,10 @@ import {
   DEFAULT_MANIFEST_PATH,
   FORBIDDEN_SCRATCH_PATHS,
   assertPromptIsolation,
+  assertSafeCheckedOutSymlink,
   buildReviewerPrompt,
   createCliReviewerRunner,
+  inspectFixtureDiffReadOnly,
   loadReviewEvalManifest,
   matchDefectSignals,
   parseReviewEvalCliArgs,
@@ -186,12 +189,48 @@ test('manifest validation supports string signals and merge_commit while rejecti
   }), /must not define expected_signals/);
 
   assert.throws(() => validateFixtureSpec({
-    id: 'redos-signal',
+    id: 'regex-signal',
     label: 'bad',
     base: 'a1b09cb9',
     head: '0db39638',
     expected_signals: [{ id: 'evil', patterns: ['(a+)+b'] }],
-  }), /exponential regex/);
+  }), /Refusing regex syntax/);
+
+  // Safe literal/wildcard/alternation patterns work without RegExp
+  const wildcardSpec = validateFixtureSpec({
+    id: 'wildcard-signal',
+    label: 'bad',
+    base: 'a1b09cb9',
+    head: '0db39638',
+    expected_signals: [{ id: 'wild', patterns: ['deleted * safety tests|removed * safety tests'] }],
+  });
+  assert.deepEqual(
+    matchDefectSignals(['P1 test/a.test.mjs:1 Removed 19 existing safety tests'], wildcardSpec.expected_signals).matched_signals,
+    ['wild'],
+  );
+  assert.deepEqual(
+    matchDefectSignals(['P1 test/a.test.mjs:1 Formatting nit'], wildcardSpec.expected_signals).matched_signals,
+    [],
+  );
+
+  // Reject min_signals_required === 0 when expected_signals is non-empty, and > 0 when empty
+  assert.throws(() => validateFixtureSpec({
+    id: 'bad-zero-min',
+    label: 'bad',
+    base: 'a1b09cb9',
+    head: '0db39638',
+    expected_signals: ['deleted safety tests'],
+    min_signals_required: 0,
+  }), /invalid min_signals_required/);
+
+  assert.throws(() => validateFixtureSpec({
+    id: 'empty-nonzero-min',
+    label: 'bad',
+    base: 'a1b09cb9',
+    head: '0db39638',
+    expected_signals: [],
+    min_signals_required: 1,
+  }), /invalid min_signals_required/);
 
   assert.throws(() => loadReviewEvalManifest({
     fixtures: [
@@ -957,10 +996,17 @@ test('CLI flag parsing, dry-run against real repo manifest, and isolated live --
   assert.ok(existsSync(dryJsonOut));
   assert.ok(existsSync(dryMdOut));
 
-  // When full repo history is present (non-shallow clone), also verify the shipped default manifest (#2559 + #2560) resolves cleanly
-  const hasReal2559 = spawnSync('git', ['cat-file', '-e', 'a1b09cb9^{commit}'], { encoding: 'utf8' }).status === 0
-    && spawnSync('git', ['cat-file', '-e', '1a4b37803^{commit}'], { encoding: 'utf8' }).status === 0;
-  if (hasReal2559) {
+  // When full repo history is present (non-shallow clone), also verify all 4 shipped manifest SHAs (#2559 + #2560) resolve cleanly
+  const shippedShas = [
+    'a1b09cb9641d021d391a87ffd9f4d3ba90340b85',
+    '0db39638250f8fd11bc08bffa78ef8c4a6b03be8',
+    '515dae711345f93b622ed19d4a3f825eb4e339d4',
+    '1a4b37803022b604f2ab576c9683a79e47943135',
+  ];
+  const hasRealShippedCommits = shippedShas.every(
+    sha => spawnSync('git', ['cat-file', '-e', `${sha}^{commit}`], { encoding: 'utf8' }).status === 0,
+  );
+  if (hasRealShippedCommits) {
     const realDry = spawnSync(process.execPath, [scriptPath, '--dry-run', '--json'], { encoding: 'utf8' });
     assert.equal(realDry.status, 0, realDry.stderr);
     const realParsed = JSON.parse(realDry.stdout);
@@ -1034,4 +1080,456 @@ writeFileSync(resultPath, JSON.stringify(verdictObj), 'utf8');
   assert.equal(seenEnv.manualFileExistsInCwd, false);
   assert.equal(seenEnv.modelArg, 'stub-llm-v1');
   assertCleanPublicText(readFileSync(liveMdOut, 'utf8'));
+});
+
+test('regression: symlink ancestor bypass is strictly refused across --out, --markdown-out, --work-dir, manifest, --prompt-template, --compare, and resultPath', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-eval-anc-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const realTarget = join(root, 'real-target');
+  const existingSub = join(realTarget, 'existing-sub');
+  mkdirSync(existingSub, { recursive: true });
+  const symlinkDir = join(root, 'symlink-dir');
+  symlinkSync(realTarget, symlinkDir);
+
+  // Create real files inside existingSub so the immediate parent directory EXISTS (previously bypassed!)
+  const realManifest = join(existingSub, 'manifest.json');
+  const realTemplate = join(existingSub, 'template.txt');
+  const realCompare = join(existingSub, 'compare.json');
+  writeFileSync(realManifest, JSON.stringify(makeSyntheticManifest()), 'utf8');
+  writeFileSync(realTemplate, 'Review:\n{{EVIDENCE}}', 'utf8');
+  writeFileSync(realCompare, JSON.stringify({ cases: [] }), 'utf8');
+
+  const stub = stubScratchPort();
+  const passReviewer = () => ({ verdict: 'PASS', summary: 'ok', mustFix: [] });
+
+  // --out symlinkDir/existing-sub/report.json
+  await assert.rejects(
+    () => runReviewEval(
+      { manifest: makeSyntheticManifest(), outFile: join(symlinkDir, 'existing-sub', 'report.json') },
+      { prepareScratch: stub.prepareScratch, runReviewer: passReviewer },
+    ),
+    /Refusing symlink for --out file/,
+  );
+
+  // --markdown-out symlinkDir/existing-sub/report.md
+  await assert.rejects(
+    () => runReviewEval(
+      { manifest: makeSyntheticManifest(), markdownOutFile: join(symlinkDir, 'existing-sub', 'report.md') },
+      { prepareScratch: stub.prepareScratch, runReviewer: passReviewer },
+    ),
+    /Refusing symlink for --markdown-out file/,
+  );
+
+  // --work-dir symlinkDir/existing-sub
+  assert.throws(
+    () => prepareScratchCheckout({
+      repoRoot: root,
+      workDirRoot: join(symlinkDir, 'existing-sub'),
+      fixture: makeSyntheticManifest().fixtures[0],
+    }),
+    /Refusing symlink for work-dir/,
+  );
+
+  // manifest under symlinkDir/existing-sub/manifest.json
+  assert.throws(
+    () => loadReviewEvalManifest(join(symlinkDir, 'existing-sub', 'manifest.json')),
+    /Refusing symlink for manifest file/,
+  );
+
+  // --prompt-template under symlinkDir/existing-sub/template.txt
+  await assert.rejects(
+    () => runReviewEval(
+      { manifest: makeSyntheticManifest(), promptTemplate: join(symlinkDir, 'existing-sub', 'template.txt') },
+      { prepareScratch: stub.prepareScratch, runReviewer: passReviewer },
+    ),
+    /Refusing symlink for prompt template/,
+  );
+
+  // --compare under symlinkDir/existing-sub/compare.json
+  await assert.rejects(
+    () => runReviewEval(
+      { compareFiles: [join(symlinkDir, 'existing-sub', 'compare.json')] },
+    ),
+    /Refusing symlink for compare report/,
+  );
+
+  // resultPath whose parent dir inside metaDir was replaced with a symlink
+  const fakeMetaDir = join(root, 'meta-dir');
+  const outsideDir = join(root, 'outside-result');
+  mkdirSync(fakeMetaDir, { recursive: true });
+  mkdirSync(outsideDir, { recursive: true });
+  writeFileSync(join(outsideDir, 'review-result.json'), '{"verdict":"PASS","summary":"hijacked","mustFix":[]}', 'utf8');
+  const linkedResultDir = join(fakeMetaDir, 'result');
+  symlinkSync(outsideDir, linkedResultDir);
+
+  const tamperedRes = await runReviewEval(
+    { manifest: { fixtures: [makeSyntheticManifest().fixtures[0]] } },
+    {
+      prepareScratch: () => ({
+        scratchDir: join(root, 'stub-scratch'),
+        metaDir: fakeMetaDir,
+        resultPath: join(linkedResultDir, 'review-result.json'),
+        changedFiles: ['M\tsrc/a.mjs'],
+        diffStat: '',
+        diffExcerpt: '',
+        cleanup() {},
+      }),
+      runReviewer: () => '',
+    },
+  );
+  assert.equal(tamperedRes.cases[0].verdict, 'ERROR');
+  assert.match(tamperedRes.cases[0].parse_error, /Refusing symlink for reviewer result file/);
+});
+
+test('regression: chained/loop/dangling git-tree symlinks are refused pre-checkout and post-checkout', t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-eval-symchain-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const initRepo = name => {
+    const dir = join(root, name);
+    mkdirSync(dir, { recursive: true });
+    gitIn(dir, ['init', '-q']);
+    gitIn(dir, ['config', 'user.name', 'Test User']);
+    gitIn(dir, ['config', 'user.email', 'test@example.invalid']);
+    gitIn(dir, ['config', 'commit.gpgsign', 'false']);
+    writeFileSync(join(dir, 'ok.txt'), 'ok\n');
+    gitIn(dir, ['add', '.']);
+    gitIn(dir, ['commit', '-qm', 'base']);
+    return { dir, baseSha: gitIn(dir, ['rev-parse', 'HEAD']) };
+  };
+
+  // 1. Chained symlink escape: a/b/up -> ../.. (inside root), a/b/escape -> up/.. (escapes via a/b/up!)
+  const chained = initRepo('chained-repo');
+  mkdirSync(join(chained.dir, 'a/b'), { recursive: true });
+  symlinkSync('../..', join(chained.dir, 'a/b/up'));
+  symlinkSync('up/..', join(chained.dir, 'a/b/escape'));
+  gitIn(chained.dir, ['add', 'a/b/up', 'a/b/escape']);
+  gitIn(chained.dir, ['commit', '-qm', 'chained escape']);
+  const chainedHead = gitIn(chained.dir, ['rev-parse', 'HEAD']);
+
+  const workDir = join(root, 'work');
+  mkdirSync(workDir, { recursive: true });
+  assert.throws(
+    () => prepareScratchCheckout({
+      repoRoot: chained.dir,
+      workDirRoot: workDir,
+      fixture: validateFixtureSpec({ id: 'chained-escape', label: 'clean', base: chained.baseSha, head: chainedHead }),
+    }),
+    /Refusing escaping symlink/,
+  );
+  assert.deepEqual(readdirSync(workDir), []);
+
+  // 2. Symlink loop inside git tree is refused
+  const loopRepo = initRepo('loop-repo');
+  symlinkSync('loop-b', join(loopRepo.dir, 'loop-a'));
+  symlinkSync('loop-a', join(loopRepo.dir, 'loop-b'));
+  gitIn(loopRepo.dir, ['add', 'loop-a', 'loop-b']);
+  gitIn(loopRepo.dir, ['commit', '-qm', 'loop']);
+  const loopHead = gitIn(loopRepo.dir, ['rev-parse', 'HEAD']);
+  assert.throws(
+    () => prepareScratchCheckout({
+      repoRoot: loopRepo.dir,
+      workDirRoot: workDir,
+      fixture: validateFixtureSpec({ id: 'loop-case', label: 'clean', base: loopRepo.baseSha, head: loopHead }),
+    }),
+    /Refusing symlink loop/,
+  );
+
+  // 3. Dangling symlink in git tree pointing outside scratch is refused
+  const danglingRepo = initRepo('dangling-repo');
+  mkdirSync(join(danglingRepo.dir, 'sub'), { recursive: true });
+  symlinkSync('../../nonexistent-outside-dir/secret', join(danglingRepo.dir, 'sub/dangling'));
+  gitIn(danglingRepo.dir, ['add', 'sub/dangling']);
+  gitIn(danglingRepo.dir, ['commit', '-qm', 'dangling escape']);
+  const danglingHead = gitIn(danglingRepo.dir, ['rev-parse', 'HEAD']);
+  assert.throws(
+    () => prepareScratchCheckout({
+      repoRoot: danglingRepo.dir,
+      workDirRoot: workDir,
+      fixture: validateFixtureSpec({ id: 'dangling-escape', label: 'clean', base: danglingRepo.baseSha, head: danglingHead }),
+    }),
+    /Refusing escaping symlink/,
+  );
+
+  // 4. Post-checkout defense-in-depth directly rejects dangling symlinks escaping realScratch (direct, via missing dir, and chained)
+  const postScratch = join(root, 'post-scratch');
+  mkdirSync(join(postScratch, 'a/b'), { recursive: true });
+  writeFileSync(join(postScratch, 'inside.txt'), 'safe\n');
+  symlinkSync('../../nonexistent-outside/file', join(postScratch, 'a/direct-dangling'));
+  symlinkSync('missing-dir/../../../outside-file', join(postScratch, 'a/backtrack-dangling'));
+  symlinkSync('../..', join(postScratch, 'a/b/up'));
+  symlinkSync('up/../nonexistent-outside', join(postScratch, 'a/b/chained-dangling'));
+  symlinkSync('../future-inside.txt', join(postScratch, 'a/safe-dangling'));
+  symlinkSync('../inside.txt', join(postScratch, 'a/safe-link'));
+
+  assert.throws(() => assertSafeCheckedOutSymlink(postScratch, 'a/direct-dangling'), /Refusing symlink escaping scratch checkout/);
+  assert.throws(() => assertSafeCheckedOutSymlink(postScratch, 'a/backtrack-dangling'), /Refusing symlink escaping scratch checkout/);
+  assert.throws(() => assertSafeCheckedOutSymlink(postScratch, 'a/b/chained-dangling'), /Refusing symlink escaping scratch checkout/);
+  assert.ok(assertSafeCheckedOutSymlink(postScratch, 'a/safe-dangling').endsWith('future-inside.txt'));
+  assert.ok(assertSafeCheckedOutSymlink(postScratch, 'a/safe-link').endsWith('inside.txt'));
+});
+
+test('regression: inherited GIT_* env vars, global gitconfig defaultBranch=eval-base, .gitignore tracked files, and GH_CONFIG_DIR isolation', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-eval-gitenv-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  // Decoy repo whose GIT_DIR/GIT_WORK_TREE are injected into env to verify they are stripped
+  const decoyRepo = join(root, 'decoy-repo');
+  mkdirSync(decoyRepo, { recursive: true });
+  gitIn(decoyRepo, ['init', '-q']);
+  gitIn(decoyRepo, ['config', 'user.name', 'Decoy']);
+  gitIn(decoyRepo, ['config', 'user.email', 'decoy@example.invalid']);
+  gitIn(decoyRepo, ['config', 'commit.gpgsign', 'false']);
+  writeFileSync(join(decoyRepo, 'decoy.txt'), 'decoy\n');
+  gitIn(decoyRepo, ['add', '.']);
+  gitIn(decoyRepo, ['commit', '-qm', 'decoy']);
+
+  // Poisoned HOME with global gitconfig setting init.defaultBranch = eval-base
+  const fakeHome = join(root, 'fake-home');
+  mkdirSync(fakeHome, { recursive: true });
+  writeFileSync(join(fakeHome, '.gitconfig'), '[init]\n\tdefaultBranch = eval-base\n', 'utf8');
+  const fakeHostGhDir = join(root, 'host-gh-config');
+  mkdirSync(fakeHostGhDir, { recursive: true });
+  writeFileSync(join(fakeHostGhDir, 'hosts.yml'), 'github.com:\n  oauth_token: gho_must_not_be_seen\n', 'utf8');
+
+  // Target fixture repo with a .gitignore-matched force-tracked file
+  const targetRepo = join(root, 'target-repo');
+  mkdirSync(targetRepo, { recursive: true });
+  gitIn(targetRepo, ['init', '-q']);
+  gitIn(targetRepo, ['config', 'user.name', 'Test User']);
+  gitIn(targetRepo, ['config', 'user.email', 'test@example.invalid']);
+  gitIn(targetRepo, ['config', 'commit.gpgsign', 'false']);
+  writeFileSync(join(targetRepo, '.gitignore'), '*.ignored\n');
+  writeFileSync(join(targetRepo, 'tracked.ignored'), 'v1\n');
+  writeFileSync(join(targetRepo, 'normal.txt'), 'a\n');
+  gitIn(targetRepo, ['add', '-f', '.gitignore', 'tracked.ignored', 'normal.txt']);
+  gitIn(targetRepo, ['commit', '-qm', 'base']);
+  const baseSha = gitIn(targetRepo, ['rev-parse', 'HEAD']);
+
+  writeFileSync(join(targetRepo, 'tracked.ignored'), 'v2\n');
+  writeFileSync(join(targetRepo, 'normal.txt'), 'b\n');
+  gitIn(targetRepo, ['add', '-f', 'tracked.ignored', 'normal.txt']);
+  gitIn(targetRepo, ['commit', '-qm', 'head']);
+  const headSha = gitIn(targetRepo, ['rev-parse', 'HEAD']);
+
+  const poisonedEnv = {
+    ...process.env,
+    HOME: fakeHome,
+    GIT_DIR: join(decoyRepo, '.git'),
+    GIT_WORK_TREE: decoyRepo,
+    GIT_INDEX_FILE: join(decoyRepo, '.git', 'index'),
+    GIT_COMMON_DIR: join(decoyRepo, '.git'),
+    GIT_OBJECT_DIRECTORY: join(decoyRepo, '.git', 'objects'),
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: join(decoyRepo, '.git', 'objects'),
+    GH_CONFIG_DIR: fakeHostGhDir,
+  };
+
+  const fixture = validateFixtureSpec({ id: 'gitenv-case', label: 'clean', base: baseSha, head: headSha });
+  const workDir = join(root, 'work');
+  mkdirSync(workDir, { recursive: true });
+
+  const scratch = prepareScratchCheckout({
+    repoRoot: targetRepo,
+    fixture,
+    workDirRoot: workDir,
+    env: poisonedEnv,
+    readOnly: false,
+  });
+  try {
+    // eval-base and HEAD must be distinct commits and preserve .gitignore-matched tracked file!
+    assert.equal(readFileSync(join(scratch.scratchDir, 'tracked.ignored'), 'utf8'), 'v2\n');
+    assert.ok(scratch.changedFiles.includes('M\ttracked.ignored'), `Expected tracked.ignored in changedFiles, got ${scratch.changedFiles}`);
+    assert.ok(scratch.changedFiles.includes('M\tnormal.txt'));
+    const activeBranch = gitIn(scratch.scratchDir, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    assert.equal(activeBranch, 'eval-head');
+    assert.notEqual(
+      gitIn(scratch.scratchDir, ['rev-parse', 'eval-base']),
+      gitIn(scratch.scratchDir, ['rev-parse', 'HEAD']),
+    );
+  } finally {
+    scratch.cleanup();
+  }
+
+  // Verify live runner strips GIT_* repo vars and points GH_CONFIG_DIR at a fresh empty dir inside metaDir
+  const envCapturePath = join(root, 'captured-child-env.json');
+  const probeScript = join(root, 'probe-env.mjs');
+  writeFileSync(probeScript, `
+import { readdirSync, writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(envCapturePath)}, JSON.stringify({
+  GIT_DIR: process.env.GIT_DIR ?? null,
+  GIT_WORK_TREE: process.env.GIT_WORK_TREE ?? null,
+  GIT_INDEX_FILE: process.env.GIT_INDEX_FILE ?? null,
+  GIT_COMMON_DIR: process.env.GIT_COMMON_DIR ?? null,
+  GIT_OBJECT_DIRECTORY: process.env.GIT_OBJECT_DIRECTORY ?? null,
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES ?? null,
+  GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM ?? null,
+  GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL ?? null,
+  GH_CONFIG_DIR: process.env.GH_CONFIG_DIR ?? null,
+  ghConfigEntries: process.env.GH_CONFIG_DIR ? readdirSync(process.env.GH_CONFIG_DIR) : null,
+}));
+process.stdout.write(JSON.stringify({ verdict: 'PASS', summary: 'ok', mustFix: [] }));
+`, 'utf8');
+
+  const liveRes = await runReviewEval(
+    {
+      manifest: { fixtures: [{ id: 'gitenv-live', label: 'clean', base: baseSha, head: headSha }] },
+      repoRoot: targetRepo,
+      workDirRoot: workDir,
+      agentCmd: process.execPath,
+      agentArgs: [probeScript],
+      env: poisonedEnv,
+    },
+  );
+  assert.equal(liveRes.cases[0].verdict, 'PASS');
+  const seen = JSON.parse(readFileSync(envCapturePath, 'utf8'));
+  assert.equal(seen.GIT_DIR, null);
+  assert.equal(seen.GIT_WORK_TREE, null);
+  assert.equal(seen.GIT_INDEX_FILE, null);
+  assert.equal(seen.GIT_COMMON_DIR, null);
+  assert.equal(seen.GIT_OBJECT_DIRECTORY, null);
+  assert.equal(seen.GIT_ALTERNATE_OBJECT_DIRECTORIES, null);
+  assert.equal(seen.GIT_CONFIG_NOSYSTEM, '1');
+  assert.equal(seen.GIT_CONFIG_GLOBAL, process.platform === 'win32' ? 'NUL' : '/dev/null');
+  assert.ok(seen.GH_CONFIG_DIR && seen.GH_CONFIG_DIR !== fakeHostGhDir);
+  assert.ok(seen.GH_CONFIG_DIR.startsWith(workDir), `Expected GH_CONFIG_DIR inside metaDir under ${workDir}, got ${seen.GH_CONFIG_DIR}`);
+  assert.deepEqual(seen.ghConfigEntries, []);
+  assert.deepEqual(readdirSync(workDir), []);
+});
+
+test('regression: --prompt-version rejects prototype keys and typos, non-P3 followUps keep FAIL, signal-killed child fails, scorecard caps signal_recall, and P3 guards hold', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'pdd-eval-reg-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  const manifest = loadReviewEvalManifest(makeSyntheticManifest());
+  const badFix = manifest.fixtures[0];
+
+  // 1. Prototype keys & typos on --prompt-version throw CliUsageError (exitCode 2)
+  for (const badVersion of ['constructor', 'toString', '__proto__', 'autopilot-v99']) {
+    assert.throws(
+      () => buildReviewerPrompt({ fixture: badFix, promptVersion: badVersion }),
+      err => err instanceof CliUsageError && err.exitCode === 2 && /Unknown --prompt-version/.test(err.message),
+    );
+    await assert.rejects(
+      () => runReviewEval(
+        { manifest: makeSyntheticManifest(), promptVersions: [badVersion], dryRun: true },
+        { inspectFixture: () => ({ changedFiles: ['M\tsrc/a.mjs'], diffStat: '' }) },
+      ),
+      err => err instanceof CliUsageError && err.exitCode === 2,
+    );
+  }
+  const scriptPath = resolve('scripts/benchmark/run-review-eval.mjs');
+  const cliProto = spawnSync(process.execPath, [scriptPath, '--prompt-version', 'constructor', '--dry-run'], { encoding: 'utf8' });
+  assert.equal(cliProto.status, 2);
+
+  // Custom --prompt-template still allows custom prompt-version labels
+  const customTpl = join(root, 'custom.txt');
+  writeFileSync(customTpl, 'Custom review prompt\n{{EVIDENCE}}', 'utf8');
+  const customDry = await runReviewEval(
+    { manifest: makeSyntheticManifest(), promptTemplate: customTpl, promptVersions: ['custom-exp-v2'], dryRun: true },
+    { inspectFixture: () => ({ changedFiles: ['M\tsrc/a.mjs'], diffStat: '' }) },
+  );
+  assert.equal(customDry.dry_run_plan[0].prompt_version, 'custom-exp-v2');
+
+  // 2. Non-P3 entries inside obj.followUps are routed to mustFix and cannot demote FAIL -> PASS
+  const p1InFollowUps = parseReviewerOutput({
+    verdict: 'FAIL',
+    summary: 'Blocking bug placed in followUps.',
+    mustFix: [],
+    followUps: ['P1 src/workflow-github.mjs:10 Missing path check'],
+  });
+  assert.equal(p1InFollowUps.verdict, 'FAIL');
+  assert.equal(p1InFollowUps.mustFix.length, 1);
+  assert.equal(p1InFollowUps.followUps.length, 0);
+
+  const unprefixedInFollowUps = parseReviewerOutput({
+    verdict: 'FAIL',
+    summary: 'Unprefixed issue in followUps.',
+    mustFix: [],
+    followUps: ['Deleted safety tests without justification'],
+  });
+  assert.equal(unprefixedInFollowUps.verdict, 'FAIL');
+  assert.equal(unprefixedInFollowUps.mustFix.length, 1);
+
+  const p2InPassFollowUps = parseReviewerOutput({
+    verdict: 'PASS',
+    summary: 'Claimed PASS with P2 in followUps.',
+    mustFix: [],
+    followUps: ['P2 src/a.mjs:5 Handle edge case'],
+  });
+  assert.equal(p2InPassFollowUps.verdict, 'FAIL');
+  assert.equal(p2InPassFollowUps.mustFix.length, 1);
+
+  const genuineP3FollowUp = parseReviewerOutput({
+    verdict: 'FAIL',
+    summary: 'Only P3.',
+    mustFix: [],
+    followUps: ['P3 src/a.mjs:9 Minor rename'],
+  });
+  assert.equal(genuineP3FollowUp.verdict, 'PASS');
+  assert.equal(genuineP3FollowUp.mustFix.length, 0);
+  assert.equal(genuineP3FollowUp.followUps.length, 1);
+
+  // 3. Linear fenced JSON extraction handles non-JSON fences + inline JSON fence + many backticks cleanly
+  const multiFence = [
+    '```diff',
+    '-old',
+    '+new',
+    '```',
+    '```'.repeat(500),
+    '```json',
+    '{"verdict":"FAIL","summary":"Fenced ok","mustFix":["P1 a.mjs:1 fix"]}',
+    '```',
+  ].join('\n');
+  assert.equal(parseReviewerOutput(multiFence).verdict, 'FAIL');
+  assert.equal(parseReviewerOutput('```json {"verdict":"PASS","summary":"inline","mustFix":[]}```').verdict, 'PASS');
+
+  // 4. Signal-killed child process fails loudly (even when stdout was written) and maps SIGTERM -> 143
+  const sigRunner = createCliReviewerRunner({
+    agentCmd: process.execPath,
+    agentArgs: ['-e', 'process.stdout.write("partial"); process.kill(process.pid, "SIGTERM");'],
+  });
+  await assert.rejects(
+    () => sigRunner({ prompt: 'test', scratchDir: root, resultPath: null, model: 'test-model' }),
+    /terminated by signal SIGTERM \(exit code 143\)/,
+  );
+
+  const enoentRunner = createCliReviewerRunner({
+    agentCmd: join(root, 'definitely-missing-binary-xyz'),
+  });
+  await assert.rejects(
+    () => enoentRunner({ prompt: 'test', scratchDir: root, resultPath: null, model: 'test-model' }),
+    /Reviewer command failed \(ENOENT\)/,
+  );
+
+  // 5. scorecard.mjs caps signal_recall <= 100% when expectedCount === 0 or matched > expected or error row
+  const cappedCard = computeReviewEvalScorecard([
+    { label: 'bad', verdict: 'FAIL', caught: true, expected_signals_count: 0, matched_signals: ['spurious-1', 'spurious-2'] },
+    { label: 'bad', verdict: 'FAIL', caught: true, expected_signals_count: 1, matched_signals: ['real-1', 'extra-2'] },
+    { label: 'bad', verdict: 'FAIL', outcome: 'error', caught: false, expected_signals_count: 1, matched_signals: ['err-sig'] },
+    { label: 'clean', verdict: 'PASS', false_positive: false },
+  ]);
+  assert.equal(cappedCard.expected_signals_total, 2);
+  assert.equal(cappedCard.matched_signals_total, 1);
+  assert.equal(cappedCard.signal_recall, 50);
+
+  // 6. P3 guards: safeChangedFiles filters forbidden source column in tab-separated renames & resolveCommitOrThrow validates git refs
+  const renamePrompt = buildReviewerPrompt({
+    fixture: badFix,
+    changedFiles: [
+      'R100\ttest/manual/independent-code-review.md\tdocs/moved.md',
+      'M\tsrc/dir with space/file.mjs',
+    ],
+  });
+  assert.ok(!renamePrompt.includes('independent-code-review.md'));
+  assert.ok(!renamePrompt.includes('docs/moved.md'));
+  assert.ok(renamePrompt.includes('src/dir with space/file.mjs'));
+
+  assert.throws(
+    () => inspectFixtureDiffReadOnly({
+      repoRoot: root,
+      fixture: { id: 'raw-bad-ref', base: '--upload-pack=evil', head: 'HEAD' },
+    }),
+    /Unsafe or invalid/,
+  );
 });
