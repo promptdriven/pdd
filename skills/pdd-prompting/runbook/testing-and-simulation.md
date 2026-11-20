@@ -26,6 +26,7 @@
   - `invalid-context`: `context` rows must have exact keys `{"prompt_path", "paths"}` (`<= 16` files, `<= 120 KiB`).
   - `unchecked-criteria`: every criterion needs at least one exact check.
   - `run-admission-failed` / `repository-graph-catalog-error`: raise `--max-calls` (up to `1000`) or lower `max_calls` in prompt `calls`.
+  - `unknown-simulation-operation` / `port-operation-kind-or-access`: bind only operations declared for the invoked entry and keep one resource family per `<port>.*` prefix (§5, §21).
 
 ## 12. `pdd simulate` and Save as test
 

@@ -1,12 +1,12 @@
-// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 51833091a7cec309c86d19b859f821a1713585b55718251235dbd57872ddd76e).
+// Generated from prompts/cli/autopilot-doctor.prompt.md (sha256: 84aaa7a5ad61a53e1ee91bb4edc155cd796ed85ca4cdfbc326dbf095b4c8f9eb).
 import {rememberSecrets, knownSecretValues} from './secret-redaction.mjs';
 import * as nativeFiles from 'node:fs';
 import {constants} from 'node:fs';
-import {join, resolve, delimiter} from 'node:path';
+import {dirname, join, resolve, delimiter} from 'node:path';
 import {runAgentProcess, parseAgentAuthStatus} from './agent-adapters.mjs';
 import {loadAgentDefinitions} from './agent-config.mjs';
 import {readCodexLimits} from './codex-limits.mjs';
-import {isCloudAccountsActive, managedCodexAuthPath, pddManagedCodexHome} from './login-pool.mjs';
+import {isCloudAccountsActive, managedClaudeSettingsPath, managedCodexAuthPath, pddManagedCodexHome} from './login-pool.mjs';
 import {checkWorkflowAgents} from './workflow-agents.mjs';
 import {githubOriginRepository} from './workflow-worktree.mjs';
 import {health as runtimeHealthCheck, runtimeClientSlice} from './runtime-seam.mjs';
@@ -33,7 +33,26 @@ export async function resolveAutopilotAgent(input, ports = {}) {
     }
   }
   const files = ports.files ?? nativeFiles;
-  const invocation = def => {
+  const isRegularManagedFile = filePath => {
+    try {
+      const useLstat = files === nativeFiles
+        || (
+          typeof files.lstatSync === 'function'
+          && (files.lstatSync !== nativeFiles.lstatSync || files.statSync === nativeFiles.statSync)
+        );
+      if (useLstat) {
+        const dirStat = files.lstatSync(dirname(filePath));
+        if (!dirStat || dirStat.isSymbolicLink() || !dirStat.isDirectory()) return false;
+      }
+      const st = useLstat ? files.lstatSync(filePath) : files.statSync?.(filePath);
+      if (!st) return false;
+      if (typeof st.isSymbolicLink === 'function' && st.isSymbolicLink()) return false;
+      return Boolean(st.isFile?.());
+    } catch {
+      return false;
+    }
+  };
+  const invocation = (def, { allowManagedCodex = true } = {}) => {
     const env = {...caller, ...def?.env};
     if (profile) {
       env.HOME = profile.home;
@@ -41,16 +60,17 @@ export async function resolveAutopilotAgent(input, ports = {}) {
       for (const name of ALL_PROVIDER_CONFIG_VARS) {
         if (name === variable && profile.configHome) env[name] = profile.configHome; else delete env[name];
       }
-    } else if (def?.kind === 'codex' && !(typeof env.CODEX_HOME === 'string' && env.CODEX_HOME.trim())) {
+    }
+    if (allowManagedCodex && !profile?.configHome && def?.kind === 'codex' && !(typeof env.CODEX_HOME === 'string' && env.CODEX_HOME.trim())) {
       try {
-        if (isCloudAccountsActive({env, provider: 'codex'}, {fs: files}) && files.statSync?.(managedCodexAuthPath(env))?.isFile()) {
+        if (isCloudAccountsActive({env, poolPath: input.pool, provider: 'codex'}, {fs: files}) && isRegularManagedFile(managedCodexAuthPath(env))) {
           env.CODEX_HOME = pddManagedCodexHome(env);
         }
       } catch {}
     }
     return env;
   };
-  let definitions = [], configurationError = null, agent = null;
+  let definitions = [], configurationError = null, agent = null, managedClaudeSettings = null;
   const installed = [], cwd = input.cwd;
   try { definitions = await (ports.agentDefinitions ?? loadAgentDefinitions)({cwd,env:definitionEnv}); }
   catch (error) { configurationError = error; }
@@ -86,14 +106,39 @@ export async function resolveAutopilotAgent(input, ports = {}) {
           if (agent) break;
         }
       } else if (['codex','claude'].includes(def.kind)) {
-        const status=await run(def.kind==='codex'?['login','status']:['auth','status','--json']);
+        const claudeSettingsFile = def.kind === 'claude' ? managedClaudeSettingsPath(env) : null;
+        const useManagedClaude = def.kind === 'claude'
+          && !profile?.configHome
+          && !(typeof env.CLAUDE_CONFIG_DIR === 'string' && env.CLAUDE_CONFIG_DIR.trim())
+          && isCloudAccountsActive({env, poolPath: input.pool, provider: 'claude'}, {fs: files})
+          && isRegularManagedFile(claudeSettingsFile);
+        let status = await run(
+          def.kind === 'codex'
+            ? ['login','status']
+            : (useManagedClaude ? ['--settings', claudeSettingsFile, 'auth', 'status', '--json'] : ['auth','status','--json']),
+        );
         installed.push(def);
-        if (parseAgentAuthStatus({agent:def.kind,result:status})==='ready') { agent=def; break; }
+        if (parseAgentAuthStatus({agent:def.kind,result:status})==='ready') {
+          agent=def;
+          if (useManagedClaude) managedClaudeSettings = claudeSettingsFile;
+          break;
+        }
+        if (useManagedClaude) {
+          status = await run(['auth','status','--json']);
+          if (parseAgentAuthStatus({agent:def.kind,result:status})==='ready') { agent=def; break; }
+        }
       }
     } catch { /* Another provider may be ready. Never echo provider output. */ }
   }
   const preferred=installed[0] ?? definitions[0];
-  return {agent,preferred,installed,env:invocation(agent??preferred),configurationError};
+  return {
+    agent,
+    preferred,
+    installed,
+    env:invocation(agent??preferred, { allowManagedCodex: Boolean(agent) }),
+    ...(managedClaudeSettings ? { managedClaudeSettings } : {}),
+    configurationError,
+  };
 }
 
 export async function runAutopilotDoctor(input, ports = {}) {
@@ -177,9 +222,14 @@ export async function runAutopilotDoctor(input, ports = {}) {
     configurationFix=`vi ${quote(path)}`;
     add('agent-config','fail',`Cannot load agent configuration: ${path}`,configurationFix);
   }
-  const {agent,preferred,installed}=selection;
+  const {agent,preferred,installed,managedClaudeSettings}=selection;
   const login = `${quote(preferred?.command ?? 'codex')}${preferred?.kind==='claude'?' auth login':['agy','gemini'].includes(preferred?.kind)?'':' login'}`;
-  const statusArgs={codex:'login status',claude:'auth status --json',agy:'models',gemini:'--version'};
+  const statusArgs={
+    codex:'login status',
+    claude:managedClaudeSettings?`--settings ${quote(managedClaudeSettings)} auth status --json`:'auth status --json',
+    agy:'models',
+    gemini:'--version',
+  };
   add('agent',agent?'pass':configurationFix?'warn':'fail',agent?`${agent.kind} signed in`:'Sign in to a configured agent; account missing or unavailable',configurationFix??(agent?`${quote(agent.command ?? agent.kind)} ${statusArgs[agent.kind]}`:installed.length?login:'npm install -g @openai/codex'));
   if (!configurationFix && !agent && !installed.length) add('agent-signin','fail','Sign in after installing Codex, or install Claude Code and sign in',login);
   let usage = {state:'unknown'};
