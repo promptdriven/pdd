@@ -6699,8 +6699,8 @@ async function sweepFiles(ctx) {
 
 async function runPostMergeCheck(ctx) {
   if (!ctx.repo || ctx.budget?.state === 'low' || ctx.budget?.state === 'reserve') return;
-  const hasMerged = chronological(ctx.fs, ctx.root).some(row => row.outcome === 'merged' && Number.isSafeInteger(row.pr) && row.pr > 0);
-  if (!hasMerged && typeof ctx.ports.checkPostMerge !== 'function') return;
+  const hasCandidatePr = chronological(ctx.fs, ctx.root).some(row => row.postMerge !== true && Number.isSafeInteger(row.pr) && row.pr > 0);
+  if (!hasCandidatePr && typeof ctx.ports.checkPostMerge !== 'function') return;
   try {
     const regressionsMod = await import('./autopilot-regressions.mjs');
     const checker = ctx.ports.checkPostMerge ?? regressionsMod.checkPostMergeRegressions;
