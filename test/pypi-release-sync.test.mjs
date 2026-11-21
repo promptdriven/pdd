@@ -11,6 +11,7 @@ import {
   normalizeReleaseTag,
   readPyprojectVersion,
   readPythonInitVersion,
+  resolveProductionDependencies,
   stagePypiBundle,
   syncPypiVersion,
 } from '../scripts/sync-pypi-version.mjs';
@@ -44,6 +45,8 @@ test('#3498 package.json, python/pyproject.toml, and python/pdd_cli/__init__.py 
   assert.match(pyproject, /^name\s*=\s*"pdd-cli"/m);
   assert.match(pyproject, /^license\s*=\s*"MIT"/m);
   assert.match(pyproject, /^pdd\s*=\s*"pdd_cli\.cli:main"/m);
+  assert.match(pyproject, /^pdd-codex\s*=\s*"pdd_cli\.cli:main_codex"/m);
+  assert.match(pyproject, /^pdd-claude\s*=\s*"pdd_cli\.cli:main_claude"/m);
   assert.match(pyproject, /^\[tool\.setuptools\]\s*\npackages\s*=\s*\["pdd_cli"\]/m);
   assert.doesNotMatch(pyproject, /packages\.find/);
 
@@ -97,6 +100,8 @@ test('#3498 release workflow validates release tags, smoke-tests offline PyPI pd
   assert.match(workflow, /lint --local/);
   assert.match(workflow, /npm publish[\s\S]*--access public --provenance/);
   assert.match(workflow, /environment:\s*pypi-publish/);
+  assert.match(workflow, /npm ci --ignore-scripts/);
+  assert.doesNotMatch(workflow, /ci-install\.mjs/);
   assert.match(workflow, /pypa\/gh-action-pypi-publish@release\/v1/);
   assert.match(workflow, /password:\s*\$\{\{\s*secrets\.PYPI_API_TOKEN\s*\}\}[\s\S]*?attestations:\s*false/);
 });
@@ -135,6 +140,9 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
     bundleDir: join(isolatedPyPkg, 'pdd_cli', '_bundled'),
   });
   assert.equal(existsSync(join(stagedBundleDir, 'bin', 'pdd.mjs')), true);
+  assert.equal(existsSync(join(stagedBundleDir, 'bin', 'pdd-codex.mjs')), true);
+  assert.equal(existsSync(join(stagedBundleDir, 'bin', 'pdd-claude.mjs')), true);
+  assert.equal(existsSync(join(stagedBundleDir, 'prompts', 'cli')), false, 'prompts/cli/ must not be staged in PyPI _bundled');
   assert.equal(existsSync(join(root, 'python', 'pdd_cli', '_bundled')), false, 'repo working tree stays clean');
 
   // 2. Create a real `python -m venv --without-pip` with a site-packages module (`demo_mod.py`) to verify:
@@ -159,6 +167,31 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
   );
   chmodSync(pyWrapperBin, 0o755);
 
+  const pyCodexBin = join(pyBinDir, 'pdd-codex');
+  writeFileSync(
+    pyCodexBin,
+    `#!${venvPy}\nimport sys\nsys.path.insert(0, ${JSON.stringify(isolatedPyPkg)})\nfrom pdd_cli.cli import main_codex\nraise SystemExit(main_codex())\n`,
+  );
+  chmodSync(pyCodexBin, 0o755);
+
+  const pyClaudeBin = join(pyBinDir, 'pdd-claude');
+  writeFileSync(
+    pyClaudeBin,
+    `#!${venvPy}\nimport sys\nsys.path.insert(0, ${JSON.stringify(isolatedPyPkg)})\nfrom pdd_cli.cli import main_claude\nraise SystemExit(main_claude())\n`,
+  );
+  chmodSync(pyClaudeBin, 0o755);
+
+  writeFileSync(
+    join(nodeOnlyBinDir, 'codex'),
+    `#!${process.execPath}\nconsole.log(JSON.stringify({ bin: 'fake-codex', argv: process.argv.slice(2) }));\n`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(nodeOnlyBinDir, 'claude'),
+    `#!${process.execPath}\nconsole.log(JSON.stringify({ bin: 'fake-claude', argv: process.argv.slice(2) }));\n`,
+    { mode: 0o755 },
+  );
+
   const baseOfflineEnv = {
     ...PY_NO_BYTECODE_ENV,
     HOME: home,
@@ -181,6 +214,35 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
   assert.equal(moduleVer.status, 0, moduleVer.stderr);
   assert.equal(moduleVer.stdout, `${pkgVersion}\n`);
   assert.equal(moduleVer.stderr, '');
+
+  const codexVer = spawnSync(pyCodexBin, ['--version'], { cwd: sandbox, env: baseOfflineEnv, encoding: 'utf8' });
+  assert.equal(codexVer.status, 0, codexVer.stderr);
+  assert.deepEqual(JSON.parse(codexVer.stdout.trim()), { bin: 'fake-codex', argv: ['--version'] });
+  assert.equal(codexVer.stderr, '');
+
+  const claudeVer = spawnSync(pyClaudeBin, ['--version'], { cwd: sandbox, env: baseOfflineEnv, encoding: 'utf8' });
+  assert.equal(claudeVer.status, 0, claudeVer.stderr);
+  assert.deepEqual(JSON.parse(claudeVer.stdout.trim()), { bin: 'fake-claude', argv: ['--version'] });
+  assert.equal(claudeVer.stderr, '');
+
+  const entryCheck = spawnSync(
+    venvPy,
+    [
+      '-B',
+      '-c',
+      [
+        'import os',
+        'from pathlib import Path',
+        'from pdd_cli import __version__, cli',
+        'codex_entry, codex_err = cli.resolve_cli_entry(__version__, os.environ, command="pdd-codex")',
+        `assert codex_entry == Path(${JSON.stringify(join(stagedBundleDir, 'bin', 'pdd-codex.mjs'))}).resolve(), f"{codex_entry} ({codex_err})"`,
+        'claude_entry, claude_err = cli.resolve_cli_entry(__version__, os.environ, command="pdd-claude")',
+        `assert claude_entry == Path(${JSON.stringify(join(stagedBundleDir, 'bin', 'pdd-claude.mjs'))}).resolve(), f"{claude_entry} ({claude_err})"`,
+      ].join('\n'),
+    ],
+    { cwd: sandbox, env: baseOfflineEnv, encoding: 'utf8' },
+  );
+  assert.equal(entryCheck.status, 0, entryCheck.stderr);
 
   const shimmedPathOut = spawnSync(
     venvPy,
@@ -401,4 +463,143 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
   assert.match(noNode.stderr, /Node\.js >=22\.16\.0/);
 
   assert.equal(existsSync(join(root, 'python', 'pdd_cli', '__pycache__')), false, 'no __pycache__ written to repo working tree');
+});
+
+test('stagePypiBundle stages full resolved production npm dependency closure (scoped, hoisted, nested, cyclic, optional) and excludes devDependencies', t => {
+  const sandbox = mkdtempSync(join(tmpdir(), 'pdd-pypi-closure-'));
+  t.after(() => rmSync(sandbox, { recursive: true, force: true }));
+
+  const writePkg = (relDir, manifest, indexSource) => {
+    const abs = join(sandbox, relDir);
+    mkdirSync(abs, { recursive: true });
+    writeFileSync(join(abs, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+    if (indexSource !== undefined) writeFileSync(join(abs, 'index.mjs'), indexSource);
+  };
+
+  mkdirSync(join(sandbox, 'bin'), { recursive: true });
+  mkdirSync(join(sandbox, 'python', 'pdd_cli'), { recursive: true });
+  writeFileSync(
+    join(sandbox, 'package.json'),
+    `${JSON.stringify({
+      name: '@promptdriven/pdd',
+      version: '0.9.1',
+      type: 'module',
+      bin: {
+        pdd: 'bin/pdd.mjs',
+        'pdd-codex': 'bin/pdd-codex.mjs',
+        'pdd-claude': 'bin/pdd-claude.mjs',
+      },
+      files: ['bin/'],
+      dependencies: {
+        '@scope/direct-dep': '1.0.0',
+        'cycle-a': '1.0.0',
+      },
+      optionalDependencies: {
+        'opt-present': '1.0.0',
+        'opt-missing': '1.0.0',
+      },
+      devDependencies: {
+        'dev-only-pkg': '1.0.0',
+      },
+    }, null, 2)}\n`,
+  );
+  writeFileSync(
+    join(sandbox, 'bin', 'pdd.mjs'),
+    [
+      '#!/usr/bin/env node',
+      'import { directValue } from "@scope/direct-dep";',
+      'import { cycleA } from "cycle-a";',
+      'import { optPresent } from "opt-present";',
+      'if (process.argv[2] === "--version") { console.log("0.9.1"); process.exit(0); }',
+      'console.log(JSON.stringify({ directValue, cycleA, optPresent }));',
+    ].join('\n') + '\n',
+    { mode: 0o755 },
+  );
+  writeFileSync(join(sandbox, 'bin', 'pdd-codex.mjs'), '#!/usr/bin/env node\nconsole.log("codex");\n', { mode: 0o644 });
+  writeFileSync(join(sandbox, 'bin', 'pdd-claude.mjs'), '#!/usr/bin/env node\nconsole.log("claude");\n', { mode: 0o644 });
+  writeFileSync(
+    join(sandbox, 'python', 'pyproject.toml'),
+    '[project]\nname = "pdd-cli"\nversion = "0.9.1"\n',
+  );
+  writeFileSync(join(sandbox, 'python', 'pdd_cli', '__init__.py'), '__version__ = "0.9.1"\n');
+
+  writePkg(
+    'node_modules/@scope/direct-dep',
+    { name: '@scope/direct-dep', version: '1.0.0', type: 'module', main: 'index.mjs', dependencies: { 'hoisted-trans': '1.0.0', 'nested-trans': '1.0.0' } },
+    'import { hoisted } from "hoisted-trans";\nimport { nested } from "nested-trans";\nexport const directValue = `${hoisted}+${nested}`;\n',
+  );
+  writePkg(
+    'node_modules/hoisted-trans',
+    { name: 'hoisted-trans', version: '1.0.0', type: 'module', main: 'index.mjs' },
+    'export const hoisted = "hoisted-ok";\n',
+  );
+  writePkg(
+    'node_modules/@scope/direct-dep/node_modules/nested-trans',
+    { name: 'nested-trans', version: '1.0.0', type: 'module', main: 'index.mjs', dependencies: { '@scope/deep-trans': '1.0.0' } },
+    'import { deep } from "@scope/deep-trans";\nexport const nested = `nested(${deep})`;\n',
+  );
+  writePkg(
+    'node_modules/@scope/deep-trans',
+    { name: '@scope/deep-trans', version: '1.0.0', type: 'module', main: 'index.mjs' },
+    'export const deep = "deep-ok";\n',
+  );
+  writePkg(
+    'node_modules/cycle-a',
+    { name: 'cycle-a', version: '1.0.0', type: 'module', main: 'index.mjs', dependencies: { 'cycle-b': '1.0.0' } },
+    'import { cycleB } from "cycle-b";\nexport const cycleA = `a->${cycleB}`;\n',
+  );
+  writePkg(
+    'node_modules/cycle-b',
+    { name: 'cycle-b', version: '1.0.0', type: 'module', main: 'index.mjs', dependencies: { 'cycle-a': '1.0.0' } },
+    'export const cycleB = "b-ok";\n',
+  );
+  writePkg(
+    'node_modules/opt-present',
+    { name: 'opt-present', version: '1.0.0', type: 'module', main: 'index.mjs' },
+    'export const optPresent = "opt-ok";\n',
+  );
+  writePkg(
+    'node_modules/dev-only-pkg',
+    { name: 'dev-only-pkg', version: '1.0.0', type: 'module', main: 'index.mjs' },
+    'export const devOnly = true;\n',
+  );
+
+  const resolved = resolveProductionDependencies(sandbox).map(item => item.relPath);
+  assert.deepEqual(resolved, [
+    'node_modules/@scope/deep-trans',
+    'node_modules/@scope/direct-dep',
+    'node_modules/@scope/direct-dep/node_modules/nested-trans',
+    'node_modules/cycle-a',
+    'node_modules/cycle-b',
+    'node_modules/hoisted-trans',
+    'node_modules/opt-present',
+  ]);
+
+  const outBundle = join(sandbox, 'staged-bundle');
+  stagePypiBundle({ root: sandbox, bundleDir: outBundle });
+  assert.equal(existsSync(join(outBundle, 'node_modules', 'dev-only-pkg')), false, 'devDependencies must not be staged');
+  assert.equal(existsSync(join(outBundle, 'node_modules', '@scope', 'deep-trans', 'index.mjs')), true);
+  assert.equal(existsSync(join(outBundle, 'node_modules', '@scope', 'direct-dep', 'node_modules', 'nested-trans', 'index.mjs')), true);
+
+  const probe = spawnSync(process.execPath, [join(outBundle, 'bin', 'pdd.mjs'), '--probe'], {
+    cwd: tmpdir(),
+    encoding: 'utf8',
+  });
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.deepEqual(JSON.parse(probe.stdout.trim()), {
+    directValue: 'hoisted-ok+nested(deep-ok)',
+    cycleA: 'a->b-ok',
+    optPresent: 'opt-ok',
+  });
+
+  // Missing required transitive dependency fails closed with a 4-part diagnostic.
+  rmSync(join(sandbox, 'node_modules', '@scope', 'deep-trans'), { recursive: true, force: true });
+  assert.throws(
+    () => resolveProductionDependencies(sandbox),
+    err => /^Location: /m.test(err.message)
+      && /^Invariant: /m.test(err.message)
+      && /^Fix: /m.test(err.message)
+      && /^Rerun: /m.test(err.message)
+      && err.message.includes('@scope/deep-trans'),
+  );
 });

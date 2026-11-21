@@ -24,7 +24,6 @@
     "RUNBOOK.md",
     "bin/",
     "src/",
-    "prompts/cli/",
     "docs/",
     "skills/",
     "examples/",

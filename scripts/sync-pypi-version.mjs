@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -137,6 +137,58 @@ const STAGE_SCRUB_CI_KEYS = new Set([
   'npm_config_cache',
 ]);
 
+function findInstalledDep(rootDir, fromDir, depName) {
+  const parts = depName.split('/');
+  const rootResolved = resolve(rootDir);
+  let cursor = resolve(fromDir);
+  while (true) {
+    const candidate = join(cursor, 'node_modules', ...parts);
+    if (existsSync(join(candidate, 'package.json'))) return candidate;
+    if (cursor === rootResolved) return null;
+    const parent = dirname(cursor);
+    if (parent === cursor) return null;
+    cursor = parent;
+  }
+}
+
+export function resolveProductionDependencies(root = DEFAULT_ROOT) {
+  const rootResolved = resolve(root);
+  const rootManifest = JSON.parse(readFileSync(join(rootResolved, 'package.json'), 'utf8'));
+  const visited = new Map();
+  const queue = [{ dir: rootResolved, manifest: rootManifest, label: rootManifest.name || 'root' }];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const optionalSet = new Set(Object.keys(current.manifest.optionalDependencies ?? {}));
+    const requiredDeps = Object.keys(current.manifest.dependencies ?? {}).filter(name => !optionalSet.has(name));
+    const peerDeps = Object.keys(current.manifest.peerDependencies ?? {});
+
+    const enqueueDep = (depName, optional) => {
+      const resolvedDir = findInstalledDep(rootResolved, current.dir, depName);
+      if (!resolvedDir) {
+        if (optional) return;
+        throw new Error([
+          `Location: ${join(rootResolved, 'node_modules', ...depName.split('/'))}`,
+          `Invariant: PyPI bundle staging requires the full resolved production dependency closure on disk (missing "${depName}" required by "${current.label}").`,
+          'Fix: Run `npm ci --ignore-scripts` in the repository root to install all production dependencies.',
+          'Rerun: node scripts/sync-pypi-version.mjs --stage-bundle',
+        ].join('\n'));
+      }
+      const relPath = relative(rootResolved, resolvedDir);
+      if (visited.has(relPath)) return;
+      const depManifest = JSON.parse(readFileSync(join(resolvedDir, 'package.json'), 'utf8'));
+      visited.set(relPath, { name: depName, srcDir: resolvedDir, relPath });
+      queue.push({ dir: resolvedDir, manifest: depManifest, label: depManifest.name || depName });
+    };
+
+    for (const depName of requiredDeps) enqueueDep(depName, false);
+    for (const depName of optionalSet) enqueueDep(depName, true);
+    for (const depName of peerDeps) enqueueDep(depName, true);
+  }
+
+  return [...visited.values()].sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
+}
+
 export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDir = null, env: sourceEnv = process.env } = {}) {
   const parity = checkVersionParity({ root });
   if (!parity.ok) {
@@ -171,17 +223,26 @@ export function stagePypiBundle({ root = DEFAULT_ROOT, bundleDir: customBundleDi
 
     const extractedPkg = join(extractDir, 'package');
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-    for (const dep of Object.keys(manifest.dependencies ?? {})) {
-      const srcDep = join(root, 'node_modules', dep);
-      if (!existsSync(srcDep)) {
-        throw new Error(`Missing installed dependency ${dep} at ${srcDep}. Run npm ci first.`);
-      }
-      const dstDep = join(extractedPkg, 'node_modules', dep);
+    const prodDeps = resolveProductionDependencies(root);
+    for (const dep of prodDeps) {
+      const dstDep = join(extractedPkg, dep.relPath);
+      const nestedModulesDir = join(dep.srcDir, 'node_modules');
       mkdirSync(dirname(dstDep), { recursive: true });
-      cpSync(srcDep, dstDep, { recursive: true, dereference: true });
+      cpSync(dep.srcDir, dstDep, {
+        recursive: true,
+        dereference: true,
+        filter: src => src !== nestedModulesDir,
+      });
     }
 
     cpSync(extractedPkg, bundleDir, { recursive: true, dereference: true });
+    const binEntries = typeof manifest.bin === 'string'
+      ? [manifest.bin]
+      : Object.values(manifest.bin ?? {});
+    for (const relBin of binEntries) {
+      const binPath = join(bundleDir, relBin);
+      if (existsSync(binPath)) chmodSync(binPath, 0o755);
+    }
     const entryMjs = join(bundleDir, 'bin', 'pdd.mjs');
     chmodSync(entryMjs, 0o755);
 

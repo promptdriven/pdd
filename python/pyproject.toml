@@ -27,6 +27,8 @@ Issues = "https://github.com/promptdriven/pdd/issues"
 
 [project.scripts]
 pdd = "pdd_cli.cli:main"
+pdd-codex = "pdd_cli.cli:main_codex"
+pdd-claude = "pdd_cli.cli:main_claude"
 
 [tool.setuptools]
 packages = ["pdd_cli"]
