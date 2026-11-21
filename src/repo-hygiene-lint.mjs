@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 7663790662ce3dc168a6ade53173079efeaa545e44408a46bd6c5e627a2fe049).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 7da1eb8075f2f18934d8b85a3d4d512ccd4bfba8249d54fd8ec155d0acb990c0).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -100,7 +100,7 @@ const INLINE_BRACE_PORT_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.
 const NETWORK_PORT_HEADING_RE = /\b(?:tcp|udp|http|https|grpc|listen(?:ing)?|network|socket|server|tls|ssl|firewall|docker|container|kubernetes|k8s|ingress|expos(?:e|ed)|stdio|serial|forward(?:ing)?)\b/i;
 const DOMAIN_PORT_HEADING_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?)\b/i;
 const DEP_PORTS_HEADING_RE = /\b(?:injected\s+ports?|external\s+ports?|domain\s+ports?|port\s+interface|port\s+contract|ports?|resources?)\b/i;
-const DEP_OPS_HEADING_RE = /\b(?:operations?|public\s+contract|public\s+interface|interface|commands?|subcommands?|tools?|exports?|entrypoints?|entry\s+points?)\b/i;
+const DEP_OPS_HEADING_RE = /(?:(?<![A-Za-z0-9_-])(?:operations|commands|subcommands|tools|exports|entrypoints|entry[ \t]+points|public[ \t]+contract)(?![A-Za-z0-9_-])|(?:^|[ \t])(?:public[ \t]+)?interface$)/i;
 const DEP_OPS_EXCLUDE_HEADING_RE = /\b(?:inputs?|outputs?|errors?|allowed|forbidden|external|ports?|resources?|dependencies)\b/i;
 const DEP_OP_DETAIL_SUBHEADING_RE = /\b(?:inputs?|outputs?|errors?|parameters?|params?|fields?|returns?|examples?|notes?|schemas?|types?)\b/i;
 const DEP_OPS_TABLE_COL_RE = /\b(?:operation|operations|op|ops|command|commands|subcommand|subcommands|tool|tools|export|exports|entrypoint|entrypoints)\b/i;
@@ -148,7 +148,7 @@ const NON_OP_FOLLOWING_NOUNS = new Set([
   'key', 'keys', 'token', 'tokens', 'flag', 'flags', 'secret', 'secrets',
   'metric', 'metrics', 'status', 'error', 'errors', 'record', 'records', 'row', 'rows',
 ]);
-const DATA_EXPORT_FORMAT_RE = /^[ \t]+(?:to|as)[ \t]+(?:a[ \t]+|an[ \t]+|the[ \t]+)?(?:csv|json|xml|yaml|yml|pdf|xlsx|tsv|parquet|html|markdown|file|files)\b/i;
+const DATA_EXPORT_FORMAT_RE = /^(?:to|as)[ \t]+(?:a[ \t]+|an[ \t]+|the[ \t]+)?(?:csv|json|xml|yaml|yml|pdf|xlsx|tsv|parquet|html|markdown|file|files)\b/i;
 const NON_PORT_IDIOM_PATTERNS = [
   /\b(?:tcp|udp|http|https|grpc|ws|wss|stdio|ipc|unix|listen(?:ing)?|server|socket|host|local|remote|network|container|service)\s+ports?\b/gi,
   /\b(?:on|to|at|from)\s+port(?:\s+`?\d+`?|\s+`?[A-Z0-9_]+`?)?\b/gi,
@@ -955,6 +955,7 @@ function extractHeadingOperationName(title, { requireExplicitSyntax = false } = 
   const hasCallParens = hasCallParensInToken(head);
   const isBacktickedWhole = /^`[^`\r\n]+`$/.test(head) || /^\*\*`[^`\r\n]+`\*\*$/.test(head);
   const isBareCallWhole = /^[a-z][a-zA-Z0-9_-]*\s*\([^()\r\n]*\)$/.test(head);
+  if (hasOpKeywordPrefix && !hasOpDelimPrefix && !isBacktickedWhole && !isBareCallWhole) return null;
   if (requireExplicitSyntax) {
     const isCallSyntax = hasCallParens && (isBacktickedWhole || isBareCallWhole);
     const isExplicitKeywordOp = hasOpKeywordPrefix && (isBacktickedWhole || (hasOpDelimPrefix && SIMPLE_IDENT_RE.test(head)));
@@ -966,10 +967,12 @@ function extractHeadingOperationName(title, { requireExplicitSyntax = false } = 
   return ident;
 }
 
-function hasNonOpSuffix(line, afterTickPos) {
-  const tail = line.slice(afterTickPos);
+function hasNonOpSuffix(line, afterTickPos, { requireLeadingSpace = true } = {}) {
+  const rawTail = line.slice(afterTickPos);
+  if (requireLeadingSpace && !/^[ \t]+/.test(rawTail)) return false;
+  const tail = rawTail.replace(/^[ \t]+/, '');
   if (DATA_EXPORT_FORMAT_RE.test(tail)) return true;
-  const nextWordMatch = /^[ \t]+([A-Za-z][A-Za-z0-9_-]*)/.exec(tail);
+  const nextWordMatch = /^([A-Za-z][A-Za-z0-9_-]*)/.exec(tail);
   if (nextWordMatch && NON_OP_FOLLOWING_NOUNS.has(nextWordMatch[1].toLowerCase())) return true;
   return false;
 }
@@ -1020,8 +1023,9 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
   }
   const collected = [];
   let trailingNonOpSuffix = false;
+  let lastItemEndPos = -1;
   while (pos < line.length) {
-    while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || line[pos] === ':' || line[pos] === ',' || line[pos] === '/')) pos++;
+    while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || (collected.length === 0 && line[pos] === ':') || line[pos] === ',' || line[pos] === '/')) pos++;
     const lower4 = line.slice(pos, pos + 4).toLowerCase();
     if (lower4 === 'and ' || lower4 === 'and\t') {
       pos += 4;
@@ -1037,18 +1041,19 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
     if (endTick < 0) break;
     const inner = line.slice(pos + 1, endTick).trim();
     pos = endTick + 1;
+    lastItemEndPos = pos;
     if (!inner || inner.includes('.') || inner.includes('/')) break;
     const hasCallParens = hasCallParensInToken(inner);
     const op = cleanSingleIdentifier(inner, { allowCallArgs: true });
     if (!op) break;
     if (!hasCallParens && NON_OP_LABEL_WORDS.has(op.toLowerCase())) break;
-    if (!hasCallParens && hasNonOpSuffix(line, pos)) {
+    if (!hasCallParens && hasNonOpSuffix(line, pos, { requireLeadingSpace: true })) {
       trailingNonOpSuffix = true;
       break;
     }
     collected.push({ op, hasCallParens });
   }
-  if (!trailingNonOpSuffix && collected.length > 0 && hasNonOpSuffix(line, pos)) {
+  if (!trailingNonOpSuffix && collected.length > 0 && hasNonOpSuffix(line, pos, { requireLeadingSpace: pos === lastItemEndPos })) {
     trailingNonOpSuffix = true;
   }
   for (const item of collected) {
@@ -1263,17 +1268,16 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
                 opSubheadingDepth = depth;
               }
             } else if (excludedDetailDepth === 0) {
-              if (
+              if (DEP_OP_DETAIL_SUBHEADING_RE.test(title)) {
+                excludedDetailDepth = depth;
+              } else if (
                 !NETWORK_PORT_HEADING_RE.test(title)
                 && !DEP_OPS_EXCLUDE_HEADING_RE.test(title)
-                && !DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)
-                && DEP_OPS_HEADING_RE.test(title)
+                && DEP_OPS_HEADING_RE.test(titleHead)
               ) {
                 opsSectionDepth = depth;
                 opSubheadingDepth = 0;
                 opDetailDepth = 0;
-              } else if (DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
-                excludedDetailDepth = depth;
               }
             }
           }

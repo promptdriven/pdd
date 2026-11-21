@@ -2972,3 +2972,180 @@ test('3619 R3 regressions: P1-1 prefix separators, P1-2 op headings before DEP_P
   );
   assert.equal(p25Fail.length, 6, p25Fail.join('\n'));
 });
+
+test('3619 R4b regressions: plural ops section headings & colon detail headings, space-only keyword prefix inside ## Operations, and post-loop conjoined non-op suffixes', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    'reason: Gateway adapter.',
+    '---',
+    '',
+    '# Adapter',
+    '',
+    '## Port wiring',
+    ...ports.map(p => `- \`${p}\``),
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+  ].join('\n');
+
+  // R4b-1: Singular/hyphenated headings (`## Tool policy`, `## Command dispatch`, `## Command-line`, `## Tool-commit`)
+  // and colon-separated detail headings (`## Tool: schema`, `## Command: parameters`, `## Operation: fields`,
+  // `## Interface: types`, `## Tool: notes`, `## Operation: examples`) must NOT open opsSectionDepth.
+  const r4b1NegDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Tool policy',
+    '- `pol_item`: policy bullet.',
+    '',
+    '## Command dispatch',
+    '- `disp_item`: dispatch bullet.',
+    '',
+    '## Command-line',
+    '- `cli_item`: CLI bullet.',
+    '',
+    '## Tool-commit',
+    '- `commit_item`: commit bullet.',
+    '',
+    '## Tool: schema',
+    '- `schema_item`: schema bullet.',
+    'Exports `schema_cue` in schema.',
+    '',
+    '## Command: parameters',
+    '- `param_item`: parameter bullet.',
+    '',
+    '## Operation: fields',
+    '- `field_item`: field bullet.',
+    '',
+    '## Interface: types',
+    '- `type_item`: type bullet.',
+    '',
+    '## Tool: notes',
+    '- `note_item`: note bullet.',
+    '',
+    '## Operation: examples',
+    '- `ex_item`: example bullet.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const r4b1NegPorts = [
+    'access.pol_item', 'access.disp_item', 'access.cli_item', 'access.commit_item',
+    'access.schema_item', 'access.schema_cue', 'access.param_item', 'access.field_item',
+    'access.type_item', 'access.note_item', 'access.ex_item',
+  ];
+  const r4b1NegRes = lintNativeOnlyPortParity(
+    nativeChecking(r4b1NegPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: r4b1NegDep }],
+  );
+  assert.equal(r4b1NegRes.length, r4b1NegPorts.length, r4b1NegRes.join('\n'));
+
+  // R4b-1 positive: Legitimate plural ops headings, Public contract, and end-anchored [Public] Interface still work.
+  const r4b1PosDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## MCP Tools',
+    '- `invoke_mcp`',
+    '',
+    '## Public contract',
+    '- `check_contract`',
+    '',
+    '## Public interface',
+    '- `open_interface`',
+    '',
+    '## Entry points',
+    '- `run_entry`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.invoke_mcp', 'access.check_contract', 'access.open_interface', 'access.run_entry']),
+      [{ path: 'prompts/access/access.prompt.md', text: r4b1PosDep }],
+    ),
+    [],
+  );
+
+  // R4b-2: Under ## Operations, space-only keyword prefixes on bare non-backticked/non-call titles
+  // (`### Tool ports`, `### Operation resources`, `### Tool policy`, `### Command dispatch`) must NOT become ops;
+  // `### Tool ports` and `### Operation resources` fall through to DEP_PORTS_HEADING_RE and open portsSectionDepth,
+  // while backticked/call/delimited titles still extract cleanly.
+  const r4b2Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '### Tool `inspect_quota`',
+    'Inspects quota.',
+    '',
+    '### Tool check_limit()',
+    'Checks rate limit.',
+    '',
+    '### Operation: revoke_session',
+    'Revokes a session.',
+    '',
+    '### Tool policy',
+    'Policy rules.',
+    '',
+    '### Command dispatch',
+    'Dispatch rules.',
+    '',
+    '### Tool ports',
+    '- `store`',
+    '  - `load(id)`',
+    '',
+    '### Operation resources',
+    '- `audit`',
+    '  - `append(ev)`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.inspect_quota', 'access.check_limit', 'access.revoke_session', 'store.load', 'audit.append']),
+      [{ path: 'prompts/access/access.prompt.md', text: r4b2Dep }],
+    ),
+    [],
+  );
+  const r4b2Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.policy', 'access.dispatch', 'access.ports', 'access.resources']),
+    [{ path: 'prompts/access/access.prompt.md', text: r4b2Dep }],
+  );
+  assert.equal(r4b2Fail.length, 4, r4b2Fail.join('\n'));
+
+  // R4b-3: Post-loop hasNonOpSuffix suppresses non-call items even after trailing whitespace or comma is consumed
+  // (preserving explicit call-syntax items like run_job() and check()).
+  const r4b3Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    'Exports `commit` and `run_job()` to CSV.',
+    'Exposes `author` and `check()` fields.',
+    'Exposes `commit_sha` and `branch_name`, fields in the response.',
+    'Operations: `get_status`: status of the service.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.run_job', 'access.check', 'access.get_status']),
+      [{ path: 'prompts/access/access.prompt.md', text: r4b3Dep }],
+    ),
+    [],
+  );
+  const r4b3Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.commit', 'access.author', 'access.commit_sha', 'access.branch_name']),
+    [{ path: 'prompts/access/access.prompt.md', text: r4b3Dep }],
+  );
+  assert.equal(r4b3Fail.length, 4, r4b3Fail.join('\n'));
+});
