@@ -535,9 +535,19 @@ test('SEAM2: src/runtime-seam.mjs imports only @promptdriven/runtime-client root
     'selectTests',
     'whyNoTests',
   ];
-  assert.deepEqual(Object.keys(seam).sort(), [...Object.keys(entry), ...seamOnlyHostExports].sort());
+  const seamForwardCompatExports = [
+    'projectCheckReconciliation',
+    'reconcileCheckReceipt',
+  ];
+  assert.deepEqual(
+    Object.keys(seam).sort(),
+    [...new Set([...Object.keys(entry), ...seamOnlyHostExports, ...seamForwardCompatExports])].sort(),
+  );
   for (const key of seamOnlyHostExports) {
     assert.equal(Object.hasOwn(entry, key), false, `cut host symbol ${key} must not remain on @promptdriven/runtime-client`);
+  }
+  for (const key of seamForwardCompatExports) {
+    assert.equal(typeof seam[key], 'function', `forward-compatible seam export ${key} must be a function`);
   }
   for (const key of Object.keys(entry)) {
     assert.equal(typeof seam[key], typeof entry[key], `seam export ${key} must match typeof @promptdriven/runtime-client`);
@@ -685,6 +695,7 @@ registerHooks({
     'src/issue-sort-github.mjs <-> src/issue-sort.mjs',
     'src/issue-mixed.mjs <-> src/issue-sort-github.mjs <-> src/issue-sort.mjs',
     'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs',
+    'src/runtime/runtime-client.mjs <-> src/runtime/runtime-slots.mjs <-> src/runtime/try-doors.mjs',
     'src/toml-string.mjs <-> src/workflow-herdr-layout.mjs',
   ]);
 
@@ -833,7 +844,7 @@ registerHooks({
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
-    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'prompt-approve',
+    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'update-sync', 'prompt-approve',
     'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
     'issue-dependency-graph', 'dependencies-prepare', 'dependencies-complete',
     'product-status', 'product-next', 'product-start',
@@ -866,6 +877,7 @@ registerHooks({
     ['cli:setup', [bin, 'setup', '--yes'], repo],
     ['cli:files', [bin, 'files', '--json'], repo],
     ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
+    ['cli:update', [bin, 'update', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
@@ -904,15 +916,16 @@ registerHooks({
     ['lib:svg-layout.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`], nonGit],
     ['lib:prompt-approve.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/prompt-approve.mjs')).href)})`], nonGit],
     ['lib:file-owner.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/file-owner.mjs')).href)})`], nonGit],
+    ['lib:update-sync.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/update-sync.mjs')).href)})`], nonGit],
     ['lib:agent-adapters.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/agent-adapters.mjs')).href)})`], nonGit],
     ['lib:product.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/product.mjs')).href)})`], nonGit],
     ['lib:autopilot-doctor.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/autopilot-doctor.mjs')).href)})`], nonGit],
   ];
 
   const ACYCLIC_ENTRIES = new Set([
-    'cli:--help', 'cli:owner', 'cli:files', 'cli:approve',
+    'cli:--help', 'cli:owner', 'cli:update', 'cli:files', 'cli:approve',
     'child:workflow-replay-selector', 'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
-    'lib:file-owner.mjs', 'lib:agent-adapters.mjs',
+    'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const ZERO_SRC_ENTRIES = new Set([
     'child:scripts/autopilot-smoke.mjs',
@@ -920,10 +933,10 @@ registerHooks({
   ]);
   const LIGHT_ENTRIES = new Set([
     'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion',
-    'cli:files', 'cli:owner', 'cli:approve', 'cli:workflow-list',
+    'cli:files', 'cli:owner', 'cli:update', 'cli:approve', 'cli:workflow-list',
     'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:simulate', 'cli:mcp',
     'child:workflow-replay-selector', 'child:try-doors-launcher',
-    'lib:svg-layout.mjs', 'lib:prompt-approve.mjs', 'lib:file-owner.mjs', 'lib:agent-adapters.mjs',
+    'lib:svg-layout.mjs', 'lib:prompt-approve.mjs', 'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const HEAVY_ORCHESTRATORS = new Set([
     'src/workflow-runner.mjs',
@@ -2733,20 +2746,76 @@ test('SEAM25: runtime client uses the exact public npm release', () => {
   const lockfile = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const name = '@promptdriven/runtime-client';
   const locked = lockfile.packages[`node_modules/${name}`];
-  assert.equal(manifest.dependencies[name], '1.0.0');
-  assert.equal(lockfile.packages[''].dependencies[name], '1.0.0');
-  assert.equal(locked.version, '1.0.0');
-  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.0\.0\.tgz$/);
+  assert.equal(manifest.dependencies[name], '1.1.0');
+  assert.equal(lockfile.packages[''].dependencies[name], '1.1.0');
+  assert.equal(locked.version, '1.1.0');
+  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.1\.0\.tgz$/);
   assert.match(locked.integrity, /^sha512-/);
   assert.doesNotMatch(locked.resolved, /^(?:github:|git\+)/);
 });
 
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return', 'throw', 'case', 'in', 'of', 'typeof', 'void', 'delete', 'await', 'yield', 'new', 'else', 'do',
+]);
+
+function canStartRegexBefore(text, slashIndex) {
+  let j = slashIndex - 1;
+  while (j >= 0 && /\s/.test(text[j])) j--;
+  if (j < 0) return true;
+  const prev = text[j];
+  if ('=([,;:!&|?~+-*%^<>{}'.includes(prev)) return true;
+  if (/[A-Za-z0-9_$]/.test(prev)) {
+    let k = j;
+    while (k >= 0 && /[A-Za-z0-9_$]/.test(text[k])) k--;
+    return REGEX_PRECEDING_KEYWORDS.has(text.slice(k + 1, j + 1));
+  }
+  return false;
+}
+
 function skipBalanced(text, start, openChar, closeChar) {
   let depth = 0;
   let i = start;
+  const tplBraceDepths = [];
+  const skipTemplateText = () => {
+    while (i < text.length) {
+      const ch = text[i];
+      if (ch === '\\') { i += 2; continue; }
+      if (ch === '`') { i++; return; }
+      if (ch === '$' && text[i + 1] === '{') {
+        i += 2;
+        tplBraceDepths.push(0);
+        return;
+      }
+      i++;
+    }
+  };
   while (i < text.length) {
     const c = text[i];
-    if (c === "'" || c === '"' || c === '`') {
+    if (c === '/' && text[i + 1] === '/') {
+      i += 2;
+      while (i < text.length && text[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
+    if (c === '/' && canStartRegexBefore(text, i)) {
+      i++;
+      let inClass = false;
+      while (i < text.length && text[i] !== '\n') {
+        if (text[i] === '\\') { i += 2; continue; }
+        if (text[i] === '[') { inClass = true; i++; continue; }
+        if (text[i] === ']') { inClass = false; i++; continue; }
+        if (text[i] === '/' && !inClass) { i++; break; }
+        i++;
+      }
+      while (i < text.length && /[a-z]/i.test(text[i])) i++;
+      continue;
+    }
+    if (c === "'" || c === '"') {
       i++;
       while (i < text.length && text[i] !== c) {
         if (text[i] === '\\') i += 2;
@@ -2754,6 +2823,30 @@ function skipBalanced(text, start, openChar, closeChar) {
       }
       i++;
       continue;
+    }
+    if (c === '`') {
+      i++;
+      skipTemplateText();
+      continue;
+    }
+    if (tplBraceDepths.length > 0) {
+      if (c === '{') {
+        tplBraceDepths[tplBraceDepths.length - 1]++;
+        i++;
+        continue;
+      }
+      if (c === '}') {
+        const top = tplBraceDepths[tplBraceDepths.length - 1];
+        if (top === 0) {
+          tplBraceDepths.pop();
+          i++;
+          skipTemplateText();
+          continue;
+        }
+        tplBraceDepths[tplBraceDepths.length - 1] = top - 1;
+        i++;
+        continue;
+      }
     }
     if (c === openChar) depth++;
     else if (c === closeChar) {
@@ -3559,13 +3652,20 @@ function findCallEdges(body, modPath, fnName, modInfo, aliases, containers, iter
     edges.push({ mod: targetMod, fn: prop, ...classifyArgs(splitTopLevelCommas(body.slice(open + 1, close - 1))) });
   }
 
+  const bodyShadowedFn = new Map();
+  for (const [k, v] of localImportedFn) {
+    const prev = seededFn.get(k);
+    if (!prev || prev.mod !== v.mod || prev.fn !== v.fn) bodyShadowedFn.set(k, v);
+  }
+
   const directCall = /(?<![.\w$])([A-Za-z0-9_$]+)\s*\(/g;
   while ((m = directCall.exec(body)) !== null) {
     const callee = m[1];
     if (['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'import', 'require', 'req'].includes(callee)) continue;
-    const target = modInfo.functions.has(callee)
-      ? { mod: modPath, fn: callee }
-      : localImportedFn.get(callee);
+    const target = bodyShadowedFn.get(callee)
+      ?? (modInfo.functions.has(callee)
+        ? { mod: modPath, fn: callee }
+        : localImportedFn.get(callee));
     if (!target) continue;
     const open = m.index + m[0].length - 1;
     const close = skipBalanced(body, open, '(', ')');
@@ -4094,10 +4194,45 @@ test('SEAM26 (#3444): every CLI option accepted by @promptdriven/runtime-client 
   const lintCatalogSet = new Set(lintRoute.options.map(option => option.name));
   const tryCatalogSet = new Set(tryRoute.options.map(option => option.name));
 
-  const missingCheck = checkRuntimeOptions.filter(flag => !checkCatalogSet.has(flag));
-  const missingTry = tryRuntimeOptions.filter(flag => !tryCatalogSet.has(flag));
+  // Audited @promptdriven/runtime-client 1.1.0 options that are intentionally NOT on the public pdd CLI:
+  // - exclusion-list-only legacy flags in 1.1.0 (only referenced in --step / --samples incompatibility arrays)
+  // - live-local flags (require host ports.liveLocal not exposed on public pdd CLI)
+  // - internal/unexposed 1.1.0 probe/step and direct-program flags
+  const EXCLUSION_LIST_STEP_CHECK_OPTIONS = ['--full', '--journey', '--parts'];
+  const EXCLUSION_LIST_SAMPLE_CHECK_OPTIONS = ['--live', '--resource-mode'];
+  const NON_PUBLIC_RUNTIME_CHECK_OPTIONS = new Set([
+    ...EXCLUSION_LIST_STEP_CHECK_OPTIONS,
+    ...EXCLUSION_LIST_SAMPLE_CHECK_OPTIONS,
+    '--live-local', '--command-manifest', '--allow-live-writes',
+    '--samples', '--step',
+  ]);
+  const NON_PUBLIC_RUNTIME_TRY_OPTIONS = new Set([
+    '--live-local', '--command-manifest', '--allow-live-writes',
+    '--data', '--show-data', '--quiet',
+  ]);
+
+  const missingCheck = checkRuntimeOptions.filter(flag => !checkCatalogSet.has(flag) && !NON_PUBLIC_RUNTIME_CHECK_OPTIONS.has(flag));
+  const missingTry = tryRuntimeOptions.filter(flag => !tryCatalogSet.has(flag) && !NON_PUBLIC_RUNTIME_TRY_OPTIONS.has(flag));
   assert.deepEqual(missingCheck, [], `src/command-catalog.mjs check route is missing runtime-client test options: ${missingCheck.join(', ')}`);
   assert.deepEqual(missingTry, [], `src/command-catalog.mjs try route is missing runtime-client simulate options: ${missingTry.join(', ')}`);
+
+  // Confirm exclusion-list-only flags fail with exit 2 under --step / --samples in runtime-client 1.1.0.
+  for (const excludedFlag of EXCLUSION_LIST_STEP_CHECK_OPTIONS) {
+    const { ports: refusedPorts } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+    const refusedCode = await seam.runCheck(
+      { cwd: setup.repo, words: ['place-order'], options: { '--step': 'one', [excludedFlag]: true } },
+      refusedPorts,
+    );
+    assert.equal(refusedCode, 2, `expected --step + ${excludedFlag} to fail with exit 2`);
+  }
+  for (const excludedFlag of EXCLUSION_LIST_SAMPLE_CHECK_OPTIONS) {
+    const { ports: refusedPorts } = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+    const refusedCode = await seam.runCheck(
+      { cwd: setup.repo, words: ['place-order'], options: { '--samples': 2, [excludedFlag]: excludedFlag === '--resource-mode' ? 'live' : true } },
+      refusedPorts,
+    );
+    assert.equal(refusedCode, 2, `expected --samples + ${excludedFlag} to fail with exit 2`);
+  }
 
   const sampleArgForOption = option => {
     if (!option || option.kind === 'flag') return { argv: [option.name], value: true };

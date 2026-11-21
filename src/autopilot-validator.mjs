@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 63f3093ec75a889d32c785af18f905e4dd7c588fb6717eeaa45b6ce4fe98d308).
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 4264c7aa1f6fa82df6deaacf592e341371ae342dc8fe70c878ae999a1e324ede).
 
 export const MAX_VALIDATION_REPAIRS = 3;
 export const MIN_REALISTIC_PAYLOAD_BYTES = 4096;
@@ -1309,24 +1309,28 @@ const TTY_CTOR_ORIG_NAMES = new Set(['ReadStream', 'WriteStream']);
 const TTY_CALL_ORIG_NAMES = new Set(['isatty']);
 const TTY_PTY_ORIG_NAMES = new Set(['spawn']);
 const DB_CTOR_ORIG_NAMES = new Set(['DatabaseSync']);
-const BROWSER_METHOD_NAMES = new Set(['launch', 'goto', 'newPage', 'newContext', 'connect']);
+const BROWSER_METHOD_NAMES = new Set([
+  'launch', 'launchPersistentContext', 'goto', 'newPage', 'newContext', 'connect', 'connectOverCDP', 'pages',
+]);
 
 const MODULE_MOCK_CALL_RE = /\b(?:(?:vi|jest)\.(?:mock|doMock)|mock\.module)[ \t]*\(\s*("")/g;
 const ESM_IMPORT_RE = /(?<!\.)\bimport\s+([A-Za-z_$*{][A-Za-z0-9_$,*{}\s]{0,1000})\bfrom\s*("")/g;
 const CJS_REQUIRE_RE = /\b(?:const|let|var)[ \t]+([A-Za-z_$][A-Za-z0-9_$]*|\{[A-Za-z0-9_$,:=\s]{1,300}\})[ \t]*=[ \t]*require[ \t]*\(\s*("")\s*\)(?:\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*))?/g;
 const SHADOW_DECL_LIST_RE = /\b(?:const|let|var)[ \t]+([^;\n]{1,300})/g;
 const SHADOW_DESTRUCTURE_RE = /\b(?:const|let|var)[ \t]*\{([^};]{1,200})\}[ \t]*=[ \t]*\r?\n?[ \t]*([^;\n]{0,200})/g;
+const SHADOW_ARRAY_DESTRUCTURE_RE = /\b(?:const|let|var)[ \t]*\[([^\];]{1,200})\][ \t]*=[ \t]*\r?\n?[ \t]*([^;\n]{0,200})/g;
 const SHADOW_FN_RE = /\bfunction[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\(/g;
-const SHADOW_CLASS_RE = /\bclass[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)\b/g;
-const SHADOW_GLOBAL_FETCH_ASSIGN_RE = /\b(?:globalThis|global|window|self)[ \t]*\.[ \t]*fetch[ \t]*=(?!=)|(?<![.\w$])fetch[ \t]*=(?!=)/;
-const PROP_ASSIGN_STUB_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(spawn|spawnSync|execFile|execFileSync|execSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|createReadStream|createWriteStream|createServer|request|listen|fetch|isatty|ReadStream|WriteStream|DatabaseSync|launch|goto|newPage|newContext|connect)[ \t]*=(?!=)/g;
-const BRACKET_ASSIGN_STUB_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\[[ \t]*("")[ \t]*\][ \t]*=(?!=)/g;
+const SHADOW_CLASS_RE = /\bclass[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)(?![A-Za-z0-9_$])/g;
+const GLOBAL_FETCH_PROP_ASSIGN_RE = /\b(?:globalThis|global|window|self)\s*\.\s*fetch\s*=(?![=>])/;
+const BARE_FETCH_ASSIGN_RE = /(?<![A-Za-z0-9_$.])fetch\s*=(?![=>])/g;
+const PROP_ASSIGN_STUB_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(spawn|spawnSync|execFile|execFileSync|execSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|createReadStream|createWriteStream|createServer|request|listen|fetch|isatty|ReadStream|WriteStream|DatabaseSync|launch|launchPersistentContext|goto|newPage|newContext|connect|connectOverCDP|pages)\s*=(?![=>])/g;
+const BRACKET_ASSIGN_STUB_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\[[ \t]*("")[ \t]*\]\s*=(?![=>])/g;
 const DEFINE_PROP_STUB_RE = /\bObject\.defineProperty[ \t]*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*,\s*("")/g;
 const STUB_GLOBAL_CALL_RE = /\bvi\.stubGlobal[ \t]*\(\s*("")/g;
 const METHOD_STUB_RE = /\b(?:mock\.method|vi\.spyOn|jest\.spyOn|sinon\.stub)[ \t]*\(\s*([^,\n)]{1,120}),\s*("")/g;
 const BROWSER_ORIGIN_RHS_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(launch|launchPersistentContext|newPage|newContext|connect|connectOverCDP|pages)[ \t]*\(/;
-const BARE_BROWSER_REASSIGN_RE = /(?<![.\w$])(page|browser|context|chromium|firefox|webkit)[ \t]*=(?!=)[ \t]*\r?\n?[ \t]*([^;\n]{0,200})/g;
-const BARE_IDENT_ASSIGN_RE = /(?<![A-Za-z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*=(?!=)/g;
+const BARE_BROWSER_REASSIGN_RE = /(?<![A-Za-z0-9_$.])(page|browser|context|chromium|firefox|webkit)\s*=(?![=>])[ \t]*\r?\n?[ \t]*([^;\n]{0,200})/g;
+const BARE_IDENT_ASSIGN_RE = /(?<![A-Za-z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)\s*=(?![=>])/g;
 const VALID_IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const BROWSER_WELL_KNOWN_VARS = new Set(['page', 'browser', 'context', 'chromium', 'firefox', 'webkit']);
 const GLOBAL_OBJ_NAMES = new Set(['globalThis', 'global', 'window', 'self']);
@@ -1341,8 +1345,71 @@ const PRIMITIVE_SHADOW_NAMES = new Set([
 ]);
 const METHOD_STUB_NAMES = new Set([
   ...PRIMITIVE_SHADOW_NAMES,
-  'request', 'listen', 'launch', 'goto', 'newPage', 'newContext', 'connect',
+  'request', 'listen', 'launch', 'launchPersistentContext', 'goto', 'newPage', 'newContext', 'connect', 'connectOverCDP', 'pages',
 ]);
+
+function splitDeclaratorLhsRhs(piece) {
+  let depth = 0;
+  for (let k = 0; k < piece.length; k += 1) {
+    const ch = piece[k];
+    if (ch === '{' || ch === '[' || ch === '(') depth += 1;
+    else if (ch === '}' || ch === ']' || ch === ')') depth = Math.max(0, depth - 1);
+    else if (ch === '=' && depth === 0 && piece[k + 1] !== '=' && piece[k + 1] !== '>') {
+      return { lhs: piece.slice(0, k).trim(), hasEq: true, rhs: piece.slice(k + 1).trim() };
+    }
+  }
+  return { lhs: piece.trim(), hasEq: false, rhs: '' };
+}
+
+function extractBoundIdentsFromPattern(rawPattern) {
+  const out = [];
+  const p = String(rawPattern ?? '').trim();
+  if (!p) return out;
+  if (p.startsWith('{') && p.endsWith('}')) {
+    for (const entry of splitTopLevelDeclaratorsWithOffsets(p.slice(1, -1), 0)) {
+      const part = entry.text.trim();
+      if (!part) continue;
+      if (part.startsWith('...')) {
+        const restName = part.slice(3).trim();
+        if (VALID_IDENT_RE.test(restName)) out.push(restName);
+        continue;
+      }
+      let colonIdx = -1;
+      let depth = 0;
+      for (let k = 0; k < part.length; k += 1) {
+        const ch = part[k];
+        if (ch === '{' || ch === '[' || ch === '(') depth += 1;
+        else if (ch === '}' || ch === ']' || ch === ')') depth = Math.max(0, depth - 1);
+        else if (ch === ':' && depth === 0) { colonIdx = k; break; }
+        else if (ch === '=' && depth === 0) break;
+      }
+      const target = colonIdx >= 0 ? part.slice(colonIdx + 1).trim() : part;
+      const lhs = splitDeclaratorLhsRhs(target).lhs;
+      if (lhs.startsWith('{') || lhs.startsWith('[')) {
+        out.push(...extractBoundIdentsFromPattern(lhs));
+      } else if (VALID_IDENT_RE.test(lhs)) {
+        out.push(lhs);
+      }
+    }
+    return out;
+  }
+  if (p.startsWith('[') && p.endsWith(']')) {
+    for (const entry of splitTopLevelDeclaratorsWithOffsets(p.slice(1, -1), 0)) {
+      let part = entry.text.trim();
+      if (!part) continue;
+      if (part.startsWith('...')) part = part.slice(3).trim();
+      const lhs = splitDeclaratorLhsRhs(part).lhs;
+      if (lhs.startsWith('{') || lhs.startsWith('[')) {
+        out.push(...extractBoundIdentsFromPattern(lhs));
+      } else if (VALID_IDENT_RE.test(lhs)) {
+        out.push(lhs);
+      }
+    }
+    return out;
+  }
+  if (VALID_IDENT_RE.test(p)) out.push(p);
+  return out;
+}
 
 function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
   const litAtMatch = (m) => {
@@ -1452,7 +1519,15 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
     }
   };
 
-  if (SHADOW_GLOBAL_FETCH_ASSIGN_RE.test(codeNoStrings)) shadowedPrimitives.add('fetch');
+  if (GLOBAL_FETCH_PROP_ASSIGN_RE.test(codeNoStrings)) shadowedPrimitives.add('fetch');
+  if (!shadowedPrimitives.has('fetch')) {
+    for (const m of codeNoStrings.matchAll(BARE_FETCH_ASSIGN_RE)) {
+      if (!hasLeadingDot(codeNoStrings, m.index ?? 0)) {
+        shadowedPrimitives.add('fetch');
+        break;
+      }
+    }
+  }
   for (const m of codeNoStrings.matchAll(PROP_ASSIGN_STUB_RE)) {
     if (hasLeadingDot(codeNoStrings, m.index ?? 0)) continue;
     recordPropStub(m[1], m[2]);
@@ -1481,30 +1556,42 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
     if (hasLeadingDot(trimmed, origin.index)) return null;
     if (shadowedPrimitives.has(originMethod)) return null;
     if (stubbedNamespaceMethods.has(`${originReceiver}.${originMethod}`)) return null;
-    if (/^(?:fake|mock|stub)/i.test(originReceiver) || shadowedBrowserVars.has(originReceiver) || shadowedNamespaces.has(originReceiver)) {
+    if (
+      /^(?:fake|mock|stub)/i.test(originReceiver)
+      || shadowedBrowserVars.has(originReceiver)
+      || shadowedNamespaces.has(originReceiver)
+      || shadowedPrimitives.has(originReceiver)
+    ) {
       return null;
     }
     return { originReceiver, originMethod };
   };
 
+  const recordBoundDecl = (ident, hasEq, rhs) => {
+    if (!VALID_IDENT_RE.test(ident)) return;
+    if (PRIMITIVE_SHADOW_NAMES.has(ident) || allImportedLocalNames.has(ident)) shadowedPrimitives.add(ident);
+    if (allNamespaceIdents.has(ident)) shadowedNamespaces.add(ident);
+    const origin = hasEq ? parseCleanBrowserOrigin(rhs) : null;
+    if (origin) {
+      cleanBrowserVars.add(ident);
+      browserVarDeps.push({ ident, originReceiver: origin.originReceiver, originMethod: origin.originMethod });
+    } else {
+      shadowedBrowserVars.add(ident);
+      cleanBrowserVars.delete(ident);
+    }
+  };
+
   // Run destructured declarations BEFORE scalar declarations so destructured shadows taint downstream derived browser vars.
   for (const m of codeNoStrings.matchAll(SHADOW_DESTRUCTURE_RE)) {
     if (isInsideAuthenticRequireSpan(m.index ?? 0)) continue;
-    const origin = parseCleanBrowserOrigin(m[2]);
-    for (const part of m[1].split(',')) {
-      const piece = part.trim();
-      const alias = /^[A-Za-z_$][A-Za-z0-9_$]*\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)/.exec(piece);
-      const local = alias ? alias[1] : piece.split('=')[0].trim();
-      if (!VALID_IDENT_RE.test(local)) continue;
-      if (PRIMITIVE_SHADOW_NAMES.has(local) || allImportedLocalNames.has(local)) shadowedPrimitives.add(local);
-      if (allNamespaceIdents.has(local)) shadowedNamespaces.add(local);
-      if (origin) {
-        cleanBrowserVars.add(local);
-        browserVarDeps.push({ ident: local, originReceiver: origin.originReceiver, originMethod: origin.originMethod });
-      } else {
-        shadowedBrowserVars.add(local);
-        cleanBrowserVars.delete(local);
-      }
+    for (const local of extractBoundIdentsFromPattern(`{${m[1]}}`)) {
+      recordBoundDecl(local, true, m[2]);
+    }
+  }
+  for (const m of codeNoStrings.matchAll(SHADOW_ARRAY_DESTRUCTURE_RE)) {
+    if (isInsideAuthenticRequireSpan(m.index ?? 0)) continue;
+    for (const local of extractBoundIdentsFromPattern(`[${m[1]}]`)) {
+      recordBoundDecl(local, true, m[2]);
     }
   }
 
@@ -1517,40 +1604,22 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
         const declAbsStart = decl.offset + leadingWs;
         if (isInsideAuthenticRequireSpan(declAbsStart)) continue;
         const piece = decl.text.trim();
-        if (!piece || piece.startsWith('{') || piece.startsWith('[')) continue;
-        const mDecl = /^([A-Za-z_$][A-Za-z0-9_$]*)(?:[ \t]*=([\s\S]*))?$/.exec(piece);
-        if (!mDecl) continue;
-        const ident = mDecl[1];
-        const hasEq = mDecl[2] !== undefined;
-        let rhs = (mDecl[2] ?? '').trim();
-        if (PRIMITIVE_SHADOW_NAMES.has(ident) || allImportedLocalNames.has(ident)) {
-          shadowedPrimitives.add(ident);
-        }
-        if (allNamespaceIdents.has(ident)) {
-          shadowedNamespaces.add(ident);
-        }
+        if (!piece) continue;
+        const { lhs, hasEq, rhs: initialRhs } = splitDeclaratorLhsRhs(piece);
+        if (!lhs) continue;
+        let rhs = initialRhs;
         if (hasEq && !rhs) {
           const sliceStart = decl.offset + decl.text.length;
           const afterEq = codeNoStrings.slice(sliceStart, sliceStart + 512).replace(/^[ \t]*\r?\n[ \t]*/, '');
           const stop = afterEq.search(/[;\r\n]/);
           rhs = (stop < 0 ? afterEq : afterEq.slice(0, stop)).slice(0, 200).trim();
         }
-        const origin = hasEq ? parseCleanBrowserOrigin(rhs) : null;
-        if (origin) {
-          cleanBrowserVars.add(ident);
-          browserVarDeps.push({ ident, originReceiver: origin.originReceiver, originMethod: origin.originMethod });
-        } else {
-          shadowedBrowserVars.add(ident);
-          cleanBrowserVars.delete(ident);
+        const boundIdents = (lhs.startsWith('{') || lhs.startsWith('['))
+          ? extractBoundIdentsFromPattern(lhs)
+          : (VALID_IDENT_RE.test(lhs) ? [lhs] : []);
+        for (const ident of boundIdents) {
+          recordBoundDecl(ident, hasEq, rhs);
         }
-      }
-    }
-    if (allImportedLocalNames.size > 0 || allNamespaceIdents.size > 0) {
-      for (const m of line.matchAll(BARE_IDENT_ASSIGN_RE)) {
-        const absIdx = lineOffset + (m.index ?? 0);
-        if (isInsideAuthenticRequireSpan(absIdx) || hasLeadingDot(codeNoStrings, absIdx)) continue;
-        if (allImportedLocalNames.has(m[1])) shadowedPrimitives.add(m[1]);
-        if (allNamespaceIdents.has(m[1])) shadowedNamespaces.add(m[1]);
       }
     }
     for (const m of line.matchAll(SHADOW_FN_RE)) {
@@ -1560,6 +1629,14 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
     }
     for (const m of line.matchAll(SHADOW_CLASS_RE)) {
       if (PRIMITIVE_SHADOW_NAMES.has(m[1]) || allImportedLocalNames.has(m[1])) shadowedPrimitives.add(m[1]);
+      if (allNamespaceIdents.has(m[1])) shadowedNamespaces.add(m[1]);
+    }
+  }
+  if (allImportedLocalNames.size > 0 || allNamespaceIdents.size > 0) {
+    for (const m of codeNoStrings.matchAll(BARE_IDENT_ASSIGN_RE)) {
+      const absIdx = m.index ?? 0;
+      if (isInsideAuthenticRequireSpan(absIdx) || hasLeadingDot(codeNoStrings, absIdx)) continue;
+      if (allImportedLocalNames.has(m[1])) shadowedPrimitives.add(m[1]);
       if (allNamespaceIdents.has(m[1])) shadowedNamespaces.add(m[1]);
     }
   }
@@ -1587,6 +1664,7 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
       if (
         shadowedBrowserVars.has(originReceiver)
         || shadowedNamespaces.has(originReceiver)
+        || shadowedPrimitives.has(originReceiver)
         || shadowedPrimitives.has(originMethod)
         || stubbedNamespaceMethods.has(`${originReceiver}.${originMethod}`)
       ) {
@@ -1906,8 +1984,8 @@ function detectAuthenticServerOrDb(codeNoStrings, auth) {
     for (const m of codeNoStrings.matchAll(/(?<![A-Za-z0-9_$.])\bfetch\s*\(/g)) {
       const idx = m.index ?? 0;
       if (hasLeadingDot(codeNoStrings, idx)) continue;
-      const before = codeNoStrings.slice(Math.max(0, idx - 24), idx);
-      if (/\b(?:async|static|get|set|function)[ \t]+$/.test(before)) continue;
+      const before = codeNoStrings.slice(Math.max(0, idx - 32), idx);
+      if (/\b(?:async|static|get|set|function|abstract|public|private|protected|override|declare)[ \t]+$/.test(before)) continue;
       const openParenIdx = idx + m[0].length - 1;
       const args = extractCallArgsSlice(codeNoStrings, openParenIdx, 240);
       if (args.closed) {
@@ -1916,31 +1994,51 @@ function detectAuthenticServerOrDb(codeNoStrings, auth) {
         if (codeNoStrings[after] === '{') continue;
         if (codeNoStrings[after] === ':') {
           let k = after + 1;
-          const limit = Math.min(codeNoStrings.length, k + 160);
+          const limit = Math.min(codeNoStrings.length, k + 200);
           let angleDepth = 0;
           let parenDepth = 0;
           let bracketDepth = 0;
+          let braceDepth = 0;
           let sawTypeToken = false;
+          let prevNonSpace = '';
           let isMethodBody = false;
           while (k < limit) {
             const c = codeNoStrings[k];
             if (c === '\n' || c === '\r' || c === ';') break;
             if (c === '=' && codeNoStrings[k + 1] === '>') {
-              if (angleDepth === 0 && parenDepth === 0 && bracketDepth === 0) break;
+              if (angleDepth === 0 && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) break;
+              prevNonSpace = '>';
               k += 2;
               continue;
             }
-            if (c === '<') { angleDepth += 1; sawTypeToken = true; }
-            else if (c === '>') angleDepth = Math.max(0, angleDepth - 1);
-            else if (c === '(') { parenDepth += 1; sawTypeToken = true; }
-            else if (c === ')') parenDepth = Math.max(0, parenDepth - 1);
-            else if (c === '[') { bracketDepth += 1; sawTypeToken = true; }
-            else if (c === ']') bracketDepth = Math.max(0, bracketDepth - 1);
-            else if (c === '{' && angleDepth === 0 && parenDepth === 0 && bracketDepth === 0) {
-              if (sawTypeToken) isMethodBody = true;
-              break;
+            if (c === '<') { angleDepth += 1; sawTypeToken = true; prevNonSpace = c; }
+            else if (c === '>') { angleDepth = Math.max(0, angleDepth - 1); prevNonSpace = c; }
+            else if (c === '(') { parenDepth += 1; sawTypeToken = true; prevNonSpace = c; }
+            else if (c === ')') { parenDepth = Math.max(0, parenDepth - 1); prevNonSpace = c; }
+            else if (c === '[') { bracketDepth += 1; sawTypeToken = true; prevNonSpace = c; }
+            else if (c === ']') { bracketDepth = Math.max(0, bracketDepth - 1); prevNonSpace = c; }
+            else if (c === '{') {
+              if (
+                angleDepth === 0
+                && parenDepth === 0
+                && bracketDepth === 0
+                && braceDepth === 0
+                && sawTypeToken
+                && prevNonSpace !== '|'
+                && prevNonSpace !== '&'
+              ) {
+                isMethodBody = true;
+                break;
+              }
+              braceDepth += 1;
+              sawTypeToken = true;
+              prevNonSpace = c;
+            } else if (c === '}') {
+              braceDepth = Math.max(0, braceDepth - 1);
+              prevNonSpace = c;
             } else if (c !== ' ' && c !== '\t') {
               sawTypeToken = true;
+              prevNonSpace = c;
             }
             k += 1;
           }
@@ -1978,15 +2076,29 @@ function detectAuthenticServerOrDb(codeNoStrings, auth) {
 
 function detectAuthenticBrowser(codeNoStrings, auth) {
   if (auth.mockedModules.has('browser') || !auth.importedModules.has('browser')) return false;
-  for (const m of codeNoStrings.matchAll(/(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*(?:([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*)?(launch|goto|newPage|newContext|connect)[ \t]*\(/g)) {
+  for (const m of codeNoStrings.matchAll(/(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*(?:([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*)?(launch|launchPersistentContext|goto|newPage|newContext|connect|connectOverCDP)[ \t]*\(/g)) {
     if (hasLeadingDot(codeNoStrings, m.index ?? 0)) continue;
     const outerReceiver = m[2] ? m[1] : '';
     const receiver = m[2] ? m[2] : m[1];
     const method = m[3];
     if (auth.shadowedPrimitives.has(method)) continue;
     if (auth.stubbedNamespaceMethods.has(`${receiver}.${method}`)) continue;
-    if (outerReceiver && (auth.stubbedNamespaceMethods.has(`${outerReceiver}.${receiver}`) || /^(?:fake|mock|stub)/i.test(outerReceiver) || auth.shadowedBrowserVars.has(outerReceiver) || auth.shadowedNamespaces.has(outerReceiver))) continue;
-    if (/^(?:fake|mock|stub)/i.test(receiver) || auth.shadowedBrowserVars.has(receiver) || auth.shadowedNamespaces.has(receiver)) continue;
+    if (
+      outerReceiver
+      && (
+        auth.stubbedNamespaceMethods.has(`${outerReceiver}.${receiver}`)
+        || /^(?:fake|mock|stub)/i.test(outerReceiver)
+        || auth.shadowedBrowserVars.has(outerReceiver)
+        || auth.shadowedNamespaces.has(outerReceiver)
+        || auth.shadowedPrimitives.has(outerReceiver)
+      )
+    ) continue;
+    if (
+      /^(?:fake|mock|stub)/i.test(receiver)
+      || auth.shadowedBrowserVars.has(receiver)
+      || auth.shadowedNamespaces.has(receiver)
+      || auth.shadowedPrimitives.has(receiver)
+    ) continue;
     if (method === 'goto' && !auth.hasPlaywrightTestImport && !auth.cleanBrowserVars.has(receiver)) continue;
     return true;
   }

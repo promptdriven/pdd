@@ -131,6 +131,55 @@ It returns 2 outside a Git repository or for a PATH outside it.
 Code replay and the `pdd test` check plan use the binding and header records
 only.
 
+## Sync touched code files with owning prompts
+
+`pdd update [FILE...] [--from RANGE] [--check] [--write] [--json]` inspects or
+syncs touched code files with their owning `.prompt.md` contracts using local
+Git metadata and working-tree files only, with zero AI subprocesses and zero
+network or interpreter calls.
+
+Choose one scope:
+
+- Pass explicit repository-relative `FILE...` paths to scope strictly to those
+  files.
+- Pass `--from RANGE` (`<base>..<head>` or `<base>`, meaning `<base>..HEAD`) to
+  scope strictly to files touched in that Git diff range.
+- Omit both to inspect staged, unstaged, and untracked non-ignored changes in
+  the current working tree.
+
+`pdd update` maps each touched file through `pdd owner` (`pdd-bindings.json`,
+`Generated from` or `Prompt:` headers, opening-sentence prose claims, and
+unique path/stem matches), groups owned modules by owning `.prompt.md` with
+`+added/-removed` diff stats and changed exported/top-level symbols, and lists
+touched unowned files separately without fabricating ownership.
+
+Per-module currency is tracked without a shared repository-wide commit SHA,
+without mutating `.prompt.md` files (preserving `prose_sha256` and human
+approvals byte-for-byte), and without adding extra keys to `pdd-bindings.json`:
+each owned module stores its derived hashes in a disjoint per-module sidecar
+file at `.pdd/sync/<module>.json` (`pdd.module-sync.v1`), while `module_sha256`
+hashes normalized code content without the derived header hash suffix. Parallel
+PRs touching different modules—even modules owned by the same prompt—edit
+disjoint sidecar files.
+
+- Default (plan): print each affected prompt's status (`current`,
+  `prompt-stale`, `code-drifted`, `both-drifted`, `unpinned`, or `deleted`),
+  diff stats, changed symbols, and next steps without writing files; exits 0.
+- `--check`: read-only verification that exits 0 when every touched owned
+  module is `current` (and no stale sidecars remain for deleted or renamed
+  modules) and exits 1 when any touched owned module has drift.
+- `--write`: after syncing prompt prose to match reviewed code diffs,
+  atomically write or prune only the touched modules' `.pdd/sync/<module>.json`
+  sidecars and refresh any existing `Generated from` / `Prompt:` header hashes
+  without modifying `.prompt.md` files, `pdd-bindings.json`, or untouched
+  modules.
+- `--json`: emit machine-readable `pdd.update-sync.v1` JSON (`scope`,
+  `prompts`, `modules`, `unowned`, `drifted`, `updated`, `ok`).
+
+Path traversal (`..`), leading-`-` options/ranges, symlinks, secret-looking
+paths (`.env`, credentials), malformed `pdd-bindings.json`, and binary owned or
+explicit files exit 2 without writing any files.
+
 ## Autopilot on this machine
 
 `pdd autopilot doctor` checks the pdd selected by PATH, Node 22.20 or newer,
@@ -719,23 +768,24 @@ Changed criterion text and other malformed test rules still refuse the test.
 | Command | What it does |
 |---|---|
 | `pdd test --target code [STORY...] [--json]` | Run the selected Story scenarios on their declared real CLI commands, with 0 AI calls. Compare arguments, optional stdin, exit code, stdout and stderr using the same cases. Save one result per Story with the commit. Unsupported steps say `not run` with a reason and cannot pass. |
-| `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every Story affected by local changes against the unique saved-run base or HEAD, including all variants and criteria. Uncertain scope keeps complete coverage. Read omitted baseline obligations from local original Check history in a separate historical report. Status describes selected checks only. Required full-pass gates still apply. |
-| `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
+| `pdd test --affected [--cache-clear] [--json] [--details] [--timeout MIN] [--max-calls N]` | Check every Story affected by local changes against the unique saved-run base or HEAD, including all variants and criteria (also accepts `--fresh`). Uncertain scope keeps complete coverage. Read omitted baseline obligations from local original Check history in a separate historical report. Status describes selected checks only. Required full-pass gates still apply. |
+| `pdd test [PATH\|STORY...] [--lf] [--cache-clear] [--fresh] [--json] [--details] [--timeout MIN] [--max-calls N]` | Reuse complete unchanged passes from `.pdd/cache/test/`. `--lf` selects last-known failures, or the normal scope when none are recorded. `--cache-clear` discards the cache while retaining operand scope and takes precedence over `--lf`. `--fresh` bypasses local cache reuse and server-side saved check answers (`fresh: true`; also accepted with `--affected` and `--journeys`) without discarding other cached Stories. Check Stories on the PDD interpreter with your gh login. With no STORY, test every Story. Send your Git files and wait for the checks, with one progress line every 30 s. Then print one table with a report link for each test, one `Prompt tests` line for each Story and, with two or more Stories, the overall line |
 | `pdd test [PATH\|STORY...] [--max-total-calls N] [--no-restart-replacement] [--max-calls N] [--timeout MIN] [--json]` | Cap logical interpreter calls across all selected Stories and any permitted `service-restarted` replacement (`--max-total-calls` 1..999999), or decline automatic `service-restarted` replacement (`--no-restart-replacement`, saved across `--read` and `--retry`). Also accepted with `--affected` and `--journeys` |
-| `pdd test --read [BATCH\|CALL_ID] [--json] [--timeout MIN]` | Read saved results; a normal Check held for lint may continue its original checks. Other reads send no work |
+| `pdd test --read [BATCH\|CALL_ID] [--json] [--details] [--timeout MIN]` | Read saved results (`--details` includes full step and check detail, outputs, errors, calls and draft interfaces); a normal Check held for lint may continue its original checks. Other reads send no work |
 | `pdd test --retry BATCH [--json] [--details] [--timeout MIN]` | Retry only confirmed unstarted checks with the saved source and call caps. Keeps completed, running and unknown jobs; changed source requires a fresh selected check |
+| `pdd test --reconcile REQUEST_ID [--json]` | Read-only reconciliation of a historical CHECK request UUID against `GET /v1/runs/<REQUEST_ID>/reconciliation` without replaying checks, changing saved batches or releasing reservations |
 | `pdd test --explain-bindings [STORY...] [--json]` | Explain each selected resource edge, fixture candidate, mismatch cause and repair. Local reads only; no sign-in or interpreter call |
 | `pdd test --files [STORY...] [--app-map PATH] [--json]` | List the exact selected upload manifest, byte sizes and `source_sha256`. No network; `--app-map` previews the Simulator's app map |
-| `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout and source-hygiene warnings, then the server checks the format of the prompts, Stories and tests only, with 0 AI calls, and requests complete diagnostics and prints the problems the server reports. Requires network access; use it before a real check |
-| `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts, labels and HTML screen stylesheet links with prompt prose and check local prompt, Story, Short JSON scenario, public-interface test and `pdd.json` project lint rules; warning advice by default (`error`-severity rules in `pdd.json` exit 1), 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, even with no PDD tests |
+| `pdd lint [STORY...] [--json] [--timeout MIN] [--max-calls N]` | Print local SVG layout and source-hygiene warnings, then run interpreter lint with 0 AI calls across selected prompts, Stories, tests (including native Short JSON and compact `app-map.json`) and whole-program cross-prompt unification (shared port signatures, mocked-port owner parity, `contracts/*.md` schema reconciliation and unwired cross-cutting advisories). Requires network access |
+| `pdd lint --local [STORY...] [--json]` | Compare linked `.ui.svg` parts, labels and HTML screen stylesheet links with prompt prose and check local prompt, Story, Short JSON scenario, compact or `v1` `app-map.json`, public-interface test and `pdd.json` project lint rules; warning advice by default (`error`-severity rules in `pdd.json` exit 1), 0 AI calls and no network/authentication. Without Story names, inspect all Git-visible prompts, including single-prompt UI apps with zero `app-map.json`, zero `Runtime interface` and no PDD tests |
 | `pdd lint --codex [STORY...] [--issue N\|FILE] [--json] [--timeout MIN]` | Run local deterministic lint plus read-only Codex readability, semantic Story-vs-Prompt alignment, and optional `--issue N\|FILE` issue-coverage checks on selected prompts and Stories with per-file `PASS` / `FAIL` verdicts (`schema_version: "pdd.codex-lint.v1"` with `--json`), exiting 0 when all pass and 1 when any file or issue-coverage check fails |
 | `pdd lint --emit-v1 [STORY...] [--write] [--json]` | Compile Short JSON Story scenarios (or omitted-`criteria` `program-scenario.v1` scenarios, passing explicit `program-scenario.v1` scenarios through unchanged in dry-run mode) locally with 0 AI calls and no network/authentication; prints the expanded `program-scenario.v1` JSON by default, or with `--write` compiles and binds matching legacy non-`ac-sha256-...` criterion IDs to current Story `ac-sha256-...` content IDs and updates each changed selected test file on disk atomically (refusing symlinks, stale `ac-sha256-...` IDs, or mismatched criterion text without modifying files) |
 | `pdd lint --bind-criteria [STORY...] [--json]` | Bind legacy non-`ac-sha256-...` criterion IDs (or omitted `criteria`) on disk to current Story `ac-sha256-...` content IDs when every criterion text matches the Story word-for-word, preserving check expectations for `git diff` review; refuses without modifying files when any criterion text differs or has a stale `ac-sha256-...` ID. 0 AI calls and no network/authentication |
 | `pdd test --screen URL --drawing PATH [--look] [--json]` | Compare the real page with its `.ui.svg` layout spec in installed headless Chrome/Chromium at the SVG viewport (`--look` also checks canvas color, painted card/section boxes, box size and spacing within tolerance, without pixel equality; `pdd test --screen URL --drawing PATH [--json]` checks parts only). No AI or interpreter call; missing/hidden parts, order, region or look differences fail |
 | `pdd approve PROMPT [--said WORDS]` | Approve one prompt with your chat words, or terminal y/N without --said; strict mode requires a person terminal. |
-| `pdd simulate [STORY] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Simulator page for screens and typed operations. With no Story, open the whole project. |
-| `pdd simulate [STORY] --page [--new]` | Open the Simulator page explicitly |
-| `pdd simulate --stop [STORY]` | Stop the open Simulator link of a Story or exact Try ID |
+| `pdd simulate [STORY\|PROMPT.md] [--max-calls N] [--tab call\|screen\|terminal\|world] [--app-map PATH] [--new] [--fresh] [--no-open] [--no-wait] [--agent NAME]` | Automatically open a shell for command-line programs, localhost with an example request for HTTP routes, or the Simulator page (Screen tab for `app-map.json` or single-file plain-prose `render`/`handle_event` UI prompts with zero `app-map.json`, zero `Runtime interface` and optional Story; Form tab for other typed operations). With no operand, open the whole project (or the sole `.prompt.md` when no Stories exist). `--fresh` requests fresh uncached interpreter execution (`fresh: true`; also accepted with `--page`, `--cli` and `--serve`). |
+| `pdd simulate [STORY\|PROMPT.md] --page [--new] [--fresh]` | Open the Simulator page explicitly (`--fresh` bypasses saved answer caches) |
+| `pdd simulate --stop [STORY\|PROMPT.md]` | Stop the open Simulator link of a Story, prompt, or exact Try ID |
 
 For `--target code`, each tested Runtime entry declares
 `"implementation": {"kind": "cli", "command": "node bin/tip.mjs"}`. The command
@@ -876,13 +926,13 @@ Check, remote lint and simulation setup use [local bookkeeping and capacity wait
 
 A saved Simulator setup is read by its original request ID before any new setup is considered. A plain repeat keeps that ID when the setup is pending, unknown, missing, expired or ended; it does not create a replacement. Recovery diagnostics name the original UUID and its authenticated `GET /v1/runs/<UUID>` status endpoint. A known running setup reuses its existing link. Start a separate setup deliberately with `--new` after reconciling the original outcome. An unknown setup result does not prove zero AI calls or zero external effects.
 
-`pdd simulate [STORY] --cli [--shell] [--max-calls N] [--new]`
+`pdd simulate [STORY|PROMPT.md] --cli [--shell] [--max-calls N] [--new] [--fresh]`
 
-Use the program in your own terminal. Copy the printed PATH line or run the absolute shim path.
+Use the program in your own terminal. Copy the printed PATH line or run the absolute shim path (`--fresh` bypasses saved answer caches).
 
-`pdd simulate [STORY] --serve [PORT] [--max-calls N] [--new]`
+`pdd simulate [STORY|PROMPT.md] --serve [PORT] [--max-calls N] [--new] [--fresh]`
 
-Serve the Story on localhost (default 8080).
+Serve the Story or prompt on localhost (default 8080; `--fresh` bypasses saved answer caches).
 
 `pdd simulate --save-last`
 

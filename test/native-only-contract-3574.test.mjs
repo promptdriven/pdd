@@ -1545,3 +1545,271 @@ test('R4 adversarial regression suite: items 1 through 8', () => {
   `;
   assert.equal(detectRealHostProbesInTest('test/multiline-prop-stub.test.mjs', multilinePropStub).hasRealHostSmoke, false);
 });
+
+test('R5 adversarial regression suite: R5-1 through R5-5', () => {
+  // R5-1 [P1]: Arrow functions (`page =>`, `cp =>`, `request =>`, `fetch =>`) never poison authentic primitives or namespaces.
+  const arrowPlaywright = `
+    import { test } from '@playwright/test';
+    test('popup', async ({ context, page }) => {
+      context.on('page', page => console.log(page.url()));
+      await page.goto('http://127.0.0.1:3000');
+    });
+  `;
+  assert.ok(detectRealE2eKindsInTest('test/arrow-pw.test.mjs', arrowPlaywright).includes('browser-playwright'));
+
+  const arrowCp = `
+    import * as cp from 'node:child_process';
+    const ids = items.map(cp => cp.id);
+    cp.execFileSync(process.execPath, ['-e', '0']);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/arrow-cp.test.mjs', arrowCp).hasRealHostSmoke, true);
+
+  const arrowRequest = `
+    import { request } from 'node:http';
+    const urls = reqs.map(request => request.url);
+    request('http://127.0.0.1:3000');
+  `;
+  assert.ok(detectRealE2eKindsInTest('test/arrow-req.test.mjs', arrowRequest).includes('local-server-or-db'));
+
+  const arrowFetch = `
+    const ids = jobs.map(fetch => fetch.id);
+    await fetch('http://127.0.0.1:3000/health');
+  `;
+  assert.equal(detectRealHostProbesInTest('test/arrow-fetch.test.mjs', arrowFetch).hasRealHostSmoke, true);
+
+  // R5-2 [P1]: Browser alias reassignment (`pw = { ... }`) & prop stubs on launchPersistentContext / connectOverCDP / pages.
+  const browserR5Bypasses = [
+    `let { chromium: pw } = require('playwright');\npw = { launch: async () => ({}) };\nawait pw.launch();`,
+    `import { chromium } from 'playwright';\nchromium.launchPersistentContext = async () => ({ newPage: async () => ({ goto: async () => {} }) });\nconst ctx = await chromium.launchPersistentContext('/tmp/p');\nconst page = await ctx.newPage();\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { chromium } from 'playwright';\nchromium.connectOverCDP = async () => ({ newPage: async () => ({ goto: async () => {} }) });\nconst browser = await chromium.connectOverCDP('http://127.0.0.1:9222');\nconst page = await browser.newPage();\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { test } from '@playwright/test';\ntest('x', async ({ context }) => {\n  context.pages = () => [{ goto: async () => {} }];\n  const [page] = context.pages();\n  await page.goto('http://127.0.0.1:3000');\n});`,
+  ];
+  for (const code of browserR5Bypasses) {
+    assert.ok(!detectRealE2eKindsInTest('test/browser-r5-bypass.test.mjs', code).includes('browser-playwright'), `R5-2 bypass must fail: ${code}`);
+  }
+
+  // R5-3 [P2]: Multiline `=` reassignments and stubs (`cp\n =`, `cp.spawnSync\n =`, `fetch\n =`, `page\n =`).
+  const multilineAssignStubs = [
+    `let cp = require('node:child_process');\ncp\n  = { spawnSync: () => ({ status: 0 }) };\ncp.spawnSync('git', ['status']);`,
+    `import * as cp from 'node:child_process';\ncp.spawnSync\n  = () => ({ status: 0 });\ncp.spawnSync('git', ['status']);`,
+    `fetch\n  = async () => ({ ok: true });\nawait fetch('http://127.0.0.1:3000');`,
+    `globalThis.\n  fetch\n  = async () => ({ ok: true });\nawait fetch('http://127.0.0.1:3000');`,
+    `import { test } from '@playwright/test';\ntest('x', async ({ page }) => {\n  page\n    = { goto: async () => {} };\n  await page.goto('http://127.0.0.1:3000');\n});`,
+  ];
+  for (const code of multilineAssignStubs) {
+    assert.equal(detectRealHostProbesInTest('test/multiline-assign.test.mjs', code).hasRealHostSmoke, false, `multiline assign stub must fail: ${code}`);
+  }
+
+  // R5-4 [P2]: TS inline object/union/intersection return types & modifier method signatures (`public`/`private`/`abstract`/`override`/`declare`).
+  const tsMethodVariants = [
+    `class Fake { fetch(url: string): { ok: boolean } { return { ok: true }; } }`,
+    `class Fake { fetch(url: string): null | { ok: boolean } { return null; } }`,
+    `class Fake { fetch(url: string): Base & { ok: boolean } { return null as any; } }`,
+    `class Fake { public fetch(url: string) { return null; } }`,
+    `abstract class Fake { abstract fetch(url: string): Promise<Response>; }`,
+    `class Fake { override fetch(url: string): Response { return null as any; } }`,
+    `class Fake { private fetch(url: string): void; }`,
+  ];
+  for (const code of tsMethodVariants) {
+    assert.equal(detectRealHostProbesInTest('test/ts-r5-fetch.test.mjs', code).hasRealHostSmoke, false, `TS method must not spoof global fetch: ${code}`);
+  }
+  // Ternary returning object literal still passes as authentic global fetch.
+  assert.equal(
+    detectRealHostProbesInTest('test/ternary-obj-r5.test.mjs', `const out = ok ? fetch('http://127.0.0.1:3000') : { ok: false };`).hasRealHostSmoke,
+    true,
+  );
+
+  // R5-5 [P2]: Comma-separated object destructuring, array destructuring shadows, and `$`-suffixed class shadowing (`class fs$`).
+  const commaAndArrayShadows = [
+    `import { test } from '@playwright/test';\nconst a = 1, { page } = { page: { goto: mock.fn() } };\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { test } from '@playwright/test';\nconst [page] = [{ goto: mock.fn() }];\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { test } from '@playwright/test';\nconst a = 1, [page] = [{ goto: mock.fn() }];\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { spawnSync } from 'node:child_process';\nconst [spawnSync] = [() => ({ status: 0 })];\nspawnSync('git', ['status']);`,
+    `import * as cp from 'node:child_process';\nconst a = 1, { cp } = { cp: { spawnSync: () => ({ status: 0 }) } };\ncp.spawnSync('git', ['status']);`,
+    `import * as fs$ from 'node:fs';\nclass fs$ { static statSync() { return {}; } }\nfs$.statSync('/dev/tty');`,
+  ];
+  for (const code of commaAndArrayShadows) {
+    assert.equal(detectRealHostProbesInTest('test/r5-destr-shadow.test.mjs', code).hasRealHostSmoke, false, `R5-5 shadow must fail: ${code}`);
+  }
+});
+
+test('R1 Finding #2 integration: autopilot-core runValidatorV2Gate enforces native-only & per-file real-host classes end-to-end', async (t) => {
+  // 1. PR modifying a `kind: native-only` module (via prompt + `// Generated from` header) with only a mocked unit test is BLOCKED in Bucket 3,
+  //    and PASSES/merges once a real non-mocked executed smoke test targets that module.
+  const w1 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w1.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  w1.issue(101, { title: 'Update native-only trust store' });
+  await w1.tick();
+  const buildCwd1 = w1.job(101, 'build').cwd;
+  writeFile(buildCwd1, 'prompts/trust/store.prompt.md', [
+    '---',
+    'kind: native-only',
+    'reason: Real SQLite adapter on host filesystem.',
+    '---',
+    '# Trust store',
+    'Owns `src/trust/store.mjs`.',
+    '## Boundary contract',
+    'Opens SQLite database on disk.',
+    '## Error mapping',
+    'Maps SQLITE_BUSY to HTTP 503.',
+    '## Real-host verification',
+    'Runs real SQLite smoke test.',
+    '## Dependencies',
+    'None.',
+  ].join('\n'));
+  writeFile(
+    buildCwd1,
+    'src/trust/store.mjs',
+    '// Generated from prompts/trust/store.prompt.md.\nexport function openTrustStore(db) { return db; }\n',
+  );
+  writeFile(
+    buildCwd1,
+    'test/trust-store-mock.test.mjs',
+    "import test, { mock } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { openTrustStore } from '../src/trust/store.mjs';\ntest('mocked', () => assert.ok(openTrustStore(mock.fn())));\n",
+  );
+  const { pr: pr1 } = w1.build(101, {
+    write: false,
+    body: 'Fixes #101\n\nRuntime: not run (native-only prompt)\nPath: d — src/trust/store.mjs, test/trust-store-mock.test.mjs — owned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w1.tick();
+  w1.review(101, 'PASS');
+  w1.suite(101, 0);
+  await w1.tick();
+
+  assert.equal(pr1.merged, false, 'mock-only native-only PR must be blocked by runValidatorV2Gate');
+  assert.ok(w1.labels(101).includes('pdd:needs-decision'), 'parks native-only mock-only PR in Bucket 3');
+  assert.ok(
+    pr1.comments.some((c) => /<!-- pdd:autopilot-core:human-boundary:/.test(c.body) && /src\/trust\/store\.mjs/.test(c.body)),
+    'human verification card names the unverified native-only module',
+  );
+
+  // Now verify a second PR on the same kind: native-only module (discovered via pdd-bindings.json) WITH a real executed SQLite smoke test PASSES and merges!
+  const w2 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w2.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  w2.issue(102, { title: 'Add real SQLite smoke for native-only trust store' });
+  await w2.tick();
+  const buildCwd2 = w2.job(102, 'build').cwd;
+  writeFile(buildCwd2, 'prompts/trust/store.prompt.md', [
+    '---',
+    'kind: native-only',
+    'reason: Real SQLite adapter on host filesystem.',
+    '---',
+    '# Trust store',
+    '## Boundary contract',
+    'Opens SQLite database on disk.',
+    '## Error mapping',
+    'Maps SQLITE_BUSY to HTTP 503.',
+    '## Real-host verification',
+    'Runs real SQLite smoke test.',
+    '## Dependencies',
+    'None.',
+  ].join('\n'));
+  writeFile(buildCwd2, 'pdd-bindings.json', JSON.stringify({
+    schema_version: 'pdd.bindings.v1',
+    modules: [{ module: 'src/trust/store.mjs', prompt: 'prompts/trust/store.prompt.md' }],
+  }, null, 2));
+  writeFile(buildCwd2, 'src/trust/store.mjs', 'export function openTrustStore(db) { return db; }\n');
+  writeFile(
+    buildCwd2,
+    'test/trust-store-smoke.test.mjs',
+    "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { DatabaseSync } from 'node:sqlite';\nimport { openTrustStore } from '../src/trust/store.mjs';\ntest('real sqlite', () => { const db = new DatabaseSync(':memory:'); assert.ok(openTrustStore(db)); db.close(); });\n",
+  );
+  const { pr: pr2 } = w2.build(102, {
+    write: false,
+    body: 'Fixes #102\n\nRuntime: not run (native-only prompt)\nPath: d — src/trust/store.mjs, test/trust-store-smoke.test.mjs — owned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w2.tick();
+  w2.review(102, 'PASS');
+  w2.suite(102, 0);
+  await w2.tick();
+
+  assert.equal(pr2.merged, true, 'native-only PR with real executed SQLite smoke test must pass runValidatorV2Gate and merge');
+
+  // 2. Unrelated test exercising `nested-sandbox` for a DIFFERENT file MUST NOT satisfy changed `src/os-sandbox.mjs`,
+  //    while a targeted `sandbox-exec` smoke test for `src/os-sandbox.mjs` PASSES and merges!
+  const w3 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w3.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  w3.issue(103, { title: 'Sandbox change without targeted nested-sandbox probe' });
+  await w3.tick();
+  const buildCwd3 = w3.job(103, 'build').cwd;
+  writeFile(buildCwd3, 'src/os-sandbox.mjs', 'export function buildSandbox() { return "sandbox-exec"; }\n');
+  writeFile(buildCwd3, 'src/other-helper.mjs', 'export function helper() { return true; }\n');
+  writeFile(
+    buildCwd3,
+    'test/os-sandbox-plain.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { buildSandbox } from '../src/os-sandbox.mjs';\ntest('plain subprocess without sandbox', () => { buildSandbox(); execFileSync(process.execPath, ['-e', '0']); });\n",
+  );
+  writeFile(
+    buildCwd3,
+    'test/unrelated-sandbox.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { helper } from '../src/other-helper.mjs';\ntest('unrelated sandbox', () => { helper(); execFileSync('sandbox-exec', ['-p', '(version 1)', '/usr/bin/true']); });\n",
+  );
+  const { pr: pr3 } = w3.build(103, {
+    write: false,
+    body: 'Fixes #103\n\nRuntime: not run (no prompt changed)\nPath: d — src/os-sandbox.mjs, test/os-sandbox-plain.test.mjs, test/unrelated-sandbox.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w3.tick();
+  w3.review(103, 'PASS');
+  w3.suite(103, 0);
+  await w3.tick();
+
+  assert.equal(pr3.merged, false, 'unrelated test exercising nested-sandbox for another file must NOT satisfy src/os-sandbox.mjs');
+  assert.ok(w3.labels(103).includes('pdd:needs-decision'));
+
+  const w4 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w4.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  w4.issue(104, { title: 'Sandbox change WITH targeted nested-sandbox probe' });
+  await w4.tick();
+  const buildCwd4 = w4.job(104, 'build').cwd;
+  writeFile(buildCwd4, 'src/os-sandbox.mjs', 'export function buildSandbox() { return "sandbox-exec"; }\n');
+  writeFile(
+    buildCwd4,
+    'test/os-sandbox-real.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { buildSandbox } from '../src/os-sandbox.mjs';\ntest('real nested sandbox', () => { const bin = buildSandbox(); execFileSync(bin, ['-p', '(version 1)', 'sandbox-exec']); });\n",
+  );
+  const { pr: pr4 } = w4.build(104, {
+    write: false,
+    body: 'Fixes #104\n\nRuntime: not run (no prompt changed)\nPath: d — src/os-sandbox.mjs, test/os-sandbox-real.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w4.tick();
+  w4.review(104, 'PASS');
+  w4.suite(104, 0);
+  await w4.tick();
+
+  assert.equal(pr4.merged, true, 'targeted real nested-sandbox probe on src/os-sandbox.mjs must pass runValidatorV2Gate and merge');
+
+  // 3. Multi-file cross-spoof: src/os-sandbox.mjs + src/os-tty.mjs with swapped failure classes MUST remain blocked!
+  const w5 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  w5.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  w5.issue(105, { title: 'Multi-file sandbox + tty swapped classes' });
+  await w5.tick();
+  const buildCwd5 = w5.job(105, 'build').cwd;
+  writeFile(buildCwd5, 'src/os-sandbox.mjs', 'export function buildSandbox() { return "sandbox-exec"; }\n');
+  writeFile(buildCwd5, 'src/os-tty.mjs', 'export function probeTty() { return "/dev/tty"; }\n');
+  writeFile(
+    buildCwd5,
+    'test/sandbox-only-tty.test.mjs',
+    "import test from 'node:test';\nimport { statSync } from 'node:fs';\nimport { buildSandbox } from '../src/os-sandbox.mjs';\ntest('wrong class for sandbox', () => { buildSandbox(); statSync('/dev/tty'); });\n",
+  );
+  writeFile(
+    buildCwd5,
+    'test/tty-only-sandbox.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { probeTty } from '../src/os-tty.mjs';\ntest('wrong class for tty', () => { probeTty(); execFileSync('sandbox-exec', ['-p', '(version 1)', '/usr/bin/true']); });\n",
+  );
+  const { pr: pr5 } = w5.build(105, {
+    write: false,
+    body: 'Fixes #105\n\nRuntime: not run (no prompt changed)\nPath: d — src/os-sandbox.mjs, src/os-tty.mjs, test/sandbox-only-tty.test.mjs, test/tty-only-sandbox.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await w5.tick();
+  w5.review(105, 'PASS');
+  w5.suite(105, 0);
+  await w5.tick();
+
+  assert.equal(pr5.merged, false, 'swapped real-host classes across two changed boundary files must NOT spoof each other');
+  assert.ok(w5.labels(105).includes('pdd:needs-decision'));
+});

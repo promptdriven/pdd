@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: cfa55237ed3b83fb275eb47e2dc719f0a79ddb8447178932a1135af1736f0315).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 908eef9418b3d27366cbd6b885800e2993e80632256f90b9505859db922b1bc3).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -3079,13 +3079,19 @@ function inferScenarioStoryPath(doc, scenarioPath, storiesByStem) {
   return null;
 }
 
-export function lintRepoProject({ root, files, promptPaths, tests, config } = {}) {
+export function lintRepoProject({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy } = {}) {
   const empty = { ok: true, configured: false, warnings: [], errors: [], findings: [] };
   if (!root || typeof root !== 'string') return empty;
   let realRoot, policy;
   try {
     realRoot = realpathSync(root);
-    policy = workspace.policy({ root: realRoot });
+    if (workspacePolicy !== undefined && workspacePolicy !== null) {
+      policy = workspacePolicy;
+    } else if (typeof workspaceRoot === 'string' && workspaceRoot.trim()) {
+      policy = workspace.policy({ root: realpathSync(workspaceRoot) });
+    } else {
+      policy = workspace.policy({ root: realRoot });
+    }
   } catch {
     return empty;
   }
@@ -3438,6 +3444,6 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
   };
 }
 
-export function lintRepoAntiPatterns({ root, files, promptPaths, tests, config } = {}) {
-  return lintRepoProject({ root, files, promptPaths, tests, config }).warnings;
+export function lintRepoAntiPatterns({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy } = {}) {
+  return lintRepoProject({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy }).warnings;
 }

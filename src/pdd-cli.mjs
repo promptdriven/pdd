@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 16c3f07e9e04a1519ed2a764259f973bec90447d9dd8b89fab45bd6240b2d9ab).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: a168765f10632ae9ca05bb997a9461671da845bc576d4b328b1eb5f807d892e0).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -33,22 +33,65 @@ const defaultReadPackageVersion = ({ packageRoot }) => {
   catch { return { ok: false, version: '' }; }
 };
 function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
-  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
+  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--reconcile', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
   try {
     const found = runtime.findTests({ root: cwd });
     const { selected, unknown } = runtime.selectTests(found, words, options);
     if (unknown?.length || !selected?.length) return null;
     const { rows } = runtime.preflight({ root: cwd, found, selected, allowMissingInterfaces: true });
     for (const row of rows) {
-      if (!row.native_only?.length) continue;
-      const nativePaths = new Set(row.native_only.map(item => item.path));
-      const checkableEntries = (row.steps ?? [])
-        .map(step => step?.entry_path)
-        .filter(entry => typeof entry === 'string' && !nativePaths.has(entry));
-      if (!checkableEntries.length) continue;
-      const entryPath = checkableEntries[0];
-      const adapter = row.native_only[0];
-      return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: adapter.path, native_only_reason: adapter.reason };
+      if (row.native_only?.length) {
+        const nativePaths = new Set(row.native_only.map(item => item.path));
+        const checkableEntries = (row.steps ?? [])
+          .map(step => step?.entry_path)
+          .filter(entry => typeof entry === 'string' && !nativePaths.has(entry));
+        if (checkableEntries.length) {
+          const entryPath = checkableEntries[0];
+          const adapter = row.native_only[0];
+          return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: adapter.path, native_only_reason: adapter.reason };
+        }
+      }
+      // Plain-Markdown prompts without embedded interfaces may still link kind: native-only adapters
+      // via Markdown links; walk their dependency closure using runtime's prompt/link readers.
+      const nativeInfoFor = prompt => {
+        if (!prompt) return null;
+        if (prompt.interface?.kind === 'native-only') return { reason: prompt.interface.reason ?? '' };
+        const fm = prompt.frontmatter ?? (typeof prompt.text === 'string' ? runtime.parsePromptFrontmatter?.(prompt.text)?.frontmatter : null);
+        if (fm?.kind === 'native-only') return { reason: fm.reason ?? '' };
+        return null;
+      };
+      const entryPaths = [...new Set((row.steps ?? []).map(step => step?.entry_path).filter(p => typeof p === 'string' && p.endsWith('.prompt.md')))];
+      for (const entryPath of entryPaths) {
+        if (!found.visible?.has(entryPath)) continue;
+        let entryPrompt;
+        try { entryPrompt = runtime.readPrompt(cwd, found.visible, entryPath, found.workspace); } catch { continue; }
+        if (nativeInfoFor(entryPrompt)) continue;
+        const visited = new Set([entryPath]);
+        const queue = [];
+        const enqueueTargets = (prompt, fromPath) => {
+          for (const call of Array.isArray(prompt?.interface?.calls) ? prompt.interface.calls : []) {
+            if (typeof call?.target === 'string' && !visited.has(call.target)) queue.push(call.target);
+          }
+          if (typeof prompt?.text === 'string' && typeof runtime.promptMarkdownTargets === 'function') {
+            for (const target of runtime.promptMarkdownTargets(prompt.text, fromPath, found.visible)) {
+              if (typeof target === 'string' && !visited.has(target)) queue.push(target);
+            }
+          }
+        };
+        enqueueTargets(entryPrompt, entryPath);
+        while (queue.length > 0 && visited.size < 64) {
+          const depPath = queue.shift();
+          if (visited.has(depPath) || !found.visible?.has(depPath)) continue;
+          visited.add(depPath);
+          let depPrompt;
+          try { depPrompt = runtime.readPrompt(cwd, found.visible, depPath, found.workspace); } catch { continue; }
+          const nativeInfo = nativeInfoFor(depPrompt);
+          if (nativeInfo) {
+            return { test: row.test, story: row.story, entry_path: entryPath, native_only_path: depPath, native_only_reason: nativeInfo.reason };
+          }
+          enqueueTargets(depPrompt, depPath);
+        }
+      }
     }
   } catch { /* delegate workspace/selection errors to runtime[action] */ }
   return null;
@@ -154,14 +197,14 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
   setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {} } = {}) {
+  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
-  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
+  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'update-sync', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
     && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
     && plan.options['--json'] !== true
     && !argv.includes('--json')) {
@@ -553,6 +596,36 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           return 1;
         }
       }
+      if (plan.local === 'runtime-check' && plan.options['--reconcile'] !== undefined) {
+        if (plan.operands.length > 0 || Object.keys(plan.options).some(key => !['--reconcile', '--json'].includes(key))) {
+          line(stderr, `Use pdd ${NAMES.test} --reconcile REQUEST_ID [--json] without other options or Stories.`);
+          return 2;
+        }
+        try {
+          const runtime = await import('./runtime-seam.mjs');
+          return await runtime.runCheck(
+            { words: [...plan.operands], options: { ...plan.options }, cwd },
+            {
+              env,
+              stdout,
+              stderr,
+              ...runtimeCheckReconcilePorts,
+              ...(runtimeCheckReconcile ? { reconcileCheckReceipt: runtimeCheckReconcile } : {}),
+            },
+          );
+        } catch (error) {
+          if (error?.code === 'invalid-request-id' || error?.exitCode === 2) {
+            line(stderr, causeText(error.message) || 'Invalid CHECK request UUID.');
+            return 2;
+          }
+          if (error?.code === 'reconciliation-unsupported' || error?.exitCode === 5) {
+            line(stderr, causeText(error.message) || 'CHECK receipt reconciliation is unavailable.');
+            return 5;
+          }
+          line(stderr, `CHECK receipt reconciliation failed.${reason(error)}`);
+          return 3;
+        }
+      }
       try {
         if (plan.local === 'runtime-check' && plan.options['--target'] === 'code') {
           if (Object.keys(plan.options).some(key => !['--target', '--json'].includes(key))) { line(stderr, 'pdd test --target code accepts only --json and Story selections.'); return 2; }
@@ -567,7 +640,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           }
         }
         const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
-        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
+        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--reconcile', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
         const lintRoot = isLintCheckMode ? resolveProjectLintRoot(cwd) : null;
         let seamProjectErrors = null;
         const onProjectLintResult = lintRoot && !plan.operands.length && plan.options['--local'] === true
@@ -620,6 +693,19 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const { runOwner } = await import('./file-owner.mjs');
       return runOwner({ cwd, paths: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
     }
+    case 'update-sync': {
+      try {
+        const { runUpdate } = await import('./update-sync.mjs');
+        return runUpdate({
+          cwd,
+          files: [...plan.operands],
+          ...(plan.options['--from'] !== undefined ? { from: plan.options['--from'] } : {}),
+          check: plan.options['--check'] === true,
+          write: plan.options['--write'] === true,
+          json: plan.options['--json'] === true,
+        }, { stdout, stderr });
+      } catch (error) { line(stderr, `pdd update failed.${reason(error)}`); return 1; }
+    }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
       return runApprove({ words: [...plan.operands], cwd, said: plan.options['--said'] }, { stdout, stderr, stdin, env });
@@ -634,7 +720,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       } catch { line(stderr, 'The bundled workflows could not be read. Use a complete PDD package.');return 1; }
     default: line(stderr, 'Unsupported command in pdd. Run pdd --help.');return 2;
   } })();
-  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
+  if (!['help', 'completion', 'version', 'version-detailed', 'mcp', 'upgrade', 'update-sync'].includes(plan.local) && !(plan.local === 'accounts' && plan.options['--quiet'] === true) && !(plan.local === 'autopilot-logs' && (plan.options['--follow'] === true || plan.options['-f'] === true)) && plan.options['--json'] !== true && (stderr?.isTTY === true || Boolean(releaseNotice))) {
     try {
       const metadata = await readPackageVersion({ packageRoot });
       if (metadata?.ok && typeof metadata.version === 'string' && metadata.version) {

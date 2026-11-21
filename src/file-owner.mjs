@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/file-owner.prompt.md
+// Generated from prompts/cli/file-owner.prompt.md (sha256: 7aca3a796bfdfac2b7448e744d801a7b3f62b8d3c064a285004767948d40bfae).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
@@ -8,7 +8,8 @@ import { runtimePreflightSlice } from './runtime-seam.mjs';
 const { gitFiles, interfaceBlocks } = runtimePreflightSlice();
 
 const HEAD = 4096, PROMPT = 65536, LINE = 1100, WHOLE = 10 * 1024 * 1024;
-const HEADER = /^\s*(?:(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from|(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*Prompt:) (\S+\.prompt\.md)(?: \(sha256: ([a-f0-9]{64})\)| sha256=([a-f0-9]{64}))?\.?\s*(?:\*\/|-->|"""|''')?\s*$/;
+const HEADER_PARTS = /^(\s*(?:Generated from |(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*(?:Generated from |Prompt: )))(\S+\.prompt\.md)(?:( \(sha256: )([a-f0-9]{64})(\))|( sha256=)([a-f0-9]{64}))?(\.?\s*(?:(?:\*\/|-->|"""|''')\s*)?)$/;
+const HEX64 = /^[a-f0-9]{64}$/;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const unique = values => [...new Set(values)];
 const bytesOf = content => typeof content === 'string' ? Buffer.from(content, 'utf8') : content;
@@ -16,17 +17,85 @@ const decode = (content, limit) => content ? new TextDecoder().decode(bytesOf(co
 const canonicalPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
 
+function splitLinesWithEol(text) {
+  const out = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\r' || ch === '\n') {
+      const eol = ch === '\r' && text[i + 1] === '\n' ? '\r\n' : ch;
+      out.push({ line: text.slice(start, i), eol });
+      if (eol.length === 2) i++;
+      start = i + 1;
+    }
+  }
+  if (start < text.length) out.push({ line: text.slice(start), eol: '' });
+  return out;
+}
+
 export function headerEntries(content) {
   if (!content) return [];
   const bytes = bytesOf(content), lines = decode(bytes, HEAD).split(/\r?\n/), rows = new Map();
   if (bytes.length > HEAD) lines.pop();
   for (const line of lines.filter(line => line.length <= LINE)) {
-    const match = HEADER.exec(line);
-    if (match && canonicalPath(match[1]) && !rows.has(match[1])) rows.set(match[1], { prompt: match[1], sha256: match[2] ?? match[3] ?? null });
+    const match = HEADER_PARTS.exec(line);
+    if (match && canonicalPath(match[2]) && !rows.has(match[2])) rows.set(match[2], { prompt: match[2], sha256: match[4] ?? match[7] ?? null });
   }
   return [...rows.values()];
 }
 export const headerPrompts = content => headerEntries(content).map(row => row.prompt);
+
+// Normalized module content hash: LF endings, BOM stripped, derived header hash suffixes removed inside the 4 KiB header window.
+export function moduleContentHash(content) {
+  const raw = typeof content === 'string' ? content : new TextDecoder('utf-8').decode(content);
+  const normalized = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  const totalBytes = Buffer.byteLength(normalized, 'utf8');
+  const rows = splitLinesWithEol(normalized);
+  let byteOffset = 0, out = '';
+  for (let i = 0; i < rows.length; i++) {
+    const { line, eol } = rows[i];
+    const lineBytes = Buffer.byteLength(line, 'utf8');
+    const stepBytes = lineBytes + eol.length;
+    const withinWindow = totalBytes <= HEAD || byteOffset + stepBytes <= HEAD;
+    if (withinWindow && line.length <= LINE) {
+      const match = HEADER_PARTS.exec(line);
+      if (match && canonicalPath(match[2])) {
+        out += `${match[1]}${match[2]}${match[8]}${eol}`;
+        byteOffset += stepBytes;
+        continue;
+      }
+    }
+    out += line + eol;
+    byteOffset += stepBytes;
+  }
+  return sha256(Buffer.from(out, 'utf8'));
+}
+
+export function updateHeaderHash(codeText, promptPath, hash) {
+  if (typeof codeText !== 'string' || !canonicalPath(promptPath) || !HEX64.test(hash ?? '')) return { content: codeText, changed: false };
+  const totalBytes = Buffer.byteLength(codeText, 'utf8');
+  const rows = splitLinesWithEol(codeText);
+  let byteOffset = 0, out = '', changed = false;
+  for (let i = 0; i < rows.length; i++) {
+    const { line, eol } = rows[i];
+    const lineBytes = Buffer.byteLength(line, 'utf8');
+    const stepBytes = lineBytes + Buffer.byteLength(eol, 'utf8');
+    const cutByWindow = totalBytes > HEAD && byteOffset + stepBytes > HEAD;
+    if (byteOffset < HEAD && !cutByWindow && line.length <= LINE) {
+      const match = HEADER_PARTS.exec(line);
+      if (match && canonicalPath(match[2]) && match[2] === promptPath) {
+        const nextLine = match[6] ? `${match[1]}${match[2]}${match[6]}${hash}${match[8]}` : `${match[1]}${match[2]} (sha256: ${hash})${match[8]}`;
+        if (nextLine !== line) changed = true;
+        out += nextLine + eol;
+        byteOffset += stepBytes;
+        continue;
+      }
+    }
+    out += line + eol;
+    byteOffset += stepBytes;
+  }
+  return { content: out, changed };
+}
 
 // The behavior text: each Runtime interface JSON object loses its approval metadata (status, prose_sha256).
 export function promptHeaderHash(content) {
