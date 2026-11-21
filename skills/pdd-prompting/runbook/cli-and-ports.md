@@ -19,7 +19,7 @@ Persist state through injected `<port>.<op>` ports—never hidden globals or pro
 
 ## 7. A prompt that calls another prompt
 
-Link peer `.prompt.md` files under `## Dependencies` with relative Markdown links (`[pricing](pricing.prompt.md)`). The interpreter resolves peer operations automatically; assert peer call counts with `["calls", "internal:<peer>", "=", 1]`.
+Link peer `.prompt.md` files under `## Dependencies` with relative Markdown links (`[pricing](pricing.prompt.md)`). Name each call to a sibling checkable prompt explicitly in prose as `<prompt>.<op>` (for example `pricing.calculate_total`) so both readers and the interpreter bind the exact peer operation. The interpreter resolves peer operations automatically; assert peer call counts with `["calls", "internal:<peer>", "=", 1]`.
 
 ## 21. Fake the outside world
 

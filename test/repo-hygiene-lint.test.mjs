@@ -1541,47 +1541,49 @@ test('3574 + 3578: default-on native-only-unknown-port fails closed without pdd.
   execFileSync('git', ['add', '.'], { cwd: repo });
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
 
-  // 1. With NO pdd.json at all, pdd lint --local (plain & --json) fails closed with exit 1 on the 3 dead ports and emits 0 SQL fence warnings.
+  // 1. With NO pdd.json at all, pdd lint --local (plain & --json) emits default-warn findings for the 3 dead ports (exit 0) and 0 SQL fence warnings.
   const brokenOut = sink(), brokenErr = sink();
   const brokenCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: brokenOut, stderr: brokenErr });
-  assert.equal(brokenCode, 1);
-  assert.match(brokenErr.text, /\[native-only-unknown-port\].*"access_state\.read"/);
-  assert.match(brokenErr.text, /\[native-only-unknown-port\].*"access\.commit"/);
-  assert.match(brokenErr.text, /\[native-only-unknown-port\].*"notice\.deliver"/);
-  assert.ok(!brokenErr.text.includes('"store.load"'));
-  assert.ok(!brokenErr.text.includes('"audit.append"'));
-  assert.ok(!brokenErr.text.includes('"telemetry.emit"'));
-  assert.ok(!brokenErr.text.includes('socket.bind'));
+  assert.equal(brokenCode, 0, brokenErr.text);
+  assert.match(brokenOut.text, /Warning:.*\[native-only-unknown-port\].*"access_state\.read"/);
+  assert.match(brokenOut.text, /Warning:.*\[native-only-unknown-port\].*"access\.commit"/);
+  assert.match(brokenOut.text, /Warning:.*\[native-only-unknown-port\].*"notice\.deliver"/);
+  assert.ok(!brokenOut.text.includes('"store.load"'));
+  assert.ok(!brokenOut.text.includes('"audit.append"'));
+  assert.ok(!brokenOut.text.includes('"telemetry.emit"'));
+  assert.ok(!brokenOut.text.includes('socket.bind'));
   assert.ok(!brokenOut.text.includes('prompt-code-fence-length'));
   assert.ok(!brokenOut.text.includes('prompt-code-fence-total'));
 
   const brokenJsonOut = sink(), brokenJsonErr = sink();
   const brokenJsonCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: brokenJsonOut, stderr: brokenJsonErr });
-  assert.equal(brokenJsonCode, 1, brokenJsonErr.text);
+  assert.equal(brokenJsonCode, 0, brokenJsonErr.text);
   const brokenParsed = JSON.parse(brokenJsonOut.text);
-  assert.equal(brokenParsed.ok, false);
-  assert.equal(brokenParsed.exit_code, 1);
-  assert.equal(brokenParsed.problems.length, 3);
+  assert.equal(brokenParsed.exit_code, 0);
+  assert.deepEqual(brokenParsed.problems, []);
+  assert.equal(brokenParsed.warnings.filter(w => w.includes('[native-only-unknown-port]')).length, 3);
   assert.ok(brokenParsed.warnings.some(w => w.includes('[fake-test-prompt-read]')), 'advisory warnings remain visible');
   assert.ok(!brokenParsed.warnings.some(w => w.includes('prompt-code-fence-')));
 
-  // 2. pdd.json without a "lint" key still fails closed by default.
+  // 2. pdd.json without a "lint" key stays default-warn (exit 0).
   writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'off' } }, null, 2) + '\n');
   execFileSync('git', ['add', 'pdd.json'], { cwd: repo });
   const noLintKeyCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: sink(), stderr: sink() });
-  assert.equal(noLintKeyCode, 1);
+  assert.equal(noLintKeyCode, 0);
 
-  // 3. pdd.json "lint" override ("warn") downgrades native-only-unknown-port to advisory warning (exit 0).
-  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'warn' } } }, null, 2) + '\n');
-  const warnOverrideOut = sink(), warnOverrideErr = sink();
-  const warnOverrideCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: warnOverrideOut, stderr: warnOverrideErr });
-  assert.equal(warnOverrideCode, 0, warnOverrideErr.text);
-  const warnParsed = JSON.parse(warnOverrideOut.text);
-  assert.deepEqual(warnParsed.problems, []);
-  assert.ok(warnParsed.warnings.some(w => w.includes('[native-only-unknown-port]') && w.includes('"access_state.read"')));
+  // 3. pdd.json "lint" override ("error") promotes native-only-unknown-port to blocking Error (exit 1).
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'error' } } }, null, 2) + '\n');
+  const errOverrideOut = sink(), errOverrideErr = sink();
+  const errOverrideCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: errOverrideOut, stderr: errOverrideErr });
+  assert.equal(errOverrideCode, 1, errOverrideErr.text);
+  const errParsed = JSON.parse(errOverrideOut.text);
+  assert.equal(errParsed.ok, false);
+  assert.equal(errParsed.exit_code, 1);
+  assert.equal(errParsed.problems.length, 3);
+  assert.ok(errParsed.problems.some(p => p.includes('[native-only-unknown-port]') && p.includes('"access_state.read"')));
 
-  // 4. pdd.json "lint" disable ("off") suppresses native-only-unknown-port completely (exit 0).
-  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { disable: ['native-only-unknown-port'] } }, null, 2) + '\n');
+  // 4. pdd.json "lint" override ("off" / disable) suppresses native-only-unknown-port completely (exit 0).
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'off' } } }, null, 2) + '\n');
   const offOverrideOut = sink(), offOverrideErr = sink();
   const offOverrideCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: offOverrideOut, stderr: offOverrideErr });
   assert.equal(offOverrideCode, 0, offOverrideErr.text);
@@ -1589,8 +1591,8 @@ test('3574 + 3578: default-on native-only-unknown-port fails closed without pdd.
   assert.deepEqual(offParsed.problems, []);
   assert.ok(!offParsed.warnings.some(w => w.includes('[native-only-unknown-port]')));
 
-  // 5. Removing pdd.json and replacing the 3 dead ports with valid ones makes pdd lint --local exit 0 even with advisory fake-test warnings present.
-  rmSync(join(repo, 'pdd.json'));
+  // 5. Replacing the 3 dead ports with valid ones makes pdd lint --local exit 0 even with "error" override and advisory fake-test warnings present.
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'error' } } }, null, 2) + '\n');
   const fixedService = brokenService
     .replace('- `access_state.read`: dead port 1.', '- `store.save`: valid direct save port.')
     .replace('- `access.commit`: dead port 2.\n', '')
@@ -1841,10 +1843,12 @@ test('3574 adversarial review fixes: linear ReDoS safety, scoped table/prose ext
   );
   assert.equal(seamCode, 0);
   assert.equal(collected.length, 1, 'seam.lint must run lintRepoProject exactly once');
-  assert.equal(collected[0].ok, false);
-  assert.equal(collected[0].errors.length, 1);
-  assert.ok(collected[0].errors[0].includes('prompts/broken-adapter.prompt.md') && collected[0].errors[0].includes('"store.missing"'));
-  assert.ok(!collected[0].errors.some(e => e.includes('only-native-dep.prompt.md')), 'heading-style native-only peer must be recognized as native-only');
+  assert.equal(collected[0].ok, true, 'native-only-unknown-port defaults to advisory warn');
+  assert.deepEqual(collected[0].errors, []);
+  const parityWarnings = collected[0].warnings.filter(w => w.includes('[native-only-unknown-port]'));
+  assert.equal(parityWarnings.length, 1);
+  assert.ok(parityWarnings[0].includes('prompts/broken-adapter.prompt.md') && parityWarnings[0].includes('"store.missing"'));
+  assert.ok(!parityWarnings.some(w => w.includes('only-native-dep.prompt.md')), 'heading-style native-only peer must be recognized as native-only');
 });
 
 test('3574 + 3578 Round 2 regressions: Story-scoped sibling isolation (P1-A), ## Ports subheadings (P1-B), adapter/idiom/separator false-positive guards (P1-C), and O(N) SQL/heading scans (P1-D)', async t => {
@@ -2070,8 +2074,12 @@ test('3574 + 3578 Round 3 regressions: hosted repo-wide pdd lint catches native-
     [],
   );
 
-  // P1: Hosted repo-wide `pdd lint` & `pdd lint --json` (without `--local`) must NOT mask native-only adapter errors behind Story-filtered lintSvgLayouts.
+  // P1: Hosted repo-wide `pdd lint` & `pdd lint --json` (without `--local`) must NOT mask promoted native-only adapter errors behind Story-filtered lintSvgLayouts.
   const h = harbor(t, repo => {
+    writeFileSync(
+      join(repo, 'pdd.json'),
+      JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'error' } } }, null, 2) + '\n',
+    );
     writeFileSync(
       join(repo, 'prompts/adapter.prompt.md'),
       [
@@ -2177,4 +2185,188 @@ test('3574 Part 1: lintRepoProject emits advisory native-only-contract-incomplet
   assert.equal(report.ok, true, 'native-only-contract-incomplete defaults to advisory warn');
   assert.equal(report.findings.filter(f => f.code === 'native-only-contract-incomplete').length, 1);
   assert.equal(report.findings.find(f => f.code === 'native-only-contract-incomplete').path, 'prompts/stub.prompt.md');
+});
+
+test('3574 reopen + 3569 Tip 1: native-only gateway routing to sibling <prompt>.<op> operations produces 0 findings, nonexistent external ports warn by default and honor pdd.json error/off', (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-3574-peer-ops-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  for (const dir of ['prompts/access', 'prompts/governance', 'prompts/billing', 'prompts/gateway']) {
+    mkdirSync(join(scratch, dir), { recursive: true });
+  }
+
+  // Linked checkable prompt 1: operations declared in ## Operations headings + bullets + Runtime interface.
+  writeFileSync(
+    join(scratch, 'prompts/access/access.prompt.md'),
+    [
+      '# Access policy',
+      '',
+      'Own `src/access/access.mjs`. Reads policy rules via `store.load`.',
+      '',
+      '## Operations',
+      '',
+      '### `invoke_tool(client_id, tool_name, args)`',
+      'Evaluates access policy and executes the requested tool.',
+      '',
+      '- `list_tools(client_id)`: lists permitted tools.',
+      '',
+      '## Dependencies',
+      'None.',
+    ].join('\n') + '\n',
+  );
+
+  // Linked checkable prompt 2: operations declared in ## Interface table + inline export prose.
+  writeFileSync(
+    join(scratch, 'prompts/governance/governance.prompt.md'),
+    [
+      '# Governance',
+      '',
+      'Own `src/governance/governance.mjs`, exporting `register_client` and `revoke_client` for callers.',
+      '',
+      '## Interface',
+      '',
+      '| Operation | Description |',
+      '| --- | --- |',
+      '| `list_clients` | Returns registered clients |',
+      '',
+      '## Dependencies',
+      'None.',
+    ].join('\n') + '\n',
+  );
+
+  // Linked checkable prompt 3: generic filename stem (`service.prompt.md`) under domain directory (`billing`),
+  // with ## Commands bullet so both `billing.charge_invoice` and `service.charge_invoice` are recognized.
+  writeFileSync(
+    join(scratch, 'prompts/billing/service.prompt.md'),
+    [
+      '# Billing service',
+      '',
+      'Own `src/billing/service.mjs`. Persists receipts via `ledger.append`.',
+      '',
+      '## Commands',
+      '',
+      '- `charge_invoice(invoice_id)` — charges an open invoice.',
+      '',
+      '## Dependencies',
+      'None.',
+    ].join('\n') + '\n',
+  );
+
+  // Clean native-only gateway/server prompt routing to exported <prompt>.<op> operations + wiring valid external ports.
+  const cleanGateway = [
+    '---',
+    'kind: native-only',
+    'reason: Runs stdio/HTTP gateway transport and real SQLite connections.',
+    '---',
+    '',
+    '# Gateway server',
+    '',
+    'Own `src/gateway/server.mjs`.',
+    '',
+    '## Transport and Tool Routing',
+    '',
+    'The gateway adapter binds routes and tools on stdio and HTTP, delegating to `access.invoke_tool`, `access.list_tools`, `governance.register_client`, `governance.revoke_client`, `governance.list_clients`, `billing.charge_invoice`, and `service.charge_invoice`.',
+    '',
+    '| Service | Operation | Notes |',
+    '| --- | --- | --- |',
+    '| `access` | `invoke_tool` | Policy-checked tool call |',
+    '| `gateway` | `health_check` | Local liveness endpoint |',
+    '',
+    '| Tool | Handler |',
+    '| --- | --- |',
+    '| `clients.create` | `governance.register_client` |',
+    '',
+    '- `access.invoke_tool`: invoke a tool.',
+    '- `governance.register_client`: register a client.',
+    '- `gateway.health_check`: local health route.',
+    '',
+    '## Port wiring',
+    '',
+    '- `store.load`: reads policy rows from SQLite.',
+    '- `ledger.append`: appends receipt rows.',
+    '',
+    '## Error mapping',
+    'Maps SQLITE_BUSY to HTTP 503 and invalid JSON-RPC payloads to exit code 2.',
+    '',
+    '## Real-host verification',
+    'Runs real-host SQLite and local HTTP gateway smoke checks.',
+    '',
+    '## Dependencies',
+    '',
+    '- [access](../access/access.prompt.md)',
+    '- [governance](../governance/governance.prompt.md)',
+    '- [billing](../billing/service.prompt.md)',
+  ].join('\n') + '\n';
+
+  writeFileSync(join(scratch, 'prompts/gateway/server.prompt.md'), cleanGateway);
+  execFileSync('git', ['init', '-q'], { cwd: scratch });
+  execFileSync('git', ['add', '.'], { cwd: scratch });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: scratch });
+
+  const cleanReport = lintRepoProject({ root: scratch });
+  assert.equal(cleanReport.ok, true, cleanReport.errors.join('\n'));
+  assert.deepEqual(
+    cleanReport.findings.filter(f => f.code === 'native-only-unknown-port'),
+    [],
+    'routing to exported <prompt>.<op> operations of linked checkable prompts must emit 0 native-only-unknown-port findings',
+  );
+
+  // Wiring a genuinely nonexistent external port produces a default-warn finding (not a hard error),
+  // promotes to error under pdd.json lint.rules["native-only-unknown-port"] = "error",
+  // and is suppressed under "off".
+  const brokenGateway = cleanGateway.replace(
+    '- `ledger.append`: appends receipt rows.',
+    '- `ledger.append`: appends receipt rows.\n- `ghost_store.purge`: nonexistent external port.',
+  );
+  writeFileSync(join(scratch, 'prompts/gateway/server.prompt.md'), brokenGateway);
+
+  const defaultReport = lintRepoProject({ root: scratch });
+  assert.equal(defaultReport.ok, true, 'nonexistent external port defaults to advisory warn (never breaks builds by default)');
+  assert.deepEqual(defaultReport.errors, []);
+  const defaultParity = defaultReport.findings.filter(f => f.code === 'native-only-unknown-port');
+  assert.equal(defaultParity.length, 1);
+  assert.equal(defaultParity[0].severity, 'warn');
+  assert.ok(defaultParity[0].formatted.startsWith('Warning:'));
+  assert.ok(defaultParity[0].message.includes('"ghost_store.purge"'));
+
+  const errorReport = lintRepoProject({ root: scratch, config: { rules: { 'native-only-unknown-port': 'error' } } });
+  assert.equal(errorReport.ok, false);
+  assert.equal(errorReport.errors.length, 1);
+  assert.ok(errorReport.errors[0].startsWith('Error:') && errorReport.errors[0].includes('"ghost_store.purge"'));
+
+  const offReport = lintRepoProject({ root: scratch, config: { rules: { 'native-only-unknown-port': 'off' } } });
+  assert.equal(offReport.ok, true);
+  assert.deepEqual(offReport.findings.filter(f => f.code === 'native-only-unknown-port'), []);
+
+  // Linked checkable prompt using ## Runtime interface operations (no ## Operations heading) also satisfies peer-op routing.
+  const runtimeIfaceDep = [
+    '# Policy engine',
+    '',
+    'Own `src/policy/engine.mjs`.',
+    '',
+    '## Runtime interface',
+    '```json',
+    JSON.stringify({ name: 'policy', operations: [{ name: 'evaluate_request' }] }),
+    '```',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: HTTP gateway.\n---\n\n# Gateway\n\n## Port wiring\n- `policy.evaluate_request`\n- `engine.evaluate_request`\n',
+      [{ path: 'prompts/policy/engine.prompt.md', text: runtimeIfaceDep }],
+    ),
+    [],
+  );
+
+  // Linear O(N) performance on large export-cue lines.
+  const hugeDep = `# Huge\n\nExports ${Array.from({ length: 4000 }, (_, i) => `\`op_${i}\``).join(', ')}.\n`;
+  const t0 = performance.now();
+  const perfRes = lintNativeOnlyPortParity(
+    '---\nkind: native-only\nreason: Perf.\n---\n\n# Perf\n\n## Port wiring\n- `huge.op_3999`\n',
+    [{ path: 'prompts/huge.prompt.md', text: hugeDep }],
+  );
+  const perfMs = performance.now() - t0;
+  assert.deepEqual(perfRes, []);
+  assert.ok(perfMs < 300, `expected linear O(N) peer-op extraction, got ${perfMs.toFixed(1)}ms`);
 });
