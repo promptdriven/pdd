@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 7da1eb8075f2f18934d8b85a3d4d512ccd4bfba8249d54fd8ec155d0acb990c0).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 9f9ab650da655dd1da62826898deb008b8934624498176d22537f394f9550709).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -100,7 +100,7 @@ const INLINE_BRACE_PORT_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.
 const NETWORK_PORT_HEADING_RE = /\b(?:tcp|udp|http|https|grpc|listen(?:ing)?|network|socket|server|tls|ssl|firewall|docker|container|kubernetes|k8s|ingress|expos(?:e|ed)|stdio|serial|forward(?:ing)?)\b/i;
 const DOMAIN_PORT_HEADING_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?)\b/i;
 const DEP_PORTS_HEADING_RE = /\b(?:injected\s+ports?|external\s+ports?|domain\s+ports?|port\s+interface|port\s+contract|ports?|resources?)\b/i;
-const DEP_OPS_HEADING_RE = /(?:(?<![A-Za-z0-9_-])(?:operations|commands|subcommands|tools|exports|entrypoints|entry[ \t]+points|public[ \t]+contract)(?![A-Za-z0-9_-])|(?:^|[ \t])(?:public[ \t]+)?interface$)/i;
+const DEP_OPS_HEADING_RE = /(?:(?<![A-Za-z0-9_-])(?:operations|commands|subcommands|tools|exports|entrypoints|entry[ \t]+points|public[ \t]+contract)(?![A-Za-z0-9_-])|^(?:\d+[.)][ \t]+)?(?:public[ \t]+)?interface$)/i;
 const DEP_OPS_EXCLUDE_HEADING_RE = /\b(?:inputs?|outputs?|errors?|allowed|forbidden|external|ports?|resources?|dependencies)\b/i;
 const DEP_OP_DETAIL_SUBHEADING_RE = /\b(?:inputs?|outputs?|errors?|parameters?|params?|fields?|returns?|examples?|notes?|schemas?|types?)\b/i;
 const DEP_OPS_TABLE_COL_RE = /\b(?:operation|operations|op|ops|command|commands|subcommand|subcommands|tool|tools|export|exports|entrypoint|entrypoints)\b/i;
@@ -1046,19 +1046,18 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
     const hasCallParens = hasCallParensInToken(inner);
     const op = cleanSingleIdentifier(inner, { allowCallArgs: true });
     if (!op) break;
-    if (!hasCallParens && NON_OP_LABEL_WORDS.has(op.toLowerCase())) break;
-    if (!hasCallParens && hasNonOpSuffix(line, pos, { requireLeadingSpace: true })) {
+    if (hasNonOpSuffix(line, pos, { requireLeadingSpace: true })) {
       trailingNonOpSuffix = true;
       break;
     }
+    if (!hasCallParens && NON_OP_LABEL_WORDS.has(op.toLowerCase())) continue;
     collected.push({ op, hasCallParens });
   }
   if (!trailingNonOpSuffix && collected.length > 0 && hasNonOpSuffix(line, pos, { requireLeadingSpace: pos === lastItemEndPos })) {
     trailingNonOpSuffix = true;
   }
-  for (const item of collected) {
-    if (trailingNonOpSuffix && !item.hasCallParens) continue;
-    onOp(item.op);
+  if (!trailingNonOpSuffix) {
+    for (const item of collected) onOp(item.op);
   }
   return pos;
 }
@@ -1262,7 +1261,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
             subheadingDepth = 0;
           } else if (isPrompt && promptPrefixes.size > 0) {
             if (opsSectionDepth > 0 && depth > opsSectionDepth) {
-              if (opDetailDepth === 0 && DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
+              if (opDetailDepth === 0 && DEP_OP_DETAIL_SUBHEADING_RE.test(title)) {
                 opDetailDepth = depth;
               } else if (opSubheadingDepth === 0 || depth === opsSectionDepth + 1) {
                 opSubheadingDepth = depth;

@@ -2945,8 +2945,8 @@ test('3619 R3 regressions: P1-1 prefix separators, P1-2 op headings before DEP_P
   );
   assert.equal(p14Fail.length, 2, p14Fail.join('\n'));
 
-  // P2-5: Trailing non-op suffix applies across ALL non-call items in a conjoined prose list,
-  // while preserving explicit call-syntax items and valid operation lists.
+  // P2-5: Trailing non-op suffix applies across ALL items in a conjoined prose list,
+  // while a separate non-conjoined call export (`Exports \`run_job()\` and the \`tag\` field.`) still extracts `run_job`.
   const p25Dep = [
     '# Access',
     '',
@@ -2954,7 +2954,7 @@ test('3619 R3 regressions: P1-1 prefix separators, P1-2 op headings before DEP_P
     '',
     'Exposes `commit`, `author`, and `branch` fields in audit entries.',
     'Exports `snapshot` and `digest` to CSV.',
-    'Exports `run_job()` and `tag` field.',
+    'Exports `run_job()` and the `tag` field.',
     '',
     '## Dependencies',
     'None.',
@@ -3121,8 +3121,8 @@ test('3619 R4b regressions: plural ops section headings & colon detail headings,
   );
   assert.equal(r4b2Fail.length, 4, r4b2Fail.join('\n'));
 
-  // R4b-3: Post-loop hasNonOpSuffix suppresses non-call items even after trailing whitespace or comma is consumed
-  // (preserving explicit call-syntax items like run_job() and check()).
+  // R4b-3 + R5-1: Trailing non-op suffix suppresses ALL items (including call-syntax items and across label words)
+  // in a conjoined list, whether followed directly or after consumed whitespace/comma.
   const r4b3Dep = [
     '# Access',
     '',
@@ -3130,6 +3130,9 @@ test('3619 R4b regressions: plural ops section headings & colon detail headings,
     '',
     'Exports `commit` and `run_job()` to CSV.',
     'Exposes `author` and `check()` fields.',
+    'Exports `commit_fn()` and `branch_fn()` to CSV.',
+    'Exposes `commit_a`, `status`, and `branch_a` fields.',
+    'Exports `commit_b`, `error`, and `branch_b` to CSV.',
     'Exposes `commit_sha` and `branch_name`, fields in the response.',
     'Operations: `get_status`: status of the service.',
     '',
@@ -3138,14 +3141,105 @@ test('3619 R4b regressions: plural ops section headings & colon detail headings,
   ].join('\n');
   assert.deepEqual(
     lintNativeOnlyPortParity(
-      nativeChecking(['access.run_job', 'access.check', 'access.get_status']),
+      nativeChecking(['access.get_status']),
       [{ path: 'prompts/access/access.prompt.md', text: r4b3Dep }],
     ),
     [],
   );
+  const r4b3FailPorts = [
+    'access.commit', 'access.run_job',
+    'access.author', 'access.check',
+    'access.commit_fn', 'access.branch_fn',
+    'access.commit_a', 'access.status', 'access.branch_a',
+    'access.commit_b', 'access.error', 'access.branch_b',
+    'access.commit_sha', 'access.branch_name',
+  ];
   const r4b3Fail = lintNativeOnlyPortParity(
-    nativeChecking(['access.commit', 'access.author', 'access.commit_sha', 'access.branch_name']),
+    nativeChecking(r4b3FailPorts),
     [{ path: 'prompts/access/access.prompt.md', text: r4b3Dep }],
   );
-  assert.equal(r4b3Fail.length, 4, r4b3Fail.join('\n'));
+  assert.equal(r4b3Fail.length, r4b3FailPorts.length, r4b3Fail.join('\n'));
+
+  // R5-2: Start-anchored [Public] Interface rejects `## User interface` and `## Storage interface`,
+  // while keeping `## Interface`, `## Public interface`, and `## 2. Public interface` working.
+  const r52NegDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## User interface',
+    '- `ui_widget`: renders button.',
+    '',
+    '## Storage interface',
+    '- `disk_flush`: flushes buffers.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const r52NegFail = lintNativeOnlyPortParity(
+    nativeChecking(['access.ui_widget', 'access.disk_flush']),
+    [{ path: 'prompts/access/access.prompt.md', text: r52NegDep }],
+  );
+  assert.equal(r52NegFail.length, 2, r52NegFail.join('\n'));
+
+  const r52PosDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Interface',
+    '- `op_plain`',
+    '',
+    '## Public interface',
+    '- `op_public`',
+    '',
+    '## 2. Public interface',
+    '- `op_numbered`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.op_plain', 'access.op_public', 'access.op_numbered']),
+      [{ path: 'prompts/access/access.prompt.md', text: r52PosDep }],
+    ),
+    [],
+  );
+
+  // R5-3: Full-title detail check inside ## Operations puts `### Operation: schema` and `#### Response: fields`
+  // into opDetailDepth so nested call bullets and export cues never leak.
+  const r53Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '### Operation: schema',
+    '- `schema_leak()`',
+    'Exports `schema_cue`.',
+    '',
+    '### `evaluate`',
+    'Runs evaluation.',
+    '',
+    '#### Response: fields',
+    '- `field_leak()`',
+    'Exposes `field_cue`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.evaluate']),
+      [{ path: 'prompts/access/access.prompt.md', text: r53Dep }],
+    ),
+    [],
+  );
+  const r53Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.schema_leak', 'access.schema_cue', 'access.field_leak', 'access.field_cue']),
+    [{ path: 'prompts/access/access.prompt.md', text: r53Dep }],
+  );
+  assert.equal(r53Fail.length, 4, r53Fail.join('\n'));
 });
