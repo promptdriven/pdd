@@ -3,14 +3,14 @@ name: PDD checks
 on:
   pull_request:
   push:
-    branches: [main, alpha]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pdd-alpha-${{ github.workflow }}-${{ github.ref }}
+  group: pdd-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -44,22 +44,21 @@ jobs:
       - name: Run offline unit tests
         id: unit-tests
         run: |
-          unit_tests=()
-          for file in test/*.test.mjs; do
-            case "$file" in
-              test/screen-*.test.mjs) ;;
-              *) unit_tests+=("$file") ;;
-            esac
-          done
+          unit_list=$(node scripts/list-tests.mjs --unit)
+          test -n "$unit_list"
+          mapfile -t unit_tests <<< "$unit_list"
           set +e
           node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-concurrency=4 --test-shard=${{ matrix.shard }}/8 "${unit_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-unit.tap"
           exit "${PIPESTATUS[0]}"
       - name: Run sequential browser tests
         if: success() || steps.unit-tests.outcome == 'failure'
         run: |
+          browser_list=$(node scripts/list-tests.mjs --browser)
+          test -n "$browser_list"
+          mapfile -t browser_tests <<< "$browser_list"
           set +e
           # Keep Chrome startup sequential so browser tests do not compete across workers.
-          node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 test/screen-*.test.mjs 2>&1 | tee "$RUNNER_TEMP/tests-browser.tap"
+          node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-concurrency=1 --test-shard=${{ matrix.shard }}/8 "${browser_tests[@]}" 2>&1 | tee "$RUNNER_TEMP/tests-browser.tap"
           exit "${PIPESTATUS[0]}"
       - name: Summarize test counts
         if: always()
@@ -89,7 +88,7 @@ jobs:
       - run: npm pack --ignore-scripts --dry-run
 
   public:
-    # main and alpha require this check name; every offline test shard must pass.
+    # main requires this check name; every offline test shard must pass.
     name: tests
     if: ${{ always() }}
     needs: test-shards

@@ -175,11 +175,23 @@ test('shell completion offers only the main names', t => {
   }
 });
 
+function listSourceModules(dir, rel = 'src') {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const relPath = join(rel, entry.name);
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listSourceModules(fullPath, relPath));
+    else if (entry.isFile() && entry.name.endsWith('.mjs')) out.push(relPath);
+  }
+  return out.sort();
+}
+
 // The lines that pdd writes name only the new commands. The removal line is built from the catalog words, so
 // no source file needs the text `pdd check` or `pdd try`. A server text passes through as data, never as source.
 test('no source line names pdd check or pdd try', () => {
-  const files = readdirSync(join(root, 'src')).filter(file => file.endsWith('.mjs')).map(file => join('src', file));
-  assert.ok(files.length >= 85, `expected full host src scan, got ${files.length}`);
+  const files = listSourceModules(join(root, 'src'));
+  assert.ok(files.length > 0, 'expected non-empty recursive src/**/*.mjs scan');
+  assert.ok(files.some(file => file.endsWith('pdd-cli.mjs')), `expected valid src/ modules, got ${files.length}`);
   const found = [];
   for (const file of files) {
     readFileSync(join(root, file), 'utf8').split('\n').forEach((text, index) => {
