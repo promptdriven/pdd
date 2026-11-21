@@ -1289,3 +1289,127 @@ test('R3 adversarial + CodeQL regression suite: items 1 through 4', () => {
     );
   }
 });
+
+test('R3b adversarial regression suite: items 1 through 5', () => {
+  // R3b-1 [P1]: Object/class method shorthand `async fetch(url) { ... }` / `fetch(url) { ... }` does NOT spoof bare global fetch(...).
+  const fetchMethodShorthands = [
+    `const fakeClient = { async fetch(url) { return { ok: true, url }; } };`,
+    `const fakeClient = { fetch(url) { return { ok: true, url }; } };`,
+    `class FakeHttp { static fetch(url) { return url; } async fetch(url) { return url; } }`,
+    `const fakeClient = { async fetch(url: string): Promise<Response> { return null; } };`,
+  ];
+  for (const code of fetchMethodShorthands) {
+    assert.equal(detectRealHostProbesInTest('test/fetch-method.test.mjs', code).hasRealHostSmoke, false, `method shorthand must not spoof fetch: ${code}`);
+    assert.ok(!detectRealE2eKindsInTest('test/fetch-method.test.mjs', code).includes('local-server-or-db'));
+  }
+  assert.equal(
+    detectRealHostProbesInTest('test/fetch-if.test.mjs', `if (await fetch('http://127.0.0.1:3000/ok')) { console.log('ok'); }`).hasRealHostSmoke,
+    true,
+  );
+
+  // R3b-2 [P1]: Span-scoped authentic require skipping, non-classified/non-browser import shadowing, comma-const, EOL `const page =`, and general destructured browser vars.
+  const wrappedRequireShadow = `
+    import { spawnSync } from 'node:child_process';
+    const spawnSync = wrap(require('./fake-cp.cjs'));
+    spawnSync('git', ['status']);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/wrapped-req.test.mjs', wrappedRequireShadow).hasRealHostSmoke, false);
+
+  const sameLineRequireAndShadow = `
+    const { spawnSync } = require('node:child_process'); const fetch = () => ({ ok: true });
+    await fetch('http://127.0.0.1:3000');
+  `;
+  assert.ok(!detectRealE2eKindsInTest('test/same-line-req-shadow.test.mjs', sameLineRequireAndShadow).includes('local-server-or-db'));
+
+  const nonBrowserImportPage = `
+    import { test } from '@playwright/test';
+    import { page } from './fake-page.mjs';
+    await page.goto('http://127.0.0.1:3000');
+  `;
+  assert.ok(!detectRealE2eKindsInTest('test/non-browser-page.test.mjs', nonBrowserImportPage).includes('browser-playwright'));
+
+  const commaConstPageAndFetch = `
+    import { test } from '@playwright/test';
+    const a = 1, page = { goto: mock.fn() }, fetch = () => ({ ok: true });
+    await page.goto('http://127.0.0.1:3000');
+    await fetch('http://127.0.0.1:3000');
+  `;
+  assert.equal(detectRealHostProbesInTest('test/comma-const.test.mjs', commaConstPageAndFetch).hasRealHostSmoke, false);
+
+  const destructuredCustomBrowserVar = `
+    import { test } from '@playwright/test';
+    const { p } = { p: { goto: mock.fn() } };
+    await p.goto('http://127.0.0.1:3000');
+  `;
+  assert.ok(!detectRealE2eKindsInTest('test/destructured-p.test.mjs', destructuredCustomBrowserVar).includes('browser-playwright'));
+
+  // R3b-3 [P2]: Spaced and multiline member access on authentic imported namespaces.
+  const multilineHttp = `
+    import http from 'node:http';
+    const srv = http.
+      createServer((req, res) => res.end('ok'));
+  `;
+  assert.ok(detectRealE2eKindsInTest('test/multiline-http.test.mjs', multilineHttp).includes('local-server-or-db'));
+
+  const spacedAndMultilineCp = `
+    import * as cp from 'node:child_process';
+    cp. spawnSync(process.execPath, ['-e', '0']);
+    cp.
+      execFileSync(process.execPath, ['-e', '0']);
+  `;
+  const spacedCpProbe = detectRealHostProbesInTest('test/spaced-cp.test.mjs', spacedAndMultilineCp);
+  assert.equal(spacedCpProbe.hasRealHostSmoke, true);
+  assert.equal(spacedCpProbe.detectedTurns, 2);
+
+  const spacedSqlite = `
+    import sqlite from 'node:sqlite';
+    const db = new sqlite.
+      DatabaseSync(':memory:');
+  `;
+  assert.ok(detectRealE2eKindsInTest('test/spaced-sqlite.test.mjs', spacedSqlite).includes('local-server-or-db'));
+
+  // R3b-4 [P2]: TypeScript inline `type` imports and unused node:sqlite + unrelated `new Client()`.
+  const tsTypeOnlyPool = `
+    import { type Pool } from 'pg';
+    const p: Pool | null = null;
+  `;
+  assert.equal(detectRealHostProbesInTest('test/ts-type-pool.test.mjs', tsTypeOnlyPool).hasRealHostSmoke, false);
+  assert.ok(!detectRealE2eKindsInTest('test/ts-type-pool.test.mjs', tsTypeOnlyPool).includes('local-server-or-db'));
+
+  const unusedSqliteWithUnrelatedClient = `
+    import { DatabaseSync } from 'node:sqlite';
+    class Client {}
+    const c = new Client();
+  `;
+  assert.equal(detectRealHostProbesInTest('test/unused-sqlite-client.test.mjs', unusedSqliteWithUnrelatedClient).hasRealHostSmoke, false);
+  assert.ok(!detectRealE2eKindsInTest('test/unused-sqlite-client.test.mjs', unusedSqliteWithUnrelatedClient).includes('local-server-or-db'));
+
+  // R3b-5 [P2]: Empty string repeat across comment/newline computes 0 bytes, `$`-named devicePathVar passes, spaced member access & object property key rejected.
+  const commentedEmptyRepeat = `
+    import { execFileSync } from 'node:child_process';
+    const a = "" /* comment */ .repeat(10000);
+    const b = ""
+      // line comment
+      .repeat(10000);
+    execFileSync(process.execPath, ['-e', '0']);
+  `;
+  const commentedRepeatProbe = detectRealHostProbesInTest('test/comment-empty-repeat.test.mjs', commentedEmptyRepeat);
+  assert.ok((commentedRepeatProbe.maxDetectedPayloadBytes ?? 0) <= MIN_REALISTIC_PAYLOAD_BYTES);
+  assert.ok(!commentedRepeatProbe.classes.includes('full-size-payload'));
+
+  const dollarDeviceVar = `
+    import { statSync } from 'node:fs';
+    const $tty = '/dev/tty';
+    statSync($tty);
+  `;
+  assert.ok(detectRealHostProbesInTest('test/dollar-tty.test.mjs', dollarDeviceVar).classes.includes('host-tty-ownership'));
+
+  const propKeyAndSpacedMemberFs = `
+    import { statSync } from 'node:fs';
+    const p = '/dev/tty';
+    statSync('/tmp/foo', { p: true });
+    statSync('/tmp/foo', { a: 1, p: true });
+    statSync(obj . p);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/fs-prop-key-spoof.test.mjs', propKeyAndSpacedMemberFs).hasRealHostSmoke, false);
+});
