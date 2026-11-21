@@ -216,7 +216,7 @@ async function t04World(t, { base = {}, change = {}, remove = [], evidence = 've
   for (const path of remove) w.git(cwd, 'rm', '-q', path);
   const line = `Evidence: runtime=not-run; ${evidence}; tests=pass (3/3)`;
   const { pr, head } = w.build(17, { body: `Fixes #17.\n\n${NOT_RUN}\n${line}`, result: { promptChanged: false, evidence: line } });
-  await w.tick(); w.review(17, 'PASS'); w.suite(17, 0); await w.tick();
+  await w.tick(); if (w.job(17, 'review')) w.review(17, 'PASS'); if (w.job(17, 'suite')) w.suite(17, 0); await w.tick();
   return { w, pr, head, cwd, command: () => w.job(17, 'vectors')?.args.at(-3) ?? '' };
 }
 

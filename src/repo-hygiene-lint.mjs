@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: b147fab1921957afeca4d0021e76b17b86bc47504cff5cf1ff37742a8f319aee).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 58975ba7d17048982d232399d93977b475f11eafe9d947869c72fdf718035f8b).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -2935,13 +2935,19 @@ function inferScenarioStoryPath(doc, scenarioPath, storiesByStem) {
   return null;
 }
 
-export function lintRepoProject({ root, files, promptPaths, tests, config } = {}) {
+export function lintRepoProject({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy } = {}) {
   const empty = { ok: true, configured: false, warnings: [], errors: [], findings: [] };
   if (!root || typeof root !== 'string') return empty;
   let realRoot, policy;
   try {
     realRoot = realpathSync(root);
-    policy = workspace.policy({ root: realRoot });
+    if (workspacePolicy !== undefined && workspacePolicy !== null) {
+      policy = workspacePolicy;
+    } else if (typeof workspaceRoot === 'string' && workspaceRoot.trim()) {
+      policy = workspace.policy({ root: realpathSync(workspaceRoot) });
+    } else {
+      policy = workspace.policy({ root: realRoot });
+    }
   } catch {
     return empty;
   }
@@ -3278,6 +3284,6 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
   };
 }
 
-export function lintRepoAntiPatterns({ root, files, promptPaths, tests, config } = {}) {
-  return lintRepoProject({ root, files, promptPaths, tests, config }).warnings;
+export function lintRepoAntiPatterns({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy } = {}) {
+  return lintRepoProject({ root, files, promptPaths, tests, config, workspaceRoot, workspacePolicy }).warnings;
 }
