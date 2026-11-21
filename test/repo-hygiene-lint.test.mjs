@@ -2382,3 +2382,111 @@ test('3562 polling FP fix: test-fixed-sleep exempts waitFor/until polling helper
   const badPyWarnings = lintTestFixedSleeps(badUnguardedPy, { path: 'tests/test_bare_sleep.py' });
   assert.equal(badPyWarnings.length, 2, `expected 2 bare Python sleep warnings, got:\n${badPyWarnings.join('\n')}`);
 });
+
+test('3574 + 3562 cross-family review regressions (Astra #1-#4): strict export clauses, top-level-only bullets, Operations and ports, signature tails, polling classification, Promise.race arm isolation, and Python O(N)', () => {
+  // #1 & #2: `Export \`read\` with the \`cursor\` field.` never exports `cursor`; indented sub-bullets never export;
+  // `## Operations and ports` keeps BOTH exports and ports; paragraph-leading `read({ id }) -> { value }` extracts `read`.
+  const combinedDep = [
+    '# Record store',
+    '',
+    'Export `load_record` with the `cursor` field and `page_size` option.',
+    '',
+    '## Operations and ports',
+    '',
+    '`read({ id }) -> { value }`',
+    '',
+    '- `list_items({ cursor }) -> { items }`: lists records.',
+    '  - `cursor`: opaque pagination token.',
+    '  - `limit`: max items per page.',
+    '- `store.fetch({ id })`: reads persisted record.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const adapterOk = [
+    '---',
+    'kind: native-only',
+    'reason: Real SQLite adapter.',
+    '---',
+    '# Adapter',
+    '## Port wiring',
+    '- `records.load_record`',
+    '- `records.read`',
+    '- `records.list_items`',
+    '- `store.fetch`',
+    '## Dependencies',
+    '- [records](records.prompt.md)',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(adapterOk, [{ path: 'prompts/records.prompt.md', text: combinedDep, isPrompt: true }], { path: 'prompts/adapter.prompt.md' }),
+    [],
+    'Operations and ports + signature tails + Export clause op must all pass',
+  );
+
+  const adapterFieldSpoof = [
+    '---',
+    'kind: native-only',
+    'reason: Real SQLite adapter.',
+    '---',
+    '# Adapter',
+    '## Port wiring',
+    '- `records.cursor`',
+    '- `records.page_size`',
+    '- `records.limit`',
+    '## Dependencies',
+    '- [records](records.prompt.md)',
+  ].join('\n');
+  const spoofErrors = lintNativeOnlyPortParity(adapterFieldSpoof, [{ path: 'prompts/records.prompt.md', text: combinedDep, isPrompt: true }], { path: 'prompts/adapter.prompt.md' });
+  assert.equal(spoofErrors.length, 3, `field names must NEVER be accepted as exported ops:\n${spoofErrors.join('\n')}`);
+  assert.match(spoofErrors[0], /"records\.cursor"/);
+  assert.match(spoofErrors[1], /"records\.page_size"/);
+  assert.match(spoofErrors[2], /"records\.limit"/);
+
+  // #3: Polling classification (state === PENDING exempt without `.`; data-draining while(rows.length){rows.pop()} flagged;
+  // Promise.race ONLY exempts direct timeout arm, NEVER sleep inside sibling work callback!).
+  const statePollJs = [
+    "test('state polling without dot', async () => {",
+    '  while (state === PENDING) { await sleep(10); }',
+    '  do { await sleep(10); } while (status !== READY);',
+    '});',
+  ].join('\n');
+  assert.deepEqual(lintTestFixedSleeps(statePollJs, { path: 'test/state-poll.test.mjs' }), []);
+
+  const dataDrainAndRaceWorkJs = [
+    "test('data drain and sibling race callback', async () => {",
+    '  while (rows.length) { rows.pop(); await sleep(10); }',
+    '  while (queue.length > 0) { queue.shift(); await new Promise(r => setTimeout(r, 10)); }',
+    '  await Promise.race([',
+    '    (async () => { await sleep(500); return "work"; })(),',
+    '    new Promise(resolve => setTimeout(() => resolve(null), 5000)),',
+    '  ]);',
+    '});',
+  ].join('\n');
+  const drainRaceWarnings = lintTestFixedSleeps(dataDrainAndRaceWorkJs, { path: 'test/drain-race.test.mjs' });
+  assert.equal(drainRaceWarnings.length, 3, `expected 3 warnings (2 drains + 1 sibling race callback, 0 on direct timeout arm), got:\n${drainRaceWarnings.join('\n')}`);
+  assert.match(drainRaceWarnings[0], /:2 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[1], /:3 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[2], /:5 \[test-fixed-sleep\]/);
+
+  // #3 & #4 Python: state == PENDING exempt, rows.pop() drain flagged, and 1,500 sleeps run in O(N) linear time (< 400ms)!
+  const pyMixed = [
+    'import time',
+    'def test_py_poll_and_drain():',
+    '    while state == PENDING:',
+    '        time.sleep(0.05)',
+    '    while rows:',
+    '        rows.pop()',
+    '        time.sleep(0.05)',
+  ].join('\n');
+  const pyMixedWarnings = lintTestFixedSleeps(pyMixed, { path: 'tests/test_py_mixed.py' });
+  assert.equal(pyMixedWarnings.length, 1, `expected only rows.pop() drain flagged, got:\n${pyMixedWarnings.join('\n')}`);
+  assert.match(pyMixedWarnings[0], /:7 \[test-fixed-sleep\]/);
+
+  const hugePy = `import time\ndef test_many():\n${'    time.sleep(0.1)\n'.repeat(1500)}`;
+  const t0 = performance.now();
+  const hugePyWarnings = lintTestFixedSleeps(hugePy, { path: 'tests/test_many_sleeps.py' });
+  const elapsedMs = performance.now() - t0;
+  assert.equal(hugePyWarnings.length, 1500);
+  assert.ok(elapsedMs < 400, `expected linear O(N) scan on 1,500 Python sleeps, took ${elapsedMs.toFixed(1)}ms`);
+});

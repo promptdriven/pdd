@@ -1,17 +1,25 @@
 #!/usr/bin/env node
 // Mechanical G7 Architecture Boundary & Cycle Checker + Shrinking Semantic-Anchor Ratchet.
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseJsModuleEdges, resolveImportSpecifier } from './lib/js-module-parser.mjs';
+import {
+  buildRatchetEntries,
+  evaluateRatchet,
+  formatFailureDiagnostic,
+  formatReport as formatRatchetReport,
+  loadRatchet as loadRatchetFile,
+  writeRatchetFile,
+} from './lib/architecture-ratchet.mjs';
 
-export { parseJsModuleEdges, resolveImportSpecifier };
+export { buildRatchetEntries, formatFailureDiagnostic, parseJsModuleEdges, resolveImportSpecifier };
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ROOT = resolve(SCRIPT_DIR, '..');
 export const DEFAULT_RATCHET_PATH = join(SCRIPT_DIR, 'architecture-ratchet.json');
 export const LAYERS = ['cli', 'setup', 'core', 'accounts', 'autopilot', 'shared', 'legacy-workflow', 'vendor'];
-const RULE_ORDER = ['circular-import', 'layer-boundary', 'legacy-workflow-import', 'path-string-spawn', 'disallowed-npm-import', 'unmapped-layer'];
+const RULE_ORDER = ['circular-import', 'layer-boundary', 'legacy-workflow-import', 'path-string-spawn', 'unresolved-local-import', 'disallowed-npm-import', 'unmapped-layer'];
 
 const ALLOWED_IMPORTS = {
   cli: new Set(['cli', 'setup', 'core', 'accounts', 'autopilot', 'shared']),
@@ -80,16 +88,10 @@ function collectJsFiles(root) {
 
 function findTarjanSccs(nodes, adj) {
   let index = 0;
-  const indices = new Map();
-  const lowlink = new Map();
-  const onStack = new Set();
-  const stack = [];
-  const sccs = [];
-
+  const indices = new Map(), lowlink = new Map(), onStack = new Set(), stack = [], sccs = [];
   const strongConnect = v => {
     indices.set(v, index);
-    lowlink.set(v, index);
-    index++;
+    lowlink.set(v, index++);
     stack.push(v);
     onStack.add(v);
     for (const w of adj.get(v) ?? []) {
@@ -112,7 +114,6 @@ function findTarjanSccs(nodes, adj) {
       else if (comp.length === 1 && (adj.get(comp[0]) ?? []).includes(comp[0])) sccs.push(comp);
     }
   };
-
   for (const node of nodes) if (!indices.has(node)) strongConnect(node);
   return sccs.sort((a, b) => a[0].localeCompare(b[0]) || a.length - b.length);
 }
@@ -148,10 +149,7 @@ export function analyzeArchitecture({ root = DEFAULT_ROOT } = {}) {
     const fromLayer = classifyLayer(rel);
     if (!fromLayer) {
       findings.push({
-        rule: 'unmapped-layer',
-        path: rel,
-        line: 1,
-        semantic_anchor: `unmapped:${rel}`,
+        rule: 'unmapped-layer', path: rel, line: 1, semantic_anchor: `unmapped:${rel}`,
         invariant: `Every src/ and bin/ module must belong to a declared layer (${LAYERS.join(', ')}).`,
         fix: `Move "${rel}" into a domain folder (src/shared/, src/core/, src/cli/, src/setup/, src/accounts/, or src/autopilot/).`,
       });
@@ -167,14 +165,22 @@ export function analyzeArchitecture({ root = DEFAULT_ROOT } = {}) {
       if (res.kind === 'npm') {
         if (!npmAllowed.has(res.packageName)) {
           findings.push({
-            rule: 'disallowed-npm-import',
-            path: rel,
-            line: edge.line,
+            rule: 'disallowed-npm-import', path: rel, line: edge.line,
             semantic_anchor: `${fromLayer} -> npm:${res.packageName}`,
             invariant: `Layer "${fromLayer}" may only import Node stdlib or declared production npm dependencies (${[...npmAllowed].sort().join(', ')}).`,
             fix: `Replace "${edge.specifier}" with a Node stdlib API or add an approved dependency in package.json.`,
           });
         }
+        continue;
+      }
+      if (res.kind === 'missing-local') {
+        if (existsSync(join(root, res.target))) continue;
+        findings.push({
+          rule: 'unresolved-local-import', path: rel, line: edge.line,
+          semantic_anchor: `unresolved:${edge.specifier} (${edge.kind})`,
+          invariant: `Relative module import "${edge.specifier}" (${edge.kind}) does not resolve to an existing file in the repository (resolved "${res.target}").`,
+          fix: `Fix the relative specifier "${edge.specifier}" to point to an existing module or remove the stale import.`,
+        });
         continue;
       }
       if (res.kind !== 'repo') continue;
@@ -191,9 +197,7 @@ export function analyzeArchitecture({ root = DEFAULT_ROOT } = {}) {
         const isLegacy = toLayer === 'legacy-workflow';
         const allowedList = [...allowedTargets].sort().join(', ');
         findings.push({
-          rule: isLegacy ? 'legacy-workflow-import' : 'layer-boundary',
-          path: rel,
-          line: edge.line,
+          rule: isLegacy ? 'legacy-workflow-import' : 'layer-boundary', path: rel, line: edge.line,
           semantic_anchor: `${fromLayer} -> ${toLayer}:${target} (${edge.kind})`,
           invariant: isLegacy
             ? `Non-legacy layer "${fromLayer}" must not import frozen "legacy-workflow" module "${target}" (${edge.kind}).`
@@ -208,10 +212,7 @@ export function analyzeArchitecture({ root = DEFAULT_ROOT } = {}) {
     for (const sp of spawns) {
       if (!fileSet.has(sp.target)) continue;
       findings.push({
-        rule: 'path-string-spawn',
-        path: rel,
-        line: sp.line,
-        semantic_anchor: `${sp.fn} -> ${sp.target}`,
+        rule: 'path-string-spawn', path: rel, line: sp.line, semantic_anchor: `${sp.fn} -> ${sp.target}`,
         invariant: `Child process spawn (${sp.fn}) hardcodes repository module path "${sp.target}", bypassing static module boundaries.`,
         fix: `Import the owning module directly or route through a single declared CLI/shared entrypoint instead of spawning "${sp.target}".`,
       });
@@ -219,20 +220,29 @@ export function analyzeArchitecture({ root = DEFAULT_ROOT } = {}) {
   }
 
   for (const list of adj.values()) list.sort();
+  for (const rel of files) {
+    if ((adj.get(rel) ?? []).includes(rel)) {
+      findings.push({
+        rule: 'circular-import', path: rel, line: edgeLines.get(`${rel}->${rel}`) ?? 1,
+        semantic_anchor: `self:${rel}->${rel}`,
+        invariant: `Self-import cycle detected: "${rel}" imports itself.`,
+        fix: `Remove the self-import in "${rel}" or extract shared helpers into a separate module in src/shared/.`,
+      });
+    }
+  }
+
   const sccs = findTarjanSccs(files, adj);
   for (const members of sccs) {
+    if (members.length < 2) continue;
     const memberSet = new Set(members);
     const anchorPath = members[0];
-    let firstLine = 1;
-    for (const target of adj.get(anchorPath) ?? []) {
-      if (memberSet.has(target)) { firstLine = edgeLines.get(`${anchorPath}->${target}`) ?? 1; break; }
-    }
+    const intraEdges = [...new Set(members.flatMap(u => (adj.get(u) ?? []).filter(v => memberSet.has(v)).map(v => `${u}->${v}`)))].sort();
+    const firstTarget = (adj.get(anchorPath) ?? []).find(v => memberSet.has(v));
+    const firstLine = firstTarget ? (edgeLines.get(`${anchorPath}->${firstTarget}`) ?? 1) : 1;
     findings.push({
-      rule: 'circular-import',
-      path: anchorPath,
-      line: firstLine,
-      semantic_anchor: `scc:${members.join(' -> ')}`,
-      invariant: `Circular import strongly connected component (${members.length} modules): ${members.join(' -> ')}.`,
+      rule: 'circular-import', path: anchorPath, line: firstLine,
+      semantic_anchor: `scc:${members.join(' -> ')} | edges:${intraEdges.join(', ')}`,
+      invariant: `Circular import strongly connected component (${members.length} modules, ${intraEdges.length} intra-SCC edges): ${members.join(' -> ')}.`,
       fix: `Extract the shared symbols out of the cycle into Layer-0 src/shared/ so imports flow strictly one way.`,
     });
   }
@@ -241,136 +251,46 @@ export function analyzeArchitecture({ root = DEFAULT_ROOT } = {}) {
   return { root, files, totalLoc, layerStats, sccs, findings };
 }
 
-export function buildRatchetEntries(findings) {
-  const counts = new Map();
-  for (const f of findings) {
-    const key = JSON.stringify([f.rule, f.path, f.semantic_anchor]);
-    const entry = counts.get(key) ?? { rule: f.rule, path: f.path, semantic_anchor: f.semantic_anchor, count: 0 };
-    entry.count += 1;
-    counts.set(key, entry);
-  }
-  return [...counts.values()].sort(
-    (a, b) => a.rule.localeCompare(b.rule) || a.path.localeCompare(b.path) || a.semantic_anchor.localeCompare(b.semantic_anchor),
-  );
-}
-
-export function loadRatchet(ratchetPath = DEFAULT_RATCHET_PATH) {
-  if (!existsSync(ratchetPath)) return { exists: false, entries: [], map: new Map(), total: 0 };
-  const parsed = JSON.parse(readFileSync(ratchetPath, 'utf8'));
-  const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
-  const map = new Map();
-  let total = 0;
-  for (const e of entries) {
-    const key = JSON.stringify([e.rule, e.path, e.semantic_anchor]);
-    map.set(key, (map.get(key) ?? 0) + Number(e.count || 0));
-    total += Number(e.count || 0);
-  }
-  return { exists: true, entries, map, total };
-}
-
-export function checkArchitecture({ root = DEFAULT_ROOT, ratchetPath = DEFAULT_RATCHET_PATH } = {}) {
-  const analysis = analyzeArchitecture({ root });
-  const ratchet = loadRatchet(ratchetPath);
-  const grouped = new Map();
-  for (const f of analysis.findings) {
-    const key = JSON.stringify([f.rule, f.path, f.semantic_anchor]);
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(f);
-  }
-
-  const failures = [];
-  for (const [key, items] of grouped.entries()) {
-    const allowed = ratchet.map.get(key) ?? 0;
-    if (items.length > allowed) {
-      for (const item of items.slice(allowed)) failures.push({ ...item, currentCount: items.length, allowedCount: allowed });
-    }
-  }
-
-  let shrunkCount = 0;
-  const resolved = [];
-  for (const [key, allowed] of ratchet.map.entries()) {
-    const cur = (grouped.get(key) ?? []).length;
-    if (cur < allowed) {
-      shrunkCount += allowed - cur;
-      const [rule, path, semantic_anchor] = JSON.parse(key);
-      resolved.push({ rule, path, semantic_anchor, delta: allowed - cur });
-    }
-  }
-
-  return {
-    ok: failures.length === 0,
-    analysis,
-    ratchetTotal: ratchet.total,
-    ratchetExists: ratchet.exists,
-    currentTotal: analysis.findings.length,
-    failures,
-    shrunkCount,
-    resolved,
-  };
-}
-
-export function formatFailureDiagnostic(failure, rerunCmd = 'node scripts/check-architecture.mjs') {
-  return [
-    `ERROR [${failure.rule}] ${failure.path}:${failure.line}`,
-    `  Invariant: ${failure.invariant}`,
-    `  Fix: ${failure.fix}`,
-    `  Rerun: ${rerunCmd}`,
-  ].join('\n');
-}
-
-export function formatReport(result) {
-  const { analysis, ratchetTotal, currentTotal, shrunkCount, failures } = result;
-  const lines = [
-    `G7 Architecture Report (${analysis.files.length} files, ${analysis.totalLoc} LOC)`,
-    '',
-    'Layer Breakdown:',
-    '  Layer             Files     LOC',
-    '  -------------------------------',
-  ];
-  for (const layer of LAYERS) {
-    const st = analysis.layerStats[layer];
-    lines.push(`  ${layer.padEnd(17)} ${String(st.files).padStart(5)} ${String(st.loc).padStart(7)}`);
-  }
-  const byRule = Object.fromEntries(RULE_ORDER.map(r => [r, analysis.findings.filter(f => f.rule === r).length]));
-  lines.push(
-    '',
-    `Cycles (Tarjan SCCs):        ${analysis.sccs.length}`,
-    `Legacy-workflow imports:     ${byRule['legacy-workflow-import']}`,
-    `Layer-boundary violations:   ${byRule['layer-boundary']}`,
-    `Path-string child spawns:    ${byRule['path-string-spawn']}`,
-    `Disallowed npm / unmapped:   ${byRule['disallowed-npm-import'] + byRule['unmapped-layer']}`,
-    `Ratchet baseline -> current: ${ratchetTotal} -> ${currentTotal} (shrunk by ${shrunkCount}, new/excess: ${failures.length})`,
-  );
-  if (analysis.sccs.length > 0) {
-    lines.push('', 'Circular SCCs:');
-    analysis.sccs.forEach((scc, idx) => lines.push(`  #${idx + 1} (${scc.length} files): ${scc.join(' -> ')}`));
-  }
-  return lines.join('\n');
-}
+export const loadRatchet = (ratchetPath = DEFAULT_RATCHET_PATH) => loadRatchetFile(ratchetPath);
+export const checkArchitecture = ({ root = DEFAULT_ROOT, ratchetPath = DEFAULT_RATCHET_PATH } = {}) => evaluateRatchet(analyzeArchitecture({ root }), ratchetPath);
+export const formatReport = result => formatRatchetReport(result, { layers: LAYERS, rules: RULE_ORDER });
 
 function main(argv) {
-  let root = DEFAULT_ROOT, ratchetPath = DEFAULT_RATCHET_PATH, writeMode = false, reportMode = false, jsonMode = false;
+  let root = DEFAULT_ROOT, ratchetPath = DEFAULT_RATCHET_PATH;
+  let writeMode = false, allowGrowth = false, reportMode = false, jsonMode = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--write-ratchet') writeMode = true;
+    else if (a === '--allow-growth') allowGrowth = true;
     else if (a === '--report') reportMode = true;
     else if (a === '--json') jsonMode = true;
     else if (a === '--root' && argv[i + 1]) root = resolve(argv[++i]);
     else if (a === '--ratchet' && argv[i + 1]) ratchetPath = resolve(argv[++i]);
     else {
-      process.stderr.write(`Unknown argument: ${a}\nUsage: node scripts/check-architecture.mjs [--report] [--write-ratchet] [--json] [--root DIR] [--ratchet FILE]\n`);
+      process.stderr.write(`Unknown argument: ${a}\nUsage: node scripts/check-architecture.mjs [--report] [--write-ratchet [--allow-growth]] [--json] [--root DIR] [--ratchet FILE]\n`);
       return 2;
     }
   }
 
   if (writeMode) {
-    const prev = loadRatchet(ratchetPath);
-    const entries = buildRatchetEntries(analyzeArchitecture({ root }).findings);
-    mkdirSync(dirname(ratchetPath), { recursive: true });
-    writeFileSync(ratchetPath, `${JSON.stringify({ schema_version: 'pdd.architecture-ratchet.v1', rules: RULE_ORDER, entries }, null, 2)}\n`, 'utf8');
-    const curTotal = entries.reduce((sum, e) => sum + e.count, 0);
-    if (jsonMode) process.stdout.write(`${JSON.stringify({ ok: true, previousTotal: prev.total, currentTotal: curTotal, entries: entries.length }, null, 2)}\n`);
-    else process.stdout.write(`Wrote ${ratchetPath}: ${curTotal} debt entries across ${entries.length} unique semantic anchors${prev.exists ? ` (was ${prev.total}, delta ${curTotal - prev.total})` : ' (initial baseline)'}.\n`);
+    const res = writeRatchetFile(analyzeArchitecture({ root }), ratchetPath, { rules: RULE_ORDER, allowGrowth });
+    if (!res.ok) {
+      if (jsonMode) process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+      else {
+        for (const g of res.growth) {
+          process.stderr.write([
+            `ERROR [ratchet-growth] ${g.path}:1`,
+            `  Invariant: --write-ratchet only shrinks or preserves existing debt; "${g.rule}" (${g.semantic_anchor}) grew ${g.allowed} -> ${g.count}.`,
+            `  Fix: Resolve the new architecture violation instead of growing the ratchet (or pass --allow-growth only for an authorized baseline migration).`,
+            `  Rerun: node scripts/check-architecture.mjs`,
+          ].join('\n') + '\n\n');
+        }
+        process.stderr.write(`Refused to grow ratchet (${res.growth.length} new/exceeding semantic anchor(s)).\n`);
+      }
+      return 1;
+    }
+    if (jsonMode) process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+    else process.stdout.write(`Wrote ${ratchetPath}: ${res.currentTotal} debt entries across ${res.entryCount} unique semantic anchors${res.existed ? ` (was ${res.previousTotal}, delta ${res.currentTotal - res.previousTotal})` : ' (initial baseline)'}.\n`);
     return 0;
   }
 

@@ -21,6 +21,51 @@ const CORPUS_NAMES = [
   'polyglot-rs',
 ];
 
+export function parseOfflineLintPayload(stdout, status, procError = null) {
+  if (procError) return { parsedOk: false, parseError: String(procError.message || procError), problems: [], warnings: [] };
+  const raw = String(stdout ?? '').trim();
+  if (!raw) return { parsedOk: false, parseError: 'empty stdout from pdd lint --local --json', problems: [], warnings: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { parsedOk: false, parseError: `invalid JSON: ${err.message}`, problems: [], warnings: [] };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { parsedOk: false, parseError: 'JSON payload must be an object', problems: [], warnings: [] };
+  }
+  if (!Array.isArray(parsed.problems) || !Array.isArray(parsed.warnings)) {
+    return { parsedOk: false, parseError: 'JSON payload missing required problems[] or warnings[] arrays', problems: [], warnings: [] };
+  }
+  if (typeof parsed.exit_code !== 'number' || (typeof status === 'number' && parsed.exit_code !== status)) {
+    return { parsedOk: false, parseError: `exit_code mismatch (payload=${parsed.exit_code}, process=${status})`, problems: parsed.problems, warnings: parsed.warnings };
+  }
+  return { parsedOk: true, parseError: null, problems: parsed.problems, warnings: parsed.warnings };
+}
+
+export function replaceRequired(text, pattern, replacement, label) {
+  let count = 0;
+  const re = pattern instanceof RegExp
+    ? new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`)
+    : null;
+  let next;
+  if (re) {
+    next = text.replace(re, () => { count += 1; return replacement; });
+  } else {
+    const idx = text.indexOf(pattern);
+    if (idx >= 0) {
+      count = 1;
+      next = `${text.slice(0, idx)}${replacement}${text.slice(idx + pattern.length)}`;
+    } else {
+      next = text;
+    }
+  }
+  if (count <= 0) {
+    throw new Error(`Seed replacement "${label}" matched 0 times in fixture`);
+  }
+  return { text: next, count };
+}
+
 function runOfflineLint(repoDir, env) {
   const t0 = performance.now();
   const proc = spawnSync(process.execPath, [PDD_BIN, 'lint', '--local', '--json'], {
@@ -30,19 +75,13 @@ function runOfflineLint(repoDir, env) {
     maxBuffer: 32 * 1024 * 1024,
   });
   const ms = Math.round(performance.now() - t0);
-  let parsed = null;
-  try {
-    parsed = JSON.parse(proc.stdout || '{}');
-  } catch {
-    parsed = null;
-  }
-  const problems = Array.isArray(parsed?.problems) ? parsed.problems : [];
-  const warnings = Array.isArray(parsed?.warnings) ? parsed.warnings : [];
+  const { parsedOk, parseError, problems, warnings } = parseOfflineLintPayload(proc.stdout, proc.status, proc.error);
   return {
-    exitCode: proc.status ?? 1,
+    exitCode: typeof proc.status === 'number' ? proc.status : 1,
     ms,
-    parsedOk: parsed !== null,
-    errors: problems.length,
+    parsedOk,
+    parseError,
+    errors: parsedOk ? problems.length : Math.max(1, problems.length),
     warnings: warnings.length,
     portErrors: problems.filter(p => String(p).includes('[native-only-unknown-port]')).length,
     sleepWarnings: warnings.filter(w => String(w).includes('[test-fixed-sleep]')).length,
@@ -79,26 +118,53 @@ function runCartaCloneSeededControls(cartaCloneDir, scratchRoot, env) {
   const mcpPath = join(tempRepo, 'prompts/connector/mcp-server.prompt.md');
   const origMcp = readFileSync(mcpPath, 'utf8');
 
-  // Control A: Positive <stem>.<op> exported operation references must pass with 0 errors.
-  const stemOpMcp = origMcp
-    .replace(/`invoke_tool`/g, '`access.invoke_tool`')
-    .replace(/`redeem_view`/g, '`access.redeem_view`')
-    .replace(/`register_client`/g, '`governance.register_client`')
-    .replace(/`set_field_policy`/g, '`governance.set_field_policy`')
-    .replace(/`manage_rollout`/g, '`governance.manage_rollout`')
-    .replace(/`manage_grant`/g, '`governance.manage_grant`')
-    .replace(/`rotate_token`/g, '`governance.rotate_token`');
+  // Control A: Positive <stem>.<op> exported operation references must pass with 0 errors (and every seed must match > 0).
+  let stemOpMcp = origMcp;
+  let posReplacements = 0;
+  const posSeeds = [
+    [/`invoke_tool`/g, '`access.invoke_tool`', 'invoke_tool -> access.invoke_tool'],
+    [/`redeem_view`/g, '`access.redeem_view`', 'redeem_view -> access.redeem_view'],
+    [/`register_client`/g, '`governance.register_client`', 'register_client -> governance.register_client'],
+    [/`set_field_policy`/g, '`governance.set_field_policy`', 'set_field_policy -> governance.set_field_policy'],
+    [/`manage_rollout`/g, '`governance.manage_rollout`', 'manage_rollout -> governance.manage_rollout'],
+    [/`manage_grant`/g, '`governance.manage_grant`', 'manage_grant -> governance.manage_grant'],
+    [/`rotate_token`/g, '`governance.rotate_token`', 'rotate_token -> governance.rotate_token'],
+  ];
+  try {
+    for (const [pat, rep, label] of posSeeds) {
+      const r = replaceRequired(stemOpMcp, pat, rep, label);
+      stemOpMcp = r.text;
+      posReplacements += r.count;
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      controls: [{ name: 'carta_clone <stem>.<op> precision', ok: false, detail: err.message }],
+    };
+  }
   writeFileSync(mcpPath, stemOpMcp, 'utf8');
   execFileSync('git', ['-C', tempRepo, 'add', '.']);
   execFileSync('git', ['-C', tempRepo, 'commit', '-qm', 'seeded stem.op']);
 
   const posRes = runOfflineLint(tempRepo, env);
-  const posOk = posRes.parsedOk && posRes.exitCode === 0 && posRes.portErrors === 0;
+  const posOk = posRes.parsedOk && posRes.exitCode === 0 && posRes.errors === 0 && posRes.portErrors === 0;
 
-  // Control B: Negative seeded fake/typo ports must fail exit 1 and catch both undeclared ports.
-  const fakePortMcp = stemOpMcp
-    .replace('`access.invoke_tool`', '`access.invoke_tools`')
-    .replace('`tokens.verify`', '`phantom_store.read`');
+  // Control B: Negative seeded fake/typo ports must fail exit 1 and catch both undeclared ports (each seed must match > 0).
+  let fakePortMcp = stemOpMcp;
+  let negReplacements = 0;
+  try {
+    const r1 = replaceRequired(fakePortMcp, '`access.invoke_tool`', '`access.invoke_tools`', 'typo access.invoke_tools');
+    fakePortMcp = r1.text;
+    negReplacements += r1.count;
+    const r2 = replaceRequired(fakePortMcp, '`tokens.verify`', '`phantom_store.read`', 'fake phantom_store.read');
+    fakePortMcp = r2.text;
+    negReplacements += r2.count;
+  } catch (err) {
+    return {
+      ok: false,
+      controls: [{ name: 'carta_clone fake-port recall', ok: false, detail: err.message }],
+    };
+  }
   writeFileSync(mcpPath, fakePortMcp, 'utf8');
 
   const negRes = runOfflineLint(tempRepo, env);
@@ -113,10 +179,11 @@ function runCartaCloneSeededControls(cartaCloneDir, scratchRoot, env) {
       exitCode: posRes.exitCode,
       errors: posRes.errors,
       portErrors: posRes.portErrors,
+      replacements: posReplacements,
       ms: posRes.ms,
       detail: posOk
-        ? '0 false native-only-unknown-port errors on access.invoke_tool / access.redeem_view / governance.*'
-        : `Expected exit 0 & 0 port errors, got exit ${posRes.exitCode} (${posRes.problems.join(' | ')})`,
+        ? `0 false native-only-unknown-port errors across ${posReplacements} seeded <stem>.<op> refs (access.*, governance.*)`
+        : `Expected exit 0 & 0 errors, got exit ${posRes.exitCode} (${posRes.parseError ?? posRes.problems.join(' | ')})`,
     },
     {
       name: 'carta_clone fake-port recall',
@@ -124,10 +191,11 @@ function runCartaCloneSeededControls(cartaCloneDir, scratchRoot, env) {
       exitCode: negRes.exitCode,
       errors: negRes.errors,
       portErrors: negRes.portErrors,
+      replacements: negReplacements,
       ms: negRes.ms,
       detail: negOk
-        ? 'exit 1 caught both seeded "access.invoke_tools" typo and "phantom_store.read" fake port'
-        : `Expected exit 1 catching both seeded ports, got exit ${negRes.exitCode} (caughtTypo=${caughtTypo}, caughtFake=${caughtFake})`,
+        ? `exit 1 caught both seeded defects (${negReplacements} edits: "access.invoke_tools" typo + "phantom_store.read" fake port)`
+        : `Expected exit 1 catching both seeded ports, got exit ${negRes.exitCode} (${negRes.parseError ?? `caughtTypo=${caughtTypo}, caughtFake=${caughtFake}`})`,
     },
   ];
   return { ok: posOk && negOk, controls };
@@ -243,4 +311,6 @@ function main(argv) {
   }
 }
 
-process.exitCode = main(process.argv.slice(2));
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = main(process.argv.slice(2));
+}

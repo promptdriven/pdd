@@ -12,7 +12,9 @@ import {
   classifyLayer,
   formatFailureDiagnostic,
   parseJsModuleEdges,
+  resolveImportSpecifier,
 } from '../scripts/check-architecture.mjs';
+import { parseOfflineLintPayload, replaceRequired } from '../scripts/corpus-check.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CHECKER_SCRIPT = join(REPO_ROOT, 'scripts/check-architecture.mjs');
@@ -219,4 +221,98 @@ test('G7 Ratchet Control 3: shrinking the ratchet locks in resolved debt so rein
   assert.match(reintroRes.stderr, /Fix:/);
   assert.match(reintroRes.stderr, /Rerun: node scripts\/check-architecture\.mjs/);
   assert.equal(analyzeArchitecture({ root: dir }).findings.length, 1);
+});
+
+test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon-free export, aliases, git non-spawn, query/hash + unresolved fail-closed, ratchet growth refusal, intra-SCC edge/self-import, and corpus fail-closed', (t) => {
+  // #5: Semicolon-free `export { f }\nawait import('./x.mjs')`, aliased createRequire/fork, and git diff non-spawn.
+  const edgeCases = [
+    "import { createRequire as mkReq } from 'node:module'",
+    "import { fork as spawnChild, execFileSync } from 'node:child_process'",
+    'const r = mkReq(import.meta.url)',
+    "r('./via-alias.mjs')",
+    "mkReq(import.meta.url)('./via-direct-alias.mjs')",
+    'const f = 1',
+    'export { f }',
+    "await import('./after-local-export.mjs')",
+    "spawnChild('src/autopilot/worker.mjs')",
+    "execFileSync('git', ['diff', '--', 'src/core/foo.mjs'])",
+    "execFileSync(process.execPath, ['bin/pdd.mjs', 'status'])",
+  ].join('\n');
+  const parsed = parseJsModuleEdges(edgeCases, 'src/core/edge.mjs');
+  assert.deepEqual(
+    parsed.imports.map(e => [e.kind, e.specifier]),
+    [
+      ['static-import', 'node:module'],
+      ['static-import', 'node:child_process'],
+      ['create-require', './via-alias.mjs'],
+      ['create-require', './via-direct-alias.mjs'],
+      ['dynamic-import', './after-local-export.mjs'],
+    ],
+  );
+  assert.deepEqual(
+    parsed.spawns.map(s => [s.fn, s.target]),
+    [
+      ['fork', 'src/autopilot/worker.mjs'],
+      ['execFileSync', 'bin/pdd.mjs'],
+    ],
+    'git diff -- src/... must NEVER be flagged while aliased fork and node spawn ARE caught',
+  );
+
+  // #6: Strip ?query and #hash on relative imports, and fail closed on unresolved local relative imports!
+  const fileSet = new Set(['src/core/a.mjs', 'src/shared/util.mjs']);
+  assert.deepEqual(resolveImportSpecifier('src/core/a.mjs', '../shared/util.mjs?bust=1', fileSet), { kind: 'repo', target: 'src/shared/util.mjs' });
+  assert.deepEqual(resolveImportSpecifier('src/core/a.mjs', '../shared/util.mjs#frag', fileSet), { kind: 'repo', target: 'src/shared/util.mjs' });
+  assert.deepEqual(resolveImportSpecifier('src/core/a.mjs', './missing.mjs', fileSet), { kind: 'missing-local', target: 'src/core/missing.mjs' });
+
+  // #6 & #7 end-to-end on temp fixture: unresolved local import fails closed, --write-ratchet refuses growth without --allow-growth,
+  // and adding an intra-SCC edge OR self-import inside an already-ratcheted SCC fails exit 1!
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-g7-astra-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const ratchetPath = join(dir, 'ratchet.json');
+
+  writeRepoFile(dir, 'package.json', JSON.stringify({ name: 'fixture', dependencies: {} }));
+  writeRepoFile(dir, 'src/shared/util.mjs', 'export const ok = 1;\n');
+  writeRepoFile(dir, 'src/core/a.mjs', "import { b } from './b.mjs?v=1';\nexport const a = b;\n");
+  writeRepoFile(dir, 'src/core/b.mjs', "import { c } from './c.mjs#hash';\nexport const b = c;\n");
+  writeRepoFile(dir, 'src/core/c.mjs', "import { a } from './a.mjs';\nexport const c = a;\n");
+
+  // Initial ratchet captures the 3-node SCC (a->b, b->c, c->a)
+  assert.equal(runChecker(['--root', dir, '--ratchet', ratchetPath, '--write-ratchet']).status, 0);
+  assert.equal(runChecker(['--root', dir, '--ratchet', ratchetPath]).status, 0);
+
+  // Adding a NEW intra-SCC edge (b -> a) inside the ALREADY-ratcheted SCC MUST FAIL exit 1!
+  writeRepoFile(dir, 'src/core/b.mjs', "import { c } from './c.mjs#hash';\nimport { a } from './a.mjs';\nexport const b = c + a;\n");
+  const intraRes = runChecker(['--root', dir, '--ratchet', ratchetPath]);
+  assert.equal(intraRes.status, 1, 'adding a new intra-SCC edge must fail exit 1');
+  assert.match(intraRes.stderr, /ERROR \[circular-import\]/);
+
+  // --write-ratchet WITHOUT --allow-growth MUST REFUSE to grow the ratchet (exit 1) and keep ratchet unchanged!
+  const beforeRatchet = readFileSync(ratchetPath, 'utf8');
+  const growRefused = runChecker(['--root', dir, '--ratchet', ratchetPath, '--write-ratchet']);
+  assert.equal(growRefused.status, 1, '--write-ratchet must refuse growth unless --allow-growth is passed');
+  assert.match(growRefused.stderr, /ERROR \[ratchet-growth\]/);
+  assert.equal(readFileSync(ratchetPath, 'utf8'), beforeRatchet);
+
+  // Restore b.mjs, then add a self-import inside c.mjs -> MUST FAIL exit 1!
+  writeRepoFile(dir, 'src/core/b.mjs', "import { c } from './c.mjs#hash';\nexport const b = c;\n");
+  writeRepoFile(dir, 'src/core/c.mjs', "import { a } from './a.mjs';\nimport './c.mjs';\nexport const c = a;\n");
+  const selfRes = runChecker(['--root', dir, '--ratchet', ratchetPath]);
+  assert.equal(selfRes.status, 1, 'self-import inside existing SCC must fail exit 1');
+  assert.match(selfRes.stderr, /Self-import cycle detected/);
+
+  // Restore c.mjs, then add an unresolved local relative import -> MUST FAIL CLOSED exit 1!
+  writeRepoFile(dir, 'src/core/c.mjs', "import { a } from './a.mjs';\nexport const c = a;\n");
+  writeRepoFile(dir, 'src/shared/util.mjs', "import './does-not-exist.mjs';\nexport const ok = 1;\n");
+  const unresolvedRes = runChecker(['--root', dir, '--ratchet', ratchetPath]);
+  assert.equal(unresolvedRes.status, 1, 'unresolved relative import must fail closed exit 1');
+  assert.match(unresolvedRes.stderr, /ERROR \[unresolved-local-import\] src\/shared\/util\.mjs:1/);
+
+  // #8: corpus-check fail-closed payload validation & non-zero seed replacement guard.
+  assert.equal(parseOfflineLintPayload('', 0).parsedOk, false);
+  assert.equal(parseOfflineLintPayload('not json', 0).parsedOk, false);
+  assert.equal(parseOfflineLintPayload('{"exit_code":0}', 0).parsedOk, false);
+  assert.equal(parseOfflineLintPayload('{"exit_code":1,"problems":[],"warnings":[]}', 0).parsedOk, false);
+  assert.equal(parseOfflineLintPayload('{"exit_code":0,"problems":[],"warnings":[]}', 0).parsedOk, true);
+  assert.throws(() => replaceRequired('hello world', '`missing`', '`replacement`', 'missing-seed'), /matched 0 times/);
+  assert.deepEqual(replaceRequired('use `foo` and `foo`', /`foo`/g, '`bar`', 'foo-seed'), { text: 'use `bar` and `bar`', count: 2 });
 });

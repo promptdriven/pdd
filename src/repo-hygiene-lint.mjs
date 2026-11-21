@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: e105deb7d1fc2a2cd136c5287e2796f233baeee703912561e53906d614278f61).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 1e4f673264add2fc18b61d04328fbac4dfed9272a95358d72e51069404fef38d).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -100,6 +100,7 @@ const INLINE_BRACE_PORT_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.
 const NETWORK_PORT_HEADING_RE = /\b(?:tcp|udp|http|https|grpc|listen(?:ing)?|network|socket|server|tls|ssl|firewall|docker|container|kubernetes|k8s|ingress|expos(?:e|ed))\b/i;
 const DOMAIN_PORT_HEADING_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?)\b/i;
 const DEP_PORTS_HEADING_RE = /\b(?:injected\s+ports?|external\s+ports?|domain\s+ports?|port\s+interface|port\s+contract|ports?|resources?)\b/i;
+const DEP_COMBINED_OPS_AND_PORTS_RE = /\b(?:public\s+)?operations?\s+(?:and|&|\/)\s+(?:external\s+|injected\s+|domain\s+)?ports?\b|\b(?:external\s+|injected\s+|domain\s+)?ports?\s+(?:and|&|\/)\s+(?:public\s+)?operations?\b/i;
 const DEP_EXPORTS_HEADING_RE = /\b(?:public\s+(?:operations?|contract|interface|exports?|api|functions?|methods?|actions?|read\s+actions?)|operations?|exports?)\b/i;
 const DEP_EXPORTS_HEADING_EXCLUDE_RE = /\b(?:consequential|internal|private|ports?|resources?|failure|errors?)\b/i;
 const DEP_EXPORT_TABLE_OP_COL_RE = /\b(?:operation|operations|op|ops|export|exports|function|functions|method|methods|action|actions|entry|entries|symbol|symbols)\b/i;
@@ -783,36 +784,44 @@ function extractDependencyLinkTargets(raw, promptPath) {
   return [...targets].sort();
 }
 
-function cleanSingleIdentifier(raw, { allowCallArgs = false } = {}) {
-  let s = String(raw ?? '').trim();
-  s = s.replace(/^\*\*|\*\*$/g, '').replace(/^`|`$/g, '').trim();
-  if (allowCallArgs) {
-    const paren = s.indexOf('(');
-    if (paren > 0 && isSingleCallSpan(s, paren)) s = s.slice(0, paren).trim();
+function stripCallAndReturnTail(raw) {
+  const s = String(raw ?? '').trim();
+  const paren = s.indexOf('(');
+  if (paren > 0) {
+    let depth = 0, close = -1;
+    for (let i = paren; i < s.length; i++) {
+      if (s[i] === '(') depth++;
+      else if (s[i] === ')' && --depth === 0) { close = i; break; }
+    }
+    if (close > paren) {
+      const tail = s.slice(close + 1).trim();
+      if (!tail || /^(?:->|=>|:|—|–|returns?\b)/i.test(tail)) return { head: s.slice(0, paren).trim(), hasSig: true };
+    }
   }
-  if (s.length < 2 || VERSION_TOKEN_RE.test(s) || !SIMPLE_IDENT_RE.test(s)) return null;
-  return s;
+  const arrow = s.search(/\s*(?:->|=>)\s*/);
+  return arrow > 0 ? { head: s.slice(0, arrow).trim(), hasSig: true } : { head: s, hasSig: false };
+}
+
+function cleanSingleIdentifier(raw, { allowCallArgs = false } = {}) {
+  let s = String(raw ?? '').trim().replace(/^\*\*|\*\*$/g, '').replace(/^`|`$/g, '').trim();
+  if (allowCallArgs) {
+    const stripped = stripCallAndReturnTail(s);
+    if (stripped.hasSig) s = stripped.head;
+  }
+  return s.length < 2 || VERSION_TOKEN_RE.test(s) || !SIMPLE_IDENT_RE.test(s) ? null : s;
 }
 
 function extractLeadingSimpleIdentifier(rest, { allowCallArgs = false } = {}) {
   const trimmed = String(rest ?? '').trim();
   if (!trimmed) return null;
-  const backtick = /^`([^`\r\n]+)`/.exec(trimmed);
-  if (backtick) {
-    const inner = backtick[1].trim();
-    if (inner.includes('.')) return null;
-    return cleanSingleIdentifier(inner, { allowCallArgs });
-  }
-  const bold = /^\*\*([^*\r\n]+)\*\*/.exec(trimmed);
-  if (bold) {
-    const inner = bold[1].trim();
-    if (inner.includes('.')) return null;
-    return cleanSingleIdentifier(inner, { allowCallArgs });
+  const wrapped = /^`([^`\r\n]+)`|^\*\*([^*\r\n]+)\*\*/.exec(trimmed);
+  if (wrapped) {
+    const inner = (wrapped[1] ?? wrapped[2]).trim();
+    const head = allowCallArgs ? stripCallAndReturnTail(inner).head : inner;
+    return head.includes('.') ? null : cleanSingleIdentifier(inner, { allowCallArgs });
   }
   const bare = /^([a-z][a-zA-Z0-9_-]*)(?:\s*(\([^()\r\n]*\)))?(?=\s*(?::|—|–|->|=>|-\s|$))/.exec(trimmed);
-  if (!bare) return null;
-  if (bare[2] && !allowCallArgs) return null;
-  return cleanSingleIdentifier(bare[1], { allowCallArgs: false });
+  return bare && (!bare[2] || allowCallArgs) ? cleanSingleIdentifier(bare[1], { allowCallArgs: false }) : null;
 }
 
 function extractOpsFromTableCell(cell) {
@@ -858,73 +867,41 @@ function classifyDependencyTable(headers, subheadingPort = null) {
 
 function promptStemAliases(promptPath) {
   if (typeof promptPath !== 'string' || !/\.prompt\.md$/i.test(promptPath)) return [];
-  const rawStem = posix.basename(promptPath).replace(/\.prompt\.md$/i, '');
-  const candidates = rawStem.includes('-') ? [rawStem, rawStem.replace(/-/g, '_')] : [rawStem];
-  const out = [];
-  for (const s of candidates) {
-    if (s.length >= 2 && !VERSION_TOKEN_RE.test(s) && SIMPLE_IDENT_RE.test(s) && !out.includes(s)) out.push(s);
+  const stem = posix.basename(promptPath).replace(/\.prompt\.md$/i, '');
+  const list = stem.includes('-') ? [stem, stem.replace(/-/g, '_')] : [stem];
+  return [...new Set(list)].filter(s => s.length >= 2 && !VERSION_TOKEN_RE.test(s) && SIMPLE_IDENT_RE.test(s));
+}
+
+function readContiguousBacktickOps(text, startIdx) {
+  const ops = [];
+  let sawSig = false;
+  let i = startIdx;
+  while (i < text.length && (text[i] === ' ' || text[i] === '\t')) i++;
+  while (i < text.length && text[i] === '`') {
+    const close = text.indexOf('`', i + 1);
+    if (close <= i + 1) break;
+    const span = text.slice(i + 1, close).trim();
+    const { head, hasSig } = stripCallAndReturnTail(span);
+    if (!head.includes('.') && !head.includes('/')) {
+      const ident = cleanSingleIdentifier(span, { allowCallArgs: true });
+      if (ident) { ops.push(ident); if (hasSig) sawSig = true; }
+    }
+    i = close + 1;
+    const sep = /^[ \t]*(?:[,/][ \t]*(?:and[ \t]+)?|and[ \t]+)(?=`)/i.exec(text.slice(i, i + 24));
+    if (!sep) break;
+    i += sep[0].length;
   }
-  return out;
+  return { ops, sawSig, rest: text.slice(i).trimStart() };
 }
 
 function extractOpsFromExportSubheading(title) {
   const { spans } = extractInlineBacktickSpans(title);
   if (spans.length > 0) {
-    const ops = [];
-    for (const span of spans) {
-      if (span.includes('.')) continue;
-      const ident = cleanSingleIdentifier(span, { allowCallArgs: true });
-      if (ident) ops.push(ident);
-    }
-    return ops;
+    return spans.map(s => (!stripCallAndReturnTail(s).head.includes('.') ? cleanSingleIdentifier(s, { allowCallArgs: true }) : null)).filter(Boolean);
   }
   const parts = String(title ?? '').split(/\s*(?:,|\/|\band\b)\s*/i).map(s => s.trim()).filter(Boolean);
-  if (!parts.length) return [];
-  const ops = [];
-  for (const part of parts) {
-    if (part.includes('.')) return [];
-    const ident = cleanSingleIdentifier(part, { allowCallArgs: true });
-    if (!ident) return [];
-    ops.push(ident);
-  }
-  return ops;
-}
-
-function extractLeadingBacktickedOpDecl(line) {
-  const trimmed = String(line ?? '').trim();
-  if (!trimmed.startsWith('`')) return [];
-  const ops = [];
-  let i = 0;
-  while (i < trimmed.length && trimmed[i] === '`') {
-    const close = trimmed.indexOf('`', i + 1);
-    if (close <= i + 1) return [];
-    const span = trimmed.slice(i + 1, close).trim();
-    if (span.includes('.')) return [];
-    const ident = cleanSingleIdentifier(span, { allowCallArgs: true });
-    if (!ident) return [];
-    ops.push(ident);
-    i = close + 1;
-    let next = i;
-    while (next < trimmed.length && (trimmed[next] === ' ' || trimmed[next] === '\t')) next++;
-    if (trimmed[next] === ',') {
-      next++;
-      while (next < trimmed.length && (trimmed[next] === ' ' || trimmed[next] === '\t')) next++;
-      if (trimmed.slice(next, next + 4).toLowerCase() === 'and ') {
-        next += 4;
-        while (next < trimmed.length && (trimmed[next] === ' ' || trimmed[next] === '\t')) next++;
-      }
-      if (trimmed[next] === '`') { i = next; continue; }
-    } else if (/^and\s+`/i.test(trimmed.slice(next, next + 8))) {
-      next += 3;
-      while (next < trimmed.length && (trimmed[next] === ' ' || trimmed[next] === '\t')) next++;
-      if (trimmed[next] === '`') { i = next; continue; }
-    }
-    i = next;
-    break;
-  }
-  const rest = trimmed.slice(i);
-  if (!ops.length || !EXPORT_PROSE_LEAD_VERB_RE.test(rest)) return [];
-  return ops;
+  const ops = parts.map(p => (!stripCallAndReturnTail(p).head.includes('.') ? cleanSingleIdentifier(p, { allowCallArgs: true }) : null));
+  return parts.length && ops.every(Boolean) ? ops : [];
 }
 
 function extractInlineExportClauseOps(line) {
@@ -932,34 +909,14 @@ function extractInlineExportClauseOps(line) {
   if (!text.includes('`') || !/\bExports?\s+/i.test(text)) return [];
   const ops = [];
   for (const m of text.matchAll(/(?:^|[.!?]\s+)Exports?\s+/g)) {
-    let pos = m.index + m[0].length;
-    let inTick = false;
-    let end = pos;
-    while (end < text.length) {
-      const ch = text[end];
-      if (ch === '`') inTick = !inTick;
-      else if (!inTick && (ch === '.' || ch === ';' || ch === '\n')) break;
-      end++;
-    }
-    const clause = text.slice(pos, end);
-    const { spans } = extractInlineBacktickSpans(clause);
-    for (const span of spans) {
-      if (span.includes('.') || span.includes('/')) continue;
-      const ident = cleanSingleIdentifier(span, { allowCallArgs: true });
-      if (ident) ops.push(ident);
-    }
+    ops.push(...readContiguousBacktickOps(text, m.index + m[0].length).ops);
   }
   return ops;
 }
 
-function classifyExportTableOpCol(headers) {
-  for (let c = 0; c < headers.length; c++) {
-    const h = headers[c];
-    if (PORT_TABLE_COL_EXCLUDE_RE.test(h) || DEP_TABLE_PORT_NAME_COL_RE.test(h)) continue;
-    if (DEP_EXPORT_TABLE_OP_COL_RE.test(h)) return c;
-  }
-  return -1;
-}
+const classifyExportTableOpCol = headers => headers.findIndex(
+  h => !PORT_TABLE_COL_EXCLUDE_RE.test(h) && !DEP_TABLE_PORT_NAME_COL_RE.test(h) && DEP_EXPORT_TABLE_OP_COL_RE.test(h),
+);
 
 function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } = {}) {
   const mentioned = new Set();
@@ -1015,19 +972,12 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
   const { proseLines, fences } = scanMarkdownLinesAndFences(cleaned);
 
   // 1. Structural declarations in proseLines: split-column tables, nested bullets/subheadings under ## Ports, and exported public operations.
-  let inPortsSection = false;
-  let portsSectionDepth = 0;
-  let subheadingPort = null;
-  let subheadingDepth = 0;
-  let bulletPort = null;
-  let bulletIndent = -1;
-  let inExportsSection = false;
-  let exportsSectionDepth = 0;
-  let inExportSubheading = false;
-  let exportSubheadingDepth = 0;
-  let inTable = false;
-  let tableSpec = null;
-  let exportTableOpCol = -1;
+  let inPortsSection = false, portsSectionDepth = 0, subheadingPort = null, subheadingDepth = 0;
+  let bulletPort = null, bulletIndent = -1;
+  let inExportsSection = false, exportsSectionDepth = 0, inExportSubheading = false, exportSubheadingDepth = 0, exportTopBulletIndent = -1;
+  let inTable = false, tableSpec = null, exportTableOpCol = -1;
+  const resetPorts = () => { inPortsSection = false; portsSectionDepth = 0; subheadingPort = null; subheadingDepth = 0; };
+  const resetExports = () => { inExportsSection = false; exportsSectionDepth = 0; inExportSubheading = false; exportSubheadingDepth = 0; };
 
   for (let idx = 0; idx < proseLines.length; idx++) {
     const line = proseLines[idx].text;
@@ -1035,58 +985,36 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
     if (headingMatch) {
       const depth = headingMatch[1].length;
       const title = headingMatch[2].trim();
-      inTable = false;
-      tableSpec = null;
-      exportTableOpCol = -1;
-      bulletPort = null;
-      bulletIndent = -1;
-      if (inPortsSection && depth > portsSectionDepth) {
-        const cleanedTitle = title.replace(/\b(?:port|resource|adapter|interface)\b/gi, '').trim();
-        const ident = cleanSingleIdentifier(cleanedTitle, { allowCallArgs: false });
-        if (ident) {
-          subheadingPort = ident;
-          subheadingDepth = depth;
-        } else if (depth <= subheadingDepth) {
-          subheadingPort = null;
-          subheadingDepth = 0;
-        }
-      } else if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title)) {
-        inPortsSection = true;
-        portsSectionDepth = depth;
-        subheadingPort = null;
-        subheadingDepth = 0;
-        inExportsSection = false;
-        exportsSectionDepth = 0;
-        inExportSubheading = false;
-        exportSubheadingDepth = 0;
+      inTable = false; tableSpec = null; exportTableOpCol = -1;
+      bulletPort = null; bulletIndent = -1; exportTopBulletIndent = -1;
+
+      const subPortIdent = inPortsSection && depth > portsSectionDepth && (!inExportsSection || /\b(?:port|resource|adapter|interface)\b/i.test(title))
+        ? cleanSingleIdentifier(title.replace(/\b(?:ports?|resources?|adapters?|interfaces?)\b/gi, '').trim(), { allowCallArgs: false })
+        : null;
+      const isCombined = !NETWORK_PORT_HEADING_RE.test(title) && DEP_COMBINED_OPS_AND_PORTS_RE.test(title);
+      const isPorts = !subPortIdent && !NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title);
+      const isExports = !subPortIdent && stems.length > 0 && (isCombined || (!DEP_EXPORTS_HEADING_EXCLUDE_RE.test(title) && DEP_EXPORTS_HEADING_RE.test(title)));
+
+      if (isCombined || (isPorts && !isExports)) {
+        if (!inPortsSection || depth <= portsSectionDepth) portsSectionDepth = depth;
+        inPortsSection = true; subheadingPort = null; subheadingDepth = 0;
+        if (isCombined && stems.length > 0) { inExportsSection = true; exportsSectionDepth = depth; inExportSubheading = false; exportSubheadingDepth = 0; }
+        else resetExports();
+      } else if (isExports) {
+        if (depth <= portsSectionDepth) resetPorts();
+        else if (depth <= subheadingDepth) { subheadingPort = null; subheadingDepth = 0; }
+        inExportsSection = true; exportsSectionDepth = depth; inExportSubheading = false; exportSubheadingDepth = 0;
       } else {
-        if (depth <= portsSectionDepth) {
-          inPortsSection = false;
-          portsSectionDepth = 0;
-          subheadingPort = null;
-          subheadingDepth = 0;
-        }
-        if (inExportsSection && depth > exportsSectionDepth) {
+        if (subPortIdent) { subheadingPort = subPortIdent; subheadingDepth = depth; }
+        else if (inPortsSection && depth > portsSectionDepth) {
+          if (depth <= subheadingDepth) { subheadingPort = null; subheadingDepth = 0; }
+        } else if (depth <= portsSectionDepth) resetPorts();
+
+        if (inExportsSection && depth > exportsSectionDepth && !subheadingPort) {
           const ops = stems.length > 0 ? extractOpsFromExportSubheading(title) : [];
-          if (ops.length > 0) {
-            for (const op of ops) addExportedOp(op);
-            inExportSubheading = true;
-            exportSubheadingDepth = depth;
-          } else if (depth <= exportSubheadingDepth) {
-            inExportSubheading = false;
-            exportSubheadingDepth = 0;
-          }
-        } else if (stems.length > 0 && !DEP_EXPORTS_HEADING_EXCLUDE_RE.test(title) && DEP_EXPORTS_HEADING_RE.test(title)) {
-          inExportsSection = true;
-          exportsSectionDepth = depth;
-          inExportSubheading = false;
-          exportSubheadingDepth = 0;
-        } else if (depth <= exportsSectionDepth) {
-          inExportsSection = false;
-          exportsSectionDepth = 0;
-          inExportSubheading = false;
-          exportSubheadingDepth = 0;
-        }
+          if (ops.length > 0) { for (const op of ops) addExportedOp(op); inExportSubheading = true; exportSubheadingDepth = depth; }
+          else if (depth <= exportSubheadingDepth) { inExportSubheading = false; exportSubheadingDepth = 0; }
+        } else if (depth <= exportsSectionDepth) resetExports();
       }
       continue;
     }
@@ -1098,6 +1026,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
       exportTableOpCol = !tableSpec && inExportsSection && stems.length > 0 ? classifyExportTableOpCol(headers) : -1;
       bulletPort = null;
       bulletIndent = -1;
+      exportTopBulletIndent = -1;
       continue;
     }
     if (inTable) {
@@ -1129,8 +1058,8 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
       }
     }
 
+    const bm = BULLET_LINE_RE.exec(line);
     if (inPortsSection) {
-      const bm = BULLET_LINE_RE.exec(line);
       if (bm) {
         const indent = bm[1].replace(/\t/g, '  ').length;
         const rest = bm[2].trim();
@@ -1140,7 +1069,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
         } else if (bulletPort && indent > bulletIndent) {
           const op = extractLeadingSimpleIdentifier(rest, { allowCallArgs: true });
           if (op) addDeclaredPair(bulletPort, op);
-        } else {
+        } else if (!inExportsSection) {
           const parentIdent = extractLeadingSimpleIdentifier(rest, { allowCallArgs: false });
           if (parentIdent) {
             bulletPort = parentIdent;
@@ -1154,13 +1083,21 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
         bulletPort = null;
         bulletIndent = -1;
       }
-    } else if (inExportsSection && !inExportSubheading && stems.length > 0) {
-      const bm = BULLET_LINE_RE.exec(line);
+    }
+
+    if (inExportsSection && !inExportSubheading && !subheadingPort && stems.length > 0) {
       if (bm) {
-        const op = extractLeadingSimpleIdentifier(bm[2].trim(), { allowCallArgs: true });
-        if (op) addExportedOp(op);
+        const indent = bm[1].replace(/\t/g, '  ').length;
+        if (exportTopBulletIndent < 0 && indent <= 1) exportTopBulletIndent = indent;
+        if (exportTopBulletIndent >= 0 && indent <= exportTopBulletIndent) {
+          const op = extractLeadingSimpleIdentifier(bm[2].trim(), { allowCallArgs: true });
+          if (op) addExportedOp(op);
+        }
       } else if (line.trimStart().startsWith('`')) {
-        for (const op of extractLeadingBacktickedOpDecl(line)) addExportedOp(op);
+        const { ops, sawSig, rest } = readContiguousBacktickOps(line, line.indexOf('`'));
+        if (ops.length && (sawSig || EXPORT_PROSE_LEAD_VERB_RE.test(rest))) {
+          for (const op of ops) addExportedOp(op);
+        }
       }
     }
 
@@ -3060,250 +2997,138 @@ function scanTimersPromiseImportsLinear(skeleton, literals, timersPromiseFns, ti
 }
 
 const POLLING_HELPER_NAME_RE = /^(?:waitFor|waitUntil|wait_for|wait_until|until|eventually|poll(?:For|Until|While)?|retry(?:WithBackoff)?|withRetry|withBackoff|backoff)(?:$|[A-Z0-9_])/i;
+const DATA_DRAIN_RE = /\.\s*(?:pop|shift|splice|dequeue)\s*\(/;
+const NONEMPTY_LEN_RE = /^(?:[A-Za-z_$][\w$.]*\.(?:length|size)|len\s*\([^()]*\))(?:\s*(?:>|!==?|>=)\s*0)?$/;
+const POLLING_DEADLINE_RE = /\b(?:Date\s*\.\s*now|performance\s*\.\s*now|hrtime|time\s*\.\s*(?:time|monotonic|perf_counter)|deadline|end|until|timeout|expires|maxWait|elapsed)\b/i;
+const POLLING_STATE_RE = /\b(?:ready|done|finished|stopped|alive|pending|waiting|connected|closed|exited|complete|completed|attempt|attempts|retries|tries|settled|healthy|running|state|status)\b/i;
+const BARE_COUNTER_RE = /^(?:[a-z]\d*|i|j|k|n|idx|index|count|step|iter)\s*(?:<|<=|>|>=|!=|!==)\s*\d+$/i;
 
-function splitTopLevelForClauses(header) {
-  const parts = [];
-  let depth = 0;
-  let start = 0;
-  for (let i = 0; i < header.length; i++) {
-    const ch = header[i];
-    if (ch === '(' || ch === '{' || ch === '[') depth++;
-    else if (ch === ')' || ch === '}' || ch === ']') depth = Math.max(0, depth - 1);
-    else if (ch === ';' && depth === 0) {
-      parts.push(header.slice(start, i));
-      start = i + 1;
-      if (parts.length > 2) return null;
-    }
-  }
-  parts.push(header.slice(start));
-  return parts.length === 3 ? parts : null;
-}
-
-function isPollingOrRetryLoop(kind, header, bodySlice) {
-  const trimmedHeader = String(header ?? '').trim();
-  const hasGuardExit = /\b(?:if|try)\b/.test(bodySlice) && /\b(?:break|return)\b/.test(bodySlice);
-  const hasTryCatchExit = /\btry\b/.test(bodySlice) && /\bcatch\b/.test(bodySlice) && /\b(?:break|return)\b/.test(bodySlice);
-  if (kind === 'while' || kind === 'do-while') {
-    if (hasGuardExit || hasTryCatchExit) return true;
-    if (/^(?:true|1|!0)$/.test(trimmedHeader)) return false;
-    return /&&|\|\||!|\(|\./.test(trimmedHeader);
-  }
+function isPollingLoop(kind, header, body, isPython = false) {
+  const h = String(header ?? '').trim();
+  const hasExit = /\b(?:if|try)\b/.test(body) && /\b(?:break|return)\b/.test(body);
+  if (hasExit) return true;
+  if (DATA_DRAIN_RE.test(body)) return false;
   if (kind === 'for') {
-    if (hasGuardExit || hasTryCatchExit) return true;
-    const clauses = splitTopLevelForClauses(trimmedHeader);
-    if (!clauses) return false;
-    const cond = clauses[1].trim();
-    return cond.length > 0 && /&&|\|\||!|\(/.test(cond);
+    const m = /^[^;]*;([^;]*);[^;]*$/.exec(h);
+    const cond = m ? m[1].trim() : '';
+    return Boolean(cond) && !BARE_COUNTER_RE.test(cond) && (/&&|\|\||!|\(|===|!==|==|!=/.test(cond) || POLLING_DEADLINE_RE.test(cond));
   }
-  return false;
+  if (/^(?:true|1|!0|True)$/.test(h) || BARE_COUNTER_RE.test(h)) return false;
+  if (POLLING_DEADLINE_RE.test(h)) return true;
+  if (NONEMPTY_LEN_RE.test(h) || (/\.\s*(?:length|size)\b|\blen\s*\(/.test(h) && !/&&|\|\||\band\b|\bor\b/.test(h))) return false;
+  return (isPython ? /\b(?:and|or|not)\b|==|!=|\(/ : /&&|\|\||!|===|!==|==|!=|\(/).test(h) || POLLING_STATE_RE.test(h);
 }
 
-function isPromiseRaceTimeoutWatchdog(skeleton, offset, enclosingBracket, closeBracket, closeParen, closeBrace) {
+function isDirectRaceTimeoutArm(skeleton, offset, { enclosingBracket, closeBracket, closeParen, closeBrace }) {
   for (let br = enclosingBracket[offset], hops = 0; br >= 0 && hops < 3; br = enclosingBracket[br], hops++) {
     let p = br - 1;
     while (p >= 0 && /\s/.test(skeleton[p])) p--;
-    if (p < 0 || skeleton[p] !== '(') continue;
-    const before = skeleton.slice(Math.max(0, p - 32), p);
-    if (!/\bPromise\s*\.\s*race\s*$/.test(before)) continue;
+    if (p < 0 || skeleton[p] !== '(' || !/\bPromise\s*\.\s*race\s*$/.test(skeleton.slice(Math.max(0, p - 32), p))) continue;
     const endBr = closeBracket[br];
     if (endBr < 0) continue;
-    let k = br + 1;
-    while (k < endBr) {
+    let armStart = br + 1, count = 0, containingStart = -1;
+    for (let k = armStart; k < endBr; k++) {
       const ch = skeleton[k];
-      if (ch === '(' && closeParen[k] > k && closeParen[k] < endBr) { k = closeParen[k] + 1; continue; }
-      if (ch === '{' && closeBrace[k] > k && closeBrace[k] < endBr) { k = closeBrace[k] + 1; continue; }
-      if (ch === '[' && closeBracket[k] > k && closeBracket[k] < endBr) { k = closeBracket[k] + 1; continue; }
-      if (ch === ',') return true;
-      k++;
+      if (ch === '(' && closeParen[k] > k && closeParen[k] < endBr) k = closeParen[k];
+      else if (ch === '{' && closeBrace[k] > k && closeBrace[k] < endBr) k = closeBrace[k];
+      else if (ch === '[' && closeBracket[k] > k && closeBracket[k] < endBr) k = closeBracket[k];
+      else if (ch === ',') { if (offset >= armStart && offset < k) containingStart = armStart; armStart = k + 1; count++; }
+    }
+    if (count > 0) {
+      if (containingStart < 0 && offset >= armStart && offset < endBr) containingStart = armStart;
+      if (containingStart >= 0 && skeleton.slice(containingStart, offset).replace(/[\s(]+/g, '') === '') return true;
     }
   }
   return false;
 }
 
-function extractAssignedFnNameBefore(skeleton, endIdx) {
-  const before = skeleton.slice(Math.max(0, endIdx - 120), endIdx);
-  const m = /(?:(?:const|let|var)\s+|(?:^|[;,\n{]\s*))([A-Za-z_$][\w$]*)\s*(?:=|:)\s*(?:async\s+)?$/.exec(before);
-  return m ? m[1] : null;
-}
-
-function classifyEnclosingBraceOwner(skeleton, braceIdx, openParen, closeBrace) {
-  let p = braceIdx - 1;
-  while (p >= 0 && /\s/.test(skeleton[p])) p--;
-  if (p < 0) return { kind: 'other' };
-
-  if (p >= 1 && skeleton[p - 1] === '=' && skeleton[p] === '>') {
-    let q = p - 2;
-    while (q >= 0 && /\s/.test(skeleton[q])) q--;
-    if (q >= 0 && skeleton[q] === ')' && openParen[q] >= 0) q = openParen[q];
-    else {
-      while (q >= 0 && /[\w$]/.test(skeleton[q])) q--;
-      q++;
-    }
-    return { kind: 'function', name: extractAssignedFnNameBefore(skeleton, q) };
-  }
-
-  if (skeleton[p] === ')' && openParen[p] >= 0) {
-    const open = openParen[p];
-    let q = open - 1;
-    while (q >= 0 && /\s/.test(skeleton[q])) q--;
-    let wStart = q;
-    while (wStart >= 0 && /[\w$]/.test(skeleton[wStart])) wStart--;
-    const word = skeleton.slice(wStart + 1, q + 1);
-    if (word === 'while' || word === 'for') {
-      return { kind: word, header: skeleton.slice(open + 1, p).trim() };
-    }
-    if (word === 'if' || word === 'catch' || word === 'switch' || word === 'with') {
-      return { kind: 'control', keyword: word };
-    }
-    if (word === 'function') {
-      return { kind: 'function', name: extractAssignedFnNameBefore(skeleton, wStart + 1) };
-    }
-    if (/^[A-Za-z_$][\w$]*$/.test(word)) {
-      return { kind: 'function', name: word };
-    }
-    return { kind: 'other' };
-  }
-
-  let wStart = p;
-  while (wStart >= 0 && /[\w$]/.test(skeleton[wStart])) wStart--;
-  const word = skeleton.slice(wStart + 1, p + 1);
-  if (word === 'do') {
-    const endB = closeBrace[braceIdx];
-    if (endB >= 0) {
-      const after = skeleton.slice(endB + 1, Math.min(skeleton.length, endB + 240));
-      const wm = /^\s*while\s*\(/.exec(after);
-      if (wm) {
-        const wOpen = endB + 1 + wm[0].length - 1;
-        // Find matching close paren linearly within bounded window
-        let depth = 0;
-        let wClose = -1;
-        for (let k = wOpen; k < Math.min(skeleton.length, wOpen + 300); k++) {
-          if (skeleton[k] === '(') depth++;
-          else if (skeleton[k] === ')') { depth--; if (depth === 0) { wClose = k; break; } }
-        }
-        if (wClose > wOpen) return { kind: 'do-while', header: skeleton.slice(wOpen + 1, wClose).trim() };
-      }
-    }
-    return { kind: 'control', keyword: 'do' };
-  }
-  if (word === 'try' || word === 'else' || word === 'finally' || word === 'catch') {
-    return { kind: 'control', keyword: word };
-  }
-  return { kind: 'other' };
-}
-
-function isBracelessPollingLoopBefore(skeleton, offset, openParen) {
-  let p = offset - 1;
-  const floor = Math.max(0, offset - 200);
-  while (p >= floor) {
-    while (p >= floor && /\s/.test(skeleton[p])) p--;
-    if (p < floor) return false;
-    if (skeleton[p] === ')') {
-      const open = openParen[p];
-      if (open < 0 || p - open > 400) return false;
-      let q = open - 1;
-      while (q >= 0 && /\s/.test(skeleton[q])) q--;
-      let wStart = q;
-      while (wStart >= 0 && /[\w$]/.test(skeleton[wStart])) wStart--;
-      const word = skeleton.slice(wStart + 1, q + 1);
-      if (word === 'while' || word === 'for') {
-        const header = skeleton.slice(open + 1, p).trim();
-        return isPollingOrRetryLoop(word, header, '');
-      }
-      return false;
-    }
-    // Skip leading `await` / `return` directly before the sleep expression
-    let wStart = p;
-    while (wStart >= floor && /[\w$]/.test(skeleton[wStart])) wStart--;
-    const word = skeleton.slice(wStart + 1, p + 1);
-    if (word === 'await' || word === 'return') {
-      p = wStart;
-      continue;
-    }
-    return false;
-  }
-  return false;
-}
-
-function isInsidePythonPollingOrRetryContext(skeleton, lineNo) {
-  const lines = skeleton.split('\n');
-  const idx = lineNo - 1;
-  if (idx < 0 || idx >= lines.length) return false;
-  const indentOf = s => {
-    let n = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === ' ') n += 1;
-      else if (s[i] === '\t') n += 4;
-      else break;
-    }
-    return n;
-  };
-  let curIndent = indentOf(lines[idx]);
-  const floor = Math.max(0, idx - 80);
-  for (let i = idx - 1; i >= floor; i--) {
-    const rawLine = lines[i];
-    const trimmed = rawLine.trim();
-    if (!trimmed) continue;
-    const ind = indentOf(rawLine);
-    if (ind >= curIndent) continue;
-    curIndent = ind;
-
-    const defMatch = /^(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(trimmed);
-    if (defMatch) {
-      if (!POLLING_HELPER_NAME_RE.test(defMatch[1])) return false;
-      const bodyLines = [];
-      for (let j = i + 1; j < Math.min(lines.length, i + 80); j++) {
-        const t = lines[j].trim();
-        if (t && indentOf(lines[j]) <= ind) break;
-        bodyLines.push(lines[j]);
-      }
-      const fnBody = bodyLines.join('\n');
-      return /\b(?:while|for)\b/.test(fnBody) || (/\bif\b/.test(fnBody) && /\breturn\b/.test(fnBody));
-    }
-    if (/^class\s+/.test(trimmed)) return false;
-
-    const whileMatch = /^while\s+(.+):\s*$/.exec(trimmed);
-    const forMatch = /^for\s+(.+):\s*$/.exec(trimmed);
-    if (whileMatch || forMatch) {
-      const bodyLines = [];
-      for (let j = i + 1; j < Math.min(lines.length, i + 80); j++) {
-        const t = lines[j].trim();
-        if (t && indentOf(lines[j]) <= ind) break;
-        bodyLines.push(lines[j]);
-      }
-      const loopBody = bodyLines.join('\n');
-      const hasGuardExit = /\b(?:if|try)\b/.test(loopBody) && /\b(?:break|return)\b/.test(loopBody);
-      if (whileMatch) {
-        const cond = whileMatch[1].trim();
-        if (hasGuardExit) return true;
-        if (/^(?:True|1)$/.test(cond)) return false;
-        return /\b(?:and|or|not)\b|\(|\.|!=|==|<|>/.test(cond);
-      }
-      if (forMatch && hasGuardExit) return true;
-    }
-  }
-  return false;
+function prevWordBefore(s, idx) {
+  let q = idx;
+  while (q >= 0 && /\s/.test(s[q])) q--;
+  let start = q;
+  while (start >= 0 && /[\w$]/.test(s[start])) start--;
+  return { word: s.slice(start + 1, q + 1), start: start + 1 };
 }
 
 function isInsidePollingOrRetryContext(skeleton, offset, lineNo, ctx) {
-  if (ctx.hashComments) return isInsidePythonPollingOrRetryContext(skeleton, lineNo);
-  if (isPromiseRaceTimeoutWatchdog(skeleton, offset, ctx.enclosingBracket, ctx.closeBracket, ctx.closeParen, ctx.closeBrace)) return true;
-  if (isBracelessPollingLoopBefore(skeleton, offset, ctx.openParen)) return true;
-
-  for (let b = ctx.enclosingBrace[offset], hops = 0; b >= 0 && hops < 8; b = ctx.enclosingBrace[b], hops++) {
-    const owner = classifyEnclosingBraceOwner(skeleton, b, ctx.openParen, ctx.closeBrace);
-    const endB = ctx.closeBrace[b];
-    const bodySlice = endB > b ? skeleton.slice(b + 1, Math.min(endB, b + 4000)) : '';
-    if (owner.kind === 'while' || owner.kind === 'for' || owner.kind === 'do-while') {
-      if (isPollingOrRetryLoop(owner.kind, owner.header, bodySlice)) return true;
-    } else if (owner.kind === 'function') {
-      if (owner.name && POLLING_HELPER_NAME_RE.test(owner.name)) {
-        if (/\b(?:while|for)\s*\(/.test(bodySlice) || (/\b(?:if|try)\b/.test(bodySlice) && /\breturn\b/.test(bodySlice))) {
-          return true;
+  if (ctx.hashComments) {
+    const lines = ctx.skeletonLines;
+    const idx = lineNo - 1;
+    if (!lines || idx < 0 || idx >= lines.length) return false;
+    const indentOf = s => { let n = 0; while (n < s.length && (s[n] === ' ' || s[n] === '\t')) n += s[n] === '\t' ? 4 : 1; return n; };
+    let cur = indentOf(lines[idx]);
+    for (let i = idx - 1; i >= Math.max(0, idx - 60); i--) {
+      const t = lines[i].trim();
+      if (!t) continue;
+      const ind = indentOf(lines[i]);
+      if (ind >= cur) continue;
+      cur = ind;
+      const block = () => {
+        const out = [];
+        for (let j = i + 1; j < Math.min(lines.length, i + 60); j++) {
+          if (lines[j].trim() && indentOf(lines[j]) <= ind) break;
+          out.push(lines[j]);
         }
-      }
-      // Do not escape across an enclosing function boundary (e.g. test(...) inside a data-driven for...of loop).
+        return out.join('\n');
+      };
+      const defM = /^(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(t);
+      if (defM) return POLLING_HELPER_NAME_RE.test(defM[1]) && (/\b(?:while|for)\b/.test(block()) || (/\bif\b/.test(block()) && /\breturn\b/.test(block())));
+      if (/^class\s+/.test(t)) return false;
+      const loopM = /^(while|for)\s+(.+):\s*$/.exec(t);
+      if (loopM && isPollingLoop(loopM[1], loopM[2], block(), true)) return true;
+    }
+    return false;
+  }
+
+  if (isDirectRaceTimeoutArm(skeleton, offset, ctx)) return true;
+
+  // Single-statement braceless `while (...) await sleep(...)` or `for (...) await sleep(...)`.
+  let p = offset - 1;
+  while (p >= Math.max(0, offset - 160)) {
+    while (p >= 0 && /\s/.test(skeleton[p])) p--;
+    if (p >= 0 && skeleton[p] === ')' && ctx.openParen[p] >= 0) {
+      const open = ctx.openParen[p];
+      const { word } = prevWordBefore(skeleton, open - 1);
+      if ((word === 'while' || word === 'for') && isPollingLoop(word, skeleton.slice(open + 1, p), '')) return true;
       break;
+    }
+    const { word, start } = prevWordBefore(skeleton, p);
+    if (word === 'await' || word === 'return') { p = start - 1; continue; }
+    break;
+  }
+
+  // Enclosing braced loops & named polling helper functions (never escaping past the current function boundary).
+  for (let b = ctx.enclosingBrace[offset], hops = 0; b >= 0 && hops < 8; b = ctx.enclosingBrace[b], hops++) {
+    let k = b - 1;
+    while (k >= 0 && /\s/.test(skeleton[k])) k--;
+    if (k < 0) break;
+    const endB = ctx.closeBrace[b];
+    const body = endB > b ? skeleton.slice(b + 1, Math.min(endB, b + 4000)) : '';
+    let fnName = null, isFn = false;
+    if (k >= 1 && skeleton[k - 1] === '=' && skeleton[k] === '>') {
+      isFn = true;
+      let q = k - 2;
+      while (q >= 0 && /\s/.test(skeleton[q])) q--;
+      q = skeleton[q] === ')' && ctx.openParen[q] >= 0 ? ctx.openParen[q] : prevWordBefore(skeleton, q).start;
+      fnName = /(?:(?:const|let|var)\s+|(?:^|[;,\n{]\s*))([A-Za-z_$][\w$]*)\s*(?:=|:)\s*(?:async\s+)?$/.exec(skeleton.slice(Math.max(0, q - 120), q))?.[1] ?? null;
+    } else if (skeleton[k] === ')' && ctx.openParen[k] >= 0) {
+      const open = ctx.openParen[k];
+      const { word, start } = prevWordBefore(skeleton, open - 1);
+      if (word === 'while' || word === 'for') { if (isPollingLoop(word, skeleton.slice(open + 1, k), body)) return true; continue; }
+      if (word === 'if' || word === 'catch' || word === 'switch' || word === 'with') continue;
+      isFn = true;
+      fnName = word === 'function'
+        ? /(?:(?:const|let|var)\s+|(?:^|[;,\n{]\s*))([A-Za-z_$][\w$]*)\s*(?:=|:)\s*(?:async\s+)?$/.exec(skeleton.slice(Math.max(0, start - 120), start))?.[1] ?? null
+        : (/^[A-Za-z_$][\w$]*$/.test(word) ? word : null);
+    } else if (prevWordBefore(skeleton, k).word === 'do' && endB >= 0) {
+      const wm = /^\s*while\s*\(/.exec(skeleton.slice(endB + 1, Math.min(skeleton.length, endB + 64)));
+      const wOpen = wm ? endB + 1 + wm[0].length - 1 : -1;
+      const wClose = wOpen >= 0 ? ctx.closeParen[wOpen] : -1;
+      if (wClose > wOpen && isPollingLoop('do-while', skeleton.slice(wOpen + 1, wClose), body)) return true;
+      continue;
+    }
+    if (isFn) {
+      return Boolean(fnName && POLLING_HELPER_NAME_RE.test(fnName) && (/\b(?:while|for)\s*\(/.test(body) || (/\b(?:if|try)\b/.test(body) && /\breturn\b/.test(body))));
     }
   }
   return false;
@@ -3317,7 +3142,8 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
   const lineStarts = buildLineStarts(skeleton);
   const { closeParen, openParen, closeBrace, closeBracket, enclosingBrace, enclosingBracket } = buildDelimiterMaps(skeleton);
   const positiveVars = collectPositiveNumericVars(skeleton, hashComments, closeParen, openParen, closeBrace, closeBracket);
-  const pollingCtx = { hashComments, openParen, closeParen, closeBrace, closeBracket, enclosingBrace, enclosingBracket };
+  const skeletonLines = hashComments ? skeleton.split('\n') : null;
+  const pollingCtx = { hashComments, skeletonLines, openParen, closeParen, closeBrace, closeBracket, enclosingBrace, enclosingBracket };
   const findings = [];
   const seenLines = new Set();
 
