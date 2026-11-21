@@ -1413,3 +1413,135 @@ test('R3b adversarial regression suite: items 1 through 5', () => {
   `;
   assert.equal(detectRealHostProbesInTest('test/fs-prop-key-spoof.test.mjs', propKeyAndSpacedMemberFs).hasRealHostSmoke, false);
 });
+
+test('R4 adversarial regression suite: items 1 through 8', () => {
+  // R4-1 [P1]: Semicolon-free CJS `const cp = require(...)` works AND earlier shadows on prior lines are NOT swallowed into authenticRequireSpans.
+  const semiFreeCjs = [
+    `const x = 1`,
+    `const cp = require('node:child_process')`,
+    `cp.execFileSync(process.execPath, ['-e', '0'])`,
+  ].join('\n');
+  assert.equal(detectRealHostProbesInTest('test/semi-free-cjs.test.mjs', semiFreeCjs).hasRealHostSmoke, true);
+
+  const priorLineFetchShadowBeforeRequire = [
+    `const fetch = () => ({ ok: true })`,
+    `const cp = require('node:child_process')`,
+    `await fetch('http://127.0.0.1:3000')`,
+  ].join('\n');
+  assert.equal(detectRealHostProbesInTest('test/prior-shadow-cjs.test.mjs', priorLineFetchShadowBeforeRequire).hasRealHostSmoke, false);
+  assert.ok(!detectRealE2eKindsInTest('test/prior-shadow-cjs.test.mjs', priorLineFetchShadowBeforeRequire).includes('local-server-or-db'));
+
+  // R4-2 [P1]: Shadowed or reassigned imported namespace bindings are rejected.
+  const namespaceShadowCases = [
+    `let cp = require('node:child_process');\ncp = { spawnSync: () => ({ status: 0 }) };\ncp.spawnSync('git', ['status']);`,
+    `import * as cp from 'node:child_process';\nfunction run() { const cp = fakeCp; cp.spawnSync('git', ['status']); }`,
+    `import * as cp from 'node:child_process';\nconst { cp } = { cp: fakeCp };\ncp.spawnSync('git', ['status']);`,
+    `import fs from 'node:fs';\nlet fs = { statSync: () => ({}) };\nfs.statSync('/dev/tty');`,
+  ];
+  for (const code of namespaceShadowCases) {
+    assert.equal(detectRealHostProbesInTest('test/ns-shadow.test.mjs', code).hasRealHostSmoke, false, `shadowed namespace must fail: ${code}`);
+  }
+
+  // R4-3 [P1]: Spaced/multiline member `fakeClient . fetch(...)` and `fakeClient.\n fetch(...)` do NOT pass as bare global fetch.
+  const spacedMemberFetchCases = [
+    `fakeClient . fetch('http://127.0.0.1:3000');`,
+    `fakeClient.\n  fetch('http://127.0.0.1:3000');`,
+  ];
+  for (const code of spacedMemberFetchCases) {
+    assert.equal(detectRealHostProbesInTest('test/spaced-fetch.test.mjs', code).hasRealHostSmoke, false, `member fetch must not spoof global fetch: ${code}`);
+  }
+
+  // R4-4 [P1]: 3-hop `a.b.page.goto` rejected AND multiline destructuring shadows `page` / `fetch`.
+  const threeHopBrowser = `
+    import { test } from '@playwright/test';
+    await a.b.page.goto('http://127.0.0.1:3000');
+  `;
+  assert.ok(!detectRealE2eKindsInTest('test/three-hop-browser.test.mjs', threeHopBrowser).includes('browser-playwright'));
+
+  const multilineDestructureShadow = `
+    import { test } from '@playwright/test';
+    const {
+      page,
+      fetch,
+    } = { page: { goto: mock.fn() }, fetch: () => ({ ok: true }) };
+    await page.goto('http://127.0.0.1:3000');
+    await fetch('http://127.0.0.1:3000');
+  `;
+  assert.equal(detectRealHostProbesInTest('test/multiline-destr.test.mjs', multilineDestructureShadow).hasRealHostSmoke, false);
+
+  // R4-5 [P2]: Pass-order bypasses (destructured browser / prop-stubbed chromium.launch before derived page) are rejected.
+  const browserPassOrderCases = [
+    `import { test } from '@playwright/test';\nconst { browser } = { browser: { newPage: () => ({ goto: () => {} }) } };\nconst page = browser.newPage();\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { chromium } from 'playwright';\nchromium.launch = async () => ({ newPage: async () => ({ goto: async () => {} }) });\nconst browser = await chromium.launch();\nconst page = await browser.newPage();\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { chromium } from 'playwright';\nconst browser = await chromium.launch();\nconst page = await browser.newPage();\nchromium.launch = async () => ({});\nawait page.goto('http://127.0.0.1:3000');`,
+  ];
+  for (const code of browserPassOrderCases) {
+    assert.ok(!detectRealE2eKindsInTest('test/browser-pass-order.test.mjs', code).includes('browser-playwright'), `pass-order bypass must fail: ${code}`);
+  }
+
+  // R4-6 [P2]: TS non-async `fetch(url: string): Promise<Response> { ... }` method shorthand rejected, while ternary `cond ? fetch(url) : ...` passes.
+  const tsNonAsyncFetchMethod = `
+    class FakeHttp {
+      fetch(url: string): Promise<Response> { return Promise.resolve(null as any); }
+    }
+  `;
+  assert.equal(detectRealHostProbesInTest('test/ts-fetch-method.test.mjs', tsNonAsyncFetchMethod).hasRealHostSmoke, false);
+  const tsGenericFetchMethod = `
+    const fake = {
+      fetch(url: string): Promise<{ ok: boolean }> { return Promise.resolve({ ok: true }); }
+    };
+  `;
+  assert.equal(detectRealHostProbesInTest('test/ts-fetch-generic.test.mjs', tsGenericFetchMethod).hasRealHostSmoke, false);
+  assert.equal(
+    detectRealHostProbesInTest('test/ternary-fetch.test.mjs', `const r = ok ? fetch('http://127.0.0.1:3000') : () => { return null; };`).hasRealHostSmoke,
+    true,
+  );
+  assert.equal(
+    detectRealHostProbesInTest('test/ternary-fetch-obj.test.mjs', `const r = ok ? fetch('http://127.0.0.1:3000') : { ok: false };`).hasRealHostSmoke,
+    true,
+  );
+
+  // R4-7 [P2]: `obj.for(1) || execFileSync(...)` and `for (...) if (true) {} execFileSync(...)` report 1 turn (NOT 2).
+  const memberForSpoof = `
+    import { execFileSync } from 'node:child_process';
+    import { mkdtempSync } from 'node:fs';
+    mkdtempSync('/tmp/x-');
+    obj.for(1) || execFileSync(process.execPath, ['-e', '0']);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/member-for.test.mjs', memberForSpoof).detectedTurns, 1);
+
+  const spacedMemberForSpoof = `
+    import { execFileSync } from 'node:child_process';
+    import { mkdtempSync } from 'node:fs';
+    mkdtempSync('/tmp/x-');
+    obj . while(1) || execFileSync(process.execPath, ['-e', '0']);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/spaced-member-while.test.mjs', spacedMemberForSpoof).detectedTurns, 1);
+
+  const bracelessForClosedIfBlock = `
+    import { execFileSync } from 'node:child_process';
+    import { mkdtempSync } from 'node:fs';
+    mkdtempSync('/tmp/x-');
+    for (const x of [1, 2]) if (true) {} execFileSync(process.execPath, ['-e', '0']);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/for-if-closed.test.mjs', bracelessForClosedIfBlock).detectedTurns, 1);
+
+  // R4-8 [P2]: `$`-prefixed bindings (`$run(...)`, `$cp.spawnSync(...)`) work cleanly AND multiline `cp.\n spawnSync = ...` is caught.
+  const dollarAliasedBindings = `
+    const { spawnSync: $run } = require('node:child_process');
+    const $cp = require('node:child_process');
+    $run(process.execPath, ['-e', '0']);
+    $cp.execFileSync(process.execPath, ['-e', '0']);
+  `;
+  const dollarProbe = detectRealHostProbesInTest('test/dollar-bindings.test.mjs', dollarAliasedBindings);
+  assert.equal(dollarProbe.hasRealHostSmoke, true);
+  assert.equal(dollarProbe.detectedTurns, 2);
+
+  const multilinePropStub = `
+    import * as $cp from 'node:child_process';
+    $cp.
+      spawnSync = () => ({ status: 0 });
+    $cp.spawnSync('git', ['status']);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/multiline-prop-stub.test.mjs', multilinePropStub).hasRealHostSmoke, false);
+});
