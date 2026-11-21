@@ -88,13 +88,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        env:
-          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
-        run: node .github/scripts/ci-install.mjs
+        run: npm ci --ignore-scripts
 
       - name: Verify GitHub Release, npm and PyPI version parity
         id: meta
@@ -161,13 +155,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        env:
-          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
-        run: node .github/scripts/ci-install.mjs
+        run: npm ci --ignore-scripts
 
       - name: Verify release tag parity before npm publish
         env:
@@ -226,14 +214,9 @@ jobs:
 
       - name: Install dependencies and stage bundled CLI
         env:
-          RUNTIME_CLIENT_DEPLOY_KEY: ${{ secrets.RUNTIME_CLIENT_DEPLOY_KEY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDD_CLOUD_APP_ID: ${{ secrets.PDD_CLOUD_APP_ID }}
-          PDD_CLOUD_APP_PRIVATE_KEY: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
           TARGET_TAG: ${{ needs.verify-release.outputs.tag }}
         run: |
-          node .github/scripts/ci-install.mjs
+          npm ci --ignore-scripts
           node scripts/sync-pypi-version.mjs --check --tag "$TARGET_TAG"
           node scripts/sync-pypi-version.mjs --stage-bundle
 
