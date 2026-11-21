@@ -2132,3 +2132,49 @@ test('3574 + 3578 Round 3 regressions: hosted repo-wide pdd lint catches native-
     `expected [native-only-unknown-port] in hosted JSON problems, got: ${JSON.stringify(hostedParsed.problems)}`,
   );
 });
+
+test('3574 Part 1: lintRepoProject emits advisory native-only-contract-incomplete warning on thin native-only stubs while staying quiet on complete specs', (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-3574-contract-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  mkdirSync(join(scratch, 'prompts'), { recursive: true });
+
+  writeFileSync(
+    join(scratch, 'prompts/stub.prompt.md'),
+    '---\nkind: native-only\nreason: SQLite adapter.\n---\n\n# Stub\n\nOwn `src/stub.mjs`.\n\n## Dependencies\nNone.\n',
+  );
+  writeFileSync(
+    join(scratch, 'prompts/complete.prompt.md'),
+    [
+      '---',
+      'kind: native-only',
+      'reason: SQLite WAL adapter.',
+      '---',
+      '',
+      '# Complete adapter',
+      '',
+      'Own `src/complete.mjs`.',
+      '',
+      '## Storage schema',
+      '```sql',
+      'CREATE TABLE items (id TEXT PRIMARY KEY);',
+      '```',
+      '',
+      '## Error mapping',
+      'Rollback and fail closed on SQLITE_BUSY timeouts.',
+      '',
+      '## Real-host verification',
+      'Run real SQLite file smoke test (`node --test test/complete-smoke.test.mjs`).',
+      '',
+      '## Dependencies',
+      'None.',
+    ].join('\n') + '\n',
+  );
+  execFileSync('git', ['init', '-q'], { cwd: scratch });
+  execFileSync('git', ['add', '.'], { cwd: scratch });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: scratch });
+
+  const report = lintRepoProject({ root: scratch });
+  assert.equal(report.ok, true, 'native-only-contract-incomplete defaults to advisory warn');
+  assert.equal(report.findings.filter(f => f.code === 'native-only-contract-incomplete').length, 1);
+  assert.equal(report.findings.find(f => f.code === 'native-only-contract-incomplete').path, 'prompts/stub.prompt.md');
+});

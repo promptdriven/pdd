@@ -1816,11 +1816,7 @@ runs until its end):
    cooldown in `toolCooldowns` and run ONLY the missing real validation against that
    exact saved commit (`rebuildCode: false`, zero code rebuilds), then continue to the
    merge lane on pass; when `action === "head-changed-abort"`, clear the stale park and
-   evaluate normally. On every candidate PR head, detect changed surfaces via
-   `detectChangedSurfaces`, run backside validation lint (`silent-validation-skip`,
-   `boundary-mock-only-test`, and workspace-local `rules/lint/*.json`) via
-   `lintRepoProject` of [Repo hygiene and extensible project lint](repo-hygiene-lint.prompt.md),
-   and classify with `evaluateValidationOutcome` of [Autopilot universal validator](autopilot-validator.prompt.md):
+   evaluate normally. On every candidate PR head, resolve the clean `headTree` checkout first, detect changed `kind: native-only` production modules strictly from in-root regular files of `headTree` (tracked `.prompt.md` files, optional `pdd-bindings.json`, and head lines of changed non-prompt files; never following symlinks or reading outside `headTree`) via `detectNativeOnlyModules`, detect changed surfaces via `detectChangedSurfaces({changedFiles, nativeOnlyFiles})`, run backside validation lint (`silent-validation-skip`, `boundary-mock-only-test`, and workspace-local `rules/lint/*.json`) via `lintRepoProject` of [Repo hygiene and extensible project lint](repo-hygiene-lint.prompt.md), inspect executed test files for per-target real-host probes via `inspectTestBoundaryTargets(..., {nativeOnlyTargets})` and `detectRealHostProbesInTest` (tagging every emitted check with `strictKind: true` so sibling surfaces never cover an untested boundary surface, excluding pure browser tests whose only class is `full-size-payload` from satisfying non-UI `os-boundary` targets, and aggregating `realHostClasses`, `turns`, `payloadBytes`, and `liveLocal` per entry across all changed boundary/`native-only` files so every file requiring a class must satisfy it on its own matched tests and sibling proof kinds can never spoof each other's required failure classes), and classify with `evaluateValidationOutcome` of [Autopilot universal validator](autopilot-validator.prompt.md) (passing `nativeOnlyFiles` and any supplied `realHostClasses`):
    - **Bucket 1 (tool/login healthy & real E2E ran):** Only `eligible: true` (100% real
      E2E pass, offline green, 0 blocking lint findings, bug-fix base-fail/head-pass; or
      docs-only with offline green) enters step 6 (`allow-merge` in `auto`,
@@ -2161,7 +2157,7 @@ with the native defaults named above.
 
 ## Dependencies
 
-- [Autopilot universal validator](autopilot-validator.prompt.md): required for `MAX_VALIDATION_REPAIRS`, `detectChangedSurfaces`, `evaluateValidationOutcome`, `formatHumanVerificationCard`, `shouldClaimWithCooldowns`, and `planValidationResume`.
+- [Autopilot universal validator](autopilot-validator.prompt.md): required for `MAX_VALIDATION_REPAIRS`, `canonicalTargetPath`, `detectChangedSurfaces`, `detectNativeOnlyModules`, `detectRealE2eKindsInTest`, `detectRealHostProbesInTest`, `evaluateValidationOutcome`, `formatHumanVerificationCard`, `inspectTestBoundaryTargets`, `shouldClaimWithCooldowns`, and `planValidationResume`.
 - [Repo hygiene and extensible project lint](repo-hygiene-lint.prompt.md): required for `lintRepoProject` and `loadProjectLintConfig` (pre-review changed-file hygiene gate, `silent-validation-skip`, `boundary-mock-only-test`, and workspace-local `rules/lint/*.json` loading).
 - [Workflow test inventory](workflow-inventory.prompt.md): required for `collectTestInventory` (static base-vs-head test inventory summary, new-skip detection, and dynamic-inventory disclosure).
 - [Areas](autopilot-areas.prompt.md): required for `issueAreas`, `areasOverlap`, `groupReadyIssues`, `orderGroupsSpreadFirst`, `normalizeAreaList`, and `parseGitHubIssueUrl`.

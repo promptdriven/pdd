@@ -52,11 +52,12 @@ inside `## Boundaries` or `## Runs`), list each part's `.prompt.md` files (in a
 table or bullet list) and state how each part starts and connects in
 real execution, naming both its checkable domain/screen prompt(s) (faked over
 injected `<port>.<op>` ports in `pdd test`, never linking `kind: native-only`
-adapters under their `## Dependencies`) and any thin `kind: native-only` boundary
-adapter prompt(s) that depend on those domain prompts for real HTTP/HTTPS routes,
-auth/cookies, SQLite or external databases, CLI/OS processes and browser DOM/network
-clients (RUNBOOK §21; `0` Runtime AI calls in `pdd test`, verified by native tests
-in `code` PR 2) so Story checks run cleanly and finished runs form a runnable product.
+adapters under their `## Dependencies`) and each `kind: native-only` boundary
+specification prompt that depends on those domain prompts for real HTTP/HTTPS
+routes, auth/cookies/crypto, SQLite or external databases, CLI/OS/sandbox/TTY
+processes and browser DOM/network clients (RUNBOOK §21; `0` Runtime AI calls in
+`pdd test`, verified by non-mocked real-host native tests in `code` PR 2) so
+Story checks run cleanly and finished runs form a runnable product.
 When `## Prompts` lists `.prompt.md` paths, `pdd lint --local` and `pdd product status`
 warn on declared prompts missing on disk or extra `.prompt.md` files under tracked
 part folders. A Run is a stable name such
@@ -97,3 +98,28 @@ Put shared starting data in `contracts/seed-world.json`.
 For example, phone → server crosses order_in and order_view under
 `contracts/phone-server.md`. Server → barista crosses ticket and ticket_done
 under `contracts/server-barista.md`. The phone never talks to the barista screen.
+
+## Native-only prompt contract
+
+Every `kind: native-only` boundary prompt is a complete executable specification,
+not a short stub or uninstantiated dependency-injection shell. Include YAML
+frontmatter (`kind: native-only` and a concrete `reason`), `## Dependencies`
+linking the checkable domain prompt(s) it wires (never the reverse), and three
+required contract elements:
+
+1. **Boundary & runtime contract:** Concrete storage/DDL schemas (declarative
+   fenced `sql`, `ddl`, `openapi`, `yaml`, `json`, `protobuf`, or `graphql`
+   blocks are exempt from prompt code-fence length limits), transaction/locking
+   or concurrency model, HTTP/wire routes, CLI/OS/process/sandbox/TTY boundaries,
+   and auth/crypto primitives as applicable, plus exact `<port>.<op>` bindings
+   matching ports declared by linked checkable prompts (`native-only-unknown-port`).
+2. **Error mapping & failure behavior:** How driver, transport, OS, permission,
+   sandbox, timeout, lock, and malformed-input failures map to observable exit
+   codes, HTTP/wire statuses, rollbacks, or domain error shapes (fail closed).
+3. **Real-host / native verification cases:** Concrete executable, non-mocked
+   verification checks naming real binary, OS kernel, database driver, local
+   server, or subprocess smoke probes (such as `--live-local` or real-driver
+   integration tests, never mocked-only unit shells). Cover applicable real-host
+   classes: nested OS sandbox child execution, host `/dev/tty` UID/permission
+   ownership, multi-turn Turn 1 → Turn 2 real CLI state containment, and
+   full-size realistic payloads exceeding `4 KiB` without lossy preview truncation.

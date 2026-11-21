@@ -1,8 +1,8 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: d271b53b57ad592f2dedcd2422de0800a73946956e18c79af46f655c92e675b6)
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: bc40891fb657482eb9dbe7ae9b32ce0454652979048bd87e5b3a3e53e80c1ad4)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
-import { join, dirname, basename, resolve } from 'node:path';
+import { join, dirname, basename, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
@@ -30,7 +30,9 @@ import {
   MAX_VALIDATION_REPAIRS,
   canonicalTargetPath,
   detectChangedSurfaces,
+  detectNativeOnlyModules,
   detectRealE2eKindsInTest,
+  detectRealHostProbesInTest,
   evaluateValidationOutcome,
   formatHumanVerificationCard,
   inspectTestBoundaryTargets,
@@ -6827,11 +6829,81 @@ function isInspectableValidatorTest(filePath) {
 
 function readCleanFileUtf8(fs, rootDir, relPath) {
   try {
-    const full = join(rootDir, relPath);
+    if (typeof relPath !== 'string' || !relPath || relPath.startsWith('/') || /^[A-Za-z]:/.test(relPath) || relPath.includes('\0')) return null;
+    if (relPath.split(/[\\/]/).some(part => part === '..')) return null;
+    const realPath = typeof fs.realpathSync === 'function' ? fs.realpathSync : nativeFs.realpathSync;
+    const realRoot = realPath(rootDir);
+    const full = join(realRoot, relPath);
     const st = fs.lstatSync(full);
     if (st.isSymbolicLink() || !st.isFile() || st.size > MAX_INSPECT_TEST_BYTES) return null;
-    return fs.readFileSync(full, 'utf8');
+    const realFile = realPath(full);
+    const rootPrefix = realRoot.endsWith(sep) ? realRoot : `${realRoot}${sep}`;
+    if (realFile !== realRoot && !realFile.startsWith(rootPrefix)) return null;
+    return fs.readFileSync(realFile, 'utf8');
   } catch { return null; }
+}
+
+function readCleanHeadLines(fs, rootDir, relPath, maxLines = 24) {
+  const raw = readCleanFileUtf8(fs, rootDir, relPath);
+  if (typeof raw !== 'string') return null;
+  return raw.split(/\r?\n/).slice(0, maxLines).join('\n');
+}
+
+function collectNativeOnlyContext(ctx, headTree, changed = []) {
+  const empty = {
+    nativeOnlyPrompts: [],
+    nativeOnlyFiles: [],
+    nativeOnlyTargets: new Set(),
+    matches: [],
+  };
+  if (!headTree) return empty;
+  const realPath = typeof ctx.fs.realpathSync === 'function' ? ctx.fs.realpathSync : nativeFs.realpathSync;
+  let realRoot;
+  try { realRoot = realPath(headTree); } catch { return empty; }
+  let tracked = [];
+  try { tracked = gitFiles(realRoot); } catch { tracked = []; }
+  const trackedSet = new Set(tracked);
+
+  const promptFiles = [];
+  for (const rel of tracked) {
+    if (!rel.endsWith('.prompt.md')) continue;
+    const content = readCleanFileUtf8(ctx.fs, realRoot, rel);
+    if (typeof content === 'string') promptFiles.push({ path: rel, content });
+  }
+
+  let bindings = null;
+  if (trackedSet.has('pdd-bindings.json')) {
+    const rawBindings = readCleanFileUtf8(ctx.fs, realRoot, 'pdd-bindings.json');
+    if (typeof rawBindings === 'string') {
+      try {
+        const parsed = JSON.parse(rawBindings);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) bindings = parsed;
+      } catch { bindings = null; }
+    }
+  }
+
+  const fileHeads = [];
+  const normChanged = Array.isArray(changed) ? changed : [];
+  for (const rel of normChanged) {
+    if (typeof rel !== 'string' || !rel || rel.endsWith('.prompt.md')) continue;
+    const headText = readCleanHeadLines(ctx.fs, realRoot, rel, 24);
+    if (typeof headText === 'string') fileHeads.push({ path: rel, content: headText });
+  }
+
+  const detected = detectNativeOnlyModules({
+    changedFiles: normChanged,
+    promptFiles,
+    bindings,
+    fileHeads,
+  });
+  const nativeOnlyFiles = Array.isArray(detected?.nativeOnlyModules) ? detected.nativeOnlyModules : [];
+  const nativeOnlyTargets = new Set(nativeOnlyFiles.map(canonicalTargetPath).filter(Boolean));
+  return {
+    nativeOnlyPrompts: Array.isArray(detected?.nativeOnlyPrompts) ? detected.nativeOnlyPrompts : [],
+    nativeOnlyFiles,
+    nativeOnlyTargets,
+    matches: Array.isArray(detected?.matches) ? detected.matches : [],
+  };
 }
 
 function isBaseControlEnvLoadError(output, changedProdFiles = []) {
@@ -7149,7 +7221,7 @@ function selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, fs) {
   return { mode: 'targets', files: matched, zeroPassed, skippedCount };
 }
 
-async function collectRealValidationEvidence(ctx, job, { headTree, changed, surfaces, suite, lintCodes }) {
+async function collectRealValidationEvidence(ctx, job, { headTree, changed, surfaces, nativeCtx, suite, lintCodes }) {
   const suiteCmd = resolveSuiteCommand(ctx, job) || 'npm test';
   const offlinePassed = suite?.state === 'pass';
   const isBugFix = job.skill === 'pdd-bug'
@@ -7165,16 +7237,27 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
     };
   }
 
+  const nativeOnlyFiles = Array.isArray(nativeCtx?.nativeOnlyFiles) ? nativeCtx.nativeOnlyFiles : [];
+  const nativeOnlyTargets = nativeCtx?.nativeOnlyTargets instanceof Set
+    ? nativeCtx.nativeOnlyTargets
+    : new Set(nativeOnlyFiles.map(canonicalTargetPath).filter(Boolean));
+
   const changedProdFiles = [];
   const changedBoundaryFiles = [];
   const changedRuntimeCodeFiles = [];
   for (const file of changed) {
-    const info = detectChangedSurfaces({ changedFiles: [file] });
+    const info = detectChangedSurfaces({ changedFiles: [file], nativeOnlyFiles });
     if (!info.requiresRealE2e) continue;
     changedProdFiles.push(file);
     const target = canonicalTargetPath(file);
     if (info.runtimeSurfaces.some(s => s !== 'runtime-code')) {
-      changedBoundaryFiles.push({ file, target, requiredProofKinds: info.requiredProofKinds });
+      changedBoundaryFiles.push({
+        file,
+        target,
+        runtimeSurfaces: info.runtimeSurfaces,
+        requiredProofKinds: info.requiredProofKinds,
+        requiredRealHostClasses: info.realHostBoundaryClasses,
+      });
     } else {
       changedRuntimeCodeFiles.push({ file, target });
     }
@@ -7210,13 +7293,18 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
   const suiteLog = job.suite?.agent?.log ? cleanLogText(readTail(ctx.fs, job.suite.agent.log)) : '';
   const executedSuite = selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, ctx.fs);
   const executedRealTestFiles = [];
+  const probesByTest = new Map();
+  const kindsByTest = new Map();
   for (const rel of executedSuite.files) {
     const content = readCleanFileUtf8(ctx.fs, headTree, rel);
     if (typeof content !== 'string') continue;
     const kinds = detectRealE2eKindsInTest(rel, content);
+    const probes = detectRealHostProbesInTest(rel, content);
+    probesByTest.set(rel, probes);
+    kindsByTest.set(rel, kinds);
     if (!kinds.length) continue;
     if (kinds.includes('real-execution')) executedRealTestFiles.push(rel);
-    const { allTargets, boundaryTargets } = inspectTestBoundaryTargets(rel, content);
+    const { allTargets, boundaryTargets } = inspectTestBoundaryTargets(rel, content, { nativeOnlyTargets });
     for (const target of new Set([...allTargets, ...boundaryTargets])) {
       for (const kind of kinds) addTargetProof(target, kind, rel);
     }
@@ -7236,6 +7324,68 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
 
   // Package/build manifest files are exercised by the test runner itself rather than imported directly by test files.
   const PACKAGE_MANIFEST_FILE_RE = /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pyproject\.toml|Cargo\.(?:toml|lock)|go\.(?:mod|sum)|(?:ts|js)config(?:\.[^/]+)?\.json)$/i;
+  const OS_NON_BROWSER_CLASSES = new Set(['nested-sandbox', 'host-tty-ownership', 'multi-turn-cli-state']);
+  const matchBoundaryEntryTestsForKind = (entry, kind) => {
+    const candidateFiles = targetProofs.get(entry.target)?.get(kind);
+    let entryFiles = candidateFiles ? [...candidateFiles] : [];
+    if (kind === 'real-host-smoke' && entry.runtimeSurfaces.includes('os-boundary') && !entry.runtimeSurfaces.includes('web-ui')) {
+      entryFiles = entryFiles.filter(f => {
+        const p = probesByTest.get(f);
+        const tk = kindsByTest.get(f);
+        if (!p?.hasRealHostSmoke) return false;
+        const hasOsClass = Array.isArray(p.classes) && p.classes.some(c => OS_NON_BROWSER_CLASSES.has(c));
+        if (p.liveLocal || p.detectedTurns >= 1 || hasOsClass) return true;
+        return !(tk?.includes('browser-playwright') && !tk.includes('subprocess-cli'));
+      });
+    }
+    return entryFiles;
+  };
+
+  // Pre-aggregate per-entry probe coverage across ALL changed boundary files so sibling proof kinds cannot spoof each other.
+  const entryAggByFile = new Map();
+  for (const entry of changedBoundaryFiles) {
+    const entryMatched = new Set();
+    for (const reqKind of entry.requiredProofKinds) {
+      for (const f of matchBoundaryEntryTestsForKind(entry, reqKind)) entryMatched.add(f);
+    }
+    const classes = new Set();
+    let turns = 0;
+    let payload = null;
+    let liveLocal = false;
+    for (const f of entryMatched) {
+      const p = probesByTest.get(f);
+      if (!p) continue;
+      for (const c of p.classes ?? []) classes.add(c);
+      if (Number.isInteger(p.detectedTurns) && p.detectedTurns > turns) turns = p.detectedTurns;
+      if (Number.isFinite(p.maxDetectedPayloadBytes) && (payload === null || p.maxDetectedPayloadBytes > payload)) {
+        payload = p.maxDetectedPayloadBytes;
+      }
+      if (p.liveLocal) liveLocal = true;
+    }
+    entryAggByFile.set(entry.file, { classes, turns, payload, liveLocal });
+  }
+  const allRequiredClasses = new Set(changedBoundaryFiles.flatMap(e => e.requiredRealHostClasses));
+  const globallySatisfiedRequiredClasses = new Set();
+  for (const cls of allRequiredClasses) {
+    const requiring = changedBoundaryFiles.filter(e => e.requiredRealHostClasses.includes(cls));
+    if (requiring.length > 0 && requiring.every(e => entryAggByFile.get(e.file)?.classes.has(cls))) {
+      globallySatisfiedRequiredClasses.add(cls);
+    }
+  }
+  let globalMinRequiredTurns = null;
+  let globalMinRequiredPayloadBytes = null;
+  for (const entry of changedBoundaryFiles) {
+    const agg = entryAggByFile.get(entry.file);
+    if (entry.requiredRealHostClasses.includes('multi-turn-cli-state')) {
+      const tVal = agg?.turns ?? 0;
+      globalMinRequiredTurns = globalMinRequiredTurns === null ? tVal : Math.min(globalMinRequiredTurns, tVal);
+    }
+    if (entry.requiredRealHostClasses.includes('full-size-payload')) {
+      const pVal = agg?.payload ?? 0;
+      globalMinRequiredPayloadBytes = globalMinRequiredPayloadBytes === null ? pVal : Math.min(globalMinRequiredPayloadBytes, pVal);
+    }
+  }
+
   const e2eChecks = [];
   for (const kind of surfaces.requiredProofKinds) {
     if (kind === 'real-execution') {
@@ -7257,6 +7407,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
       if (allRuntimeCovered && matched.size > 0) {
         e2eChecks.push({
           kind: 'real-execution',
+          strictKind: true,
           command: `${suiteCmd} (${[...matched].slice(0, 3).join(', ')})`,
           executed: true,
           exitCode: 0,
@@ -7267,6 +7418,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
       } else if (!suiteClean) {
         e2eChecks.push({
           kind: 'real-execution',
+          strictKind: true,
           command: suiteCmd,
           executed: true,
           exitCode: 0,
@@ -7278,6 +7430,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
         const label = vectorsPassFiles.length > 0 ? vectorsPassFiles.slice(0, 3).join(', ') : 'pdd test';
         e2eChecks.push({
           kind: 'real-execution',
+          strictKind: true,
           command: `${suiteCmd} (${label})`,
           executed: true,
           exitCode: 0,
@@ -7293,11 +7446,13 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
     const needingKind = changedBoundaryFiles.filter(entry => entry.requiredProofKinds.includes(kind));
     if (!needingKind.length) continue;
     const matchedTests = new Set();
+    const matchedTestsByEntry = new Map();
     let allCovered = true;
     for (const entry of needingKind) {
-      const files = targetProofs.get(entry.target)?.get(kind);
-      if (files && files.size > 0) {
-        for (const f of files) matchedTests.add(f);
+      const entryFiles = matchBoundaryEntryTestsForKind(entry, kind);
+      if (entryFiles.length > 0) {
+        matchedTestsByEntry.set(entry.file, entryFiles);
+        for (const f of entryFiles) matchedTests.add(f);
       } else if (kind === 'live-binding' && suiteClean && savedRuntimePass) {
         matchedTests.add('pdd test');
       } else {
@@ -7306,18 +7461,88 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
       }
     }
     if (allCovered && matchedTests.size > 0) {
-      e2eChecks.push({
+      const check = {
         kind,
+        strictKind: true,
         command: `${suiteCmd} (${[...matchedTests].slice(0, 3).join(', ')})`,
         executed: true,
         exitCode: 0,
         passed: executedSuite.zeroPassed ? 0 : matchedTests.size,
         failed: 0,
         skipped: executedSuite.skippedCount,
-      });
+      };
+      const requiresClassScopedMeta = kind === 'real-host-smoke'
+        || kind === 'subprocess-cli'
+        || needingKind.some(e => e.requiredRealHostClasses.length > 0);
+      if (requiresClassScopedMeta && matchedTestsByEntry.size > 0) {
+        const allObservedClasses = new Set();
+        let maxTurns = 0;
+        let kindMinRequiredTurns = null;
+        let maxPayloadBytes = null;
+        let kindMinRequiredPayloadBytes = null;
+        let anyLiveLocal = false;
+        for (const entry of needingKind) {
+          const entryFiles = matchedTestsByEntry.get(entry.file) ?? [];
+          let entryTurns = 0;
+          let entryPayload = null;
+          for (const f of entryFiles) {
+            const p = probesByTest.get(f);
+            if (!p) continue;
+            for (const c of p.classes ?? []) allObservedClasses.add(c);
+            if (Number.isInteger(p.detectedTurns) && p.detectedTurns > entryTurns) entryTurns = p.detectedTurns;
+            if (Number.isFinite(p.maxDetectedPayloadBytes) && (entryPayload === null || p.maxDetectedPayloadBytes > entryPayload)) {
+              entryPayload = p.maxDetectedPayloadBytes;
+            }
+            if (p.liveLocal) anyLiveLocal = true;
+          }
+          if (entryTurns > maxTurns) maxTurns = entryTurns;
+          if (entryPayload !== null && (maxPayloadBytes === null || entryPayload > maxPayloadBytes)) {
+            maxPayloadBytes = entryPayload;
+          }
+          if (entry.requiredRealHostClasses.includes('multi-turn-cli-state')) {
+            const aggTurns = entryAggByFile.get(entry.file)?.turns ?? entryTurns;
+            kindMinRequiredTurns = kindMinRequiredTurns === null ? aggTurns : Math.min(kindMinRequiredTurns, aggTurns);
+          }
+          if (entry.requiredRealHostClasses.includes('full-size-payload')) {
+            const aggPayload = entryAggByFile.get(entry.file)?.payload ?? entryPayload ?? 0;
+            kindMinRequiredPayloadBytes = kindMinRequiredPayloadBytes === null ? aggPayload : Math.min(kindMinRequiredPayloadBytes, aggPayload);
+          }
+        }
+        const verifiedClasses = [];
+        for (const cls of allObservedClasses) {
+          if (allRequiredClasses.has(cls)) {
+            const requiringInKind = needingKind.filter(e => e.requiredRealHostClasses.includes(cls));
+            if (requiringInKind.length > 0 && globallySatisfiedRequiredClasses.has(cls)) {
+              verifiedClasses.push(cls);
+            }
+          } else {
+            verifiedClasses.push(cls);
+          }
+        }
+        check.realHostClasses = verifiedClasses.sort();
+        if (globalMinRequiredTurns !== null && !globallySatisfiedRequiredClasses.has('multi-turn-cli-state')) {
+          check.turns = kindMinRequiredTurns !== null
+            ? Math.min(kindMinRequiredTurns, globalMinRequiredTurns)
+            : Math.min(maxTurns, globalMinRequiredTurns);
+        } else {
+          check.turns = kindMinRequiredTurns !== null ? kindMinRequiredTurns : maxTurns;
+        }
+        if (globalMinRequiredPayloadBytes !== null && !globallySatisfiedRequiredClasses.has('full-size-payload')) {
+          check.payloadBytes = kindMinRequiredPayloadBytes !== null
+            ? Math.min(kindMinRequiredPayloadBytes, globalMinRequiredPayloadBytes)
+            : (maxPayloadBytes !== null ? Math.min(maxPayloadBytes, globalMinRequiredPayloadBytes) : globalMinRequiredPayloadBytes);
+        } else if (kindMinRequiredPayloadBytes !== null) {
+          check.payloadBytes = kindMinRequiredPayloadBytes;
+        } else if (maxPayloadBytes !== null) {
+          check.payloadBytes = maxPayloadBytes;
+        }
+        if (anyLiveLocal) check.liveLocal = true;
+      }
+      e2eChecks.push(check);
     } else if (!suiteClean) {
       e2eChecks.push({
         kind,
+        strictKind: true,
         command: suiteCmd,
         executed: true,
         exitCode: 0,
@@ -7340,13 +7565,22 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
 async function runValidatorV2Gate(ctx, job, pr, { suite }) {
   let changed = [];
   try { changed = await changedFiles(ctx, job, job.head); } catch { changed = []; }
-  const surfaces = detectChangedSurfaces({ changedFiles: changed });
   let headTree = null;
   try { headTree = await treeAt(ctx, job, 'agent', job.head); } catch { headTree = null; }
+  const nativeCtx = collectNativeOnlyContext(ctx, headTree, changed);
+  const surfaces = detectChangedSurfaces({ changedFiles: changed, nativeOnlyFiles: nativeCtx.nativeOnlyFiles });
   const lint = collectBacksideLint(headTree, changed);
   let supplied = null;
   if (typeof ctx.ports.validateE2e === 'function') {
-    supplied = await ctx.ports.validateE2e({ job, pr, head: job.head, changedFiles: changed, surfaces, mode: ctx.settings.mode });
+    supplied = await ctx.ports.validateE2e({
+      job,
+      pr,
+      head: job.head,
+      changedFiles: changed,
+      nativeOnlyFiles: nativeCtx.nativeOnlyFiles,
+      surfaces,
+      mode: ctx.settings.mode,
+    });
   } else if (object(job.validation)) {
     supplied = job.validation;
   }
@@ -7354,12 +7588,19 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
     headTree,
     changed,
     surfaces,
+    nativeCtx,
     suite,
     lintCodes: lint.codes,
   });
+  const effectiveNativeOnlyFiles = [...new Set([
+    ...nativeCtx.nativeOnlyFiles,
+    ...(Array.isArray(base.nativeOnlyFiles) ? base.nativeOnlyFiles : []),
+  ])].sort();
   const outcome = evaluateValidationOutcome({
     mode: ctx.settings.mode,
     changedFiles: changed,
+    nativeOnlyFiles: effectiveNativeOnlyFiles,
+    realHostClasses: Array.isArray(base.realHostClasses) ? base.realHostClasses : [],
     isBugFix: base.isBugFix === true,
     offlinePassed: base.offlinePassed ?? (suite?.state === 'pass'),
     offlineSummary: base.offlineSummary ?? (suite?.state === 'pass' ? `${resolveSuiteCommand(ctx, job) || 'suite'} passed` : 'failed'),
