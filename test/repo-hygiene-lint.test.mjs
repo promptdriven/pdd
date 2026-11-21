@@ -3303,3 +3303,145 @@ test('3619 R6 regressions: colon only before first token and suffix scanning pas
   );
   assert.equal(r6Fail.length, r6FailPorts.length, r6Fail.join('\n'));
 });
+
+test('3619 R7 regressions: post-item-only separators, and/or conjunction, inline code-span skipping, and O(N) backtick scan', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    '---',
+    '# Gateway',
+    '',
+    '## Dependencies',
+    '- [Access](../access/access.prompt.md)',
+    '',
+    '## Ports',
+    ...ports.map(p => `- \`${p}\``),
+  ].join('\n');
+
+  // P1-1: Leading `,`, `/`, `and`, `or` before any backticked item must never start an op list.
+  const p11Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'Handles imports, exports, and `config` loading.',
+    'Supports CSV exports, `audit_log` rotation, and backups.',
+    'Runs after data exports / `snapshots` complete.',
+    'It runs on export or `import` events.',
+    'Exposes public tools and `telemetry` endpoints.',
+    'Exports public tools `pub_alpha` and `pub_beta`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.pub_alpha', 'access.pub_beta']),
+      [{ path: 'prompts/access/access.prompt.md', text: p11Dep }],
+    ),
+    [],
+  );
+  const p11FailPorts = ['access.config', 'access.audit_log', 'access.snapshots', 'access.import', 'access.telemetry'];
+  const p11Fail = lintNativeOnlyPortParity(
+    nativeChecking(p11FailPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: p11Dep }],
+  );
+  assert.equal(p11Fail.length, p11FailPorts.length, p11Fail.join('\n'));
+
+  // P1-2: Skip export/expose matches inside single- and multi-backtick inline code spans
+  // so real trailing cue verbs extract cleanly while prose between code spans never leaks.
+  const p12PosDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'The `csv-export` job exports `run_export` and `cancel_export`.',
+    'The `/v1/export` service exposes `start_export` and `poll_export`.',
+    'The ``csv-export`` job exports `finish_export`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking([
+        'access.run_export', 'access.cancel_export',
+        'access.start_export', 'access.poll_export',
+        'access.finish_export',
+      ]),
+      [{ path: 'prompts/access/access.prompt.md', text: p12PosDep }],
+    ),
+    [],
+  );
+
+  const p12NegDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'Operations: `export` and `import`.',
+    'The `csv-export` worker `sync_all` runs nightly.',
+    'Calls `/api/export` and `/api/import`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.export', 'access.import']),
+      [{ path: 'prompts/access/access.prompt.md', text: p12NegDep }],
+    ),
+    [],
+  );
+  const p12NegFailPorts = ['access.and', 'access.worker', 'access.sync_all'];
+  const p12NegFail = lintNativeOnlyPortParity(
+    nativeChecking(p12NegFailPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: p12NegDep }],
+  );
+  assert.equal(p12NegFail.length, p12NegFailPorts.length, p12NegFail.join('\n'));
+
+  // P2-1: `and/or` conjunction works in both negative suffix-drop lists and positive export lists.
+  const p21Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'Exposes `commit` and/or `branch` fields.',
+    'Exports `create_record` and/or `update_record`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.create_record', 'access.update_record']),
+      [{ path: 'prompts/access/access.prompt.md', text: p21Dep }],
+    ),
+    [],
+  );
+  const p21Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.commit', 'access.branch']),
+    [{ path: 'prompts/access/access.prompt.md', text: p21Dep }],
+  );
+  assert.equal(p21Fail.length, 2, p21Fail.join('\n'));
+
+  // O(N) backtick scan guard: 20k alternating single/double/unmatched backticks finish well under 50ms.
+  const hostileTicks = '` `` ` '.repeat(5000) + 'exports `fast_op`.';
+  const hostileDep = `# Access\n\nOwn \`src/access.mjs\`.\n\n## Behavior\n\n${hostileTicks}\n\n## Dependencies\nNone.\n`;
+  const t0 = performance.now();
+  const hostileOut = lintNativeOnlyPortParity(
+    nativeChecking(['access.fast_op']),
+    [{ path: 'prompts/access/access.prompt.md', text: hostileDep }],
+  );
+  const elapsedMs = performance.now() - t0;
+  assert.deepEqual(hostileOut, []);
+  assert.ok(elapsedMs < 200, `20k-backtick scan took ${elapsedMs.toFixed(1)}ms`);
+});

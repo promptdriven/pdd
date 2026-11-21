@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 7f83a7e7105bdc8bbd002e81c061066a26f60874aa4aea8839f39bbb42b9ebfd).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: b85d9995629a38d49b48b73232298c33dc944863b4818900fbfe0447eedb4d6f).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -1026,16 +1026,23 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
   let lastItemEndPos = -1;
   let sawInvalidItem = false;
   while (pos < line.length) {
-    while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || (lastItemEndPos < 0 && line[pos] === ':') || line[pos] === ',' || line[pos] === '/')) pos++;
-    const lower4 = line.slice(pos, pos + 4).toLowerCase();
-    if (lower4 === 'and ' || lower4 === 'and\t') {
-      pos += 4;
-      continue;
-    }
-    const lower3 = line.slice(pos, pos + 3).toLowerCase();
-    if (lower3 === 'or ' || lower3 === 'or\t') {
-      pos += 3;
-      continue;
+    while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || (lastItemEndPos < 0 ? line[pos] === ':' : (line[pos] === ',' || line[pos] === '/')))) pos++;
+    if (lastItemEndPos >= 0) {
+      const lower7 = line.slice(pos, pos + 7).toLowerCase();
+      if (lower7 === 'and/or ' || lower7 === 'and/or\t') {
+        pos += 7;
+        continue;
+      }
+      const lower4 = line.slice(pos, pos + 4).toLowerCase();
+      if (lower4 === 'and ' || lower4 === 'and\t') {
+        pos += 4;
+        continue;
+      }
+      const lower3 = line.slice(pos, pos + 3).toLowerCase();
+      if (lower3 === 'or ' || lower3 === 'or\t') {
+        pos += 3;
+        continue;
+      }
     }
     if (line[pos] !== '`') break;
     const endTick = line.indexOf('`', pos + 1);
@@ -1067,20 +1074,72 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
   return pos;
 }
 
+function computeInlineCodeSpans(line) {
+  const runs = [];
+  const byLen = new Map();
+  for (let i = 0; i < line.length;) {
+    if (line[i] !== '`') {
+      i++;
+      continue;
+    }
+    const start = i;
+    while (i < line.length && line[i] === '`') i++;
+    const len = i - start;
+    const runIndex = runs.length;
+    runs.push({ start, end: i, len });
+    let list = byLen.get(len);
+    if (!list) {
+      list = [];
+      byLen.set(len, list);
+    }
+    list.push(runIndex);
+  }
+  const spans = [];
+  const cursorByLen = new Map();
+  for (let i = 0; i < runs.length;) {
+    const len = runs[i].len;
+    const list = byLen.get(len);
+    let c = cursorByLen.get(len) ?? 0;
+    while (c < list.length && list[c] <= i) c++;
+    cursorByLen.set(len, c);
+    if (c < list.length) {
+      const j = list[c];
+      spans.push([runs[i].start, runs[j].end]);
+      cursorByLen.set(len, c + 1);
+      i = j + 1;
+    } else {
+      i++;
+    }
+  }
+  return spans;
+}
+
 function extractExportedOpsFromCueLine(line, onOp) {
   if (!line.includes('`')) return;
   const labelMatch = LINE_START_EXPORTED_OP_LABEL_RE.exec(line);
   if (labelMatch) {
     scanBacktickedOpListFrom(line, labelMatch[0].length, onOp, { allowQualifiers: false });
   }
+  const codeSpans = computeInlineCodeSpans(line);
+  let spanIdx = 0;
   EXPORTED_OP_VERB_RE.lastIndex = 0;
   let m;
   while ((m = EXPORTED_OP_VERB_RE.exec(line)) !== null) {
-    const before = line.slice(Math.max(0, m.index - 48), m.index);
+    const matchStart = m.index;
+    const matchEnd = EXPORTED_OP_VERB_RE.lastIndex;
+    while (spanIdx < codeSpans.length && codeSpans[spanIdx][1] <= matchStart) spanIdx++;
+    if (
+      (spanIdx < codeSpans.length && matchStart >= codeSpans[spanIdx][0] && matchStart < codeSpans[spanIdx][1]) ||
+      line[matchStart - 1] === '`' ||
+      line[matchEnd] === '`'
+    ) {
+      continue;
+    }
+    const before = line.slice(Math.max(0, matchStart - 48), matchStart);
     const clauseBefore = before.replace(/^.*[.;?!]/, '');
     if (EXPORTED_OP_NEGATION_RE.test(clauseBefore)) continue;
-    const endPos = scanBacktickedOpListFrom(line, EXPORTED_OP_VERB_RE.lastIndex, onOp, { allowQualifiers: true });
-    if (endPos > EXPORTED_OP_VERB_RE.lastIndex) EXPORTED_OP_VERB_RE.lastIndex = endPos;
+    const endPos = scanBacktickedOpListFrom(line, matchEnd, onOp, { allowQualifiers: true });
+    if (endPos > matchEnd) EXPORTED_OP_VERB_RE.lastIndex = endPos;
   }
 }
 
