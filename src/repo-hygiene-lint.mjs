@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 36e76edff38abb8b0c70d5d5e4c2316db86751db2bf1cd0482041c7c5f91df8c).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: eaaf37be72679217ea964088ae3ad36cecc3a00cfdfbddfe2208607493c2f43e).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -305,11 +305,16 @@ function hasRuntimeInterfaceMetadata(raw) {
   return findRuntimeInterfaceSpans(raw).length > 0;
 }
 
+const NATIVE_ONLY_KIND_LINE_RE = /^[ \t]*kind[ \t]*:[ \t]*(?:['"])?native-only(?:['"])?[ \t]*(?:#[^\r\n]*)?$/i;
+
 function hasNativeOnlyFrontmatter(raw) {
   const fm = findFrontmatterRange(raw);
   if (!fm) return false;
   const body = String(raw ?? '').slice(fm.bodyStart, fm.bodyEnd);
-  return /^\s*kind\s*:\s*(?:['"])?native-only(?:['"])?\s*(?:#.*)?$/im.test(body);
+  for (const line of body.split(/\r?\n/)) {
+    if (NATIVE_ONLY_KIND_LINE_RE.test(line)) return true;
+  }
+  return false;
 }
 
 function extractRuntimeInterfaceObjects(raw) {
@@ -1313,73 +1318,87 @@ export function lintNativeOnlyPortParity(text, dependencySources, { path = 'prom
 const NATIVE_CONTRACT_BOUNDARY_HEADING_RE = /\b(?:boundary|runtime|storage|schema|ddl|database|table|tables|sqlite|postgres|transaction|transactions|locking|lock|concurrency|http|https|wire|route|routes|endpoint|endpoints|api|protocol|cli|subcommands?|flags?|commands?|os|process|subprocess|sandbox|tty|pty|socket|filesystem|file\s+layout|auth|authentication|authorization|crypto|kms|tls|execution|adapter|driver|transport|persistence|layout|contract|interface)\b/i;
 const NATIVE_CONTRACT_ERROR_HEADING_RE = /\b(?:errors?|failures?|failure\s+modes?|error\s+mapping|degradation|refusals?|recovery|fallback|timeouts?|retries|exceptions?)\b/i;
 const NATIVE_CONTRACT_VERIFY_HEADING_RE = /\b(?:verification|verify|native\s+tests?|native\s+test\s+cases?|native\s+verification|smoke\s+tests?|smoke\s+checks?|integration\s+tests?|real[- ]host|live[- ]host|end[- ]to[- ]end|e2e|test\s+cases?|testing)\b/i;
-const NATIVE_CONTRACT_ERROR_CUE_RE = /\b(?:exit\s+code|status\s+code|http\s+[45]\d\d|[45]\d\d|stderr|error\s+mapping|error\s+code|fail(?:s|ed|ure)?\s+closed|rollback|timeout|timed?\s+out|retry|retries|reject(?:s|ed)?|refus(?:e|es|ed)|never\s+throws?|throws?\s+on|unreadable|unavailable|degrade(?:s|d)?|offline|permission\s+denied|enoent|eperm|eacces|econnrefused|deadlock|busy|conflict|lock\s+contention|atomic(?:ally)?)\b/i;
+const NATIVE_CONTRACT_ERROR_CUE_RE = /\b(?:exit\s+code|status\s+code|(?:http|status(?:\s+code)?|error)\s+[45]\d\d|stderr|error\s+mapping|error\s+code|fail(?:s|ed|ure)?\s+closed|rollback|timeout|timed?\s+out|retry|retries|reject(?:s|ed)?|refus(?:e|es|ed)|never\s+throws?|throws?\s+on|unreadable|unavailable|degrade(?:s|d)?|offline|permission\s+denied|enoent|eperm|eacces|econnrefused|deadlock|busy|conflict|lock\s+contention|atomic(?:ally)?)\b/i;
 const NATIVE_CONTRACT_VERIFY_CUE_RE = /\b(?:real[- ]host|live[- ]host|live[- ]local|--live-local|smoke\s+(?:test|tests|check|checks)|integration\s+(?:test|tests)|native\s+(?:test|tests|verification|smoke|probe|probes)|non[- ]mocked|real\s+(?:binary|subprocess|process|sandbox|tty|device|sqlite|postgres|database|driver|server|http|socket|filesystem|kernel|host))\b/i;
+const PORT_WIRING_PHRASE_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?)\b/gi;
+
+function isThematicBreak(trimmed) {
+  if (trimmed.length < 3) return false;
+  let marker = null;
+  let count = 0;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (ch === ' ' || ch === '\t') continue;
+    if (ch !== '-' && ch !== '*' && ch !== '_') return false;
+    if (marker === null) marker = ch;
+    else if (ch !== marker) return false;
+    count++;
+  }
+  return count >= 3;
+}
+
+function isPortOnlyContractHeading(title) {
+  if (!isDomainPortWiringHeading(title)) return false;
+  const remainder = title.replace(PORT_WIRING_PHRASE_RE, ' ');
+  return !NATIVE_CONTRACT_BOUNDARY_HEADING_RE.test(remainder);
+}
 
 function collectNativeOnlyContractFindings(text, { path = 'prompts/service.prompt.md' } = {}) {
-  if (!hasNativeOnlyFrontmatter(text)) return [];
+  if (!isNativeOnlyPrompt(text)) return [];
   const cleaned = stripPromptMetadataPreservingLines(text);
   const { fences, proseLines } = scanMarkdownLinesAndFences(cleaned);
 
-  // Track section flags and `## Dependencies` line spans in a single linear pass.
-  let inDependencies = false;
-  let activeHeadingFlags = { boundary: false, error: false, verify: false };
+  // Track heading-level section flags via a stack so sibling subheadings never leak flags.
+  const emptyFlags = { depth: 0, inDependencies: false, inPortOnly: false, boundary: false, error: false, verify: false };
+  const sectionStack = [];
+  const currentFlags = () => sectionStack.at(-1) ?? emptyFlags;
   let hasBoundarySurface = false;
   let hasErrorMapping = false;
   let hasNativeVerification = false;
-  const dependencyRanges = [];
   const headingEvents = [];
-  let depStart = null;
 
   for (let idx = 0; idx < proseLines.length; idx++) {
     const { lineNo, text: line } = proseLines[idx];
-    const h2 = /^ {0,3}##\s+(.+)$/.exec(line);
-    if (h2) {
-      const title = h2[1].trim();
-      const nowDeps = /^dependencies\b/i.test(title);
-      if (nowDeps && !inDependencies) depStart = lineNo;
-      else if (!nowDeps && inDependencies) {
-        dependencyRanges.push([depStart, lineNo - 1]);
-        depStart = null;
-      }
-      inDependencies = nowDeps;
+    const heading = /^ {0,3}(#{2,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      const depth = heading[1].length;
+      const title = heading[2].trim();
+      while (sectionStack.length > 0 && sectionStack.at(-1).depth >= depth) sectionStack.pop();
+      const parent = currentFlags();
+      const inDependencies = parent.inDependencies || (depth === 2 && /^dependencies\b/i.test(title));
+      let nextFlags;
       if (inDependencies) {
-        activeHeadingFlags = { boundary: false, error: false, verify: false };
+        nextFlags = { depth, inDependencies: true, inPortOnly: false, boundary: false, error: false, verify: false };
       } else {
-        const isPortOnlyHeading = isDomainPortWiringHeading(title);
-        activeHeadingFlags = {
-          boundary: !isPortOnlyHeading && NATIVE_CONTRACT_BOUNDARY_HEADING_RE.test(title),
-          error: NATIVE_CONTRACT_ERROR_HEADING_RE.test(title),
-          verify: NATIVE_CONTRACT_VERIFY_HEADING_RE.test(title),
+        const portOnly = isPortOnlyContractHeading(title);
+        const ownBoundary = !portOnly && NATIVE_CONTRACT_BOUNDARY_HEADING_RE.test(title);
+        const ownError = NATIVE_CONTRACT_ERROR_HEADING_RE.test(title);
+        const ownVerify = NATIVE_CONTRACT_VERIFY_HEADING_RE.test(title);
+        nextFlags = {
+          depth,
+          inDependencies: false,
+          inPortOnly: portOnly ? true : (ownBoundary ? false : parent.inPortOnly),
+          boundary: parent.boundary || ownBoundary,
+          error: parent.error || ownError,
+          verify: parent.verify || ownVerify,
         };
       }
-      headingEvents.push({ lineNo, flags: activeHeadingFlags });
+      sectionStack.push(nextFlags);
+      headingEvents.push({ lineNo, flags: nextFlags });
       continue;
     }
 
-    if (inDependencies) continue;
-
-    const sub = /^ {0,3}#{3,6}\s+(.+)$/.exec(line);
-    if (sub) {
-      const title = sub[1].trim();
-      const isPortOnlySub = isDomainPortWiringHeading(title);
-      activeHeadingFlags = {
-        boundary: activeHeadingFlags.boundary || (!isPortOnlySub && NATIVE_CONTRACT_BOUNDARY_HEADING_RE.test(title)),
-        error: activeHeadingFlags.error || NATIVE_CONTRACT_ERROR_HEADING_RE.test(title),
-        verify: activeHeadingFlags.verify || NATIVE_CONTRACT_VERIFY_HEADING_RE.test(title),
-      };
-      headingEvents.push({ lineNo, flags: activeHeadingFlags });
-      continue;
-    }
+    const active = currentFlags();
+    if (active.inDependencies) continue;
 
     const trimmed = line.trim();
-    if (!trimmed || /^ {0,3}#\s+/.test(line)) continue;
+    if (!trimmed || /^ {0,3}#\s+/.test(line) || isThematicBreak(trimmed)) continue;
 
-    if (activeHeadingFlags.boundary) hasBoundarySurface = true;
-    if (activeHeadingFlags.error) hasErrorMapping = true;
-    if (activeHeadingFlags.verify) hasNativeVerification = true;
+    if (active.boundary) hasBoundarySurface = true;
+    if (active.error) hasErrorMapping = true;
+    if (active.verify) hasNativeVerification = true;
 
-    if (!hasBoundarySurface && line.includes('|') && idx + 1 < proseLines.length && isMarkdownTableSeparator(proseLines[idx + 1].text)) {
+    if (!active.inPortOnly && !hasBoundarySurface && line.includes('|') && idx + 1 < proseLines.length && isMarkdownTableSeparator(proseLines[idx + 1].text)) {
       hasBoundarySurface = true;
     }
     if (!hasErrorMapping && NATIVE_CONTRACT_ERROR_CUE_RE.test(trimmed)) {
@@ -1389,24 +1408,17 @@ function collectNativeOnlyContractFindings(text, { path = 'prompts/service.promp
       hasNativeVerification = true;
     }
   }
-  if (inDependencies && depStart !== null) {
-    dependencyRanges.push([depStart, Number.MAX_SAFE_INTEGER]);
-  }
 
-  // Fences outside `## Dependencies` satisfy their enclosing section heading and declarative schema fences satisfy boundary/runtime surface.
-  let depRangeIdx = 0;
+  // Non-blank fences outside `## Dependencies` satisfy their enclosing section heading and declarative schema fences satisfy boundary/runtime surface.
   let headingIdx = -1;
   for (const fence of fences) {
-    if (!fence.bodyLines.length) continue;
-    while (depRangeIdx < dependencyRanges.length && dependencyRanges[depRangeIdx][1] < fence.openLine) depRangeIdx++;
-    if (depRangeIdx < dependencyRanges.length && fence.openLine >= dependencyRanges[depRangeIdx][0]) continue;
+    if (!fence.bodyLines.some(item => item.text.trim().length > 0)) continue;
     while (headingIdx + 1 < headingEvents.length && headingEvents[headingIdx + 1].lineNo < fence.openLine) headingIdx++;
-    if (headingIdx >= 0) {
-      const f = headingEvents[headingIdx].flags;
-      if (f.boundary) hasBoundarySurface = true;
-      if (f.error) hasErrorMapping = true;
-      if (f.verify) hasNativeVerification = true;
-    }
+    const active = headingIdx >= 0 ? headingEvents[headingIdx].flags : emptyFlags;
+    if (active.inDependencies) continue;
+    if (active.boundary) hasBoundarySurface = true;
+    if (active.error) hasErrorMapping = true;
+    if (active.verify) hasNativeVerification = true;
     if (DECLARATIVE_SCHEMA_FENCE_LANGS.has(fence.lang)) {
       hasBoundarySurface = true;
     }
@@ -3155,10 +3167,12 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
     for (const f of collectPromptSizeFindings(content, ownedCode, { path: promptPath })) {
       rawFindings.push({ ...f, defaultSeverity: 'warn' });
     }
-    if (hasNativeOnlyFrontmatter(content)) {
+    if (isNativeOnlyPrompt(content)) {
       for (const f of collectNativeOnlyContractFindings(content, { path: promptPath })) {
         rawFindings.push(f);
       }
+    }
+    if (hasNativeOnlyFrontmatter(content)) {
       const directTargets = extractDependencyLinkTargets(content, promptPath).filter(p => scopedSet.has(p));
       const directCheckablePrompts = [];
       const directContracts = [];

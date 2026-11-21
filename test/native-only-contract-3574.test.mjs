@@ -201,7 +201,7 @@ test('3574 Part 4: detectNativeOnlyModules resolves native-only ownership via bi
     ],
   });
   const fileHeads = [
-    { path: 'src/trust/headed.mjs', content: '// Generated from prompts/trust/service.prompt.md (sha256: 0000).\nexport {};\n' },
+    { path: 'src/trust/headed.mjs', content: `// Generated from prompts/trust/service.prompt.md (sha256: ${'0'.repeat(64)}).\nexport {};\n` },
     { path: 'src/calc.mjs', content: '// Generated from prompts/calc.prompt.md.\nexport {};\n' },
   ];
 
@@ -627,4 +627,293 @@ test('3574 docs & skills: pdd-product contract and RUNBOOK §17 checklist define
   ]) {
     assert.doesNotMatch(content, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i, `${name} must use timeless current wording`);
   }
+});
+
+test('3574 R1 regressions (#1, #3-#10): ReDoS safety, mocked primitives, 4-class spoofs/false-negatives, surface narrowing, cross-surface/failing-suite precedence, contract bypasses, ownership alignment, batch call count, and parts.md', () => {
+  // Finding #1 [P0]: 40,000 blank lines in YAML frontmatter run in linear O(N) time (< 50ms) in BOTH modules.
+  const hostileFrontmatter = `---\n${'\n'.repeat(40000)}kind: native-only\nreason: Perf check.\n---\n\n# Perf\n`;
+  const t1 = performance.now();
+  const fmDet = detectNativeOnlyModules({
+    changedFiles: ['src/perf.mjs'],
+    promptFiles: [{ path: 'prompts/perf.prompt.md', content: hostileFrontmatter }],
+    fileHeads: [{ path: 'src/perf.mjs', content: '// Generated from prompts/perf.prompt.md.\n' }],
+  });
+  const fmMs1 = performance.now() - t1;
+  assert.deepEqual(fmDet.nativeOnlyModules, ['src/perf.mjs']);
+  assert.ok(fmMs1 < 100, `parseNativeOnlyPromptMeta took ${fmMs1.toFixed(1)}ms on 40k blank lines`);
+
+  const t2 = performance.now();
+  const fmLint = lintNativeOnlyContract(hostileFrontmatter, { path: 'prompts/perf.prompt.md' });
+  const fmMs2 = performance.now() - t2;
+  assert.equal(fmLint.length, 1);
+  assert.ok(fmMs2 < 100, `hasNativeOnlyFrontmatter took ${fmMs2.toFixed(1)}ms on 40k blank lines`);
+
+  // Finding #3 [P1]: mocked/shadowed/module-mocked/fake-receiver primitives NEVER grant real-host smoke and ARE caught by boundary-mock-only-test.
+  const spoofTests = [
+    [
+      'local shadowed spawnSync',
+      "import { mock } from 'node:test';\nimport { run } from '../src/os-sandbox.mjs';\nconst spawnSync = mock.fn(() => ({ status: 0 }));\nspawnSync('sandbox-exec', ['-p', 'x']);\nrun();\n",
+    ],
+    [
+      'fake receiver fake.spawnSync',
+      "import { mock } from 'node:test';\nimport * as cp from 'node:child_process';\nimport { run } from '../src/os-sandbox.mjs';\nconst fake = { spawnSync: mock.fn(() => ({ status: 0 })) };\nfake.spawnSync('sandbox-exec', ['-p', 'x']);\nrun(cp);\n",
+    ],
+    [
+      'vi.mock node:child_process',
+      "import { vi } from 'vitest';\nvi.mock('node:child_process', () => ({ spawnSync: vi.fn() }));\nimport { spawnSync } from 'node:child_process';\nimport { run } from '../src/os-sandbox.mjs';\nspawnSync('sandbox-exec', ['-p', 'x']);\nrun();\n",
+    ],
+    [
+      'mock.module node:http + shadowed fetch',
+      "import { mock } from 'node:test';\nmock.module('node:http', { namedExports: { createServer: mock.fn() } });\nimport { createServer } from 'node:http';\nimport { serve } from '../api/orders.mjs';\nconst fetch = mock.fn();\ncreateServer(serve);\nfetch('http://127.0.0.1');\n",
+    ],
+    [
+      'mock.method on fs.statSync',
+      "import { mock } from 'node:test';\nimport fs from 'node:fs';\nimport { checkTty } from '../src/tty-owner.mjs';\nmock.method(fs, 'statSync', () => ({ uid: 501 }));\ncheckTty(fs.statSync('/dev/tty'));\n",
+    ],
+  ];
+  for (const [label, src] of spoofTests) {
+    const probe = detectRealHostProbesInTest('test/spoof.test.mjs', src);
+    assert.equal(probe.hasRealHostSmoke, false, `${label}: must NOT grant hasRealHostSmoke`);
+    assert.deepEqual(probe.classes, [], `${label}: must NOT credit any real-host class`);
+    const lint = lintValidationCode({ path: 'test/spoof.test.mjs', kind: 'test', text: src, hasRealE2eCoverage: false });
+    assert.ok(lint.codes.includes('boundary-mock-only-test'), `${label}: must trigger boundary-mock-only-test`);
+  }
+
+  // Finding #4 [P1]: spoofs rejected & real patterns recognized across all 4 real-host classes.
+  // 4.1 nested-sandbox: filename or unrelated string literal alone MUST NOT spoof nested-sandbox.
+  const spoofSandboxName = [
+    "import { spawnSync } from 'node:child_process';",
+    "const note = 'sandbox_apply: Operation not permitted';",
+    "spawnSync(process.execPath, ['-e', 'process.exit(0)']);",
+  ].join('\n');
+  assert.equal(detectRealHostProbesInTest('test/sandbox-name.test.mjs', spoofSandboxName).classes.includes('nested-sandbox'), false);
+
+  // 4.2 host-tty-ownership: real statSync('/dev/tty') with unrelated logSpy still passes, while dead string '/dev/tty' with unrelated statSync does NOT.
+  const ttyWithUnrelatedSpy = [
+    "import { mock } from 'node:test';",
+    "import { statSync } from 'node:fs';",
+    'const logSpy = mock.fn();',
+    "const st = statSync('/dev/tty');",
+    'logSpy(st.uid);',
+  ].join('\n');
+  assert.ok(detectRealHostProbesInTest('test/tty-real-spy.test.mjs', ttyWithUnrelatedSpy).classes.includes('host-tty-ownership'));
+
+  const ttyDeadString = [
+    "import { statSync } from 'node:fs';",
+    "const doc = '/dev/tty';",
+    "statSync('/tmp/other-file');",
+  ].join('\n');
+  assert.equal(detectRealHostProbesInTest('test/tty-dead-str.test.mjs', ttyDeadString).classes.includes('host-tty-ownership'), false);
+
+  // 4.3 multi-turn-cli-state: preceding .map() and string 'HOME' do NOT spoof multi-turn; 6-line helper called twice + real fs DOES.
+  const spoofMultiTurn = [
+    "import { execFileSync } from 'node:child_process';",
+    'const nums = [1, 2].map((x) => x + 1);',
+    "const label = 'HOME containment check';",
+    "execFileSync(process.execPath, ['bin/cli.mjs', String(nums[0])]);",
+  ].join('\n');
+  const spoofMultiProbe = detectRealHostProbesInTest('test/cli-single.test.mjs', spoofMultiTurn);
+  assert.equal(spoofMultiProbe.detectedTurns, 1);
+  assert.equal(spoofMultiProbe.classes.includes('multi-turn-cli-state'), false);
+
+  const sixLineHelperMultiTurn = [
+    "import { execFileSync } from 'node:child_process';",
+    "import { mkdtempSync, readdirSync } from 'node:fs';",
+    "const home = mkdtempSync('/tmp/turns-');",
+    'function runTurn(arg) {',
+    '  const env = { ...process.env, HOME: home };',
+    '  const opts = { env, encoding: "utf8" };',
+    '  const script = "bin/cli.mjs";',
+    '  const args = [script, arg];',
+    '  // 6 lines before real subprocess call',
+    '  return execFileSync(process.execPath, args, opts);',
+    '}',
+    "runTurn('first');",
+    "runTurn('second');",
+    'readdirSync(home);',
+  ].join('\n');
+  const sixLineProbe = detectRealHostProbesInTest('test/cli-multi-helper.test.mjs', sixLineHelperMultiTurn);
+  assert.ok(sixLineProbe.detectedTurns >= 2, `expected >= 2 turns, got ${sixLineProbe.detectedTurns}`);
+  assert.ok(sixLineProbe.classes.includes('multi-turn-cli-state'));
+
+  // 4.4 full-size-payload: regex literal /`/ and string 'Buffer.alloc(99999)' NEVER spoof payload size; real 'ab'.repeat(3000) = 6000 DOES.
+  const spoofPayload = [
+    "import { execFileSync } from 'node:child_process';",
+    'const hasTick = /`/;',
+    "const doc = 'Buffer.alloc(99999) and \"x\".repeat(12000)';",
+    'const re = /Buffer\\.alloc\\(99999\\)/;',
+    "execFileSync(process.execPath, ['-e', '0']);",
+  ].join('\n');
+  const spoofPayloadProbe = detectRealHostProbesInTest('test/payload-spoof.test.mjs', spoofPayload);
+  assert.equal(spoofPayloadProbe.classes.includes('full-size-payload'), false);
+  assert.ok((spoofPayloadProbe.maxDetectedPayloadBytes ?? 0) <= MIN_REALISTIC_PAYLOAD_BYTES);
+
+  const realRepeatPayload = [
+    "import { execFileSync } from 'node:child_process';",
+    'const hasTick = /`/;',
+    "const body = 'ab'.repeat(3000);",
+    "execFileSync(process.execPath, ['bin/cli.mjs'], { input: body + String(hasTick) });",
+  ].join('\n');
+  const realRepeatProbe = detectRealHostProbesInTest('test/payload-repeat.test.mjs', realRepeatPayload);
+  assert.equal(realRepeatProbe.maxDetectedPayloadBytes, 6000);
+  assert.ok(realRepeatProbe.classes.includes('full-size-payload'));
+
+  // Finding #5 [P1]: ordinary JS files stay runtime-code; truncate/truncation match full-size-payload; UI preview does NOT infer full-size-payload.
+  for (const ordinary of ['src/signal.mjs', 'src/namespace.mjs', 'src/fd-utils.mjs', 'src/exec.mjs', 'process/order.mjs', 'native/math.mjs']) {
+    const s = detectChangedSurfaces({ changedFiles: [ordinary] });
+    assert.deepEqual(s.surfaces, ['runtime-code'], `${ordinary} must stay runtime-code, got ${JSON.stringify(s.surfaces)}`);
+  }
+  assert.deepEqual(detectChangedSurfaces({ changedFiles: ['src/ui/card-preview.tsx'] }).realHostBoundaryClasses, []);
+  assert.ok(detectChangedSurfaces({ changedFiles: ['src/truncate.mjs'], nativeOnlyFiles: ['src/truncate.mjs'] }).realHostBoundaryClasses.includes('full-size-payload'));
+  assert.ok(detectChangedSurfaces({ changedFiles: ['bin/truncation-cli.mjs'] }).realHostBoundaryClasses.includes('full-size-payload'));
+
+  // Finding #6 [P1]: (1) browser-playwright cannot satisfy os-boundary; (2) metadata-free check cannot bypass class meta; (3) failed suite routes to Bucket 1 repair.
+  const crossSurface = evaluateValidationOutcome({
+    mode: 'auto',
+    changedFiles: ['web/page.tsx', 'src/os-sandbox.mjs'],
+    offlinePassed: true,
+    e2eChecks: [{
+      kind: 'browser-playwright',
+      command: 'npx playwright test',
+      executed: true,
+      exitCode: 0,
+      passed: 3,
+      failed: 0,
+      skipped: 0,
+    }],
+  });
+  assert.equal(crossSurface.bucket, 3);
+  assert.equal(crossSurface.waitKind, 'needs-real-host-smoke');
+  assert.equal(crossSurface.eligible, false);
+
+  const metaBypass = evaluateValidationOutcome({
+    mode: 'auto',
+    changedFiles: ['src/os-sandbox.mjs'],
+    offlinePassed: true,
+    e2eChecks: [
+      { kind: 'real-host-smoke', command: 'node --test a', executed: true, exitCode: 0, passed: 1, failed: 0, skipped: 0, realHostClasses: [] },
+      { kind: 'subprocess-cli', command: 'node --test b', executed: true, exitCode: 0, passed: 1, failed: 0, skipped: 0 },
+    ],
+  });
+  assert.equal(metaBypass.bucket, 3);
+  assert.equal(metaBypass.waitKind, 'needs-real-host-smoke');
+
+  const failingSuite = evaluateValidationOutcome({
+    mode: 'auto',
+    changedFiles: ['src/os-sandbox.mjs'],
+    offlinePassed: false,
+    e2eChecks: [{
+      kind: 'unit-mock',
+      command: 'npm test',
+      executed: true,
+      exitCode: 1,
+      passed: 0,
+      failed: 1,
+      skipped: 0,
+    }],
+    repairAttempts: 0,
+  });
+  assert.equal(failingSuite.bucket, 1);
+  assert.equal(failingSuite.decision, 'repair');
+  assert.equal(failingSuite.repairRoundsToSpend, 1);
+
+  // Finding #7 [P1]: sibling ### flags don't leak, bare 512/443 doesn't spoof error mapping, port-only table ignored, thematic break & blank fence ignored, embedded native-only checked, combined boundary+port heading accepted.
+  const siblingLeakPrompt = [
+    '---',
+    'kind: native-only',
+    'reason: Real adapter.',
+    '---',
+    '# Adapter',
+    '## Overview',
+    '### Error mapping',
+    '---',
+    '### Native verification',
+    '```sh',
+    '   ',
+    '```',
+    '### Notes',
+    'Payload buffer is 512 bytes on port 443.',
+    '## Port wiring',
+    '| Port | Op |',
+    '| --- | --- |',
+    '| store | load |',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const leakWarnings = lintNativeOnlyContract(siblingLeakPrompt, { path: 'prompts/leak.prompt.md' });
+  assert.equal(leakWarnings.length, 1);
+  assert.match(leakWarnings[0], /boundary\/runtime contract/);
+  assert.match(leakWarnings[0], /error mapping \/ failure behavior/);
+  assert.match(leakWarnings[0], /real-host \/ native verification cases/);
+
+  const embeddedStubPrompt = [
+    '# Embedded stub',
+    'Own `src/embedded.mjs`.',
+    '<details><summary>Runtime interface</summary>',
+    '```json',
+    '{"kind":"native-only","reason":"Legacy embedded stub."}',
+    '```',
+    '</details>',
+  ].join('\n');
+  assert.equal(lintNativeOnlyContract(embeddedStubPrompt, { path: 'prompts/embedded.prompt.md' }).length, 1);
+
+  const combinedHeadingPrompt = [
+    '---',
+    'kind: native-only',
+    'reason: Real SQLite adapter.',
+    '---',
+    '# Adapter',
+    '## Boundary contract and port wiring',
+    'Opens SQLite WAL database; maps SQLITE_BUSY to HTTP 503 and rolls back.',
+    '## Real-host verification',
+    'Runs real SQLite file smoke test.',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(lintNativeOnlyContract(combinedHeadingPrompt, { path: 'prompts/combined.prompt.md' }), []);
+
+  // Finding #8 [P1]: unrelated prose JSON mentioning runtime interface + native-only does NOT trigger false positive; SQL `--` / C `/* */` / Rust `///` headers & relative links & repeated `./`/`//` normalization work.
+  const falsePositivePrompt = [
+    '# Regular checkable prompt',
+    'Mentions runtime interface and native-only in prose.',
+    '```json',
+    '{"kind":"native-only","reason":"example payload, not a Runtime interface block"}',
+    '```',
+  ].join('\n');
+  const fpDetected = detectNativeOnlyModules({
+    changedFiles: ['src/regular.mjs'],
+    promptFiles: [{ path: 'prompts/regular.prompt.md', content: falsePositivePrompt }],
+    fileHeads: [{ path: 'src/regular.mjs', content: '// Generated from prompts/regular.prompt.md.\n' }],
+  });
+  assert.deepEqual(fpDetected.nativeOnlyPrompts, []);
+  assert.deepEqual(fpDetected.nativeOnlyModules, []);
+
+  const multiCommentDetected = detectNativeOnlyModules({
+    changedFiles: ['././src//a.sql', 'src/b.c', 'src/c.rs', 'src/linked.mjs'],
+    promptFiles: [{
+      path: 'prompts/native/multi.prompt.md',
+      content: '---\nkind: native-only\nreason: Native multi-lang.\n---\n\n# Multi\n\nOwns [linked](../../src/linked.mjs).\n',
+    }],
+    fileHeads: [
+      { path: 'src/a.sql', content: '-- Generated from prompts/native/multi.prompt.md.\n' },
+      { path: 'src/b.c', content: '/* Prompt: prompts/native/multi.prompt.md */\n' },
+      { path: 'src/c.rs', content: '/// Generated from prompts/native/multi.prompt.md.\n' },
+    ],
+  });
+  assert.deepEqual(multiCommentDetected.nativeOnlyModules, ['src/a.sql', 'src/b.c', 'src/c.rs', 'src/linked.mjs']);
+
+  // Finding #9 [P2]: single-pass batch helper call counting is O(N) on huge single-line input with many calls.
+  const hugeCalls = `import { execFileSync } from 'node:child_process';\nimport { mkdtempSync } from 'node:fs';\nconst run = (a) => execFileSync(process.execPath, [a]);\nmkdtempSync('/tmp/x-');\n${'run("x");'.repeat(8000)}\n`;
+  const t9 = performance.now();
+  const batchProbe = detectRealHostProbesInTest('test/batch-perf.test.mjs', hugeCalls);
+  const ms9 = performance.now() - t9;
+  assert.ok(batchProbe.detectedTurns >= 8000);
+  assert.ok(batchProbe.classes.includes('multi-turn-cli-state'));
+  assert.ok(ms9 < 250, `batch helper scan took ${ms9.toFixed(1)}ms on 8000 single-line calls`);
+
+  // Finding #10 [P2]: skills/pdd-product/steps/parts.md no longer says "Thin kind: native-only".
+  const partsDoc = readFileSync(join(process.cwd(), 'skills/pdd-product/steps/parts.md'), 'utf8');
+  assert.doesNotMatch(partsDoc, /thin\s+`kind: native-only`/i);
+  assert.match(partsDoc, /specification prompts/i);
+  assert.doesNotMatch(partsDoc, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i);
 });
