@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 2638650cd96d2a0faad6e36c338bcab44332b6f73bf3dac471c623880f252926).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 62486e9c0086f0337686b9808889b10a708a95b2d93de3b2117131faa2101f2a).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -100,8 +100,10 @@ const INLINE_BRACE_PORT_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.
 const NETWORK_PORT_HEADING_RE = /\b(?:tcp|udp|http|https|grpc|listen(?:ing)?|network|socket|server|tls|ssl|firewall|docker|container|kubernetes|k8s|ingress|expos(?:e|ed)|stdio|serial|forward(?:ing)?)\b/i;
 const DOMAIN_PORT_HEADING_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?)\b/i;
 const DEP_PORTS_HEADING_RE = /\b(?:injected\s+ports?|external\s+ports?|domain\s+ports?|port\s+interface|port\s+contract|ports?|resources?)\b/i;
-const DEP_OPS_HEADING_RE = /\b(?:operations?|public\s+contract|public\s+interface|interface|commands?|subcommands?|tools?|exports?|entrypoints?|entry\s+points?|methods?|actions?|handlers?|functions?|api)\b/i;
-const DEP_OPS_TABLE_COL_RE = /\b(?:operation|operations|op|ops|command|commands|subcommand|subcommands|tool|tools|method|methods|action|actions|function|functions|handler|handlers|export|exports|entrypoint|entrypoints)\b/i;
+const DEP_OPS_HEADING_RE = /\b(?:operations?|public\s+contract|public\s+interface|interface|commands?|subcommands?|tools?|exports?|entrypoints?|entry\s+points?)\b/i;
+const DEP_OPS_EXCLUDE_HEADING_RE = /\b(?:inputs?|outputs?|errors?|allowed|forbidden|external|ports?|resources?|dependencies)\b/i;
+const DEP_OP_DETAIL_SUBHEADING_RE = /\b(?:inputs?|outputs?|errors?|parameters?|params?|fields?|returns?|examples?|notes?|schemas?|types?)\b/i;
+const DEP_OPS_TABLE_COL_RE = /\b(?:operation|operations|op|ops|command|commands|subcommand|subcommands|tool|tools|export|exports|entrypoint|entrypoints)\b/i;
 const PORT_TABLE_COL_PORT_RE = /\b(?:port|ports|bound\s+port|wired\s+port|injected\s+port|port\s+op(?:eration)?)\b/i;
 const PORT_TABLE_COL_IN_SECTION_RE = /\b(?:operation|operations|binding|bindings)\b/i;
 const PORT_TABLE_COL_EXCLUDE_RE = /\b(?:tcp|udp|http|https|listen|network|socket|file|path|table|column|field|type|route|endpoint|url|sql|env|variable|header|status|code|metric|flag|option|description|notes?)\b/i;
@@ -127,7 +129,9 @@ const NON_OP_LABEL_WORDS = new Set([
   'constraints', 'invariant', 'invariants', 'overview', 'summary', 'details',
   'status', 'response', 'request', 'precondition', 'postcondition', 'effect', 'effects', 'none',
 ]);
-const EXPORTED_OP_CUE_RE = /\b(?:exports?|exporting|exposes?|exposing|provides?|defines?|operations?|commands?|subcommands?|tools?|methods?|functions?|handlers?|entrypoints?|entry\s+points?)\b/gi;
+const EXPORTED_OP_VERB_RE = /\b(?:exports?|exporting|exposes?|exposing)\b/gi;
+const EXPORTED_OP_NEGATION_RE = /\b(?:not|never|without|no|neither|nor|cannot|can't|won't|don't|doesn't|must\s+not|mustn't|should\s+not|shouldn't|may\s+not)\b/i;
+const LINE_START_EXPORTED_OP_LABEL_RE = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:public[ \t]+|exported[ \t]+)?(?:operations?|commands?|subcommands?|tools?|exports?|entrypoints?|entry[ \t]+points?)[ \t]*:/i;
 const EXPORTED_OP_QUALIFIER_WORDS = new Set([
   'a', 'an', 'the', 'public', 'exported', 'module', 'async', 'sync', 'peer', 'domain',
   'operation', 'operations', 'function', 'functions', 'method', 'methods',
@@ -906,28 +910,66 @@ function derivePromptPrefixes(depPath) {
   return prefixes;
 }
 
+function stripHeadingDescriptionTail(text) {
+  let inTicks = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '`') { inTicks = !inTicks; continue; }
+    if (inTicks) continue;
+    if (ch === ':' || ch === '—' || ch === '–') return text.slice(0, i).trim();
+    if (ch === '-' && i > 0 && text[i - 1] === ' ' && text[i + 1] === ' ') return text.slice(0, i).trim();
+  }
+  return text.trim();
+}
+
+function hasCallParensInToken(text) {
+  const s = String(text ?? '').trim().replace(/^\*\*|\*\*$/g, '').replace(/^`|`$/g, '').trim();
+  const paren = s.indexOf('(');
+  return paren > 0 && isSingleCallSpan(s, paren);
+}
+
 function extractHeadingOperationName(title, { requireExplicitSyntax = false } = {}) {
   const stripped = String(title ?? '')
     .trim()
     .replace(/^\d+[.)]\s+/, '')
-    .replace(/^(?:operation|command|subcommand|tool|method|function|action|handler|endpoint)\s*[:—–-]?\s*/i, '')
+    .replace(/^(?:operation|command|subcommand|tool|entrypoint)\s*[:—–-]?\s*/i, '')
     .trim();
   if (!stripped) return null;
-  const hasExplicit = stripped.startsWith('`') || stripped.startsWith('**`') || /^[a-z][a-zA-Z0-9_-]*\s*\(/.test(stripped);
-  if (requireExplicitSyntax && !hasExplicit) return null;
-  const ident = extractLeadingSimpleIdentifier(stripped, { allowCallArgs: true })
-    ?? cleanSingleIdentifier(stripped, { allowCallArgs: true });
+  const head = stripHeadingDescriptionTail(stripped);
+  if (!head) return null;
+  const isBacktickedWhole = /^`[^`\r\n]+`$/.test(head) || /^\*\*`[^`\r\n]+`\*\*$/.test(head);
+  const isBareCallWhole = /^[a-z][a-zA-Z0-9_-]*\s*\([^()\r\n]*\)$/.test(head);
+  if (requireExplicitSyntax && !isBacktickedWhole && !isBareCallWhole) return null;
+  const hasCallParens = hasCallParensInToken(head);
+  const ident = cleanSingleIdentifier(head, { allowCallArgs: true });
   if (!ident) return null;
-  if (!hasExplicit && NON_OP_LABEL_WORDS.has(ident.toLowerCase())) return null;
+  if (!hasCallParens && NON_OP_LABEL_WORDS.has(ident.toLowerCase())) return null;
   return ident;
 }
 
-function extractExportedOpsFromCueLine(line, onOp) {
-  if (!line.includes('`')) return;
-  EXPORTED_OP_CUE_RE.lastIndex = 0;
-  let m;
-  while ((m = EXPORTED_OP_CUE_RE.exec(line)) !== null) {
-    let pos = EXPORTED_OP_CUE_RE.lastIndex;
+function extractLeadingBulletCallOp(rest) {
+  const trimmed = String(rest ?? '').trim();
+  if (!trimmed) return null;
+  const backtick = /^`([^`\r\n]+)`/.exec(trimmed);
+  if (backtick) {
+    const inner = backtick[1].trim();
+    if (inner.includes('.') || !hasCallParensInToken(inner)) return null;
+    return cleanSingleIdentifier(inner, { allowCallArgs: true });
+  }
+  const bold = /^\*\*([^*\r\n]+)\*\*/.exec(trimmed);
+  if (bold) {
+    const inner = bold[1].trim();
+    if (inner.includes('.') || !hasCallParensInToken(inner)) return null;
+    return cleanSingleIdentifier(inner, { allowCallArgs: true });
+  }
+  const bare = /^([a-z][a-zA-Z0-9_-]*)\s*(\([^()\r\n]*\))(?=\s*(?::|—|–|->|=>|-\s|$))/.exec(trimmed);
+  if (!bare) return null;
+  return cleanSingleIdentifier(bare[1], { allowCallArgs: false });
+}
+
+function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = false } = {}) {
+  let pos = startPos;
+  if (allowQualifiers) {
     let qualifiers = 0;
     while (pos < line.length && qualifiers < 3) {
       while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || line[pos] === ':')) pos++;
@@ -941,36 +983,56 @@ function extractExportedOpsFromCueLine(line, onOp) {
       }
       qualifiers++;
     }
-    while (pos < line.length) {
-      while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || line[pos] === ':' || line[pos] === ',' || line[pos] === '/')) pos++;
-      const lower4 = line.slice(pos, pos + 4).toLowerCase();
-      if (lower4 === 'and ' || lower4 === 'and\t') {
-        pos += 4;
-        continue;
-      }
-      const lower3 = line.slice(pos, pos + 3).toLowerCase();
-      if (lower3 === 'or ' || lower3 === 'or\t') {
-        pos += 3;
-        continue;
-      }
-      if (line[pos] !== '`') break;
-      const endTick = line.indexOf('`', pos + 1);
-      if (endTick < 0) break;
-      const inner = line.slice(pos + 1, endTick).trim();
-      pos = endTick + 1;
-      if (!inner || inner.includes('.') || inner.includes('/')) break;
-      const op = cleanSingleIdentifier(inner, { allowCallArgs: true });
-      if (!op) break;
-      onOp(op);
+  }
+  while (pos < line.length) {
+    while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || line[pos] === ':' || line[pos] === ',' || line[pos] === '/')) pos++;
+    const lower4 = line.slice(pos, pos + 4).toLowerCase();
+    if (lower4 === 'and ' || lower4 === 'and\t') {
+      pos += 4;
+      continue;
     }
-    if (pos > EXPORTED_OP_CUE_RE.lastIndex) EXPORTED_OP_CUE_RE.lastIndex = pos;
+    const lower3 = line.slice(pos, pos + 3).toLowerCase();
+    if (lower3 === 'or ' || lower3 === 'or\t') {
+      pos += 3;
+      continue;
+    }
+    if (line[pos] !== '`') break;
+    const endTick = line.indexOf('`', pos + 1);
+    if (endTick < 0) break;
+    const inner = line.slice(pos + 1, endTick).trim();
+    pos = endTick + 1;
+    if (!inner || inner.includes('.') || inner.includes('/')) break;
+    const hasCallParens = hasCallParensInToken(inner);
+    const op = cleanSingleIdentifier(inner, { allowCallArgs: true });
+    if (!op) break;
+    if (!hasCallParens && NON_OP_LABEL_WORDS.has(op.toLowerCase())) break;
+    onOp(op);
+  }
+  return pos;
+}
+
+function extractExportedOpsFromCueLine(line, onOp) {
+  if (!line.includes('`')) return;
+  const labelMatch = LINE_START_EXPORTED_OP_LABEL_RE.exec(line);
+  if (labelMatch) {
+    scanBacktickedOpListFrom(line, labelMatch[0].length, onOp, { allowQualifiers: false });
+  }
+  EXPORTED_OP_VERB_RE.lastIndex = 0;
+  let m;
+  while ((m = EXPORTED_OP_VERB_RE.exec(line)) !== null) {
+    const before = line.slice(Math.max(0, m.index - 48), m.index);
+    const clauseBefore = before.replace(/^.*[.;?!]/, '');
+    if (EXPORTED_OP_NEGATION_RE.test(clauseBefore)) continue;
+    const endPos = scanBacktickedOpListFrom(line, EXPORTED_OP_VERB_RE.lastIndex, onOp, { allowQualifiers: true });
+    if (endPos > EXPORTED_OP_VERB_RE.lastIndex) EXPORTED_OP_VERB_RE.lastIndex = endPos;
   }
 }
 
 function classifyDependencyOpsTable(headers) {
   for (let c = 0; c < headers.length; c++) {
     const h = headers[c];
-    if (PORT_TABLE_COL_EXCLUDE_RE.test(h) && !DEP_OPS_TABLE_COL_RE.test(h)) continue;
+    if (PORT_TABLE_COL_EXCLUDE_RE.test(h)) continue;
+    if (DEP_OPS_EXCLUDE_HEADING_RE.test(h)) continue;
     if (DEP_TABLE_PORT_NAME_COL_RE.test(h)) continue;
     if (DEP_OPS_TABLE_COL_RE.test(h)) return c;
   }
@@ -981,7 +1043,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
   const mentioned = new Set();
   const display = new Set();
   const exportedPeerOps = new Set();
-  const promptPrefixes = isPrompt ? derivePromptPrefixes(path) : EMPTY_STRING_SET;
+  const promptPrefixes = isPrompt ? derivePromptPrefixes(path) : new Set();
   const addDeclaredPair = (port, op) => {
     if (port.length < 2 || op.length < 2) return;
     if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) return;
@@ -1005,7 +1067,13 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
   };
 
   if (isPrompt) {
-    for (const iface of extractRuntimeInterfaceObjects(raw)) {
+    const ifaces = extractRuntimeInterfaceObjects(raw);
+    for (const iface of ifaces) {
+      if (typeof iface.name === 'string' && iface.name.trim()) {
+        addNormalizedPrefix(promptPrefixes, iface.name);
+      }
+    }
+    for (const iface of ifaces) {
       if (Array.isArray(iface.resources)) {
         for (const res of iface.resources) {
           if (typeof res?.name !== 'string' || !res.name.trim()) continue;
@@ -1018,17 +1086,15 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
           }
         }
       }
-      const ifacePrefixes = new Set(promptPrefixes);
-      if (typeof iface.name === 'string' && iface.name.trim()) {
-        addNormalizedPrefix(ifacePrefixes, iface.name);
-      }
-      if (ifacePrefixes.size > 0) {
-        for (const opList of [iface.operations, iface.commands, iface.entry_operations]) {
+      if (promptPrefixes.size > 0) {
+        for (const opList of [iface.entries, iface.operations, iface.commands, iface.entry_operations]) {
           if (!Array.isArray(opList)) continue;
           for (const op of opList) {
-            const rawName = typeof op === 'string' ? op : (typeof op?.name === 'string' ? op.name : '');
+            const rawName = typeof op === 'string'
+              ? op
+              : (typeof op?.operation === 'string' ? op.operation : (typeof op?.name === 'string' ? op.name : ''));
             const opName = cleanSingleIdentifier(rawName, { allowCallArgs: true });
-            if (opName) addExportedOp(opName, ifacePrefixes);
+            if (opName) addExportedOp(opName, promptPrefixes);
           }
         }
       }
@@ -1039,12 +1105,12 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
   const { proseLines, fences } = scanMarkdownLinesAndFences(cleaned);
 
   // 1. Structural declarations in proseLines: split-column tables, nested bullets and subheadings under ## Ports,
-  //    plus exported prompt operations under ## Operations / ## Interface / ## Public contract / ## Commands and explicit headings/cues.
+  //    plus exported prompt operations strictly under explicit ## Operations / ## Interface / ## Public contract / ## Commands / ## Tools sections.
   let inDepsSection = false;
-  let inPortsSection = false;
   let portsSectionDepth = 0;
-  let inOpsSection = false;
   let opsSectionDepth = 0;
+  let opSubheadingDepth = 0;
+  let opDetailDepth = 0;
   let subheadingPort = null;
   let subheadingDepth = 0;
   let bulletPort = null;
@@ -1064,12 +1130,13 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
       opsTableCol = -1;
       bulletPort = null;
       bulletIndent = -1;
+
       if (depth === 2 && /^dependencies\b/i.test(title)) {
         inDepsSection = true;
-        inPortsSection = false;
         portsSectionDepth = 0;
-        inOpsSection = false;
         opsSectionDepth = 0;
+        opSubheadingDepth = 0;
+        opDetailDepth = 0;
         subheadingPort = null;
         subheadingDepth = 0;
         continue;
@@ -1077,7 +1144,24 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
       if (depth === 2) inDepsSection = false;
       if (inDepsSection) continue;
 
-      if (inPortsSection && depth > portsSectionDepth) {
+      if (portsSectionDepth > 0 && depth <= portsSectionDepth) {
+        portsSectionDepth = 0;
+        subheadingPort = null;
+        subheadingDepth = 0;
+      }
+      if (opDetailDepth > 0 && depth <= opDetailDepth) {
+        opDetailDepth = 0;
+      }
+      if (opSubheadingDepth > 0 && depth <= opSubheadingDepth) {
+        opSubheadingDepth = 0;
+      }
+      if (opsSectionDepth > 0 && depth <= opsSectionDepth) {
+        opsSectionDepth = 0;
+        opSubheadingDepth = 0;
+        opDetailDepth = 0;
+      }
+
+      if (portsSectionDepth > 0 && depth > portsSectionDepth) {
         const cleanedTitle = title.replace(/\b(?:port|resource|adapter|interface)\b/gi, '').trim();
         const ident = cleanSingleIdentifier(cleanedTitle, { allowCallArgs: false });
         if (ident) {
@@ -1088,34 +1172,28 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
           subheadingDepth = 0;
         }
       } else if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title)) {
-        inPortsSection = true;
+        // Preserve any enclosing opsSectionDepth when entering a nested #### Ports heading.
         portsSectionDepth = depth;
-        inOpsSection = false;
-        opsSectionDepth = 0;
         subheadingPort = null;
         subheadingDepth = 0;
-      } else {
-        if (depth <= portsSectionDepth) {
-          inPortsSection = false;
-          portsSectionDepth = 0;
-          subheadingPort = null;
-          subheadingDepth = 0;
-        }
-        if (isPrompt && promptPrefixes.size > 0) {
-          if (inOpsSection && depth > opsSectionDepth) {
+      } else if (isPrompt && promptPrefixes.size > 0) {
+        if (opsSectionDepth > 0 && depth > opsSectionDepth) {
+          if (opDetailDepth === 0 && DEP_OP_DETAIL_SUBHEADING_RE.test(title)) {
+            opDetailDepth = depth;
+          } else if (depth === opsSectionDepth + 1) {
             const opName = extractHeadingOperationName(title, { requireExplicitSyntax: false });
             if (opName) addExportedOp(opName);
-          } else if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_OPS_HEADING_RE.test(title)) {
-            inOpsSection = true;
-            opsSectionDepth = depth;
-          } else {
-            if (depth <= opsSectionDepth) {
-              inOpsSection = false;
-              opsSectionDepth = 0;
-            }
-            const explicitHeadingOp = extractHeadingOperationName(title, { requireExplicitSyntax: true });
-            if (explicitHeadingOp) addExportedOp(explicitHeadingOp);
+            opSubheadingDepth = depth;
+          } else if (opSubheadingDepth === 0) {
+            opSubheadingDepth = depth;
           }
+        } else if (!NETWORK_PORT_HEADING_RE.test(title) && !DEP_OPS_EXCLUDE_HEADING_RE.test(title) && DEP_OPS_HEADING_RE.test(title)) {
+          opsSectionDepth = depth;
+          opSubheadingDepth = 0;
+          opDetailDepth = 0;
+        } else {
+          const explicitHeadingOp = extractHeadingOperationName(title, { requireExplicitSyntax: true });
+          if (explicitHeadingOp) addExportedOp(explicitHeadingOp);
         }
       }
       continue;
@@ -1127,7 +1205,13 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
       const headers = splitMarkdownTableRow(line) ?? [];
       inTable = true;
       tableSpec = classifyDependencyTable(headers, subheadingPort);
-      opsTableCol = !tableSpec && isPrompt && promptPrefixes.size > 0 && !inPortsSection
+      opsTableCol = !tableSpec
+        && isPrompt
+        && promptPrefixes.size > 0
+        && portsSectionDepth === 0
+        && opsSectionDepth > 0
+        && opSubheadingDepth === 0
+        && opDetailDepth === 0
         ? classifyDependencyOpsTable(headers)
         : -1;
       bulletPort = null;
@@ -1155,9 +1239,9 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
           const cells = splitMarkdownTableRow(line) ?? [];
           if (opsTableCol < cells.length) {
             const rawCell = cells[opsTableCol];
-            const hasExplicit = rawCell.includes('`') || rawCell.includes('(');
+            const hasCallParens = rawCell.includes('(');
             for (const op of extractOpsFromTableCell(rawCell)) {
-              if (!hasExplicit && NON_OP_LABEL_WORDS.has(op.toLowerCase())) continue;
+              if (!hasCallParens && NON_OP_LABEL_WORDS.has(op.toLowerCase())) continue;
               addExportedOp(op);
             }
           }
@@ -1166,7 +1250,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
       }
     }
 
-    if (inPortsSection) {
+    if (portsSectionDepth > 0) {
       const bm = BULLET_LINE_RE.exec(line);
       if (bm) {
         const indent = bm[1].replace(/\t/g, '  ').length;
@@ -1195,14 +1279,21 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
     }
 
     if (isPrompt && promptPrefixes.size > 0) {
-      if (inOpsSection) {
+      if (opsSectionDepth > 0 && opDetailDepth === 0) {
         const bm = BULLET_LINE_RE.exec(line);
         if (bm) {
           const rest = bm[2].trim();
-          const hasExplicit = rest.startsWith('`') || rest.startsWith('**`') || /^[a-z][a-zA-Z0-9_-]*\s*\(/.test(rest);
-          const op = extractLeadingSimpleIdentifier(rest, { allowCallArgs: true });
-          if (op && (hasExplicit || !NON_OP_LABEL_WORDS.has(op.toLowerCase()))) {
-            addExportedOp(op);
+          if (opSubheadingDepth === 0) {
+            const callOp = extractLeadingBulletCallOp(rest);
+            if (callOp) {
+              addExportedOp(callOp);
+            } else {
+              const op = extractLeadingSimpleIdentifier(rest, { allowCallArgs: true });
+              if (op && !NON_OP_LABEL_WORDS.has(op.toLowerCase())) addExportedOp(op);
+            }
+          } else {
+            const callOp = extractLeadingBulletCallOp(rest);
+            if (callOp) addExportedOp(callOp);
           }
         }
       }

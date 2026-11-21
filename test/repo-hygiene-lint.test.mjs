@@ -2370,3 +2370,193 @@ test('3574 reopen + 3569 Tip 1: native-only gateway routing to sibling <prompt>.
   assert.deepEqual(perfRes, []);
   assert.ok(perfMs < 300, `expected linear O(N) peer-op extraction, got ${perfMs.toFixed(1)}ms`);
 });
+
+test('3619 R1 regressions: P1-1 negative whitelisting guards, nested #### Ports under ## Operations, P1-2 entries[].operation, and P2-1 Runtime interface name alias with prose ops', () => {
+  const nativeCallingCommit = [
+    '---',
+    'kind: native-only',
+    'reason: Live storage adapter.',
+    '---',
+    '',
+    '# Adapter',
+    '',
+    '## Port wiring',
+    '- `access.commit`: nonexistent port that must never be silently whitelisted.',
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+  ].join('\n');
+
+  // P1-1 (negation & non-export verbs): "When the caller provides `commit`..." and "Never exposes `commit`" still flag access.commit.
+  const proseCueDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`. When the caller provides `commit`, validate its hex length. Never exposes `commit` directly.',
+    'Does not export `commit` to external callers.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const proseRes = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: proseCueDep }]);
+  assert.equal(proseRes.length, 1, proseRes.join('\n'));
+  assert.ok(proseRes[0].includes('"access.commit"'));
+
+  // P1-1 (non-ops decision table): ## Decision rules with | Role | Action | Effect | still flags access.commit.
+  const decisionTableDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Decision rules',
+    '',
+    '| Role | Action | Effect |',
+    '| --- | --- | --- |',
+    '| `admin` | `commit` | allow |',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const decisionRes = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: decisionTableDep }]);
+  assert.equal(decisionRes.length, 1, decisionRes.join('\n'));
+  assert.ok(decisionRes[0].includes('"access.commit"'));
+
+  // P1-1 (excluded columns even inside ## Operations): HTTP Method / SQL Operation / Route Handler / Error Action are skipped.
+  const excludedColsDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '| HTTP Method | SQL Operation | Route Handler | Error Action |',
+    '| --- | --- | --- | --- |',
+    '| `commit` | `commit` | `commit` | `commit` |',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const excludedColsRes = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: excludedColsDep }]);
+  assert.equal(excludedColsRes.length, 1, excludedColsRes.join('\n'));
+  assert.ok(excludedColsRes[0].includes('"access.commit"'));
+
+  // P1-1 (nested subsection & op-body bullets): ## Operations -> ### evaluate -> #### Input -> - `commit`: optional SHA
+  // and plain bullet - `commit` directly under ### evaluate still flag access.commit,
+  // while nested #### Ports preserves ## Operations so sibling ### delete_tool AND store.load are BOTH recognized!
+  const nestedOpsDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '### evaluate',
+    '- `commit`: optional SHA passed in request body.',
+    '',
+    '#### Input',
+    '- `commit`: optional SHA.',
+    '',
+    '#### Ports',
+    '- `store`',
+    '  - `load(id)`',
+    '',
+    '### delete_tool',
+    'Deletes a tool registration.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const nestedFail = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: nestedOpsDep }]);
+  assert.equal(nestedFail.length, 1, nestedFail.join('\n'));
+  assert.ok(nestedFail[0].includes('"access.commit"'));
+
+  const nestedValid = lintNativeOnlyPortParity(
+    [
+      '---',
+      'kind: native-only',
+      'reason: Live storage adapter.',
+      '---',
+      '',
+      '# Adapter',
+      '',
+      '## Port wiring',
+      '- `store.load`: reads policy.',
+      '- `access.evaluate`: evaluates policy.',
+      '- `access.delete_tool`: deletes tool (still recognized after nested #### Ports).',
+      '',
+      '## Dependencies',
+      '- [access](access.prompt.md)',
+    ].join('\n'),
+    [{ path: 'prompts/access/access.prompt.md', text: nestedOpsDep }],
+  );
+  assert.deepEqual(nestedValid, []);
+
+  // P1-1 (trailing words on heading): ### `commit` field outside ## Operations still flags access.commit.
+  const headingTailDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Domain decisions',
+    '',
+    '### `commit` field',
+    'Describes the optional commit SHA field.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const headingTailRes = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: headingTailDep }]);
+  assert.equal(headingTailRes.length, 1, headingTailRes.join('\n'));
+  assert.ok(headingTailRes[0].includes('"access.commit"'));
+
+  // P1-2: Canonical PDD Runtime interface entries[].operation is recognized.
+  const entriesOpDep = [
+    '# Worker',
+    '',
+    'Own `src/worker.mjs`.',
+    '',
+    '<details><summary>Runtime interface</summary>',
+    '```json',
+    JSON.stringify({
+      entries: [{ operation: 'dispatch_job' }, { operation: 'cancel_job' }],
+    }),
+    '```',
+    '</details>',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: Queue runner.\n---\n\n# Runner\n\n## Port wiring\n- `worker.dispatch_job`\n- `worker.cancel_job`\n',
+      [{ path: 'prompts/worker.prompt.md', text: entriesOpDep }],
+    ),
+    [],
+  );
+
+  // P2-1: Embedded Runtime interface "name": "authz" pairs with prose-declared operations under ## Operations too.
+  const namedAliasDep = [
+    '# Authorization policy',
+    '',
+    'Own `src/policy/engine.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '### `evaluate_request(req)`',
+    'Evaluates an authorization decision.',
+    '',
+    '## Runtime interface',
+    '```json',
+    JSON.stringify({ name: 'authz', resources: [{ name: 'store', operations: [{ name: 'load' }] }] }),
+    '```',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: HTTP gateway.\n---\n\n# Gateway\n\n## Port wiring\n- `authz.evaluate_request`\n- `store.load`\n',
+      [{ path: 'prompts/policy/engine.prompt.md', text: namedAliasDep }],
+    ),
+    [],
+  );
+});
