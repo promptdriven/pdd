@@ -101,15 +101,22 @@ function localParts(ms, timezone) {
   };
 }
 
-function localMidnightUtcMs(year, month, day, timezone) {
-  const targetUtc = Date.UTC(year, month - 1, day, 0, 0, 0, 0);
+export function localAnchorUtcMs(year, month, day, hour = 0, timezone = 'UTC') {
+  const tz = validateTimezone(timezone);
+  const targetUtc = Date.UTC(year, month - 1, day, hour, 0, 0, 0);
   let guess = targetUtc;
-  for (let i = 0; i < 3; i++) {
-    const p = localParts(guess, timezone);
+  for (let i = 0; i < 4; i++) {
+    const p = localParts(guess, tz);
     const observedAsUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0);
-    guess -= observedAsUtc - targetUtc;
+    const diff = observedAsUtc - targetUtc;
+    if (diff === 0) break;
+    guess -= diff;
   }
   return guess;
+}
+
+function localMidnightUtcMs(year, month, day, timezone) {
+  return localAnchorUtcMs(year, month, day, 0, timezone);
 }
 
 function formatShortDate(ms, timezone) {
@@ -448,12 +455,30 @@ function indexPrStates(rawPrStates, excludedRepos) {
   return map;
 }
 
+function earliestIso(a, b) {
+  const aMs = parseTimestampMs(a, null);
+  const bMs = parseTimestampMs(b, null);
+  if (aMs === null && bMs === null) return null;
+  if (aMs === null) return new Date(bMs).toISOString();
+  if (bMs === null) return new Date(aMs).toISOString();
+  return new Date(Math.min(aMs, bMs)).toISOString();
+}
+
 function indexRegressions(rawRegressions, excludedRepos) {
   const byPr = new Map();
   const byIssue = new Map();
   if (!Array.isArray(rawRegressions)) return { byPr, byIssue };
   const mergeSignal = (map, key, entry) => {
-    const prev = map.get(key) ?? { reopened: false, reverted: false, regressionIssues: new Set() };
+    const prev = map.get(key) ?? {
+      reopened: false,
+      reverted: false,
+      regressionIssues: new Set(),
+      reopenedAt: null,
+      revertedAt: null,
+      regressionIssueAt: null,
+      detectedAt: null,
+      signals: [],
+    };
     if (entry.reopened === true) prev.reopened = true;
     if (entry.reverted === true) prev.reverted = true;
     if (Array.isArray(entry.regressionIssues)) {
@@ -461,6 +486,30 @@ function indexRegressions(rawRegressions, excludedRepos) {
         if (positiveInt(n)) prev.regressionIssues.add(n);
       }
     }
+    prev.reopenedAt = earliestIso(prev.reopenedAt, entry.reopenedAt);
+    prev.revertedAt = earliestIso(prev.revertedAt, entry.revertedAt);
+    prev.regressionIssueAt = earliestIso(prev.regressionIssueAt, entry.regressionIssueAt);
+    prev.detectedAt = earliestIso(prev.detectedAt, entry.detectedAt);
+    if (Array.isArray(entry.signals)) {
+      for (const sig of entry.signals) {
+        if (!isPlainObject(sig) || typeof sig.kind !== 'string') continue;
+        const at = earliestIso(sig.at, null);
+        if (sig.kind === 'reopened') prev.reopenedAt = earliestIso(prev.reopenedAt, at);
+        if (sig.kind === 'revert') prev.revertedAt = earliestIso(prev.revertedAt, at);
+        if (sig.kind === 'reference') prev.regressionIssueAt = earliestIso(prev.regressionIssueAt, at);
+        prev.detectedAt = earliestIso(prev.detectedAt, at);
+        prev.signals.push({
+          kind: sig.kind,
+          level: typeof sig.level === 'string' ? sig.level : 'proven',
+          at,
+          url: typeof sig.url === 'string' ? sig.url : null,
+        });
+      }
+    }
+    prev.detectedAt = earliestIso(
+      prev.detectedAt,
+      earliestIso(prev.reopenedAt, earliestIso(prev.revertedAt, prev.regressionIssueAt)),
+    );
     map.set(key, prev);
   };
   for (const entry of rawRegressions) {
@@ -487,7 +536,32 @@ function resolveItemRegression(item, regIndex) {
   for (const n of issueReg?.regressionIssues ?? []) issueSet.add(n);
   const regressionIssueNumbers = [...issueSet].sort((a, b) => a - b);
   const hasRegression = hasReopened || hasReverted || regressionIssueNumbers.length > 0;
-  return { hasReopened, hasReverted, regressionIssueNumbers, hasRegression };
+  const reopenedAt = earliestIso(item.reopenedAt, earliestIso(prReg?.reopenedAt, issueReg?.reopenedAt));
+  const revertedAt = earliestIso(item.revertedAt, earliestIso(prReg?.revertedAt, issueReg?.revertedAt));
+  const regressionIssueAt = earliestIso(item.regressionIssueAt, earliestIso(prReg?.regressionIssueAt, issueReg?.regressionIssueAt));
+  const detectedAt = earliestIso(
+    earliestIso(item.detectedAt, earliestIso(prReg?.detectedAt, issueReg?.detectedAt)),
+    earliestIso(reopenedAt, earliestIso(revertedAt, regressionIssueAt)),
+  );
+  const signalSeen = new Set();
+  const regressionSignals = [];
+  for (const sig of [...(prReg?.signals ?? []), ...(issueReg?.signals ?? [])]) {
+    const key = `${sig.kind}|${sig.level}|${sig.at ?? ''}|${sig.url ?? ''}`;
+    if (signalSeen.has(key)) continue;
+    signalSeen.add(key);
+    regressionSignals.push(sig);
+  }
+  return {
+    hasReopened,
+    hasReverted,
+    regressionIssueNumbers,
+    hasRegression,
+    reopenedAt,
+    revertedAt,
+    regressionIssueAt,
+    detectedAt,
+    regressionSignals,
+  };
 }
 
 function selectWindowIssues(normalizedRuns, windowDef, nowMs, regIndex) {
@@ -571,6 +645,46 @@ function resolveWindowPool(repoLowers, windowDef, items, openMap, openNumbersMap
   return { pool: totalPool, poolDisplay: String(totalPool) };
 }
 
+function roundPct(numerator, denominator) {
+  if (denominator === null || denominator === undefined || denominator <= 0) return null;
+  return Math.round((numerator / denominator) * 1000) / 10;
+}
+
+function fmtPct(pct) {
+  return pct === null ? 'n/a' : `${pct.toFixed(1)}%`;
+}
+
+function buildFunnelSummary({ pool, poolDisplay, taken, pr, merged, regressions, regressionsComplete = true }) {
+  const takenPct = pool !== null ? roundPct(taken, pool) : null;
+  const prPct = roundPct(pr, taken);
+  const mergedOfPrPct = roundPct(merged, pr);
+  const mergedOfTakenPct = roundPct(merged, taken);
+  const rawRegPct = roundPct(regressions, merged);
+  const incompleteZero = !regressionsComplete && merged > 0 && regressions === 0;
+  const incompletePartial = !regressionsComplete && merged > 0 && regressions > 0;
+  const regressionsPct = incompleteZero ? null : rawRegPct;
+  const regPart = incompleteZero
+    ? '? Regressions (scan incomplete)'
+    : incompletePartial
+      ? `${regressions}+ Regressions (${rawRegPct.toFixed(1)}%+)`
+      : `${regressions} Regressions (${fmtPct(regressionsPct)})`;
+  const line = `${poolDisplay} Pool -> ${taken} Taken (${fmtPct(takenPct)}) -> ${pr} PRs (${fmtPct(prPct)}) -> ${merged} Merged (${fmtPct(mergedOfPrPct)} of PRs, ${fmtPct(mergedOfTakenPct)} of Taken) | ${regPart}`;
+  return {
+    pool,
+    poolDisplay,
+    taken,
+    takenPct,
+    pr,
+    prPct,
+    merged,
+    mergedOfPrPct,
+    mergedOfTakenPct,
+    regressions,
+    regressionsPct,
+    line,
+  };
+}
+
 function summarizeOverviewRow(key, label, windowDef, items, repoLowers, openMap, openNumbersMap, closedIssues, regressionsComplete = true) {
   const { open, openDisplay } = resolveOpenCount(repoLowers, openMap, openNumbersMap);
   const { pool, poolDisplay } = resolveWindowPool(repoLowers, windowDef, items, openMap, openNumbersMap, closedIssues);
@@ -591,9 +705,20 @@ function summarizeOverviewRow(key, label, windowDef, items, repoLowers, openMap,
       regressionsDisplay = `${regressions}+ (${regressionsPct.toFixed(1)}%+)`;
     }
   }
+  const funnel = buildFunnelSummary({
+    pool,
+    poolDisplay,
+    taken,
+    pr: prCreated,
+    merged,
+    regressions,
+    regressionsComplete,
+  });
   return {
     key,
     label,
+    startAt: new Date(windowDef.startMs).toISOString(),
+    endAt: new Date(windowDef.endMs).toISOString(),
     pool,
     poolDisplay,
     open,
@@ -608,6 +733,7 @@ function summarizeOverviewRow(key, label, windowDef, items, repoLowers, openMap,
     regressions,
     regressionsPct,
     regressionsDisplay,
+    funnel,
   };
 }
 
@@ -678,9 +804,10 @@ function summarizePrGates(prItems) {
 }
 
 function summarizePromptChecks(prItems) {
+  // Grade strictly at PR granularity (excluding not-run/na and raw vector test-case counts).
   const promptItems = prItems.filter(item =>
     item.promptChanged === true
-    || PROMPT_CHECKS.some(g => item.gates[g] === 'pass' || item.gates[g] === 'fail' || (item.gateCounts?.[g]?.total ?? 0) > 0),
+    || PROMPT_CHECKS.some(g => item.gates[g] === 'pass' || item.gates[g] === 'fail'),
   );
   const promptPrs = promptItems.length;
   const checks = {};
@@ -688,10 +815,7 @@ function summarizePromptChecks(prItems) {
     let passed = 0;
     let total = 0;
     for (const item of promptItems) {
-      if (item.gateCounts?.[g]?.total > 0) {
-        passed += item.gateCounts[g].passed;
-        total += item.gateCounts[g].total;
-      } else if (item.gates[g] === 'pass') {
+      if (item.gates[g] === 'pass') {
         passed += 1;
         total += 1;
       } else if (item.gates[g] === 'fail') {
@@ -712,8 +836,22 @@ function summarizeRegressionsBreakdown(mergedItems, regressionsComplete = true) 
   const reopened = regressed.filter(i => i.hasReopened).length;
   const reverted = regressed.filter(i => i.hasReverted).length;
   const issueSet = new Set();
+  const events = [];
   for (const item of regressed) {
     for (const n of item.regressionIssueNumbers) issueSet.add(n);
+    events.push({
+      repo: item.repo,
+      pr: item.pr,
+      issue: item.issue,
+      reopened: item.hasReopened,
+      reverted: item.hasReverted,
+      regressionIssues: item.regressionIssueNumbers,
+      reopenedAt: item.reopenedAt ?? null,
+      revertedAt: item.revertedAt ?? null,
+      regressionIssueAt: item.regressionIssueAt ?? null,
+      detectedAt: item.detectedAt ?? null,
+      signals: item.regressionSignals ?? [],
+    });
   }
   const regressionIssues = [...issueSet].sort((a, b) => a - b);
   const regressionIssueCount = regressionIssues.length;
@@ -721,10 +859,10 @@ function summarizeRegressionsBreakdown(mergedItems, regressionsComplete = true) 
   const issueList = regressionIssues.length > 0 ? ` (${regressionIssues.map(n => `#${n}`).join(', ')})` : '';
   const suffix = regressionsComplete ? '' : ' (scan incomplete)';
   const summary = `Regressions (${total}): ${reopened} reopened · ${reverted} reverted · ${regressionIssueCount} ${issueLabel}${issueList}${suffix}`;
-  return { total, reopened, reverted, regressionIssueCount, regressionIssues, complete: regressionsComplete, summary };
+  return { total, reopened, reverted, regressionIssueCount, regressionIssues, complete: regressionsComplete, events, summary };
 }
 
-function summarizeStages(windowDef, items, regressionsComplete = true) {
+function summarizeStages(windowDef, items, regressionsComplete = true, poolInfo = { pool: null, poolDisplay: '?' }) {
   const gates = {};
   for (const gate of GATES) {
     let passed = 0;
@@ -790,12 +928,23 @@ function summarizeStages(windowDef, items, regressionsComplete = true) {
   const breakdown = bucketOrder.filter(b => counts[b] > 0).map(b => ({ reason: b, count: counts[b] }));
   const nonMergedSummary = formatBreakdownSummary('Non-merged', nonMergedTotal, breakdown);
 
+  const funnel = buildFunnelSummary({
+    pool: poolInfo?.pool ?? null,
+    poolDisplay: poolInfo?.poolDisplay ?? '?',
+    taken,
+    pr,
+    merged,
+    regressions: regressions.total,
+    regressionsComplete,
+  });
+
   return {
     window: { key: windowDef.key, label: windowDef.label },
     taken,
     pr,
     merged,
     mwm,
+    funnel,
     beforePr,
     unmergedPrs,
     prGates,
@@ -953,7 +1102,8 @@ export function calculateAutopilotMetrics(input = {}) {
   if (!VALID_VIEWS.has(view)) {
     throw modelError('invalid-view', `Invalid metrics view "${opts.view}".`);
   }
-  const timezone = validateTimezone(opts.timezone ?? 'UTC');
+  const standup = Boolean(opts.standup);
+  const timezone = validateTimezone(opts.timezone ?? (standup ? 'America/Los_Angeles' : 'UTC'));
   const nowMs = opts.now === undefined ? 0 : parseTimestampMs(opts.now, null);
   if (nowMs === null) {
     throw modelError('invalid-now', `Invalid timestamp "${opts.now ?? ''}".`);
@@ -1139,7 +1289,13 @@ export function calculateAutopilotMetrics(input = {}) {
 
   let windowDefs;
   let targetRefMs = nowMs;
-  if (parsedDate) {
+  if (standup && parsedDate) {
+    const prevDay = new Date(Date.UTC(parsedDate.year, parsedDate.month - 1, parsedDate.day - 1));
+    const startMs = localAnchorUtcMs(prevDay.getUTCFullYear(), prevDay.getUTCMonth() + 1, prevDay.getUTCDate(), 9, timezone);
+    const endMs = localAnchorUtcMs(parsedDate.year, parsedDate.month, parsedDate.day, 9, timezone) - 1;
+    windowDefs = [{ key: 'standup', label: `Standup ${parsedDate.text} (9am-9am)`, startMs, endMs }];
+    targetRefMs = endMs;
+  } else if (parsedDate) {
     const startMs = localMidnightUtcMs(parsedDate.year, parsedDate.month, parsedDate.day, timezone);
     const nextDay = new Date(Date.UTC(parsedDate.year, parsedDate.month - 1, parsedDate.day + 1));
     const endMs = localMidnightUtcMs(nextDay.getUTCFullYear(), nextDay.getUTCMonth() + 1, nextDay.getUTCDate(), timezone) - 1;
@@ -1154,10 +1310,22 @@ export function calculateAutopilotMetrics(input = {}) {
       mondayUtcDate.getUTCDate(),
       timezone,
     );
-    windowDefs = [
-      { key: 'last24h', label: 'Last 24h', startMs: nowMs - DAY_MS, endMs: nowMs },
-      { key: 'week', label: 'Week (Mon-Sun)', startMs: weekStartMs, endMs: nowMs },
-    ];
+    if (standup) {
+      const prevDay = new Date(Date.UTC(nowLocal.year, nowLocal.month - 1, nowLocal.day - 1));
+      const todayAnchor = localAnchorUtcMs(nowLocal.year, nowLocal.month, nowLocal.day, 9, timezone);
+      const startMs = localAnchorUtcMs(prevDay.getUTCFullYear(), prevDay.getUTCMonth() + 1, prevDay.getUTCDate(), 9, timezone);
+      const endMs = nowMs >= todayAnchor ? todayAnchor - 1 : nowMs;
+      const standupLabel = timezone === 'America/Los_Angeles' ? 'Standup (9am-9am PT)' : 'Standup (9am-9am)';
+      windowDefs = [
+        { key: 'standup', label: standupLabel, startMs, endMs },
+        { key: 'week', label: 'Week (Mon-Sun)', startMs: weekStartMs, endMs: nowMs },
+      ];
+    } else {
+      windowDefs = [
+        { key: 'last24h', label: 'Last 24h', startMs: nowMs - DAY_MS, endMs: nowMs },
+        { key: 'week', label: 'Week (Mon-Sun)', startMs: weekStartMs, endMs: nowMs },
+      ];
+    }
   }
 
   const windowItemsMap = new Map();
@@ -1192,9 +1360,14 @@ export function calculateAutopilotMetrics(input = {}) {
     return { key: w.key, label: w.label, rows, total };
   });
 
-  const primaryWindow = parsedDate ? windowDefs[0] : windowDefs[1];
+  const primaryIndex = parsedDate ? 0 : 1;
+  const primaryWindow = windowDefs[primaryIndex];
+  const primaryOverviewRow = overviewWindows[primaryIndex];
   const primaryItems = windowItemsMap.get(primaryWindow.key);
-  const stages = summarizeStages(primaryWindow, primaryItems, regressionsComplete);
+  const stages = summarizeStages(primaryWindow, primaryItems, regressionsComplete, {
+    pool: primaryOverviewRow?.pool ?? null,
+    poolDisplay: primaryOverviewRow?.poolDisplay ?? '?',
+  });
   const skills = summarizeSkills(primaryWindow, primaryItems);
   const recurringFlakes = summarizeMetricsRecurringFlakes({
     recurringFlakes: opts.recurringFlakes,
@@ -1215,6 +1388,7 @@ export function calculateAutopilotMetrics(input = {}) {
     generatedAt: nowIso,
     displayDate: formatShortDate(nowMs, timezone),
     timezone,
+    standup,
     date: parsedDate ? parsedDate.text : null,
     view,
     byRepo,
@@ -1293,6 +1467,7 @@ function renderStagesSection(report) {
   const s = report.stages;
   return [
     `Funnel & Gates · ${s.window.label} · ${s.taken} Taken -> ${s.pr} PRs -> ${s.merged} Merged`,
+    ...(s.funnel?.line ? [`- Funnel: ${s.funnel.line}`] : []),
     `- ${s.beforePr.summary}`,
     `- ${s.unmergedPrs.summary}`,
     `- ${s.prGates.summary}`,
@@ -1440,6 +1615,7 @@ export function renderMetricsHtml(report) {
     .join('\n');
 
   const funnelLinesHtml = [
+    ...(s.funnel?.line ? [`Funnel: ${s.funnel.line}`] : []),
     s.beforePr.summary,
     s.unmergedPrs.summary,
     s.prGates.summary,

@@ -234,7 +234,7 @@ new one.
 
 Record every call that reaches the diagram, also one that sends nothing, in
 `<state root>/alerts/<ID>.json`, with mode 0600. The state root is
-`ports.stateRoot`, else `<home folder>/.local/state/pdd/autopilot` (the
+`ports.stateRoot`, else `<PDD_STATE_DIR>/autopilot` when `PDD_STATE_DIR` is an absolute path, else `<home folder>/.local/state/pdd/autopilot` (the
 launcher's state folder), with the [home folder](#an-absolute-home-folder)
 above. ID is the first 20 hex characters of the SHA-256 of the lowercase
 `OWNER/REPO`. The record keeps the open incidents (kind, affected issues,

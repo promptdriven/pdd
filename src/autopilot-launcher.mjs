@@ -98,7 +98,7 @@ function describeProfile(agent, env) {
 const NOT_GIT = 'This folder is not a Git repository. cd into the repo you want Autopilot to work on, then run the command again.';
 // Git translates its messages; pdd reads the "not a git repository" text only in the C locale.
 const gitRootIn = p => p.execute('git', ['rev-parse', '--show-toplevel'], { env: { ...p.env, LC_ALL: 'C', LANG: 'C' } });
-const stateFolder = (ports, env) => ports.stateRoot ?? join(env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+const stateFolder = (ports, env) => ports.stateRoot ?? join((typeof env?.PDD_STATE_DIR === 'string' && env.PDD_STATE_DIR.trim()) || join(env.HOME || homedir(), '.local', 'state', 'pdd'), 'autopilot');
 async function gitRoot(p) {
   const result = await gitRootIn(p);
   if (result.code === 0 && result.stdout.trim()) return result.stdout.trim();
@@ -277,7 +277,7 @@ function clearCircuitBreaker(stateFile, state, nowMs = Date.now(), { clearObserv
 
 export async function resetAutopilotCircuitBreaker({ cwd, env, mode } = {}, ports = {}) {
   const effectiveEnv = env ?? ports.env ?? process.env;
-  const folder = ports.stateRoot ?? join(effectiveEnv.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+  const folder = stateFolder(ports, effectiveEnv);
   if (!existsSync(folder)) return { cleared: false };
   let state = { cwd, environment: keepEnv(effectiveEnv) };
   const run = ports.execFile ? async (command, args, options) => {
@@ -852,7 +852,7 @@ export async function requestAutopilotCompletion({ cwd, env } = {}, ports = {}) 
     const root = await gitRootIn(p);
     if (root.code !== 0 || !root.stdout.trim()) return { state: 'unknown' };
     const resolved = root.stdout.trim();
-    const folder = ports.stateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+    const folder = stateFolder(ports, p.env);
     const id = createHash('sha256').update(resolved).digest('hex').slice(0, 20), stateFile = join(folder, `${id}.json`);
     if (!read(stateFile)?.enabled) return { state: 'inactive' };
     let busy = false;
@@ -876,7 +876,7 @@ export async function withAutopilotModeLock({ cwd, env }, action, ports = {}) {
     return bad('Autopilot settings could not verify the Git repository; retry.');
   }
   state.cwd = root.stdout.trim();
-  const folder = ports.stateRoot ?? join(p.env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+  const folder = stateFolder(ports, p.env);
   const id = createHash('sha256').update(state.cwd).digest('hex').slice(0, 20), stateFile = join(folder, `${id}.json`);
   let releaseAdmission;
   try {

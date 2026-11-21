@@ -1,7 +1,6 @@
 // Generated from prompts/cli/metrics-command.prompt.md (sha256: f34959daef947465fcf1ee3612ed17159a23c165fe3d67b4043bc4f73701f693).
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import * as nativeFs from 'node:fs';
-import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -22,7 +21,7 @@ import {
 const defaultExecFile = nativeGithubCounter(promisify(execFileCb), { purpose: 'other' });
 const SUBCOMMANDS = new Set(['stages', 'skills', 'full', 'on', 'off']);
 const VALUE_FLAGS = new Set(['--repo', '--date', '--timezone', '--file']);
-const BOOL_FLAGS = new Set(['--repos', '--json', '--html']);
+const BOOL_FLAGS = new Set(['--repos', '--json', '--html', '--standup']);
 const DAY_MS = 86_400_000;
 const PR_ALIAS_CHUNK = 40;
 const MAX_ISSUE_PAGES = 10;
@@ -72,7 +71,7 @@ function parseMetricsArgv(argv = []) {
     return { error: 'Option "--file" requires "--html".' };
   }
   if (subcommand === 'on' || subcommand === 'off') {
-    for (const forbidden of ['--repos', '--date', '--timezone', '--html', '--file']) {
+    for (const forbidden of ['--repos', '--date', '--timezone', '--standup', '--html', '--file']) {
       if (options[forbidden] !== undefined) {
         return { error: `Option "${forbidden}" cannot be used with "pdd metrics ${subcommand}".` };
       }
@@ -153,14 +152,37 @@ async function execGraphql(execFile, query, env) {
   }
 }
 
+const REOPENED_TIMELINE_FIELDS = 'timelineItems(last: 10, itemTypes: [REOPENED_EVENT]) { nodes { ... on ReopenedEvent { createdAt actor { login } } } }';
+
+function recordGraphqlReopenedEvents(map, repoLower, node) {
+  if (!node || !Number.isSafeInteger(node.number) || node.number <= 0) return;
+  const events = Array.isArray(node.timelineItems?.nodes) ? node.timelineItems.nodes : [];
+  if (events.length === 0) return;
+  const key = `${repoLower}#${node.number}`;
+  let bucket = map.get(key);
+  for (const ev of events) {
+    const ms = typeof ev?.createdAt === 'string' ? Date.parse(ev.createdAt) : NaN;
+    if (!Number.isFinite(ms)) continue;
+    const at = new Date(ms).toISOString();
+    const actor = typeof ev?.actor?.login === 'string' && ev.actor.login.trim() ? ev.actor.login.trim() : null;
+    if (!bucket) {
+      bucket = [];
+      map.set(key, bucket);
+    }
+    if (!bucket.some(item => item.at === at)) {
+      bucket.push({ at, actor });
+    }
+  }
+}
+
 /** Follow bounded `UPDATED_AT DESC` cursor pagination for a repository's open or closed issues. */
 async function paginateRepoIssues({ execFile, env, owner, name, kind, sinceIso, startCursor }) {
   const collected = [];
   let cursor = startCursor;
   for (let page = 0; page < MAX_ISSUE_PAGES && cursor; page++) {
     const fieldExpr = kind === 'closed'
-      ? `issues(states: CLOSED, filterBy: { since: ${JSON.stringify(sinceIso)} }, first: 100, after: ${JSON.stringify(cursor)}, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number closedAt } }`
-      : `issues(states: OPEN, first: 100, after: ${JSON.stringify(cursor)}, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number } }`;
+      ? `issues(states: CLOSED, filterBy: { since: ${JSON.stringify(sinceIso)} }, first: 100, after: ${JSON.stringify(cursor)}, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number closedAt ${REOPENED_TIMELINE_FIELDS} } }`
+      : `issues(states: OPEN, first: 100, after: ${JSON.stringify(cursor)}, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number ${REOPENED_TIMELINE_FIELDS} } }`;
     const query = `query { repo: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { ${fieldExpr} } }`;
     const data = await execGraphql(execFile, query, env);
     const block = data?.repo?.issues;
@@ -179,7 +201,7 @@ async function paginateRepoIssues({ execFile, env, owner, name, kind, sinceIso, 
  */
 async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, env }) {
   if (!Array.isArray(repos) || repos.length === 0) {
-    return { openIssues: {}, openIssueNumbers: [], closedIssues: [], prStates: [], prMetaByKey: new Map(), online: true };
+    return { openIssues: {}, openIssueNumbers: [], closedIssues: [], prStates: [], prMetaByKey: new Map(), reopenedEventsByIssue: new Map(), online: true };
   }
   const aliases = [];
   const fields = [];
@@ -201,8 +223,8 @@ async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, e
     aliases.push({ alias, repo, owner, name, lower, prs: firstChunk });
     fields.push(
       `${alias}: repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) {`
-      + ` issues(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { totalCount pageInfo { hasNextPage endCursor } nodes { number } }`
-      + ` closedIssues: issues(states: CLOSED, filterBy: { since: ${JSON.stringify(sinceIso)} }, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number closedAt } }`
+      + ` issues(states: OPEN, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { totalCount pageInfo { hasNextPage endCursor } nodes { number ${REOPENED_TIMELINE_FIELDS} } }`
+      + ` closedIssues: issues(states: CLOSED, filterBy: { since: ${JSON.stringify(sinceIso)} }, first: 100, orderBy: { field: UPDATED_AT, direction: DESC }) { pageInfo { hasNextPage endCursor } nodes { number closedAt ${REOPENED_TIMELINE_FIELDS} } }`
       + (prFields ? ` ${prFields}` : '')
       + ' }',
     );
@@ -213,6 +235,7 @@ async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, e
   const closedIssues = [];
   const prStates = [];
   const prMetaByKey = new Map();
+  const reopenedEventsByIssue = new Map();
 
   const collectPrNodes = (repo, prs, repoData) => {
     if (!repoData || typeof repoData !== 'object') return;
@@ -234,7 +257,7 @@ async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, e
 
   const data = await execGraphql(execFile, `query { ${fields.join(' ')} }`, env);
   if (!data) {
-    return { openIssues: null, openIssueNumbers: [], closedIssues: [], prStates: null, prMetaByKey, online: false };
+    return { openIssues: null, openIssueNumbers: [], closedIssues: [], prStates: null, prMetaByKey, reopenedEventsByIssue, online: false };
   }
 
   for (const { alias, repo, owner, name, lower, prs } of aliases) {
@@ -243,9 +266,7 @@ async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, e
     const total = openBlock?.totalCount;
     openIssues[lower] = Number.isInteger(total) && total >= 0 ? total : null;
     if (Array.isArray(openBlock?.nodes)) {
-      const nums = openBlock.nodes
-        .map(n => n?.number)
-        .filter(n => Number.isSafeInteger(n) && n > 0);
+      const allOpenNodes = [...openBlock.nodes];
       if (openBlock.pageInfo?.hasNextPage && typeof openBlock.pageInfo?.endCursor === 'string') {
         const extraOpen = await paginateRepoIssues({
           execFile,
@@ -256,8 +277,13 @@ async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, e
           sinceIso,
           startCursor: openBlock.pageInfo.endCursor,
         });
-        for (const node of extraOpen) {
-          if (Number.isSafeInteger(node?.number) && node.number > 0) nums.push(node.number);
+        allOpenNodes.push(...extraOpen);
+      }
+      const nums = [];
+      for (const node of allOpenNodes) {
+        if (Number.isSafeInteger(node?.number) && node.number > 0) {
+          nums.push(node.number);
+          recordGraphqlReopenedEvents(reopenedEventsByIssue, lower, node);
         }
       }
       openIssueNumbers.push({ repo, issues: nums });
@@ -278,8 +304,11 @@ async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, e
         allClosedNodes.push(...extraClosed);
       }
       for (const node of allClosedNodes) {
-        if (Number.isSafeInteger(node?.number) && node.number > 0 && typeof node?.closedAt === 'string') {
-          closedIssues.push({ repo, issue: node.number, closedAt: node.closedAt });
+        if (Number.isSafeInteger(node?.number) && node.number > 0) {
+          recordGraphqlReopenedEvents(reopenedEventsByIssue, lower, node);
+          if (typeof node?.closedAt === 'string') {
+            closedIssues.push({ repo, issue: node.number, closedAt: node.closedAt });
+          }
         }
       }
     }
@@ -301,6 +330,7 @@ async function queryGithubMetricsBatch({ repos, prsByRepo, sinceIso, execFile, e
     closedIssues,
     prStates: prStates.length > 0 ? prStates : null,
     prMetaByKey,
+    reopenedEventsByIssue,
     online: true,
   };
 }
@@ -339,6 +369,7 @@ async function scanMergedRegressions({
   runs,
   prStates,
   prMetaByKey,
+  reopenedEventsByIssue,
   coreDirs,
   fs,
   gh,
@@ -394,12 +425,42 @@ async function scanMergedRegressions({
     }
   }
 
+  const earliestAt = list => {
+    const valid = list
+      .map(v => (typeof v === 'string' ? Date.parse(v) : NaN))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    return valid.length > 0 ? new Date(valid[0]).toISOString() : null;
+  };
+  const graphqlReopensFor = (repo, lower, candidate) => {
+    if (!reopenedEventsByIssue || reopenedEventsByIssue.size === 0) return [];
+    const mergedAtMs = Date.parse(candidate?.mergedAt ?? '');
+    if (!Number.isFinite(mergedAtMs)) return [];
+    const found = [];
+    for (const issueNum of candidate?.issues ?? []) {
+      const events = reopenedEventsByIssue.get(`${lower}#${issueNum}`) ?? [];
+      for (const ev of events) {
+        const atMs = Date.parse(ev.at);
+        if (Number.isFinite(atMs) && atMs > mergedAtMs && atMs <= untilMs) {
+          found.push({
+            kind: 'reopened',
+            level: 'proven',
+            at: ev.at,
+            url: `https://github.com/${repo}/issues/${issueNum}`,
+          });
+        }
+      }
+    }
+    return found;
+  };
+
   const regressions = [];
   let complete = true;
   for (const repo of targetRepos) {
     const lower = repo.toLowerCase();
     const candidates = [...(candidatesByRepo.get(lower)?.values() ?? [])];
     if (candidates.length === 0) continue;
+    const seenPrs = new Set();
     try {
       const scan = await scanner({
         root: coreDirs?.[lower] ?? null,
@@ -415,18 +476,35 @@ async function scanMergedRegressions({
       });
       if (scan?.complete === false) complete = false;
       for (const merge of Array.isArray(scan?.merges) ? scan.merges : []) {
-        const signals = Array.isArray(merge?.signals) ? merge.signals : [];
-        const reopened = signals.some(s => s?.kind === 'reopened');
-        const reverted = signals.some(s => s?.kind === 'revert' && s?.level === 'proven');
+        seenPrs.add(merge.pr);
+        const candidate = candidatesByRepo.get(lower)?.get(merge.pr) ?? null;
+        const rawSignals = Array.isArray(merge?.signals) ? merge.signals : [];
+        const gqlReopens = graphqlReopensFor(repo, lower, candidate);
+        const reopenedSignals = [
+          ...rawSignals.filter(s => s?.kind === 'reopened' && (s?.level === 'proven' || s?.level === undefined)),
+          ...gqlReopens,
+        ];
+        const revertedSignals = rawSignals.filter(s => s?.kind === 'revert' && s?.level === 'proven');
+        const referenceSignals = rawSignals.filter(s => s?.kind === 'reference' && s?.level === 'proven');
+        const reopened = reopenedSignals.length > 0;
+        const reverted = revertedSignals.length > 0;
         const regIssues = new Set();
-        for (const signal of signals) {
-          if (signal?.kind === 'reference' && signal?.level === 'proven') {
-            const num = extractIssueNumberFromSignal(signal);
-            if (Number.isSafeInteger(num) && num > 0) regIssues.add(num);
-          }
+        for (const signal of referenceSignals) {
+          const num = extractIssueNumberFromSignal(signal);
+          if (Number.isSafeInteger(num) && num > 0) regIssues.add(num);
         }
         if (reopened || reverted || regIssues.size > 0) {
-          const candidateIssues = candidatesByRepo.get(lower)?.get(merge.pr)?.issues ?? [];
+          const candidateIssues = candidate?.issues ?? [];
+          const normalizedSignals = [...reopenedSignals, ...revertedSignals, ...referenceSignals].map(s => ({
+            kind: s.kind,
+            level: s.level ?? 'proven',
+            at: typeof s.at === 'string' && Number.isFinite(Date.parse(s.at)) ? new Date(Date.parse(s.at)).toISOString() : null,
+            url: typeof s.url === 'string' ? s.url : null,
+          }));
+          const reopenedAt = earliestAt(reopenedSignals.map(s => s.at));
+          const revertedAt = earliestAt(revertedSignals.map(s => s.at));
+          const regressionIssueAt = earliestAt(referenceSignals.map(s => s.at));
+          const detectedAt = earliestAt([reopenedAt, revertedAt, regressionIssueAt]);
           regressions.push({
             repo,
             pr: merge.pr,
@@ -435,12 +513,35 @@ async function scanMergedRegressions({
             reopened,
             reverted,
             regressionIssues: [...regIssues].sort((a, b) => a - b),
+            ...(reopenedAt ? { reopenedAt } : {}),
+            ...(revertedAt ? { revertedAt } : {}),
+            ...(regressionIssueAt ? { regressionIssueAt } : {}),
+            ...(detectedAt ? { detectedAt } : {}),
+            ...(normalizedSignals.length > 0 ? { signals: normalizedSignals } : {}),
           });
         }
       }
     } catch {
       // Mark incomplete instead of silently reporting verified 0 (0.0%).
       complete = false;
+    }
+    // Preserve GraphQL REOPENED_EVENT signals for any merged candidate not returned by the REST scanner.
+    for (const candidate of candidates) {
+      if (seenPrs.has(candidate.pr)) continue;
+      const gqlReopens = graphqlReopensFor(repo, lower, candidate);
+      if (gqlReopens.length === 0) continue;
+      const reopenedAt = earliestAt(gqlReopens.map(s => s.at));
+      regressions.push({
+        repo,
+        pr: candidate.pr,
+        issue: candidate.issue ?? candidate.issues[0] ?? null,
+        issues: candidate.issues,
+        reopened: true,
+        reverted: false,
+        regressionIssues: [],
+        ...(reopenedAt ? { reopenedAt, detectedAt: reopenedAt } : {}),
+        signals: gqlReopens,
+      });
     }
   }
   return { regressions, complete };
@@ -517,8 +618,7 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
   }
 
   const resolvedTz = options['--timezone']
-    ?? Intl.DateTimeFormat().resolvedOptions().timeZone
-    ?? 'UTC';
+    ?? (options['--standup'] ? 'America/Los_Angeles' : (Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC'));
 
   const localState = readAutopilotMetricsState({
     repoFilter: validatedRepo,
@@ -542,6 +642,7 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
   let closedIssues = ports.closedIssues;
   let prStates = ports.prStates;
   let prMetaByKey = new Map();
+  let reopenedEventsByIssue = new Map();
   let githubOnline = ports.openIssues === undefined;
 
   if (ports.openIssues === undefined) {
@@ -558,6 +659,7 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
     closedIssues = closedIssues ?? fetched.closedIssues;
     prStates = prStates ?? fetched.prStates;
     prMetaByKey = fetched.prMetaByKey ?? new Map();
+    reopenedEventsByIssue = fetched.reopenedEventsByIssue ?? new Map();
     githubOnline = fetched.online;
   }
 
@@ -572,6 +674,7 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
         runs: localState.runs,
         prStates,
         prMetaByKey,
+        reopenedEventsByIssue,
         coreDirs: localState.coreDirs,
         fs,
         gh,
@@ -608,6 +711,7 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
       byRepo: Boolean(options['--repos']),
       repoFilter: validatedRepo,
       date: options['--date'] ?? null,
+      standup: Boolean(options['--standup']),
       timezone: resolvedTz,
       now: new Date(nowMs).toISOString(),
       recording: localState.config,
@@ -627,8 +731,8 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
       ? resolve(cwd, options['--file'])
       : join(autopilotStateRoot({ stateDir: ports.stateDir, env: effectiveEnv, home: ports.home }), 'metrics', 'pdd-metrics.html');
     try {
-      (fs.mkdirSync ?? mkdirSync)(dirname(outPath), { recursive: true, mode: 0o700 });
-      (fs.writeFileSync ?? writeFileSync)(outPath, renderMetricsHtml(report), 'utf8');
+      (fs.mkdirSync ?? nativeFs.mkdirSync)(dirname(outPath), { recursive: true, mode: 0o700 });
+      (fs.writeFileSync ?? nativeFs.writeFileSync)(outPath, renderMetricsHtml(report), 'utf8');
     } catch (err) {
       stderr.write(`Could not write HTML report to ${outPath}: ${err.message}\n`);
       return 1;
