@@ -2375,11 +2375,7 @@ function findExistingTryForFresh(cwd, words, rawOptions = {}, env = process.env,
           journeyPaths = [];
         }
         if (!journeyPaths.length && journey === undefined) {
-          if (words.length === 1) {
-            const normalized = normalizeSelectionWords(words, cwd, realRoot, found);
-            const selection = selectTests(found, normalized);
-            if (selection?.selected?.length === 1) target = selection.selected[0];
-          } else if (found.tests?.length === 1) {
+          if (found.tests?.length === 1) {
             target = found.tests[0];
           }
         } else {
@@ -2393,12 +2389,16 @@ function findExistingTryForFresh(cwd, words, rawOptions = {}, env = process.env,
           if (matched.length === 1) target = matched[0];
         }
       }
-      if (target && isPlainObject(tries[target.path])) {
-        return { story: null, product: true, title: target.title || target.story || 'this product' };
+      if (target) {
+        return isPlainObject(tries[target.path])
+          ? { story: words.length === 1 ? words[0] : null, product: true, title: target.title || target.story || 'this product' }
+          : null;
       }
-      const productEntries = Object.entries(tries).filter(([, value]) => isPlainObject(value?.product_setup));
-      if (productEntries.length === 1) {
-        return { story: null, product: true, title: 'this product' };
+      if (journey === undefined && words.length === 0) {
+        const productEntries = Object.entries(tries).filter(([, value]) => isPlainObject(value?.product_setup));
+        if (productEntries.length === 1) {
+          return { story: null, product: true, title: 'this product' };
+        }
       }
       return null;
     }
@@ -3073,8 +3073,13 @@ export async function runTry(input = {}, ports = {}) {
     if (!opts['--new'] && !isDirectProgramTarget) {
       const existing = findExistingTryForFresh(cwd, words, opts, forwardPorts.env ?? process.env, forwardPorts);
       if (existing) {
+        const productArgs = [
+          '--product',
+          ...(existing.story ? [existing.story] : []),
+          ...(typeof opts['--journey'] === 'string' && opts['--journey'] ? ['--journey', opts['--journey']] : []),
+        ].join(' ');
         const targetCmd = existing.product
-          ? 'pdd simulate --product --fresh --new'
+          ? `pdd simulate ${productArgs} --fresh --new`
           : `pdd simulate${existing.story ? ` ${existing.story}` : ''} --fresh --new`;
         stderr.write(
           `A Try for "${existing.title}" is already open. --fresh applies only to a new Try: run ${targetCmd} (it stops the open Try first).\n`,

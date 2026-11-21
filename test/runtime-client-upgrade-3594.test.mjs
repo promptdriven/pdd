@@ -885,14 +885,40 @@ test('#3594 R1 regressions: simulate --fresh --shell 0o600 single-session patch,
   assert.equal(screenPosts[0].json.fresh, true, 'openServe --fresh must inject fresh: true on Screen POSTs');
 });
 
-test('#3594 R2 regression: pdd simulate --product --fresh without --new fails closed when a product Try is already open', async t => {
-  const setup = harbor(t);
+test('#3594 R2/R3 regression: pdd simulate --product --fresh handles open, sibling, journey, and absent product Tries accurately', async t => {
+  // 0. When NO product Try is open, --product --fresh proceeds cleanly without false refusal.
+  const cleanSetup = harbor(t);
+  let cleanInvoked = false;
+  const cleanPorts = portsFor(
+    { HOME: cleanSetup.home, PDD_STATE_DIR: cleanSetup.state },
+    { runTry: async () => { cleanInvoked = true; return 0; } },
+  );
+  assert.equal(
+    await seam.simulate({ words: [], fresh: true, options: { '--product': true, '--no-wait': true }, cwd: cleanSetup.repo }, cleanPorts.ports),
+    0,
+    cleanPorts.ports.stderr.text,
+  );
+  assert.equal(cleanInvoked, true, '--product --fresh must proceed when no product Try is open');
+
+  const setup = harbor(t, repo => {
+    mkdirSync(join(repo, 'user_stories/journeys'), { recursive: true });
+    writeFileSync(
+      join(repo, 'user_stories/journeys/checkout.md'),
+      '# Checkout Journey\n\nI can place a coffee order.\n\n## Acceptance criteria\n\n1. Order succeeds.\n',
+    );
+    const baseTest = JSON.parse(readFileSync(join(repo, 'tests/place-order.json'), 'utf8'));
+    writeFileSync(
+      join(repo, 'tests/checkout.json'),
+      `${JSON.stringify({ ...baseTest, story_path: 'user_stories/journeys/checkout.md' }, null, 2)}\n`,
+    );
+  });
   const realRoot = realpathSync(setup.repo);
   const repoKey = createHash('sha256').update(realRoot).digest('hex').slice(0, 16);
   const reposDir = join(setup.state, 'repos');
   mkdirSync(reposDir, { recursive: true });
+  const repoStatePath = join(reposDir, `${repoKey}.json`);
   writeFileSync(
-    join(reposDir, `${repoKey}.json`),
+    repoStatePath,
     `${JSON.stringify({
       root: realRoot,
       last_batch: null,
@@ -907,38 +933,84 @@ test('#3594 R2 regression: pdd simulate --product --fresh without --new fails cl
     }, null, 2)}\n`,
   );
 
+  // 1. Explicit Story target `--product place-order --fresh` fails closed via resolved target branch and names the Story.
   let invokedTry = false;
+  const targetPorts = portsFor(
+    { HOME: setup.home, PDD_STATE_DIR: setup.state },
+    { runTry: async () => { invokedTry = true; return 0; } },
+  );
+  assert.equal(
+    await seam.simulate({ words: ['place-order'], fresh: true, options: { '--product': true, '--no-wait': true }, cwd: setup.repo }, targetPorts.ports),
+    2,
+    '--product place-order --fresh without --new must fail closed when place-order has an open Try',
+  );
+  assert.match(targetPorts.ports.stderr.text, /pdd simulate --product place-order --fresh --new/);
+  assert.equal(invokedTry, false);
+
+  // 2. Sibling Story target `--product unknown-item --fresh` (while place-order has an open product Try) MUST proceed cleanly!
+  let siblingInvoked = false;
+  const siblingPorts = portsFor(
+    { HOME: setup.home, PDD_STATE_DIR: setup.state },
+    { runTry: async () => { siblingInvoked = true; return 0; } },
+  );
+  assert.equal(
+    await seam.simulate({ words: ['unknown-item'], fresh: true, options: { '--product': true, '--no-wait': true }, cwd: setup.repo }, siblingPorts.ports),
+    0,
+    siblingPorts.ports.stderr.text,
+  );
+  assert.equal(siblingInvoked, true, '--product unknown-item --fresh must NOT be falsely refused by place-order open Try');
+
+  // 3. Explicit `--product --journey checkout --fresh` fails closed when checkout journey Try is open (and names --journey).
+  writeFileSync(
+    repoStatePath,
+    `${JSON.stringify({
+      root: realRoot,
+      last_batch: null,
+      tries: {
+        'tests/checkout.json': {
+          id: VALID_REQUEST_ID,
+          story: 'checkout',
+          storyPath: 'user_stories/journeys/checkout.md',
+          product_setup: { parts: null, journey: 'checkout' },
+        },
+      },
+    }, null, 2)}\n`,
+  );
+  let journeyInvoked = false;
+  const journeyPorts = portsFor(
+    { HOME: setup.home, PDD_STATE_DIR: setup.state },
+    { runTry: async () => { journeyInvoked = true; return 0; } },
+  );
+  assert.equal(
+    await seam.simulate({ words: [], fresh: true, options: { '--product': true, '--journey': 'checkout', '--no-wait': true }, cwd: setup.repo }, journeyPorts.ports),
+    2,
+    '--product --journey checkout --fresh without --new must fail closed when checkout journey Try is open',
+  );
+  assert.match(journeyPorts.ports.stderr.text, /pdd simulate --product --journey checkout --fresh --new/);
+  assert.equal(journeyInvoked, false);
+
+  // 4. Bare `--product --fresh` without --new fails closed when the unique open product Try matches, and `--new` proceeds.
+  let bareInvoked = false;
   const prodPorts = portsFor(
     { HOME: setup.home, PDD_STATE_DIR: setup.state },
-    {
-      runTry: async () => {
-        invokedTry = true;
-        return 0;
-      },
-    },
+    { runTry: async () => { bareInvoked = true; return 0; } },
   );
-  const code = await seam.simulate(
-    { words: [], fresh: true, options: { '--product': true, '--no-wait': true }, cwd: setup.repo },
-    prodPorts.ports,
+  assert.equal(
+    await seam.simulate({ words: [], fresh: true, options: { '--product': true, '--no-wait': true }, cwd: setup.repo }, prodPorts.ports),
+    2,
   );
-  assert.equal(code, 2, 'simulate --product --fresh without --new must fail closed when a product Try is already open');
   assert.match(prodPorts.ports.stderr.text, /pdd simulate --product --fresh --new/);
-  assert.equal(invokedTry, false, 'refused --product --fresh without --new must not invoke runtimeRunTry');
+  assert.equal(bareInvoked, false);
 
-  // With --new, --product --fresh passes the pre-check and reaches runtimeRunTry cleanly.
+  let newInvoked = false;
   const newProdPorts = portsFor(
     { HOME: setup.home, PDD_STATE_DIR: setup.state },
-    {
-      runTry: async () => {
-        invokedTry = true;
-        return 0;
-      },
-    },
+    { runTry: async () => { newInvoked = true; return 0; } },
   );
-  const newCode = await seam.simulate(
-    { words: [], fresh: true, options: { '--product': true, '--new': true, '--no-wait': true }, cwd: setup.repo },
-    newProdPorts.ports,
+  assert.equal(
+    await seam.simulate({ words: [], fresh: true, options: { '--product': true, '--new': true, '--no-wait': true }, cwd: setup.repo }, newProdPorts.ports),
+    0,
+    newProdPorts.ports.stderr.text,
   );
-  assert.equal(newCode, 0, newProdPorts.ports.stderr.text);
-  assert.equal(invokedTry, true, '--product --fresh --new must proceed to runtimeRunTry');
+  assert.equal(newInvoked, true, '--product --fresh --new must proceed to runtimeRunTry');
 });

@@ -844,7 +844,7 @@ registerHooks({
 
   // Every route local in PUBLIC_COMMAND_ROUTES must map to a probed switch arm.
   const coveredLocals = new Set([
-    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'prompt-approve',
+    'help', 'version', 'version-detailed', 'completion', 'setup', 'project-files', 'file-owner', 'update-sync', 'prompt-approve',
     'runtime-check', 'runtime-try', 'contracts', 'contracts-sync', 'runtime-jobs', 'mcp', 'metrics',
     'issue-dependency-graph', 'dependencies-prepare', 'dependencies-complete',
     'product-status', 'product-next', 'product-start',
@@ -877,6 +877,7 @@ registerHooks({
     ['cli:setup', [bin, 'setup', '--yes'], repo],
     ['cli:files', [bin, 'files', '--json'], repo],
     ['cli:owner', [bin, 'owner', 'prompts/a.prompt.md', '--json'], repo],
+    ['cli:update', [bin, 'update', 'prompts/a.prompt.md', '--json'], repo],
     ['cli:approve', [bin, 'approve', 'prompts/missing.prompt.md', '--said', 'ok'], repo],
     ['cli:test', [bin, 'test', 'a'], repo],
     ['cli:lint', [bin, 'lint', '--local'], repo],
@@ -915,15 +916,16 @@ registerHooks({
     ['lib:svg-layout.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/svg-layout.mjs')).href)})`], nonGit],
     ['lib:prompt-approve.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/prompt-approve.mjs')).href)})`], nonGit],
     ['lib:file-owner.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/file-owner.mjs')).href)})`], nonGit],
+    ['lib:update-sync.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/update-sync.mjs')).href)})`], nonGit],
     ['lib:agent-adapters.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/agent-adapters.mjs')).href)})`], nonGit],
     ['lib:product.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/product.mjs')).href)})`], nonGit],
     ['lib:autopilot-doctor.mjs', ['--input-type=module', '-e', `await import(${JSON.stringify(pathToFileURL(join(root, 'src/autopilot-doctor.mjs')).href)})`], nonGit],
   ];
 
   const ACYCLIC_ENTRIES = new Set([
-    'cli:--help', 'cli:owner', 'cli:files', 'cli:approve',
+    'cli:--help', 'cli:owner', 'cli:update', 'cli:files', 'cli:approve',
     'child:workflow-replay-selector', 'lib:svg-layout.mjs', 'lib:prompt-approve.mjs',
-    'lib:file-owner.mjs', 'lib:agent-adapters.mjs',
+    'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const ZERO_SRC_ENTRIES = new Set([
     'child:scripts/autopilot-smoke.mjs',
@@ -931,10 +933,10 @@ registerHooks({
   ]);
   const LIGHT_ENTRIES = new Set([
     'cli:--help', 'cli:help-topic', 'cli:--version', 'cli:completion',
-    'cli:files', 'cli:owner', 'cli:approve', 'cli:workflow-list',
+    'cli:files', 'cli:owner', 'cli:update', 'cli:approve', 'cli:workflow-list',
     'cli:jobs', 'cli:contracts', 'cli:contracts-sync', 'cli:simulate', 'cli:mcp',
     'child:workflow-replay-selector', 'child:try-doors-launcher',
-    'lib:svg-layout.mjs', 'lib:prompt-approve.mjs', 'lib:file-owner.mjs', 'lib:agent-adapters.mjs',
+    'lib:svg-layout.mjs', 'lib:prompt-approve.mjs', 'lib:file-owner.mjs', 'lib:update-sync.mjs', 'lib:agent-adapters.mjs',
   ]);
   const HEAVY_ORCHESTRATORS = new Set([
     'src/workflow-runner.mjs',
