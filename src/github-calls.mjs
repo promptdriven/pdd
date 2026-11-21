@@ -1,4 +1,4 @@
-// Generated from prompts/cli/github-calls.prompt.md (sha256: 0f7266eabf6a935883bcb542a1a1e4608121932d622abc73d438a2326202458b).
+// Generated from prompts/cli/github-calls.prompt.md (sha256: f7d2b6719962a8062493f1bbd1a90c0e0345c4276056cdab41e4e2318c64da76).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -160,18 +160,36 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
 export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, costRun, costRecord = recordCostGithub } = {}) {
+  const commonDirCache = new Map();
+  const costRunCache = new Map();
   const findCostRun = costRun ?? (async options => {
-    if (typeof options.cwd !== 'string' || !fs.existsSync(join(options.cwd, '.git'))) return null;
-    const result = await exec('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: options.cwd });
-    const folder = join(String(result.stdout).trim(), 'pdd', 'runs');
-    let names; try { names = fs.readdirSync(folder); } catch { return null; }
-    for (const name of names.filter(name => /^[1-9][0-9]*$/.test(name))) {
-      try {
-        const run = JSON.parse(fs.readFileSync(join(folder, name, 'status.json'), 'utf8'));
-        if (run.root && resolve(run.root) === resolve(options.cwd)) return run.runDir;
-      } catch {}
-    }
-    return null;
+    if (typeof options.cwd !== 'string' || !options.cwd) return null;
+    const cwd = resolve(options.cwd);
+    if (costRunCache.has(cwd)) return costRunCache.get(cwd);
+    if (!fs.existsSync(join(cwd, '.git'))) return null;
+    const lookup = (async () => {
+      let commonDirPromise = commonDirCache.get(cwd);
+      if (!commonDirPromise) {
+        commonDirPromise = exec('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd })
+          .then(result => String(result.stdout).trim());
+        commonDirCache.set(cwd, commonDirPromise);
+      }
+      let commonDir;
+      try { commonDir = await commonDirPromise; }
+      catch (error) { commonDirCache.delete(cwd); throw error; }
+      const folder = join(commonDir, 'pdd', 'runs');
+      let names; try { names = fs.readdirSync(folder); } catch { return null; }
+      for (const name of names.filter(name => /^[1-9][0-9]*$/.test(name))) {
+        try {
+          const run = JSON.parse(fs.readFileSync(join(folder, name, 'status.json'), 'utf8'));
+          if (run.root && resolve(run.root) === cwd) return run.runDir;
+        } catch {}
+      }
+      return null;
+    })();
+    costRunCache.set(cwd, lookup);
+    try { return await lookup; }
+    catch (error) { costRunCache.delete(cwd); throw error; }
   });
   const countedExec = async (file, args, options = {}) => {
     let result, failure, failed = false;

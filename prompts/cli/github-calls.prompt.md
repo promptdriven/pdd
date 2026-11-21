@@ -233,7 +233,7 @@ a new entry changes its body, or GitHub serves the saved next page.
 
 ## Per-run cost attribution
 
-`nativeGithubCounter` also accepts `costRun(options)` and `costRecord(runDir, entry)` ports. After each gh call, resolve the run from options (production: the exact run worktree in `options.cwd`, found by its Git common dir). Append the numeric call through `recordCostGithub` even for normal runs without an Autopilot ledger. Keep the original result/error if resolution or recording fails. Never allocate a repository-wide call to overlapping issues.
+`nativeGithubCounter` also accepts `costRun(options)` and `costRecord(runDir, entry)` ports. After each gh call, resolve the run from options (production: the exact run worktree in `options.cwd`, found by its Git common dir). The default lookup memoizes both the `git rev-parse --path-format=absolute --git-common-dir` result and the resolved `cwd -> runDir` lookup per counter instance (keyed by resolved `options.cwd`), without caching missing/non-string `cwd`, directories lacking `.git`, or failed lookups; an injected `costRun` port runs directly unchanged. Append the numeric call through `recordCostGithub` even for normal runs without an Autopilot ledger. Keep the original result/error if resolution or recording fails. Never allocate a repository-wide call to overlapping issues.
 
 ## Dependencies
 

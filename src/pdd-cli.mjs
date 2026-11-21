@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: a168765f10632ae9ca05bb997a9461671da845bc576d4b328b1eb5f807d892e0).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 1cd6f9cd515616d43e96276188d8f70ad5fb25d036da21d1f9855288d767f9ea).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -170,7 +170,7 @@ const RUNNER_ROUTES = {
   'workflow-changes': plan => ['changeRun', { ref: plan.operands[0], text: plan.operands.slice(1).join(' ') }],
   'workflow-tidy': plan => ['tidyRuns', { dryRun: Boolean(plan.options['--dry-run']) }],
   'workflow-cancel': plan => ['cancelRun', { ref: plan.operands[0] }],
-  'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
+  'workflow-status': plan => ['runStatus', { ref: plan.operands[0], ...Object.fromEntries(['all', 'cancelled', 'json', 'local'].filter(name => plan.options[`--${name}`]).map(name => [name, true])) }],
   'workflow-open': plan => ['openRun', { ...profileOptions(plan), ref: plan.operands[0], ...(plan.operands[1] !== undefined ? { area: plan.operands[1] } : {}), ...(plan.options['--new'] ? { newSession: true } : {}) }],
 };
 const packageLines = packageRoot => PUBLIC_HELP_TEXT.learnLines.map(line => line.replace('PACKAGE_ROOT', () => packageRoot));

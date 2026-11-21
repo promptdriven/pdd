@@ -306,8 +306,10 @@ absence. An absent chat needs no screen capture because no close is sent.
 Export `paneUsage(ports)` returning `{panes,budget}` from one complete session-wide
 pane list (an optional `onPaneUsage(rows)` receives that complete inventory), and `ensurePaneBudget(need, ports)` returning that shape plus `closed`.
 `PDD_HERDR_PANE_BUDGET` is a nonnegative safe integer, default 56; 0 disables the
-limit. Count all panes, including personal panes. Before allocation, sweep normal
-finished chats through the supplied `sweepFinished` callback and idle automatic chats through the optional `sweepIdle` callback (60-second grace). On pressure sweep finished chats and then idle chats with zero grace and `need`, oldest first in each class, then recount. The runner owns idle classification and safe parking; this module only requests reclamation. If it still cannot fit, throw
+limit. Count all panes, including personal panes. Check `paneUsage` first: when the
+budget is disabled (`0`) or `panes + need <= budget`, return at once without calling
+`sweepFinished` or `sweepIdle`. Only when `budget > 0` and `panes + need > budget`,
+sweep normal finished chats locally through `sweepFinished({graceMs: 15 * 60_000, need, localOnly: true})`, recount, and if still over budget sweep idle automatic chats through `sweepIdle({graceMs: 60_000, need})` and recount. If still over budget, escalate to zero-grace sweeps (`sweepFinished({graceMs: 0, need})`, recount, and if still over budget `sweepIdle({graceMs: 0, need})`, recount), oldest first in each class. The runner owns idle classification and safe parking; this module only requests reclamation. If it still cannot fit, throw
 `herdr_pane_budget` with count, budget, need, cleanup count, the caller-supplied `describePaneOwners(rows)` breakdown of saved run chats, run shells and other panes, and an action to close
 unused tabs or raise the variable. Unknown Herdr allocation failures include the
 observed pane count. Open, rebuild, start and replacement check before creating
@@ -402,7 +404,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"55e6022a775dc56248335df6a0885ab79dc6b7fc71ff4e93ba9d2fae9b313b45","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"6f81ca940c595d3a4f0b6d517c4fc12e7cc49b6f54006e155cee11fee7e1efa6","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
