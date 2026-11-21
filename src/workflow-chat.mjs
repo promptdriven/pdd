@@ -837,14 +837,50 @@ const warningReason = error => {
   return !rest || rest === code ? code : `${code}: ${rest}`;
 };
 // The durable close mark is shared with automatic stopped-chat recovery (#3068).
+export const DEFAULT_CLOSE_GRACE_MS = 15 * 60_000;
+export function closeGraceMs(ports = {}) {
+  const value = (ports.env ?? process.env).PDD_HERDR_CLOSE_GRACE_SEC;
+  if (value === undefined) return DEFAULT_CLOSE_GRACE_MS;
+  const seconds = typeof value === 'string' && /^[0-9]+$/.test(value) ? Number(value) : NaN;
+  const ms = seconds * 1000;
+  if (!Number.isSafeInteger(seconds) || seconds < 0 || !Number.isSafeInteger(ms))
+    throw problem('invalid_close_grace', 'PDD_HERDR_CLOSE_GRACE_SEC must be a nonnegative integer (seconds).');
+  return ms;
+}
 const endedRun = run => ['completed', 'cancelled'].includes(run.state);
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i;
+function mergedTimestamp(run, chat) {
+  if (run.state !== 'completed') return null;
+  const prs = run.pr ?? [];
+  const maxMerged = list => {
+    let latest = -Infinity;
+    for (const pr of list) {
+      if (pr?.state !== 'merged' || typeof pr.mergedAt !== 'string' || !ISO_TIMESTAMP.test(pr.mergedAt)) continue;
+      const ms = Date.parse(pr.mergedAt);
+      if (Number.isFinite(ms) && ms > latest) latest = ms;
+    }
+    return Number.isFinite(latest) ? latest : null;
+  };
+  if (typeof chat?.area === 'string' && chat.area) {
+    const areaMergedPrs = prs.filter(pr => pr?.state === 'merged' && (pr?.stage === chat.area || pr?.area === chat.area));
+    if (areaMergedPrs.length) return maxMerged(areaMergedPrs);
+  }
+  return maxMerged(prs);
+}
 export function finishedChats(run) {
   const chats = run.chats ?? [], current = [...chats].reverse().find(chat => chat.area === run.areas?.[run.area]?.name);
   return chats.filter(chat => endedRun(run) || chat !== current);
 }
 export function finishedAt(run, chat) {
-  return chat.endedAt ?? (endedRun(run) ? run.cancelled?.at ?? run.updatedAt :
-    (run.chats ?? []).find(next => next.startedAt > chat.startedAt)?.startedAt) ?? run.updatedAt ?? run.startedAt;
+  if (Number.isFinite(chat.endedAt)) return chat.endedAt;
+  if (endedRun(run)) {
+    const mergedAt = mergedTimestamp(run, chat);
+    if (mergedAt !== null
+      && (!Number.isFinite(chat.startedAt) || mergedAt >= chat.startedAt)
+      && (!Number.isFinite(run.updatedAt) || mergedAt <= run.updatedAt)) return mergedAt;
+    return run.cancelled?.at ?? run.updatedAt ?? run.startedAt;
+  }
+  return (run.chats ?? []).find(next => next.startedAt > chat.startedAt)?.startedAt ?? run.updatedAt ?? run.startedAt;
 }
 
 export async function paneUsage(ports = {}) {
@@ -860,13 +896,14 @@ export async function paneUsage(ports = {}) {
   return {panes: panes.length, budget};
 }
 export async function ensurePaneBudget(need, ports = {}) {
+  const graceMs = closeGraceMs(ports);
   let closed = 0;
   const retained = {};
   const sweep = async (kind, options) => {
     const result = await ports[kind](options);
     retained[kind] = result?.reasonCounts ?? {}; closed += result?.closed ?? 0;
   };
-  if (ports.sweepFinished) await sweep('sweepFinished', {graceMs: 15 * 60_000});
+  if (ports.sweepFinished) await sweep('sweepFinished', {graceMs});
   if (ports.sweepIdle) await sweep('sweepIdle', {graceMs: 60_000});
   let rows;
   const countPorts = {...ports,onPaneUsage:value=>{rows=value;ports.onPaneUsage?.(value);}};
@@ -906,6 +943,7 @@ export const mergeReasonCounts = (...groups) => groups.reduce((counts, group) =>
 export const reasonWords = counts => Object.entries(counts).sort(([a],[b]) => a.localeCompare(b)).map(([reason,count]) => `${reason} ${count}`).join(', ') || 'none';
 
 export async function closeFinishedChats(run, ports = {}) {
+  const defaultGrace = ports.force ? 0 : ports.graceMs ?? closeGraceMs(ports);
   const herdr = herdrCommand(ports), now = ports.now ?? Date.now, warnings = [], kept = [];
   let closed = 0;
   const checkpoint = async chat => {
@@ -970,7 +1008,7 @@ export async function closeFinishedChats(run, ports = {}) {
     const keep = reason => kept.push({area: chat.area, reason});
     try {
       if (chat.paneId === (ports.env ?? process.env).HERDR_PANE_ID) { keep('caller-pane'); continue; }
-      const grace = ports.force ? 0 : ports.graceMs ?? 15 * 60_000, end = finishedAt(run, chat);
+      const grace = defaultGrace, end = finishedAt(run, chat);
       if (!ports.force && !chat.closed && (!Number.isFinite(end) || now() < Math.max(end, chat.openedAt ?? 0) + grace)) { keep('grace'); continue; }
       const workspaces = await inventory('workspace'), workspace = workspaces.find(w => w.workspace_id === chat.workspaceId);
       if (!workspace) {
@@ -1053,7 +1091,7 @@ export async function closeFinishedChats(run, ports = {}) {
       chat.closed.confirmedAt = now(); await checkpoint(chat);
       closed++;
     } catch (error) {
-      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
+      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused','invalid_close_grace'].includes(error.code)) throw error;
       keep(error.code ?? 'cleanup-unavailable'); warnings.push(`warning: Herdr kept ${chat.area} (${warningReason(error)}).`);
     }
   }
@@ -1083,7 +1121,7 @@ export async function closeFinishedChats(run, ports = {}) {
         await ports.checkpoint(null, run.layout);
       }
     } catch (error) {
-      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
+      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused','invalid_close_grace'].includes(error.code)) throw error;
       kept.push({area:'run shell', reason:error.code ?? 'cleanup-unavailable'});
       warnings.push(`warning: the run workspace stays open (${warningReason(error)}).`);
     }
@@ -1095,7 +1133,7 @@ export async function closeFinishedChats(run, ports = {}) {
         {command: herdr, env: ports.env, force: ports.force && ports.reason !== 'park', beforeClose: ports.beforeClose, checkpoint: async () => { if (ports.checkpoint) await ports.checkpoint(null, custody); }, directory: ports.layoutDirectory}),
       {directory: ports.layoutDirectory});
     } catch (error) {
-      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused'].includes(error.code)) throw error;
+      if (['workflow_run_save_failed','checkpoint_required','workflow_progress_refused','invalid_close_grace'].includes(error.code)) throw error;
       kept.push({area:'run shell', reason:error.code ?? 'cleanup-unavailable'});
       warnings.push(`warning: the run workspace stays open (${warningReason(error)}).`);
     }
