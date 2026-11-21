@@ -2,11 +2,13 @@ import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRunResults, resultLines, usableResult } from '../src/workflow-results.mjs';
+import { runtimeLines } from '../src/workflow-runner.mjs';
 import * as seam from '../src/runtime-seam.mjs';
+import { runPdd } from '../src/pdd-cli.mjs';
 import { SHORT_SCENARIO_SCHEMA, V1_SCENARIO_SCHEMA } from '../src/scenario-compile.mjs';
 import { fakeRuntime, portsFor } from './helpers/runtime-fake.mjs';
 
@@ -172,6 +174,7 @@ test('3611: aggregates disjoint current pdd test batches into one result preserv
   assert.equal(res.source, 'current');
   assert.equal(res.sourceSha256, SHA_AB);
   assert.deepEqual(res.tests, ['tests/a.json', 'tests/b.json']);
+  assert.deepEqual(res.sourceTests, ['tests/a.json', 'tests/b.json']);
   assert.deepEqual(res.states.map(s => [s.test, s.state]), [
     ['tests/a.json', 'passed'],
     ['tests/b.json', 'passed'],
@@ -182,17 +185,27 @@ test('3611: aggregates disjoint current pdd test batches into one result preserv
     'Prompt tests (a): ✓ 2 of 2 criteria',
     'Prompt tests (b): ✓ 3 of 3 criteria',
   ]);
-  assert.equal(res.summary, 'Prompt tests: 2/2 passed; tests/a.json: passed; tests/b.json: passed');
+  assert.equal(res.summary, 'Prompt tests: ✓ · 2 passed; tests/a.json: passed; tests/b.json: passed');
   assert.equal(res.engine, 'bbbb11112222');
   assert.equal(res.model, 'newest-model');
   assert.equal(usableResult(res), true);
+  assert.deepEqual(
+    runtimeLines(res.summary).map(entry => ({ result: entry.result, pass: entry.pass })),
+    [{ result: '✓ · 2 passed', pass: true }],
+  );
 
   const [line] = resultLines(results);
-  assert.ok(line.includes('Prompt tests: 2/2 passed'));
+  assert.ok(line.includes('Prompt tests: ✓ · 2 passed'));
   assert.ok(line.includes('Prompt tests (a): ✓ 2 of 2 criteria'));
   assert.ok(line.includes('Prompt tests (b): ✓ 3 of 3 criteria'));
   assert.ok(line.includes(reqA) && line.includes(reqB));
-  assert.ok(line.includes(repA) && line.includes(repB));
+  assert.deepEqual(
+    line.split('; ').filter(part => part.startsWith('Report: ')),
+    [
+      `Report: ${repA} (report links expire after 7 days)`,
+      `Report: ${repB} (report links expire after 7 days)`,
+    ],
+  );
 });
 
 test('3611: latest current verdict always wins per test so regressions are never hidden by earlier passes', t => {
@@ -249,8 +262,8 @@ test('3611: latest current verdict always wins per test so regressions are never
     ['tests/a.json', 'failed'],
     ['tests/b.json', 'passed'],
   ]);
-  assert.ok(res.summary.startsWith('Prompt tests: no full pass;'));
-  assert.ok(!res.summary.includes('2/2 passed'));
+  assert.ok(res.summary.startsWith('Prompt tests: ✗ no full pass;'));
+  assert.ok(!res.summary.includes('✓'));
   assert.ok(res.stories.includes('Prompt tests (b): ✓ 2 of 2 criteria'));
   assert.ok(res.stories.includes('Prompt tests (a): ✗ 0 of 1 criterion'));
   assert.ok(!res.stories.includes('Prompt tests (a): ✓ 1 of 1 criterion'));
@@ -327,7 +340,11 @@ test('3611: fail-closed staleness, partial newest batch, stage isolation, and af
       ['tests/b.json', 'sent'],
     ]);
     assert.ok(runningRes.summary.startsWith('Prompt tests: no full pass;'));
-    assert.deepEqual(runningRes.stories, ['Prompt tests (a): ✓ 1 of 1 criterion']);
+    assert.ok(!runningRes.summary.includes('✓') && !runningRes.summary.includes('✗'));
+    assert.deepEqual(runningRes.stories, [
+      'Prompt tests (a): ✓ 1 of 1 criterion',
+      'Prompt tests (b): sent (awaiting-server-verdict)',
+    ]);
 
     // Partial/unknown newest batch also keeps usableResult === false
     f.writeBatch('20261110-120000-bbbb', {
@@ -342,7 +359,10 @@ test('3611: fail-closed staleness, partial newest batch, stage isolation, and af
     ]);
     assert.ok(partialRes.summary.startsWith('Prompt tests: no full pass;'));
     assert.equal(usableResult(partialRes), false);
-    assert.deepEqual(partialRes.stories, ['Prompt tests (a): ✓ 1 of 1 criterion']);
+    assert.deepEqual(partialRes.stories, [
+      'Prompt tests (a): ✓ 1 of 1 criterion',
+      'Prompt tests (b): partial (no-server-verdict)',
+    ]);
   }
 
   // 4. Historical PR 1 batch must NOT merge into current-stage batch
@@ -390,6 +410,269 @@ test('3611: fail-closed staleness, partial newest batch, stage isolation, and af
     assert.equal(res.batch, '20261110-120000-bbbb');
     assert.deepEqual(res.tests, ['tests/b.json']);
     assert.ok(res.summary.includes('Affected checks only'));
+  }
+});
+
+test('3611 R1: split-Story pass suppression, missing-summary synthesis, fail-closed capture, nativeOnly/sourceTests, runId isolation, stage normalization, and UTF-16 order', t => {
+  // P0-2a: Split-Story (checkout.a failed + checkout.b passed) must NOT emit ✓ for checkout
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch(
+      '20261110-110000-aaaa',
+      {
+        created_at: '2026-11-10T11:00:00Z',
+        source_sha256: SHA_A,
+        rows: [{ test: 'tests/checkout.a.json', story: 'user_stories/checkout.md', state: 'failed' }],
+      },
+      {
+        summary_line: 'Prompt tests: ✗ 0 of 1 criterion',
+        rows: [{ test: 'tests/checkout.a.json', story: 'user_stories/checkout.md', summary_line: 'Prompt tests (checkout): ✗ 0 of 1 criterion' }],
+      },
+    );
+    f.writeBatch(
+      '20261110-120000-bbbb',
+      {
+        created_at: '2026-11-10T12:00:00Z',
+        source_sha256: SHA_B,
+        rows: [{ test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', state: 'passed' }],
+      },
+      {
+        summary_line: 'Prompt tests: ✓ 1 of 1 criterion',
+        rows: [{ test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', summary_line: 'Prompt tests (checkout): ✓ 1 of 1 criterion' }],
+      },
+    );
+    const capture = (_root, { tests }) => {
+      const key = [...tests].sort().join(',');
+      if (key === 'tests/checkout.a.json') return { sha256: SHA_A };
+      if (key === 'tests/checkout.b.json') return { sha256: SHA_B };
+      if (key === 'tests/checkout.a.json,tests/checkout.b.json') return { sha256: SHA_AB };
+      throw new Error(`unexpected selection: ${key}`);
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture });
+    assert.ok(res.summary.startsWith('Prompt tests: ✗ no full pass;'));
+    assert.ok(!res.stories.some(line => line.includes('✓')), `split-Story must not emit ✓: ${JSON.stringify(res.stories)}`);
+    assert.deepEqual(res.stories, ['Prompt tests (checkout): ✗ 0 of 1 criterion']);
+    const parsed = runtimeLines(res.stories.join('\n'));
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].story, 'checkout');
+    assert.equal(parsed[0].pass, false);
+  }
+
+  // P0-2b: Missing summary.json on failing batch synthesizes non-passing per-Story line
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch(
+      '20261110-110000-aaaa',
+      {
+        created_at: '2026-11-10T11:00:00Z',
+        source_sha256: SHA_A,
+        rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', state: 'passed' }],
+      },
+      {
+        summary_line: 'Prompt tests: ✓ 1 of 1 criterion',
+        rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', summary_line: 'Prompt tests (a): ✓ 1 of 1 criterion' }],
+      },
+    );
+    f.writeBatch(
+      '20261110-120000-bbbb',
+      {
+        created_at: '2026-11-10T12:00:00Z',
+        source_sha256: SHA_B,
+        rows: [{ test: 'tests/b.json', story: 'user_stories/b.md', state: 'failed' }],
+      },
+    );
+    const capture = (_root, { tests }) => {
+      const key = [...tests].sort().join(',');
+      if (key === 'tests/a.json') return { sha256: SHA_A };
+      if (key === 'tests/b.json') return { sha256: SHA_B };
+      return { sha256: SHA_AB };
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture });
+    assert.ok(res.summary.startsWith('Prompt tests: ✗ no full pass;'));
+    assert.deepEqual(res.stories, [
+      'Prompt tests (a): ✓ 1 of 1 criterion',
+      'Prompt tests (b): ✗ · failed (check-failed)',
+    ]);
+    const parsed = runtimeLines(res.stories.join('\n'));
+    assert.deepEqual(
+      parsed.map(p => [p.story, p.pass, p.result.includes('✗')]),
+      [
+        ['a', true, false],
+        ['b', false, true],
+      ],
+    );
+  }
+
+  // P1-4a: Combined capture failure fails closed to newest single batch (never merged tests + single-batch hash)
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch('20261110-110000-aaaa', {
+      created_at: '2026-11-10T11:00:00Z',
+      source_sha256: SHA_A,
+      rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', state: 'passed' }],
+    }, { summary_line: 'Prompt tests: ✓ a' });
+    f.writeBatch('20261110-120000-bbbb', {
+      created_at: '2026-11-10T12:00:00Z',
+      source_sha256: SHA_B,
+      rows: [{ test: 'tests/b.json', story: 'user_stories/b.md', state: 'passed' }],
+    }, { summary_line: 'Prompt tests: ✓ b' });
+    const captureThrowsCombined = (_root, { tests }) => {
+      const key = [...tests].sort().join(',');
+      if (key === 'tests/a.json') return { sha256: SHA_A };
+      if (key === 'tests/b.json') return { sha256: SHA_B };
+      throw new Error('combined capture failed');
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture: captureThrowsCombined });
+    assert.equal(res.batch, '20261110-120000-bbbb');
+    assert.equal(res.source, 'current');
+    assert.equal(res.sourceSha256, SHA_B);
+    assert.deepEqual(res.tests, ['tests/b.json']);
+  }
+
+  // P1-4b: sourceTests filters to wonTests (excluding native_only/unsent), nativeOnly preserved from earlier batch, nativeSource filtered + fail-closed
+  {
+    const f = makeResultsFixture(t);
+    const nativeSha = '9'.repeat(64);
+    f.writeBatch('20261110-110000-aaaa', {
+      created_at: '2026-11-10T11:00:00Z',
+      source_sha256: SHA_A,
+      source_selection: { tests: ['tests/a.json'], exclude_fixture_projects: true },
+      native_source: { tests: ['tests/n.json'], sha256: nativeSha },
+      rows: [
+        { state: 'passed' },
+        { test: '', state: 'passed' },
+        { test: 'tests/a.json', story: 'user_stories/a.md', state: 'passed' },
+        { test: 'tests/n.json', story: 'user_stories/n.md', state: 'not_run', unsent: true, native_only: [{ path: 'prompts/native.prompt.md', reason: 'native only reason' }] },
+      ],
+    }, {
+      summary_line: 'Prompt tests: ✓ a',
+      rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', summary_line: 'Prompt tests (a): ✓ 1 of 1 criterion' }],
+    });
+    f.writeBatch('20261110-120000-bbbb', {
+      created_at: '2026-11-10T12:00:00Z',
+      source_sha256: SHA_B,
+      source_selection: { tests: ['tests/b.json'], exclude_fixture_projects: false },
+      rows: [{ test: 'tests/b.json', story: 'user_stories/b.md', state: 'passed' }],
+    }, {
+      summary_line: 'Prompt tests: ✓ b',
+      rows: [{ test: 'tests/b.json', story: 'user_stories/b.md', summary_line: 'Prompt tests (b): ✓ 1 of 1 criterion' }],
+    });
+    const seenSelections = [];
+    const capture = (_root, sel) => {
+      seenSelections.push(sel);
+      const key = [...sel.tests].sort().join(',');
+      if (key === 'tests/a.json') return { sha256: SHA_A };
+      if (key === 'tests/b.json') return { sha256: SHA_B };
+      if (key === 'tests/n.json') return { sha256: nativeSha };
+      if (key === 'tests/a.json,tests/b.json') return { sha256: SHA_AB };
+      throw new Error(`unexpected selection: ${key}`);
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture });
+    assert.equal(res.source, 'current');
+    assert.equal(res.sourceSha256, SHA_AB);
+    assert.deepEqual(res.tests, ['tests/a.json', 'tests/b.json', 'tests/n.json']);
+    assert.deepEqual(res.sourceTests, ['tests/a.json', 'tests/b.json']);
+    assert.equal(res.excludeFixtureProjects, false);
+    assert.deepEqual(res.nativeSource, { tests: ['tests/n.json'], sha256: nativeSha });
+    assert.deepEqual(res.nativeOnly, [
+      { test: 'tests/n.json', state: 'not_run', prompts: [{ path: 'prompts/native.prompt.md', reason: 'native only reason' }] },
+    ]);
+    assert.ok(seenSelections.some(s => s.tests.join(',') === 'tests/a.json,tests/b.json' && s.excludeFixtureProjects === false));
+  }
+
+  // P1-5: Registered association.runId batches NEVER merge; unassociated same-worktree normalizes to stage 'current'
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch('20261110-110000-aaaa', {
+      created_at: '2026-11-10T11:00:00Z',
+      source_sha256: SHA_A,
+      association: { runId: 'run-1', stage: 'current' },
+      rows: [{ test: 'tests/a.json', state: 'passed' }],
+    }, { summary_line: 'Prompt tests: ✓ a' });
+    f.writeBatch('20261110-120000-bbbb', {
+      created_at: '2026-11-10T12:00:00Z',
+      source_sha256: SHA_B,
+      association: { runId: 'run-1', stage: 'current' },
+      rows: [{ test: 'tests/b.json', state: 'passed' }],
+    }, { summary_line: 'Prompt tests: ✓ b' });
+    const workspace = req => ({
+      state: 'eligible',
+      runId: 'run-1',
+      repo: 'example/repo',
+      producerRoot: f.root,
+      tests: req.tests,
+      source_sha256: req.source_sha256,
+      stage: 'current',
+      sourceAnchor: { root: f.root, head: '1'.repeat(40) },
+    });
+    const capture = (_root, { tests }) => ({ sha256: tests[0] === 'tests/a.json' ? SHA_A : SHA_B });
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, workspace, capture });
+    assert.equal(res.batch, '20261110-120000-bbbb');
+    assert.equal(res.association?.runId, 'run-1');
+    assert.deepEqual(res.tests, ['tests/b.json']);
+  }
+  {
+    // Unassociated same-worktree batch (workspace returns ineligible -> association = null) merges with same-worktree current stage batch (no runId)
+    const f = makeResultsFixture(t);
+    f.writeBatch('20261110-110000-aaaa', {
+      created_at: '2026-11-10T11:00:00Z',
+      source_sha256: SHA_A,
+      source_selection: { tests: ['tests/a.json'], exclude_fixture_projects: false },
+      rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', state: 'passed' }],
+    }, {
+      summary_line: 'Prompt tests: ✓ a',
+      rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', summary_line: 'Prompt tests (a): ✓ 1 of 1 criterion' }],
+    });
+    f.writeBatch('20261110-120000-bbbb', {
+      created_at: '2026-11-10T12:00:00Z',
+      source_sha256: SHA_B,
+      rows: [{ test: 'tests/b.json', story: 'user_stories/b.md', state: 'passed' }],
+    }, {
+      summary_line: 'Prompt tests: ✓ b',
+      rows: [{ test: 'tests/b.json', story: 'user_stories/b.md', summary_line: 'Prompt tests (b): ✓ 1 of 1 criterion' }],
+    });
+    const workspace = req => req.tests.includes('tests/a.json')
+      ? { state: 'ineligible' }
+      : { state: 'eligible', stage: 'current', sourceAnchor: { root: f.root, head: '1'.repeat(40) } };
+    const capture = (_root, { tests }) => {
+      const key = [...tests].sort().join(',');
+      if (key === 'tests/a.json') return { sha256: SHA_A };
+      if (key === 'tests/b.json') return { sha256: SHA_B };
+      return { sha256: SHA_AB };
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, workspace, capture });
+    assert.equal(res.source, 'current');
+    assert.deepEqual(res.tests, ['tests/a.json', 'tests/b.json']);
+  }
+
+  // P2-8: Deterministic UTF-16 code-unit sort matches tests.sort() on mixed-case and punctuation paths
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch('20261110-110000-aaaa', {
+      created_at: '2026-11-10T11:00:00Z',
+      source_sha256: SHA_A,
+      rows: [
+        { test: 'tests/a_1.json', state: 'passed' },
+        { test: 'tests/a.json', state: 'passed' },
+      ],
+    });
+    f.writeBatch('20261110-120000-bbbb', {
+      created_at: '2026-11-10T12:00:00Z',
+      source_sha256: SHA_B,
+      rows: [
+        { test: 'tests/a-1.json', state: 'passed' },
+        { test: 'tests/A.json', state: 'passed' },
+      ],
+    });
+    const capture = (_root, { tests }) => {
+      const key = [...tests].sort().join(',');
+      if (key === 'tests/a.json,tests/a_1.json') return { sha256: SHA_A };
+      if (key === 'tests/A.json,tests/a-1.json') return { sha256: SHA_B };
+      return { sha256: SHA_AB };
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture });
+    assert.deepEqual(res.tests, ['tests/A.json', 'tests/a-1.json', 'tests/a.json', 'tests/a_1.json']);
+    assert.deepEqual(res.states.map(s => s.test), res.tests);
   }
 });
 
@@ -444,37 +727,66 @@ test('runtime-client#101 Part 1: compact Short JSON expanding > 1000 v1 lines em
   const pfOversized = pf.warnings.filter(w => w.includes('oversized Story'));
   assert.deepEqual(pfOversized, [], `expected no oversized Story warnings from preflight, got:\n${pfOversized.join('\n')}`);
 
-  // 2. Repo-wide & Story-scoped pdd lint --local --json
-  for (const words of [[], ['compact-implicit'], ['compact-explicit']]) {
+  // 2. Real CLI pdd lint --local (human text + --json, repo-wide & Story-scoped, plus symlinked cwd)
+  const linkRepo = join(repo, '..', 'repo-symlink');
+  symlinkSync(repo, linkRepo);
+  for (const args of [
+    ['lint', '--local'],
+    ['lint', '--local', '--json'],
+    ['lint', '--local', 'compact-implicit'],
+    ['lint', '--local', 'compact-explicit'],
+    ['lint', '--local', '--json', 'compact-explicit'],
+  ]) {
     let stdout = '';
     let stderr = '';
-    const code = await seam.runCheck(
-      { cwd: repo, words, options: { '--lint': true, '--local': true, '--json': true } },
-      {
-        env: { HOME: home, PDD_STATE_DIR: state },
-        stdout: { write: s => { stdout += s; } },
-        stderr: { write: s => { stderr += s; } },
-      },
-    );
-    assert.equal(code, 0, stderr);
-    const report = JSON.parse(stdout);
-    const oversized = (report.warnings ?? []).filter(w => w.includes('oversized Story'));
-    assert.deepEqual(oversized, [], `expected no oversized Story warnings for lint --local ${words.join(' ')}, got:\n${oversized.join('\n')}`);
+    const code = await runPdd(args, {
+      cwd: args.includes('compact-explicit') ? linkRepo : repo,
+      env: { HOME: home, PDD_STATE_DIR: state },
+      stdout: { write: s => { stdout += s; return true; } },
+      stderr: { write: s => { stderr += s; return true; } },
+    });
+    assert.equal(code, 0, `${args.join(' ')} stderr:\n${stderr}\nstdout:\n${stdout}`);
+    assert.ok(!stdout.includes('oversized Story'), `unexpected stdout oversized Story for pdd ${args.join(' ')}:\n${stdout}`);
+    assert.ok(!stderr.includes('oversized Story'), `unexpected stderr oversized Story for pdd ${args.join(' ')}:\n${stderr}`);
+    if (args.includes('--json')) {
+      const report = JSON.parse(stdout);
+      const oversized = (report.warnings ?? []).filter(w => w.includes('oversized Story'));
+      assert.deepEqual(oversized, [], `expected no oversized Story warnings for pdd ${args.join(' ')}, got:\n${oversized.join('\n')}`);
+    }
   }
 
-  // 3. Full pdd test (seam.check) against fakeRuntime
+  // 3. Direct runtimePreflightSlice().lintLocalHygiene and captureSource determinism
+  const slice = seam.runtimePreflightSlice();
+  const hygieneAll = slice.lintLocalHygiene({ root: repo });
+  assert.deepEqual(hygieneAll.filter(w => w.includes('oversized Story')), []);
+  const cap = seam.captureSource(repo, { tests: ['tests/compact-explicit.json'], appMap: null });
+  const uploadedExplicit = cap.sources.find(f => f.path === 'tests/compact-explicit.json');
+  assert.ok(uploadedExplicit, 'captureSource must include compiled compact-explicit scenario');
+  const uploadedText = Buffer.from(uploadedExplicit.bytes).toString('utf8');
+  assert.equal(uploadedText, found.tests.find(item => item.path === 'tests/compact-explicit.json').compiledText);
+
+  // 4. Online pdd lint (seam.lint) and pdd test (seam.check) in BOTH human text AND --json modes against fakeRuntime
   const fake = await fakeRuntime(t, (entry, f) =>
     entry.method === 'POST' && entry.command === 'lint'
       ? { status: 200, json: f.lint(entry.request.requestId, [{ path: 'prompts/echo.prompt.md', state: 'approved', admission_state: 'approved', interface: { calls: [] } }]) }
       : f.normal(entry),
   );
-  const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin });
-  const checkCode = await seam.check({ cwd: repo, words: [], options: { '--json': true } }, ports);
-  assert.equal(checkCode, 0, `${ports.stderr.text}\n${ports.stdout.text}`);
-  const checkJson = JSON.parse(ports.stdout.text);
-  const checkOversized = (checkJson.warnings ?? []).filter(w => w.includes('oversized Story'));
-  assert.deepEqual(checkOversized, [], `expected no oversized Story warnings from pdd test, got:\n${checkOversized.join('\n')}`);
-  assert.ok(!ports.stderr.text.includes('oversized Story'), `unexpected stderr oversized Story:\n${ports.stderr.text}`);
+  for (const [label, fn, options, cwd] of [
+    ['pdd lint (text)', seam.lint, {}, repo],
+    ['pdd lint (--json)', seam.lint, { '--json': true }, repo],
+    ['pdd test (text)', seam.check, {}, linkRepo],
+    ['pdd test (--json)', seam.check, { '--json': true }, repo],
+  ]) {
+    const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin });
+    const code = await fn({ cwd, words: [], options }, ports);
+    assert.equal(code, 0, `${label} failed:\n${ports.stderr.text}\n${ports.stdout.text}`);
+    assert.ok(!ports.stdout.text.includes('oversized Story'), `unexpected stdout oversized Story from ${label}:\n${ports.stdout.text}`);
+    assert.ok(!ports.stderr.text.includes('oversized Story'), `unexpected stderr oversized Story from ${label}:\n${ports.stderr.text}`);
+    if (options['--json']) {
+      const parsed = JSON.parse(ports.stdout.text);
+      assert.deepEqual((parsed.warnings ?? []).filter(w => w.includes('oversized Story')), [], label);
+    }
+  }
 });
 
 test('runtime-client#101 Part 1: genuinely > 1000-line Short JSON warns with real raw authored line count, > 15 steps keeps step-only warning, and regular v1 JSON stays unchanged', async t => {
@@ -558,36 +870,83 @@ test('runtime-client#101 Part 1: genuinely > 1000-line Short JSON warns with rea
   const v1Warn = pf.warnings.find(w => w.includes('(tests/regular-v1.json)'));
   assert.ok(v1Warn && v1Warn.includes(`${bigV1Lines} lines (limit: 1000)`), `expected regular v1 warning with ${bigV1Lines} lines, got: ${v1Warn}`);
 
-  // 2. lint --local --json (both repo-wide and explicit Story selection)
-  for (const words of [[], ['big-short']]) {
+  // 2. Real CLI pdd lint --local (human text & --json, repo-wide and Story-scoped) + lintLocalHygiene test scoping
+  const slice = seam.runtimePreflightSlice();
+  assert.deepEqual(
+    slice.lintLocalHygiene({ root: repo, tests: [] }).filter(w => w.includes('oversized Story')),
+    [],
+    'lintLocalHygiene({ tests: [] }) must not emit warnings for unselected tests',
+  );
+  const subsetHygiene = slice.lintLocalHygiene({ root: repo, tests: ['tests/many-steps.json'] }).filter(w => w.includes('oversized Story'));
+  assert.equal(subsetHygiene.length, 1);
+  assert.ok(subsetHygiene[0].includes('(tests/many-steps.json)'), subsetHygiene[0]);
+  assert.ok(!subsetHygiene.some(w => w.includes('(tests/big-short.json)')), 'excluded explicit Short JSON must not leak into subset lintLocalHygiene');
+  for (const args of [
+    ['lint', '--local'],
+    ['lint', '--local', '--json'],
+    ['lint', '--local', 'big-short'],
+    ['lint', '--local', '--json', 'big-short'],
+  ]) {
     let stdout = '';
     let stderr = '';
-    const code = await seam.runCheck(
-      { cwd: repo, words, options: { '--lint': true, '--local': true, '--json': true } },
-      {
-        env: { HOME: home, PDD_STATE_DIR: state },
-        stdout: { write: s => { stdout += s; } },
-        stderr: { write: s => { stderr += s; } },
-      },
-    );
-    assert.equal(code, 0, stderr);
-    const report = JSON.parse(stdout);
-    const matches = (report.warnings ?? []).filter(w => w.includes('(tests/big-short.json)'));
-    assert.equal(matches.length, 1, `expected exactly 1 raw-line warning for big-short (${words.join(' ') || 'repo'}), got:\n${matches.join('\n')}`);
-    assert.ok(matches[0].includes(`${bigRawLines} lines (limit: 1000)`), matches[0]);
+    const code = await runPdd(args, {
+      cwd: repo,
+      env: { HOME: home, PDD_STATE_DIR: state },
+      stdout: { write: s => { stdout += s; return true; } },
+      stderr: { write: s => { stderr += s; return true; } },
+    });
+    assert.equal(code, 0, `${args.join(' ')} stderr:\n${stderr}`);
+    if (args.includes('--json')) {
+      const report = JSON.parse(stdout);
+      const matches = (report.warnings ?? []).filter(w => w.includes('(tests/big-short.json)'));
+      assert.equal(matches.length, 1, `expected exactly 1 raw-line warning for pdd ${args.join(' ')}, got:\n${matches.join('\n')}`);
+      assert.ok(matches[0].includes(`${bigRawLines} lines (limit: 1000)`), matches[0]);
+    } else {
+      const combinedLines = `${stdout}\n${stderr}`.split('\n').filter(line => line.includes('(tests/big-short.json)') && line.includes('oversized Story'));
+      assert.equal(combinedLines.length, 1, `expected exactly 1 raw-line warning in text output for pdd ${args.join(' ')}, got:\n${combinedLines.join('\n')}`);
+      assert.ok(combinedLines[0].includes(`${bigRawLines} lines (limit: 1000)`), combinedLines[0]);
+    }
   }
 
-  // 3. pdd test (seam.check) against fakeRuntime also reports real raw authored line count for big-short
+  // 3. Online pdd lint (seam.lint) and pdd test (seam.check) in BOTH human text AND --json modes report EXACTLY 1 raw-line warning
   const fake = await fakeRuntime(t, (entry, f) =>
     entry.method === 'POST' && entry.command === 'lint'
       ? { status: 200, json: f.lint(entry.request.requestId, [{ path: 'prompts/echo.prompt.md', state: 'approved', admission_state: 'approved', interface: { calls: [] } }]) }
       : f.normal(entry),
   );
-  const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin });
-  const checkCode = await seam.check({ cwd: repo, words: ['big-short'], options: { '--json': true } }, ports);
-  assert.equal(checkCode, 0, `${ports.stderr.text}\n${ports.stdout.text}`);
-  const checkJson = JSON.parse(ports.stdout.text);
-  const checkBigWarn = (checkJson.warnings ?? []).filter(w => w.includes('(tests/big-short.json)'));
-  assert.equal(checkBigWarn.length, 1, `expected exactly 1 raw-line warning from pdd test, got:\n${checkBigWarn.join('\n')}`);
-  assert.ok(checkBigWarn[0].includes(`${bigRawLines} lines (limit: 1000)`), checkBigWarn[0]);
+  for (const [label, fn, options] of [
+    ['pdd lint big-short (text)', seam.lint, {}],
+    ['pdd lint big-short (--json)', seam.lint, { '--json': true }],
+    ['pdd test big-short (text)', seam.check, {}],
+    ['pdd test big-short (--json)', seam.check, { '--json': true }],
+  ]) {
+    const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin });
+    const code = await fn({ cwd: repo, words: ['big-short'], options }, ports);
+    assert.equal(code, 0, `${label}:\n${ports.stderr.text}\n${ports.stdout.text}`);
+    if (options['--json']) {
+      const parsed = JSON.parse(ports.stdout.text);
+      const matches = (parsed.warnings ?? []).filter(w => w.includes('(tests/big-short.json)'));
+      assert.equal(matches.length, 1, `expected exactly 1 raw-line warning from ${label}, got:\n${matches.join('\n')}`);
+      assert.ok(matches[0].includes(`${bigRawLines} lines (limit: 1000)`), matches[0]);
+    } else {
+      const matches = `${ports.stdout.text}\n${ports.stderr.text}`
+        .split('\n')
+        .filter(line => line.includes('(tests/big-short.json)') && line.includes('oversized Story'));
+      assert.equal(matches.length, 1, `expected exactly 1 raw-line warning (no duplicates) from ${label}, got:\n${matches.join('\n')}`);
+      assert.ok(matches[0].includes(`${bigRawLines} lines (limit: 1000)`), matches[0]);
+    }
+  }
+
+  // 4. Unselected >1000-line explicit Short JSON must NOT leak into scoped pdd test (text or --json)
+  {
+    const { ports } = portsFor({ HOME: home, PDD_STATE_DIR: state, PDD_RUNTIME_URL: fake.origin });
+    const code = await seam.check({ cwd: repo, words: ['many-steps'], options: { '--json': true } }, ports);
+    assert.equal(code, 0, `${ports.stderr.text}\n${ports.stdout.text}`);
+    const parsed = JSON.parse(ports.stdout.text);
+    assert.deepEqual(
+      (parsed.warnings ?? []).filter(w => w.includes('(tests/big-short.json)')),
+      [],
+      'unselected big-short.json must not leak into pdd test for many-steps',
+    );
+  }
 });

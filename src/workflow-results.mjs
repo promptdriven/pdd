@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 7d5ac71d969277b76e688f6d85ab4ab0f2c3087e75a2370b0a1619cb719866b2).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 387994c2e513a6f94a957c8990dc9d75f049a2517b2c27aa5155c7d4ff0ce424).
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -109,9 +109,9 @@ function savedCheckScope(batch) {
   }
   return scope;
 }
-function runtimeEvidence(batch, summary) {
+function runtimeEvidence(batch, summary, rows = batch.rows) {
   const coverage = batch.coverage ?? summary?.coverage;
-  const nativeOnly = batch.rows.filter(row => Array.isArray(row?.native_only) && row.native_only.length).map(row => ({test:row.test,state:row.state,prompts:row.native_only.filter(item => item && typeof item.path === 'string' && typeof item.reason === 'string').map(item => ({path:item.path,reason:item.reason}))}));
+  const nativeOnly = rows.filter(row => Array.isArray(row?.native_only) && row.native_only.length).map(row => ({test:row.test,state:row.state,prompts:row.native_only.filter(item => item && typeof item.path === 'string' && typeof item.reason === 'string').map(item => ({path:item.path,reason:item.reason}))}));
   return {...(batch.check_selection ? {checkSelection:batch.check_selection} : {}), ...(batch.baseline_report ? {baselineReport:batch.baseline_report} : {}), ...(batch.check_plan ? {checkPlan:batch.check_plan,checkScope:savedCheckScope(batch)} : {}), ...(coverage ? {coverage} : {}), ...(nativeOnly.length ? {nativeOnly} : {})};
 }
 
@@ -157,11 +157,12 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     else if (batch.intent === 'check') checks.push({ name, at, batch, association });
   }
   if (checks.length) {
-    checks.sort((a, b) => a.at - b.at || a.name.localeCompare(b.name));
+    const compareText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    checks.sort((a, b) => a.at - b.at || compareText(a.name, b.name));
     const latestCheck = checks.at(-1);
     const storyName = value => typeof value === 'string' ? value.split('/').at(-1).replace(/\.md$/, '') : null;
     const storyLabel = new RegExp(`^${PROMPT_TESTS_WORDS}\\s*\\(([^)]+)\\)`);
-    const stageOf = item => item.association?.stage ?? null;
+    const stageOf = item => item.association?.stage ?? 'current';
     const anchorRootOf = item => real(item.association?.sourceAnchor?.root ?? root);
     const evaluateCheck = item => {
       const { batch } = item;
@@ -214,17 +215,23 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
     };
 
     const latestEval = evaluateCheck(latestCheck);
-    if (checks.length === 1 || latestEval.source !== 'current' || latestCheck.batch.check_selection?.mode === 'affected') {
+    if (
+      checks.length === 1 ||
+      latestEval.source !== 'current' ||
+      latestCheck.batch.check_selection?.mode === 'affected' ||
+      latestCheck.association?.runId
+    ) {
       results.push(buildSingleCheck(latestEval));
     } else {
-      const coveredTests = new Set(latestEval.tests);
+      const coveredTests = new Set(latestEval.tests.filter(t => typeof t === 'string' && t.length > 0));
       const contributing = [latestEval];
       const latestStage = stageOf(latestCheck);
       const latestAnchorRoot = anchorRootOf(latestCheck);
       for (let i = checks.length - 2; i >= 0; i--) {
         const candidate = checks[i];
+        if (candidate.association?.runId) continue;
         if (stageOf(candidate) !== latestStage || anchorRootOf(candidate) !== latestAnchorRoot) continue;
-        const candidateTests = [...new Set(candidate.batch.rows.map(row => row?.test).filter(t => typeof t === 'string'))];
+        const candidateTests = [...new Set(candidate.batch.rows.map(row => row?.test).filter(t => typeof t === 'string' && t.length > 0))];
         if (!candidateTests.some(t => !coveredTests.has(t))) continue;
         const ev = evaluateCheck(candidate);
         if (ev.source !== 'current') continue;
@@ -241,13 +248,13 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
           const wonTests = new Set();
           const wonRows = [];
           for (const row of ev.batch.rows) {
-            if (typeof row?.test === 'string') {
-              if (claimedTests.has(row.test)) continue;
-              wonTests.add(row.test);
-              wonRows.push(row);
-            } else if (ev === latestEval) {
-              wonRows.push(row);
+            if (typeof row?.test !== 'string' || !row.test) {
+              if (ev === latestEval) wonRows.push(row);
+              continue;
             }
+            if (claimedTests.has(row.test)) continue;
+            wonTests.add(row.test);
+            wonRows.push(row);
           }
           for (const t of wonTests) claimedTests.add(t);
           if (wonRows.length) {
@@ -257,87 +264,130 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
         }
         const winningRows = newestFirstRows
           .map((row, idx) => ({ row, idx }))
-          .sort((a, b) => String(a.row?.test ?? '').localeCompare(String(b.row?.test ?? '')) || a.idx - b.idx)
+          .sort((a, b) => compareText(String(a.row?.test ?? ''), String(b.row?.test ?? '')) || a.idx - b.idx)
           .map(entry => entry.row);
-        const tests = [...new Set(winningRows.map(row => row?.test).filter(t => typeof t === 'string'))].sort();
+        const tests = [...new Set(winningRows.map(row => row?.test).filter(t => typeof t === 'string' && t.length > 0))].sort();
         const states = winningRows.map(savedResultState);
         const stateEvidence = winningRows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
         const incomplete = states.some(row => row.state !== 'passed');
+        const anyFailed = states.some(row => row.state === 'failed');
         const passedCount = states.filter(row => row.state === 'passed').length;
         const safeSummary = !incomplete && states.length > 0
-          ? `Prompt tests: ${passedCount}/${states.length} passed`
-          : 'Prompt tests: no full pass';
+          ? `Prompt tests: ✓ · ${passedCount} passed`
+          : anyFailed
+            ? 'Prompt tests: ✗ no full pass'
+            : 'Prompt tests: no full pass';
         const stories = [];
         const seenStories = new Set();
+        const emittedStoryKeys = new Set();
+        const emittedTestIds = new Set();
         for (const { ev, wonTests, wonRows } of [...batchWins].reverse()) {
           const summaryRows = Array.isArray(ev.summary?.rows) ? ev.summary.rows : [];
           for (const sRow of summaryRows) {
             const line = text(sRow?.summary_line);
             if (!line || seenStories.has(line)) continue;
-            const story = storyName(sRow?.story ?? storyLabel.exec(line)?.[1]);
-            const matchesWin = typeof sRow?.test === 'string'
+            const hasTestId = typeof sRow?.test === 'string' && sRow.test.length > 0;
+            const rowStory = hasTestId ? storyName(winningRows.find(saved => saved.test === sRow.test)?.story) : null;
+            const story = storyName(sRow?.story ?? storyLabel.exec(line)?.[1]) ?? rowStory;
+            const matchesWin = hasTestId
               ? wonTests.has(sRow.test)
               : Boolean(story && wonRows.some(saved => storyName(saved.story) === story));
             if (!matchesWin) continue;
             if (line.includes('✓')) {
-              const owners = winningRows.filter(saved =>
-                typeof sRow?.test === 'string'
-                  ? saved.test === sRow.test
-                  : Boolean(story && storyName(saved.story) === story));
+              const storyOwners = story ? winningRows.filter(saved => storyName(saved.story) === story) : [];
+              const testOwners = hasTestId ? winningRows.filter(saved => saved.test === sRow.test) : [];
+              const owners = [...new Set([...storyOwners, ...testOwners])];
               if (!owners.length || !owners.every(saved => resultOutcome(saved).state === 'passed' && !saved.not_checked?.length)) continue;
             }
             seenStories.add(line);
             stories.push(line);
+            if (story) emittedStoryKeys.add(story);
+            if (hasTestId) emittedTestIds.add(sRow.test);
           }
         }
-        const hasExcludeFlag = latestCheck.batch.source_selection != null;
-        const excludeFixtureProjects = hasExcludeFlag ? latestEval.selection.excludeFixtureProjects : undefined;
-        let mergedSha256 = latestEval.sha256;
-        let mergedSourceTests = latestCheck.batch.source_selection ? latestEval.sourceTests : undefined;
-        let includeMergedSourceTests = hasExcludeFlag;
-        try {
-          const mergedSelection = { tests, appMap: null, ...(hasExcludeFlag ? { excludeFixtureProjects } : {}) };
-          const combined = capture(latestEval.sourceRoot, mergedSelection);
-          if (/^[a-f0-9]{64}$/.test(combined?.sha256 ?? '')) {
-            mergedSha256 = combined.sha256;
-            mergedSourceTests = tests;
-            includeMergedSourceTests = hasExcludeFlag;
-          } else {
-            mergedSourceTests = latestEval.sourceTests;
-            includeMergedSourceTests = true;
+        for (const row of winningRows) {
+          const outcome = resultOutcome(row);
+          if (outcome.state === 'passed' && !row.not_checked?.length) continue;
+          const rowStory = storyName(row.story) ?? (typeof row.test === 'string' && row.test ? storyName(row.test.replace(/\.json$/, '')) : null);
+          if (rowStory && emittedStoryKeys.has(rowStory)) continue;
+          if (typeof row.test === 'string' && row.test && emittedTestIds.has(row.test)) continue;
+          const label = text(rowStory ?? row.test ?? 'unknown', 120);
+          const status = outcome.state === 'failed'
+            ? `✗ · ${text(outcomeText(row), 120)}`
+            : text(outcomeText(row), 120);
+          const synthesized = text(`Prompt tests (${label}): ${status}`);
+          if (synthesized && !seenStories.has(synthesized)) {
+            seenStories.add(synthesized);
+            stories.push(synthesized);
+            if (rowStory) emittedStoryKeys.add(rowStory);
+            if (typeof row.test === 'string' && row.test) emittedTestIds.add(row.test);
           }
-        } catch {
-          mergedSourceTests = latestEval.sourceTests;
-          includeMergedSourceTests = true;
         }
-        const nativeBatches = contributing.filter(ev => ev.batch.native_source);
-        let mergedNativeSource = latestCheck.batch.native_source ?? null;
-        if (nativeBatches.length > 1 || (nativeBatches.length === 1 && !latestCheck.batch.native_source)) {
-          const nativeTests = [...new Set(nativeBatches.flatMap(ev => Array.isArray(ev.batch.native_source.tests) ? ev.batch.native_source.tests : []))].sort();
+        const selectionBatches = batchWins.map(entry => entry.ev).filter(ev => ev.batch.source_selection != null);
+        const hasExcludeFlag = selectionBatches.length > 0;
+        const excludeFixtureProjects = hasExcludeFlag
+          ? selectionBatches.every(ev => ev.selection.excludeFixtureProjects === true)
+          : undefined;
+        const mergedSourceTests = [...new Set(
+          batchWins.flatMap(({ ev, wonTests }) =>
+            ev.sourceTests.filter(t => typeof t === 'string' && t.length > 0 && wonTests.has(t)),
+          ),
+        )].sort();
+        const mergedNativeTests = [...new Set(
+          batchWins.flatMap(({ ev, wonTests }) =>
+            Array.isArray(ev.batch.native_source?.tests)
+              ? ev.batch.native_source.tests.filter(t => typeof t === 'string' && t.length > 0 && wonTests.has(t))
+              : [],
+          ),
+        )].sort();
+        let mergedSha256 = null;
+        let mergedNativeSource = null;
+        let combinedFreshOk = true;
+        if (mergedSourceTests.length > 0 || hasExcludeFlag) {
           try {
-            const nativeCap = capture(latestEval.sourceRoot, { tests: nativeTests, appMap: null, ...(hasExcludeFlag ? { excludeFixtureProjects } : {}) });
-            if (/^[a-f0-9]{64}$/.test(nativeCap?.sha256 ?? '')) {
-              mergedNativeSource = { tests: nativeTests, sha256: nativeCap.sha256 };
+            const mergedSelection = { tests: mergedSourceTests, appMap: null, ...(hasExcludeFlag ? { excludeFixtureProjects } : {}) };
+            const combined = capture(latestEval.sourceRoot, mergedSelection);
+            if (/^[a-f0-9]{64}$/.test(combined?.sha256 ?? '')) {
+              mergedSha256 = combined.sha256;
+            } else {
+              combinedFreshOk = false;
             }
-          } catch { /* preserve latestCheck native_source when combined capture is unavailable */ }
+          } catch {
+            combinedFreshOk = false;
+          }
+        } else {
+          combinedFreshOk = false;
         }
-        results.push({
-          kind: 'pdd test', batch: latestCheck.name, at: latestCheck.at, source: 'current',
-          sourceSha256: mergedSha256, tests,
-          ...(includeMergedSourceTests ? { sourceTests: mergedSourceTests } : {}),
-          ...(hasExcludeFlag ? { excludeFixtureProjects } : {}),
-          ...(mergedNativeSource ? { nativeSource: mergedNativeSource } : {}),
-          ...runtimeEvidence(latestCheck.batch, latestEval.summary),
-          requests: requestsOf(winningRows), reports: reportsOf(winningRows),
-          ...(latestCheck.association?.runId ? { producerRoot: latestCheck.batch.root, association: { runId: latestCheck.association.runId, repo: latestCheck.association.repo,
-            workspaceRoot: latestCheck.association.producerRoot, tests: latestCheck.association.tests, source_sha256: latestCheck.association.source_sha256,
-            stage: latestCheck.association.stage, sourceAnchor: latestCheck.association.sourceAnchor } } : {}),
-          ...(latestCheck.association ? { stage: latestCheck.association.stage, sourceAnchor: latestCheck.association.sourceAnchor } : {}),
-          states,
-          summary: [safeSummary, stateEvidence, ...checkPlanResultLines(savedCheckScope(latestCheck.batch))].filter(Boolean).join('; '),
-          stories,
-          ...identity(newestFirstRows),
-        });
+        if (combinedFreshOk && mergedNativeTests.length > 0) {
+          try {
+            const nativeCap = capture(latestEval.sourceRoot, { tests: mergedNativeTests, appMap: null, ...(hasExcludeFlag ? { excludeFixtureProjects } : {}) });
+            if (/^[a-f0-9]{64}$/.test(nativeCap?.sha256 ?? '')) {
+              mergedNativeSource = { tests: mergedNativeTests, sha256: nativeCap.sha256 };
+            } else {
+              combinedFreshOk = false;
+            }
+          } catch {
+            combinedFreshOk = false;
+          }
+        }
+        if (!combinedFreshOk) {
+          results.push(buildSingleCheck(latestEval));
+        } else {
+          results.push({
+            kind: 'pdd test', batch: latestCheck.name, at: latestCheck.at, source: 'current',
+            sourceSha256: mergedSha256, tests,
+            sourceTests: mergedSourceTests,
+            ...(hasExcludeFlag ? { excludeFixtureProjects } : {}),
+            ...(mergedNativeSource ? { nativeSource: mergedNativeSource } : {}),
+            ...runtimeEvidence(latestCheck.batch, latestEval.summary, winningRows),
+            requests: requestsOf(winningRows), reports: reportsOf(winningRows),
+            ...(latestCheck.association ? { stage: latestCheck.association.stage, sourceAnchor: latestCheck.association.sourceAnchor } : {}),
+            states,
+            summary: [safeSummary, stateEvidence, ...checkPlanResultLines(savedCheckScope(latestCheck.batch))].filter(Boolean).join('; '),
+            stories,
+            ...identity(newestFirstRows),
+          });
+        }
       }
     }
   }

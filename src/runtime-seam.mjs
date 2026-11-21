@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: cb4723e00daf3b1bd5cd2447f74b4ac9c9f21c848a775eec538b1b271ecf5ca1).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 0a324dfcbe01868e4efcd6ab10cd5bdd3448dd70d3b2c76aea32f9b41833d075).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -229,7 +229,13 @@ function lookupScenarioOverlayVirtualText(store, rawPath) {
     store.map = (root ? buildScenarioOverlay(root, store.ports, { preserveRawLineCount: !store.interceptFd }) : null) ?? new Map();
   }
   if (!store.map || store.map.size === 0) return undefined;
-  return store.map.get(strPath) ?? store.map.get(resolve(strPath));
+  const direct = store.map.get(strPath) ?? store.map.get(resolve(strPath));
+  if (direct !== undefined) return direct;
+  try {
+    return store.map.get(realpathSync(strPath));
+  } catch {
+    return undefined;
+  }
 }
 
 function statWithVirtualSize(statObj, byteLength) {
@@ -1405,23 +1411,39 @@ function formatLocalCriteriaWarning(testPath, storyPath, classification) {
   return null;
 }
 
-function lintShortScenarioFiles(root, ports = {}, { checkCriteriaBindings = false, words = [], cwd = null } = {}) {
+function lintShortScenarioFiles(
+  root,
+  ports = {},
+  { checkCriteriaBindings = false, includeRawComplexity = true, tests = undefined, words = [], cwd = null } = {},
+) {
   if (typeof root !== 'string' || !root) return [];
   try {
     const rawWords = Array.isArray(words) ? words : [];
-    const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 }, ports);
+    const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 && tests === undefined }, ports);
     let scopedTests = found?.tests ?? [];
-    if (rawWords.length > 0) {
+    if (Array.isArray(tests)) {
+      const wanted = new Set(
+        tests
+          .map(entry => (typeof entry === 'string' ? entry : entry?.path))
+          .filter(p => typeof p === 'string' && p.length > 0)
+          .map(p => p.replace(/^\.\//, '')),
+      );
+      scopedTests = wanted.size > 0 ? scopedTests.filter(test => wanted.has(test.path)) : [];
+    } else if (rawWords.length > 0) {
       const normalized = normalizeSelectionWords(rawWords, cwd ?? root, root, found);
-      const selection = selectTests(found, normalized);
-      scopedTests = selection?.selected ?? [];
+      if (normalized.every(word => word.endsWith('.prompt.md') && found?.visible?.has(word))) {
+        scopedTests = [];
+      } else {
+        const selection = selectTests(found, normalized);
+        scopedTests = selection?.selected ?? [];
+      }
     }
     const warnings = [];
     for (const test of scopedTests) {
       if (test.shortRefusal && typeof test.error === 'string' && test.error.length > 0) {
         warnings.push(test.error);
       }
-      if (!test.shortRefusal && test.rawHadNonV1Schema) {
+      if (includeRawComplexity && !test.shortRefusal && test.rawHadNonV1Schema) {
         const complexityWarning = rawShortStoryComplexityWarning(test, test.rawLineCount);
         if (complexityWarning) warnings.push(complexityWarning);
       }
@@ -2021,7 +2043,9 @@ export function runtimePreflightSlice() {
         ...new Set([
           ...baseWarnings,
           ...lintRepoAntiPatterns(input),
-          ...lintShortScenarioFiles(input?.root, ports),
+          ...lintShortScenarioFiles(input?.root, ports, {
+            tests: input?.tests,
+          }),
         ]),
       ];
     },
@@ -2803,6 +2827,7 @@ export async function runCheck(input = {}, ports = {}) {
             ...project.warnings,
             ...lintShortScenarioFiles(arg?.root, forwardPorts, {
               checkCriteriaBindings: input?.options?.['--local'] === true,
+              includeRawComplexity: input?.options?.['--lint'] === true,
               words: commandWords(input),
               cwd,
             }),
