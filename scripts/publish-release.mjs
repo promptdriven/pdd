@@ -8,11 +8,13 @@ import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { checkVersionParity, readPyprojectField, stagePypiBundle } from './sync-pypi-version.mjs';
+import { version as runtimeClientVersionInfo } from '../src/runtime-seam.mjs';
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_REPO = 'promptdriven/pdd';
 const DEFAULT_NPM_REGISTRY = 'https://registry.npmjs.org';
 const DEFAULT_PYPI_BASE_URL = 'https://pypi.org';
+const RUNTIME_CLIENT_PACKAGE = runtimeClientVersionInfo().package;
 const TAG_RE = /^[A-Za-z0-9._-]+$/;
 const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const SHA_RE = /^[0-9a-f]{7,64}$/i;
@@ -42,6 +44,7 @@ Options:
   --repo <owner/org> GitHub repository slug (default: derived from package.json/origin)
   --python <bin>     Python 3 executable to use for build and twine
   --root <dir>       Repository root path (default: current repo)
+  --allow-stale-runtime-client  Allow publishing when pinned runtime client lags latest npm version
   -h, --help         Show this help text`;
 
 function defaultRunCommand(cmd, args, opts = {}) {
@@ -123,7 +126,8 @@ async function pollUntil({ attempts, delayMs, sleep, check, formatFailure }) {
 
 const CLI_OPTIONS = {
   'dry-run': { type: 'boolean', default: false }, 'npm-only': { type: 'boolean', default: false },
-  'pypi-only': { type: 'boolean', default: false }, tag: { type: 'string' }, repo: { type: 'string' },
+  'pypi-only': { type: 'boolean', default: false }, 'allow-stale-runtime-client': { type: 'boolean', default: false },
+  tag: { type: 'string' }, repo: { type: 'string' },
   root: { type: 'string' }, python: { type: 'string' }, help: { type: 'boolean', short: 'h', default: false },
 };
 
@@ -159,7 +163,7 @@ export function parsePublishArgs(argv, env = {}) {
   if (npmOnly && pypiOnly) throw new Error('Cannot combine --npm-only and --pypi-only.');
   if (tag !== null && !TAG_RE.test((tag = tag.trim().replace(/^refs\/tags\//, '')))) throw new Error(`Invalid GitHub Release tag "${tag}".`);
   if (repo !== null && !REPO_RE.test((repo = repo.trim()))) throw new Error(`Invalid GitHub repository "${repo}". Expected OWNER/REPO.`);
-  return { dryRun: explicitDryRun || dryRunFromNpmEnv, dryRunFromNpmEnv, tag, npmOnly, pypiOnly, repo, root: rootArg ? resolve(rootArg) : DEFAULT_ROOT, pythonBin, help };
+  return { dryRun: explicitDryRun || dryRunFromNpmEnv, dryRunFromNpmEnv, tag, npmOnly, pypiOnly, allowStaleRuntimeClient: Boolean(values['allow-stale-runtime-client']), repo, root: rootArg ? resolve(rootArg) : DEFAULT_ROOT, pythonBin, help };
 }
 
 /** Select npm dist-tag matching .github/workflows/release.yml. */
@@ -304,6 +308,96 @@ export function verifyReleaseCommitParity({ root = DEFAULT_ROOT, repo, tag, dryR
     throw new Error(`Refusing live publish: HEAD (${headCommit}) does not match remote GitHub tag "${tag}" (${remoteTagCommit}).`);
   }
   return { headCommit, localTagCommit, remoteTagCommit };
+}
+
+function parseSemver(raw) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(raw ?? '').trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ? match[4].split('.') : [],
+  };
+}
+
+function compareSemver(leftRaw, rightRaw) {
+  const left = parseSemver(leftRaw);
+  const right = parseSemver(rightRaw);
+  if (!left || !right) return null;
+  for (const field of ['major', 'minor', 'patch']) {
+    if (left[field] !== right[field]) return left[field] < right[field] ? -1 : 1;
+  }
+  if (left.prerelease.length === 0 && right.prerelease.length === 0) return 0;
+  if (left.prerelease.length === 0) return 1;
+  if (right.prerelease.length === 0) return -1;
+  const len = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let i = 0; i < len; i++) {
+    const a = left.prerelease[i];
+    const b = right.prerelease[i];
+    if (a === undefined) return -1;
+    if (b === undefined) return 1;
+    if (a === b) continue;
+    const aNum = /^\d+$/.test(a);
+    const bNum = /^\d+$/.test(b);
+    if (aNum && bNum) return Number(a) < Number(b) ? -1 : 1;
+    if (aNum !== bNum) return aNum ? -1 : 1;
+    return a < b ? -1 : 1;
+  }
+  return 0;
+}
+
+/** Verify pinned runtime-client dependency in package.json is not behind latest published npm version. */
+export function checkRuntimeClientParity({
+  root = DEFAULT_ROOT,
+  packageName = RUNTIME_CLIENT_PACKAGE,
+  npmRegistry = DEFAULT_NPM_REGISTRY,
+  allowStale = false,
+  dryRun = false,
+  env = process.env,
+  runCommand = defaultRunCommand,
+  log = console.log,
+} = {}) {
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  const pinnedRaw = pkg.dependencies?.[packageName];
+  if (typeof pinnedRaw !== 'string' || !pinnedRaw.trim()) {
+    return { ok: true, skipped: true, stale: false, packageName, pinned: null, latest: null };
+  }
+  const pinned = pinnedRaw.trim();
+  const secrets = collectSecrets(env);
+  const res = runCommand('npm', ['view', packageName, 'version', '--registry', npmRegistry], {
+    cwd: root,
+    env: scrubEnv(env, ISOLATED_HOME_ENV_KEYS, NPM_SCRUB_ENV_KEYS, PUBLISH_AUTH_ENV_KEYS),
+  });
+  const latest = res.status === 0 ? String(res.stdout ?? '').trim().split(/\r?\n/).at(-1)?.trim() ?? '' : '';
+  if (res.status !== 0 || !parseSemver(latest)) {
+    const detail = res.status !== 0 ? formatCommandFailure(`npm view ${packageName} version`, res, secrets) : `unexpected version output "${latest}"`;
+    const warning = `Could not verify latest published ${packageName} version on ${npmRegistry} (pinned ${pinned}): ${detail}`;
+    if (dryRun || allowStale) {
+      log(`  Warning: ${warning}`);
+      return { ok: true, skipped: false, stale: false, warning, packageName, pinned, latest: null };
+    }
+    throw new Error(`Refusing live publish: ${warning} Pass --allow-stale-runtime-client to override.`);
+  }
+  const cmp = compareSemver(pinned, latest);
+  if (cmp === null) {
+    const warning = `${packageName} in package.json uses non-exact version "${pinned}" (latest on ${npmRegistry}: ${latest}).`;
+    if (dryRun || allowStale) {
+      log(`  Warning: ${warning}`);
+      return { ok: true, skipped: false, stale: true, warning, packageName, pinned, latest };
+    }
+    throw new Error(`Refusing live publish: ${warning} Pin an exact version or pass --allow-stale-runtime-client.`);
+  }
+  if (cmp < 0) {
+    const message = `${packageName} in package.json is pinned to ${pinned}, behind latest published ${latest} on ${npmRegistry}. Update package.json and package-lock.json before releasing (or pass --allow-stale-runtime-client to override).`;
+    if (dryRun || allowStale) {
+      log(`  Warning: ${message}`);
+      return { ok: true, skipped: false, stale: true, warning: message, packageName, pinned, latest };
+    }
+    throw new Error(`Refusing live publish: ${message}`);
+  }
+  log(`  Verified ${packageName} parity: pinned ${pinned} (latest on npm: ${latest}).`);
+  return { ok: true, skipped: false, stale: false, packageName, pinned, latest };
 }
 
 function buildAndSmokeTestNpm({ root, scratchDir, version, packageName, npmRegistry, env, runCommand, log }) {
@@ -586,6 +680,7 @@ export async function verifyPypiLiveVersion({
 export async function publishRelease(options = {}, deps = {}) {
   const {
     dryRun = false, dryRunFromNpmEnv = false, tag = null, npmOnly = false, pypiOnly = false,
+    allowStaleRuntimeClient = false,
     repo: explicitRepo = null, root = DEFAULT_ROOT, pythonBin = null,
     npmRegistry = DEFAULT_NPM_REGISTRY, pypiBaseUrl = DEFAULT_PYPI_BASE_URL,
     verifyAttempts = 5, verifyDelayMs = 2000, interactive = false,
@@ -614,6 +709,7 @@ export async function publishRelease(options = {}, deps = {}) {
   const version = parity.version;
   log(`  Verified clean git tree, GitHub Release ${release.tag} (${release.url}), and version parity (${version}).`);
   verifyReleaseCommitParity({ root, repo, tag: release.tag, dryRun, env, runCommand, log });
+  const runtimeClientParity = checkRuntimeClientParity({ root, npmRegistry, allowStale: allowStaleRuntimeClient, dryRun, env, runCommand, log });
 
   const scratchDir = mkdtempSync(join(tmpdir(), 'pdd-release-publish-'));
   try {
@@ -631,7 +727,7 @@ export async function publishRelease(options = {}, deps = {}) {
 
     if (dryRun) {
       log('[4/4] Dry run complete. No packages were published to live registries.');
-      return { dryRun: true, repo, tag: release.tag, releaseUrl: release.url, version, npm: npmArtifact, pypi: pypiArtifact, published: { npm: null, pypi: null }, verified: { npm: null, pypi: null } };
+      return { dryRun: true, repo, tag: release.tag, releaseUrl: release.url, version, runtimeClientParity, npm: npmArtifact, pypi: pypiArtifact, published: { npm: null, pypi: null }, verified: { npm: null, pypi: null } };
     }
 
     log('[4/4] Publishing artifacts and verifying live registries...');
@@ -648,7 +744,7 @@ export async function publishRelease(options = {}, deps = {}) {
       log(`  Live PyPI registry verified: ${pypiArtifact.pypiName} ${verified.pypi.version} (${verified.pypi.fileCount} files)`);
     }
     log(`Release publish complete for ${release.tag} (${version}).`);
-    return { dryRun: false, repo, tag: release.tag, releaseUrl: release.url, version, npm: npmArtifact, pypi: pypiArtifact, published, verified };
+    return { dryRun: false, repo, tag: release.tag, releaseUrl: release.url, version, runtimeClientParity, npm: npmArtifact, pypi: pypiArtifact, published, verified };
   } finally {
     rmSync(scratchDir, { recursive: true, force: true });
   }

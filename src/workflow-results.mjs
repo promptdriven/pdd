@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/workflow-results.prompt.md
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: c88192a8b9b4f38c78d3045cd2d5acd6a699d36d6aef0a6633ccbeaeaac29062).
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -283,6 +283,95 @@ export function savedLostCheck(batch, { env = process.env, root } = {}) {
   const knownCalls = usage.reduce((sum, row) => sum + (numeric(row.calls) ? row.calls : numeric(row.known_calls) ? row.known_calls : 0), 0);
   return { batch, sourceSha256: saved.source_sha256, tests: [...new Set(lost.map(row => row.test))],
     maxCalls: Math.min(...lost.map(row => row.max_calls)), cost: { calls: usage.every(row => numeric(row.calls)) ? knownCalls : null, knownCalls } };
+}
+
+const CHECK_REQUEST_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Read-only extraction of canonical CHECK request UUIDs from a saved batch for historical reconciliation.
+export function savedCheckReconciliationTargets(batch, { env = process.env, root, includeAll = false } = {}) {
+  if (!BATCH.test(String(batch ?? '')) || typeof root !== 'string') return null;
+  const folder = join(stateFolder(env), 'batches', batch);
+  const saved = readJson(join(folder, 'batch.json'));
+  if (saved?.batch !== batch || saved.intent !== 'check' || typeof saved.root !== 'string' || real(saved.root) !== real(root)
+    || !Array.isArray(saved.rows) || !saved.rows.length) return null;
+  const requests = [];
+  const allIds = [];
+  const seenIds = new Set();
+  for (const row of saved.rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+    const outcome = resultOutcome(row);
+    if (!includeAll && !['partial', 'unknown'].includes(outcome.state)) continue;
+    const ids = (Array.isArray(row.request_ids) ? row.request_ids : [])
+      .filter(id => typeof id === 'string' && CHECK_REQUEST_UUID.test(id));
+    if (!ids.length) continue;
+    const uniqueRowIds = [...new Set(ids)];
+    requests.push({
+      test: typeof row.test === 'string' ? row.test : null,
+      story: typeof row.story === 'string' ? row.story : null,
+      state: outcome.state,
+      requestIds: uniqueRowIds,
+    });
+    for (const id of uniqueRowIds) {
+      if (!seenIds.has(id)) {
+        seenIds.add(id);
+        allIds.push(id);
+      }
+    }
+  }
+  return { batch, root: saved.root, requests, requestIds: allIds };
+}
+
+// Pure formatter for a projected pdd-runtime.check-reconciliation.v1 record (zero I/O or mutation).
+export function formatCheckReconciliation(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return 'CHECK reconciliation: unavailable (malformed response).';
+  }
+  const reqId = text(record.request_id || 'unknown', 64);
+  const httpStatus = Number.isSafeInteger(record.http_status) ? record.http_status : 0;
+  const disp = record.disposition && typeof record.disposition === 'object' ? record.disposition : {};
+  const dispatch = record.dispatch && typeof record.dispatch === 'object' ? record.dispatch : {};
+  const acct = record.accounting && typeof record.accounting === 'object' ? record.accounting : {};
+  const retry = record.retry && typeof record.retry === 'object' ? record.retry : {};
+  const ev = record.evidence && typeof record.evidence === 'object' ? record.evidence : {};
+  const prov = record.provenance && typeof record.provenance === 'object' ? record.provenance : {};
+
+  const lines = [`CHECK reconciliation ${reqId} (read-only; HTTP ${httpStatus})`];
+  const dispParts = [`state=${text(disp.state ?? 'unknown', 64)}`];
+  if (disp.verdict && disp.verdict !== disp.state) dispParts.push(`verdict=${text(disp.verdict, 64)}`);
+  if (disp.refusal_code) dispParts.push(`refusal=${text(disp.refusal_code, 96)}`);
+  if (disp.expired === true) dispParts.push('expired=yes');
+  if (disp.purged === true) dispParts.push('purged=yes');
+  lines.push(`Disposition: ${dispParts.join(', ')}`);
+
+  lines.push(`Dispatch: ${text(dispatch.status ?? 'unproved', 64)} (${dispatch.proven === true ? 'proven' : 'unproved'})`);
+
+  const acctParts = [
+    `complete=${acct.accounting_complete === true ? 'yes' : 'no'}`,
+    `calls=${acct.calls === 'unknown' || acct.calls === undefined || acct.calls === null ? 'unknown' : String(acct.calls)}`,
+    `known=${acct.known_calls === undefined || acct.known_calls === null ? 'unknown' : String(acct.known_calls)}`,
+    `unknown=${acct.unknown_calls === undefined || acct.unknown_calls === null ? 'unknown' : String(acct.unknown_calls)}`,
+  ];
+  if (Number.isSafeInteger(acct.cap)) acctParts.push(`cap=${acct.cap}`);
+  lines.push(`Accounting: ${text(acct.status ?? 'unknown', 64)} (${acctParts.join(', ')})`);
+
+  lines.push(`Retry blocked: ${retry.blocked === false ? 'no' : 'yes'}`);
+  if (retry.safe_next_action) lines.push(`Next: ${text(retry.safe_next_action, 512)}`);
+  if (record.error_code) lines.push(`Error: ${text(record.error_code, 96)}`);
+  if (Array.isArray(ev.proof_basis) && ev.proof_basis.length) {
+    lines.push(`Proof basis: ${ev.proof_basis.map(item => text(item, 96)).join(', ')}`);
+  }
+  if (Array.isArray(ev.contradictions) && ev.contradictions.length) {
+    lines.push(`Contradictions: ${ev.contradictions.map(item => text(item, 96)).join(', ')}`);
+  }
+  const provParts = [];
+  if (prov.source_sha256) provParts.push(`source=${text(prov.source_sha256, 64).slice(0, 12)}`);
+  if (prov.engine_sha) provParts.push(`engine=${text(prov.engine_sha, 64).slice(0, 12)}`);
+  if (prov.server_commit) provParts.push(`server=${text(prov.server_commit, 64).slice(0, 12)}`);
+  if (Array.isArray(prov.sources_consulted) && prov.sources_consulted.length) {
+    provParts.push(`sources=${prov.sources_consulted.map(item => text(item, 64)).join(',')}`);
+  }
+  if (provParts.length) lines.push(`Provenance: ${provParts.join(', ')}`);
+  return lines.join('\n');
 }
 
 // Proof that the interpreter gave a verdict after a time: a passed or failed row of this worktree's pdd test that ended at or

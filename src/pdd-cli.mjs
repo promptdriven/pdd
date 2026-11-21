@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 16c3f07e9e04a1519ed2a764259f973bec90447d9dd8b89fab45bd6240b2d9ab).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 9e67bb04665155cd7a110e718d7f247594bcf5cf97b7bf02aeb851842925d09a).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -33,7 +33,7 @@ const defaultReadPackageVersion = ({ packageRoot }) => {
   catch { return { ok: false, version: '' }; }
 };
 function findInvertedNativeOnlyStory(runtime, cwd, words, options) {
-  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
+  if (['--local', '--files', '--explain-bindings', '--read', '--retry', '--reconcile', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => options[flag])) return null;
   try {
     const found = runtime.findTests({ root: cwd });
     const { selected, unknown } = runtime.selectTests(found, words, options);
@@ -154,7 +154,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
   stdin = process.stdin, confirm, mcpServer, runtimeSlots, contracts, product, productPorts, gitContext, workflowProve, provePorts,
   autopilotRegressions, autopilotRegressionsPorts = {}, issueGraph, issueGraphPorts = {}, dependencyIntake, dependencyIntakePorts = {}, autopilotLauncher, autopilotLauncherPorts = {}, workflowAgents = { checkWorkflowAgents }, workflowAgentPorts = {}, setupSkills = defaultSetupSkills,
   setupProject = defaultSetupProject, setupAgentMcp, autopilot, autopilotPorts = {}, autopilotLogs, autopilotLogsPorts = {}, autopilotAlerts, autopilotAlertsPorts = {}, autopilotGithub: autopilotGithubModule, autopilotGithubPorts = {}, pathDiagnostic = defaultPathDiagnostic,
-  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {} } = {}) {
+  readPackageVersion = defaultReadPackageVersion, findSkills = defaultFindSkills, syncOwnedUserSkills = defaultSyncOwnedUserSkills, interpreterVersion, interpreterVersionPorts = {}, releaseNotice, releaseNoticePorts = {}, accountsCli, accountsPorts = {}, cliUpgrade, cliUpgradePorts = {}, codexLint, codexLintPorts = {}, runtimeCheckReconcile, runtimeCheckReconcilePorts = {} } = {}) {
   let plan;
   try { plan = parseArgv(argv); }
   catch (error) {
@@ -553,6 +553,37 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           return 1;
         }
       }
+      if (plan.local === 'runtime-check' && plan.options['--reconcile'] !== undefined) {
+        if (plan.operands.length > 0 || Object.keys(plan.options).some(key => !['--reconcile', '--json'].includes(key))) {
+          line(stderr, `Use pdd ${NAMES.test} --reconcile REQUEST_ID [--json] without other options or Stories.`);
+          return 2;
+        }
+        try {
+          const reconcile = runtimeCheckReconcile ?? (await import('./runtime-seam.mjs')).reconcileCheckReceipt;
+          const result = await reconcile(
+            { cwd, requestId: plan.options['--reconcile'] },
+            { env, stdout, stderr, ...runtimeCheckReconcilePorts },
+          );
+          if (plan.options['--json'] === true) {
+            line(stdout, JSON.stringify(result));
+          } else {
+            const { formatCheckReconciliation } = await import('./workflow-results.mjs');
+            line(stdout, formatCheckReconciliation(result));
+          }
+          return result?.available === true ? 0 : 3;
+        } catch (error) {
+          if (error?.code === 'invalid-request-id') {
+            line(stderr, causeText(error.message) || 'Invalid CHECK request UUID.');
+            return 2;
+          }
+          if (error?.code === 'reconciliation-unsupported') {
+            line(stderr, causeText(error.message) || 'CHECK receipt reconciliation requires a newer runtime client.');
+            return 5;
+          }
+          line(stderr, `CHECK receipt reconciliation failed.${reason(error)}`);
+          return 3;
+        }
+      }
       try {
         if (plan.local === 'runtime-check' && plan.options['--target'] === 'code') {
           if (Object.keys(plan.options).some(key => !['--target', '--json'].includes(key))) { line(stderr, 'pdd test --target code accepts only --json and Story selections.'); return 2; }
@@ -567,7 +598,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           }
         }
         const action = plan.local === 'runtime-try' ? 'simulate' : plan.options['--lint'] === true ? 'lint' : 'check';
-        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
+        const isLintCheckMode = action === 'lint' && !['--files', '--explain-bindings', '--read', '--retry', '--reconcile', '--request', '--screen', '--emit-v1', '--write', '--bind-criteria'].some(flag => plan.options[flag]);
         const lintRoot = isLintCheckMode ? resolveProjectLintRoot(cwd) : null;
         let seamProjectErrors = null;
         const onProjectLintResult = lintRoot && !plan.operands.length && plan.options['--local'] === true
