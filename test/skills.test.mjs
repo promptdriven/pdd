@@ -386,18 +386,19 @@ test('SKILLS21: PDD formats win over a brief, PDD tests are runtime tests, and t
   }
 });
 
-// Wrong: the Simulator showed only a form, because no step made an app map.
-test('SKILLS22: for a page or a screen, visual writes the app map, and the person gets `pdd simulate <story> --new`', () => {
+// Wrong: the Simulator showed only a form, because no step made an app map or plain-prose Screen UI.
+test('SKILLS22: interactive UI uses plain-prose render/handle_event by default, with optional app-map --new guidance', () => {
   const runbook = RUNBOOK();
-  assert.ok(runbook.includes('The Simulator has a **Screen** tab only when the repo has an app map'));
+  assert.ok(runbook.includes('The Simulator opens on the **Screen** tab automatically for both a **single-file plain-prose UI** (zero `app-map.json`, zero `Runtime interface`'));
+  assert.ok(runbook.includes('and a repo with an explicit **app map** (`app-map.json`, or `app/app-map.json`).'));
   assert.ok(runbook.includes('Without `--new`, pdd reuses the open simulation and does not send the map.'));
   const visual = read('pdd-feature/steps/visual.md');
-  assert.ok(visual.includes('For a page or a screen, also write the app map and its SVG mockups from that design (RUNBOOK §13), so `pdd simulate` shows the real screen (the Screen tab) and keys or taps work.'));
-  assert.match(visual, /app map path in your `done` summary/);
+  assert.ok(visual.includes('Single-file UI runs from plain prose (`render` + `handle_event`, inline `<style>`) with no `app-map.json`'));
+  assert.match(visual, /optional app map paths in your `done` summary/);
   assert.ok(runbook.includes('Its `## Appearance` section links the mockups'));
-  assert.ok(read('pdd-feature/steps/prompt-story.md').includes('- A page or a screen gets an app map, so the person can try it on the Screen.'));
+  assert.ok(read('pdd-feature/steps/prompt-story.md').includes('declare `render({ state }) -> { state, html }` and `handle_event({ state, event }) -> { state, html }` in one plain-prose UI prompt (no `app-map.json` required)'));
   const skill = read('pdd-feature/SKILL.md');
-  assert.ok(skill.includes('For a page or a screen, recommend visual: it makes the app map.'));
+  assert.ok(skill.includes('single-file plain-prose UI needs no app map'));
   assert.match(skill.split('\n').find(line => line.startsWith('- At the story gate')), /If visual made an app map, tell the person to run `pdd simulate <story> --new`/);
   assert.match(read('pdd-feature/steps/try.md'), /`pdd simulate STORY`[^\n]*with an app map, add `--new`/);
 });
@@ -451,14 +452,14 @@ test('SKILLS26: no sentence of a workflow skill is in two of its files', () => {
 });
 
 // Wrong (round-2 tester, bookshelf "empty shelf", 0.1.7): a page-only feature got "No tests found", 0 AI calls and
-// nothing to try, because the agent called the page "browser-only" (RUNBOOK §18) and never used the Screen of §13.
-test('SKILLS27: a page gets a render operation that returns html, an app map and exact checks, never "browser-only"', () => {
-  const feature = read('pdd-feature/steps/prompt-story.md').split('\n').find(line => line.startsWith('- A page or a screen'));
-  for (const words of ['app map', 'try it on the Screen', '`render` operation that returns `{html}`', '`count` or `equals`', '`/emptyMessage`', 'never "browser-only, no PDD test"'])
+// nothing to try, because the agent called the page "browser-only" (RUNBOOK §18).
+test('SKILLS27: a page gets plain-prose render/handle_event and exact checks, never "browser-only"', () => {
+  const feature = read('pdd-feature/steps/prompt-story.md').split('\n').find(line => line.startsWith('- For a page or screen'));
+  for (const words of ['`render({ state }) -> { state, html }`', '`handle_event({ state, event }) -> { state, html }`', 'no `app-map.json` required', 'exact `result` and `html_*` checks', 'never "browser-only, no PDD test"'])
     assert.ok(feature.includes(words), words);
   // A page bug is checked the same way.
   const bug = read('pdd-bug/steps/prompt-story.md');
-  assert.match(bug, /For a page, check what it shows through its `render` operation[^\n]*`count` or `equals`[^\n]*never "browser-only, no PDD test"/);
+  assert.match(bug, /For a page, check `render` \/ `handle_event`[^\n]*exact `result` and `html_\*` checks[^\n]*never "browser-only, no PDD test"/);
 });
 
 // Wrong (round-2 tester, 0.1.7): the optional visual step ran without asking, though pdd said "Ask the person".
