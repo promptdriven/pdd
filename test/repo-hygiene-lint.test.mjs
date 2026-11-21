@@ -3243,3 +3243,63 @@ test('3619 R4b regressions: plural ops section headings & colon detail headings,
   );
   assert.equal(r53Fail.length, 4, r53Fail.join('\n'));
 });
+
+test('3619 R6 regressions: colon only before first token and suffix scanning past mid-list invalid tokens', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    '---',
+    '# Gateway',
+    '',
+    '## Dependencies',
+    '- [Access](../access/access.prompt.md)',
+    '',
+    '## Ports',
+    ...ports.map(p => `- \`${p}\``),
+  ].join('\n');
+
+  const r6Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'Exposes `status`: `ready` or `degraded`.',
+    'Exposes `error`: `not_found` or `invalid_input`.',
+    'Operations: `status`: `healthy` or `failed`.',
+    'Exposes `commit_a`, `user.id`, and `branch_a` fields.',
+    'Exposes `commit_b`, `ID`, and `branch_b` fields.',
+    'Exports `commit_c`, `v2`, and `branch_c` to CSV.',
+    'Exports `commit_d`, `a`, and `branch_d` fields.',
+    'Exports `/health` and `bar`.',
+    'Exposes: `valid_op` and `other_op`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.valid_op', 'access.other_op']),
+      [{ path: 'prompts/access/access.prompt.md', text: r6Dep }],
+    ),
+    [],
+  );
+
+  const r6FailPorts = [
+    'access.ready', 'access.degraded',
+    'access.not_found', 'access.invalid_input',
+    'access.healthy', 'access.failed',
+    'access.commit_a', 'access.branch_a',
+    'access.commit_b', 'access.branch_b',
+    'access.commit_c', 'access.branch_c',
+    'access.commit_d', 'access.branch_d',
+    'access.bar',
+  ];
+  const r6Fail = lintNativeOnlyPortParity(
+    nativeChecking(r6FailPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: r6Dep }],
+  );
+  assert.equal(r6Fail.length, r6FailPorts.length, r6Fail.join('\n'));
+});

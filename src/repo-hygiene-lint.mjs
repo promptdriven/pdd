@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 9f9ab650da655dd1da62826898deb008b8934624498176d22537f394f9550709).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 7f83a7e7105bdc8bbd002e81c061066a26f60874aa4aea8839f39bbb42b9ebfd).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -1024,8 +1024,9 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
   const collected = [];
   let trailingNonOpSuffix = false;
   let lastItemEndPos = -1;
+  let sawInvalidItem = false;
   while (pos < line.length) {
-    while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || (collected.length === 0 && line[pos] === ':') || line[pos] === ',' || line[pos] === '/')) pos++;
+    while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || (lastItemEndPos < 0 && line[pos] === ':') || line[pos] === ',' || line[pos] === '/')) pos++;
     const lower4 = line.slice(pos, pos + 4).toLowerCase();
     if (lower4 === 'and ' || lower4 === 'and\t') {
       pos += 4;
@@ -1042,16 +1043,20 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
     const inner = line.slice(pos + 1, endTick).trim();
     pos = endTick + 1;
     lastItemEndPos = pos;
-    if (!inner || inner.includes('.') || inner.includes('/')) break;
-    const hasCallParens = hasCallParensInToken(inner);
-    const op = cleanSingleIdentifier(inner, { allowCallArgs: true });
-    if (!op) break;
+    const isInvalidToken = !inner || inner.includes('.') || inner.includes('/');
+    const hasCallParens = !isInvalidToken && hasCallParensInToken(inner);
+    const op = isInvalidToken ? null : cleanSingleIdentifier(inner, { allowCallArgs: true });
     if (hasNonOpSuffix(line, pos, { requireLeadingSpace: true })) {
       trailingNonOpSuffix = true;
       break;
     }
+    if (!op) {
+      if (collected.length === 0) break;
+      sawInvalidItem = true;
+      continue;
+    }
     if (!hasCallParens && NON_OP_LABEL_WORDS.has(op.toLowerCase())) continue;
-    collected.push({ op, hasCallParens });
+    if (!sawInvalidItem) collected.push({ op, hasCallParens });
   }
   if (!trailingNonOpSuffix && collected.length > 0 && hasNonOpSuffix(line, pos, { requireLeadingSpace: pos === lastItemEndPos })) {
     trailingNonOpSuffix = true;
