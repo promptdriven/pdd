@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { githubFullLastPage, githubReply, nativeGithubCounter } from '../github-calls.mjs';
 
-const CLAIM_EXPIRES_AFTER = 4 * 60 * 60 * 1000;
+export const CLAIM_EXPIRES_AFTER = 4 * 60 * 60 * 1000;
 const LEGACY_CLAIM_EXPIRES_AFTER = 24 * 60 * 60 * 1000;
 const TAKEOVER_LIMIT = 3;
 const TAKEOVER_GAP = 10 * 60 * 1000;
@@ -19,7 +19,7 @@ const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.t
 const time = value => typeof value === 'string' ? Date.parse(value) : NaN;
 const iso = at => new Date(at).toISOString();
 const notModified = text => /^HTTP\/\S+\s+304\b/.test(String(text ?? ''));
-const heartbeatTimeForComment = comment => Number.isFinite(time(comment?.updated_at)) ? time(comment.updated_at) : time(comment?.created_at);
+export const heartbeatTimeForComment = comment => Number.isFinite(time(comment?.updated_at)) ? time(comment.updated_at) : time(comment?.created_at);
 const memberPattern = member => member === 'lastSeen' ? LAST_SEEN : new RegExp(LAST_SEEN.source.replace('"lastSeen"', `"${member}"`), 'g');
 
 const parse = json => JSON.parse(json, (key, value, context) => (key === 'id' || key === 'fullDatabaseId') && typeof value === 'number'
@@ -144,7 +144,7 @@ function rawGithub(cwd, ports) {
   return github;
 }
 
-function claimRecord(body) {
+export function claimRecord(body) {
   const source = String(body ?? '');
   const blocks = [...source.matchAll(/```(?:json)?\s*\n([\s\S]*?)\n```/g)].map(m => m[1]);
   blocks.push(source.trim());
@@ -159,7 +159,7 @@ function claimRecord(body) {
   return null;
 }
 
-function editClaimRecord(body, record, expected, name = 'lastSeen') {
+export function editClaimRecord(body, record, expected, name = 'lastSeen') {
   const accept = text => {
     const next = String(body).replace(record.text, () => text);
     return isDeepStrictEqual(claimRecord(next)?.value, expected) ? next : null;
@@ -297,27 +297,32 @@ export async function winningClaim(repository, key, github, authority, now = NaN
   }, lastSeen);
 }
 
-export async function refreshClaimHeartbeat({ cwd = '', repository, claim, coordinatorId, machine, at }, ports = {}) {
+export async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorId, machine, at }, ports = {}) {
   const i = info(claim?.issue), s = service(cwd, ports);
   if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
     || !claim.labelEventId || claim.active !== true || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !Number.isFinite(time(at))) {
-    return { state: 'skipped' };
+    return null;
   }
   const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`;
   const comment = (await s.api(endpoint, 'GET', undefined, 'claims', repository, true)).value;
   const record = claimRecord(comment?.body);
   if (String(comment?.id) !== String(claim.commentId) || !record || !sameRepo(record.value.repository, repository)
     || record.value.coordinatorId !== coordinatorId || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) {
-    return { state: 'skipped' };
+    return null;
   }
   const value = iso(time(at));
-  const body = editClaimRecord(comment.body, record, { ...record.value, lastSeen: value }, 'lastSeen');
-  if (body === null) throw Error('Claim record cannot take a heartbeat without other changes');
+  const body = editClaimRecord(comment.body, record, { ...record.value, [name]: value }, name);
+  if (body === null) throw Error(`Claim record cannot take ${name === 'lastSeen' ? 'a heartbeat' : name} without other changes`);
   const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }), 'claims', repository)).value;
-  if (String(saved?.id) !== String(claim.commentId) || claimRecord(saved.body)?.value.lastSeen !== value) {
-    throw Error('Claim heartbeat readback is unresolved');
+  if (String(saved?.id) !== String(claim.commentId) || claimRecord(saved.body)?.value[name] !== value) {
+    throw Error(name === 'lastSeen' ? 'Claim heartbeat readback is unresolved' : 'Claim record readback is unresolved');
   }
-  return { state: 'refreshed', lastSeen: value };
+  return value;
+}
+
+export async function refreshClaimHeartbeat(args, ports = {}) {
+  const lastSeen = await setOwnClaimTime('lastSeen', args, ports);
+  return lastSeen === null ? { state: 'skipped' } : { state: 'refreshed', lastSeen };
 }
 
 function nativeAuthority(cwd, ports) {

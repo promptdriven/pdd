@@ -50,9 +50,14 @@ dependency on workflow sessions, Herdr or issue-sorting adapters.
 
 ## Public contract
 
+- `CLAIM_EXPIRES_AFTER` (`4 * 60 * 60 * 1000`)
+- `claimRecord(body) -> { value: object, text: string } | null`
+- `editClaimRecord(body, record, expected, name = 'lastSeen') -> string | null`
+- `heartbeatTimeForComment(comment) -> number`
 - `takeoverLimited(claim, self) -> boolean`
 - `withoutClaimHeartbeat(body) -> string`
 - `winningClaim(repository, key, github, authority, now = NaN, safety = false, observedIssue = null) -> Promise<object | null>`
+- `setOwnClaimTime(name, { cwd, repository, claim, coordinatorId, machine, at }, ports = {}) -> Promise<string | null>`
 - `refreshClaimHeartbeat({ cwd, repository, claim, coordinatorId, machine, at }, ports = {}) -> Promise<{ state: 'skipped' } | { state: 'refreshed', lastSeen: string }>`
 - `createDependencyReadPorts({ cwd = '' } = {}, supplied = {}) -> { cwd, github, authority, clock, owners, ... }`
 
