@@ -424,12 +424,16 @@ export function parseJsModuleEdges(source, relPath) {
   return { imports, spawns };
 }
 
-export function resolveImportSpecifier(fromRelPath, spec, fileSet) {
+export function resolveImportSpecifier(fromRelPath, spec, fileSet, kind = 'static-import') {
   const cleanSpec = String(spec ?? '').replace(/[?#].*$/, '');
   if (BUILTINS.has(cleanSpec) || cleanSpec.startsWith('node:')) return { kind: 'builtin', specifier: spec };
   if (cleanSpec.startsWith('./') || cleanSpec.startsWith('../') || cleanSpec.startsWith('/')) {
     const base = cleanSpec.startsWith('/') ? cleanSpec.slice(1) : posix.normalize(posix.join(posix.dirname(fromRelPath), cleanSpec));
-    for (const cand of [base, `${base}.mjs`, `${base}.js`, `${base}.cjs`, `${base}/index.mjs`, `${base}/index.js`]) {
+    const isCjs = kind === 'create-require' || kind === 'require';
+    const cands = isCjs
+      ? [base, `${base}.mjs`, `${base}.js`, `${base}.cjs`, `${base}/index.mjs`, `${base}/index.js`, `${base}/index.cjs`]
+      : [base, `${base}.mjs`, `${base}.js`, `${base}.cjs`];
+    for (const cand of cands) {
       if (fileSet.has(cand)) return { kind: 'repo', target: cand };
     }
     return { kind: 'missing-local', target: base };

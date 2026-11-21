@@ -160,7 +160,7 @@ export function analyzeArchitecture({ root = DEFAULT_ROOT } = {}) {
 
     const { imports, spawns } = parseJsModuleEdges(source, rel);
     for (const edge of imports) {
-      const res = resolveImportSpecifier(rel, edge.specifier, fileSet);
+      const res = resolveImportSpecifier(rel, edge.specifier, fileSet, edge.kind);
       if (res.kind === 'builtin') continue;
       if (res.kind === 'npm') {
         if (!npmAllowed.has(res.packageName)) {

@@ -263,11 +263,14 @@ test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon
     'git diff -- src/... must NEVER be flagged while aliased fork and node spawn ARE caught',
   );
 
-  // #6: Strip ?query and #hash on relative imports, and fail closed on unresolved local relative imports!
-  const fileSet = new Set(['src/core/a.mjs', 'src/shared/util.mjs']);
+  // #6: Strip ?query and #hash on relative imports, reject bare directory /index.js for ESM (allow CJS createRequire), and fail closed on unresolved local imports!
+  const fileSet = new Set(['src/core/a.mjs', 'src/shared/util.mjs', 'src/vendor/index.js']);
   assert.deepEqual(resolveImportSpecifier('src/core/a.mjs', '../shared/util.mjs?bust=1', fileSet), { kind: 'repo', target: 'src/shared/util.mjs' });
   assert.deepEqual(resolveImportSpecifier('src/core/a.mjs', '../shared/util.mjs#frag', fileSet), { kind: 'repo', target: 'src/shared/util.mjs' });
   assert.deepEqual(resolveImportSpecifier('src/core/a.mjs', './missing.mjs', fileSet), { kind: 'missing-local', target: 'src/core/missing.mjs' });
+  assert.deepEqual(resolveImportSpecifier('src/core/a.mjs', '../vendor', fileSet, 'static-import'), { kind: 'missing-local', target: 'src/vendor' });
+  assert.deepEqual(resolveImportSpecifier('src/core/a.mjs', '../vendor', fileSet, 'dynamic-import'), { kind: 'missing-local', target: 'src/vendor' });
+  assert.deepEqual(resolveImportSpecifier('src/core/a.mjs', '../vendor', fileSet, 'create-require'), { kind: 'repo', target: 'src/vendor/index.js' });
 
   // #6 & #7 end-to-end on temp fixture: unresolved local import fails closed, --write-ratchet refuses growth without --allow-growth,
   // and adding an intra-SCC edge OR self-import inside an already-ratcheted SCC fails exit 1!
@@ -277,7 +280,7 @@ test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon
 
   writeRepoFile(dir, 'package.json', JSON.stringify({ name: 'fixture', dependencies: {} }));
   writeRepoFile(dir, 'src/shared/util.mjs', 'export const ok = 1;\n');
-  writeRepoFile(dir, 'src/vendor/lib.mjs', 'export const v = 1;\n');
+  writeRepoFile(dir, 'src/vendor/index.js', 'export const v = 1;\n');
   writeRepoFile(dir, 'src/core/a.mjs', "import { b } from './b.mjs?v=1';\nimport { c } from './c.mjs';\nexport const a = b + c;\n");
   writeRepoFile(dir, 'src/core/b.mjs', "import { c } from './c.mjs#hash';\nexport const b = c;\n");
   writeRepoFile(dir, 'src/core/c.mjs', "import { a } from './a.mjs';\nexport const c = a;\n");

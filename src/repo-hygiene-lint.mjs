@@ -3002,7 +3002,7 @@ const POLLING_STATE_RE = /\b(?:ready|done|finished|stopped|alive|pending|waiting
 const COUNTER_VAR_RE = /^(?:[a-z]\d*|i|j|k|n|idx|index|count|step|iter|num|pos|offset)$/i;
 
 function isPureCounterCond(cond, bodyAndUpdate) {
-  const m = /^([A-Za-z_$][\w$]*)\s*(?:<|<=|>|>=|!=|!==)\s*(?:\d+|[A-Za-z_$][\w$]*)$/.exec(cond);
+  const m = /^([A-Za-z_$][\w$]*)\s*(?:<|<=|>|>=|!=|!==)\s*(?:\d+|[A-Za-z_$][\w$.]*)$/.exec(cond);
   if (!m || POLLING_DEADLINE_RE.test(cond) || POLLING_STATE_RE.test(cond)) return false;
   if (COUNTER_VAR_RE.test(m[1])) return true;
   const esc = m[1].replace(/\$/g, '\\$');
@@ -3058,7 +3058,15 @@ function buildPythonPollingTable(lines) {
   const parentHeader = new Int32Array(n).fill(-1);
   const headerState = new Int8Array(n); // 1 = exempt, -1 = non-exempt scope boundary (def/class), 0 = pass-through
   const stack = [];
-  const indentOf = s => { let k = 0; while (k < s.length && (s[k] === ' ' || s[k] === '\t')) k += s[k] === '\t' ? 4 : 1; return k; };
+  const indentOf = s => {
+    let col = 0;
+    for (let k = 0; k < s.length; k++) {
+      if (s[k] === ' ') col += 1;
+      else if (s[k] === '\t') col += 8 - (col % 8);
+      else break;
+    }
+    return col;
+  };
   const closeFrame = f => {
     if (f.kind === 'loop') {
       const summary = `${f.hasCond ? 'if ' : ''}${f.hasJump ? 'break ' : ''}${f.hasDrain ? '.pop() ' : ''}${[...f.incVars].map(v => `${v}+=1`).join(' ')}`;

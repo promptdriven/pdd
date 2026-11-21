@@ -2465,6 +2465,7 @@ test('3574 + 3562 cross-family review regressions (Astra #1-#4): strict export c
     '  while (queue.length > 0) { queue.shift(); await new Promise(r => setTimeout(r, 10)); }',
     '  while (i !== limit) { i++; await sleep(10); }',
     '  for (let i = 0; i !== limit; i++) { await sleep(10); }',
+    '  for (let i = 0; i !== batch.length; i++) { await sleep(10); }',
     '  await Promise.race([',
     '    (async () => { await sleep(500); return "work"; })(),',
     '    sleep(50).then(() => doWork()),',
@@ -2473,15 +2474,16 @@ test('3574 + 3562 cross-family review regressions (Astra #1-#4): strict export c
     '});',
   ].join('\n');
   const drainRaceWarnings = lintTestFixedSleeps(dataDrainAndRaceWorkJs, { path: 'test/drain-race.test.mjs' });
-  assert.equal(drainRaceWarnings.length, 6, `expected 6 warnings (2 drains + 2 pure counters + sibling callback + chained .then arm, 0 on direct timeout arm), got:\n${drainRaceWarnings.join('\n')}`);
+  assert.equal(drainRaceWarnings.length, 7, `expected 7 warnings (2 drains + 3 pure counters + sibling callback + chained .then arm, 0 on direct timeout arm), got:\n${drainRaceWarnings.join('\n')}`);
   assert.match(drainRaceWarnings[0], /:2 \[test-fixed-sleep\]/);
   assert.match(drainRaceWarnings[1], /:3 \[test-fixed-sleep\]/);
   assert.match(drainRaceWarnings[2], /:4 \[test-fixed-sleep\]/);
   assert.match(drainRaceWarnings[3], /:5 \[test-fixed-sleep\]/);
-  assert.match(drainRaceWarnings[4], /:7 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[4], /:6 \[test-fixed-sleep\]/);
   assert.match(drainRaceWarnings[5], /:8 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[6], /:9 \[test-fixed-sleep\]/);
 
-  // #3 & #4 Python: state == PENDING exempt, rows.pop() drain & pure counter flagged, and 4,000 sleeps inside 1 loop stay strictly O(N) (< 400ms)!
+  // #3 & #4 Python: state == PENDING exempt (including tab-indented!), rows.pop() drain & pure counter flagged, and 4,000 sleeps inside 1 loop stay strictly O(N) (< 400ms)!
   const pyMixed = [
     'import time',
     'def test_py_poll_and_drain():',
@@ -2493,11 +2495,18 @@ test('3574 + 3562 cross-family review regressions (Astra #1-#4): strict export c
     '    while i != limit:',
     '        i += 1',
     '        time.sleep(0.05)',
+    'def test_py_tab_indented():',
+    '\twhile state == PENDING:',
+    '\t\ttime.sleep(0.05)',
+    '\twhile i != batch.size:',
+    '\t\ti += 1',
+    '\t\ttime.sleep(0.05)',
   ].join('\n');
   const pyMixedWarnings = lintTestFixedSleeps(pyMixed, { path: 'tests/test_py_mixed.py' });
-  assert.equal(pyMixedWarnings.length, 2, `expected rows.pop() drain + pure counter flagged, got:\n${pyMixedWarnings.join('\n')}`);
+  assert.equal(pyMixedWarnings.length, 3, `expected rows.pop() drain + 2 pure counters flagged (and tab-indented polling exempt), got:\n${pyMixedWarnings.join('\n')}`);
   assert.match(pyMixedWarnings[0], /:7 \[test-fixed-sleep\]/);
   assert.match(pyMixedWarnings[1], /:10 \[test-fixed-sleep\]/);
+  assert.match(pyMixedWarnings[2], /:16 \[test-fixed-sleep\]/);
 
   const hugePyInOneLoop = `import time\ndef test_many_in_one_loop():\n    while i != limit:\n        i += 1\n${'        time.sleep(0.01)\n'.repeat(4000)}`;
   const t0 = performance.now();
