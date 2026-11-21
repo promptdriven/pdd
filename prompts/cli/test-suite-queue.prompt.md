@@ -168,6 +168,11 @@ output-save errors too. Preserve raw byte counts independently of redaction.
 Keep full sanitized output within that limit. On overflow retain the first and
 last `(MAX_VALIDATION_LOG_BYTES - 128) / 2` bytes of sanitized output and a clear
 `N bytes omitted` marker. Never append beyond the budget, even temporarily.
+To avoid rewriting 1 MiB synchronously on every post-overflow chunk, write once
+on initial overflow, buffer subsequent tail chunks in bounded memory with
+periodic checkpoints (every `flushBytes`, default `(MAX_VALIDATION_LOG_BYTES - 128) / 2`),
+and expose `flush()` called by the recorder before saving the terminal receipt,
+keeping `evidence.logBytes` equal to the bytes written on disk.
 The receipt's `evidence` is `{outputBytes, logBytes, omittedBytes, truncated}`:
 `outputBytes` counts all raw stdout/stderr bytes; `logBytes` is the saved file
 size; `omittedBytes` counts bytes removed by oversized-line suppression plus

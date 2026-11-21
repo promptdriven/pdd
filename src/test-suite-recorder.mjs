@@ -73,6 +73,7 @@ process.on('message', async message => {
     result = await executeSuite(command, {...options,startGate:true,onOutput:output,
       onChild: pid => { record.childPid = pid; save(); }});
     for (const stream of ['stdout','stderr']) { filters[stream].end(); flush(stream); }
+    log.flush();
     record.exitCode = result.exitCode; record.signal = result.signal ?? null;
     record.outcome = result.ownershipConfirmed === false ? 'unknown' : 'completed';
     record.exitCode = result.ownershipConfirmed === false ? null : result.exitCode;

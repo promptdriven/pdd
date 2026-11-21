@@ -110,6 +110,29 @@ test('log budget includes the marker at each overflow boundary and counts exact 
   }
 });
 
+test('P0-8: post-overflow chunk stream batches checkpoints instead of rewriting 1 MiB per chunk and flush() commits exact final tail',()=>{
+  let saved=Buffer.alloc(0), writes=0, appends=0;
+  const log=validationLog(
+    bytes=>{writes++;saved=Buffer.from(bytes);},
+    bytes=>{appends++;saved=Buffer.concat([saved,bytes]);},
+  );
+  const totalChunks=1280; // 1280 * 4 KiB = 5 MiB (>1000 post-overflow chunks)
+  for(let i=0;i<totalChunks;i++) {
+    const tag=`CHUNK-${String(i).padStart(4,'0')}-`;
+    log.add(tag+'a'.repeat(4096-tag.length));
+  }
+  log.flush();
+  assert.ok(appends<=256,'pre-overflow chunks use append');
+  assert.ok(writes<=12,`post-overflow full writes stay bounded (got ${writes} for ${totalChunks} chunks)`);
+  assert.ok(saved.length<=MAX_VALIDATION_LOG_BYTES);
+  assert.equal(log.evidence.logBytes,saved.length);
+  assert.equal(log.evidence.truncated,true);
+  const text=saved.toString('utf8');
+  assert.ok(text.startsWith('CHUNK-0000-'),'retains exact head');
+  assert.match(text,/bytes omitted\]/,'includes omission marker');
+  assert.ok(text.includes('CHUNK-1279-'),'flush commits exact final tail chunk');
+});
+
 test('line budget suppresses the whole oversized value including an EOF continuation',()=>{
   for(const n of [MAX_EVIDENCE_LINE_BYTES-1,MAX_EVIDENCE_LINE_BYTES,MAX_EVIDENCE_LINE_BYTES+1]) {
     let saved='',omitted=0;

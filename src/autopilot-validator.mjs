@@ -2375,15 +2375,8 @@ function coversRequiredProofKinds(requiredProofKinds, passingChecks, { hasOsBoun
   ));
 }
 
-function findMissingRealHostClasses({ requiredClasses, explicitClasses, executedRealHostChecks }) {
+function findMissingRealHostClasses({ requiredClasses, executedRealHostChecks }) {
   if (!requiredClasses.length) return [];
-  const hasExplicitRequirement = explicitClasses.length > 0;
-  const anyCheckReportsClassMeta = executedRealHostChecks.some((c) => (
-    Array.isArray(c.realHostClasses)
-    || Number.isInteger(c.turns)
-    || Number.isFinite(c.payloadBytes)
-  ));
-  if (!hasExplicitRequirement && !anyCheckReportsClassMeta) return [];
 
   const missing = [];
   for (const cls of requiredClasses) {
@@ -2404,6 +2397,22 @@ function findMissingRealHostClasses({ requiredClasses, explicitClasses, executed
     if (!satisfied) missing.push(cls);
   }
   return missing;
+}
+
+function evidencedRealHostClasses(executedRealHostChecks) {
+  const classes = new Set();
+  for (const c of executedRealHostChecks) {
+    if (!isPassingRealE2eCheck(c)) continue;
+    const checkClasses = Array.isArray(c.realHostClasses) ? c.realHostClasses : [];
+    for (const cls of checkClasses) {
+      if (cls === 'multi-turn-cli-state' && Number.isInteger(c.turns) && c.turns < 2) continue;
+      if (cls === 'full-size-payload' && Number.isFinite(c.payloadBytes) && c.payloadBytes <= MIN_REALISTIC_PAYLOAD_BYTES) continue;
+      if (typeof cls === 'string' && cls.trim()) classes.add(cls.trim());
+    }
+    if (Number.isInteger(c.turns) && c.turns >= 2) classes.add('multi-turn-cli-state');
+    if (Number.isFinite(c.payloadBytes) && c.payloadBytes > MIN_REALISTIC_PAYLOAD_BYTES) classes.add('full-size-payload');
+  }
+  return [...classes].sort();
 }
 
 function describeRealHostGap({ nativeOnlyFiles, runtimeSurfaces, missingClasses, mockOnlyDetected }) {
@@ -2638,7 +2647,6 @@ export function evaluateValidationOutcome({
   if (needsRealHostSmoke && !executedClassChecks.some((c) => !isPassingRealE2eCheck(c))) {
     const missingClasses = findMissingRealHostClasses({
       requiredClasses,
-      explicitClasses,
       executedRealHostChecks: executedClassChecks,
     });
     if (missingClasses.length > 0) {
@@ -2707,6 +2715,7 @@ export function evaluateValidationOutcome({
         surfaces: [...surfaceInfo.runtimeSurfaces],
         commands: executedRealChecks.map((c) => cleanText(c.command)),
         exitCodes: executedRealChecks.map((c) => c.exitCode),
+        ...(needsRealHostSmoke ? { realHostClasses: evidencedRealHostClasses(executedClassChecks) } : {}),
       },
       humanVerificationCard: [],
     };
