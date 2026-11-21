@@ -1,12 +1,28 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: a0e3d5ba335ffbf3eac7ce2d7b54cc22b18eef7822ba9d7b5be13b007732e6ef).
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 9466aa29fd1003fb631a75c3cf3148d244e24e4f7b6c392b4c74d6a88bce4fe9).
 
 export const MAX_VALIDATION_REPAIRS = 3;
+export const MIN_REALISTIC_PAYLOAD_BYTES = 4096;
+export const REAL_HOST_FAILURE_CLASSES = Object.freeze([
+  'nested-sandbox',
+  'host-tty-ownership',
+  'multi-turn-cli-state',
+  'full-size-payload',
+]);
+
+const REAL_HOST_CLASS_SET = new Set(REAL_HOST_FAILURE_CLASSES);
+const REAL_HOST_CLASS_LABELS = Object.freeze({
+  'nested-sandbox': 'nested OS sandbox execution (real child process inside sandbox, not mocked argv-prefix test)',
+  'host-tty-ownership': 'real host device/TTY ownership (/dev/tty UID/permissions on host kernel, not mocked TTY helper)',
+  'multi-turn-cli-state': 'multi-turn real CLI state side effects (Turn 1 -> Turn 2 state/containment check, not single-turn stub)',
+  'full-size-payload': `full-size realistic payload handling (> ${MIN_REALISTIC_PAYLOAD_BYTES} bytes un-truncated payload, not tiny synthetic fixture)`,
+});
 
 const REAL_E2E_KINDS = new Set([
   'subprocess-cli',
   'local-server-or-db',
   'browser-playwright',
   'live-binding',
+  'real-host-smoke',
   'real-execution',
 ]);
 
@@ -19,6 +35,13 @@ const CLI_TOKEN_RE = tokenMatch('cli');
 const API_TOKEN_RE = tokenMatch('server|router|api|http|https|ws|websocket|graphql|grpc');
 const DB_TOKEN_RE = tokenMatch('postgres|postgresql|mysql|sqlite|mongo|mongodb|redis|db');
 const EXTERNAL_TOKEN_RE = tokenMatch('gcloud|gcp|aws|azure|stripe|docker|kubernetes|k8s|oauth|auth|webhook|terraform');
+const OS_BOUNDARY_TOKEN_RE = tokenMatch('sandbox|tty|pty|subprocess|spawn|exec|child[-_]?process|seatbelt|seccomp|landlock|bwrap|bubblewrap|chroot|cgroup|namespace|signal|daemon|ipc|socket|fd|ioctl|termios|posix|syscall|kernel');
+const REAL_HOST_CLASS_PATH_RULES = [
+  { id: 'nested-sandbox', re: tokenMatch('sandbox|seatbelt|seccomp|landlock|bwrap|bubblewrap|chroot|cgroup') },
+  { id: 'host-tty-ownership', re: tokenMatch('tty|pty|termios|ioctl') },
+  { id: 'multi-turn-cli-state', re: tokenMatch('cli[-_]?session|cli[-_]?wrapper|session[-_]?state|containment') },
+  { id: 'full-size-payload', re: tokenMatch('payload|preview|truncat|framing|wire[-_]?frame|stream[-_]?buffer') },
+];
 
 const SURFACE_MATCHERS = [
   {
@@ -45,6 +68,11 @@ const SURFACE_MATCHERS = [
       || base.startsWith('docker-compose')
       || EXTERNAL_TOKEN_RE.test(norm),
   },
+  {
+    surface: 'os-boundary',
+    test: (norm, base) => /^(?:os|sandbox|tty|pty|process|subprocess|native)\//i.test(norm)
+      || OS_BOUNDARY_TOKEN_RE.test(base),
+  },
 ];
 
 const SURFACE_TO_PROOF_KIND = {
@@ -53,6 +81,8 @@ const SURFACE_TO_PROOF_KIND = {
   database: 'local-server-or-db',
   'web-ui': 'browser-playwright',
   'external-tool': 'live-binding',
+  'os-boundary': 'real-host-smoke',
+  'native-only': 'real-host-smoke',
 };
 
 const BUCKET2_DIAGNOSTIC_RULES = [
@@ -104,19 +134,25 @@ const BUCKET2_DIAGNOSTIC_RULES = [
   },
 ];
 
-export const MOCK_USAGE_RE = /\b(?:mock\.|vi\.mock|jest\.mock|sinon\.stub|fakeClient|fakeServer|fakeTransport)\b|stub(?:bed)?Handler/i;
+export const MOCK_USAGE_RE = /\b(?:mock\.|vi\.mock|vi\.fn|jest\.mock|jest\.fn|sinon\.stub|MagicMock|unittest\.mock|fakeClient|fakeServer|fakeTransport|fakeSandbox|mockSandbox|stubSandbox|fakeTty|mockTty|stubTty|fakeDb|mockDb|fakeDriver|mockDriver|mockSpawn|fakeSpawn|fakeSubprocess|fakeCli|stubCli)\b|stub(?:bed)?(?:Handler|Wrapper)/i;
 export const REAL_E2E_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync|createServer|playwright|puppeteer|supertest|DatabaseSync)\b|\.\s*listen\s*\(|\bfetch\s*\(|\bhttps?\.request\s*\(|\b(?:chromium|firefox|webkit)\.launch\s*\(|\bpage\.goto\s*\(/i;
 const BROWSER_EXEC_RE = /\b(?:playwright|puppeteer)\b|\b(?:chromium|firefox|webkit)\.launch\s*\(|\bpage\.goto\s*\(/i;
 const BROWSER_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:@playwright\/test|playwright(?:-core|-chromium|-firefox|-webkit)?|puppeteer(?:-core)?)['"`]/i;
 const SERVER_OR_DB_EXEC_RE = /\b(?:createServer|supertest|DatabaseSync)\b|\.\s*listen\s*\(|\bfetch\s*\(|\bhttps?\.request\s*\(|\bnew\s+(?:Pool|Client)\s*\(/i;
 const DB_DRIVER_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:pg|mysql2?|better-sqlite3|node:sqlite|sqlite3?|mongodb|redis|ioredis|@prisma\/client)['"`]/i;
 const EXTERNAL_SDK_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:@google-cloud\/[^'"`]+|@aws-sdk\/[^'"`]+|aws-sdk|stripe|dockerode|@kubernetes\/client-node|@octokit\/[^'"`]+|googleapis)['"`]/i;
+const TTY_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:node:tty|tty|node-pty)['"`]/i;
+const REAL_DEVICE_PATH_RE = /\/dev\/(?:tty|ptmx|pts\/)/;
+const REAL_DEVICE_OP_RE = /\b(?:openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream|ReadStream|WriteStream|isatty|getuid|spawn|spawnSync|execFile|execFileSync|execSync)\b/;
+const SANDBOX_EXEC_RE = /\b(?:sandbox-exec|sandbox_apply|bwrap|bubblewrap|seatbelt|seccomp|landlock|unshare|chroot)\b/i;
+const MULTI_TURN_STATE_RE = /\b(?:mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|statSync|stat|HOME|containment)\b/;
+const LOOP_LINE_RE = /\b(?:for|while)\s*\(|\.\s*(?:forEach|map)\s*\(/;
 const SUBPROCESS_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync)\s*\(/;
 const SUBPROCESS_CALL_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync)\s*\(\s*([^;\n]{1,240})/g;
 const TRIVIAL_SUBPROCESS_BIN_RE = /^(?:echo|printf|true|false|pwd|uname|whoami|id|date|sleep|cat|ls|test|\[|:)(?:\s|$)/i;
 const EXTERNAL_TOOL_EXEC_RE = /\b(?:gcloud|gsutil|bq|aws|az|stripe|docker|docker-compose|kubectl|helm|terraform|gh|pdd|curl|wget|psql|mysql|redis-cli|mongosh|ssh|scp|vault|npm|npx|git)\b/i;
 const BOUNDARY_IMPORT_RE = /(?:from|require\s*\()\s*['"`]([^'"`]+)['"`]/g;
-const PROD_PATH_LITERAL_RE = /['"`]((?:\.\.\/|\.\/)?(?:bin|cli|cmd|scripts|api|server|routes|handlers|controllers|db|database|migrations|prisma|sql|web|ui|frontend|pages|components|views|app|src)\/[A-Za-z0-9._/-]+)['"`]/g;
+const PROD_PATH_LITERAL_RE = /['"`]((?:\.\.\/|\.\/)?(?:bin|cli|cmd|scripts|api|server|routes|handlers|controllers|db|database|migrations|prisma|sql|web|ui|frontend|pages|components|views|app|os|sandbox|tty|pty|process|subprocess|native|src)\/[A-Za-z0-9._/-]+)['"`]/g;
 
 const SKIP_KEYWORD_RE = /(?:e2e|validation|validator|real-binding)/i;
 const LOCAL_SKIP_HELPER_RE = /\blocalSkipRow\b|\bstoryLocalSkipOk\b|\blocalSkipOnly\b/i;
@@ -396,15 +432,248 @@ function resolveRelativeTarget(fromPath, spec) {
   return normalizePath(resolved.join('/'));
 }
 
+function parseNativeOnlyPromptMeta(raw) {
+  const text = String(raw ?? '');
+  if (!text) return null;
+  let bodyStart = -1;
+  if (text.startsWith('---\n')) bodyStart = 4;
+  else if (text.startsWith('---\r\n')) bodyStart = 5;
+  if (bodyStart > 0) {
+    let pos = bodyStart;
+    while (pos <= text.length) {
+      const nl = text.indexOf('\n', pos);
+      const lineEnd = nl < 0 ? text.length : nl;
+      const line = text.slice(pos, lineEnd).replace(/\r$/, '');
+      if (line === '---') {
+        const fm = text.slice(bodyStart, pos);
+        if (/^\s*kind\s*:\s*(?:['"])?native-only(?:['"])?\s*(?:#.*)?$/im.test(fm)) {
+          const reasonMatch = /^\s*reason\s*:\s*(.+)$/im.exec(fm);
+          const reason = reasonMatch ? reasonMatch[1].trim().replace(/^['"]|['"]$/g, '') : '';
+          return { nativeOnly: true, reason, bodyOffset: nl < 0 ? text.length : nl + 1 };
+        }
+        break;
+      }
+      if (nl < 0) break;
+      pos = nl + 1;
+    }
+  }
+  const lower = text.toLowerCase();
+  if (lower.includes('native-only') && lower.includes('runtime interface')) {
+    let pos = 0;
+    while (pos < text.length) {
+      const openFence = text.indexOf('```', pos);
+      if (openFence < 0) break;
+      const nl = text.indexOf('\n', openFence + 3);
+      if (nl < 0) break;
+      const closeFence = text.indexOf('\n```', nl + 1);
+      if (closeFence < 0) break;
+      const lang = text.slice(openFence + 3, nl).trim().toLowerCase();
+      if (lang === 'json' || lang === '') {
+        try {
+          const parsed = JSON.parse(text.slice(nl + 1, closeFence));
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.kind === 'native-only') {
+            return { nativeOnly: true, reason: cleanText(parsed.reason), bodyOffset: 0 };
+          }
+        } catch {}
+      }
+      pos = closeFence + 4;
+    }
+  }
+  return null;
+}
+
+function extractHeaderPromptRefs(rawContent) {
+  const head = String(rawContent ?? '').slice(0, 4096);
+  const refs = [];
+  const seen = new Set();
+  for (const rawLine of head.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const m = /^(?:\/\/|#|<!--|\*|"""|''')\s*(?:Generated from|Prompt:)\s+(\S+)/i.exec(line);
+    if (!m) continue;
+    const rawToken = m[1].replace(/[.,;:]+$/, '');
+    if (!rawToken.endsWith('.prompt.md')) continue;
+    const promptPath = normalizePath(rawToken);
+    if (promptPath && !promptPath.startsWith('..') && !promptPath.includes('/../') && !seen.has(promptPath)) {
+      seen.add(promptPath);
+      refs.push(promptPath);
+    }
+  }
+  return refs;
+}
+
+function extractOpeningSentenceClaims(rawPrompt, bodyOffset = 0) {
+  const lines = String(rawPrompt ?? '').slice(bodyOffset).split(/\r?\n/);
+  let sawTitle = false;
+  const paraLines = [];
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!sawTitle) {
+      if (!line) continue;
+      if (/^#\s+\S/.test(line)) sawTitle = true;
+      continue;
+    }
+    if (!line) {
+      if (paraLines.length > 0) break;
+      continue;
+    }
+    if (/^#{1,6}\s+/.test(line)) break;
+    paraLines.push(line);
+  }
+  if (!paraLines.length) return [];
+  const para = paraLines.join(' ');
+  // Extract first sentence without breaking inside backticks.
+  let inTicks = false;
+  let sentenceEnd = para.length;
+  for (let i = 0; i < para.length; i += 1) {
+    const ch = para[i];
+    if (ch === '`') { inTicks = !inTicks; continue; }
+    if (!inTicks && ch === '.' && (i + 1 === para.length || /\s/.test(para[i + 1]))) {
+      sentenceEnd = i + 1;
+      break;
+    }
+  }
+  const sentence = para.slice(0, sentenceEnd);
+  const claims = new Set();
+  let i = 0;
+  while (i < sentence.length) {
+    const start = sentence.indexOf('`', i);
+    if (start < 0) break;
+    const end = sentence.indexOf('`', start + 1);
+    if (end < 0) break;
+    const token = normalizePath(sentence.slice(start + 1, end));
+    if (token && token.includes('/') && !token.endsWith('.prompt.md') && !token.startsWith('..') && !token.includes('/../')) {
+      claims.add(token);
+    }
+    i = end + 1;
+  }
+  return [...claims].sort();
+}
+
+/**
+ * Resolve which changed production modules are owned by `kind: native-only` prompts
+ * via `pdd-bindings.json`, `Generated from` / `Prompt:` headers, or opening-sentence prose claims.
+ */
+export function detectNativeOnlyModules({
+  changedFiles = [],
+  promptFiles = [],
+  bindings = null,
+  fileHeads = [],
+} = {}) {
+  const nativePrompts = new Map(); // promptPath -> { reason, claims }
+  const rawPrompts = Array.isArray(promptFiles)
+    ? promptFiles
+    : (promptFiles && typeof promptFiles === 'object'
+      ? Object.entries(promptFiles).map(([path, content]) => ({ path, content }))
+      : []);
+  for (const item of rawPrompts) {
+    if (!item || typeof item !== 'object') continue;
+    const p = normalizePath(item.path);
+    if (!p || !p.endsWith('.prompt.md')) continue;
+    const meta = parseNativeOnlyPromptMeta(item.content);
+    if (!meta?.nativeOnly) continue;
+    nativePrompts.set(p, {
+      reason: meta.reason,
+      claims: new Set(extractOpeningSentenceClaims(item.content, meta.bodyOffset)),
+    });
+  }
+
+  const bindingMap = new Map(); // modulePath -> promptPath
+  if (bindings) {
+    let parsed = null;
+    if (typeof bindings === 'string') {
+      try { parsed = JSON.parse(bindings); } catch { parsed = null; }
+    } else if (typeof bindings === 'object') {
+      parsed = bindings;
+    }
+    if (parsed && Array.isArray(parsed.modules)) {
+      for (const entry of parsed.modules) {
+        if (!entry || typeof entry !== 'object') continue;
+        const mod = normalizePath(entry.module);
+        const prm = normalizePath(entry.prompt);
+        if (mod && prm && nativePrompts.has(prm)) bindingMap.set(mod, prm);
+      }
+    }
+  }
+
+  const headMap = new Map(); // modulePath -> headContent
+  if (Array.isArray(fileHeads)) {
+    for (const entry of fileHeads) {
+      if (!entry || typeof entry !== 'object') continue;
+      const p = normalizePath(entry.path);
+      if (p && typeof entry.content === 'string') headMap.set(p, entry.content);
+    }
+  } else if (fileHeads instanceof Map) {
+    for (const [k, v] of fileHeads.entries()) {
+      const p = normalizePath(k);
+      if (p && typeof v === 'string') headMap.set(p, v);
+    }
+  } else if (fileHeads && typeof fileHeads === 'object') {
+    for (const [k, v] of Object.entries(fileHeads)) {
+      const p = normalizePath(k);
+      if (p && typeof v === 'string') headMap.set(p, v);
+    }
+  }
+
+  const proseClaimsByModule = new Map(); // modulePath -> promptPath
+  for (const [promptPath, meta] of nativePrompts.entries()) {
+    for (const claim of meta.claims) {
+      if (!proseClaimsByModule.has(claim)) proseClaimsByModule.set(claim, promptPath);
+    }
+  }
+
+  const matches = [];
+  const moduleSet = new Set();
+  const changedList = Array.isArray(changedFiles) ? [...new Set(changedFiles.map(normalizePath).filter(Boolean))].sort() : [];
+  for (const file of changedList) {
+    const lower = file.toLowerCase();
+    if (isDocPath(lower) || NON_PRODUCTION_DIR_RE.test(lower)) continue;
+    let promptPath = null;
+    let source = null;
+    if (bindingMap.has(file)) {
+      promptPath = bindingMap.get(file);
+      source = 'binding';
+    } else if (headMap.has(file)) {
+      const refs = extractHeaderPromptRefs(headMap.get(file));
+      const matchedPrompt = refs.find((r) => nativePrompts.has(r));
+      if (matchedPrompt) {
+        promptPath = matchedPrompt;
+        source = 'header';
+      }
+    }
+    if (!promptPath && proseClaimsByModule.has(file)) {
+      promptPath = proseClaimsByModule.get(file);
+      source = 'prose';
+    }
+    if (promptPath) {
+      moduleSet.add(file);
+      matches.push({
+        module: file,
+        prompt: promptPath,
+        source,
+        reason: nativePrompts.get(promptPath)?.reason ?? '',
+      });
+    }
+  }
+
+  return {
+    nativeOnlyPrompts: [...nativePrompts.keys()].sort(),
+    nativeOnlyModules: [...moduleSet].sort(),
+    matches,
+  };
+}
+
 /**
  * Extract production boundary targets and surfaces referenced by a test file (via imports or direct path references).
  */
-export function inspectTestBoundaryTargets(testPath, text) {
+export function inspectTestBoundaryTargets(testPath, text, { nativeOnlyTargets } = {}) {
   const normTest = normalizePath(testPath);
   const code = stripCommentsPreserveLines(text);
   const targetSet = new Set();
   const boundaryTargetSet = new Set();
   const surfaceSet = new Set();
+  const nativeTargetSet = nativeOnlyTargets instanceof Set
+    ? nativeOnlyTargets
+    : new Set(Array.isArray(nativeOnlyTargets) ? nativeOnlyTargets.map(canonicalTargetPath).filter(Boolean) : []);
 
   const consider = (rawTarget) => {
     const resolved = resolveRelativeTarget(normTest, rawTarget);
@@ -415,6 +684,7 @@ export function inspectTestBoundaryTargets(testPath, text) {
     if (!canonical) return;
     targetSet.add(canonical);
     const boundary = surfaces.filter((s) => s !== 'docs' && s !== 'runtime-code');
+    if (nativeTargetSet.has(canonical)) boundary.push('native-only');
     if (boundary.length) {
       boundaryTargetSet.add(canonical);
       for (const s of boundary) surfaceSet.add(s);
@@ -423,7 +693,7 @@ export function inspectTestBoundaryTargets(testPath, text) {
 
   for (const match of code.matchAll(BOUNDARY_IMPORT_RE)) {
     const spec = match[1];
-    if (spec.startsWith('.') || /^(?:bin|cli|cmd|scripts|api|server|routes|handlers|controllers|db|database|migrations|prisma|sql|web|ui|frontend|pages|components|views|app|src)\//i.test(spec)) {
+    if (spec.startsWith('.') || /^(?:bin|cli|cmd|scripts|api|server|routes|handlers|controllers|db|database|migrations|prisma|sql|web|ui|frontend|pages|components|views|app|os|sandbox|tty|pty|process|subprocess|native|src)\//i.test(spec)) {
       consider(spec);
     }
   }
@@ -450,18 +720,124 @@ export function inspectTestBoundaryTargets(testPath, text) {
   };
 }
 
+function parseSimpleByteExpr(rawExpr) {
+  const clean = String(rawExpr ?? '').replace(/_/g, '').trim();
+  if (!clean || clean.length > 40 || !/^[0-9\s*+]+$/.test(clean)) return null;
+  let total = 0;
+  for (const addPart of clean.split('+')) {
+    const factors = addPart.split('*').map((s) => s.trim());
+    if (!factors.length || factors.some((f) => !/^\d+$/.test(f))) return null;
+    let prod = 1;
+    for (const f of factors) {
+      prod *= Number(f);
+      if (!Number.isSafeInteger(prod)) return null;
+    }
+    total += prod;
+    if (!Number.isSafeInteger(total)) return null;
+  }
+  return total;
+}
+
+function detectMaxPayloadBytes(codeNoComments) {
+  const text = String(codeNoComments ?? '');
+  let maxBytes = null;
+  const record = (n) => {
+    if (Number.isInteger(n) && n > 0 && (maxBytes === null || n > maxBytes)) maxBytes = n;
+  };
+
+  for (const m of text.matchAll(/(?:'([^'\r\n]{1,64})'|"([^"\r\n]{1,64})"|`([^`\r\n]{1,64})`)\s*\.\s*repeat\s*\(([0-9_*\s+]{1,40})\)/g)) {
+    const unit = m[1] ?? m[2] ?? m[3] ?? '';
+    const count = parseSimpleByteExpr(m[4]);
+    if (count !== null && unit.length > 0) record(unit.length * count);
+  }
+  for (const m of text.matchAll(/\.\s*repeat\s*\(([0-9_*\s+]{1,40})\)/g)) {
+    const count = parseSimpleByteExpr(m[1]);
+    if (count !== null) record(count);
+  }
+  for (const m of text.matchAll(/\b(?:Buffer\s*\.\s*alloc(?:Unsafe)?|new\s+(?:Uint8Array|Array|Buffer))\s*\(([0-9_*\s+]{1,40})\)/g)) {
+    const size = parseSimpleByteExpr(m[1]);
+    if (size !== null) record(size);
+  }
+
+  // Linear scan for large inline string literals (> 4 KiB) without regex backtracking.
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '\'' || ch === '"' || ch === '`') {
+      const start = i + 1;
+      i += 1;
+      while (i < text.length) {
+        const c = text[i];
+        if (c === '\\') { i += 2; continue; }
+        if (c === ch) {
+          const len = i - start;
+          if (len > MIN_REALISTIC_PAYLOAD_BYTES) record(len);
+          i += 1;
+          break;
+        }
+        if (c === '\n' && ch !== '`') { i += 1; break; }
+        i += 1;
+      }
+      continue;
+    }
+    i += 1;
+  }
+
+  return maxBytes;
+}
+
+const HELPER_DEF_RE = /\b(?:function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(|(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>)/;
+
+function countIdentifierCalls(codeNoStrings, name) {
+  let count = 0;
+  let pos = 0;
+  while (pos < codeNoStrings.length) {
+    const idx = codeNoStrings.indexOf(name, pos);
+    if (idx < 0) break;
+    const before = idx > 0 ? codeNoStrings[idx - 1] : '';
+    const afterIdx = idx + name.length;
+    if (!before || !/[A-Za-z0-9_$.]/.test(before)) {
+      let j = afterIdx;
+      while (j < codeNoStrings.length && (codeNoStrings[j] === ' ' || codeNoStrings[j] === '\t')) j += 1;
+      if (codeNoStrings[j] === '(') {
+        const lineStart = codeNoStrings.lastIndexOf('\n', idx) + 1;
+        const prefix = codeNoStrings.slice(lineStart, idx);
+        if (!/\bfunction\s+$/.test(prefix)) count += 1;
+      }
+    }
+    pos = afterIdx;
+  }
+  return count;
+}
+
 function analyzeSubprocessCalls(codeNoComments, codeNoStrings) {
   let hasRealSubprocess = false;
   let hasExternalToolSubprocess = false;
+  let hasLiveLocalSubprocess = false;
+  let hasSandboxSubprocess = false;
+  let subprocessCallCount = 0;
+  let hasLoopedSubprocess = false;
   if (!SUBPROCESS_EXEC_RE.test(codeNoStrings)) {
-    return { hasRealSubprocess, hasExternalToolSubprocess };
+    return {
+      hasRealSubprocess,
+      hasExternalToolSubprocess,
+      hasLiveLocalSubprocess,
+      hasSandboxSubprocess,
+      subprocessCallCount,
+      hasLoopedSubprocess,
+    };
   }
   const codeLines = codeNoComments.split(/\r?\n/);
   const maskedLines = codeNoStrings.split(/\r?\n/);
+  const helperNames = new Set();
   for (let i = 0; i < maskedLines.length; i += 1) {
     if (!SUBPROCESS_EXEC_RE.test(maskedLines[i])) continue;
     const lineLen = (codeLines[i] ?? '').length;
     const windowText = codeLines.slice(i, i + 4).join(' ');
+    const lookbackStart = Math.max(0, i - 4);
+    const prevContext = maskedLines.slice(lookbackStart, i + 1).join('\n');
+    const inLoop = LOOP_LINE_RE.test(prevContext);
+    let matchedNonTrivial = false;
     for (const match of windowText.matchAll(SUBPROCESS_CALL_RE)) {
       if ((match.index ?? 0) > lineLen) break;
       const argText = (match[1] ?? '').trim();
@@ -474,6 +850,11 @@ function analyzeSubprocessCalls(codeNoComments, codeNoStrings) {
         const baseBin = firstWord.split(/[\\/]/).pop() ?? '';
         if (!baseBin || TRIVIAL_SUBPROCESS_BIN_RE.test(baseBin)) continue;
         hasRealSubprocess = true;
+        matchedNonTrivial = true;
+        subprocessCallCount += 1;
+        if (inLoop) hasLoopedSubprocess = true;
+        if (/--live-local\b/i.test(argText)) hasLiveLocalSubprocess = true;
+        if (SANDBOX_EXEC_RE.test(rawCmd) || SANDBOX_EXEC_RE.test(argText)) hasSandboxSubprocess = true;
         const isShellOrRuntime = /^(?:sh|bash|zsh|dash|fish|cmd|cmd\.exe|powershell|pwsh|node|nodejs|python|python3|ruby|deno|bun|tsx|ts-node)$/i.test(baseBin);
         if (EXTERNAL_TOOL_EXEC_RE.test(rawCmd) || (isShellOrRuntime && EXTERNAL_TOOL_EXEC_RE.test(argText))) {
           hasExternalToolSubprocess = true;
@@ -481,24 +862,128 @@ function analyzeSubprocessCalls(codeNoComments, codeNoStrings) {
         continue;
       }
       hasRealSubprocess = true;
+      matchedNonTrivial = true;
+      subprocessCallCount += 1;
+      if (inLoop) hasLoopedSubprocess = true;
+      if (/--live-local\b/i.test(argText)) hasLiveLocalSubprocess = true;
+      if (SANDBOX_EXEC_RE.test(argText)) hasSandboxSubprocess = true;
       if (EXTERNAL_TOOL_EXEC_RE.test(argText)) {
         hasExternalToolSubprocess = true;
       }
     }
+    if (matchedNonTrivial) {
+      for (let back = i; back >= lookbackStart; back -= 1) {
+        const def = HELPER_DEF_RE.exec(maskedLines[back] ?? '');
+        const helper = def?.[1] ?? def?.[2];
+        if (helper && helper !== 'test' && helper !== 'it' && helper !== 'describe') {
+          helperNames.add(helper);
+          break;
+        }
+      }
+    }
   }
-  return { hasRealSubprocess, hasExternalToolSubprocess };
+  for (const helper of helperNames) {
+    const calls = countIdentifierCalls(codeNoStrings, helper);
+    if (calls > subprocessCallCount) subprocessCallCount = calls;
+  }
+  return {
+    hasRealSubprocess,
+    hasExternalToolSubprocess,
+    hasLiveLocalSubprocess,
+    hasSandboxSubprocess,
+    subprocessCallCount,
+    hasLoopedSubprocess,
+  };
 }
 
 function detectRealExecutionSignals(codeNoComments, codeNoStrings) {
-  const { hasRealSubprocess, hasExternalToolSubprocess } = analyzeSubprocessCalls(codeNoComments, codeNoStrings);
+  const {
+    hasRealSubprocess,
+    hasExternalToolSubprocess,
+    hasLiveLocalSubprocess,
+    hasSandboxSubprocess,
+    subprocessCallCount,
+    hasLoopedSubprocess,
+  } = analyzeSubprocessCalls(codeNoComments, codeNoStrings);
+  const hasMock = MOCK_USAGE_RE.test(codeNoStrings);
   const hasBrowser = BROWSER_EXEC_RE.test(codeNoStrings)
     || (BROWSER_IMPORT_RE.test(codeNoComments) && /\.(?:launch|goto|newPage)\s*\(/i.test(codeNoStrings));
   const hasServerOrDb = SERVER_OR_DB_EXEC_RE.test(codeNoStrings)
-    || (DB_DRIVER_IMPORT_RE.test(codeNoComments) && !MOCK_USAGE_RE.test(codeNoStrings));
-  const hasExternalSdk = EXTERNAL_SDK_IMPORT_RE.test(codeNoComments) && !MOCK_USAGE_RE.test(codeNoStrings);
+    || (DB_DRIVER_IMPORT_RE.test(codeNoComments) && !hasMock);
+  const hasExternalSdk = EXTERNAL_SDK_IMPORT_RE.test(codeNoComments) && !hasMock;
+  const hasRealDeviceOrTtyProbe = !hasMock && (
+    (REAL_DEVICE_PATH_RE.test(codeNoComments) && REAL_DEVICE_OP_RE.test(codeNoStrings))
+    || (TTY_IMPORT_RE.test(codeNoComments) && REAL_DEVICE_OP_RE.test(codeNoStrings))
+  );
+  const hasLiveLocal = hasLiveLocalSubprocess;
   const hasLiveBinding = hasBrowser || hasServerOrDb || hasExternalToolSubprocess || hasExternalSdk;
-  const hasAnyRealExec = hasLiveBinding || hasRealSubprocess;
-  return { hasBrowser, hasServerOrDb, hasRealSubprocess, hasLiveBinding, hasAnyRealExec };
+  const hasRealHostSmoke = hasLiveBinding || hasRealSubprocess || hasRealDeviceOrTtyProbe || hasLiveLocal;
+  const hasAnyRealExec = hasRealHostSmoke;
+  return {
+    hasBrowser,
+    hasServerOrDb,
+    hasRealSubprocess,
+    hasLiveBinding,
+    hasRealDeviceOrTtyProbe,
+    hasLiveLocal,
+    hasSandboxSubprocess,
+    subprocessCallCount,
+    hasLoopedSubprocess,
+    hasRealHostSmoke,
+    hasAnyRealExec,
+  };
+}
+
+/**
+ * Inspect a test file for executable, non-mocked real-host boundary probes across the 4 OS/CLI failure classes.
+ */
+export function detectRealHostProbesInTest(testPath, text) {
+  const lint = lintValidationCode({ path: testPath, kind: 'test', text, hasRealE2eCoverage: true });
+  if (lint.codes.includes('silent-validation-skip')) {
+    return {
+      hasRealHostSmoke: false,
+      mockOnly: false,
+      classes: [],
+      maxDetectedPayloadBytes: null,
+      detectedTurns: 0,
+      liveLocal: false,
+    };
+  }
+  const { codeNoComments, codeNoStrings } = scanJsPreserveLines(text);
+  const signals = detectRealExecutionSignals(codeNoComments, codeNoStrings);
+  const hasMock = MOCK_USAGE_RE.test(codeNoStrings);
+  const mockOnly = hasMock && !signals.hasRealHostSmoke;
+  const maxDetectedPayloadBytes = detectMaxPayloadBytes(codeNoComments);
+  const detectedTurns = !signals.hasRealSubprocess
+    ? 0
+    : (signals.hasLoopedSubprocess ? Math.max(2, signals.subprocessCallCount) : signals.subprocessCallCount);
+
+  const classes = new Set();
+  if (signals.hasRealSubprocess && !mockOnly && (
+    signals.hasSandboxSubprocess
+    || /\b(?:sandbox|seatbelt|seccomp|landlock|bwrap|bubblewrap)\b/i.test(String(testPath ?? ''))
+    || SANDBOX_EXEC_RE.test(codeNoComments)
+  )) {
+    classes.add('nested-sandbox');
+  }
+  if (signals.hasRealDeviceOrTtyProbe && !mockOnly) {
+    classes.add('host-tty-ownership');
+  }
+  if (signals.hasRealSubprocess && !mockOnly && detectedTurns >= 2 && MULTI_TURN_STATE_RE.test(codeNoComments)) {
+    classes.add('multi-turn-cli-state');
+  }
+  if (signals.hasRealHostSmoke && !mockOnly && maxDetectedPayloadBytes !== null && maxDetectedPayloadBytes > MIN_REALISTIC_PAYLOAD_BYTES) {
+    classes.add('full-size-payload');
+  }
+
+  return {
+    hasRealHostSmoke: signals.hasRealHostSmoke,
+    mockOnly,
+    classes: [...classes].sort(),
+    maxDetectedPayloadBytes,
+    detectedTurns,
+    liveLocal: signals.hasLiveLocal,
+  };
 }
 
 /**
@@ -515,6 +1000,7 @@ export function detectRealE2eKindsInTest(testPath, text) {
     hasServerOrDb,
     hasRealSubprocess,
     hasLiveBinding,
+    hasRealHostSmoke,
     hasAnyRealExec,
   } = detectRealExecutionSignals(codeNoComments, codeNoStrings);
 
@@ -522,6 +1008,7 @@ export function detectRealE2eKindsInTest(testPath, text) {
   if (hasServerOrDb) kinds.add('local-server-or-db');
   if (hasRealSubprocess) kinds.add('subprocess-cli');
   if (hasLiveBinding) kinds.add('live-binding');
+  if (hasRealHostSmoke) kinds.add('real-host-smoke');
   if (hasAnyRealExec || !MOCK_USAGE_RE.test(codeNoStrings)) kinds.add('real-execution');
 
   return [...kinds].sort();
@@ -530,15 +1017,29 @@ export function detectRealE2eKindsInTest(testPath, text) {
 /**
  * Classify changed repository paths into validation surfaces and required E2E proof kinds.
  */
-export function detectChangedSurfaces({ changedFiles = [] } = {}) {
+export function detectChangedSurfaces({ changedFiles = [], nativeOnlyFiles = [] } = {}) {
   const files = Array.isArray(changedFiles) ? changedFiles.map(normalizePath).filter(Boolean) : [];
+  const nativeSet = new Set(Array.isArray(nativeOnlyFiles) ? nativeOnlyFiles.map(normalizePath).filter(Boolean) : []);
   const surfaceSet = new Set();
+  const matchedNativeFiles = new Set();
+  const realHostClassSet = new Set();
   let allDocs = files.length > 0;
 
   for (const file of files) {
     const fileSurfaces = classifyProductionPathSurfaces(file);
+    const isNativeOnlyFile = nativeSet.has(file) && !isDocPath(file.toLowerCase()) && !NON_PRODUCTION_DIR_RE.test(file.toLowerCase());
+    if (isNativeOnlyFile) {
+      matchedNativeFiles.add(file);
+      if (!fileSurfaces.includes('native-only')) fileSurfaces.push('native-only');
+    }
     if (!fileSurfaces.length || fileSurfaces.some((s) => s !== 'docs')) allDocs = false;
     for (const s of fileSurfaces) surfaceSet.add(s);
+    if (!isDocPath(file.toLowerCase()) && !NON_PRODUCTION_DIR_RE.test(file.toLowerCase())) {
+      const lower = file.toLowerCase();
+      for (const rule of REAL_HOST_CLASS_PATH_RULES) {
+        if (rule.re.test(lower)) realHostClassSet.add(rule.id);
+      }
+    }
   }
 
   const surfaces = [...surfaceSet].sort();
@@ -561,6 +1062,8 @@ export function detectChangedSurfaces({ changedFiles = [] } = {}) {
     docsOnly,
     requiresRealE2e,
     requiredProofKinds: [...proofKindSet].sort(),
+    nativeOnlyFiles: [...matchedNativeFiles].sort(),
+    realHostBoundaryClasses: [...realHostClassSet].sort(),
   };
 }
 
@@ -591,11 +1094,21 @@ function detectBucket2Blocker({ realBindingUnavailable, diagnostics, toolHint, v
   return null;
 }
 
+function isRealHostBoundaryCheck(check) {
+  if (!check || typeof check !== 'object' || check.executed !== true || check.mockOnly === true) return false;
+  if (!REAL_E2E_KINDS.has(check.kind)) return false;
+  if (check.kind === 'real-execution') {
+    return check.liveLocal === true || /--live-local\b/i.test(cleanText(check.command));
+  }
+  return true;
+}
+
 function isPassingRealE2eCheck(check) {
   return Boolean(
     check
     && typeof check === 'object'
     && check.executed === true
+    && check.mockOnly !== true
     && REAL_E2E_KINDS.has(check.kind)
     && Number.isInteger(check.exitCode)
     && check.exitCode === 0
@@ -608,12 +1121,74 @@ function isPassingRealE2eCheck(check) {
   );
 }
 
+function hasSubprocessRealHostEvidence(check) {
+  if (!check || typeof check !== 'object' || check.kind !== 'real-host-smoke') return false;
+  if (Number.isInteger(check.turns) && check.turns >= 1) return true;
+  if (check.liveLocal === true || /--live-local\b/i.test(cleanText(check.command))) return true;
+  if (Array.isArray(check.realHostClasses) && check.realHostClasses.some((c) => c === 'nested-sandbox' || c === 'multi-turn-cli-state')) {
+    return true;
+  }
+  return false;
+}
+
 function coversRequiredProofKinds(requiredProofKinds, passingChecks) {
   const passedKinds = new Set(passingChecks.map((c) => c.kind));
+  const hasRealHost = passingChecks.some(isRealHostBoundaryCheck);
+  const hasSubprocessRealHost = passingChecks.some(hasSubprocessRealHostEvidence);
   return requiredProofKinds.every((required) => (
     passedKinds.has(required)
+    || (required === 'real-host-smoke' && hasRealHost)
+    || (required === 'subprocess-cli' && hasSubprocessRealHost)
     || (required === 'real-execution' && passedKinds.size > 0)
   ));
+}
+
+function findMissingRealHostClasses({ requiredClasses, explicitClasses, executedRealHostChecks }) {
+  if (!requiredClasses.length) return [];
+  const hasExplicitRequirement = explicitClasses.length > 0;
+  const anyCheckReportsClassMeta = executedRealHostChecks.some((c) => (
+    Array.isArray(c.realHostClasses)
+    || Number.isInteger(c.turns)
+    || Number.isFinite(c.payloadBytes)
+  ));
+  if (!hasExplicitRequirement && !anyCheckReportsClassMeta) return [];
+
+  const missing = [];
+  for (const cls of requiredClasses) {
+    const satisfied = executedRealHostChecks.some((c) => {
+      const checkClasses = Array.isArray(c.realHostClasses) ? c.realHostClasses : null;
+      if (cls === 'multi-turn-cli-state') {
+        if (Number.isInteger(c.turns) && c.turns < 2) return false;
+        if (checkClasses) return checkClasses.includes(cls);
+        if (Number.isInteger(c.turns)) return c.turns >= 2;
+        return !hasExplicitRequirement;
+      }
+      if (cls === 'full-size-payload') {
+        if (Number.isFinite(c.payloadBytes) && c.payloadBytes <= MIN_REALISTIC_PAYLOAD_BYTES) return false;
+        if (checkClasses) return checkClasses.includes(cls);
+        if (Number.isFinite(c.payloadBytes)) return c.payloadBytes > MIN_REALISTIC_PAYLOAD_BYTES;
+        return !hasExplicitRequirement;
+      }
+      if (checkClasses) return checkClasses.includes(cls);
+      return !hasExplicitRequirement;
+    });
+    if (!satisfied) missing.push(cls);
+  }
+  return missing;
+}
+
+function describeRealHostGap({ nativeOnlyFiles, runtimeSurfaces, missingClasses, mockOnlyDetected }) {
+  const parts = [];
+  if (nativeOnlyFiles.length) parts.push(`native-only module(s): ${nativeOnlyFiles.join(', ')}`);
+  const nonNativeSurfaces = runtimeSurfaces.filter((s) => s !== 'native-only');
+  if (nonNativeSurfaces.length) parts.push(`surface(s): ${nonNativeSurfaces.join(', ')}`);
+  if (missingClasses.length) {
+    parts.push(`unexercised real-host class(es): ${missingClasses.map((c) => REAL_HOST_CLASS_LABELS[c] || c).join('; ')}`);
+  }
+  if (mockOnlyDetected) {
+    parts.push('only mocked/stubbed or in-process unit checks detected');
+  }
+  return parts.join('; ') || 'native-only / OS boundary real-host smoke';
 }
 
 function bucket1FailureOutcome({ repairAttempts, message }) {
@@ -682,6 +1257,11 @@ function bucket3Outcome({ waitKind, repairAttempts, offlineSummary, unverifiedBo
 export function evaluateValidationOutcome({
   mode = 'auto',
   changedFiles = [],
+  nativeOnlyFiles = [],
+  promptFiles = null,
+  bindings = null,
+  fileHeads = null,
+  realHostClasses = [],
   isBugFix = false,
   offlinePassed = false,
   offlineSummary = '',
@@ -700,11 +1280,26 @@ export function evaluateValidationOutcome({
   const diagLines = Array.isArray(diagnostics) ? diagnostics.map((d) => String(d ?? '')) : [];
   const lintErrors = Array.isArray(lintBlockingCodes) ? lintBlockingCodes.map(cleanText).filter(Boolean) : [];
   const normalizedFiles = Array.isArray(changedFiles) ? changedFiles.map(normalizePath).filter(Boolean) : [];
-  const surfaceInfo = detectChangedSurfaces({ changedFiles: normalizedFiles });
+  const detectedNative = (promptFiles || bindings || fileHeads)
+    ? detectNativeOnlyModules({ changedFiles: normalizedFiles, promptFiles, bindings, fileHeads })
+    : { nativeOnlyPrompts: [], nativeOnlyModules: [], matches: [] };
+  const resolvedNativeOnlyFiles = [...new Set([
+    ...(Array.isArray(nativeOnlyFiles) ? nativeOnlyFiles.map(normalizePath).filter(Boolean) : []),
+    ...detectedNative.nativeOnlyModules,
+  ])].sort();
+  const explicitClasses = Array.isArray(realHostClasses)
+    ? [...new Set(realHostClasses.map(cleanTool).filter((c) => REAL_HOST_CLASS_SET.has(c)))].sort()
+    : [];
+  const surfaceInfo = detectChangedSurfaces({
+    changedFiles: normalizedFiles,
+    nativeOnlyFiles: resolvedNativeOnlyFiles,
+  });
+  const requiredClasses = [...new Set([...explicitClasses, ...surfaceInfo.realHostBoundaryClasses])].sort();
+  const needsRealHostSmoke = surfaceInfo.requiredProofKinds.includes('real-host-smoke') || explicitClasses.length > 0;
   const humanBlocker = needsHumanInteraction === true || diagLines.some((d) => HUMAN_INTERACTION_RE.test(d));
   const bucket2 = detectBucket2Blocker({ realBindingUnavailable, diagnostics: diagLines, toolHint, verifyCommand });
 
-  if (surfaceInfo.docsOnly && !humanBlocker && !bucket2) {
+  if (surfaceInfo.docsOnly && !needsRealHostSmoke && !humanBlocker && !bucket2) {
     if (offlinePassed === true && lintErrors.length === 0) {
       return {
         bucket: 1,
@@ -759,7 +1354,7 @@ export function evaluateValidationOutcome({
     };
   }
 
-  const defaultVerifyCmd = cleanText(verifyCommand) || 'npm run test:e2e';
+  const defaultVerifyCmd = cleanText(verifyCommand) || (needsRealHostSmoke ? 'npm run test:smoke -- --live-local' : 'npm run test:e2e');
   if (normalizedFiles.length === 0) {
     return bucket3Outcome({
       waitKind: 'missing-e2e',
@@ -772,7 +1367,52 @@ export function evaluateValidationOutcome({
   }
 
   const checks = Array.isArray(e2eChecks) ? e2eChecks : [];
-  const executedRealChecks = checks.filter((c) => c && typeof c === 'object' && c.executed === true && REAL_E2E_KINDS.has(c.kind));
+  const executedRealChecks = checks.filter((c) => c && typeof c === 'object' && c.executed === true && c.mockOnly !== true && REAL_E2E_KINDS.has(c.kind));
+  const executedRealHostChecks = checks.filter(isRealHostBoundaryCheck);
+  const mockOnlyDetected = lintErrors.includes('boundary-mock-only-test')
+    || checks.some((c) => c && typeof c === 'object' && (c.kind === 'unit-mock' || c.mockOnly === true))
+    || (executedRealChecks.length > 0 && executedRealHostChecks.length === 0);
+
+  if (needsRealHostSmoke && executedRealHostChecks.length === 0) {
+    const gap = describeRealHostGap({
+      nativeOnlyFiles: surfaceInfo.nativeOnlyFiles,
+      runtimeSurfaces: surfaceInfo.runtimeSurfaces,
+      missingClasses: requiredClasses,
+      mockOnlyDetected,
+    });
+    return bucket3Outcome({
+      waitKind: 'needs-real-host-smoke',
+      repairAttempts: attempts,
+      offlineSummary,
+      unverifiedBoundary: cleanText(humanBoundaryDetail) || gap,
+      verifyCommand: defaultVerifyCmd,
+      message: `Real-host non-mocked smoke verification is required before merge (${gap}).`,
+    });
+  }
+
+  if (needsRealHostSmoke) {
+    const missingClasses = findMissingRealHostClasses({
+      requiredClasses,
+      explicitClasses,
+      executedRealHostChecks,
+    });
+    if (missingClasses.length > 0) {
+      const gap = describeRealHostGap({
+        nativeOnlyFiles: surfaceInfo.nativeOnlyFiles,
+        runtimeSurfaces: surfaceInfo.runtimeSurfaces,
+        missingClasses,
+        mockOnlyDetected,
+      });
+      return bucket3Outcome({
+        waitKind: 'needs-real-host-smoke',
+        repairAttempts: attempts,
+        offlineSummary,
+        unverifiedBoundary: cleanText(humanBoundaryDetail) || gap,
+        verifyCommand: defaultVerifyCmd,
+        message: `Real-host boundary verification missed required host failure class(es) (${gap}).`,
+      });
+    }
+  }
 
   if (surfaceInfo.requiresRealE2e && executedRealChecks.length === 0) {
     return bucket3Outcome({
@@ -929,7 +1569,7 @@ function matchSilentSkipLine(codeLine, maskedLine, kind, isValFile = false) {
 /**
  * Deterministic backside validation lint for silent validation skips and mock-only boundary tests.
  */
-export function lintValidationCode({ path = '', kind = 'test', text = '', hasRealE2eCoverage = false } = {}) {
+export function lintValidationCode({ path = '', kind = 'test', text = '', hasRealE2eCoverage = false, nativeOnlyTargets } = {}) {
   const filePath = normalizePath(path) || 'unknown';
   const source = String(text ?? '');
   const { codeNoComments, codeNoStrings } = scanJsPreserveLines(source);
@@ -972,14 +1612,18 @@ export function lintValidationCode({ path = '', kind = 'test', text = '', hasRea
   }
 
   if (kind === 'test' && hasRealE2eCoverage !== true) {
-    const { boundarySurfaces } = inspectTestBoundaryTargets(filePath, source);
+    const { boundarySurfaces } = inspectTestBoundaryTargets(filePath, source, { nativeOnlyTargets });
     if (boundarySurfaces.length > 0) {
       const mockLineIndex = maskedLines.findIndex((line) => MOCK_USAGE_RE.test(line));
       const { hasAnyRealExec } = detectRealExecutionSignals(codeNoComments, codeNoStrings);
       if (mockLineIndex >= 0 && !hasAnyRealExec) {
         codeSet.add('boundary-mock-only-test');
+        const isNativeOrOs = boundarySurfaces.includes('native-only') || boundarySurfaces.includes('os-boundary');
+        const detail = isNativeOrOs
+          ? `mock-only test covers a ${boundarySurfaces.join('/')} boundary with no real-host smoke or --live-local execution`
+          : 'mock-only test covers a runtime boundary with no real E2E coverage';
         warnings.push(
-          `Warning: validation lint: ${filePath}:${mockLineIndex + 1} [boundary-mock-only-test] mock-only test covers a runtime boundary with no real E2E coverage`,
+          `Warning: validation lint: ${filePath}:${mockLineIndex + 1} [boundary-mock-only-test] ${detail}`,
         );
       }
     }

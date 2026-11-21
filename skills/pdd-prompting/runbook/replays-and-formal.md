@@ -26,3 +26,10 @@ Stop and tell the person to start a new agent session in the run's worktree (`pd
 
 **Structured record (`<run-folder>/replay-evidence.json`):**
 Write/update `<run-folder>/replay-evidence.json` per `docs/replay-evidence.md` (run ID, Git-visible content fingerprint, original vector hashes, per-check outcomes, mutation control, typed `formal` result with `scope`/`reason`). Never commit it or raw logs. Prompt-space publication freezes `replayBaseline` on entry into code space (plus linked approved base scenarios); missing, malformed, or stale evidence shows **BLOCKED** / **NOT REPLAYED** on the PR.
+
+**Real-host verification for `kind: native-only` and OS-boundary modules:**
+Codegen PRs that modify `kind: native-only` modules or OS/process/TTY/sandbox boundary code require an executable, non-mocked real-host smoke/integration test or `--live-local` / real-binary probe before merge. Mocked unit helpers, argv-prefix assertions, or uninstantiated DI shells fail closed (`needs-real-host-smoke`) and never prove real host behavior. Verify every applicable host boundary class directly on the host:
+- **Nested OS sandbox execution:** Run a real child process inside the active host OS sandbox rather than asserting only mocked launch-prefix arguments (catches host kernel denials such as `sandbox_apply: Operation not permitted`, `rc=71`).
+- **Real host device/TTY ownership:** Probe `/dev/tty` and actual host kernel UID/permission metadata directly rather than mocking the TTY check helper (catches root-owned kernel aliases such as `st_uid == 0` on non-root hosts).
+- **Multi-turn real CLI state side effects:** Execute at least two sequential turns (Turn 1 → Turn 2) of the real CLI binary inside an isolated home directory and verify on-disk state and containment across turns rather than relying on single-turn or stubbed calls.
+- **Full-size realistic payload handling:** Exercise un-truncated boundary payloads strictly larger than `4 KiB` (for example `12 KiB` realistic CLI/wire responses) rather than tiny synthetic fixtures that hide fixed preview-truncation defects.

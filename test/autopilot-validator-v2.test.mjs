@@ -1787,3 +1787,55 @@ test('R4 sync regression: package.json manifest is covered by executed real test
   assert.equal(wEmpty.github.merges.length, 0, 'manifest-only change with zero real tests fails closed');
   assert.ok(pr75.comments.some((c) => /<!-- pdd:autopilot-core:human-boundary:/.test(c.body)));
 });
+
+test('3574 Part 4: native-only and os-boundary modules require non-mocked real-host smoke in both auto and observe modes', () => {
+  const surf = detectChangedSurfaces({
+    changedFiles: ['src/trust/service.mjs', 'src/os-sandbox.mjs'],
+    nativeOnlyFiles: ['src/trust/service.mjs'],
+  });
+  assert.ok(surf.surfaces.includes('native-only'));
+  assert.ok(surf.surfaces.includes('os-boundary'));
+  assert.ok(surf.requiredProofKinds.includes('real-host-smoke'));
+
+  for (const mode of ['auto', 'observe']) {
+    const blocked = evaluateValidationOutcome({
+      mode,
+      changedFiles: ['src/trust/service.mjs'],
+      nativeOnlyFiles: ['src/trust/service.mjs'],
+      offlinePassed: true,
+      offlineSummary: 'unit 4/4',
+      e2eChecks: [{
+        kind: 'real-execution',
+        command: 'node --test test/trust-unit.test.mjs',
+        executed: true,
+        exitCode: 0,
+        passed: 4,
+        failed: 0,
+        skipped: 0,
+      }],
+    });
+    assert.equal(blocked.bucket, 3, `${mode}: in-process unit check must not satisfy native-only real-host gate`);
+    assert.equal(blocked.decision, 'needs-person', `${mode}: fails closed`);
+    assert.equal(blocked.waitKind, 'needs-real-host-smoke', `${mode}: reports needs-real-host-smoke`);
+    assert.equal(blocked.eligible, false, `${mode}: never eligible`);
+
+    const passed = evaluateValidationOutcome({
+      mode,
+      changedFiles: ['src/trust/service.mjs'],
+      nativeOnlyFiles: ['src/trust/service.mjs'],
+      offlinePassed: true,
+      e2eChecks: [{
+        kind: 'real-host-smoke',
+        command: 'node --test test/trust-smoke.test.mjs --live-local',
+        executed: true,
+        exitCode: 0,
+        passed: 2,
+        failed: 0,
+        skipped: 0,
+      }],
+    });
+    assert.equal(passed.bucket, 1, `${mode}: real-host-smoke passes`);
+    assert.equal(passed.decision, mode === 'observe' ? 'allow-would-merge' : 'allow-merge');
+    assert.equal(passed.eligible, true);
+  }
+});

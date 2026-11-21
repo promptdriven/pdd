@@ -1,7 +1,7 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: b147fab1921957afeca4d0021e76b17b86bc47504cff5cf1ff37742a8f319aee).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 36e76edff38abb8b0c70d5d5e4c2316db86751db2bf1cd0482041c7c5f91df8c).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
-import { detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
+import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
 import { isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { auditProductPlan } from './product-documents.mjs';
 import { isLintableStoryPath, lintStory } from './story-lint.mjs';
@@ -1310,6 +1310,138 @@ export function lintNativeOnlyPortParity(text, dependencySources, { path = 'prom
   return collectNativeOnlyPortParityFindings(text, dependencySources, { path, dependencyPaths }).map(r => r.error);
 }
 
+const NATIVE_CONTRACT_BOUNDARY_HEADING_RE = /\b(?:boundary|runtime|storage|schema|ddl|database|table|tables|sqlite|postgres|transaction|transactions|locking|lock|concurrency|http|https|wire|route|routes|endpoint|endpoints|api|protocol|cli|subcommands?|flags?|commands?|os|process|subprocess|sandbox|tty|pty|socket|filesystem|file\s+layout|auth|authentication|authorization|crypto|kms|tls|execution|adapter|driver|transport|persistence|layout|contract|interface)\b/i;
+const NATIVE_CONTRACT_ERROR_HEADING_RE = /\b(?:errors?|failures?|failure\s+modes?|error\s+mapping|degradation|refusals?|recovery|fallback|timeouts?|retries|exceptions?)\b/i;
+const NATIVE_CONTRACT_VERIFY_HEADING_RE = /\b(?:verification|verify|native\s+tests?|native\s+test\s+cases?|native\s+verification|smoke\s+tests?|smoke\s+checks?|integration\s+tests?|real[- ]host|live[- ]host|end[- ]to[- ]end|e2e|test\s+cases?|testing)\b/i;
+const NATIVE_CONTRACT_ERROR_CUE_RE = /\b(?:exit\s+code|status\s+code|http\s+[45]\d\d|[45]\d\d|stderr|error\s+mapping|error\s+code|fail(?:s|ed|ure)?\s+closed|rollback|timeout|timed?\s+out|retry|retries|reject(?:s|ed)?|refus(?:e|es|ed)|never\s+throws?|throws?\s+on|unreadable|unavailable|degrade(?:s|d)?|offline|permission\s+denied|enoent|eperm|eacces|econnrefused|deadlock|busy|conflict|lock\s+contention|atomic(?:ally)?)\b/i;
+const NATIVE_CONTRACT_VERIFY_CUE_RE = /\b(?:real[- ]host|live[- ]host|live[- ]local|--live-local|smoke\s+(?:test|tests|check|checks)|integration\s+(?:test|tests)|native\s+(?:test|tests|verification|smoke|probe|probes)|non[- ]mocked|real\s+(?:binary|subprocess|process|sandbox|tty|device|sqlite|postgres|database|driver|server|http|socket|filesystem|kernel|host))\b/i;
+
+function collectNativeOnlyContractFindings(text, { path = 'prompts/service.prompt.md' } = {}) {
+  if (!hasNativeOnlyFrontmatter(text)) return [];
+  const cleaned = stripPromptMetadataPreservingLines(text);
+  const { fences, proseLines } = scanMarkdownLinesAndFences(cleaned);
+
+  // Track section flags and `## Dependencies` line spans in a single linear pass.
+  let inDependencies = false;
+  let activeHeadingFlags = { boundary: false, error: false, verify: false };
+  let hasBoundarySurface = false;
+  let hasErrorMapping = false;
+  let hasNativeVerification = false;
+  const dependencyRanges = [];
+  const headingEvents = [];
+  let depStart = null;
+
+  for (let idx = 0; idx < proseLines.length; idx++) {
+    const { lineNo, text: line } = proseLines[idx];
+    const h2 = /^ {0,3}##\s+(.+)$/.exec(line);
+    if (h2) {
+      const title = h2[1].trim();
+      const nowDeps = /^dependencies\b/i.test(title);
+      if (nowDeps && !inDependencies) depStart = lineNo;
+      else if (!nowDeps && inDependencies) {
+        dependencyRanges.push([depStart, lineNo - 1]);
+        depStart = null;
+      }
+      inDependencies = nowDeps;
+      if (inDependencies) {
+        activeHeadingFlags = { boundary: false, error: false, verify: false };
+      } else {
+        const isPortOnlyHeading = isDomainPortWiringHeading(title);
+        activeHeadingFlags = {
+          boundary: !isPortOnlyHeading && NATIVE_CONTRACT_BOUNDARY_HEADING_RE.test(title),
+          error: NATIVE_CONTRACT_ERROR_HEADING_RE.test(title),
+          verify: NATIVE_CONTRACT_VERIFY_HEADING_RE.test(title),
+        };
+      }
+      headingEvents.push({ lineNo, flags: activeHeadingFlags });
+      continue;
+    }
+
+    if (inDependencies) continue;
+
+    const sub = /^ {0,3}#{3,6}\s+(.+)$/.exec(line);
+    if (sub) {
+      const title = sub[1].trim();
+      const isPortOnlySub = isDomainPortWiringHeading(title);
+      activeHeadingFlags = {
+        boundary: activeHeadingFlags.boundary || (!isPortOnlySub && NATIVE_CONTRACT_BOUNDARY_HEADING_RE.test(title)),
+        error: activeHeadingFlags.error || NATIVE_CONTRACT_ERROR_HEADING_RE.test(title),
+        verify: activeHeadingFlags.verify || NATIVE_CONTRACT_VERIFY_HEADING_RE.test(title),
+      };
+      headingEvents.push({ lineNo, flags: activeHeadingFlags });
+      continue;
+    }
+
+    const trimmed = line.trim();
+    if (!trimmed || /^ {0,3}#\s+/.test(line)) continue;
+
+    if (activeHeadingFlags.boundary) hasBoundarySurface = true;
+    if (activeHeadingFlags.error) hasErrorMapping = true;
+    if (activeHeadingFlags.verify) hasNativeVerification = true;
+
+    if (!hasBoundarySurface && line.includes('|') && idx + 1 < proseLines.length && isMarkdownTableSeparator(proseLines[idx + 1].text)) {
+      hasBoundarySurface = true;
+    }
+    if (!hasErrorMapping && NATIVE_CONTRACT_ERROR_CUE_RE.test(trimmed)) {
+      hasErrorMapping = true;
+    }
+    if (!hasNativeVerification && NATIVE_CONTRACT_VERIFY_CUE_RE.test(trimmed)) {
+      hasNativeVerification = true;
+    }
+  }
+  if (inDependencies && depStart !== null) {
+    dependencyRanges.push([depStart, Number.MAX_SAFE_INTEGER]);
+  }
+
+  // Fences outside `## Dependencies` satisfy their enclosing section heading and declarative schema fences satisfy boundary/runtime surface.
+  let depRangeIdx = 0;
+  let headingIdx = -1;
+  for (const fence of fences) {
+    if (!fence.bodyLines.length) continue;
+    while (depRangeIdx < dependencyRanges.length && dependencyRanges[depRangeIdx][1] < fence.openLine) depRangeIdx++;
+    if (depRangeIdx < dependencyRanges.length && fence.openLine >= dependencyRanges[depRangeIdx][0]) continue;
+    while (headingIdx + 1 < headingEvents.length && headingEvents[headingIdx + 1].lineNo < fence.openLine) headingIdx++;
+    if (headingIdx >= 0) {
+      const f = headingEvents[headingIdx].flags;
+      if (f.boundary) hasBoundarySurface = true;
+      if (f.error) hasErrorMapping = true;
+      if (f.verify) hasNativeVerification = true;
+    }
+    if (DECLARATIVE_SCHEMA_FENCE_LANGS.has(fence.lang)) {
+      hasBoundarySurface = true;
+    }
+    if (!hasErrorMapping || !hasNativeVerification) {
+      for (const item of fence.bodyLines) {
+        if (!hasErrorMapping && NATIVE_CONTRACT_ERROR_CUE_RE.test(item.text)) hasErrorMapping = true;
+        if (!hasNativeVerification && NATIVE_CONTRACT_VERIFY_CUE_RE.test(item.text)) hasNativeVerification = true;
+        if (hasErrorMapping && hasNativeVerification) break;
+      }
+    }
+  }
+
+  const missing = [];
+  if (!hasBoundarySurface) missing.push('boundary/runtime contract (storage/DDL, transaction/locking, wire/HTTP/CLI/OS/auth surface)');
+  if (!hasErrorMapping) missing.push('error mapping / failure behavior');
+  if (!hasNativeVerification) missing.push('real-host / native verification cases');
+  if (!missing.length) return [];
+
+  const detail = `Native-only prompt is missing required specification sections: ${missing.join('; ')}. Document the concrete boundary/runtime contract, error mapping, and executable non-mocked real-host verification cases.`;
+  return [{
+    filePath: path,
+    line: 1,
+    order: 3,
+    code: 'native-only-contract-incomplete',
+    category: 'native-only contract',
+    defaultSeverity: 'warn',
+    detail,
+    warning: `Warning: native-only contract: ${path}:1 [native-only-contract-incomplete] ${detail}`,
+  }];
+}
+
+export function lintNativeOnlyContract(text, { path = 'prompts/service.prompt.md' } = {}) {
+  return collectNativeOnlyContractFindings(text, { path }).map(r => r.warning);
+}
+
 function collectPromptSizeFindings(promptText, codeFiles, { path = 'prompts/module.prompt.md' } = {}) {
   const rawList = Array.isArray(codeFiles) ? codeFiles : (codeFiles !== undefined && codeFiles !== null ? [codeFiles] : []);
   const entries = rawList
@@ -2279,8 +2411,8 @@ function parseValidationWarnings(rawWarnings, fallbackPath) {
   });
 }
 
-function collectValidationCodeFindings(text, { path = 'test/example.test.mjs', kind = 'test', hasRealE2eCoverage = false } = {}) {
-  const { warnings } = lintValidationCode({ path, kind, text, hasRealE2eCoverage });
+function collectValidationCodeFindings(text, { path = 'test/example.test.mjs', kind = 'test', hasRealE2eCoverage = false, nativeOnlyTargets } = {}) {
+  const { warnings } = lintValidationCode({ path, kind, text, hasRealE2eCoverage, nativeOnlyTargets });
   return parseValidationWarnings(warnings, path);
 }
 
@@ -2296,8 +2428,8 @@ export function lintValidationSkips(text, { path = 'src/module.mjs', kind = 'cod
 /**
  * Flag mock-only tests targeting runtime boundaries when no real E2E coverage exists.
  */
-export function lintBoundaryMockOnlyTests(text, { path = 'test/example.test.mjs', hasRealE2eCoverage = false } = {}) {
-  return collectValidationCodeFindings(text, { path, kind: 'test', hasRealE2eCoverage })
+export function lintBoundaryMockOnlyTests(text, { path = 'test/example.test.mjs', hasRealE2eCoverage = false, nativeOnlyTargets } = {}) {
+  return collectValidationCodeFindings(text, { path, kind: 'test', hasRealE2eCoverage, nativeOnlyTargets })
     .filter(item => item.code === 'boundary-mock-only-test')
     .map(item => item.warning);
 }
@@ -3024,6 +3156,9 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
       rawFindings.push({ ...f, defaultSeverity: 'warn' });
     }
     if (hasNativeOnlyFrontmatter(content)) {
+      for (const f of collectNativeOnlyContractFindings(content, { path: promptPath })) {
+        rawFindings.push(f);
+      }
       const directTargets = extractDependencyLinkTargets(content, promptPath).filter(p => scopedSet.has(p));
       const directCheckablePrompts = [];
       const directContracts = [];
@@ -3154,12 +3289,23 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
   };
 
   if (!promptFilterSet || promptFilterSet.size > 0) {
+    const nativeOnlyTargets = new Set();
+    for (const [codePath, owners] of promptOwnersByCode.entries()) {
+      if (owners.some(owner => {
+        const ownerText = getPromptText(owner);
+        return typeof ownerText === 'string' && isNativeOnlyPrompt(ownerText);
+      })) {
+        const canonical = canonicalTargetPath(codePath);
+        if (canonical) nativeOnlyTargets.add(canonical);
+      }
+    }
+
     const testEntries = [];
     const realE2eTargets = new Set();
     for (const testPath of scopedFiles.filter(isInspectableTestCodePath)) {
       const content = readSafeUtf8(realRoot, testPath);
       if (typeof content !== 'string') continue;
-      const { boundaryTargets } = inspectTestBoundaryTargets(testPath, content);
+      const { boundaryTargets } = inspectTestBoundaryTargets(testPath, content, { nativeOnlyTargets });
       const realKinds = detectRealE2eKindsInTest(testPath, content);
       if (realKinds.some(k => k !== 'real-execution')) {
         for (const target of boundaryTargets) {
@@ -3181,7 +3327,7 @@ export function lintRepoProject({ root, files, promptPaths, tests, config } = {}
       const hasRealE2eCoverage = boundaryTargets.length > 0
         && boundaryTargets.every(target => !target.startsWith('test-stem:') && realE2eTargets.has(target));
       if (!promptFilterSet) {
-        for (const item of collectValidationCodeFindings(content, { path: testPath, kind: 'test', hasRealE2eCoverage })) {
+        for (const item of collectValidationCodeFindings(content, { path: testPath, kind: 'test', hasRealE2eCoverage, nativeOnlyTargets })) {
           rawFindings.push({ ...item, defaultSeverity: 'warn' });
         }
       }
