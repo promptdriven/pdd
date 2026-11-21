@@ -297,12 +297,6 @@ For an explicit base, fetch exactly `refs/heads/BRANCH` from `origin` into `refs
 
 Allocate the issue branch from that selected origin ref and save the selection in `baseBranch` and its observed commit in `baseSha`. Keep that saved start commit immutable for replay anchors; inventory comparison below and old-code proof resolve their own fetched-original-base merge-bases without rewriting either saved field. Show the base in startup output. PR 1 (or a small-change PR) targets that saved branch. PR 2 stacks on an open PR 1; after PR 1 merges it starts from and targets the saved base. Existing runs retain their recorded bases. Only the allocated topic branches are pushed; choosing a base does not authorize pushing it, changing origin’s default branch, or merging.
 
-## Durable scope boundary
-
-Workflow scope policy governs scope decisions. Resolve trusted common-repository and saved or planned work identity through its store boundary. On creation or reuse, serialize identity/assignment with the scope check so the same repository issue cannot receive duplicate work: an existing run for a scoped batch member is reused and inherits the batch limit; ambiguous identity or unsafe scope stops with the owner’s recovery instruction before allocation or replacement. This scoped reuse rule supersedes the ordinary active-run replacement rule below; genuinely absent applicable scope preserves that rule.
-
-Before allocating a code area, code branch or code chat, before approving a transition that would start code, before opening or resuming a code area, and before building or publishing code (including commits, pushes and code PRs), check the current run against the scope owner. `prompt-pr` prevents those effects and the runner supplies a clear hold notice; `stop` prevents them and reports the owner's actionable inspection/recovery instruction. `default` and `code` continue only through all existing gates. Recheck at each effect boundary, including repeated starts and resumes; do not cache a decision across a scope mutation. Coordinate the check and effect against concurrent scope mutation so a newly committed restriction cannot be bypassed. Routine approvals, checker PASS and release metadata do not extend scope. Prompt-area branch and chat and prompt PR progress remain permitted by a prompt-only hold. Scope neither permits a merge nor deployment.
-
 ## Draft publication policy
 
 Module functions `startRun` and `approveRun` accept optional Boolean `draft`.

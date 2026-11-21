@@ -209,10 +209,6 @@ For catalog route `workflow.request-uptake`, require nonblank `--summary` before
 
 workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HOME environment value) and `formatWorkflowList` from [workflow areas](workflow-areas.prompt.md). A read failure returns 1. Local help/version/skill/completion do not import the runner.
 
-## Durable scope dispatch
-
-For the four `workflow-scope-*` dispositions, resolve the trusted repository common Git directory from cwd, and dispatch to module function `manageScope(request, ports)` for workflow scope, with injectable scope module and storage and permission ports. Map batch and comma-separated runs/issues to the owner's selector, preserving each exact member; use empty fields as its interface requires. Forward the exact `--said` argument, including `-`, to the permission boundary without reading or judging it; select said when supplied, otherwise terminal for mutations, and empty route for show. Resolve strict policy and permit stdin consumption only as the owner specifies. Validate syntax and required combinations before imports or effects. Print the owner's message and selected records for show or changed results, including repository, members, limit and history; `changed` and `shown` exit 0, refusal exits 2, unsafe state and unexpected errors exit 1 with a finite diagnostic. Never report success on uncertain commit. Help remains local; these routes do not start chats or call the interpreter.
-
 ## Product commands
 
 For product-status, product-next and product-start dynamically import

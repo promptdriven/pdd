@@ -2931,6 +2931,22 @@ test('SEC-5, SEC-6 & REL-2: atomic auto on/off preserves dotfiles symlinks & mod
     err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
   );
 
+  // Root-owned system symlink parent (e.g. macOS /tmp -> /private/tmp) is permitted for a regular target file,
+  // while a symlinked target itself inside /tmp is still refused.
+  const rootParentFs = {
+    ...nativeFs,
+    lstatSync(p) {
+      if (p === symFromDir) {
+        return { isSymbolicLink: () => true, isDirectory: () => false, isFile: () => false, uid: 0 };
+      }
+      if (p === join(symFromDir, 'auth.json')) {
+        return { isSymbolicLink: () => false, isDirectory: () => false, isFile: () => true, uid: 501 };
+      }
+      return nativeFs.lstatSync(p);
+    },
+  };
+  assert.equal(detectImportProvider(rootParentFs, sb.env, { fromOption: join(symFromDir, 'auth.json') }), 'codex');
+
   // 3. REL-2: `pdd accounts add` allocates temporary CODEX_HOME under resolvePddStateBase(env)/codex-runtime (never /tmp).
   let capturedTmpCodexHome = null;
   const addRes = await invokeCli(['accounts', 'add', '--provider', 'codex', '--label', 'rel2-seat'], sb, {

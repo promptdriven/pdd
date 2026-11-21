@@ -1,4 +1,4 @@
-// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 4fa550fc7999638b5c598ca92272136d4727ea82b388f8086d06fa44ff31a2d3).
+// Generated from prompts/cli/accounts-cli.prompt.md (sha256: 0ef5f9b6a59e1bf804b8f020f5ad43888734ddec4b520689319496779c819a4e).
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
@@ -990,7 +990,7 @@ export function detectImportProvider(fs, env = process.env, options = {}) {
     const parentDir = dirname(resolved);
     let parentSt = null;
     try { parentSt = lstat.call(fs, parentDir); } catch {}
-    if (parentSt?.isSymbolicLink?.()) {
+    if (parentSt?.isSymbolicLink?.() && parentSt.uid !== 0) {
       throw new CloudAccountsError(
         `Refusing to import credential file from symlinked directory: ${parentDir}. `
         + 'Pass a real non-symlinked credential directory or file to --from, then rerun.',

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/login-pool.prompt.md (sha256: 084c7a1039a50d6b46132dad8b1a89905624d79d9b3e84a9ae89a54d0879a0e1).
+// Generated from prompts/cli/login-pool.prompt.md (sha256: b15b5e0b8e486683fc291ade061f0946c5f6b3730012524f5c4411b7ce8d3465).
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { hostname as osHostname, homedir, tmpdir } from 'node:os';
@@ -2736,6 +2736,7 @@ export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, por
       delete targetEnv.OPENAI_API_KEY;
       delete targetEnv.CODEX_API_KEY;
       delete targetEnv.CODEX_ACCESS_TOKEN;
+      delete targetEnv.CODEX_CONNECTORS_TOKEN;
       delete targetEnv.OPENAI_BASE_URL;
       delete targetEnv.PDD_CODEX_GATEWAY_GRANT;
       return targetEnv;

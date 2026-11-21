@@ -200,8 +200,8 @@ logged. Zero usage-reset credit fields, endpoints or calls exist.
     sets `model_provider = "pdd_codex_gateway"` with
     `env_http_headers = {"x-pdd-gateway-grant": "PDD_CODEX_GATEWAY_GRANT"}`. For `provider === "codex"`,
     `prepareCloudStepExecution` sets `CODEX_HOME=<overlay>`, unconditionally deletes ambient
-    `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `OPENAI_BASE_URL`, and
-    `PDD_CODEX_GATEWAY_GRANT`, and injects `PDD_CODEX_GATEWAY_GRANT=<grant>` into `step.env`
+    `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `CODEX_CONNECTORS_TOKEN`,
+    `OPENAI_BASE_URL`, and `PDD_CODEX_GATEWAY_GRANT`, and injects `PDD_CODEX_GATEWAY_GRANT=<grant>` into `step.env`
     only for legacy non-`"pddg_lse_"` grants.
 - **Claude step isolation (`buildClaudeStepEnv`, `createClaudeStepSettingsOverlay`, `prepareCloudStepExecution`, & `loginEnvironment`):** `loginEnvironment`
   strips ambient `CLAUDE_CODE_OAUTH_TOKEN`, `PDD_CODEX_GATEWAY_GRANT` and managed

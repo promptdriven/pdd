@@ -4052,6 +4052,7 @@ test('SEC-1, SEC-3, SEC-4, SEC-8 & REL-2: shared subshell excludes, no empty-sub
     OPENAI_API_KEY: 'sk-ambient-leak',
     CODEX_API_KEY: 'ck-ambient-leak',
     CODEX_ACCESS_TOKEN: 'at-ambient-leak',
+    CODEX_CONNECTORS_TOKEN: 'ct-ambient-leak',
     OPENAI_BASE_URL: 'https://evil-proxy.example.com/v1',
     PDD_CODEX_GATEWAY_GRANT: 'pddg_stale_ambient',
   };
@@ -4064,6 +4065,7 @@ test('SEC-1, SEC-3, SEC-4, SEC-8 & REL-2: shared subshell excludes, no empty-sub
     assert.equal(embeddedStep.env.OPENAI_API_KEY, undefined);
     assert.equal(embeddedStep.env.CODEX_API_KEY, undefined);
     assert.equal(embeddedStep.env.CODEX_ACCESS_TOKEN, undefined);
+    assert.equal(embeddedStep.env.CODEX_CONNECTORS_TOKEN, undefined);
     assert.equal(embeddedStep.env.OPENAI_BASE_URL, undefined);
     assert.equal(embeddedStep.env.PDD_CODEX_GATEWAY_GRANT, undefined, 'pddg_lse_* grant must not be exported into child env');
   } finally {
@@ -4083,6 +4085,7 @@ test('SEC-1, SEC-3, SEC-4, SEC-8 & REL-2: shared subshell excludes, no empty-sub
   );
   try {
     assert.equal(legacyStep.env.OPENAI_API_KEY, undefined);
+    assert.equal(legacyStep.env.CODEX_CONNECTORS_TOKEN, undefined);
     assert.equal(legacyStep.env.PDD_CODEX_GATEWAY_GRANT, 'pddg_legacyNonEmbeddedToken123', 'legacy non-pddg_lse_* grant keeps env header');
   } finally {
     legacyStep.cleanup?.();
@@ -4105,6 +4108,7 @@ test('SEC-1, SEC-3, SEC-4, SEC-8 & REL-2: shared subshell excludes, no empty-sub
     assert.equal(directStep.env.OPENAI_API_KEY, undefined, 'SEC-3: direct_stripped must still scrub ambient OPENAI_API_KEY');
     assert.equal(directStep.env.CODEX_API_KEY, undefined, 'SEC-3: direct_stripped must still scrub ambient CODEX_API_KEY');
     assert.equal(directStep.env.CODEX_ACCESS_TOKEN, undefined, 'SEC-3: direct_stripped must still scrub ambient CODEX_ACCESS_TOKEN');
+    assert.equal(directStep.env.CODEX_CONNECTORS_TOKEN, undefined, 'SEC-3: direct_stripped must still scrub ambient CODEX_CONNECTORS_TOKEN');
     assert.equal(directStep.env.OPENAI_BASE_URL, undefined, 'SEC-3: direct_stripped must still scrub ambient OPENAI_BASE_URL');
     assert.equal(directStep.env.PDD_CODEX_GATEWAY_GRANT, undefined);
   } finally {
