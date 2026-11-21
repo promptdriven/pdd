@@ -603,7 +603,7 @@ when zero PR workflows remain on `origin/BASE` after PR workflows were removed,
 `job.ciSeen` clears so a later zero-check head resolves cleanly instead of staying
 pinned forever.
 
-**Single bounded shard-flake rerun** (#3484). In `ciState`, when a PR head is red and neither `job.flakeRerunHead` nor `job.reproduceRerun?.head` equals `head`, call `evaluateShardFlakeRerun`: on `wait-siblings` keep CI `pending` while sibling shards finish; on `rerun` invoke `gh run rerun <runId> --repo <repo> --failed` once per failed workflow run (falling back to REST `rerun-failed-jobs`, and per failed shard whose `runId` is absent or failed to rerun to `check-runs/<id>/rerequest`), record `job.flakeRerunHead = head` and `job.ciRerunPending` containing `staleTokens` only for actually-reran shards, and return `pending` when all failed shards were reran (otherwise report the remaining un-reran failed checks immediately). If the rerun fails again at `head`, proceed normally to repair.
+**Single bounded shard-flake rerun and cross-job flake ledger** (#3484, #3562). In `ciState`, when a PR head is red and neither `job.flakeRerunHead` nor `job.reproduceRerun?.head` equals `head`, call `evaluateShardFlakeRerun`: on `wait-siblings` keep CI `pending` while sibling shards finish; on `rerun` invoke `gh run rerun <runId> --repo <repo> --failed` once per failed workflow run (falling back to REST `rerun-failed-jobs`, and per failed shard whose `runId` is absent or failed to rerun to `check-runs/<id>/rerequest`), record `job.flakeRerunHead = head`, `job.flakeRerunPending = {head, targets, recorded: false, recordedTargets: []}` for the actually-reran target names, and `job.ciRerunPending` containing `staleTokens` only for actually-reran shards, and return `pending` when all failed shards were reran (otherwise report the remaining un-reran failed checks immediately). On subsequent ticks for that same `head` while `job.flakeRerunPending?.head === head && !job.flakeRerunPending.recorded`, once a tracked target settles (completed and no longer in `stalePending`), persist a structured entry to the bounded ledger `ROOT/flakes.jsonl` (`appendBoundedFlakeEntries` from [Autopilot regression detection](autopilot-regressions.prompt.md), written atomically via temp file + rename with symlink `lstatSync` guards and fail-safe error swallowing so ledger I/O never crashes a tick): `'flaked-then-passed'` when the target now passed or `'reproduced-red'` when it failed again, adding it to `recordedTargets` and setting `recorded: true` once all tracked targets settle so subsequent ticks never double-record. If the rerun fails again at `head`, proceed normally to repair.
 
 **The loop guard** (lead decision, Nov 11): a fault of Autopilot or a service that
 never ends must not loop forever on one issue. Each step stop writes the history line
@@ -1115,7 +1115,7 @@ command, detail, kinds}` is recorded, and the job moves back to phase `pr` in th
 tick. A second `"not reproduced"` at the same head, or one when non-CI/non-suite checks
 were red, ends the job as `checks-red`. A `failed` result ends
 with the agent's cause (when a repair reports `kind: "pdd"` and `code: "base-test-red"`
-for #3181, its tentative `repairs` increment is refunded first); anything else ends with
+for #3181, its tentative `repairs` increment is refunded first; whenever `code === "base-test-red"` is observed, also append a deduplicated `'base-test-red'` entry with the extracted failing test/cause target to `ROOT/flakes.jsonl` fail-safely); anything else ends with
 `no-result`.
 
 **Needs a person.** A result `{"outcome": "needs-person", "kind", "question", "options"?,
@@ -2109,7 +2109,7 @@ slot` or `; Runtime: the check that was not sent runs again`, `#N ending: …`),
 (`#N waits: OWNER stop CODE: TEXT; next try after TIME (try K)`, with `; report REF` when one was filed), one line per
 held issue (`#N held since TIME: TEXT; it goes on after a new engine version or a person's comment on the issue`), one
 line per issue that cools down (`#N cools down until TIME (owner OWNER): TEXT`), the last 5 results (`#N ended TIME: cause`,
-with ` (owner OWNER)` when the line has one; strike lines are not results), non-blocking scorecard telemetry (`Scorecard: Z/T (P%) zero-edit completion (target 90-95%); …` when history has completed deliveries) and any tracked post-merge regression summary from `post-merge.json` (`Post-merge: R regression(s) (target 0: …; reopen/revert P%)`), and the count
+with ` (owner OWNER)` when the line has one; strike lines are not results), non-blocking scorecard telemetry (`Scorecard: Z/T (P%) zero-edit completion (target 90-95%); …` when history has completed deliveries) and any tracked post-merge regression summary from `post-merge.json` (`Post-merge: R regression(s) (target 0: …; reopen/revert P%)`), any recurring cross-job flakes from `ROOT/flakes.jsonl` via `summarizeRecurringFlakes` (`Recurring flakes (7d, >=3): …`, omitted when none cross the threshold), and the count
 of local report drafts.
 
 ## Text on GitHub

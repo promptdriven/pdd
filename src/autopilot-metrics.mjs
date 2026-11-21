@@ -1,8 +1,9 @@
-// Generated from prompts/cli/autopilot-metrics.prompt.md (sha256: 4bc40988b2947d13b0e95d05dd11c6c0b5c3ba7e4833b557cacd804ecc57b026).
+// Generated from prompts/cli/autopilot-metrics.prompt.md (sha256: a16c34014a0f3514de6282e8e9b3dffc2fa1971457fee92186d94ed10ee46c6c).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { parseFlakeLedger } from './autopilot-regressions.mjs';
 import {
   applyMetricsToggle,
   isMetricsEnabled,
@@ -447,6 +448,20 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
   return runs;
 }
 
+function readCoreFlakes(fs, repo, coreDir) {
+  const file = join(coreDir, 'flakes.jsonl');
+  try {
+    const dirStat = fs.lstatSync?.(coreDir);
+    if (dirStat?.isSymbolicLink?.()) return [];
+    const st = fs.lstatSync?.(file);
+    if (st?.isSymbolicLink?.() || (st && typeof st.isFile === 'function' && !st.isFile())) return [];
+    const raw = fs.readFileSync(file, 'utf8');
+    return parseFlakeLedger(raw).map(entry => ({ ...entry, repo: entry.repo ?? repo }));
+  } catch {
+    return [];
+  }
+}
+
 export function readAutopilotMetricsState(options = {}) {
   const fs = options.fs ?? nativeFs;
   const nowFn = options.now ?? Date.now;
@@ -558,6 +573,7 @@ export function readAutopilotMetricsState(options = {}) {
     entries = [];
   }
 
+  const flakes = [];
   for (const name of entries.sort()) {
     if (!name.endsWith('.json') || SKIP_CONFIG_FILES.has(name)) continue;
     const cfg = readJsonSafe(fs, join(root, name), null);
@@ -566,12 +582,14 @@ export function readAutopilotMetricsState(options = {}) {
     const stem = name.slice(0, -5);
     const coreDir = join(root, `${stem}-core`);
     const coreRuns = readCoreRuns(fs, cfg.repo, coreDir, nowMs);
-    if (cfg.enabled === true || coreRuns.length > 0) {
+    const coreFlakes = readCoreFlakes(fs, cfg.repo, coreDir);
+    if (cfg.enabled === true || coreRuns.length > 0 || coreFlakes.length > 0) {
       rememberRepo(cfg.repo, cfg.enabled === true);
       const repoLower = cfg.repo.trim().toLowerCase();
       if (!coreDirs[repoLower] || cfg.enabled === true) coreDirs[repoLower] = coreDir;
     }
     for (const r of coreRuns) addRun(r, false);
+    for (const fl of coreFlakes) flakes.push(fl);
   }
 
   const runsPath = join(root, 'metrics', 'runs.jsonl');
@@ -599,5 +617,6 @@ export function readAutopilotMetricsState(options = {}) {
     repos: [...activeRepos.values()],
     runs: [...byRunKey.values()],
     coreDirs,
+    flakes,
   };
 }

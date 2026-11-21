@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-command.prompt.md (sha256: f8a604b23d4c79094cb2af84fb41d910b9aa22c67a1ac78f9f52a7508ddda83c).
+// Generated from prompts/cli/metrics-command.prompt.md (sha256: f34959daef947465fcf1ee3612ed17159a23c165fe3d67b4043bc4f73701f693).
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -602,6 +602,8 @@ export async function runMetrics({ argv = [], cwd = process.cwd(), env = process
       prStates,
       regressions,
       regressionsComplete,
+      flakeEntries: ports.flakeEntries ?? localState.flakes,
+      ...(ports.recurringFlakes !== undefined ? { recurringFlakes: ports.recurringFlakes } : {}),
       view,
       byRepo: Boolean(options['--repos']),
       repoFilter: validatedRepo,

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-model.prompt.md (sha256: da8d2032db65c3e281cbe20582f081ea29581835a4d70f7e989021924beac2a1).
+// Generated from prompts/cli/metrics-model.prompt.md (sha256: 8bd01fbb3d0519da7d4f460ecaaebe6a87816ea7dff77012072d50746b67afc9).
 
 export const SKILLS = Object.freeze(['small-change', 'bug', 'feature']);
 export const GATES = Object.freeze(['runtime', 'vectors', 'formal', 'suite', 'review', 'ci']);
@@ -9,6 +9,9 @@ const ALL_GATES = Object.freeze([...GATES, 'e2e']);
 const DEFAULT_TARGETS = Object.freeze({ convMinPct: 90, maxRegressionPct: 0, label: null });
 const REPO_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const VALID_VIEWS = new Set(['overview', 'stages', 'skills', 'full']);
+const VALID_FLAKE_OUTCOMES = new Set(['flaked-then-passed', 'reproduced-red', 'base-test-red']);
+const DEFAULT_FLAKE_WINDOW_DAYS = 7;
+const DEFAULT_FLAKE_THRESHOLD = 3;
 const DAY_MS = 86_400_000;
 const WEEKDAY_INDEX = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
 
@@ -825,6 +828,117 @@ function summarizeSkills(windowDef, items) {
   };
 }
 
+function summarizeMetricsRecurringFlakes({
+  recurringFlakes,
+  flakeEntries,
+  refMs,
+  windowDays = DEFAULT_FLAKE_WINDOW_DAYS,
+  threshold = DEFAULT_FLAKE_THRESHOLD,
+  excludedRepos,
+  repoFilterLower,
+}) {
+  const days = typeof windowDays === 'number' && Number.isFinite(windowDays) && windowDays > 0
+    ? windowDays
+    : DEFAULT_FLAKE_WINDOW_DAYS;
+  const minCount = positiveInt(threshold) ? threshold : DEFAULT_FLAKE_THRESHOLD;
+
+  if (isPlainObject(recurringFlakes) && Array.isArray(recurringFlakes.recurring)) {
+    const filtered = recurringFlakes.recurring
+      .filter(item => {
+        if (!isPlainObject(item) || typeof item.target !== 'string' || !item.target.trim()) return false;
+        const rLower = typeof item.repo === 'string' && item.repo.trim() ? item.repo.trim().toLowerCase() : null;
+        if (rLower && excludedRepos.has(rLower)) return false;
+        if (repoFilterLower && rLower !== repoFilterLower) return false;
+        return positiveInt(item.count) && item.count >= (positiveInt(recurringFlakes.threshold) ? recurringFlakes.threshold : minCount);
+      })
+      .map(item => ({
+        repo: typeof item.repo === 'string' && item.repo.trim() ? item.repo.trim() : null,
+        target: item.target.trim().slice(0, 200),
+        count: item.count,
+        outcomes: {
+          'flaked-then-passed': Number.isSafeInteger(item.outcomes?.['flaked-then-passed']) ? item.outcomes['flaked-then-passed'] : 0,
+          'reproduced-red': Number.isSafeInteger(item.outcomes?.['reproduced-red']) ? item.outcomes['reproduced-red'] : 0,
+          'base-test-red': Number.isSafeInteger(item.outcomes?.['base-test-red']) ? item.outcomes['base-test-red'] : 0,
+        },
+        lastSeen: typeof item.lastSeen === 'string' ? item.lastSeen : null,
+        issues: Array.isArray(item.issues) ? [...new Set(item.issues.filter(positiveInt))].sort((a, b) => a - b) : [],
+        prs: Array.isArray(item.prs) ? [...new Set(item.prs.filter(positiveInt))].sort((a, b) => a - b) : [],
+      }))
+      .sort((a, b) => b.count - a.count || a.target.localeCompare(b.target) || (a.repo ?? '').localeCompare(b.repo ?? ''));
+    return {
+      totalEntries: Number.isSafeInteger(recurringFlakes.totalEntries) && recurringFlakes.totalEntries >= 0
+        ? recurringFlakes.totalEntries
+        : filtered.reduce((acc, item) => acc + item.count, 0),
+      windowDays: typeof recurringFlakes.windowDays === 'number' && recurringFlakes.windowDays > 0 ? recurringFlakes.windowDays : days,
+      threshold: positiveInt(recurringFlakes.threshold) ? recurringFlakes.threshold : minCount,
+      recurring: filtered,
+    };
+  }
+
+  const cutoffMs = refMs - days * DAY_MS;
+  const groups = new Map();
+  let totalEntries = 0;
+
+  for (const raw of Array.isArray(flakeEntries) ? flakeEntries : []) {
+    if (!isPlainObject(raw)) continue;
+    const outcome = typeof raw.outcome === 'string' ? raw.outcome.trim() : '';
+    if (!VALID_FLAKE_OUTCOMES.has(outcome)) continue;
+    const target = typeof raw.target === 'string' ? raw.target.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+    if (!target) continue;
+    const tsMs = parseTimestampMs(raw.ts, null);
+    if (tsMs === null || tsMs < cutoffMs || tsMs > refMs) continue;
+    const repo = typeof raw.repo === 'string' && REPO_PATTERN.test(raw.repo.trim()) ? raw.repo.trim() : null;
+    const repoLower = repo ? repo.toLowerCase() : null;
+    if (repoLower && excludedRepos.has(repoLower)) continue;
+    if (repoFilterLower && repoLower !== repoFilterLower) continue;
+    totalEntries += 1;
+
+    const groupKey = `${repoLower ?? ''}\0${target.toLowerCase()}`;
+    let bucket = groups.get(groupKey);
+    if (!bucket) {
+      bucket = {
+        repo,
+        target,
+        count: 0,
+        outcomes: { 'flaked-then-passed': 0, 'reproduced-red': 0, 'base-test-red': 0 },
+        lastSeenMs: tsMs,
+        lastSeen: new Date(tsMs).toISOString(),
+        issues: new Set(),
+        prs: new Set(),
+      };
+      groups.set(groupKey, bucket);
+    }
+    bucket.count += 1;
+    bucket.outcomes[outcome] += 1;
+    if (tsMs >= bucket.lastSeenMs) {
+      bucket.lastSeenMs = tsMs;
+      bucket.lastSeen = new Date(tsMs).toISOString();
+    }
+    if (positiveInt(raw.issue)) bucket.issues.add(raw.issue);
+    if (positiveInt(raw.pr)) bucket.prs.add(raw.pr);
+  }
+
+  const recurring = [...groups.values()]
+    .filter(bucket => bucket.count >= minCount)
+    .map(bucket => ({
+      repo: bucket.repo,
+      target: bucket.target,
+      count: bucket.count,
+      outcomes: bucket.outcomes,
+      lastSeen: bucket.lastSeen,
+      issues: [...bucket.issues].sort((a, b) => a - b),
+      prs: [...bucket.prs].sort((a, b) => a - b),
+    }))
+    .sort((a, b) => b.count - a.count || a.target.localeCompare(b.target) || (a.repo ?? '').localeCompare(b.repo ?? ''));
+
+  return {
+    totalEntries,
+    windowDays: days,
+    threshold: minCount,
+    recurring,
+  };
+}
+
 export function calculateAutopilotMetrics(input = {}) {
   const opts = isPlainObject(input) ? input : {};
   const view = opts.view === undefined ? 'overview' : String(opts.view).trim().toLowerCase();
@@ -1074,6 +1188,15 @@ export function calculateAutopilotMetrics(input = {}) {
   const primaryItems = windowItemsMap.get(primaryWindow.key);
   const stages = summarizeStages(primaryWindow, primaryItems, regressionsComplete);
   const skills = summarizeSkills(primaryWindow, primaryItems);
+  const recurringFlakes = summarizeMetricsRecurringFlakes({
+    recurringFlakes: opts.recurringFlakes,
+    flakeEntries: opts.flakeEntries,
+    refMs: parsedDate ? windowDefs[0].endMs : nowMs,
+    windowDays: opts.flakeWindowDays,
+    threshold: opts.flakeThreshold,
+    excludedRepos,
+    repoFilterLower,
+  });
 
   const effectiveEnabled = repoFilterLower
     ? isMetricsEnabled(recordingCfg, repoFilterLower)
@@ -1106,6 +1229,7 @@ export function calculateAutopilotMetrics(input = {}) {
     },
     stages,
     skills,
+    recurringFlakes,
   };
 }
 
@@ -1180,6 +1304,25 @@ function renderSkillsSection(report) {
   return `Work Mix · ${sk.window.label}\n${table}`;
 }
 
+function renderRecurringFlakesSection(report) {
+  const rf = report.recurringFlakes;
+  if (!rf || !Array.isArray(rf.recurring) || rf.recurring.length === 0) return null;
+  const multiRepo = !report.repoFilter && Array.isArray(report.repos) && report.repos.length > 1;
+  const header = `Recurring flakes (${rf.windowDays ?? DEFAULT_FLAKE_WINDOW_DAYS}d, >=${rf.threshold ?? DEFAULT_FLAKE_THRESHOLD})`;
+  const bullets = rf.recurring.slice(0, 10).map(item => {
+    const parts = [];
+    for (const key of ['flaked-then-passed', 'reproduced-red', 'base-test-red']) {
+      if ((item.outcomes?.[key] ?? 0) > 0) parts.push(`${item.outcomes[key]} ${key}`);
+    }
+    const label = multiRepo && item.repo ? `${item.repo}: ${item.target}` : item.target;
+    const issuesNote = Array.isArray(item.issues) && item.issues.length > 0
+      ? ` · issues ${item.issues.map(n => `#${n}`).join(', ')}`
+      : '';
+    return `- ${label}: ${item.count}x${parts.length ? ` (${parts.join(', ')})` : ''}${issuesNote}`;
+  });
+  return [header, ...bullets].join('\n');
+}
+
 export function formatMetricsText(report, options = {}) {
   const view = options.view ?? report.view ?? 'overview';
   const scopeLabel = report.scopeLabel
@@ -1192,12 +1335,21 @@ export function formatMetricsText(report, options = {}) {
   }
   lines.push('');
 
+  const flakesBlock = renderRecurringFlakesSection(report);
   if (view === 'overview') {
     lines.push(renderOverviewSection(report));
     lines.push('');
     lines.push(renderStagesSection(report));
+    if (flakesBlock) {
+      lines.push('');
+      lines.push(flakesBlock);
+    }
   } else if (view === 'stages') {
     lines.push(renderStagesSection(report));
+    if (flakesBlock) {
+      lines.push('');
+      lines.push(flakesBlock);
+    }
   } else if (view === 'skills') {
     lines.push(renderSkillsSection(report));
   } else {
@@ -1206,6 +1358,10 @@ export function formatMetricsText(report, options = {}) {
     lines.push(renderStagesSection(report));
     lines.push('');
     lines.push(renderSkillsSection(report));
+    if (flakesBlock) {
+      lines.push('');
+      lines.push(flakesBlock);
+    }
   }
   return lines.join('\n');
 }
@@ -1293,6 +1449,23 @@ export function renderMetricsHtml(report) {
     </tr>`)
     .join('\n');
 
+  const recurringList = Array.isArray(report.recurringFlakes?.recurring) ? report.recurringFlakes.recurring : [];
+  const recurringFlakesHtml = recurringList.length > 0
+    ? `
+    <section class="card">
+      <h2>4. Recurring Flakes (${escapeHtml(String(report.recurringFlakes.windowDays ?? DEFAULT_FLAKE_WINDOW_DAYS))}d, &gt;=${escapeHtml(String(report.recurringFlakes.threshold ?? DEFAULT_FLAKE_THRESHOLD))})</h2>
+      <ul class="funnel-list">
+        ${recurringList.slice(0, 10).map(item => {
+          const parts = ['flaked-then-passed', 'reproduced-red', 'base-test-red']
+            .filter(k => (item.outcomes?.[k] ?? 0) > 0)
+            .map(k => `${item.outcomes[k]} ${k}`);
+          const label = item.repo ? `${item.repo}: ${item.target}` : item.target;
+          return `<li><code>${escapeHtml(label)}</code> — ${item.count}x${parts.length ? ` (${escapeHtml(parts.join(', '))})` : ''}</li>`;
+        }).join('\n        ')}
+      </ul>
+    </section>`
+    : '';
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1371,7 +1544,7 @@ export function renderMetricsHtml(report) {
         <thead><tr><th>Skill</th><th class="num">Taken</th><th class="num">PRs</th><th class="num">Merged (Conv%)</th><th class="num">Median Time</th></tr></thead>
         <tbody>${skillRowsHtml}</tbody>
       </table>
-    </section>
+    </section>${recurringFlakesHtml}
   </div>
 </body>
 </html>

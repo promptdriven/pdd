@@ -267,7 +267,7 @@ and `readyLogins: 0` when an explicit or default local pool file fails `loadLogi
 `not-configured` with `readyLogins: null` only when no pool file is configured: `ready`, `cooling`, `paused`,
 `reauth_required`, `5H`/`7D` usage and reset times with `null` shown as `?` and never fabricated `0%`, or `unavailable`
 when no local Cloud cache exists), and (4) read-only core `conversion` summary wired from `summarizeConversionDrops()` over saved
-`*-core/history.jsonl`, `*-core/intake`, and `core-reports` drafts. **Status --json** preserves top-level local cost
+`*-core/history.jsonl`, `*-core/intake`, and `core-reports` drafts, and (5) read-only `recurringFlakes` summary aggregated from saved `*-core/flakes.jsonl` ledgers via `summarizeRecurringFlakes` of [Autopilot regression detection](autopilot-regressions.prompt.md) (symlink-safe, fail-safe when absent; included as `recurringFlakes` in **Status --json** and rendered as a concise `Recurring flakes (7d, >=3): ...` line in **Status --all** text only when `recurring.length > 0`). **Status --json** preserves top-level local cost
 report fields alongside `costs` and `repositories`, exiting `0`.
 
 **Add** creates the `pdd:autopilot` label when it is missing and adds it to each named issue of this repository (an
@@ -343,3 +343,5 @@ exit 1 with one line; a missing program says `install git and gh, and sign in to
   shadowing warning.
 - [Autopilot self-update](autopilot-update.prompt.md): required native generation and verification context for safe
   between-tick global `pdd` and skill updates.
+- [Autopilot regression detection](autopilot-regressions.prompt.md): required for `parseFlakeLedger`,
+  `summarizeRecurringFlakes`, and `formatRecurringFlakesLine` in read-only status observability.

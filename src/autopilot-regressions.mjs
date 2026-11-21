@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-regressions.prompt.md
+// Generated from prompts/cli/autopilot-regressions.prompt.md (sha256: 38db0c18aadfdbda8ebfe2d98fa4ce1eda5a8cd9739440241bcb643a27335941).
 import * as nativeFs from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -756,6 +756,193 @@ export function evaluateShardFlakeRerun({ checkRuns = [], statuses = [], headSha
     staleTokens: shards.map(s => s.staleToken),
     shards,
   };
+}
+
+export const FLAKE_LEDGER_MAX_ENTRIES = 500;
+export const FLAKE_REPEAT_THRESHOLD = 3;
+export const FLAKE_WINDOW_DAYS = 7;
+
+const FLAKE_OUTCOMES = new Set(['flaked-then-passed', 'reproduced-red', 'base-test-red']);
+const FLAKE_DAY_MS = 86_400_000;
+
+export function normalizeFlakeEntry(entry, { now = Date.now, requireTs = false } = {}) {
+  if (!object(entry)) return null;
+  const outcome = typeof entry.outcome === 'string' ? entry.outcome.trim() : '';
+  if (!FLAKE_OUTCOMES.has(outcome)) return null;
+  const target = safe(entry.target).slice(0, 200);
+  if (!target) return null;
+
+  let ts = null;
+  if (entry.ts === undefined) {
+    if (requireTs) return null;
+    const nowMs = typeof now === 'function' ? now() : Number(now);
+    if (!Number.isFinite(nowMs)) return null;
+    ts = new Date(nowMs).toISOString();
+  } else if (typeof entry.ts === 'number' && Number.isFinite(entry.ts)) {
+    ts = new Date(entry.ts).toISOString();
+  } else if (typeof entry.ts === 'string') {
+    ts = iso(entry.ts);
+  }
+  if (!ts) return null;
+
+  const repoRaw = typeof entry.repo === 'string' ? entry.repo.trim() : '';
+  const repo = repository(repoRaw) ? repoRaw : null;
+  const issue = positive(entry.issue) ? entry.issue : null;
+  const pr = positive(entry.pr) ? entry.pr : null;
+
+  let head = null;
+  if (typeof entry.head === 'string') {
+    const cleanedHead = safe(entry.head).slice(0, 40);
+    if (cleanedHead) {
+      head = /^[a-f0-9]{7,40}$/i.test(cleanedHead) ? cleanedHead.toLowerCase() : cleanedHead;
+    }
+  }
+
+  const detail = typeof entry.detail === 'string' && entry.detail.trim()
+    ? safe(entry.detail).slice(0, 300)
+    : null;
+
+  return { ts, repo, issue, pr, head, target, outcome, detail };
+}
+
+export function parseFlakeLedger(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  const entries = [];
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    let parsed;
+    try { parsed = JSON.parse(trimmed); }
+    catch { continue; }
+    const normalized = normalizeFlakeEntry(parsed, { requireTs: true });
+    if (normalized) entries.push(normalized);
+  }
+  return entries;
+}
+
+function flakeDedupeKey(entry) {
+  const repoKey = (entry.repo ?? '').toLowerCase();
+  const targetKey = entry.target.toLowerCase();
+  if (entry.head) {
+    return `${repoKey}\0${entry.head.toLowerCase()}\0${targetKey}\0${entry.outcome}`;
+  }
+  return `${repoKey}\0\0${entry.issue ?? ''}\0${entry.pr ?? ''}\0${targetKey}\0${entry.outcome}`;
+}
+
+export function appendBoundedFlakeEntries(existingRaw, newEntries, { maxEntries = FLAKE_LEDGER_MAX_ENTRIES, now = Date.now } = {}) {
+  const existing = parseFlakeLedger(existingRaw);
+  const incomingList = Array.isArray(newEntries) ? newEntries : (newEntries ? [newEntries] : []);
+  const combined = [];
+  const seen = new Set();
+
+  for (const item of existing) {
+    const key = flakeDedupeKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    combined.push(item);
+  }
+  for (const raw of incomingList) {
+    const item = normalizeFlakeEntry(raw, { now });
+    if (!item) continue;
+    const key = flakeDedupeKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    combined.push(item);
+  }
+
+  const cap = positive(maxEntries) ? maxEntries : FLAKE_LEDGER_MAX_ENTRIES;
+  const bounded = combined.length > cap ? combined.slice(-cap) : combined;
+  return bounded.length ? `${bounded.map(item => JSON.stringify(item)).join('\n')}\n` : '';
+}
+
+export function summarizeRecurringFlakes(entries, {
+  nowMs = Date.now(),
+  windowDays = FLAKE_WINDOW_DAYS,
+  threshold = FLAKE_REPEAT_THRESHOLD,
+  repo = null,
+} = {}) {
+  const effectiveNow = Number.isFinite(nowMs) ? nowMs : Date.now();
+  const days = typeof windowDays === 'number' && Number.isFinite(windowDays) && windowDays > 0
+    ? windowDays
+    : FLAKE_WINDOW_DAYS;
+  const minCount = positive(threshold) ? threshold : FLAKE_REPEAT_THRESHOLD;
+  const cutoffMs = effectiveNow - days * FLAKE_DAY_MS;
+  const repoFilterLower = typeof repo === 'string' && repo.trim() ? repo.trim().toLowerCase() : null;
+
+  const list = typeof entries === 'string'
+    ? parseFlakeLedger(entries)
+    : (Array.isArray(entries) ? entries.map(e => normalizeFlakeEntry(e, { requireTs: true })).filter(Boolean) : []);
+
+  let totalEntries = 0;
+  const groups = new Map();
+
+  for (const entry of list) {
+    const tsMs = time(entry.ts);
+    if (tsMs === null || tsMs < cutoffMs || tsMs > effectiveNow) continue;
+    const entryRepoLower = (entry.repo ?? '').toLowerCase();
+    if (repoFilterLower && entryRepoLower !== repoFilterLower) continue;
+    totalEntries += 1;
+
+    const groupKey = `${entryRepoLower}\0${entry.target.toLowerCase()}`;
+    let bucket = groups.get(groupKey);
+    if (!bucket) {
+      bucket = {
+        repo: entry.repo,
+        target: entry.target,
+        count: 0,
+        outcomes: { 'flaked-then-passed': 0, 'reproduced-red': 0, 'base-test-red': 0 },
+        lastSeenMs: tsMs,
+        lastSeen: entry.ts,
+        issues: new Set(),
+        prs: new Set(),
+      };
+      groups.set(groupKey, bucket);
+    }
+    bucket.count += 1;
+    bucket.outcomes[entry.outcome] = (bucket.outcomes[entry.outcome] ?? 0) + 1;
+    if (tsMs >= bucket.lastSeenMs) {
+      bucket.lastSeenMs = tsMs;
+      bucket.lastSeen = entry.ts;
+    }
+    if (entry.issue !== null) bucket.issues.add(entry.issue);
+    if (entry.pr !== null) bucket.prs.add(entry.pr);
+  }
+
+  const recurring = [...groups.values()]
+    .filter(bucket => bucket.count >= minCount)
+    .map(bucket => ({
+      repo: bucket.repo,
+      target: bucket.target,
+      count: bucket.count,
+      outcomes: bucket.outcomes,
+      lastSeen: bucket.lastSeen,
+      issues: [...bucket.issues].sort((a, b) => a - b),
+      prs: [...bucket.prs].sort((a, b) => a - b),
+    }))
+    .sort((a, b) => b.count - a.count || a.target.localeCompare(b.target) || (a.repo ?? '').localeCompare(b.repo ?? ''));
+
+  return {
+    totalEntries,
+    windowDays: days,
+    threshold: minCount,
+    recurring,
+  };
+}
+
+export function formatRecurringFlakesLine(summary, { includeRepo = false, maxTargets = 5 } = {}) {
+  const recurring = Array.isArray(summary?.recurring) ? summary.recurring : [];
+  if (!recurring.length) return null;
+  const limit = positive(maxTargets) ? maxTargets : 5;
+  const shown = recurring.slice(0, limit).map(item => {
+    const parts = [];
+    for (const key of ['flaked-then-passed', 'reproduced-red', 'base-test-red']) {
+      if ((item.outcomes?.[key] ?? 0) > 0) parts.push(`${item.outcomes[key]} ${key}`);
+    }
+    const label = includeRepo && item.repo ? `${item.repo}:${item.target}` : item.target;
+    return `${label} (${item.count}x${parts.length ? `: ${parts.join(', ')}` : ''})`;
+  });
+  const extra = recurring.length > limit ? `; +${recurring.length - limit} more` : '';
+  return `Recurring flakes (${summary.windowDays ?? FLAKE_WINDOW_DAYS}d, >=${summary.threshold ?? FLAKE_REPEAT_THRESHOLD}): ${shown.join('; ')}${extra}`;
 }
 
 export async function checkPostMergeRegressions(ports) {

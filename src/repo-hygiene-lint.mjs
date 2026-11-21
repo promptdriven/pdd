@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 908eef9418b3d27366cbd6b885800e2993e80632256f90b9505859db922b1bc3).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: d16ebcf58c6330f4d748449c735a7395598e6119d15784dc3b272d85208060d6).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -2395,6 +2395,565 @@ export function lintPublicInterfaceTests(text, { path = 'test/example.test.mjs' 
   return collectPublicInterfaceTestWarnings(text, { path }).map(item => item.warning);
 }
 
+const SLEEP_ALLOW_COMMENT_RE = /\b(?:pdd-allow-sleep|sleep-ok|allow-sleep)\b/i;
+const SKIP_ALLOW_COMMENT_RE = /\bpdd-allow-skip\b/i;
+const TRACKING_HASH_ISSUE_RE = /(?:^|[\s([,:;'"`])#[1-9]\d*\b/;
+const TRACKING_TICKET_RE = /\b[A-Z]{2,10}-[1-9]\d*\b/;
+const TRACKING_WORD_ISSUE_RE = /\bissue\s+#?[1-9]\d*\b/i;
+const TRACKING_GH_URL_RE = /https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9]\d*\b/i;
+const PLACEHOLDER_SKIP_REASONS = new Set([
+  'todo', 'skip', 'skipped', 'wip', 'later', 'flaky', 'broken', 'fixme', 'temp', 'temporary', 'disabled', 'tbd', 'xxx', 'none', 'na', 'n/a',
+]);
+
+function hasTrackingIssueRef(value) {
+  const s = String(value ?? '');
+  return TRACKING_HASH_ISSUE_RE.test(s)
+    || TRACKING_TICKET_RE.test(s)
+    || TRACKING_WORD_ISSUE_RE.test(s)
+    || TRACKING_GH_URL_RE.test(s);
+}
+
+function hasSubstantiveSkipReason(value) {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) return false;
+  if (hasTrackingIssueRef(trimmed)) return true;
+  if (PLACEHOLDER_SKIP_REASONS.has(trimmed.toLowerCase())) return false;
+  return trimmed.length >= 12 && /\S+\s+\S+/.test(trimmed);
+}
+
+function buildDelimiterMaps(text) {
+  const n = text.length;
+  const closeParen = new Int32Array(n).fill(-1);
+  const closeBrace = new Int32Array(n).fill(-1);
+  const parenStack = [];
+  const braceStack = [];
+  for (let i = 0; i < n; i++) {
+    const ch = text[i];
+    if (ch === '(') parenStack.push(i);
+    else if (ch === ')' && parenStack.length > 0) closeParen[parenStack.pop()] = i;
+    else if (ch === '{') braceStack.push(i);
+    else if (ch === '}' && braceStack.length > 0) closeBrace[braceStack.pop()] = i;
+  }
+  return { closeParen, closeBrace };
+}
+
+function parseTopLevelArgsLinear(text, openParenIdx, closeParen, closeBrace, maxArgs = 4) {
+  const endParen = closeParen[openParenIdx];
+  if (endParen < 0) return null;
+  const args = [];
+  let argStart = openParenIdx + 1;
+  let k = argStart;
+  while (k < endParen) {
+    const ch = text[k];
+    if (ch === '(' && closeParen[k] > k && closeParen[k] < endParen) {
+      k = closeParen[k] + 1;
+      continue;
+    }
+    if (ch === '{' && closeBrace[k] > k && closeBrace[k] < endParen) {
+      k = closeBrace[k] + 1;
+      continue;
+    }
+    if (ch === ',') {
+      args.push(text.slice(argStart, k));
+      argStart = k + 1;
+      if (args.length >= maxArgs) return { args, endIdx: endParen + 1 };
+    }
+    k++;
+  }
+  const tail = text.slice(argStart, endParen);
+  if (args.length > 0 || tail.trim().length > 0) args.push(tail);
+  return { args, endIdx: endParen + 1 };
+}
+
+function inspectRawLineComments(rawLine, hashComments) {
+  const s = String(rawLine ?? '');
+  const comments = [];
+  let hasCode = false;
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    const next = s[i + 1];
+    if (ch === ' ' || ch === '\t' || ch === '\r') { i++; continue; }
+    if (ch === '/' && next === '/') {
+      comments.push(s.slice(i + 2));
+      break;
+    }
+    if (hashComments && ch === '#') {
+      comments.push(s.slice(i + 1));
+      break;
+    }
+    if (ch === '/' && next === '*') {
+      const end = s.indexOf('*/', i + 2);
+      if (end < 0) {
+        comments.push(s.slice(i + 2));
+        break;
+      }
+      comments.push(s.slice(i + 2, end));
+      i = end + 2;
+      continue;
+    }
+    hasCode = true;
+    if (ch === "'" || ch === '"' || ch === '`') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== ch) {
+        if (s[j] === '\\') j += 2;
+        else j++;
+      }
+      i = j < s.length ? j + 1 : j;
+      continue;
+    }
+    i++;
+  }
+  return { text: comments.join(' '), commentOnly: !hasCode && comments.length > 0 };
+}
+
+function getAdjacentCommentText(rawLines, lineNo, hashComments) {
+  const idx = lineNo - 1;
+  if (idx < 0 || idx >= rawLines.length) return '';
+  const parts = [];
+  const own = inspectRawLineComments(rawLines[idx], hashComments);
+  if (own.text) parts.push(own.text);
+  for (let back = 1; back <= 3; back++) {
+    const prevIdx = idx - back;
+    if (prevIdx < 0) break;
+    const prev = inspectRawLineComments(rawLines[prevIdx], hashComments);
+    if (!prev.commentOnly) break;
+    parts.push(prev.text);
+  }
+  return parts.join('\n');
+}
+
+function stripOuterParens(expr) {
+  let s = String(expr ?? '').trim();
+  while (s.startsWith('(') && s.endsWith(')')) {
+    let depth = 0;
+    let wrapsWhole = true;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '(') depth++;
+      else if (s[i] === ')') {
+        depth--;
+        if (depth === 0 && i < s.length - 1) { wrapsWhole = false; break; }
+      }
+    }
+    if (!wrapsWhole || depth !== 0) break;
+    s = s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+const SIMPLE_NUM_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+
+function evalSimpleNumericLiteral(expr) {
+  const s = stripOuterParens(expr).replace(/_/g, '');
+  if (!s) return null;
+  if (SIMPLE_NUM_RE.test(s)) {
+    const num = Number(s);
+    return Number.isFinite(num) ? num : null;
+  }
+  if (/^[0-9.eE+\s*]+$/.test(s) && s.includes('*')) {
+    const factors = s.split('*').map(p => p.trim());
+    if (!factors.length || factors.some(f => !SIMPLE_NUM_RE.test(f))) return null;
+    let prod = 1;
+    for (const f of factors) prod *= Number(f);
+    return Number.isFinite(prod) ? prod : null;
+  }
+  return null;
+}
+
+function collectPositiveNumericVars(skeleton, hashComments) {
+  const positiveVars = new Set();
+  const assignRe = hashComments
+    ? /(?:^|\n)[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*([^\n#;]+)/g
+    : /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^\n;,]+)/g;
+  for (const m of skeleton.matchAll(assignRe)) {
+    const val = evalSimpleNumericLiteral(m[2]);
+    if (val !== null && val > 0) positiveVars.add(m[1]);
+  }
+  return positiveVars;
+}
+
+function isPositiveDelayExpression(argExpr, positiveVars) {
+  const s = stripOuterParens(argExpr);
+  if (!s) return false;
+  const num = evalSimpleNumericLiteral(s);
+  if (num !== null) return num > 0;
+  if (/^[A-Za-z_$][\w$]*$/.test(s) && positiveVars.has(s)) return true;
+  return false;
+}
+
+function isUnconditionalResolveCallback(cbArg, resolveParam, rejectParam) {
+  const trimmed = stripOuterParens(cbArg);
+  if (!trimmed) return false;
+  if (trimmed === resolveParam) return true;
+  if (rejectParam && trimmed.includes(rejectParam)) return false;
+  if (/\b(?:reject|abort|kill|destroy|clearInterval|clearTimeout|throw|Error|exit)\b/.test(trimmed)) return false;
+  const escaped = resolveParam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const arrowOrFn = /^(?:async\s+)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>|^function\b/.test(trimmed);
+  if (!arrowOrFn) return false;
+  return new RegExp(`\\b${escaped}\\s*\\(`).test(trimmed);
+}
+
+function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } = {}) {
+  if (!canonicalRepoPath(path) || !isInspectableTestCodePath(path)) return [];
+  const raw = String(text ?? '');
+  const hashComments = /\.(?:py|rb)$/i.test(path);
+  const { skeleton, literals } = tokenizeTestCode(raw, { hashComments });
+  const rawLines = raw.split(/\r?\n/);
+  const lineStarts = buildLineStarts(skeleton);
+  const { closeParen, closeBrace } = buildDelimiterMaps(skeleton);
+  const positiveVars = collectPositiveNumericVars(skeleton, hashComments);
+  const findings = [];
+  const seenLines = new Set();
+
+  const recordFinding = (offset, snippet) => {
+    const line = lineNumberAt(lineStarts, offset);
+    if (seenLines.has(line)) return;
+    const commentCtx = getAdjacentCommentText(rawLines, line, hashComments);
+    if (SLEEP_ALLOW_COMMENT_RE.test(commentCtx) || hasTrackingIssueRef(commentCtx)) return;
+    seenLines.add(line);
+    const detail = `Fixed-duration sleep (${snippet}) in test code introduces timing flakiness. Wait on a deterministic event, condition, or injected clock instead (or annotate with // pdd-allow-sleep: <reason> or a tracking #issue).`;
+    findings.push({
+      filePath: path,
+      line,
+      order: 20,
+      code: 'test-fixed-sleep',
+      category: 'test hygiene',
+      defaultSeverity: 'warn',
+      detail,
+      warning: `Warning: test hygiene: ${path}:${line} [test-fixed-sleep] ${detail}`,
+    });
+  };
+
+  if (!hashComments) {
+    // Track imports from node:timers/promises or timers/promises.
+    const timersPromiseFns = new Set();
+    const timersPromiseNs = new Set(['timersPromises']);
+    for (const m of skeleton.matchAll(/\bimport\s+([^;]{1,160}?)\s+from\s+__STR_(\d+)__/g)) {
+      const spec = String(literals[Number(m[2])] ?? '').trim();
+      if (spec !== 'node:timers/promises' && spec !== 'timers/promises') continue;
+      const clause = m[1].trim();
+      const nsMatch = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(clause);
+      if (nsMatch) timersPromiseNs.add(nsMatch[1]);
+      const braceStart = clause.indexOf('{');
+      const braceEnd = clause.lastIndexOf('}');
+      if (braceStart >= 0 && braceEnd > braceStart) {
+        const before = clause.slice(0, braceStart).replace(/,\s*$/, '').trim();
+        if (/^[A-Za-z_$][\w$]*$/.test(before)) timersPromiseNs.add(before);
+        for (const part of clause.slice(braceStart + 1, braceEnd).split(',')) {
+          const piece = part.trim();
+          const asM = /^setTimeout\s+as\s+([A-Za-z_$][\w$]*)$/.exec(piece);
+          if (asM) timersPromiseFns.add(asM[1]);
+          else if (piece === 'setTimeout') timersPromiseFns.add('setTimeout');
+        }
+      } else if (!nsMatch && /^[A-Za-z_$][\w$]*$/.test(clause)) {
+        timersPromiseNs.add(clause);
+      }
+    }
+    for (const m of skeleton.matchAll(/\b(?:const|let|var)\s+([^=;\n]{1,120})\s*=\s*(?:await\s+)?(?:import|require)\s*\(\s*__STR_(\d+)__\s*\)/g)) {
+      const spec = String(literals[Number(m[2])] ?? '').trim();
+      if (spec !== 'node:timers/promises' && spec !== 'timers/promises') continue;
+      const lhs = m[1].trim();
+      const braceStart = lhs.indexOf('{');
+      const braceEnd = lhs.lastIndexOf('}');
+      if (braceStart >= 0 && braceEnd > braceStart) {
+        for (const part of lhs.slice(braceStart + 1, braceEnd).split(',')) {
+          const piece = part.trim();
+          const alias = /^setTimeout\s*:\s*([A-Za-z_$][\w$]*)$/.exec(piece);
+          if (alias) timersPromiseFns.add(alias[1]);
+          else if (piece === 'setTimeout') timersPromiseFns.add('setTimeout');
+        }
+      } else if (/^[A-Za-z_$][\w$]*$/.test(lhs)) {
+        timersPromiseNs.add(lhs);
+      }
+    }
+
+    // 1. JS/TS: new Promise((resolve) => setTimeout(resolve, <positive ms>))
+    for (const m of skeleton.matchAll(/\bnew\s+Promise\s*\(/g)) {
+      const openIdx = m.index + m[0].length - 1;
+      const endIdx = closeParen[openIdx];
+      if (endIdx < 0 || endIdx - openIdx > 600) continue;
+      const body = skeleton.slice(openIdx + 1, endIdx);
+      const execMatch = /^\s*(?:async\s+)?(?:\(\s*([A-Za-z_$][\w$]*)(?:\s*,\s*([A-Za-z_$][\w$]*))?\s*\)\s*=>|([A-Za-z_$][\w$]*)\s*=>|function(?:\s+[A-Za-z_$][\w$]*)?\s*\(\s*([A-Za-z_$][\w$]*)(?:\s*,\s*([A-Za-z_$][\w$]*))?\s*\))/.exec(body);
+      if (!execMatch) continue;
+      const resolveParam = execMatch[1] ?? execMatch[3] ?? execMatch[4];
+      const rejectParam = execMatch[2] ?? execMatch[5] ?? null;
+      if (!resolveParam || resolveParam === '_') continue;
+      const rest = body.slice(execMatch[0].length);
+      if (/\b(?:addEventListener|once|on|reject|abort|clearInterval|clearTimeout)\b/.test(rest)) continue;
+      const stMatch = /\bsetTimeout\s*\(/.exec(rest);
+      if (!stMatch) continue;
+      const stOpenInSkel = openIdx + 1 + execMatch[0].length + stMatch.index + stMatch[0].length - 1;
+      const parsed = parseTopLevelArgsLinear(skeleton, stOpenInSkel, closeParen, closeBrace, 3);
+      if (!parsed || parsed.args.length < 2) continue;
+      if (!isUnconditionalResolveCallback(parsed.args[0], resolveParam, rejectParam)) continue;
+      if (!isPositiveDelayExpression(parsed.args[1], positiveVars)) continue;
+      recordFinding(m.index, 'new Promise(...setTimeout...)');
+    }
+
+    // 2. JS/TS: timers/promises setTimeout(<ms>) & timersPromises.setTimeout(<ms>) / timers.promises.setTimeout(<ms>)
+    for (const m of skeleton.matchAll(/\b([A-Za-z_$][\w$]*)\s*\.\s*(?:promises\s*\.\s*)?setTimeout\s*\(/g)) {
+      const ns = m[1];
+      const hasPromisesSegment = /\.\s*promises\s*\./.test(m[0]);
+      if (!hasPromisesSegment && !timersPromiseNs.has(ns)) continue;
+      const openIdx = m.index + m[0].length - 1;
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+      if (!parsed || parsed.args.length < 1) continue;
+      if (!isPositiveDelayExpression(parsed.args[0], positiveVars)) continue;
+      recordFinding(m.index, `${ns}.setTimeout(...)`);
+    }
+    if (timersPromiseFns.size > 0) {
+      for (const m of skeleton.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
+        const fn = m[1];
+        if (!timersPromiseFns.has(fn)) continue;
+        const before = skeleton.slice(Math.max(0, m.index - 24), m.index);
+        if (/\bfunction\s*$/.test(before)) continue;
+        const openIdx = m.index + m[0].length - 1;
+        const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+        if (!parsed || parsed.args.length < 1) continue;
+        if (!isPositiveDelayExpression(parsed.args[0], positiveVars)) continue;
+        recordFinding(m.index, `timers/promises ${fn}(...)`);
+      }
+    }
+
+    // 3. JS/TS: Atomics.wait(arr, idx, val, <positive timeout>)
+    for (const m of skeleton.matchAll(/\bAtomics\s*\.\s*wait\s*\(/g)) {
+      const openIdx = m.index + m[0].length - 1;
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 4);
+      if (!parsed || parsed.args.length < 4) continue;
+      if (!isPositiveDelayExpression(parsed.args[3], positiveVars)) continue;
+      recordFinding(m.index, 'Atomics.wait(...)');
+    }
+  }
+
+  // 4. Python (and JS): time.sleep(<secs>) / asyncio.sleep(<secs>)
+  for (const m of skeleton.matchAll(/\b(time|asyncio)\s*\.\s*sleep\s*\(/g)) {
+    const openIdx = m.index + m[0].length - 1;
+    const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+    if (!parsed || parsed.args.length < 1) continue;
+    if (!isPositiveDelayExpression(parsed.args[0], positiveVars)) continue;
+    recordFinding(m.index, `${m[1]}.sleep(...)`);
+  }
+
+  // 5. Standalone sleep(<ms>) in JS/TS/Python (excluding function/def declarations and method defs)
+  for (const m of skeleton.matchAll(/(?<![.\w$])sleep\s*\(/g)) {
+    const before = skeleton.slice(Math.max(0, m.index - 24), m.index);
+    if (/(?:\bfunction|\bdef)\s*$/.test(before)) continue;
+    const openIdx = m.index + m[0].length - 1;
+    const endIdx = closeParen[openIdx];
+    if (endIdx < 0) continue;
+    const after = skeleton.slice(endIdx + 1, Math.min(skeleton.length, endIdx + 16));
+    if (/^\s*\{/.test(after)) continue;
+    const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+    if (!parsed || parsed.args.length < 1) continue;
+    if (!isPositiveDelayExpression(parsed.args[0], positiveVars)) continue;
+    recordFinding(m.index, 'sleep(...)');
+  }
+
+  findings.sort((a, b) => a.line - b.line || a.order - b.order);
+  return findings;
+}
+
+export function lintTestFixedSleeps(text, { path = 'test/example.test.mjs' } = {}) {
+  return collectTestFixedSleepFindings(text, { path }).map(item => item.warning);
+}
+
+function extractOptionPropertyValue(objExpr, propName, literals) {
+  const trimmed = String(objExpr ?? '').trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  const inner = trimmed.slice(1, -1);
+  // Linear scan over top-level properties of the object literal.
+  let depthParen = 0;
+  let depthBrace = 0;
+  let depthBracket = 0;
+  let propStart = 0;
+  const segments = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === '(') depthParen++;
+    else if (ch === ')') depthParen = Math.max(0, depthParen - 1);
+    else if (ch === '{') depthBrace++;
+    else if (ch === '}') depthBrace = Math.max(0, depthBrace - 1);
+    else if (ch === '[') depthBracket++;
+    else if (ch === ']') depthBracket = Math.max(0, depthBracket - 1);
+    else if (ch === ',' && depthParen === 0 && depthBrace === 0 && depthBracket === 0) {
+      segments.push(inner.slice(propStart, i));
+      propStart = i + 1;
+    }
+  }
+  segments.push(inner.slice(propStart));
+  for (const seg of segments) {
+    const colon = seg.indexOf(':');
+    if (colon < 0) continue;
+    const rawKey = seg.slice(0, colon).trim();
+    const key = resolveSingleLiteralString(rawKey, literals) ?? rawKey;
+    if (key === propName) return seg.slice(colon + 1).trim();
+  }
+  return null;
+}
+
+function resolveSingleLiteralString(expr, literals) {
+  const m = /^__STR_(\d+)__$/.exec(String(expr ?? '').trim());
+  if (!m) return null;
+  const val = literals[Number(m[1])];
+  return typeof val === 'string' ? val : null;
+}
+
+function collectTestUnexcusedSkipFindings(text, { path = 'test/example.test.mjs' } = {}) {
+  if (!canonicalRepoPath(path) || !isInspectableTestCodePath(path)) return [];
+  const raw = String(text ?? '');
+  const hashComments = /\.(?:py|rb)$/i.test(path);
+  const { skeleton, literals } = tokenizeTestCode(raw, { hashComments });
+  const rawLines = raw.split(/\r?\n/);
+  const lineStarts = buildLineStarts(skeleton);
+  const { closeParen, closeBrace } = buildDelimiterMaps(skeleton);
+  const findings = [];
+  const seenLines = new Set();
+
+  const hasCommentExcuse = line => {
+    const commentCtx = getAdjacentCommentText(rawLines, line, hashComments);
+    return SKIP_ALLOW_COMMENT_RE.test(commentCtx) || hasTrackingIssueRef(commentCtx);
+  };
+
+  const recordSkip = (offset, label) => {
+    const line = lineNumberAt(lineStarts, offset);
+    if (seenLines.has(line)) return;
+    if (hasCommentExcuse(line)) return;
+    seenLines.add(line);
+    const detail = `Unexcused skipped test (${label}) without a tracking issue reference or substantive reason. Cite an issue (e.g. #1234) or use a conditional guard instead of silently skipping tests.`;
+    findings.push({
+      filePath: path,
+      line,
+      order: 21,
+      code: 'test-unexcused-skip',
+      category: 'test hygiene',
+      defaultSeverity: 'warn',
+      detail,
+      warning: `Warning: test hygiene: ${path}:${line} [test-unexcused-skip] ${detail}`,
+    });
+  };
+
+  if (!hashComments) {
+    // 1. JS/TS: test.skip(, it.skip(, describe.skip(, suite.skip(, xit(, xtest(, xdescribe(
+    const directSkipRe = /(?<![\w$.])((?:test|it|describe|suite)\s*\.\s*skip|xit|xtest|xdescribe)\s*\(/g;
+    for (const m of skeleton.matchAll(directSkipRe)) {
+      const openIdx = m.index + m[0].length - 1;
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+      const firstStr = parsed?.args?.[0] ? resolveSingleLiteralString(parsed.args[0], literals) : null;
+      if (firstStr && hasTrackingIssueRef(firstStr)) continue;
+      recordSkip(m.index, m[1].replace(/\s+/g, ''));
+    }
+
+    // 2. JS/TS: test(..., { skip: true | "" | placeholder }) / it(..., { skip: ... })
+    const optsSkipRe = /(?<![\w$.])(test|it|describe|suite)\s*\(/g;
+    for (const m of skeleton.matchAll(optsSkipRe)) {
+      const openIdx = m.index + m[0].length - 1;
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 3);
+      if (!parsed || parsed.args.length < 2) continue;
+      const optsArg = parsed.args[1].trim();
+      if (!optsArg.startsWith('{') || !optsArg.endsWith('}')) continue;
+      const skipVal = extractOptionPropertyValue(optsArg, 'skip', literals);
+      if (skipVal === null) continue;
+      const cleanedVal = stripOuterParens(skipVal);
+      if (!cleanedVal || cleanedVal === 'false' || cleanedVal === 'undefined' || cleanedVal === 'null') continue;
+      const titleStr = resolveSingleLiteralString(parsed.args[0], literals);
+      if (titleStr && hasTrackingIssueRef(titleStr)) continue;
+      if (cleanedVal === 'true' || cleanedVal === '!0') {
+        recordSkip(m.index, `${m[1]}(..., { skip: true })`);
+        continue;
+      }
+      const skipStr = resolveSingleLiteralString(cleanedVal, literals);
+      if (skipStr !== null) {
+        if (!hasSubstantiveSkipReason(skipStr)) {
+          recordSkip(m.index, `${m[1]}(..., { skip: ${JSON.stringify(skipStr)} })`);
+        }
+      }
+      // Dynamic / conditional skip expression (e.g., !process.env.FOO, process.platform === 'win32') is allowed.
+    }
+
+    // 3. JS/TS: t.skip() / ctx.skip() with missing, empty, or placeholder reason
+    const ctxSkipRe = /(?<![\w$.])(t|ctx)\s*\.\s*skip\s*\(/g;
+    for (const m of skeleton.matchAll(ctxSkipRe)) {
+      const openIdx = m.index + m[0].length - 1;
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+      if (!parsed) continue;
+      if (parsed.args.length === 0 || !parsed.args[0].trim()) {
+        recordSkip(m.index, `${m[1]}.skip()`);
+        continue;
+      }
+      const reasonStr = resolveSingleLiteralString(parsed.args[0], literals);
+      if (reasonStr !== null && !hasSubstantiveSkipReason(reasonStr)) {
+        recordSkip(m.index, `${m[1]}.skip(${JSON.stringify(reasonStr)})`);
+      }
+    }
+  } else {
+    // 4. Python: @pytest.mark.skip / @pytest.mark.skip(...) / @unittest.skip(...)
+    // Note: @pytest.mark.skipif and @unittest.skipIf / @unittest.skipUnless do NOT match because of the word boundary after `skip`.
+    const pySkipRe = /@(pytest\s*\.\s*mark\s*\.\s*skip|unittest\s*\.\s*skip)\b/g;
+    for (const m of skeleton.matchAll(pySkipRe)) {
+      const afterPos = m.index + m[0].length;
+      const label = `@${m[1].replace(/\s+/g, '')}`;
+      let wsEnd = afterPos;
+      while (wsEnd < skeleton.length && (skeleton[wsEnd] === ' ' || skeleton[wsEnd] === '\t')) wsEnd++;
+      if (skeleton[wsEnd] !== '(') {
+        recordSkip(m.index, label);
+        continue;
+      }
+      const parsed = parseTopLevelArgsLinear(skeleton, wsEnd, closeParen, closeBrace, 4);
+      if (!parsed || parsed.args.length === 0 || parsed.args.every(a => !a.trim())) {
+        recordSkip(m.index, `${label}()`);
+        continue;
+      }
+      let reasonExpr = null;
+      for (const arg of parsed.args) {
+        const kv = /^\s*reason\s*=\s*([\s\S]+)$/.exec(arg);
+        if (kv) { reasonExpr = kv[1].trim(); break; }
+      }
+      if (reasonExpr === null && !parsed.args[0].includes('=')) {
+        reasonExpr = parsed.args[0].trim();
+      }
+      if (!reasonExpr) {
+        recordSkip(m.index, `${label}(...)`);
+        continue;
+      }
+      const reasonStr = resolveSingleLiteralString(reasonExpr, literals);
+      if (reasonStr !== null && !hasSubstantiveSkipReason(reasonStr)) {
+        recordSkip(m.index, `${label}(reason=${JSON.stringify(reasonStr)})`);
+      }
+    }
+    // Also detect bare pytest.skip() inside Python test bodies with missing/empty/placeholder reason.
+    for (const m of skeleton.matchAll(/(?<![.\w])pytest\s*\.\s*skip\s*\(/g)) {
+      const openIdx = m.index + m[0].length - 1;
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 3);
+      if (!parsed) continue;
+      if (parsed.args.length === 0 || parsed.args.every(a => !a.trim())) {
+        recordSkip(m.index, 'pytest.skip()');
+        continue;
+      }
+      let reasonExpr = null;
+      for (const arg of parsed.args) {
+        const kv = /^\s*(?:reason|msg)\s*=\s*([\s\S]+)$/.exec(arg);
+        if (kv) { reasonExpr = kv[1].trim(); break; }
+      }
+      if (reasonExpr === null && !parsed.args[0].includes('=')) reasonExpr = parsed.args[0].trim();
+      if (!reasonExpr) {
+        recordSkip(m.index, 'pytest.skip(...)');
+        continue;
+      }
+      const reasonStr = resolveSingleLiteralString(reasonExpr, literals);
+      if (reasonStr !== null && !hasSubstantiveSkipReason(reasonStr)) {
+        recordSkip(m.index, `pytest.skip(${JSON.stringify(reasonStr)})`);
+      }
+    }
+  }
+
+  findings.sort((a, b) => a.line - b.line || a.order - b.order);
+  return findings;
+}
+
+export function lintTestUnexcusedSkips(text, { path = 'test/example.test.mjs' } = {}) {
+  return collectTestUnexcusedSkipFindings(text, { path }).map(item => item.warning);
+}
+
 const VALIDATION_WARNING_RE = /^Warning: validation lint: (.+):(\d+) \[([^\]]+)\] (.+)$/;
 
 function parseValidationWarnings(rawWarnings, fallbackPath) {
@@ -3347,6 +3906,12 @@ export function lintRepoProject({ root, files, promptPaths, tests, config, works
       const hasRealE2eCoverage = boundaryTargets.length > 0
         && boundaryTargets.every(target => !target.startsWith('test-stem:') && realE2eTargets.has(target));
       if (!promptFilterSet) {
+        for (const item of collectTestFixedSleepFindings(content, { path: testPath })) {
+          rawFindings.push({ ...item, defaultSeverity: 'warn' });
+        }
+        for (const item of collectTestUnexcusedSkipFindings(content, { path: testPath })) {
+          rawFindings.push({ ...item, defaultSeverity: 'warn' });
+        }
         for (const item of collectValidationCodeFindings(content, { path: testPath, kind: 'test', hasRealE2eCoverage, nativeOnlyTargets })) {
           rawFindings.push({ ...item, defaultSeverity: 'warn' });
         }
