@@ -3238,6 +3238,7 @@ test('W8 a reviewer in the merge lane whose log keeps growing ends at its backst
   await w.tick(); await w.tick();
   const review = w.job(17, 'review');
   assert.match(review.input, /short scoped check/); assert.ok(pr.labels.includes('pdd:merge-lane'), 'the scoped check runs in the final step');
+  w.suite(17, 0);
   const alerts = [];
   for (let i = 0; i < 8 && !w.stopped.includes(review.id); i++) { w.advance(30 * MIN); w.progress(17, 'review'); await w.tick({ alert: async a => alerts.push(a.text) }); }
   assert.ok(w.stopped.includes(review.id));
@@ -3833,7 +3834,7 @@ test('quiet review and suite retries retain their process records until cleanup 
   assert.equal(retained.suite.agent.pid, suite.pid, 'the quiet suite record remains');
   assert.equal(w.started.filter(part => part.role === 'review').length, 1, 'no replacement reviewer starts');
   assert.equal(w.started.filter(part => part.role === 'suite').length, 1, 'no replacement suite starts');
-  assert.deepEqual([...new Set(cleanups)].sort((a, b) => a - b), [review.pid, suite.pid]);
+  assert.deepEqual([...new Set(cleanups)].sort((a, b) => a - b), [review.pid, suite.pid].sort((a, b) => a - b));
 });
 
 test('a changed head retains active review and suite records until cleanup is confirmed', async t => {
@@ -3855,7 +3856,7 @@ test('a changed head retains active review and suite records until cleanup is co
   assert.equal(w.started.filter(part => part.role === 'review').length, 1);
   assert.equal(w.started.filter(part => part.role === 'suite').length, 1);
   assert.equal(existsSync(retainedFile), true, 'the old suite checkout remains');
-  assert.deepEqual(cleanups.sort((a, b) => a - b), [review.pid, suite.pid]);
+  assert.deepEqual(cleanups.sort((a, b) => a - b), [review.pid, suite.pid].sort((a, b) => a - b));
 });
 
 test('a failed cleanup retains active checks instead of starting a repair', async t => {
