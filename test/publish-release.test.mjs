@@ -10,8 +10,10 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readPyprojectField } from '../scripts/sync-pypi-version.mjs';
+import { version as runtimeClientVersionInfo } from '../src/runtime-seam.mjs';
 import {
   buildIsolatedPddPath,
+  checkRuntimeClientParity,
   npmDistTagForVersion,
   parsePublishArgs,
   publishNpm,
@@ -25,6 +27,8 @@ import {
   verifyPypiLiveVersion,
   verifyReleaseCommitParity,
 } from '../scripts/publish-release.mjs';
+
+const RUNTIME_CLIENT_PKG = runtimeClientVersionInfo().package;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const publishScript = join(root, 'scripts', 'publish-release.mjs');
@@ -106,9 +110,10 @@ test('#3533 package.json wires release:publish, parsePublishArgs uses parseArgs 
     parsePublishArgs(['--dry-run', '--tag', 'refs/tags/alpha-v0.1.37', '--npm-only', '--repo=promptdriven/pdd']),
     {
       dryRun: true, dryRunFromNpmEnv: false, tag: 'alpha-v0.1.37',
-      npmOnly: true, pypiOnly: false, repo: 'promptdriven/pdd', root, pythonBin: null, help: false,
+      npmOnly: true, pypiOnly: false, allowStaleRuntimeClient: false, repo: 'promptdriven/pdd', root, pythonBin: null, help: false,
     },
   );
+  assert.equal(parsePublishArgs(['--allow-stale-runtime-client']).allowStaleRuntimeClient, true);
 
   // npm_config_dry_run treats any value other than false/0/undefined (including '' and '1') as dry-run (case-insensitively).
   for (const truthy of ['true', '1', '', 'yes']) {
@@ -131,6 +136,9 @@ test('#3533 package.json wires release:publish, parsePublishArgs uses parseArgs 
   assert.throws(() => parsePublishArgs([], { NPM_CONFIG_NPM_ONLY: 'true' }), /Use `--` before flags[\s\S]*--npm-only/);
   assert.throws(() => parsePublishArgs([], { npm_config_pypi_only: '1' }), /Use `--` before flags[\s\S]*--pypi-only/);
   assert.throws(() => parsePublishArgs([], { NPM_CONFIG_PYPI_ONLY: '1' }), /Use `--` before flags[\s\S]*--pypi-only/);
+  assert.throws(() => parsePublishArgs([], { npm_config_allow_stale_runtime_client: 'true' }), /Use `--` before flags[\s\S]*--allow-stale-runtime-client/);
+  assert.throws(() => parsePublishArgs([], { NPM_CONFIG_ALLOW_STALE_RUNTIME_CLIENT: '1' }), /Use `--` before flags[\s\S]*--allow-stale-runtime-client/);
+  assert.equal(parsePublishArgs(['--allow-stale-runtime-client'], { npm_config_allow_stale_runtime_client: 'true' }).allowStaleRuntimeClient, true);
   assert.throws(() => parsePublishArgs([], { npm_config_tag: 'alpha-v0.1.37' }), /Use `--` before flags[\s\S]*--tag alpha-v0\.1\.37/);
   assert.throws(() => parsePublishArgs([], { NPM_CONFIG_TAG: 'alpha-v0.1.37' }), /Use `--` before flags[\s\S]*--tag alpha-v0\.1\.37/);
   assert.equal(parsePublishArgs([], { npm_config_tag: 'latest' }).tag, null, 'default npm_config_tag=latest is allowed');
@@ -727,4 +735,168 @@ test('#3533 subprocess --dry-run and npm_config_dry_run=true build & smoke-test 
   const dirtyRun = spawnSync(process.execPath, [publishScript, '--dry-run', '--root', fixtureDir, '--tag', 'alpha-v0.1.37'], { cwd: fixtureDir, env: subEnv, encoding: 'utf8' });
   assert.equal(dirtyRun.status, 1);
   assert.match(dirtyRun.stderr, /Git working tree is not clean/);
+});
+
+test('#3594 checkRuntimeClientParity fails closed in live mode when pinned runtime client lags latest npm release and warns in dry-run/override', async t => {
+  const fixtureDir = createFixtureRepo(t, { version: '0.1.41', tag: 'alpha-v0.1.41' });
+  const pkgPath = join(fixtureDir, 'package.json');
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  pkg.dependencies = { [RUNTIME_CLIENT_PKG]: '1.1.0' };
+  writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  execFileSync('git', ['add', 'package.json'], { cwd: fixtureDir });
+  execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@e.c', 'commit', '-q', '-m', 'Pin runtime client'], { cwd: fixtureDir });
+  execFileSync('git', ['tag', '-f', 'alpha-v0.1.41'], { cwd: fixtureDir });
+
+  const logs = [];
+  const log = line => logs.push(line);
+
+  // Matching version succeeds cleanly.
+  const matched = checkRuntimeClientParity({
+    root: fixtureDir,
+    dryRun: false,
+    runCommand: (cmd, args) => {
+      assert.equal(cmd, 'npm');
+      assert.equal(args[0], 'view');
+      assert.equal(args[1], RUNTIME_CLIENT_PKG);
+      assert.equal(args[2], 'version');
+      return { status: 0, stdout: '1.1.0\n', stderr: '' };
+    },
+    log,
+  });
+  assert.equal(matched.ok, true);
+  assert.equal(matched.stale, false);
+  assert.equal(matched.pinned, '1.1.0');
+  assert.equal(matched.latest, '1.1.0');
+
+  // Lagging version fails closed in live mode.
+  assert.throws(
+    () => checkRuntimeClientParity({
+      root: fixtureDir,
+      dryRun: false,
+      runCommand: () => ({ status: 0, stdout: '1.2.0\n', stderr: '' }),
+      log,
+    }),
+    /Refusing live publish:.*pinned to 1\.1\.0, behind latest published 1\.2\.0/,
+  );
+
+  // Lagging version warns and continues in --dry-run.
+  const dryLogs = [];
+  const dryStale = checkRuntimeClientParity({
+    root: fixtureDir,
+    dryRun: true,
+    runCommand: () => ({ status: 0, stdout: '1.2.0\n', stderr: '' }),
+    log: line => dryLogs.push(line),
+  });
+  assert.equal(dryStale.ok, true);
+  assert.equal(dryStale.stale, true);
+  assert.match(dryLogs.join('\n'), /Warning:.*1\.1\.0.*1\.2\.0/);
+
+  // Explicit --allow-stale-runtime-client override allows live publish with warning.
+  const overrideLogs = [];
+  const allowed = checkRuntimeClientParity({
+    root: fixtureDir,
+    dryRun: false,
+    allowStale: true,
+    runCommand: () => ({ status: 0, stdout: '1.2.0\n', stderr: '' }),
+    log: line => overrideLogs.push(line),
+  });
+  assert.equal(allowed.ok, true);
+  assert.equal(allowed.stale, true);
+  assert.match(overrideLogs.join('\n'), /Warning:.*1\.1\.0.*1\.2\.0/);
+
+  // Registry lookup failure fails closed in live mode and warns in --dry-run.
+  assert.throws(
+    () => checkRuntimeClientParity({
+      root: fixtureDir,
+      dryRun: false,
+      runCommand: () => ({ status: 1, stdout: '', stderr: 'EAI_AGAIN' }),
+      log,
+    }),
+    /Refusing live publish: Could not verify latest published/,
+  );
+  const dryUnreachable = checkRuntimeClientParity({
+    root: fixtureDir,
+    dryRun: true,
+    runCommand: () => ({ status: 1, stdout: '', stderr: 'EAI_AGAIN' }),
+    log: () => {},
+  });
+  assert.equal(dryUnreachable.ok, true);
+  assert.equal(dryUnreachable.latest, null);
+
+  // publishRelease enforces runtime-client parity in live mode BEFORE running pack/build/publish.
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD^{commit}'], { cwd: fixtureDir, encoding: 'utf8' }).trim();
+  const invoked = [];
+  await assert.rejects(
+    () => publishRelease(
+      { dryRun: false, tag: 'alpha-v0.1.41', root: fixtureDir },
+      {
+        runCommand: (cmd, args) => {
+          invoked.push([cmd, ...args]);
+          if (cmd === 'git' && args[0] === 'rev-parse' && args[1] === '--is-inside-work-tree') return { status: 0, stdout: 'true\n', stderr: '' };
+          if (cmd === 'git' && args[0] === 'status') return { status: 0, stdout: '', stderr: '' };
+          if (cmd === 'git' && args[0] === 'rev-parse') return { status: 0, stdout: `${headSha}\n`, stderr: '' };
+          if (cmd === 'gh' && args[1].includes('/releases/tags/')) return { status: 0, stdout: JSON.stringify({ tag_name: 'alpha-v0.1.41', draft: false }), stderr: '' };
+          if (cmd === 'gh' && args[1].includes('/git/ref/tags/')) return { status: 0, stdout: JSON.stringify({ object: { type: 'commit', sha: headSha } }), stderr: '' };
+          if (cmd === 'npm' && args[0] === 'view') return { status: 0, stdout: '1.2.0\n', stderr: '' };
+          throw new Error(`unexpected ${cmd} ${args.join(' ')}`);
+        },
+        log: () => {},
+      },
+    ),
+    /Refusing live publish:.*1\.1\.0.*1\.2\.0/,
+  );
+  assert.equal(invoked.some(([cmd, arg]) => cmd === 'npm' && (arg === 'pack' || arg === 'publish')), false);
+
+  // Semver edge cases: multi-digit minor (1.10.0 > 1.2.0), prerelease behind stable (1.2.0-alpha.1 < 1.2.0),
+  // non-exact semver range (^1.1.0), and npm_config_allow_stale_runtime_client scrubbing.
+  const writePinned = pinnedVersion => {
+    const nextPkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    nextPkg.dependencies = { [RUNTIME_CLIENT_PKG]: pinnedVersion };
+    writeFileSync(pkgPath, `${JSON.stringify(nextPkg, null, 2)}\n`);
+  };
+  writePinned('1.10.0');
+  let seenViewEnv = null;
+  const multiDigit = checkRuntimeClientParity({
+    root: fixtureDir,
+    dryRun: false,
+    env: { ...process.env, npm_config_allow_stale_runtime_client: 'true' },
+    runCommand: (_cmd, _args, opts) => {
+      seenViewEnv = opts?.env ?? {};
+      return { status: 0, stdout: '1.2.0\n', stderr: '' };
+    },
+    log: () => {},
+  });
+  assert.equal(multiDigit.ok, true);
+  assert.equal(multiDigit.stale, false, '1.10.0 must compare newer than 1.2.0');
+  assert.equal(seenViewEnv.npm_config_allow_stale_runtime_client, undefined, 'npm_config_allow_stale_runtime_client must be scrubbed');
+
+  writePinned('1.2.0-alpha.1');
+  assert.throws(
+    () => checkRuntimeClientParity({
+      root: fixtureDir,
+      dryRun: false,
+      runCommand: () => ({ status: 0, stdout: '1.2.0\n', stderr: '' }),
+      log: () => {},
+    }),
+    /Refusing live publish:.*1\.2\.0-alpha\.1, behind latest published 1\.2\.0/,
+  );
+
+  writePinned('^1.1.0');
+  assert.throws(
+    () => checkRuntimeClientParity({
+      root: fixtureDir,
+      dryRun: false,
+      runCommand: () => ({ status: 0, stdout: '1.1.0\n', stderr: '' }),
+      log: () => {},
+    }),
+    /Refusing live publish:.*non-exact version "\^1\.1\.0"/,
+  );
+  const dryRange = checkRuntimeClientParity({
+    root: fixtureDir,
+    dryRun: true,
+    runCommand: () => ({ status: 0, stdout: '1.1.0\n', stderr: '' }),
+    log: () => {},
+  });
+  assert.equal(dryRange.ok, true);
+  assert.equal(dryRange.stale, true);
 });

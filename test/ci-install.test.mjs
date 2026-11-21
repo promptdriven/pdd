@@ -108,7 +108,10 @@ test('CI installer uses anonymous npm ci for a public registry runtime package',
   const bin = join(dir, 'bin');
   const log = join(dir, 'npm.json');
   const gitLog = join(dir, 'git.log');
-  writeFileSync(join(dir, 'package-lock.json'), fixtureLock('https://registry.npmjs.org/@promptdriven/runtime-client/-/runtime-client-1.0.0.tgz'));
+  const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
+  const runtimePackage = runtimeVersion().package;
+  const runtimeSpec = lock.packages[''].dependencies[runtimePackage];
+  writeFileSync(join(dir, 'package-lock.json'), fixtureLock(`https://registry.npmjs.org/${runtimePackage}/-/runtime-client-${runtimeSpec}.tgz`));
   mkdirSync(bin);
   writeCommands(bin);
 

@@ -1,9 +1,10 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 34f89314320d77322baea0af15e0a8fbe7ae17208b083a9fa3e5d843b4278621).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: cabd8ddeca13f4b53abac3d96e60cf7e854c12c2ba661b6e4fe944210341edcf).
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import fs, { realpathSync } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -32,9 +33,11 @@ import {
   checkPlanResults,
   checkRuntimeHealth as runtimeCheckHealth,
   cleanText,
+  compileLocalManifest,
   composeProductTry as runtimeComposeProductTry,
   coverageText,
   createAgentBridge as runtimeCreateAgentBridge,
+  createLocalCommandBridge,
   createSavedStoryEvidenceReader as rawCreateSavedStoryEvidenceReader,
   createStrictSourceAccess as rawCreateStrictSourceAccess,
   createTryGuide as runtimeCreateTryGuide,
@@ -49,6 +52,7 @@ import {
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
+  executeLocalCommand,
   fillHashes as rawFillHashes,
   findTests as rawFindTests,
   failedCheckCount,
@@ -79,7 +83,10 @@ import {
   outcomeText,
   parsePromptFrontmatter,
   parseScenarioJson,
+  planProgramCase,
+  planProgramSession,
   preflight as rawPreflight,
+  prepareProgramInvocation,
   providerText,
   productTapCallBound,
   progressText,
@@ -106,6 +113,7 @@ import {
   runDoorCall as runtimeRunDoorCall,
   runJobs as runtimeRunJobs,
   runMcp as runtimeRunMcp,
+  runProgram as runtimeRunProgram,
   runShim as runtimeRunShim,
   runTry as runtimeRunTry,
   runtimeAgentPacketSlice,
@@ -140,10 +148,13 @@ import {
   tryUsageHeaders,
   tryUsageLine,
   validLink,
+  validateLocalManifest,
+  validateLocalRequest,
   version,
   withExactIntegers,
   workspace,
 } from '@promptdriven/runtime-client';
+import * as runtimeClientPkg from '@promptdriven/runtime-client';
 
 const req = createRequire(import.meta.url);
 const initialReadFileSync = fs.readFileSync;
@@ -2170,8 +2181,291 @@ export async function loadRuntimeClient() {
 
 const NON_EXEC_CHECK_FLAGS = [
   '--lint', '--local', '--files', '--explain-bindings',
-  '--read', '--retry', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
+  '--read', '--retry', '--reconcile', '--request', '--screen', '--drawing', '--look', '--emit-v1', '--write', '--bind-criteria',
 ];
+const FRESH_INCOMPATIBLE_CHECK_FLAGS = [
+  '--read', '--retry', '--reconcile', '--files', '--explain-bindings',
+  '--request', '--lint', '--local', '--screen', '--drawing', '--look',
+  '--emit-v1', '--write', '--bind-criteria',
+];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function unsupportedReconciliationError(featureName) {
+  return Object.assign(
+    new Error(
+      `CHECK receipt reconciliation (${featureName}) is not available in this installed @promptdriven/runtime-client version; upgrade to @promptdriven/runtime-client >= 1.2.0.`,
+    ),
+    { code: 'reconciliation-unsupported', exitCode: 5 },
+  );
+}
+
+function wrapFetchForFresh(baseFetch, matchPathname, { onTrySessionId } = {}) {
+  if (typeof baseFetch !== 'function') return baseFetch;
+  const wrapped = async (url, init) => {
+    const method = String(init?.method ?? 'GET').toUpperCase();
+    let pathname = '';
+    try {
+      pathname = new URL(String(url), 'http://localhost').pathname;
+    } catch {
+      return baseFetch(url, init);
+    }
+    if (typeof onTrySessionId === 'function' && method === 'GET') {
+      const modelMatch = /^\/v1\/try\/([^/]+)\/model$/.exec(pathname);
+      if (modelMatch && UUID_RE.test(modelMatch[1])) onTrySessionId(modelMatch[1]);
+    }
+    if (method !== 'POST' || !matchPathname(pathname)) return baseFetch(url, init);
+    if (init?.body instanceof FormData) {
+      const reqPart = init.body.get('request');
+      if (reqPart && typeof reqPart.text === 'function') {
+        try {
+          const parsed = JSON.parse(await reqPart.text());
+          if (typeof onTrySessionId === 'function' && pathname === '/v1/try' && typeof parsed?.requestId === 'string' && UUID_RE.test(parsed.requestId)) {
+            onTrySessionId(parsed.requestId);
+          }
+          if (isPlainObject(parsed) && parsed.fresh !== true) {
+            const nextForm = new FormData();
+            for (const [key, value] of init.body.entries()) {
+              if (key === 'request') {
+                nextForm.set(
+                  'request',
+                  new Blob([JSON.stringify({ ...parsed, fresh: true })], { type: 'application/json' }),
+                  'request.json',
+                );
+              } else if (typeof File !== 'undefined' && value instanceof File) {
+                nextForm.append(key, value, value.name);
+              } else {
+                nextForm.append(key, value);
+              }
+            }
+            return baseFetch(url, { ...init, body: nextForm });
+          }
+        } catch {
+          /* Preserve original body on malformed payload. */
+        }
+      }
+      return baseFetch(url, init);
+    }
+    if (typeof init?.body === 'string') {
+      try {
+        const parsed = JSON.parse(init.body);
+        if (isPlainObject(parsed) && parsed.fresh === undefined) {
+          return baseFetch(url, { ...init, body: JSON.stringify({ ...parsed, fresh: true }) });
+        }
+      } catch {
+        /* Preserve original body on malformed payload. */
+      }
+    }
+    return baseFetch(url, init);
+  };
+  if (baseFetch.__pddLegacyCriteriaWrapped) {
+    Object.defineProperty(wrapped, '__pddLegacyCriteriaWrapped', { value: true });
+  }
+  return wrapped;
+}
+
+const MAX_DOOR_DESCRIPTOR_BYTES = 1024 * 1024;
+
+function writePrivateFileAtomically(filePath, content) {
+  const tmpPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    fs.chmodSync(tmpPath, 0o600);
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {}
+    throw err;
+  }
+}
+
+function isSafeRegularJsonFile(filePath, maxBytes = MAX_DOOR_DESCRIPTOR_BYTES) {
+  if (typeof filePath !== 'string' || !filePath) return false;
+  try {
+    const stat = fs.lstatSync(filePath);
+    return !stat.isSymbolicLink() && stat.isFile() && stat.nlink === 1 && stat.size <= maxBytes;
+  } catch {
+    return false;
+  }
+}
+
+function ensureDoorDescriptorFresh(descriptorPath) {
+  try {
+    if (!isSafeRegularJsonFile(descriptorPath, MAX_DOOR_DESCRIPTOR_BYTES)) return;
+    const raw = JSON.parse(initialReadFileSync(descriptorPath, 'utf8'));
+    if (isPlainObject(raw) && raw.fresh !== true) {
+      writePrivateFileAtomically(descriptorPath, `${JSON.stringify({ ...raw, fresh: true }, null, 2)}\n`);
+    }
+  } catch {
+    /* Best-effort compatibility patch for 1.1.0 CLI descriptors. */
+  }
+}
+
+function safeRequestIdDisplay(value) {
+  if (typeof value === 'string') return value;
+  if (value === undefined || value === null) return '';
+  try {
+    return String(value);
+  } catch {
+    return `[${typeof value}]`;
+  }
+}
+
+function patchTrackedSessionDoor(sessionId, env = process.env) {
+  if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) return;
+  const home = env?.HOME || process.env.HOME || homedir();
+  const stateRoot = resolve(env?.PDD_STATE_DIR || join(home, '.pdd', 'runtime'));
+  ensureDoorDescriptorFresh(join(stateRoot, 'tries', `${sessionId}.door.json`));
+}
+
+function wrapShellForFreshDoor(baseShell, beforeLaunch) {
+  const launcher =
+    typeof baseShell === 'function'
+      ? baseShell
+      : (shell, shellEnv, shellRoot) =>
+          new Promise((done, reject) => {
+            const child = spawn(shell, ['-i'], {
+              cwd: shellRoot ?? process.cwd(),
+              env: shellEnv,
+              stdio: 'inherit',
+            });
+            child.on('error', reject);
+            child.on('exit', (code, signal) => done(code ?? (signal ? 128 : 0)));
+          });
+  return (shell, shellEnv, shellRoot) => {
+    beforeLaunch();
+    return launcher(shell, shellEnv, shellRoot);
+  };
+}
+
+function findExistingTryForFresh(cwd, words, rawOptions = {}, env = process.env, ports = {}) {
+  try {
+    const root = repoTopRoot(cwd);
+    if (!root) return null;
+    const realRoot = realpathSync(root);
+    const home = env?.HOME || process.env.HOME || homedir();
+    const stateRoot = resolve(env?.PDD_STATE_DIR || join(home, '.pdd', 'runtime'));
+    const repoKey = createHash('sha256').update(realRoot).digest('hex').slice(0, 16);
+    const repoStatePath = join(stateRoot, 'repos', `${repoKey}.json`);
+    if (!isSafeRegularJsonFile(repoStatePath, 4 * 1024 * 1024)) return null;
+    const repoState = JSON.parse(initialReadFileSync(repoStatePath, 'utf8'));
+    const tries = repoState?.tries;
+    if (!isPlainObject(tries) || Object.keys(tries).length === 0) return null;
+    const found = findTests({ root: realRoot }, ports);
+    if (rawOptions?.['--product'] === true) {
+      const journey = rawOptions['--journey'];
+      let target = null;
+      if (journey === undefined && words.length === 1) {
+        const normalized = normalizeSelectionWords(words, cwd, realRoot, found);
+        const selection = selectTests(found, normalized);
+        if (selection?.selected?.length === 1) target = selection.selected[0];
+      } else {
+        let journeyPaths = [];
+        try {
+          journeyPaths = selectJourneys(
+            (found.tests ?? []).map(test => ({ testPath: test.path, storyPath: test.storyPath })),
+            journey,
+            ports,
+          );
+        } catch {
+          journeyPaths = [];
+        }
+        if (!journeyPaths.length && journey === undefined) {
+          if (found.tests?.length === 1) {
+            target = found.tests[0];
+          }
+        } else {
+          const requested =
+            words.length > 0
+              ? new Set(selectTests(found, normalizeSelectionWords(words, cwd, realRoot, found))?.selected?.map(t => t.path) ?? [])
+              : null;
+          const matched = (found.tests ?? []).filter(
+            test => journeyPaths.includes(test.path) && (!requested || requested.has(test.path)),
+          );
+          if (matched.length === 1) target = matched[0];
+        }
+      }
+      if (target) {
+        return isPlainObject(tries[target.path])
+          ? { story: words.length === 1 ? words[0] : null, product: true, title: target.title || target.story || 'this product' }
+          : null;
+      }
+      if (journey === undefined && words.length === 0) {
+        const productEntries = Object.entries(tries).filter(([, value]) => isPlainObject(value?.product_setup));
+        if (productEntries.length === 1) {
+          return { story: null, product: true, title: 'this product' };
+        }
+      }
+      return null;
+    }
+    if (words.length === 1) {
+      const normalized = normalizeSelectionWords(words, cwd, realRoot, found);
+      const selection = selectTests(found, normalized);
+      const target = selection?.selected?.length === 1 ? selection.selected[0] : null;
+      if (!target) return null;
+      const existing = tries[target.path];
+      if (!isPlainObject(existing)) return null;
+      return { story: target.story, title: target.title || target.story };
+    }
+    if (words.length === 0) {
+      const wholeEntry = Object.entries(tries).find(([, value]) => isPlainObject(value?.simulation_scope));
+      if (wholeEntry) return { story: null, title: 'this project' };
+      const sorted = [...(found.tests ?? [])].sort((a, b) => a.path.localeCompare(b.path));
+      const first = sorted[0];
+      if (first && isPlainObject(tries[first.path])) {
+        return { story: first.story, title: first.title || first.story };
+      }
+    }
+  } catch {
+    /* Let runtimeRunTry report selection or repository errors. */
+  }
+  return null;
+}
+
+async function runCheckReconcileCommand(input = {}, ports = {}) {
+  const stdout = ports.stdout ?? process.stdout;
+  const stderr = ports.stderr ?? process.stderr;
+  const rawOptions = input?.options ?? {};
+  const words = commandWords(input);
+  if (words.length > 0 || Object.keys(rawOptions).some(key => !['--reconcile', '--json'].includes(key))) {
+    stderr.write('Use pdd test --reconcile REQUEST_ID [--json] without other options or Stories.\n');
+    return 2;
+  }
+  const requestId = rawOptions['--reconcile'];
+  if (typeof requestId !== 'string' || !UUID_RE.test(requestId)) {
+    stderr.write(`Invalid CHECK request UUID "${cleanText(safeRequestIdDisplay(requestId))}". Pass the original external request UUID.\n`);
+    return 2;
+  }
+  try {
+    const result = await reconcileCheckReceipt(
+      { cwd: input?.cwd ?? process.cwd(), requestId },
+      ports,
+    );
+    if (rawOptions['--json'] === true) {
+      stdout.write(`${JSON.stringify(result)}\n`);
+    } else {
+      const { formatCheckReconciliation } = await import('./workflow-results.mjs');
+      stdout.write(`${formatCheckReconciliation(result)}\n`);
+    }
+    return result?.available === true ? 0 : 3;
+  } catch (error) {
+    if (error?.code === 'invalid-request-id' || error?.exitCode === 2) {
+      stderr.write(`${causeText(error.message) || 'Invalid CHECK request UUID.'}\n`);
+      return 2;
+    }
+    if (error?.code === 'reconciliation-unsupported' || error?.exitCode === 5) {
+      stderr.write(`${causeText(error.message) || 'CHECK receipt reconciliation is unavailable.'}\n`);
+      return 5;
+    }
+    const detail = causeText(error?.message ?? error);
+    stderr.write(`CHECK receipt reconciliation failed.${detail ? ` Reason: ${detail}` : ''}\n`);
+    return 3;
+  }
+}
 const PROMPT_DEP_LINK_RE = /\[[^\[\]\r\n]*\]\(([^()\s#\r\n]+\.prompt\.md)(?:#[^()\s\r\n]*)?\)/g;
 const PORT_CALL_TOKEN_RE = /\b[A-Za-z][A-Za-z0-9_-]*\.[A-Za-z][A-Za-z0-9_-]*\b/;
 
@@ -2398,15 +2692,43 @@ export async function runCheck(input = {}, ports = {}) {
   if (input?.options?.['--bind-criteria']) {
     return runBindCriteria(input, ports);
   }
+  if (input?.options?.['--reconcile'] !== undefined) {
+    return runCheckReconcileCommand(input, ports);
+  }
+  const rawOptions = input?.options ?? {};
+  const freshRequested = rawOptions['--fresh'] !== undefined;
+  if (freshRequested) {
+    const stderr = ports.stderr ?? process.stderr;
+    if (rawOptions['--fresh'] !== true) {
+      stderr.write('--fresh takes no value.\n');
+      return 2;
+    }
+    if (FRESH_INCOMPATIBLE_CHECK_FLAGS.some(flag => rawOptions[flag] !== undefined)) {
+      stderr.write('This mix of options does not work together. Run pdd test --help.\n');
+      return 2;
+    }
+  }
   const env = ports.env ?? process.env;
   const client = input?.client
     ? { ...input.client, version: input.client.version ?? clientVersion() }
     : { version: clientVersion() };
   const graphCap = computeGraphAwareDefaultMaxCalls(input, ports);
-  const effectiveInput =
-    graphCap !== undefined
-      ? { ...input, options: { ...(input.options ?? {}), '--max-calls': graphCap }, client }
-      : { ...input, client };
+  const effectiveOptions = {
+    ...rawOptions,
+    ...(graphCap !== undefined ? { '--max-calls': graphCap } : {}),
+  };
+  if (freshRequested && effectiveOptions['--affected'] === true) {
+    delete effectiveOptions['--fresh'];
+  }
+  if (effectiveOptions['--read'] === true && effectiveOptions['--details'] === true) {
+    delete effectiveOptions['--details'];
+    Object.defineProperty(effectiveOptions, 'details', { value: true, enumerable: false, configurable: true });
+  }
+  const effectiveInput = {
+    ...input,
+    options: effectiveOptions,
+    client,
+  };
   const cwd = effectiveInput?.cwd ?? process.cwd();
   const lazyOverlay = { cwd, ports, map: undefined };
 
@@ -2445,6 +2767,14 @@ export async function runCheck(input = {}, ports = {}) {
       }),
       { cwd },
     );
+    if (freshRequested) {
+      // Bypass local pass cache reuse across all modes (including --lf --fresh, --affected --fresh,
+      // --journeys --fresh) while preserving --lf failure lookup, unselected cached passes, and fresh writeback.
+      checkPorts.env = { ...(checkPorts.env ?? env), CI: '1' };
+      if (typeof checkPorts.fetch === 'function') {
+        checkPorts.fetch = wrapFetchForFresh(checkPorts.fetch, pathname => pathname === '/v1/check');
+      }
+    }
     attachRunCheckAdaptivePolling(checkPorts, forwardPorts);
     return runtimeRunCheck(effectiveInput, checkPorts);
   });
@@ -2456,7 +2786,308 @@ export async function askAgent(input = {}, ports = {}) {
   return runtimeAskAgent({ ...input, run }, ports);
 }
 
+const PLAIN_PROSE_UI_MAX_BYTES = 2 * 1024 * 1024;
+const DIRECT_PROMPT_STDERR_LIMIT = 4096;
+const REOPEN_FALLBACK_LINE_LIMIT = 64;
+const PLAIN_PROSE_RENDER_RE = /(?:\brender\s*\(|`(?:(?:sync|async)\s+)?render(?:\s*\([^)]*\))?`|^#{2,4}\s+render\b)/im;
+const PLAIN_PROSE_HANDLE_EVENT_RE = /(?:\bhandle_event\s*\(|`(?:(?:sync|async)\s+)?handle_event(?:\s*\([^)]*\))?`|^#{2,4}\s+handle_event\b)/im;
+const PLAIN_PROSE_CLI_ARGV_RE = /\bargv\b/;
+const PLAIN_PROSE_CLI_EXIT_RE = /\bexit_code\b/;
+const PLAIN_PROSE_HTTP_RE = /\bHTTP\s+(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)\s+\//;
+const HTTP_TITLE_RE = /^HTTP (?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/;
+const REOPEN_TAB_CONFLICT_RE = /--tab\b[^\n]*new/i;
+const TRY_STARTUP_DONE_RE = /https?:\/\/\S+\/s\/\S+|Try budget \d+|Connecting your agent to the Try page/i;
+const FORM_TAB_NOTICE = "This Story's operation takes typed input, so it opens on the Form tab.";
+
+let cachedNativePlainProseUiSupport;
+function runtimeClientSupportsPlainProseUi() {
+  if (cachedNativePlainProseUiSupport !== undefined) return cachedNativePlainProseUiSupport;
+  try {
+    const info = typeof version === 'function' ? version() : null;
+    if (
+      (Array.isArray(info?.features) &&
+        info.features.some(f =>
+          ['plain-prose-ui', 'plain-prose-ui-screen', 'single-prompt-try', 'single-prompt-simulate', 'hybrid-ui'].includes(f),
+        )) ||
+      info?.capabilities?.plainProseUi === true ||
+      info?.capabilities?.plainProseUiScreen === true ||
+      info?.capabilities?.singlePromptTry === true
+    ) {
+      cachedNativePlainProseUiSupport = true;
+      return true;
+    }
+    const clientEntry = req.resolve('@promptdriven/runtime-client');
+    const clientSource = initialReadFileSync(resolve(dirname(clientEntry), 'runtime', 'runtime-client.mjs'), 'utf8');
+    cachedNativePlainProseUiSupport =
+      /\bhandle_event\b/.test(clientSource) && /\brender\b/.test(clientSource) && /\bscreen\b/.test(clientSource);
+    return cachedNativePlainProseUiSupport;
+  } catch {
+    cachedNativePlainProseUiSupport = false;
+    return false;
+  }
+}
+
+function isRegularInRootPromptFile(cwd, candidate) {
+  if (typeof candidate !== 'string' || !candidate.endsWith('.prompt.md')) return false;
+  const root = repoTopRoot(cwd);
+  if (!root) return false;
+  try {
+    const realRoot = realpathSync(root);
+    const full = resolve(realpathSync(cwd), candidate);
+    const rel = relative(realRoot, full);
+    if (!rel || rel === '..' || rel.startsWith(`..${sep}`)) return false;
+    const parts = rel.split(sep);
+    for (let i = 1; i <= parts.length; i++) {
+      const st = initialLstatSync(resolve(realRoot, ...parts.slice(0, i)));
+      if (st.isSymbolicLink()) return false;
+      if (i === parts.length && !st.isFile()) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isPlainProseHybridUiPrompt(source) {
+  if (typeof source !== 'string' || !source || interfaceBlocks(source).length > 0) return false;
+  return PLAIN_PROSE_RENDER_RE.test(source) && PLAIN_PROSE_HANDLE_EVENT_RE.test(source);
+}
+
+function promptEntryHasCliOrHttpDoor(realRoot, visible, entryPath, promptSource, operation) {
+  const blocks = interfaceBlocks(promptSource);
+  if (!blocks.length) {
+    if (operation === 'main' && PLAIN_PROSE_CLI_ARGV_RE.test(promptSource) && PLAIN_PROSE_CLI_EXIT_RE.test(promptSource)) {
+      return true;
+    }
+    if (PLAIN_PROSE_HTTP_RE.test(promptSource)) {
+      return true;
+    }
+    return false;
+  }
+  let iface = null;
+  try {
+    iface = readPrompt(realRoot, visible, entryPath)?.interface ?? null;
+  } catch {
+    iface = null;
+  }
+  if (!iface) {
+    try {
+      iface = JSON.parse(blocks[0][1]);
+    } catch {
+      return false;
+    }
+  }
+  const entries = Array.isArray(iface?.entries) ? iface.entries : [];
+  const conventions = Array.isArray(iface?.conventions) ? iface.conventions : [];
+  const index = entries.findIndex(entry => entry?.operation === operation);
+  if (index < 0) return false;
+  const entry = entries[index];
+  if (
+    ['input_schema', 'result_schema'].every(name =>
+      conventions.some(c => c?.path === `/entries/${index}/${name}` && c.convention === 'cli'),
+    )
+  ) {
+    return true;
+  }
+  if (typeof entry?.input_schema?.title === 'string' && HTTP_TITLE_RE.test(entry.input_schema.title)) {
+    return true;
+  }
+  return false;
+}
+
+function hasSavedTryRecord(realRoot, tests, rawWords, env = process.env) {
+  try {
+    const stateDir = resolve(env?.PDD_STATE_DIR || join(env?.HOME || homedir(), '.pdd', 'runtime'));
+    const repoKey = createHash('sha256').update(realRoot).digest('hex').slice(0, 16);
+    const repoFile = join(stateDir, 'repos', `${repoKey}.json`);
+    const st = initialLstatSync(repoFile);
+    if (st.isSymbolicLink() || !st.isFile()) return false;
+    const saved = JSON.parse(initialReadFileSync(repoFile, 'utf8'));
+    const tries = saved?.tries;
+    if (!tries || typeof tries !== 'object' || Array.isArray(tries)) return false;
+    if (!rawWords.length) {
+      if (
+        Object.values(tries).some(
+          v => v && typeof v === 'object' && v.simulation_scope && typeof v.simulation_scope === 'object' && !Array.isArray(v.simulation_scope),
+        )
+      ) {
+        return true;
+      }
+      const seed = [...tests].sort((a, b) => String(a?.path ?? '').localeCompare(String(b?.path ?? '')))[0];
+      return typeof seed?.path === 'string' && Boolean(tries[seed.path]);
+    }
+    return tests.some(item => typeof item?.path === 'string' && Boolean(tries[item.path]));
+  } catch {
+    return false;
+  }
+}
+
+function wrapFilteredStream(baseStream, shouldSuppress) {
+  const target = baseStream;
+  return Object.assign(Object.create(target), {
+    ...(target.isTTY !== undefined ? { isTTY: target.isTTY } : {}),
+    write(chunk, ...rest) {
+      const text =
+        typeof chunk === 'string'
+          ? chunk
+          : Buffer.isBuffer(chunk) || chunk instanceof Uint8Array
+            ? Buffer.from(chunk).toString('utf8')
+            : String(chunk);
+      if (shouldSuppress(text)) {
+        const cb = rest.find(arg => typeof arg === 'function');
+        if (cb) cb();
+        return true;
+      }
+      return target.write(chunk, ...rest);
+    },
+  });
+}
+
+function classifyPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
+  const opts = input?.options ?? {};
+  if (
+    opts['--tab'] !== undefined ||
+    opts['--cli'] ||
+    opts['--shell'] ||
+    opts['--serve'] !== undefined ||
+    opts['--stop'] ||
+    opts['--save-last'] ||
+    opts['--product'] ||
+    opts['--app-map'] !== undefined
+  ) {
+    return 'none';
+  }
+  try {
+    const root = repoTopRoot(cwd);
+    if (!root) return 'none';
+    const rawWords = Array.isArray(input?.words) ? input.words : [];
+    const found = withScenarioOverlay(lazyOverlay, () =>
+      findTests({ root, cwd, excludeFixtureProjects: rawWords.length === 0 }, ports),
+    );
+    if (!found?.visible || found.visible.has('app-map.json') || found.visible.has('app/app-map.json')) {
+      return 'none';
+    }
+    const realRoot = realpathSync(root);
+    const realCwd = realpathSync(cwd);
+    const normalizedWords = rawWords.map(word => {
+      if (typeof word !== 'string' || !word) return word;
+      if (realCwd === realRoot && !word.startsWith('/') && !word.includes('\\')) return word;
+      const candidate = resolve(realCwd, word);
+      const rel = relative(realRoot, candidate).split(sep).join('/');
+      const withinRepo = rel !== '..' && !rel.startsWith('../');
+      if (!withinRepo) return word;
+      if (rel && (found.visible.has(rel) || found.tests?.some(t => t.path === rel || t.storyPath === rel))) {
+        return rel;
+      }
+      try {
+        if (initialStatSync(candidate).isDirectory()) return rel || '.';
+      } catch { /* keep original word */ }
+      return word;
+    });
+    const selectedResult = normalizedWords.length ? selectTests(found, normalizedWords) : null;
+    const tests = normalizedWords.length
+      ? (Array.isArray(selectedResult) ? selectedResult : selectedResult?.selected ?? [])
+      : (found.tests ?? []);
+    if (!tests.length) return 'none';
+
+    const promptCache = new Map();
+    const readSafeVisiblePrompt = rel => {
+      if (promptCache.has(rel)) return promptCache.get(rel);
+      let text = null;
+      try {
+        if (
+          typeof rel === 'string' &&
+          rel.endsWith('.prompt.md') &&
+          !rel.startsWith('/') &&
+          !rel.includes('\\') &&
+          found.visible.has(rel)
+        ) {
+          const full = resolve(realRoot, rel);
+          if (full.startsWith(`${realRoot}${sep}`)) {
+            const lst = initialLstatSync(full);
+            if (!lst.isSymbolicLink() && lst.isFile() && lst.size <= PLAIN_PROSE_UI_MAX_BYTES) {
+              const realFull = realpathSync(full);
+              if (realFull.startsWith(`${realRoot}${sep}`)) {
+                text = initialReadFileSync(realFull, 'utf8');
+              }
+            }
+          }
+        }
+      } catch {
+        text = null;
+      }
+      promptCache.set(rel, text);
+      return text;
+    };
+
+    let sawPlainProseUiStep = false;
+    for (const item of tests) {
+      if (Array.isArray(item?.doc?.app_maps) && item.doc.app_maps.length > 0) return 'none';
+      const steps = Array.isArray(item?.doc?.steps) ? item.doc.steps : [];
+      for (const step of steps) {
+        const entryPath = typeof step?.entry_path === 'string' ? step.entry_path : '';
+        const op = typeof step?.operation === 'string' ? step.operation : '';
+        if (!entryPath || !op) continue;
+        const promptSource = readSafeVisiblePrompt(entryPath);
+        if (promptSource === null) continue;
+        if (promptEntryHasCliOrHttpDoor(realRoot, found.visible, entryPath, promptSource, op)) return 'none';
+        if ((op === 'render' || op === 'handle_event') && isPlainProseHybridUiPrompt(promptSource)) {
+          sawPlainProseUiStep = true;
+        }
+      }
+    }
+    if (!sawPlainProseUiStep) return 'none';
+    if (!opts['--new'] && hasSavedTryRecord(realRoot, tests, rawWords, ports?.env ?? process.env)) {
+      return 'reopen';
+    }
+    return 'inject';
+  } catch {
+    return 'none';
+  }
+}
+
 export async function runTry(input = {}, ports = {}) {
+  const { runTry: rawTryOverride, ...forwardPorts } = ports;
+  const opts = input?.options ?? {};
+  const freshRequested = opts['--fresh'] !== undefined;
+  const cwd = input?.cwd ?? process.cwd();
+  const words = commandWords(input);
+  const isDirectProgramTarget =
+    words.length >= 1 &&
+    typeof words[0] === 'string' &&
+    (words[0].endsWith('.prompt.md') || basename(words[0]) === 'app-map.json');
+  if (freshRequested) {
+    const stderr = forwardPorts.stderr ?? process.stderr;
+    if (opts['--fresh'] !== true) {
+      stderr.write('--fresh takes no value.\n');
+      return 2;
+    }
+    if (opts['--stop']) {
+      stderr.write('pdd simulate --stop takes only a STORY. Run pdd simulate --help.\n');
+      return 2;
+    }
+    if (opts['--save-last']) {
+      stderr.write('Choose one of --cli (with optional --shell), --shell, --serve, --page, --save-last or --stop.\n');
+      return 2;
+    }
+    if (!opts['--new'] && !isDirectProgramTarget) {
+      const existing = findExistingTryForFresh(cwd, words, opts, forwardPorts.env ?? process.env, forwardPorts);
+      if (existing) {
+        const productArgs = [
+          '--product',
+          ...(existing.story ? [existing.story] : []),
+          ...(typeof opts['--journey'] === 'string' && opts['--journey'] ? ['--journey', opts['--journey']] : []),
+        ].join(' ');
+        const targetCmd = existing.product
+          ? `pdd simulate ${productArgs} --fresh --new`
+          : `pdd simulate${existing.story ? ` ${existing.story}` : ''} --fresh --new`;
+        stderr.write(
+          `A Try for "${existing.title}" is already open. --fresh applies only to a new Try: run ${targetCmd} (it stops the open Try first).\n`,
+        );
+        return 2;
+      }
+    }
+  }
   const [
     ,
     { loadAgentDefinitions },
@@ -2472,41 +3103,149 @@ export async function runTry(input = {}, ports = {}) {
   ]);
   const defaultDiscoverAgents = async (...args) => (await import('./agent-adapters.mjs')).discoverAgents(...args);
   const defaultAskAgent = async (turnInput, ...rest) => askAgent(turnInput, ...rest);
-  const cwd = input?.cwd ?? process.cwd();
   const defaultAgentBridge = (context, test, tryId, opts, link) =>
     createAgentBridge(context, test, tryId, opts, link, {
-      redaction: ports.redaction ?? seamRedaction(ports),
-      redactSecrets: ports.redactSecrets,
-      loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
-      discoverAgents: ports.discoverAgents ?? ports.agents?.list,
-      runAgentProcess: ports.runAgentProcess ?? ports.agents?.run,
-      askAgent: ports.askAgent ?? ports.agents?.ask,
-      evidenceEligibility: ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? readEvidenceEligibility,
-      guidePorts: ports.guidePorts,
+      redaction: forwardPorts.redaction ?? seamRedaction(forwardPorts),
+      redactSecrets: forwardPorts.redactSecrets,
+      loadAgentDefinitions: forwardPorts.loadAgentDefinitions ?? forwardPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
+      discoverAgents: forwardPorts.discoverAgents ?? forwardPorts.agents?.list,
+      runAgentProcess: forwardPorts.runAgentProcess ?? forwardPorts.agents?.run,
+      askAgent: forwardPorts.askAgent ?? forwardPorts.agents?.ask,
+      evidenceEligibility: forwardPorts.evidenceEligibility ?? forwardPorts.readEvidenceEligibility ?? readEvidenceEligibility,
+      guidePorts: forwardPorts.guidePorts,
     });
-  const lazyOverlay = { cwd, ports, map: undefined };
-  return withScenarioOverlay(lazyOverlay, () =>
-    runtimeRunTry(
-      input,
-      seamRuntimePorts(
-        withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
+  const directPromptCandidate =
+    !opts['--stop'] && !opts['--save-last'] && !opts['--product'] && words.length === 1 && isRegularInRootPromptFile(cwd, words[0])
+      ? words[0]
+      : null;
+  const invokeRunTry = typeof rawTryOverride === 'function' ? rawTryOverride : runtimeRunTry;
+  const lazyOverlay = { cwd, ports: forwardPorts, map: undefined };
+  let activeSessionId = null;
+  const finishTry = exitCode => {
+    if (exitCode === 0 && freshRequested) {
+      patchTrackedSessionDoor(activeSessionId, forwardPorts.env ?? process.env);
+    }
+    return exitCode;
+  };
+  const invoke = (tryInput, tryPorts) =>
+    withScenarioOverlay(lazyOverlay, () => {
+      const boundPorts = seamRuntimePorts(
+        withPortDefaults(withEligibilityDefault(tryPorts, readEvidenceEligibility), {
           tryLauncherUrl: TRY_LAUNCHER_URL,
           agentBridge: defaultAgentBridge,
-          loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
-          discoverAgents: ports.discoverAgents ?? ports.agents?.list ?? defaultDiscoverAgents,
-          askAgent: ports.askAgent ?? ports.agents?.ask ?? defaultAskAgent,
+          loadAgentDefinitions: tryPorts.loadAgentDefinitions ?? tryPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
+          discoverAgents: tryPorts.discoverAgents ?? tryPorts.agents?.list ?? defaultDiscoverAgents,
+          askAgent: tryPorts.askAgent ?? tryPorts.agents?.ask ?? defaultAskAgent,
           parseProductDocuments,
           parseProductWorldWriters,
           askApproval,
           lineReader,
           promptPath,
-          files: wrapCaseFilesForShortJson(ports.files, ports),
-          redaction: seamRedaction(ports),
+          files: wrapCaseFilesForShortJson(tryPorts.files, tryPorts),
+          redaction: seamRedaction(tryPorts),
         }),
         { cwd },
-      ),
-    ),
-  );
+      );
+      if (freshRequested) {
+        if (typeof boundPorts.fetch === 'function') {
+          boundPorts.fetch = wrapFetchForFresh(
+            boundPorts.fetch,
+            pathname =>
+              pathname === '/v1/try' ||
+              /^\/v1\/try\/[^/]+\/call$/.test(pathname) ||
+              /^\/v1\/try\/[^/]+\/screen\//.test(pathname),
+            {
+              onTrySessionId: id => {
+                activeSessionId = id;
+              },
+            },
+          );
+        }
+        boundPorts.shell = wrapShellForFreshDoor(boundPorts.shell, () => {
+          patchTrackedSessionDoor(activeSessionId, boundPorts.env ?? forwardPorts.env ?? process.env);
+        });
+      }
+      return invokeRunTry(tryInput, boundPorts);
+    });
+
+  if (directPromptCandidate) {
+    let observedErr = '';
+    const targetStderr = forwardPorts.stderr ?? process.stderr;
+    const watchedStderr = wrapFilteredStream(targetStderr, text => {
+      if (observedErr.length < DIRECT_PROMPT_STDERR_LIMIT) {
+        observedErr += text.slice(0, DIRECT_PROMPT_STDERR_LIMIT - observedErr.length);
+      }
+      return false;
+    });
+    const exitCode = await invoke(input, { ...forwardPorts, stderr: watchedStderr });
+    if (
+      exitCode === 2 &&
+      /No tests found|Unknown story|No Stories are available/i.test(observedErr) &&
+      !observedErr.includes('Direct .prompt.md simulation')
+    ) {
+      const safePrompt = cleanText(directPromptCandidate);
+      targetStderr.write(
+        `Direct .prompt.md simulation (${safePrompt}) requires a newer @promptdriven/runtime-client; upgrade pdd / @promptdriven/runtime-client.\n`,
+      );
+    }
+    return finishTry(exitCode);
+  }
+
+  const skipSeamAutoScreenTab = typeof rawTryOverride !== 'function' && runtimeClientSupportsPlainProseUi();
+  const screenTabMode = skipSeamAutoScreenTab
+    ? 'none'
+    : classifyPlainProseScreenTab(input, cwd, forwardPorts, lazyOverlay);
+  if (screenTabMode === 'reopen') {
+    const baseStderr = forwardPorts.stderr ?? process.stderr;
+    const reopenStderr = wrapFilteredStream(baseStderr, text => text.includes(FORM_TAB_NOTICE));
+    return finishTry(await invoke(input, { ...forwardPorts, stderr: reopenStderr }));
+  }
+  const effectiveInput =
+    screenTabMode === 'inject'
+      ? { ...input, options: { ...opts, '--tab': 'screen' } }
+      : input;
+  if (screenTabMode === 'inject' && !opts['--new']) {
+    let reopenAutoTabConflict = false;
+    let startupSucceeded = false;
+    const emittedBeforeFallback = new Set();
+    const baseStdout = forwardPorts.stdout ?? process.stdout;
+    const baseStderr = forwardPorts.stderr ?? process.stderr;
+    const observedStdout = wrapFilteredStream(baseStdout, text => {
+      if (!startupSucceeded && TRY_STARTUP_DONE_RE.test(text)) {
+        startupSucceeded = true;
+        emittedBeforeFallback.clear();
+      }
+      return false;
+    });
+    const filteredStderr = wrapFilteredStream(baseStderr, text => {
+      if (!startupSucceeded) {
+        if (REOPEN_TAB_CONFLICT_RE.test(text)) {
+          reopenAutoTabConflict = true;
+          return true;
+        }
+        if (TRY_STARTUP_DONE_RE.test(text)) {
+          startupSucceeded = true;
+          emittedBeforeFallback.clear();
+        } else if (emittedBeforeFallback.size < REOPEN_FALLBACK_LINE_LIMIT && text.length <= DIRECT_PROMPT_STDERR_LIMIT) {
+          emittedBeforeFallback.add(text);
+        }
+      }
+      return false;
+    });
+    const code = await invoke(effectiveInput, { ...forwardPorts, stdout: observedStdout, stderr: filteredStderr });
+    if (!startupSucceeded && code === 2 && reopenAutoTabConflict) {
+      const reopenStderr = wrapFilteredStream(baseStderr, text => {
+        if (emittedBeforeFallback.has(text)) {
+          emittedBeforeFallback.delete(text);
+          return true;
+        }
+        return text.includes(FORM_TAB_NOTICE);
+      });
+      return finishTry(await invoke(input, { ...forwardPorts, stderr: reopenStderr }));
+    }
+    return finishTry(code);
+  }
+  return finishTry(await invoke(effectiveInput, forwardPorts));
 }
 
 export async function createAgentBridge(context, test, tryId, options, link, seamPorts = {}) {
@@ -2539,18 +3278,61 @@ export async function createAgentBridge(context, test, tryId, options, link, sea
 }
 
 export async function openCli(context, test, sessionId, options) {
-  const nextContext =
+  let nextContext =
     context && typeof context.ports === 'object' && context.ports !== null
       ? { ...context, ports: seamRuntimePorts(withPortDefaults(context.ports, { tryLauncherUrl: TRY_LAUNCHER_URL })) }
       : context;
-  return runtimeOpenCli(nextContext, test, sessionId, options);
+  const patchOwnDoor = () => {
+    if (options?.['--fresh'] === true && context?.store && typeof sessionId === 'string' && UUID_RE.test(sessionId)) {
+      ensureDoorDescriptorFresh(join(context.store.folder('tries'), `${sessionId}.door.json`));
+    }
+  };
+  if (options?.['--fresh'] === true && nextContext?.ports) {
+    nextContext = {
+      ...nextContext,
+      ports: {
+        ...nextContext.ports,
+        shell: wrapShellForFreshDoor(nextContext.ports.shell, patchOwnDoor),
+      },
+    };
+  }
+  const result = await runtimeOpenCli(nextContext, test, sessionId, options);
+  if (result === 0) patchOwnDoor();
+  return result;
 }
 
 export async function openServe(context, test, sessionId, options) {
-  const nextContext =
+  let nextContext =
     context && typeof context.ports === 'object' && context.ports !== null
       ? { ...context, ports: seamRuntimePorts(context.ports) }
       : context;
+  if (options?.['--fresh'] === true && nextContext?.ports && typeof nextContext.ports.fetch === 'function') {
+    const freshFetch = wrapFetchForFresh(
+      nextContext.ports.fetch,
+      pathname => /^\/v1\/try\/[^/]+\/(?:call|screen\/)/.test(pathname),
+    );
+    const wrappedPorts = { ...nextContext.ports, fetch: freshFetch };
+    let nextRuntime = nextContext.runtime;
+    if (nextRuntime && typeof nextRuntime === 'object') {
+      const runtimeFetch =
+        typeof nextRuntime.ports?.fetch === 'function'
+          ? wrapFetchForFresh(
+              nextRuntime.ports.fetch,
+              pathname => /^\/v1\/try\/[^/]+\/(?:call|screen\/)/.test(pathname),
+            )
+          : freshFetch;
+      nextRuntime = Object.assign(
+        Object.create(Object.getPrototypeOf(nextRuntime)),
+        nextRuntime,
+        { ports: { ...(nextRuntime.ports ?? {}), ...wrappedPorts, fetch: runtimeFetch } },
+      );
+    }
+    nextContext = {
+      ...nextContext,
+      ports: wrappedPorts,
+      ...(nextRuntime !== undefined ? { runtime: nextRuntime } : {}),
+    };
+  }
   return runtimeOpenServe(nextContext, test, sessionId, options);
 }
 
@@ -2559,17 +3341,23 @@ export async function runShim(descriptorPath, argv, ports = {}) {
     import('./secret-redaction.mjs'),
     import('./prompt-approve.mjs'),
   ]);
-  return runtimeRunShim(
-    descriptorPath,
-    argv,
-    seamRuntimePorts(
-      withPortDefaults(ports, {
-        lineReader,
-        redaction: seamRedaction(ports),
-        files: wrapCaseFilesForShortJson(ports.files, ports),
-      }),
-    ),
+  let freshDescriptor = false;
+  if (isSafeRegularJsonFile(descriptorPath, MAX_DOOR_DESCRIPTOR_BYTES)) {
+    try {
+      freshDescriptor = JSON.parse(initialReadFileSync(descriptorPath, 'utf8'))?.fresh === true;
+    } catch { /* let runtimeRunShim report invalid/missing descriptors */ }
+  }
+  const shimPorts = seamRuntimePorts(
+    withPortDefaults(ports, {
+      lineReader,
+      redaction: seamRedaction(ports),
+      files: wrapCaseFilesForShortJson(ports.files, ports),
+    }),
   );
+  if (freshDescriptor && typeof shimPorts.fetch === 'function') {
+    shimPorts.fetch = wrapFetchForFresh(shimPorts.fetch, pathname => /^\/v1\/try\/[^/]+\/call$/.test(pathname));
+  }
+  return runtimeRunShim(descriptorPath, argv, shimPorts);
 }
 
 export async function saveLast(input) {
@@ -2586,7 +3374,11 @@ export async function saveLast(input) {
 
 export async function runDoorCall(descriptor, input, ports = {}) {
   await import('./secret-redaction.mjs');
-  return runtimeRunDoorCall(descriptor, input, seamRuntimePorts(withPortDefaults(ports, { redaction: seamRedaction(ports) })));
+  const doorPorts = seamRuntimePorts(withPortDefaults(ports, { redaction: seamRedaction(ports) }));
+  if (descriptor?.fresh === true && typeof doorPorts.fetch === 'function') {
+    doorPorts.fetch = wrapFetchForFresh(doorPorts.fetch, pathname => /^\/v1\/try\/[^/]+\/call$/.test(pathname));
+  }
+  return runtimeRunDoorCall(descriptor, input, doorPorts);
 }
 
 export async function readTryOwner(input = {}, ports = {}) {
@@ -2614,6 +3406,65 @@ export async function observeTryCall(input = {}, ports = {}) {
     input,
     seamSelectionPorts(withPortDefaults(ports, { redaction: seamRedaction(ports) })),
   );
+}
+
+export function projectCheckReconciliation(input, ports = {}) {
+  const impl =
+    typeof ports?.projectCheckReconciliation === 'function'
+      ? ports.projectCheckReconciliation
+      : typeof runtimeClientPkg.projectCheckReconciliation === 'function'
+        ? runtimeClientPkg.projectCheckReconciliation
+        : null;
+  if (!impl) throw unsupportedReconciliationError('projectCheckReconciliation');
+  return impl(input);
+}
+
+export async function reconcileCheckReceipt(input = {}, ports = {}) {
+  const rawRequestId = input?.requestId;
+  if (typeof rawRequestId !== 'string' || !UUID_RE.test(rawRequestId)) {
+    throw Object.assign(
+      new Error(`Invalid CHECK request UUID "${cleanText(safeRequestIdDisplay(rawRequestId))}". Pass the original external request UUID.`),
+      { code: 'invalid-request-id', exitCode: 2 },
+    );
+  }
+  const { reconcileCheckReceipt: injectedReconcile, ...forwardPorts } = ports ?? {};
+  const impl =
+    typeof injectedReconcile === 'function'
+      ? injectedReconcile
+      : typeof runtimeClientPkg.reconcileCheckReceipt === 'function'
+        ? runtimeClientPkg.reconcileCheckReceipt
+        : null;
+  if (!impl) throw unsupportedReconciliationError('reconcileCheckReceipt');
+  await import('./secret-redaction.mjs');
+  return impl(
+    input,
+    seamRuntimePorts(withPortDefaults(forwardPorts, { redaction: seamRedaction(forwardPorts) }), {
+      cwd: input?.cwd ?? process.cwd(),
+    }),
+  );
+}
+
+export async function runProgram(input = {}, ports = {}) {
+  const [, { lineReader }] = await Promise.all([
+    import('./secret-redaction.mjs'),
+    import('./prompt-approve.mjs'),
+  ]);
+  const cwd = input?.cwd ?? process.cwd();
+  return runtimeRunProgram(
+    input,
+    seamRuntimePorts(
+      withPortDefaults(ports, {
+        lineReader,
+        redaction: seamRedaction(ports),
+        files: wrapCaseFilesForShortJson(ports.files, ports),
+      }),
+      { cwd },
+    ),
+  );
+}
+
+export async function run(input = {}, ports = {}) {
+  return runProgram(input, ports);
 }
 
 export function createTryTools(input, ports = {}) {
@@ -2935,8 +3786,10 @@ const LOCAL_WHAT_FLAGS = Object.freeze({
 const SIMULATE_MODES = new Set(['open', 'cli', 'serve', 'save-last', 'stop']);
 
 export async function check(input = {}, ports = {}) {
-  const extraOptions =
-    input?.affected === true && input?.options?.['--affected'] === undefined ? { '--affected': true } : {};
+  const extraOptions = {
+    ...(input?.affected === true && input?.options?.['--affected'] === undefined ? { '--affected': true } : {}),
+    ...(input?.fresh === true && input?.options?.['--fresh'] === undefined ? { '--fresh': true } : {}),
+  };
   return runCheck(buildCheckInput(input, { defaultCache: true, extraOptions }), ports);
 }
 
@@ -2963,7 +3816,11 @@ export async function read(input = {}, ports = {}) {
     {
       ...(cwd !== undefined ? { cwd } : {}),
       words,
-      options: { ...(input?.options ?? {}), '--read': true },
+      options: {
+        ...(input?.options ?? {}),
+        ...(input?.details === true && input?.options?.['--details'] === undefined ? { '--details': true } : {}),
+        '--read': true,
+      },
       cache: input?.cache ?? false,
       ...(input?.client !== undefined ? { client: input.client } : {}),
       ...(input?.workflow !== undefined ? { workflow: input.workflow } : {}),
@@ -3007,6 +3864,7 @@ export async function simulate(input = {}, ports = {}) {
   }
   const cwd = input?.cwd ?? input?.root;
   const options = { ...(input?.options ?? {}) };
+  if (input?.fresh === true && options['--fresh'] === undefined) options['--fresh'] = true;
   if (input?.mode === 'cli') options['--cli'] = true;
   else if (input?.mode === 'serve' && options['--serve'] === undefined) options['--serve'] = input?.port ?? true;
   else if (input?.mode === 'save-last') options['--save-last'] = true;
@@ -3016,7 +3874,9 @@ export async function simulate(input = {}, ports = {}) {
       ? input.test
       : input?.test && typeof input.test === 'object' && typeof (input.test.path ?? input.test.story) === 'string'
         ? input.test.path ?? input.test.story
-        : null;
+        : typeof input?.prompt === 'string' && input.prompt.length > 0
+          ? input.prompt
+          : null;
   const words = Array.isArray(input?.words)
     ? [...input.words]
     : testWord !== null
@@ -3117,7 +3977,9 @@ export {
   checkPlanResultLines,
   checkPlanResults,
   cleanText,
+  compileLocalManifest,
   coverageText,
+  createLocalCommandBridge,
   defaultLineReader,
   defaultMaxCalls,
   discoveryRefusal,
@@ -3128,6 +3990,7 @@ export {
   exactNumberSpelling,
   exactValue,
   executableInterfaceText,
+  executeLocalCommand,
   failedCheckCount,
   format,
   formatSize,
@@ -3151,6 +4014,9 @@ export {
   outcomeText,
   parsePromptFrontmatter,
   parseScenarioJson,
+  planProgramCase,
+  planProgramSession,
+  prepareProgramInvocation,
   providerText,
   productTapCallBound,
   progressText,
@@ -3186,6 +4052,8 @@ export {
   tryUsageHeaders,
   tryUsageLine,
   validLink,
+  validateLocalManifest,
+  validateLocalRequest,
   version,
   withExactIntegers,
   workspace,

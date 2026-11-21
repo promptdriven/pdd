@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { headerPrompts, headerEntries, headerHashState, promptHeaderHash, promptClaims, isTestOwnedPath, resolveOwners, findOwners, runOwner } from '../src/file-owner.mjs';
+import { headerPrompts, headerEntries, headerHashState, promptHeaderHash, moduleContentHash, updateHeaderHash, promptClaims, isTestOwnedPath, resolveOwners, findOwners, runOwner } from '../src/file-owner.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runApprove } from '../src/prompt-approve.mjs';
 import { PLACE, harbor, sink } from './helpers/runtime-fake.mjs';
@@ -474,4 +474,38 @@ test('3377 findOwners checks repository-wide uniqueness via allPaths and narrows
   assert.deepEqual(plain(findOwners({ root: narrowedRoot, paths: ['src/b/index.mjs'] }).files), [
     row('src/b/index.mjs', [], null, true),
   ]);
+});
+
+test('3447/3203 per-module derived hashes, header refresh, and linear-time header regex', () => {
+  const promptBase = '# Widget\n\nOwn `src/a.mjs`.\n';
+  const baseHash = promptHeaderHash(promptBase);
+
+  // moduleContentHash is invariant to CRLF, BOM, and derived header hash updates, while sensitive to real code edits
+  const bare = '// Generated from prompts/widget.prompt.md.\nexport const x = 1;\n';
+  const hashed1 = `// Generated from prompts/widget.prompt.md (sha256: ${HEX}).\nexport const x = 1;\n`;
+  const hashed2 = `\uFEFF// Generated from prompts/widget.prompt.md (sha256: ${baseHash}).\r\nexport const x = 1;\r\n`;
+  assert.equal(moduleContentHash(bare), moduleContentHash(hashed1));
+  assert.equal(moduleContentHash(bare), moduleContentHash(hashed2));
+  assert.notEqual(moduleContentHash(bare), moduleContentHash(bare.replace('1', '2')));
+
+  // updateHeaderHash updates existing headers in-place (preserving comment style) and never injects headers into headerless files
+  const upd1 = updateHeaderHash(bare, 'prompts/widget.prompt.md', baseHash);
+  assert.equal(upd1.changed, true);
+  assert.equal(upd1.content, `// Generated from prompts/widget.prompt.md (sha256: ${baseHash}).\nexport const x = 1;\n`);
+  assert.equal(updateHeaderHash(upd1.content, 'prompts/widget.prompt.md', baseHash).changed, false);
+
+  const eqStyle = `# Prompt: prompts/widget.prompt.md sha256=${HEX}\nx = 1\n`;
+  const updEq = updateHeaderHash(eqStyle, 'prompts/widget.prompt.md', baseHash);
+  assert.equal(updEq.content, `# Prompt: prompts/widget.prompt.md sha256=${baseHash}\nx = 1\n`);
+
+  const headerless = 'export const y = 2;\n';
+  assert.deepEqual(updateHeaderHash(headerless, 'prompts/widget.prompt.md', baseHash), { content: headerless, changed: false });
+
+  // R1 #8 regression: adversarial whitespace lines never trigger quadratic ReDoS backtracking
+  const leadingSpaces = `${' '.repeat(1050)}!`;
+  const trailingSpaces = `// Generated from prompts/widget.prompt.md${' '.repeat(1000)}!`;
+  const t0 = Date.now();
+  assert.deepEqual(headerEntries(`${leadingSpaces}\n${trailingSpaces}\n`), []);
+  assert.equal(updateHeaderHash(`${leadingSpaces}\n${trailingSpaces}\n`, 'prompts/widget.prompt.md', baseHash).changed, false);
+  assert.ok(Date.now() - t0 < 200, 'header matching must stay linear time');
 });

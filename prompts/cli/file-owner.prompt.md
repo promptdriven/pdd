@@ -100,6 +100,27 @@ conventions. It ignores the approval metadata: `pdd approve` changes only
 evidence is kept outside the prompt. Approving a prompt therefore leaves its
 headers current. It also ignores white space inside the interface JSON.
 
+### Per-module derived content hash and header refresh
+
+To track prompt-to-code sync per module without a global commit baseline or
+circular hash dependencies:
+
+- `moduleContentHash(content)` computes the SHA-256 (64 lowercase hex digits)
+  of an owned code file's normalized UTF-8 text (UTF-8 BOM stripped, `\r\n` and
+  `\r` normalized to `\n`), stripping only the derived ` (sha256: HEX)` or
+  ` sha256=HEX` suffix from valid provenance header lines inside the first
+  4,096 UTF-8 bytes so refreshing a prompt header hash leaves `module_sha256`
+  unchanged.
+- `updateHeaderHash(codeText, promptPath, hash)` refreshes the hash suffix of
+  matching provenance header line(s) for `promptPath` within the first 4,096
+  UTF-8 bytes of `codeText`, preserving the existing comment opener/closer,
+  `Generated from` or `Prompt:` wording, trailing period and line ending
+  (updating `sha256=OLD` to `sha256=HASH` when that form is already used, and
+  otherwise writing ` (sha256: HASH)`), returning `{content, changed}`. It
+  never adds a header line to a file that does not already have one.
+- Header line matching uses linear-time non-backtracking patterns with no
+  overlapping whitespace quantifiers.
+
 Each header has a hash state:
 
 | State | When |
@@ -221,6 +242,11 @@ sorted eligible production code paths with a `.ext` extension in `allPaths` and
   keep its first row.
 - `promptHeaderHash(content)`: the [header hash](#header-hash) of one prompt's
   content (a string or `Uint8Array`).
+- `moduleContentHash(content)`: the [normalized module content hash](#per-module-derived-content-hash-and-header-refresh)
+  of one owned code file's content (a string or `Uint8Array`).
+- `updateHeaderHash(codeText, promptPath, hash)`: return `{content, changed}`
+  refreshing the hash suffix on matching provenance header line(s) for
+  `promptPath` inside the first 4,096 UTF-8 bytes without adding a new header.
 - `headerHashState(sha256, promptContent)`: return `{expected, state, legacy}`
   for one header. `expected` is the header hash, or null when `promptContent`
   is null or `false` (then `state` is `unknown`). `legacy` is true only for the

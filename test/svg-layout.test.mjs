@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lintSvgLayouts } from '../src/svg-layout.mjs';
-import { fillHashes, runCheck } from '../src/runtime-seam.mjs';
+import { fillHashes, format, proseSha256, runCheck } from '../src/runtime-seam.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
 import { fakeRuntime, harbor, portsFor, sink, temp, PLACE } from './helpers/runtime-fake.mjs';
@@ -93,8 +93,8 @@ test('public local lint includes no-interface/no-test Git-visible prompts with z
 test('Story local lint follows selected dependency closure and omits unrelated prompts', async t => {
   const setup = harbor(t, repo => {
     cpSync(join(fixtures, 'game.ui.svg'), join(repo, 'prompts/game.ui.svg'));
-    const original = readFileSync(join(repo, PLACE), 'utf8');
-    writeFileSync(join(repo, PLACE), `${original}\n![Layout](game.ui.svg)`);
+    const updated = `${readFileSync(join(repo, PLACE), 'utf8')}\n![Layout](game.ui.svg)`;
+    writeFileSync(join(repo, PLACE), format.setInterfaceStatus(updated, { status: 'approved', prose_sha256: proseSha256(updated) }));
     writeFileSync(join(repo, 'prompts/unrelated.prompt.md'), '![Layout](missing.ui.svg)');
   });
   const p = portsFor({ PDD_RUNTIME_URL: 'invalid', PDD_STATE_DIR: setup.state }, { gh: () => assert.fail('No auth'), fetch: () => assert.fail('No network') }).ports;
