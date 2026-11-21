@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 331f11364e07d1f2d73c50a2c03ec2873ce627bca1fdcc5df5a2cb305d2a13d2).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a885bbb2f4decb9fc0cc970870f5b67fa083fdc90489a653e39919f550309124).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -47,7 +47,7 @@ import {
   selectionEqual,
 } from './workflow-eligibility.mjs';
 export { readEvidenceEligibility };
-import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
+import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, closeGraceMs, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
@@ -993,7 +993,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   }
   try { await ensurePaneBudget(3, p); }
   catch (error) {
-    if (['herdr_pane_budget','invalid_pane_budget'].includes(error.code)) return fail([
+    if (['herdr_pane_budget','invalid_pane_budget','invalid_close_grace'].includes(error.code)) return fail([
       ...(automatic && error.code === 'herdr_pane_budget' ? ['Automatic start deferred: panes.'] : []),
       failureReason(error), ...failureDetails(error)].join('\n'));
     // Unknown capacity is not evidence of a full server. Startup retains its
@@ -3206,13 +3206,20 @@ async function startCodeFromCard(run, area, p, packageRoot) {
   commitRun(run, p, latest => {
     latest.branch = branch; latest.prBase = prBase;
     if (equalFact(latest.question, selectedQuestion)) latest.question = null;
-    if (latest.area === selectedArea) { latest.metricsOrigin = { ...(latest.metricsOrigin ?? { origin: 'unknown' }), requiredOutcome: 'code' }; if (sameGate(latest.gate, selectedGate)) latest.gate = null; latest.area = selectedArea + 1; latest.state = latest.question ? 'waiting' : 'running'; latest.doneAt = null; }
+    if (latest.area === selectedArea) {
+      latest.metricsOrigin = { ...(latest.metricsOrigin ?? { origin: 'unknown' }), requiredOutcome: 'code' };
+      if (sameGate(latest.gate, selectedGate)) latest.gate = null;
+      for (const chat of latest.chats ?? []) if (chat.area === latest.areas[selectedArea].name) chat.endedAt ??= p.now();
+      latest.area = selectedArea + 1; latest.state = latest.question ? 'waiting' : 'running'; latest.doneAt = null;
+    }
   });
   const next = run.areas[run.area];
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
   catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return `The person chose the code PR at the Story card.${based} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`; }
-  return [`The person chose the code PR at the Story card (route card-choice).${based}`,
+  let cleanupWarnings = [];
+  try { cleanupWarnings = (await cleanupRunChats(run, p)).warnings; } catch {}
+  return [...cleanupWarnings, `The person chose the code PR at the Story card (route card-choice).${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, 'This chat\'s work is done. Stop here.'].join('\n');
 }
@@ -5035,7 +5042,15 @@ function cancelClosedWaiting(latest, at, reason) {
 }
 
 export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {}, ports = {}) {
-  const p = deps(ports), runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
+  const p = deps(ports);
+  let defaultGraceMs;
+  try { defaultGraceMs = closeGraceMs(p); }
+  catch (error) {
+    if (error?.code === 'invalid_close_grace') return {...fail(error.message), closed: 0, kept: 0, reasonCounts: {}};
+    throw error;
+  }
+  const explicitTidy = graceMs === undefined && need === undefined && timeBudgetMs === undefined;
+  const runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
   let closed = 0;
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
   const reconcileSaved = targetRuns => {
@@ -5072,8 +5087,12 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
         release = acquireRunLock(run.runDir);
         const latest = dryRun ? run : readRun(run.runDir);
         if (!latest || latest.runId !== run.runId) continue;
+        const latestChat = chat ? (latest.chats ?? []).find(item => sameChat(item, chat)) : null;
+        const hasRecentOpen = Number.isFinite(latestChat?.openedAt) && p.now() < latestChat.openedAt + defaultGraceMs;
+        const effectiveGrace = graceMs !== undefined ? graceMs
+          : (explicitTidy && ended(latest) && !hasRecentOpen ? 0 : defaultGraceMs);
         const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
-          ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
+          graceMs: effectiveGrace, ...(need !== undefined && effectiveGrace === 0 ? {reason:'budget'} : {})});
         closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
         if (need !== undefined) { const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) return false; }
       } catch (error) {
@@ -5329,9 +5348,11 @@ async function refreshPr(run, p) {
     if(last.state==='merged'&&area===latest.areas.at(-1))latest.state='completed';
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
     const closedReason = closedWaitingReason(latest);
-    const endedAt = closedReason ? (priorClosedAt ?? checkedAt) : checkedAt;
+    const mergedMs = last.state === 'merged' && typeof last.mergedAt === 'string' ? Date.parse(last.mergedAt) : NaN;
+    const completionAt = Number.isFinite(mergedMs) ? Math.min(mergedMs, checkedAt) : checkedAt;
+    const endedAt = closedReason ? (priorClosedAt ?? checkedAt) : completionAt;
     if (closedReason) cancelClosedWaiting(latest, endedAt, closedReason);
-    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt ??= endedAt;
+    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt = Number.isFinite(chat.endedAt) ? Math.min(chat.endedAt, endedAt) : endedAt;
   });
   await refreshTops();
 }

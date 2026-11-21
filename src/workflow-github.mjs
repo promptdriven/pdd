@@ -307,7 +307,10 @@ export async function readWorkflowPrStatus(input, ports = {}) {
     const ci = !checks.length ? 'none'
       : failed.length ? (failed.every(billingText) ? 'billing' : 'failing')
       : checks.some(check => !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(outcome(check))) ? 'pending' : 'passing';
-    return { state, ci, ...(text(row.baseRefName) ? { base: row.baseRefName } : {}),
+    const mergedAt = state === 'merged' && text(row.mergedAt)
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(row.mergedAt)
+      && Number.isFinite(Date.parse(row.mergedAt)) ? row.mergedAt : null;
+    return { state, ci, ...(mergedAt ? { mergedAt } : {}), ...(text(row.baseRefName) ? { base: row.baseRefName } : {}),
       ...(text(row.headRefOid) ? { headSha: row.headRefOid } : {}),
       ...(view ? { view: { body: typeof row.body === 'string' ? row.body : null, head: text(row.headRefOid) ? row.headRefOid : null, comments: Array.isArray(row.comments) ? row.comments : null } } : {}) };
   } catch { return { state: 'unknown', ci: 'unknown' }; }
