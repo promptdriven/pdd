@@ -2773,3 +2773,202 @@ test('3619 R2 regressions: P1-1 bare headings & top-level detail sections, P1-2 
   assert.equal(p22Fail.length, 1, p22Fail.join('\n'));
   assert.ok(p22Fail[0].includes('"worker.input"'));
 });
+
+test('3619 R3 regressions: P1-1 prefix separators, P1-2 op headings before DEP_PORTS_HEADING_RE, P1-3 detail headings excluded from opsSectionDepth, P1-4 loose/continuation ops bullet indent, P2-5 conjoined list suffix drop', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    'reason: Gateway adapter.',
+    '---',
+    '',
+    '# Adapter',
+    '',
+    '## Port wiring',
+    ...ports.map(p => `- \`${p}\``),
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+  ].join('\n');
+
+  // P1-1: HEADING_OP_PREFIX_RE requires explicit separator boundaries; unbackticked non-delimited headings like
+  // `## Tooling`, `## Operational`, `## Tool-commit`, `## Tool policy`, `## Command dispatch` never export ops,
+  // while `### Operation: revoke_session` and ``### Tool `revoke_session` `` DO export ops.
+  const p11NegDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Tooling',
+    'Internal tooling notes.',
+    '',
+    '## Operational',
+    'Runbook notes.',
+    '',
+    '## Tool-commit',
+    'Commit checks.',
+    '',
+    '## Tool policy',
+    'Policy overview.',
+    '',
+    '## Command dispatch',
+    'Dispatch overview.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const p11NegRes = lintNativeOnlyPortParity(
+    nativeChecking(['access.ing', 'access.al', 'access.commit', 'access.policy', 'access.dispatch']),
+    [{ path: 'prompts/access/access.prompt.md', text: p11NegDep }],
+  );
+  assert.equal(p11NegRes.length, 5, p11NegRes.join('\n'));
+
+  const p11PosDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Domain decisions',
+    '',
+    '### Operation: revoke_session',
+    'Revokes a session.',
+    '',
+    '### Tool `inspect_quota`',
+    'Inspects quota.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.revoke_session', 'access.inspect_quota']),
+      [{ path: 'prompts/access/access.prompt.md', text: p11PosDep }],
+    ),
+    [],
+  );
+
+  // P1-2: Operation headings evaluated BEFORE DEP_PORTS_HEADING_RE — `### `create_record`: creates a resource`,
+  // `### `open-port``, and outside-ops `### Operation: `open-port`` extract cleanly while bare `### Ports` still opens a port section.
+  const p12Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '### Operation: `bind_port`',
+    'Binds a logical channel.',
+    '',
+    '## Operations',
+    '',
+    '### `create_record`: creates a resource',
+    'Creates a record.',
+    '',
+    '### `open-port`',
+    'Opens a port.',
+    '',
+    '### Ports',
+    '- `store`',
+    '  - `load(id)`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.bind_port', 'access.create_record', 'access.open-port', 'store.load']),
+      [{ path: 'prompts/access/access.prompt.md', text: p12Dep }],
+    ),
+    [],
+  );
+
+  // P1-3: Detail-word headings (`## Command parameters`, `## Operation fields`, `## Tool schema`,
+  // `## Interface types`, `## Operation examples`, `## Tool notes`) enter excludedDetailDepth instead of opsSectionDepth.
+  const p13Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Command parameters',
+    '- `commit`: SHA.',
+    '',
+    '## Operation fields',
+    '- `branch`: branch name.',
+    '',
+    '## Tool schema',
+    '- `author`: author name.',
+    '',
+    '## Interface types',
+    '- `token`: auth token.',
+    '',
+    '## Operation examples',
+    '- `demo_payload`: example payload.',
+    '',
+    '## Tool notes',
+    'Exports `note_item` in examples.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const p13Res = lintNativeOnlyPortParity(
+    nativeChecking(['access.commit', 'access.branch', 'access.author', 'access.token', 'access.demo_payload', 'access.note_item']),
+    [{ path: 'prompts/access/access.prompt.md', text: p13Dep }],
+  );
+  assert.equal(p13Res.length, 6, p13Res.join('\n'));
+
+  // P1-4: Loose lists and indented continuation prose inside ## Operations do NOT reset opsBulletBaseIndent.
+  const p14Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '- `evaluate`',
+    '',
+    '  - `commit`: loose indented child bullet.',
+    '',
+    '- `verify`',
+    '  Accepts fields:',
+    '  - `branch`: indented child bullet after indented continuation prose.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.evaluate', 'access.verify']),
+      [{ path: 'prompts/access/access.prompt.md', text: p14Dep }],
+    ),
+    [],
+  );
+  const p14Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.commit', 'access.branch']),
+    [{ path: 'prompts/access/access.prompt.md', text: p14Dep }],
+  );
+  assert.equal(p14Fail.length, 2, p14Fail.join('\n'));
+
+  // P2-5: Trailing non-op suffix applies across ALL non-call items in a conjoined prose list,
+  // while preserving explicit call-syntax items and valid operation lists.
+  const p25Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    'Exposes `commit`, `author`, and `branch` fields in audit entries.',
+    'Exports `snapshot` and `digest` to CSV.',
+    'Exports `run_job()` and `tag` field.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.run_job']),
+      [{ path: 'prompts/access/access.prompt.md', text: p25Dep }],
+    ),
+    [],
+  );
+  const p25Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.commit', 'access.author', 'access.branch', 'access.snapshot', 'access.digest', 'access.tag']),
+    [{ path: 'prompts/access/access.prompt.md', text: p25Dep }],
+  );
+  assert.equal(p25Fail.length, 6, p25Fail.join('\n'));
+});

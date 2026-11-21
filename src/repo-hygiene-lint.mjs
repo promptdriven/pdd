@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 94a03f7e59b629f491f5ebf58188c2b13c82a5efb360627e02edc7c98166b39d).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 7663790662ce3dc168a6ade53173079efeaa545e44408a46bd6c5e627a2fe049).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -129,7 +129,8 @@ const NON_OP_LABEL_WORDS = new Set([
   'constraints', 'invariant', 'invariants', 'overview', 'summary', 'details',
   'status', 'response', 'request', 'precondition', 'postcondition', 'effect', 'effects', 'none',
 ]);
-const HEADING_OP_PREFIX_RE = /^(?:operation|command|subcommand|tool|entrypoint)\s*[:—–-]?\s*/i;
+const HEADING_OP_PREFIX_RE = /^(?:operation|command|subcommand|tool|entrypoint)(?:[ \t]*[:—–][ \t]*|[ \t]+-[ \t]+|[ \t]+)/i;
+const HEADING_OP_DELIM_PREFIX_RE = /^(?:operation|command|subcommand|tool|entrypoint)(?:[ \t]*[:—–][ \t]*|[ \t]+-[ \t]+)/i;
 const EXPORTED_OP_VERB_RE = /\b(?:exports?|exporting|exposes?|exposing)\b/gi;
 const EXPORTED_OP_NEGATION_RE = /\b(?:not|never|without|no|neither|nor|cannot|can't|won't|don't|doesn't|must\s+not|mustn't|should\s+not|shouldn't|may\s+not)\b/i;
 const LINE_START_EXPORTED_OP_LABEL_RE = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:public[ \t]+|exported[ \t]+)?(?:operations?|commands?|subcommands?|tools?|exports?|entrypoints?|entry[ \t]+points?)[ \t]*:/i;
@@ -946,6 +947,7 @@ function extractHeadingOperationName(title, { requireExplicitSyntax = false } = 
   const raw = String(title ?? '').trim().replace(/^\d+[.)]\s+/, '').trim();
   if (!raw) return null;
   const hasOpKeywordPrefix = HEADING_OP_PREFIX_RE.test(raw);
+  const hasOpDelimPrefix = HEADING_OP_DELIM_PREFIX_RE.test(raw);
   const stripped = hasOpKeywordPrefix ? raw.replace(HEADING_OP_PREFIX_RE, '').trim() : raw;
   if (!stripped) return null;
   const head = stripHeadingDescriptionTail(stripped);
@@ -955,7 +957,7 @@ function extractHeadingOperationName(title, { requireExplicitSyntax = false } = 
   const isBareCallWhole = /^[a-z][a-zA-Z0-9_-]*\s*\([^()\r\n]*\)$/.test(head);
   if (requireExplicitSyntax) {
     const isCallSyntax = hasCallParens && (isBacktickedWhole || isBareCallWhole);
-    const isExplicitKeywordOp = hasOpKeywordPrefix && (isBacktickedWhole || SIMPLE_IDENT_RE.test(head));
+    const isExplicitKeywordOp = hasOpKeywordPrefix && (isBacktickedWhole || (hasOpDelimPrefix && SIMPLE_IDENT_RE.test(head)));
     if (!isCallSyntax && !isExplicitKeywordOp) return null;
   }
   const ident = cleanSingleIdentifier(head, { allowCallArgs: true });
@@ -1016,6 +1018,8 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
     }
     if (sawArticle && !sawApiNoun) return pos;
   }
+  const collected = [];
+  let trailingNonOpSuffix = false;
   while (pos < line.length) {
     while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || line[pos] === ':' || line[pos] === ',' || line[pos] === '/')) pos++;
     const lower4 = line.slice(pos, pos + 4).toLowerCase();
@@ -1037,8 +1041,19 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
     const hasCallParens = hasCallParensInToken(inner);
     const op = cleanSingleIdentifier(inner, { allowCallArgs: true });
     if (!op) break;
-    if (!hasCallParens && (NON_OP_LABEL_WORDS.has(op.toLowerCase()) || hasNonOpSuffix(line, pos))) break;
-    onOp(op);
+    if (!hasCallParens && NON_OP_LABEL_WORDS.has(op.toLowerCase())) break;
+    if (!hasCallParens && hasNonOpSuffix(line, pos)) {
+      trailingNonOpSuffix = true;
+      break;
+    }
+    collected.push({ op, hasCallParens });
+  }
+  if (!trailingNonOpSuffix && collected.length > 0 && hasNonOpSuffix(line, pos)) {
+    trailingNonOpSuffix = true;
+  }
+  for (const item of collected) {
+    if (trailingNonOpSuffix && !item.hasCallParens) continue;
+    onOp(item.op);
   }
   return pos;
 }
@@ -1211,38 +1226,56 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
           subheadingPort = null;
           subheadingDepth = 0;
         }
-      } else if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title) && !hasCallParensInToken(titleHead)) {
-        // Preserve any enclosing opsSectionDepth when entering a nested #### Ports heading.
-        portsSectionDepth = depth;
-        subheadingPort = null;
-        subheadingDepth = 0;
-      } else if (isPrompt && promptPrefixes.size > 0) {
-        if (opsSectionDepth > 0 && depth > opsSectionDepth) {
-          if (depth === opsSectionDepth + 1) {
-            const opName = extractHeadingOperationName(title, { requireExplicitSyntax: false });
-            if (opName) {
-              addExportedOp(opName);
-              opSubheadingDepth = depth;
-            } else if (opDetailDepth === 0 && DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
-              opDetailDepth = depth;
-            } else {
-              opSubheadingDepth = depth;
+      } else {
+        let handledAsOp = false;
+        if (isPrompt && promptPrefixes.size > 0) {
+          if (opsSectionDepth > 0 && depth === opsSectionDepth + 1) {
+            const isBarePortHeading = /^(?:ports?|resources?)$/i.test(titleHead)
+              && !titleHead.startsWith('`')
+              && !hasCallParensInToken(titleHead);
+            if (!isBarePortHeading) {
+              const opName = extractHeadingOperationName(title, { requireExplicitSyntax: false });
+              if (opName) {
+                addExportedOp(opName);
+                opSubheadingDepth = depth;
+                handledAsOp = true;
+              }
             }
-          } else if (opDetailDepth === 0 && DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
-            opDetailDepth = depth;
-          } else if (opSubheadingDepth === 0) {
-            opSubheadingDepth = depth;
+          } else if (opsSectionDepth === 0 && excludedDetailDepth === 0) {
+            const explicitHeadingOp = extractHeadingOperationName(title, { requireExplicitSyntax: true });
+            if (explicitHeadingOp) {
+              addExportedOp(explicitHeadingOp);
+              handledAsOp = true;
+            }
           }
-        } else if (excludedDetailDepth === 0) {
-          const explicitHeadingOp = extractHeadingOperationName(title, { requireExplicitSyntax: true });
-          if (explicitHeadingOp) {
-            addExportedOp(explicitHeadingOp);
-          } else if (!NETWORK_PORT_HEADING_RE.test(title) && !DEP_OPS_EXCLUDE_HEADING_RE.test(title) && DEP_OPS_HEADING_RE.test(title)) {
-            opsSectionDepth = depth;
-            opSubheadingDepth = 0;
-            opDetailDepth = 0;
-          } else if (DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
-            excludedDetailDepth = depth;
+        }
+        if (!handledAsOp) {
+          if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title) && !hasCallParensInToken(titleHead)) {
+            // Preserve any enclosing opsSectionDepth when entering a nested #### Ports heading.
+            portsSectionDepth = depth;
+            subheadingPort = null;
+            subheadingDepth = 0;
+          } else if (isPrompt && promptPrefixes.size > 0) {
+            if (opsSectionDepth > 0 && depth > opsSectionDepth) {
+              if (opDetailDepth === 0 && DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
+                opDetailDepth = depth;
+              } else if (opSubheadingDepth === 0 || depth === opsSectionDepth + 1) {
+                opSubheadingDepth = depth;
+              }
+            } else if (excludedDetailDepth === 0) {
+              if (
+                !NETWORK_PORT_HEADING_RE.test(title)
+                && !DEP_OPS_EXCLUDE_HEADING_RE.test(title)
+                && !DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)
+                && DEP_OPS_HEADING_RE.test(title)
+              ) {
+                opsSectionDepth = depth;
+                opSubheadingDepth = 0;
+                opDetailDepth = 0;
+              } else if (DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
+                excludedDetailDepth = depth;
+              }
+            }
           }
         }
       }
@@ -1350,8 +1383,16 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
             const callOp = extractLeadingBulletCallOp(rest);
             if (callOp) addExportedOp(callOp);
           }
-        } else {
-          opsBulletBaseIndent = -1;
+        } else if (line.trim()) {
+          let lineIndent = 0;
+          for (let i = 0; i < line.length; i++) {
+            if (line[i] === ' ') lineIndent++;
+            else if (line[i] === '\t') lineIndent += 2;
+            else break;
+          }
+          if (opsBulletBaseIndent >= 0 && lineIndent <= opsBulletBaseIndent) {
+            opsBulletBaseIndent = -1;
+          }
         }
       } else {
         opsBulletBaseIndent = -1;
