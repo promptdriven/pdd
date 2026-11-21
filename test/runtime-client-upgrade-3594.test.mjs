@@ -735,7 +735,7 @@ test('#3594: checkRuntimeClientParity validates real repo package.json pinned at
       runCommand: () => ({ status: 0, stdout: `${newer}\n`, stderr: '' }),
       log: () => {},
     }),
-    new RegExp(`pinned to ${pinned.replace(/\./g, '\\.')}, behind latest published ${newer.replace(/\./g, '\\.')}`),
+    err => err instanceof Error && err.message.includes(`pinned to ${pinned}, behind latest published ${newer}`),
   );
 });
 
@@ -769,10 +769,12 @@ test('#3617: .github/dependabot.yml schedules daily npm updates scoped strictly 
   }
   assert.equal(entries.length, 1, `expected exactly one Dependabot update rule, got ${entries.length}`);
 
-  const ruleText = entries[0].join('\n');
+  const ruleLines = entries[0];
+  const ruleText = ruleLines.join('\n');
   const scalar = key => {
-    const match = ruleText.match(new RegExp(`(?:^|\\n)\\s*${key}:\\s*(.+)`));
-    return match ? unquote(match[1]) : null;
+    const prefix = `${key}:`;
+    const hit = ruleLines.find(line => line.trimStart().startsWith(prefix));
+    return hit ? unquote(hit.trimStart().slice(prefix.length)) : null;
   };
   assert.equal(scalar('package-ecosystem'), 'npm');
   assert.equal(scalar('directory'), '/');
@@ -780,8 +782,26 @@ test('#3617: .github/dependabot.yml schedules daily npm updates scoped strictly 
   assert.equal(scalar('versioning-strategy'), 'increase');
   assert.equal(scalar('open-pull-requests-limit'), '1');
 
-  const allowedDeps = [...ruleText.matchAll(/dependency-name:\s*(.+)/g)].map(m => unquote(m[1]));
-  assert.deepEqual(allowedDeps, [RUNTIME_CLIENT_PKG], 'Dependabot allow list must scope strictly to the runtime client package');
+  const allowIdx = ruleLines.findIndex(line => /^\s*allow:\s*$/.test(line));
+  assert.ok(allowIdx >= 0, 'expected allow: section inside Dependabot update rule');
+  const allowIndent = ruleLines[allowIdx].match(/^(\s*)/)[1].length;
+  const allowItems = [];
+  for (let i = allowIdx + 1; i < ruleLines.length; i++) {
+    const line = ruleLines[i];
+    const indent = line.match(/^(\s*)/)[1].length;
+    if (indent <= allowIndent) break;
+    allowItems.push(line.trim());
+  }
+  const allowDeps = allowItems
+    .map(item => item.match(/^-\s*dependency-name:\s*(.+)$/)?.[1])
+    .filter(Boolean)
+    .map(unquote);
+  assert.equal(allowItems.length, 1, `expected allow: block to contain exactly one entry, got ${JSON.stringify(allowItems)}`);
+  assert.deepEqual(allowDeps, [RUNTIME_CLIENT_PKG], 'Dependabot allow: section must contain only the runtime client package');
+
+  const allDepNames = [...ruleText.matchAll(/dependency-name:\s*(.+)/g)].map(m => unquote(m[1]));
+  assert.deepEqual(allDepNames, [RUNTIME_CLIENT_PKG], 'no dependency-name entry may exist outside allow:');
+  assert.doesNotMatch(ruleText, /\bignore:/, 'must not define ignore: alongside or instead of allow:');
   assert.doesNotMatch(ruleText, /dependency-type:/, 'must not broaden allow rule by dependency-type');
   assert.match(ruleText, /\blabels:\s*\n\s*-\s*['"]?dependencies['"]?\b/);
 });
