@@ -23,11 +23,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPdd } from '../src/pdd-cli.mjs';
-import { refreshInstalledAutoSwitchBlocks, renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
+import { detectImportProvider, refreshInstalledAutoSwitchBlocks, renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
 import { readCodexUsageWindows } from '../src/codex-limits.mjs';
 import {
   accountsStatePath,
   buildSyntheticGatewayIdToken,
+  CloudAccountsError,
   createCodexStepOverlay,
   managedClaudeSettingsPath,
   managedCodexAuthPath,
@@ -35,6 +36,7 @@ import {
   pddManagedCodexHome,
   prepareCloudStepExecution,
   readCloudAccountsState,
+  resolvePddStateBase,
 } from '../src/login-pool.mjs';
 import { parse as parseToml } from '../src/vendor/smol-toml/parse.js';
 
@@ -2868,4 +2870,108 @@ esac
   assert.equal(fallbackRes.exit, 42);
   assert.equal(fallbackRes.stdout, 'bad-out\n');
   assert.equal(fallbackRes.stderr, 'bad-err\n');
+});
+
+test('SEC-5, SEC-6 & REL-2: atomic auto on/off preserves dotfiles symlinks & mode, detectImportProvider blocks symlinks, and add temp dir avoids /tmp', async t => {
+  const cloud = await createPoolGatewayServer(t);
+  const sb = makeSandbox(t, cloud.serverUrl);
+
+  // 1. SEC-5: Stow/chezmoi symlinked ~/.zshrc with custom 0o600 permissions survives `auto on` AND `auto off` intact!
+  const dotfilesDir = join(sb.root, 'dotfiles');
+  mkdirSync(dotfilesDir, { recursive: true, mode: 0o700 });
+  const realZshrc = join(dotfilesDir, '.zshrc');
+  writeFileSync(realZshrc, '# user zshrc\nexport FOO=bar\n', { mode: 0o600 });
+  chmodSync(realZshrc, 0o600);
+  const homeZshrc = join(sb.home, '.zshrc');
+  symlinkSync(realZshrc, homeZshrc);
+
+  const onRes = await invokeCli(['accounts', 'auto', 'on'], sb);
+  assert.equal(onRes.exit, 0, onRes.stderr);
+  assert.equal(lstatSync(homeZshrc).isSymbolicLink(), true, 'auto on must preserve ~/.zshrc symlink');
+  assert.equal(statSync(realZshrc).mode & 0o777, 0o600, 'auto on must preserve target file permissions');
+  assert.match(readFileSync(realZshrc, 'utf8'), /# >>> pdd accounts auto >>>/);
+
+  const offRes = await invokeCli(['accounts', 'auto', 'off'], sb);
+  assert.equal(offRes.exit, 0, offRes.stderr);
+  assert.equal(lstatSync(homeZshrc).isSymbolicLink(), true, 'auto off must preserve ~/.zshrc symlink');
+  assert.equal(statSync(realZshrc).mode & 0o777, 0o600, 'auto off must preserve target file permissions');
+  assert.doesNotMatch(readFileSync(realZshrc, 'utf8'), /# >>> pdd accounts auto >>>/);
+  assert.match(readFileSync(realZshrc, 'utf8'), /export FOO=bar/);
+
+  // 2. SEC-6: detectImportProvider refuses symlinked --from file, dir, parent dir, and child file with symlink_refused.
+  const secretSource = join(sb.root, 'real-secret.json');
+  writeFileSync(secretSource, JSON.stringify({ tokens: { access_token: 'a', refresh_token: 'r', id_token: 'i', account_id: 'acct' } }), { mode: 0o600 });
+  const symFromFile = join(sb.root, 'sym-from.json');
+  symlinkSync(secretSource, symFromFile);
+  const nativeFs = await import('node:fs');
+  assert.throws(
+    () => detectImportProvider(nativeFs, sb.env, { fromOption: symFromFile }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+
+  const realDir = join(sb.root, 'real-import-dir');
+  mkdirSync(realDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(realDir, 'auth.json'), readFileSync(secretSource));
+  const symFromDir = join(sb.root, 'sym-import-dir');
+  symlinkSync(realDir, symFromDir);
+  assert.throws(
+    () => detectImportProvider(nativeFs, sb.env, { fromOption: symFromDir }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+  assert.throws(
+    () => detectImportProvider(nativeFs, sb.env, { fromOption: join(symFromDir, 'auth.json') }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+
+  const dirWithSymChild = join(sb.root, 'dir-with-sym-child');
+  mkdirSync(dirWithSymChild, { recursive: true, mode: 0o700 });
+  symlinkSync(secretSource, join(dirWithSymChild, 'auth.json'));
+  assert.throws(
+    () => detectImportProvider(nativeFs, sb.env, { fromOption: dirWithSymChild }),
+    err => err instanceof CloudAccountsError && err.code === 'symlink_refused',
+  );
+
+  // Root-owned system symlink parent (e.g. macOS /tmp -> /private/tmp) is permitted for a regular target file,
+  // while a symlinked target itself inside /tmp is still refused.
+  const rootParentFs = {
+    ...nativeFs,
+    lstatSync(p) {
+      if (p === symFromDir) {
+        return { isSymbolicLink: () => true, isDirectory: () => false, isFile: () => false, uid: 0 };
+      }
+      if (p === join(symFromDir, 'auth.json')) {
+        return { isSymbolicLink: () => false, isDirectory: () => false, isFile: () => true, uid: 501 };
+      }
+      return nativeFs.lstatSync(p);
+    },
+  };
+  assert.equal(detectImportProvider(rootParentFs, sb.env, { fromOption: join(symFromDir, 'auth.json') }), 'codex');
+
+  // 3. REL-2: `pdd accounts add` allocates temporary CODEX_HOME under resolvePddStateBase(env)/codex-runtime (never /tmp).
+  let capturedTmpCodexHome = null;
+  const addRes = await invokeCli(['accounts', 'add', '--provider', 'codex', '--label', 'rel2-seat'], sb, {
+    run: async (cmd, _args, opts) => {
+      assert.equal(cmd, 'codex');
+      capturedTmpCodexHome = opts.env.CODEX_HOME;
+      writeFileSync(join(capturedTmpCodexHome, 'auth.json'), JSON.stringify({
+        auth_mode: 'chatgpt',
+        tokens: {
+          access_token: 'acc_rel2',
+          refresh_token: 'ref_rel2',
+          id_token: makeJwt({ email: 'rel2@example.com' }),
+          account_id: 'acct_rel2',
+        },
+      }), { mode: 0o600 });
+      return { code: 0, stdout: 'Logged in\n', stderr: '' };
+    },
+    probeCodexUsage: async () => null,
+    spawnSync: () => ({ status: 0 }),
+  });
+  assert.equal(addRes.exit, 0, addRes.stderr);
+  const expectedRuntimeRoot = join(resolvePddStateBase(sb.env), 'codex-runtime');
+  assert.ok(
+    capturedTmpCodexHome && capturedTmpCodexHome.startsWith(`${expectedRuntimeRoot}/`),
+    `expected add temp CODEX_HOME under ${expectedRuntimeRoot}, got ${capturedTmpCodexHome}`,
+  );
+  assert.equal(existsSync(capturedTmpCodexHome), false, 'temp CODEX_HOME cleaned up after add');
 });

@@ -98,21 +98,9 @@ For `workflow.run` and `workflow.approve`, also accept the value option `--throu
 - workflow.view `workflow view ISSUE` (local `workflow-view`): one required issue operand, no options. Help says it shows a read-only review of gates, approvals, files, PRs and Simulator links without starting or resuming a chat.
 - workflow.list `workflow list [--json]`.
 - workflow.prove `workflow prove ISSUE --test COMMAND --expect TEXT [--timeout MIN]` (local `workflow-prove`): one required issue operand, two text options and an optional integer `--timeout` from 1 to 120 (minutes). Help says it runs the supplied command on the merge-base of committed head with the fetched base branch and committed head, including when no eligible tests changed, with a limit per phase (default 10 minutes; --timeout sets 1 to 120), and saves a non-gating report that pull requests show as pdd's own result. No native option passthrough. Both text options are required by CLI dispatch before effects; parser retains ordinary text/duplicate/blank validation. [Old-code proof](workflow-prove.prompt.md) owns execution, outcome and saved-result policy (required generation/runtime/verification context).
-Outside the scope selectors below, no resume, attach, run IDs, decisions flag or native argument passthrough. The areas module decides which workflow names exist.
+Outside no-option local commands above, no resume, attach, run IDs, decisions flag or native argument passthrough. The areas module decides which workflow names exist.
 
 Both routes support the exact `--said -` marker. It forwards unchanged to the approval owner, which reads all UTF-8 stdin as one payload after strict/configuration prechecks. Help shows the shared quoted-heredoc template, with a delimiter absent from person text. Keep help in short sentences: ask the person; relay their words; latest chat alone never approves. Both approval routes declare `--said` as optional nonblank text, preserve its exact argument (including option-like words), and show it in help/completion. Missing value, duplicate, empty and whitespace-only values refuse through ordinary parser rules. Workflow approval help reflects the [runner's approval authority](workflow-runner.prompt.md#approval-through-the-persons-words): one --said approves the gate and all its draft prompts using any nonblank words relayed from the person after the gate prompt in any chat, without grading them. Help says: "Ask the person, then relay their words with --said. Without --said, use a separate person terminal." It avoids terminal jargon; latest native chat alone never approves. Person-terminal y/N stays available; root pdd.json strict_approvals true permits only person-terminal y/N.
-
-## Durable scope routes
-
-Catalog `workflow.scope.set`, `workflow.scope.show`, `workflow.scope.revoke`, and `workflow.scope.extend`, prefixes `workflow scope set|show|revoke|extend` and matching local dispositions `workflow-scope-set|show|revoke|extend`. No operands; options are text `--batch`, `--runs`, `--issues`, `--through`, and `--said` only where permitted by the parser's scope syntax. Include these forms in help and completion:
-
-- `pdd workflow scope set --batch NAME --issues ISSUE[,ISSUE...] --through prompt-pr [--said WORDS]`
-- `pdd workflow scope set --runs RUN_ID[,RUN_ID...] --through prompt-pr [--said WORDS]`
-- `pdd workflow scope show --batch NAME` and `pdd workflow scope show --runs RUN_ID[,RUN_ID...]`
-- `pdd workflow scope revoke --batch NAME [--said WORDS]` and `pdd workflow scope revoke --runs RUN_ID[,RUN_ID...] [--said WORDS]`
-- `pdd workflow scope extend --batch NAME --through code [--said WORDS]` and `pdd workflow scope extend --runs RUN_ID[,RUN_ID...] --through code [--said WORDS]`
-
-Help says set holds selected work through its prompt PR, show inspects its durable limit and history, revoke retains a hold, and extend separately permits code subject to normal gates. Mutations require explicit person permission; strict policy requires a person terminal and easy policy also permits `--said`, including the established quoted-heredoc `--said -` form. No batch member-addition form. The [scope owner](workflow-scope.prompt.md) owns policy and selection, not this catalog.
 
 ## Workflow runner help
 
@@ -352,8 +340,6 @@ Do not interpret `-V -V`, `-VVV`, `--version --verbose`, extra operands or mixed
 version flags as detailed version. Existing parser refusal policy applies.
 
 ## Dependencies
-
-[Workflow scope](workflow-scope.prompt.md) is required authoring, generation, runtime, verification and testing context for the scope route meanings.
 
 No outside values or callback replies are required for this data-only module. All runtime route IDs, prefixes, dispositions, operand/option types, forms and help facts are owned here. Native authoring/generation uses the repository contracts linked above to identify the receiving modules and public boundary; links in route descriptions are native integration/ownership navigation, not a request to load their unrelated implementation/runtime policies when parsing catalog data.
 

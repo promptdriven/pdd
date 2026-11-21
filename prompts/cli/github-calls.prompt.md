@@ -20,7 +20,7 @@ coordinator and worker chats make themselves are not counted.
 | `githubRepository(args)` | The lowercase `owner/name` that a call names, or `null` |
 | `githubReply(text)` | `{status, etag, link, rate, body}` of a `gh api --include` reply, or `null` |
 | `githubEntry(args, outcome, purpose, at)` | One ledger entry |
-| `githubStateRoot(env, stateRoot)` | `stateRoot`, else `$HOME/.local/state/pdd/autopilot` |
+| `githubStateRoot(env, stateRoot)` | `stateRoot`, else `${PDD_STATE_DIR || join(XDG_STATE_HOME, 'pdd') || join(HOME, '.local', 'state', 'pdd')}/autopilot` |
 | `githubLedger({root, repository, fs})` | `{file, repository, record(entry), read(), compact(now)}` |
 | `githubMachineEntries({root, fs})` | The entries of every ledger under `root` |
 | `countGithubCalls(exec, {ledger, purpose, now})` | A runner like `exec` that records each `gh` call |

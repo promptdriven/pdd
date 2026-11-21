@@ -1,9 +1,15 @@
-// Generated from prompts/cli/github-calls.prompt.md (sha256: e30d281a690c36e394b768ad216faeafcf0773f7a2b81ed39d860408fa481158).
+// Generated from prompts/cli/github-calls.prompt.md (sha256: 0f3abce287e251af878cfc10ab710bfac501127ba81e0bddcd8d08f2e3cc4235).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { recordCostGithub, shortHash } from './cost-ledger.mjs';
+import { resolvePddStateBase, shortHash } from './shared/state-dir.mjs';
+
+function defaultRecordCostGithub(runDir, entry, { fs = nativeFs } = {}) {
+  try {
+    fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
+    fs.appendFileSync(join(runDir, 'github-cost.jsonl'), `${JSON.stringify({ at: entry.at })}\n`, { mode: 0o600 });
+  } catch {}
+}
 
 export const GITHUB_PURPOSES = ['dependencies', 'claims', 'issues', 'pulls', 'writes', 'setup', 'other'];
 export const GITHUB_SHARE = 30, GITHUB_FLOOR = 1000;
@@ -93,7 +99,7 @@ export function githubEntry(args, outcome, purpose, at) {
     ...(call.conditional ? { conditional: true } : {}), ...(reply?.rate ?? {}) };
 }
 
-export const githubStateRoot = (env = process.env, stateRoot) => stateRoot ?? join(env?.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+export const githubStateRoot = (env = process.env, stateRoot) => stateRoot ?? join(resolvePddStateBase(env), 'autopilot');
 const ledgerFolder = root => join(root, 'github');
 
 function readLines(fs, file) {
@@ -167,7 +173,7 @@ const dirStamp = (fs, folder) => {
 // A counter for a pdd command outside the tick: the ledger of the repository that each call names, only when
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
-export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, costRun, costRecord = recordCostGithub } = {}) {
+export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, costRun, costRecord = defaultRecordCostGithub } = {}) {
   const commonDirCache = new Map();
   const costRunCache = new Map();
   const findCostRun = costRun ?? (async options => {

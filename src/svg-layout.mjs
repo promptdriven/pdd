@@ -3,7 +3,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';
 import { compileScenario, isShortScenarioDoc, needsScenarioCompile, SHORT_SCENARIO_SCHEMA, V1_SCENARIO_SCHEMA } from './scenario-compile.mjs';
-import { runtimeWorkspaceSlice, workspace } from './runtime-seam.mjs';
+import { runtimeWorkspaceSlice, workspace } from './shared/workspace-policy.mjs';
 
 const { requireRuntimePath } = runtimeWorkspaceSlice();
 
