@@ -11,20 +11,19 @@ Each module's `.prompt.md` is the source; code implements it.
 
 ## Core rules
 
-- Read `RUNBOOK.md` first, `guide.md` in full, and `story-guide.md`; skip `runbook/*.md` chapters unless a workflow step or lint error points to one.
-- Finish Prompt Space (`pdd lint --local` -> passing `pdd test`) before code; change no code and start no interactive `pdd simulate` unless asked.
-- One prompt per module: purpose, `## Domain decisions` and failure edges. Give each rule one owner prompt. Link shared rules. For a CLI, say if a rule belongs to the whole-CLI prompt or to one module's prompt.
+- Read `RUNBOOK.md` first, `guide.md` in full, and `story-guide.md`; skip `runbook/*.md` chapters unless pointed there.
+- Finish Prompt Space (`pdd lint --local` -> passing `pdd test`) before code; change no code and start no `pdd simulate` unless asked.
+- One plain-Markdown prompt per module (no `Runtime interface`): purpose, `## Domain decisions` and failure edges. Give each rule one owner prompt. For a CLI, say if a rule belongs to the whole-CLI prompt or to one module's prompt.
 - Inject outside effects (DB, files, net, clock, RNG, IDs) via inputs or `<port>.<op>` ports; never use prose counters or link `kind: native-only` adapters under `## Dependencies` ([RUNBOOK §21](runbook/cli-and-ports.md#21-fake-the-outside-world)).
-- Linked `.ui.svg` is the layout spec: parts, words, order, ids and states. Check with `pdd lint --local`; render PNGs only if asked (RUNBOOK §13).
-- Write Short JSON scenarios with self-contained step inputs (`seeds` + `$use`/`patch`) for parallel steps; chain `$step` or `world` only for persistence, with `1` observable check per claim; never copy code output.
-- Show prompt, Story and cases first. Record actual chat approval with --said (RUNBOOK §2), never invent it.
-- Do not run `pdd lint` before `pdd test`; test includes lint. Report only real output.
+- Interactive UI uses one plain-prose `.prompt.md` (`render` + `handle_event`, inline `<style>`, `data-pdd-op`, zero `app-map.json`); add compact `app-map.json` for timers, routing or external CSS, and `.ui.svg` only if asked (RUNBOOK §13).
+- Keep native Short JSON in scenario files (`seeds` + `$use`/`patch`, `set` for `null` for parallel steps; chain `$step`/`world` only for persistence; `1` check per claim); never copy code output.
+- Show prompt, Story and cases first. Record actual chat approval with `--said` (RUNBOOK §2), never invent it.
+- Do not run `pdd lint` right before `pdd test`; `pdd test` includes whole-program lint. Report only real output.
 
 ## Files
 
-- `RUNBOOK.md`: concise topic router and core commands (`pdd test`, `pdd lint --local`, `pdd simulate`).
-- `guide.md`: the Prompting guide.
-- `story-guide.md`: Story sizing and criteria rules.
+- `RUNBOOK.md`: concise topic router and core commands.
+- `guide.md`, `story-guide.md`: prompting and Story rules.
 - `review.md`, `verification-setup.md`, `verification-recipe.md`, `autopilot-job-rules.md`: check, code and Autopilot references.
 
 ## How to write

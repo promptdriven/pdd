@@ -58,7 +58,7 @@ bit changes invalidate it. Use lowercase hexadecimal SHA256 of the current raw v
 ## Versioned fields
 
 The manifest must be a regular single-link file of at most 2 MiB, with no symlink ancestors. Current vectors
-must be Git-visible, readable, nonempty regular single-link files to establish replay. Limits: 200 vectors,
+must be Git-visible, readable, nonempty regular single-link files (`prompt-runtime.program-scenario.v1` or native Short JSON compiled against its paired Git-visible Story while pinning raw file bytes) to establish replay. Limits: 200 vectors,
 2 MiB each, 10 MiB aggregate, and 10,000 current steps/checks. `check_index` is zero-based within its step.
 Identity strings are copied exactly from the current scenario. A missing check or operation is counted
 as not replayed, never success; counts must reflect that. Unsupported versions and wrong types are blocked.
@@ -230,7 +230,7 @@ or AI call.
 
 A base scenario belongs to the run when one of its links names a file in the changed area:
 
-- Its links are its `story_path`, each step `entry_path` and its `entry_paths`.
+- Its links are its `story_path`, top-level `entry_path`, each step `entry_path` and its `entry_paths`.
 - The changed area is every file that the run changed against its base, the links of each changed scenario,
   and, for each changed file that the base `pdd-bindings.json` declares as a `module`, its `stories` and
   `prompt` (see [module binding inventory](runtime-bindings.md)).

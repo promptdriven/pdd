@@ -2,7 +2,8 @@ import './helpers/test-home.mjs';
 import './helpers/test-net-guard.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -589,12 +590,14 @@ test('#3594 R1 regressions: runCheck --reconcile, non-string requestId, Stop(2)/
   assert.equal(JSON.parse(pMock.stdout.text).request_id, VALID_REQUEST_ID);
   assert.equal(networkHit, 0);
 
-  // Finding #8 (P2): non-string requestId objects / arrays must be rejected cleanly with invalid-request-id.
-  for (const badId of [{ toString: () => VALID_REQUEST_ID }, [VALID_REQUEST_ID], 123, null]) {
+  // Finding #8 (P2) + R2 nit: non-string requestId (including null-prototype objects and Symbols) must reject with invalid-request-id, never TypeError.
+  for (const badId of [{ toString: () => VALID_REQUEST_ID }, [VALID_REQUEST_ID], 123, null, Object.create(null), Symbol('req')]) {
     await assert.rejects(
       () => seam.reconcileCheckReceipt({ cwd: setup.repo, requestId: badId }),
       err => err?.code === 'invalid-request-id' && err?.exitCode === 2,
     );
+    const pBad = noNetPorts();
+    assert.equal(await seam.runCheck({ cwd: setup.repo, words: [], options: { '--reconcile': badId } }, pBad), 2);
   }
 
   // Finding #10 (P2): Stop(2) / Stop(5) explicit exitCode preserved (never collapsed to 3).
@@ -880,4 +883,62 @@ test('#3594 R1 regressions: simulate --fresh --shell 0o600 single-session patch,
   const screenPosts = fake.jsonPosts.filter(p => /^\/v1\/try\/[^/]+\/screen\/api\/act$/.test(p.url));
   assert.equal(screenPosts.length, 1);
   assert.equal(screenPosts[0].json.fresh, true, 'openServe --fresh must inject fresh: true on Screen POSTs');
+});
+
+test('#3594 R2 regression: pdd simulate --product --fresh without --new fails closed when a product Try is already open', async t => {
+  const setup = harbor(t);
+  const realRoot = realpathSync(setup.repo);
+  const repoKey = createHash('sha256').update(realRoot).digest('hex').slice(0, 16);
+  const reposDir = join(setup.state, 'repos');
+  mkdirSync(reposDir, { recursive: true });
+  writeFileSync(
+    join(reposDir, `${repoKey}.json`),
+    `${JSON.stringify({
+      root: realRoot,
+      last_batch: null,
+      tries: {
+        'tests/place-order.json': {
+          id: VALID_REQUEST_ID,
+          story: 'place-order',
+          storyPath: 'user_stories/place-order.md',
+          product_setup: { parts: null, journey: null },
+        },
+      },
+    }, null, 2)}\n`,
+  );
+
+  let invokedTry = false;
+  const prodPorts = portsFor(
+    { HOME: setup.home, PDD_STATE_DIR: setup.state },
+    {
+      runTry: async () => {
+        invokedTry = true;
+        return 0;
+      },
+    },
+  );
+  const code = await seam.simulate(
+    { words: [], fresh: true, options: { '--product': true, '--no-wait': true }, cwd: setup.repo },
+    prodPorts.ports,
+  );
+  assert.equal(code, 2, 'simulate --product --fresh without --new must fail closed when a product Try is already open');
+  assert.match(prodPorts.ports.stderr.text, /pdd simulate --product --fresh --new/);
+  assert.equal(invokedTry, false, 'refused --product --fresh without --new must not invoke runtimeRunTry');
+
+  // With --new, --product --fresh passes the pre-check and reaches runtimeRunTry cleanly.
+  const newProdPorts = portsFor(
+    { HOME: setup.home, PDD_STATE_DIR: setup.state },
+    {
+      runTry: async () => {
+        invokedTry = true;
+        return 0;
+      },
+    },
+  );
+  const newCode = await seam.simulate(
+    { words: [], fresh: true, options: { '--product': true, '--new': true, '--no-wait': true }, cwd: setup.repo },
+    newProdPorts.ports,
+  );
+  assert.equal(newCode, 0, newProdPorts.ports.stderr.text);
+  assert.equal(invokedTry, true, '--product --fresh --new must proceed to runtimeRunTry');
 });

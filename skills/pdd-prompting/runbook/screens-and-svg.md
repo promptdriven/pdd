@@ -4,13 +4,20 @@
 
 ## 13. Give your app a screen (app map)
 
-The Simulator has a **Screen** tab only when the repo has an app map (`app-map.json`, or `app/app-map.json`). For a page or screen prompt, include a `render` operation returning `{"html": string}` with semantic HTML, CSS classes, unique button `id` and `value` attributes, and no `<script>` or inline handlers. Author `.ui.svg` layout drawings only when requested or designing multi-view layouts: Its `## Appearance` section links the mockups, and `pdd lint --local` checks SVG geometry/overflow offline (render PNGs only when asked; compare live renders with `pdd test --screen URL --drawing SVG`).
+The Simulator opens on the **Screen** tab automatically for both a **single-file plain-prose UI** (zero `app-map.json`, zero `Runtime interface`, optional Story: run `pdd simulate prompts/<app>.prompt.md` or `pdd simulate` in a single-prompt repo) and a repo with an explicit **app map** (`app-map.json`, or `app/app-map.json`).
+
+- **Single-file plain-prose UI (default for single-screen interactive apps):** write one plain-Markdown prompt with:
+  - `render({ state }) -> { state, html }`: initializes default state when `state` is missing, `null`, or `{}` (the zero-`app-map.json` Simulator opens with `{"state": {}}`), and returns semantic HTML (inline sanitized `<style>` is preserved) with HTML-escaped dynamic text, unique button `id`/`value` attributes, and no `<script>` or inline `on*=` handlers.
+  - `handle_event({ state, event }) -> { state, html }` (1-call turn contract): handles clicks, form submits, keyboard shortcuts (`data-event-kind="key"`), and declarative `data-pdd-op="<op>"` actions with automatic wildcard event admission. To avoid re-emitting a full page on large screens, `handle_event` may return an HTML delta patch `{ state, mode: "patch", base_sha256, edits }`.
+  - Optional pure JSON `apply({ state, event }) -> { state }` for fast logic-only state-transition checks in `pdd test` (zero HTML output tokens).
+- **When to add `app-map.json`:** add `app-map.json` (or `app/app-map.json`) when the app needs host `timers`, multi-screen navigation/routing, external `stylesheets`, follow-up `after` chains, explicit static `state_schema`, or `.ui.svg` layout mockups. Author `.ui.svg` layout drawings only when requested or designing multi-view layouts: Its `## Appearance` section links the mockups, and `pdd lint --local` checks SVG geometry/overflow offline (render PNGs only when asked; compare live renders with `pdd test --screen URL --drawing SVG`).
 
 ### App map
 
 - `pdd simulate <story> --new` loads `app-map.json` (or `--app-map PATH`). Without `--new`, pdd reuses the open simulation and does not send the map.
 - Ordinary `pdd lint <story>` checks the Story's prompts and scenario (unless the scenario declares `"app_maps": ["app-map.json"]`); `pdd simulate <story> --new` checks `app-map.json` before starting Try.
-- Every object in `state_schema` follows §3 (`additionalProperties: false`, `required`, no `["string", "null"]`). Match all buttons on one screen consistently by `"value"`.
+- **Compact `app-map.json` defaults:** `schema_version` is optional (defaults to `prompt-runtime.app-map.v2`; both `v1` and `v2` are accepted), and `name`, `initial_screen` (defaults to the first screen), `initial_route`, `synthetic`, `router`, `routes`, `stylesheets`, and `state_schema` (synthesized from `initial_state`) may all be omitted. Screen `id` defaults to `"main"` / `"screen-N"`, `source` defaults to `"operation"`, and `format` defaults to `"svg"` for mockups else `"html"`. Prompts referenced by `app-map.json` need no `Runtime interface` block. Use wildcard `"match": {"value": "*"}` when one handler dispatches all buttons on a screen.
+- When an explicit `state_schema` is provided, every object follows §3 (`additionalProperties: false`, `required`, no `["string", "null"]`). Match explicit per-button handlers on one screen consistently by `"value"`.
 
 An app map with a follow-up `after` step (`app-map.json`):
 ```json
@@ -50,7 +57,9 @@ An app map with a follow-up `after` step (`app-map.json`):
 
 ## 20. HTML checks and Simulator rendering
 
-- **HTML sanitizer rules:** `<script>`, `<iframe>`, `on*=` handlers, and `javascript:` URLs are stripped (this does not disable host `timers`). Use `background-color` (not `background`), `aria-current="true"` (not `aria-pressed`), and `display: block` on `<li>` (not `list-style`).
+- **Inline CSS & declarative controls:** sanitized inline `<style>` tags are preserved (safe selectors, CSS variables, `@keyframes`, `:hover`/`:focus`/`:active`; external `@import`, `url(...)` loads, and `expression()` are stripped). Declarative `data-pdd-op="<op>"` attributes, `data-event-kind="key"`, and native `<button>` / `<form>` / `<a>` controls route events without page scripts.
+- **HTML sanitizer rules:** `<script>`, `<iframe>`, `on*=` handlers, and `javascript:` URLs are stripped (this does not disable `handle_event` or host `timers`). Use `background-color` (not `background`), `aria-current="true"` (not `aria-pressed`), and `display: block` on `<li>` (not `list-style`).
+- **1-call HTML delta patching:** `handle_event` may return `{ state, mode: "patch", base_sha256, edits }` to patch existing screen DOM nodes in place instead of re-emitting full HTML on every click.
 - **HTML checks (always include a tag name in selectors, e.g. `button#start`, `span#score`, never bare `#score`):**
   - `["html_exists", "button#start"]` (exact check)
   - `["html_text", "span#score", "=", "42"]`
