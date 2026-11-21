@@ -2450,7 +2450,7 @@ export function lintPublicInterfaceTests(text, { path = 'test/example.test.mjs' 
 
 const SLEEP_ALLOW_COMMENT_RE = /\b(?:pdd-allow-sleep|sleep-ok|allow-sleep)\b/i;
 const SKIP_ALLOW_COMMENT_RE = /\bpdd-allow-skip\b/i;
-const TRACKING_HASH_ISSUE_RE = /(?:^|[\s([,:;'"`])#[1-9]\d*\b|(?<![A-Za-z0-9_.\-/])[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d*\b/;
+const TRACKING_HASH_ISSUE_RE = /(?:^|[\s([,:;\x27\x22\x60])#[1-9]\d*\b|(?<![A-Za-z0-9_.\-/])[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d*\b/;
 const TRACKING_TICKET_RE = /\b[A-Z]{2,10}-[1-9]\d*\b/;
 const TRACKING_WORD_ISSUE_RE = /\bissue\s+#?[1-9]\d*\b/i;
 const TRACKING_GH_URL_RE = /https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9]\d*\b/i;
@@ -2793,7 +2793,7 @@ function scanTimersPromiseImportsLinear(skeleton, literals, timersPromiseFns, ti
     let k = start + 6;
     while (k < skeleton.length && (skeleton[k] === ' ' || skeleton[k] === '\t')) k++;
     if (k >= skeleton.length || skeleton[k] === '(' || skeleton[k] === '.') continue;
-    if (skeleton.startsWith('__STR_', k)) continue; // side-effect import `import '...'`
+    if (skeleton.startsWith('__STR_', k)) continue; // side-effect statement with a bare module specifier
     let braceDepth = 0;
     const limit = Math.min(skeleton.length, k + 240);
     let end = k;
