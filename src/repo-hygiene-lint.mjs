@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 62486e9c0086f0337686b9808889b10a708a95b2d93de3b2117131faa2101f2a).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 94a03f7e59b629f491f5ebf58188c2b13c82a5efb360627e02edc7c98166b39d).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -129,15 +129,25 @@ const NON_OP_LABEL_WORDS = new Set([
   'constraints', 'invariant', 'invariants', 'overview', 'summary', 'details',
   'status', 'response', 'request', 'precondition', 'postcondition', 'effect', 'effects', 'none',
 ]);
+const HEADING_OP_PREFIX_RE = /^(?:operation|command|subcommand|tool|entrypoint)\s*[:—–-]?\s*/i;
 const EXPORTED_OP_VERB_RE = /\b(?:exports?|exporting|exposes?|exposing)\b/gi;
 const EXPORTED_OP_NEGATION_RE = /\b(?:not|never|without|no|neither|nor|cannot|can't|won't|don't|doesn't|must\s+not|mustn't|should\s+not|shouldn't|may\s+not)\b/i;
 const LINE_START_EXPORTED_OP_LABEL_RE = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:public[ \t]+|exported[ \t]+)?(?:operations?|commands?|subcommands?|tools?|exports?|entrypoints?|entry[ \t]+points?)[ \t]*:/i;
-const EXPORTED_OP_QUALIFIER_WORDS = new Set([
-  'a', 'an', 'the', 'public', 'exported', 'module', 'async', 'sync', 'peer', 'domain',
+const EXPORTED_OP_ARTICLE_WORDS = new Set(['a', 'an', 'the']);
+const EXPORTED_OP_MODIFIER_WORDS = new Set(['public', 'exported', 'module', 'async', 'sync', 'peer', 'domain', 'entry']);
+const EXPORTED_OP_API_NOUNS = new Set([
   'operation', 'operations', 'function', 'functions', 'method', 'methods',
   'command', 'commands', 'subcommand', 'subcommands', 'tool', 'tools',
-  'handler', 'handlers', 'action', 'actions', 'entrypoint', 'entrypoints', 'entry', 'point', 'points',
+  'handler', 'handlers', 'action', 'actions', 'entrypoint', 'entrypoints', 'point', 'points',
 ]);
+const NON_OP_FOLLOWING_NOUNS = new Set([
+  'field', 'fields', 'column', 'columns', 'property', 'properties',
+  'attribute', 'attributes', 'header', 'headers', 'param', 'params',
+  'parameter', 'parameters', 'value', 'values', 'payload', 'payloads',
+  'key', 'keys', 'token', 'tokens', 'flag', 'flags', 'secret', 'secrets',
+  'metric', 'metrics', 'status', 'error', 'errors', 'record', 'records', 'row', 'rows',
+]);
+const DATA_EXPORT_FORMAT_RE = /^[ \t]+(?:to|as)[ \t]+(?:a[ \t]+|an[ \t]+|the[ \t]+)?(?:csv|json|xml|yaml|yml|pdf|xlsx|tsv|parquet|html|markdown|file|files)\b/i;
 const NON_PORT_IDIOM_PATTERNS = [
   /\b(?:tcp|udp|http|https|grpc|ws|wss|stdio|ipc|unix|listen(?:ing)?|server|socket|host|local|remote|network|container|service)\s+ports?\b/gi,
   /\b(?:on|to|at|from)\s+port(?:\s+`?\d+`?|\s+`?[A-Z0-9_]+`?)?\b/gi,
@@ -839,7 +849,7 @@ function extractLeadingSimpleIdentifier(rest, { allowCallArgs = false } = {}) {
   return cleanSingleIdentifier(bare[1], { allowCallArgs: false });
 }
 
-function extractOpsFromTableCell(cell) {
+function extractOpTokensFromTableCell(cell) {
   const ops = [];
   const trimmed = String(cell ?? '').trim();
   if (!trimmed) return ops;
@@ -858,9 +868,13 @@ function extractOpsFromTableCell(cell) {
   parts.push(trimmed.slice(start));
   for (const part of parts) {
     const ident = cleanSingleIdentifier(part, { allowCallArgs: true });
-    if (ident) ops.push(ident);
+    if (ident) ops.push({ ident, hasCallParens: hasCallParensInToken(part) });
   }
   return ops;
+}
+
+function extractOpsFromTableCell(cell) {
+  return extractOpTokensFromTableCell(cell).map(item => item.ident);
 }
 
 function classifyDependencyTable(headers, subheadingPort = null) {
@@ -929,22 +943,33 @@ function hasCallParensInToken(text) {
 }
 
 function extractHeadingOperationName(title, { requireExplicitSyntax = false } = {}) {
-  const stripped = String(title ?? '')
-    .trim()
-    .replace(/^\d+[.)]\s+/, '')
-    .replace(/^(?:operation|command|subcommand|tool|entrypoint)\s*[:—–-]?\s*/i, '')
-    .trim();
+  const raw = String(title ?? '').trim().replace(/^\d+[.)]\s+/, '').trim();
+  if (!raw) return null;
+  const hasOpKeywordPrefix = HEADING_OP_PREFIX_RE.test(raw);
+  const stripped = hasOpKeywordPrefix ? raw.replace(HEADING_OP_PREFIX_RE, '').trim() : raw;
   if (!stripped) return null;
   const head = stripHeadingDescriptionTail(stripped);
   if (!head) return null;
+  const hasCallParens = hasCallParensInToken(head);
   const isBacktickedWhole = /^`[^`\r\n]+`$/.test(head) || /^\*\*`[^`\r\n]+`\*\*$/.test(head);
   const isBareCallWhole = /^[a-z][a-zA-Z0-9_-]*\s*\([^()\r\n]*\)$/.test(head);
-  if (requireExplicitSyntax && !isBacktickedWhole && !isBareCallWhole) return null;
-  const hasCallParens = hasCallParensInToken(head);
+  if (requireExplicitSyntax) {
+    const isCallSyntax = hasCallParens && (isBacktickedWhole || isBareCallWhole);
+    const isExplicitKeywordOp = hasOpKeywordPrefix && (isBacktickedWhole || SIMPLE_IDENT_RE.test(head));
+    if (!isCallSyntax && !isExplicitKeywordOp) return null;
+  }
   const ident = cleanSingleIdentifier(head, { allowCallArgs: true });
   if (!ident) return null;
   if (!hasCallParens && NON_OP_LABEL_WORDS.has(ident.toLowerCase())) return null;
   return ident;
+}
+
+function hasNonOpSuffix(line, afterTickPos) {
+  const tail = line.slice(afterTickPos);
+  if (DATA_EXPORT_FORMAT_RE.test(tail)) return true;
+  const nextWordMatch = /^[ \t]+([A-Za-z][A-Za-z0-9_-]*)/.exec(tail);
+  if (nextWordMatch && NON_OP_FOLLOWING_NOUNS.has(nextWordMatch[1].toLowerCase())) return true;
+  return false;
 }
 
 function extractLeadingBulletCallOp(rest) {
@@ -971,18 +996,25 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
   let pos = startPos;
   if (allowQualifiers) {
     let qualifiers = 0;
-    while (pos < line.length && qualifiers < 3) {
+    let sawArticle = false;
+    let sawApiNoun = false;
+    while (pos < line.length && qualifiers < 4) {
       while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || line[pos] === ':')) pos++;
       if (line[pos] === '`') break;
       const wordStart = pos;
       while (pos < line.length && /[A-Za-z_-]/.test(line[pos])) pos++;
       const word = line.slice(wordStart, pos).toLowerCase();
-      if (!EXPORTED_OP_QUALIFIER_WORDS.has(word)) {
+      if (EXPORTED_OP_ARTICLE_WORDS.has(word)) {
+        sawArticle = true;
+      } else if (EXPORTED_OP_API_NOUNS.has(word)) {
+        sawApiNoun = true;
+      } else if (!EXPORTED_OP_MODIFIER_WORDS.has(word)) {
         pos = wordStart;
         break;
       }
       qualifiers++;
     }
+    if (sawArticle && !sawApiNoun) return pos;
   }
   while (pos < line.length) {
     while (pos < line.length && (line[pos] === ' ' || line[pos] === '\t' || line[pos] === ':' || line[pos] === ',' || line[pos] === '/')) pos++;
@@ -1005,7 +1037,7 @@ function scanBacktickedOpListFrom(line, startPos, onOp, { allowQualifiers = fals
     const hasCallParens = hasCallParensInToken(inner);
     const op = cleanSingleIdentifier(inner, { allowCallArgs: true });
     if (!op) break;
-    if (!hasCallParens && NON_OP_LABEL_WORDS.has(op.toLowerCase())) break;
+    if (!hasCallParens && (NON_OP_LABEL_WORDS.has(op.toLowerCase()) || hasNonOpSuffix(line, pos))) break;
     onOp(op);
   }
   return pos;
@@ -1111,6 +1143,8 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
   let opsSectionDepth = 0;
   let opSubheadingDepth = 0;
   let opDetailDepth = 0;
+  let excludedDetailDepth = 0;
+  let opsBulletBaseIndent = -1;
   let subheadingPort = null;
   let subheadingDepth = 0;
   let bulletPort = null;
@@ -1125,11 +1159,13 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
     if (headingMatch) {
       const depth = headingMatch[1].length;
       const title = headingMatch[2].trim();
+      const titleHead = stripHeadingDescriptionTail(title);
       inTable = false;
       tableSpec = null;
       opsTableCol = -1;
       bulletPort = null;
       bulletIndent = -1;
+      opsBulletBaseIndent = -1;
 
       if (depth === 2 && /^dependencies\b/i.test(title)) {
         inDepsSection = true;
@@ -1137,6 +1173,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
         opsSectionDepth = 0;
         opSubheadingDepth = 0;
         opDetailDepth = 0;
+        excludedDetailDepth = 0;
         subheadingPort = null;
         subheadingDepth = 0;
         continue;
@@ -1148,6 +1185,9 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
         portsSectionDepth = 0;
         subheadingPort = null;
         subheadingDepth = 0;
+      }
+      if (excludedDetailDepth > 0 && depth <= excludedDetailDepth) {
+        excludedDetailDepth = 0;
       }
       if (opDetailDepth > 0 && depth <= opDetailDepth) {
         opDetailDepth = 0;
@@ -1171,29 +1211,39 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
           subheadingPort = null;
           subheadingDepth = 0;
         }
-      } else if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title)) {
+      } else if (!NETWORK_PORT_HEADING_RE.test(title) && DEP_PORTS_HEADING_RE.test(title) && !hasCallParensInToken(titleHead)) {
         // Preserve any enclosing opsSectionDepth when entering a nested #### Ports heading.
         portsSectionDepth = depth;
         subheadingPort = null;
         subheadingDepth = 0;
       } else if (isPrompt && promptPrefixes.size > 0) {
         if (opsSectionDepth > 0 && depth > opsSectionDepth) {
-          if (opDetailDepth === 0 && DEP_OP_DETAIL_SUBHEADING_RE.test(title)) {
-            opDetailDepth = depth;
-          } else if (depth === opsSectionDepth + 1) {
+          if (depth === opsSectionDepth + 1) {
             const opName = extractHeadingOperationName(title, { requireExplicitSyntax: false });
-            if (opName) addExportedOp(opName);
-            opSubheadingDepth = depth;
+            if (opName) {
+              addExportedOp(opName);
+              opSubheadingDepth = depth;
+            } else if (opDetailDepth === 0 && DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
+              opDetailDepth = depth;
+            } else {
+              opSubheadingDepth = depth;
+            }
+          } else if (opDetailDepth === 0 && DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
+            opDetailDepth = depth;
           } else if (opSubheadingDepth === 0) {
             opSubheadingDepth = depth;
           }
-        } else if (!NETWORK_PORT_HEADING_RE.test(title) && !DEP_OPS_EXCLUDE_HEADING_RE.test(title) && DEP_OPS_HEADING_RE.test(title)) {
-          opsSectionDepth = depth;
-          opSubheadingDepth = 0;
-          opDetailDepth = 0;
-        } else {
+        } else if (excludedDetailDepth === 0) {
           const explicitHeadingOp = extractHeadingOperationName(title, { requireExplicitSyntax: true });
-          if (explicitHeadingOp) addExportedOp(explicitHeadingOp);
+          if (explicitHeadingOp) {
+            addExportedOp(explicitHeadingOp);
+          } else if (!NETWORK_PORT_HEADING_RE.test(title) && !DEP_OPS_EXCLUDE_HEADING_RE.test(title) && DEP_OPS_HEADING_RE.test(title)) {
+            opsSectionDepth = depth;
+            opSubheadingDepth = 0;
+            opDetailDepth = 0;
+          } else if (DEP_OP_DETAIL_SUBHEADING_RE.test(titleHead)) {
+            excludedDetailDepth = depth;
+          }
         }
       }
       continue;
@@ -1216,6 +1266,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
         : -1;
       bulletPort = null;
       bulletIndent = -1;
+      opsBulletBaseIndent = -1;
       continue;
     }
     if (inTable) {
@@ -1238,11 +1289,9 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
         } else if (opsTableCol >= 0) {
           const cells = splitMarkdownTableRow(line) ?? [];
           if (opsTableCol < cells.length) {
-            const rawCell = cells[opsTableCol];
-            const hasCallParens = rawCell.includes('(');
-            for (const op of extractOpsFromTableCell(rawCell)) {
-              if (!hasCallParens && NON_OP_LABEL_WORDS.has(op.toLowerCase())) continue;
-              addExportedOp(op);
+            for (const { ident, hasCallParens } of extractOpTokensFromTableCell(cells[opsTableCol])) {
+              if (!hasCallParens && NON_OP_LABEL_WORDS.has(ident.toLowerCase())) continue;
+              addExportedOp(ident);
             }
           }
         }
@@ -1282,22 +1331,34 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
       if (opsSectionDepth > 0 && opDetailDepth === 0) {
         const bm = BULLET_LINE_RE.exec(line);
         if (bm) {
+          const indent = bm[1].replace(/\t/g, '  ').length;
           const rest = bm[2].trim();
           if (opSubheadingDepth === 0) {
-            const callOp = extractLeadingBulletCallOp(rest);
-            if (callOp) {
-              addExportedOp(callOp);
-            } else {
-              const op = extractLeadingSimpleIdentifier(rest, { allowCallArgs: true });
-              if (op && !NON_OP_LABEL_WORDS.has(op.toLowerCase())) addExportedOp(op);
+            if (opsBulletBaseIndent < 0 || indent < opsBulletBaseIndent) {
+              opsBulletBaseIndent = indent;
+            }
+            if (indent <= opsBulletBaseIndent) {
+              const callOp = extractLeadingBulletCallOp(rest);
+              if (callOp) {
+                addExportedOp(callOp);
+              } else {
+                const op = extractLeadingSimpleIdentifier(rest, { allowCallArgs: true });
+                if (op && !NON_OP_LABEL_WORDS.has(op.toLowerCase())) addExportedOp(op);
+              }
             }
           } else {
             const callOp = extractLeadingBulletCallOp(rest);
             if (callOp) addExportedOp(callOp);
           }
+        } else {
+          opsBulletBaseIndent = -1;
         }
+      } else {
+        opsBulletBaseIndent = -1;
       }
-      extractExportedOpsFromCueLine(line, op => addExportedOp(op));
+      if (opDetailDepth === 0 && excludedDetailDepth === 0) {
+        extractExportedOpsFromCueLine(line, op => addExportedOp(op));
+      }
     }
   }
 
