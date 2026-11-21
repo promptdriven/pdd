@@ -618,3 +618,118 @@ test('3447 security guards: reject traversal, leading-dash injection, symlinks (
   assert.equal(runUpdate({ cwd: badRepo, check: true }, { stdout: cleanOut, stderr: cleanErr }), 0);
   assert.match(cleanOut.text, /no touched files in scope/);
 });
+
+test('R2 #1 regressions: deleted/renamed .prompt.md fails closed on live modules, and co-deleted module+prompt prunes sidecar cleanly', async t => {
+  const promptA = '# Alpha\n\nOwn `src/alpha.mjs`.\n';
+  const promptB = '# Beta\n\nOwn `src/beta.mjs`.\n';
+  const root = makeRepo(t, {
+    'prompts/alpha.prompt.md': promptA,
+    'prompts/beta.prompt.md': promptB,
+    'src/alpha.mjs': `// Generated from prompts/alpha.prompt.md (sha256: ${promptHeaderHash(promptA)}).\nexport const a = 1;\n`,
+    'src/beta.mjs': `// Generated from prompts/beta.prompt.md (sha256: ${promptHeaderHash(promptB)}).\nexport const b = 1;\n`,
+  });
+  assert.equal((await cli(['update', 'src/alpha.mjs', 'src/beta.mjs', '--write'], root)).code, 0);
+  git(root, ['add', '-f', '.']);
+  git(root, ['commit', '-qm', 'pinned']);
+
+  // R2 #1a: Delete prompts/alpha.prompt.md while src/alpha.mjs STILL exists -> --check MUST exit 1 (not 0!)
+  unlinkSync(join(root, 'prompts/alpha.prompt.md'));
+  const delPromptOnly = await cli(['update', '--check'], root);
+  assert.equal(delPromptOnly.code, 1, `expected exit 1 when owning prompt deleted with live module, got ${delPromptOnly.code}`);
+  assert.match(delPromptOnly.err, /Owning prompt is missing or unreadable: prompts\/alpha\.prompt\.md/);
+
+  // R2 #1c: Now delete src/alpha.mjs too (co-deleted module + prompt) -> --check exits 1 with text rendering "(prompt_sha256: deleted)", --write prunes sidecar and exits 0!
+  unlinkSync(join(root, 'src/alpha.mjs'));
+  const coDelText = await cli(['update', '--check'], root);
+  assert.equal(coDelText.code, 1, coDelText.out + coDelText.err);
+  assert.match(coDelText.out, /prompts\/alpha\.prompt\.md \[deleted\] \(prompt_sha256: deleted\)/);
+  assert.equal(coDelText.err, '');
+  const coDelWrite = await cli(['update', '--write', '--json'], root);
+  assert.equal(coDelWrite.code, 0, coDelWrite.err);
+  assert.equal(existsSync(join(root, '.pdd/sync/src/alpha.mjs.json')), false);
+  assert.equal((await cli(['update', '--check'], root)).code, 0);
+
+  // Commit cleanup, then test R2 #1b: rename prompts/beta.prompt.md -> prompts/beta-v2.prompt.md while src/beta.mjs still references prompts/beta.prompt.md
+  git(root, ['add', '-A']);
+  git(root, ['commit', '-qm', 'cleanup-alpha']);
+  const base = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['mv', 'prompts/beta.prompt.md', 'prompts/beta-v2.prompt.md']);
+  git(root, ['commit', '-qm', 'rename-beta-prompt']);
+  const renamedPromptCheck = await cli(['update', '--from', `${base}..HEAD`, '--check'], root);
+  assert.equal(renamedPromptCheck.code, 1, `expected exit 1 on renamed prompt with dangling live module, got ${renamedPromptCheck.code}`);
+  assert.match(renamedPromptCheck.err, /Owning prompt is missing or unreadable: prompts\/beta\.prompt\.md/);
+});
+
+test('R2 #2, #3, #4 regressions: deleted pinned module matched by stem, in-place unowned sidecar orphan, .pdd/ pre-validation (0 writes), and memoized owner reads', async t => {
+  // R2 #2: Deleted pinned module matched by ANOTHER prompt via stem must still fail --check and prune sidecar on --write
+  const legacyPrompt = '# Legacy\n\nLegacy contract.\n';
+  const stemPrompt = '# Widget\n\nDifferent prompt matching stem.\n';
+  const stemRepo = makeRepo(t, {
+    'prompts/legacy.prompt.md': legacyPrompt,
+    'prompts/widget.prompt.md': stemPrompt,
+    'src/widget.mjs': `// Generated from prompts/legacy.prompt.md (sha256: ${promptHeaderHash(legacyPrompt)}).\nexport const w = 1;\n`,
+  });
+  assert.equal((await cli(['update', 'src/widget.mjs', '--write'], stemRepo)).code, 0);
+  git(stemRepo, ['add', '-f', '.']);
+  git(stemRepo, ['commit', '-qm', 'pinned']);
+  unlinkSync(join(stemRepo, 'src/widget.mjs'));
+  const stemDelCheck = await cli(['update', '--check', '--json'], stemRepo);
+  assert.equal(stemDelCheck.code, 1, stemDelCheck.out);
+  assert.ok(JSON.parse(stemDelCheck.out).drifted.some(d => d.path === 'src/widget.mjs' && d.owner === 'prompts/legacy.prompt.md' && d.status === 'deleted'));
+  const stemDelWrite = await cli(['update', '--write', '--json'], stemRepo);
+  assert.equal(stemDelWrite.code, 0, stemDelWrite.err);
+  assert.equal(existsSync(join(stemRepo, '.pdd/sync/src/widget.mjs.json')), false);
+  assert.equal((await cli(['update', '--check'], stemRepo)).code, 0);
+
+  // R2 #3: Previously pinned module loses ownership in place -> --check exits 1 (both file & prompt scope), --write prunes orphan sidecar
+  const ownedPrompt = '# Owned contract\n\nContract text.\n';
+  const orphanRepo = makeRepo(t, {
+    'prompts/owned-contract.prompt.md': ownedPrompt,
+    'src/sub/detached.mjs': `// Generated from prompts/owned-contract.prompt.md (sha256: ${promptHeaderHash(ownedPrompt)}).\nexport const m = 1;\n`,
+  });
+  assert.equal((await cli(['update', 'src/sub/detached.mjs', '--write'], orphanRepo)).code, 0);
+  git(orphanRepo, ['add', '-f', '.']);
+  git(orphanRepo, ['commit', '-qm', 'pinned']);
+  // Strip ownership header in place (file stays on disk, now unowned!)
+  writeFileSync(join(orphanRepo, 'src/sub/detached.mjs'), 'export const m = 2;\n');
+  const orphanFileCheck = await cli(['update', 'src/sub/detached.mjs', '--check', '--json'], orphanRepo);
+  assert.equal(orphanFileCheck.code, 1, orphanFileCheck.out);
+  assert.equal(JSON.parse(orphanFileCheck.out).drifted[0].status, 'unowned');
+  const orphanPromptCheck = await cli(['update', 'prompts/owned-contract.prompt.md', '--check', '--json'], orphanRepo);
+  assert.equal(orphanPromptCheck.code, 1, orphanPromptCheck.out);
+  assert.equal(JSON.parse(orphanPromptCheck.out).drifted[0].path, 'src/sub/detached.mjs');
+  const orphanWrite = await cli(['update', 'src/sub/detached.mjs', '--write', '--json'], orphanRepo);
+  assert.equal(orphanWrite.code, 0, orphanWrite.err);
+  assert.equal(existsSync(join(orphanRepo, '.pdd/sync/src/sub/detached.mjs.json')), false);
+  assert.equal(existsSync(join(orphanRepo, '.pdd/sync/src/sub')), false);
+  assert.equal((await cli(['update', 'src/sub/detached.mjs', '--check'], orphanRepo)).code, 0);
+
+  // R2 #4: Owned module under .pdd/ fails pre-validation with exit 2 and ZERO writes to valid sibling module
+  const pddRepo = makeRepo(t, {
+    'prompts/good.prompt.md': '# Good\n\nOwn `src/good.mjs`.\n',
+    'src/good.mjs': '// Generated from prompts/good.prompt.md.\nexport const good = 1;\n',
+    '.pdd/evil.mjs': '// Generated from prompts/good.prompt.md.\nexport const evil = 1;\n',
+  });
+  const pddGuardRes = await cli(['update', 'src/good.mjs', '.pdd/evil.mjs', '--write'], pddRepo);
+  assert.equal(pddGuardRes.code, 2, pddGuardRes.out + pddGuardRes.err);
+  assert.match(pddGuardRes.err, /Invalid module path for sync record: \.pdd\/evil\.mjs/);
+  assert.equal(existsSync(join(pddRepo, '.pdd/sync/src/good.mjs.json')), false, 'must execute 0 writes on pre-validation failure');
+
+  // R2 #4 bonus: safeReadForOwner memoizes prompt reads across double findOwners calls when a prompt is touched
+  const readCounts = new Map();
+  const memOut = capture(), memErr = capture();
+  const memCode = runUpdate(
+    { cwd: pddRepo, files: ['prompts/good.prompt.md'], json: true },
+    {
+      stdout: memOut,
+      stderr: memErr,
+      read: (p, limit) => {
+        readCounts.set(p, (readCounts.get(p) ?? 0) + 1);
+        const full = join(pddRepo, p);
+        return existsSync(full) ? readFileSync(full).subarray(0, limit) : null;
+      },
+    },
+  );
+  assert.equal(memCode, 0, memErr.text);
+  assert.equal(readCounts.get('prompts/good.prompt.md'), 1, `expected prompt to be read once by owner port, got ${readCounts.get('prompts/good.prompt.md')}`);
+});

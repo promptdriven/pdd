@@ -1,4 +1,4 @@
-// Generated from prompts/cli/update-sync.prompt.md (sha256: db86551ae1e47e48b2df04984416e9a224b7cba7f4b3b1d3b502cf91ef08c7ea).
+// Generated from prompts/cli/update-sync.prompt.md (sha256: 22002b49827421c95f3fe301837d535c0844070f4d645f9118f86183538bdfc1).
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
@@ -52,6 +52,7 @@ const sanitizeOneLine = text => String(text ?? '').replace(/[\x00-\x1f\x7f-\x9f]
 const canonicalPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
 const isBlockedSecretPath = path => isSecretPath(path) || EXTRA_SECRET_NAME.test(posix.basename(path));
+const isPddInternalPath = path => path === '.pdd' || path.startsWith('.pdd/');
 const isSyncSidecarPath = path => path === SYNC_DIR_REL || path.startsWith(`${SYNC_DIR_REL}/`);
 const shellArg = value => (/^[A-Za-z0-9_./@+-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`);
 
@@ -63,7 +64,7 @@ class UpdateStop extends Error {
 }
 
 export function syncRecordPathForModule(modulePath) {
-  if (!canonicalPath(modulePath) || isBlockedSecretPath(modulePath) || modulePath === '.pdd' || modulePath.startsWith('.pdd/')) {
+  if (!canonicalPath(modulePath) || isBlockedSecretPath(modulePath) || isPddInternalPath(modulePath)) {
     throw new UpdateStop(2, `Invalid module path for sync record: ${sanitizeOneLine(modulePath)}.`);
   }
   return `${SYNC_DIR_REL}/${modulePath}.json`;
@@ -305,7 +306,7 @@ function scanSyncRecords(root, readBytes) {
         walk(absChild, relInside);
       } else if (st.isFile() && name.endsWith('.json')) {
         const mod = relInside.slice(0, -'.json'.length);
-        if (!canonicalPath(mod) || isBlockedSecretPath(mod) || mod.startsWith('.pdd/')) {
+        if (!canonicalPath(mod) || isBlockedSecretPath(mod) || isPddInternalPath(mod)) {
           throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
         }
         const res = readBytes(sidecarRel, MAX_SIDECAR_BYTES);
@@ -627,16 +628,17 @@ function aggregatePromptStatus(statuses) {
   if (set.has('code-drifted')) return 'code-drifted';
   if (set.has('prompt-stale')) return 'prompt-stale';
   if (set.has('unpinned')) return 'unpinned';
+  if (set.has('unowned')) return 'unowned';
   if (set.has('deleted')) return 'deleted';
   return 'current';
 }
 
-function buildInstructions(promptPath, status, activePaths, deletedPaths, diffStats, driftedDeleted, range) {
+function buildInstructions(promptPath, status, activePaths, deletedPaths, diffStats, driftedStale, range) {
   const activeList = activePaths.join(', ');
   const deletedList = deletedPaths.join(', ');
   const allList = [...activePaths, ...deletedPaths].join(', ');
   const statsStr = `+${diffStats.added}/-${diffStats.removed}`;
-  const writeCmd = activePaths.length > 0 && !driftedDeleted
+  const writeCmd = activePaths.length > 0 && !driftedStale
     ? `pdd update --write ${activePaths.map(shellArg).join(' ')}`
     : range
       ? `pdd update --from ${shellArg(range)} --write`
@@ -665,8 +667,12 @@ function buildInstructions(promptPath, status, activePaths, deletedPaths, diffSt
         `Both ${promptPath} and ${activeList || allList} (${statsStr}) changed; reconcile contract prose and code.`,
         `Run \`${writeCmd}\` once reconciled.`,
       ];
+    case 'unowned':
+      return driftedStale
+        ? [`Previously pinned file(s) lost ownership (${activeList || allList}); run \`${writeCmd}\` to prune stale sync records.`]
+        : [`Previously pinned file(s) lost ownership (${activeList || allList}); no stale sync records remain.`];
     case 'deleted':
-      return driftedDeleted
+      return driftedStale
         ? [`Owned file(s) deleted (${deletedList || allList}); update ${promptPath} and run \`${writeCmd}\` to prune stale sync records.`]
         : [`Owned file(s) deleted (${deletedList || allList}); no stale sync records remain.`];
     default:
@@ -686,20 +692,24 @@ function evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, 
 
   for (const pair of ownedPairs) {
     const { entry, ownerRow, owner } = pair;
-    const promptText = promptTextMap.get(owner);
-    const prompt_sha256 = promptHashCache.get(owner);
+    const promptText = promptTextMap.get(owner) ?? null;
+    const prompt_sha256 = promptHashCache.get(owner) ?? null;
     const record = syncRecordMap.get(entry.path) ?? null;
     const recPromptSha = recordPromptHash(record, owner);
     const hasPinForOwner = record !== null && recPromptSha !== null;
     const diffSummary = diffByPath.get(entry.path) ?? { added: 0, removed: 0, changed_symbols: [] };
 
-    let status, module_sha256 = null, recorded_prompt_sha256 = null, recorded_module_sha256 = hasPinForOwner ? record.module_sha256 : null, header_state = null;
+    let status, module_sha256 = null, recorded_prompt_sha256 = null, recorded_module_sha256 = hasPinForOwner ? record.module_sha256 : (record?.module_sha256 ?? null), header_state = null;
     let isDrifted = false;
 
     if (entry.deleted) {
       status = 'deleted';
       recorded_prompt_sha256 = recPromptSha;
-      isDrifted = hasPinForOwner;
+      isDrifted = record !== null;
+    } else if (entry.orphanedSidecar) {
+      status = 'unowned';
+      recorded_prompt_sha256 = recPromptSha;
+      isDrifted = record !== null;
     } else {
       const codeText = codeTextMap.get(entry.path);
       module_sha256 = moduleContentHash(codeText);
@@ -709,7 +719,7 @@ function evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, 
       recorded_prompt_sha256 = headerRow?.sha256 ?? recPromptSha ?? null;
 
       const headerStale = Boolean(headerRow?.sha256 && hashState?.state === 'stale');
-      const pinPromptStale = Boolean(hasPinForOwner && recPromptSha !== prompt_sha256);
+      const pinPromptStale = Boolean(hasPinForOwner && prompt_sha256 !== null && recPromptSha !== prompt_sha256);
       const promptDrifted = headerStale || pinPromptStale;
       const codeDrifted = hasPinForOwner && record.module_sha256 !== module_sha256;
 
@@ -745,7 +755,7 @@ function evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, 
     if (isDrifted) drifted.push({ path: entry.path, owner, status });
 
     if (!byPrompt.has(owner)) byPrompt.set(owner, []);
-    byPrompt.get(owner).push({ row, isDrifted });
+    byPrompt.get(owner).push({ row, isDrifted, orphaned: Boolean(entry.orphanedSidecar) });
   }
 
   const prompts = [...byPrompt.entries()]
@@ -768,16 +778,16 @@ function evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, 
       const modulePaths = items.map(item => item.row.path);
       const activePaths = items.filter(item => !item.row.deleted).map(item => item.row.path);
       const deletedPaths = items.filter(item => item.row.deleted).map(item => item.row.path);
-      const driftedDeleted = items.some(item => item.row.deleted && item.isDrifted);
+      const driftedStale = items.some(item => (item.row.deleted || item.orphaned) && item.isDrifted);
       return {
         prompt,
         status,
-        prompt_sha256: promptHashCache.get(prompt),
+        prompt_sha256: promptHashCache.get(prompt) ?? null,
         owner_certain: items.every(item => item.row.certain),
         modules: modulePaths,
         diff_stats: { added, removed },
         changed_symbols,
-        instructions: buildInstructions(prompt, status, activePaths, deletedPaths, { added, removed }, driftedDeleted, range),
+        instructions: buildInstructions(prompt, status, activePaths, deletedPaths, { added, removed }, driftedStale, range),
       };
     });
 
@@ -896,29 +906,51 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
     const touchedPrompts = touchedEntries.filter(entry => entry.path.endsWith('.prompt.md'));
     const touchedNonPrompts = touchedEntries.filter(entry => !entry.path.endsWith('.prompt.md'));
     for (const entry of touchedPrompts) {
-      if (isTestPromptPath(entry.path)) {
+      if (!entry.deleted && isTestPromptPath(entry.path)) {
         throw new UpdateStop(1, `Error: misplaced test prompt: ${entry.path}. Prompts own production modules, not test files.`);
       }
     }
 
-    // Secret-safe owner ports: never list or open secret files during owner discovery.
+    // Secret-safe memoized owner ports: never list or open secret files, and avoid duplicate prompt reads across findOwners calls.
     const safeVisible = listFiles();
+    const ownerReadCache = new Map();
     const safeReadForOwner = (path, limit) => {
       if (!canonicalPath(path) || isBlockedSecretPath(path)) return null;
-      if (ports.read) return ports.read(path, limit);
-      const res = probeRegularBytes(root, path, limit);
-      if (res.status === 'missing') return null;
-      if (res.status !== 'ok') throw new Error(res.status);
-      return res.bytes;
+      const cacheKey = `${path}\0${limit}`;
+      if (ownerReadCache.has(cacheKey)) {
+        const cached = ownerReadCache.get(cacheKey);
+        if (cached.error) throw cached.error;
+        return cached.value;
+      }
+      try {
+        let value;
+        if (ports.read) {
+          value = ports.read(path, limit);
+        } else {
+          const res = probeRegularBytes(root, path, limit);
+          if (res.status === 'missing') value = null;
+          else if (res.status !== 'ok') throw new Error(res.status);
+          else value = res.bytes;
+        }
+        ownerReadCache.set(cacheKey, { value, error: null });
+        return value;
+      } catch (error) {
+        ownerReadCache.set(cacheKey, { value: null, error });
+        throw error;
+      }
     };
     const ownerPorts = { files: () => safeVisible, read: safeReadForOwner };
 
     const nonPromptMap = new Map(touchedNonPrompts.map(entry => [entry.path, entry]));
     const activeTouchedPromptSet = new Set(touchedPrompts.filter(e => !e.deleted).map(e => e.path));
+    const touchedPromptTargets = new Set([
+      ...touchedPrompts.map(e => e.path),
+      ...touchedPrompts.filter(e => e.renamedFrom?.endsWith('.prompt.md')).map(e => e.renamedFrom),
+    ]);
     const promptTextMap = new Map();
     const syncRecordMap = new Map();
 
-    // Load touched prompt texts once (reused for claims and final evaluation).
+    // Load active touched prompt texts once (reused for claims and final evaluation).
     for (const promptPath of [...activeTouchedPromptSet].sort(cmpPath)) {
       let bytes = codeBytesMap.get(promptPath);
       if (!bytes) {
@@ -932,15 +964,15 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       promptTextMap.set(promptPath, new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes));
     }
 
-    // When a prompt itself is touched, gather its owned modules from bindings, prose claims, .pdd/sync sidecars, and eligible non-secret code files.
-    if (activeTouchedPromptSet.size > 0) {
+    // When any prompt is touched, deleted, or renamed, gather its owned modules from bindings, prose claims, .pdd/sync sidecars, and eligible non-secret code files.
+    if (touchedPromptTargets.size > 0) {
       const allSyncRecords = scanSyncRecords(root, readBytes);
       const candidateSet = new Set();
 
       if (bindingsDoc) {
         for (const item of bindingsDoc.modules) {
           if (item && typeof item === 'object' && typeof item.module === 'string' && typeof item.prompt === 'string') {
-            if (activeTouchedPromptSet.has(item.prompt) && canonicalPath(item.module) && !isBlockedSecretPath(item.module)) {
+            if (touchedPromptTargets.has(item.prompt) && canonicalPath(item.module) && !isBlockedSecretPath(item.module)) {
               candidateSet.add(item.module);
             }
           }
@@ -954,7 +986,7 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
         }
       }
       for (const [modPath, record] of allSyncRecords.entries()) {
-        if (recordOwners(record).some(owner => activeTouchedPromptSet.has(owner))) {
+        if (recordOwners(record).some(owner => touchedPromptTargets.has(owner))) {
           syncRecordMap.set(modPath, record);
           candidateSet.add(modPath);
         }
@@ -968,8 +1000,8 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
         const allOwned = findOwners({ root, paths: candidateList }, ownerPorts);
         for (const row of allOwned.files) {
           const rec = syncRecordMap.get(row.path) ?? null;
-          const ownedByTouched = row.owners.some(owner => activeTouchedPromptSet.has(owner))
-            || (rec !== null && recordOwners(rec).some(owner => activeTouchedPromptSet.has(owner)));
+          const ownedByTouched = row.owners.some(owner => touchedPromptTargets.has(owner))
+            || (rec !== null && recordOwners(rec).some(owner => touchedPromptTargets.has(owner)));
           if (ownedByTouched && !nonPromptMap.has(row.path)) {
             const probe = probeBytes(row.path, BINARY_PROBE_BYTES);
             if (probe.status === 'symlink') throw new UpdateStop(2, `Symlinks are not allowed: ${row.path}.`);
@@ -989,7 +1021,7 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
     // For every renamed entry, also check if renamedFrom has a lingering .pdd/sync sidecar so renames to unowned/other-prompt/pinned targets never escape --check.
     const renamedFromEntries = [];
     for (const entry of nonPromptMap.values()) {
-      if (entry.renamedFrom && !nonPromptMap.has(entry.renamedFrom) && !entry.renamedFrom.endsWith('.prompt.md') && !isSyncSidecarPath(entry.renamedFrom)) {
+      if (entry.renamedFrom && !nonPromptMap.has(entry.renamedFrom) && !entry.renamedFrom.endsWith('.prompt.md') && !isPddInternalPath(entry.renamedFrom)) {
         const oldRec = syncRecordMap.get(entry.renamedFrom) ?? readSyncRecord(root, entry.renamedFrom, readBytes);
         if (oldRec) {
           syncRecordMap.set(entry.renamedFrom, oldRec);
@@ -1012,9 +1044,9 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       : { files: [] };
     const ownerRowByPath = new Map(ownerLookup.files.map(row => [row.path, row]));
 
-    // Load per-module sidecars for every candidate entry; for deleted files without live header/binding/prose owners, resolve owners from their sidecar.
+    // Load per-module sidecars for every candidate entry; for deleted files with a sidecar, ALWAYS union recorded sidecar owners into ownerRow.
     for (const entry of candidateEntries) {
-      if (entry.path.startsWith('.pdd/')) continue;
+      if (isPddInternalPath(entry.path)) continue;
       if (!syncRecordMap.has(entry.path)) {
         const rec = readSyncRecord(root, entry.path, readBytes);
         if (rec) syncRecordMap.set(entry.path, rec);
@@ -1024,27 +1056,61 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
         throw new UpdateStop(2, 'pdd-bindings.json is malformed or unreadable; fix it before running pdd update.');
       }
       const rec = syncRecordMap.get(entry.path) ?? null;
-      if (entry.deleted && rec && !(existingOwner?.owners?.length)) {
-        const owners = recordOwners(rec);
-        ownerRowByPath.set(entry.path, {
-          path: entry.path,
-          owner: owners[0] ?? null,
-          owners,
-          source: 'sync-record',
-          certain: true,
-          note: '',
-          headers: [],
-        });
+      if (entry.deleted && rec) {
+        const recOwners = recordOwners(rec);
+        if (!existingOwner?.owners?.length) {
+          ownerRowByPath.set(entry.path, {
+            path: entry.path,
+            owner: recOwners[0] ?? null,
+            owners: recOwners,
+            source: 'sync-record',
+            certain: true,
+            note: '',
+            headers: [],
+          });
+        } else {
+          const mergedOwners = unique([...existingOwner.owners, ...recOwners]);
+          ownerRowByPath.set(entry.path, {
+            ...existingOwner,
+            owner: mergedOwners[0] ?? null,
+            owners: mergedOwners,
+          });
+        }
       }
     }
 
     const ownedPairs = [];
     const neededPrompts = new Set();
+    const activeNeededPrompts = new Set();
     const codeTextMap = new Map();
 
     for (const entry of candidateEntries) {
       const ownerRow = ownerRowByPath.get(entry.path) ?? { path: entry.path, owner: null, owners: [], source: null, certain: true, note: '', headers: [] };
       if (!ownerRow.owners.length) {
+        // Previously pinned file that lost all current owners in place: surface lingering sidecar as drifted and prune on --write.
+        const staleRec = !isPddInternalPath(entry.path) ? (syncRecordMap.get(entry.path) ?? null) : null;
+        if (!entry.deleted && staleRec) {
+          const staleOwners = recordOwners(staleRec);
+          for (const owner of staleOwners) {
+            if (isBlockedSecretPath(owner)) throw new UpdateStop(2, `Secret-looking path is not allowed: ${owner}.`);
+          }
+          syncRecordPathForModule(entry.path);
+          const orphanOwnerRow = {
+            path: entry.path,
+            owner: staleOwners[0] ?? null,
+            owners: staleOwners,
+            source: 'sync-record',
+            certain: true,
+            note: 'no longer owned; stale sync record remains',
+            headers: [],
+          };
+          const orphanEntry = { ...entry, orphanedSidecar: true };
+          for (const owner of staleOwners) {
+            neededPrompts.add(owner);
+            ownedPairs.push({ entry: orphanEntry, ownerRow: orphanOwnerRow, owner });
+          }
+          continue;
+        }
         if (!entry.deleted) {
           const probe = codeBytesMap.has(entry.path)
             ? { status: 'ok', bytes: codeBytesMap.get(entry.path) }
@@ -1066,6 +1132,8 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       if (misplaced) {
         throw new UpdateStop(1, `Error: misplaced test prompt: ${entry.path} is claimed by ${misplaced}. Prompts own production modules, not test files.`);
       }
+      // Pre-validate sidecar destination path for every owned module BEFORE any write phase executes (0 writes on exit 2).
+      syncRecordPathForModule(entry.path);
       if (!entry.deleted) {
         let bytes = codeBytesMap.get(entry.path);
         if (!bytes) {
@@ -1081,6 +1149,7 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       }
       for (const owner of ownerRow.owners) {
         neededPrompts.add(owner);
+        if (!entry.deleted) activeNeededPrompts.add(owner);
         ownedPairs.push({ entry, ownerRow, owner });
       }
     }
@@ -1092,7 +1161,13 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       const read = readBytes(promptPath, MAX_FILE_BYTES);
       if (read.status === 'symlink') throw new UpdateStop(2, `Symlinks are not allowed: ${promptPath}.`);
       if (read.status === 'too-large') throw new UpdateStop(1, `Owning prompt exceeds 10 MiB limit: ${promptPath}.`);
-      if (read.status !== 'ok') throw new UpdateStop(1, `Owning prompt is missing or unreadable: ${promptPath}.`);
+      if (read.status !== 'ok') {
+        if (activeNeededPrompts.has(promptPath)) {
+          throw new UpdateStop(1, `Owning prompt is missing or unreadable: ${promptPath}.`);
+        }
+        // Prompt was deleted together with its owned module(s) or orphaned sidecar(s); allow --check to report stale sidecars and --write to prune them.
+        continue;
+      }
       if (read.bytes.includes(0)) throw new UpdateStop(2, `Binary file is not supported: ${promptPath}.`);
       promptTextMap.set(promptPath, new TextDecoder('utf-8', { ignoreBOM: true }).decode(read.bytes));
     }
@@ -1109,7 +1184,7 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       const chunk = diffChunks.get(pair.entry.path);
       if (chunk) {
         diffByPath.set(pair.entry.path, extractDiffSummary(chunk));
-      } else if (!pair.entry.deleted && (pair.entry.untracked || pair.entry.status === 'A')) {
+      } else if (!pair.entry.deleted && !pair.entry.orphanedSidecar && (pair.entry.untracked || pair.entry.status === 'A')) {
         diffByPath.set(pair.entry.path, summarizeWholeFileAsAdded(codeTextMap.get(pair.entry.path) ?? ''));
       } else {
         diffByPath.set(pair.entry.path, { added: 0, removed: 0, changed_symbols: [] });
@@ -1125,21 +1200,21 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       for (const [promptPath, text] of promptTextMap.entries()) promptHashMap.set(promptPath, promptHeaderHash(text));
 
       const activeOwnersByCode = new Map();
-      const deletedModules = new Set();
+      const staleSidecarModules = new Set();
       for (const pair of ownedPairs) {
-        if (pair.entry.deleted) {
-          deletedModules.add(pair.entry.path);
+        if (pair.entry.deleted || pair.entry.orphanedSidecar) {
+          staleSidecarModules.add(pair.entry.path);
           continue;
         }
-        if (pair.entry.renamedFrom && pair.entry.renamedFrom !== pair.entry.path) {
-          deletedModules.add(pair.entry.renamedFrom);
+        if (pair.entry.renamedFrom && pair.entry.renamedFrom !== pair.entry.path && !isPddInternalPath(pair.entry.renamedFrom)) {
+          staleSidecarModules.add(pair.entry.renamedFrom);
         }
         if (!activeOwnersByCode.has(pair.entry.path)) activeOwnersByCode.set(pair.entry.path, []);
         activeOwnersByCode.get(pair.entry.path).push(pair.owner);
       }
 
-      // 1. Prune stale sidecars for deleted or renamed-away modules (never touching .prompt.md).
-      for (const oldPath of [...deletedModules].sort(cmpPath)) {
+      // 1. Prune stale sidecars for deleted, renamed-away, or unowned-in-place modules (never touching .prompt.md).
+      for (const oldPath of [...staleSidecarModules].sort(cmpPath)) {
         if (activeOwnersByCode.has(oldPath)) continue;
         const pruned = pruneSidecar(oldPath);
         if (pruned.pruned) {
@@ -1231,7 +1306,7 @@ export function formatUpdateText(report) {
     modulesByPrompt.get(mod.owner).push(mod);
   }
   for (const group of report.prompts) {
-    lines.push(`${group.prompt} [${group.status}] (prompt_sha256: ${group.prompt_sha256.slice(0, 12)})`);
+    lines.push(`${group.prompt} [${group.status}] (prompt_sha256: ${group.prompt_sha256 ? group.prompt_sha256.slice(0, 12) : 'deleted'})`);
     for (const mod of modulesByPrompt.get(group.prompt) ?? []) {
       const renamed = mod.renamed_from ? ` (renamed from ${mod.renamed_from})` : '';
       lines.push(
