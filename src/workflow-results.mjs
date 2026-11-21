@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 085ae01fa23dfb446a149560519583db76d27472180e19eb5fd9397d83999349).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 7d5ac71d969277b76e688f6d85ab4ab0f2c3087e75a2370b0a1619cb719866b2).
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -131,7 +131,8 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
   const directory = join(resolve(env.PDD_STATE_DIR || join(env.HOME || homedir(), '.pdd', 'runtime')), 'batches');
   let names = [];
   try { names = readdirSync(directory).filter(name => BATCH.test(name)).sort(); } catch { names = []; }
-  let check = null, lint = null;
+  const checks = [];
+  let lint = null;
   for (const name of names) {
     const batch = readJson(join(directory, name, 'batch.json'));
     if (!batch || batch.batch !== name || typeof batch.root !== 'string' || !Array.isArray(batch.rows) || batch.rows.some(row=>!row || typeof row!=='object' || Array.isArray(row))) continue;
@@ -153,45 +154,192 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
       }
     } else if(real(batch.root)!==wanted)continue;
     if (batch.intent === 'lint-only') { if (!lint || at >= lint.at) lint = { name, at, batch, association }; }
-    else if (batch.intent === 'check' && (!check || at >= check.at)) check = { name, at, batch, association };
+    else if (batch.intent === 'check') checks.push({ name, at, batch, association });
   }
-  if (check) {
-    const { batch } = check, summary = readJson(join(directory, check.name, 'summary.json'));
-    let source = 'unknown';
-    const tests = [...new Set(batch.rows.map(row => row?.test).filter(test => typeof test === 'string'))].sort();
-    const sha256 = /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') ? batch.source_sha256 : null;
-    const sourceTests = batch.source_selection?.tests ?? tests;
-    const selection = {tests:sourceTests,appMap:null,...(batch.source_selection ? {excludeFixtureProjects:batch.source_selection.exclude_fixture_projects === true} : {})};
-    const sourceRoot = check.association?.sourceAnchor?.root ?? root;
-    const freshness = [];
-    try { freshness.push(sha256 && (sourceTests.length || batch.source_selection) ? capture(sourceRoot, selection).sha256 === sha256 ? 'current' : 'changed' : 'unknown'); }
-    catch { freshness.push('unknown'); }
-    if (batch.native_source) {
-      try { freshness.push(batch.native_source.sha256 ? capture(sourceRoot,{...selection,tests:batch.native_source.tests}).sha256 === batch.native_source.sha256 ? 'current' : 'changed' : 'unknown'); }
+  if (checks.length) {
+    checks.sort((a, b) => a.at - b.at || a.name.localeCompare(b.name));
+    const latestCheck = checks.at(-1);
+    const storyName = value => typeof value === 'string' ? value.split('/').at(-1).replace(/\.md$/, '') : null;
+    const storyLabel = new RegExp(`^${PROMPT_TESTS_WORDS}\\s*\\(([^)]+)\\)`);
+    const stageOf = item => item.association?.stage ?? null;
+    const anchorRootOf = item => real(item.association?.sourceAnchor?.root ?? root);
+    const evaluateCheck = item => {
+      const { batch } = item;
+      const summary = readJson(join(directory, item.name, 'summary.json'));
+      const tests = [...new Set(batch.rows.map(row => row?.test).filter(t => typeof t === 'string'))].sort();
+      const sha256 = /^[a-f0-9]{64}$/.test(batch.source_sha256 ?? '') ? batch.source_sha256 : null;
+      const sourceTests = batch.source_selection?.tests ?? tests;
+      const selection = { tests: sourceTests, appMap: null, ...(batch.source_selection ? { excludeFixtureProjects: batch.source_selection.exclude_fixture_projects === true } : {}) };
+      const sourceRoot = item.association?.sourceAnchor?.root ?? root;
+      const freshness = [];
+      try { freshness.push(sha256 && (sourceTests.length || batch.source_selection) ? capture(sourceRoot, selection).sha256 === sha256 ? 'current' : 'changed' : 'unknown'); }
       catch { freshness.push('unknown'); }
+      if (batch.native_source) {
+        try { freshness.push(batch.native_source.sha256 ? capture(sourceRoot, { ...selection, tests: batch.native_source.tests }).sha256 === batch.native_source.sha256 ? 'current' : 'changed' : 'unknown'); }
+        catch { freshness.push('unknown'); }
+      }
+      const source = freshness.includes('changed') ? 'changed' : freshness.includes('unknown') ? 'unknown' : 'current';
+      return { item, batch, summary, tests, sha256, sourceTests, selection, sourceRoot, source };
+    };
+    const buildSingleCheck = ev => {
+      const { item, batch, summary, tests, sha256, sourceTests, selection, source } = ev;
+      const states = batch.rows.map(savedResultState);
+      const stateEvidence = batch.rows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
+      const incomplete = states.some(row => row.state !== 'passed');
+      const recorded = text(summary?.summary_line);
+      const safeSummary = incomplete && /✓/.test(recorded) ? 'Prompt tests: no full pass' : recorded;
+      const summaryRows = Array.isArray(summary?.rows) ? summary.rows : [];
+      const stories = [...new Set(summaryRows.filter(row => {
+        const line = text(row?.summary_line);
+        if (!line || !incomplete || !line.includes('✓')) return !!line;
+        const story = storyName(row?.story ?? storyLabel.exec(line)?.[1]);
+        const owners = batch.rows.filter(saved => story && storyName(saved.story) === story && (!row?.test || saved.test === row.test));
+        return owners.length > 0 && owners.every(saved => resultOutcome(saved).state === 'passed' && !saved.not_checked?.length);
+      }).map(row => text(row.summary_line)))];
+      return {
+        kind: 'pdd test', batch: item.name, at: item.at, source, sourceSha256: sha256, tests,
+        ...(batch.source_selection ? { sourceTests, excludeFixtureProjects: selection.excludeFixtureProjects } : {}),
+        ...(batch.native_source ? { nativeSource: batch.native_source } : {}),
+        ...runtimeEvidence(batch, summary),
+        requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
+        ...(item.association?.runId ? { producerRoot: batch.root, association: { runId: item.association.runId, repo: item.association.repo,
+          workspaceRoot: item.association.producerRoot, tests: item.association.tests, source_sha256: item.association.source_sha256,
+          stage: item.association.stage, sourceAnchor: item.association.sourceAnchor } } : {}),
+        ...(item.association ? { stage: item.association.stage, sourceAnchor: item.association.sourceAnchor } : {}),
+        states,
+        summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence, ...checkPlanResultLines(savedCheckScope(batch)), ...(batch.check_selection?.mode === 'affected' ? [AFFECTED_DISCLAIMER] : [])].filter(Boolean).join('; '),
+        stories,
+        ...identity(batch.rows),
+      };
+    };
+
+    const latestEval = evaluateCheck(latestCheck);
+    if (checks.length === 1 || latestEval.source !== 'current' || latestCheck.batch.check_selection?.mode === 'affected') {
+      results.push(buildSingleCheck(latestEval));
+    } else {
+      const coveredTests = new Set(latestEval.tests);
+      const contributing = [latestEval];
+      const latestStage = stageOf(latestCheck);
+      const latestAnchorRoot = anchorRootOf(latestCheck);
+      for (let i = checks.length - 2; i >= 0; i--) {
+        const candidate = checks[i];
+        if (stageOf(candidate) !== latestStage || anchorRootOf(candidate) !== latestAnchorRoot) continue;
+        const candidateTests = [...new Set(candidate.batch.rows.map(row => row?.test).filter(t => typeof t === 'string'))];
+        if (!candidateTests.some(t => !coveredTests.has(t))) continue;
+        const ev = evaluateCheck(candidate);
+        if (ev.source !== 'current') continue;
+        contributing.push(ev);
+        for (const t of candidateTests) coveredTests.add(t);
+      }
+      if (contributing.length === 1) {
+        results.push(buildSingleCheck(latestEval));
+      } else {
+        const claimedTests = new Set();
+        const batchWins = [];
+        const newestFirstRows = [];
+        for (const ev of contributing) {
+          const wonTests = new Set();
+          const wonRows = [];
+          for (const row of ev.batch.rows) {
+            if (typeof row?.test === 'string') {
+              if (claimedTests.has(row.test)) continue;
+              wonTests.add(row.test);
+              wonRows.push(row);
+            } else if (ev === latestEval) {
+              wonRows.push(row);
+            }
+          }
+          for (const t of wonTests) claimedTests.add(t);
+          if (wonRows.length) {
+            batchWins.push({ ev, wonTests, wonRows });
+            newestFirstRows.push(...wonRows);
+          }
+        }
+        const winningRows = newestFirstRows
+          .map((row, idx) => ({ row, idx }))
+          .sort((a, b) => String(a.row?.test ?? '').localeCompare(String(b.row?.test ?? '')) || a.idx - b.idx)
+          .map(entry => entry.row);
+        const tests = [...new Set(winningRows.map(row => row?.test).filter(t => typeof t === 'string'))].sort();
+        const states = winningRows.map(savedResultState);
+        const stateEvidence = winningRows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
+        const incomplete = states.some(row => row.state !== 'passed');
+        const passedCount = states.filter(row => row.state === 'passed').length;
+        const safeSummary = !incomplete && states.length > 0
+          ? `Prompt tests: ${passedCount}/${states.length} passed`
+          : 'Prompt tests: no full pass';
+        const stories = [];
+        const seenStories = new Set();
+        for (const { ev, wonTests, wonRows } of [...batchWins].reverse()) {
+          const summaryRows = Array.isArray(ev.summary?.rows) ? ev.summary.rows : [];
+          for (const sRow of summaryRows) {
+            const line = text(sRow?.summary_line);
+            if (!line || seenStories.has(line)) continue;
+            const story = storyName(sRow?.story ?? storyLabel.exec(line)?.[1]);
+            const matchesWin = typeof sRow?.test === 'string'
+              ? wonTests.has(sRow.test)
+              : Boolean(story && wonRows.some(saved => storyName(saved.story) === story));
+            if (!matchesWin) continue;
+            if (line.includes('✓')) {
+              const owners = winningRows.filter(saved =>
+                typeof sRow?.test === 'string'
+                  ? saved.test === sRow.test
+                  : Boolean(story && storyName(saved.story) === story));
+              if (!owners.length || !owners.every(saved => resultOutcome(saved).state === 'passed' && !saved.not_checked?.length)) continue;
+            }
+            seenStories.add(line);
+            stories.push(line);
+          }
+        }
+        const hasExcludeFlag = latestCheck.batch.source_selection != null;
+        const excludeFixtureProjects = hasExcludeFlag ? latestEval.selection.excludeFixtureProjects : undefined;
+        let mergedSha256 = latestEval.sha256;
+        let mergedSourceTests = latestCheck.batch.source_selection ? latestEval.sourceTests : undefined;
+        let includeMergedSourceTests = hasExcludeFlag;
+        try {
+          const mergedSelection = { tests, appMap: null, ...(hasExcludeFlag ? { excludeFixtureProjects } : {}) };
+          const combined = capture(latestEval.sourceRoot, mergedSelection);
+          if (/^[a-f0-9]{64}$/.test(combined?.sha256 ?? '')) {
+            mergedSha256 = combined.sha256;
+            mergedSourceTests = tests;
+            includeMergedSourceTests = hasExcludeFlag;
+          } else {
+            mergedSourceTests = latestEval.sourceTests;
+            includeMergedSourceTests = true;
+          }
+        } catch {
+          mergedSourceTests = latestEval.sourceTests;
+          includeMergedSourceTests = true;
+        }
+        const nativeBatches = contributing.filter(ev => ev.batch.native_source);
+        let mergedNativeSource = latestCheck.batch.native_source ?? null;
+        if (nativeBatches.length > 1 || (nativeBatches.length === 1 && !latestCheck.batch.native_source)) {
+          const nativeTests = [...new Set(nativeBatches.flatMap(ev => Array.isArray(ev.batch.native_source.tests) ? ev.batch.native_source.tests : []))].sort();
+          try {
+            const nativeCap = capture(latestEval.sourceRoot, { tests: nativeTests, appMap: null, ...(hasExcludeFlag ? { excludeFixtureProjects } : {}) });
+            if (/^[a-f0-9]{64}$/.test(nativeCap?.sha256 ?? '')) {
+              mergedNativeSource = { tests: nativeTests, sha256: nativeCap.sha256 };
+            }
+          } catch { /* preserve latestCheck native_source when combined capture is unavailable */ }
+        }
+        results.push({
+          kind: 'pdd test', batch: latestCheck.name, at: latestCheck.at, source: 'current',
+          sourceSha256: mergedSha256, tests,
+          ...(includeMergedSourceTests ? { sourceTests: mergedSourceTests } : {}),
+          ...(hasExcludeFlag ? { excludeFixtureProjects } : {}),
+          ...(mergedNativeSource ? { nativeSource: mergedNativeSource } : {}),
+          ...runtimeEvidence(latestCheck.batch, latestEval.summary),
+          requests: requestsOf(winningRows), reports: reportsOf(winningRows),
+          ...(latestCheck.association?.runId ? { producerRoot: latestCheck.batch.root, association: { runId: latestCheck.association.runId, repo: latestCheck.association.repo,
+            workspaceRoot: latestCheck.association.producerRoot, tests: latestCheck.association.tests, source_sha256: latestCheck.association.source_sha256,
+            stage: latestCheck.association.stage, sourceAnchor: latestCheck.association.sourceAnchor } } : {}),
+          ...(latestCheck.association ? { stage: latestCheck.association.stage, sourceAnchor: latestCheck.association.sourceAnchor } : {}),
+          states,
+          summary: [safeSummary, stateEvidence, ...checkPlanResultLines(savedCheckScope(latestCheck.batch))].filter(Boolean).join('; '),
+          stories,
+          ...identity(newestFirstRows),
+        });
+      }
     }
-    source = freshness.includes('changed') ? 'changed' : freshness.includes('unknown') ? 'unknown' : 'current';
-    const states = batch.rows.map(savedResultState);
-    const stateEvidence = batch.rows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
-    const incomplete = states.some(row => row.state !== 'passed');
-    const recorded = text(summary?.summary_line);
-    const safeSummary = incomplete && /✓/.test(recorded) ? 'Prompt tests: no full pass' : recorded;
-    const storyName=value=>typeof value==='string'?value.split('/').at(-1).replace(/\.md$/,''):null;
-    const storyLabel=new RegExp(`^${PROMPT_TESTS_WORDS}\\s*\\(([^)]+)\\)`);
-    const summaryRows=Array.isArray(summary?.rows)?summary.rows:[];
-    const stories=[...new Set(summaryRows.filter(row=>{
-      const line=text(row?.summary_line);
-      if(!line || !incomplete || !line.includes('✓'))return !!line;
-      const story=storyName(row?.story??storyLabel.exec(line)?.[1]);
-      const owners=batch.rows.filter(saved=>story && storyName(saved.story)===story && (!row?.test || saved.test===row.test));
-      return owners.length>0 && owners.every(saved=>resultOutcome(saved).state==='passed'&&!saved.not_checked?.length);
-    }).map(row=>text(row.summary_line)))];
-    results.push({ kind: 'pdd test', batch: check.name, at: check.at, source, sourceSha256: sha256, tests, ...(batch.source_selection ? {sourceTests,excludeFixtureProjects:selection.excludeFixtureProjects} : {}), ...(batch.native_source ? {nativeSource:batch.native_source} : {}), ...runtimeEvidence(batch,summary), requests: requestsOf(batch.rows), reports: reportsOf(batch.rows),
-      ...(check.association?.runId?{producerRoot:batch.root,association:{runId:check.association.runId,repo:check.association.repo,
-        workspaceRoot:check.association.producerRoot,tests:check.association.tests,source_sha256:check.association.source_sha256,
-        stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}}:{}),
-      ...(check.association?{stage:check.association.stage,sourceAnchor:check.association.sourceAnchor}:{}),states, summary: [safeSummary || 'result not saved (the check did not finish)', stateEvidence, ...checkPlanResultLines(savedCheckScope(batch)), ...(batch.check_selection?.mode === 'affected' ? [AFFECTED_DISCLAIMER] : [])].filter(Boolean).join('; '), stories,
-      ...identity(batch.rows) });
   }
   if (lint) {
     const local = localLayoutResult(lint.batch,readJson(join(directory,lint.name,'summary.json')));
