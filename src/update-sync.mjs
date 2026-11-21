@@ -1,26 +1,50 @@
-// Generated from prompts/cli/update-sync.prompt.md (sha256: 2319fbd461ec8b3a573216298330ba750878218df49b52dee91e562d4ba722ed).
+// Generated from prompts/cli/update-sync.prompt.md (sha256: db86551ae1e47e48b2df04984416e9a224b7cba7f4b3b1d3b502cf91ef08c7ea).
 import { execFileSync } from 'node:child_process';
-import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readSync, realpathSync, writeSync } from 'node:fs';
-import { isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  rmdirSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import {
   findOwners,
   headerEntries,
   headerHashState,
+  isTestOwnedPath,
   isTestPromptPath,
   moduleContentHash,
-  parseModuleSyncPins,
+  promptClaims,
   promptHeaderHash,
   updateHeaderHash,
-  updateModuleSyncPins,
 } from './file-owner.mjs';
 import { runtimePreflightSlice } from './runtime-seam.mjs';
 
 const { gitFiles, isSecretPath } = runtimePreflightSlice();
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_SIDECAR_BYTES = 65536;
+const MAX_BINDINGS_BYTES = 65536;
 const BINARY_PROBE_BYTES = 8192;
+const SYNC_DIR_REL = '.pdd/sync';
+const SYNC_SCHEMA_VERSION = 'pdd.module-sync.v1';
+const HEX64 = /^[a-f0-9]{64}$/;
 const EXTRA_SECRET_NAME = /^(?:\.env(?:\..+)?|credentials(?:\.[^/]+)?|\.aws-credentials)$/i;
 const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+
+const NON_CANDIDATE_DIR = /^(?:user_stories|docs?|\.github|\.pdd)\//i;
+const NON_CANDIDATE_EXT = /\.(?:mdx?|rst|txt|json|jsonl|ndjson|ya?ml|toml|ini|cfg|conf|lock|csv|tsv|xml|svg|png|jpe?g|gif|webp|ico|pdf|woff2?)$/i;
+const DOTFILE_SEG = /(?:^|\/)\.[^/]+$/;
 
 const cmpPath = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const unique = values => [...new Set(values)];
@@ -28,6 +52,8 @@ const sanitizeOneLine = text => String(text ?? '').replace(/[\x00-\x1f\x7f-\x9f]
 const canonicalPath = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 1000 && !isAbsolute(value)
   && !/[\\\x00-\x1f\x7f]/.test(value) && !value.split('/').some(part => !part || part === '.' || part === '..' || part.toLowerCase() === '.git');
 const isBlockedSecretPath = path => isSecretPath(path) || EXTRA_SECRET_NAME.test(posix.basename(path));
+const isSyncSidecarPath = path => path === SYNC_DIR_REL || path.startsWith(`${SYNC_DIR_REL}/`);
+const shellArg = value => (/^[A-Za-z0-9_./@+-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`);
 
 class UpdateStop extends Error {
   constructor(exitCode, message) {
@@ -36,15 +62,20 @@ class UpdateStop extends Error {
   }
 }
 
+export function syncRecordPathForModule(modulePath) {
+  if (!canonicalPath(modulePath) || isBlockedSecretPath(modulePath) || modulePath === '.pdd' || modulePath.startsWith('.pdd/')) {
+    throw new UpdateStop(2, `Invalid module path for sync record: ${sanitizeOneLine(modulePath)}.`);
+  }
+  return `${SYNC_DIR_REL}/${modulePath}.json`;
+}
+
 function parseFromRange(raw) {
   if (typeof raw !== 'string') throw new UpdateStop(2, 'Invalid --from range. Use <base>..<head> or <base>.');
   if (!raw || raw.length > 256 || /[\s\x00-\x1f\x7f]/.test(raw) || raw.includes('...') || raw.startsWith('-')) {
     throw new UpdateStop(2, `Invalid --from range: ${sanitizeOneLine(raw)}. Use <base>..<head> or <base>.`);
   }
   const parts = raw.split('..');
-  if (parts.length === 1) {
-    return `${parts[0]}..HEAD`;
-  }
+  if (parts.length === 1) return `${parts[0]}..HEAD`;
   if (parts.length === 2) {
     const [base, head] = parts;
     if (!base || !head || base.startsWith('-') || head.startsWith('-')) {
@@ -64,7 +95,7 @@ function inspectRegularPath(root, relPath) {
     try { st = lstatSync(cur); }
     catch (error) {
       if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return { kind: 'missing', full: cur };
-      throw error;
+      throw new UpdateStop(2, `Could not inspect path ${relPath}: ${sanitizeOneLine(error.message)}.`);
     }
     if (st.isSymbolicLink()) return { kind: 'symlink', full: cur };
     if (i === parts.length - 1) {
@@ -76,7 +107,7 @@ function inspectRegularPath(root, relPath) {
   return { kind: 'file', full: cur };
 }
 
-function readRegularBytes(root, relPath, limit = MAX_FILE_BYTES) {
+function readRegularBytes(root, relPath, limit = MAX_FILE_BYTES, { truncate = false } = {}) {
   const check = inspectRegularPath(root, relPath);
   if (check.kind === 'missing') return { status: 'missing', bytes: null };
   if (check.kind === 'symlink') return { status: 'symlink', bytes: null };
@@ -86,12 +117,12 @@ function readRegularBytes(root, relPath, limit = MAX_FILE_BYTES) {
   catch (error) {
     if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return { status: 'missing', bytes: null };
     if (error.code === 'ELOOP') return { status: 'symlink', bytes: null };
-    throw error;
+    throw new UpdateStop(2, `Could not read ${relPath}: ${sanitizeOneLine(error.message)}.`);
   }
   try {
     const st = fstatSync(fd);
     if (!st.isFile()) return { status: 'non-file', bytes: null };
-    const toRead = Math.min(limit + 1, st.size);
+    const toRead = truncate ? Math.min(limit, st.size) : Math.min(limit + 1, st.size);
     const buffer = Buffer.alloc(toRead);
     let total = 0;
     while (total < toRead) {
@@ -100,32 +131,252 @@ function readRegularBytes(root, relPath, limit = MAX_FILE_BYTES) {
       total += count;
     }
     const slice = buffer.subarray(0, total);
-    if (slice.length > limit) return { status: 'too-large', bytes: null };
+    if (!truncate && slice.length > limit) return { status: 'too-large', bytes: null };
     return { status: 'ok', bytes: slice };
+  } catch (error) {
+    throw new UpdateStop(2, `Could not read ${relPath}: ${sanitizeOneLine(error.message)}.`);
   } finally {
     closeSync(fd);
   }
 }
 
-function writeRegularUtf8(root, relPath, text) {
-  const check = inspectRegularPath(root, relPath);
-  if (check.kind === 'symlink') throw new UpdateStop(2, `Symlinks are not allowed: ${relPath}.`);
-  if (check.kind !== 'file') throw new UpdateStop(2, `Target is not a regular file: ${relPath}.`);
-  let fd;
-  try { fd = openSync(check.full, fsConstants.O_WRONLY | fsConstants.O_TRUNC | O_NOFOLLOW); }
-  catch (error) {
-    if (error.code === 'ELOOP') throw new UpdateStop(2, `Symlinks are not allowed: ${relPath}.`);
-    throw error;
+function probeRegularBytes(root, relPath, limit = BINARY_PROBE_BYTES) {
+  return readRegularBytes(root, relPath, limit, { truncate: true });
+}
+
+function writeRegularAtomicUtf8(root, relPath, text, { createParents = false, defaultMode = 0o644 } = {}) {
+  const parts = relPath.split('/');
+  let cur = root;
+  for (let i = 0; i < parts.length - 1; i++) {
+    cur = join(cur, parts[i]);
+    let st = null;
+    try { st = lstatSync(cur); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw new UpdateStop(2, `Could not access directory for ${relPath}: ${sanitizeOneLine(error.message)}.`);
+    }
+    if (st === null) {
+      if (!createParents) throw new UpdateStop(2, `Parent directory is missing for ${relPath}.`);
+      try { mkdirSync(cur); }
+      catch (error) {
+        if (error.code !== 'EEXIST') throw new UpdateStop(2, `Could not create directory for ${relPath}: ${sanitizeOneLine(error.message)}.`);
+      }
+      try { st = lstatSync(cur); }
+      catch (error) { throw new UpdateStop(2, `Could not verify directory for ${relPath}: ${sanitizeOneLine(error.message)}.`); }
+    }
+    if (st.isSymbolicLink()) throw new UpdateStop(2, `Symlinks are not allowed: ${parts.slice(0, i + 1).join('/')}.`);
+    if (!st.isDirectory()) throw new UpdateStop(2, `Path is not a directory: ${parts.slice(0, i + 1).join('/')}.`);
   }
+
+  const targetFull = join(cur, parts.at(-1));
+  let mode = defaultMode;
   try {
+    const st = lstatSync(targetFull);
+    if (st.isSymbolicLink()) throw new UpdateStop(2, `Symlinks are not allowed: ${relPath}.`);
+    if (!st.isFile()) throw new UpdateStop(2, `Target is not a regular file: ${relPath}.`);
+    mode = st.mode & 0o7777;
+  } catch (error) {
+    if (error instanceof UpdateStop) throw error;
+    if (error.code === 'ENOENT') {
+      if (!createParents) throw new UpdateStop(2, `Target is not a regular file: ${relPath}.`);
+    } else {
+      throw new UpdateStop(2, `Could not inspect ${relPath}: ${sanitizeOneLine(error.message)}.`);
+    }
+  }
+
+  const tmpName = `.pdd-tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
+  const tmpFull = join(dirname(targetFull), tmpName);
+  let fd;
+  try {
+    fd = openSync(tmpFull, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | O_NOFOLLOW, mode);
     const data = Buffer.from(text, 'utf8');
     let written = 0;
     while (written < data.length) {
       written += writeSync(fd, data, written, data.length - written);
     }
-  } finally {
     closeSync(fd);
+    fd = undefined;
+    renameSync(tmpFull, targetFull);
+  } catch (error) {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+    try { unlinkSync(tmpFull); } catch {}
+    if (error instanceof UpdateStop) throw error;
+    if (error.code === 'ELOOP') throw new UpdateStop(2, `Symlinks are not allowed: ${relPath}.`);
+    throw new UpdateStop(2, `Could not write ${relPath}: ${sanitizeOneLine(error.message)}.`);
   }
+}
+
+function parseSyncRecordBytes(bytes, expectedModule, sidecarRel) {
+  if (!bytes || bytes.includes(0)) throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+  let doc;
+  try { doc = JSON.parse(new TextDecoder('utf-8').decode(bytes)); }
+  catch { throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`); }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+    throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+  }
+  const allowed = new Set(['schema_version', 'module', 'prompt', 'module_sha256', 'prompt_sha256', 'prompts']);
+  for (const key of Object.keys(doc)) {
+    if (!allowed.has(key)) throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+  }
+  if (doc.schema_version !== SYNC_SCHEMA_VERSION || doc.module !== expectedModule) {
+    throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+  }
+  if (typeof doc.prompt !== 'string' || !canonicalPath(doc.prompt) || !doc.prompt.endsWith('.prompt.md') || isBlockedSecretPath(doc.prompt)) {
+    throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+  }
+  if (!HEX64.test(doc.module_sha256 ?? '') || !HEX64.test(doc.prompt_sha256 ?? '')) {
+    throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+  }
+  let prompts = null;
+  if (doc.prompts !== undefined) {
+    if (!doc.prompts || typeof doc.prompts !== 'object' || Array.isArray(doc.prompts)) {
+      throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+    }
+    prompts = {};
+    for (const [k, v] of Object.entries(doc.prompts)) {
+      if (!canonicalPath(k) || !k.endsWith('.prompt.md') || isBlockedSecretPath(k) || !HEX64.test(v ?? '')) {
+        throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+      }
+      prompts[k] = v;
+    }
+  }
+  return {
+    schema_version: SYNC_SCHEMA_VERSION,
+    module: doc.module,
+    prompt: doc.prompt,
+    module_sha256: doc.module_sha256,
+    prompt_sha256: doc.prompt_sha256,
+    ...(prompts ? { prompts } : {}),
+  };
+}
+
+function recordOwners(record) {
+  if (!record) return [];
+  if (record.prompts) return unique([record.prompt, ...Object.keys(record.prompts)]).sort(cmpPath);
+  return [record.prompt];
+}
+
+function recordPromptHash(record, owner) {
+  if (!record) return null;
+  if (record.prompts && Object.hasOwn(record.prompts, owner)) return record.prompts[owner];
+  if (record.prompt === owner) return record.prompt_sha256;
+  return null;
+}
+
+function readSyncRecord(root, modulePath, readBytes) {
+  const sidecarRel = syncRecordPathForModule(modulePath);
+  const res = readBytes(sidecarRel, MAX_SIDECAR_BYTES);
+  if (res.status === 'missing') return null;
+  if (res.status === 'symlink') throw new UpdateStop(2, `Symlinks are not allowed: ${sidecarRel}.`);
+  if (res.status !== 'ok') throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+  return parseSyncRecordBytes(res.bytes, modulePath, sidecarRel);
+}
+
+function scanSyncRecords(root, readBytes) {
+  const records = new Map();
+  let cur = root;
+  for (const seg of ['.pdd', 'sync']) {
+    cur = join(cur, seg);
+    let st;
+    try { st = lstatSync(cur); }
+    catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return records;
+      throw new UpdateStop(2, `Could not inspect ${SYNC_DIR_REL}: ${sanitizeOneLine(error.message)}.`);
+    }
+    if (st.isSymbolicLink()) throw new UpdateStop(2, `Symlinks are not allowed: ${seg === '.pdd' ? '.pdd' : SYNC_DIR_REL}.`);
+    if (!st.isDirectory()) throw new UpdateStop(2, `Path is not a directory: ${seg === '.pdd' ? '.pdd' : SYNC_DIR_REL}.`);
+  }
+
+  const walk = (absDir, relPrefix) => {
+    let entries;
+    try { entries = readdirSync(absDir); }
+    catch (error) { throw new UpdateStop(2, `Could not read ${SYNC_DIR_REL}: ${sanitizeOneLine(error.message)}.`); }
+    for (const name of entries.sort(cmpPath)) {
+      if (name.startsWith('.pdd-tmp-')) continue;
+      const absChild = join(absDir, name);
+      const relInside = relPrefix ? `${relPrefix}/${name}` : name;
+      const sidecarRel = `${SYNC_DIR_REL}/${relInside}`;
+      let st;
+      try { st = lstatSync(absChild); }
+      catch (error) { throw new UpdateStop(2, `Could not inspect ${sidecarRel}: ${sanitizeOneLine(error.message)}.`); }
+      if (st.isSymbolicLink()) throw new UpdateStop(2, `Symlinks are not allowed: ${sidecarRel}.`);
+      if (st.isDirectory()) {
+        walk(absChild, relInside);
+      } else if (st.isFile() && name.endsWith('.json')) {
+        const mod = relInside.slice(0, -'.json'.length);
+        if (!canonicalPath(mod) || isBlockedSecretPath(mod) || mod.startsWith('.pdd/')) {
+          throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+        }
+        const res = readBytes(sidecarRel, MAX_SIDECAR_BYTES);
+        if (res.status !== 'ok') throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+        records.set(mod, parseSyncRecordBytes(res.bytes, mod, sidecarRel));
+      }
+    }
+  };
+  walk(cur, '');
+  return records;
+}
+
+function serializeSyncRecord({ modulePath, owners, promptHashes, moduleSha }) {
+  const primary = owners[0];
+  const doc = {
+    schema_version: SYNC_SCHEMA_VERSION,
+    module: modulePath,
+    prompt: primary,
+    module_sha256: moduleSha,
+    prompt_sha256: promptHashes.get(primary),
+  };
+  if (owners.length > 1) {
+    const prompts = {};
+    for (const owner of [...owners].sort(cmpPath)) prompts[owner] = promptHashes.get(owner);
+    doc.prompts = prompts;
+  }
+  return `${JSON.stringify(doc, null, 2)}\n`;
+}
+
+function pruneSyncRecord(root, modulePath) {
+  const sidecarRel = syncRecordPathForModule(modulePath);
+  const check = inspectRegularPath(root, sidecarRel);
+  if (check.kind === 'missing') return { pruned: false, path: sidecarRel };
+  if (check.kind === 'symlink') throw new UpdateStop(2, `Symlinks are not allowed: ${sidecarRel}.`);
+  if (check.kind !== 'file') throw new UpdateStop(2, `Invalid sync record: ${sidecarRel}.`);
+  try { unlinkSync(check.full); }
+  catch (error) {
+    if (error.code === 'ENOENT') return { pruned: false, path: sidecarRel };
+    throw new UpdateStop(2, `Could not remove ${sidecarRel}: ${sanitizeOneLine(error.message)}.`);
+  }
+  const syncRoot = join(root, '.pdd', 'sync');
+  let dir = dirname(check.full);
+  while (dir.startsWith(syncRoot)) {
+    try {
+      const st = lstatSync(dir);
+      if (st.isSymbolicLink() || !st.isDirectory()) break;
+      if (readdirSync(dir).length > 0) break;
+      rmdirSync(dir);
+    } catch {
+      break;
+    }
+    if (dir === syncRoot) break;
+    dir = dirname(dir);
+  }
+  return { pruned: true, path: sidecarRel };
+}
+
+function validateBindingsFile(root, readBytes) {
+  const res = readBytes('pdd-bindings.json', MAX_BINDINGS_BYTES);
+  if (res.status === 'missing') return null;
+  if (res.status === 'symlink') throw new UpdateStop(2, 'Symlinks are not allowed: pdd-bindings.json.');
+  if (res.status !== 'ok' || res.bytes.includes(0)) {
+    throw new UpdateStop(2, 'pdd-bindings.json is malformed or unreadable; fix it before running pdd update.');
+  }
+  let doc;
+  try { doc = JSON.parse(new TextDecoder('utf-8').decode(res.bytes)); }
+  catch { throw new UpdateStop(2, 'pdd-bindings.json is malformed or unreadable; fix it before running pdd update.'); }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc) || doc.schema_version !== 'pdd.bindings.v1' || !Array.isArray(doc.modules)) {
+    throw new UpdateStop(2, 'pdd-bindings.json is malformed or unreadable; fix it before running pdd update.');
+  }
+  return doc;
 }
 
 function defaultGitRoot(cwd) {
@@ -194,9 +445,16 @@ function parsePorcelainZ(buffer) {
   return entries;
 }
 
+const SAFE_GIT_DIFF_PREFIX = [
+  '--literal-pathspecs',
+  '-c', 'core.quotepath=false',
+  '-c', 'diff.noprefix=false',
+  '-c', 'diff.mnemonicPrefix=false',
+];
+
 function defaultGitRangeEntries(root, range) {
   try {
-    const out = execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--name-status', '-z', '-M', '--no-ext-diff', range, '--'], {
+    const out = execFileSync('git', [...SAFE_GIT_DIFF_PREFIX, 'diff', '--name-status', '-z', '-M', '--no-ext-diff', range, '--'], {
       cwd: root,
       maxBuffer: 32 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -221,7 +479,7 @@ function defaultGitWorkingEntries(root) {
   };
   if (hasGitHead(root)) {
     try {
-      const diffOut = execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--name-status', '-z', '-M', '--no-ext-diff', 'HEAD', '--'], {
+      const diffOut = execFileSync('git', [...SAFE_GIT_DIFF_PREFIX, 'diff', '--name-status', '-z', '-M', '--no-ext-diff', 'HEAD', '--'], {
         cwd: root,
         maxBuffer: 32 * 1024 * 1024,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -229,18 +487,48 @@ function defaultGitWorkingEntries(root) {
       for (const entry of parseNameStatusZ(diffOut)) addEntry(entry);
     } catch { /* fall through to status */ }
   }
-  const statusOut = execFileSync('git', ['-c', 'core.quotepath=false', 'status', '--porcelain=v1', '-z', '-uall'], {
-    cwd: root,
-    maxBuffer: 32 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  let statusOut;
+  try {
+    statusOut = execFileSync('git', ['--literal-pathspecs', '-c', 'core.quotepath=false', 'status', '--porcelain=v1', '-z', '-uall'], {
+      cwd: root,
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    throw new UpdateStop(2, `Git status failed: ${sanitizeOneLine(error.message)}.`);
+  }
   for (const entry of parsePorcelainZ(statusOut)) addEntry(entry);
   return [...byPath.values()].sort((a, b) => cmpPath(a.path, b.path));
 }
 
+function defaultGitUntrackedSet(root, paths) {
+  const set = new Set();
+  if (!paths.length) return set;
+  try {
+    const out = execFileSync('git', ['--literal-pathspecs', '-c', 'core.quotepath=false', 'status', '--porcelain=v1', '-z', '-uall', '--', ...paths], {
+      cwd: root,
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const entry of parsePorcelainZ(out)) {
+      if (entry.untracked) set.add(entry.path);
+    }
+  } catch { /* treat as tracked if status probe fails */ }
+  return set;
+}
+
 function defaultGitUnifiedDiff(root, range, paths) {
   if (!paths.length) return '';
-  const args = ['-c', 'core.quotepath=false', 'diff', '--no-color', '--no-ext-diff', '-U0'];
+  const args = [
+    ...SAFE_GIT_DIFF_PREFIX,
+    'diff',
+    '--src-prefix=a/',
+    '--dst-prefix=b/',
+    '--no-color',
+    '--no-ext-diff',
+    '-M',
+    '-U0',
+  ];
   if (range) args.push(range);
   else if (hasGitHead(root)) args.push('HEAD');
   else return '';
@@ -257,18 +545,27 @@ function defaultGitUnifiedDiff(root, range, paths) {
   }
 }
 
-function splitDiffByFile(fullDiff) {
+function splitDiffByFile(fullDiff, knownPaths = new Set()) {
   const byPath = new Map();
   if (!fullDiff) return byPath;
   const chunks = fullDiff.split(/^diff --git /m);
   for (const chunk of chunks) {
     if (!chunk) continue;
-    const headerLine = chunk.slice(0, chunk.indexOf('\n'));
-    const bMatch = / b\/(.+)$/.exec(headerLine);
-    const plusMatch = /^\+\+\+ (?:b\/(.+)|\/dev\/null)$/m.exec(chunk);
-    const renameToMatch = /^rename to (.+)$/m.exec(chunk);
-    const minusMatch = /^--- (?:a\/(.+)|\/dev\/null)$/m.exec(chunk);
-    const targetPath = (plusMatch && plusMatch[1]) || (renameToMatch && renameToMatch[1]) || (minusMatch && minusMatch[1]) || (bMatch && bMatch[1]);
+    const nl = chunk.indexOf('\n');
+    const headerLine = (nl >= 0 ? chunk.slice(0, nl) : chunk).replace(/\r$/, '');
+    const plusMatch = /^\+\+\+ (?:b\/([^\r\n\t]+)|\/dev\/null)\t?\r?$/m.exec(chunk);
+    const renameToMatch = /^rename to ([^\r\n]+)\r?$/m.exec(chunk);
+    const minusMatch = /^--- (?:a\/([^\r\n\t]+)|\/dev\/null)\t?\r?$/m.exec(chunk);
+    let targetPath = (plusMatch && plusMatch[1]) || (renameToMatch && renameToMatch[1]) || (minusMatch && minusMatch[1]) || null;
+    if (!targetPath) {
+      for (const candidate of knownPaths) {
+        if (headerLine.endsWith(` b/${candidate}`)) { targetPath = candidate; break; }
+      }
+      if (!targetPath) {
+        const idx = headerLine.lastIndexOf(' b/');
+        if (idx >= 0) targetPath = headerLine.slice(idx + 3);
+      }
+    }
     if (targetPath) byPath.set(targetPath, `diff --git ${chunk}`);
   }
   return byPath;
@@ -334,48 +631,53 @@ function aggregatePromptStatus(statuses) {
   return 'current';
 }
 
-function buildInstructions(promptPath, status, modulePaths, diffStats, driftedDeleted) {
-  const modList = modulePaths.join(', ');
+function buildInstructions(promptPath, status, activePaths, deletedPaths, diffStats, driftedDeleted, range) {
+  const activeList = activePaths.join(', ');
+  const deletedList = deletedPaths.join(', ');
+  const allList = [...activePaths, ...deletedPaths].join(', ');
   const statsStr = `+${diffStats.added}/-${diffStats.removed}`;
-  const activeArgs = modulePaths.join(' ');
+  const writeCmd = activePaths.length > 0 && !driftedDeleted
+    ? `pdd update --write ${activePaths.map(shellArg).join(' ')}`
+    : range
+      ? `pdd update --from ${shellArg(range)} --write`
+      : 'pdd update --write';
+
   switch (status) {
     case 'current':
       return ['In sync; no action needed.'];
     case 'unpinned':
       return [
-        `Review diff in ${modList} (${statsStr}) and update ${promptPath} if behavior or domain rules changed.`,
-        `Run \`pdd update --write ${activeArgs}\` to record per-module derived hashes.`,
+        `Review diff in ${activeList || allList} (${statsStr}) and update ${promptPath} if behavior or domain rules changed.`,
+        `Run \`${writeCmd}\` to record per-module derived hashes.`,
       ];
     case 'code-drifted':
       return [
-        `Code changed since last pin in ${modList} (${statsStr}); update ${promptPath} to match the reviewed diff.`,
-        `Run \`pdd update --write ${activeArgs}\` after syncing ${promptPath}.`,
+        `Code changed since last pin in ${activeList || allList} (${statsStr}); update ${promptPath} to match the reviewed diff.`,
+        `Run \`${writeCmd}\` after syncing ${promptPath}.`,
       ];
     case 'prompt-stale':
       return [
-        `${promptPath} changed; verify ${modList} implements the updated contract.`,
-        `Run \`pdd update --write ${activeArgs}\` to refresh derived hashes.`,
+        `${promptPath} changed; verify ${activeList || allList} implements the updated contract.`,
+        `Run \`${writeCmd}\` to refresh derived hashes.`,
       ];
     case 'both-drifted':
       return [
-        `Both ${promptPath} and ${modList} (${statsStr}) changed; reconcile contract prose and code.`,
-        `Run \`pdd update --write ${activeArgs}\` once reconciled.`,
+        `Both ${promptPath} and ${activeList || allList} (${statsStr}) changed; reconcile contract prose and code.`,
+        `Run \`${writeCmd}\` once reconciled.`,
       ];
     case 'deleted':
       return driftedDeleted
-        ? [`Owned file(s) deleted (${modList}); update ${promptPath} and run \`pdd update --write\` to prune stale pins.`]
-        : [`Owned file(s) deleted (${modList}); no stale pins remain in ${promptPath}.`];
+        ? [`Owned file(s) deleted (${deletedList || allList}); update ${promptPath} and run \`${writeCmd}\` to prune stale sync records.`]
+        : [`Owned file(s) deleted (${deletedList || allList}); no stale sync records remain.`];
     default:
       return [];
   }
 }
 
-function evaluateState({ ownedPairs, promptTextMap, codeTextMap, diffByPath, updated }) {
+function evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, diffByPath, updated, range }) {
   const promptHashCache = new Map();
-  const promptPinsCache = new Map();
   for (const [promptPath, promptText] of promptTextMap.entries()) {
     promptHashCache.set(promptPath, promptHeaderHash(promptText));
-    promptPinsCache.set(promptPath, parseModuleSyncPins(promptText));
   }
 
   const modules = [];
@@ -386,34 +688,35 @@ function evaluateState({ ownedPairs, promptTextMap, codeTextMap, diffByPath, upd
     const { entry, ownerRow, owner } = pair;
     const promptText = promptTextMap.get(owner);
     const prompt_sha256 = promptHashCache.get(owner);
-    const pins = promptPinsCache.get(owner);
-    const pin = pins.get(entry.path) ?? null;
+    const record = syncRecordMap.get(entry.path) ?? null;
+    const recPromptSha = recordPromptHash(record, owner);
+    const hasPinForOwner = record !== null && recPromptSha !== null;
     const diffSummary = diffByPath.get(entry.path) ?? { added: 0, removed: 0, changed_symbols: [] };
 
-    let status, module_sha256 = null, recorded_prompt_sha256 = null, recorded_module_sha256 = pin?.sha256 ?? null, header_state = null;
+    let status, module_sha256 = null, recorded_prompt_sha256 = null, recorded_module_sha256 = hasPinForOwner ? record.module_sha256 : null, header_state = null;
     let isDrifted = false;
 
     if (entry.deleted) {
       status = 'deleted';
-      recorded_prompt_sha256 = pin?.promptSha256 ?? null;
-      isDrifted = pin !== null;
+      recorded_prompt_sha256 = recPromptSha;
+      isDrifted = hasPinForOwner;
     } else {
       const codeText = codeTextMap.get(entry.path);
       module_sha256 = moduleContentHash(codeText);
       const headerRow = headerEntries(codeText).find(h => h.prompt === owner) ?? null;
       const hashState = headerRow ? headerHashState(headerRow.sha256, promptText) : null;
       header_state = hashState ? hashState.state : null;
-      recorded_prompt_sha256 = headerRow?.sha256 ?? pin?.promptSha256 ?? null;
+      recorded_prompt_sha256 = headerRow?.sha256 ?? recPromptSha ?? null;
 
       const headerStale = Boolean(headerRow?.sha256 && hashState?.state === 'stale');
-      const pinPromptStale = Boolean(pin?.promptSha256 && pin.promptSha256 !== prompt_sha256);
+      const pinPromptStale = Boolean(hasPinForOwner && recPromptSha !== prompt_sha256);
       const promptDrifted = headerStale || pinPromptStale;
-      const codeDrifted = pin !== null && pin.sha256 !== module_sha256;
+      const codeDrifted = hasPinForOwner && record.module_sha256 !== module_sha256;
 
       if (promptDrifted && codeDrifted) status = 'both-drifted';
       else if (promptDrifted) status = 'prompt-stale';
       else if (codeDrifted) status = 'code-drifted';
-      else if (pin !== null) status = 'current';
+      else if (hasPinForOwner) status = 'current';
       else status = 'unpinned';
 
       isDrifted = status !== 'current';
@@ -431,6 +734,7 @@ function evaluateState({ ownedPairs, promptTextMap, codeTextMap, diffByPath, upd
       module_sha256,
       recorded_module_sha256,
       header_state,
+      sync_record: syncRecordPathForModule(entry.path),
       diff_stats: { added: diffSummary.added, removed: diffSummary.removed },
       changed_symbols: diffSummary.changed_symbols,
       deleted: entry.deleted,
@@ -462,6 +766,8 @@ function evaluateState({ ownedPairs, promptTextMap, codeTextMap, diffByPath, upd
       }
       const changed_symbols = [...symMap.entries()].sort(([a], [b]) => cmpPath(a, b)).map(([symbol, kind]) => ({ kind, symbol }));
       const modulePaths = items.map(item => item.row.path);
+      const activePaths = items.filter(item => !item.row.deleted).map(item => item.row.path);
+      const deletedPaths = items.filter(item => item.row.deleted).map(item => item.row.path);
       const driftedDeleted = items.some(item => item.row.deleted && item.isDrifted);
       return {
         prompt,
@@ -471,13 +777,19 @@ function evaluateState({ ownedPairs, promptTextMap, codeTextMap, diffByPath, upd
         modules: modulePaths,
         diff_stats: { added, removed },
         changed_symbols,
-        instructions: buildInstructions(prompt, status, modulePaths, { added, removed }, driftedDeleted),
+        instructions: buildInstructions(prompt, status, activePaths, deletedPaths, { added, removed }, driftedDeleted, range),
       };
     });
 
   modules.sort((a, b) => cmpPath(a.path, b.path) || cmpPath(a.owner, b.owner));
   drifted.sort((a, b) => cmpPath(a.path, b.path) || cmpPath(a.owner, b.owner));
   return { prompts, modules, drifted, updated };
+}
+
+function isEligiblePromptScanCodePath(path) {
+  if (!canonicalPath(path) || path.endsWith('.prompt.md') || isBlockedSecretPath(path) || isSyncSidecarPath(path)) return false;
+  if (isTestOwnedPath(path) || NON_CANDIDATE_DIR.test(path) || DOTFILE_SEG.test(path) || NON_CANDIDATE_EXT.test(path)) return false;
+  return true;
 }
 
 export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = false, write = false } = {}, ports = {}) {
@@ -492,7 +804,11 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
     const mode = write ? 'write' : check ? 'check' : 'plan';
     const scopeKind = files.length > 0 ? 'files' : normalizedRange ? 'from' : 'working-tree';
     const readBytes = ports.readBytes ?? ((path, limit) => readRegularBytes(root, path, limit));
-    const listFiles = ports.files ?? (() => gitFiles(root));
+    const probeBytes = ports.probeBytes ?? ((path, limit) => probeRegularBytes(root, path, limit));
+    const listFiles = () => (ports.files ? ports.files() : gitFiles(root)).filter(p => !isBlockedSecretPath(p));
+
+    // Fail closed if pdd-bindings.json exists and is malformed, unreadable, or a symlink.
+    const bindingsDoc = validateBindingsFile(root, readBytes);
 
     const codeBytesMap = new Map();
     const unownedMap = new Map();
@@ -502,6 +818,7 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       let realCwd;
       try { realCwd = ports.realCwd ? ports.realCwd(cwd) : realpathSync(cwd); }
       catch { realCwd = root; }
+      const resolvedPaths = [];
       for (const typed of files) {
         if (typeof typed !== 'string' || !typed.trim()) throw new UpdateStop(2, 'Invalid empty file path.');
         if (typed.startsWith('-')) throw new UpdateStop(2, `Invalid file path (leading '-' is not allowed): ${sanitizeOneLine(typed)}.`);
@@ -517,20 +834,30 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
         if (read.status === 'too-large') throw new UpdateStop(2, `File exceeds 10 MiB limit: ${rel}.`);
         if (read.bytes.includes(0)) throw new UpdateStop(2, `Binary file is not supported: ${rel}.`);
         codeBytesMap.set(rel, read.bytes);
-        touchedMap.set(rel, { path: rel, status: 'M', renamedFrom: null, deleted: false, untracked: false });
+        resolvedPaths.push(rel);
+      }
+      const untrackedSet = ports.gitUntrackedSet ? ports.gitUntrackedSet(root, resolvedPaths) : defaultGitUntrackedSet(root, resolvedPaths);
+      for (const rel of resolvedPaths) {
+        const isUntracked = untrackedSet.has(rel);
+        touchedMap.set(rel, { path: rel, status: isUntracked ? 'A' : 'M', renamedFrom: null, deleted: false, untracked: isUntracked });
       }
     } else {
       const rawEntries = scopeKind === 'from'
         ? (ports.gitRangeEntries ? ports.gitRangeEntries(root, normalizedRange) : defaultGitRangeEntries(root, normalizedRange))
         : (ports.gitWorkingEntries ? ports.gitWorkingEntries(root) : defaultGitWorkingEntries(root));
       for (const raw of rawEntries) {
+        if (isSyncSidecarPath(raw.path)) continue;
         if (!canonicalPath(raw.path)) throw new UpdateStop(2, `Invalid touched path: ${sanitizeOneLine(raw.path)}.`);
         if (isBlockedSecretPath(raw.path)) throw new UpdateStop(2, `Secret-looking path is not allowed: ${raw.path}.`);
+        if (raw.renamedFrom) {
+          if (!canonicalPath(raw.renamedFrom)) throw new UpdateStop(2, `Invalid renamed path: ${sanitizeOneLine(raw.renamedFrom)}.`);
+          if (isBlockedSecretPath(raw.renamedFrom)) throw new UpdateStop(2, `Secret-looking path is not allowed: ${raw.renamedFrom}.`);
+        }
         if (raw.deleted) {
           touchedMap.set(raw.path, { ...raw, deleted: true });
           continue;
         }
-        const probe = readBytes(raw.path, BINARY_PROBE_BYTES);
+        const probe = probeBytes(raw.path, BINARY_PROBE_BYTES);
         if (probe.status === 'missing') {
           touchedMap.set(raw.path, { ...raw, deleted: true });
           continue;
@@ -574,31 +901,77 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       }
     }
 
-    const ownerPorts = {
-      ...(ports.files ? { files: ports.files } : {}),
-      ...(ports.read ? { read: ports.read } : {}),
+    // Secret-safe owner ports: never list or open secret files during owner discovery.
+    const safeVisible = listFiles();
+    const safeReadForOwner = (path, limit) => {
+      if (!canonicalPath(path) || isBlockedSecretPath(path)) return null;
+      if (ports.read) return ports.read(path, limit);
+      const res = probeRegularBytes(root, path, limit);
+      if (res.status === 'missing') return null;
+      if (res.status !== 'ok') throw new Error(res.status);
+      return res.bytes;
     };
+    const ownerPorts = { files: () => safeVisible, read: safeReadForOwner };
 
     const nonPromptMap = new Map(touchedNonPrompts.map(entry => [entry.path, entry]));
     const activeTouchedPromptSet = new Set(touchedPrompts.filter(e => !e.deleted).map(e => e.path));
+    const promptTextMap = new Map();
+    const syncRecordMap = new Map();
 
-    // When a prompt itself is touched, pull its owned code modules into scope so prompt-only edits surface prompt-stale drift.
-    if (activeTouchedPromptSet.size > 0) {
-      const visible = listFiles();
-      const extraCandidates = new Set(visible.filter(p => !p.endsWith('.prompt.md')));
-      for (const promptPath of activeTouchedPromptSet) {
+    // Load touched prompt texts once (reused for claims and final evaluation).
+    for (const promptPath of [...activeTouchedPromptSet].sort(cmpPath)) {
+      let bytes = codeBytesMap.get(promptPath);
+      if (!bytes) {
         const read = readBytes(promptPath, MAX_FILE_BYTES);
-        if (read.status === 'ok' && !read.bytes.includes(0)) {
-          for (const pinPath of parseModuleSyncPins(read.bytes).keys()) extraCandidates.add(pinPath);
+        if (read.status === 'symlink') throw new UpdateStop(2, `Symlinks are not allowed: ${promptPath}.`);
+        if (read.status === 'too-large') throw new UpdateStop(1, `Owning prompt exceeds 10 MiB limit: ${promptPath}.`);
+        if (read.status !== 'ok') throw new UpdateStop(1, `Owning prompt is missing or unreadable: ${promptPath}.`);
+        if (read.bytes.includes(0)) throw new UpdateStop(2, `Binary file is not supported: ${promptPath}.`);
+        bytes = read.bytes;
+      }
+      promptTextMap.set(promptPath, new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes));
+    }
+
+    // When a prompt itself is touched, gather its owned modules from bindings, prose claims, .pdd/sync sidecars, and eligible non-secret code files.
+    if (activeTouchedPromptSet.size > 0) {
+      const allSyncRecords = scanSyncRecords(root, readBytes);
+      const candidateSet = new Set();
+
+      if (bindingsDoc) {
+        for (const item of bindingsDoc.modules) {
+          if (item && typeof item === 'object' && typeof item.module === 'string' && typeof item.prompt === 'string') {
+            if (activeTouchedPromptSet.has(item.prompt) && canonicalPath(item.module) && !isBlockedSecretPath(item.module)) {
+              candidateSet.add(item.module);
+            }
+          }
         }
       }
-      const candidateList = [...extraCandidates].sort(cmpPath);
+      for (const [promptPath, text] of promptTextMap.entries()) {
+        for (const claimed of promptClaims(promptPath, text)) {
+          if (canonicalPath(claimed) && !isBlockedSecretPath(claimed) && !claimed.endsWith('.prompt.md')) {
+            candidateSet.add(claimed);
+          }
+        }
+      }
+      for (const [modPath, record] of allSyncRecords.entries()) {
+        if (recordOwners(record).some(owner => activeTouchedPromptSet.has(owner))) {
+          syncRecordMap.set(modPath, record);
+          candidateSet.add(modPath);
+        }
+      }
+      for (const p of safeVisible) {
+        if (isEligiblePromptScanCodePath(p)) candidateSet.add(p);
+      }
+
+      const candidateList = [...candidateSet].sort(cmpPath);
       if (candidateList.length) {
         const allOwned = findOwners({ root, paths: candidateList }, ownerPorts);
         for (const row of allOwned.files) {
-          if (row.owners.some(owner => activeTouchedPromptSet.has(owner)) && !nonPromptMap.has(row.path)) {
-            if (isBlockedSecretPath(row.path)) continue;
-            const probe = readBytes(row.path, BINARY_PROBE_BYTES);
+          const rec = syncRecordMap.get(row.path) ?? null;
+          const ownedByTouched = row.owners.some(owner => activeTouchedPromptSet.has(owner))
+            || (rec !== null && recordOwners(rec).some(owner => activeTouchedPromptSet.has(owner)));
+          if (ownedByTouched && !nonPromptMap.has(row.path)) {
+            const probe = probeBytes(row.path, BINARY_PROBE_BYTES);
             if (probe.status === 'symlink') throw new UpdateStop(2, `Symlinks are not allowed: ${row.path}.`);
             if (probe.status === 'non-file') continue;
             nonPromptMap.set(row.path, {
@@ -613,35 +986,51 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       }
     }
 
+    // For every renamed entry, also check if renamedFrom has a lingering .pdd/sync sidecar so renames to unowned/other-prompt/pinned targets never escape --check.
+    const renamedFromEntries = [];
+    for (const entry of nonPromptMap.values()) {
+      if (entry.renamedFrom && !nonPromptMap.has(entry.renamedFrom) && !entry.renamedFrom.endsWith('.prompt.md') && !isSyncSidecarPath(entry.renamedFrom)) {
+        const oldRec = syncRecordMap.get(entry.renamedFrom) ?? readSyncRecord(root, entry.renamedFrom, readBytes);
+        if (oldRec) {
+          syncRecordMap.set(entry.renamedFrom, oldRec);
+          renamedFromEntries.push({
+            path: entry.renamedFrom,
+            status: 'D',
+            renamedFrom: null,
+            deleted: true,
+            untracked: false,
+            renamedTo: entry.path,
+          });
+        }
+      }
+    }
+    for (const oldEntry of renamedFromEntries) nonPromptMap.set(oldEntry.path, oldEntry);
+
     const candidateEntries = [...nonPromptMap.values()].sort((a, b) => cmpPath(a.path, b.path));
     const ownerLookup = candidateEntries.length
       ? findOwners({ root, paths: candidateEntries.map(e => e.path) }, ownerPorts)
       : { files: [] };
     const ownerRowByPath = new Map(ownerLookup.files.map(row => [row.path, row]));
 
-    // For deleted files with no current header/binding/prose owner, also check existing prompt pins so stale pins get detected/pruned.
-    const deletedUnowned = candidateEntries.filter(entry => entry.deleted && !(ownerRowByPath.get(entry.path)?.owners?.length));
-    if (deletedUnowned.length) {
-      const visiblePrompts = listFiles().filter(p => p.endsWith('.prompt.md') && !isTestPromptPath(p));
-      const pinOwners = new Map();
-      for (const promptPath of visiblePrompts) {
-        const read = readBytes(promptPath, MAX_FILE_BYTES);
-        if (read.status !== 'ok' || read.bytes.includes(0)) continue;
-        const pins = parseModuleSyncPins(read.bytes);
-        for (const entry of deletedUnowned) {
-          if (pins.has(entry.path)) {
-            if (!pinOwners.has(entry.path)) pinOwners.set(entry.path, []);
-            pinOwners.get(entry.path).push(promptPath);
-          }
-        }
+    // Load per-module sidecars for every candidate entry; for deleted files without live header/binding/prose owners, resolve owners from their sidecar.
+    for (const entry of candidateEntries) {
+      if (entry.path.startsWith('.pdd/')) continue;
+      if (!syncRecordMap.has(entry.path)) {
+        const rec = readSyncRecord(root, entry.path, readBytes);
+        if (rec) syncRecordMap.set(entry.path, rec);
       }
-      for (const [delPath, owners] of pinOwners.entries()) {
-        const sortedOwners = unique(owners).sort(cmpPath);
-        ownerRowByPath.set(delPath, {
-          path: delPath,
-          owner: sortedOwners[0],
-          owners: sortedOwners,
-          source: 'pin',
+      const existingOwner = ownerRowByPath.get(entry.path);
+      if (existingOwner?.note?.includes('pdd-bindings.json could not be read')) {
+        throw new UpdateStop(2, 'pdd-bindings.json is malformed or unreadable; fix it before running pdd update.');
+      }
+      const rec = syncRecordMap.get(entry.path) ?? null;
+      if (entry.deleted && rec && !(existingOwner?.owners?.length)) {
+        const owners = recordOwners(rec);
+        ownerRowByPath.set(entry.path, {
+          path: entry.path,
+          owner: owners[0] ?? null,
+          owners,
+          source: 'sync-record',
           certain: true,
           note: '',
           headers: [],
@@ -656,8 +1045,10 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
     for (const entry of candidateEntries) {
       const ownerRow = ownerRowByPath.get(entry.path) ?? { path: entry.path, owner: null, owners: [], source: null, certain: true, note: '', headers: [] };
       if (!ownerRow.owners.length) {
-        if (!entry.deleted && !codeBytesMap.has(entry.path)) {
-          const probe = readBytes(entry.path, BINARY_PROBE_BYTES);
+        if (!entry.deleted) {
+          const probe = codeBytesMap.has(entry.path)
+            ? { status: 'ok', bytes: codeBytesMap.get(entry.path) }
+            : probeBytes(entry.path, BINARY_PROBE_BYTES);
           if (probe.status === 'ok' && probe.bytes.includes(0)) {
             unownedMap.set(entry.path, { path: entry.path, reason: 'binary file (skipped)' });
             continue;
@@ -665,6 +1056,11 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
         }
         unownedMap.set(entry.path, { path: entry.path, reason: 'no owning prompt' });
         continue;
+      }
+      for (const owner of ownerRow.owners) {
+        if (isBlockedSecretPath(owner)) {
+          throw new UpdateStop(2, `Secret-looking path is not allowed: ${owner}.`);
+        }
       }
       const misplaced = ownerRow.owners.find(isTestPromptPath);
       if (misplaced) {
@@ -689,9 +1085,10 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       }
     }
 
-    const promptTextMap = new Map();
     for (const promptPath of [...neededPrompts].sort(cmpPath)) {
+      if (promptTextMap.has(promptPath)) continue;
       if (!canonicalPath(promptPath)) throw new UpdateStop(1, `Owning prompt path is invalid: ${sanitizeOneLine(promptPath)}.`);
+      if (isBlockedSecretPath(promptPath)) throw new UpdateStop(2, `Secret-looking path is not allowed: ${promptPath}.`);
       const read = readBytes(promptPath, MAX_FILE_BYTES);
       if (read.status === 'symlink') throw new UpdateStop(2, `Symlinks are not allowed: ${promptPath}.`);
       if (read.status === 'too-large') throw new UpdateStop(1, `Owning prompt exceeds 10 MiB limit: ${promptPath}.`);
@@ -700,11 +1097,12 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       promptTextMap.set(promptPath, new TextDecoder('utf-8', { ignoreBOM: true }).decode(read.bytes));
     }
 
-    const ownedPaths = unique(ownedPairs.map(pair => pair.entry.path)).sort(cmpPath);
-    const fullDiff = ownedPaths.length
-      ? (ports.gitUnifiedDiff ? ports.gitUnifiedDiff(root, normalizedRange, ownedPaths) : defaultGitUnifiedDiff(root, normalizedRange, ownedPaths))
+    const diffPathspecs = unique(ownedPairs.flatMap(pair => [pair.entry.path, ...(pair.entry.renamedFrom ? [pair.entry.renamedFrom] : [])])).sort(cmpPath);
+    const ownedPathSet = new Set(ownedPairs.map(pair => pair.entry.path));
+    const fullDiff = diffPathspecs.length
+      ? (ports.gitUnifiedDiff ? ports.gitUnifiedDiff(root, normalizedRange, diffPathspecs) : defaultGitUnifiedDiff(root, normalizedRange, diffPathspecs))
       : '';
-    const diffChunks = splitDiffByFile(fullDiff);
+    const diffChunks = splitDiffByFile(fullDiff, ownedPathSet);
     const diffByPath = new Map();
     for (const pair of ownedPairs) {
       if (diffByPath.has(pair.entry.path)) continue;
@@ -720,67 +1118,70 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
 
     const updated = [];
     if (write) {
-      const writeUtf8 = ports.writeUtf8 ?? ((path, text) => writeRegularUtf8(root, path, text));
+      const writeUtf8 = ports.writeUtf8 ?? ((path, text, opts) => writeRegularAtomicUtf8(root, path, text, opts));
+      const pruneSidecar = ports.pruneSidecar ?? (modPath => pruneSyncRecord(root, modPath));
 
-      // 1. Refresh per-module pins inside each affected owning prompt (strictly preserving prose and untouched module pins).
-      const pairsByPrompt = new Map();
+      const promptHashMap = new Map();
+      for (const [promptPath, text] of promptTextMap.entries()) promptHashMap.set(promptPath, promptHeaderHash(text));
+
+      const activeOwnersByCode = new Map();
+      const deletedModules = new Set();
       for (const pair of ownedPairs) {
-        if (!pairsByPrompt.has(pair.owner)) pairsByPrompt.set(pair.owner, []);
-        pairsByPrompt.get(pair.owner).push(pair);
-      }
-      for (const promptPath of [...pairsByPrompt.keys()].sort(cmpPath)) {
-        const promptText = promptTextMap.get(promptPath);
-        const promptSha = promptHeaderHash(promptText);
-        const pinUpdates = [];
-        const touchedForPrompt = [];
-        for (const pair of pairsByPrompt.get(promptPath)) {
-          touchedForPrompt.push(pair.entry.path);
-          if (pair.entry.deleted) {
-            pinUpdates.push({ path: pair.entry.path, delete: true });
-          } else {
-            if (pair.entry.renamedFrom && pair.entry.renamedFrom !== pair.entry.path) {
-              pinUpdates.push({ path: pair.entry.renamedFrom, delete: true });
-            }
-            const codeSha = moduleContentHash(codeTextMap.get(pair.entry.path));
-            pinUpdates.push({ path: pair.entry.path, sha256: codeSha, promptSha256: promptSha });
-          }
+        if (pair.entry.deleted) {
+          deletedModules.add(pair.entry.path);
+          continue;
         }
-        const { content: nextPrompt, changed } = updateModuleSyncPins(promptText, pinUpdates);
-        if (changed) {
-          writeUtf8(promptPath, nextPrompt);
-          promptTextMap.set(promptPath, nextPrompt);
-          updated.push({ path: promptPath, kind: 'prompt-pin', modules: unique(touchedForPrompt).sort(cmpPath) });
+        if (pair.entry.renamedFrom && pair.entry.renamedFrom !== pair.entry.path) {
+          deletedModules.add(pair.entry.renamedFrom);
+        }
+        if (!activeOwnersByCode.has(pair.entry.path)) activeOwnersByCode.set(pair.entry.path, []);
+        activeOwnersByCode.get(pair.entry.path).push(pair.owner);
+      }
+
+      // 1. Prune stale sidecars for deleted or renamed-away modules (never touching .prompt.md).
+      for (const oldPath of [...deletedModules].sort(cmpPath)) {
+        if (activeOwnersByCode.has(oldPath)) continue;
+        const pruned = pruneSidecar(oldPath);
+        if (pruned.pruned) {
+          syncRecordMap.delete(oldPath);
+          updated.push({ path: pruned.path, kind: 'sync-prune', module: oldPath });
         }
       }
 
-      // 2. Refresh existing provenance headers in each active touched owned code file (never injecting new headers).
-      const ownersByCode = new Map();
-      for (const pair of ownedPairs) {
-        if (pair.entry.deleted) continue;
-        if (!ownersByCode.has(pair.entry.path)) ownersByCode.set(pair.entry.path, []);
-        ownersByCode.get(pair.entry.path).push(pair.owner);
-      }
-      for (const codePath of [...ownersByCode.keys()].sort(cmpPath)) {
-        const original = codeTextMap.get(codePath);
-        let current = original;
+      // 2. Write disjoint per-module sidecars in .pdd/sync/<module>.json and refresh existing code headers atomically.
+      for (const codePath of [...activeOwnersByCode.keys()].sort(cmpPath)) {
+        const owners = unique(activeOwnersByCode.get(codePath));
+        const originalCode = codeTextMap.get(codePath);
+        let currentCode = originalCode;
         const headerUpdates = [];
-        for (const owner of unique(ownersByCode.get(codePath))) {
-          const expected = promptHeaderHash(promptTextMap.get(owner));
-          const { content: nextCode, changed } = updateHeaderHash(current, owner, expected);
+        for (const owner of owners) {
+          const expected = promptHashMap.get(owner);
+          const { content: nextCode, changed } = updateHeaderHash(currentCode, owner, expected);
           if (changed) {
-            current = nextCode;
+            currentCode = nextCode;
             headerUpdates.push({ path: codePath, kind: 'code-header', prompt: owner, prompt_sha256: expected });
           }
         }
-        if (current !== original) {
-          writeUtf8(codePath, current);
-          codeTextMap.set(codePath, current);
+        const moduleSha = moduleContentHash(currentCode);
+        const sidecarRel = syncRecordPathForModule(codePath);
+        const nextSidecarText = serializeSyncRecord({ modulePath: codePath, owners, promptHashes: promptHashMap, moduleSha });
+        const prevSidecar = readBytes(sidecarRel, MAX_SIDECAR_BYTES);
+        const prevSidecarText = prevSidecar.status === 'ok' ? new TextDecoder('utf-8').decode(prevSidecar.bytes) : null;
+
+        if (nextSidecarText !== prevSidecarText) {
+          writeUtf8(sidecarRel, nextSidecarText, { createParents: true, defaultMode: 0o644 });
+          syncRecordMap.set(codePath, parseSyncRecordBytes(Buffer.from(nextSidecarText, 'utf8'), codePath, sidecarRel));
+          updated.push({ path: sidecarRel, kind: 'sync-record', module: codePath, prompt: owners[0] });
+        }
+        if (currentCode !== originalCode) {
+          writeUtf8(codePath, currentCode, { createParents: false });
+          codeTextMap.set(codePath, currentCode);
           updated.push(...headerUpdates);
         }
       }
     }
 
-    const evaluated = evaluateState({ ownedPairs, promptTextMap, codeTextMap, diffByPath, updated });
+    const evaluated = evaluateState({ ownedPairs, promptTextMap, codeTextMap, syncRecordMap, diffByPath, updated, range: normalizedRange });
     const unowned = [...unownedMap.values()].sort((a, b) => cmpPath(a.path, b.path));
     const ok = mode === 'check' ? evaluated.drifted.length === 0 : true;
     const exitCode = mode === 'check' && evaluated.drifted.length > 0 ? 1 : 0;
@@ -801,7 +1202,7 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
     if (error instanceof UpdateStop) {
       return { ok: false, exitCode: error.exitCode, error: error.message, report: null, root: null };
     }
-    throw error;
+    return { ok: false, exitCode: 2, error: `pdd update failed: ${sanitizeOneLine(error?.message ?? error)}.`, report: null, root: null };
   }
 }
 

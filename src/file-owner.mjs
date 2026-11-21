@@ -1,4 +1,4 @@
-// Generated from prompts/cli/file-owner.prompt.md (sha256: faa6ce554ae841ba0e3aa3c8e9e1e15bb03445a4917cd7b2525d7631fb84a884).
+// Generated from prompts/cli/file-owner.prompt.md (sha256: 7aca3a796bfdfac2b7448e744d801a7b3f62b8d3c064a285004767948d40bfae).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
@@ -8,10 +8,7 @@ import { runtimePreflightSlice } from './runtime-seam.mjs';
 const { gitFiles, interfaceBlocks } = runtimePreflightSlice();
 
 const HEAD = 4096, PROMPT = 65536, LINE = 1100, WHOLE = 10 * 1024 * 1024;
-const HEADER_PARTS = /^(\s*(?:(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')?\s*Generated from|(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*Prompt:) )(\S+\.prompt\.md)(?:( \(sha256: )([a-f0-9]{64})(\))|( sha256=)([a-f0-9]{64}))?(\.?\s*(?:\*\/|-->|"""|''')?\s*)$/;
-const MODULE_SYNC_PIN = /^[ \t]*<!-- pdd:module-sync path=([^\r\n]+?) sha256=([a-f0-9]{64})(?: prompt_sha256=([a-f0-9]{64}))? -->[ \t]*$/;
-const FENCE_OPEN = /^[ \t]*(`{3,}|~{3,})(.*)$/;
-const FENCE_CLOSE = /^[ \t]*(`{3,}|~{3,})[ \t]*$/;
+const HEADER_PARTS = /^(\s*(?:Generated from |(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*(?:Generated from |Prompt: )))(\S+\.prompt\.md)(?:( \(sha256: )([a-f0-9]{64})(\))|( sha256=)([a-f0-9]{64}))?(\.?\s*(?:(?:\*\/|-->|"""|''')\s*)?)$/;
 const HEX64 = /^[a-f0-9]{64}$/;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const unique = values => [...new Set(values)];
@@ -34,73 +31,6 @@ function splitLinesWithEol(text) {
   }
   if (start < text.length) out.push({ line: text.slice(start), eol: '' });
   return out;
-}
-
-function nextFenceState(fence, line) {
-  if (!fence) {
-    const open = FENCE_OPEN.exec(line);
-    if (open && !(open[1][0] === '`' && open[2].includes('`'))) return { char: open[1][0], len: open[1].length };
-    return null;
-  }
-  const close = FENCE_CLOSE.exec(line);
-  if (close && close[1][0] === fence.char && close[1].length >= fence.len) return null;
-  return fence;
-}
-
-function parsePinLine(line) {
-  const match = MODULE_SYNC_PIN.exec(line);
-  if (!match) return null;
-  const path = match[1];
-  if (!canonicalPath(path) || path.includes('-->') || path !== path.trim()) return null;
-  return { path, sha256: match[2], promptSha256: match[3] ?? null };
-}
-
-function stripModuleSyncPins(text) {
-  if (!text || !text.includes('<!-- pdd:module-sync ')) return text;
-  let fence = null, out = '';
-  for (const { line, eol } of splitLinesWithEol(text)) {
-    const wasInFence = Boolean(fence);
-    fence = nextFenceState(fence, line);
-    if (!wasInFence && !fence && parsePinLine(line)) continue;
-    out += line + eol;
-  }
-  return out;
-}
-
-export function parseModuleSyncPins(content) {
-  const pins = new Map();
-  if (!content) return pins;
-  const text = typeof content === 'string' ? content : new TextDecoder('utf-8', { ignoreBOM: true }).decode(content);
-  if (!text.includes('<!-- pdd:module-sync ')) return pins;
-  let fence = null;
-  for (const { line } of splitLinesWithEol(text)) {
-    const wasInFence = Boolean(fence);
-    fence = nextFenceState(fence, line);
-    if (wasInFence || fence) continue;
-    const pin = parsePinLine(line);
-    if (pin) pins.set(pin.path, pin);
-  }
-  return pins;
-}
-
-export function updateModuleSyncPins(promptText, updates = []) {
-  const pins = parseModuleSyncPins(promptText);
-  for (const item of updates) {
-    if (!item || typeof item !== 'object' || !canonicalPath(item.path) || item.path.includes('-->') || item.path !== item.path.trim()) continue;
-    if (item.delete) { pins.delete(item.path); continue; }
-    if (!HEX64.test(item.sha256 ?? '')) continue;
-    const promptSha256 = item.promptSha256 && HEX64.test(item.promptSha256) ? item.promptSha256 : null;
-    pins.set(item.path, { path: item.path, sha256: item.sha256, promptSha256 });
-  }
-  const base = stripModuleSyncPins(promptText);
-  const eol = /\r\n/.test(promptText) ? '\r\n' : '\n';
-  const sorted = [...pins.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  if (!sorted.length) return { content: base, changed: base !== promptText };
-  const prefix = base.length === 0 || base.endsWith('\n') || base.endsWith('\r') ? base : base + eol;
-  const pinBlock = sorted.map(({ path, sha256: hash, promptSha256 }) =>
-    `<!-- pdd:module-sync path=${path} sha256=${hash}${promptSha256 ? ` prompt_sha256=${promptSha256}` : ''} -->${eol}`).join('');
-  const content = prefix + pinBlock;
-  return { content, changed: content !== promptText };
 }
 
 export function headerEntries(content) {
@@ -167,11 +97,9 @@ export function updateHeaderHash(codeText, promptPath, hash) {
   return { content: out, changed };
 }
 
-// The behavior text: each Runtime interface JSON object loses its approval metadata (status, prose_sha256),
-// and derived per-module sync pins outside fenced code blocks are ignored.
+// The behavior text: each Runtime interface JSON object loses its approval metadata (status, prose_sha256).
 export function promptHeaderHash(content) {
-  const raw = typeof content === 'string' ? content : new TextDecoder('utf-8', { ignoreBOM: true }).decode(content);
-  const text = stripModuleSyncPins(raw);
+  const text = typeof content === 'string' ? content : new TextDecoder('utf-8', { ignoreBOM: true }).decode(content);
   let behavior = '', at = 0;
   for (const match of interfaceBlocks(text)) {
     const [start, end] = match.indices[1];

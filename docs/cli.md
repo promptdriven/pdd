@@ -153,28 +153,32 @@ unique path/stem matches), groups owned modules by owning `.prompt.md` with
 `+added/-removed` diff stats and changed exported/top-level symbols, and lists
 touched unowned files separately without fabricating ownership.
 
-Per-module currency is tracked without a shared repository-wide commit SHA or
-extra keys in `pdd-bindings.json`: each owning `.prompt.md` stores sorted
-one-line `<!-- pdd:module-sync path=PATH sha256=MODULE_SHA prompt_sha256=PROMPT_SHA -->`
-pins for its owned modules, ignored by `pdd owner`'s header hash, while
-`module_sha256` hashes normalized code content without the derived header hash
-suffix. Parallel PRs touching different modules therefore edit disjoint files.
+Per-module currency is tracked without a shared repository-wide commit SHA,
+without mutating `.prompt.md` files (preserving `prose_sha256` and human
+approvals byte-for-byte), and without adding extra keys to `pdd-bindings.json`:
+each owned module stores its derived hashes in a disjoint per-module sidecar
+file at `.pdd/sync/<module>.json` (`pdd.module-sync.v1`), while `module_sha256`
+hashes normalized code content without the derived header hash suffix. Parallel
+PRs touching different modules—even modules owned by the same prompt—edit
+disjoint sidecar files.
 
 - Default (plan): print each affected prompt's status (`current`,
   `prompt-stale`, `code-drifted`, `both-drifted`, `unpinned`, or `deleted`),
   diff stats, changed symbols, and next steps without writing files; exits 0.
 - `--check`: read-only verification that exits 0 when every touched owned
-  module is `current` and exits 1 when any touched owned module has drift.
-- `--write`: after syncing prompt prose to match reviewed code diffs, refresh
-  only the touched modules' `<!-- pdd:module-sync ... -->` pins and any
-  existing `Generated from` / `Prompt:` header hashes without modifying
-  unrelated prompt prose or untouched modules.
+  module is `current` (and no stale sidecars remain for deleted or renamed
+  modules) and exits 1 when any touched owned module has drift.
+- `--write`: after syncing prompt prose to match reviewed code diffs,
+  atomically write or prune only the touched modules' `.pdd/sync/<module>.json`
+  sidecars and refresh any existing `Generated from` / `Prompt:` header hashes
+  without modifying `.prompt.md` files, `pdd-bindings.json`, or untouched
+  modules.
 - `--json`: emit machine-readable `pdd.update-sync.v1` JSON (`scope`,
   `prompts`, `modules`, `unowned`, `drifted`, `updated`, `ok`).
 
 Path traversal (`..`), leading-`-` options/ranges, symlinks, secret-looking
-paths (`.env`, credentials), and binary owned or explicit files exit 2 without
-writing any files.
+paths (`.env`, credentials), malformed `pdd-bindings.json`, and binary owned or
+explicit files exit 2 without writing any files.
 
 ## Autopilot on this machine
 
