@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: a67555cd1e070dbb7fef1ea51ed18c07ab38fed356fee38e7c757938287a093d).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: a5de12be9223b104389a73946155cbf88a73a9cd2fa1429d34009fe139a653e4).
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -298,9 +298,12 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
             const testOwners = hasTestId ? winningRows.filter(saved => saved.test === sRow.test) : [];
             const owners = [...new Set([...storyOwners, ...testOwners])];
             const allOwnersPassed = owners.length > 0 && owners.every(saved => resultOutcome(saved).state === 'passed' && !saved.not_checked?.length);
-            if (line.includes('✓')) {
-              if (!allOwnersPassed) continue;
-            } else if (allOwnersPassed) {
+            const anyOwnerFailed = owners.some(saved => resultOutcome(saved).state === 'failed');
+            if (allOwnersPassed) {
+              if (!line.includes('✓') || line.includes('✗')) continue;
+            } else if (anyOwnerFailed) {
+              if (!line.includes('✗') || line.includes('✓')) continue;
+            } else if (line.includes('✓') || line.includes('✗')) {
               continue;
             }
             seenStories.add(line);
@@ -312,10 +315,17 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
             if (hasTestId) emittedTestIds.add(sRow.test);
           }
         }
+        const failedStories = new Set(
+          winningRows
+            .filter(row => resultOutcome(row).state === 'failed')
+            .map(row => storyName(row.story) ?? (typeof row.test === 'string' && row.test ? storyName(row.test.replace(/\.json$/, '')) : null))
+            .filter(Boolean),
+        );
         for (const row of winningRows) {
           const outcome = resultOutcome(row);
           if (outcome.state === 'passed' && !row.not_checked?.length) continue;
           const rowStory = storyName(row.story) ?? (typeof row.test === 'string' && row.test ? storyName(row.test.replace(/\.json$/, '')) : null);
+          if (outcome.state !== 'failed' && rowStory && failedStories.has(rowStory)) continue;
           if (rowStory && (outcome.state === 'failed' ? emittedFailedStories.has(rowStory) : emittedStoryKeys.has(rowStory))) continue;
           if (typeof row.test === 'string' && row.test && emittedTestIds.has(row.test)) continue;
           const label = text(rowStory ?? row.test ?? 'unknown', 120);
