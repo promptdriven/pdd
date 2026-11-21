@@ -1467,7 +1467,7 @@ test('3574 Part B: lintNativeOnlyPortParity flags undeclared ports while ignorin
   );
 });
 
-test('3574 + 3578: default-on native-only-unknown-port fails closed without pdd.json, honors transitive deps/contracts and pdd.json overrides, and keeps warnings advisory', async t => {
+test('3574 + 3578: native-only-unknown-port warns by default without pdd.json, honors transitive deps/contracts and pdd.json error/off overrides, and keeps warnings advisory', async t => {
   const scratch = mkdtempSync(join(tmpdir(), 'pdd-3574-3578-'));
   t.after(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -1541,47 +1541,49 @@ test('3574 + 3578: default-on native-only-unknown-port fails closed without pdd.
   execFileSync('git', ['add', '.'], { cwd: repo });
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: repo });
 
-  // 1. With NO pdd.json at all, pdd lint --local (plain & --json) fails closed with exit 1 on the 3 dead ports and emits 0 SQL fence warnings.
+  // 1. With NO pdd.json at all, pdd lint --local (plain & --json) emits default-warn findings for the 3 dead ports (exit 0) and 0 SQL fence warnings.
   const brokenOut = sink(), brokenErr = sink();
   const brokenCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: brokenOut, stderr: brokenErr });
-  assert.equal(brokenCode, 1);
-  assert.match(brokenErr.text, /\[native-only-unknown-port\].*"access_state\.read"/);
-  assert.match(brokenErr.text, /\[native-only-unknown-port\].*"access\.commit"/);
-  assert.match(brokenErr.text, /\[native-only-unknown-port\].*"notice\.deliver"/);
-  assert.ok(!brokenErr.text.includes('"store.load"'));
-  assert.ok(!brokenErr.text.includes('"audit.append"'));
-  assert.ok(!brokenErr.text.includes('"telemetry.emit"'));
-  assert.ok(!brokenErr.text.includes('socket.bind'));
+  assert.equal(brokenCode, 0, brokenErr.text);
+  assert.match(brokenOut.text, /Warning:.*\[native-only-unknown-port\].*"access_state\.read"/);
+  assert.match(brokenOut.text, /Warning:.*\[native-only-unknown-port\].*"access\.commit"/);
+  assert.match(brokenOut.text, /Warning:.*\[native-only-unknown-port\].*"notice\.deliver"/);
+  assert.ok(!brokenOut.text.includes('"store.load"'));
+  assert.ok(!brokenOut.text.includes('"audit.append"'));
+  assert.ok(!brokenOut.text.includes('"telemetry.emit"'));
+  assert.ok(!brokenOut.text.includes('socket.bind'));
   assert.ok(!brokenOut.text.includes('prompt-code-fence-length'));
   assert.ok(!brokenOut.text.includes('prompt-code-fence-total'));
 
   const brokenJsonOut = sink(), brokenJsonErr = sink();
   const brokenJsonCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: brokenJsonOut, stderr: brokenJsonErr });
-  assert.equal(brokenJsonCode, 1, brokenJsonErr.text);
+  assert.equal(brokenJsonCode, 0, brokenJsonErr.text);
   const brokenParsed = JSON.parse(brokenJsonOut.text);
-  assert.equal(brokenParsed.ok, false);
-  assert.equal(brokenParsed.exit_code, 1);
-  assert.equal(brokenParsed.problems.length, 3);
+  assert.equal(brokenParsed.exit_code, 0);
+  assert.deepEqual(brokenParsed.problems, []);
+  assert.equal(brokenParsed.warnings.filter(w => w.includes('[native-only-unknown-port]')).length, 3);
   assert.ok(brokenParsed.warnings.some(w => w.includes('[fake-test-prompt-read]')), 'advisory warnings remain visible');
   assert.ok(!brokenParsed.warnings.some(w => w.includes('prompt-code-fence-')));
 
-  // 2. pdd.json without a "lint" key still fails closed by default.
+  // 2. pdd.json without a "lint" key stays default-warn (exit 0).
   writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ autopilot: { mode: 'off' } }, null, 2) + '\n');
   execFileSync('git', ['add', 'pdd.json'], { cwd: repo });
   const noLintKeyCode = await runPdd(['lint', '--local'], { cwd: repo, env, stdout: sink(), stderr: sink() });
-  assert.equal(noLintKeyCode, 1);
+  assert.equal(noLintKeyCode, 0);
 
-  // 3. pdd.json "lint" override ("warn") downgrades native-only-unknown-port to advisory warning (exit 0).
-  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'warn' } } }, null, 2) + '\n');
-  const warnOverrideOut = sink(), warnOverrideErr = sink();
-  const warnOverrideCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: warnOverrideOut, stderr: warnOverrideErr });
-  assert.equal(warnOverrideCode, 0, warnOverrideErr.text);
-  const warnParsed = JSON.parse(warnOverrideOut.text);
-  assert.deepEqual(warnParsed.problems, []);
-  assert.ok(warnParsed.warnings.some(w => w.includes('[native-only-unknown-port]') && w.includes('"access_state.read"')));
+  // 3. pdd.json "lint" override ("error") promotes native-only-unknown-port to blocking Error (exit 1).
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'error' } } }, null, 2) + '\n');
+  const errOverrideOut = sink(), errOverrideErr = sink();
+  const errOverrideCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: errOverrideOut, stderr: errOverrideErr });
+  assert.equal(errOverrideCode, 1, errOverrideErr.text);
+  const errParsed = JSON.parse(errOverrideOut.text);
+  assert.equal(errParsed.ok, false);
+  assert.equal(errParsed.exit_code, 1);
+  assert.equal(errParsed.problems.length, 3);
+  assert.ok(errParsed.problems.some(p => p.includes('[native-only-unknown-port]') && p.includes('"access_state.read"')));
 
-  // 4. pdd.json "lint" disable ("off") suppresses native-only-unknown-port completely (exit 0).
-  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { disable: ['native-only-unknown-port'] } }, null, 2) + '\n');
+  // 4. pdd.json "lint" override ("off" / disable) suppresses native-only-unknown-port completely (exit 0).
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'off' } } }, null, 2) + '\n');
   const offOverrideOut = sink(), offOverrideErr = sink();
   const offOverrideCode = await runPdd(['lint', '--local', '--json'], { cwd: repo, env, stdout: offOverrideOut, stderr: offOverrideErr });
   assert.equal(offOverrideCode, 0, offOverrideErr.text);
@@ -1589,8 +1591,8 @@ test('3574 + 3578: default-on native-only-unknown-port fails closed without pdd.
   assert.deepEqual(offParsed.problems, []);
   assert.ok(!offParsed.warnings.some(w => w.includes('[native-only-unknown-port]')));
 
-  // 5. Removing pdd.json and replacing the 3 dead ports with valid ones makes pdd lint --local exit 0 even with advisory fake-test warnings present.
-  rmSync(join(repo, 'pdd.json'));
+  // 5. Replacing the 3 dead ports with valid ones makes pdd lint --local exit 0 even with "error" override and advisory fake-test warnings present.
+  writeFileSync(join(repo, 'pdd.json'), JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'error' } } }, null, 2) + '\n');
   const fixedService = brokenService
     .replace('- `access_state.read`: dead port 1.', '- `store.save`: valid direct save port.')
     .replace('- `access.commit`: dead port 2.\n', '')
@@ -1841,10 +1843,12 @@ test('3574 adversarial review fixes: linear ReDoS safety, scoped table/prose ext
   );
   assert.equal(seamCode, 0);
   assert.equal(collected.length, 1, 'seam.lint must run lintRepoProject exactly once');
-  assert.equal(collected[0].ok, false);
-  assert.equal(collected[0].errors.length, 1);
-  assert.ok(collected[0].errors[0].includes('prompts/broken-adapter.prompt.md') && collected[0].errors[0].includes('"store.missing"'));
-  assert.ok(!collected[0].errors.some(e => e.includes('only-native-dep.prompt.md')), 'heading-style native-only peer must be recognized as native-only');
+  assert.equal(collected[0].ok, true, 'native-only-unknown-port defaults to advisory warn');
+  assert.deepEqual(collected[0].errors, []);
+  const parityWarnings = collected[0].warnings.filter(w => w.includes('[native-only-unknown-port]'));
+  assert.equal(parityWarnings.length, 1);
+  assert.ok(parityWarnings[0].includes('prompts/broken-adapter.prompt.md') && parityWarnings[0].includes('"store.missing"'));
+  assert.ok(!parityWarnings.some(w => w.includes('only-native-dep.prompt.md')), 'heading-style native-only peer must be recognized as native-only');
 });
 
 test('3574 + 3578 Round 2 regressions: Story-scoped sibling isolation (P1-A), ## Ports subheadings (P1-B), adapter/idiom/separator false-positive guards (P1-C), and O(N) SQL/heading scans (P1-D)', async t => {
@@ -2070,8 +2074,12 @@ test('3574 + 3578 Round 3 regressions: hosted repo-wide pdd lint catches native-
     [],
   );
 
-  // P1: Hosted repo-wide `pdd lint` & `pdd lint --json` (without `--local`) must NOT mask native-only adapter errors behind Story-filtered lintSvgLayouts.
+  // P1: Hosted repo-wide `pdd lint` & `pdd lint --json` (without `--local`) must NOT mask promoted native-only adapter errors behind Story-filtered lintSvgLayouts.
   const h = harbor(t, repo => {
+    writeFileSync(
+      join(repo, 'pdd.json'),
+      JSON.stringify({ lint: { rules: { 'native-only-unknown-port': 'error' } } }, null, 2) + '\n',
+    );
     writeFileSync(
       join(repo, 'prompts/adapter.prompt.md'),
       [
@@ -2177,4 +2185,1325 @@ test('3574 Part 1: lintRepoProject emits advisory native-only-contract-incomplet
   assert.equal(report.ok, true, 'native-only-contract-incomplete defaults to advisory warn');
   assert.equal(report.findings.filter(f => f.code === 'native-only-contract-incomplete').length, 1);
   assert.equal(report.findings.find(f => f.code === 'native-only-contract-incomplete').path, 'prompts/stub.prompt.md');
+});
+
+test('3574 reopen + 3569 Tip 1: native-only gateway routing to sibling <prompt>.<op> operations produces 0 findings, nonexistent external ports warn by default and honor pdd.json error/off', (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), 'pdd-3574-peer-ops-'));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  for (const dir of ['prompts/access', 'prompts/governance', 'prompts/billing', 'prompts/gateway']) {
+    mkdirSync(join(scratch, dir), { recursive: true });
+  }
+
+  // Linked checkable prompt 1: operations declared in ## Operations headings + bullets + Runtime interface.
+  writeFileSync(
+    join(scratch, 'prompts/access/access.prompt.md'),
+    [
+      '# Access policy',
+      '',
+      'Own `src/access/access.mjs`. Reads policy rules via `store.load`.',
+      '',
+      '## Operations',
+      '',
+      '### `invoke_tool(client_id, tool_name, args)`',
+      'Evaluates access policy and executes the requested tool.',
+      '',
+      '- `list_tools(client_id)`: lists permitted tools.',
+      '',
+      '## Dependencies',
+      'None.',
+    ].join('\n') + '\n',
+  );
+
+  // Linked checkable prompt 2: operations declared in ## Interface table + inline export prose.
+  writeFileSync(
+    join(scratch, 'prompts/governance/governance.prompt.md'),
+    [
+      '# Governance',
+      '',
+      'Own `src/governance/governance.mjs`, exporting `register_client` and `revoke_client` for callers.',
+      '',
+      '## Interface',
+      '',
+      '| Operation | Description |',
+      '| --- | --- |',
+      '| `list_clients` | Returns registered clients |',
+      '',
+      '## Dependencies',
+      'None.',
+    ].join('\n') + '\n',
+  );
+
+  // Linked checkable prompt 3: generic filename stem (`service.prompt.md`) under domain directory (`billing`),
+  // with ## Commands bullet so both `billing.charge_invoice` and `service.charge_invoice` are recognized.
+  writeFileSync(
+    join(scratch, 'prompts/billing/service.prompt.md'),
+    [
+      '# Billing service',
+      '',
+      'Own `src/billing/service.mjs`. Persists receipts via `ledger.append`.',
+      '',
+      '## Commands',
+      '',
+      '- `charge_invoice(invoice_id)` — charges an open invoice.',
+      '',
+      '## Dependencies',
+      'None.',
+    ].join('\n') + '\n',
+  );
+
+  // Clean native-only gateway/server prompt routing to exported <prompt>.<op> operations + wiring valid external ports.
+  const cleanGateway = [
+    '---',
+    'kind: native-only',
+    'reason: Runs stdio/HTTP gateway transport and real SQLite connections.',
+    '---',
+    '',
+    '# Gateway server',
+    '',
+    'Own `src/gateway/server.mjs`.',
+    '',
+    '## Transport and Tool Routing',
+    '',
+    'The gateway adapter binds routes and tools on stdio and HTTP, delegating to `access.invoke_tool`, `access.list_tools`, `governance.register_client`, `governance.revoke_client`, `governance.list_clients`, `billing.charge_invoice`, and `service.charge_invoice`.',
+    '',
+    '| Service | Operation | Notes |',
+    '| --- | --- | --- |',
+    '| `access` | `invoke_tool` | Policy-checked tool call |',
+    '| `gateway` | `health_check` | Local liveness endpoint |',
+    '',
+    '| Tool | Handler |',
+    '| --- | --- |',
+    '| `clients.create` | `governance.register_client` |',
+    '',
+    '- `access.invoke_tool`: invoke a tool.',
+    '- `governance.register_client`: register a client.',
+    '- `gateway.health_check`: local health route.',
+    '',
+    '## Port wiring',
+    '',
+    '- `store.load`: reads policy rows from SQLite.',
+    '- `ledger.append`: appends receipt rows.',
+    '',
+    '## Error mapping',
+    'Maps SQLITE_BUSY to HTTP 503 and invalid JSON-RPC payloads to exit code 2.',
+    '',
+    '## Real-host verification',
+    'Runs real-host SQLite and local HTTP gateway smoke checks.',
+    '',
+    '## Dependencies',
+    '',
+    '- [access](../access/access.prompt.md)',
+    '- [governance](../governance/governance.prompt.md)',
+    '- [billing](../billing/service.prompt.md)',
+  ].join('\n') + '\n';
+
+  writeFileSync(join(scratch, 'prompts/gateway/server.prompt.md'), cleanGateway);
+  execFileSync('git', ['init', '-q'], { cwd: scratch });
+  execFileSync('git', ['add', '.'], { cwd: scratch });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'init'], { cwd: scratch });
+
+  const cleanReport = lintRepoProject({ root: scratch });
+  assert.equal(cleanReport.ok, true, cleanReport.errors.join('\n'));
+  assert.deepEqual(
+    cleanReport.findings.filter(f => f.code === 'native-only-unknown-port'),
+    [],
+    'routing to exported <prompt>.<op> operations of linked checkable prompts must emit 0 native-only-unknown-port findings',
+  );
+
+  // Wiring a genuinely nonexistent external port produces a default-warn finding (not a hard error),
+  // promotes to error under pdd.json lint.rules["native-only-unknown-port"] = "error",
+  // and is suppressed under "off".
+  const brokenGateway = cleanGateway.replace(
+    '- `ledger.append`: appends receipt rows.',
+    '- `ledger.append`: appends receipt rows.\n- `ghost_store.purge`: nonexistent external port.',
+  );
+  writeFileSync(join(scratch, 'prompts/gateway/server.prompt.md'), brokenGateway);
+
+  const defaultReport = lintRepoProject({ root: scratch });
+  assert.equal(defaultReport.ok, true, 'nonexistent external port defaults to advisory warn (never breaks builds by default)');
+  assert.deepEqual(defaultReport.errors, []);
+  const defaultParity = defaultReport.findings.filter(f => f.code === 'native-only-unknown-port');
+  assert.equal(defaultParity.length, 1);
+  assert.equal(defaultParity[0].severity, 'warn');
+  assert.ok(defaultParity[0].formatted.startsWith('Warning:'));
+  assert.ok(defaultParity[0].message.includes('"ghost_store.purge"'));
+
+  const errorReport = lintRepoProject({ root: scratch, config: { rules: { 'native-only-unknown-port': 'error' } } });
+  assert.equal(errorReport.ok, false);
+  assert.equal(errorReport.errors.length, 1);
+  assert.ok(errorReport.errors[0].startsWith('Error:') && errorReport.errors[0].includes('"ghost_store.purge"'));
+
+  const offReport = lintRepoProject({ root: scratch, config: { rules: { 'native-only-unknown-port': 'off' } } });
+  assert.equal(offReport.ok, true);
+  assert.deepEqual(offReport.findings.filter(f => f.code === 'native-only-unknown-port'), []);
+
+  // Linked checkable prompt using ## Runtime interface operations (no ## Operations heading) also satisfies peer-op routing.
+  const runtimeIfaceDep = [
+    '# Policy engine',
+    '',
+    'Own `src/policy/engine.mjs`.',
+    '',
+    '## Runtime interface',
+    '```json',
+    JSON.stringify({ name: 'policy', operations: [{ name: 'evaluate_request' }] }),
+    '```',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: HTTP gateway.\n---\n\n# Gateway\n\n## Port wiring\n- `policy.evaluate_request`\n- `engine.evaluate_request`\n',
+      [{ path: 'prompts/policy/engine.prompt.md', text: runtimeIfaceDep }],
+    ),
+    [],
+  );
+
+  // Linear O(N) performance on large export-cue lines.
+  const hugeDep = `# Huge\n\nExports ${Array.from({ length: 4000 }, (_, i) => `\`op_${i}\``).join(', ')}.\n`;
+  const t0 = performance.now();
+  const perfRes = lintNativeOnlyPortParity(
+    '---\nkind: native-only\nreason: Perf.\n---\n\n# Perf\n\n## Port wiring\n- `huge.op_3999`\n',
+    [{ path: 'prompts/huge.prompt.md', text: hugeDep }],
+  );
+  const perfMs = performance.now() - t0;
+  assert.deepEqual(perfRes, []);
+  assert.ok(perfMs < 300, `expected linear O(N) peer-op extraction, got ${perfMs.toFixed(1)}ms`);
+});
+
+test('3619 R1 regressions: P1-1 negative whitelisting guards, nested #### Ports under ## Operations, P1-2 entries[].operation, and P2-1 Runtime interface name alias with prose ops', () => {
+  const nativeCallingCommit = [
+    '---',
+    'kind: native-only',
+    'reason: Live storage adapter.',
+    '---',
+    '',
+    '# Adapter',
+    '',
+    '## Port wiring',
+    '- `access.commit`: nonexistent port that must never be silently whitelisted.',
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+  ].join('\n');
+
+  // P1-1 (negation & non-export verbs): "When the caller provides `commit`..." and "Never exposes `commit`" still flag access.commit.
+  const proseCueDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`. When the caller provides `commit`, validate its hex length. Never exposes `commit` directly.',
+    'Does not export `commit` to external callers.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const proseRes = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: proseCueDep }]);
+  assert.equal(proseRes.length, 1, proseRes.join('\n'));
+  assert.ok(proseRes[0].includes('"access.commit"'));
+
+  // P1-1 (non-ops decision table): ## Decision rules with | Role | Action | Effect | still flags access.commit.
+  const decisionTableDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Decision rules',
+    '',
+    '| Role | Action | Effect |',
+    '| --- | --- | --- |',
+    '| `admin` | `commit` | allow |',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const decisionRes = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: decisionTableDep }]);
+  assert.equal(decisionRes.length, 1, decisionRes.join('\n'));
+  assert.ok(decisionRes[0].includes('"access.commit"'));
+
+  // P1-1 (excluded columns even inside ## Operations): HTTP Method / SQL Operation / Route Handler / Error Action are skipped.
+  const excludedColsDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '| HTTP Method | SQL Operation | Route Handler | Error Action |',
+    '| --- | --- | --- | --- |',
+    '| `commit` | `commit` | `commit` | `commit` |',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const excludedColsRes = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: excludedColsDep }]);
+  assert.equal(excludedColsRes.length, 1, excludedColsRes.join('\n'));
+  assert.ok(excludedColsRes[0].includes('"access.commit"'));
+
+  // P1-1 (nested subsection & op-body bullets): ## Operations -> ### evaluate -> #### Input -> - `commit`: optional SHA
+  // and plain bullet - `commit` directly under ### evaluate still flag access.commit,
+  // while nested #### Ports preserves ## Operations so sibling ### delete_tool AND store.load are BOTH recognized!
+  const nestedOpsDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '### evaluate',
+    '- `commit`: optional SHA passed in request body.',
+    '',
+    '#### Input',
+    '- `commit`: optional SHA.',
+    '',
+    '#### Ports',
+    '- `store`',
+    '  - `load(id)`',
+    '',
+    '### delete_tool',
+    'Deletes a tool registration.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const nestedFail = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: nestedOpsDep }]);
+  assert.equal(nestedFail.length, 1, nestedFail.join('\n'));
+  assert.ok(nestedFail[0].includes('"access.commit"'));
+
+  const nestedValid = lintNativeOnlyPortParity(
+    [
+      '---',
+      'kind: native-only',
+      'reason: Live storage adapter.',
+      '---',
+      '',
+      '# Adapter',
+      '',
+      '## Port wiring',
+      '- `store.load`: reads policy.',
+      '- `access.evaluate`: evaluates policy.',
+      '- `access.delete_tool`: deletes tool (still recognized after nested #### Ports).',
+      '',
+      '## Dependencies',
+      '- [access](access.prompt.md)',
+    ].join('\n'),
+    [{ path: 'prompts/access/access.prompt.md', text: nestedOpsDep }],
+  );
+  assert.deepEqual(nestedValid, []);
+
+  // P1-1 (trailing words on heading): ### `commit` field outside ## Operations still flags access.commit.
+  const headingTailDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Domain decisions',
+    '',
+    '### `commit` field',
+    'Describes the optional commit SHA field.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const headingTailRes = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: headingTailDep }]);
+  assert.equal(headingTailRes.length, 1, headingTailRes.join('\n'));
+  assert.ok(headingTailRes[0].includes('"access.commit"'));
+
+  // P1-2: Canonical PDD Runtime interface entries[].operation is recognized.
+  const entriesOpDep = [
+    '# Worker',
+    '',
+    'Own `src/worker.mjs`.',
+    '',
+    '<details><summary>Runtime interface</summary>',
+    '```json',
+    JSON.stringify({
+      entries: [{ operation: 'dispatch_job' }, { operation: 'cancel_job' }],
+    }),
+    '```',
+    '</details>',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: Queue runner.\n---\n\n# Runner\n\n## Port wiring\n- `worker.dispatch_job`\n- `worker.cancel_job`\n',
+      [{ path: 'prompts/worker.prompt.md', text: entriesOpDep }],
+    ),
+    [],
+  );
+
+  // P2-1: Embedded Runtime interface "name": "authz" pairs with prose-declared operations under ## Operations too.
+  const namedAliasDep = [
+    '# Authorization policy',
+    '',
+    'Own `src/policy/engine.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '### `evaluate_request(req)`',
+    'Evaluates an authorization decision.',
+    '',
+    '## Runtime interface',
+    '```json',
+    JSON.stringify({ name: 'authz', resources: [{ name: 'store', operations: [{ name: 'load' }] }] }),
+    '```',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: HTTP gateway.\n---\n\n# Gateway\n\n## Port wiring\n- `authz.evaluate_request`\n- `store.load`\n',
+      [{ path: 'prompts/policy/engine.prompt.md', text: namedAliasDep }],
+    ),
+    [],
+  );
+});
+
+test('3619 R2 regressions: P1-1 bare headings & top-level detail sections, P1-2 op-heading precedence over detail/port keywords, P1-3 indented child bullets, P2-1 cue tightening, P2-2 per-token table call parens', () => {
+  const nativeCallingCommit = [
+    '---',
+    'kind: native-only',
+    'reason: Live storage adapter.',
+    '---',
+    '',
+    '# Adapter',
+    '',
+    '## Port wiring',
+    '- `access.commit`: nonexistent port that must stay flagged.',
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+  ].join('\n');
+
+  // P1-1: Bare non-call backticked headings outside ## Operations (### `commit`, ### `commit`: optional SHA field)
+  // AND headings/cues inside top-level detail sections (## Input, ## Output, ## Schema) must NOT whitelist access.commit.
+  const bareHeadingAndDetailDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Domain decisions',
+    '',
+    '### `commit`',
+    'Stores the optional commit hash.',
+    '',
+    '### `commit`: optional SHA field',
+    'Must be 40 hex chars when present.',
+    '',
+    '## Input',
+    '',
+    '### `commit(sha)`',
+    'Exports `commit` in the request payload.',
+    '',
+    '## Output',
+    '',
+    'Expose the `commit` field in responses.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const p11Fail = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: bareHeadingAndDetailDep }]);
+  assert.equal(p11Fail.length, 1, p11Fail.join('\n'));
+  assert.ok(p11Fail[0].includes('"access.commit"'));
+
+  // P1-1 positive: Outside ## Operations (and outside detail sections), call-syntax headings and explicit keyword-prefixed headings still work.
+  const explicitOutsideOpsDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Domain decisions',
+    '',
+    '### `invoke_tool(client_id, name)`',
+    'Runs a tool.',
+    '',
+    '### Operation: `revoke_session`',
+    'Revokes an active session.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: Gateway.\n---\n\n# Gateway\n\n## Port wiring\n- `access.invoke_tool`\n- `access.revoke_session`\n',
+      [{ path: 'prompts/access/access.prompt.md', text: explicitOutsideOpsDep }],
+    ),
+    [],
+  );
+
+  // P1-2: Under ## Operations, op headings with detail/port words in their descriptions or call-syntax names
+  // MUST be extracted before detail/port heading classifiers.
+  const p12OpsDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '### `list_tools`: returns all permitted tools',
+    'Lists tools available to the caller.',
+    '',
+    '### `validate_req` — validates input parameters and errors',
+    'Checks request shape.',
+    '',
+    '### `get-schema(id)`',
+    'Returns the schema for id.',
+    '',
+    '### `open-port(id)`',
+    'Opens a logical channel.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      [
+        '---',
+        'kind: native-only',
+        'reason: Gateway.',
+        '---',
+        '',
+        '# Gateway',
+        '',
+        '## Port wiring',
+        '- `access.list_tools`',
+        '- `access.validate_req`',
+        '- `access.get-schema`',
+        '- `access.open-port`',
+        '',
+        '## Dependencies',
+        '- [access](access.prompt.md)',
+      ].join('\n'),
+      [{ path: 'prompts/access/access.prompt.md', text: p12OpsDep }],
+    ),
+    [],
+  );
+
+  // P1-3: Indented parameter/field child bullets under operation bullets (both `-` and numbered `1.`) must NOT whitelist access.commit.
+  const indentedBulletsDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '- `evaluate`',
+    '  - `commit`: optional SHA',
+    '',
+    '1. `check_policy(req)`',
+    '   - `commit`: optional SHA',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const p13Fail = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: indentedBulletsDep }]);
+  assert.equal(p13Fail.length, 1, p13Fail.join('\n'));
+  assert.ok(p13Fail[0].includes('"access.commit"'));
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: Gateway.\n---\n\n# Gateway\n\n## Port wiring\n- `access.evaluate`\n- `access.check_policy`\n',
+      [{ path: 'prompts/access/access.prompt.md', text: indentedBulletsDep }],
+    ),
+    [],
+  );
+
+  // P2-1: Prose export/expose cues disabled in #### Output and reject bare articles, non-op suffix nouns, and data-export phrases.
+  const p21Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    'Export `commit` to CSV when requested.',
+    'Expose the `commit` in audit summaries.',
+    'Exposes `commit` field on each record.',
+    '',
+    '## Operations',
+    '',
+    '### `evaluate`',
+    'Runs evaluation.',
+    '',
+    '#### Output',
+    'Exposes `commit` in JSON.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const p21Fail = lintNativeOnlyPortParity(nativeCallingCommit, [{ path: 'prompts/access/access.prompt.md', text: p21Dep }]);
+  assert.equal(p21Fail.length, 1, p21Fail.join('\n'));
+  assert.ok(p21Fail[0].includes('"access.commit"'));
+
+  // P2-1 positive: Article WITH an API noun (`exporting the module functions`) still extracts valid ops.
+  const p21ValidDep = '# Access\n\nOwn `src/access.mjs`, exporting the module functions `register_client` and `revoke_client` for callers.\n\n## Dependencies\nNone.\n';
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: Gateway.\n---\n\n# Gateway\n\n## Port wiring\n- `access.register_client`\n- `access.revoke_client`\n',
+      [{ path: 'prompts/access/access.prompt.md', text: p21ValidDep }],
+    ),
+    [],
+  );
+
+  // P2-2: Per-token call-paren check in opsTableCol — `| \`start()\`, \`input\` |` allows worker.start but MUST NOT whitelist worker.input.
+  const p22Dep = [
+    '# Worker',
+    '',
+    'Own `src/worker.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '| Operation | Description |',
+    '| --- | --- |',
+    '| `start()`, `input` | Starts worker |',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      '---\nkind: native-only\nreason: Runner.\n---\n\n# Runner\n\n## Port wiring\n- `worker.start`\n',
+      [{ path: 'prompts/worker.prompt.md', text: p22Dep }],
+    ),
+    [],
+  );
+  const p22Fail = lintNativeOnlyPortParity(
+    '---\nkind: native-only\nreason: Runner.\n---\n\n# Runner\n\n## Port wiring\n- `worker.input`\n',
+    [{ path: 'prompts/worker.prompt.md', text: p22Dep }],
+  );
+  assert.equal(p22Fail.length, 1, p22Fail.join('\n'));
+  assert.ok(p22Fail[0].includes('"worker.input"'));
+});
+
+test('3619 R3 regressions: P1-1 prefix separators, P1-2 op headings before DEP_PORTS_HEADING_RE, P1-3 detail headings excluded from opsSectionDepth, P1-4 loose/continuation ops bullet indent, P2-5 conjoined list suffix drop', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    'reason: Gateway adapter.',
+    '---',
+    '',
+    '# Adapter',
+    '',
+    '## Port wiring',
+    ...ports.map(p => `- \`${p}\``),
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+  ].join('\n');
+
+  // P1-1: HEADING_OP_PREFIX_RE requires explicit separator boundaries; unbackticked non-delimited headings like
+  // `## Tooling`, `## Operational`, `## Tool-commit`, `## Tool policy`, `## Command dispatch` never export ops,
+  // while `### Operation: revoke_session` and ``### Tool `revoke_session` `` DO export ops.
+  const p11NegDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Tooling',
+    'Internal tooling notes.',
+    '',
+    '## Operational',
+    'Runbook notes.',
+    '',
+    '## Tool-commit',
+    'Commit checks.',
+    '',
+    '## Tool policy',
+    'Policy overview.',
+    '',
+    '## Command dispatch',
+    'Dispatch overview.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const p11NegRes = lintNativeOnlyPortParity(
+    nativeChecking(['access.ing', 'access.al', 'access.commit', 'access.policy', 'access.dispatch']),
+    [{ path: 'prompts/access/access.prompt.md', text: p11NegDep }],
+  );
+  assert.equal(p11NegRes.length, 5, p11NegRes.join('\n'));
+
+  const p11PosDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Domain decisions',
+    '',
+    '### Operation: revoke_session',
+    'Revokes a session.',
+    '',
+    '### Tool `inspect_quota`',
+    'Inspects quota.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.revoke_session', 'access.inspect_quota']),
+      [{ path: 'prompts/access/access.prompt.md', text: p11PosDep }],
+    ),
+    [],
+  );
+
+  // P1-2: Operation headings evaluated BEFORE DEP_PORTS_HEADING_RE — `### `create_record`: creates a resource`,
+  // `### `open-port``, and outside-ops `### Operation: `open-port`` extract cleanly while bare `### Ports` still opens a port section.
+  const p12Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '### Operation: `bind_port`',
+    'Binds a logical channel.',
+    '',
+    '## Operations',
+    '',
+    '### `create_record`: creates a resource',
+    'Creates a record.',
+    '',
+    '### `open-port`',
+    'Opens a port.',
+    '',
+    '### Ports',
+    '- `store`',
+    '  - `load(id)`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.bind_port', 'access.create_record', 'access.open-port', 'store.load']),
+      [{ path: 'prompts/access/access.prompt.md', text: p12Dep }],
+    ),
+    [],
+  );
+
+  // P1-3: Detail-word headings (`## Command parameters`, `## Operation fields`, `## Tool schema`,
+  // `## Interface types`, `## Operation examples`, `## Tool notes`) enter excludedDetailDepth instead of opsSectionDepth.
+  const p13Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Command parameters',
+    '- `commit`: SHA.',
+    '',
+    '## Operation fields',
+    '- `branch`: branch name.',
+    '',
+    '## Tool schema',
+    '- `author`: author name.',
+    '',
+    '## Interface types',
+    '- `token`: auth token.',
+    '',
+    '## Operation examples',
+    '- `demo_payload`: example payload.',
+    '',
+    '## Tool notes',
+    'Exports `note_item` in examples.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const p13Res = lintNativeOnlyPortParity(
+    nativeChecking(['access.commit', 'access.branch', 'access.author', 'access.token', 'access.demo_payload', 'access.note_item']),
+    [{ path: 'prompts/access/access.prompt.md', text: p13Dep }],
+  );
+  assert.equal(p13Res.length, 6, p13Res.join('\n'));
+
+  // P1-4: Loose lists and indented continuation prose inside ## Operations do NOT reset opsBulletBaseIndent.
+  const p14Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '- `evaluate`',
+    '',
+    '  - `commit`: loose indented child bullet.',
+    '',
+    '- `verify`',
+    '  Accepts fields:',
+    '  - `branch`: indented child bullet after indented continuation prose.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.evaluate', 'access.verify']),
+      [{ path: 'prompts/access/access.prompt.md', text: p14Dep }],
+    ),
+    [],
+  );
+  const p14Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.commit', 'access.branch']),
+    [{ path: 'prompts/access/access.prompt.md', text: p14Dep }],
+  );
+  assert.equal(p14Fail.length, 2, p14Fail.join('\n'));
+
+  // P2-5: Trailing non-op suffix applies across ALL items in a conjoined prose list,
+  // while a separate non-conjoined call export (`Exports \`run_job()\` and the \`tag\` field.`) still extracts `run_job`.
+  const p25Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    'Exposes `commit`, `author`, and `branch` fields in audit entries.',
+    'Exports `snapshot` and `digest` to CSV.',
+    'Exports `run_job()` and the `tag` field.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.run_job']),
+      [{ path: 'prompts/access/access.prompt.md', text: p25Dep }],
+    ),
+    [],
+  );
+  const p25Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.commit', 'access.author', 'access.branch', 'access.snapshot', 'access.digest', 'access.tag']),
+    [{ path: 'prompts/access/access.prompt.md', text: p25Dep }],
+  );
+  assert.equal(p25Fail.length, 6, p25Fail.join('\n'));
+});
+
+test('3619 R4b regressions: plural ops section headings & colon detail headings, space-only keyword prefix inside ## Operations, and post-loop conjoined non-op suffixes', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    'reason: Gateway adapter.',
+    '---',
+    '',
+    '# Adapter',
+    '',
+    '## Port wiring',
+    ...ports.map(p => `- \`${p}\``),
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+  ].join('\n');
+
+  // R4b-1: Singular/hyphenated headings (`## Tool policy`, `## Command dispatch`, `## Command-line`, `## Tool-commit`)
+  // and colon-separated detail headings (`## Tool: schema`, `## Command: parameters`, `## Operation: fields`,
+  // `## Interface: types`, `## Tool: notes`, `## Operation: examples`) must NOT open opsSectionDepth.
+  const r4b1NegDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Tool policy',
+    '- `pol_item`: policy bullet.',
+    '',
+    '## Command dispatch',
+    '- `disp_item`: dispatch bullet.',
+    '',
+    '## Command-line',
+    '- `cli_item`: CLI bullet.',
+    '',
+    '## Tool-commit',
+    '- `commit_item`: commit bullet.',
+    '',
+    '## Tool: schema',
+    '- `schema_item`: schema bullet.',
+    'Exports `schema_cue` in schema.',
+    '',
+    '## Command: parameters',
+    '- `param_item`: parameter bullet.',
+    '',
+    '## Operation: fields',
+    '- `field_item`: field bullet.',
+    '',
+    '## Interface: types',
+    '- `type_item`: type bullet.',
+    '',
+    '## Tool: notes',
+    '- `note_item`: note bullet.',
+    '',
+    '## Operation: examples',
+    '- `ex_item`: example bullet.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const r4b1NegPorts = [
+    'access.pol_item', 'access.disp_item', 'access.cli_item', 'access.commit_item',
+    'access.schema_item', 'access.schema_cue', 'access.param_item', 'access.field_item',
+    'access.type_item', 'access.note_item', 'access.ex_item',
+  ];
+  const r4b1NegRes = lintNativeOnlyPortParity(
+    nativeChecking(r4b1NegPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: r4b1NegDep }],
+  );
+  assert.equal(r4b1NegRes.length, r4b1NegPorts.length, r4b1NegRes.join('\n'));
+
+  // R4b-1 positive: Legitimate plural ops headings, Public contract, and end-anchored [Public] Interface still work.
+  const r4b1PosDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## MCP Tools',
+    '- `invoke_mcp`',
+    '',
+    '## Public contract',
+    '- `check_contract`',
+    '',
+    '## Public interface',
+    '- `open_interface`',
+    '',
+    '## Entry points',
+    '- `run_entry`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.invoke_mcp', 'access.check_contract', 'access.open_interface', 'access.run_entry']),
+      [{ path: 'prompts/access/access.prompt.md', text: r4b1PosDep }],
+    ),
+    [],
+  );
+
+  // R4b-2: Under ## Operations, space-only keyword prefixes on bare non-backticked/non-call titles
+  // (`### Tool ports`, `### Operation resources`, `### Tool policy`, `### Command dispatch`) must NOT become ops;
+  // `### Tool ports` and `### Operation resources` fall through to DEP_PORTS_HEADING_RE and open portsSectionDepth,
+  // while backticked/call/delimited titles still extract cleanly.
+  const r4b2Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '### Tool `inspect_quota`',
+    'Inspects quota.',
+    '',
+    '### Tool check_limit()',
+    'Checks rate limit.',
+    '',
+    '### Operation: revoke_session',
+    'Revokes a session.',
+    '',
+    '### Tool policy',
+    'Policy rules.',
+    '',
+    '### Command dispatch',
+    'Dispatch rules.',
+    '',
+    '### Tool ports',
+    '- `store`',
+    '  - `load(id)`',
+    '',
+    '### Operation resources',
+    '- `audit`',
+    '  - `append(ev)`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.inspect_quota', 'access.check_limit', 'access.revoke_session', 'store.load', 'audit.append']),
+      [{ path: 'prompts/access/access.prompt.md', text: r4b2Dep }],
+    ),
+    [],
+  );
+  const r4b2Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.policy', 'access.dispatch', 'access.ports', 'access.resources']),
+    [{ path: 'prompts/access/access.prompt.md', text: r4b2Dep }],
+  );
+  assert.equal(r4b2Fail.length, 4, r4b2Fail.join('\n'));
+
+  // R4b-3 + R5-1: Trailing non-op suffix suppresses ALL items (including call-syntax items and across label words)
+  // in a conjoined list, whether followed directly or after consumed whitespace/comma.
+  const r4b3Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    'Exports `commit` and `run_job()` to CSV.',
+    'Exposes `author` and `check()` fields.',
+    'Exports `commit_fn()` and `branch_fn()` to CSV.',
+    'Exposes `commit_a`, `status`, and `branch_a` fields.',
+    'Exports `commit_b`, `error`, and `branch_b` to CSV.',
+    'Exposes `commit_sha` and `branch_name`, fields in the response.',
+    'Operations: `get_status`: status of the service.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.get_status']),
+      [{ path: 'prompts/access/access.prompt.md', text: r4b3Dep }],
+    ),
+    [],
+  );
+  const r4b3FailPorts = [
+    'access.commit', 'access.run_job',
+    'access.author', 'access.check',
+    'access.commit_fn', 'access.branch_fn',
+    'access.commit_a', 'access.status', 'access.branch_a',
+    'access.commit_b', 'access.error', 'access.branch_b',
+    'access.commit_sha', 'access.branch_name',
+  ];
+  const r4b3Fail = lintNativeOnlyPortParity(
+    nativeChecking(r4b3FailPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: r4b3Dep }],
+  );
+  assert.equal(r4b3Fail.length, r4b3FailPorts.length, r4b3Fail.join('\n'));
+
+  // R5-2: Start-anchored [Public] Interface rejects `## User interface` and `## Storage interface`,
+  // while keeping `## Interface`, `## Public interface`, and `## 2. Public interface` working.
+  const r52NegDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## User interface',
+    '- `ui_widget`: renders button.',
+    '',
+    '## Storage interface',
+    '- `disk_flush`: flushes buffers.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const r52NegFail = lintNativeOnlyPortParity(
+    nativeChecking(['access.ui_widget', 'access.disk_flush']),
+    [{ path: 'prompts/access/access.prompt.md', text: r52NegDep }],
+  );
+  assert.equal(r52NegFail.length, 2, r52NegFail.join('\n'));
+
+  const r52PosDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Interface',
+    '- `op_plain`',
+    '',
+    '## Public interface',
+    '- `op_public`',
+    '',
+    '## 2. Public interface',
+    '- `op_numbered`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.op_plain', 'access.op_public', 'access.op_numbered']),
+      [{ path: 'prompts/access/access.prompt.md', text: r52PosDep }],
+    ),
+    [],
+  );
+
+  // R5-3: Full-title detail check inside ## Operations puts `### Operation: schema` and `#### Response: fields`
+  // into opDetailDepth so nested call bullets and export cues never leak.
+  const r53Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Operations',
+    '',
+    '### Operation: schema',
+    '- `schema_leak()`',
+    'Exports `schema_cue`.',
+    '',
+    '### `evaluate`',
+    'Runs evaluation.',
+    '',
+    '#### Response: fields',
+    '- `field_leak()`',
+    'Exposes `field_cue`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.evaluate']),
+      [{ path: 'prompts/access/access.prompt.md', text: r53Dep }],
+    ),
+    [],
+  );
+  const r53Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.schema_leak', 'access.schema_cue', 'access.field_leak', 'access.field_cue']),
+    [{ path: 'prompts/access/access.prompt.md', text: r53Dep }],
+  );
+  assert.equal(r53Fail.length, 4, r53Fail.join('\n'));
+});
+
+test('3619 R6 regressions: colon only before first token and suffix scanning past mid-list invalid tokens', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    '---',
+    '# Gateway',
+    '',
+    '## Dependencies',
+    '- [Access](../access/access.prompt.md)',
+    '',
+    '## Ports',
+    ...ports.map(p => `- \`${p}\``),
+  ].join('\n');
+
+  const r6Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'Exposes `status`: `ready` or `degraded`.',
+    'Exposes `error`: `not_found` or `invalid_input`.',
+    'Operations: `status`: `healthy` or `failed`.',
+    'Exposes `commit_a`, `user.id`, and `branch_a` fields.',
+    'Exposes `commit_b`, `ID`, and `branch_b` fields.',
+    'Exports `commit_c`, `v2`, and `branch_c` to CSV.',
+    'Exports `commit_d`, `a`, and `branch_d` fields.',
+    'Exports `/health` and `bar`.',
+    'Exposes: `valid_op` and `other_op`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.valid_op', 'access.other_op']),
+      [{ path: 'prompts/access/access.prompt.md', text: r6Dep }],
+    ),
+    [],
+  );
+
+  const r6FailPorts = [
+    'access.ready', 'access.degraded',
+    'access.not_found', 'access.invalid_input',
+    'access.healthy', 'access.failed',
+    'access.commit_a', 'access.branch_a',
+    'access.commit_b', 'access.branch_b',
+    'access.commit_c', 'access.branch_c',
+    'access.commit_d', 'access.branch_d',
+    'access.bar',
+  ];
+  const r6Fail = lintNativeOnlyPortParity(
+    nativeChecking(r6FailPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: r6Dep }],
+  );
+  assert.equal(r6Fail.length, r6FailPorts.length, r6Fail.join('\n'));
+});
+
+test('3619 R7 regressions: post-item-only separators, and/or conjunction, inline code-span skipping, and O(N) backtick scan', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    '---',
+    '# Gateway',
+    '',
+    '## Dependencies',
+    '- [Access](../access/access.prompt.md)',
+    '',
+    '## Ports',
+    ...ports.map(p => `- \`${p}\``),
+  ].join('\n');
+
+  // P1-1: Leading `,`, `/`, `and`, `or` before any backticked item must never start an op list.
+  const p11Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'Handles imports, exports, and `config` loading.',
+    'Supports CSV exports, `audit_log` rotation, and backups.',
+    'Runs after data exports / `snapshots` complete.',
+    'It runs on export or `import` events.',
+    'Exposes public tools and `telemetry` endpoints.',
+    'Exports public tools `pub_alpha` and `pub_beta`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.pub_alpha', 'access.pub_beta']),
+      [{ path: 'prompts/access/access.prompt.md', text: p11Dep }],
+    ),
+    [],
+  );
+  const p11FailPorts = ['access.config', 'access.audit_log', 'access.snapshots', 'access.import', 'access.telemetry'];
+  const p11Fail = lintNativeOnlyPortParity(
+    nativeChecking(p11FailPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: p11Dep }],
+  );
+  assert.equal(p11Fail.length, p11FailPorts.length, p11Fail.join('\n'));
+
+  // P1-2: Skip export/expose matches inside single- and multi-backtick inline code spans
+  // so real trailing cue verbs extract cleanly while prose between code spans never leaks.
+  const p12PosDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'The `csv-export` job exports `run_export` and `cancel_export`.',
+    'The `/v1/export` service exposes `start_export` and `poll_export`.',
+    'The ``csv-export`` job exports `finish_export`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking([
+        'access.run_export', 'access.cancel_export',
+        'access.start_export', 'access.poll_export',
+        'access.finish_export',
+      ]),
+      [{ path: 'prompts/access/access.prompt.md', text: p12PosDep }],
+    ),
+    [],
+  );
+
+  const p12NegDep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'Operations: `export` and `import`.',
+    'The `csv-export` worker `sync_all` runs nightly.',
+    'Calls `/api/export` and `/api/import`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.export', 'access.import']),
+      [{ path: 'prompts/access/access.prompt.md', text: p12NegDep }],
+    ),
+    [],
+  );
+  const p12NegFailPorts = ['access.and', 'access.worker', 'access.sync_all'];
+  const p12NegFail = lintNativeOnlyPortParity(
+    nativeChecking(p12NegFailPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: p12NegDep }],
+  );
+  assert.equal(p12NegFail.length, p12NegFailPorts.length, p12NegFail.join('\n'));
+
+  // P2-1: `and/or` conjunction works in both negative suffix-drop lists and positive export lists.
+  const p21Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'Exposes `commit` and/or `branch` fields.',
+    'Exports `create_record` and/or `update_record`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.create_record', 'access.update_record']),
+      [{ path: 'prompts/access/access.prompt.md', text: p21Dep }],
+    ),
+    [],
+  );
+  const p21Fail = lintNativeOnlyPortParity(
+    nativeChecking(['access.commit', 'access.branch']),
+    [{ path: 'prompts/access/access.prompt.md', text: p21Dep }],
+  );
+  assert.equal(p21Fail.length, 2, p21Fail.join('\n'));
+
+  // O(N) backtick scan guard: 20k alternating single/double/unmatched backticks finish well under 50ms.
+  const hostileTicks = '` `` ` '.repeat(5000) + 'exports `fast_op`.';
+  const hostileDep = `# Access\n\nOwn \`src/access.mjs\`.\n\n## Behavior\n\n${hostileTicks}\n\n## Dependencies\nNone.\n`;
+  const t0 = performance.now();
+  const hostileOut = lintNativeOnlyPortParity(
+    nativeChecking(['access.fast_op']),
+    [{ path: 'prompts/access/access.prompt.md', text: hostileDep }],
+  );
+  const elapsedMs = performance.now() - t0;
+  assert.deepEqual(hostileOut, []);
+  assert.ok(elapsedMs < 200, `20k-backtick scan took ${elapsedMs.toFixed(1)}ms`);
+});
+
+test('3619 R8 regression: EXPORTED_OP_VERB_RE excludes hyphenated/path/dotted/colon-prefixed compounds while keeping Exports: working', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    '---',
+    '# Gateway',
+    '',
+    '## Dependencies',
+    '- [Access](../access/access.prompt.md)',
+    '',
+    '## Ports',
+    ...ports.map(p => `- \`${p}\``),
+  ].join('\n');
+
+  const r8Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'The post-export `cleanup` runs async.',
+    'The pre-export `validation` checks rows.',
+    'Handles non-export `config` loading.',
+    'The csv-export `worker` runs nightly.',
+    'The data-export `pipeline` writes to S3.',
+    'On csv-export: `batch_id` is logged.',
+    'On POST /api/export `cleanup_api` runs.',
+    'Calls /v1/export `batch_v1` directly.',
+    'Calls store.export `batch_store` directly.',
+    'Exports: `inspect_quota` and `revoke_session`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.inspect_quota', 'access.revoke_session']),
+      [{ path: 'prompts/access/access.prompt.md', text: r8Dep }],
+    ),
+    [],
+  );
+
+  const r8FailPorts = [
+    'access.cleanup',
+    'access.validation',
+    'access.config',
+    'access.worker',
+    'access.pipeline',
+    'access.batch_id',
+    'access.cleanup_api',
+    'access.batch_v1',
+    'access.batch_store',
+  ];
+  const r8Fail = lintNativeOnlyPortParity(
+    nativeChecking(r8FailPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: r8Dep }],
+  );
+  assert.equal(r8Fail.length, r8FailPorts.length, r8Fail.join('\n'));
 });
