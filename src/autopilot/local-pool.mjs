@@ -15,7 +15,8 @@ import {
 import * as codexLimitsModule from '../codex-limits.mjs';
 import { knownSecretValues, rememberSecrets } from '../secret-redaction.mjs';
 import { agyStatus, parseAgentAuthStatus, runAgentProcess } from '../shared/agent-process.mjs';
-import { writeAtomicPrivate } from '../shared/atomic-fs.mjs';
+import { readJsonObjectQuiet, writeAtomicPrivate } from '../shared/atomic-fs.mjs';
+import { readBoundedUtf8 } from '../shared/safe-read.mjs';
 
 const readCodexLimits = (...args) => codexLimitsModule.readCodexLimits(...args);
 
@@ -52,43 +53,14 @@ function readPoolJson(fs, filePath) {
   if (!info) bad(`file not found at ${filePath}.`);
   if (!info.isFile() || info.isSymbolicLink()) bad('pool file must be a regular file and not a symlink.');
   if (info.size > 65_536) bad('pool file exceeds 65536 bytes.');
-  if ((fs.openSync && fs.fstatSync && fs.readSync && fs.closeSync) || fs === nativeFs) {
-    const f = fs.openSync ? fs : nativeFs;
-    const flags = (f.constants?.O_RDONLY ?? 0) | (f.constants?.O_NOFOLLOW ?? 0) | (f.constants?.O_NONBLOCK ?? 0);
-    let fd;
-    try {
-      fd = f.openSync(filePath, flags);
-      const actual = f.fstatSync(fd);
-      if (!actual.isFile() || actual.size > 65_536) bad('pool file must be regular and at most 65536 bytes.');
-      const buf = Buffer.alloc(65_537);
-      let len = 0;
-      while (len < buf.length) {
-        const n = f.readSync(fd, buf, len, buf.length - len, null);
-        if (!n) break;
-        len += n;
-      }
-      if (len > 65_536) bad('pool file exceeds 65536 bytes.');
-      try {
-        return JSON.parse(buf.subarray(0, len).toString('utf8'));
-      } catch {
-        bad('pool file must contain valid JSON.');
-      }
-    } catch (error) {
-      if (error?.message?.startsWith('Invalid login pool:')) throw error;
-      bad('cannot read pool file.');
-    } finally {
-      if (fd !== undefined) {
-        try { f.closeSync(fd); } catch {}
-      }
-    }
-  }
   let raw;
   try {
-    raw = fs.readFileSync(filePath, 'utf8');
-  } catch {
+    raw = readBoundedUtf8(filePath, { maxBytes: 65_536, noFollow: true, fs });
+  } catch (error) {
+    if (error?.code === 'file_too_large') bad('pool file exceeds 65536 bytes.');
+    if (error?.code === 'not_regular_file') bad('pool file must be regular and at most 65536 bytes.');
     bad('cannot read pool file.');
   }
-  if (Buffer.byteLength(raw, 'utf8') > 65_536) bad('pool file exceeds 65536 bytes.');
   try {
     return JSON.parse(raw);
   } catch {
@@ -243,25 +215,20 @@ const poolStatePath = stateRoot => join(stateRoot, 'login-pool.json');
 
 export function readPoolCooldowns({ stateRoot, now = Date.now() } = {}, ports = {}) {
   if (!stateRoot) return {};
-  const fs = ports.fs ?? nativeFs;
-  try {
-    const raw = JSON.parse(fs.readFileSync(poolStatePath(stateRoot), 'utf8'));
-    if (!object(raw) || !object(raw.logins)) return {};
-    const active = {};
-    for (const [id, row] of Object.entries(raw.logins)) {
-      if (object(row) && typeof row.until === 'number' && Number.isFinite(row.until) && row.until > now) {
-        active[id] = {
-          until: row.until,
-          resetAt: typeof row.resetAt === 'number' && Number.isFinite(row.resetAt) ? row.resetAt : null,
-          reason: typeof row.reason === 'string' ? row.reason.slice(0, 200) : 'quota',
-          at: typeof row.at === 'number' && Number.isFinite(row.at) ? row.at : now,
-        };
-      }
+  const raw = readJsonObjectQuiet(ports.fs ?? nativeFs, poolStatePath(stateRoot));
+  if (!object(raw?.logins)) return {};
+  const active = {};
+  for (const [id, row] of Object.entries(raw.logins)) {
+    if (object(row) && typeof row.until === 'number' && Number.isFinite(row.until) && row.until > now) {
+      active[id] = {
+        until: row.until,
+        resetAt: typeof row.resetAt === 'number' && Number.isFinite(row.resetAt) ? row.resetAt : null,
+        reason: typeof row.reason === 'string' ? row.reason.slice(0, 200) : 'quota',
+        at: typeof row.at === 'number' && Number.isFinite(row.at) ? row.at : now,
+      };
     }
-    return active;
-  } catch {
-    return {};
   }
+  return active;
 }
 
 export function markLoginExhausted({ stateRoot, loginId, resetAt = null, reason = 'quota', now = Date.now() } = {}, ports = {}) {

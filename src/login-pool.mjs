@@ -754,13 +754,13 @@ function resolveUserCodexConfigTarget(fs, userConfigPath, disallowedRoots = [], 
   }
   for (const root of disallowedRoots) {
     if (typeof root !== 'string' || !root) continue;
-    if (isPathAtOrInside(realTarget, root)) {
+    if (isPathAtOrInside(realTarget, root, fs)) {
       if (strict) throw new CloudAccountsError(`Refusing symlink or non-regular Codex file at ${userConfigPath}.`, { code: 'symlink_refused' });
       return { exists: false, readPath: null, writePath: userConfigPath };
     }
     try {
       const realRoot = String(realFn.call(fs, root));
-      if (isPathAtOrInside(realTarget, realRoot)) {
+      if (isPathAtOrInside(realTarget, realRoot, fs)) {
         if (strict) throw new CloudAccountsError(`Refusing symlink or non-regular Codex file at ${userConfigPath}.`, { code: 'symlink_refused' });
         return { exists: false, readPath: null, writePath: userConfigPath };
       }
@@ -834,13 +834,17 @@ export function resolveCodexResponsesBaseUrl(backendApiUrl) {
   return backendApiUrl;
 }
 
-const REQUIRED_CODEX_SUBSHELL_EXCLUDES = [
+export const REQUIRED_CODEX_SUBSHELL_EXCLUDES = Object.freeze([
   'PDD_*',
+  'PDD_TOKEN',
+  'PDD_ACCOUNTS_TOKEN',
+  'PDD_CODEX_GATEWAY_GRANT',
   'OPENAI_API_KEY',
   'CODEX_API_KEY',
   'CODEX_ACCESS_TOKEN',
   'CODEX_CONNECTORS_TOKEN',
-];
+  'CODEX_HOME',
+]);
 
 function parseCodexTomlQuiet(text) {
   if (typeof text !== 'string' || !text.trim()) return null;
@@ -1063,8 +1067,8 @@ function buildCodexSubshellExcludeCliArgs(
   } = {},
 ) {
   const requiredExcludes = includeCodexHome
-    ? [...REQUIRED_CODEX_SUBSHELL_EXCLUDES, 'CODEX_HOME']
-    : REQUIRED_CODEX_SUBSHELL_EXCLUDES;
+    ? REQUIRED_CODEX_SUBSHELL_EXCLUDES
+    : REQUIRED_CODEX_SUBSHELL_EXCLUDES.filter(k => k !== 'CODEX_HOME');
   const parsedUser = parseCodexTomlQuiet(userConfigText);
   const {
     profile: cliProfile,
@@ -1869,17 +1873,17 @@ export function isSafeCodexSourceEntry(fs, src, targetRoot, { sourceHome = null 
   if (isDisallowedCodexSymlinkTargetName(basename(realSrc))) return false;
   const roots = (Array.isArray(targetRoot) ? targetRoot : [targetRoot]).filter(r => typeof r === 'string' && r);
   for (const root of roots) {
-    if (isPathAtOrInside(realSrc, root)) return false;
+    if (isPathAtOrInside(realSrc, root, fs)) return false;
     try {
       const realTarget = String(realFn.call(fs, root));
-      if (isPathAtOrInside(realSrc, realTarget)) return false;
+      if (isPathAtOrInside(realSrc, realTarget, fs)) return false;
     } catch {}
   }
   if (typeof sourceHome === 'string' && sourceHome) {
-    if (isPathAtOrInside(sourceHome, realSrc)) return false;
+    if (isPathAtOrInside(sourceHome, realSrc, fs)) return false;
     try {
       const realSource = String(realFn.call(fs, sourceHome));
-      if (isPathAtOrInside(realSource, realSrc)) return false;
+      if (isPathAtOrInside(realSource, realSrc, fs)) return false;
     } catch {}
   }
   return true;
@@ -2466,11 +2470,34 @@ export function restoreLocalClaudeGatewayConfig({ env = process.env, managedToke
       nextSettings.env = settingsEnv;
     }
     let writeTarget = settingsPath;
+    const claudeManagedHome = pddManagedClaudeHome(env);
+    let targetSafe = true;
     try {
-      if (fs.lstatSync?.(settingsPath)?.isSymbolicLink?.() && typeof fs.realpathSync === 'function') {
-        writeTarget = fs.realpathSync(settingsPath);
+      if (fs.lstatSync?.(settingsPath)?.isSymbolicLink?.()) {
+        const realFn = fs.realpathSync?.native ?? fs.realpathSync;
+        const statFn = fs.statSync;
+        if (typeof realFn !== 'function' || typeof statFn !== 'function') {
+          targetSafe = false;
+        } else {
+          const resolved = String(realFn.call(fs, settingsPath));
+          const targetStat = statFn.call(fs, resolved);
+          if (!targetStat?.isFile?.() || isPathAtOrInside(resolved, claudeManagedHome, fs)) {
+            targetSafe = false;
+          } else {
+            writeTarget = resolved;
+          }
+        }
       }
-    } catch {}
+    } catch {
+      targetSafe = false;
+    }
+    if (!targetSafe) {
+      throw new CloudAccountsError(
+        `Refusing unsafe symlinked Claude settings path "${settingsPath}". `
+        + 'Ensure ~/.claude/settings.json is a regular file (or a symlink to a regular file outside PDD-managed directories), then rerun.',
+        { code: 'symlink_refused' },
+      );
+    }
     try {
       writeAtomicPrivate(fs, writeTarget, `${JSON.stringify(nextSettings, null, 2)}\n`);
       restoredSettings = true;
@@ -2497,7 +2524,11 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
   const backendApiUrl = hasExplicitBackendApi ? resolveCodexBackendApiUrl(authOrLease, gatewayUrl) : gatewayUrl;
   const codexApiUrl = hasExplicitBackendApi ? resolveCodexResponsesBaseUrl(backendApiUrl) : gatewayUrl;
   const embeddedLeaseGrant = isGateway && isEmbeddedLeaseGatewayGrant(gatewayToken);
-  const rootDir = tmpRoot || (fs.existsSync?.('/tmp') !== false ? '/tmp' : tmpdir());
+  const rootDir = tmpRoot
+    || (typeof env?.PDD_CODEX_RUNTIME_ROOT === 'string' && env.PDD_CODEX_RUNTIME_ROOT.trim())
+    || join(resolvePddStateBase(env), 'codex-runtime');
+  fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
+  try { (fs.chmodSync ?? nativeFs.chmodSync)(rootDir, 0o700); } catch {}
   let overlayDir;
   if (typeof fs.mkdtempSync === 'function') {
     overlayDir = fs.mkdtempSync(join(rootDir, 'pdd-cx-'));
@@ -2561,22 +2592,25 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
       }
       delete prevPolicy.exclude;
       delete prevPolicy.include_only;
+      const requiredLowerSet = new Set(REQUIRED_CODEX_SUBSHELL_EXCLUDES.map(key => key.toLowerCase()));
       for (const k of Object.keys(prevFilters)) {
-        if (k.toLowerCase() === 'pdd_codex_gateway_grant') {
+        if (requiredLowerSet.has(k.toLowerCase())) {
           delete prevFilters[k];
         }
       }
       if (isTomlTable(prevPolicy.set)) {
         const nextSet = { ...prevPolicy.set };
         for (const k of Object.keys(nextSet)) {
-          if (k.toLowerCase() === 'pdd_codex_gateway_grant') {
+          if (requiredLowerSet.has(k.toLowerCase())) {
             delete nextSet[k];
           }
         }
         if (Object.keys(nextSet).length > 0) prevPolicy.set = nextSet;
         else delete prevPolicy.set;
       }
-      prevFilters.PDD_CODEX_GATEWAY_GRANT = 'exclude';
+      for (const key of REQUIRED_CODEX_SUBSHELL_EXCLUDES) {
+        prevFilters[key] = 'exclude';
+      }
       prevPolicy.filters = prevFilters;
       const prevProviders = isTomlTable(baseConfig.model_providers) ? { ...baseConfig.model_providers } : {};
       delete prevProviders[CODEX_GATEWAY_PROVIDER_ID];
@@ -2590,11 +2624,6 @@ export function createCodexStepOverlay(authOrLease, { env = process.env, tmpRoot
         delete prevFeatures.responses_websockets;
       }
       if (embeddedLeaseGrant) {
-        if (hasExplicitBackendApi) {
-          const emptySubshellDir = join(overlayDir, 'empty-subshell');
-          try { fs.mkdirSync(emptySubshellDir, { recursive: true, mode: 0o700 }); } catch {}
-          prevPolicy.set = { ...(isTomlTable(prevPolicy.set) ? prevPolicy.set : {}), CODEX_HOME: emptySubshellDir };
-        }
         const overlayConfig = {
           ...baseConfig,
           cli_auth_credentials_store: 'file',
@@ -2703,28 +2732,34 @@ export function prepareCloudStepExecution(leaseReply, baseEnv = process.env, por
   const lease = leaseReply?.lease;
   const cleanBase = loginEnvironment(baseEnv, { kind: provider || 'codex' });
   if (provider === 'codex') {
+    const scrubCodexAmbientEnv = targetEnv => {
+      delete targetEnv.OPENAI_API_KEY;
+      delete targetEnv.CODEX_API_KEY;
+      delete targetEnv.CODEX_ACCESS_TOKEN;
+      delete targetEnv.OPENAI_BASE_URL;
+      delete targetEnv.PDD_CODEX_GATEWAY_GRANT;
+      return targetEnv;
+    };
     if (lease?.delivery_mode === 'gateway_grant') {
       const overlay = createCodexStepOverlay({
         ...lease,
         plan_type: lease?.plan_type ?? leaseReply?.account?.plan_type ?? leaseReply?.account?.plan,
       }, { env: baseEnv, tmpRoot: ports.tmpRoot, detached }, ports);
-      const env = {
+      const env = scrubCodexAmbientEnv({
         ...cleanBase,
         CODEX_HOME: overlay.overlayDir,
-        PDD_CODEX_GATEWAY_GRANT: overlay.gatewayToken,
         PDD_CLOUD_STEP_ISOLATED: '1',
-      };
-      delete env.OPENAI_API_KEY;
-      delete env.CODEX_API_KEY;
-      delete env.CODEX_ACCESS_TOKEN;
-      delete env.OPENAI_BASE_URL;
+      });
+      if (!isEmbeddedLeaseGatewayGrant(overlay.gatewayToken)) {
+        env.PDD_CODEX_GATEWAY_GRANT = overlay.gatewayToken;
+      }
       return { env, cleanupDirs: [overlay.overlayDir], cleanup: overlay.cleanup, overlayDir: overlay.overlayDir };
     }
     if (!object(lease?.codex_auth_json)) {
       throw new CloudAccountsError('Cloud lease returned no Codex auth bundle.', { code: 'invalid_lease' });
     }
     const overlay = createCodexStepOverlay(lease.codex_auth_json, { env: baseEnv, tmpRoot: ports.tmpRoot, detached }, ports);
-    const env = { ...cleanBase, CODEX_HOME: overlay.overlayDir, PDD_CLOUD_STEP_ISOLATED: '1' };
+    const env = scrubCodexAmbientEnv({ ...cleanBase, CODEX_HOME: overlay.overlayDir, PDD_CLOUD_STEP_ISOLATED: '1' });
     return { env, cleanupDirs: [overlay.overlayDir], cleanup: overlay.cleanup, overlayDir: overlay.overlayDir };
   }
   if (provider === 'claude') {

@@ -2,10 +2,12 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as nativeFs from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { runAgentProcess } from './shared/agent-process.mjs';
+import { writeAtomicPreservingSymlinkAndMode } from './shared/atomic-fs.mjs';
+import { resolvePddStateBase } from './shared/state-dir.mjs';
 import {
   CloudAccountsError,
   classifyRateLimitFailure,
@@ -311,22 +313,7 @@ export function refreshInstalledAutoSwitchBlocks({ env = process.env } = {}, por
       if (beginIdx < 0 || endIdx < 0) continue;
       const nextText = applyAutoSwitchBlock(existingText, entry.shell);
       if (nextText === existingText) continue;
-      let writePath = entry.path;
-      let mode = 0o644;
-      try {
-        const lstat = typeof fs.lstatSync === 'function' ? fs.lstatSync(entry.path) : null;
-        if (lstat?.isSymbolicLink?.()) {
-          const realFn = fs.realpathSync?.native ?? fs.realpathSync;
-          if (typeof realFn === 'function') {
-            writePath = String(realFn.call(fs, entry.path));
-          }
-        }
-        const st = typeof fs.statSync === 'function' ? fs.statSync(writePath) : lstat;
-        if (typeof st?.mode === 'number' && (st.mode & 0o777) !== 0) {
-          mode = st.mode & 0o777;
-        }
-      } catch {}
-      fs.writeFileSync(writePath, nextText, { mode });
+      writeAtomicPreservingSymlinkAndMode(fs, entry.path, nextText, { defaultMode: 0o644 });
       upgraded.push(entry.path);
     } catch {}
   }
@@ -999,17 +986,57 @@ export function detectImportProvider(fs, env = process.env, options = {}) {
   const now = typeof options?.now === 'function' ? options.now : Date.now;
   if (fromOption) {
     const resolved = resolve(cwd, String(fromOption).trim());
-    let isDir = false;
-    try { isDir = Boolean(fs.statSync(resolved)?.isDirectory()); } catch {}
-    if (isDir) {
+    const lstat = fs.lstatSync ?? nativeFs.lstatSync;
+    const parentDir = dirname(resolved);
+    let parentSt = null;
+    try { parentSt = lstat.call(fs, parentDir); } catch {}
+    if (parentSt?.isSymbolicLink?.()) {
+      throw new CloudAccountsError(
+        `Refusing to import credential file from symlinked directory: ${parentDir}. `
+        + 'Pass a real non-symlinked credential directory or file to --from, then rerun.',
+        { code: 'symlink_refused' },
+      );
+    }
+    let rawSt = null;
+    try { rawSt = lstat.call(fs, resolved); } catch {}
+    if (rawSt?.isSymbolicLink?.()) {
+      throw new CloudAccountsError(
+        `Refusing to import symlinked credential path: ${resolved}. `
+        + 'Pass the real credential file or directory path to --from (not a symlink), then rerun.',
+        { code: 'symlink_refused' },
+      );
+    }
+    const isRegularNonSymlink = candidatePath => {
+      let st;
       try {
-        const raw = JSON.parse(fs.readFileSync(join(resolved, 'auth.json'), 'utf8'));
-        rememberCodexPayloadSecrets(raw);
-        if (object(raw?.tokens)) return 'codex';
-      } catch {}
-      for (const fileName of ['settings.json', '.credentials.json']) {
+        st = lstat.call(fs, candidatePath);
+      } catch {
+        return false;
+      }
+      if (st?.isSymbolicLink?.()) {
+        throw new CloudAccountsError(
+          `Refusing to import symlinked credential file: ${candidatePath}. `
+          + 'Pass a real non-symlinked credential file to --from, then rerun.',
+          { code: 'symlink_refused' },
+        );
+      }
+      return Boolean(st?.isFile?.());
+    };
+    const isDir = Boolean(rawSt?.isDirectory?.());
+    if (isDir) {
+      const authCandidate = join(resolved, 'auth.json');
+      if (isRegularNonSymlink(authCandidate)) {
         try {
-          const txt = fs.readFileSync(join(resolved, fileName), 'utf8');
+          const raw = JSON.parse(fs.readFileSync(authCandidate, 'utf8'));
+          rememberCodexPayloadSecrets(raw);
+          if (object(raw?.tokens)) return 'codex';
+        } catch {}
+      }
+      for (const fileName of ['settings.json', '.credentials.json']) {
+        const candidate = join(resolved, fileName);
+        if (!isRegularNonSymlink(candidate)) continue;
+        try {
+          const txt = fs.readFileSync(candidate, 'utf8');
           try {
             const raw = JSON.parse(txt);
             rememberClaudePayloadSecrets(raw);
@@ -1022,6 +1049,9 @@ export function detectImportProvider(fs, env = process.env, options = {}) {
           }
         } catch {}
       }
+      return 'codex';
+    }
+    if (!rawSt?.isFile?.()) {
       return 'codex';
     }
     try {
@@ -1057,8 +1087,12 @@ export function detectImportProvider(fs, env = process.env, options = {}) {
   return 'codex';
 }
 
-function createTempPrivateDir(fs, prefix, tmpRoot) {
-  const rootDir = tmpRoot || (fs.existsSync?.('/tmp') !== false ? '/tmp' : tmpdir());
+function createTempPrivateDir(fs, prefix, tmpRoot, env = process.env) {
+  const rootDir = tmpRoot
+    || (typeof env?.PDD_CODEX_RUNTIME_ROOT === 'string' && env.PDD_CODEX_RUNTIME_ROOT.trim())
+    || join(resolvePddStateBase(env), 'codex-runtime');
+  fs.mkdirSync(rootDir, { recursive: true, mode: 0o700 });
+  try { (fs.chmodSync ?? nativeFs.chmodSync)(rootDir, 0o700); } catch {}
   let dir;
   if (typeof fs.mkdtempSync === 'function') {
     dir = fs.mkdtempSync(join(rootDir, prefix));
@@ -1624,7 +1658,7 @@ async function probeInitialCodexUsageIfUnpopulated(acc, authJson, _probeCodexHom
     // Always probe inside a disposable 0700 temp directory whose auth.json copy has
     // tokens.refresh_token cleared ("") so local `codex app-server` uses only access_token
     // and can never consume/invalidate the single-use refresh_token uploaded to Cloud.
-    tempProbeDir = createTempPrivateDir(fs, 'pdd-cx-probe-', ports.tmpRoot);
+    tempProbeDir = createTempPrivateDir(fs, 'pdd-cx-probe-', ports.tmpRoot, env);
     const probeAuthJson = object(authJson) && object(authJson.tokens)
       ? {
           ...authJson,
@@ -2099,7 +2133,7 @@ async function enrollSingleIteration(mode, {
       let importSourcePath = null;
 
       if (mode === 'add') {
-        tempLoginDir = createTempPrivateDir(fs, 'pdd-codex-login-', ports.tmpRoot);
+        tempLoginDir = createTempPrivateDir(fs, 'pdd-codex-login-', ports.tmpRoot, env);
         const loginEnv = { ...env, CODEX_HOME: tempLoginDir };
         const loginRes = await runProviderLogin('codex', { cwd, env: loginEnv, deviceAuth, stdin }, ports);
         if (!loginRes || loginRes.code !== 0) {
@@ -2301,7 +2335,7 @@ async function enrollSingleIteration(mode, {
       if (piped.trim()) {
         oauthToken = extractIsolatedClaudeSetupToken(fs, null, piped, ports.now);
       } else {
-        tempClaudeDir = createTempPrivateDir(fs, 'pdd-claude-login-', ports.tmpRoot);
+        tempClaudeDir = createTempPrivateDir(fs, 'pdd-claude-login-', ports.tmpRoot, env);
         const claudeLoginEnv = { ...env, CLAUDE_CONFIG_DIR: tempClaudeDir, COLUMNS: env?.COLUMNS || '500' };
         delete claudeLoginEnv.CLAUDE_CODE_OAUTH_TOKEN;
         const loginRes = await runProviderLogin('claude', { cwd, env: claudeLoginEnv, deviceAuth: false, stdin }, ports);
@@ -2716,8 +2750,7 @@ function runAutoCommand(mode, { env }, ports = {}) {
       try { current = fs.readFileSync(entry.path, 'utf8'); } catch (err) { if (err?.code !== 'ENOENT') throw err; }
       const updated = applyAutoSwitchBlock(current, entry.shell);
       if (updated !== current) {
-        fs.mkdirSync(dirname(entry.path), { recursive: true });
-        fs.writeFileSync(entry.path, updated, { mode: 0o644 });
+        writeAtomicPreservingSymlinkAndMode(fs, entry.path, updated, { defaultMode: 0o644 });
       }
     }
     return {
@@ -2730,7 +2763,9 @@ function runAutoCommand(mode, { env }, ports = {}) {
       let current;
       try { current = fs.readFileSync(entry.path, 'utf8'); } catch (err) { if (err?.code === 'ENOENT') continue; throw err; }
       const updated = removeAutoSwitchBlock(current);
-      if (updated !== current) fs.writeFileSync(entry.path, updated, { mode: 0o644 });
+      if (updated !== current) {
+        writeAtomicPreservingSymlinkAndMode(fs, entry.path, updated, { defaultMode: 0o644 });
+      }
     }
     restoreLocalClaudeGatewayConfig({ env }, ports);
     return {

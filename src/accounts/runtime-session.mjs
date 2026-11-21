@@ -293,21 +293,21 @@ export function startLeaseHeartbeat({
  * Attach process `exit` emergency cleanup and `SIGINT`/`SIGTERM`/`SIGHUP` forwarding hooks,
  * returning a `detach()` function to unregister all listeners cleanly in `finally`.
  */
-export function registerProcessCleanupHooks({ onEmergencyExit, onSignal }) {
+export function registerProcessCleanupHooks({ onEmergencyExit, onSignal, proc = process }) {
   const onSigInt = () => onSignal?.('SIGINT');
   const onSigTerm = () => onSignal?.('SIGTERM');
   const onSigHup = () => onSignal?.('SIGHUP');
 
-  process.on('exit', onEmergencyExit);
-  process.on('SIGINT', onSigInt);
-  process.on('SIGTERM', onSigTerm);
-  process.on('SIGHUP', onSigHup);
+  proc.on('exit', onEmergencyExit);
+  proc.on('SIGINT', onSigInt);
+  proc.on('SIGTERM', onSigTerm);
+  proc.on('SIGHUP', onSigHup);
 
   return () => {
-    process.off('exit', onEmergencyExit);
-    process.off('SIGINT', onSigInt);
-    process.off('SIGTERM', onSigTerm);
-    process.off('SIGHUP', onSigHup);
+    proc.off('exit', onEmergencyExit);
+    proc.off('SIGINT', onSigInt);
+    proc.off('SIGTERM', onSigTerm);
+    proc.off('SIGHUP', onSigHup);
   };
 }
 

@@ -99,7 +99,7 @@ export function assertSafePrivateDir(
   const target = resolve(dirPath);
 
   const fail = (reason, fixHint) => {
-    const msg = `${label} path "${dirPath}": ${reason} ${fixHint}`;
+    const msg = `Refusing unsafe ${label} path "${dirPath}": ${reason} ${fixHint}`;
     if (typeof errorFactory === 'function') throw errorFactory(msg);
     const err = new Error(msg);
     err.code = 'unsafe_runtime_dir';

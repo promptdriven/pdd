@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { countGithubCalls, githubBudget, githubLedger, githubPurpose, githubReply, githubStatusLine, githubUsage, githubEtagCache, nativeGithubCounter } from '../src/github-calls.mjs';
+import { countGithubCalls, githubBudget, githubLedger, githubPurpose, githubReply, githubStateRoot, githubStatusLine, githubUsage, githubEtagCache, nativeGithubCounter } from '../src/github-calls.mjs';
 import { createDependencyReadPorts, readDependencySnapshot, saveDependencyReview } from '../src/issue-dependencies-github.mjs';
 
 // Issue #3046: Autopilot counts its GitHub calls, keeps a budget and reads less.
@@ -307,4 +307,11 @@ test('status line: in reserve the budget part names the calls left and the floor
   const usage = githubUsage([{ at: NOW - minute, api: 'rest', purpose: 'claims', status: 200, resource: 'core', remaining: 120, limit: 5000, resetAt: NOW + 20 * minute }], NOW);
   assert.equal(githubStatusLine({ usage, budget: githubBudget({ usage }) }),
     'GitHub calls in the last hour: 1 (claims 1); no conditional reads; REST limit 120 of 5000 left until 12:20Z; budget reserve (120 REST calls left, below the floor of 1000): Autopilot on this machine used 1 of 1500 (30%).');
+});
+
+test('githubStateRoot honors PDD_STATE_DIR, XDG_STATE_HOME, HOME default, and explicit stateRoot override', () => {
+  assert.equal(githubStateRoot({ HOME: '/u/a', PDD_STATE_DIR: '/custom/pdd-state', XDG_STATE_HOME: '/xdg/state' }), '/custom/pdd-state/autopilot');
+  assert.equal(githubStateRoot({ HOME: '/u/a', XDG_STATE_HOME: '/xdg/state' }), '/xdg/state/pdd/autopilot');
+  assert.equal(githubStateRoot({ HOME: '/u/a' }), '/u/a/.local/state/pdd/autopilot');
+  assert.equal(githubStateRoot({ HOME: '/u/a', PDD_STATE_DIR: '/custom/pdd-state' }, '/override/root'), '/override/root');
 });
