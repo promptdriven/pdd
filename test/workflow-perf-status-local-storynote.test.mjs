@@ -509,7 +509,7 @@ test('3614: listStatus skips terminal PRs, refreshes open waiting PRs with bound
   assert.ok(startedWorkers <= 6, `bounded pool must stop taking new items after fatal error (started ${startedWorkers} of 8)`);
 });
 
-test('3614: refreshPr skips individual terminal PRs on multi-PR runs (merged PR 1 + open PR 2 fetches only PR 2)', async t => {
+test('3614: refreshPr skips merged PRs on multi-PR runs but still re-checks closed PRs (which can be reopened/merged)', async t => {
   const f = await fixture(t, { name: 'bug' });
   assert.equal((await f.run()).exitCode, 0);
   const run = f.record();
@@ -531,6 +531,25 @@ test('3614: refreshPr skips individual terminal PRs on multi-PR runs (merged PR 
   assert.equal(res.exitCode, 0, res.message);
   assert.deepEqual(fetched, ['https://github.com/example/project/pull/302'], 'refreshPr must skip already-merged PR 1 and only fetch open PR 2');
   assert.deepEqual(said, ['Reading the PR from GitHub…']);
+
+  // A saved `closed` PR (e.g. ask-code with through: 'code') can be reopened and merged on GitHub, so single-run refreshPr must re-check it.
+  const closedRun = f.record();
+  closedRun.state = 'waiting';
+  closedRun.through = 'code';
+  closedRun.gate = { area: closedRun.areas[0].name, kind: 'ask-code', at: f.clock };
+  closedRun.pr = [
+    { number: 301, url: 'https://github.com/example/project/pull/301', stage: closedRun.areas[0].name, state: 'closed', ci: 'none' },
+  ];
+  saveRun(closedRun);
+  const rechecked = [];
+  const reopenedRes = await runStatus({ ref: '17', cwd: f.source, json: true }, {
+    ...f.ports,
+    readPrStatus: async ({ url }) => { rechecked.push(url); return { state: 'merged', ci: 'passing' }; },
+    readIssueStatus: async ({ number }) => ({ number, state: 'open' }),
+  });
+  assert.equal(reopenedRes.exitCode, 0, reopenedRes.message);
+  assert.deepEqual(rechecked, ['https://github.com/example/project/pull/301'], 'single-run refreshPr must still re-check a saved closed PR');
+  assert.equal(f.record().pr[0].state, 'merged');
 });
 
 test('3614: nativeGithubCounter detects newly created status.json later in the same process with 0 extra git rev-parse calls', async t => {

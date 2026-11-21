@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 1d0579cc79618d31911864c4eace0cb2f4c247d9012289d198614a730db1576e).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 24e4205551aa87b2c978c1276f4f4114732036562e83d2321c213c2714f022b7).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -5342,14 +5342,14 @@ async function refreshPr(run, p) {
   // #3042: the read of a PR that pdd published with readable facts also gives its description, head and comments
   // (`view`), so that the refresh below of its readable top needs no other read when nothing changed.
   for(const pr of run.pr){
-    if(TERMINAL_PR_STATES.has(pr.state)){
-      observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields:{state:pr.state,...(pr.ci!==undefined?{ci:pr.ci}:{})},view:null,skippedTerminal:true});
+    if(pr.state==='merged'){
+      observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields:{state:pr.state,...(pr.ci!==undefined?{ci:pr.ci}:{})},view:null,skippedMerged:true});
       continue;
     }
     const {view,...fields}=await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url,...(pr.readable?.facts?{view:true}:{})},p.commandPorts);
-    observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view,skippedTerminal:false});
+    observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view,skippedMerged:false});
   }
-  const liveObservations=observations.filter(row=>!row.skippedTerminal);
+  const liveObservations=observations.filter(row=>!row.skippedMerged);
   if(liveObservations.length) await captureClosedCi({ ...run, pr: liveObservations.map(row => ({ ...run.pr.find(pr => pr.url === row.url), ...row.fields, ...(row.view?.head ? { headSha: row.view.head } : {}) })) }, p);
   const refreshTops=async()=>{
     const observed=new Map(observations.map(observation=>[observation.url,{...observation.fields,view:observation.view}]));
@@ -5813,7 +5813,7 @@ async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled
   if (found.error) return fail(found.error);
   // A login file of a launch that never ran must not stay in the run folder.
   if (!localMode) removeStaleLoginFiles(found.run.runDir);
-  const readingSingle = !localMode && found.run.state !== 'cancelled' ? (found.run.pr ?? []).filter(pr => !TERMINAL_PR_STATES.has(pr.state)).length : 0;
+  const readingSingle = !localMode && found.run.state !== 'cancelled' ? (found.run.pr ?? []).filter(pr => pr.state !== 'merged').length : 0;
   if (readingSingle) p.say(`Reading ${readingSingle === 1 ? 'the PR' : `${readingSingle} PRs`} from GitHub…`);
   const ordinaryOwnership = readRunOwnership(found.run.runDir, p);
   if (!ordinaryOwnership && !localMode) {
