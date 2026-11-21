@@ -97,6 +97,8 @@ test('#3498 release workflow validates release tags, smoke-tests offline PyPI pd
   const npmPackIdx = workflow.indexOf('npm pack --ignore-scripts --pack-destination "$smoke_dir/npm-dist"');
   assert.equal(mkdirIdx >= 0 && mkdirIdx < npmPackIdx, true, 'verify-release creates $smoke_dir/npm-dist before npm pack --pack-destination');
   assert.match(workflow, /test ! -s "\$smoke_dir\/ver\.err"/);
+  assert.match(workflow, /pdd-codex" --pdd-help/);
+  assert.match(workflow, /pdd-claude" --pdd-help/);
   assert.match(workflow, /lint --local/);
   assert.match(workflow, /npm publish[\s\S]*--access public --provenance/);
   assert.match(workflow, /environment:\s*pypi-publish/);
@@ -214,6 +216,16 @@ test('#3498 stagePypiBundle + Python pdd_cli wrapper run offline with empty stde
   assert.equal(moduleVer.status, 0, moduleVer.stderr);
   assert.equal(moduleVer.stdout, `${pkgVersion}\n`);
   assert.equal(moduleVer.stderr, '');
+
+  const codexHelp = spawnSync(pyCodexBin, ['--pdd-help'], { cwd: sandbox, env: baseOfflineEnv, encoding: 'utf8' });
+  assert.equal(codexHelp.status, 0, codexHelp.stderr);
+  assert.match(codexHelp.stdout, /pdd-codex/);
+  assert.equal(codexHelp.stderr, '');
+
+  const claudeHelp = spawnSync(pyClaudeBin, ['--pdd-help'], { cwd: sandbox, env: baseOfflineEnv, encoding: 'utf8' });
+  assert.equal(claudeHelp.status, 0, claudeHelp.stderr);
+  assert.match(claudeHelp.stdout, /pdd-claude/);
+  assert.equal(claudeHelp.stderr, '');
 
   const codexVer = spawnSync(pyCodexBin, ['--version'], { cwd: sandbox, env: baseOfflineEnv, encoding: 'utf8' });
   assert.equal(codexVer.status, 0, codexVer.stderr);

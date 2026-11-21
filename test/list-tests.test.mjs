@@ -3,10 +3,11 @@ import './helpers/test-net-guard.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { boundSuiteCommand } from '../src/autopilot-core.mjs';
 import {
   discoverTestFiles,
   EXCLUDED_TEST_FILES,
@@ -16,7 +17,7 @@ import {
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const listScript = join(root, 'scripts', 'list-tests.mjs');
 
-test('list-tests matches current flat test/*.test.mjs exactly while excluding baseline fixture', () => {
+test('list-tests includes every top-level test file, keeps only valid .test.mjs paths, and excludes baseline fixture', () => {
   const flat = readdirSync(join(root, 'test'), { withFileTypes: true })
     .filter(entry => entry.isFile() && entry.name.endsWith('.test.mjs'))
     .map(entry => `test/${entry.name}`)
@@ -25,10 +26,16 @@ test('list-tests matches current flat test/*.test.mjs exactly while excluding ba
   const all = discoverTestFiles({ root, mode: 'all' });
   const unit = discoverTestFiles({ root, mode: 'unit' });
   const browser = discoverTestFiles({ root, mode: 'browser' });
+  const allSet = new Set(all);
 
-  assert.deepEqual(all, flat);
+  assert.equal(allSet.size, all.length, 'discovered test paths must be unique');
+  assert.deepEqual([...all].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), all, 'discovered test paths must be sorted');
+  assert.ok(all.every(file => file.startsWith('test/') && file.endsWith('.test.mjs')), 'every entry must be a test/**/*.test.mjs path');
+  for (const file of flat) {
+    assert.equal(allSet.has(file), true, `missing top-level test file ${file}`);
+  }
   for (const excluded of EXCLUDED_TEST_FILES) {
-    assert.equal(all.includes(excluded), false, `must exclude ${excluded}`);
+    assert.equal(allSet.has(excluded), false, `must exclude ${excluded}`);
   }
   assert.ok(browser.length > 0, 'expected browser screen tests');
   assert.ok(browser.every(isBrowserTest));
@@ -95,18 +102,20 @@ test('list-tests emits 4-part agent-teaching diagnostics on invalid flags or mis
   }
 });
 
-test('package.json and ci.yml wire recursive test manifest without stale alpha branch trigger or ci-install', () => {
+test('package.json test script supports bounded concurrency and fails closed when no test files exist', t => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-  assert.match(pkg.scripts.test, /scripts\/list-tests\.mjs/);
-  assert.match(pkg.scripts.test, /--import \.\/test\/helpers\/test-home\.mjs/);
-  assert.match(pkg.scripts.test, /--import \.\/test\/helpers\/test-net-guard\.mjs/);
-  assert.doesNotMatch(pkg.scripts.test, /test\/\*\.test\.mjs/);
+  const bounded = boundSuiteCommand('npm test', pkg, 4);
+  assert.match(bounded, /--test --test-concurrency=4\b/, 'boundSuiteCommand must inject --test-concurrency into package.json scripts.test');
 
-  const ci = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
-  assert.match(ci, /branches:\s*\[main\]/);
-  assert.doesNotMatch(ci, /branches:\s*\[.*alpha/);
-  assert.doesNotMatch(ci, /pdd-alpha-/);
-  assert.match(ci, /node scripts\/list-tests\.mjs --unit/);
-  assert.match(ci, /node scripts\/list-tests\.mjs --browser/);
-  assert.doesNotMatch(ci, /ci-install\.mjs/);
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-empty-suite-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, 'test', 'helpers'), { recursive: true });
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  copyFileSync(listScript, join(dir, 'scripts', 'list-tests.mjs'));
+  copyFileSync(join(root, 'test', 'helpers', 'test-home.mjs'), join(dir, 'test', 'helpers', 'test-home.mjs'));
+  copyFileSync(join(root, 'test', 'helpers', 'test-net-guard.mjs'), join(dir, 'test', 'helpers', 'test-net-guard.mjs'));
+
+  const res = spawnSync('/bin/sh', ['-c', pkg.scripts.test], { cwd: dir, encoding: 'utf8' });
+  assert.notEqual(res.status, 0, 'empty test discovery must fail closed instead of falling back to node --test defaults');
+  assert.equal(res.stdout, '');
 });

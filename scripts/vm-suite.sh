@@ -36,7 +36,7 @@ list_tests="$script_dir/list-tests.mjs"
 if [[ -f ./scripts/list-tests.mjs ]]; then
   list_tests="./scripts/list-tests.mjs"
 fi
-printf -v suite 'files=$(node %q) && env HOME=%q PDD_STATE_DIR=%q POCKET_BROWSER_BIN=/usr/bin/google-chrome node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-reporter=tap --test-concurrency=4 $files' "$list_tests" "$run_dir/home" "$run_dir/state"
+printf -v suite 'HOME=%q PDD_STATE_DIR=%q POCKET_BROWSER_BIN=/usr/bin/google-chrome; export HOME PDD_STATE_DIR POCKET_BROWSER_BIN; files=$(node %q) && [ -n "$files" ] && node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test --test-reporter=tap --test-concurrency=4 $files' "$run_dir/home" "$run_dir/state" "$list_tests"
 suite_result=0
 SUITE="$suite" "$lock_runner" > "$run_dir/suite.log" 2>&1 || suite_result=$?
 

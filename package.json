@@ -31,7 +31,7 @@
     "user_stories/fake-*.md"
   ],
   "scripts": {
-    "test": "files=$(node scripts/list-tests.mjs) && node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test $files",
+    "test": "files=$(node scripts/list-tests.mjs) && [ -n \"$files\" ] && node --import ./test/helpers/test-home.mjs --import ./test/helpers/test-net-guard.mjs --test $files",
     "version": "node scripts/sync-pypi-version.mjs && git add python/pyproject.toml python/pdd_cli/__init__.py",
     "release:publish": "node scripts/publish-release.mjs"
   },

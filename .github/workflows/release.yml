@@ -127,6 +127,12 @@ jobs:
           pypi_version=$(PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd" --version 2>"$smoke_dir/ver.err")
           test "$pypi_version" = "$EXPECTED_VERSION"
           test ! -s "$smoke_dir/ver.err"
+          PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd-codex" --pdd-help >"$smoke_dir/codex.out" 2>"$smoke_dir/codex.err"
+          grep -q "pdd-codex" "$smoke_dir/codex.out"
+          test ! -s "$smoke_dir/codex.err"
+          PATH="$smoke_dir/venv/bin:$PATH" PDD_CLI_OFFLINE=1 PDD_CLI_IGNORE_CHECKOUT=1 "$smoke_dir/venv/bin/pdd-claude" --pdd-help >"$smoke_dir/claude.out" 2>"$smoke_dir/claude.err"
+          grep -q "pdd-claude" "$smoke_dir/claude.out"
+          test ! -s "$smoke_dir/claude.err"
 
           cp -R test/fixtures/harbor "$smoke_dir/harbor"
           git -C "$smoke_dir/harbor" init -q
