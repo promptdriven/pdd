@@ -100,6 +100,14 @@ file owner module, with the PATH operands and json from --json. Return its exit
 code. This local route imports no Runtime client, reads no token and installs no
 skills.
 
+Dispatch `update-sync` to `runUpdate({cwd,files,from,check,write,json}, {stdout,stderr})`
+from [Code-to-prompt sync](update-sync.prompt.md), with FILE operands as `files`,
+`--from` as `from` (when present), and Boolean flags `--check`, `--write`, and
+`--json`. Return its exit code, catching unexpected errors with one finite stderr
+line and exit 1. This local route imports no Runtime client, spawns zero AI
+subprocesses, skips post-upgrade skill sync and the cached release notice (zero
+network even in TTY terminals), reads no token and installs no skills.
+
 ## Finished chat maintenance route
 
 Dispatch `workflow-tidy` to runner `tidyRuns({dryRun,cwd}, ports)`, forwarding
@@ -147,6 +155,7 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 - [Files view](files.prompt.md): required generation/verification/testing context for read-only file inspection and exits.
 
 - [File owner lookup](file-owner.prompt.md): required generation/verification/testing context for the read-only owner command and its exits.
+- [Code-to-prompt sync](update-sync.prompt.md): required generation/verification/testing context for the offline scoped `pdd update` command and per-module derived hash sync.
 
 - [Metrics command](metrics-command.prompt.md): required native generation/verification context for local metrics dispatch.
 
@@ -315,7 +324,7 @@ reply.
 {
   "kind": "partial",
   "status": "approved",
-  "prose_sha256": "cae5ac0d143b78e23c855a21633bf1cc6f5e00d04007eb4f92e3edc14bac7a33",
+  "prose_sha256": "a9f9cf942eb1ec35e31dca035901cfe25663a1f629e4e8a5318f500f04f2675d",
   "entries": [
     {
       "operation": "runPdd",
@@ -1301,4 +1310,4 @@ Route `pdd test --target code` to the local compiled Story checker without conta
 
 Dispatch local `accounts` by dynamically importing [Cloud accounts CLI](accounts-cli.prompt.md) (`accountsCli ?? await import('./accounts-cli.mjs')`) and calling `runAccountsCli({commandId: plan.commandId, operands: [...plan.operands], options: {...plan.options}, cwd, env, stdin}, accountsPorts)`. When `result.message` is non-empty, write it to `stdout` on exit 0 or `stderr` otherwise; keep `stdout` silent when `result.message === ''` (such as `pdd accounts sync --quiet`).
 
-Before command dispatch on normal CLI invocations (excluding `help`, `version`, `version-detailed`, `completion`, `workflow-list`, `project-files`, `file-owner`, `mcp`, `setup`, `upgrade`, `accounts` with `--quiet`, and any command with `--json` in `plan.options` or `argv`), call [skills install](skills-install.prompt.md) `syncOwnedUserSkills({packageRoot, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, codexHome: env.CODEX_HOME, stateRoot: env.PDD_STATE_DIR})` (or injected `syncOwnedUserSkills`) fail-open (#3424). When `updated.length > 0` and `stderr?.isTTY === true`, write `Updated PDD skills to VERSION (FOLDERS).` to `stderr`. Dispatch local `upgrade` by dynamically importing [Autopilot self-update and CLI upgrade](autopilot-update.prompt.md) (`cliUpgrade ?? await import('./autopilot-update.mjs')`) and calling `runCliUpgrade({env, stdout, stderr, main: plan.options['--main'] === true, packageRoot, home: env.HOME || homedir(), cwd}, cliUpgradePorts)`; return its `exitCode` without running the post-command release notice.
+Before command dispatch on normal CLI invocations (excluding `help`, `version`, `version-detailed`, `completion`, `workflow-list`, `project-files`, `file-owner`, `update-sync`, `mcp`, `setup`, `upgrade`, `accounts` with `--quiet`, and any command with `--json` in `plan.options` or `argv`), call [skills install](skills-install.prompt.md) `syncOwnedUserSkills({packageRoot, home: env.HOME || homedir(), claudeConfigDir: env.CLAUDE_CONFIG_DIR, codexHome: env.CODEX_HOME, stateRoot: env.PDD_STATE_DIR})` (or injected `syncOwnedUserSkills`) fail-open (#3424). When `updated.length > 0` and `stderr?.isTTY === true`, write `Updated PDD skills to VERSION (FOLDERS).` to `stderr`. Dispatch local `upgrade` by dynamically importing [Autopilot self-update and CLI upgrade](autopilot-update.prompt.md) (`cliUpgrade ?? await import('./autopilot-update.mjs')`) and calling `runCliUpgrade({env, stdout, stderr, main: plan.options['--main'] === true, packageRoot, home: env.HOME || homedir(), cwd}, cliUpgradePorts)`; return its `exitCode` without running the post-command release notice.
