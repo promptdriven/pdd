@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 79f4329f49d811aeeb333274e2398206f1b20dca35f783d16fa140b926edc114).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 501868e5244a9a2be510a9b632555c1a95ab99c07b2b2d732ee671d612e0d02a).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -2576,8 +2576,16 @@ function hasSavedTryRecord(realRoot, tests, rawWords, env = process.env) {
     const saved = JSON.parse(initialReadFileSync(repoFile, 'utf8'));
     const tries = saved?.tries;
     if (!tries || typeof tries !== 'object' || Array.isArray(tries)) return false;
-    if (!rawWords.length && Object.values(tries).some(v => v && typeof v === 'object' && v.simulation_scope)) {
-      return true;
+    if (!rawWords.length) {
+      if (
+        Object.values(tries).some(
+          v => v && typeof v === 'object' && v.simulation_scope && typeof v.simulation_scope === 'object' && !Array.isArray(v.simulation_scope),
+        )
+      ) {
+        return true;
+      }
+      const seed = [...tests].sort((a, b) => String(a?.path ?? '').localeCompare(String(b?.path ?? '')))[0];
+      return typeof seed?.path === 'string' && Boolean(tries[seed.path]);
     }
     return tests.some(item => typeof item?.path === 'string' && Boolean(tries[item.path]));
   } catch {
@@ -2820,11 +2828,11 @@ export async function runTry(input = {}, ports = {}) {
       return false;
     });
     const filteredStderr = wrapFilteredStream(baseStderr, text => {
-      if (REOPEN_TAB_CONFLICT_RE.test(text)) {
-        reopenAutoTabConflict = true;
-        return true;
-      }
       if (!startupSucceeded) {
+        if (REOPEN_TAB_CONFLICT_RE.test(text)) {
+          reopenAutoTabConflict = true;
+          return true;
+        }
         if (TRY_STARTUP_DONE_RE.test(text)) {
           startupSucceeded = true;
           emittedBeforeFallback.clear();
@@ -2835,7 +2843,7 @@ export async function runTry(input = {}, ports = {}) {
       return false;
     });
     const code = await invoke(effectiveInput, { ...forwardPorts, stdout: observedStdout, stderr: filteredStderr });
-    if (code === 2 && reopenAutoTabConflict) {
+    if (!startupSucceeded && code === 2 && reopenAutoTabConflict) {
       const reopenStderr = wrapFilteredStream(baseStderr, text => {
         if (emittedBeforeFallback.has(text)) {
           emittedBeforeFallback.delete(text);

@@ -917,3 +917,81 @@ test('3595/3596 R1-5/6: malformed non-object state_schema warns, screens[] keeps
     assert.match(content, /ref_target/, `${rel} must clarify input as ref_target`);
   }
 });
+
+test('3596 R2-1/2: whole-project plain-prose UI injects --tab screen when only non-seed Story has saved Try, and post-startup --tab stderr never triggers spurious retry', async t => {
+  // R2-1: 2-Story plain-prose UI repo (alpha, beta) with saved per-Story Try ONLY on non-seed tests/beta.json
+  const fTwo = makeRepo(t, {
+    'prompts/alpha.prompt.md': '# Alpha\n\n## Operations and ports\n\n- `sync render({ state }) -> { state, html }`\n- `sync handle_event({ state, event }) -> { state, html }`\n',
+    'prompts/beta.prompt.md': '# Beta\n\n## Operations and ports\n\n- `sync render({ state }) -> { state, html }`\n- `sync handle_event({ state, event }) -> { state, html }`\n',
+    'user_stories/alpha.md': '# Alpha screen\n\nAs a shopper, I want alpha, so that alpha renders.\n\n## Acceptance criteria\n\n1. Starts at 0.\n',
+    'user_stories/beta.md': '# Beta screen\n\nAs a shopper, I want beta, so that beta renders.\n\n## Acceptance criteria\n\n1. Starts at 0.\n',
+    'tests/alpha.json': { entry_path: 'prompts/alpha.prompt.md', steps: [{ id: 'open', op: 'render', input: { state: { count: 0 } }, checks: { '1': [['result', '/state/count', '=', 0]] } }] },
+    'tests/beta.json': { entry_path: 'prompts/beta.prompt.md', steps: [{ id: 'open', op: 'render', input: { state: { count: 0 } }, checks: { '1': [['result', '/state/count', '=', 0]] } }] },
+  }, { commit: true });
+
+  const { createHash } = await import('node:crypto');
+  const repoKey = createHash('sha256').update(realpathSync(fTwo.root)).digest('hex').slice(0, 16);
+  const reposDir = join(fTwo.state, 'repos');
+  mkdirSync(reposDir, { recursive: true });
+  writeFileSync(
+    join(reposDir, `${repoKey}.json`),
+    JSON.stringify({
+      root: realpathSync(fTwo.root),
+      last_batch: null,
+      tries: {
+        'tests/beta.json': { id: 'saved-beta-try', story: 'beta', storyPath: 'user_stories/beta.md' },
+      },
+    }),
+  );
+
+  const seenWhole = [];
+  const wholeCode = await runTry(
+    { cwd: fTwo.root, words: [], options: {} },
+    {
+      ...captureStreams(),
+      env: { ...process.env, PDD_STATE_DIR: fTwo.state },
+      runTry: async input => {
+        seenWhole.push(input.options);
+        return 0;
+      },
+    },
+  );
+  assert.equal(wholeCode, 0);
+  assert.deepEqual(seenWhole, [{ '--tab': 'screen' }]);
+
+  // Named beta still detects its saved Try and reopens without injecting --tab
+  const seenBeta = [];
+  const betaCode = await runTry(
+    { cwd: fTwo.root, words: ['beta'], options: {} },
+    {
+      ...captureStreams(),
+      env: { ...process.env, PDD_STATE_DIR: fTwo.state },
+      runTry: async input => {
+        seenBeta.push(input.options);
+        return 0;
+      },
+    },
+  );
+  assert.equal(betaCode, 0);
+  assert.deepEqual(seenBeta, [{}]);
+
+  // R2-2: post-startup stderr matching /--tab\b[^\n]*new/i passes through and NEVER triggers a second invoke even on exit 2
+  const postStartupStreams = captureStreams();
+  const postStartupCalls = [];
+  const postStartupCode = await runTry(
+    { cwd: fTwo.root, words: ['alpha'], options: {} },
+    {
+      ...postStartupStreams,
+      env: { ...process.env, PDD_STATE_DIR: fTwo.state },
+      runTry: async (input, ports) => {
+        postStartupCalls.push(input.options);
+        ports.stdout?.write('Try budget 400 calls; 400 remaining.\n');
+        ports.stderr?.write('Post-startup note: pass --tab screen with --new next time.\n');
+        return 2;
+      },
+    },
+  );
+  assert.equal(postStartupCode, 2);
+  assert.deepEqual(postStartupCalls, [{ '--tab': 'screen' }]);
+  assert.match(postStartupStreams.err, /Post-startup note: pass --tab screen with --new next time\./);
+});
