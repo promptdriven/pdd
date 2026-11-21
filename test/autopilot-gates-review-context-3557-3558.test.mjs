@@ -18,6 +18,7 @@ import {
   formatDomainDecisionsForReview,
   formatTestInventoryForReview,
 } from '../src/autopilot-core.mjs';
+import { lintRepoProject } from '../src/repo-hygiene-lint.mjs';
 import { promptHeaderHash } from '../src/file-owner.mjs';
 import { coreWorld } from './helpers/core-world.mjs';
 
@@ -1125,4 +1126,150 @@ test('R1-8 & R1-9: base owning prompt #21+ is not dropped, git show uses verifie
   assert.equal(saved707.testInventory.text.length, longInvText.length, 'job.testInventory.text is NOT prematurely re-sliced to 4500 chars');
   const invTruncMatch = rev707.input.match(/\[truncated: (\d+) more characters omitted from test inventory\]/);
   assert.ok(invTruncMatch && Number(invTruncMatch[1]) > 2000, `single-pass review truncation reports accurate omitted char count (>2000), got: ${invTruncMatch?.[0]}`);
+});
+
+test('R2-1, R2-2 & R2-3: PR-head pdd-workspace.json bypasses blocked, nonexistent root/configRoot & gitFiles failures fail closed, and sentence-ending period accepted in test deletion justification', async t => {
+  // 1. R2-1 (A): PR head puts {"allowed_paths": []} in pdd-workspace.json alongside a test-private-import violation -> BOTH caught before review!
+  const wWsEmpty = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wWsEmpty, {
+    'package.json': JSON.stringify({ name: 'ws-empty', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'src/core.mjs': 'export const pub = () => 1;\nexport const _priv = () => 2;\n',
+  });
+  wWsEmpty.issue(801);
+  await wWsEmpty.tick();
+  const cwd801 = wWsEmpty.job(801, 'build').cwd;
+  writeIn(cwd801, 'pdd-workspace.json', JSON.stringify({ allowed_paths: [] }, null, 2) + '\n');
+  writeIn(cwd801, 'test/bad.test.mjs', "import test from 'node:test';\nimport { _priv } from '../src/core.mjs';\ntest('priv', () => { _priv(); });\n");
+  wWsEmpty.build(801, {
+    write: false,
+    body: 'Fixes #801\n\nRuntime: not run (no prompt changed)\nPath: d — pdd-workspace.json, test/bad.test.mjs — unowned — no contract change — Test: test/bad.test.mjs',
+    result: { promptChanged: false },
+  });
+  await wWsEmpty.tick();
+  assert.equal(wWsEmpty.started.filter(j => j.role === 'review').length, 0, 'PR with {"allowed_paths": []} in pdd-workspace.json is blocked before review');
+  const rep801 = wWsEmpty.job(801, 'repair');
+  assert.ok(rep801);
+  assert.match(rep801.input, /test-private-import/, 'base workspace policy still lints changed test/bad.test.mjs despite head {"allowed_paths": []}');
+
+  // 2. R2-1 (B): PR head puts valid narrow {"allowed_paths": ["README.md"]} in pdd-workspace.json to hide test/bad.test.mjs -> base workspace policy still catches test-private-import!
+  const wWsNarrow = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wWsNarrow, {
+    'package.json': JSON.stringify({ name: 'ws-narrow', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'README.md': '# Demo\n',
+    'src/core.mjs': 'export const pub = () => 1;\nexport const _priv = () => 2;\n',
+  });
+  wWsNarrow.issue(802);
+  await wWsNarrow.tick();
+  const cwd802 = wWsNarrow.job(802, 'build').cwd;
+  writeIn(cwd802, 'pdd-workspace.json', JSON.stringify({ allowed_paths: ['README.md'] }, null, 2) + '\n');
+  writeIn(cwd802, 'test/bad.test.mjs', "import test from 'node:test';\nimport { _priv } from '../src/core.mjs';\ntest('priv', () => { _priv(); });\n");
+  wWsNarrow.build(802, {
+    write: false,
+    body: 'Fixes #802\n\nRuntime: not run (no prompt changed)\nPath: d — pdd-workspace.json, test/bad.test.mjs — unowned — no contract change — Test: test/bad.test.mjs',
+    result: { promptChanged: false },
+  });
+  await wWsNarrow.tick();
+  assert.equal(wWsNarrow.started.filter(j => j.role === 'review').length, 0, 'PR narrowing pdd-workspace.json cannot hide changed test violations');
+  assert.match(wWsNarrow.job(802, 'repair')?.input ?? '', /test-private-import/);
+
+  // 3. R2-1 (C): PR head puts malformed "{" in pdd-workspace.json -> blocked with lint-config-invalid before review!
+  const wWsBroken = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wWsBroken, {
+    'package.json': JSON.stringify({ name: 'ws-broken', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'src/core.mjs': 'export const pub = () => 1;\n',
+  });
+  wWsBroken.issue(803);
+  await wWsBroken.tick();
+  writeIn(wWsBroken.job(803, 'build').cwd, 'pdd-workspace.json', '{\n');
+  wWsBroken.build(803, {
+    write: false,
+    body: 'Fixes #803\n\nRuntime: not run (no prompt changed)\nPath: d — pdd-workspace.json — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wWsBroken.tick();
+  assert.equal(wWsBroken.started.filter(j => j.role === 'review').length, 0, 'malformed head pdd-workspace.json is blocked before review');
+  assert.match(wWsBroken.job(803, 'repair')?.input ?? '', /pdd-workspace\.json:1 \[lint-config-invalid\]/);
+
+  // 4. R2-1 (D): Untouched pre-existing malformed pdd-workspace.json on base falls back cleanly and does NOT block unrelated clean PR!
+  const wWsBaseBad = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wWsBaseBad, {
+    'package.json': JSON.stringify({ name: 'ws-base-bad', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'pdd-workspace.json': '{\n',
+    'src/clean.mjs': 'export const ok = () => 1;\n',
+  });
+  wWsBaseBad.issue(804);
+  await wWsBaseBad.tick();
+  writeIn(wWsBaseBad.job(804, 'build').cwd, 'src/clean.mjs', 'export const ok = () => 2;\n');
+  wWsBaseBad.build(804, {
+    write: false,
+    body: 'Fixes #804\n\nRuntime: not run (no prompt changed)\nPath: d — src/clean.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wWsBaseBad.tick();
+  assert.ok(wWsBaseBad.job(804, 'review'), 'untouched pre-existing broken base pdd-workspace.json never blocks unrelated PR');
+  assert.equal(wWsBaseBad.job(804, 'repair'), undefined);
+
+  // 5. R2-1 (E): direct lintRepoProject workspaceRoot / workspacePolicy override ignores head pdd-workspace.json!
+  const { dir: baseWsRepo, run: runBaseWs } = makeTempGitRepo(t, 'pdd-r2-base-ws-');
+  writeIn(baseWsRepo, 'src/core.mjs', 'export const _priv = () => 1;\n');
+  runBaseWs('add', '.');
+  runBaseWs('commit', '-qm', 'base');
+  const { dir: headWsRepo, run: runHeadWs } = makeTempGitRepo(t, 'pdd-r2-head-ws-');
+  writeIn(headWsRepo, 'pdd-workspace.json', JSON.stringify({ allowed_paths: ['README.md'] }, null, 2) + '\n');
+  writeIn(headWsRepo, 'README.md', '# ok\n');
+  writeIn(headWsRepo, 'src/core.mjs', 'export const _priv = () => 1;\n');
+  writeIn(headWsRepo, 'test/bad.test.mjs', "import test from 'node:test';\nimport { _priv } from '../src/core.mjs';\ntest('p', () => { _priv(); });\n");
+  runHeadWs('add', '.');
+  runHeadWs('commit', '-qm', 'head');
+  const headOnlyLint = lintRepoProject({ root: headWsRepo });
+  assert.equal(headOnlyLint.findings.some(f => f.code === 'test-private-import'), false, 'default workspace policy excludes test/bad.test.mjs');
+  const baseWsLint = lintRepoProject({ root: headWsRepo, workspaceRoot: baseWsRepo });
+  assert.equal(baseWsLint.findings.some(f => f.code === 'test-private-import'), true, 'workspaceRoot uses trusted base policy and catches test-private-import');
+
+  // 6. R2-2: nonexistent root, nonexistent configRoot, and real non-git directory (gitFiles failure) return { failed: true, ok: false }!
+  const missingRoot = evaluateChangedFileHygiene({ root: join(tmpdir(), `pdd-missing-root-${Date.now()}`), changedFiles: ['src/a.mjs'], mode: 'enforce' });
+  assert.equal(missingRoot.failed, true, 'nonexistent root fails closed');
+  assert.equal(missingRoot.ok, false);
+  assert.ok(missingRoot.error);
+
+  const { dir: validRepo } = makeTempGitRepo(t, 'pdd-r2-valid-');
+  const missingConfigRoot = evaluateChangedFileHygiene({
+    root: validRepo,
+    configRoot: join(tmpdir(), `pdd-missing-cfg-${Date.now()}`),
+    changedFiles: ['src/a.mjs'],
+    mode: 'enforce',
+  });
+  assert.equal(missingConfigRoot.failed, true, 'nonexistent configRoot fails closed');
+  assert.equal(missingConfigRoot.ok, false);
+
+  const nonGitDir = mkdtempSync(join(tmpdir(), 'pdd-r2-nongit-'));
+  t.after(() => rmSync(nonGitDir, { recursive: true, force: true }));
+  writeIn(nonGitDir, 'src/a.mjs', 'export const a = 1;\n');
+  const gitFail = evaluateChangedFileHygiene({ root: nonGitDir, changedFiles: ['src/a.mjs'], mode: 'enforce' });
+  assert.equal(gitFail.failed, true, 'gitFiles failure in non-git directory fails closed instead of returning ok:true');
+  assert.equal(gitFail.ok, false);
+  assert.match(gitFail.error, /Git files/i);
+
+  // 7. R2-3: sentence-ending "." after deleted test path/basename is ACCEPTED, while ".bak"/".1" and backslash prefix remain REJECTED!
+  const invStub = { available: true, reason: '', text: 'Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; this inventory did not run tests.\n' };
+  const acceptedPeriodBodies = [
+    'Fixes #1\n\nReplaced by new OAuth suite; removed `test/auth.test.mjs`.\n',
+    'Fixes #1\n\nRemoved test/auth.test.mjs. Covered by new OAuth integration suite.\n',
+    'Fixes #1\n\nRetired auth.test.mjs. Covered by new OAuth integration suite.\n',
+  ];
+  for (const prBody of acceptedPeriodBodies) {
+    const res = evaluateTestInventoryGate({ inventory: invStub, deletedTestFiles: ['test/auth.test.mjs'], prBody, mode: 'enforce' });
+    assert.equal(res.ok, true, `must accept sentence-ending period: ${prBody.trim()}`);
+    assert.deepEqual(res.unacknowledgedDeletedTests, []);
+  }
+  const rejectedPeriodBodies = [
+    'Fixes #1\n\nRemoved test/auth.test.mjs.bak as obsolete backup.\n',
+    'Fixes #1\n\nRemoved test/auth.test.mjs.1 as obsolete copy.\n',
+    'Fixes #1\n\nRemoved other\\auth.test.mjs as obsolete duplicate.\n',
+  ];
+  for (const prBody of rejectedPeriodBodies) {
+    const res = evaluateTestInventoryGate({ inventory: invStub, deletedTestFiles: ['test/auth.test.mjs'], prBody, mode: 'enforce' });
+    assert.equal(res.ok, false, `must reject suffix/backslash collision: ${prBody.trim()}`);
+    assert.deepEqual(res.unacknowledgedDeletedTests, ['test/auth.test.mjs']);
+  }
 });

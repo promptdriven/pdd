@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 9f8e883ca570bd47f8f8447cba1a476be6a3bceb8ff727ef239b3fb3aa809c02)
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: d271b53b57ad592f2dedcd2422de0800a73946956e18c79af46f655c92e675b6)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
@@ -13,7 +13,7 @@ import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupA
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
 import { checkAutopilotBase } from './autopilot-base.mjs';
 import { redactSecrets } from './secret-redaction.mjs';
-import { runtimePreflightSlice } from './runtime-seam.mjs';
+import { runtimePreflightSlice, workspace } from './runtime-seam.mjs';
 import { findOwners, headerEntries, isTestOwnedPath, resolveOwners } from './file-owner.mjs';
 import { readPromptApprovals } from './approval-policy.mjs';
 import { intakeTick, collectActiveIntake, activeReadyCards, rankReadyRows, intakeMode, isPersonComment, personComments, recordForensicsFixedCard, findOtherRepoSkipLabel, preflightCoreIssue } from './autopilot-intake.mjs';
@@ -7650,6 +7650,12 @@ function formatHygieneFinding(f) {
   return `${f.path}:${f.line ?? 1} [${f.code}] ${oneLine(sanitizeReviewData(f.message ?? f.formatted ?? f.code), 200)}`;
 }
 
+const isWorkspacePolicyError = err => Boolean(err && (
+  err.constructor?.name === 'RuntimeWorkspaceError'
+  || err.name === 'RuntimeWorkspaceError'
+  || (typeof err.code === 'string' && err.code.startsWith('workspace-'))
+));
+
 export function evaluateChangedFileHygiene({ root, changedFiles = [], mode = 'observe', config, configRoot } = {}) {
   const effectiveMode = ['off', 'observe', 'enforce'].includes(mode) ? mode : 'observe';
   if (effectiveMode === 'off') {
@@ -7663,16 +7669,60 @@ export function evaluateChangedFileHygiene({ root, changedFiles = [], mode = 'ob
       .filter(named)
       .map(p => String(p).replace(/\\/g, '/').replace(/^\.\//, '')),
   );
-  // Load trusted lint disable/severity overrides from config/configRoot (origin/<base> in preReviewHygieneCheck)
-  // rather than the untrusted PR head so a PR cannot self-disable rules via pdd.json or rules/lint/*.json.
+  // Load trusted lint disable/severity overrides AND workspace policy from config/configRoot (origin/<base>
+  // in preReviewHygieneCheck) rather than the untrusted PR head so a PR cannot self-disable rules via
+  // pdd.json, rules/lint/*.json, or pdd-workspace.json.
   const trustedConfig = config !== undefined ? config : (named(configRoot) ? configRoot : root);
-  const splitConfigRoot = typeof trustedConfig === 'string' && trustedConfig !== root;
-  let lintConfig, lintOut, headLintConfig = null;
+  let realHeadRoot, realConfigRoot = null, realWorkspaceRoot = null;
+  let splitConfigRoot = false, splitWorkspaceRoot = false;
+  let lintConfig, lintOut, headLintConfig = null, headWorkspaceError = null;
   try {
-    lintConfig = loadProjectLintConfig(trustedConfig);
-    lintOut = lintRepoProject({ root, config: trustedConfig });
+    realHeadRoot = nativeFs.realpathSync(root);
+    if (typeof trustedConfig === 'string') {
+      realConfigRoot = nativeFs.realpathSync(trustedConfig);
+      splitConfigRoot = realConfigRoot !== realHeadRoot;
+    }
+    if (named(configRoot)) {
+      realWorkspaceRoot = nativeFs.realpathSync(configRoot);
+    } else {
+      realWorkspaceRoot = realConfigRoot ?? realHeadRoot;
+    }
+    splitWorkspaceRoot = realWorkspaceRoot !== realHeadRoot;
+    const headFiles = gitFiles(realHeadRoot);
+    let workspacePolicy;
+    try {
+      workspacePolicy = workspace.policy({ root: realWorkspaceRoot });
+    } catch (wsErr) {
+      if (isWorkspacePolicyError(wsErr)) {
+        workspacePolicy = { configured: false, allowed_paths: [] };
+        if (!splitWorkspaceRoot && changedSet.has('pdd-workspace.json')) {
+          headWorkspaceError = wsErr?.message ?? 'pdd-workspace.json is invalid.';
+        }
+      } else {
+        throw wsErr;
+      }
+    }
+    if (splitWorkspaceRoot && changedSet.has('pdd-workspace.json')) {
+      try {
+        workspace.policy({ root: realHeadRoot });
+      } catch (wsErr) {
+        if (isWorkspacePolicyError(wsErr)) {
+          headWorkspaceError = wsErr?.message ?? 'pdd-workspace.json is invalid.';
+        } else {
+          throw wsErr;
+        }
+      }
+    }
+    const effectiveConfigInput = realConfigRoot ?? trustedConfig;
+    lintConfig = loadProjectLintConfig(effectiveConfigInput);
+    lintOut = lintRepoProject({
+      root: realHeadRoot,
+      files: headFiles,
+      config: effectiveConfigInput,
+      workspacePolicy,
+    });
     if (splitConfigRoot) {
-      headLintConfig = loadProjectLintConfig(root);
+      headLintConfig = loadProjectLintConfig(realHeadRoot);
     }
   } catch (error) {
     return { mode: effectiveMode, skipped: false, failed: true, error: error?.message ?? String(error), ok: false, blocking: [], observed: [], findings: [], summaryLines: [], reds: [] };
@@ -7680,8 +7730,8 @@ export function evaluateChangedFileHygiene({ root, changedFiles = [], mode = 'ob
   // Filter strictly to PR changed files (never failing unrelated PRs on untouched pre-existing broken config files).
   const relevant = (lintOut?.findings ?? [])
     .filter(f => f && changedSet.has(f.path) && !(splitConfigRoot && f.code === 'lint-config-invalid'));
+  const seenFormatted = new Set(relevant.map(f => f.formatted).filter(Boolean));
   if (splitConfigRoot && Array.isArray(headLintConfig?.configErrors)) {
-    const seenFormatted = new Set(relevant.map(f => f.formatted).filter(Boolean));
     for (const err of headLintConfig.configErrors) {
       if (!err || !changedSet.has(err.filePath)) continue;
       const line = err.line ?? 1;
@@ -7696,6 +7746,22 @@ export function evaluateChangedFileHygiene({ root, changedFiles = [], mode = 'ob
         category,
         severity: 'error',
         message: err.detail,
+        formatted,
+      });
+    }
+  }
+  if (headWorkspaceError && changedSet.has('pdd-workspace.json')) {
+    const detail = oneLine(sanitizeReviewData(headWorkspaceError), 300);
+    const formatted = `Error: lint config: pdd-workspace.json:1 [lint-config-invalid] ${detail}`;
+    if (!seenFormatted.has(formatted)) {
+      seenFormatted.add(formatted);
+      relevant.push({
+        path: 'pdd-workspace.json',
+        line: 1,
+        code: 'lint-config-invalid',
+        category: 'lint config',
+        severity: 'error',
+        message: detail,
         formatted,
       });
     }
@@ -7854,9 +7920,10 @@ function hasTestDeletionJustification(prBody, deletedPath) {
   const targetLower = target.toLowerCase();
   const baseLower = baseName.toLowerCase();
   // Match exact path (with optional leading ./) or standalone basename with path/filename token boundaries so
-  // substring collisions (test/foo.test.mjs.bak) or different-directory basenames (other/foo.test.mjs) never match.
-  const targetPattern = targetLower ? `(?<![a-z0-9_./-])(?:\\.\\/)?${escapeRegexLiteral(targetLower)}(?![a-z0-9_./-])` : null;
-  const basePattern = baseLower ? `(?<![a-z0-9_./-])${escapeRegexLiteral(baseLower)}(?![a-z0-9_./-])` : null;
+  // sentence-ending periods (e.g. "removed test/foo.test.mjs.") are accepted while substring collisions
+  // (test/foo.test.mjs.bak) or different-directory basenames (other/foo.test.mjs) never match.
+  const targetPattern = targetLower ? `(?<![a-z0-9_./\\\\-])(?:\\.\\/)?${escapeRegexLiteral(targetLower)}(?![a-z0-9_/-]|\\.[a-z0-9_-])` : null;
+  const basePattern = baseLower ? `(?<![a-z0-9_./\\\\-])${escapeRegexLiteral(baseLower)}(?![a-z0-9_/-]|\\.[a-z0-9_-])` : null;
   const targetRe = targetPattern ? new RegExp(targetPattern, 'i') : null;
   const baseRe = basePattern ? new RegExp(basePattern, 'i') : null;
   const targetReG = targetPattern ? new RegExp(targetPattern, 'gi') : null;
