@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 12ddd084ee873b763a0f5319815c5f9e7d54903d3488b5466adfe03f6dde9574).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: d0dc075a8383300596a645a9797492b5666470a5fcf93e3729a878a43bf486b0).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -7,7 +7,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, rea
 import { dirname, isAbsolute, join, relative, resolve, sep, basename } from 'node:path';
 import { headerPrompts } from './file-owner.mjs';
 import { cleanText, format, runtimeOutputSlice, runtimePreflightSlice, runtimeScenarioJsonSlice } from './runtime-seam.mjs';
-import { compileScenarioText, isShortScenarioDoc } from './scenario-compile.mjs';
+import { classifyExplicitCriteriaBinding, compileScenarioText, extractStoryCriteria, isShortScenarioDoc } from './scenario-compile.mjs';
 
 const { gitFiles } = runtimePreflightSlice();
 runtimeOutputSlice();
@@ -92,6 +92,25 @@ function storyOwnerStems(path) {
   }
   return stems;
 }
+function storyOwnerMatches(path, availablePaths) {
+  const stories = [...availablePaths].filter(isStoryCandidatePath).sort();
+  const stemSet = new Set(storyOwnerStems(path));
+  return stories.filter(candidate => stemSet.has(basename(candidate, '.md')));
+}
+function looksLikeBaseShortScenario(doc, baseMatches) {
+  if (!object(doc)) return false;
+  if (doc.schema_version === 'pdd.scenario.short.v1' || doc.schema_version === 'prompt-runtime.program-scenario.v1') return true;
+  if (baseMatches.length > 0) return true;
+  if (Object.hasOwn(doc, 'story_path') || Object.hasOwn(doc, 'entry_path') || Object.hasOwn(doc, 'entry_paths')) return true;
+  if (Array.isArray(doc.steps)) {
+    for (const step of doc.steps) {
+      if (!object(step)) continue;
+      if (Object.hasOwn(step, 'entry_path')) return true;
+      if ((Object.hasOwn(step, 'op') || Object.hasOwn(step, 'operation')) && Object.hasOwn(step, 'checks')) return true;
+    }
+  }
+  return false;
+}
 function resolvePairedStory(path, doc, availablePaths, readStoryBytes) {
   if (Object.hasOwn(doc, 'story_path')) {
     const explicit = typeof doc.story_path === 'string' ? doc.story_path : '';
@@ -100,9 +119,7 @@ function resolvePairedStory(path, doc, availablePaths, readStoryBytes) {
     const bytes = readStoryBytes(explicit);
     return { storyPath: explicit, storySource: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
   }
-  const stories = [...availablePaths].filter(isStoryCandidatePath).sort();
-  const stemSet = new Set(storyOwnerStems(path));
-  const matches = stories.filter(candidate => stemSet.has(basename(candidate, '.md')));
+  const matches = storyOwnerMatches(path, availablePaths);
   if (matches.length > 1) {
     throw Error(`Short JSON scenario ${path} matches multiple Stories: ${matches.join(', ')}.`);
   }
@@ -115,8 +132,11 @@ function resolvePairedStory(path, doc, availablePaths, readStoryBytes) {
 function compileIfShort(path, rawText, exact, resolveStory) {
   if (!isShortScenarioDoc(exact)) return exact;
   const story = typeof resolveStory === 'function' ? resolveStory(path, exact) : null;
-  if (!story && !Object.hasOwn(exact, 'criteria')) {
-    throw Error(`Short JSON scenario ${path} requires a paired Story file to bind acceptance criteria.`);
+  const hasExplicitCriteria = Object.hasOwn(exact, 'criteria');
+  const storyItems = story ? extractStoryCriteria(story.storySource) : [];
+  if (!hasExplicitCriteria) {
+    requireThat(Boolean(story), `Short JSON scenario ${path} requires a paired Story file to bind acceptance criteria.`);
+    requireThat(storyItems.length > 0, `Short JSON scenario ${path} paired Story ${story.storyPath} has no acceptance criteria.`);
   }
   const compiled = compileScenarioText(rawText, {
     path,
@@ -124,6 +144,38 @@ function compileIfShort(path, rawText, exact, resolveStory) {
     storySource: story?.storySource ?? null,
   });
   requireThat(!compiled.refusal, compiled.refusal?.message || 'Short JSON scenario could not be compiled.');
+  const compiledCriteria = Array.isArray(compiled.exactDoc?.criteria) ? compiled.exactDoc.criteria : [];
+  if (!hasExplicitCriteria) {
+    requireThat(compiledCriteria.length > 0, `Short JSON scenario ${path} failed to bind acceptance criteria from ${story.storyPath}.`);
+  }
+  const seenCriteriaIds = new Set();
+  for (const item of compiledCriteria) {
+    if (!object(item) || !text(item.id) || typeof item.text !== 'string' || !item.text.trim()) {
+      throw Error(
+        hasExplicitCriteria && (!story || storyItems.length === 0)
+          ? `Short JSON scenario ${path} uses shorthand criteria without a paired Story containing acceptance criteria.`
+          : `Short JSON scenario ${path} contains an invalid or unbound acceptance criterion entry.`,
+      );
+    }
+    requireThat(!seenCriteriaIds.has(item.id), `Short JSON scenario ${path} has duplicate acceptance criterion ID ${item.id}.`);
+    seenCriteriaIds.add(item.id);
+  }
+  if (story && compiledCriteria.length > 0) {
+    const binding = classifyExplicitCriteriaBinding(compiled.exactDoc, {
+      storyPath: story.storyPath,
+      storySource: story.storySource,
+      allowSubset: true,
+    });
+    if (binding.kind === 'stale-content-id') {
+      throw Error(`Short JSON scenario ${path} has stale criterion ID ${binding.criterionId} for Story ${binding.storyPath}.`);
+    }
+    if (binding.kind === 'text-mismatch') {
+      throw Error(`Short JSON scenario ${path} criteria do not match Story ${binding.storyPath}: ${binding.difference}`);
+    }
+    if (binding.kind === 'duplicate-criterion') {
+      throw Error(`Short JSON scenario ${path} has duplicate acceptance criterion ${binding.criterionId}.`);
+    }
+  }
   return compiled.exactDoc;
 }
 function worktreeStoryResolver(root, visible) {
@@ -468,14 +520,23 @@ function baseScenarios(root,commit,changed,scenarios,codeSpace) {
       rawExact=parseScenario(rawText);
     } catch{ continue; }
     if(object(rawExact)&&rawExact.schema_version==='prompt-runtime.program-scenario.v1'&&!isShortScenarioDoc(rawExact)){docs.set(row.path,jsonSafe(rawExact));continue;}
-    if((named.has(row.path)||shortCandidate(row.path))&&object(rawExact)&&isShortScenarioDoc(rawExact)){
-      try{
-        const compiled=compileIfShort(row.path,rawText,rawExact,resolveBaseStory);
-        if(object(compiled)&&compiled.schema_version==='prompt-runtime.program-scenario.v1')docs.set(row.path,jsonSafe(compiled));
-      }catch(error){
-        if(rawExact.schema_version==='pdd.scenario.short.v1'||rawExact.schema_version==='prompt-runtime.program-scenario.v1'){
-          brokenBaseShort.set(row.path,error.message);
-          docs.set(row.path,jsonSafe(rawExact));
+    if((named.has(row.path)||shortCandidate(row.path))&&object(rawExact)){
+      const baseMatches=storyOwnerMatches(row.path,basePathSet);
+      if(isShortScenarioDoc(rawExact)||looksLikeBaseShortScenario(rawExact,baseMatches)){
+        try{
+          const compiled=isShortScenarioDoc(rawExact)
+            ?compileIfShort(row.path,rawText,rawExact,resolveBaseStory)
+            :(()=>{throw Error(`Short JSON scenario ${row.path} has invalid scenario structure.`);})();
+          if(object(compiled)&&compiled.schema_version==='prompt-runtime.program-scenario.v1')docs.set(row.path,jsonSafe(compiled));
+        }catch(error){
+          if(looksLikeBaseShortScenario(rawExact,baseMatches)){
+            brokenBaseShort.set(row.path,error.message);
+            const synthetic=jsonSafe(rawExact);
+            if(object(synthetic)&&!Object.hasOwn(synthetic,'story_path')&&baseMatches.length===1){
+              synthetic.story_path=baseMatches[0];
+            }
+            docs.set(row.path,synthetic);
+          }
         }
       }
     }

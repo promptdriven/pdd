@@ -1,9 +1,10 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: c117de70ab9036ab2fa8bf7d7f30b3c54757082d9cebc4146d796ec618a34ead).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 79f4329f49d811aeeb333274e2398206f1b20dca35f783d16fa140b926edc114).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import fs, { realpathSync } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -2457,9 +2458,45 @@ export async function askAgent(input = {}, ports = {}) {
 }
 
 const PLAIN_PROSE_UI_MAX_BYTES = 2 * 1024 * 1024;
+const DIRECT_PROMPT_STDERR_LIMIT = 4096;
+const REOPEN_FALLBACK_LINE_LIMIT = 64;
 const PLAIN_PROSE_RENDER_RE = /(?:\brender\s*\(|`(?:(?:sync|async)\s+)?render(?:\s*\([^)]*\))?`|^#{2,4}\s+render\b)/im;
 const PLAIN_PROSE_HANDLE_EVENT_RE = /(?:\bhandle_event\s*\(|`(?:(?:sync|async)\s+)?handle_event(?:\s*\([^)]*\))?`|^#{2,4}\s+handle_event\b)/im;
+const PLAIN_PROSE_CLI_ARGV_RE = /\bargv\b/;
+const PLAIN_PROSE_CLI_EXIT_RE = /\bexit_code\b/;
+const PLAIN_PROSE_HTTP_RE = /\bHTTP\s+(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)\s+\//;
 const HTTP_TITLE_RE = /^HTTP (?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/;
+const REOPEN_TAB_CONFLICT_RE = /--tab\b[^\n]*new/i;
+const TRY_STARTUP_DONE_RE = /https?:\/\/\S+\/s\/\S+|Try budget \d+|Connecting your agent to the Try page/i;
+const FORM_TAB_NOTICE = "This Story's operation takes typed input, so it opens on the Form tab.";
+
+let cachedNativePlainProseUiSupport;
+function runtimeClientSupportsPlainProseUi() {
+  if (cachedNativePlainProseUiSupport !== undefined) return cachedNativePlainProseUiSupport;
+  try {
+    const info = typeof version === 'function' ? version() : null;
+    if (
+      (Array.isArray(info?.features) &&
+        info.features.some(f =>
+          ['plain-prose-ui', 'plain-prose-ui-screen', 'single-prompt-try', 'single-prompt-simulate', 'hybrid-ui'].includes(f),
+        )) ||
+      info?.capabilities?.plainProseUi === true ||
+      info?.capabilities?.plainProseUiScreen === true ||
+      info?.capabilities?.singlePromptTry === true
+    ) {
+      cachedNativePlainProseUiSupport = true;
+      return true;
+    }
+    const clientEntry = req.resolve('@promptdriven/runtime-client');
+    const clientSource = initialReadFileSync(resolve(dirname(clientEntry), 'runtime', 'runtime-client.mjs'), 'utf8');
+    cachedNativePlainProseUiSupport =
+      /\bhandle_event\b/.test(clientSource) && /\brender\b/.test(clientSource) && /\bscreen\b/.test(clientSource);
+    return cachedNativePlainProseUiSupport;
+  } catch {
+    cachedNativePlainProseUiSupport = false;
+    return false;
+  }
+}
 
 function isRegularInRootPromptFile(cwd, candidate) {
   if (typeof candidate !== 'string' || !candidate.endsWith('.prompt.md')) return false;
@@ -2489,7 +2526,15 @@ function isPlainProseHybridUiPrompt(source) {
 
 function promptEntryHasCliOrHttpDoor(realRoot, visible, entryPath, promptSource, operation) {
   const blocks = interfaceBlocks(promptSource);
-  if (!blocks.length) return false;
+  if (!blocks.length) {
+    if (operation === 'main' && PLAIN_PROSE_CLI_ARGV_RE.test(promptSource) && PLAIN_PROSE_CLI_EXIT_RE.test(promptSource)) {
+      return true;
+    }
+    if (PLAIN_PROSE_HTTP_RE.test(promptSource)) {
+      return true;
+    }
+    return false;
+  }
   let iface = null;
   try {
     iface = readPrompt(realRoot, visible, entryPath)?.interface ?? null;
@@ -2521,8 +2566,27 @@ function promptEntryHasCliOrHttpDoor(realRoot, visible, entryPath, promptSource,
   return false;
 }
 
-function wrapFilteredStderr(baseStderr, shouldSuppress) {
-  const target = baseStderr ?? process.stderr;
+function hasSavedTryRecord(realRoot, tests, rawWords, env = process.env) {
+  try {
+    const stateDir = resolve(env?.PDD_STATE_DIR || join(env?.HOME || homedir(), '.pdd', 'runtime'));
+    const repoKey = createHash('sha256').update(realRoot).digest('hex').slice(0, 16);
+    const repoFile = join(stateDir, 'repos', `${repoKey}.json`);
+    const st = initialLstatSync(repoFile);
+    if (st.isSymbolicLink() || !st.isFile()) return false;
+    const saved = JSON.parse(initialReadFileSync(repoFile, 'utf8'));
+    const tries = saved?.tries;
+    if (!tries || typeof tries !== 'object' || Array.isArray(tries)) return false;
+    if (!rawWords.length && Object.values(tries).some(v => v && typeof v === 'object' && v.simulation_scope)) {
+      return true;
+    }
+    return tests.some(item => typeof item?.path === 'string' && Boolean(tries[item.path]));
+  } catch {
+    return false;
+  }
+}
+
+function wrapFilteredStream(baseStream, shouldSuppress) {
+  const target = baseStream;
   return Object.assign(Object.create(target), {
     ...(target.isTTY !== undefined ? { isTTY: target.isTTY } : {}),
     write(chunk, ...rest) {
@@ -2542,7 +2606,7 @@ function wrapFilteredStderr(baseStderr, shouldSuppress) {
   });
 }
 
-function shouldDefaultPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
+function classifyPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
   const opts = input?.options ?? {};
   if (
     opts['--tab'] !== undefined ||
@@ -2554,17 +2618,17 @@ function shouldDefaultPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
     opts['--product'] ||
     opts['--app-map'] !== undefined
   ) {
-    return false;
+    return 'none';
   }
   try {
     const root = repoTopRoot(cwd);
-    if (!root) return false;
+    if (!root) return 'none';
     const rawWords = Array.isArray(input?.words) ? input.words : [];
     const found = withScenarioOverlay(lazyOverlay, () =>
       findTests({ root, cwd, excludeFixtureProjects: rawWords.length === 0 }, ports),
     );
     if (!found?.visible || found.visible.has('app-map.json') || found.visible.has('app/app-map.json')) {
-      return false;
+      return 'none';
     }
     const realRoot = realpathSync(root);
     const realCwd = realpathSync(cwd);
@@ -2587,7 +2651,7 @@ function shouldDefaultPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
     const tests = normalizedWords.length
       ? (Array.isArray(selectedResult) ? selectedResult : selectedResult?.selected ?? [])
       : (found.tests ?? []);
-    if (!tests.length) return false;
+    if (!tests.length) return 'none';
 
     const promptCache = new Map();
     const readSafeVisiblePrompt = rel => {
@@ -2621,6 +2685,7 @@ function shouldDefaultPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
 
     let sawPlainProseUiStep = false;
     for (const item of tests) {
+      if (Array.isArray(item?.doc?.app_maps) && item.doc.app_maps.length > 0) return 'none';
       const steps = Array.isArray(item?.doc?.steps) ? item.doc.steps : [];
       for (const step of steps) {
         const entryPath = typeof step?.entry_path === 'string' ? step.entry_path : '';
@@ -2628,15 +2693,19 @@ function shouldDefaultPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
         if (!entryPath || !op) continue;
         const promptSource = readSafeVisiblePrompt(entryPath);
         if (promptSource === null) continue;
-        if (promptEntryHasCliOrHttpDoor(realRoot, found.visible, entryPath, promptSource, op)) return false;
+        if (promptEntryHasCliOrHttpDoor(realRoot, found.visible, entryPath, promptSource, op)) return 'none';
         if ((op === 'render' || op === 'handle_event') && isPlainProseHybridUiPrompt(promptSource)) {
           sawPlainProseUiStep = true;
         }
       }
     }
-    return sawPlainProseUiStep;
+    if (!sawPlainProseUiStep) return 'none';
+    if (!opts['--new'] && hasSavedTryRecord(realRoot, tests, rawWords, ports?.env ?? process.env)) {
+      return 'reopen';
+    }
+    return 'inject';
   } catch {
-    return false;
+    return 'none';
   }
 }
 
@@ -2704,47 +2773,75 @@ export async function runTry(input = {}, ports = {}) {
   if (directPromptCandidate) {
     let observedErr = '';
     const targetStderr = forwardPorts.stderr ?? process.stderr;
-    const watchedStderr = wrapFilteredStderr(targetStderr, text => {
-      observedErr += text;
+    const watchedStderr = wrapFilteredStream(targetStderr, text => {
+      if (observedErr.length < DIRECT_PROMPT_STDERR_LIMIT) {
+        observedErr += text.slice(0, DIRECT_PROMPT_STDERR_LIMIT - observedErr.length);
+      }
       return false;
     });
     const exitCode = await invoke(input, { ...forwardPorts, stderr: watchedStderr });
     if (
       exitCode === 2 &&
       /No tests found|Unknown story|No Stories are available/i.test(observedErr) &&
-      !observedErr.includes('runtime-client#97')
+      !observedErr.includes('Direct .prompt.md simulation')
     ) {
+      const safePrompt = cleanText(directPromptCandidate);
       targetStderr.write(
-        `Direct .prompt.md simulation (${directPromptCandidate}) requires @promptdriven/runtime-client with single-prompt simulation support (promptdriven/runtime-client#97).\n`,
+        `Direct .prompt.md simulation (${safePrompt}) requires a newer @promptdriven/runtime-client; upgrade pdd / @promptdriven/runtime-client.\n`,
       );
     }
     return exitCode;
   }
 
-  const autoScreenTab = shouldDefaultPlainProseScreenTab(input, cwd, forwardPorts, lazyOverlay);
-  const effectiveInput = autoScreenTab
-    ? { ...input, options: { ...opts, '--tab': 'screen' } }
-    : input;
-  if (autoScreenTab && !opts['--new']) {
-    let reopenAutoTabConflict = false;
-    const emittedBeforeFallback = new Set();
+  const skipSeamAutoScreenTab = typeof rawTryOverride !== 'function' && runtimeClientSupportsPlainProseUi();
+  const screenTabMode = skipSeamAutoScreenTab
+    ? 'none'
+    : classifyPlainProseScreenTab(input, cwd, forwardPorts, lazyOverlay);
+  if (screenTabMode === 'reopen') {
     const baseStderr = forwardPorts.stderr ?? process.stderr;
-    const filteredStderr = wrapFilteredStderr(baseStderr, text => {
-      if (text.includes('--app-map and --tab apply only to a new Try')) {
+    const reopenStderr = wrapFilteredStream(baseStderr, text => text.includes(FORM_TAB_NOTICE));
+    return invoke(input, { ...forwardPorts, stderr: reopenStderr });
+  }
+  const effectiveInput =
+    screenTabMode === 'inject'
+      ? { ...input, options: { ...opts, '--tab': 'screen' } }
+      : input;
+  if (screenTabMode === 'inject' && !opts['--new']) {
+    let reopenAutoTabConflict = false;
+    let startupSucceeded = false;
+    const emittedBeforeFallback = new Set();
+    const baseStdout = forwardPorts.stdout ?? process.stdout;
+    const baseStderr = forwardPorts.stderr ?? process.stderr;
+    const observedStdout = wrapFilteredStream(baseStdout, text => {
+      if (!startupSucceeded && TRY_STARTUP_DONE_RE.test(text)) {
+        startupSucceeded = true;
+        emittedBeforeFallback.clear();
+      }
+      return false;
+    });
+    const filteredStderr = wrapFilteredStream(baseStderr, text => {
+      if (REOPEN_TAB_CONFLICT_RE.test(text)) {
         reopenAutoTabConflict = true;
         return true;
       }
-      emittedBeforeFallback.add(text);
+      if (!startupSucceeded) {
+        if (TRY_STARTUP_DONE_RE.test(text)) {
+          startupSucceeded = true;
+          emittedBeforeFallback.clear();
+        } else if (emittedBeforeFallback.size < REOPEN_FALLBACK_LINE_LIMIT && text.length <= DIRECT_PROMPT_STDERR_LIMIT) {
+          emittedBeforeFallback.add(text);
+        }
+      }
       return false;
     });
-    const code = await invoke(effectiveInput, { ...forwardPorts, stderr: filteredStderr });
+    const code = await invoke(effectiveInput, { ...forwardPorts, stdout: observedStdout, stderr: filteredStderr });
     if (code === 2 && reopenAutoTabConflict) {
-      const reopenStderr = wrapFilteredStderr(baseStderr, text => {
+      const reopenStderr = wrapFilteredStream(baseStderr, text => {
         if (emittedBeforeFallback.has(text)) {
           emittedBeforeFallback.delete(text);
           return true;
         }
-        return text.includes("This Story's operation takes typed input, so it opens on the Form tab.");
+        return text.includes(FORM_TAB_NOTICE);
       });
       return invoke(input, { ...forwardPorts, stderr: reopenStderr });
     }

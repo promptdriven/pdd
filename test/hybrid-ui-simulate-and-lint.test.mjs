@@ -172,7 +172,8 @@ test('3596 CLI & runtime-seam forward prompts/app.prompt.md, --stop prompts/app.
     2,
   );
   assert.match(compatStreams.err, /No tests found\./);
-  assert.match(compatStreams.err, /Direct \.prompt\.md simulation \(prompts\/app\.prompt\.md\) requires @promptdriven\/runtime-client/);
+  assert.match(compatStreams.err, /Direct \.prompt\.md simulation \(prompts\/app\.prompt\.md\) requires a newer @promptdriven\/runtime-client; upgrade pdd \/ @promptdriven\/runtime-client\./);
+  assert.doesNotMatch(compatStreams.err, /runtime-client#97/);
 
   const stopStreams = captureStreams();
   assert.equal(
@@ -192,7 +193,20 @@ test('3596 CLI & runtime-seam forward prompts/app.prompt.md, --stop prompts/app.
   const env = { HOME: home, PDD_RUNTIME_URL: 'https://runtime.example', PDD_STATE_DIR: state };
   const cliCode = await runPdd(['simulate', 'prompts/app.prompt.md'], { cwd: root, env, stdout: cliStreams.stdout, stderr: cliStreams.stderr });
   assert.equal(cliCode, 2);
-  assert.match(cliStreams.err, /Direct \.prompt\.md simulation \(prompts\/app\.prompt\.md\) requires @promptdriven\/runtime-client/);
+  assert.match(cliStreams.err, /Direct \.prompt\.md simulation \(prompts\/app\.prompt\.md\) requires a newer @promptdriven\/runtime-client; upgrade pdd \/ @promptdriven\/runtime-client\./);
+  assert.doesNotMatch(cliStreams.err, /runtime-client#97/);
+
+  // R1-4: oversized stderr (>4096 chars before "No tests found.") stays bounded and does not trigger unbounded buffering
+  const floodStreams = captureStreams();
+  const noisyReject = async (_input, ports) => {
+    ports.stderr?.write(`${'x'.repeat(5000)}\nNo tests found.\n`);
+    return 2;
+  };
+  assert.equal(
+    await runTry({ cwd: root, words: ['prompts/app.prompt.md'], options: {} }, { ...floodStreams, runTry: noisyReject }),
+    2,
+  );
+  assert.doesNotMatch(floodStreams.err, /Direct \.prompt\.md simulation/);
 });
 
 test('3596 pdd lint --local passes with 0 warnings on 1-file and 3-file plain-prose HTML UI apps (zero app-map.json, zero Runtime interface)', async t => {
@@ -730,4 +744,176 @@ test('3596 runTry does not hijack mixed CLI+UI or HTTP+UI whole-project sessions
   assert.equal(codeMapReopen, 0, `${pMapReopen.ports.stdout.text}\n${pMapReopen.ports.stderr.text}`);
   const runsAfterReopen = fakeCli.gets.filter(g => g.url.startsWith('/v1/runs/')).length;
   assert.equal(runsAfterReopen - runsBeforeReopen, 1);
+});
+
+test('3596 R1-3/4: plain-prose CLI+UI and HTTP+UI repos, scenario app_maps, and runtime-client@1.1.0 reopen error wording', async t => {
+  // 1. Mixed plain-prose CLI + UI repo (no Runtime interface blocks anywhere)
+  const fPlainCli = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\n## Operations and ports\n\n- `sync render({ state }) -> { state, html }`\n- `sync handle_event({ state, event }) -> { state, html }`\n',
+    'prompts/tool.prompt.md': '# tool\n\n## Operations and ports\n\n- `sync main({ argv }) -> { exit_code, stdout, stderr }`\n',
+    'user_stories/counter.md': '# Counter\n\nAs a shopper, I want to count, so that totals match.\n\n## Acceptance criteria\n\n1. Starts at 0.\n',
+    'user_stories/tool.md': '# Tool\n\nAs an operator, I want ping, so that health checks work.\n\n## Acceptance criteria\n\n1. Prints ok.\n',
+    'tests/counter.json': { entry_path: 'prompts/counter.prompt.md', steps: [{ id: 'open', op: 'render', input: { state: { count: 0 } }, checks: { '1': [['result', '/state/count', '=', 0]] } }] },
+    'tests/tool.json': { entry_path: 'prompts/tool.prompt.md', steps: [{ id: 'run', op: 'main', input: { argv: ['ping'] }, checks: { '1': [['result', '/exit_code', '=', 0]] } }] },
+  }, { commit: true });
+
+  const seenPlainCli = [];
+  await runTry(
+    { cwd: fPlainCli.root, words: [], options: {} },
+    {
+      ...captureStreams(),
+      env: { ...process.env, PDD_STATE_DIR: fPlainCli.state },
+      runTry: async input => {
+        seenPlainCli.push(input.options);
+        return 0;
+      },
+    },
+  );
+  assert.deepEqual(seenPlainCli, [{}]);
+
+  // 2. Mixed plain-prose HTTP + UI repo (no Runtime interface blocks anywhere)
+  const fPlainHttp = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\n## Operations and ports\n\n- `sync render({ state }) -> { state, html }`\n- `sync handle_event({ state, event }) -> { state, html }`\n',
+    'prompts/api.prompt.md': '# API\n\n## Operations and ports\n\n- `sync ping({}) -> { status, body }` — handles `HTTP GET /ping`.\n',
+    'user_stories/counter.md': '# Counter\n\nAs a shopper, I want to count, so that totals match.\n\n## Acceptance criteria\n\n1. Starts at 0.\n',
+    'user_stories/api.md': '# API\n\nAs a client, I want ping, so that health checks work.\n\n## Acceptance criteria\n\n1. Returns 200.\n',
+    'tests/counter.json': { entry_path: 'prompts/counter.prompt.md', steps: [{ id: 'open', op: 'render', input: { state: { count: 0 } }, checks: { '1': [['result', '/state/count', '=', 0]] } }] },
+    'tests/api.json': { entry_path: 'prompts/api.prompt.md', steps: [{ id: 'ping', op: 'ping', input: {}, checks: { '1': [['result', '/status', '=', 200]] } }] },
+  }, { commit: true });
+
+  const seenPlainHttp = [];
+  await runTry(
+    { cwd: fPlainHttp.root, words: [], options: {} },
+    {
+      ...captureStreams(),
+      env: { ...process.env, PDD_STATE_DIR: fPlainHttp.state },
+      runTry: async input => {
+        seenPlainHttp.push(input.options);
+        return 0;
+      },
+    },
+  );
+  assert.deepEqual(seenPlainHttp, [{}]);
+
+  // 3. Scenario declaring app_maps (without root app-map.json) bails out of seam --tab screen injection
+  const fScenarioMap = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\n## Operations and ports\n\n- `sync render({ state }) -> { state, html }`\n- `sync handle_event({ state, event }) -> { state, html }`\n',
+    'app/maps/custom.json': { initial_state: { count: 0 }, screens: [{ prompt_path: 'prompts/counter.prompt.md' }] },
+    'user_stories/counter.md': '# Counter\n\nAs a shopper, I want to count, so that totals match.\n\n## Acceptance criteria\n\n1. Starts at 0.\n',
+    'tests/counter.json': {
+      entry_path: 'prompts/counter.prompt.md',
+      app_maps: ['app/maps/custom.json'],
+      steps: [{ id: 'open', op: 'render', input: { state: { count: 0 } }, checks: { '1': [['result', '/state/count', '=', 0]] } }],
+    },
+  }, { commit: true });
+
+  const seenScenarioMap = [];
+  await runTry(
+    { cwd: fScenarioMap.root, words: ['counter'], options: {} },
+    {
+      ...captureStreams(),
+      env: { ...process.env, PDD_STATE_DIR: fScenarioMap.state },
+      runTry: async input => {
+        seenScenarioMap.push(input.options);
+        return 0;
+      },
+    },
+  );
+  assert.deepEqual(seenScenarioMap, [{}]);
+
+  // 4. Reopened Try fallback with updated runtime-client@1.1.0 stderr wording (--app-map, --tab, and --fresh apply only to a new Try)
+  const fReopen11 = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\n## Operations and ports\n\n- `sync render({ state }) -> { state, html }`\n- `sync handle_event({ state, event }) -> { state, html }`\n',
+    'user_stories/counter.md': '# Counter\n\nAs a shopper, I want to count, so that totals match.\n\n## Acceptance criteria\n\n1. Starts at 0.\n',
+    'tests/counter.json': { entry_path: 'prompts/counter.prompt.md', steps: [{ id: 'open', op: 'render', input: { state: { count: 0 } }, checks: { '1': [['result', '/state/count', '=', 0]] } }] },
+  }, { commit: true });
+
+  const reopenStreams = captureStreams();
+  const reopenCalls = [];
+  const reopenCode = await runTry(
+    { cwd: fReopen11.root, words: ['counter'], options: {} },
+    {
+      ...reopenStreams,
+      env: { ...process.env, PDD_STATE_DIR: fReopen11.state },
+      runTry: async (input, ports) => {
+        reopenCalls.push(input.options);
+        ports.stderr?.write('Capture notice once\n');
+        if (input.options['--tab'] === 'screen') {
+          ports.stderr?.write('A Try for "Counter" is already open. --app-map, --tab, and --fresh apply only to a new Try: run pdd simulate counter --new (it stops the open Try first).\n');
+          return 2;
+        }
+        ports.stderr?.write("This Story's operation takes typed input, so it opens on the Form tab.\n");
+        ports.stdout?.write('Try budget 400 calls; 400 remaining.\n');
+        return 0;
+      },
+    },
+  );
+  assert.equal(reopenCode, 0);
+  assert.deepEqual(reopenCalls, [{ '--tab': 'screen' }, {}]);
+  assert.equal((reopenStreams.err.match(/Capture notice once/g) ?? []).length, 1);
+  assert.doesNotMatch(reopenStreams.err, /apply only to a new Try|Form tab/);
+});
+
+test('3595/3596 R1-5/6: malformed non-object state_schema warns, screens[] keeps original indices, and docs advertise 4 top-level targets with input as ref_target only', t => {
+  for (const badSchema of ['bad', [], null]) {
+    const { root } = makeRepo(t, {
+      'prompts/screen.prompt.md': '# Screen\n\n- `render({ state })` -> `{ state, html }`\n\n## Dependencies\n\nNone.\n',
+      'app-map.json': {
+        initial_state: { count: 0 },
+        state_schema: badSchema,
+        screens: [{ prompt_path: 'prompts/screen.prompt.md', operation: 'render', result_pointer: '/html' }],
+      },
+    });
+    const warnings = lintSvgLayouts({ root, files: gitFiles(root) });
+    assert.ok(
+      warnings.some(line => line === 'Warning: app-map.json: state_schema must be a JSON Schema object (or omit it for compact app-map.json).'),
+      `expected state_schema warning for ${JSON.stringify(badSchema)}, got:\n${warnings.join('\n')}`,
+    );
+  }
+
+  // Leading non-object entry in screens[] must not shift screen-2 down to main
+  const { root: idxRoot } = makeRepo(t, {
+    'prompts/second.prompt.md': [
+      '# Second Screen',
+      '',
+      '## Appearance',
+      '',
+      '![Second](views/second__desktop.ui.svg)',
+      '',
+      'Render `<button id="go">Go</button>`.',
+      '',
+      '## Dependencies',
+      '',
+      'None.',
+      '',
+    ].join('\n'),
+    'prompts/views/second__desktop.ui.svg': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><title>Second</title><desc>Second screen</desc><g id="go"><rect width="80" height="30"/><text x="10" y="20">Go</text></g></svg>\n',
+    'app-map.json': {
+      initial_state: {},
+      screens: [
+        null,
+        { prompt_path: 'prompts/second.prompt.md', operation: 'render', result_pointer: '/html' },
+        { prompt_path: 'prompts/missing.prompt.md', operation: 'render', result_pointer: '/html' },
+      ],
+    },
+  });
+  const idxWarnings = lintSvgLayouts({ root: idxRoot, files: gitFiles(idxRoot) });
+  assert.ok(idxWarnings.some(line => /screen "screen-3".*prompts\/missing\.prompt\.md/.test(line)), idxWarnings.join('\n'));
+  assert.ok(idxWarnings.some(line => /screen-2/.test(line)), `expected screen-2 in stylesheet warning, got:\n${idxWarnings.join('\n')}`);
+  assert.ok(!idxWarnings.some(line => /\bscreen "main"\b/.test(line)), idxWarnings.join('\n'));
+
+  // R1-6: docs document 4 top-level check targets and input as ref_target only
+  for (const rel of [
+    '../RUNBOOK.md',
+    '../skills/pdd-prompting/RUNBOOK.md',
+    '../docs/prompting-guide.md',
+    '../skills/pdd-prompting/guide.md',
+    '../docs/story-guide.md',
+    '../skills/pdd-prompting/story-guide.md',
+    '../skills/pdd-prompting/runbook/checks-and-budgets.md',
+  ]) {
+    const content = readFileSync(new URL(rel, import.meta.url), 'utf8');
+    assert.doesNotMatch(content, /5-target|5 targets|five core check targets/i, `${rel} must not advertise 5 top-level targets`);
+    assert.match(content, /ref_target/, `${rel} must clarify input as ref_target`);
+  }
 });

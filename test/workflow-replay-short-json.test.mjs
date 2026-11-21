@@ -334,3 +334,138 @@ test('3576: Short JSON replay fails closed on symlinked, hardlinked, missing, in
   assert.equal(allBroken.outcome, 'blocked');
   assert.match(allBroken.reason, /exceeds|counter\.json/i);
 });
+
+test('3576 R1-1: broken schema-versionless native Short JSON on base commit fails closed on code and Story-only changes while skipping unrelated JSON', t => {
+  const fNativeBroken = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\nExpose `sync inc()`.\n',
+    'user_stories/counter.md': '# Counter\n\nAs a clerk, I want to count, so that totals match.\n\n## Acceptance criteria\n\n1. Inc returns 1.\n',
+    'tests/counter.json': {
+      entry_path: 'prompts/counter.prompt.md',
+      steps: [{ id: 's1', op: 'inc', checks: { '9': [['result', '/count', '=', 1]] } }],
+    },
+    'tests/unrelated-wizard.json': {
+      steps: [{ name: 'welcome' }],
+    },
+    'src/counter.mjs': '// Generated from prompts/counter.prompt.md\nexport const inc = () => ({ count: 1 });\n',
+  });
+  const baseSha = fNativeBroken.git('rev-parse', 'HEAD');
+
+  const codeChangeBlocked = pinRunAnchor(fNativeBroken.root, {
+    paths: [],
+    commit: baseSha,
+    changed: ['src/counter.mjs'],
+    scenarios: [],
+    codeSpace: true,
+  });
+  assert.equal(codeChangeBlocked.outcome, 'blocked');
+  assert.match(codeChangeBlocked.reason, /tests\/counter\.json.*exceeds/i);
+
+  const storyOnlyBlocked = pinRunAnchor(fNativeBroken.root, {
+    paths: [],
+    commit: baseSha,
+    changed: ['user_stories/counter.md'],
+    scenarios: [],
+    codeSpace: true,
+  });
+  assert.equal(storyOnlyBlocked.outcome, 'blocked');
+  assert.match(storyOnlyBlocked.reason, /tests\/counter\.json.*exceeds/i);
+
+  const fUnrelatedOnly = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\nExpose `sync inc()`.\n',
+    'user_stories/counter.md': '# Counter\n\nAs a clerk, I want to count, so that totals match.\n\n## Acceptance criteria\n\n1. Inc returns 1.\n',
+    'tests/counter.json': {
+      entry_path: 'prompts/counter.prompt.md',
+      steps: [{ id: 's1', op: 'inc', checks: { '1': [['result', '/count', '=', 1]] } }],
+    },
+    'tests/unrelated-wizard.json': {
+      steps: [{ name: 'welcome' }],
+    },
+    'src/counter.mjs': '// Generated from prompts/counter.prompt.md\nexport const inc = () => ({ count: 1 });\n',
+  });
+  const okSha = fUnrelatedOnly.git('rev-parse', 'HEAD');
+  const okAnchor = pinRunAnchor(fUnrelatedOnly.root, {
+    paths: [],
+    commit: okSha,
+    changed: ['src/counter.mjs'],
+    scenarios: [],
+    codeSpace: true,
+  });
+  assert.equal(okAnchor.outcome, undefined, okAnchor.reason);
+  assert.deepEqual(okAnchor.vectors.map(v => v.path), ['tests/counter.json']);
+});
+
+test('3576 R1-2: compileIfShort fails closed on 0-AC Stories, missing-Story shorthand criteria, duplicate Story criteria, and stale/mismatched ac-sha256 hashes', t => {
+  const fZeroAc = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\nExpose `sync inc()`.\n',
+    'user_stories/counter.md': '# Counter\n\nAs a clerk, I want to count, so that totals match.\n',
+    'tests/counter.json': {
+      entry_path: 'prompts/counter.prompt.md',
+      steps: [{ id: 's1', op: 'inc', checks: { '1': [['result', '/count', '=', 1]] } }],
+    },
+  });
+  const zeroAnchor = pinReplayVectors(fZeroAc.root, ['tests/counter.json']);
+  assert.equal(zeroAnchor.outcome, 'blocked');
+  assert.match(zeroAnchor.reason, /no acceptance criteria/i);
+
+  const fShorthandStr = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\nExpose `sync inc()`.\n',
+    'tests/counter.json': {
+      entry_path: 'prompts/counter.prompt.md',
+      criteria: ['AC1'],
+      steps: [{ id: 's1', op: 'inc', checks: [{ criterion_id: 'AC1', target: 'result', path: '/count', op: '=', value: 1 }] }],
+    },
+  });
+  const shorthandStrAnchor = pinReplayVectors(fShorthandStr.root, ['tests/counter.json']);
+  assert.equal(shorthandStrAnchor.outcome, 'blocked');
+  assert.match(shorthandStrAnchor.reason, /shorthand criteria|invalid|unbound/i);
+
+  const fShorthandIdObj = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\nExpose `sync inc()`.\n',
+    'tests/counter.json': {
+      entry_path: 'prompts/counter.prompt.md',
+      criteria: [{ id: 'AC1' }],
+      steps: [{ id: 's1', op: 'inc', checks: [{ criterion_id: 'AC1', target: 'result', path: '/count', op: '=', value: 1 }] }],
+    },
+  });
+  const shorthandObjAnchor = pinReplayVectors(fShorthandIdObj.root, ['tests/counter.json']);
+  assert.equal(shorthandObjAnchor.outcome, 'blocked');
+  assert.match(shorthandObjAnchor.reason, /shorthand criteria|invalid|unbound/i);
+
+  const fDupStory = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\nExpose `sync inc()`.\n',
+    'user_stories/counter.md': '# Counter\n\nAs a clerk, I want to count, so that totals match.\n\n## Acceptance criteria\n\n1. Inc returns 1.\n2. Inc returns 1.\n',
+    'tests/counter.json': {
+      entry_path: 'prompts/counter.prompt.md',
+      steps: [{ id: 's1', op: 'inc', checks: { '1': [['result', '/count', '=', 1]] } }],
+    },
+  });
+  const dupAnchor = pinReplayVectors(fDupStory.root, ['tests/counter.json']);
+  assert.equal(dupAnchor.outcome, 'blocked');
+  assert.match(dupAnchor.reason, /duplicate/i);
+
+  const fStaleHash = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\nExpose `sync inc()`.\n',
+    'user_stories/counter.md': '# Counter\n\nAs a clerk, I want to count, so that totals match.\n\n## Acceptance criteria\n\n1. Inc returns 1.\n',
+    'tests/counter.json': {
+      entry_path: 'prompts/counter.prompt.md',
+      criteria: [{ id: 'ac-sha256-000000000000000000000000000000000000000000000000', text: 'Inc returns 1.' }],
+      steps: [{ id: 's1', op: 'inc', checks: [{ criterion_id: 'ac-sha256-000000000000000000000000000000000000000000000000', target: 'result', path: '/count', op: '=', value: 1 }] }],
+    },
+  });
+  const staleHashAnchor = pinReplayVectors(fStaleHash.root, ['tests/counter.json']);
+  assert.equal(staleHashAnchor.outcome, 'blocked');
+  assert.match(staleHashAnchor.reason, /stale criterion/i);
+
+  const fTextMismatch = makeRepo(t, {
+    'prompts/counter.prompt.md': '# Counter\n\nExpose `sync inc()`.\n',
+    'user_stories/counter.md': '# Counter\n\nAs a clerk, I want to count, so that totals match.\n\n## Acceptance criteria\n\n1. Inc returns 1.\n',
+    'tests/counter.json': {
+      entry_path: 'prompts/counter.prompt.md',
+      criteria: [{ id: 'AC1', text: 'Inc returns 99.' }],
+      steps: [{ id: 's1', op: 'inc', checks: [{ criterion_id: 'AC1', target: 'result', path: '/count', op: '=', value: 1 }] }],
+    },
+  });
+  const textMismatchAnchor = pinReplayVectors(fTextMismatch.root, ['tests/counter.json']);
+  assert.equal(textMismatchAnchor.outcome, 'blocked');
+  assert.match(textMismatchAnchor.reason, /do not match/i);
+});

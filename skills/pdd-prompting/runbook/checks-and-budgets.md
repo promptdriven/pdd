@@ -4,7 +4,7 @@
 
 ## 8. Check paths
 
-The five core check targets are `result`, `error`, `world`, `calls`, and `input` (never `output`—use `result`), plus `html` selector checks on rendered HTML strings.
+The four top-level check targets are `result`, `error`, `world`, and `calls` (never `output`—use `result`), plus `html` selector shorthands on rendered HTML strings (`input` is valid only as a `ref_target` reference source for cross-target checks and `integer_relation`).
 
 | Target | JSON Pointer `path` | Notes |
 |---|---|---|
@@ -12,7 +12,7 @@ The five core check targets are `result`, `error`, `world`, `calls`, and `input`
 | `error` | `/code` (or shorthand `["error", "=", "code"]`) | Step must also set `"expected_error"` (auto-inferred in Short JSON). Ops: `count`, `equals`, `exists`, `not_equals`, `one_of`. |
 | `world` | `/kv/tasks/0/done` | Persisted simulated store state after the step. |
 | `calls` | `store.save` or `internal:peer` | Call count. Assert `= 0` only when the op contract binds that port; on read-only ops, check unchanged `world` instead. Ops: `count`, `equals`, `not_equals`, `one_of`. |
-| `input` | `/field`, `/amount_cents` | Step input object field (useful for `ref_target`/`ref_path` cross-checks and `integer_relation`). |
+| `input` (`ref_target` only) | `/field`, `/amount_cents` | Reference source only (never a top-level `target`); use with `ref_target`/`ref_path` cross-target checks and `integer_relation`. |
 | `html` | Short JSON tuples: `["html_exists", "button#go"]`, `["html_text", "span#score", "=", "0"]`, `["html_attr", "button#go", "value", "=", "go"]`, `["html", "button", "labels_include", ["Go"]]` | Selector MUST start with a tag name (`button#go`, `span#score`). |
 
 - **All 16 operators:**

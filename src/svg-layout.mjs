@@ -1,4 +1,4 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: 4a5f7a6aedc2322ebbf3ee5f27621fefb0fd67950cff4d2a36e7ea1142885217).
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: caece5556b3ce3f7693dff1e20c424cf239792f37e3bab6bc4fc689c05f2327a).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';
@@ -799,8 +799,9 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         ) continue;
         const topSheets = Array.isArray(doc.stylesheets) ? doc.stylesheets.filter(item => typeof item === 'string') : [];
         const screens = doc.screens
-          .filter(screen => screen && typeof screen === 'object' && typeof screen.prompt_path === 'string')
-          .map((screen, idx) => {
+          .map((screen, idx) => [screen, idx])
+          .filter(([screen]) => screen && typeof screen === 'object' && !Array.isArray(screen) && typeof screen.prompt_path === 'string')
+          .map(([screen, idx]) => {
             const source = typeof screen.source === 'string' ? screen.source : 'operation';
             const format = typeof screen.format === 'string' ? screen.format : (source === 'mockup' ? 'svg' : 'html');
             const id = typeof screen.id === 'string' && screen.id ? screen.id : (idx === 0 ? 'main' : `screen-${idx + 1}`);
@@ -898,11 +899,13 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     }
     if (!mapDoc || typeof mapDoc !== 'object' || Array.isArray(mapDoc)) continue;
     parsedAppMaps.set(mapPath, mapDoc);
-    const screens = Array.isArray(mapDoc.screens) ? mapDoc.screens.filter(s => s && typeof s === 'object') : [];
+    const screenEntries = Array.isArray(mapDoc.screens)
+      ? mapDoc.screens.map((s, idx) => [s, idx]).filter(([s]) => s && typeof s === 'object' && !Array.isArray(s))
+      : [];
     const timers = Array.isArray(mapDoc.timers) ? mapDoc.timers : [];
     if (promptFilter) {
       const referenced = new Set([
-        ...screens.map(s => s.prompt_path).filter(p => typeof p === 'string'),
+        ...screenEntries.map(([s]) => s.prompt_path).filter(p => typeof p === 'string'),
         ...timers.map(t => t?.handler?.prompt_path).filter(p => typeof p === 'string'),
       ]);
       if (![...referenced].some(p => promptFilter.has(p))) continue;
@@ -911,13 +914,13 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       const text = `Warning: ${mapPath}: app-map schema_version ${JSON.stringify(mapDoc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.app-map.v1" (or omit it for compact app-map.json).`;
       warnings.push({ key: `${mapPath}\0mapschema`, text });
     }
-    if (!screens.length && !promptFilter) {
+    if (!screenEntries.length && !promptFilter) {
       const text = `Warning: ${mapPath}: app-map.json must declare a non-empty "screens" array.`;
       warnings.push({ key: `${mapPath}\0mapscreens`, text });
     }
     const validScreenIds = new Set();
     const screenPromptById = new Map();
-    for (const [sIdx, screen] of screens.entries()) {
+    for (const [screen, sIdx] of screenEntries) {
       const sId = typeof screen.id === 'string' && screen.id ? screen.id : (sIdx === 0 ? 'main' : `screen-${sIdx + 1}`);
       if (sId !== '*') validScreenIds.add(sId);
       if (typeof screen.prompt_path === 'string' && screen.prompt_path.trim()) {
@@ -932,6 +935,10 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       }
     }
     const hasStateSchema = Boolean(mapDoc.state_schema && typeof mapDoc.state_schema === 'object' && !Array.isArray(mapDoc.state_schema));
+    if (Object.hasOwn(mapDoc, 'state_schema') && !hasStateSchema) {
+      const text = `Warning: ${mapPath}: state_schema must be a JSON Schema object (or omit it for compact app-map.json).`;
+      warnings.push({ key: `${mapPath}\0mapstateschema`, text });
+    }
     if (mapDoc.timers !== undefined) {
       if (!Array.isArray(mapDoc.timers) || mapDoc.timers.length > 16) {
         const text = `Warning: ${mapPath}: timers must be an array of at most 16 timer objects.`;
@@ -1036,7 +1043,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
           }
         }
       };
-      for (const [sIdx, screen] of screens.entries()) {
+      for (const [screen, sIdx] of screenEntries) {
         const sLabel = `screen "${typeof screen.id === 'string' && screen.id ? screen.id : `screens[${sIdx}]`}"`;
         checkStateRefs(screen.input, sLabel);
       }

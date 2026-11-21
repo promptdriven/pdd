@@ -22,7 +22,7 @@ a vector without one has no such field,
 or an explicit blocked anchor with a reason. No paths or no checks is not_replayed. Paths must be unique,
 Git-visible, canonical repo-relative regular files with no symlink ancestors or hardlinks; refuse missing,
 empty, unreadable or malformed scenarios. Limit200files,10MiB aggregate vector bytes,2MiB per file and10000
-steps/checks. Each scenario uses `prompt-runtime.program-scenario.v1` (kept verbatim without rewriting literal criterion IDs) or PDD Short JSON (compiled in memory via `src/scenario-compile.mjs` (`compileScenarioText`) against its paired Git-visible regular Story from explicit canonical `story_path` or matching `user_stories/**/S.md` per the test-selection naming rule, failing closed on missing, ambiguous, noncanonical, symlinked, hardlinked, oversized, or invalid-UTF-8 Stories and preserving the raw file SHA256 and exact whole numbers while refusing compile errors), unique nonempty step_id, entry_path and
+steps/checks. Each scenario uses `prompt-runtime.program-scenario.v1` (kept verbatim without rewriting literal criterion IDs) or PDD Short JSON (compiled in memory via `src/scenario-compile.mjs` (`compileScenarioText`, `extractStoryCriteria`, `classifyExplicitCriteriaBinding`) against its paired Git-visible regular Story from explicit canonical `story_path` or matching `user_stories/**/S.md` per the test-selection naming rule, failing closed on missing, ambiguous, noncanonical, symlinked, hardlinked, oversized, invalid-UTF-8, or zero-criterion Stories when `criteria` is omitted, rejecting duplicate criterion IDs, rejecting string-only or ID-only explicit `criteria` entries without a bound Story containing acceptance criteria, rejecting `stale-content-id`, `text-mismatch`, or `duplicate-criterion` from `classifyExplicitCriteriaBinding(..., { allowSubset: true })` whenever a paired Story is present, and preserving the raw file SHA256 and exact whole numbers while refusing compile errors), unique nonempty step_id, entry_path and
 operation, and nonempty checks. A check identity is vector path, step_id and zero-based check_index, plus the
 original entry_path, operation, criterion_id, target, JSON path and assertion op. Supported targets are result,
 error, world and calls. Preserve every original identity; do not substitute generated fixtures or expected values.
@@ -37,7 +37,7 @@ area. Read the base with local Git only: `git grep -F` for the scenario schema n
 settings when parsing Git output; the scenario search must emit no color codes.
 
 A base scenario is a regular `.json` blob of at most 10 MiB, found by that search or containing `"steps"` under `test/` or `tests/` (excluding `fixtures/`), whose parsed schema_version is
-`prompt-runtime.program-scenario.v1` (kept verbatim when not Short JSON) or valid PDD Short JSON compiled against its paired base Story blob; skip other and unparsable JSON (while blocking selected malformed `pdd.scenario.short.v1` and hybrid `prompt-runtime.program-scenario.v1` scenarios). Search matches over 10 MiB are not read;
+`prompt-runtime.program-scenario.v1` (kept verbatim when not Short JSON) or valid PDD Short JSON compiled against its paired base Story blob; skip other and unparsable JSON, while treating a failing Short JSON candidate as a broken base scenario whenever it declares an explicit scenario `schema_version` (`pdd.scenario.short.v1` or `prompt-runtime.program-scenario.v1`), matches a base Story stem, or declares `story_path`, top-level `entry_path`, `entry_paths`, or a step with `entry_path` or `op`/`operation` alongside `checks` (recording its failure and preserving synthetic links including any uniquely matched base Story path when `story_path` is omitted so Story-only changes also select it and fail closed). Search matches over 10 MiB are not read;
 report each path, byte size and limit in the base note and the PR Anchor line, even when other files are
 selected. Never silently omit them. Its links are its story_path, top-level entry_path, every step
 entry_path and its entry_paths. The changed area is every changed path, the links of each changed scenario
@@ -389,7 +389,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 ```json
 {
   "status": "approved",
-  "prose_sha256": "d9e1462c32ff25016ca95c98cfc123b3bec2b994495b13082fa6e1898549f2c6",
+  "prose_sha256": "198eb4498b59007df90abe29e64e9c55078d3d3c75a170835503851a3e024302",
   "entries": [
     {
       "operation": "adoptReplayCorpus",
