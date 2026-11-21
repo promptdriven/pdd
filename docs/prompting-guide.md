@@ -53,13 +53,15 @@ Inject outside effects (databases, filesystem, HTTP/network, clocks, randomness,
 
 - **Dependency direction for `kind: native-only` boundary adapters:** Checkable domain, CLI flow and screen prompts must depend on shared contracts or checkable peers over injected `<port>.<op>` interfaces — **never** list a `kind: native-only` adapter prompt under `## Dependencies` of a checkable prompt (including Story `entry_path` prompts). Invert the dependency so the thin `kind: native-only` adapter depends on the checkable domain prompt.
 
-## SVG appearance content for frontend modules
+## Screens, inline CSS, and SVG appearance content for frontend modules
 
-Every user-facing frontend module links minimal representative `.ui.svg` mockups (`views/<state>[--<variant>]__<layout-mode>.ui.svg`) using Markdown image syntax (`![Alt text](relative/path.ui.svg)`) under `## Appearance`. Backend servers, routers, CLIs and daemons carry no `.ui.svg` screens.
+Single-screen and simple interactive UI apps run directly from one plain-prose `.prompt.md` with zero `app-map.json`, zero `Runtime interface`, and optional Story (`render({ state }) -> { state, html }` + `handle_event({ state, event }) -> { state, html | patch }`, plus optional pure JSON `apply({ state, event }) -> { state }` for fast logic-only checks in `pdd test`; initialize default state when `state` is missing, `null`, or `{}`): emit semantic HTML (`<button>`, `<a>`, `<form>`, `data-event-kind="key"`), optional declarative `data-pdd-op="<op>"`, HTML-escaped dynamic text, and inline sanitizer-safe `<style>`. Add compact `app-map.json` (omitting optional defaults, using wildcard `"match": {"value": "*"}` or `data-pdd-op`) only when an app needs host `timers`, multi-screen routing, external stylesheets, follow-up `after` handlers, or strict static `state_schema` checks. Backend servers, routers, CLIs and daemons stay screenless.
+
+When a frontend module has `.ui.svg` mockups (`views/<state>[--<variant>]__<layout-mode>.ui.svg`), link them using Markdown image syntax (`![Alt text](relative/path.ui.svg)`) under `## Appearance`:
 
 - **Single source of truth:** SVG owns visual layout, visible labels, spatial order and stable intent-based `id`s (`viewBox`, `<title>`, `<desc>`; mark unowned surroundings `data-context-only="true"` or class `context-only`; exclude scripts, event handlers, framework classes, external fonts/assets and base64 blobs). Prose owns behavior, responsive rules, keyboard/click flows, accessibility/focus order and dynamic data authority.
 - **Fidelity and purpose:** Declare whether each view is **illustrative** or a **comparison reference** for a named state, and state fidelity once (**Relational**, **Measured** at a reference viewport with comparator/tolerances, or **Exact**).
-- **Stylesheets and fast authoring lint:** HTML operation screens (`"source": "operation"`, `"format": "html"`) list CSS files under `"stylesheets"` in `app-map.json` and name matching CSS classes in the screen prompt. During authoring, verify `.ui.svg` and `app-map.json` alignment with `pdd lint --local` (`<150ms`, zero browser/AI calls); render `.ui.svg` to PNG only when a person explicitly requests PNG previews.
+- **Stylesheets and fast authoring lint:** Screen HTML preserves inline sanitizer-safe `<style>`; HTML operation screens with linked `.ui.svg` drawings and external CSS list those files under `"stylesheets"` in `app-map.json` and name matching CSS classes in prose. Verify prompts, `.ui.svg`, Short JSON, and `app-map.json` alignment offline with `pdd lint --local` (`<150ms`, zero browser/AI calls); render `.ui.svg` to PNG only when explicitly requested.
 
 <a id="preservation"></a>
 <details>
@@ -80,12 +82,12 @@ Policy comes from authorized requirements and accepted consumer or shared contra
 Choose the proof boundary before touching `user_stories/` (see `story-guide.md` for Story structure and `<= 35`-line / `<= 6`-criteria bounds):
 
 - **`0` Stories + `"No Story: <reason>"` PR line:** Internal refactors, `kind: native-only` adapters, or changes already covered by an existing Story over an injected port.
-- **Edit existing Story vs `1` Story per cohesive standalone user loop:** Modify the existing Story when changing an existing user slice; write `1` Story per new standalone user loop (ask before `> 3`), give steps self-contained starting states by default so `pdd test` runs them in parallel, and assert `1` observable check per material claim in its Short JSON scenario.
+- **Edit existing Story vs `1` Story per cohesive standalone user loop:** Modify the existing Story when changing an existing user slice; write `1` Story per new standalone user loop (ask before `> 3`), keep native Short JSON directly in `tests/<slug>.json` (with top-level `entry_path` and auto-inferred `user_stories/<slug>.md`, self-contained starting states so `pdd test` runs steps in parallel, and `1` observable check per material claim across the 4 targets `result`, `world`, `calls`, `error` plus `html_*` shorthands—with `input` as a `ref_target` reference source—and 16 operators). `pdd lint` (and `pdd test`) runs whole-program cross-prompt unification across shared `<port>.<op>` signatures, mocked-port owner parity, and `contracts/*.md` schemas.
 - **Technical invariants stay in `.prompt.md`:** Put symlink, `.GIT` casing, V1/V2 schema, and boundary invariants in `.prompt.md` `## Domain decisions` (verified by PR 2 native/formal checks), never in `user_stories/*.md`. Test suites, fixtures, CI configs, manifests and docs never get `.prompt.md` owners.
 
 ## Prompt format and native-only declarations
 
-A behavior prompt is plain Markdown: purpose, `## Domain decisions`, public operations, failure edges and `## Dependencies` (no embedded `Runtime interface` block). Owned code files carry `Generated from <path>.prompt.md` near line 1 (or line 2 after `#!`; commentless files use `pdd-bindings.json`).
+A behavior prompt is plain Markdown: purpose, `## Domain decisions`, public operations, failure edges and `## Dependencies`. `Runtime interface` blocks are omitted for both `app-map.json` apps and Hybrid simulation (when present, embedded `Runtime interface` blocks are stripped from LLM context). Owned code files carry `Generated from <path>.prompt.md` near line 1 (or line 2 after `#!`; commentless files use `pdd-bindings.json`).
 
 Use YAML frontmatter at the very top of the file **only** when a prompt owns pure physical/OS plumbing with `0` Runtime Stories:
 

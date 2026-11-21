@@ -1,9 +1,10 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 34f89314320d77322baea0af15e0a8fbe7ae17208b083a9fa3e5d843b4278621).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 501868e5244a9a2be510a9b632555c1a95ab99c07b2b2d732ee671d612e0d02a).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import fs, { realpathSync } from 'node:fs';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -2456,7 +2457,268 @@ export async function askAgent(input = {}, ports = {}) {
   return runtimeAskAgent({ ...input, run }, ports);
 }
 
+const PLAIN_PROSE_UI_MAX_BYTES = 2 * 1024 * 1024;
+const DIRECT_PROMPT_STDERR_LIMIT = 4096;
+const REOPEN_FALLBACK_LINE_LIMIT = 64;
+const PLAIN_PROSE_RENDER_RE = /(?:\brender\s*\(|`(?:(?:sync|async)\s+)?render(?:\s*\([^)]*\))?`|^#{2,4}\s+render\b)/im;
+const PLAIN_PROSE_HANDLE_EVENT_RE = /(?:\bhandle_event\s*\(|`(?:(?:sync|async)\s+)?handle_event(?:\s*\([^)]*\))?`|^#{2,4}\s+handle_event\b)/im;
+const PLAIN_PROSE_CLI_ARGV_RE = /\bargv\b/;
+const PLAIN_PROSE_CLI_EXIT_RE = /\bexit_code\b/;
+const PLAIN_PROSE_HTTP_RE = /\bHTTP\s+(?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)\s+\//;
+const HTTP_TITLE_RE = /^HTTP (?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/;
+const REOPEN_TAB_CONFLICT_RE = /--tab\b[^\n]*new/i;
+const TRY_STARTUP_DONE_RE = /https?:\/\/\S+\/s\/\S+|Try budget \d+|Connecting your agent to the Try page/i;
+const FORM_TAB_NOTICE = "This Story's operation takes typed input, so it opens on the Form tab.";
+
+let cachedNativePlainProseUiSupport;
+function runtimeClientSupportsPlainProseUi() {
+  if (cachedNativePlainProseUiSupport !== undefined) return cachedNativePlainProseUiSupport;
+  try {
+    const info = typeof version === 'function' ? version() : null;
+    if (
+      (Array.isArray(info?.features) &&
+        info.features.some(f =>
+          ['plain-prose-ui', 'plain-prose-ui-screen', 'single-prompt-try', 'single-prompt-simulate', 'hybrid-ui'].includes(f),
+        )) ||
+      info?.capabilities?.plainProseUi === true ||
+      info?.capabilities?.plainProseUiScreen === true ||
+      info?.capabilities?.singlePromptTry === true
+    ) {
+      cachedNativePlainProseUiSupport = true;
+      return true;
+    }
+    const clientEntry = req.resolve('@promptdriven/runtime-client');
+    const clientSource = initialReadFileSync(resolve(dirname(clientEntry), 'runtime', 'runtime-client.mjs'), 'utf8');
+    cachedNativePlainProseUiSupport =
+      /\bhandle_event\b/.test(clientSource) && /\brender\b/.test(clientSource) && /\bscreen\b/.test(clientSource);
+    return cachedNativePlainProseUiSupport;
+  } catch {
+    cachedNativePlainProseUiSupport = false;
+    return false;
+  }
+}
+
+function isRegularInRootPromptFile(cwd, candidate) {
+  if (typeof candidate !== 'string' || !candidate.endsWith('.prompt.md')) return false;
+  const root = repoTopRoot(cwd);
+  if (!root) return false;
+  try {
+    const realRoot = realpathSync(root);
+    const full = resolve(realpathSync(cwd), candidate);
+    const rel = relative(realRoot, full);
+    if (!rel || rel === '..' || rel.startsWith(`..${sep}`)) return false;
+    const parts = rel.split(sep);
+    for (let i = 1; i <= parts.length; i++) {
+      const st = initialLstatSync(resolve(realRoot, ...parts.slice(0, i)));
+      if (st.isSymbolicLink()) return false;
+      if (i === parts.length && !st.isFile()) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isPlainProseHybridUiPrompt(source) {
+  if (typeof source !== 'string' || !source || interfaceBlocks(source).length > 0) return false;
+  return PLAIN_PROSE_RENDER_RE.test(source) && PLAIN_PROSE_HANDLE_EVENT_RE.test(source);
+}
+
+function promptEntryHasCliOrHttpDoor(realRoot, visible, entryPath, promptSource, operation) {
+  const blocks = interfaceBlocks(promptSource);
+  if (!blocks.length) {
+    if (operation === 'main' && PLAIN_PROSE_CLI_ARGV_RE.test(promptSource) && PLAIN_PROSE_CLI_EXIT_RE.test(promptSource)) {
+      return true;
+    }
+    if (PLAIN_PROSE_HTTP_RE.test(promptSource)) {
+      return true;
+    }
+    return false;
+  }
+  let iface = null;
+  try {
+    iface = readPrompt(realRoot, visible, entryPath)?.interface ?? null;
+  } catch {
+    iface = null;
+  }
+  if (!iface) {
+    try {
+      iface = JSON.parse(blocks[0][1]);
+    } catch {
+      return false;
+    }
+  }
+  const entries = Array.isArray(iface?.entries) ? iface.entries : [];
+  const conventions = Array.isArray(iface?.conventions) ? iface.conventions : [];
+  const index = entries.findIndex(entry => entry?.operation === operation);
+  if (index < 0) return false;
+  const entry = entries[index];
+  if (
+    ['input_schema', 'result_schema'].every(name =>
+      conventions.some(c => c?.path === `/entries/${index}/${name}` && c.convention === 'cli'),
+    )
+  ) {
+    return true;
+  }
+  if (typeof entry?.input_schema?.title === 'string' && HTTP_TITLE_RE.test(entry.input_schema.title)) {
+    return true;
+  }
+  return false;
+}
+
+function hasSavedTryRecord(realRoot, tests, rawWords, env = process.env) {
+  try {
+    const stateDir = resolve(env?.PDD_STATE_DIR || join(env?.HOME || homedir(), '.pdd', 'runtime'));
+    const repoKey = createHash('sha256').update(realRoot).digest('hex').slice(0, 16);
+    const repoFile = join(stateDir, 'repos', `${repoKey}.json`);
+    const st = initialLstatSync(repoFile);
+    if (st.isSymbolicLink() || !st.isFile()) return false;
+    const saved = JSON.parse(initialReadFileSync(repoFile, 'utf8'));
+    const tries = saved?.tries;
+    if (!tries || typeof tries !== 'object' || Array.isArray(tries)) return false;
+    if (!rawWords.length) {
+      if (
+        Object.values(tries).some(
+          v => v && typeof v === 'object' && v.simulation_scope && typeof v.simulation_scope === 'object' && !Array.isArray(v.simulation_scope),
+        )
+      ) {
+        return true;
+      }
+      const seed = [...tests].sort((a, b) => String(a?.path ?? '').localeCompare(String(b?.path ?? '')))[0];
+      return typeof seed?.path === 'string' && Boolean(tries[seed.path]);
+    }
+    return tests.some(item => typeof item?.path === 'string' && Boolean(tries[item.path]));
+  } catch {
+    return false;
+  }
+}
+
+function wrapFilteredStream(baseStream, shouldSuppress) {
+  const target = baseStream;
+  return Object.assign(Object.create(target), {
+    ...(target.isTTY !== undefined ? { isTTY: target.isTTY } : {}),
+    write(chunk, ...rest) {
+      const text =
+        typeof chunk === 'string'
+          ? chunk
+          : Buffer.isBuffer(chunk) || chunk instanceof Uint8Array
+            ? Buffer.from(chunk).toString('utf8')
+            : String(chunk);
+      if (shouldSuppress(text)) {
+        const cb = rest.find(arg => typeof arg === 'function');
+        if (cb) cb();
+        return true;
+      }
+      return target.write(chunk, ...rest);
+    },
+  });
+}
+
+function classifyPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
+  const opts = input?.options ?? {};
+  if (
+    opts['--tab'] !== undefined ||
+    opts['--cli'] ||
+    opts['--shell'] ||
+    opts['--serve'] !== undefined ||
+    opts['--stop'] ||
+    opts['--save-last'] ||
+    opts['--product'] ||
+    opts['--app-map'] !== undefined
+  ) {
+    return 'none';
+  }
+  try {
+    const root = repoTopRoot(cwd);
+    if (!root) return 'none';
+    const rawWords = Array.isArray(input?.words) ? input.words : [];
+    const found = withScenarioOverlay(lazyOverlay, () =>
+      findTests({ root, cwd, excludeFixtureProjects: rawWords.length === 0 }, ports),
+    );
+    if (!found?.visible || found.visible.has('app-map.json') || found.visible.has('app/app-map.json')) {
+      return 'none';
+    }
+    const realRoot = realpathSync(root);
+    const realCwd = realpathSync(cwd);
+    const normalizedWords = rawWords.map(word => {
+      if (typeof word !== 'string' || !word) return word;
+      if (realCwd === realRoot && !word.startsWith('/') && !word.includes('\\')) return word;
+      const candidate = resolve(realCwd, word);
+      const rel = relative(realRoot, candidate).split(sep).join('/');
+      const withinRepo = rel !== '..' && !rel.startsWith('../');
+      if (!withinRepo) return word;
+      if (rel && (found.visible.has(rel) || found.tests?.some(t => t.path === rel || t.storyPath === rel))) {
+        return rel;
+      }
+      try {
+        if (initialStatSync(candidate).isDirectory()) return rel || '.';
+      } catch { /* keep original word */ }
+      return word;
+    });
+    const selectedResult = normalizedWords.length ? selectTests(found, normalizedWords) : null;
+    const tests = normalizedWords.length
+      ? (Array.isArray(selectedResult) ? selectedResult : selectedResult?.selected ?? [])
+      : (found.tests ?? []);
+    if (!tests.length) return 'none';
+
+    const promptCache = new Map();
+    const readSafeVisiblePrompt = rel => {
+      if (promptCache.has(rel)) return promptCache.get(rel);
+      let text = null;
+      try {
+        if (
+          typeof rel === 'string' &&
+          rel.endsWith('.prompt.md') &&
+          !rel.startsWith('/') &&
+          !rel.includes('\\') &&
+          found.visible.has(rel)
+        ) {
+          const full = resolve(realRoot, rel);
+          if (full.startsWith(`${realRoot}${sep}`)) {
+            const lst = initialLstatSync(full);
+            if (!lst.isSymbolicLink() && lst.isFile() && lst.size <= PLAIN_PROSE_UI_MAX_BYTES) {
+              const realFull = realpathSync(full);
+              if (realFull.startsWith(`${realRoot}${sep}`)) {
+                text = initialReadFileSync(realFull, 'utf8');
+              }
+            }
+          }
+        }
+      } catch {
+        text = null;
+      }
+      promptCache.set(rel, text);
+      return text;
+    };
+
+    let sawPlainProseUiStep = false;
+    for (const item of tests) {
+      if (Array.isArray(item?.doc?.app_maps) && item.doc.app_maps.length > 0) return 'none';
+      const steps = Array.isArray(item?.doc?.steps) ? item.doc.steps : [];
+      for (const step of steps) {
+        const entryPath = typeof step?.entry_path === 'string' ? step.entry_path : '';
+        const op = typeof step?.operation === 'string' ? step.operation : '';
+        if (!entryPath || !op) continue;
+        const promptSource = readSafeVisiblePrompt(entryPath);
+        if (promptSource === null) continue;
+        if (promptEntryHasCliOrHttpDoor(realRoot, found.visible, entryPath, promptSource, op)) return 'none';
+        if ((op === 'render' || op === 'handle_event') && isPlainProseHybridUiPrompt(promptSource)) {
+          sawPlainProseUiStep = true;
+        }
+      }
+    }
+    if (!sawPlainProseUiStep) return 'none';
+    if (!opts['--new'] && hasSavedTryRecord(realRoot, tests, rawWords, ports?.env ?? process.env)) {
+      return 'reopen';
+    }
+    return 'inject';
+  } catch {
+    return 'none';
+  }
+}
+
 export async function runTry(input = {}, ports = {}) {
+  const { runTry: rawTryOverride, ...forwardPorts } = ports;
   const [
     ,
     { loadAgentDefinitions },
@@ -2475,38 +2737,125 @@ export async function runTry(input = {}, ports = {}) {
   const cwd = input?.cwd ?? process.cwd();
   const defaultAgentBridge = (context, test, tryId, opts, link) =>
     createAgentBridge(context, test, tryId, opts, link, {
-      redaction: ports.redaction ?? seamRedaction(ports),
-      redactSecrets: ports.redactSecrets,
-      loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
-      discoverAgents: ports.discoverAgents ?? ports.agents?.list,
-      runAgentProcess: ports.runAgentProcess ?? ports.agents?.run,
-      askAgent: ports.askAgent ?? ports.agents?.ask,
-      evidenceEligibility: ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? readEvidenceEligibility,
-      guidePorts: ports.guidePorts,
+      redaction: forwardPorts.redaction ?? seamRedaction(forwardPorts),
+      redactSecrets: forwardPorts.redactSecrets,
+      loadAgentDefinitions: forwardPorts.loadAgentDefinitions ?? forwardPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
+      discoverAgents: forwardPorts.discoverAgents ?? forwardPorts.agents?.list,
+      runAgentProcess: forwardPorts.runAgentProcess ?? forwardPorts.agents?.run,
+      askAgent: forwardPorts.askAgent ?? forwardPorts.agents?.ask,
+      evidenceEligibility: forwardPorts.evidenceEligibility ?? forwardPorts.readEvidenceEligibility ?? readEvidenceEligibility,
+      guidePorts: forwardPorts.guidePorts,
     });
-  const lazyOverlay = { cwd, ports, map: undefined };
-  return withScenarioOverlay(lazyOverlay, () =>
-    runtimeRunTry(
-      input,
-      seamRuntimePorts(
-        withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
-          tryLauncherUrl: TRY_LAUNCHER_URL,
-          agentBridge: defaultAgentBridge,
-          loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
-          discoverAgents: ports.discoverAgents ?? ports.agents?.list ?? defaultDiscoverAgents,
-          askAgent: ports.askAgent ?? ports.agents?.ask ?? defaultAskAgent,
-          parseProductDocuments,
-          parseProductWorldWriters,
-          askApproval,
-          lineReader,
-          promptPath,
-          files: wrapCaseFilesForShortJson(ports.files, ports),
-          redaction: seamRedaction(ports),
-        }),
-        { cwd },
+  const words = Array.isArray(input?.words) ? input.words : [];
+  const opts = input?.options ?? {};
+  const directPromptCandidate =
+    !opts['--stop'] && !opts['--save-last'] && !opts['--product'] && words.length === 1 && isRegularInRootPromptFile(cwd, words[0])
+      ? words[0]
+      : null;
+  const invokeRunTry = typeof rawTryOverride === 'function' ? rawTryOverride : runtimeRunTry;
+  const lazyOverlay = { cwd, ports: forwardPorts, map: undefined };
+  const invoke = (tryInput, tryPorts) =>
+    withScenarioOverlay(lazyOverlay, () =>
+      invokeRunTry(
+        tryInput,
+        seamRuntimePorts(
+          withPortDefaults(withEligibilityDefault(tryPorts, readEvidenceEligibility), {
+            tryLauncherUrl: TRY_LAUNCHER_URL,
+            agentBridge: defaultAgentBridge,
+            loadAgentDefinitions: tryPorts.loadAgentDefinitions ?? tryPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
+            discoverAgents: tryPorts.discoverAgents ?? tryPorts.agents?.list ?? defaultDiscoverAgents,
+            askAgent: tryPorts.askAgent ?? tryPorts.agents?.ask ?? defaultAskAgent,
+            parseProductDocuments,
+            parseProductWorldWriters,
+            askApproval,
+            lineReader,
+            promptPath,
+            files: wrapCaseFilesForShortJson(tryPorts.files, tryPorts),
+            redaction: seamRedaction(tryPorts),
+          }),
+          { cwd },
+        ),
       ),
-    ),
-  );
+    );
+
+  if (directPromptCandidate) {
+    let observedErr = '';
+    const targetStderr = forwardPorts.stderr ?? process.stderr;
+    const watchedStderr = wrapFilteredStream(targetStderr, text => {
+      if (observedErr.length < DIRECT_PROMPT_STDERR_LIMIT) {
+        observedErr += text.slice(0, DIRECT_PROMPT_STDERR_LIMIT - observedErr.length);
+      }
+      return false;
+    });
+    const exitCode = await invoke(input, { ...forwardPorts, stderr: watchedStderr });
+    if (
+      exitCode === 2 &&
+      /No tests found|Unknown story|No Stories are available/i.test(observedErr) &&
+      !observedErr.includes('Direct .prompt.md simulation')
+    ) {
+      const safePrompt = cleanText(directPromptCandidate);
+      targetStderr.write(
+        `Direct .prompt.md simulation (${safePrompt}) requires a newer @promptdriven/runtime-client; upgrade pdd / @promptdriven/runtime-client.\n`,
+      );
+    }
+    return exitCode;
+  }
+
+  const skipSeamAutoScreenTab = typeof rawTryOverride !== 'function' && runtimeClientSupportsPlainProseUi();
+  const screenTabMode = skipSeamAutoScreenTab
+    ? 'none'
+    : classifyPlainProseScreenTab(input, cwd, forwardPorts, lazyOverlay);
+  if (screenTabMode === 'reopen') {
+    const baseStderr = forwardPorts.stderr ?? process.stderr;
+    const reopenStderr = wrapFilteredStream(baseStderr, text => text.includes(FORM_TAB_NOTICE));
+    return invoke(input, { ...forwardPorts, stderr: reopenStderr });
+  }
+  const effectiveInput =
+    screenTabMode === 'inject'
+      ? { ...input, options: { ...opts, '--tab': 'screen' } }
+      : input;
+  if (screenTabMode === 'inject' && !opts['--new']) {
+    let reopenAutoTabConflict = false;
+    let startupSucceeded = false;
+    const emittedBeforeFallback = new Set();
+    const baseStdout = forwardPorts.stdout ?? process.stdout;
+    const baseStderr = forwardPorts.stderr ?? process.stderr;
+    const observedStdout = wrapFilteredStream(baseStdout, text => {
+      if (!startupSucceeded && TRY_STARTUP_DONE_RE.test(text)) {
+        startupSucceeded = true;
+        emittedBeforeFallback.clear();
+      }
+      return false;
+    });
+    const filteredStderr = wrapFilteredStream(baseStderr, text => {
+      if (!startupSucceeded) {
+        if (REOPEN_TAB_CONFLICT_RE.test(text)) {
+          reopenAutoTabConflict = true;
+          return true;
+        }
+        if (TRY_STARTUP_DONE_RE.test(text)) {
+          startupSucceeded = true;
+          emittedBeforeFallback.clear();
+        } else if (emittedBeforeFallback.size < REOPEN_FALLBACK_LINE_LIMIT && text.length <= DIRECT_PROMPT_STDERR_LIMIT) {
+          emittedBeforeFallback.add(text);
+        }
+      }
+      return false;
+    });
+    const code = await invoke(effectiveInput, { ...forwardPorts, stdout: observedStdout, stderr: filteredStderr });
+    if (!startupSucceeded && code === 2 && reopenAutoTabConflict) {
+      const reopenStderr = wrapFilteredStream(baseStderr, text => {
+        if (emittedBeforeFallback.has(text)) {
+          emittedBeforeFallback.delete(text);
+          return true;
+        }
+        return text.includes(FORM_TAB_NOTICE);
+      });
+      return invoke(input, { ...forwardPorts, stderr: reopenStderr });
+    }
+    return code;
+  }
+  return invoke(effectiveInput, forwardPorts);
 }
 
 export async function createAgentBridge(context, test, tryId, options, link, seamPorts = {}) {
@@ -3011,12 +3360,15 @@ export async function simulate(input = {}, ports = {}) {
   else if (input?.mode === 'serve' && options['--serve'] === undefined) options['--serve'] = input?.port ?? true;
   else if (input?.mode === 'save-last') options['--save-last'] = true;
   else if (input?.mode === 'stop') options['--stop'] = true;
+  if (input?.fresh === true && options['--fresh'] === undefined) options['--fresh'] = true;
   const testWord =
     typeof input?.test === 'string' && input.test.length > 0
       ? input.test
       : input?.test && typeof input.test === 'object' && typeof (input.test.path ?? input.test.story) === 'string'
         ? input.test.path ?? input.test.story
-        : null;
+        : typeof input?.prompt === 'string' && input.prompt.length > 0
+          ? input.prompt
+          : null;
   const words = Array.isArray(input?.words)
     ? [...input.words]
     : testWord !== null
