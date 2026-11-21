@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: eaaf37be72679217ea964088ae3ad36cecc3a00cfdfbddfe2208607493c2f43e).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: cfa55237ed3b83fb275eb47e2dc719f0a79ddb8447178932a1135af1736f0315).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -1409,7 +1409,7 @@ function collectNativeOnlyContractFindings(text, { path = 'prompts/service.promp
     }
   }
 
-  // Non-blank fences outside `## Dependencies` satisfy their enclosing section heading and declarative schema fences satisfy boundary/runtime surface.
+  // Non-blank fences outside `## Dependencies` satisfy their enclosing section heading, and declarative schema fences outside port-only sections satisfy boundary/runtime surface.
   let headingIdx = -1;
   for (const fence of fences) {
     if (!fence.bodyLines.some(item => item.text.trim().length > 0)) continue;
@@ -1419,7 +1419,7 @@ function collectNativeOnlyContractFindings(text, { path = 'prompts/service.promp
     if (active.boundary) hasBoundarySurface = true;
     if (active.error) hasErrorMapping = true;
     if (active.verify) hasNativeVerification = true;
-    if (DECLARATIVE_SCHEMA_FENCE_LANGS.has(fence.lang)) {
+    if (!active.inPortOnly && DECLARATIVE_SCHEMA_FENCE_LANGS.has(fence.lang)) {
       hasBoundarySurface = true;
     }
     if (!hasErrorMapping || !hasNativeVerification) {

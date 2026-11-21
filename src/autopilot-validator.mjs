@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 8775343001743c1690db5a89df6bdaecd12b40d7164936e57a18c584dd297192).
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: fe50a41112b31cf1d3d55fd5c6cbdb5ca7a332d5914b742a208ccf07fd29e607).
 
 export const MAX_VALIDATION_REPAIRS = 3;
 export const MIN_REALISTIC_PAYLOAD_BYTES = 4096;
@@ -134,22 +134,13 @@ const BUCKET2_DIAGNOSTIC_RULES = [
   },
 ];
 
-export const MOCK_USAGE_RE = /\b(?:mock\.|vi\.mock|vi\.fn|vi\.spyOn|vi\.stubGlobal|jest\.mock|jest\.fn|jest\.spyOn|sinon\.stub|MagicMock|unittest\.mock|fakeClient|fakeServer|fakeTransport|fakeSandbox|mockSandbox|stubSandbox|fakeTty|mockTty|stubTty|fakeDb|mockDb|fakeDriver|mockDriver|mockSpawn|fakeSpawn|fakeSubprocess|fakeCli|stubCli)\b|stub(?:bed)?(?:Handler|Wrapper)/i;
+export const MOCK_USAGE_RE = /\b(?:mock\.|vi\.mock|vi\.doMock|vi\.fn|vi\.spyOn|vi\.stubGlobal|jest\.mock|jest\.doMock|jest\.fn|jest\.spyOn|sinon\.stub|MagicMock|unittest\.mock|fakeClient|fakeServer|fakeTransport|fakeSandbox|mockSandbox|stubSandbox|fakeTty|mockTty|stubTty|fakeDb|mockDb|fakeDriver|mockDriver|mockSpawn|fakeSpawn|fakeSubprocess|fakeCli|stubCli)\b|stub(?:bed)?(?:Handler|Wrapper)/i;
 export const REAL_E2E_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync|createServer|playwright|puppeteer|supertest|DatabaseSync)\b|\.\s*listen\s*\(|\bfetch\s*\(|\bhttps?\.request\s*\(|\b(?:chromium|firefox|webkit)\.launch\s*\(|\bpage\.goto\s*\(/i;
-const BROWSER_EXEC_RE = /\b(?:playwright|puppeteer)\b|\b(?:chromium|firefox|webkit)\.launch\s*\(|\bpage\.goto\s*\(/i;
-const BROWSER_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:@playwright\/test|playwright(?:-core|-chromium|-firefox|-webkit)?|puppeteer(?:-core)?)['"`]/i;
-const SERVER_OR_DB_EXEC_RE = /\b(?:createServer|supertest|DatabaseSync)\b|\.\s*listen\s*\(|\bfetch\s*\(|\bhttps?\.request\s*\(|\bnew\s+(?:Pool|Client)\s*\(/i;
-const DB_DRIVER_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:pg|mysql2?|better-sqlite3|node:sqlite|sqlite3?|mongodb|redis|ioredis|@prisma\/client)['"`]/i;
-const EXTERNAL_SDK_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:@google-cloud\/[^'"`]+|@aws-sdk\/[^'"`]+|aws-sdk|stripe|dockerode|@kubernetes\/client-node|@octokit\/[^'"`]+|googleapis)['"`]/i;
-const TTY_IMPORT_RE = /(?:from|require\s*\()\s*['"`](?:node:tty|tty|node-pty)['"`]/i;
 const REAL_DEVICE_PATH_RE = /\/dev\/(?:tty|ptmx|pts\/)/;
-const REAL_DEVICE_FS_OP_RE = /\b(openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream)\s*\(/g;
-const REAL_TTY_OP_RE = /\b(?:ReadStream|WriteStream|isatty)\b/;
 const SANDBOX_EXEC_RE = /\b(?:sandbox-exec|sandbox_apply|bwrap|bubblewrap|seatbelt|seccomp|landlock|unshare|chroot|firejail)\b/i;
-const REAL_FS_STATE_CALL_RE = /\b(?:mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|statSync|stat|lstatSync|lstat|accessSync)\s*\(/;
-const LOOP_START_RE = /\b(?:for|while)\s*\(|\.\s*(?:forEach|map)\s*\(/;
+const LOOP_START_ALL_RE = /\b(for|while)[ \t]*\(|\.[ \t]*(forEach|map)[ \t]*\(/g;
 const SUBPROCESS_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync)\s*\(/;
-const SUBPROCESS_CALL_RE = /([A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)?\b(spawn|spawnSync|execFile|execFileSync|execSync)\s*\(\s*([^;\n]{1,240})/g;
+const SUBPROCESS_CALL_START_RE = /([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?\b(spawn|spawnSync|execFile|execFileSync|execSync)[ \t]*\(/g;
 const TRIVIAL_SUBPROCESS_BIN_RE = /^(?:echo|printf|true|false|pwd|uname|whoami|id|date|sleep|cat|ls|test|\[|:)(?:\s|$)/i;
 const EXTERNAL_TOOL_EXEC_RE = /\b(?:gcloud|gsutil|bq|aws|az|stripe|docker|docker-compose|kubectl|helm|terraform|gh|pdd|curl|wget|psql|mysql|redis-cli|mongosh|ssh|scp|vault|npm|npx|git)\b/i;
 const BOUNDARY_IMPORT_RE = /(?:from|require\s*\()\s*['"`]([^'"`]+)['"`]/g;
@@ -213,7 +204,8 @@ function isRegexStartContext(prevToken) {
 
 /**
  * Strip JS/TS comments and separately mask string literal contents while keeping exact line numbers,
- * plus exact inline string literal lengths and unit lengths immediately preceding `.repeat(...)`.
+ * plus exact inline string literal lengths, unit lengths preceding `.repeat(...)`, and decoded string
+ * literal contents indexed by each opening `"` offset in `codeNoStrings`.
  */
 function scanJsWithMetrics(source) {
   const text = String(source ?? '');
@@ -222,9 +214,12 @@ function scanJsWithMetrics(source) {
   const templateBraceDepths = [];
   let maxInlineStringBytes = 0;
   const repeatLiteralUnits = new Map(); // endIndexInNoStrings -> literal unit char length
+  const stringLiteralsByOpenPos = new Map(); // openIndexInNoStrings -> decoded literal content
   let i = 0;
   let lastToken = '';
   let noStringsLen = 0;
+
+  const decodeEscape = (ch) => (ch === 'n' ? '\n' : ch === 'r' ? '\r' : ch === 't' ? '\t' : ch);
 
   const pushNoStrings = (...parts) => {
     for (const part of parts) {
@@ -235,7 +230,7 @@ function scanJsWithMetrics(source) {
 
   const recordLiteralLen = (len, nextPos) => {
     if (len > maxInlineStringBytes) maxInlineStringBytes = len;
-    if (len > 0) {
+    if (len >= 0) {
       let k = nextPos;
       while (k < text.length && (text[k] === ' ' || text[k] === '\t' || text[k] === '\r' || text[k] === '\n')) k += 1;
       if (text[k] === '.') {
@@ -248,18 +243,32 @@ function scanJsWithMetrics(source) {
     }
   };
 
-  const scanTemplatePart = (isStart) => {
+  const scanTemplatePart = (isStart, openIdx) => {
     let chunkLen = 0;
+    let contentStart = i;
+    let parts = null;
+    const finalizeLiteral = (endPos) => {
+      const lit = parts
+        ? (parts.push(text.slice(contentStart, endPos)), parts.join(''))
+        : text.slice(contentStart, endPos);
+      stringLiteralsByOpenPos.set(openIdx, lit);
+    };
     while (i < text.length) {
       const c = text[i];
       if (c === '\\' && i + 1 < text.length) {
-        noComments.push(c, text[i + 1]);
-        if (text[i + 1] === '\n') pushNoStrings('\n');
+        if (!parts) parts = [];
+        if (i > contentStart) parts.push(text.slice(contentStart, i));
+        const esc = text[i + 1];
+        noComments.push(c, esc);
+        if (esc === '\n') pushNoStrings('\n');
+        else parts.push(decodeEscape(esc));
         chunkLen += 1;
         i += 2;
+        contentStart = i;
         continue;
       }
       if (c === '$' && text[i + 1] === '{') {
+        finalizeLiteral(i);
         if (chunkLen > maxInlineStringBytes) maxInlineStringBytes = chunkLen;
         noComments.push('$', '{');
         pushNoStrings('"+(');
@@ -269,6 +278,7 @@ function scanJsWithMetrics(source) {
         return;
       }
       if (c === '`') {
+        finalizeLiteral(i);
         noComments.push(c);
         pushNoStrings('"');
         i += 1;
@@ -282,6 +292,7 @@ function scanJsWithMetrics(source) {
       chunkLen += 1;
       i += 1;
     }
+    finalizeLiteral(i);
     if (chunkLen > maxInlineStringBytes) maxInlineStringBytes = chunkLen;
     lastToken = '""';
   };
@@ -333,10 +344,11 @@ function scanJsWithMetrics(source) {
 
     // Template literal (scan ${...} expressions as code while masking static text)
     if (ch === '`') {
+      const openIdx = noStringsLen;
       noComments.push(ch);
       pushNoStrings('"');
       i += 1;
-      scanTemplatePart(true);
+      scanTemplatePart(true, openIdx);
       continue;
     }
 
@@ -349,9 +361,11 @@ function scanJsWithMetrics(source) {
         if (templateBraceDepths[templateBraceDepths.length - 1] === 0) {
           templateBraceDepths.pop();
           noComments.push('}');
-          pushNoStrings(')+"');
+          pushNoStrings(')+');
+          const nextOpenIdx = noStringsLen;
+          pushNoStrings('"');
           i += 1;
-          scanTemplatePart(false);
+          scanTemplatePart(false, nextOpenIdx);
           continue;
         }
       }
@@ -360,35 +374,60 @@ function scanJsWithMetrics(source) {
     // Single- or double-quoted string literal
     if (ch === '\'' || ch === '"') {
       const quote = ch;
+      const openIdx = noStringsLen;
       noComments.push(ch);
       pushNoStrings('"');
       i += 1;
+      let contentStart = i;
+      let parts = null;
       let litLen = 0;
+      let closed = false;
       while (i < text.length) {
         const c = text[i];
         if (c === '\\' && i + 1 < text.length) {
-          noComments.push(c, text[i + 1]);
-          if (text[i + 1] === '\n') pushNoStrings('\n');
+          if (!parts) parts = [];
+          if (i > contentStart) parts.push(text.slice(contentStart, i));
+          const esc = text[i + 1];
+          noComments.push(c, esc);
+          if (esc === '\n') pushNoStrings('\n');
+          else parts.push(decodeEscape(esc));
           litLen += 1;
           i += 2;
+          contentStart = i;
           continue;
         }
         if (c === quote) {
+          const lit = parts
+            ? (parts.push(text.slice(contentStart, i)), parts.join(''))
+            : text.slice(contentStart, i);
+          stringLiteralsByOpenPos.set(openIdx, lit);
           noComments.push(c);
           pushNoStrings('"');
           i += 1;
           recordLiteralLen(litLen, i);
+          closed = true;
           break;
         }
         if (c === '\n') {
+          const lit = parts
+            ? (parts.push(text.slice(contentStart, i)), parts.join(''))
+            : text.slice(contentStart, i);
+          stringLiteralsByOpenPos.set(openIdx, lit);
           noComments.push('\n');
           pushNoStrings('"', '\n');
           i += 1;
+          closed = true;
           break;
         }
         noComments.push(c);
         litLen += 1;
         i += 1;
+      }
+      if (!closed) {
+        const lit = parts
+          ? (parts.push(text.slice(contentStart, i)), parts.join(''))
+          : text.slice(contentStart, i);
+        stringLiteralsByOpenPos.set(openIdx, lit);
       }
       lastToken = '""';
       continue;
@@ -437,6 +476,7 @@ function scanJsWithMetrics(source) {
     codeNoStrings: noStrings.join(''),
     maxInlineStringBytes,
     repeatLiteralUnits,
+    stringLiteralsByOpenPos,
   };
 }
 
@@ -639,6 +679,7 @@ function parseNativeOnlyPromptMeta(raw) {
   const text = String(raw ?? '');
   if (!text) return null;
   let bodyStart = -1;
+  let fmEndOffset = 0;
   if (text.startsWith('---\n')) bodyStart = 4;
   else if (text.startsWith('---\r\n')) bodyStart = 5;
   if (bodyStart > 0) {
@@ -650,8 +691,9 @@ function parseNativeOnlyPromptMeta(raw) {
       const lineEnd = nl < 0 ? text.length : nl;
       const line = text.slice(pos, lineEnd).replace(/\r$/, '');
       if (line === '---') {
+        fmEndOffset = nl < 0 ? text.length : nl + 1;
         if (isNativeKind) {
-          return { nativeOnly: true, reason, bodyOffset: nl < 0 ? text.length : nl + 1 };
+          return { nativeOnly: true, reason, bodyOffset: fmEndOffset };
         }
         break;
       }
@@ -672,7 +714,7 @@ function parseNativeOnlyPromptMeta(raw) {
       try {
         const parsed = JSON.parse(fence.body);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.kind === 'native-only') {
-          return { nativeOnly: true, reason: cleanText(parsed.reason), bodyOffset: 0 };
+          return { nativeOnly: true, reason: cleanText(parsed.reason), bodyOffset: fmEndOffset };
         }
       } catch {}
     }
@@ -710,6 +752,7 @@ function extractHeaderPromptRefs(rawContent) {
     const sp = afterLabel.search(/[ \t]/);
     let rawToken = sp < 0 ? afterLabel : afterLabel.slice(0, sp);
     const tail = sp < 0 ? '' : afterLabel.slice(sp).trim();
+    if (!tail) rawToken = rawToken.replace(/(?:\*\/|-->|"""|''')$/, '');
     if (rawToken.endsWith('.')) rawToken = rawToken.slice(0, -1);
     if (!rawToken.endsWith('.prompt.md')) continue;
     if (tail && !HEADER_TAIL_OK_RE.test(tail)) continue;
@@ -981,6 +1024,9 @@ function detectMaxPayloadBytes(codeNoStrings, { maxInlineStringBytes = 0, repeat
     if (count !== null) record(unitLen * count);
   }
   for (const m of text.matchAll(/\.\s*repeat\s*\(([0-9_*\s+]{1,40})\)/g)) {
+    let prev = (m.index ?? 0) - 1;
+    while (prev >= 0 && (text[prev] === ' ' || text[prev] === '\t' || text[prev] === '\r' || text[prev] === '\n')) prev -= 1;
+    if (prev >= 0 && text[prev] === '"') continue;
     const count = parseSimpleByteExpr(m[1]);
     if (count !== null) record(count);
   }
@@ -990,6 +1036,159 @@ function detectMaxPayloadBytes(codeNoStrings, { maxInlineStringBytes = 0, repeat
   }
 
   return maxBytes;
+}
+
+/**
+ * Extract the balanced argument slice strictly inside `(...)` starting at `openParenIdx`,
+ * stopping at the matching closing `)` (or `maxLen` chars). Quote-aware and strictly O(maxLen).
+ */
+function extractCallArgsSlice(text, openParenIdx, maxLen = 240) {
+  if (typeof text !== 'string' || openParenIdx < 0 || text[openParenIdx] !== '(') {
+    return { slice: '', startIdx: openParenIdx + 1, endIdx: openParenIdx + 1, closed: false };
+  }
+  const startIdx = openParenIdx + 1;
+  const limit = Math.min(text.length, startIdx + maxLen);
+  let depth = 1;
+  let quote = '';
+  let i = startIdx;
+  while (i < limit) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === '\\' && i + 1 < limit) {
+        i += 2;
+        continue;
+      }
+      if (ch === quote) quote = '';
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === '\'' || ch === '`') {
+      quote = ch;
+      i += 1;
+      continue;
+    }
+    if (ch === '(') {
+      depth += 1;
+    } else if (ch === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return { slice: text.slice(startIdx, i), startIdx, endIdx: i, closed: true };
+      }
+    }
+    i += 1;
+  }
+  return { slice: text.slice(startIdx, limit), startIdx, endIdx: limit, closed: false };
+}
+
+function collectLiteralsInMaskedSlice(slice, sliceStartIdx, stringLiteralsByOpenPos) {
+  const literals = [];
+  if (!(stringLiteralsByOpenPos instanceof Map) || !slice) return literals;
+  let k = 0;
+  while (k < slice.length) {
+    if (slice[k] === '"') {
+      const openIdx = sliceStartIdx + k;
+      const lit = stringLiteralsByOpenPos.get(openIdx);
+      if (lit !== undefined) literals.push({ value: lit, sliceStart: k });
+      k += 1;
+      while (k < slice.length && slice[k] !== '"') k += 1;
+      if (k < slice.length) k += 1;
+      continue;
+    }
+    k += 1;
+  }
+  return literals;
+}
+
+function splitLinesWithOffsets(text) {
+  const out = [];
+  let start = 0;
+  while (start <= text.length) {
+    const nl = text.indexOf('\n', start);
+    if (nl < 0) {
+      const line = text.endsWith('\r') && start < text.length ? text.slice(start, -1) : text.slice(start);
+      out.push({ line, offset: start });
+      break;
+    }
+    const end = nl > start && text[nl - 1] === '\r' ? nl - 1 : nl;
+    out.push({ line: text.slice(start, end), offset: start });
+    start = nl + 1;
+  }
+  return out;
+}
+
+function isSameLineLoopEnclosing(maskedLine, targetIdx) {
+  for (const m of maskedLine.matchAll(LOOP_START_ALL_RE)) {
+    const openParenIdx = (m.index ?? 0) + m[0].length - 1;
+    if (openParenIdx >= targetIdx) break;
+    const isMethodLoop = Boolean(m[2]); // .forEach( or .map(
+    let parenDepth = 1;
+    let braceDepth = 0;
+    let headerClosedAt = -1;
+    let bodyHasBlock = false;
+    let sawBodyToken = false;
+    let bodyClosed = false;
+    let nestedDepth = 0;
+    for (let k = openParenIdx + 1; k < targetIdx; k += 1) {
+      const ch = maskedLine[k];
+      if (isMethodLoop) {
+        if (ch === '(') parenDepth += 1;
+        else if (ch === ')') {
+          parenDepth -= 1;
+          if (parenDepth === 0) {
+            bodyClosed = true;
+            break;
+          }
+        }
+        continue;
+      }
+      if (headerClosedAt < 0) {
+        if (ch === '(') parenDepth += 1;
+        else if (ch === ')') {
+          parenDepth -= 1;
+          if (parenDepth === 0) headerClosedAt = k;
+        }
+        continue;
+      }
+      if (!bodyHasBlock && !sawBodyToken) {
+        if (ch === ' ' || ch === '\t') continue;
+        if (ch === '{') {
+          bodyHasBlock = true;
+          braceDepth = 1;
+          continue;
+        }
+        if (ch === ';') {
+          bodyClosed = true;
+          break;
+        }
+        sawBodyToken = true;
+        if (ch === '(' || ch === '[') nestedDepth += 1;
+        continue;
+      }
+      if (bodyHasBlock) {
+        if (ch === '{') braceDepth += 1;
+        else if (ch === '}') {
+          braceDepth -= 1;
+          if (braceDepth === 0) {
+            bodyClosed = true;
+            break;
+          }
+        }
+      } else {
+        if (ch === '(' || ch === '{' || ch === '[') nestedDepth += 1;
+        else if (ch === ')' || ch === '}' || ch === ']') nestedDepth = Math.max(0, nestedDepth - 1);
+        else if (ch === ';' && nestedDepth === 0) {
+          bodyClosed = true;
+          break;
+        }
+      }
+    }
+    if (isMethodLoop) {
+      if (!bodyClosed && parenDepth > 0) return true;
+    } else if (headerClosedAt >= 0 && !bodyClosed) {
+      if (bodyHasBlock ? braceDepth > 0 : true) return true;
+    }
+  }
+  return false;
 }
 
 function classifyImportedModule(spec) {
@@ -1022,7 +1221,7 @@ function extractBindingNamesFromClause(clause) {
     for (const part of trimmed.slice(braceStart + 1, braceEnd).split(',')) {
       const piece = part.trim();
       if (!piece) continue;
-      const alias = /^([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:as|:)\s*([A-Za-z_$][A-Za-z0-9_$]*)/.exec(piece);
+      const alias = /^([A-Za-z_$][A-Za-z0-9_$]*)(?:\s+as\s+|\s*:\s*)([A-Za-z_$][A-Za-z0-9_$]*)$/.exec(piece);
       if (alias) named.set(alias[2], alias[1]);
       else if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(piece)) named.set(piece, piece);
     }
@@ -1032,41 +1231,88 @@ function extractBindingNamesFromClause(clause) {
   return { namespaces, named };
 }
 
-const MODULE_MOCK_CALL_RE = /\b(?:vi\.mock|jest\.mock|mock\.module)[ \t]*\([ \t]*(['"`])([^'"`\r\n]{1,120})\1/g;
-const ESM_IMPORT_RE = /\bimport[ \t]+([^;]{1,400})from[ \t]*(['"`])([^'"`\r\n]{1,120})\2/g;
-const CJS_REQUIRE_RE = /\b(?:const|let|var)[ \t]+([^=;]{1,300})=[ \t]*require[ \t]*\([ \t]*(['"`])([^'"`\r\n]{1,120})\2[ \t]*\)/g;
-const SHADOW_VAR_RE = /\b(?:const|let|var)[ \t]+(spawn|spawnSync|execFile|execFileSync|execSync|createServer|fetch|DatabaseSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream)[ \t]*=/g;
-const SHADOW_DESTRUCTURE_RE = /\b(?:const|let|var)[ \t]*\{([^}\r\n]{1,200})\}[ \t]*=/g;
-const SHADOW_FN_RE = /\bfunction[ \t]+(spawn|spawnSync|execFile|execFileSync|execSync|createServer|fetch|DatabaseSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream)[ \t]*\(/g;
-const SHADOW_GLOBAL_FETCH_RE = /\b(?:globalThis|global)[ \t]*\.[ \t]*fetch[ \t]*=|\bvi\.stubGlobal[ \t]*\([ \t]*['"`]fetch['"`]/g;
-const METHOD_STUB_RE = /\b(?:mock\.method|vi\.spyOn|jest\.spyOn|sinon\.stub)[ \t]*\(([^,\n)]{1,120}),[ \t]*(['"`])(spawn|spawnSync|execFile|execFileSync|execSync|createServer|request|fetch|listen|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream|launch|goto)\2/g;
+function splitTopLevelDeclarators(listText) {
+  const out = [];
+  let start = 0;
+  let depth = 0;
+  for (let idx = 0; idx < listText.length; idx += 1) {
+    const ch = listText[idx];
+    if (ch === '(' || ch === '{' || ch === '[') depth += 1;
+    else if (ch === ')' || ch === '}' || ch === ']') depth = Math.max(0, depth - 1);
+    else if (ch === ',' && depth === 0) {
+      out.push(listText.slice(start, idx));
+      start = idx + 1;
+    }
+  }
+  out.push(listText.slice(start));
+  return out;
+}
+
+const MODULE_MOCK_CALL_RE = /\b(?:(?:vi|jest)\.(?:mock|doMock)|mock\.module)[ \t]*\(\s*("")/g;
+const ESM_IMPORT_RE = /(?<!\.)\bimport\s+([A-Za-z_$*{][A-Za-z0-9_$,*{}\s]{0,1000})\bfrom\s*("")/g;
+const CJS_REQUIRE_RE = /\b(?:const|let|var)[ \t]+([A-Za-z_${][A-Za-z0-9_$,:{}\s]{0,300})=[ \t]*require[ \t]*\(\s*("")\s*\)(?:\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*))?/g;
+const SHADOW_VAR_RE = /\b(?:const|let|var)[ \t]+(spawn|spawnSync|execFile|execFileSync|execSync|createServer|fetch|DatabaseSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream|isatty|ReadStream|WriteStream)[ \t]*=/g;
+const SHADOW_UNINIT_DECL_RE = /\b(?:let|var)[ \t]+([^;\n]{1,300})/g;
+const SHADOW_DESTRUCTURE_RE = /\b(?:const|let|var)[ \t]*\{([^}\r\n]{1,200})\}[ \t]*=([^;\n]{0,200})/g;
+const SHADOW_FN_RE = /\bfunction[ \t]+(spawn|spawnSync|execFile|execFileSync|execSync|createServer|fetch|DatabaseSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream|isatty|ReadStream|WriteStream)[ \t]*\(/g;
+const SHADOW_CLASS_RE = /\bclass[ \t]+(DatabaseSync|ReadStream|WriteStream)\b/g;
+const SHADOW_GLOBAL_FETCH_ASSIGN_RE = /\b(?:globalThis|global|window|self)[ \t]*\.[ \t]*fetch[ \t]*=(?!=)|(?<![.\w$])fetch[ \t]*=(?!=)/;
+const STUB_GLOBAL_CALL_RE = /\bvi\.stubGlobal[ \t]*\(\s*("")/g;
+const DEFINE_PROP_GLOBAL_RE = /\bObject\.defineProperty[ \t]*\(\s*(?:globalThis|global|window|self)\s*,\s*("")/g;
+const METHOD_STUB_RE = /\b(?:mock\.method|vi\.spyOn|jest\.spyOn|sinon\.stub)[ \t]*\(\s*([^,\n)]{1,120}),\s*("")/g;
+const BROWSER_ORIGIN_RHS_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*(?:launch|launchPersistentContext|newPage|newContext|connect|connectOverCDP|pages)[ \t]*\(/;
+const LOCAL_VAR_DECL_RE = /\b(?:const|let|var)[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)(?:[ \t]*=([^;\n]{1,200})|[ \t]*(?:;|,|$))/g;
+const BROWSER_WELL_KNOWN_VARS = new Set(['page', 'browser', 'context', 'chromium', 'firefox', 'webkit']);
 const PRIMITIVE_SHADOW_NAMES = new Set([
   'spawn', 'spawnSync', 'execFile', 'execFileSync', 'execSync',
   'createServer', 'fetch', 'DatabaseSync',
   'openSync', 'open', 'statSync', 'stat', 'fstatSync', 'fstat',
   'lstatSync', 'lstat', 'accessSync', 'access', 'createReadStream', 'createWriteStream',
+  'isatty', 'ReadStream', 'WriteStream',
+]);
+const METHOD_STUB_NAMES = new Set([
+  ...PRIMITIVE_SHADOW_NAMES,
+  'request', 'listen', 'launch', 'goto', 'newPage', 'newContext', 'connect',
 ]);
 
-function analyzePrimitiveAuthenticity(codeNoComments, codeNoStrings) {
+function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
+  const litAtMatch = (m) => {
+    if (!(stringLiteralsByOpenPos instanceof Map)) return '';
+    const rel = m[0].lastIndexOf('""');
+    if (rel < 0) return '';
+    return stringLiteralsByOpenPos.get((m.index ?? 0) + rel) ?? '';
+  };
+
   const mockedModules = new Set();
-  for (const m of codeNoComments.matchAll(MODULE_MOCK_CALL_RE)) {
-    const cat = classifyImportedModule(m[2]);
+  for (const m of codeNoStrings.matchAll(MODULE_MOCK_CALL_RE)) {
+    const cat = classifyImportedModule(litAtMatch(m));
     if (cat) mockedModules.add(cat);
   }
 
   const importedModules = new Set();
   const namespaceBindings = new Map(); // category -> Set<ident>
   const namedBindings = new Map(); // category -> Map<localIdent, origIdent>
+  const shadowedPrimitives = new Set();
   let hasNodePtyImport = false;
   let hasNonSqliteDbImport = false;
-  const addImport = (spec, clause) => {
+  const addImport = (spec, clause, propAccess = '') => {
+    const trimmedClause = String(clause ?? '').trim();
+    if (!trimmedClause || /^type\s+/.test(trimmedClause)) return;
+    const { namespaces, named } = extractBindingNamesFromClause(trimmedClause);
+    if (propAccess && namespaces.length === 1 && named.size === 0) {
+      named.set(namespaces[0], propAccess);
+      namespaces.length = 0;
+    }
+    const lowerSpec = String(spec ?? '').trim().toLowerCase();
+    // Mark `fetch` shadowed whenever an import/require binds local identifier `fetch` from any non-native module.
+    if ((namespaces.includes('fetch') || named.has('fetch')) && !lowerSpec.startsWith('node:')) {
+      shadowedPrimitives.add('fetch');
+    }
     const cat = classifyImportedModule(spec);
     if (!cat || mockedModules.has(cat)) return;
-    const lowerSpec = String(spec ?? '').trim().toLowerCase();
     if (lowerSpec === 'node-pty') hasNodePtyImport = true;
     if (cat === 'db' && lowerSpec !== 'node:sqlite') hasNonSqliteDbImport = true;
     importedModules.add(cat);
-    const { namespaces, named } = extractBindingNamesFromClause(clause);
     let nsSet = namespaceBindings.get(cat);
     if (!nsSet) { nsSet = new Set(); namespaceBindings.set(cat, nsSet); }
     for (const n of namespaces) nsSet.add(n);
@@ -1075,27 +1321,67 @@ function analyzePrimitiveAuthenticity(codeNoComments, codeNoStrings) {
     for (const [local, orig] of named.entries()) namedMap.set(local, orig);
   };
 
-  for (const m of codeNoComments.matchAll(ESM_IMPORT_RE)) addImport(m[3], m[1]);
-  for (const m of codeNoComments.matchAll(CJS_REQUIRE_RE)) addImport(m[3], m[1]);
+  for (const m of codeNoStrings.matchAll(ESM_IMPORT_RE)) addImport(litAtMatch(m), m[1]);
+  for (const m of codeNoStrings.matchAll(CJS_REQUIRE_RE)) addImport(litAtMatch(m), m[1], m[3] ?? '');
 
-  const shadowedPrimitives = new Set();
+  const shadowedBrowserVars = new Set();
+  const isCleanBrowserRhs = (rhs) => {
+    const trimmed = String(rhs ?? '').trim();
+    if (!trimmed || trimmed.startsWith('{') || /\b(?:fake|mock|stub)/i.test(trimmed)) return false;
+    const origin = BROWSER_ORIGIN_RHS_RE.exec(trimmed);
+    if (!origin) return false;
+    const originReceiver = origin[1];
+    if (/^(?:fake|mock|stub)/i.test(originReceiver) || shadowedBrowserVars.has(originReceiver)) return false;
+    return true;
+  };
+
   const maskedLines = codeNoStrings.split(/\r?\n/);
   for (const line of maskedLines) {
     if (!/\brequire\s*\(/.test(line)) {
       for (const m of line.matchAll(SHADOW_VAR_RE)) shadowedPrimitives.add(m[1]);
+      for (const m of line.matchAll(SHADOW_UNINIT_DECL_RE)) {
+        for (const decl of splitTopLevelDeclarators(m[1])) {
+          const piece = decl.trim();
+          const idMatch = /^([A-Za-z_$][A-Za-z0-9_$]*)\b/.exec(piece);
+          if (idMatch && PRIMITIVE_SHADOW_NAMES.has(idMatch[1])) shadowedPrimitives.add(idMatch[1]);
+          if (idMatch && !piece.includes('=')) shadowedBrowserVars.add(idMatch[1]);
+        }
+      }
       for (const m of line.matchAll(SHADOW_DESTRUCTURE_RE)) {
+        const rhsCleanBrowser = isCleanBrowserRhs(m[2]);
         for (const part of m[1].split(',')) {
           const piece = part.trim();
           const alias = /^[A-Za-z_$][A-Za-z0-9_$]*\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)/.exec(piece);
           const local = alias ? alias[1] : piece.split('=')[0].trim();
           if (PRIMITIVE_SHADOW_NAMES.has(local)) shadowedPrimitives.add(local);
+          if (!rhsCleanBrowser && BROWSER_WELL_KNOWN_VARS.has(local)) shadowedBrowserVars.add(local);
         }
+      }
+      for (const m of line.matchAll(LOCAL_VAR_DECL_RE)) {
+        const ident = m[1];
+        const rhs = m[2] ?? '';
+        if (!isCleanBrowserRhs(rhs)) shadowedBrowserVars.add(ident);
       }
     }
     for (const m of line.matchAll(SHADOW_FN_RE)) shadowedPrimitives.add(m[1]);
+    for (const m of line.matchAll(SHADOW_CLASS_RE)) shadowedPrimitives.add(m[1]);
+    for (const m of line.matchAll(/\bfunction[ \t]+(page|browser|context|chromium|firefox|webkit)[ \t]*\(/g)) {
+      shadowedBrowserVars.add(m[1]);
+    }
   }
-  if (SHADOW_GLOBAL_FETCH_RE.test(codeNoComments)) shadowedPrimitives.add('fetch');
-  for (const m of codeNoComments.matchAll(METHOD_STUB_RE)) shadowedPrimitives.add(m[3]);
+  if (SHADOW_GLOBAL_FETCH_ASSIGN_RE.test(codeNoStrings)) shadowedPrimitives.add('fetch');
+  for (const m of codeNoStrings.matchAll(STUB_GLOBAL_CALL_RE)) {
+    const target = litAtMatch(m);
+    if (target === 'fetch' || PRIMITIVE_SHADOW_NAMES.has(target)) shadowedPrimitives.add(target);
+  }
+  for (const m of codeNoStrings.matchAll(DEFINE_PROP_GLOBAL_RE)) {
+    const target = litAtMatch(m);
+    if (target === 'fetch' || PRIMITIVE_SHADOW_NAMES.has(target)) shadowedPrimitives.add(target);
+  }
+  for (const m of codeNoStrings.matchAll(METHOD_STUB_RE)) {
+    const target = litAtMatch(m);
+    if (METHOD_STUB_NAMES.has(target)) shadowedPrimitives.add(target);
+  }
 
   return {
     mockedModules,
@@ -1103,6 +1389,7 @@ function analyzePrimitiveAuthenticity(codeNoComments, codeNoStrings) {
     namespaceBindings,
     namedBindings,
     shadowedPrimitives,
+    shadowedBrowserVars,
     hasNodePtyImport,
     hasNonSqliteDbImport,
   };
@@ -1159,7 +1446,7 @@ function countHelperCallsBatch(codeNoStrings, helperNames) {
   return counts;
 }
 
-function analyzeSubprocessCalls(codeNoComments, codeNoStrings, auth) {
+function analyzeSubprocessCalls(codeNoStrings, auth, stringLiteralsByOpenPos) {
   let hasRealSubprocess = false;
   let hasExternalToolSubprocess = false;
   let hasLiveLocalSubprocess = false;
@@ -1176,14 +1463,13 @@ function analyzeSubprocessCalls(codeNoComments, codeNoStrings, auth) {
       hasLoopedSubprocess,
     };
   }
-  const codeLines = codeNoComments.split(/\r?\n/);
-  const maskedLines = codeNoStrings.split(/\r?\n/);
+  const maskedLineEntries = splitLinesWithOffsets(codeNoStrings);
   const helperNames = new Set();
   const scopeStack = []; // { kind: 'fn' | 'loop', name: string | null, depth: number }
   let braceDepth = 0;
 
-  for (let i = 0; i < maskedLines.length; i += 1) {
-    const maskedLine = maskedLines[i] ?? '';
+  for (let i = 0; i < maskedLineEntries.length; i += 1) {
+    const { line: maskedLine, offset: lineOffset } = maskedLineEntries[i];
     const lineStartDepth = braceDepth;
 
     // Pop scopes closed before this line's body if line starts with '}'
@@ -1200,51 +1486,65 @@ function analyzeSubprocessCalls(codeNoComments, codeNoStrings, auth) {
     const defMatch = HELPER_DEF_RE.exec(maskedLine);
     const defName = defMatch?.[1] ?? defMatch?.[2] ?? null;
     const isHelperDef = Boolean(defName && defName !== 'test' && defName !== 'it' && defName !== 'describe');
-    const loopMatch = LOOP_START_RE.exec(maskedLine);
 
     if (SUBPROCESS_EXEC_RE.test(maskedLine)) {
-      const lineLen = (codeLines[i] ?? '').length;
-      const windowText = codeLines.slice(i, i + 4).join(' ');
       const firstSubIdx = maskedLine.search(SUBPROCESS_EXEC_RE);
-      const sameLineLoop = Boolean(loopMatch && loopMatch.index < firstSubIdx);
-      const inLoop = sameLineLoop || scopeStack.some((s) => s.kind === 'loop');
       const sameLineHelper = isHelperDef && defMatch.index < firstSubIdx ? defName : null;
+      const inOuterLoop = scopeStack.some((s) => s.kind === 'loop');
       let matchedNonTrivial = false;
 
-      for (const match of windowText.matchAll(SUBPROCESS_CALL_RE)) {
-        if ((match.index ?? 0) > lineLen) break;
+      for (const match of maskedLine.matchAll(SUBPROCESS_CALL_START_RE)) {
         const receiver = match[1] ?? '';
         const fnName = match[2];
-        const argText = (match[3] ?? '').trim();
-        if (!argText) continue;
         if (!isAuthenticCategoryCall(auth, 'child_process', fnName, receiver)) continue;
+        const callCol = match.index ?? 0;
+        const openParenIdx = lineOffset + callCol + match[0].length - 1;
+        const { slice, startIdx } = extractCallArgsSlice(codeNoStrings, openParenIdx, 240);
+        const trimmedSlice = slice.trim();
+        if (!trimmedSlice) continue;
 
-        const literalFirst = /^(['"`])([^'"`]*)\1/.exec(argText);
-        if (literalFirst) {
-          const rawCmd = literalFirst[2].trim();
-          if (!rawCmd) continue;
-          const firstWord = rawCmd.split(/\s+/)[0] ?? '';
-          const baseBin = firstWord.split(/[\\/]/).pop() ?? '';
-          if (!baseBin || TRIVIAL_SUBPROCESS_BIN_RE.test(baseBin)) continue;
-          hasRealSubprocess = true;
-          matchedNonTrivial = true;
-          subprocessCallCount += 1;
-          if (inLoop) hasLoopedSubprocess = true;
-          if (/--live-local\b/i.test(argText)) hasLiveLocalSubprocess = true;
-          if (SANDBOX_EXEC_RE.test(rawCmd) || SANDBOX_EXEC_RE.test(argText)) hasSandboxSubprocess = true;
-          const isShellOrRuntime = /^(?:sh|bash|zsh|dash|fish|cmd|cmd\.exe|powershell|pwsh|node|nodejs|python|python3|ruby|deno|bun|tsx|ts-node)$/i.test(baseBin);
-          if (EXTERNAL_TOOL_EXEC_RE.test(rawCmd) || (isShellOrRuntime && EXTERNAL_TOOL_EXEC_RE.test(argText))) {
-            hasExternalToolSubprocess = true;
+        const argLiterals = collectLiteralsInMaskedSlice(slice, startIdx, stringLiteralsByOpenPos);
+        const combinedArgs = argLiterals.length > 0
+          ? `${slice} ${argLiterals.map((item) => item.value).join(' ')}`
+          : slice;
+        const inLoop = inOuterLoop || isSameLineLoopEnclosing(maskedLine, callCol);
+
+        const leadingLiteral = trimmedSlice[0] === '"'
+          && argLiterals.length > 0
+          && slice.slice(0, argLiterals[0].sliceStart).trim() === ''
+          ? argLiterals[0]
+          : null;
+        if (leadingLiteral) {
+          const closePos = trimmedSlice.indexOf('"', 1);
+          const afterFirst = closePos >= 0 ? trimmedSlice.slice(closePos + 1).trimStart() : '';
+          const rawCmd = leadingLiteral.value.trim();
+          if (!rawCmd) {
+            if (!afterFirst.startsWith('+')) continue;
+          } else {
+            const firstWord = rawCmd.split(/\s+/)[0] ?? '';
+            const baseBin = firstWord.split(/[\\/]/).pop() ?? '';
+            if (!baseBin || TRIVIAL_SUBPROCESS_BIN_RE.test(baseBin)) continue;
+            hasRealSubprocess = true;
+            matchedNonTrivial = true;
+            subprocessCallCount += 1;
+            if (inLoop) hasLoopedSubprocess = true;
+            if (/--live-local\b/i.test(combinedArgs)) hasLiveLocalSubprocess = true;
+            if (SANDBOX_EXEC_RE.test(rawCmd) || SANDBOX_EXEC_RE.test(combinedArgs)) hasSandboxSubprocess = true;
+            const isShellOrRuntime = /^(?:sh|bash|zsh|dash|fish|cmd|cmd\.exe|powershell|pwsh|node|nodejs|python|python3|ruby|deno|bun|tsx|ts-node)$/i.test(baseBin);
+            if (EXTERNAL_TOOL_EXEC_RE.test(rawCmd) || (isShellOrRuntime && EXTERNAL_TOOL_EXEC_RE.test(combinedArgs))) {
+              hasExternalToolSubprocess = true;
+            }
+            continue;
           }
-          continue;
         }
+
         hasRealSubprocess = true;
         matchedNonTrivial = true;
         subprocessCallCount += 1;
         if (inLoop) hasLoopedSubprocess = true;
-        if (/--live-local\b/i.test(argText)) hasLiveLocalSubprocess = true;
-        if (SANDBOX_EXEC_RE.test(argText)) hasSandboxSubprocess = true;
-        if (EXTERNAL_TOOL_EXEC_RE.test(argText)) {
+        if (/--live-local\b/i.test(combinedArgs)) hasLiveLocalSubprocess = true;
+        if (SANDBOX_EXEC_RE.test(combinedArgs)) hasSandboxSubprocess = true;
+        if (EXTERNAL_TOOL_EXEC_RE.test(combinedArgs)) {
           hasExternalToolSubprocess = true;
         }
       }
@@ -1276,8 +1576,9 @@ function analyzeSubprocessCalls(codeNoComments, codeNoStrings, auth) {
       }
     }
     while (scopeStack.length && scopeStack[scopeStack.length - 1].depth > braceDepth) scopeStack.pop();
+    const openLoopAtEol = isSameLineLoopEnclosing(maskedLine, maskedLine.length);
     if (openedDepth !== null && braceDepth >= openedDepth) {
-      if (loopMatch) scopeStack.push({ kind: 'loop', name: null, depth: openedDepth });
+      if (openLoopAtEol) scopeStack.push({ kind: 'loop', name: null, depth: openedDepth });
       else if (isHelperDef) scopeStack.push({ kind: 'fn', name: defName, depth: openedDepth });
     } else if (netDelta > 0 && isHelperDef) {
       scopeStack.push({ kind: 'fn', name: defName, depth: braceDepth });
@@ -1300,43 +1601,53 @@ function analyzeSubprocessCalls(codeNoComments, codeNoStrings, auth) {
   };
 }
 
-function detectRealDeviceOrTtyProbe(codeNoComments, codeNoStrings, auth) {
+function detectRealDeviceOrTtyProbe(codeNoStrings, auth, stringLiteralsByOpenPos) {
   if (!auth.mockedModules.has('tty') && auth.importedModules.has('tty')) {
-    if (REAL_TTY_OP_RE.test(codeNoStrings)) return true;
-    if (auth.hasNodePtyImport && !auth.shadowedPrimitives.has('spawn') && /\.\s*spawn\s*\(/.test(codeNoStrings)) return true;
+    for (const m of codeNoStrings.matchAll(/\bnew[ \t]+([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?(ReadStream|WriteStream)[ \t]*\(/g)) {
+      if (isAuthenticCategoryCall(auth, 'tty', m[2], m[1] ?? '')) return true;
+    }
+    for (const m of codeNoStrings.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?\b(isatty)[ \t]*\(/g)) {
+      if (isAuthenticCategoryCall(auth, 'tty', m[2], m[1] ?? '')) return true;
+    }
+    if (auth.hasNodePtyImport) {
+      for (const m of codeNoStrings.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?\b(spawn)[ \t]*\(/g)) {
+        if (isAuthenticCategoryCall(auth, 'tty', m[2], m[1] ?? '')) return true;
+      }
+    }
   }
   if (auth.mockedModules.has('fs') || !auth.importedModules.has('fs')) return false;
-  if (!REAL_DEVICE_PATH_RE.test(codeNoComments)) return false;
 
-  // Track simple local path variables assigned a /dev/tty, /dev/ptmx, or /dev/pts/... literal.
+  // Track simple local path variables assigned a /dev/tty, /dev/ptmx, or /dev/pts/... string literal.
   const devicePathVars = new Set();
-  for (const m of codeNoComments.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(['"`])([^'"`\r\n]{1,64})\2/g)) {
-    if (REAL_DEVICE_PATH_RE.test(m[3])) devicePathVars.add(m[1]);
+  if (stringLiteralsByOpenPos instanceof Map) {
+    for (const m of codeNoStrings.matchAll(/\b(?:const|let|var)[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*=[ \t]*("")/g)) {
+      const openQuoteIdx = (m.index ?? 0) + m[0].lastIndexOf('""');
+      const lit = stringLiteralsByOpenPos.get(openQuoteIdx) ?? '';
+      if (REAL_DEVICE_PATH_RE.test(lit)) devicePathVars.add(m[1]);
+    }
   }
 
-  const codeLines = codeNoComments.split(/\r?\n/);
-  const maskedLines = codeNoStrings.split(/\r?\n/);
-  for (let i = 0; i < maskedLines.length; i += 1) {
-    const maskedLine = maskedLines[i] ?? '';
-    const lineLen = (codeLines[i] ?? '').length;
-    const windowText = codeLines.slice(i, i + 2).join(' ');
-    for (const m of maskedLine.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)?\b(openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream)\s*\(/g)) {
-      const receiver = m[1] ?? '';
-      const fnName = m[2];
-      if (!isAuthenticCategoryCall(auth, 'fs', fnName, receiver)) continue;
-      // Inspect arguments inside the real line window
-      const callIdx = windowText.indexOf(`${fnName}(`);
-      const argSlice = callIdx >= 0 && callIdx <= lineLen ? windowText.slice(callIdx, callIdx + 160) : windowText;
-      if (REAL_DEVICE_PATH_RE.test(argSlice)) return true;
-      for (const v of devicePathVars) {
-        if (argSlice.includes(v)) return true;
+  for (const m of codeNoStrings.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?\b(openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream)[ \t]*\(/g)) {
+    const receiver = m[1] ?? '';
+    const fnName = m[2];
+    if (!isAuthenticCategoryCall(auth, 'fs', fnName, receiver)) continue;
+    const openParenIdx = (m.index ?? 0) + m[0].length - 1;
+    const { slice, startIdx } = extractCallArgsSlice(codeNoStrings, openParenIdx, 240);
+    if (!slice) continue;
+    const argLiterals = collectLiteralsInMaskedSlice(slice, startIdx, stringLiteralsByOpenPos);
+    if (argLiterals.some((item) => REAL_DEVICE_PATH_RE.test(item.value))) return true;
+    if (devicePathVars.size > 0) {
+      for (const idMatch of slice.matchAll(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g)) {
+        const idx = idMatch.index ?? 0;
+        if (idx > 0 && slice[idx - 1] === '.') continue;
+        if (devicePathVars.has(idMatch[0])) return true;
       }
     }
   }
   return false;
 }
 
-function detectAuthenticServerOrDb(codeNoComments, codeNoStrings, auth) {
+function detectAuthenticServerOrDb(codeNoStrings, auth) {
   // 1. Bare unshadowed global fetch(...)
   if (!auth.shadowedPrimitives.has('fetch')) {
     for (const m of codeNoStrings.matchAll(/(?<![A-Za-z0-9_$.])\bfetch\s*\(/g)) {
@@ -1353,21 +1664,29 @@ function detectAuthenticServerOrDb(codeNoComments, codeNoStrings, auth) {
     }
     if (/\bsupertest\s*\(/.test(codeNoStrings)) return true;
   }
-  // 3. Authentic DB driver / DatabaseSync when DB module is genuinely imported and unmocked
+  // 3. Authentic DB driver / new DatabaseSync(...) when DB module is genuinely imported and unmocked
   if (!auth.mockedModules.has('db') && auth.importedModules.has('db')) {
-    if (!auth.shadowedPrimitives.has('DatabaseSync') && /\bDatabaseSync\b/.test(codeNoStrings)) return true;
+    for (const m of codeNoStrings.matchAll(/\bnew[ \t]+([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?(DatabaseSync)[ \t]*\(/g)) {
+      if (isAuthenticCategoryCall(auth, 'db', m[2], m[1] ?? '')) return true;
+    }
     if (/\bnew\s+(?:Pool|Client)\s*\(/.test(codeNoStrings)) return true;
-    if (auth.hasNonSqliteDbImport && !MOCK_USAGE_RE.test(codeNoStrings) && DB_DRIVER_IMPORT_RE.test(codeNoComments)) return true;
+    if (auth.hasNonSqliteDbImport && !MOCK_USAGE_RE.test(codeNoStrings)) return true;
   }
   return false;
 }
 
-function detectAuthenticBrowser(codeNoComments, codeNoStrings, auth) {
-  if (auth.mockedModules.has('browser')) return false;
-  if (auth.shadowedPrimitives.has('launch') || auth.shadowedPrimitives.has('goto')) return false;
-  if (/\b(?:fake|mock|stub)[A-Za-z0-9_$]*\s*\.\s*(?:launch|goto|newPage)\s*\(/i.test(codeNoStrings)) return false;
-  if (BROWSER_EXEC_RE.test(codeNoStrings)) return true;
-  return auth.importedModules.has('browser') && /\.(?:launch|goto|newPage)\s*\(/i.test(codeNoStrings);
+function detectAuthenticBrowser(codeNoStrings, auth) {
+  if (auth.mockedModules.has('browser') || !auth.importedModules.has('browser')) return false;
+  for (const m of codeNoStrings.matchAll(/(?:([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*)?([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*(launch|goto|newPage|newContext|connect)[ \t]*\(/g)) {
+    const outerReceiver = m[1] ?? '';
+    const receiver = m[2];
+    const method = m[3];
+    if (auth.shadowedPrimitives.has(method)) continue;
+    if (outerReceiver && (/^(?:fake|mock|stub)/i.test(outerReceiver) || auth.shadowedBrowserVars.has(outerReceiver))) continue;
+    if (/^(?:fake|mock|stub)/i.test(receiver) || auth.shadowedBrowserVars.has(receiver)) continue;
+    return true;
+  }
+  return false;
 }
 
 function detectAuthenticFsState(codeNoStrings, auth) {
@@ -1378,8 +1697,8 @@ function detectAuthenticFsState(codeNoStrings, auth) {
   return false;
 }
 
-function detectRealExecutionSignals(codeNoComments, codeNoStrings) {
-  const auth = analyzePrimitiveAuthenticity(codeNoComments, codeNoStrings);
+function detectRealExecutionSignals(codeNoStrings, stringLiteralsByOpenPos) {
+  const auth = analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos);
   const {
     hasRealSubprocess,
     hasExternalToolSubprocess,
@@ -1387,12 +1706,12 @@ function detectRealExecutionSignals(codeNoComments, codeNoStrings) {
     hasSandboxSubprocess,
     subprocessCallCount,
     hasLoopedSubprocess,
-  } = analyzeSubprocessCalls(codeNoComments, codeNoStrings, auth);
+  } = analyzeSubprocessCalls(codeNoStrings, auth, stringLiteralsByOpenPos);
   const hasMock = MOCK_USAGE_RE.test(codeNoStrings);
-  const hasBrowser = detectAuthenticBrowser(codeNoComments, codeNoStrings, auth);
-  const hasServerOrDb = detectAuthenticServerOrDb(codeNoComments, codeNoStrings, auth);
+  const hasBrowser = detectAuthenticBrowser(codeNoStrings, auth);
+  const hasServerOrDb = detectAuthenticServerOrDb(codeNoStrings, auth);
   const hasExternalSdk = auth.importedModules.has('external-sdk') && !auth.mockedModules.has('external-sdk') && !hasMock;
-  const hasRealDeviceOrTtyProbe = detectRealDeviceOrTtyProbe(codeNoComments, codeNoStrings, auth);
+  const hasRealDeviceOrTtyProbe = detectRealDeviceOrTtyProbe(codeNoStrings, auth, stringLiteralsByOpenPos);
   const hasRealFsState = detectAuthenticFsState(codeNoStrings, auth);
   const hasLiveLocal = hasLiveLocalSubprocess;
   const hasLiveBinding = hasBrowser || hasServerOrDb || hasExternalToolSubprocess || hasExternalSdk;
@@ -1429,8 +1748,8 @@ export function detectRealHostProbesInTest(testPath, text) {
       liveLocal: false,
     };
   }
-  const { codeNoComments, codeNoStrings, maxInlineStringBytes, repeatLiteralUnits } = scanJsWithMetrics(text);
-  const signals = detectRealExecutionSignals(codeNoComments, codeNoStrings);
+  const { codeNoStrings, maxInlineStringBytes, repeatLiteralUnits, stringLiteralsByOpenPos } = scanJsWithMetrics(text);
+  const signals = detectRealExecutionSignals(codeNoStrings, stringLiteralsByOpenPos);
   const hasMock = MOCK_USAGE_RE.test(codeNoStrings);
   const mockOnly = hasMock && !signals.hasRealHostSmoke;
   const maxDetectedPayloadBytes = detectMaxPayloadBytes(codeNoStrings, { maxInlineStringBytes, repeatLiteralUnits });
@@ -1469,7 +1788,7 @@ export function detectRealE2eKindsInTest(testPath, text) {
   const lint = lintValidationCode({ path: testPath, kind: 'test', text, hasRealE2eCoverage: true });
   if (lint.codes.includes('silent-validation-skip')) return [];
 
-  const { codeNoComments, codeNoStrings } = scanJsPreserveLines(text);
+  const { codeNoStrings, stringLiteralsByOpenPos } = scanJsWithMetrics(text);
   const kinds = new Set();
   const {
     hasBrowser,
@@ -1478,7 +1797,7 @@ export function detectRealE2eKindsInTest(testPath, text) {
     hasLiveBinding,
     hasRealHostSmoke,
     hasAnyRealExec,
-  } = detectRealExecutionSignals(codeNoComments, codeNoStrings);
+  } = detectRealExecutionSignals(codeNoStrings, stringLiteralsByOpenPos);
 
   if (hasBrowser) kinds.add('browser-playwright');
   if (hasServerOrDb) kinds.add('local-server-or-db');
@@ -2068,7 +2387,7 @@ function matchSilentSkipLine(codeLine, maskedLine, kind, isValFile = false) {
 export function lintValidationCode({ path = '', kind = 'test', text = '', hasRealE2eCoverage = false, nativeOnlyTargets } = {}) {
   const filePath = normalizePath(path) || 'unknown';
   const source = String(text ?? '');
-  const { codeNoComments, codeNoStrings } = scanJsPreserveLines(source);
+  const { codeNoComments, codeNoStrings, stringLiteralsByOpenPos } = scanJsWithMetrics(source);
   const codeLines = codeNoComments.split(/\r?\n/);
   const maskedLines = codeNoStrings.split(/\r?\n/);
   const codeSet = new Set();
@@ -2111,7 +2430,7 @@ export function lintValidationCode({ path = '', kind = 'test', text = '', hasRea
     const { boundarySurfaces } = inspectTestBoundaryTargets(filePath, source, { nativeOnlyTargets });
     if (boundarySurfaces.length > 0) {
       const mockLineIndex = maskedLines.findIndex((line) => MOCK_USAGE_RE.test(line));
-      const { hasAnyRealExec } = detectRealExecutionSignals(codeNoComments, codeNoStrings);
+      const { hasAnyRealExec } = detectRealExecutionSignals(codeNoStrings, stringLiteralsByOpenPos);
       if (mockLineIndex >= 0 && !hasAnyRealExec) {
         codeSet.add('boundary-mock-only-test');
         const isNativeOrOs = boundarySurfaces.includes('native-only') || boundarySurfaces.includes('os-boundary');

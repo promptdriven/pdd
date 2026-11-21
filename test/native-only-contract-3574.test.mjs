@@ -917,3 +917,264 @@ test('3574 R1 regressions (#1, #3-#10): ReDoS safety, mocked primitives, 4-class
   assert.match(partsDoc, /specification prompts/i);
   assert.doesNotMatch(partsDoc, /\b(?:no longer|used to|was renamed|moved to|since 0\.1|New in)\b/i);
 });
+
+test('R2 adversarial regression suite: R2-1 through R2-5', () => {
+  // R2-1 [P1]: No stateful /g flip-flop on global fetch shadowing + window.fetch / bare fetch / uninit let / non-native import shadows.
+  const globalFetchStub = `
+    globalThis.fetch = async () => ({ ok: true });
+    await fetch('http://127.0.0.1:3000/api');
+  `;
+  for (let run = 0; run < 4; run += 1) {
+    const p = detectRealHostProbesInTest('test/api-fetch-stub.test.mjs', globalFetchStub);
+    assert.equal(p.hasRealHostSmoke, false, `globalThis.fetch stub must stay rejected on call #${run + 1}`);
+    assert.deepEqual(detectRealE2eKindsInTest('test/api-fetch-stub.test.mjs', globalFetchStub), ['real-execution']);
+  }
+
+  const fetchShadowVariants = [
+    `window.fetch = async () => ({ ok: true }); await fetch('http://127.0.0.1:3000');`,
+    `fetch = async () => ({ ok: true }); await fetch('http://127.0.0.1:3000');`,
+    `let fetch; fetch = () => ({ ok: true }); await fetch('http://127.0.0.1:3000');`,
+    `var fetch;\nawait fetch('http://127.0.0.1:3000');`,
+    `let a = 1, fetch;\nawait fetch('http://127.0.0.1:3000');`,
+    `import fetch from './fake-fetch.mjs'\nawait fetch('http://127.0.0.1:3000')`,
+    `import { fakeFetch as fetch } from './helpers.mjs'\nawait fetch('http://127.0.0.1:3000')`,
+    `const { fetch } = require('./fake-fetch.cjs')\nawait fetch('http://127.0.0.1:3000')`,
+    `const fetch = require('fetch-mock')\nawait fetch('http://127.0.0.1:3000')`,
+    `vi.stubGlobal(\n  'fetch',\n  vi.fn(),\n);\nawait fetch('http://127.0.0.1:3000');`,
+  ];
+  for (const code of fetchShadowVariants) {
+    const p = detectRealHostProbesInTest('test/api-fetch-shadow.test.mjs', code);
+    assert.equal(p.hasRealHostSmoke, false, `shadowed fetch must not count as real smoke: ${code}`);
+    assert.ok(!detectRealE2eKindsInTest('test/api-fetch-shadow.test.mjs', code).includes('local-server-or-db'));
+  }
+
+  const uninitSpawnShadow = `
+    import * as cp from 'node:child_process';
+    let spawnSync;
+    spawnSync = () => ({ status: 0 });
+    spawnSync('git', ['status']);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/uninit-spawn.test.mjs', uninitSpawnShadow).hasRealHostSmoke, false);
+
+  // Genuine unshadowed global fetch still passes reliably across repeated calls.
+  const realFetchTest = `await fetch('http://127.0.0.1:3000/health');`;
+  for (let run = 0; run < 3; run += 1) {
+    assert.equal(detectRealHostProbesInTest('test/api-real-fetch.test.mjs', realFetchTest).hasRealHostSmoke, true);
+    assert.ok(detectRealE2eKindsInTest('test/api-real-fetch.test.mjs', realFetchTest).includes('local-server-or-db'));
+  }
+
+  // R2-2 [P1]: Semicolon-free consecutive ESM imports, multiline vi.mock/doMock/jest.doMock, and string-literal import spoofs.
+  const semiFreeEsm = [
+    `import assert from 'node:assert/strict'`,
+    `import test from 'node:test'`,
+    `import { spawnSync } from 'node:child_process'`,
+    `import { mkdtempSync } from 'node:fs'`,
+    `test('cli', () => {`,
+    `  mkdtempSync('/tmp/semi-')`,
+    `  spawnSync(process.execPath, ['-e', '0'])`,
+    `  spawnSync(process.execPath, ['-e', '0'])`,
+    `})`,
+  ].join('\n');
+  const semiFreeProbe = detectRealHostProbesInTest('test/semi-free.test.mjs', semiFreeEsm);
+  assert.equal(semiFreeProbe.hasRealHostSmoke, true);
+  assert.equal(semiFreeProbe.detectedTurns, 2);
+  assert.ok(semiFreeProbe.classes.includes('multi-turn-cli-state'));
+
+  const multilineMocks = [
+    `import { spawnSync } from 'node:child_process'\nvi.mock(\n  'node:child_process',\n  () => ({ spawnSync: () => ({ status: 0 }) }),\n)\nspawnSync('git', ['status'])`,
+    `import { spawnSync } from 'node:child_process'\nvi.doMock(\n  'node:child_process',\n  () => ({ spawnSync: () => ({ status: 0 }) }),\n)\nspawnSync('git', ['status'])`,
+    `import { spawnSync } from 'node:child_process'\njest.doMock(\n  'node:child_process',\n  () => ({ spawnSync: () => ({ status: 0 }) }),\n)\nspawnSync('git', ['status'])`,
+  ];
+  for (const code of multilineMocks) {
+    const p = detectRealHostProbesInTest('test/multiline-mock.test.mjs', code);
+    assert.equal(p.hasRealHostSmoke, false);
+    assert.equal(p.mockOnly, true);
+  }
+
+  const stringLiteralImportSpoof = `
+    const doc = "import { spawnSync } from 'node:child_process'";
+    const doc2 = "const { execFileSync } = require('node:child_process')";
+    const spawnSync = () => ({ status: 0 });
+    spawnSync('git', ['status']);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/str-import-spoof.test.mjs', stringLiteralImportSpoof).hasRealHostSmoke, false);
+
+  const stringLiteralMockDoesNotPoisonReal = `
+    import { spawnSync } from 'node:child_process'
+    const note = "vi.mock('node:child_process')"
+    spawnSync(process.execPath, ['-e', '0'])
+  `;
+  assert.equal(detectRealHostProbesInTest('test/str-mock-inert.test.mjs', stringLiteralMockDoesNotPoisonReal).hasRealHostSmoke, true);
+
+  // R2-3 [P1]: Unimported browser mocks, unused node:sqlite/node:tty imports, and mock.method(tty, 'isatty') bypass.
+  const unimportedBrowserMocks = [
+    `const page = { goto: async () => ({ ok: true }) }; await page.goto('http://127.0.0.1:3000');`,
+    `const chromium = { launch: async () => ({}) }; await chromium.launch();`,
+    `import { test } from '@playwright/test';\nconst page = { goto: async () => ({}) };\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { test } from '@playwright/test';\nconst browser = { newPage: () => ({ goto: () => {} }) };\nconst page = browser.newPage();\npage.goto('http://127.0.0.1:3000');`,
+    `import { chromium } from 'playwright';\nmock.method(chromium, 'launch', async () => ({}));\nawait chromium.launch();`,
+  ];
+  for (const code of unimportedBrowserMocks) {
+    const kinds = detectRealE2eKindsInTest('test/web-mock.test.mjs', code);
+    assert.ok(!kinds.includes('browser-playwright'), `unimported/mocked browser must fail: ${code}`);
+  }
+
+  const realPlaywrightFixture = `
+    import { test, expect } from '@playwright/test';
+    test('loads home', async ({ page }) => {
+      await page.goto('http://127.0.0.1:3000');
+      await expect(page).toHaveTitle(/Home/);
+    });
+  `;
+  assert.ok(detectRealE2eKindsInTest('test/web-real.test.mjs', realPlaywrightFixture).includes('browser-playwright'));
+
+  const realPlaywrightLaunch = `
+    import { chromium } from 'playwright';
+    const browser = await chromium.launch();
+    const page = await browser.newPage();
+    await page.goto('http://127.0.0.1:3000');
+  `;
+  assert.ok(detectRealE2eKindsInTest('test/web-launch.test.mjs', realPlaywrightLaunch).includes('browser-playwright'));
+
+  const unusedTtyImport = `import { isatty, ReadStream } from 'node:tty';\nconst x = 1;`;
+  assert.equal(detectRealHostProbesInTest('test/unused-tty.test.mjs', unusedTtyImport).hasRealHostSmoke, false);
+
+  const stubbedTtyIsatty = `
+    import tty from 'node:tty';
+    mock.method(tty, 'isatty', () => true);
+    tty.isatty(0);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/stubbed-tty.test.mjs', stubbedTtyIsatty).hasRealHostSmoke, false);
+
+  const realTtyIsatty = `
+    import { isatty } from 'node:tty';
+    const ok = isatty(0);
+  `;
+  const realTtyProbe = detectRealHostProbesInTest('test/real-tty.test.mjs', realTtyIsatty);
+  assert.equal(realTtyProbe.hasRealHostSmoke, true);
+  assert.ok(realTtyProbe.classes.includes('host-tty-ownership'));
+
+  const unusedSqliteImport = `import { DatabaseSync } from 'node:sqlite';\nconst ref = DatabaseSync;`;
+  assert.equal(detectRealHostProbesInTest('test/unused-sqlite.test.mjs', unusedSqliteImport).hasRealHostSmoke, false);
+  assert.ok(!detectRealE2eKindsInTest('test/unused-sqlite.test.mjs', unusedSqliteImport).includes('local-server-or-db'));
+
+  const realSqliteUsage = `import { DatabaseSync } from 'node:sqlite';\nconst db = new DatabaseSync(':memory:');`;
+  assert.equal(detectRealHostProbesInTest('test/real-sqlite.test.mjs', realSqliteUsage).hasRealHostSmoke, true);
+  assert.ok(detectRealE2eKindsInTest('test/real-sqlite.test.mjs', realSqliteUsage).includes('local-server-or-db'));
+
+  // R2-4 [P1]: Balanced call args (no bleed past ')'), whole-identifier devicePathVars, enclosing-only sameLineLoop, "".repeat(10000) == 0 bytes.
+  const sameLineBleedSubprocess = `
+    import { execFileSync } from 'node:child_process';
+    execFileSync(process.execPath, ['-e', '0']); const x = 'sandbox-exec --live-local';
+  `;
+  const bleedSubProbe = detectRealHostProbesInTest('test/same-line-bleed.test.mjs', sameLineBleedSubprocess);
+  assert.equal(bleedSubProbe.hasRealHostSmoke, true);
+  assert.equal(bleedSubProbe.liveLocal, false);
+  assert.ok(!bleedSubProbe.classes.includes('nested-sandbox'));
+
+  const sameLineBleedFs = `
+    import { statSync } from 'node:fs';
+    statSync('/tmp/foo'); const p = '/dev/tty';
+  `;
+  assert.equal(detectRealHostProbesInTest('test/fs-bleed.test.mjs', sameLineBleedFs).hasRealHostSmoke, false);
+
+  const substringVarFsSpoof = `
+    import { statSync } from 'node:fs';
+    const p = '/dev/tty';
+    statSync('/tmp/p');
+    statSync(path);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/fs-substr-spoof.test.mjs', substringVarFsSpoof).hasRealHostSmoke, false);
+
+  const realVarFsProbe = `
+    import { statSync } from 'node:fs';
+    const ttyPath = '/dev/tty';
+    statSync(ttyPath);
+  `;
+  assert.ok(detectRealHostProbesInTest('test/fs-real-var.test.mjs', realVarFsProbe).classes.includes('host-tty-ownership'));
+
+  const closedMapBeforeExec = `
+    import { execFileSync } from 'node:child_process';
+    import { mkdtempSync } from 'node:fs';
+    mkdtempSync('/tmp/x-');
+    const args = ['a'].map(x => x); execFileSync(process.execPath, args);
+  `;
+  const closedMapProbe = detectRealHostProbesInTest('test/closed-map.test.mjs', closedMapBeforeExec);
+  assert.equal(closedMapProbe.detectedTurns, 1);
+  assert.ok(!closedMapProbe.classes.includes('multi-turn-cli-state'));
+
+  const closedForBeforeExec = `
+    import { execFileSync } from 'node:child_process';
+    import { mkdtempSync } from 'node:fs';
+    mkdtempSync('/tmp/x-');
+    for (let i = 0; i < 2; i++) { args.push(i); } execFileSync(process.execPath, args);
+  `;
+  assert.equal(detectRealHostProbesInTest('test/closed-for.test.mjs', closedForBeforeExec).detectedTurns, 1);
+
+  const enclosingSameLineLoop = `
+    import { execFileSync } from 'node:child_process';
+    import { mkdtempSync } from 'node:fs';
+    mkdtempSync('/tmp/x-');
+    ['a', 'b'].forEach(x => execFileSync(process.execPath, ['-e', x]));
+  `;
+  const enclosingLoopProbe = detectRealHostProbesInTest('test/enclosing-loop.test.mjs', enclosingSameLineLoop);
+  assert.ok(enclosingLoopProbe.detectedTurns >= 2);
+  assert.ok(enclosingLoopProbe.classes.includes('multi-turn-cli-state'));
+
+  const emptyRepeatSpoof = `
+    import { execFileSync } from 'node:child_process';
+    const empty1 = "".repeat(10000);
+    const empty2 = '' .repeat(10000);
+    const empty3 = \`\`.repeat(10000);
+    execFileSync(process.execPath, ['-e', '0']);
+  `;
+  const emptyRepeatProbe = detectRealHostProbesInTest('test/empty-repeat.test.mjs', emptyRepeatSpoof);
+  assert.ok((emptyRepeatProbe.maxDetectedPayloadBytes ?? 0) <= MIN_REALISTIC_PAYLOAD_BYTES);
+  assert.ok(!emptyRepeatProbe.classes.includes('full-size-payload'));
+
+  // R2-5 [P2]: Non-native frontmatter + embedded Runtime interface bodyOffset, attached comment closer in header, and schema fence inside port-only section.
+  const fmPlusEmbeddedPrompt = [
+    '---',
+    'owner: platform',
+    '---',
+    '',
+    '# Embedded OS adapter',
+    '',
+    'Owns `src/embedded-os.mjs`.',
+    '',
+    '<details><summary>Runtime interface</summary>',
+    '```json',
+    '{"kind":"native-only","reason":"OS boundary"}',
+    '```',
+    '</details>',
+  ].join('\n');
+  const fmEmbeddedDetected = detectNativeOnlyModules({
+    changedFiles: ['src/embedded-os.mjs', 'src/attached-closer.c'],
+    promptFiles: [{ path: 'prompts/embedded-os.prompt.md', content: fmPlusEmbeddedPrompt }],
+    fileHeads: [
+      { path: 'src/attached-closer.c', content: '/* Prompt: prompts/embedded-os.prompt.md*/\n' },
+    ],
+  });
+  assert.deepEqual(fmEmbeddedDetected.nativeOnlyModules, ['src/attached-closer.c', 'src/embedded-os.mjs']);
+
+  const portOnlySchemaFencePrompt = [
+    '---',
+    'kind: native-only',
+    'reason: Real adapter.',
+    '---',
+    '# Adapter',
+    '## Port wiring',
+    '```json',
+    '{"port": "store", "op": "load"}',
+    '```',
+    '## Error mapping',
+    'Maps failures to HTTP 503.',
+    '## Real-host verification',
+    'Runs real-host smoke test.',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+  const portFenceWarnings = lintNativeOnlyContract(portOnlySchemaFencePrompt, { path: 'prompts/port-fence.prompt.md' });
+  assert.equal(portFenceWarnings.length, 1);
+  assert.match(portFenceWarnings[0], /boundary\/runtime contract/);
+});
