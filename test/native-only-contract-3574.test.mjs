@@ -1178,3 +1178,114 @@ test('R2 adversarial regression suite: R2-1 through R2-5', () => {
   assert.equal(portFenceWarnings.length, 1);
   assert.match(portFenceWarnings[0], /boundary\/runtime contract/);
 });
+
+test('R3 adversarial + CodeQL regression suite: items 1 through 4', () => {
+  // R3-1 [P0 CodeQL]: HTML comment closers (--> and --!>) parsed linearly without HTML-filtering regexes.
+  const htmlCloserPrompt = '---\nkind: native-only\nreason: HTML comment header test.\n---\n# HTML\n';
+  const sha = '0'.repeat(64);
+  const htmlHeaderDetected = detectNativeOnlyModules({
+    changedFiles: ['src/h1.html', 'src/h2.html', 'src/h3.html', 'src/h4.html', 'src/bad.html'],
+    promptFiles: [{ path: 'prompts/html-closer.prompt.md', content: htmlCloserPrompt }],
+    fileHeads: [
+      { path: 'src/h1.html', content: `<!-- Generated from prompts/html-closer.prompt.md-->\n` },
+      { path: 'src/h2.html', content: `<!-- Generated from prompts/html-closer.prompt.md--!>\n` },
+      { path: 'src/h3.html', content: `<!-- Prompt: prompts/html-closer.prompt.md (sha256: ${sha}). --!>\n` },
+      { path: 'src/h4.html', content: `<!-- Prompt: prompts/html-closer.prompt.md sha256=${sha} -->\n` },
+      { path: 'src/bad.html', content: `<!-- Prompt: prompts/html-closer.prompt.md trailing garbage -->\n` },
+    ],
+  });
+  assert.deepEqual(htmlHeaderDetected.nativeOnlyModules, ['src/h1.html', 'src/h2.html', 'src/h3.html', 'src/h4.html']);
+
+  // R3-2 [P1]: isSameLineLoopEnclosing rejects closed .map() followed by assert.ok(execFileSync(...)) and accepts brace-less for (...).
+  const closedMapWithAssert = `
+    import { execFileSync } from 'node:child_process';
+    import { mkdtempSync } from 'node:fs';
+    mkdtempSync('/tmp/x-');
+    const xs = ['a'].map(x => x); assert.ok(execFileSync(process.execPath, xs));
+  `;
+  const closedMapAssertProbe = detectRealHostProbesInTest('test/closed-map-assert.test.mjs', closedMapWithAssert);
+  assert.equal(closedMapAssertProbe.detectedTurns, 1);
+  assert.ok(!closedMapAssertProbe.classes.includes('multi-turn-cli-state'));
+
+  const bracelessFor = `
+    import { execFileSync } from 'node:child_process';
+    import { mkdtempSync } from 'node:fs';
+    mkdtempSync('/tmp/x-');
+    for (const t of ['a', 'b']) execFileSync(process.execPath, ['-e', t]);
+  `;
+  const bracelessForProbe = detectRealHostProbesInTest('test/braceless-for.test.mjs', bracelessFor);
+  assert.ok(bracelessForProbe.detectedTurns >= 2);
+  assert.ok(bracelessForProbe.classes.includes('multi-turn-cli-state'));
+
+  const closedBlockForWithAssert = `
+    import { execFileSync } from 'node:child_process';
+    import { mkdtempSync } from 'node:fs';
+    mkdtempSync('/tmp/x-');
+    for (let i = 0; i < 2; i++) { const o = { a: i }; } assert.ok(execFileSync(process.execPath, ['-e', '0']));
+  `;
+  assert.equal(detectRealHostProbesInTest('test/closed-block-for.test.mjs', closedBlockForWithAssert).detectedTurns, 1);
+
+  // R3-3 [P1]: Direct namespace property assignment stubbing (cp.spawnSync=, fs.statSync=, bracket/defineProperty) + CJS/ESM aliased named bindings.
+  const propAssignStubs = [
+    `import * as cp from 'node:child_process';\ncp.spawnSync = () => ({ status: 0 });\ncp.spawnSync('git', ['status']);`,
+    `import * as cp from 'node:child_process';\ncp['spawnSync'] = () => ({ status: 0 });\ncp.spawnSync('git', ['status']);`,
+    `import * as cp from 'node:child_process';\nObject.defineProperty(cp, 'spawnSync', { value: () => ({ status: 0 }) });\ncp.spawnSync('git', ['status']);`,
+    `import fs from 'node:fs';\nfs.statSync = () => ({ uid: 0 });\nfs.statSync('/dev/tty');`,
+    `import tty from 'node:tty';\ntty.isatty = () => true;\ntty.isatty(0);`,
+    `import sqlite from 'node:sqlite';\nsqlite.DatabaseSync = class {};\nnew sqlite.DatabaseSync(':memory:');`,
+    `let { spawnSync: run } = require('node:child_process');\nrun = () => ({ status: 0 });\nrun(process.execPath, ['-e', '0']);`,
+  ];
+  for (const code of propAssignStubs) {
+    assert.equal(
+      detectRealHostProbesInTest('test/prop-stub.test.mjs', code).hasRealHostSmoke,
+      false,
+      `property-stubbed or reassigned binding must be rejected: ${code}`,
+    );
+  }
+
+  const cjsAliasedSubprocess = `
+    const { spawnSync: run } = require('node:child_process');
+    const { mkdtempSync: makeTmp } = require('node:fs');
+    makeTmp('/tmp/cjs-');
+    run(process.execPath, ['-e', '0']);
+    run(process.execPath, ['-e', '0']);
+  `;
+  const cjsAliasProbe = detectRealHostProbesInTest('test/cjs-alias.test.mjs', cjsAliasedSubprocess);
+  assert.equal(cjsAliasProbe.hasRealHostSmoke, true);
+  assert.equal(cjsAliasProbe.detectedTurns, 2);
+  assert.ok(cjsAliasProbe.classes.includes('multi-turn-cli-state'));
+
+  const esmAliasedSubprocess = `
+    import { execFileSync as runCli } from 'node:child_process';
+    runCli('sandbox-exec', ['-p', '(version 1)', '/usr/bin/true']);
+  `;
+  const esmAliasProbe = detectRealHostProbesInTest('test/esm-alias.test.mjs', esmAliasedSubprocess);
+  assert.equal(esmAliasProbe.hasRealHostSmoke, true);
+  assert.ok(esmAliasProbe.classes.includes('nested-sandbox'));
+
+  const cjsAliasedFsAndDb = `
+    const { statSync: checkDev } = require('node:fs');
+    const { DatabaseSync: DB } = require('node:sqlite');
+    checkDev('/dev/tty');
+    const db = new DB(':memory:');
+  `;
+  const cjsFsDbProbe = detectRealHostProbesInTest('test/cjs-fs-db.test.mjs', cjsAliasedFsAndDb);
+  assert.equal(cjsFsDbProbe.hasRealHostSmoke, true);
+  assert.ok(cjsFsDbProbe.classes.includes('host-tty-ownership'));
+  assert.ok(detectRealE2eKindsInTest('test/cjs-fs-db.test.mjs', cjsAliasedFsAndDb).includes('local-server-or-db'));
+
+  // R3-4 [P2]: Mocked/reassigned/property-stubbed page.goto rejected even when Playwright is imported.
+  const browserMockBypasses = [
+    `import { test } from '@playwright/test';\nconst page = { goto: mock.fn() };\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { test } from '@playwright/test';\nconst page =\n  { goto: mock.fn() };\nawait page.goto('http://127.0.0.1:3000');`,
+    `import { test } from '@playwright/test';\ntest('x', async ({ page }) => {\n  page = { goto: () => {} };\n  await page.goto('http://127.0.0.1:3000');\n});`,
+    `import { test } from '@playwright/test';\ntest('x', async ({ page }) => {\n  page.goto = mock.fn();\n  await page.goto('http://127.0.0.1:3000');\n});`,
+    `import { chromium } from 'playwright';\nawait page.goto('http://127.0.0.1:3000');`,
+  ];
+  for (const code of browserMockBypasses) {
+    assert.ok(
+      !detectRealE2eKindsInTest('test/browser-bypass.test.mjs', code).includes('browser-playwright'),
+      `mocked/unlaunched browser must not pass: ${code}`,
+    );
+  }
+});

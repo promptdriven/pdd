@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: fe50a41112b31cf1d3d55fd5c6cbdb5ca7a332d5914b742a208ccf07fd29e607).
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: fa7bd5da7d5b236a30aa33b04a63cc7f8b8602543e69f05ae2f3f9edee1a2c5e).
 
 export const MAX_VALIDATION_REPAIRS = 3;
 export const MIN_REALISTIC_PAYLOAD_BYTES = 4096;
@@ -722,8 +722,22 @@ function parseNativeOnlyPromptMeta(raw) {
   return null;
 }
 
-const HEADER_COMMENT_OPENER_RE = /^(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')/;
-const HEADER_TAIL_OK_RE = /^(?:(?:\(sha256: [a-f0-9]{64}\)|sha256=[a-f0-9]{64})?\.?[ \t]*(?:\*\/|-->|"""|''')?)?$/;
+const HEADER_COMMENT_OPENER_RE = /^(?:\/\/+|#+|--|;+|\/\*+|\*+|"""|''')/;
+const HEADER_COMMENT_CLOSERS = ['*/', '--!>', '-->', '"""', "'''"];
+const HEADER_HASH_TAIL_RE = /^(?:\(sha256: [a-f0-9]{64}\)|sha256=[a-f0-9]{64})$/;
+
+function stripTrailingHeaderCloser(value) {
+  for (const closer of HEADER_COMMENT_CLOSERS) {
+    if (value.endsWith(closer)) return value.slice(0, -closer.length);
+  }
+  return value;
+}
+
+function isValidHeaderTail(tail) {
+  let rest = stripTrailingHeaderCloser(tail.trim()).trimEnd();
+  if (rest.endsWith('.')) rest = rest.slice(0, -1).trimEnd();
+  return rest === '' || HEADER_HASH_TAIL_RE.test(rest);
+}
 
 function extractHeaderPromptRefs(rawContent) {
   if (!rawContent) return [];
@@ -737,10 +751,15 @@ function extractHeaderPromptRefs(rawContent) {
     let rest = rawLine.trim();
     if (!rest) continue;
     let hasOpener = false;
-    const opener = HEADER_COMMENT_OPENER_RE.exec(rest);
-    if (opener) {
+    if (rest.startsWith('<!--')) {
       hasOpener = true;
-      rest = rest.slice(opener[0].length).replace(/^[ \t]+/, '');
+      rest = rest.slice(4).replace(/^[ \t]+/, '');
+    } else {
+      const opener = HEADER_COMMENT_OPENER_RE.exec(rest);
+      if (opener) {
+        hasOpener = true;
+        rest = rest.slice(opener[0].length).replace(/^[ \t]+/, '');
+      }
     }
     let afterLabel = null;
     if (rest.startsWith('Generated from ')) {
@@ -752,10 +771,10 @@ function extractHeaderPromptRefs(rawContent) {
     const sp = afterLabel.search(/[ \t]/);
     let rawToken = sp < 0 ? afterLabel : afterLabel.slice(0, sp);
     const tail = sp < 0 ? '' : afterLabel.slice(sp).trim();
-    if (!tail) rawToken = rawToken.replace(/(?:\*\/|-->|"""|''')$/, '');
+    if (!tail) rawToken = stripTrailingHeaderCloser(rawToken);
     if (rawToken.endsWith('.')) rawToken = rawToken.slice(0, -1);
     if (!rawToken.endsWith('.prompt.md')) continue;
-    if (tail && !HEADER_TAIL_OK_RE.test(tail)) continue;
+    if (tail && !isValidHeaderTail(tail)) continue;
     if (!isCanonicalRepoPath(rawToken)) continue;
     const promptPath = normalizePath(rawToken);
     const key = promptPath.toLowerCase();
@@ -1219,11 +1238,15 @@ function extractBindingNamesFromClause(clause) {
     const before = trimmed.slice(0, braceStart).replace(/,\s*$/, '').trim();
     if (before && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(before)) namespaces.push(before);
     for (const part of trimmed.slice(braceStart + 1, braceEnd).split(',')) {
-      const piece = part.trim();
+      const piece = part.split('=')[0].trim();
       if (!piece) continue;
       const alias = /^([A-Za-z_$][A-Za-z0-9_$]*)(?:\s+as\s+|\s*:\s*)([A-Za-z_$][A-Za-z0-9_$]*)$/.exec(piece);
-      if (alias) named.set(alias[2], alias[1]);
-      else if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(piece)) named.set(piece, piece);
+      if (alias) {
+        if (alias[1] === 'default') namespaces.push(alias[2]);
+        else named.set(alias[2], alias[1]);
+      } else if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(piece)) {
+        named.set(piece, piece);
+      }
     }
   } else if (!nsMatch && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(trimmed)) {
     namespaces.push(trimmed);
@@ -1248,26 +1271,57 @@ function splitTopLevelDeclarators(listText) {
   return out;
 }
 
+function hasLeadingDot(text, idx) {
+  let j = idx - 1;
+  while (j >= 0 && (text[j] === ' ' || text[j] === '\t')) j -= 1;
+  return j >= 0 && text[j] === '.';
+}
+
+const GENERIC_CALL_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*)(?:[ \t]*\.[ \t]*([A-Za-z_$][A-Za-z0-9_$]*))?[ \t]*\(/g;
+const GENERIC_NEW_RE = /\bnew[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)(?:[ \t]*\.[ \t]*([A-Za-z_$][A-Za-z0-9_$]*))?[ \t]*\(/g;
+const SUBPROCESS_ORIG_NAMES = new Set(['spawn', 'spawnSync', 'execFile', 'execFileSync', 'execSync']);
+const FS_DEVICE_ORIG_NAMES = new Set([
+  'openSync', 'open', 'statSync', 'stat', 'fstatSync', 'fstat',
+  'lstatSync', 'lstat', 'accessSync', 'access', 'createReadStream', 'createWriteStream',
+]);
+const FS_STATE_ORIG_NAMES = new Set([
+  'mkdtempSync', 'mkdtemp', 'readdirSync', 'readdir', 'existsSync',
+  'readFileSync', 'readFile', 'statSync', 'stat', 'lstatSync', 'lstat', 'accessSync',
+]);
+const HTTP_ORIG_NAMES = new Set(['createServer', 'request']);
+const TTY_CTOR_ORIG_NAMES = new Set(['ReadStream', 'WriteStream']);
+const TTY_CALL_ORIG_NAMES = new Set(['isatty']);
+const TTY_PTY_ORIG_NAMES = new Set(['spawn']);
+const DB_CTOR_ORIG_NAMES = new Set(['DatabaseSync']);
+const BROWSER_METHOD_NAMES = new Set(['launch', 'goto', 'newPage', 'newContext', 'connect']);
+
 const MODULE_MOCK_CALL_RE = /\b(?:(?:vi|jest)\.(?:mock|doMock)|mock\.module)[ \t]*\(\s*("")/g;
 const ESM_IMPORT_RE = /(?<!\.)\bimport\s+([A-Za-z_$*{][A-Za-z0-9_$,*{}\s]{0,1000})\bfrom\s*("")/g;
-const CJS_REQUIRE_RE = /\b(?:const|let|var)[ \t]+([A-Za-z_${][A-Za-z0-9_$,:{}\s]{0,300})=[ \t]*require[ \t]*\(\s*("")\s*\)(?:\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*))?/g;
-const SHADOW_VAR_RE = /\b(?:const|let|var)[ \t]+(spawn|spawnSync|execFile|execFileSync|execSync|createServer|fetch|DatabaseSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream|isatty|ReadStream|WriteStream)[ \t]*=/g;
+const CJS_REQUIRE_RE = /\b(?:const|let|var)[ \t]+([A-Za-z_${][A-Za-z0-9_$,:{}=\s]{0,300})=[ \t]*require[ \t]*\(\s*("")\s*\)(?:\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*))?/g;
+const SHADOW_VAR_RE = /\b(?:const|let|var)[ \t]+(spawn|spawnSync|execFile|execFileSync|execSync|createServer|fetch|DatabaseSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|createReadStream|createWriteStream|isatty|ReadStream|WriteStream)[ \t]*=/g;
 const SHADOW_UNINIT_DECL_RE = /\b(?:let|var)[ \t]+([^;\n]{1,300})/g;
 const SHADOW_DESTRUCTURE_RE = /\b(?:const|let|var)[ \t]*\{([^}\r\n]{1,200})\}[ \t]*=([^;\n]{0,200})/g;
-const SHADOW_FN_RE = /\bfunction[ \t]+(spawn|spawnSync|execFile|execFileSync|execSync|createServer|fetch|DatabaseSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream|isatty|ReadStream|WriteStream)[ \t]*\(/g;
-const SHADOW_CLASS_RE = /\bclass[ \t]+(DatabaseSync|ReadStream|WriteStream)\b/g;
+const SHADOW_FN_RE = /\bfunction[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\(/g;
+const SHADOW_CLASS_RE = /\bclass[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)\b/g;
 const SHADOW_GLOBAL_FETCH_ASSIGN_RE = /\b(?:globalThis|global|window|self)[ \t]*\.[ \t]*fetch[ \t]*=(?!=)|(?<![.\w$])fetch[ \t]*=(?!=)/;
+const PROP_ASSIGN_STUB_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*(spawn|spawnSync|execFile|execFileSync|execSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|createReadStream|createWriteStream|createServer|request|listen|fetch|isatty|ReadStream|WriteStream|DatabaseSync|launch|goto|newPage|newContext|connect)[ \t]*=(?!=)/g;
+const BRACKET_ASSIGN_STUB_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\[[ \t]*("")[ \t]*\][ \t]*=(?!=)/g;
+const DEFINE_PROP_STUB_RE = /\bObject\.defineProperty[ \t]*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*,\s*("")/g;
 const STUB_GLOBAL_CALL_RE = /\bvi\.stubGlobal[ \t]*\(\s*("")/g;
-const DEFINE_PROP_GLOBAL_RE = /\bObject\.defineProperty[ \t]*\(\s*(?:globalThis|global|window|self)\s*,\s*("")/g;
 const METHOD_STUB_RE = /\b(?:mock\.method|vi\.spyOn|jest\.spyOn|sinon\.stub)[ \t]*\(\s*([^,\n)]{1,120}),\s*("")/g;
 const BROWSER_ORIGIN_RHS_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*(?:launch|launchPersistentContext|newPage|newContext|connect|connectOverCDP|pages)[ \t]*\(/;
-const LOCAL_VAR_DECL_RE = /\b(?:const|let|var)[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)(?:[ \t]*=([^;\n]{1,200})|[ \t]*(?:;|,|$))/g;
+const LOCAL_VAR_DECL_RE = /\b(?:const|let|var)[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)(?:[ \t]*=[ \t]*\r?\n?[ \t]*([^;\n]{0,200})|[ \t]*(?:;|,|$))/g;
+const BARE_BROWSER_REASSIGN_RE = /(?<![.\w$])(page|browser|context|chromium|firefox|webkit)[ \t]*=(?!=)[ \t]*\r?\n?[ \t]*([^;\n]{0,200})/g;
+const BARE_IDENT_ASSIGN_RE = /(?<![.\w$])([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*=(?!=)/g;
 const BROWSER_WELL_KNOWN_VARS = new Set(['page', 'browser', 'context', 'chromium', 'firefox', 'webkit']);
+const GLOBAL_OBJ_NAMES = new Set(['globalThis', 'global', 'window', 'self']);
 const PRIMITIVE_SHADOW_NAMES = new Set([
   'spawn', 'spawnSync', 'execFile', 'execFileSync', 'execSync',
   'createServer', 'fetch', 'DatabaseSync',
   'openSync', 'open', 'statSync', 'stat', 'fstatSync', 'fstat',
-  'lstatSync', 'lstat', 'accessSync', 'access', 'createReadStream', 'createWriteStream',
+  'lstatSync', 'lstat', 'accessSync', 'access',
+  'mkdtempSync', 'mkdtemp', 'readdirSync', 'readdir', 'existsSync', 'readFileSync', 'readFile',
+  'createReadStream', 'createWriteStream',
   'isatty', 'ReadStream', 'WriteStream',
 ]);
 const METHOD_STUB_NAMES = new Set([
@@ -1292,9 +1346,13 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
   const importedModules = new Set();
   const namespaceBindings = new Map(); // category -> Set<ident>
   const namedBindings = new Map(); // category -> Map<localIdent, origIdent>
+  const allNamespaceIdents = new Set();
+  const allImportedLocalNames = new Set();
   const shadowedPrimitives = new Set();
+  const stubbedNamespaceMethods = new Set();
   let hasNodePtyImport = false;
   let hasNonSqliteDbImport = false;
+  let hasPlaywrightTestImport = false;
   const addImport = (spec, clause, propAccess = '') => {
     const trimmedClause = String(clause ?? '').trim();
     if (!trimmedClause || /^type\s+/.test(trimmedClause)) return;
@@ -1311,23 +1369,31 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
     const cat = classifyImportedModule(spec);
     if (!cat || mockedModules.has(cat)) return;
     if (lowerSpec === 'node-pty') hasNodePtyImport = true;
+    if (lowerSpec === '@playwright/test') hasPlaywrightTestImport = true;
     if (cat === 'db' && lowerSpec !== 'node:sqlite') hasNonSqliteDbImport = true;
     importedModules.add(cat);
     let nsSet = namespaceBindings.get(cat);
     if (!nsSet) { nsSet = new Set(); namespaceBindings.set(cat, nsSet); }
-    for (const n of namespaces) nsSet.add(n);
+    for (const n of namespaces) {
+      nsSet.add(n);
+      allNamespaceIdents.add(n);
+    }
     let namedMap = namedBindings.get(cat);
     if (!namedMap) { namedMap = new Map(); namedBindings.set(cat, namedMap); }
-    for (const [local, orig] of named.entries()) namedMap.set(local, orig);
+    for (const [local, orig] of named.entries()) {
+      namedMap.set(local, orig);
+      allImportedLocalNames.add(local);
+    }
   };
 
   for (const m of codeNoStrings.matchAll(ESM_IMPORT_RE)) addImport(litAtMatch(m), m[1]);
   for (const m of codeNoStrings.matchAll(CJS_REQUIRE_RE)) addImport(litAtMatch(m), m[1], m[3] ?? '');
 
   const shadowedBrowserVars = new Set();
+  const cleanBrowserVars = new Set();
   const isCleanBrowserRhs = (rhs) => {
     const trimmed = String(rhs ?? '').trim();
-    if (!trimmed || trimmed.startsWith('{') || /\b(?:fake|mock|stub)/i.test(trimmed)) return false;
+    if (!trimmed || trimmed.startsWith('{') || /\b(?:fake|mock|stub|vi\.|jest\.)/i.test(trimmed)) return false;
     const origin = BROWSER_ORIGIN_RHS_RE.exec(trimmed);
     if (!origin) return false;
     const originReceiver = origin[1];
@@ -1343,7 +1409,9 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
         for (const decl of splitTopLevelDeclarators(m[1])) {
           const piece = decl.trim();
           const idMatch = /^([A-Za-z_$][A-Za-z0-9_$]*)\b/.exec(piece);
-          if (idMatch && PRIMITIVE_SHADOW_NAMES.has(idMatch[1])) shadowedPrimitives.add(idMatch[1]);
+          if (idMatch && (PRIMITIVE_SHADOW_NAMES.has(idMatch[1]) || allImportedLocalNames.has(idMatch[1]))) {
+            shadowedPrimitives.add(idMatch[1]);
+          }
           if (idMatch && !piece.includes('=')) shadowedBrowserVars.add(idMatch[1]);
         }
       }
@@ -1353,28 +1421,64 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
           const piece = part.trim();
           const alias = /^[A-Za-z_$][A-Za-z0-9_$]*\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)/.exec(piece);
           const local = alias ? alias[1] : piece.split('=')[0].trim();
-          if (PRIMITIVE_SHADOW_NAMES.has(local)) shadowedPrimitives.add(local);
+          if (PRIMITIVE_SHADOW_NAMES.has(local) || allImportedLocalNames.has(local)) shadowedPrimitives.add(local);
           if (!rhsCleanBrowser && BROWSER_WELL_KNOWN_VARS.has(local)) shadowedBrowserVars.add(local);
         }
       }
-      for (const m of line.matchAll(LOCAL_VAR_DECL_RE)) {
-        const ident = m[1];
-        const rhs = m[2] ?? '';
-        if (!isCleanBrowserRhs(rhs)) shadowedBrowserVars.add(ident);
+      if (allImportedLocalNames.size > 0) {
+        for (const m of line.matchAll(BARE_IDENT_ASSIGN_RE)) {
+          if (allImportedLocalNames.has(m[1])) shadowedPrimitives.add(m[1]);
+        }
       }
     }
-    for (const m of line.matchAll(SHADOW_FN_RE)) shadowedPrimitives.add(m[1]);
-    for (const m of line.matchAll(SHADOW_CLASS_RE)) shadowedPrimitives.add(m[1]);
-    for (const m of line.matchAll(/\bfunction[ \t]+(page|browser|context|chromium|firefox|webkit)[ \t]*\(/g)) {
-      shadowedBrowserVars.add(m[1]);
+    for (const m of line.matchAll(SHADOW_FN_RE)) {
+      if (PRIMITIVE_SHADOW_NAMES.has(m[1]) || allImportedLocalNames.has(m[1])) shadowedPrimitives.add(m[1]);
+      if (BROWSER_WELL_KNOWN_VARS.has(m[1])) shadowedBrowserVars.add(m[1]);
+    }
+    for (const m of line.matchAll(SHADOW_CLASS_RE)) {
+      if (PRIMITIVE_SHADOW_NAMES.has(m[1]) || allImportedLocalNames.has(m[1])) shadowedPrimitives.add(m[1]);
     }
   }
-  if (SHADOW_GLOBAL_FETCH_ASSIGN_RE.test(codeNoStrings)) shadowedPrimitives.add('fetch');
-  for (const m of codeNoStrings.matchAll(STUB_GLOBAL_CALL_RE)) {
-    const target = litAtMatch(m);
-    if (target === 'fetch' || PRIMITIVE_SHADOW_NAMES.has(target)) shadowedPrimitives.add(target);
+  for (const m of codeNoStrings.matchAll(LOCAL_VAR_DECL_RE)) {
+    const ident = m[1];
+    const rhs = m[2] ?? '';
+    if (/\brequire\s*\(/.test(rhs)) continue;
+    if (isCleanBrowserRhs(rhs)) {
+      cleanBrowserVars.add(ident);
+    } else {
+      shadowedBrowserVars.add(ident);
+    }
   }
-  for (const m of codeNoStrings.matchAll(DEFINE_PROP_GLOBAL_RE)) {
+  for (const m of codeNoStrings.matchAll(BARE_BROWSER_REASSIGN_RE)) {
+    const ident = m[1];
+    const rhs = m[2] ?? '';
+    if (!isCleanBrowserRhs(rhs)) {
+      shadowedBrowserVars.add(ident);
+      cleanBrowserVars.delete(ident);
+    }
+  }
+
+  const recordPropStub = (receiver, method) => {
+    if (!METHOD_STUB_NAMES.has(method)) return;
+    if (GLOBAL_OBJ_NAMES.has(receiver)) {
+      shadowedPrimitives.add(method);
+      return;
+    }
+    if (allNamespaceIdents.has(receiver)) {
+      stubbedNamespaceMethods.add(`${receiver}.${method}`);
+      shadowedPrimitives.add(method);
+      return;
+    }
+    if (BROWSER_METHOD_NAMES.has(method) || BROWSER_WELL_KNOWN_VARS.has(receiver)) {
+      stubbedNamespaceMethods.add(`${receiver}.${method}`);
+    }
+  };
+
+  if (SHADOW_GLOBAL_FETCH_ASSIGN_RE.test(codeNoStrings)) shadowedPrimitives.add('fetch');
+  for (const m of codeNoStrings.matchAll(PROP_ASSIGN_STUB_RE)) recordPropStub(m[1], m[2]);
+  for (const m of codeNoStrings.matchAll(BRACKET_ASSIGN_STUB_RE)) recordPropStub(m[1], litAtMatch(m));
+  for (const m of codeNoStrings.matchAll(DEFINE_PROP_STUB_RE)) recordPropStub(m[1], litAtMatch(m));
+  for (const m of codeNoStrings.matchAll(STUB_GLOBAL_CALL_RE)) {
     const target = litAtMatch(m);
     if (target === 'fetch' || PRIMITIVE_SHADOW_NAMES.has(target)) shadowedPrimitives.add(target);
   }
@@ -1389,22 +1493,31 @@ function analyzePrimitiveAuthenticity(codeNoStrings, stringLiteralsByOpenPos) {
     namespaceBindings,
     namedBindings,
     shadowedPrimitives,
+    stubbedNamespaceMethods,
     shadowedBrowserVars,
+    cleanBrowserVars,
     hasNodePtyImport,
     hasNonSqliteDbImport,
+    hasPlaywrightTestImport,
   };
 }
 
-function isAuthenticCategoryCall(auth, category, fnName, rawReceiver) {
-  if (auth.mockedModules.has(category)) return false;
-  if (auth.shadowedPrimitives.has(fnName)) return false;
-  if (!auth.importedModules.has(category)) return false;
+function resolveAuthenticCategoryCall(auth, category, allowedOrigNames, localName, rawReceiver) {
+  if (auth.mockedModules.has(category)) return null;
+  if (!auth.importedModules.has(category)) return null;
+  if (auth.shadowedPrimitives.has(localName)) return null;
   const receiver = rawReceiver ? rawReceiver.replace(/\.$/, '').trim() : '';
   if (receiver) {
-    return auth.namespaceBindings.get(category)?.has(receiver) === true;
+    if (!allowedOrigNames.has(localName)) return null;
+    if (auth.stubbedNamespaceMethods.has(`${receiver}.${localName}`)) return null;
+    return auth.namespaceBindings.get(category)?.has(receiver) === true ? localName : null;
   }
   const namedMap = auth.namedBindings.get(category);
-  return Boolean(namedMap && namedMap.has(fnName));
+  if (!namedMap || !namedMap.has(localName)) return null;
+  const origName = namedMap.get(localName);
+  if (!allowedOrigNames.has(origName)) return null;
+  if (auth.shadowedPrimitives.has(origName)) return null;
+  return origName;
 }
 
 const HELPER_DEF_RE = /\b(?:function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(|(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>)/;
@@ -1453,7 +1566,15 @@ function analyzeSubprocessCalls(codeNoStrings, auth, stringLiteralsByOpenPos) {
   let hasSandboxSubprocess = false;
   let subprocessCallCount = 0;
   let hasLoopedSubprocess = false;
-  if (!SUBPROCESS_EXEC_RE.test(codeNoStrings) || auth.mockedModules.has('child_process') || !auth.importedModules.has('child_process')) {
+  const cpNamespaces = auth.namespaceBindings.get('child_process');
+  const cpNamed = auth.namedBindings.get('child_process');
+  let hasSubprocessBinding = Boolean(cpNamespaces && cpNamespaces.size > 0);
+  if (!hasSubprocessBinding && cpNamed) {
+    for (const orig of cpNamed.values()) {
+      if (SUBPROCESS_ORIG_NAMES.has(orig)) { hasSubprocessBinding = true; break; }
+    }
+  }
+  if (!hasSubprocessBinding || auth.mockedModules.has('child_process') || !auth.importedModules.has('child_process')) {
     return {
       hasRealSubprocess,
       hasExternalToolSubprocess,
@@ -1487,17 +1608,18 @@ function analyzeSubprocessCalls(codeNoStrings, auth, stringLiteralsByOpenPos) {
     const defName = defMatch?.[1] ?? defMatch?.[2] ?? null;
     const isHelperDef = Boolean(defName && defName !== 'test' && defName !== 'it' && defName !== 'describe');
 
-    if (SUBPROCESS_EXEC_RE.test(maskedLine)) {
-      const firstSubIdx = maskedLine.search(SUBPROCESS_EXEC_RE);
-      const sameLineHelper = isHelperDef && defMatch.index < firstSubIdx ? defName : null;
+    if (maskedLine.includes('(')) {
       const inOuterLoop = scopeStack.some((s) => s.kind === 'loop');
       let matchedNonTrivial = false;
+      let firstSubCol = -1;
 
-      for (const match of maskedLine.matchAll(SUBPROCESS_CALL_START_RE)) {
-        const receiver = match[1] ?? '';
-        const fnName = match[2];
-        if (!isAuthenticCategoryCall(auth, 'child_process', fnName, receiver)) continue;
+      for (const match of maskedLine.matchAll(GENERIC_CALL_RE)) {
         const callCol = match.index ?? 0;
+        if (hasLeadingDot(maskedLine, callCol)) continue;
+        const receiver = match[2] ? match[1] : '';
+        const fnName = match[2] ? match[2] : match[1];
+        if (!resolveAuthenticCategoryCall(auth, 'child_process', SUBPROCESS_ORIG_NAMES, fnName, receiver)) continue;
+        if (firstSubCol < 0) firstSubCol = callCol;
         const openParenIdx = lineOffset + callCol + match[0].length - 1;
         const { slice, startIdx } = extractCallArgsSlice(codeNoStrings, openParenIdx, 240);
         const trimmedSlice = slice.trim();
@@ -1549,6 +1671,7 @@ function analyzeSubprocessCalls(codeNoStrings, auth, stringLiteralsByOpenPos) {
         }
       }
       if (matchedNonTrivial) {
+        const sameLineHelper = isHelperDef && firstSubCol >= 0 && defMatch.index < firstSubCol ? defName : null;
         if (sameLineHelper) {
           helperNames.add(sameLineHelper);
         } else {
@@ -1603,16 +1726,17 @@ function analyzeSubprocessCalls(codeNoStrings, auth, stringLiteralsByOpenPos) {
 
 function detectRealDeviceOrTtyProbe(codeNoStrings, auth, stringLiteralsByOpenPos) {
   if (!auth.mockedModules.has('tty') && auth.importedModules.has('tty')) {
-    for (const m of codeNoStrings.matchAll(/\bnew[ \t]+([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?(ReadStream|WriteStream)[ \t]*\(/g)) {
-      if (isAuthenticCategoryCall(auth, 'tty', m[2], m[1] ?? '')) return true;
+    for (const m of codeNoStrings.matchAll(GENERIC_NEW_RE)) {
+      const receiver = m[2] ? m[1] : '';
+      const fnName = m[2] ? m[2] : m[1];
+      if (resolveAuthenticCategoryCall(auth, 'tty', TTY_CTOR_ORIG_NAMES, fnName, receiver)) return true;
     }
-    for (const m of codeNoStrings.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?\b(isatty)[ \t]*\(/g)) {
-      if (isAuthenticCategoryCall(auth, 'tty', m[2], m[1] ?? '')) return true;
-    }
-    if (auth.hasNodePtyImport) {
-      for (const m of codeNoStrings.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?\b(spawn)[ \t]*\(/g)) {
-        if (isAuthenticCategoryCall(auth, 'tty', m[2], m[1] ?? '')) return true;
-      }
+    for (const m of codeNoStrings.matchAll(GENERIC_CALL_RE)) {
+      if (hasLeadingDot(codeNoStrings, m.index ?? 0)) continue;
+      const receiver = m[2] ? m[1] : '';
+      const fnName = m[2] ? m[2] : m[1];
+      if (resolveAuthenticCategoryCall(auth, 'tty', TTY_CALL_ORIG_NAMES, fnName, receiver)) return true;
+      if (auth.hasNodePtyImport && resolveAuthenticCategoryCall(auth, 'tty', TTY_PTY_ORIG_NAMES, fnName, receiver)) return true;
     }
   }
   if (auth.mockedModules.has('fs') || !auth.importedModules.has('fs')) return false;
@@ -1627,10 +1751,11 @@ function detectRealDeviceOrTtyProbe(codeNoStrings, auth, stringLiteralsByOpenPos
     }
   }
 
-  for (const m of codeNoStrings.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?\b(openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|createReadStream|createWriteStream)[ \t]*\(/g)) {
-    const receiver = m[1] ?? '';
-    const fnName = m[2];
-    if (!isAuthenticCategoryCall(auth, 'fs', fnName, receiver)) continue;
+  for (const m of codeNoStrings.matchAll(GENERIC_CALL_RE)) {
+    if (hasLeadingDot(codeNoStrings, m.index ?? 0)) continue;
+    const receiver = m[2] ? m[1] : '';
+    const fnName = m[2] ? m[2] : m[1];
+    if (!resolveAuthenticCategoryCall(auth, 'fs', FS_DEVICE_ORIG_NAMES, fnName, receiver)) continue;
     const openParenIdx = (m.index ?? 0) + m[0].length - 1;
     const { slice, startIdx } = extractCallArgsSlice(codeNoStrings, openParenIdx, 240);
     if (!slice) continue;
@@ -1656,8 +1781,11 @@ function detectAuthenticServerOrDb(codeNoStrings, auth) {
   }
   // 2. Authentic HTTP/server primitives when http/net/server module is genuinely imported and unmocked
   if (!auth.mockedModules.has('http') && auth.importedModules.has('http')) {
-    for (const m of codeNoStrings.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)?\b(createServer|request)\s*\(/g)) {
-      if (isAuthenticCategoryCall(auth, 'http', m[2], m[1] ?? '')) return true;
+    for (const m of codeNoStrings.matchAll(GENERIC_CALL_RE)) {
+      if (hasLeadingDot(codeNoStrings, m.index ?? 0)) continue;
+      const receiver = m[2] ? m[1] : '';
+      const fnName = m[2] ? m[2] : m[1];
+      if (resolveAuthenticCategoryCall(auth, 'http', HTTP_ORIG_NAMES, fnName, receiver)) return true;
     }
     if (!auth.shadowedPrimitives.has('listen') && /\.\s*listen\s*\(/.test(codeNoStrings) && !/\b(?:fake|mock|stub)[A-Za-z0-9_$]*\s*\.\s*listen\s*\(/i.test(codeNoStrings)) {
       return true;
@@ -1666,8 +1794,10 @@ function detectAuthenticServerOrDb(codeNoStrings, auth) {
   }
   // 3. Authentic DB driver / new DatabaseSync(...) when DB module is genuinely imported and unmocked
   if (!auth.mockedModules.has('db') && auth.importedModules.has('db')) {
-    for (const m of codeNoStrings.matchAll(/\bnew[ \t]+([A-Za-z_$][A-Za-z0-9_$]*[ \t]*\.[ \t]*)?(DatabaseSync)[ \t]*\(/g)) {
-      if (isAuthenticCategoryCall(auth, 'db', m[2], m[1] ?? '')) return true;
+    for (const m of codeNoStrings.matchAll(GENERIC_NEW_RE)) {
+      const receiver = m[2] ? m[1] : '';
+      const fnName = m[2] ? m[2] : m[1];
+      if (resolveAuthenticCategoryCall(auth, 'db', DB_CTOR_ORIG_NAMES, fnName, receiver)) return true;
     }
     if (/\bnew\s+(?:Pool|Client)\s*\(/.test(codeNoStrings)) return true;
     if (auth.hasNonSqliteDbImport && !MOCK_USAGE_RE.test(codeNoStrings)) return true;
@@ -1677,13 +1807,15 @@ function detectAuthenticServerOrDb(codeNoStrings, auth) {
 
 function detectAuthenticBrowser(codeNoStrings, auth) {
   if (auth.mockedModules.has('browser') || !auth.importedModules.has('browser')) return false;
-  for (const m of codeNoStrings.matchAll(/(?:([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*)?([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*(launch|goto|newPage|newContext|connect)[ \t]*\(/g)) {
-    const outerReceiver = m[1] ?? '';
-    const receiver = m[2];
+  for (const m of codeNoStrings.matchAll(/\b([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*(?:([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\.[ \t]*)?(launch|goto|newPage|newContext|connect)[ \t]*\(/g)) {
+    const outerReceiver = m[2] ? m[1] : '';
+    const receiver = m[2] ? m[2] : m[1];
     const method = m[3];
     if (auth.shadowedPrimitives.has(method)) continue;
-    if (outerReceiver && (/^(?:fake|mock|stub)/i.test(outerReceiver) || auth.shadowedBrowserVars.has(outerReceiver))) continue;
+    if (auth.stubbedNamespaceMethods.has(`${receiver}.${method}`)) continue;
+    if (outerReceiver && (auth.stubbedNamespaceMethods.has(`${outerReceiver}.${receiver}`) || /^(?:fake|mock|stub)/i.test(outerReceiver) || auth.shadowedBrowserVars.has(outerReceiver))) continue;
     if (/^(?:fake|mock|stub)/i.test(receiver) || auth.shadowedBrowserVars.has(receiver)) continue;
+    if (method === 'goto' && !auth.hasPlaywrightTestImport && !auth.cleanBrowserVars.has(receiver)) continue;
     return true;
   }
   return false;
@@ -1691,8 +1823,11 @@ function detectAuthenticBrowser(codeNoStrings, auth) {
 
 function detectAuthenticFsState(codeNoStrings, auth) {
   if (auth.mockedModules.has('fs') || !auth.importedModules.has('fs')) return false;
-  for (const m of codeNoStrings.matchAll(/([A-Za-z_$][A-Za-z0-9_$]*\s*\.\s*)?\b(mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|statSync|stat|lstatSync|lstat|accessSync)\s*\(/g)) {
-    if (isAuthenticCategoryCall(auth, 'fs', m[2], m[1] ?? '')) return true;
+  for (const m of codeNoStrings.matchAll(GENERIC_CALL_RE)) {
+    if (hasLeadingDot(codeNoStrings, m.index ?? 0)) continue;
+    const receiver = m[2] ? m[1] : '';
+    const fnName = m[2] ? m[2] : m[1];
+    if (resolveAuthenticCategoryCall(auth, 'fs', FS_STATE_ORIG_NAMES, fnName, receiver)) return true;
   }
   return false;
 }
