@@ -2,8 +2,7 @@ import './helpers/test-home.mjs';
 import './helpers/test-net-guard.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -317,11 +316,18 @@ test('#3594: pdd test --read --details passes through cleanly without rejecting 
   const batchId = JSON.parse(runPorts.ports.stdout.text).batch;
   assert.ok(batchId, 'expected saved batch ID from check output');
 
+  // Compare --read WITHOUT --details vs --read WITH --details: detailed checks output appears only with --details.
+  const plainReadPorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+  const plainReadCode = await seam.read({ batch: batchId, cwd: setup.repo }, plainReadPorts.ports);
+  assert.equal(plainReadCode, 1, plainReadPorts.ports.stderr.text);
+  assert.doesNotMatch(plainReadPorts.ports.stdout.text, /Checks for Place a coffee order \(tests\/place-order\.json\):/);
+
   const readPorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
   const readCode = await seam.read({ batch: batchId, details: true, cwd: setup.repo }, readPorts.ports);
   assert.equal(readCode, 1, `expected saved failure exit 1 (not option refusal 2), stderr:\n${readPorts.ports.stderr.text}`);
   assert.doesNotMatch(readPorts.ports.stderr.text, /This mix of options does not work together/);
-  assert.match(readPorts.ports.stdout.text, /place-order/);
+  assert.match(readPorts.ports.stdout.text, /Checks for Place a coffee order \(tests\/place-order\.json\):/);
+  assert.match(readPorts.ports.stdout.text, /\/total/);
 
   // Also test through runPdd CLI path.
   const cliOut = captureStream();
@@ -334,6 +340,7 @@ test('#3594: pdd test --read --details passes through cleanly without rejecting 
   });
   assert.equal(cliReadCode, 1, cliErr.text);
   assert.doesNotMatch(cliErr.text, /This mix of options does not work together/);
+  assert.match(cliOut.text, /Checks for Place a coffee order \(tests\/place-order\.json\):/);
 
   // Invalid extra flag alongside --read --details still fails closed with exit 2.
   const badPorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
@@ -546,4 +553,331 @@ test('#3594: checkRuntimeClientParity validates real repo package.json pinned at
     }),
     /pinned to 1\.1\.0, behind latest published 1\.2\.0/,
   );
+});
+
+test('#3594 R1 regressions: runCheck --reconcile, non-string requestId, Stop(2)/Stop(5) exit codes, and formatCheckReconciliation sanitization', async t => {
+  const setup = harbor(t);
+  let networkHit = 0;
+  const noNetPorts = extra => portsFor(
+    { HOME: setup.home, PDD_RUNTIME_URL: 'http://127.0.0.1:9', PDD_STATE_DIR: setup.state },
+    { fetch: async () => { networkHit += 1; throw new Error('must not dispatch network check'); }, ...extra },
+  ).ports;
+
+  // Finding #1 (P0): direct seam.runCheck({ options: { '--reconcile': uuid } }) never dispatches POST /v1/check.
+  const pUnsupported = noNetPorts();
+  assert.equal(await seam.runCheck({ cwd: setup.repo, words: [], options: { '--reconcile': VALID_REQUEST_ID } }, pUnsupported), 5);
+  assert.equal(networkHit, 0, 'runCheck --reconcile must never dispatch POST /v1/lint or /v1/check');
+  assert.match(pUnsupported.stderr.text, />= 1\.2\.0/);
+
+  const pExtra = noNetPorts();
+  assert.equal(await seam.runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--reconcile': VALID_REQUEST_ID } }, pExtra), 2);
+  assert.equal(networkHit, 0);
+
+  const pMock = noNetPorts({
+    reconcileCheckReceipt: async ({ requestId }) => ({
+      schema_version: 'pdd-runtime.check-reconciliation.v1',
+      request_id: requestId,
+      available: true,
+      http_status: 200,
+      disposition: { state: 'passed' },
+      dispatch: { status: 'dispatched', proven: true },
+      accounting: { status: 'complete_dispatched', accounting_complete: true, calls: 1, known_calls: 1, unknown_calls: 0 },
+      retry: { blocked: true, safe_next_action: 'Read saved verdict.' },
+    }),
+  });
+  assert.equal(await seam.runCheck({ cwd: setup.repo, words: [], options: { '--reconcile': VALID_REQUEST_ID, '--json': true } }, pMock), 0);
+  assert.equal(JSON.parse(pMock.stdout.text).request_id, VALID_REQUEST_ID);
+  assert.equal(networkHit, 0);
+
+  // Finding #8 (P2): non-string requestId objects / arrays must be rejected cleanly with invalid-request-id.
+  for (const badId of [{ toString: () => VALID_REQUEST_ID }, [VALID_REQUEST_ID], 123, null]) {
+    await assert.rejects(
+      () => seam.reconcileCheckReceipt({ cwd: setup.repo, requestId: badId }),
+      err => err?.code === 'invalid-request-id' && err?.exitCode === 2,
+    );
+  }
+
+  // Finding #10 (P2): Stop(2) / Stop(5) explicit exitCode preserved (never collapsed to 3).
+  for (const expectedExit of [2, 5]) {
+    const out = captureStream();
+    const err = captureStream();
+    const code = await runPdd(['test', '--reconcile', VALID_REQUEST_ID], {
+      cwd: setup.repo,
+      env: { ...process.env, HOME: setup.home, PDD_STATE_DIR: setup.state },
+      stdout: out,
+      stderr: err,
+      runtimeCheckReconcile: async () => {
+        throw Object.assign(new Error(`explicit exit ${expectedExit}`), { exitCode: expectedExit });
+      },
+    });
+    assert.equal(code, expectedExit, `expected explicit exitCode ${expectedExit} to survive`);
+    assert.match(err.text, new RegExp(`explicit exit ${expectedExit}`));
+  }
+
+  // Finding #7 (P2): formatCheckReconciliation sanitizes accounting.calls / known_calls / unknown_calls.
+  const formatted = formatCheckReconciliation({
+    request_id: VALID_REQUEST_ID,
+    http_status: 200,
+    disposition: { state: 'unknown' },
+    dispatch: { status: 'unproved', proven: false },
+    accounting: {
+      status: 'unknown',
+      accounting_complete: false,
+      calls: '1\npdd-workflow:fake',
+      known_calls: '2\r\ninjected',
+      unknown_calls: '3\u0007bell',
+    },
+    retry: { blocked: true },
+  });
+  assert.doesNotMatch(formatted, /pdd-workflow:fake/);
+  assert.match(formatted, /pdd-workflow\\u003afake/);
+  assert.match(formatted, /Accounting: unknown \(complete=no, calls=1 pdd-workflow\\u003afake, known=2 injected, unknown=3 bell\)/);
+});
+
+test('#3594 R1 regressions: --lf --fresh bypasses cache reuse while keeping unselected cached passes intact', async t => {
+  const setup = harbor(t);
+  let nowMs = Date.parse('2026-10-27T16:27:47Z');
+  const stepPorts = () => {
+    nowMs += 60_000;
+    const base = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+    base.clock.now = nowMs;
+    return base;
+  };
+  let failUnknown = true;
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.method === 'POST' && entry.command === 'check') {
+      const state = failUnknown && JSON.stringify(entry.request).includes('unknown-item') ? 'failed' : 'passed';
+      f.jobs.set(entry.request.requestId, state);
+      return { status: 202, json: f.check(entry.request.requestId, 'queued') };
+    }
+    const id = entry.url.split('/').at(-1);
+    const state = f.jobs.get(id) ?? 'passed';
+    return {
+      status: 200,
+      json: state === 'failed'
+        ? f.check(id, 'failed', [{ criterion_id: 'AC1', passed: false }])
+        : f.check(id, 'passed'),
+    };
+  });
+
+  // 1. Run all stories: place-order passes (cached), unknown-item fails (recorded in last-failed).
+  const first = stepPorts();
+  assert.equal(await seam.check({ words: [], options: { '--json': true }, cwd: setup.repo }, first.ports), 1, first.ports.stderr.text);
+  const initialCheckPosts = fake.posts.filter(p => p.command === 'check').length;
+  assert.equal(initialCheckPosts, 2);
+
+  // 2. Now unknown-item passes on rerun; run --lf --fresh and verify it dispatches fresh: true (not cached) and writes back pass.
+  failUnknown = false;
+  const lfFresh = stepPorts();
+  assert.equal(
+    await seam.check({ words: [], options: { '--lf': true, '--fresh': true, '--json': true }, cwd: setup.repo }, lfFresh.ports),
+    0,
+    lfFresh.ports.stderr.text,
+  );
+  const afterLfPosts = fake.posts.filter(p => p.command === 'check');
+  assert.equal(afterLfPosts.length, initialCheckPosts + 1, '--lf --fresh must execute the failed story freshly');
+  assert.equal(afterLfPosts.at(-1).request.fresh, true);
+
+  // 3. Subsequent ordinary run of place-order STILL hits local cache (0 new POSTs) because --lf --fresh preserved unselected passes!
+  const cachedSibling = stepPorts();
+  assert.equal(
+    await seam.check({ words: ['place-order'], options: { '--json': true }, cwd: setup.repo }, cachedSibling.ports),
+    0,
+    cachedSibling.ports.stderr.text,
+  );
+  assert.equal(fake.posts.filter(p => p.command === 'check').length, afterLfPosts.length, 'unselected Story cache pass must survive --lf --fresh');
+
+  // 4. With all stories passing and cached (0 failed), plain --lf reuses cache (0 new POSTs),
+  //    while --lf --fresh bypasses local cache reuse and dispatches fresh: true for every selected Story!
+  const lfCached = stepPorts();
+  assert.equal(
+    await seam.check({ words: [], options: { '--lf': true, '--json': true }, cwd: setup.repo }, lfCached.ports),
+    0,
+    lfCached.ports.stderr.text,
+  );
+  assert.equal(fake.posts.filter(p => p.command === 'check').length, afterLfPosts.length, 'plain --lf with cached passes reuses cache');
+
+  const lfBypass = stepPorts();
+  assert.equal(
+    await seam.check({ words: [], options: { '--lf': true, '--fresh': true, '--json': true }, cwd: setup.repo }, lfBypass.ports),
+    0,
+    lfBypass.ports.stderr.text,
+  );
+  const finalPosts = fake.posts.filter(p => p.command === 'check');
+  assert.equal(finalPosts.length, afterLfPosts.length + 2, '--lf --fresh must bypass cached pass reuse for all selected stories');
+  assert.equal(finalPosts.at(-1).request.fresh, true);
+  assert.equal(finalPosts.at(-2).request.fresh, true);
+});
+
+test('#3594 R1 regressions: simulate --fresh --shell 0o600 single-session patch, existing-Try refusal, runDoorCall/runShim/openServe guards', async t => {
+  const setup = harbor(t, makeCliStory);
+  const fake = await fakeRuntime(t, (entry, f) => {
+    if (entry.url.endsWith('/model')) {
+      return {
+        status: 200,
+        json: {
+          calls: { cap: 40, remaining: 40 },
+          app_map: true,
+          entries: [],
+        },
+      };
+    }
+    if (entry.command === 'lint') return { status: 200, json: f.lint(entry.request.requestId) };
+    if (entry.method === 'POST' && entry.command === 'try') return { status: 200, json: f.tryJob(entry.request.requestId) };
+    if (entry.method === 'DELETE') {
+      const tryId = entry.url.split('/').at(-1);
+      const stopId = entry.headers['x-request-id'] || VALID_REQUEST_ID;
+      const stopAnswer = f.stopJob(stopId, tryId);
+      f.jobs.set(stopId, stopAnswer);
+      return { status: 200, json: stopAnswer };
+    }
+    if (entry.method === 'POST' && /^\/v1\/try\/([^/]+)\/call$/.test(entry.url)) {
+      const sessionId = entry.url.match(/^\/v1\/try\/([^/]+)\/call$/)[1];
+      const callId = entry.json?.requestId ?? VALID_REQUEST_ID;
+      const callAnswer = {
+        id: callId,
+        requestId: callId,
+        command: 'call',
+        session_id: sessionId,
+        state: 'passed',
+        result: {
+          program_result: { stdout: 'hi\n', stderr: '', exit_code: 0 },
+          world: {},
+          input_world: {},
+          session: { id: sessionId },
+        },
+        usage: { calls: 1, cap: 40, remaining: 39 },
+      };
+      f.jobs.set(callId, callAnswer);
+      return { status: 200, json: callAnswer };
+    }
+    if (entry.method === 'POST' && /^\/v1\/try\/([^/]+)\/screen\/api\/act$/.test(entry.url)) {
+      return { status: 200, json: { ok: true } };
+    }
+    if (entry.method === 'GET' && f.jobs.has(entry.url.split('/').at(-1))) {
+      return { status: 200, json: f.jobs.get(entry.url.split('/').at(-1)) };
+    }
+    return { status: 200, json: f.tryJob(entry.url.split('/').at(-1)) };
+  });
+
+  // Seed an UNRELATED existing CLI door descriptor (must NOT be touched by --fresh for this session).
+  const unrelatedId = '99999999-9999-4999-8999-999999999999';
+  const triesDir = join(setup.state, 'tries');
+  mkdirSync(triesDir, { recursive: true });
+  const unrelatedDoorPath = join(triesDir, `${unrelatedId}.door.json`);
+  writeFileSync(unrelatedDoorPath, `${JSON.stringify({ version: 1, sessionId: unrelatedId }, null, 2)}\n`, { mode: 0o600 });
+
+  // Finding #3 (P1): --cli --shell --fresh patches THIS session's .door.json BEFORE shell launches, with mode 0o600,
+  // and leaves unrelated open CLI sessions untouched!
+  let freshInsideShell = null;
+  let modeInsideShell = null;
+  let doorPathInsideShell = null;
+  const shellPorts = portsFor(
+    { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state },
+    {
+      stdin: Readable.from([]),
+      openUrl: async () => false,
+      shell: async () => {
+        const launcher = readFileSync(join(setup.repo, '.pdd/try/bin/paperclip'), 'utf8');
+        doorPathInsideShell = launcher.match(/([^\s'"]+\.door\.json)/)?.[1] ?? null;
+        if (doorPathInsideShell) {
+          freshInsideShell = JSON.parse(readFileSync(doorPathInsideShell, 'utf8')).fresh === true;
+          modeInsideShell = statSync(doorPathInsideShell).mode & 0o777;
+        }
+        return 0;
+      },
+    },
+  );
+  assert.equal(
+    await seam.simulate({ words: ['place-order'], mode: 'cli', fresh: true, options: { '--shell': true }, cwd: setup.repo }, shellPorts.ports),
+    0,
+    shellPorts.ports.stderr.text,
+  );
+  assert.equal(freshInsideShell, true, '.door.json must be patched fresh: true BEFORE --shell launches');
+  assert.equal(modeInsideShell, 0o600, '.door.json must keep 0o600 permissions');
+  assert.equal(JSON.parse(readFileSync(unrelatedDoorPath, 'utf8')).fresh, undefined, 'unrelated session door must remain untouched');
+
+  // Finding #4 (P1): simulate [STORY] --fresh without --new fails closed (exit 2) when a Try is already open!
+  const postsBeforeReuse = fake.posts.length;
+  const reusePorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { openUrl: async () => true });
+  assert.equal(
+    await seam.simulate({ words: ['place-order'], fresh: true, options: { '--no-wait': true }, cwd: setup.repo }, reusePorts.ports),
+    2,
+    'simulate --fresh without --new must fail closed when a Try is already open',
+  );
+  assert.match(reusePorts.ports.stderr.text, /--new/);
+  assert.equal(fake.posts.length, postsBeforeReuse, 'refused --fresh without --new must not silently reuse or post');
+
+  // Passing --new alongside --fresh replaces the open Try cleanly.
+  const replacePorts = portsFor(
+    { HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state },
+    { stdin: Readable.from([]), openUrl: async () => false },
+  );
+  assert.equal(
+    await seam.simulate({ words: ['place-order'], mode: 'cli', fresh: true, options: { '--new': true }, cwd: setup.repo }, replacePorts.ports),
+    0,
+    replacePorts.ports.stderr.text,
+  );
+
+  // Finding #5 (P2): runDoorCall inspects ONLY descriptor.fresh (never domain payload input.fresh).
+  const nonFreshDescriptor = {
+    ...JSON.parse(readFileSync(doorPathInsideShell, 'utf8')),
+    fresh: undefined,
+  };
+  delete nonFreshDescriptor.fresh;
+  const doorPorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state });
+  await seam.runDoorCall(nonFreshDescriptor, { argv: ['hi'], fresh: true }, doorPorts.ports);
+  const lastCallPost = fake.jsonPosts.filter(p => /^\/v1\/try\/[^/]+\/call$/.test(p.url)).at(-1);
+  assert.equal(lastCallPost.json.fresh, undefined, 'runDoorCall must not lift domain input.fresh onto transport body');
+
+  // Finding #9 (P2): runShim ignores symlinked descriptorPath when checking fresh flag.
+  const symlinkDoorPath = join(setup.sandbox, 'symlink.door.json');
+  symlinkSync(doorPathInsideShell, symlinkDoorPath);
+  const shimPorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { stdin: Readable.from([]) });
+  const shimCode = await seam.runShim(symlinkDoorPath, ['hi'], shimPorts.ports);
+  assert.equal(shimCode, 125, 'symlinked descriptor must be refused');
+
+  // Finding #6 (P2): direct seam.openServe(..., { '--fresh': true }) injects fresh: true on Screen POSTs via context.runtime.send.
+  const serveSessionId = nonFreshDescriptor.sessionId;
+  const baseFetch = globalThis.fetch;
+  const servePorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }, { fetch: baseFetch }).ports;
+  const runtimeProto = {
+    async send(path, init) {
+      const response = await this.ports.fetch(new URL(path, this.origin), init);
+      const text = await response.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch {}
+      return { status: response.status, headers: response.headers, text, json };
+    },
+  };
+  const fakeRuntimeClient = Object.assign(Object.create(runtimeProto), { origin: fake.origin, ports: servePorts });
+  let screenStatus = 0;
+  servePorts.serve = async server => {
+    const port = server.address().port;
+    const res = await baseFetch(`http://127.0.0.1:${port}/__pdd/screen/api/act`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', host: `127.0.0.1:${port}` },
+      body: JSON.stringify({ action: 'tap' }),
+    });
+    screenStatus = res.status;
+  };
+  const serveCode = await seam.openServe(
+    {
+      root: setup.repo,
+      origin: fake.origin,
+      identity: { login: 'octo', token: TOKEN },
+      ports: servePorts,
+      runtime: fakeRuntimeClient,
+      signal: new AbortController().signal,
+    },
+    { path: 'tests/place-order.json', story: 'place-order' },
+    serveSessionId,
+    { '--serve': 0, '--fresh': true },
+  );
+  assert.equal(serveCode, 0);
+  assert.equal(screenStatus, 200);
+  const screenPosts = fake.jsonPosts.filter(p => /^\/v1\/try\/[^/]+\/screen\/api\/act$/.test(p.url));
+  assert.equal(screenPosts.length, 1);
+  assert.equal(screenPosts[0].json.fresh, true, 'openServe --fresh must inject fresh: true on Screen POSTs');
 });

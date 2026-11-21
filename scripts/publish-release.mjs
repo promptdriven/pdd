@@ -29,6 +29,7 @@ const ISOLATED_HOME_ENV_KEYS = [
 ];
 const NPM_SCRUB_ENV_KEYS = [
   'npm_config_dry_run', 'npm_config_tag', 'npm_config_npm_only', 'npm_config_pypi_only',
+  'npm_config_allow_stale_runtime_client',
   'npm_config_cache', 'npm_config_prefix', 'npm_config_userconfig', 'npm_config_globalconfig', 'npm_config_registry',
 ];
 const TWINE_REPO_ENV_KEYS = ['TWINE_REPOSITORY', 'TWINE_REPOSITORY_URL'];
@@ -149,8 +150,13 @@ export function parsePublishArgs(argv, env = {}) {
   const rootArg = opt('--root', values.root);
   const pythonBin = opt('--python', values.python);
 
+  const allowStaleRuntimeClient = Boolean(values['allow-stale-runtime-client']);
   if (!help) {
-    for (const [key, flag, present] of [['npm_config_npm_only', '--npm-only', npmOnly], ['npm_config_pypi_only', '--pypi-only', pypiOnly]]) {
+    for (const [key, flag, present] of [
+      ['npm_config_npm_only', '--npm-only', npmOnly],
+      ['npm_config_pypi_only', '--pypi-only', pypiOnly],
+      ['npm_config_allow_stale_runtime_client', '--allow-stale-runtime-client', allowStaleRuntimeClient],
+    ]) {
       if (!present && isTruthyNpmConfig(env, key)) {
         throw new Error(`Detected ${key} without ${flag}. Use \`--\` before flags: npm run release:publish -- ${flag}`);
       }
@@ -163,7 +169,7 @@ export function parsePublishArgs(argv, env = {}) {
   if (npmOnly && pypiOnly) throw new Error('Cannot combine --npm-only and --pypi-only.');
   if (tag !== null && !TAG_RE.test((tag = tag.trim().replace(/^refs\/tags\//, '')))) throw new Error(`Invalid GitHub Release tag "${tag}".`);
   if (repo !== null && !REPO_RE.test((repo = repo.trim()))) throw new Error(`Invalid GitHub repository "${repo}". Expected OWNER/REPO.`);
-  return { dryRun: explicitDryRun || dryRunFromNpmEnv, dryRunFromNpmEnv, tag, npmOnly, pypiOnly, allowStaleRuntimeClient: Boolean(values['allow-stale-runtime-client']), repo, root: rootArg ? resolve(rootArg) : DEFAULT_ROOT, pythonBin, help };
+  return { dryRun: explicitDryRun || dryRunFromNpmEnv, dryRunFromNpmEnv, tag, npmOnly, pypiOnly, allowStaleRuntimeClient, repo, root: rootArg ? resolve(rootArg) : DEFAULT_ROOT, pythonBin, help };
 }
 
 /** Select npm dist-tag matching .github/workflows/release.yml. */

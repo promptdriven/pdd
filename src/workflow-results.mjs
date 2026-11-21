@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: c88192a8b9b4f38c78d3045cd2d5acd6a699d36d6aef0a6633ccbeaeaac29062).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: 085ae01fa23dfb446a149560519583db76d27472180e19eb5fd9397d83999349).
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -345,11 +345,17 @@ export function formatCheckReconciliation(record) {
 
   lines.push(`Dispatch: ${text(dispatch.status ?? 'unproved', 64)} (${dispatch.proven === true ? 'proven' : 'unproved'})`);
 
+  const fmtCount = value =>
+    value === 'unknown' || value === undefined || value === null
+      ? 'unknown'
+      : Number.isSafeInteger(value) && value >= 0
+        ? String(value)
+        : text(value, 32);
   const acctParts = [
     `complete=${acct.accounting_complete === true ? 'yes' : 'no'}`,
-    `calls=${acct.calls === 'unknown' || acct.calls === undefined || acct.calls === null ? 'unknown' : String(acct.calls)}`,
-    `known=${acct.known_calls === undefined || acct.known_calls === null ? 'unknown' : String(acct.known_calls)}`,
-    `unknown=${acct.unknown_calls === undefined || acct.unknown_calls === null ? 'unknown' : String(acct.unknown_calls)}`,
+    `calls=${fmtCount(acct.calls)}`,
+    `known=${fmtCount(acct.known_calls)}`,
+    `unknown=${fmtCount(acct.unknown_calls)}`,
   ];
   if (Number.isSafeInteger(acct.cap)) acctParts.push(`cap=${acct.cap}`);
   lines.push(`Accounting: ${text(acct.status ?? 'unknown', 64)} (${acctParts.join(', ')})`);

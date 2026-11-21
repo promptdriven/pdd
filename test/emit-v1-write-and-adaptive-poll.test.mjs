@@ -498,10 +498,16 @@ test('pdd lint --local honors Story selection scope, allows valid subset-criteri
   assert.equal(await runPdd(['lint', '--local', 'alpha', '--json'], { cwd: root, ...alphaIo }), 0, alphaIo.err + alphaIo.out);
   assert.deepEqual(JSON.parse(alphaIo.out).warnings, []);
 
-  // 2. Scoped `pdd lint --local beta --json` reports duplicate criterion attributed to tests/beta.json (not user_stories/beta.md).
+  // 2. Scoped `pdd lint --local beta --json` reports duplicate criterion attributed to tests/beta.json (not user_stories/beta.md),
+  //    and runtime-client 1.1.0 offline preflight catches the duplicate-criterion refusal with exit 4.
   const betaIo = captureStreams();
-  assert.equal(await runPdd(['lint', '--local', 'beta', '--json'], { cwd: root, ...betaIo }), 0, betaIo.err + betaIo.out);
-  const betaWarnings = JSON.parse(betaIo.out).warnings;
+  assert.equal(await runPdd(['lint', '--local', 'beta', '--json'], { cwd: root, ...betaIo }), 4, betaIo.err + betaIo.out);
+  const betaResult = JSON.parse(betaIo.out);
+  assert.ok(
+    betaResult.problems.some(p => p.code === 'duplicate-criterion' && p.path === 'tests/beta.json'),
+    `expected duplicate-criterion problem for tests/beta.json, got ${JSON.stringify(betaResult.problems)}`,
+  );
+  const betaWarnings = betaResult.warnings;
   assert.ok(
     betaWarnings.some(w => /duplicate criterion/.test(w) && /in tests\/beta\.json\./.test(w)),
     `expected duplicate warning citing tests/beta.json, got ${JSON.stringify(betaWarnings)}`,

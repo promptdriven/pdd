@@ -136,6 +136,9 @@ test('#3533 package.json wires release:publish, parsePublishArgs uses parseArgs 
   assert.throws(() => parsePublishArgs([], { NPM_CONFIG_NPM_ONLY: 'true' }), /Use `--` before flags[\s\S]*--npm-only/);
   assert.throws(() => parsePublishArgs([], { npm_config_pypi_only: '1' }), /Use `--` before flags[\s\S]*--pypi-only/);
   assert.throws(() => parsePublishArgs([], { NPM_CONFIG_PYPI_ONLY: '1' }), /Use `--` before flags[\s\S]*--pypi-only/);
+  assert.throws(() => parsePublishArgs([], { npm_config_allow_stale_runtime_client: 'true' }), /Use `--` before flags[\s\S]*--allow-stale-runtime-client/);
+  assert.throws(() => parsePublishArgs([], { NPM_CONFIG_ALLOW_STALE_RUNTIME_CLIENT: '1' }), /Use `--` before flags[\s\S]*--allow-stale-runtime-client/);
+  assert.equal(parsePublishArgs(['--allow-stale-runtime-client'], { npm_config_allow_stale_runtime_client: 'true' }).allowStaleRuntimeClient, true);
   assert.throws(() => parsePublishArgs([], { npm_config_tag: 'alpha-v0.1.37' }), /Use `--` before flags[\s\S]*--tag alpha-v0\.1\.37/);
   assert.throws(() => parsePublishArgs([], { NPM_CONFIG_TAG: 'alpha-v0.1.37' }), /Use `--` before flags[\s\S]*--tag alpha-v0\.1\.37/);
   assert.equal(parsePublishArgs([], { npm_config_tag: 'latest' }).tag, null, 'default npm_config_tag=latest is allowed');
@@ -843,4 +846,57 @@ test('#3594 checkRuntimeClientParity fails closed in live mode when pinned runti
     /Refusing live publish:.*1\.1\.0.*1\.2\.0/,
   );
   assert.equal(invoked.some(([cmd, arg]) => cmd === 'npm' && (arg === 'pack' || arg === 'publish')), false);
+
+  // Semver edge cases: multi-digit minor (1.10.0 > 1.2.0), prerelease behind stable (1.2.0-alpha.1 < 1.2.0),
+  // non-exact semver range (^1.1.0), and npm_config_allow_stale_runtime_client scrubbing.
+  const writePinned = pinnedVersion => {
+    const nextPkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    nextPkg.dependencies = { [RUNTIME_CLIENT_PKG]: pinnedVersion };
+    writeFileSync(pkgPath, `${JSON.stringify(nextPkg, null, 2)}\n`);
+  };
+  writePinned('1.10.0');
+  let seenViewEnv = null;
+  const multiDigit = checkRuntimeClientParity({
+    root: fixtureDir,
+    dryRun: false,
+    env: { ...process.env, npm_config_allow_stale_runtime_client: 'true' },
+    runCommand: (_cmd, _args, opts) => {
+      seenViewEnv = opts?.env ?? {};
+      return { status: 0, stdout: '1.2.0\n', stderr: '' };
+    },
+    log: () => {},
+  });
+  assert.equal(multiDigit.ok, true);
+  assert.equal(multiDigit.stale, false, '1.10.0 must compare newer than 1.2.0');
+  assert.equal(seenViewEnv.npm_config_allow_stale_runtime_client, undefined, 'npm_config_allow_stale_runtime_client must be scrubbed');
+
+  writePinned('1.2.0-alpha.1');
+  assert.throws(
+    () => checkRuntimeClientParity({
+      root: fixtureDir,
+      dryRun: false,
+      runCommand: () => ({ status: 0, stdout: '1.2.0\n', stderr: '' }),
+      log: () => {},
+    }),
+    /Refusing live publish:.*1\.2\.0-alpha\.1, behind latest published 1\.2\.0/,
+  );
+
+  writePinned('^1.1.0');
+  assert.throws(
+    () => checkRuntimeClientParity({
+      root: fixtureDir,
+      dryRun: false,
+      runCommand: () => ({ status: 0, stdout: '1.1.0\n', stderr: '' }),
+      log: () => {},
+    }),
+    /Refusing live publish:.*non-exact version "\^1\.1\.0"/,
+  );
+  const dryRange = checkRuntimeClientParity({
+    root: fixtureDir,
+    dryRun: true,
+    runCommand: () => ({ status: 0, stdout: '1.1.0\n', stderr: '' }),
+    log: () => {},
+  });
+  assert.equal(dryRange.ok, true);
+  assert.equal(dryRange.stale, true);
 });
