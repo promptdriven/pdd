@@ -100,6 +100,10 @@ const INLINE_BRACE_PORT_SCAN_RE = /(?<![A-Za-z0-9_./:@-])([a-z][a-zA-Z0-9_-]*)\.
 const NETWORK_PORT_HEADING_RE = /\b(?:tcp|udp|http|https|grpc|listen(?:ing)?|network|socket|server|tls|ssl|firewall|docker|container|kubernetes|k8s|ingress|expos(?:e|ed))\b/i;
 const DOMAIN_PORT_HEADING_RE = /\b(?:port\s+wiring|port\s+bindings?|bound\s+ports?|wired\s+ports?|injected\s+ports?|external\s+ports?|port\s+adapters?|port\s+map(?:ping)?|port\s+interface|port\s+contract|dependency\s+wiring|ports?)\b/i;
 const DEP_PORTS_HEADING_RE = /\b(?:injected\s+ports?|external\s+ports?|domain\s+ports?|port\s+interface|port\s+contract|ports?|resources?)\b/i;
+const DEP_EXPORTS_HEADING_RE = /\b(?:public\s+(?:operations?|contract|interface|exports?|api|functions?|methods?|actions?|read\s+actions?)|operations?|exports?)\b/i;
+const DEP_EXPORTS_HEADING_EXCLUDE_RE = /\b(?:consequential|internal|private|ports?|resources?|failure|errors?)\b/i;
+const DEP_EXPORT_TABLE_OP_COL_RE = /\b(?:operation|operations|op|ops|export|exports|function|functions|method|methods|action|actions|entry|entries|symbol|symbols)\b/i;
+const EXPORT_PROSE_LEAD_VERB_RE = /^(?:takes?|accepts?|returns?|receives?|handles?|runs?|executes?|performs?|computes?|validates?|maps?|reads?|writes?|creates?|updates?|deletes?|is\b|—|–|:|\()/i;
 const PORT_TABLE_COL_PORT_RE = /\b(?:port|ports|bound\s+port|wired\s+port|injected\s+port|port\s+op(?:eration)?)\b/i;
 const PORT_TABLE_COL_IN_SECTION_RE = /\b(?:operation|operations|binding|bindings)\b/i;
 const PORT_TABLE_COL_EXCLUDE_RE = /\b(?:tcp|udp|http|https|listen|network|socket|file|path|table|column|field|type|route|endpoint|url|sql|env|variable|header|status|code|metric|flag|option|description|notes?)\b/i;
@@ -852,9 +856,115 @@ function classifyDependencyTable(headers, subheadingPort = null) {
   return null;
 }
 
-function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
+function promptStemAliases(promptPath) {
+  if (typeof promptPath !== 'string' || !/\.prompt\.md$/i.test(promptPath)) return [];
+  const rawStem = posix.basename(promptPath).replace(/\.prompt\.md$/i, '');
+  const candidates = rawStem.includes('-') ? [rawStem, rawStem.replace(/-/g, '_')] : [rawStem];
+  const out = [];
+  for (const s of candidates) {
+    if (s.length >= 2 && !VERSION_TOKEN_RE.test(s) && SIMPLE_IDENT_RE.test(s) && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+function extractOpsFromExportSubheading(title) {
+  const { spans } = extractInlineBacktickSpans(title);
+  if (spans.length > 0) {
+    const ops = [];
+    for (const span of spans) {
+      if (span.includes('.')) continue;
+      const ident = cleanSingleIdentifier(span, { allowCallArgs: true });
+      if (ident) ops.push(ident);
+    }
+    return ops;
+  }
+  const parts = String(title ?? '').split(/\s*(?:,|\/|\band\b)\s*/i).map(s => s.trim()).filter(Boolean);
+  if (!parts.length) return [];
+  const ops = [];
+  for (const part of parts) {
+    if (part.includes('.')) return [];
+    const ident = cleanSingleIdentifier(part, { allowCallArgs: true });
+    if (!ident) return [];
+    ops.push(ident);
+  }
+  return ops;
+}
+
+function extractLeadingBacktickedOpDecl(line) {
+  const trimmed = String(line ?? '').trim();
+  if (!trimmed.startsWith('`')) return [];
+  const ops = [];
+  let i = 0;
+  while (i < trimmed.length && trimmed[i] === '`') {
+    const close = trimmed.indexOf('`', i + 1);
+    if (close <= i + 1) return [];
+    const span = trimmed.slice(i + 1, close).trim();
+    if (span.includes('.')) return [];
+    const ident = cleanSingleIdentifier(span, { allowCallArgs: true });
+    if (!ident) return [];
+    ops.push(ident);
+    i = close + 1;
+    let next = i;
+    while (next < trimmed.length && (trimmed[next] === ' ' || trimmed[next] === '\t')) next++;
+    if (trimmed[next] === ',') {
+      next++;
+      while (next < trimmed.length && (trimmed[next] === ' ' || trimmed[next] === '\t')) next++;
+      if (trimmed.slice(next, next + 4).toLowerCase() === 'and ') {
+        next += 4;
+        while (next < trimmed.length && (trimmed[next] === ' ' || trimmed[next] === '\t')) next++;
+      }
+      if (trimmed[next] === '`') { i = next; continue; }
+    } else if (/^and\s+`/i.test(trimmed.slice(next, next + 8))) {
+      next += 3;
+      while (next < trimmed.length && (trimmed[next] === ' ' || trimmed[next] === '\t')) next++;
+      if (trimmed[next] === '`') { i = next; continue; }
+    }
+    i = next;
+    break;
+  }
+  const rest = trimmed.slice(i);
+  if (!ops.length || !EXPORT_PROSE_LEAD_VERB_RE.test(rest)) return [];
+  return ops;
+}
+
+function extractInlineExportClauseOps(line) {
+  const text = String(line ?? '');
+  if (!text.includes('`') || !/\bExports?\s+/i.test(text)) return [];
+  const ops = [];
+  for (const m of text.matchAll(/(?:^|[.!?]\s+)Exports?\s+/g)) {
+    let pos = m.index + m[0].length;
+    let inTick = false;
+    let end = pos;
+    while (end < text.length) {
+      const ch = text[end];
+      if (ch === '`') inTick = !inTick;
+      else if (!inTick && (ch === '.' || ch === ';' || ch === '\n')) break;
+      end++;
+    }
+    const clause = text.slice(pos, end);
+    const { spans } = extractInlineBacktickSpans(clause);
+    for (const span of spans) {
+      if (span.includes('.') || span.includes('/')) continue;
+      const ident = cleanSingleIdentifier(span, { allowCallArgs: true });
+      if (ident) ops.push(ident);
+    }
+  }
+  return ops;
+}
+
+function classifyExportTableOpCol(headers) {
+  for (let c = 0; c < headers.length; c++) {
+    const h = headers[c];
+    if (PORT_TABLE_COL_EXCLUDE_RE.test(h) || DEP_TABLE_PORT_NAME_COL_RE.test(h)) continue;
+    if (DEP_EXPORT_TABLE_OP_COL_RE.test(h)) return c;
+  }
+  return -1;
+}
+
+function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } = {}) {
   const mentioned = new Set();
   const display = new Set();
+  const stems = isPrompt ? promptStemAliases(path) : [];
   const addDeclaredPair = (port, op) => {
     if (port.length < 2 || op.length < 2) return;
     if (VERSION_TOKEN_RE.test(port) || VERSION_TOKEN_RE.test(op)) return;
@@ -865,17 +975,36 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
     mentioned.add(full);
     display.add(full);
   };
+  const addExportedOp = op => {
+    if (!stems.length) return;
+    const ident = cleanSingleIdentifier(op, { allowCallArgs: true });
+    if (!ident) return;
+    for (const stem of stems) addDeclaredPair(stem, ident);
+  };
 
   if (isPrompt) {
     for (const iface of extractRuntimeInterfaceObjects(raw)) {
-      if (!Array.isArray(iface.resources)) continue;
-      for (const res of iface.resources) {
-        if (typeof res?.name !== 'string' || !res.name.trim()) continue;
-        for (const op of (Array.isArray(res.operations) ? res.operations : [])) {
-          if (typeof op?.name === 'string' && op.name.trim()) {
-            const pair = `${res.name.trim()}.${op.name.trim()}`;
-            mentioned.add(pair);
-            display.add(pair);
+      if (Array.isArray(iface.resources)) {
+        for (const res of iface.resources) {
+          if (typeof res?.name !== 'string' || !res.name.trim()) continue;
+          for (const op of (Array.isArray(res.operations) ? res.operations : [])) {
+            if (typeof op?.name === 'string' && op.name.trim()) {
+              const pair = `${res.name.trim()}.${op.name.trim()}`;
+              mentioned.add(pair);
+              display.add(pair);
+            }
+          }
+        }
+      }
+      if (stems.length > 0) {
+        for (const list of [iface.entries, iface.operations]) {
+          if (!Array.isArray(list)) continue;
+          for (const item of list) {
+            if (typeof item?.name !== 'string' || !item.name.trim()) continue;
+            const rawName = item.name.trim();
+            const dot = rawName.indexOf('.');
+            if (dot > 0) addDeclaredPair(rawName.slice(0, dot), rawName.slice(dot + 1));
+            else addExportedOp(rawName);
           }
         }
       }
@@ -885,15 +1014,20 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
   const cleaned = stripPromptMetadata(raw);
   const { proseLines, fences } = scanMarkdownLinesAndFences(cleaned);
 
-  // 1. Structural declarations in proseLines: split-column tables, nested bullets under ## Ports, and subheadings under ## Ports.
+  // 1. Structural declarations in proseLines: split-column tables, nested bullets/subheadings under ## Ports, and exported public operations.
   let inPortsSection = false;
   let portsSectionDepth = 0;
   let subheadingPort = null;
   let subheadingDepth = 0;
   let bulletPort = null;
   let bulletIndent = -1;
+  let inExportsSection = false;
+  let exportsSectionDepth = 0;
+  let inExportSubheading = false;
+  let exportSubheadingDepth = 0;
   let inTable = false;
   let tableSpec = null;
+  let exportTableOpCol = -1;
 
   for (let idx = 0; idx < proseLines.length; idx++) {
     const line = proseLines[idx].text;
@@ -903,6 +1037,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
       const title = headingMatch[2].trim();
       inTable = false;
       tableSpec = null;
+      exportTableOpCol = -1;
       bulletPort = null;
       bulletIndent = -1;
       if (inPortsSection && depth > portsSectionDepth) {
@@ -920,11 +1055,38 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
         portsSectionDepth = depth;
         subheadingPort = null;
         subheadingDepth = 0;
-      } else if (depth <= portsSectionDepth) {
-        inPortsSection = false;
-        portsSectionDepth = 0;
-        subheadingPort = null;
-        subheadingDepth = 0;
+        inExportsSection = false;
+        exportsSectionDepth = 0;
+        inExportSubheading = false;
+        exportSubheadingDepth = 0;
+      } else {
+        if (depth <= portsSectionDepth) {
+          inPortsSection = false;
+          portsSectionDepth = 0;
+          subheadingPort = null;
+          subheadingDepth = 0;
+        }
+        if (inExportsSection && depth > exportsSectionDepth) {
+          const ops = stems.length > 0 ? extractOpsFromExportSubheading(title) : [];
+          if (ops.length > 0) {
+            for (const op of ops) addExportedOp(op);
+            inExportSubheading = true;
+            exportSubheadingDepth = depth;
+          } else if (depth <= exportSubheadingDepth) {
+            inExportSubheading = false;
+            exportSubheadingDepth = 0;
+          }
+        } else if (stems.length > 0 && !DEP_EXPORTS_HEADING_EXCLUDE_RE.test(title) && DEP_EXPORTS_HEADING_RE.test(title)) {
+          inExportsSection = true;
+          exportsSectionDepth = depth;
+          inExportSubheading = false;
+          exportSubheadingDepth = 0;
+        } else if (depth <= exportsSectionDepth) {
+          inExportsSection = false;
+          exportsSectionDepth = 0;
+          inExportSubheading = false;
+          exportSubheadingDepth = 0;
+        }
       }
       continue;
     }
@@ -933,6 +1095,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
       const headers = splitMarkdownTableRow(line) ?? [];
       inTable = true;
       tableSpec = classifyDependencyTable(headers, subheadingPort);
+      exportTableOpCol = !tableSpec && inExportsSection && stems.length > 0 ? classifyExportTableOpCol(headers) : -1;
       bulletPort = null;
       bulletIndent = -1;
       continue;
@@ -942,6 +1105,7 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
       if (!line.includes('|')) {
         inTable = false;
         tableSpec = null;
+        exportTableOpCol = -1;
       } else {
         if (tableSpec) {
           const cells = splitMarkdownTableRow(line) ?? [];
@@ -951,6 +1115,13 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
           if (portName && tableSpec.opCol < cells.length) {
             for (const op of extractOpsFromTableCell(cells[tableSpec.opCol])) {
               addDeclaredPair(portName, op);
+            }
+          }
+        } else if (exportTableOpCol >= 0) {
+          const cells = splitMarkdownTableRow(line) ?? [];
+          if (exportTableOpCol < cells.length) {
+            for (const op of extractOpsFromTableCell(cells[exportTableOpCol])) {
+              addExportedOp(op);
             }
           }
         }
@@ -983,6 +1154,18 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true } = {}) {
         bulletPort = null;
         bulletIndent = -1;
       }
+    } else if (inExportsSection && !inExportSubheading && stems.length > 0) {
+      const bm = BULLET_LINE_RE.exec(line);
+      if (bm) {
+        const op = extractLeadingSimpleIdentifier(bm[2].trim(), { allowCallArgs: true });
+        if (op) addExportedOp(op);
+      } else if (line.trimStart().startsWith('`')) {
+        for (const op of extractLeadingBacktickedOpDecl(line)) addExportedOp(op);
+      }
+    }
+
+    if (stems.length > 0 && line.includes('`')) {
+      for (const op of extractInlineExportClauseOps(line)) addExportedOp(op);
     }
   }
 
@@ -1271,7 +1454,7 @@ function collectNativeOnlyPortParityFindings(text, dependencySources, { path = '
   const displayPorts = new Set();
   const declaredPortPrefixes = new Set();
   for (const dep of deps) {
-    const { mentioned, display } = extractDeclaredPortsFromDependency(dep.text, { isPrompt: dep.isPrompt !== false });
+    const { mentioned, display } = extractDeclaredPortsFromDependency(dep.text, { isPrompt: dep.isPrompt !== false, path: dep.path });
     for (const p of mentioned) mentionedInDeps.add(p);
     for (const p of display) {
       displayPorts.add(p);
@@ -1296,7 +1479,7 @@ function collectNativeOnlyPortParityFindings(text, dependencySources, { path = '
   const findings = [];
   for (const { port, line } of refs) {
     if (mentionedInDeps.has(port)) continue;
-    const detail = `Port "${port}" wired in native-only prompt is not declared by linked checkable dependencies (${depSummary}${declaredHint}).`;
+    const detail = `Port "${port}" wired in native-only prompt is not declared by linked checkable dependencies (${depSummary}${declaredHint}). Fix: declare "${port}" in a linked checkable dependency (## Ports or ## Public operations) or fix the port name, then re-run \`pdd lint --local\`.`;
     findings.push({
       filePath: path,
       line,
@@ -2480,10 +2663,14 @@ function buildDelimiterMaps(text) {
   const openParen = new Int32Array(n).fill(-1);
   const closeBrace = new Int32Array(n).fill(-1);
   const closeBracket = new Int32Array(n).fill(-1);
+  const enclosingBrace = new Int32Array(n).fill(-1);
+  const enclosingBracket = new Int32Array(n).fill(-1);
   const parenStack = [];
   const braceStack = [];
   const bracketStack = [];
   for (let i = 0; i < n; i++) {
+    enclosingBrace[i] = braceStack.length > 0 ? braceStack[braceStack.length - 1] : -1;
+    enclosingBracket[i] = bracketStack.length > 0 ? bracketStack[bracketStack.length - 1] : -1;
     const ch = text[i];
     if (ch === '(') parenStack.push(i);
     else if (ch === ')' && parenStack.length > 0) {
@@ -2495,7 +2682,7 @@ function buildDelimiterMaps(text) {
     else if (ch === '[') bracketStack.push(i);
     else if (ch === ']' && bracketStack.length > 0) closeBracket[bracketStack.pop()] = i;
   }
-  return { closeParen, openParen, closeBrace, closeBracket };
+  return { closeParen, openParen, closeBrace, closeBracket, enclosingBrace, enclosingBracket };
 }
 
 function parseTopLevelArgsLinear(text, openParenIdx, closeParen, closeBrace, closeBracket, maxArgs = 4) {
@@ -2872,14 +3059,265 @@ function scanTimersPromiseImportsLinear(skeleton, literals, timersPromiseFns, ti
   }
 }
 
+const POLLING_HELPER_NAME_RE = /^(?:waitFor|waitUntil|wait_for|wait_until|until|eventually|poll(?:For|Until|While)?|retry(?:WithBackoff)?|withRetry|withBackoff|backoff)(?:$|[A-Z0-9_])/i;
+
+function splitTopLevelForClauses(header) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < header.length; i++) {
+    const ch = header[i];
+    if (ch === '(' || ch === '{' || ch === '[') depth++;
+    else if (ch === ')' || ch === '}' || ch === ']') depth = Math.max(0, depth - 1);
+    else if (ch === ';' && depth === 0) {
+      parts.push(header.slice(start, i));
+      start = i + 1;
+      if (parts.length > 2) return null;
+    }
+  }
+  parts.push(header.slice(start));
+  return parts.length === 3 ? parts : null;
+}
+
+function isPollingOrRetryLoop(kind, header, bodySlice) {
+  const trimmedHeader = String(header ?? '').trim();
+  const hasGuardExit = /\b(?:if|try)\b/.test(bodySlice) && /\b(?:break|return)\b/.test(bodySlice);
+  const hasTryCatchExit = /\btry\b/.test(bodySlice) && /\bcatch\b/.test(bodySlice) && /\b(?:break|return)\b/.test(bodySlice);
+  if (kind === 'while' || kind === 'do-while') {
+    if (hasGuardExit || hasTryCatchExit) return true;
+    if (/^(?:true|1|!0)$/.test(trimmedHeader)) return false;
+    return /&&|\|\||!|\(|\./.test(trimmedHeader);
+  }
+  if (kind === 'for') {
+    if (hasGuardExit || hasTryCatchExit) return true;
+    const clauses = splitTopLevelForClauses(trimmedHeader);
+    if (!clauses) return false;
+    const cond = clauses[1].trim();
+    return cond.length > 0 && /&&|\|\||!|\(/.test(cond);
+  }
+  return false;
+}
+
+function isPromiseRaceTimeoutWatchdog(skeleton, offset, enclosingBracket, closeBracket, closeParen, closeBrace) {
+  for (let br = enclosingBracket[offset], hops = 0; br >= 0 && hops < 3; br = enclosingBracket[br], hops++) {
+    let p = br - 1;
+    while (p >= 0 && /\s/.test(skeleton[p])) p--;
+    if (p < 0 || skeleton[p] !== '(') continue;
+    const before = skeleton.slice(Math.max(0, p - 32), p);
+    if (!/\bPromise\s*\.\s*race\s*$/.test(before)) continue;
+    const endBr = closeBracket[br];
+    if (endBr < 0) continue;
+    let k = br + 1;
+    while (k < endBr) {
+      const ch = skeleton[k];
+      if (ch === '(' && closeParen[k] > k && closeParen[k] < endBr) { k = closeParen[k] + 1; continue; }
+      if (ch === '{' && closeBrace[k] > k && closeBrace[k] < endBr) { k = closeBrace[k] + 1; continue; }
+      if (ch === '[' && closeBracket[k] > k && closeBracket[k] < endBr) { k = closeBracket[k] + 1; continue; }
+      if (ch === ',') return true;
+      k++;
+    }
+  }
+  return false;
+}
+
+function extractAssignedFnNameBefore(skeleton, endIdx) {
+  const before = skeleton.slice(Math.max(0, endIdx - 120), endIdx);
+  const m = /(?:(?:const|let|var)\s+|(?:^|[;,\n{]\s*))([A-Za-z_$][\w$]*)\s*(?:=|:)\s*(?:async\s+)?$/.exec(before);
+  return m ? m[1] : null;
+}
+
+function classifyEnclosingBraceOwner(skeleton, braceIdx, openParen, closeBrace) {
+  let p = braceIdx - 1;
+  while (p >= 0 && /\s/.test(skeleton[p])) p--;
+  if (p < 0) return { kind: 'other' };
+
+  if (p >= 1 && skeleton[p - 1] === '=' && skeleton[p] === '>') {
+    let q = p - 2;
+    while (q >= 0 && /\s/.test(skeleton[q])) q--;
+    if (q >= 0 && skeleton[q] === ')' && openParen[q] >= 0) q = openParen[q];
+    else {
+      while (q >= 0 && /[\w$]/.test(skeleton[q])) q--;
+      q++;
+    }
+    return { kind: 'function', name: extractAssignedFnNameBefore(skeleton, q) };
+  }
+
+  if (skeleton[p] === ')' && openParen[p] >= 0) {
+    const open = openParen[p];
+    let q = open - 1;
+    while (q >= 0 && /\s/.test(skeleton[q])) q--;
+    let wStart = q;
+    while (wStart >= 0 && /[\w$]/.test(skeleton[wStart])) wStart--;
+    const word = skeleton.slice(wStart + 1, q + 1);
+    if (word === 'while' || word === 'for') {
+      return { kind: word, header: skeleton.slice(open + 1, p).trim() };
+    }
+    if (word === 'if' || word === 'catch' || word === 'switch' || word === 'with') {
+      return { kind: 'control', keyword: word };
+    }
+    if (word === 'function') {
+      return { kind: 'function', name: extractAssignedFnNameBefore(skeleton, wStart + 1) };
+    }
+    if (/^[A-Za-z_$][\w$]*$/.test(word)) {
+      return { kind: 'function', name: word };
+    }
+    return { kind: 'other' };
+  }
+
+  let wStart = p;
+  while (wStart >= 0 && /[\w$]/.test(skeleton[wStart])) wStart--;
+  const word = skeleton.slice(wStart + 1, p + 1);
+  if (word === 'do') {
+    const endB = closeBrace[braceIdx];
+    if (endB >= 0) {
+      const after = skeleton.slice(endB + 1, Math.min(skeleton.length, endB + 240));
+      const wm = /^\s*while\s*\(/.exec(after);
+      if (wm) {
+        const wOpen = endB + 1 + wm[0].length - 1;
+        // Find matching close paren linearly within bounded window
+        let depth = 0;
+        let wClose = -1;
+        for (let k = wOpen; k < Math.min(skeleton.length, wOpen + 300); k++) {
+          if (skeleton[k] === '(') depth++;
+          else if (skeleton[k] === ')') { depth--; if (depth === 0) { wClose = k; break; } }
+        }
+        if (wClose > wOpen) return { kind: 'do-while', header: skeleton.slice(wOpen + 1, wClose).trim() };
+      }
+    }
+    return { kind: 'control', keyword: 'do' };
+  }
+  if (word === 'try' || word === 'else' || word === 'finally' || word === 'catch') {
+    return { kind: 'control', keyword: word };
+  }
+  return { kind: 'other' };
+}
+
+function isBracelessPollingLoopBefore(skeleton, offset, openParen) {
+  let p = offset - 1;
+  const floor = Math.max(0, offset - 200);
+  while (p >= floor) {
+    while (p >= floor && /\s/.test(skeleton[p])) p--;
+    if (p < floor) return false;
+    if (skeleton[p] === ')') {
+      const open = openParen[p];
+      if (open < 0 || p - open > 400) return false;
+      let q = open - 1;
+      while (q >= 0 && /\s/.test(skeleton[q])) q--;
+      let wStart = q;
+      while (wStart >= 0 && /[\w$]/.test(skeleton[wStart])) wStart--;
+      const word = skeleton.slice(wStart + 1, q + 1);
+      if (word === 'while' || word === 'for') {
+        const header = skeleton.slice(open + 1, p).trim();
+        return isPollingOrRetryLoop(word, header, '');
+      }
+      return false;
+    }
+    // Skip leading `await` / `return` directly before the sleep expression
+    let wStart = p;
+    while (wStart >= floor && /[\w$]/.test(skeleton[wStart])) wStart--;
+    const word = skeleton.slice(wStart + 1, p + 1);
+    if (word === 'await' || word === 'return') {
+      p = wStart;
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+function isInsidePythonPollingOrRetryContext(skeleton, lineNo) {
+  const lines = skeleton.split('\n');
+  const idx = lineNo - 1;
+  if (idx < 0 || idx >= lines.length) return false;
+  const indentOf = s => {
+    let n = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === ' ') n += 1;
+      else if (s[i] === '\t') n += 4;
+      else break;
+    }
+    return n;
+  };
+  let curIndent = indentOf(lines[idx]);
+  const floor = Math.max(0, idx - 80);
+  for (let i = idx - 1; i >= floor; i--) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    const ind = indentOf(rawLine);
+    if (ind >= curIndent) continue;
+    curIndent = ind;
+
+    const defMatch = /^(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(trimmed);
+    if (defMatch) {
+      if (!POLLING_HELPER_NAME_RE.test(defMatch[1])) return false;
+      const bodyLines = [];
+      for (let j = i + 1; j < Math.min(lines.length, i + 80); j++) {
+        const t = lines[j].trim();
+        if (t && indentOf(lines[j]) <= ind) break;
+        bodyLines.push(lines[j]);
+      }
+      const fnBody = bodyLines.join('\n');
+      return /\b(?:while|for)\b/.test(fnBody) || (/\bif\b/.test(fnBody) && /\breturn\b/.test(fnBody));
+    }
+    if (/^class\s+/.test(trimmed)) return false;
+
+    const whileMatch = /^while\s+(.+):\s*$/.exec(trimmed);
+    const forMatch = /^for\s+(.+):\s*$/.exec(trimmed);
+    if (whileMatch || forMatch) {
+      const bodyLines = [];
+      for (let j = i + 1; j < Math.min(lines.length, i + 80); j++) {
+        const t = lines[j].trim();
+        if (t && indentOf(lines[j]) <= ind) break;
+        bodyLines.push(lines[j]);
+      }
+      const loopBody = bodyLines.join('\n');
+      const hasGuardExit = /\b(?:if|try)\b/.test(loopBody) && /\b(?:break|return)\b/.test(loopBody);
+      if (whileMatch) {
+        const cond = whileMatch[1].trim();
+        if (hasGuardExit) return true;
+        if (/^(?:True|1)$/.test(cond)) return false;
+        return /\b(?:and|or|not)\b|\(|\.|!=|==|<|>/.test(cond);
+      }
+      if (forMatch && hasGuardExit) return true;
+    }
+  }
+  return false;
+}
+
+function isInsidePollingOrRetryContext(skeleton, offset, lineNo, ctx) {
+  if (ctx.hashComments) return isInsidePythonPollingOrRetryContext(skeleton, lineNo);
+  if (isPromiseRaceTimeoutWatchdog(skeleton, offset, ctx.enclosingBracket, ctx.closeBracket, ctx.closeParen, ctx.closeBrace)) return true;
+  if (isBracelessPollingLoopBefore(skeleton, offset, ctx.openParen)) return true;
+
+  for (let b = ctx.enclosingBrace[offset], hops = 0; b >= 0 && hops < 8; b = ctx.enclosingBrace[b], hops++) {
+    const owner = classifyEnclosingBraceOwner(skeleton, b, ctx.openParen, ctx.closeBrace);
+    const endB = ctx.closeBrace[b];
+    const bodySlice = endB > b ? skeleton.slice(b + 1, Math.min(endB, b + 4000)) : '';
+    if (owner.kind === 'while' || owner.kind === 'for' || owner.kind === 'do-while') {
+      if (isPollingOrRetryLoop(owner.kind, owner.header, bodySlice)) return true;
+    } else if (owner.kind === 'function') {
+      if (owner.name && POLLING_HELPER_NAME_RE.test(owner.name)) {
+        if (/\b(?:while|for)\s*\(/.test(bodySlice) || (/\b(?:if|try)\b/.test(bodySlice) && /\breturn\b/.test(bodySlice))) {
+          return true;
+        }
+      }
+      // Do not escape across an enclosing function boundary (e.g. test(...) inside a data-driven for...of loop).
+      break;
+    }
+  }
+  return false;
+}
+
 function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } = {}) {
   if (!canonicalRepoPath(path) || !isInspectableTestCodePath(path)) return [];
   const raw = String(text ?? '');
   const hashComments = /\.(?:py|rb)$/i.test(path);
   const { skeleton, literals, lineComments, lineHasCode, lineHasComment } = tokenizeTestCode(raw, { hashComments });
   const lineStarts = buildLineStarts(skeleton);
-  const { closeParen, openParen, closeBrace, closeBracket } = buildDelimiterMaps(skeleton);
+  const { closeParen, openParen, closeBrace, closeBracket, enclosingBrace, enclosingBracket } = buildDelimiterMaps(skeleton);
   const positiveVars = collectPositiveNumericVars(skeleton, hashComments, closeParen, openParen, closeBrace, closeBracket);
+  const pollingCtx = { hashComments, openParen, closeParen, closeBrace, closeBracket, enclosingBrace, enclosingBracket };
   const findings = [];
   const seenLines = new Set();
 
@@ -2888,6 +3326,7 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
     if (seenLines.has(line)) return;
     const commentCtx = getAdjacentCommentText(lineComments, lineHasCode, lineHasComment, line);
     if (SLEEP_ALLOW_COMMENT_RE.test(commentCtx) || hasTrackingIssueRef(commentCtx)) return;
+    if (isInsidePollingOrRetryContext(skeleton, offset, line, pollingCtx)) return;
     seenLines.add(line);
     const detail = `Fixed-duration sleep (${snippet}) in test code introduces timing flakiness. Wait on a deterministic event, condition, or injected clock instead (or annotate with // pdd-allow-sleep: <reason> or a tracking #issue).`;
     findings.push({

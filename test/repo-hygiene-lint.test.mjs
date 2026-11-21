@@ -17,6 +17,7 @@ import {
   lintPublicInterfaceTests,
   lintRepoAntiPatterns,
   lintRepoProject,
+  lintTestFixedSleeps,
   loadProjectLintConfig,
   stripPromptMetadata,
 } from '../src/repo-hygiene-lint.mjs';
@@ -2177,4 +2178,207 @@ test('3574 Part 1: lintRepoProject emits advisory native-only-contract-incomplet
   assert.equal(report.ok, true, 'native-only-contract-incomplete defaults to advisory warn');
   assert.equal(report.findings.filter(f => f.code === 'native-only-contract-incomplete').length, 1);
   assert.equal(report.findings.find(f => f.code === 'native-only-contract-incomplete').path, 'prompts/stub.prompt.md');
+});
+
+test('3574 reopened: lintNativeOnlyPortParity recognizes exported <stem>.<op> operations from linked checkable prompts while still failing fake/typo ports with 4-part remediation', () => {
+  const accessPrompt = [
+    '# Remote MCP connector access',
+    '',
+    '## Public operations',
+    '',
+    '### invoke_tool',
+    'Runs read-only MCP tool.',
+    '',
+    '### redeem_view',
+    'Redeems authenticated view.',
+    '',
+    '## Ports',
+    '- `tokens.verify`',
+    '- `audit_log.append`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const governancePrompt = [
+    '# Remote MCP connector governance',
+    '',
+    '## Public operations',
+    '',
+    '### `register_client`',
+    'Registers OAuth client.',
+    '',
+    '### manage_grant and rotate_token',
+    'Issues, revokes, and rotates grants.',
+    '',
+    '## Ports',
+    '- `grant_store.save`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const interimPrompt = [
+    '# Interim authority',
+    '',
+    '## Operations',
+    '',
+    '`activate_interim_authority` and `reauthorize_interim_authority` take `{ issuer_id }`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const embeddedEntriesPrompt = [
+    '# Vendor CLI',
+    '',
+    'Export `run_vendor_cli(argv)`.',
+    '',
+    '<details><summary>Runtime interface</summary>',
+    '```json',
+    JSON.stringify({ entries: [{ name: 'main' }] }),
+    '```',
+    '</details>',
+  ].join('\n');
+
+  const deps = [
+    { path: 'prompts/connector/access.prompt.md', text: accessPrompt, isPrompt: true },
+    { path: 'prompts/connector/governance.prompt.md', text: governancePrompt, isPrompt: true },
+    { path: 'prompts/continuity/interim-authority.prompt.md', text: interimPrompt, isPrompt: true },
+    { path: 'prompts/cli/vendor-cli.prompt.md', text: embeddedEntriesPrompt, isPrompt: true },
+  ];
+
+  const validServerPrompt = [
+    '---',
+    'kind: native-only',
+    'reason: HTTPS remote MCP transport and OAuth token plumbing.',
+    '---',
+    '',
+    '# Remote MCP connector server adapter',
+    '',
+    'Route MCP calls to `access.invoke_tool` and browser redemptions to `access.redeem_view`.',
+    '',
+    '## Port wiring',
+    '- Wire `access.invoke_tool` and `access.redeem_view` to `tokens.verify` and `audit_log.append`.',
+    '- Invoke `governance.register_client`, `governance.manage_grant`, and `governance.rotate_token` wired to `grant_store.save`.',
+    '- Route authority checks through `interim-authority.activate_interim_authority` and `interim_authority.reauthorize_interim_authority`.',
+    '- Dispatch CLI calls to `vendor-cli.main` and `vendor_cli.run_vendor_cli`.',
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+    '- [governance](governance.prompt.md)',
+    '- [interim](../continuity/interim-authority.prompt.md)',
+    '- [vendor-cli](../cli/vendor-cli.prompt.md)',
+  ].join('\n');
+
+  assert.deepEqual(
+    lintNativeOnlyPortParity(validServerPrompt, deps, { path: 'prompts/connector/mcp-server.prompt.md' }),
+    [],
+    'exported <stem>.<op> operations across all declaration forms must pass with 0 errors',
+  );
+
+  // Negative control: typo on exported op + completely undeclared port MUST fail with 4-part remediation.
+  const brokenServerPrompt = validServerPrompt
+    .replace('`access.invoke_tool`', '`access.invoke_tools`')
+    .replace('`grant_store.save`', '`phantom_store.save`');
+  const negErrors = lintNativeOnlyPortParity(brokenServerPrompt, deps, { path: 'prompts/connector/mcp-server.prompt.md' });
+  assert.equal(negErrors.length, 2, negErrors.join('\n'));
+  assert.match(negErrors[0], /prompts\/connector\/mcp-server\.prompt\.md:8 \[native-only-unknown-port\].*"access\.invoke_tools"/);
+  assert.match(negErrors[0], /access\.invoke_tool/);
+  assert.match(negErrors[0], /Fix: declare "access\.invoke_tools".*pdd lint --local/);
+  assert.match(negErrors[1], /prompts\/connector\/mcp-server\.prompt\.md:12 \[native-only-unknown-port\].*"phantom_store\.save"/);
+  assert.match(negErrors[1], /Fix: declare "phantom_store\.save".*pdd lint --local/);
+});
+
+test('3562 polling FP fix: test-fixed-sleep exempts waitFor/until polling helpers, bounded retry loops, and Promise.race watchdogs while still flagging bare unguarded sleeps', () => {
+  const safePollingJs = [
+    "import { setTimeout } from 'node:timers/promises';",
+    'const until = async (check, ms = 5000) => {',
+    '  const deadline = Date.now() + ms;',
+    '  while (Date.now() < deadline) {',
+    '    const val = check();',
+    '    if (val) return val;',
+    '    await new Promise(r => setTimeout(r, 25));',
+    '  }',
+    '  throw new Error("timeout");',
+    '};',
+    'async function waitForFile(path) {',
+    '  for (let i = 0; i < 100; i++) {',
+    '    if (exists(path)) return true;',
+    '    await sleep(10);',
+    '  }',
+    '  return false;',
+    '}',
+    "test('polling and retry backoff loops', async () => {",
+    '  const end = Date.now() + 5000;',
+    '  while (Date.now() < end && !ready()) await new Promise(r => setTimeout(r, 20));',
+    '  while (!stopped() && performance.now() < end) await setTimeout(10);',
+    '  for (let i = 0; i < 20 && !isReady(); i++) await new Promise(r => setTimeout(r, 15));',
+    '  for (;;) {',
+    '    try { readReady(); break; } catch { await new Promise(r => setTimeout(r, 5)); }',
+    '  }',
+    '  for (const delayMs of [10, 20, 40]) {',
+    '    if (checkDone()) break;',
+    '    await new Promise(r => setTimeout(r, 15));',
+    '  }',
+    '  await Promise.race([pendingOp(), new Promise(resolve => setTimeout(() => resolve(null), 5000))]);',
+    '  void until; void waitForFile;',
+    '});',
+  ].join('\n');
+  assert.deepEqual(
+    lintTestFixedSleeps(safePollingJs, { path: 'test/polling-safe.test.mjs' }),
+    [],
+    'legitimate polling helpers, bounded retry loops, and Promise.race watchdogs must emit 0 warnings',
+  );
+
+  const safePollingPy = [
+    'import time',
+    'def wait_for_ready(check):',
+    '    deadline = time.time() + 5',
+    '    while time.time() < deadline:',
+    '        if check():',
+    '            return True',
+    '        time.sleep(0.05)',
+    '    return False',
+    'def test_retry_loop():',
+    '    for _ in range(10):',
+    '        try:',
+    '            probe()',
+    '            break',
+    '        except RuntimeError:',
+    '            time.sleep(0.02)',
+  ].join('\n');
+  assert.deepEqual(
+    lintTestFixedSleeps(safePollingPy, { path: 'tests/test_polling_safe.py' }),
+    [],
+    'Python polling and bounded retry loops must emit 0 warnings',
+  );
+
+  // Bare unguarded sleeps (including inside data-driven test loops or unconditional loops) MUST STILL FAIL!
+  const badUnguardedJs = [
+    "test('bare sleep', async () => {",
+    '  await new Promise(r => setTimeout(r, 200));',
+    '  await sleep(150);',
+    '  for (let i = 0; i < 3; i++) { await sleep(50); }',
+    '  while (true) { await sleep(50); }',
+    '});',
+    'for (const size of [1, 2]) {',
+    "  test('data loop with bare sleep', async () => {",
+    '    await new Promise(r => setTimeout(r, 30));',
+    '  });',
+    '}',
+  ].join('\n');
+  const badWarnings = lintTestFixedSleeps(badUnguardedJs, { path: 'test/bare-sleeps.test.mjs' });
+  assert.equal(badWarnings.length, 5, `expected 5 bare unguarded sleep warnings, got:\n${badWarnings.join('\n')}`);
+
+  const badUnguardedPy = [
+    'import time',
+    'def test_bare_sleep():',
+    '    time.sleep(0.5)',
+    'def test_unconditional_for():',
+    '    for _ in range(3):',
+    '        time.sleep(0.1)',
+  ].join('\n');
+  const badPyWarnings = lintTestFixedSleeps(badUnguardedPy, { path: 'tests/test_bare_sleep.py' });
+  assert.equal(badPyWarnings.length, 2, `expected 2 bare Python sleep warnings, got:\n${badPyWarnings.join('\n')}`);
 });
