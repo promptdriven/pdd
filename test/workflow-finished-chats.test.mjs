@@ -132,7 +132,7 @@ for (const condition of ['busy','blocked','own-pane','foreign-terminal','foreign
       return h(args);
     }; }
     const before = f.herdr.panes.length;
-    assert.equal((await tidy(f)).exitCode,0);
+    assert.equal((await (condition === 'grace' ? runner.tidyRuns({graceMs:15*60_000},f.ports) : tidy(f))).exitCode,0);
     assert.equal(f.herdr.panes.length,before);
     assert.equal(f.record().chats[0].closed,undefined);
     assert.equal(effects(f).length,0);
