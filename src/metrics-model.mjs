@@ -1,4 +1,4 @@
-// Generated from prompts/cli/metrics-model.prompt.md (sha256: 8bd01fbb3d0519da7d4f460ecaaebe6a87816ea7dff77012072d50746b67afc9).
+// Generated from prompts/cli/metrics-model.prompt.md (sha256: 965e27a4c6b5c07204070f858cb6848c0a92c8267ff0ffd4008e02f35eb3193c).
 
 export const SKILLS = Object.freeze(['small-change', 'bug', 'feature']);
 export const GATES = Object.freeze(['runtime', 'vectors', 'formal', 'suite', 'review', 'ci']);
@@ -13,6 +13,9 @@ const VALID_FLAKE_OUTCOMES = new Set(['flaked-then-passed', 'reproduced-red', 'b
 const DEFAULT_FLAKE_WINDOW_DAYS = 7;
 const DEFAULT_FLAKE_THRESHOLD = 3;
 const DAY_MS = 86_400_000;
+const MAX_DATE_MS = 8_640_000_000_000_000;
+const validDateMs = ms => typeof ms === 'number' && Number.isFinite(ms) && Math.abs(ms) <= MAX_DATE_MS;
+const nonNegativeSafeInt = value => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
 const WEEKDAY_INDEX = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
 
 function modelError(code, message) {
@@ -856,11 +859,13 @@ function summarizeMetricsRecurringFlakes({
         target: item.target.trim().slice(0, 200),
         count: item.count,
         outcomes: {
-          'flaked-then-passed': Number.isSafeInteger(item.outcomes?.['flaked-then-passed']) ? item.outcomes['flaked-then-passed'] : 0,
-          'reproduced-red': Number.isSafeInteger(item.outcomes?.['reproduced-red']) ? item.outcomes['reproduced-red'] : 0,
-          'base-test-red': Number.isSafeInteger(item.outcomes?.['base-test-red']) ? item.outcomes['base-test-red'] : 0,
+          'flaked-then-passed': nonNegativeSafeInt(item.outcomes?.['flaked-then-passed']),
+          'reproduced-red': nonNegativeSafeInt(item.outcomes?.['reproduced-red']),
+          'base-test-red': nonNegativeSafeInt(item.outcomes?.['base-test-red']),
         },
-        lastSeen: typeof item.lastSeen === 'string' ? item.lastSeen : null,
+        lastSeen: typeof item.lastSeen === 'string' && validDateMs(Date.parse(item.lastSeen))
+          ? new Date(Date.parse(item.lastSeen)).toISOString()
+          : null,
         issues: Array.isArray(item.issues) ? [...new Set(item.issues.filter(positiveInt))].sort((a, b) => a - b) : [],
         prs: Array.isArray(item.prs) ? [...new Set(item.prs.filter(positiveInt))].sort((a, b) => a - b) : [],
       }))
@@ -869,13 +874,16 @@ function summarizeMetricsRecurringFlakes({
       totalEntries: Number.isSafeInteger(recurringFlakes.totalEntries) && recurringFlakes.totalEntries >= 0
         ? recurringFlakes.totalEntries
         : filtered.reduce((acc, item) => acc + item.count, 0),
-      windowDays: typeof recurringFlakes.windowDays === 'number' && recurringFlakes.windowDays > 0 ? recurringFlakes.windowDays : days,
+      windowDays: typeof recurringFlakes.windowDays === 'number' && Number.isFinite(recurringFlakes.windowDays) && recurringFlakes.windowDays > 0
+        ? recurringFlakes.windowDays
+        : days,
       threshold: positiveInt(recurringFlakes.threshold) ? recurringFlakes.threshold : minCount,
       recurring: filtered,
     };
   }
 
-  const cutoffMs = refMs - days * DAY_MS;
+  const safeRefMs = validDateMs(refMs) ? refMs : 0;
+  const cutoffMs = Math.max(-MAX_DATE_MS, safeRefMs - days * DAY_MS);
   const groups = new Map();
   let totalEntries = 0;
 
@@ -886,7 +894,7 @@ function summarizeMetricsRecurringFlakes({
     const target = typeof raw.target === 'string' ? raw.target.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) : '';
     if (!target) continue;
     const tsMs = parseTimestampMs(raw.ts, null);
-    if (tsMs === null || tsMs < cutoffMs || tsMs > refMs) continue;
+    if (tsMs === null || !validDateMs(tsMs) || tsMs < cutoffMs || tsMs > safeRefMs) continue;
     const repo = typeof raw.repo === 'string' && REPO_PATTERN.test(raw.repo.trim()) ? raw.repo.trim() : null;
     const repoLower = repo ? repo.toLowerCase() : null;
     if (repoLower && excludedRepos.has(repoLower)) continue;

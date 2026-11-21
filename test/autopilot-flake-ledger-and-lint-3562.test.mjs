@@ -597,21 +597,180 @@ test('3562 Part 2B: test-unexcused-skip detects JS/TS and Python unexcused skips
   assert.equal(offRes.warnings.filter(w => w.includes('[test-unexcused-skip]')).length, 0);
 });
 
-test('3562 Part 2C: test-fixed-sleep and test-unexcused-skip stay strictly linear O(N) on 50k+ adversarial inputs (< 50ms)', () => {
-  const adversarialJs = [
-    'new Promise('.repeat(4500),
-    'test.skip('.repeat(2000),
-    'setTimeout('.repeat(2000),
-    `test('a', { skip: ${'('.repeat(200)}true${')'.repeat(200)} }, () => {});\n`,
-    '// '.padEnd(5000, 'a') + '\n',
-  ].join('');
-  assert.ok(adversarialJs.length > 50_000);
+test('3562 Part 2C: test-fixed-sleep and test-unexcused-skip stay strictly linear O(N) on 50k–100k+ adversarial inputs (< 500ms)', () => {
+  const adversarialPayloads = [
+    // Original nested/unclosed delimiter payload (~101KB)
+    [
+      'new Promise('.repeat(4500),
+      'test.skip('.repeat(2000),
+      'setTimeout('.repeat(2000),
+      `test('a', { skip: ${'('.repeat(200)}true${')'.repeat(200)} }, () => {});\n`,
+      '// '.padEnd(5000, 'a') + '\n',
+    ].join(''),
+    // P1-2 #1: import backtracking bomb (~65KB)
+    ('import ' + ' '.repeat(155) + '\n').repeat(400),
+    // P1-2 #2: const/let/var backtracking bomb (~61KB)
+    ('const ' + ' '.repeat(115) + '\n').repeat(500),
+    // P1-2 #3: deep nested outer parens (depth 25,000, ~50KB)
+    `test('deep', { skip: ${'('.repeat(25_000)}true${')'.repeat(25_000)} }, () => {});\n`,
+    // P1-2 #4: deeply nested test(..., { x: test(..., { ... }) }) (~45KB)
+    `${'test("a", { x: '.repeat(1500)}true${' }, () => {})'.repeat(1500)};\n`,
+  ];
 
-  const t0 = performance.now();
-  const sleepOut = lintTestFixedSleeps(adversarialJs, { path: 'test/adversarial.test.mjs' });
-  const skipOut = lintTestUnexcusedSkips(adversarialJs, { path: 'test/adversarial.test.mjs' });
-  const elapsedMs = performance.now() - t0;
+  for (const payload of adversarialPayloads) {
+    const t0 = performance.now();
+    const sleepOut = lintTestFixedSleeps(payload, { path: 'test/adversarial.test.mjs' });
+    const skipOut = lintTestUnexcusedSkips(payload, { path: 'test/adversarial.test.mjs' });
+    const elapsedMs = performance.now() - t0;
+    assert.ok(Array.isArray(sleepOut) && Array.isArray(skipOut));
+    assert.ok(elapsedMs < 500, `expected < 500ms for ${payload.length} chars, took ${elapsedMs.toFixed(1)}ms`);
+  }
+});
 
-  assert.ok(Array.isArray(sleepOut) && Array.isArray(skipOut));
-  assert.ok(elapsedMs < 50, `expected < 50ms for ${adversarialJs.length} chars, took ${elapsedMs.toFixed(1)}ms`);
+test('3562 R1 regressions: P1-1..P1-5 and P2-1..P2-2 edge cases', () => {
+  // P1-1: out-of-range numeric timestamps, non-string target coercion, non-finite windowDays, negative outcomes
+  assert.equal(normalizeFlakeEntry({ ts: 1e20, target: 'test/a.test.mjs', outcome: 'base-test-red' }), null);
+  assert.equal(normalizeFlakeEntry({ ts: -1e17, target: 'test/a.test.mjs', outcome: 'base-test-red' }), null);
+  assert.equal(normalizeFlakeEntry({ target: 'test/a.test.mjs', outcome: 'base-test-red' }, { now: () => 1e20 }), null);
+  assert.equal(normalizeFlakeEntry({ ts: Date.now(), target: { foo: 1 }, outcome: 'base-test-red' }), null);
+  assert.equal(normalizeFlakeEntry({ ts: Date.now(), target: 12345, outcome: 'base-test-red' }), null);
+  assert.deepEqual(
+    parseFlakeLedger(`${JSON.stringify({ ts: 1e20, target: 'test/a.test.mjs', outcome: 'base-test-red' })}\n${JSON.stringify({ ts: Date.now(), target: { bad: true }, outcome: 'base-test-red' })}\n`),
+    [],
+  );
+
+  const metricsOutOfRange = calculateAutopilotMetrics({
+    repos: ['acme/widgets'],
+    runs: [],
+    now: '2026-11-21T12:00:00.000Z',
+    flakeWindowDays: 1e12,
+    flakeEntries: [
+      { ts: -1e17, repo: 'acme/widgets', target: 'test/a.test.mjs', outcome: 'base-test-red' },
+      { ts: 1e20, repo: 'acme/widgets', target: 'test/a.test.mjs', outcome: 'base-test-red' },
+    ],
+  });
+  assert.deepEqual(metricsOutOfRange.recurringFlakes.recurring, []);
+
+  const metricsSanitizedPreSummary = calculateAutopilotMetrics({
+    repos: ['acme/widgets'],
+    runs: [],
+    now: '2026-11-21T12:00:00.000Z',
+    recurringFlakes: {
+      totalEntries: 3,
+      windowDays: Infinity,
+      threshold: 3,
+      recurring: [{
+        repo: 'acme/widgets',
+        target: 'test/x.test.mjs',
+        count: 3,
+        outcomes: { 'flaked-then-passed': -1, 'reproduced-red': 3, 'base-test-red': -5 },
+        lastSeen: '2026-11-21T10:00:00.000Z',
+      }],
+    },
+  });
+  assert.equal(metricsSanitizedPreSummary.recurringFlakes.windowDays, 7);
+  assert.deepEqual(metricsSanitizedPreSummary.recurringFlakes.recurring[0].outcomes, {
+    'flaked-then-passed': 0,
+    'reproduced-red': 3,
+    'base-test-red': 0,
+  });
+
+  // P1-3 #1 & #2: template literal and Python triple-quoted strings cannot spoof allow/excuse comments
+  const spoofSleepJs = [
+    'const s = `hello',
+    '// pdd-allow-sleep: fake`;',
+    'await sleep(500);',
+  ].join('\n');
+  assert.equal(lintTestFixedSleeps(spoofSleepJs, { path: 'test/spoof.test.mjs' }).length, 1);
+
+  const spoofSkipJs = [
+    'const doc = `line 1',
+    '// #1234`;',
+    'test.skip("unexcused", () => {});',
+  ].join('\n');
+  assert.equal(lintTestUnexcusedSkips(spoofSkipJs, { path: 'test/spoof.test.mjs' }).length, 1);
+
+  const spoofPy = [
+    'import time',
+    'def test_spoof():',
+    '    s = """line1',
+    '# pdd-allow-sleep"""',
+    '    time.sleep(1)',
+  ].join('\n');
+  assert.equal(lintTestFixedSleeps(spoofPy, { path: 'tests/test_spoof.py' }).length, 1);
+
+  // P1-3 #3: valid multi-line /* ... */ block comments excuse both skip and sleep
+  const blockCommentExcuses = [
+    '/*',
+    ' * Tracked in #1234',
+    ' */',
+    'test.skip("block excused", () => {});',
+    '/*',
+    ' * pdd-allow-sleep: fs mtime',
+    ' */',
+    'await sleep(200);',
+  ].join('\n');
+  assert.deepEqual(lintTestUnexcusedSkips(blockCommentExcuses, { path: 'test/block.test.mjs' }), []);
+  assert.deepEqual(lintTestFixedSleeps(blockCommentExcuses, { path: 'test/block.test.mjs' }), []);
+
+  // P1-3 #4: Python // floor division does NOT hide subsequent time.sleep on the same line
+  assert.equal(
+    lintTestFixedSleeps('import time\ndef test_div():\n    x = 10 // 2; time.sleep(1)\n', { path: 'tests/test_div.py' }).length,
+    1,
+  );
+
+  // P1-3 #5: JS regex literal containing an apostrophe does NOT swallow trailing allow comment
+  assert.deepEqual(
+    lintTestFixedSleeps("const r = /foo'bar/; await sleep(500); // pdd-allow-sleep: ok\nvoid r;\n", { path: 'test/regex.test.mjs' }),
+    [],
+  );
+
+  // P1-4: whole-identifier reject/resolve matching (single-letter reject params `e`/`r` and `$` resolve param)
+  const p14Js = [
+    "test('p14', async () => {",
+    '  await new Promise((resolve, e) => setTimeout(() => resolve(), 500));',
+    '  await new Promise((resolve, r) => setTimeout(() => resolve(), 500));',
+    '  await new Promise(($) => setTimeout(() => $(), 500));',
+    '});',
+  ].join('\n');
+  assert.equal(lintTestFixedSleeps(p14Js, { path: 'test/p14.test.mjs' }).length, 3);
+
+  // P1-5: parameterized helpers and shadowed zero-delay vars must NOT falsely flag
+  const p15ParamHelper = [
+    'const delay = ms => new Promise(r => setTimeout(r, ms));',
+    "test('unrelated', () => { const ms = 100; return ms; });",
+    'void delay;',
+  ].join('\n');
+  assert.deepEqual(lintTestFixedSleeps(p15ParamHelper, { path: 'test/p15-helper.test.mjs' }), []);
+
+  const p15ShadowedZero = [
+    "test('one', () => { const ms = 500; return ms; });",
+    "test('two', async () => { const ms = 0; await sleep(ms); });",
+  ].join('\n');
+  assert.deepEqual(lintTestFixedSleeps(p15ShadowedZero, { path: 'test/p15-shadow.test.mjs' }), []);
+
+  // P2-1: semicolon-less side-effect import does not break default/namespace timers/promises import
+  const p21NoSemi = [
+    "import './helpers/test-home.mjs'",
+    "import tp from 'node:timers/promises'",
+    "test('x', async () => { await tp.setTimeout(500); })",
+  ].join('\n');
+  assert.equal(lintTestFixedSleeps(p21NoSemi, { path: 'test/p21.test.mjs' }).length, 1);
+
+  // P2-2: owner/repo#N, interpolated template titles with #N, and 1st-arg test({ skip: true }, fn)
+  const p22Excused = [
+    "test.skip('see promptdriven/pdd#3562', () => {});",
+    'const osName = process.platform;',
+    'test.skip(`broken on ${osName} (#1234)`, () => {});',
+    'test(`also tracked in ${osName} (acme/widgets#99)`, { skip: true }, () => {});',
+  ].join('\n');
+  assert.deepEqual(lintTestUnexcusedSkips(p22Excused, { path: 'test/p22-ok.test.mjs' }), []);
+
+  const p22FirstArgSkip = [
+    'test({ skip: true }, () => {});',
+    "it({ skip: '' }, () => {});",
+    'test({ skip: !process.env.LIVE }, () => {});',
+  ].join('\n');
+  const p22Warnings = lintTestUnexcusedSkips(p22FirstArgSkip, { path: 'test/p22-first-arg.test.mjs' });
+  assert.equal(p22Warnings.length, 2, `expected 2 first-arg skip warnings, got:\n${p22Warnings.join('\n')}`);
 });

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: d16ebcf58c6330f4d748449c735a7395598e6119d15784dc3b272d85208060d6).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: d2fe77a3b5c360c303b21f2a459308c7522f1a1bc057ebe353c0bf6acf0fa9b5).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -1608,13 +1608,41 @@ const newlinesIn = str => {
   return '\n'.repeat(n);
 };
 
-// Mask comments and string/template bodies into __STR_k__ placeholders while keeping 1-based line numbers intact.
+// Mask comments and string/template bodies into __STR_k__ placeholders while keeping 1-based line numbers
+// and capturing real per-line lexical comments/code presence in one linear O(N) pass.
 function tokenizeTestCode(source, { hashComments = false } = {}) {
   const literals = [];
+  const lineComments = [];
+  const lineHasCode = [];
+  const lineHasComment = [];
+  let lineNo = 1;
+
+  const markCodeLines = (startLine, rawSpan) => {
+    lineHasCode[startLine - 1] = true;
+    let nl = 0;
+    for (let k = 0; k < rawSpan.length; k++) {
+      if (rawSpan[k] === '\n') {
+        nl++;
+        lineHasCode[startLine - 1 + nl] = true;
+      }
+    }
+    return nl;
+  };
+  const recordCommentSpan = (startLine, rawComment) => {
+    const parts = rawComment.split('\n');
+    for (let k = 0; k < parts.length; k++) {
+      const idx = startLine - 1 + k;
+      lineHasComment[idx] = true;
+      lineComments[idx] = lineComments[idx] ? `${lineComments[idx]} ${parts[k]}` : parts[k];
+    }
+    return parts.length - 1;
+  };
   const addLit = (val, rawSpan) => {
     const id = literals.length;
     literals.push(val);
-    return `__STR_${id}__${newlinesIn(rawSpan)}`;
+    const nl = markCodeLines(lineNo, rawSpan);
+    lineNo += nl;
+    return `__STR_${id}__${'\n'.repeat(nl)}`;
   };
 
   let out = '';
@@ -1649,24 +1677,32 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
     const ch = source[i];
     const next = source[i + 1];
 
-    if (ch === '/' && next === '/') {
+    if (!hashComments && ch === '/' && next === '/') {
       const end = source.indexOf('\n', i + 2);
+      const body = end < 0 ? source.slice(i + 2) : source.slice(i + 2, end);
+      recordCommentSpan(lineNo, body);
       if (end < 0) break;
       out += '\n';
+      lineNo++;
       i = end + 1;
       continue;
     }
     if (hashComments && ch === '#') {
       const end = source.indexOf('\n', i + 1);
+      const body = end < 0 ? source.slice(i + 1) : source.slice(i + 1, end);
+      recordCommentSpan(lineNo, body);
       if (end < 0) break;
       out += '\n';
+      lineNo++;
       i = end + 1;
       continue;
     }
-    if (ch === '/' && next === '*') {
+    if (!hashComments && ch === '/' && next === '*') {
       const end = source.indexOf('*/', i + 2);
       const body = end < 0 ? source.slice(i + 2) : source.slice(i + 2, end);
-      out += newlinesIn(body);
+      const nl = recordCommentSpan(lineNo, body);
+      out += '\n'.repeat(nl);
+      lineNo += nl;
       i = end < 0 ? source.length : end + 2;
       continue;
     }
@@ -1691,7 +1727,7 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
       i = j < source.length && source[j] === ch ? j + 1 : j;
       continue;
     }
-    if (ch === '`') {
+    if (!hashComments && ch === '`') {
       let j = i + 1;
       let hasInterp = false;
       while (j < source.length && source[j] !== '`') {
@@ -1714,6 +1750,7 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
     if (templateStack.length) {
       if (ch === '{') {
         templateStack.at(-1).depth++;
+        lineHasCode[lineNo - 1] = true;
         out += ch;
         prevToken = '{';
         i++;
@@ -1721,6 +1758,7 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
       }
       if (ch === '}' && --templateStack.at(-1).depth === 0) {
         templateStack.pop();
+        lineHasCode[lineNo - 1] = true;
         out += ') + ';
         const step = consumeTemplateChunk(i + 1);
         out += step.text;
@@ -1741,6 +1779,7 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
       }
       if (closed) {
         while (j < source.length && /[A-Za-z]/.test(source[j])) j++;
+        lineHasCode[lineNo - 1] = true;
         out += source.slice(i, j);
         prevToken = 'regex';
         i = j;
@@ -1748,6 +1787,7 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
       }
     }
     if (/\s/.test(ch)) {
+      if (ch === '\n') lineNo++;
       out += ch;
       i++;
       continue;
@@ -1756,17 +1796,19 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
       let j = i + 1;
       while (j < source.length && /[A-Za-z0-9_$]/.test(source[j])) j++;
       const word = source.slice(i, j);
+      lineHasCode[lineNo - 1] = true;
       out += word;
       prevToken = word;
       i = j;
       continue;
     }
+    lineHasCode[lineNo - 1] = true;
     out += ch;
     prevToken = ch;
     i++;
   }
 
-  return { skeleton: out, literals };
+  return { skeleton: out, literals, lineComments, lineHasCode, lineHasComment };
 }
 
 function buildLineStarts(text) {
@@ -2397,7 +2439,7 @@ export function lintPublicInterfaceTests(text, { path = 'test/example.test.mjs' 
 
 const SLEEP_ALLOW_COMMENT_RE = /\b(?:pdd-allow-sleep|sleep-ok|allow-sleep)\b/i;
 const SKIP_ALLOW_COMMENT_RE = /\bpdd-allow-skip\b/i;
-const TRACKING_HASH_ISSUE_RE = /(?:^|[\s([,:;'"`])#[1-9]\d*\b/;
+const TRACKING_HASH_ISSUE_RE = /(?:^|[\s([,:;'"`])#[1-9]\d*\b|\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d*\b/;
 const TRACKING_TICKET_RE = /\b[A-Z]{2,10}-[1-9]\d*\b/;
 const TRACKING_WORD_ISSUE_RE = /\bissue\s+#?[1-9]\d*\b/i;
 const TRACKING_GH_URL_RE = /https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9]\d*\b/i;
@@ -2424,23 +2466,32 @@ function hasSubstantiveSkipReason(value) {
 function buildDelimiterMaps(text) {
   const n = text.length;
   const closeParen = new Int32Array(n).fill(-1);
+  const openParen = new Int32Array(n).fill(-1);
   const closeBrace = new Int32Array(n).fill(-1);
+  const closeBracket = new Int32Array(n).fill(-1);
   const parenStack = [];
   const braceStack = [];
+  const bracketStack = [];
   for (let i = 0; i < n; i++) {
     const ch = text[i];
     if (ch === '(') parenStack.push(i);
-    else if (ch === ')' && parenStack.length > 0) closeParen[parenStack.pop()] = i;
-    else if (ch === '{') braceStack.push(i);
+    else if (ch === ')' && parenStack.length > 0) {
+      const open = parenStack.pop();
+      closeParen[open] = i;
+      openParen[i] = open;
+    } else if (ch === '{') braceStack.push(i);
     else if (ch === '}' && braceStack.length > 0) closeBrace[braceStack.pop()] = i;
+    else if (ch === '[') bracketStack.push(i);
+    else if (ch === ']' && bracketStack.length > 0) closeBracket[bracketStack.pop()] = i;
   }
-  return { closeParen, closeBrace };
+  return { closeParen, openParen, closeBrace, closeBracket };
 }
 
-function parseTopLevelArgsLinear(text, openParenIdx, closeParen, closeBrace, maxArgs = 4) {
+function parseTopLevelArgsLinear(text, openParenIdx, closeParen, closeBrace, closeBracket, maxArgs = 4) {
   const endParen = closeParen[openParenIdx];
   if (endParen < 0) return null;
   const args = [];
+  const argStarts = [];
   let argStart = openParenIdx + 1;
   let k = argStart;
   while (k < endParen) {
@@ -2453,92 +2504,79 @@ function parseTopLevelArgsLinear(text, openParenIdx, closeParen, closeBrace, max
       k = closeBrace[k] + 1;
       continue;
     }
+    if (ch === '[' && closeBracket[k] > k && closeBracket[k] < endParen) {
+      k = closeBracket[k] + 1;
+      continue;
+    }
     if (ch === ',') {
       args.push(text.slice(argStart, k));
+      argStarts.push(argStart);
       argStart = k + 1;
-      if (args.length >= maxArgs) return { args, endIdx: endParen + 1 };
+      if (args.length >= maxArgs) return { args, argStarts, endIdx: endParen + 1 };
     }
     k++;
   }
   const tail = text.slice(argStart, endParen);
-  if (args.length > 0 || tail.trim().length > 0) args.push(tail);
-  return { args, endIdx: endParen + 1 };
-}
-
-function inspectRawLineComments(rawLine, hashComments) {
-  const s = String(rawLine ?? '');
-  const comments = [];
-  let hasCode = false;
-  let i = 0;
-  while (i < s.length) {
-    const ch = s[i];
-    const next = s[i + 1];
-    if (ch === ' ' || ch === '\t' || ch === '\r') { i++; continue; }
-    if (ch === '/' && next === '/') {
-      comments.push(s.slice(i + 2));
-      break;
-    }
-    if (hashComments && ch === '#') {
-      comments.push(s.slice(i + 1));
-      break;
-    }
-    if (ch === '/' && next === '*') {
-      const end = s.indexOf('*/', i + 2);
-      if (end < 0) {
-        comments.push(s.slice(i + 2));
-        break;
-      }
-      comments.push(s.slice(i + 2, end));
-      i = end + 2;
-      continue;
-    }
-    hasCode = true;
-    if (ch === "'" || ch === '"' || ch === '`') {
-      let j = i + 1;
-      while (j < s.length && s[j] !== ch) {
-        if (s[j] === '\\') j += 2;
-        else j++;
-      }
-      i = j < s.length ? j + 1 : j;
-      continue;
-    }
-    i++;
+  if (args.length > 0 || tail.trim().length > 0) {
+    args.push(tail);
+    argStarts.push(argStart);
   }
-  return { text: comments.join(' '), commentOnly: !hasCode && comments.length > 0 };
+  return { args, argStarts, endIdx: endParen + 1 };
 }
 
-function getAdjacentCommentText(rawLines, lineNo, hashComments) {
+function getAdjacentCommentText(lineComments, lineHasCode, lineHasComment, lineNo) {
   const idx = lineNo - 1;
-  if (idx < 0 || idx >= rawLines.length) return '';
+  if (idx < 0) return '';
   const parts = [];
-  const own = inspectRawLineComments(rawLines[idx], hashComments);
-  if (own.text) parts.push(own.text);
-  for (let back = 1; back <= 3; back++) {
+  if (lineComments[idx]) parts.push(lineComments[idx]);
+  for (let back = 1; back <= 6; back++) {
     const prevIdx = idx - back;
     if (prevIdx < 0) break;
-    const prev = inspectRawLineComments(rawLines[prevIdx], hashComments);
-    if (!prev.commentOnly) break;
-    parts.push(prev.text);
+    if (!lineHasComment[prevIdx] || lineHasCode[prevIdx]) break;
+    if (lineComments[prevIdx]) parts.push(lineComments[prevIdx]);
   }
   return parts.join('\n');
 }
 
+// Single-pass O(N) outer-parenthesis stripping: finds all candidate paired outer `(...)`
+// and computes the minimum interior nesting depth in one linear scan before slicing once.
 function stripOuterParens(expr) {
-  let s = String(expr ?? '').trim();
-  while (s.startsWith('(') && s.endsWith(')')) {
-    let depth = 0;
-    let wrapsWhole = true;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === '(') depth++;
-      else if (s[i] === ')') {
-        depth--;
-        if (depth === 0 && i < s.length - 1) { wrapsWhole = false; break; }
-      }
+  const s = String(expr ?? '').trim();
+  if (!s.startsWith('(') || !s.endsWith(')')) return s;
+  const pairs = [];
+  let lo = 0;
+  let hi = s.length - 1;
+  while (lo < hi) {
+    while (lo < hi && /\s/.test(s[lo])) lo++;
+    while (lo < hi && /\s/.test(s[hi])) hi--;
+    if (lo < hi && s[lo] === '(' && s[hi] === ')') {
+      pairs.push([lo, hi]);
+      lo++;
+      hi--;
+    } else {
+      break;
     }
-    if (!wrapsWhole || depth !== 0) break;
-    s = s.slice(1, -1).trim();
   }
-  return s;
+  if (!pairs.length) return s;
+
+  const innerLo = pairs[pairs.length - 1][0];
+  const innerHi = pairs[pairs.length - 1][1];
+  let depth = 0;
+  let minInteriorDepth = pairs.length;
+  for (let i = pairs[0][0]; i <= pairs[0][1]; i++) {
+    const ch = s[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth < 0) return s;
+    }
+    if (i >= innerLo && i < innerHi && depth < minInteriorDepth) {
+      minInteriorDepth = depth;
+    }
+  }
+  if (depth !== 0 || minInteriorDepth <= 0) return s;
+  const [cutLo, cutHi] = pairs[minInteriorDepth - 1];
+  return s.slice(cutLo + 1, cutHi).trim();
 }
 
 const SIMPLE_NUM_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
@@ -2560,24 +2598,165 @@ function evalSimpleNumericLiteral(expr) {
   return null;
 }
 
-function collectPositiveNumericVars(skeleton, hashComments) {
+function collectParamIdentifiers(paramSlice, targetSet) {
+  for (const m of paramSlice.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)(?![\w$])/g)) {
+    targetSet.add(m[1]);
+  }
+}
+
+function collectAllParameterNames(skeleton, hashComments, closeParen, openParen) {
+  const paramNames = new Set();
+  if (!hashComments) {
+    // Arrow function parameters: `ident =>` or `(...) =>`
+    for (const m of skeleton.matchAll(/=>/g)) {
+      let p = m.index - 1;
+      while (p >= 0 && /\s/.test(skeleton[p])) p--;
+      if (p < 0) continue;
+      if (skeleton[p] === ')') {
+        const open = openParen[p];
+        if (open >= 0 && p - open <= 300) {
+          collectParamIdentifiers(skeleton.slice(open + 1, p), paramNames);
+        }
+      } else if (/[\w$]/.test(skeleton[p])) {
+        let start = p;
+        while (start > 0 && /[\w$]/.test(skeleton[start - 1])) start--;
+        const word = skeleton.slice(start, p + 1);
+        if (/^[A-Za-z_$][\w$]*$/.test(word)) paramNames.add(word);
+      }
+    }
+    // Named/anonymous function declarations/expressions: `function [name](...)`
+    for (const m of skeleton.matchAll(/\bfunction\b/g)) {
+      let k = m.index + m[0].length;
+      const limit = Math.min(skeleton.length, k + 80);
+      while (k < limit && skeleton[k] !== '(' && skeleton[k] !== '{' && skeleton[k] !== ';') k++;
+      if (k < limit && skeleton[k] === '(' && closeParen[k] > k && closeParen[k] - k <= 300) {
+        collectParamIdentifiers(skeleton.slice(k + 1, closeParen[k]), paramNames);
+      }
+    }
+  } else {
+    // Python `def name(...):` and `lambda ...:`
+    for (const m of skeleton.matchAll(/\bdef\b/g)) {
+      let k = m.index + m[0].length;
+      const limit = Math.min(skeleton.length, k + 80);
+      while (k < limit && skeleton[k] !== '(' && skeleton[k] !== '\n') k++;
+      if (k < limit && skeleton[k] === '(' && closeParen[k] > k && closeParen[k] - k <= 300) {
+        collectParamIdentifiers(skeleton.slice(k + 1, closeParen[k]), paramNames);
+      }
+    }
+    for (const m of skeleton.matchAll(/\blambda\b/g)) {
+      const colon = skeleton.indexOf(':', m.index + 6);
+      const nl = skeleton.indexOf('\n', m.index + 6);
+      if (colon > m.index + 6 && (nl < 0 || colon < nl) && colon - m.index <= 200) {
+        collectParamIdentifiers(skeleton.slice(m.index + 6, colon), paramNames);
+      }
+    }
+  }
+  return paramNames;
+}
+
+function collectPositiveNumericVars(skeleton, hashComments, closeParen, openParen, closeBrace, closeBracket) {
+  const paramNames = collectAllParameterNames(skeleton, hashComments, closeParen, openParen);
+  const declCounts = new Map();
+  const positiveCandidates = new Set();
+  const disqualified = new Set(paramNames);
+
+  if (!hashComments) {
+    // Linear scan over const/let/var declarations; only single-declared, non-reassigned, non-param `const` bindings qualify.
+    for (const m of skeleton.matchAll(/\b(const|let|var)\b/g)) {
+      const kind = m[1];
+      let k = m.index + kind.length;
+      const limit = Math.min(skeleton.length, k + 512);
+      while (k < limit) {
+        while (k < limit && /[ \t]/.test(skeleton[k])) k++;
+        if (k >= limit || skeleton[k] === ';' || skeleton[k] === '\n') break;
+        if (skeleton[k] === '{' || skeleton[k] === '[') {
+          const close = skeleton[k] === '{' ? closeBrace[k] : closeBracket[k];
+          if (close > k && close < limit) {
+            collectParamIdentifiers(skeleton.slice(k + 1, close), disqualified);
+            k = close + 1;
+          }
+          break;
+        }
+        const idStart = k;
+        while (k < limit && /[\w$]/.test(skeleton[k])) k++;
+        const ident = skeleton.slice(idStart, k);
+        if (!/^[A-Za-z_$][\w$]*$/.test(ident)) break;
+        declCounts.set(ident, (declCounts.get(ident) ?? 0) + 1);
+        while (k < limit && /[ \t]/.test(skeleton[k])) k++;
+        if (skeleton[k] !== '=' || skeleton[k + 1] === '=') {
+          disqualified.add(ident);
+          if (skeleton[k] === ',') { k++; continue; }
+          break;
+        }
+        k++;
+        const rhsStart = k;
+        while (k < limit) {
+          const ch = skeleton[k];
+          if (ch === '(' && closeParen[k] > k && closeParen[k] < limit) { k = closeParen[k] + 1; continue; }
+          if (ch === '{' && closeBrace[k] > k && closeBrace[k] < limit) { k = closeBrace[k] + 1; continue; }
+          if (ch === '[' && closeBracket[k] > k && closeBracket[k] < limit) { k = closeBracket[k] + 1; continue; }
+          if (ch === ',' || ch === ';' || ch === '\n') break;
+          k++;
+        }
+        const rhs = skeleton.slice(rhsStart, k).trim();
+        const val = evalSimpleNumericLiteral(rhs);
+        if (kind === 'const' && val !== null && val > 0) positiveCandidates.add(ident);
+        else disqualified.add(ident);
+        if (skeleton[k] === ',') { k++; continue; }
+        break;
+      }
+    }
+    // Disqualify any identifier mutated via assignment or increment/decrement.
+    for (const m of skeleton.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*(?:[+\-*/%&|^]?=(?![=>])|\+\+|--)/g)) {
+      const before = skeleton.slice(Math.max(0, m.index - 12), m.index);
+      if (!/\b(?:const|let|var)\s+$/.test(before)) disqualified.add(m[1]);
+    }
+  } else {
+    for (const m of skeleton.matchAll(/(?:^|\n)[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(?!=)[ \t]*([^\n;]+)/g)) {
+      const ident = m[1];
+      declCounts.set(ident, (declCounts.get(ident) ?? 0) + 1);
+      const val = evalSimpleNumericLiteral(m[2]);
+      if (val !== null && val > 0) positiveCandidates.add(ident);
+      else disqualified.add(ident);
+    }
+  }
+
   const positiveVars = new Set();
-  const assignRe = hashComments
-    ? /(?:^|\n)[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*([^\n#;]+)/g
-    : /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^\n;,]+)/g;
-  for (const m of skeleton.matchAll(assignRe)) {
-    const val = evalSimpleNumericLiteral(m[2]);
-    if (val !== null && val > 0) positiveVars.add(m[1]);
+  for (const ident of positiveCandidates) {
+    if (declCounts.get(ident) === 1 && !disqualified.has(ident)) {
+      positiveVars.add(ident);
+    }
   }
   return positiveVars;
 }
 
-function isPositiveDelayExpression(argExpr, positiveVars) {
+function collectEnclosingPromiseWrapperParams(skeleton, promiseIndex, openParen) {
+  const params = new Set();
+  const windowStart = Math.max(0, promiseIndex - 120);
+  const before = skeleton.slice(windowStart, promiseIndex);
+  const arrowIdx = before.lastIndexOf('=>');
+  if (arrowIdx >= 0) {
+    let p = windowStart + arrowIdx - 1;
+    while (p >= windowStart && /\s/.test(skeleton[p])) p--;
+    if (p >= windowStart && skeleton[p] === ')' && openParen[p] >= 0 && p - openParen[p] <= 120) {
+      collectParamIdentifiers(skeleton.slice(openParen[p] + 1, p), params);
+    } else if (p >= windowStart && /[\w$]/.test(skeleton[p])) {
+      let start = p;
+      while (start > 0 && /[\w$]/.test(skeleton[start - 1])) start--;
+      params.add(skeleton.slice(start, p + 1));
+    }
+  }
+  const fnMatch = /\bfunction(?:\s+[A-Za-z_$][\w$]*)?\s*\(([^()]{1,120})\)\s*\{[^{}]{0,60}$/.exec(before);
+  if (fnMatch) collectParamIdentifiers(fnMatch[1], params);
+  return params;
+}
+
+function isPositiveDelayExpression(argExpr, positiveVars, excludedIdents = EMPTY_STRING_SET) {
   const s = stripOuterParens(argExpr);
   if (!s) return false;
   const num = evalSimpleNumericLiteral(s);
   if (num !== null) return num > 0;
-  if (/^[A-Za-z_$][\w$]*$/.test(s) && positiveVars.has(s)) return true;
+  if (/^[A-Za-z_$][\w$]*$/.test(s) && positiveVars.has(s) && !excludedIdents.has(s)) return true;
   return false;
 }
 
@@ -2585,30 +2764,119 @@ function isUnconditionalResolveCallback(cbArg, resolveParam, rejectParam) {
   const trimmed = stripOuterParens(cbArg);
   if (!trimmed) return false;
   if (trimmed === resolveParam) return true;
-  if (rejectParam && trimmed.includes(rejectParam)) return false;
+  if (rejectParam) {
+    const escapedReject = rejectParam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(?<![\\w$])${escapedReject}(?![\\w$])`).test(trimmed)) return false;
+  }
   if (/\b(?:reject|abort|kill|destroy|clearInterval|clearTimeout|throw|Error|exit)\b/.test(trimmed)) return false;
   const escaped = resolveParam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const arrowOrFn = /^(?:async\s+)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>|^function\b/.test(trimmed);
   if (!arrowOrFn) return false;
-  return new RegExp(`\\b${escaped}\\s*\\(`).test(trimmed);
+  return new RegExp(`(?<![\\w$])${escaped}\\s*\\(`).test(trimmed);
+}
+
+function scanTimersPromiseImportsLinear(skeleton, literals, timersPromiseFns, timersPromiseNs) {
+  // 1. Static ESM imports: isolate each `import` statement without crossing `;`, another `import`, or `\n` outside `{...}`.
+  for (const m of skeleton.matchAll(/\bimport\b/g)) {
+    const start = m.index;
+    if (start > 0 && skeleton[start - 1] === '.') continue;
+    let k = start + 6;
+    while (k < skeleton.length && (skeleton[k] === ' ' || skeleton[k] === '\t')) k++;
+    if (k >= skeleton.length || skeleton[k] === '(' || skeleton[k] === '.') continue;
+    if (skeleton.startsWith('__STR_', k)) continue; // side-effect import `import '...'`
+    let braceDepth = 0;
+    const limit = Math.min(skeleton.length, k + 240);
+    let end = k;
+    while (end < limit) {
+      const ch = skeleton[end];
+      if (ch === '{') braceDepth++;
+      else if (ch === '}' && braceDepth > 0) braceDepth--;
+      else if (ch === ';') break;
+      else if (ch === '\n' && braceDepth === 0) break;
+      else if (braceDepth === 0 && ch === 'i' && skeleton.startsWith('import', end)
+        && (end === k || !/[\w$]/.test(skeleton[end - 1]))
+        && !/[\w$]/.test(skeleton[end + 6] ?? '')) {
+        break;
+      }
+      end++;
+    }
+    const stmt = skeleton.slice(k, end);
+    const fromMatch = /\bfrom\s+__STR_(\d+)__/.exec(stmt);
+    if (!fromMatch) continue;
+    const spec = String(literals[Number(fromMatch[1])] ?? '').trim();
+    if (spec !== 'node:timers/promises' && spec !== 'timers/promises') continue;
+    const clause = stmt.slice(0, fromMatch.index).trim();
+    const nsMatch = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(clause);
+    if (nsMatch) timersPromiseNs.add(nsMatch[1]);
+    const braceStart = clause.indexOf('{');
+    const braceEnd = clause.lastIndexOf('}');
+    if (braceStart >= 0 && braceEnd > braceStart) {
+      const before = clause.slice(0, braceStart).replace(/,\s*$/, '').trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(before)) timersPromiseNs.add(before);
+      for (const part of clause.slice(braceStart + 1, braceEnd).split(',')) {
+        const piece = part.trim();
+        const asM = /^setTimeout\s+as\s+([A-Za-z_$][\w$]*)$/.exec(piece);
+        if (asM) timersPromiseFns.add(asM[1]);
+        else if (piece === 'setTimeout') timersPromiseFns.add('setTimeout');
+      }
+    } else if (!nsMatch && /^[A-Za-z_$][\w$]*$/.test(clause)) {
+      timersPromiseNs.add(clause);
+    }
+  }
+
+  // 2. Dynamic `import(...)` / `require(...)` assignments: strictly linear forward scan up to `=`, `;`, or `\n`.
+  for (const m of skeleton.matchAll(/\b(?:const|let|var)\b/g)) {
+    const start = m.index + m[0].length;
+    const limit = Math.min(skeleton.length, start + 160);
+    let eqIdx = -1;
+    let braceDepth = 0;
+    for (let k = start; k < limit; k++) {
+      const ch = skeleton[k];
+      if (ch === '{') braceDepth++;
+      else if (ch === '}' && braceDepth > 0) braceDepth--;
+      else if (ch === ';' || (ch === '\n' && braceDepth === 0)) break;
+      else if (ch === '=' && braceDepth === 0) {
+        if (skeleton[k + 1] !== '=' && skeleton[k + 1] !== '>') eqIdx = k;
+        break;
+      }
+    }
+    if (eqIdx < 0) continue;
+    const rhsSlice = skeleton.slice(eqIdx + 1, Math.min(skeleton.length, eqIdx + 96));
+    const callMatch = /^\s*(?:await\s+)?(?:import|require)\s*\(\s*__STR_(\d+)__\s*\)/.exec(rhsSlice);
+    if (!callMatch) continue;
+    const spec = String(literals[Number(callMatch[1])] ?? '').trim();
+    if (spec !== 'node:timers/promises' && spec !== 'timers/promises') continue;
+    const lhs = skeleton.slice(start, eqIdx).trim();
+    const braceStart = lhs.indexOf('{');
+    const braceEnd = lhs.lastIndexOf('}');
+    if (braceStart >= 0 && braceEnd > braceStart) {
+      for (const part of lhs.slice(braceStart + 1, braceEnd).split(',')) {
+        const piece = part.trim();
+        const alias = /^setTimeout\s*:\s*([A-Za-z_$][\w$]*)$/.exec(piece);
+        if (alias) timersPromiseFns.add(alias[1]);
+        else if (piece === 'setTimeout') timersPromiseFns.add('setTimeout');
+      }
+    } else if (/^[A-Za-z_$][\w$]*$/.test(lhs)) {
+      timersPromiseNs.add(lhs);
+    }
+  }
 }
 
 function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } = {}) {
   if (!canonicalRepoPath(path) || !isInspectableTestCodePath(path)) return [];
   const raw = String(text ?? '');
   const hashComments = /\.(?:py|rb)$/i.test(path);
-  const { skeleton, literals } = tokenizeTestCode(raw, { hashComments });
-  const rawLines = raw.split(/\r?\n/);
+  const { skeleton, literals, lineComments, lineHasCode, lineHasComment } = tokenizeTestCode(raw, { hashComments });
   const lineStarts = buildLineStarts(skeleton);
-  const { closeParen, closeBrace } = buildDelimiterMaps(skeleton);
-  const positiveVars = collectPositiveNumericVars(skeleton, hashComments);
+  const { closeParen, openParen, closeBrace, closeBracket } = buildDelimiterMaps(skeleton);
+  const positiveVars = collectPositiveNumericVars(skeleton, hashComments, closeParen, openParen, closeBrace, closeBracket);
   const findings = [];
   const seenLines = new Set();
 
   const recordFinding = (offset, snippet) => {
     const line = lineNumberAt(lineStarts, offset);
     if (seenLines.has(line)) return;
-    const commentCtx = getAdjacentCommentText(rawLines, line, hashComments);
+    const commentCtx = getAdjacentCommentText(lineComments, lineHasCode, lineHasComment, line);
     if (SLEEP_ALLOW_COMMENT_RE.test(commentCtx) || hasTrackingIssueRef(commentCtx)) return;
     seenLines.add(line);
     const detail = `Fixed-duration sleep (${snippet}) in test code introduces timing flakiness. Wait on a deterministic event, condition, or injected clock instead (or annotate with // pdd-allow-sleep: <reason> or a tracking #issue).`;
@@ -2625,47 +2893,9 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
   };
 
   if (!hashComments) {
-    // Track imports from node:timers/promises or timers/promises.
     const timersPromiseFns = new Set();
     const timersPromiseNs = new Set(['timersPromises']);
-    for (const m of skeleton.matchAll(/\bimport\s+([^;]{1,160}?)\s+from\s+__STR_(\d+)__/g)) {
-      const spec = String(literals[Number(m[2])] ?? '').trim();
-      if (spec !== 'node:timers/promises' && spec !== 'timers/promises') continue;
-      const clause = m[1].trim();
-      const nsMatch = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(clause);
-      if (nsMatch) timersPromiseNs.add(nsMatch[1]);
-      const braceStart = clause.indexOf('{');
-      const braceEnd = clause.lastIndexOf('}');
-      if (braceStart >= 0 && braceEnd > braceStart) {
-        const before = clause.slice(0, braceStart).replace(/,\s*$/, '').trim();
-        if (/^[A-Za-z_$][\w$]*$/.test(before)) timersPromiseNs.add(before);
-        for (const part of clause.slice(braceStart + 1, braceEnd).split(',')) {
-          const piece = part.trim();
-          const asM = /^setTimeout\s+as\s+([A-Za-z_$][\w$]*)$/.exec(piece);
-          if (asM) timersPromiseFns.add(asM[1]);
-          else if (piece === 'setTimeout') timersPromiseFns.add('setTimeout');
-        }
-      } else if (!nsMatch && /^[A-Za-z_$][\w$]*$/.test(clause)) {
-        timersPromiseNs.add(clause);
-      }
-    }
-    for (const m of skeleton.matchAll(/\b(?:const|let|var)\s+([^=;\n]{1,120})\s*=\s*(?:await\s+)?(?:import|require)\s*\(\s*__STR_(\d+)__\s*\)/g)) {
-      const spec = String(literals[Number(m[2])] ?? '').trim();
-      if (spec !== 'node:timers/promises' && spec !== 'timers/promises') continue;
-      const lhs = m[1].trim();
-      const braceStart = lhs.indexOf('{');
-      const braceEnd = lhs.lastIndexOf('}');
-      if (braceStart >= 0 && braceEnd > braceStart) {
-        for (const part of lhs.slice(braceStart + 1, braceEnd).split(',')) {
-          const piece = part.trim();
-          const alias = /^setTimeout\s*:\s*([A-Za-z_$][\w$]*)$/.exec(piece);
-          if (alias) timersPromiseFns.add(alias[1]);
-          else if (piece === 'setTimeout') timersPromiseFns.add('setTimeout');
-        }
-      } else if (/^[A-Za-z_$][\w$]*$/.test(lhs)) {
-        timersPromiseNs.add(lhs);
-      }
-    }
+    scanTimersPromiseImportsLinear(skeleton, literals, timersPromiseFns, timersPromiseNs);
 
     // 1. JS/TS: new Promise((resolve) => setTimeout(resolve, <positive ms>))
     for (const m of skeleton.matchAll(/\bnew\s+Promise\s*\(/g)) {
@@ -2683,10 +2913,11 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
       const stMatch = /\bsetTimeout\s*\(/.exec(rest);
       if (!stMatch) continue;
       const stOpenInSkel = openIdx + 1 + execMatch[0].length + stMatch.index + stMatch[0].length - 1;
-      const parsed = parseTopLevelArgsLinear(skeleton, stOpenInSkel, closeParen, closeBrace, 3);
+      const parsed = parseTopLevelArgsLinear(skeleton, stOpenInSkel, closeParen, closeBrace, closeBracket, 3);
       if (!parsed || parsed.args.length < 2) continue;
       if (!isUnconditionalResolveCallback(parsed.args[0], resolveParam, rejectParam)) continue;
-      if (!isPositiveDelayExpression(parsed.args[1], positiveVars)) continue;
+      const wrapperParams = collectEnclosingPromiseWrapperParams(skeleton, m.index, openParen);
+      if (!isPositiveDelayExpression(parsed.args[1], positiveVars, wrapperParams)) continue;
       recordFinding(m.index, 'new Promise(...setTimeout...)');
     }
 
@@ -2696,7 +2927,7 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
       const hasPromisesSegment = /\.\s*promises\s*\./.test(m[0]);
       if (!hasPromisesSegment && !timersPromiseNs.has(ns)) continue;
       const openIdx = m.index + m[0].length - 1;
-      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, closeBracket, 2);
       if (!parsed || parsed.args.length < 1) continue;
       if (!isPositiveDelayExpression(parsed.args[0], positiveVars)) continue;
       recordFinding(m.index, `${ns}.setTimeout(...)`);
@@ -2708,7 +2939,7 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
         const before = skeleton.slice(Math.max(0, m.index - 24), m.index);
         if (/\bfunction\s*$/.test(before)) continue;
         const openIdx = m.index + m[0].length - 1;
-        const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+        const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, closeBracket, 2);
         if (!parsed || parsed.args.length < 1) continue;
         if (!isPositiveDelayExpression(parsed.args[0], positiveVars)) continue;
         recordFinding(m.index, `timers/promises ${fn}(...)`);
@@ -2718,7 +2949,7 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
     // 3. JS/TS: Atomics.wait(arr, idx, val, <positive timeout>)
     for (const m of skeleton.matchAll(/\bAtomics\s*\.\s*wait\s*\(/g)) {
       const openIdx = m.index + m[0].length - 1;
-      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 4);
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, closeBracket, 4);
       if (!parsed || parsed.args.length < 4) continue;
       if (!isPositiveDelayExpression(parsed.args[3], positiveVars)) continue;
       recordFinding(m.index, 'Atomics.wait(...)');
@@ -2728,7 +2959,7 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
   // 4. Python (and JS): time.sleep(<secs>) / asyncio.sleep(<secs>)
   for (const m of skeleton.matchAll(/\b(time|asyncio)\s*\.\s*sleep\s*\(/g)) {
     const openIdx = m.index + m[0].length - 1;
-    const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+    const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, closeBracket, 2);
     if (!parsed || parsed.args.length < 1) continue;
     if (!isPositiveDelayExpression(parsed.args[0], positiveVars)) continue;
     recordFinding(m.index, `${m[1]}.sleep(...)`);
@@ -2743,7 +2974,7 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
     if (endIdx < 0) continue;
     const after = skeleton.slice(endIdx + 1, Math.min(skeleton.length, endIdx + 16));
     if (/^\s*\{/.test(after)) continue;
-    const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+    const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, closeBracket, 2);
     if (!parsed || parsed.args.length < 1) continue;
     if (!isPositiveDelayExpression(parsed.args[0], positiveVars)) continue;
     recordFinding(m.index, 'sleep(...)');
@@ -2757,40 +2988,6 @@ export function lintTestFixedSleeps(text, { path = 'test/example.test.mjs' } = {
   return collectTestFixedSleepFindings(text, { path }).map(item => item.warning);
 }
 
-function extractOptionPropertyValue(objExpr, propName, literals) {
-  const trimmed = String(objExpr ?? '').trim();
-  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
-  const inner = trimmed.slice(1, -1);
-  // Linear scan over top-level properties of the object literal.
-  let depthParen = 0;
-  let depthBrace = 0;
-  let depthBracket = 0;
-  let propStart = 0;
-  const segments = [];
-  for (let i = 0; i < inner.length; i++) {
-    const ch = inner[i];
-    if (ch === '(') depthParen++;
-    else if (ch === ')') depthParen = Math.max(0, depthParen - 1);
-    else if (ch === '{') depthBrace++;
-    else if (ch === '}') depthBrace = Math.max(0, depthBrace - 1);
-    else if (ch === '[') depthBracket++;
-    else if (ch === ']') depthBracket = Math.max(0, depthBracket - 1);
-    else if (ch === ',' && depthParen === 0 && depthBrace === 0 && depthBracket === 0) {
-      segments.push(inner.slice(propStart, i));
-      propStart = i + 1;
-    }
-  }
-  segments.push(inner.slice(propStart));
-  for (const seg of segments) {
-    const colon = seg.indexOf(':');
-    if (colon < 0) continue;
-    const rawKey = seg.slice(0, colon).trim();
-    const key = resolveSingleLiteralString(rawKey, literals) ?? rawKey;
-    if (key === propName) return seg.slice(colon + 1).trim();
-  }
-  return null;
-}
-
 function resolveSingleLiteralString(expr, literals) {
   const m = /^__STR_(\d+)__$/.exec(String(expr ?? '').trim());
   if (!m) return null;
@@ -2798,19 +2995,76 @@ function resolveSingleLiteralString(expr, literals) {
   return typeof val === 'string' ? val : null;
 }
 
+function extractExprStringText(expr, literals) {
+  const parts = [];
+  for (const m of String(expr ?? '').matchAll(/__STR_(\d+)__/g)) {
+    const val = literals[Number(m[1])];
+    if (typeof val === 'string') parts.push(val);
+  }
+  return parts.join(' ');
+}
+
+// Strict O(1)-jump linear property extractor using precomputed delimiter maps.
+function extractOptionPropertyValueLinear(skeleton, openBraceIdx, closeParen, closeBrace, closeBracket, propName, literals) {
+  const endBrace = closeBrace[openBraceIdx];
+  if (endBrace < 0) return null;
+  let propStart = openBraceIdx + 1;
+  let k = propStart;
+  while (k <= endBrace) {
+    if (k < endBrace) {
+      const ch = skeleton[k];
+      if (ch === '(' && closeParen[k] > k && closeParen[k] < endBrace) { k = closeParen[k] + 1; continue; }
+      if (ch === '{' && closeBrace[k] > k && closeBrace[k] < endBrace) { k = closeBrace[k] + 1; continue; }
+      if (ch === '[' && closeBracket[k] > k && closeBracket[k] < endBrace) { k = closeBracket[k] + 1; continue; }
+      if (ch !== ',') { k++; continue; }
+    }
+    // Inspect top-level property segment [propStart, k)
+    let colonIdx = -1;
+    let scan = propStart;
+    while (scan < k) {
+      const ch = skeleton[scan];
+      if (ch === '(' && closeParen[scan] > scan && closeParen[scan] < k) { scan = closeParen[scan] + 1; continue; }
+      if (ch === '{' && closeBrace[scan] > scan && closeBrace[scan] < k) { scan = closeBrace[scan] + 1; continue; }
+      if (ch === '[' && closeBracket[scan] > scan && closeBracket[scan] < k) { scan = closeBracket[scan] + 1; continue; }
+      if (ch === ':') { colonIdx = scan; break; }
+      scan++;
+    }
+    if (colonIdx >= 0) {
+      const rawKey = skeleton.slice(propStart, colonIdx).trim();
+      const key = resolveSingleLiteralString(rawKey, literals) ?? rawKey;
+      if (key === propName) return skeleton.slice(colonIdx + 1, k).trim();
+    }
+    propStart = k + 1;
+    k++;
+  }
+  return null;
+}
+
+function findOpeningBraceAtArg(skeleton, argStart, argLength, closeBrace) {
+  let k = argStart;
+  const end = argStart + argLength;
+  while (k < end && /\s/.test(skeleton[k])) k++;
+  if (k >= end || skeleton[k] !== '{') return -1;
+  const closeIdx = closeBrace[k];
+  if (closeIdx < 0 || closeIdx >= end) return -1;
+  for (let tail = closeIdx + 1; tail < end; tail++) {
+    if (!/\s/.test(skeleton[tail])) return -1;
+  }
+  return k;
+}
+
 function collectTestUnexcusedSkipFindings(text, { path = 'test/example.test.mjs' } = {}) {
   if (!canonicalRepoPath(path) || !isInspectableTestCodePath(path)) return [];
   const raw = String(text ?? '');
   const hashComments = /\.(?:py|rb)$/i.test(path);
-  const { skeleton, literals } = tokenizeTestCode(raw, { hashComments });
-  const rawLines = raw.split(/\r?\n/);
+  const { skeleton, literals, lineComments, lineHasCode, lineHasComment } = tokenizeTestCode(raw, { hashComments });
   const lineStarts = buildLineStarts(skeleton);
-  const { closeParen, closeBrace } = buildDelimiterMaps(skeleton);
+  const { closeParen, closeBrace, closeBracket } = buildDelimiterMaps(skeleton);
   const findings = [];
   const seenLines = new Set();
 
   const hasCommentExcuse = line => {
-    const commentCtx = getAdjacentCommentText(rawLines, line, hashComments);
+    const commentCtx = getAdjacentCommentText(lineComments, lineHasCode, lineHasComment, line);
     return SKIP_ALLOW_COMMENT_RE.test(commentCtx) || hasTrackingIssueRef(commentCtx);
   };
 
@@ -2837,28 +3091,37 @@ function collectTestUnexcusedSkipFindings(text, { path = 'test/example.test.mjs'
     const directSkipRe = /(?<![\w$.])((?:test|it|describe|suite)\s*\.\s*skip|xit|xtest|xdescribe)\s*\(/g;
     for (const m of skeleton.matchAll(directSkipRe)) {
       const openIdx = m.index + m[0].length - 1;
-      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
-      const firstStr = parsed?.args?.[0] ? resolveSingleLiteralString(parsed.args[0], literals) : null;
-      if (firstStr && hasTrackingIssueRef(firstStr)) continue;
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, closeBracket, 2);
+      const titleText = parsed?.args?.[0] ? extractExprStringText(parsed.args[0], literals) : '';
+      if (titleText && hasTrackingIssueRef(titleText)) continue;
       recordSkip(m.index, m[1].replace(/\s+/g, ''));
     }
 
-    // 2. JS/TS: test(..., { skip: true | "" | placeholder }) / it(..., { skip: ... })
+    // 2. JS/TS: test(..., { skip: true | "" | placeholder }) and 1st-arg test({ skip: true }, fn)
     const optsSkipRe = /(?<![\w$.])(test|it|describe|suite)\s*\(/g;
     for (const m of skeleton.matchAll(optsSkipRe)) {
       const openIdx = m.index + m[0].length - 1;
-      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 3);
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, closeBracket, 3);
       if (!parsed || parsed.args.length < 2) continue;
-      const optsArg = parsed.args[1].trim();
-      if (!optsArg.startsWith('{') || !optsArg.endsWith('}')) continue;
-      const skipVal = extractOptionPropertyValue(optsArg, 'skip', literals);
+      let optsIdx = -1;
+      let openBraceIdx = findOpeningBraceAtArg(skeleton, parsed.argStarts[1], parsed.args[1].length, closeBrace);
+      if (openBraceIdx >= 0) {
+        optsIdx = 1;
+      } else {
+        openBraceIdx = findOpeningBraceAtArg(skeleton, parsed.argStarts[0], parsed.args[0].length, closeBrace);
+        if (openBraceIdx >= 0) optsIdx = 0;
+      }
+      if (optsIdx < 0) continue;
+      const skipVal = extractOptionPropertyValueLinear(skeleton, openBraceIdx, closeParen, closeBrace, closeBracket, 'skip', literals);
       if (skipVal === null) continue;
       const cleanedVal = stripOuterParens(skipVal);
       if (!cleanedVal || cleanedVal === 'false' || cleanedVal === 'undefined' || cleanedVal === 'null') continue;
-      const titleStr = resolveSingleLiteralString(parsed.args[0], literals);
-      if (titleStr && hasTrackingIssueRef(titleStr)) continue;
+      if (optsIdx === 1) {
+        const titleText = extractExprStringText(parsed.args[0], literals);
+        if (titleText && hasTrackingIssueRef(titleText)) continue;
+      }
       if (cleanedVal === 'true' || cleanedVal === '!0') {
-        recordSkip(m.index, `${m[1]}(..., { skip: true })`);
+        recordSkip(m.index, optsIdx === 0 ? `${m[1]}({ skip: true }, ...)` : `${m[1]}(..., { skip: true })`);
         continue;
       }
       const skipStr = resolveSingleLiteralString(cleanedVal, literals);
@@ -2874,7 +3137,7 @@ function collectTestUnexcusedSkipFindings(text, { path = 'test/example.test.mjs'
     const ctxSkipRe = /(?<![\w$.])(t|ctx)\s*\.\s*skip\s*\(/g;
     for (const m of skeleton.matchAll(ctxSkipRe)) {
       const openIdx = m.index + m[0].length - 1;
-      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 2);
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, closeBracket, 2);
       if (!parsed) continue;
       if (parsed.args.length === 0 || !parsed.args[0].trim()) {
         recordSkip(m.index, `${m[1]}.skip()`);
@@ -2898,7 +3161,7 @@ function collectTestUnexcusedSkipFindings(text, { path = 'test/example.test.mjs'
         recordSkip(m.index, label);
         continue;
       }
-      const parsed = parseTopLevelArgsLinear(skeleton, wsEnd, closeParen, closeBrace, 4);
+      const parsed = parseTopLevelArgsLinear(skeleton, wsEnd, closeParen, closeBrace, closeBracket, 4);
       if (!parsed || parsed.args.length === 0 || parsed.args.every(a => !a.trim())) {
         recordSkip(m.index, `${label}()`);
         continue;
@@ -2923,7 +3186,7 @@ function collectTestUnexcusedSkipFindings(text, { path = 'test/example.test.mjs'
     // Also detect bare pytest.skip() inside Python test bodies with missing/empty/placeholder reason.
     for (const m of skeleton.matchAll(/(?<![.\w])pytest\s*\.\s*skip\s*\(/g)) {
       const openIdx = m.index + m[0].length - 1;
-      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, 3);
+      const parsed = parseTopLevelArgsLinear(skeleton, openIdx, closeParen, closeBrace, closeBracket, 3);
       if (!parsed) continue;
       if (parsed.args.length === 0 || parsed.args.every(a => !a.trim())) {
         recordSkip(m.index, 'pytest.skip()');

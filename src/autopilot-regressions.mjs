@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-regressions.prompt.md (sha256: 38db0c18aadfdbda8ebfe2d98fa4ce1eda5a8cd9739440241bcb643a27335941).
+// Generated from prompts/cli/autopilot-regressions.prompt.md (sha256: 3f7ba8760a9d849333624a883dd8dac9739396a3c59643fc9bd8dc2b72e6fbac).
 import * as nativeFs from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -764,11 +764,15 @@ export const FLAKE_WINDOW_DAYS = 7;
 
 const FLAKE_OUTCOMES = new Set(['flaked-then-passed', 'reproduced-red', 'base-test-red']);
 const FLAKE_DAY_MS = 86_400_000;
+const MAX_DATE_MS = 8_640_000_000_000_000;
+const validDateMs = ms => typeof ms === 'number' && Number.isFinite(ms) && Math.abs(ms) <= MAX_DATE_MS;
+const safeIsoFromMs = ms => (validDateMs(ms) ? new Date(ms).toISOString() : null);
 
 export function normalizeFlakeEntry(entry, { now = Date.now, requireTs = false } = {}) {
   if (!object(entry)) return null;
   const outcome = typeof entry.outcome === 'string' ? entry.outcome.trim() : '';
   if (!FLAKE_OUTCOMES.has(outcome)) return null;
+  if (typeof entry.target !== 'string') return null;
   const target = safe(entry.target).slice(0, 200);
   if (!target) return null;
 
@@ -776,12 +780,12 @@ export function normalizeFlakeEntry(entry, { now = Date.now, requireTs = false }
   if (entry.ts === undefined) {
     if (requireTs) return null;
     const nowMs = typeof now === 'function' ? now() : Number(now);
-    if (!Number.isFinite(nowMs)) return null;
-    ts = new Date(nowMs).toISOString();
-  } else if (typeof entry.ts === 'number' && Number.isFinite(entry.ts)) {
-    ts = new Date(entry.ts).toISOString();
+    ts = safeIsoFromMs(nowMs);
+  } else if (typeof entry.ts === 'number') {
+    ts = safeIsoFromMs(entry.ts);
   } else if (typeof entry.ts === 'string') {
-    ts = iso(entry.ts);
+    const parsedMs = time(entry.ts);
+    ts = parsedMs === null ? null : safeIsoFromMs(parsedMs);
   }
   if (!ts) return null;
 
@@ -861,12 +865,12 @@ export function summarizeRecurringFlakes(entries, {
   threshold = FLAKE_REPEAT_THRESHOLD,
   repo = null,
 } = {}) {
-  const effectiveNow = Number.isFinite(nowMs) ? nowMs : Date.now();
+  const effectiveNow = validDateMs(nowMs) ? nowMs : Date.now();
   const days = typeof windowDays === 'number' && Number.isFinite(windowDays) && windowDays > 0
     ? windowDays
     : FLAKE_WINDOW_DAYS;
   const minCount = positive(threshold) ? threshold : FLAKE_REPEAT_THRESHOLD;
-  const cutoffMs = effectiveNow - days * FLAKE_DAY_MS;
+  const cutoffMs = Math.max(-MAX_DATE_MS, effectiveNow - days * FLAKE_DAY_MS);
   const repoFilterLower = typeof repo === 'string' && repo.trim() ? repo.trim().toLowerCase() : null;
 
   const list = typeof entries === 'string'

@@ -222,14 +222,16 @@ Export pure deterministic constants `FLAKE_LEDGER_MAX_ENTRIES = 500`,
 - `normalizeFlakeEntry(entry, {now, requireTs}?)`: validate a plain object into
   `{ts, repo, issue, pr, head, target, outcome, detail}` or return `null` when
   invalid. `outcome` must be strictly one of `'flaked-then-passed'`,
-  `'reproduced-red'`, or `'base-test-red'`. `target` is secret-redacted,
-  stripped of control characters and newlines, whitespace-collapsed, and capped
-  to 200 characters (empty returns `null`). `ts` is ISO-8601 UTC (defaulting to
-  `now()` only when `entry.ts === undefined` and `!requireTs`; invalid or
-  required-missing returns `null`). `repo` is a valid `owner/name` or `null`;
-  `issue` and `pr` are positive safe integers or `null`; `head` is trimmed and
-  bounded to 40 characters (lowercased when 7–40 hex) or `null`; `detail` is a
-  safe redacted single-line string bounded to 300 characters or `null`.
+  `'reproduced-red'`, or `'base-test-red'`. `target` must be a string and is
+  secret-redacted, stripped of control characters and newlines,
+  whitespace-collapsed, and capped to 200 characters (non-string or empty
+  returns `null`). `ts` is ISO-8601 UTC within valid ECMAScript Date bounds
+  (`|ms| <= 8.64e15`, defaulting to `now()` only when `entry.ts === undefined`
+  and `!requireTs`; invalid, out-of-range, or required-missing returns `null`
+  without throwing). `repo` is a valid `owner/name` or `null`; `issue` and `pr`
+  are positive safe integers or `null`; `head` is trimmed and bounded to 40
+  characters (lowercased when 7–40 hex) or `null`; `detail` is a safe redacted
+  single-line string bounded to 300 characters or `null`.
 - `parseFlakeLedger(raw)`: parse newline-delimited JSON fail-safely without
   throwing, ignoring blank, malformed, or timestamp-less lines via
   `normalizeFlakeEntry(parsed, {requireTs: true})`.
