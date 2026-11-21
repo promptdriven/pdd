@@ -36,6 +36,8 @@ function child(args, env, cwd = root) {
 for (const entry of ['focused import', 'npm preload']) test(`${entry} removes inherited suite controls before tests and subprocesses`, t => {
   const f = caller(t), project = join(f.dir, 'suite-project');
   mkdirSync(join(project, 'test/helpers'), { recursive: true });
+  mkdirSync(join(project, 'scripts'), { recursive: true });
+  writeFileSync(join(project, 'scripts/list-tests.mjs'), readFileSync(join(root, 'scripts/list-tests.mjs')));
   writeFileSync(join(project, 'test/helpers/test-home.mjs'), readFileSync(join(root, 'test/helpers/test-home.mjs')));
   writeFileSync(join(project, 'test/helpers/test-net-guard.mjs'), readFileSync(join(root, 'test/helpers/test-net-guard.mjs')));
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
@@ -193,6 +195,8 @@ for (const [file, pattern] of [
 test('npm test isolates a new file that omits the helper import', t => {
   const f = caller(t), before = snapshot(f.home), project = join(f.dir, 'project');
   mkdirSync(join(project, 'test/helpers'), { recursive: true });
+  mkdirSync(join(project, 'scripts'), { recursive: true });
+  writeFileSync(join(project, 'scripts/list-tests.mjs'), readFileSync(join(root, 'scripts/list-tests.mjs')));
   writeFileSync(join(project, 'test/helpers/test-home.mjs'), readFileSync(join(root, 'test/helpers/test-home.mjs')));
   writeFileSync(join(project, 'test/helpers/test-net-guard.mjs'), readFileSync(join(root, 'test/helpers/test-net-guard.mjs')));
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));

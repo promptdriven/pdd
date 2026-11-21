@@ -52,6 +52,8 @@ for (const entry of ['focused import', 'npm preload']) test(`${entry} isolates c
   const dir = mkdtempSync(join(tmpdir(), 'pdd-session-guard-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, 'test/helpers'), { recursive: true });
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  writeFileSync(join(dir, 'scripts/list-tests.mjs'), readFileSync(join(root, 'scripts/list-tests.mjs')));
   writeFileSync(join(dir, 'test/helpers/test-home.mjs'), readFileSync(join(root, 'test/helpers/test-home.mjs')));
   writeFileSync(join(dir, 'test/helpers/test-net-guard.mjs'), readFileSync(join(root, 'test/helpers/test-net-guard.mjs')));
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
