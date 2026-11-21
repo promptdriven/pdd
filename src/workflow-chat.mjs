@@ -903,16 +903,36 @@ export async function ensurePaneBudget(need, ports = {}) {
     const result = await ports[kind](options);
     retained[kind] = result?.reasonCounts ?? {}; closed += result?.closed ?? 0;
   };
-  if (ports.sweepFinished) await sweep('sweepFinished', {graceMs});
-  if (ports.sweepIdle) await sweep('sweepIdle', {graceMs: 60_000});
-  let rows;
-  const countPorts = {...ports,onPaneUsage:value=>{rows=value;ports.onPaneUsage?.(value);}};
+  let rows = [];
+  const countPorts = {...ports, onPaneUsage: value => { rows = value; ports.onPaneUsage?.(value); }};
   let usage = await paneUsage(countPorts);
-  if (usage.budget && usage.panes + need > usage.budget) {
-    if (ports.sweepFinished) await sweep('sweepFinished', {graceMs: 0, need});
-    if (ports.sweepIdle) await sweep('sweepIdle', {graceMs: 0, need});
+  const over = () => Boolean(usage.budget && usage.panes + need > usage.budget);
+  if (!over()) {
+    if (usage.panes > 0) {
+      if (ports.sweepFinished) await sweep('sweepFinished', {graceMs, localOnly: true, paneInventory: rows});
+      if (ports.sweepIdle) await sweep('sweepIdle', {graceMs: 60_000, localOnly: true, paneInventory: rows});
+      if (closed > 0) usage = await paneUsage(countPorts);
+    }
+    return {...usage, closed};
+  }
+  if (ports.sweepFinished) {
+    await sweep('sweepFinished', {graceMs, need, localOnly: true, paneInventory: rows});
     usage = await paneUsage(countPorts);
-    if (usage.panes + need > usage.budget) throw problem('herdr_pane_budget',
+  }
+  if (over() && ports.sweepIdle) {
+    await sweep('sweepIdle', {graceMs: 60_000, need, localOnly: true, paneInventory: rows});
+    usage = await paneUsage(countPorts);
+  }
+  if (over()) {
+    if (ports.sweepFinished) {
+      await sweep('sweepFinished', {graceMs: 0, need});
+      usage = await paneUsage(countPorts);
+    }
+    if (over() && ports.sweepIdle) {
+      await sweep('sweepIdle', {graceMs: 0, need});
+      usage = await paneUsage(countPorts);
+    }
+    if (over()) throw problem('herdr_pane_budget',
       `herdr_pane_budget: Herdr session pdd has ${usage.panes} panes and the budget is ${usage.budget}. This start needs ${need}. pdd closed ${closed} chat tabs; no other chat is safe to close. Retained: ${reasonWords(mergeReasonCounts(...Object.values(retained)))}.\n${ports.describePaneOwners?.(rows ?? []) ?? ''}\nThe count includes personal panes. Close unused tabs, or raise PDD_HERDR_PANE_BUDGET (0 disables it).`);
   }
   return {...usage, closed};
