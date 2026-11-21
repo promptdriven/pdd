@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8f5ac26b031c8fa035dc0e26a6f02d46c04778eb4e118b760e15b0fd868c9c44).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d37cdf1ddcf8f891ac4960637101903e22a8a1e84e0478b517030be461d4bec6).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -47,7 +47,7 @@ import {
   selectionEqual,
 } from './workflow-eligibility.mjs';
 export { readEvidenceEligibility };
-import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
+import { startChat, sendToChat, herdrCommand, chatSession, chatHealth, openChat, rebuildClosedChat, assertRestartCaller, restartChat, validSessionId, closeFinishedChats, closeGraceMs, finishedChats, finishedAt, paneUsage, ensurePaneBudget, countReasons, mergeReasonCounts, reasonWords, expandHome, homeVariable, isFolder, observeLifecycle, applyLifecycle, launchAnchor, sessionEvidenceDue, ownSession, observedSession, START_GRACE_MS, removeStaleLoginFiles } from './workflow-chat.mjs';
 import { samePath } from './workflow-herdr-layout.mjs';
 import { workflowAgentEntry } from './workflow-agents.mjs';
 import { PDD_HERDR_SESSION } from './workflow-herdr-layout.mjs';
@@ -994,7 +994,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   let preCheckedBudget = false;
   try { await ensurePaneBudget(3, p); preCheckedBudget = true; }
   catch (error) {
-    if (['herdr_pane_budget','invalid_pane_budget'].includes(error.code)) return fail([
+    if (['herdr_pane_budget','invalid_pane_budget','invalid_close_grace'].includes(error.code)) return fail([
       ...(automatic && error.code === 'herdr_pane_budget' ? ['Automatic start deferred: panes.'] : []),
       failureReason(error), ...failureDetails(error)].join('\n'));
     // Unknown capacity is not evidence of a full server. Startup retains its
@@ -3207,13 +3207,20 @@ async function startCodeFromCard(run, area, p, packageRoot) {
   commitRun(run, p, latest => {
     latest.branch = branch; latest.prBase = prBase;
     if (equalFact(latest.question, selectedQuestion)) latest.question = null;
-    if (latest.area === selectedArea) { latest.metricsOrigin = { ...(latest.metricsOrigin ?? { origin: 'unknown' }), requiredOutcome: 'code' }; if (sameGate(latest.gate, selectedGate)) latest.gate = null; latest.area = selectedArea + 1; latest.state = latest.question ? 'waiting' : 'running'; latest.doneAt = null; }
+    if (latest.area === selectedArea) {
+      latest.metricsOrigin = { ...(latest.metricsOrigin ?? { origin: 'unknown' }), requiredOutcome: 'code' };
+      if (sameGate(latest.gate, selectedGate)) latest.gate = null;
+      for (const chat of latest.chats ?? []) if (chat.area === latest.areas[selectedArea].name) chat.endedAt ??= p.now();
+      latest.area = selectedArea + 1; latest.state = latest.question ? 'waiting' : 'running'; latest.doneAt = null;
+    }
   });
   const next = run.areas[run.area];
   let chat;
   try { chat = await startNextChat(run, p, packageRoot); }
   catch (error) { if (error?.code === 'workflow_progress_refused') throw error; return `The person chose the code PR at the Story card.${based} The ${next.name} chat startup was not confirmed (${error.code ?? 'error'}). Start it: pdd workflow open ${run.number}`; }
-  return [`The person chose the code PR at the Story card (route card-choice).${based}`,
+  let cleanupWarnings = [];
+  try { cleanupWarnings = (await cleanupRunChats(run, p)).warnings; } catch {}
+  return [...cleanupWarnings, `The person chose the code PR at the Story card (route card-choice).${based}`,
     `Started area ${run.area + 1} of ${run.areas.length}: ${next.name} (${next.steps.join(', ')}) in a new chat: Herdr session pdd, tab "${chat.label}".`,
     `Watch it: pdd workflow open ${run.number}`, 'This chat\'s work is done. Stop here.'].join('\n');
 }
@@ -5049,12 +5056,20 @@ function cancelClosedWaiting(latest, at, reason) {
 const hasNonMergedPr = run => (run.pr ?? []).some(pr => pr.state !== 'merged');
 
 export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs, localOnly = false, paneInventory} = {}, ports = {}) {
-  const p = deps(ports), runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
+  const p = deps(ports);
+  let defaultGraceMs;
+  try { defaultGraceMs = closeGraceMs(p); }
+  catch (error) {
+    if (error?.code === 'invalid_close_grace') return {...fail(error.message), closed: 0, kept: 0, reasonCounts: {}};
+    throw error;
+  }
+  const explicitTidy = graceMs === undefined && need === undefined && timeBudgetMs === undefined && !localOnly;
+  const runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
   let closed = 0;
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
   const livePaneIds = localOnly && Array.isArray(paneInventory) ? new Set(paneInventory.map(row => row.pane_id)) : null;
   const liveWorkspaceIds = localOnly && Array.isArray(paneInventory) ? new Set(paneInventory.map(row => row.workspace_id)) : null;
-  const effectiveGrace = graceMs ?? 15 * 60_000;
+  const localGraceMs = graceMs ?? defaultGraceMs;
   const reconcileSaved = targetRuns => {
     for (const run of targetRuns) {
       const reason = !readRunOwnership(run.runDir, p) ? closedWaitingReason(run) : null;
@@ -5082,13 +5097,13 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs, loc
   }).sort((a,b) => a.at - b.at);
   const sweepCandidates = async candidates => {
     for (const [index,{run,chat}] of candidates.entries()) {
-      if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({chat})=>({area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); return false; }
+      if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({run,chat})=>({runId:run.runId,area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); return false; }
       if (livePaneIds) {
         if (chat) {
           if (!livePaneIds.has(chat.paneId) && (!chat.workspaceId || !liveWorkspaceIds.has(chat.workspaceId))) continue;
           const end = finishedAt(run, chat);
-          if (!chat.closed && (!Number.isFinite(end) || p.now() < Math.max(end, chat.openedAt ?? 0) + effectiveGrace)) {
-            kept.push({area: chat.area, reason: 'grace'});
+          if (!chat.closed && (!Number.isFinite(end) || p.now() < Math.max(end, chat.openedAt ?? 0) + localGraceMs)) {
+            kept.push({runId: run.runId, area: chat.area, reason: 'grace'});
             continue;
           }
         } else {
@@ -5102,13 +5117,19 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs, loc
         release = acquireRunLock(run.runDir);
         const latest = dryRun ? run : readRun(run.runDir);
         if (!latest || latest.runId !== run.runId) continue;
+        const latestChat = chat ? (latest.chats ?? []).find(item => sameChat(item, chat)) : null;
+        const hasRecentOpen = Number.isFinite(latestChat?.openedAt) && p.now() < latestChat.openedAt + defaultGraceMs;
+        const effectiveGrace = graceMs !== undefined ? graceMs
+          : (explicitTidy && ended(latest) && !hasRecentOpen ? 0 : defaultGraceMs);
         const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
-          ...(graceMs === undefined ? {} : {graceMs}), ...(graceMs === 0 ? {reason:'budget'} : {})});
-        closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
+          graceMs: effectiveGrace, ...(need !== undefined && effectiveGrace === 0 ? {reason:'budget'} : {})});
+        closed += result.closed;
+        kept.push(...result.kept.map(item => ({...item, runId: run.runId})));
+        warnings.push(...result.warnings.map(text => ({runId: run.runId, text})));
         if (need !== undefined) { const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) return false; }
       } catch (error) {
         kept.push({runId:run.runId,reason:error.code ?? 'cleanup-unavailable'});
-        if (error.code !== 'run_busy') warnings.push(failureReason(error));
+        if (error.code !== 'run_busy') warnings.push({runId:run.runId,text:failureReason(error)});
       } finally { release?.(); }
     }
     return true;
@@ -5146,15 +5167,22 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs, loc
         } finally { release?.(); }
         if (endedNow) {
           if (need !== undefined) {
+            for (let i = kept.length - 1; i >= 0; i--) if (kept[i].runId === run.runId) kept.splice(i, 1);
+            for (let i = warnings.length - 1; i >= 0; i--) if (warnings[i].runId === run.runId) warnings.splice(i, 1);
             const keepGoing = await sweepCandidates(candidatesFor([run]));
             if (!keepGoing) break;
           } else newlyEnded.push(run);
         }
       }
-      if (newlyEnded.length) await sweepCandidates(candidatesFor(newlyEnded));
+      if (newlyEnded.length) {
+        const refreshedIds = new Set(newlyEnded.map(run => run.runId));
+        for (let i = kept.length - 1; i >= 0; i--) if (refreshedIds.has(kept[i].runId)) kept.splice(i, 1);
+        for (let i = warnings.length - 1; i >= 0; i--) if (refreshedIds.has(warnings[i].runId)) warnings.splice(i, 1);
+        await sweepCandidates(candidatesFor(newlyEnded));
+      }
     }
   }
-  return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}. Retained: ${reasonWords(countReasons(kept))}.`, ...warnings].join('\n')),closed,kept:kept.length,reasonCounts:countReasons(kept)};
+  return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}. Retained: ${reasonWords(countReasons(kept))}.`, ...warnings.map(item => item.text)].join('\n')),closed,kept:kept.length,reasonCounts:countReasons(kept)};
 }
 
 async function cancelRunCommand({ ref, cwd }, ports, expectedIdentity = null) {
@@ -5380,10 +5408,36 @@ async function refreshPr(run, p) {
     if(latest.state==='cancelled')return;
     if(last.state==='merged'&&area===latest.areas.at(-1))latest.state='completed';
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
+    const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i;
+    const maxMergedMs = list => {
+      let latest = -Infinity;
+      for (const pr of list) {
+        if (pr?.state !== 'merged' || typeof pr.mergedAt !== 'string' || !ISO_TIMESTAMP.test(pr.mergedAt)) continue;
+        const ms = Date.parse(pr.mergedAt);
+        if (Number.isFinite(ms) && ms > latest) latest = ms;
+      }
+      return Number.isFinite(latest) ? latest : NaN;
+    };
     const closedReason = closedWaitingReason(latest);
-    const endedAt = closedReason ? (priorClosedAt ?? checkedAt) : checkedAt;
+    const runMergedMs = maxMergedMs(latest.pr ?? []);
+    const completionAt = Number.isFinite(runMergedMs) ? Math.min(runMergedMs, checkedAt) : checkedAt;
+    const endedAt = closedReason ? (priorClosedAt ?? checkedAt) : completionAt;
     if (closedReason) cancelClosedWaiting(latest, endedAt, closedReason);
-    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt ??= endedAt;
+    if (ended(latest)) for (const chat of latest.chats ?? []) {
+      let chatEnd = endedAt;
+      if (!closedReason) {
+        const prs = latest.pr ?? [];
+        const areaMergedPrs = typeof chat.area === 'string' && chat.area
+          ? prs.filter(pr => pr?.state === 'merged' && (pr?.stage === chat.area || pr?.area === chat.area))
+          : [];
+        const rawMergedMs = areaMergedPrs.length ? maxMergedMs(areaMergedPrs) : runMergedMs;
+        const clampedMerged = Number.isFinite(rawMergedMs) ? Math.min(rawMergedMs, checkedAt) : NaN;
+        chatEnd = Number.isFinite(clampedMerged) && (!Number.isFinite(chat.startedAt) || clampedMerged >= chat.startedAt)
+          ? clampedMerged
+          : checkedAt;
+      }
+      chat.endedAt = Number.isFinite(chat.endedAt) ? Math.min(chat.endedAt, chatEnd) : chatEnd;
+    }
   });
   await refreshTops();
 }
@@ -5893,7 +5947,8 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
   return conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && !ended(fresh) && sameFact(lastChat(fresh, area), original) && !(reset && fresh.area !== run.area), fresh => {
     const selected = lastChat(fresh, area);
     if (reset) {
-      fresh.abandonedChats = [...(fresh.abandonedChats ?? []), { ...selected, abandonedAt: p.now(), reason: 'tab-and-agent-missing' }];
+      const at = p.now();
+      fresh.abandonedChats = [...(fresh.abandonedChats ?? []), { ...selected, abandonedAt: at, endedAt: selected.endedAt ?? at, reason: 'tab-and-agent-missing' }];
       fresh.chats = fresh.chats.filter(chat => chat !== selected);
     } else if (selected && observed) copyObservation(selected, observed);
     else if (observed) fresh.chats.push(structuredClone(observed));
@@ -5984,6 +6039,7 @@ async function reopenChangedStory(run,p,entryContract,observedContract) {
   commitRun(run,p,latest=>{
     if(ended(latest) || latest.area!==run.area || latest.promptReturn?.at!==run.promptReturn?.at)throw Object.assign(Error('The returned area changed. Look at the current run again.'),{code:'workflow_progress_refused'});
     for(const item of latest.areas.slice(story))for(const step of item.steps)delete latest.done[step];
+    for (const chat of latest.chats ?? []) if (chat.area !== latest.areas[story]?.name) chat.endedAt ??= p.now();
     latest.area=story;latest.gate=null;latest.question=null;latest.state='running';
   });
   return true;
@@ -6035,6 +6091,7 @@ async function returnToPrompt(run,selected,p) {
     for(const area of latest.areas.slice(selected))for(const step of area.steps)delete latest.done[step];
     for(const key of ['replayEvidence','testInventory','approvalRecord','publicationPending','chatReplacement','localPublication'])delete latest[key];
     latest.runtimeHistory=[];latest.pddHistory=[];latest.evidence=[];latest.evidenceAssociations=[];
+    for (const chat of latest.chats ?? []) if (chat.area !== latest.areas[selected]?.name) chat.endedAt ??= p.now();
     latest.branch=pr1.branch;latest.prBase=run.baseBranch;latest.area=selected;latest.state='running';latest.gate=null;latest.question=null;
   });
   for(const file of ['replay-evidence.json','old-code-proof.json','test-inventory.json','verify.md','formal.md','review.md'])
@@ -6211,7 +6268,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
         };
         admit(readRun(run.runDir));
         commitRun(run, p, fresh => {
-          if (!admit(fresh)) (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' });
+          if (!admit(fresh)) (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, endedAt: record.original.endedAt ?? record.at, reason: 'explicit-new-session' });
           const priorPhase = fresh.chatReplacement?.phase;
           fresh.chatReplacement = structuredClone(record);
           if (layout) fresh.layout = {...fresh.layout, ...structuredClone(layout)};

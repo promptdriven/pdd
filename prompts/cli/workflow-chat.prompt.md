@@ -247,12 +247,12 @@ custody. A close failure retains this mark and can be retried by cleanup. Only
 an explicit successful `workflow open` clears it and saves `openedAt` (epoch ms).
 Automatic recovery must skip marked chats, including after process/server restart.
 
-Export `finishedChats(run)`, `finishedAt(run,chat)` (the boundary in epoch ms), and `closeFinishedChats(run, ports={})`. A chat is
+Export `DEFAULT_CLOSE_GRACE_MS` (900,000 ms, 15 minutes), `closeGraceMs(ports={})`, `finishedChats(run)`, `finishedAt(run,chat)` (the boundary in epoch ms), and `closeFinishedChats(run, ports={})`. `PDD_HERDR_CLOSE_GRACE_SEC` (in `ports.env`, default process env) optionally tunes the automatic finished-chat close grace period as a nonnegative integer number of seconds (default 900 seconds = 15 minutes when unset); invalid values (empty string, non-digits, negative, fractional, or overflowing safe ms) throw `invalid_close_grace` (`"PDD_HERDR_CLOSE_GRACE_SEC must be a nonnegative integer (seconds)."`). A chat is
 finished when the run is cancelled/completed, or it is not the latest chat of the
 current area. Each finished chat gets an `endedAt` epoch-ms boundary at handoff
-or run end; legacy records use the next area's start, cancellation or saved update
-time. Close only after 15 minutes from that boundary and from `openedAt`.
-`ports.graceMs:0` removes only that grace under budget pressure or replacement.
+or run end; when `chat.endedAt` is missing on a completed run whose merged PRs carry valid ISO-8601 `mergedAt` timestamps, `finishedAt` selects the latest finite `Date.parse(mergedAt)` among merged PRs matching `chat.area` (by `stage` or `area`) when any merged PR matches that area (returning none rather than falling back to an unrelated PR when the matched merged PR lacks a valid ISO-8601 `mergedAt`), else the latest (`Math.max`) across all merged PRs in `run.pr`, preferring that timestamp over `run.updatedAt` when finite, `>= chat.startedAt` (if finite), and `<= run.updatedAt`, while other legacy records use the next area's start, cancellation or saved update
+time. Close only after `ports.graceMs ?? closeGraceMs(ports)` (15 minutes by default) from that boundary and from `openedAt`, validating `closeGraceMs(ports)` before per-chat cleanup so `invalid_close_grace` propagates instead of being swallowed.
+`ports.graceMs:0` removes only that grace under budget pressure, explicit tidy of ended runs, or replacement.
 Ordinary finished-chat cleanup leaves the current chat, including a gate,
 question or failed chat. Forced parking includes it with the guards below.
 Never close the caller's `HERDR_PANE_ID`. Require complete valid live inventory.
@@ -306,14 +306,15 @@ absence. An absent chat needs no screen capture because no close is sent.
 Export `paneUsage(ports)` returning `{panes,budget}` from one complete session-wide
 pane list (an optional `onPaneUsage(rows)` receives that complete inventory), and `ensurePaneBudget(need, ports)` returning that shape plus `closed`.
 `PDD_HERDR_PANE_BUDGET` is a nonnegative safe integer, default 56; 0 disables the
-limit. Count all panes, including personal panes. Check `paneUsage` first. When the
+limit. Count all panes, including personal panes. Validate `closeGraceMs(ports)` first
+before calling Herdr or any sweep callback, then check `paneUsage`. When the
 budget is disabled (`0`) or `panes + need <= budget`: if `panes === 0`, return at once
 with zero sweeps; if `panes > 0`, run fast local-only opportunistic cleanup through
-`sweepFinished({graceMs: 15 * 60_000, localOnly: true, paneInventory: rows})` and
+`sweepFinished({graceMs: closeGraceMs(ports), localOnly: true, paneInventory: rows})` and
 `sweepIdle({graceMs: 60_000, localOnly: true, paneInventory: rows})` (zero GitHub calls,
 reusing `rows` so idle/grace runs spawn no extra `pane list`), recounting `paneUsage`
 only when at least one pane closed. Only when `budget > 0` and `panes + need > budget`,
-sweep normal finished chats locally through `sweepFinished({graceMs: 15 * 60_000, need, localOnly: true, paneInventory: rows})`, recount, and if still over budget sweep idle automatic chats locally through `sweepIdle({graceMs: 60_000, need, localOnly: true, paneInventory: rows})` and recount. If still over budget, escalate to full zero-grace sweeps (`sweepFinished({graceMs: 0, need})`, recount, and if still over budget `sweepIdle({graceMs: 0, need})`, recount), oldest first in each class. The runner owns idle classification and safe parking; this module only requests reclamation. If it still cannot fit, throw
+sweep normal finished chats locally through `sweepFinished({graceMs: closeGraceMs(ports), need, localOnly: true, paneInventory: rows})`, recount, and if still over budget sweep idle automatic chats locally through `sweepIdle({graceMs: 60_000, need, localOnly: true, paneInventory: rows})` and recount. If still over budget, escalate to full zero-grace sweeps (`sweepFinished({graceMs: 0, need})`, recount, and if still over budget `sweepIdle({graceMs: 0, need})`, recount), oldest first in each class. The runner owns idle classification and safe parking; this module only requests reclamation. If it still cannot fit, throw
 `herdr_pane_budget` with count, budget, need, cleanup count, the caller-supplied `describePaneOwners(rows)` breakdown of saved run chats, run shells and other panes, and an action to close
 unused tabs or raise the variable. Unknown Herdr allocation failures include the
 observed pane count. Open, rebuild, start and replacement check before creating
@@ -408,7 +409,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"89d92939d8ad8eff47133144b6f08aba407d3522e434de9461934b87043126fd","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"7948e474ca9d6d9c08e753cc742b3c0f26733de244412c005a80a41f17785b94","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
