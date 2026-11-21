@@ -676,6 +676,232 @@ test('3611 R1: split-Story pass suppression, missing-summary synthesis, fail-clo
   }
 });
 
+test('3611 R2: stale multi-variant fail suppression, passed-with-not_checked incompleteness, legacy excludeFixtureProjects, and split-Story failure synthesis', t => {
+  // R2-1a [P1]: Retrying failed variant of split-Story suppresses stale ✗ line from earlier batch when Batch 2 has summary.json
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch(
+      '20261110-110000-aaaa',
+      {
+        created_at: '2026-11-10T11:00:00Z',
+        source_sha256: SHA_AB,
+        rows: [
+          { test: 'tests/checkout.a.json', story: 'user_stories/checkout.md', state: 'passed' },
+          { test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', state: 'failed' },
+        ],
+      },
+      {
+        summary_line: 'Prompt tests: ✗ 1 of 2 criteria',
+        rows: [
+          { test: 'tests/checkout.a.json', story: 'user_stories/checkout.md', summary_line: 'Prompt tests (checkout): ✗ 1 of 2 criteria' },
+          { test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', summary_line: 'Prompt tests (checkout): ✗ 1 of 2 criteria' },
+        ],
+      },
+    );
+    f.writeBatch(
+      '20261110-120000-bbbb',
+      {
+        created_at: '2026-11-10T12:00:00Z',
+        source_sha256: SHA_B,
+        rows: [{ test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', state: 'passed' }],
+      },
+      {
+        summary_line: 'Prompt tests: ✓ 1 of 1 criterion',
+        rows: [{ test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', summary_line: 'Prompt tests (checkout): ✓ 1 of 1 criterion' }],
+      },
+    );
+    const capture = (_root, { tests }) => {
+      const key = [...tests].sort().join(',');
+      if (key === 'tests/checkout.b.json') return { sha256: SHA_B };
+      if (key === 'tests/checkout.a.json,tests/checkout.b.json') return { sha256: SHA_AB };
+      throw new Error(`unexpected selection: ${key}`);
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture });
+    assert.ok(res.summary.startsWith('Prompt tests: ✓ · 2 passed;'));
+    assert.deepEqual(res.stories, ['Prompt tests (checkout): ✓ 1 of 1 criterion']);
+    const parsed = runtimeLines(res.stories.join('\n'));
+    assert.deepEqual(parsed.map(p => [p.story, p.pass]), [['checkout', true]]);
+  }
+
+  // R2-1b [P1]: Same multi-variant retry when Batch 2 has NO summary.json suppresses stale ✗ and synthesizes ✓ passed
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch(
+      '20261110-110000-aaaa',
+      {
+        created_at: '2026-11-10T11:00:00Z',
+        source_sha256: SHA_ABC,
+        rows: [
+          { test: 'tests/checkout.a.json', story: 'user_stories/checkout.md', state: 'passed' },
+          { test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', state: 'failed' },
+          { test: 'tests/login.json', story: 'user_stories/login.md', state: 'passed' },
+        ],
+      },
+      {
+        summary_line: 'Prompt tests: ✗ 2 of 3 criteria',
+        rows: [
+          { test: 'tests/checkout.a.json', story: 'user_stories/checkout.md', summary_line: 'Prompt tests (checkout): ✗ 1 of 2 criteria' },
+          { test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', summary_line: 'Prompt tests (checkout): ✗ 1 of 2 criteria' },
+          { test: 'tests/login.json', story: 'user_stories/login.md', summary_line: 'Prompt tests (login): ✓ 1 of 1 criterion' },
+        ],
+      },
+    );
+    f.writeBatch(
+      '20261110-120000-bbbb',
+      {
+        created_at: '2026-11-10T12:00:00Z',
+        source_sha256: SHA_B,
+        rows: [{ test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', state: 'passed' }],
+      },
+    );
+    const capture = (_root, { tests }) => {
+      const key = [...tests].sort().join(',');
+      if (key === 'tests/checkout.b.json') return { sha256: SHA_B };
+      if (key === 'tests/checkout.a.json,tests/checkout.b.json,tests/login.json') return { sha256: SHA_ABC };
+      throw new Error(`unexpected selection: ${key}`);
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture });
+    assert.ok(res.summary.startsWith('Prompt tests: ✓ · 3 passed;'));
+    assert.ok(!res.stories.some(line => line.includes('✗')), `stale ✗ leaked: ${JSON.stringify(res.stories)}`);
+    assert.deepEqual(res.stories, [
+      'Prompt tests (login): ✓ 1 of 1 criterion',
+      'Prompt tests (checkout): ✓ passed',
+    ]);
+    const parsed = runtimeLines(res.stories.join('\n'));
+    assert.deepEqual(parsed.map(p => [p.story, p.pass]), [['login', true], ['checkout', true]]);
+  }
+
+  // R2-2 [P1]: Winning row with state: 'passed' + non-empty not_checked must NOT emit ✓ in summary or stories
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch(
+      '20261110-110000-aaaa',
+      {
+        created_at: '2026-11-10T11:00:00Z',
+        source_sha256: SHA_A,
+        rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', state: 'passed' }],
+      },
+      {
+        summary_line: 'Prompt tests: ✓ 1 of 1 criterion',
+        rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', summary_line: 'Prompt tests (a): ✓ 1 of 1 criterion' }],
+      },
+    );
+    f.writeBatch(
+      '20261110-120000-bbbb',
+      {
+        created_at: '2026-11-10T12:00:00Z',
+        source_sha256: SHA_B,
+        rows: [{
+          test: 'tests/b.json',
+          story: 'user_stories/b.md',
+          state: 'passed',
+          not_checked: [
+            { criterion_id: 'AC2', reason: 'not covered', text: 'Second criterion' },
+            { criterion_id: 'AC3', reason: 'not covered', text: 'Third criterion' },
+          ],
+        }],
+      },
+      {
+        summary_line: 'Prompt tests: ✓ 1 of 3 criteria',
+        rows: [{ test: 'tests/b.json', story: 'user_stories/b.md', summary_line: 'Prompt tests (b): ✓ 1 of 3 criteria' }],
+      },
+    );
+    const capture = (_root, { tests }) => {
+      const key = [...tests].sort().join(',');
+      if (key === 'tests/a.json') return { sha256: SHA_A };
+      if (key === 'tests/b.json') return { sha256: SHA_B };
+      return { sha256: SHA_AB };
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture });
+    assert.ok(res.summary.startsWith('Prompt tests: no full pass;'), res.summary);
+    assert.ok(!res.summary.includes('✓') && !res.summary.includes('✗'), res.summary);
+    assert.deepEqual(res.stories, [
+      'Prompt tests (a): ✓ 1 of 1 criterion',
+      'Prompt tests (b): 2 criteria not checked',
+    ]);
+    const parsed = runtimeLines(res.stories.join('\n'));
+    assert.deepEqual(parsed.map(p => [p.story, p.pass, p.result]), [
+      ['a', true, '✓ 1 of 1 criterion'],
+      ['b', false, '2 criteria not checked'],
+    ]);
+  }
+
+  // R2-3 [P2]: Legacy batch without source_selection + newer batch with exclude_fixture_projects: true keeps excludeFixtureProjects: false
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch('20261110-110000-aaaa', {
+      created_at: '2026-11-10T11:00:00Z',
+      source_sha256: SHA_A,
+      rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', state: 'passed' }],
+    }, {
+      summary_line: 'Prompt tests: ✓ a',
+      rows: [{ test: 'tests/a.json', story: 'user_stories/a.md', summary_line: 'Prompt tests (a): ✓ 1 of 1 criterion' }],
+    });
+    f.writeBatch('20261110-120000-bbbb', {
+      created_at: '2026-11-10T12:00:00Z',
+      source_sha256: SHA_B,
+      source_selection: { tests: ['tests/b.json'], exclude_fixture_projects: true },
+      rows: [{ test: 'tests/b.json', story: 'user_stories/b.md', state: 'passed' }],
+    }, {
+      summary_line: 'Prompt tests: ✓ b',
+      rows: [{ test: 'tests/b.json', story: 'user_stories/b.md', summary_line: 'Prompt tests (b): ✓ 1 of 1 criterion' }],
+    });
+    const combinedCalls = [];
+    const capture = (_root, sel) => {
+      const key = [...sel.tests].sort().join(',');
+      if (key === 'tests/a.json') return { sha256: SHA_A };
+      if (key === 'tests/b.json') return { sha256: SHA_B };
+      combinedCalls.push(sel);
+      return { sha256: SHA_AB };
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture });
+    assert.equal(res.excludeFixtureProjects, false);
+    assert.equal(combinedCalls.length, 1);
+    assert.equal(combinedCalls[0].excludeFixtureProjects, false);
+  }
+
+  // R2-4 [P2]: Split-Story failure without summary.json is NOT suppressed when sibling emitted a non-failed summary.json line
+  {
+    const f = makeResultsFixture(t);
+    f.writeBatch(
+      '20261110-110000-aaaa',
+      {
+        created_at: '2026-11-10T11:00:00Z',
+        source_sha256: SHA_A,
+        rows: [{ test: 'tests/checkout.a.json', story: 'user_stories/checkout.md', state: 'unknown' }],
+      },
+      {
+        summary_line: 'Prompt tests: partial (no-server-verdict)',
+        rows: [{ test: 'tests/checkout.a.json', story: 'user_stories/checkout.md', summary_line: 'Prompt tests (checkout): partial (no-server-verdict)' }],
+      },
+    );
+    f.writeBatch(
+      '20261110-120000-bbbb',
+      {
+        created_at: '2026-11-10T12:00:00Z',
+        source_sha256: SHA_B,
+        rows: [{ test: 'tests/checkout.b.json', story: 'user_stories/checkout.md', state: 'failed' }],
+      },
+    );
+    const capture = (_root, { tests }) => {
+      const key = [...tests].sort().join(',');
+      if (key === 'tests/checkout.a.json') return { sha256: SHA_A };
+      if (key === 'tests/checkout.b.json') return { sha256: SHA_B };
+      return { sha256: SHA_AB };
+    };
+    const [res] = readRunResults({ root: f.root, since: SINCE }, { env: f.env, capture });
+    assert.ok(res.summary.startsWith('Prompt tests: ✗ no full pass;'));
+    assert.deepEqual(res.stories, [
+      'Prompt tests (checkout): partial (no-server-verdict)',
+      'Prompt tests (checkout): ✗ · failed (check-failed)',
+    ]);
+    const parsed = runtimeLines(res.stories.join('\n'));
+    const latestForCheckout = parsed.filter(p => p.story === 'checkout').at(-1);
+    assert.equal(latestForCheckout.pass, false);
+    assert.equal(latestForCheckout.result.includes('✗'), true);
+  }
+});
+
 // ============================================================================
 // Part B: runtime-client#101 Part 1 — Raw authored Short JSON line counts
 // ============================================================================

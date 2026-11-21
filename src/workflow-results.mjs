@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-results.prompt.md (sha256: 387994c2e513a6f94a957c8990dc9d75f049a2517b2c27aa5155c7d4ff0ce424).
+// Generated from prompts/cli/workflow-results.prompt.md (sha256: a67555cd1e070dbb7fef1ea51ed18c07ab38fed356fee38e7c757938287a093d).
 import { isDeepStrictEqual } from 'node:util';
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
@@ -269,9 +269,9 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
         const tests = [...new Set(winningRows.map(row => row?.test).filter(t => typeof t === 'string' && t.length > 0))].sort();
         const states = winningRows.map(savedResultState);
         const stateEvidence = winningRows.map(row => text(`${row.test}: ${outcomeText(row)}`)).join('; ');
-        const incomplete = states.some(row => row.state !== 'passed');
+        const incomplete = states.some(row => row.state !== 'passed') || winningRows.some(row => Array.isArray(row?.not_checked) && row.not_checked.length > 0);
         const anyFailed = states.some(row => row.state === 'failed');
-        const passedCount = states.filter(row => row.state === 'passed').length;
+        const passedCount = winningRows.filter(row => resultOutcome(row).state === 'passed' && !row?.not_checked?.length).length;
         const safeSummary = !incomplete && states.length > 0
           ? `Prompt tests: ✓ · ${passedCount} passed`
           : anyFailed
@@ -280,6 +280,7 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
         const stories = [];
         const seenStories = new Set();
         const emittedStoryKeys = new Set();
+        const emittedFailedStories = new Set();
         const emittedTestIds = new Set();
         for (const { ev, wonTests, wonRows } of [...batchWins].reverse()) {
           const summaryRows = Array.isArray(ev.summary?.rows) ? ev.summary.rows : [];
@@ -293,15 +294,21 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
               ? wonTests.has(sRow.test)
               : Boolean(story && wonRows.some(saved => storyName(saved.story) === story));
             if (!matchesWin) continue;
+            const storyOwners = story ? winningRows.filter(saved => storyName(saved.story) === story) : [];
+            const testOwners = hasTestId ? winningRows.filter(saved => saved.test === sRow.test) : [];
+            const owners = [...new Set([...storyOwners, ...testOwners])];
+            const allOwnersPassed = owners.length > 0 && owners.every(saved => resultOutcome(saved).state === 'passed' && !saved.not_checked?.length);
             if (line.includes('✓')) {
-              const storyOwners = story ? winningRows.filter(saved => storyName(saved.story) === story) : [];
-              const testOwners = hasTestId ? winningRows.filter(saved => saved.test === sRow.test) : [];
-              const owners = [...new Set([...storyOwners, ...testOwners])];
-              if (!owners.length || !owners.every(saved => resultOutcome(saved).state === 'passed' && !saved.not_checked?.length)) continue;
+              if (!allOwnersPassed) continue;
+            } else if (allOwnersPassed) {
+              continue;
             }
             seenStories.add(line);
             stories.push(line);
-            if (story) emittedStoryKeys.add(story);
+            if (story) {
+              emittedStoryKeys.add(story);
+              if (line.includes('✗')) emittedFailedStories.add(story);
+            }
             if (hasTestId) emittedTestIds.add(sRow.test);
           }
         }
@@ -309,24 +316,42 @@ export function readRunResults({ root, runDir = null, runId = null, since = 0, b
           const outcome = resultOutcome(row);
           if (outcome.state === 'passed' && !row.not_checked?.length) continue;
           const rowStory = storyName(row.story) ?? (typeof row.test === 'string' && row.test ? storyName(row.test.replace(/\.json$/, '')) : null);
-          if (rowStory && emittedStoryKeys.has(rowStory)) continue;
+          if (rowStory && (outcome.state === 'failed' ? emittedFailedStories.has(rowStory) : emittedStoryKeys.has(rowStory))) continue;
           if (typeof row.test === 'string' && row.test && emittedTestIds.has(row.test)) continue;
           const label = text(rowStory ?? row.test ?? 'unknown', 120);
           const status = outcome.state === 'failed'
             ? `✗ · ${text(outcomeText(row), 120)}`
-            : text(outcomeText(row), 120);
+            : outcome.state === 'passed' && Array.isArray(row.not_checked) && row.not_checked.length
+              ? `${row.not_checked.length} criteria not checked`
+              : text(outcomeText(row), 120);
           const synthesized = text(`Prompt tests (${label}): ${status}`);
           if (synthesized && !seenStories.has(synthesized)) {
             seenStories.add(synthesized);
             stories.push(synthesized);
-            if (rowStory) emittedStoryKeys.add(rowStory);
+            if (rowStory) {
+              emittedStoryKeys.add(rowStory);
+              if (outcome.state === 'failed') emittedFailedStories.add(rowStory);
+            }
             if (typeof row.test === 'string' && row.test) emittedTestIds.add(row.test);
+          }
+        }
+        for (const row of winningRows) {
+          const rowStory = storyName(row.story);
+          if (!rowStory || emittedStoryKeys.has(rowStory)) continue;
+          const storyOwners = winningRows.filter(saved => storyName(saved.story) === rowStory);
+          if (storyOwners.length > 0 && storyOwners.every(saved => resultOutcome(saved).state === 'passed' && !saved.not_checked?.length)) {
+            const synthesized = text(`Prompt tests (${text(rowStory, 120)}): ✓ passed`);
+            if (synthesized && !seenStories.has(synthesized)) {
+              seenStories.add(synthesized);
+              stories.push(synthesized);
+              emittedStoryKeys.add(rowStory);
+            }
           }
         }
         const selectionBatches = batchWins.map(entry => entry.ev).filter(ev => ev.batch.source_selection != null);
         const hasExcludeFlag = selectionBatches.length > 0;
         const excludeFixtureProjects = hasExcludeFlag
-          ? selectionBatches.every(ev => ev.selection.excludeFixtureProjects === true)
+          ? batchWins.every(entry => entry.ev.selection.excludeFixtureProjects === true)
           : undefined;
         const mergedSourceTests = [...new Set(
           batchWins.flatMap(({ ev, wonTests }) =>
