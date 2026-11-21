@@ -3,9 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
-import { runtimePreflightSlice } from './runtime-seam.mjs';
-
-const { gitFiles, interfaceBlocks } = runtimePreflightSlice();
+import { gitFiles } from './shared/git-context.mjs';
+import { interfaceBlocks } from './shared/workspace-policy.mjs';
 
 const HEAD = 4096, PROMPT = 65536, LINE = 1100, WHOLE = 10 * 1024 * 1024;
 const HEADER_PARTS = /^(\s*(?:Generated from |(?:\/\/+|#+|--|;+|\/\*+|\*+|<!--|"""|''')\s*(?:Generated from |Prompt: )))(\S+\.prompt\.md)(?:( \(sha256: )([a-f0-9]{64})(\))|( sha256=)([a-f0-9]{64}))?(\.?\s*(?:(?:\*\/|-->|"""|''')\s*)?)$/;

@@ -5,7 +5,7 @@ import * as nativeFs from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
-import { runAgentProcess } from './agent-adapters.mjs';
+import { runAgentProcess } from './shared/agent-process.mjs';
 import {
   CloudAccountsError,
   classifyRateLimitFailure,
