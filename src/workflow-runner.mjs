@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0b511e254b650631e6ef361c4d572c7c317188777087e3839baf633497ec16c2).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a594be98a02c1c8bbeed81fd9669a1852827f975628b4924166949cc06ae6613).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -5080,7 +5080,7 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
   }).sort((a,b) => a.at - b.at);
   const sweepCandidates = async candidates => {
     for (const [index,{run,chat}] of candidates.entries()) {
-      if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({chat})=>({area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); return false; }
+      if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({run,chat})=>({runId:run.runId,area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); return false; }
       if (readRunOwnership(run.runDir,p)) { kept.push({runId:run.runId,reason:'run-busy'}); continue; }
       let release;
       try {
@@ -5093,11 +5093,13 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
           : (explicitTidy && ended(latest) && !hasRecentOpen ? 0 : defaultGraceMs);
         const result = await cleanupRunChats(latest, {...p,progressGuard:undefined}, {dryRun, ...(chat ? {onlyChat:chat} : {}),
           graceMs: effectiveGrace, ...(need !== undefined && effectiveGrace === 0 ? {reason:'budget'} : {})});
-        closed += result.closed; kept.push(...result.kept); warnings.push(...result.warnings);
+        closed += result.closed;
+        kept.push(...result.kept.map(item => ({...item, runId: run.runId})));
+        warnings.push(...result.warnings.map(text => ({runId: run.runId, text})));
         if (need !== undefined) { const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) return false; }
       } catch (error) {
         kept.push({runId:run.runId,reason:error.code ?? 'cleanup-unavailable'});
-        if (error.code !== 'run_busy') warnings.push(failureReason(error));
+        if (error.code !== 'run_busy') warnings.push({runId:run.runId,text:failureReason(error)});
       } finally { release?.(); }
     }
     return true;
@@ -5126,10 +5128,15 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
           if (error?.code === 'workflow_run_save_failed') throw error;
         } finally { release?.(); }
       }
-      if (newlyEnded.length) await sweepCandidates(candidatesFor(newlyEnded));
+      if (newlyEnded.length) {
+        const refreshedIds = new Set(newlyEnded.map(run => run.runId));
+        for (let i = kept.length - 1; i >= 0; i--) if (refreshedIds.has(kept[i].runId)) kept.splice(i, 1);
+        for (let i = warnings.length - 1; i >= 0; i--) if (refreshedIds.has(warnings[i].runId)) warnings.splice(i, 1);
+        await sweepCandidates(candidatesFor(newlyEnded));
+      }
     }
   }
-  return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}. Retained: ${reasonWords(countReasons(kept))}.`, ...warnings].join('\n')),closed,kept:kept.length,reasonCounts:countReasons(kept)};
+  return {...done([`${dryRun ? 'Would close' : 'Closed'} ${closed} finished chat tabs. Kept ${kept.length}. Retained: ${reasonWords(countReasons(kept))}.`, ...warnings.map(item => item.text)].join('\n')),closed,kept:kept.length,reasonCounts:countReasons(kept)};
 }
 
 async function cancelRunCommand({ ref, cwd }, ports, expectedIdentity = null) {
@@ -5347,10 +5354,11 @@ async function refreshPr(run, p) {
     if(latest.state==='cancelled')return;
     if(last.state==='merged'&&area===latest.areas.at(-1))latest.state='completed';
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
+    const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i;
     const maxMergedMs = list => {
       let latest = -Infinity;
       for (const pr of list) {
-        if (pr?.state !== 'merged' || typeof pr.mergedAt !== 'string') continue;
+        if (pr?.state !== 'merged' || typeof pr.mergedAt !== 'string' || !ISO_TIMESTAMP.test(pr.mergedAt)) continue;
         const ms = Date.parse(pr.mergedAt);
         if (Number.isFinite(ms) && ms > latest) latest = ms;
       }
@@ -5362,10 +5370,18 @@ async function refreshPr(run, p) {
     const endedAt = closedReason ? (priorClosedAt ?? checkedAt) : completionAt;
     if (closedReason) cancelClosedWaiting(latest, endedAt, closedReason);
     if (ended(latest)) for (const chat of latest.chats ?? []) {
-      const areaMergedMs = !closedReason && typeof chat.area === 'string' && chat.area
-        ? maxMergedMs((latest.pr ?? []).filter(pr => pr?.stage === chat.area || pr?.area === chat.area))
-        : NaN;
-      const chatEnd = Number.isFinite(areaMergedMs) ? Math.min(areaMergedMs, checkedAt) : endedAt;
+      let chatEnd = endedAt;
+      if (!closedReason) {
+        const prs = latest.pr ?? [];
+        const areaMergedPrs = typeof chat.area === 'string' && chat.area
+          ? prs.filter(pr => pr?.state === 'merged' && (pr?.stage === chat.area || pr?.area === chat.area))
+          : [];
+        const rawMergedMs = areaMergedPrs.length ? maxMergedMs(areaMergedPrs) : runMergedMs;
+        const clampedMerged = Number.isFinite(rawMergedMs) ? Math.min(rawMergedMs, checkedAt) : NaN;
+        chatEnd = Number.isFinite(clampedMerged) && (!Number.isFinite(chat.startedAt) || clampedMerged >= chat.startedAt)
+          ? clampedMerged
+          : checkedAt;
+      }
       chat.endedAt = Number.isFinite(chat.endedAt) ? Math.min(chat.endedAt, chatEnd) : chatEnd;
     }
   });

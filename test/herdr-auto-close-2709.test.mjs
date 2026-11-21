@@ -109,7 +109,7 @@ test('2709: readWorkflowPrStatus preserves valid ISO mergedAt and omits invalid,
     assert.equal(status.mergedAt, ts);
   }
 
-  for (const bad of [null, undefined, '', '   ', 12345, 'not-a-date', '2026-10-27', '2026-13-45T00:00:00Z']) {
+  for (const bad of [null, undefined, '', '   ', 12345, '1', 'not-a-date', '2026-10-27', '2026-13-45T00:00:00Z']) {
     const status = await readWorkflowPrStatus(
       { cwd: '/tmp', url: PR_URL },
       execReturning({ state: 'MERGED', mergedAt: bad, statusCheckRollup: [] }),
@@ -134,6 +134,9 @@ test('2709: PR merged 20 minutes ago discovered by refreshPr gets endedAt from m
   const buildChat = run.chats[1];
   const prUrl = run.pr[0].url;
 
+  // Advance clock so chat.startedAt precedes both earlierPlanEnd and mergedAtMs realistically.
+  f.tick(90 * 60_000);
+
   // Give planChat an already-earlier endedAt (60 minutes ago) to prove refreshPr never overwrites it.
   const earlierPlanEnd = f.clock - 60 * 60_000;
   run.chats[0].endedAt = earlierPlanEnd;
@@ -144,7 +147,7 @@ test('2709: PR merged 20 minutes ago discovered by refreshPr gets endedAt from m
   const mergedAtIso = new Date(mergedAtMs).toISOString();
   stubPrView(f, prUrl, { state: 'MERGED', mergedAt: mergedAtIso, statusCheckRollup: [] });
 
-  // Very first automatic sweep with default 15-minute grace (no clock advance!).
+  // Very first automatic sweep with default 15-minute grace (no further clock advance!).
   const swept = await runner.tidyRuns({ graceMs: DEFAULT_CLOSE_GRACE_MS }, f.ports);
   assert.equal(swept.exitCode, 0, swept.message);
   assert.equal(swept.closed, 2, 'both plan and build chats must close on the very first sweep');
@@ -171,9 +174,10 @@ test('2709: PR merged 20 minutes ago discovered by refreshPr gets endedAt from m
   assert.equal(skew.f.record().pr[0].mergedAt, skewMergedIso);
   assert.equal(skew.f.record().chats.at(-1).endedAt, skew.f.clock, 'future mergedAt must clamp to now');
 
-  // Legacy completed run saved without chat.endedAt prefers Date.parse(pr.mergedAt) when <= updatedAt.
+  // Legacy completed run saved without chat.endedAt prefers Date.parse(pr.mergedAt) when >= startedAt and <= updatedAt.
   const legacy = await fixture(t, { agent: 'claude' });
   assert.equal((await legacy.run()).exitCode, 0);
+  legacy.tick(30 * 60_000);
   const legacyRun = legacy.record();
   const legacyMergedMs = legacy.clock - 20 * 60_000;
   legacyRun.state = 'completed';
@@ -204,6 +208,7 @@ test('2709: PR merged 2 minutes ago respects default 15-min grace, closes immedi
   // 1) Default 15-minute automatic grace protects a PR merged 2 minutes ago; PDD_HERDR_CLOSE_GRACE_SEC=0 closes it immediately.
   const { f, run } = await waitingPrRun(t);
   const buildChat = run.chats[1];
+  f.tick(5 * 60_000);
   const mergedAtMs = f.clock - 2 * 60_000;
   stubPrView(f, run.pr[0].url, { state: 'MERGED', mergedAt: new Date(mergedAtMs).toISOString(), statusCheckRollup: [] });
 
@@ -229,6 +234,7 @@ test('2709: PR merged 2 minutes ago respects default 15-min grace, closes immedi
   //    a PR merged 2 minutes ago while protecting another active/unmerged waiting run!
   const g = await waitingPrRun(t, { issue: '17' });
   const active = await waitingPrRun(t, { issue: '18', existingFixture: g.f });
+  g.f.tick(5 * 60_000);
   const mergedRun = g.readIssueRun();
   const openRun = active.readIssueRun();
   const mergedPrUrl = mergedRun.pr[0].url;
@@ -268,7 +274,10 @@ test('2709: invalid PDD_HERDR_CLOSE_GRACE_SEC fails cleanly with invalid_close_g
   save(run);
   f.herdr.idle();
 
-  const invalidValues = ['', '-1', 'abc', '1.5', ' 10', '9999999999999999'];
+  const maxSafeSecOverflow = String(Math.floor(Number.MAX_SAFE_INTEGER / 1000) + 1);
+  assert.equal(Number.isSafeInteger(Number(maxSafeSecOverflow)), true);
+  assert.equal(Number.isSafeInteger(Number(maxSafeSecOverflow) * 1000), false);
+  const invalidValues = ['', '-1', 'abc', '1.5', ' 10', maxSafeSecOverflow, '9999999999999999'];
   for (const bad of invalidValues) {
     assert.throws(
       () => closeGraceMs({ env: { PDD_HERDR_CLOSE_GRACE_SEC: bad } }),
@@ -349,13 +358,15 @@ test('2709: 20 sequential finished runs leave 0 finished panes open and pane bud
       f.herdr.idle();
       const prUrl = f.record().pr[0].url;
       if (mode === 0) {
-        // Merged 20m ago -> closes on very first automatic 15-min grace sweep!
+        // Merged 20m ago (after chat started) -> closes on very first automatic 15-min grace sweep!
+        f.tick(25 * 60_000);
         const mergedAt = new Date(f.clock - 20 * 60_000).toISOString();
         prReplies.set(prUrl, { state: 'MERGED', mergedAt, statusCheckRollup: [] });
         const auto = await runner.tidyRuns({ graceMs: DEFAULT_CLOSE_GRACE_MS }, f.ports);
         assert.equal(auto.exitCode, 0, auto.message);
       } else {
-        // Merged 2m ago -> explicit pdd workflow tidy closes immediately!
+        // Merged 2m ago (after chat started) -> explicit pdd workflow tidy closes immediately!
+        f.tick(5 * 60_000);
         const mergedAt = new Date(f.clock - 2 * 60_000).toISOString();
         prReplies.set(prUrl, { state: 'MERGED', mergedAt, statusCheckRollup: [] });
         const tidy = await runExplicitTidy(f);
@@ -459,8 +470,11 @@ test('2709 R1 P1-2: 2-PR run selects per-area / latest mergedAt and absent panes
   assert.equal(finishedAt(legacyTwoPrRun, legacyTwoPrRun.chats[0]), pr2MergedMs, 'unmatched area uses latest (Math.max) mergedAt');
 
   // 2) Live 2-PR waiting run discovered by refreshPr + automatic 15-min grace sweep:
-  //    PR 1 (prompt) merged 2h ago closes immediately; PR 2 (code) merged 2m ago stays protected by 15m grace!
+  //    PR 1 (prompt) started 3h ago and merged 2h ago; PR 2 (code) started 10m ago and merged 2m ago!
+  //    Pass 1 retains promptChat under grace (codeChat started 10m ago), Pass 2 discovers both merges,
+  //    prunes Pass-1 retention, closes promptChat immediately, and keeps ONLY codeChat (kept=1, grace=1)!
   const { f, run } = await waitingPrRun(t);
+  f.tick(3 * 60 * 60_000);
   const promptChat = run.chats[0];
   const codeChat = run.chats[1];
   const promptPrUrl = 'https://github.com/example/project/pull/22';
@@ -470,6 +484,7 @@ test('2709 R1 P1-2: 2-PR run selects per-area / latest mergedAt and absent panes
   const runPr1MergedIso = new Date(runPr1MergedMs).toISOString();
   const runPr2MergedIso = new Date(runPr2MergedMs).toISOString();
 
+  run.chats[1].startedAt = f.clock - 10 * 60_000;
   delete run.chats[0].endedAt;
   delete run.chats[1].endedAt;
   run.pr = [
@@ -483,6 +498,9 @@ test('2709 R1 P1-2: 2-PR run selects per-area / latest mergedAt and absent panes
 
   const autoSweep = await runner.tidyRuns({ graceMs: DEFAULT_CLOSE_GRACE_MS }, f.ports);
   assert.equal(autoSweep.exitCode, 0, autoSweep.message);
+  assert.equal(autoSweep.closed, 1);
+  assert.equal(autoSweep.kept, 1, 'Pass-1 kept entry must be pruned for newlyEnded run (no double count)');
+  assert.deepEqual(autoSweep.reasonCounts, { grace: 1 });
   const afterAuto = f.record();
   assert.equal(afterAuto.state, 'completed');
   assert.equal(afterAuto.chats[0].endedAt, runPr1MergedMs, 'prompt chat gets PR 1 mergedAt');
@@ -499,6 +517,7 @@ test('2709 R1 P1-2: 2-PR run selects per-area / latest mergedAt and absent panes
   // 3) Already-closed / absent pane discovered during refreshPr + tidy persists chat.closed.confirmedAt durably
   //    with zero close commands sent to Herdr.
   const absent = await waitingPrRun(t);
+  absent.f.tick(30 * 60_000);
   const absentChat = absent.run.chats[1];
   await absent.f.herdr.herdr(['workspace', 'close', absentChat.workspaceId]);
   absent.f.herdr.calls.length = 0;
@@ -555,4 +574,124 @@ test('2709 R1 P1-3: cancelRun immediately closes all run panes and --new replace
   assert.equal(afterReplace.abandonedChats?.length, 1);
   assert.equal(afterReplace.abandonedChats[0].paneId, originalChat.paneId);
   assert.ok(Number.isFinite(afterReplace.abandonedChats[0].endedAt), 'superseded chat in abandonedChats must carry endedAt');
+});
+
+test('2709 R2 P1-1: missing mergedAt on matched PR never falls back to earlier PR and mergedAt < chat.startedAt falls back cleanly', async (t) => {
+  const now = Date.parse('2026-10-27T19:00:00Z');
+  const pr1MergedMs = now - 2 * 60 * 60_000;
+  const pr1MergedIso = new Date(pr1MergedMs).toISOString();
+
+  // 1) finishedAt: 2-PR completed run where PR 1 (prompt) has mergedAt 2h ago and PR 2 (code) is merged WITHOUT mergedAt.
+  const missingPr2MergedAtRun = {
+    state: 'completed',
+    updatedAt: now,
+    startedAt: now - 3 * 60 * 60_000,
+    pr: [
+      { number: 23, stage: 'prompt', state: 'merged', mergedAt: pr1MergedIso },
+      { number: 24, stage: 'code', state: 'merged' },
+    ],
+    chats: [
+      { area: 'prompt', startedAt: now - 2.5 * 60 * 60_000 },
+      { area: 'code', startedAt: now - 30 * 60_000 },
+    ],
+  };
+  assert.equal(finishedAt(missingPr2MergedAtRun, missingPr2MergedAtRun.chats[0]), pr1MergedMs, 'PR 1 chat still uses PR 1 mergedAt');
+  assert.equal(
+    finishedAt(missingPr2MergedAtRun, missingPr2MergedAtRun.chats[1]),
+    now,
+    'PR 2 chat merged without mergedAt must fall back to run.updatedAt, never PR 1 mergedAt',
+  );
+
+  // Live refreshPr + automatic 15-min grace sweep for the same 2-PR missing-mergedAt scenario:
+  const { f, run } = await waitingPrRun(t);
+  f.tick(3 * 60 * 60_000);
+  const promptChat = run.chats[0];
+  const codeChat = run.chats[1];
+  const promptPrUrl = 'https://github.com/example/project/pull/22';
+  const codePrUrl = run.pr[0].url;
+  const livePr1MergedMs = f.clock - 2 * 60 * 60_000;
+
+  run.chats[1].startedAt = f.clock - 10 * 60_000;
+  delete run.chats[0].endedAt;
+  delete run.chats[1].endedAt;
+  run.pr = [
+    { number: 22, url: promptPrUrl, stage: promptChat.area, state: 'open' },
+    { ...run.pr[0], stage: codeChat.area, state: 'open' },
+  ];
+  save(run);
+
+  stubPrView(f, promptPrUrl, { state: 'MERGED', mergedAt: new Date(livePr1MergedMs).toISOString(), statusCheckRollup: [] });
+  stubPrView(f, codePrUrl, { state: 'MERGED', mergedAt: null, statusCheckRollup: [] });
+
+  const autoSweep = await runner.tidyRuns({ graceMs: DEFAULT_CLOSE_GRACE_MS }, f.ports);
+  assert.equal(autoSweep.exitCode, 0, autoSweep.message);
+  assert.equal(autoSweep.closed, 1);
+  assert.equal(autoSweep.kept, 1);
+  assert.deepEqual(autoSweep.reasonCounts, { grace: 1 });
+  const afterAuto = f.record();
+  assert.equal(afterAuto.chats[0].endedAt, livePr1MergedMs, 'PR 1 chat uses PR 1 mergedAt and closes');
+  assert.equal(afterAuto.chats[1].endedAt, f.clock, 'PR 2 chat merged without mergedAt falls back to now (not PR 1)');
+  assert.equal(f.herdr.paneOf(promptChat), undefined);
+  assert.ok(f.herdr.paneOf(codeChat), 'PR 2 chat stays protected by 15m grace when its mergedAt is absent');
+
+  // 2) Clock-skew / post-merge chat (chat.startedAt > mergedAt): never fabricate endedAt < chat.startedAt!
+  const skewedLegacyRun = {
+    state: 'completed',
+    updatedAt: now,
+    startedAt: now - 30 * 60_000,
+    pr: [{ number: 25, stage: 'build', state: 'merged', mergedAt: new Date(now - 20 * 60_000).toISOString() }],
+    chats: [{ area: 'build', startedAt: now - 5 * 60_000 }],
+  };
+  assert.equal(
+    finishedAt(skewedLegacyRun, skewedLegacyRun.chats[0]),
+    now,
+    'finishedAt must fall back to run.updatedAt when mergedAt < chat.startedAt',
+  );
+
+  // Strict ISO-8601 regex rejects bare "1" (which V8 Date.parse otherwise parses as 2001-01-01) in finishedAt and refreshPr!
+  assert.equal(
+    finishedAt(
+      { state: 'completed', updatedAt: now, startedAt: 0, pr: [{ state: 'merged', mergedAt: '1' }], chats: [{ area: 'build', startedAt: 0 }] },
+      { area: 'build', startedAt: 0 },
+    ),
+    now,
+    'finishedAt must reject non-ISO mergedAt like "1"',
+  );
+
+  // Live refreshPr + automatic 15-min grace sweep when chat.startedAt > skewed mergedAt:
+  const postMerge = await waitingPrRun(t);
+  const postChat = postMerge.run.chats[1];
+  const skewedMergedIso = new Date(postChat.startedAt - 20 * 60_000).toISOString();
+  stubPrView(postMerge.f, postMerge.run.pr[0].url, { state: 'MERGED', mergedAt: skewedMergedIso, statusCheckRollup: [] });
+
+  const postSweep = await runner.tidyRuns({ graceMs: DEFAULT_CLOSE_GRACE_MS }, postMerge.f.ports);
+  assert.equal(postSweep.exitCode, 0, postSweep.message);
+  const afterPost = postMerge.f.record();
+  assert.ok(afterPost.chats[1].endedAt >= postChat.startedAt, 'refreshPr must never stamp endedAt < chat.startedAt');
+  assert.equal(afterPost.chats[1].endedAt, postMerge.f.clock, 'skewed pre-start mergedAt falls back to discovery time');
+  assert.ok(postMerge.f.herdr.paneOf(postChat), 'post-merge chat stays protected by 15m grace');
+
+  // 3) Addendum P1: explicit tidyRuns on a recently-merged waiting multi-area run prunes Pass-1 kept/warnings
+  //    entries for newlyEnded runs -> reports closed=2, kept=0, reasonCounts={} (no ghost Pass-1 grace entry!).
+  const multi = await waitingPrRun(t);
+  multi.f.tick(5 * 60_000);
+  const merged2mIso = new Date(multi.f.clock - 2 * 60_000).toISOString();
+  stubPrView(multi.f, multi.run.pr[0].url, { state: 'MERGED', mergedAt: merged2mIso, statusCheckRollup: [] });
+  const explicitTidy = await runner.tidyRuns({}, multi.f.ports);
+  assert.equal(explicitTidy.exitCode, 0, explicitTidy.message);
+  assert.equal(explicitTidy.closed, 2, 'explicit tidy closes both plan and build tabs');
+  assert.equal(explicitTidy.kept, 0, 'Pass-1 kept entry for newlyEnded run must be pruned');
+  assert.deepEqual(explicitTidy.reasonCounts, {});
+  assert.match(explicitTidy.message, /Closed 2 finished chat tabs\. Kept 0\. Retained: none\./);
+  assert.equal(multi.f.herdr.panes.length, 1);
+
+  // Strict ISO-8601 check in refreshPr when readPrStatus supplies non-ISO "1":
+  const badIso = await waitingPrRun(t);
+  badIso.f.tick(30 * 60_000);
+  const badIsoStatus = await runner.runStatus({ ref: '17', cwd: badIso.f.source }, {
+    ...badIso.f.ports,
+    readPrStatus: async () => ({ state: 'merged', ci: 'passing', mergedAt: '1' }),
+  });
+  assert.equal(badIsoStatus.exitCode, 0, badIsoStatus.message);
+  assert.equal(badIso.f.record().chats[1].endedAt, badIso.f.clock, 'refreshPr must reject non-ISO mergedAt "1"');
 });

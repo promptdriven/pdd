@@ -848,21 +848,22 @@ export function closeGraceMs(ports = {}) {
   return ms;
 }
 const endedRun = run => ['completed', 'cancelled'].includes(run.state);
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i;
 function mergedTimestamp(run, chat) {
   if (run.state !== 'completed') return null;
   const prs = run.pr ?? [];
   const maxMerged = list => {
     let latest = -Infinity;
     for (const pr of list) {
-      if (pr?.state !== 'merged' || typeof pr.mergedAt !== 'string') continue;
+      if (pr?.state !== 'merged' || typeof pr.mergedAt !== 'string' || !ISO_TIMESTAMP.test(pr.mergedAt)) continue;
       const ms = Date.parse(pr.mergedAt);
       if (Number.isFinite(ms) && ms > latest) latest = ms;
     }
     return Number.isFinite(latest) ? latest : null;
   };
   if (typeof chat?.area === 'string' && chat.area) {
-    const areaMerged = maxMerged(prs.filter(pr => pr?.stage === chat.area || pr?.area === chat.area));
-    if (areaMerged !== null) return areaMerged;
+    const areaMergedPrs = prs.filter(pr => pr?.state === 'merged' && (pr?.stage === chat.area || pr?.area === chat.area));
+    if (areaMergedPrs.length) return maxMerged(areaMergedPrs);
   }
   return maxMerged(prs);
 }
@@ -874,7 +875,9 @@ export function finishedAt(run, chat) {
   if (Number.isFinite(chat.endedAt)) return chat.endedAt;
   if (endedRun(run)) {
     const mergedAt = mergedTimestamp(run, chat);
-    if (mergedAt !== null && (!Number.isFinite(run.updatedAt) || mergedAt <= run.updatedAt)) return mergedAt;
+    if (mergedAt !== null
+      && (!Number.isFinite(chat.startedAt) || mergedAt >= chat.startedAt)
+      && (!Number.isFinite(run.updatedAt) || mergedAt <= run.updatedAt)) return mergedAt;
     return run.cancelled?.at ?? run.updatedAt ?? run.startedAt;
   }
   return (run.chats ?? []).find(next => next.startedAt > chat.startedAt)?.startedAt ?? run.updatedAt ?? run.startedAt;
