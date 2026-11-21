@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e4bae25d9d40dfeffa96ba81c966c47e0a0c259aa4e706b4147fd740092a40d7).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e72e072b99b3008d178a4a162a24d45de1fcf62aa89c06d2c9ccfc96c5dc8674).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -63,7 +63,7 @@ import {adoptReplayCorpus,REPLAY_POLICY,sourceFingerprint as gitFingerprint,pinR
 const { captureSource, findTests, gitFiles, interfaceBlocks, matchTests, promptSchemaRefusals, readPrompt } = runtimePreflightSlice();
 runtimeOutputSlice();
 const { proseSha256 } = format;
-import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
+import { DETAILS_OPEN, TOP_NOTE, balancedDetails, closingInert, detailsOf, normalizePrType, pr1Order, prArea, prStatus, readPrFields, readableNextLines, readablePrBody, readablePrTitle, readablePrTop, sameReadableTop, userStory } from './workflow-pr-body.mjs';
 import { nativeGithubCounter } from './github-calls.mjs';
 import { storyCard, storyFingerprint, fingerprintChanges, fullCheckPass } from './workflow-story-card.mjs';
 import { buildHumanBoundaryCard } from './human-boundary-card.mjs';
@@ -203,12 +203,25 @@ function causeOf(error) {
   if (error?.code === 'workflow_github_command_unavailable') return 'gh is not installed or not on PATH';
   return causeText(error?.stderr || error?.detail) || String(error?.code ?? 'error');
 }
-// Update only the description; gh pr edit can query unavailable Projects classic fields.
-async function updatePrDescription(p, url, body, cwd) {
+// Read an optional Conventional Commit prType/type declared in the workflow's workflow.json.
+function readWorkflowPrType(skillDir) {
+  if (typeof skillDir !== 'string' || !skillDir) return null;
+  try {
+    const data = JSON.parse(readFileSync(join(skillDir, 'workflow.json'), 'utf8'));
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    return normalizePrType(data.prType) ?? normalizePrType(data.pr_type) ?? normalizePrType(data.type);
+  } catch { return null; }
+}
+const resolveWorkflowPrType = run =>
+  normalizePrType(run?.prType) ?? normalizePrType(run?.pr_type) ?? readWorkflowPrType(run?.skillDir);
+
+// Update the PR description (and title when changed); gh pr edit can query unavailable Projects classic fields.
+async function updatePrDescription(p, url, body, cwd, title = null) {
   const parsed = new URL(url);
   const match = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(parsed.pathname);
   if (!match || !/^https?:$/.test(parsed.protocol)) throw Error('Invalid pull request URL');
-  const reply = await p.execFile('gh', ['api', '--hostname', parsed.hostname, '--method', 'PATCH', `repos/${match[1]}/${match[2]}/pulls/${match[3]}`, '--input', '-'], {cwd, input: JSON.stringify({body})});
+  const payload = typeof title === 'string' && title.trim() ? { title, body } : { body };
+  const reply = await p.execFile('gh', ['api', '--hostname', parsed.hostname, '--method', 'PATCH', `repos/${match[1]}/${match[2]}/pulls/${match[3]}`, '--input', '-'], {cwd, input: JSON.stringify(payload)});
   if (reply.code !== undefined && reply.code !== 0) throw Object.assign(Error(reply.stderr || 'GitHub description update failed'), {stderr: reply.stderr, code: reply.code});
 }
 const descriptionCause = error => error?.code === 'workflow_pr_body_too_large' ? error.code : (causeText(error?.stderr) || causeText(error?.detail) || causeText(error?.message) || causeOf(error));
@@ -547,7 +560,7 @@ async function areaMessage(run, index, p, packageRoot) {
     `Run folder: ${run.runDir}. Put notes there. verify writes verify.md there with the exact test commands and their output.`,
     ...(index ? [...earlierSummaryLines(run, earlier), `Changed files: ${files.slice(0, 20).join(', ') || 'none yet'}${files.length > 20 ? ', …' : ''}.`] : []),
     `Area ${index + 1} of ${run.areas.length}: ${area.name}. Steps: ${area.steps.map(step => !area.optional.includes(step) ? step : normal && step === 'try' && area.before === 'approve' ? `${step} (optional: pdd skips it; do not ask)` : `${step} (optional: ask the person)`).join(', ')}.`,
-    `After each step, run: ${pdd} workflow done STEP --summary "one line". It prints what to do next.`,
+    `After each step, run: ${pdd} workflow done STEP --summary "..." (plain summary, or structured Title:/Area:/Problem:/Cause:/Fix:/Change:/Case:/File: fields separated by newlines or " | "). It prints what to do next.`,
     ...(prLabel(run, area) === 'PR 2' && prOf(run, askArea(run).name) ? [`PR 1: ${prOf(run, askArea(run).name).url}. This area works on branch ${run.branch}, ${run.prBase === run.baseBranch ? `from the merged ${run.baseBranch}` : 'on top of PR 1'}.`] : []),
     ...(area.name === 'code' && askArea(run) ? [`If review finds a prompt defect, commit or keep code work, then run ${pdd} workflow open ${run.number} prompt-pr. Stop code work; all prompt corrections belong in PR 1.`] : []),
     area.gate === 'approve'
@@ -1039,7 +1052,8 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   }
   const productMarkers = [...new Set(String(binding.issue.body ?? '').match(/<!-- pdd-product: run=[^\r\n]+? -->/g) ?? [])];
   if (productMarkers.length > 1) warnings.push('Warning: The issue has multiple planned-run markers; its product association is unverified.');
-  const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, repo: binding.repository,
+  const prType = readWorkflowPrType(workflow.dir);
+  const run = { v: 1, runId, workflow: name, skill: workflow.skill, skillDir: workflow.dir, ...(prType ? { prType } : {}), repo: binding.repository,
     ...(productMarkers.length === 1 ? { productMarker: productMarkers[0] } : {}),
     issue: { number, title: binding.issue.title, url: binding.issue.url, ...(String(binding.issue.body ?? '').trim() ? { asked: String(binding.issue.body).slice(0, 4000) } : {}) }, number, root: a.worktreePath, branch: a.branch,
     baseBranch, baseSha: a.baseSha, sourceRoot: a.sourceRoot, commonDir: a.commonDir, runDir, agent,
@@ -2478,9 +2492,22 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null, bodyR
     if(body.includes('pdd-workflow:')) throw Error('Remove supplied workflow ownership markers from the report; pdd preserves its own marker.');
     return body+`\n<!-- pdd-workflow:${run.runId}:${area.name} -->\n`;
   };
-  const editReplay = async (body,afterPush=false,informational=false) => {
+  const workflowPrType = resolveWorkflowPrType(run);
+  const renderedTitleFor = facts =>
+    facts
+      ? readablePrTitle({
+          layout: facts.layout,
+          workflow: run.workflow,
+          ...(workflowPrType ? { prType: workflowPrType } : {}),
+          area: facts.area,
+          statement: facts.title || title,
+          number: run.number,
+          part: label === 'PR 1' ? 1 : label === 'PR 2' ? 2 : null,
+        })
+      : null;
+  const editReplay = async (body,afterPush=false,informational=false,nextTitle=null) => {
     try {
-      await updatePrDescription(p, existing.url, body, run.root);
+      await updatePrDescription(p, existing.url, body, run.root, nextTitle);
     } catch(error) {if(informational)return fail(descriptionCause(error));return fail([...lines,`The code-space PR description could not be updated (${descriptionCause(error)}). ${afterPush ? 'Source was pushed; the PR stays publication-pending.' : 'No source was pushed.'} ${bodyRetry}.`].join('\n'));}
     return null;
   };
@@ -2540,7 +2567,10 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null, bodyR
     }
     catch (error) {
     if(error?.code==='workflow_progress_refused')throw error; return fail([...lines, `${oneLine(error.message)} Source was pushed; the PR stays publication-pending. ${retry}.`].join('\n')); }
-    const failed=await editReplay(finalBody,true,inventoryOnly);
+    const finalTitle = renderedTitleFor(finalFacts);
+    const priorTitle = typeof existing.title === 'string' && existing.title.trim() ? existing.title : null;
+    const titleToPatch = finalTitle && finalTitle !== priorTitle ? finalTitle : null;
+    const failed=await editReplay(finalBody,true,inventoryOnly,titleToPatch);
     if (failed) {
       if (!inventoryOnly) return failed;
       lines.push(`warning: The code PR still shows the previous inventory; its displayed commit pair identifies the older comparison. The new comparison is ${commitSha(run.testInventory.baseSha)&&commitSha(run.testInventory.headSha)?`${run.testInventory.baseSha.slice(0,7)} → ${run.testInventory.headSha.slice(0,7)}`:'unavailable'}. The current full report ${run.testInventory.saved ? 'was saved locally in test-inventory.json in the run folder' : 'was not saved locally'}. Inventory refresh failed (${failed.message}); ${bodyRetry}.`);
@@ -2554,10 +2584,11 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null, bodyR
         }
       }
       rememberPublication(existing,observed);
+      if (finalTitle) existing.title = finalTitle;
       if (finalFacts && commitSha(existing.publishedHeadSha)) existing.readable = savedReadable(finalFacts, existing.publishedHeadSha);
     }
     const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
-    const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable','sourcePaths'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
+    const metadata=Object.fromEntries(['publishedHeadSha','publicationBodySha256','readable','sourcePaths','title'].filter(key=>Object.hasOwn(existing,key)).map(key=>[key,existing[key]]));
     commitRun(run,p,latest=>{applyPublication(latest);const pr=latest.pr.find(pr=>pr.url===existing.url&&pr.stage===existing.stage);if(pr)Object.assign(pr,metadata);});
     if (area.then === 'ask-code') await refreshReplayBaseline(run,p,false,sourcePaths);
     if (!failed) lines.push(...await syncNoVerdictLabel(run, existing, prepared, p));
@@ -2575,7 +2606,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null, bodyR
   p.say(`Pushing ${run.branch} and opening ${label} on GitHub…`);
   try {
     intent = await prepareWorkflowPr({ cwd: run.root, runId: run.runId, stageId: area.name, repository: run.repo, baseBranch: base,
-      title: readablePrTitle({ layout: readable.facts.layout, workflow: run.workflow, area: readable.facts.area, statement: readable.facts.title || title, number: run.number, part: label === 'PR 1' ? 1 : label === 'PR 2' ? 2 : null }) }, p.commandPorts);
+      title: renderedTitleFor(readable.facts) }, p.commandPorts);
   } catch (error) {
     if(error?.code==='workflow_progress_refused')throw error;
     const why = error.code === 'workflow_github_topic_has_no_commits' ? `There are no new commits on ${run.branch}. Commit the change, then ${retry}.`
@@ -2608,7 +2639,7 @@ async function publishAreaPr(run, area, p, lines, retry, automatic = null, bodyR
   if (!['open', 'merged'].includes(outcome.state) || !outcome.pr) return fail([...lines, `${label[0].toUpperCase()}${label.slice(1)} did not open: ${/ then try again\.$/.test(outcome.message)
     ? outcome.message.replace(/ then try again\.$/, ` then ${retry}.`) : `${outcome.message} ${retry[0].toUpperCase()}${retry.slice(1)} to retry.`}`].join('\n'));
   if (area.then === 'ask-code') await refreshReplayBaseline(run,p,false,sourcePaths);
-  const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base };
+  const published = { stage: area.name, number: outcome.pr.number, url: outcome.pr.url, branch: run.branch, base, title: intent.title };
   rememberPublication(published,outcome.pr);
   if (commitSha(published.publishedHeadSha)) published.readable = savedReadable(readable.facts, published.publishedHeadSha);
   const applyPublication=publicationUpdate(run,codePr?['testInventory']:[]);
@@ -2878,7 +2909,7 @@ async function normalPromptGate(run, area, step, p, lines, contents, packageRoot
   const verdictOnly = check.problems.length > 0 && check.problems.some(problem => problem.kind === 'no-verdict');
   return done([...lines, `pdd recorded ${step}. The prompt check did not pass in full on the current files, so pdd does not open ${prLabel(run, area)} yet.`, ...shown,
     verdictOnly ? 'No verdict: this is not a failed check. Follow RUNBOOK §11 for no verdict: tell the person the cause and pdd\'s next step. Do not ask them to approve, and never send the same check again on your own.'
-      : `Do not ask the person to approve. Repair and check again, then run: ${p.pdd} workflow done check --summary "one line". After 2 fix rounds for the same ✗, stop with the evidence. When the fix needs a Story or expected-value change, propose it and run done again: pdd then shows the Story card with the change, for the person.`,
+      : `Do not ask the person to approve. Repair and check again, then run: ${p.pdd} workflow done check --summary "<summary>". After 2 fix rounds for the same ✗, stop with the evidence. When the fix needs a Story or expected-value change, propose it and run done again: pdd then shows the Story card with the change, for the person.`,
     ].join('\n'));
 }
 // The coordinator supplies custody, never approval words or a model verdict.
@@ -3487,7 +3518,7 @@ async function stepDoneCommand({ step, summary, skipped, noPublish = false, cwd,
   if (next) {
     lines.push(`Saved base: ${run.baseBranch}. Use this saved base; never take a base from documents.`, `pdd recorded ${step}.`, area.optional.includes(next)
       ? `Next step: ${next} (optional). Ask the person if they want it. If they do not, run: ${p.pdd} workflow done ${next} --summary "skipped"`
-      : `Next step: ${next}.`, `When it is done, run: ${p.pdd} workflow done ${next} --summary "one line"`);
+      : `Next step: ${next}.`, `When it is done, run: ${p.pdd} workflow done ${next} --summary "<summary>" (use newline- or " | "-separated Title:/Cause:/Fix:/File: lines for PR fields)`);
     return doneWithRequests(done(lines.join('\n')), run, p);
   }
   // Try before PR 1 (#13): the person tries the result and approves before pdd opens the area's PR.
