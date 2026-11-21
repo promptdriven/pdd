@@ -22,7 +22,7 @@ a vector without one has no such field,
 or an explicit blocked anchor with a reason. No paths or no checks is not_replayed. Paths must be unique,
 Git-visible, canonical repo-relative regular files with no symlink ancestors or hardlinks; refuse missing,
 empty, unreadable or malformed scenarios. Limit200files,10MiB aggregate vector bytes,2MiB per file and10000
-steps/checks. Each scenario uses prompt-runtime.program-scenario.v1, unique nonempty step_id, entry_path and
+steps/checks. Each scenario uses `prompt-runtime.program-scenario.v1` (kept verbatim without rewriting literal criterion IDs) or PDD Short JSON (compiled in memory via `src/scenario-compile.mjs` (`compileScenarioText`) against its paired Git-visible regular Story from explicit canonical `story_path` or matching `user_stories/**/S.md` per the test-selection naming rule, failing closed on missing, ambiguous, noncanonical, symlinked, hardlinked, oversized, or invalid-UTF-8 Stories and preserving the raw file SHA256 and exact whole numbers while refusing compile errors), unique nonempty step_id, entry_path and
 operation, and nonempty checks. A check identity is vector path, step_id and zero-based check_index, plus the
 original entry_path, operation, criterion_id, target, JSON path and assertion op. Supported targets are result,
 error, world and calls. Preserve every original identity; do not substitute generated fixtures or expected values.
@@ -33,14 +33,13 @@ pinRunAnchor(root, {paths, commit, changed, scenarios, codeSpace}) builds a run'
 `paths` are the run's changed scenario files, pinned as pinReplayVectors pins them. `commit` is the run's full
 base commit, `changed` the run's changed paths against it, and `scenarios` the current changed scenario files.
 A file on the base branch counts as approved. Also anchor each base scenario that belongs to the run's changed
-area. Read the base with local Git only: one `git grep -F` for the schema name in `*.json`, one `ls-tree`, one
-`git cat-file --batch`; never gh, a model or the worktree copy of a base file. Ignore user Git color
+area. Read the base with local Git only: `git grep -F` for the scenario schema names (`prompt-runtime.program-scenario.v1`, `pdd.scenario.short.v1`) and Short JSON `"steps"` in `*.json`, one `ls-tree`, and batched `git cat-file --batch`; never gh, a model or the worktree copy of a base file. Ignore user Git color
 settings when parsing Git output; the scenario search must emit no color codes.
 
-A base scenario is a regular `.json` blob of at most 10 MiB, found by that search, whose parsed schema_version is
-prompt-runtime.program-scenario.v1; skip other and unparsable JSON. Search matches over 10 MiB are not read;
+A base scenario is a regular `.json` blob of at most 10 MiB, found by that search or containing `"steps"` under `test/` or `tests/` (excluding `fixtures/`), whose parsed schema_version is
+`prompt-runtime.program-scenario.v1` (kept verbatim when not Short JSON) or valid PDD Short JSON compiled against its paired base Story blob; skip other and unparsable JSON (while blocking selected malformed `pdd.scenario.short.v1` and hybrid `prompt-runtime.program-scenario.v1` scenarios). Search matches over 10 MiB are not read;
 report each path, byte size and limit in the base note and the PR Anchor line, even when other files are
-selected. Never silently omit them. Its links are its story_path, every step
+selected. Never silently omit them. Its links are its story_path, top-level entry_path, every step
 entry_path and its entry_paths. The changed area is every changed path, the links of each changed scenario
 (current file and base blob), the `stories` and `prompt` of each changed path that the base commit's
 `pdd-bindings.json` (pdd.bindings.v1) declares as a `module`, and each header prompt. A base scenario belongs when
@@ -381,6 +380,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 ## Dependencies
 
 - [Runtime seam](runtime-seam.prompt.md#public-contract): required generation/runtime context for `gitFiles(root)`, safe diagnostic text (`causeText`), and exact scenario numbers (`parseScenarioJson`, `stringifyScenarioJson`).
+- [Short scenario compiler](scenario-compile.prompt.md): required generation/runtime context for compiling Short JSON scenarios in memory against paired Stories.
 - [File owner lookup](file-owner.prompt.md#generated-from-header): required generation context for the header rule.
 
 <details>
@@ -389,7 +389,7 @@ A present base `pdd.json` must be a regular readable blob within the 10 MiB read
 ```json
 {
   "status": "approved",
-  "prose_sha256": "e5e2bb5b5be451831ea1125f608714a383059878f25c02120c83fcf3e78f0baf",
+  "prose_sha256": "d9e1462c32ff25016ca95c98cfc123b3bec2b994495b13082fa6e1898549f2c6",
   "entries": [
     {
       "operation": "adoptReplayCorpus",

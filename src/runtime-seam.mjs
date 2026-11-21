@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 34f89314320d77322baea0af15e0a8fbe7ae17208b083a9fa3e5d843b4278621).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: c117de70ab9036ab2fa8bf7d7f30b3c54757082d9cebc4146d796ec618a34ead).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -2456,7 +2456,192 @@ export async function askAgent(input = {}, ports = {}) {
   return runtimeAskAgent({ ...input, run }, ports);
 }
 
+const PLAIN_PROSE_UI_MAX_BYTES = 2 * 1024 * 1024;
+const PLAIN_PROSE_RENDER_RE = /(?:\brender\s*\(|`(?:(?:sync|async)\s+)?render(?:\s*\([^)]*\))?`|^#{2,4}\s+render\b)/im;
+const PLAIN_PROSE_HANDLE_EVENT_RE = /(?:\bhandle_event\s*\(|`(?:(?:sync|async)\s+)?handle_event(?:\s*\([^)]*\))?`|^#{2,4}\s+handle_event\b)/im;
+const HTTP_TITLE_RE = /^HTTP (?:GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) \/\S*$/;
+
+function isRegularInRootPromptFile(cwd, candidate) {
+  if (typeof candidate !== 'string' || !candidate.endsWith('.prompt.md')) return false;
+  const root = repoTopRoot(cwd);
+  if (!root) return false;
+  try {
+    const realRoot = realpathSync(root);
+    const full = resolve(realpathSync(cwd), candidate);
+    const rel = relative(realRoot, full);
+    if (!rel || rel === '..' || rel.startsWith(`..${sep}`)) return false;
+    const parts = rel.split(sep);
+    for (let i = 1; i <= parts.length; i++) {
+      const st = initialLstatSync(resolve(realRoot, ...parts.slice(0, i)));
+      if (st.isSymbolicLink()) return false;
+      if (i === parts.length && !st.isFile()) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isPlainProseHybridUiPrompt(source) {
+  if (typeof source !== 'string' || !source || interfaceBlocks(source).length > 0) return false;
+  return PLAIN_PROSE_RENDER_RE.test(source) && PLAIN_PROSE_HANDLE_EVENT_RE.test(source);
+}
+
+function promptEntryHasCliOrHttpDoor(realRoot, visible, entryPath, promptSource, operation) {
+  const blocks = interfaceBlocks(promptSource);
+  if (!blocks.length) return false;
+  let iface = null;
+  try {
+    iface = readPrompt(realRoot, visible, entryPath)?.interface ?? null;
+  } catch {
+    iface = null;
+  }
+  if (!iface) {
+    try {
+      iface = JSON.parse(blocks[0][1]);
+    } catch {
+      return false;
+    }
+  }
+  const entries = Array.isArray(iface?.entries) ? iface.entries : [];
+  const conventions = Array.isArray(iface?.conventions) ? iface.conventions : [];
+  const index = entries.findIndex(entry => entry?.operation === operation);
+  if (index < 0) return false;
+  const entry = entries[index];
+  if (
+    ['input_schema', 'result_schema'].every(name =>
+      conventions.some(c => c?.path === `/entries/${index}/${name}` && c.convention === 'cli'),
+    )
+  ) {
+    return true;
+  }
+  if (typeof entry?.input_schema?.title === 'string' && HTTP_TITLE_RE.test(entry.input_schema.title)) {
+    return true;
+  }
+  return false;
+}
+
+function wrapFilteredStderr(baseStderr, shouldSuppress) {
+  const target = baseStderr ?? process.stderr;
+  return Object.assign(Object.create(target), {
+    ...(target.isTTY !== undefined ? { isTTY: target.isTTY } : {}),
+    write(chunk, ...rest) {
+      const text =
+        typeof chunk === 'string'
+          ? chunk
+          : Buffer.isBuffer(chunk) || chunk instanceof Uint8Array
+            ? Buffer.from(chunk).toString('utf8')
+            : String(chunk);
+      if (shouldSuppress(text)) {
+        const cb = rest.find(arg => typeof arg === 'function');
+        if (cb) cb();
+        return true;
+      }
+      return target.write(chunk, ...rest);
+    },
+  });
+}
+
+function shouldDefaultPlainProseScreenTab(input, cwd, ports, lazyOverlay) {
+  const opts = input?.options ?? {};
+  if (
+    opts['--tab'] !== undefined ||
+    opts['--cli'] ||
+    opts['--shell'] ||
+    opts['--serve'] !== undefined ||
+    opts['--stop'] ||
+    opts['--save-last'] ||
+    opts['--product'] ||
+    opts['--app-map'] !== undefined
+  ) {
+    return false;
+  }
+  try {
+    const root = repoTopRoot(cwd);
+    if (!root) return false;
+    const rawWords = Array.isArray(input?.words) ? input.words : [];
+    const found = withScenarioOverlay(lazyOverlay, () =>
+      findTests({ root, cwd, excludeFixtureProjects: rawWords.length === 0 }, ports),
+    );
+    if (!found?.visible || found.visible.has('app-map.json') || found.visible.has('app/app-map.json')) {
+      return false;
+    }
+    const realRoot = realpathSync(root);
+    const realCwd = realpathSync(cwd);
+    const normalizedWords = rawWords.map(word => {
+      if (typeof word !== 'string' || !word) return word;
+      if (realCwd === realRoot && !word.startsWith('/') && !word.includes('\\')) return word;
+      const candidate = resolve(realCwd, word);
+      const rel = relative(realRoot, candidate).split(sep).join('/');
+      const withinRepo = rel !== '..' && !rel.startsWith('../');
+      if (!withinRepo) return word;
+      if (rel && (found.visible.has(rel) || found.tests?.some(t => t.path === rel || t.storyPath === rel))) {
+        return rel;
+      }
+      try {
+        if (initialStatSync(candidate).isDirectory()) return rel || '.';
+      } catch { /* keep original word */ }
+      return word;
+    });
+    const selectedResult = normalizedWords.length ? selectTests(found, normalizedWords) : null;
+    const tests = normalizedWords.length
+      ? (Array.isArray(selectedResult) ? selectedResult : selectedResult?.selected ?? [])
+      : (found.tests ?? []);
+    if (!tests.length) return false;
+
+    const promptCache = new Map();
+    const readSafeVisiblePrompt = rel => {
+      if (promptCache.has(rel)) return promptCache.get(rel);
+      let text = null;
+      try {
+        if (
+          typeof rel === 'string' &&
+          rel.endsWith('.prompt.md') &&
+          !rel.startsWith('/') &&
+          !rel.includes('\\') &&
+          found.visible.has(rel)
+        ) {
+          const full = resolve(realRoot, rel);
+          if (full.startsWith(`${realRoot}${sep}`)) {
+            const lst = initialLstatSync(full);
+            if (!lst.isSymbolicLink() && lst.isFile() && lst.size <= PLAIN_PROSE_UI_MAX_BYTES) {
+              const realFull = realpathSync(full);
+              if (realFull.startsWith(`${realRoot}${sep}`)) {
+                text = initialReadFileSync(realFull, 'utf8');
+              }
+            }
+          }
+        }
+      } catch {
+        text = null;
+      }
+      promptCache.set(rel, text);
+      return text;
+    };
+
+    let sawPlainProseUiStep = false;
+    for (const item of tests) {
+      const steps = Array.isArray(item?.doc?.steps) ? item.doc.steps : [];
+      for (const step of steps) {
+        const entryPath = typeof step?.entry_path === 'string' ? step.entry_path : '';
+        const op = typeof step?.operation === 'string' ? step.operation : '';
+        if (!entryPath || !op) continue;
+        const promptSource = readSafeVisiblePrompt(entryPath);
+        if (promptSource === null) continue;
+        if (promptEntryHasCliOrHttpDoor(realRoot, found.visible, entryPath, promptSource, op)) return false;
+        if ((op === 'render' || op === 'handle_event') && isPlainProseHybridUiPrompt(promptSource)) {
+          sawPlainProseUiStep = true;
+        }
+      }
+    }
+    return sawPlainProseUiStep;
+  } catch {
+    return false;
+  }
+}
+
 export async function runTry(input = {}, ports = {}) {
+  const { runTry: rawTryOverride, ...forwardPorts } = ports;
   const [
     ,
     { loadAgentDefinitions },
@@ -2475,38 +2660,97 @@ export async function runTry(input = {}, ports = {}) {
   const cwd = input?.cwd ?? process.cwd();
   const defaultAgentBridge = (context, test, tryId, opts, link) =>
     createAgentBridge(context, test, tryId, opts, link, {
-      redaction: ports.redaction ?? seamRedaction(ports),
-      redactSecrets: ports.redactSecrets,
-      loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
-      discoverAgents: ports.discoverAgents ?? ports.agents?.list,
-      runAgentProcess: ports.runAgentProcess ?? ports.agents?.run,
-      askAgent: ports.askAgent ?? ports.agents?.ask,
-      evidenceEligibility: ports.evidenceEligibility ?? ports.readEvidenceEligibility ?? readEvidenceEligibility,
-      guidePorts: ports.guidePorts,
+      redaction: forwardPorts.redaction ?? seamRedaction(forwardPorts),
+      redactSecrets: forwardPorts.redactSecrets,
+      loadAgentDefinitions: forwardPorts.loadAgentDefinitions ?? forwardPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
+      discoverAgents: forwardPorts.discoverAgents ?? forwardPorts.agents?.list,
+      runAgentProcess: forwardPorts.runAgentProcess ?? forwardPorts.agents?.run,
+      askAgent: forwardPorts.askAgent ?? forwardPorts.agents?.ask,
+      evidenceEligibility: forwardPorts.evidenceEligibility ?? forwardPorts.readEvidenceEligibility ?? readEvidenceEligibility,
+      guidePorts: forwardPorts.guidePorts,
     });
-  const lazyOverlay = { cwd, ports, map: undefined };
-  return withScenarioOverlay(lazyOverlay, () =>
-    runtimeRunTry(
-      input,
-      seamRuntimePorts(
-        withPortDefaults(withEligibilityDefault(ports, readEvidenceEligibility), {
-          tryLauncherUrl: TRY_LAUNCHER_URL,
-          agentBridge: defaultAgentBridge,
-          loadAgentDefinitions: ports.loadAgentDefinitions ?? ports.agents?.loadDefinitions ?? loadAgentDefinitions,
-          discoverAgents: ports.discoverAgents ?? ports.agents?.list ?? defaultDiscoverAgents,
-          askAgent: ports.askAgent ?? ports.agents?.ask ?? defaultAskAgent,
-          parseProductDocuments,
-          parseProductWorldWriters,
-          askApproval,
-          lineReader,
-          promptPath,
-          files: wrapCaseFilesForShortJson(ports.files, ports),
-          redaction: seamRedaction(ports),
-        }),
-        { cwd },
+  const words = Array.isArray(input?.words) ? input.words : [];
+  const opts = input?.options ?? {};
+  const directPromptCandidate =
+    !opts['--stop'] && !opts['--save-last'] && !opts['--product'] && words.length === 1 && isRegularInRootPromptFile(cwd, words[0])
+      ? words[0]
+      : null;
+  const invokeRunTry = typeof rawTryOverride === 'function' ? rawTryOverride : runtimeRunTry;
+  const lazyOverlay = { cwd, ports: forwardPorts, map: undefined };
+  const invoke = (tryInput, tryPorts) =>
+    withScenarioOverlay(lazyOverlay, () =>
+      invokeRunTry(
+        tryInput,
+        seamRuntimePorts(
+          withPortDefaults(withEligibilityDefault(tryPorts, readEvidenceEligibility), {
+            tryLauncherUrl: TRY_LAUNCHER_URL,
+            agentBridge: defaultAgentBridge,
+            loadAgentDefinitions: tryPorts.loadAgentDefinitions ?? tryPorts.agents?.loadDefinitions ?? loadAgentDefinitions,
+            discoverAgents: tryPorts.discoverAgents ?? tryPorts.agents?.list ?? defaultDiscoverAgents,
+            askAgent: tryPorts.askAgent ?? tryPorts.agents?.ask ?? defaultAskAgent,
+            parseProductDocuments,
+            parseProductWorldWriters,
+            askApproval,
+            lineReader,
+            promptPath,
+            files: wrapCaseFilesForShortJson(tryPorts.files, tryPorts),
+            redaction: seamRedaction(tryPorts),
+          }),
+          { cwd },
+        ),
       ),
-    ),
-  );
+    );
+
+  if (directPromptCandidate) {
+    let observedErr = '';
+    const targetStderr = forwardPorts.stderr ?? process.stderr;
+    const watchedStderr = wrapFilteredStderr(targetStderr, text => {
+      observedErr += text;
+      return false;
+    });
+    const exitCode = await invoke(input, { ...forwardPorts, stderr: watchedStderr });
+    if (
+      exitCode === 2 &&
+      /No tests found|Unknown story|No Stories are available/i.test(observedErr) &&
+      !observedErr.includes('runtime-client#97')
+    ) {
+      targetStderr.write(
+        `Direct .prompt.md simulation (${directPromptCandidate}) requires @promptdriven/runtime-client with single-prompt simulation support (promptdriven/runtime-client#97).\n`,
+      );
+    }
+    return exitCode;
+  }
+
+  const autoScreenTab = shouldDefaultPlainProseScreenTab(input, cwd, forwardPorts, lazyOverlay);
+  const effectiveInput = autoScreenTab
+    ? { ...input, options: { ...opts, '--tab': 'screen' } }
+    : input;
+  if (autoScreenTab && !opts['--new']) {
+    let reopenAutoTabConflict = false;
+    const emittedBeforeFallback = new Set();
+    const baseStderr = forwardPorts.stderr ?? process.stderr;
+    const filteredStderr = wrapFilteredStderr(baseStderr, text => {
+      if (text.includes('--app-map and --tab apply only to a new Try')) {
+        reopenAutoTabConflict = true;
+        return true;
+      }
+      emittedBeforeFallback.add(text);
+      return false;
+    });
+    const code = await invoke(effectiveInput, { ...forwardPorts, stderr: filteredStderr });
+    if (code === 2 && reopenAutoTabConflict) {
+      const reopenStderr = wrapFilteredStderr(baseStderr, text => {
+        if (emittedBeforeFallback.has(text)) {
+          emittedBeforeFallback.delete(text);
+          return true;
+        }
+        return text.includes("This Story's operation takes typed input, so it opens on the Form tab.");
+      });
+      return invoke(input, { ...forwardPorts, stderr: reopenStderr });
+    }
+    return code;
+  }
+  return invoke(effectiveInput, forwardPorts);
 }
 
 export async function createAgentBridge(context, test, tryId, options, link, seamPorts = {}) {
@@ -3011,12 +3255,15 @@ export async function simulate(input = {}, ports = {}) {
   else if (input?.mode === 'serve' && options['--serve'] === undefined) options['--serve'] = input?.port ?? true;
   else if (input?.mode === 'save-last') options['--save-last'] = true;
   else if (input?.mode === 'stop') options['--stop'] = true;
+  if (input?.fresh === true && options['--fresh'] === undefined) options['--fresh'] = true;
   const testWord =
     typeof input?.test === 'string' && input.test.length > 0
       ? input.test
       : input?.test && typeof input.test === 'object' && typeof (input.test.path ?? input.test.story) === 'string'
         ? input.test.path ?? input.test.story
-        : null;
+        : typeof input?.prompt === 'string' && input.prompt.length > 0
+          ? input.prompt
+          : null;
   const words = Array.isArray(input?.words)
     ? [...input.words]
     : testWord !== null

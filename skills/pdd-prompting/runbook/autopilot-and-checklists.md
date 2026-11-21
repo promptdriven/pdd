@@ -34,7 +34,7 @@ Pass labeled lines in your `done` summary (later lines replace earlier ones):
 
 ## 22. Bounded handoffs and measurement
 
-- Author a single coupled slice (`1–2` prompts) in one session (`0` authoring subagents). Parallelize only `3+` independent modules after locking shared contracts (`app-map.json` / interfaces).
+- Author a single coupled slice (`1–2` prompts) in one session (`0` authoring subagents). Parallelize only `3+` independent modules after locking shared contracts (schemas / ports).
 - Give each subagent its full brief once and wait once; keep code verification, formal check, and review on fresh independent subagents.
 
 ### Autopilot core jobs

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/svg-layout.prompt.md (sha256: f2368017279a97f20b6c19504b9b335157d2d90597dff895b9285c035eebc4f0).
+// Generated from prompts/cli/svg-layout.prompt.md (sha256: 4a5f7a6aedc2322ebbf3ee5f27621fefb0fd67950cff4d2a36e7ea1142885217).
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { lintScreenDesign } from './screen-design-check.mjs';
@@ -720,6 +720,8 @@ function resolveInitialWorld(root, testFile, initialWorld) {
 }
 
 const APP_MAP_PATH_RE = /(?:^|\/)(?:app-map\.json|app\/maps\/[^/]+\.json)$/;
+const APP_MAP_SCHEMA_VERSIONS = new Set(['prompt-runtime.app-map.v1', 'prompt-runtime.app-map.v2']);
+const isValidAppMapSchemaVersion = doc => !Object.hasOwn(doc, 'schema_version') || APP_MAP_SCHEMA_VERSIONS.has(doc.schema_version);
 const isFixturePath = path => /(?:^|\/)fixtures\//.test(path);
 
 function proseMentionsPortOp(prose, opKey) {
@@ -787,17 +789,29 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
     for (const mapPath of [...mapPaths].sort()) {
       try {
         const doc = JSON.parse(safeRead(root, mapPath));
-        if (!doc || typeof doc !== 'object' || doc.schema_version !== 'prompt-runtime.app-map.v1' || typeof doc.name !== 'string' || !doc.name) continue;
+        if (
+          !doc
+          || typeof doc !== 'object'
+          || Array.isArray(doc)
+          || !isValidAppMapSchemaVersion(doc)
+          || (Object.hasOwn(doc, 'name') && (typeof doc.name !== 'string' || !doc.name))
+          || !Array.isArray(doc.screens)
+        ) continue;
         const topSheets = Array.isArray(doc.stylesheets) ? doc.stylesheets.filter(item => typeof item === 'string') : [];
-        const screens = (Array.isArray(doc.screens) ? doc.screens : [])
-          .filter(screen => screen && typeof screen === 'object' && typeof screen.id === 'string' && typeof screen.prompt_path === 'string' && typeof screen.source === 'string' && typeof screen.format === 'string')
-          .map(screen => ({
-            id: screen.id,
-            prompt_path: screen.prompt_path,
-            source: screen.source,
-            format: screen.format,
-            stylesheets: Array.isArray(screen.stylesheets) ? screen.stylesheets.filter(item => typeof item === 'string') : [],
-          }));
+        const screens = doc.screens
+          .filter(screen => screen && typeof screen === 'object' && typeof screen.prompt_path === 'string')
+          .map((screen, idx) => {
+            const source = typeof screen.source === 'string' ? screen.source : 'operation';
+            const format = typeof screen.format === 'string' ? screen.format : (source === 'mockup' ? 'svg' : 'html');
+            const id = typeof screen.id === 'string' && screen.id ? screen.id : (idx === 0 ? 'main' : `screen-${idx + 1}`);
+            return {
+              id,
+              prompt_path: screen.prompt_path,
+              source,
+              format,
+              stylesheets: Array.isArray(screen.stylesheets) ? screen.stylesheets.filter(item => typeof item === 'string') : [],
+            };
+          });
         for (const screen of screens) {
           if (screen.source === 'operation' && screen.format === 'html' && inspectedPrompts.has(screen.prompt_path)) {
             for (const cssPath of [...topSheets, ...screen.stylesheets]) cssPaths.add(cssPath);
@@ -893,17 +907,21 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
       ]);
       if (![...referenced].some(p => promptFilter.has(p))) continue;
     }
-    if (mapDoc.schema_version !== 'prompt-runtime.app-map.v1') {
-      const text = `Warning: ${mapPath}: app-map schema_version ${JSON.stringify(mapDoc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.app-map.v1".`;
+    if (Object.hasOwn(mapDoc, 'schema_version') && !APP_MAP_SCHEMA_VERSIONS.has(mapDoc.schema_version)) {
+      const text = `Warning: ${mapPath}: app-map schema_version ${JSON.stringify(mapDoc.schema_version ?? null)} is invalid; set "schema_version": "prompt-runtime.app-map.v1" (or omit it for compact app-map.json).`;
       warnings.push({ key: `${mapPath}\0mapschema`, text });
+    }
+    if (!screens.length && !promptFilter) {
+      const text = `Warning: ${mapPath}: app-map.json must declare a non-empty "screens" array.`;
+      warnings.push({ key: `${mapPath}\0mapscreens`, text });
     }
     const validScreenIds = new Set();
     const screenPromptById = new Map();
     for (const [sIdx, screen] of screens.entries()) {
-      const sId = typeof screen.id === 'string' && screen.id ? screen.id : `screens[${sIdx}]`;
-      if (typeof screen.id === 'string' && screen.id && screen.id !== '*') validScreenIds.add(screen.id);
+      const sId = typeof screen.id === 'string' && screen.id ? screen.id : (sIdx === 0 ? 'main' : `screen-${sIdx + 1}`);
+      if (sId !== '*') validScreenIds.add(sId);
       if (typeof screen.prompt_path === 'string' && screen.prompt_path.trim()) {
-        if (typeof screen.id === 'string' && screen.id) screenPromptById.set(screen.id, screen.prompt_path);
+        screenPromptById.set(sId, screen.prompt_path);
         if (!promptExists(screen.prompt_path)) {
           const text = `Warning: ${mapPath} (screen "${sId}"): screen prompt_path "${screen.prompt_path}" does not exist in Git-visible prompts; point prompt_path to an existing prompts/*.prompt.md file and run git add.`;
           warnings.push({ key: `${mapPath}\0mapscreen\0${sIdx}`, text });
@@ -913,6 +931,7 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
         warnings.push({ key: `${mapPath}\0mapscreenmissing\0${sIdx}`, text });
       }
     }
+    const hasStateSchema = Boolean(mapDoc.state_schema && typeof mapDoc.state_schema === 'object' && !Array.isArray(mapDoc.state_schema));
     if (mapDoc.timers !== undefined) {
       if (!Array.isArray(mapDoc.timers) || mapDoc.timers.length > 16) {
         const text = `Warning: ${mapPath}: timers must be an array of at most 16 timer objects.`;
@@ -937,31 +956,35 @@ export function lintSvgLayouts({ root, files, promptPaths }) {
             warnings.push({ key: `${mapPath}\0timerinterval\0${tIdx}`, text });
           }
           const enInit = readPointer(mapDoc.initial_state, timer.enabled_pointer);
-          const enSchema = readSchemaPointer(mapDoc.state_schema, timer.enabled_pointer);
+          const enSchema = hasStateSchema ? readSchemaPointer(mapDoc.state_schema, timer.enabled_pointer) : null;
           if (
             typeof enInit.value !== 'boolean'
-            || !enSchema.exists
-            || !enSchema.required
-            || enSchema.schema?.type !== 'boolean'
-            || Array.isArray(enSchema.schema?.oneOf)
+            || (hasStateSchema && (
+              !enSchema.exists
+              || !enSchema.required
+              || enSchema.schema?.type !== 'boolean'
+              || Array.isArray(enSchema.schema?.oneOf)
+            ))
           ) {
             const text = `Warning: ${mapPath} (timer "${tLabel}"): enabled_pointer ${JSON.stringify(timer.enabled_pointer ?? null)} must resolve to a boolean in initial_state and a required {"type": "boolean"} property (without oneOf) in state_schema.`;
             warnings.push({ key: `${mapPath}\0timerenabled\0${tIdx}`, text });
           }
           const genInit = readPointer(mapDoc.initial_state, timer.generation_pointer);
-          const genSchema = readSchemaPointer(mapDoc.state_schema, timer.generation_pointer);
-          const genMin = genSchema.schema?.minimum;
-          const genMax = genSchema.schema?.maximum;
+          const genSchema = hasStateSchema ? readSchemaPointer(mapDoc.state_schema, timer.generation_pointer) : null;
+          const genMin = genSchema?.schema?.minimum;
+          const genMax = genSchema?.schema?.maximum;
           const validGenInit = Number.isSafeInteger(genInit.value) && genInit.value >= 0 && genInit.value <= MAX_SAFE_TIMER_INT;
           const validGenMax = genMax === undefined || (Number.isSafeInteger(genMax) && genMax <= MAX_SAFE_TIMER_INT && Number.isSafeInteger(genMin) && genMin <= genMax);
-          const validGenSchema = genSchema.exists
+          const validGenSchema = !hasStateSchema || (
+            genSchema.exists
             && genSchema.required
             && genSchema.schema?.type === 'integer'
             && !Array.isArray(genSchema.schema?.oneOf)
             && Number.isSafeInteger(genMin)
             && genMin >= 0
             && genMin <= MAX_SAFE_TIMER_INT
-            && validGenMax;
+            && validGenMax
+          );
           if (!validGenInit || !validGenSchema) {
             const text = `Warning: ${mapPath} (timer "${tLabel}"): generation_pointer ${JSON.stringify(timer.generation_pointer ?? null)} must resolve to a safe integer 0..9007199254740991 in initial_state and a required {"type": "integer", "minimum": 0} property (without oneOf) in state_schema.`;
             warnings.push({ key: `${mapPath}\0timergen\0${tIdx}`, text });

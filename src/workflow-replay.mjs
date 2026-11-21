@@ -1,11 +1,13 @@
-// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 0db4cd06a931f2ed0bacbe8a9ae7aec976b7637fdf312c5023048d376c6edea8).
+// Generated from prompts/cli/workflow-replay.prompt.md (sha256: 12ddd084ee873b763a0f5319815c5f9e7d54903d3488b5466adfe03f6dde9574).
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, readSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync, symlinkSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep, basename } from 'node:path';
 import { headerPrompts } from './file-owner.mjs';
 import { cleanText, format, runtimeOutputSlice, runtimePreflightSlice, runtimeScenarioJsonSlice } from './runtime-seam.mjs';
+import { compileScenarioText, isShortScenarioDoc } from './scenario-compile.mjs';
 
 const { gitFiles } = runtimePreflightSlice();
 runtimeOutputSlice();
@@ -76,9 +78,63 @@ function vectorFile(root, path, visible) {
   requireThat(rel && !rel.startsWith('..') && !rel.startsWith(sep) && visible.has(path), 'An original vector is not Git-visible in this repository.');
   return boundedFile(join(root,path));
 }
-function scenario(path, bytes) {
+function isStoryCandidatePath(path) {
+  if (!path.endsWith('.md')) return false;
+  const parts = path.split('/');
+  return parts.slice(0, -1).includes('user_stories') && !/^(?:plan|readme)\.md$/i.test(parts.at(-1));
+}
+function storyOwnerStems(path) {
+  const base = basename(path, '.json');
+  if (!base) return [];
+  const stems = [base];
+  for (let at = base.lastIndexOf('.'); at > 0; at = base.lastIndexOf('.', at - 1)) {
+    stems.push(base.slice(0, at));
+  }
+  return stems;
+}
+function resolvePairedStory(path, doc, availablePaths, readStoryBytes) {
+  if (Object.hasOwn(doc, 'story_path')) {
+    const explicit = typeof doc.story_path === 'string' ? doc.story_path : '';
+    requireThat(explicit === explicit.trim() && canonicalPath(explicit), 'Short JSON scenario story_path must be a canonical repository-relative path.');
+    requireThat(availablePaths.has(explicit), `Short JSON scenario paired Story ${explicit} is missing or not Git-visible.`);
+    const bytes = readStoryBytes(explicit);
+    return { storyPath: explicit, storySource: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
+  }
+  const stories = [...availablePaths].filter(isStoryCandidatePath).sort();
+  const stemSet = new Set(storyOwnerStems(path));
+  const matches = stories.filter(candidate => stemSet.has(basename(candidate, '.md')));
+  if (matches.length > 1) {
+    throw Error(`Short JSON scenario ${path} matches multiple Stories: ${matches.join(', ')}.`);
+  }
+  if (matches.length === 1) {
+    const bytes = readStoryBytes(matches[0]);
+    return { storyPath: matches[0], storySource: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
+  }
+  return null;
+}
+function compileIfShort(path, rawText, exact, resolveStory) {
+  if (!isShortScenarioDoc(exact)) return exact;
+  const story = typeof resolveStory === 'function' ? resolveStory(path, exact) : null;
+  if (!story && !Object.hasOwn(exact, 'criteria')) {
+    throw Error(`Short JSON scenario ${path} requires a paired Story file to bind acceptance criteria.`);
+  }
+  const compiled = compileScenarioText(rawText, {
+    path,
+    storyPath: story?.storyPath ?? null,
+    storySource: story?.storySource ?? null,
+  });
+  requireThat(!compiled.refusal, compiled.refusal?.message || 'Short JSON scenario could not be compiled.');
+  return compiled.exactDoc;
+}
+function worktreeStoryResolver(root, visible) {
+  return (path, doc) => resolvePairedStory(path, doc, visible, candidate => vectorFile(root, candidate, visible));
+}
+function scenario(path, bytes, resolveStory) {
   // Exact whole numbers above 2^53 keep their digits beside the ordinary JSON snapshot.
-  const exact = parseScenario(new TextDecoder('utf-8',{fatal:true}).decode(bytes)), doc = jsonSafe(exact), leaves = exactIntegerLeaves(exact);
+  const rawText = new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+  const rawExact = parseScenario(rawText);
+  const exact = compileIfShort(path, rawText, rawExact, resolveStory);
+  const doc = jsonSafe(exact), leaves = exactIntegerLeaves(exact);
   requireThat(object(doc) && doc.schema_version === 'prompt-runtime.program-scenario.v1' && Array.isArray(doc.steps) && doc.steps.length > 0 && doc.steps.length <= MAX, 'Original vectors need nonempty versioned scenario steps.');
   const seen = new Set(), steps = [], checks = [];
   for (const step of doc.steps) {
@@ -98,11 +154,12 @@ export function pinReplayVectors(root, paths) {
   try {
     requireThat(Array.isArray(paths) && paths.length <= 200 && new Set(paths).size === paths.length, 'Original vector selection is invalid or too large.');
     if (!paths.length) return {...anchor,outcome:'not_replayed',reason:'The approved prompt area has no original scenario vectors.'};
-    const visible = new Set(gitFiles(root)); let bytes = 0, count = 0, steps = 0;
+    const visible = new Set(gitFiles(root)), resolveStory = worktreeStoryResolver(root, visible);
+    let bytes = 0, count = 0, steps = 0;
     for (const path of paths) {
       const raw = vectorFile(root,path,visible); bytes += raw.length;
       requireThat(bytes <= 10*1024*1024, 'Original vectors exceed 10 MiB.');
-      const vector = scenario(path,raw);count += vector.checks.length;steps += vector.steps.length;
+      const vector = scenario(path,raw,resolveStory);count += vector.checks.length;steps += vector.steps.length;
       requireThat(count <= MAX && steps <= MAX, 'Original vectors exceed the step/check limit.');anchor.vectors.push(vector);
     }
     return anchor;
@@ -234,12 +291,16 @@ function nativeFingerprint(root) {
   })));
 }
 function inspectAdoptionView(view, prompts, scenarios) {
-  const vectors=[], seeds=[...prompts]; let total=0, checks=0, steps=0;
+  const vectors=[], seeds=[...prompts], viewNameSet=new Set(view.names); let total=0, checks=0, steps=0;
+  const resolveViewStory=(path,doc)=>resolvePairedStory(path,doc,viewNameSet,candidate=>{
+    view.loadMany([candidate]);
+    return boundedFile(join(view.root,candidate),LIMIT);
+  });
   for (const path of [...scenarios].sort()) {
-    const raw=boundedFile(join(view.root,path),10*1024*1024); const doc=parse(raw);
-    requireThat(doc?.schema_version === 'prompt-runtime.program-scenario.v1','Declared scenario has an invalid version.');
+    const raw=boundedFile(join(view.root,path),10*1024*1024); const parsed=parse(raw);
+    requireThat(parsed?.schema_version === 'prompt-runtime.program-scenario.v1' || isShortScenarioDoc(parsed),'Declared scenario has an invalid version.');
     requireThat(raw.length<=LIMIT,'Original vector exceeds its byte limit.');
-    const vector=scenario(path,raw); total+=raw.length; checks+=vector.checks.length; steps+=vector.steps.length;
+    const vector=scenario(path,raw,resolveViewStory), doc=vector.snapshot; total+=raw.length; checks+=vector.checks.length; steps+=vector.steps.length;
     requireThat(vectors.length < 200 && total<=10*1024*1024 && checks<=MAX && steps<=MAX, 'Corpus exceeds original vector bounds.');
     vectors.push(vector);
     seeds.push(...doc.steps.map(step=>step.entry_path));
@@ -341,7 +402,7 @@ export async function adoptReplayCorpus(root, declarationPath, ports = {}) {
 // #2640: approved scenarios on the run's base join its anchor without a declaration.
 // Only links that the repository records count; all reads are local Git blobs.
 const plural=(count,word)=>`${count} ${word}${count===1?'':'s'}`;
-const scenarioLinks=doc=>[doc.story_path,...(Array.isArray(doc.steps)?doc.steps.map(step=>step?.entry_path):[]),
+const scenarioLinks=doc=>[doc.story_path,doc.entry_path,...(Array.isArray(doc.steps)?doc.steps.map(step=>step?.entry_path):[]),
   ...(Array.isArray(doc.entry_paths)?doc.entry_paths:[])].filter(value=>typeof value==='string'&&value.length>0);
 function bindingLinks(bytes) {
   if(!bytes)return {state:'absent',links:new Map()};
@@ -367,10 +428,12 @@ function baseSelection(bytes,commit) {
   return doc.replay.base_scenarios??'linked';
 }
 function baseScenarios(root,commit,changed,scenarios,codeSpace) {
-  // Read only JSON blobs that name the scenario schema, so large unrelated JSON stays unread.
-  let named;const changedSet=new Set(changed);
-  try {named=new Set(localGit(root,'grep','--no-color','-l','-z','-F','-e','prompt-runtime.program-scenario.v1',commit,'--','*.json').toString('utf8').split('\0').filter(Boolean).map(name=>name.slice(commit.length+1)));}
+  // Read only JSON blobs that name the scenario schema or Short JSON steps, so large unrelated JSON stays unread.
+  let named, stepNamed;const changedSet=new Set(changed);
+  try {named=new Set(localGit(root,'grep','--no-color','-l','-z','-F','-e','prompt-runtime.program-scenario.v1','-e','pdd.scenario.short.v1',commit,'--','*.json').toString('utf8').split('\0').filter(Boolean).map(name=>name.slice(commit.length+1)));}
   catch(error) {if(error.status!==1)throw Error('The base scenario search failed.');named=new Set();}
+  try {stepNamed=new Set(localGit(root,'grep','--no-color','-l','-z','-F','-e','"steps"',commit,'--','*.json').toString('utf8').split('\0').filter(Boolean).map(name=>name.slice(commit.length+1)));}
+  catch(error) {if(error.status!==1)throw Error('The base scenario search failed.');stepNamed=new Set();}
   const inventory=localGit(root,'ls-tree','-r','-t','-l','-z','--full-tree',commit).toString('utf8').split('\0').filter(Boolean).map(row=>{
     const match=/^(\d+) (\w+) ([a-f0-9]+) +(-|\d+)\t([\s\S]+)$/.exec(row);
     requireThat(match,'Invalid Git tree inventory.');return {mode:match[1],type:match[2],oid:match[3],size:Number(match[4])||0,path:match[5]};
@@ -378,16 +441,60 @@ function baseScenarios(root,commit,changed,scenarios,codeSpace) {
   const config=inventory.find(row=>row.path==='pdd.json');
   requireThat(!config || config.type==='blob' && ['100644','100755'].includes(config.mode) && config.size<=10*1024*1024,
     `pdd.json on base ${commit.slice(0,7)} cannot be read: it must be a regular blob within 10 MiB.`);
-  const rows=inventory.filter(row=>row.type==='blob'&&['100644','100755'].includes(row.mode)&&(named.has(row.path)||['pdd-bindings.json','pdd.json'].includes(row.path)||changedSet.has(row.path))&&canonicalPath(row.path));
-  const oversized=rows.filter(row=>named.has(row.path)&&row.size>10*1024*1024);
+  const shortCandidate = path => stepNamed.has(path) && /^(?:tests?|.*\/tests?)\/.*\.json$/.test(path) && !/(?:^|\/)fixtures\//.test(path);
+  const regularBlobs = new Map(inventory.filter(row=>row.type==='blob'&&['100644','100755'].includes(row.mode)&&canonicalPath(row.path)).map(row=>[row.path,row]));
+  const rows=inventory.filter(row=>row.type==='blob'&&['100644','100755'].includes(row.mode)&&(named.has(row.path)||shortCandidate(row.path)||isStoryCandidatePath(row.path)||['pdd-bindings.json','pdd.json'].includes(row.path)||changedSet.has(row.path))&&canonicalPath(row.path));
+  const oversized=rows.filter(row=>(named.has(row.path)||shortCandidate(row.path))&&row.size>10*1024*1024);
   const readable=rows.filter(row=>row.size<=10*1024*1024);
-  const blobs=batchBlobs(root,readable),docs=new Map(),select=baseSelection(blobs.get('pdd.json'),commit);
-  for(const row of readable){try{const doc=parse(blobs.get(row.path));if(object(doc)&&doc.schema_version==='prompt-runtime.program-scenario.v1')docs.set(row.path,doc);}catch{/* Not a scenario. */}}
+  const blobs=batchBlobs(root,readable),docs=new Map(),brokenBaseShort=new Map(),select=baseSelection(blobs.get('pdd.json'),commit);
+  const basePathSet=new Set(regularBlobs.keys());
+  const readBaseStoryBytes=candidate=>{
+    const invRow=regularBlobs.get(candidate);
+    requireThat(invRow && invRow.size<=LIMIT, `Paired Story ${candidate} on base ${commit.slice(0,7)} exceeds its byte limit or is not a regular blob.`);
+    if(!blobs.has(candidate)){
+      const extra=batchBlobs(root,[invRow]);
+      if(extra.has(candidate))blobs.set(candidate,extra.get(candidate));
+    }
+    const bytes=blobs.get(candidate);
+    requireThat(bytes && bytes.length>0, `Paired Story ${candidate} on base ${commit.slice(0,7)} is empty or unreadable.`);
+    return bytes;
+  };
+  const resolveBaseStory=(path,doc)=>resolvePairedStory(path,doc,basePathSet,readBaseStoryBytes);
+  for(const row of readable){
+    if(!row.path.endsWith('.json'))continue;
+    let rawText, rawExact;
+    try{
+      rawText=new TextDecoder('utf-8',{fatal:true}).decode(blobs.get(row.path));
+      rawExact=parseScenario(rawText);
+    } catch{ continue; }
+    if(object(rawExact)&&rawExact.schema_version==='prompt-runtime.program-scenario.v1'&&!isShortScenarioDoc(rawExact)){docs.set(row.path,jsonSafe(rawExact));continue;}
+    if((named.has(row.path)||shortCandidate(row.path))&&object(rawExact)&&isShortScenarioDoc(rawExact)){
+      try{
+        const compiled=compileIfShort(row.path,rawText,rawExact,resolveBaseStory);
+        if(object(compiled)&&compiled.schema_version==='prompt-runtime.program-scenario.v1')docs.set(row.path,jsonSafe(compiled));
+      }catch(error){
+        if(rawExact.schema_version==='pdd.scenario.short.v1'||rawExact.schema_version==='prompt-runtime.program-scenario.v1'){
+          brokenBaseShort.set(row.path,error.message);
+          docs.set(row.path,jsonSafe(rawExact));
+        }
+      }
+    }
+  }
   const bindings=bindingLinks(blobs.get('pdd-bindings.json')),area=new Set(changed);
   const linkAll=doc=>{if(object(doc))for(const link of scenarioLinks(doc))area.add(link);};
   for(const path of changed){if(docs.has(path))linkAll(docs.get(path));for(const link of bindings.links.get(path)??[])area.add(link);}
   // The inventory owner reports unreadable current scenarios; here they add no links.
-  for(const path of scenarios){try{linkAll(parse(boundedFile(join(root,path))));}catch{/* No links. */}}
+  if(scenarios.length){
+    const currentVisible=new Set(gitFiles(root)), currentStoryResolver=worktreeStoryResolver(root,currentVisible);
+    for(const path of scenarios){
+      try{
+        const raw=boundedFile(join(root,path));
+        const rawText=new TextDecoder('utf-8',{fatal:true}).decode(raw);
+        const rawExact=parseScenario(rawText);
+        linkAll(jsonSafe(isShortScenarioDoc(rawExact)?compileIfShort(path,rawText,rawExact,currentStoryResolver):rawExact));
+      }catch{/* No links. */}
+    }
+  }
   // Changed prompts and header prompts both touch the Stories that test them.
   const prompts=new Set(changed.filter(path=>canonicalPath(path)&&path.endsWith('.prompt.md')));
   let hasHeader=false;
@@ -399,8 +506,9 @@ function baseScenarios(root,commit,changed,scenarios,codeSpace) {
   const selected=[...docs.keys()].filter(path=>(codeSpace||!changedSet.has(path))&&(select==='all'||scenarioLinks(docs.get(path)).some(link=>area.has(link)))).sort();
   let bytes=0;
   const vectors=selected.map(path=>{
+    if(brokenBaseShort.has(path))throw Error(`${path} on base ${commit.slice(0,7)}: ${brokenBaseShort.get(path)}`);
     const raw=blobs.get(path);bytes+=raw.length;
-    try {requireThat(raw.length>0&&raw.length<=LIMIT,'Original vector exceeds its byte limit.');return {...scenario(path,raw),base:commit};}
+    try {requireThat(raw.length>0&&raw.length<=LIMIT,'Original vector exceeds its byte limit.');return {...scenario(path,raw,resolveBaseStory),base:commit};}
     catch(error){throw Error(`${path} on base ${commit.slice(0,7)}: ${error.message}`);}
   });
   const why=[...(hasHeader?[]:['no changed file names its prompt in a Generated from header']),
@@ -585,7 +693,8 @@ function replayRecord(run, paths) {
         continue;
       }
       current.vectors.push(vector);
-      if(!saved || saved.sha256!==vector.sha256) {
+      const snapshotChanged = Boolean(saved?.snapshot && !isDeepStrictEqual(exactSnapshot(saved), exactSnapshot(vector)));
+      if(!saved || saved.sha256!==vector.sha256 || snapshotChanged) {
         if(saved && !saved.snapshot)result.warnings.push({vector:path,reason:`SHA256 ${saved.sha256} -> ${vector.sha256}; original values unavailable.`});
         else {
           const changes=valueChanges(exactSnapshot(saved),exactSnapshot(vector));
