@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 24e4205551aa87b2c978c1276f4f4114732036562e83d2321c213c2714f022b7).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 8f5ac26b031c8fa035dc0e26a6f02d46c04778eb4e118b760e15b0fd868c9c44).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -5046,8 +5046,7 @@ function cancelClosedWaiting(latest, at, reason) {
   if (validSavedAutomaticOrigin(latest)) latest.claimRelease ??= { state: 'pending', reason: 'cancel', at };
 }
 
-const TERMINAL_PR_STATES = new Set(['merged', 'closed']);
-const hasNonTerminalPr = run => (run.pr ?? []).some(pr => !TERMINAL_PR_STATES.has(pr.state));
+const hasNonMergedPr = run => (run.pr ?? []).some(pr => pr.state !== 'merged');
 
 export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs, localOnly = false, paneInventory} = {}, ports = {}) {
   const p = deps(ports), runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
@@ -5132,8 +5131,15 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs, loc
           release = acquireRunLock(run.runDir);
           const latest = readRun(run.runDir);
           if (!latest || latest.runId !== run.runId || ended(latest) || latest.state !== 'waiting') continue;
-          if (hasNonTerminalPr(latest)) await refreshPr(latest, {...p, progressGuard: undefined});
-          if (latest.state === 'waiting') await refreshWaitingIssue(latest, {...p, progressGuard: undefined});
+          if (closedWaitingReason(latest)) {
+            commitMaintenance(latest, p, fresh => {
+              const latestReason = closedWaitingReason(fresh);
+              if (latestReason) cancelClosedWaiting(fresh, fresh.prState?.checkedAt ?? fresh.updatedAt ?? p.now(), latestReason);
+            });
+          } else {
+            if (hasNonMergedPr(latest)) await refreshPr(latest, {...p, progressGuard: undefined});
+            if (latest.state === 'waiting') await refreshWaitingIssue(latest, {...p, progressGuard: undefined});
+          }
           if (ended(latest)) { Object.assign(run, latest); endedNow = true; }
         } catch (error) {
           if (error?.code === 'workflow_run_save_failed') throw error;
@@ -5722,7 +5728,7 @@ function snapshotHerdrPorts(p) {
 
 async function listStatus(runs, { json, cancelled, scope, snapshotOnly = false }, p) {
   const waitingRuns = snapshotOnly ? [] : runs.filter(run => !readRunOwnership(run.runDir, p) && run.state === 'waiting');
-  const reading = waitingRuns.reduce((sum, run) => sum + (run.pr ?? []).filter(pr => !TERMINAL_PR_STATES.has(pr.state)).length, 0);
+  const reading = waitingRuns.reduce((sum, run) => sum + (closedWaitingReason(run) ? 0 : (run.pr ?? []).filter(pr => pr.state !== 'merged').length), 0);
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
   await runBounded(waitingRuns, 6, async run => {
     try {
@@ -5737,8 +5743,9 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly = false }
         } catch (error) {
           if (error?.code === 'workflow_run_save_failed') throw error;
         } finally { release?.(); }
+        if (ended(run) || closedWaitingReason(run)) return;
       }
-      if (hasNonTerminalPr(run)) await refreshPr(run, p);
+      if (run.state === 'waiting' && hasNonMergedPr(run)) await refreshPr(run, p);
       if (run.state === 'waiting') await refreshWaitingIssue(run, p);
     } catch (error) {
       if (error?.code === 'workflow_run_save_failed') throw error;

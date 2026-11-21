@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nativeGithubCounter } from '../src/github-calls.mjs';
 import { ensurePaneBudget } from '../src/workflow-chat.mjs';
-import { approveRun, runStatus, startRun, stepDone, tidyRuns } from '../src/workflow-runner.mjs';
+import { acquireRunLock, approveRun, runStatus, startRun, stepDone, tidyRuns } from '../src/workflow-runner.mjs';
 import { readablePrTop } from '../src/workflow-pr-body.mjs';
 import { runPdd, renderHelp } from '../src/pdd-cli.mjs';
 import { parseArgv } from '../src/argument-parser.mjs';
@@ -433,14 +433,16 @@ test('3614: listStatus skips terminal PRs, refreshes open waiting PRs with bound
   const commonDir = f.git(f.source, 'rev-parse', '--path-format=absolute', '--git-common-dir');
   const readN = n => JSON.parse(readFileSync(join(commonDir, 'pdd', 'runs', String(n), 'status.json'), 'utf8'));
 
-  // 8 open PRs (#17..#24) + 2 terminal PRs (#25 merged, #26 closed).
+  // 8 open PRs (#17..#24) + 1 merged PR (#25) + 1 locally reconcilable closed final-area PR (#26).
   for (const n of issueNumbers) {
     const r = readN(n);
     r.state = 'waiting';
+    r.area = r.areas.length - 1;
+    r.gate = null;
     r.pr = [{
       number: 200 + n,
       url: `https://github.com/example/project/pull/${200 + n}`,
-      stage: 'change',
+      stage: r.areas.at(-1).name,
       state: n === 25 ? 'merged' : n === 26 ? 'closed' : 'open',
     }];
     saveRun(r);
@@ -669,6 +671,90 @@ test('3614: listStatus locally reconciles a waiting run with a saved closed fina
   assert.equal(data.runs[0].words, 'cancelled');
   assert.equal(f.record().state, 'cancelled');
   assert.equal(f.record().cancelled?.reason, 'pr-closed');
+});
+
+test('3614: listStatus makes 0 GitHub calls for a locally reconcilable closedWaitingReason run even under run_busy lock contention', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record();
+  run.state = 'waiting';
+  run.area = run.areas.length - 1;
+  run.gate = null;
+  run.pr = [{ number: 402, url: 'https://github.com/example/project/pull/402', stage: run.areas.at(-1).name, state: 'closed' }];
+  saveRun(run);
+
+  let ghCalls = 0;
+  const said = [];
+  const release = acquireRunLock(run.runDir);
+  try {
+    const res = await runStatus({ cwd: f.source, json: true }, {
+      ...f.ports,
+      say: line => said.push(line),
+      readPrStatus: async () => { ghCalls++; return { state: 'closed', ci: 'unknown' }; },
+      readIssueStatus: async () => { ghCalls++; return { number: 17, state: 'open' }; },
+    });
+    assert.equal(res.exitCode, 0, res.message);
+  } finally {
+    release();
+  }
+  assert.equal(ghCalls, 0, 'run_busy lock contention on a closedWaitingReason run must NOT fall through to GitHub');
+  assert.deepEqual(said, [], 'locally reconcilable closedWaitingReason run must not emit a GitHub PR-reading progress line');
+});
+
+test('3614: listStatus and tidyRuns re-check a closed PR on an active non-reconcilable run (ask-code with through: code) while skipping merged PRs', async t => {
+  const f = await fixture(t, { name: 'bug' });
+  assert.equal((await f.run()).exitCode, 0);
+  const askArea = f.record().areas.find(a => a.then === 'ask-code');
+  assert.ok(askArea, 'bug workflow must have an ask-code area');
+
+  const resetActiveClosed = () => {
+    const run = f.record();
+    run.state = 'waiting';
+    run.area = run.areas.indexOf(askArea);
+    run.through = 'code';
+    run.gate = { area: askArea.name, kind: 'ask-code', at: f.clock };
+    run.pr = [
+      { number: 501, url: 'https://github.com/example/project/pull/501', stage: askArea.name, state: 'closed', ci: 'none' },
+    ];
+    saveRun(run);
+  };
+
+  // 1) listStatus re-checks the active non-reconcilable closed PR and picks up its reopened+merged state.
+  resetActiveClosed();
+  const listFetched = [];
+  const listSaid = [];
+  const listRes = await runStatus({ cwd: f.source, json: true }, {
+    ...f.ports,
+    say: line => listSaid.push(line),
+    readPrStatus: async ({ url }) => { listFetched.push(url); return { state: 'merged', ci: 'passing' }; },
+    readIssueStatus: async ({ number }) => ({ number, state: 'open' }),
+  });
+  assert.equal(listRes.exitCode, 0, listRes.message);
+  assert.deepEqual(listFetched, ['https://github.com/example/project/pull/501']);
+  assert.deepEqual(listSaid, ['Reading 1 PR from GitHub…']);
+  assert.equal(f.record().pr[0].state, 'merged');
+  assert.equal(f.record().doneAt, 'PR 1');
+
+  // Once merged, a subsequent listStatus makes 0 PR calls.
+  const afterMerged = [];
+  await runStatus({ cwd: f.source, json: true }, {
+    ...f.ports,
+    readPrStatus: async ({ url }) => { afterMerged.push(url); return { state: 'merged', ci: 'passing' }; },
+    readIssueStatus: async ({ number }) => ({ number, state: 'open' }),
+  });
+  assert.deepEqual(afterMerged, []);
+
+  // 2) tidyRuns also re-checks the active non-reconcilable closed PR (and skips once merged).
+  resetActiveClosed();
+  const tidyFetched = [];
+  const tidyRes = await tidyRuns({ graceMs: 0 }, {
+    ...f.ports,
+    readPrStatus: async ({ url }) => { tidyFetched.push(url); return { state: 'merged', ci: 'passing' }; },
+    readIssueStatus: async ({ number }) => ({ number, state: 'open' }),
+  });
+  assert.equal(tidyRes.exitCode, 0);
+  assert.deepEqual(tidyFetched, ['https://github.com/example/project/pull/501']);
+  assert.equal(f.record().pr[0].state, 'merged');
 });
 
 test('3578 / 3614: pdd workflow status --local parses, appears in help, dispatches local: true, and makes 0 gh and 0 herdr calls', async t => {
