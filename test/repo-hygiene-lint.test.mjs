@@ -3445,3 +3445,65 @@ test('3619 R7 regressions: post-item-only separators, and/or conjunction, inline
   assert.deepEqual(hostileOut, []);
   assert.ok(elapsedMs < 200, `20k-backtick scan took ${elapsedMs.toFixed(1)}ms`);
 });
+
+test('3619 R8 regression: EXPORTED_OP_VERB_RE excludes hyphenated/path/dotted/colon-prefixed compounds while keeping Exports: working', () => {
+  const nativeChecking = (ports) => [
+    '---',
+    'kind: native-only',
+    '---',
+    '# Gateway',
+    '',
+    '## Dependencies',
+    '- [Access](../access/access.prompt.md)',
+    '',
+    '## Ports',
+    ...ports.map(p => `- \`${p}\``),
+  ].join('\n');
+
+  const r8Dep = [
+    '# Access',
+    '',
+    'Own `src/access.mjs`.',
+    '',
+    '## Behavior',
+    '',
+    'The post-export `cleanup` runs async.',
+    'The pre-export `validation` checks rows.',
+    'Handles non-export `config` loading.',
+    'The csv-export `worker` runs nightly.',
+    'The data-export `pipeline` writes to S3.',
+    'On csv-export: `batch_id` is logged.',
+    'On POST /api/export `cleanup_api` runs.',
+    'Calls /v1/export `batch_v1` directly.',
+    'Calls store.export `batch_store` directly.',
+    'Exports: `inspect_quota` and `revoke_session`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  assert.deepEqual(
+    lintNativeOnlyPortParity(
+      nativeChecking(['access.inspect_quota', 'access.revoke_session']),
+      [{ path: 'prompts/access/access.prompt.md', text: r8Dep }],
+    ),
+    [],
+  );
+
+  const r8FailPorts = [
+    'access.cleanup',
+    'access.validation',
+    'access.config',
+    'access.worker',
+    'access.pipeline',
+    'access.batch_id',
+    'access.cleanup_api',
+    'access.batch_v1',
+    'access.batch_store',
+  ];
+  const r8Fail = lintNativeOnlyPortParity(
+    nativeChecking(r8FailPorts),
+    [{ path: 'prompts/access/access.prompt.md', text: r8Dep }],
+  );
+  assert.equal(r8Fail.length, r8FailPorts.length, r8Fail.join('\n'));
+});

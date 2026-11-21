@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: b85d9995629a38d49b48b73232298c33dc944863b4818900fbfe0447eedb4d6f).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: 2a90027c8af62686f9a63fca1390b7b5814e30bd9f2ba057fa513880d75151c0).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -131,7 +131,7 @@ const NON_OP_LABEL_WORDS = new Set([
 ]);
 const HEADING_OP_PREFIX_RE = /^(?:operation|command|subcommand|tool|entrypoint)(?:[ \t]*[:—–][ \t]*|[ \t]+-[ \t]+|[ \t]+)/i;
 const HEADING_OP_DELIM_PREFIX_RE = /^(?:operation|command|subcommand|tool|entrypoint)(?:[ \t]*[:—–][ \t]*|[ \t]+-[ \t]+)/i;
-const EXPORTED_OP_VERB_RE = /\b(?:exports?|exporting|exposes?|exposing)\b/gi;
+const EXPORTED_OP_VERB_RE = /(?<![A-Za-z0-9_./:-])(?:exports?|exporting|exposes?|exposing)(?![A-Za-z0-9_./-])/gi;
 const EXPORTED_OP_NEGATION_RE = /\b(?:not|never|without|no|neither|nor|cannot|can't|won't|don't|doesn't|must\s+not|mustn't|should\s+not|shouldn't|may\s+not)\b/i;
 const LINE_START_EXPORTED_OP_LABEL_RE = /^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?(?:public[ \t]+|exported[ \t]+)?(?:operations?|commands?|subcommands?|tools?|exports?|entrypoints?|entry[ \t]+points?)[ \t]*:/i;
 const EXPORTED_OP_ARTICLE_WORDS = new Set(['a', 'an', 'the']);
