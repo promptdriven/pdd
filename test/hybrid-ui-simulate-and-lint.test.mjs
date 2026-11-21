@@ -189,12 +189,14 @@ test('3596 CLI & runtime-seam forward prompts/app.prompt.md, --stop prompts/app.
   );
   assert.doesNotMatch(missingStreams.err, /Direct \.prompt\.md simulation/);
 
+  // With @promptdriven/runtime-client@1.1.0, `pdd simulate prompts/app.prompt.md` is accepted natively
+  // and proceeds past Story discovery to runtime authentication (exit 5 without gh sign-in, no old-client refusal).
   const cliStreams = captureStreams();
   const env = { HOME: home, PDD_RUNTIME_URL: 'https://runtime.example', PDD_STATE_DIR: state };
   const cliCode = await runPdd(['simulate', 'prompts/app.prompt.md'], { cwd: root, env, stdout: cliStreams.stdout, stderr: cliStreams.stderr });
-  assert.equal(cliCode, 2);
-  assert.match(cliStreams.err, /Direct \.prompt\.md simulation \(prompts\/app\.prompt\.md\) requires a newer @promptdriven\/runtime-client; upgrade pdd \/ @promptdriven\/runtime-client\./);
-  assert.doesNotMatch(cliStreams.err, /runtime-client#97/);
+  assert.equal(cliCode, 5, cliStreams.err);
+  assert.doesNotMatch(cliStreams.err, /No tests found|Unknown story|No Stories are available/);
+  assert.doesNotMatch(cliStreams.err, /Direct \.prompt\.md simulation|runtime-client#97/);
 
   // R1-4: oversized stderr (>4096 chars before "No tests found.") stays bounded and does not trigger unbounded buffering
   const floodStreams = captureStreams();
