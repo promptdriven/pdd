@@ -895,11 +895,9 @@ function readContiguousBacktickOps(text, startIdx) {
 }
 
 function extractOpsFromExportSubheading(title) {
-  const { spans } = extractInlineBacktickSpans(title);
-  if (spans.length > 0) {
-    return spans.map(s => (!stripCallAndReturnTail(s).head.includes('.') ? cleanSingleIdentifier(s, { allowCallArgs: true }) : null)).filter(Boolean);
-  }
-  const parts = String(title ?? '').split(/\s*(?:,|\/|\band\b)\s*/i).map(s => s.trim()).filter(Boolean);
+  const s = String(title ?? '').trim().replace(/^\d+[.)]\s+/, '');
+  if (s.startsWith('`')) return readContiguousBacktickOps(s, 0).ops;
+  const parts = s.split(/\s*(?:,|\/|\band\b)\s*/i).map(p => p.trim()).filter(Boolean);
   const ops = parts.map(p => (!stripCallAndReturnTail(p).head.includes('.') ? cleanSingleIdentifier(p, { allowCallArgs: true }) : null));
   return parts.length && ops.every(Boolean) ? ops : [];
 }
@@ -1088,8 +1086,8 @@ function extractDeclaredPortsFromDependency(raw, { isPrompt = true, path = '' } 
     if (inExportsSection && !inExportSubheading && !subheadingPort && stems.length > 0) {
       if (bm) {
         const indent = bm[1].replace(/\t/g, '  ').length;
-        if (exportTopBulletIndent < 0 && indent <= 1) exportTopBulletIndent = indent;
-        if (exportTopBulletIndent >= 0 && indent <= exportTopBulletIndent) {
+        if (exportTopBulletIndent < 0 || indent < exportTopBulletIndent) exportTopBulletIndent = indent;
+        if (indent === exportTopBulletIndent) {
           const op = extractLeadingSimpleIdentifier(bm[2].trim(), { allowCallArgs: true });
           if (op) addExportedOp(op);
         }
@@ -3001,19 +2999,27 @@ const DATA_DRAIN_RE = /\.\s*(?:pop|shift|splice|dequeue)\s*\(/;
 const NONEMPTY_LEN_RE = /^(?:[A-Za-z_$][\w$.]*\.(?:length|size)|len\s*\([^()]*\))(?:\s*(?:>|!==?|>=)\s*0)?$/;
 const POLLING_DEADLINE_RE = /\b(?:Date\s*\.\s*now|performance\s*\.\s*now|hrtime|time\s*\.\s*(?:time|monotonic|perf_counter)|deadline|end|until|timeout|expires|maxWait|elapsed)\b/i;
 const POLLING_STATE_RE = /\b(?:ready|done|finished|stopped|alive|pending|waiting|connected|closed|exited|complete|completed|attempt|attempts|retries|tries|settled|healthy|running|state|status)\b/i;
-const BARE_COUNTER_RE = /^(?:[a-z]\d*|i|j|k|n|idx|index|count|step|iter)\s*(?:<|<=|>|>=|!=|!==)\s*\d+$/i;
+const COUNTER_VAR_RE = /^(?:[a-z]\d*|i|j|k|n|idx|index|count|step|iter|num|pos|offset)$/i;
+
+function isPureCounterCond(cond, bodyAndUpdate) {
+  const m = /^([A-Za-z_$][\w$]*)\s*(?:<|<=|>|>=|!=|!==)\s*(?:\d+|[A-Za-z_$][\w$]*)$/.exec(cond);
+  if (!m || POLLING_DEADLINE_RE.test(cond) || POLLING_STATE_RE.test(cond)) return false;
+  if (COUNTER_VAR_RE.test(m[1])) return true;
+  const esc = m[1].replace(/\$/g, '\\$');
+  return new RegExp(`(?:\\+\\+|--)[\\s]*\\b${esc}\\b|\\b${esc}\\b\\s*(?:\\+\\+|--|\\+=|-=|=(?!=)\\s*${esc}\\s*[+-])`).test(bodyAndUpdate);
+}
 
 function isPollingLoop(kind, header, body, isPython = false) {
   const h = String(header ?? '').trim();
-  const hasExit = /\b(?:if|try)\b/.test(body) && /\b(?:break|return)\b/.test(body);
-  if (hasExit) return true;
+  if (/\b(?:if|try)\b/.test(body) && /\b(?:break|return)\b/.test(body)) return true;
   if (DATA_DRAIN_RE.test(body)) return false;
   if (kind === 'for') {
-    const m = /^[^;]*;([^;]*);[^;]*$/.exec(h);
+    const m = /^[^;]*;([^;]*);([^;]*)$/.exec(h);
     const cond = m ? m[1].trim() : '';
-    return Boolean(cond) && !BARE_COUNTER_RE.test(cond) && (/&&|\|\||!|\(|===|!==|==|!=/.test(cond) || POLLING_DEADLINE_RE.test(cond));
+    const upd = m ? m[2] : '';
+    return Boolean(cond) && !isPureCounterCond(cond, `${upd}\n${body}`) && (/&&|\|\||!|\(|===|!==|==|!=/.test(cond) || POLLING_DEADLINE_RE.test(cond));
   }
-  if (/^(?:true|1|!0|True)$/.test(h) || BARE_COUNTER_RE.test(h)) return false;
+  if (/^(?:true|1|!0|True)$/.test(h) || isPureCounterCond(h, body)) return false;
   if (POLLING_DEADLINE_RE.test(h)) return true;
   if (NONEMPTY_LEN_RE.test(h) || (/\.\s*(?:length|size)\b|\blen\s*\(/.test(h) && !/&&|\|\||\band\b|\bor\b/.test(h))) return false;
   return (isPython ? /\b(?:and|or|not)\b|==|!=|\(/ : /&&|\|\||!|===|!==|==|!=|\(/).test(h) || POLLING_STATE_RE.test(h);
@@ -3026,20 +3032,76 @@ function isDirectRaceTimeoutArm(skeleton, offset, { enclosingBracket, closeBrack
     if (p < 0 || skeleton[p] !== '(' || !/\bPromise\s*\.\s*race\s*$/.test(skeleton.slice(Math.max(0, p - 32), p))) continue;
     const endBr = closeBracket[br];
     if (endBr < 0) continue;
-    let armStart = br + 1, count = 0, containingStart = -1;
+    let armStart = br + 1, count = 0, containingStart = -1, containingEnd = -1;
     for (let k = armStart; k < endBr; k++) {
       const ch = skeleton[k];
       if (ch === '(' && closeParen[k] > k && closeParen[k] < endBr) k = closeParen[k];
       else if (ch === '{' && closeBrace[k] > k && closeBrace[k] < endBr) k = closeBrace[k];
       else if (ch === '[' && closeBracket[k] > k && closeBracket[k] < endBr) k = closeBracket[k];
-      else if (ch === ',') { if (offset >= armStart && offset < k) containingStart = armStart; armStart = k + 1; count++; }
+      else if (ch === ',') { if (offset >= armStart && offset < k) { containingStart = armStart; containingEnd = k; } armStart = k + 1; count++; }
     }
     if (count > 0) {
-      if (containingStart < 0 && offset >= armStart && offset < endBr) containingStart = armStart;
-      if (containingStart >= 0 && skeleton.slice(containingStart, offset).replace(/[\s(]+/g, '') === '') return true;
+      if (containingStart < 0 && offset >= armStart && offset < endBr) { containingStart = armStart; containingEnd = endBr; }
+      if (containingStart >= 0 && skeleton.slice(containingStart, offset).replace(/[\s(]+/g, '') === '') {
+        let openIdx = -1;
+        for (let q = offset; q < containingEnd; q++) { if (skeleton[q] === '(') { openIdx = q; break; } }
+        const closeIdx = openIdx >= 0 ? closeParen[openIdx] : -1;
+        if (closeIdx > openIdx && closeIdx < containingEnd && skeleton.slice(closeIdx + 1, containingEnd).replace(/[\s)]+/g, '') === '') return true;
+      }
     }
   }
   return false;
+}
+
+function buildPythonPollingTable(lines) {
+  const n = lines.length;
+  const parentHeader = new Int32Array(n).fill(-1);
+  const headerState = new Int8Array(n); // 1 = exempt, -1 = non-exempt scope boundary (def/class), 0 = pass-through
+  const stack = [];
+  const indentOf = s => { let k = 0; while (k < s.length && (s[k] === ' ' || s[k] === '\t')) k += s[k] === '\t' ? 4 : 1; return k; };
+  const closeFrame = f => {
+    if (f.kind === 'loop') {
+      const summary = `${f.hasCond ? 'if ' : ''}${f.hasJump ? 'break ' : ''}${f.hasDrain ? '.pop() ' : ''}${[...f.incVars].map(v => `${v}+=1`).join(' ')}`;
+      if (isPollingLoop(f.loopKind, f.loopHeader, summary, true)) headerState[f.start] = 1;
+    } else if (f.kind === 'def') {
+      headerState[f.start] = POLLING_HELPER_NAME_RE.test(f.fnName) && (f.hasLoop || (f.hasCond && f.hasJump)) ? 1 : -1;
+    } else if (f.kind === 'class') {
+      headerState[f.start] = -1;
+    }
+    if (stack.length > 0) {
+      const p = stack[stack.length - 1];
+      if (f.kind === 'other') {
+        p.hasCond ||= f.hasCond; p.hasJump ||= f.hasJump; p.hasDrain ||= f.hasDrain; p.hasLoop ||= f.hasLoop;
+        for (const v of f.incVars) p.incVars.add(v);
+      } else if (f.kind === 'loop') {
+        p.hasLoop = true;
+      }
+    }
+  };
+  for (let i = 0; i < n; i++) {
+    const t = lines[i].trim();
+    if (!t) continue;
+    const ind = indentOf(lines[i]);
+    while (stack.length > 0 && stack[stack.length - 1].indent >= ind) closeFrame(stack.pop());
+    if (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      parentHeader[i] = top.start;
+      if (/\b(?:if|try)\b/.test(t)) top.hasCond = true;
+      if (/\b(?:break|return)\b/.test(t)) top.hasJump = true;
+      if (DATA_DRAIN_RE.test(t)) top.hasDrain = true;
+      if (/^(?:while|for)\b/.test(t)) top.hasLoop = true;
+      const incM = /^([A-Za-z_]\w*)\s*(?:\+=|-=|=(?!=)\s*\1\s*[+-])/.exec(t);
+      if (incM) top.incVars.add(incM[1]);
+    }
+    const defM = /^(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(t);
+    const loopM = !defM && /^(while|for)\s+(.+):\s*$/.exec(t);
+    if (defM) stack.push({ kind: 'def', fnName: defM[1], indent: ind, start: i, hasCond: false, hasJump: false, hasDrain: false, hasLoop: false, incVars: new Set() });
+    else if (/^class\s+/.test(t)) stack.push({ kind: 'class', indent: ind, start: i, hasCond: false, hasJump: false, hasDrain: false, hasLoop: false, incVars: new Set() });
+    else if (loopM) stack.push({ kind: 'loop', loopKind: loopM[1], loopHeader: loopM[2], indent: ind, start: i, hasCond: false, hasJump: false, hasDrain: false, hasLoop: false, incVars: new Set() });
+    else if (t.endsWith(':')) stack.push({ kind: 'other', indent: ind, start: i, hasCond: false, hasJump: false, hasDrain: false, hasLoop: false, incVars: new Set() });
+  }
+  while (stack.length > 0) closeFrame(stack.pop());
+  return { parentHeader, headerState };
 }
 
 function prevWordBefore(s, idx) {
@@ -3052,30 +3114,12 @@ function prevWordBefore(s, idx) {
 
 function isInsidePollingOrRetryContext(skeleton, offset, lineNo, ctx) {
   if (ctx.hashComments) {
-    const lines = ctx.skeletonLines;
+    if (!ctx.pyTable) ctx.pyTable = buildPythonPollingTable(ctx.skeletonLines ?? []);
     const idx = lineNo - 1;
-    if (!lines || idx < 0 || idx >= lines.length) return false;
-    const indentOf = s => { let n = 0; while (n < s.length && (s[n] === ' ' || s[n] === '\t')) n += s[n] === '\t' ? 4 : 1; return n; };
-    let cur = indentOf(lines[idx]);
-    for (let i = idx - 1; i >= Math.max(0, idx - 60); i--) {
-      const t = lines[i].trim();
-      if (!t) continue;
-      const ind = indentOf(lines[i]);
-      if (ind >= cur) continue;
-      cur = ind;
-      const block = () => {
-        const out = [];
-        for (let j = i + 1; j < Math.min(lines.length, i + 60); j++) {
-          if (lines[j].trim() && indentOf(lines[j]) <= ind) break;
-          out.push(lines[j]);
-        }
-        return out.join('\n');
-      };
-      const defM = /^(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(t);
-      if (defM) return POLLING_HELPER_NAME_RE.test(defM[1]) && (/\b(?:while|for)\b/.test(block()) || (/\bif\b/.test(block()) && /\breturn\b/.test(block())));
-      if (/^class\s+/.test(t)) return false;
-      const loopM = /^(while|for)\s+(.+):\s*$/.exec(t);
-      if (loopM && isPollingLoop(loopM[1], loopM[2], block(), true)) return true;
+    if (idx < 0 || idx >= ctx.pyTable.parentHeader.length) return false;
+    for (let h = ctx.pyTable.parentHeader[idx], hops = 0; h >= 0 && hops < 32; h = ctx.pyTable.parentHeader[h], hops++) {
+      if (ctx.pyTable.headerState[h] === 1) return true;
+      if (ctx.pyTable.headerState[h] === -1) return false;
     }
     return false;
   }

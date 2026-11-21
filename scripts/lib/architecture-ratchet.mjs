@@ -116,7 +116,7 @@ export function formatReport(result, { layers, rules }) {
   const byRule = Object.fromEntries(rules.map(r => [r, analysis.findings.filter(f => f.rule === r).length]));
   lines.push(
     '',
-    `Cycles (Tarjan SCCs):        ${analysis.sccs.length}`,
+    `Cycles (Tarjan SCCs):        ${analysis.sccs.length} (${byRule['circular-import']} intra-SCC edges)`,
     `Legacy-workflow imports:     ${byRule['legacy-workflow-import']}`,
     `Layer-boundary violations:   ${byRule['layer-boundary']}`,
     `Path-string child spawns:    ${byRule['path-string-spawn']}`,

@@ -131,7 +131,7 @@ test('G7 Ratchet Control 1: existing baseline debt passes (and remains stable ac
   const writeRes = runChecker(['--root', dir, '--ratchet', ratchetPath, '--write-ratchet']);
   assert.equal(writeRes.status, 0, writeRes.stderr);
   const ratchet = JSON.parse(readFileSync(ratchetPath, 'utf8'));
-  assert.equal(ratchet.entries.length, 2);
+  assert.equal(ratchet.entries.length, 3); // 1 layer-boundary + 2 directed cycle edges (cyc-a->cyc-b, cyc-b->cyc-a)
 
   // Check mode passes cleanly on baseline debt.
   const pass1 = runChecker(['--root', dir, '--ratchet', ratchetPath]);
@@ -224,8 +224,11 @@ test('G7 Ratchet Control 3: shrinking the ratchet locks in resolved debt so rein
 });
 
 test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon-free export, aliases, git non-spawn, query/hash + unresolved fail-closed, ratchet growth refusal, intra-SCC edge/self-import, and corpus fail-closed', (t) => {
-  // #5: Semicolon-free `export { f }\nawait import('./x.mjs')`, aliased createRequire/fork, and git diff non-spawn.
+  // #5: Semicolon-free `export { f }\nawait import('./x.mjs')`, hoisted & regular aliased createRequire/fork, and git diff non-spawn.
   const edgeCases = [
+    'const hoistedReq = hoistedMk(import.meta.url)',
+    "hoistedReq('./via-hoisted-alias.mjs')",
+    "import { createRequire as hoistedMk } from 'node:module'",
     "import { createRequire as mkReq } from 'node:module'",
     "import { fork as spawnChild, execFileSync } from 'node:child_process'",
     'const r = mkReq(import.meta.url)',
@@ -242,6 +245,8 @@ test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon
   assert.deepEqual(
     parsed.imports.map(e => [e.kind, e.specifier]),
     [
+      ['create-require', './via-hoisted-alias.mjs'],
+      ['static-import', 'node:module'],
       ['static-import', 'node:module'],
       ['static-import', 'node:child_process'],
       ['create-require', './via-alias.mjs'],
@@ -272,13 +277,24 @@ test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon
 
   writeRepoFile(dir, 'package.json', JSON.stringify({ name: 'fixture', dependencies: {} }));
   writeRepoFile(dir, 'src/shared/util.mjs', 'export const ok = 1;\n');
-  writeRepoFile(dir, 'src/core/a.mjs', "import { b } from './b.mjs?v=1';\nexport const a = b;\n");
+  writeRepoFile(dir, 'src/vendor/lib.mjs', 'export const v = 1;\n');
+  writeRepoFile(dir, 'src/core/a.mjs', "import { b } from './b.mjs?v=1';\nimport { c } from './c.mjs';\nexport const a = b + c;\n");
   writeRepoFile(dir, 'src/core/b.mjs', "import { c } from './c.mjs#hash';\nexport const b = c;\n");
   writeRepoFile(dir, 'src/core/c.mjs', "import { a } from './a.mjs';\nexport const c = a;\n");
 
-  // Initial ratchet captures the 3-node SCC (a->b, b->c, c->a)
+  // Initial ratchet captures the 3-node SCC per-edge (a->b, a->c, b->c, c->a = 4 edges)
   assert.equal(runChecker(['--root', dir, '--ratchet', ratchetPath, '--write-ratchet']).status, 0);
   assert.equal(runChecker(['--root', dir, '--ratchet', ratchetPath]).status, 0);
+  assert.equal(JSON.parse(readFileSync(ratchetPath, 'utf8')).entries.length, 4);
+
+  // Removing ONE existing cycle edge (a -> c) inside the 3-node SCC MUST PASS and cleanly shrink via --write-ratchet!
+  writeRepoFile(dir, 'src/core/a.mjs', "import { b } from './b.mjs?v=1';\nexport const a = b;\n");
+  const edgeRemovedCheck = runChecker(['--root', dir, '--ratchet', ratchetPath]);
+  assert.equal(edgeRemovedCheck.status, 0, `removing an existing intra-SCC edge must pass, stderr: ${edgeRemovedCheck.stderr}`);
+  assert.match(edgeRemovedCheck.stdout, /Ratchet can shrink by 1/);
+  const shrinkEdgeRes = runChecker(['--root', dir, '--ratchet', ratchetPath, '--write-ratchet']);
+  assert.equal(shrinkEdgeRes.status, 0, `--write-ratchet must shrink cleanly when removing a cycle edge, stderr: ${shrinkEdgeRes.stderr}`);
+  assert.equal(JSON.parse(readFileSync(ratchetPath, 'utf8')).entries.length, 3);
 
   // Adding a NEW intra-SCC edge (b -> a) inside the ALREADY-ratcheted SCC MUST FAIL exit 1!
   writeRepoFile(dir, 'src/core/b.mjs', "import { c } from './c.mjs#hash';\nimport { a } from './a.mjs';\nexport const b = c + a;\n");
@@ -300,18 +316,22 @@ test('G7 + corpus-check cross-family review regressions (Astra #5-#8): semicolon
   assert.equal(selfRes.status, 1, 'self-import inside existing SCC must fail exit 1');
   assert.match(selfRes.stderr, /Self-import cycle detected/);
 
-  // Restore c.mjs, then add an unresolved local relative import -> MUST FAIL CLOSED exit 1!
+  // Restore c.mjs, then add an unresolved local relative import AND bare directory import -> BOTH MUST FAIL CLOSED exit 1!
   writeRepoFile(dir, 'src/core/c.mjs', "import { a } from './a.mjs';\nexport const c = a;\n");
-  writeRepoFile(dir, 'src/shared/util.mjs', "import './does-not-exist.mjs';\nexport const ok = 1;\n");
+  writeRepoFile(dir, 'src/shared/util.mjs', "import './does-not-exist.mjs';\nimport '../vendor';\nexport const ok = 1;\n");
   const unresolvedRes = runChecker(['--root', dir, '--ratchet', ratchetPath]);
-  assert.equal(unresolvedRes.status, 1, 'unresolved relative import must fail closed exit 1');
+  assert.equal(unresolvedRes.status, 1, 'unresolved file and bare-directory imports must fail closed exit 1');
   assert.match(unresolvedRes.stderr, /ERROR \[unresolved-local-import\] src\/shared\/util\.mjs:1/);
+  assert.match(unresolvedRes.stderr, /ERROR \[unresolved-local-import\] src\/shared\/util\.mjs:2/);
 
-  // #8: corpus-check fail-closed payload validation & non-zero seed replacement guard.
+  // #8: corpus-check fail-closed payload validation (including null status & killed signal) + non-zero seed replacement guard.
   assert.equal(parseOfflineLintPayload('', 0).parsedOk, false);
   assert.equal(parseOfflineLintPayload('not json', 0).parsedOk, false);
   assert.equal(parseOfflineLintPayload('{"exit_code":0}', 0).parsedOk, false);
   assert.equal(parseOfflineLintPayload('{"exit_code":1,"problems":[],"warnings":[]}', 0).parsedOk, false);
+  assert.equal(parseOfflineLintPayload('{"exit_code":1,"problems":[],"warnings":[]}', null).parsedOk, false);
+  assert.equal(parseOfflineLintPayload('{"exit_code":1,"problems":[],"warnings":[]}', null, null, 'SIGKILL').parsedOk, false);
+  assert.equal(parseOfflineLintPayload('{"exit_code":0,"problems":[],"warnings":[]}', 0, null, 'SIGTERM').parsedOk, false);
   assert.equal(parseOfflineLintPayload('{"exit_code":0,"problems":[],"warnings":[]}', 0).parsedOk, true);
   assert.throws(() => replaceRequired('hello world', '`missing`', '`replacement`', 'missing-seed'), /matched 0 times/);
   assert.deepEqual(replaceRequired('use `foo` and `foo`', /`foo`/g, '`bar`', 'foo-seed'), { text: 'use `bar` and `bar`', count: 2 });

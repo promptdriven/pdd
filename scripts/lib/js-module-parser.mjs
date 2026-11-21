@@ -264,35 +264,36 @@ export function parseJsModuleEdges(source, relPath) {
   const requireIdents = new Set(['require']);
   const pathVars = new Map();
 
-  // Pass 1: discover static import aliases (`createRequire as mkReq`, `fork as spawnChild`), require bindings, and path constants.
+  // Pass 1A: discover hoisted static import aliases (`createRequire as mkReq`, `fork as spawnChild`) before scanning bindings/calls.
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
     const prevIsDot = tokens[i - 1]?.kind === 'punct' && (tokens[i - 1].value === '.' || tokens[i - 1].value === '?.');
-    if (t.kind === 'ident' && t.value === 'import' && !prevIsDot && tokens[i + 1]?.value !== '(' && tokens[i + 1]?.value !== '.') {
-      let braceStart = -1;
-      let braceEnd = -1;
-      let k = i + 1;
-      while (k < tokens.length && k < i + 200) {
-        const cur = tokens[k];
-        if (cur.kind === 'punct' && cur.value === '{') {
-          braceStart = k;
-          braceEnd = findMatchingDelim(tokens, k, '{', '}');
-          if (braceEnd < 0) break;
-          k = braceEnd + 1;
-          continue;
-        }
-        if (cur.kind === 'punct' && cur.value === ';') break;
-        if (cur.kind === 'ident' && STMT_BOUNDARY_KEYWORDS.has(cur.value)) break;
-        if (cur.kind === 'ident' && cur.value === 'from' && tokens[k + 1]?.kind === 'string') {
-          if (braceStart >= 0 && braceEnd > braceStart) {
-            registerImportAliases(tokens, braceStart, braceEnd, tokens[k + 1].value, createRequireFns, spawnFnKind);
-          }
-          break;
-        }
-        k++;
+    if (t.kind !== 'ident' || t.value !== 'import' || prevIsDot || tokens[i + 1]?.value === '(' || tokens[i + 1]?.value === '.') continue;
+    let braceStart = -1, braceEnd = -1, k = i + 1;
+    while (k < tokens.length && k < i + 200) {
+      const cur = tokens[k];
+      if (cur.kind === 'punct' && cur.value === '{') {
+        braceStart = k;
+        braceEnd = findMatchingDelim(tokens, k, '{', '}');
+        if (braceEnd < 0) break;
+        k = braceEnd + 1;
+        continue;
       }
-      continue;
+      if (cur.kind === 'punct' && cur.value === ';') break;
+      if (cur.kind === 'ident' && STMT_BOUNDARY_KEYWORDS.has(cur.value)) break;
+      if (cur.kind === 'ident' && cur.value === 'from' && tokens[k + 1]?.kind === 'string') {
+        if (braceStart >= 0 && braceEnd > braceStart) {
+          registerImportAliases(tokens, braceStart, braceEnd, tokens[k + 1].value, createRequireFns, spawnFnKind);
+        }
+        break;
+      }
+      k++;
     }
+  }
+
+  // Pass 1B: discover require bindings, promisify aliases, and repo path constants.
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
     if (t.kind !== 'ident' || (t.value !== 'const' && t.value !== 'let' && t.value !== 'var')) continue;
     const nameTok = tokens[i + 1];
     const eqTok = tokens[i + 2];

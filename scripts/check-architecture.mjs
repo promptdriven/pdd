@@ -174,7 +174,12 @@ export function analyzeArchitecture({ root = DEFAULT_ROOT } = {}) {
         continue;
       }
       if (res.kind === 'missing-local') {
-        if (existsSync(join(root, res.target))) continue;
+        let isExistingFile = false;
+        try {
+          const resolvedAbs = resolve(root, res.target);
+          isExistingFile = resolvedAbs.startsWith(`${resolve(root)}/`) && statSync(resolvedAbs).isFile();
+        } catch {}
+        if (isExistingFile) continue;
         findings.push({
           rule: 'unresolved-local-import', path: rel, line: edge.line,
           semantic_anchor: `unresolved:${edge.specifier} (${edge.kind})`,
@@ -220,31 +225,26 @@ export function analyzeArchitecture({ root = DEFAULT_ROOT } = {}) {
   }
 
   for (const list of adj.values()) list.sort();
-  for (const rel of files) {
-    if ((adj.get(rel) ?? []).includes(rel)) {
-      findings.push({
-        rule: 'circular-import', path: rel, line: edgeLines.get(`${rel}->${rel}`) ?? 1,
-        semantic_anchor: `self:${rel}->${rel}`,
-        invariant: `Self-import cycle detected: "${rel}" imports itself.`,
-        fix: `Remove the self-import in "${rel}" or extract shared helpers into a separate module in src/shared/.`,
-      });
-    }
-  }
-
   const sccs = findTarjanSccs(files, adj);
   for (const members of sccs) {
-    if (members.length < 2) continue;
     const memberSet = new Set(members);
-    const anchorPath = members[0];
-    const intraEdges = [...new Set(members.flatMap(u => (adj.get(u) ?? []).filter(v => memberSet.has(v)).map(v => `${u}->${v}`)))].sort();
-    const firstTarget = (adj.get(anchorPath) ?? []).find(v => memberSet.has(v));
-    const firstLine = firstTarget ? (edgeLines.get(`${anchorPath}->${firstTarget}`) ?? 1) : 1;
-    findings.push({
-      rule: 'circular-import', path: anchorPath, line: firstLine,
-      semantic_anchor: `scc:${members.join(' -> ')} | edges:${intraEdges.join(', ')}`,
-      invariant: `Circular import strongly connected component (${members.length} modules, ${intraEdges.length} intra-SCC edges): ${members.join(' -> ')}.`,
-      fix: `Extract the shared symbols out of the cycle into Layer-0 src/shared/ so imports flow strictly one way.`,
-    });
+    for (const u of members) {
+      const targets = [...new Set((adj.get(u) ?? []).filter(v => memberSet.has(v)))].sort();
+      for (const v of targets) {
+        findings.push({
+          rule: 'circular-import',
+          path: u,
+          line: edgeLines.get(`${u}->${v}`) ?? 1,
+          semantic_anchor: `cycle-edge:${u}->${v}`,
+          invariant: u === v
+            ? `Self-import cycle detected: "${u}" imports itself.`
+            : `Circular import edge "${u}" -> "${v}" inside ${members.length}-module strongly connected component (${members.join(' -> ')}).`,
+          fix: u === v
+            ? `Remove the self-import in "${u}" or extract shared helpers into a separate module in src/shared/.`
+            : `Break the cycle edge "${u}" -> "${v}" by moving shared helpers into Layer-0 src/shared/ so imports flow one way.`,
+        });
+      }
+    }
   }
 
   findings.sort((a, b) => a.rule.localeCompare(b.rule) || a.path.localeCompare(b.path) || a.semantic_anchor.localeCompare(b.semantic_anchor) || a.line - b.line);

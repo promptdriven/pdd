@@ -21,8 +21,10 @@ const CORPUS_NAMES = [
   'polyglot-rs',
 ];
 
-export function parseOfflineLintPayload(stdout, status, procError = null) {
+export function parseOfflineLintPayload(stdout, status, procError = null, signal = null) {
   if (procError) return { parsedOk: false, parseError: String(procError.message || procError), problems: [], warnings: [] };
+  if (signal) return { parsedOk: false, parseError: `process terminated by signal ${signal}`, problems: [], warnings: [] };
+  if (typeof status !== 'number') return { parsedOk: false, parseError: `process exited with non-numeric status (${status})`, problems: [], warnings: [] };
   const raw = String(stdout ?? '').trim();
   if (!raw) return { parsedOk: false, parseError: 'empty stdout from pdd lint --local --json', problems: [], warnings: [] };
   let parsed;
@@ -37,7 +39,7 @@ export function parseOfflineLintPayload(stdout, status, procError = null) {
   if (!Array.isArray(parsed.problems) || !Array.isArray(parsed.warnings)) {
     return { parsedOk: false, parseError: 'JSON payload missing required problems[] or warnings[] arrays', problems: [], warnings: [] };
   }
-  if (typeof parsed.exit_code !== 'number' || (typeof status === 'number' && parsed.exit_code !== status)) {
+  if (typeof parsed.exit_code !== 'number' || parsed.exit_code !== status) {
     return { parsedOk: false, parseError: `exit_code mismatch (payload=${parsed.exit_code}, process=${status})`, problems: parsed.problems, warnings: parsed.warnings };
   }
   return { parsedOk: true, parseError: null, problems: parsed.problems, warnings: parsed.warnings };
@@ -75,9 +77,10 @@ function runOfflineLint(repoDir, env) {
     maxBuffer: 32 * 1024 * 1024,
   });
   const ms = Math.round(performance.now() - t0);
-  const { parsedOk, parseError, problems, warnings } = parseOfflineLintPayload(proc.stdout, proc.status, proc.error);
+  const { parsedOk, parseError, problems, warnings } = parseOfflineLintPayload(proc.stdout, proc.status, proc.error, proc.signal);
   return {
-    exitCode: typeof proc.status === 'number' ? proc.status : 1,
+    exitCode: typeof proc.status === 'number' ? proc.status : null,
+    signal: proc.signal ?? null,
     ms,
     parsedOk,
     parseError,
@@ -290,8 +293,9 @@ function main(argv) {
     ];
     for (const r of rows) {
       const status = r.missing ? 'MISSING' : (r.ok ? 'PASS' : 'FAIL');
+      const exitLabel = r.signal ? String(r.signal) : (r.exitCode === null ? 'NULL' : String(r.exitCode));
       lines.push(
-        `${r.name.padEnd(16)} ${String(r.exitCode).padStart(4)}  ${String(r.errors).padStart(6)}  ${String(r.warnings).padStart(8)}  ${String(r.sleepWarnings).padStart(9)}  ${String(r.ms).padStart(8)}  ${status}`,
+        `${r.name.padEnd(16)} ${exitLabel.padStart(4)}  ${String(r.errors).padStart(6)}  ${String(r.warnings).padStart(8)}  ${String(r.sleepWarnings).padStart(9)}  ${String(r.ms).padStart(8)}  ${status}`,
       );
     }
     lines.push(
