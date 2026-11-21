@@ -1,4 +1,4 @@
-// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: d2fe77a3b5c360c303b21f2a459308c7522f1a1bc057ebe353c0bf6acf0fa9b5).
+// Generated from prompts/cli/repo-hygiene-lint.prompt.md (sha256: e105deb7d1fc2a2cd136c5287e2796f233baeee703912561e53906d614278f61).
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, posix } from 'node:path';
 import { canonicalTargetPath, detectRealE2eKindsInTest, inspectTestBoundaryTargets, lintValidationCode } from './autopilot-validator.mjs';
@@ -1707,9 +1707,17 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
       continue;
     }
     if (ch === "'" || ch === '"') {
-      if (hashComments && source.slice(i, i + 3) === ch.repeat(3)) {
-        const delim = ch.repeat(3);
-        const end = source.indexOf(delim, i + 3);
+      if (hashComments && source[i + 1] === ch && source[i + 2] === ch) {
+        let j = i + 3;
+        let end = -1;
+        while (j < source.length) {
+          if (source[j] === '\\') { j += 2; continue; }
+          if (source[j] === ch && source[j + 1] === ch && source[j + 2] === ch) {
+            end = j;
+            break;
+          }
+          j++;
+        }
         const body = end < 0 ? source.slice(i + 3) : source.slice(i + 3, end);
         out += addLit(body, body);
         prevToken = 'str';
@@ -1771,7 +1779,10 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
       let inClass = false;
       let closed = false;
       while (j < source.length && source[j] !== '\n') {
-        if (source[j] === '\\') { j += 2; continue; }
+        if (source[j] === '\\') {
+          if (j + 1 < source.length && source[j + 1] !== '\n') { j += 2; continue; }
+          break;
+        }
         if (source[j] === '[') inClass = true;
         else if (source[j] === ']') inClass = false;
         else if (source[j] === '/' && !inClass) { closed = true; j++; break; }
@@ -1780,7 +1791,7 @@ function tokenizeTestCode(source, { hashComments = false } = {}) {
       if (closed) {
         while (j < source.length && /[A-Za-z]/.test(source[j])) j++;
         lineHasCode[lineNo - 1] = true;
-        out += source.slice(i, j);
+        out += '/__RE__/';
         prevToken = 'regex';
         i = j;
         continue;
@@ -2439,7 +2450,7 @@ export function lintPublicInterfaceTests(text, { path = 'test/example.test.mjs' 
 
 const SLEEP_ALLOW_COMMENT_RE = /\b(?:pdd-allow-sleep|sleep-ok|allow-sleep)\b/i;
 const SKIP_ALLOW_COMMENT_RE = /\bpdd-allow-skip\b/i;
-const TRACKING_HASH_ISSUE_RE = /(?:^|[\s([,:;'"`])#[1-9]\d*\b|\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d*\b/;
+const TRACKING_HASH_ISSUE_RE = /(?:^|[\s([,:;'"`])#[1-9]\d*\b|(?<![A-Za-z0-9_.\-/])[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[1-9]\d*\b/;
 const TRACKING_TICKET_RE = /\b[A-Z]{2,10}-[1-9]\d*\b/;
 const TRACKING_WORD_ISSUE_RE = /\bissue\s+#?[1-9]\d*\b/i;
 const TRACKING_GH_URL_RE = /https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9]\d*\b/i;
@@ -2460,7 +2471,7 @@ function hasSubstantiveSkipReason(value) {
   if (!trimmed) return false;
   if (hasTrackingIssueRef(trimmed)) return true;
   if (PLACEHOLDER_SKIP_REASONS.has(trimmed.toLowerCase())) return false;
-  return trimmed.length >= 12 && /\S+\s+\S+/.test(trimmed);
+  return trimmed.length >= 12 && /\s/.test(trimmed);
 }
 
 function buildDelimiterMaps(text) {
@@ -2561,20 +2572,18 @@ function stripOuterParens(expr) {
 
   const innerLo = pairs[pairs.length - 1][0];
   const innerHi = pairs[pairs.length - 1][1];
-  let depth = 0;
+  let depth = pairs.length;
   let minInteriorDepth = pairs.length;
-  for (let i = pairs[0][0]; i <= pairs[0][1]; i++) {
+  for (let i = innerLo + 1; i < innerHi; i++) {
     const ch = s[i];
     if (ch === '(') depth++;
     else if (ch === ')') {
       depth--;
       if (depth < 0) return s;
-    }
-    if (i >= innerLo && i < innerHi && depth < minInteriorDepth) {
-      minInteriorDepth = depth;
+      if (depth < minInteriorDepth) minInteriorDepth = depth;
     }
   }
-  if (depth !== 0 || minInteriorDepth <= 0) return s;
+  if (depth !== pairs.length || minInteriorDepth <= 0) return s;
   const [cutLo, cutHi] = pairs[minInteriorDepth - 1];
   return s.slice(cutLo + 1, cutHi).trim();
 }
@@ -2644,10 +2653,11 @@ function collectAllParameterNames(skeleton, hashComments, closeParen, openParen)
       }
     }
     for (const m of skeleton.matchAll(/\blambda\b/g)) {
-      const colon = skeleton.indexOf(':', m.index + 6);
-      const nl = skeleton.indexOf('\n', m.index + 6);
-      if (colon > m.index + 6 && (nl < 0 || colon < nl) && colon - m.index <= 200) {
-        collectParamIdentifiers(skeleton.slice(m.index + 6, colon), paramNames);
+      const head = skeleton.slice(m.index + 6, m.index + 207);
+      const colon = head.indexOf(':');
+      const nl = head.indexOf('\n');
+      if (colon > 0 && (nl < 0 || colon < nl) && colon <= 194) {
+        collectParamIdentifiers(head.slice(0, colon), paramNames);
       }
     }
   }
@@ -2922,7 +2932,7 @@ function collectTestFixedSleepFindings(text, { path = 'test/example.test.mjs' } 
     }
 
     // 2. JS/TS: timers/promises setTimeout(<ms>) & timersPromises.setTimeout(<ms>) / timers.promises.setTimeout(<ms>)
-    for (const m of skeleton.matchAll(/\b([A-Za-z_$][\w$]*)\s*\.\s*(?:promises\s*\.\s*)?setTimeout\s*\(/g)) {
+    for (const m of skeleton.matchAll(/(?<![\w$])([A-Za-z_$][\w$]*)\s*\.\s*(?:promises\s*\.\s*)?setTimeout\s*\(/g)) {
       const ns = m[1];
       const hasPromisesSegment = /\.\s*promises\s*\./.test(m[0]);
       if (!hasPromisesSegment && !timersPromiseNs.has(ns)) continue;
@@ -2989,15 +2999,18 @@ export function lintTestFixedSleeps(text, { path = 'test/example.test.mjs' } = {
 }
 
 function resolveSingleLiteralString(expr, literals) {
-  const m = /^__STR_(\d+)__$/.exec(String(expr ?? '').trim());
+  const trimmed = String(expr ?? '').trim();
+  if (trimmed.length > 32) return null;
+  const m = /^__STR_(\d+)__$/.exec(trimmed);
   if (!m) return null;
   const val = literals[Number(m[1])];
   return typeof val === 'string' ? val : null;
 }
 
 function extractExprStringText(expr, literals) {
+  const bounded = String(expr ?? '').slice(0, 512);
   const parts = [];
-  for (const m of String(expr ?? '').matchAll(/__STR_(\d+)__/g)) {
+  for (const m of bounded.matchAll(/__STR_(\d+)__/g)) {
     const val = literals[Number(m[1])];
     if (typeof val === 'string') parts.push(val);
   }

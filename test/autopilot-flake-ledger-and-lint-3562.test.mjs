@@ -600,30 +600,43 @@ test('3562 Part 2B: test-unexcused-skip detects JS/TS and Python unexcused skips
 test('3562 Part 2C: test-fixed-sleep and test-unexcused-skip stay strictly linear O(N) on 50k–100k+ adversarial inputs (< 500ms)', () => {
   const adversarialPayloads = [
     // Original nested/unclosed delimiter payload (~101KB)
-    [
-      'new Promise('.repeat(4500),
-      'test.skip('.repeat(2000),
-      'setTimeout('.repeat(2000),
-      `test('a', { skip: ${'('.repeat(200)}true${')'.repeat(200)} }, () => {});\n`,
-      '// '.padEnd(5000, 'a') + '\n',
-    ].join(''),
+    {
+      path: 'test/adversarial.test.mjs',
+      text: [
+        'new Promise('.repeat(4500),
+        'test.skip('.repeat(2000),
+        'setTimeout('.repeat(2000),
+        `test('a', { skip: ${'('.repeat(200)}true${')'.repeat(200)} }, () => {});\n`,
+        '// '.padEnd(5000, 'a') + '\n',
+      ].join(''),
+    },
     // P1-2 #1: import backtracking bomb (~65KB)
-    ('import ' + ' '.repeat(155) + '\n').repeat(400),
+    { path: 'test/adv-import.test.mjs', text: ('import ' + ' '.repeat(155) + '\n').repeat(400) },
     // P1-2 #2: const/let/var backtracking bomb (~61KB)
-    ('const ' + ' '.repeat(115) + '\n').repeat(500),
+    { path: 'test/adv-const.test.mjs', text: ('const ' + ' '.repeat(115) + '\n').repeat(500) },
     // P1-2 #3: deep nested outer parens (depth 25,000, ~50KB)
-    `test('deep', { skip: ${'('.repeat(25_000)}true${')'.repeat(25_000)} }, () => {});\n`,
+    { path: 'test/adv-parens.test.mjs', text: `test('deep', { skip: ${'('.repeat(25_000)}true${')'.repeat(25_000)} }, () => {});\n` },
     // P1-2 #4: deeply nested test(..., { x: test(..., { ... }) }) (~45KB)
-    `${'test("a", { x: '.repeat(1500)}true${' }, () => {})'.repeat(1500)};\n`,
+    { path: 'test/adv-nested.test.mjs', text: `${'test("a", { x: '.repeat(1500)}true${' }, () => {})'.repeat(1500)};\n` },
+    // R2 P1-1 #1: TRACKING_HASH_ISSUE_RE polynomial ReDoS bomb (~40KB)
+    { path: 'test/adv-track-re.test.mjs', text: `// ${'a-'.repeat(20_000)}\nawait sleep(500);\ntest.skip('${'a-'.repeat(20_000)}', () => {});\n` },
+    // R2 P1-1 #2: hasSubstantiveSkipReason polynomial ReDoS bomb (~50KB)
+    { path: 'test/adv-reason-re.test.mjs', text: `test('long', { skip: '${'a'.repeat(50_000)}' }, () => {});\n` },
+    // R2 P1-1 #3: ns.setTimeout polynomial ReDoS bomb (~40KB)
+    { path: 'test/adv-ns-re.test.mjs', text: `const x = ${'a$'.repeat(20_000)};\nvoid x;\n` },
+    // R2 P2-1 #1: Python lambda unbounded scan bomb (~70KB)
+    { path: 'tests/test_adv_lambda.py', text: `${'lambda '.repeat(10_000)}\n` },
+    // R2 P2-1 #2: deeply nested test.skip("a" + ...) expression scan bomb (~26KB)
+    { path: 'test/adv-nested-skip.test.mjs', text: `${'test.skip("a" + '.repeat(1500)}"b"${')'.repeat(1500)};\n` },
   ];
 
-  for (const payload of adversarialPayloads) {
+  for (const { path, text } of adversarialPayloads) {
     const t0 = performance.now();
-    const sleepOut = lintTestFixedSleeps(payload, { path: 'test/adversarial.test.mjs' });
-    const skipOut = lintTestUnexcusedSkips(payload, { path: 'test/adversarial.test.mjs' });
+    const sleepOut = lintTestFixedSleeps(text, { path });
+    const skipOut = lintTestUnexcusedSkips(text, { path });
     const elapsedMs = performance.now() - t0;
     assert.ok(Array.isArray(sleepOut) && Array.isArray(skipOut));
-    assert.ok(elapsedMs < 500, `expected < 500ms for ${payload.length} chars, took ${elapsedMs.toFixed(1)}ms`);
+    assert.ok(elapsedMs < 500, `expected < 500ms for ${path} (${text.length} chars), took ${elapsedMs.toFixed(1)}ms`);
   }
 });
 
@@ -773,4 +786,79 @@ test('3562 R1 regressions: P1-1..P1-5 and P2-1..P2-2 edge cases', () => {
   ].join('\n');
   const p22Warnings = lintTestUnexcusedSkips(p22FirstArgSkip, { path: 'test/p22-first-arg.test.mjs' });
   assert.equal(p22Warnings.length, 2, `expected 2 first-arg skip warnings, got:\n${p22Warnings.join('\n')}`);
+});
+
+test('3562 R2 regressions: P1-1 tracking/reason/ns semantics, P2-1 lambda param guard, and P2-2 escaped triple-quote & JS regex placeholder', () => {
+  // P1-1 #1: owner/repo#N accepted while foo/bar/baz#1 is rejected
+  assert.deepEqual(
+    lintTestUnexcusedSkips("test.skip('see promptdriven/pdd#3562', () => {});\n", { path: 'test/r2-owner-repo.test.mjs' }),
+    [],
+  );
+  assert.equal(
+    lintTestUnexcusedSkips("test.skip('bad path foo/bar/baz#1', () => {});\n", { path: 'test/r2-triple-slash.test.mjs' }).length,
+    1,
+  );
+  assert.equal(
+    lintTestFixedSleeps('// foo/bar/baz#1\nawait sleep(500);\n', { path: 'test/r2-triple-slash-sleep.test.mjs' }).length,
+    1,
+  );
+
+  // P1-1 #2: single long word without whitespace is NOT a substantive skip reason; multi-word >= 12 chars IS
+  assert.equal(
+    lintTestUnexcusedSkips("test('x', { skip: 'unexcusedsinglelongword' }, () => {});\n", { path: 'test/r2-reason.test.mjs' }).length,
+    1,
+  );
+  assert.deepEqual(
+    lintTestUnexcusedSkips("test('x', { skip: 'requires local sqlite binary' }, () => {});\n", { path: 'test/r2-reason-ok.test.mjs' }),
+    [],
+  );
+
+  // P1-1 #3: $-prefixed timers/promises namespace is detected
+  const dollarNs = [
+    "import * as $timers from 'node:timers/promises';",
+    "test('dollar ns', async () => { await $timers.setTimeout(250); });",
+  ].join('\n');
+  assert.equal(lintTestFixedSleeps(dollarNs, { path: 'test/r2-dollar-ns.test.mjs' }).length, 1);
+
+  // P2-1 #1: Python lambda parameter still disqualifies unrelated positive assignment of same name
+  const pyLambdaParam = [
+    'import time',
+    'delay = lambda secs: time.sleep(secs)',
+    'secs = 5',
+    'assert delay',
+  ].join('\n');
+  assert.deepEqual(lintTestFixedSleeps(pyLambdaParam, { path: 'tests/test_r2_lambda.py' }), []);
+
+  // P2-2 #1: Python escaped triple-quote cannot close triple-quoted string early to spoof # pdd-allow-sleep
+  const pyEscapedTripleSpoof = [
+    'import time',
+    'def test_escaped_triple():',
+    '    s = """line1 \\"""',
+    '# pdd-allow-sleep',
+    '"""',
+    '    time.sleep(1)',
+  ].join('\n');
+  assert.equal(lintTestFixedSleeps(pyEscapedTripleSpoof, { path: 'tests/test_r2_escaped_triple.py' }).length, 1);
+
+  // Escaped backslash right before real closing triple-quote DOES close the string so following real comment excuses sleep
+  const pyEscapedBackslashThenClose = [
+    'import time',
+    'def test_real_close():',
+    '    s = """ends with backslash \\\\"""',
+    '    # pdd-allow-sleep: legitimate',
+    '    time.sleep(1)',
+  ].join('\n');
+  assert.deepEqual(lintTestFixedSleeps(pyEscapedBackslashThenClose, { path: 'tests/test_r2_real_close.py' }), []);
+
+  // P2-2 #2: JS regex literal bodies do not trigger false positives or desync delimiter maps
+  const jsRegexBody = [
+    'const r1 = /sleep(500)/g;',
+    'const r2 = /test.skip(/;',
+    "test('clean after unbalanced regex', () => { return r1.test('a') || r2.test('b'); });",
+    "test('real unexcused skip after regex', { skip: true }, () => {});",
+  ].join('\n');
+  assert.deepEqual(lintTestFixedSleeps(jsRegexBody, { path: 'test/r2-regex-body.test.mjs' }), []);
+  const regexSkipWarnings = lintTestUnexcusedSkips(jsRegexBody, { path: 'test/r2-regex-body.test.mjs' });
+  assert.equal(regexSkipWarnings.length, 1, `expected only the real line-4 skip warning, got:\n${regexSkipWarnings.join('\n')}`);
+  assert.match(regexSkipWarnings[0], /:4 \[test-unexcused-skip\]/);
 });
