@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   coreSettings,
   evaluateChangedFileHygiene,
@@ -339,8 +339,28 @@ test('#3557 (3): workflow-inventory pre-review gate catches newSkips and unackno
   assert.match(revClean.input, /unknown dynamic test inventory/);
 });
 
-test('#3557 (4): cheap-first ordering skips reviewState when local suite/vectors already failed or are missing, while preserving #3588 deferSuiteForReview security boundary', async t => {
-  // (A) Normal PR where local suite already failed on job.head -> reviewState NEVER launches on that head!
+test('#3557 (4): cheap-first ordering skips reviewState when engineEvidenceReds/suite fail or break, while preserving #3588 deferSuiteForReview security boundary', async t => {
+  // (A1) Synchronous engineEvidenceReds failure on Tick 1 -> 0 total review launches!
+  const wEvRed = await coreWorld(t, { settings: { runs: 1 } });
+  seedBaseFiles(wEvRed, {
+    'package.json': JSON.stringify({ name: 'ev-red', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'test/j.vectors.test.js': "test('j', () => expect(1).toBe(1));\n",
+  });
+  wEvRed.issue(300);
+  await wEvRed.tick();
+  writeIn(wEvRed.job(300, 'build').cwd, 'test/j.vectors.test.js', "test('j2', () => expect(2).toBe(2));\n");
+  const evClaim = 'Evidence: runtime=not-run; vectors=pass (1/1); formal=not-applicable; tests=pass (1/1)';
+  wEvRed.build(300, {
+    write: false,
+    body: `Fixes #300\n\nRuntime: not run (no prompt changed)\n${evClaim}\nPath: d — test/j.vectors.test.js — unowned — no contract change — Test: test/j.vectors.test.js`,
+    result: { promptChanged: false, evidence: evClaim },
+  });
+  await wEvRed.tick();
+  assert.equal(wEvRed.started.filter(j => j.role === 'review').length, 0, 'synchronous engineEvidenceReds failure launches 0 reviewers');
+  assert.ok(wEvRed.job(300, 'repair'), 'engineEvidenceReds failure enters repair cleanly');
+  assert.match(wEvRed.job(300, 'repair').input, /The Evidence line says vectors=pass \(1\/1\), but Autopilot could not check it/);
+
+  // (A2) Already-failed local suite prevents review retry launch (no fake job-file mutation!)
   const wSuiteRed = await coreWorld(t, { settings: { runs: 1 } });
   seedBaseFiles(wSuiteRed, {
     'package.json': JSON.stringify({ name: 'cheap', scripts: { test: 'node --test' } }, null, 2) + '\n',
@@ -354,30 +374,42 @@ test('#3557 (4): cheap-first ordering skips reviewState when local suite/vectors
     body: 'Fixes #301\n\nRuntime: not run (no prompt changed)\nPath: d — src/app.mjs — unowned — no contract change — Test: done check',
     result: { promptChanged: false },
   });
-  // Simulate synchronous fast local suite failure before review is ever launched.
-  const origStart = wSuiteRed.jobs.start;
-  wSuiteRed.jobs.start = spec => {
-    const started = origStart(spec);
-    if (spec.role === 'suite') {
-      wSuiteRed.alive.delete(started.pid);
-      writeFileSync(started.log, 'not ok 1 - fails fast\n# fail 1\n');
-      writeFileSync(started.exit, JSON.stringify({ code: 1, signal: null, at: wSuiteRed.now() }));
-    }
-    return started;
-  };
-  // Advance tick 1 (starts suite synchronously as exited 1); tick 2 reads failed suite -> must NEVER start review!
-  // Actually suiteState returns running on start, so let's test pre-failed suite on tick 2 with review paused/unstarted,
-  // AND test immediate missing suite!
   await wSuiteRed.tick();
-  // Reset review so we verify tick 2 sees suite fail FIRST and does NOT start a fresh review!
-  const job301Path = join(wSuiteRed.root, 'jobs', '301.json');
-  const saved301 = JSON.parse(readFileSync(job301Path, 'utf8'));
-  const reviewsBefore = wSuiteRed.started.filter(j => j.role === 'review').length;
-  saved301.review = null;
-  writeFileSync(job301Path, JSON.stringify(saved301, null, 2));
+  assert.equal(wSuiteRed.started.filter(j => j.role === 'review').length, 1);
+  // Both suite fails and review #1 dies with no verdict -> Tick 2 sees suite.state === 'fail' FIRST and does NOT retry review!
+  writeFileSync(wSuiteRed.job(301, 'suite').log, 'not ok 1 - fails fast\n# fail 1\n');
+  wSuiteRed.suite(301, 1);
+  wSuiteRed.finish(301, 'review', { code: 1 });
   await wSuiteRed.tick();
-  assert.equal(wSuiteRed.started.filter(j => j.role === 'review').length, reviewsBefore, 'already-failed local suite does NOT launch reviewState');
+  assert.equal(wSuiteRed.started.filter(j => j.role === 'review').length, 1, 'already-failed local suite does NOT launch a review retry');
   assert.ok(wSuiteRed.job(301, 'repair'), 'failed local suite enters repair cleanly');
+
+  // (A3) Broken local suite (3 runner failures exit 127) ends immediately before launching a review retry!
+  const wBroken = await coreWorld(t, { settings: { runs: 1 } });
+  seedBaseFiles(wBroken, {
+    'package.json': JSON.stringify({ name: 'broken-suite', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'src/app.mjs': 'export const ok = () => 1;\n',
+  });
+  wBroken.issue(303);
+  await wBroken.tick();
+  writeIn(wBroken.job(303, 'build').cwd, 'src/app.mjs', 'export const ok = () => 3;\n');
+  wBroken.build(303, {
+    write: false,
+    body: 'Fixes #303\n\nRuntime: not run (no prompt changed)\nPath: d — src/app.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wBroken.tick();
+  // Suite exits 127 across 3 tries while review #1 is still running on tries 1-2 and dies on try 3 -> broken suite ends BEFORE review retry!
+  for (let tryNum = 0; tryNum < 3; tryNum++) {
+    const s = wBroken.job(303, 'suite');
+    writeFileSync(s.log, 'sh: node: command not found\n');
+    wBroken.suite(303, 127);
+    if (tryNum === 2) wBroken.finish(303, 'review', { code: 1 });
+    await wBroken.tick();
+  }
+  assert.equal(wBroken.started.filter(j => j.role === 'review').length, 1, 'suite.state === broken ends job without launching a review retry');
+  const brokenHistory = readFileSync(join(wBroken.root, 'history.jsonl'), 'utf8');
+  assert.match(brokenHistory, /suite-broken|full test suite runner failed/);
 
   // (B) #3588 security boundary preserved: package.json edit + enforce hygiene error blocks BEFORE review AND never runs suite;
   // once hygiene is fixed, reviewState runs FIRST while suiteState/vectorsState stay waiting-review until review PASS!
@@ -815,4 +847,282 @@ test('#3557/#3558 (5): independent-verifier adversarial regressions — backtick
   assert.equal(job601.localTestRepairs ?? 0, 0, 'unconfirmed cleanup never burns localTestRepairs');
   assert.equal(wStop.started.filter(j => j.role === 'repair').length, 0);
   wStop.jobs.cleanup = origCleanup;
+});
+
+test('R1-1 & R1-6: untrusted PR head cannot self-disable hygieneGate via rules/lint/*.json or pdd.json, untouched malformed config never fails unrelated PRs, and PR-broken config still fails', async t => {
+  // 1. PR tries to disable test-private-import on itself via BOTH rules/lint/disable.json and pdd.json -> still blocked!
+  const wSelfDisable = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wSelfDisable, {
+    'package.json': JSON.stringify({ name: 'self-disable', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'pdd.json': JSON.stringify({ autopilot: { mode: 'auto', hygieneGate: 'enforce' } }, null, 2) + '\n',
+    'src/core.mjs': 'export const pub = () => 1;\nexport const _priv = () => 2;\n',
+  });
+  wSelfDisable.issue(701);
+  await wSelfDisable.tick();
+  const cwd701 = wSelfDisable.job(701, 'build').cwd;
+  writeIn(cwd701, 'rules/lint/disable.json', JSON.stringify({ disable: ['test-private-import'], rules: { 'test-private-import': 'off' } }, null, 2) + '\n');
+  writeIn(cwd701, 'pdd.json', JSON.stringify({ autopilot: { mode: 'auto', hygieneGate: 'enforce' }, lint: { disable: ['test-private-import'], rules: { 'test-private-import': 'off' } } }, null, 2) + '\n');
+  writeIn(cwd701, 'test/bad.test.mjs', "import test from 'node:test';\nimport { _priv } from '../src/core.mjs';\ntest('priv', () => { _priv(); });\n");
+  wSelfDisable.build(701, {
+    write: false,
+    body: 'Fixes #701\n\nRuntime: not run (no prompt changed)\nPath: d — pdd.json, rules/lint/disable.json, test/bad.test.mjs — unowned — no contract change — Test: test/bad.test.mjs',
+    result: { promptChanged: false },
+  });
+  await wSelfDisable.tick();
+  assert.equal(wSelfDisable.started.filter(j => j.role === 'review').length, 0, 'PR self-disabling rules via pdd.json & rules/lint/*.json is STILL blocked before review');
+  const rep701 = wSelfDisable.job(701, 'repair');
+  assert.ok(rep701, 'enters repair on changed-file hygiene violation');
+  assert.match(rep701.input, /test-private-import/);
+  assert.doesNotMatch(rep701.input, /adjust pdd\.json lint rules/i, 'red message must NEVER tell builder to weaken pdd.json lint rules');
+
+  // 2. Untouched pre-existing malformed rules/lint/legacy-broken.json on base NEVER fails an unrelated clean PR (R1-6)!
+  const wLegacyBad = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wLegacyBad, {
+    'package.json': JSON.stringify({ name: 'legacy-bad-cfg', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'rules/lint/legacy-broken.json': '{ this is invalid json\n',
+    'src/clean.mjs': 'export const ok = () => 1;\n',
+  });
+  wLegacyBad.issue(702);
+  await wLegacyBad.tick();
+  writeIn(wLegacyBad.job(702, 'build').cwd, 'src/clean.mjs', 'export const ok = () => 2;\n');
+  wLegacyBad.build(702, {
+    write: false,
+    body: 'Fixes #702\n\nRuntime: not run (no prompt changed)\nPath: d — src/clean.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wLegacyBad.tick();
+  assert.ok(wLegacyBad.job(702, 'review'), 'untouched pre-existing malformed lint config never blocks unrelated PR');
+  assert.equal(wLegacyBad.job(702, 'repair'), undefined);
+
+  // 3. PR that introduces a malformed rules/lint/bad.json on HEAD IS caught as lint-config-invalid before review!
+  const wNewBad = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wNewBad, {
+    'package.json': JSON.stringify({ name: 'new-bad-cfg', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'src/clean.mjs': 'export const ok = () => 1;\n',
+  });
+  wNewBad.issue(703);
+  await wNewBad.tick();
+  writeIn(wNewBad.job(703, 'build').cwd, 'rules/lint/bad.json', '{ broken json\n');
+  wNewBad.build(703, {
+    write: false,
+    body: 'Fixes #703\n\nRuntime: not run (no prompt changed)\nPath: d — rules/lint/bad.json — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wNewBad.tick();
+  assert.equal(wNewBad.started.filter(j => j.role === 'review').length, 0, 'PR introducing invalid rules/lint/*.json is blocked before review');
+  assert.match(wNewBad.job(703, 'repair')?.input ?? '', /lint-config-invalid/);
+});
+
+test('R1-3, R1-4 & R1-7: rename-out-of-test-surface treated as deletion, boundary-checked deletion justification blocks collisions and generic words, and fixtures/helpers newSkips are ignored', async t => {
+  // 1. R1-3: Renaming test/critical.test.mjs -> docs/archived-critical.txt (non-test path) is gated as a deletion!
+  const wRenameOut = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wRenameOut, {
+    'package.json': JSON.stringify({ name: 'rename-out', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'test/critical.test.mjs': "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('critical', () => { assert.equal(1 + 1, 2); });\n",
+  });
+  wRenameOut.issue(704);
+  await wRenameOut.tick();
+  const cwd704 = wRenameOut.job(704, 'build').cwd;
+  mkdirSync(join(cwd704, 'docs'), { recursive: true });
+  wRenameOut.git(cwd704, 'mv', 'test/critical.test.mjs', 'docs/archived-critical.txt');
+  wRenameOut.build(704, {
+    write: false,
+    body: 'Fixes #704\n\nRuntime: not run (no prompt changed)\nPath: d — test/critical.test.mjs, docs/archived-critical.txt — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wRenameOut.tick();
+  assert.equal(wRenameOut.started.filter(j => j.role === 'review').length, 0, 'renaming a test file out of test surface blocks before review');
+  assert.match(wRenameOut.job(704, 'repair')?.input ?? '', /deleted test file\(s\) lack an explicit justification.*test\/critical\.test\.mjs/);
+
+  // 2. R1-4: Substring collision, different-directory basename, prefixed basename, and generic "because"/"reason" MUST fail!
+  const invClean = { available: true, reason: '', text: 'Tests vs base: none.\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; this inventory did not run tests.\n' };
+  const invalidJustifications = [
+    'Fixes #1\n\nDeleted test/auth.test.mjs.bak because it was obsolete backup data.\n',
+    'Fixes #1\n\nRemoved other/dir/auth.test.mjs as obsolete after cleanup.\n',
+    'Fixes #1\n\nRemoved sub-auth.test.mjs as obsolete after cleanup.\n',
+    'Fixes #1\n\nChanged login handler because test/auth.test.mjs failed on CI.\n',
+    'Fixes #1\n\nReason: test/auth.test.mjs was slow on local laptops.\n',
+  ];
+  for (const prBody of invalidJustifications) {
+    const res = evaluateTestInventoryGate({ inventory: invClean, deletedTestFiles: ['test/auth.test.mjs'], prBody, mode: 'enforce' });
+    assert.equal(res.ok, false, `must reject spoofed/generic justification: ${prBody.trim()}`);
+    assert.deepEqual(res.unacknowledgedDeletedTests, ['test/auth.test.mjs']);
+  }
+  const validJustifications = [
+    'Fixes #1\n\nRemoved `./test/auth.test.mjs`: replaced by `test/oauth.test.mjs`.\n',
+    'Fixes #1\n\nRetired auth.test.mjs after consolidating coverage into `test/oauth.test.mjs`.\n',
+  ];
+  for (const prBody of validJustifications) {
+    const res = evaluateTestInventoryGate({ inventory: invClean, deletedTestFiles: ['test/auth.test.mjs'], prBody, mode: 'enforce' });
+    assert.equal(res.ok, true, `must accept legitimate justification: ${prBody.trim()}`);
+    assert.deepEqual(res.unacknowledgedDeletedTests, []);
+  }
+
+  // 3. R1-7: New skips under test/fixtures/ and test/helpers/ (including HTML-entity-encoded paths) are ignored!
+  const fixtureSkipsInv = {
+    available: true,
+    reason: '',
+    text: [
+      'Tests vs base: "test/fixtures/sample.test.mjs" 1 → 1 tests. Removed: none.',
+      'Tests vs base: "test/fixtures/foo&#64;1.test.mjs" 1 → 1 tests. Removed: none.',
+      'Tests vs base: "test/helpers/mock-runner.test.mjs" 1 → 1 tests. Removed: none.',
+      'Changed assertions in kept tests: none.',
+      'New skips: "test/fixtures/sample.test.mjs" `"f"` `test.skip`.',
+      'New skips: "test/fixtures/foo&#64;1.test.mjs" `"f2"` `test.skip`.',
+      'New skips: "test/helpers/mock-runner.test.mjs" `"h"` `test.skip`.',
+      'Static inventory only; this inventory did not run tests.',
+    ].join('\n'),
+  };
+  const fixtureRes = evaluateTestInventoryGate({ inventory: fixtureSkipsInv, deletedTestFiles: [], prBody: 'Fixes #1', mode: 'enforce' });
+  assert.equal(fixtureRes.ok, true, 'fixtures/ and helpers/ newSkips must not false-positive block');
+  assert.deepEqual(fixtureRes.newSkips, []);
+
+  // Rename FROM fixtures INTO real test surface WITH a skip MUST still be caught!
+  const promotedSkipInv = {
+    available: true,
+    reason: '',
+    text: 'Tests vs base: "test/fixtures/a.test.mjs" → "test/real.test.mjs" 1 → 1 tests. Removed: none.\nNew skips: "test/fixtures/a.test.mjs" → "test/real.test.mjs" `"s"` `test.skip`.\n',
+  };
+  const promotedRes = evaluateTestInventoryGate({ inventory: promotedSkipInv, deletedTestFiles: [], prBody: 'Fixes #1', mode: 'enforce' });
+  assert.equal(promotedRes.ok, false, 'rename from fixtures into real test surface with new skip IS caught');
+  assert.equal(promotedRes.newSkips.length, 1);
+});
+
+test('R1-5: transient git/worktree/inventory failures warn, never cache ok:true, defer review in enforce mode, and recover on next tick', async t => {
+  // 1. Transient headTree checkout failure during preReviewHygieneCheck
+  const wHygErr = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wHygErr, {
+    'package.json': JSON.stringify({ name: 'trans-hyg', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'src/core.mjs': 'export const _priv = () => 1;\n',
+  });
+  wHygErr.issue(705);
+  await wHygErr.tick();
+  writeIn(wHygErr.job(705, 'build').cwd, 'test/bad.test.mjs', "import test from 'node:test';\nimport { _priv } from '../src/core.mjs';\ntest('p', () => { _priv(); });\n");
+  wHygErr.build(705, {
+    write: false,
+    body: 'Fixes #705\n\nRuntime: not run (no prompt changed)\nPath: d — test/bad.test.mjs — unowned — no contract change — Test: test/bad.test.mjs',
+    result: { promptChanged: false },
+  });
+  const warningsHyg = [];
+  await wHygErr.tick({
+    warn: msg => warningsHyg.push(String(msg)),
+    git: async (args, opts) => {
+      if (args[0] === 'worktree' && args[1] === 'add' && args.some(a => String(a).endsWith('705-agent'))) {
+        return { code: 128, stdout: '', stderr: 'transient index.lock failure' };
+      }
+      const res = spawnSync('git', args, { cwd: opts?.cwd ?? wHygErr.cwd, encoding: 'utf8' });
+      return { code: res.status ?? 1, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
+    },
+  });
+  assert.ok(warningsHyg.some(m => /pre-review hygiene checkout failed/i.test(m)), 'transient hygiene checkout failure logs warning');
+  assert.equal(wHygErr.started.filter(j => j.role === 'review').length, 0, 'enforce mode defers review on transient hygiene failure');
+  const saved705Tick1 = JSON.parse(readFileSync(join(wHygErr.root, 'jobs', '705.json'), 'utf8'));
+  assert.equal(saved705Tick1.hygiene, undefined, 'failed hygiene read is NEVER persisted into job.hygiene cache');
+  assert.equal(saved705Tick1.lastErrorStep, 'hygiene-gate');
+  // Next tick recovers cleanly and catches the real test-private-import violation without launching review!
+  await wHygErr.tick();
+  assert.equal(wHygErr.started.filter(j => j.role === 'review').length, 0, 'recovered tick catches real hygiene violation with 0 review launches');
+  assert.match(wHygErr.job(705, 'repair')?.input ?? '', /test-private-import/);
+
+  // 2. Transient collectTestInventory failure during preReviewTestInventoryCheck
+  const wInvErr = await coreWorld(t, { settings: { runs: 1, hygieneGate: 'enforce' } });
+  seedBaseFiles(wInvErr, {
+    'package.json': JSON.stringify({ name: 'trans-inv', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'test/a.test.mjs': "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('a', () => { assert.equal(1, 1); });\n",
+  });
+  wInvErr.issue(706);
+  await wInvErr.tick();
+  writeIn(wInvErr.job(706, 'build').cwd, 'test/a.test.mjs', "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest.skip('a', () => { assert.equal(1, 1); });\n");
+  wInvErr.build(706, {
+    write: false,
+    body: 'Fixes #706\n\nRuntime: not run (no prompt changed)\nPath: d — test/a.test.mjs — unowned — no contract change — Test: test/a.test.mjs',
+    result: { promptChanged: false },
+  });
+  const warningsInv = [];
+  await wInvErr.tick({
+    warn: msg => warningsInv.push(String(msg)),
+    collectTestInventory: async () => { throw new Error('transient snapshot EIO'); },
+  });
+  assert.ok(warningsInv.some(m => /pre-review test inventory failed/i.test(m)), 'transient inventory failure logs warning');
+  assert.equal(wInvErr.started.filter(j => j.role === 'review').length, 0, 'enforce mode defers review on transient inventory failure');
+  const saved706Tick1 = JSON.parse(readFileSync(join(wInvErr.root, 'jobs', '706.json'), 'utf8'));
+  assert.equal(saved706Tick1.testInventory, undefined, 'failed inventory read is NEVER persisted into job.testInventory cache');
+  assert.equal(saved706Tick1.lastErrorStep, 'test-inventory');
+  // Next tick recovers cleanly and catches the planted test.skip without launching review!
+  await wInvErr.tick();
+  assert.equal(wInvErr.started.filter(j => j.role === 'review').length, 0, 'recovered tick catches real newSkip with 0 review launches');
+  assert.match(wInvErr.job(706, 'repair')?.input ?? '', /newly introduced test skip\(s\) detected/);
+});
+
+test('R1-8 & R1-9: base owning prompt #21+ is not dropped, git show uses verified commit SHA, baseBranch is sanitized, and job.testInventory.text preserves accurate truncation counts', async t => {
+  // 1. Sanitized baseBranch in formatDomainDecisionsForReview
+  const sanitizedHeader = formatDomainDecisionsForReview(
+    [{ promptPath: 'prompts/x.prompt.md', ownedFiles: ['src/x.mjs'], content: '- Must stay safe.' }],
+    { baseBranch: 'main\n\x1b[31mINJECTED\x1b[0m' },
+  );
+  assert.ok(!sanitizedHeader.includes('\x1b['), 'ANSI stripped from baseBranch header');
+  assert.match(sanitizedHeader, /^Base owning prompt ## Domain decisions \(read from origin\/main INJECTED, NOT PR head/);
+
+  // 2. 21 changed owned files where ONLY prompt #21 has ## Domain decisions + verified hex SHA in git show + no double truncation on >6KB inventory text
+  const baseFiles = {
+    'package.json': JSON.stringify({ name: 'many-owners', scripts: { test: 'node --test' } }, null, 2) + '\n',
+    'test/keep.test.mjs': "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('k', () => { assert.equal(1, 1); });\n",
+  };
+  const changedCodePaths = [];
+  for (let i = 1; i <= 21; i++) {
+    const id = String(i).padStart(2, '0');
+    const promptPath = `prompts/p${id}.prompt.md`;
+    const codePath = `src/p${id}.mjs`;
+    const promptText = i === 21
+      ? `# Mod ${id}\n\nOwn \`${codePath}\`.\n\n## Domain decisions\n\n- INVARIANT_P21_MUST_APPEAR: never drop prompt #21 behind a 20-item slice.\n`
+      : `# Mod ${id}\n\nOwn \`${codePath}\`.\n\n## Public contract\n\nExports \`v${id}\`.\n`;
+    const hash = promptHeaderHash(promptText);
+    baseFiles[promptPath] = promptText;
+    baseFiles[codePath] = `// Generated from ${promptPath} (sha256: ${hash})\nexport const v${id} = 1;\n`;
+    changedCodePaths.push({ id, promptPath, codePath, hash });
+  }
+  const w = await coreWorld(t, { settings: { runs: 1 } });
+  seedBaseFiles(w, baseFiles);
+  w.issue(707);
+  await w.tick();
+  const cwd707 = w.job(707, 'build').cwd;
+  const pathLines = [];
+  for (const { id, promptPath, codePath, hash } of changedCodePaths) {
+    writeIn(cwd707, codePath, `// Generated from ${promptPath} (sha256: ${hash})\nexport const v${id} = 2;\n`);
+    pathLines.push(`Path: b — ${codePath} — ${promptPath} — quote ${promptPath}:1 — Test: test/keep.test.mjs`);
+  }
+  writeIn(cwd707, 'test/keep.test.mjs', "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('k', () => { assert.equal(2, 2); });\n");
+  pathLines.push('Path: d — test/keep.test.mjs — unowned — no contract change — Test: test/keep.test.mjs');
+  w.build(707, {
+    write: false,
+    body: `Fixes #707\n\nRuntime: not run (no prompt changed)\n${pathLines.join('\n')}`,
+    result: { promptChanged: false },
+  });
+
+  // Record every `git show` arg + supply a 6,200-char inventory report to verify single-pass accurate truncation (R1-9)!
+  const longInvLines = Array.from({ length: 85 }, (_, idx) => `Tests vs base: "test/file-${String(idx).padStart(3, '0')}.test.mjs" 10 → 10 tests. Removed: none.`);
+  const longInvText = `${longInvLines.join('\n')}\nChanged assertions in kept tests: none.\nNew skips: none.\nStatic inventory only; this inventory did not run tests.\n`;
+  assert.ok(longInvText.length > 5500, `fixture inventory > 5500 chars (got ${longInvText.length})`);
+  const gitShowSpecs = [];
+  await w.tick({
+    collectTestInventory: async () => ({ available: true, reason: '', text: longInvText, details: longInvText }),
+    git: async (args, opts) => {
+      if (args[0] === 'show') gitShowSpecs.push(args[1]);
+      const res = spawnSync('git', args, { cwd: opts?.cwd ?? w.cwd, encoding: 'utf8' });
+      return { code: res.status ?? 1, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
+    },
+  });
+  const rev707 = w.job(707, 'review');
+  assert.ok(rev707, 'review starts cleanly');
+  assert.match(rev707.input, /### prompts\/p21\.prompt\.md \(owns: src\/p21\.mjs\)/, 'prompt #21 is NOT dropped by a 20-prompt pre-slice');
+  assert.match(rev707.input, /INVARIANT_P21_MUST_APPEAR/);
+  const promptShowSpecs = gitShowSpecs.filter(spec => spec.endsWith('.prompt.md'));
+  assert.ok(promptShowSpecs.length >= 21, `read all 21 base prompts via git show (got ${promptShowSpecs.length})`);
+  for (const spec of promptShowSpecs) {
+    assert.match(spec, /^[0-9a-f]{40}:prompts\/p\d\d\.prompt\.md$/i, `git show uses validated hex base commit SHA, not raw origin/ref: ${spec}`);
+  }
+  const saved707 = JSON.parse(readFileSync(join(w.root, 'jobs', '707.json'), 'utf8'));
+  assert.equal(saved707.testInventory.text.length, longInvText.length, 'job.testInventory.text is NOT prematurely re-sliced to 4500 chars');
+  const invTruncMatch = rev707.input.match(/\[truncated: (\d+) more characters omitted from test inventory\]/);
+  assert.ok(invTruncMatch && Number(invTruncMatch[1]) > 2000, `single-pass review truncation reports accurate omitted char count (>2000), got: ${invTruncMatch?.[0]}`);
 });
