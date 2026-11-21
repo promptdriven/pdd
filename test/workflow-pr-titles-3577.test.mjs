@@ -39,6 +39,22 @@ test('3577-1: readPrFields parses both multi-line and single-line pipe-delimited
   assert.equal(codeAndEscaped.cause, 'missed code spans');
   assert.equal(codeAndEscaped.fix, 'scan code spans first');
 
+  // R1-1: CommonMark/GFM code spans: backslashes inside a span never escape the closing backtick,
+  // and an even run of backslashes before an opening backtick does not escape it
+  const trailingBackslashInSpan = readPrFields([
+    'Title: Preserve trailing `\\` in cells | Cause: broke `foo` | Fix: trim',
+  ]);
+  assert.equal(trailingBackslashInSpan.title, 'Preserve trailing `\\` in cells');
+  assert.equal(trailingBackslashInSpan.cause, 'broke `foo`');
+  assert.equal(trailingBackslashInSpan.fix, 'trim');
+
+  const evenBackslashesBeforeSpan = readPrFields([
+    'Title: Keep \\\\`a | Cause: inside` | Cause: real cause | Fix: real fix',
+  ]);
+  assert.equal(evenBackslashesBeforeSpan.title, 'Keep \\\\`a | Cause: inside`');
+  assert.equal(evenBackslashesBeforeSpan.cause, 'real cause');
+  assert.equal(evenBackslashesBeforeSpan.fix, 'real fix');
+
   // Case rows starting with Case: must never split on `|`, even if a cell text contains a label
   const caseRows = readPrFields([
     'Case: `a || b` | Cause: old | Fix: new\nCase: 1205 | $12.50 | $12.05 | $12.05',
@@ -255,4 +271,48 @@ test('3577-1/2/3: runner aligns --summary guidance, PATCHes {title, body} when t
   assert.equal(legacyRepair.exitCode, 0, legacyRepair.message);
   assert.equal(patches.at(-1).title, 'feat(invoices): Repaired legacy title (#17)', 'still resolves prType from workflow.json when missing on run');
   assert.equal(f.record().pr[0].title, 'feat(invoices): Repaired legacy title (#17)');
+});
+
+test('3577 R1-2: PR 1 (layout: spec) inline Verdict does not swallow subsequent |-delimited fields into Summary or Details', async t => {
+  const f = await fixture(t, { agent: 'codex', name: 'bug' });
+  const baseExec = f.ports.execFile;
+  f.ports.execFile = async (file, args, options) => {
+    if (file === 'gh' && args[0] === 'label' && args[1] === 'list') return { stdout: JSON.stringify([{ name: 'pdd:no-verdict' }]) };
+    if (file === 'gh' && args[0] === 'pr' && args[1] === 'edit') return { stdout: '' };
+    return baseExec(file, args, options);
+  };
+  const started = await startRun({ name: 'bug', issue: '17', agent: 'codex', cwd: f.source, packageRoot }, f.ports);
+  assert.equal(started.exitCode, 0, started.message);
+  const doneStep = (step, summary) => stepDone({ step, summary, cwd: f.record().root }, f.agentPorts());
+
+  const storyPath = join(f.record().root, 'user_stories', 'pad-cents.md');
+  mkdirSync(join(f.record().root, 'user_stories'), { recursive: true });
+  writeFileSync(
+    storyPath,
+    '# Pad cents\n\nAs a shop owner, I want prices to show two cent digits, so that customers can compare prices.\n\n## Acceptance criteria\n\n1. 1205 displays $12.05.\n',
+  );
+  f.git(f.record().root, 'add', '-A');
+  f.git(f.record().root, 'commit', '-qm', 'Add story');
+
+  assert.equal((await doneStep('reproduce', 'Problem: shows $12.50 instead of $12.05')).exitCode, 0);
+  assert.equal((await doneStep('prompt-story', 'Story added')).exitCode, 0);
+  assert.equal((await approveRun({ ref: '17', cwd: f.source, said: 'Approved Story for PR 1.' }, f.ports)).exitCode, 0);
+
+  // Strict-mode / manual PR 1 check summary with inline |-delimited fields after Verdict:
+  const inlineSummary = 'Title: Pad cents to 2 digits | Verdict: code bug only | Problem: shows $12.50 | This PR: adds Story and test';
+  assert.equal((await doneStep('check', inlineSummary)).exitCode, 0);
+  const tryDone = await doneStep('try', 'skipped');
+  assert.equal(tryDone.exitCode, 0, tryDone.message);
+  const openPr1 = await approveRun({ ref: '17', cwd: f.source, said: 'Open PR 1.' }, f.ports);
+  assert.equal(openPr1.exitCode, 0, openPr1.message);
+
+  assert.equal(f.prs.length, 1);
+  assert.equal(f.prs[0].title, 'spec(pad-cents): Pad cents to 2 digits (#17 · part 1: spec)');
+  const body = f.prs[0].body;
+  assert.match(body, /^- \*\*Problem:\*\* shows \$12\.50$/m);
+  assert.match(body, /^- \*\*This PR:\*\* adds Story and test$/m);
+  assert.match(body, /^- \*\*Verdict:\*\* code bug only$/m);
+  assert.doesNotMatch(body, /^- \*\*Verdict:\*\*.*(?:Problem:|This PR:)/m);
+  assert.match(body, /^Agent note — not checked by pdd: Verdict: code bug only$/m);
+  assert.doesNotMatch(body, /^Agent note — not checked by pdd: Verdict:.*(?:Problem:|This PR:)/m);
 });

@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: e72e072b99b3008d178a4a162a24d45de1fcf62aa89c06d2c9ccfc96c5dc8674).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 331f11364e07d1f2d73c50a2c03ec2873ce627bca1fdcc5df5a2cb305d2a13d2).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -1379,7 +1379,11 @@ function reportLinks(text, env) {
 // one per line or joined with "; ". "; " inside the verdict sentence stays.
 const VERDICT = new RegExp(`\\bVerdict:[^\\n]*?(?=;?\\s*(?:\\n|\\bBefore\\s*[✗✓:]|\\b${PROMPT_TESTS_WORDS}\\b|\\bReport\\b|$))`);
 const CHANGE = new RegExp(`\\bBefore\\s*[✗✓:][^\\n]*?(?=;?\\s*(?:\\n|\\bVerdict:|\\b${PROMPT_TESTS_WORDS}\\b|\\bReport\\b|$))`);
-const verdictLine = text => String(text).match(VERDICT)?.[0].trim() ?? null;
+const verdictLine = text => {
+  const parsed = readPrFields([text]).verdict;
+  if (parsed) return `Verdict: ${parsed}`.match(VERDICT)?.[0].trim() ?? `Verdict: ${parsed}`;
+  return String(text).match(VERDICT)?.[0].trim() ?? null;
+};
 const changeLine = text => String(text).match(CHANGE)?.[0].trim() ?? null;
 
 // verify.md in the PR body (0.1.6 tester: 100 lines of shell came before the vector table). pdd drops a leading "# Verify"

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: ea60d939897459f3bcf6eb99fb907946d7ae16e659bba84cbf4f5753c38e9f53).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 6046172a26455394d38e4182b092bb57fda9dbf37e34e9719f6ce47ff413e9c4).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
@@ -77,24 +77,24 @@ export function codeSpan(value) {
   return `${fence}${padding}${text}${padding}${fence}`;
 }
 
-// Strictly O(N) backtick code-span interval finder so inline field splitting never suffers quadratic backtracking.
+// Strictly O(N) CommonMark/GFM backtick code-span interval finder: backslashes inside a span never escape a closing
+// backtick, and only an odd run of backslashes immediately before an opening backtick escapes it.
 function findCodeSpans(text) {
   const runs = [];
   const byLen = new Map();
   const n = text.length;
   for (let i = 0; i < n; ) {
     if (text[i] === '`') {
-      const escaped = i > 0 && text[i - 1] === '\\';
+      let bs = 0;
+      while (i - 1 - bs >= 0 && text[i - 1 - bs] === '\\') bs++;
       let j = i + 1;
       while (j < n && text[j] === '`') j++;
-      if (!escaped) {
-        const idx = runs.length;
-        const len = j - i;
-        runs.push({ start: i, end: j, len });
-        let list = byLen.get(len);
-        if (!list) { list = []; byLen.set(len, list); }
-        list.push(idx);
-      }
+      const idx = runs.length;
+      const len = j - i;
+      runs.push({ start: i, end: j, len, openable: bs % 2 === 0 });
+      let list = byLen.get(len);
+      if (!list) { list = []; byLen.set(len, list); }
+      list.push(idx);
       i = j;
     } else {
       i++;
@@ -103,6 +103,7 @@ function findCodeSpans(text) {
   const spans = [];
   const cursor = new Map();
   for (let r = 0; r < runs.length; ) {
+    if (!runs[r].openable) { r++; continue; }
     const { start, len } = runs[r];
     const list = byLen.get(len);
     let pos = cursor.get(len) ?? 0;
