@@ -1,4 +1,4 @@
-// Generated from prompts/cli/update-sync.prompt.md (sha256: 22002b49827421c95f3fe301837d535c0844070f4d645f9118f86183538bdfc1).
+// Generated from prompts/cli/update-sync.prompt.md (sha256: d2d69053f47193461710d5f39ca7f7ed58d53ca4b94f45933822bd003a110e9e).
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
@@ -945,7 +945,7 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
     const activeTouchedPromptSet = new Set(touchedPrompts.filter(e => !e.deleted).map(e => e.path));
     const touchedPromptTargets = new Set([
       ...touchedPrompts.map(e => e.path),
-      ...touchedPrompts.filter(e => e.renamedFrom?.endsWith('.prompt.md')).map(e => e.renamedFrom),
+      ...touchedEntries.filter(e => e.renamedFrom?.endsWith('.prompt.md')).map(e => e.renamedFrom),
     ]);
     const promptTextMap = new Map();
     const syncRecordMap = new Map();
@@ -1018,9 +1018,9 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
       }
     }
 
-    // For every renamed entry, also check if renamedFrom has a lingering .pdd/sync sidecar so renames to unowned/other-prompt/pinned targets never escape --check.
+    // For every renamed entry (including cross-type renames into .prompt.md), check if renamedFrom has a lingering .pdd/sync sidecar so stale pins never escape --check.
     const renamedFromEntries = [];
-    for (const entry of nonPromptMap.values()) {
+    for (const entry of touchedEntries) {
       if (entry.renamedFrom && !nonPromptMap.has(entry.renamedFrom) && !entry.renamedFrom.endsWith('.prompt.md') && !isPddInternalPath(entry.renamedFrom)) {
         const oldRec = syncRecordMap.get(entry.renamedFrom) ?? readSyncRecord(root, entry.renamedFrom, readBytes);
         if (oldRec) {
@@ -1206,7 +1206,7 @@ export function analyzeUpdate({ cwd = process.cwd(), files = [], from, check = f
           staleSidecarModules.add(pair.entry.path);
           continue;
         }
-        if (pair.entry.renamedFrom && pair.entry.renamedFrom !== pair.entry.path && !isPddInternalPath(pair.entry.renamedFrom)) {
+        if (pair.entry.renamedFrom && pair.entry.renamedFrom !== pair.entry.path && !pair.entry.renamedFrom.endsWith('.prompt.md') && !isPddInternalPath(pair.entry.renamedFrom)) {
           staleSidecarModules.add(pair.entry.renamedFrom);
         }
         if (!activeOwnersByCode.has(pair.entry.path)) activeOwnersByCode.set(pair.entry.path, []);

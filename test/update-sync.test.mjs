@@ -704,16 +704,26 @@ test('R2 #2, #3, #4 regressions: deleted pinned module matched by stem, in-place
   assert.equal(existsSync(join(orphanRepo, '.pdd/sync/src/sub')), false);
   assert.equal((await cli(['update', 'src/sub/detached.mjs', '--check'], orphanRepo)).code, 0);
 
-  // R2 #4: Owned module under .pdd/ fails pre-validation with exit 2 and ZERO writes to valid sibling module
+  // R2 #4 + R3 #2.1 (revert-sensitive): Owned module under .pdd/ fails pre-validation with exit 2 and ZERO writes,
+  // preserving an already-queued stale/deleted sidecar that Step 1 would otherwise prune before Step 2!
   const pddRepo = makeRepo(t, {
-    'prompts/good.prompt.md': '# Good\n\nOwn `src/good.mjs`.\n',
+    'prompts/good.prompt.md': '# Good\n\nOwn `src/good.mjs` and `src/stale-gone.mjs`.\n',
     'src/good.mjs': '// Generated from prompts/good.prompt.md.\nexport const good = 1;\n',
-    '.pdd/evil.mjs': '// Generated from prompts/good.prompt.md.\nexport const evil = 1;\n',
+    'src/stale-gone.mjs': '// Generated from prompts/good.prompt.md.\nexport const gone = 1;\n',
   });
-  const pddGuardRes = await cli(['update', 'src/good.mjs', '.pdd/evil.mjs', '--write'], pddRepo);
+  assert.equal((await cli(['update', 'src/stale-gone.mjs', '--write'], pddRepo)).code, 0);
+  git(pddRepo, ['add', '-f', '.']);
+  git(pddRepo, ['commit', '-qm', 'pin-stale-gone']);
+  unlinkSync(join(pddRepo, 'src/stale-gone.mjs'));
+  writeFileSync(join(pddRepo, 'src/good.mjs'), '// Generated from prompts/good.prompt.md.\nexport const good = 2;\n');
+  mkdirSync(join(pddRepo, '.pdd'), { recursive: true });
+  writeFileSync(join(pddRepo, '.pdd/evil.mjs'), '// Generated from prompts/good.prompt.md.\nexport const evil = 1;\n');
+  const pddGuardRes = await cli(['update', '--write'], pddRepo);
   assert.equal(pddGuardRes.code, 2, pddGuardRes.out + pddGuardRes.err);
   assert.match(pddGuardRes.err, /Invalid module path for sync record: \.pdd\/evil\.mjs/);
+  assert.equal(existsSync(join(pddRepo, '.pdd/sync/src/stale-gone.mjs.json')), true, 'stale sidecar must survive untouched on pre-validation failure');
   assert.equal(existsSync(join(pddRepo, '.pdd/sync/src/good.mjs.json')), false, 'must execute 0 writes on pre-validation failure');
+  unlinkSync(join(pddRepo, '.pdd/evil.mjs'));
 
   // R2 #4 bonus: safeReadForOwner memoizes prompt reads across double findOwners calls when a prompt is touched
   const readCounts = new Map();
@@ -732,4 +742,59 @@ test('R2 #2, #3, #4 regressions: deleted pinned module matched by stem, in-place
   );
   assert.equal(memCode, 0, memErr.text);
   assert.equal(readCounts.get('prompts/good.prompt.md'), 1, `expected prompt to be read once by owner port, got ${readCounts.get('prompts/good.prompt.md')}`);
+});
+
+test('R3 #1 & #2 regressions: cross-type renames involving .prompt.md, .pdd rename, and malformed .pdd/sync/.pdd.json', async t => {
+  // 1. Cross-type rename: git mv prompts/beta.prompt.md docs/beta.md -> fails --check (exit 1) when live module still references it
+  const betaPrompt = '# Beta\n\nOwn `src/beta.mjs`.\n';
+  const crossPromptRepo = makeRepo(t, {
+    'prompts/beta.prompt.md': betaPrompt,
+    'src/beta.mjs': `// Generated from prompts/beta.prompt.md (sha256: ${promptHeaderHash(betaPrompt)}).\nexport const b = 1;\n`,
+    '.pdd/notes.md': 'internal note\n',
+  });
+  assert.equal((await cli(['update', 'src/beta.mjs', '--write'], crossPromptRepo)).code, 0);
+  git(crossPromptRepo, ['add', '-f', '.']);
+  git(crossPromptRepo, ['commit', '-qm', 'pinned']);
+  const base1 = git(crossPromptRepo, ['rev-parse', 'HEAD']);
+  mkdirSync(join(crossPromptRepo, 'docs'), { recursive: true });
+  git(crossPromptRepo, ['mv', 'prompts/beta.prompt.md', 'docs/beta.md']);
+  git(crossPromptRepo, ['commit', '-qm', 'rename-prompt-to-doc']);
+  const crossPromptCheck = await cli(['update', '--from', `${base1}..HEAD`, '--check'], crossPromptRepo);
+  assert.equal(crossPromptCheck.code, 1, `expected exit 1 when .prompt.md renamed to doc with live module, got ${crossPromptCheck.code}`);
+  assert.match(crossPromptCheck.err, /Owning prompt is missing or unreadable: prompts\/beta\.prompt\.md/);
+
+  // 2. Rename from .pdd/notes.md -> docs/notes.md completes cleanly without crashing
+  const base2 = git(crossPromptRepo, ['rev-parse', 'HEAD']);
+  git(crossPromptRepo, ['mv', '.pdd/notes.md', 'docs/notes.md']);
+  git(crossPromptRepo, ['commit', '-qm', 'rename-pdd-note']);
+  const pddRenameRes = await cli(['update', '--from', `${base2}..HEAD`, '--check', '--json'], crossPromptRepo);
+  assert.equal(pddRenameRes.code, 0, pddRenameRes.err);
+  assert.deepEqual(JSON.parse(pddRenameRes.out).unowned, [{ path: 'docs/notes.md', reason: 'no owning prompt' }]);
+
+  // 3. Cross-type rename: git mv src/foo.mjs prompts/foo.prompt.md -> fails --check (exit 1) and prunes stale sidecar on --write
+  const fooPrompt = '# Foo\n\nOwn `src/foo.mjs`.\n';
+  const crossCodeRepo = makeRepo(t, {
+    'prompts/origin.prompt.md': fooPrompt,
+    'src/foo.mjs': `// Generated from prompts/origin.prompt.md (sha256: ${promptHeaderHash(fooPrompt)}).\nexport const foo = 1;\n`,
+  });
+  assert.equal((await cli(['update', 'src/foo.mjs', '--write'], crossCodeRepo)).code, 0);
+  git(crossCodeRepo, ['add', '-f', '.']);
+  git(crossCodeRepo, ['commit', '-qm', 'pinned-foo']);
+  const base3 = git(crossCodeRepo, ['rev-parse', 'HEAD']);
+  git(crossCodeRepo, ['mv', 'src/foo.mjs', 'prompts/foo.prompt.md']);
+  git(crossCodeRepo, ['commit', '-qm', 'rename-code-to-prompt']);
+  const crossCodeCheck = await cli(['update', '--from', `${base3}..HEAD`, '--check', '--json'], crossCodeRepo);
+  assert.equal(crossCodeCheck.code, 1, crossCodeCheck.out);
+  assert.ok(JSON.parse(crossCodeCheck.out).drifted.some(d => d.path === 'src/foo.mjs' && d.status === 'deleted'));
+  const crossCodeWrite = await cli(['update', '--from', `${base3}..HEAD`, '--write', '--json'], crossCodeRepo);
+  assert.equal(crossCodeWrite.code, 0, crossCodeWrite.err);
+  assert.equal(existsSync(join(crossCodeRepo, '.pdd/sync/src/foo.mjs.json')), false);
+  assert.equal((await cli(['update', '--from', `${base3}..HEAD`, '--check'], crossCodeRepo)).code, 0);
+
+  // 4. Malformed .pdd/sync/.pdd.json (mod === '.pdd') rejected with exit 2 in scanSyncRecords
+  mkdirSync(join(crossCodeRepo, '.pdd/sync'), { recursive: true });
+  writeFileSync(join(crossCodeRepo, '.pdd/sync/.pdd.json'), '{"schema_version":"pdd.module-sync.v1"}\n');
+  const badDotPddSidecar = await cli(['update', 'prompts/origin.prompt.md', '--check'], crossCodeRepo);
+  assert.equal(badDotPddSidecar.code, 2, badDotPddSidecar.out + badDotPddSidecar.err);
+  assert.match(badDotPddSidecar.err, /Invalid sync record: \.pdd\/sync\/\.pdd\.json/);
 });
