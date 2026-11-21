@@ -97,13 +97,26 @@ test('3610: readable.facts.storyNote still reports unreadable Story when storyPa
 //        and tidyRuns honors localOnly, terminal-PR skip, and bounded need
 // ---------------------------------------------------------------------------
 
-test('3613: ensurePaneBudget checks paneUsage first and skips all sweeps when panes fit or budget is 0', async () => {
+test('3613: ensurePaneBudget checks paneUsage first, skips sweeps when 0 panes, and runs local-only opportunistic cleanup under budget', async () => {
+  // 0 panes: zero sweeps at all.
+  let paneLists = 0;
+  const zeroSweeps = [];
+  const empty = await ensurePaneBudget(3, {
+    env: { PDD_HERDR_PANE_BUDGET: '56' },
+    herdr: async args => { assert.deepEqual(args, ['pane', 'list']); paneLists++; return { result: { type: 'pane_list', panes: [] } }; },
+    sweepFinished: async opts => { zeroSweeps.push(['finished', opts]); return { closed: 0, reasonCounts: {} }; },
+    sweepIdle: async opts => { zeroSweeps.push(['idle', opts]); return { closed: 0, reasonCounts: {} }; },
+  });
+  assert.deepEqual(empty, { panes: 0, budget: 56, closed: 0 });
+  assert.equal(paneLists, 1);
+  assert.deepEqual(zeroSweeps, []);
+
+  // Under budget with > 0 panes: runs local-only sweeps reusing fetched paneInventory, with 0 extra pane list calls when nothing closes.
   const panes = Array.from({ length: 5 }, (_, i) => ({
     pane_id: `p-${i}`, workspace_id: 'w-1', tab_id: `t-${i}`, terminal_id: `term-${i}`,
   }));
-  let paneLists = 0;
-  let finishedSweeps = 0;
-  let idleSweeps = 0;
+  paneLists = 0;
+  const underBudgetCalls = [];
   const ports = {
     env: { PDD_HERDR_PANE_BUDGET: '56' },
     herdr: async args => {
@@ -111,22 +124,27 @@ test('3613: ensurePaneBudget checks paneUsage first and skips all sweeps when pa
       paneLists++;
       return { result: { type: 'pane_list', panes } };
     },
-    sweepFinished: async () => { finishedSweeps++; return { closed: 0, reasonCounts: {} }; },
-    sweepIdle: async () => { idleSweeps++; return { closed: 0, reasonCounts: {} }; },
+    sweepFinished: async opts => { underBudgetCalls.push(['finished', opts]); return { closed: 0, reasonCounts: {} }; },
+    sweepIdle: async opts => { underBudgetCalls.push(['idle', opts]); return { closed: 0, reasonCounts: {} }; },
   };
   const ok = await ensurePaneBudget(3, ports);
   assert.deepEqual(ok, { panes: 5, budget: 56, closed: 0 });
   assert.equal(paneLists, 1);
-  assert.equal(finishedSweeps, 0);
-  assert.equal(idleSweeps, 0);
+  assert.deepEqual(underBudgetCalls, [
+    ['finished', { graceMs: 15 * 60_000, localOnly: true, paneInventory: panes }],
+    ['idle', { graceMs: 60_000, localOnly: true, paneInventory: panes }],
+  ]);
 
-  // Disabled budget (0) also performs zero sweeps even with many panes.
+  // Disabled budget (0) with > 0 panes also runs only local-only opportunistic cleanup (never zero-grace or network sweeps).
   paneLists = 0;
+  underBudgetCalls.length = 0;
   const disabled = await ensurePaneBudget(10, { ...ports, env: { PDD_HERDR_PANE_BUDGET: '0' } });
   assert.deepEqual(disabled, { panes: 5, budget: 0, closed: 0 });
   assert.equal(paneLists, 1);
-  assert.equal(finishedSweeps, 0);
-  assert.equal(idleSweeps, 0);
+  assert.deepEqual(underBudgetCalls, [
+    ['finished', { graceMs: 15 * 60_000, localOnly: true, paneInventory: panes }],
+    ['idle', { graceMs: 60_000, localOnly: true, paneInventory: panes }],
+  ]);
 });
 
 test('3613: ensurePaneBudget sweeps locally with grace first under pressure, then escalates to zero grace', async () => {
@@ -152,7 +170,12 @@ test('3613: ensurePaneBudget sweeps locally with grace first under pressure, the
     },
   });
   assert.deepEqual(res, { panes: 1, budget: 2, closed: 1 });
-  assert.deepEqual(calls, [['finished', { graceMs: 15 * 60_000, need: 1, localOnly: true }]]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], 'finished');
+  assert.equal(calls[0][1].graceMs, 15 * 60_000);
+  assert.equal(calls[0][1].need, 1);
+  assert.equal(calls[0][1].localOnly, true);
+  assert.ok(Array.isArray(calls[0][1].paneInventory));
 
   // When normal-grace sweeps free nothing, escalate to zero-grace sweeps and fail with retained counts.
   const stuck = [{ pane_id: 'p-1', workspace_id: 'w-1', tab_id: 't-1', terminal_id: 'term-1' }];
@@ -167,63 +190,72 @@ test('3613: ensurePaneBudget sweeps locally with grace first under pressure, the
     err => err.code === 'herdr_pane_budget' && /agent-busy 1/.test(err.message) && /no-saved-session 2/.test(err.message),
   );
   assert.deepEqual(escalation, [
-    ['finished', { graceMs: 15 * 60_000, need: 1, localOnly: true }],
-    ['idle', { graceMs: 60_000, need: 1 }],
+    ['finished', { graceMs: 15 * 60_000, need: 1, localOnly: true, paneInventory: stuck }],
+    ['idle', { graceMs: 60_000, need: 1, localOnly: true, paneInventory: stuck }],
     ['finished', { graceMs: 0, need: 1 }],
     ['idle', { graceMs: 0, need: 1 }],
   ]);
 });
 
-test('3613: startRun performs zero GitHub PR sweeps under budget and never double-sweeps under pressure', async t => {
+test('3613: startRun performs zero GitHub PR sweeps under budget, closes locally finished past-grace panes, and never double-sweeps', async t => {
   const f = await fixture(t);
-  assert.equal((await f.run()).exitCode, 0);
-  const first = f.record();
-  first.state = 'waiting';
-  first.pr = [{ number: 23, url: 'https://github.com/example/project/pull/23', stage: 'change', state: 'open' }];
-  saveRun(first);
-
-  let prStatusReads = 0;
-  let sweepFinishedCalls = 0;
-  let sweepIdleCalls = 0;
   const baseExec = f.ports.execFile;
-  const ports = {
+  const issuePorts = {
     ...f.ports,
-    env: { ...f.ports.env, PDD_HERDR_PANE_BUDGET: '56' },
-    readPrStatus: async () => { prStatusReads++; return { state: 'open', ci: 'pass' }; },
-    readIssueStatus: async () => ({ number: 17, state: 'open' }),
-    sweepFinished: async opts => { sweepFinishedCalls++; return tidyRuns(opts, f.ports); },
-    sweepIdle: async () => { sweepIdleCalls++; return { closed: 0, reasonCounts: {} }; },
     execFile: async (file, args, opts) => {
-      if (file === 'gh' && args[0] === 'api' && args[1] === 'repos/example/project/issues/18') {
-        return { stdout: JSON.stringify({ number: 18, html_url: 'https://github.com/example/project/issues/18', title: 'Second issue', body: 'Do second.' }) };
-      }
+      const m = file === 'gh' && args[0] === 'api' && /^repos\/example\/project\/issues\/(\d+)$/.exec(args[1]);
+      if (m) return { stdout: JSON.stringify({ number: Number(m[1]), html_url: `https://github.com/example/project/issues/${m[1]}`, title: `Issue ${m[1]}`, body: 'Body.' }) };
       return baseExec(file, args, opts);
     },
+  };
+  assert.equal((await startRun({ name: 'small-change', issue: '17', agent: 'claude', cwd: f.source, packageRoot }, issuePorts)).exitCode, 0);
+  assert.equal((await startRun({ name: 'small-change', issue: '20', agent: 'claude', cwd: f.source, packageRoot }, issuePorts)).exitCode, 0);
+  const commonDir = f.git(f.source, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+  const readN = n => JSON.parse(readFileSync(join(commonDir, 'pdd', 'runs', String(n), 'status.json'), 'utf8'));
+
+  // Run #17: waiting with an open PR (must NOT trigger any GitHub PR sweep under budget).
+  const first = readN(17);
+  first.state = 'waiting';
+  first.pr = [{ number: 23, url: 'https://github.com/example/project/pull/23', stage: first.areas.at(-1).name, state: 'open' }];
+  saveRun(first);
+
+  // Run #20: locally completed and past 15m grace (MUST be closed opportunistically under budget to prevent pane pileup!).
+  const finished = readN(20);
+  finished.state = 'completed';
+  finished.chats[0].endedAt = f.clock - 20 * 60_000;
+  saveRun(finished);
+  f.herdr.idle();
+  assert.ok(f.herdr.paneOf(finished.chats[0]), 'finished chat pane starts open');
+
+  let prStatusReads = 0;
+  const underBudgetSweeps = [];
+  const ports = {
+    ...issuePorts,
+    env: { ...f.ports.env, PDD_HERDR_PANE_BUDGET: '56' },
+    readPrStatus: async () => { prStatusReads++; return { state: 'open', ci: 'pass' }; },
+    readIssueStatus: async ({ number }) => ({ number, state: 'open' }),
+    sweepFinished: async opts => { underBudgetSweeps.push(['finished', opts]); return tidyRuns(opts, { ...issuePorts, readPrStatus: async () => { prStatusReads++; return { state: 'open', ci: 'pass' }; } }); },
+    sweepIdle: async opts => { underBudgetSweeps.push(['idle', opts]); return { closed: 0, reasonCounts: {} }; },
   };
   const started = await startRun({ name: 'small-change', issue: '18', agent: 'claude', cwd: f.source, packageRoot }, ports);
   assert.equal(started.exitCode, 0, started.message);
   assert.equal(prStatusReads, 0, 'under-budget start must make 0 GitHub PR sweep calls');
-  assert.equal(sweepFinishedCalls, 0, 'under-budget start must make 0 sweepFinished calls');
-  assert.equal(sweepIdleCalls, 0, 'under-budget start must make 0 sweepIdle calls');
+  assert.equal(f.herdr.paneOf(finished.chats[0]), undefined, 'under-budget local-only cleanup must close locally finished past-grace pane');
+  assert.equal(underBudgetSweeps.filter(([k]) => k === 'finished').length, 1, 'startChat must NOT repeat sweepFinished after pre-allocation check');
+  assert.equal(underBudgetSweeps.find(([k]) => k === 'finished')[1].localOnly, true);
 
   // Now put an ended run under budget pressure and start issue #19: sweepFinished must run only during pre-allocation, not again inside startChat.
-  const r18 = JSON.parse(readFileSync(join(first.commonDir, 'pdd', 'runs', '18', 'status.json'), 'utf8'));
+  const r18 = readN(18);
   r18.state = 'completed';
   r18.chats[0].endedAt = f.clock;
   saveRun(r18);
   f.herdr.idle();
   const pressureCalls = [];
   const pressurePorts = {
-    ...ports,
+    ...issuePorts,
     env: { ...f.ports.env, PDD_HERDR_PANE_BUDGET: String(f.herdr.panes.length + 1) },
     sweepFinished: async opts => { pressureCalls.push(opts); return tidyRuns(opts, f.ports); },
     sweepIdle: async () => ({ closed: 0, reasonCounts: {} }),
-    execFile: async (file, args, opts) => {
-      if (file === 'gh' && args[0] === 'api' && args[1] === 'repos/example/project/issues/19') {
-        return { stdout: JSON.stringify({ number: 19, html_url: 'https://github.com/example/project/issues/19', title: 'Third issue', body: 'Do third.' }) };
-      }
-      return baseExec(file, args, opts);
-    },
   };
   const third = await startRun({ name: 'small-change', issue: '19', agent: 'claude', cwd: f.source, packageRoot }, pressurePorts);
   assert.equal(third.exitCode, 0, third.message);
@@ -280,7 +312,7 @@ test('3613: tidyRuns honors localOnly, skips terminal PRs, and stops refreshing 
   });
   assert.equal(boundedRes.exitCode, 0);
   assert.equal(seenBounded.length, 1, `expected bounded tidy to stop after 1 newly ended run freed panes, saw: ${JSON.stringify(seenBounded)}`);
-  assert.ok(!seenBounded.includes('https://github.com/example/project/pull/120'), 'terminal PR must never be refreshed');
+  assert.equal(new Set(seenBounded).has('https://github.com/example/project/pull/120'), false, 'terminal PR must never be refreshed');
 
   // 3) Explicit tidy (no need) refreshes remaining open PRs (#18, #19) but still skips terminal PR (#20).
   const seenFull = [];
@@ -289,7 +321,7 @@ test('3613: tidyRuns honors localOnly, skips terminal PRs, and stops refreshing 
     readPrStatus: async ({ url }) => { seenFull.push(url); return { state: 'open', ci: 'pass' }; },
     readIssueStatus: async ({ number }) => ({ number, state: 'open' }),
   });
-  assert.ok(!seenFull.includes('https://github.com/example/project/pull/120'), 'terminal PR #120 must be skipped');
+  assert.equal(new Set(seenFull).has('https://github.com/example/project/pull/120'), false, 'terminal PR #120 must be skipped');
   assert.equal(seenFull.length, 2, `expected exactly 2 open PR refreshes, got ${JSON.stringify(seenFull)}`);
 });
 
@@ -440,8 +472,9 @@ test('3614: listStatus skips terminal PRs, refreshes open waiting PRs with bound
   });
   assert.equal(res.exitCode, 0, res.message);
   assert.equal(seenPrUrls.length, 8, `expected 8 open PR refreshes (skipping 2 terminal PRs), saw ${seenPrUrls.length}`);
-  assert.ok(!seenPrUrls.includes('https://github.com/example/project/pull/225'), 'merged PR must be skipped');
-  assert.ok(!seenPrUrls.includes('https://github.com/example/project/pull/226'), 'closed PR must be skipped');
+  const seenPrSet = new Set(seenPrUrls);
+  assert.equal(seenPrSet.has('https://github.com/example/project/pull/225'), false, 'merged PR must be skipped');
+  assert.equal(seenPrSet.has('https://github.com/example/project/pull/226'), false, 'closed PR must be skipped');
   assert.ok(maxActive > 1, `expected concurrent PR refreshes (maxActive > 1), got ${maxActive}`);
   assert.ok(maxActive <= 6, `expected bounded concurrency <= 6, got ${maxActive}`);
   assert.ok(messages.includes('Reading 8 PRs from GitHub…'), `expected progress line for 8 non-terminal PRs, got ${JSON.stringify(messages)}`);
@@ -451,14 +484,172 @@ test('3614: listStatus skips terminal PRs, refreshes open waiting PRs with bound
   assert.equal(paneListCalls.length, 1, `expected exactly 1 Herdr pane list snapshot across 10 runs, got ${paneListCalls.length}`);
   assert.ok(workspaceListCalls.length <= 1, `expected at most 1 Herdr workspace list snapshot across 10 runs, got ${workspaceListCalls.length}`);
 
-  // Also verify workflow_run_save_failed propagates cleanly from the concurrent pool (triggering runStatus's busy fallback cleanly, or failing on non-busy save error).
+  // Verify runBounded settles all in-flight workers before rejecting on workflow_run_save_failed and stops dispatching remaining items.
   const saveErr = Object.assign(Error('disk full'), { code: 'workflow_run_save_failed' });
+  let startedWorkers = 0;
+  let activeWorkers = 0;
   const failRes = await runStatus({ cwd: f.source, json: true }, {
     ...f.ports,
-    readPrStatus: async () => { throw saveErr; },
+    readPrStatus: async () => {
+      const idx = ++startedWorkers;
+      activeWorkers++;
+      if (idx === 1) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+        activeWorkers--;
+        throw saveErr;
+      }
+      await new Promise(resolve => setTimeout(resolve, 25));
+      activeWorkers--;
+      return { state: 'open', ci: 'pass' };
+    },
     readIssueStatus: async ({ number }) => ({ number, state: 'open' }),
   });
   assert.notEqual(failRes.exitCode, 0, 'non-busy workflow_run_save_failed must propagate out of concurrent pool');
+  assert.equal(activeWorkers, 0, 'all in-flight workers must have settled before rejection (no detached writes)');
+  assert.ok(startedWorkers <= 6, `bounded pool must stop taking new items after fatal error (started ${startedWorkers} of 8)`);
+});
+
+test('3614: refreshPr skips individual terminal PRs on multi-PR runs (merged PR 1 + open PR 2 fetches only PR 2)', async t => {
+  const f = await fixture(t, { name: 'bug' });
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record();
+  run.state = 'waiting';
+  run.pr = [
+    { number: 301, url: 'https://github.com/example/project/pull/301', stage: run.areas[0].name, state: 'merged', ci: 'passing' },
+    { number: 302, url: 'https://github.com/example/project/pull/302', stage: run.areas.at(-1).name, state: 'open', ci: 'pending' },
+  ];
+  saveRun(run);
+
+  const fetched = [];
+  const said = [];
+  const res = await runStatus({ ref: '17', cwd: f.source, json: true }, {
+    ...f.ports,
+    say: line => said.push(line),
+    readPrStatus: async ({ url }) => { fetched.push(url); return { state: 'open', ci: 'passing' }; },
+    readIssueStatus: async ({ number }) => ({ number, state: 'open' }),
+  });
+  assert.equal(res.exitCode, 0, res.message);
+  assert.deepEqual(fetched, ['https://github.com/example/project/pull/302'], 'refreshPr must skip already-merged PR 1 and only fetch open PR 2');
+  assert.deepEqual(said, ['Reading the PR from GitHub…']);
+});
+
+test('3614: nativeGithubCounter detects newly created status.json later in the same process with 0 extra git rev-parse calls', async t => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-cost-late-status-')));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const repo = join(dir, 'repo');
+  const worktree = join(dir, 'wt-17');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  const commonDir = realpathSync(join(repo, '.git'));
+  mkdirSync(join(worktree, '.git'), { recursive: true });
+
+  let gitRevParseCount = 0;
+  const recorded = [];
+  const counted = nativeGithubCounter(
+    async (file, args) => {
+      if (file === 'git' && args[0] === 'rev-parse') {
+        gitRevParseCount++;
+        return { stdout: `${commonDir}\n` };
+      }
+      return { stdout: 'HTTP/2.0 200\r\n\r\n{}' };
+    },
+    {
+      now: () => 1_700_000_000_000,
+      costRecord: (dirPath, entry) => recorded.push({ dirPath, entry }),
+    },
+  );
+
+  // Calls 1 & 2 happen before runs/17/status.json exists -> null result, 1 git rev-parse.
+  await counted('gh', ['api', 'repos/example/project/issues/17'], { cwd: worktree });
+  await counted('gh', ['api', 'repos/example/project/issues/17'], { cwd: worktree });
+  assert.equal(gitRevParseCount, 1);
+  assert.equal(recorded.length, 0);
+
+  // Now create runs/17/status.json on disk in the same long-lived process.
+  const runDir = join(commonDir, 'pdd', 'runs', '17');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'status.json'), JSON.stringify({ root: worktree, runDir }));
+
+  // Subsequent calls attribute cost to runDir with 0 extra git rev-parse calls!
+  for (let i = 0; i < 5; i++) {
+    await counted('gh', ['api', `repos/example/project/issues/${i + 1}`], { cwd: worktree });
+  }
+  assert.equal(gitRevParseCount, 1, 'must NOT re-spawn git rev-parse when runs/ changes');
+  assert.equal(recorded.length, 5, 'all post-creation gh calls must be attributed to the new runDir');
+  assert.ok(recorded.every(r => r.dirPath === runDir));
+});
+
+test('3614: nativeGithubCounter handles synchronous exec doubles and never caches non-zero or empty git rev-parse replies', async t => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-cost-sync-exec-')));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const repo = join(dir, 'repo');
+  const worktree = join(dir, 'wt-17');
+  mkdirSync(repo);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  const commonDir = realpathSync(join(repo, '.git'));
+  const runDir = join(commonDir, 'pdd', 'runs', '17');
+  mkdirSync(runDir, { recursive: true });
+  mkdirSync(join(worktree, '.git'), { recursive: true });
+  writeFileSync(join(runDir, 'status.json'), JSON.stringify({ root: worktree, runDir }));
+
+  let gitCalls = 0;
+  const recorded = [];
+  // Synchronous (non-Promise) exec test double: 1st call returns non-zero code, 2nd returns empty stdout, 3rd succeeds!
+  const counted = nativeGithubCounter(
+    (file, args) => {
+      if (file === 'git' && args[0] === 'rev-parse') {
+        gitCalls++;
+        if (gitCalls === 1) return { stdout: '', code: 128 };
+        if (gitCalls === 2) return { stdout: '   \n', code: 0 };
+        return { stdout: `${commonDir}\n`, code: 0 };
+      }
+      return { stdout: 'HTTP/2.0 200\r\n\r\n{}', code: 0 };
+    },
+    {
+      now: () => 1_700_000_000_000,
+      costRecord: (dirPath, entry) => recorded.push({ dirPath, entry }),
+    },
+  );
+
+  await counted('gh', ['api', 'repos/example/project/issues/1'], { cwd: worktree });
+  assert.equal(gitCalls, 1);
+  assert.equal(recorded.length, 0, 'non-zero git rev-parse must not cache or attribute');
+
+  await counted('gh', ['api', 'repos/example/project/issues/2'], { cwd: worktree });
+  assert.equal(gitCalls, 2);
+  assert.equal(recorded.length, 0, 'empty stdout git rev-parse must not cache or attribute');
+
+  await counted('gh', ['api', 'repos/example/project/issues/3'], { cwd: worktree });
+  await counted('gh', ['api', 'repos/example/project/issues/4'], { cwd: worktree });
+  assert.equal(gitCalls, 3, 'once valid commonDir succeeds, subsequent calls reuse cached commonDir');
+  assert.equal(recorded.length, 2);
+  assert.ok(recorded.every(r => r.dirPath === runDir));
+});
+
+test('3614: listStatus locally reconciles a waiting run with a saved closed final-area PR with 0 GitHub calls', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.run()).exitCode, 0);
+  const run = f.record();
+  run.state = 'waiting';
+  run.area = run.areas.length - 1;
+  run.gate = null;
+  run.pr = [{ number: 401, url: 'https://github.com/example/project/pull/401', stage: run.areas.at(-1).name, state: 'closed' }];
+  saveRun(run);
+
+  let ghCalls = 0;
+  const res = await runStatus({ cwd: f.source, cancelled: true, json: true }, {
+    ...f.ports,
+    readPrStatus: async () => { ghCalls++; return { state: 'closed', ci: 'unknown' }; },
+    readIssueStatus: async () => { ghCalls++; return { number: 17, state: 'open' }; },
+  });
+  assert.equal(res.exitCode, 0, res.message);
+  assert.equal(ghCalls, 0, 'reconciling a saved closed final-area PR must make 0 GitHub calls');
+  const data = JSON.parse(res.message);
+  assert.equal(data.runs.length, 1);
+  assert.equal(data.runs[0].group, 'cancelled');
+  assert.equal(data.runs[0].words, 'cancelled');
+  assert.equal(f.record().state, 'cancelled');
+  assert.equal(f.record().cancelled?.reason, 'pr-closed');
 });
 
 test('3578 / 3614: pdd workflow status --local parses, appears in help, dispatches local: true, and makes 0 gh and 0 herdr calls', async t => {
@@ -520,11 +711,20 @@ test('3578 / 3614: pdd workflow status --local parses, appears in help, dispatch
   assert.equal(listData.runs.length, 1);
   assert.equal(listData.runs[0].number, 17);
 
-  const detailResult = await runStatus({ ref: '17', cwd: f.source, local: true, json: true }, offlinePorts);
-  assert.equal(detailResult.exitCode, 0, detailResult.message);
-  const detailData = JSON.parse(detailResult.message);
+  const detailJson = await runStatus({ ref: '17', cwd: f.source, local: true, json: true }, offlinePorts);
+  assert.equal(detailJson.exitCode, 0, detailJson.message);
+  const detailData = JSON.parse(detailJson.message);
   assert.equal(detailData.runs.length, 1);
   assert.equal(detailData.runs[0].number, 17);
+
+  const detailText = await runStatus({ ref: '17', cwd: f.source, local: true }, offlinePorts);
+  assert.equal(detailText.exitCode, 0, detailText.message);
+  assert.match(detailText.message, /example\/project#17/);
+  assert.doesNotMatch(detailText.message, /Reading .* from GitHub/);
+
+  const worktreeText = await runStatus({ cwd: run.root, local: true }, offlinePorts);
+  assert.equal(worktreeText.exitCode, 0, worktreeText.message);
+  assert.match(worktreeText.message, /example\/project#17/);
 
   assert.deepEqual(unexpectedCalls, [], `expected 0 gh and 0 herdr calls under --local, saw ${JSON.stringify(unexpectedCalls)}`);
   assert.deepEqual(said, [], `expected 0 GitHub progress messages under --local, saw ${JSON.stringify(said)}`);
