@@ -966,7 +966,7 @@ const REGISTERED_E2E_ROUTES = Object.freeze([
   // Discovery, help, version, completion
   'help', 'version', 'version.detailed', 'completion',
   // Core PDD workflow
-  'setup', 'check', 'lint', 'try', 'approve', 'files', 'owner', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade',
+  'setup', 'check', 'lint', 'try', 'approve', 'files', 'owner', 'update', 'contracts', 'contracts.sync', 'jobs', 'mcp', 'upgrade',
   // Cloud accounts
   'accounts', 'accounts.list', 'accounts.status', 'accounts.add', 'accounts.import', 'accounts.use',
   'accounts.next', 'accounts.codex', 'accounts.sync', 'accounts.auto', 'accounts.pause', 'accounts.unpause',
@@ -1124,6 +1124,25 @@ test('core local authoring commands: setup, files, owner, contracts, jobs, mcp, 
   assert.equal(ownerText.code, 0, ownerText.stderr);
   assert.match(ownerText.stdout, /app\.mjs: prompts\/app\.prompt\.md \(header\)/);
   markExecuted('owner');
+
+  // update: inspect plan, --check drift refusal, --write pin refresh, and --check pass
+  const updatePlan = await fx.cli(['update', 'app.mjs', 'README.md', '--json']);
+  assert.equal(updatePlan.code, 0, updatePlan.stderr);
+  const planData = JSON.parse(updatePlan.stdout);
+  assert.equal(planData.schema_version, 'pdd.update-sync.v1');
+  assert.equal(planData.prompts[0].prompt, 'prompts/app.prompt.md');
+  assert.equal(planData.modules[0].status, 'unpinned');
+  assert.deepEqual(planData.unowned, [{ path: 'README.md', reason: 'no owning prompt' }]);
+  const updateCheckFail = await fx.cli(['update', 'app.mjs', '--check', '--json']);
+  assert.equal(updateCheckFail.code, 1, updateCheckFail.stderr);
+  assert.equal(JSON.parse(updateCheckFail.stdout).ok, false);
+  const updateWrite = await fx.cli(['update', 'app.mjs', '--write', '--json']);
+  assert.equal(updateWrite.code, 0, updateWrite.stderr);
+  assert.equal(JSON.parse(updateWrite.stdout).modules[0].status, 'current');
+  const updateCheckPass = await fx.cli(['update', 'app.mjs', '--check', '--json']);
+  assert.equal(updateCheckPass.code, 0, updateCheckPass.stderr);
+  assert.equal(JSON.parse(updateCheckPass.stdout).ok, true);
+  markExecuted('update');
 
   // contracts & contracts sync [--write]
   const contractsRes = await fx.cli(['contracts']);

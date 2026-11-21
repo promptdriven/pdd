@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { headerPrompts, headerEntries, headerHashState, promptHeaderHash, promptClaims, isTestOwnedPath, resolveOwners, findOwners, runOwner } from '../src/file-owner.mjs';
+import { headerPrompts, headerEntries, headerHashState, promptHeaderHash, moduleContentHash, parseModuleSyncPins, updateModuleSyncPins, updateHeaderHash, promptClaims, isTestOwnedPath, resolveOwners, findOwners, runOwner } from '../src/file-owner.mjs';
 import { runPdd } from '../src/pdd-cli.mjs';
 import { runApprove } from '../src/prompt-approve.mjs';
 import { PLACE, harbor, sink } from './helpers/runtime-fake.mjs';
@@ -474,4 +474,66 @@ test('3377 findOwners checks repository-wide uniqueness via allPaths and narrows
   assert.deepEqual(plain(findOwners({ root: narrowedRoot, paths: ['src/b/index.mjs'] }).files), [
     row('src/b/index.mjs', [], null, true),
   ]);
+});
+
+test('3447/3203 per-module derived hashes and pins are non-circular, preserve prose, and ignore fenced examples', () => {
+  const promptBase = [
+    '# Widget',
+    '',
+    'Own `src/a.mjs` and `src/b.mjs`.',
+    '',
+    '```markdown',
+    `<!-- pdd:module-sync path=src/example.mjs sha256=${HEX} -->`,
+    '```',
+    '',
+  ].join('\n');
+  const baseHash = promptHeaderHash(promptBase);
+
+  // Fenced example pin is ignored by parseModuleSyncPins and hashed as normal prose
+  assert.equal(parseModuleSyncPins(promptBase).size, 0);
+
+  // Adding, updating, or deleting pins outside fences leaves promptHeaderHash invariant!
+  const hA = '1'.repeat(64), hB = '2'.repeat(64), hA2 = '3'.repeat(64);
+  const pinned1 = updateModuleSyncPins(promptBase, [
+    { path: 'src/b.mjs', sha256: hB, promptSha256: baseHash },
+    { path: 'src/a.mjs', sha256: hA, promptSha256: baseHash },
+  ]);
+  assert.equal(pinned1.changed, true);
+  assert.equal(promptHeaderHash(pinned1.content), baseHash, 'adding pins must not change promptHeaderHash');
+  const pins1 = parseModuleSyncPins(pinned1.content);
+  assert.deepEqual([...pins1.keys()], ['src/a.mjs', 'src/b.mjs']);
+  assert.equal(pins1.get('src/a.mjs').sha256, hA);
+  assert.equal(pins1.get('src/a.mjs').promptSha256, baseHash);
+
+  // Updating one module pin preserves the other module pin and stays invariant
+  const pinned2 = updateModuleSyncPins(pinned1.content, [{ path: 'src/a.mjs', sha256: hA2, promptSha256: baseHash }]);
+  assert.equal(pinned2.changed, true);
+  assert.equal(promptHeaderHash(pinned2.content), baseHash);
+  assert.equal(parseModuleSyncPins(pinned2.content).get('src/b.mjs').sha256, hB);
+  assert.equal(updateModuleSyncPins(pinned2.content, [{ path: 'src/a.mjs', sha256: hA2, promptSha256: baseHash }]).changed, false);
+
+  // Deleting pins returns original prompt byte-for-byte
+  const unpinned = updateModuleSyncPins(pinned2.content, [{ path: 'src/a.mjs', delete: true }, { path: 'src/b.mjs', delete: true }]);
+  assert.equal(unpinned.content, promptBase);
+
+  // moduleContentHash is invariant to CRLF and derived header hash updates, while sensitive to real code edits
+  const bare = '// Generated from prompts/widget.prompt.md.\nexport const x = 1;\n';
+  const hashed1 = `// Generated from prompts/widget.prompt.md (sha256: ${HEX}).\nexport const x = 1;\n`;
+  const hashed2 = `// Generated from prompts/widget.prompt.md (sha256: ${baseHash}).\r\nexport const x = 1;\r\n`;
+  assert.equal(moduleContentHash(bare), moduleContentHash(hashed1));
+  assert.equal(moduleContentHash(bare), moduleContentHash(hashed2));
+  assert.notEqual(moduleContentHash(bare), moduleContentHash(bare.replace('1', '2')));
+
+  // updateHeaderHash updates existing headers in-place (preserving comment style) and never injects headers into headerless files
+  const upd1 = updateHeaderHash(bare, 'prompts/widget.prompt.md', baseHash);
+  assert.equal(upd1.changed, true);
+  assert.equal(upd1.content, `// Generated from prompts/widget.prompt.md (sha256: ${baseHash}).\nexport const x = 1;\n`);
+  assert.equal(updateHeaderHash(upd1.content, 'prompts/widget.prompt.md', baseHash).changed, false);
+
+  const eqStyle = `# Prompt: prompts/widget.prompt.md sha256=${HEX}\nx = 1\n`;
+  const updEq = updateHeaderHash(eqStyle, 'prompts/widget.prompt.md', baseHash);
+  assert.equal(updEq.content, `# Prompt: prompts/widget.prompt.md sha256=${baseHash}\nx = 1\n`);
+
+  const headerless = 'export const y = 2;\n';
+  assert.deepEqual(updateHeaderHash(headerless, 'prompts/widget.prompt.md', baseHash), { content: headerless, changed: false });
 });

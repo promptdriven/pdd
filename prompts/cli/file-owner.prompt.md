@@ -87,18 +87,54 @@ with no backslash, no control character and no empty, `.`, `..` or `.git`
 
 The header hash of a prompt is the SHA-256 (64 lowercase hex digits) of the
 UTF-8 bytes of its behavior text. The behavior text is the prompt text with
-the approval metadata taken out: replace the JSON of each Runtime interface
-block (found with the shared [interface block reader](runtime-seam.prompt.md))
-that parses as a JSON object with `JSON.stringify` of that object without its
-top-level `status` and `prose_sha256` keys. Keep all other bytes. A block whose
-JSON does not parse as an object stays as written.
+the approval metadata and derived per-module sync pins taken out: replace the
+JSON of each Runtime interface block (found with the shared
+[interface block reader](runtime-seam.prompt.md)) that parses as a JSON object
+with `JSON.stringify` of that object without its top-level `status` and
+`prose_sha256` keys, and strip any line outside fenced code blocks matching a
+valid derived per-module sync pin
+`<!-- pdd:module-sync path=PATH sha256=HEX -->` or
+`<!-- pdd:module-sync path=PATH sha256=HEX prompt_sha256=HEX -->` (where PATH is
+a canonical repository path without `-->` and each HEX is 64 lowercase hex
+digits). Keep all other bytes. A block whose JSON does not parse as an object
+stays as written.
 
 So the hash covers the prose and every interface declaration: entries,
 operations, schemas, errors, calls, resources, limits, kind, reason and
-conventions. It ignores the approval metadata: `pdd approve` changes only
+conventions. It ignores the approval metadata (`pdd approve` changes only
 `status` and `prose_sha256` when an embedded block is present, and approval
-evidence is kept outside the prompt. Approving a prompt therefore leaves its
-headers current. It also ignores white space inside the interface JSON.
+evidence is kept outside the prompt) and derived `<!-- pdd:module-sync ... -->`
+pin lines (`pdd update --write` updates per-module code hashes without making
+the prompt's headers or untouched sibling modules stale). It also ignores white
+space inside the interface JSON.
+
+### Per-module derived content hash and sync pins
+
+To track prompt-to-code sync per module without a global commit baseline or
+circular hash dependencies:
+
+- `moduleContentHash(content)` computes the SHA-256 (64 lowercase hex digits)
+  of an owned code file's normalized UTF-8 text (UTF-8 BOM stripped, `\r\n` and
+  `\r` normalized to `\n`), stripping only the derived ` (sha256: HEX)` or
+  ` sha256=HEX` suffix from valid provenance header lines inside the first
+  4,096 UTF-8 bytes so refreshing a prompt header hash leaves `module_sha256`
+  unchanged.
+- `parseModuleSyncPins(content)` parses valid `<!-- pdd:module-sync ... -->`
+  lines outside fenced code blocks and returns a `Map` keyed by canonical
+  `path` with `{path, sha256, promptSha256}` entries (keeping the last valid
+  entry if duplicated).
+- `updateModuleSyncPins(promptText, updates)` upserts or deletes per-module pin
+  entries (`updates` entries with `{path, sha256, promptSha256}` or `{path, delete: true}`)
+  at the end of `promptText` in sorted canonical `path` order without altering
+  any prompt prose, frontmatter, Runtime interface blocks or untouched module
+  pins, returning `{content, changed}`.
+- `updateHeaderHash(codeText, promptPath, hash)` refreshes the hash suffix of
+  matching provenance header line(s) for `promptPath` within the first 4,096
+  UTF-8 bytes of `codeText`, preserving the existing comment opener/closer,
+  `Generated from` or `Prompt:` wording, trailing period and line ending
+  (updating `sha256=OLD` to `sha256=HASH` when that form is already used, and
+  otherwise writing ` (sha256: HASH)`), returning `{content, changed}`. It
+  never adds a header line to a file that does not already have one.
 
 Each header has a hash state:
 
@@ -221,6 +257,16 @@ sorted eligible production code paths with a `.ext` extension in `allPaths` and
   keep its first row.
 - `promptHeaderHash(content)`: the [header hash](#header-hash) of one prompt's
   content (a string or `Uint8Array`).
+- `moduleContentHash(content)`: the [normalized module content hash](#per-module-derived-content-hash-and-sync-pins)
+  of one owned code file's content (a string or `Uint8Array`).
+- `parseModuleSyncPins(content)`: parse valid derived `<!-- pdd:module-sync ... -->`
+  pins outside fenced code blocks into a `Map<string, {path, sha256, promptSha256}>`.
+- `updateModuleSyncPins(promptText, updates)`: return `{content, changed}` with
+  per-module sync pins upserted or deleted in sorted canonical path order while
+  preserving all unrelated prompt prose and untouched pins.
+- `updateHeaderHash(codeText, promptPath, hash)`: return `{content, changed}`
+  refreshing the hash suffix on matching provenance header line(s) for
+  `promptPath` inside the first 4,096 UTF-8 bytes without adding a new header.
 - `headerHashState(sha256, promptContent)`: return `{expected, state, legacy}`
   for one header. `expected` is the header hash, or null when `promptContent`
   is null or `false` (then `state` is `unknown`). `legacy` is true only for the

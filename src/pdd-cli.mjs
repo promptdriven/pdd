@@ -1,4 +1,4 @@
-// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 16c3f07e9e04a1519ed2a764259f973bec90447d9dd8b89fab45bd6240b2d9ab).
+// Generated from prompts/cli/pdd-cli.prompt.md (sha256: 7d19067822da8fcc5a25f7bc1ccc825b2db4c8fa33ff643461e40e9c91d33064).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -161,7 +161,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     line(stderr, error instanceof CommandInputError ? error.message : 'The command could not be parsed. Run pdd --help.');
     return 2;
   }
-  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
+  if (!['help', 'version', 'version-detailed', 'completion', 'workflow-list', 'project-files', 'file-owner', 'update-sync', 'mcp', 'setup', 'upgrade', 'autopilot-logs'].includes(plan.local)
     && !(plan.local === 'accounts' && plan.options['--quiet'] === true)
     && plan.options['--json'] !== true
     && !argv.includes('--json')) {
@@ -619,6 +619,17 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
     case 'file-owner': {
       const { runOwner } = await import('./file-owner.mjs');
       return runOwner({ cwd, paths: [...plan.operands], json: !!plan.options['--json'] }, { stdout, stderr });
+    }
+    case 'update-sync': {
+      const { runUpdate } = await import('./update-sync.mjs');
+      return runUpdate({
+        cwd,
+        files: [...plan.operands],
+        ...(plan.options['--from'] !== undefined ? { from: plan.options['--from'] } : {}),
+        check: plan.options['--check'] === true,
+        write: plan.options['--write'] === true,
+        json: plan.options['--json'] === true,
+      }, { stdout, stderr });
     }
     case 'prompt-approve': {
       const { runApprove } = await import('./prompt-approve.mjs');
