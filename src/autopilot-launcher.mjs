@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-launcher.prompt.md (sha256: f524d922da6a551887ba2d0adc3aae4b6f32e9a43bd386769be3e717b11322fd)
+// Prompt: prompts/cli/autopilot-launcher.prompt.md (sha256: 3400b7c889152cf5c793fe6fe2195259181947a698bc3cf97bc8bedd0c09ffb8)
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -28,6 +28,7 @@ import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs
 import { listReportDrafts, sendReportDraft, summarizeConversionDrops } from './autopilot-reports.mjs';
 import { INTAKE_MODES, intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
 import { moveToCore, moved, movedState, engineBefore, procTable, MAX_DEFERS, FULL_ENGINE_REMOVED } from './autopilot-retire.mjs';
+import { formatRecurringFlakesLine, parseFlakeLedger, summarizeRecurringFlakes } from './autopilot-regressions.mjs';
 import * as nativeFs from 'node:fs';
 
 const validAutoUpdateMode = mode => ['release', 'main', 'off'].includes(mode);
@@ -1110,6 +1111,24 @@ function readConversionSummary(folder, env, ports = {}, coreDirs = []) {
   const summary = summarizeConversionDrops({ runs, drafts });
   return { ...summary, intake: { cards: intakeCards, wouldPick: intakeWouldPick, running: intakeRunning } };
 }
+function readRecurringFlakesSummary(coreDirs = [], nowMs = Date.now(), fs = nativeFs) {
+  const entries = [];
+  for (const entry of coreDirs) {
+    if (!entry?.dir || typeof entry.dir !== 'string') continue;
+    const file = join(entry.dir, 'flakes.jsonl');
+    try {
+      const dirStat = fs.lstatSync?.(entry.dir);
+      if (dirStat?.isSymbolicLink?.()) continue;
+      const st = fs.lstatSync?.(file);
+      if (st?.isSymbolicLink?.() || (st && typeof st.isFile === 'function' && !st.isFile())) continue;
+      const raw = fs.readFileSync(file, 'utf8');
+      for (const parsed of parseFlakeLedger(raw)) {
+        entries.push({ ...parsed, repo: parsed.repo ?? (typeof entry.repo === 'string' ? entry.repo : null) });
+      }
+    } catch { /* Optional flake ledger. */ }
+  }
+  return summarizeRecurringFlakes(entries, { nowMs });
+}
 function readSavedStates(folder) {
   let names = [];
   try { names = readdirSync(folder).filter(name => /^[0-9a-f]{20}\.json$/.test(name)).sort(); }
@@ -1143,9 +1162,10 @@ async function collectMachineObservability(folder, ports, env, cwd) {
   const guard = await (ports.machineGuard ?? readMachineGuard)(guardInput, { env: effectiveEnv });
   const suiteQueue = readSuiteQueueSummary(effectiveEnv, ports);
   const conversion = readConversionSummary(folder, effectiveEnv, ports, inventory.coreDirs);
-  return { here, saved, unreadable, inventory, guard, suiteQueue, loginPool, conversion };
+  const recurringFlakes = readRecurringFlakesSummary(inventory.coreDirs, (ports.now ?? Date.now)(), ports.files ?? nativeFs);
+  return { here, saved, unreadable, inventory, guard, suiteQueue, loginPool, conversion, recurringFlakes };
 }
-function formatObservabilityLines({ inventory, guard, suiteQueue, loginPool, conversion }) {
+function formatObservabilityLines({ inventory, guard, suiteQueue, loginPool, conversion, recurringFlakes }) {
   const roleParts = JOB_ROLES.map(role => {
     const items = inventory.byRole[role];
     const issuesTag = items.length ? ` (${items.map(i => i.issue ? `#${i.issue}` : 'job').join(', ')})` : '';
@@ -1181,7 +1201,8 @@ function formatObservabilityLines({ inventory, guard, suiteQueue, loginPool, con
   const dropWords = t.dropped > 0 && ownerDrops ? `dropped ${t.dropped}: ${ownerDrops}` : `dropped ${t.dropped}`;
   const intakeWords = conversion.intake?.cards ? `; intake cards ${conversion.intake.cards}` : '';
   const convLine = `Conversion: claimed ${t.claimed} → clear-spec ${t.clearSpec} → PR ${t.prOpened} → merged/would-merge ${t.mergedOrWouldMerge} (${dropWords}; pending drafts ${conversion.reports.pendingDrafts.length}${intakeWords})`;
-  return [guard.line, activeLine, suiteLine, poolLine, convLine];
+  const flakeLine = formatRecurringFlakesLine(recurringFlakes, { includeRepo: true });
+  return flakeLine ? [guard.line, activeLine, suiteLine, poolLine, convLine, flakeLine] : [guard.line, activeLine, suiteLine, poolLine, convLine];
 }
 async function machineStatus(folder, ports, env, cwd) {
   const obs = await collectMachineObservability(folder, ports, env, cwd);
@@ -1250,6 +1271,7 @@ async function statusJsonPayload(input, ports, p) {
     suiteQueue: obs.suiteQueue,
     loginPool: obs.loginPool,
     conversion: obs.conversion,
+    recurringFlakes: obs.recurringFlakes,
   };
 }
 

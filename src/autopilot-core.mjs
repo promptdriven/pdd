@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: bc40891fb657482eb9dbe7ae9b32ce0454652979048bd87e5b3a3e53e80c1ad4)
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 64ef901ed9fbc60aae53dcf4c4b17bbbc69958c8d18632069bca59566b667afd)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
@@ -41,6 +41,7 @@ import {
 } from './autopilot-validator.mjs';
 import { lintRepoProject, loadProjectLintConfig } from './repo-hygiene-lint.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
+import { appendBoundedFlakeEntries, formatRecurringFlakesLine, parseFlakeLedger, summarizeRecurringFlakes } from './autopilot-regressions.mjs';
 
 const MAX_LOCAL_TEST_REPAIRS = MAX_VALIDATION_REPAIRS;
 
@@ -639,7 +640,115 @@ function resolveSuiteCommand(ctx, job, cwd = null, { baseSuiteCommand = undefine
 }
 
 // ---- Files ----------------------------------------------------------------------------------------------
-const folders = root => ({ jobs: join(root, 'jobs'), logs: join(root, 'logs'), worktrees: join(root, 'worktrees'), history: join(root, 'history.jsonl'), durations: join(root, 'durations.jsonl'), machine: join(root, 'core.json'), bin: join(root, 'bin') });
+const folders = root => ({ jobs: join(root, 'jobs'), logs: join(root, 'logs'), worktrees: join(root, 'worktrees'), history: join(root, 'history.jsonl'), durations: join(root, 'durations.jsonl'), flakes: join(root, 'flakes.jsonl'), machine: join(root, 'core.json'), bin: join(root, 'bin') });
+
+function isSymlinkSafe(fs, targetPath) {
+  try {
+    return Boolean(fs.lstatSync?.(targetPath)?.isSymbolicLink?.());
+  } catch {
+    return false;
+  }
+}
+
+function readFlakeLedgerSafe(fs, root) {
+  if (!root || typeof root !== 'string') return [];
+  const file = join(root, 'flakes.jsonl');
+  try {
+    if (isSymlinkSafe(fs, root) || isSymlinkSafe(fs, file)) return [];
+    const st = fs.lstatSync?.(file);
+    if (st && typeof st.isFile === 'function' && !st.isFile()) return [];
+    const raw = fs.readFileSync(file, 'utf8');
+    return parseFlakeLedger(raw);
+  } catch {
+    return [];
+  }
+}
+
+function recordFlakeLedger(ctx, entries) {
+  if (!ctx?.root || !Array.isArray(entries) || !entries.length) return;
+  const fs = ctx.fs ?? nativeFs;
+  const file = join(ctx.root, 'flakes.jsonl');
+  let temp = null;
+  try {
+    if (isSymlinkSafe(fs, ctx.root) || isSymlinkSafe(fs, file)) return;
+    let existing = '';
+    try {
+      existing = fs.readFileSync(file, 'utf8');
+    } catch (err) {
+      if (err?.code !== 'ENOENT') return;
+    }
+    const next = appendBoundedFlakeEntries(existing, entries, { now: ctx.now });
+    if (!next || next === existing) return;
+    fs.mkdirSync?.(ctx.root, { recursive: true, mode: 0o700 });
+    if (isSymlinkSafe(fs, ctx.root) || isSymlinkSafe(fs, file)) return;
+    if (typeof fs.renameSync === 'function') {
+      temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+      fs.writeFileSync(temp, next, { flag: 'wx', mode: 0o600 });
+      fs.renameSync(temp, file);
+      temp = null;
+    } else {
+      fs.writeFileSync(file, next, { mode: 0o600 });
+    }
+  } catch {
+    // Fail-safe: flake ledger I/O errors must never interrupt or crash an Autopilot tick.
+  } finally {
+    if (temp) {
+      try { fs.unlinkSync?.(temp); } catch {}
+    }
+  }
+}
+
+function extractBaseRedTarget(causeText, detailText, job) {
+  const scanForTestFile = raw => {
+    const s = String(raw ?? '');
+    const m = /(?:^|[\s'"`(])((?:test|tests|__tests__)\/[A-Za-z0-9_./-]+\.[A-Za-z0-9]+)(?=$|[\s'"`):,])/.exec(s);
+    return m ? m[1] : null;
+  };
+  const fromCause = scanForTestFile(causeText);
+  if (fromCause) return fromCause;
+  const fromDetail = scanForTestFile(detailText);
+  if (fromDetail) return fromDetail;
+  const reproTest = job?.repairReproduce?.tests?.[0];
+  if (typeof reproTest?.file === 'string' && reproTest.file.trim()) return reproTest.file.trim();
+  if (typeof reproTest?.name === 'string' && reproTest.name.trim()) return reproTest.name.trim();
+  const stripped = oneLine(causeText, 160).replace(/\s+also\s+fails\s+on\s+.+$/i, '').trim();
+  return stripped || 'base-suite';
+}
+
+function settleFlakeRerunPending(ctx, job, head, checks) {
+  const pending = job?.flakeRerunPending;
+  if (!object(pending) || pending.head !== head || pending.recorded === true) return;
+  const targets = Array.isArray(pending.targets) ? pending.targets.filter(t => typeof t === 'string' && t.trim()) : [];
+  if (!targets.length) {
+    pending.recorded = true;
+    ctx.saveJob(job);
+    return;
+  }
+  const recordedSet = new Set(Array.isArray(pending.recordedTargets) ? pending.recordedTargets : []);
+  const newEntries = [];
+  for (const target of targets) {
+    if (recordedSet.has(target)) continue;
+    const matching = checks.filter(c => c.name === target);
+    if (!matching.length || !matching.every(c => c.done)) continue;
+    const outcome = matching.some(c => !c.good) ? 'reproduced-red' : 'flaked-then-passed';
+    newEntries.push({
+      ts: new Date(ctx.now()).toISOString(),
+      repo: ctx.repo,
+      issue: job.issue,
+      pr: job.pr ?? null,
+      head,
+      target,
+      outcome,
+      detail: outcome === 'flaked-then-passed' ? 'shard flake passed on rerun' : 'shard failure reproduced on rerun',
+    });
+    recordedSet.add(target);
+  }
+  if (!newEntries.length) return;
+  recordFlakeLedger(ctx, newEntries);
+  pending.recordedTargets = [...recordedSet];
+  if (targets.every(t => recordedSet.has(t))) pending.recorded = true;
+  ctx.saveJob(job);
+}
 function readJobs(fs, root) {
   const dir = folders(root).jobs;
   let names = [];
@@ -3134,6 +3243,7 @@ async function ciState(ctx, head, job) {
     const out = await ciStart(ctx, job, head, runs, { state: 'red', failed, sig });
     if (out.state !== 'red') return out;
     await markCiSeen();
+    settleFlakeRerunPending(ctx, job, head, checks);
     if (job.flakeRerunHead !== head && job.reproduceRerun?.head !== head) {
       const { evaluateShardFlakeRerun } = await import('./autopilot-regressions.mjs');
       const flake = evaluateShardFlakeRerun({
@@ -3177,7 +3287,10 @@ async function ciState(ctx, head, job) {
   }
   if (stalePending.size) { await markCiSeen(); return { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig }; }
   const started = await ciStart(ctx, job, head, runs, checks.some(c => !c.done) ? { state: 'pending', pending: checks.filter(c => !c.done).map(c => c.name), sig } : { state: 'green', count: checks.length, sig });
-  if (!started.notStarted) await markCiSeen();
+  if (!started.notStarted) {
+    await markCiSeen();
+    settleFlakeRerunPending(ctx, job, head, checks);
+  }
   return started;
 }
 async function rerunShardFlake(ctx, job, head, flake) {
@@ -3232,7 +3345,13 @@ async function rerunShardFlake(ctx, job, head, flake) {
     }
   }
   const reranTokens = [...new Set(reranShards.map(s => s.staleToken).filter(Boolean))];
+  const reranTargets = [...new Set(reranShards.map(s => s.name).filter(Boolean))];
   job.flakeRerunHead = head;
+  if (reranTargets.length > 0) {
+    job.flakeRerunPending = { head, targets: reranTargets, recorded: false, recordedTargets: [] };
+  } else {
+    delete job.flakeRerunPending;
+  }
   if (reranTokens.length > 0) {
     job.ciRerunPending = { head, staleTokens: reranTokens, until: ctx.now() + 2 * MIN };
   } else {
@@ -10981,6 +11100,18 @@ async function advance(ctx, job) {
   if (object(r) && r.outcome === 'failed') {
     delete job.poolRotations; clearPoolExhausted(ctx); ctx.produced();
     const kind = ['runtime', 'pdd', 'job'].includes(r.kind) ? r.kind : 'job', code = slug(r.code) || 'failed';
+    if (code === 'base-test-red') {
+      recordFlakeLedger(ctx, [{
+        ts: new Date(ctx.now()).toISOString(),
+        repo: ctx.repo,
+        issue: job.issue,
+        pr: job.pr ?? null,
+        head: job.head ?? null,
+        target: extractBaseRedTarget(r.cause, r.detail, job),
+        outcome: 'base-test-red',
+        detail: oneLine(r.cause || r.detail, 300),
+      }]);
+    }
     if (job.role === 'repair' && kind === 'pdd' && code === 'base-test-red' && job.repairReproduce?.counted) {
       job.repairs = Math.max(0, (job.repairs ?? 1) - 1);
       if (job.lastRepairCounters?.localTest) job.localTestRepairs = job.lastRepairCounters.prevLocalTestRepairs;
@@ -11364,6 +11495,12 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
     const pm = postMerge.counts;
     const reopenPct = `${Math.round(((pm.reopenOrRevert ?? 0) / pm.tracked) * 100)}%`;
     lines.push(`Post-merge: ${pm.regressions ?? 0} regression(s) (target 0: ${pm.reopened ?? 0} reopened, ${pm.reverted ?? 0} reverted, ${pm.ci ?? 0} CI; reopen/revert ${reopenPct}) across ${pm.tracked} merged PR(s)${pm.pending ? `; ${pm.pending} pending check` : ''}.`);
+  }
+  if (ports.root) {
+    const flakeEntries = readFlakeLedgerSafe(fs, ports.root);
+    const flakeSummary = summarizeRecurringFlakes(flakeEntries, { nowMs: now });
+    const flakeLine = formatRecurringFlakesLine(flakeSummary);
+    if (flakeLine) lines.push(flakeLine);
   }
   const drafts = ports.reportRoot ? listReportDrafts({ root: ports.reportRoot }, { fs }).length : 0;
   if (drafts) lines.push(`Reports: ${drafts} local draft(s); run pdd autopilot report to list or send them.`);
