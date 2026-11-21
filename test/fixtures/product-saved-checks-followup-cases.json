@@ -787,13 +787,13 @@
       ],
       "setup": "For each public operation use a verified merged local run whose cwd/run-root saved batches share the same original test set and canonical comparison base. Use the authentic producer records and valid merged-code PR metadata. Invoke the public operation twice with identical comparison inputs. productStart targets the existing linked issue with noRun true. Count actual native capture dependency executions; retain the product default saved reader without an injected savedStoryEvidence callback.",
       "expected": {
-        "captures_first_command": 1,
-        "captures_second_command": 1,
+        "captures_first_command": 5,
+        "captures_second_command": 5,
         "second_command_reuses_first_capture": false,
         "saved_check_state_changed": false,
         "runtime_requests": 0,
         "workflow_dispatches": 0,
-        "captures_total": 2
+        "captures_total": 10
       }
     },
     {
@@ -823,8 +823,8 @@
           "notRun": 0
         },
         "second_server": {
-          "pass": 0,
-          "stale": 4,
+          "pass": 3,
+          "stale": 1,
           "notRun": 0
         },
         "saved_check_state_changed": false,

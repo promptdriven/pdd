@@ -237,14 +237,20 @@ test('native default reader leaves a nonexistent state directory absent', async 
   assert.deepEqual(snapshot(f.sandbox), before);
 });
 
-test('native source recapture includes every selected test when one Story changes', async t => {
+test('native source recapture marks only the edited Story stale when contract_snapshots are saved', async t => {
   const f = await produced(t);
   const read = () => runtime.savedStoryEvidence({ root: f.repo }, { env: f.env });
   const original = await read();
   assert.deepEqual(original.stories.map(row => row.story).sort(), f.selected.map(path => JSON.parse(readFileSync(join(f.repo, path))).story_path).sort());
   assert.ok(original.stories.every(row => row.pass && row.current));
-  const path = join(f.repo, JSON.parse(readFileSync(join(f.repo, f.batch.rows[0].test))).story_path); writeFileSync(path, readFileSync(path, 'utf8') + '\nChanged synthetic criterion input.\n');
-  const result = await read(); assert.ok(result.stories.every(row => row.pass && !row.current));
+  const editedStory = JSON.parse(readFileSync(join(f.repo, f.batch.rows[0].test))).story_path;
+  const path = join(f.repo, editedStory); writeFileSync(path, readFileSync(path, 'utf8') + '\nChanged synthetic criterion input.\n');
+  const result = await read();
+  const editedRow = result.stories.find(row => row.story === editedStory);
+  const untouchedRows = result.stories.filter(row => row.story !== editedStory);
+  assert.ok(editedRow?.pass && !editedRow.current, `expected ${editedStory} to become stale`);
+  assert.equal(untouchedRows.length, 4);
+  assert.ok(untouchedRows.every(row => row.pass && row.current), 'expected untouched Stories to stay current');
 });
 
 for (const ambiguity of [false, true]) test(`legacy Story identity refuses ${ambiguity ? 'ambiguous' : 'missing'} captured paths`, async () => {

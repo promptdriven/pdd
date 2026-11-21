@@ -32,6 +32,11 @@ export function factoryInterpreter() {
         const state={verdict:actual===2?'passed':'failed','no-verdict':'unknown',refused:'refused',slow:'running'}[f.mode];assert.ok(state,'unknown interpreter program');
         reply=check(request.requestId,state,actual);f.jobs.set(request.requestId,{mode:f.mode,actual});
       }
+    } else if (new URL(url).pathname === '/v1/capacity') {
+      return new Response(JSON.stringify({ error: { code: 'not-found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
     } else {
       const id=new URL(url).pathname.split('/').at(-1);f.gets.push(id);
       const saved=f.jobs.get(id);assert.ok(saved,'only dispatched jobs can be polled');
