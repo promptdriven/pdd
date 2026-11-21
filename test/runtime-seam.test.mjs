@@ -2741,15 +2741,27 @@ test('SEAM24: no file under test/ outside test/runtime-seam.test.mjs imports or 
   assert.ok(findSeamViolations('test/example.test.mjs', "import { runCheck } from '@promptdriven/runtime-client';\n").length > 0);
 });
 
+function compareExactSemver(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  }
+  return 0;
+}
+
 test('SEAM25: runtime client uses the exact public npm release', () => {
   const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const lockfile = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
   const name = '@promptdriven/runtime-client';
+  const pinned = manifest.dependencies[name];
   const locked = lockfile.packages[`node_modules/${name}`];
-  assert.equal(manifest.dependencies[name], '1.1.0');
-  assert.equal(lockfile.packages[''].dependencies[name], '1.1.0');
-  assert.equal(locked.version, '1.1.0');
-  assert.match(locked.resolved, /^https:\/\/registry\.npmjs\.org\/@promptdriven\/runtime-client\/-\/runtime-client-1\.1\.0\.tgz$/);
+  assert.equal(typeof pinned, 'string');
+  assert.match(pinned, /^\d+\.\d+\.\d+$/, `expected exact semver pin for ${name}, got ${JSON.stringify(pinned)}`);
+  assert.ok(compareExactSemver(pinned, '1.1.1') >= 0, `expected ${name} >= 1.1.1, got ${pinned}`);
+  assert.equal(lockfile.packages[''].dependencies[name], pinned);
+  assert.equal(locked.version, pinned);
+  assert.equal(locked.resolved, `https://registry.npmjs.org/${name}/-/runtime-client-${pinned}.tgz`);
   assert.match(locked.integrity, /^sha512-/);
   assert.doesNotMatch(locked.resolved, /^(?:github:|git\+)/);
 });
