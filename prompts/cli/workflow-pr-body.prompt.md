@@ -31,7 +31,7 @@ requirements add no person gate.
 
 ## Agent fields
 
-`readPrFields(texts)` reads labeled lines from the `done` summaries of a PR's steps, in step order. A line starts (after optional spaces and one `- ` or `* `) with exactly one label and a colon: `Title`, `Area`, `Problem`, `Cause`, `Fix`, `Change`, `Result`, `This PR`, `Verdict`, `Case` or `File`. A later line replaces an earlier line with the same label. `Case: INPUT | BEFORE | AFTER | EXPECTED` gives a cases row; 3 cells are `INPUT | BEFORE | EXPECTED` and 2 cells `INPUT | EXPECTED`; other cell counts and an empty input are ignored. A `|` inside a code span stays in its cell (`` `a || b` `` is one input), and a cell loses a trailing backslash, so `INPUT \| TODAY \| EXPECTED` copied from a Markdown table still gives three cells. The Case rows of the latest text that has any replace all earlier rows, at most 12. `File: PATH — NOTE` (or `-`, `–` or `:` as the separator, the path optionally in backticks) gives one short note for a changed file. It returns `{title?, area?, problem?, cause?, fix?, change?, result?, thisPr?, verdict?, cases, notes}`.
+`readPrFields(texts)` reads labeled fields from the `done` summaries of a PR's steps, in step order, supporting both multi-line summaries and single-line `|`-delimited structured summaries (for example `Title: ... | Cause: ... | Fix: ...`) via strictly O(N) linear scanning. A line or inline segment starts (after optional spaces and one `- ` or `* `) with one label and a colon: `Title`, `Area`, `Problem`, `Cause`, `Fix`, `Change`, `Result`, `This PR`, `Verdict`, `Case` or `File`. Outside a line that starts with `Case:`, an unescaped `|` outside backtick code spans (following CommonMark/GFM code-span rules: backslashes inside a code span are literal and never escape a closing backtick, and only an odd run of backslashes escapes an opening backtick) splits into a new segment only when followed (after optional horizontal spaces) by one of those labels or `Summary`, `Checks` or `Risk` and a colon—so legitimate `|` characters in a plain title stay intact while trailing `Summary:`/`Checks:`/`Risk:` segments are not swallowed into `title`. A later line or segment replaces an earlier one with the same label. `Case: INPUT | BEFORE | AFTER | EXPECTED` gives a cases row; 3 cells are `INPUT | BEFORE | EXPECTED` and 2 cells `INPUT | EXPECTED`; other cell counts and an empty input are ignored. A `|` inside a code span stays in its cell (`` `a || b` `` is one input), and a cell loses a trailing backslash, so `INPUT \| TODAY \| EXPECTED` copied from a Markdown table still gives three cells. The Case rows of the latest text that has any replace all earlier rows, at most 12. `File: PATH — NOTE` (or `-`, `–` or `:` as the separator, the path optionally in backticks) gives one short note for a changed file. It returns `{title?, area?, problem?, cause?, fix?, change?, result?, thisPr?, verdict?, cases, notes}`.
 
 ## User story
 
@@ -39,9 +39,11 @@ requirements add no person gate.
 
 ## Area and title
 
-`prArea({area, files, workflow})`: the agent's `Area` field when it has a usable name, else the first changed `*.prompt.md` (its name without `.prompt.md` and a language suffix such as `_python`), else the first changed Story under `user_stories/` (not `PLAN.md` or `README.md`), else the first changed source file (a common source extension such as `.js`, `.ts`, `.py` or `.go`) outside test, fixture, doc, Story and prompt folders, else the first other such file that is not Markdown, JSON, a lock file or text, else the workflow name. The result is lowercase letters, digits, `.`, `_` and `-`, at most 40 characters.
+`prArea({area, files, workflow})`: the agent's `Area` field when it has a usable name, else the first changed `*.prompt.md` (its name without `.prompt.md` and a language suffix such as `_python`), else the first changed Story under `user_stories/` (not `PLAN.md` or `README.md`), else the first changed non-boilerplate source file (a common source extension such as `.js`, `.ts`, `.py` or `.go`) outside test, fixture, doc, Story and prompt folders—ignoring boilerplate/internal filenames (`__init__.py`, `index.js`/`index.mjs`/`index.cjs`/`index.jsx`/`index.ts`/`index.tsx`/`index.d.ts`, `mod.rs`, `lib.rs`, `main.*`, `_*.py`)—else the deepest meaningful parent directory name of a changed source file (skipping generic container directories `src`, `lib`, `pkg`, `app`, `packages`, `internal`, `tests`, `test`, `__tests__`, `fixtures`, `docs`, `doc`, `prompts`, `user_stories`), else the first other non-boilerplate such file that is not Markdown, JSON, a lock file or text, else the workflow name (or `'pdd'`). The result is lowercase letters, digits, `.`, `_` and `-`, at most 40 characters.
 
-`readablePrTitle({layout, workflow, area, statement, number, part})`: `spec(AREA): STATEMENT (#N · part 1: spec)` for PR 1, `fix(AREA): STATEMENT (#N · part 2: fix)` for a bug code PR, `feat(AREA): STATEMENT (#N · part 2: feat)` for a feature code PR and `fix(AREA): STATEMENT (#N)` for a one-PR run (`part` null). STATEMENT is the agent's `Title` field (PR 1: what must be true; PR 2: what is true after the merge), else the issue title, on one line. GitHub puts the title into the merge commit, and a closing keyword in a commit closes an issue; a commit message has no code spans. So in the whole statement, also between backticks, every closing keyword gets a zero-width space after it and so does each `@` before a name, as in [inert agent words](#inert-agent-words): the title `Fixes #5 by padding` closes nothing. GitHub refuses a title over 256 UTF-16 code units: cut only the statement, at a Unicode character boundary, and show ` …`; the type, area and suffix always stay.
+`normalizePrType(value)` validates a Conventional Commit PR type against the safe allowlist (`feat`, `fix`, `chore`, `refactor`, `docs`, `test`, `build`, `ci`, `perf`, `style`, `revert`, `spec`), returning lowercase token or `null`. `resolvePrTitleType({layout, workflow, prType, type})` returns `'spec'` when `layout === 'spec'`, else the first valid Conventional Commit token from `prType`, `type`, or workflow metadata (`workflow.prType`, `workflow.pr_type`, `workflow.type`), else workflow defaults (`feature`, `product`, `codegen` -> `'feat'`; `bug`, `small-change`, other -> `'fix'`).
+
+`readablePrTitle({layout, workflow, prType, type, area, statement, number, part})`: `spec(AREA): STATEMENT (#N · part 1: spec)` for PR 1, `TYPE(AREA): STATEMENT (#N · part 2: TYPE)` for PR 2, and `TYPE(AREA): STATEMENT (#N)` for a one-PR run (`part` null), where `TYPE` is `resolvePrTitleType({layout, workflow, prType, type})`. STATEMENT is the agent's `Title` field (PR 1: what must be true; PR 2: what is true after the merge), else the issue title, on one line. GitHub puts the title into the merge commit, and a closing keyword in a commit closes an issue; a commit message has no code spans. So in the whole statement, also between backticks, every closing keyword gets a zero-width space after it and so does each `@` before a name, as in [inert agent words](#inert-agent-words): the title `Fixes #5 by padding` closes nothing. GitHub refuses a title over 256 UTF-16 code units: cut only the statement, at a Unicode character boundary, and show ` …`; the type, area and suffix always stay.
 
 ## The readable part
 
@@ -109,7 +111,7 @@ add a record, verdict, filesystem read or model call.
 ```json
 {
   "status": "approved",
-  "prose_sha256": "62cb549576edaed75a81fb5c8f245e89235eba57d2b81739a9e9eb75a1818136",
+  "prose_sha256": "62c2e3c3a5e37b4b7927649508c0508174cda439af96e1d1af937da29c18ae63",
   "entries": [
     {
       "operation": "readablePrTitle",
@@ -125,6 +127,26 @@ add a record, verdict, filesystem read or model call.
           },
           "workflow": {
             "type": "string"
+          },
+          "prType": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "area": {
             "type": "string"

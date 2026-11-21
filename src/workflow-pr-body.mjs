@@ -1,4 +1,4 @@
-// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: f722fda82b8e7c4b8c532689a97b7acee916f64ebc2b53874e7a20643e80b2ec).
+// Generated from prompts/cli/workflow-pr-body.prompt.md (sha256: 6046172a26455394d38e4182b092bb57fda9dbf37e34e9719f6ce47ff413e9c4).
 // The readable part of a pdd workflow PR (#3042): a status line, the user story, a short summary, a cases table, what
 // changed, a proof table from pdd's own records and one approval/next/merge line. The runner gathers the facts; this
 // module only renders them. Agent words appear only in the title, the summary and the cases table, always as inert text.
@@ -8,7 +8,13 @@ import { formalStatusText } from './workflow-replay.mjs';
 export const DETAILS_OPEN = '<details><summary>Details for tools and audits</summary>';
 const MAX_FIELD = 300, MAX_CELL = 120, MAX_CASES = 12, MAX_FILES = 40, MAX_NOTE = 160, MAX_STORIES = 3, MAX_WORDS = 3;
 const LABELS = { Title: 'title', Area: 'area', Problem: 'problem', Cause: 'cause', Fix: 'fix', Change: 'change', Result: 'result', 'This PR': 'thisPr', Verdict: 'verdict' };
-const FIELD_LINE = /^(?:[-*]\s+)?(Title|Area|Problem|Cause|Fix|Change|Result|This PR|Verdict|Case|File):\s*(.*\S)\s*$/;
+const INLINE_LABELS = ['Title', 'Area', 'Problem', 'Cause', 'Fix', 'Change', 'Result', 'This PR', 'Verdict', 'Case', 'File', 'Summary', 'Checks', 'Risk'];
+const FIELD_LINE = /^(?:[-*][ \t]+)?(Title|Area|Problem|Cause|Fix|Change|Result|This PR|Verdict|Case|File):[ \t]*(\S[\s\S]*)$/;
+const CASE_PREFIX = /^(?:[-*][ \t]+)?Case:/;
+const BOILERPLATE_FILE = /^(?:__init__\.py|index\.(?:[cm]?js|jsx|tsx?|d\.ts)|mod\.rs|lib\.rs|main\.[^.]+|_.*\.py)$/i;
+const GENERIC_AREA_DIRS = new Set(['src', 'lib', 'pkg', 'app', 'packages', 'internal', 'tests', 'test', '__tests__', 'fixtures', 'docs', 'doc', 'prompts', 'user_stories']);
+const CONVENTIONAL_PR_TYPES = new Set(['feat', 'fix', 'chore', 'refactor', 'docs', 'test', 'build', 'ci', 'perf', 'style', 'revert', 'spec']);
+const WORKFLOW_DEFAULT_PR_TYPE = { feature: 'feat', product: 'feat', codegen: 'feat', bug: 'fix', 'small-change': 'fix' };
 
 const characters = text => [...text].length;
 const oneLine = value => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -71,24 +77,109 @@ export function codeSpan(value) {
   return `${fence}${padding}${text}${padding}${fence}`;
 }
 
-// The PR fields that agents write as labeled lines in their `done` summaries. A later text replaces an earlier one per
-// field; the Case rows of the latest text that has any replace all earlier rows; a File note replaces an earlier one.
+// Strictly O(N) CommonMark/GFM backtick code-span interval finder: backslashes inside a span never escape a closing
+// backtick, and only an odd run of backslashes immediately before an opening backtick escapes it.
+function findCodeSpans(text) {
+  const runs = [];
+  const byLen = new Map();
+  const n = text.length;
+  for (let i = 0; i < n; ) {
+    if (text[i] === '`') {
+      let bs = 0;
+      while (i - 1 - bs >= 0 && text[i - 1 - bs] === '\\') bs++;
+      let j = i + 1;
+      while (j < n && text[j] === '`') j++;
+      const idx = runs.length;
+      const len = j - i;
+      runs.push({ start: i, end: j, len, openable: bs % 2 === 0 });
+      let list = byLen.get(len);
+      if (!list) { list = []; byLen.set(len, list); }
+      list.push(idx);
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  const spans = [];
+  const cursor = new Map();
+  for (let r = 0; r < runs.length; ) {
+    if (!runs[r].openable) { r++; continue; }
+    const { start, len } = runs[r];
+    const list = byLen.get(len);
+    let pos = cursor.get(len) ?? 0;
+    while (pos < list.length && list[pos] <= r) pos++;
+    cursor.set(len, pos);
+    if (pos < list.length) {
+      const closeIdx = list[pos];
+      spans.push([start, runs[closeIdx].end]);
+      r = closeIdx + 1;
+    } else {
+      r++;
+    }
+  }
+  return spans;
+}
+function matchInlineLabel(text, at) {
+  for (const label of INLINE_LABELS) {
+    if (text.startsWith(label, at) && text[at + label.length] === ':') return label;
+  }
+  return null;
+}
+function splitInlineFields(rawLine) {
+  const line = String(rawLine ?? '').trim();
+  if (!line || CASE_PREFIX.test(line) || !line.includes('|')) return line ? [line] : [];
+  const spans = findCodeSpans(line);
+  const segments = [];
+  const n = line.length;
+  let spanIdx = 0;
+  let segStart = 0;
+  for (let i = 0; i < n; i++) {
+    while (spanIdx < spans.length && spans[spanIdx][1] <= i) spanIdx++;
+    if (spanIdx < spans.length && i >= spans[spanIdx][0] && i < spans[spanIdx][1]) {
+      i = spans[spanIdx][1] - 1;
+      continue;
+    }
+    if (line[i] === '|') {
+      let bs = 0;
+      while (i - 1 - bs >= 0 && line[i - 1 - bs] === '\\') bs++;
+      if (bs % 2 === 1) continue;
+      let j = i + 1;
+      while (j < n && (line[j] === ' ' || line[j] === '\t')) j++;
+      const nextLabel = matchInlineLabel(line, j);
+      if (nextLabel) {
+        const part = line.slice(segStart, i).trim();
+        if (part) segments.push(part);
+        segStart = j;
+        i = j + nextLabel.length;
+      }
+    }
+  }
+  const tail = line.slice(segStart).trim();
+  if (tail) segments.push(tail);
+  return segments;
+}
+
+// The PR fields that agents write as labeled lines (or single-line `|`-delimited segments) in their `done` summaries.
+// A later text replaces an earlier one per field; the Case rows of the latest text that has any replace all earlier rows;
+// a File note replaces an earlier one.
 export function readPrFields(texts) {
   const fields = { cases: [], notes: {} };
   for (const text of texts ?? []) {
     let cases = null;
     for (const raw of String(text ?? '').split(/\r?\n/)) {
-      const match = FIELD_LINE.exec(raw.trim());
-      if (!match) continue;
-      const [, label, value] = match;
-      if (label === 'Case') {
-        const cells = caseCells(value);
-        if (cells.length >= 2 && cells.length <= 4 && cells[0]) (cases ??= []).push(cells.length === 2 ? { input: cells[0], expected: cells[1] }
-          : cells.length === 3 ? { input: cells[0], before: cells[1], expected: cells[2] } : { input: cells[0], before: cells[1], after: cells[2], expected: cells[3] });
-      } else if (label === 'File') {
-        const file = /^`?([^`\s]+?)`?\s*(?:—|–|-|:)\s+(\S.*)$/.exec(value);
-        if (file) fields.notes[file[1]] = file[2];
-      } else fields[LABELS[label]] = value;
+      for (const segment of splitInlineFields(raw)) {
+        const match = FIELD_LINE.exec(segment);
+        if (!match) continue;
+        const [, label, value] = match;
+        if (label === 'Case') {
+          const cells = caseCells(value);
+          if (cells.length >= 2 && cells.length <= 4 && cells[0]) (cases ??= []).push(cells.length === 2 ? { input: cells[0], expected: cells[1] }
+            : cells.length === 3 ? { input: cells[0], before: cells[1], expected: cells[2] } : { input: cells[0], before: cells[1], after: cells[2], expected: cells[3] });
+        } else if (label === 'File') {
+          const file = /^`?([^`\s]+?)`?\s*(?:—|–|-|:)\s+(\S.*)$/.exec(value);
+          if (file) fields.notes[file[1]] = file[2];
+        } else fields[LABELS[label]] = value;
+      }
     }
     if (cases) fields.cases = cases.slice(0, MAX_CASES);
   }
@@ -121,31 +212,65 @@ export function userStory(text) {
   return null;
 }
 
-// The area in a title: the agent's `Area:` field, else the owning prompt, the Story, the first code file or the workflow.
+// The area in a title: the agent's `Area:` field, else the owning prompt, the Story, the first non-boilerplate code file,
+// a meaningful parent module directory for boilerplate code files, another non-boilerplate file, or the workflow.
 export function prArea({ area, files = [], workflow } = {}) {
   const clean = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '').slice(0, 40).replace(/[-._]+$/, '');
-  const name = path => path.split('/').at(-1);
+  const name = path => String(path ?? '').replace(/\\/g, '/').split('/').at(-1) ?? '';
+  const meaningfulDir = path => {
+    const dirs = String(path ?? '').replace(/\\/g, '/').split('/').slice(0, -1);
+    for (let i = dirs.length - 1; i >= 0; i--) {
+      const candidate = clean(dirs[i]);
+      if (candidate && !GENERIC_AREA_DIRS.has(candidate)) return candidate;
+    }
+    return '';
+  };
   if (clean(area)) return clean(area);
   const prompt = files.find(path => path.endsWith('.prompt.md'));
   if (prompt) return clean(name(prompt).replace(/\.prompt\.md$/, '').replace(/_(?:python|typescript|javascript|js|ts|go|rust|java)$/, '')) || 'pdd';
   const story = files.find(path => /(?:^|\/)user_stories\/[^/]+\.md$/.test(path) && !/^(?:plan|readme)\.md$/i.test(name(path)));
   if (story) return clean(name(story).replace(/\.md$/, '')) || 'pdd';
   const owned = path => !/(?:^|\/)(?:tests?|__tests__|fixtures|docs?|user_stories|prompts)\//.test(path) && !/\.(?:test|spec)\./i.test(path);
-  const code = files.find(path => owned(path) && /\.(?:[cm]?js|jsx|tsx?|py|go|rs|java|kt|rb|php|cs|swift|c|cc|cpp|h|hpp|sh|vue|svelte)$/i.test(path))
-    ?? files.find(path => owned(path) && /\.[a-z0-9]+$/i.test(path) && !/\.(?:md|json|lock|txt)$/i.test(path));
-  if (code) return clean(name(code).replace(/\.[^.]+$/, '')) || 'pdd';
+  const codeFiles = files.filter(path => owned(path) && /\.(?:[cm]?js|jsx|tsx?|py|go|rs|java|kt|rb|php|cs|swift|c|cc|cpp|h|hpp|sh|vue|svelte)$/i.test(path));
+  const directCode = codeFiles.find(path => !BOILERPLATE_FILE.test(name(path)));
+  if (directCode) return clean(name(directCode).replace(/\.[^.]+$/, '')) || 'pdd';
+  for (const path of codeFiles) {
+    const parent = meaningfulDir(path);
+    if (parent) return parent;
+  }
+  const other = files.find(path => owned(path) && /\.[a-z0-9]+$/i.test(path) && !/\.(?:md|json|lock|txt)$/i.test(path) && !BOILERPLATE_FILE.test(name(path)));
+  if (other) return clean(name(other).replace(/\.[^.]+$/, '')) || 'pdd';
   return clean(workflow) || 'pdd';
 }
 
-// `spec(area): … (#N · part 1: spec)`, `fix(area): … (#N · part 2: fix)`, `feat(area): … (#N · part 2: feat)`, and
-// `fix(area): … (#N)` for a one-PR run (part null). GitHub refuses a title over 256 UTF-16 code units: the statement is
-// cut at a character boundary and shows " …"; the type, area and suffix always stay. The statement follows the keyword
-// and mention rule of the readable part everywhere, also between backticks: GitHub puts the title into the merge commit,
-// and a commit message has no code spans.
-export function readablePrTitle({ layout, workflow, area, statement, number, part = layout === 'spec' ? 1 : null }) {
-  const type = layout === 'spec' ? 'spec' : workflow === 'feature' ? 'feat' : 'fix';
-  const prefix = `${type}(${area || 'pdd'}): `;
-  const suffix = part ? ` (#${number} · part ${part}: ${type})` : ` (#${number})`;
+export function normalizePrType(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return CONVENTIONAL_PR_TYPES.has(normalized) ? normalized : null;
+}
+
+export function resolvePrTitleType({ layout, workflow, prType, type } = {}) {
+  if (layout === 'spec') return 'spec';
+  const wfMeta = workflow && typeof workflow === 'object' ? workflow : null;
+  const explicit =
+    normalizePrType(prType) ??
+    normalizePrType(type) ??
+    normalizePrType(wfMeta?.prType) ??
+    normalizePrType(wfMeta?.pr_type) ??
+    normalizePrType(wfMeta?.type);
+  if (explicit) return explicit;
+  const wfName = String(wfMeta?.name ?? (typeof workflow === 'string' ? workflow : '')).trim().toLowerCase();
+  return WORKFLOW_DEFAULT_PR_TYPE[wfName] ?? 'fix';
+}
+
+// `spec(area): … (#N · part 1: spec)`, `TYPE(area): … (#N · part 2: TYPE)`, and `TYPE(area): … (#N)` for a one-PR run
+// (part null). GitHub refuses a title over 256 UTF-16 code units: the statement is cut at a character boundary and shows
+// " …"; the type, area and suffix always stay. The statement follows the keyword and mention rule of the readable part
+// everywhere, also between backticks: GitHub puts the title into the merge commit, and a commit message has no code spans.
+export function readablePrTitle({ layout, workflow, prType, type, area, statement, number, part = layout === 'spec' ? 1 : null }) {
+  const commitType = resolvePrTitleType({ layout, workflow, prType, type });
+  const prefix = `${commitType}(${area || 'pdd'}): `;
+  const suffix = part ? ` (#${number} · part ${part}: ${commitType})` : ` (#${number})`;
   const text = inertWords(oneLine(statement)) || `issue #${number}`;
   if ((prefix + text + suffix).length <= 256) return prefix + text + suffix;
   let kept = '';
