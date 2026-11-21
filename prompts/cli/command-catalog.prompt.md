@@ -112,7 +112,7 @@ Catalog `workflow.scope.set`, `workflow.scope.show`, `workflow.scope.revoke`, an
 - `pdd workflow scope revoke --batch NAME [--said WORDS]` and `pdd workflow scope revoke --runs RUN_ID[,RUN_ID...] [--said WORDS]`
 - `pdd workflow scope extend --batch NAME --through code [--said WORDS]` and `pdd workflow scope extend --runs RUN_ID[,RUN_ID...] --through code [--said WORDS]`
 
-Help says set holds selected work through its prompt PR, show inspects its durable limit and history, revoke retains a hold, and extend separately permits code subject to normal gates. Mutations require explicit person permission; strict policy requires a person terminal and easy policy also permits `--said`, including the established quoted-heredoc `--said -` form. No batch member-addition form. The [scope owner](workflow-scope.prompt.md) owns policy and selection, not this catalog.
+Help says set holds selected work through its prompt PR, show inspects its durable limit and history, revoke retains a hold, and extend separately permits code subject to normal gates. Mutations require explicit person permission; strict policy requires a person terminal and easy policy also permits `--said`, including the established quoted-heredoc `--said -` form. No batch member-addition form. Scope policy and selection are owned outside this catalog.
 
 ## Workflow runner help
 
@@ -352,8 +352,6 @@ Do not interpret `-V -V`, `-VVV`, `--version --verbose`, extra operands or mixed
 version flags as detailed version. Existing parser refusal policy applies.
 
 ## Dependencies
-
-[Workflow scope](workflow-scope.prompt.md) is required authoring, generation, runtime, verification and testing context for the scope route meanings.
 
 No outside values or callback replies are required for this data-only module. All runtime route IDs, prefixes, dispositions, operand/option types, forms and help facts are owned here. Native authoring/generation uses the repository contracts linked above to identify the receiving modules and public boundary; links in route descriptions are native integration/ownership navigation, not a request to load their unrelated implementation/runtime policies when parsing catalog data.
 

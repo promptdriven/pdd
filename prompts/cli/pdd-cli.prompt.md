@@ -163,8 +163,6 @@ finite safe failure and exits 1. Do not load the launcher or remote settings.
 
 - [Structured dependency intake](issue-dependencies-intake.prompt.md): required generation and verification context for prepare/complete dispatch.
 
-- [Workflow scope](workflow-scope.prompt.md): required authoring, generation, runtime, verification and testing context for scope dispatch and its ports.
-
 - [Autopilot launcher](autopilot-launcher.prompt.md): required native generation/verification context for launch, tick, stop, status and backlog selection. These native effects are not bound by the existing syntax transport. Launcher ports are separate from the settings module's `autopilotPorts`.
 
 - [Autopilot settings](autopilot.prompt.md): required authoring, generation, runtime, verification and testing context for setup, Autopilot settings and `autopilot logs` subcommand dispatch.
@@ -213,7 +211,7 @@ workflow list uses `listWorkflowAreas({packageRoot,cwd,home})` (home from the HO
 
 ## Durable scope dispatch
 
-For the four `workflow-scope-*` dispositions, resolve the trusted repository common Git directory from cwd, and dispatch to module function `manageScope(request, ports)` in [workflow scope](workflow-scope.prompt.md), with injectable scope module and storage and permission ports. Map batch and comma-separated runs/issues to the owner's selector, preserving each exact member; use empty fields as its interface requires. Forward the exact `--said` argument, including `-`, to the permission boundary without reading or judging it; select said when supplied, otherwise terminal for mutations, and empty route for show. Resolve strict policy and permit stdin consumption only as the owner specifies. Validate syntax and required combinations before imports or effects. Print the owner's message and selected records for show or changed results, including repository, members, limit and history; `changed` and `shown` exit 0, refusal exits 2, unsafe state and unexpected errors exit 1 with a finite diagnostic. Never report success on uncertain commit. Help remains local; these routes do not start chats or call the interpreter.
+For the four `workflow-scope-*` dispositions, resolve the trusted repository common Git directory from cwd, and dispatch to module function `manageScope(request, ports)` for workflow scope, with injectable scope module and storage and permission ports. Map batch and comma-separated runs/issues to the owner's selector, preserving each exact member; use empty fields as its interface requires. Forward the exact `--said` argument, including `-`, to the permission boundary without reading or judging it; select said when supplied, otherwise terminal for mutations, and empty route for show. Resolve strict policy and permit stdin consumption only as the owner specifies. Validate syntax and required combinations before imports or effects. Print the owner's message and selected records for show or changed results, including repository, members, limit and history; `changed` and `shown` exit 0, refusal exits 2, unsafe state and unexpected errors exit 1 with a finite diagnostic. Never report success on uncertain commit. Help remains local; these routes do not start chats or call the interpreter.
 
 ## Product commands
 
