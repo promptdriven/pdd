@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
-import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './autopilot/claims.mjs';
 import { githubFullLastPage } from './github-calls.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
@@ -4872,9 +4872,8 @@ async function reviewState(ctx, job, prBody = '', preselected = null, { noLaunch
     let reviewExtras = null;
     if (!scoped) {
       const priorMustFix = extractPriorMustFixChecklist(job.rounds);
-      const testInv = job.testInventory?.head === job.head
-        ? job.testInventory
-        : await preReviewTestInventoryCheck(ctx, job, prBody).catch(() => null);
+      const testInv = await preReviewTestInventoryCheck(ctx, job, prBody)
+        .catch(() => (job.testInventory?.head === job.head ? job.testInventory : null));
       const domainDecisions = await collectBaseDomainDecisions(ctx, job, changed).catch(() => ({ entries: [], text: '' }));
       const hygieneText = job.hygiene?.head === job.head ? formatHygieneForReview(job.hygiene) : '';
       reviewExtras = {
@@ -6914,14 +6913,20 @@ async function detectSavedRealBindingBlocker(ctx, job, pr) {
   return null;
 }
 
-function collectBacksideLint(headTree, changed) {
+function collectBacksideLint(headTree, changed, baseTree) {
   if (!headTree) {
     return {
       codes: ['lint-checkout-unavailable'],
       details: ['clean checkout at PR head is unavailable for backside validation lint'],
     };
   }
-  const lintOut = lintRepoProject({ root: headTree });
+  if (!baseTree) {
+    return {
+      codes: ['lint-base-checkout-unavailable'],
+      details: ['clean checkout at verified base commit is unavailable for backside validation lint config'],
+    };
+  }
+  const lintOut = lintRepoProject({ root: headTree, config: baseTree, workspaceRoot: baseTree });
   const changedSet = new Set(changed);
   const codeSet = new Set();
   const details = [];
@@ -7343,7 +7348,7 @@ function selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, fs) {
 async function collectRealValidationEvidence(ctx, job, { headTree, changed, surfaces, nativeCtx, suite, lintCodes }) {
   const suiteCmd = resolveSuiteCommand(ctx, job) || 'npm test';
   const offlinePassed = suite?.state === 'pass';
-  const isBugFix = job.skill === 'pdd-bug'
+  const isBugFix = /^(?:pdd-)?bug$/i.test(String(job.skill ?? '').trim())
     || (Array.isArray(job.labels) && job.labels.some(l => /^(?:bug|type:bug|pdd:bug)$/i.test(l)));
 
   if (surfaces.docsOnly) {
@@ -7688,7 +7693,12 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
   try { headTree = await treeAt(ctx, job, 'agent', job.head); } catch { headTree = null; }
   const nativeCtx = collectNativeOnlyContext(ctx, headTree, changed);
   const surfaces = detectChangedSurfaces({ changedFiles: changed, nativeOnlyFiles: nativeCtx.nativeOnlyFiles });
-  const lint = collectBacksideLint(headTree, changed);
+  let baseTree = null;
+  try {
+    const baseTip = await resolveVerifiedBaseTip(ctx, job);
+    if (isGitCommitSha(baseTip)) baseTree = await treeAt(ctx, job, 'base', baseTip);
+  } catch { baseTree = null; }
+  const lint = collectBacksideLint(headTree, changed, baseTree);
   let supplied = null;
   if (typeof ctx.ports.validateE2e === 'function') {
     supplied = await ctx.ports.validateE2e({
@@ -8357,29 +8367,42 @@ export function evaluateTestInventoryGate({ inventory = null, deletedTestFiles =
 const isGitCommitSha = value => typeof value === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
 const isSafeBranchRefName = value => named(value) && value.length <= 255 && !value.startsWith('-') && !/[\x00-\x20\x7f~^:?*\[\\]|\.\.|\/\/|@\{|\.lock$|\/$/.test(value);
 
-async function resolveVerifiedBaseTip(ctx, job, cwd = null) {
-  if (job.paths?.head === job.head && isGitCommitSha(job.paths.base)) {
-    return job.paths.base;
+async function resolveVerifiedBaseTip(ctx, job, cwd = null, { preferLiveBase = false } = {}) {
+  const cachedBase = job.paths?.head === job.head && isGitCommitSha(job.paths.base) ? job.paths.base : '';
+  if (!preferLiveBase && cachedBase) {
+    return cachedBase;
   }
   const baseBranch = ctx.state?.baseBranch ?? 'main';
-  if (!isSafeBranchRefName(baseBranch)) return '';
+  if (!isSafeBranchRefName(baseBranch)) return preferLiveBase ? cachedBase : '';
   const targetCwd = cwd || (job.worktree && ctx.fs.existsSync?.(job.worktree) ? job.worktree : ctx.state?.cwd);
-  if (!targetCwd) return '';
+  if (!targetCwd) return preferLiveBase ? cachedBase : '';
+  const cacheKey = `${targetCwd}\0${baseBranch}`;
+  if (ctx._liveBaseTips?.has(cacheKey)) {
+    const memo = ctx._liveBaseTips.get(cacheKey);
+    if (memo) return memo;
+  }
   const ref = `refs/remotes/origin/${baseBranch}^{commit}`;
   const readTip = async () => {
     const out = String(await ctx.git(['rev-parse', '--verify', ref], targetCwd) ?? '').trim();
     return isGitCommitSha(out) ? out : '';
   };
+  const remember = tip => {
+    if (tip) {
+      ctx._liveBaseTips ??= new Map();
+      ctx._liveBaseTips.set(cacheKey, tip);
+    }
+    return tip;
+  };
   try {
     const tip = await readTip();
-    if (tip) return tip;
+    if (tip) return remember(tip);
   } catch { /* retry once after fetch */ }
   await ctx.git(['fetch', '-q', 'origin', '--', baseBranch], targetCwd).catch(() => {});
   try {
-    return await readTip();
-  } catch {
-    return '';
-  }
+    const tip = await readTip();
+    if (tip) return remember(tip);
+  } catch { /* fall through */ }
+  return preferLiveBase ? cachedBase : '';
 }
 
 async function preReviewHygieneCheck(ctx, job, changed = [], { changedError = null } = {}) {
@@ -8435,9 +8458,6 @@ async function preReviewHygieneCheck(ctx, job, changed = [], { changedError = nu
 async function preReviewTestInventoryCheck(ctx, job, prBody = '') {
   const mode = hygieneGateMode(ctx);
   const bodyKey = createHash('sha256').update(String(prBody ?? '')).digest('hex').slice(0, 16);
-  if (job.testInventory?.head === job.head && job.testInventory.mode === mode && job.testInventory.bodyKey === bodyKey && !job.testInventory.failed) {
-    return job.testInventory;
-  }
   const failedResult = errorText => {
     ctx.warn?.(`Autopilot core pre-review test inventory failed for #${job.issue} @ ${short(job.head)}: ${errorText}`);
     return { head: job.head, mode, bodyKey, failed: true, error: errorText, available: false, reason: errorText, text: '', hasTestChanges: false, newSkips: [], deletedTestFiles: [], unacknowledgedDeletedTests: [], unavailableFiles: [], reds: [] };
@@ -8446,19 +8466,46 @@ async function preReviewTestInventoryCheck(ctx, job, prBody = '') {
   if (!cwd) return failedResult('worktree unavailable');
   const baseBranch = ctx.state?.baseBranch ?? 'main';
   if (!isSafeBranchRefName(baseBranch)) return failedResult(`unsafe base branch ref "${oneLine(baseBranch, 80)}"`);
-  await ctx.git(['fetch', '-q', 'origin', '--', baseBranch], cwd).catch(() => {});
-  const baseTip = await resolveVerifiedBaseTip(ctx, job, cwd);
+  const baseTip = await resolveVerifiedBaseTip(ctx, job, cwd, { preferLiveBase: true });
   let baseSha = '';
   if (isGitCommitSha(baseTip) && isGitCommitSha(job.head)) {
-    try {
-      const mb = String(await ctx.git(['merge-base', baseTip, job.head], cwd) ?? '').trim();
-      baseSha = isGitCommitSha(mb) ? mb : baseTip;
-    } catch {
-      baseSha = baseTip;
+    const mbKey = `${cwd}\0${baseTip}\0${job.head}`;
+    if (ctx._mergeBaseCache?.has(mbKey)) {
+      baseSha = ctx._mergeBaseCache.get(mbKey);
+    } else {
+      try {
+        const mb = String(await ctx.git(['merge-base', baseTip, job.head], cwd) ?? '').trim();
+        baseSha = isGitCommitSha(mb) ? mb : baseTip;
+      } catch {
+        baseSha = baseTip;
+      }
+      ctx._mergeBaseCache ??= new Map();
+      ctx._mergeBaseCache.set(mbKey, baseSha);
+    }
+  }
+  if (!isGitCommitSha(baseSha) || !isGitCommitSha(job.head)) {
+    await ctx.git(['fetch', '-q', 'origin', '--', baseBranch], cwd).catch(() => {});
+    const fetchedTip = await resolveVerifiedBaseTip(ctx, job, cwd, { preferLiveBase: true });
+    if (isGitCommitSha(fetchedTip) && isGitCommitSha(job.head)) {
+      try {
+        const mb = String(await ctx.git(['merge-base', fetchedTip, job.head], cwd) ?? '').trim();
+        baseSha = isGitCommitSha(mb) ? mb : fetchedTip;
+      } catch {
+        baseSha = fetchedTip;
+      }
     }
   }
   if (!isGitCommitSha(baseSha) || !isGitCommitSha(job.head)) {
     return failedResult('could not resolve verified base/head commit SHA');
+  }
+  if (
+    job.testInventory?.head === job.head
+    && job.testInventory?.baseSha === baseSha
+    && job.testInventory.mode === mode
+    && job.testInventory.bodyKey === bodyKey
+    && !job.testInventory.failed
+  ) {
+    return job.testInventory;
   }
   let inventory = null;
   try {
@@ -9739,7 +9786,8 @@ export function pathRules({ changed = [], baseFiles = [], before = EMPTY_READ, a
   const wait = !unchecked.length ? null : byBindings.length ? `pdd-bindings.json cannot be read on main, so the owners of ${byBindings.slice(0, 10).map(c => c.path).join(', ')}${byBindings.length > 10 ? ` and ${byBindings.length - 10} more` : ''} are not checked`
     : `${unchecked.slice(0, 10).map(c => c.path).join(', ')} could not be read on main`;
   const uniqueReds = [...new Set(reds)];
-  return { reds: uniqueReds, owners, unowned: changed.filter(c => state(c) === 'unowned').map(c => c.path), unchecked: unchecked.map(c => c.path), wait, bindingsWait: byBindings.length > 0, quotes };
+  const letters = [...new Set(lines.map(l => l.path))].sort();
+  return { reds: uniqueReds, letters, owners, unowned: changed.filter(c => state(c) === 'unowned').map(c => c.path), unchecked: unchecked.map(c => c.path), wait, bindingsWait: byBindings.length > 0, quotes };
 }
 // The native path checks, once per head and PR body, from clean checkouts of the base tip and the head (pathRules).
 // R5 is only a hint for the reviewer: prompts at the head that mention a changed file that is unowned on the base.
@@ -9756,7 +9804,7 @@ async function pathChecks(ctx, job, body) {
   const baseRoot = await treeAt(ctx, job, 'base', tip), headRoot = await treeAt(ctx, job, 'head', job.head);
   const baseFiles = treeFiles(baseRoot), headFiles = treeFiles(headRoot);
   const before = ownerRead(ctx.fs, baseRoot, baseFiles), after = ownerRead(ctx.fs, headRoot, headFiles);
-  const { reds, owners, unowned, unchecked, wait, bindingsWait, quotes } = pathRules({ changed, baseFiles, before, after, body, adopting: /adopt\s+pdd/i.test(`${job.title}\n${job.body}`) });
+  const { reds, letters, owners, unowned, unchecked, wait, bindingsWait, quotes } = pathRules({ changed, baseFiles, before, after, body, adopting: /adopt\s+pdd/i.test(`${job.title}\n${job.body}`) });
   const hints = [];
   for (const path of unowned.filter(path => !path.endsWith('.prompt.md')))
     for (const prompt of headFiles.filter(file => file.endsWith('.prompt.md'))) { try { if (ctx.fs.readFileSync(join(headRoot, prompt), 'utf8').includes(path)) hints.push(`${prompt} mentions ${path}`); } catch { /* Skipped. */ } }
@@ -9777,7 +9825,7 @@ async function pathChecks(ctx, job, body) {
   const basePromptOwners = [...baseOwnersMap.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([prompt, filesSet]) => ({ prompt, files: [...filesSet].sort().slice(0, 10) }));
-  job.paths = { head: job.head, body: key, base: tip, reds, hints: hints.slice(0, 20), owners, unowned, unchecked, wait, bindingsWait, quotes, basePromptOwners };
+  job.paths = { head: job.head, body: key, base: tip, reds, letters, hints: hints.slice(0, 20), owners, unowned, unchecked, wait, bindingsWait, quotes, basePromptOwners };
   // P1 (debate B): the job's changed files go into its claim record for other jobs (a note and an order hint, no lock).
   const files = [...new Set(changed.map(c => c.path))].sort();
   if (!sameList(files, job.files ?? [])) { job.files = files; await writeClaimRecord(ctx, job, { files }); }
@@ -10869,7 +10917,9 @@ async function finishLocal(ctx, job, outcome, text) {
     await step('history', () => {
       const nowAt = ctx.now();
       const ev = honestEvidence(job) ?? null;
+      const letters = Array.isArray(job.paths?.letters) ? job.paths.letters : [];
       appendHistory(ctx, { at: nowAt, issue: job.issue, ...(jobIssues(job).length > 1 ? { issues: jobIssues(job) } : {}), ...(job.skill ? { skill: job.skill } : {}), outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: ev,
+        ...(letters.length ? { paths: { letters } } : {}),
         ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
         ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
         ...(job.end?.cause?.ask ? { ask: job.end.cause.ask } : {}), ...(job.decided ? { decided: oneLine(job.decided.question, 300) } : {}),
@@ -10877,7 +10927,6 @@ async function finishLocal(ctx, job, outcome, text) {
         ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}), ...(job.end?.cause?.owner ? { owner: job.end.cause.owner } : {}),
         ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}) });
       const metricsStateDir = ctx.ports.metricsStateDir ?? (basename(dirname(ctx.root)) === 'autopilot' ? dirname(dirname(ctx.root)) : join(ctx.root, '.metrics-state'));
-      const letters = Array.isArray(job.paths?.letters) ? job.paths.letters : [];
       const wallMin = job.telemetry?.phases?.wallClockMinutes ?? (Number.isFinite(job.started) && nowAt > job.started ? (nowAt - job.started) / 60000 : null);
       recordAutopilotMetric({
         repo: ctx.repo,
