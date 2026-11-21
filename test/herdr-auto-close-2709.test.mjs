@@ -422,13 +422,14 @@ test('2709 R1 P1-1: ensurePaneBudget passes closeGraceMs(ports) to sweepFinished
     return { closed: 0, reasonCounts: {} };
   };
 
+  const expectedPanes = [{ pane_id: 'p1', workspace_id: 'w1', tab_id: 't1', terminal_id: 'term1' }];
   await ensurePaneBudget(1, { env: {}, herdr, sweepFinished });
   await ensurePaneBudget(1, { env: { PDD_HERDR_CLOSE_GRACE_SEC: '0' }, herdr, sweepFinished });
   await ensurePaneBudget(1, { env: { PDD_HERDR_CLOSE_GRACE_SEC: '30' }, herdr, sweepFinished });
   assert.deepEqual(seen, [
-    { graceMs: DEFAULT_CLOSE_GRACE_MS },
-    { graceMs: 0 },
-    { graceMs: 30_000 },
+    { graceMs: DEFAULT_CLOSE_GRACE_MS, localOnly: true, paneInventory: expectedPanes },
+    { graceMs: 0, localOnly: true, paneInventory: expectedPanes },
+    { graceMs: 30_000, localOnly: true, paneInventory: expectedPanes },
   ]);
 
   const callsBefore = herdrCalls;

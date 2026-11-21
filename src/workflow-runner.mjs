@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a594be98a02c1c8bbeed81fd9669a1852827f975628b4924166949cc06ae6613).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: d37cdf1ddcf8f891ac4960637101903e22a8a1e84e0478b517030be461d4bec6).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -991,7 +991,8 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
       writeFileSync(join(frozenFolder,'declaration.json'),declarationBytes,{mode:0o600});
     } catch(error) {const code=/^[A-Z0-9_-]{1,32}$/.test(String(error.code ?? '')) ? error.code : 'local-operation-failed';return {exitCode:2,message:`Cannot adopt the approved corpus (unavailable: source selection or declaration freezing failed; ${code}). Repair the declaration/source or start an ordinary approval workflow. No new run was started.`};}
   }
-  try { await ensurePaneBudget(3, p); }
+  let preCheckedBudget = false;
+  try { await ensurePaneBudget(3, p); preCheckedBudget = true; }
   catch (error) {
     if (['herdr_pane_budget','invalid_pane_budget','invalid_close_grace'].includes(error.code)) return fail([
       ...(automatic && error.code === 'herdr_pane_budget' ? ['Automatic start deferred: panes.'] : []),
@@ -1073,7 +1074,7 @@ async function startRunUnlocked({ name, issue, agent = 'codex', model, herdrAgen
   }
   writeRun(run, p);
   const first = workflow.areas[0];
-  try { await startNextChat(run, p, packageRoot); }
+  try { await startNextChat(run, preCheckedBudget ? { ...p, sweepFinished: null, sweepIdle: null } : p, packageRoot); }
   catch (error) {
     if(error?.code==='workflow_run_save_failed')throw error;
     const warning=`The ${first.name} chat startup was not confirmed (${error.code ?? 'error'}).`;
@@ -2189,7 +2190,7 @@ async function readableFacts(run, area, p, evidence, { drafts = [], pending = fa
       ? buildHumanBoundaryCard({ root: run.root, promptPaths: prompts, storyPaths, changedPaths: files, since: Number.isFinite(run.startedAt) ? run.startedAt : 0, env: p.env })
       : null;
   return { layout, single: label === 'the PR', workflow: run.workflow, number: run.number, baseBranch: run.baseBranch, mode, pending, draft: run.draft === true, issueReference: evidence.issueReference,
-    stories, storyPaths, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : storyPaths.length ? 'the Story file could not be read' : 'no Story applies to this PR',
+    stories, storyPaths, storyNote: missing.length ? `${missing.join(', ')} has no "As a …, I want …, so that …" line` : stories.length ? null : storyPaths.length ? 'the Story file could not be read' : 'no Story applies to this PR',
     ...(boundary ? { boundary } : {}),
     fields, thisPr: holds.length ? `${others.length ? '' : 'no code change. '}It holds ${listed(holds)}.` : 'no code change.', diff,
     area: prArea({ area: fields.area, files, workflow: run.workflow }), title: fields.title,
@@ -4995,14 +4996,23 @@ export const recoverAutomaticRunOwner = saveGuard((args, ports) => lockedMutatio
   return result ? {...done(''),recovery:'recovered',claim:result.claim} : skip();
 }));
 // Admission reuses parking custody. It never starts a worker or releases a claim.
-export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {}, ports = {}) {
+export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs, localOnly = false, paneInventory} = {}, ports = {}) {
   const p = deps(ports), runs = allRuns({}, p).sort((a,b) => idleSince(a) - idleSince(b) || a.number - b.number);
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
-  let closed = 0, kept = 0, reasonCounts = {};
+  const livePaneIds = Array.isArray(paneInventory) ? new Set(paneInventory.map(row => row.pane_id)) : null;
+  const liveWorkspaceIds = Array.isArray(paneInventory) ? new Set(paneInventory.map(row => row.workspace_id)) : null;
+  const hasLivePane = run => !livePaneIds
+    || (run.layout?.workspaceId && liveWorkspaceIds.has(run.layout.workspaceId))
+    || (run.chats ?? []).some(chat => (chat.paneId && livePaneIds.has(chat.paneId)) || (chat.workspaceId && liveWorkspaceIds.has(chat.workspaceId)));
+  let closed = 0, kept = 0, reasonCounts = {}, checkedUsage = Array.isArray(paneInventory);
   for (const run of runs) {
     if (timeBudgetMs !== undefined && elapsed() - began >= timeBudgetMs) break;
-    if (need !== undefined) {const usage = await paneUsage(p); if (!usage.budget || usage.panes + need <= usage.budget) break;}
-    const owner = currentParkingOwner(run, p, {allowOlder:true});
+    if (need !== undefined && !checkedUsage) {
+      const usage = await paneUsage(p);
+      if (!usage.budget || usage.panes + need <= usage.budget) break;
+    }
+    if (!hasLivePane(run)) continue;
+    const owner = currentParkingOwner(run, p, {allowOlder: !localOnly});
     if (!owner || !validSavedAutomaticOrigin(run) || readRunOwnership(run.runDir, p) || explicitlyStopped(run, p)
       || ['parked', 'waking', 'releasing'].includes(run.parking?.phase)) continue;
     const blocker = idleParkingBlocker(run, p.now(), graceMs);
@@ -5011,8 +5021,10 @@ export async function sweepIdleRuns({graceMs = 60_000, need, timeBudgetMs} = {},
       coordinatorId: owner.coordinatorId, machine: owner.machine,
       blocker, expected: run, idleGraceMs: graceMs}, {...p, progressGuard: undefined});
     const latest = readRun(run.runDir);
-    closed += (latest?.runId === run.runId ? latest.chats ?? [] : []).filter(chat => Number.isFinite(chat.closed?.confirmedAt)
+    const newlyClosed = (latest?.runId === run.runId ? latest.chats ?? [] : []).filter(chat => Number.isFinite(chat.closed?.confirmedAt)
       && !(run.chats ?? []).some(old => sameChat(old, chat) && Number.isFinite(old.closed?.confirmedAt))).length;
+    closed += newlyClosed;
+    if (newlyClosed > 0 || result.recovery === 'parked') checkedUsage = false;
     if (result.recovery !== 'parked') kept++;
     reasonCounts = mergeReasonCounts(reasonCounts, result.reasonCounts ?? {});
   }
@@ -5041,7 +5053,9 @@ function cancelClosedWaiting(latest, at, reason) {
   if (validSavedAutomaticOrigin(latest)) latest.claimRelease ??= { state: 'pending', reason: 'cancel', at };
 }
 
-export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {}, ports = {}) {
+const hasNonMergedPr = run => (run.pr ?? []).some(pr => pr.state !== 'merged');
+
+export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs, localOnly = false, paneInventory} = {}, ports = {}) {
   const p = deps(ports);
   let defaultGraceMs;
   try { defaultGraceMs = closeGraceMs(p); }
@@ -5049,10 +5063,13 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
     if (error?.code === 'invalid_close_grace') return {...fail(error.message), closed: 0, kept: 0, reasonCounts: {}};
     throw error;
   }
-  const explicitTidy = graceMs === undefined && need === undefined && timeBudgetMs === undefined;
+  const explicitTidy = graceMs === undefined && need === undefined && timeBudgetMs === undefined && !localOnly;
   const runs = allRuns({cancelled:true}, p), kept = [], warnings = [];
   let closed = 0;
   const elapsed = p.elapsedNow ?? (() => Number(process.hrtime.bigint() / 1_000_000n)), began = elapsed();
+  const livePaneIds = localOnly && Array.isArray(paneInventory) ? new Set(paneInventory.map(row => row.pane_id)) : null;
+  const liveWorkspaceIds = localOnly && Array.isArray(paneInventory) ? new Set(paneInventory.map(row => row.workspace_id)) : null;
+  const localGraceMs = graceMs ?? defaultGraceMs;
   const reconcileSaved = targetRuns => {
     for (const run of targetRuns) {
       const reason = !readRunOwnership(run.runDir, p) ? closedWaitingReason(run) : null;
@@ -5081,6 +5098,19 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
   const sweepCandidates = async candidates => {
     for (const [index,{run,chat}] of candidates.entries()) {
       if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) { kept.push(...candidates.slice(index).map(({run,chat})=>({runId:run.runId,area:chat?.area ?? 'run shell',reason:'sweep-time-budget'}))); return false; }
+      if (livePaneIds) {
+        if (chat) {
+          if (!livePaneIds.has(chat.paneId) && (!chat.workspaceId || !liveWorkspaceIds.has(chat.workspaceId))) continue;
+          const end = finishedAt(run, chat);
+          if (!chat.closed && (!Number.isFinite(end) || p.now() < Math.max(end, chat.openedAt ?? 0) + localGraceMs)) {
+            kept.push({runId: run.runId, area: chat.area, reason: 'grace'});
+            continue;
+          }
+        } else {
+          const workspaces = [run.layout?.workspaceId, ...(run.chats ?? []).map(item => item.workspaceId)].filter(Boolean);
+          if (!workspaces.some(id => liveWorkspaceIds.has(id))) continue;
+        }
+      }
       if (readRunOwnership(run.runDir,p)) { kept.push({runId:run.runId,reason:'run-busy'}); continue; }
       let release;
       try {
@@ -5106,7 +5136,7 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
   };
   reconcileSaved(runs);
   const more = await sweepCandidates(candidatesFor(runs));
-  if (more && !dryRun && (need === undefined || graceMs === 0)) {
+  if (more && !dryRun && !localOnly && (need === undefined || graceMs === 0)) {
     let fits = false;
     if (need !== undefined) {
       try { const usage = await paneUsage(p); fits = !usage.budget || usage.panes + need <= usage.budget; } catch {}
@@ -5116,17 +5146,33 @@ export async function tidyRuns({dryRun = false, graceMs, need, timeBudgetMs} = {
       for (const run of runs) {
         if (timeBudgetMs !== undefined && elapsed()-began >= timeBudgetMs) break;
         if (ended(run) || run.state !== 'waiting' || readRunOwnership(run.runDir, p)) continue;
+        let endedNow = false;
         let release;
         try {
           release = acquireRunLock(run.runDir);
           const latest = readRun(run.runDir);
           if (!latest || latest.runId !== run.runId || ended(latest) || latest.state !== 'waiting') continue;
-          if (latest.pr?.length) await refreshPr(latest, {...p, progressGuard: undefined});
-          if (latest.state === 'waiting') await refreshWaitingIssue(latest, {...p, progressGuard: undefined});
-          if (ended(latest)) { Object.assign(run, latest); newlyEnded.push(run); }
+          if (closedWaitingReason(latest)) {
+            commitMaintenance(latest, p, fresh => {
+              const latestReason = closedWaitingReason(fresh);
+              if (latestReason) cancelClosedWaiting(fresh, fresh.prState?.checkedAt ?? fresh.updatedAt ?? p.now(), latestReason);
+            });
+          } else {
+            if (hasNonMergedPr(latest)) await refreshPr(latest, {...p, progressGuard: undefined});
+            if (latest.state === 'waiting') await refreshWaitingIssue(latest, {...p, progressGuard: undefined});
+          }
+          if (ended(latest)) { Object.assign(run, latest); endedNow = true; }
         } catch (error) {
           if (error?.code === 'workflow_run_save_failed') throw error;
         } finally { release?.(); }
+        if (endedNow) {
+          if (need !== undefined) {
+            for (let i = kept.length - 1; i >= 0; i--) if (kept[i].runId === run.runId) kept.splice(i, 1);
+            for (let i = warnings.length - 1; i >= 0; i--) if (warnings[i].runId === run.runId) warnings.splice(i, 1);
+            const keepGoing = await sweepCandidates(candidatesFor([run]));
+            if (!keepGoing) break;
+          } else newlyEnded.push(run);
+        }
       }
       if (newlyEnded.length) {
         const refreshedIds = new Set(newlyEnded.map(run => run.runId));
@@ -5329,8 +5375,16 @@ async function refreshPr(run, p) {
   const cwd=existsSync(run.root)?run.root:run.sourceRoot,observations=[];
   // #3042: the read of a PR that pdd published with readable facts also gives its description, head and comments
   // (`view`), so that the refresh below of its readable top needs no other read when nothing changed.
-  for(const pr of run.pr){const {view,...fields}=await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url,...(pr.readable?.facts?{view:true}:{})},p.commandPorts);observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view});}
-  await captureClosedCi({ ...run, pr: observations.map(row => ({ ...run.pr.find(pr => pr.url === row.url), ...row.fields, ...(row.view?.head ? { headSha: row.view.head } : {}) })) }, p);
+  for(const pr of run.pr){
+    if(pr.state==='merged'){
+      observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields:{state:pr.state,...(pr.ci!==undefined?{ci:pr.ci}:{})},view:null,skippedMerged:true});
+      continue;
+    }
+    const {view,...fields}=await (p.readPrStatus??readWorkflowPrStatus)({cwd,url:pr.url,...(pr.readable?.facts?{view:true}:{})},p.commandPorts);
+    observations.push({url:pr.url,number:pr.number,stage:pr.stage,fields,view,skippedMerged:false});
+  }
+  const liveObservations=observations.filter(row=>!row.skippedMerged);
+  if(liveObservations.length) await captureClosedCi({ ...run, pr: liveObservations.map(row => ({ ...run.pr.find(pr => pr.url === row.url), ...row.fields, ...(row.view?.head ? { headSha: row.view.head } : {}) })) }, p);
   const refreshTops=async()=>{
     const observed=new Map(observations.map(observation=>[observation.url,{...observation.fields,view:observation.view}]));
     for(const pr of run.pr) if(pr.readable?.facts && observed.get(pr.url)?.state==='open') for(const line of await refreshReadableTop(run,pr,p,{observed,cwd})) p.say(line);
@@ -5669,20 +5723,95 @@ function savedStepResults(run) {
     pddResults: record.pddResults ?? [] }));
 }
 
-async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, p) {
-  const reading = runs.filter(run => run.state === 'waiting' && run.pr?.length).reduce((sum, run) => sum + run.pr.length, 0);
+async function runBounded(items, limit, worker) {
+  if (!items.length) return;
+  const concurrency = Math.max(1, Math.min(limit, items.length));
+  let index = 0;
+  let aborted = false;
+  let firstError = null;
+  const workers = Array.from({ length: concurrency }, async () => {
+    while (!aborted) {
+      const i = index++;
+      if (i >= items.length) break;
+      try { await worker(items[i], i); }
+      catch (error) {
+        if (!firstError) firstError = error;
+        aborted = true;
+        return;
+      }
+    }
+  });
+  await Promise.allSettled(workers);
+  if (firstError) throw firstError;
+}
+
+function snapshotHerdrPorts(p) {
+  const base = herdrCommand(p);
+  const memoize = fn => {
+    let pending = null;
+    return async () => {
+      if (!pending) pending = Promise.resolve().then(fn).then(value => ({ ok: true, value }), error => ({ ok: false, error }));
+      const outcome = await pending;
+      if (!outcome.ok) throw outcome.error;
+      return outcome.value;
+    };
+  };
+  const paneList = memoize(() => base(['pane', 'list']));
+  const workspaceList = memoize(() => base(['workspace', 'list']));
+  const tabLists = new Map();
+  const herdr = async args => {
+    if (args[0] === 'pane' && args[1] === 'list') {
+      const reply = await paneList();
+      if (args.length === 2) return reply;
+      if (args.length === 4 && args[2] === '--workspace' && Array.isArray(reply?.result?.panes)) {
+        const workspaceId = args[3];
+        return { ...reply, result: { ...reply.result, panes: reply.result.panes.filter(row => row?.workspace_id === workspaceId) } };
+      }
+      return reply;
+    }
+    if (args[0] === 'workspace' && args[1] === 'list' && args.length === 2) return workspaceList();
+    if (args[0] === 'tab' && args[1] === 'list' && args.length === 4 && args[2] === '--workspace') {
+      const workspaceId = args[3];
+      if (!tabLists.has(workspaceId)) tabLists.set(workspaceId, memoize(() => base(args)));
+      return tabLists.get(workspaceId)();
+    }
+    return base(args);
+  };
+  return { ...p, herdr };
+}
+
+async function listStatus(runs, { json, cancelled, scope, snapshotOnly = false }, p) {
+  const waitingRuns = snapshotOnly ? [] : runs.filter(run => !readRunOwnership(run.runDir, p) && run.state === 'waiting');
+  const reading = waitingRuns.reduce((sum, run) => sum + (closedWaitingReason(run) ? 0 : (run.pr ?? []).filter(pr => pr.state !== 'merged').length), 0);
   if (reading) p.say(`Reading ${reading} PR${reading === 1 ? '' : 's'} from GitHub…`);
-  for (const run of runs) if (!snapshotOnly && !readRunOwnership(run.runDir,p) && run.state === 'waiting') {
+  await runBounded(waitingRuns, 6, async run => {
     try {
-      if (run.pr?.length) await refreshPr(run, p);
+      if (closedWaitingReason(run)) {
+        let release;
+        try {
+          release = acquireRunLock(run.runDir);
+          commitMaintenance(run, p, latest => {
+            const latestReason = closedWaitingReason(latest);
+            if (latestReason) cancelClosedWaiting(latest, latest.prState?.checkedAt ?? latest.updatedAt ?? p.now(), latestReason);
+          });
+        } catch (error) {
+          if (error?.code === 'workflow_run_save_failed') throw error;
+        } finally { release?.(); }
+        if (ended(run) || closedWaitingReason(run)) return;
+      }
+      if (run.state === 'waiting' && hasNonMergedPr(run)) await refreshPr(run, p);
       if (run.state === 'waiting') await refreshWaitingIssue(run, p);
-    } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; /* A PR or issue read failure keeps the saved state. */ }
-  }
+    } catch (error) {
+      if (error?.code === 'workflow_run_save_failed') throw error;
+      /* A PR or issue read failure keeps the saved state. */
+    }
+  });
+  const statusPorts = snapshotOnly ? p : snapshotHerdrPorts(p);
   const all = [];
   for (const run of runs) {
-    const ordinaryOwnership=readRunOwnership(run.runDir,p);
-    const health = {}, chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, health);
-    const item = summary(run, p.timeZone, chat, { ...(ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p)), ...health, now: p.now(), suite: readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p) });
+    const ordinaryOwnership = readRunOwnership(run.runDir, p);
+    const health = {}, chat = ordinaryOwnership || snapshotOnly ? null : await chatState(run, statusPorts, health);
+    const item = summary(run, p.timeZone, chat, { ...(ended(run) || ordinaryOwnership || snapshotOnly ? {} : await gateFacts(run, p)), ...health, now: p.now(), suite: readSuiteProgress({ cwd: run.root, since: run.updatedAt ?? 0, env: p.env }, p) });
     const snapshot = requestSnapshot(run, p);
     all.push({ ...item, chats: run.chats ?? [], steps: savedStepResults(run), ...snapshot, ordinaryOwnership, line: [item.line, ...cleanupLines(run), ...ownershipLines(ordinaryOwnership), ...requestLines(snapshot, { openOnly: true, ended: ended(run), currentArea: run.areas[run.area]?.name, p })].join('\n') });
   }
@@ -5690,27 +5819,29 @@ async function listStatus(runs, { json, cancelled, scope, snapshotOnly=false }, 
   const shown = all.filter(item => cancelled || item.group !== 'cancelled')
     .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   let herdr = null, inventory = [];
-  try {
-    herdr = {...await paneUsage({...p,onPaneUsage:rows=>{inventory=rows;}}), finishedOpen: 0};
-    const machineRuns = allRuns({cancelled:true},p);
-    herdr.owners = paneOwners(inventory, machineRuns).owners;
-    herdr.warning = herdr.budget && herdr.panes >= Math.ceil(herdr.budget * 0.9)
-      ? `Herdr pane capacity is near its limit (${herdr.panes} of ${herdr.budget}). Run pdd workflow tidy.` : null;
-    const reply = await herdrCommand(p)(['workspace', 'list']), workspaces = reply?.result?.workspaces;
-    if (reply?.result?.type !== 'workspace_list' || !Array.isArray(workspaces)
-      || workspaces.some(w => typeof w?.workspace_id !== 'string' || !w.workspace_id)
-      || new Set(workspaces.map(w => w.workspace_id)).size !== workspaces.length) throw Error('invalid_workspace_inventory');
-    const known = new Set(machineRuns.flatMap(run => [run.layout?.workspaceId, run.layout?.repoWorkspaceId,
-      ...(run.chats ?? []).flatMap(chat => [chat.workspaceId, chat.repoWorkspaceId])]).filter(Boolean));
-    herdr.unownedWorkspaces = workspaces.filter(w => !known.has(w.workspace_id)).map(w => ({workspaceId: w.workspace_id,
-      closeCommand: `herdr --session pdd workspace close ${shellQuote(w.workspace_id)}`}));
-    for (const run of machineRuns) {
-      if (readRunOwnership(run.runDir,p)) continue;
-      const snapshot = structuredClone(run);
-      snapshot.chats = (snapshot.chats ?? []).filter(chat => !Number.isFinite(chat.closed?.confirmedAt));
-      herdr.finishedOpen += (await closeFinishedChats(snapshot, {...p, dryRun:true})).closed;
-    }
-  } catch {}
+  if (!snapshotOnly) {
+    try {
+      herdr = { ...await paneUsage({ ...statusPorts, onPaneUsage: rows => { inventory = rows; } }), finishedOpen: 0 };
+      const machineRuns = allRuns({ cancelled: true }, p);
+      herdr.owners = paneOwners(inventory, machineRuns).owners;
+      herdr.warning = herdr.budget && herdr.panes >= Math.ceil(herdr.budget * 0.9)
+        ? `Herdr pane capacity is near its limit (${herdr.panes} of ${herdr.budget}). Run pdd workflow tidy.` : null;
+      const reply = await herdrCommand(statusPorts)(['workspace', 'list']), workspaces = reply?.result?.workspaces;
+      if (reply?.result?.type !== 'workspace_list' || !Array.isArray(workspaces)
+        || workspaces.some(w => typeof w?.workspace_id !== 'string' || !w.workspace_id)
+        || new Set(workspaces.map(w => w.workspace_id)).size !== workspaces.length) throw Error('invalid_workspace_inventory');
+      const known = new Set(machineRuns.flatMap(run => [run.layout?.workspaceId, run.layout?.repoWorkspaceId,
+        ...(run.chats ?? []).flatMap(chat => [chat.workspaceId, chat.repoWorkspaceId])]).filter(Boolean));
+      herdr.unownedWorkspaces = workspaces.filter(w => !known.has(w.workspace_id)).map(w => ({ workspaceId: w.workspace_id,
+        closeCommand: `herdr --session pdd workspace close ${shellQuote(w.workspace_id)}` }));
+      for (const run of machineRuns) {
+        if (readRunOwnership(run.runDir, p)) continue;
+        const snapshot = structuredClone(run);
+        snapshot.chats = (snapshot.chats ?? []).filter(chat => !Number.isFinite(chat.closed?.confirmedAt));
+        herdr.finishedOpen += (await closeFinishedChats(snapshot, { ...statusPorts, dryRun: true })).closed;
+      }
+    } catch {}
+  }
   if (json) return done(JSON.stringify({ herdr, runs: shown.map(({ line, ...item }) => item) }, null, 2));
   const paneLines = herdr ? [`Herdr session pdd: ${herdr.panes} of ${herdr.budget} panes. ${herdr.finishedOpen} eligible finished chats.${herdr.finishedOpen ? ' Run pdd workflow tidy.' : ''} ${p.describePaneOwners(inventory)}`,
     ...(herdr.warning ? [herdr.warning] : []), ...(herdr.unownedWorkspaces ?? []).map(w => `Unowned workspace ${JSON.stringify(w.workspaceId)}: ${w.closeCommand}`)] : [];
@@ -5734,21 +5865,23 @@ async function showStoryCardCommand({ ref, cwd }, ports) {
   return done(await cardText(run, p, { changes, results }));
 }
 
-async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled = false }, ports, snapshotOnly=false) {
+async function runStatusCommand({ ref, cwd, all = false, json = false, cancelled = false, local = false }, ports, snapshotOnly = false) {
+  const localMode = Boolean(snapshotOnly || local);
   const p = deps(ports);
-  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus(allRuns({ cancelled }, p), { json, cancelled, scope: 'on this machine', snapshotOnly }, p);
-  if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository', snapshotOnly }, p);
+  if (ref === undefined && (all || !(await gitContext(cwd, p)))) return listStatus(allRuns({ cancelled }, p), { json, cancelled, scope: 'on this machine', snapshotOnly: localMode }, p);
+  if (ref === undefined && !(await runForWorktree(cwd, p))) return listStatus(await listRuns({ cwd, cancelled }, p), { json, cancelled, scope: 'in this repository', snapshotOnly: localMode }, p);
   const found = await resolveRun(ref, { cwd }, p);
   if (found.error) return fail(found.error);
   // A login file of a launch that never ran must not stay in the run folder.
-  removeStaleLoginFiles(found.run.runDir);
-  if (found.run.pr?.length && found.run.state !== 'cancelled') p.say(`Reading ${found.run.pr.length === 1 ? 'the PR' : `${found.run.pr.length} PRs`} from GitHub…`);
-  const ordinaryOwnership=readRunOwnership(found.run.runDir,p);
-  if(!ordinaryOwnership&&!snapshotOnly){
+  if (!localMode) removeStaleLoginFiles(found.run.runDir);
+  const readingSingle = !localMode && found.run.state !== 'cancelled' ? (found.run.pr ?? []).filter(pr => pr.state !== 'merged').length : 0;
+  if (readingSingle) p.say(`Reading ${readingSingle === 1 ? 'the PR' : `${readingSingle} PRs`} from GitHub…`);
+  const ordinaryOwnership = readRunOwnership(found.run.runDir, p);
+  if (!ordinaryOwnership && !localMode) {
     await refreshPr(found.run, p);
-    if (found.run.state === 'waiting') { try { await refreshWaitingIssue(found.run, p); } catch(error) { if(error?.code==='workflow_run_save_failed')throw error; } }
+    if (found.run.state === 'waiting') { try { await refreshWaitingIssue(found.run, p); } catch (error) { if (error?.code === 'workflow_run_save_failed') throw error; } }
   }
-  const run = found.run, facts = ended(run)||ordinaryOwnership||snapshotOnly ? {} : await gateFacts(run, p), chat = ordinaryOwnership||snapshotOnly?null:await chatState(run, p, facts);
+  const run = found.run, facts = ended(run) || ordinaryOwnership || localMode ? {} : await gateFacts(run, p), chat = ordinaryOwnership || localMode ? null : await chatState(run, p, facts);
   facts.suite = readSuiteProgress({cwd:run.root, since:run.updatedAt ?? 0, env:p.env}, p);
   facts.now = p.now();
   const snapshot = requestSnapshot(run, p);

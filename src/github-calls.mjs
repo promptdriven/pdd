@@ -1,4 +1,4 @@
-// Generated from prompts/cli/github-calls.prompt.md (sha256: 0f7266eabf6a935883bcb542a1a1e4608121932d622abc73d438a2326202458b).
+// Generated from prompts/cli/github-calls.prompt.md (sha256: e30d281a690c36e394b768ad216faeafcf0773f7a2b81ed39d860408fa481158).
 import * as nativeFs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -156,21 +156,68 @@ export function countGithubCalls(exec, { ledger, purpose, now = Date.now } = {})
   };
 }
 
+const dirStamp = (fs, folder) => {
+  if (typeof fs.statSync !== 'function') return undefined;
+  try {
+    const st = fs.statSync(folder);
+    return `${st.mtimeMs}:${st.ctimeMs}:${st.nlink ?? ''}`;
+  } catch { return null; }
+};
+
 // A counter for a pdd command outside the tick: the ledger of the repository that each call names, only when
 // Autopilot already keeps a ledger for it on this machine. Other repositories, and test doubles of gh, write nothing.
 // The folder is found at each call, so a later HOME applies.
 export function nativeGithubCounter(exec, { env = process.env, stateRoot, purpose, fs = nativeFs, now = Date.now, costRun, costRecord = recordCostGithub } = {}) {
+  const commonDirCache = new Map();
+  const costRunCache = new Map();
   const findCostRun = costRun ?? (async options => {
-    if (typeof options.cwd !== 'string' || !fs.existsSync(join(options.cwd, '.git'))) return null;
-    const result = await exec('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: options.cwd });
-    const folder = join(String(result.stdout).trim(), 'pdd', 'runs');
-    let names; try { names = fs.readdirSync(folder); } catch { return null; }
-    for (const name of names.filter(name => /^[1-9][0-9]*$/.test(name))) {
-      try {
-        const run = JSON.parse(fs.readFileSync(join(folder, name, 'status.json'), 'utf8'));
-        if (run.root && resolve(run.root) === resolve(options.cwd)) return run.runDir;
-      } catch {}
+    if (typeof options.cwd !== 'string' || !options.cwd) return null;
+    const cwd = resolve(options.cwd);
+    const cached = costRunCache.get(cwd);
+    if (cached?.runDir) return cached.runDir;
+    if (!fs.existsSync(join(cwd, '.git'))) return null;
+    let commonDirPromise = commonDirCache.get(cwd);
+    if (!commonDirPromise) {
+      commonDirPromise = Promise.resolve()
+        .then(() => exec('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd }))
+        .then(result => {
+          const dir = String(result?.stdout ?? '').trim();
+          if ((result?.code !== undefined && result.code !== 0) || !dir) throw Error('git common-dir unavailable');
+          return dir;
+        });
+      commonDirCache.set(cwd, commonDirPromise);
     }
+    let commonDir;
+    try { commonDir = await commonDirPromise; }
+    catch (error) { commonDirCache.delete(cwd); throw error; }
+    const latest = costRunCache.get(cwd);
+    if (latest?.runDir) return latest.runDir;
+    const folder = join(commonDir, 'pdd', 'runs');
+    const stamp = dirStamp(fs, folder);
+    if (latest && latest.runDir === null && latest.stamp === stamp
+        && !(latest.missingStatus?.some(name => fs.existsSync(join(folder, name, 'status.json'))))) {
+      return null;
+    }
+    let names;
+    try { names = fs.readdirSync(folder); }
+    catch {
+      costRunCache.set(cwd, { runDir: null, stamp, missingStatus: [] });
+      return null;
+    }
+    const missingStatus = [];
+    for (const name of names.filter(name => /^[1-9][0-9]*$/.test(name))) {
+      const statusFile = join(folder, name, 'status.json');
+      try {
+        const run = JSON.parse(fs.readFileSync(statusFile, 'utf8'));
+        if (run.root && resolve(run.root) === cwd) {
+          costRunCache.set(cwd, { runDir: run.runDir });
+          return run.runDir;
+        }
+      } catch {
+        if (!fs.existsSync(statusFile)) missingStatus.push(name);
+      }
+    }
+    costRunCache.set(cwd, { runDir: null, stamp, missingStatus });
     return null;
   });
   const countedExec = async (file, args, options = {}) => {

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/command-catalog.prompt.md (sha256: 5b1c804d7704b0ea710054eacf4307e3b5c9a4110e42431ce9f19027fec12318).
+// Generated from prompts/cli/command-catalog.prompt.md (sha256: cecf3cbea83fe385a315d58d34958791c9e414f366ca3ad625eb232e5ffb4b5e).
 const form = (form, description) => Object.freeze({ form, description });
 // The one place for the words of five commands; a later rename changes only NAMES.
 export const NAMES = Object.freeze({ test: 'test', lint: 'lint', simulate: 'simulate', run: 'run', requestUptake: 'ack' });
@@ -206,8 +206,8 @@ const routes = [
     options:[{name:'--model',kind:'text'},{name:'--herdr-agent-name',kind:'text'},{name:'--codex-threads',kind:'text'},{name:'--agent',kind:'text',choices:['codex','claude','gemini','agy']},{name:'--base',kind:'text'},{name:'--adopt-corpus',kind:'text'},{name:'--draft',kind:'flag'},{name:'--through',kind:'value',choices:['prompt-pr','code']},{name:'--origin',kind:'value',choices:['manual','autopilot','unknown']},{name:'--decision-id',kind:'text'},{name:'--outcome',kind:'value',choices:['code','prompt-only']}],
     forms:[form(`pdd workflow ${run} NAME ISSUE [--agent codex|claude|gemini|agy|ENTRY] [--base BRANCH] [--draft] [--model MODEL] [--herdr-agent-name NAME] [--codex-threads N]`, 'Start the first area chat for a GitHub issue in Herdr and exit; ENTRY is a name from ~/.config/pdd/agents.json; --base selects an existing origin branch (default: repository default); --draft requests draft PRs for this run; --adopt-corpus FILE adopts exact unchanged approved content for a fresh replay-evidence-enabled workflow; --origin, --decision-id and --outcome record optional metrics metadata; --through prompt-pr stops after PR 1 (normal, automatic or strict runs) and --through code goes on to the code PR in a normal run; pdd later pushes the issue branch and opens a real PR.')] },
   { id: 'workflow.status', prefix: ['workflow', 'status'], local: 'workflow-status',
-    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--all',kind:'flag'},{name:'--cancelled',kind:'flag'},{name:'--json',kind:'flag'}],
-    forms: [form('pdd workflow status [ISSUE] [--all] [--cancelled] [--json]', 'Show this repo\'s runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first.')] },
+    operands: [{name:'issue',type:'issue',optional:true}], options: [{name:'--all',kind:'flag'},{name:'--cancelled',kind:'flag'},{name:'--local',kind:'flag'},{name:'--json',kind:'flag'}],
+    forms: [form('pdd workflow status [ISSUE] [--all] [--cancelled] [--local] [--json]', 'Show this repo\'s runs, or one run with its area, gate, chat and PRs. --all (or outside a repo): every run on this machine, people-waiting first. --local reads saved local state only (no GitHub or Herdr calls).')] },
   { id: 'workflow.view', prefix: ['workflow', 'view'], local: 'workflow-view',
     operands: [{name:'issue',type:'issue'}], options: [],
     forms: [form('pdd workflow view ISSUE', 'Read-only review of gates, approvals, files, PRs and Simulator links; never start or resume a chat.')] },
