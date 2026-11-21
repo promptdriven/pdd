@@ -37,7 +37,7 @@
     "release:publish": "node scripts/publish-release.mjs"
   },
   "dependencies": {
-    "@promptdriven/runtime-client": "1.1.0"
+    "@promptdriven/runtime-client": "1.1.1"
   },
   "engines": {
     "node": ">=22.16.0"

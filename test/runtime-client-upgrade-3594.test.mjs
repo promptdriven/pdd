@@ -98,9 +98,83 @@ function makeCliStory(repo) {
   writeFileSync(join(repo, 'tests/place-order.json'), `${JSON.stringify(doc, null, 2)}\n`);
 }
 
-test('#3431 / #3594: runtime-client 1.1.0 accepts pdd-bindings.json { module, prompt } without stories on pdd test --files', async t => {
+function compareExactSemver(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  }
+  return 0;
+}
+
+function makeReconciliationBody(requestId, overrides = {}) {
+  return {
+    schema_version: 'pdd-runtime.check-reconciliation.v1',
+    read_only: true,
+    request_id: requestId,
+    job_id: requestId,
+    command: 'check',
+    disposition: {
+      state: 'refused',
+      verdict: 'refused',
+      terminal: true,
+      refusal_code: 'capacity-full',
+      created_at: '2026-11-21T00:00:00Z',
+      finished_at: '2026-11-21T00:00:01Z',
+      expired: false,
+      purged: false,
+    },
+    dispatch: { status: 'not_started', proven: true },
+    accounting: {
+      status: 'complete_zero',
+      accounting_complete: true,
+      calls: 0,
+      known_calls: 0,
+      unknown_calls: 0,
+      cap: 40,
+    },
+    retry: {
+      blocked: false,
+      safe_next_action: 'Safe to submit a replacement check with a new request ID.',
+    },
+    evidence: {
+      proof_basis: ['server_receipt_not_dispatched'],
+      contradictions: [],
+      ledger_row_present: false,
+      report_status: 'missing',
+      report_dispatch: 'not_started',
+      report_accounting_complete: true,
+      prepared_receipt_status: 'valid',
+      provision_phase: 'never_provisioned',
+      accounting_custody: 'protected',
+      call_records_count: 0,
+      call_ledger_status: 'absent',
+      call_ledger_started: false,
+      call_ledger_counts: null,
+    },
+    provenance: {
+      source_sha256: 'a'.repeat(64),
+      engine_sha: 'b'.repeat(40),
+      server_commit: 'c'.repeat(40),
+      sources_consulted: ['receipt_store'],
+    },
+    ...overrides,
+  };
+}
+
+test('#3431 / #3594: runtime-client >= 1.1.1 pins exact semver, accepts pdd-bindings.json without stories, and supports bounded pdd-workspace.json', async t => {
   const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
-  assert.equal(pkg.dependencies[RUNTIME_CLIENT_PKG], '1.1.0');
+  const lockfile = JSON.parse(readFileSync(join(repoRoot, 'package-lock.json'), 'utf8'));
+  const pinned = pkg.dependencies[RUNTIME_CLIENT_PKG];
+  const locked = lockfile.packages[`node_modules/${RUNTIME_CLIENT_PKG}`];
+  assert.equal(typeof pinned, 'string');
+  assert.match(pinned, /^\d+\.\d+\.\d+$/, `expected exact semver pin, got ${JSON.stringify(pinned)}`);
+  assert.ok(compareExactSemver(pinned, '1.1.1') >= 0, `expected pinned version >= 1.1.1, got ${pinned}`);
+  assert.equal(lockfile.packages[''].dependencies[RUNTIME_CLIENT_PKG], pinned);
+  assert.equal(locked.version, pinned);
+  assert.equal(locked.resolved, `https://registry.npmjs.org/${RUNTIME_CLIENT_PKG}/-/runtime-client-${pinned}.tgz`);
+
+  // 1. pdd-bindings.json { module, prompt } without stories works on pdd test --files.
   const setup = harbor(t, repo => {
     mkdirSync(join(repo, 'src'), { recursive: true });
     writeFileSync(join(repo, 'src/place-order.mjs'), 'export function placeOrder() { return true; }\n');
@@ -131,6 +205,51 @@ test('#3431 / #3594: runtime-client 1.1.0 accepts pdd-bindings.json { module, pr
   assert.equal(cliCode, 0, stderr.text);
   const cliJson = JSON.parse(stdout.text);
   assert.ok(cliJson.files.some(f => f.path === PLACE));
+
+  // 2. Bounded pdd-workspace.json excluding src/ still allows pdd-bindings.json to reference Git-visible src/ modules (1.1.1 fix).
+  const boundedSetup = harbor(t, repo => {
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    writeFileSync(join(repo, 'src/place-order.mjs'), 'export function placeOrder() { return true; }\n');
+    writeFileSync(
+      join(repo, 'pdd-workspace.json'),
+      `${JSON.stringify({ allowed_paths: ['prompts/', 'user_stories/', 'tests/'] }, null, 2)}\n`,
+    );
+    writeFileSync(
+      join(repo, 'pdd-bindings.json'),
+      `${JSON.stringify({
+        schema_version: 'pdd.bindings.v1',
+        modules: [{ module: 'src/place-order.mjs', stories: ['user_stories/place-order.md'], prompt: PLACE }],
+      }, null, 2)}\n`,
+    );
+  });
+
+  const boundedFiles = portsFor({ HOME: boundedSetup.home, PDD_STATE_DIR: boundedSetup.state });
+  assert.equal(
+    await seam.local({ what: 'files', words: ['place-order'], options: { '--json': true }, cwd: boundedSetup.repo }, boundedFiles.ports),
+    0,
+    boundedFiles.ports.stderr.text,
+  );
+  assert.ok(JSON.parse(boundedFiles.ports.stdout.text).files.some(f => f.path === PLACE));
+
+  const boundedBindings = portsFor({ HOME: boundedSetup.home, PDD_STATE_DIR: boundedSetup.state });
+  assert.equal(
+    await seam.local({ what: 'explain-bindings', words: ['place-order'], options: { '--json': true }, cwd: boundedSetup.repo }, boundedBindings.ports),
+    0,
+    boundedBindings.ports.stderr.text,
+  );
+
+  // Also verify real 1.1.1 check run computes binding coverage cleanly under bounded pdd-workspace.json.
+  const fake = await fakeRuntime(t, (entry, f) => f.normal(entry));
+  const boundedCheck = portsFor({ HOME: boundedSetup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: boundedSetup.state });
+  assert.equal(
+    await seam.check({ words: ['place-order'], options: { '--json': true }, cwd: boundedSetup.repo }, boundedCheck.ports),
+    0,
+    boundedCheck.ports.stderr.text,
+  );
+  const checkJson = JSON.parse(boundedCheck.ports.stdout.text);
+  assert.equal(checkJson.coverage?.available, true);
+  assert.equal(checkJson.coverage?.bound, 1);
+  assert.equal(checkJson.coverage?.total, 1);
 });
 
 test('#3594: pdd test --fresh parses cleanly, bypasses local cache reuse, sends fresh: true, and rejects invalid mixes', async t => {
@@ -351,7 +470,7 @@ test('#3594: pdd test --read --details passes through cleanly without rejecting 
   );
 });
 
-test('#3594: pdd test --reconcile fails closed on 1.1.0, validates inputs, supports mocked read-only JSON & text paths, and reads saved targets', async t => {
+test('#3594: pdd test --reconcile exercises real >= 1.1.1 read-only HTTP reconciliation, validates inputs, preserves mocked older-client fail-closed path, and reads saved targets', async t => {
   assert.deepEqual(parseArgv(['test', '--reconcile', VALID_REQUEST_ID, '--json']).options, {
     '--reconcile': VALID_REQUEST_ID,
     '--json': true,
@@ -359,22 +478,173 @@ test('#3594: pdd test --reconcile fails closed on 1.1.0, validates inputs, suppo
   assert.throws(() => parseArgv(['test', '--reconcile', 'not-a-uuid']), CommandInputError);
 
   const setup = harbor(t);
+  const completeZeroBody = makeReconciliationBody(VALID_REQUEST_ID);
+  let reconcileReply = () => ({ status: 200, json: completeZeroBody });
+  const fake = await fakeRuntime(t, entry => {
+    if (entry.method === 'GET' && entry.url === `/v1/runs/${VALID_REQUEST_ID}/reconciliation`) {
+      return reconcileReply(entry);
+    }
+    throw new Error(`unexpected runtime call during --reconcile: ${entry.method} ${entry.url}`);
+  });
 
-  // 1. Direct seam helpers fail closed cleanly on 1.1.0 (never TypeError).
-  await assert.rejects(
-    () => seam.reconcileCheckReceipt({ cwd: setup.repo, requestId: VALID_REQUEST_ID }),
-    err => err?.code === 'reconciliation-unsupported' && err?.exitCode === 5 && err.message.includes('>= 1.2.0') && err.message.includes(RUNTIME_CLIENT_PKG),
-  );
+  // 1. Real >= 1.1.1 projectCheckReconciliation projects valid HTTP 200, 410, 404, and contradictory payloads fail-closed.
+  const projectedOk = seam.projectCheckReconciliation({
+    request_id: VALID_REQUEST_ID,
+    status: 200,
+    body: completeZeroBody,
+  });
+  assert.equal(projectedOk.available, true);
+  assert.equal(projectedOk.http_status, 200);
+  assert.equal(projectedOk.dispatch.status, 'not_started');
+  assert.equal(projectedOk.dispatch.proven, true);
+  assert.equal(projectedOk.accounting.status, 'complete_zero');
+  assert.equal(projectedOk.retry.blocked, false);
+
+  const projectedExpired = seam.projectCheckReconciliation({
+    request_id: VALID_REQUEST_ID,
+    status: 410,
+    body: null,
+  });
+  assert.equal(projectedExpired.available, false);
+  assert.equal(projectedExpired.http_status, 410);
+  assert.equal(projectedExpired.error_code, 'result-expired');
+  assert.equal(projectedExpired.disposition.expired, true);
+  assert.equal(projectedExpired.retry.blocked, true);
+
+  const projectedMissing = seam.projectCheckReconciliation({
+    request_id: VALID_REQUEST_ID,
+    status: 404,
+    body: null,
+  });
+  assert.equal(projectedMissing.available, false);
+  assert.equal(projectedMissing.error_code, 'run-not-found');
+  assert.equal(projectedMissing.retry.blocked, true);
+
+  const projectedContradictory = seam.projectCheckReconciliation({
+    request_id: VALID_REQUEST_ID,
+    status: 200,
+    body: makeReconciliationBody(VALID_REQUEST_ID, {
+      accounting: {
+        status: 'complete_zero',
+        accounting_complete: true,
+        calls: 1,
+        known_calls: 1,
+        unknown_calls: 0,
+        cap: 40,
+      },
+    }),
+  });
+  assert.equal(projectedContradictory.available, false);
+  assert.equal(projectedContradictory.error_code, 'contradictory-reconciliation');
+  assert.equal(projectedContradictory.retry.blocked, true);
+
   assert.throws(
-    () => seam.projectCheckReconciliation({ requestId: VALID_REQUEST_ID }),
-    err => err?.code === 'reconciliation-unsupported' && err?.exitCode === 5 && err.message.includes('>= 1.2.0'),
+    () => seam.projectCheckReconciliation({ request_id: '', status: 200, body: null }),
+    err => err?.code === 'invalid-request-id',
   );
   await assert.rejects(
     () => seam.reconcileCheckReceipt({ cwd: setup.repo, requestId: 'bad-id' }),
     err => err?.code === 'invalid-request-id' && err?.exitCode === 2,
   );
 
-  // 2. CLI fallback on 1.1.0 fails closed with exit 5 and actionable upgrade message.
+  // 2. Real >= 1.1.1 seam.reconcileCheckReceipt & CLI runPdd end-to-end against loopback fakeRuntime (read-only GET, 0 POSTs).
+  const batchName = '20261121-000100-ab12';
+  const batchDir = join(setup.state, 'batches', batchName);
+  mkdirSync(batchDir, { recursive: true });
+  const batchPath = join(batchDir, 'batch.json');
+  const savedBatch = {
+    batch: batchName,
+    intent: 'check',
+    root: setup.repo,
+    rows: [
+      { test: 'tests/place-order.json', story: 'user_stories/place-order.md', state: 'unknown', request_ids: [VALID_REQUEST_ID, 'not-a-uuid', VALID_REQUEST_ID] },
+      { test: 'tests/unknown-item.json', story: 'user_stories/unknown-item.md', state: 'passed', request_ids: ['22222222-2222-4222-8222-222222222222'] },
+    ],
+  };
+  const rawSaved = `${JSON.stringify(savedBatch, null, 2)}\n`;
+  writeFileSync(batchPath, rawSaved);
+
+  const livePorts = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }).ports;
+  const directLive = await seam.reconcileCheckReceipt({ cwd: setup.repo, requestId: VALID_REQUEST_ID }, livePorts);
+  assert.equal(directLive.available, true);
+  assert.equal(directLive.request_id, VALID_REQUEST_ID);
+  assert.equal(directLive.accounting.status, 'complete_zero');
+
+  const liveEnv = {
+    ...process.env,
+    HOME: setup.home,
+    PDD_RUNTIME_URL: fake.origin,
+    PDD_STATE_DIR: setup.state,
+    PATH: fakeGhBin(setup.sandbox),
+  };
+
+  const jsonOut = captureStream();
+  const jsonErr = captureStream();
+  const jsonCode = await runPdd(['test', '--reconcile', VALID_REQUEST_ID, '--json'], {
+    cwd: setup.repo,
+    env: liveEnv,
+    stdout: jsonOut,
+    stderr: jsonErr,
+  });
+  assert.equal(jsonCode, 0, jsonErr.text);
+  const parsedLive = JSON.parse(jsonOut.text);
+  assert.equal(parsedLive.available, true);
+  assert.equal(parsedLive.request_id, VALID_REQUEST_ID);
+  assert.equal(parsedLive.accounting.status, 'complete_zero');
+
+  const textOut = captureStream();
+  const textErr = captureStream();
+  const textCode = await runPdd(['test', '--reconcile', VALID_REQUEST_ID], {
+    cwd: setup.repo,
+    env: liveEnv,
+    stdout: textOut,
+    stderr: textErr,
+  });
+  assert.equal(textCode, 0, textErr.text);
+  assert.match(textOut.text, /CHECK reconciliation 11111111-1111-4111-8111-111111111111 \(read-only; HTTP 200\)/);
+  assert.match(textOut.text, /Dispatch: not_started \(proven\)/);
+  assert.match(textOut.text, /Accounting: complete_zero \(complete=yes, calls=0, known=0, unknown=0, cap=40\)/);
+  assert.match(textOut.text, /Retry blocked: no/);
+
+  // Real >= 1.1.1 HTTP 410 expired response fails closed with exit 3 and keeps retry blocked.
+  reconcileReply = () => ({ status: 410, json: { error: { code: 'result-expired' } } });
+  const expOut = captureStream();
+  const expErr = captureStream();
+  const expCode = await runPdd(['test', '--reconcile', VALID_REQUEST_ID], {
+    cwd: setup.repo,
+    env: liveEnv,
+    stdout: expOut,
+    stderr: expErr,
+  });
+  assert.equal(expCode, 3, expErr.text);
+  assert.match(expOut.text, /expired=yes/);
+  assert.match(expOut.text, /Retry blocked: yes/);
+  assert.match(expOut.text, /Error: result-expired/);
+  assert.equal(fake.posts.length, 0, '--reconcile must never dispatch POST requests');
+  assert.equal(fake.jsonPosts.length, 0, '--reconcile must never dispatch JSON POST requests');
+  assert.equal(fake.gets.filter(g => g.url === `/v1/runs/${VALID_REQUEST_ID}/reconciliation`).length, 4);
+  assert.equal(formatCheckReconciliation(null), 'CHECK reconciliation: unavailable (malformed response).');
+
+  // 3. Mocked older-client fail-closed coverage (code: reconciliation-unsupported, exit 5) via seam/CLI ports.
+  const makeUnsupportedError = () =>
+    Object.assign(new Error(`CHECK receipt reconciliation requires ${RUNTIME_CLIENT_PKG} >= 1.1.1.`), {
+      code: 'reconciliation-unsupported',
+      exitCode: 5,
+    });
+  await assert.rejects(
+    () => seam.reconcileCheckReceipt(
+      { cwd: setup.repo, requestId: VALID_REQUEST_ID },
+      { reconcileCheckReceipt: async () => { throw makeUnsupportedError(); } },
+    ),
+    err => err?.code === 'reconciliation-unsupported' && err?.exitCode === 5 && err.message.includes(RUNTIME_CLIENT_PKG),
+  );
+  assert.throws(
+    () => seam.projectCheckReconciliation(
+      { request_id: VALID_REQUEST_ID, status: 200, body: completeZeroBody },
+      { projectCheckReconciliation: () => { throw makeUnsupportedError(); } },
+    ),
+    err => err?.code === 'reconciliation-unsupported' && err?.exitCode === 5,
+  );
   const fallbackOut = captureStream();
   const fallbackErr = captureStream();
   const fallbackCode = await runPdd(['test', '--reconcile', VALID_REQUEST_ID], {
@@ -382,12 +652,12 @@ test('#3594: pdd test --reconcile fails closed on 1.1.0, validates inputs, suppo
     env: { ...process.env, HOME: setup.home, PDD_STATE_DIR: setup.state },
     stdout: fallbackOut,
     stderr: fallbackErr,
+    runtimeCheckReconcile: async () => { throw makeUnsupportedError(); },
   });
   assert.equal(fallbackCode, 5);
-  assert.match(fallbackErr.text, />= 1\.2\.0/);
   assert.ok(fallbackErr.text.includes(RUNTIME_CLIENT_PKG));
 
-  // 3. CLI rejects invalid option/operand mixes with exit 2.
+  // 4. CLI rejects invalid option/operand mixes with exit 2.
   for (const argv of [
     ['test', '--reconcile', 'not-a-uuid'],
     ['test', '--reconcile', VALID_REQUEST_ID, '--fresh'],
@@ -407,85 +677,7 @@ test('#3594: pdd test --reconcile fails closed on 1.1.0, validates inputs, suppo
     );
   }
 
-  // 4. Mocked happy path (available: true, complete_zero) in both JSON and human-text modes.
-  const completeZeroRecord = {
-    schema_version: 'pdd-runtime.check-reconciliation.v1',
-    request_id: VALID_REQUEST_ID,
-    available: true,
-    http_status: 200,
-    error_code: null,
-    disposition: { state: 'not_dispatched', verdict: null, refusal_code: 'capacity-full', expired: false, purged: false },
-    dispatch: { status: 'not_dispatched', proven: true },
-    accounting: { status: 'complete_zero', accounting_complete: true, calls: 0, known_calls: 0, unknown_calls: 0, cap: 40 },
-    retry: { blocked: false, safe_next_action: 'Safe to submit a replacement check with a new request ID.' },
-    evidence: { proof_basis: ['server_receipt_not_dispatched'], contradictions: [] },
-    provenance: { source_sha256: 'a'.repeat(64), engine_sha: 'b'.repeat(40), server_commit: 'c'.repeat(40), sources_consulted: ['receipt_store'] },
-  };
-  const reconcileCalls = [];
-  const mockReconcile = async (input, ports) => {
-    reconcileCalls.push({ input, ports });
-    return completeZeroRecord;
-  };
-
-  const jsonOut = captureStream();
-  const jsonErr = captureStream();
-  const jsonCode = await runPdd(['test', '--reconcile', VALID_REQUEST_ID, '--json'], {
-    cwd: setup.repo,
-    env: { ...process.env, HOME: setup.home, PDD_STATE_DIR: setup.state },
-    stdout: jsonOut,
-    stderr: jsonErr,
-    runtimeCheckReconcile: mockReconcile,
-  });
-  assert.equal(jsonCode, 0, jsonErr.text);
-  assert.deepEqual(JSON.parse(jsonOut.text), completeZeroRecord);
-  assert.equal(reconcileCalls.length, 1);
-  assert.equal(reconcileCalls[0].input.requestId, VALID_REQUEST_ID);
-
-  const textOut = captureStream();
-  const textErr = captureStream();
-  const textCode = await runPdd(['test', '--reconcile', VALID_REQUEST_ID], {
-    cwd: setup.repo,
-    env: { ...process.env, HOME: setup.home, PDD_STATE_DIR: setup.state },
-    stdout: textOut,
-    stderr: textErr,
-    runtimeCheckReconcile: mockReconcile,
-  });
-  assert.equal(textCode, 0, textErr.text);
-  assert.match(textOut.text, /CHECK reconciliation 11111111-1111-4111-8111-111111111111 \(read-only; HTTP 200\)/);
-  assert.match(textOut.text, /Dispatch: not_dispatched \(proven\)/);
-  assert.match(textOut.text, /Accounting: complete_zero \(complete=yes, calls=0, known=0, unknown=0, cap=40\)/);
-  assert.match(textOut.text, /Retry blocked: no/);
-
-  // 5. Mocked fail-closed unavailable record (HTTP 410 expired) returns exit 3 and keeps retry blocked.
-  const expiredRecord = {
-    schema_version: 'pdd-runtime.check-reconciliation.v1',
-    request_id: VALID_REQUEST_ID,
-    available: false,
-    http_status: 410,
-    error_code: 'receipt-expired',
-    disposition: { state: 'unknown', verdict: null, refusal_code: null, expired: true, purged: false },
-    dispatch: { status: 'unproved', proven: false },
-    accounting: { status: 'unknown', accounting_complete: false, calls: 'unknown', known_calls: 0, unknown_calls: null, cap: null },
-    retry: { blocked: true, safe_next_action: 'Do not automatically retry; receipt expired.' },
-    evidence: { proof_basis: [], contradictions: ['expired-before-reconcile'] },
-    provenance: { sources_consulted: ['receipt_store'] },
-  };
-  const expOut = captureStream();
-  const expErr = captureStream();
-  const expCode = await runPdd(['test', '--reconcile', VALID_REQUEST_ID], {
-    cwd: setup.repo,
-    env: { ...process.env, HOME: setup.home, PDD_STATE_DIR: setup.state },
-    stdout: expOut,
-    stderr: expErr,
-    runtimeCheckReconcile: async () => expiredRecord,
-  });
-  assert.equal(expCode, 3, expErr.text);
-  assert.match(expOut.text, /expired=yes/);
-  assert.match(expOut.text, /Retry blocked: yes/);
-  assert.match(expOut.text, /Error: receipt-expired/);
-  assert.equal(formatCheckReconciliation(null), 'CHECK reconciliation: unavailable (malformed response).');
-
-  // 6. Seam DI forwarding for reconcileCheckReceipt & projectCheckReconciliation.
+  // 5. Seam DI forwarding for reconcileCheckReceipt & projectCheckReconciliation.
   const forwarded = await seam.reconcileCheckReceipt(
     { cwd: setup.repo, requestId: VALID_REQUEST_ID },
     { reconcileCheckReceipt: async (inp, p) => ({ ok: true, id: inp.requestId, hasRedaction: Boolean(p.redaction) }) },
@@ -499,23 +691,7 @@ test('#3594: pdd test --reconcile fails closed on 1.1.0, validates inputs, suppo
     { projected: VALID_REQUEST_ID },
   );
 
-  // 7. Read-only savedCheckReconciliationTargets extracts canonical UUIDs without modifying saved batch JSON.
-  const batchName = '20261121-000100-ab12';
-  const batchDir = join(setup.state, 'batches', batchName);
-  mkdirSync(batchDir, { recursive: true });
-  const batchPath = join(batchDir, 'batch.json');
-  const savedBatch = {
-    batch: batchName,
-    intent: 'check',
-    root: setup.repo,
-    rows: [
-      { test: 'tests/place-order.json', story: 'user_stories/place-order.md', state: 'unknown', request_ids: [VALID_REQUEST_ID, 'not-a-uuid', VALID_REQUEST_ID] },
-      { test: 'tests/unknown-item.json', story: 'user_stories/unknown-item.md', state: 'passed', request_ids: ['22222222-2222-4222-8222-222222222222'] },
-    ],
-  };
-  const rawSaved = `${JSON.stringify(savedBatch, null, 2)}\n`;
-  writeFileSync(batchPath, rawSaved);
-
+  // 6. Read-only savedCheckReconciliationTargets extracts canonical UUIDs without modifying saved batch JSON.
   const lostOnly = savedCheckReconciliationTargets(batchName, {
     env: { PDD_STATE_DIR: setup.state },
     root: setup.repo,
@@ -529,31 +705,105 @@ test('#3594: pdd test --reconcile fails closed on 1.1.0, validates inputs, suppo
     includeAll: true,
   });
   assert.deepEqual(allTargets.requestIds, [VALID_REQUEST_ID, '22222222-2222-4222-8222-222222222222']);
-  assert.equal(readFileSync(batchPath, 'utf8'), rawSaved, 'savedCheckReconciliationTargets must remain strictly read-only');
+  assert.equal(readFileSync(batchPath, 'utf8'), rawSaved, 'savedCheckReconciliationTargets and --reconcile must remain strictly read-only');
 });
 
-test('#3594: checkRuntimeClientParity validates real repo package.json pinned at 1.1.0 cleanly offline', () => {
+test('#3594: checkRuntimeClientParity validates real repo package.json pinned at exact semver >= 1.1.1 cleanly offline', () => {
+  const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'));
+  const pinned = pkg.dependencies[RUNTIME_CLIENT_PKG];
+  assert.match(pinned, /^\d+\.\d+\.\d+$/);
+  assert.ok(compareExactSemver(pinned, '1.1.1') >= 0);
+  const [major, minor] = pinned.split('.').map(Number);
+  const newer = `${major}.${minor + 1}.0`;
+
   const matched = checkRuntimeClientParity({
     root: repoRoot,
     dryRun: false,
-    runCommand: () => ({ status: 0, stdout: '1.1.0\n', stderr: '' }),
+    runCommand: () => ({ status: 0, stdout: `${pinned}\n`, stderr: '' }),
     log: () => {},
   });
   assert.equal(matched.ok, true);
   assert.equal(matched.skipped, false);
   assert.equal(matched.stale, false);
-  assert.equal(matched.pinned, '1.1.0');
-  assert.equal(matched.latest, '1.1.0');
+  assert.equal(matched.pinned, pinned);
+  assert.equal(matched.latest, pinned);
 
   assert.throws(
     () => checkRuntimeClientParity({
       root: repoRoot,
       dryRun: false,
-      runCommand: () => ({ status: 0, stdout: '1.2.0\n', stderr: '' }),
+      runCommand: () => ({ status: 0, stdout: `${newer}\n`, stderr: '' }),
       log: () => {},
     }),
-    /pinned to 1\.1\.0, behind latest published 1\.2\.0/,
+    err => err instanceof Error && err.message.includes(`pinned to ${pinned}, behind latest published ${newer}`),
   );
+});
+
+test('#3617: .github/dependabot.yml schedules daily npm updates scoped strictly to the runtime client package', () => {
+  const dependabotPath = join(repoRoot, '.github/dependabot.yml');
+  assert.equal(existsSync(dependabotPath), true, 'expected .github/dependabot.yml to exist');
+  const raw = readFileSync(dependabotPath, 'utf8');
+  const lines = raw
+    .split(/\r?\n/)
+    .map(line => line.replace(/#.*$/, '').trimEnd())
+    .filter(line => line.trim().length > 0);
+  const unquote = val => val.trim().replace(/^(['"])(.*)\1$/, '$2');
+
+  assert.ok(lines.some(line => /^version:\s*2\s*$/.test(line)), 'expected Dependabot config version: 2');
+
+  const updatesIdx = lines.findIndex(line => /^updates:\s*$/.test(line));
+  assert.ok(updatesIdx >= 0, 'expected top-level updates: section');
+  const updateIndent = lines.slice(updatesIdx + 1).find(line => /^\s*-\s+/.test(line))?.match(/^(\s*)-/)?.[1].length;
+  assert.equal(typeof updateIndent, 'number', 'expected at least one updates entry');
+
+  const entries = [];
+  for (let i = updatesIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    const indent = line.match(/^(\s*)/)[1].length;
+    if (indent === 0) break;
+    if (indent === updateIndent && line.slice(indent).startsWith('-')) {
+      entries.push([line.slice(indent + 1).trim()]);
+    } else if (entries.length > 0) {
+      entries.at(-1).push(line);
+    }
+  }
+  assert.equal(entries.length, 1, `expected exactly one Dependabot update rule, got ${entries.length}`);
+
+  const ruleLines = entries[0];
+  const ruleText = ruleLines.join('\n');
+  const scalar = key => {
+    const prefix = `${key}:`;
+    const hit = ruleLines.find(line => line.trimStart().startsWith(prefix));
+    return hit ? unquote(hit.trimStart().slice(prefix.length)) : null;
+  };
+  assert.equal(scalar('package-ecosystem'), 'npm');
+  assert.equal(scalar('directory'), '/');
+  assert.equal(scalar('interval'), 'daily');
+  assert.equal(scalar('versioning-strategy'), 'increase');
+  assert.equal(scalar('open-pull-requests-limit'), '1');
+
+  const allowIdx = ruleLines.findIndex(line => /^\s*allow:\s*$/.test(line));
+  assert.ok(allowIdx >= 0, 'expected allow: section inside Dependabot update rule');
+  const allowIndent = ruleLines[allowIdx].match(/^(\s*)/)[1].length;
+  const allowItems = [];
+  for (let i = allowIdx + 1; i < ruleLines.length; i++) {
+    const line = ruleLines[i];
+    const indent = line.match(/^(\s*)/)[1].length;
+    if (indent <= allowIndent) break;
+    allowItems.push(line.trim());
+  }
+  const allowDeps = allowItems
+    .map(item => item.match(/^-\s*dependency-name:\s*(.+)$/)?.[1])
+    .filter(Boolean)
+    .map(unquote);
+  assert.equal(allowItems.length, 1, `expected allow: block to contain exactly one entry, got ${JSON.stringify(allowItems)}`);
+  assert.deepEqual(allowDeps, [RUNTIME_CLIENT_PKG], 'Dependabot allow: section must contain only the runtime client package');
+
+  const allDepNames = [...ruleText.matchAll(/dependency-name:\s*(.+)/g)].map(m => unquote(m[1]));
+  assert.deepEqual(allDepNames, [RUNTIME_CLIENT_PKG], 'no dependency-name entry may exist outside allow:');
+  assert.doesNotMatch(ruleText, /\bignore:/, 'must not define ignore: alongside or instead of allow:');
+  assert.doesNotMatch(ruleText, /dependency-type:/, 'must not broaden allow rule by dependency-type');
+  assert.match(ruleText, /\blabels:\s*\n\s*-\s*['"]?dependencies['"]?\b/);
 });
 
 test('#3594 R1 regressions: runCheck --reconcile, non-string requestId, Stop(2)/Stop(5) exit codes, and formatCheckReconciliation sanitization', async t => {
@@ -564,11 +814,35 @@ test('#3594 R1 regressions: runCheck --reconcile, non-string requestId, Stop(2)/
     { fetch: async () => { networkHit += 1; throw new Error('must not dispatch network check'); }, ...extra },
   ).ports;
 
-  // Finding #1 (P0): direct seam.runCheck({ options: { '--reconcile': uuid } }) never dispatches POST /v1/check.
-  const pUnsupported = noNetPorts();
+  // Finding #1 (P0): direct seam.runCheck({ options: { '--reconcile': uuid } }) never dispatches POST /v1/lint or /v1/check.
+  const pUnsupported = noNetPorts({
+    reconcileCheckReceipt: async () => {
+      throw Object.assign(new Error(`CHECK receipt reconciliation requires ${RUNTIME_CLIENT_PKG} >= 1.1.1.`), {
+        code: 'reconciliation-unsupported',
+        exitCode: 5,
+      });
+    },
+  });
   assert.equal(await seam.runCheck({ cwd: setup.repo, words: [], options: { '--reconcile': VALID_REQUEST_ID } }, pUnsupported), 5);
   assert.equal(networkHit, 0, 'runCheck --reconcile must never dispatch POST /v1/lint or /v1/check');
-  assert.match(pUnsupported.stderr.text, />= 1\.2\.0/);
+  assert.ok(pUnsupported.stderr.text.includes(RUNTIME_CLIENT_PKG));
+
+  // Real >= 1.1.1 direct seam.runCheck --reconcile dispatches ONLY read-only GET /v1/runs/<uuid>/reconciliation (0 POSTs).
+  const fake = await fakeRuntime(t, entry => {
+    if (entry.method === 'GET' && entry.url === `/v1/runs/${VALID_REQUEST_ID}/reconciliation`) {
+      return { status: 200, json: makeReconciliationBody(VALID_REQUEST_ID) };
+    }
+    throw new Error(`unexpected runtime call: ${entry.method} ${entry.url}`);
+  });
+  const pLive = portsFor({ HOME: setup.home, PDD_RUNTIME_URL: fake.origin, PDD_STATE_DIR: setup.state }).ports;
+  assert.equal(
+    await seam.runCheck({ cwd: setup.repo, words: [], options: { '--reconcile': VALID_REQUEST_ID, '--json': true } }, pLive),
+    0,
+    pLive.stderr.text,
+  );
+  assert.equal(JSON.parse(pLive.stdout.text).request_id, VALID_REQUEST_ID);
+  assert.equal(fake.posts.length, 0, 'real runCheck --reconcile must never POST /v1/lint or /v1/check');
+  assert.equal(fake.gets.length, 1);
 
   const pExtra = noNetPorts();
   assert.equal(await seam.runCheck({ cwd: setup.repo, words: ['place-order'], options: { '--reconcile': VALID_REQUEST_ID } }, pExtra), 2);
