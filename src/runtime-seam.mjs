@@ -1,4 +1,4 @@
-// Generated from prompts/cli/runtime-seam.prompt.md (sha256: cabd8ddeca13f4b53abac3d96e60cf7e854c12c2ba661b6e4fe944210341edcf).
+// Generated from prompts/cli/runtime-seam.prompt.md (sha256: 0a324dfcbe01868e4efcd6ab10cd5bdd3448dd70d3b2c76aea32f9b41833d075).
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -226,10 +226,16 @@ function lookupScenarioOverlayVirtualText(store, rawPath) {
   if (store.map === undefined) {
     store.map = null;
     const root = store.root ?? repoTopRoot(store.cwd);
-    store.map = (root ? buildScenarioOverlay(root, store.ports) : null) ?? new Map();
+    store.map = (root ? buildScenarioOverlay(root, store.ports, { preserveRawLineCount: !store.interceptFd }) : null) ?? new Map();
   }
   if (!store.map || store.map.size === 0) return undefined;
-  return store.map.get(strPath) ?? store.map.get(resolve(strPath));
+  const direct = store.map.get(strPath) ?? store.map.get(resolve(strPath));
+  if (direct !== undefined) return direct;
+  try {
+    return store.map.get(realpathSync(strPath));
+  } catch {
+    return undefined;
+  }
 }
 
 function statWithVirtualSize(statObj, byteLength) {
@@ -827,6 +833,33 @@ export function orphanSummary(...args) {
   return hostSelection().orphanSummary(...args);
 }
 
+const STORY_STEP_LIMIT = 15;
+const STORY_LINE_LIMIT = 1000;
+
+function countTextLines(text) {
+  if (typeof text !== 'string' || !text.length) return 0;
+  const trimmed = text.replace(/\r?\n$/, '');
+  return trimmed ? trimmed.split(/\r?\n/).length : 0;
+}
+
+function formatPreflightOverlayText(exactDoc, rawText, compiler) {
+  const compact = compiler.stringifyExactScenarioJson(exactDoc);
+  const rawLines = Math.max(1, countTextLines(rawText));
+  return `${compact}${'\n'.repeat(rawLines)}`;
+}
+
+function rawShortStoryComplexityWarning({ path, storyPath, doc }, rawLines) {
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return null;
+  const steps = Array.isArray(doc.steps) ? doc.steps.length : 0;
+  const lines = Number.isInteger(rawLines) ? rawLines : 0;
+  const reasons = [];
+  if (steps > STORY_STEP_LIMIT) reasons.push(`${steps} scenario steps (limit: ${STORY_STEP_LIMIT})`);
+  if (lines > STORY_LINE_LIMIT) reasons.push(`${lines} lines (limit: ${STORY_LINE_LIMIT})`);
+  if (!reasons.length) return null;
+  const storyLabel = storyPath ?? (typeof doc.story_path === 'string' && doc.story_path.trim() ? doc.story_path.trim() : null) ?? path;
+  return `Warning: oversized Story: ${storyLabel} (${path}) has ${reasons.join(' and ')}. Keep prompt scenarios focused on policy and authority boundaries and move multi-step state-machine or wire-protocol sequences to native tests (RUNBOOK.md §17, §18).`;
+}
+
 function enrichFoundWithCompiledScenarios(found, readText) {
   if (!found || !Array.isArray(found.tests) || !found.root) return found;
   const compiler = hostScenarioCompiler();
@@ -875,9 +908,16 @@ function enrichFoundWithCompiledScenarios(found, readText) {
     }
     if (!compiled.changed) return test;
     anyCompiled = true;
+    const rawLineCount = countTextLines(rawText);
+    const preflightText = formatPreflightOverlayText(compiled.exactDoc ?? compiled.doc, rawText, compiler);
     const item = { ...test, doc: compiled.doc };
     Object.defineProperty(item, 'rawDoc', { value: compiled.doc });
     Object.defineProperty(item, 'compiledText', { value: compiled.text });
+    Object.defineProperty(item, 'compiledPreflightText', { value: preflightText });
+    Object.defineProperty(item, 'rawLineCount', { value: rawLineCount });
+    if (Object.hasOwn(rawParsed, 'schema_version') && rawParsed.schema_version !== TEST_SCHEMA) {
+      Object.defineProperty(item, 'rawHadNonV1Schema', { value: true });
+    }
     if (Array.isArray(compiled.warnings) && compiled.warnings.length > 0) {
       Object.defineProperty(item, 'shortWarnings', { value: compiled.warnings });
     }
@@ -898,7 +938,7 @@ export function findTests(input, ports = {}) {
   return enrichFoundWithCompiledScenarios(found, relPath => initialReadFileSync(join(found.root, relPath), 'utf8'));
 }
 
-function buildScenarioOverlay(root, ports = {}) {
+function buildScenarioOverlay(root, ports = {}, { preserveRawLineCount = false } = {}) {
   if (typeof root !== 'string' || !root) return null;
   let found;
   try {
@@ -914,9 +954,10 @@ function buildScenarioOverlay(root, ports = {}) {
   }
   const overlay = new Map();
   for (const test of found?.tests ?? []) {
-    if (test.error || typeof test.compiledText !== 'string') continue;
-    overlay.set(resolve(root, test.path), test.compiledText);
-    if (realRoot) overlay.set(join(realRoot, test.path), test.compiledText);
+    const overlayText = preserveRawLineCount ? (test?.compiledPreflightText ?? test?.compiledText) : test?.compiledText;
+    if (test.error || typeof overlayText !== 'string') continue;
+    overlay.set(resolve(root, test.path), overlayText);
+    if (realRoot) overlay.set(join(realRoot, test.path), overlayText);
   }
   return overlay.size ? overlay : null;
 }
@@ -926,9 +967,17 @@ export function preflight(input) {
   const directTests = Array.isArray(input.selected) ? input.selected : input.found?.tests;
   if (Array.isArray(directTests)) {
     const map = new Map();
+    let realRoot = null;
+    try {
+      realRoot = realpathSync(input.root);
+    } catch {
+      realRoot = null;
+    }
     for (const test of directTests) {
-      if (test && !test.error && typeof test.compiledText === 'string') {
-        map.set(resolve(input.root, test.path), test.compiledText);
+      const overlayText = test?.compiledPreflightText ?? test?.compiledText;
+      if (test && !test.error && typeof overlayText === 'string') {
+        map.set(resolve(input.root, test.path), overlayText);
+        if (realRoot) map.set(join(realRoot, test.path), overlayText);
       }
     }
     if (map.size === 0) return rawPreflight(input);
@@ -1362,21 +1411,41 @@ function formatLocalCriteriaWarning(testPath, storyPath, classification) {
   return null;
 }
 
-function lintShortScenarioFiles(root, ports = {}, { checkCriteriaBindings = false, words = [], cwd = null } = {}) {
+function lintShortScenarioFiles(
+  root,
+  ports = {},
+  { checkCriteriaBindings = false, includeRawComplexity = true, tests = undefined, words = [], cwd = null } = {},
+) {
   if (typeof root !== 'string' || !root) return [];
   try {
     const rawWords = Array.isArray(words) ? words : [];
-    const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 }, ports);
+    const found = findTests({ root, excludeFixtureProjects: rawWords.length === 0 && tests === undefined }, ports);
     let scopedTests = found?.tests ?? [];
-    if (rawWords.length > 0) {
+    if (Array.isArray(tests)) {
+      const wanted = new Set(
+        tests
+          .map(entry => (typeof entry === 'string' ? entry : entry?.path))
+          .filter(p => typeof p === 'string' && p.length > 0)
+          .map(p => p.replace(/^\.\//, '')),
+      );
+      scopedTests = wanted.size > 0 ? scopedTests.filter(test => wanted.has(test.path)) : [];
+    } else if (rawWords.length > 0) {
       const normalized = normalizeSelectionWords(rawWords, cwd ?? root, root, found);
-      const selection = selectTests(found, normalized);
-      scopedTests = selection?.selected ?? [];
+      if (normalized.every(word => word.endsWith('.prompt.md') && found?.visible?.has(word))) {
+        scopedTests = [];
+      } else {
+        const selection = selectTests(found, normalized);
+        scopedTests = selection?.selected ?? [];
+      }
     }
     const warnings = [];
     for (const test of scopedTests) {
       if (test.shortRefusal && typeof test.error === 'string' && test.error.length > 0) {
         warnings.push(test.error);
+      }
+      if (includeRawComplexity && !test.shortRefusal && test.rawHadNonV1Schema) {
+        const complexityWarning = rawShortStoryComplexityWarning(test, test.rawLineCount);
+        if (complexityWarning) warnings.push(complexityWarning);
       }
       if (Array.isArray(test.shortWarnings)) {
         for (const warning of test.shortWarnings) {
@@ -1974,7 +2043,9 @@ export function runtimePreflightSlice() {
         ...new Set([
           ...baseWarnings,
           ...lintRepoAntiPatterns(input),
-          ...lintShortScenarioFiles(input?.root, ports),
+          ...lintShortScenarioFiles(input?.root, ports, {
+            tests: input?.tests,
+          }),
         ]),
       ];
     },
@@ -2756,6 +2827,7 @@ export async function runCheck(input = {}, ports = {}) {
             ...project.warnings,
             ...lintShortScenarioFiles(arg?.root, forwardPorts, {
               checkCriteriaBindings: input?.options?.['--local'] === true,
+              includeRawComplexity: input?.options?.['--lint'] === true,
               words: commandWords(input),
               cwd,
             }),
