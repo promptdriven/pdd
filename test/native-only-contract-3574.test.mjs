@@ -1813,3 +1813,285 @@ test('R1 Finding #2 integration: autopilot-core runValidatorV2Gate enforces nati
   assert.equal(pr5.merged, false, 'swapped real-host classes across two changed boundary files must NOT spoof each other');
   assert.ok(w5.labels(105).includes('pdd:needs-decision'));
 });
+
+test('R6 adversarial regression suite: R6-1 through R6-5', async (t) => {
+  // R6-3: TypeScript inline object return-type scan continues past `;` and newlines inside `{ ... }`,
+  // while preserving ternary expressions `ok ? fetch(url) : { a: 1 };`.
+  const r63Inline = detectRealHostProbesInTest(
+    'test/ts-inline-obj-ret.test.ts',
+    'class Fake { fetch(url: string): { a: number; b: string } { return { a: 1, b: "" }; } }\n',
+  );
+  assert.equal(r63Inline.hasRealHostSmoke, false, 'R6-3: TS inline object return type with `;` is a method definition, not a fetch call');
+
+  const r63Multiline = detectRealHostProbesInTest(
+    'test/ts-multiline-obj-ret.test.ts',
+    'class Fake {\n  fetch(url: string): {\n    a: number;\n    b: string;\n  } {\n    return { a: 1, b: "" };\n  }\n}\n',
+  );
+  assert.equal(r63Multiline.hasRealHostSmoke, false, 'R6-3: multiline TS inline object return type is a method definition, not a fetch call');
+
+  const r63IntersectionNewline = detectRealHostProbesInTest(
+    'test/ts-intersection-newline.test.ts',
+    'class Fake {\n  fetch(url: string): {\n    a: number;\n  } &\n  {\n    b: string;\n  } {\n    return { a: 1, b: "" };\n  }\n}\n',
+  );
+  assert.equal(r63IntersectionNewline.hasRealHostSmoke, false, 'R6-3: multiline TS intersection inline object return type is a method definition');
+
+  const r63Ternary = detectRealHostProbesInTest(
+    'test/ts-ternary-fetch.test.ts',
+    'const ok = true;\nconst r = ok ? fetch("http://127.0.0.1:8080/health") : { a: 1 };\n',
+  );
+  assert.equal(r63Ternary.hasRealHostSmoke, true, 'R6-3: ternary expression with fetch followed by object literal must remain a real fetch call');
+
+  // R6-4: ES2021 logical assignment operators (&&=, ||=, ??=) count as reassignments/stubs.
+  for (const op of ['&&=', '||=', '??=']) {
+    const rGlobal = detectRealHostProbesInTest(
+      'test/logical-global-fetch.test.mjs',
+      `globalThis.fetch ${op} (async () => ({ ok: true }));\nawait fetch('http://127.0.0.1:3000');\n`,
+    );
+    assert.equal(rGlobal.hasRealHostSmoke, false, `R6-4: globalThis.fetch ${op} must taint fetch`);
+
+    const rBare = detectRealHostProbesInTest(
+      'test/logical-bare-fetch.test.mjs',
+      `fetch ${op} (async () => ({ ok: true }));\nawait fetch('http://127.0.0.1:3000');\n`,
+    );
+    assert.equal(rBare.hasRealHostSmoke, false, `R6-4: bare fetch ${op} must taint fetch`);
+
+    const rCpProp = detectRealHostProbesInTest(
+      'test/logical-cp-prop.test.mjs',
+      `import * as cp from 'node:child_process';\ncp.spawnSync ${op} (() => ({ status: 0 }));\ncp.spawnSync('node', ['-e', '0']);\n`,
+    );
+    assert.equal(rCpProp.hasRealHostSmoke, false, `R6-4: cp.spawnSync ${op} must taint cp.spawnSync`);
+
+    const rCpBracket = detectRealHostProbesInTest(
+      'test/logical-cp-bracket.test.mjs',
+      `import * as cp from 'node:child_process';\ncp['spawnSync'] ${op} (() => ({ status: 0 }));\ncp.spawnSync('node', ['-e', '0']);\n`,
+    );
+    assert.equal(rCpBracket.hasRealHostSmoke, false, `R6-4: cp['spawnSync'] ${op} must taint cp.spawnSync`);
+
+    const rNamed = detectRealHostProbesInTest(
+      'test/logical-named-alias.test.mjs',
+      `import { execFileSync as run } from 'node:child_process';\nrun ${op} (() => '');\nrun('node', ['-e', '0']);\n`,
+    );
+    assert.equal(rNamed.hasRealHostSmoke, false, `R6-4: named alias ${op} must taint alias`);
+
+    const rPage = detectRealHostProbesInTest(
+      'test/logical-page.test.mjs',
+      `import { test } from '@playwright/test';\ntest('x', async ({ page }) => { page ${op} fakePage; await page.goto('http://127.0.0.1:3000'); });\n`,
+    );
+    assert.equal(rPage.hasRealHostSmoke, false, `R6-4: page ${op} fakePage must taint page.goto`);
+  }
+
+  // R6-1 (standalone validator): strictKind: true prevents cross-surface substitution while preserving legacy behavior.
+  const strictBlockApiForNative = evaluateValidationOutcome({
+    changedFiles: ['src/native.mjs', 'src/api-server.mjs'],
+    nativeOnlyFiles: ['src/native.mjs'],
+    offlinePassed: true,
+    e2eChecks: [
+      { kind: 'local-server-or-db', strictKind: true, command: 'npm test', executed: true, exitCode: 0, passed: 1, failed: 0, skipped: 0 },
+    ],
+  });
+  assert.equal(strictBlockApiForNative.eligible, false);
+  assert.equal(strictBlockApiForNative.waitKind, 'needs-real-host-smoke');
+
+  const strictBlockOsForCli = evaluateValidationOutcome({
+    changedFiles: ['src/os-daemon.mjs', 'bin/tool-cli.mjs'],
+    offlinePassed: true,
+    e2eChecks: [
+      { kind: 'real-host-smoke', strictKind: true, command: 'npm test', executed: true, exitCode: 0, passed: 1, failed: 0, skipped: 0, turns: 1 },
+    ],
+  });
+  assert.equal(strictBlockOsForCli.eligible, false);
+
+  const writeFile = (cwd, rel, content) => {
+    const abs = join(cwd, rel);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content, 'utf8');
+  };
+
+  // R6-1a (coreWorld): untested kind: native-only + tested api-server -> MUST block!
+  const wR61a = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wR61a.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wR61a.issue(201, { title: 'R6-1a untested native-only + tested api-server' });
+  await wR61a.tick();
+  const cwd201 = wR61a.job(201, 'build').cwd;
+  writeFile(cwd201, 'prompts/native-mod.prompt.md', '---\nkind: native-only\nreason: host binding\n---\n# Native mod\n\nOwn `src/native-mod.mjs`.\n');
+  writeFile(cwd201, 'src/native-mod.mjs', '// Prompt: prompts/native-mod.prompt.md\nexport const nativeVal = () => 1;\n');
+  writeFile(cwd201, 'src/api-server.mjs', 'export const apiVal = () => 2;\n');
+  writeFile(
+    cwd201,
+    'test/api-server.test.mjs',
+    "import test from 'node:test';\nimport { createServer } from 'node:http';\nimport { apiVal } from '../src/api-server.mjs';\ntest('real server', () => { apiVal(); const s = createServer((_req, res) => res.end('ok')); s.listen(0); s.close(); });\n",
+  );
+  const { pr: pr201 } = wR61a.build(201, {
+    write: false,
+    body: 'Fixes #201\n\nRuntime: not run (native-only prompt)\nPath: d — src/native-mod.mjs, src/api-server.mjs, test/api-server.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wR61a.tick();
+  wR61a.review(201, 'PASS');
+  wR61a.suite(201, 0);
+  await wR61a.tick();
+  assert.equal(pr201.merged, false, 'R6-1a: untested native-only file must NOT merge via sibling api-server check');
+  assert.ok(wR61a.labels(201).includes('pdd:needs-decision'));
+
+  // R6-1b (coreWorld): untested os-boundary + tested cli -> MUST block!
+  const wR61b = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wR61b.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wR61b.issue(202, { title: 'R6-1b untested os-boundary + tested cli' });
+  await wR61b.tick();
+  const cwd202 = wR61b.job(202, 'build').cwd;
+  writeFile(cwd202, 'src/os-daemon.mjs', 'export const daemonVal = () => 1;\n');
+  writeFile(cwd202, 'bin/tool-cli.mjs', 'export const cliVal = () => 2;\n');
+  writeFile(
+    cwd202,
+    'test/tool-cli.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { cliVal } from '../bin/tool-cli.mjs';\ntest('real cli', () => { cliVal(); execFileSync(process.execPath, ['-e', '0']); });\n",
+  );
+  const { pr: pr202 } = wR61b.build(202, {
+    write: false,
+    body: 'Fixes #202\n\nRuntime: not run (no prompt changed)\nPath: d — src/os-daemon.mjs, bin/tool-cli.mjs, test/tool-cli.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wR61b.tick();
+  wR61b.review(202, 'PASS');
+  wR61b.suite(202, 0);
+  await wR61b.tick();
+  assert.equal(pr202.merged, false, 'R6-1b: untested os-boundary file must NOT merge via sibling cli check');
+  assert.ok(wR61b.labels(202).includes('pdd:needs-decision'));
+
+  // R6-1c (coreWorld): untested cli + tested os-boundary -> MUST block!
+  const wR61c = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wR61c.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wR61c.issue(203, { title: 'R6-1c untested cli + tested os-boundary' });
+  await wR61c.tick();
+  const cwd203 = wR61c.job(203, 'build').cwd;
+  writeFile(cwd203, 'bin/tool-cli.mjs', 'export const cliVal = () => 2;\n');
+  writeFile(cwd203, 'src/os-daemon.mjs', 'export const daemonVal = () => 1;\n');
+  writeFile(
+    cwd203,
+    'test/os-daemon.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { daemonVal } from '../src/os-daemon.mjs';\ntest('real os daemon', () => { daemonVal(); execFileSync(process.execPath, ['-e', '0']); });\n",
+  );
+  const { pr: pr203 } = wR61c.build(203, {
+    write: false,
+    body: 'Fixes #203\n\nRuntime: not run (no prompt changed)\nPath: d — bin/tool-cli.mjs, src/os-daemon.mjs, test/os-daemon.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wR61c.tick();
+  wR61c.review(203, 'PASS');
+  wR61c.suite(203, 0);
+  await wR61c.tick();
+  assert.equal(pr203.merged, false, 'R6-1c: untested cli file must NOT merge via sibling os-boundary check');
+
+  // R6-2 (coreWorld, dir 1): src/os-sandbox.mjs (plain execFileSync) + bin/cli-session.mjs (sandbox-exec + 2 turns + mkdtempSync) -> MUST block!
+  const wR62a = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wR62a.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wR62a.issue(204, { title: 'R6-2a cross-kind spoof cli -> os-sandbox' });
+  await wR62a.tick();
+  const cwd204 = wR62a.job(204, 'build').cwd;
+  writeFile(cwd204, 'src/os-sandbox.mjs', 'export const sandbox = () => true;\n');
+  writeFile(cwd204, 'bin/cli-session.mjs', 'export const session = () => true;\n');
+  writeFile(
+    cwd204,
+    'test/os-sandbox-plain.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { sandbox } from '../src/os-sandbox.mjs';\ntest('plain subprocess', () => { sandbox(); execFileSync(process.execPath, ['-e', '0']); });\n",
+  );
+  writeFile(
+    cwd204,
+    'test/cli-session-spoof.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { mkdtempSync } from 'node:fs';\nimport { session } from '../bin/cli-session.mjs';\ntest('spoof sandbox inside cli test', () => { session(); mkdtempSync('/tmp/pdd-'); execFileSync('sandbox-exec', ['-p', '(version 1)', '/usr/bin/true']); execFileSync(process.execPath, ['-e', '0']); });\n",
+  );
+  const { pr: pr204 } = wR62a.build(204, {
+    write: false,
+    body: 'Fixes #204\n\nRuntime: not run (no prompt changed)\nPath: d — src/os-sandbox.mjs, bin/cli-session.mjs, test/os-sandbox-plain.test.mjs, test/cli-session-spoof.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wR62a.tick();
+  wR62a.review(204, 'PASS');
+  wR62a.suite(204, 0);
+  await wR62a.tick();
+  assert.equal(pr204.merged, false, 'R6-2a: bin/cli-session test must NOT spoof nested-sandbox for src/os-sandbox.mjs');
+  assert.ok(wR62a.labels(204).includes('pdd:needs-decision'));
+
+  // R6-2 (coreWorld, dir 2): src/os-sandbox.mjs (sandbox-exec + 2 turns + mkdtempSync) + bin/cli-session.mjs (1-turn execFileSync) -> MUST block!
+  const wR62b = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wR62b.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wR62b.issue(205, { title: 'R6-2b cross-kind spoof os-sandbox -> cli-session' });
+  await wR62b.tick();
+  const cwd205 = wR62b.job(205, 'build').cwd;
+  writeFile(cwd205, 'src/os-sandbox.mjs', 'export const sandbox = () => true;\n');
+  writeFile(cwd205, 'bin/cli-session.mjs', 'export const session = () => true;\n');
+  writeFile(
+    cwd205,
+    'test/os-sandbox-spoof.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { mkdtempSync } from 'node:fs';\nimport { sandbox } from '../src/os-sandbox.mjs';\ntest('spoof multi-turn inside sandbox test', () => { sandbox(); mkdtempSync('/tmp/pdd-'); execFileSync('sandbox-exec', ['-p', '(version 1)', '/usr/bin/true']); execFileSync(process.execPath, ['-e', '0']); });\n",
+  );
+  writeFile(
+    cwd205,
+    'test/cli-session-single.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { session } from '../bin/cli-session.mjs';\ntest('single-turn cli', () => { session(); execFileSync(process.execPath, ['-e', '0']); });\n",
+  );
+  const { pr: pr205 } = wR62b.build(205, {
+    write: false,
+    body: 'Fixes #205\n\nRuntime: not run (no prompt changed)\nPath: d — src/os-sandbox.mjs, bin/cli-session.mjs, test/os-sandbox-spoof.test.mjs, test/cli-session-single.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wR62b.tick();
+  wR62b.review(205, 'PASS');
+  wR62b.suite(205, 0);
+  await wR62b.tick();
+  assert.equal(pr205.merged, false, 'R6-2b: src/os-sandbox test must NOT spoof multi-turn-cli-state for bin/cli-session.mjs');
+  assert.ok(wR62b.labels(205).includes('pdd:needs-decision'));
+
+  // R6-2 (coreWorld, valid multi-surface control): BOTH src/os-sandbox.mjs AND bin/cli-session.mjs validly tested -> MUST merge!
+  const wR62ok = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wR62ok.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wR62ok.issue(206, { title: 'R6-2c valid multi-surface os-sandbox + cli-session' });
+  await wR62ok.tick();
+  const cwd206 = wR62ok.job(206, 'build').cwd;
+  writeFile(cwd206, 'src/os-sandbox.mjs', 'export const sandbox = () => true;\n');
+  writeFile(cwd206, 'bin/cli-session.mjs', 'export const session = () => true;\n');
+  writeFile(
+    cwd206,
+    'test/os-sandbox-ok.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { sandbox } from '../src/os-sandbox.mjs';\ntest('real sandbox', () => { sandbox(); execFileSync('sandbox-exec', ['-p', '(version 1)', '/usr/bin/true']); });\n",
+  );
+  writeFile(
+    cwd206,
+    'test/cli-session-ok.test.mjs',
+    "import test from 'node:test';\nimport { execFileSync } from 'node:child_process';\nimport { mkdtempSync } from 'node:fs';\nimport { session } from '../bin/cli-session.mjs';\ntest('real multi-turn cli', () => { session(); mkdtempSync('/tmp/pdd-'); execFileSync(process.execPath, ['-e', '0']); execFileSync(process.execPath, ['-e', '1']); });\n",
+  );
+  const { pr: pr206 } = wR62ok.build(206, {
+    write: false,
+    body: 'Fixes #206\n\nRuntime: not run (no prompt changed)\nPath: d — src/os-sandbox.mjs, bin/cli-session.mjs, test/os-sandbox-ok.test.mjs, test/cli-session-ok.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wR62ok.tick();
+  wR62ok.review(206, 'PASS');
+  wR62ok.suite(206, 0);
+  await wR62ok.tick();
+  assert.equal(pr206.merged, true, 'R6-2c: validly tested os-sandbox + cli-session multi-surface PR must pass and merge');
+
+  // R6-5 (coreWorld): pure Playwright test importing src/os-daemon.mjs with > 4 KiB string MUST NOT satisfy os-boundary!
+  const wR65 = await coreWorld(t, { settings: { mode: 'auto', runs: 1 } });
+  wR65.runtimeEvidence = () => ({ stories: [], storyFiles: [] });
+  wR65.issue(207, { title: 'R6-5 pure Playwright with large string on os-daemon' });
+  await wR65.tick();
+  const cwd207 = wR65.job(207, 'build').cwd;
+  writeFile(cwd207, 'src/os-daemon.mjs', 'export const daemonVal = () => 1;\n');
+  writeFile(
+    cwd207,
+    'test/os-daemon-playwright.test.mjs',
+    "import { test } from '@playwright/test';\nimport { daemonVal } from '../src/os-daemon.mjs';\ntest('browser only with big string', async ({ page }) => { daemonVal(); const payload = 'a'.repeat(5000); await page.goto('http://127.0.0.1:3000/?p=' + payload.length); });\n",
+  );
+  const { pr: pr207 } = wR65.build(207, {
+    write: false,
+    body: 'Fixes #207\n\nRuntime: not run (no prompt changed)\nPath: d — src/os-daemon.mjs, test/os-daemon-playwright.test.mjs — unowned — no contract change — Test: done check',
+    result: { promptChanged: false },
+  });
+  await wR65.tick();
+  wR65.review(207, 'PASS');
+  wR65.suite(207, 0);
+  await wR65.tick();
+  assert.equal(pr207.merged, false, 'R6-5: pure Playwright test with > 4 KiB string must NOT satisfy os-boundary');
+  assert.ok(wR65.labels(207).includes('pdd:needs-decision'));
+});

@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-core.prompt.md (sha256: 3522fe45360550e701c77e6fef705dc27257ff5ca230a029fed9af2fa1aa01bd)
+// Generated from prompts/cli/autopilot-core.prompt.md (sha256: bc40891fb657482eb9dbe7ae9b32ce0454652979048bd87e5b3a3e53e80c1ad4)
 import { execFile as cbExecFile } from 'node:child_process';
 import * as nativeFs from 'node:fs';
 import { availableParallelism, hostname, tmpdir } from 'node:os';
@@ -7324,6 +7324,68 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
 
   // Package/build manifest files are exercised by the test runner itself rather than imported directly by test files.
   const PACKAGE_MANIFEST_FILE_RE = /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|pyproject\.toml|Cargo\.(?:toml|lock)|go\.(?:mod|sum)|(?:ts|js)config(?:\.[^/]+)?\.json)$/i;
+  const OS_NON_BROWSER_CLASSES = new Set(['nested-sandbox', 'host-tty-ownership', 'multi-turn-cli-state']);
+  const matchBoundaryEntryTestsForKind = (entry, kind) => {
+    const candidateFiles = targetProofs.get(entry.target)?.get(kind);
+    let entryFiles = candidateFiles ? [...candidateFiles] : [];
+    if (kind === 'real-host-smoke' && entry.runtimeSurfaces.includes('os-boundary') && !entry.runtimeSurfaces.includes('web-ui')) {
+      entryFiles = entryFiles.filter(f => {
+        const p = probesByTest.get(f);
+        const tk = kindsByTest.get(f);
+        if (!p?.hasRealHostSmoke) return false;
+        const hasOsClass = Array.isArray(p.classes) && p.classes.some(c => OS_NON_BROWSER_CLASSES.has(c));
+        if (p.liveLocal || p.detectedTurns >= 1 || hasOsClass) return true;
+        return !(tk?.includes('browser-playwright') && !tk.includes('subprocess-cli'));
+      });
+    }
+    return entryFiles;
+  };
+
+  // Pre-aggregate per-entry probe coverage across ALL changed boundary files so sibling proof kinds cannot spoof each other.
+  const entryAggByFile = new Map();
+  for (const entry of changedBoundaryFiles) {
+    const entryMatched = new Set();
+    for (const reqKind of entry.requiredProofKinds) {
+      for (const f of matchBoundaryEntryTestsForKind(entry, reqKind)) entryMatched.add(f);
+    }
+    const classes = new Set();
+    let turns = 0;
+    let payload = null;
+    let liveLocal = false;
+    for (const f of entryMatched) {
+      const p = probesByTest.get(f);
+      if (!p) continue;
+      for (const c of p.classes ?? []) classes.add(c);
+      if (Number.isInteger(p.detectedTurns) && p.detectedTurns > turns) turns = p.detectedTurns;
+      if (Number.isFinite(p.maxDetectedPayloadBytes) && (payload === null || p.maxDetectedPayloadBytes > payload)) {
+        payload = p.maxDetectedPayloadBytes;
+      }
+      if (p.liveLocal) liveLocal = true;
+    }
+    entryAggByFile.set(entry.file, { classes, turns, payload, liveLocal });
+  }
+  const allRequiredClasses = new Set(changedBoundaryFiles.flatMap(e => e.requiredRealHostClasses));
+  const globallySatisfiedRequiredClasses = new Set();
+  for (const cls of allRequiredClasses) {
+    const requiring = changedBoundaryFiles.filter(e => e.requiredRealHostClasses.includes(cls));
+    if (requiring.length > 0 && requiring.every(e => entryAggByFile.get(e.file)?.classes.has(cls))) {
+      globallySatisfiedRequiredClasses.add(cls);
+    }
+  }
+  let globalMinRequiredTurns = null;
+  let globalMinRequiredPayloadBytes = null;
+  for (const entry of changedBoundaryFiles) {
+    const agg = entryAggByFile.get(entry.file);
+    if (entry.requiredRealHostClasses.includes('multi-turn-cli-state')) {
+      const tVal = agg?.turns ?? 0;
+      globalMinRequiredTurns = globalMinRequiredTurns === null ? tVal : Math.min(globalMinRequiredTurns, tVal);
+    }
+    if (entry.requiredRealHostClasses.includes('full-size-payload')) {
+      const pVal = agg?.payload ?? 0;
+      globalMinRequiredPayloadBytes = globalMinRequiredPayloadBytes === null ? pVal : Math.min(globalMinRequiredPayloadBytes, pVal);
+    }
+  }
+
   const e2eChecks = [];
   for (const kind of surfaces.requiredProofKinds) {
     if (kind === 'real-execution') {
@@ -7345,6 +7407,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
       if (allRuntimeCovered && matched.size > 0) {
         e2eChecks.push({
           kind: 'real-execution',
+          strictKind: true,
           command: `${suiteCmd} (${[...matched].slice(0, 3).join(', ')})`,
           executed: true,
           exitCode: 0,
@@ -7355,6 +7418,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
       } else if (!suiteClean) {
         e2eChecks.push({
           kind: 'real-execution',
+          strictKind: true,
           command: suiteCmd,
           executed: true,
           exitCode: 0,
@@ -7366,6 +7430,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
         const label = vectorsPassFiles.length > 0 ? vectorsPassFiles.slice(0, 3).join(', ') : 'pdd test';
         e2eChecks.push({
           kind: 'real-execution',
+          strictKind: true,
           command: `${suiteCmd} (${label})`,
           executed: true,
           exitCode: 0,
@@ -7384,17 +7449,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
     const matchedTestsByEntry = new Map();
     let allCovered = true;
     for (const entry of needingKind) {
-      const candidateFiles = targetProofs.get(entry.target)?.get(kind);
-      let entryFiles = candidateFiles ? [...candidateFiles] : [];
-      if (kind === 'real-host-smoke' && entry.runtimeSurfaces.includes('os-boundary') && !entry.runtimeSurfaces.includes('web-ui')) {
-        entryFiles = entryFiles.filter(f => {
-          const p = probesByTest.get(f);
-          const tk = kindsByTest.get(f);
-          if (!p?.hasRealHostSmoke) return false;
-          if (p.liveLocal || p.detectedTurns >= 1 || (p.classes?.length ?? 0) > 0) return true;
-          return !(tk?.includes('browser-playwright') && !tk.includes('subprocess-cli'));
-        });
-      }
+      const entryFiles = matchBoundaryEntryTestsForKind(entry, kind);
       if (entryFiles.length > 0) {
         matchedTestsByEntry.set(entry.file, entryFiles);
         for (const f of entryFiles) matchedTests.add(f);
@@ -7408,6 +7463,7 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
     if (allCovered && matchedTests.size > 0) {
       const check = {
         kind,
+        strictKind: true,
         command: `${suiteCmd} (${[...matchedTests].slice(0, 3).join(', ')})`,
         executed: true,
         exitCode: 0,
@@ -7419,66 +7475,74 @@ async function collectRealValidationEvidence(ctx, job, { headTree, changed, surf
         || kind === 'subprocess-cli'
         || needingKind.some(e => e.requiredRealHostClasses.length > 0);
       if (requiresClassScopedMeta && matchedTestsByEntry.size > 0) {
-        const requiredByAny = new Set(needingKind.flatMap(e => e.requiredRealHostClasses));
         const allObservedClasses = new Set();
-        const perEntryClasses = new Map();
         let maxTurns = 0;
-        let minRequiredTurns = null;
+        let kindMinRequiredTurns = null;
         let maxPayloadBytes = null;
-        let minRequiredPayloadBytes = null;
+        let kindMinRequiredPayloadBytes = null;
         let anyLiveLocal = false;
         for (const entry of needingKind) {
           const entryFiles = matchedTestsByEntry.get(entry.file) ?? [];
-          const entryClassSet = new Set();
           let entryTurns = 0;
           let entryPayload = null;
           for (const f of entryFiles) {
             const p = probesByTest.get(f);
             if (!p) continue;
-            for (const c of p.classes ?? []) {
-              entryClassSet.add(c);
-              allObservedClasses.add(c);
-            }
+            for (const c of p.classes ?? []) allObservedClasses.add(c);
             if (Number.isInteger(p.detectedTurns) && p.detectedTurns > entryTurns) entryTurns = p.detectedTurns;
             if (Number.isFinite(p.maxDetectedPayloadBytes) && (entryPayload === null || p.maxDetectedPayloadBytes > entryPayload)) {
               entryPayload = p.maxDetectedPayloadBytes;
             }
             if (p.liveLocal) anyLiveLocal = true;
           }
-          perEntryClasses.set(entry.file, entryClassSet);
           if (entryTurns > maxTurns) maxTurns = entryTurns;
           if (entryPayload !== null && (maxPayloadBytes === null || entryPayload > maxPayloadBytes)) {
             maxPayloadBytes = entryPayload;
           }
           if (entry.requiredRealHostClasses.includes('multi-turn-cli-state')) {
-            minRequiredTurns = minRequiredTurns === null ? entryTurns : Math.min(minRequiredTurns, entryTurns);
+            const aggTurns = entryAggByFile.get(entry.file)?.turns ?? entryTurns;
+            kindMinRequiredTurns = kindMinRequiredTurns === null ? aggTurns : Math.min(kindMinRequiredTurns, aggTurns);
           }
           if (entry.requiredRealHostClasses.includes('full-size-payload')) {
-            const pVal = entryPayload ?? 0;
-            minRequiredPayloadBytes = minRequiredPayloadBytes === null ? pVal : Math.min(minRequiredPayloadBytes, pVal);
+            const aggPayload = entryAggByFile.get(entry.file)?.payload ?? entryPayload ?? 0;
+            kindMinRequiredPayloadBytes = kindMinRequiredPayloadBytes === null ? aggPayload : Math.min(kindMinRequiredPayloadBytes, aggPayload);
           }
         }
         const verifiedClasses = [];
         for (const cls of allObservedClasses) {
-          if (requiredByAny.has(cls)) {
-            const allRequiringSatisfied = needingKind
-              .filter(e => e.requiredRealHostClasses.includes(cls))
-              .every(e => perEntryClasses.get(e.file)?.has(cls));
-            if (allRequiringSatisfied) verifiedClasses.push(cls);
+          if (allRequiredClasses.has(cls)) {
+            const requiringInKind = needingKind.filter(e => e.requiredRealHostClasses.includes(cls));
+            if (requiringInKind.length > 0 && globallySatisfiedRequiredClasses.has(cls)) {
+              verifiedClasses.push(cls);
+            }
           } else {
             verifiedClasses.push(cls);
           }
         }
         check.realHostClasses = verifiedClasses.sort();
-        check.turns = minRequiredTurns !== null ? minRequiredTurns : maxTurns;
-        if (minRequiredPayloadBytes !== null) check.payloadBytes = minRequiredPayloadBytes;
-        else if (maxPayloadBytes !== null) check.payloadBytes = maxPayloadBytes;
+        if (globalMinRequiredTurns !== null && !globallySatisfiedRequiredClasses.has('multi-turn-cli-state')) {
+          check.turns = kindMinRequiredTurns !== null
+            ? Math.min(kindMinRequiredTurns, globalMinRequiredTurns)
+            : Math.min(maxTurns, globalMinRequiredTurns);
+        } else {
+          check.turns = kindMinRequiredTurns !== null ? kindMinRequiredTurns : maxTurns;
+        }
+        if (globalMinRequiredPayloadBytes !== null && !globallySatisfiedRequiredClasses.has('full-size-payload')) {
+          check.payloadBytes = kindMinRequiredPayloadBytes !== null
+            ? Math.min(kindMinRequiredPayloadBytes, globalMinRequiredPayloadBytes)
+            : (maxPayloadBytes !== null ? Math.min(maxPayloadBytes, globalMinRequiredPayloadBytes) : globalMinRequiredPayloadBytes);
+        } else if (kindMinRequiredPayloadBytes !== null) {
+          check.payloadBytes = kindMinRequiredPayloadBytes;
+        } else if (maxPayloadBytes !== null) {
+          check.payloadBytes = maxPayloadBytes;
+        }
         if (anyLiveLocal) check.liveLocal = true;
       }
       e2eChecks.push(check);
     } else if (!suiteClean) {
       e2eChecks.push({
         kind,
+        strictKind: true,
         command: suiteCmd,
         executed: true,
         exitCode: 0,

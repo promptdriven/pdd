@@ -1,4 +1,4 @@
-// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 4264c7aa1f6fa82df6deaacf592e341371ae342dc8fe70c878ae999a1e324ede).
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 018c8e6b0791b1584546828de6e955e4b4bd0dc2ffa4a2f8538512cb118f3de2).
 
 export const MAX_VALIDATION_REPAIRS = 3;
 export const MIN_REALISTIC_PAYLOAD_BYTES = 4096;
@@ -1321,16 +1321,16 @@ const SHADOW_DESTRUCTURE_RE = /\b(?:const|let|var)[ \t]*\{([^};]{1,200})\}[ \t]*
 const SHADOW_ARRAY_DESTRUCTURE_RE = /\b(?:const|let|var)[ \t]*\[([^\];]{1,200})\][ \t]*=[ \t]*\r?\n?[ \t]*([^;\n]{0,200})/g;
 const SHADOW_FN_RE = /\bfunction[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\(/g;
 const SHADOW_CLASS_RE = /\bclass[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)(?![A-Za-z0-9_$])/g;
-const GLOBAL_FETCH_PROP_ASSIGN_RE = /\b(?:globalThis|global|window|self)\s*\.\s*fetch\s*=(?![=>])/;
-const BARE_FETCH_ASSIGN_RE = /(?<![A-Za-z0-9_$.])fetch\s*=(?![=>])/g;
-const PROP_ASSIGN_STUB_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(spawn|spawnSync|execFile|execFileSync|execSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|createReadStream|createWriteStream|createServer|request|listen|fetch|isatty|ReadStream|WriteStream|DatabaseSync|launch|launchPersistentContext|goto|newPage|newContext|connect|connectOverCDP|pages)\s*=(?![=>])/g;
-const BRACKET_ASSIGN_STUB_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\[[ \t]*("")[ \t]*\]\s*=(?![=>])/g;
+const GLOBAL_FETCH_PROP_ASSIGN_RE = /\b(?:globalThis|global|window|self)\s*\.\s*fetch\s*(?:&&|\|\||\?\?)?=(?![=>])/;
+const BARE_FETCH_ASSIGN_RE = /(?<![A-Za-z0-9_$.])fetch\s*(?:&&|\|\||\?\?)?=(?![=>])/g;
+const PROP_ASSIGN_STUB_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(spawn|spawnSync|execFile|execFileSync|execSync|openSync|open|statSync|stat|fstatSync|fstat|lstatSync|lstat|accessSync|access|mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|createReadStream|createWriteStream|createServer|request|listen|fetch|isatty|ReadStream|WriteStream|DatabaseSync|launch|launchPersistentContext|goto|newPage|newContext|connect|connectOverCDP|pages)\s*(?:&&|\|\||\?\?)?=(?![=>])/g;
+const BRACKET_ASSIGN_STUB_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\[[ \t]*("")[ \t]*\]\s*(?:&&|\|\||\?\?)?=(?![=>])/g;
 const DEFINE_PROP_STUB_RE = /\bObject\.defineProperty[ \t]*\(\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*,\s*("")/g;
 const STUB_GLOBAL_CALL_RE = /\bvi\.stubGlobal[ \t]*\(\s*("")/g;
 const METHOD_STUB_RE = /\b(?:mock\.method|vi\.spyOn|jest\.spyOn|sinon\.stub)[ \t]*\(\s*([^,\n)]{1,120}),\s*("")/g;
 const BROWSER_ORIGIN_RHS_RE = /(?<![A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(launch|launchPersistentContext|newPage|newContext|connect|connectOverCDP|pages)[ \t]*\(/;
-const BARE_BROWSER_REASSIGN_RE = /(?<![A-Za-z0-9_$.])(page|browser|context|chromium|firefox|webkit)\s*=(?![=>])[ \t]*\r?\n?[ \t]*([^;\n]{0,200})/g;
-const BARE_IDENT_ASSIGN_RE = /(?<![A-Za-z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)\s*=(?![=>])/g;
+const BARE_BROWSER_REASSIGN_RE = /(?<![A-Za-z0-9_$.])(page|browser|context|chromium|firefox|webkit)\s*(?:&&|\|\||\?\?)?=(?![=>])[ \t]*\r?\n?[ \t]*([^;\n]{0,200})/g;
+const BARE_IDENT_ASSIGN_RE = /(?<![A-Za-z0-9_$.])([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:&&|\|\||\?\?)?=(?![=>])/g;
 const VALID_IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const BROWSER_WELL_KNOWN_VARS = new Set(['page', 'browser', 'context', 'chromium', 'firefox', 'webkit']);
 const GLOBAL_OBJ_NAMES = new Set(['globalThis', 'global', 'window', 'self']);
@@ -2004,7 +2004,15 @@ function detectAuthenticServerOrDb(codeNoStrings, auth) {
           let isMethodBody = false;
           while (k < limit) {
             const c = codeNoStrings[k];
-            if (c === '\n' || c === '\r' || c === ';') break;
+            if (
+              angleDepth === 0
+              && parenDepth === 0
+              && bracketDepth === 0
+              && braceDepth === 0
+              && (c === ';' || ((c === '\n' || c === '\r') && prevNonSpace !== '|' && prevNonSpace !== '&'))
+            ) {
+              break;
+            }
             if (c === '=' && codeNoStrings[k + 1] === '>') {
               if (angleDepth === 0 && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) break;
               prevNonSpace = '>';
@@ -2036,7 +2044,7 @@ function detectAuthenticServerOrDb(codeNoStrings, auth) {
             } else if (c === '}') {
               braceDepth = Math.max(0, braceDepth - 1);
               prevNonSpace = c;
-            } else if (c !== ' ' && c !== '\t') {
+            } else if (c !== ' ' && c !== '\t' && c !== '\n' && c !== '\r') {
               sawTypeToken = true;
               prevNonSpace = c;
             }
@@ -2314,6 +2322,9 @@ function detectBucket2Blocker({ realBindingUnavailable, diagnostics, toolHint, v
 function isRealHostBoundaryCheck(check, { hasOsBoundary = false } = {}) {
   if (!check || typeof check !== 'object' || check.executed !== true || check.mockOnly === true) return false;
   if (!REAL_E2E_KINDS.has(check.kind)) return false;
+  if (check.strictKind === true) {
+    return check.kind === 'real-host-smoke';
+  }
   const isLiveLocal = check.liveLocal === true || /--live-local\b/i.test(cleanText(check.command));
   if (hasOsBoundary) {
     return check.kind === 'real-host-smoke' || check.kind === 'subprocess-cli' || isLiveLocal;
@@ -2355,7 +2366,7 @@ function hasSubprocessRealHostEvidence(check) {
 function coversRequiredProofKinds(requiredProofKinds, passingChecks, { hasOsBoundary = false } = {}) {
   const passedKinds = new Set(passingChecks.map((c) => c.kind));
   const hasRealHost = passingChecks.some((c) => isRealHostBoundaryCheck(c, { hasOsBoundary }));
-  const hasSubprocessRealHost = passingChecks.some(hasSubprocessRealHostEvidence);
+  const hasSubprocessRealHost = passingChecks.some((c) => c.strictKind !== true && hasSubprocessRealHostEvidence(c));
   return requiredProofKinds.every((required) => (
     passedKinds.has(required)
     || (required === 'real-host-smoke' && hasRealHost)
@@ -2588,13 +2599,17 @@ export function evaluateValidationOutcome({
   const hasOsBoundary = surfaceInfo.runtimeSurfaces.includes('os-boundary');
   const executedRealChecks = checks.filter((c) => c && typeof c === 'object' && c.executed === true && c.mockOnly !== true && REAL_E2E_KINDS.has(c.kind));
   const executedRealHostChecks = checks.filter((c) => isRealHostBoundaryCheck(c, { hasOsBoundary }));
+  const executedClassChecks = checks.filter((c) => (
+    isRealHostBoundaryCheck(c, { hasOsBoundary })
+    || (c && typeof c === 'object' && c.strictKind === true && c.executed === true && c.mockOnly !== true && c.kind === 'subprocess-cli')
+  ));
   const hasExecutedFailure = checks.some((c) => (
     c && typeof c === 'object' && c.executed === true
     && ((Number.isInteger(c.exitCode) && c.exitCode !== 0) || (Number.isInteger(c.failed) && c.failed > 0))
   ));
   const mockOnlyDetected = lintErrors.includes('boundary-mock-only-test')
     || checks.some((c) => c && typeof c === 'object' && (c.kind === 'unit-mock' || c.mockOnly === true))
-    || (executedRealChecks.length > 0 && executedRealHostChecks.length === 0);
+    || (executedRealChecks.length > 0 && executedRealHostChecks.length === 0 && !executedRealChecks.some((c) => c.strictKind === true));
 
   if (offlinePassed === false && hasExecutedFailure) {
     return bucket1FailureOutcome({
@@ -2620,11 +2635,11 @@ export function evaluateValidationOutcome({
     });
   }
 
-  if (needsRealHostSmoke && !executedRealHostChecks.some((c) => !isPassingRealE2eCheck(c))) {
+  if (needsRealHostSmoke && !executedClassChecks.some((c) => !isPassingRealE2eCheck(c))) {
     const missingClasses = findMissingRealHostClasses({
       requiredClasses,
       explicitClasses,
-      executedRealHostChecks,
+      executedRealHostChecks: executedClassChecks,
     });
     if (missingClasses.length > 0) {
       const gap = describeRealHostGap({

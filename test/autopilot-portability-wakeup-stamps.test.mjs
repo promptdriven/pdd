@@ -581,7 +581,7 @@ test('3460-7: greenfield pdd-product plan-only repo with no package.json on main
   writeFileSync(join(builderClone, 'package.json'), JSON.stringify({ name: 'pocket-hub', type: 'module', scripts: { test: 'node --test' } }, null, 2) + '\n');
   writeFileSync(join(builderClone, 'prompts/hub.prompt.md'), '---\nkind: native-only\nreason: local process socket bootstrap\n---\n# Hub\n\nOwn `src/hub.mjs`.\n');
   writeFileSync(join(builderClone, 'src/hub.mjs'), '// Prompt: prompts/hub.prompt.md\nexport const hubReady = () => true;\n');
-  writeFileSync(join(builderClone, 'test/hub.test.mjs'), 'import test from "node:test"; import assert from "node:assert/strict"; import { hubReady } from "../src/hub.mjs"; test("hub", () => assert.equal(hubReady(), true));\n');
+  writeFileSync(join(builderClone, 'test/hub.test.mjs'), 'import test from "node:test"; import assert from "node:assert/strict"; import { execFileSync } from "node:child_process"; import { hubReady } from "../src/hub.mjs"; test("hub", () => { execFileSync(process.execPath, ["-e", "0"]); assert.equal(hubReady(), true); });\n');
   w.git(builderClone, 'add', '.');
   w.git(builderClone, 'commit', '-qm', 'feat(hub): bootstrap package.json, prompt, src and tests');
   w.git(builderClone, 'push', '-q', 'origin', `HEAD:${build.branch}`);
@@ -661,7 +661,7 @@ test('3460-8: openPullRequest fails closed on malformed/omitted evidence, keeps 
     'prompts/p1.prompt.md': '---\nkind: native-only\nreason: shared part 1\n---\n# Part 1\n\nOwn src/shared.js.\n',
     'prompts/p2.prompt.md': '---\nkind: native-only\nreason: shared part 2\n---\n# Part 2\n\nOwn src/shared.js.\n',
     'src/shared.js': 'export const shared = () => 1;\n',
-    'test/shared.test.mjs': 'import test from "node:test"; import assert from "node:assert/strict"; import { shared } from "../src/shared.js"; test("s", () => assert.equal(shared(), 1));\n',
+    'test/shared.test.mjs': 'import test from "node:test"; import assert from "node:assert/strict"; import { execFileSync } from "node:child_process"; import { shared } from "../src/shared.js"; test("s", () => { execFileSync(process.execPath, ["-e", "0"]); assert.equal(shared(), 1); });\n',
     'pdd-bindings.json': JSON.stringify({
       schema_version: 'pdd.bindings.v1',
       modules: [
@@ -679,7 +679,7 @@ test('3460-8: openPullRequest fails closed on malformed/omitted evidence, keeps 
   writeFileSync(join(build.cwd, 'prompts/only.prompt.md'), '---\nkind: native-only\nreason: contract doc\n---\n# Only\n\nContract v2.\n');
   writeFileSync(join(build.cwd, 'prompts/p2.prompt.md'), '---\nkind: native-only\nreason: shared part 2\n---\n# Part 2\n\nOwn src/shared.js returning 2.\n');
   writeFileSync(join(build.cwd, 'src/shared.js'), 'export const shared = () => 2;\n');
-  writeFileSync(join(build.cwd, 'test/shared.test.mjs'), 'import test from "node:test"; import assert from "node:assert/strict"; import { shared } from "../src/shared.js"; test("s", () => assert.equal(shared(), 2));\n');
+  writeFileSync(join(build.cwd, 'test/shared.test.mjs'), 'import test from "node:test"; import assert from "node:assert/strict"; import { execFileSync } from "node:child_process"; import { shared } from "../src/shared.js"; test("s", () => { execFileSync(process.execPath, ["-e", "0"]); assert.equal(shared(), 2); });\n');
   w.git(build.cwd, 'add', '.');
   w.git(build.cwd, 'commit', '-qm', 'update prompt-only and p2 multi-owner');
   w.git(build.cwd, 'push', '-q', 'origin', `HEAD:${build.branch}`);
