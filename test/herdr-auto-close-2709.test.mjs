@@ -398,3 +398,161 @@ test('2709: 20 sequential finished runs leave 0 finished panes open and pane bud
   assert.equal(f.git(f.source, 'branch', '--format=%(refname)'), branchesBefore, 'pane budget refusal must allocate 0 branches');
   assert.equal(f.herdr.calls.some((args) => ['create', 'open', 'run'].includes(args[1])), false);
 });
+
+test('2709 R1 P1-1: ensurePaneBudget passes closeGraceMs(ports) to sweepFinished and rejects invalid values before sweeping', async () => {
+  const seen = [];
+  let herdrCalls = 0;
+  const herdr = async () => {
+    herdrCalls++;
+    return { result: { type: 'pane_list', panes: [{ pane_id: 'p1', workspace_id: 'w1', tab_id: 't1', terminal_id: 'term1' }] } };
+  };
+  const sweepFinished = async (options) => {
+    seen.push(options);
+    return { closed: 0, reasonCounts: {} };
+  };
+
+  await ensurePaneBudget(1, { env: {}, herdr, sweepFinished });
+  await ensurePaneBudget(1, { env: { PDD_HERDR_CLOSE_GRACE_SEC: '0' }, herdr, sweepFinished });
+  await ensurePaneBudget(1, { env: { PDD_HERDR_CLOSE_GRACE_SEC: '30' }, herdr, sweepFinished });
+  assert.deepEqual(seen, [
+    { graceMs: DEFAULT_CLOSE_GRACE_MS },
+    { graceMs: 0 },
+    { graceMs: 30_000 },
+  ]);
+
+  const callsBefore = herdrCalls;
+  const sweepsBefore = seen.length;
+  for (const bad of ['abc', '-1']) {
+    await assert.rejects(
+      () => ensurePaneBudget(1, { env: { PDD_HERDR_CLOSE_GRACE_SEC: bad }, herdr, sweepFinished }),
+      (err) => err?.code === 'invalid_close_grace' && /PDD_HERDR_CLOSE_GRACE_SEC/.test(err.message),
+    );
+  }
+  assert.equal(seen.length, sweepsBefore, 'invalid_close_grace must fail before invoking sweepFinished');
+  assert.equal(herdrCalls, callsBefore, 'invalid_close_grace must fail before calling Herdr');
+});
+
+test('2709 R1 P1-2: 2-PR run selects per-area / latest mergedAt and absent panes persist chat.closed.confirmedAt', async (t) => {
+  const now = Date.parse('2026-10-27T19:00:00Z');
+  const pr1MergedMs = now - 2 * 60 * 60_000; // 2 hours ago
+  const pr2MergedMs = now - 2 * 60_000;      // 2 minutes ago
+  const pr1MergedIso = new Date(pr1MergedMs).toISOString();
+  const pr2MergedIso = new Date(pr2MergedMs).toISOString();
+
+  // 1) finishedAt on a legacy 2-PR completed run without chat.endedAt
+  const legacyTwoPrRun = {
+    state: 'completed',
+    updatedAt: now,
+    startedAt: now - 3 * 60 * 60_000,
+    pr: [
+      { number: 23, stage: 'prompt', state: 'merged', mergedAt: pr1MergedIso },
+      { number: 24, stage: 'code', state: 'merged', mergedAt: pr2MergedIso },
+    ],
+    chats: [
+      { area: 'story', startedAt: now - 3 * 60 * 60_000 },
+      { area: 'prompt', startedAt: now - 2.5 * 60 * 60_000 },
+      { area: 'code', startedAt: now - 30 * 60_000 },
+    ],
+  };
+  assert.equal(finishedAt(legacyTwoPrRun, legacyTwoPrRun.chats[1]), pr1MergedMs, 'PR 1 area chat uses PR 1 mergedAt');
+  assert.equal(finishedAt(legacyTwoPrRun, legacyTwoPrRun.chats[2]), pr2MergedMs, 'PR 2 area chat uses PR 2 mergedAt (not PR 1)');
+  assert.equal(finishedAt(legacyTwoPrRun, legacyTwoPrRun.chats[0]), pr2MergedMs, 'unmatched area uses latest (Math.max) mergedAt');
+
+  // 2) Live 2-PR waiting run discovered by refreshPr + automatic 15-min grace sweep:
+  //    PR 1 (prompt) merged 2h ago closes immediately; PR 2 (code) merged 2m ago stays protected by 15m grace!
+  const { f, run } = await waitingPrRun(t);
+  const promptChat = run.chats[0];
+  const codeChat = run.chats[1];
+  const promptPrUrl = 'https://github.com/example/project/pull/22';
+  const codePrUrl = run.pr[0].url;
+  const runPr1MergedMs = f.clock - 2 * 60 * 60_000;
+  const runPr2MergedMs = f.clock - 2 * 60_000;
+  const runPr1MergedIso = new Date(runPr1MergedMs).toISOString();
+  const runPr2MergedIso = new Date(runPr2MergedMs).toISOString();
+
+  delete run.chats[0].endedAt;
+  delete run.chats[1].endedAt;
+  run.pr = [
+    { number: 22, url: promptPrUrl, stage: promptChat.area, state: 'open' },
+    { ...run.pr[0], stage: codeChat.area, state: 'open' },
+  ];
+  save(run);
+
+  stubPrView(f, promptPrUrl, { state: 'MERGED', mergedAt: runPr1MergedIso, statusCheckRollup: [] });
+  stubPrView(f, codePrUrl, { state: 'MERGED', mergedAt: runPr2MergedIso, statusCheckRollup: [] });
+
+  const autoSweep = await runner.tidyRuns({ graceMs: DEFAULT_CLOSE_GRACE_MS }, f.ports);
+  assert.equal(autoSweep.exitCode, 0, autoSweep.message);
+  const afterAuto = f.record();
+  assert.equal(afterAuto.state, 'completed');
+  assert.equal(afterAuto.chats[0].endedAt, runPr1MergedMs, 'prompt chat gets PR 1 mergedAt');
+  assert.equal(afterAuto.chats[1].endedAt, runPr2MergedMs, 'code chat gets PR 2 mergedAt (NOT PR 1)');
+  assert.equal(f.herdr.paneOf(promptChat), undefined, 'PR 1 chat merged 2h ago closes immediately');
+  assert.ok(f.herdr.paneOf(codeChat), 'PR 2 chat merged 2m ago stays protected under 15m grace');
+  assert.deepEqual(afterAuto.cleanupKept, [{ area: codeChat.area, reason: 'grace' }]);
+
+  const explicit = await runExplicitTidy(f);
+  assert.equal(explicit.exitCode, 0, explicit.message);
+  assert.equal(f.herdr.paneOf(codeChat), undefined, 'explicit tidy closes PR 2 chat immediately');
+  assert.equal(f.herdr.panes.length, 1);
+
+  // 3) Already-closed / absent pane discovered during refreshPr + tidy persists chat.closed.confirmedAt durably
+  //    with zero close commands sent to Herdr.
+  const absent = await waitingPrRun(t);
+  const absentChat = absent.run.chats[1];
+  await absent.f.herdr.herdr(['workspace', 'close', absentChat.workspaceId]);
+  absent.f.herdr.calls.length = 0;
+  stubPrView(absent.f, absent.run.pr[0].url, {
+    state: 'MERGED',
+    mergedAt: new Date(absent.f.clock - 20 * 60_000).toISOString(),
+    statusCheckRollup: [],
+  });
+  const reconciled = await runner.tidyRuns({ graceMs: DEFAULT_CLOSE_GRACE_MS }, absent.f.ports);
+  assert.equal(reconciled.exitCode, 0, reconciled.message);
+  const savedAbsent = absent.f.record();
+  assert.equal(savedAbsent.state, 'completed');
+  assert.equal(savedAbsent.chats.every((c) => Number.isFinite(c.closed?.confirmedAt) && c.closed?.reason === 'absent'), true);
+  assert.equal(savedAbsent.layout?.phase, 'closed');
+  assert.equal(
+    absent.f.herdr.calls.some((args) => args[1] === 'close'),
+    false,
+    'absent reconciliation must send zero close calls to Herdr',
+  );
+});
+
+test('2709 R1 P1-3: cancelRun immediately closes all run panes and --new replacement closes old tab and stamps endedAt', async (t) => {
+  // 1) Explicit cancel immediately closes all run panes (0 run panes left open).
+  const f = await fixture(t, { agent: 'claude', name: 'small-change' });
+  f.ports.skipMetricsDelivery = true;
+  assert.equal((await f.run()).exitCode, 0);
+  const runBeforeCancel = f.record();
+  assert.ok(f.herdr.panes.length > 1);
+
+  const cancelled = await runner.cancelRun({ ref: '17', cwd: f.source }, f.ports);
+  assert.equal(cancelled.exitCode, 0, cancelled.message);
+  const afterCancel = f.record();
+  assert.equal(afterCancel.state, 'cancelled');
+  assert.ok(Number.isFinite(afterCancel.chats[0].endedAt), 'cancel must stamp chat.endedAt');
+  assert.equal(afterCancel.chats[0].closed?.reason, 'cancel');
+  assert.ok(Number.isFinite(afterCancel.chats[0].closed?.confirmedAt), 'cancel must persist chat.closed.confirmedAt');
+  assert.equal(afterCancel.layout?.phase, 'closed');
+  assert.equal(f.herdr.paneOf(runBeforeCancel.chats[0]), undefined);
+  assert.equal(f.herdr.panes.length, 1, 'only repository anchor pane remains after cancel');
+
+  // 2) Chat replacement (--new) closes the old tab without leaking panes and stamps endedAt on abandonedChats.
+  const g = await fixture(t, { agent: 'claude', name: 'small-change' });
+  g.ports.skipMetricsDelivery = true;
+  assert.equal((await g.run()).exitCode, 0);
+  const originalChat = g.record().chats[0];
+  const panesBeforeReplace = g.herdr.panes.length;
+  g.tick(5_000);
+
+  const replaced = await runner.openRun({ ref: '17', cwd: g.source, newSession: true, packageRoot }, g.ports);
+  assert.equal(replaced.exitCode, 0, replaced.message);
+  const afterReplace = g.record();
+  assert.equal(g.herdr.paneOf(originalChat), undefined, '--new must close the superseded chat tab');
+  assert.equal(g.herdr.panes.length, panesBeforeReplace, '--new must not leak any extra Herdr panes');
+  assert.equal(afterReplace.abandonedChats?.length, 1);
+  assert.equal(afterReplace.abandonedChats[0].paneId, originalChat.paneId);
+  assert.ok(Number.isFinite(afterReplace.abandonedChats[0].endedAt), 'superseded chat in abandonedChats must carry endedAt');
+});

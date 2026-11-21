@@ -8,7 +8,7 @@ import { findNativeSessions } from './approval-evidence.mjs';
 import { projectIssueGraph } from './issue-dependencies.mjs';
 import { sortClosingReferences } from './issue-sort.mjs';
 import { readDependencySnapshot, createDependencyReadPorts, recoverCoordinatorClaim, releaseParkedClaim } from './issue-dependencies-github.mjs';
-// Generated from prompts/cli/workflow-runner.prompt.md (sha256: a885bbb2f4decb9fc0cc970870f5b67fa083fdc90489a653e39919f550309124).
+// Generated from prompts/cli/workflow-runner.prompt.md (sha256: 0b511e254b650631e6ef361c4d572c7c317188777087e3839baf633497ec16c2).
 import { approvalActor, readSaidWords, readApprovalPolicy, readPromptApprovals, recordPromptApproval } from './approval-policy.mjs';
 import { approvePromptText } from './prompt-approve.mjs';
 import { findOwners, findTestPromptViolations, isTestOwnedPath } from './file-owner.mjs';
@@ -5347,12 +5347,27 @@ async function refreshPr(run, p) {
     if(latest.state==='cancelled')return;
     if(last.state==='merged'&&area===latest.areas.at(-1))latest.state='completed';
     if(last.state==='merged'&&area?.then==='ask-code'&&latest.gate?.kind==='ask-code'){latest.state='completed';latest.doneAt='PR 1';}
+    const maxMergedMs = list => {
+      let latest = -Infinity;
+      for (const pr of list) {
+        if (pr?.state !== 'merged' || typeof pr.mergedAt !== 'string') continue;
+        const ms = Date.parse(pr.mergedAt);
+        if (Number.isFinite(ms) && ms > latest) latest = ms;
+      }
+      return Number.isFinite(latest) ? latest : NaN;
+    };
     const closedReason = closedWaitingReason(latest);
-    const mergedMs = last.state === 'merged' && typeof last.mergedAt === 'string' ? Date.parse(last.mergedAt) : NaN;
-    const completionAt = Number.isFinite(mergedMs) ? Math.min(mergedMs, checkedAt) : checkedAt;
+    const runMergedMs = maxMergedMs(latest.pr ?? []);
+    const completionAt = Number.isFinite(runMergedMs) ? Math.min(runMergedMs, checkedAt) : checkedAt;
     const endedAt = closedReason ? (priorClosedAt ?? checkedAt) : completionAt;
     if (closedReason) cancelClosedWaiting(latest, endedAt, closedReason);
-    if (ended(latest)) for (const chat of latest.chats ?? []) chat.endedAt = Number.isFinite(chat.endedAt) ? Math.min(chat.endedAt, endedAt) : endedAt;
+    if (ended(latest)) for (const chat of latest.chats ?? []) {
+      const areaMergedMs = !closedReason && typeof chat.area === 'string' && chat.area
+        ? maxMergedMs((latest.pr ?? []).filter(pr => pr?.stage === chat.area || pr?.area === chat.area))
+        : NaN;
+      const chatEnd = Number.isFinite(areaMergedMs) ? Math.min(areaMergedMs, checkedAt) : endedAt;
+      chat.endedAt = Number.isFinite(chat.endedAt) ? Math.min(chat.endedAt, chatEnd) : chatEnd;
+    }
   });
   await refreshTops();
 }
@@ -5783,7 +5798,8 @@ function saveChatObservations(run, original, observed, p, { error, phase = 'open
   return conditionalCommit(run, p, fresh => fresh && fresh.runId === run.runId && !ended(fresh) && sameFact(lastChat(fresh, area), original) && !(reset && fresh.area !== run.area), fresh => {
     const selected = lastChat(fresh, area);
     if (reset) {
-      fresh.abandonedChats = [...(fresh.abandonedChats ?? []), { ...selected, abandonedAt: p.now(), reason: 'tab-and-agent-missing' }];
+      const at = p.now();
+      fresh.abandonedChats = [...(fresh.abandonedChats ?? []), { ...selected, abandonedAt: at, endedAt: selected.endedAt ?? at, reason: 'tab-and-agent-missing' }];
       fresh.chats = fresh.chats.filter(chat => chat !== selected);
     } else if (selected && observed) copyObservation(selected, observed);
     else if (observed) fresh.chats.push(structuredClone(observed));
@@ -5874,6 +5890,7 @@ async function reopenChangedStory(run,p,entryContract,observedContract) {
   commitRun(run,p,latest=>{
     if(ended(latest) || latest.area!==run.area || latest.promptReturn?.at!==run.promptReturn?.at)throw Object.assign(Error('The returned area changed. Look at the current run again.'),{code:'workflow_progress_refused'});
     for(const item of latest.areas.slice(story))for(const step of item.steps)delete latest.done[step];
+    for (const chat of latest.chats ?? []) if (chat.area !== latest.areas[story]?.name) chat.endedAt ??= p.now();
     latest.area=story;latest.gate=null;latest.question=null;latest.state='running';
   });
   return true;
@@ -5925,6 +5942,7 @@ async function returnToPrompt(run,selected,p) {
     for(const area of latest.areas.slice(selected))for(const step of area.steps)delete latest.done[step];
     for(const key of ['replayEvidence','testInventory','approvalRecord','publicationPending','chatReplacement','localPublication'])delete latest[key];
     latest.runtimeHistory=[];latest.pddHistory=[];latest.evidence=[];latest.evidenceAssociations=[];
+    for (const chat of latest.chats ?? []) if (chat.area !== latest.areas[selected]?.name) chat.endedAt ??= p.now();
     latest.branch=pr1.branch;latest.prBase=run.baseBranch;latest.area=selected;latest.state='running';latest.gate=null;latest.question=null;
   });
   for(const file of ['replay-evidence.json','old-code-proof.json','test-inventory.json','verify.md','formal.md','review.md'])
@@ -6101,7 +6119,7 @@ async function openRunLocked({ ref, cwd, area, newSession = false, model, herdrA
         };
         admit(readRun(run.runDir));
         commitRun(run, p, fresh => {
-          if (!admit(fresh)) (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, reason: 'explicit-new-session' });
+          if (!admit(fresh)) (fresh.abandonedChats ??= []).push({ ...record.original, replacementId: record.id, abandonedAt: record.at, endedAt: record.original.endedAt ?? record.at, reason: 'explicit-new-session' });
           const priorPhase = fresh.chatReplacement?.phase;
           fresh.chatReplacement = structuredClone(record);
           if (layout) fresh.layout = {...fresh.layout, ...structuredClone(layout)};
