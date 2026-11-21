@@ -17,6 +17,7 @@ import {
   lintPublicInterfaceTests,
   lintRepoAntiPatterns,
   lintRepoProject,
+  lintTestFixedSleeps,
   loadProjectLintConfig,
   stripPromptMetadata,
 } from '../src/repo-hygiene-lint.mjs';
@@ -2177,4 +2178,340 @@ test('3574 Part 1: lintRepoProject emits advisory native-only-contract-incomplet
   assert.equal(report.ok, true, 'native-only-contract-incomplete defaults to advisory warn');
   assert.equal(report.findings.filter(f => f.code === 'native-only-contract-incomplete').length, 1);
   assert.equal(report.findings.find(f => f.code === 'native-only-contract-incomplete').path, 'prompts/stub.prompt.md');
+});
+
+test('3574 reopened: lintNativeOnlyPortParity recognizes exported <stem>.<op> operations from linked checkable prompts while still failing fake/typo ports with 4-part remediation', () => {
+  const accessPrompt = [
+    '# Remote MCP connector access',
+    '',
+    '## Public operations',
+    '',
+    '### invoke_tool',
+    'Runs read-only MCP tool.',
+    '',
+    '### redeem_view',
+    'Redeems authenticated view.',
+    '',
+    '## Ports',
+    '- `tokens.verify`',
+    '- `audit_log.append`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const governancePrompt = [
+    '# Remote MCP connector governance',
+    '',
+    '## Public operations',
+    '',
+    '### `register_client`',
+    'Registers OAuth client.',
+    '',
+    '### manage_grant and rotate_token',
+    'Issues, revokes, and rotates grants.',
+    '',
+    '## Ports',
+    '- `grant_store.save`',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const interimPrompt = [
+    '# Interim authority',
+    '',
+    '## Operations',
+    '',
+    '`activate_interim_authority` and `reauthorize_interim_authority` take `{ issuer_id }`.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const embeddedEntriesPrompt = [
+    '# Vendor CLI',
+    '',
+    'Export `run_vendor_cli(argv)`.',
+    '',
+    '<details><summary>Runtime interface</summary>',
+    '```json',
+    JSON.stringify({ entries: [{ name: 'main' }] }),
+    '```',
+    '</details>',
+  ].join('\n');
+
+  const deps = [
+    { path: 'prompts/connector/access.prompt.md', text: accessPrompt, isPrompt: true },
+    { path: 'prompts/connector/governance.prompt.md', text: governancePrompt, isPrompt: true },
+    { path: 'prompts/continuity/interim-authority.prompt.md', text: interimPrompt, isPrompt: true },
+    { path: 'prompts/cli/vendor-cli.prompt.md', text: embeddedEntriesPrompt, isPrompt: true },
+  ];
+
+  const validServerPrompt = [
+    '---',
+    'kind: native-only',
+    'reason: HTTPS remote MCP transport and OAuth token plumbing.',
+    '---',
+    '',
+    '# Remote MCP connector server adapter',
+    '',
+    'Route MCP calls to `access.invoke_tool` and browser redemptions to `access.redeem_view`.',
+    '',
+    '## Port wiring',
+    '- Wire `access.invoke_tool` and `access.redeem_view` to `tokens.verify` and `audit_log.append`.',
+    '- Invoke `governance.register_client`, `governance.manage_grant`, and `governance.rotate_token` wired to `grant_store.save`.',
+    '- Route authority checks through `interim-authority.activate_interim_authority` and `interim_authority.reauthorize_interim_authority`.',
+    '- Dispatch CLI calls to `vendor-cli.main` and `vendor_cli.run_vendor_cli`.',
+    '',
+    '## Dependencies',
+    '- [access](access.prompt.md)',
+    '- [governance](governance.prompt.md)',
+    '- [interim](../continuity/interim-authority.prompt.md)',
+    '- [vendor-cli](../cli/vendor-cli.prompt.md)',
+  ].join('\n');
+
+  assert.deepEqual(
+    lintNativeOnlyPortParity(validServerPrompt, deps, { path: 'prompts/connector/mcp-server.prompt.md' }),
+    [],
+    'exported <stem>.<op> operations across all declaration forms must pass with 0 errors',
+  );
+
+  // Negative control: typo on exported op + completely undeclared port MUST fail with 4-part remediation.
+  const brokenServerPrompt = validServerPrompt
+    .replace('`access.invoke_tool`', '`access.invoke_tools`')
+    .replace('`grant_store.save`', '`phantom_store.save`');
+  const negErrors = lintNativeOnlyPortParity(brokenServerPrompt, deps, { path: 'prompts/connector/mcp-server.prompt.md' });
+  assert.equal(negErrors.length, 2, negErrors.join('\n'));
+  assert.match(negErrors[0], /prompts\/connector\/mcp-server\.prompt\.md:8 \[native-only-unknown-port\].*"access\.invoke_tools"/);
+  assert.match(negErrors[0], /access\.invoke_tool/);
+  assert.match(negErrors[0], /Fix: declare "access\.invoke_tools".*pdd lint --local/);
+  assert.match(negErrors[1], /prompts\/connector\/mcp-server\.prompt\.md:12 \[native-only-unknown-port\].*"phantom_store\.save"/);
+  assert.match(negErrors[1], /Fix: declare "phantom_store\.save".*pdd lint --local/);
+});
+
+test('3562 polling FP fix: test-fixed-sleep exempts waitFor/until polling helpers, bounded retry loops, and Promise.race watchdogs while still flagging bare unguarded sleeps', () => {
+  const safePollingJs = [
+    "import { setTimeout } from 'node:timers/promises';",
+    'const until = async (check, ms = 5000) => {',
+    '  const deadline = Date.now() + ms;',
+    '  while (Date.now() < deadline) {',
+    '    const val = check();',
+    '    if (val) return val;',
+    '    await new Promise(r => setTimeout(r, 25));',
+    '  }',
+    '  throw new Error("timeout");',
+    '};',
+    'async function waitForFile(path) {',
+    '  for (let i = 0; i < 100; i++) {',
+    '    if (exists(path)) return true;',
+    '    await sleep(10);',
+    '  }',
+    '  return false;',
+    '}',
+    "test('polling and retry backoff loops', async () => {",
+    '  const end = Date.now() + 5000;',
+    '  while (Date.now() < end && !ready()) await new Promise(r => setTimeout(r, 20));',
+    '  while (!stopped() && performance.now() < end) await setTimeout(10);',
+    '  for (let i = 0; i < 20 && !isReady(); i++) await new Promise(r => setTimeout(r, 15));',
+    '  for (;;) {',
+    '    try { readReady(); break; } catch { await new Promise(r => setTimeout(r, 5)); }',
+    '  }',
+    '  for (const delayMs of [10, 20, 40]) {',
+    '    if (checkDone()) break;',
+    '    await new Promise(r => setTimeout(r, 15));',
+    '  }',
+    '  await Promise.race([pendingOp(), new Promise(resolve => setTimeout(() => resolve(null), 5000))]);',
+    '  void until; void waitForFile;',
+    '});',
+  ].join('\n');
+  assert.deepEqual(
+    lintTestFixedSleeps(safePollingJs, { path: 'test/polling-safe.test.mjs' }),
+    [],
+    'legitimate polling helpers, bounded retry loops, and Promise.race watchdogs must emit 0 warnings',
+  );
+
+  const safePollingPy = [
+    'import time',
+    'def wait_for_ready(check):',
+    '    deadline = time.time() + 5',
+    '    while time.time() < deadline:',
+    '        if check():',
+    '            return True',
+    '        time.sleep(0.05)',
+    '    return False',
+    'def test_retry_loop():',
+    '    for _ in range(10):',
+    '        try:',
+    '            probe()',
+    '            break',
+    '        except RuntimeError:',
+    '            time.sleep(0.02)',
+  ].join('\n');
+  assert.deepEqual(
+    lintTestFixedSleeps(safePollingPy, { path: 'tests/test_polling_safe.py' }),
+    [],
+    'Python polling and bounded retry loops must emit 0 warnings',
+  );
+
+  // Bare unguarded sleeps (including inside data-driven test loops or unconditional loops) MUST STILL FAIL!
+  const badUnguardedJs = [
+    "test('bare sleep', async () => {",
+    '  await new Promise(r => setTimeout(r, 200));',
+    '  await sleep(150);',
+    '  for (let i = 0; i < 3; i++) { await sleep(50); }',
+    '  while (true) { await sleep(50); }',
+    '});',
+    'for (const size of [1, 2]) {',
+    "  test('data loop with bare sleep', async () => {",
+    '    await new Promise(r => setTimeout(r, 30));',
+    '  });',
+    '}',
+  ].join('\n');
+  const badWarnings = lintTestFixedSleeps(badUnguardedJs, { path: 'test/bare-sleeps.test.mjs' });
+  assert.equal(badWarnings.length, 5, `expected 5 bare unguarded sleep warnings, got:\n${badWarnings.join('\n')}`);
+
+  const badUnguardedPy = [
+    'import time',
+    'def test_bare_sleep():',
+    '    time.sleep(0.5)',
+    'def test_unconditional_for():',
+    '    for _ in range(3):',
+    '        time.sleep(0.1)',
+  ].join('\n');
+  const badPyWarnings = lintTestFixedSleeps(badUnguardedPy, { path: 'tests/test_bare_sleep.py' });
+  assert.equal(badPyWarnings.length, 2, `expected 2 bare Python sleep warnings, got:\n${badPyWarnings.join('\n')}`);
+});
+
+test('3574 + 3562 cross-family review regressions (Astra #1-#4): strict export clauses, top-level-only bullets, Operations and ports, signature tails, polling classification, Promise.race arm isolation, and Python O(N)', () => {
+  // #1 & #2: `Export \`read\` with the \`cursor\` field.` never exports `cursor`; indented sub-bullets never export;
+  // `## Operations and ports` keeps BOTH exports and ports; paragraph-leading `read({ id }) -> { value }` extracts `read`.
+  const combinedDep = [
+    '# Record store',
+    '',
+    'Export `load_record` with the `cursor` field and `page_size` option.',
+    '',
+    '## Operations and ports',
+    '',
+    '`read({ id }) -> { value }`',
+    '',
+    '  - `list_items({ cursor }) -> { items }`: lists records.',
+    '    - `cursor`: opaque pagination token.',
+    '    - `limit`: max items per page.',
+    '  - `store.fetch({ id })`: reads persisted record.',
+    '',
+    '### `search_records` with the `next_token` field',
+    'Returns matching records.',
+    '',
+    '## Dependencies',
+    'None.',
+  ].join('\n');
+
+  const adapterOk = [
+    '---',
+    'kind: native-only',
+    'reason: Real SQLite adapter.',
+    '---',
+    '# Adapter',
+    '## Port wiring',
+    '- `records.load_record`',
+    '- `records.read`',
+    '- `records.list_items`',
+    '- `records.search_records`',
+    '- `store.fetch`',
+    '## Dependencies',
+    '- [records](records.prompt.md)',
+  ].join('\n');
+  assert.deepEqual(
+    lintNativeOnlyPortParity(adapterOk, [{ path: 'prompts/records.prompt.md', text: combinedDep, isPrompt: true }], { path: 'prompts/adapter.prompt.md' }),
+    [],
+    'Operations and ports + 2-space top-level bullets + heading stop-before-prose + signature tails must all pass',
+  );
+
+  const adapterFieldSpoof = [
+    '---',
+    'kind: native-only',
+    'reason: Real SQLite adapter.',
+    '---',
+    '# Adapter',
+    '## Port wiring',
+    '- `records.cursor`',
+    '- `records.page_size`',
+    '- `records.limit`',
+    '- `records.next_token`',
+    '## Dependencies',
+    '- [records](records.prompt.md)',
+  ].join('\n');
+  const spoofErrors = lintNativeOnlyPortParity(adapterFieldSpoof, [{ path: 'prompts/records.prompt.md', text: combinedDep, isPrompt: true }], { path: 'prompts/adapter.prompt.md' });
+  assert.equal(spoofErrors.length, 4, `field names in prose, sub-bullets, or headings must NEVER be accepted as exported ops:\n${spoofErrors.join('\n')}`);
+  assert.match(spoofErrors[0], /"records\.cursor"/);
+  assert.match(spoofErrors[1], /"records\.page_size"/);
+  assert.match(spoofErrors[2], /"records\.limit"/);
+  assert.match(spoofErrors[3], /"records\.next_token"/);
+
+  // #3: Polling classification (state === PENDING exempt without `.`; data-draining while(rows.length){rows.pop()} flagged;
+  // Promise.race ONLY exempts direct timeout arm, NEVER sleep inside sibling work callback!).
+  const statePollJs = [
+    "test('state polling without dot', async () => {",
+    '  while (state === PENDING) { await sleep(10); }',
+    '  do { await sleep(10); } while (status !== READY);',
+    '});',
+  ].join('\n');
+  assert.deepEqual(lintTestFixedSleeps(statePollJs, { path: 'test/state-poll.test.mjs' }), []);
+
+  const dataDrainAndRaceWorkJs = [
+    "test('data drain, pure counters, and race chained work', async () => {",
+    '  while (rows.length) { rows.pop(); await sleep(10); }',
+    '  while (queue.length > 0) { queue.shift(); await new Promise(r => setTimeout(r, 10)); }',
+    '  while (i !== limit) { i++; await sleep(10); }',
+    '  for (let i = 0; i !== limit; i++) { await sleep(10); }',
+    '  for (let i = 0; i !== batch.length; i++) { await sleep(10); }',
+    '  await Promise.race([',
+    '    (async () => { await sleep(500); return "work"; })(),',
+    '    sleep(50).then(() => doWork()),',
+    '    new Promise(resolve => setTimeout(() => resolve(null), 5000)),',
+    '  ]);',
+    '});',
+  ].join('\n');
+  const drainRaceWarnings = lintTestFixedSleeps(dataDrainAndRaceWorkJs, { path: 'test/drain-race.test.mjs' });
+  assert.equal(drainRaceWarnings.length, 7, `expected 7 warnings (2 drains + 3 pure counters + sibling callback + chained .then arm, 0 on direct timeout arm), got:\n${drainRaceWarnings.join('\n')}`);
+  assert.match(drainRaceWarnings[0], /:2 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[1], /:3 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[2], /:4 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[3], /:5 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[4], /:6 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[5], /:8 \[test-fixed-sleep\]/);
+  assert.match(drainRaceWarnings[6], /:9 \[test-fixed-sleep\]/);
+
+  // #3 & #4 Python: state == PENDING exempt (including tab-indented!), rows.pop() drain & pure counter flagged, and 4,000 sleeps inside 1 loop stay strictly O(N) (< 400ms)!
+  const pyMixed = [
+    'import time',
+    'def test_py_poll_and_drain():',
+    '    while state == PENDING:',
+    '        time.sleep(0.05)',
+    '    while rows:',
+    '        rows.pop()',
+    '        time.sleep(0.05)',
+    '    while i != limit:',
+    '        i += 1',
+    '        time.sleep(0.05)',
+    'def test_py_tab_indented():',
+    '\twhile state == PENDING:',
+    '\t\ttime.sleep(0.05)',
+    '\twhile i != batch.size:',
+    '\t\ti += 1',
+    '\t\ttime.sleep(0.05)',
+  ].join('\n');
+  const pyMixedWarnings = lintTestFixedSleeps(pyMixed, { path: 'tests/test_py_mixed.py' });
+  assert.equal(pyMixedWarnings.length, 3, `expected rows.pop() drain + 2 pure counters flagged (and tab-indented polling exempt), got:\n${pyMixedWarnings.join('\n')}`);
+  assert.match(pyMixedWarnings[0], /:7 \[test-fixed-sleep\]/);
+  assert.match(pyMixedWarnings[1], /:10 \[test-fixed-sleep\]/);
+  assert.match(pyMixedWarnings[2], /:16 \[test-fixed-sleep\]/);
+
+  const hugePyInOneLoop = `import time\ndef test_many_in_one_loop():\n    while i != limit:\n        i += 1\n${'        time.sleep(0.01)\n'.repeat(4000)}`;
+  const t0 = performance.now();
+  const hugePyWarnings = lintTestFixedSleeps(hugePyInOneLoop, { path: 'tests/test_many_sleeps.py' });
+  const elapsedMs = performance.now() - t0;
+  assert.equal(hugePyWarnings.length, 4000);
+  assert.ok(elapsedMs < 400, `expected linear O(N) memoized scan on 4,000 Python sleeps inside 1 loop, took ${elapsedMs.toFixed(1)}ms`);
 });

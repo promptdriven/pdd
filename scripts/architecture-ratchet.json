@@ -1,0 +1,776 @@
+{
+  "schema_version": "pdd.architecture-ratchet.v1",
+  "rules": [
+    "circular-import",
+    "layer-boundary",
+    "legacy-workflow-import",
+    "path-string-spawn",
+    "unresolved-local-import",
+    "disallowed-npm-import",
+    "unmapped-layer"
+  ],
+  "entries": [
+    {
+      "rule": "circular-import",
+      "path": "src/agent-adapters.mjs",
+      "semantic_anchor": "cycle-edge:src/agent-adapters.mjs->src/login-pool.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/agent-adapters.mjs",
+      "semantic_anchor": "cycle-edge:src/agent-adapters.mjs->src/pdd-claude.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/agent-adapters.mjs",
+      "semantic_anchor": "cycle-edge:src/agent-adapters.mjs->src/runtime-seam.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-alerts.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-alerts.mjs->src/workflow-runner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-audit.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-audit.mjs->src/autopilot-alerts.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-audit.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-audit.mjs->src/workflow-runner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-core.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-core.mjs->src/issue-dependencies-github.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-core.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-core.mjs->src/test-suite-queue.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-core.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-core.mjs->src/workflow-runner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-environment.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-environment.mjs->src/test-suite-queue.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-launcher.mjs->src/autopilot-alerts.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-launcher.mjs->src/autopilot-audit.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-launcher.mjs->src/autopilot-core.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-launcher.mjs->src/autopilot.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-launcher.mjs->src/test-suite-queue.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-launcher.mjs->src/workflow-runner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-logs.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-logs.mjs->src/test-suite-queue.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot-parking.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot-parking.mjs->src/autopilot-environment.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/autopilot.mjs",
+      "semantic_anchor": "cycle-edge:src/autopilot.mjs->src/autopilot-logs.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/file-owner.mjs",
+      "semantic_anchor": "cycle-edge:src/file-owner.mjs->src/runtime-seam.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/human-boundary-card.mjs",
+      "semantic_anchor": "cycle-edge:src/human-boundary-card.mjs->src/file-owner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/human-boundary-card.mjs",
+      "semantic_anchor": "cycle-edge:src/human-boundary-card.mjs->src/runtime-seam.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-dependencies-github.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-dependencies-github.mjs->src/autopilot-parking.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-dependencies-github.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-dependencies-github.mjs->src/autopilot.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-dependencies-github.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-dependencies-github.mjs->src/test-suite-queue.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-dependencies-intake.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-dependencies-intake.mjs->src/autopilot-parking.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-dependencies-intake.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-dependencies-intake.mjs->src/issue-dependencies-github.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-mixed.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-mixed.mjs->src/issue-sort-github.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-mixed.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-mixed.mjs->src/issue-sort.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-sort-github.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-sort-github.mjs->src/issue-mixed.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-sort-github.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-sort-github.mjs->src/issue-sort.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/issue-sort.mjs",
+      "semantic_anchor": "cycle-edge:src/issue-sort.mjs->src/issue-mixed.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/login-pool.mjs",
+      "semantic_anchor": "cycle-edge:src/login-pool.mjs->src/agent-adapters.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/login-pool.mjs",
+      "semantic_anchor": "cycle-edge:src/login-pool.mjs->src/workflow-agents.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/pdd-claude.mjs",
+      "semantic_anchor": "cycle-edge:src/pdd-claude.mjs->src/login-pool.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/prompt-approve.mjs",
+      "semantic_anchor": "cycle-edge:src/prompt-approve.mjs->src/file-owner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/prompt-approve.mjs",
+      "semantic_anchor": "cycle-edge:src/prompt-approve.mjs->src/human-boundary-card.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/prompt-approve.mjs",
+      "semantic_anchor": "cycle-edge:src/prompt-approve.mjs->src/runtime-seam.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/prompt-approve.mjs",
+      "semantic_anchor": "cycle-edge:src/prompt-approve.mjs->src/workflow-runs.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/repo-hygiene-lint.mjs",
+      "semantic_anchor": "cycle-edge:src/repo-hygiene-lint.mjs->src/file-owner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/repo-hygiene-lint.mjs",
+      "semantic_anchor": "cycle-edge:src/repo-hygiene-lint.mjs->src/runtime-seam.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "cycle-edge:src/runtime-seam.mjs->src/agent-adapters.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "cycle-edge:src/runtime-seam.mjs->src/file-owner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "cycle-edge:src/runtime-seam.mjs->src/prompt-approve.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "cycle-edge:src/runtime-seam.mjs->src/repo-hygiene-lint.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "cycle-edge:src/runtime-seam.mjs->src/svg-layout.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "cycle-edge:src/runtime-seam.mjs->src/workflow-eligibility.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "cycle-edge:src/runtime-seam.mjs->src/workflow-results.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "cycle-edge:src/runtime-seam.mjs->src/workflow-runs.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/svg-layout.mjs",
+      "semantic_anchor": "cycle-edge:src/svg-layout.mjs->src/runtime-seam.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/test-suite-queue.mjs",
+      "semantic_anchor": "cycle-edge:src/test-suite-queue.mjs->src/workflow-runner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/vendor/smol-toml/extract.js",
+      "semantic_anchor": "cycle-edge:src/vendor/smol-toml/extract.js->src/vendor/smol-toml/struct.js",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/vendor/smol-toml/struct.js",
+      "semantic_anchor": "cycle-edge:src/vendor/smol-toml/struct.js->src/vendor/smol-toml/extract.js",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-agents.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-agents.mjs->src/agent-adapters.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-chat.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-chat.mjs->src/workflow-agents.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-eligibility.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-eligibility.mjs->src/runtime-seam.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-eligibility.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-eligibility.mjs->src/workflow-runs.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-pr-evidence.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-pr-evidence.mjs->src/workflow-prove.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-prove.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-prove.mjs->src/workflow-runs.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-results.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-results.mjs->src/runtime-seam.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-results.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-results.mjs->src/workflow-pr-evidence.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-results.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-results.mjs->src/workflow-runs.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-runner.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-runner.mjs->src/autopilot-core.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-runner.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-runner.mjs->src/autopilot-environment.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-runner.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-runner.mjs->src/autopilot-launcher.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-runner.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-runner.mjs->src/autopilot-parking.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-runner.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-runner.mjs->src/issue-dependencies-github.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-runner.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-runner.mjs->src/issue-dependencies-intake.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-runner.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-runner.mjs->src/test-suite-queue.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-runner.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-runner.mjs->src/workflow-worker-completion.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-runs.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-runs.mjs->src/workflow-chat.mjs",
+      "count": 1
+    },
+    {
+      "rule": "circular-import",
+      "path": "src/workflow-worker-completion.mjs",
+      "semantic_anchor": "cycle-edge:src/workflow-worker-completion.mjs->src/workflow-runner.mjs",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/accounts-cli.mjs",
+      "semantic_anchor": "accounts -> autopilot:src/agent-adapters.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/agent-mcp-setup.mjs",
+      "semantic_anchor": "setup -> vendor:src/vendor/smol-toml/parse.js (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/autopilot-forensics.mjs",
+      "semantic_anchor": "autopilot -> vendor:src/vendor/smol-toml/parse.js (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/autopilot-update.mjs",
+      "semantic_anchor": "autopilot -> setup:src/skills-install.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/github-calls.mjs",
+      "semantic_anchor": "shared -> autopilot:src/cost-ledger.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/interpreter-version.mjs",
+      "semantic_anchor": "setup -> core:src/runtime-seam.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/login-pool.mjs",
+      "semantic_anchor": "accounts -> autopilot:src/agent-adapters.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/login-pool.mjs",
+      "semantic_anchor": "accounts -> vendor:src/vendor/smol-toml/parse.js (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/project-files.mjs",
+      "semantic_anchor": "setup -> core:src/runtime-seam.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/repo-hygiene-lint.mjs",
+      "semantic_anchor": "core -> autopilot:src/autopilot-validator.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "core -> autopilot:src/agent-adapters.mjs (dynamic-import)",
+      "count": 3
+    },
+    {
+      "rule": "layer-boundary",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "core -> cli:src/command-catalog.mjs (dynamic-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-alerts.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runner.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-audit.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-chat.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-audit.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-launch-profile.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-audit.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runner.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-audit.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runs.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-core.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-inventory.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-core.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runner.mjs (dynamic-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-doctor.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-agents.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-doctor.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-worktree.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-github.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-github.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-herdr-layout.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runner.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runs.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-launcher.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-worktree.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/autopilot-regressions.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-worktree.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/issue-dependencies-github.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-chat.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/issue-dependencies-github.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-github.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/issue-dependencies-github.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runs.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/issue-dependencies-intake.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runs.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/issue-dependency-graph.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-github.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/issue-sort-github.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runs.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/login-pool.mjs",
+      "semantic_anchor": "accounts -> legacy-workflow:src/workflow-agents.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/pdd-cli.mjs",
+      "semantic_anchor": "cli -> legacy-workflow:src/workflow-agents.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/pdd-cli.mjs",
+      "semantic_anchor": "cli -> legacy-workflow:src/workflow-areas.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/pdd-cli.mjs",
+      "semantic_anchor": "cli -> legacy-workflow:src/workflow-prove.mjs (dynamic-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/pdd-cli.mjs",
+      "semantic_anchor": "cli -> legacy-workflow:src/workflow-runner.mjs (dynamic-import)",
+      "count": 2
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/pdd-cli.mjs",
+      "semantic_anchor": "cli -> legacy-workflow:src/workflow-runs.mjs (dynamic-import)",
+      "count": 2
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/pdd-cli.mjs",
+      "semantic_anchor": "cli -> legacy-workflow:src/workflow-setup.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/pdd-cli.mjs",
+      "semantic_anchor": "cli -> legacy-workflow:src/workflow-view.mjs (dynamic-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/product.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-agents.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/product.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-github.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/product.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-runner.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/product.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-runs.mjs (static-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/prompt-approve.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-runs.mjs (dynamic-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-eligibility.mjs (create-require)",
+      "count": 5
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-eligibility.mjs (dynamic-import)",
+      "count": 6
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-results.mjs (dynamic-import)",
+      "count": 2
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-runs.mjs (create-require)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/runtime-seam.mjs",
+      "semantic_anchor": "core -> legacy-workflow:src/workflow-runs.mjs (dynamic-import)",
+      "count": 1
+    },
+    {
+      "rule": "legacy-workflow-import",
+      "path": "src/test-suite-queue.mjs",
+      "semantic_anchor": "autopilot -> legacy-workflow:src/workflow-runner.mjs (dynamic-import)",
+      "count": 1
+    },
+    {
+      "rule": "path-string-spawn",
+      "path": "src/test-suite-queue.mjs",
+      "semantic_anchor": "spawn -> src/test-suite-recorder.mjs",
+      "count": 1
+    },
+    {
+      "rule": "path-string-spawn",
+      "path": "src/workflow-replay.mjs",
+      "semantic_anchor": "execFileSync -> src/runtime-seam.mjs",
+      "count": 1
+    },
+    {
+      "rule": "path-string-spawn",
+      "path": "src/workflow-runner.mjs",
+      "semantic_anchor": "execFile -> bin/pdd.mjs",
+      "count": 1
+    }
+  ]
+}
