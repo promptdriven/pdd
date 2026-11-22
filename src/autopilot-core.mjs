@@ -55,12 +55,14 @@ import {
   formatHarnessPrReceipt,
   parseHarnessPrReceipt,
   parseTypedOrLegacyOutput,
+  safeJsonParse,
 } from './autopilot/gates/typed-schemas.mjs';
 import {
   buildPostReviewSandboxEnv,
   loadAutopilotTestEnv,
   probeMachineCapabilities,
   registerTestEnvSecrets,
+  summarizeTestEnvMetadata,
 } from './autopilot/gates/test-env.mjs';
 import { lintRepoProject, loadProjectLintConfig } from './repo-hygiene-lint.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
@@ -3556,10 +3558,10 @@ function scanJsonObjectsBounded(rawText, maxRestarts = 16) {
       if (ch === '}' && depth > 0) {
         depth--;
         if (depth === 0 && start >= 0) {
-          try {
-            const parsed = JSON.parse(s.slice(start, i + 1));
-            if (object(parsed)) found.push(parsed);
-          } catch { /* Ignore non-JSON brace span. */ }
+          const parsed = safeJsonParse(s.slice(start, i + 1));
+          if (parsed.ok && object(parsed.value) && parsed.value.is_error !== true && parsed.value.type !== 'error' && parsed.value.type !== 'turn.failed') {
+            found.push(parsed.value);
+          }
           start = -1;
         }
       }
@@ -3574,22 +3576,31 @@ function scanJsonObjectsBounded(rawText, maxRestarts = 16) {
   return found;
 }
 
+const FINAL_JSON_REJECTION_RE = /(?:Duplicate JSON key|Forbidden or unsafe key|Input exceeds|JSON nesting depth|Max object depth)/;
+
 function parseFinalAssistantText(rawText) {
   const trimmed = typeof rawText === 'string' ? rawText.trim() : '';
   if (!trimmed) return null;
-  // 0. Prefer strict typed review schema JSON output when present (dual-read transition).
-  if (trimmed.startsWith('{')) {
-    const typed = parseTypedOrLegacyOutput(trimmed, { schemaName: 'review' });
-    if (typed.ok && typed.source === 'typed-json') return typed.value;
-  }
-  // 1. Strict full-message JSON parse first (after stripping at most one optional surrounding markdown code fence).
+  // 0. Strict full-message JSON handling (dual-read transition): security/envelope rejections are FINAL.
   const singleFence = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(trimmed);
   const fullCandidate = singleFence ? singleFence[1].trim() : trimmed;
   if (fullCandidate.startsWith('{') && fullCandidate.endsWith('}')) {
-    try {
-      const direct = JSON.parse(fullCandidate);
-      if (object(direct) && typeof direct.verdict === 'string') return direct;
-    } catch { /* Fall through to bounded structured scan. */ }
+    const safe = safeJsonParse(fullCandidate);
+    if (!safe.ok) {
+      if (FINAL_JSON_REJECTION_RE.test(String(safe.error ?? ''))) return null;
+      // Only non-security syntax error (e.g. multiple top-level `{...} prose {...}`) falls through to bounded scan.
+    } else if (object(safe.value)) {
+      if (safe.value.is_error === true || safe.value.type === 'error' || safe.value.type === 'turn.failed') return null;
+      const typed = parseTypedOrLegacyOutput(fullCandidate, { schemaName: 'review' });
+      if (typed.ok && typed.source === 'typed-json') return typed.value;
+      if (typed.finalRejection) {
+        // Never allow an outer FAIL object carrying structured_output/result to flip to PASS; preserve FAIL, reject PASS conflicts.
+        if (safe.value.verdict === 'FAIL') return safe.value;
+        return null;
+      }
+      if (typeof safe.value.verdict === 'string') return safe.value;
+      return null;
+    }
   }
   // 2. Fallback scan: collect all verdict objects from fenced blocks and prose, failing closed on conflicting verdicts.
   const fenceMatches = [...trimmed.matchAll(/```(?:json)?[ \t]*\r?\n([\s\S]*?)```/gi)];
@@ -7827,11 +7838,34 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
     ...nativeCtx.nativeOnlyFiles,
     ...(Array.isArray(base.nativeOnlyFiles) ? base.nativeOnlyFiles : []),
   ])].sort();
+  const requiredCapabilities = Array.isArray(base.requiredCapabilities)
+    ? base.requiredCapabilities
+    : (Array.isArray(job.requiredCapabilities) ? job.requiredCapabilities : []);
+  let contractInput = null;
+  if (typeof ctx.ports.evidenceContract === 'function') {
+    contractInput = await ctx.ports.evidenceContract({ job, pr, head: job.head, changedFiles: changed, surfaces, mode: ctx.settings.mode });
+  } else if (object(base.evidenceContract)) {
+    contractInput = base.evidenceContract;
+  } else if (object(job.evidenceContractInput)) {
+    contractInput = job.evidenceContractInput;
+  }
+  let availableCapabilities = Array.isArray(base.availableCapabilities) ? base.availableCapabilities : null;
+  if (availableCapabilities === null && (requiredCapabilities.length > 0 || contractInput !== null)) {
+    const probed = preparePostReviewTestEnv({
+      reviewApproved: false,
+      env: ctx.env ?? process.env,
+      fs: ctx.fs ?? nativeFs,
+      probeOptions: ctx.ports.probeOptions ?? {},
+    });
+    availableCapabilities = probed.capabilities.capabilities;
+  }
   const outcome = evaluateValidationOutcome({
     mode: ctx.settings.mode,
     changedFiles: changed,
     nativeOnlyFiles: effectiveNativeOnlyFiles,
     realHostClasses: Array.isArray(base.realHostClasses) ? base.realHostClasses : [],
+    requiredCapabilities,
+    availableCapabilities,
     isBugFix: base.isBugFix === true,
     offlinePassed: base.offlinePassed ?? (suite?.state === 'pass'),
     offlineSummary: base.offlineSummary ?? (suite?.state === 'pass' ? `${resolveSuiteCommand(ctx, job) || 'suite'} passed` : 'failed'),
@@ -7846,6 +7880,52 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
     lintBlockingCodes: [...new Set([...(Array.isArray(base.lintBlockingCodes) ? base.lintBlockingCodes : []), ...lint.codes])].sort(),
     repairAttempts: job.validationRepairs ?? 0,
   });
+  if (outcome.eligible && contractInput !== null) {
+    const contract = evaluateCoreEvidenceContract({
+      changedFiles: changed,
+      availableCapabilities,
+      ...contractInput,
+    });
+    job.evidenceContract = contract;
+    if (!contract.ok) {
+      ctx.saveJob(job);
+      if (contract.holdReason === 'protected_path') {
+        const paths = contract.checks.protectedPaths.unapprovedProtectedPaths.join(', ');
+        await parkHumanBoundary(ctx, job, pr, {
+          ...outcome, eligible: false, bucket: 3, decision: 'needs-human-verification', waitKind: 'needs-human-verification',
+          message: contract.summary,
+          humanVerificationCard: formatHumanVerificationCard({
+            offlineSummary: 'Evidence contract Check 4',
+            unverifiedBoundary: `Protected path approval required (${paths})`,
+            verifyCommand: `Review protected path change(s) (${paths}) and explicitly approve`,
+          }),
+        });
+        return { handled: true, outcome, evidenceContract: contract };
+      }
+      if (contract.holdReason === 'missing_capability' || contract.holdReason === 'service_failure') {
+        const cooldownTool = contract.holdReason === 'service_failure'
+          ? 'service'
+          : (contract.checks.pathReceipts.missingCapabilities[0] || 'capability');
+        await parkValidationWait(ctx, job, pr, {
+          ...outcome, eligible: false, bucket: 2, decision: 'needs-binding-wait', waitKind: 'needs-binding-wait',
+          cooldownTool, checkCommand: '', message: contract.summary,
+        });
+        return { handled: true, outcome, evidenceContract: contract };
+      }
+      const red = `[Evidence Contract HOLD (${contract.holdReason})] ${contract.summary}`;
+      await repairOrEnd(ctx, job, [red], [red], null, {
+        skipRepeatStop: true,
+        maxRepairs: Math.max(ctx.settings.repairs, MAX_VALIDATION_REPAIRS, (job.repairs ?? 0) + 1),
+      });
+      return { handled: true, outcome, evidenceContract: contract };
+    }
+    if (object(contractInput.stampReceipt)) {
+      job.harnessReceipt = stampHarnessReceiptForJob(contractInput.stampReceipt);
+      if (pr?.number && typeof ctx.comment === 'function') {
+        await ctx.comment(pr.number, job.harnessReceipt);
+      }
+    }
+  }
   if (outcome.eligible) {
     job.validatorProof = outcome.proof;
     ctx.saveJob(job);
@@ -12050,13 +12130,17 @@ export function preparePostReviewTestEnv({
   reviewApproved = false, approvedHead = '', currentHead = '',
   allowedAccounts = [], allowedEnvKeys = [], probeOptions = {},
 } = {}) {
-  const testEnv = loadAutopilotTestEnv({ filePath, homeDir, env, fs });
-  registerTestEnvSecrets(testEnv);
-  const capabilities = probeMachineCapabilities({ testEnv, env, ...probeOptions });
+  const rawTestEnv = loadAutopilotTestEnv({ filePath, homeDir, env, fs });
+  registerTestEnvSecrets(rawTestEnv);
+  const capabilities = probeMachineCapabilities({ testEnv: rawTestEnv, env, ...probeOptions });
+  const testEnv = summarizeTestEnvMetadata(rawTestEnv);
+  if (reviewApproved !== true) {
+    return { ok: true, reviewApproved: false, testEnv, capabilities, sandbox: null, env: null };
+  }
   const sandbox = buildPostReviewSandboxEnv({
-    baseEnv: env, testEnv, reviewApproved, approvedHead, currentHead, allowedAccounts, allowedEnvKeys,
+    baseEnv: env, testEnv: rawTestEnv, reviewApproved: true, approvedHead, currentHead, allowedAccounts, allowedEnvKeys,
   });
-  return { testEnv, capabilities, sandbox };
+  return { ok: true, reviewApproved: true, testEnv, capabilities, sandbox, env: sandbox.env };
 }
 
 export { buildGapCheckInput, computeCanonicalDigest, parseHarnessPrReceipt, validateGapCheckOutput };

@@ -1,4 +1,4 @@
-// Layer-2 language-agnostic 3-bucket validation policy, capability check, and cooldown/resume planning.
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 75fde4547979ce8f760b5cb49996fe40b92c8567837622ceac4c2dd1c41f41ce).
 import {
   MIN_REALISTIC_PAYLOAD_BYTES,
   REAL_E2E_KINDS,

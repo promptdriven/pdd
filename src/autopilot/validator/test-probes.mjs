@@ -1,26 +1,30 @@
-// Layer-2 lean polyglot (JS/TS, Python, Go, Rust) test probes & backside validation lint.
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 75fde4547979ce8f760b5cb49996fe40b92c8567837622ceac4c2dd1c41f41ce).
 import { execFileSync } from 'node:child_process';
 import { readSafeUtf8 } from '../../core/lint/diagnostics.mjs';
 import { loadProjectLintConfig } from '../../core/lint/project-config.mjs';
 import { collectTestFixedSleepFindings, collectTestUnexcusedSkipFindings, lintAutopilotTestHygiene, lintTestFixedSleeps, lintTestUnexcusedSkips } from '../lint-sleep-skip.mjs';
 import { MIN_REALISTIC_PAYLOAD_BYTES, NON_PRODUCTION_DIR_RE, canonicalTargetPath, classifyProductionPathSurfaces, normalizePath, resolveRelativeTarget } from './surfaces.mjs';
-export { collectTestFixedSleepFindings, collectTestUnexcusedSkipFindings, lintAutopilotTestHygiene, lintTestFixedSleeps, lintTestUnexcusedSkips };
+import {
+  EXTERNAL_TOOL_EXEC_RE, GENERIC_CALL_RE, MOCK_USAGE_RE, POLYGLOT_MOCK_USAGE_RE, REAL_DEVICE_PATH_RE, REAL_E2E_EXEC_RE,
+  SANDBOX_EXEC_RE, SHELL_RUNTIME_RE, SUBPROCESS_ORIG_NAMES, TRIVIAL_SUBPROCESS_BIN_RE,
+  analyzePrimitiveAuthenticity, collectLiteralsInMaskedSlice, detectJsBrowser, detectJsFsState, detectJsServerOrDb,
+  detectJsTty, detectLang, extractCallArgsSlice, hasLeadingDot, resolveAuthenticCall, resolveLeadingMemberReceiver, splitLinesWithOffsets,
+} from './real-host-probes.mjs';
 
-export const MOCK_USAGE_RE = /\b(?:mock\.|vi\.mock|vi\.doMock|vi\.fn|vi\.spyOn|vi\.stubGlobal|jest\.mock|jest\.doMock|jest\.fn|jest\.spyOn|sinon\.stub|MagicMock|AsyncMock|unittest\.mock|monkeypatch\.setattr|mocker\.patch|gomock|mockall|httptest\.NewRecorder|fakeClient|fakeServer|fakeTransport|fakeSandbox|mockSandbox|stubSandbox|fakeTty|mockTty|stubTty|fakeDb|mockDb|fakeDriver|mockDriver|mockSpawn|fakeSpawn|fakeSubprocess|fakeCli|stubCli)\b|stub(?:bed)?(?:Handler|Wrapper)|#\[automock\]/i;
-export const REAL_E2E_EXEC_RE = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync|createServer|playwright|puppeteer|supertest|DatabaseSync|subprocess\.(?:run|Popen|check_output|check_call)|exec\.Command(?:Context)?|httptest\.NewServer|Command::new|TcpListener::bind)\b|\.\s*listen\s*\(|\bfetch\s*\(|\bhttps?\.request\s*\(|\b(?:chromium|firefox|webkit)\.launch\s*\(|\bpage\.goto\s*\(/i;
+export { MOCK_USAGE_RE, REAL_E2E_EXEC_RE, collectTestFixedSleepFindings, collectTestUnexcusedSkipFindings, lintAutopilotTestHygiene, lintTestFixedSleeps, lintTestUnexcusedSkips };
 
-const REAL_DEVICE_PATH_RE = /\/dev\/(?:tty|ptmx|pts\/)/, SANDBOX_EXEC_RE = /\b(?:sandbox-exec|sandbox_apply|bwrap|bubblewrap|seatbelt|seccomp|landlock|unshare|chroot|firejail)\b/i;
-const TRIVIAL_BIN_RE = /^(?:echo|printf|true|false|pwd|uname|whoami|id|date|sleep|cat|ls|test|\[|:)(?:\s|$)/i, SHELL_BIN_RE = /^(?:sh|bash|zsh|dash|fish|cmd|cmd\.exe|powershell|pwsh|node|nodejs|python|python3|ruby|deno|bun|tsx|ts-node)$/i;
-const EXTERNAL_TOOL_RE = /\b(?:gcloud|gsutil|bq|aws|az|stripe|docker|docker-compose|kubectl|helm|terraform|gh|pdd|curl|wget|psql|mysql|redis-cli|mongosh|ssh|scp|vault|npm|npx|git)\b/i;
 const PROD_PATH_LITERAL_RE = /['"`]((?:\.\.\/|\.\/)?(?:bin|cli|cmd|scripts|api|server|routes|handlers|controllers|db|database|migrations|prisma|sql|web|ui|frontend|pages|components|views|app|os|sandbox|tty|pty|subprocess|src)\/[A-Za-z0-9._/-]+)['"`]/g;
-const SKIP_KEYWORD_RE = /(?:e2e|validation|validator|real-binding)/i, PRIVATE_IMPORT_SYM_RE = /^_(?!_)[A-Za-z0-9_$]*$/;
-const BACKSIDE_CODE_EXT_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i, BACKSIDE_SKIP_SUBDIR_RE = /(?:^|\/)(?:fixtures|helpers)\//i;
+const LOOP_START_ALL_RE = /(?<![.\w$])(for|while)[ \t]*\(|\.[ \t]*(forEach|map)[ \t]*\(/g;
+const HELPER_DEF_RE = /\b(?:function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(|(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][A-Za-z0-9_$]*)\s*=>)/;
+const SKIP_KEYWORD_RE = /(?:e2e|validation|validator|real-binding)/i;
+const PRIVATE_IMPORT_SYM_RE = /^_(?!_)[A-Za-z0-9_$]*$/;
+const BACKSIDE_CODE_EXT_RE = /\.(?:mjs|cjs|js|ts|tsx|jsx|py|rs|go|rb|java|kt|cs|swift)$/i;
+const BACKSIDE_SKIP_SUBDIR_RE = /(?:^|\/)(?:fixtures|helpers)\//i;
 const BACKSIDE_TEST_FILE_RE = /(?:(?:^|\/)(?:test|tests|__tests__|spec)\/|\.(?:test|spec)\.[a-z0-9]+$|_test\.(?:go|rs|py)$|(?:^|\/)test_[^/]+\.py$)/i;
 
-const detectLang = (p) => (/\.py$/i.test(p) ? 'py' : /\.go$/i.test(p) ? 'go' : /\.rs$/i.test(p) ? 'rs' : 'js');
 const decodeEsc = (c) => (c === 'n' ? '\n' : c === 'r' ? '\r' : c === 't' ? '\t' : c);
 const isRegexStart = (p) => !p || '([{:;,=!?&|+-*%^~<>}'.includes(p) || /^(?:return|case|throw|in|of|typeof|void|delete|new|else|do|yield|await)$/.test(p);
-const hasLeadDot = (t, idx) => { let j = idx - 1; while (j >= 0 && /\s/.test(t[j])) j -= 1; return j >= 0 && t[j] === '.'; };
+const hasMockUsage = (code, lang) => MOCK_USAGE_RE.test(code) || (lang !== 'js' && POLYGLOT_MOCK_USAGE_RE.test(code));
 
 function scanSourceWithMetrics(source, lang = 'js') {
   const text = String(source ?? ''), nc = [], ns = [], tpl = [], repUnits = new Map(), lits = new Map();
@@ -80,6 +84,173 @@ export const scanJsPreserveLines = (source) => { const { codeNoComments, codeNoS
 export const stripCommentsPreserveLines = (source) => scanJsPreserveLines(source).codeNoComments;
 export const maskStringsPreserveLines = (source) => scanJsPreserveLines(source).codeNoStrings;
 
+function isSameLineLoopEnclosing(maskedLine, targetIdx) {
+  for (const m of maskedLine.matchAll(LOOP_START_ALL_RE)) {
+    const matchIdx = m.index ?? 0, isMethod = Boolean(m[2]);
+    if (!isMethod && hasLeadingDot(maskedLine, matchIdx)) continue;
+    const openIdx = matchIdx + m[0].length - 1;
+    if (openIdx >= targetIdx) break;
+    let paren = 1, brace = 0, headerClosed = -1, block = false, sawTok = false, closed = false, pb = 0, ib = 0;
+    for (let k = openIdx + 1; k < targetIdx; k += 1) {
+      const ch = maskedLine[k];
+      if (isMethod) { if (ch === '(') paren += 1; else if (ch === ')' && --paren === 0) { closed = true; break; } continue; }
+      if (headerClosed < 0) { if (ch === '(') paren += 1; else if (ch === ')' && --paren === 0) headerClosed = k; continue; }
+      if (!block && !sawTok) { if (ch === ' ' || ch === '\t') continue; if (ch === '{') { block = true; brace = 1; continue; } if (ch === ';') { closed = true; break; } sawTok = true; if (ch === '(' || ch === '[') pb += 1; continue; }
+      if (block) { if (ch === '{') brace += 1; else if (ch === '}' && --brace === 0) { closed = true; break; } }
+      else if (ch === '(' || ch === '[') pb += 1; else if (ch === ')' || ch === ']') pb = Math.max(0, pb - 1);
+      else if (ch === '{') ib += 1; else if (ch === '}') { if (ib > 0 && --ib === 0 && pb === 0) { closed = true; break; } }
+      else if (ch === ';' && pb === 0 && ib === 0) { closed = true; break; }
+    }
+    if (isMethod ? (!closed && paren > 0) : (headerClosed >= 0 && !closed && (!block || brace > 0))) return true;
+  }
+  return false;
+}
+
+function countHelperCallsBatch(text, helperNames) {
+  const counts = new Map();
+  if (!helperNames.size) return counts;
+  let prevWord = '', prevNonSpace = '';
+  for (let i = 0; i < text.length;) {
+    const ch = text[i];
+    if (/[A-Za-z_$]/.test(ch)) {
+      let j = i + 1; while (j < text.length && /[A-Za-z0-9_$]/.test(text[j])) j += 1;
+      const word = text.slice(i, j);
+      if (helperNames.has(word) && prevNonSpace !== '.' && prevWord !== 'function') { let k = j; while (k < text.length && (text[k] === ' ' || text[k] === '\t')) k += 1; if (text[k] === '(') counts.set(word, (counts.get(word) ?? 0) + 1); }
+      prevWord = word; prevNonSpace = word[word.length - 1]; i = j; continue;
+    }
+    if (!/\s/.test(ch)) { prevNonSpace = ch; if (ch !== '(' && ch !== ')' && ch !== ',') prevWord = ''; }
+    i += 1;
+  }
+  return counts;
+}
+
+function analyzeJsSubprocessCalls(code, auth, litMap) {
+  let hasRealSubprocess = false, hasExternalToolSubprocess = false, hasLiveLocalSubprocess = false, hasSandboxSubprocess = false, subprocessCallCount = 0, hasLoopedSubprocess = false;
+  const ns = auth.namespaceBindings.get('child_process'), nm = auth.namedBindings.get('child_process');
+  const hasBinding = Boolean(ns?.size) || (nm ? [...nm.values()].some((o) => SUBPROCESS_ORIG_NAMES.has(o)) : false);
+  if (!hasBinding || auth.mockedModules.has('child_process') || !auth.importedModules.has('child_process')) {
+    return { hasRealSubprocess, hasExternalToolSubprocess, hasLiveLocalSubprocess, hasSandboxSubprocess, subprocessCallCount, hasLoopedSubprocess };
+  }
+  const helpers = new Set(), scopes = [];
+  let braceDepth = 0;
+  for (const { line, offset } of splitLinesWithOffsets(code)) {
+    let leadCloses = 0, idx = 0;
+    while (idx < line.length && (line[idx] === ' ' || line[idx] === '\t')) idx += 1;
+    while (idx < line.length && line[idx] === '}') { leadCloses += 1; idx += 1; }
+    const effDepth = Math.max(0, braceDepth - leadCloses);
+    while (scopes.length && scopes.at(-1).depth > effDepth) scopes.pop();
+    const defMatch = HELPER_DEF_RE.exec(line), defName = defMatch?.[1] ?? defMatch?.[2] ?? null;
+    const isHelper = Boolean(defName && defName !== 'test' && defName !== 'it' && defName !== 'describe');
+    if (line.includes('(')) {
+      const inOuterLoop = scopes.some((s) => s.kind === 'loop');
+      let matched = false, firstCol = -1;
+      for (const m of line.matchAll(GENERIC_CALL_RE)) {
+        const col = m.index ?? 0, abs = offset + col;
+        let rcv = m[2] ? m[1] : ''; const fn = m[2] || m[1];
+        if (m[2]) { if (hasLeadingDot(code, abs)) continue; }
+        else { const lead = resolveLeadingMemberReceiver(code, abs); if (lead.hasDot) { if (!lead.receiver) continue; rcv = lead.receiver; } }
+        if (!resolveAuthenticCall(auth, 'child_process', SUBPROCESS_ORIG_NAMES, fn, rcv)) continue;
+        if (firstCol < 0) firstCol = col;
+        const { slice, startIdx } = extractCallArgsSlice(code, offset + col + m[0].length - 1, 240), tr = slice.trim();
+        if (!tr) continue;
+        const lits = collectLiteralsInMaskedSlice(slice, startIdx, litMap), combined = lits.length ? `${slice} ${lits.map((x) => x.value).join(' ')}` : slice;
+        const inLoop = inOuterLoop || isSameLineLoopEnclosing(line, col), leadLit = tr[0] === '"' && lits.length && !slice.slice(0, lits[0].sliceStart).trim() ? lits[0] : null;
+        if (leadLit) {
+          const rawCmd = leadLit.value.trim(), cp = tr.indexOf('"', 1), after = cp >= 0 ? tr.slice(cp + 1).trimStart() : '';
+          if (!rawCmd) { if (!after.startsWith('+')) continue; }
+          else {
+            const base = (rawCmd.split(/\s+/)[0] ?? '').split(/[\\/]/).pop() ?? '';
+            if (!base || TRIVIAL_SUBPROCESS_BIN_RE.test(base)) continue;
+            if (EXTERNAL_TOOL_EXEC_RE.test(rawCmd) || (SHELL_RUNTIME_RE.test(base) && EXTERNAL_TOOL_EXEC_RE.test(combined))) hasExternalToolSubprocess = true;
+            if (SANDBOX_EXEC_RE.test(rawCmd)) hasSandboxSubprocess = true;
+          }
+        } else if (EXTERNAL_TOOL_EXEC_RE.test(combined)) hasExternalToolSubprocess = true;
+        hasRealSubprocess = true; matched = true; subprocessCallCount += 1;
+        if (inLoop) hasLoopedSubprocess = true;
+        if (/--live-local\b/i.test(combined)) hasLiveLocalSubprocess = true;
+        if (SANDBOX_EXEC_RE.test(combined)) hasSandboxSubprocess = true;
+      }
+      if (matched) {
+        if (isHelper && firstCol >= 0 && defMatch.index < firstCol) helpers.add(defName);
+        else for (let s = scopes.length - 1; s >= 0; s -= 1) if (scopes[s].kind === 'fn' && scopes[s].name) { helpers.add(scopes[s].name); break; }
+      }
+    }
+    let net = 0, opened = null;
+    for (let k = 0; k < line.length; k += 1) { if (line[k] === '{') { braceDepth += 1; net += 1; if (opened === null) opened = braceDepth; } else if (line[k] === '}') { braceDepth = Math.max(0, braceDepth - 1); net -= 1; } }
+    while (scopes.length && scopes.at(-1).depth > braceDepth) scopes.pop();
+    const openLoop = isSameLineLoopEnclosing(line, line.length);
+    if (opened !== null && braceDepth >= opened) { if (openLoop) scopes.push({ kind: 'loop', name: null, depth: opened }); else if (isHelper) scopes.push({ kind: 'fn', name: defName, depth: opened }); }
+    else if (net > 0 && isHelper) scopes.push({ kind: 'fn', name: defName, depth: braceDepth });
+  }
+  for (const calls of countHelperCallsBatch(code, helpers).values()) if (calls > subprocessCallCount) subprocessCallCount = calls;
+  return { hasRealSubprocess, hasExternalToolSubprocess, hasLiveLocalSubprocess, hasSandboxSubprocess, subprocessCallCount, hasLoopedSubprocess };
+}
+
+function detectPolyglotSignals(lang, code, litMap) {
+  const litValues = litMap instanceof Map ? [...litMap.values()] : [], hasMock = hasMockUsage(code, lang);
+  let hasBrowser = false, hasServerOrDb = false, hasRealSub = false, hasExtSub = false, hasLiveLocal = false, hasSandbox = false, subCount = 0, hasLoop = false, hasTty = false, hasFs = false;
+  const inspectCmd = (openIdx) => {
+    const { slice, startIdx } = extractCallArgsSlice(code, openIdx, 240), tr = slice.trim();
+    if (!tr) return false;
+    const lits = collectLiteralsInMaskedSlice(slice, startIdx, litMap), all = `${slice} ${lits.map((x) => x.value).join(' ')}`;
+    const lead = tr[0] === '"' && lits.length && !slice.slice(0, lits[0].sliceStart).trim() ? lits[0].value.trim() : null;
+    if (lead !== null) {
+      if (!lead && !tr.slice(tr.indexOf('"', 1) + 1).trimStart().startsWith('+')) return false;
+      const base = (lead.split(/\s+/)[0] ?? '').split(/[\\/]/).pop() ?? '';
+      if (lead && (!base || TRIVIAL_SUBPROCESS_BIN_RE.test(base))) return false;
+      if (EXTERNAL_TOOL_EXEC_RE.test(lead) || (SHELL_RUNTIME_RE.test(base) && EXTERNAL_TOOL_EXEC_RE.test(all))) hasExtSub = true;
+    } else if (EXTERNAL_TOOL_EXEC_RE.test(all)) hasExtSub = true;
+    hasRealSub = true; subCount += 1;
+    if (/--live-local\b/i.test(all)) hasLiveLocal = true;
+    if (SANDBOX_EXEC_RE.test(all)) hasSandbox = true;
+    return true;
+  };
+  if (lang === 'py') {
+    const stubbed = /\b(?:patch|monkeypatch\.setattr|mocker\.patch|setattr)\s*\([^)]*subprocess/i.test(code) || /\bsubprocess\s*\.\s*(?:run|Popen|check_output|check_call)\s*=(?!=)|\bsubprocess\s*=(?!=)/.test(code) || litValues.some((v) => /subprocess\.(?:run|Popen|check_output|check_call)/.test(v));
+    if (!stubbed && /\b(?:import\s+subprocess|from\s+subprocess\s+import)\b/.test(code)) for (const m of code.matchAll(/\bsubprocess\.(?:run|Popen|check_output|check_call)\s*\(/g)) inspectCmd((m.index ?? 0) + m[0].length - 1);
+    hasLoop = hasRealSub && /\b(?:for|while)\s+[^:\n]+:\s*\n?[ \t]+[^\n]*subprocess\./.test(code);
+    hasBrowser = /\bplaywright\b/.test(code) && /\.(?:goto|launch)\s*\(/.test(code) && !hasMock;
+    hasServerOrDb = /\b(?:requests\.(?:get|post|put|delete|request)|httpx\.(?:get|post|Client)|urllib\.request\.urlopen|HTTPServer|sqlite3\.connect|psycopg2?\.connect|TestClient)\s*\(/.test(code) && !hasMock;
+    hasTty = (/\b(?:pty\.openpty|termios\.tcgetattr|os\.isatty)\s*\(/.test(code) || (/\b(?:open|os\.stat)\s*\(/.test(code) && litValues.some((v) => REAL_DEVICE_PATH_RE.test(v)))) && !hasMock;
+    hasFs = /\b(?:tempfile\.mkdtemp|TemporaryDirectory|os\.listdir|Path\(|tmp_path)\b/.test(code);
+  } else if (lang === 'go') {
+    const execShadowed = /\b(?:var|type)\s+exec\b|\bexec\s*:?=(?!=)|\bfunc\b[^(\n]*\([^)]*\bexec\b/.test(code);
+    if (!execShadowed && litValues.includes('os/exec')) for (const m of code.matchAll(/\bexec\.Command(?:Context)?\s*\(/g)) inspectCmd((m.index ?? 0) + m[0].length - 1);
+    hasLoop = hasRealSub && /\bfor\b[^{]*\{[^}]*exec\.Command/.test(code);
+    hasServerOrDb = /\b(?:httptest\.NewServer|net\.Listen|http\.(?:Get|Post|Do)|sql\.Open)\s*\(/.test(code);
+    hasTty = /\bterm\.IsTerminal\s*\(/.test(code) || (/\bos\.(?:Open|Stat)\s*\(/.test(code) && litValues.some((v) => REAL_DEVICE_PATH_RE.test(v)));
+    hasFs = /\b(?:os\.MkdirTemp|t\.TempDir|os\.ReadDir|os\.ReadFile)\s*\(/.test(code);
+  } else if (lang === 'rs') {
+    const cmdShadowed = /\b(?:struct|enum|trait|type)\s+Command\b|\bmod\s+command\b/i.test(code);
+    const hasStdCmd = /\b(?:std|tokio|async_process|assert_cmd)::process::(?:\{[^}]*\bCommand\b|Command\b|\*)|\b(?:std|tokio|async_process)::process::Command::new\b/.test(code);
+    if (!cmdShadowed && hasStdCmd) {
+      for (const m of code.matchAll(/\bCommand::new\s*\(/g)) if (inspectCmd((m.index ?? 0) + m[0].length - 1)) {
+        const st = (m.index ?? 0) + m[0].length, semi = code.indexOf(';', st), ch = code.slice(st, semi < 0 ? st + 240 : Math.min(semi, st + 240));
+        const all = `${ch} ${collectLiteralsInMaskedSlice(ch, st, litMap).map((x) => x.value).join(' ')}`;
+        if (/--live-local\b/i.test(all)) hasLiveLocal = true; if (SANDBOX_EXEC_RE.test(all)) hasSandbox = true; if (EXTERNAL_TOOL_EXEC_RE.test(all)) hasExtSub = true;
+      }
+    }
+    hasLoop = hasRealSub && /\b(?:for|while)\b[^{]*\{[^}]*Command::new/.test(code);
+    hasServerOrDb = /\b(?:TcpListener::bind|reqwest::|axum::serve|Connection::open|sqlx::)\b/.test(code);
+    hasTty = /\b(?:libc::isatty|nix::pty::)\b/.test(code) || (/\b(?:File::open|fs::metadata)\s*\(/.test(code) && litValues.some((v) => REAL_DEVICE_PATH_RE.test(v)));
+    hasFs = /\b(?:tempdir|TempDir|fs::read_dir|fs::read_to_string|fs::create_dir)\b/.test(code);
+  }
+  const hasLiveBinding = hasBrowser || hasServerOrDb || hasExtSub, hasRealHostSmoke = hasLiveBinding || hasRealSub || hasTty || hasLiveLocal;
+  return { hasBrowser, hasServerOrDb, hasRealSubprocess: hasRealSub, hasLiveBinding, hasRealDeviceOrTtyProbe: hasTty, hasRealFsState: hasFs, hasLiveLocal, hasSandboxSubprocess: hasSandbox, subprocessCallCount: subCount, hasLoopedSubprocess: hasLoop, hasRealHostSmoke, hasAnyRealExec: hasRealHostSmoke };
+}
+
+function detectRealExecutionSignals(filePath, code, litMap) {
+  const lang = detectLang(filePath);
+  if (lang !== 'js') return detectPolyglotSignals(lang, code, litMap);
+  const auth = analyzePrimitiveAuthenticity(code, litMap), sub = analyzeJsSubprocessCalls(code, auth, litMap);
+  const hasBrowser = detectJsBrowser(code, auth), hasServerOrDb = detectJsServerOrDb(code, auth);
+  const hasExternalSdk = auth.importedModules.has('external-sdk') && !auth.mockedModules.has('external-sdk') && !MOCK_USAGE_RE.test(code);
+  const hasRealDeviceOrTtyProbe = detectJsTty(code, auth, litMap), hasRealFsState = detectJsFsState(code, auth);
+  const hasLiveBinding = hasBrowser || hasServerOrDb || sub.hasExternalToolSubprocess || hasExternalSdk;
+  const hasRealHostSmoke = hasLiveBinding || sub.hasRealSubprocess || hasRealDeviceOrTtyProbe || sub.hasLiveLocalSubprocess;
+  return { hasBrowser, hasServerOrDb, hasRealSubprocess: sub.hasRealSubprocess, hasLiveBinding, hasRealDeviceOrTtyProbe, hasRealFsState, hasLiveLocal: sub.hasLiveLocalSubprocess, hasSandboxSubprocess: sub.hasSandboxSubprocess, subprocessCallCount: sub.subprocessCallCount, hasLoopedSubprocess: sub.hasLoopedSubprocess, hasRealHostSmoke, hasAnyRealExec: hasRealHostSmoke };
+}
+
 export function inspectTestBoundaryTargets(testPath, text, { nativeOnlyTargets } = {}) {
   const normTest = normalizePath(testPath), lang = detectLang(normTest), code = scanSourceWithMetrics(text, lang).codeNoComments;
   const targetSet = new Set(), boundaryTargetSet = new Set(), surfaceSet = new Set();
@@ -115,162 +286,32 @@ function parseByteExpr(raw) {
   return total;
 }
 
-function detectMaxPayloadBytes(code, { maxInlineStringBytes = 0, repeatLiteralUnits = null } = {}) {
+function detectMaxPayloadBytes(code, { maxInlineStringBytes = 0, repeatLiteralUnits = null, lang = 'js' } = {}) {
   let maxBytes = maxInlineStringBytes > 0 ? maxInlineStringBytes : null;
   const rec = (n) => { if (Number.isInteger(n) && n > 0 && (maxBytes === null || n > maxBytes)) maxBytes = n; };
-  for (const m of code.matchAll(/"\s*(?:\.\s*repeat\s*\(([0-9_*\s+]{1,40})\)|\*\s*([0-9_*\s+]{1,40}))/g)) { const c = parseByteExpr(m[1] ?? m[2]); if (c !== null) rec((repeatLiteralUnits?.get(m.index) ?? 1) * c); }
-  for (const m of code.matchAll(/\.\s*repeat\s*\(([0-9_*\s+]{1,40})\)/g)) { let p = (m.index ?? 0) - 1; while (p >= 0 && /\s/.test(code[p])) p -= 1; if (p < 0 || code[p] !== '"') { const c = parseByteExpr(m[1]); if (c !== null) rec(c); } }
-  for (const m of code.matchAll(/\b(?:Buffer\s*\.\s*alloc(?:Unsafe)?|new\s+(?:Uint8Array|Array|Buffer)|bytearray|bytes|make\s*\(\s*\[\]byte\s*,)\s*\(?([0-9_*\s+]{1,40})|\b(?:strings|bytes)\.Repeat\s*\([^,]{1,40},\s*([0-9_*\s+]{1,40})\)|\bvec!\s*\[\s*[^;]{1,20};\s*([0-9_*\s+]{1,40})\s*\]/g)) { const n = parseByteExpr(m[1] ?? m[2] ?? m[3]); if (n !== null) rec(n); }
+  for (const m of code.matchAll(/"\s*\.\s*repeat\s*\(([0-9_*\s+]{1,40})\)/g)) { const c = parseByteExpr(m[1]); if (c !== null) rec((repeatLiteralUnits?.get(m.index) ?? 1) * c); }
+  for (const m of code.matchAll(/\.\s*repeat\s*\(([0-9_*\s+]{1,40})\)/g)) { let p = (m.index ?? 0) - 1; while (p >= 0 && /\s/.test(code[p])) p -= 1; if (p < 0 || code[p] !== '"') rec(parseByteExpr(m[1])); }
+  if (lang === 'js') { for (const m of code.matchAll(/\b(?:Buffer\s*\.\s*alloc(?:Unsafe)?|new\s+(?:Uint8Array|Array|Buffer))\s*\(([0-9_*\s+]{1,40})\)/g)) rec(parseByteExpr(m[1])); }
+  else if (lang === 'py') { for (const m of code.matchAll(/"\s*\*\s*([0-9_*\s+]{1,40})/g)) { const c = parseByteExpr(m[1]); if (c !== null) rec((repeatLiteralUnits?.get(m.index) ?? 1) * c); } for (const m of code.matchAll(/\b(?:bytearray|bytes)\s*\(\s*([0-9_*\s+]{1,40})/g)) rec(parseByteExpr(m[1])); }
+  else if (lang === 'go') { for (const m of code.matchAll(/\bmake\s*\(\s*\[\]byte\s*,\s*([0-9_*\s+]{1,40})|\b(?:strings|bytes)\.Repeat\s*\([^,]{1,40},\s*([0-9_*\s+]{1,40})\)/g)) rec(parseByteExpr(m[1] ?? m[2])); }
+  else if (lang === 'rs') { for (const m of code.matchAll(/\bvec!\s*\[\s*[^;]{1,20};\s*([0-9_*\s+]{1,40})\s*\]/g)) rec(parseByteExpr(m[1])); }
   return maxBytes;
-}
-
-function extractCallArgs(text, openIdx, maxLen = 240) {
-  if (openIdx < 0 || text[openIdx] !== '(') return { slice: '', startIdx: openIdx + 1, endIdx: openIdx + 1, closed: false };
-  const startIdx = openIdx + 1, lim = Math.min(text.length, startIdx + maxLen);
-  for (let d = 1, q = '', i = startIdx; i < lim; i += 1) {
-    const c = text[i];
-    if (q) { if (c === '\\' && i + 1 < lim) i += 1; else if (c === q) q = ''; continue; }
-    if (c === '"' || c === '\'' || c === '`') q = c; else if (c === '(') d += 1; else if (c === ')' && --d === 0) return { slice: text.slice(startIdx, i), startIdx, endIdx: i, closed: true };
-  }
-  return { slice: text.slice(startIdx, lim), startIdx, endIdx: lim, closed: false };
-}
-
-function literalsInSlice(slice, startIdx, litMap) {
-  const out = [];
-  for (let k = 0; k < slice.length; k += 1) if (slice[k] === '"') { const v = litMap.get(startIdx + k); if (v !== undefined) out.push({ value: v, pos: k }); k += 1; while (k < slice.length && slice[k] !== '"') k += 1; }
-  return out;
-}
-
-const classifyMod = (spec) => {
-  const s = String(spec ?? '').trim().toLowerCase();
-  if (/^(?:node:)?child_process$/.test(s)) return 'child_process';
-  if (/^(?:node:)?fs(?:\/promises)?$/.test(s)) return 'fs';
-  if (/^(?:node:)?(?:https?|http2|net)$|^(?:supertest|express|fastify|koa|hono)$/.test(s)) return 'http';
-  if (/^(?:node:)?tty$|^node-pty$/.test(s)) return 'tty';
-  if (/^(?:node:sqlite|pg|mysql2?|better-sqlite3|sqlite3?|mongodb|redis|ioredis|@prisma\/client)$/.test(s)) return 'db';
-  if (/^(?:@playwright\/test|playwright(?:-core|-chromium|-firefox|-webkit)?|puppeteer(?:-core)?)$/.test(s)) return 'browser';
-  if (/^(?:@google-cloud\/.+|@aws-sdk\/.+|aws-sdk|stripe|dockerode|@kubernetes\/client-node|@octokit\/.+|googleapis)$/.test(s)) return 'external-sdk';
-  return null;
-};
-
-function detectExecutionSignals(filePath, code, litMap) {
-  const lang = detectLang(filePath), litValues = [...litMap.values()], hasMock = MOCK_USAGE_RE.test(code);
-  const litAt = (m) => { const r = m[0].lastIndexOf('""'); return r < 0 ? '' : (litMap.get((m.index ?? 0) + r) ?? ''); };
-  let hasBrowser = false, hasServerOrDb = false, hasRealSub = false, hasExtSub = false, hasLiveLocal = false;
-  let hasSandboxSub = false, subCount = 0, hasLoopSub = false, hasDevTty = false, hasFsState = false, hasExtSdk = false;
-
-  const inspectCmd = (openParenIdx) => {
-    const { slice, startIdx } = extractCallArgs(code, openParenIdx, 240), tr = slice.trim();
-    if (!tr) return false;
-    const lits = literalsInSlice(slice, startIdx, litMap), all = `${slice} ${lits.map((l) => l.value).join(' ')}`;
-    const lead = tr[0] === '"' && lits.length && !slice.slice(0, lits[0].pos).trim() ? lits[0].value.trim() : null;
-    if (lead !== null) {
-      if (!lead && !tr.slice(tr.indexOf('"', 1) + 1).trimStart().startsWith('+')) return false;
-      const base = (lead.split(/\s+/)[0] ?? '').split(/[\\/]/).pop() ?? '';
-      if (lead && (!base || TRIVIAL_BIN_RE.test(base))) return false;
-      if (EXTERNAL_TOOL_RE.test(lead) || (SHELL_BIN_RE.test(base) && EXTERNAL_TOOL_RE.test(all))) hasExtSub = true;
-    } else if (EXTERNAL_TOOL_RE.test(all)) hasExtSub = true;
-    hasRealSub = true; subCount += 1;
-    if (/--live-local\b/i.test(all)) hasLiveLocal = true;
-    if (SANDBOX_EXEC_RE.test(all)) hasSandboxSub = true;
-    return true;
-  };
-
-  if (lang === 'py') {
-    const patched = /\b(?:patch|monkeypatch\.setattr)\s*\([^)]*subprocess/i.test(code) || litValues.some((v) => /subprocess\.(?:run|Popen|check_output|check_call)/.test(v));
-    if (!patched && /\b(?:import\s+subprocess|from\s+subprocess\s+import)\b/.test(code)) for (const m of code.matchAll(/\bsubprocess\.(?:run|Popen|check_output|check_call)\s*\(/g)) inspectCmd((m.index ?? 0) + m[0].length - 1);
-    hasLoopSub = hasRealSub && /\b(?:for|while)\s+[^:\n]+:\s*\n?[ \t]+[^\n]*subprocess\./.test(code);
-    hasBrowser = /\bplaywright\b/.test(code) && /\.(?:goto|launch)\s*\(/.test(code) && !hasMock;
-    hasServerOrDb = /\b(?:requests\.(?:get|post|put|delete|request)|httpx\.(?:get|post|Client)|urllib\.request\.urlopen|HTTPServer|sqlite3\.connect|psycopg2?\.connect|TestClient)\s*\(/.test(code) && !hasMock;
-    hasDevTty = (/\b(?:pty\.openpty|termios\.tcgetattr|os\.isatty)\s*\(/.test(code) || (/\b(?:open|os\.stat)\s*\(/.test(code) && litValues.some((v) => REAL_DEVICE_PATH_RE.test(v)))) && !hasMock;
-    hasFsState = /\b(?:tempfile\.mkdtemp|TemporaryDirectory|os\.listdir|Path\(|tmp_path)\b/.test(code);
-  } else if (lang === 'go') {
-    if (litValues.includes('os/exec')) for (const m of code.matchAll(/\bexec\.Command(?:Context)?\s*\(/g)) inspectCmd((m.index ?? 0) + m[0].length - 1);
-    hasLoopSub = hasRealSub && /\bfor\b[^{]*\{[^}]*exec\.Command/.test(code);
-    hasServerOrDb = /\b(?:httptest\.NewServer|net\.Listen|http\.(?:Get|Post|Do)|sql\.Open)\s*\(/.test(code);
-    hasDevTty = /\bterm\.IsTerminal\s*\(/.test(code) || (/\bos\.(?:Open|Stat)\s*\(/.test(code) && litValues.some((v) => REAL_DEVICE_PATH_RE.test(v)));
-    hasFsState = /\b(?:os\.MkdirTemp|t\.TempDir|os\.ReadDir|os\.ReadFile)\s*\(/.test(code);
-  } else if (lang === 'rs') {
-    for (const m of code.matchAll(/\bCommand::new\s*\(/g)) if (inspectCmd((m.index ?? 0) + m[0].length - 1)) {
-      const st = (m.index ?? 0) + m[0].length, semi = code.indexOf(';', st), ch = code.slice(st, semi < 0 ? st + 240 : Math.min(semi, st + 240));
-      const all = `${ch} ${literalsInSlice(ch, st, litMap).map((l) => l.value).join(' ')}`;
-      if (/--live-local\b/i.test(all)) hasLiveLocal = true; if (SANDBOX_EXEC_RE.test(all)) hasSandboxSub = true; if (EXTERNAL_TOOL_RE.test(all)) hasExtSub = true;
-    }
-    hasLoopSub = hasRealSub && /\b(?:for|while)\b[^{]*\{[^}]*Command::new/.test(code);
-    hasServerOrDb = /\b(?:TcpListener::bind|reqwest::|axum::serve|Connection::open|sqlx::)\b/.test(code);
-    hasDevTty = /\b(?:libc::isatty|nix::pty::)\b/.test(code) || (/\b(?:File::open|fs::metadata)\s*\(/.test(code) && litValues.some((v) => REAL_DEVICE_PATH_RE.test(v)));
-    hasFsState = /\b(?:tempdir|TempDir|fs::read_dir|fs::read_to_string|fs::create_dir)\b/.test(code);
-  } else {
-    const mocked = new Set(), imported = new Set(), shadowed = new Set(), cpNs = new Set(), cpNamed = new Map();
-    for (const m of code.matchAll(/\b(?:(?:vi|jest)\.(?:mock|doMock)|mock\.module)[ \t]*\(\s*("")/g)) { const c = classifyMod(litAt(m)); if (c) mocked.add(c); }
-    const addImp = (spec, clause) => {
-      const tr = String(clause ?? '').trim(); if (!tr || /^type\s+/.test(tr)) return;
-      const cat = classifyMod(spec), lo = spec.trim().toLowerCase(), ns = [], named = new Map();
-      const nsm = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(tr); if (nsm) ns.push(nsm[1]);
-      const bs = tr.indexOf('{'), be = tr.lastIndexOf('}');
-      if (bs >= 0 && be > bs) {
-        const bef = tr.slice(0, bs).replace(/,\s*$/, '').trim(); if (/^[A-Za-z_$][\w$]*$/.test(bef)) ns.push(bef);
-        for (const p of tr.slice(bs + 1, be).split(',')) { const x = p.split('=')[0].trim(); if (!x || /^type\s+/.test(x)) continue; const a = /^([A-Za-z_$][\w$]*)(?:\s+as\s+|\s*:\s*)([A-Za-z_$][\w$]*)$/.exec(x); if (a) { if (a[1] === 'default') ns.push(a[2]); else named.set(a[2], a[1]); } else if (/^[A-Za-z_$][\w$]*$/.test(x)) named.set(x, x); }
-      } else if (!nsm && /^[A-Za-z_$][\w$]*$/.test(tr)) ns.push(tr);
-      if (!cat) { for (const k of [...ns, ...named.keys()]) shadowed.add(k); return; }
-      if (mocked.has(cat)) return;
-      imported.add(cat); if (lo === '@playwright/test') imported.add('pw-test'); if (cat === 'db' && lo !== 'node:sqlite') imported.add('non-sqlite-db');
-      if (cat === 'child_process') { for (const n of ns) cpNs.add(n); for (const [l, o] of named) cpNamed.set(l, o); }
-    };
-    for (const m of code.matchAll(/(?<!\.)\bimport\s+([A-Za-z_$*{][A-Za-z0-9_$,*{}\s]{0,600})\bfrom\s*("")/g)) addImp(litAt(m), m[1]);
-    for (const m of code.matchAll(/\b(?:const|let|var)[ \t]+([A-Za-z_$][\w$]*|\{[A-Za-z0-9_$,:=\s]{1,200}\})[ \t]*=[ \t]*require[ \t]*\(\s*("")\s*\)/g)) addImp(litAt(m), m[1]);
-    for (const m of code.matchAll(/\b(?:const|let|var|function|class)[ \t]+([A-Za-z_$][\w$]*)(?![ \t]*=[ \t]*require\b)/g)) if (/^(?:spawn|spawnSync|execFile|execFileSync|execSync|fetch|createServer|statSync|openSync|isatty|DatabaseSync|page|browser|chromium)$/.test(m[1])) shadowed.add(m[1]);
-    for (const m of code.matchAll(/\b(?:globalThis|global|window|self)\s*\.\s*(fetch)\s*(?:&&|\|\||\?\?)?=(?![=>])|(?<![\w$.])(fetch|page|browser)\s*(?:&&|\|\||\?\?)?=(?![=>])|\b(?:vi\.stubGlobal|mock\.method|vi\.spyOn|jest\.spyOn|sinon\.stub)\s*\((?:[^,\n)]{1,80},\s*)?("")|(?<![\w$])[A-Za-z_$][\w$]*\s*\.\s*(spawn|spawnSync|execFile|execFileSync|execSync|statSync|openSync|isatty|DatabaseSync|launch|goto)\s*(?:&&|\|\||\?\?)?=(?![=>])/g)) { const k = m[1] || m[2] || m[4] || litAt(m); if (k) shadowed.add(k); }
-
-    const subNames = new Set(['spawn', 'spawnSync', 'execFile', 'execFileSync', 'execSync']);
-    if (imported.has('child_process')) {
-      const helpers = new Set();
-      for (const m of code.matchAll(/(?<![\w$])([A-Za-z_$][\w$]*)(?:\s*\.\s*([A-Za-z_$][\w$]*))?[ \t]*\(/g)) {
-        const rcv = m[2] ? m[1] : '', fn = m[2] || m[1];
-        const ok = rcv ? (cpNs.has(rcv) && subNames.has(fn) && !shadowed.has(fn) && !shadowed.has(rcv)) : (subNames.has(cpNamed.get(fn)) && !shadowed.has(fn) && !shadowed.has(cpNamed.get(fn)));
-        if (!ok || hasLeadDot(code, m.index ?? 0) || !inspectCmd((m.index ?? 0) + m[0].length - 1)) continue;
-        if (/\b(?:for|while)\s*\([^)]*\)\s*(?:\{[^}]*)?$|\.(?:forEach|map)\s*\([^)]*$/.test(code.slice(code.lastIndexOf('\n', m.index ?? 0) + 1, m.index ?? 0))) hasLoopSub = true;
-        const hm = [...code.slice(Math.max(0, (m.index ?? 0) - 400), m.index ?? 0).matchAll(/\b(?:function\s+([A-Za-z_$][\w$]*)\s*\(|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>)/g)].at(-1);
-        const hn = hm?.[1] ?? hm?.[2]; if (hn && !/^(?:test|it|describe)$/.test(hn)) helpers.add(hn);
-      }
-      for (const h of helpers) { const c = [...code.matchAll(new RegExp(`(?<![.\\w$])${h.replace(/\$/g, '\\$')}[ \\t]*\\(`, 'g'))].length - (code.includes(`function ${h}`) ? 1 : 0); if (c > subCount) subCount = c; }
-    }
-    if (!shadowed.has('fetch')) for (const m of code.matchAll(/(?<![\w$.])\bfetch\s*\(/g)) {
-      const idx = m.index ?? 0; if (hasLeadDot(code, idx) || /\b(?:async|static|get|set|function|abstract|public|private|protected|override|declare)[ \t]+$/.test(code.slice(Math.max(0, idx - 32), idx))) continue;
-      const args = extractCallArgs(code, idx + m[0].length - 1, 240), after = args.closed ? code.slice(args.endIdx + 1, args.endIdx + 80).trimStart() : '';
-      if (!after.startsWith('{') && !/^:\s*[A-Za-z_$][^{;=\n]{0,60}\{/.test(after)) { hasServerOrDb = true; break; }
-    }
-    if (!hasServerOrDb && imported.has('http')) hasServerOrDb = (!shadowed.has('createServer') && /\b(?:createServer|request)\s*\(/.test(code)) || (/\.\s*listen\s*\(/.test(code) && !/\b(?:fake|mock|stub)[\w$]*\s*\.\s*listen\s*\(/i.test(code)) || /\bsupertest\s*\(/.test(code);
-    if (!hasServerOrDb && imported.has('db')) hasServerOrDb = (!shadowed.has('DatabaseSync') && /\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?DatabaseSync\s*\(/.test(code)) || (imported.has('non-sqlite-db') && !hasMock);
-    hasBrowser = imported.has('browser') && !shadowed.has('page') && !shadowed.has('launch') && !shadowed.has('goto') && (/\b(?:chromium|firefox|webkit|browser|context)\s*\.\s*(?:launch|launchPersistentContext|newPage|newContext|connect)\s*\(/.test(code) || (imported.has('pw-test') && /\bpage\s*\.\s*goto\s*\(/.test(code)));
-    if (imported.has('tty')) hasDevTty = (!shadowed.has('isatty') && /\bisatty\s*\(/.test(code)) || /\bnew\s+(?:[A-Za-z_$][\w$]*\s*\.\s*)?(?:ReadStream|WriteStream)\s*\(/.test(code);
-    if (imported.has('fs')) {
-      hasFsState = /\b(?:mkdtempSync|mkdtemp|readdirSync|readdir|existsSync|readFileSync|readFile|statSync|stat)\s*\(/.test(code);
-      const devVars = new Set([...code.matchAll(/\b(?:const|let|var)[ \t]+([A-Za-z_$][\w$]*)[ \t]*=[ \t]*("")/g)].filter((m) => REAL_DEVICE_PATH_RE.test(litAt(m))).map((m) => m[1]));
-      if (!hasDevTty && !shadowed.has('statSync') && !shadowed.has('openSync')) for (const m of code.matchAll(/\b(?:openSync|open|statSync|stat|fstatSync|lstatSync|accessSync)\s*\(/g)) {
-        const { slice, startIdx } = extractCallArgs(code, (m.index ?? 0) + m[0].length - 1, 200);
-        if (literalsInSlice(slice, startIdx, litMap).some((l) => REAL_DEVICE_PATH_RE.test(l.value)) || [...devVars].some((v) => new RegExp(`(?<![\\w$.])${v.replace(/\$/g, '\\$')}(?![\\w$])`).test(slice))) { hasDevTty = true; break; }
-      }
-    }
-    hasExtSdk = imported.has('external-sdk') && !hasMock;
-  }
-  const hasLiveBinding = hasBrowser || hasServerOrDb || hasExtSub || hasExtSdk, hasRealHostSmoke = hasLiveBinding || hasRealSub || hasDevTty || hasLiveLocal;
-  return { hasBrowser, hasServerOrDb, hasRealSubprocess: hasRealSub, hasLiveBinding, hasRealDeviceOrTtyProbe: hasDevTty, hasRealFsState: hasFsState, hasLiveLocal, hasSandboxSubprocess: hasSandboxSub, subprocessCallCount: subCount, hasLoopedSubprocess: hasLoopSub, hasRealHostSmoke, hasAnyRealExec: hasRealHostSmoke };
 }
 
 export function detectRealHostProbesInTest(testPath, text) {
   if (lintValidationCode({ path: testPath, kind: 'test', text, hasRealE2eCoverage: true }).codes.includes('silent-validation-skip')) return { hasRealHostSmoke: false, mockOnly: false, classes: [], maxDetectedPayloadBytes: null, detectedTurns: 0, liveLocal: false };
-  const { codeNoStrings, maxInlineStringBytes, repeatLiteralUnits, stringLiteralsByOpenPos } = scanSourceWithMetrics(text, detectLang(testPath));
-  const s = detectExecutionSignals(testPath, codeNoStrings, stringLiteralsByOpenPos), maxBytes = detectMaxPayloadBytes(codeNoStrings, { maxInlineStringBytes, repeatLiteralUnits });
+  const lang = detectLang(testPath), { codeNoStrings, maxInlineStringBytes, repeatLiteralUnits, stringLiteralsByOpenPos } = scanSourceWithMetrics(text, lang);
+  const s = detectRealExecutionSignals(testPath, codeNoStrings, stringLiteralsByOpenPos), maxBytes = detectMaxPayloadBytes(codeNoStrings, { maxInlineStringBytes, repeatLiteralUnits, lang });
   const turns = !s.hasRealSubprocess ? 0 : (s.hasLoopedSubprocess ? Math.max(2, s.subprocessCallCount) : s.subprocessCallCount);
   const classes = [...(s.hasRealSubprocess && s.hasSandboxSubprocess ? ['nested-sandbox'] : []), ...(s.hasRealDeviceOrTtyProbe ? ['host-tty-ownership'] : []), ...(s.hasRealSubprocess && turns >= 2 && s.hasRealFsState ? ['multi-turn-cli-state'] : []), ...(s.hasRealHostSmoke && maxBytes !== null && maxBytes > MIN_REALISTIC_PAYLOAD_BYTES ? ['full-size-payload'] : [])].sort();
-  return { hasRealHostSmoke: s.hasRealHostSmoke, mockOnly: MOCK_USAGE_RE.test(codeNoStrings) && !s.hasRealHostSmoke, classes, maxDetectedPayloadBytes: maxBytes, detectedTurns: turns, liveLocal: s.hasLiveLocal };
+  return { hasRealHostSmoke: s.hasRealHostSmoke, mockOnly: hasMockUsage(codeNoStrings, lang) && !s.hasRealHostSmoke, classes, maxDetectedPayloadBytes: maxBytes, detectedTurns: turns, liveLocal: s.hasLiveLocal };
 }
 
 export function detectRealE2eKindsInTest(testPath, text) {
   if (lintValidationCode({ path: testPath, kind: 'test', text, hasRealE2eCoverage: true }).codes.includes('silent-validation-skip')) return [];
-  const { codeNoStrings, stringLiteralsByOpenPos } = scanSourceWithMetrics(text, detectLang(testPath)), s = detectExecutionSignals(testPath, codeNoStrings, stringLiteralsByOpenPos);
-  return [...(s.hasBrowser ? ['browser-playwright'] : []), ...(s.hasServerOrDb ? ['local-server-or-db'] : []), ...(s.hasRealSubprocess ? ['subprocess-cli'] : []), ...(s.hasLiveBinding ? ['live-binding'] : []), ...(s.hasRealHostSmoke ? ['real-host-smoke'] : []), ...(s.hasAnyRealExec || !MOCK_USAGE_RE.test(codeNoStrings) ? ['real-execution'] : [])].sort();
+  const lang = detectLang(testPath), { codeNoStrings, stringLiteralsByOpenPos } = scanSourceWithMetrics(text, lang);
+  const s = detectRealExecutionSignals(testPath, codeNoStrings, stringLiteralsByOpenPos);
+  return [...(s.hasBrowser ? ['browser-playwright'] : []), ...(s.hasServerOrDb ? ['local-server-or-db'] : []), ...(s.hasRealSubprocess ? ['subprocess-cli'] : []), ...(s.hasLiveBinding ? ['live-binding'] : []), ...(s.hasRealHostSmoke ? ['real-host-smoke'] : []), ...(s.hasAnyRealExec || !hasMockUsage(codeNoStrings, lang) ? ['real-execution'] : [])].sort();
 }
 
 function matchSilentSkipLine(codeLine, maskedLine, kind, isValFile, lang) {
@@ -307,8 +348,8 @@ export function lintValidationCode({ path = '', kind = 'test', text = '', hasRea
   }
   if (kind === 'test' && hasRealE2eCoverage !== true) {
     const { boundarySurfaces } = inspectTestBoundaryTargets(filePath, source, { nativeOnlyTargets });
-    const mockLine = boundarySurfaces.length ? maskedLines.findIndex((l) => MOCK_USAGE_RE.test(l)) : -1;
-    if (mockLine >= 0 && !detectExecutionSignals(filePath, codeNoStrings, stringLiteralsByOpenPos).hasAnyRealExec) {
+    const mockLine = boundarySurfaces.length ? maskedLines.findIndex((l) => hasMockUsage(l, lang)) : -1;
+    if (mockLine >= 0 && !detectRealExecutionSignals(filePath, codeNoStrings, stringLiteralsByOpenPos).hasAnyRealExec) {
       codeSet.add('boundary-mock-only-test');
       const detail = (boundarySurfaces.includes('native-only') || boundarySurfaces.includes('os-boundary')) ? `mock-only test covers a ${boundarySurfaces.join('/')} boundary with no real-host smoke or --live-local execution` : 'mock-only test covers a runtime boundary with no real E2E coverage';
       warnings.push(`Warning: validation lint: ${filePath}:${mockLine + 1} [boundary-mock-only-test] ${detail}`);
@@ -331,7 +372,7 @@ export function lintRepoValidationBackside({ root, files, config, workspaceRoot 
     if (text === null) continue;
     if (isTest) {
       const { codeNoStrings, stringLiteralsByOpenPos } = scanSourceWithMetrics(text, detectLang(rel)), boundary = inspectTestBoundaryTargets(rel, text);
-      if (detectExecutionSignals(rel, codeNoStrings, stringLiteralsByOpenPos).hasAnyRealExec) for (const t of boundary.boundaryTargets) covered.add(t);
+      if (detectRealExecutionSignals(rel, codeNoStrings, stringLiteralsByOpenPos).hasAnyRealExec) for (const t of boundary.boundaryTargets) covered.add(t);
       tests.push({ rel, text, targets: boundary.boundaryTargets });
     } else if (!BACKSIDE_SKIP_SUBDIR_RE.test(rel)) codes.push({ rel, text });
   }

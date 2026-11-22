@@ -1,4 +1,4 @@
-// Layer-2 surface classification and native-only ownership detection.
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 75fde4547979ce8f760b5cb49996fe40b92c8567837622ceac4c2dd1c41f41ce).
 // Delegates prompt metadata & file-owner parsing to core modules.
 import { headerPrompts, promptClaims } from '../../file-owner.mjs';
 import { extractRuntimeInterfaceObjects, findFrontmatterRange } from '../../core/lint/prompt-metadata.mjs';

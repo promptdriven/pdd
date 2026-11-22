@@ -1,81 +1,68 @@
-// Layer-2 strict JSON schemas, CLI native schema flags, fence-hardened dual-read parser, and harness PR receipt stamper.
-import { createHash } from 'node:crypto';
+// Generated from prompts/cli/autopilot-validator.prompt.md (sha256: 75fde4547979ce8f760b5cb49996fe40b92c8567837622ceac4c2dd1c41f41ce).
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { redactSecrets } from '../../secret-redaction.mjs';
 import { writeAtomicPrivate } from '../../shared/atomic-fs.mjs';
 
 const strArr = (maxItems, extra = {}) => ({ type: 'array', items: { type: 'string', ...extra }, maxItems });
 const strictObj = (required, properties) => Object.freeze({ type: 'object', additionalProperties: false, required, properties });
 
-export const buildResultSchema = strictObj(
-  ['status', 'summary', 'changedPaths', 'testCommands', 'promptChanged', 'notes'],
-  {
-    status: { type: 'string', enum: ['ready', 'blocked', 'needs-decision'] },
-    summary: { type: 'string', maxLength: 2000 },
-    changedPaths: strArr(200),
-    testCommands: strArr(50),
-    promptChanged: { type: 'boolean' },
-    notes: { type: 'string', maxLength: 4000 },
-  },
-);
-
-export const reviewResultSchema = strictObj(
-  ['verdict', 'mustFix', 'followUps', 'preExisting', 'summary'],
-  {
-    verdict: { type: 'string', enum: ['PASS', 'FAIL'] },
-    mustFix: strArr(50),
-    followUps: strArr(50),
-    preExisting: strArr(50),
-    summary: { type: 'string', maxLength: 2000 },
-  },
-);
-
-export const gapCheckSchema = strictObj(
-  ['missingPathIds', 'unprovedAcIds', 'flags'],
-  {
-    missingPathIds: strArr(100),
-    unprovedAcIds: strArr(100),
-    flags: strArr(2, { enum: ['UNMAPPED_CHANGE', 'INSUFFICIENT_SCOPE'] }),
-  },
-);
-
-export const intakeCardSchema = strictObj(
-  ['decision', 'summary', 'acceptanceCriteria', 'touchedPaths', 'requiredCapabilities', 'questions'],
-  {
-    decision: { type: 'string', enum: ['ready', 'needs-clarification', 'skip'] },
-    summary: { type: 'string', maxLength: 2000 },
-    acceptanceCriteria: strArr(50),
-    touchedPaths: strArr(100),
-    requiredCapabilities: strArr(30),
-    questions: strArr(10),
-  },
-);
-
-export const TYPED_SCHEMAS = Object.freeze({
-  build: buildResultSchema,
-  review: reviewResultSchema,
-  'gap-check': gapCheckSchema,
-  intake: intakeCardSchema,
+export const buildResultSchema = strictObj(['status', 'summary', 'changedPaths', 'testCommands', 'promptChanged', 'notes'], {
+  status: { type: 'string', enum: ['ready', 'blocked', 'needs-decision'] }, summary: { type: 'string', maxLength: 2000 },
+  changedPaths: strArr(200), testCommands: strArr(50), promptChanged: { type: 'boolean' }, notes: { type: 'string', maxLength: 4000 },
 });
+export const reviewResultSchema = strictObj(['verdict', 'mustFix', 'followUps', 'preExisting', 'summary'], {
+  verdict: { type: 'string', enum: ['PASS', 'FAIL'] }, mustFix: strArr(50), followUps: strArr(50), preExisting: strArr(50), summary: { type: 'string', maxLength: 2000 },
+});
+export const gapCheckSchema = strictObj(['missingPathIds', 'unprovedAcIds', 'flags'], {
+  missingPathIds: strArr(100), unprovedAcIds: strArr(100), flags: strArr(2, { enum: ['UNMAPPED_CHANGE', 'INSUFFICIENT_SCOPE'] }),
+});
+export const intakeCardSchema = strictObj(['decision', 'summary', 'acceptanceCriteria', 'touchedPaths', 'requiredCapabilities', 'questions'], {
+  decision: { type: 'string', enum: ['ready', 'needs-clarification', 'skip'] }, summary: { type: 'string', maxLength: 2000 },
+  acceptanceCriteria: strArr(50), touchedPaths: strArr(100), requiredCapabilities: strArr(30), questions: strArr(10),
+});
+export const TYPED_SCHEMAS = Object.freeze({ build: buildResultSchema, review: reviewResultSchema, 'gap-check': gapCheckSchema, intake: intakeCardSchema });
 
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype', 'confidence', 'score', 'probability', 'certainty', 'confidenceScore']);
-const BIDI_AND_ZW_RE = /[\uFEFF\u061C\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069]/g;
-const CTRL_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g;
+const RECEIPT_OUTCOMES = new Set(['proved', 'failed', 'missing_capability', 'service_failure']);
+const REQUIRED_RECEIPT_STRINGS = ['repo', 'acRevision', 'targetTip', 'candidateHead', 'integratedTree', 'trustedPolicyDigest', 'recipeDigest', 'testProfile', 'command', 'toolchain', 'artifactDigest'];
+// Stateless non-/g regexes for .test(), paired with /g variants ONLY for .replace().
+const BIDI_AND_ZW_TEST_RE = /[\uFEFF\u061C\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069]/;
+const CTRL_TEST_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/;
+const BIDI_AND_ZW_REPLACE_RE = /[\uFEFF\u061C\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069]/g;
+const CTRL_REPLACE_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g;
 const isPlainObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const nonEmptyStr = (v) => typeof v === 'string' && v.trim().length > 0;
 
-/** Hardening 1: Linear O(N) ANSI CSI/OSC, C0/C1 control, BOM, zero-width, and bidi override sanitizer. */
+/** Hardening 1: Linear O(N) ANSI CSI/OSC (bounded; unterminated sequences never eat trailing text), C0/C1, BOM, ZW, and bidi sanitizer. */
 export function sanitizeUntrustedText(raw) {
   const s = String(raw ?? '');
   let out = '';
   for (let i = 0; i < s.length; i += 1) {
     if (s.charCodeAt(i) === 0x1b) {
       const nx = s[i + 1];
-      if (nx === '[') { i += 2; while (i < s.length && (s.charCodeAt(i) < 0x40 || s.charCodeAt(i) > 0x7e)) i += 1; continue; }
-      if (nx === ']') { i += 2; while (i < s.length && s.charCodeAt(i) !== 0x07 && !(s.charCodeAt(i) === 0x1b && s[i + 1] === '\\')) i += 1; if (s.charCodeAt(i) === 0x1b && s[i + 1] === '\\') i += 1; continue; }
+      if (nx === '[') {
+        const lim = Math.min(s.length, i + 64);
+        let j = i + 2;
+        while (j < lim && (s.charCodeAt(j) < 0x40 || s.charCodeAt(j) > 0x7e) && s[j] !== '\n' && s[j] !== '\r') j += 1;
+        i = (j < lim && s.charCodeAt(j) >= 0x40 && s.charCodeAt(j) <= 0x7e) ? j : i + 1;
+        continue;
+      }
+      if (nx === ']') {
+        const lim = Math.min(s.length, i + 2048);
+        let j = i + 2, terminated = false;
+        while (j < lim && s[j] !== '\n' && s[j] !== '\r') {
+          if (s.charCodeAt(j) === 0x07) { terminated = true; break; }
+          if (s.charCodeAt(j) === 0x1b && s[j + 1] === '\\') { j += 1; terminated = true; break; }
+          j += 1;
+        }
+        i = terminated ? j : i + 1;
+        continue;
+      }
       continue;
     }
     out += s[i];
   }
-  return out.replace(BIDI_AND_ZW_RE, '').replace(CTRL_RE, '');
+  return out.replace(BIDI_AND_ZW_REPLACE_RE, '').replace(CTRL_REPLACE_RE, '');
 }
 
 /** Hardening 2: Dynamic tilde fence strictly longer than any backtick or tilde run in payload. */
@@ -120,8 +107,7 @@ export function detectDuplicateJsonKeys(jsonText) {
       if (top?.kind === 'obj' && top.expectKey) {
         let key; try { key = JSON.parse(s.slice(i, j + 1)); } catch { return { hasDuplicate: false, duplicateKey: null }; }
         if (top.keys.has(key)) return { hasDuplicate: true, duplicateKey: key };
-        top.keys.add(key);
-        top.expectKey = false;
+        top.keys.add(key); top.expectKey = false;
       }
       i = j;
     }
@@ -129,8 +115,8 @@ export function detectDuplicateJsonKeys(jsonText) {
   return { hasDuplicate: false, duplicateKey: null };
 }
 
-/** Hardening 5: Safe JSON parse rejecting duplicate keys, prototype pollution, and forbidden numeric score keys. */
-export function safeJsonParse(raw, { maxBytes = 262_144, maxDepth = 16 } = {}) {
+/** Hardening 5: Safe JSON parse rejecting duplicate/forbidden/unsafe keys and sanitizing decoded string values. */
+export function safeJsonParse(raw, { maxBytes = 262_144, maxDepth = 16, sanitizeStrings = true } = {}) {
   const text = String(raw ?? '').replace(/^\uFEFF/, '').trim();
   const bounds = enforceSizeAndDepthBounds(text, { maxBytes, maxDepth });
   if (!bounds.ok) return { ok: false, value: null, error: bounds.error };
@@ -138,28 +124,38 @@ export function safeJsonParse(raw, { maxBytes = 262_144, maxDepth = 16 } = {}) {
   if (dup.hasDuplicate) return { ok: false, value: null, error: `Duplicate JSON key "${dup.duplicateKey}" rejected.` };
   let parsed;
   try { parsed = JSON.parse(text); } catch (err) { return { ok: false, value: null, error: err?.message ?? 'Invalid JSON.' }; }
+  let err = null;
   const walk = (node, depth) => {
-    if (depth > maxDepth) return 'Max object depth exceeded.';
-    if (Array.isArray(node)) { for (const item of node) { const e = walk(item, depth + 1); if (e) return e; } return null; }
+    if (err) return node;
+    if (depth > maxDepth) { err = 'Max object depth exceeded.'; return node; }
+    if (typeof node === 'string') return sanitizeStrings ? sanitizeUntrustedText(node) : node;
+    if (Array.isArray(node)) return node.map((item) => walk(item, depth + 1));
     if (isPlainObj(node)) {
+      const cleanObj = {};
       for (const k of Object.keys(node)) {
-        if (FORBIDDEN_KEYS.has(k) || BIDI_AND_ZW_RE.test(k) || CTRL_RE.test(k)) return `Forbidden or unsafe key "${k}" rejected.`;
-        const e = walk(node[k], depth + 1); if (e) return e;
+        if (FORBIDDEN_KEYS.has(k) || BIDI_AND_ZW_TEST_RE.test(k) || CTRL_TEST_RE.test(k) || k.includes('\x1b')) { err = `Forbidden or unsafe key "${k}" rejected.`; return node; }
+        cleanObj[k] = walk(node[k], depth + 1);
       }
+      return cleanObj;
     }
-    return null;
+    return node;
   };
-  const err = walk(parsed, 0);
-  return err ? { ok: false, value: null, error: err } : { ok: true, value: parsed, error: null };
+  const cleaned = walk(parsed, 0);
+  return err ? { ok: false, value: null, error: err } : { ok: true, value: cleaned, error: null };
 }
 
-/** Hardening 6: Strip HTML comments, Markdown blockquotes, and unified diff lines before legacy fence scanning. */
+/** Hardening 6: Strip HTML comments, blockquotes, and unified diff lines (preserving ordinary `- ` Markdown bullets). */
 export function stripInjectionContainers(raw) {
-  return sanitizeUntrustedText(raw)
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .split(/\r?\n/)
-    .filter((line) => !/^\s*>/.test(line) && !/^[+-](?![+-]{2})/.test(line))
-    .join('\n');
+  const lines = sanitizeUntrustedText(raw).replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/), out = [];
+  let inDiffHunk = false;
+  for (const line of lines) {
+    if (/^\s*>/.test(line)) continue;
+    if (/^(?:diff --git |@@ |--- [a-z/]|\+\+\+ [a-z/])/i.test(line)) { inDiffHunk = true; continue; }
+    if (inDiffHunk) { if (/^[+-]/.test(line)) continue; if (!line.startsWith(' ')) inDiffHunk = false; }
+    if (/^[+-]\s*(?:\{|```|~~~)/.test(line)) continue;
+    out.push(line);
+  }
+  return out.join('\n');
 }
 
 /** Hardening 7: Extract strictly closed JSON fences and detect unclosed/truncated fence attacks. */
@@ -183,10 +179,28 @@ export function extractClosedJsonFences(raw) {
   return { blocks, unclosedFence: Boolean(active) };
 }
 
-/** Hardening 8: Detect conflicting verdict/decision/status across multiple candidate objects. */
+function scanBalancedJsonStrings(text, maxObjects = 32) {
+  const found = [], s = String(text ?? '');
+  for (let i = 0; i < s.length && found.length < maxObjects; i += 1) {
+    if (s[i] !== '{') continue;
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < s.length; j += 1) {
+      const c = s[j];
+      if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === '{') depth += 1;
+      else if (c === '}' && --depth === 0) { found.push(s.slice(i, j + 1)); i = j; break; }
+    }
+  }
+  return found;
+}
+
+const normStrArr = (a) => (Array.isArray(a) ? [...new Set(a.map((x) => String(x)))].sort() : null);
+
+/** Hardening 8: Detect conflicting verdict/decision/status/gap-check arrays across multiple candidate objects. */
 export function detectConflictingVerdicts(candidates) {
   if (!Array.isArray(candidates) || candidates.length < 2) return false;
-  return new Set(candidates.map((c) => JSON.stringify([c?.verdict ?? null, c?.decision ?? null, c?.status ?? null, c?.flags ?? null]))).size > 1;
+  return new Set(candidates.map((c) => JSON.stringify([c?.verdict ?? null, c?.decision ?? null, c?.status ?? null, normStrArr(c?.flags), normStrArr(c?.missingPathIds), normStrArr(c?.unprovedAcIds)]))).size > 1;
 }
 
 /** Hardening 9: Strict schema validator (additionalProperties: false, closed enums, bounds). */
@@ -219,12 +233,13 @@ export function validateAgainstSchema(value, schema) {
   return { ok: false, error: `Unsupported schema type "${schema.type}".` };
 }
 
-/** Hardening 10: Unwrap Claude/Codex structured envelopes while failing closed on terminal error frames. */
+/** Hardening 10: Unwrap Claude/Codex structured envelopes while NEVER flipping an outer verdict/decision via nested fields. */
 export function unwrapStructuredEnvelope(parsed) {
   if (!isPlainObj(parsed)) return { ok: false, value: null, error: 'Expected JSON object envelope.' };
-  if (parsed.is_error === true || parsed.type === 'error' || parsed.type === 'turn.failed') {
-    return { ok: false, value: null, error: 'Terminal error envelope rejected.' };
-  }
+  if (parsed.is_error === true || parsed.type === 'error' || parsed.type === 'turn.failed') return { ok: false, value: null, error: 'Terminal error envelope rejected.' };
+  const hasOuterDecision = Object.hasOwn(parsed, 'verdict') || Object.hasOwn(parsed, 'decision') || Object.hasOwn(parsed, 'missingPathIds') || (Object.hasOwn(parsed, 'status') && ['ready', 'blocked', 'needs-decision'].includes(parsed.status));
+  const hasNested = isPlainObj(parsed.structured_output) || (typeof parsed.result === 'string' && parsed.result.trim().startsWith('{'));
+  if (hasOuterDecision && hasNested) return { ok: false, value: null, error: 'Conflicting outer decision and nested envelope rejected.' };
   if (isPlainObj(parsed.structured_output)) return { ok: true, value: parsed.structured_output, error: null };
   if (typeof parsed.result === 'string' && parsed.result.trim().startsWith('{')) {
     const inner = safeJsonParse(parsed.result);
@@ -239,12 +254,10 @@ export function buildCodexSchemaArgs({ schemaPath, schema = null, fs = null } = 
   if (schema !== null) writeAtomicPrivate(fs, schemaPath, `${JSON.stringify(schema, null, 2)}\n`, 0o700, 0o600);
   return ['--output-schema', schemaPath];
 }
-
 export function buildClaudeSchemaArgs({ schema } = {}) {
   if (!isPlainObj(schema)) throw new Error('claude --json-schema requires a schema object.');
   return ['--json-schema', JSON.stringify(schema)];
 }
-
 export function buildNativeSchemaArgs({ agentKind = '', schema, schemaPath = '', fs = null } = {}) {
   const kind = String(agentKind ?? '').trim().toLowerCase();
   if (kind === 'codex') return buildCodexSchemaArgs({ schemaPath, schema, fs });
@@ -252,78 +265,116 @@ export function buildNativeSchemaArgs({ agentKind = '', schema, schemaPath = '',
   return [];
 }
 
-/** Dual-read parser: prefers strict typed JSON schema output, cleanly falls back to legacy fenced/structured text. */
+const hasDecisionKey = (obj) => isPlainObj(obj) && (Object.hasOwn(obj, 'verdict') || Object.hasOwn(obj, 'decision') || Object.hasOwn(obj, 'status') || Object.hasOwn(obj, 'missingPathIds') || Object.hasOwn(obj, 'unprovedAcIds') || Object.hasOwn(obj, 'flags'));
+
+/** Dual-read parser: prefers strict typed JSON schema output, fails closed on desynced/conflicting/extra-key decision blocks. */
 export function parseTypedOrLegacyOutput(raw, { schemaName = null, schema = null, legacyParser = null, maxBytes = 262_144, maxDepth = 16 } = {}) {
   const targetSchema = schema ?? (schemaName ? TYPED_SCHEMAS[schemaName] : null);
-  const fail = (source, error) => ({ ok: false, source, value: null, reason: 'malformed_output', error });
-  if (!targetSchema) return fail('none', 'Unknown schema.');
+  const fail = (source, error, finalRejection = false) => ({ ok: false, source, value: null, reason: 'malformed_output', error, finalRejection });
+  if (!targetSchema) return fail('none', 'Unknown schema.', true);
   const text = String(raw ?? '').replace(/^\uFEFF/, '');
   const bounds = enforceSizeAndDepthBounds(text, { maxBytes, maxDepth });
-  if (!bounds.ok) return fail('none', bounds.error);
+  if (!bounds.ok) return fail('none', bounds.error, true);
 
   const trimmed = text.trim();
   if (trimmed.startsWith('{')) {
     const parsed = safeJsonParse(trimmed, { maxBytes, maxDepth });
-    if (!parsed.ok) return fail('typed-json', parsed.error);
+    if (!parsed.ok) return fail('typed-json', parsed.error, true);
     const env = unwrapStructuredEnvelope(parsed.value);
-    if (!env.ok) return fail('typed-json', env.error);
+    if (!env.ok) return fail('typed-json', env.error, true);
     const valid = validateAgainstSchema(env.value, targetSchema);
-    return valid.ok ? { ok: true, source: 'typed-json', value: env.value, reason: null, error: null } : fail('typed-json', valid.error);
+    return valid.ok ? { ok: true, source: 'typed-json', value: env.value, reason: null, error: null, finalRejection: false } : fail('typed-json', valid.error, false);
   }
 
   const stripped = stripInjectionContainers(text);
   const { blocks, unclosedFence } = extractClosedJsonFences(stripped);
-  if (unclosedFence) return fail('legacy-fallback', 'Unclosed fenced block rejected.');
-  const parsedCandidates = [];
-  for (const block of blocks) {
-    if (!block.startsWith('{')) continue;
-    const p = safeJsonParse(block, { maxBytes, maxDepth });
-    if (!p.ok) return fail('legacy-fallback', p.error);
-    if (validateAgainstSchema(p.value, targetSchema).ok) parsedCandidates.push(p.value);
+  if (unclosedFence) return fail('legacy-fallback', 'Unclosed fenced block rejected.', true);
+
+  // Collect JSON candidates from BOTH closed fences AND standalone balanced objects (immune to fence-line desync).
+  const candidateTexts = [...new Set([...blocks.filter((b) => b.startsWith('{')), ...scanBalancedJsonStrings(stripped)])];
+  const validCandidates = [], allDecisionObjects = [];
+  for (const snippet of candidateTexts) {
+    const p = safeJsonParse(snippet, { maxBytes, maxDepth });
+    if (!p.ok) {
+      if (blocks.includes(snippet) || /"(?:verdict|decision|status|missingPathIds|confidence|score|__proto__)"/.test(snippet)) return fail('legacy-fallback', p.error, true);
+      continue;
+    }
+    const v = validateAgainstSchema(p.value, targetSchema);
+    if (hasDecisionKey(p.value)) {
+      allDecisionObjects.push(p.value);
+      if (!v.ok) return fail('legacy-fallback', `Malformed or extra-key decision block rejected: ${v.error}`, true);
+    }
+    if (v.ok) validCandidates.push(p.value);
   }
-  if (detectConflictingVerdicts(parsedCandidates)) return fail('legacy-fallback', 'Conflicting JSON verdicts detected in fenced output.');
-  if (parsedCandidates.length > 0) return { ok: true, source: 'legacy-fallback', value: parsedCandidates.at(-1), reason: null, error: null };
+  if (detectConflictingVerdicts(allDecisionObjects) || detectConflictingVerdicts(validCandidates)) return fail('legacy-fallback', 'Conflicting JSON verdicts detected in output.', true);
+  if (validCandidates.length > 0) return { ok: true, source: 'legacy-fallback', value: validCandidates.at(-1), reason: null, error: null, finalRejection: false };
+
   if (typeof legacyParser === 'function') {
     const legacyVal = legacyParser(stripped);
     if (legacyVal !== null && legacyVal !== undefined) {
       const v = validateAgainstSchema(legacyVal, targetSchema);
-      return v.ok ? { ok: true, source: 'legacy-fallback', value: legacyVal, reason: null, error: null } : fail('legacy-fallback', v.error);
+      return v.ok ? { ok: true, source: 'legacy-fallback', value: legacyVal, reason: null, error: null, finalRejection: false } : fail('legacy-fallback', v.error, true);
     }
   }
-  return fail('none', 'No valid typed JSON or legacy structured output found.');
+  return fail('none', 'No valid typed JSON or legacy structured output found.', false);
 }
 
 const canonicalPayload = (obj) => Object.fromEntries(Object.keys(obj).sort().filter((k) => obj[k] !== undefined).map((k) => [k, obj[k]]));
+const cleanReceiptStr = (v) => redactSecrets(sanitizeUntrustedText(v)).trim();
+const computeReceiptDigest = (core, hmacKey = null) => (hmacKey ? createHmac('sha256', hmacKey) : createHash('sha256')).update(JSON.stringify(canonicalPayload(core))).digest('hex');
+const hexEqual = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && /^[a-f0-9]{64}$/.test(a) && /^[a-f0-9]{64}$/.test(b) && timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
 
-/** Deterministic harness PR receipt stamper bound to sourceTreeSha, policyDigest, and recipeDigest. */
+/** Deterministic harness PR receipt stamper aligned 100% with evidence-contract.mjs (all 13 fields + optional HMAC-SHA256). */
 export function formatHarnessPrReceipt({
-  repo = '', candidateHead = '', sourceTreeSha = '', policyDigest = '', recipeDigest = '',
-  acRevision = '', targetTip = '', outcome = 'proved', testProfile = 'default', artifactDigest = '',
+  repo, acRevision, targetTip, candidateHead, integratedTree, sourceTreeSha, trustedPolicyDigest, policyDigest,
+  recipeDigest, testProfile, command, toolchain, capability = null, outcome, artifactDigest,
+  pathId = undefined, pathIds = undefined, hmacKey = null,
 } = {}) {
-  for (const [k, v] of [['sourceTreeSha', sourceTreeSha], ['policyDigest', policyDigest], ['recipeDigest', recipeDigest]]) {
-    if (typeof v !== 'string' || !v.trim()) throw new Error(`formatHarnessPrReceipt requires non-empty ${k}.`);
+  const rawFields = { repo, acRevision, targetTip, candidateHead, integratedTree: integratedTree ?? sourceTreeSha, trustedPolicyDigest: trustedPolicyDigest ?? policyDigest, recipeDigest, testProfile, command, toolchain, artifactDigest };
+  const cleaned = {};
+  for (const k of REQUIRED_RECEIPT_STRINGS) {
+    if (!nonEmptyStr(rawFields[k])) throw new Error(`formatHarnessPrReceipt requires non-empty ${k}.`);
+    cleaned[k] = cleanReceiptStr(rawFields[k]);
+    if (!cleaned[k]) throw new Error(`formatHarnessPrReceipt field ${k} is empty after sanitization.`);
   }
+  const cleanOutcome = nonEmptyStr(outcome) ? cleanReceiptStr(outcome) : '';
+  if (!RECEIPT_OUTCOMES.has(cleanOutcome)) throw new Error(`formatHarnessPrReceipt requires explicit outcome in [${[...RECEIPT_OUTCOMES].join(', ')}].`);
+  if (capability !== null && !nonEmptyStr(capability)) throw new Error('formatHarnessPrReceipt capability must be null or a non-empty string.');
+  if (hmacKey !== null && hmacKey !== undefined && !(typeof hmacKey === 'string' && hmacKey.length > 0) && !Buffer.isBuffer(hmacKey)) throw new Error('formatHarnessPrReceipt hmacKey must be a non-empty string or Buffer.');
+
   const core = canonicalPayload({
-    repo: sanitizeUntrustedText(repo).trim(), acRevision: sanitizeUntrustedText(acRevision).trim(),
-    targetTip: sanitizeUntrustedText(targetTip).trim(), candidateHead: sanitizeUntrustedText(candidateHead).trim(),
-    sourceTreeSha: sanitizeUntrustedText(sourceTreeSha).trim(), policyDigest: sanitizeUntrustedText(policyDigest).trim(),
-    recipeDigest: sanitizeUntrustedText(recipeDigest).trim(), testProfile: sanitizeUntrustedText(testProfile).trim() || 'default',
-    outcome: sanitizeUntrustedText(outcome).trim() || 'proved', artifactDigest: sanitizeUntrustedText(artifactDigest).trim(),
+    ...cleaned, sourceTreeSha: cleaned.integratedTree, policyDigest: cleaned.trustedPolicyDigest,
+    capability: capability === null ? null : cleanReceiptStr(capability), outcome: cleanOutcome,
+    writtenBy: 'harness', digestAlg: hmacKey ? 'hmac-sha256' : 'sha256',
+    ...(nonEmptyStr(pathId) ? { pathId: cleanReceiptStr(pathId) } : {}),
+    ...(Array.isArray(pathIds) && pathIds.length ? { pathIds: [...new Set(pathIds.filter(nonEmptyStr).map(cleanReceiptStr))].sort() } : {}),
   });
-  const receiptDigest = createHash('sha256').update(JSON.stringify(core)).digest('hex');
+  const receiptDigest = computeReceiptDigest(core, hmacKey || null);
   const stamped = canonicalPayload({ ...core, receiptDigest });
-  const marker = `<!-- pdd:harness-receipt:v1 ${JSON.stringify(stamped)} -->`;
-  const summary = `Harness Receipt: outcome=${core.outcome}; sourceTreeSha=${core.sourceTreeSha}; policyDigest=${core.policyDigest}; recipeDigest=${core.recipeDigest}; receiptDigest=${receiptDigest.slice(0, 16)}`;
-  return redactSecrets(`${marker}\n${summary}`);
+  const safeJson = JSON.stringify(stamped).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+  const summary = redactSecrets(`Harness Receipt: outcome=${core.outcome}; integratedTree=${core.integratedTree}; trustedPolicyDigest=${core.trustedPolicyDigest}; recipeDigest=${core.recipeDigest}; receiptDigest=${receiptDigest.slice(0, 16)}`);
+  return `<!-- pdd:harness-receipt:v1 ${safeJson} -->\n${summary}`;
 }
 
-export function parseHarnessPrReceipt(text) {
-  const m = /<!-- pdd:harness-receipt:v1 (\{[^\r\n]{2,16000}\}) -->/.exec(String(text ?? ''));
-  if (!m) return { ok: false, receipt: null, error: 'Harness receipt marker not found.' };
-  const parsed = safeJsonParse(m[1]);
+export function parseHarnessPrReceipt(text, { hmacKey = null, requireKeyed = false } = {}) {
+  const matches = [...String(text ?? '').matchAll(/<!--\s*pdd:harness-receipt:v1\b([\s\S]*?)-->/g)];
+  if (matches.length === 0) return { ok: false, receipt: null, error: 'Harness receipt marker not found.' };
+  if (matches.length > 1) return { ok: false, receipt: null, error: 'Multiple harness receipt markers rejected.' };
+  const payload = matches[0][1].trim();
+  if (!payload || payload.length > 16_384 || !payload.startsWith('{')) return { ok: false, receipt: null, error: 'Malformed or empty harness receipt marker payload.' };
+  const parsed = safeJsonParse(payload);
   if (!parsed.ok || !isPlainObj(parsed.value)) return { ok: false, receipt: null, error: parsed.error || 'Malformed receipt JSON.' };
   const { receiptDigest, ...core } = parsed.value;
-  if (typeof receiptDigest !== 'string' || !/^[a-f0-9]{64}$/.test(receiptDigest)) return { ok: false, receipt: null, error: 'Invalid receiptDigest.' };
-  const expected = createHash('sha256').update(JSON.stringify(canonicalPayload(core))).digest('hex');
-  return receiptDigest === expected ? { ok: true, receipt: parsed.value, error: null } : { ok: false, receipt: null, error: 'Harness receipt digest mismatch (tampered).' };
+  if (core.writtenBy !== 'harness') return { ok: false, receipt: null, error: 'Receipt writtenBy must be "harness".' };
+  for (const k of REQUIRED_RECEIPT_STRINGS) if (!nonEmptyStr(core[k])) return { ok: false, receipt: null, error: `Receipt missing required field "${k}".` };
+  if (!RECEIPT_OUTCOMES.has(core.outcome)) return { ok: false, receipt: null, error: 'Receipt has invalid outcome.' };
+  if (core.capability !== null && !nonEmptyStr(core.capability)) return { ok: false, receipt: null, error: 'Receipt has invalid capability.' };
+  if (requireKeyed || hmacKey) {
+    if (core.digestAlg !== 'hmac-sha256') return { ok: false, receipt: null, error: 'Unkeyed receipt rejected (HMAC-SHA256 required).' };
+    if (!hmacKey) return { ok: false, receipt: null, error: 'hmacKey required to verify keyed receipt.' };
+    return hexEqual(receiptDigest, computeReceiptDigest(core, hmacKey)) ? { ok: true, receipt: parsed.value, error: null } : { ok: false, receipt: null, error: 'Harness receipt HMAC mismatch (tampered).' };
+  }
+  if (core.digestAlg === 'hmac-sha256') return { ok: false, receipt: null, error: 'Keyed harness receipt requires hmacKey for verification.' };
+  if (core.digestAlg !== 'sha256') return { ok: false, receipt: null, error: 'Unsupported receipt digestAlg.' };
+  return hexEqual(receiptDigest, computeReceiptDigest(core, null)) ? { ok: true, receipt: parsed.value, error: null } : { ok: false, receipt: null, error: 'Harness receipt digest mismatch (tampered).' };
 }
