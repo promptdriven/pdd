@@ -43,6 +43,25 @@ import {
   planValidationResume,
   shouldClaimWithCooldowns,
 } from './autopilot-validator.mjs';
+import {
+  buildGapCheckInput,
+  computeCanonicalDigest,
+  evaluateEvidenceContract,
+  validateGapCheckOutput,
+} from './autopilot/gates/evidence-contract.mjs';
+import {
+  TYPED_SCHEMAS,
+  buildNativeSchemaArgs,
+  formatHarnessPrReceipt,
+  parseHarnessPrReceipt,
+  parseTypedOrLegacyOutput,
+} from './autopilot/gates/typed-schemas.mjs';
+import {
+  buildPostReviewSandboxEnv,
+  loadAutopilotTestEnv,
+  probeMachineCapabilities,
+  registerTestEnvSecrets,
+} from './autopilot/gates/test-env.mjs';
 import { lintRepoProject, loadProjectLintConfig } from './repo-hygiene-lint.mjs';
 import { collectTestInventory } from './workflow-inventory.mjs';
 import { appendBoundedFlakeEntries, formatRecurringFlakesLine, parseFlakeLedger, summarizeRecurringFlakes } from './autopilot-regressions.mjs';
@@ -3558,6 +3577,11 @@ function scanJsonObjectsBounded(rawText, maxRestarts = 16) {
 function parseFinalAssistantText(rawText) {
   const trimmed = typeof rawText === 'string' ? rawText.trim() : '';
   if (!trimmed) return null;
+  // 0. Prefer strict typed review schema JSON output when present (dual-read transition).
+  if (trimmed.startsWith('{')) {
+    const typed = parseTypedOrLegacyOutput(trimmed, { schemaName: 'review' });
+    if (typed.ok && typed.source === 'typed-json') return typed.value;
+  }
   // 1. Strict full-message JSON parse first (after stripping at most one optional surrounding markdown code fence).
   const singleFence = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/i.exec(trimmed);
   const fullCandidate = singleFence ? singleFence[1].trim() : trimmed;
@@ -12006,3 +12030,33 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
     if (lock) try { fs.unlinkSync(lock); } catch { /* Already unlinked. */ }
   }
 }
+
+export function buildStepSchemaArgs({ agentKind, schemaName, schemaPath, fs = nativeFs } = {}) {
+  const schema = TYPED_SCHEMAS[schemaName];
+  if (!schema) return [];
+  return buildNativeSchemaArgs({ agentKind, schema, schemaPath, fs });
+}
+
+export function evaluateCoreEvidenceContract(params = {}) {
+  return evaluateEvidenceContract(params);
+}
+
+export function stampHarnessReceiptForJob(receiptParams = {}) {
+  return formatHarnessPrReceipt(receiptParams);
+}
+
+export function preparePostReviewTestEnv({
+  filePath = null, homeDir, env = process.env, fs = nativeFs,
+  reviewApproved = false, approvedHead = '', currentHead = '',
+  allowedAccounts = [], allowedEnvKeys = [], probeOptions = {},
+} = {}) {
+  const testEnv = loadAutopilotTestEnv({ filePath, homeDir, env, fs });
+  registerTestEnvSecrets(testEnv);
+  const capabilities = probeMachineCapabilities({ testEnv, env, ...probeOptions });
+  const sandbox = buildPostReviewSandboxEnv({
+    baseEnv: env, testEnv, reviewApproved, approvedHead, currentHead, allowedAccounts, allowedEnvKeys,
+  });
+  return { testEnv, capabilities, sandbox };
+}
+
+export { buildGapCheckInput, computeCanonicalDigest, parseHarnessPrReceipt, validateGapCheckOutput };
