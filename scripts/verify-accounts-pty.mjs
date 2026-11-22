@@ -12,15 +12,29 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { applyAutoSwitchBlock, removeAutoSwitchBlock, renderAutoSwitchBlock } from '../src/accounts-cli.mjs';
-import { writeAtomicPreservingSymlinkAndMode } from '../src/shared/atomic-fs.mjs';
-import { writeCloudAccountsState } from '../src/login-pool.mjs';
+import { renderAutoSwitchBlock, runAccountsCli } from '../src/accounts-cli.mjs';
+import { ensureUserCodexHomeBaseline, writeCloudAccountsState } from '../src/login-pool.mjs';
 import { sharedRuntimeDirPath } from '../src/pdd-codex.mjs';
 import { sharedClaudeRuntimeDir } from '../src/pdd-claude.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BIN_CODEX = join(REPO_ROOT, 'bin', 'pdd-codex.mjs');
 const BIN_CLAUDE = join(REPO_ROOT, 'bin', 'pdd-claude.mjs');
+
+const HOST_SCRUB_KEYS = new Set([
+  'CODEX_HOME', 'CLAUDE_CONFIG_DIR',
+  'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME',
+]);
+
+function scrubHostEnv(base = process.env) {
+  const out = {};
+  for (const [k, v] of Object.entries(base ?? {})) {
+    if (typeof v !== 'string') continue;
+    if (HOST_SCRUB_KEYS.has(k) || k.startsWith('PDD_')) continue;
+    out[k] = v;
+  }
+  return out;
+}
 
 const PTY_BRIDGE_PY = `
 import fcntl, os, pty, select, signal, struct, subprocess, sys, termios
@@ -128,16 +142,23 @@ function runCmd(bin, args, { env = process.env, cwd = REPO_ROOT, timeoutMs = 10_
 
 const sha256 = buf => createHash('sha256').update(buf).digest('hex');
 
-function snapshotTargets(targets) {
+function snapshotTree(targets, { recursive = true, ignoreChildDirs = new Set() } = {}) {
   const out = {};
-  for (const p of targets) {
+  const visit = (p, depth) => {
     let st;
-    try { st = lstatSync(p); } catch { out[p] = 'MISSING'; continue; }
+    try { st = lstatSync(p); } catch { out[p] = 'MISSING'; return; }
     const mode = (st.mode & 0o7777).toString(8);
-    out[p] = st.isSymbolicLink() ? `SYMLINK:${mode}->${readlinkSync(p)}`
-      : st.isFile() ? `FILE:${mode}:${sha256(readFileSync(p))}`
-        : st.isDirectory() ? `DIR:${mode}:[${readdirSync(p).sort().join(',')}]` : 'OTHER';
-  }
+    if (st.isSymbolicLink()) { out[p] = `SYMLINK:${mode}->${readlinkSync(p)}`; return; }
+    if (st.isFile()) { out[p] = `FILE:${mode}:${sha256(readFileSync(p))}`; return; }
+    if (st.isDirectory()) {
+      const names = readdirSync(p).filter(n => !(depth === 0 && ignoreChildDirs.has(n))).sort();
+      out[p] = `DIR:${mode}:[${names.join(',')}]`;
+      if (recursive && depth < 8) {
+        for (const n of names) visit(join(p, n), depth + 1);
+      }
+    }
+  };
+  for (const t of targets) visit(t, 0);
   return out;
 }
 
@@ -174,7 +195,8 @@ async function measureColdStartupMs(entryPath, samples = 3) {
 
 async function startMockGatewayServer() {
   let seq = 0;
-  const leases = new Map(), state = { seatAExhausted: false, revoked: new Set(), mcpAuthOk: 0, mcpAuthFail: 0 };
+  const leases = new Map();
+  const state = { seatAExhausted: false, force503: false, leaseRequests: 0, revoked: new Set(), mcpAuthOk: 0, mcpAuthFail: 0 };
   const server = createServer((req, res) => {
     const chunks = [];
     req.on('data', c => chunks.push(c));
@@ -185,6 +207,8 @@ async function startMockGatewayServer() {
       const json = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json', connection: 'close' }); res.end(JSON.stringify(obj)); };
       const origin = `http://127.0.0.1:${server.address().port}`;
       if (req.method === 'POST' && url.pathname === '/v1/accounts/lease') {
+        state.leaseRequests += 1;
+        if (state.force503) return json(503, { error: 'service_unavailable', message: 'Gateway temporarily unavailable' });
         const provider = body.provider || 'codex', autoRotate = body.auto_rotate !== false;
         const leaseId = `lse_${provider}_${++seq}`, token = provider === 'codex' ? `pddg_${leaseId}_tok` : `pddg_cl_${leaseId}_tok`;
         const seat = body.preferred_account || 'seat-A';
@@ -244,11 +268,11 @@ for (let i = 0; i < args.length; i += 1) {
   else parsed.pos.push(args[i]);
 }
 if (parsed.pos[0] === 'app-server') process.exit(0);
+if (parsed.pos.includes('DUMP_ENV_PASSTHROUGH')) { console.log('ENV_JSON=' + JSON.stringify(Object.keys(process.env).sort())); process.exit(0); }
 if (parsed.pos.some(a => a === '--version' || a === '-V' || a === '-v')) { console.log(kind + '-mock 1.0.0'); process.exit(0); }
 if (['mcp', 'plugin', 'features'].includes(parsed.pos[0]) && parsed.pos[1] === 'list') { console.log(kind + ':' + parsed.pos[0] + ':ok'); process.exit(0); }
 if (parsed.pos[0] === '--' && parsed.pos[1] === '-prompt') { console.log('OPERAND:' + parsed.pos[1]); process.exit(0); }
 const sessDir = kind === 'codex' ? join(process.env.CODEX_HOME || join(process.env.HOME, '.codex'), 'sessions') : join(process.env.HOME, '.claude', 'projects');
-mkdirSync(sessDir, { recursive: true });
 function getAuth() {
   if (kind === 'codex') {
     const auth = existsSync(join(process.env.CODEX_HOME || '', 'auth.json')) ? JSON.parse(readFileSync(join(process.env.CODEX_HOME, 'auth.json'), 'utf8')) : null;
@@ -288,6 +312,7 @@ for await (const rawLine of createInterface({ input: process.stdin })) {
   if (line.startsWith('TURN:')) {
     const nonce = line.slice(5); if (!turn1Nonce) turn1Nonce = nonce;
     const r = await callGw(nonce);
+    mkdirSync(sessDir, { recursive: true });
     writeFileSync(join(sessDir, sid + '.json'), JSON.stringify({ sid, nonce: turn1Nonce }));
     writeFileSync(join(sessDir, 'last.txt'), sid);
     console.log('REPLY=' + nonce + ' SEAT=' + r.seat + ' STATUS=' + r.status + ' PID=' + process.pid);
@@ -322,27 +347,30 @@ async function runOfflineChecks() {
   const results = [], activePtys = new Set();
   const rec = (id, name, pass, detail) => results.push({ id, name, status: pass ? 'PASS' : 'FAIL', detail });
   const root = mkdtempSync(join(tmpdir(), 'pdd-pty-verify-'));
-  const home = join(root, 'home'), stateDir = join(root, 'state'), mockBin = join(root, 'bin'), dotfilesDir = join(root, 'dotfiles');
-  for (const d of [join(home, '.codex'), join(home, '.claude'), stateDir, mockBin, dotfilesDir]) mkdirSync(d, { recursive: true, mode: 0o700 });
-  const codexAuth = join(home, '.codex', 'auth.json'), codexCfg = join(home, '.codex', 'config.toml');
-  const claudeSettings = join(home, '.claude', 'settings.json'), claudeJson = join(home, '.claude.json');
+  const home = join(root, 'home'), c5Home = join(root, 'c5-home'), stateDir = join(root, 'state'), mockBin = join(root, 'bin'), dotfilesDir = join(root, 'dotfiles');
+  for (const d of [join(home, '.codex'), join(home, '.claude'), join(c5Home, '.codex'), join(c5Home, '.claude'), stateDir, mockBin, dotfilesDir]) mkdirSync(d, { recursive: true, mode: 0o700 });
+  const codexDir = join(home, '.codex'), claudeDir = join(home, '.claude'), claudeJson = join(home, '.claude.json');
+  const codexAuth = join(codexDir, 'auth.json'), codexCfg = join(codexDir, 'config.toml'), claudeSettings = join(claudeDir, 'settings.json');
   const stowZshrc = join(dotfilesDir, 'zshrc'), userZshrc = join(home, '.zshrc');
+  ensureUserCodexHomeBaseline({ existsSync, mkdirSync, writeFileSync, chmodSync, lstatSync }, codexDir);
   writeFileSync(codexAuth, JSON.stringify({ tokens: { access_token: 'PERSONAL_KEEP' } }), { mode: 0o600 });
   writeFileSync(codexCfg, 'model = "gpt-5.4"\n', { mode: 0o600 });
   writeFileSync(claudeSettings, JSON.stringify({ theme: 'dark', env: { USER_FLAG: 'keep' } }, null, 2), { mode: 0o600 });
   writeFileSync(claudeJson, JSON.stringify({ user: 'keep' }), { mode: 0o600 });
+  writeFileSync(join(c5Home, '.codex', 'config.toml'), 'model = "gpt-5.4"\n', { mode: 0o600 });
   writeFileSync(stowZshrc, '# user zshrc\n', { mode: 0o640 });
   symlinkSync(stowZshrc, userZshrc);
 
   const browserStateFile = join(root, 'browser-hook-state.txt');
   writeMockBinaries(mockBin, join(root, 'mcp-echo.mjs'), browserStateFile);
   const gw = await startMockGatewayServer();
+  const cleanHost = scrubHostEnv(process.env);
   const baseEnv = {
-    ...process.env, HOME: home, PDD_STATE_DIR: stateDir,
+    ...cleanHost, HOME: home, PDD_STATE_DIR: stateDir,
     PDD_CODEX_RUNTIME_ROOT: join(stateDir, 'codex-runtime'), PDD_CLAUDE_RUNTIME_ROOT: join(stateDir, 'claude-runtime'),
     PDD_ACCOUNTS_URL: gw.url, PDD_TOKEN: 'pdd_test_bearer_token',
     PDD_CODEX_BIN: join(mockBin, 'codex'), PDD_CLAUDE_BIN: join(mockBin, 'claude'),
-    PATH: `${mockBin}:${process.env.PATH}`,
+    PATH: `${mockBin}:${cleanHost.PATH ?? '/usr/bin:/bin'}`,
   };
   writeCloudAccountsState({
     enrolled: true, providers: ['codex', 'claude'],
@@ -351,7 +379,8 @@ async function runOfflineChecks() {
       claude: { account_id: 'acc_seat-A', label: 'seat-A', provider: 'claude', state: 'ready' },
     },
   }, { env: baseEnv });
-  const protectedBefore = snapshotTargets([codexAuth, claudeSettings, claudeJson]);
+  const homeSnapOpts = { recursive: true, ignoreChildDirs: new Set(['sessions', 'projects']) };
+  const homeBefore = snapshotTree([codexDir, claudeDir, claudeJson], homeSnapOpts);
 
   try {
     const c1 = [], c2 = [], c3 = [], c4 = [], c5 = [], c8 = [];
@@ -374,15 +403,26 @@ async function runOfflineChecks() {
       pty.send(`MCP_ECHO:${nonceMcp}`);
       await pty.waitFor(new RegExp(`MCP_OK=${nonceMcp} PS_STATUS=200`), { from: m });
       c4.push(`${label}:echo=${nonceMcp},ps=200`);
-      m = pty.mark();
-      pty.send('HOOK_WRITE');
-      await pty.waitFor(/HOOK_OK=1/, { from: m });
       pty.send('EXIT');
       const ex = await pty.waitExit();
       if (ex.code !== 0) throw new Error(`${label} interactive PTY exited ${ex.code}`);
+
+      // C05 runs in its own isolated c5Home so main home's config.toml stays 100% untouched for C10!
+      const c5Env = { ...baseEnv, HOME: c5Home, PDD_CODEX_RUNTIME_ROOT: join(stateDir, 'c5-codex-rt'), PDD_CLAUDE_RUNTIME_ROOT: join(stateDir, 'c5-claude-rt') };
+      const pty5 = spawnPtySession([process.execPath, binPath], c5Env, root, activePtys);
+      await pty5.waitFor(/READY SID=/);
+      const m5 = pty5.mark();
+      pty5.send('HOOK_WRITE');
+      await pty5.waitFor(/HOOK_OK=1/, { from: m5 });
+      pty5.send('EXIT');
+      if ((await pty5.waitExit()).code !== 0) throw new Error(`${label} C05 PTY exited non-zero`);
       if (!readFileSync(browserStateFile, 'utf8').includes(`${label}:hook-browser-ok`)) throw new Error(`${label} hook state missing`);
-      if (label === 'codex' && (readFileSync(codexCfg, 'utf8').includes('pdd-codex-') || !readFileSync(codexCfg, 'utf8').includes(`${home}/.codex/hooks/demo.sh`))) throw new Error('codex writeback failed');
+      if (label === 'codex') {
+        const cfgAfter = readFileSync(join(c5Home, '.codex', 'config.toml'), 'utf8');
+        if (cfgAfter.includes('pdd-codex-') || !cfgAfter.includes(`${c5Home}/.codex/hooks/demo.sh`)) throw new Error(`codex writeback failed: ${cfgAfter}`);
+      }
       c5.push(`${label}:hook+writeback=ok`);
+
       const r1 = await runCmd(process.execPath, [binPath, ...(label === 'codex' ? ['resume', sid] : ['--resume', sid])], { env: baseEnv, cwd: root });
       const r2 = await runCmd(process.execPath, [binPath, ...(label === 'codex' ? ['resume', '--last'] : ['-c'])], { env: baseEnv, cwd: root });
       if (r1.status !== 0 || !r1.stdout.includes(`RESUMED=${nonce1}`) || r2.status !== 0 || !r2.stdout.includes(`RESUMED=${nonce1}`)) throw new Error(`${label} resume failed: ${r1.stdout}${r1.stderr} | ${r2.stdout}${r2.stderr}`);
@@ -413,8 +453,7 @@ async function runOfflineChecks() {
     gw.state.seatAExhausted = false;
     const c7Details = [];
     for (const [label, binPath, runtimeDir] of [['codex', BIN_CODEX, sharedRuntimeDirPath({ env: baseEnv })], ['claude', BIN_CLAUDE, sharedClaudeRuntimeDir(baseEnv)]]) {
-      const leasesBefore = gw.leases.size;
-      const revokedBefore = gw.state.revoked.size;
+      const leasesBefore = gw.leases.size, revokedBefore = gw.state.revoked.size;
       const sessions = [0, 1, 2].map(() => spawnPtySession([process.execPath, binPath], baseEnv, root, activePtys));
       for (const s of sessions) await s.waitFor(/READY SID=/);
       const addedLeases = gw.leases.size - leasesBefore;
@@ -435,34 +474,45 @@ async function runOfflineChecks() {
     rec('C07', 'Concurrent Sessions (3) + SIGKILL Cleanup', true, c7Details.join('; '));
     rec('C08', 'Forced A->B Rotation + Pinned Negative Control', true, c8.join('; '));
 
-    const offlineEnv = { ...baseEnv, PDD_ACCOUNTS_URL: 'http://127.0.0.1:1', PDD_STATE_DIR: join(root, 'empty-state') };
-    mkdirSync(offlineEnv.PDD_STATE_DIR, { recursive: true });
-    const foCx = await runCmd(process.execPath, [BIN_CODEX, 'exec', 'fo'], { env: { ...offlineEnv, PDD_CODEX_AUTO_FAIL_OPEN: '1' }, cwd: root });
-    const foCl = await runCmd(process.execPath, [BIN_CLAUDE, '-p', 'fo'], { env: { ...offlineEnv, PDD_CLAUDE_AUTO_FAIL_OPEN: '1' }, cwd: root });
-    const fcCx = await runCmd(process.execPath, [BIN_CODEX, 'exec', 'fc'], { env: offlineEnv, cwd: root });
+    // C09: REAL enrolled-state 503 lease-failure fail-open + empty-state fail-open + fail-closed + zero ~/.codex creation + ENOENT->127!
+    const freshHome = join(root, 'fresh-failopen-home');
+    mkdirSync(freshHome, { recursive: true, mode: 0o700 });
+    gw.state.force503 = true;
+    const reqBefore503 = gw.state.leaseRequests;
+    const enrolledFailEnv = { ...baseEnv, HOME: freshHome, PDD_CODEX_RUNTIME_ROOT: join(stateDir, 'c9-cx-rt'), PDD_CLAUDE_RUNTIME_ROOT: join(stateDir, 'c9-cl-rt') };
+    const foCx503 = await runCmd(process.execPath, [BIN_CODEX, 'exec', 'fo503'], { env: { ...enrolledFailEnv, PDD_CODEX_AUTO_FAIL_OPEN: '1' }, cwd: root });
+    const foCl503 = await runCmd(process.execPath, [BIN_CLAUDE, '-p', 'fo503'], { env: { ...enrolledFailEnv, PDD_CLAUDE_AUTO_FAIL_OPEN: '1' }, cwd: root });
+    const fcCx503 = await runCmd(process.execPath, [BIN_CODEX, 'exec', 'fc503'], { env: enrolledFailEnv, cwd: root });
+    const fcCl503 = await runCmd(process.execPath, [BIN_CLAUDE, '-p', 'fc503'], { env: enrolledFailEnv, cwd: root });
+    const leaseHits503 = gw.state.leaseRequests - reqBefore503;
+    const noCodexCreatedOnFailOpen = !existsSync(join(freshHome, '.codex'));
+    gw.state.force503 = false;
     const enCx = await runCmd(process.execPath, [BIN_CODEX, '--version'], { env: { ...baseEnv, PDD_CODEX_BIN: '/nonexistent/codex-bin' }, cwd: root });
     const enCl = await runCmd(process.execPath, [BIN_CLAUDE, '--version'], { env: { ...baseEnv, PDD_CLAUDE_BIN: '/nonexistent/claude-bin' }, cwd: root });
-    rec('C09', 'Fail-Open, ENOENT->127, & Non-TTY', foCx.status === 0 && foCx.stdout.includes('SEAT=stock-local') && foCl.status === 0 && foCl.stdout.includes('SEAT=stock-local') && fcCx.status !== 0 && enCx.status === 127 && enCl.status === 127, `fo=${foCx.status}/${foCl.status}, fc=${fcCx.status}, enoent=${enCx.status}/${enCl.status}`);
+    const c9Ok = leaseHits503 >= 4 && foCx503.status === 0 && foCx503.stdout.includes('SEAT=stock-local')
+      && foCl503.status === 0 && foCl503.stdout.includes('SEAT=stock-local')
+      && fcCx503.status !== 0 && fcCl503.status !== 0 && noCodexCreatedOnFailOpen
+      && enCx.status === 127 && enCl.status === 127;
+    rec('C09', 'Fail-Open (503 Lease), Fail-Closed & ENOENT->127', c9Ok, `503-hits=${leaseHits503}, fo=${foCx503.status}/${foCl503.status}, fc=${fcCx503.status}/${fcCl503.status}, noHomeTouch=${noCodexCreatedOnFailOpen}, enoent=${enCx.status}/${enCl.status}`);
 
-    const fsMod = await import('node:fs');
-    writeAtomicPreservingSymlinkAndMode(fsMod, userZshrc, applyAutoSwitchBlock(readFileSync(userZshrc, 'utf8'), 'sh'), { defaultMode: 0o644 });
-    writeAtomicPreservingSymlinkAndMode(fsMod, userZshrc, removeAutoSwitchBlock(readFileSync(userZshrc, 'utf8')), { defaultMode: 0o644 });
-    const stowOk = lstatSync(userZshrc).isSymbolicLink() && readlinkSync(userZshrc) === stowZshrc && (lstatSync(stowZshrc).mode & 0o777) === 0o640;
-    const homeDiffs = diffSnapshots(protectedBefore, snapshotTargets([codexAuth, claudeSettings, claudeJson]));
-    rec('C10', 'Zero Home Mutation & Dotfile Symlink Proof', homeDiffs.length === 0 && stowOk, homeDiffs.length ? homeDiffs.join('; ') : '0 protected home mutations; Stow symlink + 0640 mode intact');
-
-    const dirtyEnv = { ...baseEnv, PDD_SECRET_LEAK: 'nope', OPENAI_API_KEY: 'sk-leak', CODEX_API_KEY: 'sk-cx-leak', ANTHROPIC_API_KEY: 'sk-ant-leak', CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-leak' };
+    // C11: Zero PDD_* leakage across ALL 3 paths (leased + fail-open + pass-through) & non-/tmp runtime root
+    const dirtyEnv = { ...baseEnv, PDD_TOKEN: 'tok_leak', PDD_ACCOUNTS_TOKEN: 'acct_leak', PDD_SECRET_LEAK: 'nope', OPENAI_API_KEY: 'sk-leak', CODEX_API_KEY: 'sk-cx-leak', ANTHROPIC_API_KEY: 'sk-ant-leak', CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-leak' };
     const leaks = [];
-    for (const [lbl, r, forbidden] of [
-      ['codex', await runCmd(process.execPath, [BIN_CODEX, 'exec', 'DUMP_ENV'], { env: dirtyEnv, cwd: root }), new Set(['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_BASE_URL'])],
-      ['claude', await runCmd(process.execPath, [BIN_CLAUDE, '-p', 'DUMP_ENV'], { env: dirtyEnv, cwd: root }), new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL'])],
-    ]) {
+    const checkEnvOut = (tag, r, extraForbidden = new Set()) => {
       const m = r.stdout.match(/ENV_JSON=(\[.*\])/);
-      const bad = (m ? JSON.parse(m[1]) : ['MISSING']).filter(k => k.startsWith('PDD_') || forbidden.has(k));
-      if (bad.length) leaks.push(`${lbl}:${bad.join(',')}`);
-    }
+      const bad = (m ? JSON.parse(m[1]) : ['MISSING']).filter(k => k.startsWith('PDD_') || extraForbidden.has(k));
+      if (bad.length) leaks.push(`${tag}:${bad.join(',')}`);
+    };
+    checkEnvOut('codex-leased', await runCmd(process.execPath, [BIN_CODEX, 'exec', 'DUMP_ENV'], { env: dirtyEnv, cwd: root }), new Set(['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_BASE_URL']));
+    checkEnvOut('claude-leased', await runCmd(process.execPath, [BIN_CLAUDE, '-p', 'DUMP_ENV'], { env: dirtyEnv, cwd: root }), new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL']));
+    checkEnvOut('codex-passthrough', await runCmd(process.execPath, [BIN_CODEX, 'completion', 'DUMP_ENV_PASSTHROUGH'], { env: dirtyEnv, cwd: root }));
+    checkEnvOut('claude-passthrough', await runCmd(process.execPath, [BIN_CLAUDE, 'mcp', 'DUMP_ENV_PASSTHROUGH'], { env: dirtyEnv, cwd: root }));
+    gw.state.force503 = true;
+    checkEnvOut('codex-failopen', await runCmd(process.execPath, [BIN_CODEX, 'exec', 'DUMP_ENV'], { env: { ...dirtyEnv, PDD_CODEX_AUTO_FAIL_OPEN: '1', PDD_CODEX_RUNTIME_ROOT: join(stateDir, 'c11-cx-rt') }, cwd: root }));
+    checkEnvOut('claude-failopen', await runCmd(process.execPath, [BIN_CLAUDE, '-p', 'DUMP_ENV'], { env: { ...dirtyEnv, PDD_CLAUDE_AUTO_FAIL_OPEN: '1', PDD_CLAUDE_RUNTIME_ROOT: join(stateDir, 'c11-cl-rt') }, cwd: root }));
+    gw.state.force503 = false;
     const nonTmp = !sharedRuntimeDirPath({ env: { HOME: '/home/u' }, uid: 501 }).startsWith(resolve(tmpdir())) && !sharedClaudeRuntimeDir({ HOME: '/home/u' }, 501).startsWith(resolve(tmpdir()));
-    rec('C11', 'Zero Secret/PDD_* Leakage & Non-/tmp Root', leaks.length === 0 && nonTmp, leaks.length ? leaks.join('; ') : '0 leaked PDD_*/provider keys; runtime root under ~/.local/state/pdd');
+    rec('C11', 'Zero Secret/PDD_* Leakage (All Paths) & Non-/tmp Root', leaks.length === 0 && nonTmp, leaks.length ? leaks.join('; ') : '0 leaked PDD_* across leased+failopen+passthrough; runtime under ~/.local/state/pdd');
 
     const cxT = await measureColdStartupMs(BIN_CODEX), clT = await measureColdStartupMs(BIN_CLAUDE);
     const reachable = walkReachableModules([BIN_CODEX, BIN_CLAUDE, join(REPO_ROOT, 'src', 'accounts-cli.mjs')]);
@@ -479,7 +529,21 @@ async function runOfflineChecks() {
     for (const n of ['codex', 'claude']) writeFileSync(join(stockOnly, n), readFileSync(join(mockBin, n)), { mode: 0o755 });
     const shPip = await runCmd('bash', ['-c', `source ${JSON.stringify(shFile)} && codex exec pip-ok && claude -p pip-ok`], { env: { ...baseEnv, PATH: `${stockOnly}:/usr/bin:/bin` }, cwd: root });
     const c13Ok = shCx.status === 0 && shCx.stdout.includes('SEAT=seat-A') && shCl.status === 0 && shCl.stdout.includes('SEAT=seat-A') && shPip.status === 0 && shPip.stdout.includes('NONTTY_OK=pip-ok SEAT=stock-local');
-    rec('C13', 'Shell Auto-Switch & Pip-Fallback Proof', c13Ok, c13Ok ? 'codex/claude managed=seat-A; absent-wrapper fallback=ok' : `cx=${shCx.status} cl=${shCl.status} pip=${shPip.status}(${shPip.stderr.trim()})`);
+    rec('C13', 'Shell Auto-Switch & Pip-Fallback Proof', c13Ok, c13Ok ? 'codex/claude managed=seat-A; absent-wrapper fallback=ok' : `cx=${shCx.status} cl=${shCl.status} pip=${shPip.status}`);
+
+    // C10 runs LAST (after C11 + C13): real `pdd accounts auto on/off` Stow symlink proof + full recursive .codex/.claude/.claude.json diff!
+    const autoOnRes = await runAccountsCli({ commandId: 'accounts.auto', operands: ['on'], cwd: root, env: baseEnv });
+    const autoOffRes = await runAccountsCli({ commandId: 'accounts.auto', operands: ['off'], cwd: root, env: baseEnv });
+    const stowOk = autoOnRes.exitCode === 0 && autoOffRes.exitCode === 0
+      && lstatSync(userZshrc).isSymbolicLink() && readlinkSync(userZshrc) === stowZshrc
+      && (lstatSync(stowZshrc).mode & 0o777) === 0o640;
+    const homeDiffs = diffSnapshots(homeBefore, snapshotTree([codexDir, claudeDir, claudeJson], homeSnapOpts));
+    results.splice(9, 0, {
+      id: 'C10',
+      name: 'Zero Home Mutation (Full Tree) & Auto Stow Symlink Proof',
+      status: homeDiffs.length === 0 && stowOk ? 'PASS' : 'FAIL',
+      detail: homeDiffs.length ? homeDiffs.join('; ') : '0 diffs across full ~/.codex & ~/.claude trees + ~/.claude.json; pdd accounts auto preserves Stow symlink + 0640 mode',
+    });
   } finally {
     for (const s of activePtys) s.kill();
     gw.server.closeAllConnections?.();
@@ -494,11 +558,9 @@ async function runLiveChecks() {
   const rec = (id, name, status, detail) => results.push({ id, name, status, detail });
   const realHome = homedir();
   const protectedPaths = [join(realHome, '.codex', 'auth.json'), join(realHome, '.codex', 'config.toml'), join(realHome, '.claude', 'settings.json'), join(realHome, '.claude.json')];
-  const before = snapshotTargets(protectedPaths);
+  const before = snapshotTree(protectedPaths, { recursive: false });
   const tmpState = mkdtempSync(join(tmpdir(), 'pdd-pty-live-safe-'));
-  const liveSafeEnv = { ...process.env, PDD_STATE_DIR: join(tmpState, 'state'), PDD_CODEX_RUNTIME_ROOT: join(tmpState, 'codex-rt'), PDD_CLAUDE_RUNTIME_ROOT: join(tmpState, 'claude-rt'), PDD_ACCOUNTS_URL: 'http://127.0.0.1:1' };
-  delete liveSafeEnv.PDD_TOKEN;
-  delete liveSafeEnv.PDD_ACCOUNTS_TOKEN;
+  const liveSafeEnv = { ...scrubHostEnv(process.env), HOME: realHome, PDD_STATE_DIR: join(tmpState, 'state'), PDD_CODEX_RUNTIME_ROOT: join(tmpState, 'codex-rt'), PDD_CLAUDE_RUNTIME_ROOT: join(tmpState, 'claude-rt'), PDD_ACCOUNTS_URL: 'http://127.0.0.1:1' };
   mkdirSync(liveSafeEnv.PDD_STATE_DIR, { recursive: true, mode: 0o700 });
   try {
     const hasCx = (await runCmd('codex', ['--version'], { env: liveSafeEnv })).status === 0;
@@ -513,11 +575,13 @@ async function runLiveChecks() {
     rec('C06', 'Stock CLI Parity Diff (Real Binaries)', (!hasCx || (sCxV.status === 0 && sCxV.stdout === wCxV.stdout)) && (!hasCl || (sClV.status === 0 && sClV.stdout === wClV.stdout)) ? 'PASS' : 'FAIL', `codex=${sCxV?.stdout.trim() || 'missing'}, claude=${sClV?.stdout.trim() || 'missing'}`);
     rec('C07', 'Concurrent Sessions + SIGKILL Cleanup', 'SKIP', 'Requires live test account (proved in --offline)');
     rec('C08', 'Forced A->B Rotation + Negative Control', 'SKIP', 'Requires Decision #10 cloud test switch (proved in --offline)');
-    const foCx = hasCx ? await runCmd(process.execPath, [BIN_CODEX, '--version'], { env: { ...liveSafeEnv, PDD_CODEX_AUTO_FAIL_OPEN: '1' } }) : { status: 0 };
-    const foCl = hasCl ? await runCmd(process.execPath, [BIN_CLAUDE, '--version'], { env: { ...liveSafeEnv, PDD_CLAUDE_AUTO_FAIL_OPEN: '1' } }) : { status: 0 };
+    // C09 live: real ENOENT->127 + fail-closed against unreachable gateway (0 model/API calls!)
+    writeCloudAccountsState({ enrolled: true, providers: ['codex', 'claude'], active: {} }, { env: liveSafeEnv });
+    const fcCx = await runCmd(process.execPath, [BIN_CODEX, 'exec', 'unreachable-check'], { env: { ...liveSafeEnv, PDD_TOKEN: 'dummy' } });
+    const fcCl = await runCmd(process.execPath, [BIN_CLAUDE, '-p', 'unreachable-check'], { env: { ...liveSafeEnv, PDD_TOKEN: 'dummy' } });
     const enCx = await runCmd(process.execPath, [BIN_CODEX, '--version'], { env: { ...liveSafeEnv, PDD_CODEX_BIN: '/nonexistent/codex-bin' } });
     const enCl = await runCmd(process.execPath, [BIN_CLAUDE, '--version'], { env: { ...liveSafeEnv, PDD_CLAUDE_BIN: '/nonexistent/claude-bin' } });
-    rec('C09', 'Fail-Open & ENOENT->127 (Real Binaries)', foCx.status === 0 && foCl.status === 0 && enCx.status === 127 && enCl.status === 127 ? 'PASS' : 'FAIL', `fo=${foCx.status}/${foCl.status}, enoent=${enCx.status}/${enCl.status}`);
+    rec('C09', 'Fail-Closed & ENOENT->127 (Real Binaries)', fcCx.status === 1 && fcCl.status === 1 && enCx.status === 127 && enCl.status === 127 ? 'PASS' : 'FAIL', `fc=${fcCx.status}/${fcCl.status}, enoent=${enCx.status}/${enCl.status}`);
     rec('C11', 'Non-/tmp Default Runtime Root', !sharedRuntimeDirPath({ env: { HOME: realHome } }).startsWith(resolve(tmpdir())) && !sharedClaudeRuntimeDir({ HOME: realHome }).startsWith(resolve(tmpdir())) ? 'PASS' : 'FAIL', 'codex-runtime & claude-runtime under ~/.local/state/pdd');
     const cxT = await measureColdStartupMs(BIN_CODEX), clT = await measureColdStartupMs(BIN_CLAUDE);
     const reachesSeam = walkReachableModules([BIN_CODEX, BIN_CLAUDE, join(REPO_ROOT, 'src', 'accounts-cli.mjs')]).has(resolve(REPO_ROOT, 'src', 'runtime-seam.mjs'));
@@ -535,7 +599,7 @@ async function runLiveChecks() {
   } finally {
     rmSync(tmpState, { recursive: true, force: true });
   }
-  const diffs = diffSnapshots(before, snapshotTargets(protectedPaths));
+  const diffs = diffSnapshots(before, snapshotTree(protectedPaths, { recursive: false }));
   results.splice(9, 0, { id: 'C10', name: 'Real Personal Home Zero-Mutation Proof', status: diffs.length === 0 ? 'PASS' : 'FAIL', detail: diffs.length === 0 ? 'SHA-256 + mode + symlink identical across ~/.codex & ~/.claude' : diffs.join('; ') });
   return results;
 }

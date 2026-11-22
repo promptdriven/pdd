@@ -9,7 +9,7 @@ The tests of Story `S` (`user_stories/**/S.md`) are the Git-visible regular file
 
 - A *Story file* (`isStoryPath(path)`) is a path ending in `.md` with `user_stories` in its directory components whose basename is neither `PLAN.md` nor `README.md` (case-insensitive).
 - A Story file counts as a Story (`hasAcceptance(text)`) when its text contains a line-starting `## Acceptance` or `## Acceptance Criteria` heading (`\n` line boundaries, case-insensitive, horizontal spaces or tabs only). A Story file with no acceptance heading still claims tests matching its basename, so those files do not become orphans, while never receiving a `has no test` warning.
-- A *test-folder JSON file* is a path ending in `.json` with `test` or `tests` as any directory component, excluding non-scenario subdirectories (`fixtures`, `__fixtures__`, `mocks`, `__mocks__`, `snapshots`, `__snapshots__`) beneath the innermost `test` or `tests` directory and excluding standard project/tooling config filenames (`tsconfig*.json`, `jsconfig.json`, `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `composer.json`, `biome.json`, `deno.json`, `jsr.json`, `eslint.json`, `prettier.json`, `vitest.json`, `jest.json`, `babel.json`). Nested projects that contain their own inner `test/` or `tests/` directory still pair normally.
+- A *test-folder JSON file* is a path ending in `.json` with `test` or `tests` as any directory component, excluding non-scenario subdirectories (`fixtures`, `__fixtures__`, `mocks`, `__mocks__`, `snapshots`, `__snapshots__`, `data`, `testdata`, `golden`, `cassettes`) beneath the innermost `test` or `tests` directory and excluding standard project/tooling config filenames (`tsconfig*.json`, `jsconfig.json`, `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `composer.json`, `biome.json`, `deno.json`, `jsr.json`, `eslint.json`, `prettier.json`, `vitest.json`, `jest.json`, `babel.json`). Nested projects that contain their own inner `test/` or `tests/` directory still pair normally.
 - `expectedTestPath(storyPath)` returns `<dir>tests/<S>.json`, where `<dir>` is the path prefix before the Story's nearest `user_stories` directory (empty when `user_stories` is at the repository root) and `<S>` is the Story basename without `.md`.
 - A test-folder JSON file named `N.json` fits Story name `N` and every Story name `S` where `N` is `S.<variant>`. One fit pairs the file with that Story; zero fits is an orphan; two or more fits (`tests/a.b.json` with Stories `a` and `a.b`) is a conflict, and pdd never picks one.
 
@@ -70,6 +70,6 @@ Node `node:path` (`basename`, `posix`), `node:fs`, and `node:child_process` (`ex
 <details><summary>Runtime interface</summary>
 
 ```json
-{"kind":"native-only","status":"approved","prose_sha256":"1bf3d0285bb6a9bad2cbb7bf7a6c02867b5d77bb198c34a19ecc6ba20fd06746","reason":"Exposes synchronous host-bound callbacks for native Story capture, repository import-graph inspection, and pure path-matching functions consumed across pdd and Runtime ports."}
+{"kind":"native-only","status":"approved","prose_sha256":"29f73bf12b94782bbed04a2d350046e478a1a828ae176446ad9b81c2fbe1360f","reason":"Exposes synchronous host-bound callbacks for native Story capture, repository import-graph inspection, and pure path-matching functions consumed across pdd and Runtime ports."}
 ```
 </details>

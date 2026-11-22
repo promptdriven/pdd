@@ -1,4 +1,4 @@
-// Generated from prompts/cli/test-selection.prompt.md (sha256: 24071275c62325a10ab2a38496738808a101bf7f2c56174168c87b3d8e5c4257).
+// Generated from prompts/cli/test-selection.prompt.md (sha256: 579eaebb04307f7a3bcc5fc9c6840e013d18f474a36f4999f8d0a46673c81f76).
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join, posix } from 'node:path';
@@ -14,7 +14,10 @@ export const isStoryPath = path =>
 
 export const hasAcceptance = text => AC_HEADING.test(text);
 
-const NON_SCENARIO_TEST_DIRS = new Set(['fixtures', '__fixtures__', 'mocks', '__mocks__', 'snapshots', '__snapshots__']);
+const NON_SCENARIO_TEST_DIRS = new Set([
+  'fixtures', '__fixtures__', 'mocks', '__mocks__', 'snapshots', '__snapshots__',
+  'data', 'testdata', 'golden', 'cassettes',
+]);
 const NON_SCENARIO_JSON_NAME_RE =
   /^(?:tsconfig(?:\.[^/]+)?|jsconfig|package(?:-lock)?|npm-shrinkwrap|composer|biome|deno|jsr|eslint|prettier|vitest|jest|babel)\.json$/i;
 

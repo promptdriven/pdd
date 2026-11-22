@@ -14,7 +14,7 @@ export function registerTomlParser(fn) {
 
 export function parseTomlText(raw) {
   if (typeof tomlParserFn !== 'function') {
-    throw new CloudAccountsError('TOML parser is not registered; load via src/login-pool.mjs.', { code: 'invalid_codex_config' });
+    throw new CloudAccountsError('TOML parser is not registered; load via src/login-pool.mjs.', { code: 'toml_parser_unregistered' });
   }
   return tomlParserFn(raw);
 }
@@ -59,7 +59,8 @@ export function parseCodexTomlQuiet(text) {
   try {
     const parsed = parseTomlText(text);
     return isTomlTable(parsed) ? parsed : null;
-  } catch {
+  } catch (err) {
+    if (err?.code === 'toml_parser_unregistered') throw err;
     return null;
   }
 }
@@ -68,7 +69,8 @@ export function readCodexTomlQuiet(fs, filePath) {
   if (typeof filePath !== 'string' || !filePath) return null;
   try {
     return parseCodexTomlQuiet(fs.readFileSync(filePath, 'utf8'));
-  } catch {
+  } catch (err) {
+    if (err?.code === 'toml_parser_unregistered') throw err;
     return null;
   }
 }
@@ -84,7 +86,8 @@ export function readCodexTomlObject(fs, configPath, { strict = true } = {}) {
   try {
     const parsed = parseTomlText(raw);
     return { exists: true, data: isTomlTable(parsed) ? parsed : {} };
-  } catch {
+  } catch (err) {
+    if (err?.code === 'toml_parser_unregistered') throw err;
     if (!strict) return { exists: true, data: {} };
     throw new CloudAccountsError(`${configPath} contains malformed TOML; fix it before updating Codex Cloud accounts.`, { code: 'invalid_codex_config' });
   }
