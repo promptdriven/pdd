@@ -189,7 +189,7 @@ test('v2 scorecard reconciles Pool, E2E, Prompt Checks, Regressions, turned-off 
   assert.equal(report.overview.target.convDisplay, '>=92.5%');
   assert.equal(report.overview.target.regressionDisplay, '1.0%');
   assert.equal(report.stages.prGates.summary, 'PR Gates (of 2 PRs): Suite 2/2 · Review 2/2 · CI 1/2 · E2E 1/2');
-  assert.equal(report.stages.promptChecks.summary, 'Prompt Checks (of 1 prompt PR): Runtime 6/6 · Vectors 20/20 · Formal 4/4');
+  assert.equal(report.stages.promptChecks.summary, 'Prompt Checks (of 1 prompt PR): Runtime 1/1 · Vectors 1/1 · Formal 1/1');
   assert.equal(report.stages.unmergedPrs.summary, 'Unmerged PRs (1): 1 failed ci');
   assert.equal(report.stages.regressions.summary, 'Regressions (1): 0 reopened · 0 reverted · 1 regression issue (#3528)');
 

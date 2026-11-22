@@ -69,17 +69,26 @@ process.on('message', async message => {
 
   };
   let result;
+  let flushed = false;
   try {
     result = await executeSuite(command, {...options,startGate:true,onOutput:output,
       onChild: pid => { record.childPid = pid; save(); }});
     for (const stream of ['stdout','stderr']) { filters[stream].end(); flush(stream); }
+    log.flush();
+    flushed = true;
     record.exitCode = result.exitCode; record.signal = result.signal ?? null;
+    if (result.signalDiagnostics) record.signalDiagnostics = result.signalDiagnostics;
     record.outcome = result.ownershipConfirmed === false ? 'unknown' : 'completed';
     record.exitCode = result.ownershipConfirmed === false ? null : result.exitCode;
     record.counts = record.outcome === 'completed' && !pending ? complete : null;
   } catch (error) {
     result = {exitCode:1,reason:safeEvidenceText(`Validation recorder failed: ${error.code ?? error.message}`)};
     record.exitCode = null; record.signal = null; record.outcome = 'unknown'; record.counts = null;
+  } finally {
+    if (!flushed) {
+      for (const stream of ['stdout','stderr']) { try { filters[stream].end(); flush(stream); } catch {} }
+      try { log.flush(); } catch {}
+    }
   }
   try {
     if (environmentRoot && record.outcome === 'completed') fs.rmSync(environmentRoot,{recursive:true,force:true});

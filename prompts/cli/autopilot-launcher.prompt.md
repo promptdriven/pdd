@@ -52,7 +52,7 @@ change). When Cloud Accounts is active for the saved agent provider (`isCloudAcc
 exit code 2 with `Use --auto-update release, --auto-update main or --auto-update off.`); after each enabled core tick,
 run `maybeAutoUpdateAutopilot` of [Autopilot self-update](autopilot-update.prompt.md) under the machine admission lock
 when no job is publishing or merging, and include `autoUpdateStatusLine` in status. Optional `--runs` and `--checks` are positive safe integers with no product maximum; save explicit values, and
-remove them when a start omits them.
+remove them when a start omits them. Optional `start --issues N,M` / `--issue N` (`input.allowedIssues`, `input.issue`, or start `input.issues`) pins an explicit operator allowlist of positive safe integer issue numbers (`state.allowedIssues`), sorted and deduplicated; `off`, `all`, `clear` or `none` removes `state.allowedIssues`; omitting it preserves any saved allowlist; invalid values return exit code 2 with an actionable diagnostic naming the option, invariant, example fix, and rerun command before any state write. A non-empty `state.allowedIssues` satisfies the start opt-in scope check without requiring `--label`, forwards `core.allowedIssues` on every core tick, and appears in `start`, `status`, and `status --json`.
 
 ## Automatic continuation custody
 
@@ -102,8 +102,8 @@ A start then, in this order:
    override it keeps the saved profile when one is saved (refuse when it is unavailable) and refuses a silently changed
    saved profile with `The saved coordinator profile cannot be verified.`; without a saved profile, or when `--agent`,
    `--pool` or an explicit caller agent config folder overrides the saved profile (#3230), it saves the newly verified
-   agent, its definition HOME, the kept environment (`HOME`, `PATH`, the agent config folders, the XDG and D-Bus session
-   values, `PDD_STATE_DIR`, `PDD_ACCOUNTS_URL`, `PDD_CLOUD_URL` and the shared queue variables; never credentials or the whole environment), `launchProfile` from the new
+   agent, its definition HOME, the kept environment (`keepEnv`: `HOME`, `PATH`, the agent config folders, the XDG and D-Bus session
+   values, `PDD_STATE_DIR`, `PDD_ACCOUNTS_URL`, `PDD_CLOUD_URL`, the shared queue variables, toolchain roots `GOPATH`, `CARGO_HOME`, `RUSTUP_HOME`, `VIRTUAL_ENV`, and `PDD_TEST_ENV_*` variables; never credentials or the whole environment), `launchProfile` from the new
    profile binding, and `poolPath` when `--pool` is set, removes legacy `ownerLaunch`, clears stale `pausedUntil`,
    `pausedHours`, `streak` and `poolOut` in `core.json` (plus `clearPoolCooldowns` when switching accounts or pools),
    and adds an `Account changed from OLD to NEW.` or `Login pool: PATH (N login(s)).` note to the start message.

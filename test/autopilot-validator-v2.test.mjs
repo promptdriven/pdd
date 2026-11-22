@@ -1839,3 +1839,46 @@ test('3574 Part 4: native-only and os-boundary modules require non-mocked real-h
     assert.equal(passed.eligible, true);
   }
 });
+
+test('P0-8: real-host failure-class coverage never claims classes covered without explicit evidence', () => {
+  const unverified = evaluateValidationOutcome({
+    mode: 'auto',
+    changedFiles: ['src/os-sandbox.mjs'],
+    offlinePassed: true,
+    offlineSummary: 'unit 4/4',
+    e2eChecks: [{
+      kind: 'real-host-smoke',
+      command: 'npm run test:smoke',
+      executed: true,
+      exitCode: 0,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+    }],
+  });
+  assert.equal(unverified.bucket, 3);
+  assert.equal(unverified.decision, 'needs-person');
+  assert.equal(unverified.waitKind, 'needs-real-host-smoke');
+  assert.equal(unverified.eligible, false);
+  assert.match(unverified.message, /nested OS sandbox/i);
+
+  const verified = evaluateValidationOutcome({
+    mode: 'auto',
+    changedFiles: ['src/os-sandbox.mjs'],
+    offlinePassed: true,
+    offlineSummary: 'unit 4/4',
+    e2eChecks: [{
+      kind: 'real-host-smoke',
+      command: 'npm run test:smoke',
+      executed: true,
+      exitCode: 0,
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+      realHostClasses: ['nested-sandbox'],
+    }],
+  });
+  assert.equal(verified.eligible, true);
+  assert.equal(verified.decision, 'allow-merge');
+  assert.deepEqual(verified.proof.realHostClasses, ['nested-sandbox']);
+});

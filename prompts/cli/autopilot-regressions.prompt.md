@@ -97,12 +97,12 @@ is proven, otherwise suspect if any signal exists, otherwise ok.
 | New same-repo issue title/body explicitly blames this PR with `Regressed by`, `Regression from`, `Regression in`, `Broken by`, `Caused by`, or `Introduced by` followed by optional `PR ` and `#PR`, qualified `owner/repo#PR`, or exact PR URL | proven (`kind: "reference"`, `detail` naming `Issue #<number>`) |
 | New same-repo issue carrying label `regression` (case-insensitive match on label `name` or string label) that references this PR or any recorded issue of the merge (same-repo `#N`, qualified `owner/repo#N`, URL, or timeline `cross-referenced` event) | proven (`kind: "reference"`, `detail` naming `Issue #<number>`) |
 | Unlabeled new issue mentions this PR or recorded issue through a number, same-repo qualified reference or URL; or an unlabeled timeline cross-reference originates in a new same-repo issue | suspect (`kind: "reference"`) |
-| Any recorded issue of the merge has a later `reopened` event | suspect (`kind: "reopened"`) |
+| Any recorded issue of the merge has a later non-machine `reopened` timeline event | proven (`kind: "reopened"`) |
 
 Match complete reference identities, never number prefixes or references to
-another repository. Cross-references and reopens alone do not establish cause in
-the standalone `regressionScan` `proven` verdict (consumers such as `pdd metrics`
-count `reopened` signals explicitly in their reopened breakdown).
+another repository. Unlabeled cross-references alone remain `suspect`; explicit
+human post-merge `reopened` timeline events are `proven` consistently across
+`regressionScan` and `checkPostMergeRegressions`.
 Ignore a reopen carrying a `<!-- pdd:... -->` marker or with a same-actor marked
 comment within five minutes: machine actions cannot establish a human reopen.
 Do not suppress other people's events on the basis of the account name alone.
@@ -167,8 +167,9 @@ at their prior state (`pending` when never checked).
 For each examined merge, detect three actionable post-merge regression signals
 after `mergedAt` (up to `now`):
 - `reopened`: any recorded issue of the merge has a later non-machine `reopened`
-  timeline event (ignoring `<!-- pdd:... -->` markers as above) or is currently
-  `open` on GitHub without a machine-marked reopen;
+  timeline event (ignoring `<!-- pdd:... -->` markers as above; an issue that
+  simply remains `open` without a post-merge `reopened` timeline event is not
+  classified as reopened);
 - `revert`: a later default-branch commit reverts `mergeCommit` (`This reverts
   commit FULL_SHA...`) or a later merged PR explicitly `Reverts` the PR;
 - `ci`: a red check run or commit status on `mergeCommit` dated at or after
@@ -261,7 +262,7 @@ Export async `runAutopilotRegressions({cwd,env,json,file}, ports={})` returning
 `fs`, `run(file,args,{cwd,env,...})`, `gh`, `now`, `stateRoot` and optional `root`
 can replace them. Resolve Git root with `git rev-parse --show-toplevel`; hash it
 with sha256 truncated to 20 hex as the launcher does. Read the saved launcher
-JSON from stateRoot/HASH.json, default stateRoot HOME/.local/state/pdd/autopilot,
+JSON from stateRoot/HASH.json, default stateRoot `$PDD_STATE_DIR/autopilot` when `PDD_STATE_DIR` is non-empty else `HOME/.local/state/pdd/autopilot`,
 and scan HASH-core. No folder creation, timer, sign-in probe or launcher call.
 Require its repo, or, for no saved state, resolve origin with the shared GitHub
 origin parser. An explicit ports.root bypasses state discovery but still requires

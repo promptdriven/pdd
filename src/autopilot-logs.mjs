@@ -895,7 +895,7 @@ export async function inspectAutopilotWorkers(input = {}, ports = {}) {
     rawGitRoot = reply.stdout.trim();
   }
 
-  const stateRoot = ports.stateRoot ?? join(env.HOME || homedir(), '.local', 'state', 'pdd', 'autopilot');
+  const stateRoot = ports.stateRoot ?? join((typeof env?.PDD_STATE_DIR === 'string' && env.PDD_STATE_DIR.trim()) || join(env.HOME || homedir(), '.local', 'state', 'pdd'), 'autopilot');
   const stateId = createHash('sha256').update(rawGitRoot).digest('hex').slice(0, 20);
   const rawStateFile = join(stateRoot, `${stateId}.json`);
   const rawCoreRoot = ports.coreRoot ?? join(stateRoot, `${stateId}-core`);

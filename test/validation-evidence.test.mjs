@@ -1,6 +1,11 @@
 import './helpers/test-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fork } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {redactingLines,validationLog,serializeValidationReceipt,safeEvidenceText,MAX_VALIDATION_LOG_BYTES,MAX_EVIDENCE_LINE_BYTES} from '../src/validation-evidence.mjs';
 import {redactSecrets,rememberSecrets,redactingValues} from '../src/secret-redaction.mjs';
 
@@ -108,6 +113,104 @@ test('log budget includes the marker at each overflow boundary and counts exact 
     assert.equal(log.evidence.omittedBytes,n>MAX_VALIDATION_LOG_BYTES?n-(MAX_VALIDATION_LOG_BYTES-128):0);
     if(n<=MAX_VALIDATION_LOG_BYTES)assert.deepEqual(saved,input);
   }
+});
+
+test('P0-8: post-overflow chunk stream batches checkpoints instead of rewriting 1 MiB per chunk and flush() commits exact final tail',()=>{
+  let saved=Buffer.alloc(0), writes=0, appends=0;
+  const log=validationLog(
+    bytes=>{writes++;saved=Buffer.from(bytes);},
+    bytes=>{appends++;saved=Buffer.concat([saved,bytes]);},
+  );
+  const totalChunks=1280; // 1280 * 4 KiB = 5 MiB (>1000 post-overflow chunks)
+  for(let i=0;i<totalChunks;i++) {
+    const tag=`CHUNK-${String(i).padStart(4,'0')}-`;
+    log.add(tag+'a'.repeat(4096-tag.length));
+  }
+  log.flush();
+  assert.ok(appends<=256,'pre-overflow chunks use append');
+  assert.ok(writes<=12,`post-overflow full writes stay bounded (got ${writes} for ${totalChunks} chunks)`);
+  assert.ok(saved.length<=MAX_VALIDATION_LOG_BYTES);
+  assert.equal(log.evidence.logBytes,saved.length);
+  assert.equal(log.evidence.truncated,true);
+  const text=saved.toString('utf8');
+  assert.ok(text.startsWith('CHUNK-0000-'),'retains exact head');
+  assert.match(text,/bytes omitted\]/,'includes omission marker');
+  assert.ok(text.includes('CHUNK-1279-'),'flush commits exact final tail chunk');
+});
+
+test('P0-8 review fix: test-suite-recorder flushes buffered post-overflow tail on nonzero exit, SIGTERM, and thrown error paths', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'pdd-recorder-flush-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const recorderPath = fileURLToPath(new URL('../src/test-suite-recorder.mjs', import.meta.url));
+
+  const runRecorder = ({ command, record, cancelOnSentinel = null, execArgv = [] }) => new Promise((resolve, reject) => {
+    const child = fork(recorderPath, [], { execArgv, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    t.after(() => { try { child.kill('SIGKILL'); } catch {} });
+    let resultMsg = null;
+    let stderr = '';
+    let seenStream = '';
+    let canceled = false;
+    child.stderr?.on('data', d => { stderr += d; });
+    child.on('message', msg => {
+      if (msg.stream && cancelOnSentinel && !canceled) {
+        seenStream = (seenStream + Buffer.from(msg.bytes, 'base64').toString('utf8')).slice(-4096);
+        if (seenStream.includes(cancelOnSentinel)) {
+          canceled = true;
+          child.send({ cancel: 'SIGTERM' });
+        }
+      }
+      if (msg.result) resultMsg = msg.result;
+    });
+    child.once('error', reject);
+    child.once('exit', code => resolve({ code, result: resultMsg, stderr }));
+    child.send({ start: { command, cwd: dir, env: { PATH: process.env.PATH, HOME: dir }, timeoutMs: 15000, record } });
+  });
+
+  // 1. Nonzero failure emitting >1.1 MiB with final sentinel buffered past last checkpoint.
+  const logFail = join(dir, 'fail.log'), receiptFail = join(dir, 'fail.json');
+  const failCmd = `${JSON.stringify(process.execPath)} -e "for (let i = 0; i < 300; i++) process.stdout.write('F' + String(i).padStart(4, '0') + '-' + 'x'.repeat(4090) + '\\n'); process.stdout.write('TAIL-FLUSH-FAIL-SENTINEL\\n'); process.exitCode = 1;"`;
+  const failRun = await runRecorder({ command: failCmd, record: { ticket: 1, pid: process.pid, cwd: dir, state: 'running', queuedAt: 1, startedAt: 2, finishedAt: null, receiptPath: receiptFail, logPath: logFail } });
+  assert.equal(failRun.result?.record?.exitCode, 1, failRun.stderr);
+  const failLogText = readFileSync(logFail, 'utf8');
+  assert.ok(failLogText.includes('TAIL-FLUSH-FAIL-SENTINEL'), 'nonzero exit flushes buffered post-overflow tail');
+  assert.equal(failRun.result.record.evidence.logBytes, statSync(logFail).size);
+
+  // 2. SIGTERM cancellation after >1.1 MiB + sentinel output flushes buffered tail.
+  const logSig = join(dir, 'sig.log'), receiptSig = join(dir, 'sig.json');
+  const sigCmd = `${JSON.stringify(process.execPath)} -e "for (let i = 0; i < 300; i++) process.stdout.write('S' + String(i).padStart(4, '0') + '-' + 'y'.repeat(4090) + '\\n'); process.stdout.write('TAIL-FLUSH-SIGTERM-SENTINEL\\n' + 'r'.repeat(512) + '\\n'); setInterval(() => {}, 1000);"`;
+  const sigRun = await runRecorder({ command: sigCmd, cancelOnSentinel: 'TAIL-FLUSH-SIGTERM-SENTINEL', record: { ticket: 2, pid: process.pid, cwd: dir, state: 'running', queuedAt: 1, startedAt: 2, finishedAt: null, receiptPath: receiptSig, logPath: logSig } });
+  assert.equal(sigRun.result?.record?.signal, 'SIGTERM', sigRun.stderr);
+  assert.equal(sigRun.result?.record?.exitCode, 143, 'explicit SIGTERM cancel exits 143 (not timeout 124)');
+  const sigLogText = readFileSync(logSig, 'utf8');
+  assert.ok(sigLogText.includes('TAIL-FLUSH-SIGTERM-SENTINEL'), 'SIGTERM cancellation flushes buffered post-overflow tail');
+  assert.equal(sigRun.result.record.evidence.logBytes, statSync(logSig).size);
+
+  // 3. Thrown exception inside executeSuite still flushes buffered post-overflow tail via finally!
+  const logErr = join(dir, 'err.log'), receiptErr = join(dir, 'err.json');
+  const hookCode = `
+    import { registerHooks } from 'node:module';
+    registerHooks({
+      load(url, context, nextLoad) {
+        if (url.endsWith('/src/test-suite-queue.mjs')) {
+          return {
+            format: 'module',
+            shortCircuit: true,
+            source: 'export async function executeSuite(_cmd, opts) { for (let i = 0; i < 300; i++) opts.onOutput("stdout", Buffer.from("E" + String(i).padStart(4, "0") + "-" + "z".repeat(4090) + "\\\\n")); opts.onOutput("stdout", Buffer.from("TAIL-FLUSH-THROW-SENTINEL\\\\n")); throw new Error("simulated-recorder-crash"); }',
+          };
+        }
+        return nextLoad(url, context);
+      },
+    });
+  `;
+  const errRun = await runRecorder({
+    command: 'ignored',
+    execArgv: ['--import', `data:text/javascript,${encodeURIComponent(hookCode)}`],
+    record: { ticket: 3, pid: process.pid, cwd: dir, state: 'running', queuedAt: 1, startedAt: 2, finishedAt: null, receiptPath: receiptErr, logPath: logErr },
+  });
+  assert.equal(errRun.result?.record?.outcome, 'unknown', errRun.stderr);
+  const errLogText = readFileSync(logErr, 'utf8');
+  assert.ok(errLogText.includes('TAIL-FLUSH-THROW-SENTINEL'), 'finally block flushes buffered post-overflow tail even when executeSuite throws');
+  assert.equal(errRun.result.record.evidence.logBytes, statSync(logErr).size);
 });
 
 test('line budget suppresses the whole oversized value including an EOF continuation',()=>{

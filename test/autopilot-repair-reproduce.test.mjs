@@ -129,7 +129,7 @@ test('RR2 #3247 reproducible CI and suite failures give test names, log lines an
   const suiteRepair = w.job(18, 'repair');
   assert.ok(suiteRepair);
   assert.match(suiteRepair.input, /Full test suite failure \(`npm test`/);
-  assert.match(suiteRepair.input, /local full-suite runner \(pdd workflow suite\)/);
+  assert.match(suiteRepair.input, /local full-suite runner \(pdd autopilot suite\)/);
   assert.match(suiteRepair.input, /Failing tests: suite recorder keeps completion marker \(suite-recorder\.test\.mjs\)/);
   assert.match(suiteRepair.input, /AssertionError: expected completion to be saved/, 'early TAP assertion is preserved even past 20 trailing lines');
 });

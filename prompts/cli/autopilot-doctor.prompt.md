@@ -13,13 +13,17 @@ has no Herdr check and makes no Herdr call. The launcher can also pass `engine`,
 
 Return {exitCode, message, checks}. Checks are ordered records with exactly id,
 status (pass, warn, fail), detail and fix. Every record has a fix, also a pass
-record. Exit 1 only for missing or signed-out
-agent sign-in; otherwise exit 0. This is the only new refusal allowed before
-native start. Every other doctor finding is WARN with a fix command, including
-a different pdd on PATH, read-only repository permission and disabled merge
-methods, in both observe and auto mode. Preserve native start admission,
+record. Exit 1 for critical preflight failures — unsupported Node (`< 22.20.0`),
+missing `git`, missing `gh` (`github-cli`), corrupt `agents.json` (`agent-config`),
+missing or signed-out agent (`agent` / `agent-signin`), or unsupported OS
+(`platform`) — and exit 0 otherwise. Non-critical advisory findings (`path`,
+`repository`, `github-auth`, `github-permission`, `merge-method`, `merge-rules`,
+`git-identity`, `agent-usage`, `codex-sandbox`, `setup-block`, `setup-skills`,
+`retired-skills`, `setup-mode`, `settings-github`, `draft-prompts`, `interpreter`,
+`user-timers`, `linger`, `sleep`) report WARN with a fix command and permit
+readiness. Preserve native start admission,
 cleanup, parking and recovery decisions. Start displays advisory lines and
-continues to its native guards; doctor findings must not add other refusals.
+continues to its native guards; doctor advisory findings must not add other refusals.
 Message has one line per record. A pass line is `PASS id: detail`: it shows no
 fix. A warn or fail line is `STATUS id: detail; fix: command`.
 Collapse control characters and newlines in details. Never echo auth payloads,
@@ -39,9 +43,7 @@ teammates (including `pdd autopilot start --agent codex`) pass `codex login stat
 this invocation environment for every prerequisite, including PATH, GitHub,
 provider sign-in, usage, skills, interpreter and scheduling. Claude user skills
 live under CLAUDE_CONFIG_DIR/skills when set; HOME overrides select user roots.
-Keep the caller environment unchanged. An agents.json read or parse failure gets
-its own advisory agent-config line with the actual file path and an editor repair
-command; never echo raw errors or configuration values.
+Keep the caller environment unchanged. An agents.json read or parse failure fails with its own `agent-config` check naming the actual file path and an editor repair command; never echo raw errors or configuration values.
 
 Export resolveAutopilotAgent(input, ports = {}) for the launcher's same selection
 policy. Return agent (definition or null), preferred (definition or undefined),
@@ -67,9 +69,7 @@ Check these boundaries in order and continue after failures:
   advertises autopilot. A different install warns even at the same
   version; include its path and safe version. Fix with an absolute Node plus
   this CLI doctor command, so source checkouts work too.
-- Node >=22.20.0; Git present; Git checkout and GitHub origin; gh signed in;
-  repo viewerPermission is ADMIN, MAINTAIN or WRITE and at least one merge method
-  is enabled. Missing tools, gh auth or write permission warn. Read effective
+- Node >=22.20.0, Git present, and `gh` present are critical (`fail` when absent/unsupported); Git checkout, `gh` auth, write permission (`ADMIN`, `MAINTAIN` or `WRITE`), and enabled merge methods warn when missing. Read effective
   rules for the default branch separately (`repos/REPO/rules/branches/BRANCH`).
   When `gh repo view` confirmed `REPO` and `BRANCH`, an HTTP 403 reply stating
   `Upgrade to GitHub Pro or make this repository public` or an HTTP 404 reply

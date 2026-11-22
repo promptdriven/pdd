@@ -15,6 +15,18 @@ import { gitContext, currentChat, stateDirFor } from './workflow-runs.mjs';
 import { chatLifecycle, chatSession, observeLifecycle, sessionEvidenceDue, observedSession, ownSession, launchAnchor, validSessionId } from './workflow-chat.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
 import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, nativeGithubCounter } from './github-calls.mjs';
+import {
+  CLAIM_EXPIRES_AFTER,
+  claimRecord,
+  editClaimRecord,
+  heartbeatTimeForComment,
+  refreshClaimHeartbeat,
+  setOwnClaimTime,
+  takeoverLimited,
+  winningClaim,
+  withoutClaimHeartbeat,
+} from './autopilot/claims.mjs';
+export { refreshClaimHeartbeat, takeoverLimited, withoutClaimHeartbeat };
 
 const REVIEW = 'pdd-dependency-review:v1', IMPACT = 'pdd-dependency-impact:v1';
 const NATIVE_GITHUB = Symbol('native github'), NATIVE_OWNERS = Symbol('native owners'), LIVE_GITHUB = Symbol('live github');
@@ -944,213 +956,8 @@ async function launcherState(cwd, repository, ports) {
   return state && sameRepo(state.repo, repository) && state.cwd === root ? state : null;
 }
 
-// A claim comment carries one JSON record. `text` is its exact source so a
-// heartbeat changes only the lastSeen value and keeps the rest of the comment.
-function claimRecord(body) {
-  const source = String(body ?? ''), blocks = [...source.matchAll(/```(?:json)?\s*\n([\s\S]*?)\n```/g)].map(m => m[1]);
-  blocks.push(source.trim());
-  for (const text of blocks) try {
-    const value = JSON.parse(text);
-    if (object(value) && ['repository', 'coordinatorId', 'machine', 'labelEventId'].every(k => typeof value[k] === 'string' && value[k])) return { value, text };
-  } catch { /* Legacy prose claims have unknown coordinator identity. */ }
-  return null;
-}
-const claimMetadata = body => claimRecord(body)?.value ?? null;
-const CLAIM_EXPIRES_AFTER = 4 * 60 * 60 * 1000, LEGACY_CLAIM_EXPIRES_AFTER = 24 * 60 * 60 * 1000;
-// Takeover ceiling (#3041): after 3 takeovers, an expired claim is not taken over a 4th
-// time, and a 4th takeover made anyway does not admit a start.
-// A takeover adds the label again at once: within 10 minutes of the removal, by its actor.
-const TAKEOVER_LIMIT = 3, TAKEOVER_GAP = 10 * 60 * 1000;
-// `self` ({coordinatorId, machine}) is the reader's own coordinator: taking back its own
-// expired claim is a re-claim, not a takeover, so it is not limited.
-export const takeoverLimited = (claim, self) => {
-  const retake = claim?.expired === true && Boolean(self?.coordinatorId) && claim.coordinatorId === self.coordinatorId && claim.machine === self.machine;
-  return (Number.isSafeInteger(claim?.takeovers) ? claim.takeovers : 0) + (claim?.expired === true && !retake ? 1 : 0) > TAKEOVER_LIMIT;
-};
-// A "lastSeen" member with a JSON scalar value, anywhere in the record text.
-const LAST_SEEN = /(,\s*)?"lastSeen"\s*:\s*(?:"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)(\s*,)?/g;
-// The same for another member that only the tick writes: the 24-hour alert time (#3041).
-const memberPattern = member => member === 'lastSeen' ? LAST_SEEN : new RegExp(LAST_SEEN.source.replace('"lastSeen"', `"${member}"`), 'g');
-const TICK_MEMBERS = ['lastSeen', 'longRunningAlertedAt'];
 const time = value => typeof value === 'string' ? Date.parse(value) : NaN;
 const iso = at => new Date(at).toISOString();
-const heartbeatTimeForComment = comment => Number.isFinite(time(comment?.updated_at)) ? time(comment.updated_at) : time(comment?.created_at);
-
-// Set or remove only one top-level member (lastSeen unless named) and keep every other
-// byte. Each place where the member can be is tried; an edit counts only when the new
-// body parses to exactly the expected record, so a nested member is never changed.
-// Return null when no such edit exists.
-function editClaimRecord(body, record, expected, name = 'lastSeen') {
-  const accept = text => { const next = String(body).replace(record.text, () => text); return isDeepStrictEqual(claimRecord(next)?.value, expected) ? next : null; };
-  const set = Object.hasOwn(expected, name), value = JSON.stringify(expected[name]);
-  if (set && !Object.hasOwn(record.value, name)) return accept(record.text.replace(/\}\s*$/, `,"${name}":${value}}`));
-  for (const match of record.text.matchAll(memberPattern(name))) {
-    const [whole, before = '', after = ''] = match, member = set ? `${before}"${name}":${value}${after}` : before && after ? ',' : '';
-    const next = accept(record.text.slice(0, match.index) + member + record.text.slice(match.index + whole.length));
-    if (next !== null) return next;
-  }
-  return null;
-}
-
-// The claim comment body without its top-level lastSeen member. A heartbeat alone
-// must not look like new trusted work to the tick.
-// The 24-hour alert time is removed the same way: it is also a tick write.
-export function withoutClaimHeartbeat(body) {
-  let text = body;
-  for (const name of TICK_MEMBERS) {
-    const record = claimRecord(text);
-    if (!record || !Object.hasOwn(record.value, name)) continue;
-    const { [name]: removed, ...rest } = record.value;
-    text = editClaimRecord(text, record, rest, name) ?? text;
-  }
-  return text;
-}
-
-async function winningClaim(repository, key, github, authority, now = NaN, safety = false, observedIssue = null) {
-  // Claim checks are their own purpose in the GitHub call ledger; a live claim check is a safety read.
-  const i = info(key), raw = observedIssue ?? parse((await github.issue({ repository, issue: i.issue, purpose: 'claims', ...(safety ? { safety } : {}) })).json);
-  if (raw.error) throw Error('Current claim issue unavailable');
-  const labels = raw.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
-  if (!labels.includes('pdd:working')) return null;
-  const timeline = await allPages(github, repository, 'timeline', i.issue, 'claims', safety), comments = await allPages(github, repository, 'comments', i.issue, 'claims', safety);
-  let candidates = [], stuck = null;
-  // Claim eras in order ({winner, start, end, index}; the current era has no end) and the
-  // removals of pdd:stuck, for the takeover count below.
-  const eras = [], stuckRemovals = [];
-  // Events arrive in service order. Only a native removal ends the active claim era.
-  for (const [index, event] of timeline.entries()) {
-    if (event.label?.name === 'pdd:working') {
-      if (event.event === 'unlabeled') { if (candidates.length) eras.at(-1).end = { event, index }; candidates = []; }
-      if (event.event === 'labeled') { if (!candidates.length) eras.push({ winner: event, start: index, end: null }); candidates.push(event); }
-    }
-    if (event.label?.name === 'pdd:stuck') {
-      if (event.event === 'unlabeled' && stuck) stuckRemovals.push({ at: time(event.created_at), index });
-      stuck = event.event === 'labeled' ? event : event.event === 'unlabeled' ? null : stuck;
-    }
-  }
-  // The one trusted claim comment of an era: by the winning label event's actor, naming that event.
-  const recordOf = async winner => {
-    if (!winner?.id || !winner.actor?.login) return null;
-    const matching = [];
-    for (const comment of comments) {
-      const metadata = claimMetadata(comment.body);
-      if (metadata && sameRepo(metadata.repository, repository) && metadata.labelEventId === String(winner.id)
-        && comment.user?.login?.toLowerCase() === winner.actor.login.toLowerCase()
-        && (await authority.read({ repository, author: comment.user.login })).authority === 'trusted') matching.push({ comment, metadata });
-    }
-    return matching.length === 1 ? matching[0] : null;
-  };
-  // The heartbeat time of a matched claim record. The current era and the takeover count
-  // below use this one rule. A top-level lastSeen member, with any value ("" in a new
-  // record), makes the comment a heartbeat claim; a record without it (older pdd) keeps
-  // the legacy rule (NaN here). The time is only the comment's GitHub server time:
-  // updated_at, else created_at. A recorded lastSeen never extends the claim, so no
-  // writer clock or written value keeps a dead claim live. With no server time, the
-  // legacy rule applies.
-  const heartbeatTime = ({ comment, metadata }) => !Object.hasOwn(metadata, 'lastSeen') ? NaN
-    : heartbeatTimeForComment(comment);
-  // Takeovers (#3041), from GitHub data only. An era ends in one of three ways:
-  // - a takeover: its claim was already expired at the removal (the same expiry rules at
-  //   that time, with only earlier facts), and the removal's actor added the label again
-  //   at once (within 10 minutes) for another coordinator or machine;
-  // - a re-claim: the same, but the new claim names the same coordinator and machine;
-  // - else a release: a normal end of a live claim, or a person's removal of an expired
-  //   label. It ends the claim chain and the count starts again at 0.
-  // A takeover and a re-claim continue the chain; claimedAt is the chain start. A removal
-  // of pdd:stuck while the claim is takeover-limited also starts the count again at 0.
-  for (const era of eras) era.record = await recordOf(era.winner);
-  const expiredAt = (era, at, index) => {
-    let server = era.record ? heartbeatTime(era.record) : NaN;
-    let expiresAfter = Number.isFinite(server) ? CLAIM_EXPIRES_AFTER : LEGACY_CLAIM_EXPIRES_AFTER;
-    const proof = era.record?.metadata.coordinatorRecovery;
-    const beforeRecovery = time(proof?.lastSeenBeforeRecovery);
-    // A recovery can race the removal. Its edit must not make an already-expired
-    // historical era look live and erase the takeover chain.
-    if (server >= at && Number.isFinite(beforeRecovery)) {
-      server = beforeRecovery;
-      expiresAfter = proof.heartbeatBeforeRecovery === false ? LEGACY_CLAIM_EXPIRES_AFTER : CLAIM_EXPIRES_AFTER;
-    }
-    const seen = Number.isFinite(server) ? Math.min(server, at) : [...comments.flatMap(c => [time(c.created_at), time(c.updated_at)]), ...timeline.slice(0, index).map(e => time(e.created_at))]
-      .filter(value => Number.isFinite(value) && value < at).reduce((latest, value) => Math.max(latest, value), -Infinity);
-    return Number.isFinite(at) && Number.isFinite(seen) && at - seen >= expiresAfter;
-  };
-  const owner = era => era?.record ? `${era.record.metadata.coordinatorId}\n${era.record.metadata.machine}` : null;
-  // Recovery may change the current owner within an era. Its incoming transition
-  // still compares against the owner that originally claimed that era.
-  const initialOwner = era => era?.record ? `${era.record.metadata.coordinatorRecovery?.originalCoordinatorId ?? era.record.metadata.coordinatorId}\n${era.record.metadata.machine}` : null;
-  const login = event => String(event?.actor?.login ?? '').toLowerCase();
-  let takeovers = 0, chainStart = 0;
-  const points = [...eras.flatMap((era, k) => era.end ? [{ index: era.end.index, k }] : []), ...stuckRemovals].sort((a, b) => a.index - b.index);
-  for (const point of points) {
-    if (point.k === undefined) {
-      const held = eras.find(era => era.start < point.index && (!era.end || era.end.index > point.index));
-      if (takeovers + (held && expiredAt(held, point.at, point.index) ? 1 : 0) > TAKEOVER_LIMIT) takeovers = 0;
-      continue;
-    }
-    const era = eras[point.k], next = eras[point.k + 1], at = time(era.end.event.created_at);
-    const again = next && login(next.winner) && login(next.winner) === login(era.end.event) && time(next.winner.created_at) - at <= TAKEOVER_GAP;
-    if (again && expiredAt(era, at, era.end.index)) { if (!owner(era) || owner(era) !== initialOwner(next)) takeovers++; }
-    else { takeovers = 0; chainStart = point.k + 1; }
-  }
-  const chain = eras.slice(chainStart), current = candidates.length ? eras.at(-1) : null;
-  const claimedAt = current ? time(chain[0].winner.created_at) : NaN;
-  // The coordinator that held the claim last before the current owner in this chain.
-  const previous = current && chain.slice(0, -1).reverse().find(era => owner(era) && owner(era) !== owner(current));
-  // The 24-hour alert is sent once per chain: any claim record of the chain may carry it.
-  const alerted = current ? chain.map(era => time(era.record?.metadata.longRunningAlertedAt)).filter(Number.isFinite).sort((a, b) => a - b)[0] : NaN;
-  // Expiry: a heartbeat claim is expired 4 hours after its last-seen time. A legacy
-  // claim (a record with no top-level lastSeen, no unique matching claim record, a bare
-  // label, or a claim comment with no server time) is expired after 24 hours with no
-  // issue activity. An unknown time or clock never expires a claim.
-  const facts = (claim, lastSeen) => {
-    const heartbeat = Number.isFinite(lastSeen);
-    const seen = heartbeat ? lastSeen : [time(raw.updated_at), ...comments.flatMap(c => [time(c.created_at), time(c.updated_at)]),
-      ...timeline.map(e => time(e.created_at))].filter(Number.isFinite).reduce((latest, at) => Math.max(latest, at), -Infinity);
-    const expired = Number.isFinite(now) && Number.isFinite(seen) && now - seen >= (heartbeat ? CLAIM_EXPIRES_AFTER : LEGACY_CLAIM_EXPIRES_AFTER);
-    const stuckSince = labels.includes('pdd:stuck') ? time(stuck?.created_at) : NaN;
-    return { ...claim, active: !expired, ...(Number.isFinite(seen) ? { lastSeen: iso(seen) } : {}), ...(expired ? { expired: true } : {}),
-      ...(Number.isFinite(stuckSince) ? { stuckSince: iso(stuckSince) } : {}), ...(Number.isFinite(claimedAt) ? { claimedAt: iso(claimedAt) } : {}),
-      ...(takeovers ? { takeovers } : {}),
-      ...(takeovers && previous ? { previousOwner: { coordinatorId: previous.record.metadata.coordinatorId, machine: previous.record.metadata.machine } } : {}),
-      ...(Number.isFinite(alerted) ? { longRunningAlertedAt: iso(alerted) } : {}) };
-  };
-  const winner = candidates[0];
-  if (!winner?.id || !winner.actor?.login) return facts({ issue: key, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: '' });
-  const match = current?.record;
-  if (!match) return facts({ issue: key, owner: '', coordinatorId: '', machine: '', commentId: '', labelEventId: String(winner.id) });
-  const { comment, metadata } = match;
-  // The last-seen time of the current claim comes from heartbeatTime above: a heartbeat
-  // claim (a top-level lastSeen member) uses only the comment's GitHub server time, at
-  // most now; a record without lastSeen (older pdd) keeps the legacy rule.
-  const server = heartbeatTime(match);
-  const lastSeen = Number.isFinite(server) && Number.isFinite(now) ? Math.min(server, now) : server;
-  return facts({ issue: key, owner: metadata.coordinatorId, coordinatorId: metadata.coordinatorId, machine: metadata.machine,
-    commentId: String(comment.id), labelEventId: String(winner.id) }, lastSeen);
-}
-
-// The owning coordinator sets one top-level tick member (a time) of its own winning
-// claim comment. It edits nothing else and no other comment.
-async function setOwnClaimTime(name, { cwd = '', repository, claim, coordinatorId, machine, at }, ports) {
-  const i = info(claim?.issue), s = service(cwd, ports);
-  if (!repositoryName(repository) || !i || !sameRepo(i.repository, repository) || !/^[1-9][0-9]*$/.test(String(claim.commentId ?? ''))
-    || !claim.labelEventId || claim.active !== true || claim.coordinatorId !== coordinatorId || claim.machine !== machine || !Number.isFinite(time(at))) return null;
-  const endpoint = `repos/${repository}/issues/comments/${claim.commentId}`, comment = (await s.api(endpoint, 'GET', undefined, 'claims', repository, true)).value;
-  const record = claimRecord(comment?.body);
-  if (String(comment?.id) !== String(claim.commentId) || !record || !sameRepo(record.value.repository, repository) || record.value.coordinatorId !== coordinatorId
-    || record.value.machine !== machine || record.value.labelEventId !== String(claim.labelEventId)) return null;
-  const value = iso(time(at)), body = editClaimRecord(comment.body, record, { ...record.value, [name]: value }, name);
-  if (body === null) throw Error(`Claim record cannot take ${name === 'lastSeen' ? 'a heartbeat' : name} without other changes`);
-  const saved = (await s.api(endpoint, 'PATCH', JSON.stringify({ body }), 'claims', repository)).value;
-  if (String(saved?.id) !== String(claim.commentId) || claimRecord(saved.body)?.value[name] !== value) throw Error(name === 'lastSeen' ? 'Claim heartbeat readback is unresolved' : 'Claim record readback is unresolved');
-  return value;
-}
-
-// Heartbeat: the owning coordinator writes the current time as the top-level lastSeen
-// of its own winning claim comment.
-export async function refreshClaimHeartbeat(args, ports = {}) {
-  const lastSeen = await setOwnClaimTime('lastSeen', args, ports);
-  return lastSeen === null ? { state: 'skipped' } : { state: 'refreshed', lastSeen };
-}
 
 // Recover only the still-winning claim era admitted by a local run. The proof in
 // the same edit makes a crash between remote ownership and local custody retryable.

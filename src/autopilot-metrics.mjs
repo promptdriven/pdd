@@ -230,8 +230,12 @@ function indexLatestEvidenceByIssue(fs, logsDir) {
   return byIssue;
 }
 
+const NON_EXECUTED_GATE_STATES = new Set(['not-run', 'not_run', 'na', 'n/a', 'skipped', 'pending', 'running', 'none']);
+
 function extractPairCount(obj) {
   if (!isPlainObject(obj)) return null;
+  const rawState = typeof obj.state === 'string' ? obj.state.trim().toLowerCase() : '';
+  if (rawState && NON_EXECUTED_GATE_STATES.has(rawState)) return null;
   const passed = Number(obj.passed ?? obj.pass);
   const total = Number(obj.total ?? obj.tests ?? obj.applicable ?? obj.count);
   if (Number.isSafeInteger(passed) && Number.isSafeInteger(total) && total > 0 && passed >= 0 && passed <= total) {
@@ -245,15 +249,16 @@ function deriveGates({ evidence, evDoc, outcome, text }) {
   let runtime = ev.runtime?.state ?? null;
   let runtimeCount = extractPairCount(ev.runtime);
   if (Array.isArray(evDoc?.runtime?.lines) && evDoc.runtime.lines.length > 0) {
-    const verdicts = evDoc.runtime.lines.map(l => l?.verdict);
+    const verdicts = evDoc.runtime.lines.map(l => typeof l?.verdict === 'string' ? l.verdict.trim().toLowerCase() : '');
+    const executedVerdicts = verdicts.filter(v => v === 'pass' || v === 'fail' || v === 'other');
     if (!runtime) {
-      if (verdicts.includes('other') || verdicts.includes('fail')) runtime = 'fail';
-      else if (verdicts.every(v => v === 'pass')) runtime = 'pass';
-      else runtime = 'not-run';
+      if (executedVerdicts.length === 0) runtime = 'not-run';
+      else if (executedVerdicts.includes('other') || executedVerdicts.includes('fail')) runtime = 'fail';
+      else runtime = 'pass';
     }
-    if (!runtimeCount) {
-      const passed = verdicts.filter(v => v === 'pass').length;
-      runtimeCount = { passed, total: verdicts.length };
+    if (!runtimeCount && executedVerdicts.length > 0) {
+      const passed = executedVerdicts.filter(v => v === 'pass').length;
+      runtimeCount = { passed, total: executedVerdicts.length };
     }
   }
   let vectors = ev.vectors?.state ?? evDoc?.vectors?.kinds?.vectors?.state ?? null;
@@ -359,11 +364,10 @@ function readCoreRuns(fs, repo, coreDir, nowMs) {
       ...(Number.isSafeInteger(row.pr) ? (regressed.regressionIssues.get(`pr:${row.pr}`) ?? []) : []),
     ]);
     const regressionIssues = [...regIssueSet].sort((a, b) => a - b);
-    const hasPromptCheck = Boolean(gateCounts)
-      || ['runtime', 'vectors', 'formal'].some(k => {
-        const v = typeof gates[k] === 'string' ? gates[k].trim().toLowerCase() : '';
-        return v === 'pass' || v === 'fail' || v === 'proved' || v === 'bounded' || v === 'failed';
-      });
+    const hasPromptCheck = ['runtime', 'vectors', 'formal'].some(k => {
+      const v = typeof gates[k] === 'string' ? gates[k].trim().toLowerCase() : '';
+      return v === 'pass' || v === 'fail' || v === 'proved' || v === 'bounded' || v === 'failed';
+    });
     const promptChanged = typeof row.promptChanged === 'boolean'
       ? row.promptChanged
       : typeof evDoc?.promptChanged === 'boolean'

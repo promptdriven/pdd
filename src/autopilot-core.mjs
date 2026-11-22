@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
-import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './issue-dependencies-github.mjs';
+import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './autopilot/claims.mjs';
 import { githubFullLastPage } from './github-calls.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
@@ -296,6 +296,15 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
   const count = (value, fallback, min = 1) => Number.isSafeInteger(value) && value >= min ? value : fallback;
   const modelTiering = a.modelTiering === true || a.modelTiering === false || object(a.modelTiering) ? a.modelTiering : undefined;
   const skipLabels = Array.isArray(a.skipLabels) ? [...new Set(a.skipLabels.filter(named).map(s => s.trim()))] : undefined;
+  const siblingRepos = Array.isArray(a.siblingRepos)
+    ? a.siblingRepos.filter(item => named(item) || (object(item) && named(item.canonical ?? item.name ?? item.repo)))
+    : undefined;
+  const minIntakeConfidence = typeof a.minIntakeConfidence === 'number' && Number.isFinite(a.minIntakeConfidence) && a.minIntakeConfidence >= 0 && a.minIntakeConfidence <= 1
+    ? a.minIntakeConfidence
+    : undefined;
+  const allowedIssues = Array.isArray(a.allowedIssues)
+    ? [...new Set(a.allowedIssues.filter(n => Number.isSafeInteger(n) && n > 0))].sort((x, y) => x - y)
+    : [];
   const forensics = typeof a.forensics === 'boolean' ? a.forensics : undefined;
   const ciRaw = a.ci ?? a.ciPolicy;
   const ci = ciRaw !== undefined ? (['local', 'github'].includes(ciRaw) ? ciRaw : 'github') : undefined;
@@ -304,6 +313,7 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
     : undefined;
   return { engine: autopilotEngine(config), mode: ['off', 'observe', 'auto'].includes(a.mode) ? a.mode : 'off',
     trust: Array.isArray(a.trust) ? a.trust.filter(named) : [], runs: machine ? slotCount({ ...machine, repoRuns: a.runs }).slots : count(a.runs, 2), label: named(a.label) ? a.label.trim() : null,
+    ...(allowedIssues.length ? { allowedIssues } : {}),
     ...(a.intake !== undefined ? { intake: intakeMode(a.intake) } : {}),
     ...(ci !== undefined ? { ci } : {}),
     ...(hygieneGate !== undefined ? { hygieneGate } : {}),
@@ -314,6 +324,8 @@ export function coreSettings(config = {}, packageJson = null, machine = null) {
     repairs: count(a.maxRepairs, count(a.repairs, 6, 0), 0), testCommand: named(a.testCommand) ? a.testCommand : packageJson?.scripts?.test ? 'npm test' : null,
     ...(modelTiering !== undefined ? { modelTiering } : {}),
     ...(skipLabels !== undefined ? { skipLabels } : {}),
+    ...(siblingRepos !== undefined ? { siblingRepos } : {}),
+    ...(minIntakeConfidence !== undefined ? { minIntakeConfidence } : {}),
     ...(forensics !== undefined ? { forensics } : {}) };
 }
 const hygieneGateMode = ctx => ['off', 'observe', 'enforce'].includes(ctx?.settings?.hygieneGate) ? ctx.settings.hygieneGate : 'observe';
@@ -924,7 +936,7 @@ function context({ state, settings, budget }, ports) {
   const ctx = { state, settings, budget, ports, fs, now, root, dirs, repo, gh, jobs, git, owners, heartbeat, execFile, machineId, counts: { started: 0, merged: 0, wouldMerge: 0, ended: 0, repairs: 0 },
     // Floors: the quiet period is at least 2 ticks and the pending-CI limit at least 3 ticks of the machine timer.
     quiet: Math.max(settings.quietMinutes, 2 * (ports.tickMinutes ?? 10)) * MIN, ciStuck: Math.max(settings.ciStuckMinutes, 3 * (ports.tickMinutes ?? 10)) * MIN,
-    ceiling: settings.maxJobHours * HOUR, pdd: join(state.packageRoot ?? PACKAGE_ROOT, 'bin', 'pdd.mjs'), skip: new Set(), warn: ports.warn ?? (() => {}) };
+    ceiling: settings.maxJobHours * HOUR, pdd: join(state.packageRoot ?? PACKAGE_ROOT, 'bin', 'pdd.mjs'), suiteEntry: join(state.packageRoot ?? PACKAGE_ROOT, 'src', 'test-suite-entry.mjs'), skip: new Set(), warn: ports.warn ?? (() => {}) };
   ctx.saveJob = job => save(fs, join(dirs.jobs, `${job.issue}.json`), job);
   // An issue author's trust, read once per login and tick (the ready rule and the prompts' open issues share it).
   const trust = new Map();
@@ -999,10 +1011,15 @@ async function blocked(ctx, row) {
 // T10 (trial, Nov 11): a trusted reply to this engine's question ends the wait. An issue with pdd:needs-decision is read
 // once per change (its updated_at, saved as decisionSeen in the machine state); with a trusted reply after the question,
 // the engine removes the label itself and the issue is ready in this tick.
+const allowedIssueSet = settings => Array.isArray(settings?.allowedIssues) && settings.allowedIssues.length
+  ? new Set(settings.allowedIssues.filter(n => Number.isSafeInteger(n) && n > 0))
+  : null;
 async function decisionReplies(ctx, rows) {
   const parkedIssues = new Set((ctx.machineState().validationParks ?? []).map(p => p.issue));
+  const allowed = allowedIssueSet(ctx.settings);
   const ready = new Set(), waiting = rows.filter(row => !row.pull_request && row.state === 'open' && !skippedIssueLabel(row, ctx.settings) && !parkedIssues.has(row.number) && labelsOf(row).includes(DECISION) && row.comments > 0
-    && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label)));
+    && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
+    && (!allowed || allowed.has(row.number)));
   if (!waiting.length) return ready;
   const seen = { ...(object(ctx.machineState().decisionSeen) ? ctx.machineState().decisionSeen : {}) };
   let changed = false;
@@ -1073,10 +1090,12 @@ async function* readyRows(ctx, rows) {
   // The loop guard (Stop owners): only issues with a hold line are checked for a hold.
   const holding = new Set(history.filter(row => row.hold === true).map(row => row.issue));
   const fixedHolding = new Set(history.filter(row => row.fixedHold === true).map(row => row.issue));
+  const allowed = allowedIssueSet(ctx.settings);
   const candidates = rows.filter(row => !row.pull_request && row.state === 'open' && !row.assignees?.length && !row.assignee
     && !skippedIssueLabel(row, ctx.settings)
     && !parkedIssues.has(row.number)
     && !labelsOf(row).includes('pdd:stuck') && (!labelsOf(row).includes(DECISION) || replied.has(row.number)) && !labelsOf(row).includes(WOULD_MERGE) && !labelsOf(row).some(name => REPORT_LABELS.includes(name)) && (!ctx.settings.label || labelsOf(row).includes(ctx.settings.label))
+    && (!allowed || allowed.has(row.number))
     && !local.has(row.number) && !ctx.skip.has(row.number) && !cooling.has(row.number)
     && shouldClaimWithCooldowns({ issueRequiredTools: issueRequiredTools(row), toolCooldowns: machine.toolCooldowns }).claimable)
     .sort((a, b) => (Date.parse(a.created_at) || 0) - (Date.parse(b.created_at) || 0) || a.number - b.number);
@@ -2203,17 +2222,26 @@ function clearPoolExhausted(ctx) {
   delete m.poolOut;
   ctx.saveMachine({ ...m, poolOut: null });
 }
+function isAuthPoolFailure(exhausted, reason) {
+  if (exhausted?.state === 'reauth_required' || exhausted?.state === 'unavailable') return true;
+  if (Array.isArray(exhausted?.unavailable) && exhausted.unavailable.length > 0 && !(Array.isArray(exhausted?.cooling) && exhausted.cooling.length > 0)) return true;
+  const text = String(reason ?? '');
+  return isAuthFailureMessage(text) || /\b(?:auth(?:entication)? (?:is )?unavailable|account (?:is )?(?:disabled|suspended|deactivated)|reauth[_ -]?required|not logged in)\b/i.test(text);
+}
 async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
   const m = ctx.machineState();
   const already = Boolean(m.poolOut);
-  const resetAt = Number.isFinite(exhausted?.resetAt) && exhausted.resetAt > ctx.now() ? exhausted.resetAt : null;
+  const hasProviderReset = Number.isFinite(exhausted?.resetAt) && exhausted.resetAt > ctx.now();
+  const resetAt = hasProviderReset ? exhausted.resetAt : ctx.now() + POOL_FALLBACK_COOLDOWN_MS;
   const cloud = Boolean(exhausted?.cloud || m.poolOut?.cloud);
-  const wakeAt = typeof exhausted?.wakeAt === 'string' && exhausted.wakeAt ? exhausted.wakeAt : (resetAt ? new Date(resetAt).toISOString() : null);
+  const wakeAt = typeof exhausted?.wakeAt === 'string' && exhausted.wakeAt ? exhausted.wakeAt : new Date(resetAt).toISOString();
   const cleanReason = safeLine(reason ?? exhausted?.cooling?.[0]?.reason ?? 'usage-limit', 200);
+  const isAuth = isAuthPoolFailure(exhausted, cleanReason);
   const poolOut = {
     since: m.poolOut?.since ?? ctx.now(),
     at: ctx.now(),
     resetAt,
+    kind: isAuth ? 'auth' : 'quota',
     ...(cloud ? { cloud: true } : {}),
     ...(wakeAt ? { wakeAt } : {}),
     reason: cleanReason,
@@ -2221,17 +2249,23 @@ async function recordPoolExhausted(ctx, exhausted, reason, issue = null) {
   };
   ctx.saveMachine({ ...m, poolOut });
   if (!already) {
-    const untilWords = resetAt ? `until ${new Date(resetAt).toISOString()}` : 'until the bounded retry window expires';
+    const untilWords = hasProviderReset ? `until ${new Date(resetAt).toISOString()}` : 'until the bounded retry window expires';
     try {
       await (ctx.ports.alert ?? (async () => {}))({
         issue: Number.isSafeInteger(issue) ? issue : 'pool',
         kind: 'usage-limit',
         update: true,
-        text: `Autopilot paused login-pool work ${untilWords}: every login in the pool reached quota or rate limits (last: "${cleanReason}", machine ${ctx.state.machine}).`,
-        tried: `Autopilot rotated across every configured login in the pool and put exhausted logins on cooldown ${untilWords}. No slot stays jammed and no retries are burned.`,
-        need: resetAt
-          ? `Nothing is needed if you want to wait: Autopilot resumes automatically after ${new Date(resetAt).toISOString()}. Or add a healthy login with pdd accounts add and run pdd autopilot start.`
-          : 'Check sign-in and usage limits on this machine with pdd autopilot doctor, or add a healthy login with pdd accounts add and run pdd autopilot start.',
+        text: isAuth
+          ? `Autopilot paused work until ${new Date(resetAt).toISOString()}: agent sign-in or authentication is unavailable (last: "${cleanReason}", machine ${ctx.state.machine}).`
+          : `Autopilot paused login-pool work ${untilWords}: every login in the pool reached quota or rate limits (last: "${cleanReason}", machine ${ctx.state.machine}).`,
+        tried: isAuth
+          ? `Autopilot paused work until ${new Date(resetAt).toISOString()} instead of retrying a broken sign-in. No slot stays jammed and no retries are burned.`
+          : `Autopilot rotated across every configured login in the pool and put exhausted logins on cooldown ${untilWords}. No slot stays jammed and no retries are burned.`,
+        need: isAuth
+          ? 'Check sign-in on this machine with pdd autopilot doctor, re-authenticate or add a healthy login with pdd accounts add, then run pdd autopilot start.'
+          : (hasProviderReset
+            ? `Nothing is needed if you want to wait: Autopilot resumes automatically after ${new Date(resetAt).toISOString()}. Or add a healthy login with pdd accounts add and run pdd autopilot start.`
+            : 'Check sign-in and usage limits on this machine with pdd autopilot doctor, or add a healthy login with pdd accounts add and run pdd autopilot start.'),
       });
     } catch (error) { ctx.warn(`Autopilot core alert failed: ${error.message}`); }
   }
@@ -2602,8 +2636,9 @@ async function intake(ctx, rows) {
   if (!['codex', 'claude', 'gemini', 'agy'].includes(state.agent?.kind)) return 'intake held: the core engine needs a Codex, Claude, Gemini or agy agent; run pdd autopilot start from a signed-in Codex, Claude, Gemini or agy';
   const activeMode = intakeMode(settings.intake) === 'active';
   if (!activeMode) delete state.intakeNote;
-  // The launcher asks for an opt-in label unless active intake evaluates open issues.
-  if (settings.labelRequired && !settings.label && !activeMode) return 'intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with pdd autopilot add N';
+  const hasAllowlist = Boolean(allowedIssueSet(settings));
+  // The launcher asks for an opt-in label unless active intake or an explicit issue allowlist scopes the work.
+  if (settings.labelRequired && !settings.label && !activeMode && !hasAllowlist) return 'intake held: no opt-in label; run pdd autopilot start --label pdd:autopilot and mark issues with pdd autopilot add N';
   // The machine pause: no new job starts until it ends; then intake goes on as usual.
   const pausedText = () => { const m = ctx.machineState(); return m.pausedUntil ? `new jobs paused until ${new Date(m.pausedUntil).toISOString()} (${m.pausedHours} h): the agent ended ${STRIKES} or more jobs in a row with no result` : null; };
   if (pausedText()) return pausedText();
@@ -2615,13 +2650,24 @@ async function intake(ctx, rows) {
     : `intake held: every login in the pool is exhausted${poolOut?.resetAt ? ` until ${new Date(poolOut.resetAt).toISOString()}` : ''}; no issue was claimed`;
   const checkIdlePool = async () => {
     const m = ctx.machineState();
-    if (ctx.ports.selectLogin && m.poolOut && (!Number.isFinite(m.poolOut.resetAt) || ctx.now() >= m.poolOut.resetAt)) {
+    if (!m.poolOut) return null;
+    if (Number.isFinite(m.poolOut.resetAt) && ctx.now() < m.poolOut.resetAt) return poolHeldText(m.poolOut);
+    if (ctx.ports.selectLogin) {
       const check = await ctx.ports.selectLogin();
       if (check === null || check?.state === 'ready') { clearPoolExhausted(ctx); return null; }
-      if (check?.state === 'exhausted') return poolHeldText(await recordPoolExhausted(ctx, check, check.cooling?.[0]?.reason ?? 'usage-limit', m.poolOut.issue));
+      const reason = check?.cooling?.[0]?.reason ?? check?.unavailable?.[0]?.reason ?? m.poolOut.reason ?? 'usage-limit';
+      return poolHeldText(await recordPoolExhausted(ctx, check, reason, m.poolOut.issue));
     }
-    return m.poolOut ? poolHeldText(m.poolOut) : null;
+    if (ctx.ports.agentReady) {
+      const readyNow = await ctx.ports.agentReady().catch(() => false);
+      if (readyNow) { clearPoolExhausted(ctx); return null; }
+      return poolHeldText(await recordPoolExhausted(ctx, null, m.poolOut.reason ?? 'auth-unavailable', m.poolOut.issue));
+    }
+    clearPoolExhausted(ctx);
+    return null;
   };
+  const poolHeld = await checkIdlePool();
+  if (poolHeld) return poolHeld;
   let others = [], candidateGroups = [], cards = null, busyJobs = [];
   if (activeMode) {
     delete state.intakeNote;
@@ -2648,7 +2694,7 @@ async function intake(ctx, rows) {
       return await checkActiveIntakeLogin();
     }
     // Check decision replies even before ready cards exist so answered questions clear pdd:needs-decision promptly.
-    const cardsNow = activeReadyCards(ctx.root, rows, ctx.fs);
+    const cardsNow = activeReadyCards(ctx.root, rows, ctx.fs, { minConfidence: settings.minIntakeConfidence });
     cards = cardsNow;
     if (!cards.size) {
       await decisionReplies(ctx, rows);
@@ -4872,9 +4918,17 @@ async function reviewState(ctx, job, prBody = '', preselected = null, { noLaunch
     let reviewExtras = null;
     if (!scoped) {
       const priorMustFix = extractPriorMustFixChecklist(job.rounds);
-      const testInv = job.testInventory?.head === job.head
-        ? job.testInventory
-        : await preReviewTestInventoryCheck(ctx, job, prBody).catch(() => null);
+      const cachedTestInv = (resolvedBaseSha = null) => (
+        job.testInventory?.head === job.head
+        && !job.testInventory.failed
+        && (!resolvedBaseSha || job.testInventory.baseSha === resolvedBaseSha)
+          ? job.testInventory
+          : null
+      );
+      const refreshedTestInv = await preReviewTestInventoryCheck(ctx, job, prBody).catch(() => null);
+      const testInv = refreshedTestInv && !refreshedTestInv.failed
+        ? refreshedTestInv
+        : (cachedTestInv(refreshedTestInv?.baseSha ?? null) ?? refreshedTestInv);
       const domainDecisions = await collectBaseDomainDecisions(ctx, job, changed).catch(() => ({ entries: [], text: '' }));
       const hygieneText = job.hygiene?.head === job.head ? formatHygieneForReview(job.hygiene) : '';
       reviewExtras = {
@@ -4993,11 +5047,19 @@ async function reviewState(ctx, job, prBody = '', preselected = null, { noLaunch
       ctx.saveJob(job);
       return reviewState(ctx, job, prBody);
     }
-    const service = ctx.ports.exhaustLogin ? serviceProblem(ctx, job.review.agent) : null;
-    const reviewPooled = service && isPoolRotatableService(service)
+    const service = serviceProblem(ctx, job.review.agent);
+    const preserveReviewShell = () => {
+      const preserved = {
+        ...(job.review?.scoped ? { scoped: job.review.scoped } : {}),
+        ...(job.review?.crossFamilyFallback ? { crossFamilyFallback: true } : {}),
+        ...(Array.isArray(job.review?.failedReviewLoginIds) && job.review.failedReviewLoginIds.length ? { failedReviewLoginIds: job.review.failedReviewLoginIds } : {}),
+      };
+      return Object.keys(preserved).length ? { head: job.head, ...preserved } : null;
+    };
+    const reviewPooled = service && isPoolRotatableService(service) && ctx.ports.exhaustLogin
       ? (job.review.agent?.cloud || !ctx.ports.selectLogin || (await ctx.ports.selectLogin()) !== null)
       : false;
-    if (service && isPoolRotatableService(service) && reviewPooled) {
+    if (service && isPoolRotatableService(service) && ctx.ports.exhaustLogin && reviewPooled) {
       const prevReviewAgent = job.review.agent;
       const rateClass = isQuotaExhaustionMessage(service) ? classifyRateLimitFailure(service, prevReviewAgent?.accountWindows) : null;
       if (!await cleanupPart(ctx, job, prevReviewAgent, 'review')) return { state: 'running' };
@@ -5044,27 +5106,27 @@ async function reviewState(ctx, job, prBody = '', preselected = null, { noLaunch
         accountWindows: prevReviewAgent?.accountWindows ?? null,
         ...(sameFamilyAllowedKinds?.length ? { allowedKinds: sameFamilyAllowedKinds } : {}),
       });
-      if (next !== null) {
-        if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
-          job.poolRotations = (job.poolRotations ?? 0) + 1;
-          delete job.review.burstRetried;
-          clearPoolExhausted(ctx);
-          job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
-          job.review.agent = null;
-          job.review.retry = true;
-          ctx.saveJob(job);
-          return reviewState(ctx, job, prBody, next);
-        }
-        const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-        const preserved = {
-          ...(job.review?.scoped ? { scoped: job.review.scoped } : {}),
-          ...(job.review?.crossFamilyFallback ? { crossFamilyFallback: true } : {}),
-          ...(Array.isArray(job.review?.failedReviewLoginIds) && job.review.failedReviewLoginIds.length ? { failedReviewLoginIds: job.review.failedReviewLoginIds } : {}),
-        };
-        job.review = Object.keys(preserved).length ? { head: job.head, ...preserved } : null;
-        await pausePrForPool(ctx, job, poolOut, service);
-        return { state: 'pool-paused' };
+      if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
+        job.poolRotations = (job.poolRotations ?? 0) + 1;
+        delete job.review.burstRetried;
+        clearPoolExhausted(ctx);
+        job.review.attempts = Math.max(0, (job.review.attempts ?? 1) - 1);
+        job.review.agent = null;
+        job.review.retry = true;
+        ctx.saveJob(job);
+        return reviewState(ctx, job, prBody, next);
       }
+      const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
+      job.review = preserveReviewShell();
+      await pausePrForPool(ctx, job, poolOut, service);
+      return { state: 'pool-paused' };
+    }
+    if (service && isTerminalAccountError(service)) {
+      if (!await cleanupPart(ctx, job, job.review.agent, 'review')) return { state: 'running' };
+      const poolOut = await recordPoolExhausted(ctx, null, service, job.issue);
+      job.review = preserveReviewShell();
+      await pausePrForPool(ctx, job, poolOut, service);
+      return { state: 'pool-paused' };
     }
     if (job.review.attempts >= 2) return { state: 'missing' };
     job.review.retry = true; return reviewState(ctx, job, prBody);
@@ -5318,7 +5380,9 @@ function queuedCommand(ctx, cwd, testCommand) {
   const rawShare = ctx.ports.machine?.priority?.('suite')?.checkCpus ?? (Number.isSafeInteger(envShare) && envShare > 0 ? envShare : null);
   const shareCpus = Number.isSafeInteger(rawShare) && rawShare > 0 ? rawShare : null;
   const effectiveCommand = boundSuiteCommand(testCommand, pkg, shareCpus);
-  const suite = [ctx.pdd, 'workflow', 'suite', '--command', effectiveCommand, '--timeout', '0'];
+  const suite = ctx.ports.suiteRunner === 'cli'
+    ? [ctx.pdd, 'autopilot', 'suite', '--command', effectiveCommand, '--timeout', '0']
+    : [ctx.suiteEntry, 'suite', '--command', effectiveCommand, '--timeout', '0'];
   const deps = ['dependencies', 'devDependencies', 'optionalDependencies'].some(key => object(pkg?.[key]) && Object.keys(pkg[key]).length);
   const has = name => Boolean(ctx.fs.existsSync?.(join(cwd, name)));
   const install = !deps ? null
@@ -5396,7 +5460,7 @@ async function suiteState(ctx, job, { baseSuiteCommand = undefined, reviewPassed
   const failure = {
     kind: 'suite',
     command: suiteCommand,
-    runner: 'local full-suite runner (pdd workflow suite)',
+    runner: 'local full-suite runner (pdd autopilot suite)',
     platform: `${process.platform} (${process.arch})`,
     concurrency: '$PDD_CHECK_CPUS (shared full-suite queue)',
     env: 'CI=true',
@@ -6914,14 +6978,20 @@ async function detectSavedRealBindingBlocker(ctx, job, pr) {
   return null;
 }
 
-function collectBacksideLint(headTree, changed) {
+function collectBacksideLint(headTree, changed, baseTree) {
   if (!headTree) {
     return {
       codes: ['lint-checkout-unavailable'],
       details: ['clean checkout at PR head is unavailable for backside validation lint'],
     };
   }
-  const lintOut = lintRepoProject({ root: headTree });
+  if (!baseTree) {
+    return {
+      codes: ['lint-base-checkout-unavailable'],
+      details: ['clean checkout at verified base commit is unavailable for backside validation lint config'],
+    };
+  }
+  const lintOut = lintRepoProject({ root: headTree, config: baseTree, workspaceRoot: baseTree });
   const changedSet = new Set(changed);
   const codeSet = new Set();
   const details = [];
@@ -7343,7 +7413,7 @@ function selectExecutedSuiteTests(tracked, suiteCmd, suiteLog, headTree, fs) {
 async function collectRealValidationEvidence(ctx, job, { headTree, changed, surfaces, nativeCtx, suite, lintCodes }) {
   const suiteCmd = resolveSuiteCommand(ctx, job) || 'npm test';
   const offlinePassed = suite?.state === 'pass';
-  const isBugFix = job.skill === 'pdd-bug'
+  const isBugFix = /^(?:pdd-)?bug$/i.test(String(job.skill ?? '').trim())
     || (Array.isArray(job.labels) && job.labels.some(l => /^(?:bug|type:bug|pdd:bug)$/i.test(l)));
 
   if (surfaces.docsOnly) {
@@ -7688,7 +7758,12 @@ async function runValidatorV2Gate(ctx, job, pr, { suite }) {
   try { headTree = await treeAt(ctx, job, 'agent', job.head); } catch { headTree = null; }
   const nativeCtx = collectNativeOnlyContext(ctx, headTree, changed);
   const surfaces = detectChangedSurfaces({ changedFiles: changed, nativeOnlyFiles: nativeCtx.nativeOnlyFiles });
-  const lint = collectBacksideLint(headTree, changed);
+  let baseTree = null;
+  try {
+    const baseTip = await resolveVerifiedBaseTip(ctx, job);
+    if (isGitCommitSha(baseTip)) baseTree = await treeAt(ctx, job, 'base', baseTip);
+  } catch { baseTree = null; }
+  const lint = collectBacksideLint(headTree, changed, baseTree);
   let supplied = null;
   if (typeof ctx.ports.validateE2e === 'function') {
     supplied = await ctx.ports.validateE2e({
@@ -8357,29 +8432,42 @@ export function evaluateTestInventoryGate({ inventory = null, deletedTestFiles =
 const isGitCommitSha = value => typeof value === 'string' && /^(?:[a-f\d]{40}|[a-f\d]{64})$/i.test(value);
 const isSafeBranchRefName = value => named(value) && value.length <= 255 && !value.startsWith('-') && !/[\x00-\x20\x7f~^:?*\[\\]|\.\.|\/\/|@\{|\.lock$|\/$/.test(value);
 
-async function resolveVerifiedBaseTip(ctx, job, cwd = null) {
-  if (job.paths?.head === job.head && isGitCommitSha(job.paths.base)) {
-    return job.paths.base;
+async function resolveVerifiedBaseTip(ctx, job, cwd = null, { preferLiveBase = false } = {}) {
+  const cachedBase = job.paths?.head === job.head && isGitCommitSha(job.paths.base) ? job.paths.base : '';
+  if (!preferLiveBase && cachedBase) {
+    return cachedBase;
   }
   const baseBranch = ctx.state?.baseBranch ?? 'main';
-  if (!isSafeBranchRefName(baseBranch)) return '';
+  if (!isSafeBranchRefName(baseBranch)) return preferLiveBase ? cachedBase : '';
   const targetCwd = cwd || (job.worktree && ctx.fs.existsSync?.(job.worktree) ? job.worktree : ctx.state?.cwd);
-  if (!targetCwd) return '';
+  if (!targetCwd) return preferLiveBase ? cachedBase : '';
+  const cacheKey = `${targetCwd}\0${baseBranch}`;
+  if (ctx._liveBaseTips?.has(cacheKey)) {
+    const memo = ctx._liveBaseTips.get(cacheKey);
+    if (memo) return memo;
+  }
   const ref = `refs/remotes/origin/${baseBranch}^{commit}`;
   const readTip = async () => {
     const out = String(await ctx.git(['rev-parse', '--verify', ref], targetCwd) ?? '').trim();
     return isGitCommitSha(out) ? out : '';
   };
+  const remember = tip => {
+    if (tip) {
+      ctx._liveBaseTips ??= new Map();
+      ctx._liveBaseTips.set(cacheKey, tip);
+    }
+    return tip;
+  };
   try {
     const tip = await readTip();
-    if (tip) return tip;
+    if (tip) return remember(tip);
   } catch { /* retry once after fetch */ }
   await ctx.git(['fetch', '-q', 'origin', '--', baseBranch], targetCwd).catch(() => {});
   try {
-    return await readTip();
-  } catch {
-    return '';
-  }
+    const tip = await readTip();
+    if (tip) return remember(tip);
+  } catch { /* fall through */ }
+  return preferLiveBase ? cachedBase : '';
 }
 
 async function preReviewHygieneCheck(ctx, job, changed = [], { changedError = null } = {}) {
@@ -8435,30 +8523,54 @@ async function preReviewHygieneCheck(ctx, job, changed = [], { changedError = nu
 async function preReviewTestInventoryCheck(ctx, job, prBody = '') {
   const mode = hygieneGateMode(ctx);
   const bodyKey = createHash('sha256').update(String(prBody ?? '')).digest('hex').slice(0, 16);
-  if (job.testInventory?.head === job.head && job.testInventory.mode === mode && job.testInventory.bodyKey === bodyKey && !job.testInventory.failed) {
-    return job.testInventory;
-  }
-  const failedResult = errorText => {
+  const failedResult = (errorText, resolvedBaseSha = null) => {
     ctx.warn?.(`Autopilot core pre-review test inventory failed for #${job.issue} @ ${short(job.head)}: ${errorText}`);
-    return { head: job.head, mode, bodyKey, failed: true, error: errorText, available: false, reason: errorText, text: '', hasTestChanges: false, newSkips: [], deletedTestFiles: [], unacknowledgedDeletedTests: [], unavailableFiles: [], reds: [] };
+    return { head: job.head, ...(isGitCommitSha(resolvedBaseSha) ? { baseSha: resolvedBaseSha } : {}), mode, bodyKey, failed: true, error: errorText, available: false, reason: errorText, text: '', hasTestChanges: false, newSkips: [], deletedTestFiles: [], unacknowledgedDeletedTests: [], unavailableFiles: [], reds: [] };
   };
   const cwd = job.worktree && ctx.fs.existsSync?.(job.worktree) ? job.worktree : ctx.state?.cwd;
   if (!cwd) return failedResult('worktree unavailable');
   const baseBranch = ctx.state?.baseBranch ?? 'main';
   if (!isSafeBranchRefName(baseBranch)) return failedResult(`unsafe base branch ref "${oneLine(baseBranch, 80)}"`);
-  await ctx.git(['fetch', '-q', 'origin', '--', baseBranch], cwd).catch(() => {});
-  const baseTip = await resolveVerifiedBaseTip(ctx, job, cwd);
+  const baseTip = await resolveVerifiedBaseTip(ctx, job, cwd, { preferLiveBase: true });
   let baseSha = '';
   if (isGitCommitSha(baseTip) && isGitCommitSha(job.head)) {
-    try {
-      const mb = String(await ctx.git(['merge-base', baseTip, job.head], cwd) ?? '').trim();
-      baseSha = isGitCommitSha(mb) ? mb : baseTip;
-    } catch {
-      baseSha = baseTip;
+    const mbKey = `${cwd}\0${baseTip}\0${job.head}`;
+    if (ctx._mergeBaseCache?.has(mbKey)) {
+      baseSha = ctx._mergeBaseCache.get(mbKey);
+    } else {
+      try {
+        const mb = String(await ctx.git(['merge-base', baseTip, job.head], cwd) ?? '').trim();
+        baseSha = isGitCommitSha(mb) ? mb : baseTip;
+      } catch {
+        baseSha = baseTip;
+      }
+      ctx._mergeBaseCache ??= new Map();
+      ctx._mergeBaseCache.set(mbKey, baseSha);
+    }
+  }
+  if (!isGitCommitSha(baseSha) || !isGitCommitSha(job.head)) {
+    await ctx.git(['fetch', '-q', 'origin', '--', baseBranch], cwd).catch(() => {});
+    const fetchedTip = await resolveVerifiedBaseTip(ctx, job, cwd, { preferLiveBase: true });
+    if (isGitCommitSha(fetchedTip) && isGitCommitSha(job.head)) {
+      try {
+        const mb = String(await ctx.git(['merge-base', fetchedTip, job.head], cwd) ?? '').trim();
+        baseSha = isGitCommitSha(mb) ? mb : fetchedTip;
+      } catch {
+        baseSha = fetchedTip;
+      }
     }
   }
   if (!isGitCommitSha(baseSha) || !isGitCommitSha(job.head)) {
     return failedResult('could not resolve verified base/head commit SHA');
+  }
+  if (
+    job.testInventory?.head === job.head
+    && job.testInventory?.baseSha === baseSha
+    && job.testInventory.mode === mode
+    && job.testInventory.bodyKey === bodyKey
+    && !job.testInventory.failed
+  ) {
+    return job.testInventory;
   }
   let inventory = null;
   try {
@@ -8466,17 +8578,17 @@ async function preReviewTestInventoryCheck(ctx, job, prBody = '') {
       ? await ctx.ports.collectTestInventory({ cwd, baseSha, headSha: job.head })
       : await collectTestInventory({ cwd, baseSha, headSha: job.head }, ctx.ports.testInventoryPorts ?? {});
   } catch (error) {
-    return failedResult(error?.message ?? 'collectTestInventory threw');
+    return failedResult(error?.message ?? 'collectTestInventory threw', baseSha);
   }
   if (!inventory || (!inventory.available && inventory.reason !== 'inventory limit exceeded')) {
-    return failedResult(inventory?.reason || 'test inventory unavailable');
+    return failedResult(inventory?.reason || 'test inventory unavailable', baseSha);
   }
   const deletedTestFiles = [];
   let hasChangedTestFiles = false;
   try {
     const r = await ctx.ports.git(['-c', 'core.quotePath=false', 'diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', baseSha, job.head, '--'], { cwd });
     if (r?.code !== 0) {
-      return failedResult(`git diff exited ${r?.code ?? 'unknown'}`);
+      return failedResult(`git diff exited ${r?.code ?? 'unknown'}`, baseSha);
     }
     const raw = String(r.stdout ?? '');
     const fields = raw.endsWith('\0') ? raw.slice(0, -1).split('\0') : (raw ? raw.split('\0') : []);
@@ -8493,7 +8605,7 @@ async function preReviewTestInventoryCheck(ctx, job, prBody = '') {
       }
     }
   } catch (error) {
-    return failedResult(error?.message ?? 'git diff failed');
+    return failedResult(error?.message ?? 'git diff failed', baseSha);
   }
   const gate = evaluateTestInventoryGate({ inventory, deletedTestFiles, prBody, mode, hasChangedTestFiles });
   job.testInventory = {
@@ -9739,7 +9851,8 @@ export function pathRules({ changed = [], baseFiles = [], before = EMPTY_READ, a
   const wait = !unchecked.length ? null : byBindings.length ? `pdd-bindings.json cannot be read on main, so the owners of ${byBindings.slice(0, 10).map(c => c.path).join(', ')}${byBindings.length > 10 ? ` and ${byBindings.length - 10} more` : ''} are not checked`
     : `${unchecked.slice(0, 10).map(c => c.path).join(', ')} could not be read on main`;
   const uniqueReds = [...new Set(reds)];
-  return { reds: uniqueReds, owners, unowned: changed.filter(c => state(c) === 'unowned').map(c => c.path), unchecked: unchecked.map(c => c.path), wait, bindingsWait: byBindings.length > 0, quotes };
+  const letters = [...new Set(lines.map(l => l.path))].sort();
+  return { reds: uniqueReds, letters, owners, unowned: changed.filter(c => state(c) === 'unowned').map(c => c.path), unchecked: unchecked.map(c => c.path), wait, bindingsWait: byBindings.length > 0, quotes };
 }
 // The native path checks, once per head and PR body, from clean checkouts of the base tip and the head (pathRules).
 // R5 is only a hint for the reviewer: prompts at the head that mention a changed file that is unowned on the base.
@@ -9756,7 +9869,7 @@ async function pathChecks(ctx, job, body) {
   const baseRoot = await treeAt(ctx, job, 'base', tip), headRoot = await treeAt(ctx, job, 'head', job.head);
   const baseFiles = treeFiles(baseRoot), headFiles = treeFiles(headRoot);
   const before = ownerRead(ctx.fs, baseRoot, baseFiles), after = ownerRead(ctx.fs, headRoot, headFiles);
-  const { reds, owners, unowned, unchecked, wait, bindingsWait, quotes } = pathRules({ changed, baseFiles, before, after, body, adopting: /adopt\s+pdd/i.test(`${job.title}\n${job.body}`) });
+  const { reds, letters, owners, unowned, unchecked, wait, bindingsWait, quotes } = pathRules({ changed, baseFiles, before, after, body, adopting: /adopt\s+pdd/i.test(`${job.title}\n${job.body}`) });
   const hints = [];
   for (const path of unowned.filter(path => !path.endsWith('.prompt.md')))
     for (const prompt of headFiles.filter(file => file.endsWith('.prompt.md'))) { try { if (ctx.fs.readFileSync(join(headRoot, prompt), 'utf8').includes(path)) hints.push(`${prompt} mentions ${path}`); } catch { /* Skipped. */ } }
@@ -9777,7 +9890,7 @@ async function pathChecks(ctx, job, body) {
   const basePromptOwners = [...baseOwnersMap.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([prompt, filesSet]) => ({ prompt, files: [...filesSet].sort().slice(0, 10) }));
-  job.paths = { head: job.head, body: key, base: tip, reds, hints: hints.slice(0, 20), owners, unowned, unchecked, wait, bindingsWait, quotes, basePromptOwners };
+  job.paths = { head: job.head, body: key, base: tip, reds, letters, hints: hints.slice(0, 20), owners, unowned, unchecked, wait, bindingsWait, quotes, basePromptOwners };
   // P1 (debate B): the job's changed files go into its claim record for other jobs (a note and an order hint, no lock).
   const files = [...new Set(changed.map(c => c.path))].sort();
   if (!sameList(files, job.files ?? [])) { job.files = files; await writeClaimRecord(ctx, job, { files }); }
@@ -10245,6 +10358,19 @@ async function issueStop(ctx, job, hang) {
   if (repair) return repairOrEnd(ctx, job, [hangRed(hang)], []);
   return end(ctx, job, cause('job', 'no-result', `${hangWords(hang)} with no output and almost no CPU at head ${short(hang.head)} (the same command hung again at this head)`, { owner: 'issue', hang }));
 }
+function rollbackStepCounters(job) {
+  if (job.role === 'repair') {
+    job.repairs = Math.max(0, (job.repairs ?? 1) - 1);
+    if (job.lastRepairCounters?.localTest) job.localTestRepairs = job.lastRepairCounters.prevLocalTestRepairs;
+    if (job.lastRepairCounters?.validation) job.validationRepairs = job.lastRepairCounters.prevValidationRepairs;
+    delete job.lastRepairCounters;
+    if (Array.isArray(job.rounds) && job.rounds.length) job.rounds = job.rounds.slice(0, -1);
+    delete job.repairReproduce;
+  } else if (job.role === 'conflict') {
+    job.conflictExits = Math.max(0, (job.conflictExits ?? 1) - 1);
+    delete job.conflict;
+  }
+}
 // A build, repair or conflict agent that T1 stopped, or that ended with no result: service, issue or machine.
 async function agentStop(ctx, job, seen, quiet) {
   recordPartTelemetry(ctx, job, job.agent, job.role, seen);
@@ -10297,34 +10423,32 @@ async function agentStop(ctx, job, seen, quiet) {
       }
     }
     const next = await ctx.ports.exhaustLogin({ loginId: prevAgent?.loginId ?? ctx.state.agent?.id, resetAt: null, reason: service, accountWindows: prevAgent?.accountWindows ?? null });
-    if (next !== null) {
-      if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
-        job.poolRotations = (job.poolRotations ?? 0) + 1;
-        clearPoolExhausted(ctx);
-        await restartStepWith(next, false);
-        return;
-      }
-      const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
-      if (Number.isSafeInteger(job.pr)) {
-        if (job.role === 'repair') {
-          job.repairs = Math.max(0, (job.repairs ?? 1) - 1);
-          if (job.lastRepairCounters?.localTest) job.localTestRepairs = job.lastRepairCounters.prevLocalTestRepairs;
-          if (job.lastRepairCounters?.validation) job.validationRepairs = job.lastRepairCounters.prevValidationRepairs;
-          delete job.lastRepairCounters;
-          if (Array.isArray(job.rounds) && job.rounds.length) job.rounds = job.rounds.slice(0, -1);
-          delete job.repairReproduce;
-        } else if (job.role === 'conflict') {
-          job.conflictExits = Math.max(0, (job.conflictExits ?? 1) - 1);
-          delete job.conflict;
-        }
-        job.agent = null;
-        return pausePrForPool(ctx, job, poolOut, service);
-      }
-      const endMsg = poolOut?.cloud && poolOut?.wakeAt
-        ? `Waiting on AI quota until ${poolOut.wakeAt}`
-        : `all logins in the pool reached quota limits: "${service}"`;
-      return end(ctx, job, cause('job', 'no-result', endMsg, { service, owner: 'service', poolExhausted: true }));
+    if (next?.state === 'ready' && (job.poolRotations ?? 0) < Math.max(1, next.poolSize ?? 4)) {
+      job.poolRotations = (job.poolRotations ?? 0) + 1;
+      clearPoolExhausted(ctx);
+      await restartStepWith(next, false);
+      return;
     }
+    const poolOut = await recordPoolExhausted(ctx, next, service, job.issue);
+    if (Number.isSafeInteger(job.pr)) {
+      rollbackStepCounters(job);
+      job.agent = null;
+      return pausePrForPool(ctx, job, poolOut, service);
+    }
+    const endMsg = poolOut?.cloud && poolOut?.wakeAt
+      ? `Waiting on AI quota until ${poolOut.wakeAt}`
+      : `all logins in the pool reached quota limits: "${service}"`;
+    return end(ctx, job, cause('job', 'no-result', endMsg, { service, owner: 'service', poolExhausted: true }));
+  }
+  if (service && isTerminalAccountError(service)) {
+    if (!await cleanupPart(ctx, job, job.agent, job.role)) return;
+    const poolOut = await recordPoolExhausted(ctx, null, service, job.issue);
+    if (Number.isSafeInteger(job.pr)) {
+      rollbackStepCounters(job);
+      job.agent = null;
+      return pausePrForPool(ctx, job, poolOut, service);
+    }
+    return end(ctx, job, cause('job', 'no-result', `account auth or quota unavailable: "${service}"`, { service, owner: 'service', poolExhausted: true }));
   }
   const said = service ? `: the AI service said "${service}" (an agent account or service problem, not this issue)` : '';
   const text = quiet ? `${quietText(ctx, `${job.role} agent`)}${said}`
@@ -10869,7 +10993,9 @@ async function finishLocal(ctx, job, outcome, text) {
     await step('history', () => {
       const nowAt = ctx.now();
       const ev = honestEvidence(job) ?? null;
+      const letters = Array.isArray(job.paths?.letters) ? job.paths.letters : [];
       appendHistory(ctx, { at: nowAt, issue: job.issue, ...(jobIssues(job).length > 1 ? { issues: jobIssues(job) } : {}), ...(job.skill ? { skill: job.skill } : {}), outcome, text: oneLine(text), pr: job.pr ?? null, log: job.agent?.log ?? null, evidence: ev,
+        ...(letters.length ? { paths: { letters } } : {}),
         ...(job.runtimeOriginal ? { runtimeOriginal: job.runtimeOriginal } : {}),
         ...(job.legacyCleanup?.length ? { legacyCleanup: job.legacyCleanup } : {}),
         ...(job.end?.cause?.ask ? { ask: job.end.cause.ask } : {}), ...(job.decided ? { decided: oneLine(job.decided.question, 300) } : {}),
@@ -10877,7 +11003,6 @@ async function finishLocal(ctx, job, outcome, text) {
         ...(outcome === 'released' && job.end?.cause?.counted ? { noResult: true } : {}), ...(outcome === 'ended' ? { reset: true } : {}), ...(job.end?.cause?.owner ? { owner: job.end.cause.owner } : {}),
         ...(job.telemetry ? { telemetry: { phases: job.telemetry.phases, tokens: job.telemetry.tokens } } : {}) });
       const metricsStateDir = ctx.ports.metricsStateDir ?? (basename(dirname(ctx.root)) === 'autopilot' ? dirname(dirname(ctx.root)) : join(ctx.root, '.metrics-state'));
-      const letters = Array.isArray(job.paths?.letters) ? job.paths.letters : [];
       const wallMin = job.telemetry?.phases?.wallClockMinutes ?? (Number.isFinite(job.started) && nowAt > job.started ? (nowAt - job.started) / 60000 : null);
       recordAutopilotMetric({
         repo: ctx.repo,
@@ -10916,7 +11041,20 @@ const SERVICE_WORDS = new RegExp([
   /\bresource_exhausted\b/, /\bquota (?:has been )?exhausted\b/, /\b(?:weekly|daily|monthly|spending)[_ ](?:usage[_ ])?limit\b/, /\bspend[_ ]control\b/,
   /\bhit your (?:usage|rate) limit\b/, /\busage[_ ]limit[_ ](?:reached|exceeded)\b/, /\brate[_ ]limit[_ ](?:reached|exceeded|error)\b/, /\btoo many requests\b/,
   /\boverloaded_error\b/, /\bnot logged in\b/, /\bplease (?:run \/login|log ?in|sign ?in)\b/, /\bfailed to (?:authenticate|refresh token)\b/, /\boauth access token is invalid\b/, /\binvalid[_ ]api[_ ]key\b/, /\bauthentication_error\b/,
+  /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_(?:reused|expired)|oauth_token_revoked|oauth_(?:not_allowed_for_organization|org_not_allowed)|gateway_grant_revoked|share_revoked)\b/,
+  /\bauth(?:entication)? (?:is )?unavailable\b/, /\baccount (?:is )?(?:disabled|suspended|deactivated|pool (?:is )?exhausted)\b/,
+  /\b(?:zero[_ ]quota|(?:0|no) remaining quota|all (?:accounts|logins) (?:are )?exhausted|no available (?:accounts|logins))\b/,
+  /disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code/,
 ].map(re => re.source).join('|'), 'i');
+const TERMINAL_ACCOUNT_ERROR = new RegExp([
+  /\b(?:api error|http|status(?: code)?)\W{0,3}401\b/, /\b401\s+unauthorized\b/,
+  /\b(?:authentication_error|invalid[_ ]api[_ ]key|oauth access token is invalid|failed to (?:authenticate|refresh token)|not logged in|please run \/login)\b/,
+  /\b(?:reauth_required|needs_reauth|token_revoked|invalid_grant|refresh_token_(?:reused|expired)|oauth_token_revoked|oauth_(?:not_allowed_for_organization|org_not_allowed)|gateway_grant_revoked|share_revoked)\b/,
+  /\bauth(?:entication)? (?:is )?unavailable\b/, /\baccount (?:is )?(?:disabled|suspended|deactivated|pool (?:is )?exhausted)\b/,
+  /\b(?:zero[_ ]quota|(?:0|no) remaining quota|all (?:accounts|logins) (?:are )?exhausted|no available (?:accounts|logins))\b/,
+  /disabled\s+claude\s+subscription\s+access\s+for\s+claude\s+code/,
+].map(re => re.source).join('|'), 'i');
+const isTerminalAccountError = text => Boolean(typeof text === 'string' && text.trim() && !TEST_DIAGNOSTIC.test(text) && TERMINAL_ACCOUNT_ERROR.test(text));
 // In a terminal error event a clear account or service phrase counts too (an ordinary test error keeps its strike).
 const SERVICE_EVENT = /\bout of credits\b|\b(?:service|server|model|provider|api)(?: is)? (?:at|over) capacity\b|\b(?:service|server|model|provider|api)(?: is)? overloaded\b|^\W*(?:sign-?in|log-?in|login|authentication) required\b|\bquota exceeded\b/i;
 // A message that reads like a test diagnostic is never a service problem, in any shape (Codex round 4).
@@ -11433,8 +11571,11 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   const fs = ports.fs ?? nativeFs, now = (ports.now ?? Date.now)(), jobs = readJobs(fs, ports.root), machine = readMachine(fs, ports.root, null, now);
   const busy = jobs.filter(holdsSlot).length, age = at => `${Math.max(0, Math.round((now - at) / MIN))}m`;
   const from = sources.engine === 'machine' ? ' (this machine: pdd autopilot start --engine core)' : sources.engine === 'pdd.json' ? ' (pdd.json autopilot.engine)' : '';
+  const allowedText = Array.isArray(settings.allowedIssues) && settings.allowedIssues.length
+    ? `; only issues ${settings.allowedIssues.map(n => `#${n}`).join(', ')}`
+    : '';
   const lines = [`Autopilot engine core${from}, mode ${settings.mode}${sources.mode === 'machine' ? ' (this machine)' : ''}${settings.mode === 'observe' ? ' (every check, no merge)' : ''}: ${state.repo ?? 'repository unknown'} in ${state.cwd} · base ${state.baseBranch ?? 'unknown'} · agent ${state.agent?.kind ?? 'none'}`,
-    `Jobs: ${busy} of ${settings.runs} slots busy; no-progress limit ${settings.quietMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${sources.report === 'machine' ? ' (this machine)' : ''}; decisions ${settings.decisions ?? 'decide'}${sources.decisions === 'machine' ? ' (this machine)' : ''}${settings.label ? `; only issues with ${settings.label}${sources.label === 'machine' ? ' (this machine)' : sources.label === 'pdd.json' ? ' (pdd.json)' : ''}` : intakeMode(settings.intake) === 'active' ? '; active intake (ready cards)' : ''}`];
+    `Jobs: ${busy} of ${settings.runs} slots busy; no-progress limit ${settings.quietMinutes} minutes; repairs ${settings.repairs}; reports ${settings.report}${sources.report === 'machine' ? ' (this machine)' : ''}; decisions ${settings.decisions ?? 'decide'}${sources.decisions === 'machine' ? ' (this machine)' : ''}${settings.label ? `; only issues with ${settings.label}${sources.label === 'machine' ? ' (this machine)' : sources.label === 'pdd.json' ? ' (pdd.json)' : ''}` : intakeMode(settings.intake) === 'active' ? '; active intake (ready cards)' : ''}${allowedText}`];
   if (named(guard)) lines.push(guard);
   lines.push(machine.pausedUntil ? `New jobs paused until ${new Date(machine.pausedUntil).toISOString()} (${machine.pausedHours} h): the agent ended ${machine.streak} jobs in a row with no result; then intake goes on.`
     : `No pause: ${machine.streak} no-result end(s) in a row (a pause starts at ${STRIKES}; the next pause is ${machine.hours} h).`);

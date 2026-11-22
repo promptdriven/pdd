@@ -159,7 +159,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const executable = path => { try { files.accessSync(path, constants.X_OK); return files.statSync(path).isFile(); } catch { return false; } };
   rememberSecrets(...knownSecretValues(env));
   const checks = [];
-  const add = (id,status,detail,fix) => checks.push({id,status:status==='fail' && !['agent','agent-signin'].includes(id)?'warn':status,detail:clean(detail),fix});
+  const add = (id,status,detail,fix) => checks.push({id,status,detail:clean(detail),fix});
   const retry = `${quote(ports.nodePath ?? process.execPath)} ${quote(join(input.packageRoot,'bin/pdd.mjs'))} autopilot doctor`;
   const install = name => platform === 'darwin' ? `brew install ${name}` : `sudo apt-get install ${name}`;
   const selected = (env.PATH ?? '').split(delimiter).map(dir => resolve(cwd,dir || '.', 'pdd')).find(executable);
@@ -168,16 +168,16 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const correct = selected && same(selected,join(input.packageRoot,'bin/pdd.mjs')) && ready(pathHelp) && /autopilot/.test(pathHelp.stdout);
   // Only accept a version-shaped value, never arbitrary stdout from another CLI.
   const version = String(pathVersion?.stdout ?? '').trim().match(/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/)?.[0] ?? 'unknown';
-  add('path',correct?'pass':'fail',selected?`${selected} (${version}); ${correct?'this install has Autopilot':'PATH must select this install with Autopilot'}`:'pdd missing on PATH',correct?'pdd autopilot doctor':`npm install -g ${quote(input.packageRoot)} && export PATH="$(npm prefix -g)/bin:$PATH" && hash -r && ${retry}`);
+  add('path',correct?'pass':'warn',selected?`${selected} (${version}); ${correct?'this install has Autopilot':'PATH must select this install with Autopilot'}`:'pdd missing on PATH',correct?'pdd autopilot doctor':`npm install -g ${quote(input.packageRoot)} && export PATH="$(npm prefix -g)/bin:$PATH" && hash -r && ${retry}`);
   const parts = node.split('.').map(Number);
   add('node',parts[0]>22 || parts[0]===22 && (parts[1]>20 || parts[1]===20 && parts[2]>=0)?'pass':'fail',`Node ${node}; requires 22.20.0 or newer`,'nvm install 22.20.0 && nvm use 22.20.0');
   add('git',ready(await run('git',['--version']))?'pass':'fail','Git installation',install('git'));
   const root = await run('git',['rev-parse','--show-toplevel']);
   if (ready(root) && root.stdout.trim()) cwd = root.stdout.trim();
-  add('repository',ready(root)&&Boolean(root.stdout.trim())?'pass':'fail','Git working repository','git clone https://github.com/OWNER/REPO.git');
+  add('repository',ready(root)&&Boolean(root.stdout.trim())?'pass':'warn','Git working repository','git clone https://github.com/OWNER/REPO.git');
   add('github-cli',ready(await run('gh',['--version']))?'pass':'fail','GitHub CLI installation',install('gh'));
   const auth = await run('gh',['auth','status']);
-  add('github-auth',ready(auth)?'pass':'fail','GitHub CLI sign-in','gh auth login');
+  add('github-auth',ready(auth)?'pass':'warn','GitHub CLI sign-in','gh auth login');
   const metadataReply = await run('gh',['repo','view','--json','nameWithOwner,defaultBranchRef,viewerPermission,mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed']);
   const metadata = ready(metadataReply) ? json(metadataReply.stdout) : null;
   const repo = metadata?.nameWithOwner, branch = metadata?.defaultBranchRef?.name;
@@ -186,9 +186,9 @@ export async function runAutopilotDoctor(input, ports = {}) {
   const originRepo = githubOriginRepository(origin.stdout);
   const write = ['ADMIN','MAINTAIN','WRITE'].includes(metadata?.viewerPermission);
   const permission = named && originRepo?.toLowerCase()===repo.toLowerCase() && write;
-  add('github-permission',permission ? 'pass':'fail',`${named?repo:'repository unavailable'}; permission ${['ADMIN','MAINTAIN','WRITE','TRIAGE','READ'].includes(metadata?.viewerPermission)?metadata.viewerPermission:'unknown'}; push and PR need write access`,permission?`gh repo view ${quote(repo)} --json viewerPermission`:named?`gh repo fork ${quote(repo)} --clone`:'gh auth setup-git');
+  add('github-permission',permission ? 'pass':'warn',`${named?repo:'repository unavailable'}; permission ${['ADMIN','MAINTAIN','WRITE','TRIAGE','READ'].includes(metadata?.viewerPermission)?metadata.viewerPermission:'unknown'}; push and PR need write access`,permission?`gh repo view ${quote(repo)} --json viewerPermission`:named?`gh repo fork ${quote(repo)} --clone`:'gh auth setup-git');
   const merge = [metadata?.mergeCommitAllowed,metadata?.squashMergeAllowed,metadata?.rebaseMergeAllowed].includes(true);
-  add('merge-method',merge?'pass':'fail','Repository must enable a merge method; permission alone does not bypass reviews',merge?`gh repo view ${quote(repo)} --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`:named?`gh repo edit ${quote(repo)} --enable-squash-merge`:'gh auth login');
+  add('merge-method',merge?'pass':'warn','Repository must enable a merge method; permission alone does not bypass reviews',merge?`gh repo view ${quote(repo)} --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed`:named?`gh repo edit ${quote(repo)} --enable-squash-merge`:'gh auth login');
   const rulesEndpoint = named && branch ? `repos/${repo}/rules/branches/${encodeURIComponent(branch)}` : null;
   const ruleReply = rulesEndpoint ? await run('gh',['api',rulesEndpoint]) : null;
   const rules = ready(ruleReply)?json(ruleReply.stdout):null;
@@ -241,11 +241,11 @@ export async function runAutopilotDoctor(input, ports = {}) {
   }
 
   const block = ['CLAUDE.md','AGENTS.md'].some(name=>/<!-- pdd:start -->[\s\S]*<!-- pdd:end -->/.test(read(join(cwd,name))??''));
-  add('setup-block',block?'pass':'fail','PDD instructions in AGENTS.md or CLAUDE.md','pdd setup');
+  add('setup-block',block?'pass':'warn','PDD instructions in AGENTS.md or CLAUDE.md','pdd setup');
   const kind = agent?.kind ?? preferred?.kind ?? 'codex';
   const roots = kind==='claude'?[join(cwd,'.claude','skills'),join(env.CLAUDE_CONFIG_DIR??join(env.HOME??'','.claude'),'skills')]:[join(cwd,'.agents','skills'),join(env.HOME??'','.agents','skills')];
   const complete = roots.some(root=>skills.every(skill=>read(join(root,skill,'SKILL.md'))!==null));
-  add('setup-skills',complete?'pass':'fail',`${kind} PDD skill bundle`,'pdd setup');
+  add('setup-skills',complete?'pass':'warn',`${kind} PDD skill bundle`,'pdd setup');
   const userRoots = [...new Set([env.HOME?join(env.HOME,'.agents','skills'):null, env.CLAUDE_CONFIG_DIR?join(env.CLAUDE_CONFIG_DIR,'skills'):(env.HOME?join(env.HOME,'.claude','skills'):null)].filter(Boolean))];
   const retiredByRoot = [];
   for (const userRoot of userRoots) {
@@ -276,7 +276,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
   }
   const config = json(read(join(cwd,'pdd.json'))), auto = config?.autopilot;
   const valid = auto && ['auto','observe'].includes(auto.mode) && (auto.trust===undefined || Array.isArray(auto.trust)&&auto.trust.every(x=>typeof x==='string'&&x.trim()));
-  add('setup-mode',valid?'pass':'fail',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}`:'Choose mode and trust in pdd setup; off does not start work','pdd setup');
+  add('setup-mode',valid?'pass':'warn',valid?`${auto.mode==='auto'?'auto authorizes eligible branches, PRs and merges':'observe reports work without automatic merges'}; owner and write-access users are trusted; explicit trust: ${(auto.trust??[]).join(', ')||'none'}; ${config.strict_approvals===true?'strict person-terminal approvals required':'delegated ordinary gates allowed; required human reviews still apply'}`:'Choose mode and trust in pdd setup; off does not start work','pdd setup');
   // Job worktrees and other machines read pdd.json of the default branch on GitHub.
   // The settings differ as autopilot-github defines: the mode, or the trust names ignoring case and order.
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -330,11 +330,11 @@ export async function runAutopilotDoctor(input, ports = {}) {
   } catch { health = {state:'unavailable'}; }
   add('interpreter',health?.state==='healthy'?'pass':'warn',health?.state==='healthy'?'Read-only interpreter access accepted':health?.state==='address'?'PDD_RUNTIME_URL must be an HTTPS origin; unset it to use the default':'Interpreter access is unproved; no check was submitted',health?.state==='address'?`unset PDD_RUNTIME_URL; ${retry}`:health?.state==='auth'?'gh auth login':health?.state==='access'?`${platform==='darwin'?'open':'xdg-open'} https://promptdriven.ai/login`:retry);
   if (platform==='linux') {
-    add('user-timers',ready(await run('systemctl',['--user','show-environment']))?'pass':'fail','systemd user session','systemctl --user status; sudo systemctl start user@$(id -u).service');
+    add('user-timers',ready(await run('systemctl',['--user','show-environment']))?'pass':'warn','systemd user session','systemctl --user status; sudo systemctl start user@$(id -u).service');
     const linger = await run('loginctl',['show-user',String(uid),'--property=Linger','--value']);
     add('linger',ready(linger)&&linger.stdout.trim()==='yes'?'pass':'warn','Lingering keeps timers running after logout','loginctl enable-linger');
   } else if (platform==='darwin') {
-    add('user-timers',ready(await run('launchctl',['print',`gui/${uid}`]))?'pass':'fail','launchctl user session',`launchctl print gui/${uid}; launchctl bootstrap gui/${uid} "$HOME/Library/LaunchAgents"`);
+    add('user-timers',ready(await run('launchctl',['print',`gui/${uid}`]))?'pass':'warn','launchctl user session',`launchctl print gui/${uid}; launchctl bootstrap gui/${uid} "$HOME/Library/LaunchAgents"`);
     const sleep = await run('pmset',['-g','custom']);
     const values = [...(sleep.stdout??'').matchAll(/^\s*sleep\s+(\d+)/gm)].map(x=>Number(x[1]));
     add('sleep',ready(sleep)&&values.length&&values.every(x=>x===0)?'pass':'warn','Sleep can pause work; keep this command running while Autopilot works','caffeinate -i');
