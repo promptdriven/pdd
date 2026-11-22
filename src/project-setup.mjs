@@ -1,55 +1,138 @@
-// Generated from prompts/cli/project-setup.prompt.md (sha256: 9409020fcf148cdc815b719fee5ddc1f1fb35dfe842632a617961c22f188a4e5).
-import { appendFileSync, existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+// Prompt: prompts/cli/project-setup.prompt.md
+import { existsSync, lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { resolveRepoRoot } from './shared/git-context.mjs';
 
-const START = '<!-- pdd:start -->', END = '<!-- pdd:end -->';
+const START = '<!-- pdd:start -->';
+const END = '<!-- pdd:end -->';
 
-function block(packageRoot) {
-  const lines = readFileSync(join(packageRoot, 'skills/pdd-setup/SKILL.md'), 'utf8').split('\n');
-  const start = lines.indexOf(START), end = lines.indexOf(END);
-  if (start < 0 || end < start) throw Error('The pdd-setup skill has no PDD block.');
-  const runbook = existsSync(join(packageRoot, 'RUNBOOK.md'));
-  return lines.slice(start, end + 1).filter(line => runbook || !line.includes('RUNBOOK.md')).join('\n');
+export const PDD_BLOCK = [
+  START,
+  'This project uses PDD — edit the owning `.prompt.md` before changing owned code, and verify with `pdd status`, `pdd lint`, and `pdd test`.',
+  'Invoke `/pdd` in Claude Code or `$pdd` in Codex (first time? `npm i -g @promptdriven/pdd && pdd setup`).',
+  END,
+].join('\n');
+
+function readJsonQuiet(file) {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
-export function setupProject({ cwd, packageRoot }) {
-  const wanted = block(packageRoot);
-  const file = join(cwd, existsSync(join(cwd, 'CLAUDE.md')) ? 'CLAUDE.md' : 'AGENTS.md');
-  const old = existsSync(file) ? readFileSync(file, 'utf8') : null;
-  let text;
-  if (old === null) text = `${wanted}\n`;
-  else {
-    const lines = old.split('\n'), starts = lines.filter(line => line === START).length, ends = lines.filter(line => line === END).length;
-    const start = lines.indexOf(START), end = lines.indexOf(END);
-    if (starts === 0 && ends === 0) text = `${old}${old.endsWith('\n') ? '' : '\n'}\n${wanted}\n`;
-    else if (starts === 1 && ends === 1 && start < end) text = [...lines.slice(0, start), wanted, ...lines.slice(end + 1)].join('\n');
-    else throw Error(`${file} needs exactly one ${START} line followed by one ${END} line. Fix the markers, then run pdd setup again.`);
+export function detectProjectStack(root) {
+  if (typeof root !== 'string' || !root) return { language: null, testCommand: null };
+  const has = name => existsSync(join(root, name));
+
+  if (has('package.json')) {
+    const pkg = readJsonQuiet(join(root, 'package.json'));
+    const rawTest = typeof pkg?.scripts?.test === 'string' ? pkg.scripts.test.trim() : '';
+    const hasRealTest = Boolean(rawTest && !/no test specified/i.test(rawTest));
+    const pm = has('pnpm-lock.yaml') ? 'pnpm'
+      : has('yarn.lock') ? 'yarn'
+      : (has('bun.lock') || has('bun.lockb')) ? 'bun'
+      : 'npm';
+    const language = has('tsconfig.json') ? 'typescript' : 'javascript';
+    return { language, testCommand: hasRealTest ? `${pm} test` : null };
   }
-  if (!text.endsWith('\n')) text += '\n';
+  if (has('pyproject.toml') || has('pytest.ini') || has('setup.py')) {
+    return { language: 'python', testCommand: has('uv.lock') ? 'uv run pytest' : 'pytest' };
+  }
+  if (has('go.mod')) return { language: 'go', testCommand: 'go test ./...' };
+  if (has('Cargo.toml')) return { language: 'rust', testCommand: 'cargo test' };
+  if (has('Gemfile')) return { language: 'ruby', testCommand: has('.rspec') ? 'bundle exec rspec' : 'bundle exec rake test' };
+  if (has('pom.xml')) return { language: 'java', testCommand: 'mvn test' };
+  if (has('build.gradle') || has('build.gradle.kts')) {
+    return { language: 'java', testCommand: has('gradlew') ? './gradlew test' : 'gradle test' };
+  }
+  return { language: null, testCommand: null };
+}
+
+function assertRegularFileIfExists(file) {
+  let st;
+  try {
+    st = lstatSync(file);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+  if (st.isSymbolicLink() || !st.isFile()) {
+    const kind = st.isSymbolicLink() ? 'a symbolic link' : 'not a regular file';
+    throw new Error(
+      `${file}: cannot write PDD block because the target is ${kind}.\n`
+      + '  Invariant: pdd init only updates regular CLAUDE.md / AGENTS.md files inside the repository.\n'
+      + `  Fix: Replace "${file}" with a regular file or add the 4-line PDD block manually.\n`
+      + '  Rerun: pdd init',
+    );
+  }
+  return st;
+}
+
+function writeAtomicRegular(file, content, mode = 0o644) {
+  const tmp = `${file}.pdd-tmp-${process.pid}-${randomBytes(6).toString('hex')}`;
+  try {
+    writeFileSync(tmp, content, { encoding: 'utf8', mode });
+    renameSync(tmp, file);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch {}
+    throw error;
+  }
+}
+
+export function setupProject({ cwd }) {
+  const claude = join(cwd, 'CLAUDE.md');
+  const file = existsSync(claude) ? claude : join(cwd, 'AGENTS.md');
+  const existingStat = assertRegularFileIfExists(file);
+  const old = existingStat ? readFileSync(file, 'utf8') : null;
+  const eol = old?.includes('\r\n') ? '\r\n' : '\n';
+  const wanted = eol === '\r\n' ? PDD_BLOCK.replaceAll('\n', '\r\n') : PDD_BLOCK;
+
+  let text;
+  if (old === null) {
+    text = `${wanted}${eol}`;
+  } else {
+    const normalizedLines = old.split(/\r?\n/);
+    const trailingEmpty = old.endsWith('\n') || old.endsWith('\r');
+    const lines = trailingEmpty ? normalizedLines.slice(0, -1) : normalizedLines;
+    const startIndexes = [];
+    const endIndexes = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i] === START) startIndexes.push(i);
+      if (lines[i] === END) endIndexes.push(i);
+    }
+    if (startIndexes.length === 0 && endIndexes.length === 0) {
+      const prefix = old.endsWith('\n') || old.endsWith('\r') ? old : `${old}${eol}`;
+      text = `${prefix}${eol}${wanted}${eol}`;
+    } else if (startIndexes.length === 1 && endIndexes.length === 1 && startIndexes[0] < endIndexes[0]) {
+      const replaced = [
+        ...lines.slice(0, startIndexes[0]),
+        ...PDD_BLOCK.split('\n'),
+        ...lines.slice(endIndexes[0] + 1),
+      ];
+      text = `${replaced.join(eol)}${eol}`;
+    } else {
+      throw new Error(
+        `${file}: needs exactly one ${START} line followed by one ${END} line.\n`
+        + '  Invariant: existing PDD marker blocks must be balanced so surrounding instructions are never corrupted.\n'
+        + `  Fix: Repair or remove the unmatched ${START} / ${END} marker in ${file}.\n`
+        + '  Rerun: pdd init',
+      );
+    }
+  }
+
   if (text === old) return { file, changed: false };
-  writeFileSync(file, text);
+  const mode = existingStat && (existingStat.mode & 0o777) ? (existingStat.mode & 0o777) : 0o644;
+  writeAtomicRegular(file, text, mode);
   return { file, changed: true };
 }
 
-// pdd test keeps its local cache in .pdd/ at the Git root; a commit must never carry it.
-// Bytes, not text: a line check needs ASCII only, and the append keeps every old byte (also non-UTF-8 ones).
-const IGNORED = new Set(['.pdd', '.pdd/', '/.pdd', '/.pdd/']);
-// A "!" line for .pdd or a path in it, such as !.pdd/config.json: a .pdd/ line after it would override it.
-const NEGATION = /^!\/?(\*\*\/)?\.pdd($|[/*?[])/;
-export function ignorePddFolder({ root }) {
-  const file = join(root, '.gitignore');
-  let old = null;
-  try {
-    if (!lstatSync(file).isFile()) throw Error(`${file} is not a regular file. Add the line .pdd/ to it by hand.`);
-    old = readFileSync(file);
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  if (old === null) { writeFileSync(file, '.pdd/\n', { flag: 'wx' }); return { file, changed: true, negated: false }; }
-  // Git drops trailing spaces and a CR, never leading spaces; the last matching line wins.
-  const lines = old.toString('latin1').split('\n').map(line => line.replace(/[ \r]+$/, ''));
-  const last = lines.findLast(line => IGNORED.has(line) || line.startsWith('!') && IGNORED.has(line.slice(1)));
-  if (last !== undefined) return { file, changed: false, negated: last.startsWith('!') };
-  if (lines.some(line => NEGATION.test(line))) return { file, changed: false, negated: true };
-  const newline = old.includes('\r\n') ? '\r\n' : '\n';
-  appendFileSync(file, `${old.length && old.at(-1) !== 0x0a ? newline : ''}.pdd/${newline}`);
-  return { file, changed: true, negated: false };
+export async function initProject({ cwd = process.cwd(), packageRoot } = {}, ports = {}) {
+  const repoRoot = await resolveRepoRoot(cwd, ports);
+  const root = repoRoot ?? cwd;
+  const { file, changed } = setupProject({ cwd: root, packageRoot });
+  const { language, testCommand } = detectProjectStack(root);
+  return { root, inGit: Boolean(repoRoot), file, changed, language, testCommand };
 }

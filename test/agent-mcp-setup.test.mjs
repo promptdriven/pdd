@@ -19,8 +19,13 @@ function fixture(t) {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'pdd-mcp-setup-')));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const env = { HOME: home, PATH: '', CODEX_HOME: join(home, 'custom-codex'), CLAUDE_CONFIG_DIR: join(home, 'custom-claude') };
-  mkdirSync(env.CODEX_HOME); mkdirSync(env.CLAUDE_CONFIG_DIR); mkdirSync(join(home, '.gemini'));
-  const files = [join(env.CODEX_HOME, 'config.toml'), join(env.CLAUDE_CONFIG_DIR, '.claude.json'), join(home, '.gemini/settings.json')];
+  mkdirSync(env.CODEX_HOME); mkdirSync(env.CLAUDE_CONFIG_DIR); mkdirSync(join(home, '.gemini/config'), { recursive: true });
+  const files = [
+    join(env.CODEX_HOME, 'config.toml'),
+    join(env.CLAUDE_CONFIG_DIR, '.claude.json'),
+    join(home, '.gemini/settings.json'),
+    join(home, '.gemini/config/mcp_config.json'),
+  ];
   let out = '', err = '';
   const ports = { stdout: { write: text => { out += text; } }, stderr: { write: text => { err += text; } }, stdin: { isTTY: false } };
   return { home, env, files, ports, output: () => out, errors: () => err };
@@ -30,6 +35,7 @@ test('MCP setup previews exact scoped registrations before one explicit consent,
   writeFileSync(f.files[0], '# Keep this comment\nmodel = "custom"\n[mcp_servers.other]\ncommand = "other"\n');
   writeFileSync(f.files[1], '{"theme":"dark","mcpServers":{"other":{"command":"other"}}}\n');
   writeFileSync(f.files[2], '{"theme":"light","mcpServers":{"other":{"command":"other"}}}\n');
+  writeFileSync(f.files[3], '{"mcpServers":{"other":{"command":"other"}}}\n');
   let asked = 0;
   assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => {
     asked++;
@@ -51,11 +57,14 @@ test('MCP setup previews exact scoped registrations before one explicit consent,
   assert.deepEqual(claude.mcpServers.pdd, { type: 'stdio', ...pinned });
   const gemini = JSON.parse(readFileSync(f.files[2]));
   assert.equal(gemini.theme, 'light'); assert.equal(gemini.mcpServers.pdd.trust, true);
+  const agy = JSON.parse(readFileSync(f.files[3]));
+  assert.equal(agy.mcpServers.other.command, 'other');
+  assert.deepEqual(agy.mcpServers.pdd, pinned);
   const before = f.files.map(path => readFileSync(path, 'utf8'));
   assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => { throw Error('must not ask twice'); } }), 0);
   assert.deepEqual(f.files.map(path => readFileSync(path, 'utf8')), before);
 });
-test('MCP setup declines empty, n, yes, EOF and noninteractive input without creating configs', async t => {
+test('MCP setup declines empty, n, yes, EOF and noninteractive input without creating configs, while yes:true applies directly', async t => {
   const f = fixture(t);
   for (const answer of ['', 'n', 'yes', undefined]) {
     assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => answer }), 0);
@@ -63,20 +72,43 @@ test('MCP setup declines empty, n, yes, EOF and noninteractive input without cre
   }
   assert.equal(await setupAgentMcp({ env: f.env }, f.ports), 0);
   assert.ok(f.files.every(path => !existsSync(path)));
+  // Bare ~/.gemini/ with no settings.json and no gemini binary must NOT trigger Gemini CLI false positive; Antigravity still registers.
+  assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, yes: true }), 0);
+  assert.equal(existsSync(f.files[0]), true);
+  assert.equal(existsSync(f.files[1]), true);
+  assert.equal(existsSync(f.files[2]), false, 'bare ~/.gemini/ must not create Gemini CLI settings.json');
+  assert.equal(existsSync(f.files[3]), true, '~/.gemini/config/ must register Antigravity mcp_config.json');
 });
-test('MCP setup refuses malformed configs, wrong roots and conflicts, and warns on symlinks before consent', async t => {
+test('MCP setup isolates malformed configs and symlinks per agent, updates stale PDD entries, and rejects non-PDD conflicts', async t => {
   const f = fixture(t);
-  for (const [file, text] of [[f.files[0], '[broken'], [f.files[1], '{broken'], [f.files[1], '[]'], [f.files[1], '{"mcpServers":[]}'], [f.files[0], '[mcp_servers.pdd]\ncommand="different"']]) {
-    writeFileSync(file, text);
-    assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => { throw Error('must not ask'); } }), 1);
-    assert.equal(readFileSync(file, 'utf8'), text);
-    rmSync(file);
-  }
-  const target = join(f.home, 'target'); writeFileSync(target, '{}'); symlinkSync(target, f.files[1]);
-  assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => assert.fail('symlink must skip before consent') }), 0);
+  // Healthy agents still register even when one agent has a malformed config (returns 1 for the broken agent).
+  writeFileSync(f.files[0], '[broken');
+  assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => 'y' }), 1);
+  assert.equal(readFileSync(f.files[0], 'utf8'), '[broken');
+  assert.equal(existsSync(f.files[1]), true, 'healthy Claude config still registers');
+  assert.equal(existsSync(f.files[3]), true, 'healthy Antigravity config still registers');
+  assert.match(f.errors(), /malformed TOML/);
+
+  // Non-PDD conflict fails cleanly without touching the conflicting file.
+  writeFileSync(f.files[0], '[mcp_servers.pdd]\ncommand = "different"\n');
+  assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, confirm: () => 'y' }), 1);
+  assert.equal(readFileSync(f.files[0], 'utf8'), '[mcp_servers.pdd]\ncommand = "different"\n');
+
+  // Stale PDD entries (pointing to an older Node or package path) are updated in place cleanly!
+  writeFileSync(f.files[0], '# keep\n[mcp_servers.pdd]\ncommand = "/old/node"\nargs = ["/old/pdd/bin/pdd.mjs", "mcp"]\n[mcp_servers.other]\ncommand = "other"\n');
+  writeFileSync(f.files[1], JSON.stringify({ mcpServers: { pdd: { type: 'stdio', command: '/old/node', args: ['/old/pdd/bin/pdd.mjs', 'mcp'] } } }));
+  assert.equal(await setupAgentMcp({ env: f.env }, { ...f.ports, yes: true }), 0);
+  assert.deepEqual(parse(readFileSync(f.files[0], 'utf8')).mcp_servers.pdd.args, pinned.args);
+  assert.equal(parse(readFileSync(f.files[0], 'utf8')).mcp_servers.other.command, 'other');
+  assert.deepEqual(JSON.parse(readFileSync(f.files[1], 'utf8')).mcpServers.pdd.args, pinned.args);
+
+  // Symlinked config warns with exit 0 and does not modify symlink target.
+  const f2 = fixture(t);
+  const target = join(f2.home, 'target'); writeFileSync(target, '{}'); symlinkSync(target, f2.files[1]);
+  assert.equal(await setupAgentMcp({ env: f2.env }, { ...f2.ports, confirm: () => 'y' }), 0);
   assert.equal(readFileSync(target, 'utf8'), '{}');
-  assert.match(f.errors(), /malformed TOML/); assert.match(f.errors(), /symlink/);
-  assert.equal(existsSync(f.files[0]), false);
+  assert.match(f2.errors(), /symlink/);
+  assert.equal(existsSync(f2.files[0]), true, 'healthy Codex still registers alongside symlinked Claude');
 });
 test('MCP setup detects intervening config edits and applies none of its previews', async t => {
   const f = fixture(t);
