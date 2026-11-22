@@ -45,11 +45,14 @@ Battery detection uses Linux power-supply types. Virtualization is true only aft
 a successful bounded systemd-detect-virt probe; unknown reserves personal capacity.
 Taskset is an executable absolute PATH selection or null. Export
 `machineCheckPorts(env, ports)` as the synchronous compatibility adapters for
-legacy capacity callers: cores, platform, battery, virtualized, taskset, memory
-and load. Its memory adapter returns available bytes by the same platform rule. They use the same native readers; policy stays with the queue.
+legacy capacity callers: cores, platform, battery, virtualized, taskset, memory,
+load and `memoryPressure`. Its memory adapter returns available bytes by the same platform rule.
+Its `memoryPressure` adapter returns the macOS `kern.memorystatus_vm_pressure_level` integer
+(1 normal, 2 warn, 4 critical; null when unreadable or on non-macOS platforms), allowing test
+injection via `ports.memoryPressure` or `ports.sysctl`. They use the same native readers; policy stays with the queue.
 
 Ports: `readFile(path)`, `statfs(path)`, `cpuCount()`, `load()`, `memory()`,
-`vmStat()` (the `vm_stat` text), `sysctl(name)`
+`memoryPressure()`, `vmStat()` (the `vm_stat` text), `sysctl(name)`
 (the `sysctl -n` text), `freeMemory()`, `totalMemory()` and `platform`,
 with native Node defaults. An injected `memory()` replaces the platform rule. Callers can inject `machineResources`
 with the same input/output contract; policy belongs to those callers.

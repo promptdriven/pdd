@@ -101,7 +101,7 @@ and `WINDIR` when supplied. Set `POCKET_BROWSER_BIN` to the caller's value or
 `/usr/bin/google-chrome`, as for the VM suite. Include the assigned
 `PDD_CHECK_CPUS`. All other inherited variables are absent, including
 `CODEX_HOME`, `PDD_AUTOPILOT_CONTEXT`, `HERDR_*`, agent credentials, session and
-config variables, `NODE_OPTIONS`, `BASH_ENV` and
+config variables, `PDD_SUITE_CONCURRENCY`, `NODE_OPTIONS`, `BASH_ENV` and
 npm configuration. A command can explicitly set its own needed variables.
 Execute the supplied command unchanged. Preserve cwd, status, timeout and CPU affinity;
 saved and forwarded evidence follows Durable validation evidence below.
@@ -252,7 +252,8 @@ signaling applies only to a child started by that executor.
 Own the capacity rule for full suites and full builds. Preserve queue ordering,
 ownership, cleanup and paused intervals. Inject `cores()` (ordered usable CPU ID
 array), `memory()` (free bytes), `load()` (one-minute load), `platform` (OS name),
-`battery()` and `virtualized()` (Booleans), and `taskset()` (absolute executable path or null).
+`battery()` and `virtualized()` (Booleans), `taskset()` (absolute executable path or null),
+and `memoryPressure()` (macOS `kern.memorystatus_vm_pressure_level` nonnegative integer or null).
 Native Linux cores come from the current affinity list, with available parallelism
 as fallback. Native battery detection reads power-supply types; taskset discovery
 searches PATH for an executable. Native Linux virtualization detection runs
@@ -261,7 +262,7 @@ searches PATH for an executable. Native Linux virtualization detection runs
 timeout or any other result conservatively reserves personal-machine capacity.
 These adapters make no AI calls.
 
-`calculateCheckCapacity({checks, runs}, ports)` returns `{cores, usableCores,
+`calculateCheckCapacity({checks, runs, cwd}, ports)` returns `{cores, usableCores,
 cpuIds, freeMemory, load, personal, affinity, taskset, calculatedChecks, checks,
 calculatedRuns, runs, coresPerCheck, busy}`. Counts are positive integers; memory
 is bytes, load is a nonnegative number, CPU IDs are unique nonnegative integers,
@@ -274,7 +275,23 @@ without batteries retain the full machine budget. Use the first max(1, floor(cor
 CPU IDs on a personal machine, else all IDs. Let U be this usable count and M be
 free bytes. Calculated slots are max(1, min(floor(U/12), floor(M/4294967296))).
 Without Linux taskset, cap calculated slots at one, since an env hint cannot
-constrain tools which ignore it. Explicit checks replaces calculated slots.
+constrain tools which ignore it. Direct explicit `checks` replaces calculated slots unchanged.
+When direct `checks` is omitted, an opt-in suite concurrency override may be supplied by
+`env.PDD_SUITE_CONCURRENCY` (taking precedence) or repository `pdd.json` `suite.checks`
+(discovered when `cwd` is supplied by walking upward from canonical `realpathSync(resolve(cwd))`,
+bounded, rejecting symlinked `pdd.json`, and stopping at the first directory containing `pdd.json`
+or `.git` or the filesystem root so parent directories above a repository root are never read).
+Unset or blank/whitespace-only `PDD_SUITE_CONCURRENCY` is treated as unset; any other non-positive-integer
+value fails closed (`Invalid PDD_SUITE_CONCURRENCY: must be a positive integer.`). Absent `pdd.json`
+or omitted `suite`/`suite.checks` is treated as unset; malformed JSON, non-object or symlinked `pdd.json`,
+or a non-positive-safe-integer `suite.checks` fails closed (`Invalid pdd.json suite.checks: must be a positive integer.`).
+When an opt-in override `requested` is present, enforce hardware and macOS VM pressure ceilings without bypass:
+let `memoryCap = floor(M / 4294967296)`, `coreCap = U`, and on `darwin` inspect `memoryPressure()`
+(failing closed unless `null` or a nonnegative integer), setting `pressureCap = 1` whenever `pressure >= 2`
+(warning/critical VM pressure) and `Infinity` when `1` (normal) or `null` (unavailable) or on non-`darwin`
+platforms. Chosen slots are `max(1, min(requested, coreCap, memoryCap, pressureCap))`, allowing both opting
+up on high-memory Macs within safe ceilings and opting down to `1` for heavy suites while preserving
+`calculatedChecks` as the unmodified baseline formula.
 Calculated open runs are twice the chosen slots, capped at the largest safe integer; explicit runs replaces this.
 Each check gets max(1, floor(U/chosen slots)) CPUs. Busy means load > U; equality
 admits. A busy machine admits no new heavy work. Running checks are not killed
@@ -285,16 +302,19 @@ this snapshot as `capacity.json` under the shared queue admission lock and retur
 it with `owner` (the launcher state-file identity, or null), `observedAt` and
 `expiresAt` (epoch milliseconds). Snapshots expire 31 minutes after observation,
 so a stopped or lost timer cannot hold busy state or an override forever.
-Admission ignores an expired snapshot and probes the machine with default limits.
+Admission ignores an expired snapshot and probes the machine with default limits
+(or an active opt-in suite concurrency override when no valid snapshot governs).
 `releaseCheckCapacity({env, owner}, ports)` removes only the matching owner's
 snapshot under the admission lock and returns whether it removed one. Missing
 snapshots are harmless; another active repository's snapshot remains. Running
-tickets are never removed. `readCheckStatus({env, checks, runs}, ports)` reads the
-same capacity used by admission without writing and adds machine-wide
+tickets are never removed. `readCheckStatus({env, cwd, checks, runs}, ports)` reads the
+same capacity used by admission without writing (threading optional `cwd` for `pdd.json`
+override discovery when no active snapshot exists) and adds machine-wide
 `busyChecks` and `waitingChecks` ticket counts. The optional checks/runs arguments
 are accepted for compatibility but do not override the active shared limits.
-A valid unexpired snapshot wins even after a resize or from a different repository;
-absent or expired snapshots use current machine observations with default limits.
+A valid unexpired snapshot wins even after a resize or from a different repository
+(and revalidates with its saved explicit `checks`/`runs` unaffected by `PDD_SUITE_CONCURRENCY` or `pdd.json`);
+absent or expired snapshots use current machine observations with default limits or active opt-in override.
 Status retains the snapshot's original core count and personal classification.
 An unavailable observation or record read throws for the caller to report.
 Queue admission uses the saved snapshot when present, otherwise computes from

@@ -103,7 +103,8 @@ A start then, in this order:
    saved profile with `The saved coordinator profile cannot be verified.`; without a saved profile, or when `--agent`,
    `--pool` or an explicit caller agent config folder overrides the saved profile (#3230), it saves the newly verified
    agent, its definition HOME, the kept environment (`HOME`, `PATH`, the agent config folders, the XDG and D-Bus session
-   values, `PDD_STATE_DIR`, `PDD_ACCOUNTS_URL`, `PDD_CLOUD_URL` and the shared queue variables; never credentials or the whole environment), `launchProfile` from the new
+   values, `PDD_STATE_DIR`, `PDD_ACCOUNTS_URL`, `PDD_CLOUD_URL` and the shared queue variables `PDD_SUITE_QUEUE`,
+   `PDD_VM_SUITE_LOCK` and `PDD_SUITE_CONCURRENCY`; never credentials or the whole environment), `launchProfile` from the new
    profile binding, and `poolPath` when `--pool` is set, removes legacy `ownerLaunch`, clears stale `pausedUntil`,
    `pausedHours`, `streak` and `poolOut` in `core.json` (plus `clearPoolCooldowns` when switching accounts or pools),
    and adds an `Account changed from OLD to NEW.` or `Login pool: PATH (N login(s)).` note to the start message.

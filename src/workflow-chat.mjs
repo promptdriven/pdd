@@ -1,5 +1,5 @@
 import { launchProfile, chatAgentName, validLaunchProfile } from './workflow-launch-profile.mjs';
-// Prompt: prompts/cli/workflow-chat.prompt.md
+// Prompt: prompts/cli/workflow-chat.prompt.md (sha256: a335e6e8662e27ba5b0100185f6688aad2ba18b741bf47a9f80b94f768c08e92)
 import { execFile as execFileCallback, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { statSync, lstatSync, readdirSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -199,7 +199,7 @@ export function chatLaunch({ run, agent, configDir, env = process.env }) {
   const entry = savedAgentEntry(run, agent, env), names = LOGIN_VARIABLES[agent] ?? [], home = homeVariable(agent), values = {};
   for (const name of names) if (typeof env[name] === 'string' && env[name] !== '') values[name] = env[name];
   for (const [name, value] of Object.entries(entry?.env ?? {})) if (name !== home && ENV_NAME.test(name)) values[name] = value;
-  const queueNames = ['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'];
+  const queueNames = ['PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'PDD_SUITE_CONCURRENCY'];
   for (const name of queueNames) if (!Object.hasOwn(values, name) && typeof env[name] === 'string') values[name] = env[name];
   const queueEnv = Object.fromEntries(queueNames.filter(name => Object.hasOwn(values, name)).map(name => [name, values[name]]));
   const unset = [...queueNames.filter(name => !Object.hasOwn(values, name)), ...names.filter(name => !Object.hasOwn(values, name)), ...(home && !configDir ? [home] : [])];

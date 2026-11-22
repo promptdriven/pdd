@@ -1,4 +1,4 @@
-// Generated from prompts/cli/machine-resources.prompt.md (sha256: 9a0d9394d184fd41f0ef3712c333fabf1b78f274507cc8e6fd0b3e57b8a84893).
+// Generated from prompts/cli/machine-resources.prompt.md (sha256: 8706fec968cddf35bee2bd67e1e34b7977b4b7a84964eae05d97343ff5be72e3).
 import * as files from 'node:fs';
 import { readFileSync, statfsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
@@ -68,8 +68,12 @@ export function readAutopilotUse(ports = {}) {
   return { processes: seen.size, wrappers: wrappers.length, rss, cores: Math.round(cores * 100) / 100 };
 }
 function macPressure(ports) {
-  const text = (ports.sysctl ? String(ports.sysctl('kern.memorystatus_vm_pressure_level') ?? '') : run(ports, 'sysctl', 'sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'])).trim();
-  return /^\d+$/.test(text) ? Number(text) : null;
+  try {
+    const text = (ports.sysctl ? String(ports.sysctl('kern.memorystatus_vm_pressure_level') ?? '') : run(ports, 'sysctl', 'sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'])).trim();
+    return /^\d+$/.test(text) ? Number(text) : null;
+  } catch {
+    return null;
+  }
 }
 // cgroup v2: the lowest CPU quota, the lowest memory limit and the lowest memory room of this process's cgroup and its
 // parents.
@@ -140,5 +144,8 @@ function nativeTaskset(env) {
 export function machineCheckPorts(env = process.env, ports = {}) {
   return {cores:nativeCores, platform:process.platform, battery:nativeBattery,
     virtualized:()=>nativeVirtualized(ports.spawnSync ?? spawnSync), taskset:()=>nativeTaskset(env),
-    memory:()=>availableMemory(ports), load:()=>loadavg()[0]};
+    memory:()=>availableMemory(ports), load:()=>loadavg()[0],
+    memoryPressure:()=>(ports.platform ?? process.platform) === 'darwin'
+      ? (typeof ports.memoryPressure === 'function' ? ports.memoryPressure() : macPressure(ports))
+      : null};
 }

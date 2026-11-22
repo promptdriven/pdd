@@ -1,4 +1,4 @@
-// Prompt: prompts/cli/autopilot-launcher.prompt.md (sha256: 3400b7c889152cf5c793fe6fe2195259181947a698bc3cf97bc8bedd0c09ffb8)
+// Prompt: prompts/cli/autopilot-launcher.prompt.md (sha256: 672aff71e6495a1234bad9a14b1bb8a9126d60bc7ce01f56545553fdf039f91c)
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
 import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
@@ -84,7 +84,7 @@ function portsFor(state, ports) {
 }
 const AGENT_KINDS = ['codex', 'claude', 'gemini', 'agy'];
 const AGENT_CONFIG_VARS = { codex: 'CODEX_HOME', claude: 'CLAUDE_CONFIG_DIR', gemini: 'GEMINI_CLI_HOME', agy: 'ANTIGRAVITY_APP_DATA_DIR' };
-const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'ANTIGRAVITY_APP_DATA_DIR', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_STATE_DIR', 'PDD_ACCOUNTS_URL', 'PDD_CLOUD_URL', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
+const keepEnv = env => Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GEMINI_CLI_HOME', 'ANTIGRAVITY_APP_DATA_DIR', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'PDD_STATE_DIR', 'PDD_ACCOUNTS_URL', 'PDD_CLOUD_URL', 'PDD_SUITE_QUEUE', 'PDD_VM_SUITE_LOCK', 'PDD_SUITE_CONCURRENCY'].filter(k => typeof env[k] === 'string').map(k => [k, env[k]]));
 function explicitConfigOverride(previous, env) {
   const kind = previous?.agent?.kind, variable = kind ? AGENT_CONFIG_VARS[kind] : null;
   if (!variable || typeof env?.[variable] !== 'string' || !env[variable].trim()) return false;

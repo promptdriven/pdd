@@ -1,15 +1,91 @@
-// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 9a6fbeb4f0e51d65db80cee642a73f0977c1943b8a6548f9c24281b66b319d3c).
+// Generated from prompts/cli/test-suite-queue.prompt.md (sha256: 5434e27b0c888911b39b4fe3025a6b064c0ebced3b5acb35929ae784f303da18).
 import {knownSecretValues, rememberSecrets} from './secret-redaction.mjs';
 import * as files from 'node:fs';
 import {serializeValidationReceipt, safeEvidenceText} from './validation-evidence.mjs';
-import { join, isAbsolute, resolve } from 'node:path';
+import { dirname, join, isAbsolute, resolve } from 'node:path';
 import { createHash, hash as contentDigest, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { machineCheckPorts } from './machine-resources.mjs';
 
-export function calculateCheckCapacity({checks, runs} = {}, ports = {}) {
-  const native = machineCheckPorts(ports.env ?? process.env, ports);
+function parseSuiteConcurrencyEnv(env) {
+  if (!env || !Object.hasOwn(env, 'PDD_SUITE_CONCURRENCY') || env.PDD_SUITE_CONCURRENCY === undefined) return null;
+  if (typeof env.PDD_SUITE_CONCURRENCY !== 'string') throw Error('Invalid PDD_SUITE_CONCURRENCY: must be a positive integer.');
+  const raw = env.PDD_SUITE_CONCURRENCY.trim();
+  if (!raw) return null;
+  if (!/^\d+$/.test(raw)) throw Error('Invalid PDD_SUITE_CONCURRENCY: must be a positive integer.');
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw Error('Invalid PDD_SUITE_CONCURRENCY: must be a positive integer.');
+  return value;
+}
+
+function statEntry(fs, target) {
+  if (typeof fs?.lstatSync === 'function') return fs.lstatSync(target);
+  if (typeof fs?.statSync === 'function') return fs.statSync(target);
+  if (typeof fs?.existsSync === 'function') return fs.existsSync(target) ? { isFile: () => true, isSymbolicLink: () => false } : null;
+  return null;
+}
+
+function readRepoSuiteChecks(cwd, fs = files) {
+  if (typeof cwd !== 'string' || !cwd || typeof fs?.readFileSync !== 'function') return null;
+  const abs = resolve(cwd);
+  let dir;
+  try { dir = typeof fs.realpathSync === 'function' ? fs.realpathSync(abs) : abs; }
+  catch { dir = abs; }
+  let configPath = null;
+  for (let depth = 0; depth < 128; depth++) {
+    const candidate = join(dir, 'pdd.json');
+    let st = null;
+    try { st = statEntry(fs, candidate); }
+    catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
+    if (st) {
+      if (st.isSymbolicLink?.()) throw Error('Invalid pdd.json: symbolic links are not allowed.');
+      if (st.isFile?.() === false) throw Error('Invalid pdd.json: expected a regular file.');
+      configPath = candidate;
+      break;
+    }
+    let gitEntry = null;
+    try { gitEntry = statEntry(fs, join(dir, '.git')); }
+    catch (error) { if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error; }
+    if (gitEntry) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (!configPath) return null;
+  let text;
+  try { text = fs.readFileSync(configPath, 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw Error(`Cannot read pdd.json: ${error.code ?? error.message}`);
+  }
+  let config;
+  try { config = JSON.parse(text); }
+  catch { throw Error('Invalid JSON in pdd.json.'); }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw Error('Invalid pdd.json: expected a JSON object.');
+  }
+  if (!Object.hasOwn(config, 'suite') || config.suite === undefined) return null;
+  if (!config.suite || typeof config.suite !== 'object' || Array.isArray(config.suite)) {
+    throw Error('Invalid pdd.json suite.checks: must be a positive integer.');
+  }
+  if (!Object.hasOwn(config.suite, 'checks') || config.suite.checks === undefined) return null;
+  const value = config.suite.checks;
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw Error('Invalid pdd.json suite.checks: must be a positive integer.');
+  }
+  return value;
+}
+
+function resolveSuiteConcurrencyOverride({ cwd, env, fs }) {
+  const fromEnv = parseSuiteConcurrencyEnv(env);
+  if (fromEnv !== null) return fromEnv;
+  return readRepoSuiteChecks(cwd, fs);
+}
+
+export function calculateCheckCapacity({checks, runs, cwd} = {}, ports = {}) {
+  const env = ports.env ?? process.env;
+  const native = machineCheckPorts(env, ports);
   ports = {...ports};
   for (const [name, value] of Object.entries(native)) ports[name] ??= value;
   const cpuIds = ports.cores(), freeMemory = ports.memory(),
@@ -25,7 +101,28 @@ export function calculateCheckCapacity({checks, runs} = {}, ports = {}) {
   const usable = cpuIds.slice(0, personal ? Math.max(1, Math.floor(cpuIds.length / 2)) : cpuIds.length);
   const affinity = platform === 'linux' && taskset !== null;
   const calculatedChecks = Math.max(1, Math.min(Math.floor(usable.length / 12), Math.floor(freeMemory / (4 * 1024 ** 3)), affinity ? Infinity : 1));
-  const selected = checks ?? calculatedChecks, calculatedRuns = Math.min(Number.MAX_SAFE_INTEGER, selected * 2);
+  let selected;
+  if (checks !== undefined) {
+    selected = checks;
+  } else {
+    const override = resolveSuiteConcurrencyOverride({ cwd: cwd ?? ports.cwd, env, fs: ports.fs ?? files });
+    if (override === null) {
+      selected = calculatedChecks;
+    } else {
+      const memoryCap = Math.floor(freeMemory / (4 * 1024 ** 3));
+      let pressure = null;
+      if (platform === 'darwin') {
+        pressure = typeof ports.memoryPressure === 'function' ? ports.memoryPressure() : null;
+        if (pressure !== null && (!Number.isInteger(pressure) || pressure < 0)) {
+          throw Error('Machine check capacity is unavailable or invalid.');
+        }
+      }
+      const pressureCap = platform === 'darwin' && pressure !== null && pressure >= 2 ? 1 : Infinity;
+      const coreCap = usable.length;
+      selected = Math.max(1, Math.min(override, coreCap, memoryCap, pressureCap));
+    }
+  }
+  const calculatedRuns = Math.min(Number.MAX_SAFE_INTEGER, selected * 2);
   return {cores:cpuIds.length, usableCores:usable.length, cpuIds:usable, freeMemory, load, personal, affinity, taskset,
     calculatedChecks, checks:selected, calculatedRuns, runs:runs ?? calculatedRuns,
     coresPerCheck:Math.max(1, Math.floor(usable.length / selected)), busy:load > usable.length};
@@ -55,10 +152,10 @@ export async function releaseCheckCapacity({env = process.env, owner}, ports = {
     p.fs.unlinkSync(path); return true;
   });
 }
-function admissionCapacity(p, env) {
+function admissionCapacity(p, env, cwd) {
   let value;
   try { value = JSON.parse(p.fs.readFileSync(join(p.root,'capacity.json'),'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return calculateCheckCapacity({}, {...p,env}); throw error; }
+  catch (error) { if (error.code === 'ENOENT') return calculateCheckCapacity({cwd}, {...p,env}); throw error; }
   if (!value || typeof value.personal !== 'boolean' || typeof value.affinity !== 'boolean'
     || value.owner !== null && (typeof value.owner !== 'string' || !value.owner)
     || !Number.isFinite(value.observedAt) || value.expiresAt !== value.observedAt + CAPACITY_LIFETIME
@@ -75,11 +172,11 @@ function admissionCapacity(p, env) {
   if (result.usableCores !== value.usableCores || result.coresPerCheck !== value.coresPerCheck
     || result.busy !== value.busy || result.calculatedChecks !== value.calculatedChecks
     || result.calculatedRuns !== value.calculatedRuns) throw Error('Invalid saved machine check capacity.');
-  if (p.now() >= value.expiresAt) return calculateCheckCapacity({}, {...p,env});
+  if (p.now() >= value.expiresAt) return calculateCheckCapacity({cwd}, {...p,env});
   return {...result, cores:value.cores, personal:value.personal, affinity:value.affinity, taskset:value.taskset};
 }
-export function readCheckStatus({env = process.env, checks, runs}, ports = {}) {
-  const p = portsFor(env, ports), capacity = admissionCapacity(p, env), all = records(p);
+export function readCheckStatus({env = process.env, cwd, checks, runs} = {}, ports = {}) {
+  const p = portsFor(env, ports), capacity = admissionCapacity(p, env, cwd), all = records(p);
   return {...capacity, busyChecks:all.filter(row=>row.state==='running').length, waitingChecks:all.filter(row=>row.state==='waiting').length};
 }
 const delay = ms => new Promise(done => setTimeout(done, ms));
@@ -321,7 +418,7 @@ export async function runTestSuite({ cwd, command, timeout = 30, env = process.e
       if (pendingSignal) return await finishInterrupted(pendingSignal);
       const position = await underLock(p, () => {
         if (pendingSignal) return -1;
-        const all = records(p), place = positionOf(all, row), capacity = admissionCapacity(p, env);
+        const all = records(p), place = positionOf(all, row), capacity = admissionCapacity(p, env, cwd);
         const running = all.filter(other => other.state === 'running');
         const occupied = new Set(running.flatMap(other => other.cpuIds ?? []));
         const available = capacity.cpuIds.filter(id => !occupied.has(id));

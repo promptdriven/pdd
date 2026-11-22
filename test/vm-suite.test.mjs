@@ -266,7 +266,7 @@ test('the compatibility runner uses the shared queue and returns the suite exit 
   const suite = result.events.find(e => e.name === 'npm');
   assert.equal(suite.cwd, realpathSync(result.clone));
   assert.equal(suite.stdinIsDevNull, true);
-  const clone = literal(result.clone);
+  const clone = literal(realpathSync(result.clone));
   assert.match(result.stdout, new RegExp(`^queued ${clock} in ${clone}\\nstarted ${clock} in ${clone}\\nfinished ${clock} exit 7 in ${clone}\\n$`));
   const history = readFileSync(join(result.dir, 'shared/fullsuite.lock.history'), 'utf8');
   assert.match(history, new RegExp(`^started ${clock} in ${clone}\\nfinished ${clock} exit 7 in ${clone}\\n$`));
@@ -281,7 +281,7 @@ test('the lock runner runs the plain suite with Chrome when SUITE is empty', t =
   assert.equal(suite.browser, '/usr/bin/google-chrome');
   assert.equal(suite.stdinIsDevNull, true);
   const history = readFileSync(join(result.home, '.local/state/pdd/vm-suite/fullsuite.lock.history'), 'utf8');
-  const clone = literal(result.clone);
+  const clone = literal(realpathSync(result.clone));
   assert.match(history, new RegExp(`^started ${clock} in ${clone}\\nfinished ${clock} exit 3 in ${clone}\\n$`));
 });
 

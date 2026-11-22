@@ -214,13 +214,13 @@ Limits: the screen is a fallback. A Claude error that comes after a tool call in
 ## Shared suite queue environment
 
 `chatLaunch` adds `queueEnv` to its existing result. It is a mapping with only
-present string values for `PDD_SUITE_QUEUE` and `PDD_VM_SUITE_LOCK`.
+present string values for `PDD_SUITE_QUEUE`, `PDD_VM_SUITE_LOCK` and `PDD_SUITE_CONCURRENCY`.
 `chatCommand` accepts optional `queueEnv = {}` for Codex command overrides.
-On every worker launch and resume, forward the caller's `PDD_SUITE_QUEUE` and
-`PDD_VM_SUITE_LOCK` values through the private launch environment; current named
-agent overrides retain their normal precedence. Unset either missing selector
+On every worker launch and resume, forward the caller's `PDD_SUITE_QUEUE`,
+`PDD_VM_SUITE_LOCK` and `PDD_SUITE_CONCURRENCY` values through the private launch environment; current named
+agent overrides retain their normal precedence. Unset any missing variable
 in the native child so an older Herdr server environment cannot select a
-different queue. Pass selected values to Codex commands with invocation-only
+different queue or concurrency override. Pass selected values to Codex commands with invocation-only
 `shell_environment_policy.set` overrides as well. Preserve all other shell
 policy entries. The [shared queue contract](test-suite-queue.prompt.md) owns
 selector precedence and admission.
@@ -409,7 +409,7 @@ Export countReasons(kept) to count the reason fields, mergeReasonCounts(...group
 <details><summary>Runtime interface</summary>
 
 ```json
-{"status":"approved","prose_sha256":"7948e474ca9d6d9c08e753cc742b3c0f26733de244412c005a80a41f17785b94","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
+{"status":"approved","prose_sha256":"0d309df49c46682ada816be125c5d1e6d712dcd425f52fed6cc41febde21c84e","entries":[{"operation":"sendToChat","input_schema":{"type":"object","properties":{"chat":{"type":"object","properties":{"paneId":{"type":"string"},"startedAt":{"type":"number"},"resumedAt":{"type":"number"}},"required":["paneId"],"additionalProperties":false},"text":{"type":"string"}},"required":["chat","text"],"additionalProperties":false},"result_schema":{"type":"object","properties":{"ok":{"type":"boolean"},"code":{"type":"string"},"uncertain":{"type":"boolean"},"reason":{"type":"string"}},"required":["ok"],"additionalProperties":false},"errors":[]}],"calls":[],"resources":[],"limits":{"max_steps":4,"max_model_calls":1},"conventions":[]}
 ```
 </details>
 
