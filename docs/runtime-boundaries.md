@@ -37,7 +37,7 @@ to selected logical input values when the contract requires them.
 Put injected I/O and callbacks behind declared `port` operations. A `port.write` simulation
 records arguments in the scenario world and returns the scenario-declared result. Bind
 these operations to the actual dependency contract and keep expected values owned by the
-Story and test. See [RUNBOOK §5](../skills/pdd-prompting/runbook/cli-and-ports.md#5-saved-data) for saved data and resources.
+Story and test. See [Ports and CLI](../skills/pdd/references/ports-and-cli.md) for saved data and resources.
 
 | Declared simulation | What it covers |
 |---|---|

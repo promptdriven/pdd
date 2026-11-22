@@ -4,14 +4,14 @@ import { execFile as execCallback } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import * as nativeFs from 'node:fs';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { runAutopilot } from './autopilot.mjs';
 import { githubOriginRepository } from './shared/github-repo.mjs';
 import { gitContext } from './shared/git-context.mjs';
-import { resolvePddStateBase } from './shared/state-dir.mjs';
 import { dependencyLinks, projectIssueGraph, validateDependencyChange } from './issue-dependencies.mjs';
-const stateDirFor = (ports = {}) => ports.stateDir ?? resolvePddStateBase(ports.env ?? process.env);
+const stateDirFor = (ports = {}) => ports.stateDir ?? ((ports.env ?? process.env).PDD_STATE_DIR || join((ports.env ?? process.env).HOME || homedir(), '.local', 'state', 'pdd'));
 import { githubBudgetSettings, githubEtagCache, githubFloorGuard, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, nativeGithubCounter } from './github-calls.mjs';
 import {
   CLAIM_EXPIRES_AFTER,

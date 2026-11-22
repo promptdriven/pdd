@@ -21,7 +21,7 @@ const send = (message, done = () => {}) => {
   if (process.connected) try { process.send(message, done); return; } catch {}
   done();
 };
-if (isDirectEntry() || (!process.argv[1] && typeof process.send === 'function')) {
+if (isDirectEntry()) {
 // Losing the caller is not a request to cancel an already admitted command.
 process.on('disconnect', () => { if (!started) process.exitCode = 1; });
 process.on('message', async message => {

@@ -16,7 +16,7 @@ const {runtimeOrigin} = runtimeClientSlice();
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 const clean = value => String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
 const skills = ['pdd'];
-const retiredSkills = ['pdd-autopilot','pdd-check','pdd-merge','pdd-setup'];
+const retiredSkills = ['pdd-autopilot','pdd-check','pdd-merge','pdd-setup','pdd-prompting','pdd-small-change','pdd-bug','pdd-feature','pdd-product','pdd-graph'];
 const ready = value => value?.code === 0;
 
 const PROVIDER_CONFIG_VARS = {codex:'CODEX_HOME',claude:'CLAUDE_CONFIG_DIR',gemini:'GEMINI_CLI_HOME',agy:'ANTIGRAVITY_APP_DATA_DIR'};
@@ -272,7 +272,7 @@ export async function runAutopilotDoctor(input, ports = {}) {
       const backupDir = join(userRoot, '.pdd-retired');
       return `mkdir -p ${quote(backupDir)} && mv ${dirs.map(quote).join(' ')} ${quote(`${backupDir}/`)}`;
     }).join(' && ');
-    add('retired-skills','warn',`Unmarked retired PDD skill folder(s) found: ${allRetired.join(', ')}; move them aside so agents use the 7 current skills`,retiredFix);
+    add('retired-skills','warn',`Unmarked retired PDD skill folder(s) found: ${allRetired.join(', ')}; move them aside so agents use the current pdd skill`,retiredFix);
   }
   const config = json(read(join(cwd,'pdd.json'))), auto = config?.autopilot;
   const valid = auto && ['auto','observe'].includes(auto.mode) && (auto.trust===undefined || Array.isArray(auto.trust)&&auto.trust.every(x=>typeof x==='string'&&x.trim()));

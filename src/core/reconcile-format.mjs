@@ -1,7 +1,7 @@
 // Layer-1 read-only formatter for CHECK receipt reconciliation responses.
 const cleanText = (value, max = 240) =>
   String(value ?? '')
-    .replace(/[\x00-\x1f\x7f]/g, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, max);

@@ -1472,7 +1472,7 @@ test('E75 (#3177, #3227 fix 5) every agent brief names the short job rules file 
   assert.doesNotMatch(build, /`pdd` on PATH is the same/);
   assert.match(review, /When you run pdd, run it as "\$PDD_CLI", never as a bare pdd\./);
   assert.match(review, /Read any PDD skill or rules file from "\$PDD_SKILLS"\./);
-  assert.match(build, /Read these PDD skills and their step files from "\$PDD_SKILLS" \(for example "\$PDD_SKILLS\/pdd-feature\/SKILL\.md"\), never from ~\/\.agents\/skills or ~\/\.claude\/skills: the installed copies can be older than this Autopilot\./);
+  assert.match(build, /Read the PDD skill from "\$PDD_SKILLS\/pdd\/SKILL\.md" \(and load its guides from "\$PDD_SKILLS\/pdd\/references\/" on demand\), never from ~\/\.agents\/skills or ~\/\.claude\/skills: the installed copies can be older than this Autopilot\./);
   w.finish(17, 'review', { result: { verdict: 'FAIL', head, summary: 'x', mustFix: ['P2 src/duration.js:1 wrong'] } }); w.suite(17, 0); await w.tick();
   const repair = w.job(17, 'repair').input;
   assert.ok(repair.includes(`Read ${rules} in full before you write the PR body.`), 'repair');

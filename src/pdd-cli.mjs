@@ -544,8 +544,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
       const repoFeatures = (!needsRemoteOrCompiler && !localLint && plan.options['--diff'] === undefined && plan.options['--base'] === undefined)
         ? inspectLocalLintRepoFeatures(cwd)
         : { hasNativeStory: false, hasScenarioJson: false };
-      const needsRuntimeLocalAssessment = repoFeatures.hasNativeStory
-        || (plan.options['--local'] === true && repoFeatures.hasScenarioJson);
+      const needsRuntimeLocalAssessment = plan.options['--local'] === true && repoFeatures.hasScenarioJson;
       if (needsRemoteOrCompiler || needsRuntimeLocalAssessment) {
         try {
           const runtime = await import('./runtime-seam.mjs');

@@ -28,7 +28,6 @@ const BIN_ENTRY = join(PACKAGE_ROOT, 'bin', 'pdd.mjs');
 const NET_GUARD = join(PACKAGE_ROOT, 'test', 'helpers', 'test-net-guard.mjs');
 const PKG_VERSION = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
 const GIT_BIN = execFileSync('which', ['git'], { encoding: 'utf8' }).trim() || '/usr/bin/git';
-const FAKE_HERDR_PATH = join(PACKAGE_ROOT, 'test', 'helpers', 'fake-herdr.mjs');
 
 const tempDirs = [];
 const activeServers = [];
@@ -332,57 +331,6 @@ const fullArgs = bare && (args[0] === 'fetch' || args[0] === 'push')
 const res = spawnSync(${JSON.stringify(GIT_BIN)}, fullArgs, { stdio: 'inherit' });
 process.exit(res.status ?? 1);
 `,
-  );
-
-  // Persistent file-backed `herdr` shim delegating to the repository's fakeHerdr state machine.
-  const herdrMjs = join(binDir, 'herdr.mjs');
-  writeFileSync(
-    herdrMjs,
-    `import fs from 'node:fs';
-import { fakeHerdr } from ${JSON.stringify(FAKE_HERDR_PATH)};
-const stateFile = process.env.PDD_E2E_HERDR_STATE;
-const args = process.argv.slice(2);
-if (args[0] === '--version') {
-  process.stdout.write('herdr 0.9.1-e2e\\n');
-  process.exit(0);
-}
-if (!stateFile) {
-  process.stderr.write('herdr: offline e2e shim (set PDD_E2E_HERDR_STATE to enable)\\n');
-  process.exit(1);
-}
-const stripped = [];
-for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--session') { i++; continue; }
-  if (args[i] === '--json') continue;
-  stripped.push(args[i]);
-}
-const h = fakeHerdr();
-if (fs.existsSync(stateFile)) Object.assign(h, JSON.parse(fs.readFileSync(stateFile, 'utf8')));
-try {
-  const reply = await h.herdr(stripped);
-  process.stdout.write(JSON.stringify(reply));
-} catch (error) {
-  process.stdout.write(JSON.stringify({ error: { code: error.code ?? error.message, message: error.message } }));
-  process.exitCode = 1;
-} finally {
-  fs.writeFileSync(stateFile, JSON.stringify({
-    workspaces: h.workspaces,
-    tabs: h.tabs,
-    panes: h.panes,
-    calls: h.calls,
-    next: h.next,
-    focus: h.focus,
-    sessions: h.sessions,
-    nextSession: h.nextSession,
-  }));
-}
-`,
-    { mode: 0o755 },
-  );
-  writeFileSync(
-    join(binDir, 'herdr'),
-    `#!/bin/sh\nexec '${nodeBin.replace(/'/g, "'\\''")}' '${herdrMjs.replace(/'/g, "'\\''")}' "$@"\n`,
-    { mode: 0o755 },
   );
 
   // Also put a symlink to real bin/pdd.mjs in a separate bin dir when tests want `pdd` on PATH.

@@ -1,23 +1,23 @@
 # Autopilot core job rules
 
-Read this whole file before you write or check the PR body. It is short on purpose: one read holds all of it. The
-long reference is RUNBOOK.md §15 "Autopilot core jobs", with §3, §11 and §17. A tool output over about 10,000 tokens
+Read this whole file before you write or check the PR body. It is short on purpose: one read holds all of it. Load
+`$PDD_SKILLS/pdd/SKILL.md` and the co-located references (`prompting.md`, `stories.md`, `verification.md`) on demand. A tool output over about 10,000 tokens
 loses its middle: read big files in parts.
 
-These rules are for a job of the Autopilot core engine (`pdd autopilot start --engine core`). The job makes one PR
-with no workflow run. It writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot checks each
+These rules are for a job of the Autopilot core engine (`pdd autopilot start --engine core`). The job makes one PR.
+It writes the `Runtime:` lines and one `Evidence:` line in the PR body. Autopilot checks each
 line against its own records. A line that the records do not support is red.
 
-## Skill choice
+## Mode choice (inside `$PDD_SKILLS/pdd/SKILL.md`)
 
-- Use `pdd-small-change` only when every planned file is an unowned path `d` file outside PDD (docs, guides, CI, lock
+- Use `small-change` mode only when every planned file is an unowned path `d` file outside PDD (docs, guides, CI, lock
   files, packages, non-behavior config or metadata, or test-only maintenance — never `*.prompt.md`,
   `user_stories/*.md`, or product/app code), also when the issue is written as a bug.
 - If an issue touches prompt-owned or product/app code (`src/`, `app/`, etc.), even when no prompt exists yet, pick
-  `pdd-bug` or `pdd-feature` instead so PR 1 creates or updates the owning prompt.
+  `bug` or `feature` mode instead so the PR creates or updates the owning prompt.
 - Write no new Story and no new prompt for a path `d` non-code file.
-- If a `pdd-small-change` run already touched owned or product code, note it and include the Story test, replay and
-  `Runtime:` evidence or rerun under `pdd-bug` or `pdd-feature`.
+- If a `small-change` run already touched owned or product code, note it and include the Story test, replay and
+  `Runtime:` evidence or rerun under `bug` or `feature` mode.
 - A repair on a path-`d`-only PR keeps path `d` without adding a new Story or prompt.
 
 ## Changed

@@ -44,8 +44,7 @@ export async function runApprove({ words = [], cwd = process.cwd(), said } = {},
     const { strictApprovals } = readApprovalPolicy({ root }, ports);
     const env = ports.env ?? process.env;
     const agent = approvalActor(env).kind === 'agent';
-    const pane = Boolean(strictApprovals && env.HERDR_PANE_ID);
-    if (strictApprovals ? said !== undefined || !interactive || agent || pane : said === undefined && !interactive) {
+    if (strictApprovals ? said !== undefined || !interactive || agent : said === undefined && !interactive) {
       throw new Stop(2, `pdd approve is for a person at a terminal. Ask the person to run: pdd approve ${path}`);
     }
     const common = await gitRun(['rev-parse', '--path-format=absolute', '--git-common-dir'], root);

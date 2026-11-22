@@ -245,7 +245,7 @@ function lazyEvidenceEligibility({ root, producerRoot, tests, source_sha256, run
         || p.split('/').some(seg => !seg || seg === '.' || seg === '..' || seg.toLowerCase() === '.git'))
       || new Set(tests).size !== tests.length
     ) {
-      return { ...result, producerRoot: realProducer, state: 'ineligible', reason: 'invalid selected test paths' };
+      return { ...result, state: 'unavailable', reason: 'Select nonempty unique safe authored-relative test paths.' };
     }
     const sortedTests = [...tests].sort();
     result = { ...result, producerRoot: realProducer, tests: sortedTests };
@@ -2794,6 +2794,13 @@ export async function runCheck(input = {}, ports = {}) {
         allRuns: lazyAllRuns,
         workflowBaseSha: ({ root, env: runEnv }) =>
           resolveWorkflowBaseSha({ root, env: runEnv ?? env, allRunsPort: forwardPorts.allRuns ?? lazyAllRuns }),
+        ...(nativeLintRequested
+          ? {
+              assessNativeEvidence: () => ({ ok: false, state: 'unavailable', storyNativeProof: 'none', reason: 'Verify native Stories locally with `pdd prove`.' }),
+              usableResult: () => false,
+              resultLines: () => [],
+            }
+          : {}),
         ...(defaultLintSvgLayouts ? { lintSvgLayouts: defaultLintSvgLayouts } : {}),
         ...(screenMod
           ? {
@@ -3104,14 +3111,30 @@ export async function runTry(input = {}, ports = {}) {
     { parseProductDocuments, parseProductWorldWriters },
     { lineReader },
     { createPromptApproval },
+    { createHumanBoundaryCard },
   ] = await Promise.all([
     import('./secret-redaction.mjs'),
     import('./agent-config.mjs'),
     import('./product-documents.mjs'),
     import('./shared/line-reader.mjs'),
     import('./core/approve-prompt.mjs'),
+    import('./core/human-boundary-card-core.mjs'),
   ]);
-  const { askApproval, promptPath } = createPromptApproval(runtimePreflightSlice());
+  const { buildHumanBoundaryCard, formatApproveBoundaryCard } = createHumanBoundaryCard({
+    TEST_SCHEMA,
+    findTests,
+    gitFiles,
+    interfaceBlocks,
+    parseScenarioJson,
+    promptMarkdownTargets,
+    readPrompt,
+    storyCriteria,
+  });
+  const { askApproval, promptPath } = createPromptApproval({
+    ...runtimePreflightSlice(),
+    formatBoundaryCardLines: ({ root: cardRoot, focusPrompt, env: cardEnv }) =>
+      formatApproveBoundaryCard(buildHumanBoundaryCard({ root: cardRoot, focusPrompt, env: cardEnv })),
+  });
   const defaultDiscoverAgents = async (...args) => (await import('./shared/agent-process.mjs')).discoverAgents(...args);
   const defaultAskAgent = async (turnInput, ...rest) => askAgent(turnInput, ...rest);
   const defaultAgentBridge = (context, test, tryId, opts, link) =>

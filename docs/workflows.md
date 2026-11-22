@@ -62,7 +62,7 @@ Only prompt-story reads the full Prompting guide. check reads the `pdd-prompting
 | Branch and worktree | No. The agent works in your folder | Yes. A new branch and worktree for the issue |
 | Chats | One | One for each area, in Herdr |
 | Gates | The agent asks you | pdd holds them. You approve in the chat or with `pdd workflow approve` |
-| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. Your agent may merge on your explicit chat request under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files) | pdd opens them. Your agent may merge on your explicit chat request under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files) |
+| PRs | At a PR gate, the agent asks you. It opens the PR only if you say yes. Your agent may merge on your explicit chat request under [Prompting guide §5](../skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges) | Autopilot opens them. Your agent may merge on your explicit chat request under [Prompting guide §5](../skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges) |
 
 ## How a run works
 
@@ -303,7 +303,7 @@ pdd-mybug/
 
 Keep the rules of the PDD workflows in your `SKILL.md`: the main chat does not write code, each step runs in a fresh subagent, verify runs in a subagent that did not write the code, and the agent records only the person's actual approval and merges only by the explicit-request rules above. Outside a run, the agent opens a PR only if the person says yes; in a run, pdd does.
 
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [RUNBOOK §2](../skills/pdd-prompting/runbook/files-and-runtime-block.md#2-the-files). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
+The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [Prompting guide §5](../skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
 
 Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
 

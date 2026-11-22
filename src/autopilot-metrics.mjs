@@ -135,8 +135,10 @@ function inferSkillFromBuildLog(fs, logPath) {
       const buf = Buffer.alloc(262_144);
       const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
       const text = buf.subarray(0, bytes).toString('utf8');
-      const matches = [...text.matchAll(/(?<!\$PDD_SKILLS\/)pdd-(small-change|bug|feature)\/SKILL\.md/g)];
-      if (matches.length > 0) return matches.at(-1)[1];
+      const legacyMatches = [...text.matchAll(/(?<!\$PDD_SKILLS\/)pdd-(small-change|bug|feature)\/SKILL\.md/g)];
+      if (legacyMatches.length > 0) return legacyMatches.at(-1)[1];
+      const modeMatches = [...text.matchAll(/(?:\bmode\s*[:=]\s*|\bpdd\s+mode\s*:\s*|`)(small-change|bug|feature)\b/gi)];
+      if (modeMatches.length > 0) return modeMatches.at(-1)[1].toLowerCase();
     } finally {
       fs.closeSync(fd);
     }
