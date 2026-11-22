@@ -34,7 +34,7 @@ Read the full [Prompting guide](../../skills/pdd/references/prompting.md) before
 - `approve` (`approve`, local `prompt-approve`, [prompt approve](prompt-approve.prompt.md)): required text `prompt`, optional text `--said`. Form `pdd approve PROMPT [--said WORDS]` includes the shared quoted-heredoc approval template.
 - `files` (`files`, local `project-files`, [files view](files.prompt.md)): flag `--json`. Form `pdd files [--json]`.
 - `owner` (`owner`, local `file-owner`, [file owner lookup](file-owner.prompt.md)): required repeated text `path`, flag `--json`. Form `pdd owner PATH... [--json]`.
-- `update` (`update`, local `update-sync`, [Changed-map wrapper](update-sync.prompt.md)): optional repeated text `file`, options `--from` (text), `--branch` (text), `--all` (flag), `--check` (flag), hidden `--write` (flag, refused read-only by handler without advertising in help or completion), and `--json` (flag). Form: `pdd update [FILE...] [--from RANGE] [--branch REF] [--all] [--check] [--json]`.
+- `update` (`update`, local `update-sync`, [Changed-map wrapper](update-sync.prompt.md)): optional repeated text `file`, options `--from` (text), `--branch` (flag), `--all` (flag), `--check` (flag), hidden `--write` (flag, refused read-only by handler without advertising in help or completion), and `--json` (flag). Form: `pdd update [FILE...] [--from RANGE] [--branch] [--all] [--check] [--json]`.
 - `contracts` (`contracts`, local `contracts`) and `contracts.sync` (`contracts sync`, local `contracts-sync`, flag `--write`).
 - `jobs` (`jobs`, local `runtime-jobs`): no operands or options. Form `pdd jobs`.
 - `mcp` (`mcp`, local `mcp`): no operands or options. Form `pdd mcp`.

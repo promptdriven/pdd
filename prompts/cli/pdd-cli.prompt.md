@@ -80,8 +80,8 @@ skills.
 
 Dispatch `update-sync` to `(runUpdateSync ?? runUpdate)({cwd,files,from,branch,all,check,write,json}, {stdout,stderr})`
 from [Changed-map wrapper](update-sync.prompt.md), with FILE operands as `files`,
-`--from` as `from` (when present), `--branch` as `branch` (when present), and
-Boolean flags `--all`, `--check`, `--write`, and `--json`. It stays read-only
+`--from` as `from` (when present), and
+Boolean flags `--branch`, `--all`, `--check`, `--write`, and `--json`. It stays read-only
 (zero `.pdd/sync/` sidecars, refusing hidden `--write` with exit 2), returns its
 exit code, catches unexpected errors with one finite stderr line and exit 1,
 imports no Runtime client, spawns zero AI subprocesses, and skips post-upgrade

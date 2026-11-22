@@ -132,7 +132,7 @@ only.
 
 ## Inspect changed code files against owning prompts
 
-`pdd update [FILE...] [--from RANGE] [--branch REF] [--all] [--check] [--json]`
+`pdd update [FILE...] [--from RANGE] [--branch] [--all] [--check] [--json]`
 inspects changed code files against their owning `.prompt.md` contracts using
 local Git metadata and working-tree files only, with zero AI subprocesses, zero
 network or interpreter calls, and zero file writes.
@@ -143,11 +143,12 @@ Choose one scope:
   files.
 - Pass `--from RANGE` (`<base>..<head>` or `<base>`, meaning `<base>..HEAD`) to
   scope strictly to files touched in that Git diff range.
-- Pass `--branch REF` to diff from `merge-base(REF, HEAD)` against the working
-  tree.
+- Pass `--branch` to diff from `merge-base(defaultBranch, HEAD)` against the
+  working tree.
 - Pass `--all` to inspect all prompt-mapped files in the repository.
 - Omit all scope flags to inspect staged, unstaged, and untracked non-ignored
-  changes in the current working tree.
+  changes in the current working tree (automatically widening to `--branch` or
+  `--all` on clean committed trees when `--check` runs).
 
 `pdd update` is strictly read-only and writes zero sidecar files or prompt
 edits. It maps each touched file through `pdd owner` (`pdd-bindings.json` and

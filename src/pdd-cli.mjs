@@ -708,7 +708,7 @@ export async function runPdd(argv, { stdout = process.stdout, stderr = process.s
           cwd,
           files: [...plan.operands],
           ...(plan.options['--from'] !== undefined ? { from: plan.options['--from'] } : {}),
-          ...(plan.options['--branch'] !== undefined ? { branch: plan.options['--branch'] } : {}),
+          branch: plan.options['--branch'] === true,
           all: plan.options['--all'] === true,
           check: plan.options['--check'] === true,
           write: plan.options['--write'] === true,
