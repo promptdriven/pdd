@@ -1835,7 +1835,7 @@ test('removed commands, quiet aliases, and invalid flag/operand errors return ex
     { args: ['completion', 'fish'], match: /Unsupported command or options/ },
     // Missing operands & retired workflow command
     { args: ['owner'], match: /Unsupported command or options/ },
-    { args: ['workflow', 'list'], match: /Unknown command "workflow"/ },
+    { args: ['workflow', 'list'], match: /pdd workflow was removed[\s\S]*\/pdd[\s\S]*pdd prove[\s\S]*pdd autopilot/ },
     // Cross-flag semantic validation (exit 2)
     { args: ['test', '--target', 'code', '--timeout', '5'], match: /accepts only --json/ },
     { args: ['metrics', '--json', '--html'], match: /either --json or --html/ },

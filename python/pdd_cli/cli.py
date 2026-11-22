@@ -22,6 +22,24 @@ ENTRY_SCRIPTS: dict[str, str] = {
     "pdd-claude": "pdd-claude.mjs",
 }
 _PY_INTERP_RE = re.compile(r"^(?:python(?:\d+(?:\.\d+)*)?|pypy(?:\d+(?:\.\d+)*)?)$")
+_SEMVER_PRE_RE = re.compile(r"^(\d+\.\d+\.\d+)-(alpha|a|beta|b|rc)\.?(\d+)$", re.IGNORECASE)
+
+
+def _to_pep440(version: str) -> str:
+    raw = version.strip()
+    match = _SEMVER_PRE_RE.match(raw)
+    if not match:
+        return raw
+    base, label, num = match.groups()
+    low = label.lower()
+    prefix = "a" if low.startswith("a") else ("b" if low.startswith("b") else "rc")
+    return f"{base}{prefix}{num}"
+
+
+def _version_matches(pkg_version: str | None, expected_version: str) -> bool:
+    if not pkg_version:
+        return False
+    return pkg_version == expected_version or _to_pep440(pkg_version) == _to_pep440(expected_version)
 
 
 def _script_for_command(command: str) -> str:
@@ -112,20 +130,20 @@ def _find_installed_on_path(
             if not resolved_str or (self_path and resolved_str == self_path):
                 continue
             resolved = Path(resolved_str)
-            if resolved.name == script_name and _read_pkg_version(resolved) == version:
+            if resolved.name == script_name and _version_matches(_read_pkg_version(resolved), version):
                 return resolved
             if win_mode and name.lower() == f"{command}.cmd":
                 for win_entry in (
                     folder_path / "node_modules" / "@promptdriven" / "pdd" / "bin" / script_name,
                     folder_path.parent / "node_modules" / "@promptdriven" / "pdd" / "bin" / script_name,
                 ):
-                    if win_entry.is_file() and _read_pkg_version(win_entry) == version:
+                    if win_entry.is_file() and _version_matches(_read_pkg_version(win_entry), version):
                         return win_entry.resolve()
     if command != "pdd":
         pdd_entry = _find_installed_on_path(version, env, None, is_windows=win_mode, command="pdd")
         if pdd_entry is not None:
             sibling = pdd_entry.parent / script_name
-            if sibling.is_file() and _read_pkg_version(sibling) == version:
+            if sibling.is_file() and _version_matches(_read_pkg_version(sibling), version):
                 return sibling.resolve()
     return None
 
@@ -138,7 +156,7 @@ def _install_into_cache(
 ) -> tuple[Path | None, str]:
     script_name = _script_for_command(command)
     cached_entry = cache_dir / "node_modules" / "@promptdriven" / "pdd" / "bin" / script_name
-    if cached_entry.is_file() and _read_pkg_version(cached_entry) == version:
+    if cached_entry.is_file() and _version_matches(_read_pkg_version(cached_entry), version):
         return cached_entry, ""
     if env.get("PDD_CLI_OFFLINE") == "1":
         return None, f"{PACKAGE_NAME}@{version} is not cached and PDD_CLI_OFFLINE=1 is set."
@@ -176,7 +194,7 @@ def _install_into_cache(
             capture_output=True,
             text=True,
         )
-        if proc.returncode == 0 and cached_entry.is_file() and _read_pkg_version(cached_entry) == version:
+        if proc.returncode == 0 and cached_entry.is_file() and _version_matches(_read_pkg_version(cached_entry), version):
             return cached_entry, ""
         last_err = (proc.stderr or proc.stdout or "").strip()
     return None, last_err
@@ -205,12 +223,12 @@ def resolve_cli_entry(
 
     pkg_dir = Path(__file__).resolve().parent
     bundled = pkg_dir / "_bundled" / "bin" / script_name
-    if bundled.is_file() and _read_pkg_version(bundled) == version:
+    if bundled.is_file() and _version_matches(_read_pkg_version(bundled), version):
         return bundled, ""
 
     if active_env.get("PDD_CLI_IGNORE_CHECKOUT") != "1":
         checkout = pkg_dir.parents[1] / "bin" / script_name
-        if checkout.is_file() and _read_pkg_version(checkout) == version:
+        if checkout.is_file() and _version_matches(_read_pkg_version(checkout), version):
             return checkout, ""
 
     _, self_real = _resolve_argv0_real(argv0, active_env)

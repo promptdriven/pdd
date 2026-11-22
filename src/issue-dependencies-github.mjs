@@ -981,13 +981,14 @@ async function readLocalOccupied({ cwd, repository }, ports = {}) {
     if (['completed', 'cancelled'].includes(run.state)) continue;
     const held = progress => ['waiting', 'running', 'unavailable'].includes(progress?.state);
     const checkHeld = held((ports.readSuiteProgress ?? readSuiteProgress)({cwd: run.root, env: ports.env}, ports));
+    // Dead legacy `pdd workflow` runs in `paused` state have no workflow resume/cancel CLI; ignore them once no suite check holds the worktree so `pdd graph` is never permanently stuck.
+    if (run.state === 'paused' && !checkHeld) continue;
     const working = checkHeld || run.state === 'running';
     runs.push({
       issue: `https://github.com/${repository.toLowerCase()}/issues/${run.number}`,
       runId,
       working,
       state: ['running', 'waiting', 'paused', 'stuck', 'question'].includes(run.state) ? run.state : 'unknown',
-      ...(run.state === 'paused' && run.runtimeWait ? { waiting: 'runtime' } : {}),
     });
   }
   const index = join(context.commonDir, 'pdd', 'worktree-assignments');

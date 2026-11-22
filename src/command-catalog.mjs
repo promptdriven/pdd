@@ -31,7 +31,7 @@ export const PUBLIC_HELP_TEXT = Object.freeze({
       "  pdd approve PROMPT           Review prompt changes and record approval.",
       "  pdd files [--json]           List prompts, Stories, tests and refusals.",
       "  pdd owner PATH... [--json]   Show which prompt owns each file.",
-      "  pdd update [FILE...]         Inspect or sync touched modules and hashes.",
+      "  pdd update [FILE...]         Inspect changed code vs owning prompts.",
       "  pdd contracts [sync]         Inspect or sync shared record schemas.",
       "  pdd jobs                     List active local interpreter jobs.",
       "  pdd mcp                      Serve repository simulator tools over MCP.",
@@ -146,8 +146,8 @@ const routes = [
   { id: 'owner', prefix: ['owner'], local: 'file-owner', operands: [{ name: 'path', type: 'text', repeat: true }], options: [{ name: '--json', kind: 'flag' }],
     forms: [form('pdd owner PATH... [--json]', 'Show which prompt owns each file, from pdd-bindings.json and top-of-file Prompt / Generated from headers; reads local files only.')] },
   { id: 'update', prefix: ['update'], local: 'update-sync', operands: [{ name: 'file', type: 'text', optional: true, repeat: true }],
-    options: [{ name: '--from', kind: 'text' }, { name: '--check', kind: 'flag' }, { name: '--write', kind: 'flag' }, { name: '--json', kind: 'flag' }],
-    forms: [form('pdd update [FILE...] [--from RANGE] [--check] [--write] [--json]', 'Inspect or sync touched code files with their owning prompts and per-module content hashes using local Git and working files only, with zero AI calls. Use --check to fail on drift and --write to refresh derived hashes for touched modules.')] },
+    options: [{ name: '--from', kind: 'text' }, { name: '--branch', kind: 'text' }, { name: '--all', kind: 'flag' }, { name: '--check', kind: 'flag' }, { name: '--write', kind: 'flag', hidden: true }, { name: '--json', kind: 'flag' }],
+    forms: [form('pdd update [FILE...] [--from RANGE] [--branch REF] [--all] [--check] [--json]', 'Inspect changed code files against their owning prompts and changed symbols using local Git and working files only (read-only, zero AI calls). Use --branch REF to diff from merge-base(REF, HEAD), --all for all mapped files, and --check to fail on drift.')] },
   { id: 'contracts', prefix: ['contracts'], local: 'contracts', operands: [], options: [],
     forms: [form('pdd contracts', 'List shared records, their users and Stories stale since their last check; local working files only.')] },
   { id: 'contracts.sync', prefix: ['contracts', 'sync'], local: 'contracts-sync', operands: [], options: [{name:'--write',kind:'flag'}],
@@ -207,7 +207,7 @@ const routes = [
   { id: 'product.next', prefix: ['product', 'next'], local: 'product-next', operands: [], options: [{name:'--through',kind:'value',choices:['prompt-pr','code']}],
     forms: [form('pdd product next [--through prompt-pr|code]', 'Show ready planned runs and their start commands; --through prompt-pr|code selects the completion target; no interpreter calls.')] },
   { id: 'product.start', prefix: ['product', 'start'], local: 'product-start', operands: [{name:'run',type:'text'}], options: [{name:'--no-run',kind:'flag'},{name:'--agent',kind:'text',choices:['codex','claude','gemini','agy']},{name:'--through',kind:'value',choices:['prompt-pr','code']},{name:'--base',kind:'text'}],
-    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy|ENTRY] [--through prompt-pr|code] [--base BRANCH]', 'Create or reuse the run issue and start a normal feature run; --no-run only prepares the issue; --through prompt-pr|code sets the completion target and forwards it; --base selects an existing origin branch; ENTRY is a name from ~/.config/pdd/agents.json. No interpreter calls.')] },
+    forms: [form('pdd product start RUN [--no-run] [--agent codex|claude|gemini|agy|ENTRY] [--through prompt-pr|code] [--base BRANCH]', 'Create or reuse the scoped run issue and print a /pdd handoff prompt; --no-run only prepares the issue; --through prompt-pr|code sets the completion target; --base selects an existing origin branch; ENTRY is a name from ~/.config/pdd/agents.json. No interpreter calls.')] },
   { id: 'product.contracts', prefix: ['product', 'contracts'], local: 'contracts', operands: [], options: [],
     forms: [form('pdd product contracts', 'List shared product records, their users and Stories stale since their last check (alias: pdd contracts); local working files only.')] },
   { id: 'graph', prefix: ['graph'], local: 'issue-dependency-graph', operands: [], options: [{name:'--open',kind:'flag'},{name:'--issue',kind:'text'},{name:'--repo',kind:'text'}],
@@ -279,6 +279,12 @@ const routes = [
   { id: 'version.detailed', prefix: ['-VV'], local: 'version-detailed', operands: [], options: [],
     forms: [form('pdd -VV', 'Show this package version and the interpreter build and supported formats; unknown when unavailable. Uses existing gh sign-in, with no AI call.')] },
 ];
+export const REMOVED_COMMANDS = Object.freeze([
+  Object.freeze({
+    words: Object.freeze(['workflow']),
+    message: 'pdd workflow was removed. Use /pdd (or $pdd) in your coding agent, pdd prove for base-vs-head proof, or pdd autopilot for headless issue runs.',
+  }),
+]);
 export const PUBLIC_COMMAND_ROUTES = Object.freeze(routes.map(route => Object.freeze({ ...route,
   prefix: Object.freeze(route.prefix), ...(route.quiet ? { quiet: Object.freeze(route.quiet) } : {}),
   ...(route.removed ? { removed: Object.freeze(route.removed) } : {}),

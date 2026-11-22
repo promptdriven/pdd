@@ -47,9 +47,7 @@ change.
 
 ## Source identity
 
-Compute the current content identity after all source/test edits with `sourceFingerprint(root)`, exported
-by the installed pdd package's `src/workflow-replay.mjs`. This helper makes local Git/file reads only.
-It returns null when source cannot be read. The algorithm is SHA256 of JSON.stringify of lexically sorted
+Compute the current content identity after all source/test edits using the SHA-256 of `JSON.stringify` of lexically sorted
 Git-visible path tuples (tracked and untracked non-ignored files): regular `[path, mode & 0o111, SHA256(bytes)]`,
 symlink `[path, "link", linkTarget]`, missing tracked `[path, "missing"]`. The hash is independent of commit
 identity, so committing byte-identical content preserves it; source edits, new visible files and executable
@@ -143,7 +141,7 @@ one formal status, with the same words:
 | malformed (FIELD) | FIELD is wrong: the file, its JSON, `schema_version`, `run_id`, `source`, a `formal.*` field or `mutation`. | Correct FIELD. |
 | stale (source changed) | `source.sha256` is not the current source fingerprint. | Run the formal check on the current source and write a new block. |
 
-After the repair, run `pdd workflow done formal` again. A line that is not recorded always gives the reason
+After the repair, re-run the formal check and update `replay-evidence.json`. A line that is not recorded always gives the reason
 and the repair step. When the file holds a block that pdd did not accept, the line says what the block
 claims and why pdd did not accept it.
 
@@ -243,9 +241,9 @@ header. pdd reads the header from the file on the base commit and from the file 
 any complete line in the first 4 KiB of the file, for example after a `#!` line, a license or imports:
 
 ```text
-// Prompt: prompts/cli/workflow-runner.prompt.md
+// Prompt: prompts/cli/pdd-cli.prompt.md
 # Prompt: prompts/modules/src/app/policy.py.prompt.md
-// Generated from prompts/cli/workflow-runner.prompt.md.
+// Generated from prompts/cli/pdd-cli.prompt.md.
 """Generated from prompts/app.prompt.md."""
 <!-- Prompt: prompts/page.prompt.md -->
 ```
@@ -316,23 +314,7 @@ the scenarios. pdd does not write or run these tests itself.
 
 ## Adopt an unchanged approved corpus
 
-A fresh workflow with an explicit replay evidence policy can use the complete
-scenario corpus already approved at an immutable commit. For a custom workflow
-named `replay`, put its definition in `.agents/skills/pdd-replay/workflow.json`:
-
-```json
-{"version":2,"areas":[{"name":"code","steps":["build","verify","formal"],"gate":"pr","replay_evidence":"pdd.replay-evidence.v1"}]}
-```
-
-Give the declaration to the workflow you selected:
-
-```sh
-pdd workflow run replay 123 --adopt-corpus /path/to/approval.json
-```
-
-The first area can be the code area. Adoption supplies its original vector anchor
-without requiring an earlier prompt publication. Workflow gates still apply.
-Without adoption, an absent original anchor remains BLOCKED.
+An approved replay corpus can be declared explicitly for an immutable commit by supplying a `pdd.replay-adoption.v1` JSON declaration alongside the replay evidence record. Adoption supplies the original vector anchor without requiring an earlier prompt publication. Without adoption, an absent original anchor remains BLOCKED.
 
 The declaration names the canonical repository, full approved commit, entry prompts
 the nonempty unique canonical `scenarios` inventory and an explicit assertion covering that inventory and all required context:

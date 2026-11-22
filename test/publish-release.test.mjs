@@ -160,8 +160,12 @@ test('#3533 package.json wires release:publish, parsePublishArgs uses parseArgs 
 
   assert.equal(npmDistTagForVersion('0.1.37'), 'latest');
   assert.equal(npmDistTagForVersion('0.1.38-alpha.1'), 'alpha');
+  assert.equal(npmDistTagForVersion('0.2.0-beta.1'), 'beta');
+  assert.equal(npmDistTagForVersion('0.2.0-rc.1'), 'next');
   assert.equal(toPep440Version('0.1.37'), '0.1.37');
   assert.equal(toPep440Version('0.1.38-alpha.1'), '0.1.38a1');
+  assert.equal(toPep440Version('0.2.0-beta.1'), '0.2.0b1');
+  assert.equal(toPep440Version('0.2.0-rc.1'), '0.2.0rc1');
   assert.equal(toPep440Version('0.1.38-rc.2'), '0.1.38rc2');
 });
 

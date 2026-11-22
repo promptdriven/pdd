@@ -17,7 +17,7 @@ PDD is the `pdd` command and a set of skills for your agent. Your agent writes t
 
 ## Install
 
-You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. For `pdd setup` and workflow runs, install Codex, Claude Code, Gemini CLI or Antigravity CLI. Without `--agent`, pdd selects the first ready agent in that order. Codex and Claude status probes check for configured credentials; Gemini checks installation and leaves sign-in to the chat; Antigravity lists models for a signed-in account. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
+You need [Node.js](https://nodejs.org) 22.16.0 or newer, [Git](https://git-scm.com), and the [GitHub CLI](https://cli.github.com) signed in with `gh auth login`. Install Codex, Claude Code, Gemini CLI or Antigravity CLI to run PDD with your coding agent. Without `--agent`, pdd selects the first ready agent in that order. Codex and Claude status probes check for configured credentials; Gemini checks installation and leaves sign-in to the chat; Antigravity lists models for a signed-in account. Remote checks and Try need access to the PDD interpreter (see [Access](#access)). PDD is tested on macOS and Linux.
 
 ```sh
 npm install -g @promptdriven/pdd
@@ -28,12 +28,12 @@ pdd init
 ```
 
 1. `npm install -g @promptdriven/pdd` installs the `pdd` command.
-2. `pdd setup` installs the global `/pdd` skill (and transition skills) into `~/.agents/skills`, `~/.claude/skills` (skipping duplicates when a Claude Code plugin is installed), and `~/.gemini/config/skills`, and previews Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to confirm previewed MCP registration without prompting, or `--skills-dir PATH` for a custom skill folder.
+2. `pdd setup` installs the global `/pdd` skill into `~/.agents/skills`, `~/.claude/skills` (cleaning retired marked skills and skipping duplicates when a Claude Code plugin is installed), and `~/.gemini/config/skills`, and previews Simulator MCP registration for detected Codex, Claude Code, Gemini, and Antigravity configs without editing any repository. Pass `--yes` to confirm previewed MCP registration without prompting, or `--skills-dir PATH` for a custom skill folder.
 3. If you use another skills installer, `npx skills add promptdriven/pdd -g --skill '*'` installs the skills globally.
 4. `pdd --version` prints `0.1.41`. When installed skills are older than pdd, it prints the update command on stderr.
 5. `pdd init` adds a 4-line PDD block to `CLAUDE.md` (else `AGENTS.md`) inside a repository and detects its language and test command, without editing root `.gitignore` (`.pdd/.gitignore` is managed automatically).
 
-To update a global npm installation and its `.pdd-skill.json`-marked user skills in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. `pdd upgrade` installs `@promptdriven/pdd@<version>` from npm first with a GitHub tag fallback, guards against mutating Git checkouts, PyPI `pdd-cli`, `pnpm`, `npx`, or local `node_modules` installs, and prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked copies are older. When a global install prints `npm error code EEXIST` on `<prefix>/bin/pdd`, remove the conflicting unscoped `pdd` package with `npm uninstall -g pdd && npm install -g @promptdriven/pdd`.
+To update a global npm or Volta installation and its `.pdd-skill.json`-marked user skills in one step, run `pdd upgrade` (or `pdd upgrade --main` for the pinned `main` commit), then start a new agent chat. `pdd upgrade` installs `@promptdriven/pdd@<version>` from npm first with a GitHub tag fallback (using Volta's `npm` without `--prefix` on Volta installs), guards against mutating Git checkouts, PyPI `pdd-cli`, `pnpm`, `npx`, or local `node_modules` installs, and prints `npx skills add promptdriven/pdd -g --skill '*'` when unmarked copies are older. When a global install prints `npm error code EEXIST` on `<prefix>/bin/pdd`, remove the conflicting unscoped `pdd` package with `npm uninstall -g pdd && npm install -g @promptdriven/pdd`.
 
 > [!IMPORTANT]
 > Do not run `npm install -g pdd` or `npm update -g`. The npm registry has a different package with the name `pdd`.
@@ -70,31 +70,31 @@ your own write access.
    For Claude Code, use `npm install -g @anthropic-ai/claude-code`,
    `claude auth login`, then `claude auth status --json`.
 
-3. Enter your repository and run setup:
+3. Enter your repository, initialize PDD, and choose the Autopilot mode:
 
    ```sh
    cd your-repo
-   pdd setup
+   pdd init
+   pdd autopilot observe   # or: pdd autopilot auto
    ```
 
-   Setup asks for the Autopilot mode: `off`, `observe` or `auto`. The default
-   is `off`, and `off` starts no work. Choose `observe` for a first try, or
-   `auto` to let Autopilot merge. An empty `trust: []` still trusts the owner
-   and the users with write access. Explicit trust names add users.
+   Choose `observe` for a first try, or `auto` to let Autopilot merge when CI,
+   fresh review, and the full test suite pass. An empty `trust: []` still trusts
+   the owner and the users with write access. Explicit trust names add users via
+   `pdd autopilot trust NAME...`.
 
-4. Commit and push the files that setup changed, so that GitHub and the
-   Autopilot jobs have them. Use `CLAUDE.md` instead of `AGENTS.md` when setup
-   wrote the PDD block there:
+4. Commit and push the repository block (`AGENTS.md` or `CLAUDE.md`) and
+   `pdd.json` if needed so GitHub and Autopilot jobs have them:
 
    ```sh
-   git add pdd.json .gitignore AGENTS.md
+   git add pdd.json AGENTS.md
    git commit -m "Set up PDD"
    git push
    ```
 
-   If you cannot push to the default branch, run `pdd autopilot observe` or
-   `pdd autopilot auto` instead. It puts the mode in `pdd.json` on GitHub, or it
-   opens a pull request with the change for you to merge.
+   If you cannot push directly to the default branch, `pdd autopilot observe` or
+   `pdd autopilot auto` updates `pdd.json` on GitHub through the API or opens a
+   pull request for you to merge.
 
 5. Check the machine:
 

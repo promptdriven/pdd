@@ -170,11 +170,11 @@ test('vm-suite posts only counts on the detached tested commit, with an empty su
   assert.equal(suite.cwd, git.find(e => e.args[0] === 'checkout').cwd);
 });
 
-test('vm-suite discovers nested tests recursively while excluding already-imported baseline fixture', t => {
+test('vm-suite discovers nested tests recursively and skips non-test helpers', t => {
   const result = run(t, {
     extraTests: [
       'test/nested/deep.test.mjs',
-      'test/workflow-commit-warning-paths/baseline.test.mjs',
+      'test/nested/helper.mjs',
     ],
   });
   assert.equal(result.status, 0, result.stderr);
@@ -182,7 +182,7 @@ test('vm-suite discovers nested tests recursively while excluding already-import
   assert.ok(suite.args.includes('./test/helpers/test-home.mjs'));
   assert.ok(suite.args.includes('./test/helpers/test-net-guard.mjs'));
   assert.deepEqual(suite.args.slice(-2), ['test/example.test.mjs', 'test/nested/deep.test.mjs']);
-  assert.equal(suite.args.includes('test/workflow-commit-warning-paths/baseline.test.mjs'), false);
+  assert.equal(suite.args.includes('test/nested/helper.mjs'), false);
 });
 
 test('vm-suite fails closed without running node --test when discovery returns no test files', t => {

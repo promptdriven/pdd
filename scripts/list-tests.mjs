@@ -5,11 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const DEFAULT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-// Imported directly by test/workflow-commit-warning-paths-replay.test.mjs;
-// running it standalone would double-execute the same baseline suite.
-export const EXCLUDED_TEST_FILES = Object.freeze([
-  'test/workflow-commit-warning-paths/baseline.test.mjs',
-]);
+export const EXCLUDED_TEST_FILES = Object.freeze([]);
 
 const EXCLUDED_SET = new Set(EXCLUDED_TEST_FILES);
 const BROWSER_TEST_RE = /(?:^|\/)screen-[^/]+\.test\.mjs$/;

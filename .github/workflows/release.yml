@@ -181,6 +181,9 @@ jobs:
 
           dist_tag="latest"
           case "$EXPECTED_VERSION" in
+            *-rc.*|*-rc[0-9]*|*-rc) dist_tag="next" ;;
+            *-beta.*|*-beta[0-9]*|*-beta) dist_tag="beta" ;;
+            *-alpha.*|*-alpha[0-9]*|*-alpha) dist_tag="alpha" ;;
             *-*) dist_tag="alpha" ;;
           esac
 

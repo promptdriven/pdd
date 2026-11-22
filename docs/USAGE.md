@@ -3,20 +3,20 @@
 This guide is for people who install pdd 0.1.41 from `promptdriven/pdd`. Each section has commands that you can copy.
 
 > [!WARNING]
-> **Agents run with full access.** PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`, Gemini CLI with `--yolo`, and Antigravity CLI with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use PDD only in projects and on machines where you accept this.
+> **Autopilot agents run with full access.** When running headless Autopilot jobs, PDD starts Codex with `--dangerously-bypass-approvals-and-sandbox`, Claude Code with `--dangerously-skip-permissions`, Gemini CLI with `--yolo`, and Antigravity CLI with `--dangerously-skip-permissions`. The agents do not stop to ask for approval. They can read, change and delete files and run commands as your user. Use Autopilot only in projects and on machines where you accept this.
 
 Contents:
 
 1. [Before you start](#1-before-you-start)
 2. [Install](#2-install)
 3. [If you have the old Python pdd](#3-if-you-have-the-old-python-pdd)
-4. [The PDD skills](#4-the-pdd-skills)
-5. [Set up a repo and use the skills](#5-set-up-a-repo-and-use-the-skills)
-6. [Run a workflow on a GitHub issue](#6-run-a-workflow-on-a-github-issue)
+4. [The PDD skill](#4-the-pdd-skills)
+5. [Set up a repo and use `/pdd`](#5-set-up-a-repo-and-use-the-skills)
+6. [Work on issues with `/pdd` and Autopilot](#6-work-on-issues-with-pdd-and-autopilot)
 7. [Check prompts on the PDD interpreter](#7-check-prompts-on-the-pdd-interpreter)
-8. [Make your own workflow](#8-make-your-own-workflow)
+8. [Customize project lint and verification rules](#8-customize-project-lint-and-verification-rules)
 9. [Shell completion](#9-shell-completion)
-10. [Clean up after a run](#clean-up-after-a-run)
+10. [Clean up worktrees and state](#clean-up-after-a-run)
 11. [Update and uninstall](#update-and-uninstall)
 12. [Known limits](#12-known-limits)
 13. [Troubleshooting](#13-troubleshooting)
@@ -24,7 +24,7 @@ Contents:
 
 ## 1. Before you start
 
-PDD runs on your own machine, with your own agent account and your own GitHub account. Remote `pdd test`, `pdd lint`, `pdd simulate` and the Try tools in `pdd mcp` use the PDD interpreter with your GitHub login, which needs PDD Cloud approval.
+PDD runs on your own machine, with your own agent account and your own GitHub account. Remote `pdd test`, `pdd lint --remote`, `pdd simulate` and the Try tools in `pdd mcp` use the PDD interpreter with your GitHub login, which needs PDD Cloud approval.
 
 Check your tools:
 
@@ -32,7 +32,6 @@ Check your tools:
 node -v               # Node.js 22.16.0 or newer
 git --version         # Git
 gh auth status        # "Logged in to github.com"
-herdr --version       # Herdr, for workflow runs
 codex login status    # "Logged in ..."  (or use Claude Code)
 ```
 
@@ -43,12 +42,11 @@ PDD needs Node.js 22.16.0 or newer. The other tools work with the versions you h
 | Node.js 22.16.0 or newer | [nodejs.org](https://nodejs.org), or your Node version manager |
 | Git | [git-scm.com](https://git-scm.com) |
 | GitHub CLI | [cli.github.com](https://cli.github.com). Then run `gh auth login`. If `git push` asks for a password later, run `gh auth setup-git`. |
-| Herdr | `curl -fsSL https://herdr.dev/install.sh \| sh`, or see [herdr.dev/docs/install](https://herdr.dev/docs/install/). You need Herdr only for workflow runs. You do not have to open it yourself. |
 | Codex CLI | [developers.openai.com/codex/cli](https://developers.openai.com/codex/cli/). Then run `codex login`. |
 | Claude Code | [code.claude.com](https://code.claude.com/docs/en/overview). Start `claude` once and sign in. |
-| Gemini CLI / Antigravity CLI | Install and sign in to the agent you choose; Gemini CLI requires paid access for workflow chats. |
+| Gemini CLI / Antigravity CLI | Install and sign in to the agent you choose. |
 
-Without `--agent`, pdd selects the first ready agent in order: Codex, Claude Code, Gemini CLI, then Antigravity CLI (`agy`). An explicit agent or configured launcher selects that choice. PDD is tested on macOS and Linux. Windows is not tested.
+Without `--agent`, pdd selects the first ready agent in order: Codex, Claude Code, Gemini CLI, then Antigravity CLI (`agy`). An explicit agent or configured launcher selects that choice. PDD is tested on macOS and Linux.
 
 ## 2. Install
 
@@ -56,11 +54,11 @@ Do these steps in this order:
 
 | Step | Command | When |
 |---|---|---|
-| 1. Install the pdd command | `npm install -g @promptdriven/pdd` (or `github:promptdriven/pdd`) | Once on your machine |
-| 2. Set up your machine | `pdd setup` (or `npx skills add promptdriven/pdd -g`) | Once on your machine: installs the `/pdd` skill globally and registers PDD Simulator MCP tools |
+| 1. Install the pdd command | `npm install -g @promptdriven/pdd` | Once on your machine |
+| 2. Set up your machine | `pdd setup` (or `npx skills add promptdriven/pdd -g`) | Once on your machine: installs `/pdd` globally and previews PDD Simulator MCP registration |
 | 3. Set up a repo | `pdd init` | Once in the top folder of each repository |
 
-### 2.1 Install the skills
+### 2.1 Install the skill
 
 ```sh
 cd your-project
@@ -68,33 +66,33 @@ npx skills add promptdriven/pdd       # for this project
 npx skills add promptdriven/pdd -g    # for all your projects
 ```
 
-This is the standard skills installer. It needs only Node.js. [Section 4](#4-the-pdd-skills) tells where the skills go. Then do [step 2](#5-set-up-a-repo-and-use-the-skills).
+This is the standard skills installer. It needs only Node.js. [Section 4](#4-the-pdd-skills) tells where the skill goes. Then do [step 5](#5-set-up-a-repo-and-use-the-skills).
 
 ### 2.2 Install the pdd command
 
-You need the pdd command only for runs on GitHub issues ([section 6](#6-run-a-workflow-on-a-github-issue)) and for `pdd test`, `pdd lint`, `pdd simulate` and `pdd approve` ([section 7](#7-check-prompts-on-the-pdd-interpreter)).
+You need the pdd command for offline repo tools (`pdd init`, `pdd status`, `pdd lint`, `pdd prove`, `pdd update`, `pdd owner`, `pdd files`), interpreter commands (`pdd test`, `pdd simulate`, `pdd approve`), and headless Autopilot (`pdd autopilot`).
 
 ```sh
-npm install -g github:promptdriven/pdd
+npm install -g @promptdriven/pdd
 "$(npm prefix -g)/bin/pdd" --version  # reports PATH conflicts without changing files
 pdd --version   # prints 0.1.41
-which -a pdd    # the first line must be in "$(npm prefix -g)/bin"
+which -a pdd    # the first line must be in your global npm or Volta bin folder
 ```
 
-npm downloads the repository's default branch, `main`, from GitHub. Install the CLI and skills from this same source. The package has no dependencies and no build step. `pdd setup` copies missing skills to user folders, `pdd upgrade` updates a global `pdd` installation and its `.pdd-skill.json`-marked skills, and normal CLI commands refresh existing `.pdd-skill.json`-marked user folders once per version without touching unmarked copies or symlinks.
+`pdd setup` copies the `/pdd` skill to user folders, `pdd upgrade` updates a global npm or Volta `@promptdriven/pdd` installation and its `.pdd-skill.json`-marked skills, and normal CLI commands refresh existing `.pdd-skill.json`-marked user folders once per version without touching unmarked copies or symlinks.
 
 Important:
 
-- Always install and update with the full `github:promptdriven/pdd` line.
+- Always install and update `@promptdriven/pdd` (or `github:promptdriven/pdd` for a Git tag/branch).
 - Do not run `npm install -g pdd`. That installs a different, unrelated package from the npm registry.
 - Do not run `npm update -g`. npm thinks that the unrelated registry package is a newer version of PDD, and it would replace your pdd with it. You can see this with `npm outdated -g`.
-- If npm says `EEXIST` on `<prefix>/bin/pdd`, an unscoped `pdd` npm package still owns `bin/pdd` while PDD installs as `@promptdriven/pdd`. Remove the unscoped package first instead of passing `--force`: `npm uninstall -g pdd && npm install -g github:promptdriven/pdd`.
-- If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager, or set your own npm prefix. Do not use `sudo`.
+- If npm says `EEXIST` on `<prefix>/bin/pdd`, an unscoped `pdd` npm package still owns `bin/pdd` while PDD installs as `@promptdriven/pdd`. Remove the unscoped package first instead of passing `--force`: `npm uninstall -g pdd && npm install -g @promptdriven/pdd`.
+- If npm says `EACCES` (permission denied), your global npm folder belongs to root. Use a Node version manager (such as Volta or nvm), or set your own npm prefix. Do not use `sudo`.
 
 ### 2.3 Start Autopilot on your repository
 
 Follow [Autopilot on your own repository](../README.md#autopilot-on-your-own-repository)
-for the ordered installation, sign-in, setup, doctor, start, status and stop path.
+for the ordered installation, sign-in, init, doctor, start, status and stop path.
 Use Node.js 22.20 or newer. Repository writes need write permission.
 `pdd autopilot doctor` reads readiness without GitHub writes or AI calls.
 Start runs the same checks before it changes local state or starts work.
@@ -111,7 +109,7 @@ running a prompt, so native green CI and doctor do not prove prompt behavior.
 
 The Python pdd (0.0.x) is on the [`v1` branch](https://github.com/promptdriven/pdd/tree/v1) and on [PyPI](https://pypi.org/project/pdd-cli/) as `pdd-cli`. It also installs a command named `pdd`. On one machine, only the first `pdd` on your PATH runs.
 
-Run this pdd by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it lists executable paths and reports the selected executable’s version. `pdd --version` keeps just the version on stdout and prints a conflict report to stderr; `workflow run` prints a one-line warning when another executable comes first. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
+Run this pdd by its absolute path to diagnose the selection: `"$(npm prefix -g)/bin/pdd" --version`. On a conflict it lists executable paths and reports the selected executable’s version. `pdd --version` keeps just the version on stdout and prints a conflict report to stderr. A program whose version cannot be read stays listed as version unavailable. No installation is removed or replaced.
 
 See all of them:
 
@@ -146,11 +144,13 @@ hash -r
 
 Use the absolute Node-plus-pdd command printed by the diagnostic when the environment selects a different Node installation or pdd is running from a source checkout.
 
-The agents that PDD starts always get the full path of this pdd. They are not affected by your PATH. Only the commands that you type are.
+Autopilot workers always get the full path of this pdd. They are not affected by your PATH. Only the commands that you type are.
 
-## 4. The PDD skills
+<a id="4-the-pdd-skills"></a>
 
-PDD exposes one visible skill: [`pdd`](../skills/pdd/SKILL.md), with co-located references in `skills/pdd/references/`. Call it with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name); it routes product planning, features, bugs, and small changes and loads only the reference needed for the task.
+## 4. The PDD skill
+
+PDD exposes one skill: [`pdd`](../skills/pdd/SKILL.md), with co-located references in `skills/pdd/references/`. Call it with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name); it routes product planning, features, bugs, and small changes and loads only the reference needed for the task.
 
 | Reference | What it covers |
 |---|---|
@@ -162,25 +162,25 @@ PDD exposes one visible skill: [`pdd`](../skills/pdd/SKILL.md), with co-located 
 | [`references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) | Screens, HTML rendering, app maps, and interactive simulation |
 | [`references/verification.md`](../skills/pdd/references/verification.md) | Real-path verification, `pdd.json` `verify.paths` Feature Map, `pdd prove`, and deliberate-break checks |
 
-Where the skills go:
+Where the skill goes:
 
 | You run | Codex & Gemini CLI | Claude Code | Antigravity |
 |---|---|---|---|
 | `npx skills add promptdriven/pdd` | `.agents/skills/` in your project | `.claude/skills/` in your project | — |
 | `npx skills add promptdriven/pdd -g` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` | — |
-| `pdd setup` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` (skipped when the Claude Code plugin is installed) | `~/.gemini/config/skills/` |
+| `pdd setup` | `~/.agents/skills/` | `~/.claude/skills/`, or `$CLAUDE_CONFIG_DIR/skills/` (skips copying `/pdd` when the Claude Code plugin is installed, while cleaning marked retired split skills) | `~/.gemini/config/skills/` |
 
-`pdd setup` installs missing skills in user folders and says where. Pass `--skills-dir PATH` to sync an additional folder. It also updates eligible marked copies there. A complete copy installed by `npx skills` needs no extra copy. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies the skills into your repo.
+`pdd setup` installs missing skills in user folders and says where. Pass `--skills-dir PATH` to sync a custom folder. It also updates eligible marked copies there. A complete copy installed by `npx skills` needs no extra copy. When those skills are older than this pdd, or differ from its skills, `pdd setup` says so and prints the command that updates them: `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` (without `-g` for a copy in your project). `pdd --version` prints the same line when your skills are older. pdd never copies skills into your repo.
 
-Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It also removes a marked copy of `pdd-autopilot`, `pdd-check`, `pdd-merge`, or `pdd-setup`, because pdd does not ship these skills. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
+Each copy that pdd makes has a marker file, `.pdd-skill.json`. `pdd setup` replaces a marked copy when its version is older, when the same version has different files, or when its marker is invalid. It keeps a copy with a newer marker version. It also removes marked copies of retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`), including when Claude Code has the PDD plugin installed. It never touches a copy without the marker, or a symlink, for example an `npx skills` install.
 
-`npx skills add promptdriven/pdd --skill pdd` installs the skill directly. `npx skills list` shows what you have. The `pdd-skills:` line at the top of each `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.41`.
+`npx skills add promptdriven/pdd --skill pdd` installs the skill directly. `npx skills list` shows what you have. The `pdd-skills:` line at the top of `SKILL.md` shows the version of that skill, for example `pdd-skills: 0.1.41`.
 
-Do not edit the installed skill folders: an update replaces your edits. To change a workflow, [make your own](#8-make-your-own-workflow).
+Do not edit the installed skill folders: an update replaces your edits. The skill works in any Codex, Claude Code, Gemini CLI, or Antigravity chat.
 
-The skill works in any Codex, Claude Code, Gemini CLI, or Antigravity chat.
+<a id="5-set-up-a-repo-and-use-the-skills"></a>
 
-## 5. Set up a repo and use the skills
+## 5. Set up a repo and use `/pdd`
 
 Run `pdd setup` once on your machine to install the `/pdd` skill globally and preview PDD Simulator MCP tool registration (`--yes` applies MCP registration without prompting; non-interactive runs without `--yes` skip MCP safely). `pdd setup` edits no repository files.
 
@@ -197,11 +197,9 @@ pdd init
 3. It keeps all other text and preserves existing line endings (LF or CRLF). A second run changes nothing. It never pastes the guide or edits root `.gitignore` (`.pdd/.gitignore` is written automatically when `.pdd/` is created).
 4. It detects the project's language and test command so your agent can verify changes right away.
 
-Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on each machine. To turn on Autopilot for the repo, run `pdd autopilot observe` or `pdd autopilot auto`. Autopilot workers read `pdd.json` on the default branch on GitHub, so these commands also update `pdd.json` there, or open a PR when the branch needs one. Each command changes only its own part of the copy on GitHub. See [Repository Autopilot settings](cli.md#repository-autopilot-settings).
-
 Then open Codex or Claude Code as usual, in your project, and call `/pdd` (or `$pdd` in Codex):
 
-```
+```text
 $pdd Add a CSV export button to the orders page.
 $pdd The export button does nothing on Safari.
 $pdd Fix the typo in the footer.
@@ -210,178 +208,54 @@ $pdd Review my prompts against the Prompting guide.
 
 In Claude Code:
 
-```
+```text
 /pdd Add a CSV export button to the orders page.
 /pdd The export button does nothing on Safari.
 /pdd Fix the typo in the footer.
 /pdd Review my prompts against the Prompting guide.
 ```
 
-You can also inspect repository state offline at any time with `pdd status` (or `pdd status --changed --json`).
+You can also inspect repository state offline at any time with `pdd status` (or `pdd status --changed --json`). The agent reads only the reference files needed for your task; nothing big is pasted into the chat.
 
-You can also ask for a skill by name, for example "Use the pdd-bug skill for this."
+<a id="6-work-on-issues-with-pdd-and-autopilot"></a>
 
-The agent can also pick a skill by itself when your request fits it. It reads the full Prompting guide when it writes or changes a prompt, a Story or test cases. Nothing big is pasted into the chat.
+## 6. Work on issues with `/pdd` and Autopilot
 
-In a chat, the work stays in your folder: no worktree and no automatic PR. To turn a GitHub issue into PRs, start a run (next section). The agent can start it for you when you ask.
+### 6.1 Interactive issue work in your coding agent
 
-## 6. Run a workflow on a GitHub issue
-
-`pdd workflow run` takes one GitHub issue to real PRs. The work happens in a few chats in Herdr. In manual workflows, you approve at each gate. The pdd CLI opens the PRs; the agent handles merges.
-
-### 6.1 Prepare the repository
-
-- Use a clone of a GitHub repository that you can push to. The `origin` remote must point to it.
-- The issue must be in that same repository. It must be an issue, not a PR.
-- PDD fetches `origin`'s default branch (for example `origin/main`) and starts the new issue branch there. If that default fetch fails, it warns and uses the last fetched commit. Add `--base BRANCH` to select an existing origin topic branch; an explicit base must fetch successfully before startup.
-- The project needs a way to test the change. The agents find and run the project's tests.
-- Your own checkout can have uncommitted work. PDD does not touch it.
-
-### 6.2 Start the run
-
-Run this from the top folder of your clone:
+In Codex, Claude Code, Gemini CLI, or Antigravity, invoke `/pdd` with the issue number or description. The skill inspects the repo with `pdd status --json`, selects `feature`, `bug`, `small-change`, or `product` mode, writes prompts/Stories/tests before code, checks them with `pdd lint` and `pdd test`, waits for your approval (`pdd approve PROMPT`), builds the implementation, and proves the change with `pdd prove`:
 
 ```sh
-cd your-clone
-git fetch origin
-pdd workflow run small-change 42
+pdd status --changed
+pdd lint
+pdd lint --diff origin/main
+pdd prove --base origin/main
 ```
 
-ISSUE is the issue number (`42`). Add `--agent claude`, `--agent gemini` or `--agent agy` to choose the agent for the whole run, or an entry name such as `--agent "Claude (account-a)"` for one of [your own launchers](#many-accounts). NAME is `small-change`, `bug`, `feature`, `product` or the name of [your own workflow](#8-make-your-own-workflow).
-
-To build on an isolated topic branch, put that base on `origin`, then name its branch (without an `origin/` or `refs/` prefix):
+For bug fixes, prove that your regression test fails on the merge base with the defect text and passes on `HEAD`:
 
 ```sh
-pdd workflow run bug 2 --base feature/checkout
+pdd prove --base origin/main --test "node --test test/regression.test.mjs" --expect "expected defect text"
 ```
 
-PDD fetches that exact branch and starts the issue worktree from its commit. A failed fetch or missing branch stops the run; it does not use a local or default branch instead. Startup prints the selected base. The PR targets that saved base, and PDD pushes only its new issue branches. It does not change the repository's default branch. For two PRs, PR 2 stacks on an open PR 1; after PR 1 merges, PR 2 starts from and targets the saved base.
+### 6.2 Unattended background runs with Autopilot
 
-The command returns at once. It prints where the run is and the commands to open and approve it. **You can close the terminal now.** Workflow chats have no overall time limit; individual checks can have limits.
-
-### 6.3 What happens
-
-1. pdd reads the issue with `gh`. It makes a new branch (for example `pdd/small-change-42-1a2b3c4d`) and a new Git worktree in the folder `your-clone.pdd-worktrees/` next to your clone. It makes the run folder `your-clone/.git/pdd/runs/42/`. From a linked worktree or with a bare repository, the worktree folder is beside the primary repository, or beside the project folder that holds a bare repository, and the run folder is in the common Git directory (`git rev-parse --git-common-dir`). [How a run works](workflows.md#how-a-run-works) has the table.
-2. pdd opens the first chat in Herdr, in full-access mode. The Herdr session is `pdd`. Each verified common Git directory has its own repository workspace. It uses the free repository name, then `owner/repo`, then a checkout-qualified label when another clone holds those labels. Each run has a workspace with the repo name, the issue and the workflow, for example `my-app#42 small-change`, with one tab per area. Each chat starts with a `cd` to the run worktree, so a `cd` in your shell startup file (for example `~/.zshrc`) does not change where the agent works. pdd does not touch your default Herdr session.
-3. The chat follows the workflow skill. It gives each step to a fresh subagent. The subagent gets its full brief at once, with file paths, not the chat history.
-4. After each step, the agent tells pdd that the step is done. The step notes go into the run folder.
-5. At a gate, the chat shows you the result and asks you. Then it stops and waits. It waits as long as you need.
-6. When you approve, pdd starts a new chat for the next area. That chat gets the results of the area that you approved.
-7. After the last step of an area with a PR gate, pdd pushes the branch and opens the PR when the applicable gate is satisfied. In a normal feature or bug run, a valid Story approval and a verified full saved check pass open PR 1 without another question; strict and other routes can require a separate approval gate.
-8. You review and merge the PRs on GitHub. When `pdd workflow status` sees the merge, the run is completed.
-
-With Claude Code, the first chat can ask you once to trust the new worktree folder. This happens when your clone's folder is not trusted in Claude Code yet. `pdd workflow run` prints a hint. Open the chat with `pdd workflow open 42` and answer the question.
-
-The areas of the four bundled workflows (you act at the **bold** ones):
-
-| Workflow | Areas and steps |
-|---|---|
-| `feature` | story (understand, visual?, prompt-story), **approve**, prompt PR (check, try?), PR 1 opens at the applicable gate, code (build, verify, formal, review) opens PR 2 if chosen, **merge** |
-| `bug` | story (reproduce, prompt-story), **approve**, prompt PR (check, try?), PR 1 opens at the applicable gate, code (build, verify, formal, review) opens PR 2 if chosen, **merge** |
-| `small-change` | plan (scope), **approve**, build (change, verify, formal) opens one PR, **merge** |
-| `product` | map (understand, map), **approve**, plan (parts, contracts, plan) opens one PR, **merge** |
-
-`?` marks an optional step. Each area is one chat. In a normal feature or bug run, the Story card includes the code-or-stop choice; a valid Story approval and full saved check pass open PR 1, then pdd follows that choice. In strict mode, you can try the result when available and approve before PR 1, then choose whether to make the code PR. [workflows.md](workflows.md) tells what each step does.
-
-**A big request: a plan and many Stories.** In `feature`, the understand step counts the separate behaviors in the issue. For one behavior, it writes one Story. For more, it writes a plan, `user_stories/PLAN.md`: a numbered list with one line for each Story, in build order. Each Story gets its own test file, `tests/<story>.json`. At the story gate, the chat gives the paths of the Story files and the plan, shows the plan, and asks for approval or changes. You can answer, for example:
-
-- "Make it one Story."
-- "Split part 5."
-- "Change Story 5: also refuse an empty order." The chat redoes only that Story and its test file.
-
-Before PR 1, the check shows one `Prompt tests` line for each Story. `pdd workflow status` then shows, for example, `Stories: 4 of 5 Stories pass (✗ refunds)`.
-
-### 6.4 See the chat
+To process opt-in GitHub issues autonomously on a 10-minute timer, configure Autopilot in your repository:
 
 ```sh
-pdd workflow open 42
+pdd autopilot doctor
+pdd autopilot observe                  # or: pdd autopilot auto
+pdd autopilot add 42
+pdd autopilot start --label pdd:autopilot
+pdd autopilot status
+pdd autopilot logs 42 -f               # follow live worker progress (Ctrl-C detaches safely)
 ```
 
-This shows the current chat of the run. You can read it and type to it. If the chat ended, for example after a restart, `open` resumes it in its tab.
-
-### 6.5 Answer a gate
-
-At a gate, read what the chat shows. The step notes are in the run folder (`.git/pdd/runs/42/` in your clone), and the files are in the run's worktree. Then choose:
-
-| You want to | In the chat | In a terminal |
-|---|---|---|
-| Approve | Say so in your own words, for example "Looks good, go on." | `pdd workflow approve 42` |
-| Ask for changes | Say what to change | `pdd workflow changes 42 "Also cover an empty list."` (a plain "I approve" is not a change: pdd tells you to run `approve`) |
-| Stop the run | (no chat answer) | `pdd workflow cancel 42` |
-
-Rules:
-
-See [Record a chat approval](cli.md#record-a-chat-approval) for the safe agent commands, prompt snapshots and terminal or strict-mode approval. One workflow approval covers the ready gate and its draft prompts. The later code-or-stop decision is separate.
-- In a terminal, `approve` without --said asks y/N. The question shows the repo, the issue and its title.
-- pdd asks y/N only in a normal terminal. A terminal tab of your own in Herdr is one, but the chat's own pane is not. Inside Claude Code (its `!` prefix sets `CLAUDECODE=1`), Codex or the current Herdr chat pane, pdd tells the agent to ask you and then use the [safe stdin form](cli.md#record-a-chat-approval). It never treats the latest chat message as approval.
-- `status` says "waiting for you" when the chat has asked you. Before that, it says that the agent writes the gate message.
-- `approve` without N: in a run's worktree, it approves that run. Elsewhere in the repo, it approves the one run that waits for you. If more than one run waits, it lists them.
-- Changes stay in the same chat. The chat revises and asks you again.
-- `cancel` closes the chat tabs of the run. pdd keeps the worktree and the branch. A new `pdd workflow run` on the same issue then starts fresh.
-
-### 6.6 Optional steps
-
-`visual` and `try` are optional. Before each one, the chat asks you, for example "Do you want a visual design step? yes/no", and waits for your answer. They are not gates: answer in the chat.
-
-For a page or a screen, the chat recommends `visual`. It writes the app map, so the Simulator shows the real screen and your keys or taps work. A page with no visual step still gets an app map and a `render` operation that returns its HTML, so you can try it, and its tests check what the page shows. At the story gate, you can open a simulation before the check: `pdd simulate <story>`, or `pdd simulate <story> --new` when there is an app map. The check still runs first in the prompt PR area.
-
-### 6.7 The PRs and the merge
-
-`small-change` makes one PR with the change and its tests. Its body says `Refs #42` when an authorized `Not fixed yet:` warning is present; otherwise it says `Closes #42`.
-
-`feature` and `bug` make up to two PRs:
-
-| PR | What it holds | When |
-|---|---|---|
-| PR 1 | The prompt, the Story and the test cases. Its title is `spec(AREA): what must be true (#42 · part 1: spec)` | After the prompt PR area. Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Part of #42` |
-| PR 2 | The code. Its title is `fix(AREA): what is true after the merge (#42 · part 2: fix)` (`feat(AREA)` in a feature run) | Only when you ask for it (in Autopilot `auto` mode it starts by itself). Its body says `Refs #42` for an authorized `Not fixed yet:` warning, otherwise `Closes #42`, and that it builds on PR 1. It shows the PR 1 test cases run on the real code (a table: expected, prompt result, code result) and a formal check line: Proved, Failed with a counterexample, Not run or Not applicable, each with a reason. The tables come first; long commands and output are folded in closed `<details>` blocks |
-
-In verify after the last commit, run one `pdd workflow prove 42 --test "node --test test/regression.test.mjs" --expect "defect text"` command that covers all new or changed tests; its line goes on the PR. Its `Old-code proof:` line names the actual command and old/new results. Authorized defect, proof, warning and independent review lines appear above replay status on both PRs; code PRs also show the machine proof.
-
-**The Story card and PR 1.** At the story gate, the chat shows pdd's Story card: the issue and what you asked, each Story with its criteria, what must not change and its rules, the test cases, the prompts that change, the full paths and the next step (`pdd workflow card 42` prints it again). Approve it or say what to change. To try it first, ask: the chat runs `pdd simulate`. To get the code PR too, say so: the chat approves with `--through code`. Without it, pdd stops after PR 1. When the check then passes in full on the current prompts, pdd opens PR 1 with no question. A failed check goes back to the agent. A repair that changes a Story or an expected value shows the card again, for you.
-
-**Strict mode.** With `strict_approvals: true`, the chat shows one `Prompt tests` line for each Story after the prompt PR area, with its report link, and the Simulator links. Try it. Then approve, or ask for changes. pdd opens PR 1 only after you approve. When there is nothing to try, the chat asks you only to approve. Then the chat shows the PR 1 link and asks: "Do you want the code PR now, or stop here and merge PR 1 first? To make the code PR later, tell your agent, or run `pdd workflow approve 42` in a terminal."
-
-Every PR starts with a part for people: a status line (`✅ Ready to merge`, `⏳ Waiting for CI` or `⛔ Blocked: <reason>`), the user story from the Story's "As a …, I want …, so that …" line, a short summary (PR 1: Problem, This PR, Verdict; PR 2: Problem, Cause, Fix, Result), a table of cases, what changed (+/− and the files), a Checks table (PR 1) or a Proof table (PR 2), and one line: PR 1's Approval and Next lines, PR 2's Merge line. The summary and the cases are the agent's words. pdd fills the status line and the tables only from its own records: saved `pdd test` and `pdd lint` results, replay evidence, the old-code proof, the review verdict, CI and the checker verdict. The status line says `✅ Ready to merge` only when every record that the PR needs is there and current (for PR 2: the old-code proof for its head, the review, a recorded Proved or Not applicable formal result when a Story has `## Rules to check`, green CI and, in Autopilot, a checker PASS for the head); else it waits or is blocked and says why. A PR that only helps find the cause says `⛔ Not fixed yet` with "Not fixed yet: this helps find the cause." under it. A row that has no result yet shows `⏳ pending`, and a repository without CI checks shows "no CI checks configured". pdd refreshes the status line and the rows when it updates the PR and each time you run `pdd workflow status 42`; the line says when ("Updated <time>"). pdd owns the description: it rewrites the part above Details at each status and all of it at each push, so write your notes in a PR comment. The agent's words in the title, the summary, the cases and `verify.md` cannot close an issue (code spans keep their exact text), and in the summary they cannot add a link. Everything else (pdd's `pdd result:` lines, the agent's step summaries with their `Agent note — not checked by pdd:` label, the approval records, `Part of #42`, draft prompts, the step list and `verify.md`) is in one closed "Details for tools and audits" section. PR 1 has no `verify.md` and no Simulator links.
-
-- **Code now:** say so in the chat in your own words, or run `pdd workflow approve 42`. The code area starts in a new chat. PR 2 is stacked on PR 1's branch. Merge PR 1 first, except when PR 1's CI fails (its new tests are red until the code exists): then PR 2 says "This PR also merges PR 1 (#N). Do not merge PR 1 alone.", waits until it targets the base branch (`gh pr edit PR2 --base main`), and you merge PR 2, which carries PR 1. While PR 1's CI has no result, PR 2 says only "Builds on PR 1 (#N).".
-- **Stop:** the run waits. `status` says that PR 1 is open. If you merge PR 1 and do not go on, the run ends as "done at PR 1". You can still run `pdd workflow approve 42` later. Then PR 2 starts from the merged prompts on the run’s saved base branch.
-If PR 1 names draft prompts, approve through the chat route above or approve each with `pdd approve PROMPT` at a terminal. The agent runs pdd and never sets approval fields. The later code-or-stop decision remains separate.
-- If a test case still fails on the code after two more build rounds, PR 2 opens anyway with "✗ N vectors fail" at the top. Read it before you merge.
-
-**When the chat asks you something in the middle of a step,** the agent first runs `pdd workflow ask` (only agents use it). Then `pdd workflow status` shows "waiting for you: <the question>". Answer in the chat, or from any terminal with `pdd workflow changes 42 "your answer"`.
-
-For all workflows:
-
-- The verify step runs in a fresh subagent that did not write the code.
-- verify writes the exact test commands and their real output to `verify.md` in the run folder.
-- The Details section of the PR has the step summaries. PR 2 and the `small-change` PR also have `verify.md`. Code PRs show a `Tests vs base:` block with removed cases, changed assertions and new skips before any `Prompt tests` lines and report links. Report links expire after 7 days.
-- Agents run tests; `pdd workflow prove` also runs its supplied test command on base and head. Read the test output in the PR before you merge.
-The pdd CLI has no merge command. In manual workflows, ask your agent to merge under [Prompting guide §5](../skills/pdd/references/prompting.md#5-expected-values-approvals-and-merges). In Autopilot `auto` mode, Autopilot merges its own pull request after CI, a fresh review and the full test suite pass; required human approvals still apply.
-
-### 6.8 Check a run
-
-```sh
-pdd workflow status 42
-pdd workflow status               # all runs in this repo
-pdd workflow status --all         # every run on this machine, in all repos
-pdd workflow status --cancelled   # also show the cancelled runs
-pdd workflow status --all --json  # the same list as data
-```
-
-`status` shows the area, the step, what the run waits for, and the PRs with their CI state. For a run with many Stories, it also shows how many pass, for example `Stories: 4 of 5 Stories pass`. Without N, it shows all runs in this repo. In a run's worktree, it shows that run. N is the issue number in the current repo. If several repos have a run for that number, use `owner/repo#42`.
-
-`--all` lists every run on this machine, in all repos. Plain `status` outside a Git repo does the same. The list shows the runs that wait for you first, then the runs that work, then the runs with an open PR, then the runs that are done. Cancelled runs are hidden. `--cancelled` shows them. `--json` gives the same list as data.
-
-### 6.9 Close the terminal or restart
-
-The chats run in Herdr, not in your terminal. You can close the terminal at any time. Workflow chats have no overall time limit.
-
-After a restart, run `pdd workflow open 42`. pdd resumes the chat of the current area (using the selected agent’s resume command) in its tab.
-
-### 6.10 Many issues at once
-
-Each issue gets its own branch, worktree and Herdr tab. You can start several runs. An issue has one active run. A second `pdd workflow run` on the same issue still starts: it marks the old active run replaced and names it in one warning. After `pdd workflow cancel N`, you can also run it again. The new run starts fresh. Each step is a full agent session on your machine. Many runs at once use a lot of memory and agent quota.
+- Each issue runs in an isolated Git worktree and branch using a headless worker job.
+- Full test suites run through the shared machine queue (`pdd autopilot suite --command "npm test"`).
+- In `observe` mode, Autopilot opens the PR, runs CI, fresh review, and full tests, and posts "would merge" for a person to merge.
+- In `auto` mode, Autopilot merges its own PR once CI, fresh review, and full tests pass (required GitHub branch protections and `strict_approvals` still apply).
+- Run `pdd autopilot stop` to stop the timer while letting any active step finish.
 
 <a id="7-check-prompts-on-the-pdd-runtime"></a>
 
@@ -389,11 +263,9 @@ Each issue gets its own branch, worktree and Herdr tab. You can start several ru
 
 The PDD interpreter runs a prompt as a program: an AI model on the PDD server reads the `*.prompt.md` file and acts as the program. `pdd test` sends your prompts, Stories and tests there and checks each answer against its test. `pdd simulate` opens the PDD Simulator, where a person can use the prompt by hand.
 
-Both commands sign in with your GitHub login (`gh auth status`). They send the selected Stories, their authored tests and the prompts and context those tests need. Every sent file must be Git-visible (tracked or new, not ignored). The selected payload must fit 10 MB and 10,000 files; safe in-repository links send their final Git-visible regular target bytes under the authored path. Secret names, outside or broken links, loops and non-regular targets are refused. The bindings inventory and executable/write destinations retain their strict no-link rules. Unrelated source files are not sent. pdd keeps runtime state in `~/.pdd/runtime`; the repo also holds the test cache in `.pdd/cache/test/` and CLI simulation files in `.pdd/try/`.
+Both commands sign in with your GitHub login (`gh auth status`). They send the selected Stories, their authored tests and the prompts and context those tests need. Every sent file must be Git-visible (tracked or new, not ignored). The selected payload must fit 10 MB and 10,000 files; safe in-repository links send their final Git-visible regular target bytes under the authored path. Secret names, outside or broken links, loops and non-regular targets are refused. Unrelated source files are not sent. pdd keeps runtime state in `~/.pdd/runtime`; the repo also holds the test cache in `.pdd/cache/test/` and CLI simulation files in `.pdd/try/`.
 
-The upload follows each test's entry prompts and their `calls` targets, test `context` files, and local links in each prompt's `## Dependencies`. A dependency list item may instead begin with a backticked file path, such as ``- `data/menu.json`: required runtime context``. Schema labels, code examples, installation paths and backticked names in descriptions do not declare extra files. Markdown context may declare its own Dependencies. Paths in links are relative to their declaring file; repository-root spellings also work when Git names them. A linked fragment includes the whole file. Local image links, including SVG mockups, go with their prompt. Ordinary navigation links outside Dependencies and remote URLs do not supply context. A missing declared file stops the upload and names its referrer.
-
-Dependencies ends at the next level-one or level-two Markdown heading, or a collapsible section headed `Required rules`, `Required module rules`, `Required interface reference` or `Decision path`. These summary labels ignore case and balanced `strong`, `em`, `b` or `i` emphasis tags (including quoted attributes), allow omitting `Required`, and may have a colon with a description. Unknown or malformed summary markup keeps later dependency declarations and their safety checks in scope. Literal HTML section examples inside code or comments do not end Dependencies. Source/test filenames and navigation links in later rule/reference sections do not add upload context. Other collapsible blocks may contain genuine dependency declarations; their context and file-safety checks still apply. The full prompt and its image links are retained.
+The upload follows each test's entry prompts and their `calls` targets, test `context` files, and local links in each prompt's `## Dependencies`. A dependency list item may instead begin with a backticked file path, such as ``- `data/menu.json`: required runtime context``. Local image links, including SVG mockups, go with their prompt. Ordinary navigation links outside Dependencies and remote URLs do not supply context. A missing declared file stops the upload and names its referrer.
 
 A simulation includes a valid default `app-map.json` (else `app/app-map.json`), including screen, router, handler and after-operation prompts and stylesheets. Check and lint use no app map. To preview a simulation with a custom map, run `pdd test --files place-order --app-map app/custom-map.json` before `pdd simulate place-order --app-map app/custom-map.json`.
 
@@ -403,14 +275,14 @@ For extra files, add `pdd-source.json` at the repository root:
 {"include": ["docs/shared-policy.md", "data/menu.json"]}
 ```
 
-`include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them. The same safety and size limits apply. Included prompts and Markdown files bring their declared dependencies too. The config is local selection metadata and is sent only when explicitly included. A simulation keeps the original test paths: Save as test appends cases to the authored test file that launched the simulation, even when a Story has several test files. Reopening that simulation keeps the same target. If that test disappears or changes Story, pdd reports the conflict and leaves the other files alone.
-
-Case saving recovers an abandoned ownership lock only after confirming that its owner ended. A symlink or non-regular recovery guard refuses the save and leaves the guard, lock and authored test unchanged. Contention with another recovery attempt uses the same finite wait and cancellation limits as other ownership waits; an unresolved save stays pending.
+`include` is the only key. Entries are exact repository-relative file paths, not folders or patterns, and Git must show them.
 
 ```sh
+pdd lint                      # offline structural, SVG and project lint; 0 AI / 0 network
+pdd lint --diff origin/main   # offline lint plus diff checks against origin/main
+pdd lint --remote             # interpreter format and cross-prompt lint; 0 AI calls
 pdd test --files              # exact upload manifest and byte sizes for all Stories; offline
 pdd test --files place-order  # preview only this Story; offline
-pdd lint                      # the server checks the format only, 0 AI calls
 pdd test                      # check Stories, reusing unchanged passing results from the local cache
 pdd test place-order          # check one story
 pdd test --lf                 # check the last failures
@@ -420,13 +292,11 @@ pdd simulate place-order      # open a Simulator link in your browser; it ends i
 pdd simulate --stop place-order
 ```
 
-The AI-call budget is a ceiling; you are charged only for calls that run. Check defaults to 12 calls per step, with a minimum of 18 and maximum of 1000 per test. `pdd test STORY --max-calls N` overrides that ceiling. A new `pdd simulate STORY` requests 400 calls; use `pdd simulate STORY --max-calls 600` when starting a new simulation. The CLI cannot raise an existing simulation’s ceiling; `--new --max-calls 600` replaces it with fresh saved data. The Simulator shows the interpreter-confirmed total and remaining calls, and reusing a simulation without a budget option keeps its current ceiling. Both `pdd test` and `pdd simulate` accept --max-calls from 1 through 1000, the interpreter maximum. Agents choosing a budget use at least 3 times their worst-case estimate, including child calls and planned interactions (RUNBOOK §10).
+The AI-call budget is a ceiling; you are charged only for calls that run. Check defaults to 12 calls per step, with a minimum of 18 and maximum of 1000 per test. `pdd test STORY --max-calls N` overrides that ceiling. A new `pdd simulate STORY` requests 400 calls; use `pdd simulate STORY --max-calls 600` when starting a new simulation. Both `pdd test` and `pdd simulate` accept `--max-calls` from 1 through 1000, the interpreter maximum. Choose at least 3 times your worst-case estimate, including child calls and planned interactions (see [`skills/pdd/references/stories.md`](../skills/pdd/references/stories.md)).
 
-`pdd test` and saved-batch `pdd test --read BATCH` wait until every Story ends in every shell. `--timeout MIN` (1 to 120 minutes) sets an explicit caller limit. While checks run, pdd prints one stderr line every 30 s, for example `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. Use the shell tool's longest timeout or a background task that notifies on exit (Claude Code: `run_in_background`; Codex: a long `timeout_ms`). If the tool stops pdd, or you press Ctrl-C, run the printed recovery read once to keep waiting. Never poll every minute.
+`pdd test` and saved-batch `pdd test --read BATCH` wait until every Story ends in every shell. `--timeout MIN` (1 to 120 minutes) sets an explicit caller limit. While checks run, pdd prints one stderr line every 30 s, for example `Still running: 2 of 3 Stories done · 14 AI calls so far · 4 min`. If stopped, run the printed recovery read once to keep waiting. Never poll every minute.
 
 After the table, `pdd test` prints one `Prompt tests` line for each Story that you can paste into a PR, for example `Prompt tests (place-order): ✓ 4 of 4 criteria · 11/11 checks · 2 AI calls`. With two or more Stories, the overall `Prompt tests:` line comes last.
-
-Run `pdd lint` (or `pdd lint STORY`) before a real check. The server checks the format of the prompts, Stories and tests only. It requests complete diagnostics (`complete: true`), uses 0 AI calls and shows the problems the server reports, including each schema pointer and Story/test diagnostic. A selected test refused by complete lint is refused even when its prompt admission passed. The preliminary lint before a check or a simulation keeps its ordinary admission request. It requires network access, sign-in and server capacity. An offline-only task must use local file/schema/criteria review instead; `pdd files` and `pdd test --files` send nothing. Those checks are not a server lint pass. See [Offline review and interpreter boundaries](runtime-boundaries.md). With `--json`, `lint_state` matches the selected test rows and exit code: `passed` for exit 0, `refused` for exit 4. The problems list retains all server diagnostics, including those outside the selected tests.
 
 A prompt whose interface is still `draft` can be checked, and its result is marked DRAFT. A DRAFT pass is not an approval.
 
@@ -439,12 +309,7 @@ A prompt whose interface is still `draft` can be checked, and its result is mark
 | 3 | unknown or still running | Run `pdd test --read` later. Never send it again. |
 | 2 | command error | Run `pdd test --help`. |
 
-The optional Story scope uses one exact `pdd-boundary` fenced block with
-repository-relative prompt paths, one per line. See the [Story boundary
-format](cli.md#explain-resource-bindings). Links and headings never narrow scope.
-Without one valid block, pdd keeps the full dependency closure and gives a named
-`boundary-not-applied` note. Duplicate blocks or an unreadable path also keep the
-full closure.
+The optional Story scope uses one exact `pdd-boundary` fenced block with repository-relative prompt paths, one per line. See [Explain resource bindings](cli.md#explain-resource-bindings).
 
 Your agent reads [`skills/pdd/references/stories.md`](../skills/pdd/references/stories.md) in the pdd package: the three files (prompt, Story, test), their rules and what to do with each result.
 
@@ -454,7 +319,7 @@ Factories and method-bearing instances can bind through Runtime interface v2 han
 
 ### 7.1 Approve a prompt
 
-In manual workflows, a person approves a prompt. Explicit Autopilot auto setup and start can delegate ordinary approval gates through the supported commands. Strict approvals and required human reviews still need a person. An agent never edits `"status": "approved"` directly.
+In interactive work, a person approves a prompt. Explicit Autopilot auto setup and start can delegate ordinary approval gates through the supported commands. Strict approvals and required human reviews still need a person. An agent never edits `"status": "approved"` directly.
 
 ```sh
 pdd approve prompts/place_order.prompt.md
@@ -467,7 +332,7 @@ pdd shows the prompt summary and the text that you approve: the changes since th
 
 ### 7.2 Simulate a Story
 
-`pdd simulate STORY` automatically opens a shell for a command-line program, localhost with an example request for HTTP routes, the PDD Simulator page for screens, or its Form tab for typed operations. Omit STORY to open the whole project: all mapped screens, the unique main command-line program, or all HTTP routes. Use `--page` to choose the Simulator page. On the page, it makes a Simulator link and opens it in your browser. In the Simulator, you use the prompt by hand. The link ends after 24 hours, or with `pdd simulate --stop STORY`. If an idle simulation is paused, run `pdd simulate STORY` again: pdd asks the server to reopen that same simulation and waits until it is running. Reopening uses no AI calls and keeps its original expiry and remaining allowance. A failed reopen keeps the record and reports a nonzero result instead of printing a paused link as ready.
+`pdd simulate STORY` automatically opens a shell for a command-line program, localhost with an example request for HTTP routes, the PDD Simulator page for screens, or its Form tab for typed operations. Omit STORY to open the whole project: all mapped screens, the unique main command-line program, or all HTTP routes. Use `--page` to choose the Simulator page. On the page, it makes a Simulator link and opens it in your browser. In the Simulator, you use the prompt by hand. The link ends after 24 hours, or with `pdd simulate --stop STORY`.
 
 In your terminal, `pdd simulate` keeps waiting while the page is open:
 
@@ -484,21 +349,18 @@ Use `--no-open` to get the link without opening a browser. Use `--no-wait` to re
 | `Your GitHub account does not have PDD interpreter access yet. Sign up at https://promptdriven.ai/login with GitHub; you can use the interpreter when your account is approved.` | PDD Cloud has not approved your GitHub account. Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses. After the approval, access starts within 1 minute. Exit code 5. |
 | `Your GitHub login NAME is not on the PDD interpreter invite list yet. Ask the PDD team to add you.` | Ask the PDD team to add your GitHub login. Exit code 5. |
 | `PDD Cloud could not confirm your access. Try again in a minute.` | PDD Cloud did not answer. Run the same command again in a minute. Exit code 5. |
-| `Please update pdd: npm install -g github:promptdriven/pdd` | Your pdd is too old for the PDD interpreter. Run that line, then `pdd setup`. Exit code 5. |
+| `Please update pdd: ...` | Your pdd is too old for the PDD interpreter. Run `pdd upgrade` (or `npm install -g @promptdriven/pdd && pdd setup`). Exit code 5. |
 
-## 8. Make your own workflow
+<a id="8-customize-project-lint-and-verification-rules"></a>
 
-A workflow is a skill folder. Copy one of the PDD workflows as `pdd-NAME`, and edit it. For example, in your repo:
+## 8. Customize project lint and verification rules
 
-```sh
-mkdir -p .agents/skills
-cp -RL ~/.agents/skills/pdd-bug .agents/skills/pdd-mybug   # or from .agents/skills/pdd-bug
-rm -f .agents/skills/pdd-mybug/.pdd-skill.json
-pdd workflow list            # mybug is in the list
-pdd workflow run mybug 42
-```
+Configure repository-specific lint rules and real-path verification recipes in root `pdd.json`:
 
-[workflows.md](workflows.md#make-your-own-workflow) has the steps and the file format.
+- `"lint"`: tune built-in rules (`"off" | "warn" | "error"`), disable rules, or add `"custom_rules"` enforced by `pdd lint`.
+- `"verify": { "paths": [...] }`: declare glob-matched real-path verification recipes (CLI, API, browser, or database) that `pdd status` reports and `pdd prove` runs from merge-base trusted configuration.
+
+See [`skills/pdd/references/verification.md`](../skills/pdd/references/verification.md) and [the CLI reference](cli.md).
 
 ## 9. Shell completion
 
@@ -511,82 +373,62 @@ source <(pdd completion bash)   # in ~/.bashrc
 
 <a id="clean-up-after-a-run"></a>
 
-## 10. Clean up after a run
+## 10. Clean up worktrees and state
 
-PDD does not remove old worktrees or branches. Clean up only runs that are completed (the PR is merged) or cancelled.
-
-```sh
-git worktree list                                   # runs show as your-clone.pdd-worktrees/FOLDER [pdd/...]
-git worktree remove ../your-clone.pdd-worktrees/FOLDER
-git branch -D pdd/small-change-42-1a2b3c4d          # the run's local branch
-```
-
-For a linked worktree or a bare repository, the run worktrees folder is in the table in [How a run works](workflows.md#how-a-run-works). Do not remove a worktree while its run goes on. The run folder stays in `pdd/runs/N` in the common Git directory (`.git/pdd/runs/N` in a normal clone).
-
-All runs share the Herdr session `pdd`. `cancel` closes the tabs of a run. To remove the whole session when no run uses it:
+Autopilot ticks automatically remove unused Autopilot worktrees and prune old logs. To clean up any manual worktree or branch:
 
 ```sh
-herdr session list
-herdr session stop pdd
-herdr session delete pdd
+git worktree list
+git worktree remove ../path/to/worktree
+git branch -D pdd/branch-name
 ```
-
-Do not run `herdr server stop` without a session name. That stops your default Herdr and every agent in it.
 
 <a id="update-and-uninstall"></a>
 
 ## 11. Update and uninstall
 
-Update the skills:
+Update the pdd command and its `.pdd-skill.json`-marked user skills in one step:
+
+```sh
+pdd upgrade           # latest release (npm first with GitHub fallback; Volta-safe)
+pdd upgrade --main    # pinned main commit
+```
+
+Update skills installed with `npx skills`:
 
 ```sh
 npx skills add promptdriven/pdd -g -a codex -a claude-code -y   # for all your projects
 npx skills add promptdriven/pdd -a codex -a claude-code -y      # in a project that has its own copy
 ```
 
-This replaces the PDD skills, also a copy that `pdd setup` made. Start a new agent chat after the update, so it loads the new skills.
+Start a new agent chat after updating so it loads the updated skill.
 
-Update the pdd command, then let it check the skills:
-
-```sh
-npm install -g github:promptdriven/pdd
-pdd --version
-pdd setup
-```
-
-Uninstall the skills that `npx skills` installed:
+Uninstall the skill that `npx skills` installed:
 
 ```sh
-npx skills remove pdd pdd-prompting pdd-feature pdd-bug pdd-small-change pdd-product pdd-graph      # add -g for the global ones
+npx skills remove pdd      # add -g for the global install
 ```
 
-Uninstall the pdd command, the skills that `pdd setup` copied, and its state:
+Uninstall the pdd command, the skill that `pdd setup` copied, and its state:
 
 ```sh
 npm uninstall -g @promptdriven/pdd pdd
-rm -rf ~/.agents/skills/pdd ~/.agents/skills/pdd-{prompting,feature,bug,small-change,product,graph}
-rm -rf ~/.claude/skills/pdd ~/.claude/skills/pdd-{prompting,feature,bug,small-change,product,graph}
-rm -rf ~/.gemini/config/skills/pdd ~/.gemini/config/skills/pdd-{prompting,feature,bug,small-change,product,graph}
-# If you set CLAUDE_CONFIG_DIR, also remove the pdd skill folders in "$CLAUDE_CONFIG_DIR/skills"
+rm -rf ~/.agents/skills/pdd
+rm -rf ~/.claude/skills/pdd
+rm -rf ~/.gemini/config/skills/pdd
+# If you set CLAUDE_CONFIG_DIR, also remove "$CLAUDE_CONFIG_DIR/skills/pdd"
 rm -rf ~/.local/state/pdd
 rm -rf ~/.pdd
 ```
 
 Look before you run `rm -rf`: if `npx skills -g` installed these folders, use `npx skills remove -g` instead.
 
-If setup added MCP registration, remove only its `pdd` entry from `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`), `$CLAUDE_CONFIG_DIR/.claude.json` (default `~/.claude.json`), `~/.gemini/settings.json`, and `~/.gemini/config/mcp_config.json`. Leftovers can stay in your clones: `.pdd/`, `.git/pdd`, the `*.pdd-worktrees` folders and the `pdd/...` branches. See [Clean up after a run](#clean-up-after-a-run).
+If setup added MCP registration, remove only its `pdd` entry from `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`), `$CLAUDE_CONFIG_DIR/.claude.json` (default `~/.claude.json`), `~/.gemini/settings.json`, and `~/.gemini/config/mcp_config.json`.
 
 ## 12. Known limits
 
-This is a pre-release. These limits are known today:
-
-- Agents run tests; `pdd workflow prove` also runs its supplied test command on base and head. Read the test output in the PR body before you merge.
-- pdd does not remove old worktrees or branches. See [Clean up after a run](#clean-up-after-a-run).
-- A busy or rate-limited model (HTTP 429, capacity or quota) can stop a chat. Open it with `pdd workflow open N` and ask it to go on.
-- Setup and workflow startup check agent readiness before starting. Codex and Claude status show whether credentials are configured; Gemini startup checks installation with `gemini --version` and leaves sign-in to the chat. Sign in or select another ready agent.
-- With Claude Code, the first chat of a run can ask once to trust the new worktree. Answer it in the chat.
-- An issue has one active run. A second `pdd workflow run` on the same issue still starts: it marks the old active run replaced and names it (id, worktree, last activity) in one warning.
-- Each step is a fresh subagent. A run uses a lot of agent quota.
+- Read the test and `pdd prove` output before merging a PR.
+- PDD is tested on macOS and Linux.
 - Without `--agent`, pdd selects the first ready agent in order: Codex, Claude Code, Gemini CLI, then Antigravity CLI (`agy`). An explicit agent or configured launcher selects that choice.
 
 ## 13. Troubleshooting
@@ -594,35 +436,19 @@ This is a pre-release. These limits are known today:
 | You see | What to do |
 |---|---|
 | `pdd --version` does not print `0.1.41` | Another `pdd` comes first. See [section 3](#3-if-you-have-the-old-python-pdd). |
-| pdd says an agent is not installed or signed in | Install the agent and sign in, or use the other one with `--agent`. |
+| pdd says an agent is not installed or signed in | Install the agent and sign in, or use another agent with `--agent`. |
 | A message about `git rev-parse --show-toplevel` | You are not in a Git clone. `cd` into your clone. |
 | A message about `refs/remotes/origin/...` or a missing base | Run `git fetch origin`. |
-| A GitHub error when the run starts | Check `git remote -v` (a GitHub `origin`), `gh auth status`, and that the issue exists in this repository. |
-| `approve` says that more than one run matches | Give the issue number, or `owner/repo#N`. |
-| `pdd workflow run` says that the issue already has a run | The issue has a completed run. Use `pdd workflow open N` or `status N`. |
-| `pdd workflow run` warns that the issue had an active run | pdd marked that run replaced and started a new one. If the warning says the old run may still be working, close its chat. Its worktree and branch stay. |
-| `pdd workflow run` prints a hint about Claude Code trust | Run `pdd workflow open N` and answer the trust question in the chat. |
-| `pdd workflow run` says that `CODEX_HOME`, `CLAUDE_CONFIG_DIR` or `GEMINI_CLI_HOME` does not exist | Set it to a folder that exists, for example `CODEX_HOME=$HOME/.codex`, and run the command again. |
-| Chat startup/open is not confirmed (`server_unavailable`) | Herdr could not handle the request. PDD keeps the same worktree, base and run and reports waiting. After Herdr is available, use `pdd workflow open N` for that run. A lost launch reply keeps the original tab identity; if no live agent can be confirmed there, inspect that tab before starting another agent. |
-| `herdr_layout_identity_changed` | A tab or pane of the run is not the one pdd saved, for example after you closed or split the run's first tab. The message names the workspace and what changed. The next lines show the saved and the live Herdr IDs. Look at that workspace with `herdr session attach pdd`, undo the change, then run `pdd workflow open N` again. A shell that changes folder at startup does not cause this message. |
-| `status` says "the chat stopped" | The agent ran in the chat, and now Herdr sees no agent there. Run `pdd workflow open N` to start it again. If it stops again at once, read the error in the chat. |
-| `status` says "the chat cannot work" | The agent runs, but its turns fail. "The agent's login failed": sign the agent in again (Claude: `/login` in the chat, or fix its API key; Codex: `codex login` with the run's `CODEX_HOME`), then run `pdd workflow open N --new`. "Usage limit until TIME": after that time, run `pdd workflow open N` and ask the chat to go on, or start a new chat with `pdd workflow open N --new`. When pdd can tell that TIME has passed, status says "the chat stopped at its usage limit" instead. For Codex, `CODEX_HOME=<folder> pdd workflow open N --new` starts it on another account. pdd never answers the limit menu for you. |
-| `open` or `status` says "starting, not confirmed" | pdd started the chat, but Herdr shows no agent in its tab and the launch reply was not confirmed. Look at the tab in Herdr session pdd, then run `pdd workflow open N` again. pdd sends no second launch. |
-| `approve` asks you to relay approval or use a person terminal | Your terminal runs inside Claude Code or Codex. Run `pdd workflow approve N` in a normal terminal, or answer the gate question in the chat. |
-| The agent must ask for your approval | Reply after the agent shows the gate. It records your reply with the [safe stdin form](cli.md#record-a-chat-approval). You can also approve at a normal terminal. |
-| The chat stopped and does nothing | Run `pdd workflow open N`. Read the last lines. It can wait for you, show a sign-in screen or hit a rate limit. Answer it, or ask it to go on. |
-| The chat is gone after a restart | Run `pdd workflow open N`. It resumes the chat. |
-| The agent uses an old PDD skill | Run `npx skills add promptdriven/pdd -g -a codex -a claude-code -y`, then start a new chat. `pdd --version` says when your skills are older than pdd. |
-| `npx skills update -g` prints `No global skills tracked in lock file` | `npx skills add` did not install these skills (for example, `pdd setup` did). Run `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` once. After that, `npx skills update -g` works too. |
+| The agent uses an old PDD skill | Run `pdd setup` (or `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` for unmarked installs), then start a new chat. `pdd --version` says when your skills are older than pdd. |
+| `npx skills update -g` prints `No global skills tracked in lock file` | `npx skills add` did not install the skill (for example, `pdd setup` did). Run `npx skills add promptdriven/pdd -g -a codex -a claude-code -y` once. After that, `npx skills update -g` works too. |
 | `npx skills add … -g` prints `Failed to install` for some agents | Those agents do not support global skills. Codex and Claude Code still get them. To install only for these two, add `-a codex -a claude-code`. |
-| The agent does not know the `pdd-feature` skill | Install the skills: `npx skills add promptdriven/pdd`. Then start a new chat. |
+| The agent does not know the `/pdd` skill | Run `pdd setup` (or `npx skills add promptdriven/pdd -g`), then start a new chat. |
 | `pdd test` says `No tests found` | Read the reasons under that line, and fix the files that it names. See [section 7.3](#73-when-a-check-does-not-run). |
 | `pdd test` says that your GitHub account does not have PDD interpreter access | Sign up at [promptdriven.ai/login](https://promptdriven.ai/login) with the GitHub account that `gh` uses, and wait for the approval. See [section 7.3](#73-when-a-check-does-not-run). |
-| `pdd test` or `pdd simulate` says `Please update pdd` | Run `npm install -g github:promptdriven/pdd`, then `pdd setup`. |
+| `pdd test` or `pdd simulate` says `Please update pdd` | Run `pdd upgrade` (or `npm install -g @promptdriven/pdd && pdd setup`). |
 | `pdd test` says that your login is not on the invite list | Ask the PDD team to add your GitHub login. |
-| `pdd approve is for a person at a terminal` | In strict mode, run the approval yourself in a normal terminal. In easy mode, your agent can record your actual chat approval with --said. |
-| PR 1 says `Draft prompts: …` | Approve the ready gate and its drafts together, or approve one prompt at a time in a terminal. See [approval commands](cli.md#record-a-chat-approval). |
-| `npm error code EEXIST` on `<prefix>/bin/pdd` | An unscoped `pdd` npm package owns `bin/pdd`. Run `npm uninstall -g pdd && npm install -g github:promptdriven/pdd` (do not use `--force`). |
+| `pdd approve is for a person at a terminal` | In strict mode, run the approval yourself in a normal terminal. In easy mode, your agent can record your actual chat approval with `--said -`. |
+| `npm error code EEXIST` on `<prefix>/bin/pdd` | An unscoped `pdd` npm package owns `bin/pdd`. Run `npm uninstall -g pdd && npm install -g @promptdriven/pdd` (do not use `--force`). |
 | `npm outdated -g` shows `pdd` 0.4.14 | That is the unrelated registry package. Ignore it. Do not run `npm update -g`. |
 
 ## 14. Report a problem
@@ -649,7 +475,6 @@ HTTP status, headers and body. Unknown routes return 404. The listener stays on 
 When the Story has an app map, open `http://127.0.0.1:8080/` to use its real Screen. Click **Open the app**
 if needed; opening and taps use the same simulation budget and saved data. See [`skills/pdd/references/ui-and-screens.md`](../skills/pdd/references/ui-and-screens.md) for details.
 
-
 ## Ask your agent in the PDD Simulator
 
 Run `pdd simulate STORY` in your own terminal and keep pdd running. Without terminal stdout, plain `pdd simulate STORY` reads saved cases once and returns without discovering or connecting a local agent. An explicit `--agent NAME` connects even in the background; `--no-wait` skips the connection. The Simulator's **Ask your agent** panel connects to your own installed Codex, Claude or Gemini through the interpreter. Ask what you can try, ask it to prepare the fields, or ask whether the last answer meets the Story. Suggested inputs are checked against the entry's schema. The agent fills directly on a supported page and runs only when it understands that you want the action to happen; otherwise you press **Run**. Actions use the simulation budget. Older pages keep manual **Fill fields** and **Run**.
@@ -674,14 +499,11 @@ Many accounts? List your agents in `~/.config/pdd/agents.json`:
 
 Use `pdd simulate my-story --agent "Codex (account-b)"`, or choose a name in the picker. Each launcher has its own state, and the choice is remembered for the project. Detected defaults appear after your entries; set `"include_defaults": false` to show only your list. Only your user file supplies custom launchers; repository `.pdd/agents.json` files are ignored. `kind` chooses the read-only Codex, Claude or Gemini adapter. `command` is a program name or path, launched without a shell; leading `~` is expanded in paths and env values. Env overrides apply only to that launcher. Commands and env stay on your computer; only names and states reach the picker. Invalid configuration stops with a plain error.
 
-The same names work for workflow runs:
+The same names also work with `pdd product start`:
 
 ```sh
-pdd workflow run feature 42 --agent "Claude (account-a)"
 pdd product start phone-1 --agent "Claude (account-a)"
 ```
-
-The readiness check at start runs that entry's command with `login status` for Codex, `auth status` for Claude, or `--version` for Gemini, and the entry's env. Gemini's version probe checks installation; sign-in is checked in the chat. Every chat of the run, also `pdd workflow open` and `--new`, starts that command with the normal agent arguments. The run saves the entry's name, kind and command. The run record keeps only the names of the entry's env variables, never their values. At each chat start, pdd reads the values again from `agents.json` and writes them to a one-time private file (mode 0600) in the run folder, inside your clone's `.git` folder. The chat deletes that file before the agent starts. If it cannot delete the file, the agent does not start. If pdd stops before the chat runs, a start or status of the run deletes the file only when it is at least five minutes old. Cancel deletes all login files, including newer ones. Do not set a name in `env` that the shell controls, such as `UID`, `PPID` or `SHLVL`: pdd refuses such an entry and names the variable. If you remove or rename the entry, the run stops with a clear message before it starts a chat; add the entry again. The built-in names `codex`, `claude`, `gemini` and `agy` always mean the built-in agents, so do not give an entry one of these names. An unknown name stops with a list of your entry names.
 
 `command` must be a file that can run, not a shell function or an alias, because pdd starts it without your shell startup files. A small script works. For example, `~/bin/claude-account-a` (run `chmod +x` on it):
 
@@ -693,8 +515,6 @@ export CLAUDE_CODE_OAUTH_TOKEN
 exec claude "$@"
 ```
 
-Each chat also gets the login variables of the person who runs the pdd command, not the ones of the terminal that first started the Herdr session `pdd`. See [the CLI reference](cli.md).
-
 The picker shows installation and sign-in state. You can switch agents; pdd remembers the choice for this project. A usage limit or sign-in error is shown in the chat without sending your message to another agent automatically. Codex and Claude use fresh read-only turns with your default model and login. Gemini Try accepts any installed version whose `--help` lists the required options. It checks `--help` for `--approval-mode`, `--admin-policy`, `--extensions`, `--allowed-mcp-server-names` and `--output-format` before applying its restricted configuration. If an option is missing, pdd prints `Gemini Try read-only mode requires <option>; update Gemini CLI.` When its sign-in cannot be checked cheaply, the picker says it will be checked on the first message.
 
 If an agent cannot start, the chat shows its first error line with recognized secrets removed. Full sanitized diagnostics stay on your computer in `~/.pdd/runtime/agent-chat.log`; the chat shows that path when the log was saved.
@@ -702,11 +522,3 @@ If an agent cannot start, the chat shows its first error line with recognized se
 Chat uses your agent account's allowance. The interpreter relays messages and invokes no model for chat. Context includes the Story, criteria, entry schemas, current fields/data and last answer; recognized credential fields and token patterns are removed. Keep secrets out of project text and chat. The agent can request a Simulator action when you ask it to run one; it cannot edit the project.
 
 Closing pdd or pressing Ctrl-C disconnects chat and leaves the simulation open. `pdd simulate STORY --no-wait` opens an ordinary Simulator link without a chat bridge. Agent selection does not combine with `--no-wait`, `--cli`, `--serve`, `--stop` or `--save-last`. Shared Simulator links do not grant access to owner chat. If a browser cannot open automatically, pdd prints a separate private owner-chat link; do not share it. Reconnecting replaces the chat connection and clears its temporary history.
-
-Only an explicit approve call can pass an approval gate. Chat messages, steps and `workflow done` never approve it. A workflow without an approve gate before code gets a warning, not a block.
-
-When `herdr_pane_budget` prevents a start, run `pdd workflow tidy --dry-run`, then
-`pdd workflow tidy`. The default session budget is 56 panes, including personal
-panes. Close unused tabs or set `PDD_HERDR_PANE_BUDGET` to another nonnegative
-integer (`0` disables the budget). Busy chats and the current chat of a live run
-are kept open. Use `pdd workflow status --all` to inspect capacity and runs.

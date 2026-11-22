@@ -2,24 +2,24 @@
 
 This page lists every command of pdd 0.1.41, as `pdd --help` and `pdd <command> --help` show it. A test (`test/docs-commands.test.mjs`) checks that each command form of the help catalog is on this page.
 
-You need the pdd command for local inspection (`pdd status`, `pdd files`, `pdd owner`), remote checks (`pdd test`, `pdd lint`, `pdd simulate`, `pdd approve`), and workflow runs with PRs. Install the single `/pdd` skill globally with `pdd setup` (or `npx skills add promptdriven/pdd -g`), and set up each repository once with `pdd init`. For simulations that your agent drives, use the Try tools in `pdd mcp`. Call the skill with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
+You need the pdd command for local inspection (`pdd status`, `pdd files`, `pdd owner`, `pdd update`, `pdd lint`, `pdd prove`), remote checks (`pdd test`, `pdd lint --remote`, `pdd simulate`, `pdd approve`), and headless Autopilot issue runs (`pdd autopilot`). Install the single `/pdd` skill globally with `pdd setup` (or `npx skills add promptdriven/pdd -g`), and set up each repository once with `pdd init`. For simulations that your agent drives, use the Try tools in `pdd mcp`. Call the skill with `$pdd` in Codex or `/pdd` in Claude Code (or ask for it by name). See [Install](USAGE.md#2-install).
 
-Typing `pdd check` or `pdd try` runs nothing and prints the name of the command to use.
+Typing `pdd check`, `pdd try`, or `pdd workflow` runs nothing and prints the command or skill to use.
 
 ## Set up your machine and repo
 
 | Command | What it does |
 |---|---|
-| `pdd setup [--yes] [--skills-dir PATH]` | One-time laptop setup: check `gh` authentication (non-blocking), install or refresh the bundled [PDD skill](USAGE.md#4-the-pdd-skills) in user agent skill folders (respecting Claude Code plugin installs and optional `--skills-dir PATH`), preview and register PDD Simulator MCP tools in detected agents (Codex, Claude Code, Gemini CLI, Antigravity), and report any PATH conflict. Never edits repository files or asks Autopilot questions |
+| `pdd setup [--yes] [--skills-dir PATH]` | One-time laptop setup: check `gh` authentication (non-blocking), install or refresh the bundled [PDD skill](USAGE.md#4-the-pdd-skills) in user agent skill folders (respecting Claude Code plugin installs while cleaning marked retired split skills, or targeting optional `--skills-dir PATH`), preview and register PDD Simulator MCP tools in detected agents (Codex, Claude Code, Gemini CLI, Antigravity), and report any PATH conflict. Never edits repository files or asks Autopilot questions |
 | `pdd init` | One-time per-repository setup: add or update the 4-line PDD block between `<!-- pdd:start -->` and `<!-- pdd:end -->` in `CLAUDE.md` (if it exists) else `AGENTS.md` (creating `AGENTS.md` if neither exists), detect project language and test command, and keep all other bytes untouched |
 | `pdd status [PATH...] [--changed] [--json]` | Offline repository overview: inspect prompts, Stories, tests, file ownership, PDD block status, and `pdd.json` `verify.paths` Feature Map coverage without network or AI calls |
-| `pdd upgrade [--main]` | Update a user-owned global `@promptdriven/pdd` installation from npm (with GitHub tag fallback, or the pinned `main` commit with `--main`) using `--ignore-scripts`, refresh `.pdd-skill.json`-marked user PDD skills across supported agent folders, and clear cached release notices |
+| `pdd upgrade [--main]` | Update a user-owned global npm or Volta `@promptdriven/pdd` installation from npm (with GitHub tag fallback, or the pinned `main` commit with `--main`) using `--ignore-scripts`, refresh `.pdd-skill.json`-marked user PDD skills across supported agent folders, and clear cached release notices |
 
-`pdd setup` copies the bundled skill to `~/.agents/skills` (Codex and Gemini CLI), `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path, skipping automatically when Claude Code already has the PDD plugin installed in `installed_plugins.json`), and `~/.gemini/config/skills` when Antigravity (`agy` on PATH, `~/.gemini/antigravity-cli`, or `~/.gemini/config/mcp_config.json`) is present. Pass `--skills-dir PATH` to target a custom skill folder instead of the default roots. Setup also updates existing `.pdd-skill.json`-marked folders in `~/.codex/skills` and `$CODEX_HOME/skills`. After an update of the pdd command, `pdd setup`, `pdd upgrade`, and the once-per-version automatic sync on normal `pdd` commands replace older or same-version differing copies with the `.pdd-skill.json` marker (including invalid markers), add missing bundled skills to existing marked folders, and remove `.pdd-skill.json`-marked retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`). Unmarked folders, customized copies, symlinks and unrelated custom skills are never modified; `pdd upgrade` reports updated marked folders, lists skipped unmarked or customized folders with `npx skills add promptdriven/pdd -g --skill '*'` (without `-g` for project folders), and reports failed folders with their recovery commands. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd is 0.1.20`. Discovery, `pdd files`, `pdd init`, `pdd status` and `--json` commands write nothing and skip automatic network checks.
+`pdd setup` copies the bundled `/pdd` skill to `~/.agents/skills` (Codex and Gemini CLI), `~/.claude/skills` (or `$CLAUDE_CONFIG_DIR/skills` when it is an absolute path, cleaning marked retired split skills and skipping duplicate `/pdd` copies when Claude Code already has the PDD plugin installed in `installed_plugins.json`), and `~/.gemini/config/skills` when Antigravity (`agy` on PATH, `~/.gemini/antigravity-cli`, or `~/.gemini/config/mcp_config.json`) is present. Pass `--skills-dir PATH` to target a custom skill folder instead of the default roots. Setup also updates existing `.pdd-skill.json`-marked folders in `~/.codex/skills` and `$CODEX_HOME/skills`. After an update of the pdd command, `pdd setup`, `pdd upgrade`, and the once-per-version automatic sync on normal `pdd` commands replace older or same-version differing copies with the `.pdd-skill.json` marker (including invalid markers), add missing bundled skills to existing marked folders, and remove `.pdd-skill.json`-marked retired skills (`pdd-autopilot`, `pdd-check`, `pdd-merge`, `pdd-setup`, `pdd-prompting`, `pdd-small-change`, `pdd-bug`, `pdd-feature`, `pdd-product`, `pdd-graph`). Unmarked folders, customized copies, symlinks and unrelated custom skills are never modified; `pdd upgrade` reports updated marked folders, lists skipped unmarked or customized folders with `npx skills add promptdriven/pdd -g --skill '*'` (without `-g` for project folders), and reports failed folders with their recovery commands. When `pdd --version` or `pdd setup` reports older skills, it names each affected skill and its installed version, for example `pdd is 0.1.20`. Discovery, `pdd files`, `pdd init`, `pdd status` and `--json` commands write nothing and skip automatic network checks.
 
 Setup previews the exact PDD Simulator MCP tools configuration changes for the Codex, Claude Code, Gemini CLI and Antigravity (`agy`) agents it finds, then asks once (y/N). Passing `--yes` applies the previewed MCP configuration without asking; without `--yes` in a non-interactive terminal, MCP registration is skipped safely. Registrations pin this running pdd executable, so another installation earlier on PATH cannot receive its tools, and stale PDD entries are updated in place while preserving custom keys, unrelated servers and formatting. Codex uses `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) and `mcp_servers.pdd` with `default_tools_approval_mode = "approve"`. Claude Code uses `mcpServers.pdd` in its configuration; Gemini CLI uses `mcpServers.pdd` in `~/.gemini/settings.json` with server trust (detected via `settings.json` or `gemini` on PATH); Antigravity uses `mcpServers.pdd` in `~/.gemini/config/mcp_config.json` (detected via `mcp_config.json`, `~/.gemini/antigravity-cli`, or `agy` on PATH). Each entry runs `pdd mcp`. A symlinked agent config is skipped with a warning and exit 0, and a failure in one agent does not block registering healthy agents.
 
-Setup also reports PATH conflicts when another `pdd` executable precedes this one on PATH, listing the running pdd executable and version, the `pdd` paths in order, and the exact command for this pdd. When PATH is clean, setup stays quiet. `--version` preserves its version-only stdout; PATH diagnostics go to stderr. `workflow run` gives a one-line warning when another pdd comes first.
+Setup also reports PATH conflicts when another `pdd` executable precedes this one on PATH, listing the running pdd executable and version, the `pdd` paths in order, and the exact command for this pdd. When PATH is clean, setup stays quiet. `--version` preserves its version-only stdout; PATH diagnostics go to stderr.
 
 `pdd init` sets up the current repository without touching user-global skills, MCP config, or root `.gitignore` (`.pdd/.gitignore` is written automatically whenever `.pdd/` is created). It preserves existing line endings (LF or CRLF), follows in-repo symlinks such as `CLAUDE.md -> AGENTS.md` cleanly while refusing out-of-repo symlinks, and detects project stack and test commands so the agent can start immediately.
 
@@ -130,12 +130,12 @@ It returns 2 outside a Git repository or for a PATH outside it.
 Code replay and the `pdd test` check plan use the binding and header records
 only.
 
-## Sync touched code files with owning prompts
+## Inspect changed code files against owning prompts
 
-`pdd update [FILE...] [--from RANGE] [--check] [--write] [--json]` inspects or
-syncs touched code files with their owning `.prompt.md` contracts using local
-Git metadata and working-tree files only, with zero AI subprocesses and zero
-network or interpreter calls.
+`pdd update [FILE...] [--from RANGE] [--branch REF] [--all] [--check] [--json]`
+inspects changed code files against their owning `.prompt.md` contracts using
+local Git metadata and working-tree files only, with zero AI subprocesses, zero
+network or interpreter calls, and zero file writes.
 
 Choose one scope:
 
@@ -143,15 +143,18 @@ Choose one scope:
   files.
 - Pass `--from RANGE` (`<base>..<head>` or `<base>`, meaning `<base>..HEAD`) to
   scope strictly to files touched in that Git diff range.
-- Omit both to inspect staged, unstaged, and untracked non-ignored changes in
-  the current working tree.
+- Pass `--branch REF` to diff from `merge-base(REF, HEAD)` against the working
+  tree.
+- Pass `--all` to inspect all prompt-mapped files in the repository.
+- Omit all scope flags to inspect staged, unstaged, and untracked non-ignored
+  changes in the current working tree.
 
-`pdd update` is read-only and writes zero sidecar files or prompt edits. It maps
-each touched file through `pdd owner` (`pdd-bindings.json`, `Generated from` or
-`Prompt:` headers, opening-sentence prose claims, and unique path/stem matches),
-groups owned modules by owning `.prompt.md` with `+added/-removed` diff stats and
-changed exported/top-level symbols, and lists touched unowned files separately
-without fabricating ownership.
+`pdd update` is strictly read-only and writes zero sidecar files or prompt
+edits. It maps each touched file through `pdd owner` (`pdd-bindings.json` and
+`Prompt:` / `Generated from` headers), groups owned modules by owning
+`.prompt.md` with `+added/-removed` diff stats and changed exported/top-level
+symbols, and lists touched unowned files separately without fabricating
+ownership.
 
 - Default: print each affected prompt's status (`current`, `prompt-stale`,
   `changed`, or `deleted`), diff stats, and changed symbols without writing
@@ -160,8 +163,6 @@ without fabricating ownership.
 - `--check`: read-only verification that exits 0 when every touched owned
   module is `current` and exits 1 when any touched owned module has changes or a
   stale prompt header.
-- `--write`: refused with exit 2 because `pdd update` never writes sidecar files
-  or modifies headers on disk.
 - `--json`: emit machine-readable `pdd.update-sync.v1` JSON (`scope`,
   `prompts`, `modules`, `unowned`, `ok`).
 
@@ -176,7 +177,7 @@ Git, gh sign-in, write access, merge methods and effective branch rules, the Git
 name and email, agent sign-in and read-only usage, setup instructions and skills,
 mode and trust, the `pdd.json` on GitHub, draft prompts, authenticated interpreter
 capacity access, and the platform's user scheduler. Linux lingering and macOS
-sleep are advisory. Doctor needs no Herdr: Autopilot jobs run headless.
+sleep are advisory. Autopilot jobs run headless.
 Codex usage uses a read-only account request. Claude usage remains unproved;
 run `claude` and `/usage` to inspect it. No agent prompt is sent.
 Unreadable branch rules are advisory; repository reviews and checks still apply.
@@ -214,9 +215,8 @@ Interpreter readiness uses the runtime client's health check, including a JSON
 404 from an interpreter without the optional capacity endpoint.
 
 Run Autopilot commands inside the repo folder. Each repo has its own Autopilot on
-each machine. Autopilot has one engine, the [core engine](#core-engine). Its tick
-makes no AI call. Each issue gets one headless Codex or Claude job with a log file.
-Autopilot opens no chat and needs no Herdr.
+each machine. Autopilot runs the [core engine](#core-engine). Its tick
+makes no AI call. Each issue gets one headless Codex, Claude, Gemini, or Antigravity job with a log file.
 
 | Command | What it does |
 |---|---|
@@ -291,9 +291,9 @@ reads only the issues that changed since then (`since=`).
 Autopilot uses `autopilot.base` in `pdd.json` when it is set; else it uses the
 repository default branch. Start and status show the selection. Each start reads
 the default branch from GitHub again. Repository documents do not select the
-base. A manual workflow still accepts `--base`.
+base.
 
-`pdd autopilot status` reads local files and the timer, with no Herdr or AI call.
+`pdd autopilot status` reads local files and the timer, with no AI call.
 It shows `Autopilot enabled; timer active, every 10 minutes; next tick: TIME`. Then
 come the core lines: mode, repository, folder, base and agent; the busy slots, the
 no-progress limit, repairs, the report mode and the opt-in label, each with its
@@ -327,27 +327,6 @@ running full suite, a repair pass, and a stale suite receipt. Add `--follow` or
 `-f` to stream live worker and test-suite progress and stage changes; pressing
 Ctrl-C detaches the viewer without stopping the worker or changing `observe`
 mode. Add `--json` for structured snapshot output (`pdd.autopilot-logs.v1`).
-
-A machine state that ran the full engine moves to the core engine at its next
-tick. A start runs a tick, so a start moves it too. No new work starts before the
-move is complete. While old work is busy (a live run with a merged PR, or a working
-old Autopilot chat), the move waits, for at most 6 ticks. Then it closes the old
-Autopilot chat pane when the pane is Autopilot's own. It cancels this machine's
-live old runs and closes their worker chats. It releases this machine's claims: it
-deletes their claim comments, and it removes `pdd:working` only when the claim is
-this machine's. All other labels stay, also `pdd:stuck` and `pdd:needs-decision`.
-Each open PR of an old run gets one note: `Autopilot moved this machine to the core
-engine; this PR is not worked on. A person can merge or close it.` PRs and branches
-stay. Last, the move releases the check slots and stops the old completion workers
-of this repository (TERM, then KILL). It prints one line with the counts. A failed
-step goes on at the next tick. The move does not change the timer: the next
-`pdd autopilot start` sets the 10-minute interval, and status says so until then.
-Before the move, status says `This machine moves from the full engine to the core
-engine at its next tick`, and `status --all` adds the same words. For 7 days after
-the move, status shows `Moved from the full engine at TIME:` and the line.
-`pdd autopilot start --engine full` stops with exit code 2 and says `The full
-Autopilot engine is removed; Autopilot runs only the core engine. Run pdd autopilot
-start without --engine.` `--engine core` changes nothing.
 
 ## Machine and account health
 
@@ -516,11 +495,10 @@ missing or invalid value uses the default.
 - **Reserve.** GitHub reports fewer calls left than the floor, for REST or
   GraphQL. Then the tick reads no issue list until the reset. It refreshes only
   the heartbeat of each live claim of this machine, so a claim does not expire
-  while its job works. Native dependency observations for an Autopilot
-  repository also stop non-safety reads. This includes `pdd dependencies
-  prepare`, `complete` and direct snapshot reads. A reply that shows fewer calls
-  than the floor stops the reads after it. A stopped `complete` keeps its request
-  and analysis. Reviews that were already saved are never saved twice.
+  while its job works. Native dependency snapshot reads for an Autopilot
+  repository also stop non-safety reads. A reply that shows fewer calls than
+  the floor stops the reads after it. Reviews that were already saved are never
+  saved twice.
 
 The agent jobs' own `gh` calls are not counted and do not wait for the floor.
 Safety reads (claim checks, trust, permissions and write readbacks) and writes can
@@ -785,8 +763,8 @@ The tools are `try_open`, `try_state`, `try_run`, `try_observe`, `try_check` and
 
 | Command | What it does |
 |---|---|
-| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the grouped command overview, quick-start examples, focused-help hint (`pdd <command> --help`), and the full paths of the installed Prompting guide and RUNBOOK |
-| `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the Prompting guide and RUNBOOK |
+| `pdd`, `pdd --help`, `pdd -h`, `pdd help` | Show the grouped command overview, quick-start examples, focused-help hint (`pdd <command> --help`), and the full paths of the installed PDD skill and Prompting guide |
+| `pdd help prompting` | Show how to write a prompt, a Story and its test, which commands check them, and the full paths of the PDD skill and Prompting guide |
 | `pdd --version` | Print the version, `0.1.41`. When the PDD skills that your agent finds are older, also print the update command on stderr |
 | `pdd -V` | Same version and local diagnostics as `pdd --version` |
 | `pdd -VV` | Print the local CLI version, the interpreter's full build identifier and its supported interface, test and app-map format IDs. Use existing gh sign-in without prompting; unavailable metadata prints `PDD interpreter: unknown` and exits 0 |
@@ -830,25 +808,13 @@ Serve the Story or prompt on localhost (default 8080; `--fresh` bypasses saved a
 
 Append the last command and its observed output to its original Story test file.
 
-Story counts use the newest source-compatible evidence across check, verify and saved evidence records. Unknown results stay unknown. Source changes invalidate old counts. To refresh counts without rerunning workflow steps, save `pdd test --read BATCH --json` outside the repository, then run `pdd workflow evidence ISSUE --summary /path/to/check.json`. The JSON must retain its repository, selected test paths, Story lines and source SHA. This records saved evidence, not new execution or approval.
-
-To register an earlier failing check of a bug after its prompt changed ("fails before the fix"), name a local commit whose files are exactly the checked files, then import the original saved JSON:
-
-```sh
-pdd workflow evidence-associate 18 --workspace . --stage before --commit <full commit SHA> --test tests/count-words.json
-pdd test --read <BATCH> --json > /tmp/before.json
-pdd workflow evidence 18 --summary /tmp/before.json
-```
-
-The selected source at that commit must have the saved check's exact `source_sha256`, and each test must be a current test of the same Story. pdd shows the result as `Before the fix (commit SHORT, batch BATCH): …`. It never counts as a current result, check or approval.
-
-An explicit `pdd lint` that is still queued/running exits 3 and prints its saved read command; exit 0 means validation finished successfully. The all-Story cost estimate includes entry executions, declared saved-data operations and nested prompt-call allowances. Conditional operations may use fewer calls; `--max-calls` remains the hard cap.
+An explicit `pdd lint --remote` that is still queued/running exits 3 and prints its saved read command; exit 0 means validation finished successfully. The all-Story cost estimate includes entry executions, declared saved-data operations and nested prompt-call allowances. Conditional operations may use fewer calls; `--max-calls` remains the hard cap.
 
 Virtual CLI and HTTP startup print `Try AI usage` on stderr. Each virtual CLI command appends its usage line to stderr, keeping program stdout and exit status intact. It distinguishes calls for this command, total used and remaining in this simulation, and the session cap. Unknown counters stay unknown. Named HTTP routes carry `x-pdd-ai-calls`, `x-pdd-try-used`, `x-pdd-try-remaining`, `x-pdd-try-cap`, and `x-pdd-usage-source` headers; response bodies and program statuses stay intact. `runtime` identifies a confirmed call receipt; `last-known` identifies cached session allowance on a local zero-call response such as an unmatched route. Session allowance is separate from an account or tester allowance. Usage reads spend no model calls and never repeat commands.
 
 `pdd test --read CALL_ID` reads an authenticated owner call receipt by UUID without sending the operation again. Interrupted `pdd simulate --cli` commands print the recovery command for this read. See [module binding coverage](runtime-bindings.md) for selected Story coverage and unbound reasons.
 
-`workflow prove` leaves the saved run base unchanged. Fresh worktrees have no installed dependencies; include required installation in `--test`. The command inherits your environment and network access, and shares the repository’s Git refs and config, just like tests run by hand. Interrupting with SIGINT, SIGTERM or SIGHUP stops the process group and removes both snapshots before exit 130, 143 or 129. Only positively owned stale proof worktrees with inactive owners are recovered; unrelated worktrees are left alone.
+`pdd prove --base REF --test CMD --expect TEXT` leaves the repository checkout unchanged and runs both base and head snapshots in isolated temporary worktrees. Fresh worktrees have no installed dependencies; include required installation in `--setup` or `--test`. Interrupting with SIGINT, SIGTERM or SIGHUP stops the process group and removes both temporary snapshots.
 
 Preliminary lint shares Check's unlimited default caller wait; standalone remote lint retains its 90-second agent default and unlimited interactive wait. `--timeout` bounds either, with no separate lint cap. A saved-batch read of a lint-held Check waits without a default limit, retains the saved interpreter origin and dispatches each original check at most once. Explicit retry retains its finite default wait. Standalone lint reads never send checks.
 
@@ -896,23 +862,15 @@ approved interface set it to draft; review the preview and approve it as usual.
 |---|---|
 | `pdd product status [--json] [--through prompt-pr\|code]` | Count Stories by part and slice from current saved checks; identify stale results and remote evidence from PRs; `--through prompt-pr\|code` sets the completion target. Makes no interpreter calls |
 | `pdd product next [--through prompt-pr\|code]` | Show ready planned runs and their start commands; `--through prompt-pr\|code` sets the completion target; parallel starts are optional |
-| `pdd product start RUN [--no-run] [--agent codex\|claude\|gemini\|agy\|ENTRY] [--through prompt-pr\|code] [--base BRANCH]` | Find or create the run's issue once, then start a normal feature run; `--no-run` only finds or creates the issue; `--through` sets and forwards the completion target; `--base` selects an existing origin branch. ENTRY is an entry name from `~/.config/pdd/agents.json` |
+| `pdd product start RUN [--no-run] [--agent codex\|claude\|gemini\|agy\|ENTRY] [--through prompt-pr\|code] [--base BRANCH]` | Create or reuse the scoped run issue and print a `/pdd` handoff prompt; `--no-run` only prepares the issue; `--through` sets the completion target; `--base` selects an existing origin branch. ENTRY is an entry name from `~/.config/pdd/agents.json` |
 
 See [Build a whole product](build-a-whole-product.md).
 
 ## Record a chat approval
 
-Show the gate before you ask for approval. The person may reply in their own Claude Code or Codex conversation, or in Herdr. No Herdr area chat or terminal is needed in easy mode. The agent judges the later reply. Questions, change requests and earlier messages are not approval. No exact phrase is required.
+Show the prompt changes before asking for approval. The person may reply in their own Claude Code, Codex, Gemini, or Antigravity conversation. The agent judges the later reply. Questions, change requests and earlier messages are not approval. No exact phrase is required.
 
-After the person approves, record their exact words. For the ready gate and all its draft prompts, use:
-
-```sh
-pdd workflow approve N --said - <<'PDD_SAID'
-<the person's exact words>
-PDD_SAID
-```
-
-For one prompt outside a workflow gate, use:
+After the person approves, record their exact words for each approved prompt:
 
 ```sh
 pdd approve PROMPT --said - <<'PDD_SAID'
@@ -922,17 +880,7 @@ PDD_SAID
 
 Replace the payload line with the person's words. Choose a delimiter that does not occur as a whole line in those words. Keep the delimiter quoted. Do not put the words into shell quotes or interpolate them into a command. `--said -` reads stdin exactly, including newlines. Blank input is refused. pdd records nonblank words without a yes-word list or semantic grading.
 
-When the gate is shown, pdd saves the selected prompt paths and prose hashes. Approval covers that snapshot. If a prompt changes, show the gate again before approval. Output lists the prompt paths and hashes. Only an explicit approve call passes a gate. Chat messages, steps and `workflow done` never approve it. A workflow with no approve gate before code gets a warning.
-
-In a normal run (no `strict_approvals`), the Story gate prints a Story card; show it as printed, then ask. The person approves each Story with that context and may choose the code PR after PR 1 (`--through code`). After that approval, a prompt-only repair needs no new approval. When pdd verifies its own saved check results (every criterion of every scenario in the default project check scope passes, and each result belongs to its batch and matches the current files), `pdd workflow done` opens PR 1 with no question and records the route `automatic-check-pass`; PR 1 shows it as `Opened after a full check pass (no person asked):`. pdd skips the optional try step. A failed check keeps the gate for repairs. A change to a Story, the plan or an expected value shows the card again and waits for the person. The same checks apply before updating an open PR 1 and before a later said or terminal code approval, including after PR 1 merged. A revised Story must be shown and approved first. Unpublished source changes need a current full check. Default discovery excludes nested fixture projects, as `pdd test` does. With `--through code`, pdd then starts the code area and records the route `card-choice`. Strict mode keeps its person gates. A changed Story reopens Story approval and replaces any earlier check-failure guidance. Missing or unverified coverage, incomplete or stale checks, strict policy and unavailable authority keep PR 1 closed. Normal runs with missing coverage keep their person gate. Status shows the hold reason. A cancellation, new person question or changed gate during preparation or publication stops further approval, push and PR effects. This includes a blocker saved while waiting for the approval journal lock: pdd rechecks the saved run under journal custody before committing approval evidence. Saved blockers remain in place. `pdd workflow status` names the runs that wait for a Story approval.
-
-Without `--said`, a person at a normal terminal answers y/N. The question lists the gate and its drafts; one answer approves them together. `pdd approve PROMPT` still approves only one prompt. Agent, non-TTY and current Herdr chat-pane callers must ask the person, then relay the reply with the safe form above. Native Herdr evidence never authorizes approval by itself.
-
-Workflow approval reads `pdd.json` from the main checkout (`sourceRoot`), outside the agent's run worktree. Standalone `pdd approve` reads it from the Git root of the current checkout. `"strict_approvals": true` permits only a person at a terminal and refuses `--said`. Absent or false keeps easy mode. Agents never edit approval fields or decide expected values. Records retain the invoking actor, time, route, exact words and prompt path/hash. PRs show matching approvals safely quoted. Approval of PR 1 does not approve the later code-or-stop gate.
-
-`pdd workflow ack REQUEST_ID --summary TEXT` records the agent’s uptake of a delivered change request from its active run worktree. The first note and time are retained on repeat calls. Delivery and this explicit agent claim do not prove the request was fully addressed. Status shows delivered requests still awaiting uptake; done warns without blocking progress.
-
-`pdd workflow approve [ISSUE] [--said WORDS] [--draft]` records the ready approval gate. Use `--through prompt-pr` in normal, automatic or strict runs to stop after PR 1, or `--through code` in a normal run to continue into the code PR.
+Without `--said`, a person at a normal terminal answers y/N. `pdd approve PROMPT` reads `pdd.json` from the Git root of the current checkout. `"strict_approvals": true` permits only a person at a terminal and refuses `--said`. Absent or false keeps easy mode. Agents never edit approval fields or decide expected values. Records retain the invoking actor, time, route, exact words and prompt path/hash.
 
 ## Metrics
 
@@ -947,39 +895,11 @@ See [Metrics](metrics.md) for the three Autopilot views, local state layout, and
 
 `pdd graph` reads the saved dependency graph; `pdd graph --open` opens its viewer. Use `pdd graph --issue N` to select an issue, or `pdd graph --open --issue N --repo OWNER/REPO` to select a repository explicitly.
 
-`pdd dependencies prepare [--issue N]` reads a scoped native review packet without AI or GitHub writes. `pdd dependencies complete --input -` reads a structured completion from stdin, saves the review and reconciles its intended effects. `pdd workflow yield N` hands off automatic capacity after the current worker has stopped.
-
-The `pdd workflow park` forms record a stop in the run worktree. Each one keeps the run, its claim, branch, worktree and completed work, and asks no person.
-
-`pdd workflow park --reason TEXT --step STEP` records an environment failure of
-check, verify or formal in the current area. Environment parks require `--step`;
-pdd does not guess the failed target from unfinished steps in an older run.
-
-`pdd workflow park --route KIND --reason TEXT [--until FIX] [--step STEP]` records a missing supported PDD route. Use a lowercase kind such as `interface-drafting` or `native-replay`; put the agent's full question in `--reason`. The default fix is `capability:route-KIND`; `prompt-reentry` uses `#2897`. An explicit fix can name a capability, issue fix or commit. A package version alone cannot clear this wait. The command keeps gates and independent questions.
-
-`pdd workflow park --reason TEXT --blocker KIND [--until VALUE]` names an external wait. Use `dependency --until 2897` for an issue that must merge, `pdd --until capability:prompt-reentry` for an installed capability, `pdd --until commit:SHA` for an installed ancestor commit, or `pdd --until '#2897'` for the PR 1 re-entry route, or `account` / `github` with an ISO reset time. `person` requires an existing pending question or gate and clears on its reply. `ci` and `review` use the saved PR result or review evidence. Invalid clearing values save nothing.
-
-`pdd workflow park --reason TEXT` records an automatic stop from its existing run worktree without releasing its claim or treating the worker as done.
-
-A lost verdict, such as `runner-stopped`, needs a person decision before another paid attempt. To authorize one resend for each listed run, relay the person's exact words:
-
-```sh
-pdd workflow resend 17 23 --said - <<'PDD_SAID'
-<the person's exact words>
-PDD_SAID
-```
-
-Use a quoted delimiter absent as a whole line from the words. Without `--said`, a person can use terminal y/N. Strict mode requires a person terminal. This decision does not approve prompts or workflow gates. Automatic setup and start do not authorize it. There is no automatic resend budget setting.
-
-pdd saves the decision, old batch and earlier cost before sending only the lost checks. It keeps the original call caps or lowers them to the smallest selected cap. Active checks, changed source and consumed attempts cannot be resent. The new batch is saved in the run's `checkResends` record. If another attempt has no verdict, the command stops the group at once and names that batch for the interpreter owner. A `service-restarted` receipt also stops this command without an automatic replacement. Later reads and retries of that batch keep this limit. An interrupted send is uncertain; it is never replayed automatically. Gates, questions, parks and completed steps stay as saved.
-
-`pdd workflow park --interpreter --reason TEXT` records that a run waits for the PDD interpreter, the hosted service behind `pdd test`. pdd first reads the run's latest `pdd test` result. Only a check with no verdict from the AI service, a busy or not-run check, or an unknown outcome may wait. A failed check, a refusal that names a file rule or a step that took longer than the server time limit is the issue's own work (make the step smaller). A sign-in, access or interpreter address problem needs a person, and waiting does not fix it. For these, the command exits 1, names the fix and parks nothing. If pdd cannot read the result, the outcome counts as unknown. A waiting run asks no person. `pdd workflow status` shows `waiting for the interpreter: REASON`, and `pdd graph` shows the hold `Waiting for the interpreter`. The run keeps its claim, branch, worktree and progress.
-
 ## Shared full-suite queue
 
-`pdd workflow suite --command COMMAND [--timeout MIN]` runs the repository's full
+`pdd autopilot suite --command COMMAND [--timeout MIN]` runs the repository's full
 suite through one machine queue. Use the actual repository command, for example
-`pdd workflow suite --command "npm test"`. Focused tests can run normally.
+`pdd autopilot suite --command "npm test"`. Focused tests can run normally.
 
 Each suite uses fresh temporary HOME, PDD_STATE_DIR, XDG_CONFIG_HOME and TMPDIR
 folders. The runner removes them after execution. It passes PATH, locale, time
@@ -1045,7 +965,7 @@ truncated. Ordinary secret replacements do not count as omitted bytes. These
 limits apply per attempt; earlier attempts remain available.
 
 The recorder keeps the same validation running if its calling session disappears.
-A later `pdd workflow status` reads its saved progress without running the command
+A later `pdd autopilot status` or `pdd autopilot logs` reads its saved progress without running the command
 again. Completion saves the log and terminal receipt before returning. Explicit
 SIGINT/SIGTERM cancels through the recorder; unexpected caller loss leaves the
 original timeout in force. If custody is lost before a terminal receipt exists,
@@ -1054,7 +974,7 @@ keeps earlier evidence. A receipt describes execution; it does not approve a mer
 
 Full suites and full builds share machine capacity across repositories and
 worktrees. Run a full build through the same command. Additional
-runs show "waiting for a check slot (position N)". Workflow status also shows the
+runs show "waiting for a check slot (position N)". Autopilot status also shows the
 queue position. For an Autopilot job, a wait for a check slot is not quiet time.
 A suite failure, interruption or execution timeout has its own reason.
 
@@ -1100,56 +1020,22 @@ Queue records stay outside the repository and contain no commands or test output
 `pdd autopilot status --json` prints `pdd.cost-report.v1`. Use `--all` to include
 indexed repositories. This form reads local files only. Human status includes
 day and week totals, outcomes, account token totals, and nearest-rank P50/P90
-costs per merged issue. Multiple attempts for one repository/issue are combined,
-including archived attempts when a run path is reused. Cost reads keep the last
-workflow progress time, so polling does not delay stalled-run warnings.
+costs per merged issue. Multiple attempts for one repository/issue are combined.
 Totals use the time each measurement was observed. Percentiles use cumulative
 costs of issues whose latest outcome was merged in the selected period.
 
-`pdd workflow cost ISSUE [--input -]` reads an issue cost row as JSON. With
-`--input -`, it records an explicit measurement from stdin. For example:
-
-```sh
-printf '%s\n' '{"id":"suite-1","suiteMinutes":2.5,"personMinutes":1}' | pdd workflow cost 17 --input -
-printf '%s\n' '{"id":"result-1","outcome":"reverted"}' | pdd workflow cost 17 --input -
-```
-
-A repeated id with equal values has no effect. Conflicting values are refused.
-The accepted outcomes are merged, reverted, stuck, closed and parked. This changes
-only cost data. It does not approve a prompt or change workflow progress.
-Measure suite elapsed wall time, including failures. `workflow prove` records its
-two native phase durations automatically; other agent-run suites need an explicit
-measurement. Person active minutes are explicit measurements; waiting minutes
-come from questions, answers and gates. Approval counts include every recorded
-approval, including one recorded by an agent on behalf of the person. The recorder
-identity does not prove active person effort. These are separate quantities.
-
-The ledger is saved in each run's local `status.json` as `cost`. Its numeric GitHub
-call journal is `github-cost.jsonl`. Calls made by pdd from that exact run worktree
-are counted, including normal runs. Calls made by agents outside pdd are
-excluded. Costs remain after GitHub budget compaction.
-
 Token accounts are hashes of local config profiles, not billing identities. Codex
 usage comes from cumulative rollout counts. Claude usage comes from transcript
-usage, with streaming duplicates removed. Each session read is limited to 256 KiB;
-Claude backlogs are consumed on later captures, including after a chat moves to
-abandoned custody. Saved current, abandoned and replacement chats use their own
-account and session identities; repeated custody does not add usage twice. Missing
-files, backlogs and unknown minutes appear in coverage. No message text, credentials or monetary estimates
-are saved. Cached input and reasoning tokens are subsets, not extra total tokens.
-
-At PR closure, pdd reserves one Actions duration read for the saved PR branch,
-including earlier heads. Without a saved branch, it reads the observed head only
-and marks coverage incomplete. It reads at most 100 workflow runs, without pagination. CI minutes are elapsed
-workflow wall time, not billed job minutes. Incomplete data is marked in coverage;
-a failed or interrupted measurement is not retried. Status never fetches durations.
-
+usage, with streaming duplicates removed. Each session read is limited to 256 KiB.
+Missing files, backlogs and unknown minutes appear in coverage. No message text,
+credentials or monetary estimates are saved. Cached input and reasoning tokens
+are subsets, not extra total tokens.
 
 ## Prompt coverage and native-only declarations
 
-Plain Markdown prompts are checkable by default; the interpreter synthesizes and caches their Runtime interfaces on demand. For pure OS, network, database or byte-level plumbing with `0` Runtime Stories, declare YAML frontmatter at the top of the prompt (`kind: native-only` and a nonblank `reason` naming an effect the bound ports in RUNBOOK §21 cannot fake). Prompts with an embedded Runtime interface block remain supported (`partial` or `native-only`). A checker reviews a native-only reason. Approval records the prompt's prose SHA-256 in the local approval journal without editing plain Markdown prompts. Checks show `not run: <reason>`, with no passing result. Other selected tests can run.
+Plain Markdown prompts are checkable by default; the interpreter synthesizes and caches their Runtime interfaces on demand. For pure OS, network, database or byte-level plumbing with `0` Runtime Stories, declare YAML frontmatter at the top of the prompt (`kind: native-only` and a nonblank `reason` naming an effect the bound ports in [Ports and CLI](../skills/pdd/references/ports-and-cli.md) cannot fake). Prompts with an embedded Runtime interface block remain supported (`partial` or `native-only`). A checker reviews a native-only reason. Approval records the prompt's prose SHA-256 in the local approval journal without editing plain Markdown prompts. Checks show `not run: <reason>`, with no passing result. Other selected tests can run.
 
-Test output, workflow status and saved PR evidence include prompt coverage counts. Text uses `Runtime coverage: N of M prompts checkable, K native-only` for native declarations and `Interpreter coverage` otherwise. A response with only passed and busy checks uses `Runtime coverage` and retains all coverage counts. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios retain refusal details as `not run (broken-test)` and are never uploaded.
+Test output and saved PR evidence include prompt coverage counts. Text uses `Runtime coverage: N of M prompts checkable, K native-only` for native declarations and `Interpreter coverage` otherwise. A response with only passed and busy checks uses `Runtime coverage` and retains all coverage counts. Native-only rows retain their paths and reasons, including all-local selections. Invalid native-only scenarios retain refusal details as `not run (broken-test)` and are never uploaded.
 
 Saved reads preserve native-only outcomes and reasons while other selected rows wait for lint or complete it. Local lint also saves coverage and omission evidence when another selected row is refused before upload. These local results can be read without authentication. Temporary lint failures retain local paths, reasons, refusals and coverage in text and JSON, and return exit 5. Named lint targets include only executable scenarios present in the uploaded archive. The files preview uses that same selection and shows native omissions with their reasons.
 
@@ -1159,10 +1045,9 @@ Runtime refusals retain a reported field pointer and rule. A supplied rule also 
 
 ## Core engine
 
-Autopilot has one engine, the core. Each tick makes no AI call, so the timer runs a
-tick every 10 minutes. Each job is a headless Codex or Claude process with a log
-file. The core needs no Herdr: `pdd autopilot doctor` has no Herdr check, and
-`start` opens no chat. `--label NAME` sets the opt-in label and
+Autopilot runs the core engine. Each tick makes no AI call, so the timer runs a
+tick every 10 minutes. Each job is a headless Codex, Claude, Gemini, or Antigravity process with a log
+file. `--label NAME` sets the opt-in label and
 `--mode auto|observe|off` the mode, on this machine only (`pdd autopilot observe`
 changes `pdd.json` instead). The machine values win over `pdd.json`, and
 `pdd autopilot status` says where the label and the mode come from.
@@ -1177,7 +1062,7 @@ representation are agent decisions when a safe, low-surprise choice exists. Pres
 existing APIs, defaults and behavior unless the request authorizes a change. Several
 valid designs alone are not a reason to ask. A job may ask one plain question with 2
 or 3 options and a recommended one (you answer with one letter) only when every
-reasonable fix breaks something people use today, or, in a pdd-feature run, when the
+reasonable fix breaks something people use today, or, in feature mode, when the
 choice actually changes product direction: whether a new feature area or capability
 should exist, removing a feature, an on-purpose change to a core contract, security,
 privacy, data policy, or cost; `decide`, the default for now, asks no choice
@@ -1522,49 +1407,6 @@ open issue in scope: unlike the core, they do not skip issues that cool down aft
 no-result or whose blocker is named only in the text. `pdd autopilot intake` prints
 the cards and today's changes; `--json` prints them as JSON.
 
-
-## Post-merge audit settings
-
-`pdd autopilot audit RUN PR` audits one merge of a saved workflow run. Autopilot does not
-call it by itself: the core engine starts no audit after its merges. Its fixed
-brief requires before/after reproduction, scope, Story quality, old-code tests,
-real check evidence, unchanged checks and actual merge gates. Audit files remain
-in shared durable custody under the machine workflow state root, keyed by
-repository, run attempt, PR and merge commit. The run's `audits/` folder holds
-evidence copies. Every clone reads shared results and effect reservations under
-the repository lock. An interrupted auditor is unknown, never a pass.
-
-Set `autopilot.audit` to `false` in this repository's `pdd.json` to disable audits.
-The default is on. Codex and Claude auditors start a fresh native session using
-the run's configured account and model. Unsupported agents remain pending.
-Auditor sessions count in the issue cost ledger and the provider's account
-limits. Optional `autopilot.auditTokenLimit` sets a nonnegative measured token
-cap for this repository's last day; unavailable usage holds a capped audit. A
-missing, damaged or full machine run index also holds it because cost coverage
-is unknown.
-Codex limit reads that are unknown or reached hold without a paid call.
-
-The saved audit keeps `result.verdict` and Boolean `result.revert` separately.
-BAD with a revert recommendation creates a unique revert branch and a PR against
-the saved base. It never pushes directly to that base or merges the revert. A
-revert conflict records an unknown follow-up and alerts for help. BAD without a
-revert recommendation keeps the merge and reopens or keeps the original issue
-open. One audit comment lists the missing parts from the saved summary and
-evidence. It creates no revert PR or follow-up issue. Both BAD forms send one
-decision alert that states the auditor's recommendation. When it recommends no
-revert, the default choice is to keep the merge and finish the rest. The alert
-also offers `git revert -m 1 MERGE_SHA` on a review branch and a PR against the
-saved base as the other choice. The same command accepts a merge commit or a
-single-parent squash commit. Two CONCERN verdicts of the same category
-from distinct PRs create one process issue in the repository. Publication
-attempts are saved before sending. An uncertain reopen, comment, PR, process issue or
-alert is never blindly repeated after a restart. Audit admission and concern
-records share the machine workflow state root by repository identity, including
-independent local clones. Every indexed repository record must validate and appear
-in run discovery before capped admission. Damaged or unreadable earlier audit
-evidence, including an unreadable audit folder, holds before another auditor
-launch. Unknown audit costs retain an explicit coverage marker. Separate machines
-retain separate local cost ledgers.
 
 ## Explain resource bindings
 
