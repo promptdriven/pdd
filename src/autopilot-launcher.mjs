@@ -1,48 +1,44 @@
-// Prompt: prompts/cli/autopilot-launcher.prompt.md (sha256: 3400b7c889152cf5c793fe6fe2195259181947a698bc3cf97bc8bedd0c09ffb8)
+// Prompt: prompts/cli/autopilot-launcher.prompt.md
 import {runAutopilotDoctor, resolveAutopilotAgent} from './autopilot-doctor.mjs';
 import { loadAgentDefinitions } from './agent-config.mjs';
-import {releaseRunClaim, cancelRun, acquireRunLock} from './workflow-runner.mjs';
+import { acquireRunLock } from './shared/file-lock.mjs';
 import { releaseCheckCapacity, readCheckStatus } from './test-suite-queue.mjs';
 import { readCodexLimits } from './codex-limits.mjs';
 import { loginEnvironment, isCloudAccountsActive, isCreditOrResetAccount, selectCloudPoolLogin, exhaustCloudPoolLogin, accountsStatePath, readCloudAccountsState } from './login-pool.mjs';
 import { loadLoginPool, selectPoolLogin, markLoginExhausted, clearPoolCooldowns, readPoolCooldowns } from './autopilot/local-pool.mjs';
-import { spawn, spawnSync, execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, watch, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, renameSync, unlinkSync, linkSync, watch, realpathSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAgentProcess } from './agent-adapters.mjs';
 import { pathDiagnostic } from './path-diagnostic.mjs';
 import { runAutopilot } from './autopilot.mjs';
-import { allRuns, listRuns, resolveRun } from './workflow-runs.mjs';
-import { auditMerge } from './autopilot-audit.mjs';
-import { releaseIssueClaim } from './workflow-worktree.mjs';
-import { samePath } from './workflow-herdr-layout.mjs';
 import { alertStatusLine, runAutopilotAlerts } from './autopilot-alerts.mjs';
 import { countGithubCalls, githubBudget, githubBudgetSettings, githubEtagCache, githubFullLastPage, githubLedger, githubMachineEntries, githubReply, githubStateRoot, githubUsage } from './github-calls.mjs';
-import { captureCosts, costReport, costStatusLines } from './cost-ledger.mjs';
 import { selectAutopilotBase, checkAutopilotBase } from './autopilot-base.mjs';
 import { readCoreSettings, tickCore, coreStatus, busySlots, claimTickLock, releaseCoreJob, runDefaultPreflightCheck } from './autopilot-core.mjs';
 import { readMachineGuard, timerPriority, validShare } from './machine-guard.mjs';
 import { listReportDrafts, sendReportDraft, summarizeConversionDrops } from './autopilot-reports.mjs';
 import { INTAKE_MODES, intakeMode, readIntake, intakeText, stopCardJobs } from './autopilot-intake.mjs';
-import { moveToCore, moved, movedState, engineBefore, procTable, MAX_DEFERS, FULL_ENGINE_REMOVED } from './autopilot-retire.mjs';
 import { formatRecurringFlakesLine, parseFlakeLedger, summarizeRecurringFlakes } from './autopilot-regressions.mjs';
 import * as nativeFs from 'node:fs';
 
 const validAutoUpdateMode = mode => ['release', 'main', 'off'].includes(mode);
 
+const FULL_ENGINE_REMOVED = 'The full Autopilot engine is removed; Autopilot runs only the core engine. Run pdd autopilot start without --engine.';
 const INTERVAL = 30 * 60 * 1000;
 // The core tick has no AI call and each job phase needs a tick, so the core engine's timer fires every 10 minutes.
 const CORE_INTERVAL = 10 * 60 * 1000;
 // The issue list reads only changed issues; the whole open list is read again after this time.
 const FULL_ISSUE_LIST_EVERY = 6 * 60 * 60 * 1000;
-// The Herdr session of the removed full engine's coordinator chat; only the move reads it.
-const COORDINATOR_SESSION = 'pdd-autopilot';
 const self = fileURLToPath(import.meta.url);
 const line = value => String(value).split(/[\r\n]/)[0].replace(/[\x00-\x1f\x7f]/g, ' ');
+const samePath = (a, b) => {
+  if (typeof a !== 'string' || !a || typeof b !== 'string' || !b) return false;
+  try { return realpathSync(a) === realpathSync(b); } catch { return false; }
+};
 const read = (file, fallback = null) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 function save(file, value) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -347,23 +343,7 @@ async function claimMachineAdmission(stateFile, p, wait = lockWait(p)) {
 
 export async function tickAutopilot(stateFile, ports = {}) { return runTick(stateFile, ports); }
 
-function workflowCleanupPorts(p, ports) {
-  return {...p, execFile: p.execFile ?? (async (file, args, options) => {
-    const result = await p.execute(file, args, options);
-    if (result.code !== 0) throw Object.assign(Error(`${file} failed`), result);
-    return result;
-  }), herdr: ports.workflowHerdr ?? ports.herdr ?? (async args => {
-    const result = await p.execute('herdr', ['--session','pdd',...args]);
-    if (result.code === 0 && args[0] === 'pane' && args[1] === 'read') return result.stdout;
-    let reply; try { reply = JSON.parse(result.code === 0 ? result.stdout : result.stderr || result.stdout); } catch {}
-    if (result.code !== 0 || reply?.error) throw Object.assign(Error('Workflow Herdr inventory unavailable'), {code:reply?.error?.code ?? 'herdr_failed'});
-    return reply;
-  })};
-}
 // Autopilot has one engine, the core: headless jobs with no coordinator chat, Herdr, parking or AI scheduling.
-// pdd.json's autopilot.engine when it names one, else null. Only the move of a machine from the removed full engine
-// reads it, to know which engine the machine ran before.
-const engineAt = cwd => { try { const engine = JSON.parse(readFileSync(join(cwd, 'pdd.json'), 'utf8'))?.autopilot?.engine; return ['core', 'full'].includes(engine) ? engine : null; } catch { return null; } };
 // The core timer fires every 10 minutes. Start writes the interval into the timer; a tick never reloads its own timer.
 const intervalOf = () => CORE_INTERVAL;
 // The installed timer's interval in minutes; a timer installed before this was saved fires every 30 minutes.
@@ -412,14 +392,6 @@ const effectiveIntake = (state, core = null) => savedIntake(state) ?? intakeMode
 // A start with no opt-in label (the machine's --label or pdd.json autopilot.label) asks for one and starts nothing unless intake is active.
 const NO_LABEL = 'Autopilot did not start: it works only on the issues that you mark with an opt-in label. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N (or add the label on GitHub). Nothing was started or claimed.';
 const ACTIVE_INTAKE_AGENT_MSG = 'Active intake needs a codex or claude login for sandboxed read-only card checks; add a codex or claude login with pdd accounts add, pass --agent codex or --agent claude, or use --intake off --label pdd:autopilot.';
-// The status line of the move from the full engine: pending or waiting, or done in the last 7 days.
-function moveStatus(state, now) {
-  if (!state) return '';
-  const journal = state.retiredFull;
-  if (moved(state)) return journal.line && now - journal.done < 7 * 24 * 60 * 60 * 1000 ? `\nMoved from the full engine at ${new Date(journal.done).toISOString()}: ${line(journal.line)}` : '';
-  if (engineBefore(state, engineAt(state.cwd)) !== 'full') return '';
-  return `\nThis machine moves from the full engine to the core engine at its next tick${journal?.lastError ? ` (last try: ${line(journal.lastError)})` : journal?.defers ? ` (it waited ${journal.defers} of ${MAX_DEFERS} ticks)` : ''}; no new work starts before that.`;
-}
 // The status line of an alert that was not delivered, from local files only; an error adds nothing.
 function alertLine(state, p, ports) {
   try { const text = (ports.alertStatusLine ?? alertStatusLine)({ repo: state.repo, env: p.env }, { stateRoot: ports.stateRoot }); return text ? `\n${text}` : ''; }
@@ -732,69 +704,7 @@ async function runCoreTick(stateFile, state, p, ports) {
   } finally { release(); }
   return result;
 }
-// The Herdr reply of the old coordinator session, for the move only. A missing Herdr has nothing to close.
-async function coordinatorHerdr(args, p) {
-  if (p.herdr) return p.herdr(args);
-  let result;
-  try { result = await p.execute('herdr', ['--session', COORDINATOR_SESSION, ...args]); }
-  catch (error) { if (error.code === 'ENOENT') throw Object.assign(Error('Herdr is not installed'), { code: 'herdr_missing' }); throw error; }
-  let reply; try { reply = JSON.parse(result.code === 0 ? result.stdout : result.stderr || result.stdout); } catch { reply = {}; }
-  if (result.code !== 0 || reply.error) throw Object.assign(Error(reply.error?.message || 'Herdr did not answer'), { code: reply.error?.code });
-  return reply;
-}
-const coreJobs = stateFile => { try { return new Set(readdirSync(join(coreRoot(stateFile), 'jobs')).map(name => Number(/^(\d+)\.json$/.exec(name)?.[1])).filter(Number.isSafeInteger)); } catch { return new Set(); } };
-// The move of this machine from the removed full engine, in steps (autopilot-retire). The tick lock is held for the
-// whole move, and the core starts no job until the move is complete. It never stops or reloads the timer.
-async function moveTick(stateFile, state, p, ports) {
-  const saveJournal = async journal => {
-    const release = await claimAdmission(state, p);
-    if (!release) throw Error('Timed out waiting for automatic admission; retry.');
-    try { const latest = read(stateFile); if (latest) { latest.retiredFull = journal; save(stateFile, latest); } } finally { release(); }
-  };
-  let commonDir = null;
-  try { const dir = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim(); commonDir = realpathSync(resolve(state.cwd, dir)); }
-  catch { return { done: false, message: 'Autopilot could not read this Git repository to move it to the core engine; the next tick retries.' }; }
-  const cleanup = workflowCleanupPorts(p, ports);
-  const result = await (ports.moveToCore ?? moveToCore)({ state, stateFile, repoEngine: engineAt(state.cwd) }, {
-    now: p.now, commonDir, samePath, coreJobs: () => coreJobs(stateFile), save: saveJournal,
-    gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, purpose: 'claims', ...options }),
-    herdr: args => coordinatorHerdr(args, p),
-    listRuns: (cancelled = false) => (p.listRuns ?? listRuns)({ cwd: state.cwd, cancelled }, p),
-    cancelRun: run => (p.cancelRun ?? cancelRun)({ ref: String(run.number), cwd: state.cwd }, { ...cleanup, claimReleased: true, isTTY: false, skipMetricsDelivery: true }),
-    releaseLocal: run => (p.releaseIssueClaim ?? releaseIssueClaim)({ cwd: run.sourceRoot, runId: run.runId, issueNumber: run.number }, cleanup.commandPorts ?? {}),
-    releaseSlots: () => releaseCheckCapacity({ env: p.env, owner: stateFile }, p.checkCapacityPorts ?? p),
-    // A local read of this machine's process table (no agent, Git or GitHub call); Linux without ps reads /proc.
-    processes: async () => {
-      try { return (await promisify(execFile)('ps', ['-A', '-ww', '-o', 'pid=', '-o', 'ppid=', '-o', 'pgid=', '-o', 'rss=', '-o', 'uid=', '-o', 'lstart=', '-o', 'args='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 30000, env: { ...process.env, LC_ALL: 'C' } })).stdout; }
-      catch (error) { if (error.code === 'ENOENT' && process.platform === 'linux') return procTable(nativeFs); throw error; }
-    },
-    uid: typeof process.getuid === 'function' ? process.getuid() : null,
-    cwdOf: async pid => {
-      if (process.platform === 'linux') {
-        try { return realpathSync(`/proc/${pid}/cwd`); }
-        catch {
-          try { return readlinkSync(`/proc/${pid}/cwd`).replace(/ \(deleted\)$/, ''); } catch { return null; }
-        }
-      }
-      if (process.platform === 'darwin') {
-        const text = (await promisify(execFile)('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { encoding: 'utf8', timeout: 5000 })).stdout;
-        return /^n(.+)$/m.exec(text)?.[1] ?? null;
-      }
-      return null;
-    },
-    signal: (pid, name) => { try { process.kill(pid, name); } catch { /* It ended already. */ } },
-    sleep: ms => new Promise(done => setTimeout(done, ms)),
-    ...p.movePorts,
-  });
-  if (!result.done) return result;
-  const release = await claimAdmission(state, p);
-  if (!release) return { done: false, message: 'Timed out waiting for automatic admission; the move is saved and the next tick goes on.' };
-  try { const latest = read(stateFile); if (latest) save(stateFile, movedState(latest, { ...result.journal, ...(result.message ? { line: result.message } : {}) })); }
-  finally { release(); }
-  if (result.message) (ports.notice ?? (text => process.stderr.write(`${text}\n`)))(result.message);
-  return result;
-}
-// One tick: first the move of a machine that ran the removed full engine (once, in steps), then the core engine.
+// One tick of the core engine.
 async function runTick(stateFile, ports) {
   let state = read(stateFile), p; if (!state?.enabled) return ok('Autopilot stopped.');
   const lock = stateFile + '.lock';
@@ -809,12 +719,6 @@ async function runTick(stateFile, ports) {
       if (!release) throw Error('Timed out waiting for automatic admission; retry.');
       try { state = read(stateFile); if (!state?.enabled) return ok('Autopilot stopped.'); state.coordinatorId ??= randomUUID(); state.machine ??= hostname(); save(stateFile, state); }
       finally { release(); }
-    }
-    if (!moved(state)) {
-      const move = await moveTick(stateFile, state, p, ports);
-      if (!move.done) return ok(line(move.message));
-      state = read(stateFile);
-      if (!state?.enabled) return ok('Autopilot stopped.');
     }
     const tickResult = await coreTick(stateFile, state, p, ports);
     try {
@@ -1248,7 +1152,7 @@ async function machineStatus(folder, ports, env, cwd) {
     const mode = machineMode(state) ? `${machineMode(state)} (this machine)` : await savedMode(state, ports, env);
     let timerState = 'unknown';
     try { timerState = await timer('status', state, p) ? 'active' : 'inactive'; } catch { /* Report unknown. */ }
-    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState}${moved(state) ? '' : ' · moves from the full engine to the core engine at its next tick'}`);
+    rows.push(`${typeof state.repo === 'string' ? line(state.repo) : 'repository unknown'} in ${typeof state.cwd === 'string' ? line(state.cwd) : 'an unknown folder'} · base ${line(state.baseBranch ?? 'unavailable (start Autopilot)')} · mode ${mode} · Autopilot ${state.enabled ? 'enabled' : 'disabled'} · timer ${timerState}`);
   }
   const header = rows.length ? [`Autopilot on this machine (${rows.length}):`, ...rows] : ['No Autopilot on this machine.'];
   return ok([...header, ...formatObservabilityLines(obs)].join('\n'));
@@ -1312,17 +1216,48 @@ async function statusJsonPayload(input, ports, p) {
   };
 }
 
-async function localCosts(input, ports, state = {}) {
-  const options = { ...ports, env: input.env ?? ports.env };
-  const runs = await (ports.costRuns ?? (async () => input.all ? allRuns({ cancelled: true }, options) : listRuns({ cwd: state.cwd ?? input.cwd, cancelled: true }, options)))();
-  const measured = runs.map(run => {
-    try {
-      const observed = structuredClone(run);
-      observed.cost = captureCosts(run, observed, options);
-      return observed;
-    } catch { return run; }
-  });
-  return costReport(measured, (ports.now ?? Date.now)());
+function emptyCostWindow(since) {
+  return {
+    since,
+    totals: {
+      totalTokens: null, uncachedInput: null, cacheHitShare: null, effectiveTokens: null,
+      tokens: [], person: { questions: 0, answers: 0, approvals: 0, waitingMinutes: 0, activeMinutes: null },
+      suiteMinutes: null, ciMinutes: null, githubCalls: 0,
+    },
+    coverage: [], mergedIssues: 0, p50: null, p90: null,
+  };
+}
+async function localCosts(_input, ports) {
+  const now = (ports.now ?? Date.now)();
+  return {
+    schema: 'pdd.cost-report.v1',
+    generatedAt: now,
+    runs: [],
+    day: emptyCostWindow(now - 24 * 60 * 60 * 1000),
+    week: emptyCostWindow(now - 7 * 24 * 60 * 60 * 1000),
+  };
+}
+async function resolveSavedRun(ref, cwd, p) {
+  const token = String(ref ?? '').trim();
+  if (!token) return { error: 'Give a run number or run id.' };
+  let commonDir;
+  try {
+    const out = (await p.checked('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim();
+    commonDir = resolve(cwd, out);
+  } catch (error) { return { error: line(error.message || 'Not a Git repository.') }; }
+  const runsDir = join(commonDir, 'pdd', 'runs');
+  const direct = join(runsDir, token, 'status.json');
+  if (existsSync(direct)) {
+    const run = read(direct);
+    if (run && typeof run === 'object') return { run };
+  }
+  try {
+    for (const entry of readdirSync(runsDir)) {
+      const candidate = read(join(runsDir, entry, 'status.json'));
+      if (candidate && (String(candidate.runId) === token || String(candidate.number) === token)) return { run: candidate };
+    }
+  } catch { /* Missing runs dir falls through to not-found message. */ }
+  return { error: `No saved run ${token} found.` };
 }
 export async function runAutopilotLauncher(input, ports = {}) {
   const { command, packageRoot, runs, checks, issues = [] } = input;
@@ -1482,24 +1417,18 @@ export async function runAutopilotLauncher(input, ports = {}) {
       const drafts = listReportDrafts({ root });
       return ok(drafts.length ? [...drafts.map(d => `${d.fingerprint}: ${d.title}; seen ${d.count} time(s), last ${new Date(d.lastAt).toISOString()}`), 'Send one with pdd autopilot report send FINGERPRINT.'].join('\n') : 'No local Autopilot report drafts.');
     }
-    // The post-merge audit of a saved run's merge (kept for #3182: the core will reuse it after its own merges).
     if (command === 'audit') {
-      const found = await resolveRun(issues[0], {cwd:input.cwd}, {...ports,env:p.env,execFile:async(file,args,options)=>({stdout:await p.checked(file,args,options)})});
-      if(found.error) return bad(found.error);
-      state.repo=found.run.repo;
-      return auditMerge({run:found.run,pr:issues[1]},{...ports,env:p.env,execFile:(file,args,options)=>p.execute(file,args,{...options,purpose:'audit'})});
+      return { exitCode: 2, message: 'pdd autopilot audit has been retired; use pdd autopilot regressions.' };
     }
     if (command === 'check-base') {
-      const found = await resolveRun(issues[0], { cwd: input.cwd }, { ...ports, env: p.env, execFile: async (file, args, options) => ({ stdout: await p.checked(file, args, options) }) });
+      const found = await resolveSavedRun(issues[0], input.cwd, p);
       if (found.error) return bad(found.error);
       state.repo = found.run.repo;
       return checkAutopilotBase({ run: found.run, pr: issues[1] }, { execFile: (file, args, options) => p.execute(file, args, options) });
     }
     if (command === 'status' && input.json) return ok(JSON.stringify(await statusJsonPayload(input, ports, p), null, 2));
     if (command === 'status' && input.all) {
-      const status = await machineStatus(stateFolder(ports, p.env), ports, input.env ?? p.env, input.cwd);
-      try { status.message += '\n' + costStatusLines(await localCosts(input, ports)); } catch {}
-      return status;
+      return await machineStatus(stateFolder(ports, p.env), ports, input.env ?? p.env, input.cwd);
     }
     state.cwd = await gitRoot(p);
     const id = createHash('sha256').update(state.cwd).digest('hex').slice(0, 20);
@@ -1558,7 +1487,6 @@ export async function runAutopilotLauncher(input, ports = {}) {
         + (label || allowedIssues?.length || intakeNow === 'active' ? '' : '\nNo opt-in label: Autopilot takes no issue. Run pdd autopilot start --label pdd:autopilot, then mark issues with pdd autopilot add N.')
         + alertLine(state, p, ports)
         + (await updateLine(stateFile, ports))
-        + moveStatus(previous, p.now())
         + (state.core?.message ? `\nLast tick ${new Date(state.core.at).toISOString()}: ${line(state.core.message)}` : ''));
     }
     if (command === 'stop') {
@@ -1593,7 +1521,6 @@ export async function runAutopilotLauncher(input, ports = {}) {
       return ok(`Marked ${issues.length} issue(s) with pdd:autopilot.`);
     }
     if (command === 'release') {
-      const cleanup = workflowCleanupPorts(p, ports);
       return releaseCoreJob(stateFile, issues[0], {
         state, root: coreRoot(stateFile), now: p.now, env: p.env, warn: p.warn,
         ...(ports.authority ? { authority: ports.authority } : {}),
@@ -1601,19 +1528,6 @@ export async function runAutopilotLauncher(input, ports = {}) {
         ...(p.sleep ? { sleep: p.sleep } : {}),
         gh: (args, options = {}) => p.execute('gh', args, { timeoutMs: 120000, purpose: 'claims', ...options }),
         git: (args, options = {}) => p.execute('git', args, { timeoutMs: 300000, ...options }),
-        releaseClaim: (machine, ref = issues[0], onMutate) => releaseRunClaim({
-          ref, cwd: state.cwd, repository: state.repo,
-          machine, coordinatorId: state.coordinatorId,
-        }, { ...cleanup, execFile: async (file, args, options) => {
-          if (file === 'gh' && args?.[0] === 'api') {
-            const idx = args.indexOf('--method');
-            const method = idx >= 0 ? String(args[idx + 1] ?? 'GET').toUpperCase() : 'GET';
-            if (method !== 'GET') onMutate?.();
-          }
-          const reply = await p.execute(file, args, { purpose: 'claims', ...options });
-          if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
-          return reply;
-        } }),
         ...p.corePorts,
       });
     }

@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
-import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited } from './autopilot/claims.mjs';
+import { createDependencyReadPorts, refreshClaimHeartbeat, takeoverLimited, winningClaim } from './autopilot/claims.mjs';
+import { githubOriginRepository, sameRepo, validateRepoName } from './shared/github-repo.mjs';
 import { githubFullLastPage } from './github-calls.mjs';
 import { jobEnvironment, startAgentJob, readAgentJob, snapshotAgentJob, cleanupAgentJob, agentCommand, agentJobCpu, agentJobHangs, pddCheckFile, skillsCheckFile } from './agent-job.mjs';
 import { fileReport, listReportDrafts, reportKind } from './autopilot-reports.mjs';
@@ -11649,6 +11650,82 @@ export function coreStatus({ state, settings, sources = {}, guard = null }, port
   return lines.join('\n');
 }
 
+async function releaseAutopilotClaim({ ref, cwd = '', repository, machine, coordinatorId }, ports = {}) {
+  const fail = message => ({ exitCode: 1, message });
+  const text = String(ref ?? '').trim().replace(/\/$/, '');
+  const match = /^#?([1-9][0-9]*)$/.exec(text) ?? /^([^/\s#]+\/[^/\s#]+)#([1-9][0-9]*)$/.exec(text)
+    ?? /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/([1-9][0-9]*)$/.exec(text);
+  if (!match) return fail(`"${String(ref).slice(0, 80)}" is not an issue number, owner/repo#N or issue URL.`);
+  const number = Number(match.at(-1)), refRepo = match.length === 3 ? match[1] : null;
+  let repo = repository || refRepo || '';
+  if (!repo && cwd && typeof ports.execFile === 'function') {
+    try {
+      const origin = await ports.execFile('git', ['config', '--get', 'remote.origin.url'], { cwd });
+      repo = githubOriginRepository(origin?.stdout ?? '') ?? '';
+    } catch { repo = ''; }
+  }
+  if (!repo || !validateRepoName(repo)) return fail('Could not determine the GitHub repository for this issue.');
+  if (refRepo && !sameRepo(refRepo, repo)) return fail(`Issue ${ref} does not belong to ${repo}.`);
+  const host = machine || hostname();
+  const coord = coordinatorId || '';
+  const issueUrl = `https://github.com/${repo.toLowerCase()}/issues/${number}`;
+  const live = createDependencyReadPorts({ cwd }, ports);
+  const nowFn = ports.now ?? Date.now;
+  const parseIssue = async () => {
+    const raw = JSON.parse((await live.github.issue({ repository: repo, issue: number, purpose: 'claims', safety: true })).json);
+    if (raw?.error) throw Error('Current claim issue unavailable');
+    return raw;
+  };
+  const labelNames = raw => raw?.labels?.map(l => typeof l === 'string' ? l : l.name) ?? [];
+  const winner = raw => winningClaim(repo, issueUrl, live.github, live.authority, nowFn(), true, raw);
+  const supplied = { coordinatorId: coord, machine: host };
+  const identityMatches = observed => Object.entries(supplied).every(([key, value]) =>
+    value === undefined || value === null || value === '' || String(observed?.[key] ?? '') === String(value));
+  const removeLabel = async encoded => {
+    const endpoint = `repos/${repo}/issues/${number}/labels/${encoded}`;
+    try {
+      const res = await ports.execFile('gh', ['api', '--include', '--method', 'DELETE', endpoint, '-H', 'Accept: application/vnd.github+json'], {
+        ...(cwd ? { cwd } : {}), purpose: 'claims', repository: repo,
+      });
+      const status = Number(String(res?.stdout ?? '').match(/^HTTP\/\S+\s+(\d+)/m)?.[1] ?? 200);
+      if (status !== 404 && (status < 200 || status >= 300)) throw Error(`GitHub label delete returned ${status}`);
+    } catch (error) {
+      const detail = `${error?.message ?? ''} ${error?.stdout ?? ''} ${error?.stderr ?? ''}`;
+      if (!/\b404\b/.test(detail)) throw error;
+    }
+  };
+  const refuse = owner => fail(owner === 'unknown'
+    ? `Cannot release ${repo}#${number}: claim ownership is unknown.`
+    : `Cannot release ${repo}#${number}: ${owner} holds a live claim.`);
+  const unconfirmed = () => fail(`Could not confirm claim cleanup for ${repo}#${number}; retry the release.`);
+  try {
+    const firstRaw = await parseIssue();
+    let labels = labelNames(firstRaw);
+    let current = labels.includes('pdd:working') ? await winner(firstRaw) : null;
+    if (labels.includes('pdd:working') && !current) return refuse('unknown');
+    const firstClaim = current;
+    if (current?.active === true && (!current.machine || current.machine !== host)) return refuse(current.machine || 'unknown');
+    if (current && !identityMatches(current)) return unconfirmed();
+    if (labels.includes('pdd:stuck')) await removeLabel('pdd%3Astuck');
+    const beforeWorking = await parseIssue();
+    labels = labelNames(beforeWorking);
+    current = labels.includes('pdd:working') ? await winner(beforeWorking) : null;
+    if (labels.includes('pdd:working') && !current) return refuse('unknown');
+    if (current) {
+      if (current.active === true && (!current.machine || current.machine !== host)) return refuse(current.machine || 'unknown');
+      if (!identityMatches(current)) return unconfirmed();
+      if (!firstClaim || ['coordinatorId', 'machine', 'commentId', 'labelEventId'].some(key => String(current[key] ?? '') !== String(firstClaim[key] ?? ''))) return unconfirmed();
+    }
+    if (labels.includes('pdd:working')) await removeLabel('pdd%3Aworking');
+    const after = await parseIssue();
+    labels = labelNames(after);
+    if (labels.includes('pdd:working') || labels.includes('pdd:stuck')) return unconfirmed();
+    return { exitCode: 0, message: `Released the Autopilot claim for ${repo}#${number}.`, number, repo, recovery: 'released' };
+  } catch {
+    return unconfirmed();
+  }
+}
+
 export async function releaseCoreJob(stateFile, issue, ports = {}) {
   const fs = ports.fs ?? nativeFs;
   const text = String(issue ?? '').trim().replace(/\/$/, '');
@@ -11699,26 +11776,23 @@ export async function releaseCoreJob(stateFile, issue, ports = {}) {
     };
     const runReleaseClaim = ports.releaseClaim
       ? (machine, targetRef = issue, onMutate) => ports.releaseClaim(machine, targetRef, onMutate)
-      : (async (machine, targetRef = issue, onMutate) => {
-          const { releaseRunClaim } = await import('./workflow-runner.mjs');
-          return releaseRunClaim({
-            ref: targetRef, cwd: state.cwd, repository: repo || undefined,
-            machine, coordinatorId: state.coordinatorId,
-          }, {
-            now: ctx.now,
-            ...(ports.authority ? { authority: ports.authority } : {}),
-            execFile: async (file, args, options) => {
-              if (file === 'gh' && args?.[0] === 'api') {
-                const idx = args.indexOf('--method');
-                const method = idx >= 0 ? String(args[idx + 1] ?? 'GET').toUpperCase() : 'GET';
-                if (method !== 'GET') onMutate?.();
-              }
-              const reply = await (file === 'gh' ? ghPort(args, options) : gitPort(args, options));
-              if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
-              return reply;
-            },
-          });
-        });
+      : (async (machine, targetRef = issue, onMutate) => releaseAutopilotClaim({
+          ref: targetRef, cwd: state.cwd, repository: repo || undefined,
+          machine, coordinatorId: state.coordinatorId,
+        }, {
+          now: ctx.now,
+          ...(ports.authority ? { authority: ports.authority } : {}),
+          execFile: async (file, args, options) => {
+            if (file === 'gh' && args?.[0] === 'api') {
+              const idx = args.indexOf('--method');
+              const method = idx >= 0 ? String(args[idx + 1] ?? 'GET').toUpperCase() : 'GET';
+              if (method !== 'GET') onMutate?.();
+            }
+            const reply = await (file === 'gh' ? ghPort(args, options) : gitPort(args, options));
+            if (reply.code !== 0) throw Object.assign(Error(reply.stderr || reply.stdout || `${file} failed`), reply);
+            return reply;
+          },
+        }));
     const tryForms = async (forms = noRunForms, targetRef = issue, targetNum = number) => {
       if (!forms.length) {
         return { exitCode: 1, message: `Could not confirm claim cleanup for ${repo || 'this repository'}#${targetNum}; retry the release.` };
